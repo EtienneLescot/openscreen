@@ -62,6 +62,10 @@ import {
 	DEFAULT_ANNOTATION_SIZE,
 	DEFAULT_ANNOTATION_STYLE,
 	DEFAULT_BLUR_DATA,
+	DEFAULT_CURSOR_CLICK_BOUNCE,
+	DEFAULT_CURSOR_MOTION_BLUR,
+	DEFAULT_CURSOR_SIZE,
+	DEFAULT_CURSOR_SMOOTHING,
 	DEFAULT_FIGURE_DATA,
 	DEFAULT_PLAYBACK_SPEED,
 	DEFAULT_ZOOM_DEPTH,
@@ -148,7 +152,13 @@ export default function VideoEditor() {
 	} | null>(null);
 	const [isFullscreen, setIsFullscreen] = useState(false);
 
-	const playerContainerRef = useRef<HTMLDivElement>(null);
+	// Cursor & motion blur visual settings (non-undoable preferences)
+	const [showCursor, setShowCursor] = useState(true);
+	const [cursorSize, setCursorSize] = useState(DEFAULT_CURSOR_SIZE);
+	const [cursorSmoothing, setCursorSmoothing] = useState(DEFAULT_CURSOR_SMOOTHING);
+	const [cursorMotionBlur, setCursorMotionBlur] = useState(DEFAULT_CURSOR_MOTION_BLUR);
+	const [cursorClickBounce, setCursorClickBounce] = useState(DEFAULT_CURSOR_CLICK_BOUNCE);
+
 	const videoPlaybackRef = useRef<VideoPlaybackRef>(null);
 
 	const nextZoomIdRef = useRef(1);
@@ -200,12 +210,7 @@ export default function VideoEditor() {
 			}
 
 			const project = candidate;
-			const media = resolveProjectMedia(project);
-			if (!media) {
-				return false;
-			}
-			const sourcePath = fromFileUrl(media.screenVideoPath);
-			const webcamSourcePath = media.webcamVideoPath ? fromFileUrl(media.webcamVideoPath) : null;
+			const sourcePath = project.videoPath;
 			const normalizedEditor = normalizeProjectEditor(project.editor);
 
 			try {
@@ -383,11 +388,8 @@ export default function VideoEditor() {
 
 				const result = await window.electronAPI.getCurrentVideoPath();
 				if (result.success && result.path) {
-					const sourcePath = fromFileUrl(result.path);
-					setVideoSourcePath(sourcePath);
-					setVideoPath(toFileUrl(sourcePath));
-					setWebcamVideoSourcePath(null);
-					setWebcamVideoPath(null);
+					setVideoSourcePath(result.path);
+					setVideoPath(toFileUrl(result.path));
 					setCurrentProjectPath(null);
 					setLastSavedSnapshot(
 						createProjectSnapshot({ screenVideoPath: sourcePath }, INITIAL_EDITOR_STATE),
@@ -1911,8 +1913,11 @@ export default function VideoEditor() {
 											onBlurDataChange={handleBlurDataPreviewChange}
 											onBlurDataCommit={commitState}
 											cursorTelemetry={cursorTelemetry}
-											cursorHighlight={effectiveCursorHighlight}
-											cursorClickTimestamps={cursorClickTimestamps}
+											showCursor={showCursor}
+											cursorSize={cursorSize}
+											cursorSmoothing={cursorSmoothing}
+											cursorMotionBlur={cursorMotionBlur}
+											cursorClickBounce={cursorClickBounce}
 										/>
 									</div>
 								</div>
@@ -2100,6 +2105,17 @@ export default function VideoEditor() {
 						onSpeedDelete={handleSpeedDelete}
 						unsavedExport={unsavedExport}
 						onSaveUnsavedExport={handleSaveUnsavedExport}
+						showCursor={showCursor}
+						onShowCursorChange={setShowCursor}
+						cursorSize={cursorSize}
+						onCursorSizeChange={setCursorSize}
+						cursorSmoothing={cursorSmoothing}
+						onCursorSmoothingChange={setCursorSmoothing}
+						cursorMotionBlur={cursorMotionBlur}
+						onCursorMotionBlurChange={setCursorMotionBlur}
+						cursorClickBounce={cursorClickBounce}
+						onCursorClickBounceChange={setCursorClickBounce}
+						hasCursorData={cursorTelemetry.length > 0}
 					/>
 				</div>
 			</div>

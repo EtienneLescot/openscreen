@@ -36,7 +36,12 @@ import { AnnotationOverlay } from "./AnnotationOverlay";
 import {
 	type AnnotationRegion,
 	type BlurData,
+	type CursorTelemetryPoint,
 	computeRotation3DContainScale,
+	DEFAULT_CURSOR_CLICK_BOUNCE,
+	DEFAULT_CURSOR_MOTION_BLUR,
+	DEFAULT_CURSOR_SIZE,
+	DEFAULT_CURSOR_SMOOTHING,
 	DEFAULT_ROTATION_3D,
 	isRotation3DIdentity,
 	lerpRotation3D,
@@ -67,6 +72,11 @@ import {
 	DEFAULT_CURSOR_HIGHLIGHT,
 	drawCursorHighlightGraphics,
 } from "./videoPlayback/cursorHighlight";
+import {
+	DEFAULT_CURSOR_CONFIG,
+	PixiCursorOverlay,
+	preloadCursorAssets,
+} from "./videoPlayback/cursorRenderer";
 import { clampFocusToStage as clampFocusToStageUtil } from "./videoPlayback/focusUtils";
 import { layoutVideoContent as layoutVideoContentUtil } from "./videoPlayback/layoutUtils";
 import { clamp01 } from "./videoPlayback/mathUtils";
@@ -124,9 +134,14 @@ interface VideoPlaybackProps {
 	onBlurSizeChange?: (id: string, size: { width: number; height: number }) => void;
 	onBlurDataChange?: (id: string, blurData: BlurData) => void;
 	onBlurDataCommit?: () => void;
-	cursorTelemetry?: import("./types").CursorTelemetryPoint[];
+	cursorTelemetry?: CursorTelemetryPoint[];
 	cursorHighlight?: CursorHighlightConfig;
 	cursorClickTimestamps?: number[];
+	showCursor?: boolean;
+	cursorSize?: number;
+	cursorSmoothing?: number;
+	cursorMotionBlur?: number;
+	cursorClickBounce?: number;
 }
 
 export interface VideoPlaybackRef {
@@ -187,6 +202,11 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 			cursorTelemetry = [],
 			cursorHighlight = DEFAULT_CURSOR_HIGHLIGHT,
 			cursorClickTimestamps = [],
+			showCursor = false,
+			cursorSize = DEFAULT_CURSOR_SIZE,
+			cursorSmoothing = DEFAULT_CURSOR_SMOOTHING,
+			cursorMotionBlur = DEFAULT_CURSOR_MOTION_BLUR,
+			cursorClickBounce = DEFAULT_CURSOR_CLICK_BOUNCE,
 		},
 		ref,
 	) => {
@@ -197,6 +217,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		const videoSpriteRef = useRef<Sprite | null>(null);
 		const videoContainerRef = useRef<Container | null>(null);
 		const cameraContainerRef = useRef<Container | null>(null);
+		const cursorContainerRef = useRef<Container | null>(null);
 		const timeUpdateAnimationRef = useRef<number | null>(null);
 		const [pixiReady, setPixiReady] = useState(false);
 		const [videoReady, setVideoReady] = useState(false);
@@ -211,7 +232,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		const [webcamDimensions, setWebcamDimensions] = useState<Size | null>(null);
 		const currentTimeRef = useRef(0);
 		const zoomRegionsRef = useRef<ZoomRegion[]>([]);
-		const cursorTelemetryRef = useRef<import("./types").CursorTelemetryPoint[]>([]);
+		const cursorTelemetryRef = useRef<CursorTelemetryPoint[]>([]);
 		const cursorHighlightRef = useRef<CursorHighlightConfig>(DEFAULT_CURSOR_HIGHLIGHT);
 		const cursorClickTimestampsRef = useRef<number[]>([]);
 		const cursorHighlightGraphicsRef = useRef<Graphics | null>(null);
@@ -251,6 +272,12 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		const trimRegionsRef = useRef<TrimRegion[]>([]);
 		const speedRegionsRef = useRef<SpeedRegion[]>([]);
 		const motionBlurAmountRef = useRef(motionBlurAmount);
+		const cursorOverlayRef = useRef<PixiCursorOverlay | null>(null);
+		const showCursorRef = useRef(showCursor);
+		const cursorSizeRef = useRef(cursorSize);
+		const cursorSmoothingRef = useRef(cursorSmoothing);
+		const cursorMotionBlurRef = useRef(cursorMotionBlur);
+		const cursorClickBounceRef = useRef(cursorClickBounce);
 		const motionBlurStateRef = useRef<MotionBlurState>(createMotionBlurState());
 		const onTimeUpdateRef = useRef(onTimeUpdate);
 		const onPlayStateChangeRef = useRef(onPlayStateChange);
@@ -574,6 +601,41 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		}, [motionBlurAmount]);
 
 		useEffect(() => {
+			cursorTelemetryRef.current = cursorTelemetry;
+		}, [cursorTelemetry]);
+
+		useEffect(() => {
+			showCursorRef.current = showCursor;
+		}, [showCursor]);
+
+		useEffect(() => {
+			cursorSizeRef.current = cursorSize;
+		}, [cursorSize]);
+
+		useEffect(() => {
+			cursorSmoothingRef.current = cursorSmoothing;
+		}, [cursorSmoothing]);
+
+		useEffect(() => {
+			cursorMotionBlurRef.current = cursorMotionBlur;
+		}, [cursorMotionBlur]);
+
+		useEffect(() => {
+			cursorClickBounceRef.current = cursorClickBounce;
+		}, [cursorClickBounce]);
+
+		// Sync cursor overlay config when settings change
+		useEffect(() => {
+			const overlay = cursorOverlayRef.current;
+			if (!overlay) return;
+			overlay.setDotRadius(DEFAULT_CURSOR_CONFIG.dotRadius * cursorSize);
+			overlay.setSmoothingFactor(cursorSmoothing);
+			overlay.setMotionBlur(cursorMotionBlur);
+			overlay.setClickBounce(cursorClickBounce);
+			overlay.reset();
+		}, [cursorSize, cursorSmoothing, cursorMotionBlur, cursorClickBounce]);
+
+		useEffect(() => {
 			onTimeUpdateRef.current = onTimeUpdate;
 		}, [onTimeUpdate]);
 
@@ -692,6 +754,13 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 			let app: Application | null = null;
 
 			(async () => {
+				let cursorOverlayEnabled = true;
+				try {
+					await preloadCursorAssets();
+				} catch {
+					cursorOverlayEnabled = false;
+				}
+
 				app = new Application();
 
 				await app.init({
@@ -727,12 +796,33 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 				videoContainerRef.current = videoContainer;
 				cameraContainer.addChild(videoContainer);
 
+				// Cursor container - rendered above video
+				const cursorContainer = new Container();
+				cursorContainerRef.current = cursorContainer;
+				cameraContainer.addChild(cursorContainer);
+
+				// Cursor overlay - rendered above the masked video
+				if (cursorOverlayEnabled) {
+					const cursorOverlay = new PixiCursorOverlay({
+						dotRadius: DEFAULT_CURSOR_CONFIG.dotRadius * cursorSizeRef.current,
+						smoothingFactor: cursorSmoothingRef.current,
+						motionBlur: cursorMotionBlurRef.current,
+						clickBounce: cursorClickBounceRef.current,
+					});
+					cursorOverlayRef.current = cursorOverlay;
+					cursorContainer.addChild(cursorOverlay.container);
+				}
+
 				setPixiReady(true);
 			})();
 
 			return () => {
 				mounted = false;
 				setPixiReady(false);
+				if (cursorOverlayRef.current) {
+					cursorOverlayRef.current.destroy();
+					cursorOverlayRef.current = null;
+				}
 				if (app && app.renderer) {
 					app.destroy(true, {
 						children: true,
@@ -743,6 +833,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 				appRef.current = null;
 				cameraContainerRef.current = null;
 				videoContainerRef.current = null;
+				cursorContainerRef.current = null;
 				videoSpriteRef.current = null;
 			};
 		}, []);
@@ -772,8 +863,9 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 			const video = videoRef.current;
 			const app = appRef.current;
 			const videoContainer = videoContainerRef.current;
+			const cursorContainer = cursorContainerRef.current;
 
-			if (!video || !app || !videoContainer) return;
+			if (!video || !app || !videoContainer || !cursorContainer) return;
 			if (video.videoWidth === 0 || video.videoHeight === 0) return;
 
 			const source = VideoSource.from(video);
@@ -793,6 +885,9 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 			videoContainer.addChild(maskGraphics);
 			videoContainer.mask = maskGraphics;
 			maskGraphicsRef.current = maskGraphics;
+			if (cursorOverlayRef.current) {
+				cursorContainer.addChild(cursorOverlayRef.current.container);
+			}
 
 			const cursorHighlightGraphics = new Graphics();
 			cursorHighlightGraphics.visible = false;
@@ -1137,6 +1232,19 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 						videoContainerRef.current.filters = null;
 						lastMotionBlurActive = false;
 					}
+				}
+
+				// Update cursor overlay
+				const cursorOverlay = cursorOverlayRef.current;
+				if (cursorOverlay) {
+					const timeMs = currentTimeRef.current;
+					cursorOverlay.update(
+						cursorTelemetryRef.current,
+						timeMs,
+						baseMaskRef.current,
+						showCursorRef.current,
+						!isPlayingRef.current || isSeekingRef.current,
+					);
 				}
 
 				const composite3D = composite3DRef.current;

@@ -168,7 +168,31 @@ export interface CursorTelemetryPoint {
 	timeMs: number;
 	cx: number;
 	cy: number;
+	interactionType?: "move" | "click" | "double-click" | "right-click" | "middle-click" | "mouseup";
+	cursorType?:
+		| "arrow"
+		| "text"
+		| "pointer"
+		| "crosshair"
+		| "open-hand"
+		| "closed-hand"
+		| "resize-ew"
+		| "resize-ns"
+		| "not-allowed";
 }
+
+export interface CursorVisualSettings {
+	size: number;
+	smoothing: number;
+	motionBlur: number;
+	clickBounce: number;
+}
+
+export const DEFAULT_CURSOR_SIZE = 3.0;
+export const DEFAULT_CURSOR_SMOOTHING = 0.67;
+export const DEFAULT_CURSOR_MOTION_BLUR = 0.35;
+export const DEFAULT_CURSOR_CLICK_BOUNCE = 2.5;
+export const DEFAULT_ZOOM_MOTION_BLUR = 0.35;
 
 export interface TrimRegion {
 	id: string;

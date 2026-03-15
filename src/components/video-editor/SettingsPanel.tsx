@@ -240,6 +240,18 @@ interface SettingsPanelProps {
 	webcamSizePreset?: WebcamSizePreset;
 	onWebcamSizePresetChange?: (size: WebcamSizePreset) => void;
 	onWebcamSizePresetCommit?: () => void;
+	// Cursor settings
+	showCursor?: boolean;
+	onShowCursorChange?: (show: boolean) => void;
+	cursorSize?: number;
+	onCursorSizeChange?: (size: number) => void;
+	cursorSmoothing?: number;
+	onCursorSmoothingChange?: (smoothing: number) => void;
+	cursorMotionBlur?: number;
+	onCursorMotionBlurChange?: (blur: number) => void;
+	cursorClickBounce?: number;
+	onCursorClickBounceChange?: (bounce: number) => void;
+	hasCursorData?: boolean;
 }
 
 export default SettingsPanel;
@@ -327,6 +339,17 @@ export function SettingsPanel({
 	webcamSizePreset = DEFAULT_WEBCAM_SIZE_PRESET,
 	onWebcamSizePresetChange,
 	onWebcamSizePresetCommit,
+	showCursor = true,
+	onShowCursorChange,
+	cursorSize = 3.0,
+	onCursorSizeChange,
+	cursorSmoothing = 0.67,
+	onCursorSmoothingChange,
+	cursorMotionBlur = 0.35,
+	onCursorMotionBlurChange,
+	cursorClickBounce = 2.5,
+	onCursorClickBounceChange,
+	hasCursorData = false,
 }: SettingsPanelProps) {
 	const t = useScopedT("settings");
 	// Resolved URLs are for DOM rendering only (backgroundImage). The canonical
@@ -458,6 +481,7 @@ export function SettingsPanel({
 		},
 		[cropRegion, videoWidth, videoHeight],
 	);
+	const [showCropDropdown, setShowCropDropdown] = useState(false);
 
 	const zoomEnabled = Boolean(selectedZoomDepth);
 	const trimEnabled = Boolean(selectedTrimId);
@@ -519,20 +543,6 @@ export function SettingsPanel({
 		if (selected === imageUrl) {
 			onWallpaperChange(WALLPAPER_PATHS[0]);
 		}
-	};
-
-	const handleCropToggle = () => {
-		if (!showCropModal && cropRegion) {
-			cropSnapshotRef.current = { ...cropRegion };
-		}
-		setShowCropModal(!showCropModal);
-	};
-
-	const handleCropCancel = () => {
-		if (cropSnapshotRef.current && onCropChange) {
-			onCropChange(cropSnapshotRef.current);
-		}
-		setShowCropModal(false);
 	};
 
 	// Find selected annotation
@@ -1218,7 +1228,7 @@ export function SettingsPanel({
 							)}
 
 							<Button
-								onClick={handleCropToggle}
+								onClick={() => setShowCropDropdown(!showCropDropdown)}
 								variant="outline"
 								className="w-full mt-2 gap-1.5 bg-white/5 text-slate-200 border-white/10 hover:bg-white/10 hover:border-white/20 hover:text-white text-[10px] h-8 transition-all"
 							>
@@ -1227,6 +1237,98 @@ export function SettingsPanel({
 							</Button>
 						</AccordionContent>
 					</AccordionItem>
+
+					{hasCursorData && (
+						<AccordionItem
+							value="cursor"
+							className="border-white/5 rounded-xl bg-white/[0.02] px-3"
+						>
+							<AccordionTrigger className="py-2.5 hover:no-underline">
+								<div className="flex items-center gap-2">
+									<Star className="w-4 h-4 text-[#34B27B]" />
+									<span className="text-xs font-medium">Cursor</span>
+								</div>
+							</AccordionTrigger>
+							<AccordionContent className="pb-3">
+								<div className="flex items-center justify-between p-2 rounded-lg bg-white/5 border border-white/5 mb-3">
+									<div className="text-[10px] font-medium text-slate-300">Show Cursor</div>
+									<Switch
+										checked={showCursor}
+										onCheckedChange={onShowCursorChange}
+										className="data-[state=checked]:bg-[#34B27B] scale-90"
+									/>
+								</div>
+								{showCursor && (
+									<div className="grid grid-cols-2 gap-2">
+										<div className="p-2 rounded-lg bg-white/5 border border-white/5">
+											<div className="flex items-center justify-between mb-1">
+												<div className="text-[10px] font-medium text-slate-300">Size</div>
+												<span className="text-[10px] text-slate-500 font-mono">
+													{cursorSize.toFixed(1)}
+												</span>
+											</div>
+											<Slider
+												value={[cursorSize]}
+												onValueChange={(values) => onCursorSizeChange?.(values[0])}
+												min={0.5}
+												max={10}
+												step={0.1}
+												className="w-full [&_[role=slider]]:bg-[#34B27B] [&_[role=slider]]:border-[#34B27B] [&_[role=slider]]:h-3 [&_[role=slider]]:w-3"
+											/>
+										</div>
+										<div className="p-2 rounded-lg bg-white/5 border border-white/5">
+											<div className="flex items-center justify-between mb-1">
+												<div className="text-[10px] font-medium text-slate-300">Smoothing</div>
+												<span className="text-[10px] text-slate-500 font-mono">
+													{Math.round(cursorSmoothing * 100)}%
+												</span>
+											</div>
+											<Slider
+												value={[cursorSmoothing]}
+												onValueChange={(values) => onCursorSmoothingChange?.(values[0])}
+												min={0}
+												max={1}
+												step={0.01}
+												className="w-full [&_[role=slider]]:bg-[#34B27B] [&_[role=slider]]:border-[#34B27B] [&_[role=slider]]:h-3 [&_[role=slider]]:w-3"
+											/>
+										</div>
+										<div className="p-2 rounded-lg bg-white/5 border border-white/5">
+											<div className="flex items-center justify-between mb-1">
+												<div className="text-[10px] font-medium text-slate-300">Motion Blur</div>
+												<span className="text-[10px] text-slate-500 font-mono">
+													{Math.round(cursorMotionBlur * 100)}%
+												</span>
+											</div>
+											<Slider
+												value={[cursorMotionBlur]}
+												onValueChange={(values) => onCursorMotionBlurChange?.(values[0])}
+												min={0}
+												max={1}
+												step={0.01}
+												className="w-full [&_[role=slider]]:bg-[#34B27B] [&_[role=slider]]:border-[#34B27B] [&_[role=slider]]:h-3 [&_[role=slider]]:w-3"
+											/>
+										</div>
+										<div className="p-2 rounded-lg bg-white/5 border border-white/5">
+											<div className="flex items-center justify-between mb-1">
+												<div className="text-[10px] font-medium text-slate-300">Click Bounce</div>
+												<span className="text-[10px] text-slate-500 font-mono">
+													{cursorClickBounce.toFixed(1)}
+												</span>
+											</div>
+											<Slider
+												value={[cursorClickBounce]}
+												onValueChange={(values) => onCursorClickBounceChange?.(values[0])}
+												min={0}
+												max={5}
+												step={0.1}
+												className="w-full [&_[role=slider]]:bg-[#34B27B] [&_[role=slider]]:border-[#34B27B] [&_[role=slider]]:h-3 [&_[role=slider]]:w-3"
+											/>
+										</div>
+									</div>
+								)}
+							</AccordionContent>
+						</AccordionItem>
+					)}
 
 					<AccordionItem
 						value="background"
@@ -1380,11 +1482,11 @@ export function SettingsPanel({
 				</Accordion>
 			</div>
 
-			{showCropModal && cropRegion && onCropChange && (
+			{showCropDropdown && cropRegion && onCropChange && (
 				<>
 					<div
 						className="fixed inset-0 bg-black/80 backdrop-blur-sm z-50 animate-in fade-in duration-200"
-						onClick={handleCropCancel}
+						onClick={() => setShowCropDropdown(false)}
 					/>
 					<div className="fixed top-1/2 left-1/2 transform -translate-x-1/2 -translate-y-1/2 z-[60] bg-[#09090b] rounded-2xl shadow-2xl border border-white/10 p-8 w-[90vw] max-w-5xl max-h-[90vh] overflow-auto animate-in zoom-in-95 duration-200">
 						<div className="flex items-center justify-between mb-6">
@@ -1395,7 +1497,7 @@ export function SettingsPanel({
 							<Button
 								variant="ghost"
 								size="icon"
-								onClick={handleCropCancel}
+								onClick={() => setShowCropDropdown(false)}
 								className="hover:bg-white/10 text-slate-400 hover:text-white"
 							>
 								<X className="w-5 h-5" />
@@ -1491,7 +1593,7 @@ export function SettingsPanel({
 
 							<div className="flex justify-end">
 								<Button
-									onClick={() => setShowCropModal(false)}
+									onClick={() => setShowCropDropdown(false)}
 									size="lg"
 									className="bg-[#34B27B] hover:bg-[#34B27B]/90 text-white"
 								>
