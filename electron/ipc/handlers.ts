@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import { createRequire } from "node:module";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 
 const nodeRequire = createRequire(import.meta.url);
 
@@ -26,8 +26,18 @@ import {
 	type RecordingSession,
 	type StoreRecordedSessionInput,
 } from "../../src/lib/recordingSession";
+import type {
+	CursorRecordingData,
+	CursorRecordingSample,
+	NativeCursorAsset,
+	ProjectFileResult,
+	ProjectPathResult,
+} from "../../src/native/contracts";
 import { mainT } from "../i18n";
 import { RECORDINGS_DIR } from "../main";
+import { createCursorRecordingSession } from "../native-bridge/cursor/recording/factory";
+import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
+import { registerNativeBridgeHandlers } from "./nativeBridge";
 
 const PROJECT_FILE_EXTENSION = "openscreen";
 const SHORTCUTS_FILE = path.join(app.getPath("userData"), "shortcuts.json");
@@ -192,7 +202,7 @@ type SelectedSource = {
 
 let selectedSource: SelectedSource | null = null;
 let currentProjectPath: string | null = null;
-let currentRecordingSession: RecordingSession | null = null;
+let currentVideoPath: string | null = null;
 
 function normalizePath(filePath: string) {
 	return path.resolve(filePath);
@@ -226,450 +236,180 @@ function isTrustedProjectPath(filePath?: string | null) {
 	return normalizePath(filePath) === normalizePath(currentProjectPath);
 }
 
-function setCurrentRecordingSessionState(session: RecordingSession | null) {
-	currentRecordingSession = session;
-}
-
-function getSessionManifestPathForVideo(videoPath: string) {
-	const parsed = path.parse(videoPath);
-	const baseName = parsed.name.endsWith("-webcam")
-		? parsed.name.slice(0, -"-webcam".length)
-		: parsed.name;
-	return path.join(parsed.dir, `${baseName}${RECORDING_SESSION_SUFFIX}`);
-}
-
-async function loadRecordedSessionForVideoPath(
-	videoPath: string,
-): Promise<RecordingSession | null> {
-	const normalizedVideoPath = normalizeVideoSourcePath(videoPath);
-	if (!normalizedVideoPath) {
-		return null;
-	}
-
-	try {
-		const manifestPath = getSessionManifestPathForVideo(normalizedVideoPath);
-		const content = await fs.readFile(manifestPath, "utf-8");
-		const session = normalizeRecordingSession(JSON.parse(content));
-		if (!session) {
-			return null;
-		}
-
-		const normalizedSession: RecordingSession = {
-			...session,
-			screenVideoPath: normalizeVideoSourcePath(session.screenVideoPath) ?? session.screenVideoPath,
-			...(session.webcamVideoPath
-				? {
-						webcamVideoPath:
-							normalizeVideoSourcePath(session.webcamVideoPath) ?? session.webcamVideoPath,
-					}
-				: {}),
-		};
-
-		const targetPath = normalizePath(normalizedVideoPath);
-		const screenMatches = normalizePath(normalizedSession.screenVideoPath) === targetPath;
-		const webcamMatches = normalizedSession.webcamVideoPath
-			? normalizePath(normalizedSession.webcamVideoPath) === targetPath
-			: false;
-
-		return screenMatches || webcamMatches ? normalizedSession : null;
-	} catch {
-		return null;
-	}
-}
-
-async function storeRecordedSessionFiles(payload: StoreRecordedSessionInput) {
-	const createdAt =
-		typeof payload.createdAt === "number" && Number.isFinite(payload.createdAt)
-			? payload.createdAt
-			: Date.now();
-	const screenVideoPath = resolveRecordingOutputPath(payload.screen.fileName);
-	await fs.writeFile(screenVideoPath, Buffer.from(payload.screen.videoData));
-
-	let webcamVideoPath: string | undefined;
-	if (payload.webcam) {
-		webcamVideoPath = resolveRecordingOutputPath(payload.webcam.fileName);
-		await fs.writeFile(webcamVideoPath, Buffer.from(payload.webcam.videoData));
-	}
-
-	const session: RecordingSession = webcamVideoPath
-		? { screenVideoPath, webcamVideoPath, createdAt }
-		: { screenVideoPath, createdAt };
-	setCurrentRecordingSessionState(session);
-	currentProjectPath = null;
-
-	const telemetryPath = `${screenVideoPath}.cursor.json`;
-	const pendingBatch = cursorTelemetryBuffer.takeNextBatch();
-	const pendingClicks = takeCursorClickTimestamps();
-	if ((pendingBatch && pendingBatch.samples.length > 0) || pendingClicks.length > 0) {
-		try {
-			await fs.writeFile(
-				telemetryPath,
-				JSON.stringify(
-					{
-						version: CURSOR_TELEMETRY_VERSION,
-						samples: pendingBatch?.samples ?? [],
-						clicks: pendingClicks,
-					},
-					null,
-					2,
-				),
-				"utf-8",
-			);
-		} catch (err) {
-			if (pendingBatch) cursorTelemetryBuffer.prependBatch(pendingBatch);
-			throw err;
-		}
-	}
-
-	const sessionManifestPath = path.join(
-		RECORDINGS_DIR,
-		`${path.parse(payload.screen.fileName).name}${RECORDING_SESSION_SUFFIX}`,
-	);
-	await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
-
-	return {
-		success: true,
-		path: screenVideoPath,
-		session,
-		message: "Recording session stored successfully",
-	};
-}
-
-const CURSOR_TELEMETRY_VERSION = 1;
+const CURSOR_TELEMETRY_VERSION = 2;
 const CURSOR_SAMPLE_INTERVAL_MS = 100;
 const MAX_CURSOR_SAMPLES = 60 * 60 * 10; // 1 hour @ 10Hz
 
-let cursorCaptureInterval: NodeJS.Timeout | null = null;
-let cursorCaptureStartTimeMs = 0;
-const cursorTelemetryBuffer = createCursorTelemetryBuffer({
-	maxActiveSamples: MAX_CURSOR_SAMPLES,
-});
-
-// Mouse click timestamps (macOS only — uiohook-napi behind Accessibility).
-const MAX_CURSOR_CLICKS = 60 * 60 * 60; // ~1 click/sec for an hour
-let cursorClickTimestampsMs: number[] = [];
-let uioHookInstance: {
-	start: () => void;
-	stop: () => void;
-	on: (...a: unknown[]) => void;
-	off?: (...a: unknown[]) => void;
-	removeListener?: (...a: unknown[]) => void;
-} | null = null;
-let uioHookMouseDownHandler: ((event: { time?: number }) => void) | null = null;
-let uioHookFailureLogged = false;
+let cursorRecordingSession: CursorRecordingSession | null = null;
+let pendingCursorRecordingData: CursorRecordingData | null = null;
 
 function clamp(value: number, min: number, max: number) {
 	return Math.min(max, Math.max(min, value));
 }
 
-function loadUioHookForClicks(): typeof uioHookInstance {
-	try {
-		// Dynamic require + try/catch so a broken native binary doesn't crash startup.
-		const mod = nodeRequire("uiohook-napi");
-		const candidate = mod.uIOhook ?? mod.default?.uIOhook ?? mod.uiohook ?? mod.default;
-		if (candidate && typeof candidate.start === "function" && typeof candidate.on === "function") {
-			return candidate;
-		}
-		return null;
-	} catch (error) {
-		if (!uioHookFailureLogged) {
-			uioHookFailureLogged = true;
-			console.warn("[clickCapture] uiohook-napi unavailable:", error);
-		}
+function normalizeCursorSample(sample: unknown): CursorRecordingSample | null {
+	if (!sample || typeof sample !== "object") {
 		return null;
 	}
-}
 
-function startClickCapture() {
-	if (process.platform !== "darwin") return;
-	if (uioHookInstance) return;
-
-	// Passive check — the prompt fires from the renderer when the user toggles
-	// "Only on clicks" so it doesn't stack with the screen-recording prompt.
-	try {
-		if (!systemPreferences.isTrustedAccessibilityClient(false)) {
-			if (!uioHookFailureLogged) {
-				uioHookFailureLogged = true;
-				console.warn(
-					"[clickCapture] Accessibility permission not granted — click capture disabled.",
-				);
-			}
-			return;
-		}
-	} catch {
-		// fall through; uiohook will fail defensively below
-	}
-
-	const hook = loadUioHookForClicks();
-	if (!hook) return;
-
-	uioHookMouseDownHandler = (event) => {
-		const elapsed = Math.max(0, Date.now() - cursorCaptureStartTimeMs);
-		void event;
-		if (cursorClickTimestampsMs.length >= MAX_CURSOR_CLICKS) return;
-		cursorClickTimestampsMs.push(elapsed);
+	const point = sample as Partial<CursorRecordingSample>;
+	return {
+		timeMs:
+			typeof point.timeMs === "number" && Number.isFinite(point.timeMs)
+				? Math.max(0, point.timeMs)
+				: 0,
+		cx: typeof point.cx === "number" && Number.isFinite(point.cx) ? clamp(point.cx, 0, 1) : 0.5,
+		cy: typeof point.cy === "number" && Number.isFinite(point.cy) ? clamp(point.cy, 0, 1) : 0.5,
+		assetId: typeof point.assetId === "string" ? point.assetId : null,
+		visible: typeof point.visible === "boolean" ? point.visible : true,
 	};
+}
 
+function normalizeCursorAsset(asset: unknown): NativeCursorAsset | null {
+	if (!asset || typeof asset !== "object") {
+		return null;
+	}
+
+	const candidate = asset as Partial<NativeCursorAsset>;
+	if (typeof candidate.id !== "string" || typeof candidate.imageDataUrl !== "string") {
+		return null;
+	}
+
+	return {
+		id: candidate.id,
+		platform:
+			candidate.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",
+		imageDataUrl: candidate.imageDataUrl,
+		width:
+			typeof candidate.width === "number" && Number.isFinite(candidate.width)
+				? Math.max(1, Math.round(candidate.width))
+				: 1,
+		height:
+			typeof candidate.height === "number" && Number.isFinite(candidate.height)
+				? Math.max(1, Math.round(candidate.height))
+				: 1,
+		hotspotX:
+			typeof candidate.hotspotX === "number" && Number.isFinite(candidate.hotspotX)
+				? Math.max(0, Math.round(candidate.hotspotX))
+				: 0,
+		hotspotY:
+			typeof candidate.hotspotY === "number" && Number.isFinite(candidate.hotspotY)
+				? Math.max(0, Math.round(candidate.hotspotY))
+				: 0,
+		scaleFactor:
+			typeof candidate.scaleFactor === "number" && Number.isFinite(candidate.scaleFactor)
+				? Math.max(0.1, candidate.scaleFactor)
+				: undefined,
+	};
+}
+
+async function readCursorRecordingFile(targetVideoPath: string): Promise<CursorRecordingData> {
+	const telemetryPath = `${targetVideoPath}.cursor.json`;
 	try {
-		hook.on("mousedown", uioHookMouseDownHandler);
-		hook.start();
-		uioHookInstance = hook;
+		const content = await fs.readFile(telemetryPath, "utf-8");
+		const parsed = JSON.parse(content);
+		const rawSamples = Array.isArray(parsed)
+			? parsed
+			: Array.isArray(parsed?.samples)
+				? parsed.samples
+				: [];
+		const rawAssets = Array.isArray(parsed?.assets) ? parsed.assets : [];
+
+		const samples = rawSamples
+			.map((sample: unknown) => normalizeCursorSample(sample))
+			.filter((sample: CursorRecordingSample | null): sample is CursorRecordingSample =>
+				Boolean(sample),
+			)
+			.sort((a: CursorRecordingSample, b: CursorRecordingSample) => a.timeMs - b.timeMs);
+
+		const assets = rawAssets
+			.map((asset: unknown) => normalizeCursorAsset(asset))
+			.filter((asset: NativeCursorAsset | null): asset is NativeCursorAsset => Boolean(asset));
+
+		return {
+			version:
+				typeof parsed?.version === "number" && Number.isFinite(parsed.version) ? parsed.version : 1,
+			provider: parsed?.provider === "native" ? "native" : "none",
+			samples,
+			assets,
+		};
 	} catch (error) {
-		if (!uioHookFailureLogged) {
-			uioHookFailureLogged = true;
-			console.warn("[clickCapture] failed to start uiohook:", error);
+		const nodeError = error as NodeJS.ErrnoException;
+		if (nodeError.code === "ENOENT") {
+			return {
+				version: CURSOR_TELEMETRY_VERSION,
+				provider: "none",
+				samples: [],
+				assets: [],
+			};
 		}
-		uioHookMouseDownHandler = null;
+
+		console.error("Failed to load cursor telemetry:", error);
+		throw error;
 	}
 }
 
-function stopClickCapture() {
-	if (!uioHookInstance) return;
+async function readCursorTelemetryFile(targetVideoPath: string) {
 	try {
-		if (uioHookMouseDownHandler) {
-			if (typeof uioHookInstance.off === "function") {
-				uioHookInstance.off("mousedown", uioHookMouseDownHandler);
-			} else if (typeof uioHookInstance.removeListener === "function") {
-				uioHookInstance.removeListener("mousedown", uioHookMouseDownHandler);
-			}
-		}
-		uioHookInstance.stop();
+		const recordingData = await readCursorRecordingFile(targetVideoPath);
+		return {
+			success: true,
+			samples: recordingData.samples.map((sample) => ({
+				timeMs: sample.timeMs,
+				cx: sample.cx,
+				cy: sample.cy,
+			})),
+		};
 	} catch (error) {
-		console.warn("[clickCapture] failed to stop uiohook:", error);
+		console.error("Failed to load cursor telemetry:", error);
+		return {
+			success: false,
+			message: "Failed to load cursor telemetry",
+			error: String(error),
+			samples: [],
+		};
 	}
-	uioHookInstance = null;
-	uioHookMouseDownHandler = null;
 }
 
-function takeCursorClickTimestamps(): number[] {
-	const out = cursorClickTimestampsMs;
-	cursorClickTimestampsMs = [];
-	return out;
-}
-
-function stopCursorCapture() {
-	if (cursorCaptureInterval) {
-		clearInterval(cursorCaptureInterval);
-		cursorCaptureInterval = null;
+function resolveAssetBasePath() {
+	try {
+		if (app.isPackaged) {
+			const assetPath = path.join(process.resourcesPath, "assets");
+			return pathToFileURL(`${assetPath}${path.sep}`).toString();
+		}
+		const assetPath = path.join(app.getAppPath(), "public", "assets");
+		return pathToFileURL(`${assetPath}${path.sep}`).toString();
+	} catch (err) {
+		console.error("Failed to resolve asset base path:", err);
+		return null;
 	}
-	stopClickCapture();
 }
 
-function sampleCursorPoint() {
+function getSelectedSourceBounds() {
 	const cursor = screen.getCursorScreenPoint();
 	const sourceDisplayId = Number(selectedSource?.display_id);
 	const sourceDisplay = Number.isFinite(sourceDisplayId)
 		? (screen.getAllDisplays().find((display) => display.id === sourceDisplayId) ?? null)
 		: null;
-	const display = sourceDisplay ?? screen.getDisplayNearestPoint(cursor);
-	const bounds = display.bounds;
-	const width = Math.max(1, bounds.width);
-	const height = Math.max(1, bounds.height);
-
-	const cx = clamp((cursor.x - bounds.x) / width, 0, 1);
-	const cy = clamp((cursor.y - bounds.y) / height, 0, 1);
-
-	cursorTelemetryBuffer.push({
-		timeMs: Math.max(0, Date.now() - cursorCaptureStartTimeMs),
-		cx,
-		cy,
-	});
+	return (sourceDisplay ?? screen.getDisplayNearestPoint(cursor)).bounds;
 }
 
 export function registerIpcHandlers(
 	createEditorWindow: () => void,
 	createSourceSelectorWindow: () => BrowserWindow,
-	createCountdownOverlayWindow: () => BrowserWindow,
 	getMainWindow: () => BrowserWindow | null,
 	getSourceSelectorWindow: () => BrowserWindow | null,
-	getCountdownOverlayWindow: () => BrowserWindow | null,
 	onRecordingStateChange?: (recording: boolean, sourceName: string) => void,
-	switchToHud?: () => void,
 ) {
-	const supportsWindowOpacity = process.platform !== "linux";
-	const countdownOverlayState = {
-		visible: false,
-		value: null as number | null,
-		activeRunId: null as number | null,
-		hideCommitId: 0,
-		hideCommitTimer: null as ReturnType<typeof setTimeout> | null,
-	};
-	const COUNTDOWN_OVERLAY_HIDE_DEBOUNCE_MS = 1200;
-
-	const clearCountdownOverlayHideCommit = () => {
-		if (countdownOverlayState.hideCommitTimer) {
-			clearTimeout(countdownOverlayState.hideCommitTimer);
-			countdownOverlayState.hideCommitTimer = null;
-		}
-	};
-
-	const commitCountdownOverlayHide = (win: BrowserWindow, hideCommitId: number) => {
-		if (win.isDestroyed()) {
-			return;
-		}
-
-		if (countdownOverlayState.visible || countdownOverlayState.hideCommitId !== hideCommitId) {
-			return;
-		}
-
-		win.hide();
-		if (supportsWindowOpacity) {
-			// Reset baseline opacity for the next show cycle.
-			win.setOpacity(1);
-		}
-	};
-
-	const flushCountdownOverlayState = (win: BrowserWindow) => {
-		if (win.isDestroyed()) {
-			return;
-		}
-
-		clearCountdownOverlayHideCommit();
-		win.webContents.send("countdown-overlay-value", countdownOverlayState.value);
-		if (!countdownOverlayState.visible) {
-			return;
-		}
-
-		if (win.isVisible()) {
-			if (supportsWindowOpacity) {
-				win.setOpacity(1);
-			}
-			return;
-		}
-
-		setTimeout(() => {
-			if (!win.isDestroyed() && countdownOverlayState.visible && !win.isVisible()) {
-				if (supportsWindowOpacity) {
-					win.setOpacity(0);
-				}
-				win.showInactive();
-
-				if (supportsWindowOpacity) {
-					setTimeout(() => {
-						if (!win.isDestroyed() && countdownOverlayState.visible && win.isVisible()) {
-							win.setOpacity(1);
-						}
-					}, 0);
-				}
-			}
-		}, 16);
-	};
-
-	ipcMain.handle("countdown-overlay-show", (_, value: number, runId: number) => {
-		countdownOverlayState.activeRunId = runId;
-		countdownOverlayState.visible = true;
-		countdownOverlayState.value = value;
-
-		const win = getCountdownOverlayWindow() ?? createCountdownOverlayWindow();
-		if (win.isDestroyed()) {
-			return;
-		}
-
-		if (win.webContents.isLoading()) {
-			win.webContents.once("did-finish-load", () => {
-				if (!win.isDestroyed()) {
-					flushCountdownOverlayState(win);
-				}
-			});
-		} else {
-			flushCountdownOverlayState(win);
-		}
-	});
-
-	ipcMain.handle("countdown-overlay-set-value", (_, value: number, runId: number) => {
-		if (countdownOverlayState.activeRunId !== runId || !countdownOverlayState.visible) {
-			return;
-		}
-
-		countdownOverlayState.value = value;
-
-		const win = getCountdownOverlayWindow();
-		if (!win || win.isDestroyed()) {
-			return;
-		}
-
-		if (win.webContents.isLoading()) {
-			return;
-		}
-
-		win.webContents.send("countdown-overlay-value", value);
-	});
-
-	ipcMain.handle("countdown-overlay-hide", (_, runId: number) => {
-		if (countdownOverlayState.activeRunId !== runId) {
-			return;
-		}
-
-		countdownOverlayState.visible = false;
-		countdownOverlayState.hideCommitId += 1;
-		const hideCommitId = countdownOverlayState.hideCommitId;
-		clearCountdownOverlayHideCommit();
-
-		const win = getCountdownOverlayWindow();
-		if (!win || win.isDestroyed()) {
-			countdownOverlayState.value = null;
-			return;
-		}
-
-		if (supportsWindowOpacity) {
-			// Hide visually immediately to avoid hide/show compositor flashes on rapid restart.
-			win.setOpacity(0);
-		}
-
-		countdownOverlayState.value = null;
-		if (!win.webContents.isLoading()) {
-			win.webContents.send("countdown-overlay-value", countdownOverlayState.value);
-		}
-
-		if (!supportsWindowOpacity) {
-			win.hide();
-			return;
-		}
-
-		countdownOverlayState.hideCommitTimer = setTimeout(() => {
-			countdownOverlayState.hideCommitTimer = null;
-			commitCountdownOverlayHide(win, hideCommitId);
-		}, COUNTDOWN_OVERLAY_HIDE_DEBOUNCE_MS);
-	});
-
-	ipcMain.handle("switch-to-hud", () => {
-		if (switchToHud) switchToHud();
-	});
-	ipcMain.handle("start-new-recording", () => {
-		try {
-			setCurrentRecordingSessionState(null);
-			if (switchToHud) {
-				switchToHud();
-			}
-			return { success: true };
-		} catch (error) {
-			console.error("Failed to start new recording:", error);
-			return { success: false, error: String(error) };
-		}
-	});
-
 	ipcMain.handle("get-sources", async (_, opts) => {
-		const ownWindowSourceIds = new Set(
-			BrowserWindow.getAllWindows()
-				.map((win) => {
-					try {
-						return win.getMediaSourceId();
-					} catch {
-						return null;
-					}
-				})
-				.filter((id): id is string => Boolean(id)),
-		);
 		const sources = await desktopCapturer.getSources(opts);
-		return sources
-			.filter((source) => !ownWindowSourceIds.has(source.id))
-			.map((source) => ({
-				id: source.id,
-				name: source.name,
-				display_id: source.display_id,
-				thumbnail: source.thumbnail ? source.thumbnail.toDataURL() : null,
-				appIcon: source.appIcon ? source.appIcon.toDataURL() : null,
-			}));
+		return sources.map((source) => ({
+			id: source.id,
+			name: source.name,
+			display_id: source.display_id,
+			thumbnail: source.thumbnail ? source.thumbnail.toDataURL() : null,
+			appIcon: source.appIcon ? source.appIcon.toDataURL() : null,
+		}));
 	});
 
 	ipcMain.handle("select-source", (_, source: SelectedSource) => {
@@ -717,22 +457,6 @@ export function registerIpcHandlers(
 		}
 	});
 
-	// macOS Accessibility prompt for global click capture. First call shows the
-	// system dialog; the user has to toggle the app in System Settings (no
-	// programmatic grant exists for Accessibility).
-	ipcMain.handle("request-accessibility-access", () => {
-		if (process.platform !== "darwin") {
-			return { success: true, granted: true };
-		}
-		try {
-			const granted = systemPreferences.isTrustedAccessibilityClient(true);
-			return { success: true, granted };
-		} catch (error) {
-			console.error("Failed to request accessibility access:", error);
-			return { success: false, granted: false, error: String(error) };
-		}
-	});
-
 	ipcMain.handle("open-source-selector", () => {
 		const sourceSelectorWin = getSourceSelectorWindow();
 		if (sourceSelectorWin) {
@@ -752,7 +476,25 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("store-recorded-session", async (_, payload: StoreRecordedSessionInput) => {
 		try {
-			return await storeRecordedSessionFiles(payload);
+			const videoPath = path.join(RECORDINGS_DIR, fileName);
+			await fs.writeFile(videoPath, Buffer.from(videoData));
+			currentProjectPath = null;
+
+			const telemetryPath = `${videoPath}.cursor.json`;
+			if (pendingCursorRecordingData && pendingCursorRecordingData.samples.length > 0) {
+				await fs.writeFile(
+					telemetryPath,
+					JSON.stringify(pendingCursorRecordingData, null, 2),
+					"utf-8",
+				);
+			}
+			pendingCursorRecordingData = null;
+
+			return {
+				success: true,
+				path: videoPath,
+				message: "Video stored successfully",
+			};
 		} catch (error) {
 			console.error("Failed to store recording session:", error);
 			return {
@@ -794,24 +536,7 @@ export function registerIpcHandlers(
 				return { success: false, message: "No recorded video found" };
 			}
 
-			// Sort by most recently modified to reliably get the latest recording.
-			// Lexicographic sort is unreliable (e.g. recording-9.webm > recording-10.webm).
-			let latestVideo: string | null = null;
-			let latestMtimeMs = 0;
-			for (const file of videoFiles) {
-				try {
-					const stat = await fs.stat(path.join(RECORDINGS_DIR, file));
-					if (stat.mtimeMs > latestMtimeMs) {
-						latestMtimeMs = stat.mtimeMs;
-						latestVideo = file;
-					}
-				} catch {
-					// Skip inaccessible files.
-				}
-			}
-			if (!latestVideo) {
-				return { success: false, message: "No recorded video found" };
-			}
+			const latestVideo = videoFiles.sort().reverse()[0];
 			const videoPath = path.join(RECORDINGS_DIR, latestVideo);
 
 			return { success: true, path: videoPath };
@@ -821,64 +546,44 @@ export function registerIpcHandlers(
 		}
 	});
 
-	ipcMain.handle("read-binary-file", async (_, inputPath: string) => {
-		try {
-			const normalizedPath = normalizeVideoSourcePath(inputPath);
-			if (!normalizedPath) {
-				return { success: false, message: "Invalid file path" };
-			}
-
-			if (!isPathAllowed(normalizedPath)) {
-				console.warn(
-					"[read-binary-file] Rejected path outside allowed directories:",
-					normalizedPath,
-				);
-				return { success: false, message: "Access denied: path outside allowed directories" };
-			}
-
-			const data = await fs.readFile(normalizedPath);
-			return {
-				success: true,
-				data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
-				path: normalizedPath,
-			};
-		} catch (error) {
-			console.error("Failed to read binary file:", error);
-			return {
-				success: false,
-				message: "Failed to read binary file",
-				error: String(error),
-			};
-		}
-	});
-
-	ipcMain.handle("set-recording-state", (_, recording: boolean, recordingId?: number) => {
+	ipcMain.handle("set-recording-state", async (_, recording: boolean) => {
 		if (recording) {
-			stopCursorCapture();
-			// The renderer is the source of truth for the recording id (it
-			// uses the same id as the saved fileName). Fall back to a
-			// timestamp only if the renderer didn't supply one, so the
-			// buffer always has a stable key per session.
-			const id = typeof recordingId === "number" ? recordingId : Date.now();
-			cursorTelemetryBuffer.startSession(id);
-			cursorCaptureStartTimeMs = Date.now();
-			cursorClickTimestampsMs = [];
-			startClickCapture();
-			sampleCursorPoint();
-			cursorCaptureInterval = setInterval(sampleCursorPoint, CURSOR_SAMPLE_INTERVAL_MS);
+			if (cursorRecordingSession) {
+				pendingCursorRecordingData = await cursorRecordingSession.stop();
+				cursorRecordingSession = null;
+			}
+
+			pendingCursorRecordingData = null;
+			cursorRecordingSession = createCursorRecordingSession({
+				getDisplayBounds: getSelectedSourceBounds,
+				maxSamples: MAX_CURSOR_SAMPLES,
+				platform: process.platform,
+				sampleIntervalMs: CURSOR_SAMPLE_INTERVAL_MS,
+			});
+
+			try {
+				await cursorRecordingSession.start();
+			} catch (error) {
+				console.error("Failed to start cursor recording session:", error);
+				cursorRecordingSession = null;
+			}
 		} else {
-			stopCursorCapture();
-			cursorTelemetryBuffer.endSession();
+			if (cursorRecordingSession) {
+				try {
+					pendingCursorRecordingData = await cursorRecordingSession.stop();
+				} catch (error) {
+					console.error("Failed to stop cursor recording session:", error);
+					pendingCursorRecordingData = null;
+				} finally {
+					cursorRecordingSession = null;
+				}
+			}
 		}
 
 		const source = selectedSource || { name: "Screen" };
 		if (onRecordingStateChange) {
 			onRecordingStateChange(recording, source.name);
 		}
-	});
-
-	ipcMain.handle("discard-cursor-telemetry", (_, recordingId: number) => {
-		cursorTelemetryBuffer.discardBatch(recordingId);
 	});
 
 	ipcMain.handle("get-cursor-telemetry", async (_, videoPath?: string) => {
@@ -889,85 +594,12 @@ export function registerIpcHandlers(
 			return { success: true, samples: [] };
 		}
 
-		if (!isPathAllowed(targetVideoPath)) {
-			console.warn(
-				"[get-cursor-telemetry] Rejected path outside allowed directories:",
-				targetVideoPath,
-			);
-			return { success: true, samples: [] };
-		}
-
-		const telemetryPath = `${targetVideoPath}.cursor.json`;
-		try {
-			const content = await fs.readFile(telemetryPath, "utf-8");
-			const parsed = JSON.parse(content);
-			const rawSamples = Array.isArray(parsed)
-				? parsed
-				: Array.isArray(parsed?.samples)
-					? parsed.samples
-					: [];
-
-			const samples: CursorTelemetryPoint[] = rawSamples
-				.filter((sample: unknown) => Boolean(sample && typeof sample === "object"))
-				.map((sample: unknown) => {
-					const point = sample as Partial<CursorTelemetryPoint>;
-					return {
-						timeMs:
-							typeof point.timeMs === "number" && Number.isFinite(point.timeMs)
-								? Math.max(0, point.timeMs)
-								: 0,
-						cx:
-							typeof point.cx === "number" && Number.isFinite(point.cx)
-								? clamp(point.cx, 0, 1)
-								: 0.5,
-						cy:
-							typeof point.cy === "number" && Number.isFinite(point.cy)
-								? clamp(point.cy, 0, 1)
-								: 0.5,
-					};
-				})
-				.sort((a: CursorTelemetryPoint, b: CursorTelemetryPoint) => a.timeMs - b.timeMs);
-
-			const rawClicks = Array.isArray(parsed?.clicks) ? parsed.clicks : [];
-			const clicks: number[] = rawClicks
-				.map((value: unknown) =>
-					typeof value === "number" && Number.isFinite(value) ? Math.max(0, value) : null,
-				)
-				.filter((v: number | null): v is number => v !== null)
-				.sort((a: number, b: number) => a - b);
-
-			return { success: true, samples, clicks };
-		} catch (error) {
-			const nodeError = error as NodeJS.ErrnoException;
-			if (nodeError.code === "ENOENT") {
-				return { success: true, samples: [], clicks: [] };
-			}
-			console.error("Failed to load cursor telemetry:", error);
-			return {
-				success: false,
-				message: "Failed to load cursor telemetry",
-				error: String(error),
-				samples: [],
-				clicks: [],
-			};
-		}
+		return readCursorTelemetryFile(targetVideoPath);
 	});
 
 	ipcMain.handle("open-external-url", async (_, url: string) => {
 		try {
-			const ALLOWED_SCHEMES = ["http:", "https:", "mailto:"];
-			let parsed: URL;
-			try {
-				parsed = new URL(url);
-			} catch {
-				return { success: false, error: "Invalid URL" };
-			}
-
-			if (!ALLOWED_SCHEMES.includes(parsed.protocol)) {
-				return { success: false, error: `Unsupported URL scheme: ${parsed.protocol}` };
-			}
-
-			await shell.openExternal(parsed.toString());
+			await shell.openExternal(url);
 			return { success: true };
 		} catch (error) {
 			console.error("Failed to open URL:", error);
@@ -975,15 +607,10 @@ export function registerIpcHandlers(
 		}
 	});
 
-	/**
-	 * Handles saving an exported video file.
-	 * Shows a save dialog, normalizes the file path for the current OS,
-	 * ensures the directory exists, and writes the video data.
-	 * @param _ - Unused event parameter.
-	 * @param videoData - The exported video as an ArrayBuffer.
-	 * @param fileName - Suggested filename for the save dialog.
-	 * @returns Object with success status, optional file path, and error details.
-	 */
+	// Return base path for assets so renderer can resolve file:// paths in production
+	ipcMain.handle("get-asset-base-path", () => {
+		return resolveAssetBasePath();
+	});
 
 	ipcMain.handle("save-exported-video", async (_, videoData: ArrayBuffer, fileName: string) => {
 		try {
@@ -1014,18 +641,11 @@ export function registerIpcHandlers(
 				};
 			}
 
-			// --- FIX: Normalize the path for Windows compatibility ---
-			const normalizedPath = path.normalize(result.filePath);
-
-			// Ensure the parent directory exists (Windows may fail if the folder is missing)
-			await fs.mkdir(path.dirname(normalizedPath), { recursive: true });
-			// --- END FIX ---
-
-			await fs.writeFile(normalizedPath, Buffer.from(videoData));
+			await fs.writeFile(result.filePath, Buffer.from(videoData));
 
 			return {
 				success: true,
-				path: normalizedPath,
+				path: result.filePath,
 				message: "Video exported successfully",
 			};
 		} catch (error) {
@@ -1037,6 +657,7 @@ export function registerIpcHandlers(
 			};
 		}
 	});
+
 	ipcMain.handle("open-video-file-picker", async () => {
 		try {
 			const dialogOptions = buildDialogOptions(
@@ -1060,17 +681,10 @@ export function registerIpcHandlers(
 				return { success: false, canceled: true };
 			}
 
-			const approvedPath = await approveReadableVideoPath(result.filePaths[0]);
-			if (!approvedPath) {
-				return {
-					success: false,
-					message: "Selected file is not a supported video",
-				};
-			}
 			currentProjectPath = null;
 			return {
 				success: true,
-				path: approvedPath,
+				path: result.filePaths[0],
 			};
 		} catch (error) {
 			console.error("Failed to open file picker:", error);
@@ -1109,75 +723,87 @@ export function registerIpcHandlers(
 	ipcMain.handle(
 		"save-project-file",
 		async (_, projectData: unknown, suggestedName?: string, existingProjectPath?: string) => {
-			try {
-				const trustedExistingProjectPath = isTrustedProjectPath(existingProjectPath)
-					? existingProjectPath
-					: null;
-
-				if (trustedExistingProjectPath) {
-					await fs.writeFile(
-						trustedExistingProjectPath,
-						JSON.stringify(projectData, null, 2),
-						"utf-8",
-					);
-					currentProjectPath = trustedExistingProjectPath;
-					return {
-						success: true,
-						path: trustedExistingProjectPath,
-						message: "Project saved successfully",
-					};
-				}
-
-				const safeName = (suggestedName || `project-${Date.now()}`).replace(/[^a-zA-Z0-9-_]/g, "_");
-				const defaultName = safeName.endsWith(`.${PROJECT_FILE_EXTENSION}`)
-					? safeName
-					: `${safeName}.${PROJECT_FILE_EXTENSION}`;
-
-				const dialogOptions = buildDialogOptions(
-					{
-						title: mainT("dialogs", "fileDialogs.saveProject"),
-						defaultPath: path.join(RECORDINGS_DIR, defaultName),
-						filters: [
-							{
-								name: mainT("dialogs", "fileDialogs.openscreenProject"),
-								extensions: [PROJECT_FILE_EXTENSION],
-							},
-							{ name: "JSON", extensions: ["json"] },
-						],
-						properties: ["createDirectory", "showOverwriteConfirmation"],
-					},
-					getMainWindow(),
-				);
-				const result = await dialog.showSaveDialog(dialogOptions);
-
-				if (result.canceled || !result.filePath) {
-					return {
-						success: false,
-						canceled: true,
-						message: "Save project canceled",
-					};
-				}
-
-				await fs.writeFile(result.filePath, JSON.stringify(projectData, null, 2), "utf-8");
-				currentProjectPath = result.filePath;
-
-				return {
-					success: true,
-					path: result.filePath,
-					message: "Project saved successfully",
-				};
-			} catch (error) {
-				console.error("Failed to save project file:", error);
-				return {
-					success: false,
-					message: "Failed to save project file",
-					error: String(error),
-				};
-			}
+			return saveProjectFile(projectData, suggestedName, existingProjectPath);
 		},
 	);
 
+	async function saveProjectFile(
+		projectData: unknown,
+		suggestedName?: string,
+		existingProjectPath?: string,
+	): Promise<ProjectFileResult> {
+		try {
+			const trustedExistingProjectPath = isTrustedProjectPath(existingProjectPath)
+				? existingProjectPath
+				: null;
+
+			if (trustedExistingProjectPath) {
+				await fs.writeFile(
+					trustedExistingProjectPath,
+					JSON.stringify(projectData, null, 2),
+					"utf-8",
+				);
+				currentProjectPath = trustedExistingProjectPath;
+				return {
+					success: true,
+					path: trustedExistingProjectPath,
+					message: "Project saved successfully",
+				};
+			}
+
+			const safeName = (suggestedName || `project-${Date.now()}`).replace(/[^a-zA-Z0-9-_]/g, "_");
+			const defaultName = safeName.endsWith(`.${PROJECT_FILE_EXTENSION}`)
+				? safeName
+				: `${safeName}.${PROJECT_FILE_EXTENSION}`;
+
+			const dialogOptions = buildDialogOptions(
+				{
+					title: mainT("dialogs", "fileDialogs.saveProject"),
+					defaultPath: path.join(RECORDINGS_DIR, defaultName),
+					filters: [
+						{
+							name: mainT("dialogs", "fileDialogs.openscreenProject"),
+							extensions: [PROJECT_FILE_EXTENSION],
+						},
+						{ name: "JSON", extensions: ["json"] },
+					],
+					properties: ["createDirectory", "showOverwriteConfirmation"],
+				},
+				getMainWindow(),
+			);
+			const result = await dialog.showSaveDialog(dialogOptions);
+
+			if (result.canceled || !result.filePath) {
+				return {
+					success: false,
+					canceled: true,
+					message: "Save project canceled",
+				};
+			}
+
+			await fs.writeFile(result.filePath, JSON.stringify(projectData, null, 2), "utf-8");
+			currentProjectPath = result.filePath;
+
+			return {
+				success: true,
+				path: result.filePath,
+				message: "Project saved successfully",
+			};
+		} catch (error) {
+			console.error("Failed to save project file:", error);
+			return {
+				success: false,
+				message: "Failed to save project file",
+				error: String(error),
+			};
+		}
+	}
+
 	ipcMain.handle("load-project-file", async () => {
+		return loadProjectFile();
+	});
+
+	async function loadProjectFile(): Promise<ProjectFileResult> {
 		try {
 			const dialogOptions = buildDialogOptions(
 				{
@@ -1204,9 +830,19 @@ export function registerIpcHandlers(
 			const filePath = result.filePaths[0];
 			const content = await fs.readFile(filePath, "utf-8");
 			const project = JSON.parse(content);
-			const session = await getApprovedProjectSession(project, filePath);
 			currentProjectPath = filePath;
-			setCurrentRecordingSessionState(session);
+			if (project && typeof project === "object") {
+				const rawProject = project as { media?: unknown; videoPath?: unknown };
+				const media =
+					normalizeProjectMedia(rawProject.media) ??
+					(typeof rawProject.videoPath === "string"
+						? {
+								screenVideoPath:
+									normalizeVideoSourcePath(rawProject.videoPath) ?? rawProject.videoPath,
+							}
+						: null);
+				setCurrentRecordingSessionState(media ? { ...media, createdAt: Date.now() } : null);
+			}
 
 			return {
 				success: true,
@@ -1221,9 +857,13 @@ export function registerIpcHandlers(
 				error: String(error),
 			};
 		}
-	});
+	}
 
 	ipcMain.handle("load-current-project-file", async () => {
+		return loadCurrentProjectFile();
+	});
+
+	async function loadCurrentProjectFile(): Promise<ProjectFileResult> {
 		try {
 			if (!currentProjectPath) {
 				return { success: false, message: "No active project" };
@@ -1231,8 +871,18 @@ export function registerIpcHandlers(
 
 			const content = await fs.readFile(currentProjectPath, "utf-8");
 			const project = JSON.parse(content);
-			const session = await getApprovedProjectSession(project, currentProjectPath);
-			setCurrentRecordingSessionState(session);
+			if (project && typeof project === "object") {
+				const rawProject = project as { media?: unknown; videoPath?: unknown };
+				const media =
+					normalizeProjectMedia(rawProject.media) ??
+					(typeof rawProject.videoPath === "string"
+						? {
+								screenVideoPath:
+									normalizeVideoSourcePath(rawProject.videoPath) ?? rawProject.videoPath,
+							}
+						: null);
+				setCurrentRecordingSessionState(media ? { ...media, createdAt: Date.now() } : null);
+			}
 			return {
 				success: true,
 				path: currentProjectPath,
@@ -1246,54 +896,34 @@ export function registerIpcHandlers(
 				error: String(error),
 			};
 		}
-	});
-	ipcMain.handle("set-current-recording-session", (_, session: RecordingSession | null) => {
-		const normalized = normalizeRecordingSession(session);
-		setCurrentRecordingSessionState(normalized);
-		currentProjectPath = null;
-		return { success: true, session: normalized ?? undefined };
+	}
+
+	ipcMain.handle("set-current-video-path", (_, path: string) => {
+		return setCurrentVideoPath(path);
 	});
 
-	ipcMain.handle("get-current-recording-session", () => {
-		return currentRecordingSession
-			? { success: true, session: currentRecordingSession }
-			: { success: false };
-	});
-
-	ipcMain.handle("set-current-video-path", async (_, path: string) => {
-		const normalizedPath = normalizeVideoSourcePath(path);
-		if (!normalizedPath || !isPathAllowed(normalizedPath)) {
-			return { success: false, message: "Video path has not been approved" };
-		}
-
-		const restoredSession = await loadRecordedSessionForVideoPath(normalizedPath);
-		if (restoredSession) {
-			// Approve all media paths from the restored session so they can be read later
-			approveFilePath(restoredSession.screenVideoPath);
-			if (restoredSession.webcamVideoPath) {
-				approveFilePath(restoredSession.webcamVideoPath);
-			}
-			setCurrentRecordingSessionState(restoredSession);
-		} else {
-			setCurrentRecordingSessionState({
-				screenVideoPath: normalizedPath,
-				createdAt: Date.now(),
-			});
-		}
+	function setCurrentVideoPath(path: string): ProjectPathResult {
+		currentVideoPath = normalizeVideoSourcePath(path) ?? path;
 		currentProjectPath = null;
 		return { success: true };
-	});
+	}
 
 	ipcMain.handle("get-current-video-path", () => {
-		return currentRecordingSession?.screenVideoPath
-			? { success: true, path: currentRecordingSession.screenVideoPath }
-			: { success: false };
+		return getCurrentVideoPathResult();
 	});
 
+	function getCurrentVideoPathResult(): ProjectPathResult {
+		return currentVideoPath ? { success: true, path: currentVideoPath } : { success: false };
+	}
+
 	ipcMain.handle("clear-current-video-path", () => {
-		setCurrentRecordingSessionState(null);
-		return { success: true };
+		return clearCurrentVideoPath();
 	});
+
+	function clearCurrentVideoPath(): ProjectPathResult {
+		currentVideoPath = null;
+		return { success: true };
+	}
 
 	ipcMain.handle("get-platform", () => {
 		return process.platform;
@@ -1316,5 +946,22 @@ export function registerIpcHandlers(
 			console.error("Failed to save shortcuts:", error);
 			return { success: false, error: String(error) };
 		}
+	});
+
+	registerNativeBridgeHandlers({
+		getPlatform: () => process.platform,
+		getCurrentProjectPath: () => currentProjectPath,
+		getCurrentVideoPath: () => currentVideoPath,
+		saveProjectFile,
+		loadProjectFile,
+		loadCurrentProjectFile,
+		setCurrentVideoPath,
+		getCurrentVideoPathResult,
+		clearCurrentVideoPath,
+		resolveAssetBasePath,
+		resolveVideoPath: (videoPath?: string | null) =>
+			normalizeVideoSourcePath(videoPath ?? currentVideoPath),
+		loadCursorRecordingData: readCursorRecordingFile,
+		loadCursorTelemetry: readCursorTelemetryFile,
 	});
 }

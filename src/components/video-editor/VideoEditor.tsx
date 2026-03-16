@@ -38,6 +38,7 @@ import {
 	getNativeAspectRatioValue,
 	isPortraitAspectRatio,
 } from "@/utils/aspectRatioUtils";
+import { nativeBridgeClient, useCursorRecordingData, useCursorTelemetry } from "@/native";
 import { ExportDialog } from "./ExportDialog";
 import PlaybackControls from "./PlaybackControls";
 import {
@@ -56,7 +57,6 @@ import TimelineEditor from "./timeline/TimelineEditor";
 import {
 	type AnnotationRegion,
 	type BlurData,
-	type CursorTelemetryPoint,
 	clampFocusToDepth,
 	DEFAULT_ANNOTATION_POSITION,
 	DEFAULT_ANNOTATION_SIZE,
@@ -126,8 +126,6 @@ export default function VideoEditor() {
 	currentTimeRef.current = currentTime;
 	const durationRef = useRef(duration);
 	durationRef.current = duration;
-	const [cursorTelemetry, setCursorTelemetry] = useState<CursorTelemetryPoint[]>([]);
-	const [cursorClickTimestamps, setCursorClickTimestamps] = useState<number[]>([]);
 	const [selectedZoomId, setSelectedZoomId] = useState<string | null>(null);
 	const [selectedTrimId, setSelectedTrimId] = useState<string | null>(null);
 	const [selectedSpeedId, setSelectedSpeedId] = useState<string | null>(null);
@@ -145,12 +143,12 @@ export default function VideoEditor() {
 	const [gifSizePreset, setGifSizePreset] = useState<GifSizePreset>("medium");
 	const [exportedFilePath, setExportedFilePath] = useState<string | null>(null);
 	const [lastSavedSnapshot, setLastSavedSnapshot] = useState<string | null>(null);
-	const [unsavedExport, setUnsavedExport] = useState<{
-		arrayBuffer: ArrayBuffer;
-		fileName: string;
-		format: string;
-	} | null>(null);
-	const [isFullscreen, setIsFullscreen] = useState(false);
+	const cursorTelemetrySourcePath = videoSourcePath ?? (videoPath ? fromFileUrl(videoPath) : null);
+	const { samples: cursorTelemetry, error: cursorTelemetryError } =
+		useCursorTelemetry(cursorTelemetrySourcePath);
+	const { data: cursorRecordingData, error: cursorRecordingDataError } =
+		useCursorRecordingData(cursorTelemetrySourcePath);
+	const cursorClickTimestamps: number[] = [];
 
 	// Cursor & motion blur visual settings (non-undoable preferences)
 	const [showCursor, setShowCursor] = useState(true);
@@ -212,6 +210,13 @@ export default function VideoEditor() {
 			const project = candidate;
 			const sourcePath = project.videoPath;
 			const normalizedEditor = normalizeProjectEditor(project.editor);
+			const inferredDurationMs = Math.max(
+				0,
+				...normalizedEditor.zoomRegions.map((region) => region.endMs),
+				...normalizedEditor.trimRegions.map((region) => region.endMs),
+				...normalizedEditor.speedRegions.map((region) => region.endMs),
+				...normalizedEditor.annotationRegions.map((region) => region.endMs),
+			);
 
 			try {
 				videoPlaybackRef.current?.pause();
@@ -220,7 +225,7 @@ export default function VideoEditor() {
 			}
 			setIsPlaying(false);
 			setCurrentTime(0);
-			setDuration(0);
+			setDuration(inferredDurationMs > 0 ? inferredDurationMs / 1000 : 0);
 
 			setError(null);
 			setVideoSourcePath(sourcePath);
@@ -349,7 +354,7 @@ export default function VideoEditor() {
 	useEffect(() => {
 		async function loadInitialData() {
 			try {
-				const currentProjectResult = await window.electronAPI.loadCurrentProjectFile();
+				const currentProjectResult = await nativeBridgeClient.project.loadCurrentProjectFile();
 				if (currentProjectResult.success && currentProjectResult.project) {
 					const restored = await applyLoadedProject(
 						currentProjectResult.project,
@@ -386,7 +391,7 @@ export default function VideoEditor() {
 					return;
 				}
 
-				const result = await window.electronAPI.getCurrentVideoPath();
+				const result = await nativeBridgeClient.project.getCurrentVideoPath();
 				if (result.success && result.path) {
 					setVideoSourcePath(result.path);
 					setVideoPath(toFileUrl(result.path));
@@ -475,7 +480,7 @@ export default function VideoEditor() {
 			// Match the normalization path used by `currentProjectSnapshot` so the
 			// post-save baseline compares equal and `hasUnsavedChanges` clears.
 			const projectSnapshot = createProjectSnapshot(currentProjectMedia, editorState);
-			const result = await window.electronAPI.saveProjectFile(
+			const result = await nativeBridgeClient.project.saveProjectFile(
 				projectData,
 				fileNameBase,
 				forceSaveAs ? undefined : (currentProjectPath ?? undefined),
@@ -559,7 +564,7 @@ export default function VideoEditor() {
 	}, []);
 
 	const handleLoadProject = useCallback(async () => {
-		const result = await window.electronAPI.loadProjectFile();
+		const result = await nativeBridgeClient.project.loadProjectFile();
 
 		if (result.canceled) {
 			return;
@@ -592,40 +597,16 @@ export default function VideoEditor() {
 	}, [handleLoadProject, handleSaveProject, handleSaveProjectAs]);
 
 	useEffect(() => {
-		let mounted = true;
-
-		async function loadCursorTelemetry() {
-			const sourcePath = currentProjectMedia?.screenVideoPath ?? null;
-
-			if (!sourcePath) {
-				if (mounted) {
-					setCursorTelemetry([]);
-					setCursorClickTimestamps([]);
-				}
-				return;
-			}
-
-			try {
-				const result = await window.electronAPI.getCursorTelemetry(sourcePath);
-				if (mounted) {
-					setCursorTelemetry(result.success ? result.samples : []);
-					setCursorClickTimestamps(result.success ? (result.clicks ?? []) : []);
-				}
-			} catch (telemetryError) {
-				console.warn("Unable to load cursor telemetry:", telemetryError);
-				if (mounted) {
-					setCursorTelemetry([]);
-					setCursorClickTimestamps([]);
-				}
-			}
+		if (cursorTelemetryError) {
+			console.warn("Unable to load cursor telemetry:", cursorTelemetryError);
 		}
+	}, [cursorTelemetryError]);
 
-		loadCursorTelemetry();
-
-		return () => {
-			mounted = false;
-		};
-	}, [currentProjectMedia]);
+	useEffect(() => {
+		if (cursorRecordingDataError) {
+			console.warn("Unable to load cursor recording data:", cursorRecordingDataError);
+		}
+	}, [cursorRecordingDataError]);
 
 	function togglePlayPause() {
 		const playback = videoPlaybackRef.current;
@@ -1419,6 +1400,7 @@ export default function VideoEditor() {
 						padding,
 						videoPadding: padding,
 						cropRegion,
+						cursorRecordingData,
 						annotationRegions,
 						webcamLayoutPreset,
 						webcamMaskShape,
@@ -1561,6 +1543,7 @@ export default function VideoEditor() {
 						borderRadius,
 						padding,
 						cropRegion,
+						cursorRecordingData,
 						annotationRegions,
 						webcamLayoutPreset,
 						webcamMaskShape,
@@ -1644,6 +1627,7 @@ export default function VideoEditor() {
 			borderRadius,
 			padding,
 			cropRegion,
+			cursorRecordingData,
 			annotationRegions,
 			isPlaying,
 			aspectRatio,
@@ -1898,6 +1882,7 @@ export default function VideoEditor() {
 											borderRadius={borderRadius}
 											padding={padding}
 											cropRegion={cropRegion}
+											cursorRecordingData={cursorRecordingData}
 											trimRegions={trimRegions}
 											speedRegions={speedRegions}
 											annotationRegions={annotationOnlyRegions}
@@ -1947,6 +1932,7 @@ export default function VideoEditor() {
 							<div className="h-full bg-[#09090b] rounded-2xl border border-white/5 shadow-lg overflow-hidden flex flex-col">
 								<TimelineEditor
 									videoDuration={duration}
+									hasVideoSource={Boolean(videoPath)}
 									currentTime={currentTime}
 									onSeek={handleSeek}
 									cursorTelemetry={cursorTelemetry}

@@ -57,8 +57,14 @@ import {
 	type Size,
 	type StyledRenderRect,
 } from "@/lib/compositeLayout";
+import {
+	getNativeCursorDisplayMetrics,
+	projectNativeCursorToStage,
+	resolveActiveNativeCursorFrame,
+} from "@/lib/cursor/nativeCursor";
 import { BackgroundLoadError, classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { drawCanvasClipPath } from "@/lib/webcamMaskShapes";
+import type { CursorRecordingData, NativeCursorAsset } from "@/native/contracts";
 import { renderAnnotations } from "./annotationRenderer";
 import {
 	getLinearGradientPoints,
@@ -80,6 +86,7 @@ interface FrameRenderConfig {
 	borderRadius?: number;
 	padding?: number;
 	cropRegion: CropRegion;
+	cursorRecordingData?: CursorRecordingData | null;
 	videoWidth: number;
 	videoHeight: number;
 	webcamSize?: Size | null;
@@ -137,6 +144,7 @@ export class FrameRenderer {
 	private rasterCtx: CanvasRenderingContext2D | null = null;
 	private threeDPass: ThreeDPass | null = null;
 	private currentRotation3D: Rotation3D = { ...DEFAULT_ROTATION_3D };
+	private cursorImageCache = new Map<string, HTMLImageElement>();
 	private config: FrameRenderConfig;
 	private animationState: AnimationState;
 	private layoutCache: LayoutCache | null = null;
@@ -469,6 +477,8 @@ export class FrameRenderer {
 			}
 		}
 
+		await this.drawNativeCursor(timeMs);
+
 		// Render annotations on top of foreground (so they rotate with recording).
 		if (
 			this.config.annotationRegions &&
@@ -544,7 +554,63 @@ export class FrameRenderer {
 		}
 	}
 
-	private updateLayout(webcamFrame?: VideoFrame | null): void {
+	private async drawNativeCursor(timeMs: number) {
+		if (!this.compositeCtx || !this.cameraContainer || !this.videoContainer || !this.layoutCache) {
+			return;
+		}
+
+		const activeNativeCursor = resolveActiveNativeCursorFrame(
+			this.config.cursorRecordingData,
+			timeMs,
+		);
+		if (!activeNativeCursor) {
+			return;
+		}
+
+		const projectedPoint = projectNativeCursorToStage({
+			cameraContainer: this.cameraContainer,
+			cropRegion: this.config.cropRegion,
+			maskRect: this.layoutCache.maskRect,
+			videoContainerPosition: {
+				x: this.videoContainer.x,
+				y: this.videoContainer.y,
+			},
+			sample: activeNativeCursor.sample,
+		});
+		if (!projectedPoint) {
+			return;
+		}
+
+		const image = await this.getCursorImage(activeNativeCursor.asset);
+		const metrics = getNativeCursorDisplayMetrics(activeNativeCursor.asset, 1);
+
+		this.compositeCtx.drawImage(
+			image,
+			projectedPoint.x - metrics.hotspotX,
+			projectedPoint.y - metrics.hotspotY,
+			metrics.width,
+			metrics.height,
+		);
+	}
+
+	private async getCursorImage(asset: NativeCursorAsset) {
+		const cachedImage = this.cursorImageCache.get(asset.id);
+		if (cachedImage) {
+			return cachedImage;
+		}
+
+		const image = new Image();
+		await new Promise<void>((resolve, reject) => {
+			image.onload = () => resolve();
+			image.onerror = () => reject(new Error(`Failed to load cursor asset ${asset.id}`));
+			image.src = asset.imageDataUrl;
+		});
+
+		this.cursorImageCache.set(asset.id, image);
+		return image;
+	}
+
+	private updateLayout(): void {
 		if (!this.app || !this.videoSprite || !this.maskGraphics || !this.videoContainer) return;
 
 		const { width, height } = this.config;
@@ -1001,5 +1067,6 @@ export class FrameRenderer {
 			this.threeDPass.destroy();
 			this.threeDPass = null;
 		}
+		this.cursorImageCache.clear();
 	}
 }

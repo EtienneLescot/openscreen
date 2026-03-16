@@ -28,6 +28,12 @@ import {
 import { classifyWallpaper, DEFAULT_WALLPAPER, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import {
+	getNativeCursorDisplayMetrics,
+	projectNativeCursorToStage,
+	resolveActiveNativeCursorFrame,
+} from "@/lib/cursor/nativeCursor";
+import type { CursorRecordingData } from "@/native/contracts";
+import {
 	type AspectRatio,
 	formatAspectRatioForCSS,
 	getNativeAspectRatioValue,
@@ -122,6 +128,7 @@ interface VideoPlaybackProps {
 	trimRegions?: TrimRegion[];
 	speedRegions?: SpeedRegion[];
 	aspectRatio: AspectRatio;
+	cursorRecordingData?: CursorRecordingData | null;
 	annotationRegions?: AnnotationRegion[];
 	selectedAnnotationId?: string | null;
 	onSelectAnnotation?: (id: string | null) => void;
@@ -152,6 +159,22 @@ export interface VideoPlaybackRef {
 	containerRef: React.RefObject<HTMLDivElement>;
 	play: () => Promise<void>;
 	pause: () => void;
+}
+
+function getResolvedVideoDuration(video: HTMLVideoElement): number | null {
+	if (Number.isFinite(video.duration) && video.duration > 0) {
+		return video.duration;
+	}
+
+	if (video.seekable.length > 0) {
+		const lastRangeIndex = video.seekable.length - 1;
+		const seekableEnd = video.seekable.end(lastRangeIndex);
+		if (Number.isFinite(seekableEnd) && seekableEnd > 0) {
+			return seekableEnd;
+		}
+	}
+
+	return null;
 }
 
 const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
@@ -187,6 +210,7 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 			trimRegions = [],
 			speedRegions = [],
 			aspectRatio,
+			cursorRecordingData,
 			annotationRegions = [],
 			selectedAnnotationId,
 			onSelectAnnotation,
@@ -284,6 +308,149 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		const videoReadyRafRef = useRef<number | null>(null);
 		const smoothedAutoFocusRef = useRef<ZoomFocus | null>(null);
 		const prevTargetProgressRef = useRef(0);
+		const durationResolutionTimeoutRef = useRef<number | null>(null);
+		const lastResolvedDurationRef = useRef<number | null>(null);
+		const isResolvingDurationRef = useRef(false);
+
+		const activeNativeCursor = useMemo(
+			() => resolveActiveNativeCursorFrame(cursorRecordingData, currentTime * 1000),
+			[cursorRecordingData, currentTime],
+		);
+
+		const nativeCursorStyle = useMemo(() => {
+			if (!activeNativeCursor || !cameraContainerRef.current || !videoContainerRef.current) {
+				return null;
+			}
+
+			const projectedPoint = projectNativeCursorToStage({
+				cameraContainer: cameraContainerRef.current,
+				cropRegion: cropRegion ?? { x: 0, y: 0, width: 1, height: 1 },
+				maskRect: baseMaskRef.current,
+				videoContainerPosition: {
+					x: videoContainerRef.current.x,
+					y: videoContainerRef.current.y,
+				},
+				sample: activeNativeCursor.sample,
+			});
+			if (!projectedPoint) {
+				return null;
+			}
+
+			const metrics = getNativeCursorDisplayMetrics(
+				activeNativeCursor.asset,
+				window.devicePixelRatio || 1,
+			);
+
+			return {
+				left: projectedPoint.x - metrics.hotspotX,
+				top: projectedPoint.y - metrics.hotspotY,
+				width: metrics.width,
+				height: metrics.height,
+			};
+		}, [activeNativeCursor, cropRegion, currentTime]);
+
+		const syncResolvedDuration = useCallback(
+			(video: HTMLVideoElement) => {
+				const resolvedDuration = getResolvedVideoDuration(video);
+				if (!resolvedDuration) {
+					return false;
+				}
+
+				const normalizedDuration = Math.round(resolvedDuration * 1000) / 1000;
+				if (lastResolvedDurationRef.current !== normalizedDuration) {
+					lastResolvedDurationRef.current = normalizedDuration;
+					onDurationChange(normalizedDuration);
+				}
+
+				return true;
+			},
+			[onDurationChange],
+		);
+
+		const forceResolveDuration = useCallback(
+			(video: HTMLVideoElement) => {
+				if (isResolvingDurationRef.current) {
+					return;
+				}
+
+				if (video.readyState < HTMLMediaElement.HAVE_METADATA) {
+					return;
+				}
+
+				isResolvingDurationRef.current = true;
+				const previousMuted = video.muted;
+
+				const finalize = () => {
+					video.removeEventListener("durationchange", handleProgress);
+					video.removeEventListener("timeupdate", handleProgress);
+					video.removeEventListener("loadeddata", handleProgress);
+					video.removeEventListener("ended", handleProgress);
+					if (durationResolutionTimeoutRef.current) {
+						clearTimeout(durationResolutionTimeoutRef.current);
+						durationResolutionTimeoutRef.current = null;
+					}
+					video.muted = previousMuted;
+					isResolvingDurationRef.current = false;
+				};
+
+				const resolveCurrentDuration = () => {
+					if (syncResolvedDuration(video)) {
+						return true;
+					}
+
+					if (Number.isFinite(video.currentTime) && video.currentTime > 0) {
+						lastResolvedDurationRef.current = null;
+						onDurationChange(Math.round(video.currentTime * 1000) / 1000);
+						return true;
+					}
+
+					return false;
+				};
+
+				const handleProgress = () => {
+					if (!resolveCurrentDuration()) {
+						return;
+					}
+
+					try {
+						video.pause();
+						video.currentTime = 0;
+					} catch {
+						// no-op
+					}
+					currentTimeRef.current = 0;
+					finalize();
+				};
+
+				video.addEventListener("durationchange", handleProgress);
+				video.addEventListener("timeupdate", handleProgress);
+				video.addEventListener("loadeddata", handleProgress);
+				video.addEventListener("ended", handleProgress);
+				durationResolutionTimeoutRef.current = window.setTimeout(() => {
+					handleProgress();
+					finalize();
+				}, 1500);
+				video.muted = true;
+
+				const playAttempt = video.play();
+				if (playAttempt && typeof playAttempt.catch === "function") {
+					playAttempt.catch(() => {
+						try {
+							video.currentTime = Math.max(video.currentTime, 0.1);
+						} catch {
+							finalize();
+						}
+					});
+				}
+
+				try {
+					video.currentTime = Math.max(video.currentTime, 0.1);
+				} catch {
+					finalize();
+				}
+			},
+			[onDurationChange, syncResolvedDuration],
+		);
 
 		const clampFocusToStage = useCallback((focus: ZoomFocus, depth: ZoomDepth) => {
 			return clampFocusToStageUtil(focus, depth, stageSizeRef.current);
@@ -840,6 +1007,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
 		useEffect(() => {
 			if (!videoPath) {
+				lastResolvedDurationRef.current = null;
+				isResolvingDurationRef.current = false;
 				setVideoReady(false);
 				return;
 			}
@@ -850,11 +1019,18 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 			video.currentTime = 0;
 			allowPlaybackRef.current = false;
 			lockedVideoDimensionsRef.current = null;
+			lastResolvedDurationRef.current = null;
+			isResolvingDurationRef.current = false;
+			if (durationResolutionTimeoutRef.current) {
+				clearTimeout(durationResolutionTimeoutRef.current);
+				durationResolutionTimeoutRef.current = null;
+			}
 			setVideoReady(false);
 			if (videoReadyRafRef.current) {
 				cancelAnimationFrame(videoReadyRafRef.current);
 				videoReadyRafRef.current = null;
 			}
+			video.load();
 		}, [videoPath]);
 
 		useEffect(() => {
@@ -1296,8 +1472,12 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
 		const handleLoadedMetadata = (e: React.SyntheticEvent<HTMLVideoElement, Event>) => {
 			const video = e.currentTarget;
-			onDurationChange(video.duration);
-			video.currentTime = 0;
+			const hasResolvedDuration = syncResolvedDuration(video);
+			if (!hasResolvedDuration) {
+				forceResolveDuration(video);
+			} else {
+				video.currentTime = 0;
+			}
 			video.pause();
 			allowPlaybackRef.current = false;
 			currentTimeRef.current = 0;
@@ -1310,6 +1490,9 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 			const waitForRenderableFrame = () => {
 				const hasDimensions = video.videoWidth > 0 && video.videoHeight > 0;
 				const hasData = video.readyState >= HTMLMediaElement.HAVE_CURRENT_DATA;
+				if (!syncResolvedDuration(video)) {
+					forceResolveDuration(video);
+				}
 				if (hasDimensions && hasData) {
 					videoReadyRafRef.current = null;
 					setVideoReady(true);
@@ -1408,6 +1591,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 				if (scrubEndTimerRef.current !== null) {
 					window.clearTimeout(scrubEndTimerRef.current);
 					scrubEndTimerRef.current = null;
+				}
+				if (durationResolutionTimeoutRef.current) {
+					clearTimeout(durationResolutionTimeoutRef.current);
+					durationResolutionTimeoutRef.current = null;
 				}
 			};
 		}, []);
@@ -1524,6 +1711,22 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 								className="absolute rounded-md border border-[#34B27B]/80 bg-[#34B27B]/20 shadow-[0_0_0_1px_rgba(52,178,123,0.35)]"
 								style={{ display: "none", pointerEvents: "none" }}
 							/>
+							{activeNativeCursor && nativeCursorStyle ? (
+								<img
+									alt=""
+									aria-hidden="true"
+									src={activeNativeCursor.asset.imageDataUrl}
+									className="absolute select-none"
+									style={{
+										left: nativeCursorStyle.left,
+										top: nativeCursorStyle.top,
+										width: nativeCursorStyle.width,
+										height: nativeCursorStyle.height,
+										pointerEvents: "none",
+										userSelect: "none",
+									}}
+								/>
+							) : null}
 							{(() => {
 								const filteredAnnotations = (annotationRegions || []).filter((annotation) => {
 									if (
@@ -1652,11 +1855,24 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 					ref={videoRef}
 					src={videoPath}
 					className="hidden"
-					preload="metadata"
+					preload="auto"
+					muted
 					playsInline
 					onLoadedMetadata={handleLoadedMetadata}
 					onDurationChange={(e) => {
-						onDurationChange(e.currentTarget.duration);
+						if (!syncResolvedDuration(e.currentTarget)) {
+							forceResolveDuration(e.currentTarget);
+						}
+					}}
+					onLoadedData={(e) => {
+						if (!syncResolvedDuration(e.currentTarget)) {
+							forceResolveDuration(e.currentTarget);
+						}
+					}}
+					onCanPlay={(e) => {
+						if (!syncResolvedDuration(e.currentTarget)) {
+							forceResolveDuration(e.currentTarget);
+						}
 					}}
 					onError={() => onError("Failed to load video")}
 				/>

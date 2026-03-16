@@ -11,6 +11,7 @@ import type {
 import { BackgroundLoadError } from "@/lib/wallpaper";
 import { getPlatform } from "@/utils/platformUtils";
 import { AsyncVideoFrameQueue } from "./asyncVideoFrameQueue";
+import type { CursorRecordingData } from "@/native/contracts";
 import { FrameRenderer } from "./frameRenderer";
 import { StreamingVideoDecoder } from "./streamingDecoder";
 import type {
@@ -47,6 +48,7 @@ interface GifExporterConfig {
 	webcamMaskShape?: import("@/components/video-editor/types").WebcamMaskShape;
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: { cx: number; cy: number } | null;
+	cursorRecordingData?: CursorRecordingData | null;
 	annotationRegions?: AnnotationRegion[];
 	previewWidth?: number;
 	previewHeight?: number;
@@ -151,6 +153,7 @@ export class GifExporter {
 				borderRadius: this.config.borderRadius,
 				padding: this.config.padding,
 				cropRegion: this.config.cropRegion,
+				cursorRecordingData: this.config.cursorRecordingData,
 				videoWidth: videoInfo.width,
 				videoHeight: videoInfo.height,
 				webcamSize: webcamInfo ? { width: webcamInfo.width, height: webcamInfo.height } : null,

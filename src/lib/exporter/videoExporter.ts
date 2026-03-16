@@ -10,6 +10,7 @@ import type {
 import { BackgroundLoadError } from "@/lib/wallpaper";
 import { getPlatform } from "@/utils/platformUtils";
 import { AsyncVideoFrameQueue } from "./asyncVideoFrameQueue";
+import type { CursorRecordingData } from "@/native/contracts";
 import { AudioProcessor } from "./audioEncoder";
 import { FrameRenderer } from "./frameRenderer";
 import { VideoMuxer } from "./muxer";
@@ -38,6 +39,7 @@ interface VideoExporterConfig extends ExportConfig {
 	webcamMaskShape?: import("@/components/video-editor/types").WebcamMaskShape;
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: { cx: number; cy: number } | null;
+	cursorRecordingData?: CursorRecordingData | null;
 	annotationRegions?: AnnotationRegion[];
 	previewWidth?: number;
 	previewHeight?: number;
@@ -146,6 +148,7 @@ export class VideoExporter {
 				borderRadius: this.config.borderRadius,
 				padding: this.config.padding,
 				cropRegion: this.config.cropRegion,
+				cursorRecordingData: this.config.cursorRecordingData,
 				videoWidth: videoInfo.width,
 				videoHeight: videoInfo.height,
 				webcamSize: webcamInfo ? { width: webcamInfo.width, height: webcamInfo.height } : null,
