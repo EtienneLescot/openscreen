@@ -24,6 +24,9 @@ declare namespace NodeJS {
 // Used in Renderer process, expose in `preload.ts`
 interface Window {
 	electronAPI: {
+		invokeNativeBridge: <TData = unknown>(
+			request: import("../src/native/contracts").NativeBridgeRequest,
+		) => Promise<import("../src/native/contracts").NativeBridgeResponse<TData>>;
 		getSources: (opts: Electron.SourcesOptions) => Promise<ProcessedDesktopSource[]>;
 		switchToEditor: () => Promise<void>;
 		switchToHud: () => Promise<void>;

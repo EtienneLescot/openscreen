@@ -20,6 +20,7 @@ import {
 import { RxDragHandleDots2 } from "react-icons/rx";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { getAvailableLocales, getLocaleName } from "@/i18n/loader";
+import { nativeBridgeClient } from "@/native";
 import { useAudioLevelMeter } from "../../hooks/useAudioLevelMeter";
 import { useCameraDevices } from "../../hooks/useCameraDevices";
 import { useMicrophoneDevices } from "../../hooks/useMicrophoneDevices";
@@ -285,13 +286,13 @@ export function LaunchWindow() {
 		}
 
 		if (result.success && result.path) {
-			await window.electronAPI.setCurrentVideoPath(result.path);
+			await nativeBridgeClient.project.setCurrentVideoPath(result.path);
 			await window.electronAPI.switchToEditor();
 		}
 	};
 
 	const openProjectFile = async () => {
-		const result = await window.electronAPI.loadProjectFile();
+		const result = await nativeBridgeClient.project.loadProjectFile();
 		if (result.canceled || !result.success) return;
 		await window.electronAPI.switchToEditor();
 	};
