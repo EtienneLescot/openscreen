@@ -29,8 +29,9 @@ import { classifyWallpaper, DEFAULT_WALLPAPER, resolveImageWallpaperUrl } from "
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import {
 	getNativeCursorDisplayMetrics,
+	hasNativeCursorRecordingData,
 	projectNativeCursorToStage,
-	resolveActiveNativeCursorFrame,
+	resolveInterpolatedNativeCursorFrame,
 } from "@/lib/cursor/nativeCursor";
 import type { CursorRecordingData } from "@/native/contracts";
 import {
@@ -311,43 +312,15 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		const durationResolutionTimeoutRef = useRef<number | null>(null);
 		const lastResolvedDurationRef = useRef<number | null>(null);
 		const isResolvingDurationRef = useRef(false);
+		const hasNativeCursorRecordingRef = useRef(false);
+		const cursorRecordingDataRef = useRef(cursorRecordingData);
+		const cropRegionRef = useRef(cropRegion);
+		const nativeCursorImgRef = useRef<HTMLImageElement | null>(null);
 
-		const activeNativeCursor = useMemo(
-			() => resolveActiveNativeCursorFrame(cursorRecordingData, currentTime * 1000),
-			[cursorRecordingData, currentTime],
+		const hasNativeCursorRecording = useMemo(
+			() => hasNativeCursorRecordingData(cursorRecordingData),
+			[cursorRecordingData],
 		);
-
-		const nativeCursorStyle = useMemo(() => {
-			if (!activeNativeCursor || !cameraContainerRef.current || !videoContainerRef.current) {
-				return null;
-			}
-
-			const projectedPoint = projectNativeCursorToStage({
-				cameraContainer: cameraContainerRef.current,
-				cropRegion: cropRegion ?? { x: 0, y: 0, width: 1, height: 1 },
-				maskRect: baseMaskRef.current,
-				videoContainerPosition: {
-					x: videoContainerRef.current.x,
-					y: videoContainerRef.current.y,
-				},
-				sample: activeNativeCursor.sample,
-			});
-			if (!projectedPoint) {
-				return null;
-			}
-
-			const metrics = getNativeCursorDisplayMetrics(
-				activeNativeCursor.asset,
-				window.devicePixelRatio || 1,
-			);
-
-			return {
-				left: projectedPoint.x - metrics.hotspotX,
-				top: projectedPoint.y - metrics.hotspotY,
-				width: metrics.width,
-				height: metrics.height,
-			};
-		}, [activeNativeCursor, cropRegion, currentTime]);
 
 		const syncResolvedDuration = useCallback(
 			(video: HTMLVideoElement) => {
@@ -774,6 +747,18 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		useEffect(() => {
 			showCursorRef.current = showCursor;
 		}, [showCursor]);
+
+		useEffect(() => {
+			hasNativeCursorRecordingRef.current = hasNativeCursorRecording;
+		}, [hasNativeCursorRecording]);
+
+		useEffect(() => {
+			cursorRecordingDataRef.current = cursorRecordingData;
+		}, [cursorRecordingData]);
+
+		useEffect(() => {
+			cropRegionRef.current = cropRegion;
+		}, [cropRegion]);
 
 		useEffect(() => {
 			cursorSizeRef.current = cursorSize;
@@ -1413,14 +1398,67 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 				// Update cursor overlay
 				const cursorOverlay = cursorOverlayRef.current;
 				if (cursorOverlay) {
-					const timeMs = currentTimeRef.current;
+					const timeMs = currentTimeRef.current; // already in ms
 					cursorOverlay.update(
 						cursorTelemetryRef.current,
 						timeMs,
 						baseMaskRef.current,
-						showCursorRef.current,
+						showCursorRef.current && !hasNativeCursorRecordingRef.current,
 						!isPlayingRef.current || isSeekingRef.current,
 					);
+				}
+
+				// Update native cursor image position at ticker rate (60fps)
+				const nativeCursorImg = nativeCursorImgRef.current;
+				if (nativeCursorImg) {
+					const cameraContainerRc = cameraContainerRef.current;
+					const videoContainerRc = videoContainerRef.current;
+					if (
+						hasNativeCursorRecordingRef.current &&
+						showCursorRef.current &&
+						cameraContainerRc &&
+						videoContainerRc
+					) {
+						const timeMs = currentTimeRef.current; // already in ms
+						const frame = resolveInterpolatedNativeCursorFrame(
+							cursorRecordingDataRef.current,
+							timeMs,
+						);
+						if (frame) {
+							const projectedPoint = projectNativeCursorToStage({
+								cameraContainer: cameraContainerRc,
+								cropRegion: cropRegionRef.current ?? { x: 0, y: 0, width: 1, height: 1 },
+								maskRect: baseMaskRef.current,
+								videoContainerPosition: {
+									x: videoContainerRc.x,
+									y: videoContainerRc.y,
+								},
+								sample: frame.sample,
+							});
+							if (projectedPoint) {
+								const metrics = getNativeCursorDisplayMetrics(
+									frame.asset,
+									window.devicePixelRatio || 1,
+								);
+								const scale = Math.max(0, cursorSizeRef.current);
+								if (nativeCursorImg.dataset.cursorId !== frame.asset.id) {
+									nativeCursorImg.src = frame.asset.imageDataUrl;
+									nativeCursorImg.dataset.cursorId = frame.asset.id;
+								}
+								nativeCursorImg.style.left = `${projectedPoint.x - metrics.hotspotX * scale}px`;
+								nativeCursorImg.style.top = `${projectedPoint.y - metrics.hotspotY * scale}px`;
+								nativeCursorImg.style.width = `${metrics.width * scale}px`;
+								nativeCursorImg.style.height = `${metrics.height * scale}px`;
+								nativeCursorImg.style.display = "block";
+							} else {
+								nativeCursorImg.style.display = "none";
+							}
+						} else {
+							nativeCursorImg.style.display = "none";
+						}
+					} else {
+						nativeCursorImg.style.display = "none";
+					}
 				}
 
 				const composite3D = composite3DRef.current;
@@ -1711,17 +1749,14 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 								className="absolute rounded-md border border-[#34B27B]/80 bg-[#34B27B]/20 shadow-[0_0_0_1px_rgba(52,178,123,0.35)]"
 								style={{ display: "none", pointerEvents: "none" }}
 							/>
-							{activeNativeCursor && nativeCursorStyle ? (
+							{hasNativeCursorRecording ? (
 								<img
+									ref={nativeCursorImgRef}
 									alt=""
 									aria-hidden="true"
-									src={activeNativeCursor.asset.imageDataUrl}
 									className="absolute select-none"
 									style={{
-										left: nativeCursorStyle.left,
-										top: nativeCursorStyle.top,
-										width: nativeCursorStyle.width,
-										height: nativeCursorStyle.height,
+										display: "none",
 										pointerEvents: "none",
 										userSelect: "none",
 									}}

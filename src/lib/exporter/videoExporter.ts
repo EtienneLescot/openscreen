@@ -40,6 +40,7 @@ interface VideoExporterConfig extends ExportConfig {
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: { cx: number; cy: number } | null;
 	cursorRecordingData?: CursorRecordingData | null;
+	cursorScale?: number;
 	annotationRegions?: AnnotationRegion[];
 	previewWidth?: number;
 	previewHeight?: number;
@@ -149,6 +150,7 @@ export class VideoExporter {
 				padding: this.config.padding,
 				cropRegion: this.config.cropRegion,
 				cursorRecordingData: this.config.cursorRecordingData,
+				cursorScale: this.config.cursorScale,
 				videoWidth: videoInfo.width,
 				videoHeight: videoInfo.height,
 				webcamSize: webcamInfo ? { width: webcamInfo.width, height: webcamInfo.height } : null,

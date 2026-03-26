@@ -14,13 +14,24 @@ export interface ActiveNativeCursorFrame {
 interface ProjectNativeCursorOptions {
 	cameraContainer: Container;
 	cropRegion: CropRegion;
-	maskRect: { width: number; height: number };
+	maskRect: { x: number; y: number; width: number; height: number };
 	videoContainerPosition: { x: number; y: number };
 	sample: CursorRecordingSample;
 }
 
 function clamp(value: number, min: number, max: number) {
 	return Math.min(max, Math.max(min, value));
+}
+
+export function hasNativeCursorRecordingData(
+	recordingData: CursorRecordingData | null | undefined,
+): recordingData is CursorRecordingData {
+	return Boolean(
+		recordingData &&
+			recordingData.provider === "native" &&
+			recordingData.samples.length > 0 &&
+			recordingData.assets.length > 0,
+	);
 }
 
 function getCroppedCursorPosition(sample: CursorRecordingSample, cropRegion: CropRegion) {
@@ -45,7 +56,7 @@ export function resolveActiveNativeCursorFrame(
 	recordingData: CursorRecordingData | null | undefined,
 	timeMs: number,
 ): ActiveNativeCursorFrame | null {
-	if (!recordingData || recordingData.provider !== "native" || recordingData.assets.length === 0) {
+	if (!hasNativeCursorRecordingData(recordingData)) {
 		return null;
 	}
 
@@ -70,6 +81,65 @@ export function resolveActiveNativeCursorFrame(
 	return null;
 }
 
+export function resolveInterpolatedNativeCursorFrame(
+	recordingData: CursorRecordingData | null | undefined,
+	timeMs: number,
+): ActiveNativeCursorFrame | null {
+	if (!hasNativeCursorRecordingData(recordingData)) {
+		return null;
+	}
+
+	const samples = recordingData.samples;
+	let activeIndex = -1;
+
+	for (let index = samples.length - 1; index >= 0; index -= 1) {
+		if (samples[index].timeMs <= timeMs) {
+			activeIndex = index;
+			break;
+		}
+	}
+
+	if (activeIndex < 0) {
+		return null;
+	}
+
+	const activeSample = samples[activeIndex];
+	if (activeSample.visible === false || !activeSample.assetId) {
+		return null;
+	}
+
+	const asset = recordingData.assets.find((candidate) => candidate.id === activeSample.assetId);
+	if (!asset) {
+		return null;
+	}
+
+	const nextSample = samples[activeIndex + 1];
+	if (
+		!nextSample ||
+		nextSample.timeMs <= activeSample.timeMs ||
+		nextSample.visible === false ||
+		nextSample.assetId !== activeSample.assetId ||
+		timeMs <= activeSample.timeMs
+	) {
+		return { asset, sample: activeSample };
+	}
+
+	const interpolation = clamp(
+		(timeMs - activeSample.timeMs) / (nextSample.timeMs - activeSample.timeMs),
+		0,
+		1,
+	);
+
+	return {
+		asset,
+		sample: {
+			...activeSample,
+			cx: activeSample.cx + (nextSample.cx - activeSample.cx) * interpolation,
+			cy: activeSample.cy + (nextSample.cy - activeSample.cy) * interpolation,
+		},
+	};
+}
+
 export function projectNativeCursorToStage({
 	cameraContainer,
 	cropRegion,
@@ -83,8 +153,8 @@ export function projectNativeCursorToStage({
 	}
 
 	const localPoint = new Point(
-		videoContainerPosition.x + croppedPosition.cx * maskRect.width,
-		videoContainerPosition.y + croppedPosition.cy * maskRect.height,
+		videoContainerPosition.x + maskRect.x + croppedPosition.cx * maskRect.width,
+		videoContainerPosition.y + maskRect.y + croppedPosition.cy * maskRect.height,
 	);
 
 	return cameraContainer.toGlobal(localPoint);

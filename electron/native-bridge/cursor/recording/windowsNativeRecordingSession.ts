@@ -1,206 +1,23 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import type { Readable } from "node:stream";
-import { type Rectangle, screen } from "electron";
+import { screen } from "electron";
 import type {
 	CursorRecordingData,
 	CursorRecordingSample,
 	NativeCursorAsset,
 } from "../../../../src/native/contracts";
 import type { CursorRecordingSession } from "./session";
+import { buildPowerShellCommand, parseWindowHandleFromSourceId } from "./windowsNativeRecordingSession.script";
+import type {
+	WindowsCursorEvent,
+	WindowsNativeRecordingSessionOptions,
+} from "./windowsNativeRecordingSession.types";
 
-interface WindowsCursorSampleEvent {
-	type: "sample";
-	timestampMs: number;
-	x: number;
-	y: number;
-	visible: boolean;
-	handle: string | null;
-	asset?: WindowsCursorAssetPayload;
-}
+const READY_TIMEOUT_MS = 5_000;
 
-interface WindowsCursorReadyEvent {
-	type: "ready";
-	timestampMs: number;
-}
-
-interface WindowsCursorErrorEvent {
-	type: "error";
-	timestampMs: number;
-	message: string;
-}
-
-interface WindowsCursorAssetPayload {
-	id: string;
-	imageDataUrl: string;
-	width: number;
-	height: number;
-	hotspotX: number;
-	hotspotY: number;
-}
-
-type WindowsCursorEvent =
-	| WindowsCursorSampleEvent
-	| WindowsCursorReadyEvent
-	| WindowsCursorErrorEvent;
-
-interface WindowsNativeRecordingSessionOptions {
-	getDisplayBounds: () => Rectangle | null;
-	maxSamples: number;
-	sampleIntervalMs: number;
-}
-
-function clamp(value: number, min: number, max: number) {
-	return Math.min(max, Math.max(min, value));
-}
-
-function buildPowerShellCommand(sampleIntervalMs: number) {
-	const script = String.raw`
-$ErrorActionPreference = 'Stop'
-Add-Type -AssemblyName System.Drawing
-
-$source = @"
-using System;
-using System.Runtime.InteropServices;
-
-public static class OpenScreenCursorInterop {
-    [StructLayout(LayoutKind.Sequential)]
-    public struct POINT {
-        public int X;
-        public int Y;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct CURSORINFO {
-        public int cbSize;
-        public int flags;
-        public IntPtr hCursor;
-        public POINT ptScreenPos;
-    }
-
-    [StructLayout(LayoutKind.Sequential)]
-    public struct ICONINFO {
-        [MarshalAs(UnmanagedType.Bool)]
-        public bool fIcon;
-        public int xHotspot;
-        public int yHotspot;
-        public IntPtr hbmMask;
-        public IntPtr hbmColor;
-    }
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool GetCursorInfo(ref CURSORINFO pci);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    public static extern IntPtr CopyIcon(IntPtr hIcon);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool DestroyIcon(IntPtr hIcon);
-
-    [DllImport("user32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool GetIconInfo(IntPtr hIcon, out ICONINFO piconinfo);
-
-    [DllImport("gdi32.dll", SetLastError = true)]
-    [return: MarshalAs(UnmanagedType.Bool)]
-    public static extern bool DeleteObject(IntPtr hObject);
-}
-"@
-
-Add-Type -TypeDefinition $source
-
-function Write-JsonLine($payload) {
-    [Console]::Out.WriteLine(($payload | ConvertTo-Json -Compress -Depth 6))
-}
-
-function Get-CursorAsset($cursorHandle, $cursorId) {
-    $copiedHandle = [OpenScreenCursorInterop]::CopyIcon($cursorHandle)
-    if ($copiedHandle -eq [IntPtr]::Zero) {
-        return $null
-    }
-
-    $iconInfo = New-Object OpenScreenCursorInterop+ICONINFO
-    $hasIconInfo = [OpenScreenCursorInterop]::GetIconInfo($copiedHandle, [ref]$iconInfo)
-
-    try {
-        $icon = [System.Drawing.Icon]::FromHandle($copiedHandle)
-        $bitmap = New-Object System.Drawing.Bitmap $icon.Width, $icon.Height, ([System.Drawing.Imaging.PixelFormat]::Format32bppArgb)
-        $graphics = [System.Drawing.Graphics]::FromImage($bitmap)
-        $memoryStream = New-Object System.IO.MemoryStream
-
-        try {
-            $graphics.Clear([System.Drawing.Color]::Transparent)
-            $graphics.DrawIcon($icon, 0, 0)
-            $bitmap.Save($memoryStream, [System.Drawing.Imaging.ImageFormat]::Png)
-            $base64 = [System.Convert]::ToBase64String($memoryStream.ToArray())
-
-            return @{
-                id = $cursorId
-                imageDataUrl = "data:image/png;base64,$base64"
-                width = $bitmap.Width
-                height = $bitmap.Height
-                hotspotX = if ($hasIconInfo) { $iconInfo.xHotspot } else { 0 }
-                hotspotY = if ($hasIconInfo) { $iconInfo.yHotspot } else { 0 }
-            }
-        }
-        finally {
-            $memoryStream.Dispose()
-            $graphics.Dispose()
-            $bitmap.Dispose()
-            $icon.Dispose()
-        }
-    }
-    finally {
-        if ($hasIconInfo) {
-            if ($iconInfo.hbmMask -ne [IntPtr]::Zero) {
-                [OpenScreenCursorInterop]::DeleteObject($iconInfo.hbmMask) | Out-Null
-            }
-            if ($iconInfo.hbmColor -ne [IntPtr]::Zero) {
-                [OpenScreenCursorInterop]::DeleteObject($iconInfo.hbmColor) | Out-Null
-            }
-        }
-        [OpenScreenCursorInterop]::DestroyIcon($copiedHandle) | Out-Null
-    }
-}
-
-Write-JsonLine @{ type = 'ready'; timestampMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
-
-$lastCursorId = $null
-while ($true) {
-    $cursorInfo = New-Object OpenScreenCursorInterop+CURSORINFO
-    $cursorInfo.cbSize = [Runtime.InteropServices.Marshal]::SizeOf([type][OpenScreenCursorInterop+CURSORINFO])
-
-    if (-not [OpenScreenCursorInterop]::GetCursorInfo([ref]$cursorInfo)) {
-        Write-JsonLine @{ type = 'error'; timestampMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds(); message = 'GetCursorInfo failed' }
-        Start-Sleep -Milliseconds ${sampleIntervalMs}
-        continue
-    }
-
-    $visible = ($cursorInfo.flags -band 1) -ne 0
-    $cursorId = if ($cursorInfo.hCursor -eq [IntPtr]::Zero) { $null } else { ('0x{0:X}' -f $cursorInfo.hCursor.ToInt64()) }
-    $asset = $null
-
-    if ($visible -and $cursorId -and $cursorId -ne $lastCursorId) {
-        $asset = Get-CursorAsset -cursorHandle $cursorInfo.hCursor -cursorId $cursorId
-        $lastCursorId = $cursorId
-    }
-
-    Write-JsonLine @{
-        type = 'sample'
-        timestampMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
-        x = $cursorInfo.ptScreenPos.X
-        y = $cursorInfo.ptScreenPos.Y
-        visible = $visible
-        handle = $cursorId
-        asset = $asset
-    }
-
-    Start-Sleep -Milliseconds ${sampleIntervalMs}
-}
-`;
-
-	return Buffer.from(script, "utf16le").toString("base64");
+interface NormalizedSample {
+	sample: CursorRecordingSample;
+	withinBounds: boolean;
 }
 
 export class WindowsNativeRecordingSession implements CursorRecordingSession {
@@ -209,6 +26,11 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 	private process: ChildProcessByStdio<null, Readable, Readable> | null = null;
 	private lineBuffer = "";
 	private startTimeMs = 0;
+	private readyResolve: (() => void) | null = null;
+	private readyReject: ((error: Error) => void) | null = null;
+	private readyTimer: NodeJS.Timeout | null = null;
+	private sampleCount = 0;
+	private outOfBoundsSampleCount = 0;
 
 	constructor(private readonly options: WindowsNativeRecordingSessionOptions) {}
 
@@ -217,8 +39,13 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		this.samples = [];
 		this.lineBuffer = "";
 		this.startTimeMs = Date.now();
+		this.sampleCount = 0;
+		this.outOfBoundsSampleCount = 0;
 
-		const encodedCommand = buildPowerShellCommand(this.options.sampleIntervalMs);
+		const encodedCommand = buildPowerShellCommand(
+			this.options.sampleIntervalMs,
+			parseWindowHandleFromSourceId(this.options.sourceId),
+		);
 		const child = spawn(
 			"powershell.exe",
 			[
@@ -237,23 +64,57 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		);
 
 		this.process = child;
+		this.logDiagnostic("spawn", {
+			pid: child.pid ?? null,
+			sampleIntervalMs: this.options.sampleIntervalMs,
+			sourceId: this.options.sourceId ?? null,
+			windowHandle: parseWindowHandleFromSourceId(this.options.sourceId),
+		});
+
 		child.stdout.setEncoding("utf8");
 		child.stdout.on("data", (chunk: string) => {
 			this.handleStdoutChunk(chunk);
 		});
 		child.stderr.setEncoding("utf8");
 		child.stderr.on("data", (chunk: string) => {
-			console.error("[cursor-native]", chunk.trim());
+			const message = chunk.trim();
+			if (message) {
+				this.logDiagnostic("stderr", { message });
+			}
+			console.error("[cursor-native]", message);
 		});
+		child.once("exit", (code, signal) => {
+			this.logDiagnostic("exit", {
+				code,
+				signal,
+				sampleCount: this.sampleCount,
+				assetCount: this.assets.size,
+				outOfBoundsSampleCount: this.outOfBoundsSampleCount,
+			});
+			this.rejectReady(new Error(`Windows cursor helper exited before ready (code=${code}, signal=${signal})`));
+		});
+		child.once("error", (error) => {
+			this.logDiagnostic("process-error", { message: error.message });
+			this.rejectReady(error);
+		});
+
+		await this.waitUntilReady();
 	}
 
 	async stop(): Promise<CursorRecordingData> {
 		const child = this.process;
 		this.process = null;
+		this.clearReadyState();
 
 		if (child && !child.killed) {
 			child.kill();
 		}
+
+		this.logDiagnostic("stop", {
+			sampleCount: this.sampleCount,
+			assetCount: this.assets.size,
+			outOfBoundsSampleCount: this.outOfBoundsSampleCount,
+		});
 
 		return {
 			version: 2,
@@ -285,11 +146,14 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 
 	private handleEvent(payload: WindowsCursorEvent) {
 		if (payload.type === "error") {
+			this.logDiagnostic("helper-error", { message: payload.message });
 			console.error("Windows cursor helper error:", payload.message);
 			return;
 		}
 
 		if (payload.type === "ready") {
+			this.logDiagnostic("ready", { timestampMs: payload.timestampMs });
+			this.resolveReady();
 			return;
 		}
 
@@ -305,22 +169,100 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 				hotspotY: payload.asset.hotspotY,
 				scaleFactor: assetDisplay.scaleFactor,
 			});
+			this.logDiagnostic("asset", {
+				id: payload.asset.id,
+				width: payload.asset.width,
+				height: payload.asset.height,
+				hotspotX: payload.asset.hotspotX,
+				hotspotY: payload.asset.hotspotY,
+				scaleFactor: assetDisplay.scaleFactor,
+			});
 		}
 
-		const bounds = this.options.getDisplayBounds() ?? screen.getPrimaryDisplay().bounds;
-		const width = Math.max(1, bounds.width);
-		const height = Math.max(1, bounds.height);
+		const normalized = this.normalizeSample(payload);
+		this.sampleCount += 1;
+		if (!normalized.withinBounds) {
+			this.outOfBoundsSampleCount += 1;
+		}
 
-		this.samples.push({
-			timeMs: Math.max(0, payload.timestampMs - this.startTimeMs),
-			cx: clamp((payload.x - bounds.x) / width, 0, 1),
-			cy: clamp((payload.y - bounds.y) / height, 0, 1),
-			assetId: payload.handle,
-			visible: payload.visible,
-		});
+		this.samples.push(normalized.sample);
 
 		if (this.samples.length > this.options.maxSamples) {
 			this.samples.shift();
 		}
+	}
+
+	private normalizeSample(payload: Extract<WindowsCursorEvent, { type: "sample" }>): NormalizedSample {
+		const bounds = payload.bounds ?? this.options.getDisplayBounds() ?? screen.getPrimaryDisplay().bounds;
+		const width = Math.max(1, bounds.width);
+		const height = Math.max(1, bounds.height);
+		const normalizedX = (payload.x - bounds.x) / width;
+		const normalizedY = (payload.y - bounds.y) / height;
+		const withinBounds = normalizedX >= 0 && normalizedX <= 1 && normalizedY >= 0 && normalizedY <= 1;
+
+		if (this.sampleCount === 0 || (!withinBounds && this.outOfBoundsSampleCount === 0)) {
+			this.logDiagnostic("sample", {
+				rawX: payload.x,
+				rawY: payload.y,
+				normalizedX,
+				normalizedY,
+				visible: payload.visible,
+				withinBounds,
+				bounds,
+				handle: payload.handle,
+			});
+		}
+
+		return {
+			withinBounds,
+			sample: {
+				timeMs: Math.max(0, payload.timestampMs - this.startTimeMs),
+				cx: normalizedX,
+				cy: normalizedY,
+				assetId: payload.handle,
+				visible: payload.visible && withinBounds,
+			},
+		};
+	}
+
+	private waitUntilReady() {
+		return new Promise<void>((resolve, reject) => {
+			this.readyResolve = resolve;
+			this.readyReject = reject;
+			this.readyTimer = setTimeout(() => {
+				this.rejectReady(new Error("Timed out waiting for Windows cursor helper readiness"));
+			}, READY_TIMEOUT_MS);
+		});
+	}
+
+	private resolveReady() {
+		const resolve = this.readyResolve;
+		this.clearReadyState();
+		resolve?.();
+	}
+
+	private rejectReady(error: Error) {
+		const reject = this.readyReject;
+		this.clearReadyState();
+		reject?.(error);
+	}
+
+	private clearReadyState() {
+		if (this.readyTimer) {
+			clearTimeout(this.readyTimer);
+			this.readyTimer = null;
+		}
+		this.readyResolve = null;
+		this.readyReject = null;
+	}
+
+	private logDiagnostic(event: string, data: Record<string, unknown>) {
+		console.info(
+			"[cursor-native][win32]",
+			JSON.stringify({
+				event,
+				...data,
+			}),
+		);
 	}
 }

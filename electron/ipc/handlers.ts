@@ -1,9 +1,6 @@
 import fs from "node:fs/promises";
-import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
-const nodeRequire = createRequire(import.meta.url);
 
 import {
 	app,
@@ -15,10 +12,7 @@ import {
 	shell,
 	systemPreferences,
 } from "electron";
-import {
-	type CursorTelemetryPoint,
-	createCursorTelemetryBuffer,
-} from "../../src/lib/cursorTelemetryBuffer";
+import type { DesktopCapturerSource } from "electron";
 import {
 	normalizeProjectMedia,
 	normalizeRecordingSession,
@@ -197,11 +191,24 @@ async function getApprovedProjectSession(
 
 type SelectedSource = {
 	name: string;
+	id?: string;
+	display_id?: string;
 	[key: string]: unknown;
 };
 
 let selectedSource: SelectedSource | null = null;
+let selectedDesktopSource: DesktopCapturerSource | null = null;
+let lastEnumeratedSources = new Map<string, DesktopCapturerSource>();
 let currentProjectPath: string | null = null;
+let currentRecordingSession: RecordingSession | null = null;
+
+/**
+ * Returns the cached DesktopCapturerSource set when the user picked a source.
+ * Used by setDisplayMediaRequestHandler in main.ts for cursor-free capture.
+ */
+export function getSelectedDesktopSource(): DesktopCapturerSource | null {
+	return selectedDesktopSource;
+}
 let currentVideoPath: string | null = null;
 
 function normalizePath(filePath: string) {
@@ -237,15 +244,11 @@ function isTrustedProjectPath(filePath?: string | null) {
 }
 
 const CURSOR_TELEMETRY_VERSION = 2;
-const CURSOR_SAMPLE_INTERVAL_MS = 100;
-const MAX_CURSOR_SAMPLES = 60 * 60 * 10; // 1 hour @ 10Hz
+const CURSOR_SAMPLE_INTERVAL_MS = 33;
+const MAX_CURSOR_SAMPLES = 60 * 60 * 30; // 1 hour @ 30Hz
 
 let cursorRecordingSession: CursorRecordingSession | null = null;
 let pendingCursorRecordingData: CursorRecordingData | null = null;
-
-function clamp(value: number, min: number, max: number) {
-	return Math.min(max, Math.max(min, value));
-}
 
 function normalizeCursorSample(sample: unknown): CursorRecordingSample | null {
 	if (!sample || typeof sample !== "object") {
@@ -258,8 +261,8 @@ function normalizeCursorSample(sample: unknown): CursorRecordingSample | null {
 			typeof point.timeMs === "number" && Number.isFinite(point.timeMs)
 				? Math.max(0, point.timeMs)
 				: 0,
-		cx: typeof point.cx === "number" && Number.isFinite(point.cx) ? clamp(point.cx, 0, 1) : 0.5,
-		cy: typeof point.cy === "number" && Number.isFinite(point.cy) ? clamp(point.cy, 0, 1) : 0.5,
+		cx: typeof point.cx === "number" && Number.isFinite(point.cx) ? point.cx : 0.5,
+		cy: typeof point.cy === "number" && Number.isFinite(point.cy) ? point.cy : 0.5,
 		assetId: typeof point.assetId === "string" ? point.assetId : null,
 		visible: typeof point.visible === "boolean" ? point.visible : true,
 	};
@@ -394,6 +397,55 @@ function getSelectedSourceBounds() {
 	return (sourceDisplay ?? screen.getDisplayNearestPoint(cursor)).bounds;
 }
 
+function getSelectedSourceId() {
+	return typeof selectedSource?.id === "string" ? selectedSource.id : null;
+}
+
+function setCurrentRecordingSessionState(session: RecordingSession | null) {
+	currentRecordingSession = session;
+	currentVideoPath = session?.screenVideoPath ?? null;
+}
+
+async function storeRecordedSessionFiles(payload: StoreRecordedSessionInput) {
+	const createdAt =
+		typeof payload.createdAt === "number" && Number.isFinite(payload.createdAt)
+			? payload.createdAt
+			: Date.now();
+	const screenVideoPath = resolveRecordingOutputPath(payload.screen.fileName);
+	await fs.writeFile(screenVideoPath, Buffer.from(payload.screen.videoData));
+
+	let webcamVideoPath: string | undefined;
+	if (payload.webcam) {
+		webcamVideoPath = resolveRecordingOutputPath(payload.webcam.fileName);
+		await fs.writeFile(webcamVideoPath, Buffer.from(payload.webcam.videoData));
+	}
+
+	const session: RecordingSession = webcamVideoPath
+		? { screenVideoPath, webcamVideoPath, createdAt }
+		: { screenVideoPath, createdAt };
+	setCurrentRecordingSessionState(session);
+	currentProjectPath = null;
+
+	const telemetryPath = `${screenVideoPath}.cursor.json`;
+	if (pendingCursorRecordingData && pendingCursorRecordingData.samples.length > 0) {
+		await fs.writeFile(telemetryPath, JSON.stringify(pendingCursorRecordingData, null, 2), "utf-8");
+	}
+	pendingCursorRecordingData = null;
+
+	const sessionManifestPath = path.join(
+		RECORDINGS_DIR,
+		`${path.parse(payload.screen.fileName).name}${RECORDING_SESSION_SUFFIX}`,
+	);
+	await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
+
+	return {
+		success: true,
+		path: screenVideoPath,
+		session,
+		message: "Recording session stored successfully",
+	};
+}
+
 export function registerIpcHandlers(
 	createEditorWindow: () => void,
 	createSourceSelectorWindow: () => BrowserWindow,
@@ -403,6 +455,7 @@ export function registerIpcHandlers(
 ) {
 	ipcMain.handle("get-sources", async (_, opts) => {
 		const sources = await desktopCapturer.getSources(opts);
+		lastEnumeratedSources = new Map(sources.map((source) => [source.id, source]));
 		return sources.map((source) => ({
 			id: source.id,
 			name: source.name,
@@ -412,8 +465,26 @@ export function registerIpcHandlers(
 		}));
 	});
 
-	ipcMain.handle("select-source", (_, source: SelectedSource) => {
+	ipcMain.handle("select-source", async (_, source: SelectedSource) => {
 		selectedSource = source;
+		// Reuse the exact source object returned during enumeration to avoid
+		// Windows window-source id mismatches across separate getSources() calls.
+		selectedDesktopSource =
+			typeof source.id === "string" ? lastEnumeratedSources.get(source.id) ?? null : null;
+
+		if (!selectedDesktopSource && typeof source.id === "string") {
+			try {
+				const sources = await desktopCapturer.getSources({
+					types: ["screen", "window"],
+					thumbnailSize: { width: 0, height: 0 },
+					fetchWindowIcons: true,
+				});
+				lastEnumeratedSources = new Map(sources.map((candidate) => [candidate.id, candidate]));
+				selectedDesktopSource = lastEnumeratedSources.get(source.id) ?? null;
+			} catch {
+				selectedDesktopSource = null;
+			}
+		}
 		const sourceSelectorWin = getSourceSelectorWindow();
 		if (sourceSelectorWin) {
 			sourceSelectorWin.close();
@@ -476,25 +547,7 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("store-recorded-session", async (_, payload: StoreRecordedSessionInput) => {
 		try {
-			const videoPath = path.join(RECORDINGS_DIR, fileName);
-			await fs.writeFile(videoPath, Buffer.from(videoData));
-			currentProjectPath = null;
-
-			const telemetryPath = `${videoPath}.cursor.json`;
-			if (pendingCursorRecordingData && pendingCursorRecordingData.samples.length > 0) {
-				await fs.writeFile(
-					telemetryPath,
-					JSON.stringify(pendingCursorRecordingData, null, 2),
-					"utf-8",
-				);
-			}
-			pendingCursorRecordingData = null;
-
-			return {
-				success: true,
-				path: videoPath,
-				message: "Video stored successfully",
-			};
+			return await storeRecordedSessionFiles(payload);
 		} catch (error) {
 			console.error("Failed to store recording session:", error);
 			return {
@@ -559,6 +612,7 @@ export function registerIpcHandlers(
 				maxSamples: MAX_CURSOR_SAMPLES,
 				platform: process.platform,
 				sampleIntervalMs: CURSOR_SAMPLE_INTERVAL_MS,
+				sourceId: getSelectedSourceId(),
 			});
 
 			try {

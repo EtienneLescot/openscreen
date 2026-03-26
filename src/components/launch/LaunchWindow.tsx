@@ -251,6 +251,8 @@ export function LaunchWindow() {
 
 	const [selectedSource, setSelectedSource] = useState("Screen");
 	const [hasSelectedSource, setHasSelectedSource] = useState(false);
+	const [, setHudPointerDownCount] = useState(0);
+	const [, setRecordPointerDownCount] = useState(0);
 
 	useEffect(() => {
 		const checkSelectedSource = async () => {
@@ -321,6 +323,9 @@ export function LaunchWindow() {
 		// recording toolbar widened (issue #305).
 		<div
 			className={`h-full w-full min-w-0 max-w-full overflow-x-hidden overflow-y-hidden bg-transparent ${styles.electronDrag}`}
+			onPointerDown={() => {
+				setHudPointerDownCount((count) => count + 1);
+			}}
 		>
 			{systemLocaleSuggestion && (
 				<div
@@ -523,6 +528,9 @@ export function LaunchWindow() {
 						onClick={toggleMicrophone}
 						disabled={recording}
 						title={microphoneEnabled ? t("audio.disableMicrophone") : t("audio.enableMicrophone")}
+						onPointerDown={() => {
+							setRecordPointerDownCount((count) => count + 1);
+						}}
 					>
 						{microphoneEnabled
 							? getIcon("micOn", "text-green-400")
