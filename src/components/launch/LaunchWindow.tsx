@@ -257,7 +257,7 @@ export function LaunchWindow() {
 					{/* Mic selector */}
 					{showMicControls && (
 						<div
-							className={`flex items-center gap-2 px-3 py-1.5 bg-gradient-to-br from-[rgba(28,28,36,0.97)] to-[rgba(18,18,26,0.96)] backdrop-blur-[24px] border border-white/10 rounded-xl shadow-2xl transition-all duration-300 overflow-hidden ${!isMicHovered ? "opacity-60 grayscale-[0.5]" : "opacity-100"}`}
+							className={`flex items-center gap-2 px-3 py-1.5 min-h-[36px] bg-gradient-to-br from-[rgba(28,28,36,0.97)] to-[rgba(18,18,26,0.96)] backdrop-blur-[24px] border border-white/10 rounded-xl shadow-2xl transition-all duration-300 overflow-hidden ${!isMicHovered ? "opacity-60 grayscale-[0.5]" : "opacity-100"}`}
 							onMouseEnter={() => setIsMicHovered(true)}
 							onMouseLeave={() => setIsMicHovered(false)}
 							style={{ width: isMicHovered ? "240px" : "140px", transition: "width 300ms ease" }}
@@ -304,7 +304,7 @@ export function LaunchWindow() {
 					{/* Webcam selector */}
 					{showWebcamControls && (
 						<div
-							className={`flex items-center gap-2 px-3 py-1.5 bg-gradient-to-br from-[rgba(28,28,36,0.97)] to-[rgba(18,18,26,0.96)] backdrop-blur-[24px] border border-white/10 rounded-xl shadow-2xl transition-all duration-300 overflow-hidden ${!isWebcamHovered ? "opacity-60 grayscale-[0.5]" : "opacity-100"}`}
+							className={`flex items-center gap-2 px-3 py-1.5 min-h-[36px] bg-gradient-to-br from-[rgba(28,28,36,0.97)] to-[rgba(18,18,26,0.96)] backdrop-blur-[24px] border border-white/10 rounded-xl shadow-2xl transition-all duration-300 overflow-hidden ${!isWebcamHovered ? "opacity-60 grayscale-[0.5]" : "opacity-100"}`}
 							onMouseEnter={() => setIsWebcamHovered(true)}
 							onMouseLeave={() => setIsWebcamHovered(false)}
 							style={{ width: isWebcamHovered ? "240px" : "140px", transition: "width 300ms ease" }}
