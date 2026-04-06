@@ -89,6 +89,7 @@ export function LaunchWindow() {
 		systemLocaleSuggestion,
 		acceptSystemLocaleSuggestion,
 		dismissSystemLocaleSuggestion,
+		resolveSystemLocaleSuggestion,
 	} = useI18n();
 	const suggestedLanguageName = systemLocaleSuggestion ? getLocaleName(systemLocaleSuggestion) : "";
 
@@ -554,12 +555,15 @@ export function LaunchWindow() {
 							side="top"
 							sideOffset={6}
 							collisionPadding={6}
-							className={`w-36 min-w-0 max-h-none overflow-hidden border-white/15 bg-[rgba(24,24,34,0.98)] p-1 text-white shadow-2xl backdrop-blur-xl ${styles.electronNoDrag}`}
+							className={`w-36 min-w-0 max-h-none overflow-y-hidden overflow-x-hidden border-white/15 bg-[rgba(24,24,34,0.98)] p-1 text-white shadow-2xl backdrop-blur-xl ${styles.electronNoDrag}`}
 						>
 							{SUPPORTED_LOCALES.map((loc) => (
 								<DropdownMenuItem
 									key={loc}
-									onSelect={() => setLocale(loc)}
+									onSelect={() => {
+										setLocale(loc);
+										resolveSystemLocaleSuggestion();
+									}}
 									className={`flex items-center justify-between rounded-sm px-2 py-1.5 text-[11px] transition-colors ${loc === locale ? "text-white" : "text-white/90"} focus:bg-white/10 focus:text-white ${styles.electronNoDrag}`}
 								>
 									<span className="truncate">{getLocaleName(loc)}</span>

@@ -26,6 +26,7 @@ interface I18nContextValue {
 	systemLocaleSuggestion: Locale | null;
 	acceptSystemLocaleSuggestion: () => void;
 	dismissSystemLocaleSuggestion: () => void;
+	resolveSystemLocaleSuggestion: () => void;
 }
 
 const SYSTEM_LANGUAGE_PROMPT_SEEN_KEY = "openscreen-system-language-prompt-seen";
@@ -152,12 +153,11 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 
 	const dismissSystemLocaleSuggestion = useCallback(() => {
 		setSystemLocaleSuggestion(null);
-		try {
-			// Persisting default locale avoids showing this prompt again.
-			localStorage.setItem(LOCALE_STORAGE_KEY, DEFAULT_LOCALE);
-		} catch {
-			// localStorage may be unavailable
-		}
+		markPromptAsHandled();
+	}, [markPromptAsHandled]);
+
+	const resolveSystemLocaleSuggestion = useCallback(() => {
+		setSystemLocaleSuggestion(null);
 		markPromptAsHandled();
 	}, [markPromptAsHandled]);
 
@@ -180,6 +180,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 			systemLocaleSuggestion,
 			acceptSystemLocaleSuggestion,
 			dismissSystemLocaleSuggestion,
+			resolveSystemLocaleSuggestion,
 		}),
 		[
 			locale,
@@ -188,6 +189,7 @@ export function I18nProvider({ children }: { children: ReactNode }) {
 			systemLocaleSuggestion,
 			acceptSystemLocaleSuggestion,
 			dismissSystemLocaleSuggestion,
+			resolveSystemLocaleSuggestion,
 		],
 	);
 
