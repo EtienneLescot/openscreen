@@ -1,3 +1,4 @@
+import { HsvaColor, hexToHsva } from "@uiw/color-convert";
 import Block from "@uiw/react-color-block";
 import Colorful from "@uiw/react-color-colorful";
 import { useEffect, useState } from "react";
@@ -20,6 +21,12 @@ export default function ColorPicker({
 }) {
 	const [colorMode, setColorMode] = useState<"wheel" | "palette">("wheel");
 	const [hexInput, setHexInput] = useState(selectedColor);
+	const [transparentColorHSVA, setTransparentColorHSVA] = useState<HsvaColor>({
+		h: 0,
+		s: 0,
+		v: 0,
+		a: 0,
+	});
 
 	useEffect(() => {
 		setHexInput(selectedColor);
@@ -54,6 +61,12 @@ export default function ColorPicker({
 		if (isValidHexColor) {
 			onUpdateColor(normalized);
 		}
+	};
+
+	const toTransparent = (color: string) => {
+		const hsva = hexToHsva(color);
+		hsva.a = 0;
+		return hsva;
 	};
 	return (
 		<div className="p-1 flex flex-col gap-4 items-center">
@@ -94,7 +107,7 @@ export default function ColorPicker({
 						<span style={{ color: getTextColor(selectedColor) }}>{selectedColor}</span>
 					</div>
 					<Colorful
-						color={selectedColor}
+						color={selectedColor !== "transparent" ? selectedColor : transparentColorHSVA}
 						onChange={(color) => {
 							onUpdateColor(color.hex);
 						}}
@@ -130,6 +143,8 @@ export default function ColorPicker({
 					size="sm"
 					className="w-full mt-2 text-xs h-7 hover:bg-white/5 text-slate-400"
 					onClick={() => {
+						const hsva = toTransparent(selectedColor);
+						setTransparentColorHSVA(hsva);
 						onUpdateColor("transparent");
 					}}
 				>
