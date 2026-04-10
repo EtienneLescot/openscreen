@@ -1,0 +1,37 @@
+{
+	"tooltips": {
+		"hideHUD": "HUD 숨기기",
+		"closeApp": "앱 닫기",
+		"restartRecording": "녹화 다시 시작",
+		"cancelRecording": "녹화 취소",
+		"pauseRecording": "녹화 일시정지",
+		"resumeRecording": "녹화 재개",
+		"openVideoFile": "비디오 파일 열기",
+		"openProject": "프로젝트 열기"
+	},
+	"audio": {
+		"enableSystemAudio": "시스템 오디오 활성화",
+		"disableSystemAudio": "시스템 오디오 비활성화",
+		"enableMicrophone": "마이크 활성화",
+		"disableMicrophone": "마이크 비활성화",
+		"defaultMicrophone": "기본 마이크"
+	},
+	"webcam": {
+		"enableWebcam": "웹캠 활성화",
+		"disableWebcam": "웹캠 비활성화",
+		"defaultCamera": "기본 카메라",
+		"searching": "검색 중...",
+		"noneFound": "카메라를 찾을 수 없음",
+		"unavailable": "카메라를 사용할 수 없음"
+	},
+	"sourceSelector": {
+		"loading": "소스 불러오는 중...",
+		"screens": "화면 ({{count}}개)",
+		"windows": "창 ({{count}}개)",
+		"defaultSourceName": "화면"
+	},
+	"recording": {
+		"selectSource": "녹화할 소스를 선택해 주세요"
+	},
+	"language": "언어"
+}

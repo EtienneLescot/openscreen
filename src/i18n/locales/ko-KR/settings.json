@@ -1,0 +1,162 @@
+{
+	"zoom": {
+		"level": "줌 레벨",
+		"selectRegion": "조정할 줌 구간을 선택하세요",
+		"deleteZoom": "줌 삭제",
+		"focusMode": {
+			"title": "포커스 모드",
+			"manual": "수동",
+			"auto": "자동",
+			"autoDescription": "녹화된 커서 위치를 따라 카메라가 이동합니다"
+		}
+	},
+	"speed": {
+		"playbackSpeed": "재생 속도",
+		"selectRegion": "조정할 속도 구간을 선택하세요",
+		"deleteRegion": "속도 구간 삭제",
+		"customPlaybackSpeed": "재생 속도 직접 입력",
+		"maxSpeedError": "속도는 16×를 초과할 수 없습니다"
+	},
+	"trim": {
+		"deleteRegion": "트림 구간 삭제"
+	},
+	"layout": {
+		"title": "레이아웃",
+		"preset": "프리셋",
+		"selectPreset": "프리셋 선택",
+		"pictureInPicture": "화면 속 화면",
+		"verticalStack": "세로 배치",
+		"webcamShape": "카메라 모양",
+		"webcamSize": "웹캠 크기"
+	},
+	"effects": {
+		"title": "비디오 효과",
+		"blurBg": "배경 흐림",
+		"motionBlur": "모션 블러",
+		"off": "끄기",
+		"shadow": "그림자",
+		"roundness": "모서리 둥글기",
+		"padding": "여백"
+	},
+	"background": {
+		"title": "배경",
+		"image": "이미지",
+		"color": "색상",
+		"gradient": "그라디언트",
+		"uploadCustom": "직접 업로드",
+		"gradientLabel": "그라디언트 {{index}}"
+	},
+	"crop": {
+		"title": "자르기",
+		"cropVideo": "비디오 자르기",
+		"dragInstruction": "각 면을 드래그해 자르기 영역을 조정하세요",
+		"ratio": "비율",
+		"free": "자유",
+		"done": "완료",
+		"lockAspectRatio": "화면 비율 고정",
+		"unlockAspectRatio": "화면 비율 해제"
+	},
+	"exportFormat": {
+		"mp4": "MP4",
+		"gif": "GIF",
+		"mp4Video": "MP4 비디오",
+		"mp4Description": "고화질 비디오 파일",
+		"gifAnimation": "GIF 애니메이션",
+		"gifDescription": "공유용 애니메이션 이미지"
+	},
+	"exportQuality": {
+		"title": "내보내기 품질",
+		"low": "낮음",
+		"medium": "보통",
+		"high": "높음"
+	},
+	"gifSettings": {
+		"frameRate": "GIF 프레임 속도",
+		"size": "GIF 크기",
+		"loop": "GIF 반복"
+	},
+	"project": {
+		"save": "프로젝트 저장",
+		"load": "프로젝트 불러오기"
+	},
+	"export": {
+		"videoButton": "비디오 내보내기",
+		"gifButton": "GIF 내보내기",
+		"chooseSaveLocation": "저장 위치 선택"
+	},
+	"links": {
+		"reportBug": "버그 신고",
+		"starOnGithub": "GitHub에 Star 남기기"
+	},
+	"imageUpload": {
+		"invalidFileType": "지원하지 않는 파일 형식입니다",
+		"jpgOnly": "JPG 또는 JPEG 이미지 파일을 업로드해 주세요.",
+		"uploadSuccess": "커스텀 이미지가 성공적으로 업로드되었습니다!",
+		"failedToUpload": "이미지 업로드에 실패했습니다",
+		"errorReading": "파일을 읽는 중 오류가 발생했습니다."
+	},
+	"annotation": {
+		"title": "주석 설정",
+		"active": "활성",
+		"typeText": "텍스트",
+		"typeImage": "이미지",
+		"typeArrow": "화살표",
+		"textContent": "텍스트 내용",
+		"textPlaceholder": "텍스트를 입력하세요...",
+		"fontStyle": "폰트 스타일",
+		"selectStyle": "스타일 선택",
+		"size": "크기",
+		"customFonts": "커스텀 폰트",
+		"textColor": "텍스트 색상",
+		"background": "배경",
+		"none": "없음",
+		"color": "색상",
+		"clearBackground": "배경 지우기",
+		"uploadImage": "이미지 업로드",
+		"supportedFormats": "지원 형식: JPG, PNG, GIF, WebP",
+		"arrowDirection": "화살표 방향",
+		"strokeWidth": "선 두께: {{width}}px",
+		"arrowColor": "화살표 색상",
+		"deleteAnnotation": "주석 삭제",
+		"shortcutsAndTips": "단축키 및 팁",
+		"tipMovePlayhead": "재생 헤드를 주석 구간으로 옮겨 항목을 선택하세요.",
+		"tipTabCycle": "Tab 키로 겹치는 항목을 순환할 수 있습니다.",
+		"tipShiftTabCycle": "Shift+Tab으로 역방향 순환할 수 있습니다.",
+		"invalidImageType": "지원하지 않는 파일 형식입니다",
+		"imageFormatsOnly": "JPG, PNG, GIF 또는 WebP 이미지 파일을 업로드해 주세요.",
+		"imageUploadSuccess": "이미지가 성공적으로 업로드되었습니다!",
+		"failedImageUpload": "이미지 업로드에 실패했습니다"
+	},
+	"fontStyles": {
+		"classic": "클래식",
+		"editor": "에디터",
+		"strong": "강조",
+		"typewriter": "타자기",
+		"deco": "데코",
+		"simple": "심플",
+		"modern": "모던",
+		"clean": "클린"
+	},
+	"customFont": {
+		"dialogTitle": "Google 폰트 추가",
+		"urlLabel": "Google Fonts 가져오기 URL",
+		"urlPlaceholder": "https://fonts.googleapis.com/css2?family=Roboto&display=swap",
+		"urlHelp": "Google Fonts에서 폰트 선택 → \"폰트 가져오기\" 클릭 → @import URL 복사",
+		"nameLabel": "표시 이름",
+		"namePlaceholder": "내 커스텀 폰트",
+		"nameHelp": "폰트 선택기에서 표시될 이름입니다",
+		"addButton": "폰트 추가",
+		"addingButton": "추가 중...",
+		"errorEmptyUrl": "Google Fonts 가져오기 URL을 입력해 주세요",
+		"errorInvalidUrl": "유효한 Google Fonts URL을 입력해 주세요",
+		"errorEmptyName": "폰트 이름을 입력해 주세요",
+		"errorExtractFailed": "URL에서 폰트 패밀리를 추출할 수 없습니다",
+		"successMessage": "\"{{fontName}}\" 폰트가 성공적으로 추가되었습니다",
+		"failedToAdd": "폰트 추가에 실패했습니다",
+		"errorTimeout": "폰트 로딩 시간이 초과되었습니다. URL을 확인하고 다시 시도해 주세요.",
+		"errorLoadFailed": "폰트를 불러올 수 없습니다. Google Fonts URL이 올바른지 확인해 주세요."
+	},
+	"language": {
+		"title": "언어"
+	}
+}
