@@ -230,9 +230,11 @@ export class StreamingVideoDecoder {
 		// Scan video packets to find the true content boundary.
 		// MediaRecorder (especially on Linux) writes unreliable container durations.
 		// Packet timestamps are ground truth — no decode needed, just timestamp reads.
+		// Pass explicit range because some containers are truncated without one.
+		const scanEndSec = Math.max(mediaInfo.duration, videoStream?.duration ?? 0, 0) + 0.5;
 		let maxPacketEndUs = 0;
 		const scanReader = (
-			this.demuxer.read("video") as ReadableStream<EncodedVideoChunk>
+			this.demuxer.read("video", 0, scanEndSec) as ReadableStream<EncodedVideoChunk>
 		).getReader();
 		try {
 			while (true) {
