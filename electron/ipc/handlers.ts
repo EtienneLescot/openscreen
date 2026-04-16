@@ -12,6 +12,10 @@ import {
 	systemPreferences,
 } from "electron";
 import {
+	type CursorTelemetryPoint,
+	createCursorTelemetryBuffer,
+} from "../../src/lib/cursorTelemetryBuffer";
+import {
 	normalizeProjectMedia,
 	normalizeRecordingSession,
 	type ProjectMedia,
@@ -275,14 +279,14 @@ async function storeRecordedSessionFiles(payload: StoreRecordedSessionInput) {
 	currentProjectPath = null;
 
 	const telemetryPath = `${screenVideoPath}.cursor.json`;
-	if (pendingCursorSamples.length > 0) {
+	const pendingSamples: CursorTelemetryPoint[] = cursorTelemetryBuffer.takeNextBatch();
+	if (pendingSamples.length > 0) {
 		await fs.writeFile(
 			telemetryPath,
-			JSON.stringify({ version: CURSOR_TELEMETRY_VERSION, samples: pendingCursorSamples }, null, 2),
+			JSON.stringify({ version: CURSOR_TELEMETRY_VERSION, samples: pendingSamples }, null, 2),
 			"utf-8",
 		);
 	}
-	pendingCursorSamples = [];
 
 	const sessionManifestPath = path.join(
 		RECORDINGS_DIR,
@@ -302,16 +306,11 @@ const CURSOR_TELEMETRY_VERSION = 1;
 const CURSOR_SAMPLE_INTERVAL_MS = 100;
 const MAX_CURSOR_SAMPLES = 60 * 60 * 10; // 1 hour @ 10Hz
 
-interface CursorTelemetryPoint {
-	timeMs: number;
-	cx: number;
-	cy: number;
-}
-
 let cursorCaptureInterval: NodeJS.Timeout | null = null;
 let cursorCaptureStartTimeMs = 0;
-let activeCursorSamples: CursorTelemetryPoint[] = [];
-let pendingCursorSamples: CursorTelemetryPoint[] = [];
+const cursorTelemetryBuffer = createCursorTelemetryBuffer({
+	maxActiveSamples: MAX_CURSOR_SAMPLES,
+});
 
 function clamp(value: number, min: number, max: number) {
 	return Math.min(max, Math.max(min, value));
@@ -338,15 +337,11 @@ function sampleCursorPoint() {
 	const cx = clamp((cursor.x - bounds.x) / width, 0, 1);
 	const cy = clamp((cursor.y - bounds.y) / height, 0, 1);
 
-	activeCursorSamples.push({
+	cursorTelemetryBuffer.push({
 		timeMs: Math.max(0, Date.now() - cursorCaptureStartTimeMs),
 		cx,
 		cy,
 	});
-
-	if (activeCursorSamples.length > MAX_CURSOR_SAMPLES) {
-		activeCursorSamples.shift();
-	}
 }
 
 export function registerIpcHandlers(
@@ -534,15 +529,13 @@ export function registerIpcHandlers(
 	ipcMain.handle("set-recording-state", (_, recording: boolean) => {
 		if (recording) {
 			stopCursorCapture();
-			activeCursorSamples = [];
-			pendingCursorSamples = [];
+			cursorTelemetryBuffer.startSession();
 			cursorCaptureStartTimeMs = Date.now();
 			sampleCursorPoint();
 			cursorCaptureInterval = setInterval(sampleCursorPoint, CURSOR_SAMPLE_INTERVAL_MS);
 		} else {
 			stopCursorCapture();
-			pendingCursorSamples = [...activeCursorSamples];
-			activeCursorSamples = [];
+			cursorTelemetryBuffer.endSession();
 		}
 
 		const source = selectedSource || { name: "Screen" };
