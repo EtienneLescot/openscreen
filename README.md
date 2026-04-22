@@ -5,12 +5,15 @@
   <img src="public/openscreen.png" alt="OpenScreen Logo" width="64" />
   <br />
   <br />
+	<a href="https://trendshift.io/repositories/17427" target="_blank"><img src="https://trendshift.io/api/badge/repositories/17427" alt="siddharthvaddem%2Fopenscreen | Trendshift" style="width: 250px; height: 55px;" width="250" height="55"/></a>
+	<br />
+	<br />
   <a href="https://deepwiki.com/siddharthvaddem/openscreen">
     <img src="https://deepwiki.com/badge.svg" alt="Ask DeepWiki" />
   </a>
   &nbsp;
   <a href="https://discord.gg/yAQQhRaEeg">
-    <img src="https://img.shields.io/discord/pHAUbcqNd?logo=discord&label=Discord&color=5865F2" alt="Join Discord" />
+    <img src="https://dcbadge.limes.pink/api/server/https://discord.gg/yAQQhRaEeg?style=flat" alt="Join Discord" />
   </a>
 </p>
 
@@ -101,6 +104,16 @@ See the documentation here:
 ## Contributing
 
 Contributions are welcome! If you’d like to help out or see what’s currently being worked on, take a look at the open issues and the [project roadmap](https://github.com/users/siddharthvaddem/projects/3) to understand the current direction of the project and find ways to contribute.
+
+## Star History
+
+<a href="https://www.star-history.com/?repos=siddharthvaddem%2Fopenscreen&type=date&legend=top-left">
+ <picture>
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=siddharthvaddem/openscreen&type=date&theme=dark&legend=top-left" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=siddharthvaddem/openscreen&type=date&legend=top-left" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=siddharthvaddem/openscreen&type=date&legend=top-left" />
+ </picture>
+</a>
 
 ## License
 
