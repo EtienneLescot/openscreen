@@ -390,18 +390,22 @@ export class StreamingVideoDecoder {
 				support.supported,
 			);
 			if (!support.supported) {
-				throw new DOMException(
-					`Unsupported codec: ${preferredDecoderConfig.codec}`,
-					"NotSupportedError",
-				);
+				throw new Error(`Unsupported codec: ${preferredDecoderConfig.codec}`);
 			}
 			this.decoder.configure(preferredDecoderConfig);
 		} catch (error) {
-			if (!shouldPreferSoftwareDecode) {
+			if (shouldPreferSoftwareDecode) {
+				this.decoder.configure(decoderConfig);
+			} else if (/^avc1/i.test(codec)) {
+				const fallback = { ...decoderConfig, codec: "avc1.640033" };
+				console.warn(
+					`[StreamingVideoDecoder] codec "${codec}" unsupported, ` +
+						`falling back to "${fallback.codec}"`,
+				);
+				this.decoder.configure(fallback);
+			} else {
 				throw error;
 			}
-			// Fall back to default decoder config if software preference isn't supported.
-			this.decoder.configure(decoderConfig);
 		}
 
 		const getNextFrame = (): Promise<VideoFrame | null> => {
