@@ -1,7 +1,8 @@
 import { fixWebmDuration } from "@fix-webm-duration/fix";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
-import { nativeBridgeClient } from "@/native";
+import { useScopedT } from "@/contexts/I18nContext";
+import { requestCameraAccess } from "@/lib/requestCameraAccess";
 
 const TARGET_FRAME_RATE = 60;
 const MIN_FRAME_RATE = 30;

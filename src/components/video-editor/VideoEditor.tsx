@@ -33,12 +33,12 @@ import type { ProjectMedia } from "@/lib/recordingSession";
 import { matchesShortcut } from "@/lib/shortcuts";
 import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences";
 import { BackgroundLoadError } from "@/lib/wallpaper";
+import { nativeBridgeClient, useCursorRecordingData, useCursorTelemetry } from "@/native";
 import {
 	getAspectRatioValue,
 	getNativeAspectRatioValue,
 	isPortraitAspectRatio,
 } from "@/utils/aspectRatioUtils";
-import { nativeBridgeClient, useCursorRecordingData, useCursorTelemetry } from "@/native";
 import { ExportDialog } from "./ExportDialog";
 import PlaybackControls from "./PlaybackControls";
 import {
@@ -143,6 +143,13 @@ export default function VideoEditor() {
 	const [gifSizePreset, setGifSizePreset] = useState<GifSizePreset>("medium");
 	const [exportedFilePath, setExportedFilePath] = useState<string | null>(null);
 	const [lastSavedSnapshot, setLastSavedSnapshot] = useState<string | null>(null);
+	const [unsavedExport, setUnsavedExport] = useState<{
+		arrayBuffer: ArrayBuffer;
+		fileName: string;
+		format: string;
+	} | null>(null);
+	const [isFullscreen, setIsFullscreen] = useState(false);
+	const playerContainerRef = useRef<HTMLDivElement | null>(null);
 	const cursorTelemetrySourcePath = videoSourcePath ?? (videoPath ? fromFileUrl(videoPath) : null);
 	const { samples: cursorTelemetry, error: cursorTelemetryError } =
 		useCursorTelemetry(cursorTelemetrySourcePath);
@@ -208,7 +215,12 @@ export default function VideoEditor() {
 			}
 
 			const project = candidate;
-			const sourcePath = project.videoPath;
+			const projectMedia = resolveProjectMedia(project);
+			if (!projectMedia) {
+				return false;
+			}
+			const sourcePath = projectMedia.screenVideoPath;
+			const webcamSourcePath = projectMedia.webcamVideoPath ?? null;
 			const normalizedEditor = normalizeProjectEditor(project.editor);
 			const inferredDurationMs = Math.max(
 				0,
@@ -397,7 +409,7 @@ export default function VideoEditor() {
 					setVideoPath(toFileUrl(result.path));
 					setCurrentProjectPath(null);
 					setLastSavedSnapshot(
-						createProjectSnapshot({ screenVideoPath: sourcePath }, INITIAL_EDITOR_STATE),
+						createProjectSnapshot({ screenVideoPath: result.path }, INITIAL_EDITOR_STATE),
 					);
 				} else {
 					setError("No video to load. Please record or select a video.");

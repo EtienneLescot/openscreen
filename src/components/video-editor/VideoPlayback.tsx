@@ -25,14 +25,14 @@ import {
 	type WebcamLayoutPreset,
 	type WebcamSizePreset,
 } from "@/lib/compositeLayout";
-import { classifyWallpaper, DEFAULT_WALLPAPER, resolveImageWallpaperUrl } from "@/lib/wallpaper";
-import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import {
 	getNativeCursorDisplayMetrics,
 	hasNativeCursorRecordingData,
 	projectNativeCursorToStage,
 	resolveInterpolatedNativeCursorFrame,
 } from "@/lib/cursor/nativeCursor";
+import { classifyWallpaper, DEFAULT_WALLPAPER, resolveImageWallpaperUrl } from "@/lib/wallpaper";
+import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import type { CursorRecordingData } from "@/native/contracts";
 import {
 	type AspectRatio,

@@ -43,3 +43,6 @@ __screenshots__/
 result
 result-*
 .direnv/
+
+#kilocode
+.kilo/

@@ -615,7 +615,7 @@ export class FrameRenderer {
 		return image;
 	}
 
-	private updateLayout(): void {
+	private updateLayout(webcamFrame?: VideoFrame | null): void {
 		if (!this.app || !this.videoSprite || !this.maskGraphics || !this.videoContainer) return;
 
 		const { width, height } = this.config;

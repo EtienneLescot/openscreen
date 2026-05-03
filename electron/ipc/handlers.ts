@@ -449,9 +449,12 @@ async function storeRecordedSessionFiles(payload: StoreRecordedSessionInput) {
 export function registerIpcHandlers(
 	createEditorWindow: () => void,
 	createSourceSelectorWindow: () => BrowserWindow,
+	_createCountdownOverlayWindow: () => BrowserWindow,
 	getMainWindow: () => BrowserWindow | null,
 	getSourceSelectorWindow: () => BrowserWindow | null,
+	_getCountdownOverlayWindow?: () => BrowserWindow | null,
 	onRecordingStateChange?: (recording: boolean, sourceName: string) => void,
+	_switchToHud?: () => void,
 ) {
 	ipcMain.handle("get-sources", async (_, opts) => {
 		const sources = await desktopCapturer.getSources(opts);
@@ -470,7 +473,7 @@ export function registerIpcHandlers(
 		// Reuse the exact source object returned during enumeration to avoid
 		// Windows window-source id mismatches across separate getSources() calls.
 		selectedDesktopSource =
-			typeof source.id === "string" ? lastEnumeratedSources.get(source.id) ?? null : null;
+			typeof source.id === "string" ? (lastEnumeratedSources.get(source.id) ?? null) : null;
 
 		if (!selectedDesktopSource && typeof source.id === "string") {
 			try {
@@ -557,6 +560,45 @@ export function registerIpcHandlers(
 			};
 		}
 	});
+
+	async function storeRecordedSessionFiles(payload: StoreRecordedSessionInput) {
+		const createdAt =
+			typeof payload.createdAt === "number" && Number.isFinite(payload.createdAt)
+				? payload.createdAt
+				: Date.now();
+		const screenVideoPath = path.join(RECORDINGS_DIR, payload.screen.fileName);
+		await fs.writeFile(screenVideoPath, Buffer.from(payload.screen.videoData));
+
+		let webcamVideoPath: string | undefined;
+		if (payload.webcam) {
+			webcamVideoPath = path.join(RECORDINGS_DIR, payload.webcam.fileName);
+			await fs.writeFile(webcamVideoPath, Buffer.from(payload.webcam.videoData));
+		}
+
+		const session: RecordingSession = webcamVideoPath
+			? { screenVideoPath, webcamVideoPath, createdAt }
+			: { screenVideoPath, createdAt };
+		setCurrentRecordingSessionState(session);
+		currentVideoPath = screenVideoPath;
+		currentProjectPath = null;
+
+		const telemetryPath = `${screenVideoPath}.cursor.json`;
+		if (pendingCursorRecordingData && pendingCursorRecordingData.samples.length > 0) {
+			await fs.writeFile(
+				telemetryPath,
+				JSON.stringify(pendingCursorRecordingData, null, 2),
+				"utf-8",
+			);
+		}
+		pendingCursorRecordingData = null;
+
+		return {
+			success: true,
+			path: screenVideoPath,
+			session,
+			message: "Recording session stored successfully",
+		};
+	}
 
 	ipcMain.handle("store-recorded-video", async (_, videoData: ArrayBuffer, fileName: string) => {
 		try {

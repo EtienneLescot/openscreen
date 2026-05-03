@@ -379,8 +379,6 @@ export function SettingsPanel({
 
 	const [selectedColor, setSelectedColor] = useState("#ADADAD");
 	const [gradient, setGradient] = useState<string>(GRADIENTS[0]);
-	const [showCropModal, setShowCropModal] = useState(false);
-	const cropSnapshotRef = useRef<CropRegion | null>(null);
 	const [cropAspectLocked, setCropAspectLocked] = useState(false);
 	const [cropAspectRatio, setCropAspectRatio] = useState("");
 	const isPortraitCanvas = isPortraitAspectRatio(aspectRatio);
