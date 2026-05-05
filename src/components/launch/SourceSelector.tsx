@@ -77,6 +77,9 @@ export function SourceSelector() {
 		return (
 			<div
 				key={source.id}
+				data-testid="source-selector-card"
+				data-source-id={source.id}
+				data-source-kind={source.id.startsWith("screen:") ? "screen" : "window"}
 				className={`${styles.sourceCard} ${isSelected ? styles.selected : ""} p-2`}
 				onClick={() => handleSourceSelect(source)}
 			>
@@ -145,6 +148,7 @@ export function SourceSelector() {
 			</div>
 			<div className="p-3 justify-center flex gap-2">
 				<Button
+					data-testid="source-selector-cancel-button"
 					variant="ghost"
 					onClick={() => window.close()}
 					className="px-5 py-1 text-xs text-zinc-400 hover:text-white active:scale-95 transition-transform duration-150 hover:bg-white/5 rounded-full"
@@ -152,6 +156,7 @@ export function SourceSelector() {
 					{tc("actions.cancel")}
 				</Button>
 				<Button
+					data-testid="source-selector-share-button"
 					onClick={handleShare}
 					disabled={!selectedSource}
 					className="px-5 py-1 text-xs bg-[#34B27B] text-white active:scale-95 transition-transform duration-150 hover:bg-[#34B27B]/80 disabled:opacity-30 disabled:bg-zinc-700 rounded-full"

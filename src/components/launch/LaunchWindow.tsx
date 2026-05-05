@@ -510,6 +510,7 @@ export function LaunchWindow() {
 
 				{/* Source selector */}
 				<button
+					data-testid="launch-source-selector-button"
 					className={`${hudGroupClasses} p-2 ${styles.electronNoDrag}`}
 					onClick={openSourceSelector}
 					disabled={recording}
@@ -522,6 +523,7 @@ export function LaunchWindow() {
 				{/* Audio controls group */}
 				<div className={`${hudGroupClasses} ${styles.electronNoDrag}`}>
 					<button
+						data-testid="launch-system-audio-button"
 						className={`${hudIconBtnClasses} ${systemAudioEnabled ? "drop-shadow-[0_0_4px_rgba(74,222,128,0.4)]" : ""}`}
 						onClick={() => !recording && setSystemAudioEnabled(!systemAudioEnabled)}
 						disabled={recording}
@@ -534,6 +536,7 @@ export function LaunchWindow() {
 							: getIcon("volumeOff", "text-white/40")}
 					</button>
 					<button
+						data-testid="launch-microphone-button"
 						className={`${hudIconBtnClasses} ${microphoneEnabled ? "drop-shadow-[0_0_4px_rgba(74,222,128,0.4)]" : ""}`}
 						onClick={toggleMicrophone}
 						disabled={recording}
@@ -547,6 +550,7 @@ export function LaunchWindow() {
 							: getIcon("micOff", "text-white/40")}
 					</button>
 					<button
+						data-testid="launch-webcam-button"
 						className={`${hudIconBtnClasses} ${webcamEnabled ? "drop-shadow-[0_0_4px_rgba(74,222,128,0.4)]" : ""}`}
 						onClick={async () => {
 							await setWebcamEnabled(!webcamEnabled);
@@ -562,6 +566,7 @@ export function LaunchWindow() {
 
 				{/* Record/Stop group */}
 				<button
+					data-testid="launch-record-button"
 					className={`flex items-center justify-center rounded-full p-2 transition-[min-width,background-color] duration-150 ${recording ? "min-w-[78px]" : "min-w-[36px]"} ${styles.electronNoDrag} ${
 						recording
 							? paused
@@ -614,6 +619,7 @@ export function LaunchWindow() {
 						{/* Open video file */}
 						<Tooltip content={t("tooltips.openVideoFile")}>
 							<button
+								data-testid="launch-open-video-button"
 								className={`${hudIconBtnClasses} ${styles.electronNoDrag}`}
 								onClick={openVideoFile}
 							>
@@ -624,6 +630,7 @@ export function LaunchWindow() {
 						{/* Open project */}
 						<Tooltip content={t("tooltips.openProject")}>
 							<button
+								data-testid="launch-open-project-button"
 								className={`${hudIconBtnClasses} ${styles.electronNoDrag}`}
 								onClick={openProjectFile}
 							>

@@ -39,6 +39,7 @@
 		"test:browser": "vitest --config vitest.browser.config.ts --run",
 		"test:browser:install": "playwright install --with-deps chromium-headless-shell",
 		"test:e2e": "playwright test",
+		"test:e2e:windows-native-checklist": "playwright test tests/e2e/windows-native-checklist.spec.ts",
 		"prepare": "husky",
 		"rebuild:native": "node ./scripts/rebuild-native.mjs",
 		"postinstall": "npm run rebuild:native"
