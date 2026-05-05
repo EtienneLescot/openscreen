@@ -16,6 +16,8 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_executable(wgc-capture
   src/audio_sample_utils.cpp
   src/audio_sample_utils.h
+  src/dshow_webcam_capture.cpp
+  src/dshow_webcam_capture.h
   src/main.cpp
   src/mf_encoder.cpp
   src/mf_encoder.h

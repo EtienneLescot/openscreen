@@ -40,6 +40,7 @@ The helper owns Windows media capture:
 - WASAPI system loopback;
 - WASAPI microphone input;
 - Media Foundation webcam capture;
+- DirectShow webcam fallback for virtual cameras not visible to Media Foundation;
 - Media Foundation encoding/muxing;
 - stream timestamp normalization.
 
@@ -135,6 +136,7 @@ SSOT rules for this phase:
 - `WgcSession::captureWidth()/captureHeight()` is the encoded screen frame size until a dedicated native scaling stage exists.
 - `WasapiLoopbackCapture::inputFormat()` is the runtime audio format source used by `MFEncoder`.
 - The renderer passes both the browser webcam `deviceId` and selected display label as `deviceName`; `electron/native/wgc-capture/src/webcam_capture.*` is the only place that maps those values to Media Foundation devices.
+- Electron resolves the selected label to a DirectShow filter CLSID once and passes it as `webcamDirectShowClsid`; the helper must not independently guess among DirectShow filters.
 - No duplicated hard-coded audio format assumptions in `main.cpp`.
 
 ### 3. WASAPI Microphone
@@ -158,6 +160,7 @@ Acceptance:
 - Convert webcam samples to BGRA and compose them into the primary helper MP4 as an initial bottom-right picture-in-picture overlay.
 - Keep the helper process as the SSOT for screen/window, WASAPI system audio, microphone, webcam, and mux timing.
 - Match the requested webcam through Media Foundation friendly names first, then browser device ids/symbolic links, so UI selection remains stable across Chromium and Windows native device namespaces.
+- Use the Electron-resolved DirectShow CLSID when the selected virtual camera, for example NVIDIA Broadcast, is registered for DirectShow but absent from Media Foundation enumeration.
 - Later: promote the same webcam capture source to a separate editable native `webcamVideoPath` if product requirements need post-recording layout edits.
 
 Acceptance:

@@ -27,6 +27,7 @@ export type NativeWindowsRecordingRequest = {
 		enabled: boolean;
 		deviceId?: string;
 		deviceName?: string;
+		directShowClsid?: string;
 		width: number;
 		height: number;
 		fps: number;

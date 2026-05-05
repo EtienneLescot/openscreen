@@ -474,6 +474,103 @@ function isWindowsGraphicsCaptureOsSupported() {
 	return Number.isFinite(build) && build >= 19041;
 }
 
+function normalizeNativeDeviceName(value: string) {
+	return value
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
+}
+
+function scoreNativeDeviceName(candidateName: string, candidateId: string, requestedName?: string) {
+	const candidate = normalizeNativeDeviceName(candidateName);
+	const id = normalizeNativeDeviceName(candidateId);
+	const requested = normalizeNativeDeviceName(requestedName ?? "");
+	if (!requested) {
+		return 0;
+	}
+	if (candidate === requested) {
+		return 1000;
+	}
+	if (candidate.includes(requested) || requested.includes(candidate)) {
+		return 900;
+	}
+	if (id.includes(requested) || requested.includes(id)) {
+		return 800;
+	}
+
+	return requested
+		.split(/\s+/)
+		.filter((word) => word.length > 1 && !["camera", "webcam", "video", "input"].includes(word))
+		.reduce((score, word) => {
+			if (candidate.includes(word)) return score + 100;
+			if (id.includes(word)) return score + 50;
+			return score;
+		}, 0);
+}
+
+function queryDirectShowVideoInputRegistry() {
+	return new Promise<string>((resolve) => {
+		const proc = spawn(
+			"reg.exe",
+			["query", "HKCR\\CLSID\\{860BB310-5D01-11D0-BD3B-00A0C911CE86}\\Instance", "/s"],
+			{ windowsHide: true },
+		);
+		let stdout = "";
+		proc.stdout.on("data", (chunk: Buffer) => {
+			stdout += chunk.toString("utf16le").includes("\u0000")
+				? chunk.toString("utf16le")
+				: chunk.toString();
+		});
+		proc.on("close", () => resolve(stdout));
+		proc.on("error", () => resolve(""));
+	});
+}
+
+async function resolveDirectShowWebcamClsid(deviceName?: string) {
+	if (process.platform !== "win32" || !deviceName?.trim()) {
+		return null;
+	}
+
+	const output = await queryDirectShowVideoInputRegistry();
+	let current: { friendlyName?: string; clsid?: string } = {};
+	const entries: Array<{ friendlyName?: string; clsid?: string }> = [];
+	for (const rawLine of output.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		if (/^HKEY_/i.test(line)) {
+			if (current.friendlyName || current.clsid) entries.push(current);
+			current = {};
+			continue;
+		}
+		const match = line.match(/^(\S+)\s+REG_SZ\s+(.+)$/);
+		if (!match) continue;
+		if (match[1] === "FriendlyName") current.friendlyName = match[2].trim();
+		if (match[1] === "CLSID") current.clsid = match[2].trim();
+	}
+	if (current.friendlyName || current.clsid) entries.push(current);
+
+	let best: { clsid: string; friendlyName?: string; score: number } | null = null;
+	for (const entry of entries) {
+		if (!entry.clsid) continue;
+		const score = scoreNativeDeviceName(entry.friendlyName ?? "", entry.clsid, deviceName);
+		if (!best || score > best.score) {
+			best = { clsid: entry.clsid, friendlyName: entry.friendlyName, score };
+		}
+	}
+
+	if (!best || best.score <= 0) {
+		return null;
+	}
+
+	console.info("[native-wgc] resolved DirectShow webcam filter", {
+		requestedName: deviceName,
+		filterName: best.friendlyName,
+		clsid: best.clsid,
+		score: best.score,
+	});
+	return best.clsid;
+}
+
 async function startCursorRecording(recordingId?: number) {
 	if (cursorRecordingSession) {
 		pendingCursorRecordingData = await cursorRecordingSession.stop();
@@ -619,6 +716,25 @@ function waitForNativeWindowsCaptureStop(proc: ChildProcessWithoutNullStreams) {
 		proc.once("close", onClose);
 		proc.once("error", onError);
 	});
+}
+
+function readNativeWindowsWebcamFormat(output: string) {
+	const lines = output.split(/\r?\n/).filter((line) => line.includes('"event":"webcam-format"'));
+	const lastLine = lines.at(-1);
+	if (!lastLine) {
+		return null;
+	}
+
+	try {
+		return JSON.parse(lastLine) as {
+			width?: number;
+			height?: number;
+			fps?: number;
+			deviceName?: string;
+		};
+	} catch {
+		return null;
+	}
 }
 
 function setCurrentRecordingSessionState(session: RecordingSession | null) {
@@ -822,6 +938,9 @@ export function registerIpcHandlers(
 					typeof request.source.displayId === "number" && Number.isFinite(request.source.displayId)
 						? request.source.displayId
 						: Number(selectedSource?.display_id);
+				const webcamDirectShowClsid = request.webcam.enabled
+					? await resolveDirectShowWebcamClsid(request.webcam.deviceName)
+					: null;
 				const config = {
 					schemaVersion: 2,
 					recordingId,
@@ -845,6 +964,7 @@ export function registerIpcHandlers(
 					webcamEnabled: request.webcam.enabled,
 					webcamDeviceId: request.webcam.deviceId ?? null,
 					webcamDeviceName: request.webcam.deviceName ?? null,
+					webcamDirectShowClsid,
 					webcamWidth: request.webcam.width,
 					webcamHeight: request.webcam.height,
 					webcamFps: request.webcam.fps,
@@ -899,9 +1019,11 @@ export function registerIpcHandlers(
 				await waitForNativeWindowsCaptureStart(proc);
 				const captureStartedAtMs = Date.now();
 				nativeWindowsCursorOffsetMs = Math.max(0, captureStartedAtMs - cursorStartTimeMs);
+				const webcamFormat = readNativeWindowsWebcamFormat(nativeWindowsCaptureOutput);
 				console.info("[native-wgc] capture started", {
 					captureStartedAtMs,
 					cursorOffsetMs: nativeWindowsCursorOffsetMs,
+					webcamFormat,
 				});
 
 				const source = selectedSource || { name: "Screen" };

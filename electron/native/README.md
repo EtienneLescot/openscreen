@@ -47,7 +47,7 @@ Current V2 JSON shape:
 }
 ```
 
-The current helper implementation supports display/window video capture, system audio loopback, default-microphone capture, and Media Foundation webcam capture. Webcam frames are currently composed into the primary MP4 as a bottom-right picture-in-picture overlay. Browser `deviceId` values do not always map to Media Foundation symbolic links, so the renderer passes both `webcamDeviceId` and `webcamDeviceName`. The helper treats the Media Foundation friendly name as the preferred stable selector, then tries the browser id, and only falls back to the default webcam with an explicit warning when no requested device matches.
+The current helper implementation supports display/window video capture, system audio loopback, default-microphone capture, Media Foundation webcam capture, and a DirectShow webcam fallback for virtual cameras that are not exposed through Media Foundation. Webcam frames are currently composed into the primary MP4 as a bottom-right picture-in-picture overlay. Browser `deviceId` values do not always map to Media Foundation symbolic links, so the renderer passes both `webcamDeviceId` and `webcamDeviceName`. Electron resolves a matching DirectShow filter CLSID for the selected label; the helper uses Media Foundation first, then that exact DirectShow filter when the requested camera is absent from Media Foundation.
 
 Smoke-test the helper with:
 

@@ -105,6 +105,67 @@ function startFixtureWindow() {
 	});
 }
 
+function normalizeDeviceName(value) {
+	return value
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, " ")
+		.trim();
+}
+
+function scoreDeviceName(candidateName, candidateId, requestedName) {
+	const candidate = normalizeDeviceName(candidateName ?? "");
+	const id = normalizeDeviceName(candidateId ?? "");
+	const requested = normalizeDeviceName(requestedName ?? "");
+	if (!requested) return 0;
+	if (candidate === requested) return 1000;
+	if (candidate.includes(requested) || requested.includes(candidate)) return 900;
+	if (id.includes(requested) || requested.includes(id)) return 800;
+	return requested
+		.split(/\s+/)
+		.filter((word) => word.length > 1 && !["camera", "webcam", "video", "input"].includes(word))
+		.reduce((score, word) => {
+			if (candidate.includes(word)) return score + 100;
+			if (id.includes(word)) return score + 50;
+			return score;
+		}, 0);
+}
+
+function resolveDirectShowWebcamClsid(requestedName) {
+	if (!requestedName) return "";
+	const query = spawnSync(
+		"reg.exe",
+		["query", "HKCR\\CLSID\\{860BB310-5D01-11D0-BD3B-00A0C911CE86}\\Instance", "/s"],
+		{ encoding: "utf8", windowsHide: true },
+	);
+	if (query.status !== 0) return "";
+	const entries = [];
+	let current = {};
+	for (const rawLine of query.stdout.split(/\r?\n/)) {
+		const line = rawLine.trim();
+		if (!line) continue;
+		if (/^HKEY_/i.test(line)) {
+			if (current.friendlyName || current.clsid) entries.push(current);
+			current = {};
+			continue;
+		}
+		const match = line.match(/^(\S+)\s+REG_SZ\s+(.+)$/);
+		if (!match) continue;
+		if (match[1] === "FriendlyName") current.friendlyName = match[2].trim();
+		if (match[1] === "CLSID") current.clsid = match[2].trim();
+	}
+	if (current.friendlyName || current.clsid) entries.push(current);
+
+	let best = null;
+	for (const entry of entries) {
+		if (!entry.clsid) continue;
+		const score = scoreDeviceName(entry.friendlyName, entry.clsid, requestedName);
+		if (!best || score > best.score) {
+			best = { ...entry, score };
+		}
+	}
+	return best && best.score > 0 ? best.clsid : "";
+}
+
 function probeStreams(outputPath) {
 	const ffprobe = spawnSync(
 		"ffprobe",
@@ -191,6 +252,9 @@ const config = {
 	webcamEnabled: WITH_WEBCAM,
 	webcamDeviceId: process.env.OPENSCREEN_WGC_TEST_WEBCAM_DEVICE_ID ?? "",
 	webcamDeviceName: process.env.OPENSCREEN_WGC_TEST_WEBCAM_DEVICE_NAME ?? "",
+	webcamDirectShowClsid: resolveDirectShowWebcamClsid(
+		process.env.OPENSCREEN_WGC_TEST_WEBCAM_DEVICE_NAME ?? "",
+	),
 	webcamWidth: 640,
 	webcamHeight: 360,
 	webcamFps: 30,
@@ -224,6 +288,13 @@ if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {
 const streams = probeStreams(outputPath);
 const hasVideo = streams.some((stream) => stream.codec_type === "video");
 const hasAudio = streams.some((stream) => stream.codec_type === "audio");
+const webcamFormatLine = result.stdout
+	.split(/\r?\n/)
+	.find((line) => line.includes('"event":"webcam-format"'));
+const webcamFormat = webcamFormatLine ? JSON.parse(webcamFormatLine) : null;
+const nativeWebcamDiagnostics = result.stderr
+	.split(/\r?\n/)
+	.filter((line) => line.includes("Native webcam candidate"));
 if (!hasVideo) {
 	throw new Error(`WGC helper output has no video stream: ${outputPath}`);
 }
@@ -249,6 +320,8 @@ console.log(
 				codecName: stream.codec_name,
 				duration: stream.duration,
 			})),
+			selectedWebcamDeviceName: webcamFormat?.deviceName,
+			nativeWebcamDiagnostics,
 			firstFrameLuma: frameLuma,
 		},
 		null,

@@ -41,6 +41,7 @@ struct CaptureConfig {
     double microphoneGain = 1.0;
     std::string webcamDeviceId;
     std::string webcamDeviceName;
+    std::string webcamDirectShowClsid;
     int webcamWidth = 0;
     int webcamHeight = 0;
     int webcamFps = 0;
@@ -280,6 +281,7 @@ bool parseConfig(const std::string& json, CaptureConfig& config) {
     config.microphoneGain = findDouble(json, "microphoneGain", 1.0);
     config.webcamDeviceId = findString(json, "webcamDeviceId");
     config.webcamDeviceName = findString(json, "webcamDeviceName");
+    config.webcamDirectShowClsid = findString(json, "webcamDirectShowClsid");
     config.webcamWidth = findInt(json, "webcamWidth", 0);
     config.webcamHeight = findInt(json, "webcamHeight", 0);
     config.webcamFps = findInt(json, "webcamFps", 0);
@@ -362,6 +364,7 @@ int main(int argc, char* argv[]) {
         if (!webcamCapture.initialize(
                 utf8ToWide(config.webcamDeviceId),
                 utf8ToWide(config.webcamDeviceName),
+                utf8ToWide(config.webcamDirectShowClsid),
                 config.webcamWidth,
                 config.webcamHeight,
                 config.webcamFps > 0 ? config.webcamFps : config.fps)) {
