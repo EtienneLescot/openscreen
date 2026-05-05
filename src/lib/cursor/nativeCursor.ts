@@ -29,12 +29,12 @@ export interface ActiveNativeCursorFrame {
 interface ProjectNativeCursorOptions {
 	cropRegion: CropRegion;
 	maskRect: { x: number; y: number; width: number; height: number };
-	videoContainerPosition: { x: number; y: number };
 	sample: CursorRecordingSample;
 }
 
 interface ProjectNativeCursorToStageOptions extends ProjectNativeCursorOptions {
 	cameraContainer: Container;
+	videoContainerPosition: { x: number; y: number };
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -179,6 +179,15 @@ function getCroppedCursorPosition(sample: CursorRecordingSample, cropRegion: Cro
 	};
 }
 
+function getNativeCursorMaskPoint(sample: CursorRecordingSample, cropRegion: CropRegion) {
+	const croppedPosition = getCroppedCursorPosition(sample, cropRegion);
+	if (!croppedPosition) {
+		return null;
+	}
+
+	return new Point(croppedPosition.cx, croppedPosition.cy);
+}
+
 export function resolveActiveNativeCursorFrame(
 	recordingData: CursorRecordingData | null | undefined,
 	timeMs: number,
@@ -270,29 +279,32 @@ export function resolveInterpolatedNativeCursorFrame(
 export function projectNativeCursorToLocal({
 	cropRegion,
 	maskRect,
-	videoContainerPosition,
 	sample,
 }: ProjectNativeCursorOptions) {
-	const croppedPosition = getCroppedCursorPosition(sample, cropRegion);
-	if (!croppedPosition) {
+	const maskPoint = getNativeCursorMaskPoint(sample, cropRegion);
+	if (!maskPoint) {
 		return null;
 	}
 
 	return new Point(
-		videoContainerPosition.x + maskRect.x + croppedPosition.cx * maskRect.width,
-		videoContainerPosition.y + maskRect.y + croppedPosition.cy * maskRect.height,
+		maskRect.x + maskPoint.x * maskRect.width,
+		maskRect.y + maskPoint.y * maskRect.height,
 	);
 }
 
 export function projectNativeCursorToStage({
 	cameraContainer,
+	videoContainerPosition,
 	...options
 }: ProjectNativeCursorToStageOptions) {
 	const localPoint = projectNativeCursorToLocal(options);
 	if (!localPoint) {
 		return null;
 	}
-	return cameraContainer.toGlobal(localPoint);
+
+	return cameraContainer.toGlobal(
+		new Point(localPoint.x + videoContainerPosition.x, localPoint.y + videoContainerPosition.y),
+	);
 }
 
 export function getNativeCursorDisplayMetrics(asset: NativeCursorAsset, deviceScaleFactor: number) {

@@ -58,7 +58,7 @@ import {
 	type StyledRenderRect,
 } from "@/lib/compositeLayout";
 import {
-	projectNativeCursorToStage,
+	projectNativeCursorToLocal,
 	resolveInterpolatedNativeCursorFrame,
 	resolveNativeCursorRenderAsset,
 } from "@/lib/cursor/nativeCursor";
@@ -556,7 +556,7 @@ export class FrameRenderer {
 	}
 
 	private async drawNativeCursor(timeMs: number) {
-		if (!this.compositeCtx || !this.cameraContainer || !this.videoContainer || !this.layoutCache) {
+		if (!this.foregroundCtx || !this.layoutCache) {
 			return;
 		}
 
@@ -572,14 +572,9 @@ export class FrameRenderer {
 			return;
 		}
 
-		const projectedPoint = projectNativeCursorToStage({
-			cameraContainer: this.cameraContainer,
+		const projectedPoint = projectNativeCursorToLocal({
 			cropRegion: this.config.cropRegion,
 			maskRect: this.layoutCache.maskRect,
-			videoContainerPosition: {
-				x: this.videoContainer.x,
-				y: this.videoContainer.y,
-			},
 			sample: activeNativeCursor.sample,
 		});
 		if (!projectedPoint) {
@@ -593,12 +588,15 @@ export class FrameRenderer {
 		);
 		const image = await this.getCursorImage(renderAsset);
 		const scale = Math.max(0, this.config.cursorScale ?? 1);
-		this.compositeCtx.drawImage(
+		const appliedScale = this.animationState.appliedScale;
+		const canvasX = projectedPoint.x * appliedScale + this.animationState.x;
+		const canvasY = projectedPoint.y * appliedScale + this.animationState.y;
+		this.foregroundCtx.drawImage(
 			image,
-			projectedPoint.x - renderAsset.hotspotX * scale,
-			projectedPoint.y - renderAsset.hotspotY * scale,
-			renderAsset.width * scale,
-			renderAsset.height * scale,
+			canvasX - renderAsset.hotspotX * scale * appliedScale,
+			canvasY - renderAsset.hotspotY * scale * appliedScale,
+			renderAsset.width * scale * appliedScale,
+			renderAsset.height * scale * appliedScale,
 		);
 	}
 
