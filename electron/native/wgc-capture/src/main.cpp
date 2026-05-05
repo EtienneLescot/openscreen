@@ -463,13 +463,14 @@ int main(int argc, char* argv[]) {
     std::atomic<bool> firstFrameWritten = false;
     std::atomic<bool> encodeFailed = false;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> latestFrameTexture;
+    int64_t latestFrameTimestampHns = 0;
+    int64_t firstFrameTimestampHns = -1;
     std::vector<BYTE> latestWebcamFrame;
     int latestWebcamWidth = 0;
     int latestWebcamHeight = 0;
     bool hasVisibleWebcamFrame = false;
 
     session.setFrameCallback([&](ID3D11Texture2D* texture, int64_t timestampHns) {
-        (void)timestampHns;
         if (stopRequested) {
             return;
         }
@@ -490,6 +491,7 @@ int main(int argc, char* argv[]) {
         }
 
         session.context()->CopyResource(latestFrameTexture.Get(), texture);
+        latestFrameTimestampHns = timestampHns;
         if (!firstFrameWritten.exchange(true)) {
             cv.notify_all();
         }
@@ -498,6 +500,7 @@ int main(int argc, char* argv[]) {
     auto writeVideoFrames = [&]() {
         const auto startedAt = std::chrono::steady_clock::now();
         uint64_t frameIndex = 0;
+        int64_t lastEncodedVideoTimestampHns = -1;
 
         while (!stopRequested && !encodeFailed) {
             {
@@ -519,14 +522,31 @@ int main(int argc, char* argv[]) {
                     latestWebcamWidth,
                     latestWebcamHeight,
                 };
+                const int64_t syntheticTimestampHns =
+                    static_cast<int64_t>((frameIndex * 10'000'000ULL) / config.fps);
+                const int64_t sourceTimestampHns =
+                    latestFrameTimestampHns > 0 ? latestFrameTimestampHns : syntheticTimestampHns;
+                if (firstFrameTimestampHns < 0) {
+                    firstFrameTimestampHns = sourceTimestampHns;
+                }
+                int64_t frameTimestampHns =
+                    std::max<int64_t>(0, sourceTimestampHns - firstFrameTimestampHns);
+                if (lastEncodedVideoTimestampHns >= 0 &&
+                    frameTimestampHns <= lastEncodedVideoTimestampHns) {
+                    frameTimestampHns =
+                        lastEncodedVideoTimestampHns + static_cast<int64_t>(10'000'000ULL / config.fps);
+                }
                 if (latestFrameTexture && !encoder.writeFrame(
                         latestFrameTexture.Get(),
-                        static_cast<int64_t>((frameIndex * 10'000'000ULL) / config.fps),
+                        frameTimestampHns,
                         webcamFrame.data ? &webcamFrame : nullptr)) {
                     encodeFailed = true;
                     stopRequested = true;
                     cv.notify_all();
                     return;
+                }
+                if (latestFrameTexture) {
+                    lastEncodedVideoTimestampHns = frameTimestampHns;
                 }
             }
 
@@ -714,7 +734,7 @@ int main(int argc, char* argv[]) {
     }
 
     if (stdinThread.joinable()) {
-        stdinThread.join();
+        stdinThread.detach();
     }
 
     if (encodeFailed) {

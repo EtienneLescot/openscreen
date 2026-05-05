@@ -721,6 +721,8 @@ export class PixiCursorOverlay {
 		}
 		this.cursorMotionBlurFilter.destroy();
 		this.container.destroy({ children: true });
+		cursorAssetsPromise = null;
+		loadedCursorAssets = {};
 	}
 }
 

@@ -55,4 +55,6 @@ private:
     std::atomic<bool> stopRequested_ = false;
     std::vector<BYTE> silenceBuffer_;
     uint64_t writtenFrames_ = 0;
+    uint64_t lastDevicePositionEnd_ = 0;
+    bool hasLastDevicePosition_ = false;
 };

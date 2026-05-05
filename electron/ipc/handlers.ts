@@ -258,6 +258,7 @@ let nativeWindowsCaptureTargetPath: string | null = null;
 let nativeWindowsCaptureWebcamTargetPath: string | null = null;
 let nativeWindowsCaptureRecordingId: number | null = null;
 let nativeWindowsCursorOffsetMs = 0;
+const NATIVE_WINDOWS_CAPTURE_STOP_TIMEOUT_MS = 15_000;
 
 function normalizeCursorSample(sample: unknown): CursorRecordingSample | null {
 	if (!sample || typeof sample !== "object") {
@@ -679,6 +680,19 @@ function waitForNativeWindowsCaptureStart(proc: ChildProcessWithoutNullStreams) 
 
 function waitForNativeWindowsCaptureStop(proc: ChildProcessWithoutNullStreams) {
 	return new Promise<string>((resolve, reject) => {
+		const timer = setTimeout(() => {
+			cleanup();
+			if (!proc.killed) {
+				proc.kill();
+			}
+			reject(
+				new Error(
+					`Timed out waiting for native Windows capture to stop. Output path: ${
+						nativeWindowsCaptureTargetPath ?? "unknown"
+					}. Output: ${nativeWindowsCaptureOutput.trim()}`,
+				),
+			);
+		}, NATIVE_WINDOWS_CAPTURE_STOP_TIMEOUT_MS);
 		const onOutput = (chunk: Buffer) => {
 			nativeWindowsCaptureOutput += chunk.toString();
 		};
@@ -705,6 +719,7 @@ function waitForNativeWindowsCaptureStop(proc: ChildProcessWithoutNullStreams) {
 			reject(error);
 		};
 		const cleanup = () => {
+			clearTimeout(timer);
 			proc.stdout.off("data", onOutput);
 			proc.stderr.off("data", onOutput);
 			proc.off("close", onClose);
@@ -740,6 +755,78 @@ function readNativeWindowsWebcamFormat(output: string) {
 function setCurrentRecordingSessionState(session: RecordingSession | null) {
 	currentRecordingSession = session;
 	currentVideoPath = session?.screenVideoPath ?? null;
+}
+
+function getSessionManifestPathForVideo(videoPath: string) {
+	const parsedPath = path.parse(videoPath);
+	const baseName = parsedPath.name.endsWith("-webcam")
+		? parsedPath.name.slice(0, -"-webcam".length)
+		: parsedPath.name;
+	return path.join(parsedPath.dir, `${baseName}${RECORDING_SESSION_SUFFIX}`);
+}
+
+async function loadRecordedSessionForVideoPath(
+	videoPath: string,
+): Promise<RecordingSession | null> {
+	try {
+		const manifestPath = getSessionManifestPathForVideo(videoPath);
+		if (!isPathAllowed(manifestPath)) {
+			const parsedVideoPath = path.parse(videoPath);
+			if (!isPathWithinDir(path.resolve(manifestPath), parsedVideoPath.dir)) {
+				return null;
+			}
+		}
+
+		const content = await fs.readFile(manifestPath, "utf-8");
+		const session = normalizeRecordingSession(JSON.parse(content));
+		if (!session) {
+			return null;
+		}
+
+		const normalizedVideoPath = normalizePath(videoPath);
+		const matchesScreen = normalizePath(session.screenVideoPath) === normalizedVideoPath;
+		const matchesWebcam =
+			typeof session.webcamVideoPath === "string" &&
+			normalizePath(session.webcamVideoPath) === normalizedVideoPath;
+		if (!matchesScreen && !matchesWebcam) {
+			return null;
+		}
+
+		if (!isPathAllowed(session.screenVideoPath)) {
+			const approvedScreen = await approveReadableVideoPath(session.screenVideoPath, [
+				path.dirname(manifestPath),
+				RECORDINGS_DIR,
+			]);
+			if (!approvedScreen) {
+				return null;
+			}
+			session.screenVideoPath = approvedScreen;
+		}
+
+		if (session.webcamVideoPath && !isPathAllowed(session.webcamVideoPath)) {
+			const approvedWebcam = await approveReadableVideoPath(session.webcamVideoPath, [
+				path.dirname(manifestPath),
+				RECORDINGS_DIR,
+			]);
+			if (!approvedWebcam) {
+				session.webcamVideoPath = undefined;
+			} else {
+				session.webcamVideoPath = approvedWebcam;
+			}
+		}
+
+		approveFilePath(session.screenVideoPath);
+		if (session.webcamVideoPath) {
+			approveFilePath(session.webcamVideoPath);
+		}
+		return session;
+	} catch (error) {
+		const nodeError = error as NodeJS.ErrnoException;
+		if (nodeError.code !== "ENOENT") {
+			console.error("Failed to restore recording session manifest:", error);
+		}
+		return null;
+	}
 }
 
 export function registerIpcHandlers(
@@ -1548,7 +1635,7 @@ export function registerIpcHandlers(
 		}
 	}
 
-	ipcMain.handle("set-current-video-path", (_, path: string) => {
+	ipcMain.handle("set-current-video-path", async (_, path: string) => {
 		return setCurrentVideoPath(path);
 	});
 
@@ -1566,10 +1653,26 @@ export function registerIpcHandlers(
 			: { success: false };
 	});
 
-	function setCurrentVideoPath(path: string): ProjectPathResult {
-		currentVideoPath = normalizeVideoSourcePath(path) ?? path;
+	async function setCurrentVideoPath(path: string): Promise<ProjectPathResult> {
+		const normalizedPath = normalizeVideoSourcePath(path);
+		if (!normalizedPath || !isPathAllowed(normalizedPath)) {
+			return {
+				success: false,
+				message: "Video path has not been approved",
+			};
+		}
+
+		const restoredSession = await loadRecordedSessionForVideoPath(normalizedPath);
+		if (restoredSession) {
+			setCurrentRecordingSessionState(restoredSession);
+		} else {
+			setCurrentRecordingSessionState({
+				screenVideoPath: normalizedPath,
+				createdAt: Date.now(),
+			});
+		}
 		currentProjectPath = null;
-		return { success: true };
+		return { success: true, path: currentVideoPath ?? normalizedPath };
 	}
 
 	ipcMain.handle("get-current-video-path", () => {

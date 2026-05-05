@@ -151,6 +151,7 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		if (payload.type === "error") {
 			this.logDiagnostic("helper-error", { message: payload.message });
 			console.error("Windows cursor helper error:", payload.message);
+			this.failHelper(new Error(payload.message));
 			return;
 		}
 
@@ -254,6 +255,15 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		const reject = this.readyReject;
 		this.clearReadyState();
 		reject?.(error);
+	}
+
+	private failHelper(error: Error) {
+		this.rejectReady(error);
+		const child = this.process;
+		this.process = null;
+		if (child && !child.killed) {
+			child.kill();
+		}
 	}
 
 	private clearReadyState() {

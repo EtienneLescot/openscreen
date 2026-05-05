@@ -16,7 +16,7 @@ interface ProjectServiceOptions {
 	) => Promise<ProjectFileResult>;
 	loadProjectFile: () => Promise<ProjectFileResult>;
 	loadCurrentProjectFile: () => Promise<ProjectFileResult>;
-	setCurrentVideoPath: (path: string) => ProjectPathResult;
+	setCurrentVideoPath: (path: string) => ProjectPathResult | Promise<ProjectPathResult>;
 	getCurrentVideoPathResult: () => ProjectPathResult;
 	clearCurrentVideoPath: () => ProjectPathResult;
 }
@@ -60,8 +60,8 @@ export class ProjectService {
 		return result;
 	}
 
-	setCurrentVideoPath(path: string) {
-		const result = this.options.setCurrentVideoPath(path);
+	async setCurrentVideoPath(path: string) {
+		const result = await this.options.setCurrentVideoPath(path);
 		this.getCurrentContext();
 		return result;
 	}

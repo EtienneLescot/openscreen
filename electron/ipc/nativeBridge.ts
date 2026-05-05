@@ -27,7 +27,7 @@ export interface NativeBridgeContext {
 	) => Promise<ProjectFileResult>;
 	loadProjectFile: () => Promise<ProjectFileResult>;
 	loadCurrentProjectFile: () => Promise<ProjectFileResult>;
-	setCurrentVideoPath: (path: string) => ProjectPathResult;
+	setCurrentVideoPath: (path: string) => ProjectPathResult | Promise<ProjectPathResult>;
 	getCurrentVideoPathResult: () => ProjectPathResult;
 	clearCurrentVideoPath: () => ProjectPathResult;
 	resolveAssetBasePath: () => string | null;
@@ -171,7 +171,7 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 						case "setCurrentVideoPath":
 							return createSuccessResponse(
 								requestId,
-								projectService.setCurrentVideoPath(request.payload.path),
+								await projectService.setCurrentVideoPath(request.payload.path),
 							);
 						case "getCurrentVideoPath":
 							return createSuccessResponse(requestId, projectService.getCurrentVideoPath());

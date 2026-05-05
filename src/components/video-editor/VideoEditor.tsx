@@ -2143,6 +2143,7 @@ export default function VideoEditor() {
 						onCursorClickBounceChange={setCursorClickBounce}
 						hasCursorData={cursorTelemetry.length > 0}
 						showCursorSettings={showCursorSettings}
+						showCursorHighlightSettings={isMac}
 					/>
 				</div>
 			</div>

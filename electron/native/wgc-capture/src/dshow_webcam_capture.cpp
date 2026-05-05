@@ -256,6 +256,7 @@ bool DirectShowWebcamCapture::initialize(
     int requestedFps) {
     stop();
     delete impl_;
+    impl_ = nullptr;
     impl_ = new Impl();
     fps_ = std::clamp(requestedFps > 0 ? requestedFps : 30, 1, 60);
 
@@ -402,7 +403,7 @@ void DirectShowWebcamCapture::stop() {
 }
 
 void DirectShowWebcamCapture::captureLoop() {
-    CoInitializeEx(nullptr, COINIT_MULTITHREADED);
+    const HRESULT coinitHr = CoInitializeEx(nullptr, COINIT_MULTITHREADED);
     while (!stopRequested_ && impl_ && impl_->sampleGrabber) {
         long bufferSize = 0;
         HRESULT hr = impl_->sampleGrabber->GetCurrentBuffer(&bufferSize, nullptr);
@@ -415,7 +416,9 @@ void DirectShowWebcamCapture::captureLoop() {
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(1000 / std::max(1, fps_)));
     }
-    CoUninitialize();
+    if (SUCCEEDED(coinitHr)) {
+        CoUninitialize();
+    }
 }
 
 void DirectShowWebcamCapture::storeFrame(const BYTE* buffer, long length) {

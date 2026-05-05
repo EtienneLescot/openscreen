@@ -644,7 +644,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				finalizing: false,
 			};
 			accumulatedDurationMs.current = 0;
-			segmentStartedAt.current = result.recordingId;
+			segmentStartedAt.current = Date.now();
 			allowAutoFinalize.current = true;
 			setRecording(true);
 			setPaused(false);
@@ -918,7 +918,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 
 			accumulatedDurationMs.current = 0;
-			segmentStartedAt.current = activeRecordingId;
+			segmentStartedAt.current = Date.now();
 			allowAutoFinalize.current = true;
 			setRecording(true);
 			setPaused(false);

@@ -146,6 +146,7 @@ export class FrameRenderer {
 	private threeDPass: ThreeDPass | null = null;
 	private currentRotation3D: Rotation3D = { ...DEFAULT_ROTATION_3D };
 	private cursorImageCache = new Map<string, HTMLImageElement>();
+	private warnedKeys = new Set<string>();
 	private config: FrameRenderConfig;
 	private animationState: AnimationState;
 	private layoutCache: LayoutCache | null = null;
@@ -586,7 +587,13 @@ export class FrameRenderer {
 			1,
 			activeNativeCursor.sample,
 		);
-		const image = await this.getCursorImage(renderAsset);
+		let image: HTMLImageElement;
+		try {
+			image = await this.getCursorImage(renderAsset);
+		} catch (error) {
+			this.warnOnce("native-cursor-image-load", "Failed to load native cursor asset", error);
+			return;
+		}
 		const scale = Math.max(0, this.config.cursorScale ?? 1);
 		const appliedScale = this.animationState.appliedScale;
 		const canvasX = projectedPoint.x * appliedScale + this.animationState.x;
@@ -615,6 +622,14 @@ export class FrameRenderer {
 
 		this.cursorImageCache.set(asset.id, image);
 		return image;
+	}
+
+	private warnOnce(key: string, message: string, error: unknown) {
+		if (this.warnedKeys.has(key)) {
+			return;
+		}
+		this.warnedKeys.add(key);
+		console.warn(`[FrameRenderer] ${message}:`, error);
 	}
 
 	private updateLayout(webcamFrame?: VideoFrame | null): void {

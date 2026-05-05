@@ -387,18 +387,20 @@ app.whenReady().then(async () => {
 
 	// Intercept getDisplayMedia to return the pre-selected source without the cursor.
 	// The source is cached synchronously at select-source time to avoid async delays here.
-	session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
-		const source = getSelectedDesktopSource();
-		if (!source) {
-			callback({});
-			return;
-		}
-		callback({
-			video: source,
-			// WASAPI loopback provides system audio capture on Windows.
-			...(process.platform === "win32" && { audio: "loopback" as const }),
+	if (process.platform === "win32") {
+		session.defaultSession.setDisplayMediaRequestHandler((_request, callback) => {
+			const source = getSelectedDesktopSource();
+			if (!source) {
+				callback({});
+				return;
+			}
+			callback({
+				video: source,
+				// WASAPI loopback provides system audio capture on Windows.
+				audio: "loopback",
+			});
 		});
-	});
+	}
 
 	// Allow microphone/media permission checks
 	session.defaultSession.setPermissionCheckHandler((_webContents, permission) => {

@@ -1,9 +1,13 @@
 export function buildPowerShellCommand(sampleIntervalMs: number, windowHandle?: string | null) {
+	const targetWindowHandle =
+		typeof windowHandle === "string" && /^(?:0x[0-9a-fA-F]+|\d+)$/.test(windowHandle)
+			? `'${windowHandle}'`
+			: "$null";
 	const script = String.raw`
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
-$targetWindowHandle = ${windowHandle ? `'${windowHandle}'` : "$null"}
+$targetWindowHandle = ${targetWindowHandle}
 
 $source = @"
 using System;

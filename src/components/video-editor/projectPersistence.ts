@@ -118,12 +118,33 @@ function clamp(value: number, min: number, max: number) {
 	return Math.min(max, Math.max(min, value));
 }
 
+function encodePathSegments(pathname: string, keepWindowsDrive = false): string {
+	return pathname
+		.split("/")
+		.map((segment, index) => {
+			if (!segment) {
+				return segment;
+			}
+			if (keepWindowsDrive && index === 0 && /^[a-zA-Z]:$/.test(segment)) {
+				return segment;
+			}
+			return encodeURIComponent(segment);
+		})
+		.join("/");
+}
+
 export function toFileUrl(filePath: string): string {
 	const normalized = filePath.replace(/\\/g, "/");
 	if (normalized.match(/^[a-zA-Z]:/)) {
-		return `file:///${encodeURI(normalized)}`;
+		return `file:///${encodePathSegments(normalized, true)}`;
 	}
-	return `file://${encodeURI(normalized)}`;
+	if (normalized.startsWith("//")) {
+		const withoutPrefix = normalized.slice(2);
+		const [host = "", ...segments] = withoutPrefix.split("/");
+		return `file://${host}/${encodePathSegments(segments.join("/"))}`;
+	}
+	const absolutePath = normalized.startsWith("/") ? normalized : `/${normalized}`;
+	return `file://${encodePathSegments(absolutePath)}`;
 }
 
 export function fromFileUrl(fileUrl: string): string {

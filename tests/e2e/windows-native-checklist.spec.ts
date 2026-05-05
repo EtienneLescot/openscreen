@@ -1,3 +1,4 @@
+import { once } from "node:events";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -18,12 +19,16 @@ async function launchApp() {
 			MAIN_JS,
 			"--no-sandbox",
 			"--enable-unsafe-swiftshader",
+			"--lang=en-US",
 			`--user-data-dir=${testUserDataDir}`,
 		],
 		env: {
 			...process.env,
 			ELECTRON_USER_DATA_DIR: testUserDataDir,
 			HEADLESS: process.env["HEADLESS"] ?? "true",
+			LANG: "en_US.UTF-8",
+			LC_ALL: "en_US.UTF-8",
+			LANGUAGE: "en_US",
 		},
 	});
 
@@ -53,13 +58,24 @@ async function closeApp(app: ElectronApplication) {
 		}
 	).__childProcess;
 	await Promise.race([app.close(), new Promise<void>((resolve) => setTimeout(resolve, 5_000))]);
-	if (childProcess && !childProcess.killed) {
-		childProcess.kill();
+	if (childProcess && childProcess.exitCode === null && childProcess.signalCode === null) {
+		if (!childProcess.killed) {
+			childProcess.kill();
+		}
+		await Promise.race([
+			once(childProcess, "close"),
+			new Promise<void>((resolve) => setTimeout(resolve, 5_000)),
+		]);
 	}
 	const testUserDataDir = (app as ElectronApplication & { __testUserDataDir?: string })
 		.__testUserDataDir;
 	if (testUserDataDir && fs.existsSync(testUserDataDir)) {
-		fs.rmSync(testUserDataDir, { recursive: true, force: true });
+		fs.rmSync(testUserDataDir, {
+			recursive: true,
+			force: true,
+			maxRetries: 5,
+			retryDelay: 100,
+		});
 	}
 }
 

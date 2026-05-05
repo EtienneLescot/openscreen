@@ -293,6 +293,8 @@ bool WasapiLoopbackCapture::start(AudioCallback callback) {
     callback_ = std::move(callback);
     stopRequested_ = false;
     writtenFrames_ = 0;
+    lastDevicePositionEnd_ = 0;
+    hasLastDevicePosition_ = false;
 
     HRESULT hr = audioClient_->Start();
     if (!succeeded(hr, "IAudioClient::Start")) {
@@ -324,6 +326,22 @@ const std::wstring& WasapiLoopbackCapture::selectedDeviceName() const {
 }
 
 void WasapiLoopbackCapture::captureLoop() {
+    auto emitSilenceFrames = [&](uint64_t frames, int64_t timestampHns) {
+        constexpr uint64_t MaxSilenceChunkFrames = 4800;
+        uint64_t remainingFrames = frames;
+        int64_t currentTimestampHns = timestampHns;
+        while (remainingFrames > 0 && !stopRequested_) {
+            const uint64_t chunkFrames = std::min<uint64_t>(remainingFrames, MaxSilenceChunkFrames);
+            const DWORD chunkBytes = static_cast<DWORD>(chunkFrames * inputFormat_.blockAlign);
+            const int64_t chunkDurationHns =
+                static_cast<int64_t>((chunkFrames * HnsPerSecond) / inputFormat_.sampleRate);
+            silenceBuffer_.assign(chunkBytes, 0);
+            callback_(silenceBuffer_.data(), chunkBytes, currentTimestampHns, chunkDurationHns);
+            remainingFrames -= chunkFrames;
+            currentTimestampHns += chunkDurationHns;
+        }
+    };
+
     while (!stopRequested_) {
         UINT32 packetFrames = 0;
         HRESULT hr = captureClient_->GetNextPacketSize(&packetFrames);
@@ -337,17 +355,29 @@ void WasapiLoopbackCapture::captureLoop() {
             BYTE* data = nullptr;
             UINT32 framesAvailable = 0;
             DWORD flags = 0;
+            UINT64 devicePosition = 0;
+            UINT64 qpcPosition = 0;
 
-            hr = captureClient_->GetBuffer(&data, &framesAvailable, &flags, nullptr, nullptr);
+            hr = captureClient_->GetBuffer(&data, &framesAvailable, &flags, &devicePosition, &qpcPosition);
             if (FAILED(hr)) {
                 std::cerr << "ERROR: IAudioCaptureClient::GetBuffer failed (hr=0x" << std::hex
                           << hr << std::dec << ")" << std::endl;
                 break;
             }
 
+            (void)qpcPosition;
+            if (hasLastDevicePosition_ && devicePosition > lastDevicePositionEnd_) {
+                const uint64_t gapFrames = devicePosition - lastDevicePositionEnd_;
+                if ((flags & AUDCLNT_BUFFERFLAGS_DATA_DISCONTINUITY) != 0 || gapFrames > framesAvailable) {
+                    const int64_t gapTimestampHns =
+                        static_cast<int64_t>((lastDevicePositionEnd_ * HnsPerSecond) / inputFormat_.sampleRate);
+                    emitSilenceFrames(gapFrames, gapTimestampHns);
+                }
+            }
+
             const DWORD byteCount = framesAvailable * inputFormat_.blockAlign;
             const int64_t timestampHns =
-                static_cast<int64_t>((writtenFrames_ * HnsPerSecond) / inputFormat_.sampleRate);
+                static_cast<int64_t>((devicePosition * HnsPerSecond) / inputFormat_.sampleRate);
             const int64_t durationHns =
                 static_cast<int64_t>((static_cast<uint64_t>(framesAvailable) * HnsPerSecond) /
                                      inputFormat_.sampleRate);
@@ -362,6 +392,8 @@ void WasapiLoopbackCapture::captureLoop() {
             }
 
             writtenFrames_ += framesAvailable;
+            lastDevicePositionEnd_ = devicePosition + framesAvailable;
+            hasLastDevicePosition_ = true;
             captureClient_->ReleaseBuffer(framesAvailable);
 
             hr = captureClient_->GetNextPacketSize(&packetFrames);

@@ -38,7 +38,8 @@ export class TelemetryCursorAdapter implements CursorNativeAdapter {
 		const resolvedVideoPath = this.options.resolveVideoPath(videoPath);
 		if (!resolvedVideoPath) {
 			return {
-				success: true,
+				success: false,
+				message: "No video path is available for cursor telemetry",
 				samples: [],
 			} satisfies CursorTelemetryLoadResult;
 		}

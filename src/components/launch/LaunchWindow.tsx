@@ -294,7 +294,11 @@ export function LaunchWindow() {
 		}
 
 		if (result.success && result.path) {
-			await nativeBridgeClient.project.setCurrentVideoPath(result.path);
+			const setVideoPathResult = await nativeBridgeClient.project.setCurrentVideoPath(result.path);
+			if (!setVideoPathResult.success) {
+				console.error("Failed to set current video path:", setVideoPathResult);
+				return;
+			}
 			await window.electronAPI.switchToEditor();
 		}
 	};
