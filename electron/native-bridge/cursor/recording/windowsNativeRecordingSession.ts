@@ -7,7 +7,10 @@ import type {
 	NativeCursorAsset,
 } from "../../../../src/native/contracts";
 import type { CursorRecordingSession } from "./session";
-import { buildPowerShellCommand, parseWindowHandleFromSourceId } from "./windowsNativeRecordingSession.script";
+import {
+	buildPowerShellCommand,
+	parseWindowHandleFromSourceId,
+} from "./windowsNativeRecordingSession.script";
 import type {
 	WindowsCursorEvent,
 	WindowsNativeRecordingSessionOptions,
@@ -91,7 +94,9 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 				assetCount: this.assets.size,
 				outOfBoundsSampleCount: this.outOfBoundsSampleCount,
 			});
-			this.rejectReady(new Error(`Windows cursor helper exited before ready (code=${code}, signal=${signal})`));
+			this.rejectReady(
+				new Error(`Windows cursor helper exited before ready (code=${code}, signal=${signal})`),
+			);
 		});
 		child.once("error", (error) => {
 			this.logDiagnostic("process-error", { message: error.message });
@@ -168,6 +173,7 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 				hotspotX: payload.asset.hotspotX,
 				hotspotY: payload.asset.hotspotY,
 				scaleFactor: assetDisplay.scaleFactor,
+				cursorType: payload.asset.cursorType ?? payload.cursorType ?? null,
 			});
 			this.logDiagnostic("asset", {
 				id: payload.asset.id,
@@ -192,13 +198,17 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		}
 	}
 
-	private normalizeSample(payload: Extract<WindowsCursorEvent, { type: "sample" }>): NormalizedSample {
-		const bounds = payload.bounds ?? this.options.getDisplayBounds() ?? screen.getPrimaryDisplay().bounds;
+	private normalizeSample(
+		payload: Extract<WindowsCursorEvent, { type: "sample" }>,
+	): NormalizedSample {
+		const bounds =
+			payload.bounds ?? this.options.getDisplayBounds() ?? screen.getPrimaryDisplay().bounds;
 		const width = Math.max(1, bounds.width);
 		const height = Math.max(1, bounds.height);
 		const normalizedX = (payload.x - bounds.x) / width;
 		const normalizedY = (payload.y - bounds.y) / height;
-		const withinBounds = normalizedX >= 0 && normalizedX <= 1 && normalizedY >= 0 && normalizedY <= 1;
+		const withinBounds =
+			normalizedX >= 0 && normalizedX <= 1 && normalizedY >= 0 && normalizedY <= 1;
 
 		if (this.sampleCount === 0 || (!withinBounds && this.outOfBoundsSampleCount === 0)) {
 			this.logDiagnostic("sample", {
@@ -221,6 +231,7 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 				cy: normalizedY,
 				assetId: payload.handle,
 				visible: payload.visible && withinBounds,
+				cursorType: payload.cursorType ?? payload.asset?.cursorType ?? null,
 			},
 		};
 	}

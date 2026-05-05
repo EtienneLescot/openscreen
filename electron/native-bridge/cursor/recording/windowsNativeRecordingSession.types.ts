@@ -1,4 +1,5 @@
 import type { Rectangle } from "electron";
+import type { NativeCursorType } from "../../../../src/native/contracts";
 
 export interface WindowsCursorSampleEvent {
 	type: "sample";
@@ -7,6 +8,7 @@ export interface WindowsCursorSampleEvent {
 	y: number;
 	visible: boolean;
 	handle: string | null;
+	cursorType?: NativeCursorType | null;
 	bounds?: {
 		x: number;
 		y: number;
@@ -34,6 +36,7 @@ export interface WindowsCursorAssetPayload {
 	height: number;
 	hotspotX: number;
 	hotspotY: number;
+	cursorType?: NativeCursorType | null;
 }
 
 export type WindowsCursorEvent =

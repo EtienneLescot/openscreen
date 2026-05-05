@@ -265,6 +265,7 @@ function normalizeCursorSample(sample: unknown): CursorRecordingSample | null {
 		cy: typeof point.cy === "number" && Number.isFinite(point.cy) ? point.cy : 0.5,
 		assetId: typeof point.assetId === "string" ? point.assetId : null,
 		visible: typeof point.visible === "boolean" ? point.visible : true,
+		cursorType: typeof point.cursorType === "string" ? point.cursorType : null,
 	};
 }
 
@@ -303,6 +304,7 @@ function normalizeCursorAsset(asset: unknown): NativeCursorAsset | null {
 			typeof candidate.scaleFactor === "number" && Number.isFinite(candidate.scaleFactor)
 				? Math.max(0.1, candidate.scaleFactor)
 				: undefined,
+		cursorType: typeof candidate.cursorType === "string" ? candidate.cursorType : null,
 	};
 }
 
@@ -996,6 +998,20 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("set-current-video-path", (_, path: string) => {
 		return setCurrentVideoPath(path);
+	});
+
+	ipcMain.handle("set-current-recording-session", (_, session: RecordingSession | null) => {
+		const normalizedSession = normalizeRecordingSession(session);
+		setCurrentRecordingSessionState(normalizedSession);
+		currentVideoPath = normalizedSession?.screenVideoPath ?? null;
+		currentProjectPath = null;
+		return { success: true, session: currentRecordingSession };
+	});
+
+	ipcMain.handle("get-current-recording-session", () => {
+		return currentRecordingSession
+			? { success: true, session: currentRecordingSession }
+			: { success: false };
 	});
 
 	function setCurrentVideoPath(path: string): ProjectPathResult {

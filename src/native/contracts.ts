@@ -3,6 +3,21 @@ export const NATIVE_BRIDGE_VERSION = 1;
 
 export type NativePlatform = "darwin" | "win32" | "linux";
 export type CursorProviderKind = "native" | "none";
+export type NativeCursorType =
+	| "arrow"
+	| "text"
+	| "pointer"
+	| "crosshair"
+	| "resize-ew"
+	| "resize-ns"
+	| "resize-nesw"
+	| "resize-nwse"
+	| "move"
+	| "not-allowed"
+	| "wait"
+	| "app-starting"
+	| "help"
+	| "up-arrow";
 
 export interface CursorTelemetryPoint {
 	timeMs: number;
@@ -13,6 +28,7 @@ export interface CursorTelemetryPoint {
 export interface CursorRecordingSample extends CursorTelemetryPoint {
 	assetId?: string | null;
 	visible?: boolean;
+	cursorType?: NativeCursorType | null;
 }
 
 export interface NativeCursorAsset {
@@ -24,6 +40,7 @@ export interface NativeCursorAsset {
 	hotspotX: number;
 	hotspotY: number;
 	scaleFactor?: number;
+	cursorType?: NativeCursorType | null;
 }
 
 export interface CursorRecordingData {

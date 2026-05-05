@@ -26,10 +26,10 @@ import {
 	type WebcamSizePreset,
 } from "@/lib/compositeLayout";
 import {
-	getNativeCursorDisplayMetrics,
 	hasNativeCursorRecordingData,
 	projectNativeCursorToStage,
 	resolveInterpolatedNativeCursorFrame,
+	resolveNativeCursorRenderAsset,
 } from "@/lib/cursor/nativeCursor";
 import { classifyWallpaper, DEFAULT_WALLPAPER, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
@@ -1436,19 +1436,20 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 								sample: frame.sample,
 							});
 							if (projectedPoint) {
-								const metrics = getNativeCursorDisplayMetrics(
+								const renderAsset = resolveNativeCursorRenderAsset(
 									frame.asset,
 									window.devicePixelRatio || 1,
+									frame.sample,
 								);
 								const scale = Math.max(0, cursorSizeRef.current);
-								if (nativeCursorImg.dataset.cursorId !== frame.asset.id) {
-									nativeCursorImg.src = frame.asset.imageDataUrl;
-									nativeCursorImg.dataset.cursorId = frame.asset.id;
+								if (nativeCursorImg.dataset.cursorId !== renderAsset.id) {
+									nativeCursorImg.src = renderAsset.imageDataUrl;
+									nativeCursorImg.dataset.cursorId = renderAsset.id;
 								}
-								nativeCursorImg.style.left = `${projectedPoint.x - metrics.hotspotX * scale}px`;
-								nativeCursorImg.style.top = `${projectedPoint.y - metrics.hotspotY * scale}px`;
-								nativeCursorImg.style.width = `${metrics.width * scale}px`;
-								nativeCursorImg.style.height = `${metrics.height * scale}px`;
+								nativeCursorImg.style.left = `${projectedPoint.x - renderAsset.hotspotX * scale}px`;
+								nativeCursorImg.style.top = `${projectedPoint.y - renderAsset.hotspotY * scale}px`;
+								nativeCursorImg.style.width = `${renderAsset.width * scale}px`;
+								nativeCursorImg.style.height = `${renderAsset.height * scale}px`;
 								nativeCursorImg.style.display = "block";
 							} else {
 								nativeCursorImg.style.display = "none";

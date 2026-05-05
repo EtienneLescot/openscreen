@@ -58,13 +58,13 @@ import {
 	type StyledRenderRect,
 } from "@/lib/compositeLayout";
 import {
-	getNativeCursorDisplayMetrics,
 	projectNativeCursorToStage,
 	resolveInterpolatedNativeCursorFrame,
+	resolveNativeCursorRenderAsset,
 } from "@/lib/cursor/nativeCursor";
 import { BackgroundLoadError, classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { drawCanvasClipPath } from "@/lib/webcamMaskShapes";
-import type { CursorRecordingData, NativeCursorAsset } from "@/native/contracts";
+import type { CursorRecordingData } from "@/native/contracts";
 import { renderAnnotations } from "./annotationRenderer";
 import {
 	getLinearGradientPoints,
@@ -586,19 +586,23 @@ export class FrameRenderer {
 			return;
 		}
 
-		const image = await this.getCursorImage(activeNativeCursor.asset);
-		const metrics = getNativeCursorDisplayMetrics(activeNativeCursor.asset, 1);
+		const renderAsset = resolveNativeCursorRenderAsset(
+			activeNativeCursor.asset,
+			1,
+			activeNativeCursor.sample,
+		);
+		const image = await this.getCursorImage(renderAsset);
 		const scale = Math.max(0, this.config.cursorScale ?? 1);
 		this.compositeCtx.drawImage(
 			image,
-			projectedPoint.x - metrics.hotspotX * scale,
-			projectedPoint.y - metrics.hotspotY * scale,
-			metrics.width * scale,
-			metrics.height * scale,
+			projectedPoint.x - renderAsset.hotspotX * scale,
+			projectedPoint.y - renderAsset.hotspotY * scale,
+			renderAsset.width * scale,
+			renderAsset.height * scale,
 		);
 	}
 
-	private async getCursorImage(asset: NativeCursorAsset) {
+	private async getCursorImage(asset: { id: string; imageDataUrl: string }) {
 		const cachedImage = this.cursorImageCache.get(asset.id);
 		if (cachedImage) {
 			return cachedImage;

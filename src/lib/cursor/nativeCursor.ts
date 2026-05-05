@@ -1,9 +1,20 @@
 import { type Container, Point } from "pixi.js";
+import crosshairUrl from "@/assets/cursors/Cursor=Cross.svg";
+import arrowUrl from "@/assets/cursors/Cursor=Default.svg";
+import pointerUrl from "@/assets/cursors/Cursor=Hand-(Pointing).svg";
+import notAllowedUrl from "@/assets/cursors/Cursor=Menu.svg";
+import moveUrl from "@/assets/cursors/Cursor=Move.svg";
+import resizeNeswUrl from "@/assets/cursors/Cursor=Resize-North-East-South-West.svg";
+import resizeNsUrl from "@/assets/cursors/Cursor=Resize-North-South.svg";
+import resizeNwseUrl from "@/assets/cursors/Cursor=Resize-North-West-South-East.svg";
+import resizeEwUrl from "@/assets/cursors/Cursor=Resize-West-East.svg";
+import textUrl from "@/assets/cursors/Cursor=Text-Cursor.svg";
 import type { CropRegion } from "@/components/video-editor/types";
 import type {
 	CursorRecordingData,
 	CursorRecordingSample,
 	NativeCursorAsset,
+	NativeCursorType,
 } from "@/native/contracts";
 
 export interface ActiveNativeCursorFrame {
@@ -22,6 +33,87 @@ interface ProjectNativeCursorOptions {
 function clamp(value: number, min: number, max: number) {
 	return Math.min(max, Math.max(min, value));
 }
+
+interface PrettyNativeCursorAsset {
+	imageDataUrl: string;
+	width: number;
+	height: number;
+	hotspotX: number;
+	hotspotY: number;
+}
+
+const PRETTY_NATIVE_CURSOR_ASSETS: Partial<Record<NativeCursorType, PrettyNativeCursorAsset>> = {
+	arrow: {
+		imageDataUrl: arrowUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 5.8,
+		hotspotY: 3.2,
+	},
+	text: {
+		imageDataUrl: textUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 16,
+		hotspotY: 16,
+	},
+	pointer: {
+		imageDataUrl: pointerUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 11.8,
+		hotspotY: 2.6,
+	},
+	crosshair: {
+		imageDataUrl: crosshairUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 16,
+		hotspotY: 16,
+	},
+	"resize-ew": {
+		imageDataUrl: resizeEwUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 16,
+		hotspotY: 16,
+	},
+	"resize-ns": {
+		imageDataUrl: resizeNsUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 16,
+		hotspotY: 16,
+	},
+	"resize-nesw": {
+		imageDataUrl: resizeNeswUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 16,
+		hotspotY: 16,
+	},
+	"resize-nwse": {
+		imageDataUrl: resizeNwseUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 16,
+		hotspotY: 16,
+	},
+	move: {
+		imageDataUrl: moveUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 16,
+		hotspotY: 16,
+	},
+	"not-allowed": {
+		imageDataUrl: notAllowedUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 16,
+		hotspotY: 16,
+	},
+};
 
 export function hasNativeCursorRecordingData(
 	recordingData: CursorRecordingData | null | undefined,
@@ -167,5 +259,41 @@ export function getNativeCursorDisplayMetrics(asset: NativeCursorAsset, deviceSc
 		height: asset.height / scaleFactor,
 		hotspotX: asset.hotspotX / scaleFactor,
 		hotspotY: asset.hotspotY / scaleFactor,
+	};
+}
+
+export function resolvePrettyNativeCursorAsset(
+	asset: NativeCursorAsset,
+	sample?: CursorRecordingSample,
+) {
+	const cursorType = sample?.cursorType ?? asset.cursorType ?? null;
+	return cursorType ? (PRETTY_NATIVE_CURSOR_ASSETS[cursorType] ?? null) : null;
+}
+
+export function resolveNativeCursorRenderAsset(
+	asset: NativeCursorAsset,
+	deviceScaleFactor: number,
+	sample?: CursorRecordingSample,
+) {
+	const prettyAsset = resolvePrettyNativeCursorAsset(asset, sample);
+	if (prettyAsset) {
+		return {
+			id: `pretty:${sample?.cursorType ?? asset.cursorType}`,
+			imageDataUrl: prettyAsset.imageDataUrl,
+			width: prettyAsset.width,
+			height: prettyAsset.height,
+			hotspotX: prettyAsset.hotspotX,
+			hotspotY: prettyAsset.hotspotY,
+		};
+	}
+
+	const metrics = getNativeCursorDisplayMetrics(asset, deviceScaleFactor);
+	return {
+		id: asset.id,
+		imageDataUrl: asset.imageDataUrl,
+		width: metrics.width,
+		height: metrics.height,
+		hotspotX: metrics.hotspotX,
+		hotspotY: metrics.hotspotY,
 	};
 }

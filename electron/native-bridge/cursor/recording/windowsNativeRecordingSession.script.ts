@@ -16,7 +16,7 @@ export function buildPowerShellCommand(sampleIntervalMs: number, windowHandle?: 
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
 
-$targetWindowHandle = ${windowHandle ? `'${windowHandle}'` : '$null'}
+$targetWindowHandle = ${windowHandle ? `'${windowHandle}'` : "$null"}
 
 $source = @"
 using System;
@@ -60,6 +60,9 @@ public static class OpenScreenCursorInterop {
     public static extern bool GetCursorInfo(ref CURSORINFO pci);
 
 	[DllImport("user32.dll", SetLastError = true)]
+	public static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
+
+	[DllImport("user32.dll", SetLastError = true)]
 	[return: MarshalAs(UnmanagedType.Bool)]
 	public static extern bool GetWindowRect(IntPtr hWnd, out RECT lpRect);
 
@@ -85,6 +88,37 @@ public static class OpenScreenCursorInterop {
 "@
 
 Add-Type -TypeDefinition $source
+
+$standardCursors = @{
+    arrow = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32512))
+    text = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32513))
+    wait = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32514))
+    crosshair = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32515))
+    'up-arrow' = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32516))
+    'resize-nwse' = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32642))
+    'resize-nesw' = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32643))
+    'resize-ew' = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32644))
+    'resize-ns' = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32645))
+    move = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32646))
+    'not-allowed' = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32648))
+    pointer = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32649))
+    'app-starting' = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32650))
+    help = [OpenScreenCursorInterop]::LoadCursor([IntPtr]::Zero, [IntPtr]::new(32651))
+}
+
+function Get-StandardCursorType($cursorHandle) {
+    if ($cursorHandle -eq [IntPtr]::Zero) {
+        return $null
+    }
+
+    foreach ($entry in $standardCursors.GetEnumerator()) {
+        if ($entry.Value -eq $cursorHandle) {
+            return $entry.Key
+        }
+    }
+
+    return $null
+}
 
 function Write-JsonLine($payload) {
     [Console]::Out.WriteLine(($payload | ConvertTo-Json -Compress -Depth 6))
@@ -190,10 +224,14 @@ while ($true) {
 
     $visible = ($cursorInfo.flags -band 1) -ne 0
     $cursorId = if ($cursorInfo.hCursor -eq [IntPtr]::Zero) { $null } else { ('0x{0:X}' -f $cursorInfo.hCursor.ToInt64()) }
+    $cursorType = Get-StandardCursorType $cursorInfo.hCursor
     $asset = $null
 
     if ($visible -and $cursorId -and $cursorId -ne $lastCursorId) {
         $asset = Get-CursorAsset -cursorHandle $cursorInfo.hCursor -cursorId $cursorId
+        if ($asset -and $cursorType) {
+            $asset.cursorType = $cursorType
+        }
         $lastCursorId = $cursorId
     }
 
@@ -204,6 +242,7 @@ while ($true) {
         y = $cursorInfo.ptScreenPos.Y
         visible = $visible
         handle = $cursorId
+        cursorType = $cursorType
 		bounds = Get-TargetBounds
         asset = $asset
     }
