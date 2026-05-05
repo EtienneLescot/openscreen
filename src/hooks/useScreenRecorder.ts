@@ -182,6 +182,20 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		}
 	}, []);
 
+	const stopWebcamPreviewStream = useCallback(() => {
+		if (!webcamStream.current) {
+			return;
+		}
+
+		webcamAcquireId.current++;
+		webcamStream.current.getTracks().forEach((track) => {
+			track.onended = null;
+			track.stop();
+		});
+		webcamStream.current = null;
+		webcamReady.current = true;
+	}, []);
+
 	const setWebcamEnabled = useCallback(
 		async (enabled: boolean) => {
 			if (!enabled) {
@@ -577,6 +591,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const displayId = Number(selectedSource.display_id);
 			const sourceType = selectedSource.id.startsWith("window:") ? "window" : "display";
 			const windowHandle = parseWindowHandleFromSourceId(selectedSource.id);
+			if (webcamEnabled) {
+				stopWebcamPreviewStream();
+			}
 			const request: NativeWindowsRecordingRequest = {
 				recordingId: activeRecordingId,
 				source: {

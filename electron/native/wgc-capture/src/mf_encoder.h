@@ -11,6 +11,12 @@
 #include <mutex>
 #include <string>
 
+struct BgraFrameView {
+    const BYTE* data = nullptr;
+    int width = 0;
+    int height = 0;
+};
+
 struct AudioInputFormat {
     GUID subtype = MFAudioFormat_PCM;
     UINT32 sampleRate = 0;
@@ -37,13 +43,17 @@ public:
         ID3D11Device* device,
         ID3D11DeviceContext* context,
         const AudioInputFormat* audioFormat = nullptr);
-    bool writeFrame(ID3D11Texture2D* texture, int64_t timestampHns);
+    bool writeFrame(ID3D11Texture2D* texture, int64_t timestampHns, const BgraFrameView* webcamFrame = nullptr);
     bool writeAudio(const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns);
     bool finalize();
 
 private:
     bool ensureStagingTexture(ID3D11Texture2D* texture);
-    bool copyFrameToBuffer(ID3D11Texture2D* texture, BYTE* destination, DWORD destinationSize);
+    bool copyFrameToBuffer(
+        ID3D11Texture2D* texture,
+        BYTE* destination,
+        DWORD destinationSize,
+        const BgraFrameView* webcamFrame);
     bool configureAudioStream(const AudioInputFormat& audioFormat);
 
     Microsoft::WRL::ComPtr<IMFSinkWriter> sinkWriter_;

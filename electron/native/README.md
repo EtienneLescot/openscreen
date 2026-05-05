@@ -35,15 +35,18 @@ Current V2 JSON shape:
   "captureMic": false,
   "microphoneDeviceId": "default",
   "microphoneGain": 1.4,
-  "webcamEnabled": false,
+  "webcamEnabled": true,
+  "webcamDeviceId": "default",
+  "webcamWidth": 1280,
+  "webcamHeight": 720,
+  "webcamFps": 30,
   "outputs": {
-    "screenPath": "C:\\path\\recording-123.mp4",
-    "webcamPath": "C:\\path\\recording-123-webcam.mp4"
+    "screenPath": "C:\\path\\recording-123.mp4"
   }
 }
 ```
 
-The current helper implementation supports display/window video capture, system audio loopback, and initial default-microphone capture. Webcam capture now fails explicitly in the helper rather than silently falling back to Electron capture on Windows. See `docs/engineering/windows-native-recorder-roadmap.md` for the phased implementation plan.
+The current helper implementation supports display/window video capture, system audio loopback, default-microphone capture, and Media Foundation webcam capture. Webcam frames are currently composed into the primary MP4 as a bottom-right picture-in-picture overlay. Browser `deviceId` values do not always map to Media Foundation symbolic links; when the requested webcam is not matched, the helper logs a warning and uses the default webcam.
 
 Smoke-test the helper with:
 
@@ -53,4 +56,5 @@ npm run test:wgc-window:win
 npm run test:wgc-audio:win
 npm run test:wgc-mic:win
 npm run test:wgc-mixed-audio:win
+npm run test:wgc-webcam:win
 ```

@@ -38,6 +38,43 @@ void setAudioFormat(IMFMediaType* type, UINT32 channels, UINT32 sampleRate, UINT
     type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, bitsPerSample);
 }
 
+void compositeWebcam(BYTE* destination, int width, int height, const BgraFrameView& webcamFrame) {
+    if (!webcamFrame.data || webcamFrame.width <= 0 || webcamFrame.height <= 0 || width <= 0 || height <= 0) {
+        return;
+    }
+
+    const int margin = std::max(16, std::min(width, height) / 60);
+    const int maxOverlayWidth = std::max(2, width / 4);
+    int overlayWidth = maxOverlayWidth;
+    int overlayHeight = static_cast<int>(
+        (static_cast<int64_t>(overlayWidth) * webcamFrame.height) / std::max(1, webcamFrame.width));
+    const int maxOverlayHeight = std::max(2, height / 3);
+    if (overlayHeight > maxOverlayHeight) {
+        overlayHeight = maxOverlayHeight;
+        overlayWidth = static_cast<int>(
+            (static_cast<int64_t>(overlayHeight) * webcamFrame.width) / std::max(1, webcamFrame.height));
+    }
+
+    overlayWidth = std::max(2, std::min(overlayWidth, width - margin * 2));
+    overlayHeight = std::max(2, std::min(overlayHeight, height - margin * 2));
+    const int originX = std::max(0, width - overlayWidth - margin);
+    const int originY = std::max(0, height - overlayHeight - margin);
+
+    for (int y = 0; y < overlayHeight; y += 1) {
+        const int sourceY = static_cast<int>((static_cast<int64_t>(y) * webcamFrame.height) / overlayHeight);
+        BYTE* destinationRow = destination + ((originY + y) * width + originX) * 4;
+        for (int x = 0; x < overlayWidth; x += 1) {
+            const int sourceX = static_cast<int>((static_cast<int64_t>(x) * webcamFrame.width) / overlayWidth);
+            const BYTE* source = webcamFrame.data + (sourceY * webcamFrame.width + sourceX) * 4;
+            BYTE* target = destinationRow + x * 4;
+            target[0] = source[0];
+            target[1] = source[1];
+            target[2] = source[2];
+            target[3] = 255;
+        }
+    }
+}
+
 } // namespace
 
 MFEncoder::~MFEncoder() {
@@ -179,7 +216,11 @@ bool MFEncoder::ensureStagingTexture(ID3D11Texture2D* texture) {
                      "CreateTexture2D(staging)");
 }
 
-bool MFEncoder::copyFrameToBuffer(ID3D11Texture2D* texture, BYTE* destination, DWORD destinationSize) {
+bool MFEncoder::copyFrameToBuffer(
+    ID3D11Texture2D* texture,
+    BYTE* destination,
+    DWORD destinationSize,
+    const BgraFrameView* webcamFrame) {
     if (!ensureStagingTexture(texture)) {
         return false;
     }
@@ -203,12 +244,15 @@ bool MFEncoder::copyFrameToBuffer(ID3D11Texture2D* texture, BYTE* destination, D
     for (int y = 0; y < height_; y += 1) {
         std::memcpy(destination + rowBytes * y, source + mapped.RowPitch * y, rowBytes);
     }
+    if (webcamFrame) {
+        compositeWebcam(destination, width_, height_, *webcamFrame);
+    }
 
     context_->Unmap(stagingTexture_.Get(), 0);
     return true;
 }
 
-bool MFEncoder::writeFrame(ID3D11Texture2D* texture, int64_t timestampHns) {
+bool MFEncoder::writeFrame(ID3D11Texture2D* texture, int64_t timestampHns, const BgraFrameView* webcamFrame) {
     std::scoped_lock writerLock(writerMutex_);
     if (!sinkWriter_ || finalized_) {
         return false;
@@ -238,7 +282,7 @@ bool MFEncoder::writeFrame(ID3D11Texture2D* texture, int64_t timestampHns) {
         return false;
     }
 
-    const bool copied = copyFrameToBuffer(texture, data, maxLength);
+    const bool copied = copyFrameToBuffer(texture, data, maxLength, webcamFrame);
     buffer->Unlock();
     if (!copied) {
         return false;

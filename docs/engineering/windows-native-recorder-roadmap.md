@@ -9,7 +9,7 @@ OpenScreen's Windows recorder should be owned by one native backend. Electron ca
 - Capture system audio through WASAPI loopback.
 - Capture microphone audio through WASAPI.
 - Mix system audio and microphone audio into the primary screen recording.
-- Capture webcam video natively and keep it as a separate editable OpenScreen media stream.
+- Capture webcam video natively and compose it into the Windows helper MP4 during the native-recording migration.
 - Keep preview/export aligned because screen video, audio, webcam, and cursor share one native timing origin.
 - Keep exported MP4s Windows-friendly: H.264 video plus AAC audio. Opus-in-MP4 is not an acceptable Windows export target.
 - Package the native helper with the Windows app.
@@ -17,7 +17,7 @@ OpenScreen's Windows recorder should be owned by one native backend. Electron ca
 ## Non-Goals
 
 - Replacing the editor/export pipeline.
-- Flattening webcam into the screen recording. The editor currently treats webcam as editable picture-in-picture media, so the native recorder should preserve a separate `webcamVideoPath`.
+- Replacing the editor/export pipeline. A later pass can reintroduce a separate editable native `webcamVideoPath`; the current Windows-native milestone prioritizes a helper-owned multi-flux MP4 with deterministic screen/audio/mic/webcam sync.
 - Adding a native fallback for macOS or Linux in this branch.
 
 ## Target Architecture
@@ -78,7 +78,6 @@ The helper receives a single JSON argument:
   },
   "outputs": {
     "screenPath": "C:\\Users\\me\\recording-123.mp4",
-    "webcamPath": "C:\\Users\\me\\recording-123-webcam.mp4",
     "manifestPath": "C:\\Users\\me\\recording-123.session.json"
   }
 }
@@ -90,7 +89,7 @@ The helper emits newline-delimited JSON events to stdout:
 { "event": "ready", "schemaVersion": 2 }
 { "event": "recording-started", "timestampMs": 1234567890 }
 { "event": "warning", "code": "audio-device-unavailable", "message": "..." }
-{ "event": "recording-stopped", "screenPath": "...", "webcamPath": "..." }
+{ "event": "recording-stopped", "screenPath": "..." }
 { "event": "error", "code": "unsupported-window-source", "message": "..." }
 ```
 
@@ -153,15 +152,16 @@ Acceptance:
 ### 4. Webcam Capture
 
 - Add Media Foundation webcam source reader.
-- Select 1280x720/30fps or nearest supported format.
-- Encode webcam to `recording-<id>-webcam.mp4`.
-- Synchronize webcam timestamps to the native session clock.
-- Store `webcamVideoPath` in the OpenScreen session manifest.
+- Select requested dimensions/fps or the nearest format accepted by Media Foundation.
+- Convert webcam samples to BGRA and compose them into the primary helper MP4 as an initial bottom-right picture-in-picture overlay.
+- Keep the helper process as the SSOT for screen/window, WASAPI system audio, microphone, webcam, and mux timing.
+- Later: promote the same webcam capture source to a separate editable native `webcamVideoPath` if product requirements need post-recording layout edits.
 
 Acceptance:
 
-- Editor loads the native screen recording and the native webcam recording.
-- Webcam layout controls behave the same as today.
+- Native display/window recordings can include webcam without returning to Electron capture.
+- `npm run test:wgc-webcam:win` validates the helper path when a webcam is available and skips explicitly when no webcam device exists.
+- Combined webcam + system audio + microphone produces one MP4 with H.264 video and AAC audio.
 
 ### 5. Native Window Capture
 

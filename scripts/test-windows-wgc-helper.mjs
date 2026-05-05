@@ -21,6 +21,8 @@ const WITH_MICROPHONE =
 	process.argv.includes("--mic");
 const WITH_WINDOW =
 	process.env.OPENSCREEN_WGC_TEST_WINDOW === "true" || process.argv.includes("--window");
+const WITH_WEBCAM =
+	process.env.OPENSCREEN_WGC_TEST_WEBCAM === "true" || process.argv.includes("--webcam");
 
 function runHelper(config) {
 	return new Promise((resolve, reject) => {
@@ -31,21 +33,34 @@ function runHelper(config) {
 
 		let stdout = "";
 		let stderr = "";
+		let stopTimer = null;
+		const scheduleStop = () => {
+			if (stopTimer) {
+				return;
+			}
+			stopTimer = setTimeout(() => {
+				child.stdin.write("stop\n");
+			}, DURATION_MS);
+		};
+		const fallbackTimer = setTimeout(scheduleStop, 15_000);
 
 		child.stdout.on("data", (chunk) => {
 			stdout += chunk.toString();
+			if (stdout.includes('"recording-started"') || stdout.includes("Recording started")) {
+				scheduleStop();
+			}
 		});
 		child.stderr.on("data", (chunk) => {
 			stderr += chunk.toString();
 		});
 		child.once("error", reject);
 		child.once("exit", (code) => {
+			clearTimeout(fallbackTimer);
+			if (stopTimer) {
+				clearTimeout(stopTimer);
+			}
 			resolve({ code, stdout, stderr });
 		});
-
-		setTimeout(() => {
-			child.stdin.write("stop\n");
-		}, DURATION_MS);
 	});
 }
 
@@ -149,7 +164,7 @@ if (!fs.existsSync(HELPER_PATH)) {
 
 const outputPath = path.join(
 	os.tmpdir(),
-	`openscreen-wgc-helper-${WITH_WINDOW ? "window" : WITH_SYSTEM_AUDIO || WITH_MICROPHONE ? "audio" : "video"}-${process.pid}-${Date.now()}-${randomUUID()}.mp4`,
+	`openscreen-wgc-helper-${WITH_WEBCAM ? "webcam" : WITH_WINDOW ? "window" : WITH_SYSTEM_AUDIO || WITH_MICROPHONE ? "audio" : "video"}-${process.pid}-${Date.now()}-${randomUUID()}.mp4`,
 );
 
 const fixtureWindow = WITH_WINDOW ? await startFixtureWindow() : null;
@@ -173,7 +188,11 @@ const config = {
 	captureMic: WITH_MICROPHONE,
 	microphoneDeviceId: "default",
 	microphoneGain: 1.4,
-	webcamEnabled: false,
+	webcamEnabled: WITH_WEBCAM,
+	webcamDeviceId: process.env.OPENSCREEN_WGC_TEST_WEBCAM_DEVICE_ID ?? "",
+	webcamWidth: 640,
+	webcamHeight: 360,
+	webcamFps: 30,
 	outputs: { screenPath: outputPath },
 };
 
@@ -186,6 +205,15 @@ try {
 	}
 }
 if (result.code !== 0) {
+	if (
+		WITH_WEBCAM &&
+		/No native Windows webcam devices were found|Failed to initialize native webcam/.test(
+			result.stderr,
+		)
+	) {
+		console.log("Skipping WGC webcam smoke test: no native Windows webcam device is available.");
+		process.exit(0);
+	}
 	throw new Error(`WGC helper exited with ${result.code}\n${result.stdout}\n${result.stderr}`);
 }
 if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size === 0) {

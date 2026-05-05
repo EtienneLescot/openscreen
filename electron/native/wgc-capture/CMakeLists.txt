@@ -23,6 +23,8 @@ add_executable(wgc-capture
   src/monitor_utils.h
   src/wasapi_loopback_capture.cpp
   src/wasapi_loopback_capture.h
+  src/webcam_capture.cpp
+  src/webcam_capture.h
   src/wgc_session.cpp
   src/wgc_session.h
 )

@@ -2,6 +2,7 @@
 #include "mf_encoder.h"
 #include "monitor_utils.h"
 #include "wasapi_loopback_capture.h"
+#include "webcam_capture.h"
 #include "wgc_session.h"
 
 #include <winrt/Windows.Foundation.h>
@@ -303,11 +304,6 @@ int main(int argc, char* argv[]) {
 
     std::cout << "{\"event\":\"ready\",\"schemaVersion\":2}" << std::endl;
 
-    if (config.webcamEnabled) {
-        std::cerr << "ERROR: Native webcam capture is not implemented in this helper yet" << std::endl;
-        return 1;
-    }
-
     WgcSession session;
     if (config.sourceType == "display") {
         HMONITOR monitor = findMonitorForCapture(
@@ -346,6 +342,22 @@ int main(int argc, char* argv[]) {
 
     const int pixels = width * height;
     const int bitrate = pixels >= 3840 * 2160 ? 45'000'000 : pixels >= 2560 * 1440 ? 28'000'000 : 18'000'000;
+
+    WebcamCapture webcamCapture;
+    bool webcamActive = false;
+    if (config.webcamEnabled) {
+        if (!webcamCapture.initialize(
+                utf8ToWide(config.webcamDeviceId),
+                config.webcamWidth,
+                config.webcamHeight,
+                config.webcamFps > 0 ? config.webcamFps : config.fps)) {
+            std::cerr << "ERROR: Failed to initialize native webcam capture" << std::endl;
+            return 1;
+        }
+        std::cout << "{\"event\":\"webcam-format\",\"schemaVersion\":2,\"width\":" << webcamCapture.width()
+                  << ",\"height\":" << webcamCapture.height()
+                  << ",\"fps\":" << webcamCapture.fps() << "}" << std::endl;
+    }
 
     WasapiLoopbackCapture loopbackCapture;
     WasapiLoopbackCapture microphoneCapture;
@@ -398,6 +410,9 @@ int main(int argc, char* argv[]) {
     std::atomic<bool> firstFrameWritten = false;
     std::atomic<bool> encodeFailed = false;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> latestFrameTexture;
+    std::vector<BYTE> latestWebcamFrame;
+    int latestWebcamWidth = 0;
+    int latestWebcamHeight = 0;
 
     session.setFrameCallback([&](ID3D11Texture2D* texture, int64_t timestampHns) {
         (void)timestampHns;
@@ -433,9 +448,18 @@ int main(int argc, char* argv[]) {
         while (!stopRequested && !encodeFailed) {
             {
                 std::scoped_lock lock(mutex);
+                if (webcamActive) {
+                    webcamCapture.copyLatestFrame(latestWebcamFrame, latestWebcamWidth, latestWebcamHeight);
+                }
+                const BgraFrameView webcamFrame{
+                    latestWebcamFrame.empty() ? nullptr : latestWebcamFrame.data(),
+                    latestWebcamWidth,
+                    latestWebcamHeight,
+                };
                 if (latestFrameTexture && !encoder.writeFrame(
                         latestFrameTexture.Get(),
-                        static_cast<int64_t>((frameIndex * 10'000'000ULL) / config.fps))) {
+                        static_cast<int64_t>((frameIndex * 10'000'000ULL) / config.fps),
+                        webcamFrame.data ? &webcamFrame : nullptr)) {
                     encodeFailed = true;
                     stopRequested = true;
                     cv.notify_all();
@@ -528,8 +552,30 @@ int main(int argc, char* argv[]) {
     if (!startAudioCaptures()) {
         return 1;
     }
+    if (config.webcamEnabled) {
+        if (!webcamCapture.start()) {
+            microphoneCapture.stop();
+            loopbackCapture.stop();
+            if (audioMixer) {
+                audioMixer->stop();
+            }
+            std::cerr << "ERROR: Failed to start native webcam capture" << std::endl;
+            return 1;
+        }
+        webcamActive = true;
+        const auto webcamDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < webcamDeadline &&
+               !webcamCapture.copyLatestFrame(latestWebcamFrame, latestWebcamWidth, latestWebcamHeight)) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if (latestWebcamFrame.empty()) {
+            std::cerr << "WARNING: Native webcam started but no frame was available before screen capture"
+                      << std::endl;
+        }
+    }
 
     if (!session.start()) {
+        webcamCapture.stop();
         microphoneCapture.stop();
         loopbackCapture.stop();
         if (audioMixer) {
@@ -554,6 +600,7 @@ int main(int argc, char* argv[]) {
             }
             microphoneCapture.stop();
             loopbackCapture.stop();
+            webcamCapture.stop();
             if (audioMixer) {
                 audioMixer->stop();
             }
@@ -580,6 +627,7 @@ int main(int argc, char* argv[]) {
 
     microphoneCapture.stop();
     loopbackCapture.stop();
+    webcamCapture.stop();
     if (audioMixer) {
         audioMixer->stop();
     }
