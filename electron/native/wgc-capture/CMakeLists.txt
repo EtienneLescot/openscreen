@@ -14,6 +14,8 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
 add_executable(wgc-capture
+  src/audio_sample_utils.cpp
+  src/audio_sample_utils.h
   src/main.cpp
   src/mf_encoder.cpp
   src/mf_encoder.h

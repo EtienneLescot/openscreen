@@ -14,6 +14,10 @@ const DURATION_MS = Number(process.env.OPENSCREEN_WGC_TEST_DURATION_MS ?? 5000);
 const WITH_SYSTEM_AUDIO =
 	process.env.OPENSCREEN_WGC_TEST_SYSTEM_AUDIO === "true" ||
 	process.argv.includes("--system-audio");
+const WITH_MICROPHONE =
+	process.env.OPENSCREEN_WGC_TEST_MICROPHONE === "true" ||
+	process.argv.includes("--microphone") ||
+	process.argv.includes("--mic");
 
 function runHelper(config) {
 	return new Promise((resolve, reject) => {
@@ -101,7 +105,7 @@ if (!fs.existsSync(HELPER_PATH)) {
 
 const outputPath = path.join(
 	os.tmpdir(),
-	`openscreen-wgc-helper-${WITH_SYSTEM_AUDIO ? "audio" : "video"}-${Date.now()}.mp4`,
+	`openscreen-wgc-helper-${WITH_SYSTEM_AUDIO || WITH_MICROPHONE ? "audio" : "video"}-${Date.now()}.mp4`,
 );
 
 const config = {
@@ -120,7 +124,9 @@ const config = {
 	displayH: 1080,
 	hasDisplayBounds: true,
 	captureSystemAudio: WITH_SYSTEM_AUDIO,
-	captureMic: false,
+	captureMic: WITH_MICROPHONE,
+	microphoneDeviceId: "default",
+	microphoneGain: 1.4,
 	webcamEnabled: false,
 	outputs: { screenPath: outputPath },
 };
@@ -139,7 +145,7 @@ const hasAudio = streams.some((stream) => stream.codec_type === "audio");
 if (!hasVideo) {
 	throw new Error(`WGC helper output has no video stream: ${outputPath}`);
 }
-if (WITH_SYSTEM_AUDIO && !hasAudio) {
+if ((WITH_SYSTEM_AUDIO || WITH_MICROPHONE) && !hasAudio) {
 	throw new Error(`WGC helper output has no audio stream: ${outputPath}`);
 }
 const frameLuma = measureFirstFrameLuma(outputPath);

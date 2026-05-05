@@ -1,3 +1,4 @@
+#include "audio_sample_utils.h"
 #include "mf_encoder.h"
 #include "monitor_utils.h"
 #include "wasapi_loopback_capture.h"
@@ -273,11 +274,6 @@ int main(int argc, char* argv[]) {
         return 1;
     }
 
-    if (config.captureMic) {
-        std::cerr << "ERROR: Microphone capture is not implemented in this helper yet" << std::endl;
-        return 1;
-    }
-
     if (config.webcamEnabled) {
         std::cerr << "ERROR: Native webcam capture is not implemented in this helper yet" << std::endl;
         return 1;
@@ -309,16 +305,34 @@ int main(int argc, char* argv[]) {
     const int bitrate = pixels >= 3840 * 2160 ? 45'000'000 : pixels >= 2560 * 1440 ? 28'000'000 : 18'000'000;
 
     WasapiLoopbackCapture loopbackCapture;
+    WasapiLoopbackCapture microphoneCapture;
     const AudioInputFormat* audioFormat = nullptr;
     if (config.captureSystemAudio) {
-        if (!loopbackCapture.initialize()) {
+        if (!loopbackCapture.initializeSystemLoopback()) {
             std::cerr << "ERROR: Failed to initialize WASAPI loopback capture" << std::endl;
             return 1;
         }
         audioFormat = &loopbackCapture.inputFormat();
-        std::cout << "{\"event\":\"audio-format\",\"schemaVersion\":2,\"sampleRate\":"
-                  << audioFormat->sampleRate << ",\"channels\":" << audioFormat->channels
-                  << ",\"bitsPerSample\":" << audioFormat->bitsPerSample << "}" << std::endl;
+    }
+    if (config.captureMic) {
+        if (!microphoneCapture.initializeMicrophone(utf8ToWide(config.microphoneDeviceId))) {
+            std::cerr << "ERROR: Failed to initialize WASAPI microphone capture" << std::endl;
+            return 1;
+        }
+        if (!audioFormat) {
+            audioFormat = &microphoneCapture.inputFormat();
+        } else if (!sameAudioFormatForMixing(*audioFormat, microphoneCapture.inputFormat())) {
+            std::cerr << "ERROR: System audio and microphone formats differ; native mixing is not supported yet"
+                      << std::endl;
+            return 1;
+        }
+    }
+    if (audioFormat) {
+        std::cout << "{\"event\":\"audio-format\",\"schemaVersion\":2,\"sampleRate\":" << audioFormat->sampleRate
+                  << ",\"channels\":" << audioFormat->channels
+                  << ",\"bitsPerSample\":" << audioFormat->bitsPerSample
+                  << ",\"system\":" << (config.captureSystemAudio ? "true" : "false")
+                  << ",\"microphone\":" << (config.captureMic ? "true" : "false") << "}" << std::endl;
     }
 
     MFEncoder encoder;
@@ -358,24 +372,81 @@ int main(int argc, char* argv[]) {
         }
     });
 
+    std::mutex microphoneAudioMutex;
+    std::vector<BYTE> latestMicrophoneAudio;
+    std::vector<BYTE> mixedAudioBuffer;
+    std::vector<BYTE> microphoneGainBuffer;
+
+    if (config.captureMic) {
+        if (!microphoneCapture.start([&](const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns) {
+                if (stopRequested || !audioFormat) {
+                    return;
+                }
+
+                copyAudioWithGain(
+                    data,
+                    byteCount,
+                    microphoneCapture.inputFormat(),
+                    config.microphoneGain,
+                    microphoneGainBuffer);
+
+                if (config.captureSystemAudio) {
+                    std::scoped_lock lock(microphoneAudioMutex);
+                    latestMicrophoneAudio = microphoneGainBuffer;
+                    return;
+                }
+
+                if (!encoder.writeAudio(
+                        microphoneGainBuffer.data(),
+                        static_cast<DWORD>(microphoneGainBuffer.size()),
+                        timestampHns,
+                        durationHns)) {
+                    encodeFailed = true;
+                    stopRequested = true;
+                    cv.notify_all();
+                }
+            })) {
+            std::cerr << "ERROR: Failed to start WASAPI microphone capture" << std::endl;
+            return 1;
+        }
+    }
+
     if (config.captureSystemAudio) {
         if (!loopbackCapture.start([&](const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns) {
                 if (stopRequested) {
                     return;
                 }
 
-                if (!encoder.writeAudio(data, byteCount, timestampHns, durationHns)) {
+                const BYTE* encodedData = data;
+                DWORD encodedByteCount = byteCount;
+                if (config.captureMic && audioFormat) {
+                    mixedAudioBuffer.assign(data, data + byteCount);
+                    {
+                        std::scoped_lock lock(microphoneAudioMutex);
+                        mixAudioInPlace(
+                            mixedAudioBuffer,
+                            latestMicrophoneAudio.data(),
+                            static_cast<DWORD>(latestMicrophoneAudio.size()),
+                            *audioFormat);
+                    }
+                    encodedData = mixedAudioBuffer.data();
+                    encodedByteCount = static_cast<DWORD>(mixedAudioBuffer.size());
+                }
+
+                if (!encoder.writeAudio(encodedData, encodedByteCount, timestampHns, durationHns)) {
                     encodeFailed = true;
                     stopRequested = true;
                     cv.notify_all();
                 }
             })) {
             std::cerr << "ERROR: Failed to start WASAPI loopback capture" << std::endl;
+            microphoneCapture.stop();
             return 1;
         }
     }
 
     if (!session.start()) {
+        microphoneCapture.stop();
         loopbackCapture.stop();
         std::cerr << "ERROR: Failed to start WGC session" << std::endl;
         return 1;
@@ -394,6 +465,7 @@ int main(int argc, char* argv[]) {
             if (stdinThread.joinable()) {
                 stdinThread.detach();
             }
+            microphoneCapture.stop();
             loopbackCapture.stop();
             std::cerr << "ERROR: Timed out waiting for first WGC frame" << std::endl;
             return 1;
@@ -410,6 +482,7 @@ int main(int argc, char* argv[]) {
         });
     }
 
+    microphoneCapture.stop();
     loopbackCapture.stop();
     session.stop();
     {

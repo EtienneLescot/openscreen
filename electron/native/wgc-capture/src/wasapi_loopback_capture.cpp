@@ -51,7 +51,15 @@ WasapiLoopbackCapture::~WasapiLoopbackCapture() {
     }
 }
 
-bool WasapiLoopbackCapture::initialize() {
+bool WasapiLoopbackCapture::initializeSystemLoopback() {
+    return initialize(WasapiCaptureEndpoint::SystemLoopback, {});
+}
+
+bool WasapiLoopbackCapture::initializeMicrophone(const std::wstring& deviceId) {
+    return initialize(WasapiCaptureEndpoint::Microphone, deviceId);
+}
+
+bool WasapiLoopbackCapture::initialize(WasapiCaptureEndpoint endpoint, const std::wstring& deviceId) {
     HRESULT hr = CoCreateInstance(
         __uuidof(MMDeviceEnumerator),
         nullptr,
@@ -61,9 +69,22 @@ bool WasapiLoopbackCapture::initialize() {
         return false;
     }
 
-    hr = deviceEnumerator_->GetDefaultAudioEndpoint(eRender, eConsole, &device_);
-    if (!succeeded(hr, "GetDefaultAudioEndpoint(render)")) {
-        return false;
+    if (endpoint == WasapiCaptureEndpoint::Microphone && !deviceId.empty() && deviceId != L"default") {
+        hr = deviceEnumerator_->GetDevice(deviceId.c_str(), &device_);
+        if (FAILED(hr)) {
+            std::wcerr << L"WARNING: Could not resolve microphone device id; using default capture endpoint"
+                       << std::endl;
+            device_.Reset();
+        }
+    }
+
+    if (!device_) {
+        const EDataFlow flow =
+            endpoint == WasapiCaptureEndpoint::SystemLoopback ? eRender : eCapture;
+        hr = deviceEnumerator_->GetDefaultAudioEndpoint(flow, eConsole, &device_);
+        if (!succeeded(hr, "GetDefaultAudioEndpoint")) {
+            return false;
+        }
     }
 
     hr = device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &audioClient_);
@@ -81,9 +102,11 @@ bool WasapiLoopbackCapture::initialize() {
         return false;
     }
 
+    const DWORD streamFlags =
+        endpoint == WasapiCaptureEndpoint::SystemLoopback ? AUDCLNT_STREAMFLAGS_LOOPBACK : 0;
     hr = audioClient_->Initialize(
         AUDCLNT_SHAREMODE_SHARED,
-        AUDCLNT_STREAMFLAGS_LOOPBACK,
+        streamFlags,
         BufferDurationHns,
         0,
         mixFormat_,

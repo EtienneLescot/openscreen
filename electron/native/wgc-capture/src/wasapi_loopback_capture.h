@@ -10,8 +10,14 @@
 #include <atomic>
 #include <cstdint>
 #include <functional>
+#include <string>
 #include <thread>
 #include <vector>
+
+enum class WasapiCaptureEndpoint {
+    SystemLoopback,
+    Microphone,
+};
 
 class WasapiLoopbackCapture {
 public:
@@ -23,13 +29,15 @@ public:
     WasapiLoopbackCapture(const WasapiLoopbackCapture&) = delete;
     WasapiLoopbackCapture& operator=(const WasapiLoopbackCapture&) = delete;
 
-    bool initialize();
+    bool initializeSystemLoopback();
+    bool initializeMicrophone(const std::wstring& deviceId);
     bool start(AudioCallback callback);
     void stop();
 
     const AudioInputFormat& inputFormat() const;
 
 private:
+    bool initialize(WasapiCaptureEndpoint endpoint, const std::wstring& deviceId);
     void captureLoop();
     bool resolveInputFormat(WAVEFORMATEX* mixFormat);
 

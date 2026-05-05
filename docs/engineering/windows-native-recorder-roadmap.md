@@ -138,6 +138,8 @@ SSOT rules for this phase:
 
 ### 3. WASAPI Microphone
 
+Status: initial implementation in progress. The helper can open the default WASAPI capture endpoint, apply the OpenScreen microphone gain, encode mic-only audio, and mix mic into system-loopback packets when both endpoints expose the same runtime format. Browser `deviceId` to MMDevice id mapping, resampling between mismatched endpoint formats, and drift correction remain follow-up hardening work.
+
 - Add microphone device enumeration and stable device-id mapping.
 - Capture selected/default microphone through WASAPI.
 - Apply OpenScreen's current mic gain policy.
@@ -192,6 +194,8 @@ Acceptance:
 - `npm run test:wgc-webcam:win`: validates webcam output when a webcam is available, otherwise skips explicitly.
 - Packaging check: confirms the helper is in `app.asar.unpacked`.
 - Export check: exported MP4s generated from native recordings keep an AAC audio track when the source has audio.
+- `npm run test:wgc-mic:win`: validates default-microphone capture writes an AAC track when an input endpoint is available.
+- `npm run test:wgc-mixed-audio:win`: validates system loopback plus microphone writes one mixed AAC track when endpoint formats are compatible.
 
 ## Ship Criteria
 
