@@ -187,6 +187,25 @@ function getResolvedVideoDuration(video: HTMLVideoElement): number | null {
 	return null;
 }
 
+function getEndedVideoDuration(video: HTMLVideoElement): number | null {
+	const currentTime = video.currentTime;
+	if (!Number.isFinite(currentTime) || currentTime <= 0) {
+		return null;
+	}
+
+	if (video.ended) {
+		return currentTime;
+	}
+
+	const resolvedDuration = getResolvedVideoDuration(video);
+	const durationEpsilonSeconds = 0.05;
+	if (resolvedDuration && currentTime >= resolvedDuration - durationEpsilonSeconds) {
+		return resolvedDuration;
+	}
+
+	return null;
+}
+
 const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 	(
 		{
@@ -384,9 +403,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 						return true;
 					}
 
-					if (Number.isFinite(video.currentTime) && video.currentTime > 0) {
+					const endedDuration = getEndedVideoDuration(video);
+					if (endedDuration) {
 						lastResolvedDurationRef.current = null;
-						onDurationChange(Math.round(video.currentTime * 1000) / 1000);
+						onDurationChange(Math.round(endedDuration * 1000) / 1000);
 						return true;
 					}
 

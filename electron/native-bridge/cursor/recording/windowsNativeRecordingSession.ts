@@ -118,7 +118,13 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 			this.rejectReady(error);
 		});
 
-		await this.waitUntilReady();
+		try {
+			await this.waitUntilReady();
+		} catch (error) {
+			this.terminateHelperProcess();
+			this.cleanupHelperScript(helperScriptPath);
+			throw error;
+		}
 	}
 
 	async stop(): Promise<CursorRecordingData> {
@@ -126,9 +132,7 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		this.process = null;
 		this.clearReadyState();
 
-		if (child && !child.killed) {
-			child.kill();
-		}
+		this.killHelperProcess(child);
 
 		this.logDiagnostic("stop", {
 			sampleCount: this.sampleCount,
@@ -287,8 +291,16 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 
 	private failHelper(error: Error) {
 		this.rejectReady(error);
+		this.terminateHelperProcess();
+	}
+
+	private terminateHelperProcess() {
 		const child = this.process;
 		this.process = null;
+		this.killHelperProcess(child);
+	}
+
+	private killHelperProcess(child: ChildProcessByStdio<null, Readable, Readable> | null) {
 		if (child && !child.killed) {
 			child.kill();
 		}

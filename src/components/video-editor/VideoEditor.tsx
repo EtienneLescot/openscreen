@@ -82,6 +82,15 @@ import {
 } from "./types";
 import VideoPlayback, { VideoPlaybackRef } from "./VideoPlayback";
 
+function isClickInteractionType(interactionType: string | null | undefined) {
+	return (
+		interactionType === "click" ||
+		interactionType === "double-click" ||
+		interactionType === "right-click" ||
+		interactionType === "middle-click"
+	);
+}
+
 export default function VideoEditor() {
 	const {
 		state: editorState,
@@ -156,7 +165,19 @@ export default function VideoEditor() {
 		useCursorTelemetry(cursorTelemetrySourcePath);
 	const { data: cursorRecordingData, error: cursorRecordingDataError } =
 		useCursorRecordingData(cursorTelemetrySourcePath);
-	const cursorClickTimestamps = useMemo<number[]>(() => [], []);
+	const cursorClickTimestamps = useMemo<number[]>(() => {
+		const recordingClicks =
+			cursorRecordingData?.samples
+				.filter((sample) => isClickInteractionType(sample.interactionType))
+				.map((sample) => sample.timeMs) ?? [];
+		if (recordingClicks.length > 0) {
+			return recordingClicks;
+		}
+
+		return cursorTelemetry
+			.filter((sample) => isClickInteractionType(sample.interactionType))
+			.map((sample) => sample.timeMs);
+	}, [cursorRecordingData, cursorTelemetry]);
 
 	// Cursor & motion blur visual settings (non-undoable preferences)
 	const [showCursor, setShowCursor] = useState(true);
@@ -1947,6 +1968,8 @@ export default function VideoEditor() {
 											onBlurDataChange={handleBlurDataPreviewChange}
 											onBlurDataCommit={commitState}
 											cursorTelemetry={cursorTelemetry}
+											cursorHighlight={effectiveCursorHighlight}
+											cursorClickTimestamps={cursorClickTimestamps}
 											showCursor={showCursor}
 											cursorSize={cursorSize}
 											cursorSmoothing={cursorSmoothing}

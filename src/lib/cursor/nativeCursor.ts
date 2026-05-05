@@ -59,6 +59,43 @@ function clamp(value: number, min: number, max: number) {
 
 const NATIVE_CURSOR_CLICK_ANIMATION_MS = 140;
 const NATIVE_CURSOR_MOTION_BLUR_MAX_PX = 6;
+const nativeCursorAssetMapCache = new WeakMap<
+	CursorRecordingData,
+	Map<string, NativeCursorAsset>
+>();
+
+function findNativeCursorSampleIndexAtOrBefore(samples: CursorRecordingSample[], timeMs: number) {
+	let low = 0;
+	let high = samples.length - 1;
+	let result = -1;
+
+	while (low <= high) {
+		const middle = low + Math.floor((high - low) / 2);
+		if (samples[middle].timeMs <= timeMs) {
+			result = middle;
+			low = middle + 1;
+		} else {
+			high = middle - 1;
+		}
+	}
+
+	return result;
+}
+
+function getNativeCursorAssetMap(recordingData: CursorRecordingData) {
+	const cached = nativeCursorAssetMapCache.get(recordingData);
+	if (cached) {
+		return cached;
+	}
+
+	const assetMap = new Map(recordingData.assets.map((asset) => [asset.id, asset]));
+	nativeCursorAssetMapCache.set(recordingData, assetMap);
+	return assetMap;
+}
+
+function getNativeCursorAsset(recordingData: CursorRecordingData, assetId: string) {
+	return getNativeCursorAssetMap(recordingData).get(assetId) ?? null;
+}
 
 interface PrettyNativeCursorAsset {
 	imageDataUrl: string;
@@ -296,12 +333,12 @@ export function getNativeCursorClickBounceProgress(
 		return 0;
 	}
 
-	for (let index = recordingData.samples.length - 1; index >= 0; index -= 1) {
+	for (
+		let index = findNativeCursorSampleIndexAtOrBefore(recordingData.samples, timeMs);
+		index >= 0;
+		index -= 1
+	) {
 		const sample = recordingData.samples[index];
-		if (sample.timeMs > timeMs) {
-			continue;
-		}
-
 		const ageMs = timeMs - sample.timeMs;
 		if (ageMs > NATIVE_CURSOR_CLICK_ANIMATION_MS) {
 			return 0;
@@ -397,17 +434,15 @@ export function resolveActiveNativeCursorFrame(
 		return null;
 	}
 
-	for (let index = recordingData.samples.length - 1; index >= 0; index -= 1) {
+	const index = findNativeCursorSampleIndexAtOrBefore(recordingData.samples, timeMs);
+	if (index >= 0) {
 		const sample = recordingData.samples[index];
-		if (sample.timeMs > timeMs) {
-			continue;
-		}
 
 		if (sample.visible === false || !sample.assetId) {
 			return null;
 		}
 
-		const asset = recordingData.assets.find((candidate) => candidate.id === sample.assetId);
+		const asset = getNativeCursorAsset(recordingData, sample.assetId);
 		if (!asset) {
 			return null;
 		}
@@ -427,14 +462,7 @@ export function resolveInterpolatedNativeCursorFrame(
 	}
 
 	const samples = recordingData.samples;
-	let activeIndex = -1;
-
-	for (let index = samples.length - 1; index >= 0; index -= 1) {
-		if (samples[index].timeMs <= timeMs) {
-			activeIndex = index;
-			break;
-		}
-	}
+	const activeIndex = findNativeCursorSampleIndexAtOrBefore(samples, timeMs);
 
 	if (activeIndex < 0) {
 		return null;
@@ -445,7 +473,7 @@ export function resolveInterpolatedNativeCursorFrame(
 		return null;
 	}
 
-	const asset = recordingData.assets.find((candidate) => candidate.id === activeSample.assetId);
+	const asset = getNativeCursorAsset(recordingData, activeSample.assetId);
 	if (!asset) {
 		return null;
 	}

@@ -602,6 +602,7 @@ export class FrameRenderer {
 			sample: displaySample,
 		});
 		if (!projectedPoint) {
+			resetNativeCursorSmoothingState(this.nativeCursorSmoothingState);
 			resetNativeCursorMotionBlurState(this.nativeCursorMotionBlurState);
 			return;
 		}
