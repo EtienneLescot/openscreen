@@ -1,0 +1,317 @@
+#include "mf_encoder.h"
+
+#include <mfapi.h>
+#include <mferror.h>
+#include <propvarutil.h>
+
+#include <algorithm>
+#include <cstring>
+#include <iostream>
+
+namespace {
+
+bool succeeded(HRESULT hr, const char* label) {
+    if (SUCCEEDED(hr)) {
+        return true;
+    }
+
+    std::cerr << "ERROR: " << label << " failed (hr=0x" << std::hex << hr << std::dec << ")"
+              << std::endl;
+    return false;
+}
+
+void setFrameSize(IMFMediaType* type, UINT32 width, UINT32 height) {
+    MFSetAttributeSize(type, MF_MT_FRAME_SIZE, width, height);
+}
+
+void setFrameRate(IMFMediaType* type, UINT32 fps) {
+    MFSetAttributeRatio(type, MF_MT_FRAME_RATE, fps, 1);
+}
+
+void setPixelAspectRatio(IMFMediaType* type) {
+    MFSetAttributeRatio(type, MF_MT_PIXEL_ASPECT_RATIO, 1, 1);
+}
+
+void setAudioFormat(IMFMediaType* type, UINT32 channels, UINT32 sampleRate, UINT32 bitsPerSample) {
+    type->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, channels);
+    type->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, sampleRate);
+    type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, bitsPerSample);
+}
+
+} // namespace
+
+MFEncoder::~MFEncoder() {
+    finalize();
+}
+
+bool MFEncoder::initialize(
+    const std::wstring& outputPath,
+    int width,
+    int height,
+    int fps,
+    int bitrate,
+    ID3D11Device* device,
+    ID3D11DeviceContext* context,
+    const AudioInputFormat* audioFormat) {
+    width_ = (std::max(2, width) / 2) * 2;
+    height_ = (std::max(2, height) / 2) * 2;
+    fps_ = std::max(1, fps);
+    device_ = device;
+    context_ = context;
+
+    if (!succeeded(MFStartup(MF_VERSION), "MFStartup")) {
+        return false;
+    }
+
+    Microsoft::WRL::ComPtr<IMFMediaType> outputType;
+    if (!succeeded(MFCreateMediaType(&outputType), "MFCreateMediaType(output)")) {
+        return false;
+    }
+    outputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    outputType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_H264);
+    outputType->SetUINT32(MF_MT_AVG_BITRATE, static_cast<UINT32>(std::max(1, bitrate)));
+    outputType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+    setFrameSize(outputType.Get(), static_cast<UINT32>(width_), static_cast<UINT32>(height_));
+    setFrameRate(outputType.Get(), static_cast<UINT32>(fps_));
+    setPixelAspectRatio(outputType.Get());
+
+    if (!succeeded(MFCreateSinkWriterFromURL(outputPath.c_str(), nullptr, nullptr, &sinkWriter_),
+                   "MFCreateSinkWriterFromURL")) {
+        return false;
+    }
+    if (!succeeded(sinkWriter_->AddStream(outputType.Get(), &videoStreamIndex_), "AddStream")) {
+        return false;
+    }
+
+    if (audioFormat && !configureAudioStream(*audioFormat)) {
+        return false;
+    }
+
+    Microsoft::WRL::ComPtr<IMFMediaType> inputType;
+    if (!succeeded(MFCreateMediaType(&inputType), "MFCreateMediaType(input)")) {
+        return false;
+    }
+    inputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+    inputType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+    inputType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+    inputType->SetUINT32(MF_MT_DEFAULT_STRIDE, static_cast<UINT32>(width_ * 4));
+    setFrameSize(inputType.Get(), static_cast<UINT32>(width_), static_cast<UINT32>(height_));
+    setFrameRate(inputType.Get(), static_cast<UINT32>(fps_));
+    setPixelAspectRatio(inputType.Get());
+
+    if (!succeeded(sinkWriter_->SetInputMediaType(videoStreamIndex_, inputType.Get(), nullptr),
+                   "SetInputMediaType")) {
+        return false;
+    }
+    if (!succeeded(sinkWriter_->BeginWriting(), "BeginWriting")) {
+        return false;
+    }
+
+    return true;
+}
+
+bool MFEncoder::configureAudioStream(const AudioInputFormat& audioFormat) {
+    if (!sinkWriter_) {
+        return false;
+    }
+    if (audioFormat.sampleRate == 0 || audioFormat.channels == 0 || audioFormat.blockAlign == 0) {
+        std::cerr << "ERROR: Invalid audio input format" << std::endl;
+        return false;
+    }
+
+    const UINT32 bitsPerSample = std::max<UINT32>(8, audioFormat.bitsPerSample);
+    const UINT32 aacBytesPerSecond = 24'000;
+
+    Microsoft::WRL::ComPtr<IMFMediaType> outputType;
+    if (!succeeded(MFCreateMediaType(&outputType), "MFCreateMediaType(audio output)")) {
+        return false;
+    }
+    outputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    outputType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC);
+    setAudioFormat(outputType.Get(), audioFormat.channels, audioFormat.sampleRate, 16);
+    outputType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, aacBytesPerSecond);
+    outputType->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0);
+
+    if (!succeeded(sinkWriter_->AddStream(outputType.Get(), &audioStreamIndex_), "AddStream(audio)")) {
+        return false;
+    }
+
+    Microsoft::WRL::ComPtr<IMFMediaType> inputType;
+    if (!succeeded(MFCreateMediaType(&inputType), "MFCreateMediaType(audio input)")) {
+        return false;
+    }
+    inputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    inputType->SetGUID(MF_MT_SUBTYPE, audioFormat.subtype);
+    setAudioFormat(inputType.Get(), audioFormat.channels, audioFormat.sampleRate, bitsPerSample);
+    inputType->SetUINT32(MF_MT_AUDIO_BLOCK_ALIGNMENT, audioFormat.blockAlign);
+    inputType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, audioFormat.avgBytesPerSec);
+    inputType->SetUINT32(MF_MT_ALL_SAMPLES_INDEPENDENT, TRUE);
+
+    if (!succeeded(sinkWriter_->SetInputMediaType(audioStreamIndex_, inputType.Get(), nullptr),
+                   "SetInputMediaType(audio)")) {
+        return false;
+    }
+
+    hasAudioStream_ = true;
+    return true;
+}
+
+bool MFEncoder::ensureStagingTexture(ID3D11Texture2D* texture) {
+    if (stagingTexture_) {
+        return true;
+    }
+
+    D3D11_TEXTURE2D_DESC desc{};
+    texture->GetDesc(&desc);
+    desc.Width = static_cast<UINT>(width_);
+    desc.Height = static_cast<UINT>(height_);
+    desc.MipLevels = 1;
+    desc.ArraySize = 1;
+    desc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    desc.SampleDesc.Count = 1;
+    desc.SampleDesc.Quality = 0;
+    desc.Usage = D3D11_USAGE_STAGING;
+    desc.BindFlags = 0;
+    desc.CPUAccessFlags = D3D11_CPU_ACCESS_READ;
+    desc.MiscFlags = 0;
+
+    return succeeded(device_->CreateTexture2D(&desc, nullptr, &stagingTexture_),
+                     "CreateTexture2D(staging)");
+}
+
+bool MFEncoder::copyFrameToBuffer(ID3D11Texture2D* texture, BYTE* destination, DWORD destinationSize) {
+    if (!ensureStagingTexture(texture)) {
+        return false;
+    }
+
+    context_->CopyResource(stagingTexture_.Get(), texture);
+
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (!succeeded(context_->Map(stagingTexture_.Get(), 0, D3D11_MAP_READ, 0, &mapped), "Map")) {
+        return false;
+    }
+
+    const DWORD rowBytes = static_cast<DWORD>(width_ * 4);
+    const DWORD requiredBytes = rowBytes * static_cast<DWORD>(height_);
+    if (destinationSize < requiredBytes) {
+        context_->Unmap(stagingTexture_.Get(), 0);
+        std::cerr << "ERROR: Media Foundation buffer is too small" << std::endl;
+        return false;
+    }
+
+    auto* source = static_cast<const BYTE*>(mapped.pData);
+    for (int y = 0; y < height_; y += 1) {
+        std::memcpy(destination + rowBytes * y, source + mapped.RowPitch * y, rowBytes);
+    }
+
+    context_->Unmap(stagingTexture_.Get(), 0);
+    return true;
+}
+
+bool MFEncoder::writeFrame(ID3D11Texture2D* texture, int64_t timestampHns) {
+    std::scoped_lock writerLock(writerMutex_);
+    if (!sinkWriter_ || finalized_) {
+        return false;
+    }
+
+    if (firstTimestampHns_ < 0) {
+        firstTimestampHns_ = timestampHns;
+    }
+
+    int64_t sampleTime = timestampHns - firstTimestampHns_;
+    if (sampleTime <= lastTimestampHns_) {
+        sampleTime = lastTimestampHns_ + (10'000'000LL / fps_);
+    }
+    const int64_t sampleDuration = 10'000'000LL / fps_;
+    lastTimestampHns_ = sampleTime;
+
+    Microsoft::WRL::ComPtr<IMFMediaBuffer> buffer;
+    const DWORD frameBytes = static_cast<DWORD>(width_ * height_ * 4);
+    if (!succeeded(MFCreateMemoryBuffer(frameBytes, &buffer), "MFCreateMemoryBuffer")) {
+        return false;
+    }
+
+    BYTE* data = nullptr;
+    DWORD maxLength = 0;
+    DWORD currentLength = 0;
+    if (!succeeded(buffer->Lock(&data, &maxLength, &currentLength), "IMFMediaBuffer::Lock")) {
+        return false;
+    }
+
+    const bool copied = copyFrameToBuffer(texture, data, maxLength);
+    buffer->Unlock();
+    if (!copied) {
+        return false;
+    }
+    buffer->SetCurrentLength(frameBytes);
+
+    Microsoft::WRL::ComPtr<IMFSample> sample;
+    if (!succeeded(MFCreateSample(&sample), "MFCreateSample")) {
+        return false;
+    }
+    sample->AddBuffer(buffer.Get());
+    sample->SetSampleTime(sampleTime);
+    sample->SetSampleDuration(sampleDuration);
+
+    return succeeded(sinkWriter_->WriteSample(videoStreamIndex_, sample.Get()), "WriteSample");
+}
+
+bool MFEncoder::writeAudio(const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns) {
+    std::scoped_lock writerLock(writerMutex_);
+    if (!sinkWriter_ || finalized_ || !hasAudioStream_) {
+        return false;
+    }
+    if (!data || byteCount == 0 || durationHns <= 0) {
+        return true;
+    }
+
+    Microsoft::WRL::ComPtr<IMFMediaBuffer> buffer;
+    if (!succeeded(MFCreateMemoryBuffer(byteCount, &buffer), "MFCreateMemoryBuffer(audio)")) {
+        return false;
+    }
+
+    BYTE* destination = nullptr;
+    DWORD maxLength = 0;
+    DWORD currentLength = 0;
+    if (!succeeded(buffer->Lock(&destination, &maxLength, &currentLength),
+                   "IMFMediaBuffer::Lock(audio)")) {
+        return false;
+    }
+    if (maxLength < byteCount) {
+        buffer->Unlock();
+        std::cerr << "ERROR: Media Foundation audio buffer is too small" << std::endl;
+        return false;
+    }
+    std::memcpy(destination, data, byteCount);
+    buffer->Unlock();
+    buffer->SetCurrentLength(byteCount);
+
+    Microsoft::WRL::ComPtr<IMFSample> sample;
+    if (!succeeded(MFCreateSample(&sample), "MFCreateSample(audio)")) {
+        return false;
+    }
+    sample->AddBuffer(buffer.Get());
+    sample->SetSampleTime(std::max<int64_t>(0, timestampHns));
+    sample->SetSampleDuration(durationHns);
+
+    return succeeded(sinkWriter_->WriteSample(audioStreamIndex_, sample.Get()), "WriteSample(audio)");
+}
+
+bool MFEncoder::finalize() {
+    std::scoped_lock writerLock(writerMutex_);
+    if (finalized_) {
+        return true;
+    }
+
+    finalized_ = true;
+    bool ok = true;
+    if (sinkWriter_) {
+        ok = succeeded(sinkWriter_->Finalize(), "SinkWriter::Finalize");
+        sinkWriter_.Reset();
+    }
+    stagingTexture_.Reset();
+    context_.Reset();
+    device_.Reset();
+    MFShutdown();
+    return ok;
+}

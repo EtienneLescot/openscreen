@@ -54,8 +54,8 @@ const PRETTY_NATIVE_CURSOR_ASSETS: Partial<Record<NativeCursorType, PrettyNative
 		imageDataUrl: arrowUrl,
 		width: 32,
 		height: 32,
-		hotspotX: 5.8,
-		hotspotY: 3.2,
+		hotspotX: 16.25,
+		hotspotY: 15.03,
 	},
 	text: {
 		imageDataUrl: textUrl,
@@ -67,9 +67,9 @@ const PRETTY_NATIVE_CURSOR_ASSETS: Partial<Record<NativeCursorType, PrettyNative
 	pointer: {
 		imageDataUrl: pointerUrl,
 		width: 32,
-		height: 32,
-		hotspotX: 11.8,
-		hotspotY: 2.6,
+		height: 33,
+		hotspotX: 16.65,
+		hotspotY: 14.24,
 	},
 	crosshair: {
 		imageDataUrl: crosshairUrl,
@@ -131,15 +131,15 @@ const PRETTY_NATIVE_CURSOR_ASSETS: Partial<Record<NativeCursorType, PrettyNative
 		imageDataUrl: appStartingUrl,
 		width: 32,
 		height: 32,
-		hotspotX: 5.8,
-		hotspotY: 3.2,
+		hotspotX: 7.25,
+		hotspotY: 4.03,
 	},
 	help: {
 		imageDataUrl: helpUrl,
 		width: 32,
 		height: 32,
-		hotspotX: 5.8,
-		hotspotY: 3.2,
+		hotspotX: 7.25,
+		hotspotY: 4.03,
 	},
 	"up-arrow": {
 		imageDataUrl: upArrowUrl,

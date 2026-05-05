@@ -40,7 +40,7 @@ export class VideoMuxer {
 
 		// Create audio source if needed
 		if (this.hasAudio) {
-			this.audioSource = new EncodedAudioPacketSource("opus");
+			this.audioSource = new EncodedAudioPacketSource("aac");
 			this.output.addAudioTrack(this.audioSource);
 		}
 

@@ -72,6 +72,24 @@ interface Window {
 			error?: string;
 		}>;
 		setRecordingState: (recording: boolean, recordingId?: number) => Promise<void>;
+		isNativeWindowsCaptureAvailable: () => Promise<{
+			success: boolean;
+			available: boolean;
+			helperPath?: string;
+			reason?: string;
+			error?: string;
+		}>;
+		startNativeWindowsRecording: (
+			request: import("../src/lib/nativeWindowsRecording").NativeWindowsRecordingRequest,
+		) => Promise<import("../src/lib/nativeWindowsRecording").NativeWindowsRecordingStartResult>;
+		stopNativeWindowsRecording: (discard?: boolean) => Promise<{
+			success: boolean;
+			path?: string;
+			session?: import("../src/lib/recordingSession").RecordingSession;
+			message?: string;
+			discarded?: boolean;
+			error?: string;
+		}>;
 		discardCursorTelemetry: (recordingId: number) => Promise<void>;
 		getCursorTelemetry: (videoPath?: string) => Promise<{
 			success: boolean;

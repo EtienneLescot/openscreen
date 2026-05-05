@@ -83,3 +83,37 @@ Together, the scripts make it quick to inspect:
 - whether the real OpenScreen preview renders the same cursor behavior as the diagnostic pipeline
 
 They are not a full substitute for an end-to-end manual recording pass. Before shipping cursor changes, also test a real capture session and export from the packaged app.
+
+## Native Windows capture backend
+
+The app now routes Windows recordings through an external WGC helper instead of Electron `getDisplayMedia`. This is meant to remove the coordinate and clock split that made the reconstructed cursor drift in the preview/export path.
+
+Current native availability rules:
+
+- Windows 10 build 19041 or newer
+- a helper executable is available
+
+The helper currently implements display video capture and system audio loopback. Window capture, microphone audio, and webcam capture are part of the native recorder roadmap and fail explicitly instead of silently falling back to Electron capture on Windows.
+
+Build OpenScreen's helper locally:
+
+```powershell
+npm run build:native:win
+```
+
+Smoke-test the helper directly:
+
+```powershell
+npm run test:wgc-helper:win
+npm run test:wgc-audio:win
+```
+
+For local diagnostics with another compatible helper, point OpenScreen at that executable:
+
+```powershell
+$env:OPENSCREEN_WGC_CAPTURE_EXE = "C:\path\to\wgc-capture.exe"
+npm run build-vite
+npm run dev
+```
+
+The helper receives one JSON config argument, emits JSON lifecycle events, prints the legacy `Recording started` marker, accepts `stop` on stdin, and prints `Recording stopped. Output path: <path>`. See `electron/native/README.md` for the exact contract and build output paths.
