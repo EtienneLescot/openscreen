@@ -37,6 +37,7 @@ Current V2 JSON shape:
   "microphoneGain": 1.4,
   "webcamEnabled": true,
   "webcamDeviceId": "default",
+  "webcamDeviceName": "Camera (NVIDIA Broadcast)",
   "webcamWidth": 1280,
   "webcamHeight": 720,
   "webcamFps": 30,
@@ -46,7 +47,7 @@ Current V2 JSON shape:
 }
 ```
 
-The current helper implementation supports display/window video capture, system audio loopback, default-microphone capture, and Media Foundation webcam capture. Webcam frames are currently composed into the primary MP4 as a bottom-right picture-in-picture overlay. Browser `deviceId` values do not always map to Media Foundation symbolic links; when the requested webcam is not matched, the helper logs a warning and uses the default webcam.
+The current helper implementation supports display/window video capture, system audio loopback, default-microphone capture, and Media Foundation webcam capture. Webcam frames are currently composed into the primary MP4 as a bottom-right picture-in-picture overlay. Browser `deviceId` values do not always map to Media Foundation symbolic links, so the renderer passes both `webcamDeviceId` and `webcamDeviceName`. The helper treats the Media Foundation friendly name as the preferred stable selector, then tries the browser id, and only falls back to the default webcam with an explicit warning when no requested device matches.
 
 Smoke-test the helper with:
 
@@ -57,4 +58,12 @@ npm run test:wgc-audio:win
 npm run test:wgc-mic:win
 npm run test:wgc-mixed-audio:win
 npm run test:wgc-webcam:win
+```
+
+To validate a specific native webcam manually:
+
+```powershell
+$env:OPENSCREEN_WGC_TEST_WEBCAM_DEVICE_NAME = "NVIDIA Broadcast"
+npm run test:wgc-webcam:win
+Remove-Item Env:OPENSCREEN_WGC_TEST_WEBCAM_DEVICE_NAME
 ```

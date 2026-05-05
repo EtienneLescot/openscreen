@@ -844,6 +844,7 @@ export function registerIpcHandlers(
 					microphoneGain: request.audio.microphone.gain,
 					webcamEnabled: request.webcam.enabled,
 					webcamDeviceId: request.webcam.deviceId ?? null,
+					webcamDeviceName: request.webcam.deviceName ?? null,
 					webcamWidth: request.webcam.width,
 					webcamHeight: request.webcam.height,
 					webcamFps: request.webcam.fps,

@@ -26,6 +26,7 @@ export type NativeWindowsRecordingRequest = {
 	webcam: {
 		enabled: boolean;
 		deviceId?: string;
+		deviceName?: string;
 		width: number;
 		height: number;
 		fps: number;

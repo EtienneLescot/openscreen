@@ -71,6 +71,7 @@ The helper receives a single JSON argument:
   "webcam": {
     "enabled": true,
     "deviceId": "default",
+    "deviceName": "Camera (NVIDIA Broadcast)",
     "width": 1280,
     "height": 720,
     "fps": 30,
@@ -133,6 +134,7 @@ SSOT rules for this phase:
 - `docs/engineering/windows-native-recorder-roadmap.md` is the feature-level contract and phase checklist.
 - `WgcSession::captureWidth()/captureHeight()` is the encoded screen frame size until a dedicated native scaling stage exists.
 - `WasapiLoopbackCapture::inputFormat()` is the runtime audio format source used by `MFEncoder`.
+- The renderer passes both the browser webcam `deviceId` and selected display label as `deviceName`; `electron/native/wgc-capture/src/webcam_capture.*` is the only place that maps those values to Media Foundation devices.
 - No duplicated hard-coded audio format assumptions in `main.cpp`.
 
 ### 3. WASAPI Microphone
@@ -155,6 +157,7 @@ Acceptance:
 - Select requested dimensions/fps or the nearest format accepted by Media Foundation.
 - Convert webcam samples to BGRA and compose them into the primary helper MP4 as an initial bottom-right picture-in-picture overlay.
 - Keep the helper process as the SSOT for screen/window, WASAPI system audio, microphone, webcam, and mux timing.
+- Match the requested webcam through Media Foundation friendly names first, then browser device ids/symbolic links, so UI selection remains stable across Chromium and Windows native device namespaces.
 - Later: promote the same webcam capture source to a separate editable native `webcamVideoPath` if product requirements need post-recording layout edits.
 
 Acceptance:

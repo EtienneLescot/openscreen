@@ -20,7 +20,12 @@ public:
     WebcamCapture(const WebcamCapture&) = delete;
     WebcamCapture& operator=(const WebcamCapture&) = delete;
 
-    bool initialize(const std::wstring& deviceId, int requestedWidth, int requestedHeight, int requestedFps);
+    bool initialize(
+        const std::wstring& deviceId,
+        const std::wstring& deviceName,
+        int requestedWidth,
+        int requestedHeight,
+        int requestedFps);
     bool start();
     void stop();
     bool copyLatestFrame(std::vector<BYTE>& destination, int& width, int& height);
@@ -31,7 +36,7 @@ public:
     const std::wstring& selectedDeviceName() const;
 
 private:
-    bool selectDevice(const std::wstring& deviceId);
+    bool selectDevice(const std::wstring& deviceId, const std::wstring& deviceName);
     bool configureReader(int requestedWidth, int requestedHeight, int requestedFps);
     void captureLoop();
 

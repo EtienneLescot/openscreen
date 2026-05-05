@@ -40,6 +40,7 @@ struct CaptureConfig {
     std::string microphoneDeviceId;
     double microphoneGain = 1.0;
     std::string webcamDeviceId;
+    std::string webcamDeviceName;
     int webcamWidth = 0;
     int webcamHeight = 0;
     int webcamFps = 0;
@@ -53,6 +54,17 @@ std::wstring utf8ToWide(const std::string& value) {
     const int size = MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0);
     std::wstring result(static_cast<size_t>(size), L'\0');
     MultiByteToWideChar(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), size);
+    return result;
+}
+
+std::string wideToUtf8(const std::wstring& value) {
+    if (value.empty()) {
+        return {};
+    }
+
+    const int size = WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), nullptr, 0, nullptr, nullptr);
+    std::string result(static_cast<size_t>(size), '\0');
+    WideCharToMultiByte(CP_UTF8, 0, value.data(), static_cast<int>(value.size()), result.data(), size, nullptr, nullptr);
     return result;
 }
 
@@ -267,6 +279,7 @@ bool parseConfig(const std::string& json, CaptureConfig& config) {
     config.microphoneDeviceId = findString(json, "microphoneDeviceId");
     config.microphoneGain = findDouble(json, "microphoneGain", 1.0);
     config.webcamDeviceId = findString(json, "webcamDeviceId");
+    config.webcamDeviceName = findString(json, "webcamDeviceName");
     config.webcamWidth = findInt(json, "webcamWidth", 0);
     config.webcamHeight = findInt(json, "webcamHeight", 0);
     config.webcamFps = findInt(json, "webcamFps", 0);
@@ -348,6 +361,7 @@ int main(int argc, char* argv[]) {
     if (config.webcamEnabled) {
         if (!webcamCapture.initialize(
                 utf8ToWide(config.webcamDeviceId),
+                utf8ToWide(config.webcamDeviceName),
                 config.webcamWidth,
                 config.webcamHeight,
                 config.webcamFps > 0 ? config.webcamFps : config.fps)) {
@@ -356,7 +370,9 @@ int main(int argc, char* argv[]) {
         }
         std::cout << "{\"event\":\"webcam-format\",\"schemaVersion\":2,\"width\":" << webcamCapture.width()
                   << ",\"height\":" << webcamCapture.height()
-                  << ",\"fps\":" << webcamCapture.fps() << "}" << std::endl;
+                  << ",\"fps\":" << webcamCapture.fps()
+                  << ",\"deviceName\":\"" << jsonEscape(wideToUtf8(webcamCapture.selectedDeviceName()))
+                  << "\"}" << std::endl;
     }
 
     WasapiLoopbackCapture loopbackCapture;

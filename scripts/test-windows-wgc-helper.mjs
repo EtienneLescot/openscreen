@@ -190,6 +190,7 @@ const config = {
 	microphoneGain: 1.4,
 	webcamEnabled: WITH_WEBCAM,
 	webcamDeviceId: process.env.OPENSCREEN_WGC_TEST_WEBCAM_DEVICE_ID ?? "",
+	webcamDeviceName: process.env.OPENSCREEN_WGC_TEST_WEBCAM_DEVICE_NAME ?? "",
 	webcamWidth: 640,
 	webcamHeight: 360,
 	webcamFps: 30,

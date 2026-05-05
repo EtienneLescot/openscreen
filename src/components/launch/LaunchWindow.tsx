@@ -107,6 +107,7 @@ export function LaunchWindow() {
 		setWebcamEnabled,
 		webcamDeviceId,
 		setWebcamDeviceId,
+		setWebcamDeviceName,
 	} = useScreenRecorder();
 
 	const showMicControls = microphoneEnabled && !recording;
@@ -148,14 +149,16 @@ export function LaunchWindow() {
 	const selectedMicLabel =
 		micDevices.find((d) => d.deviceId === (microphoneDeviceId || selectedMicId))?.label ||
 		t("audio.defaultMicrophone");
+	const selectedCameraDevice = cameraDevices.find(
+		(d) => d.deviceId === (webcamDeviceId || selectedCameraId),
+	);
 	const selectedCameraLabel = isCameraDevicesLoading
 		? t("webcam.searching")
 		: cameraDevicesError
 			? t("webcam.unavailable")
 			: cameraDevices.length === 0
 				? t("webcam.noneFound")
-				: cameraDevices.find((d) => d.deviceId === (webcamDeviceId || selectedCameraId))?.label ||
-					t("webcam.defaultCamera");
+				: selectedCameraDevice?.label || t("webcam.defaultCamera");
 
 	const { level } = useAudioLevelMeter({
 		enabled: showMicControls,
@@ -171,8 +174,9 @@ export function LaunchWindow() {
 	useEffect(() => {
 		if (selectedCameraId) {
 			setWebcamDeviceId(selectedCameraId);
+			setWebcamDeviceName(cameraDevices.find((d) => d.deviceId === selectedCameraId)?.label);
 		}
-	}, [selectedCameraId, setWebcamDeviceId]);
+	}, [selectedCameraId, cameraDevices, setWebcamDeviceId, setWebcamDeviceName]);
 
 	useEffect(() => {
 		if (!import.meta.env.DEV) {
@@ -446,8 +450,12 @@ export function LaunchWindow() {
 											<select
 												value={webcamDeviceId || selectedCameraId}
 												onChange={(e) => {
+													const device = cameraDevices.find(
+														(item) => item.deviceId === e.target.value,
+													);
 													setSelectedCameraId(e.target.value);
 													setWebcamDeviceId(e.target.value);
+													setWebcamDeviceName(device?.label);
 												}}
 												className="w-full appearance-none bg-white/5 text-white text-[11px] rounded-lg pl-2 pr-6 py-1 border border-white/10 outline-none hover:bg-white/10 transition-colors cursor-pointer"
 											>
@@ -471,8 +479,10 @@ export function LaunchWindow() {
 									<select
 										value={webcamDeviceId || selectedCameraId}
 										onChange={(e) => {
+											const device = cameraDevices.find((item) => item.deviceId === e.target.value);
 											setSelectedCameraId(e.target.value);
 											setWebcamDeviceId(e.target.value);
+											setWebcamDeviceName(device?.label);
 										}}
 										className="sr-only"
 									>

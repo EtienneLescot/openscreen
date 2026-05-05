@@ -51,20 +51,25 @@ WebcamCapture::~WebcamCapture() {
     stop();
 }
 
-bool WebcamCapture::initialize(const std::wstring& deviceId, int requestedWidth, int requestedHeight, int requestedFps) {
+bool WebcamCapture::initialize(
+    const std::wstring& deviceId,
+    const std::wstring& deviceName,
+    int requestedWidth,
+    int requestedHeight,
+    int requestedFps) {
     fps_ = std::clamp(requestedFps > 0 ? requestedFps : 30, 1, 60);
     if (!succeeded(MFStartup(MF_VERSION), "MFStartup(webcam)")) {
         return false;
     }
     mfStarted_ = true;
-    if (!selectDevice(deviceId)) {
+    if (!selectDevice(deviceId, deviceName)) {
         return false;
     }
 
     return configureReader(requestedWidth, requestedHeight, fps_);
 }
 
-bool WebcamCapture::selectDevice(const std::wstring& deviceId) {
+bool WebcamCapture::selectDevice(const std::wstring& deviceId, const std::wstring& deviceName) {
     Microsoft::WRL::ComPtr<IMFAttributes> attributes;
     if (!succeeded(MFCreateAttributes(&attributes, 1), "MFCreateAttributes(webcam enumeration)")) {
         return false;
@@ -88,22 +93,32 @@ bool WebcamCapture::selectDevice(const std::wstring& deviceId) {
     }
 
     UINT32 selectedIndex = 0;
+    bool matched = false;
+    auto matchesRequestedDevice = [&](const std::wstring& name, const std::wstring& symbolicLink) {
+        if (!deviceName.empty() &&
+            (containsInsensitive(name, deviceName) || containsInsensitive(symbolicLink, deviceName))) {
+            return true;
+        }
+        if (!deviceId.empty() &&
+            (containsInsensitive(symbolicLink, deviceId) || containsInsensitive(name, deviceId))) {
+            return true;
+        }
+        return false;
+    };
+
     for (UINT32 index = 0; index < deviceCount; index += 1) {
         const std::wstring name = readAllocatedString(devices[index], MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME);
         const std::wstring symbolicLink = readAllocatedString(devices[index], MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK);
-        if (!deviceId.empty() && (containsInsensitive(symbolicLink, deviceId) || containsInsensitive(name, deviceId))) {
+        if (matchesRequestedDevice(name, symbolicLink)) {
             selectedIndex = index;
+            matched = true;
             break;
         }
     }
 
-    if (!deviceId.empty() && selectedIndex == 0) {
-        const std::wstring firstName = readAllocatedString(devices[0], MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME);
-        const std::wstring firstLink = readAllocatedString(devices[0], MF_DEVSOURCE_ATTRIBUTE_SOURCE_TYPE_VIDCAP_SYMBOLIC_LINK);
-        if (!containsInsensitive(firstLink, deviceId) && !containsInsensitive(firstName, deviceId)) {
-            std::cerr << "WARNING: Requested webcam device was not found by Media Foundation; using default webcam"
-                      << std::endl;
-        }
+    if ((!deviceId.empty() || !deviceName.empty()) && !matched) {
+        std::cerr << "WARNING: Requested webcam device was not found by Media Foundation; using default webcam"
+                  << std::endl;
     }
 
     selectedDeviceName_ = readAllocatedString(devices[selectedIndex], MF_DEVSOURCE_ATTRIBUTE_FRIENDLY_NAME);
