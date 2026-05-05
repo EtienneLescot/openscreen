@@ -41,7 +41,7 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		this.assets.clear();
 		this.samples = [];
 		this.lineBuffer = "";
-		this.startTimeMs = Date.now();
+		this.startTimeMs = this.options.startTimeMs ?? Date.now();
 		this.sampleCount = 0;
 		this.outOfBoundsSampleCount = 0;
 

@@ -214,10 +214,6 @@ try {
 	await editorWindow.waitForLoadState("domcontentloaded");
 	await editorWindow.waitForSelector("video", { state: "attached", timeout: 30_000 });
 	await editorWindow.waitForSelector("canvas", { state: "attached", timeout: 30_000 });
-	await editorWindow.waitForSelector('img[aria-hidden="true"]', {
-		state: "attached",
-		timeout: 30_000,
-	});
 
 	await editorWindow.setViewportSize({ width: 1280, height: 800 });
 	await editorWindow.evaluate(async () => {

@@ -6,6 +6,7 @@ interface TelemetryRecordingSessionOptions {
 	getDisplayBounds: () => Rectangle | null;
 	maxSamples: number;
 	sampleIntervalMs: number;
+	startTimeMs?: number;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -21,7 +22,7 @@ export class TelemetryRecordingSession implements CursorRecordingSession {
 
 	async start(): Promise<void> {
 		this.samples = [];
-		this.startTimeMs = Date.now();
+		this.startTimeMs = this.options.startTimeMs ?? Date.now();
 		this.captureSample();
 		this.interval = setInterval(() => {
 			this.captureSample();

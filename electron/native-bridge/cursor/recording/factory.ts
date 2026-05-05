@@ -9,6 +9,7 @@ interface CreateCursorRecordingSessionOptions {
 	platform: NodeJS.Platform;
 	sampleIntervalMs: number;
 	sourceId?: string | null;
+	startTimeMs?: number;
 }
 
 export function createCursorRecordingSession(
@@ -20,6 +21,7 @@ export function createCursorRecordingSession(
 			maxSamples: options.maxSamples,
 			sampleIntervalMs: options.sampleIntervalMs,
 			sourceId: options.sourceId,
+			startTimeMs: options.startTimeMs,
 		});
 	}
 
@@ -27,5 +29,6 @@ export function createCursorRecordingSession(
 		getDisplayBounds: options.getDisplayBounds,
 		maxSamples: options.maxSamples,
 		sampleIntervalMs: options.sampleIntervalMs,
+		startTimeMs: options.startTimeMs,
 	});
 }

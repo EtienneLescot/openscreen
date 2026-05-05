@@ -607,7 +607,7 @@ export function registerIpcHandlers(
 		}
 	});
 
-	ipcMain.handle("set-recording-state", async (_, recording: boolean) => {
+	ipcMain.handle("set-recording-state", async (_, recording: boolean, recordingId?: number) => {
 		if (recording) {
 			if (cursorRecordingSession) {
 				pendingCursorRecordingData = await cursorRecordingSession.stop();
@@ -621,6 +621,8 @@ export function registerIpcHandlers(
 				platform: process.platform,
 				sampleIntervalMs: CURSOR_SAMPLE_INTERVAL_MS,
 				sourceId: getSelectedSourceId(),
+				startTimeMs:
+					typeof recordingId === "number" && Number.isFinite(recordingId) ? recordingId : undefined,
 			});
 
 			try {
@@ -743,6 +745,7 @@ export function registerIpcHandlers(
 				return { success: false, canceled: true };
 			}
 
+			approveFilePath(result.filePaths[0]);
 			currentProjectPath = null;
 			return {
 				success: true,
@@ -779,6 +782,32 @@ export function registerIpcHandlers(
 				console.error(`Error opening directory: ${path.dirname(filePath)}`, openError);
 				return { success: false, error: String(error) };
 			}
+		}
+	});
+
+	ipcMain.handle("read-binary-file", async (_, filePath: string) => {
+		try {
+			const normalizedPath = await approveReadableVideoPath(filePath);
+			if (!normalizedPath) {
+				return {
+					success: false,
+					message: "File path is not approved or is not a supported video file",
+				};
+			}
+
+			const data = await fs.readFile(normalizedPath);
+			return {
+				success: true,
+				data: data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength),
+				path: normalizedPath,
+			};
+		} catch (error) {
+			console.error("Failed to read binary file:", error);
+			return {
+				success: false,
+				message: "Failed to read binary file",
+				error: String(error),
+			};
 		}
 	});
 

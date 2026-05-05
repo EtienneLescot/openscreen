@@ -27,11 +27,14 @@ export interface ActiveNativeCursorFrame {
 }
 
 interface ProjectNativeCursorOptions {
-	cameraContainer: Container;
 	cropRegion: CropRegion;
 	maskRect: { x: number; y: number; width: number; height: number };
 	videoContainerPosition: { x: number; y: number };
 	sample: CursorRecordingSample;
+}
+
+interface ProjectNativeCursorToStageOptions extends ProjectNativeCursorOptions {
+	cameraContainer: Container;
 }
 
 function clamp(value: number, min: number, max: number) {
@@ -264,8 +267,7 @@ export function resolveInterpolatedNativeCursorFrame(
 	};
 }
 
-export function projectNativeCursorToStage({
-	cameraContainer,
+export function projectNativeCursorToLocal({
 	cropRegion,
 	maskRect,
 	videoContainerPosition,
@@ -276,11 +278,20 @@ export function projectNativeCursorToStage({
 		return null;
 	}
 
-	const localPoint = new Point(
+	return new Point(
 		videoContainerPosition.x + maskRect.x + croppedPosition.cx * maskRect.width,
 		videoContainerPosition.y + maskRect.y + croppedPosition.cy * maskRect.height,
 	);
+}
 
+export function projectNativeCursorToStage({
+	cameraContainer,
+	...options
+}: ProjectNativeCursorToStageOptions) {
+	const localPoint = projectNativeCursorToLocal(options);
+	if (!localPoint) {
+		return null;
+	}
 	return cameraContainer.toGlobal(localPoint);
 }
 

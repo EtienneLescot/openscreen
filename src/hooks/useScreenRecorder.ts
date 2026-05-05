@@ -719,6 +719,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				return;
 			}
 
+			recordingId.current = Date.now();
+			const activeRecordingId = recordingId.current;
 			screenRecorder.current = createRecorderHandle(stream.current, {
 				mimeType,
 				videoBitsPerSecond,
@@ -741,9 +743,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				});
 			}
 
-			recordingId.current = Date.now();
 			accumulatedDurationMs.current = 0;
-			segmentStartedAt.current = Date.now();
+			segmentStartedAt.current = activeRecordingId;
 			allowAutoFinalize.current = true;
 			setRecording(true);
 			setPaused(false);
@@ -752,7 +753,6 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 			const activeScreenRecorder = screenRecorder.current;
 			const activeWebcamRecorder = webcamRecorder.current;
-			const activeRecordingId = recordingId.current;
 			if (activeScreenRecorder) {
 				activeScreenRecorder.recorder.addEventListener(
 					"stop",

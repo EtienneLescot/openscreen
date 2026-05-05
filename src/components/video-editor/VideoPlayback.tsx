@@ -27,7 +27,7 @@ import {
 } from "@/lib/compositeLayout";
 import {
 	hasNativeCursorRecordingData,
-	projectNativeCursorToStage,
+	projectNativeCursorToLocal,
 	resolveInterpolatedNativeCursorFrame,
 	resolveNativeCursorRenderAsset,
 } from "@/lib/cursor/nativeCursor";
@@ -315,7 +315,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		const hasNativeCursorRecordingRef = useRef(false);
 		const cursorRecordingDataRef = useRef(cursorRecordingData);
 		const cropRegionRef = useRef(cropRegion);
-		const nativeCursorImgRef = useRef<HTMLImageElement | null>(null);
+		const nativeCursorSpriteRef = useRef<Sprite | null>(null);
+		const nativeCursorTextureIdRef = useRef<string | null>(null);
 
 		const hasNativeCursorRecording = useMemo(
 			() => hasNativeCursorRecordingData(cursorRecordingData),
@@ -953,6 +954,12 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 				cursorContainerRef.current = cursorContainer;
 				cameraContainer.addChild(cursorContainer);
 
+				const nativeCursorSprite = new Sprite(Texture.EMPTY);
+				nativeCursorSprite.visible = false;
+				nativeCursorSprite.eventMode = "none";
+				nativeCursorSpriteRef.current = nativeCursorSprite;
+				cursorContainer.addChild(nativeCursorSprite);
+
 				// Cursor overlay - rendered above the masked video
 				if (cursorOverlayEnabled) {
 					const cursorOverlay = new PixiCursorOverlay({
@@ -975,6 +982,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 					cursorOverlayRef.current.destroy();
 					cursorOverlayRef.current = null;
 				}
+				nativeCursorSpriteRef.current = null;
+				nativeCursorTextureIdRef.current = null;
 				if (app && app.renderer) {
 					app.destroy(true, {
 						children: true,
@@ -1408,25 +1417,18 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 					);
 				}
 
-				// Update native cursor image position at ticker rate (60fps)
-				const nativeCursorImg = nativeCursorImgRef.current;
-				if (nativeCursorImg) {
-					const cameraContainerRc = cameraContainerRef.current;
+				// Update native cursor sprite in the same PIXI coordinate space as the video.
+				const nativeCursorSprite = nativeCursorSpriteRef.current;
+				if (nativeCursorSprite) {
 					const videoContainerRc = videoContainerRef.current;
-					if (
-						hasNativeCursorRecordingRef.current &&
-						showCursorRef.current &&
-						cameraContainerRc &&
-						videoContainerRc
-					) {
+					if (hasNativeCursorRecordingRef.current && showCursorRef.current && videoContainerRc) {
 						const timeMs = currentTimeRef.current; // already in ms
 						const frame = resolveInterpolatedNativeCursorFrame(
 							cursorRecordingDataRef.current,
 							timeMs,
 						);
 						if (frame) {
-							const projectedPoint = projectNativeCursorToStage({
-								cameraContainer: cameraContainerRc,
+							const projectedPoint = projectNativeCursorToLocal({
 								cropRegion: cropRegionRef.current ?? { x: 0, y: 0, width: 1, height: 1 },
 								maskRect: baseMaskRef.current,
 								videoContainerPosition: {
@@ -1442,23 +1444,25 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 									frame.sample,
 								);
 								const scale = Math.max(0, cursorSizeRef.current);
-								if (nativeCursorImg.dataset.cursorId !== renderAsset.id) {
-									nativeCursorImg.src = renderAsset.imageDataUrl;
-									nativeCursorImg.dataset.cursorId = renderAsset.id;
+								if (nativeCursorTextureIdRef.current !== renderAsset.id) {
+									nativeCursorSprite.texture = Texture.from(renderAsset.imageDataUrl);
+									nativeCursorTextureIdRef.current = renderAsset.id;
 								}
-								nativeCursorImg.style.left = `${projectedPoint.x - renderAsset.hotspotX * scale}px`;
-								nativeCursorImg.style.top = `${projectedPoint.y - renderAsset.hotspotY * scale}px`;
-								nativeCursorImg.style.width = `${renderAsset.width * scale}px`;
-								nativeCursorImg.style.height = `${renderAsset.height * scale}px`;
-								nativeCursorImg.style.display = "block";
+								nativeCursorSprite.position.set(
+									projectedPoint.x - renderAsset.hotspotX * scale,
+									projectedPoint.y - renderAsset.hotspotY * scale,
+								);
+								nativeCursorSprite.width = renderAsset.width * scale;
+								nativeCursorSprite.height = renderAsset.height * scale;
+								nativeCursorSprite.visible = true;
 							} else {
-								nativeCursorImg.style.display = "none";
+								nativeCursorSprite.visible = false;
 							}
 						} else {
-							nativeCursorImg.style.display = "none";
+							nativeCursorSprite.visible = false;
 						}
 					} else {
-						nativeCursorImg.style.display = "none";
+						nativeCursorSprite.visible = false;
 					}
 				}
 
@@ -1750,19 +1754,6 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 								className="absolute rounded-md border border-[#34B27B]/80 bg-[#34B27B]/20 shadow-[0_0_0_1px_rgba(52,178,123,0.35)]"
 								style={{ display: "none", pointerEvents: "none" }}
 							/>
-							{hasNativeCursorRecording ? (
-								<img
-									ref={nativeCursorImgRef}
-									alt=""
-									aria-hidden="true"
-									className="absolute select-none"
-									style={{
-										display: "none",
-										pointerEvents: "none",
-										userSelect: "none",
-									}}
-								/>
-							) : null}
 							{(() => {
 								const filteredAnnotations = (annotationRegions || []).filter((annotation) => {
 									if (

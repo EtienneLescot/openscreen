@@ -49,4 +49,5 @@ export interface WindowsNativeRecordingSessionOptions {
 	maxSamples: number;
 	sampleIntervalMs: number;
 	sourceId?: string | null;
+	startTimeMs?: number;
 }
