@@ -13,6 +13,7 @@
 #include <cctype>
 #include <cstdint>
 #include <iostream>
+#include <memory>
 #include <mutex>
 #include <string>
 #include <thread>
@@ -372,82 +373,78 @@ int main(int argc, char* argv[]) {
         }
     });
 
-    std::mutex microphoneAudioMutex;
-    std::vector<BYTE> latestMicrophoneAudio;
-    std::vector<BYTE> mixedAudioBuffer;
-    std::vector<BYTE> microphoneGainBuffer;
+    std::unique_ptr<AudioMixer> audioMixer;
+    auto startAudioCaptures = [&]() -> bool {
+        if (!audioFormat) {
+            return true;
+        }
 
-    if (config.captureMic) {
-        if (!microphoneCapture.start([&](const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns) {
-                if (stopRequested || !audioFormat) {
-                    return;
-                }
-
-                copyAudioWithGain(
-                    data,
-                    byteCount,
-                    microphoneCapture.inputFormat(),
-                    config.microphoneGain,
-                    microphoneGainBuffer);
-
-                if (config.captureSystemAudio) {
-                    std::scoped_lock lock(microphoneAudioMutex);
-                    latestMicrophoneAudio = microphoneGainBuffer;
-                    return;
-                }
-
-                if (!encoder.writeAudio(
-                        microphoneGainBuffer.data(),
-                        static_cast<DWORD>(microphoneGainBuffer.size()),
-                        timestampHns,
-                        durationHns)) {
+        audioMixer = std::make_unique<AudioMixer>(
+            *audioFormat,
+            config.captureSystemAudio,
+            config.captureMic,
+            config.microphoneGain,
+            [&](const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns) {
+                if (!encoder.writeAudio(data, byteCount, timestampHns, durationHns)) {
                     encodeFailed = true;
                     stopRequested = true;
                     cv.notify_all();
+                    return false;
                 }
-            })) {
-            std::cerr << "ERROR: Failed to start WASAPI microphone capture" << std::endl;
-            return 1;
+                return true;
+            });
+
+        if (!audioMixer->start()) {
+            std::cerr << "ERROR: Failed to start native audio mixer" << std::endl;
+            return false;
         }
-    }
 
-    if (config.captureSystemAudio) {
-        if (!loopbackCapture.start([&](const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns) {
-                if (stopRequested) {
-                    return;
-                }
-
-                const BYTE* encodedData = data;
-                DWORD encodedByteCount = byteCount;
-                if (config.captureMic && audioFormat) {
-                    mixedAudioBuffer.assign(data, data + byteCount);
-                    {
-                        std::scoped_lock lock(microphoneAudioMutex);
-                        mixAudioInPlace(
-                            mixedAudioBuffer,
-                            latestMicrophoneAudio.data(),
-                            static_cast<DWORD>(latestMicrophoneAudio.size()),
-                            *audioFormat);
+        if (config.captureMic) {
+            if (!microphoneCapture.start([&](const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns) {
+                    (void)timestampHns;
+                    (void)durationHns;
+                    if (stopRequested || !audioMixer) {
+                        return;
                     }
-                    encodedData = mixedAudioBuffer.data();
-                    encodedByteCount = static_cast<DWORD>(mixedAudioBuffer.size());
-                }
 
-                if (!encoder.writeAudio(encodedData, encodedByteCount, timestampHns, durationHns)) {
-                    encodeFailed = true;
-                    stopRequested = true;
-                    cv.notify_all();
-                }
-            })) {
-            std::cerr << "ERROR: Failed to start WASAPI loopback capture" << std::endl;
-            microphoneCapture.stop();
-            return 1;
+                    audioMixer->pushMicrophone(data, byteCount);
+                })) {
+                std::cerr << "ERROR: Failed to start WASAPI microphone capture" << std::endl;
+                audioMixer->stop();
+                return false;
+            }
         }
+
+        if (config.captureSystemAudio) {
+            if (!loopbackCapture.start([&](const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns) {
+                    (void)timestampHns;
+                    (void)durationHns;
+                    if (stopRequested || !audioMixer) {
+                        return;
+                    }
+
+                    audioMixer->pushSystem(data, byteCount);
+                })) {
+                std::cerr << "ERROR: Failed to start WASAPI loopback capture" << std::endl;
+                microphoneCapture.stop();
+                audioMixer->stop();
+                return false;
+            }
+        }
+
+        return true;
+    };
+
+    if (!startAudioCaptures()) {
+        return 1;
     }
 
     if (!session.start()) {
         microphoneCapture.stop();
         loopbackCapture.stop();
+        if (audioMixer) {
+            audioMixer->stop();
+        }
         std::cerr << "ERROR: Failed to start WGC session" << std::endl;
         return 1;
     }
@@ -467,9 +464,17 @@ int main(int argc, char* argv[]) {
             }
             microphoneCapture.stop();
             loopbackCapture.stop();
+            if (audioMixer) {
+                audioMixer->stop();
+            }
+            session.stop();
             std::cerr << "ERROR: Timed out waiting for first WGC frame" << std::endl;
             return 1;
         }
+    }
+
+    if (audioMixer) {
+        audioMixer->beginTimeline();
     }
 
     std::cout << "{\"event\":\"recording-started\",\"schemaVersion\":2}" << std::endl;
@@ -484,6 +489,9 @@ int main(int argc, char* argv[]) {
 
     microphoneCapture.stop();
     loopbackCapture.stop();
+    if (audioMixer) {
+        audioMixer->stop();
+    }
     session.stop();
     {
         std::scoped_lock lock(mutex);

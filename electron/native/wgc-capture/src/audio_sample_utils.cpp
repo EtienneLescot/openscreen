@@ -3,6 +3,7 @@
 #include <mfapi.h>
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -26,6 +27,8 @@ T clampTo(double value) {
 
 } // namespace
 
+constexpr int64_t HnsPerSecond = 10'000'000;
+
 bool sameAudioFormatForMixing(const AudioInputFormat& left, const AudioInputFormat& right) {
     return left.subtype == right.subtype &&
            left.sampleRate == right.sampleRate &&
@@ -43,6 +46,7 @@ void copyAudioWithGain(
     std::vector<BYTE>& destination) {
     destination.resize(byteCount);
     if (!source || byteCount == 0) {
+        std::fill(destination.begin(), destination.end(), static_cast<BYTE>(0));
         return;
     }
 
@@ -124,5 +128,164 @@ void mixAudioInPlace(
             output[index] = clampTo<int32_t>(
                 static_cast<double>(output[index]) + static_cast<double>(input[index]));
         }
+    }
+}
+
+AudioMixer::AudioMixer(
+    const AudioInputFormat& format,
+    bool includeSystem,
+    bool includeMicrophone,
+    double microphoneGain,
+    OutputCallback output)
+    : format_(format),
+      includeSystem_(includeSystem),
+      includeMicrophone_(includeMicrophone),
+      microphoneGain_(microphoneGain),
+      output_(std::move(output)) {}
+
+AudioMixer::~AudioMixer() {
+    stop();
+}
+
+bool AudioMixer::start() {
+    if (!output_ || format_.sampleRate == 0 || format_.blockAlign == 0) {
+        return false;
+    }
+
+    stopRequested_ = false;
+    emittedFrames_ = 0;
+    timelineStarted_ = false;
+    thread_ = std::thread([this] {
+        mixLoop();
+    });
+    return true;
+}
+
+void AudioMixer::beginTimeline() {
+    {
+        std::scoped_lock lock(mutex_);
+        systemQueue_.clear();
+        microphoneQueue_.clear();
+        emittedFrames_ = 0;
+        timelineStarted_ = true;
+    }
+    cv_.notify_all();
+}
+
+void AudioMixer::stop() {
+    stopRequested_ = true;
+    cv_.notify_all();
+    if (thread_.joinable()) {
+        thread_.join();
+    }
+}
+
+void AudioMixer::pushSystem(const BYTE* data, DWORD byteCount) {
+    if (!includeSystem_ || stopRequested_) {
+        return;
+    }
+
+    {
+        std::scoped_lock lock(mutex_);
+        append(systemQueue_, data, byteCount, 1.0);
+    }
+    cv_.notify_all();
+}
+
+void AudioMixer::pushMicrophone(const BYTE* data, DWORD byteCount) {
+    if (!includeMicrophone_ || stopRequested_) {
+        return;
+    }
+
+    {
+        std::scoped_lock lock(mutex_);
+        append(microphoneQueue_, data, byteCount, microphoneGain_);
+    }
+    cv_.notify_all();
+}
+
+void AudioMixer::append(std::vector<BYTE>& queue, const BYTE* data, DWORD byteCount, double gain) {
+    if (!data || byteCount == 0) {
+        return;
+    }
+
+    copyAudioWithGain(data, byteCount, format_, gain, gainBuffer_);
+    queue.insert(queue.end(), gainBuffer_.begin(), gainBuffer_.end());
+}
+
+bool AudioMixer::pop(std::vector<BYTE>& queue, std::vector<BYTE>& chunk, size_t byteCount) {
+    if (queue.empty()) {
+        chunk.assign(byteCount, 0);
+        return false;
+    }
+
+    chunk.assign(byteCount, 0);
+    const size_t copiedBytes = std::min(byteCount, queue.size());
+    std::memcpy(chunk.data(), queue.data(), copiedBytes);
+    queue.erase(queue.begin(), queue.begin() + static_cast<std::ptrdiff_t>(copiedBytes));
+    return copiedBytes > 0;
+}
+
+void AudioMixer::mixLoop() {
+    const uint32_t chunkFrames = std::max<uint32_t>(1, format_.sampleRate / 100);
+    const size_t chunkBytes = static_cast<size_t>(chunkFrames) * format_.blockAlign;
+    std::vector<BYTE> mixedChunk;
+    std::vector<BYTE> sourceChunk;
+    std::chrono::steady_clock::time_point audioClockStart;
+    bool audioClockStarted = false;
+
+    while (true) {
+        {
+            std::unique_lock lock(mutex_);
+            cv_.wait_for(lock, std::chrono::milliseconds(20), [&] {
+                const bool hasSystem = !includeSystem_ || systemQueue_.size() >= chunkBytes;
+                const bool hasMicrophone = !includeMicrophone_ || microphoneQueue_.size() >= chunkBytes;
+                const bool hasAnySource = !systemQueue_.empty() || !microphoneQueue_.empty();
+                return stopRequested_.load() ||
+                    (timelineStarted_ && (hasSystem || hasMicrophone) && hasAnySource);
+            });
+
+            if (stopRequested_) {
+                break;
+            }
+            if (!timelineStarted_) {
+                continue;
+            }
+
+            const bool hasAnyQueuedAudio = !systemQueue_.empty() || !microphoneQueue_.empty();
+            if (!hasAnyQueuedAudio) {
+                continue;
+            }
+
+            mixedChunk.assign(chunkBytes, 0);
+            if (includeSystem_) {
+                pop(systemQueue_, sourceChunk, chunkBytes);
+                mixAudioInPlace(mixedChunk, sourceChunk.data(), static_cast<DWORD>(sourceChunk.size()), format_);
+            }
+            if (includeMicrophone_) {
+                pop(microphoneQueue_, sourceChunk, chunkBytes);
+                mixAudioInPlace(mixedChunk, sourceChunk.data(), static_cast<DWORD>(sourceChunk.size()), format_);
+            }
+        }
+
+        if (!audioClockStarted) {
+            audioClockStart = std::chrono::steady_clock::now();
+            audioClockStarted = true;
+        }
+
+        const int64_t timestampHns =
+            static_cast<int64_t>((emittedFrames_ * HnsPerSecond) / format_.sampleRate);
+        const int64_t durationHns =
+            static_cast<int64_t>((static_cast<uint64_t>(chunkFrames) * HnsPerSecond) / format_.sampleRate);
+        if (!output_(mixedChunk.data(), static_cast<DWORD>(mixedChunk.size()), timestampHns, durationHns)) {
+            stopRequested_ = true;
+            break;
+        }
+        emittedFrames_ += chunkFrames;
+
+        const auto nextDeadline = audioClockStart +
+            std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                std::chrono::duration<double>(static_cast<double>(emittedFrames_) / format_.sampleRate));
+        std::this_thread::sleep_until(nextDeadline);
     }
 }

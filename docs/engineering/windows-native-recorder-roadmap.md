@@ -138,7 +138,7 @@ SSOT rules for this phase:
 
 ### 3. WASAPI Microphone
 
-Status: initial implementation in progress. The helper can open the default WASAPI capture endpoint, apply the OpenScreen microphone gain, encode mic-only audio, and mix mic into system-loopback packets when both endpoints expose the same runtime format. Browser `deviceId` to MMDevice id mapping, resampling between mismatched endpoint formats, and drift correction remain follow-up hardening work.
+Status: initial implementation in progress. The helper can open the default WASAPI capture endpoint, apply the OpenScreen microphone gain, encode mic-only audio, and mix system loopback plus microphone through a single queued `AudioMixer` timeline when both endpoints expose the same runtime format. Audio endpoints are warmed before WGC starts, the mixer drops pre-roll and begins its paced timeline on the first encoded video frame, then cuts queued tail audio on stop so the MP4 does not drift past the video. Browser `deviceId` to MMDevice id mapping, resampling between mismatched endpoint formats, and drift correction remain follow-up hardening work.
 
 - Add microphone device enumeration and stable device-id mapping.
 - Capture selected/default microphone through WASAPI.
