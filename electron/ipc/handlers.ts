@@ -279,6 +279,12 @@ function normalizeCursorSample(sample: unknown): CursorRecordingSample | null {
 	}
 
 	const point = sample as Partial<CursorRecordingSample>;
+	const interactionType =
+		point.interactionType === "click" ||
+		point.interactionType === "mouseup" ||
+		point.interactionType === "move"
+			? point.interactionType
+			: "move";
 	return {
 		timeMs:
 			typeof point.timeMs === "number" && Number.isFinite(point.timeMs)
@@ -289,6 +295,7 @@ function normalizeCursorSample(sample: unknown): CursorRecordingSample | null {
 		assetId: typeof point.assetId === "string" ? point.assetId : null,
 		visible: typeof point.visible === "boolean" ? point.visible : true,
 		cursorType: typeof point.cursorType === "string" ? point.cursorType : null,
+		interactionType,
 	};
 }
 

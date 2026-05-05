@@ -35,6 +35,7 @@
 		"test:wgc-webcam:win": "node scripts/test-windows-wgc-helper.mjs --webcam",
 		"test:wgc-full:win": "node scripts/test-windows-wgc-helper.mjs --webcam --system-audio --microphone",
 		"capture:openscreen-preview": "node scripts/capture-openscreen-preview.mjs",
+		"inspect:cursor-click-bounce": "node scripts/inspect-native-cursor-click-bounce.mjs",
 		"build-vite": "tsc && vite build",
 		"test:browser": "vitest --config vitest.browser.config.ts --run",
 		"test:browser:install": "playwright install --with-deps chromium-headless-shell",
