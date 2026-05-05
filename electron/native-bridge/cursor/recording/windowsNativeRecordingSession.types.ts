@@ -18,7 +18,7 @@ export interface WindowsCursorSampleEvent {
 		width: number;
 		height: number;
 	} | null;
-	asset?: WindowsCursorAssetPayload;
+	asset: WindowsCursorAssetPayload | null;
 }
 
 export interface WindowsCursorReadyEvent {

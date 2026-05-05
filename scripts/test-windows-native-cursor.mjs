@@ -3,10 +3,25 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 
-const SAMPLE_INTERVAL_MS = Number(process.env.CURSOR_TEST_SAMPLE_INTERVAL_MS ?? 25);
-const DURATION_MS = Number(process.env.CURSOR_TEST_DURATION_MS ?? 1800);
-const SCREEN_FRAME_INTERVAL_MS = Number(process.env.CURSOR_TEST_SCREEN_FRAME_INTERVAL_MS ?? 100);
-const READY_TIMEOUT_MS = 5000;
+function readPositiveIntEnv(name, fallback) {
+	const raw = process.env[name];
+	if (raw === undefined) {
+		return fallback;
+	}
+
+	const parsed = Number(raw);
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		console.warn(`[cursor-native-test] ignoring invalid ${name}=${raw}; using ${fallback}`);
+		return fallback;
+	}
+
+	return Math.floor(parsed);
+}
+
+const SAMPLE_INTERVAL_MS = readPositiveIntEnv("CURSOR_TEST_SAMPLE_INTERVAL_MS", 25);
+const DURATION_MS = readPositiveIntEnv("CURSOR_TEST_DURATION_MS", 1800);
+const SCREEN_FRAME_INTERVAL_MS = readPositiveIntEnv("CURSOR_TEST_SCREEN_FRAME_INTERVAL_MS", 100);
+const READY_TIMEOUT_MS = readPositiveIntEnv("CURSOR_TEST_READY_TIMEOUT_MS", 5000);
 const OUTPUT_DIR =
 	process.env.CURSOR_TEST_OUTPUT_DIR ??
 	path.join(os.tmpdir(), `openscreen-cursor-native-${Date.now()}`);
@@ -550,22 +565,32 @@ while ($stopwatch.ElapsedMilliseconds -le ${durationMs + 700}) {
 `;
 }
 
-function waitForReady(events) {
-	return new Promise((resolve, reject) => {
-		const startedAt = Date.now();
-		const timer = setInterval(() => {
-			if (events.some((event) => event.type === "ready")) {
-				clearInterval(timer);
-				resolve();
+function createReadyWaiter() {
+	let settled = false;
+	let resolveReady = null;
+	const promise = new Promise((resolve, reject) => {
+		const timer = setTimeout(() => {
+			if (settled) {
 				return;
 			}
+			settled = true;
+			reject(new Error("Timed out waiting for cursor sampler readiness."));
+		}, READY_TIMEOUT_MS);
 
-			if (Date.now() - startedAt > READY_TIMEOUT_MS) {
-				clearInterval(timer);
-				reject(new Error("Timed out waiting for cursor sampler readiness."));
+		resolveReady = () => {
+			if (settled) {
+				return;
 			}
-		}, 25);
+			settled = true;
+			clearTimeout(timer);
+			resolve();
+		};
 	});
+
+	return {
+		promise,
+		resolve: () => resolveReady?.(),
+	};
 }
 
 function writeAssets(assets, outputDir) {
@@ -1113,10 +1138,15 @@ function findPlaywrightChromiumExecutable(defaultPath) {
 	const candidates = fs
 		.readdirSync(baseDir, { withFileTypes: true })
 		.filter((entry) => entry.isDirectory() && entry.name.startsWith("chromium-"))
-		.map((entry) => path.join(baseDir, entry.name, "chrome-win64", "chrome.exe"))
-		.filter((candidate) => fs.existsSync(candidate))
-		.sort()
-		.reverse();
+		.map((entry) => ({
+			executablePath: path.join(baseDir, entry.name, "chrome-win64", "chrome.exe"),
+			revision: Number.parseInt(entry.name.slice("chromium-".length), 10),
+		}))
+		.filter(
+			(candidate) => Number.isFinite(candidate.revision) && fs.existsSync(candidate.executablePath),
+		)
+		.sort((a, b) => b.revision - a.revision)
+		.map((candidate) => candidate.executablePath);
 
 	return candidates[0] ?? defaultPath;
 }
@@ -1169,6 +1199,7 @@ const events = [];
 const assets = new Map();
 let lineBuffer = "";
 let stoppingSampler = false;
+const readyWaiter = createReadyWaiter();
 const sampler = spawnPowerShell(buildSamplerScript(), {
 	onStdout: (chunk) => {
 		lineBuffer += chunk;
@@ -1181,8 +1212,17 @@ const sampler = spawnPowerShell(buildSamplerScript(), {
 				continue;
 			}
 
-			const event = JSON.parse(trimmed);
+			let event;
+			try {
+				event = JSON.parse(trimmed);
+			} catch {
+				process.stderr.write(`[cursor-native-test] dropping non-JSON line: ${trimmed}\n`);
+				continue;
+			}
 			events.push(event);
+			if (event.type === "ready") {
+				readyWaiter.resolve();
+			}
 			if (event.asset?.id && !assets.has(event.asset.id)) {
 				assets.set(event.asset.id, event.asset);
 			}
@@ -1197,7 +1237,7 @@ const sampler = spawnPowerShell(buildSamplerScript(), {
 let screenRecorder = null;
 
 try {
-	await waitForReady(events);
+	await readyWaiter.promise;
 	screenRecorder = spawnPowerShell(buildScreenRecorderScript(OUTPUT_DIR, DURATION_MS), {
 		onStderr: (chunk) => {
 			if (!chunk.startsWith("#< CLIXML") && !chunk.startsWith("<Objs")) {
