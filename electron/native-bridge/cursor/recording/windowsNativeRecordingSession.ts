@@ -1,4 +1,8 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import type { Readable } from "node:stream";
 import { screen } from "electron";
 import { parseWindowHandleFromSourceId } from "../../../../src/lib/nativeWindowsRecording";
@@ -8,7 +12,7 @@ import type {
 	NativeCursorAsset,
 } from "../../../../src/native/contracts";
 import type { CursorRecordingSession } from "./session";
-import { buildPowerShellCommand } from "./windowsNativeRecordingSession.script";
+import { buildPowerShellScript } from "./windowsNativeRecordingSession.script";
 import type {
 	WindowsCursorEvent,
 	WindowsNativeRecordingSessionOptions,
@@ -25,6 +29,7 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 	private assets = new Map<string, NativeCursorAsset>();
 	private samples: CursorRecordingSample[] = [];
 	private process: ChildProcessByStdio<null, Readable, Readable> | null = null;
+	private helperScriptPath: string | null = null;
 	private lineBuffer = "";
 	private startTimeMs = 0;
 	private readyResolve: (() => void) | null = null;
@@ -45,10 +50,18 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		this.outOfBoundsSampleCount = 0;
 		this.previousLeftButtonDown = false;
 
-		const encodedCommand = buildPowerShellCommand(
+		const script = buildPowerShellScript(
 			this.options.sampleIntervalMs,
 			parseWindowHandleFromSourceId(this.options.sourceId),
 		);
+		const helperScriptDir = join(tmpdir(), "openscreen-cursor-native");
+		mkdirSync(helperScriptDir, { recursive: true });
+		const helperScriptPath = join(
+			helperScriptDir,
+			`cursor-sampler-${process.pid}-${Date.now()}-${randomUUID()}.ps1`,
+		);
+		writeFileSync(helperScriptPath, script, "utf8");
+		this.helperScriptPath = helperScriptPath;
 		const child = spawn(
 			"powershell.exe",
 			[
@@ -57,8 +70,8 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 				"-NonInteractive",
 				"-ExecutionPolicy",
 				"Bypass",
-				"-EncodedCommand",
-				encodedCommand,
+				"-File",
+				helperScriptPath,
 			],
 			{
 				stdio: ["ignore", "pipe", "pipe"],
@@ -87,6 +100,7 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 			console.error("[cursor-native]", message);
 		});
 		child.once("exit", (code, signal) => {
+			this.cleanupHelperScript(helperScriptPath);
 			this.logDiagnostic("exit", {
 				code,
 				signal,
@@ -99,6 +113,7 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 			);
 		});
 		child.once("error", (error) => {
+			this.cleanupHelperScript(helperScriptPath);
 			this.logDiagnostic("process-error", { message: error.message });
 			this.rejectReady(error);
 		});
@@ -212,10 +227,11 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 			normalizedX >= 0 && normalizedX <= 1 && normalizedY >= 0 && normalizedY <= 1;
 		const leftButtonDown = payload.leftButtonDown === true;
 		const leftButtonPressed = payload.leftButtonPressed === true;
+		const leftButtonReleased = payload.leftButtonReleased === true;
 		const interactionType =
 			leftButtonPressed || (leftButtonDown && !this.previousLeftButtonDown)
 				? "click"
-				: !leftButtonDown && this.previousLeftButtonDown
+				: leftButtonReleased || (!leftButtonDown && this.previousLeftButtonDown)
 					? "mouseup"
 					: "move";
 		this.previousLeftButtonDown = leftButtonDown;
@@ -285,6 +301,25 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		}
 		this.readyResolve = null;
 		this.readyReject = null;
+	}
+
+	private cleanupHelperScript(scriptPath = this.helperScriptPath) {
+		if (!scriptPath) {
+			return;
+		}
+
+		try {
+			rmSync(scriptPath, { force: true });
+		} catch (error) {
+			this.logDiagnostic("script-cleanup-error", {
+				path: scriptPath,
+				message: error instanceof Error ? error.message : String(error),
+			});
+		} finally {
+			if (this.helperScriptPath === scriptPath) {
+				this.helperScriptPath = null;
+			}
+		}
 	}
 
 	private logDiagnostic(event: string, data: Record<string, unknown>) {

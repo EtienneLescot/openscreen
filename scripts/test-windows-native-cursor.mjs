@@ -65,17 +65,14 @@ function runPowerShell(script) {
 }
 
 function spawnPowerShell(script, { onStdout, onStderr } = {}) {
+	const scriptPath = path.join(
+		os.tmpdir(),
+		`openscreen-powershell-${process.pid}-${Date.now()}-${Math.random().toString(16).slice(2)}.ps1`,
+	);
+	fs.writeFileSync(scriptPath, script, "utf8");
 	const child = spawn(
 		"powershell.exe",
-		[
-			"-NoLogo",
-			"-NoProfile",
-			"-NonInteractive",
-			"-ExecutionPolicy",
-			"Bypass",
-			"-EncodedCommand",
-			encodePowerShell(script),
-		],
+		["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", scriptPath],
 		{ stdio: ["ignore", "pipe", "pipe"], windowsHide: true },
 	);
 
@@ -85,8 +82,15 @@ function spawnPowerShell(script, { onStdout, onStderr } = {}) {
 	child.stderr.on("data", (chunk) => onStderr?.(chunk));
 
 	const done = new Promise((resolve, reject) => {
-		child.once("error", reject);
+		const cleanup = () => {
+			fs.rmSync(scriptPath, { force: true });
+		};
+		child.once("error", (error) => {
+			cleanup();
+			reject(error);
+		});
 		child.once("exit", (code, signal) => {
+			cleanup();
 			if (code === 0 || child.killed) {
 				resolve({ code, signal });
 				return;
@@ -107,9 +111,26 @@ Add-Type -AssemblyName System.Windows.Forms
 
 $source = @"
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 public static class OpenScreenCursorDiagnosticInterop {
+    private const int WH_MOUSE_LL = 14;
+    private const int WM_LBUTTONDOWN = 0x0201;
+    private const int WM_LBUTTONUP = 0x0202;
+    private static readonly object MouseSync = new object();
+    private static int LeftDownCount = 0;
+    private static int LeftUpCount = 0;
+    private static IntPtr MouseHook = IntPtr.Zero;
+    private static LowLevelMouseProc MouseProcDelegate = MouseHookCallback;
+
+    public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    public struct MouseButtonEvents {
+        public int LeftDownCount;
+        public int LeftUpCount;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT {
         public int X;
@@ -132,6 +153,48 @@ public static class OpenScreenCursorDiagnosticInterop {
         public int yHotspot;
         public IntPtr hbmMask;
         public IntPtr hbmColor;
+    }
+
+    public static bool InstallMouseHook() {
+        if (MouseHook != IntPtr.Zero) {
+            return true;
+        }
+
+        using (Process process = Process.GetCurrentProcess())
+        using (ProcessModule module = process.MainModule) {
+            MouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseProcDelegate, GetModuleHandle(module.ModuleName), 0);
+        }
+
+        return MouseHook != IntPtr.Zero;
+    }
+
+    public static MouseButtonEvents ConsumeMouseButtonEvents() {
+        lock (MouseSync) {
+            MouseButtonEvents events = new MouseButtonEvents {
+                LeftDownCount = LeftDownCount,
+                LeftUpCount = LeftUpCount
+            };
+            LeftDownCount = 0;
+            LeftUpCount = 0;
+            return events;
+        }
+    }
+
+    private static IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
+        if (nCode >= 0) {
+            int message = wParam.ToInt32();
+            if (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) {
+                lock (MouseSync) {
+                    if (message == WM_LBUTTONDOWN) {
+                        LeftDownCount += 1;
+                    } else {
+                        LeftUpCount += 1;
+                    }
+                }
+            }
+        }
+
+        return CallNextHookEx(MouseHook, nCode, wParam, lParam);
     }
 
     [DllImport("user32.dll", SetLastError = true)]
@@ -158,6 +221,15 @@ public static class OpenScreenCursorDiagnosticInterop {
     [DllImport("gdi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr GetModuleHandle(string lpModuleName);
 }
 "@
 
@@ -308,12 +380,15 @@ function Get-CursorAsset($cursorHandle, $cursorId) {
     }
 }
 
+[OpenScreenCursorDiagnosticInterop]::InstallMouseHook() | Out-Null
 [OpenScreenCursorDiagnosticInterop]::GetAsyncKeyState(0x01) | Out-Null
 Write-JsonLine @{ type = 'ready'; timestampMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
 
 $lastCursorId = $null
 $screenBounds = [System.Windows.Forms.Screen]::PrimaryScreen.Bounds
 while ($true) {
+    [System.Windows.Forms.Application]::DoEvents()
+    $mouseEvents = [OpenScreenCursorDiagnosticInterop]::ConsumeMouseButtonEvents()
     $cursorInfo = New-Object OpenScreenCursorDiagnosticInterop+CURSORINFO
     $cursorInfo.cbSize = [Runtime.InteropServices.Marshal]::SizeOf([type][OpenScreenCursorDiagnosticInterop+CURSORINFO])
 
@@ -328,7 +403,8 @@ while ($true) {
     $cursorType = Get-StandardCursorType $cursorInfo.hCursor
     $leftButtonState = [OpenScreenCursorDiagnosticInterop]::GetAsyncKeyState(0x01)
     $leftButtonDown = ($leftButtonState -band 0x8000) -ne 0
-    $leftButtonPressed = ($leftButtonState -band 0x0001) -ne 0
+    $leftButtonPressed = ($mouseEvents.LeftDownCount -gt 0) -or (($leftButtonState -band 0x0001) -ne 0)
+    $leftButtonReleased = $mouseEvents.LeftUpCount -gt 0
     $asset = $null
 
     if ($visible -and $cursorId -and $cursorId -ne $lastCursorId) {
@@ -351,6 +427,7 @@ while ($true) {
         cursorType = $cursorType
         leftButtonDown = $leftButtonDown
         leftButtonPressed = $leftButtonPressed
+        leftButtonReleased = $leftButtonReleased
         bounds = @{
             x = $screenBounds.Left
             y = $screenBounds.Top
@@ -517,10 +594,11 @@ function toRecordingData(samples, assets) {
 
 		const leftButtonDown = sample.leftButtonDown === true;
 		const leftButtonPressed = sample.leftButtonPressed === true;
+		const leftButtonReleased = sample.leftButtonReleased === true;
 		const interactionType =
 			leftButtonPressed || (leftButtonDown && !previousLeftButtonDown)
 				? "click"
-				: !leftButtonDown && previousLeftButtonDown
+				: leftButtonReleased || (!leftButtonDown && previousLeftButtonDown)
 					? "mouseup"
 					: "move";
 		previousLeftButtonDown = leftButtonDown;

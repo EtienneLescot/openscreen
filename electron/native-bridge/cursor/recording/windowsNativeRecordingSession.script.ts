@@ -1,4 +1,4 @@
-export function buildPowerShellCommand(sampleIntervalMs: number, windowHandle?: string | null) {
+export function buildPowerShellScript(sampleIntervalMs: number, windowHandle?: string | null) {
 	const targetWindowHandle =
 		typeof windowHandle === "string" && /^(?:0x[0-9a-fA-F]+|\d+)$/.test(windowHandle)
 			? `'${windowHandle}'`
@@ -6,14 +6,32 @@ export function buildPowerShellCommand(sampleIntervalMs: number, windowHandle?: 
 	const script = String.raw`
 $ErrorActionPreference = 'Stop'
 Add-Type -AssemblyName System.Drawing
+Add-Type -AssemblyName System.Windows.Forms
 
 $targetWindowHandle = ${targetWindowHandle}
 
 $source = @"
 using System;
+using System.Diagnostics;
 using System.Runtime.InteropServices;
 
 public static class OpenScreenCursorInterop {
+    private const int WH_MOUSE_LL = 14;
+    private const int WM_LBUTTONDOWN = 0x0201;
+    private const int WM_LBUTTONUP = 0x0202;
+    private static readonly object MouseSync = new object();
+    private static int LeftDownCount = 0;
+    private static int LeftUpCount = 0;
+    private static IntPtr MouseHook = IntPtr.Zero;
+    private static LowLevelMouseProc MouseProcDelegate = MouseHookCallback;
+
+    public delegate IntPtr LowLevelMouseProc(int nCode, IntPtr wParam, IntPtr lParam);
+
+    public struct MouseButtonEvents {
+        public int LeftDownCount;
+        public int LeftUpCount;
+    }
+
     [StructLayout(LayoutKind.Sequential)]
     public struct POINT {
         public int X;
@@ -45,6 +63,48 @@ public static class OpenScreenCursorInterop {
 		public int Right;
 		public int Bottom;
 	}
+
+    public static bool InstallMouseHook() {
+        if (MouseHook != IntPtr.Zero) {
+            return true;
+        }
+
+        using (Process process = Process.GetCurrentProcess())
+        using (ProcessModule module = process.MainModule) {
+            MouseHook = SetWindowsHookEx(WH_MOUSE_LL, MouseProcDelegate, GetModuleHandle(module.ModuleName), 0);
+        }
+
+        return MouseHook != IntPtr.Zero;
+    }
+
+    public static MouseButtonEvents ConsumeMouseButtonEvents() {
+        lock (MouseSync) {
+            MouseButtonEvents events = new MouseButtonEvents {
+                LeftDownCount = LeftDownCount,
+                LeftUpCount = LeftUpCount
+            };
+            LeftDownCount = 0;
+            LeftUpCount = 0;
+            return events;
+        }
+    }
+
+    private static IntPtr MouseHookCallback(int nCode, IntPtr wParam, IntPtr lParam) {
+        if (nCode >= 0) {
+            int message = wParam.ToInt32();
+            if (message == WM_LBUTTONDOWN || message == WM_LBUTTONUP) {
+                lock (MouseSync) {
+                    if (message == WM_LBUTTONDOWN) {
+                        LeftDownCount += 1;
+                    } else {
+                        LeftUpCount += 1;
+                    }
+                }
+            }
+        }
+
+        return CallNextHookEx(MouseHook, nCode, wParam, lParam);
+    }
 
     [DllImport("user32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
@@ -78,6 +138,15 @@ public static class OpenScreenCursorInterop {
     [DllImport("gdi32.dll", SetLastError = true)]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool DeleteObject(IntPtr hObject);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr SetWindowsHookEx(int idHook, LowLevelMouseProc lpfn, IntPtr hMod, uint dwThreadId);
+
+    [DllImport("user32.dll", SetLastError = true)]
+    private static extern IntPtr CallNextHookEx(IntPtr hhk, int nCode, IntPtr wParam, IntPtr lParam);
+
+    [DllImport("kernel32.dll", CharSet = CharSet.Auto, SetLastError = true)]
+    private static extern IntPtr GetModuleHandle(string lpModuleName);
 }
 "@
 
@@ -263,11 +332,14 @@ function Get-CursorAsset($cursorHandle, $cursorId) {
     }
 }
 
+[OpenScreenCursorInterop]::InstallMouseHook() | Out-Null
 [OpenScreenCursorInterop]::GetAsyncKeyState(0x01) | Out-Null
 Write-JsonLine @{ type = 'ready'; timestampMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
 
 $lastCursorId = $null
 while ($true) {
+    [System.Windows.Forms.Application]::DoEvents()
+    $mouseEvents = [OpenScreenCursorInterop]::ConsumeMouseButtonEvents()
     $cursorInfo = New-Object OpenScreenCursorInterop+CURSORINFO
     $cursorInfo.cbSize = [Runtime.InteropServices.Marshal]::SizeOf([type][OpenScreenCursorInterop+CURSORINFO])
 
@@ -282,7 +354,8 @@ while ($true) {
     $cursorType = Get-StandardCursorType $cursorInfo.hCursor
     $leftButtonState = [OpenScreenCursorInterop]::GetAsyncKeyState(0x01)
     $leftButtonDown = ($leftButtonState -band 0x8000) -ne 0
-    $leftButtonPressed = ($leftButtonState -band 0x0001) -ne 0
+    $leftButtonPressed = ($mouseEvents.LeftDownCount -gt 0) -or (($leftButtonState -band 0x0001) -ne 0)
+    $leftButtonReleased = $mouseEvents.LeftUpCount -gt 0
     $asset = $null
 
     if ($visible -and $cursorId -and $cursorId -ne $lastCursorId) {
@@ -305,6 +378,7 @@ while ($true) {
         cursorType = $cursorType
         leftButtonDown = $leftButtonDown
         leftButtonPressed = $leftButtonPressed
+        leftButtonReleased = $leftButtonReleased
 		bounds = Get-TargetBounds
         asset = $asset
     }
@@ -313,5 +387,5 @@ while ($true) {
 }
 `;
 
-	return Buffer.from(script, "utf16le").toString("base64");
+	return script;
 }

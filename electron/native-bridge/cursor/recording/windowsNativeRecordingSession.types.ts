@@ -11,6 +11,7 @@ export interface WindowsCursorSampleEvent {
 	cursorType?: NativeCursorType | null;
 	leftButtonDown?: boolean;
 	leftButtonPressed?: boolean;
+	leftButtonReleased?: boolean;
 	bounds?: {
 		x: number;
 		y: number;
