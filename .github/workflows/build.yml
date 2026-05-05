@@ -20,18 +20,15 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v3
-      
+
       - name: Setup Node.js
         uses: actions/setup-node@v3
         with:
           node-version: '22'
-          
+
       - name: Install dependencies
         run: npm ci
-        
-      - name: Install app dependencies
-        run: npx electron-builder install-app-deps
-        
+
       - name: Build Windows app
         run: npm run build:win
         env:
@@ -233,9 +230,6 @@ jobs:
 
       - name: Install dependencies
         run: npm ci
-
-      - name: Install app dependencies
-        run: npx electron-builder install-app-deps
 
       - name: Build Linux app
         run: npm run build:linux
