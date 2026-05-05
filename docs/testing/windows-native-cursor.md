@@ -84,6 +84,12 @@ Together, the scripts make it quick to inspect:
 
 They are not a full substitute for an end-to-end manual recording pass. Before shipping cursor changes, also test a real capture session and export from the packaged app.
 
+## Known Gap
+
+Windows native cursor `Click Bounce` is currently backlogged. `Size`, `Smoothing`, and `Motion Blur` can be validated through preview/export, but `Click Bounce` has not shown a visible effect in packaged-app manual testing. The current diagnostic can observe synthetic click metadata, but that is not enough to validate the real OpenScreen record -> preview -> export path.
+
+Track the open item in `docs/engineering/windows-native-recorder-roadmap.md` under `Native Cursor Click Bounce Is Not Visibly Applied`.
+
 ## Native Windows capture backend
 
 The app now routes Windows recordings through an external WGC helper instead of Electron `getDisplayMedia`. This is meant to remove the coordinate and clock split that made the reconstructed cursor drift in the preview/export path.
