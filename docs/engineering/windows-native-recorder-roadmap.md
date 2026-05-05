@@ -158,6 +158,7 @@ Acceptance:
 - Add Media Foundation webcam source reader.
 - Select requested dimensions/fps or the nearest format accepted by Media Foundation.
 - Convert webcam samples to BGRA and compose them into the primary helper MP4 as an initial bottom-right picture-in-picture overlay.
+- Ignore black webcam warmup frames and keep the overlay hidden until the first visible frame is available, so virtual cameras do not flash a black picture-in-picture rectangle at recording start.
 - Keep the helper process as the SSOT for screen/window, WASAPI system audio, microphone, webcam, and mux timing.
 - Match the requested webcam through Media Foundation friendly names first, then browser device ids/symbolic links, so UI selection remains stable across Chromium and Windows native device namespaces.
 - Use the Electron-resolved DirectShow CLSID when the selected virtual camera, for example NVIDIA Broadcast, is registered for DirectShow but absent from Media Foundation enumeration.

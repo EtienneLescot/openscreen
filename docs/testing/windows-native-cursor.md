@@ -93,7 +93,7 @@ Current native availability rules:
 - Windows 10 build 19041 or newer
 - a helper executable is available
 
-The helper currently implements display video capture and system audio loopback. Window capture, microphone audio, and webcam capture are part of the native recorder roadmap and fail explicitly instead of silently falling back to Electron capture on Windows.
+The helper currently implements display/window video capture, system audio loopback, default microphone capture, Media Foundation webcam capture, and DirectShow fallback for selected virtual cameras such as NVIDIA Broadcast. Webcam frames are composed into the primary MP4 as a bottom-right picture-in-picture overlay, and black webcam warmup frames are ignored until the first visible frame is available.
 
 Build OpenScreen's helper locally:
 
@@ -105,7 +105,11 @@ Smoke-test the helper directly:
 
 ```powershell
 npm run test:wgc-helper:win
+npm run test:wgc-window:win
 npm run test:wgc-audio:win
+npm run test:wgc-mic:win
+npm run test:wgc-mixed-audio:win
+npm run test:wgc-webcam:win
 ```
 
 For local diagnostics with another compatible helper, point OpenScreen at that executable:

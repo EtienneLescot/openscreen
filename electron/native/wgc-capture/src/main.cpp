@@ -97,6 +97,31 @@ std::string jsonEscape(const std::string& value) {
     return result;
 }
 
+bool hasVisibleBgraContent(const std::vector<BYTE>& frame) {
+    if (frame.size() < 4) {
+        return false;
+    }
+
+    uint64_t lumaTotal = 0;
+    BYTE maxLuma = 0;
+    const size_t pixelCount = frame.size() / 4;
+    const size_t step = std::max<size_t>(1, pixelCount / 4096);
+    size_t sampledPixels = 0;
+    for (size_t pixel = 0; pixel < pixelCount; pixel += step) {
+        const size_t offset = pixel * 4;
+        const BYTE b = frame[offset + 0];
+        const BYTE g = frame[offset + 1];
+        const BYTE r = frame[offset + 2];
+        const BYTE luma = static_cast<BYTE>((static_cast<uint16_t>(r) * 54 + static_cast<uint16_t>(g) * 183 + static_cast<uint16_t>(b) * 19) >> 8);
+        lumaTotal += luma;
+        maxLuma = std::max(maxLuma, luma);
+        sampledPixels += 1;
+    }
+
+    const uint64_t averageLuma = sampledPixels > 0 ? lumaTotal / sampledPixels : 0;
+    return maxLuma > 24 || averageLuma > 4;
+}
+
 bool findBool(const std::string& json, const std::string& key, bool fallback) {
     auto pos = json.find("\"" + key + "\"");
     if (pos == std::string::npos) {
@@ -432,6 +457,7 @@ int main(int argc, char* argv[]) {
     std::vector<BYTE> latestWebcamFrame;
     int latestWebcamWidth = 0;
     int latestWebcamHeight = 0;
+    bool hasVisibleWebcamFrame = false;
 
     session.setFrameCallback([&](ID3D11Texture2D* texture, int64_t timestampHns) {
         (void)timestampHns;
@@ -468,10 +494,19 @@ int main(int argc, char* argv[]) {
             {
                 std::scoped_lock lock(mutex);
                 if (webcamActive) {
-                    webcamCapture.copyLatestFrame(latestWebcamFrame, latestWebcamWidth, latestWebcamHeight);
+                    std::vector<BYTE> candidateWebcamFrame;
+                    int candidateWebcamWidth = 0;
+                    int candidateWebcamHeight = 0;
+                    if (webcamCapture.copyLatestFrame(candidateWebcamFrame, candidateWebcamWidth, candidateWebcamHeight) &&
+                        hasVisibleBgraContent(candidateWebcamFrame)) {
+                        latestWebcamFrame = std::move(candidateWebcamFrame);
+                        latestWebcamWidth = candidateWebcamWidth;
+                        latestWebcamHeight = candidateWebcamHeight;
+                        hasVisibleWebcamFrame = true;
+                    }
                 }
                 const BgraFrameView webcamFrame{
-                    latestWebcamFrame.empty() ? nullptr : latestWebcamFrame.data(),
+                    hasVisibleWebcamFrame && !latestWebcamFrame.empty() ? latestWebcamFrame.data() : nullptr,
                     latestWebcamWidth,
                     latestWebcamHeight,
                 };
@@ -583,12 +618,22 @@ int main(int argc, char* argv[]) {
         }
         webcamActive = true;
         const auto webcamDeadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
-        while (std::chrono::steady_clock::now() < webcamDeadline &&
-               !webcamCapture.copyLatestFrame(latestWebcamFrame, latestWebcamWidth, latestWebcamHeight)) {
+        while (std::chrono::steady_clock::now() < webcamDeadline && !hasVisibleWebcamFrame) {
+            std::vector<BYTE> candidateWebcamFrame;
+            int candidateWebcamWidth = 0;
+            int candidateWebcamHeight = 0;
+            if (webcamCapture.copyLatestFrame(candidateWebcamFrame, candidateWebcamWidth, candidateWebcamHeight) &&
+                hasVisibleBgraContent(candidateWebcamFrame)) {
+                latestWebcamFrame = std::move(candidateWebcamFrame);
+                latestWebcamWidth = candidateWebcamWidth;
+                latestWebcamHeight = candidateWebcamHeight;
+                hasVisibleWebcamFrame = true;
+                break;
+            }
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
         }
-        if (latestWebcamFrame.empty()) {
-            std::cerr << "WARNING: Native webcam started but no frame was available before screen capture"
+        if (!hasVisibleWebcamFrame) {
+            std::cerr << "WARNING: Native webcam started but no visible frame was available before screen capture"
                       << std::endl;
         }
     }
