@@ -960,6 +960,7 @@ export function registerIpcHandlers(
 					captureSystemAudio: request.audio.system.enabled,
 					captureMic: request.audio.microphone.enabled,
 					microphoneDeviceId: request.audio.microphone.deviceId ?? null,
+					microphoneDeviceName: request.audio.microphone.deviceName ?? null,
 					microphoneGain: request.audio.microphone.gain,
 					webcamEnabled: request.webcam.enabled,
 					webcamDeviceId: request.webcam.deviceId ?? null,

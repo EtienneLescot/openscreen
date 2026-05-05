@@ -1,9 +1,12 @@
 #include "wasapi_loopback_capture.h"
 
+#include <Functiondiscoverykeys_devpkey.h>
 #include <ksmedia.h>
+#include <propvarutil.h>
 
 #include <algorithm>
 #include <chrono>
+#include <cwctype>
 #include <iostream>
 
 namespace {
@@ -41,6 +44,86 @@ GUID audioSubtypeFromFormat(WAVEFORMATEX* format) {
     return GUID_NULL;
 }
 
+std::wstring normalizeDeviceName(const std::wstring& value) {
+    std::wstring result;
+    result.reserve(value.size());
+    bool lastWasSpace = true;
+
+    for (const wchar_t c : value) {
+        if (std::iswalnum(c)) {
+            result.push_back(static_cast<wchar_t>(std::towlower(c)));
+            lastWasSpace = false;
+        } else if (!lastWasSpace) {
+            result.push_back(L' ');
+            lastWasSpace = true;
+        }
+    }
+
+    if (!result.empty() && result.back() == L' ') {
+        result.pop_back();
+    }
+    return result;
+}
+
+int scoreDeviceName(const std::wstring& candidateName, const std::wstring& candidateId, const std::wstring& requestedName) {
+    const std::wstring candidate = normalizeDeviceName(candidateName);
+    const std::wstring id = normalizeDeviceName(candidateId);
+    const std::wstring requested = normalizeDeviceName(requestedName);
+    if (requested.empty()) {
+        return 0;
+    }
+    if (candidate == requested) {
+        return 1000;
+    }
+    if (!candidate.empty() && (candidate.find(requested) != std::wstring::npos || requested.find(candidate) != std::wstring::npos)) {
+        return 900;
+    }
+    if (!id.empty() && (id.find(requested) != std::wstring::npos || requested.find(id) != std::wstring::npos)) {
+        return 800;
+    }
+
+    int score = 0;
+    size_t pos = 0;
+    while (pos < requested.size()) {
+        const size_t end = requested.find(L' ', pos);
+        const std::wstring word = requested.substr(pos, end == std::wstring::npos ? std::wstring::npos : end - pos);
+        if (word.size() > 1 && word != L"microphone" && word != L"mic" && word != L"audio" && word != L"input") {
+            if (candidate.find(word) != std::wstring::npos) {
+                score += 100;
+            } else if (id.find(word) != std::wstring::npos) {
+                score += 50;
+            }
+        }
+        if (end == std::wstring::npos) {
+            break;
+        }
+        pos = end + 1;
+    }
+    return score;
+}
+
+std::wstring getDeviceFriendlyName(IMMDevice* device) {
+    if (!device) {
+        return {};
+    }
+
+    Microsoft::WRL::ComPtr<IPropertyStore> properties;
+    HRESULT hr = device->OpenPropertyStore(STGM_READ, &properties);
+    if (FAILED(hr) || !properties) {
+        return {};
+    }
+
+    PROPVARIANT value;
+    PropVariantInit(&value);
+    hr = properties->GetValue(PKEY_Device_FriendlyName, &value);
+    std::wstring name;
+    if (SUCCEEDED(hr) && value.vt == VT_LPWSTR && value.pwszVal) {
+        name = value.pwszVal;
+    }
+    PropVariantClear(&value);
+    return name;
+}
+
 } // namespace
 
 WasapiLoopbackCapture::~WasapiLoopbackCapture() {
@@ -52,14 +135,14 @@ WasapiLoopbackCapture::~WasapiLoopbackCapture() {
 }
 
 bool WasapiLoopbackCapture::initializeSystemLoopback() {
-    return initialize(WasapiCaptureEndpoint::SystemLoopback, {});
+    return initialize(WasapiCaptureEndpoint::SystemLoopback, {}, {});
 }
 
-bool WasapiLoopbackCapture::initializeMicrophone(const std::wstring& deviceId) {
-    return initialize(WasapiCaptureEndpoint::Microphone, deviceId);
+bool WasapiLoopbackCapture::initializeMicrophone(const std::wstring& deviceId, const std::wstring& deviceName) {
+    return initialize(WasapiCaptureEndpoint::Microphone, deviceId, deviceName);
 }
 
-bool WasapiLoopbackCapture::initialize(WasapiCaptureEndpoint endpoint, const std::wstring& deviceId) {
+bool WasapiLoopbackCapture::initialize(WasapiCaptureEndpoint endpoint, const std::wstring& deviceId, const std::wstring& deviceName) {
     HRESULT hr = CoCreateInstance(
         __uuidof(MMDeviceEnumerator),
         nullptr,
@@ -72,9 +155,16 @@ bool WasapiLoopbackCapture::initialize(WasapiCaptureEndpoint endpoint, const std
     if (endpoint == WasapiCaptureEndpoint::Microphone && !deviceId.empty() && deviceId != L"default") {
         hr = deviceEnumerator_->GetDevice(deviceId.c_str(), &device_);
         if (FAILED(hr)) {
-            std::wcerr << L"WARNING: Could not resolve microphone device id; using default capture endpoint"
+            std::wcerr << L"WARNING: Could not resolve microphone device id directly"
                        << std::endl;
             device_.Reset();
+        }
+    }
+
+    if (endpoint == WasapiCaptureEndpoint::Microphone && !device_ && !deviceName.empty()) {
+        if (!resolveMicrophoneByName(deviceName)) {
+            std::wcerr << L"WARNING: Could not resolve microphone by name; using default capture endpoint"
+                       << std::endl;
         }
     }
 
@@ -86,6 +176,8 @@ bool WasapiLoopbackCapture::initialize(WasapiCaptureEndpoint endpoint, const std
             return false;
         }
     }
+
+    selectedDeviceName_ = getDeviceFriendlyName(device_.Get());
 
     hr = device_->Activate(__uuidof(IAudioClient), CLSCTX_ALL, nullptr, &audioClient_);
     if (!succeeded(hr, "IMMDevice::Activate(IAudioClient)")) {
@@ -120,6 +212,61 @@ bool WasapiLoopbackCapture::initialize(WasapiCaptureEndpoint endpoint, const std
         return false;
     }
 
+    return true;
+}
+
+bool WasapiLoopbackCapture::resolveMicrophoneByName(const std::wstring& deviceName) {
+    if (!deviceEnumerator_ || deviceName.empty()) {
+        return false;
+    }
+
+    Microsoft::WRL::ComPtr<IMMDeviceCollection> devices;
+    HRESULT hr = deviceEnumerator_->EnumAudioEndpoints(eCapture, DEVICE_STATE_ACTIVE, &devices);
+    if (!succeeded(hr, "IMMDeviceEnumerator::EnumAudioEndpoints(eCapture)")) {
+        return false;
+    }
+
+    UINT count = 0;
+    hr = devices->GetCount(&count);
+    if (!succeeded(hr, "IMMDeviceCollection::GetCount")) {
+        return false;
+    }
+
+    Microsoft::WRL::ComPtr<IMMDevice> bestDevice;
+    std::wstring bestId;
+    std::wstring bestName;
+    int bestScore = 0;
+    for (UINT i = 0; i < count; ++i) {
+        Microsoft::WRL::ComPtr<IMMDevice> candidate;
+        hr = devices->Item(i, &candidate);
+        if (FAILED(hr) || !candidate) {
+            continue;
+        }
+
+        LPWSTR rawId = nullptr;
+        std::wstring candidateId;
+        if (SUCCEEDED(candidate->GetId(&rawId)) && rawId) {
+            candidateId = rawId;
+            CoTaskMemFree(rawId);
+        }
+
+        const std::wstring candidateName = getDeviceFriendlyName(candidate.Get());
+        const int score = scoreDeviceName(candidateName, candidateId, deviceName);
+        std::wcerr << L"Native microphone candidate: " << candidateName << L" score=" << score << std::endl;
+        if (score > bestScore) {
+            bestScore = score;
+            bestDevice = candidate;
+            bestId = candidateId;
+            bestName = candidateName;
+        }
+    }
+
+    if (!bestDevice || bestScore <= 0) {
+        return false;
+    }
+
+    device_ = bestDevice;
+    std::wcerr << L"Selected native microphone endpoint: " << bestName << L" id=" << bestId << std::endl;
     return true;
 }
 
@@ -170,6 +317,10 @@ void WasapiLoopbackCapture::stop() {
 
 const AudioInputFormat& WasapiLoopbackCapture::inputFormat() const {
     return inputFormat_;
+}
+
+const std::wstring& WasapiLoopbackCapture::selectedDeviceName() const {
+    return selectedDeviceName_;
 }
 
 void WasapiLoopbackCapture::captureLoop() {

@@ -101,6 +101,7 @@ export function LaunchWindow() {
 		setMicrophoneEnabled,
 		microphoneDeviceId,
 		setMicrophoneDeviceId,
+		setMicrophoneDeviceName,
 		systemAudioEnabled,
 		setSystemAudioEnabled,
 		webcamEnabled,
@@ -168,8 +169,9 @@ export function LaunchWindow() {
 	useEffect(() => {
 		if (selectedMicId && selectedMicId !== "default") {
 			setMicrophoneDeviceId(selectedMicId);
+			setMicrophoneDeviceName(micDevices.find((d) => d.deviceId === selectedMicId)?.label);
 		}
-	}, [selectedMicId, setMicrophoneDeviceId]);
+	}, [selectedMicId, micDevices, setMicrophoneDeviceId, setMicrophoneDeviceName]);
 
 	useEffect(() => {
 		if (selectedCameraId) {
@@ -391,8 +393,10 @@ export function LaunchWindow() {
 								<select
 									value={microphoneDeviceId || selectedMicId}
 									onChange={(e) => {
+										const selectedDevice = micDevices.find((d) => d.deviceId === e.target.value);
 										setSelectedMicId(e.target.value);
 										setMicrophoneDeviceId(e.target.value);
+										setMicrophoneDeviceName(selectedDevice?.label);
 									}}
 									className={`w-full appearance-none bg-white/5 text-white text-[11px] rounded-lg pl-2 pr-6 py-1 border border-white/10 outline-none hover:bg-white/10 transition-colors cursor-pointer ${!micExpanded ? "sr-only" : ""}`}
 								>

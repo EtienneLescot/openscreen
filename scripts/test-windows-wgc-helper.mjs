@@ -247,7 +247,8 @@ const config = {
 	hasDisplayBounds: true,
 	captureSystemAudio: WITH_SYSTEM_AUDIO,
 	captureMic: WITH_MICROPHONE,
-	microphoneDeviceId: "default",
+	microphoneDeviceId: process.env.OPENSCREEN_WGC_TEST_MICROPHONE_DEVICE_ID ?? "default",
+	microphoneDeviceName: process.env.OPENSCREEN_WGC_TEST_MICROPHONE_DEVICE_NAME ?? "",
 	microphoneGain: 1.4,
 	webcamEnabled: WITH_WEBCAM,
 	webcamDeviceId: process.env.OPENSCREEN_WGC_TEST_WEBCAM_DEVICE_ID ?? "",
@@ -292,9 +293,20 @@ const webcamFormatLine = result.stdout
 	.split(/\r?\n/)
 	.find((line) => line.includes('"event":"webcam-format"'));
 const webcamFormat = webcamFormatLine ? JSON.parse(webcamFormatLine) : null;
+const audioFormatLine = result.stdout
+	.split(/\r?\n/)
+	.find((line) => line.includes('"event":"audio-format"'));
+const audioFormat = audioFormatLine ? JSON.parse(audioFormatLine) : null;
 const nativeWebcamDiagnostics = result.stderr
 	.split(/\r?\n/)
 	.filter((line) => line.includes("Native webcam candidate"));
+const nativeMicrophoneDiagnostics = result.stderr
+	.split(/\r?\n/)
+	.filter(
+		(line) =>
+			line.includes("Native microphone candidate") ||
+			line.includes("Selected native microphone endpoint"),
+	);
 if (!hasVideo) {
 	throw new Error(`WGC helper output has no video stream: ${outputPath}`);
 }
@@ -320,7 +332,9 @@ console.log(
 				codecName: stream.codec_name,
 				duration: stream.duration,
 			})),
+			selectedMicrophoneDeviceName: audioFormat?.microphoneDeviceName,
 			selectedWebcamDeviceName: webcamFormat?.deviceName,
+			nativeMicrophoneDiagnostics,
 			nativeWebcamDiagnostics,
 			firstFrameLuma: frameLuma,
 		},

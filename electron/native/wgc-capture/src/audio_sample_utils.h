@@ -19,6 +19,13 @@ void copyAudioWithGain(
     const AudioInputFormat& format,
     double gain,
     std::vector<BYTE>& destination);
+void convertAudioWithGain(
+    const BYTE* source,
+    DWORD byteCount,
+    const AudioInputFormat& sourceFormat,
+    const AudioInputFormat& targetFormat,
+    double gain,
+    std::vector<BYTE>& destination);
 void mixAudioInPlace(
     std::vector<BYTE>& destination,
     const BYTE* source,
@@ -31,6 +38,8 @@ public:
 
     AudioMixer(
         const AudioInputFormat& format,
+        const AudioInputFormat& systemFormat,
+        const AudioInputFormat& microphoneFormat,
         bool includeSystem,
         bool includeMicrophone,
         double microphoneGain,
@@ -47,11 +56,18 @@ public:
     void pushMicrophone(const BYTE* data, DWORD byteCount);
 
 private:
-    void append(std::vector<BYTE>& queue, const BYTE* data, DWORD byteCount, double gain);
+    void append(
+        std::vector<BYTE>& queue,
+        const BYTE* data,
+        DWORD byteCount,
+        const AudioInputFormat& sourceFormat,
+        double gain);
     bool pop(std::vector<BYTE>& queue, std::vector<BYTE>& chunk, size_t byteCount);
     void mixLoop();
 
     AudioInputFormat format_{};
+    AudioInputFormat systemFormat_{};
+    AudioInputFormat microphoneFormat_{};
     bool includeSystem_ = false;
     bool includeMicrophone_ = false;
     double microphoneGain_ = 1.0;

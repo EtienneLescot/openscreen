@@ -25,6 +25,68 @@ T clampTo(double value) {
     return static_cast<T>(std::clamp(std::round(value), minValue, maxValue));
 }
 
+size_t bytesPerSample(const AudioInputFormat& format) {
+    return format.bitsPerSample / 8;
+}
+
+double readSampleAsDouble(const BYTE* source, const AudioInputFormat& format, size_t frameIndex, UINT32 channelIndex) {
+    if (!source || format.blockAlign == 0 || channelIndex >= format.channels) {
+        return 0.0;
+    }
+
+    const size_t offset = frameIndex * format.blockAlign + channelIndex * bytesPerSample(format);
+    if (isFloatFormat(format)) {
+        return static_cast<double>(*reinterpret_cast<const float*>(source + offset));
+    }
+    if (isPcmFormat(format, 16)) {
+        return static_cast<double>(*reinterpret_cast<const int16_t*>(source + offset)) / 32768.0;
+    }
+    if (isPcmFormat(format, 32)) {
+        return static_cast<double>(*reinterpret_cast<const int32_t*>(source + offset)) / 2147483648.0;
+    }
+    return 0.0;
+}
+
+void writeSampleFromDouble(BYTE* destination, const AudioInputFormat& format, size_t frameIndex, UINT32 channelIndex, double value) {
+    if (!destination || format.blockAlign == 0 || channelIndex >= format.channels) {
+        return;
+    }
+
+    const double clamped = std::clamp(value, -1.0, 1.0);
+    const size_t offset = frameIndex * format.blockAlign + channelIndex * bytesPerSample(format);
+    if (isFloatFormat(format)) {
+        *reinterpret_cast<float*>(destination + offset) = static_cast<float>(clamped);
+        return;
+    }
+    if (isPcmFormat(format, 16)) {
+        *reinterpret_cast<int16_t*>(destination + offset) = clampTo<int16_t>(clamped * 32767.0);
+        return;
+    }
+    if (isPcmFormat(format, 32)) {
+        *reinterpret_cast<int32_t*>(destination + offset) = clampTo<int32_t>(clamped * 2147483647.0);
+    }
+}
+
+double readMappedChannel(const BYTE* source, const AudioInputFormat& format, size_t frameIndex, UINT32 targetChannel, UINT32 targetChannels) {
+    if (format.channels == 0) {
+        return 0.0;
+    }
+    if (format.channels == targetChannels && targetChannel < format.channels) {
+        return readSampleAsDouble(source, format, frameIndex, targetChannel);
+    }
+    if (format.channels == 1) {
+        return readSampleAsDouble(source, format, frameIndex, 0);
+    }
+    if (targetChannels == 1) {
+        double sum = 0.0;
+        for (UINT32 channel = 0; channel < format.channels; ++channel) {
+            sum += readSampleAsDouble(source, format, frameIndex, channel);
+        }
+        return sum / static_cast<double>(format.channels);
+    }
+    return readSampleAsDouble(source, format, frameIndex, std::min(targetChannel, format.channels - 1));
+}
+
 } // namespace
 
 constexpr int64_t HnsPerSecond = 10'000'000;
@@ -88,6 +150,53 @@ void copyAudioWithGain(
     std::memcpy(destination.data(), source, byteCount);
 }
 
+void convertAudioWithGain(
+    const BYTE* source,
+    DWORD byteCount,
+    const AudioInputFormat& sourceFormat,
+    const AudioInputFormat& targetFormat,
+    double gain,
+    std::vector<BYTE>& destination) {
+    if (!source || byteCount == 0 || sourceFormat.blockAlign == 0 || targetFormat.blockAlign == 0 ||
+        sourceFormat.sampleRate == 0 || targetFormat.sampleRate == 0 || sourceFormat.channels == 0 ||
+        targetFormat.channels == 0) {
+        destination.clear();
+        return;
+    }
+
+    if (sameAudioFormatForMixing(sourceFormat, targetFormat)) {
+        copyAudioWithGain(source, byteCount, targetFormat, gain, destination);
+        return;
+    }
+
+    const size_t sourceFrames = byteCount / sourceFormat.blockAlign;
+    if (sourceFrames == 0) {
+        destination.clear();
+        return;
+    }
+
+    const double rateRatio = static_cast<double>(targetFormat.sampleRate) /
+        static_cast<double>(sourceFormat.sampleRate);
+    const size_t targetFrames = std::max<size_t>(1, static_cast<size_t>(std::llround(sourceFrames * rateRatio)));
+    destination.assign(targetFrames * targetFormat.blockAlign, 0);
+
+    for (size_t targetFrame = 0; targetFrame < targetFrames; ++targetFrame) {
+        const double sourcePosition = static_cast<double>(targetFrame) / rateRatio;
+        const size_t sourceFrame = std::min(
+            sourceFrames - 1,
+            static_cast<size_t>(std::llround(sourcePosition)));
+        for (UINT32 channel = 0; channel < targetFormat.channels; ++channel) {
+            const double sample = readMappedChannel(
+                source,
+                sourceFormat,
+                sourceFrame,
+                channel,
+                targetFormat.channels);
+            writeSampleFromDouble(destination.data(), targetFormat, targetFrame, channel, sample * gain);
+        }
+    }
+}
+
 void mixAudioInPlace(
     std::vector<BYTE>& destination,
     const BYTE* source,
@@ -133,11 +242,15 @@ void mixAudioInPlace(
 
 AudioMixer::AudioMixer(
     const AudioInputFormat& format,
+    const AudioInputFormat& systemFormat,
+    const AudioInputFormat& microphoneFormat,
     bool includeSystem,
     bool includeMicrophone,
     double microphoneGain,
     OutputCallback output)
     : format_(format),
+      systemFormat_(systemFormat),
+      microphoneFormat_(microphoneFormat),
       includeSystem_(includeSystem),
       includeMicrophone_(includeMicrophone),
       microphoneGain_(microphoneGain),
@@ -187,7 +300,7 @@ void AudioMixer::pushSystem(const BYTE* data, DWORD byteCount) {
 
     {
         std::scoped_lock lock(mutex_);
-        append(systemQueue_, data, byteCount, 1.0);
+        append(systemQueue_, data, byteCount, systemFormat_, 1.0);
     }
     cv_.notify_all();
 }
@@ -199,17 +312,22 @@ void AudioMixer::pushMicrophone(const BYTE* data, DWORD byteCount) {
 
     {
         std::scoped_lock lock(mutex_);
-        append(microphoneQueue_, data, byteCount, microphoneGain_);
+        append(microphoneQueue_, data, byteCount, microphoneFormat_, microphoneGain_);
     }
     cv_.notify_all();
 }
 
-void AudioMixer::append(std::vector<BYTE>& queue, const BYTE* data, DWORD byteCount, double gain) {
+void AudioMixer::append(
+    std::vector<BYTE>& queue,
+    const BYTE* data,
+    DWORD byteCount,
+    const AudioInputFormat& sourceFormat,
+    double gain) {
     if (!data || byteCount == 0) {
         return;
     }
 
-    copyAudioWithGain(data, byteCount, format_, gain, gainBuffer_);
+    convertAudioWithGain(data, byteCount, sourceFormat, format_, gain, gainBuffer_);
     queue.insert(queue.end(), gainBuffer_.begin(), gainBuffer_.end());
 }
 

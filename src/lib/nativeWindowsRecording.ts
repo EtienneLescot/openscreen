@@ -20,6 +20,7 @@ export type NativeWindowsRecordingRequest = {
 		microphone: {
 			enabled: boolean;
 			deviceId?: string;
+			deviceName?: string;
 			gain: number;
 		};
 	};

@@ -30,14 +30,16 @@ public:
     WasapiLoopbackCapture& operator=(const WasapiLoopbackCapture&) = delete;
 
     bool initializeSystemLoopback();
-    bool initializeMicrophone(const std::wstring& deviceId);
+    bool initializeMicrophone(const std::wstring& deviceId, const std::wstring& deviceName);
     bool start(AudioCallback callback);
     void stop();
 
     const AudioInputFormat& inputFormat() const;
+    const std::wstring& selectedDeviceName() const;
 
 private:
-    bool initialize(WasapiCaptureEndpoint endpoint, const std::wstring& deviceId);
+    bool initialize(WasapiCaptureEndpoint endpoint, const std::wstring& deviceId, const std::wstring& deviceName);
+    bool resolveMicrophoneByName(const std::wstring& deviceName);
     void captureLoop();
     bool resolveInputFormat(WAVEFORMATEX* mixFormat);
 
@@ -47,6 +49,7 @@ private:
     Microsoft::WRL::ComPtr<IAudioCaptureClient> captureClient_;
     WAVEFORMATEX* mixFormat_ = nullptr;
     AudioInputFormat inputFormat_{};
+    std::wstring selectedDeviceName_;
     AudioCallback callback_;
     std::thread thread_;
     std::atomic<bool> stopRequested_ = false;

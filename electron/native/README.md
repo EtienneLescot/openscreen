@@ -34,6 +34,7 @@ Current V2 JSON shape:
   "captureSystemAudio": false,
   "captureMic": false,
   "microphoneDeviceId": "default",
+  "microphoneDeviceName": "Microphone (NVIDIA Broadcast)",
   "microphoneGain": 1.4,
   "webcamEnabled": true,
   "webcamDeviceId": "default",
@@ -47,7 +48,7 @@ Current V2 JSON shape:
 }
 ```
 
-The current helper implementation supports display/window video capture, system audio loopback, default-microphone capture, Media Foundation webcam capture, and a DirectShow webcam fallback for virtual cameras that are not exposed through Media Foundation. Webcam frames are currently composed into the primary MP4 as a bottom-right picture-in-picture overlay. Browser `deviceId` values do not always map to Media Foundation symbolic links, so the renderer passes both `webcamDeviceId` and `webcamDeviceName`. Electron resolves a matching DirectShow filter CLSID for the selected label; the helper uses Media Foundation first, then that exact DirectShow filter when the requested camera is absent from Media Foundation.
+The current helper implementation supports display/window video capture, system audio loopback, selected-microphone capture, Media Foundation webcam capture, and a DirectShow webcam fallback for virtual cameras that are not exposed through Media Foundation. Webcam frames are currently composed into the primary MP4 as a bottom-right picture-in-picture overlay. Browser `deviceId` values do not always map to Media Foundation symbolic links or WASAPI endpoint IDs, so the renderer passes both browser IDs and user-visible device names. For microphones, the helper tries the requested WASAPI endpoint ID first, then resolves an active capture endpoint by `microphoneDeviceName`, then falls back to the default endpoint. For webcams, Electron resolves a matching DirectShow filter CLSID for the selected label; the helper uses Media Foundation first, then that exact DirectShow filter when the requested camera is absent from Media Foundation.
 
 Smoke-test the helper with:
 
@@ -66,4 +67,12 @@ To validate a specific native webcam manually:
 $env:OPENSCREEN_WGC_TEST_WEBCAM_DEVICE_NAME = "NVIDIA Broadcast"
 npm run test:wgc-webcam:win
 Remove-Item Env:OPENSCREEN_WGC_TEST_WEBCAM_DEVICE_NAME
+```
+
+To validate a specific native microphone manually:
+
+```powershell
+$env:OPENSCREEN_WGC_TEST_MICROPHONE_DEVICE_NAME = "Microphone (NVIDIA Broadcast)"
+npm run test:wgc-mic:win
+Remove-Item Env:OPENSCREEN_WGC_TEST_MICROPHONE_DEVICE_NAME
 ```

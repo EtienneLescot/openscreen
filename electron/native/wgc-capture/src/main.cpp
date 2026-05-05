@@ -38,6 +38,7 @@ struct CaptureConfig {
     bool captureMic = false;
     bool webcamEnabled = false;
     std::string microphoneDeviceId;
+    std::string microphoneDeviceName;
     double microphoneGain = 1.0;
     std::string webcamDeviceId;
     std::string webcamDeviceName;
@@ -303,6 +304,7 @@ bool parseConfig(const std::string& json, CaptureConfig& config) {
     config.captureMic = findBool(json, "captureMic", false);
     config.webcamEnabled = findBool(json, "webcamEnabled", false);
     config.microphoneDeviceId = findString(json, "microphoneDeviceId");
+    config.microphoneDeviceName = findString(json, "microphoneDeviceName");
     config.microphoneGain = findDouble(json, "microphoneGain", 1.0);
     config.webcamDeviceId = findString(json, "webcamDeviceId");
     config.webcamDeviceName = findString(json, "webcamDeviceName");
@@ -406,24 +408,26 @@ int main(int argc, char* argv[]) {
     WasapiLoopbackCapture loopbackCapture;
     WasapiLoopbackCapture microphoneCapture;
     const AudioInputFormat* audioFormat = nullptr;
+    AudioInputFormat systemAudioFormat{};
+    AudioInputFormat microphoneAudioFormat{};
     if (config.captureSystemAudio) {
         if (!loopbackCapture.initializeSystemLoopback()) {
             std::cerr << "ERROR: Failed to initialize WASAPI loopback capture" << std::endl;
             return 1;
         }
+        systemAudioFormat = loopbackCapture.inputFormat();
         audioFormat = &loopbackCapture.inputFormat();
     }
     if (config.captureMic) {
-        if (!microphoneCapture.initializeMicrophone(utf8ToWide(config.microphoneDeviceId))) {
+        if (!microphoneCapture.initializeMicrophone(
+                utf8ToWide(config.microphoneDeviceId),
+                utf8ToWide(config.microphoneDeviceName))) {
             std::cerr << "ERROR: Failed to initialize WASAPI microphone capture" << std::endl;
             return 1;
         }
+        microphoneAudioFormat = microphoneCapture.inputFormat();
         if (!audioFormat) {
             audioFormat = &microphoneCapture.inputFormat();
-        } else if (!sameAudioFormatForMixing(*audioFormat, microphoneCapture.inputFormat())) {
-            std::cerr << "ERROR: System audio and microphone formats differ; native mixing is not supported yet"
-                      << std::endl;
-            return 1;
         }
     }
     if (audioFormat) {
@@ -431,7 +435,12 @@ int main(int argc, char* argv[]) {
                   << ",\"channels\":" << audioFormat->channels
                   << ",\"bitsPerSample\":" << audioFormat->bitsPerSample
                   << ",\"system\":" << (config.captureSystemAudio ? "true" : "false")
-                  << ",\"microphone\":" << (config.captureMic ? "true" : "false") << "}" << std::endl;
+                  << ",\"microphone\":" << (config.captureMic ? "true" : "false");
+        if (config.captureMic) {
+            std::cout << ",\"microphoneDeviceName\":\""
+                      << jsonEscape(wideToUtf8(microphoneCapture.selectedDeviceName())) << "\"";
+        }
+        std::cout << "}" << std::endl;
     }
 
     MFEncoder encoder;
@@ -549,6 +558,8 @@ int main(int argc, char* argv[]) {
 
         audioMixer = std::make_unique<AudioMixer>(
             *audioFormat,
+            config.captureSystemAudio ? systemAudioFormat : *audioFormat,
+            config.captureMic ? microphoneAudioFormat : *audioFormat,
             config.captureSystemAudio,
             config.captureMic,
             config.microphoneGain,
