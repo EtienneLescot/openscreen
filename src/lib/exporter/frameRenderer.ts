@@ -58,9 +58,17 @@ import {
 	type StyledRenderRect,
 } from "@/lib/compositeLayout";
 import {
+	createNativeCursorMotionBlurState,
+	createNativeCursorSmoothingState,
+	getNativeCursorClickBounceProgress,
+	getNativeCursorClickBounceScale,
+	getNativeCursorMotionBlurPx,
 	projectNativeCursorToLocal,
+	resetNativeCursorMotionBlurState,
+	resetNativeCursorSmoothingState,
 	resolveInterpolatedNativeCursorFrame,
 	resolveNativeCursorRenderAsset,
+	smoothNativeCursorSample,
 } from "@/lib/cursor/nativeCursor";
 import { BackgroundLoadError, classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { drawCanvasClipPath } from "@/lib/webcamMaskShapes";
@@ -88,6 +96,9 @@ interface FrameRenderConfig {
 	cropRegion: CropRegion;
 	cursorRecordingData?: CursorRecordingData | null;
 	cursorScale?: number;
+	cursorSmoothing?: number;
+	cursorMotionBlur?: number;
+	cursorClickBounce?: number;
 	videoWidth: number;
 	videoHeight: number;
 	webcamSize?: Size | null;
@@ -152,6 +163,8 @@ export class FrameRenderer {
 	private layoutCache: LayoutCache | null = null;
 	private currentVideoTime = 0;
 	private motionBlurState: MotionBlurState = createMotionBlurState();
+	private nativeCursorSmoothingState = createNativeCursorSmoothingState();
+	private nativeCursorMotionBlurState = createNativeCursorMotionBlurState();
 	private smoothedAutoFocus: { cx: number; cy: number } | null = null;
 	private prevAnimationTimeMs: number | null = null;
 	private prevTargetProgress = 0;
@@ -562,6 +575,8 @@ export class FrameRenderer {
 		}
 
 		if ((this.config.cursorScale ?? 1) <= 0) {
+			resetNativeCursorSmoothingState(this.nativeCursorSmoothingState);
+			resetNativeCursorMotionBlurState(this.nativeCursorMotionBlurState);
 			return;
 		}
 
@@ -570,23 +585,28 @@ export class FrameRenderer {
 			timeMs,
 		);
 		if (!activeNativeCursor) {
+			resetNativeCursorSmoothingState(this.nativeCursorSmoothingState);
+			resetNativeCursorMotionBlurState(this.nativeCursorMotionBlurState);
 			return;
 		}
+		const displaySample = smoothNativeCursorSample({
+			sample: activeNativeCursor.sample,
+			smoothing: this.config.cursorSmoothing ?? 0,
+			state: this.nativeCursorSmoothingState,
+			timeMs,
+		});
 
 		const projectedPoint = projectNativeCursorToLocal({
 			cropRegion: this.config.cropRegion,
 			maskRect: this.layoutCache.maskRect,
-			sample: activeNativeCursor.sample,
+			sample: displaySample,
 		});
 		if (!projectedPoint) {
+			resetNativeCursorMotionBlurState(this.nativeCursorMotionBlurState);
 			return;
 		}
 
-		const renderAsset = resolveNativeCursorRenderAsset(
-			activeNativeCursor.asset,
-			1,
-			activeNativeCursor.sample,
-		);
+		const renderAsset = resolveNativeCursorRenderAsset(activeNativeCursor.asset, 1, displaySample);
 		let image: HTMLImageElement;
 		try {
 			image = await this.getCursorImage(renderAsset);
@@ -594,10 +614,25 @@ export class FrameRenderer {
 			this.warnOnce("native-cursor-image-load", "Failed to load native cursor asset", error);
 			return;
 		}
-		const scale = Math.max(0, this.config.cursorScale ?? 1);
+		const scale =
+			Math.max(0, this.config.cursorScale ?? 1) *
+			getNativeCursorClickBounceScale(
+				this.config.cursorClickBounce ?? 0,
+				getNativeCursorClickBounceProgress(this.config.cursorRecordingData, timeMs),
+			);
 		const appliedScale = this.animationState.appliedScale;
 		const canvasX = projectedPoint.x * appliedScale + this.animationState.x;
 		const canvasY = projectedPoint.y * appliedScale + this.animationState.y;
+		const blurPx = getNativeCursorMotionBlurPx({
+			motionBlur: this.config.cursorMotionBlur ?? 0,
+			point: { x: canvasX, y: canvasY },
+			state: this.nativeCursorMotionBlurState,
+			timeMs,
+		});
+		const previousFilter = this.foregroundCtx.filter;
+		if (blurPx > 0) {
+			this.foregroundCtx.filter = `blur(${blurPx.toFixed(2)}px)`;
+		}
 		this.foregroundCtx.drawImage(
 			image,
 			canvasX - renderAsset.hotspotX * scale * appliedScale,
@@ -605,6 +640,7 @@ export class FrameRenderer {
 			renderAsset.width * scale * appliedScale,
 			renderAsset.height * scale * appliedScale,
 		);
+		this.foregroundCtx.filter = previousFilter;
 	}
 
 	private async getCursorImage(asset: { id: string; imageDataUrl: string }) {

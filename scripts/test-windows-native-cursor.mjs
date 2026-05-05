@@ -138,6 +138,9 @@ public static class OpenScreenCursorDiagnosticInterop {
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetCursorInfo(ref CURSORINFO pci);
 
+    [DllImport("user32.dll")]
+    public static extern short GetAsyncKeyState(int vKey);
+
     [DllImport("user32.dll", SetLastError = true)]
     public static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
 
@@ -322,6 +325,7 @@ while ($true) {
     $visible = ($cursorInfo.flags -band 1) -ne 0
     $cursorId = if ($cursorInfo.hCursor -eq [IntPtr]::Zero) { $null } else { ('0x{0:X}' -f $cursorInfo.hCursor.ToInt64()) }
     $cursorType = Get-StandardCursorType $cursorInfo.hCursor
+    $leftButtonDown = ([OpenScreenCursorDiagnosticInterop]::GetAsyncKeyState(0x01) -band 0x8000) -ne 0
     $asset = $null
 
     if ($visible -and $cursorId -and $cursorId -ne $lastCursorId) {
@@ -342,6 +346,7 @@ while ($true) {
         visible = $visible
         handle = $cursorId
         cursorType = $cursorType
+        leftButtonDown = $leftButtonDown
         bounds = @{
             x = $screenBounds.Left
             y = $screenBounds.Top
@@ -366,11 +371,15 @@ Add-Type -AssemblyName System.Windows.Forms
 
 $source = @"
 using System.Runtime.InteropServices;
+using System;
 
 public static class OpenScreenMouseDiagnosticInterop {
     [DllImport("user32.dll")]
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool SetCursorPos(int X, int Y);
+
+    [DllImport("user32.dll")]
+    public static extern void mouse_event(uint dwFlags, uint dx, uint dy, uint dwData, UIntPtr dwExtraInfo);
 }
 "@
 
@@ -386,8 +395,14 @@ for ($i = 0; $i -lt ${steps}; $i++) {
     $points += @{ x = $x; y = $y }
 }
 
-foreach ($point in $points) {
+for ($i = 0; $i -lt $points.Count; $i++) {
+    $point = $points[$i]
     [OpenScreenMouseDiagnosticInterop]::SetCursorPos($point.x, $point.y) | Out-Null
+    if ($i -eq [int]([Math]::Floor($points.Count / 2))) {
+        [OpenScreenMouseDiagnosticInterop]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
+        Start-Sleep -Milliseconds 90
+        [OpenScreenMouseDiagnosticInterop]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
+    }
     Start-Sleep -Milliseconds ${stepMs}
 }
 `;
@@ -489,11 +504,21 @@ function writeAssets(assets, outputDir) {
 
 function toRecordingData(samples, assets) {
 	const firstTimestampMs = samples[0]?.timestampMs ?? Date.now();
+	let previousLeftButtonDown = false;
 	const normalizedSamples = samples.flatMap((sample) => {
 		const bounds = sample.bounds;
 		if (!bounds || bounds.width <= 0 || bounds.height <= 0) {
 			return [];
 		}
+
+		const leftButtonDown = sample.leftButtonDown === true;
+		const interactionType =
+			leftButtonDown && !previousLeftButtonDown
+				? "click"
+				: !leftButtonDown && previousLeftButtonDown
+					? "mouseup"
+					: "move";
+		previousLeftButtonDown = leftButtonDown;
 
 		return [
 			{
@@ -503,6 +528,7 @@ function toRecordingData(samples, assets) {
 				assetId: sample.handle,
 				visible: Boolean(sample.visible),
 				cursorType: sample.cursorType ?? null,
+				interactionType,
 			},
 		];
 	});
@@ -1045,6 +1071,9 @@ function assertReport(report) {
 	if (report.errorCount > 0) {
 		failures.push(`Sampler reported ${report.errorCount} error event(s).`);
 	}
+	if (report.leftButtonDownSampleCount === 0 || report.clickSampleCount === 0) {
+		failures.push("Left button click interaction was not observed.");
+	}
 
 	if (failures.length > 0) {
 		throw new Error(failures.join(" "));
@@ -1111,6 +1140,15 @@ const samples = events.filter((event) => event.type === "sample");
 const errors = events.filter((event) => event.type === "error");
 const recordingStartTimestampMs = samples[0]?.timestampMs ?? Date.now();
 const uniquePositions = new Set(samples.map((sample) => `${sample.x},${sample.y}`));
+let previousLeftButtonDown = false;
+let clickSampleCount = 0;
+for (const sample of samples) {
+	const leftButtonDown = sample.leftButtonDown === true;
+	if (leftButtonDown && !previousLeftButtonDown) {
+		clickSampleCount += 1;
+	}
+	previousLeftButtonDown = leftButtonDown;
+}
 const report = {
 	outputDir: OUTPUT_DIR,
 	sampleIntervalMs: SAMPLE_INTERVAL_MS,
@@ -1121,6 +1159,8 @@ const report = {
 	assetCount: assets.size,
 	uniqueCursorHandleCount: new Set(samples.map((sample) => sample.handle).filter(Boolean)).size,
 	uniquePositionCount: uniquePositions.size,
+	leftButtonDownSampleCount: samples.filter((sample) => sample.leftButtonDown === true).length,
+	clickSampleCount,
 	errorCount: errors.length,
 	firstSample: samples[0] ?? null,
 	lastSample: samples.at(-1) ?? null,

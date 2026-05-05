@@ -26,11 +26,19 @@ import {
 	type WebcamSizePreset,
 } from "@/lib/compositeLayout";
 import {
+	createNativeCursorMotionBlurState,
+	createNativeCursorSmoothingState,
+	getNativeCursorClickBounceProgress,
+	getNativeCursorClickBounceScale,
+	getNativeCursorMotionBlurPx,
 	hasNativeCursorRecordingData,
 	projectNativeCursorToLocal,
 	projectNativeCursorToStage,
+	resetNativeCursorMotionBlurState,
+	resetNativeCursorSmoothingState,
 	resolveInterpolatedNativeCursorFrame,
 	resolveNativeCursorRenderAsset,
+	smoothNativeCursorSample,
 } from "@/lib/cursor/nativeCursor";
 import { classifyWallpaper, DEFAULT_WALLPAPER, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
@@ -319,6 +327,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 		const nativeCursorTextureIdRef = useRef<string | null>(null);
 		const nativeCursorImageRef = useRef<HTMLImageElement | null>(null);
 		const nativeCursorImageIdRef = useRef<string | null>(null);
+		const nativeCursorSmoothingStateRef = useRef(createNativeCursorSmoothingState());
+		const nativeCursorMotionBlurStateRef = useRef(createNativeCursorMotionBlurState());
 
 		const hasNativeCursorRecording = useMemo(
 			() => hasNativeCursorRecordingData(cursorRecordingData),
@@ -757,6 +767,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 
 		useEffect(() => {
 			cursorRecordingDataRef.current = cursorRecordingData;
+			resetNativeCursorSmoothingState(nativeCursorSmoothingStateRef.current);
+			resetNativeCursorMotionBlurState(nativeCursorMotionBlurStateRef.current);
 		}, [cursorRecordingData]);
 
 		useEffect(() => {
@@ -1426,7 +1438,10 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 					}
 					if (nativeCursorImage) {
 						nativeCursorImage.style.display = "none";
+						nativeCursorImage.style.filter = "none";
 					}
+					resetNativeCursorSmoothingState(nativeCursorSmoothingStateRef.current);
+					resetNativeCursorMotionBlurState(nativeCursorMotionBlurStateRef.current);
 				};
 				if (nativeCursorImage) {
 					if (hasNativeCursorRecordingRef.current && showCursorRef.current) {
@@ -1436,13 +1451,20 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 							timeMs,
 						);
 						if (frame) {
+							const displaySample = smoothNativeCursorSample({
+								forceSnap: !isPlayingRef.current || isSeekingRef.current,
+								sample: frame.sample,
+								smoothing: cursorSmoothingRef.current,
+								state: nativeCursorSmoothingStateRef.current,
+								timeMs,
+							});
 							const cameraContainer = cameraContainerRef.current;
 							const videoContainer = videoContainerRef.current;
 							const cropRegionValue = cropRegionRef.current ?? { x: 0, y: 0, width: 1, height: 1 };
 							const projectedLocalPoint = projectNativeCursorToLocal({
 								cropRegion: cropRegionValue,
 								maskRect: baseMaskRef.current,
-								sample: frame.sample,
+								sample: displaySample,
 							});
 							const projectedStagePoint =
 								cameraContainer && videoContainer
@@ -1454,17 +1476,32 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 												x: videoContainer.x,
 												y: videoContainer.y,
 											},
-											sample: frame.sample,
+											sample: displaySample,
 										})
 									: null;
 							if (projectedLocalPoint && projectedStagePoint) {
 								const renderAsset = resolveNativeCursorRenderAsset(
 									frame.asset,
 									window.devicePixelRatio || 1,
-									frame.sample,
+									displaySample,
 								);
-								const scale = Math.max(0, cursorSizeRef.current);
+								const bounceProgress = getNativeCursorClickBounceProgress(
+									cursorRecordingDataRef.current,
+									timeMs,
+								);
+								const scale =
+									Math.max(0, cursorSizeRef.current) *
+									getNativeCursorClickBounceScale(cursorClickBounceRef.current, bounceProgress);
 								const transformedScale = scale * Math.abs(cameraContainer?.scale.x || 1);
+								const blurPx =
+									!isPlayingRef.current || isSeekingRef.current
+										? 0
+										: getNativeCursorMotionBlurPx({
+												motionBlur: cursorMotionBlurRef.current,
+												point: projectedStagePoint,
+												state: nativeCursorMotionBlurStateRef.current,
+												timeMs,
+											});
 								if (nativeCursorImageIdRef.current !== renderAsset.id) {
 									nativeCursorImage.src = renderAsset.imageDataUrl;
 									nativeCursorImageIdRef.current = renderAsset.id;
@@ -1472,6 +1509,8 @@ const VideoPlayback = forwardRef<VideoPlaybackRef, VideoPlaybackProps>(
 								nativeCursorImage.style.display = "block";
 								nativeCursorImage.style.width = `${renderAsset.width * transformedScale}px`;
 								nativeCursorImage.style.height = `${renderAsset.height * transformedScale}px`;
+								nativeCursorImage.style.filter =
+									blurPx > 0 ? `blur(${blurPx.toFixed(2)}px)` : "none";
 								nativeCursorImage.style.transform = `translate3d(${
 									projectedStagePoint.x - renderAsset.hotspotX * transformedScale
 								}px, ${projectedStagePoint.y - renderAsset.hotspotY * transformedScale}px, 0)`;

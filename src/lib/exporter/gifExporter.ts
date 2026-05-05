@@ -9,9 +9,9 @@ import type {
 	ZoomRegion,
 } from "@/components/video-editor/types";
 import { BackgroundLoadError } from "@/lib/wallpaper";
+import type { CursorRecordingData } from "@/native/contracts";
 import { getPlatform } from "@/utils/platformUtils";
 import { AsyncVideoFrameQueue } from "./asyncVideoFrameQueue";
-import type { CursorRecordingData } from "@/native/contracts";
 import { FrameRenderer } from "./frameRenderer";
 import { StreamingVideoDecoder } from "./streamingDecoder";
 import type {
@@ -50,6 +50,9 @@ interface GifExporterConfig {
 	webcamPosition?: { cx: number; cy: number } | null;
 	cursorRecordingData?: CursorRecordingData | null;
 	cursorScale?: number;
+	cursorSmoothing?: number;
+	cursorMotionBlur?: number;
+	cursorClickBounce?: number;
 	annotationRegions?: AnnotationRegion[];
 	previewWidth?: number;
 	previewHeight?: number;
@@ -156,6 +159,9 @@ export class GifExporter {
 				cropRegion: this.config.cropRegion,
 				cursorRecordingData: this.config.cursorRecordingData,
 				cursorScale: this.config.cursorScale,
+				cursorSmoothing: this.config.cursorSmoothing,
+				cursorMotionBlur: this.config.cursorMotionBlur,
+				cursorClickBounce: this.config.cursorClickBounce,
 				videoWidth: videoInfo.width,
 				videoHeight: videoInfo.height,
 				webcamSize: webcamInfo ? { width: webcamInfo.width, height: webcamInfo.height } : null,

@@ -28,6 +28,20 @@ export interface ActiveNativeCursorFrame {
 	sample: CursorRecordingSample;
 }
 
+export interface NativeCursorSmoothingState {
+	cx: number;
+	cy: number;
+	lastTimeMs: number | null;
+	initialized: boolean;
+}
+
+export interface NativeCursorMotionBlurState {
+	x: number;
+	y: number;
+	lastTimeMs: number | null;
+	initialized: boolean;
+}
+
 interface ProjectNativeCursorOptions {
 	cropRegion: CropRegion;
 	maskRect: { x: number; y: number; width: number; height: number };
@@ -42,6 +56,9 @@ interface ProjectNativeCursorToStageOptions extends ProjectNativeCursorOptions {
 function clamp(value: number, min: number, max: number) {
 	return Math.min(max, Math.max(min, value));
 }
+
+const NATIVE_CURSOR_CLICK_ANIMATION_MS = 140;
+const NATIVE_CURSOR_MOTION_BLUR_MAX_PX = 6;
 
 interface PrettyNativeCursorAsset {
 	imageDataUrl: string;
@@ -167,17 +184,20 @@ const PRETTY_NATIVE_CURSOR_ASSETS: Partial<Record<NativeCursorType, PrettyNative
 };
 
 function resolveUntypedPrettyNativeCursorAsset(asset: NativeCursorAsset) {
-	if (asset.cursorType || asset.width < 24 || asset.width > 64 || asset.height < 24 || asset.height > 64) {
+	if (
+		asset.cursorType ||
+		asset.width < 24 ||
+		asset.width > 64 ||
+		asset.height < 24 ||
+		asset.height > 64
+	) {
 		return null;
 	}
 
 	const hotspotXNorm = asset.hotspotX / asset.width;
 	const hotspotYNorm = asset.hotspotY / asset.height;
 	const looksLikeChromiumGrabCursor =
-		hotspotXNorm >= 0.22 &&
-		hotspotXNorm <= 0.55 &&
-		hotspotYNorm >= 0.2 &&
-		hotspotYNorm <= 0.45;
+		hotspotXNorm >= 0.22 && hotspotXNorm <= 0.55 && hotspotYNorm >= 0.2 && hotspotYNorm <= 0.45;
 
 	return looksLikeChromiumGrabCursor ? (PRETTY_NATIVE_CURSOR_ASSETS["open-hand"] ?? null) : null;
 }
@@ -191,6 +211,155 @@ export function hasNativeCursorRecordingData(
 			recordingData.samples.length > 0 &&
 			recordingData.assets.length > 0,
 	);
+}
+
+export function createNativeCursorSmoothingState(): NativeCursorSmoothingState {
+	return {
+		cx: 0,
+		cy: 0,
+		lastTimeMs: null,
+		initialized: false,
+	};
+}
+
+export function resetNativeCursorSmoothingState(state: NativeCursorSmoothingState) {
+	state.cx = 0;
+	state.cy = 0;
+	state.lastTimeMs = null;
+	state.initialized = false;
+}
+
+export function createNativeCursorMotionBlurState(): NativeCursorMotionBlurState {
+	return {
+		x: 0,
+		y: 0,
+		lastTimeMs: null,
+		initialized: false,
+	};
+}
+
+export function resetNativeCursorMotionBlurState(state: NativeCursorMotionBlurState) {
+	state.x = 0;
+	state.y = 0;
+	state.lastTimeMs = null;
+	state.initialized = false;
+}
+
+export function smoothNativeCursorSample({
+	forceSnap = false,
+	sample,
+	smoothing,
+	state,
+	timeMs,
+}: {
+	forceSnap?: boolean;
+	sample: CursorRecordingSample;
+	smoothing: number;
+	state: NativeCursorSmoothingState;
+	timeMs: number;
+}): CursorRecordingSample {
+	const clampedSmoothing = clamp(Number.isFinite(smoothing) ? smoothing : 0, 0, 0.98);
+	const previousTimeMs = state.lastTimeMs;
+	const shouldSnap =
+		forceSnap ||
+		clampedSmoothing <= 0 ||
+		!state.initialized ||
+		previousTimeMs === null ||
+		timeMs <= previousTimeMs;
+
+	if (shouldSnap) {
+		state.cx = sample.cx;
+		state.cy = sample.cy;
+		state.lastTimeMs = timeMs;
+		state.initialized = true;
+		return sample;
+	}
+
+	const frameCount = Math.max(1, (timeMs - previousTimeMs) / (1000 / 60));
+	const alpha = 1 - Math.pow(clampedSmoothing, frameCount);
+	state.cx += (sample.cx - state.cx) * alpha;
+	state.cy += (sample.cy - state.cy) * alpha;
+	state.lastTimeMs = timeMs;
+
+	return {
+		...sample,
+		cx: state.cx,
+		cy: state.cy,
+	};
+}
+
+export function getNativeCursorClickBounceProgress(
+	recordingData: CursorRecordingData | null | undefined,
+	timeMs: number,
+) {
+	if (!hasNativeCursorRecordingData(recordingData)) {
+		return 0;
+	}
+
+	for (let index = recordingData.samples.length - 1; index >= 0; index -= 1) {
+		const sample = recordingData.samples[index];
+		if (sample.timeMs > timeMs) {
+			continue;
+		}
+
+		const ageMs = timeMs - sample.timeMs;
+		if (ageMs > NATIVE_CURSOR_CLICK_ANIMATION_MS) {
+			return 0;
+		}
+
+		if (sample.interactionType === "click") {
+			return 1 - ageMs / NATIVE_CURSOR_CLICK_ANIMATION_MS;
+		}
+	}
+
+	return 0;
+}
+
+export function getNativeCursorClickBounceScale(clickBounce: number, progress: number) {
+	if (progress <= 0 || clickBounce <= 0) {
+		return 1;
+	}
+
+	const bounceAmount = Math.sin(progress * Math.PI);
+	const amplitude = clamp(clickBounce, 0, 4) * 0.08;
+	return Math.max(0.72, 1 - bounceAmount * amplitude);
+}
+
+export function getNativeCursorMotionBlurPx({
+	motionBlur,
+	point,
+	state,
+	timeMs,
+}: {
+	motionBlur: number;
+	point: { x: number; y: number };
+	state: NativeCursorMotionBlurState;
+	timeMs: number;
+}) {
+	const clampedMotionBlur = clamp(Number.isFinite(motionBlur) ? motionBlur : 0, 0, 1);
+	const previousTimeMs = state.lastTimeMs;
+	const shouldSnap =
+		clampedMotionBlur <= 0 ||
+		!state.initialized ||
+		previousTimeMs === null ||
+		timeMs <= previousTimeMs;
+
+	if (shouldSnap) {
+		state.x = point.x;
+		state.y = point.y;
+		state.lastTimeMs = timeMs;
+		state.initialized = true;
+		return 0;
+	}
+
+	const deltaMs = Math.max(1, timeMs - previousTimeMs);
+	const distance = Math.hypot(point.x - state.x, point.y - state.y);
+	const speedPxPerSecond = (distance / deltaMs) * 1000;
+	state.x = point.x;
+	state.y = point.y;
+	state.lastTimeMs = timeMs;
+
+	return clamp(speedPxPerSecond * clampedMotionBlur * 0.004, 0, NATIVE_CURSOR_MOTION_BLUR_MAX_PX);
 }
 
 function getCroppedCursorPosition(sample: CursorRecordingSample, cropRegion: CropRegion) {

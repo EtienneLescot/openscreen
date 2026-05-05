@@ -50,6 +50,9 @@ public static class OpenScreenCursorInterop {
     [return: MarshalAs(UnmanagedType.Bool)]
     public static extern bool GetCursorInfo(ref CURSORINFO pci);
 
+	[DllImport("user32.dll")]
+	public static extern short GetAsyncKeyState(int vKey);
+
 	[DllImport("user32.dll", SetLastError = true)]
 	public static extern IntPtr LoadCursor(IntPtr hInstance, IntPtr lpCursorName);
 
@@ -276,6 +279,7 @@ while ($true) {
     $visible = ($cursorInfo.flags -band 1) -ne 0
     $cursorId = if ($cursorInfo.hCursor -eq [IntPtr]::Zero) { $null } else { ('0x{0:X}' -f $cursorInfo.hCursor.ToInt64()) }
     $cursorType = Get-StandardCursorType $cursorInfo.hCursor
+    $leftButtonDown = ([OpenScreenCursorInterop]::GetAsyncKeyState(0x01) -band 0x8000) -ne 0
     $asset = $null
 
     if ($visible -and $cursorId -and $cursorId -ne $lastCursorId) {
@@ -296,6 +300,7 @@ while ($true) {
         visible = $visible
         handle = $cursorId
         cursorType = $cursorType
+        leftButtonDown = $leftButtonDown
 		bounds = Get-TargetBounds
         asset = $asset
     }

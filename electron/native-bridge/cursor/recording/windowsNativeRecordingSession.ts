@@ -32,6 +32,7 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 	private readyTimer: NodeJS.Timeout | null = null;
 	private sampleCount = 0;
 	private outOfBoundsSampleCount = 0;
+	private previousLeftButtonDown = false;
 
 	constructor(private readonly options: WindowsNativeRecordingSessionOptions) {}
 
@@ -42,6 +43,7 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		this.startTimeMs = this.options.startTimeMs ?? Date.now();
 		this.sampleCount = 0;
 		this.outOfBoundsSampleCount = 0;
+		this.previousLeftButtonDown = false;
 
 		const encodedCommand = buildPowerShellCommand(
 			this.options.sampleIntervalMs,
@@ -208,6 +210,14 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		const normalizedY = (payload.y - bounds.y) / height;
 		const withinBounds =
 			normalizedX >= 0 && normalizedX <= 1 && normalizedY >= 0 && normalizedY <= 1;
+		const leftButtonDown = payload.leftButtonDown === true;
+		const interactionType =
+			leftButtonDown && !this.previousLeftButtonDown
+				? "click"
+				: !leftButtonDown && this.previousLeftButtonDown
+					? "mouseup"
+					: "move";
+		this.previousLeftButtonDown = leftButtonDown;
 
 		if (this.sampleCount === 0 || (!withinBounds && this.outOfBoundsSampleCount === 0)) {
 			this.logDiagnostic("sample", {
@@ -231,6 +241,7 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 				assetId: payload.handle,
 				visible: payload.visible && withinBounds,
 				cursorType: payload.cursorType ?? payload.asset?.cursorType ?? null,
+				interactionType,
 			},
 		};
 	}

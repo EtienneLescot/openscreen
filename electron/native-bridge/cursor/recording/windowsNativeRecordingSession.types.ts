@@ -9,6 +9,7 @@ export interface WindowsCursorSampleEvent {
 	visible: boolean;
 	handle: string | null;
 	cursorType?: NativeCursorType | null;
+	leftButtonDown?: boolean;
 	bounds?: {
 		x: number;
 		y: number;
