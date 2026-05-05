@@ -211,8 +211,9 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		const withinBounds =
 			normalizedX >= 0 && normalizedX <= 1 && normalizedY >= 0 && normalizedY <= 1;
 		const leftButtonDown = payload.leftButtonDown === true;
+		const leftButtonPressed = payload.leftButtonPressed === true;
 		const interactionType =
-			leftButtonDown && !this.previousLeftButtonDown
+			leftButtonPressed || (leftButtonDown && !this.previousLeftButtonDown)
 				? "click"
 				: !leftButtonDown && this.previousLeftButtonDown
 					? "mouseup"

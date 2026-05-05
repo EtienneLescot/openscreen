@@ -308,6 +308,7 @@ function Get-CursorAsset($cursorHandle, $cursorId) {
     }
 }
 
+[OpenScreenCursorDiagnosticInterop]::GetAsyncKeyState(0x01) | Out-Null
 Write-JsonLine @{ type = 'ready'; timestampMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
 
 $lastCursorId = $null
@@ -325,7 +326,9 @@ while ($true) {
     $visible = ($cursorInfo.flags -band 1) -ne 0
     $cursorId = if ($cursorInfo.hCursor -eq [IntPtr]::Zero) { $null } else { ('0x{0:X}' -f $cursorInfo.hCursor.ToInt64()) }
     $cursorType = Get-StandardCursorType $cursorInfo.hCursor
-    $leftButtonDown = ([OpenScreenCursorDiagnosticInterop]::GetAsyncKeyState(0x01) -band 0x8000) -ne 0
+    $leftButtonState = [OpenScreenCursorDiagnosticInterop]::GetAsyncKeyState(0x01)
+    $leftButtonDown = ($leftButtonState -band 0x8000) -ne 0
+    $leftButtonPressed = ($leftButtonState -band 0x0001) -ne 0
     $asset = $null
 
     if ($visible -and $cursorId -and $cursorId -ne $lastCursorId) {
@@ -347,6 +350,7 @@ while ($true) {
         handle = $cursorId
         cursorType = $cursorType
         leftButtonDown = $leftButtonDown
+        leftButtonPressed = $leftButtonPressed
         bounds = @{
             x = $screenBounds.Left
             y = $screenBounds.Top
@@ -400,7 +404,7 @@ for ($i = 0; $i -lt $points.Count; $i++) {
     [OpenScreenMouseDiagnosticInterop]::SetCursorPos($point.x, $point.y) | Out-Null
     if ($i -eq [int]([Math]::Floor($points.Count / 2))) {
         [OpenScreenMouseDiagnosticInterop]::mouse_event(0x0002, 0, 0, 0, [UIntPtr]::Zero)
-        Start-Sleep -Milliseconds 90
+        Start-Sleep -Milliseconds 12
         [OpenScreenMouseDiagnosticInterop]::mouse_event(0x0004, 0, 0, 0, [UIntPtr]::Zero)
     }
     Start-Sleep -Milliseconds ${stepMs}
@@ -512,8 +516,9 @@ function toRecordingData(samples, assets) {
 		}
 
 		const leftButtonDown = sample.leftButtonDown === true;
+		const leftButtonPressed = sample.leftButtonPressed === true;
 		const interactionType =
-			leftButtonDown && !previousLeftButtonDown
+			leftButtonPressed || (leftButtonDown && !previousLeftButtonDown)
 				? "click"
 				: !leftButtonDown && previousLeftButtonDown
 					? "mouseup"
@@ -1071,7 +1076,7 @@ function assertReport(report) {
 	if (report.errorCount > 0) {
 		failures.push(`Sampler reported ${report.errorCount} error event(s).`);
 	}
-	if (report.leftButtonDownSampleCount === 0 || report.clickSampleCount === 0) {
+	if (report.leftButtonPressedSampleCount === 0 || report.clickSampleCount === 0) {
 		failures.push("Left button click interaction was not observed.");
 	}
 
@@ -1144,7 +1149,8 @@ let previousLeftButtonDown = false;
 let clickSampleCount = 0;
 for (const sample of samples) {
 	const leftButtonDown = sample.leftButtonDown === true;
-	if (leftButtonDown && !previousLeftButtonDown) {
+	const leftButtonPressed = sample.leftButtonPressed === true;
+	if (leftButtonPressed || (leftButtonDown && !previousLeftButtonDown)) {
 		clickSampleCount += 1;
 	}
 	previousLeftButtonDown = leftButtonDown;
@@ -1160,6 +1166,8 @@ const report = {
 	uniqueCursorHandleCount: new Set(samples.map((sample) => sample.handle).filter(Boolean)).size,
 	uniquePositionCount: uniquePositions.size,
 	leftButtonDownSampleCount: samples.filter((sample) => sample.leftButtonDown === true).length,
+	leftButtonPressedSampleCount: samples.filter((sample) => sample.leftButtonPressed === true)
+		.length,
 	clickSampleCount,
 	errorCount: errors.length,
 	firstSample: samples[0] ?? null,

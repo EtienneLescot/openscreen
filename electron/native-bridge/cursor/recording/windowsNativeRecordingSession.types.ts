@@ -10,6 +10,7 @@ export interface WindowsCursorSampleEvent {
 	handle: string | null;
 	cursorType?: NativeCursorType | null;
 	leftButtonDown?: boolean;
+	leftButtonPressed?: boolean;
 	bounds?: {
 		x: number;
 		y: number;

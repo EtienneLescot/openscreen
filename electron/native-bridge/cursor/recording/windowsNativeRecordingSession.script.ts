@@ -263,6 +263,7 @@ function Get-CursorAsset($cursorHandle, $cursorId) {
     }
 }
 
+[OpenScreenCursorInterop]::GetAsyncKeyState(0x01) | Out-Null
 Write-JsonLine @{ type = 'ready'; timestampMs = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds() }
 
 $lastCursorId = $null
@@ -279,7 +280,9 @@ while ($true) {
     $visible = ($cursorInfo.flags -band 1) -ne 0
     $cursorId = if ($cursorInfo.hCursor -eq [IntPtr]::Zero) { $null } else { ('0x{0:X}' -f $cursorInfo.hCursor.ToInt64()) }
     $cursorType = Get-StandardCursorType $cursorInfo.hCursor
-    $leftButtonDown = ([OpenScreenCursorInterop]::GetAsyncKeyState(0x01) -band 0x8000) -ne 0
+    $leftButtonState = [OpenScreenCursorInterop]::GetAsyncKeyState(0x01)
+    $leftButtonDown = ($leftButtonState -band 0x8000) -ne 0
+    $leftButtonPressed = ($leftButtonState -band 0x0001) -ne 0
     $asset = $null
 
     if ($visible -and $cursorId -and $cursorId -ne $lastCursorId) {
@@ -301,6 +304,7 @@ while ($true) {
         handle = $cursorId
         cursorType = $cursorType
         leftButtonDown = $leftButtonDown
+        leftButtonPressed = $leftButtonPressed
 		bounds = Get-TargetBounds
         asset = $asset
     }
