@@ -67,6 +67,19 @@ function isPathAllowed(filePath: string): boolean {
 	return getAllowedReadDirs().some((dir) => isPathWithinDir(resolved, dir));
 }
 
+function resolveApprovedVideoPath(videoPath?: string | null): string | null {
+	const normalizedPath = normalizeVideoSourcePath(videoPath);
+	if (!normalizedPath) {
+		return null;
+	}
+
+	if (!hasAllowedImportVideoExtension(normalizedPath) || !isPathAllowed(normalizedPath)) {
+		return null;
+	}
+
+	return normalizedPath;
+}
+
 /**
  * Helper function to build dialog options with a parent window only when it's valid.
  * This prevents passing stale or destroyed BrowserWindow references to dialog calls.
@@ -1319,7 +1332,7 @@ export function registerIpcHandlers(
 	});
 
 	ipcMain.handle("get-cursor-telemetry", async (_, videoPath?: string) => {
-		const targetVideoPath = normalizeVideoSourcePath(
+		const targetVideoPath = resolveApprovedVideoPath(
 			videoPath ?? currentRecordingSession?.screenVideoPath,
 		);
 		if (!targetVideoPath) {
@@ -1413,11 +1426,18 @@ export function registerIpcHandlers(
 				return { success: false, canceled: true };
 			}
 
-			approveFilePath(result.filePaths[0]);
+			const normalizedPath = await approveReadableVideoPath(result.filePaths[0]);
+			if (!normalizedPath) {
+				return {
+					success: false,
+					message: "Selected file is not a supported readable video file",
+				};
+			}
+
 			currentProjectPath = null;
 			return {
 				success: true,
-				path: result.filePaths[0],
+				path: normalizedPath,
 			};
 		} catch (error) {
 			console.error("Failed to open file picker:", error);
@@ -1727,7 +1747,7 @@ export function registerIpcHandlers(
 		clearCurrentVideoPath,
 		resolveAssetBasePath,
 		resolveVideoPath: (videoPath?: string | null) =>
-			normalizeVideoSourcePath(videoPath ?? currentVideoPath),
+			resolveApprovedVideoPath(videoPath ?? currentVideoPath),
 		loadCursorRecordingData: readCursorRecordingFile,
 		loadCursorTelemetry: readCursorTelemetryFile,
 	});

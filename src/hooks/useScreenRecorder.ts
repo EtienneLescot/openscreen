@@ -402,24 +402,30 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		}
 
 		activeNativeRecording.finalizing = true;
-		nativeWindowsRecording.current = null;
-		setRecording(false);
-		setPaused(false);
-		setElapsedSeconds(0);
-		accumulatedDurationMs.current = 0;
-		segmentStartedAt.current = null;
+
+		const clearNativeRecordingState = () => {
+			nativeWindowsRecording.current = null;
+			setRecording(false);
+			setPaused(false);
+			setElapsedSeconds(0);
+			accumulatedDurationMs.current = 0;
+			segmentStartedAt.current = null;
+		};
 
 		try {
 			const result = await window.electronAPI.stopNativeWindowsRecording(discard);
 			if (discard || result.discarded) {
+				clearNativeRecordingState();
 				return true;
 			}
 			if (!result.success) {
 				console.error("Failed to stop native Windows recording:", result.error);
 				toast.error(result.error ?? "Failed to stop native Windows recording");
+				activeNativeRecording.finalizing = false;
 				return true;
 			}
 
+			clearNativeRecordingState();
 			if (result.session) {
 				await window.electronAPI.setCurrentRecordingSession(result.session);
 			} else if (result.path) {
@@ -433,6 +439,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			toast.error(
 				error instanceof Error ? error.message : "Failed to save native Windows recording",
 			);
+			activeNativeRecording.finalizing = false;
 			return true;
 		} finally {
 			if (discardRecordingId.current === activeNativeRecording.recordingId) {
@@ -582,6 +589,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 			const availability = await window.electronAPI.isNativeWindowsCaptureAvailable();
 			if (!availability.success || !availability.available) {
+				if (availability.reason === "unsupported-os") {
+					return false;
+				}
+
 				throw new Error(
 					availability.reason === "missing-helper"
 						? "Native Windows capture helper is not available."
