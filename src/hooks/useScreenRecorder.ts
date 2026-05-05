@@ -2,7 +2,10 @@ import { fixWebmDuration } from "@fix-webm-duration/fix";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
-import type { NativeWindowsRecordingRequest } from "@/lib/nativeWindowsRecording";
+import {
+	type NativeWindowsRecordingRequest,
+	parseWindowHandleFromSourceId,
+} from "@/lib/nativeWindowsRecording";
 import { requestCameraAccess } from "@/lib/requestCameraAccess";
 
 const TARGET_FRAME_RATE = 60;
@@ -573,12 +576,14 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const activeRecordingId = Date.now();
 			const displayId = Number(selectedSource.display_id);
 			const sourceType = selectedSource.id.startsWith("window:") ? "window" : "display";
+			const windowHandle = parseWindowHandleFromSourceId(selectedSource.id);
 			const request: NativeWindowsRecordingRequest = {
 				recordingId: activeRecordingId,
 				source: {
 					type: sourceType,
 					sourceId: selectedSource.id,
 					...(Number.isFinite(displayId) ? { displayId } : {}),
+					...(windowHandle ? { windowHandle } : {}),
 				},
 				video: {
 					fps: TARGET_FRAME_RATE,

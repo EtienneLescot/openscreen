@@ -165,6 +165,8 @@ Acceptance:
 
 ### 5. Native Window Capture
 
+Status: initial implementation in progress. Electron parses the `window:<HWND>:...` desktop source id through the shared native Windows recording contract and passes `windowHandle` to the helper. The helper resolves the `HWND`, validates it with `IsWindow`, and creates the WGC item with `CreateForWindow(HWND)`. Resize/minimize/move hardening and protected-window diagnostics remain follow-up work.
+
 - Resolve Electron `window:*` selections to an `HWND`.
 - Use WGC `CreateForWindow(HWND)`.
 - Handle window close, minimize, resize, DPI scaling, and monitor moves.

@@ -39,3 +39,16 @@ export type NativeWindowsRecordingStartResult = {
 	helperPath?: string;
 	error?: string;
 };
+
+export function parseWindowHandleFromSourceId(sourceId?: string | null) {
+	if (!sourceId?.startsWith("window:")) {
+		return null;
+	}
+
+	const handlePart = sourceId.split(":")[1];
+	if (!handlePart || !/^\d+$/.test(handlePart)) {
+		return null;
+	}
+
+	return handlePart;
+}

@@ -1,16 +1,14 @@
 import { type ChildProcessByStdio, spawn } from "node:child_process";
 import type { Readable } from "node:stream";
 import { screen } from "electron";
+import { parseWindowHandleFromSourceId } from "../../../../src/lib/nativeWindowsRecording";
 import type {
 	CursorRecordingData,
 	CursorRecordingSample,
 	NativeCursorAsset,
 } from "../../../../src/native/contracts";
 import type { CursorRecordingSession } from "./session";
-import {
-	buildPowerShellCommand,
-	parseWindowHandleFromSourceId,
-} from "./windowsNativeRecordingSession.script";
+import { buildPowerShellCommand } from "./windowsNativeRecordingSession.script";
 import type {
 	WindowsCursorEvent,
 	WindowsNativeRecordingSessionOptions,

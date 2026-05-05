@@ -19,6 +19,8 @@ const WITH_MICROPHONE =
 	process.env.OPENSCREEN_WGC_TEST_MICROPHONE === "true" ||
 	process.argv.includes("--microphone") ||
 	process.argv.includes("--mic");
+const WITH_WINDOW =
+	process.env.OPENSCREEN_WGC_TEST_WINDOW === "true" || process.argv.includes("--window");
 
 function runHelper(config) {
 	return new Promise((resolve, reject) => {
@@ -44,6 +46,47 @@ function runHelper(config) {
 		setTimeout(() => {
 			child.stdin.write("stop\n");
 		}, DURATION_MS);
+	});
+}
+
+function startFixtureWindow() {
+	return new Promise((resolve, reject) => {
+		const child = spawn("mspaint.exe", [], {
+			stdio: ["ignore", "ignore", "ignore"],
+			windowsHide: false,
+		});
+
+		const poll = setInterval(() => {
+			const lookup = spawnSync(
+				"powershell",
+				[
+					"-NoProfile",
+					"-Command",
+					`(Get-Process -Id ${child.pid} -ErrorAction SilentlyContinue).MainWindowHandle`,
+				],
+				{ encoding: "utf8", windowsHide: true },
+			);
+			const handle = lookup.stdout
+				.trim()
+				.split(/\r?\n/)
+				.find((line) => /^\d+$/.test(line.trim()));
+			if (handle && handle !== "0") {
+				clearInterval(poll);
+				clearTimeout(timer);
+				resolve({ child, sourceId: `window:${handle.trim()}:0` });
+			}
+		}, 250);
+
+		const timer = setTimeout(() => {
+			clearInterval(poll);
+			child.kill();
+			reject(new Error("Timed out waiting for fixture window handle"));
+		}, 10_000);
+		child.once("error", (error) => {
+			clearInterval(poll);
+			clearTimeout(timer);
+			reject(error);
+		});
 	});
 }
 
@@ -106,15 +149,17 @@ if (!fs.existsSync(HELPER_PATH)) {
 
 const outputPath = path.join(
 	os.tmpdir(),
-	`openscreen-wgc-helper-${WITH_SYSTEM_AUDIO || WITH_MICROPHONE ? "audio" : "video"}-${process.pid}-${Date.now()}-${randomUUID()}.mp4`,
+	`openscreen-wgc-helper-${WITH_WINDOW ? "window" : WITH_SYSTEM_AUDIO || WITH_MICROPHONE ? "audio" : "video"}-${process.pid}-${Date.now()}-${randomUUID()}.mp4`,
 );
+
+const fixtureWindow = WITH_WINDOW ? await startFixtureWindow() : null;
 
 const config = {
 	schemaVersion: 2,
 	recordingId: Date.now(),
 	outputPath,
-	sourceType: "display",
-	sourceId: "screen:0:0",
+	sourceType: fixtureWindow ? "window" : "display",
+	sourceId: fixtureWindow ? fixtureWindow.sourceId : "screen:0:0",
 	displayId: 0,
 	fps: 30,
 	videoWidth: 1280,
@@ -132,7 +177,14 @@ const config = {
 	outputs: { screenPath: outputPath },
 };
 
-const result = await runHelper(config);
+let result;
+try {
+	result = await runHelper(config);
+} finally {
+	if (fixtureWindow) {
+		fixtureWindow.child.kill();
+	}
+}
 if (result.code !== 0) {
 	throw new Error(`WGC helper exited with ${result.code}\n${result.stdout}\n${result.stderr}`);
 }
@@ -151,7 +203,9 @@ if ((WITH_SYSTEM_AUDIO || WITH_MICROPHONE) && !hasAudio) {
 }
 const frameLuma = measureFirstFrameLuma(outputPath);
 if (frameLuma.average < 1 && frameLuma.max < 5) {
-	throw new Error(`WGC helper output first frame is black: ${outputPath}`);
+	throw new Error(
+		`WGC helper output first frame is black: ${outputPath}\n${result.stdout}\n${result.stderr}`,
+	);
 }
 
 console.log(

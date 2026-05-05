@@ -201,6 +201,36 @@ std::string findString(const std::string& json, const std::string& key) {
     return result;
 }
 
+std::string parseWindowHandleFromSourceId(const std::string& sourceId) {
+    constexpr char prefix[] = "window:";
+    if (sourceId.rfind(prefix, 0) != 0) {
+        return {};
+    }
+
+    const size_t start = sizeof(prefix) - 1;
+    const size_t end = sourceId.find(':', start);
+    const std::string handle = sourceId.substr(start, end == std::string::npos ? std::string::npos : end - start);
+    return handle.empty() ? std::string{} : handle;
+}
+
+HWND parseWindowHandle(const std::string& value) {
+    if (value.empty()) {
+        return nullptr;
+    }
+
+    try {
+        size_t parsed = 0;
+        const int base = value.rfind("0x", 0) == 0 || value.rfind("0X", 0) == 0 ? 16 : 10;
+        const uint64_t handleValue = std::stoull(value, &parsed, base);
+        if (parsed != value.size() || handleValue == 0) {
+            return nullptr;
+        }
+        return reinterpret_cast<HWND>(static_cast<uintptr_t>(handleValue));
+    } catch (...) {
+        return nullptr;
+    }
+}
+
 bool parseConfig(const std::string& json, CaptureConfig& config) {
     config.schemaVersion = findInt(json, "schemaVersion", 1);
     config.outputPath = findString(json, "screenPath");
@@ -218,6 +248,9 @@ bool parseConfig(const std::string& json, CaptureConfig& config) {
     }
     config.sourceId = findString(json, "sourceId");
     config.windowHandle = findString(json, "windowHandle");
+    if (config.windowHandle.empty()) {
+        config.windowHandle = parseWindowHandleFromSourceId(config.sourceId);
+    }
     config.displayId = findInt64(json, "displayId", 0);
     config.fps = std::clamp(findInt(json, "fps", 60), 1, 120);
     config.width = findInt(json, "videoWidth", findInt(json, "width", 0));
@@ -270,27 +303,36 @@ int main(int argc, char* argv[]) {
 
     std::cout << "{\"event\":\"ready\",\"schemaVersion\":2}" << std::endl;
 
-    if (config.sourceType != "display") {
-        std::cerr << "ERROR: Native window capture is not implemented yet" << std::endl;
-        return 1;
-    }
-
     if (config.webcamEnabled) {
         std::cerr << "ERROR: Native webcam capture is not implemented in this helper yet" << std::endl;
         return 1;
     }
 
-    HMONITOR monitor = findMonitorForCapture(
-        config.displayId,
-        config.hasDisplayBounds ? &config.bounds : nullptr);
-    if (!monitor) {
-        std::cerr << "ERROR: Could not resolve monitor" << std::endl;
-        return 1;
-    }
-
     WgcSession session;
-    if (!session.initialize(monitor, config.fps)) {
-        std::cerr << "ERROR: Failed to initialize WGC session" << std::endl;
+    if (config.sourceType == "display") {
+        HMONITOR monitor = findMonitorForCapture(
+            config.displayId,
+            config.hasDisplayBounds ? &config.bounds : nullptr);
+        if (!monitor) {
+            std::cerr << "ERROR: Could not resolve monitor" << std::endl;
+            return 1;
+        }
+        if (!session.initialize(monitor, config.fps)) {
+            std::cerr << "ERROR: Failed to initialize WGC display session" << std::endl;
+            return 1;
+        }
+    } else if (config.sourceType == "window") {
+        HWND window = parseWindowHandle(config.windowHandle);
+        if (!window || !IsWindow(window)) {
+            std::cerr << "ERROR: Native window capture requires a valid HWND" << std::endl;
+            return 1;
+        }
+        if (!session.initialize(window, config.fps)) {
+            std::cerr << "ERROR: Failed to initialize WGC window session" << std::endl;
+            return 1;
+        }
+    } else {
+        std::cerr << "ERROR: Unsupported native capture source type: " << config.sourceType << std::endl;
         return 1;
     }
 
@@ -355,23 +397,71 @@ int main(int argc, char* argv[]) {
     std::atomic<bool> stopRequested = false;
     std::atomic<bool> firstFrameWritten = false;
     std::atomic<bool> encodeFailed = false;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> latestFrameTexture;
 
     session.setFrameCallback([&](ID3D11Texture2D* texture, int64_t timestampHns) {
+        (void)timestampHns;
         if (stopRequested) {
             return;
         }
 
         std::scoped_lock lock(mutex);
-        if (!encoder.writeFrame(texture, timestampHns)) {
-            encodeFailed = true;
-            stopRequested = true;
-            cv.notify_all();
-            return;
+        if (!latestFrameTexture) {
+            D3D11_TEXTURE2D_DESC desc{};
+            texture->GetDesc(&desc);
+            desc.BindFlags = 0;
+            desc.CPUAccessFlags = 0;
+            desc.MiscFlags = 0;
+            if (FAILED(session.device()->CreateTexture2D(&desc, nullptr, &latestFrameTexture))) {
+                encodeFailed = true;
+                stopRequested = true;
+                cv.notify_all();
+                return;
+            }
         }
+
+        session.context()->CopyResource(latestFrameTexture.Get(), texture);
         if (!firstFrameWritten.exchange(true)) {
             cv.notify_all();
         }
     });
+
+    auto writeVideoFrames = [&]() {
+        const auto startedAt = std::chrono::steady_clock::now();
+        uint64_t frameIndex = 0;
+
+        while (!stopRequested && !encodeFailed) {
+            {
+                std::scoped_lock lock(mutex);
+                if (latestFrameTexture && !encoder.writeFrame(
+                        latestFrameTexture.Get(),
+                        static_cast<int64_t>((frameIndex * 10'000'000ULL) / config.fps))) {
+                    encodeFailed = true;
+                    stopRequested = true;
+                    cv.notify_all();
+                    return;
+                }
+            }
+
+            frameIndex += 1;
+            const auto nextDeadline = startedAt +
+                std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                    std::chrono::duration<double>(static_cast<double>(frameIndex) / config.fps));
+            std::this_thread::sleep_until(nextDeadline);
+        }
+    };
+
+    std::thread videoWriterThread;
+
+    auto stopVideoWriter = [&]() {
+        if (videoWriterThread.joinable()) {
+            videoWriterThread.join();
+        }
+    };
+
+    auto startVideoWriter = [&]() {
+        videoWriterThread = std::thread(writeVideoFrames);
+    };
 
     std::unique_ptr<AudioMixer> audioMixer;
     auto startAudioCaptures = [&]() -> bool {
@@ -476,6 +566,7 @@ int main(int argc, char* argv[]) {
     if (audioMixer) {
         audioMixer->beginTimeline();
     }
+    startVideoWriter();
 
     std::cout << "{\"event\":\"recording-started\",\"schemaVersion\":2}" << std::endl;
     std::cout << "Recording started" << std::endl;
@@ -492,6 +583,7 @@ int main(int argc, char* argv[]) {
     if (audioMixer) {
         audioMixer->stop();
     }
+    stopVideoWriter();
     session.stop();
     {
         std::scoped_lock lock(mutex);

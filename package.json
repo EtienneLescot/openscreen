@@ -28,6 +28,7 @@
 		"test:watch": "vitest",
 		"test:cursor-native:win": "node scripts/test-windows-native-cursor.mjs",
 		"test:wgc-helper:win": "node scripts/test-windows-wgc-helper.mjs",
+		"test:wgc-window:win": "node scripts/test-windows-wgc-helper.mjs --window",
 		"test:wgc-audio:win": "node scripts/test-windows-wgc-helper.mjs --system-audio",
 		"test:wgc-mic:win": "node scripts/test-windows-wgc-helper.mjs --microphone",
 		"test:wgc-mixed-audio:win": "node scripts/test-windows-wgc-helper.mjs --system-audio --microphone",

@@ -26,6 +26,7 @@ Current V2 JSON shape:
   "sourceType": "display",
   "sourceId": "screen:0:0",
   "displayId": 1,
+  "windowHandle": null,
   "outputPath": "C:\\path\\recording-123.mp4",
   "videoWidth": 1920,
   "videoHeight": 1080,
@@ -42,12 +43,13 @@ Current V2 JSON shape:
 }
 ```
 
-The current helper implementation supports display video capture, system audio loopback, and initial default-microphone capture. Webcam and window capture now fail explicitly in the helper rather than silently falling back to Electron capture on Windows. See `docs/engineering/windows-native-recorder-roadmap.md` for the phased implementation plan.
+The current helper implementation supports display/window video capture, system audio loopback, and initial default-microphone capture. Webcam capture now fails explicitly in the helper rather than silently falling back to Electron capture on Windows. See `docs/engineering/windows-native-recorder-roadmap.md` for the phased implementation plan.
 
 Smoke-test the helper with:
 
 ```powershell
 npm run test:wgc-helper:win
+npm run test:wgc-window:win
 npm run test:wgc-audio:win
 npm run test:wgc-mic:win
 npm run test:wgc-mixed-audio:win

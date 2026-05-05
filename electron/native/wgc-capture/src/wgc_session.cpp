@@ -120,6 +120,26 @@ bool WgcSession::createCaptureItem(HMONITOR monitor) {
     return width_ > 0 && height_ > 0;
 }
 
+bool WgcSession::createCaptureItem(HWND window) {
+    auto factory = winrt::get_activation_factory<wgcap::GraphicsCaptureItem>();
+    auto interop = factory.as<IGraphicsCaptureItemInterop>();
+
+    wgcap::GraphicsCaptureItem item{nullptr};
+    HRESULT hr = interop->CreateForWindow(
+        window,
+        winrt::guid_of<wgcap::GraphicsCaptureItem>(),
+        reinterpret_cast<void**>(winrt::put_abi(item)));
+    if (!succeeded(hr, "CreateForWindow")) {
+        return false;
+    }
+
+    item_ = item;
+    const auto size = item_.Size();
+    width_ = static_cast<int>(size.Width);
+    height_ = static_cast<int>(size.Height);
+    return width_ > 0 && height_ > 0;
+}
+
 bool WgcSession::initialize(HMONITOR monitor, int fps) {
     fps_ = fps > 0 ? fps : 60;
     if (!createD3DDevice()) {
@@ -140,6 +160,44 @@ bool WgcSession::initialize(HMONITOR monitor, int fps) {
         session_.IsCursorCaptureEnabled(false);
     } catch (...) {
         // Older WGC builds can omit this property; callers still overlay their own cursor.
+    }
+
+    try {
+        session_.IsBorderRequired(false);
+    } catch (...) {
+        // IsBorderRequired is Windows 11-only. Ignore it on older builds.
+    }
+
+    frameArrivedToken_ = framePool_.FrameArrived({this, &WgcSession::onFrameArrived});
+    return true;
+}
+
+bool WgcSession::initialize(HWND window, int fps) {
+    fps_ = fps > 0 ? fps : 60;
+    if (!createD3DDevice()) {
+        return false;
+    }
+    if (!createCaptureItem(window)) {
+        return false;
+    }
+
+    framePool_ = wgcap::Direct3D11CaptureFramePool::CreateFreeThreaded(
+        winrtDevice_,
+        wgdx::DirectXPixelFormat::B8G8R8A8UIntNormalized,
+        2,
+        item_.Size());
+    session_ = framePool_.CreateCaptureSession(item_);
+
+    try {
+        session_.IsCursorCaptureEnabled(false);
+    } catch (...) {
+        // Older WGC builds can omit this property; callers still overlay their own cursor.
+    }
+
+    try {
+        session_.IsBorderRequired(false);
+    } catch (...) {
+        // IsBorderRequired is Windows 11-only. Ignore it on older builds.
     }
 
     frameArrivedToken_ = framePool_.FrameArrived({this, &WgcSession::onFrameArrived});
@@ -204,6 +262,7 @@ void WgcSession::onFrameArrived(
     if (callback) {
         callback(texture.Get(), timeSpanToHns(frame.SystemRelativeTime()));
     }
+    frame.Close();
 }
 
 int WgcSession::captureWidth() const {
