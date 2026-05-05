@@ -1,7 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
-
+import type { DesktopCapturerSource } from "electron";
 import {
 	app,
 	BrowserWindow,
@@ -12,7 +12,6 @@ import {
 	shell,
 	systemPreferences,
 } from "electron";
-import type { DesktopCapturerSource } from "electron";
 import {
 	normalizeProjectMedia,
 	normalizeRecordingSession,
@@ -408,46 +407,6 @@ function setCurrentRecordingSessionState(session: RecordingSession | null) {
 	currentVideoPath = session?.screenVideoPath ?? null;
 }
 
-async function storeRecordedSessionFiles(payload: StoreRecordedSessionInput) {
-	const createdAt =
-		typeof payload.createdAt === "number" && Number.isFinite(payload.createdAt)
-			? payload.createdAt
-			: Date.now();
-	const screenVideoPath = resolveRecordingOutputPath(payload.screen.fileName);
-	await fs.writeFile(screenVideoPath, Buffer.from(payload.screen.videoData));
-
-	let webcamVideoPath: string | undefined;
-	if (payload.webcam) {
-		webcamVideoPath = resolveRecordingOutputPath(payload.webcam.fileName);
-		await fs.writeFile(webcamVideoPath, Buffer.from(payload.webcam.videoData));
-	}
-
-	const session: RecordingSession = webcamVideoPath
-		? { screenVideoPath, webcamVideoPath, createdAt }
-		: { screenVideoPath, createdAt };
-	setCurrentRecordingSessionState(session);
-	currentProjectPath = null;
-
-	const telemetryPath = `${screenVideoPath}.cursor.json`;
-	if (pendingCursorRecordingData && pendingCursorRecordingData.samples.length > 0) {
-		await fs.writeFile(telemetryPath, JSON.stringify(pendingCursorRecordingData, null, 2), "utf-8");
-	}
-	pendingCursorRecordingData = null;
-
-	const sessionManifestPath = path.join(
-		RECORDINGS_DIR,
-		`${path.parse(payload.screen.fileName).name}${RECORDING_SESSION_SUFFIX}`,
-	);
-	await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
-
-	return {
-		success: true,
-		path: screenVideoPath,
-		session,
-		message: "Recording session stored successfully",
-	};
-}
-
 export function registerIpcHandlers(
 	createEditorWindow: () => void,
 	createSourceSelectorWindow: () => BrowserWindow,
@@ -568,12 +527,12 @@ export function registerIpcHandlers(
 			typeof payload.createdAt === "number" && Number.isFinite(payload.createdAt)
 				? payload.createdAt
 				: Date.now();
-		const screenVideoPath = path.join(RECORDINGS_DIR, payload.screen.fileName);
+		const screenVideoPath = resolveRecordingOutputPath(payload.screen.fileName);
 		await fs.writeFile(screenVideoPath, Buffer.from(payload.screen.videoData));
 
 		let webcamVideoPath: string | undefined;
 		if (payload.webcam) {
-			webcamVideoPath = path.join(RECORDINGS_DIR, payload.webcam.fileName);
+			webcamVideoPath = resolveRecordingOutputPath(payload.webcam.fileName);
 			await fs.writeFile(webcamVideoPath, Buffer.from(payload.webcam.videoData));
 		}
 
@@ -581,7 +540,6 @@ export function registerIpcHandlers(
 			? { screenVideoPath, webcamVideoPath, createdAt }
 			: { screenVideoPath, createdAt };
 		setCurrentRecordingSessionState(session);
-		currentVideoPath = screenVideoPath;
 		currentProjectPath = null;
 
 		const telemetryPath = `${screenVideoPath}.cursor.json`;
@@ -593,6 +551,12 @@ export function registerIpcHandlers(
 			);
 		}
 		pendingCursorRecordingData = null;
+
+		const sessionManifestPath = path.join(
+			RECORDINGS_DIR,
+			`${path.parse(payload.screen.fileName).name}${RECORDING_SESSION_SUFFIX}`,
+		);
+		await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
 
 		return {
 			success: true,
@@ -929,18 +893,7 @@ export function registerIpcHandlers(
 			const content = await fs.readFile(filePath, "utf-8");
 			const project = JSON.parse(content);
 			currentProjectPath = filePath;
-			if (project && typeof project === "object") {
-				const rawProject = project as { media?: unknown; videoPath?: unknown };
-				const media =
-					normalizeProjectMedia(rawProject.media) ??
-					(typeof rawProject.videoPath === "string"
-						? {
-								screenVideoPath:
-									normalizeVideoSourcePath(rawProject.videoPath) ?? rawProject.videoPath,
-							}
-						: null);
-				setCurrentRecordingSessionState(media ? { ...media, createdAt: Date.now() } : null);
-			}
+			setCurrentRecordingSessionState(await getApprovedProjectSession(project, filePath));
 
 			return {
 				success: true,
@@ -969,18 +922,7 @@ export function registerIpcHandlers(
 
 			const content = await fs.readFile(currentProjectPath, "utf-8");
 			const project = JSON.parse(content);
-			if (project && typeof project === "object") {
-				const rawProject = project as { media?: unknown; videoPath?: unknown };
-				const media =
-					normalizeProjectMedia(rawProject.media) ??
-					(typeof rawProject.videoPath === "string"
-						? {
-								screenVideoPath:
-									normalizeVideoSourcePath(rawProject.videoPath) ?? rawProject.videoPath,
-							}
-						: null);
-				setCurrentRecordingSessionState(media ? { ...media, createdAt: Date.now() } : null);
-			}
+			setCurrentRecordingSessionState(await getApprovedProjectSession(project, currentProjectPath));
 			return {
 				success: true,
 				path: currentProjectPath,

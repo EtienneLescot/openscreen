@@ -1,14 +1,18 @@
 import { type Container, Point } from "pixi.js";
+import appStartingUrl from "@/assets/cursors/Cursor=App-Starting.svg";
 import crosshairUrl from "@/assets/cursors/Cursor=Cross.svg";
 import arrowUrl from "@/assets/cursors/Cursor=Default.svg";
 import pointerUrl from "@/assets/cursors/Cursor=Hand-(Pointing).svg";
-import notAllowedUrl from "@/assets/cursors/Cursor=Menu.svg";
+import helpUrl from "@/assets/cursors/Cursor=Help.svg";
 import moveUrl from "@/assets/cursors/Cursor=Move.svg";
+import notAllowedUrl from "@/assets/cursors/Cursor=Not-Allowed.svg";
 import resizeNeswUrl from "@/assets/cursors/Cursor=Resize-North-East-South-West.svg";
 import resizeNsUrl from "@/assets/cursors/Cursor=Resize-North-South.svg";
 import resizeNwseUrl from "@/assets/cursors/Cursor=Resize-North-West-South-East.svg";
 import resizeEwUrl from "@/assets/cursors/Cursor=Resize-West-East.svg";
 import textUrl from "@/assets/cursors/Cursor=Text-Cursor.svg";
+import upArrowUrl from "@/assets/cursors/Cursor=Up-Arrow.svg";
+import waitUrl from "@/assets/cursors/Cursor=Wait.svg";
 import type { CropRegion } from "@/components/video-editor/types";
 import type {
 	CursorRecordingData,
@@ -112,6 +116,34 @@ const PRETTY_NATIVE_CURSOR_ASSETS: Partial<Record<NativeCursorType, PrettyNative
 		height: 32,
 		hotspotX: 16,
 		hotspotY: 16,
+	},
+	wait: {
+		imageDataUrl: waitUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 16,
+		hotspotY: 16,
+	},
+	"app-starting": {
+		imageDataUrl: appStartingUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 5.8,
+		hotspotY: 3.2,
+	},
+	help: {
+		imageDataUrl: helpUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 5.8,
+		hotspotY: 3.2,
+	},
+	"up-arrow": {
+		imageDataUrl: upArrowUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 16,
+		hotspotY: 3,
 	},
 };
 
