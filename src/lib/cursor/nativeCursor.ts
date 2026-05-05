@@ -57,7 +57,7 @@ function clamp(value: number, min: number, max: number) {
 	return Math.min(max, Math.max(min, value));
 }
 
-const NATIVE_CURSOR_CLICK_ANIMATION_MS = 140;
+const NATIVE_CURSOR_CLICK_ANIMATION_MS = 260;
 const NATIVE_CURSOR_MOTION_BLUR_MAX_PX = 6;
 const nativeCursorAssetMapCache = new WeakMap<
 	CursorRecordingData,
@@ -329,7 +329,7 @@ export function getNativeCursorClickBounceProgress(
 	recordingData: CursorRecordingData | null | undefined,
 	timeMs: number,
 ) {
-	if (!hasNativeCursorRecordingData(recordingData)) {
+	if (!recordingData || recordingData.provider !== "native" || recordingData.samples.length === 0) {
 		return 0;
 	}
 
@@ -357,9 +357,15 @@ export function getNativeCursorClickBounceScale(clickBounce: number, progress: n
 		return 1;
 	}
 
-	const bounceAmount = Math.sin(progress * Math.PI);
-	const amplitude = clamp(clickBounce, 0, 4) * 0.08;
-	return Math.max(0.72, 1 - bounceAmount * amplitude);
+	const intensity = clamp(clickBounce, 0, 5) / 5;
+	const elapsed = 1 - clamp(progress, 0, 1);
+	if (elapsed < 0.38) {
+		const pressProgress = Math.sin((elapsed / 0.38) * Math.PI);
+		return 1 - pressProgress * intensity * 0.24;
+	}
+
+	const reboundProgress = Math.sin(((elapsed - 0.38) / 0.62) * Math.PI);
+	return 1 + reboundProgress * intensity * 0.16;
 }
 
 export function getNativeCursorMotionBlurPx({
