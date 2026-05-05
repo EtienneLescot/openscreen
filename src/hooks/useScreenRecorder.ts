@@ -5,7 +5,6 @@ import { useScopedT } from "@/contexts/I18nContext";
 import { requestCameraAccess } from "@/lib/requestCameraAccess";
 
 const TARGET_FRAME_RATE = 60;
-const MIN_FRAME_RATE = 30;
 const TARGET_WIDTH = 3840;
 const TARGET_HEIGHT = 2160;
 const FOUR_K_PIXELS = TARGET_WIDTH * TARGET_HEIGHT;
@@ -407,6 +406,14 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		}
 	});
 
+	const safeHideCountdownOverlay = useCallback(async (runId: number) => {
+		try {
+			await window.electronAPI.hideCountdownOverlay(runId);
+		} catch (error) {
+			console.warn("Failed to hide countdown overlay:", error);
+		}
+	}, []);
+
 	useEffect(() => {
 		let cleanup: (() => void) | undefined;
 
@@ -449,7 +456,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			webcamRecorder.current = null;
 			teardownMedia();
 		};
-	}, [teardownMedia]);
+	}, [teardownMedia, safeHideCountdownOverlay]);
 
 	const safeShowCountdownOverlay = async (value: number, runId: number) => {
 		try {
@@ -473,14 +480,6 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			await window.electronAPI.setCountdownOverlayValue(value, runId);
 		} catch (error) {
 			console.warn("Failed to update countdown overlay value:", error);
-		}
-	};
-
-	const safeHideCountdownOverlay = async (runId: number) => {
-		try {
-			await window.electronAPI.hideCountdownOverlay(runId);
-		} catch (error) {
-			console.warn("Failed to hide countdown overlay:", error);
 		}
 	};
 
@@ -585,7 +584,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					cursor: "never",
 					width: { max: TARGET_WIDTH },
 					height: { max: TARGET_HEIGHT },
-					frameRate: { ideal: TARGET_FRAME_RATE, min: MIN_FRAME_RATE },
+					frameRate: { ideal: TARGET_FRAME_RATE },
 				} as MediaTrackConstraints,
 				audio: systemAudioEnabled,
 			} as DisplayMediaStreamOptions);
