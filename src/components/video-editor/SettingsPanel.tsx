@@ -252,6 +252,7 @@ interface SettingsPanelProps {
 	cursorClickBounce?: number;
 	onCursorClickBounceChange?: (bounce: number) => void;
 	hasCursorData?: boolean;
+	showCursorSettings?: boolean;
 }
 
 export default SettingsPanel;
@@ -350,6 +351,7 @@ export function SettingsPanel({
 	cursorClickBounce = 2.5,
 	onCursorClickBounceChange,
 	hasCursorData = false,
+	showCursorSettings = true,
 }: SettingsPanelProps) {
 	const t = useScopedT("settings");
 	// Resolved URLs are for DOM rendering only (backgroundImage). The canonical
@@ -1050,7 +1052,7 @@ export function SettingsPanel({
 								</div>
 							</div>
 
-							{cursorHighlight && onCursorHighlightChange && (
+							{showCursorSettings && cursorHighlight && onCursorHighlightChange && (
 								<div className="p-2 rounded-lg bg-white/5 border border-white/5 mt-2 space-y-2">
 									<div className="flex items-center justify-between">
 										<div className="text-[10px] font-medium text-slate-300">Cursor highlight</div>
@@ -1236,7 +1238,7 @@ export function SettingsPanel({
 						</AccordionContent>
 					</AccordionItem>
 
-					{hasCursorData && (
+					{showCursorSettings && hasCursorData && (
 						<AccordionItem
 							value="cursor"
 							className="border-white/5 rounded-xl bg-white/[0.02] px-3"

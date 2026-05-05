@@ -111,6 +111,62 @@ function Write-JsonLine($payload) {
     [Console]::Out.WriteLine(($payload | ConvertTo-Json -Compress -Depth 6))
 }
 
+function Get-CustomCursorType($bitmap, $hotspotX, $hotspotY) {
+    if ($bitmap.Width -lt 24 -or $bitmap.Height -lt 24 -or $bitmap.Width -gt 64 -or $bitmap.Height -gt 64) {
+        return $null
+    }
+
+    if ($hotspotX -lt ($bitmap.Width * 0.25) -or $hotspotX -gt ($bitmap.Width * 0.75) -or
+        $hotspotY -lt ($bitmap.Height * 0.15) -or $hotspotY -gt ($bitmap.Height * 0.55)) {
+        return $null
+    }
+
+    $opaquePixels = 0
+    $topHalfOpaquePixels = 0
+    $left = $bitmap.Width
+    $top = $bitmap.Height
+    $right = -1
+    $bottom = -1
+
+    for ($y = 0; $y -lt $bitmap.Height; $y++) {
+        for ($x = 0; $x -lt $bitmap.Width; $x++) {
+            if ($bitmap.GetPixel($x, $y).A -le 32) {
+                continue
+            }
+
+            $opaquePixels += 1
+            if ($y -lt ($bitmap.Height / 2)) {
+                $topHalfOpaquePixels += 1
+            }
+            if ($x -lt $left) { $left = $x }
+            if ($x -gt $right) { $right = $x }
+            if ($y -lt $top) { $top = $y }
+            if ($y -gt $bottom) { $bottom = $y }
+        }
+    }
+
+    if ($opaquePixels -lt 90 -or $right -lt $left -or $bottom -lt $top) {
+        return $null
+    }
+
+    $opaqueWidth = $right - $left + 1
+    $opaqueHeight = $bottom - $top + 1
+    if ($opaqueWidth -lt ($bitmap.Width * 0.35) -or $opaqueWidth -gt ($bitmap.Width * 0.9) -or
+        $opaqueHeight -lt ($bitmap.Height * 0.45) -or $opaqueHeight -gt $bitmap.Height) {
+        return $null
+    }
+
+    if ($top -gt ($bitmap.Height * 0.45) -or $bottom -lt ($bitmap.Height * 0.65)) {
+        return $null
+    }
+
+    if ($topHalfOpaquePixels -gt ($opaquePixels * 0.55)) {
+        return 'closed-hand'
+    }
+
+    return 'open-hand'
+}
+
 function Get-TargetBounds() {
 	if ([string]::IsNullOrWhiteSpace($targetWindowHandle)) {
 		return $null
@@ -164,6 +220,9 @@ function Get-CursorAsset($cursorHandle, $cursorId) {
         try {
             $graphics.Clear([System.Drawing.Color]::Transparent)
             $graphics.DrawIcon($icon, 0, 0)
+            $hotspotX = if ($hasIconInfo) { $iconInfo.xHotspot } else { 0 }
+            $hotspotY = if ($hasIconInfo) { $iconInfo.yHotspot } else { 0 }
+            $customCursorType = Get-CustomCursorType -bitmap $bitmap -hotspotX $hotspotX -hotspotY $hotspotY
             $bitmap.Save($memoryStream, [System.Drawing.Imaging.ImageFormat]::Png)
             $base64 = [System.Convert]::ToBase64String($memoryStream.ToArray())
 
@@ -172,8 +231,9 @@ function Get-CursorAsset($cursorHandle, $cursorId) {
                 imageDataUrl = "data:image/png;base64,$base64"
                 width = $bitmap.Width
                 height = $bitmap.Height
-                hotspotX = if ($hasIconInfo) { $iconInfo.xHotspot } else { 0 }
-                hotspotY = if ($hasIconInfo) { $iconInfo.yHotspot } else { 0 }
+                hotspotX = $hotspotX
+                hotspotY = $hotspotY
+                cursorType = $customCursorType
             }
         }
         finally {
@@ -218,6 +278,8 @@ while ($true) {
         $asset = Get-CursorAsset -cursorHandle $cursorInfo.hCursor -cursorId $cursorId
         if ($asset -and $cursorType) {
             $asset.cursorType = $cursorType
+        } elseif ($asset -and $asset.cursorType) {
+            $cursorType = $asset.cursorType
         }
         $lastCursorId = $cursorId
     }

@@ -8,6 +8,8 @@ export type NativeCursorType =
 	| "text"
 	| "pointer"
 	| "crosshair"
+	| "open-hand"
+	| "closed-hand"
 	| "resize-ew"
 	| "resize-ns"
 	| "resize-nesw"

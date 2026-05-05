@@ -2,6 +2,8 @@ import { type Container, Point } from "pixi.js";
 import appStartingUrl from "@/assets/cursors/Cursor=App-Starting.svg";
 import crosshairUrl from "@/assets/cursors/Cursor=Cross.svg";
 import arrowUrl from "@/assets/cursors/Cursor=Default.svg";
+import closedHandUrl from "@/assets/cursors/Cursor=Hand-(Grabbing).svg";
+import openHandUrl from "@/assets/cursors/Cursor=Hand-(Open).svg";
 import pointerUrl from "@/assets/cursors/Cursor=Hand-(Pointing).svg";
 import helpUrl from "@/assets/cursors/Cursor=Help.svg";
 import moveUrl from "@/assets/cursors/Cursor=Move.svg";
@@ -78,6 +80,20 @@ const PRETTY_NATIVE_CURSOR_ASSETS: Partial<Record<NativeCursorType, PrettyNative
 		hotspotX: 16,
 		hotspotY: 16,
 	},
+	"open-hand": {
+		imageDataUrl: openHandUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 16,
+		hotspotY: 9,
+	},
+	"closed-hand": {
+		imageDataUrl: closedHandUrl,
+		width: 32,
+		height: 32,
+		hotspotX: 16,
+		hotspotY: 9,
+	},
 	"resize-ew": {
 		imageDataUrl: resizeEwUrl,
 		width: 32,
@@ -149,6 +165,22 @@ const PRETTY_NATIVE_CURSOR_ASSETS: Partial<Record<NativeCursorType, PrettyNative
 		hotspotY: 3,
 	},
 };
+
+function resolveUntypedPrettyNativeCursorAsset(asset: NativeCursorAsset) {
+	if (asset.cursorType || asset.width < 24 || asset.width > 64 || asset.height < 24 || asset.height > 64) {
+		return null;
+	}
+
+	const hotspotXNorm = asset.hotspotX / asset.width;
+	const hotspotYNorm = asset.hotspotY / asset.height;
+	const looksLikeChromiumGrabCursor =
+		hotspotXNorm >= 0.22 &&
+		hotspotXNorm <= 0.55 &&
+		hotspotYNorm >= 0.2 &&
+		hotspotYNorm <= 0.45;
+
+	return looksLikeChromiumGrabCursor ? (PRETTY_NATIVE_CURSOR_ASSETS["open-hand"] ?? null) : null;
+}
 
 export function hasNativeCursorRecordingData(
 	recordingData: CursorRecordingData | null | undefined,
@@ -322,7 +354,9 @@ export function resolvePrettyNativeCursorAsset(
 	sample?: CursorRecordingSample,
 ) {
 	const cursorType = sample?.cursorType ?? asset.cursorType ?? null;
-	return cursorType ? (PRETTY_NATIVE_CURSOR_ASSETS[cursorType] ?? null) : null;
+	return cursorType
+		? (PRETTY_NATIVE_CURSOR_ASSETS[cursorType] ?? null)
+		: resolveUntypedPrettyNativeCursorAsset(asset);
 }
 
 export function resolveNativeCursorRenderAsset(
