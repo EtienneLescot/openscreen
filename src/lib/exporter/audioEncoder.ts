@@ -22,6 +22,138 @@ const EXPORT_AUDIO_CODECS: ExportAudioCodecCandidate[] = [
 	{ encoderCodec: "opus", muxerCodec: "opus", label: "Opus" },
 ];
 
+function averageChannels(sourcePlanes: Float32Array[], frame: number) {
+	let mixed = 0;
+	for (const plane of sourcePlanes) {
+		mixed += plane[frame] ?? 0;
+	}
+	return mixed / Math.max(1, sourcePlanes.length);
+}
+
+function weightedSample(
+	sourcePlanes: Float32Array[],
+	frame: number,
+	weights: Array<[channel: number, weight: number]>,
+) {
+	let mixed = 0;
+	let weightSum = 0;
+	for (const [channel, weight] of weights) {
+		const sample = sourcePlanes[channel]?.[frame];
+		if (typeof sample !== "number") {
+			continue;
+		}
+		mixed += sample * weight;
+		weightSum += weight;
+	}
+	return weightSum > 0 ? mixed / weightSum : averageChannels(sourcePlanes, frame);
+}
+
+function getStereoDownmixWeights(sourceChannels: number) {
+	const centerWeight = Math.SQRT1_2;
+	const surroundWeight = Math.SQRT1_2;
+	const lfeWeight = 0.5;
+
+	if (sourceChannels >= 8) {
+		// Windows 7.1 order: FL, FR, FC, LFE, BL, BR, SL, SR.
+		return {
+			left: [
+				[0, 1],
+				[2, centerWeight],
+				[3, lfeWeight],
+				[4, surroundWeight],
+				[6, surroundWeight],
+			] satisfies Array<[number, number]>,
+			right: [
+				[1, 1],
+				[2, centerWeight],
+				[3, lfeWeight],
+				[5, surroundWeight],
+				[7, surroundWeight],
+			] satisfies Array<[number, number]>,
+		};
+	}
+
+	if (sourceChannels >= 6) {
+		// Windows 5.1 order: FL, FR, FC, LFE, BL, BR.
+		return {
+			left: [
+				[0, 1],
+				[2, centerWeight],
+				[3, lfeWeight],
+				[4, surroundWeight],
+			] satisfies Array<[number, number]>,
+			right: [
+				[1, 1],
+				[2, centerWeight],
+				[3, lfeWeight],
+				[5, surroundWeight],
+			] satisfies Array<[number, number]>,
+		};
+	}
+
+	if (sourceChannels >= 4) {
+		return {
+			left: [
+				[0, 1],
+				[2, surroundWeight],
+			] satisfies Array<[number, number]>,
+			right: [
+				[1, 1],
+				[3, surroundWeight],
+			] satisfies Array<[number, number]>,
+		};
+	}
+
+	return {
+		left: [
+			[0, 1],
+			[2, centerWeight],
+		] satisfies Array<[number, number]>,
+		right: [
+			[1, 1],
+			[2, centerWeight],
+		] satisfies Array<[number, number]>,
+	};
+}
+
+export function downmixPlanarChannelsForExport(
+	sourcePlanes: Float32Array[],
+	targetChannels: number,
+): Float32Array {
+	const frameCount = sourcePlanes[0]?.length ?? 0;
+	const output = new Float32Array(frameCount * targetChannels);
+
+	if (targetChannels === 1) {
+		for (let frame = 0; frame < frameCount; frame++) {
+			output[frame] = averageChannels(sourcePlanes, frame);
+		}
+		return output;
+	}
+
+	if (targetChannels !== 2) {
+		throw new Error(`Unsupported target channel count: ${targetChannels}`);
+	}
+
+	if (sourcePlanes.length === 1) {
+		output.set(sourcePlanes[0], 0);
+		output.set(sourcePlanes[0], frameCount);
+		return output;
+	}
+
+	if (sourcePlanes.length === 2) {
+		output.set(sourcePlanes[0], 0);
+		output.set(sourcePlanes[1], frameCount);
+		return output;
+	}
+
+	const weights = getStereoDownmixWeights(sourcePlanes.length);
+	for (let frame = 0; frame < frameCount; frame++) {
+		output[frame] = weightedSample(sourcePlanes, frame, weights.left);
+		output[frameCount + frame] = weightedSample(sourcePlanes, frame, weights.right);
+	}
+	return output;
+}
+
 export class AudioProcessor {
 	private cancelled = false;
 
@@ -665,22 +797,7 @@ export class AudioProcessor {
 			});
 		}
 
-		const output = new Float32Array(frameCount * targetChannels);
-		if (targetChannels === 1) {
-			for (let frame = 0; frame < frameCount; frame++) {
-				let mixed = 0;
-				for (let channel = 0; channel < sourceChannels; channel++) {
-					mixed += sourcePlanes[channel][frame];
-				}
-				output[frame] = mixed / sourceChannels;
-			}
-		} else if (sourceChannels === 1) {
-			output.set(sourcePlanes[0], 0);
-			output.set(sourcePlanes[0], frameCount);
-		} else {
-			output.set(sourcePlanes[0], 0);
-			output.set(sourcePlanes[1], frameCount);
-		}
+		const output = downmixPlanarChannelsForExport(sourcePlanes, targetChannels);
 
 		return new AudioData({
 			format: "f32-planar",
@@ -688,7 +805,7 @@ export class AudioProcessor {
 			numberOfFrames: frameCount,
 			numberOfChannels: targetChannels,
 			timestamp: newTimestamp,
-			data: output,
+			data: output.buffer instanceof ArrayBuffer ? output.buffer : output.slice().buffer,
 		});
 	}
 
