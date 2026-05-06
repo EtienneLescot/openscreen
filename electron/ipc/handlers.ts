@@ -451,6 +451,14 @@ function resolveUnpackedAppPath(...segments: string[]) {
 	return resolved;
 }
 
+function resolvePackagedResourcePath(...segments: string[]) {
+	if (!app.isPackaged) {
+		return null;
+	}
+
+	return path.join(process.resourcesPath, ...segments);
+}
+
 function getNativeWindowsCaptureHelperCandidates() {
 	const envPath = process.env.OPENSCREEN_WGC_CAPTURE_EXE?.trim();
 	const archTag = process.arch === "arm64" ? "win32-arm64" : "win32-x64";
@@ -466,6 +474,7 @@ function getNativeWindowsCaptureHelperCandidates() {
 		),
 		resolveUnpackedAppPath("electron", "native", "wgc-capture", "build", "wgc-capture.exe"),
 		resolveUnpackedAppPath("electron", "native", "bin", archTag, "wgc-capture.exe"),
+		resolvePackagedResourcePath("electron", "native", "bin", archTag, "wgc-capture.exe"),
 	].filter((candidate): candidate is string => Boolean(candidate));
 }
 

@@ -178,8 +178,17 @@ export class VideoExporter {
 
 			await this.initializeEncoder(encoderPreference);
 
-			const hasAudio = videoInfo.hasAudio;
-			const muxer = new VideoMuxer(this.config, hasAudio);
+			const sourceDemuxer = streamingDecoder.getDemuxer();
+			const audioExportCodec =
+				videoInfo.hasAudio && sourceDemuxer
+					? await AudioProcessor.selectSupportedExportCodecForSource(sourceDemuxer)
+					: null;
+			if (videoInfo.hasAudio && !audioExportCodec) {
+				console.warn("[VideoExporter] No supported audio export codec, exporting video-only.");
+			}
+
+			const hasAudio = Boolean(audioExportCodec);
+			const muxer = new VideoMuxer(this.config, hasAudio, audioExportCodec?.muxerCodec);
 			this.muxer = muxer;
 			await muxer.initialize();
 
@@ -361,7 +370,7 @@ export class VideoExporter {
 				phase: "finalizing",
 			});
 
-			if (hasAudio && !this.cancelled) {
+			if (hasAudio && audioExportCodec && !this.cancelled) {
 				const demuxer = streamingDecoder.getDemuxer();
 				if (demuxer) {
 					console.log("[VideoExporter] Processing audio track...");
@@ -373,6 +382,7 @@ export class VideoExporter {
 						this.config.trimRegions,
 						this.config.speedRegions,
 						videoInfo.duration,
+						audioExportCodec,
 					);
 				}
 			}

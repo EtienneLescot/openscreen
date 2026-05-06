@@ -6,8 +6,7 @@
   // .node binaries can't be dlopen'd from inside an asar — must live unpacked.
   "asarUnpack": [
     "node_modules/uiohook-napi/**/*",
-    "**/*.node",
-    "electron/native/bin/**"
+    "**/*.node"
   ],
   "productName": "Openscreen",
   "npmRebuild": true,
@@ -19,7 +18,6 @@
   "files": [
     "dist",
     "dist-electron",
-    "electron/native/bin/**/*",
     "!*.png",
     "!preview*.png",
     "!*.md",
@@ -71,7 +69,14 @@
     "target": [
       "nsis"
     ],
-    "icon": "icons/icons/win/icon.ico"
+    "icon": "icons/icons/win/icon.ico",
+    "extraResources": [
+      {
+        "from": "electron/native/bin",
+        "to": "electron/native/bin",
+        "filter": ["**/*"]
+      }
+    ]
   },
   "nsis": {
     "oneClick": false,

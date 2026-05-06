@@ -1,15 +1,65 @@
 import { WebDemuxer } from "web-demuxer";
 import type { SpeedRegion, TrimRegion } from "@/components/video-editor/types";
-import type { VideoMuxer } from "./muxer";
+import type { ExportAudioMuxerCodec, VideoMuxer } from "./muxer";
 
 const AUDIO_BITRATE = 128_000;
-const EXPORT_AUDIO_CODEC = "mp4a.40.2";
 const DECODE_BACKPRESSURE_LIMIT = 20;
 const MIN_SPEED_REGION_DELTA_MS = 0.0001;
 const SEEK_TIMEOUT_MS = 5_000;
 
+export interface ExportAudioCodec {
+	encoderCodec: string;
+	muxerCodec: ExportAudioMuxerCodec;
+	label: string;
+}
+
+const EXPORT_AUDIO_CODECS: ExportAudioCodec[] = [
+	{ encoderCodec: "mp4a.40.2", muxerCodec: "aac", label: "AAC" },
+	{ encoderCodec: "opus", muxerCodec: "opus", label: "Opus" },
+];
+
 export class AudioProcessor {
 	private cancelled = false;
+
+	static async selectSupportedExportCodec(
+		sampleRate: number,
+		numberOfChannels: number,
+	): Promise<ExportAudioCodec | null> {
+		for (const codec of EXPORT_AUDIO_CODECS) {
+			const support = await AudioEncoder.isConfigSupported({
+				codec: codec.encoderCodec,
+				sampleRate,
+				numberOfChannels,
+				bitrate: AUDIO_BITRATE,
+			});
+			if (support.supported) {
+				return codec;
+			}
+		}
+
+		return null;
+	}
+
+	static async selectSupportedExportCodecForSource(
+		demuxer: WebDemuxer,
+	): Promise<ExportAudioCodec | null> {
+		let audioConfig: AudioDecoderConfig;
+		try {
+			audioConfig = await demuxer.getDecoderConfig("audio");
+		} catch {
+			return null;
+		}
+
+		const codecCheck = await AudioDecoder.isConfigSupported(audioConfig);
+		if (!codecCheck.supported) {
+			console.warn("[AudioProcessor] Audio codec not supported:", audioConfig.codec);
+			return null;
+		}
+
+		const sampleRate = audioConfig.sampleRate || 48000;
+		const channels = audioConfig.numberOfChannels || 2;
+		return AudioProcessor.selectSupportedExportCodec(sampleRate, channels);
+	}
 
 	/**
 	 * Audio export has two modes:
@@ -23,6 +73,7 @@ export class AudioProcessor {
 		trimRegions: TrimRegion[] | undefined,
 		speedRegions: SpeedRegion[] | undefined,
 		validatedDurationSec: number,
+		exportCodec: ExportAudioCodec,
 	): Promise<void> {
 		const sortedTrims = trimRegions ? [...trimRegions].sort((a, b) => a.startMs - b.startMs) : [];
 		const sortedSpeedRegions = speedRegions
@@ -40,7 +91,7 @@ export class AudioProcessor {
 				validatedDurationSec,
 			);
 			if (!this.cancelled && renderedAudioBlob.size > 0) {
-				await this.muxRenderedAudioBlob(renderedAudioBlob, muxer);
+				await this.muxRenderedAudioBlob(renderedAudioBlob, muxer, exportCodec);
 				return;
 			}
 			return;
@@ -50,7 +101,7 @@ export class AudioProcessor {
 		// The +0.5s buffer mirrors streamingDecoder.decodeAll's read window so the trim-only
 		// and speed-aware paths agree on how far to read past the validated duration boundary.
 		const readEndSec = validatedDurationSec + 0.5;
-		await this.processTrimOnlyAudio(demuxer, muxer, sortedTrims, readEndSec);
+		await this.processTrimOnlyAudio(demuxer, muxer, sortedTrims, readEndSec, exportCodec);
 	}
 
 	// Legacy trim-only path. This is still used for projects without speed regions.
@@ -59,6 +110,7 @@ export class AudioProcessor {
 		muxer: VideoMuxer,
 		sortedTrims: TrimRegion[],
 		readEndSec?: number,
+		exportCodec?: ExportAudioCodec,
 	): Promise<void> {
 		let audioConfig: AudioDecoderConfig;
 		try {
@@ -137,9 +189,16 @@ export class AudioProcessor {
 
 		const sampleRate = audioConfig.sampleRate || 48000;
 		const channels = audioConfig.numberOfChannels || 2;
+		const selectedCodec =
+			exportCodec ?? (await AudioProcessor.selectSupportedExportCodec(sampleRate, channels));
+		if (!selectedCodec) {
+			console.warn("[AudioProcessor] No supported audio export codec, skipping audio");
+			for (const frame of decodedFrames) frame.close();
+			return;
+		}
 
 		const encodeConfig: AudioEncoderConfig = {
-			codec: EXPORT_AUDIO_CODEC,
+			codec: selectedCodec.encoderCodec,
 			sampleRate,
 			numberOfChannels: channels,
 			bitrate: AUDIO_BITRATE,
@@ -147,7 +206,9 @@ export class AudioProcessor {
 
 		const encodeSupport = await AudioEncoder.isConfigSupported(encodeConfig);
 		if (!encodeSupport.supported) {
-			console.warn("[AudioProcessor] AAC encoding not supported, skipping audio");
+			console.warn(
+				`[AudioProcessor] ${selectedCodec.label} encoding not supported, skipping audio`,
+			);
 			for (const frame of decodedFrames) frame.close();
 			return;
 		}
@@ -389,7 +450,11 @@ export class AudioProcessor {
 	}
 
 	// Demuxes the rendered speed-adjusted blob and feeds encoded chunks into the MP4 muxer.
-	private async muxRenderedAudioBlob(blob: Blob, muxer: VideoMuxer): Promise<void> {
+	private async muxRenderedAudioBlob(
+		blob: Blob,
+		muxer: VideoMuxer,
+		exportCodec: ExportAudioCodec,
+	): Promise<void> {
 		if (this.cancelled) return;
 
 		const file = new File([blob], "speed-audio.webm", { type: blob.type || "audio/webm" });
@@ -398,7 +463,7 @@ export class AudioProcessor {
 
 		try {
 			await demuxer.load(file);
-			await this.processTrimOnlyAudio(demuxer, muxer, []);
+			await this.processTrimOnlyAudio(demuxer, muxer, [], undefined, exportCodec);
 		} finally {
 			try {
 				demuxer.destroy();

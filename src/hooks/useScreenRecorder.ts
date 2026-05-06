@@ -9,6 +9,7 @@ import {
 import { requestCameraAccess } from "@/lib/requestCameraAccess";
 
 const TARGET_FRAME_RATE = 60;
+const MIN_FRAME_RATE = 30;
 const TARGET_WIDTH = 3840;
 const TARGET_HEIGHT = 2160;
 const FOUR_K_PIXELS = TARGET_WIDTH * TARGET_HEIGHT;
@@ -29,6 +30,7 @@ const CODEC_ALIGNMENT = 2;
 
 const RECORDER_TIMESLICE_MS = 1000;
 const BITS_PER_MEGABIT = 1_000_000;
+const CHROME_MEDIA_SOURCE = "desktop";
 const RECORDING_FILE_PREFIX = "recording-";
 const VIDEO_FILE_EXTENSION = ".webm";
 const WEBCAM_FILE_SUFFIX = "-webcam";
@@ -759,20 +761,60 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 
 			let screenMediaStream: MediaStream;
+			const platform = await window.electronAPI.getPlatform();
 
-			// getDisplayMedia + setDisplayMediaRequestHandler (main.ts) supplies the
-			// pre-selected source and honors cursor:"never" to exclude the system cursor
-			// from every captured frame. System audio is provided via WASAPI loopback
-			// on Windows when the user has enabled it.
-			screenMediaStream = await navigator.mediaDevices.getDisplayMedia({
-				video: {
-					cursor: "never",
-					width: { max: TARGET_WIDTH },
-					height: { max: TARGET_HEIGHT },
-					frameRate: { ideal: TARGET_FRAME_RATE },
-				} as MediaTrackConstraints,
-				audio: systemAudioEnabled,
-			} as DisplayMediaStreamOptions);
+			if (platform === "win32") {
+				// getDisplayMedia + setDisplayMediaRequestHandler (main.ts) supplies the
+				// pre-selected source and honors cursor:"never" to exclude the system cursor
+				// from every captured frame. System audio is provided via WASAPI loopback
+				// on Windows when the user has enabled it.
+				screenMediaStream = await navigator.mediaDevices.getDisplayMedia({
+					video: {
+						cursor: "never",
+						width: { max: TARGET_WIDTH },
+						height: { max: TARGET_HEIGHT },
+						frameRate: { ideal: TARGET_FRAME_RATE },
+					} as MediaTrackConstraints,
+					audio: systemAudioEnabled,
+				} as DisplayMediaStreamOptions);
+			} else {
+				const videoConstraints = {
+					mandatory: {
+						chromeMediaSource: CHROME_MEDIA_SOURCE,
+						chromeMediaSourceId: selectedSource.id,
+						maxWidth: TARGET_WIDTH,
+						maxHeight: TARGET_HEIGHT,
+						maxFrameRate: TARGET_FRAME_RATE,
+						minFrameRate: MIN_FRAME_RATE,
+					},
+				};
+
+				if (systemAudioEnabled) {
+					try {
+						screenMediaStream = await navigator.mediaDevices.getUserMedia({
+							audio: {
+								mandatory: {
+									chromeMediaSource: CHROME_MEDIA_SOURCE,
+									chromeMediaSourceId: selectedSource.id,
+								},
+							},
+							video: videoConstraints,
+						} as unknown as MediaStreamConstraints);
+					} catch (audioErr) {
+						console.warn("System audio capture failed, falling back to video-only:", audioErr);
+						toast.error(t("recording.systemAudioUnavailable"));
+						screenMediaStream = await navigator.mediaDevices.getUserMedia({
+							audio: false,
+							video: videoConstraints,
+						} as unknown as MediaStreamConstraints);
+					}
+				} else {
+					screenMediaStream = await navigator.mediaDevices.getUserMedia({
+						audio: false,
+						video: videoConstraints,
+					} as unknown as MediaStreamConstraints);
+				}
+			}
 			screenStream.current = screenMediaStream;
 
 			if (!isCountdownRunActive(countdownRunToken)) {
