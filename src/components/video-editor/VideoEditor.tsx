@@ -163,8 +163,11 @@ export default function VideoEditor() {
 	const cursorTelemetrySourcePath = videoSourcePath ?? (videoPath ? fromFileUrl(videoPath) : null);
 	const { samples: cursorTelemetry, error: cursorTelemetryError } =
 		useCursorTelemetry(cursorTelemetrySourcePath);
-	const { data: cursorRecordingData, error: cursorRecordingDataError } =
-		useCursorRecordingData(cursorTelemetrySourcePath);
+	const {
+		data: cursorRecordingData,
+		loading: cursorRecordingDataLoading,
+		error: cursorRecordingDataError,
+	} = useCursorRecordingData(cursorTelemetrySourcePath);
 	const cursorClickTimestamps = useMemo<number[]>(() => {
 		const recordingClicks =
 			cursorRecordingData?.samples
@@ -1605,6 +1608,7 @@ export default function VideoEditor() {
 						padding,
 						cropRegion,
 						cursorRecordingData,
+						cursorRecordingDataLoading,
 						cursorScale: showCursor ? cursorSize : 0,
 						cursorSmoothing,
 						cursorMotionBlur,
@@ -1693,6 +1697,7 @@ export default function VideoEditor() {
 			padding,
 			cropRegion,
 			cursorRecordingData,
+			cursorRecordingDataLoading,
 			annotationRegions,
 			isPlaying,
 			aspectRatio,

@@ -73,6 +73,15 @@ describe("isSourceCopyFastPathEligible", () => {
 		expect(
 			isSourceCopyFastPathEligible(
 				createConfig({
+					cursorRecordingDataLoading: true,
+					cursorScale: 2,
+				}),
+				videoInfo,
+			),
+		).toBe(false);
+		expect(
+			isSourceCopyFastPathEligible(
+				createConfig({
 					cursorScale: 2,
 					cursorRecordingData: {
 						version: 2,
