@@ -33,6 +33,9 @@ export type NativeWindowsRecordingRequest = {
 		height: number;
 		fps: number;
 	};
+	cursor: {
+		mode: import("./recordingSession").CursorCaptureMode;
+	};
 };
 
 export type NativeWindowsRecordingStartResult = {

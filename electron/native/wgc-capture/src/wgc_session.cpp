@@ -140,7 +140,21 @@ bool WgcSession::createCaptureItem(HWND window) {
     return width_ > 0 && height_ > 0;
 }
 
-bool WgcSession::initialize(HMONITOR monitor, int fps) {
+void WgcSession::applySessionOptions(bool captureCursor) {
+    try {
+        session_.IsCursorCaptureEnabled(captureCursor);
+    } catch (...) {
+        // Older WGC builds can omit this property. They will keep the OS default.
+    }
+
+    try {
+        session_.IsBorderRequired(false);
+    } catch (...) {
+        // IsBorderRequired is Windows 11-only. Ignore it on older builds.
+    }
+}
+
+bool WgcSession::initialize(HMONITOR monitor, int fps, bool captureCursor) {
     fps_ = fps > 0 ? fps : 60;
     if (!createD3DDevice()) {
         return false;
@@ -156,23 +170,13 @@ bool WgcSession::initialize(HMONITOR monitor, int fps) {
         item_.Size());
     session_ = framePool_.CreateCaptureSession(item_);
 
-    try {
-        session_.IsCursorCaptureEnabled(false);
-    } catch (...) {
-        // Older WGC builds can omit this property; callers still overlay their own cursor.
-    }
-
-    try {
-        session_.IsBorderRequired(false);
-    } catch (...) {
-        // IsBorderRequired is Windows 11-only. Ignore it on older builds.
-    }
+    applySessionOptions(captureCursor);
 
     frameArrivedToken_ = framePool_.FrameArrived({this, &WgcSession::onFrameArrived});
     return true;
 }
 
-bool WgcSession::initialize(HWND window, int fps) {
+bool WgcSession::initialize(HWND window, int fps, bool captureCursor) {
     fps_ = fps > 0 ? fps : 60;
     if (!createD3DDevice()) {
         return false;
@@ -188,17 +192,7 @@ bool WgcSession::initialize(HWND window, int fps) {
         item_.Size());
     session_ = framePool_.CreateCaptureSession(item_);
 
-    try {
-        session_.IsCursorCaptureEnabled(false);
-    } catch (...) {
-        // Older WGC builds can omit this property; callers still overlay their own cursor.
-    }
-
-    try {
-        session_.IsBorderRequired(false);
-    } catch (...) {
-        // IsBorderRequired is Windows 11-only. Ignore it on older builds.
-    }
+    applySessionOptions(captureCursor);
 
     frameArrivedToken_ = framePool_.FrameArrived({this, &WgcSession::onFrameArrived});
     return true;

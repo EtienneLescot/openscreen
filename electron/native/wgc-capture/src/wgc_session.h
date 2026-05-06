@@ -22,8 +22,8 @@ public:
     WgcSession(const WgcSession&) = delete;
     WgcSession& operator=(const WgcSession&) = delete;
 
-    bool initialize(HMONITOR monitor, int fps);
-    bool initialize(HWND window, int fps);
+    bool initialize(HMONITOR monitor, int fps, bool captureCursor);
+    bool initialize(HWND window, int fps, bool captureCursor);
     void setFrameCallback(FrameCallback callback);
     bool start();
     void stop();
@@ -37,6 +37,7 @@ private:
     bool createD3DDevice();
     bool createCaptureItem(HMONITOR monitor);
     bool createCaptureItem(HWND window);
+    void applySessionOptions(bool captureCursor);
     void onFrameArrived(
         winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool const& sender,
         winrt::Windows::Foundation::IInspectable const&);

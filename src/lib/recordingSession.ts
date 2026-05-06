@@ -1,7 +1,10 @@
 export interface ProjectMedia {
 	screenVideoPath: string;
 	webcamVideoPath?: string;
+	cursorCaptureMode?: CursorCaptureMode;
 }
+
+export type CursorCaptureMode = "editable-overlay" | "system";
 
 export interface RecordingSession extends ProjectMedia {
 	createdAt: number;
@@ -16,6 +19,11 @@ export interface StoreRecordedSessionInput {
 	screen: RecordedVideoAssetInput;
 	webcam?: RecordedVideoAssetInput;
 	createdAt?: number;
+	cursorCaptureMode?: CursorCaptureMode;
+}
+
+export function normalizeCursorCaptureMode(value: unknown): CursorCaptureMode | undefined {
+	return value === "editable-overlay" || value === "system" ? value : undefined;
 }
 
 function normalizePath(value: unknown): string | undefined {
@@ -40,12 +48,13 @@ export function normalizeProjectMedia(candidate: unknown): ProjectMedia | null {
 	}
 
 	const webcamVideoPath = normalizePath(raw.webcamVideoPath);
+	const cursorCaptureMode = normalizeCursorCaptureMode(raw.cursorCaptureMode);
 
-	return webcamVideoPath
-		? { screenVideoPath, webcamVideoPath }
-		: {
-				screenVideoPath,
-			};
+	return {
+		screenVideoPath,
+		...(webcamVideoPath ? { webcamVideoPath } : {}),
+		...(cursorCaptureMode ? { cursorCaptureMode } : {}),
+	};
 }
 
 export function normalizeRecordingSession(candidate: unknown): RecordingSession | null {

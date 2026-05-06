@@ -35,6 +35,10 @@
 		"noneFound": "Kamera bulunamadı",
 		"unavailable": "Kamera kullanılamıyor"
 	},
+	"cursor": {
+		"useEditableCursor": "Düzenlenebilir imleci kullan",
+		"useSystemCursor": "Sistem imlecini kullan"
+	},
 	"sourceSelector": {
 		"loading": "Kaynaklar yükleniyor...",
 		"screens": "Ekranlar ({{count}})",

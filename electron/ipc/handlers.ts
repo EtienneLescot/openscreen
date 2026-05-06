@@ -16,6 +16,8 @@ import {
 } from "electron";
 import type { NativeWindowsRecordingRequest } from "../../src/lib/nativeWindowsRecording";
 import {
+	type CursorCaptureMode,
+	normalizeCursorCaptureMode,
 	normalizeProjectMedia,
 	normalizeRecordingSession,
 	type ProjectMedia,
@@ -271,6 +273,7 @@ let nativeWindowsCaptureTargetPath: string | null = null;
 let nativeWindowsCaptureWebcamTargetPath: string | null = null;
 let nativeWindowsCaptureRecordingId: number | null = null;
 let nativeWindowsCursorOffsetMs = 0;
+let nativeWindowsCursorCaptureMode: CursorCaptureMode = "editable-overlay";
 const NATIVE_WINDOWS_CAPTURE_STOP_TIMEOUT_MS = 15_000;
 
 function normalizeCursorSample(sample: unknown): CursorRecordingSample | null {
@@ -1057,6 +1060,8 @@ export function registerIpcHandlers(
 				const webcamDirectShowClsid = request.webcam.enabled
 					? await resolveDirectShowWebcamClsid(request.webcam.deviceName)
 					: null;
+				const cursorCaptureMode =
+					normalizeCursorCaptureMode(request.cursor?.mode) ?? "editable-overlay";
 				const config = {
 					schemaVersion: 2,
 					recordingId,
@@ -1085,6 +1090,8 @@ export function registerIpcHandlers(
 					webcamWidth: request.webcam.width,
 					webcamHeight: request.webcam.height,
 					webcamFps: request.webcam.fps,
+					captureCursor: cursorCaptureMode === "system",
+					cursorCaptureMode,
 					outputs: {
 						screenPath: outputPath,
 						webcamPath: webcamOutputPath,
@@ -1099,6 +1106,9 @@ export function registerIpcHandlers(
 					video: request.video,
 					audio: request.audio,
 					webcam: request.webcam,
+					cursor: {
+						mode: cursorCaptureMode,
+					},
 				};
 
 				console.info("[native-wgc] starting Windows capture", {
@@ -1106,6 +1116,7 @@ export function registerIpcHandlers(
 					source: request.source,
 					audio: request.audio,
 					webcam: request.webcam,
+					cursor: { mode: cursorCaptureMode },
 					bounds,
 					sourceId: selectedSource?.id ?? null,
 					usedDisplayMatch: Boolean(sourceDisplay),
@@ -1118,13 +1129,18 @@ export function registerIpcHandlers(
 				nativeWindowsCaptureWebcamTargetPath = request.webcam.enabled ? webcamOutputPath : null;
 				nativeWindowsCaptureRecordingId = recordingId;
 				nativeWindowsCursorOffsetMs = 0;
+				nativeWindowsCursorCaptureMode = cursorCaptureMode;
 
 				const cursorStartTimeMs = Date.now();
-				await startCursorRecording(cursorStartTimeMs);
-				console.info("[native-wgc] cursor sampler ready", {
-					cursorStartTimeMs,
-					warmupMs: Date.now() - cursorStartTimeMs,
-				});
+				if (cursorCaptureMode === "editable-overlay") {
+					await startCursorRecording(cursorStartTimeMs);
+					console.info("[native-wgc] cursor sampler ready", {
+						cursorStartTimeMs,
+						warmupMs: Date.now() - cursorStartTimeMs,
+					});
+				} else {
+					pendingCursorRecordingData = null;
+				}
 
 				const proc = spawn(helperPath, [JSON.stringify(config)], {
 					cwd: RECORDINGS_DIR,
@@ -1135,7 +1151,10 @@ export function registerIpcHandlers(
 
 				await waitForNativeWindowsCaptureStart(proc);
 				const captureStartedAtMs = Date.now();
-				nativeWindowsCursorOffsetMs = Math.max(0, captureStartedAtMs - cursorStartTimeMs);
+				nativeWindowsCursorOffsetMs =
+					cursorCaptureMode === "editable-overlay"
+						? Math.max(0, captureStartedAtMs - cursorStartTimeMs)
+						: 0;
 				const webcamFormat = readNativeWindowsWebcamFormat(nativeWindowsCaptureOutput);
 				console.info("[native-wgc] capture started", {
 					captureStartedAtMs,
@@ -1162,6 +1181,7 @@ export function registerIpcHandlers(
 				nativeWindowsCaptureWebcamTargetPath = null;
 				nativeWindowsCaptureRecordingId = null;
 				nativeWindowsCursorOffsetMs = 0;
+				nativeWindowsCursorCaptureMode = "editable-overlay";
 				await stopCursorRecording();
 				return { success: false, error: String(error) };
 			}
@@ -1173,6 +1193,7 @@ export function registerIpcHandlers(
 		const preferredPath = nativeWindowsCaptureTargetPath;
 		const preferredWebcamPath = nativeWindowsCaptureWebcamTargetPath;
 		const recordingId = nativeWindowsCaptureRecordingId ?? Date.now();
+		const cursorCaptureMode = nativeWindowsCursorCaptureMode;
 
 		if (!proc) {
 			return { success: false, error: "Native Windows capture is not running." };
@@ -1187,7 +1208,11 @@ export function registerIpcHandlers(
 				throw new Error("Native Windows capture did not return an output path.");
 			}
 
-			await stopCursorRecording();
+			if (cursorCaptureMode === "editable-overlay") {
+				await stopCursorRecording();
+			} else {
+				pendingCursorRecordingData = null;
+			}
 			if (discard) {
 				pendingCursorRecordingData = null;
 				await Promise.all([
@@ -1198,8 +1223,10 @@ export function registerIpcHandlers(
 				return { success: true, discarded: true };
 			}
 
-			shiftPendingCursorTelemetry(nativeWindowsCursorOffsetMs);
-			await writePendingCursorTelemetry(screenVideoPath);
+			if (cursorCaptureMode === "editable-overlay") {
+				shiftPendingCursorTelemetry(nativeWindowsCursorOffsetMs);
+				await writePendingCursorTelemetry(screenVideoPath);
+			}
 			let webcamVideoPath: string | undefined;
 			if (preferredWebcamPath) {
 				try {
@@ -1210,8 +1237,8 @@ export function registerIpcHandlers(
 				}
 			}
 			const session: RecordingSession = webcamVideoPath
-				? { screenVideoPath, webcamVideoPath, createdAt: recordingId }
-				: { screenVideoPath, createdAt: recordingId };
+				? { screenVideoPath, webcamVideoPath, createdAt: recordingId, cursorCaptureMode }
+				: { screenVideoPath, createdAt: recordingId, cursorCaptureMode };
 			setCurrentRecordingSessionState(session);
 			currentProjectPath = null;
 
@@ -1237,6 +1264,7 @@ export function registerIpcHandlers(
 			nativeWindowsCaptureWebcamTargetPath = null;
 			nativeWindowsCaptureRecordingId = null;
 			nativeWindowsCursorOffsetMs = 0;
+			nativeWindowsCursorCaptureMode = "editable-overlay";
 			const source = selectedSource || { name: "Screen" };
 			if (onRecordingStateChange) {
 				onRecordingStateChange(false, source.name);
@@ -1262,6 +1290,7 @@ export function registerIpcHandlers(
 			typeof payload.createdAt === "number" && Number.isFinite(payload.createdAt)
 				? payload.createdAt
 				: Date.now();
+		const cursorCaptureMode = normalizeCursorCaptureMode(payload.cursorCaptureMode);
 		const screenVideoPath = resolveRecordingOutputPath(payload.screen.fileName);
 		await fs.writeFile(screenVideoPath, Buffer.from(payload.screen.videoData));
 
@@ -1272,8 +1301,13 @@ export function registerIpcHandlers(
 		}
 
 		const session: RecordingSession = webcamVideoPath
-			? { screenVideoPath, webcamVideoPath, createdAt }
-			: { screenVideoPath, createdAt };
+			? {
+					screenVideoPath,
+					webcamVideoPath,
+					createdAt,
+					...(cursorCaptureMode ? { cursorCaptureMode } : {}),
+				}
+			: { screenVideoPath, createdAt, ...(cursorCaptureMode ? { cursorCaptureMode } : {}) };
 		setCurrentRecordingSessionState(session);
 		currentProjectPath = null;
 
@@ -1334,18 +1368,23 @@ export function registerIpcHandlers(
 		}
 	});
 
-	ipcMain.handle("set-recording-state", async (_, recording: boolean, recordingId?: number) => {
-		if (recording) {
-			await startCursorRecording(recordingId);
-		} else {
-			await stopCursorRecording();
-		}
+	ipcMain.handle(
+		"set-recording-state",
+		async (_, recording: boolean, recordingId?: number, cursorCaptureMode?: CursorCaptureMode) => {
+			const normalizedCursorCaptureMode =
+				normalizeCursorCaptureMode(cursorCaptureMode) ?? "editable-overlay";
+			if (recording && normalizedCursorCaptureMode === "editable-overlay") {
+				await startCursorRecording(recordingId);
+			} else {
+				await stopCursorRecording();
+			}
 
-		const source = selectedSource || { name: "Screen" };
-		if (onRecordingStateChange) {
-			onRecordingStateChange(recording, source.name);
-		}
-	});
+			const source = selectedSource || { name: "Screen" };
+			if (onRecordingStateChange) {
+				onRecordingStateChange(recording, source.name);
+			}
+		},
+	);
 
 	ipcMain.handle("get-cursor-telemetry", async (_, videoPath?: string) => {
 		const targetVideoPath = resolveApprovedVideoPath(

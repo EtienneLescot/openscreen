@@ -59,8 +59,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	getRecordedVideoPath: () => {
 		return ipcRenderer.invoke("get-recorded-video-path");
 	},
-	setRecordingState: (recording: boolean, recordingId?: number) => {
-		return ipcRenderer.invoke("set-recording-state", recording, recordingId);
+	setRecordingState: (
+		recording: boolean,
+		recordingId?: number,
+		cursorCaptureMode?: import("../src/lib/recordingSession").CursorCaptureMode,
+	) => {
+		return ipcRenderer.invoke("set-recording-state", recording, recordingId, cursorCaptureMode);
 	},
 	isNativeWindowsCaptureAvailable: () => {
 		return ipcRenderer.invoke("is-native-windows-capture-available");

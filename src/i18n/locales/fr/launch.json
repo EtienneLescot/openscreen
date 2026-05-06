@@ -24,6 +24,10 @@
 		"noneFound": "Aucune caméra trouvée",
 		"unavailable": "Caméra non disponible"
 	},
+	"cursor": {
+		"useEditableCursor": "Utiliser le curseur éditable",
+		"useSystemCursor": "Utiliser le curseur système"
+	},
 	"sourceSelector": {
 		"loading": "Chargement des sources...",
 		"screens": "Écrans ({{count}})",

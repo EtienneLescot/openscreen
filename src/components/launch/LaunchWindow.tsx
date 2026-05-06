@@ -10,6 +10,7 @@ import {
 	MdMic,
 	MdMicOff,
 	MdMonitor,
+	MdMouse,
 	MdRestartAlt,
 	MdVideocam,
 	MdVideocamOff,
@@ -43,6 +44,7 @@ const ICON_CONFIG = {
 	micOff: { icon: MdMicOff, size: ICON_SIZE },
 	webcamOn: { icon: MdVideocam, size: ICON_SIZE },
 	webcamOff: { icon: MdVideocamOff, size: ICON_SIZE },
+	cursor: { icon: MdMouse, size: ICON_SIZE },
 	pause: { icon: BsPauseCircle, size: ICON_SIZE },
 	resume: { icon: BsPlayCircle, size: ICON_SIZE },
 	stop: { icon: FaRegStopCircle, size: ICON_SIZE },
@@ -109,6 +111,8 @@ export function LaunchWindow() {
 		webcamDeviceId,
 		setWebcamDeviceId,
 		setWebcamDeviceName,
+		cursorCaptureMode,
+		setCursorCaptureMode,
 	} = useScreenRecorder();
 
 	const showMicControls = microphoneEnabled && !recording;
@@ -122,6 +126,7 @@ export function LaunchWindow() {
 	const [isWebcamFocused, setIsWebcamFocused] = useState(false);
 	const webcamExpanded = isWebcamHovered || isWebcamFocused;
 	const [isLanguageMenuOpen, setIsLanguageMenuOpen] = useState(false);
+	const [isWindows, setIsWindows] = useState(false);
 	const languageTriggerRef = useRef<HTMLButtonElement | null>(null);
 	const languageMenuPanelRef = useRef<HTMLDivElement | null>(null);
 	const [languageMenuStyle, setLanguageMenuStyle] = useState<{
@@ -179,6 +184,26 @@ export function LaunchWindow() {
 			setWebcamDeviceName(cameraDevices.find((d) => d.deviceId === selectedCameraId)?.label);
 		}
 	}, [selectedCameraId, cameraDevices, setWebcamDeviceId, setWebcamDeviceName]);
+
+	useEffect(() => {
+		let cancelled = false;
+		nativeBridgeClient.system
+			.getPlatform()
+			.then((platform) => {
+				if (!cancelled) {
+					setIsWindows(platform === "win32");
+				}
+			})
+			.catch(() => {
+				if (!cancelled) {
+					setIsWindows(false);
+				}
+			});
+
+		return () => {
+			cancelled = true;
+		};
+	}, []);
 
 	useEffect(() => {
 		if (!import.meta.env.DEV) {
@@ -570,6 +595,33 @@ export function LaunchWindow() {
 							? getIcon("webcamOn", "text-green-400")
 							: getIcon("webcamOff", "text-white/40")}
 					</button>
+					{isWindows && (
+						<button
+							data-testid="launch-cursor-mode-button"
+							className={`${hudIconBtnClasses} ${
+								cursorCaptureMode === "editable-overlay"
+									? "drop-shadow-[0_0_4px_rgba(74,222,128,0.4)]"
+									: ""
+							}`}
+							onClick={() =>
+								!recording &&
+								setCursorCaptureMode(
+									cursorCaptureMode === "editable-overlay" ? "system" : "editable-overlay",
+								)
+							}
+							disabled={recording}
+							title={
+								cursorCaptureMode === "editable-overlay"
+									? t("cursor.useSystemCursor")
+									: t("cursor.useEditableCursor")
+							}
+						>
+							{getIcon(
+								"cursor",
+								cursorCaptureMode === "editable-overlay" ? "text-green-400" : "text-white/40",
+							)}
+						</button>
+					)}
 				</div>
 
 				{/* Record/Stop group */}

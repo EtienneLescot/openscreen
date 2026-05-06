@@ -24,6 +24,10 @@
 		"noneFound": "未找到攝影機",
 		"unavailable": "攝影機不可用"
 	},
+	"cursor": {
+		"useEditableCursor": "使用可編輯游標",
+		"useSystemCursor": "使用系統游標"
+	},
 	"sourceSelector": {
 		"loading": "正在載入來源...",
 		"screens": "螢幕 ({{count}})",

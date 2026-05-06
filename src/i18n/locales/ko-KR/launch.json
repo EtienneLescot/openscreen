@@ -24,6 +24,10 @@
 		"noneFound": "카메라를 찾을 수 없음",
 		"unavailable": "카메라를 사용할 수 없음"
 	},
+	"cursor": {
+		"useEditableCursor": "편집 가능한 커서 사용",
+		"useSystemCursor": "시스템 커서 사용"
+	},
 	"sourceSelector": {
 		"loading": "소스 불러오는 중...",
 		"screens": "화면 ({{count}}개)",

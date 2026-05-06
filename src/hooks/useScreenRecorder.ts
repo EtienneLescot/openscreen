@@ -6,6 +6,7 @@ import {
 	type NativeWindowsRecordingRequest,
 	parseWindowHandleFromSourceId,
 } from "@/lib/nativeWindowsRecording";
+import type { CursorCaptureMode } from "@/lib/recordingSession";
 import { requestCameraAccess } from "@/lib/requestCameraAccess";
 
 const TARGET_FRAME_RATE = 60;
@@ -65,6 +66,8 @@ type UseScreenRecorderReturn = {
 	setSystemAudioEnabled: (enabled: boolean) => void;
 	webcamEnabled: boolean;
 	setWebcamEnabled: (enabled: boolean) => Promise<boolean>;
+	cursorCaptureMode: CursorCaptureMode;
+	setCursorCaptureMode: (mode: CursorCaptureMode) => void;
 };
 
 type RecorderHandle = {
@@ -111,6 +114,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const [webcamDeviceName, setWebcamDeviceName] = useState<string | undefined>(undefined);
 	const [systemAudioEnabled, setSystemAudioEnabled] = useState(false);
 	const [webcamEnabled, setWebcamEnabledState] = useState(false);
+	const [cursorCaptureMode, setCursorCaptureMode] = useState<CursorCaptureMode>("editable-overlay");
 	const screenRecorder = useRef<RecorderHandle | null>(null);
 	const webcamRecorder = useRef<RecorderHandle | null>(null);
 	const nativeWindowsRecording = useRef<NativeWindowsRecordingHandle | null>(null);
@@ -368,6 +372,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 								}
 							: undefined,
 						createdAt: activeRecordingId,
+						cursorCaptureMode,
 					});
 
 					if (!result.success) {
@@ -394,7 +399,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				}
 			})();
 		},
-		[teardownMedia],
+		[cursorCaptureMode, teardownMedia],
 	);
 
 	const finalizeNativeWindowsRecording = useCallback(async (discard = false) => {
@@ -645,6 +650,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					height: WEBCAM_TARGET_HEIGHT,
 					fps: WEBCAM_TARGET_FRAME_RATE,
 				},
+				cursor: {
+					mode: cursorCaptureMode,
+				},
 			};
 			const result = await window.electronAPI.startNativeWindowsRecording(request);
 			if (!result.success || !result.recordingId) {
@@ -765,12 +773,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 			if (platform === "win32") {
 				// getDisplayMedia + setDisplayMediaRequestHandler (main.ts) supplies the
-				// pre-selected source and honors cursor:"never" to exclude the system cursor
-				// from every captured frame. System audio is provided via WASAPI loopback
-				// on Windows when the user has enabled it.
+				// pre-selected source. Editable cursor mode excludes the system cursor so
+				// the editor can render a replacement; system mode bakes it into the video.
 				screenMediaStream = await navigator.mediaDevices.getDisplayMedia({
 					video: {
-						cursor: "never",
+						cursor: cursorCaptureMode === "editable-overlay" ? "never" : "always",
 						width: { max: TARGET_WIDTH },
 						height: { max: TARGET_HEIGHT },
 						frameRate: { ideal: TARGET_FRAME_RATE },
@@ -976,7 +983,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			setRecording(true);
 			setPaused(false);
 			setElapsedSeconds(0);
-			window.electronAPI?.setRecordingState(true, recordingId.current);
+			window.electronAPI?.setRecordingState(true, recordingId.current, cursorCaptureMode);
 
 			const activeScreenRecorder = screenRecorder.current;
 			const activeWebcamRecorder = webcamRecorder.current;
@@ -1192,5 +1199,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		setSystemAudioEnabled,
 		webcamEnabled,
 		setWebcamEnabled,
+		cursorCaptureMode,
+		setCursorCaptureMode,
 	};
 }

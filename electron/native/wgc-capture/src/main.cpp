@@ -36,6 +36,7 @@ struct CaptureConfig {
     bool hasDisplayBounds = false;
     bool captureSystemAudio = false;
     bool captureMic = false;
+    bool captureCursor = false;
     bool webcamEnabled = false;
     std::string microphoneDeviceId;
     std::string microphoneDeviceName;
@@ -302,6 +303,7 @@ bool parseConfig(const std::string& json, CaptureConfig& config) {
     config.hasDisplayBounds = findBool(json, "hasDisplayBounds", false);
     config.captureSystemAudio = findBool(json, "captureSystemAudio", false);
     config.captureMic = findBool(json, "captureMic", false);
+    config.captureCursor = findBool(json, "captureCursor", false);
     config.webcamEnabled = findBool(json, "webcamEnabled", false);
     config.microphoneDeviceId = findString(json, "microphoneDeviceId");
     config.microphoneDeviceName = findString(json, "microphoneDeviceName");
@@ -355,7 +357,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "ERROR: Could not resolve monitor" << std::endl;
             return 1;
         }
-        if (!session.initialize(monitor, config.fps)) {
+        if (!session.initialize(monitor, config.fps, config.captureCursor)) {
             std::cerr << "ERROR: Failed to initialize WGC display session" << std::endl;
             return 1;
         }
@@ -365,7 +367,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "ERROR: Native window capture requires a valid HWND" << std::endl;
             return 1;
         }
-        if (!session.initialize(window, config.fps)) {
+        if (!session.initialize(window, config.fps, config.captureCursor)) {
             std::cerr << "ERROR: Failed to initialize WGC window session" << std::endl;
             return 1;
         }

@@ -24,6 +24,10 @@
 		"noneFound": "カメラが見つかりません",
 		"unavailable": "カメラが利用できません"
 	},
+	"cursor": {
+		"useEditableCursor": "編集可能なカーソルを使う",
+		"useSystemCursor": "システムカーソルを使う"
+	},
 	"sourceSelector": {
 		"loading": "ソースを読み込み中...",
 		"screens": "画面 ({{count}})",

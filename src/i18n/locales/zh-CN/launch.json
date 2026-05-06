@@ -24,6 +24,10 @@
 		"noneFound": "未找到摄像头",
 		"unavailable": "摄像头不可用"
 	},
+	"cursor": {
+		"useEditableCursor": "使用可编辑光标",
+		"useSystemCursor": "使用系统光标"
+	},
 	"sourceSelector": {
 		"loading": "正在加载源...",
 		"screens": "屏幕 ({{count}})",
