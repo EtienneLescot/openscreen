@@ -11,11 +11,15 @@ export interface ExportAudioCodec {
 	encoderCodec: string;
 	muxerCodec: ExportAudioMuxerCodec;
 	label: string;
+	sampleRate: number;
+	numberOfChannels: number;
 }
 
-const EXPORT_AUDIO_CODECS: ExportAudioCodec[] = [
-	{ encoderCodec: "opus", muxerCodec: "opus", label: "Opus" },
+type ExportAudioCodecCandidate = Omit<ExportAudioCodec, "sampleRate" | "numberOfChannels">;
+
+const EXPORT_AUDIO_CODECS: ExportAudioCodecCandidate[] = [
 	{ encoderCodec: "mp4a.40.2", muxerCodec: "aac", label: "AAC" },
+	{ encoderCodec: "opus", muxerCodec: "opus", label: "Opus" },
 ];
 
 export class AudioProcessor {
@@ -25,15 +29,26 @@ export class AudioProcessor {
 		sampleRate: number,
 		numberOfChannels: number,
 	): Promise<ExportAudioCodec | null> {
+		const channelOptions = [numberOfChannels];
+		if (numberOfChannels > 2) {
+			channelOptions.push(2);
+		}
+
+		if (!channelOptions.includes(1)) {
+			channelOptions.push(1);
+		}
+
 		for (const codec of EXPORT_AUDIO_CODECS) {
-			const support = await AudioEncoder.isConfigSupported({
-				codec: codec.encoderCodec,
-				sampleRate,
-				numberOfChannels,
-				bitrate: AUDIO_BITRATE,
-			});
-			if (support.supported) {
-				return codec;
+			for (const channels of channelOptions) {
+				const support = await AudioEncoder.isConfigSupported({
+					codec: codec.encoderCodec,
+					sampleRate,
+					numberOfChannels: channels,
+					bitrate: AUDIO_BITRATE,
+				});
+				if (support.supported) {
+					return { ...codec, sampleRate, numberOfChannels: channels };
+				}
 			}
 		}
 
@@ -56,9 +71,10 @@ export class AudioProcessor {
 			return null;
 		}
 
-		const sampleRate = audioConfig.sampleRate || 48000;
-		const channels = audioConfig.numberOfChannels || 2;
-		return AudioProcessor.selectSupportedExportCodec(sampleRate, channels);
+		return AudioProcessor.selectSupportedExportCodec(
+			audioConfig.sampleRate || 48000,
+			audioConfig.numberOfChannels || 2,
+		);
 	}
 
 	/**
@@ -197,10 +213,12 @@ export class AudioProcessor {
 			return;
 		}
 
+		const outputSampleRate = selectedCodec.sampleRate || sampleRate;
+		const outputChannels = selectedCodec.numberOfChannels || channels;
 		const encodeConfig: AudioEncoderConfig = {
 			codec: selectedCodec.encoderCodec,
-			sampleRate,
-			numberOfChannels: channels,
+			sampleRate: outputSampleRate,
+			numberOfChannels: outputChannels,
 			bitrate: AUDIO_BITRATE,
 		};
 
@@ -225,7 +243,11 @@ export class AudioProcessor {
 			const trimOffsetMs = this.computeTrimOffset(timestampMs, sortedTrims);
 			const adjustedTimestampUs = audioData.timestamp - trimOffsetMs * 1000;
 
-			const adjusted = this.cloneWithTimestamp(audioData, Math.max(0, adjustedTimestampUs));
+			const adjusted = this.cloneForEncoding(
+				audioData,
+				Math.max(0, adjustedTimestampUs),
+				outputChannels,
+			);
 			audioData.close();
 
 			encoder.encode(adjusted);
@@ -586,7 +608,15 @@ export class AudioProcessor {
 		);
 	}
 
-	private cloneWithTimestamp(src: AudioData, newTimestamp: number): AudioData {
+	private cloneForEncoding(
+		src: AudioData,
+		newTimestamp: number,
+		targetChannels: number,
+	): AudioData {
+		if (targetChannels !== src.numberOfChannels) {
+			return this.downmixWithTimestamp(src, newTimestamp, targetChannels);
+		}
+
 		if (!src.format) {
 			throw new Error("AudioData format is required for cloning");
 		}
@@ -613,6 +643,52 @@ export class AudioProcessor {
 			numberOfChannels: src.numberOfChannels,
 			timestamp: newTimestamp,
 			data: buffer,
+		});
+	}
+
+	private downmixWithTimestamp(
+		src: AudioData,
+		newTimestamp: number,
+		targetChannels: number,
+	): AudioData {
+		const sourceChannels = src.numberOfChannels;
+		const frameCount = src.numberOfFrames;
+		if (targetChannels < 1 || targetChannels > 2) {
+			throw new Error(`Unsupported target channel count: ${targetChannels}`);
+		}
+
+		const sourcePlanes = Array.from({ length: sourceChannels }, () => new Float32Array(frameCount));
+		for (let channel = 0; channel < sourceChannels; channel++) {
+			src.copyTo(sourcePlanes[channel], {
+				format: "f32-planar",
+				planeIndex: channel,
+			});
+		}
+
+		const output = new Float32Array(frameCount * targetChannels);
+		if (targetChannels === 1) {
+			for (let frame = 0; frame < frameCount; frame++) {
+				let mixed = 0;
+				for (let channel = 0; channel < sourceChannels; channel++) {
+					mixed += sourcePlanes[channel][frame];
+				}
+				output[frame] = mixed / sourceChannels;
+			}
+		} else if (sourceChannels === 1) {
+			output.set(sourcePlanes[0], 0);
+			output.set(sourcePlanes[0], frameCount);
+		} else {
+			output.set(sourcePlanes[0], 0);
+			output.set(sourcePlanes[1], frameCount);
+		}
+
+		return new AudioData({
+			format: "f32-planar",
+			sampleRate: src.sampleRate,
+			numberOfFrames: frameCount,
+			numberOfChannels: targetChannels,
+			timestamp: newTimestamp,
+			data: output,
 		});
 	}
 
