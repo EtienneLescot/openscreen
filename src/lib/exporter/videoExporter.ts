@@ -40,7 +40,6 @@ export interface VideoExporterConfig extends ExportConfig {
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: { cx: number; cy: number } | null;
 	cursorRecordingData?: CursorRecordingData | null;
-	cursorRecordingDataLoading?: boolean;
 	cursorScale?: number;
 	cursorSmoothing?: number;
 	cursorMotionBlur?: number;
@@ -71,19 +70,7 @@ function hasActiveSpeedRegions(regions?: SpeedRegion[]) {
 }
 
 function hasNativeCursorOverlay(config: VideoExporterConfig) {
-	if ((config.cursorScale ?? 0) <= 0) {
-		return false;
-	}
-
-	if (config.cursorRecordingDataLoading) {
-		return true;
-	}
-
-	return Boolean(
-		config.cursorRecordingData?.provider === "native" &&
-			config.cursorRecordingData.samples.length > 0 &&
-			config.cursorRecordingData.assets.length > 0,
-	);
+	return (config.cursorScale ?? 0) > 0;
 }
 
 function hasCursorHighlightOverlay(config: VideoExporterConfig) {

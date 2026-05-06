@@ -14,8 +14,8 @@ export interface ExportAudioCodec {
 }
 
 const EXPORT_AUDIO_CODECS: ExportAudioCodec[] = [
-	{ encoderCodec: "mp4a.40.2", muxerCodec: "aac", label: "AAC" },
 	{ encoderCodec: "opus", muxerCodec: "opus", label: "Opus" },
+	{ encoderCodec: "mp4a.40.2", muxerCodec: "aac", label: "AAC" },
 ];
 
 export class AudioProcessor {
