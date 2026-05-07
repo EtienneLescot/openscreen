@@ -92,25 +92,39 @@ export function isSourceCopyFastPathEligible(
 	config: VideoExporterConfig,
 	videoInfo: { width: number; height: number },
 ) {
-	return (
-		config.width === videoInfo.width &&
-		config.height === videoInfo.height &&
-		!config.webcamVideoUrl &&
-		!hasActiveTimeRegions(config.trimRegions) &&
-		!hasActiveSpeedRegions(config.speedRegions) &&
-		!hasActiveTimeRegions(config.zoomRegions) &&
-		!hasActiveTimeRegions(config.annotationRegions) &&
-		!hasNativeCursorOverlay(config) &&
-		!hasCursorHighlightOverlay(config) &&
-		isDefaultCrop(config.cropRegion) &&
-		(config.padding ?? 0) <= SOURCE_COPY_EPSILON &&
-		(config.videoPadding ?? 0) <= SOURCE_COPY_EPSILON &&
-		(config.borderRadius ?? 0) <= SOURCE_COPY_EPSILON &&
-		!config.showShadow &&
-		config.shadowIntensity <= SOURCE_COPY_EPSILON &&
-		!config.showBlur &&
-		(config.motionBlurAmount ?? 0) <= SOURCE_COPY_EPSILON
-	);
+	return getSourceCopyFastPathBlockers(config, videoInfo).length === 0;
+}
+
+export function getSourceCopyFastPathBlockers(
+	config: VideoExporterConfig,
+	videoInfo: { width: number; height: number },
+) {
+	const blockers: string[] = [];
+
+	if (config.width !== videoInfo.width || config.height !== videoInfo.height) {
+		blockers.push(
+			`output-size ${config.width}x${config.height} differs from source ${videoInfo.width}x${videoInfo.height}`,
+		);
+	}
+	if (config.webcamVideoUrl) blockers.push("webcam overlay is enabled");
+	if (hasActiveTimeRegions(config.trimRegions)) blockers.push("trim regions are present");
+	if (hasActiveSpeedRegions(config.speedRegions)) blockers.push("speed regions are present");
+	if (hasActiveTimeRegions(config.zoomRegions)) blockers.push("zoom regions are present");
+	if (hasActiveTimeRegions(config.annotationRegions))
+		blockers.push("annotation regions are present");
+	if (hasNativeCursorOverlay(config)) blockers.push("editable cursor overlay is enabled");
+	if (hasCursorHighlightOverlay(config)) blockers.push("cursor highlight overlay is enabled");
+	if (!isDefaultCrop(config.cropRegion)) blockers.push("crop is not default");
+	if ((config.padding ?? 0) > SOURCE_COPY_EPSILON) blockers.push("padding is not zero");
+	if ((config.videoPadding ?? 0) > SOURCE_COPY_EPSILON) blockers.push("video padding is not zero");
+	if ((config.borderRadius ?? 0) > SOURCE_COPY_EPSILON) blockers.push("roundness is not zero");
+	if (config.showShadow || config.shadowIntensity > SOURCE_COPY_EPSILON) {
+		blockers.push("shadow is enabled");
+	}
+	if (config.showBlur) blockers.push("background blur is enabled");
+	if ((config.motionBlurAmount ?? 0) > SOURCE_COPY_EPSILON) blockers.push("motion blur is enabled");
+
+	return blockers;
 }
 
 function isMp4Source(videoUrl: string, blob: Blob) {
@@ -645,12 +659,22 @@ export class VideoExporter {
 	}
 
 	private async trySourceCopyFastPath(videoInfo: { width: number; height: number }) {
-		if (!isSourceCopyFastPathEligible(this.config, videoInfo)) {
+		const blockers = getSourceCopyFastPathBlockers(this.config, videoInfo);
+		if (blockers.length > 0) {
+			console.info("[VideoExporter] source-copy fast path disabled", {
+				blockers,
+				output: { width: this.config.width, height: this.config.height },
+				source: videoInfo,
+			});
 			return null;
 		}
 
 		const sourceBlob = await this.loadSourceBlob();
 		if (!sourceBlob || !isMp4Source(this.config.videoUrl, sourceBlob)) {
+			console.info("[VideoExporter] source-copy fast path disabled", {
+				blockers: ["source is not a readable MP4"],
+				source: videoInfo,
+			});
 			return null;
 		}
 
@@ -664,6 +688,10 @@ export class VideoExporter {
 			percentage: 100,
 			estimatedTimeRemaining: 0,
 			phase: "finalizing",
+		});
+		console.info("[VideoExporter] using source-copy fast path", {
+			source: videoInfo,
+			bytes: sourceBlob.size,
 		});
 
 		return {

@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { isSourceCopyFastPathEligible, type VideoExporterConfig } from "./videoExporter";
+import {
+	getSourceCopyFastPathBlockers,
+	isSourceCopyFastPathEligible,
+	type VideoExporterConfig,
+} from "./videoExporter";
 
 function createConfig(overrides: Partial<VideoExporterConfig> = {}): VideoExporterConfig {
 	return {
@@ -121,5 +125,16 @@ describe("isSourceCopyFastPathEligible", () => {
 				videoInfo,
 			),
 		).toBe(false);
+	});
+});
+
+describe("getSourceCopyFastPathBlockers", () => {
+	it("reports the source-size mismatch that blocks copy-only export", () => {
+		expect(
+			getSourceCopyFastPathBlockers(createConfig({ height: 1080 }), {
+				width: 1920,
+				height: 1032,
+			}),
+		).toContain("output-size 1920x1080 differs from source 1920x1032");
 	});
 });
