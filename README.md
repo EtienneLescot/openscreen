@@ -101,9 +101,6 @@ _I'm new to open source, idk what I'm doing lol. If something is wrong please ra
 See the documentation here:
 [OpenScreen Docs](https://deepwiki.com/siddharthvaddem/openscreen)
 
-Developer notes:
-- [Windows native cursor test pipeline](docs/testing/windows-native-cursor.md)
-
 ## Contributing
 
 Contributions are welcome! If you’d like to help out or see what’s currently being worked on, take a look at the open issues and the [project roadmap](https://github.com/users/siddharthvaddem/projects/3) to understand the current direction of the project and find ways to contribute.
