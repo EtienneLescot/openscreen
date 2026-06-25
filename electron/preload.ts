@@ -174,6 +174,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	getCurrentRecordingSession: () => {
 		return ipcRenderer.invoke("get-current-recording-session");
 	},
+	findRecordingCamera: (videoPath: string) => {
+		return ipcRenderer.invoke("find-recording-camera", videoPath);
+	},
 	readBinaryFile: (filePath: string) => {
 		return ipcRenderer.invoke("read-binary-file", filePath);
 	},
@@ -301,5 +304,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	},
 	sendCloseConfirmResponse: (choice: "save" | "discard" | "cancel") => {
 		ipcRenderer.send("close-confirm-response", choice);
+	},
+	// ponytail: forward renderer console output to main-process stdout so
+	// recorder diagnostics land next to the main-process logs in dev output.
+	// One-way fire-and-forget; we deliberately don't await the IPC.
+	rendererConsole: (channel: "log" | "warn" | "error", args: unknown[]) => {
+		ipcRenderer.send(`renderer-console-${channel}`, ...args);
 	},
 });

@@ -9,8 +9,10 @@ import {
 	type ProjectFileResult,
 	type ProjectPathResult,
 } from "../../src/native/contracts";
+import type { DocumentService } from "../ai-edition/document-service";
 import type { CursorTelemetryLoadResult } from "../native-bridge/cursor/adapter";
 import { TelemetryCursorAdapter } from "../native-bridge/cursor/telemetryCursorAdapter";
+import { AiEditionService } from "../native-bridge/services/aiEditionService";
 import { CursorService } from "../native-bridge/services/cursorService";
 import { ProjectService } from "../native-bridge/services/projectService";
 import { SystemService } from "../native-bridge/services/systemService";
@@ -37,6 +39,16 @@ export interface NativeBridgeContext {
 		videoPath: string,
 	) => Promise<import("../../src/native/contracts").CursorRecordingData>;
 	loadCursorTelemetry: (videoPath: string) => Promise<CursorTelemetryLoadResult>;
+	getAiEditionDocuments: () => DocumentService;
+	getAiEditionLlmConfig: () => import("../ai-edition/llm-config-store").LlmConfigStore;
+	runAiEditionChat: (
+		projectId: string,
+		message: string,
+	) => Promise<import("../../src/native/contracts").AiEditionChatResult>;
+	getAiEditionChatHistory: (
+		projectId: string,
+	) => Promise<import("../../src/native/contracts").AiEditionChatMessage[]>;
+	clearAiEditionChatHistory: (projectId: string) => void;
 }
 
 function normalizePlatform(platform: NodeJS.Platform): NativePlatform {
@@ -119,6 +131,13 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 		getPlatform: () => platform,
 		getAssetBasePath: context.resolveAssetBasePath,
 		getCursorCapabilities: () => cursorService.getCapabilities(),
+	});
+	const aiEditionService = new AiEditionService({
+		documents: context.getAiEditionDocuments(),
+		llmConfig: context.getAiEditionLlmConfig(),
+		runChat: context.runAiEditionChat,
+		getChatHistory: context.getAiEditionChatHistory,
+		clearChatHistory: context.clearAiEditionChatHistory,
 	});
 
 	ipcMain.handle(NATIVE_BRIDGE_CHANNEL, async (_, request: unknown) => {
@@ -216,6 +235,92 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 								requestId,
 								"UNSUPPORTED_ACTION",
 								`Unsupported cursor action: ${action}`,
+							);
+					}
+				}
+
+				case "aiEdition": {
+					const action = request.action as string;
+					switch (request.action) {
+						case "document.listProjects":
+							return createSuccessResponse(requestId, await aiEditionService.listProjects());
+						case "document.get":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.get(request.payload.projectId),
+							);
+						case "document.create":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.create(request.payload?.title),
+							);
+						case "document.save":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.save(request.payload.document),
+							);
+						case "document.delete":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.deleteProject(request.payload.projectId),
+							);
+						case "document.addAsset":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.addAsset(
+									request.payload.projectId,
+									request.payload.path,
+									request.payload.label,
+								),
+							);
+						case "document.removeAsset":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.removeAsset(
+									request.payload.projectId,
+									request.payload.assetId,
+								),
+							);
+						case "llm.getSnapshot":
+							return createSuccessResponse(requestId, await aiEditionService.llmGetSnapshot());
+						case "llm.setConfig":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.llmSetConfig(request.payload.config),
+							);
+						case "llm.setApiKey":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.llmSetApiKey(
+									request.payload.providerId,
+									request.payload.apiKey,
+								),
+							);
+						case "llm.removeApiKey":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.llmRemoveApiKey(request.payload.providerId),
+							);
+						case "chat.run":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.chatRun(request.payload.projectId, request.payload.message),
+							);
+						case "chat.history":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.chatHistory(request.payload.projectId),
+							);
+						case "chat.clear":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.chatClear(request.payload.projectId),
+							);
+						default:
+							return createErrorResponse(
+								requestId,
+								"UNSUPPORTED_ACTION",
+								`Unsupported aiEdition action: ${action}`,
 							);
 					}
 				}

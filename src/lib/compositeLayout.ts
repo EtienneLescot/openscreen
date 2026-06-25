@@ -125,7 +125,8 @@ interface OverlayTransform {
 
 interface StackTransform {
 	type: "stack";
-	gap: number;
+	gapFraction: number;
+	minGap: number;
 }
 
 interface SplitTransform {
@@ -185,12 +186,13 @@ const WEBCAM_LAYOUT_PRESET_MAP: Record<WebcamLayoutPreset, WebcamLayoutPresetDef
 		label: "Vertical Stack",
 		transform: {
 			type: "stack",
-			gap: 0,
+			gapFraction: 0.02,
+			minGap: 8,
 		},
 		borderRadius: {
-			max: 0,
-			min: 0,
-			fraction: 0,
+			max: 24,
+			min: 8,
+			fraction: 0.06,
 		},
 		shadow: null,
 	},
@@ -302,27 +304,82 @@ export function computeCompositeLayout(params: {
 			};
 		}
 
-		// Webcam: full width at the bottom, keeping aspect ratio.
-		const webcamAspect = webcamWidth / webcamHeight;
-		const resolvedWebcamWidth = canvasWidth;
-		const resolvedWebcamHeight = Math.round(canvasWidth / webcamAspect);
+		// ponytail: padding insets the content vertically (like dual-frame
+		// insets it horizontally). `maxContentSize` from `PreviewCanvas` is
+		// already padded to `canvasSize × paddingFit`; we derive a content
+		// area, vertically center the screen+gap+camera stack inside it, and
+		// keep the wallpaper visible at the top and bottom of the canvas.
+		const contentHeight = Math.min(
+			canvasHeight,
+			Math.max(1, Math.round(maxContentSize?.height ?? canvasHeight)),
+		);
+		const contentWidth = Math.min(
+			canvasWidth,
+			Math.max(1, Math.round(maxContentSize?.width ?? canvasWidth)),
+		);
+		const contentY = Math.max(0, Math.floor((canvasHeight - contentHeight) / 2));
 
-		// Screen: fills remaining space at the top (cover mode, may crop sides).
-		const screenRectHeight = canvasHeight - resolvedWebcamHeight;
+		// ponytail: gap between screen and camera, scaled off the padded
+		// content width so the proportional spacing stays consistent.
+		const gap = Math.max(
+			preset.transform.minGap,
+			Math.round(contentWidth * preset.transform.gapFraction),
+		);
+
+		// Webcam: full content width at the bottom, capped at 40% of the
+		// padded content area so the screen always has room (otherwise a
+		// 16:9 webcam in a 16:9 canvas collapses the screen to 0px). Aspect
+		// is preserved when the request overflows the cap. The 40% follows the
+		// same 1-of-N ratio the dual-frame preset uses for screenUnits/webcamUnits.
+		const webcamAspect = webcamWidth / webcamHeight;
+		const requestedWebcamWidth = contentWidth;
+		const requestedWebcamHeight = Math.round(requestedWebcamWidth / webcamAspect);
+		const stackCapHeight = Math.max(1, Math.round(contentHeight * 0.4));
+		const resolvedWebcamHeight = Math.min(requestedWebcamHeight, stackCapHeight);
+		const resolvedWebcamWidth = Math.round(resolvedWebcamHeight * webcamAspect);
+
+		// Screen: fills remaining space above the camera + gap, content width.
+		const screenRectHeight = Math.max(0, contentHeight - resolvedWebcamHeight - gap);
+
+		// Camera border-radius follows the same preset fraction rule as
+		// dual-frame so the strip gets gentle rounded corners.
+		const webcamBorderRadius = Math.min(
+			preset.borderRadius.max,
+			Math.max(
+				preset.borderRadius.min,
+				Math.round(
+					Math.min(resolvedWebcamWidth, resolvedWebcamHeight) * preset.borderRadius.fraction,
+				),
+			),
+		);
 
 		return {
 			screenRect: {
-				x: 0,
-				y: 0,
-				width: canvasWidth,
-				height: Math.max(0, screenRectHeight),
+				// ponytail: the content area (padded by `maxContentSize`) is
+				// centered in the canvas — top/bottom from the canvas, and
+				// left/right from the canvas when `maxContentSize` is narrower
+				// than canvasWidth. This matches the dual-frame pattern where
+				// padding = canvas-margin.
+				x: Math.max(0, Math.floor((canvasWidth - contentWidth) / 2)),
+				y: contentY,
+				width: contentWidth,
+				height: screenRectHeight,
 			},
 			webcamRect: {
-				x: 0,
-				y: Math.max(0, screenRectHeight),
+				// ponytail: legacy hardcoded x:0 which left-aligned the camera
+				// strip in the bottom-left when its aspect produced a narrower
+				// width than the canvas. Center the strip horizontally within
+				// the padded content area when there's room to spare, and
+				// match the screen's horizontal inset.
+				x:
+					Math.max(0, Math.floor((canvasWidth - contentWidth) / 2)) +
+					Math.floor((contentWidth - resolvedWebcamWidth) / 2),
+				// ponytail: place camera BELOW the gap inside the padded area so
+				// screen and camera don't touch.
+				y: contentY + screenRectHeight + gap,
 				width: resolvedWebcamWidth,
 				height: resolvedWebcamHeight,
-				borderRadius: 0,
+				borderRadius: webcamBorderRadius,
 			},
 			screenCover: true,
 		};

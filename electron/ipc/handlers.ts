@@ -35,6 +35,9 @@ import type {
 	ProjectFileResult,
 	ProjectPathResult,
 } from "../../src/native/contracts";
+import { clearChatHistory, getChatHistory, runChat } from "../ai-edition/chat-service";
+import { DocumentService } from "../ai-edition/document-service";
+import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
 import { RECORDINGS_DIR } from "../main";
@@ -2308,6 +2311,36 @@ export function registerIpcHandlers(
 			);
 		}
 
+		// ponytail: MediaRecorder occasionally produces a 0-byte file on Windows
+		// when the display stream is captured but no frames are produced (the
+		// streaming WriteStream was opened but never received any chunks). Detect
+		// the bad file here so the recording fails loudly instead of opening the
+		// editor on a file the <video> element can't decode. The WebM EBML header
+		// alone is ~33 bytes; 1KB rules out a header-only file with no frames.
+		const MIN_VALID_BYTES = 1024;
+		try {
+			const screenStat = await fs.stat(screenVideoPath);
+			if (screenStat.size < MIN_VALID_BYTES) {
+				await fs.unlink(screenVideoPath).catch(() => undefined);
+				if (webcamVideoPath) {
+					await fs.unlink(webcamVideoPath).catch(() => undefined);
+				}
+				return {
+					success: false,
+					message: `Screen recording is empty (${screenStat.size} bytes). The screen capture did not produce any frames — this can happen on Windows when the display source changes during recording. Try recording again.`,
+				};
+			}
+		} catch (statError) {
+			// file missing is fatal; any other stat error is non-fatal, the
+			// editor will surface the load error on its own.
+			if ((statError as NodeJS.ErrnoException).code === "ENOENT") {
+				return {
+					success: false,
+					message: "Screen recording file is missing on disk.",
+				};
+			}
+		}
+
 		// Streamed files lack the WebM Duration header (renderer no longer holds the
 		// blob), so patch on disk for the editor's seek bar and timeline. Best-effort,
 		// independent per file, so they run together.
@@ -2937,6 +2970,43 @@ export function registerIpcHandlers(
 			: { success: false };
 	});
 
+	// ponytail: returns the webcam path (if any) for a given screen video by
+	// reading its sibling session.json — drives the cameraTrack auto-link on
+	// `addAsset` in the new editor's project store.
+	ipcMain.handle(
+		"find-recording-camera",
+		async (
+			_event,
+			videoPath: string,
+		): Promise<{
+			success: boolean;
+			webcamVideoPath?: string;
+			offsetMs?: number;
+			error?: string;
+		}> => {
+			try {
+				const normalized = normalizeVideoSourcePath(videoPath);
+				if (!normalized || !isPathAllowed(normalized)) {
+					return { success: false, error: "Video path has not been approved" };
+				}
+				const session = await loadRecordedSessionForVideoPath(normalized);
+				if (!session?.webcamVideoPath) {
+					return { success: false, error: "No camera attached to this recording" };
+				}
+				return {
+					success: true,
+					webcamVideoPath: session.webcamVideoPath,
+					offsetMs: 0,
+				};
+			} catch (err) {
+				return {
+					success: false,
+					error: err instanceof Error ? err.message : String(err),
+				};
+			}
+		},
+	);
+
 	async function setCurrentVideoPath(path: string): Promise<ProjectPathResult> {
 		const normalizedPath = normalizeVideoSourcePath(path);
 		if (!normalizedPath || !isPathAllowed(normalizedPath)) {
@@ -3066,5 +3136,12 @@ export function registerIpcHandlers(
 			normalizeVideoSourcePath(videoPath ?? currentVideoPath),
 		loadCursorRecordingData: readCursorRecordingFile,
 		loadCursorTelemetry: readCursorTelemetryFile,
+		getAiEditionDocuments: () =>
+			new DocumentService(path.join(app.getPath("userData"), "projects")),
+		getAiEditionLlmConfig: () => new LlmConfigStore(app.getPath("userData")),
+		runAiEditionChat: (projectId, message) =>
+			runChat(projectId, message, new LlmConfigStore(app.getPath("userData"))),
+		getAiEditionChatHistory: (projectId) => getChatHistory(projectId),
+		clearAiEditionChatHistory: (projectId: string) => clearChatHistory(projectId),
 	});
 }

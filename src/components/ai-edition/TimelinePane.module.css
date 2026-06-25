@@ -1,0 +1,304 @@
+.pane {
+	display: flex;
+	flex-direction: column;
+	gap: 0.5rem;
+	padding: 0.75rem;
+	background: var(--card);
+	border-top: 1px solid var(--border);
+	min-height: 180px;
+}
+
+.header {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1rem;
+}
+
+.heading {
+	font-size: 0.875rem;
+	font-weight: 600;
+	margin: 0;
+	color: var(--card-foreground);
+	text-transform: uppercase;
+	letter-spacing: 0.025em;
+}
+
+.meta {
+	font-size: 0.75rem;
+	color: var(--muted-foreground);
+	margin: 0;
+}
+
+.readout {
+	display: flex;
+	align-items: center;
+	gap: 0.625rem;
+	font-size: 0.8125rem;
+}
+
+.muted {
+	color: var(--muted-foreground);
+}
+
+.tool {
+	display: flex;
+	align-items: center;
+	gap: 0.25rem;
+	padding: 0.25rem 0.625rem;
+	border-radius: 0.375rem;
+	border: 1px solid var(--border);
+	background: var(--background);
+	color: var(--card-foreground);
+	font-size: 0.75rem;
+	cursor: pointer;
+}
+
+.tool:hover:not(:disabled) {
+	background: var(--accent);
+}
+
+.tool:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.navigatorRow {
+	display: flex;
+	align-items: center;
+	gap: 0.5rem;
+}
+
+.fitButton {
+	padding: 0.125rem 0.5rem;
+	border-radius: 0.25rem;
+	border: 1px solid var(--border);
+	background: var(--background);
+	color: var(--muted-foreground);
+	font-size: 0.6875rem;
+	cursor: pointer;
+}
+
+.fitButton:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+
+.navigator {
+	position: relative;
+	flex: 1;
+	height: 24px;
+	border-radius: 0.25rem;
+	background: var(--background);
+	border: 1px solid var(--border);
+	overflow: hidden;
+	cursor: pointer;
+}
+
+.navigatorContent {
+	position: absolute;
+	inset: 0;
+}
+
+.navigatorCut {
+	position: absolute;
+	top: 4px;
+	bottom: 4px;
+	background: var(--destructive);
+	opacity: 0.3;
+	border-radius: 2px;
+}
+
+.navigatorWindow {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	background: var(--primary);
+	opacity: 0.15;
+	border: 1px solid var(--primary);
+	border-radius: 2px;
+	cursor: grab;
+}
+
+.navigatorHandle {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 4px;
+	background: var(--primary);
+	border-radius: 1px;
+	cursor: ew-resize;
+}
+
+.navigatorHandle.start {
+	left: -2px;
+}
+
+.navigatorHandle.end {
+	right: -2px;
+}
+
+.viewport {
+	position: relative;
+	overflow-x: auto;
+	overflow-y: hidden;
+	flex: 1;
+	min-height: 80px;
+	cursor: crosshair;
+	user-select: none;
+}
+
+.viewport.panning {
+	cursor: grabbing;
+}
+
+.viewport.scrubbing {
+	cursor: grabbing;
+}
+
+.canvas {
+	position: relative;
+	min-height: 100%;
+}
+
+.ruler {
+	position: relative;
+	border-bottom: 1px solid var(--border);
+	overflow: hidden;
+}
+
+.tick {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 1px;
+	background: var(--border);
+}
+
+.tickMajor {
+	background: var(--muted-foreground);
+}
+
+.tickMajor span {
+	position: absolute;
+	top: 4px;
+	left: 4px;
+	font-size: 0.625rem;
+	color: var(--muted-foreground);
+	white-space: nowrap;
+}
+
+.trackLane {
+	position: relative;
+	height: 60px;
+	margin-top: 4px;
+}
+
+.segment {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	border-radius: 0.25rem;
+	display: flex;
+	align-items: center;
+	overflow: hidden;
+}
+
+.kept {
+	background: var(--primary);
+	opacity: 0.25;
+}
+
+.kept.active {
+	opacity: 0.45;
+}
+
+.cut {
+	background: var(--destructive);
+	opacity: 0.2;
+	border: 1px dashed var(--destructive);
+}
+
+.cut.active {
+	opacity: 0.35;
+}
+
+.segmentLabel {
+	display: flex;
+	flex-direction: column;
+	gap: 0.125rem;
+	padding: 0 0.5rem;
+	font-size: 0.625rem;
+	color: var(--card-foreground);
+	white-space: nowrap;
+	overflow: hidden;
+}
+
+.segmentLabel small {
+	color: var(--muted-foreground);
+}
+
+.cutHandle {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 8px;
+	background: var(--destructive);
+	opacity: 0.6;
+	border: none;
+	cursor: ew-resize;
+}
+
+.cutHandle:hover {
+	opacity: 1;
+}
+
+.handleStart {
+	left: 0;
+	border-radius: 0.25rem 0 0 0.25rem;
+}
+
+.handleEnd {
+	right: 0;
+	border-radius: 0 0.25rem 0.25rem 0;
+}
+
+.cutDelete {
+	position: absolute;
+	top: 2px;
+	right: 12px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 18px;
+	height: 18px;
+	border-radius: 0.25rem;
+	border: none;
+	background: var(--destructive);
+	color: white;
+	cursor: pointer;
+	opacity: 0.7;
+}
+
+.cutDelete:hover {
+	opacity: 1;
+}
+
+.playhead {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 2px;
+	background: var(--primary);
+	z-index: 10;
+	pointer-events: none;
+}
+
+.empty {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	height: 100%;
+	color: var(--muted-foreground);
+	font-size: 0.8125rem;
+}

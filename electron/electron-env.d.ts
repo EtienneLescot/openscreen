@@ -208,7 +208,14 @@ interface Window {
 		getCurrentVideoPath: () => Promise<{ success: boolean; path?: string }>;
 		getCurrentRecordingSession: () => Promise<{
 			success: boolean;
-			session?: import("../src/lib/recordingSession").RecordingSession;
+			session?: RecordingSession | null;
+			canceled?: boolean;
+		}>;
+		findRecordingCamera: (videoPath: string) => Promise<{
+			success: boolean;
+			webcamVideoPath?: string;
+			offsetMs?: number;
+			error?: string;
 		}>;
 		readBinaryFile: (filePath: string) => Promise<{
 			success: boolean;

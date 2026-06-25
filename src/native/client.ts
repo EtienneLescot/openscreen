@@ -1,4 +1,11 @@
 import {
+	type AiEditionAssetResult,
+	type AiEditionChatMessage,
+	type AiEditionChatResult,
+	type AiEditionDocumentResult,
+	type AiEditionLlmConfig,
+	type AiEditionLlmSnapshot,
+	type AiEditionProjectSummary,
 	type CursorCapabilities,
 	type CursorRecordingData,
 	type CursorTelemetryPoint,
@@ -135,6 +142,90 @@ export const nativeBridgeClient = {
 				domain: "cursor",
 				action: "getTelemetry",
 				payload: videoPath ? { videoPath } : {},
+			}),
+	},
+	aiEdition: {
+		listProjects: () =>
+			requireNativeBridgeData<AiEditionProjectSummary[]>({
+				domain: "aiEdition",
+				action: "document.listProjects",
+			}),
+		get: (projectId: string) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "document.get",
+				payload: { projectId },
+			}),
+		create: (title?: string) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "document.create",
+				payload: { title },
+			}),
+		save: (document: unknown) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "document.save",
+				payload: { document },
+			}),
+		delete: (projectId: string) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "document.delete",
+				payload: { projectId },
+			}),
+		addAsset: (projectId: string, path: string, label?: string) =>
+			requireNativeBridgeData<AiEditionAssetResult>({
+				domain: "aiEdition",
+				action: "document.addAsset",
+				payload: { projectId, path, label },
+			}),
+		removeAsset: (projectId: string, assetId: string) =>
+			requireNativeBridgeData<AiEditionAssetResult>({
+				domain: "aiEdition",
+				action: "document.removeAsset",
+				payload: { projectId, assetId },
+			}),
+		llmGetSnapshot: () =>
+			requireNativeBridgeData<AiEditionLlmSnapshot>({
+				domain: "aiEdition",
+				action: "llm.getSnapshot",
+			}),
+		llmSetConfig: (config: AiEditionLlmConfig) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "llm.setConfig",
+				payload: { config },
+			}),
+		llmSetApiKey: (providerId: string, apiKey: string) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "llm.setApiKey",
+				payload: { providerId, apiKey },
+			}),
+		llmRemoveApiKey: (providerId: string) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "llm.removeApiKey",
+				payload: { providerId },
+			}),
+		chatRun: (projectId: string, message: string) =>
+			requireNativeBridgeData<AiEditionChatResult>({
+				domain: "aiEdition",
+				action: "chat.run",
+				payload: { projectId, message },
+			}),
+		chatHistory: (projectId: string) =>
+			requireNativeBridgeData<AiEditionChatMessage[]>({
+				domain: "aiEdition",
+				action: "chat.history",
+				payload: { projectId },
+			}),
+		chatClear: (projectId: string) =>
+			requireNativeBridgeData<{ success: boolean }>({
+				domain: "aiEdition",
+				action: "chat.clear",
+				payload: { projectId },
 			}),
 	},
 };
