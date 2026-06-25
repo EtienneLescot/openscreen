@@ -27,8 +27,16 @@ import { BLUR_REGIONS_ENABLED } from "./featureFlags";
 const MODIFIER_KEYS = new Set(["Control", "Shift", "Alt", "Meta"]);
 
 export function ShortcutsConfigDialog() {
-	const { shortcuts, isMac, isConfigOpen, closeConfig, setShortcuts, persistShortcuts } =
-		useShortcuts();
+	const {
+		shortcuts,
+		isMac,
+		isConfigOpen,
+		openConfig,
+		closeConfig,
+		setShortcuts,
+		persistShortcuts,
+	} = useShortcuts();
+	void openConfig;
 	const t = useScopedT("shortcuts");
 	const tc = useScopedT("common");
 

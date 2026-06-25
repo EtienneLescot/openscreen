@@ -170,15 +170,41 @@ describe("computeCompositeLayout", () => {
 		});
 
 		expect(layout).not.toBeNull();
-		// Webcam is full-width at the bottom
+		// ponytail: padding insets the content vertically. `maxContentSize` is
+		// 1536x864 (canvasSize × paddingFit=0.8), so the content area is
+		// 1536×864 centered at y=(1080−864)/2=108. Everything inside the
+		// stack is computed against this content area, not the canvas.
 		expect(layout!.webcamRect).not.toBeNull();
-		expect(layout!.webcamRect!.x).toBe(0);
-		expect(layout!.webcamRect!.width).toBe(1920);
-		expect(layout!.webcamRect!.borderRadius).toBe(0);
-		// Screen fills remaining space at the top (cover mode)
-		expect(layout!.screenRect.x).toBe(0);
-		expect(layout!.screenRect.y).toBe(0);
-		expect(layout!.screenRect.width).toBe(1920);
+		const contentHeight = 864;
+		const webcamCapHeight = Math.min(1280 / (1280 / 720), Math.round(contentHeight * 0.4));
+		const webcamHeight = Math.round(webcamCapHeight);
+		const webcamWidth = Math.round(webcamHeight * (1280 / 720));
+		const gap = Math.max(8, Math.round(1536 * 0.02));
+		const contentY = Math.floor((1080 - contentHeight) / 2);
+		// Camera is centered horizontally inside the content area, which is
+		// itself centered in the canvas. Sits at contentY + (contentHeight
+		// − webcamHeight − gap) — i.e. with the gap between it and the
+		// screen, all inside the padded band.
+		const screenHeight = contentHeight - webcamHeight - gap;
+		const contentX = Math.floor((1920 - 1536) / 2);
+		const camOffsetInContent = Math.floor((1536 - webcamWidth) / 2);
+		expect(layout!.webcamRect!.x).toBe(contentX + camOffsetInContent);
+		expect(layout!.webcamRect!.y).toBe(contentY + screenHeight + gap);
+		expect(layout!.webcamRect!.width).toBe(webcamWidth);
+		expect(layout!.webcamRect!.height).toBe(webcamHeight);
+		// Border-radius follows the preset fraction (max:24, min:8, fraction:0.06)
+		// on min(width, height) — gives soft rounded corners instead of 0.
+		const expectedRadius = Math.min(
+			24,
+			Math.max(8, Math.round(Math.min(webcamWidth, webcamHeight) * 0.06)),
+		);
+		expect(layout!.webcamRect!.borderRadius).toBe(expectedRadius);
+		// Screen fills the padded band above the gap, centered horizontally
+		// in the canvas. (cover mode.)
+		expect(layout!.screenRect.x).toBe(contentX);
+		expect(layout!.screenRect.y).toBe(contentY);
+		expect(layout!.screenRect.width).toBe(1536);
+		expect(layout!.screenRect.height).toBe(screenHeight);
 		expect(layout!.screenCover).toBe(true);
 	});
 

@@ -11,6 +11,10 @@ export default defineConfig({
 			main: {
 				entry: "electron/main.ts",
 				onstart({ startup }) {
+					if (process.env.NO_ELECTRON) {
+						console.log("NO_ELECTRON is set, skipping Electron startup.");
+						return;
+					}
 					const env = { ...process.env };
 					delete env.ELECTRON_RUN_AS_NODE;
 					return startup(["."], { env });

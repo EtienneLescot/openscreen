@@ -90,6 +90,55 @@ export interface ProjectFileResult {
 	error?: string;
 }
 
+// ---- AI Edition domain (Phase 1+) -----------------------------------------
+// v3 AxcutDocument projects live under userData/projects/<id>.axcut. Project
+// ids are uuid-prefixed strings (e.g. "proj_<uuid>"). Asset ids likewise.
+
+export interface AiEditionProjectSummary {
+	id: string;
+	title: string;
+	updatedAt: string;
+	assetCount: number;
+}
+
+export interface AiEditionAssetResult {
+	assetId: string;
+	document: unknown;
+}
+
+export interface AiEditionDocumentResult {
+	success: boolean;
+	document?: unknown;
+	error?: string;
+}
+
+export interface AiEditionLlmConfig {
+	provider: string;
+	model: string;
+	baseUrl?: string;
+	reasoningEffort?: string;
+}
+
+export interface AiEditionLlmSnapshot {
+	config: AiEditionLlmConfig | null;
+	connectedProviders: string[];
+	availableProviders: Array<{ id: string; label: string; authKind: string }>;
+}
+
+export interface AiEditionChatMessage {
+	id: string;
+	role: "user" | "assistant";
+	content: string;
+	createdAt: string;
+}
+
+export interface AiEditionChatResult {
+	success: boolean;
+	assistantMessage?: AiEditionChatMessage;
+	document?: unknown;
+	error?: string;
+}
+
 export type NativeBridgeErrorCode =
 	| "INVALID_REQUEST"
 	| "UNSUPPORTED_ACTION"
@@ -224,6 +273,90 @@ export type NativeBridgeRequest =
 			payload?: {
 				videoPath?: string;
 			};
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "document.listProjects";
+			payload?: EmptyPayload;
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "document.get";
+			payload: { projectId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "document.create";
+			payload: { title?: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "document.save";
+			payload: { document: unknown };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "document.delete";
+			payload: { projectId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "document.addAsset";
+			payload: { projectId: string; path: string; label?: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "document.removeAsset";
+			payload: { projectId: string; assetId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "llm.getSnapshot";
+			payload?: EmptyPayload;
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "llm.setConfig";
+			payload: { config: AiEditionLlmConfig };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "llm.setApiKey";
+			payload: { providerId: string; apiKey: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "llm.removeApiKey";
+			payload: { providerId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.run";
+			payload: { projectId: string; message: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.history";
+			payload: { projectId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.clear";
+			payload: { projectId: string };
 			requestId?: string;
 	  };
 
