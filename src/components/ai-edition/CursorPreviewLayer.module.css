@@ -1,0 +1,34 @@
+/* Cursor preview layer. Transparent overlay that hosts a Pixi canvas +
+   a native-cursor <img>. The Pixi canvas is appended by the component on
+   mount; the <img> is positioned via translate3d in the same coordinate
+   space as the <video>, so cursor + video always align. */
+
+.layer {
+	position: absolute;
+	inset: 0;
+	z-index: 2;
+	pointer-events: none;
+	overflow: hidden;
+}
+
+.layer[data-clip="off"] {
+	overflow: visible;
+}
+
+.nativeCursorClip {
+	position: absolute;
+	inset: 0;
+	pointer-events: none;
+}
+
+.nativeCursor {
+	position: absolute;
+	top: 0;
+	left: 0;
+	image-rendering: -webkit-optimize-contrast;
+	image-rendering: crisp-edges;
+	will-change: transform, filter;
+	user-select: none;
+	-webkit-user-drag: none;
+	display: none;
+}

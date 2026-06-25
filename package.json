@@ -97,7 +97,9 @@
 		"tailwind-merge": "^3.5.0",
 		"tailwindcss-animate": "^1.0.7",
 		"uuid": "^13.0.0",
-		"web-demuxer": "^4.0.0"
+		"web-demuxer": "^4.0.0",
+		"zod": "^3.23.8",
+		"zustand": "^5.0.8"
 	},
 	"devDependencies": {
 		"@actions/core": "^3.0.1",
