@@ -1,0 +1,130 @@
+.hero {
+	padding: 8rem 1.5rem 6rem;
+	text-align: center;
+	background:
+		radial-gradient(ellipse at top, rgba(99, 102, 241, 0.18), transparent 60%),
+		linear-gradient(180deg, var(--ifm-background-color) 0%, var(--ifm-background-surface-color) 100%);
+}
+
+.heroInner {
+	max-width: 760px;
+	margin: 0 auto;
+}
+
+.badge {
+	display: inline-block;
+	padding: 0.35rem 0.9rem;
+	border-radius: 999px;
+	background: rgba(99, 102, 241, 0.12);
+	color: #6366f1;
+	font-size: 0.85rem;
+	font-weight: 600;
+	margin-bottom: 1.5rem;
+}
+
+[data-theme="dark"] .badge {
+	background: rgba(165, 180, 252, 0.18);
+	color: #a5b4fc;
+}
+
+.title {
+	font-size: clamp(3rem, 8vw, 5.5rem);
+	font-weight: 800;
+	letter-spacing: -0.04em;
+	margin: 0;
+	background: linear-gradient(135deg, #6366f1 0%, #a855f7 50%, #ec4899 100%);
+	-webkit-background-clip: text;
+	background-clip: text;
+	color: transparent;
+}
+
+.tagline {
+	font-size: 1.25rem;
+	line-height: 1.6;
+	color: var(--ifm-color-emphasis-700);
+	margin: 1.5rem 0 2.5rem;
+}
+
+.actions {
+	display: flex;
+	gap: 1rem;
+	justify-content: center;
+	flex-wrap: wrap;
+	margin-bottom: 3rem;
+}
+
+.primaryCta,
+.secondaryCta {
+	padding: 0.85rem 1.75rem;
+	border-radius: 8px;
+	font-weight: 600;
+	font-size: 1rem;
+	text-decoration: none;
+	transition: transform 0.15s ease, box-shadow 0.15s ease;
+}
+
+.primaryCta {
+	background: linear-gradient(135deg, #6366f1, #a855f7);
+	color: white;
+	box-shadow: 0 8px 24px rgba(99, 102, 241, 0.35);
+}
+
+.primaryCta:hover {
+	transform: translateY(-2px);
+	box-shadow: 0 12px 28px rgba(99, 102, 241, 0.45);
+	color: white;
+}
+
+.secondaryCta {
+	background: transparent;
+	color: var(--ifm-color-emphasis-900);
+	border: 1px solid var(--ifm-color-emphasis-300);
+}
+
+.secondaryCta:hover {
+	transform: translateY(-2px);
+	border-color: var(--ifm-color-emphasis-500);
+}
+
+.note {
+	font-size: 0.9rem;
+	color: var(--ifm-color-emphasis-600);
+	max-width: 520px;
+	margin: 0 auto;
+}
+
+.features {
+	padding: 4rem 1.5rem 6rem;
+}
+
+.featuresInner {
+	display: grid;
+	grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+	gap: 1.5rem;
+	max-width: 1100px;
+	margin: 0 auto;
+}
+
+.feature {
+	padding: 1.75rem;
+	border-radius: 12px;
+	border: 1px solid var(--ifm-color-emphasis-200);
+	background: var(--ifm-card-background-color);
+	transition: transform 0.2s ease, border-color 0.2s ease;
+}
+
+.feature:hover {
+	transform: translateY(-4px);
+	border-color: var(--ifm-color-primary);
+}
+
+.feature h3 {
+	margin: 0 0 0.75rem;
+	font-size: 1.2rem;
+}
+
+.feature p {
+	margin: 0;
+	color: var(--ifm-color-emphasis-700);
+	line-height: 1.6;
+}
