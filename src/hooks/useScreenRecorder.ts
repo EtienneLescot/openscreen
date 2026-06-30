@@ -29,12 +29,6 @@ const BITRATE_QHD = 28_000_000;
 const BITRATE_BASE = 18_000_000;
 const HIGH_FRAME_RATE_THRESHOLD = 60;
 const HIGH_FRAME_RATE_BOOST = 1.7;
-// ponytail: Chromium's WebM/H.264 software encoder silently stalls (no
-// ondataavailable) when the requested videoBitsPerSecond exceeds what it can
-// produce in real time — see recorderHandle.ts watchdog for the symptoms.
-// Cap at 30 Mbps (Netflix 4K HDR is ~25 Mbps) so the encoder is never
-// over-driven, regardless of resolution or frame rate.
-const MAX_BITRATE = 30_000_000;
 
 const DEFAULT_WIDTH = 1920;
 const DEFAULT_HEIGHT = 1080;
@@ -162,17 +156,15 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		const highFrameRateBoost =
 			TARGET_FRAME_RATE >= HIGH_FRAME_RATE_THRESHOLD ? HIGH_FRAME_RATE_BOOST : 1;
 
-		let bitrate: number;
 		if (pixels >= FOUR_K_PIXELS) {
-			bitrate = BITRATE_4K * highFrameRateBoost;
-		} else if (pixels >= QHD_PIXELS) {
-			bitrate = BITRATE_QHD * highFrameRateBoost;
-		} else {
-			bitrate = BITRATE_BASE * highFrameRateBoost;
+			return Math.round(BITRATE_4K * highFrameRateBoost);
 		}
-		// ponytail: cap so Chromium's H.264 software encoder doesn't stall on
-		// 4K@60fps. See recorderHandle.ts for the failure mode.
-		return Math.round(Math.min(bitrate, MAX_BITRATE));
+
+		if (pixels >= QHD_PIXELS) {
+			return Math.round(BITRATE_QHD * highFrameRateBoost);
+		}
+
+		return Math.round(BITRATE_BASE * highFrameRateBoost);
 	};
 
 	const teardownMedia = useCallback(() => {
@@ -398,9 +390,6 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 
 					if (!result.success) {
 						console.error("Failed to store recording session:", result.message);
-						toast.error(result.message ?? "Recording failed to save", {
-							description: "Try recording again. If the problem persists, restart the app.",
-						});
 						return;
 					}
 					// store-recorded-session has flushed and closed the saved streams.
@@ -1186,18 +1175,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				// getDisplayMedia + setDisplayMediaRequestHandler (main.ts) supplies the
 				// pre-selected source. Editable cursor mode excludes the system cursor so
 				// the editor can render a replacement; system mode bakes it into the video.
-				// ponytail: use `ideal: 1920×1080` so the capture matches the display's
-				// physical content (avoiding 4K upscaling on a 1080p display with
-				// 200% DPI scaling, which is what was over-driving the H.264 encoder
-				// and producing 0-byte files). Cap the max at 1920×1080 so a 4K
-				// display also captures at 1080p — keeps bitrate low and the
-				// encoder real-time. A higher-res path can be opt-in later.
 				screenMediaStream = await navigator.mediaDevices.getDisplayMedia({
 					video: {
 						cursor: cursorCaptureMode === "editable-overlay" ? "never" : "always",
-						width: { ideal: 1920, max: 1920 },
-						height: { ideal: 1080, max: 1080 },
-						frameRate: { ideal: TARGET_FRAME_RATE, max: TARGET_FRAME_RATE },
+						width: { max: TARGET_WIDTH },
+						height: { max: TARGET_HEIGHT },
+						frameRate: { ideal: TARGET_FRAME_RATE },
 					} as MediaTrackConstraints,
 					audio: systemAudioEnabled,
 				} as DisplayMediaStreamOptions);
@@ -1206,10 +1189,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					mandatory: {
 						chromeMediaSource: CHROME_MEDIA_SOURCE,
 						chromeMediaSourceId: selectedSource.id,
-						// ponytail: see the Windows path — keep the capture at
-						// 1080p so the H.264 encoder can keep up in real time.
-						maxWidth: 1920,
-						maxHeight: 1080,
+						maxWidth: TARGET_WIDTH,
+						maxHeight: TARGET_HEIGHT,
 						maxFrameRate: TARGET_FRAME_RATE,
 						minFrameRate: MIN_FRAME_RATE,
 					},
