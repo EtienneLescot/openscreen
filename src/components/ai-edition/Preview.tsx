@@ -220,7 +220,15 @@ export function Preview({
 						(acc, c) => acc + (c.timelineEndSec - c.timelineStartSec),
 						0,
 					);
-					const progress = virtualDurationSec ? (currentTimeSec / virtualDurationSec) * 100 : 0;
+					// ponytail: the input clamps value to [0, virtualDurationSec || 1]
+					// so the drag range is meaningful when no clip exists. Use the
+					// same clamp for the visual thumb's `left` so the CSS thumb
+					// and the native range thumb stay in sync (otherwise the CSS
+					// thumb is stuck at 0% when virtualDurationSec is 0, while the
+					// native thumb follows the input).
+					const inputMax = virtualDurationSec || 1;
+					const inputValue = Math.min(Math.max(currentTimeSec, 0), inputMax);
+					const progress = (inputValue / inputMax) * 100;
 					return (
 						<>
 							<span className={styles.time}>
@@ -235,9 +243,9 @@ export function Preview({
 								<input
 									type="range"
 									min={0}
-									max={virtualDurationSec || 1}
+									max={inputMax}
 									step={0.01}
-									value={Math.min(currentTimeSec, virtualDurationSec || 1)}
+									value={inputValue}
 									onChange={(e) => {
 										onSeek(Number(e.target.value));
 									}}

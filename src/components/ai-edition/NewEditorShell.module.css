@@ -1618,7 +1618,7 @@
 /* Custom range slider / progress bar */
 .scrubBar {
 	flex: 1;
-	max-width: 400px;
+	min-width: 0;
 	position: relative;
 	height: 24px;
 	display: flex;
@@ -1659,10 +1659,9 @@
 	pointer-events: none;
 	transform: translate(-50%, -50%);
 	top: 50%;
-	opacity: 0;
-	transition: transform 100ms ease, opacity 100ms ease;
+	opacity: 1;
+	transition: transform 100ms ease;
 }
 .scrubBar:hover .scrubThumb {
-	opacity: 1;
 	transform: translate(-50%, -50%) scale(1.2);
 }
