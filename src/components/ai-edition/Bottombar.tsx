@@ -2,18 +2,23 @@ import {
 	ChevronDown,
 	FileText,
 	MessageSquare,
+	Pencil,
 	Scissors,
 	Timer,
 	WandSparkles,
 	ZoomIn,
 } from "lucide-react";
-import { useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { AnnotationRegion } from "@/components/video-editor/types";
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
+import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { ASPECT_RATIOS, type AspectRatio } from "@/utils/aspectRatioUtils";
+import { EditClipModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
+import { type Span } from "./RegionTimeline";
 import { TimelinePane } from "./TimelinePane";
+import type { VideoSource } from "./VirtualPreview";
 
 type RegionKind = "zoom" | "skip" | "annotation" | "speed";
 
@@ -24,14 +29,9 @@ interface RegionHandle {
 
 interface BottombarProps {
 	clips: AxcutClip[];
+	videoSources: VideoSource[];
 	currentTimeSec: number;
-	sourceDurationSec: number;
-	onPreviewSource: (sec: number) => void;
-	onReplaceTimeline: (
-		intervals: Array<{ startSec: number; endSec: number }>,
-		reason: string,
-	) => void;
-	// Region operations (from useTimeline)
+	onSeek: (timelineSec: number) => void;
 	zoomRegions: AxcutDocument["zoomRanges"];
 	skipRanges: AxcutDocument["timeline"]["skipRanges"];
 	annotationRegions: AnnotationRegion[];
@@ -39,11 +39,14 @@ interface BottombarProps {
 	selection: RegionHandle | null;
 	hasDoc: boolean;
 	onAddZoom: () => void;
-	onAddSkip: () => void;
 	onAddAnnotation: () => void;
 	onAddSpeed: () => void;
+	// T15 — receives a setter so the parent's "T" keyboard shortcut can
+	// call into our togglePlaceSkip (state lives here, body-class + Esc
+	// handler live here). The Scissors button in this component calls
+	// togglePlaceSkip directly.
+	setTogglePlaceSkip?: (fn: () => void) => void;
 	onSelectRegion: (kind: RegionKind, id: string) => void;
-	onRemoveRegion: (kind: RegionKind, id: string) => void;
 	onCaptions: () => void;
 }
 
@@ -58,34 +61,97 @@ const RATIO_LABELS: Record<AspectRatio, string> = {
 	native: "Original",
 };
 
-function formatMs(ms: number): string {
-	const sec = ms / 1000;
-	const m = Math.floor(sec / 60);
-	const s = (sec % 60).toFixed(1);
-	return `${m}:${s.padStart(4, "0")}`;
-}
-
 export function Bottombar({
 	clips,
+	videoSources,
 	currentTimeSec,
-	sourceDurationSec,
-	onPreviewSource,
-	onReplaceTimeline,
+	onSeek,
 	zoomRegions,
+	skipRanges,
 	annotationRegions,
 	speedRegions,
 	selection,
 	hasDoc,
 	onAddZoom,
-	onAddSkip,
 	onAddAnnotation,
 	onAddSpeed,
+	setTogglePlaceSkip,
 	onSelectRegion,
-	onRemoveRegion,
 	onCaptions,
 }: BottombarProps) {
 	const { settings, set } = useEditorSettings();
+	const tl = useTimeline();
 	const [ratioOpen, setRatioOpen] = useState(false);
+	const [editClipTarget, setEditClipTarget] = useState<AxcutClip | null>(null);
+	const firstClip = clips[0] ?? null;
+	// T11 — viewport state lifted from TimelinePane so the navigator strip
+	// can drive the same window. pxPerSec stays inside TimelinePane (it
+	// depends on the viewport's measured width); Bottombar only owns the
+	// logical window + zoom multiplier.
+	const [zoom, setZoom] = useState(1);
+	const [visibleStartSec, setVisibleStartSec] = useState(0);
+	// T15 — Place-skip armed state. The Scissors (Trim) button toggles
+	// this; the timeline pane shows the red preview marker and the cursor
+	// becomes crosshair. Esc cancels. The preview is pinned to the
+	// playhead the moment the mode is armed so the user sees the marker
+	// right away (axcut's behavior).
+	const [pendingCutPlacement, setPendingCutPlacement] = useState(false);
+	const [pendingCutPreviewSec, setPendingCutPreviewSec] = useState<number | null>(null);
+	const togglePlaceSkip = useCallback(() => {
+		setPendingCutPlacement((active) => {
+			if (active) {
+				setPendingCutPreviewSec(null);
+				return false;
+			}
+			setPendingCutPreviewSec(currentTimeSec);
+			return true;
+		});
+	}, [currentTimeSec]);
+
+	// T15 — body cursor + Esc-to-cancel while placing a cut. Lives here
+	// (not in TimelinePane) because the state lives here.
+	useEffect(() => {
+		if (!pendingCutPlacement) {
+			document.body.classList.remove("timeline-placing-cut");
+			return;
+		}
+		document.body.classList.add("timeline-placing-cut");
+		const handleKey = (event: KeyboardEvent) => {
+			if (event.key === "Escape") {
+				setPendingCutPlacement(false);
+				setPendingCutPreviewSec(null);
+			}
+		};
+		window.addEventListener("keydown", handleKey);
+		return () => {
+			document.body.classList.remove("timeline-placing-cut");
+			window.removeEventListener("keydown", handleKey);
+		};
+	}, [pendingCutPlacement]);
+
+	// ponytail: register our toggler with the parent (NewEditorShell)
+	// so the "T" keyboard shortcut can call the same function the
+	// Scissors button does. Uses an effect so re-renders (togglePlaceSkip
+	// identity is stable but the ref it points to may change) always
+	// see the latest implementation.
+	useEffect(() => {
+		setTogglePlaceSkip?.(togglePlaceSkip);
+	}, [togglePlaceSkip, setTogglePlaceSkip]);
+
+	const sourceDurationSec = Math.max(0.001, ...clips.map((c) => c.timelineEndSec));
+	const visibleEndSec = Math.min(visibleStartSec + sourceDurationSec, sourceDurationSec);
+	void visibleEndSec; // surfaced to the navigator (now inside TimelinePane)
+	const handleRegionSpanChange = (id: string, span: Span) => {
+		if (zoomRegions.some((z) => z.id === id)) void tl.updateZoomSpan(id, span.start, span.end);
+		else if (speedRegions.some((s) => s.id === id))
+			void tl.updateSpeedSpan(id, span.start, span.end);
+		else void tl.updateAnnotationSpan(id, span.start, span.end);
+	};
+	// ponytail: T10 removed the explicit onRemoveRegion prop (region
+	// removal happens via the Del/Bksp shortcut wired in NewEditorShell).
+	const editClipAsset = editClipTarget
+		? (tl.assets.find((a) => a.id === editClipTarget.assetId) ?? null)
+		: null;
 	return (
 		<footer className={styles.bottombar} aria-label="Timeline and properties">
 			<section
@@ -122,7 +188,17 @@ export function Bottombar({
 								<circle cx="12" cy="12" r="1.6" />
 							</svg>
 						</VtBtn>
-						<VtBtn label="Trim" title="Press T to add trim" onClick={onAddSkip} disabled={!hasDoc}>
+						<VtBtn
+							label="Trim"
+							title={
+								pendingCutPlacement
+									? "Click on the timeline to place a 1s skip (Esc to cancel)"
+									: "Arm the place-skip tool (T) — next click drops a 1s skip"
+							}
+							onClick={togglePlaceSkip}
+							disabled={!hasDoc}
+							on={pendingCutPlacement}
+						>
 							<Scissors size={17} />
 						</VtBtn>
 						<VtBtn
@@ -203,81 +279,90 @@ export function Bottombar({
 							<span className={styles.kbd}>+ Scroll</span>
 							<span>Zoom</span>
 						</span>
+						<button
+							type="button"
+							className={styles.vtBtn}
+							style={{
+								marginLeft: 8,
+								height: 28,
+								width: "auto",
+								padding: "0 10px",
+								gap: 6,
+								borderRadius: "var(--r-sm)",
+							}}
+							onClick={() => firstClip && setEditClipTarget(firstClip)}
+							disabled={!firstClip}
+							title={firstClip ? "Edit the first clip's in/out points" : "Add a clip first"}
+							aria-label="Edit clip"
+						>
+							<Pencil size={14} />
+							Edit clip…
+						</button>
 					</div>
 				</header>
 				<div className={styles.timelineBody}>
-					{/* Region lane rows */}
-					<div
-						style={{
-							padding: "4px var(--sp-4) 0",
-							display: "flex",
-							flexDirection: "column",
-							gap: 4,
-							flexShrink: 0,
-						}}
-					>
-						{zoomRegions.length > 0 ? (
-							<LaneRow
-								label="Zoom"
-								kind="zoom"
-								items={zoomRegions.map((z) => ({
-									id: z.id,
-									startMs: z.startMs,
-									endMs: z.endMs,
-									label: `${getZoomLabel(z)}`,
-								}))}
-								selection={selection}
-								onSelect={onSelectRegion}
-								onRemove={onRemoveRegion}
-							/>
-						) : null}
-						{annotationRegions.length > 0 ? (
-							<LaneRow
-								label="Annotations"
-								kind="annotation"
-								items={annotationRegions.map((a) => ({
-									id: a.id,
-									startMs: a.startMs,
-									endMs: a.endMs,
-									label: a.content?.slice(0, 30) || "Annotation",
-								}))}
-								selection={selection}
-								onSelect={onSelectRegion}
-								onRemove={onRemoveRegion}
-							/>
-						) : null}
-						{speedRegions.length > 0 ? (
-							<LaneRow
-								label="Speed"
-								kind="speed"
-								items={speedRegions.map((s) => ({
-									id: s.id,
-									startMs: s.startMs,
-									endMs: s.endMs,
-									label: `${s.speed}×`,
-								}))}
-								selection={selection}
-								onSelect={onSelectRegion}
-								onRemove={onRemoveRegion}
-							/>
-						) : null}
-					</div>
+					{/* T10 — clip track + region lanes both live inside
+					    TimelinePane's .timeline-canvas, so they share the
+					    translateX(pan) and pxPerSec(zoom). Lanes-in-canvas,
+					    not lanes-in-a-sibling-column. */}
 					<div className="timelinePaneWrap" style={{ flex: 1, minHeight: 0, overflow: "hidden" }}>
 						<TimelinePane
 							clips={clips}
+							assets={tl.assets}
+							skipRanges={skipRanges}
+							zoomRegions={zoomRegions}
+							annotationRegions={annotationRegions}
+							speedRegions={speedRegions}
+							regionSelection={selection}
 							currentTimeSec={currentTimeSec}
-							sourceDurationSec={sourceDurationSec}
-							onPreviewSource={onPreviewSource}
-							onReplaceTimeline={onReplaceTimeline}
+							selectedClipId={tl.clipSelection}
+							onSelectClip={tl.selectClip}
+							onSelectRegion={onSelectRegion}
+							onSeek={onSeek}
+							onInsertAsset={(assetId, index) => void tl.insertClipAt(assetId, index)}
+							onMoveClip={(clipId, toIndex) => void tl.moveClip(clipId, toIndex)}
+							onEditClip={(clip) => setEditClipTarget(clip)}
+							onRemoveClip={(clipId) => void tl.removeClip(clipId)}
+							onUpdateSkipRange={(skipId, s, e) => void tl.updateSkipRange(skipId, s, e)}
+							onPreviewSource={(timeSec, _assetId) => {
+								// T19 — drive the source-time clock so the preview
+								// video scrubs to the edge being dragged. We don't
+								// rebind the preview's activeSource because that
+								// resets playback; the existing Preview's
+								// seekToSourceTime handles the same-source case.
+								tl.setCurrentTime(timeSec);
+							}}
+							onRemoveSkipRange={(skipId) => void tl.removeRegion("skip", skipId)}
+							onAddSkip={(assetId, s, e) => void tl.addSkipAt(assetId, s, e)}
+							onRegionSpanChange={(id, span) => handleRegionSpanChange(id, span)}
+							zoom={zoom}
+							visibleStartSec={visibleStartSec}
+							setZoom={setZoom}
+							setVisibleStartSec={setVisibleStartSec}
+							pendingCutPlacement={pendingCutPlacement}
+							pendingCutPreviewSec={pendingCutPreviewSec}
+							setPendingCutPreviewSec={setPendingCutPreviewSec}
+							onCancelPlaceSkip={() => togglePlaceSkip()}
 						/>
 					</div>
 				</div>
-				<div className={styles.zoombar} role="group" aria-label="Zoom range">
-					<div className={styles.zoomTrack}>
-						<div className={styles.zoomFill} aria-hidden />
-					</div>
-				</div>
 			</section>
+			<EditClipModal
+				open={editClipTarget !== null}
+				onClose={() => setEditClipTarget(null)}
+				clip={editClipTarget}
+				assetMeta={
+					editClipAsset
+						? { label: editClipAsset.label, durationSec: editClipAsset.durationSec }
+						: null
+				}
+				videoSources={videoSources}
+				onApply={(sourceStartSec, sourceEndSec) => {
+					if (editClipTarget) {
+						void tl.updateClipSourceRange(editClipTarget.id, sourceStartSec, sourceEndSec);
+					}
+				}}
+			/>
 		</footer>
 	);
 }
@@ -310,115 +395,6 @@ function VtBtn({
 			{children}
 		</button>
 	);
-}
-
-function LaneRow({
-	label,
-	kind,
-	items,
-	selection,
-	onSelect,
-	onRemove,
-}: {
-	label: string;
-	kind: RegionKind;
-	items: Array<{ id: string; startMs: number; endMs: number; label: string }>;
-	selection: RegionHandle | null;
-	onSelect: (kind: RegionKind, id: string) => void;
-	onRemove: (kind: RegionKind, id: string) => void;
-}) {
-	return (
-		<div
-			style={{
-				display: "flex",
-				alignItems: "center",
-				gap: 8,
-				height: 30,
-			}}
-		>
-			<span
-				style={{
-					font: "600 10px/1 var(--font-mono)",
-					color: "var(--meta)",
-					letterSpacing: "0.04em",
-					textTransform: "uppercase",
-					minWidth: 48,
-					flexShrink: 0,
-				}}
-			>
-				{label}
-			</span>
-			{items.map((item) => {
-				const isSel = selection?.kind === kind && selection?.id === item.id;
-				return (
-					<button
-						type="button"
-						key={item.id}
-						onClick={() => onSelect(kind, item.id)}
-						title={`${formatMs(item.startMs)}–${formatMs(item.endMs)}`}
-						style={{
-							display: "inline-flex",
-							alignItems: "center",
-							gap: 6,
-							padding: "3px 8px",
-							borderRadius: "var(--r-md)",
-							border: `1px solid ${isSel ? "var(--accent)" : "var(--border-soft)"}`,
-							background: isSel ? "var(--accent-soft)" : "var(--surface-2)",
-							color: isSel ? "var(--accent)" : "var(--fg-2)",
-							font: "500 11px/1 var(--font-mono)",
-							letterSpacing: "0.02em",
-							cursor: "pointer",
-							whiteSpace: "nowrap",
-						}}
-					>
-						<span style={{ maxWidth: 140, overflow: "hidden", textOverflow: "ellipsis" }}>
-							{item.label}
-						</span>
-						<span style={{ color: "var(--meta)", fontSize: 10 }}>{formatMs(item.startMs)}</span>
-						<button
-							type="button"
-							aria-label="Delete"
-							title="Delete (Del)"
-							onClick={(e) => {
-								e.stopPropagation();
-								onRemove(kind, item.id);
-							}}
-							style={{
-								display: "inline-flex",
-								alignItems: "center",
-								justifyContent: "center",
-								width: 16,
-								height: 16,
-								borderRadius: "var(--r-xs)",
-								border: 0,
-								background: "var(--danger-soft)",
-								color: "var(--danger)",
-								fontSize: 10,
-								fontWeight: 600,
-								cursor: "pointer",
-								opacity: isSel ? 1 : 0,
-							}}
-						>
-							×
-						</button>
-					</button>
-				);
-			})}
-		</div>
-	);
-}
-
-function getZoomLabel(z: { depth: number; customScale?: number }): string {
-	if (z.customScale) return `${z.customScale.toFixed(1)}×`;
-	const scales: Record<number, string> = {
-		1: "1.25×",
-		2: "1.5×",
-		3: "1.8×",
-		4: "2.2×",
-		5: "3.5×",
-		6: "5×",
-	};
-	return scales[z.depth] ?? "1.8×";
 }
 
 function menuItemStyle(active: boolean): React.CSSProperties {

@@ -38,6 +38,17 @@
 	--accent-soft: rgba(16, 185, 129, 0.10);
 	--accent-wash: rgba(16, 185, 129, 0.06);
 
+	/* legacy shadcn-style aliases → canonical tokens. Referenced by the
+	   TimelinePane / TranscriptEditor / VirtualPreview / NewEditorShell module
+	   CSS that was ported before the token system existed. Defined via var()
+	   so the dark-theme overrides of the target tokens cascade automatically —
+	   no need to redefine these in the dark block. */
+	--primary: var(--accent);
+	--primary-foreground: var(--accent-on);
+	--card: var(--surface);
+	--card-foreground: var(--fg);
+	--muted-foreground: var(--muted);
+
 	/* semantic */
 	--danger: #ef4444;
 	--danger-lo: #dc2626;

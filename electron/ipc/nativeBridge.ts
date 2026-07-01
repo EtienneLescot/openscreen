@@ -43,12 +43,34 @@ export interface NativeBridgeContext {
 	getAiEditionLlmConfig: () => import("../ai-edition/llm-config-store").LlmConfigStore;
 	runAiEditionChat: (
 		projectId: string,
+		sessionId: string,
 		message: string,
 	) => Promise<import("../../src/native/contracts").AiEditionChatResult>;
-	getAiEditionChatHistory: (
+	runAiEditionChatDefault: (
 		projectId: string,
-	) => Promise<import("../../src/native/contracts").AiEditionChatMessage[]>;
-	clearAiEditionChatHistory: (projectId: string) => void;
+		message: string,
+	) => Promise<import("../../src/native/contracts").AiEditionChatResult>;
+	getAiEditionChatHistoryDefault: (
+		projectId: string,
+	) => import("../../src/native/contracts").AiEditionChatMessage[];
+	clearAiEditionChatHistoryDefault: (projectId: string) => void;
+	listAiEditionChatSessions: (
+		projectId: string,
+	) => import("../../src/native/contracts").AiEditionChatSessionSummary[];
+	createAiEditionChatSession: (
+		projectId: string,
+		title?: string,
+	) => import("../../src/native/contracts").AiEditionChatSessionSummary;
+	selectAiEditionChatSession: (
+		projectId: string,
+		sessionId: string,
+	) => import("../../src/native/contracts").AiEditionChatSession | null;
+	renameAiEditionChatSession: (
+		projectId: string,
+		sessionId: string,
+		title: string,
+	) => import("../../src/native/contracts").AiEditionChatSessionSummary | null;
+	deleteAiEditionChatSession: (projectId: string, sessionId: string) => boolean;
 }
 
 function normalizePlatform(platform: NodeJS.Platform): NativePlatform {
@@ -136,8 +158,14 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 		documents: context.getAiEditionDocuments(),
 		llmConfig: context.getAiEditionLlmConfig(),
 		runChat: context.runAiEditionChat,
-		getChatHistory: context.getAiEditionChatHistory,
-		clearChatHistory: context.clearAiEditionChatHistory,
+		runChatDefault: context.runAiEditionChatDefault,
+		getDefaultChatHistory: context.getAiEditionChatHistoryDefault,
+		clearDefaultChatHistory: context.clearAiEditionChatHistoryDefault,
+		listSessions: context.listAiEditionChatSessions,
+		createSession: context.createAiEditionChatSession,
+		selectSession: context.selectAiEditionChatSession,
+		renameSession: context.renameAiEditionChatSession,
+		deleteSession: context.deleteAiEditionChatSession,
 	});
 
 	ipcMain.handle(NATIVE_BRIDGE_CHANNEL, async (_, request: unknown) => {
@@ -304,17 +332,67 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 						case "chat.run":
 							return createSuccessResponse(
 								requestId,
-								await aiEditionService.chatRun(request.payload.projectId, request.payload.message),
+								await aiEditionService.chatRun(
+									request.payload.projectId,
+									request.payload.sessionId,
+									request.payload.message,
+								),
+							);
+						case "chat.runDefault":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.chatRunDefault(
+									request.payload.projectId,
+									request.payload.message,
+								),
 							);
 						case "chat.history":
 							return createSuccessResponse(
 								requestId,
-								await aiEditionService.chatHistory(request.payload.projectId),
+								aiEditionService.chatHistoryDefault(request.payload.projectId),
 							);
 						case "chat.clear":
 							return createSuccessResponse(
 								requestId,
-								await aiEditionService.chatClear(request.payload.projectId),
+								aiEditionService.chatClearDefault(request.payload.projectId),
+							);
+						case "chat.listSessions":
+							return createSuccessResponse(
+								requestId,
+								aiEditionService.chatListSessions(request.payload.projectId),
+							);
+						case "chat.createSession":
+							return createSuccessResponse(
+								requestId,
+								aiEditionService.chatCreateSession(
+									request.payload.projectId,
+									request.payload.title,
+								),
+							);
+						case "chat.selectSession":
+							return createSuccessResponse(
+								requestId,
+								aiEditionService.chatSelectSession(
+									request.payload.projectId,
+									request.payload.sessionId,
+								),
+							);
+						case "chat.renameSession":
+							return createSuccessResponse(
+								requestId,
+								aiEditionService.chatRenameSession(
+									request.payload.projectId,
+									request.payload.sessionId,
+									request.payload.title,
+								),
+							);
+						case "chat.deleteSession":
+							return createSuccessResponse(
+								requestId,
+								aiEditionService.chatDeleteSession(
+									request.payload.projectId,
+									request.payload.sessionId,
+								),
 							);
 						default:
 							return createErrorResponse(

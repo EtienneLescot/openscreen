@@ -343,7 +343,10 @@ function ChatStripPanel() {
 	const [llmConfig, setLlmConfig] = useState<AiEditionLlmConfig | null>(null);
 	const [settingsOpen, setSettingsOpen] = useState(false);
 	const [chatsOpen, setChatsOpen] = useState(false);
-	const [sessionNum, setSessionNum] = useState(1);
+	const [sessions, setSessions] = useState<
+		Array<{ id: string; title: string; messageCount: number; createdAt: string }>
+	>([]);
+	const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 
 	const refreshLlm = useCallback(async () => {
@@ -355,33 +358,79 @@ function ChatStripPanel() {
 		}
 	}, []);
 
+	const refreshSessions = useCallback(
+		async (pid: string, preferFirst = false) => {
+			try {
+				const list = await nativeBridgeClient.aiEdition.chatListSessions(pid);
+				setSessions(list);
+				if (list.length === 0) {
+					setActiveSessionId(null);
+					setMessages([]);
+					return;
+				}
+				if (preferFirst || !list.some((s) => s.id === activeSessionId)) {
+					setActiveSessionId(list[0].id);
+				}
+			} catch {
+				// ponytail: silent — shim mode or missing project
+			}
+		},
+		[activeSessionId],
+	);
+
 	useEffect(() => {
 		void refreshLlm();
 	}, [refreshLlm]);
 
 	useEffect(() => {
-		if (!projectId) return;
+		if (!projectId) {
+			setSessions([]);
+			setActiveSessionId(null);
+			setMessages([]);
+			return;
+		}
+		void refreshSessions(projectId, true);
+	}, [projectId, refreshSessions]);
+
+	useEffect(() => {
+		if (!projectId || !activeSessionId) {
+			setMessages([]);
+			return;
+		}
 		void (async () => {
 			try {
-				const history = await nativeBridgeClient.aiEdition.chatHistory(projectId);
-				setMessages(history.map((m) => ({ role: m.role, content: m.content, time: m.createdAt })));
+				const session = await nativeBridgeClient.aiEdition.chatSelectSession(
+					projectId,
+					activeSessionId,
+				);
+				if (session) {
+					setMessages(
+						session.messages.map((m) => ({
+							role: m.role,
+							content: m.content,
+							time: m.createdAt,
+						})),
+					);
+				} else {
+					setMessages([]);
+				}
 			} catch {
-				// ponytail: silent — shim mode or missing project
+				// ponytail: silent — shim mode
 			}
 		})();
-	}, [projectId]);
+	}, [projectId, activeSessionId]);
 
 	useEffect(() => {
 		scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
 	});
 
 	const send = async () => {
-		if (!projectId || !input.trim() || busy) return;
+		if (!projectId || !activeSessionId || !input.trim() || busy) return;
 		const text = input.trim();
 		setInput("");
 		setBusy(true);
 		try {
-			const result = await nativeBridgeClient.aiEdition.chatRun(projectId, text);
+			const result = await nativeBridgeClient.aiEdition.chatRun(projectId, activeSessionId, text);
 			setMessages((prev) => [
 				...prev,
 				{ role: "user", content: text, time: new Date().toLocaleTimeString() },
@@ -396,6 +445,7 @@ function ChatStripPanel() {
 						time: new Date().toLocaleTimeString(),
 					},
 				]);
+				void refreshSessions(projectId);
 			} else {
 				toast.error(result.error ?? "Chat failed");
 			}
@@ -417,16 +467,65 @@ function ChatStripPanel() {
 			: null;
 
 	const newChat = useCallback(async () => {
-		setMessages([]);
-		setSessionNum((n) => n + 1);
-		if (projectId) {
-			try {
-				await nativeBridgeClient.aiEdition.chatClear(projectId);
-			} catch {
-				// ponytail: silent — shim mode or no-op
-			}
+		if (!projectId) return;
+		try {
+			const created = await nativeBridgeClient.aiEdition.chatCreateSession(projectId);
+			setSessions((prev) => [...prev, created]);
+			setActiveSessionId(created.id);
+			setMessages([]);
+		} catch (err) {
+			toast.error("Could not create conversation", {
+				description: err instanceof Error ? err.message : String(err),
+			});
 		}
 	}, [projectId]);
+
+	const selectSession = useCallback((id: string) => {
+		setActiveSessionId(id);
+	}, []);
+
+	const handleDelete = useCallback(
+		async (id: string) => {
+			if (!projectId) return;
+			try {
+				const res = await nativeBridgeClient.aiEdition.chatDeleteSession(projectId, id);
+				if (!res.success) return;
+				setSessions((prev) => prev.filter((s) => s.id !== id));
+				if (activeSessionId === id) {
+					setActiveSessionId(null);
+					setMessages([]);
+				}
+			} catch (err) {
+				toast.error("Could not delete conversation", {
+					description: err instanceof Error ? err.message : String(err),
+				});
+			}
+		},
+		[projectId, activeSessionId],
+	);
+
+	const handleRename = useCallback(
+		async (id: string, title: string) => {
+			if (!projectId) return;
+			const trimmed = title.trim();
+			if (!trimmed) return;
+			try {
+				const updated = await nativeBridgeClient.aiEdition.chatRenameSession(
+					projectId,
+					id,
+					trimmed,
+				);
+				if (updated) {
+					setSessions((prev) => prev.map((s) => (s.id === id ? updated : s)));
+				}
+			} catch (err) {
+				toast.error("Could not rename conversation", {
+					description: err instanceof Error ? err.message : String(err),
+				});
+			}
+		},
+		[projectId],
+	);
 
 	return (
 		<aside className={styles.panel}>
@@ -521,6 +620,109 @@ function ChatStripPanel() {
 				</div>
 				<div className={styles.chatHint}>Describe the edit you want…</div>
 			</div>
+
+			{activeSessionId ? (
+				<div
+					style={{
+						display: "flex",
+						alignItems: "center",
+						justifyContent: "space-between",
+						gap: 8,
+						padding: "6px var(--sp-3)",
+						borderTop: "1px solid var(--border-soft)",
+						background: "var(--surface-warm)",
+					}}
+				>
+					<span
+						style={{
+							font: "500 12px/1.3 var(--font-body)",
+							color: "var(--fg-2)",
+							overflow: "hidden",
+							textOverflow: "ellipsis",
+							whiteSpace: "nowrap",
+							flex: 1,
+							cursor: "text",
+						}}
+						title="Click to rename"
+						onClick={() => {
+							const current = sessions.find((s) => s.id === activeSessionId);
+							if (!current) return;
+							const next = window.prompt("Rename conversation", current.title);
+							if (next !== null) void handleRename(activeSessionId, next);
+						}}
+					>
+						{sessions.find((s) => s.id === activeSessionId)?.title ?? "Conversation"}
+					</span>
+					<button
+						type="button"
+						title="Rename conversation"
+						aria-label="Rename conversation"
+						onClick={() => {
+							const current = sessions.find((s) => s.id === activeSessionId);
+							if (!current) return;
+							const next = window.prompt("Rename conversation", current.title);
+							if (next !== null) void handleRename(activeSessionId, next);
+						}}
+						style={{
+							background: "transparent",
+							border: 0,
+							color: "var(--meta)",
+							cursor: "pointer",
+							padding: 2,
+						}}
+					>
+						<svg
+							width={12}
+							height={12}
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+						>
+							<path d="M12 20h9" />
+							<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+						</svg>
+					</button>
+					<button
+						type="button"
+						title="Delete conversation"
+						aria-label="Delete conversation"
+						onClick={() => {
+							const current = sessions.find((s) => s.id === activeSessionId);
+							if (!current) return;
+							if (window.confirm(`Delete "${current.title}"?`)) {
+								void handleDelete(activeSessionId);
+							}
+						}}
+						style={{
+							background: "transparent",
+							border: 0,
+							color: "var(--meta)",
+							cursor: "pointer",
+							padding: 2,
+						}}
+					>
+						<svg
+							width={12}
+							height={12}
+							viewBox="0 0 24 24"
+							fill="none"
+							stroke="currentColor"
+							strokeWidth="2"
+							strokeLinecap="round"
+							strokeLinejoin="round"
+						>
+							<polyline points="3 6 5 6 21 6" />
+							<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+							<path d="M10 11v6" />
+							<path d="M14 11v6" />
+							<path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+						</svg>
+					</button>
+				</div>
+			) : null}
 
 			<div className={styles.panelBody} ref={scrollRef}>
 				{messages.length === 0 ? (
@@ -652,16 +854,9 @@ function ChatStripPanel() {
 			<ChatHistoryModal
 				open={chatsOpen}
 				onClose={() => setChatsOpen(false)}
-				sessions={[
-					{
-						id: `session_${sessionNum}`,
-						title: `Session ${sessionNum}`,
-						messageCount: messages.length,
-						createdAt: new Date().toISOString(),
-					},
-				]}
-				activeSessionId={`session_${sessionNum}`}
-				onSelect={() => setChatsOpen(false)}
+				sessions={sessions}
+				activeSessionId={activeSessionId}
+				onSelect={selectSession}
 				onNew={newChat}
 			/>
 		</aside>

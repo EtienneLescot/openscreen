@@ -1,6 +1,6 @@
 # AI Edition Merge — Collision Analysis & Edge Cases
 
-> Cross-references `ai-edition-merge-plan.md`, `openscreen-inventory.md`, `axcut-inventory.md`. Every collision listed here must be resolved before its owning phase starts.
+> Cross-references `ai-edition-roadmap.md`, `openscreen-inventory.md`, `axcut-inventory.md`. Every collision listed here must be resolved before its owning phase starts.
 >
 > **Severity legend:** 🔴 breaks the merge · 🟠 will cause user-visible regressions · 🟡 polish / nice-to-have.
 
@@ -157,7 +157,7 @@
 
 ### 4.2 axcut-only features to drop or rewrite
 - **`worktreeService`** — drop entirely. Video projects don't need git worktrees.
-- **`proxy.mp4` per asset** — axcut generates a low-res proxy during ingest for fast preview scrubbing. OpenScreen already has the streaming decoder. **Decision (locked 2026-06-25):** no proxy files; rely on `StreamingVideoDecoder` (WebCodecs) to seek the source on demand. **Known concern:** users have reported scrubbing lag on long recordings (>30 min). Documented in `ai-edition-merge-plan.md §8.1` with a revival path (per-asset "Generate proxy" button + auto-enable threshold at 30 min duration).
+- **`proxy.mp4` per asset** — axcut generates a low-res proxy during ingest for fast preview scrubbing. OpenScreen already has the streaming decoder. **Decision (locked 2026-06-25):** no proxy files; rely on `StreamingVideoDecoder` (WebCodecs) to seek the source on demand. **Known concern:** users have reported scrubbing lag on long recordings (>30 min). Documented in `ai-edition-roadmap.md §5 (deferred)` with a revival path (per-asset "Generate proxy" button + auto-enable threshold at 30 min duration).
 - **`.axcut-data/` directory tree** — replaced by `app.getPath('userData')/ai-edition/` and `app.getPath('userData')/projects/`.
 - **ChatGPT device-flow OAuth** (`openai-account.ts`) — keep; it works in Electron main process.
 - **GitHub Copilot token exchange** (`copilot-account.ts`) — keep.
@@ -325,14 +325,14 @@ Reasoning: the streaming agent code is hard to test without a working chat pipel
 
 ## 9. Locked decisions (resolved 2026-06-25)
 
-All questions resolved with the user before Phase 0. Decisions are also recorded in `ai-edition-merge-plan.md §5`.
+All questions resolved with the user before Phase 0. Decisions are also recorded in `ai-edition-roadmap.md §3`.
 
 1. **Stop behavior** — ✅ first recording = auto-open (current behavior); second-and-later recordings in an active AI-edition project = stay-in-recorder with "Open editor / Record another" prompt. Preserves existing UX for users who don't use AI Edition. Decision §3.1.
 2. **Auto-caption annotations** — ✅ drop entirely. AI-edition's transcript is richer; users add overlay annotations manually if needed. Decision §4.1.
 3. **React Query** — ✅ add `@tanstack/react-query` as a dependency. Phase 6 leans on it. Decision §3.7.
 4. **Credential storage** — ✅ use Electron's `safeStorage` (OS keychain). Plain JSON is a security regression. Decision §2.5.
 5. **Whisper model default** — ✅ bundle OpenScreen's existing smaller model. Add a "Transcription model" picker in settings with download size + speed hints; user opts into larger. Decision §2.1 + §5.13.
-6. **Proxy MP4 generation** — ✅ drop. Rely on `StreamingVideoDecoder`. **Documented limitation:** users have reported scrubbing lag on long recordings (>30 min). Revival path in `ai-edition-merge-plan.md §8.1`. Decision §4.2.
+6. **Proxy MP4 generation** — ✅ drop. Rely on `StreamingVideoDecoder`. **Documented limitation:** users have reported scrubbing lag on long recordings (>30 min). Revival path in `ai-edition-roadmap.md §5 (deferred)`. Decision §4.2.
 7. **File extension** — ✅ keep `.openscreen`. No rename. Decision §3 of the merge plan + §6.3.
 8. **Repository / packaging model** — ✅ **single package, in-tree.** AI-edition lives inside the openscreen repo at `src/lib/ai-edition/`, `electron/ai-edition/`, `src/components/ai-edition/`, `src/i18n/locales/<locale>/ai-edition.*`. One `package.json`, one CI, one release. No monorepo, no separate npm package, no separate repo. Decision §4.2 + §6 of the merge plan.
 
