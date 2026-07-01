@@ -1,6 +1,6 @@
 // Vendored from @axcut/schema (https://github.com/EtienneLescot/axcut) —
 // original file: packages/axcut-schema/src/index.ts. Modifications for
-// OpenScreen's AI-edition merge (Phase 0, see docs/architecture/ai-edition-merge-plan.md):
+// OpenScreen's AI-edition merge (Phase 0, see docs/architecture/ai-edition-roadmap.md):
 //
 //   1. axcutSchemaVersion bumped 2 -> 3.
 //   2. clip.sourceEndSec made optional (duration is unknown until asset is probed).
@@ -382,7 +382,7 @@ export const zoomRegionSchema = z
 
 // Legacy OpenScreen appearance / export settings that the v3 schema doesn't
 // normalize into the timeline / assets model. They are applied at export time
-// by the existing pipeline (see docs/architecture/ai-edition-merge-plan.md §2.1).
+// by the existing pipeline (see docs/architecture/ai-edition-roadmap.md §2).
 //
 // ponytail: passthrough blob — v2 ProjectEditorState carries ~25 fields, several
 // of which (autoZoomEnabled, autoFocusAll, cursorTheme, …) have no first-class

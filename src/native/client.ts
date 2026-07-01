@@ -2,6 +2,8 @@ import {
 	type AiEditionAssetResult,
 	type AiEditionChatMessage,
 	type AiEditionChatResult,
+	type AiEditionChatSession,
+	type AiEditionChatSessionSummary,
 	type AiEditionDocumentResult,
 	type AiEditionLlmConfig,
 	type AiEditionLlmSnapshot,
@@ -209,10 +211,30 @@ export const nativeBridgeClient = {
 				action: "llm.removeApiKey",
 				payload: { providerId },
 			}),
-		chatRun: (projectId: string, message: string) =>
-			requireNativeBridgeData<AiEditionChatResult>({
+		chatRun: (
+			projectId: string,
+			sessionIdOrMessage: string,
+			message?: string,
+		): Promise<AiEditionChatResult> => {
+			// ponytail: polymorphic — legacy 2-arg callers pass (projectId, message).
+			// Multi-session callers pass (projectId, sessionId, message).
+			if (message === undefined) {
+				return requireNativeBridgeData<AiEditionChatResult>({
+					domain: "aiEdition",
+					action: "chat.runDefault",
+					payload: { projectId, message: sessionIdOrMessage },
+				});
+			}
+			return requireNativeBridgeData<AiEditionChatResult>({
 				domain: "aiEdition",
 				action: "chat.run",
+				payload: { projectId, sessionId: sessionIdOrMessage, message },
+			});
+		},
+		chatRunDefault: (projectId: string, message: string) =>
+			requireNativeBridgeData<AiEditionChatResult>({
+				domain: "aiEdition",
+				action: "chat.runDefault",
 				payload: { projectId, message },
 			}),
 		chatHistory: (projectId: string) =>
@@ -226,6 +248,36 @@ export const nativeBridgeClient = {
 				domain: "aiEdition",
 				action: "chat.clear",
 				payload: { projectId },
+			}),
+		chatListSessions: (projectId: string) =>
+			requireNativeBridgeData<AiEditionChatSessionSummary[]>({
+				domain: "aiEdition",
+				action: "chat.listSessions",
+				payload: { projectId },
+			}),
+		chatCreateSession: (projectId: string, title?: string) =>
+			requireNativeBridgeData<AiEditionChatSessionSummary>({
+				domain: "aiEdition",
+				action: "chat.createSession",
+				payload: { projectId, title },
+			}),
+		chatSelectSession: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<AiEditionChatSession | null>({
+				domain: "aiEdition",
+				action: "chat.selectSession",
+				payload: { projectId, sessionId },
+			}),
+		chatRenameSession: (projectId: string, sessionId: string, title: string) =>
+			requireNativeBridgeData<AiEditionChatSessionSummary | null>({
+				domain: "aiEdition",
+				action: "chat.renameSession",
+				payload: { projectId, sessionId, title },
+			}),
+		chatDeleteSession: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<{ success: boolean }>({
+				domain: "aiEdition",
+				action: "chat.deleteSession",
+				payload: { projectId, sessionId },
 			}),
 	},
 };

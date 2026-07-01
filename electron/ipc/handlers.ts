@@ -35,7 +35,17 @@ import type {
 	ProjectFileResult,
 	ProjectPathResult,
 } from "../../src/native/contracts";
-import { clearChatHistory, getChatHistory, runChat } from "../ai-edition/chat-service";
+import {
+	clearDefaultChatHistory,
+	createSession,
+	deleteSession,
+	getDefaultChatHistory,
+	listSessions,
+	renameSession,
+	runChat,
+	runChatDefault,
+	selectSession,
+} from "../ai-edition/chat-service";
 import { DocumentService } from "../ai-edition/document-service";
 import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { mainLogBuffer } from "../diagnostics/main-log-buffer";
@@ -3139,9 +3149,17 @@ export function registerIpcHandlers(
 		getAiEditionDocuments: () =>
 			new DocumentService(path.join(app.getPath("userData"), "projects")),
 		getAiEditionLlmConfig: () => new LlmConfigStore(app.getPath("userData")),
-		runAiEditionChat: (projectId, message) =>
-			runChat(projectId, message, new LlmConfigStore(app.getPath("userData"))),
-		getAiEditionChatHistory: (projectId) => getChatHistory(projectId),
-		clearAiEditionChatHistory: (projectId: string) => clearChatHistory(projectId),
+		runAiEditionChat: (projectId, sessionId, message) =>
+			runChat(projectId, sessionId, message, new LlmConfigStore(app.getPath("userData"))),
+		runAiEditionChatDefault: (projectId, message) =>
+			runChatDefault(projectId, message, new LlmConfigStore(app.getPath("userData"))),
+		getAiEditionChatHistoryDefault: (projectId) => getDefaultChatHistory(projectId),
+		clearAiEditionChatHistoryDefault: (projectId) => clearDefaultChatHistory(projectId),
+		listAiEditionChatSessions: (projectId) => listSessions(projectId),
+		createAiEditionChatSession: (projectId, title) => createSession(projectId, title),
+		selectAiEditionChatSession: (projectId, sessionId) => selectSession(projectId, sessionId),
+		renameAiEditionChatSession: (projectId, sessionId, title) =>
+			renameSession(projectId, sessionId, title),
+		deleteAiEditionChatSession: (projectId, sessionId) => deleteSession(projectId, sessionId),
 	});
 }

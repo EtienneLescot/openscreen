@@ -1330,6 +1330,186 @@
 	background: var(--bg);
 	overflow: hidden;
 }
+
+/* Region lanes (annotations / speed / zoom) inside the timeline body. */
+/* Lanes: fixed-width label column + one shared dnd-timeline surface column.
+   Both columns lay out 3 rows independently but with identical height (22px)
+   + gap (2px), so they line up without needing CSS grid row-spanning. */
+.lanes {
+	display: flex;
+	gap: 8px;
+	padding: 4px var(--sp-4) 2px;
+	flex-shrink: 0;
+	border-bottom: 1px solid var(--border-soft);
+}
+.laneLabelCol {
+	width: 64px;
+	flex-shrink: 0;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.laneLabelCell {
+	height: 22px;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 4px;
+}
+.laneLabel {
+	font: 600 10px/1 var(--font-mono);
+	color: var(--meta);
+	letter-spacing: 0.04em;
+	text-transform: uppercase;
+}
+.laneMeta {
+	font: 500 10.5px/1 var(--font-mono);
+	color: var(--muted);
+	min-width: 12px;
+	text-align: right;
+}
+.laneDelete {
+	width: 18px;
+	height: 18px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	border: 0;
+	border-radius: var(--r-xs);
+	background: var(--danger-soft);
+	color: var(--danger);
+	font-size: 13px;
+	line-height: 1;
+	cursor: pointer;
+}
+.laneDelete:hover {
+	filter: brightness(0.95);
+}
+.laneSurface {
+	flex: 1;
+	min-width: 0;
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+}
+.laneTrackRow {
+	position: relative;
+	height: 22px;
+	background: var(--surface-2);
+	border: 1px dashed var(--border-soft);
+	border-radius: var(--r-sm);
+	overflow: hidden;
+}
+.laneEmpty {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font: 500 11px/1 var(--font-body);
+	color: var(--muted);
+	opacity: 0.6;
+	pointer-events: none;
+}
+
+/* Lane pills: zoom / speed / annotation. Visuals match the design — tab caps
+ * on each side, frame color per kind, gradient sheen on top. */
+.zoomPill,
+.speedPill,
+.annotationPill {
+	--_pill: var(--accent);
+	position: absolute;
+	top: 50%;
+	transform: translateY(-50%);
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 4px 10px;
+	background: linear-gradient(
+		180deg,
+		color-mix(in oklch, var(--_pill) 14%, var(--bg)) 0%,
+		color-mix(in oklch, var(--_pill) 6%, var(--bg)) 60%,
+		var(--bg) 100%
+	);
+	border: 1.5px solid var(--_pill);
+	border-radius: var(--r-md);
+	color: var(--fg);
+	font: 600 11px/1 var(--font-display);
+	letter-spacing: 0.01em;
+	font-variant-numeric: tabular-nums;
+	white-space: nowrap;
+	pointer-events: auto;
+	box-shadow:
+		0 4px 12px -8px color-mix(in oklch, var(--_pill) 60%, transparent),
+		inset 0 1px 0 color-mix(in oklch, var(--_pill) 30%, transparent);
+	cursor: pointer;
+	z-index: 2;
+}
+.zoomPill {
+	--_pill: var(--accent);
+}
+.speedPill {
+	--_pill: var(--speed);
+}
+.annotationPill {
+	--_pill: var(--annotation);
+}
+.lanePillSelected {
+	box-shadow:
+		0 4px 12px -8px color-mix(in oklch, var(--_pill) 60%, transparent),
+		inset 0 1px 0 color-mix(in oklch, var(--_pill) 30%, transparent),
+		0 0 0 3px color-mix(in oklch, var(--_pill) 35%, transparent);
+}
+.lanePillSelected::before,
+.lanePillSelected::after {
+	background: color-mix(in oklch, var(--_pill) 80%, var(--bg));
+	box-shadow:
+		0 0 0 1px var(--bg),
+		0 2px 6px -2px color-mix(in oklch, var(--_pill) 65%, transparent);
+}
+/* tab caps at the ends */
+.zoomPill::before,
+.zoomPill::after,
+.speedPill::before,
+.speedPill::after,
+.annotationPill::before,
+.annotationPill::after {
+	content: "";
+	position: absolute;
+	top: 50%;
+	width: 6px;
+	height: 14px;
+	background: var(--_pill);
+	border-radius: 3px;
+	transform: translateY(-50%);
+	pointer-events: none;
+	z-index: 1;
+	box-shadow:
+		0 0 0 1px var(--bg),
+		0 2px 6px -2px color-mix(in oklch, var(--_pill) 55%, transparent);
+}
+.zoomPill::before,
+.speedPill::before,
+.annotationPill::before {
+	left: -4px;
+}
+.zoomPill::after,
+.speedPill::after,
+.annotationPill::after {
+	right: -4px;
+}
+.pillIcon {
+	width: 11px;
+	height: 11px;
+	flex-shrink: 0;
+	color: color-mix(in oklch, var(--_pill) 70%, var(--fg));
+}
+.pillValue {
+	color: var(--fg);
+	font-variant-numeric: tabular-nums;
+}
+
 .timelineHead {
 	display: flex;
 	align-items: center;
@@ -1430,6 +1610,12 @@
 	flex-shrink: 0;
 	border-top: 1px solid var(--border-soft);
 }
+
+/* T11 — Navigator strip. Moved to TimelinePane.module.css so the
+   className (applied via TimelinePane's own styles import) actually
+   matches the CSS. CSS modules' class hashes don't match across
+   files. The shape and the elements are unchanged from axcut's
+   .timeline-navigator / .timeline-navigator-window. */
 .zoombar .zoomTrack {
 	position: relative;
 	height: 18px;
@@ -1445,6 +1631,46 @@
 	background: var(--accent);
 	border-radius: 3px;
 	pointer-events: none;
+}
+
+/* Radix Slider — visible two-handle range, design-aligned. */
+.sliderRoot {
+	position: relative;
+	display: flex;
+	align-items: center;
+	height: 18px;
+	width: 100%;
+	touch-action: none;
+	user-select: none;
+}
+.sliderTrack {
+	position: relative;
+	height: 6px;
+	width: 100%;
+	background: var(--surface-2);
+	border-radius: 3px;
+	overflow: hidden;
+}
+.sliderRange {
+	position: absolute;
+	height: 100%;
+	background: var(--accent);
+	border-radius: 3px;
+}
+.sliderThumb {
+	display: block;
+	width: 14px;
+	height: 14px;
+	background: var(--accent);
+	border: 1px solid var(--bg);
+	border-radius: 3px;
+	cursor: ew-resize;
+	transition: box-shadow var(--motion-fast) var(--ease);
+}
+.sliderThumb:hover,
+.sliderThumb:focus-visible {
+	outline: none;
+	box-shadow: 0 0 0 4px color-mix(in oklch, var(--accent) 22%, transparent);
 }
 
 /* ─── modals ───────────────────────────────────────────────────── */
@@ -1542,6 +1768,11 @@
 	border-color: var(--border);
 	color: var(--muted);
 	cursor: not-allowed;
+}
+
+/* ─── Edit Clip modal — draggable source-range track ────────────── */
+.editClipRangeDragging {
+	box-shadow: 0 0 0 2px var(--accent-soft);
 }
 
 /* ─── media card (left panel media list) ───────────────────────── */

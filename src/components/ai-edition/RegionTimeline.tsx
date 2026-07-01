@@ -1,0 +1,250 @@
+import {
+	type DragEndEvent,
+	type ResizeEndEvent,
+	type Span,
+	TimelineContext,
+	useItem,
+	useRow,
+	useTimelineContext,
+} from "dnd-timeline";
+
+export type { Span };
+
+import { useCallback } from "react";
+import styles from "./NewEditorShell.module.css";
+
+// Zoom/annotation/speed lanes, made draggable + resizable via dnd-timeline
+// (already a dependency — see OpenScreen's old TimelineWrapper.tsx/Item.tsx/
+// Row.tsx on `main` for the reference this ports). Scoped down from that
+// reference: clamp-to-bounds + collision-clamp against sibling spans are
+// ported, but the snap-guide and floating drag tooltip are not (follow-up).
+
+const MIN_ITEM_DURATION_MS = 100;
+
+interface RegionSpanRef {
+	id: string;
+	start: number;
+	end: number;
+}
+
+function clamp(value: number, min: number, max: number): number {
+	return Math.min(max, Math.max(min, value));
+}
+
+interface RegionTimelineProviderProps {
+	totalMs: number;
+	// Spans that must not overlap each other (zoom, speed). Annotation spans
+	// are intentionally excluded — multiple annotations may overlap.
+	collidableSpans: RegionSpanRef[];
+	onItemSpanChange: (id: string, span: Span) => void;
+	children: React.ReactNode;
+}
+
+export function RegionTimelineProvider({
+	totalMs,
+	collidableSpans,
+	onItemSpanChange,
+	children,
+}: RegionTimelineProviderProps) {
+	const safeTotalMs = Math.max(totalMs, 1);
+
+	const clampSpanToBounds = useCallback(
+		(span: Span): Span => {
+			const rawDuration = Math.max(span.end - span.start, 0);
+			const duration = Math.min(Math.max(rawDuration, MIN_ITEM_DURATION_MS), safeTotalMs);
+			const start = clamp(span.start, 0, safeTotalMs - duration);
+			return { start, end: start + duration };
+		},
+		[safeTotalMs],
+	);
+
+	const isCollidable = useCallback(
+		(id: string) => collidableSpans.some((r) => r.id === id),
+		[collidableSpans],
+	);
+
+	const hasOverlap = useCallback(
+		(span: Span, excludeId: string) =>
+			collidableSpans.some((r) => r.id !== excludeId && span.end > r.start && span.start < r.end),
+		[collidableSpans],
+	);
+
+	const clampToNeighbours = useCallback(
+		(span: Span, activeItemId: string): Span => {
+			const siblings = collidableSpans.filter((r) => r.id !== activeItemId);
+			let { start, end } = span;
+			for (const r of siblings) {
+				if (end > r.start && start < r.start) end = r.start;
+				if (start < r.end && end > r.end) start = r.end;
+			}
+			if (end - start < MIN_ITEM_DURATION_MS) {
+				if (end + MIN_ITEM_DURATION_MS - (end - start) <= safeTotalMs) {
+					end = start + MIN_ITEM_DURATION_MS;
+				} else {
+					start = end - MIN_ITEM_DURATION_MS;
+				}
+			}
+			return { start: Math.max(0, start), end: Math.min(end, safeTotalMs) };
+		},
+		[collidableSpans, safeTotalMs],
+	);
+
+	const resolveSpan = useCallback(
+		(rawSpan: Span, activeItemId: string): Span | null => {
+			let span = clampSpanToBounds(rawSpan);
+			if (isCollidable(activeItemId) && hasOverlap(span, activeItemId)) {
+				span = clampToNeighbours(span, activeItemId);
+				if (hasOverlap(span, activeItemId)) return null;
+			}
+			return span;
+		},
+		[clampSpanToBounds, clampToNeighbours, hasOverlap, isCollidable],
+	);
+
+	const onResizeEnd = useCallback(
+		(event: ResizeEndEvent) => {
+			const updatedSpan = event.active.data.current.getSpanFromResizeEvent?.(event);
+			if (!updatedSpan) return;
+			const activeItemId = event.active.id as string;
+			const span = resolveSpan(updatedSpan, activeItemId);
+			if (span) onItemSpanChange(activeItemId, span);
+		},
+		[onItemSpanChange, resolveSpan],
+	);
+
+	const onDragEnd = useCallback(
+		(event: DragEndEvent) => {
+			if (!event.over) return;
+			const updatedSpan = event.active.data.current.getSpanFromDragEvent?.(event);
+			if (!updatedSpan) return;
+			const activeItemId = event.active.id as string;
+			const span = resolveSpan(updatedSpan, activeItemId);
+			if (span) onItemSpanChange(activeItemId, span);
+		},
+		[onItemSpanChange, resolveSpan],
+	);
+
+	return (
+		<TimelineContext
+			range={{ start: 0, end: safeTotalMs }}
+			// Range is read-only for the regions surface (zoom/pan live on the clip track).
+			onRangeChanged={() => {
+				// intentionally empty
+			}}
+			onResizeEnd={onResizeEnd}
+			onDragEnd={onDragEnd}
+		>
+			{children}
+		</TimelineContext>
+	);
+}
+
+export function RegionTimelineSurface({
+	pxPerSec,
+	totalMs,
+	children,
+}: {
+	// Lane pill positions come from dnd-timeline in ms, and the library maps
+	// 1 px = range / timelineWidth. We set the surface width to totalMs*pxPerSec
+	// so dnd-timeline naturally maps 1 ms = pxPerSec/1000 px — same as the
+	// timeline ruler ticks — keeping pills aligned with the clip track at any
+	// zoom. Lanes do not share the clip track's horizontal-scroll container;
+	// at very long timelines (>30s) they sit fully visible while the clip
+	// track scrolls. See roadmap P3 for the full shared-scroll follow-up.
+	pxPerSec: number;
+	totalMs: number;
+	children: React.ReactNode;
+}) {
+	const { setTimelineRef, style } = useTimelineContext();
+	return (
+		<div
+			ref={setTimelineRef}
+			style={{
+				...style,
+				position: "relative",
+				width: (Math.max(totalMs, 1) * pxPerSec) / 1000,
+			}}
+			className={styles.laneSurface}
+		>
+			{children}
+		</div>
+	);
+}
+
+export function RegionRow({
+	id,
+	empty,
+	children,
+}: {
+	id: string;
+	empty?: string;
+	children: React.ReactNode;
+}) {
+	const { setNodeRef, rowStyle, rowWrapperStyle } = useRow({ id });
+	return (
+		<div style={rowWrapperStyle} className={styles.laneTrackRow}>
+			{empty ? <span className={styles.laneEmpty}>{empty}</span> : null}
+			<div ref={setNodeRef} style={rowStyle}>
+				{children}
+			</div>
+		</div>
+	);
+}
+
+interface RegionItemProps {
+	id: string;
+	rowId: string;
+	span: Span;
+	label: string;
+	icon: React.ReactNode;
+	selected: boolean;
+	onSelect: () => void;
+	variant: "zoom" | "annotation" | "speed";
+}
+
+export function RegionItem({
+	id,
+	rowId,
+	span,
+	label,
+	icon,
+	selected,
+	onSelect,
+	variant,
+}: RegionItemProps) {
+	const { setNodeRef, listeners, attributes, itemStyle, itemContentStyle } = useItem({
+		id,
+		span,
+		data: { rowId },
+	});
+	const pillClass =
+		variant === "zoom"
+			? styles.zoomPill
+			: variant === "speed"
+				? styles.speedPill
+				: styles.annotationPill;
+	return (
+		<div
+			ref={setNodeRef}
+			style={{ ...itemStyle, height: "100%", minWidth: 12 }}
+			{...listeners}
+			{...attributes}
+			onPointerDownCapture={onSelect}
+		>
+			<div style={{ ...itemContentStyle, height: "100%", minWidth: 24 }}>
+				<div
+					className={selected ? `${pillClass} ${styles.lanePillSelected}` : pillClass}
+					// The pill's own CSS is written for absolute left/top-50% placement
+					// inside the old static `.laneTrack`; here dnd-timeline's outer
+					// divs already own absolute positioning + width, so the pill just
+					// fills that box.
+					style={{ position: "relative", top: 0, transform: "none", width: "100%", height: "100%" }}
+					title={label}
+				>
+					{icon}
+					<span className={styles.pillValue}>{label}</span>
+				</div>
+			</div>
+		</div>
+	);
+}

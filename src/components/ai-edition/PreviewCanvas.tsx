@@ -43,7 +43,7 @@ interface PreviewCanvasProps {
 	seekTarget: { timeSec: number; requestId: number } | null;
 	onTimeChange: (sec: number) => void;
 	onSeek: (sec: number) => void;
-	onLoadedMetadata: (sec: number) => void;
+	onLoadedMetadata: (sec: number, assetId: string) => void;
 	onVideoElement: (el: HTMLVideoElement | null) => void;
 	currentTimeSec: number;
 	onVideoError?: () => void;
