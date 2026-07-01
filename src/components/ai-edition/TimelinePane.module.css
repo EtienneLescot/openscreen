@@ -1,304 +1,588 @@
+/* Timeline viewport — custom scroll/pan model (NOT native overflow). The
+   outer viewport is overflow: hidden; the inner .canvas uses
+   transform: translateX(...) to pan, and its width is totalDuration *
+   pxPerSec. This lets the lanes (T10) share the same coordinate space
+   when they move into the canvas. Mirrors axcut TimelinePane.tsx's
+   .timeline-viewport / .timeline-canvas. */
+
 .pane {
+	position: relative;
 	display: flex;
 	flex-direction: column;
-	gap: 0.5rem;
-	padding: 0.75rem;
-	background: var(--card);
-	border-top: 1px solid var(--border);
-	min-height: 180px;
-}
-
-.header {
-	display: flex;
-	align-items: center;
-	justify-content: space-between;
-	gap: 1rem;
-}
-
-.heading {
-	font-size: 0.875rem;
-	font-weight: 600;
-	margin: 0;
-	color: var(--card-foreground);
-	text-transform: uppercase;
-	letter-spacing: 0.025em;
-}
-
-.meta {
-	font-size: 0.75rem;
-	color: var(--muted-foreground);
-	margin: 0;
-}
-
-.readout {
-	display: flex;
-	align-items: center;
-	gap: 0.625rem;
-	font-size: 0.8125rem;
-}
-
-.muted {
-	color: var(--muted-foreground);
-}
-
-.tool {
-	display: flex;
-	align-items: center;
-	gap: 0.25rem;
-	padding: 0.25rem 0.625rem;
-	border-radius: 0.375rem;
-	border: 1px solid var(--border);
-	background: var(--background);
-	color: var(--card-foreground);
-	font-size: 0.75rem;
-	cursor: pointer;
-}
-
-.tool:hover:not(:disabled) {
-	background: var(--accent);
-}
-
-.tool:disabled {
-	opacity: 0.5;
-	cursor: not-allowed;
-}
-
-.navigatorRow {
-	display: flex;
-	align-items: center;
-	gap: 0.5rem;
-}
-
-.fitButton {
-	padding: 0.125rem 0.5rem;
-	border-radius: 0.25rem;
-	border: 1px solid var(--border);
-	background: var(--background);
-	color: var(--muted-foreground);
-	font-size: 0.6875rem;
-	cursor: pointer;
-}
-
-.fitButton:disabled {
-	opacity: 0.5;
-	cursor: not-allowed;
-}
-
-.navigator {
-	position: relative;
-	flex: 1;
-	height: 24px;
-	border-radius: 0.25rem;
-	background: var(--background);
-	border: 1px solid var(--border);
-	overflow: hidden;
-	cursor: pointer;
-}
-
-.navigatorContent {
-	position: absolute;
-	inset: 0;
-}
-
-.navigatorCut {
-	position: absolute;
-	top: 4px;
-	bottom: 4px;
-	background: var(--destructive);
-	opacity: 0.3;
-	border-radius: 2px;
-}
-
-.navigatorWindow {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	background: var(--primary);
-	opacity: 0.15;
-	border: 1px solid var(--primary);
-	border-radius: 2px;
-	cursor: grab;
-}
-
-.navigatorHandle {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	width: 4px;
-	background: var(--primary);
-	border-radius: 1px;
-	cursor: ew-resize;
-}
-
-.navigatorHandle.start {
-	left: -2px;
-}
-
-.navigatorHandle.end {
-	right: -2px;
+	min-height: 0;
+	height: 100%;
 }
 
 .viewport {
 	position: relative;
-	overflow-x: auto;
-	overflow-y: hidden;
-	flex: 1;
-	min-height: 80px;
-	cursor: crosshair;
-	user-select: none;
+	flex: 1 1 auto;
+	min-height: 0;
+	overflow: hidden;
+	cursor: pointer;
+	/* ponytail: scrollbar hidden — the navigator strip (T11) is the
+	   scroll/zoom UI; we don't want native scroll chrome leaking in. */
+	scrollbar-width: none;
 }
-
+.viewport::-webkit-scrollbar {
+	display: none;
+}
 .viewport.panning {
 	cursor: grabbing;
 }
-
-.viewport.scrubbing {
+.viewport.reordering {
 	cursor: grabbing;
+}
+.viewport.scrubbing {
+	cursor: ew-resize;
+}
+.viewport.placingCut {
+	cursor: crosshair;
+}
+
+/* T16 — body-level cursor classes that override child cursors while a
+   timeline interaction is active. */
+body.timeline-scrubbing,
+body.timeline-scrubbing * {
+	cursor: ew-resize !important;
+}
+body.timeline-panning,
+body.timeline-panning * {
+	cursor: grabbing !important;
+}
+body.timeline-reordering,
+body.timeline-reordering * {
+	cursor: grabbing !important;
+}
+/* T15 — Place-skip cursor. The class is added via
+   document.body.classList.add() in Bottombar (raw string), so the
+   selector MUST use :global() — otherwise CSS modules would hash
+   `.timeline-placing-cut` and the rule would never match. Same hash
+   issue as the navigator CSS had. The `*` selector cascades to
+   every descendant with the body class applied. */
+body:global(.timeline-placing-cut),
+body:global(.timeline-placing-cut) * {
+	cursor: crosshair !important;
+}
+/* Same problem on the specific element overrides. */
+body:global(.timeline-placing-cut) .trackBlock,
+body:global(.timeline-placing-cut) .trackBlock:active,
+body:global(.timeline-placing-cut) .skipControlBtn,
+body:global(.timeline-placing-cut) .editIcon,
+body:global(.timeline-placing-cut) .clipDelete,
+body:global(.timeline-placing-cut) .trackBlock .segment,
+body:global(.timeline-placing-cut) .reorderMarker,
+body:global(.timeline-placing-cut) .dropMarker,
+body:global(.timeline-placing-cut) .timelineHeader,
+body:global(.timeline-placing-cut) .timelineHeader *,
+body:global(.timeline-placing-cut) button,
+body:global(.timeline-placing-cut) [class*="vtBtn"] {
+	cursor: crosshair !important;
 }
 
 .canvas {
 	position: relative;
-	min-height: 100%;
+	height: 100%;
+	min-width: 100%;
+	display: flex;
+	flex-direction: column;
+	/* T15 — these tokens drive the playhead + placement-marker top
+	   offsets. The marker/playhead use a calc(-1 * (--rule-h + --lanes-h))
+	   to land inside the timing ruler regardless of lane-count changes. */
+	--rule-h: 22px;
+	--lanes-h: 78px;
+	will-change: transform;
 }
 
 .ruler {
 	position: relative;
-	border-bottom: 1px solid var(--border);
-	overflow: hidden;
+	height: 22px;
+	border-bottom: 1px solid var(--border-soft);
+	user-select: none;
+	cursor: text;
 }
-
 .tick {
 	position: absolute;
 	top: 0;
 	bottom: 0;
 	width: 1px;
-	background: var(--border);
+	background: var(--border-hi);
 }
-
-.tickMajor {
-	background: var(--muted-foreground);
-}
-
-.tickMajor span {
+.tick.major::before {
+	content: "";
 	position: absolute;
-	top: 4px;
-	left: 4px;
-	font-size: 0.625rem;
-	color: var(--muted-foreground);
+	left: 0;
+	bottom: -4px;
+	width: 2px;
+	height: 4px;
+	background: var(--border-hi);
+}
+.tick span {
+	position: absolute;
+	left: 2px;
+	top: 0;
+	font-family: var(--font-mono);
+	font-size: 11px;
+	font-weight: 500;
+	letter-spacing: 0.02em;
+	color: var(--muted);
 	white-space: nowrap;
+	pointer-events: none;
+}
+
+.lanesContainer {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	padding: 4px 0 2px;
+	border-bottom: 1px solid var(--border-soft);
+	flex-shrink: 0;
 }
 
 .trackLane {
 	position: relative;
-	height: 60px;
-	margin-top: 4px;
-}
-
-.segment {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	border-radius: 0.25rem;
-	display: flex;
-	align-items: center;
-	overflow: hidden;
-}
-
-.kept {
-	background: var(--primary);
-	opacity: 0.25;
-}
-
-.kept.active {
-	opacity: 0.45;
-}
-
-.cut {
-	background: var(--destructive);
-	opacity: 0.2;
-	border: 1px dashed var(--destructive);
-}
-
-.cut.active {
-	opacity: 0.35;
-}
-
-.segmentLabel {
 	display: flex;
 	flex-direction: column;
-	gap: 0.125rem;
-	padding: 0 0.5rem;
-	font-size: 0.625rem;
-	color: var(--card-foreground);
+	gap: 4px;
+	padding: 4px 0;
+	min-height: 0;
+	flex: 1 1 auto;
+}
+
+.trackBlock {
+	position: absolute;
+	top: 4px;
+	height: calc(100% - 8px);
+	min-width: 68px;
+	display: flex;
+	flex-direction: column;
+	background: var(--surface-2);
+	border: 1px solid var(--border);
+	border-radius: var(--r-md);
+	box-shadow: var(--elev-card-soft);
+	cursor: grab;
+	overflow: hidden;
+	transition:
+		border-color var(--motion-fast) var(--ease),
+		box-shadow var(--motion-fast) var(--ease);
+}
+.trackBlock:hover {
+	border-color: var(--border-hi);
+}
+.trackBlock:active {
+	cursor: grabbing;
+}
+.trackBlock.selected {
+	border-color: var(--accent);
+	box-shadow: 0 0 0 1px var(--accent), 0 4px 12px -4px var(--accent-soft);
+}
+.trackBlock.reordering {
+	opacity: 0.85;
+	box-shadow: 0 8px 24px -8px rgba(0, 0, 0, 0.45);
+	z-index: 20;
+}
+
+.trackVisual {
+	flex: 0 0 auto;
+	height: 26px;
+	display: flex;
+	overflow: hidden;
+	background: var(--surface);
+	border-bottom: 1px solid var(--border);
+}
+.segment {
+	height: 100%;
+	flex-basis: 0;
+}
+.segment.keep {
+	background: transparent;
+}
+.segment.cut {
+	position: relative;
+	background-color: var(--accent-wash);
+	background-image: repeating-linear-gradient(
+		45deg,
+		color-mix(in srgb, var(--accent) 32%, transparent) 0,
+		color-mix(in srgb, var(--accent) 32%, transparent) 8px,
+		transparent 8px,
+		transparent 16px
+	);
+}
+
+.skipControls {
+	position: absolute;
+	top: 50%;
+	left: 50%;
+	transform: translate(
+		calc(-50% + var(--skip-controls-shift-px, 0px)),
+		-50%
+	);
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	padding: 2px;
+	background: var(--surface);
+	border: 1px solid var(--border-soft);
+	border-radius: var(--r-sm);
+	box-shadow: var(--elev-card-soft);
+	z-index: 20;
 	white-space: nowrap;
+}
+.skipControlBtn {
+	width: 20px;
+	height: 20px;
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent;
+	border: 0;
+	border-radius: var(--r-xs);
+	color: var(--muted);
+	cursor: pointer;
+	padding: 0;
+	transition:
+		background var(--motion-fast) var(--ease),
+		color var(--motion-fast) var(--ease);
+}
+.skipControlBtn:hover {
+	background: var(--surface-3);
+	color: var(--fg);
+}
+.skipControlDelete:hover {
+	background: var(--danger-soft);
+	color: var(--danger);
+}
+
+.trackInfo {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px;
 	overflow: hidden;
 }
-
-.segmentLabel small {
-	color: var(--muted-foreground);
-}
-
-.cutHandle {
-	position: absolute;
-	top: 0;
-	bottom: 0;
-	width: 8px;
-	background: var(--destructive);
-	opacity: 0.6;
-	border: none;
-	cursor: ew-resize;
-}
-
-.cutHandle:hover {
-	opacity: 1;
-}
-
-.handleStart {
-	left: 0;
-	border-radius: 0.25rem 0 0 0.25rem;
-}
-
-.handleEnd {
-	right: 0;
-	border-radius: 0 0.25rem 0.25rem 0;
-}
-
-.cutDelete {
-	position: absolute;
-	top: 2px;
-	right: 12px;
+.editIcon {
+	flex: 0 0 auto;
+	width: 30px;
+	height: 30px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	width: 18px;
-	height: 18px;
-	border-radius: 0.25rem;
-	border: none;
-	background: var(--destructive);
-	color: white;
+	background: var(--surface);
+	border: 1px solid var(--border);
+	border-radius: var(--r-sm);
+	color: var(--fg);
+	box-shadow: var(--elev-card-soft);
 	cursor: pointer;
-	opacity: 0.7;
+	transition:
+		border-color var(--motion-fast) var(--ease),
+		color var(--motion-fast) var(--ease);
 }
-
-.cutDelete:hover {
+.editIcon:hover {
+	border-color: var(--accent);
+	color: var(--accent);
+}
+.trackText {
+	display: flex;
+	flex-direction: column;
+	gap: 2px;
+	min-width: 0;
+	flex: 1;
+}
+.trackTitle {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 500;
+	letter-spacing: -0.005em;
+	color: var(--fg);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.trackSubtitle {
+	margin: 0;
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	letter-spacing: 0.02em;
+	color: var(--muted);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.trackSubtitle span {
+	margin: 0 4px;
+	color: var(--dim);
+}
+.clipDelete {
+	flex: 0 0 auto;
+	width: 26px;
+	height: 26px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	background: transparent;
+	border: 0;
+	border-radius: var(--r-sm);
+	color: var(--muted);
+	cursor: pointer;
+	opacity: 0;
+	transition:
+		background var(--motion-fast) var(--ease),
+		color var(--motion-fast) var(--ease),
+		opacity var(--motion-fast) var(--ease);
+}
+.trackBlock:hover .clipDelete,
+.trackBlock.selected .clipDelete {
 	opacity: 1;
 }
+.clipDelete:hover {
+	background: var(--danger-soft);
+	color: var(--danger);
+}
 
-.playhead {
+/* ── drop marker + playhead ────────────────────────────────────────── */
+.dropMarker {
 	position: absolute;
 	top: 0;
 	bottom: 0;
 	width: 2px;
-	background: var(--primary);
+	background: var(--accent);
+	border-radius: 2px;
+	box-shadow: 0 0 6px var(--accent-soft);
+	pointer-events: none;
+	z-index: 9;
+}
+
+/* T08 — live marker shown between clips while a reorder drag is active. */
+.reorderMarker {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 4px;
+	background: var(--accent);
+	border-radius: 2px;
+	box-shadow: 0 0 12px var(--accent-soft), 0 0 4px var(--accent);
+	pointer-events: none;
+	z-index: 30;
+}
+
+/* T24 — thin vertical snap-guide lines at the resize edges during
+   skip-edge drag. Shown in the ruler area (top: 0; height: 22px).
+   Two of them, one per edge being dragged (axcut TimelinePane.tsx). */
+.snapGuide {
+	position: absolute;
+	top: 0;
+	height: var(--rule-h, 22px);
+	width: 2px;
+	background: var(--danger);
+	box-shadow: 0 0 6px color-mix(in oklch, var(--danger) 60%, transparent);
+	pointer-events: none;
+	z-index: 14;
+}
+
+/* T25 — floating drag tooltip showing the new time range during skip
+   resize. Sits just to the right of the moving edge so it doesn't
+   overlap the snap guide. Pill style matches the chip typography
+   used elsewhere in the ruler / header. */
+.dragTooltip {
+	position: absolute;
+	top: 2px;
+	height: 18px;
+	padding: 0 8px;
+	background: var(--surface);
+	border: 1px solid var(--border-soft);
+	border-radius: 9px;
+	color: var(--fg-2);
+	font: 500 10.5px/18px var(--font-mono);
+	letter-spacing: 0.02em;
+	white-space: nowrap;
+	pointer-events: none;
+	z-index: 15;
+	box-shadow: var(--elev-card-soft);
+}
+
+/* T15 — Place-skip preview marker: 1s-wide red-tinted strip at the
+   cursor's source time. Indicates where the next click would land.
+   Top matches the playhead's top (ruler + lanes above) so it spans
+   the entire visible timeline: ruler above + clip tracks below. */
+.placementMarker {
+	position: absolute;
+	top: calc(-1 * (var(--rule-h, 22px) + var(--lanes-h, 78px)));
+	bottom: 0;
+	width: 12px;
+	margin-left: -6px;
+	background: color-mix(in oklch, var(--danger) 50%, transparent);
+	border-left: 2px solid var(--danger);
+	border-right: 2px solid var(--danger);
+	box-shadow: 0 0 8px color-mix(in oklch, var(--danger) 50%, transparent);
+	pointer-events: none;
+	z-index: 12;
+}
+
+/* T14 — Header row above the viewport: clip/skip/total readouts +
+   Place-skip toggle + current timecode. */
+.timelineHeader {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 6px var(--sp-3) 6px var(--sp-3);
+	border-bottom: 1px solid var(--border-soft);
+	font: 500 11px/1 var(--font-mono);
+	color: var(--muted);
+	flex-shrink: 0;
+}
+.headerStat {
+	letter-spacing: 0.02em;
+}
+.headerDivider {
+	color: var(--dim);
+}
+.headerSpacer {
+	flex: 1 1 auto;
+}
+.headerButton {
+	height: 22px;
+	padding: 0 10px;
+	border: 1px solid var(--border-soft);
+	border-radius: var(--r-sm);
+	background: var(--surface-2);
+	color: var(--fg-2);
+	font: 500 11px/1 var(--font-body);
+	cursor: pointer;
+	transition:
+		background var(--motion-fast) var(--ease),
+		border-color var(--motion-fast) var(--ease);
+}
+.headerButton:hover {
+	background: var(--surface-3);
+	border-color: var(--border-hi);
+}
+.headerButton:disabled {
+	opacity: 0.5;
+	cursor: not-allowed;
+}
+.headerButtonActive {
+	background: var(--accent-wash);
+	border-color: var(--accent);
+	color: var(--accent);
+}
+.headerTime {
+	font-variant-numeric: tabular-nums;
+	color: var(--fg);
+	min-width: 5ch;
+	text-align: right;
+}
+
+.playhead {
+	position: absolute;
+	/* Top: -(ruler + lanes) so the diamond head (::before, 8px tall,
+	   at top: 0) lands inside the .ruler (22px tall) at the very top of
+	   the canvas, not in the zoom/speed/annotation lanes below it.
+	   The vertical line still extends down through the canvas into the
+	   trackLane. */
+	top: calc(-1 * (var(--rule-h, 22px) + var(--lanes-h, 78px)));
+	bottom: 0;
+	width: 2px;
+	background: var(--accent);
 	z-index: 10;
 	pointer-events: none;
 }
+.playhead::before {
+	content: "";
+	position: absolute;
+	top: 0;
+	left: -3px;
+	width: 8px;
+	height: 8px;
+	background: var(--accent);
+	transform: rotate(45deg);
+}
 
+/* ── empty state ───────────────────────────────────────────────────── */
 .empty {
+	flex: 1;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	height: 100%;
-	color: var(--muted-foreground);
-	font-size: 0.8125rem;
+	border: 1.5px dashed var(--border-hi);
+	border-radius: var(--r-md);
+	color: var(--muted);
+	font-size: 12.5px;
+	text-align: center;
+	padding: 16px;
+	transition:
+		border-color var(--motion-fast) var(--ease),
+		color var(--motion-fast) var(--ease);
+}
+.empty[data-drop-active="true"] {
+	border-color: var(--accent);
+	color: var(--accent);
+	background: var(--accent-wash);
+}
+
+/* T11/T12 — Navigator strip. The Navigator is the row that drives
+   the timeline's pan/zoom (axcut TimelinePane.tsx timeline-navigator
+   + .timeline-navigator-window). Lives here, not in
+   NewEditorShell.module.css, because TimelinePane applies the
+   className via its own styles import — CSS modules' class hashes
+   don't match across files. */
+.timelineNavigator {
+	position: relative;
+	height: 1.15rem;
+	flex-shrink: 0;
+	margin: 4px var(--sp-3) 4px var(--sp-3);
+	border: 1px solid var(--border-soft);
+	border-radius: 6px;
+	background: color-mix(in oklch, var(--surface-2) 60%, transparent);
+	overflow: hidden;
+}
+.timelineNavigator.navigating {
+	border-color: var(--accent);
+}
+.timelineNavigatorContent {
+	position: absolute;
+	inset: 0;
+	background: transparent;
+	pointer-events: none;
+}
+.timelineNavigatorSkip {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	min-width: 1px;
+	background: color-mix(in oklch, var(--accent) 50%, transparent);
+	border-left: 1px solid var(--accent);
+	border-right: 1px solid var(--accent);
+	pointer-events: none;
+}
+.timelineNavigatorWindow {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	min-width: 1.8rem;
+	border: 2px solid color-mix(in oklch, var(--accent) 92%, transparent);
+	border-radius: 6px;
+	background: color-mix(in oklch, var(--accent) 16%, transparent);
+	box-shadow:
+		0 0 0 1px rgba(0, 0, 0, 0.45),
+		inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+	cursor: grab;
+}
+.timelineNavigator.navigating .timelineNavigatorWindow {
+	cursor: grabbing;
+}
+.timelineNavigatorHandleStart,
+.timelineNavigatorHandleEnd {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 6px;
+	cursor: ew-resize;
+}
+.timelineNavigatorHandleStart {
+	left: 0;
+}
+.timelineNavigatorHandleEnd {
+	right: 0;
 }

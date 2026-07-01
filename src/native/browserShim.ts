@@ -28,6 +28,12 @@ function createShimElectronAPI() {
 		switchToEditor: () => Promise.resolve({ success: true }),
 		startNewRecording: () => Promise.resolve({ success: true }),
 		openSourceSelector: () => Promise.resolve({ success: true }),
+		setHasUnsavedChanges: () => undefined,
+		sendCloseConfirmResponse: () => undefined,
+		onRequestCloseConfirm: () => () => undefined,
+		onRequestSaveBeforeClose: () => () => undefined,
+		loadProjectFileFromPath: () => Promise.resolve({ success: false, canceled: true }),
+		getPathForFile: () => "",
 		invokeNativeBridge: (req: { domain: string; action: string; payload?: unknown }) => {
 			console.info("[browser-shim] invokeNativeBridge", req.domain, req.action, req.payload);
 			return Promise.resolve({
@@ -72,6 +78,32 @@ function createShimBridgeClient() {
 		}
 	};
 	let currentDoc: unknown = loadFromStorage();
+
+	// ponytail: in-memory chat sessions per project for browser shim. The
+	// renderer treats these the same as the main-process sessions.
+	type ShimSession = {
+		id: string;
+		projectId: string;
+		title: string;
+		createdAt: string;
+		messages: Array<{ id: string; role: "user" | "assistant"; content: string; createdAt: string }>;
+	};
+	const sessionsByProject = new Map<string, Map<string, ShimSession>>();
+	const getSessions = (projectId: string): Map<string, ShimSession> => {
+		let m = sessionsByProject.get(projectId);
+		if (!m) {
+			m = new Map();
+			sessionsByProject.set(projectId, m);
+		}
+		return m;
+	};
+	const summarize = (s: ShimSession) => ({
+		id: s.id,
+		projectId: s.projectId,
+		title: s.title,
+		createdAt: s.createdAt,
+		messageCount: s.messages.length,
+	});
 
 	return {
 		aiEdition: {
@@ -135,8 +167,21 @@ function createShimBridgeClient() {
 			llmSetConfig: () => Promise.resolve({ success: true }),
 			llmSetApiKey: () => Promise.resolve({ success: true }),
 			llmRemoveApiKey: () => Promise.resolve({ success: true }),
-			chatRun: () =>
-				Promise.resolve({
+			chatRun: (projectId: string, sessionId: string) => {
+				const sessions = getSessions(projectId);
+				let s = sessions.get(sessionId);
+				if (!s) {
+					const id = `sess_${Date.now()}`;
+					s = {
+						id,
+						projectId,
+						title: "Conversation 1",
+						createdAt: new Date().toISOString(),
+						messages: [],
+					};
+					sessions.set(id, s);
+				}
+				return Promise.resolve({
 					success: true,
 					assistantMessage: {
 						id: `msg_${Date.now()}`,
@@ -145,9 +190,79 @@ function createShimBridgeClient() {
 							"[browser-shim] AI features need real LLM deps. Configure a provider in Settings, install the LangChain packages, then chat will work for real.",
 						createdAt: new Date().toISOString(),
 					},
-				}),
-			chatHistory: () => Promise.resolve([]),
-			chatClear: () => Promise.resolve({ success: true }),
+				});
+			},
+			chatRunDefault: (projectId: string) => {
+				// ponytail: legacy single-session consumers — pick the most
+				// recent session or auto-create one.
+				const sessions = getSessions(projectId);
+				if (sessions.size === 0) {
+					const id = `sess_${Date.now()}`;
+					sessions.set(id, {
+						id,
+						projectId,
+						title: "Conversation 1",
+						createdAt: new Date().toISOString(),
+						messages: [],
+					});
+				}
+				return Promise.resolve({
+					success: true,
+					assistantMessage: {
+						id: `msg_${Date.now()}`,
+						role: "assistant",
+						content:
+							"[browser-shim] AI features need real LLM deps. Configure a provider in Settings, install the LangChain packages, then chat will work for real.",
+						createdAt: new Date().toISOString(),
+					},
+				});
+			},
+			chatHistory: (projectId: string) => {
+				const m = sessionsByProject.get(projectId);
+				if (!m || m.size === 0) return Promise.resolve([]);
+				const arr = Array.from(m.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+				return Promise.resolve([...arr[0].messages]);
+			},
+			chatClear: (projectId: string) => {
+				const m = sessionsByProject.get(projectId);
+				if (m) for (const s of m.values()) s.messages = [];
+				return Promise.resolve({ success: true });
+			},
+			chatListSessions: (projectId: string) => {
+				const m = sessionsByProject.get(projectId);
+				if (!m) return Promise.resolve([]);
+				return Promise.resolve(Array.from(m.values()).map(summarize));
+			},
+			chatCreateSession: (projectId: string, title?: string) => {
+				const sessions = getSessions(projectId);
+				const id = `sess_${Date.now()}`;
+				const s: ShimSession = {
+					id,
+					projectId,
+					title: title?.trim() || `Conversation ${sessions.size + 1}`,
+					createdAt: new Date().toISOString(),
+					messages: [],
+				};
+				sessions.set(id, s);
+				return Promise.resolve(summarize(s));
+			},
+			chatSelectSession: (projectId: string, sessionId: string) => {
+				const s = sessionsByProject.get(projectId)?.get(sessionId);
+				return Promise.resolve(s ? { ...s, messages: [...s.messages] } : null);
+			},
+			chatRenameSession: (projectId: string, sessionId: string, title: string) => {
+				const s = sessionsByProject.get(projectId)?.get(sessionId);
+				if (!s) return Promise.resolve(null);
+				const trimmed = title.trim();
+				if (trimmed) s.title = trimmed;
+				return Promise.resolve(summarize(s));
+			},
+			chatDeleteSession: (projectId: string, sessionId: string) => {
+				const m = sessionsByProject.get(projectId);
+				if (!m?.has(sessionId)) return Promise.resolve({ success: false });
+				m.delete(sessionId);
+				return Promise.resolve({ success: true });
+			},
 		},
 		project: {
 			getCurrentContext: () =>

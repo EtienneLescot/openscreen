@@ -6,5 +6,5 @@ export const BLUR_REGIONS_ENABLED = false;
 // Local Whisper is privacy-safe and also not gated. The new editor ships as
 // the default from Phase 1 PR 1.3 onward; this flag is just the AI-features
 // opt-in. Renamed from AI_EDITION_ENABLED on 2026-06-26 — see
-// docs/architecture/ai-edition-merge-plan.md §0 / §5.9.
+// docs/architecture/ai-edition-roadmap.md §1 / §3 (decision 9).
 export const AI_FEATURES_ENABLED = true;

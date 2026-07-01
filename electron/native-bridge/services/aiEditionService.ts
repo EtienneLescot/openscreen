@@ -3,6 +3,8 @@ import type {
 	AiEditionAssetResult,
 	AiEditionChatMessage,
 	AiEditionChatResult,
+	AiEditionChatSession,
+	AiEditionChatSessionSummary,
 	AiEditionDocumentResult,
 	AiEditionLlmConfig,
 	AiEditionLlmSnapshot,
@@ -15,9 +17,19 @@ import { PROVIDER_DEFINITIONS } from "../../ai-edition/provider-registry";
 export interface AiEditionServiceOptions {
 	documents: DocumentService;
 	llmConfig: LlmConfigStore;
-	runChat: (projectId: string, message: string) => Promise<AiEditionChatResult>;
-	getChatHistory: (projectId: string) => Promise<AiEditionChatMessage[]>;
-	clearChatHistory: (projectId: string) => void;
+	runChat: (projectId: string, sessionId: string, message: string) => Promise<AiEditionChatResult>;
+	runChatDefault: (projectId: string, message: string) => Promise<AiEditionChatResult>;
+	getDefaultChatHistory: (projectId: string) => AiEditionChatMessage[];
+	clearDefaultChatHistory: (projectId: string) => void;
+	listSessions: (projectId: string) => AiEditionChatSessionSummary[];
+	createSession: (projectId: string, title?: string) => AiEditionChatSessionSummary;
+	selectSession: (projectId: string, sessionId: string) => AiEditionChatSession | null;
+	renameSession: (
+		projectId: string,
+		sessionId: string,
+		title: string,
+	) => AiEditionChatSessionSummary | null;
+	deleteSession: (projectId: string, sessionId: string) => boolean;
 }
 
 export class AiEditionService {
@@ -132,16 +144,53 @@ export class AiEditionService {
 		}
 	}
 
-	async chatRun(projectId: string, message: string): Promise<AiEditionChatResult> {
-		return this.options.runChat(projectId, message);
+	async chatRun(
+		projectId: string,
+		sessionId: string,
+		message: string,
+	): Promise<AiEditionChatResult> {
+		return this.options.runChat(projectId, sessionId, message);
 	}
 
-	async chatHistory(projectId: string): Promise<AiEditionChatMessage[]> {
-		return this.options.getChatHistory(projectId);
+	async chatRunDefault(projectId: string, message: string): Promise<AiEditionChatResult> {
+		return this.options.runChatDefault(projectId, message);
 	}
 
-	async chatClear(projectId: string): Promise<{ success: boolean }> {
-		this.options.clearChatHistory(projectId);
+	chatHistoryDefault(projectId: string): AiEditionChatMessage[] {
+		return this.options.getDefaultChatHistory(projectId);
+	}
+
+	chatClearDefault(projectId: string): { success: boolean } {
+		this.options.clearDefaultChatHistory(projectId);
 		return { success: true };
+	}
+
+	chatListSessions(projectId: string): AiEditionChatSessionSummary[] {
+		return this.options.listSessions(projectId);
+	}
+
+	chatCreateSession(projectId: string, title?: string): AiEditionChatSessionSummary {
+		return this.options.createSession(projectId, title);
+	}
+
+	chatSelectSession(projectId: string, sessionId: string): AiEditionChatSession | null {
+		return this.options.selectSession(projectId, sessionId);
+	}
+
+	chatRenameSession(
+		projectId: string,
+		sessionId: string,
+		title: string,
+	): AiEditionChatSessionSummary | null {
+		return this.options.renameSession(projectId, sessionId, title);
+	}
+
+	chatDeleteSession(projectId: string, sessionId: string): { success: boolean } {
+		return { success: this.options.deleteSession(projectId, sessionId) };
+	}
+
+	chatMessages(projectId: string, sessionId: string): AiEditionChatMessage[] {
+		const session = this.options.selectSession(projectId, sessionId);
+		return session?.messages ?? [];
 	}
 }

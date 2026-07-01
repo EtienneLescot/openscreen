@@ -139,6 +139,22 @@ export interface AiEditionChatResult {
 	error?: string;
 }
 
+export interface AiEditionChatSessionSummary {
+	id: string;
+	projectId: string;
+	title: string;
+	createdAt: string;
+	messageCount: number;
+}
+
+export interface AiEditionChatSession {
+	id: string;
+	projectId: string;
+	title: string;
+	createdAt: string;
+	messages: AiEditionChatMessage[];
+}
+
 export type NativeBridgeErrorCode =
 	| "INVALID_REQUEST"
 	| "UNSUPPORTED_ACTION"
@@ -344,6 +360,12 @@ export type NativeBridgeRequest =
 	| {
 			domain: "aiEdition";
 			action: "chat.run";
+			payload: { projectId: string; sessionId: string; message: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.runDefault";
 			payload: { projectId: string; message: string };
 			requestId?: string;
 	  }
@@ -357,6 +379,36 @@ export type NativeBridgeRequest =
 			domain: "aiEdition";
 			action: "chat.clear";
 			payload: { projectId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.listSessions";
+			payload: { projectId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.createSession";
+			payload: { projectId: string; title?: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.selectSession";
+			payload: { projectId: string; sessionId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.renameSession";
+			payload: { projectId: string; sessionId: string; title: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.deleteSession";
+			payload: { projectId: string; sessionId: string };
 			requestId?: string;
 	  };
 

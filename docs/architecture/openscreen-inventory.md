@@ -690,7 +690,7 @@ Validates every locale folder has the same key tree as `en/` for all 7 namespace
   - `getExportFolder` / `getProjectFolder` are the only places user prefs cross into the IPC layer; AI Edition prefs (default provider, default model, reasoning effort per the merge plan §Phase 9) can extend `UserPreferences` cleanly.
 
 ### Documentation files (`docs/`)
-- `docs/architecture/ai-edition-merge-plan.md` — the merge plan itself.
+- `docs/architecture/ai-edition-roadmap.md` — the merge plan itself.
 - `docs/architecture/native-bridge.md` (39 lines) — describes the versioned IPC pattern.
 - `docs/tests/writing-tests.md`.
 - `docs/testing/windows-native-cursor.md`, `docs/testing/macos-native-cursor.md` — native-helper smoke-test notes.

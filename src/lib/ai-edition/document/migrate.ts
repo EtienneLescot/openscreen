@@ -1,5 +1,5 @@
 // Bidirectional migration between OpenScreen's v2 EditorProjectData and the
-// new v3 AxcutDocument. See docs/architecture/ai-edition-merge-plan.md §2.1
+// new v3 AxcutDocument. See docs/architecture/ai-edition-roadmap.md §2
 // for the field-by-field mapping. The migration is pure (no DOM, no fs, no
 // network) — the renderer probes asset duration at runtime.
 //
