@@ -13,6 +13,7 @@ import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import {
 	type DocumentExportOptions,
+	type ExportVideoCodec,
 	exportAxcutDocument,
 } from "@/lib/ai-edition/exporter/documentExporter";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
@@ -50,6 +51,8 @@ interface ExportDialogProps {
 export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 	const [format, setFormat] = useState<ExportFormat>("mp4");
 	const [quality, setQuality] = useState<ExportQuality>("good");
+	const [fps, setFps] = useState<24 | 30 | 60>(60);
+	const [codec, setCodec] = useState<ExportVideoCodec>("h264");
 	const [gifFrameRate, setGifFrameRate] = useState<GifFrameRate>(15);
 	const [gifSize, setGifSize] = useState<GifSizePreset>("medium");
 	const [gifLoop, setGifLoop] = useState(true);
@@ -113,6 +116,8 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		const options: DocumentExportOptions = {
 			format,
 			quality,
+			frameRate: fps,
+			codec,
 			gifFrameRate,
 			gifLoop,
 			gifSizePreset: gifSize,
@@ -229,6 +234,78 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 									</span>
 								</button>
 							))}
+						</div>
+						<div
+							style={{
+								display: "grid",
+								gridTemplateColumns: "1fr 1fr",
+								gap: 12,
+								marginTop: 12,
+							}}
+						>
+							<div>
+								<div
+									style={{
+										font: "500 11px/1 var(--font-body)",
+										textTransform: "uppercase",
+										letterSpacing: "0.06em",
+										color: "var(--muted)",
+										marginBottom: 8,
+									}}
+								>
+									Frame rate
+								</div>
+								<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+									{([24, 30, 60] as const).map((r) => (
+										<button
+											type="button"
+											key={r}
+											disabled={isBusy}
+											onClick={() => setFps(r)}
+											style={segStyle(fps === r)}
+										>
+											{r}
+										</button>
+									))}
+								</div>
+							</div>
+							<div>
+								<div
+									style={{
+										font: "500 11px/1 var(--font-body)",
+										textTransform: "uppercase",
+										letterSpacing: "0.06em",
+										color: "var(--muted)",
+										marginBottom: 8,
+									}}
+								>
+									Codec
+								</div>
+								<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
+									{(
+										[
+											["h264", "H.264"],
+											["h265", "H.265"],
+											["vp9", "VP9"],
+										] as Array<[ExportVideoCodec, string]>
+									).map(([value, label]) => (
+										<button
+											type="button"
+											key={value}
+											disabled={isBusy}
+											onClick={() => setCodec(value)}
+											style={segStyle(codec === value)}
+											title={
+												value === "h264"
+													? "Best compatibility"
+													: "May not be supported by every system encoder"
+											}
+										>
+											{label}
+										</button>
+									))}
+								</div>
+							</div>
 						</div>
 					</section>
 				) : (

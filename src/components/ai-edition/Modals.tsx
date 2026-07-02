@@ -526,7 +526,7 @@ export function CropModal({ open, onClose, initialRegion, onApply }: CropModalPr
 						height: `${hPct}%`,
 						border: "1.5px solid var(--fg)",
 						borderRadius: 4,
-						boxShadow: "0 0 0 9999px rgba(22,23,29,0.55)",
+						boxShadow: "0 0 0 9999px var(--overlay-dark)",
 						cursor: "move",
 					}}
 				/>

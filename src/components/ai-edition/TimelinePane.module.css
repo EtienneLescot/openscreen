@@ -367,6 +367,19 @@ body:global(.timeline-placing-cut) [class*="vtBtn"] {
 	z-index: 30;
 }
 
+/* P3.7 — hover marker in the ruler: same footprint as .snapGuide but in
+   the accent color so it reads as "preview", not "edit in progress". */
+.hoverGuide {
+	position: absolute;
+	top: 0;
+	height: var(--rule-h, 22px);
+	width: 1px;
+	background: var(--accent);
+	opacity: 0.8;
+	pointer-events: none;
+	z-index: 13;
+}
+
 /* T24 — thin vertical snap-guide lines at the resize edges during
    skip-edge drag. Shown in the ruler area (top: 0; height: 22px).
    Two of them, one per edge being dragged (axcut TimelinePane.tsx). */

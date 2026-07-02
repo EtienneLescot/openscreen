@@ -150,8 +150,16 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 					await get().saveDocument(next);
 					document = parseDocument(next);
 				}
-			} catch {
-				// ponytail: silent — no camera, no problem.
+			} catch (err) {
+				// P3.2 — a missing sidecar is normal (success:false above), but a
+				// *failing* lookup means the recording should have had a camera
+				// and something went wrong. Surface it instead of eating it.
+				const name = addedAsset.originalPath.split(/[\\/]/).pop() ?? addedAsset.originalPath;
+				void import("sonner").then(({ toast }) =>
+					toast.error(`No camera file found next to ${name}`, {
+						description: err instanceof Error ? err.message : String(err),
+					}),
+				);
 			}
 		}
 

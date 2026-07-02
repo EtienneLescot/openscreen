@@ -192,6 +192,11 @@ function createShimBridgeClient() {
 					},
 				});
 			},
+			chatUndoLastBatch: () =>
+				Promise.resolve({
+					success: false,
+					error: "[browser-shim] No agent tool batches to undo in browser mode.",
+				}),
 			chatRunDefault: (projectId: string) => {
 				// ponytail: legacy single-session consumers — pick the most
 				// recent session or auto-create one.

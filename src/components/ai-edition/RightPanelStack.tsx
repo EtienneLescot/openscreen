@@ -186,6 +186,19 @@ function RegionInspector({
 		void saveDocument({ ...document, annotations: next });
 	}, [annot, textDraft, document, selection.id, setDocument, saveDocument]);
 
+	// Shared save path for the inspector's annotation controls (style, figure
+	// and blur sub-objects) — one undo snapshot per change.
+	const patchAnnotation = useCallback(
+		(patch: (a: AxcutAnnotationRegion) => AxcutAnnotationRegion) => {
+			const next = document.annotations.map((a) =>
+				a.id === selection.id ? patch(a as AxcutAnnotationRegion) : a,
+			);
+			setDocument({ ...document, annotations: next });
+			void saveDocument({ ...document, annotations: next });
+		},
+		[document, selection.id, setDocument, saveDocument],
+	);
+
 	return (
 		<div style={{ display: "grid", gridTemplateRows: "auto 1fr", minHeight: 0 }}>
 			<header className={styles.paneHead}>
@@ -359,6 +372,151 @@ function RegionInspector({
 									))}
 								</select>
 							</Field>
+							<Field label="Font family">
+								<select
+									value={annot.style?.fontFamily ?? "Inter"}
+									onChange={(e) =>
+										patchAnnotation((a) => ({
+											...a,
+											style: { ...a.style, fontFamily: e.target.value },
+										}))
+									}
+									style={selectStyle()}
+								>
+									<option value="Inter">Inter</option>
+									<option value="JetBrains Mono">Mono</option>
+									<option value="Georgia">Serif</option>
+								</select>
+							</Field>
+							{annot.type === "figure" ? (
+								<>
+									<Field label="Arrow direction">
+										<select
+											value={annot.figureData?.arrowDirection ?? "right"}
+											onChange={(e) =>
+												patchAnnotation((a) => ({
+													...a,
+													figureData: {
+														arrowDirection: e.target.value as NonNullable<
+															AxcutAnnotationRegion["figureData"]
+														>["arrowDirection"],
+														color: a.figureData?.color ?? "#34B27B",
+														strokeWidth: a.figureData?.strokeWidth ?? 4,
+													},
+												}))
+											}
+											style={selectStyle()}
+										>
+											{[
+												"up",
+												"down",
+												"left",
+												"right",
+												"up-right",
+												"up-left",
+												"down-right",
+												"down-left",
+											].map((d) => (
+												<option key={d} value={d}>
+													{d}
+												</option>
+											))}
+										</select>
+									</Field>
+									<Field label={`Stroke width — ${annot.figureData?.strokeWidth ?? 4}px`}>
+										<input
+											type="range"
+											min={1}
+											max={16}
+											step={1}
+											value={annot.figureData?.strokeWidth ?? 4}
+											onChange={(e) =>
+												patchAnnotation((a) => ({
+													...a,
+													figureData: {
+														arrowDirection: a.figureData?.arrowDirection ?? "right",
+														color: a.figureData?.color ?? "#34B27B",
+														strokeWidth: Number(e.target.value),
+													},
+												}))
+											}
+											style={{ width: "100%" }}
+										/>
+									</Field>
+								</>
+							) : null}
+							{annot.type === "blur" ? (
+								<>
+									<Field label="Mode">
+										<select
+											value={annot.blurData?.type ?? "mosaic"}
+											onChange={(e) =>
+												patchAnnotation((a) => ({
+													...a,
+													blurData: {
+														type: e.target.value as "blur" | "mosaic",
+														shape: a.blurData?.shape ?? "rectangle",
+														color: a.blurData?.color ?? "white",
+														intensity: a.blurData?.intensity ?? 12,
+														blockSize: a.blurData?.blockSize ?? 12,
+													},
+												}))
+											}
+											style={selectStyle()}
+										>
+											<option value="mosaic">Mosaic</option>
+											<option value="blur">Blur</option>
+										</select>
+									</Field>
+									{(annot.blurData?.type ?? "mosaic") === "blur" ? (
+										<Field label={`Blur radius — ${annot.blurData?.intensity ?? 12}px`}>
+											<input
+												type="range"
+												min={2}
+												max={40}
+												step={1}
+												value={annot.blurData?.intensity ?? 12}
+												onChange={(e) =>
+													patchAnnotation((a) => ({
+														...a,
+														blurData: {
+															type: a.blurData?.type ?? "mosaic",
+															shape: a.blurData?.shape ?? "rectangle",
+															color: a.blurData?.color ?? "white",
+															intensity: Number(e.target.value),
+															blockSize: a.blurData?.blockSize ?? 12,
+														},
+													}))
+												}
+												style={{ width: "100%" }}
+											/>
+										</Field>
+									) : (
+										<Field label={`Mosaic size — ${annot.blurData?.blockSize ?? 12}px`}>
+											<input
+												type="range"
+												min={4}
+												max={48}
+												step={2}
+												value={annot.blurData?.blockSize ?? 12}
+												onChange={(e) =>
+													patchAnnotation((a) => ({
+														...a,
+														blurData: {
+															type: a.blurData?.type ?? "mosaic",
+															shape: a.blurData?.shape ?? "rectangle",
+															color: a.blurData?.color ?? "white",
+															intensity: a.blurData?.intensity ?? 12,
+															blockSize: Number(e.target.value),
+														},
+													}))
+												}
+												style={{ width: "100%" }}
+											/>
+										</Field>
+									)}
+								</>
+							) : null}
 						</>
 					) : null
 				) : selection.kind === "skip" ? (

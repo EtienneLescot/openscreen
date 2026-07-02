@@ -45,7 +45,12 @@ export interface NativeBridgeContext {
 		projectId: string,
 		sessionId: string,
 		message: string,
+		document?: unknown,
 	) => Promise<import("../../src/native/contracts").AiEditionChatResult>;
+	undoAiEditionToolBatch: (
+		projectId: string,
+		sessionId: string,
+	) => import("../../src/native/contracts").AiEditionChatResult;
 	runAiEditionChatDefault: (
 		projectId: string,
 		message: string,
@@ -159,6 +164,7 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 		llmConfig: context.getAiEditionLlmConfig(),
 		runChat: context.runAiEditionChat,
 		runChatDefault: context.runAiEditionChatDefault,
+		undoLastToolBatch: context.undoAiEditionToolBatch,
 		getDefaultChatHistory: context.getAiEditionChatHistoryDefault,
 		clearDefaultChatHistory: context.clearAiEditionChatHistoryDefault,
 		listSessions: context.listAiEditionChatSessions,
@@ -336,6 +342,15 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 									request.payload.projectId,
 									request.payload.sessionId,
 									request.payload.message,
+									request.payload.document,
+								),
+							);
+						case "chat.undoLastBatch":
+							return createSuccessResponse(
+								requestId,
+								aiEditionService.chatUndoLastBatch(
+									request.payload.projectId,
+									request.payload.sessionId,
 								),
 							);
 						case "chat.runDefault":

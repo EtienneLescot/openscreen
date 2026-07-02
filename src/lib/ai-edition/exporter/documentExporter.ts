@@ -32,10 +32,21 @@ import type { CursorRecordingData, CursorTelemetryPoint } from "@/native/contrac
 import { primaryAssetDuration, timelineIntervals } from "../document/timeline";
 import type { AxcutDocument } from "../schema";
 
+export type ExportVideoCodec = "h264" | "h265" | "vp9";
+
+// WebCodecs encoder strings per user-facing codec choice (F2.4). The muxer
+// derives its mp4 track family from the same string.
+const CODEC_STRINGS: Record<ExportVideoCodec, string> = {
+	h264: "avc1.640033",
+	h265: "hvc1.1.6.L120.90",
+	vp9: "vp09.00.10.08",
+};
+
 export interface DocumentExportOptions {
 	quality: ExportQuality;
 	format: ExportFormat;
 	frameRate?: number;
+	codec?: ExportVideoCodec;
 	gifFrameRate?: GifFrameRate;
 	gifLoop?: boolean;
 	gifSizePreset?: GifSizePreset;
@@ -217,7 +228,7 @@ export async function exportAxcutDocument(
 		height: settings.height,
 		frameRate: options.frameRate ?? 60,
 		bitrate: settings.bitrate,
-		codec: "avc1.640033",
+		codec: CODEC_STRINGS[options.codec ?? "h264"],
 	});
 	return exporter.export();
 }

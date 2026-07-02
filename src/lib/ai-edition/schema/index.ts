@@ -73,6 +73,8 @@ export const assetSchema = z.object({
 	proxyPath: z.string().optional(),
 	waveformPath: z.string().optional(),
 	durationSec: z.number().nonnegative().optional(),
+	// P3.1 — file size captured at import time (fs.stat in document-service).
+	sizeBytes: z.number().int().nonnegative().optional(),
 	video: assetVideoSchema.optional(),
 	audio: assetAudioSchema.optional(),
 });
