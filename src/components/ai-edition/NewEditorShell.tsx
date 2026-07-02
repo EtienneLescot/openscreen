@@ -146,7 +146,34 @@ export function NewEditorShell() {
 			if (!window.electronAPI) return;
 			try {
 				const result = await window.electronAPI.getCurrentRecordingSession();
-				if (!result.success || !result.session?.screenVideoPath) return;
+				if (!result.success || !result.session?.screenVideoPath) {
+					// ponytail: no active recording — try to restore the user's
+					// most recent project. The browser-shim's listProjects
+					// returns the seeded `browser-shim-projects` entries, so
+					// e2e tests can land directly in a populated editor; for
+					// real Electron users this is the expected "open last
+					// project on launch" UX.
+					try {
+						const projects = await nativeBridgeClient.aiEdition.listProjects();
+						console.info("[editor] listProjects returned", projects);
+						if (projects.length > 0) {
+							console.info("[editor] auto-loading project", projects[0].id);
+							await loadProject(projects[0].id);
+							const state = useProjectStore.getState();
+							console.info(
+								"[editor] post-loadProject status=",
+								state.status,
+								"error=",
+								JSON.stringify(state.error),
+								"doc=",
+								state.document ? "loaded" : "null",
+							);
+						}
+					} catch (e) {
+						console.warn("[editor] auto-load failed", e);
+					}
+					return;
+				}
 				const screenPath = result.session.screenVideoPath;
 				const label = screenPath.split(/[\\/]/).pop() || "Recording";
 				await createProject(`Recording ${new Date().toLocaleString()}`);
@@ -170,7 +197,7 @@ export function NewEditorShell() {
 				});
 			}
 		})();
-	}, [addAsset, createProject]);
+	}, [addAsset, createProject, loadProject]);
 
 	// Warn on close when dirty
 	useEffect(() => {

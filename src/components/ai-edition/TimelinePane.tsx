@@ -1003,7 +1003,20 @@ export function TimelinePane({
 		(regionMultiSelection?.some((h) => h.kind === kind && h.id === id) ?? false);
 
 	return (
-		<section className={styles.pane}>
+		// ponytail: data-* hooks let the Playwright test agent assert on
+		// observable behavior (zoom, scrub, region count) without scraping
+		// the DOM. Stays in sync with state automatically — render-only,
+		// no logic change.
+		<section
+			className={styles.pane}
+			data-testid="timeline-pane"
+			data-clip-count={orderedClips.length}
+			data-skip-count={skipRanges.length}
+			data-zoom-range-count={zoomRegions.length}
+			data-annotation-count={annotationRegions.length}
+			data-current-time-sec={currentTimeSec.toFixed(3)}
+			data-zoom-multiplier={zoom.toFixed(3)}
+		>
 			<div
 				ref={viewportRef}
 				className={
@@ -1017,6 +1030,8 @@ export function TimelinePane({
 									? `${styles.viewport} ${styles.placingCut}`
 									: styles.viewport
 				}
+				data-testid="timeline-viewport"
+				data-px-per-sec={pxPerSec.toFixed(2)}
 				onPointerDown={handleTimelinePointerDown}
 				onPointerMove={(event) => {
 					// pointerType guards against touch-emulation hover
