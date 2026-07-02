@@ -180,7 +180,7 @@ export async function streamLlm(
 		}
 		return streamCopilot(opts, callbacks);
 	}
-	if (def.id === "anthropic") return streamAnthropic(opts, callbacks);
+	if (def.wireProtocol === "anthropic") return streamAnthropic(opts, callbacks);
 	return streamOpenAiCompatible(opts, callbacks);
 }
 
@@ -283,7 +283,7 @@ async function streamAnthropic(
 	opts: CallLlmOptions,
 	cb: LlmStreamCallbacks,
 ): Promise<CallLlmResult> {
-	const def = getProviderDefinition("anthropic");
+	const def = getProviderDefinition(opts.provider) ?? getProviderDefinition("anthropic");
 	const baseUrl = (opts.baseUrl || def?.baseUrl || "https://api.anthropic.com/v1").replace(
 		/\/+$/,
 		"",
@@ -317,6 +317,9 @@ async function streamAnthropic(
 			body.output_config = reasoning.requestBodyPatch.outputConfig;
 		}
 	}
+	// MiniMax rides this same Anthropic-shaped wire path but takes its
+	// reasoning knob as a plain extraBody field (see agent-provider-capabilities.ts).
+	if (reasoning.extraBody) Object.assign(body, reasoning.extraBody);
 
 	const res = await fetch(`${baseUrl}/messages`, {
 		method: "POST",

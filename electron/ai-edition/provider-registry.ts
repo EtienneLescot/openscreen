@@ -20,6 +20,10 @@ export interface ProviderDefinition {
 	setupHint?: string;
 	envKeys: string[];
 	baseUrl?: string;
+	/** Wire protocol the chat/completion call uses. Defaults to "openai" (the
+	 * `/chat/completions` SSE shape). MiniMax's base URL is Anthropic's
+	 * `/messages` API, so it (like Anthropic itself) needs "anthropic". */
+	wireProtocol?: "anthropic" | "openai";
 }
 
 export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
@@ -29,6 +33,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
 		defaultModel: "claude-haiku-4-5",
 		authKind: "api-key",
 		supportsReasoningEffort: true,
+		wireProtocol: "anthropic",
 		envKeys: ["ANTHROPIC_LLM_API_KEY", "ANTHROPIC_API_KEY"],
 		setupHint: "Use ANTHROPIC_API_KEY or paste a Claude API key.",
 	},
@@ -104,9 +109,10 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
 	{
 		id: "minimax",
 		label: "MiniMax API",
-		defaultModel: "MiniMax-M2.7",
+		defaultModel: "MiniMax-M3",
 		authKind: "api-key",
 		supportsReasoningEffort: true,
+		wireProtocol: "anthropic",
 		baseUrl: "https://api.minimax.io/anthropic",
 		envKeys: ["MINIMAX_API_KEY"],
 		setupHint: "Use MINIMAX_API_KEY or paste a MiniMax API key.",
@@ -114,9 +120,10 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
 	{
 		id: "minimax-token-plan",
 		label: "MiniMax Token Plan",
-		defaultModel: "MiniMax-M2.7",
+		defaultModel: "MiniMax-M3",
 		authKind: "api-key",
 		supportsReasoningEffort: true,
+		wireProtocol: "anthropic",
 		baseUrl: "https://api.minimax.io/anthropic",
 		envKeys: ["MINIMAX_TOKEN_PLAN_API_KEY"],
 		setupHint: "Use MINIMAX_TOKEN_PLAN_API_KEY or paste a MiniMax token-plan API key.",

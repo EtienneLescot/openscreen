@@ -23,8 +23,14 @@ import {
 	beginGithubDeviceAuth,
 	completeCodexDeviceAuth,
 	completeGithubDeviceAuth,
+	listAnthropicModels,
 	listGithubCopilotModels,
+	listGoogleModels,
+	listMistralModels,
 	listOpenAiAccountModels,
+	listOpenAiCompatibleModels,
+	listOpenRouterModels,
+	probeMiniMaxModels,
 } from "../../ai-edition/llm-provider-auth";
 import { PROVIDER_DEFINITIONS } from "../../ai-edition/provider-registry";
 
@@ -273,6 +279,32 @@ export class AiEditionService {
 				if (!cred) return { models: [], error: "Not connected" };
 				const models = await listGithubCopilotModels(cred.value);
 				return { models };
+			}
+			const def = PROVIDER_DEFINITIONS.find((d) => d.id === providerId);
+			if (!def) return { models: [], error: `Unknown provider ${providerId}` };
+			const cred = this.options.llmConfig.getCredential(providerId, def.envKeys);
+			if (!cred) return { models: [], error: "Not connected" };
+			const config = this.options.llmConfig.getConfig();
+			const baseUrl = (config?.provider === providerId ? config.baseUrl : undefined) ?? def.baseUrl;
+
+			if (providerId === "anthropic") {
+				return { models: await listAnthropicModels(cred.value) };
+			}
+			if (providerId === "google") {
+				return { models: await listGoogleModels(cred.value) };
+			}
+			if (providerId === "mistral") {
+				return { models: await listMistralModels(cred.value) };
+			}
+			if (providerId === "openrouter") {
+				return { models: await listOpenRouterModels() };
+			}
+			if (providerId === "minimax" || providerId === "minimax-token-plan") {
+				return { models: await probeMiniMaxModels(cred.value, baseUrl) };
+			}
+			if (providerId === "openai" || providerId === "openai-compatible") {
+				if (!baseUrl) return { models: [], error: "Missing base URL" };
+				return { models: await listOpenAiCompatibleModels(baseUrl, cred.value) };
 			}
 			return { models: [], error: `Provider ${providerId} does not expose a dynamic model list` };
 		} catch (error) {
