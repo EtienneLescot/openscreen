@@ -137,7 +137,13 @@ export function Preview({
 	const aspectRatioLabel = editorSettings.aspectRatio;
 
 	return (
-		<section className={styles.previewWrap} aria-label="Video preview">
+		<section
+			className={styles.previewWrap}
+			aria-label="Video preview"
+			data-testid="preview"
+			data-current-time-sec={currentTimeSec.toFixed(3)}
+			data-is-playing={playing ? "true" : "false"}
+		>
 			<div className={styles.previewCanvas}>
 				{hasProject && hasAsset && !videoError ? (
 					<PreviewCanvas
