@@ -122,10 +122,45 @@ export interface AiEditionLlmConfig {
 	allowAgentEdits?: boolean;
 }
 
+export type AiEditionLlmCredentialKind = "api-key" | "codex" | "github-device" | "github-pat";
+
 export interface AiEditionLlmSnapshot {
 	config: AiEditionLlmConfig | null;
 	connectedProviders: string[];
 	availableProviders: Array<{ id: string; label: string; authKind: string }>;
+	/** Per-provider credential metadata so the UI can show `Connect via OAuth` vs `Connect via API key`. */
+	credentialSummary: Array<{
+		providerId: string;
+		connected: boolean;
+		authKind: string;
+		credentialKind: AiEditionLlmCredentialKind | null;
+	}>;
+}
+
+export interface AiEditionDeviceChallenge {
+	verificationUri: string;
+	verificationUriComplete?: string;
+	userCode: string;
+	deviceCode?: string;
+	deviceAuthId?: string;
+	intervalMs: number;
+	expiresAt: number;
+}
+
+export interface AiEditionDeviceCompletionResult {
+	success: boolean;
+	snapshot?: AiEditionLlmSnapshot;
+	error?: string;
+}
+
+export interface AiEditionLlmDisconnectResult {
+	success: boolean;
+	snapshot: AiEditionLlmSnapshot;
+}
+
+export interface AiEditionLlmProviderModelsResult {
+	models: string[];
+	error?: string;
 }
 
 /** One executed agent tool call, rendered as a compact "applied: …" line in
@@ -166,6 +201,18 @@ export interface AiEditionChatSession {
 	title: string;
 	createdAt: string;
 	messages: AiEditionChatMessage[];
+}
+
+export interface AiEditionChatBudget {
+	usedTokens: number;
+	budgetTokens: number;
+	ratio: number;
+}
+
+export interface AiEditionChatCompactResult {
+	session: AiEditionChatSession;
+	summaryMessageId: string | null;
+	summary: string;
 }
 
 export type NativeBridgeErrorCode =
@@ -372,6 +419,38 @@ export type NativeBridgeRequest =
 	  }
 	| {
 			domain: "aiEdition";
+			action: "llm.beginDeviceAuth";
+			payload: {
+				providerId: "openai-oauth" | "copilot-proxy";
+				/** Optional model — recorded into the config when the device flow completes. */
+				model?: string;
+			};
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "llm.completeDeviceAuth";
+			payload: {
+				providerId: "openai-oauth" | "copilot-proxy";
+				challenge: AiEditionDeviceChallenge;
+				model?: string;
+			};
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "llm.disconnect";
+			payload: { providerId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "llm.listProviderModels";
+			payload: { providerId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
 			action: "chat.run";
 			payload: {
 				projectId: string;
@@ -434,6 +513,18 @@ export type NativeBridgeRequest =
 	| {
 			domain: "aiEdition";
 			action: "chat.deleteSession";
+			payload: { projectId: string; sessionId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.budget";
+			payload: { projectId: string; sessionId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.compact";
 			payload: { projectId: string; sessionId: string };
 			requestId?: string;
 	  };

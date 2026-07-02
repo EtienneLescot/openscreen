@@ -1,17 +1,31 @@
 import { documentSchema } from "../../../src/lib/ai-edition/schema";
 import type {
 	AiEditionAssetResult,
+	AiEditionChatBudget,
+	AiEditionChatCompactResult,
 	AiEditionChatMessage,
 	AiEditionChatResult,
 	AiEditionChatSession,
 	AiEditionChatSessionSummary,
+	AiEditionDeviceChallenge,
+	AiEditionDeviceCompletionResult,
 	AiEditionDocumentResult,
 	AiEditionLlmConfig,
+	AiEditionLlmDisconnectResult,
 	AiEditionLlmSnapshot,
 	AiEditionProjectSummary,
 } from "../../../src/native/contracts";
+import { compactSession, getSessionBudget } from "../../ai-edition/chat-service";
 import type { DocumentService } from "../../ai-edition/document-service";
-import type { LlmConfigStore } from "../../ai-edition/llm-config-store";
+import type { LlmConfigStore, LlmCredential } from "../../ai-edition/llm-config-store";
+import {
+	beginCodexDeviceAuth,
+	beginGithubDeviceAuth,
+	completeCodexDeviceAuth,
+	completeGithubDeviceAuth,
+	listGithubCopilotModels,
+	listOpenAiAccountModels,
+} from "../../ai-edition/llm-provider-auth";
 import { PROVIDER_DEFINITIONS } from "../../ai-edition/provider-registry";
 
 export interface AiEditionServiceOptions {
@@ -107,10 +121,18 @@ export class AiEditionService {
 
 	async llmGetSnapshot(): Promise<AiEditionLlmSnapshot> {
 		const config = this.options.llmConfig.getConfig();
+		const credentialSummary: AiEditionLlmSnapshot["credentialSummary"] = [];
 		const connectedProviders: string[] = [];
 		for (const def of PROVIDER_DEFINITIONS) {
-			const key = this.options.llmConfig.getApiKey(def.id, def.envKeys);
-			if (key) connectedProviders.push(def.id);
+			const resolved = this.options.llmConfig.getCredential(def.id, def.envKeys);
+			const connected = Boolean(resolved);
+			if (connected) connectedProviders.push(def.id);
+			credentialSummary.push({
+				providerId: def.id,
+				connected,
+				authKind: def.authKind,
+				credentialKind: resolved ? resolved.entry.kind : null,
+			});
 		}
 		return {
 			config,
@@ -120,6 +142,7 @@ export class AiEditionService {
 				label: d.label,
 				authKind: d.authKind,
 			})),
+			credentialSummary,
 		};
 	}
 
@@ -134,7 +157,8 @@ export class AiEditionService {
 
 	async llmSetApiKey(providerId: string, apiKey: string): Promise<AiEditionDocumentResult> {
 		try {
-			await this.options.llmConfig.setApiKey(providerId, apiKey);
+			const entry: LlmCredential = { kind: "api-key", apiKey };
+			await this.options.llmConfig.setCredential(providerId, entry);
 			return { success: true };
 		} catch (error) {
 			return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -143,10 +167,116 @@ export class AiEditionService {
 
 	async llmRemoveApiKey(providerId: string): Promise<AiEditionDocumentResult> {
 		try {
-			await this.options.llmConfig.removeApiKey(providerId);
+			await this.options.llmConfig.removeCredential(providerId);
 			return { success: true };
 		} catch (error) {
 			return { success: false, error: error instanceof Error ? error.message : String(error) };
+		}
+	}
+
+	async llmBeginDeviceAuth(
+		providerId: "openai-oauth" | "copilot-proxy",
+		_model?: string,
+	): Promise<AiEditionDeviceChallenge> {
+		if (providerId === "openai-oauth") {
+			return await beginCodexDeviceAuth();
+		}
+		if (providerId === "copilot-proxy") {
+			return await beginGithubDeviceAuth();
+		}
+		throw new Error(`Provider ${providerId} does not support device flow.`);
+	}
+
+	async llmCompleteDeviceAuth(
+		providerId: "openai-oauth" | "copilot-proxy",
+		challenge: AiEditionDeviceChallenge,
+		model?: string,
+	): Promise<AiEditionDeviceCompletionResult> {
+		try {
+			if (providerId === "openai-oauth") {
+				const tokens = await completeCodexDeviceAuth({
+					deviceAuthId: challenge.deviceAuthId ?? "",
+					userCode: challenge.userCode,
+					intervalMs: challenge.intervalMs,
+					expiresAt: challenge.expiresAt,
+				});
+				const entry: LlmCredential = {
+					kind: "codex",
+					apiKey: tokens.accessToken,
+					refreshToken: tokens.refreshToken,
+					accountId: tokens.accountId,
+					expiresAt: tokens.expiresAt,
+				};
+				await this.options.llmConfig.setCredential(providerId, entry);
+			} else if (providerId === "copilot-proxy") {
+				const token = await completeGithubDeviceAuth({
+					deviceCode: challenge.deviceCode ?? "",
+					userCode: challenge.userCode,
+					intervalMs: challenge.intervalMs,
+					expiresAt: challenge.expiresAt,
+				});
+				const entry: LlmCredential = { kind: "github-device", apiKey: token };
+				await this.options.llmConfig.setCredential(providerId, entry);
+			} else {
+				throw new Error(`Provider ${providerId} does not support device flow.`);
+			}
+
+			// Persist the selected model so the chat path knows which model to use.
+			const existing = this.options.llmConfig.getConfig();
+			if (model && (!existing || existing.provider !== providerId)) {
+				await this.options.llmConfig.setConfig({
+					provider: providerId,
+					model,
+					baseUrl: existing?.provider === providerId ? existing.baseUrl : undefined,
+					reasoningEffort: existing?.provider === providerId ? existing.reasoningEffort : undefined,
+				});
+			} else if (!existing) {
+				const def = PROVIDER_DEFINITIONS.find((d) => d.id === providerId);
+				if (def) {
+					await this.options.llmConfig.setConfig({
+						provider: providerId,
+						model: def.defaultModel,
+					});
+				}
+			}
+			return { success: true, snapshot: await this.llmGetSnapshot() };
+		} catch (error) {
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
+		}
+	}
+
+	async llmDisconnect(providerId: string): Promise<AiEditionLlmDisconnectResult> {
+		await this.options.llmConfig.removeCredential(providerId);
+		const active = this.options.llmConfig.getConfig();
+		if (active?.provider === providerId) {
+			await this.options.llmConfig.setConfig({
+				provider: "",
+				model: "",
+			});
+		}
+		return { success: true, snapshot: await this.llmGetSnapshot() };
+	}
+
+	async llmListProviderModels(providerId: string): Promise<{ models: string[]; error?: string }> {
+		try {
+			if (providerId === "openai-oauth") {
+				const cred = this.options.llmConfig.getCredential(providerId, []);
+				if (!cred) return { models: [], error: "Not connected" };
+				const models = await listOpenAiAccountModels(cred.value);
+				return { models };
+			}
+			if (providerId === "copilot-proxy") {
+				const cred = this.options.llmConfig.getCredential(providerId, []);
+				if (!cred) return { models: [], error: "Not connected" };
+				const models = await listGithubCopilotModels(cred.value);
+				return { models };
+			}
+			return { models: [], error: `Provider ${providerId} does not expose a dynamic model list` };
+		} catch (error) {
+			return { models: [], error: error instanceof Error ? error.message : String(error) };
 		}
 	}
 
@@ -203,5 +333,24 @@ export class AiEditionService {
 	chatMessages(projectId: string, sessionId: string): AiEditionChatMessage[] {
 		const session = this.options.selectSession(projectId, sessionId);
 		return session?.messages ?? [];
+	}
+
+	chatBudget(projectId: string, sessionId: string): AiEditionChatBudget | null {
+		return getSessionBudget(projectId, sessionId);
+	}
+
+	async chatCompact(
+		projectId: string,
+		sessionId: string,
+	): Promise<AiEditionChatCompactResult | null> {
+		const result = await compactSession(projectId, sessionId, this.options.llmConfig);
+		if (!result) return null;
+		const session = this.options.selectSession(projectId, sessionId);
+		if (!session) return null;
+		return {
+			session,
+			summaryMessageId: result.summaryMessageId,
+			summary: result.summary,
+		};
 	}
 }
