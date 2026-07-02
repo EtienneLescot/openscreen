@@ -89,10 +89,12 @@ interface TimelinePaneProps {
 	annotationRegions: AnnotationRegion[];
 	speedRegions: SpeedRegion[];
 	regionSelection: RegionSelection | null;
+	// F2.7 — full shift-click selection set, for multi-select highlighting.
+	regionMultiSelection?: RegionSelection[];
 	currentTimeSec: number;
 	selectedClipId: string | null;
 	onSelectClip: (id: string) => void;
-	onSelectRegion: (kind: RegionSelection["kind"], id: string) => void;
+	onSelectRegion: (kind: RegionSelection["kind"], id: string, additive?: boolean) => void;
 	onSeek: (timelineSec: number) => void;
 	onInsertAsset: (assetId: string, index: number) => void;
 	onMoveClip: (clipId: string, toIndex: number) => void;
@@ -266,6 +268,7 @@ export function TimelinePane({
 	annotationRegions,
 	speedRegions,
 	regionSelection,
+	regionMultiSelection,
 	currentTimeSec,
 	selectedClipId,
 	onSelectClip,
@@ -302,6 +305,9 @@ export function TimelinePane({
 	// T16 — tracks whether the user is currently scrubbing so the body
 	// cursor can flip to ew-resize. Cleared on pointerup.
 	const [scrubbing, setScrubbing] = useState(false);
+	// P3.7 — source time under the cursor while hovering the timeline; drives
+	// the ruler's hover marker + time chip. Null when the pointer is outside.
+	const [hoverSec, setHoverSec] = useState<number | null>(null);
 	// viewport state is owned by Bottombar (T11). We only mirror it here.
 	const [panning, setPanning] = useState(false);
 	const [clipReorderState, setClipReorderState] = useState<ClipReorderState | null>(null);
@@ -990,6 +996,12 @@ export function TimelinePane({
 		],
 	);
 
+	// F2.7 — a region is highlighted when it's the focused selection or part
+	// of the shift-click multi-selection.
+	const isRegionSelected = (kind: RegionSelection["kind"], id: string) =>
+		(regionSelection?.kind === kind && regionSelection.id === id) ||
+		(regionMultiSelection?.some((h) => h.kind === kind && h.id === id) ?? false);
+
 	return (
 		<section className={styles.pane}>
 			<div
@@ -1006,17 +1018,22 @@ export function TimelinePane({
 									: styles.viewport
 				}
 				onPointerDown={handleTimelinePointerDown}
-				onPointerMove={
-					pendingCutPlacement
-						? (event) => {
-								// pointerType guards against touch-emulation hover
-								if (event.pointerType === "touch") return;
-								setPendingCutPreviewSec(sourceSecFromClientX(event.clientX));
-							}
-						: undefined
-				}
+				onPointerMove={(event) => {
+					// pointerType guards against touch-emulation hover
+					if (event.pointerType === "touch") return;
+					if (pendingCutPlacement) {
+						setPendingCutPreviewSec(sourceSecFromClientX(event.clientX));
+						return;
+					}
+					// P3.7 — hover feedback: a marker + time chip in the ruler
+					// under the cursor. Click to seek (startScrub handles it).
+					if (orderedClips.length > 0) {
+						setHoverSec(Math.max(0, Math.min(sourceDuration, sourceSecFromClientX(event.clientX))));
+					}
+				}}
 				onPointerLeave={() => {
 					if (pendingCutPlacement) setPendingCutPreviewSec(null);
+					setHoverSec(null);
 				}}
 				onDragOver={handleDragOver}
 				onDragLeave={() => setDropIndex(null)}
@@ -1052,6 +1069,20 @@ export function TimelinePane({
 									{tick.major ? <span>{formatSeconds(tick.timeSec)}</span> : null}
 								</div>
 							))}
+							{hoverSec !== null && !scrubbing && !panning ? (
+								<>
+									<div
+										className={styles.hoverGuide}
+										style={{ left: TIMELINE_START_GUTTER_PX + hoverSec * pxPerSec }}
+									/>
+									<div
+										className={styles.dragTooltip}
+										style={{ left: TIMELINE_START_GUTTER_PX + hoverSec * pxPerSec + 6 }}
+									>
+										{formatSeconds(hoverSec)}
+									</div>
+								</>
+							) : null}
 						</div>
 						{/* T10 — region lanes (annotation / speed / zoom). They live
 						    inside the same .canvas as the clip track so the
@@ -1086,10 +1117,8 @@ export function TimelinePane({
 												span={{ start: a.startMs, end: a.endMs }}
 												label={a.textContent?.slice(0, 40) || "Annotation"}
 												icon={<MessageSquare size={11} strokeWidth={2} aria-hidden="true" />}
-												selected={
-													regionSelection?.kind === "annotation" && regionSelection.id === a.id
-												}
-												onSelect={() => onSelectRegion("annotation", a.id)}
+												selected={isRegionSelected("annotation", a.id)}
+												onSelect={(additive) => onSelectRegion("annotation", a.id, additive)}
 												variant="annotation"
 											/>
 										))}
@@ -1103,8 +1132,8 @@ export function TimelinePane({
 												span={{ start: s.startMs, end: s.endMs }}
 												label={`${s.speed.toFixed(1)}×`}
 												icon={<Timer size={11} strokeWidth={2} aria-hidden="true" />}
-												selected={regionSelection?.kind === "speed" && regionSelection.id === s.id}
-												onSelect={() => onSelectRegion("speed", s.id)}
+												selected={isRegionSelected("speed", s.id)}
+												onSelect={(additive) => onSelectRegion("speed", s.id, additive)}
 												variant="speed"
 											/>
 										))}
@@ -1122,8 +1151,8 @@ export function TimelinePane({
 														: (ZOOM_LABEL[z.depth ?? 1] ?? "1.8×")
 												}
 												icon={<ZoomIn size={11} strokeWidth={2} aria-hidden="true" />}
-												selected={regionSelection?.kind === "zoom" && regionSelection.id === z.id}
-												onSelect={() => onSelectRegion("zoom", z.id)}
+												selected={isRegionSelected("zoom", z.id)}
+												onSelect={(additive) => onSelectRegion("zoom", z.id, additive)}
 												variant="zoom"
 											/>
 										))}

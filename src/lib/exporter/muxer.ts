@@ -25,6 +25,15 @@ export class VideoMuxer {
 		this.audioCodec = audioCodec;
 	}
 
+	// Map the WebCodecs codec string (e.g. "avc1.640033", "hvc1.1.6.L120.90",
+	// "vp09.00.10.08") to mediabunny's codec family for the mp4 track.
+	private videoCodecFamily(): "avc" | "hevc" | "vp9" {
+		const codec = (this.config.codec ?? "").toLowerCase();
+		if (codec.startsWith("hvc1") || codec.startsWith("hev1")) return "hevc";
+		if (codec.startsWith("vp09") || codec.startsWith("vp9")) return "vp9";
+		return "avc";
+	}
+
 	async initialize(): Promise<void> {
 		this.target = new BufferTarget();
 
@@ -35,8 +44,9 @@ export class VideoMuxer {
 			target: this.target,
 		});
 
-		// Codec is deduced from the chunk metadata.
-		this.videoSource = new EncodedVideoPacketSource("avc");
+		// Codec details are deduced from the chunk metadata; the family must
+		// match the encoder codec (F2.4 exposes h264/h265/vp9 in the dialog).
+		this.videoSource = new EncodedVideoPacketSource(this.videoCodecFamily());
 		this.output.addVideoTrack(this.videoSource, {
 			frameRate: this.config.frameRate,
 		});

@@ -7,6 +7,7 @@ import { useCallback, useState } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
 import { createId } from "../document/ids";
+import { resequenceClips } from "../document/timeline";
 import type { AxcutDocument } from "../schema";
 import { probeVideoDuration } from "../timeline/duration";
 import { useProjectStore } from "./projectStore";
@@ -28,27 +29,16 @@ interface RegionHandle {
 
 type Clip = AxcutDocument["timeline"]["clips"][number];
 
-// Lay clips back-to-back from t=0, preserving each clip's own length. Called
-// after any structural change (insert / move / remove) so the timeline never
-// has gaps or overlaps between clips.
-function resequenceClips(clips: Clip[]): Clip[] {
-	let cursor = 0;
-	return clips.map((c) => {
-		const timelineLen = c.timelineEndSec - c.timelineStartSec;
-		const sourceLen = (c.sourceEndSec ?? 0) - c.sourceStartSec;
-		const len = Math.max(0.001, timelineLen > 0 ? timelineLen : sourceLen);
-		const next = { ...c, timelineStartSec: cursor, timelineEndSec: cursor + len };
-		cursor += len;
-		return next;
-	});
-}
-
 export function useTimeline() {
 	const document = useProjectStore((s) => s.document);
 	const projectId = useProjectStore((s) => s.projectId);
 	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
 	const saveDocument = useProjectStore((s) => s.saveDocument);
 	const [selection, setSelection] = useState<RegionHandle | null>(null);
+	// F2.7 — shift-click multi-selection. `selection` stays the inspector's
+	// focused region (the last one clicked); `multiSelection` is the full set
+	// the Delete key operates on.
+	const [multiSelection, setMultiSelection] = useState<RegionHandle[]>([]);
 	const [clipSelection, setClipSelection] = useState<string | null>(null);
 
 	const hasDoc = document !== null && projectId !== null;
@@ -297,15 +287,68 @@ export function useTimeline() {
 			}
 			await saveDocument(next);
 			if (selection?.id === id) setSelection(null);
+			setMultiSelection((prev) => prev.filter((h) => h.id !== id));
 		},
 		[document, selection, saveDocument],
 	);
 
-	const selectRegion = useCallback((kind: RegionKind, id: string) => {
-		setSelection({ kind, id });
-	}, []);
+	// F2.7 — batch removal for multi-selection: one document save (one undo
+	// snapshot) regardless of how many regions are selected.
+	const removeRegions = useCallback(
+		async (handles: RegionHandle[]) => {
+			if (!document || handles.length === 0) return;
+			const zoomIds = new Set(handles.filter((h) => h.kind === "zoom").map((h) => h.id));
+			const skipIds = new Set(handles.filter((h) => h.kind === "skip").map((h) => h.id));
+			const annotationIds = new Set(
+				handles.filter((h) => h.kind === "annotation").map((h) => h.id),
+			);
+			const speedIds = new Set(handles.filter((h) => h.kind === "speed").map((h) => h.id));
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prevSpeed = ((legacy.speedRegions as unknown[]) ?? []).filter(
+				(s) => !speedIds.has((s as { id: string }).id),
+			);
+			const next: AxcutDocument = {
+				...document,
+				zoomRanges: document.zoomRanges.filter(
+					(z) => !zoomIds.has(z.id),
+				) as AxcutDocument["zoomRanges"],
+				annotations: document.annotations.filter((a) => !annotationIds.has(a.id)),
+				timeline: {
+					...document.timeline,
+					skipRanges: document.timeline.skipRanges.filter((s) => !skipIds.has(s.id)),
+				},
+				legacyEditor:
+					speedIds.size > 0 ? { ...legacy, speedRegions: prevSpeed } : document.legacyEditor,
+			};
+			await saveDocument(next);
+			setSelection(null);
+			setMultiSelection([]);
+		},
+		[document, saveDocument],
+	);
 
-	const clearSelection = useCallback(() => setSelection(null), []);
+	const selectRegion = useCallback(
+		(kind: RegionKind, id: string, opts?: { additive?: boolean }) => {
+			const handle = { kind, id };
+			if (opts?.additive) {
+				// Shift-click toggles membership; the focused region follows the click.
+				setMultiSelection((prev) => {
+					const exists = prev.some((h) => h.kind === kind && h.id === id);
+					return exists ? prev.filter((h) => !(h.kind === kind && h.id === id)) : [...prev, handle];
+				});
+				setSelection(handle);
+				return;
+			}
+			setMultiSelection([handle]);
+			setSelection(handle);
+		},
+		[],
+	);
+
+	const clearSelection = useCallback(() => {
+		setSelection(null);
+		setMultiSelection([]);
+	}, []);
 
 	const addClipBefore = useCallback(
 		async (assetId: string) => {
@@ -504,6 +547,53 @@ export function useTimeline() {
 		[document, saveDocument, addClipAfter],
 	);
 
+	// Background probe: read the asset's actual duration and patch the
+	// freshly-inserted clip to use it. Skips if the clip has already been
+	// trimmed (sourceEndSec != PLACEHOLDER_DURATION_SEC) so we never stomp
+	// on user edits. Also persists the duration back onto the asset so
+	// subsequent inserts use the cached value without re-probing.
+	const probeAndCorrectClip = useCallback(
+		async (assetId: string, clipId: string, originalPath: string) => {
+			const probed = await probeVideoDuration(toFileUrl(originalPath));
+			if (probed == null) return;
+			const state = useProjectStore.getState();
+			const doc = state.document;
+			if (!doc) return;
+			const clip = doc.timeline.clips.find((c) => c.id === clipId);
+			if (!clip) return;
+			// Guard: only correct clips still sitting at the 0..60s placeholder.
+			// If the user has since trimmed the clip or moved on, leave it alone.
+			const stillPlaceholder =
+				clip.sourceStartSec === 0 &&
+				Math.abs((clip.sourceEndSec ?? 0) - PLACEHOLDER_DURATION_SEC) < 0.01;
+			if (!stillPlaceholder) return;
+			const shiftSec = probed - (clip.sourceEndSec ?? PLACEHOLDER_DURATION_SEC);
+			const nextClips = doc.timeline.clips.map((c) => {
+				if (c.id !== clipId) {
+					return {
+						...c,
+						timelineStartSec: c.timelineStartSec + shiftSec,
+						timelineEndSec: c.timelineEndSec + shiftSec,
+					};
+				}
+				return {
+					...c,
+					sourceEndSec: probed,
+					timelineEndSec: c.timelineStartSec + probed,
+				};
+			});
+			const nextAssets = doc.assets.map((a) =>
+				a.id === assetId ? { ...a, durationSec: probed } : a,
+			);
+			await state.saveDocument({
+				...doc,
+				assets: nextAssets,
+				timeline: { ...doc.timeline, clips: nextClips },
+			});
+		},
+		[],
+	);
+
 	// Insert a new full-duration clip for `assetId` at position `index`
 	// (0 = before all, clips.length = after all), then resequence.
 	//
@@ -553,54 +643,7 @@ export function useTimeline() {
 				void probeAndCorrectClip(assetId, newClip.id, asset.originalPath);
 			}
 		},
-		[saveDocument],
-	);
-
-	// Background probe: read the asset's actual duration and patch the
-	// freshly-inserted clip to use it. Skips if the clip has already been
-	// trimmed (sourceEndSec != PLACEHOLDER_DURATION_SEC) so we never stomp
-	// on user edits. Also persists the duration back onto the asset so
-	// subsequent inserts use the cached value without re-probing.
-	const probeAndCorrectClip = useCallback(
-		async (assetId: string, clipId: string, originalPath: string) => {
-			const probed = await probeVideoDuration(toFileUrl(originalPath));
-			if (probed == null) return;
-			const state = useProjectStore.getState();
-			const doc = state.document;
-			if (!doc) return;
-			const clip = doc.timeline.clips.find((c) => c.id === clipId);
-			if (!clip) return;
-			// Guard: only correct clips still sitting at the 0..60s placeholder.
-			// If the user has since trimmed the clip or moved on, leave it alone.
-			const stillPlaceholder =
-				clip.sourceStartSec === 0 &&
-				Math.abs((clip.sourceEndSec ?? 0) - PLACEHOLDER_DURATION_SEC) < 0.01;
-			if (!stillPlaceholder) return;
-			const shiftSec = probed - (clip.sourceEndSec ?? PLACEHOLDER_DURATION_SEC);
-			const nextClips = doc.timeline.clips.map((c) => {
-				if (c.id !== clipId) {
-					return {
-						...c,
-						timelineStartSec: c.timelineStartSec + shiftSec,
-						timelineEndSec: c.timelineEndSec + shiftSec,
-					};
-				}
-				return {
-					...c,
-					sourceEndSec: probed,
-					timelineEndSec: c.timelineStartSec + probed,
-				};
-			});
-			const nextAssets = doc.assets.map((a) =>
-				a.id === assetId ? { ...a, durationSec: probed } : a,
-			);
-			await state.saveDocument({
-				...doc,
-				assets: nextAssets,
-				timeline: { ...doc.timeline, clips: nextClips },
-			});
-		},
-		[],
+		[saveDocument, probeAndCorrectClip],
 	);
 
 	// Reorder a clip to a new index, then resequence timeline positions.
@@ -682,6 +725,7 @@ export function useTimeline() {
 		assets: document?.assets ?? [],
 		hasDoc,
 		selection,
+		multiSelection,
 		clipSelection,
 		addZoom,
 		addSkip,
@@ -689,6 +733,7 @@ export function useTimeline() {
 		addAnnotation,
 		addSpeed,
 		removeRegion,
+		removeRegions,
 		selectRegion,
 		clearSelection,
 		addClipBefore,

@@ -708,6 +708,15 @@ export function NewEditorShell() {
 					return;
 				}
 			}
+			if (ctrl && e.key.toLowerCase() === "x") {
+				// F2.8 — cut: remember the region in the clipboard, then remove it.
+				if (tl.selection && tl.selection.kind !== "skip") {
+					e.preventDefault();
+					const cut = tl.selection;
+					void handleCopyRegion().then(() => tl.removeRegion(cut.kind, cut.id));
+					return;
+				}
+			}
 			if (ctrl && e.key.toLowerCase() === "v") {
 				e.preventDefault();
 				// A selected/copied clip takes priority — pasting with a clip in
@@ -734,6 +743,13 @@ export function NewEditorShell() {
 				return;
 			}
 			if (e.key === "Delete" || e.key === "Backspace") {
+				// F2.7 — a shift-click multi-selection deletes as one batch (one
+				// undo snapshot); a single selection keeps the original path.
+				if (tl.multiSelection.length > 1) {
+					e.preventDefault();
+					void tl.removeRegions(tl.multiSelection);
+					return;
+				}
 				if (tl.selection) {
 					e.preventDefault();
 					void tl.removeRegion(tl.selection.kind, tl.selection.id);
@@ -891,12 +907,13 @@ export function NewEditorShell() {
 					annotationRegions={tl.annotationRegions}
 					speedRegions={tl.speedRegions}
 					selection={tl.selection}
+					multiSelection={tl.multiSelection}
 					hasDoc={tl.hasDoc}
 					onAddZoom={() => void tl.addZoom()}
 					onAddAnnotation={() => void tl.addAnnotation()}
 					onAddSpeed={() => void tl.addSpeed()}
 					setTogglePlaceSkip={setTogglePlaceSkip}
-					onSelectRegion={(kind, id) => tl.selectRegion(kind, id)}
+					onSelectRegion={(kind, id, additive) => tl.selectRegion(kind, id, { additive })}
 					onCaptions={handleCaptions}
 				/>
 			) : null}

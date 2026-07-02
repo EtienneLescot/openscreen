@@ -95,6 +95,22 @@ function collectWordRefs(
 		.map((word) => word.id);
 }
 
+// Lay clips back-to-back from t=0, preserving each clip's own length. Called
+// after any structural change (insert / move / remove / trim) so the timeline
+// never has gaps or overlaps between clips. Shared by useTimeline (UI) and
+// the agent tool executor (main process) so both enforce the same invariant.
+export function resequenceClips(clips: AxcutClip[]): AxcutClip[] {
+	let cursor = 0;
+	return clips.map((c) => {
+		const timelineLen = c.timelineEndSec - c.timelineStartSec;
+		const sourceLen = (c.sourceEndSec ?? 0) - c.sourceStartSec;
+		const len = Math.max(0.001, timelineLen > 0 ? timelineLen : sourceLen);
+		const next = { ...c, timelineStartSec: cursor, timelineEndSec: cursor + len };
+		cursor += len;
+		return next;
+	});
+}
+
 export function subtractInterval(intervals: Interval[], cut: Interval): Interval[] {
 	const output: Interval[] = [];
 	for (const interval of intervals) {

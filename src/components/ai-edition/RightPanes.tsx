@@ -34,13 +34,16 @@ interface PaneProps {
 	title: string;
 	icon: ReactNode;
 	helpLabel?: string;
+	// P3.3 — contextual help shown in a popover when the ? button is clicked.
+	helpText?: string;
 	children: ReactNode;
 }
 
-function Pane({ title, icon, helpLabel, children }: PaneProps) {
+function Pane({ title, icon, helpLabel, helpText, children }: PaneProps) {
+	const [helpOpen, setHelpOpen] = useState(false);
 	return (
 		<div className={`${styles.pane} ${styles.isActive}`}>
-			<header className={styles.paneHead}>
+			<header className={styles.paneHead} style={{ position: "relative" }}>
 				<h2>{title}</h2>
 				<span style={{ marginLeft: "auto", display: "inline-flex", gap: 4 }}>
 					<button
@@ -48,11 +51,35 @@ function Pane({ title, icon, helpLabel, children }: PaneProps) {
 						className={styles.iconBtn}
 						title={helpLabel ?? "Help"}
 						aria-label={helpLabel ?? "Help"}
+						aria-expanded={helpOpen}
+						onClick={() => setHelpOpen((v) => !v)}
 					>
 						<HelpCircle size={14} />
 					</button>
 				</span>
 				<span style={{ display: "none" }}>{icon}</span>
+				{helpOpen ? (
+					<div
+						role="note"
+						style={{
+							position: "absolute",
+							top: "calc(100% + 4px)",
+							right: 8,
+							zIndex: 60,
+							maxWidth: 240,
+							padding: "10px 12px",
+							background: "var(--surface)",
+							border: "1px solid var(--border)",
+							borderRadius: "var(--r-md)",
+							boxShadow: "var(--elev-pop)",
+							color: "var(--fg-2)",
+							font: "400 12px/1.5 var(--font-body)",
+						}}
+						onClick={() => setHelpOpen(false)}
+					>
+						{helpText ?? `Settings for ${title.toLowerCase()}.`}
+					</div>
+				) : null}
 			</header>
 			<div className={styles.paneBody}>{children}</div>
 		</div>
@@ -141,7 +168,11 @@ export function BackgroundPane() {
 	};
 
 	return (
-		<Pane title="Background" icon={<Palette size={14} />}>
+		<Pane
+			title="Background"
+			icon={<Palette size={14} />}
+			helpText="Choose what appears behind the recording: a bundled wallpaper image, a solid color, a gradient, or a custom image from disk."
+		>
 			<div className={styles.paneTabs} role="tablist">
 				<button
 					type="button"
@@ -366,7 +397,11 @@ export function TranscriptPane({
 }) {
 	if (!transcript) {
 		return (
-			<Pane title="Current transcription" icon={<FileText size={14} />}>
+			<Pane
+				title="Current transcription"
+				icon={<FileText size={14} />}
+				helpText="The transcript of the spoken words, generated on-device by Whisper. Click a word to seek; select a range to cut it from the timeline."
+			>
 				<div
 					style={{
 						display: "flex",
@@ -421,7 +456,11 @@ export function TranscriptPane({
 export function VideoEffectsPane() {
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	return (
-		<Pane title="Video effects" icon={<Sliders size={14} />}>
+		<Pane
+			title="Video effects"
+			icon={<Sliders size={14} />}
+			helpText="Frame styling for the recording: background blur, drop shadow, motion blur, corner radius, and padding around the video."
+		>
 			<div className={styles.paneRow}>
 				<span className="label">Blur BG</span>
 				<Toggle
@@ -505,7 +544,11 @@ export function LayoutPane() {
 	// preset isn't PiP.
 	const isPip = settings.webcamLayoutPreset === "picture-in-picture";
 	return (
-		<Pane title="Layout" icon={<LayoutIcon size={14} />}>
+		<Pane
+			title="Layout"
+			icon={<LayoutIcon size={14} />}
+			helpText="How the webcam is composed with the screen: picture-in-picture, vertical stack, dual frame, mask shape, size, and mirroring."
+		>
 			<div className={styles.sectionLabel}>Preset</div>
 			<div className={styles.field}>
 				<label>Layout</label>
@@ -632,7 +675,11 @@ const CURSOR_STYLE_LABELS: Array<{ title: string; d: string }> = [
 export function CursorPane() {
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	return (
-		<Pane title="Cursor" icon={<MousePointerClick size={14} />}>
+		<Pane
+			title="Cursor"
+			icon={<MousePointerClick size={14} />}
+			helpText="Cursor rendering from the recorded telemetry: theme, size, smoothing, motion blur, and click-bounce emphasis."
+		>
 			<div className={styles.paneRow}>
 				<span className="label">Show cursor</span>
 				<Toggle
@@ -722,7 +769,11 @@ export function CursorPane() {
 export function TimelinePaneBody() {
 	const { settings, set, hasDocument } = useEditorSettings();
 	return (
-		<Pane title="Timeline" icon={<CropIcon size={14} />}>
+		<Pane
+			title="Timeline"
+			icon={<CropIcon size={14} />}
+			helpText="Timeline display options, like showing the audio waveform on the trim track."
+		>
 			<div className={styles.paneRow}>
 				<span className="label">Show audio waveform on trim track</span>
 				<Toggle

@@ -15,6 +15,9 @@ export interface LlmConfig {
 	model: string;
 	baseUrl?: string;
 	reasoningEffort?: string;
+	/** P2.5 — when false, the agent's write tools are refused and the model is
+	 * told to ask the user for confirmation. Undefined means enabled. */
+	allowAgentEdits?: boolean;
 }
 
 export interface LlmCredentials {

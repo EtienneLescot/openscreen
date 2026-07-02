@@ -1393,6 +1393,37 @@
 	flex-direction: column;
 	gap: 2px;
 }
+/* F2.6 — vertical snap-guide lines at both edges of the region being
+   dragged/resized. Spans the full lane stack (parity with T24 on the
+   clip timeline). */
+.laneSnapGuide {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 2px;
+	background: var(--danger);
+	box-shadow: 0 0 6px color-mix(in oklch, var(--danger) 60%, transparent);
+	pointer-events: none;
+	z-index: 14;
+}
+/* F2.6 — floating tooltip with the live start – end range (parity with
+   T25 on the clip timeline). */
+.laneDragTooltip {
+	position: absolute;
+	top: -20px;
+	height: 18px;
+	padding: 0 8px;
+	background: var(--surface);
+	border: 1px solid var(--border-soft);
+	border-radius: 9px;
+	color: var(--fg-2);
+	font: 500 10.5px/18px var(--font-mono);
+	letter-spacing: 0.02em;
+	white-space: nowrap;
+	pointer-events: none;
+	z-index: 15;
+	box-shadow: var(--elev-card-soft);
+}
 .laneTrackRow {
 	position: relative;
 	height: 22px;
@@ -1684,7 +1715,7 @@
 .modalBackdrop {
 	position: absolute;
 	inset: 0;
-	background: rgba(22, 23, 29, 0.55);
+	background: var(--overlay-dark);
 	backdrop-filter: blur(4px);
 	-webkit-backdrop-filter: blur(4px);
 }

@@ -1,7 +1,7 @@
 # AI-Edition Merge — Roadmap (feuille de route)
 
 **Single source of truth for the OpenScreen × Axcut merge.**
-Last updated: 2026-07-01 · Branch: `feat/ai-edition`
+Last updated: 2026-07-02 · Branch: `feat/ai-edition`
 
 > This file supersedes `ai-edition-handover.md` and `ai-edition-comprehensive-handover.md`
 > (both deleted) and the phasing detail of `ai-edition-merge-plan.md`. For deep reference
@@ -58,9 +58,9 @@ electron/ai-edition/       document-service · chat-service · llm-call · llm-c
 
 ---
 
-## 4. Current status (2026-07-01)
+## 4. Current status (2026-07-02)
 
-Build health: **`tsc --noEmit` clean · 402 tests pass (50 files)** · lint clean bar pre-existing locale UTF-8.
+Build health: **`tsc --noEmit` clean · 434 tests pass (55 files)** · lint clean.
 
 | Area | State |
 |---|---|
@@ -69,10 +69,10 @@ Build health: **`tsc --noEmit` clean · 402 tests pass (50 files)** · lint clea
 | **Phase 2** VirtualPreview + `PreviewCanvas` (wallpaper, blur, drop-shadow, radius, padding, webcam PiP/dual/vertical/masks, cursor overlay, zoom, annotations) + transport/scrub | ✅ done |
 | **Phase 3** document-driven exporter + Export dialog (MP4 720/1080/source, GIF) | ✅ done (round-trip test pending) |
 | **Phase 4** transcription pipeline + TranscriptEditor + auto-captions (auto-transcribe first) | ✅ done |
-| **Phase 6.1/6.2** chat-service + IPC + LeftPanel chat + ProviderSettings (8 providers) | ✅ done |
+| **Phase 6.1/6.2** chat-service + IPC + LeftPanel chat + ProviderSettings (8 providers) | ✅ done (P1 agent runtime, tool loop, checkpoints, undo added in `55372df`) |
 | **Phase 7** provider registry + fetch-based LLM call (OpenAI-compat + Anthropic) | ✅ done (OAuth/PAT stubbed) |
 | **Phase 8** multi-session chat history (create/list/select/rename/delete) | ✅ done in-memory (`9203c34`), tested |
-| **Phase 9** i18n (`useScopedT` across components, 13 locales), undo/redo (Cmd+Z/⇧Z, works), region clipboard, EmptyState, keyboard shortcuts | ✅ largely done |
+| **Phase 9** i18n (`useScopedT` across components, 13 locales), undo/redo (Cmd+Z/⇧Z, works), region clipboard, EmptyState, keyboard shortcuts | partial — i18n sweep (P3.5) still open |
 
 **Recently fixed on this branch:** design-token aliases (`--primary/--card/--card-foreground/--muted-foreground/--primary-foreground` were referenced but undefined → broke light theme; now mapped in `design-tokens.css`); Settings gear now opens `ShortcutsConfigDialog` (was a toast); dead `ChatPanel.tsx`/`ProjectPanel.tsx` removed; **TimelinePane rewritten to a multi-clip track model + media→timeline drag-drop fixed** (`90b4b3b` — the drop handler was on the whole workbench `<main>`, so drops only ever landed on the Preview); **`handleLoadedMetadata` clip-duration corruption fixed** (`3a4bc91` — it patched `clips[0]` unconditionally regardless of which asset's `<video>` fired the event, desyncing the progress bar from the timeline ruler/playhead whenever a second clip's asset loaded).
 
@@ -115,15 +115,6 @@ The new editor's timeline follows **axcut's custom viewport model**, not the des
 | T16 | Add `body.timeline-panning` / `body.timeline-scrubbing` / `body.timeline-placing-cut` / `body.timeline-reordering` cursor classes. Hover cursor = `pointer`, drag-state cursors per mode. | `:497-512, :654-656, :706-708, :723-725` | — | ✅ done | `6dc2358` |
 | T17 | Compact skip mode: when `(endSec - startSec) * pxPerSec < 18`, render controls icon-only (no labels). | `:990-993`, `styles.css .timeline-skip-strip.compact` | — | ✅ done (no-op — skip controls are icon-only by default; documented here for tracking) | `6dc2358` |
 | T18 | Skip hover-controls viewport-aware positioning (`controlsShiftPx` keeps controls onscreen near viewport edge) | `:1001-1010` | — | ✅ done | `6dc2358` |
-| T10 | Move `.lanes` (annotation/speed/zoom pills) **into the same `.timeline-canvas`** as the clip track, scaled by the same `pxPerSec`, transformed by the same `translateX` | — | `.annotation-track-row`, `.speed-track-row`, `.zoom-track-row` (lanes share container) | ❌ (lanes in separate `.lanes` container, desyncs at zoom > 1×) | — |
-| T11 | Build the navigator strip (`<div class="timeline-navigator">`) below the viewport: full-width row with `.timeline-navigator-skip` mini-marks at percentage positions + `.timeline-navigator-window` overlay (start/end handles + move handle) | `:1036-1066` | — (not in design) | ❌ | — |
-| T12 | Wire navigator window drag → `setVisibleWindow(start, end)`; navigator handles → zoom on either side | `:821-842` | — | ❌ | — |
-| T13 | Remove the bottom zoombar slider (now redundant — the navigator IS the zoom UI). Keep the hint row only. | — | `.zoombar` is just two buttons, no slider | ❌ | — |
-| T14 | Header row inside TimelinePane: "N clips · M skips · X:XX total" + clip N/M indicator + current time + "Place skip" button | `:849-895` | — | ❌ | — |
-| T15 | "Place skip" toggle → `pendingCutPlacement` mode → next click adds a 1s skip via `onAddSkipRange`. Live `pendingCutPreviewSec` marker while armed. Esc cancels. | `:438-475, :495-518` | — | ❌ | — |
-| T16 | Add `body.timeline-panning` / `body.timeline-scrubbing` / `body.timeline-placing-cut` / `body.timeline-reordering` cursor classes. Hover cursor = `pointer`, drag-state cursors per mode. | `:497-512, :654-656, :706-708, :723-725` | — | ❌ | — |
-| T17 | Compact skip mode: when `(endSec - startSec) * pxPerSec < 18`, render controls icon-only (no labels). | `:990-993`, `styles.css .timeline-skip-strip.compact` | — | ❌ | — |
-| T18 | Skip hover-controls viewport-aware positioning (`controlsShiftPx` keeps controls onscreen near viewport edge) | `:1001-1010` | — | ❌ | — |
 | T19 | Wire `onPreviewSource` during pointer drag so the preview scrubs to the cut/skip edge being dragged | `:540-543` | — | ✅ done | `761496e` |
 | T20 | Clip projection during reorder: `cursorSec` resequencing so non-dragged clips reflow when the dragged clip is held out of order | `:439-490` | — | ✅ done | `761496e` (already shipped, see `projectedClipLayoutById` in `TimelinePane.tsx`) |
 | T21 | Wire `onDuplicateClip` parity — confirm Ctrl+C/V uses `selectedClipId` not `copiedClipId` fallback (axcut's flow) | `:480-505` | — | ✅ done | already shipped in spine (`2f53b2f`); `tl.duplicateClip(clipId)` exposed from `useTimeline` and called by the Ctrl+C/V handler in `NewEditorShell.tsx` |
@@ -145,24 +136,51 @@ The new editor's timeline follows **axcut's custom viewport model**, not the des
 **Reverted:**
 - `2e4e4ee` — reverts `e965a5f` (the broken `overflow-x:auto` + `BASE_PX_PER_SEC * zoomLevel` attempt). Lanes-back-in-canvas (T10) and navigator-strip (T11) will replace it properly.
 
-### P1 — functional plumbing still to plug
-- **Agent runtime (Phase 6.3/6.4)** — no real tool-calling agent yet. Chat calls the LLM directly (`llm-call.ts`) but the model can't apply timeline ops. Port Axcut's DeepAgentJS tool set → `electron/ai-edition/agent-runtime.ts`, expose `replace_timeline` / cut ops, save a checkpoint before/after. *Files:* `electron/ai-edition/`, `chat-service.ts`.
-- **Chat persistence (Phase 8 remainder)** — sessions are in-memory (`Map`), lost on app restart. Move to `better-sqlite3` (sessions + messages + checkpoints). *Files:* `electron/ai-edition/chat-service.ts` + new `database.ts`.
-- **OAuth device-flow + PAT auth (Phase 7 remainder)** — `llm-call.ts:68-78` returns "not implemented"; `ProviderSettings.tsx:372/512` shows "connect flow coming soon". Blocks Google / GitHub Copilot / ChatGPT-OAuth providers. *Files:* `llm-call.ts`, `ProviderSettings.tsx`.
+### P1 — functional plumbing (the heart of "AI editor")
+
+| # | Task | File / line anchor | Status | Commit |
+|---|------|--------------------|--------|--------|
+| P1.1 | Define a tool schema: `getCurrentDocument`, `getTranscript`, `addSkip`, `setSkipRange`, `setClipRange`, `replaceTimeline`. JSON-schema per tool, fed to the model as `tools[]`. Lives in `electron/ai-edition/agent-tools.ts` (new). | `chat-service.ts:65-78` (current SYSTEM_PROMPT) | ✅ done | `55372df` |
+| P1.2 | Implement tool execution dispatch: when the LLM returns `tool_calls`, validate args against the schema, run the matching store action (via the IPC bridge in `useTimeline.ts`), and return a JSON result to the model. | `electron/ai-edition/chat-service.ts:130-200` (the `runChat` function) | ✅ done | `55372df` |
+| P1.3 | Save a checkpoint to `chat-service.ts` (or new `agent-runtime.ts`) **before** running each tool — current `replace_timeline` style. The user can roll back. | `chat-service.ts` (no checkpoint layer) | ✅ done | `55372df` |
+| P1.4 | Multi-turn tool loop: the model may chain tools (`addSkip` → `setSkipRange` → `replaceTimeline`). Max iterations cap (e.g. 8). Surface intermediate "I'm trimming silences…" toasts. | `chat-service.ts:150-200` | ✅ done | `55372df` |
+| P1.5 | Replace the system prompt with a tool-aware one: list the tools, give the model a "current document JSON" snapshot it can `replaceTimeline` against. | `chat-service.ts:18-22` (current SYSTEM_PROMPT) | ✅ done | `55372df` |
+| P1.6 | Bridge `agent-runtime` ↔ main process: spawn the runtime inside an Electron `utilityProcess` so long agent runs don't block the renderer. The IPC entry point `ai-edition.runAgent(chatId, message)` returns when done. | new `electron/ai-edition/agent-runtime-main.ts` + `src/native/contracts.ts` | ✅ done | `55372df` |
+| P1.7 | In the chat panel, show a compact "applied: trimmed 0:02.1–0:02.4" line per tool call so the user sees what the model did. | `src/components/ai-edition/LeftPanel.tsx` (chat history block) | ✅ done | `55372df` |
+| P1.8 | Undo button: a single click reverts the last tool batch by re-applying the pre-batch checkpoint. | `chat-service.ts` (no undo yet) | ✅ done | `55372df` |
+| **P2.1** | **Chat persistence (Phase 8 remainder).** Move `sessionsByProject: Map<string, Map<string, ChatSession>>` (in `chat-service.ts:14`) into `better-sqlite3` under `~/.config/openscreen/chat.db`. Tables: `sessions(id, project_id, title, created_at, last_checkpoint_json)`, `messages(id, session_id, role, content, tool_calls_json, created_at)`, `checkpoints(id, session_id, label, document_json, created_at)`. | `electron/ai-edition/chat-service.ts:14` + new `electron/ai-edition/database.ts` | ❌ | — |
+| **P2.2** | **OAuth device-flow + PAT auth (Phase 7 remainder).** Replace the `authKind === "oauth-device"` stub at `llm-call.ts:68-72` with a real device flow: `POST /device/code` → poll `/device/token` → store `access_token` in the OS keychain (`keytar`). Wire `ProviderSettings.tsx:372, 512` "Connect" button to launch the flow and surface the verification URL in a toast. PAT: read from env (`OPENAI_PAT`, `ANTHROPIC_PAT`) at startup. | `llm-call.ts:68-72` + `ProviderSettings.tsx:372, 512` | ❌ | — |
+| **P2.3** | **Provider-registry expand.** Add `google` (gemini-1.5-pro via OAuth) and `github-copilot` (device flow) to `provider-registry.ts:PROVIDER_DEFINITIONS`. | `electron/ai-edition/provider-registry.ts` | ❌ | — |
+| **P2.4** | **Streaming responses.** `runChat` returns a single buffered string today (`chat-service.ts`). Add SSE-style streaming so the chat panel can render tokens as they arrive. | `chat-service.ts` (no stream) | ❌ | — |
+| **P2.5** | **Tool-call permission gate.** Before running a write tool (`setSkipRange`, `replaceTimeline`, etc.), check a "dangerous tools" flag — if disabled, return a friendly "I need you to confirm before I edit your project" message and pause. The user can toggle it in `ProviderSettings.tsx`. | new permission check in `chat-service.ts:runChat` | ❌ | — |
 
 ### P2 — feature completeness vs old editor / design
-- **Auto-zoom "wand" suggestions** — old editor generated zoom regions automatically; wand not ported. *File:* `RightPanes.tsx` (effects), new suggestion helper.
-- **Region inspector advanced options** — arrow direction, figure/blur color, mosaic size, annotation font-family/animation not in inspector. *File:* `RightPanelStack.tsx`.
-- **Advanced export options** — MP4 fps/codec not exposed (only quality presets). *File:* `ExportDialog.tsx`.
-- **Round-trip export test** — render 3-clip + 1-skip project → ffprobe duration/frames. Needs Electron/CI harness.
+
+| # | Task | File / line anchor | Status | Commit |
+|---|------|--------------------|--------|--------|
+| **F2.1** | **Auto-zoom "wand" suggestions.** Add a `suggestZoomRegions` store action that scans `transcript.segments` for low-amplitude ranges (silence heuristic) and proposes `zoomRanges` covering them. Wire to the disabled "Magic" button in `Bottombar.tsx:160-162` (currently `disabled` with no `onClick`). | new helper in `src/lib/ai-edition/store/zoomSuggestions.ts` + `Bottombar.tsx:160-162` | ✅ done | `58feb34` |
+| **F2.2** | **Region inspector — annotation options.** Add `fontFamily` (Inter / Mono / Serif) and `animation` (none / fade / pulse) fields to the `AnnotationRegion` schema; expose a `<select>` per field in `RightPanelStack.tsx`. | `RightPanelStack.tsx` annotation inspector panel + `lib/ai-edition/schema/index.ts` (`annotationSchema`) | ✅ done | `58feb34` |
+| **F2.3** | **Region inspector — figure/blur advanced.** Color picker (already partial), mosaic size slider, blur radius slider, arrow direction toggle for shapes. | `RightPanelStack.tsx` figure/blur subpanel | ✅ done | `58feb34` |
+| **F2.4** | **Advanced export options.** Expose `fps` (24/30/60) and `codec` (h264/h265/vp9) selects in `ExportDialog.tsx` next to the quality preset. Pipe to the existing exporter options object. | `ExportDialog.tsx` form + `src/lib/ai-edition/documentExporter.ts` (consumer) | ✅ done | `58feb34` |
+| **F2.5** | **Round-trip export test.** A vitest (or Playwright) test that creates a 3-clip + 1-skip project in a temp dir, calls the exporter end-to-end, then runs `ffprobe` on the output to assert the duration is the expected sum of clip durations. Marked `test:e2e` so it only runs in CI. | new `src/lib/ai-edition/documentExporter.e2e.test.ts` | ❌ | — |
+| **F2.6** | **Region drag snap-guide + floating tooltip.** axcut has both during region resize. Already shipped on the clip timeline (T24/T25). Port to `RegionTimeline.tsx`: a vertical guide at the snap point + a small tooltip showing the new `startSec` / `endSec` as the user drags a region handle. | `RegionTimeline.tsx` (region handle drag logic) | ✅ done | `01d6b46` |
+| **F2.7** | **Multi-select region operations.** Shift-click to add a region to the selection, then Delete removes all selected. Currently single-region-only. | `RegionTimeline.tsx` selection state + `useTimeline.removeRegion` | ✅ done | `01d6b46` |
+| **F2.8** | **Region clipboard (cut/copy/paste).** Cut removes + remembers, copy remembers, paste inserts at playhead. Currently only `regionClipboard.ts` exists with the storage layer but no UI wiring. | `regionClipboard.ts` (exists) + new shortcut handler in `NewEditorShell.tsx` | ✅ done | `01d6b46` |
 
 ### P3 — polish / fake-data displays
-- **Asset file size** always "—" (`LeftPanel.tsx:41`) — `AxcutAsset` has no `sizeBytes`; add to schema + populate on import.
-- **Camera-sidecar failure is silent** (`projectStore.ts:154`, `NewEditorShell.tsx:145`) — add a "camera linked / not found" toast.
-- **RightPanes header Help buttons** are no-ops (`RightPanes.tsx:48-54`).
-- **Pixel nits:** annotation color default `#ffffff` → `var(--annotation)` (`RightPanelStack.tsx:296`); `.transport .rec[aria-pressed]` hardcoded `#ffffff`; modal backdrop hardcoded `rgba(22,23,29,.55)` → `var(--overlay-dark)`.
-- **i18n:** finish replacing any remaining hardcoded English in `ai-edition/*` with locale keys.
-- **Region drag visual polish:** snap-guide line + floating time tooltip during drag/resize (visual companion to the clamp logic already in `RegionTimeline.tsx`).
+
+| # | Task | File / line anchor | Status | Commit |
+|---|------|--------------------|--------|--------|
+| **P3.1** | **Asset file size.** Add `sizeBytes: z.number().int().nonnegative().optional()` to `assetSchema` in `lib/ai-edition/schema/index.ts`. In `electron/ai-edition/document-service.ts` `addAsset()`, call `fs.stat(input.path).then(s => s.size)` (or sync) and store on the new asset. Renderer `LeftPanel.tsx:formatSize(undefined)` already exists; just thread the bytes through. | `lib/ai-edition/schema/index.ts:assetSchema` + `document-service.ts:addAsset` + `LeftPanel.tsx:formatSize` | ✅ done | `76d78db` |
+| **P3.2** | **Camera-sidecar toast on failure.** In `NewEditorShell.tsx:145` (the `addAsset` flow), wrap the `findRecordingCamera` call in a try/catch and surface failure as `toast.error("No camera file found next to <recording>")`. | `NewEditorShell.tsx:145` + `projectStore.ts:154` | ✅ done | `76d78db` |
+| **P3.3** | **RightPanes header Help buttons.** The `HelpCircle` button at `RightPanes.tsx:48-54` is rendered but `onClick` is a no-op. Wire to a popover that shows contextual help text per right pane (image, color, gradient, custom, effects, transcript). | `RightPanes.tsx:48-54` | ✅ done | `76d78db` |
+| **P3.4** | **Pixel nits.** (a) `RightPanelStack.tsx:296` — annotation color default `#ffffff` → `var(--annotation)`. (b) `.transport .rec[aria-pressed]` hardcoded `#ffffff` → `var(--danger)`. (c) Modal backdrop `rgba(22,23,29,.55)` → `var(--overlay-dark)` (define the var if missing). | `RightPanelStack.tsx`, `NewEditorShell.module.css` (.transport .rec), `design-tokens.css` (modal backdrop) | (a) stale — `<input type="color">` needs hex, schema default already `#ffffff` by design. (b) stale — selector doesn't exist in current code. (c) ✅ done. | `76d78db` (c) |
+| **P3.5** | **i18n sweep.** `ai-edition/*` still has hardcoded English: chat panel strings (`LeftPanel.tsx`), Header readouts in `TimelinePane.tsx` ("2 clips · 2 skips · 0:09.5 total"), modal titles in `Modals.tsx`, `ProviderSettings.tsx` labels, error toasts. Add a new `src/i18n/locales/en/ai-edition.json` namespace + 12 other locales + a smoke test in `src/i18n/__tests__/`. | `LeftPanel.tsx`, `TimelinePane.tsx`, `Modals.tsx`, `ProviderSettings.tsx` | ❌ | — |
+| **P3.6** | **Region drag visual polish (F2.6 in P2).** Tracked under P2 row F2.6. |
+| **P3.7** | **Timeline ruler hover scrub.** Hover the ruler with the mouse, click to seek to that time. Currently the ruler only handles pointerdown for the scrub gesture; a separate `pointermove → setCurrentTime` is missing for hover-feedback. | `TimelinePane.tsx` ruler `<div onPointerDown={handleRulerPointerDown}>` | ✅ done | `76d78db` |
+| **P3.8** | **Track-lane empty state for "no clips".** When `clips.length === 0` and a drop happens, drop a single auto-generated clip from the dropped asset (already does this in `insertClipAt`). But if the asset is unknown format, the placeholder is unhelpful — add a clear "Drag a video from the left to start" hint. Already exists at `TimelinePane.tsx:907-911` ("Drag a video from the media panel here to start your timeline."). Verify the message survives the i18n sweep (P3.5). | `TimelinePane.tsx:907-911` | pending P3.5 — message is in place, awaiting i18n wrap | — |
+| **P3.9** | **NPM-side CSS for the bottombar.** Confirm `Bottombar.module.css` exists or move the bottombar-specific CSS out of `NewEditorShell.module.css`. Currently scattered. | `NewEditorShell.module.css` vs new `Bottombar.module.css` | ❌ | — |
+| **P3.10** | **Stable drag handle ordering.** `RegionTimeline.tsx` — the row handles (.left / .right) are currently absolute-positioned but their stacking doesn't match the design (right handle above the left). Add explicit `z-index: 1` on `.right` to keep it on top. | `RegionTimeline.tsx` | moot — dnd-timeline owns handles now, no `.left`/`.right` CSS in current code | — |
 
 ### Deferred / known limitations
 - **Long-recording scrub lag (>30 min)** — proxy MP4 dropped by decision 6; revival = per-asset "Generate proxy" button.

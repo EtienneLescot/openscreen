@@ -2,10 +2,10 @@ import { Film, Loader2, MessageSquare, Plus, Search, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { AI_FEATURES_ENABLED } from "@/components/video-editor/featureFlags";
-import type { AxcutAsset } from "@/lib/ai-edition/schema";
+import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { nativeBridgeClient } from "@/native/client";
-import type { AiEditionLlmConfig } from "@/native/contracts";
+import type { AiEditionLlmConfig, AiEditionToolCallSummary } from "@/native/contracts";
 import { ChatHistoryModal, SourceTranscriptModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 import { ProviderSettings } from "./ProviderSettings";
@@ -38,7 +38,6 @@ function formatTimecode(sec: number | undefined): string {
 }
 
 function formatSize(bytes: number | undefined): string {
-	// ponytail: AxcutAsset has no size field yet — always em-dash.
 	if (!bytes || !Number.isFinite(bytes)) return "—";
 	if (bytes < 1024) return `${bytes} B`;
 	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
@@ -81,7 +80,7 @@ function MediaList({
 			{assets.map((asset, i) => {
 				const label = asset.label || basename(asset.originalPath);
 				const tc = formatTimecode(asset.durationSec);
-				const size = formatSize(undefined);
+				const size = formatSize(asset.sizeBytes);
 				const palette = THUMB_PALETTE[i % THUMB_PALETTE.length];
 				const isReady = transcriptReadyIds?.has(asset.id);
 				const status = isReady ? "complete" : (assetStatuses?.[asset.id] ?? "idle");
@@ -333,11 +332,16 @@ export function LeftPanel({
 	);
 }
 
+interface ChatDisplayMessage {
+	role: string;
+	content: string;
+	time?: string;
+	toolCalls?: AiEditionToolCallSummary[];
+}
+
 function ChatStripPanel() {
 	const projectId = useProjectStore((s) => s.projectId);
-	const [messages, setMessages] = useState<Array<{ role: string; content: string; time?: string }>>(
-		[],
-	);
+	const [messages, setMessages] = useState<ChatDisplayMessage[]>([]);
 	const [input, setInput] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [llmConfig, setLlmConfig] = useState<AiEditionLlmConfig | null>(null);
@@ -409,6 +413,7 @@ function ChatStripPanel() {
 							role: m.role,
 							content: m.content,
 							time: m.createdAt,
+							toolCalls: m.toolCalls,
 						})),
 					);
 				} else {
@@ -424,25 +429,53 @@ function ChatStripPanel() {
 		scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
 	});
 
+	// Apply a document returned by the agent (tool batch or undo). setDocument
+	// pushes the previous doc to the local undo stack (Cmd+Z also works), then
+	// saveDocument persists it to disk.
+	const applyAgentDocument = useCallback(async (doc: unknown) => {
+		const parsed = ensureDocument(doc);
+		const store = useProjectStore.getState();
+		store.setDocument(parsed);
+		await store.saveDocument(parsed);
+	}, []);
+
 	const send = async () => {
 		if (!projectId || !activeSessionId || !input.trim() || busy) return;
 		const text = input.trim();
 		setInput("");
 		setBusy(true);
 		try {
-			const result = await nativeBridgeClient.aiEdition.chatRun(projectId, activeSessionId, text);
+			// Send the current document snapshot so the agent can run edit tools
+			// against it (P1). Falls back to text-only chat when no doc is open.
+			const documentSnapshot = useProjectStore.getState().document ?? undefined;
+			const result = await nativeBridgeClient.aiEdition.chatRun(
+				projectId,
+				activeSessionId,
+				text,
+				documentSnapshot,
+			);
 			setMessages((prev) => [
 				...prev,
 				{ role: "user", content: text, time: new Date().toLocaleTimeString() },
 			]);
 			const assistant = result.assistantMessage;
 			if (result.success && assistant) {
+				if (result.document) {
+					try {
+						await applyAgentDocument(result.document);
+					} catch (err) {
+						toast.error("Could not apply the agent's edits", {
+							description: err instanceof Error ? err.message : String(err),
+						});
+					}
+				}
 				setMessages((prev) => [
 					...prev,
 					{
 						role: "assistant",
 						content: assistant.content,
 						time: new Date().toLocaleTimeString(),
+						toolCalls: assistant.toolCalls,
 					},
 				]);
 				void refreshSessions(projectId);
@@ -457,6 +490,28 @@ function ChatStripPanel() {
 			setBusy(false);
 		}
 	};
+
+	// P1.8 — one click reverts the last tool batch by re-applying the
+	// pre-batch checkpoint held by the chat service.
+	const undoLastBatch = useCallback(async () => {
+		if (!projectId || !activeSessionId) return;
+		try {
+			const result = await nativeBridgeClient.aiEdition.chatUndoLastBatch(
+				projectId,
+				activeSessionId,
+			);
+			if (result.success && result.document) {
+				await applyAgentDocument(result.document);
+				toast.success("Reverted the agent's last edits");
+			} else {
+				toast.error(result.error ?? "Nothing to undo");
+			}
+		} catch (err) {
+			toast.error("Undo failed", {
+				description: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}, [projectId, activeSessionId, applyAgentDocument]);
 
 	const modelLabel = llmConfig
 		? `${llmConfig.provider} / ${llmConfig.model}`
@@ -755,6 +810,40 @@ function ChatStripPanel() {
 									) : null}
 								</div>
 								<div className={styles.msgBubble}>{m.content}</div>
+								{m.toolCalls?.length ? (
+									<div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>
+										{m.toolCalls.map((call, j) => (
+											<div
+												key={j}
+												style={{
+													font: "500 10px/1.5 var(--font-mono)",
+													color: "var(--success)",
+												}}
+											>
+												applied: {call.summary}
+											</div>
+										))}
+										{i === messages.length - 1 ? (
+											<button
+												type="button"
+												onClick={() => void undoLastBatch()}
+												style={{
+													alignSelf: "flex-start",
+													marginTop: 2,
+													padding: "3px 8px",
+													background: "transparent",
+													border: "1px solid var(--border-soft)",
+													borderRadius: "var(--r-md)",
+													color: "var(--fg-2)",
+													font: "500 10px var(--font-body)",
+													cursor: "pointer",
+												}}
+											>
+												Undo these edits
+											</button>
+										) : null}
+									</div>
+								) : null}
 							</div>
 						))}
 						{busy ? (
