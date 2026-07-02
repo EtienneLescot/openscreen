@@ -6,6 +6,7 @@ import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { nativeBridgeClient } from "@/native/client";
 import type { AiEditionLlmConfig, AiEditionToolCallSummary } from "@/native/contracts";
+import { computeBudget } from "./chatBudget";
 import { ChatHistoryModal, SourceTranscriptModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 import { ProviderSettings } from "./ProviderSettings";
@@ -521,6 +522,35 @@ function ChatStripPanel() {
 			? `Reasoning ${llmConfig.reasoningEffort}`
 			: null;
 
+	// Real context usage — feeds the badge in the chat strip and gates the
+	// auto-compact heuristic on the main side. Recomputed on every messages
+	// change so the % tracks the live history.
+	const budget = computeBudget(messages);
+
+	const compactNow = useCallback(async () => {
+		if (!projectId || !activeSessionId) return;
+		try {
+			const result = await nativeBridgeClient.aiEdition.chatCompact(projectId, activeSessionId);
+			if (!result) {
+				toast.info("Not enough history to compact yet.");
+				return;
+			}
+			setMessages(
+				result.session.messages.map((m) => ({
+					role: m.role,
+					content: m.content,
+					time: m.createdAt,
+					toolCalls: m.toolCalls,
+				})),
+			);
+			toast.success("Compacted earlier context");
+		} catch (err) {
+			toast.error("Compact failed", {
+				description: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}, [projectId, activeSessionId]);
+
 	const newChat = useCallback(async () => {
 		if (!projectId) return;
 		try {
@@ -586,12 +616,20 @@ function ChatStripPanel() {
 		<aside className={styles.panel}>
 			<div className={styles.chatStrip}>
 				<div className={styles.chatStripRow}>
-					<span className={styles.ctxPill}>
+					<span
+						className={styles.ctxPill}
+						title={`${budget.usedTokens} / ${budget.budgetTokens} estimated tokens`}
+					>
 						<span className={styles.d} aria-hidden />
-						0% context
+						{Math.min(100, Math.round(budget.ratio * 100))}% context
 					</span>
 					<span className={styles.stripActions}>
-						<button type="button" title="Compact" aria-label="Compact">
+						<button
+							type="button"
+							title="Compact"
+							aria-label="Compact"
+							onClick={() => void compactNow()}
+						>
 							<svg
 								width={14}
 								height={14}

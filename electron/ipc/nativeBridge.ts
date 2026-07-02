@@ -335,6 +335,33 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 								requestId,
 								await aiEditionService.llmRemoveApiKey(request.payload.providerId),
 							);
+						case "llm.beginDeviceAuth":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.llmBeginDeviceAuth(
+									request.payload.providerId,
+									request.payload.model,
+								),
+							);
+						case "llm.completeDeviceAuth":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.llmCompleteDeviceAuth(
+									request.payload.providerId,
+									request.payload.challenge,
+									request.payload.model,
+								),
+							);
+						case "llm.disconnect":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.llmDisconnect(request.payload.providerId),
+							);
+						case "llm.listProviderModels":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.llmListProviderModels(request.payload.providerId),
+							);
 						case "chat.run":
 							return createSuccessResponse(
 								requestId,
@@ -405,6 +432,19 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 							return createSuccessResponse(
 								requestId,
 								aiEditionService.chatDeleteSession(
+									request.payload.projectId,
+									request.payload.sessionId,
+								),
+							);
+						case "chat.budget":
+							return createSuccessResponse(
+								requestId,
+								aiEditionService.chatBudget(request.payload.projectId, request.payload.sessionId),
+							);
+						case "chat.compact":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.chatCompact(
 									request.payload.projectId,
 									request.payload.sessionId,
 								),

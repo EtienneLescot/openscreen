@@ -11,13 +11,14 @@ import type { CallLlmOptions, CallLlmResult } from "./llm-call";
 
 vi.mock("./llm-call", () => ({
 	callLlm: vi.fn(),
+	streamLlm: vi.fn(),
 }));
 
 import { createSession, runChat, undoLastToolBatch } from "./chat-service";
-import { callLlm } from "./llm-call";
+import { callLlm, streamLlm } from "./llm-call";
 import type { LlmConfigStore } from "./llm-config-store";
 
-const callLlmMock = vi.mocked(callLlm);
+const streamLlmMock = vi.mocked(streamLlm);
 
 function fixtureDocument(): AxcutDocument {
 	const base = createEmptyDocument({ title: "Test", projectId: "proj_loop" });
@@ -56,16 +57,20 @@ function stubConfig(overrides: Record<string, unknown> = {}): LlmConfigStore {
 	return {
 		getConfig: () => ({ provider: "openai", model: "gpt-4o", ...overrides }),
 		getApiKey: () => "sk-test",
+		getCredential: (_id: string, _envKeys: string[]) => ({
+			value: "sk-test",
+			entry: { kind: "api-key", apiKey: "sk-test" },
+		}),
 	} as unknown as LlmConfigStore;
 }
 
 beforeEach(() => {
-	callLlmMock.mockReset();
+	streamLlmMock.mockReset();
 });
 
 describe("runChat tool loop", () => {
 	it("executes tool calls, chains turns, and returns the mutated document", async () => {
-		callLlmMock
+		streamLlmMock
 			.mockResolvedValueOnce({
 				success: true,
 				content: "",
@@ -97,14 +102,14 @@ describe("runChat tool loop", () => {
 		expect(doc.timeline.skipRanges[0]).toMatchObject({ startSec: 5, endSec: 8, origin: "agent" });
 
 		// The second LLM call must see the tool result message.
-		const secondCall = callLlmMock.mock.calls[1][0] as CallLlmOptions;
+		const secondCall = streamLlmMock.mock.calls[1][0] as CallLlmOptions;
 		const toolMsg = secondCall.messages.find((m) => m.role === "tool");
 		expect(toolMsg).toBeDefined();
 		expect(secondCall.tools?.map((t) => t.name)).toContain("addSkip");
 	});
 
 	it("saves a pre-batch checkpoint that undoLastToolBatch restores", async () => {
-		callLlmMock
+		streamLlmMock
 			.mockResolvedValueOnce({
 				success: true,
 				content: "",
@@ -137,7 +142,7 @@ describe("runChat tool loop", () => {
 	});
 
 	it("refuses write tools when allowAgentEdits is false (P2.5)", async () => {
-		callLlmMock
+		streamLlmMock
 			.mockResolvedValueOnce({
 				success: true,
 				content: "",
@@ -166,13 +171,13 @@ describe("runChat tool loop", () => {
 		expect(result.success).toBe(true);
 		expect(result.document).toBeUndefined();
 		expect(result.toolCalls).toBeUndefined();
-		const secondCall = callLlmMock.mock.calls[1][0] as CallLlmOptions;
+		const secondCall = streamLlmMock.mock.calls[1][0] as CallLlmOptions;
 		const toolMsg = secondCall.messages.find((m) => m.role === "tool");
 		expect(toolMsg?.content).toMatch(/edits are disabled/i);
 	});
 
 	it("still allows read tools when edits are disabled", async () => {
-		callLlmMock
+		streamLlmMock
 			.mockResolvedValueOnce({
 				success: true,
 				content: "",
@@ -189,13 +194,13 @@ describe("runChat tool loop", () => {
 			fixtureDocument(),
 		);
 		expect(result.success).toBe(true);
-		const secondCall = callLlmMock.mock.calls[1][0] as CallLlmOptions;
+		const secondCall = streamLlmMock.mock.calls[1][0] as CallLlmOptions;
 		const toolMsg = secondCall.messages.find((m) => m.role === "tool");
 		expect(toolMsg?.content).toContain("asset_1");
 	});
 
 	it("caps the loop at MAX_TOOL_ITERATIONS and reports applied edits", async () => {
-		callLlmMock.mockResolvedValue({
+		streamLlmMock.mockResolvedValue({
 			success: true,
 			content: "",
 			toolCalls: [
@@ -210,26 +215,26 @@ describe("runChat tool loop", () => {
 		const s = createSession("proj_cap");
 		const result = await runChat("proj_cap", s.id, "loop forever", stubConfig(), fixtureDocument());
 		expect(result.success).toBe(true);
-		expect(callLlmMock).toHaveBeenCalledTimes(8);
+		expect(streamLlmMock).toHaveBeenCalledTimes(8);
 		expect(result.assistantMessage?.content).toMatch(/tool-call limit/);
 		expect(documentSchema.parse(result.document).timeline.skipRanges).toHaveLength(8);
 	});
 
 	it("runs text-only (no tools) when no document snapshot is provided", async () => {
-		callLlmMock.mockResolvedValueOnce({ success: true, content: "Hi!" });
+		streamLlmMock.mockResolvedValueOnce({ success: true, content: "Hi!" });
 		const s = createSession("proj_text_only");
 		const result = await runChat("proj_text_only", s.id, "hello", stubConfig());
 		expect(result.success).toBe(true);
 		expect(result.document).toBeUndefined();
-		const call = callLlmMock.mock.calls[0][0] as CallLlmOptions;
+		const call = streamLlmMock.mock.calls[0][0] as CallLlmOptions;
 		expect(call.tools).toBeUndefined();
 	});
 
 	it("embeds the document snapshot in the system prompt (P1.5)", async () => {
-		callLlmMock.mockResolvedValueOnce({ success: true, content: "ok" });
+		streamLlmMock.mockResolvedValueOnce({ success: true, content: "ok" });
 		const s = createSession("proj_prompt");
 		await runChat("proj_prompt", s.id, "hello", stubConfig(), fixtureDocument());
-		const call = callLlmMock.mock.calls[0][0] as CallLlmOptions;
+		const call = streamLlmMock.mock.calls[0][0] as CallLlmOptions;
 		const system = call.messages.find((m) => m.role === "system");
 		expect(system?.content).toContain("Current document snapshot:");
 		expect(system?.content).toContain("clip_1");

@@ -268,6 +268,25 @@ function createShimBridgeClient() {
 				m.delete(sessionId);
 				return Promise.resolve({ success: true });
 			},
+			chatBudget: (projectId: string, sessionId: string) => {
+				const s = sessionsByProject.get(projectId)?.get(sessionId);
+				if (!s) return Promise.resolve(null);
+				const chars = s.messages.reduce((acc, m) => acc + m.content.length, 0);
+				const used = Math.ceil(chars / 4);
+				return Promise.resolve({ usedTokens: used, budgetTokens: 80_000, ratio: used / 80_000 });
+			},
+			chatCompact: (projectId: string, sessionId: string) => {
+				// ponytail: browser shim is a no-op compaction — it just hand-summarizes
+				// instead of round-tripping an LLM call. Returns a placeholder session
+				// so renderers can validate the wiring.
+				const s = sessionsByProject.get(projectId)?.get(sessionId);
+				if (!s) return Promise.resolve(null);
+				return Promise.resolve({
+					session: s,
+					summaryMessageId: null,
+					summary: "(browser shim compaction is a no-op)",
+				});
+			},
 		},
 		project: {
 			getCurrentContext: () =>

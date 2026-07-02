@@ -1,11 +1,17 @@
 import {
 	type AiEditionAssetResult,
+	type AiEditionChatBudget,
+	type AiEditionChatCompactResult,
 	type AiEditionChatMessage,
 	type AiEditionChatResult,
 	type AiEditionChatSession,
 	type AiEditionChatSessionSummary,
+	type AiEditionDeviceChallenge,
+	type AiEditionDeviceCompletionResult,
 	type AiEditionDocumentResult,
 	type AiEditionLlmConfig,
+	type AiEditionLlmDisconnectResult,
+	type AiEditionLlmProviderModelsResult,
 	type AiEditionLlmSnapshot,
 	type AiEditionProjectSummary,
 	type CursorCapabilities,
@@ -211,6 +217,34 @@ export const nativeBridgeClient = {
 				action: "llm.removeApiKey",
 				payload: { providerId },
 			}),
+		llmBeginDeviceAuth: (providerId: "openai-oauth" | "copilot-proxy", model?: string) =>
+			requireNativeBridgeData<AiEditionDeviceChallenge>({
+				domain: "aiEdition",
+				action: "llm.beginDeviceAuth",
+				payload: { providerId, model },
+			}),
+		llmCompleteDeviceAuth: (
+			providerId: "openai-oauth" | "copilot-proxy",
+			challenge: AiEditionDeviceChallenge,
+			model?: string,
+		) =>
+			requireNativeBridgeData<AiEditionDeviceCompletionResult>({
+				domain: "aiEdition",
+				action: "llm.completeDeviceAuth",
+				payload: { providerId, challenge, model },
+			}),
+		llmDisconnect: (providerId: string) =>
+			requireNativeBridgeData<AiEditionLlmDisconnectResult>({
+				domain: "aiEdition",
+				action: "llm.disconnect",
+				payload: { providerId },
+			}),
+		llmListProviderModels: (providerId: string) =>
+			requireNativeBridgeData<AiEditionLlmProviderModelsResult>({
+				domain: "aiEdition",
+				action: "llm.listProviderModels",
+				payload: { providerId },
+			}),
 		chatRun: (
 			projectId: string,
 			sessionIdOrMessage: string,
@@ -285,6 +319,18 @@ export const nativeBridgeClient = {
 			requireNativeBridgeData<{ success: boolean }>({
 				domain: "aiEdition",
 				action: "chat.deleteSession",
+				payload: { projectId, sessionId },
+			}),
+		chatBudget: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<AiEditionChatBudget | null>({
+				domain: "aiEdition",
+				action: "chat.budget",
+				payload: { projectId, sessionId },
+			}),
+		chatCompact: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<AiEditionChatCompactResult | null>({
+				domain: "aiEdition",
+				action: "chat.compact",
 				payload: { projectId, sessionId },
 			}),
 	},

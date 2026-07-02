@@ -18,7 +18,15 @@ import {
 	executeAgentTool,
 	isMutatingTool,
 } from "./agent-tools";
-import { type ChatMessage, callLlm } from "./llm-call";
+import {
+	applyCompaction,
+	budgetSnapshot,
+	buildCompactionPrompt,
+	COMPACTION_SYSTEM_PROMPT,
+	DEFAULT_BUDGET_TOKENS,
+	shouldCompact,
+} from "./chat-compaction";
+import { type ChatMessage, type LlmToolCall, streamLlm } from "./llm-call";
 import type { LlmConfigStore } from "./llm-config-store";
 import { PROVIDER_DEFINITIONS } from "./provider-registry";
 
@@ -174,13 +182,16 @@ export async function runChat(
 		return { success: false, error: `Unknown provider: ${config.provider}` };
 	}
 
-	const apiKey = llmConfig.getApiKey(def.id, def.envKeys);
+	const credential = llmConfig.getCredential(def.id, def.envKeys);
+	const apiKey = credential?.value ?? null;
 	if (!apiKey && def.authKind === "api-key") {
 		return {
 			success: false,
 			error: `No API key for ${def.label}. Add one in Settings → AI.`,
 		};
 	}
+	const accountId =
+		credential?.entry.kind === "codex" ? (credential.entry.accountId ?? undefined) : undefined;
 
 	const sessions = getProjectSessions(projectId);
 	let session = sessions.get(sessionId);
@@ -211,6 +222,24 @@ export async function runChat(
 	};
 	session.messages.push(userMessage);
 
+	// P3.7 — context compaction: when the session grows past the heuristic
+	// budget, summarize the older half into a single "Earlier context"
+	// assistant message. The current user turn stays uncompacted, so the
+	// model still sees the request verbatim.
+	const decision = shouldCompact(session.messages);
+	if (decision && decision.compact) {
+		await tryCompactSession({
+			session,
+			splitIndex: decision.splitIndex,
+			apiKey: apiKey ?? "",
+			provider: config.provider,
+			model: config.model,
+			baseUrl: config.baseUrl,
+			reasoningEffort: config.reasoningEffort,
+			accountId,
+		});
+	}
+
 	const systemPrompt = workingDocument ? buildToolSystemPrompt(workingDocument) : SYSTEM_PROMPT;
 	const loopMessages: ChatMessage[] = [
 		{ role: "system", content: systemPrompt },
@@ -227,21 +256,34 @@ export async function runChat(
 	let finalContent = "";
 
 	for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
-		const result = await callLlm({
-			provider: config.provider,
-			model: config.model,
-			apiKey: apiKey ?? "",
-			baseUrl: config.baseUrl,
-			reasoningEffort: config.reasoningEffort,
-			messages: loopMessages,
-			tools: workingDocument ? AGENT_TOOL_SPECS : undefined,
-		});
+		const collectedToolCalls: LlmToolCall[] = [];
+		const result = await streamLlm(
+			{
+				provider: config.provider,
+				model: config.model,
+				apiKey: apiKey ?? "",
+				baseUrl: config.baseUrl,
+				reasoningEffort: config.reasoningEffort,
+				accountId,
+				messages: loopMessages,
+				tools: workingDocument ? AGENT_TOOL_SPECS : undefined,
+			},
+			{
+				// ponytail: streamLlm already accumulates the deltas internally
+				// and the renderer's chat panel still consumes the finalized
+				// `result.content`. Collecting tool calls here so the existing
+				// tool-execution flow keeps working unchanged.
+				onToolCall: (call) => collectedToolCalls.push(call),
+			},
+		);
 
 		if (!result.success) {
 			return { success: false, error: result.error ?? "Empty response from model." };
 		}
 
-		if (!result.toolCalls?.length) {
+		const toolCalls = collectedToolCalls.length ? collectedToolCalls : (result.toolCalls ?? []);
+
+		if (!toolCalls.length) {
 			finalContent = result.content ?? "";
 			break;
 		}
@@ -249,10 +291,10 @@ export async function runChat(
 		loopMessages.push({
 			role: "assistant",
 			content: result.content ?? "",
-			toolCalls: result.toolCalls,
+			toolCalls,
 		});
 
-		for (const call of result.toolCalls) {
+		for (const call of toolCalls) {
 			if (!workingDocument) {
 				loopMessages.push({
 					role: "tool",
@@ -357,4 +399,121 @@ export function clearDefaultChatHistory(projectId: string): void {
 	const m = sessionsByProject.get(projectId);
 	if (!m) return;
 	for (const s of m.values()) s.messages = [];
+}
+
+// --- Compaction (P3.7) ---------------------------------------------------
+
+export interface SessionBudgetSnapshot {
+	usedTokens: number;
+	budgetTokens: number;
+	ratio: number;
+}
+
+export function getSessionBudget(
+	projectId: string,
+	sessionId: string,
+	budgetTokens: number = DEFAULT_BUDGET_TOKENS,
+): SessionBudgetSnapshot | null {
+	const s = sessionsByProject.get(projectId)?.get(sessionId);
+	if (!s) return null;
+	const snap = budgetSnapshot(s.messages, budgetTokens);
+	return {
+		usedTokens: snap.usedTokens,
+		budgetTokens: snap.budgetTokens,
+		ratio: snap.ratio,
+	};
+}
+
+/**
+ * Force a compaction on the given session. Returns the inserted "Earlier
+ * context" message id, or `null` if there isn't enough history yet.
+ */
+export async function compactSession(
+	projectId: string,
+	sessionId: string,
+	llmConfig: LlmConfigStore,
+): Promise<{ summaryMessageId: string | null; summary: string } | null> {
+	const session = sessionsByProject.get(projectId)?.get(sessionId);
+	if (!session) return null;
+	const config = llmConfig.getConfig();
+	if (!config) return null;
+	const def = PROVIDER_DEFINITIONS.find((d) => d.id === config.provider);
+	const credential = def ? llmConfig.getCredential(def.id, def.envKeys) : null;
+	const apiKey = credential?.value ?? "";
+	const accountId =
+		credential?.entry.kind === "codex" ? (credential.entry.accountId ?? undefined) : undefined;
+
+	const decision = shouldCompact(session.messages);
+	if (!decision) return { summaryMessageId: null, summary: "" };
+
+	const ok = await tryCompactSession({
+		session,
+		splitIndex: decision.splitIndex,
+		apiKey,
+		provider: config.provider,
+		model: config.model,
+		baseUrl: config.baseUrl,
+		reasoningEffort: config.reasoningEffort,
+		accountId,
+	});
+	return ok;
+}
+
+async function tryCompactSession(opts: {
+	session: ChatSession;
+	splitIndex: number;
+	apiKey: string;
+	provider: string;
+	model: string;
+	baseUrl?: string;
+	reasoningEffort?: string;
+	accountId?: string;
+}): Promise<{ summaryMessageId: string | null; summary: string } | null> {
+	const { session, splitIndex, apiKey, provider, model, baseUrl, reasoningEffort, accountId } =
+		opts;
+	const oldMessages = session.messages.slice(0, splitIndex);
+	if (oldMessages.length === 0) return null;
+
+	const prompt = buildCompactionPrompt(oldMessages);
+	let summary = "";
+	try {
+		const result = await streamLlm(
+			{
+				provider,
+				model,
+				apiKey,
+				baseUrl,
+				reasoningEffort,
+				accountId,
+				messages: [
+					{ role: "system", content: COMPACTION_SYSTEM_PROMPT },
+					{ role: "user", content: prompt },
+				],
+			},
+			{
+				onTextDelta: (d) => (summary = `${summary}${d}`),
+			},
+		);
+		if (!result.success || !result.content) {
+			return null;
+		}
+		summary = result.content;
+	} catch {
+		// ponytail: a failed summarize must not break the chat turn — leave
+		// the session as-is and let the next turn try again.
+		return null;
+	}
+
+	const compacted = applyCompaction(
+		session.messages,
+		splitIndex,
+		summary,
+		new Date().toISOString(),
+	);
+	const inserted = compacted[splitIndex];
+	session.messages = compacted;
+	return {
+		summaryMessageId: inserted?.id ?? null,
+		summary,
+	};
 }
