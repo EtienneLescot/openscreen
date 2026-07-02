@@ -117,6 +117,9 @@ export interface AiEditionLlmConfig {
 	model: string;
 	baseUrl?: string;
 	reasoningEffort?: string;
+	/** P2.5 — when false, the agent must ask before running write tools.
+	 * Undefined means enabled (edits allowed, protected by checkpoints). */
+	allowAgentEdits?: boolean;
 }
 
 export interface AiEditionLlmSnapshot {
@@ -125,17 +128,27 @@ export interface AiEditionLlmSnapshot {
 	availableProviders: Array<{ id: string; label: string; authKind: string }>;
 }
 
+/** One executed agent tool call, rendered as a compact "applied: …" line in
+ * the chat panel (P1.7). */
+export interface AiEditionToolCallSummary {
+	name: string;
+	summary: string;
+}
+
 export interface AiEditionChatMessage {
 	id: string;
 	role: "user" | "assistant";
 	content: string;
 	createdAt: string;
+	toolCalls?: AiEditionToolCallSummary[];
 }
 
 export interface AiEditionChatResult {
 	success: boolean;
 	assistantMessage?: AiEditionChatMessage;
+	/** Updated document when the agent ran write tools during this turn. */
 	document?: unknown;
+	toolCalls?: AiEditionToolCallSummary[];
 	error?: string;
 }
 
@@ -360,7 +373,20 @@ export type NativeBridgeRequest =
 	| {
 			domain: "aiEdition";
 			action: "chat.run";
-			payload: { projectId: string; sessionId: string; message: string };
+			payload: {
+				projectId: string;
+				sessionId: string;
+				message: string;
+				/** Current AxcutDocument snapshot — enables the agent tool loop.
+				 * When omitted the chat runs text-only (no tools). */
+				document?: unknown;
+			};
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.undoLastBatch";
+			payload: { projectId: string; sessionId: string };
 			requestId?: string;
 	  }
 	| {

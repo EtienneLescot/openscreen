@@ -1,6 +1,8 @@
 import {
 	type DragEndEvent,
+	type DragMoveEvent,
 	type ResizeEndEvent,
+	type ResizeMoveEvent,
 	type Span,
 	TimelineContext,
 	useItem,
@@ -10,14 +12,20 @@ import {
 
 export type { Span };
 
-import { useCallback } from "react";
+import { createContext, useCallback, useContext, useState } from "react";
+import { formatMs } from "@/lib/ai-edition/timeline/format";
 import styles from "./NewEditorShell.module.css";
 
 // Zoom/annotation/speed lanes, made draggable + resizable via dnd-timeline
 // (already a dependency — see OpenScreen's old TimelineWrapper.tsx/Item.tsx/
-// Row.tsx on `main` for the reference this ports). Scoped down from that
-// reference: clamp-to-bounds + collision-clamp against sibling spans are
-// ported, but the snap-guide and floating drag tooltip are not (follow-up).
+// Row.tsx on `main` for the reference this ports): clamp-to-bounds +
+// collision-clamp against sibling spans, plus the F2.6 snap-guide and
+// floating drag tooltip during live drag/resize (parity with the clip
+// timeline's T24/T25).
+
+// F2.6 — the span currently being dragged/resized, resolved through the same
+// clamp pipeline as the final drop. The surface renders guides + tooltip.
+const LiveSpanContext = createContext<{ id: string; span: Span } | null>(null);
 
 const MIN_ITEM_DURATION_MS = 100;
 
@@ -101,8 +109,11 @@ export function RegionTimelineProvider({
 		[clampSpanToBounds, clampToNeighbours, hasOverlap, isCollidable],
 	);
 
+	const [liveSpan, setLiveSpan] = useState<{ id: string; span: Span } | null>(null);
+
 	const onResizeEnd = useCallback(
 		(event: ResizeEndEvent) => {
+			setLiveSpan(null);
 			const updatedSpan = event.active.data.current.getSpanFromResizeEvent?.(event);
 			if (!updatedSpan) return;
 			const activeItemId = event.active.id as string;
@@ -114,6 +125,7 @@ export function RegionTimelineProvider({
 
 	const onDragEnd = useCallback(
 		(event: DragEndEvent) => {
+			setLiveSpan(null);
 			if (!event.over) return;
 			const updatedSpan = event.active.data.current.getSpanFromDragEvent?.(event);
 			if (!updatedSpan) return;
@@ -124,6 +136,31 @@ export function RegionTimelineProvider({
 		[onItemSpanChange, resolveSpan],
 	);
 
+	// F2.6 — live feedback while the pointer is still down. The resolved span
+	// is what would be committed on release, so the guide/tooltip show the
+	// clamped values (not the raw pointer position).
+	const onResizeMove = useCallback(
+		(event: ResizeMoveEvent) => {
+			const updatedSpan = event.active.data.current.getSpanFromResizeEvent?.(event);
+			if (!updatedSpan) return;
+			const activeItemId = event.active.id as string;
+			const span = resolveSpan(updatedSpan, activeItemId);
+			if (span) setLiveSpan({ id: activeItemId, span });
+		},
+		[resolveSpan],
+	);
+
+	const onDragMove = useCallback(
+		(event: DragMoveEvent) => {
+			const updatedSpan = event.active.data.current.getSpanFromDragEvent?.(event);
+			if (!updatedSpan) return;
+			const activeItemId = event.active.id as string;
+			const span = resolveSpan(updatedSpan, activeItemId);
+			if (span) setLiveSpan({ id: activeItemId, span });
+		},
+		[resolveSpan],
+	);
+
 	return (
 		<TimelineContext
 			range={{ start: 0, end: safeTotalMs }}
@@ -131,10 +168,13 @@ export function RegionTimelineProvider({
 			onRangeChanged={() => {
 				// intentionally empty
 			}}
+			onResizeMove={onResizeMove}
 			onResizeEnd={onResizeEnd}
+			onDragMove={onDragMove}
 			onDragEnd={onDragEnd}
+			onDragCancel={() => setLiveSpan(null)}
 		>
-			{children}
+			<LiveSpanContext.Provider value={liveSpan}>{children}</LiveSpanContext.Provider>
 		</TimelineContext>
 	);
 }
@@ -156,6 +196,8 @@ export function RegionTimelineSurface({
 	children: React.ReactNode;
 }) {
 	const { setTimelineRef, style } = useTimelineContext();
+	const liveSpan = useContext(LiveSpanContext);
+	const msToPx = pxPerSec / 1000;
 	return (
 		<div
 			ref={setTimelineRef}
@@ -167,6 +209,15 @@ export function RegionTimelineSurface({
 			className={styles.laneSurface}
 		>
 			{children}
+			{liveSpan ? (
+				<>
+					<div className={styles.laneSnapGuide} style={{ left: liveSpan.span.start * msToPx }} />
+					<div className={styles.laneSnapGuide} style={{ left: liveSpan.span.end * msToPx }} />
+					<div className={styles.laneDragTooltip} style={{ left: liveSpan.span.end * msToPx + 6 }}>
+						{formatMs(liveSpan.span.start)} – {formatMs(liveSpan.span.end)}
+					</div>
+				</>
+			) : null}
 		</div>
 	);
 }
@@ -198,7 +249,8 @@ interface RegionItemProps {
 	label: string;
 	icon: React.ReactNode;
 	selected: boolean;
-	onSelect: () => void;
+	/** F2.7 — `additive` is true on shift-click (adds to the multi-selection). */
+	onSelect: (additive: boolean) => void;
 	variant: "zoom" | "annotation" | "speed";
 }
 
@@ -229,7 +281,7 @@ export function RegionItem({
 			style={{ ...itemStyle, height: "100%", minWidth: 12 }}
 			{...listeners}
 			{...attributes}
-			onPointerDownCapture={onSelect}
+			onPointerDownCapture={(event) => onSelect(event.shiftKey)}
 		>
 			<div style={{ ...itemContentStyle, height: "100%", minWidth: 24 }}>
 				<div

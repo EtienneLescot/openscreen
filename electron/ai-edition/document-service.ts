@@ -174,11 +174,20 @@ export class DocumentService {
 			);
 		}
 		const absolutePath = path.isAbsolute(input.path) ? input.path : path.resolve(input.path);
+		// P3.1 — capture the file size at import. Non-fatal: a stat failure
+		// (network drive, permissions) just leaves sizeBytes undefined.
+		let sizeBytes: number | undefined;
+		try {
+			sizeBytes = (await fs.stat(absolutePath)).size;
+		} catch {
+			sizeBytes = undefined;
+		}
 		const asset: AxcutAsset = {
 			id: createId("asset"),
 			kind: "video",
 			label: input.label?.trim() || path.basename(absolutePath),
 			originalPath: absolutePath,
+			sizeBytes,
 		};
 		const next: AxcutDocument = {
 			...doc,

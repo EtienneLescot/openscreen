@@ -215,9 +215,11 @@ export const nativeBridgeClient = {
 			projectId: string,
 			sessionIdOrMessage: string,
 			message?: string,
+			document?: unknown,
 		): Promise<AiEditionChatResult> => {
 			// ponytail: polymorphic — legacy 2-arg callers pass (projectId, message).
-			// Multi-session callers pass (projectId, sessionId, message).
+			// Multi-session callers pass (projectId, sessionId, message[, document]).
+			// The document snapshot enables the agent tool loop (P1).
 			if (message === undefined) {
 				return requireNativeBridgeData<AiEditionChatResult>({
 					domain: "aiEdition",
@@ -228,9 +230,15 @@ export const nativeBridgeClient = {
 			return requireNativeBridgeData<AiEditionChatResult>({
 				domain: "aiEdition",
 				action: "chat.run",
-				payload: { projectId, sessionId: sessionIdOrMessage, message },
+				payload: { projectId, sessionId: sessionIdOrMessage, message, document },
 			});
 		},
+		chatUndoLastBatch: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<AiEditionChatResult>({
+				domain: "aiEdition",
+				action: "chat.undoLastBatch",
+				payload: { projectId, sessionId },
+			}),
 		chatRunDefault: (projectId: string, message: string) =>
 			requireNativeBridgeData<AiEditionChatResult>({
 				domain: "aiEdition",

@@ -410,6 +410,34 @@ function ProviderForm({
 				</Field>
 			) : null}
 
+			<Field
+				label="Project edits"
+				hint="When off, the agent must ask before changing the timeline. Edits are always undoable."
+			>
+				<label
+					style={{
+						display: "flex",
+						alignItems: "center",
+						gap: 8,
+						font: "500 12px var(--font-body)",
+						color: "var(--fg-2)",
+						cursor: "pointer",
+					}}
+				>
+					<input
+						type="checkbox"
+						checked={config?.allowAgentEdits !== false}
+						onChange={(e) =>
+							setConfig({
+								...(config ?? { provider: def.id, model: def.defaultModel }),
+								allowAgentEdits: e.target.checked,
+							})
+						}
+					/>
+					Allow the agent to edit the project
+				</label>
+			</Field>
+
 			<div
 				style={{
 					display: "flex",

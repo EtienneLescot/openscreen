@@ -17,8 +17,14 @@ import { PROVIDER_DEFINITIONS } from "../../ai-edition/provider-registry";
 export interface AiEditionServiceOptions {
 	documents: DocumentService;
 	llmConfig: LlmConfigStore;
-	runChat: (projectId: string, sessionId: string, message: string) => Promise<AiEditionChatResult>;
+	runChat: (
+		projectId: string,
+		sessionId: string,
+		message: string,
+		document?: unknown,
+	) => Promise<AiEditionChatResult>;
 	runChatDefault: (projectId: string, message: string) => Promise<AiEditionChatResult>;
+	undoLastToolBatch: (projectId: string, sessionId: string) => AiEditionChatResult;
 	getDefaultChatHistory: (projectId: string) => AiEditionChatMessage[];
 	clearDefaultChatHistory: (projectId: string) => void;
 	listSessions: (projectId: string) => AiEditionChatSessionSummary[];
@@ -148,8 +154,13 @@ export class AiEditionService {
 		projectId: string,
 		sessionId: string,
 		message: string,
+		document?: unknown,
 	): Promise<AiEditionChatResult> {
-		return this.options.runChat(projectId, sessionId, message);
+		return this.options.runChat(projectId, sessionId, message, document);
+	}
+
+	chatUndoLastBatch(projectId: string, sessionId: string): AiEditionChatResult {
+		return this.options.undoLastToolBatch(projectId, sessionId);
 	}
 
 	async chatRunDefault(projectId: string, message: string): Promise<AiEditionChatResult> {

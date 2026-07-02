@@ -9,10 +9,13 @@ import {
 	ZoomIn,
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
 import type { AnnotationRegion } from "@/components/video-editor/types";
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
+import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { suggestZoomRegions } from "@/lib/ai-edition/store/zoomSuggestions";
 import { ASPECT_RATIOS, type AspectRatio } from "@/utils/aspectRatioUtils";
 import { EditClipModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
@@ -37,6 +40,8 @@ interface BottombarProps {
 	annotationRegions: AnnotationRegion[];
 	speedRegions: Array<{ id: string; startMs: number; endMs: number; speed: number }>;
 	selection: RegionHandle | null;
+	// F2.7 — full shift-click selection set, for multi-select highlighting.
+	multiSelection?: RegionHandle[];
 	hasDoc: boolean;
 	onAddZoom: () => void;
 	onAddAnnotation: () => void;
@@ -46,7 +51,7 @@ interface BottombarProps {
 	// handler live here). The Scissors button in this component calls
 	// togglePlaceSkip directly.
 	setTogglePlaceSkip?: (fn: () => void) => void;
-	onSelectRegion: (kind: RegionKind, id: string) => void;
+	onSelectRegion: (kind: RegionKind, id: string, additive?: boolean) => void;
 	onCaptions: () => void;
 }
 
@@ -71,6 +76,7 @@ export function Bottombar({
 	annotationRegions,
 	speedRegions,
 	selection,
+	multiSelection,
 	hasDoc,
 	onAddZoom,
 	onAddAnnotation,
@@ -107,6 +113,36 @@ export function Bottombar({
 			return true;
 		});
 	}, [currentTimeSec]);
+
+	// F2.1 — Magic button: propose zoom regions over sustained speech
+	// segments and append them to the document in one save.
+	const applyZoomSuggestions = useCallback(async () => {
+		const store = useProjectStore.getState();
+		const doc = store.document;
+		if (!doc) return;
+		const suggestions = suggestZoomRegions(doc);
+		if (suggestions.length === 0) {
+			toast.info("No zoom suggestions found", {
+				description: doc.transcripts.length
+					? "No sustained speech segments without an existing zoom."
+					: "Transcribe the recording first — suggestions come from the transcript.",
+			});
+			return;
+		}
+		try {
+			await store.saveDocument({
+				...doc,
+				zoomRanges: [...doc.zoomRanges, ...suggestions] as AxcutDocument["zoomRanges"],
+			});
+			toast.success(
+				`Added ${suggestions.length} zoom suggestion${suggestions.length === 1 ? "" : "s"}`,
+			);
+		} catch (err) {
+			toast.error("Could not apply zoom suggestions", {
+				description: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}, []);
 
 	// T15 — body cursor + Esc-to-cancel while placing a cut. Lives here
 	// (not in TimelinePane) because the state lives here.
@@ -220,7 +256,12 @@ export function Bottombar({
 						<VtBtn label="Captions" title="Auto captions" onClick={onCaptions} disabled={!hasDoc}>
 							<FileText size={17} />
 						</VtBtn>
-						<VtBtn label="Magic" title="Auto zoom suggestions" disabled>
+						<VtBtn
+							label="Magic"
+							title="Auto zoom suggestions — propose zooms over sustained speech"
+							disabled={!hasDoc}
+							onClick={() => void applyZoomSuggestions()}
+						>
 							<WandSparkles size={17} />
 						</VtBtn>
 						<div style={{ position: "relative" }}>
@@ -314,6 +355,7 @@ export function Bottombar({
 							annotationRegions={annotationRegions}
 							speedRegions={speedRegions}
 							regionSelection={selection}
+							regionMultiSelection={multiSelection}
 							currentTimeSec={currentTimeSec}
 							selectedClipId={tl.clipSelection}
 							onSelectClip={tl.selectClip}
