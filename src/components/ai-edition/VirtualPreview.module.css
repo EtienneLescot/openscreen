@@ -15,6 +15,8 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
+	transform-origin: 0 0;
+	will-change: transform;
 }
 
 .video {

@@ -31,6 +31,9 @@ const MIN_ITEM_DURATION_MS = 100;
 
 interface RegionSpanRef {
 	id: string;
+	// ponytail: scopes collision to the same lane — zoom and speed rows are
+	// independent tracks, so a zoom over a speed range (or vice versa) is fine.
+	rowId: string;
 	start: number;
 	end: number;
 }
@@ -66,20 +69,17 @@ export function RegionTimelineProvider({
 		[safeTotalMs],
 	);
 
-	const isCollidable = useCallback(
-		(id: string) => collidableSpans.some((r) => r.id === id),
-		[collidableSpans],
-	);
-
 	const hasOverlap = useCallback(
-		(span: Span, excludeId: string) =>
-			collidableSpans.some((r) => r.id !== excludeId && span.end > r.start && span.start < r.end),
+		(span: Span, excludeId: string, rowId: string) =>
+			collidableSpans.some(
+				(r) => r.id !== excludeId && r.rowId === rowId && span.end > r.start && span.start < r.end,
+			),
 		[collidableSpans],
 	);
 
 	const clampToNeighbours = useCallback(
-		(span: Span, activeItemId: string): Span => {
-			const siblings = collidableSpans.filter((r) => r.id !== activeItemId);
+		(span: Span, activeItemId: string, rowId: string): Span => {
+			const siblings = collidableSpans.filter((r) => r.id !== activeItemId && r.rowId === rowId);
 			let { start, end } = span;
 			for (const r of siblings) {
 				if (end > r.start && start < r.start) end = r.start;
@@ -99,14 +99,19 @@ export function RegionTimelineProvider({
 
 	const resolveSpan = useCallback(
 		(rawSpan: Span, activeItemId: string): Span | null => {
+			// Resolve the active item's row from the collidable set. Annotations
+			// are intentionally not in it, so missing here means "no collision
+			// rules apply" (annotations may freely overlap).
+			const activeRow = collidableSpans.find((r) => r.id === activeItemId)?.rowId;
+			if (!activeRow) return clampSpanToBounds(rawSpan);
 			let span = clampSpanToBounds(rawSpan);
-			if (isCollidable(activeItemId) && hasOverlap(span, activeItemId)) {
-				span = clampToNeighbours(span, activeItemId);
-				if (hasOverlap(span, activeItemId)) return null;
+			if (hasOverlap(span, activeItemId, activeRow)) {
+				span = clampToNeighbours(span, activeItemId, activeRow);
+				if (hasOverlap(span, activeItemId, activeRow)) return null;
 			}
 			return span;
 		},
-		[clampSpanToBounds, clampToNeighbours, hasOverlap, isCollidable],
+		[clampSpanToBounds, clampToNeighbours, hasOverlap, collidableSpans],
 	);
 
 	const [liveSpan, setLiveSpan] = useState<{ id: string; span: Span } | null>(null);
@@ -251,7 +256,7 @@ interface RegionItemProps {
 	selected: boolean;
 	/** F2.7 — `additive` is true on shift-click (adds to the multi-selection). */
 	onSelect: (additive: boolean) => void;
-	variant: "zoom" | "annotation" | "speed";
+	variant: "zoom" | "annotation" | "speed" | "skip";
 }
 
 export function RegionItem({
@@ -274,7 +279,9 @@ export function RegionItem({
 			? styles.zoomPill
 			: variant === "speed"
 				? styles.speedPill
-				: styles.annotationPill;
+				: variant === "skip"
+					? styles.skipPill
+					: styles.annotationPill;
 	return (
 		<div
 			ref={setNodeRef}
