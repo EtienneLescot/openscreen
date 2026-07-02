@@ -420,7 +420,11 @@ function ProviderForm({
 	const showApiKeyField = def.authKind === "api-key" || (def.authKind === "pat" && !isConnected);
 	const showBaseUrl = def.id === "openai-compatible" || Boolean(def.baseUrl);
 	const isCodexOrCopilot = def.authKind === "oauth-device";
-	const supportsDynamicModels = isCodexOrCopilot || def.authKind === "pat";
+	// Every provider now exposes a live model list once connected (matching
+	// axcut's `screen === 'models' && activeProvider?.connected` gate) — API-key
+	// providers hit their own /models endpoint (or, for MiniMax, a probe call)
+	// same as OAuth/PAT providers do.
+	const supportsDynamicModels = true;
 
 	const [modelOptions, setModelOptions] = useState<string[]>([]);
 	const [modelsLoading, setModelsLoading] = useState(false);
