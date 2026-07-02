@@ -1,13 +1,5 @@
 import { type Span } from "dnd-timeline";
-import {
-	ChevronLeft,
-	ChevronRight,
-	MessageSquare,
-	Pencil,
-	Timer,
-	Trash2,
-	ZoomIn,
-} from "lucide-react";
+import { MessageSquare, Pencil, Scissors, Timer, Trash2, ZoomIn } from "lucide-react";
 import {
 	type DragEvent as ReactDragEvent,
 	type PointerEvent as ReactPointerEvent,
@@ -20,7 +12,11 @@ import {
 } from "react";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { startGlobalPointerDrag } from "@/lib/ai-edition/timeline/pointer-drag";
-import { formatSeconds, locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
+import {
+	formatSeconds,
+	locateSourcePosition,
+	locateVirtualPosition,
+} from "@/lib/ai-edition/timeline/virtual-preview";
 import {
 	RegionItem,
 	RegionRow,
@@ -36,7 +32,6 @@ const MAX_PX_PER_SEC = 280;
 const MIN_SOURCE_DURATION_SEC = 0.001;
 const TIMELINE_START_GUTTER_PX = 6;
 const TIMELINE_END_GUTTER_PX = 6;
-const SKIP_CONTROLS_HIDE_DELAY_MS = 220;
 const CLIP_REORDER_THRESHOLD_PX = 6;
 
 const ASSET_MIME = "application/x-axcut-asset";
@@ -100,12 +95,6 @@ interface TimelinePaneProps {
 	onMoveClip: (clipId: string, toIndex: number) => void;
 	onEditClip: (clip: AxcutClip) => void;
 	onRemoveClip: (clipId: string) => void;
-	onUpdateSkipRange: (skipId: string, startSec: number, endSec: number) => void;
-	// T19 — called during skip-edge resize so the preview video can
-	// scrub to the edge being dragged. Wire from Bottombar →
-	// tl.previewSource(timeSec, assetId) (no-op if undefined).
-	onPreviewSource?: (sourceTimeSec: number, assetId: string) => void;
-	onRemoveSkipRange: (skipId: string) => void;
 	// T15 — Place-skip callback. Bottombar wires this to
 	// tl.addSkipAt(assetId, sourceStartSec, sourceEndSec) so the timeline
 	// pane can add a skip at the cursor's source position without jumping
@@ -133,33 +122,6 @@ interface TimelinePaneProps {
 	// T15 — disarms the place-skip mode after a successful click.
 	onCancelPlaceSkip: () => void;
 }
-
-type KeepSegment = { kind: "keep"; len: number };
-type CutSegment = {
-	kind: "cut";
-	len: number;
-	skipId: string;
-	startSec: number;
-	endSec: number;
-	minStartSec: number;
-	maxEndSec: number;
-};
-type Segment = KeepSegment | CutSegment;
-
-// Live state of an in-flight skip-edge resize. Refs are used as a hot-path
-// mirror so move handlers read fresh values without re-creating callbacks.
-type ResizeState = {
-	id: number;
-	itemId: string;
-	edge: "start" | "end";
-	startClientX: number;
-	startSec: number;
-	endSec: number;
-	currentStartSec: number;
-	currentEndSec: number;
-	minStartSec: number;
-	maxEndSec: number;
-};
 
 // T07 — Pan via Alt+drag or middle-click-drag. Refs only; no state needed
 // because the visible window updates frequently and the only side-effect is
@@ -192,38 +154,6 @@ interface ProjectedClipLayout {
 
 function clamp(value: number, min: number, max: number): number {
 	return Math.min(max, Math.max(min, value));
-}
-
-// Split a clip's source span into keep/cut segments using the asset's skip
-// ranges. Cut segments carry the skip id + local drag bounds (clamped to the
-// clip's own source span and the neighboring skip) so they can be resized or
-// deleted in place — mirrors Axcut's per-clip skip strips.
-function clipSegments(clip: AxcutClip, skips: SkipRange[]): Segment[] {
-	const s0 = clip.sourceStartSec;
-	const s1 = clip.sourceEndSec ?? s0;
-	const span = Math.max(0.001, s1 - s0);
-	const cuts = skips
-		.filter((k) => k.assetId === clip.assetId && k.endSec > s0 && k.startSec < s1)
-		.map((k) => ({ skipId: k.id, start: Math.max(s0, k.startSec), end: Math.min(s1, k.endSec) }))
-		.sort((a, b) => a.start - b.start);
-	const segs: Segment[] = [];
-	let cur = s0;
-	cuts.forEach((c, i) => {
-		if (c.start > cur) segs.push({ kind: "keep", len: c.start - cur });
-		segs.push({
-			kind: "cut",
-			len: c.end - c.start,
-			skipId: c.skipId,
-			startSec: c.start,
-			endSec: c.end,
-			minStartSec: i > 0 ? cuts[i - 1].end : s0,
-			maxEndSec: i < cuts.length - 1 ? cuts[i + 1].start : s1,
-		});
-		cur = Math.max(cur, c.end);
-	});
-	if (cur < s1) segs.push({ kind: "keep", len: s1 - cur });
-	if (segs.length === 0) segs.push({ kind: "keep", len: span });
-	return segs;
 }
 
 // Adaptive ruler: major step is the smallest entry in the standard
@@ -287,21 +217,13 @@ export function TimelinePane({
 	onMoveClip,
 	onEditClip,
 	onRemoveClip,
-	onUpdateSkipRange,
-	onPreviewSource,
-	onRemoveSkipRange,
 	onAddSkip,
 	onRegionSpanChange,
 }: TimelinePaneProps) {
 	const viewportRef = useRef<HTMLDivElement | null>(null);
-	const resizeRef = useRef<ResizeState | null>(null);
 	const panRef = useRef<PanState | null>(null);
 	const clipReorderRef = useRef<ClipReorderState | null>(null);
 	const [viewportWidthPx, setViewportWidthPx] = useState(0);
-	// T18 — viewportLeftPx + windowWidthPx for viewport-aware controlsShiftPx
-	// (keeps skip hover-controls onscreen near the viewport edge).
-	const [viewportLeftPx, setViewportLeftPx] = useState(0);
-	const [windowWidthPx, setWindowWidthPx] = useState(0);
 	// T16 — tracks whether the user is currently scrubbing so the body
 	// cursor can flip to ew-resize. Cleared on pointerup.
 	const [scrubbing, setScrubbing] = useState(false);
@@ -311,18 +233,10 @@ export function TimelinePane({
 	// viewport state is owned by Bottombar (T11). We only mirror it here.
 	const [panning, setPanning] = useState(false);
 	const [clipReorderState, setClipReorderState] = useState<ClipReorderState | null>(null);
-	const [hoveredCutId, setHoveredCutId] = useState<string | null>(null);
-	const [dragPreview, setDragPreview] = useState<{
-		skipId: string;
-		startSec: number;
-		endSec: number;
-	} | null>(null);
 	const [dropIndex, setDropIndex] = useState<number | null>(null);
 	// T15 — place-skip state lives in Bottombar (it owns the body class
 	// + Esc-to-cancel). TimelinePane reads it as a prop to render the
 	// preview marker and dispatch the click.
-	const hideControlsTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-	const resizeSequenceRef = useRef(0);
 
 	const sourceDuration = useMemo(
 		() =>
@@ -365,46 +279,32 @@ export function TimelinePane({
 		[assets],
 	);
 
-	// T18 — per-skip viewport-aware shift so the hover-controls stay onscreen
-	// when the skip is near the viewport's left/right edge. axcut
-	// TimelinePane.tsx builds the same map inline.
-	const skipControlsShiftPxBySkipId = useMemo(() => {
-		if (viewportLeftPx <= 0) return new Map<string, number>();
-		const SKIP_CONTROLS_VIEWPORT_MARGIN_PX = 4;
-		const visibleLeftPx = SKIP_CONTROLS_VIEWPORT_MARGIN_PX;
-		const visibleRightPx = Math.max(
-			visibleLeftPx,
-			windowWidthPx - SKIP_CONTROLS_VIEWPORT_MARGIN_PX,
-		);
-		// Resize=25 + remove=31 + two 3px gaps. Actual values mirror axcut.
-		const controlsHalfWidthPx = (31 + 25 + 25 + 3 * 3) / 2;
-		const map = new Map<string, number>();
-		for (const clip of orderedClips) {
-			for (const skip of clip.sourceEndSec == null
-				? []
-				: skipRanges.filter((k) => k.assetId === clip.assetId)) {
-				const skipCenterSec = (skip.startSec + skip.endSec) / 2;
-				const skipScreenCenterPx =
-					viewportLeftPx + TIMELINE_START_GUTTER_PX + skipCenterSec * pxPerSec - canvasOffsetPx;
-				let shift = 0;
-				if (skipScreenCenterPx - controlsHalfWidthPx < visibleLeftPx) {
-					shift = visibleLeftPx - (skipScreenCenterPx - controlsHalfWidthPx);
-				} else if (skipScreenCenterPx + controlsHalfWidthPx > visibleRightPx) {
-					shift = visibleRightPx - (skipScreenCenterPx + controlsHalfWidthPx);
-				}
-				if (shift !== 0) map.set(skip.id, shift);
-			}
+	// Skip ranges are source-time and get their own lane (mirrors main's
+	// TrimRegion row) instead of the old in-clip chevron strip. Map each
+	// skip's source-time span through whichever clip it falls within to
+	// get a timeline(ms) span for the lane — same coordinate space the
+	// zoom/speed/annotation lanes already use.
+	const skipRegionSpans = useMemo(() => {
+		const spans: Array<{ id: string; start: number; end: number; durationSec: number }> = [];
+		for (const skip of skipRanges) {
+			const startPos = locateSourcePosition(orderedClips, skip.startSec, skip.assetId);
+			const endPos = locateSourcePosition(orderedClips, skip.endSec, skip.assetId);
+			if (!startPos || !endPos) continue;
+			spans.push({
+				id: skip.id,
+				start: startPos.virtualTimeSec * 1000,
+				end: endPos.virtualTimeSec * 1000,
+				durationSec: skip.endSec - skip.startSec,
+			});
 		}
-		return map;
-	}, [orderedClips, skipRanges, pxPerSec, canvasOffsetPx, viewportLeftPx, windowWidthPx]);
+		return spans;
+	}, [skipRanges, orderedClips]);
 
 	useEffect(() => {
 		const el = viewportRef.current;
 		if (!el) return;
 		const updateMetrics = () => {
 			setViewportWidthPx(el.clientWidth);
-			setViewportLeftPx(el.getBoundingClientRect().left);
-			setWindowWidthPx(window.innerWidth);
 		};
 		updateMetrics();
 		const observer = new ResizeObserver(updateMetrics);
@@ -456,7 +356,6 @@ export function TimelinePane({
 
 	useEffect(
 		() => () => {
-			if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
 			document.body.classList.remove("timeline-panning");
 			document.body.classList.remove("timeline-reordering");
 			// ponytail: timeline-placing-cut body class is now owned by
@@ -485,22 +384,6 @@ export function TimelinePane({
 		},
 		[orderedClips, onAddSkip],
 	);
-
-	const showCutControls = useCallback((cutId: string) => {
-		if (hideControlsTimerRef.current) {
-			clearTimeout(hideControlsTimerRef.current);
-			hideControlsTimerRef.current = null;
-		}
-		setHoveredCutId(cutId);
-	}, []);
-
-	const scheduleHideCutControls = useCallback((cutId: string) => {
-		if (hideControlsTimerRef.current) clearTimeout(hideControlsTimerRef.current);
-		hideControlsTimerRef.current = setTimeout(() => {
-			setHoveredCutId((current) => (current === cutId ? null : current));
-			hideControlsTimerRef.current = null;
-		}, SKIP_CONTROLS_HIDE_DELAY_MS);
-	}, []);
 
 	// Convert screen-x (PointerEvent.clientX) to source-time, accounting for
 	// the canvas's translateX pan offset.
@@ -836,87 +719,6 @@ export function TimelinePane({
 		],
 	);
 
-	// Skip chevron pointerdown → resize the cut's start or end.
-	const startResizeSkip = useCallback(
-		(
-			clipId: string,
-			seg: CutSegment,
-			edge: "start" | "end",
-			event: ReactPointerEvent<HTMLElement>,
-		) => {
-			event.preventDefault();
-			event.stopPropagation();
-			const clip = orderedClips.find((c) => c.id === clipId);
-			if (!clip) return;
-			const id = resizeSequenceRef.current + 1;
-			resizeSequenceRef.current = id;
-			const initial: ResizeState = {
-				id,
-				itemId: seg.skipId,
-				edge,
-				startClientX: event.clientX,
-				startSec: seg.startSec,
-				endSec: seg.endSec,
-				currentStartSec: seg.startSec,
-				currentEndSec: seg.endSec,
-				minStartSec: seg.minStartSec,
-				maxEndSec: seg.maxEndSec,
-			};
-			resizeRef.current = initial;
-			setDragPreview({ skipId: seg.skipId, startSec: seg.startSec, endSec: seg.endSec });
-
-			startGlobalPointerDrag(event, {
-				onMove: (moveEvent) => {
-					const current = resizeRef.current;
-					if (!current || current.id !== id) return;
-					const deltaSec = (moveEvent.clientX - current.startClientX) / Math.max(pxPerSec, 0.001);
-					const nextStartSec =
-						current.edge === "start"
-							? clamp(
-									current.startSec + deltaSec,
-									current.minStartSec,
-									current.currentEndSec - 0.05,
-								)
-							: current.currentStartSec;
-					const nextEndSec =
-						current.edge === "end"
-							? clamp(current.endSec + deltaSec, nextStartSec + 0.05, current.maxEndSec)
-							: current.currentEndSec;
-					const next = {
-						...current,
-						currentStartSec: nextStartSec,
-						currentEndSec: nextEndSec,
-					};
-					resizeRef.current = next;
-					setDragPreview({ skipId: seg.skipId, startSec: nextStartSec, endSec: nextEndSec });
-					// T19 — scrub the preview video to the edge being
-					// dragged so the user sees exactly which frame is the
-					// cut boundary. axcut TimelinePane.tsx startResizeSkip.
-					onPreviewSource?.(current.edge === "start" ? nextStartSec : nextEndSec, clip.assetId);
-				},
-				onEnd: () => {
-					const current = resizeRef.current;
-					if (!current || current.id !== id) {
-						resizeRef.current = null;
-						setDragPreview(null);
-						return;
-					}
-					const changed =
-						Math.abs(current.currentStartSec - current.startSec) > 0.001 ||
-						Math.abs(current.currentEndSec - current.endSec) > 0.001;
-					resizeRef.current = null;
-					if (changed) {
-						onUpdateSkipRange(seg.skipId, current.currentStartSec, current.currentEndSec);
-					}
-					requestAnimationFrame(() => {
-						setDragPreview(null);
-					});
-				},
-			});
-		},
-		[orderedClips, onUpdateSkipRange, onPreviewSource, pxPerSec],
-	);
-
 	// T12 — setVisibleWindow helper. Computes the new pxPerSec to fit
 	// [startSec, endSec] into the viewport, derives the matching zoom
 	// multiplier, and updates visibleStartSec + zoom atomically. axcut
@@ -1111,13 +913,21 @@ export function TimelinePane({
 								collidableSpans={[
 									...zoomRegions.map((z) => ({
 										id: z.id,
+										rowId: "zoom",
 										start: z.startMs,
 										end: z.endMs,
 									})),
 									...speedRegions.map((s) => ({
 										id: s.id,
+										rowId: "speed",
 										start: s.startMs,
 										end: s.endMs,
+									})),
+									...skipRegionSpans.map((s) => ({
+										id: s.id,
+										rowId: "skip",
+										start: s.start,
+										end: s.end,
 									})),
 								]}
 								onItemSpanChange={onRegionSpanChange}
@@ -1150,6 +960,21 @@ export function TimelinePane({
 												selected={isRegionSelected("speed", s.id)}
 												onSelect={(additive) => onSelectRegion("speed", s.id, additive)}
 												variant="speed"
+											/>
+										))}
+									</RegionRow>
+									<RegionRow id="skip" empty="No skips">
+										{skipRegionSpans.map((s) => (
+											<RegionItem
+												key={s.id}
+												id={s.id}
+												rowId="skip"
+												span={{ start: s.start, end: s.end }}
+												label={formatSeconds(s.durationSec)}
+												icon={<Scissors size={11} strokeWidth={2} aria-hidden="true" />}
+												selected={isRegionSelected("skip", s.id)}
+												onSelect={(additive) => onSelectRegion("skip", s.id, additive)}
+												variant="skip"
 											/>
 										))}
 									</RegionRow>
@@ -1188,15 +1013,6 @@ export function TimelinePane({
 								// even when adjacent. The .joinedPrev / .joinedNext classes are removed
 								// from the rendered classList, and the CSS for them is dropped too.
 								// Adjacent clips keep their own border + border-radius on every side.
-								const previewedSkips = dragPreview
-									? skipRanges.map((k) =>
-											k.id === dragPreview.skipId
-												? { ...k, startSec: dragPreview.startSec, endSec: dragPreview.endSec }
-												: k,
-										)
-									: skipRanges;
-								const segs = clipSegments(clip, previewedSkips);
-								const segTotal = segs.reduce((m, s) => m + s.len, 0) || 1;
 								const selected = clip.id === selectedClipId;
 								const classes = [styles.trackBlock];
 								if (selected) classes.push(styles.selected);
@@ -1234,82 +1050,11 @@ export function TimelinePane({
 										title={`${assetLabel(clip.assetId)} · ${formatSeconds(clip.timelineStartSec)}–${formatSeconds(clip.timelineEndSec)}`}
 									>
 										<div className={styles.trackVisual}>
-											{segs.map((s, si) =>
-												s.kind === "keep" ? (
-													<div
-														key={si}
-														className={`${styles.segment} ${styles.keep}`}
-														aria-hidden="true"
-														style={{ flexGrow: (s.len / segTotal) * 100 }}
-													/>
-												) : (
-													<div
-														key={s.skipId}
-														className={`${styles.segment} ${styles.cut}`}
-														style={{ flexGrow: (s.len / segTotal) * 100 }}
-														onPointerEnter={() => showCutControls(s.skipId)}
-														onPointerLeave={() => scheduleHideCutControls(s.skipId)}
-														title={`Skip ${formatSeconds(s.startSec)}–${formatSeconds(s.endSec)}`}
-													>
-														{hoveredCutId === s.skipId || dragPreview?.skipId === s.skipId ? (
-															<div
-																className={styles.skipControls}
-																style={
-																	skipControlsShiftPxBySkipId.has(s.skipId)
-																		? ({
-																				"--skip-controls-shift-px": `${skipControlsShiftPxBySkipId.get(s.skipId)}px`,
-																			} as React.CSSProperties)
-																		: undefined
-																}
-																onPointerEnter={() => showCutControls(s.skipId)}
-																onPointerLeave={() => scheduleHideCutControls(s.skipId)}
-															>
-																<button
-																	type="button"
-																	className={styles.skipControlBtn}
-																	aria-label={`Adjust skip start at ${formatSeconds(s.startSec)}`}
-																	title="Adjust skip start"
-																	onPointerDown={(e) => startResizeSkip(clip.id, s, "start", e)}
-																	onClick={(e) => e.stopPropagation()}
-																>
-																	<ChevronLeft size={13} />
-																</button>
-																<button
-																	type="button"
-																	className={`${styles.skipControlBtn} ${styles.skipControlDelete}`}
-																	aria-label={`Remove skip ${formatSeconds(s.startSec)}–${formatSeconds(s.endSec)}`}
-																	title="Remove skip"
-																	onPointerDown={(e) => {
-																		// ponytail: stop the clip block's
-																		// startClipReorder from grabbing
-																		// pointer capture and rerouting the
-																		// click up to the block (then
-																		// nowhere). Without this, the trash
-																		// button's onClick never fires.
-																		e.stopPropagation();
-																	}}
-																	onClick={(e) => {
-																		e.stopPropagation();
-																		onRemoveSkipRange(s.skipId);
-																	}}
-																>
-																	<Trash2 size={12} />
-																</button>
-																<button
-																	type="button"
-																	className={styles.skipControlBtn}
-																	aria-label={`Adjust skip end at ${formatSeconds(s.endSec)}`}
-																	title="Adjust skip end"
-																	onPointerDown={(e) => startResizeSkip(clip.id, s, "end", e)}
-																	onClick={(e) => e.stopPropagation()}
-																>
-																	<ChevronRight size={13} />
-																</button>
-															</div>
-														) : null}
-													</div>
-												),
-											)}
+											<div
+												className={`${styles.segment} ${styles.keep}`}
+												aria-hidden="true"
+												style={{ flexGrow: 100 }}
+											/>
 										</div>
 										<div className={styles.trackInfo}>
 											<button
@@ -1383,35 +1128,6 @@ export function TimelinePane({
 								}}
 								aria-hidden="true"
 							/>
-						) : null}
-						{/* T24 + T25 — snap-guide lines + floating drag tooltip for
-						    skip-edge resize. Two thin vertical lines in the
-						    ruler (one per edge being dragged) plus a small
-						    pill near the cursor showing the new time range.
-						    Matches axcut TimelinePane.tsx dragPreview styling
-						    and controlsVisible. */}
-						{dragPreview ? (
-							<>
-								<div
-									className={styles.snapGuide}
-									style={{ left: TIMELINE_START_GUTTER_PX + dragPreview.startSec * pxPerSec }}
-									aria-hidden="true"
-								/>
-								<div
-									className={styles.snapGuide}
-									style={{ left: TIMELINE_START_GUTTER_PX + dragPreview.endSec * pxPerSec }}
-									aria-hidden="true"
-								/>
-								<div
-									className={styles.dragTooltip}
-									style={{
-										left: TIMELINE_START_GUTTER_PX + (dragPreview.endSec * pxPerSec + 6),
-									}}
-									aria-hidden="true"
-								>
-									{formatSeconds(dragPreview.startSec)} → {formatSeconds(dragPreview.endSec)}
-								</div>
-							</>
 						) : null}
 					</div>
 				)}

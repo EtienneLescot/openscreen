@@ -9,6 +9,8 @@ Last updated: 2026-07-02 · Branch: `feat/ai-edition`
 > rationale), [`openscreen-inventory.md`](openscreen-inventory.md) and
 > [`axcut-inventory.md`](axcut-inventory.md) (source catalogs). The canonical UI target is
 > [`design/openscreen-editor.html`](../../design/openscreen-editor.html) + `design/DESIGN.md`.
+> For a diagram of who reads/writes the DSL document, see
+> [`ai-edition-data-flow.md`](ai-edition-data-flow.md).
 
 ---
 

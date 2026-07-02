@@ -1,16 +1,38 @@
 import { Maximize2, Pause, Play, Repeat, SkipBack, SkipForward } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
-import type { AxcutClip } from "@/lib/ai-edition/schema";
+import type { ZoomFocus } from "@/components/video-editor/types";
+import type {
+	AxcutAnnotationRegion,
+	AxcutClip,
+	AxcutSkipRange,
+	AxcutZoomRegion,
+} from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
+import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import { EditorEmptyState } from "./EditorEmptyState";
 import styles from "./NewEditorShell.module.css";
 import { PreviewCanvas } from "./PreviewCanvas";
+
+type BlurData = NonNullable<AxcutAnnotationRegion["blurData"]>;
 
 interface PreviewProps {
 	hasProject: boolean;
 	hasAsset: boolean;
 	videoSources: import("./VirtualPreview").VideoSource[];
 	clips: AxcutClip[];
+	zoomRegions?: AxcutZoomRegion[];
+	speedRegions?: SpeedRegion[];
+	skipRanges?: AxcutSkipRange[];
+	selectedZoomRegionId?: string | null;
+	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
+	onZoomFocusCommit?: () => void;
+	annotationRegions?: AxcutAnnotationRegion[];
+	selectedAnnotationId?: string | null;
+	onSelectAnnotation?: (id: string) => void;
+	onAnnotationPositionChange?: (id: string, position: { x: number; y: number }) => void;
+	onAnnotationSizeChange?: (id: string, size: { width: number; height: number }) => void;
+	onAnnotationBlurDataChange?: (id: string, blurData: BlurData) => void;
+	onAnnotationCommit?: () => void;
 	seekTarget: { timeSec: number; requestId: number } | null;
 	onTimeChange: (sec: number) => void;
 	onSeek: (sec: number) => void;
@@ -31,6 +53,19 @@ export function Preview({
 	hasAsset,
 	videoSources,
 	clips,
+	zoomRegions,
+	speedRegions,
+	skipRanges,
+	selectedZoomRegionId,
+	onZoomFocusChange,
+	onZoomFocusCommit,
+	annotationRegions,
+	selectedAnnotationId,
+	onSelectAnnotation,
+	onAnnotationPositionChange,
+	onAnnotationSizeChange,
+	onAnnotationBlurDataChange,
+	onAnnotationCommit,
 	seekTarget,
 	onTimeChange,
 	onSeek,
@@ -149,6 +184,19 @@ export function Preview({
 					<PreviewCanvas
 						videoSources={videoSources}
 						clips={clips}
+						zoomRegions={zoomRegions}
+						speedRegions={speedRegions}
+						skipRanges={skipRanges}
+						selectedZoomRegionId={selectedZoomRegionId}
+						onZoomFocusChange={onZoomFocusChange}
+						onZoomFocusCommit={onZoomFocusCommit}
+						annotationRegions={annotationRegions}
+						selectedAnnotationId={selectedAnnotationId}
+						onSelectAnnotation={onSelectAnnotation}
+						onAnnotationPositionChange={onAnnotationPositionChange}
+						onAnnotationSizeChange={onAnnotationSizeChange}
+						onAnnotationBlurDataChange={onAnnotationBlurDataChange}
+						onAnnotationCommit={onAnnotationCommit}
 						seekTarget={seekTarget}
 						onTimeChange={onTimeChange}
 						onSeek={onSeek}

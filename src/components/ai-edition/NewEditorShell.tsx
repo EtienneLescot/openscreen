@@ -875,6 +875,29 @@ export function NewEditorShell() {
 					hasAsset={hasAsset}
 					videoSources={videoSources}
 					clips={clips}
+					zoomRegions={tl.zoomRegions}
+					speedRegions={tl.speedRegions}
+					skipRanges={tl.skipRanges}
+					selectedZoomRegionId={tl.selection?.kind === "zoom" ? tl.selection.id : null}
+					onZoomFocusChange={tl.updateZoomFocusLive}
+					onZoomFocusCommit={() => void tl.commitZoomFocus()}
+					annotationRegions={tl.annotationRegions}
+					selectedAnnotationId={tl.selection?.kind === "annotation" ? tl.selection.id : null}
+					onSelectAnnotation={(id) => tl.selectRegion("annotation", id)}
+					onAnnotationPositionChange={(id, position) => {
+						// ponytail: Rnd only calls this once per drag gesture (on
+						// dragStop, not on every pointermove), so — unlike the zoom
+						// focus overlay — there's no per-frame IPC risk here; commit
+						// immediately.
+						tl.updateAnnotationLive(id, { position });
+						void tl.commitAnnotationChange();
+					}}
+					onAnnotationSizeChange={(id, size) => {
+						tl.updateAnnotationLive(id, { size });
+						void tl.commitAnnotationChange();
+					}}
+					onAnnotationBlurDataChange={(id, blurData) => tl.updateAnnotationLive(id, { blurData })}
+					onAnnotationCommit={() => void tl.commitAnnotationChange()}
 					seekTarget={seekTarget}
 					onTimeChange={handleTimeChange}
 					onSeek={handleSeek}

@@ -8,7 +8,8 @@ import {
 	WandSparkles,
 	ZoomIn,
 } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import type { AnnotationRegion } from "@/components/video-editor/types";
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
@@ -16,6 +17,7 @@ import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { suggestZoomRegions } from "@/lib/ai-edition/store/zoomSuggestions";
+import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import { ASPECT_RATIOS, type AspectRatio } from "@/utils/aspectRatioUtils";
 import { EditClipModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
@@ -88,6 +90,22 @@ export function Bottombar({
 	const { settings, set } = useEditorSettings();
 	const tl = useTimeline();
 	const [ratioOpen, setRatioOpen] = useState(false);
+	const ratioButtonRef = useRef<HTMLButtonElement | null>(null);
+	// ponytail: `.bottombar` sets `overflow: hidden` to contain the timeline
+	// lanes, which also clips any absolutely-positioned child that escapes
+	// its box -- including this menu. Render it through a portal, positioned
+	// from the button's live viewport rect, so it paints above everything
+	// regardless of ancestor overflow/stacking.
+	const [ratioMenuRect, setRatioMenuRect] = useState<{ left: number; bottom: number } | null>(
+		null,
+	);
+	useEffect(() => {
+		if (!ratioOpen) return;
+		const button = ratioButtonRef.current;
+		if (!button) return;
+		const rect = button.getBoundingClientRect();
+		setRatioMenuRect({ left: rect.left, bottom: window.innerHeight - rect.top + 4 });
+	}, [ratioOpen]);
 	const [editClipTarget, setEditClipTarget] = useState<AxcutClip | null>(null);
 	const firstClip = clips[0] ?? null;
 	// T11 — viewport state lifted from TimelinePane so the navigator strip
@@ -181,7 +199,17 @@ export function Bottombar({
 		if (zoomRegions.some((z) => z.id === id)) void tl.updateZoomSpan(id, span.start, span.end);
 		else if (speedRegions.some((s) => s.id === id))
 			void tl.updateSpeedSpan(id, span.start, span.end);
-		else void tl.updateAnnotationSpan(id, span.start, span.end);
+		else if (skipRanges.some((s) => s.id === id)) {
+			// ponytail: skip spans are edited in timeline (virtual) ms via the
+			// same lane drag/resize as zoom/speed/annotation, but persisted in
+			// source-time seconds (skipRangeSchema) — map back through the
+			// clip the span resolves to.
+			const startPos = locateVirtualPosition(clips, span.start / 1000);
+			const endPos = locateVirtualPosition(clips, span.end / 1000);
+			if (startPos && endPos) {
+				void tl.updateSkipRange(id, startPos.sourceTimeSec, endPos.sourceTimeSec);
+			}
+		} else void tl.updateAnnotationSpan(id, span.start, span.end);
 	};
 	// ponytail: T10 removed the explicit onRemoveRegion prop (region
 	// removal happens via the Del/Bksp shortcut wired in NewEditorShell).
@@ -266,6 +294,7 @@ export function Bottombar({
 						</VtBtn>
 						<div style={{ position: "relative" }}>
 							<button
+								ref={ratioButtonRef}
 								type="button"
 								className={styles.ratio}
 								onClick={() => setRatioOpen((v) => !v)}
@@ -275,39 +304,42 @@ export function Bottombar({
 								<span>{RATIO_LABELS[settings.aspectRatio]}</span>
 								<ChevronDown size={10} className="caret" />
 							</button>
-							{ratioOpen ? (
-								<div
-									role="menu"
-									style={{
-										position: "absolute",
-										top: "calc(100% + 4px)",
-										left: 0,
-										minWidth: 120,
-										background: "var(--surface)",
-										border: "1px solid var(--border)",
-										borderRadius: "var(--r-md)",
-										boxShadow: "var(--elev-pop)",
-										padding: 4,
-										zIndex: 60,
-									}}
-								>
-									{ASPECT_RATIOS.map((r) => (
-										<button
-											type="button"
-											key={r}
-											role="menuitem"
-											style={menuItemStyle(r === settings.aspectRatio)}
-											disabled={!hasDoc}
-											onClick={() => {
-												void set({ aspectRatio: r });
-												setRatioOpen(false);
+							{ratioOpen && ratioMenuRect
+								? createPortal(
+										<div
+											role="menu"
+											style={{
+												position: "fixed",
+												left: ratioMenuRect.left,
+												bottom: ratioMenuRect.bottom,
+												minWidth: 120,
+												background: "var(--surface)",
+												border: "1px solid var(--border)",
+												borderRadius: "var(--r-md)",
+												boxShadow: "var(--elev-pop)",
+												padding: 4,
+												zIndex: 1000,
 											}}
 										>
-											{RATIO_LABELS[r]}
-										</button>
-									))}
-								</div>
-							) : null}
+											{ASPECT_RATIOS.map((r) => (
+												<button
+													type="button"
+													key={r}
+													role="menuitem"
+													style={menuItemStyle(r === settings.aspectRatio)}
+													disabled={!hasDoc}
+													onClick={() => {
+														void set({ aspectRatio: r });
+														setRatioOpen(false);
+													}}
+												>
+													{RATIO_LABELS[r]}
+												</button>
+											))}
+										</div>,
+										document.body,
+									)
+								: null}
 						</div>
 					</div>
 					<div className={styles.hintRow}>
@@ -365,16 +397,6 @@ export function Bottombar({
 							onMoveClip={(clipId, toIndex) => void tl.moveClip(clipId, toIndex)}
 							onEditClip={(clip) => setEditClipTarget(clip)}
 							onRemoveClip={(clipId) => void tl.removeClip(clipId)}
-							onUpdateSkipRange={(skipId, s, e) => void tl.updateSkipRange(skipId, s, e)}
-							onPreviewSource={(timeSec, _assetId) => {
-								// T19 — drive the source-time clock so the preview
-								// video scrubs to the edge being dragged. We don't
-								// rebind the preview's activeSource because that
-								// resets playback; the existing Preview's
-								// seekToSourceTime handles the same-source case.
-								tl.setCurrentTime(timeSec);
-							}}
-							onRemoveSkipRange={(skipId) => void tl.removeRegion("skip", skipId)}
 							onAddSkip={(assetId, s, e) => void tl.addSkipAt(assetId, s, e)}
 							onRegionSpanChange={(id, span) => handleRegionSpanChange(id, span)}
 							zoom={zoom}
