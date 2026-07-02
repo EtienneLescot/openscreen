@@ -1,15 +1,30 @@
-import { Film, Loader2, MessageSquare, Plus, Search, X } from "lucide-react";
+import { ArrowLeft, Check, Film, Loader2, MessageSquare, Plus, Search, X } from "lucide-react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { AI_FEATURES_ENABLED } from "@/components/video-editor/featureFlags";
 import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { nativeBridgeClient } from "@/native/client";
 import type { AiEditionLlmConfig, AiEditionToolCallSummary } from "@/native/contracts";
+import {
+	PROVIDER_DEFINITIONS,
+	REASONING_EFFORT_OPTIONS,
+	type ReasoningEffort,
+} from "../../../electron/ai-edition/provider-registry";
 import { computeBudget } from "./chatBudget";
 import { ChatHistoryModal, SourceTranscriptModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 import { ProviderSettings } from "./ProviderSettings";
+
+const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
+	none: "None",
+	minimal: "Minimal",
+	low: "Low",
+	medium: "Medium",
+	high: "High",
+	xhigh: "Extra high",
+};
 
 export type LeftTab = "chat" | "media";
 
@@ -340,6 +355,300 @@ interface ChatDisplayMessage {
 	toolCalls?: AiEditionToolCallSummary[];
 }
 
+// Quick-access model picker anchored to the composer's model pill — mirrors
+// axcut's LlmPopover in "models"/"providers" mode (a lightweight popover, not
+// the full AI-settings modal). "Provider settings…" in the providers screen
+// is the escape hatch into that full modal (same one the header gear opens),
+// matching axcut's `openProviderSettings` from its popover's providers screen.
+function ModelQuickPopover({
+	anchorRect,
+	llmConfig,
+	connectedProviders,
+	onClose,
+	onConfigChange,
+	onOpenFullSettings,
+}: {
+	anchorRect: { left: number; bottom: number; maxHeight: number };
+	llmConfig: AiEditionLlmConfig;
+	connectedProviders: string[];
+	onClose: () => void;
+	onConfigChange: () => void;
+	onOpenFullSettings: () => void;
+}) {
+	const [screen, setScreen] = useState<"models" | "providers">("models");
+	const [browseProviderId, setBrowseProviderId] = useState(llmConfig.provider);
+	const [models, setModels] = useState<string[]>([]);
+	const [modelsLoading, setModelsLoading] = useState(false);
+	const [modelsError, setModelsError] = useState<string | null>(null);
+	const [search, setSearch] = useState("");
+	const [busy, setBusy] = useState(false);
+
+	const browseDef = PROVIDER_DEFINITIONS.find((d) => d.id === browseProviderId);
+
+	useEffect(() => {
+		if (screen !== "models" || !browseProviderId) return;
+		let cancelled = false;
+		setModelsLoading(true);
+		setModelsError(null);
+		void nativeBridgeClient.aiEdition
+			.llmListProviderModels(browseProviderId)
+			.then((result) => {
+				if (cancelled) return;
+				setModels(result.models);
+				setModelsError(result.error ?? null);
+			})
+			.catch((err) => {
+				if (cancelled) return;
+				setModels([]);
+				setModelsError(err instanceof Error ? err.message : String(err));
+			})
+			.finally(() => {
+				if (!cancelled) setModelsLoading(false);
+			});
+		return () => {
+			cancelled = true;
+		};
+	}, [screen, browseProviderId]);
+
+	const selectModel = async (nextModel: string) => {
+		setBusy(true);
+		try {
+			const result = await nativeBridgeClient.aiEdition.llmSetConfig({
+				...llmConfig,
+				provider: browseProviderId,
+				model: nextModel,
+			});
+			if (result.success) {
+				onConfigChange();
+				onClose();
+			} else {
+				setModelsError(result.error ?? "Could not select model");
+			}
+		} finally {
+			setBusy(false);
+		}
+	};
+
+	const filteredModels = search.trim()
+		? models.filter((candidate) => candidate.toLowerCase().includes(search.trim().toLowerCase()))
+		: models;
+
+	return createPortal(
+		<div
+			role="dialog"
+			aria-modal="true"
+			style={{ position: "fixed", inset: 0, zIndex: 999 }}
+			onMouseDown={(event) => {
+				if (event.target === event.currentTarget) onClose();
+			}}
+		>
+			<section
+				style={{
+					position: "fixed",
+					left: anchorRect.left,
+					bottom: anchorRect.bottom,
+					width: 320,
+					maxHeight: anchorRect.maxHeight,
+					display: "flex",
+					flexDirection: "column",
+					background: "var(--surface)",
+					border: "1px solid var(--border)",
+					borderRadius: "var(--r-md)",
+					boxShadow: "var(--elev-pop)",
+					zIndex: 1000,
+					overflow: "hidden",
+				}}
+			>
+				<div
+					style={{
+						display: "flex",
+						alignItems: "center",
+						justifyContent: "space-between",
+						padding: "10px 12px",
+						borderBottom: "1px solid var(--border-soft)",
+					}}
+				>
+					<button
+						type="button"
+						onClick={() => setScreen(screen === "models" ? "providers" : "models")}
+						style={{
+							display: "flex",
+							alignItems: "center",
+							gap: 6,
+							background: "transparent",
+							border: "none",
+							color: "var(--fg-2)",
+							cursor: "pointer",
+							fontSize: 12.5,
+							padding: 0,
+						}}
+					>
+						<ArrowLeft size={14} />
+						{screen === "models" ? "Change provider" : "Back"}
+					</button>
+					<button
+						type="button"
+						onClick={onClose}
+						aria-label="Close"
+						style={{
+							background: "transparent",
+							border: "none",
+							color: "var(--muted)",
+							cursor: "pointer",
+							padding: 0,
+						}}
+					>
+						<X size={14} />
+					</button>
+				</div>
+				<div style={{ overflowY: "auto", padding: 10, minHeight: 0, flex: 1 }}>
+					{screen === "models" ? (
+						<>
+							<div style={{ marginBottom: 8 }}>
+								<div style={{ fontWeight: 600, fontSize: 13 }}>
+									{browseDef?.label ?? browseProviderId}
+								</div>
+								<div style={{ fontSize: 11.5, color: "var(--muted)" }}>
+									Current model:{" "}
+									{browseProviderId === llmConfig.provider
+										? llmConfig.model
+										: (browseDef?.defaultModel ?? "Not selected")}
+								</div>
+							</div>
+							<input
+								value={search}
+								onChange={(e) => setSearch(e.target.value)}
+								placeholder={modelsLoading ? "Loading models…" : "Search models…"}
+								disabled={modelsLoading || !models.length}
+								style={{
+									width: "100%",
+									padding: "6px 8px",
+									marginBottom: 8,
+									borderRadius: "var(--r-sm)",
+									border: "1px solid var(--border)",
+									background: "var(--bg)",
+									color: "var(--fg)",
+								}}
+							/>
+							{!models.length ? (
+								<div style={{ fontSize: 12, color: "var(--muted)", padding: "8px 0" }}>
+									{modelsLoading
+										? "Loading models…"
+										: modelsError
+											? `Couldn't fetch live models (${modelsError}); open provider settings to type a model id manually.`
+											: "No models available from this provider."}
+								</div>
+							) : (
+								<div>
+									{filteredModels.map((candidate) => (
+										<button
+											key={candidate}
+											type="button"
+											disabled={busy}
+											onClick={() => void selectModel(candidate)}
+											style={{
+												display: "flex",
+												alignItems: "center",
+												justifyContent: "space-between",
+												width: "100%",
+												padding: "7px 8px",
+												border: "none",
+												borderRadius: "var(--r-sm)",
+												background:
+													candidate === llmConfig.model && browseProviderId === llmConfig.provider
+														? "var(--surface-3)"
+														: "transparent",
+												color: "var(--fg)",
+												cursor: "pointer",
+												fontSize: 12.5,
+												marginBottom: 2,
+											}}
+										>
+											{candidate}
+											{candidate === llmConfig.model && browseProviderId === llmConfig.provider ? (
+												<Check size={12} />
+											) : null}
+										</button>
+									))}
+									{filteredModels.length === 0 ? (
+										<div style={{ fontSize: 12, color: "var(--muted)" }}>
+											No models match this search.
+										</div>
+									) : null}
+								</div>
+							)}
+						</>
+					) : (
+						<>
+							{connectedProviders.map((providerId) => {
+								const def = PROVIDER_DEFINITIONS.find((d) => d.id === providerId);
+								if (!def) return null;
+								return (
+									<button
+										key={providerId}
+										type="button"
+										onClick={() => {
+											setBrowseProviderId(providerId);
+											setScreen("models");
+										}}
+										style={{
+											display: "flex",
+											flexDirection: "column",
+											alignItems: "flex-start",
+											width: "100%",
+											padding: "8px 10px",
+											border: "none",
+											borderRadius: "var(--r-sm)",
+											background:
+												providerId === browseProviderId ? "var(--surface-3)" : "transparent",
+											color: "var(--fg)",
+											cursor: "pointer",
+											marginBottom: 4,
+										}}
+									>
+										<strong style={{ fontSize: 12.5 }}>{def.label}</strong>
+										<span style={{ fontSize: 11, color: "var(--muted)" }}>
+											{providerId === llmConfig.provider ? llmConfig.model : def.defaultModel}
+										</span>
+									</button>
+								);
+							})}
+							{connectedProviders.length === 0 ? (
+								<div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
+									No connected providers yet.
+								</div>
+							) : null}
+							<button
+								type="button"
+								onClick={() => {
+									onClose();
+									onOpenFullSettings();
+								}}
+								style={{
+									display: "flex",
+									alignItems: "center",
+									gap: 6,
+									width: "100%",
+									padding: "8px 10px",
+									border: "1px solid var(--border-soft)",
+									borderRadius: "var(--r-sm)",
+									background: "transparent",
+									color: "var(--fg-2)",
+									cursor: "pointer",
+									marginTop: 6,
+								}}
+							>
+								Provider settings…
+							</button>
+						</>
+					)}
+				</div>
+			</section>
+		</div>,
+		document.body,
+	);
+}
+
 function ChatStripPanel() {
 	const projectId = useProjectStore((s) => s.projectId);
 	const [messages, setMessages] = useState<ChatDisplayMessage[]>([]);
@@ -353,11 +662,27 @@ function ChatStripPanel() {
 	>([]);
 	const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
 	const scrollRef = useRef<HTMLDivElement | null>(null);
+	const [reasoningOpen, setReasoningOpen] = useState(false);
+	const reasoningButtonRef = useRef<HTMLButtonElement | null>(null);
+	const [reasoningMenuRect, setReasoningMenuRect] = useState<{
+		left: number;
+		bottom: number;
+	} | null>(null);
+	const [reasoningBusy, setReasoningBusy] = useState(false);
+	const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
+	const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
+	const modelButtonRef = useRef<HTMLButtonElement | null>(null);
+	const [modelPopoverRect, setModelPopoverRect] = useState<{
+		left: number;
+		bottom: number;
+		maxHeight: number;
+	} | null>(null);
 
 	const refreshLlm = useCallback(async () => {
 		try {
 			const snap = await nativeBridgeClient.aiEdition.llmGetSnapshot();
 			setLlmConfig(snap.config);
+			setConnectedProviders(snap.connectedProviders);
 		} catch {
 			// ponytail: silent
 		}
@@ -441,17 +766,27 @@ function ChatStripPanel() {
 	}, []);
 
 	const send = async () => {
-		if (!projectId || !activeSessionId || !input.trim() || busy) return;
+		if (!projectId || !input.trim() || busy) return;
 		const text = input.trim();
 		setInput("");
 		setBusy(true);
 		try {
+			// Mirror axcut's `getOrCreateSession`: the composer works with zero
+			// setup, so the first message on a project with no sessions yet
+			// silently starts one instead of no-op'ing.
+			let sessionId = activeSessionId;
+			if (!sessionId) {
+				const created = await nativeBridgeClient.aiEdition.chatCreateSession(projectId);
+				sessionId = created.id;
+				setSessions((prev) => [...prev, created]);
+				setActiveSessionId(created.id);
+			}
 			// Send the current document snapshot so the agent can run edit tools
 			// against it (P1). Falls back to text-only chat when no doc is open.
 			const documentSnapshot = useProjectStore.getState().document ?? undefined;
 			const result = await nativeBridgeClient.aiEdition.chatRun(
 				projectId,
-				activeSessionId,
+				sessionId,
 				text,
 				documentSnapshot,
 			);
@@ -517,10 +852,81 @@ function ChatStripPanel() {
 	const modelLabel = llmConfig
 		? `${llmConfig.provider} / ${llmConfig.model}`
 		: "Configure AI Model";
-	const reasoningLabel =
-		llmConfig?.reasoningEffort && llmConfig.reasoningEffort !== "none"
-			? `Reasoning ${llmConfig.reasoningEffort}`
-			: null;
+	const providerSupportsReasoning = Boolean(
+		llmConfig &&
+			PROVIDER_DEFINITIONS.find((d) => d.id === llmConfig.provider)?.supportsReasoningEffort,
+	);
+	const currentReasoningEffort: ReasoningEffort =
+		(llmConfig?.reasoningEffort as ReasoningEffort | undefined) ?? "medium";
+	const reasoningLabel = providerSupportsReasoning
+		? REASONING_EFFORT_LABELS[currentReasoningEffort]
+		: null;
+
+	const selectReasoningEffort = useCallback(
+		async (effort: ReasoningEffort) => {
+			if (!llmConfig) return;
+			setReasoningBusy(true);
+			try {
+				const result = await nativeBridgeClient.aiEdition.llmSetConfig({
+					...llmConfig,
+					reasoningEffort: effort,
+				});
+				if (result.success) {
+					setLlmConfig({ ...llmConfig, reasoningEffort: effort });
+					setReasoningOpen(false);
+				} else {
+					toast.error(result.error ?? "Could not update reasoning effort");
+				}
+			} catch (err) {
+				toast.error("Could not update reasoning effort", {
+					description: err instanceof Error ? err.message : String(err),
+				});
+			} finally {
+				setReasoningBusy(false);
+			}
+		},
+		[llmConfig],
+	);
+
+	const toggleReasoningOpen = useCallback(() => {
+		setReasoningOpen((wasOpen) => {
+			if (!wasOpen) {
+				const rect = reasoningButtonRef.current?.getBoundingClientRect();
+				if (rect) {
+					setReasoningMenuRect({ left: rect.left, bottom: window.innerHeight - rect.top + 4 });
+				}
+			}
+			return !wasOpen;
+		});
+	}, []);
+
+	const toggleModelPopoverOpen = useCallback(() => {
+		// Mirrors axcut's providerButtonRef handler: with no provider configured
+		// yet there's nothing to quick-pick a model from, so go straight to the
+		// full settings modal (the "providers" screen) instead of toggling a
+		// popover that would render empty.
+		if (!llmConfig) {
+			setSettingsOpen(true);
+			return;
+		}
+		setModelPopoverOpen((wasOpen) => {
+			if (!wasOpen) {
+				const rect = modelButtonRef.current?.getBoundingClientRect();
+				if (rect) {
+					// The popover opens upward from the pill and can hold a long,
+					// scrollable model list — cap its height to the space actually
+					// available above the button so it never overflows off the top
+					// of the window (only "bottom" is set; nothing clamps "top").
+					setModelPopoverRect({
+						left: rect.left,
+						bottom: window.innerHeight - rect.top + 4,
+						maxHeight: Math.max(160, rect.top - 12),
+					});
+				}
+			}
+			return !wasOpen;
+		});
+	}, [llmConfig]);
 
 	// Real context usage — feeds the badge in the chat strip and gates the
 	// auto-compact heuristic on the main side. Recomputed on every messages
@@ -920,10 +1326,13 @@ function ChatStripPanel() {
 				/>
 				<div className="actions">
 					<button
+						ref={modelButtonRef}
 						type="button"
 						className={styles.modelPicker}
-						aria-label="AI settings"
-						onClick={() => setSettingsOpen(true)}
+						aria-label="Model"
+						aria-haspopup="menu"
+						aria-expanded={modelPopoverOpen}
+						onClick={toggleModelPopoverOpen}
 					>
 						<svg
 							width={12}
@@ -940,13 +1349,81 @@ function ChatStripPanel() {
 							<line x1="3" y1="18" x2="21" y2="18" />
 						</svg>
 						<span>{modelLabel}</span>
-						{reasoningLabel ? (
+					</button>
+					{reasoningLabel ? (
+						<button
+							ref={reasoningButtonRef}
+							type="button"
+							className={styles.modelPicker}
+							aria-label="Reasoning effort"
+							aria-haspopup="menu"
+							aria-expanded={reasoningOpen}
+							onClick={toggleReasoningOpen}
+						>
 							<span className="chip">
 								<span className="d" />
-								{reasoningLabel}
+								Reasoning {reasoningLabel}
 							</span>
-						) : null}
-					</button>
+						</button>
+					) : null}
+					{reasoningOpen && reasoningMenuRect
+						? createPortal(
+								<div
+									role="menu"
+									style={{
+										position: "fixed",
+										left: reasoningMenuRect.left,
+										bottom: reasoningMenuRect.bottom,
+										minWidth: 160,
+										background: "var(--surface)",
+										border: "1px solid var(--border)",
+										borderRadius: "var(--r-md)",
+										boxShadow: "var(--elev-pop)",
+										padding: 4,
+										zIndex: 1000,
+									}}
+								>
+									{REASONING_EFFORT_OPTIONS.map((option) => (
+										<button
+											type="button"
+											key={option}
+											role="menuitem"
+											disabled={reasoningBusy}
+											onClick={() => void selectReasoningEffort(option)}
+											style={{
+												display: "flex",
+												alignItems: "center",
+												justifyContent: "space-between",
+												gap: 8,
+												width: "100%",
+												padding: "6px 10px",
+												border: "none",
+												background:
+													option === currentReasoningEffort ? "var(--surface-3)" : "transparent",
+												color: "var(--fg)",
+												borderRadius: "var(--r-sm)",
+												cursor: "pointer",
+												fontSize: 12.5,
+											}}
+										>
+											{REASONING_EFFORT_LABELS[option]}
+											{option === currentReasoningEffort ? <Check size={12} /> : null}
+										</button>
+									))}
+								</div>,
+								document.body,
+							)
+						: null}
+					{modelPopoverOpen && modelPopoverRect && llmConfig ? (
+						<ModelQuickPopover
+							anchorRect={modelPopoverRect}
+							llmConfig={llmConfig}
+							connectedProviders={connectedProviders}
+							onClose={() => setModelPopoverOpen(false)}
+							onConfigChange={() => void refreshLlm()}
+							onOpenFullSettings={() => setSettingsOpen(true)}
+						/>
+					) : null}
 					<button
 						type="button"
 						className={styles.sendBtn}

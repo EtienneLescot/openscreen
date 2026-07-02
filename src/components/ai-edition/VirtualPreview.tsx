@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fromFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AxcutClip, AxcutSkipRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import {
 	clampVirtualTime,
@@ -48,6 +49,7 @@ export function VirtualPreview({
 	videoStyle,
 	onVideoError,
 }: VirtualPreviewProps) {
+	const { settings } = useEditorSettings();
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const videoFrameRef = useRef<HTMLDivElement | null>(null);
 
@@ -313,7 +315,9 @@ export function VirtualPreview({
 						ref={videoRef}
 						src={activeSource.src}
 						className={styles.video}
-						style={videoStyle}
+						// When a synthetic cursor is being drawn on top (CursorPreviewLayer),
+						// hide the real OS pointer here so it doesn't compete with it.
+						style={{ ...videoStyle, cursor: settings.cursorShow ? "none" : undefined }}
 						preload="metadata"
 						playsInline
 						onLoadedMetadata={(e) => {

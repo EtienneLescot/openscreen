@@ -408,6 +408,112 @@ export async function listGithubCopilotModels(githubToken: string): Promise<stri
 		.sort((left, right) => left.localeCompare(right));
 }
 
+/**
+ * Generic `GET {url}` model-list fetch shared by the OpenAI-shaped
+ * (`{data: [{id}]}`) and Anthropic-shaped (`{data: [{id}]}`) list endpoints.
+ * `apiKey` is sent as a Bearer token unless `extraHeaders` overrides
+ * Authorization. Ported from axcut's `fetchModelIds`.
+ */
+async function fetchModelIds(
+	url: string,
+	apiKey?: string,
+	extraHeaders?: Record<string, string>,
+): Promise<string[]> {
+	const headers: Record<string, string> = { Accept: "application/json", ...extraHeaders };
+	if (apiKey && !extraHeaders?.Authorization && !extraHeaders?.["x-api-key"]) {
+		headers.Authorization = `Bearer ${apiKey}`;
+	}
+	const response = await fetch(url, { headers });
+	if (!response.ok) {
+		throw new Error(`Model discovery failed: HTTP ${response.status}`);
+	}
+	const payload = (await response.json()) as { data?: Array<{ id?: string }> };
+	return (payload.data ?? [])
+		.map((entry) => entry.id?.trim() ?? "")
+		.filter((id) => id.length > 0)
+		.sort((left, right) => left.localeCompare(right));
+}
+
+export async function listAnthropicModels(apiKey: string): Promise<string[]> {
+	return fetchModelIds("https://api.anthropic.com/v1/models", undefined, {
+		"x-api-key": apiKey,
+		"anthropic-version": "2023-06-01",
+	});
+}
+
+export async function listGoogleModels(apiKey: string): Promise<string[]> {
+	const models = await fetchModelIds(
+		"https://generativelanguage.googleapis.com/v1beta/openai/models",
+		apiKey,
+	);
+	return models
+		.map((model) => model.replace(/^models\//, ""))
+		.filter((model) => /^gemini-/i.test(model));
+}
+
+export async function listMistralModels(apiKey: string): Promise<string[]> {
+	return fetchModelIds("https://api.mistral.ai/v1/models", apiKey);
+}
+
+export async function listOpenRouterModels(): Promise<string[]> {
+	return fetchModelIds("https://openrouter.ai/api/v1/models");
+}
+
+export async function listOpenAiCompatibleModels(
+	baseUrl: string,
+	apiKey?: string,
+): Promise<string[]> {
+	return fetchModelIds(`${baseUrl.replace(/\/+$/, "")}/models`, apiKey);
+}
+
+const MINIMAX_DISCOVERY_CANDIDATE_MODELS = [
+	"MiniMax-M3",
+	"MiniMax-M3-highspeed",
+	"MiniMax-M2.7",
+	"MiniMax-M2.7-highspeed",
+	"MiniMax-M2.5",
+	"MiniMax-M2.5-highspeed",
+	"MiniMax-M2.1",
+	"MiniMax-M2.1-highspeed",
+	"MiniMax-M2",
+] as const;
+
+/**
+ * MiniMax has no `/models` list endpoint, so — like axcut — probe each known
+ * model slug with a 1-token completion call and keep the ones that don't
+ * error. Uses the OpenAI-compatible `/v1/chat/completions` path (a sibling of
+ * the Anthropic-shaped `/anthropic` base actually used for chat) purely as a
+ * cheap existence check.
+ */
+export async function probeMiniMaxModels(apiKey: string, baseUrl?: string): Promise<string[]> {
+	const resolvedBaseUrl = baseUrl || "https://api.minimax.io/anthropic";
+	const discoveryUrl = resolvedBaseUrl.endsWith("/anthropic")
+		? resolvedBaseUrl.replace(/\/anthropic\/?$/, "/v1/chat/completions")
+		: `${resolvedBaseUrl.replace(/\/$/, "")}/v1/chat/completions`;
+
+	const checks = await Promise.all(
+		MINIMAX_DISCOVERY_CANDIDATE_MODELS.map(async (model) => {
+			try {
+				const response = await fetch(discoveryUrl, {
+					method: "POST",
+					headers: { Authorization: `Bearer ${apiKey}`, "Content-Type": "application/json" },
+					body: JSON.stringify({
+						model,
+						messages: [{ role: "user", content: "ping" }],
+						max_tokens: 1,
+					}),
+				});
+				return response.ok ? model : undefined;
+			} catch {
+				return undefined;
+			}
+		}),
+	);
+	return checks.filter((model): model is (typeof MINIMAX_DISCOVERY_CANDIDATE_MODELS)[number] =>
+		Boolean(model),
+	);
+}
+
 async function safeErrorDetail(response: Response): Promise<string | undefined> {
 	try {
 		const data = (await response.json()) as {
