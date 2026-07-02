@@ -40,6 +40,7 @@ xcuserdata/
 release/**
 *.kiro/
 .claude/
+.worktrees/
 # npx electron-builder --mac --win
 
 # Playwright
@@ -66,3 +67,5 @@ result-*
 
 # Auto-caption model + ORT wasm — regenerated at build by scripts/fetch-caption-model.mjs
 /caption-assets/
+opencode.json
+opencode.json

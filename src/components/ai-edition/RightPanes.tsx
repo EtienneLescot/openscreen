@@ -14,10 +14,12 @@ import {
 	Palette,
 	Sliders,
 } from "lucide-react";
-import { type ChangeEvent, type ReactNode, useEffect, useRef, useState } from "react";
+import { type ChangeEvent, type ReactNode, useEffect, useMemo, useRef, useState } from "react";
+import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
 import type { AxcutClip, AxcutTranscript } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
-import { CURSOR_THEMES } from "@/lib/cursor/cursorThemes";
+import { getAssetPath } from "@/lib/assetPath";
+import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { resolveImageWallpaperUrl, WALLPAPER_PATHS } from "@/lib/wallpaper";
 import styles from "./NewEditorShell.module.css";
 import { TranscriptEditor } from "./TranscriptEditor";
@@ -655,25 +657,39 @@ export function LayoutPane() {
 
 // ─── Cursor ───────────────────────────────────────────────────────
 
-const CURSOR_STYLE_LABELS: Array<{ title: string; d: string }> = [
-	{
-		title: "Arrow",
-		d: "M5.5 3.21V20.8c0 .45.54.67.85.35l4.86-4.86 2.94 6.4c.5.1.8-.13.95-.55l1.86-6.4 6.4-1.86c.42-.15.65-.5.55-.95l-6.4-2.94 4.86-4.86c.32-.31.1-.85-.35-.85H5.5z",
-	},
-	{
-		title: "Pointer",
-		d: "M14 4.1 12 6 M5.1 8l-2.9-.8 M6 12l-1.9 2 M7.2 2.2 8 5.1 M9 11V6a3 3 0 1 1 6 0v5",
-	},
-	{
-		title: "Hand",
-		d: "M18 11V6a2 2 0 0 0-4 0v5 M14 10V4a2 2 0 0 0-4 0v6 M10 10.5V6a2 2 0 0 0-4 0v8",
-	},
-	{ title: "Text", d: "M14 4.1 12 6 M5.1 8l-2.9-.8 M6 12l-1.9 2 M7.2 2.2 8 5.1" },
-	{ title: "Cross", d: "M12 2v20M2 12h20" },
-];
+function safeAssetUrl(relativePath: string): string {
+	try {
+		return getAssetPath(relativePath);
+	} catch {
+		return `/${relativePath.replace(/^\/+/, "")}`;
+	}
+}
 
 export function CursorPane() {
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+
+	// Built-in "Default" plus each bundled theme. Thumbnails use the theme's
+	// arrow asset; the persisted value is the theme id. Same shape as the
+	// legacy SettingsPanel picker.
+	const cursorThemeOptions = useMemo(
+		() => [
+			{
+				id: DEFAULT_CURSOR_THEME_ID,
+				name: "Default",
+				previewUrl: defaultCursorPreviewUrl,
+			},
+			...CURSOR_THEMES.map((theme) => {
+				const previewPath = (theme.assets.arrow ?? theme.assets.pointer)?.assetPath;
+				return {
+					id: theme.id,
+					name: theme.name,
+					previewUrl: previewPath ? safeAssetUrl(previewPath) : defaultCursorPreviewUrl,
+				};
+			}),
+		],
+		[],
+	);
+
 	return (
 		<Pane
 			title="Cursor"
@@ -698,20 +714,27 @@ export function CursorPane() {
 			</div>
 			<div className={styles.sectionLabel}>Cursor style</div>
 			<div className={styles.cursorGrid}>
-				{CURSOR_THEMES.slice(0, 5).map((theme) => {
-					const isActive = settings.cursorTheme === theme.id;
+				{cursorThemeOptions.map((option) => {
+					const isActive = settings.cursorTheme === option.id;
 					return (
 						<button
 							type="button"
-							key={theme.id}
+							key={option.id}
 							className={`${styles.cursorCell} ${isActive ? styles.isActive : ""}`}
-							title={theme.name}
+							title={option.name}
+							aria-label={option.name}
+							aria-pressed={isActive}
 							disabled={!hasDocument}
-							onClick={() => void set({ cursor: { theme: theme.id } })}
+							onClick={() => void set({ cursor: { theme: option.id } })}
 						>
-							<svg viewBox="0 0 24 24" fill="currentColor" width={18} height={18}>
-								<path d={CURSOR_STYLE_LABELS[0]?.d ?? ""} />
-							</svg>
+							<img
+								src={option.previewUrl}
+								alt=""
+								width={20}
+								height={20}
+								draggable={false}
+								style={{ objectFit: "contain", pointerEvents: "none" }}
+							/>
 						</button>
 					);
 				})}

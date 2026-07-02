@@ -1448,7 +1448,8 @@
  * on each side, frame color per kind, gradient sheen on top. */
 .zoomPill,
 .speedPill,
-.annotationPill {
+.annotationPill,
+.skipPill {
 	--_pill: var(--accent);
 	position: absolute;
 	top: 50%;
@@ -1486,6 +1487,9 @@
 .annotationPill {
 	--_pill: var(--annotation);
 }
+.skipPill {
+	--_pill: var(--danger);
+}
 .lanePillSelected {
 	box-shadow:
 		0 4px 12px -8px color-mix(in oklch, var(--_pill) 60%, transparent),
@@ -1505,7 +1509,9 @@
 .speedPill::before,
 .speedPill::after,
 .annotationPill::before,
-.annotationPill::after {
+.annotationPill::after,
+.skipPill::before,
+.skipPill::after {
 	content: "";
 	position: absolute;
 	top: 50%;
@@ -1522,12 +1528,14 @@
 }
 .zoomPill::before,
 .speedPill::before,
-.annotationPill::before {
+.annotationPill::before,
+.skipPill::before {
 	left: -4px;
 }
 .zoomPill::after,
 .speedPill::after,
-.annotationPill::after {
+.annotationPill::after,
+.skipPill::after {
 	right: -4px;
 }
 .pillIcon {
