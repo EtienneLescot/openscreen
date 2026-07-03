@@ -74,19 +74,20 @@ async function loadTranscriber(opts: {
 }
 
 self.onmessage = async (event: MessageEvent<TranscribeWorkerRequest>) => {
-	const { samples, trimRegions, useLocalModels, assetBaseUrl } = event.data;
+	const { samples, trimRegions, useLocalModels, assetBaseUrl, language } = event.data;
 	try {
 		post({ type: "status", phase: "model" });
 		const transcriber = await loadTranscriber({ useLocalModels, assetBaseUrl });
 
 		post({ type: "status", phase: "transcribe" });
-		const { segments, granularity } = await runTranscription(
+		const { segments, granularity, detectedLanguage } = await runTranscription(
 			transcriber,
 			samples,
 			trimRegions ?? [],
+			{ language },
 		);
 
-		post({ type: "result", segments, granularity });
+		post({ type: "result", segments, granularity, detectedLanguage });
 	} catch (e) {
 		post({ type: "error", message: e instanceof Error ? e.message : String(e) });
 	}

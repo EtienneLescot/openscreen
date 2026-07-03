@@ -15,6 +15,7 @@ import {
 	type AiEditionLlmProviderModelsResult,
 	type AiEditionLlmSnapshot,
 	type AiEditionProjectSummary,
+	type AxcutTimelineOperation,
 	type CursorCapabilities,
 	type CursorRecordingData,
 	type CursorTelemetryPoint,
@@ -351,6 +352,20 @@ export const nativeBridgeClient = {
 				domain: "aiEdition",
 				action: "chat.compactNow",
 				payload: { projectId, sessionId },
+			}),
+		runTimelineOperation: (
+			projectId: string,
+			sessionId: string,
+			operation: AxcutTimelineOperation,
+			conversationMessage: string,
+		) =>
+			requireNativeBridgeData<
+				| { success: true; result: { document: unknown; summary: string } }
+				| { success: false; error: string }
+			>({
+				domain: "aiEdition",
+				action: "timeline.run",
+				payload: { projectId, sessionId, operation, conversationMessage },
 			}),
 	},
 };

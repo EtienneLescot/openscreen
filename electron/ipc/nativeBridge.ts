@@ -70,6 +70,18 @@ export interface NativeBridgeContext {
 		projectId: string,
 		sessionId: string,
 	) => Promise<import("../../src/native/contracts").AiEditionChatCompactResult | null>;
+	runTimelineOperation: (
+		projectId: string,
+		sessionId: string,
+		op: import("../../src/native/contracts").AxcutTimelineOperation,
+		conversationMessage: string,
+	) => Promise<
+		| {
+				success: true;
+				result: import("../../src/native/contracts").AppliedTimelineOperation;
+		  }
+		| { success: false; error: string }
+	>;
 	getContextUsage: (
 		projectId: string,
 		sessionId: string,
@@ -212,6 +224,7 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 		undoLastToolBatch: context.undoAiEditionToolBatch,
 		rewindToMessage: context.rewindToMessage,
 		compactNow: context.compactNow,
+		runTimelineOperation: context.runTimelineOperation,
 		getContextUsage: context.getContextUsage,
 		getDefaultChatHistory: context.getAiEditionChatHistoryDefault,
 		clearDefaultChatHistory: context.clearAiEditionChatHistoryDefault,
@@ -527,6 +540,16 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 								await aiEditionService.chatCompactNow(
 									request.payload.projectId,
 									request.payload.sessionId,
+								),
+							);
+						case "timeline.run":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.chatRunTimelineOperation(
+									request.payload.projectId,
+									request.payload.sessionId,
+									request.payload.operation,
+									request.payload.conversationMessage,
 								),
 							);
 						default:

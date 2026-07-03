@@ -1,9 +1,11 @@
 import { beforeEach, describe, expect, it } from "vitest";
+import { type AxcutDocument, createEmptyDocument } from "../../src/lib/ai-edition/schema";
 import {
 	createSession,
 	deleteSession,
 	listSessions,
 	renameSession,
+	runTimelineOperation,
 	selectSession,
 } from "./chat-service";
 import type { LlmConfigStore } from "./llm-config-store";
@@ -105,5 +107,102 @@ describe("chat-service runChat signature", () => {
 		const result = await runChat("proj_sig", s.id, "hi", llmConfig);
 		expect(result.success).toBe(false);
 		expect(result.error).toMatch(/No LLM provider/);
+	});
+});
+
+// ponytail: runTimelineOperation reads, applies, saves, and records a chat
+// summary. Tested with a stub DocumentService so the test is fast + offline.
+describe("runTimelineOperation", () => {
+	function makeDocument(): AxcutDocument {
+		const base = createEmptyDocument({ title: "T", projectId: "proj_run" });
+		const assetId = "asset_1";
+		return {
+			...base,
+			project: { ...base.project, primaryAssetId: assetId },
+			assets: [
+				{
+					id: assetId,
+					kind: "video" as const,
+					label: "Rec",
+					originalPath: "/tmp/r.mp4",
+					durationSec: 60,
+				},
+			],
+			timeline: {
+				...base.timeline,
+				clips: [
+					{
+						id: "c1",
+						assetId,
+						sourceStartSec: 0,
+						sourceEndSec: 60,
+						timelineStartSec: 0,
+						timelineEndSec: 60,
+						wordRefs: [],
+						origin: "user" as const,
+						reason: "",
+					},
+				],
+			},
+		};
+	}
+
+	function makeDocumentsStub() {
+		const initial = makeDocument();
+		const file: { stored: AxcutDocument | undefined } = { stored: initial };
+		const documents = {
+			async getProject(_id: string): Promise<AxcutDocument> {
+				if (!file.stored) throw new Error("no document");
+				return file.stored;
+			},
+			async saveProject(doc: AxcutDocument): Promise<AxcutDocument> {
+				file.stored = doc;
+				return doc;
+			},
+		};
+		return { documents, file };
+	}
+
+	it("applies the op, persists, and records an assistant summary", async () => {
+		const { documents, file } = makeDocumentsStub();
+		const s = createSession("proj_run");
+		const result = await runTimelineOperation(
+			"proj_run",
+			s.id,
+			{ type: "add_skip_range", startSec: 5, endSec: 8 },
+			"Trimmed silence",
+			documents,
+		);
+		expect(result.success).toBe(true);
+		if (!result.success) return;
+		expect(result.result.summary).toMatch(/added skip/);
+		const saved = file.stored?.timeline.skipRanges ?? [];
+		expect(saved.some((s) => s.startSec === 5)).toBe(true);
+		const session = selectSession("proj_run", s.id);
+		expect(session?.messages).toHaveLength(1);
+		expect(session?.messages[0].content).toBe("Trimmed silence");
+		expect(session?.messages[0].role).toBe("assistant");
+	});
+
+	it("returns success:false on getProject failure", async () => {
+		const documents = {
+			async getProject() {
+				throw new Error("disk is dead");
+			},
+			async saveProject() {
+				throw new Error("disk is dead");
+			},
+		};
+		const s = createSession("proj_run_err");
+		const result = await runTimelineOperation(
+			"proj_run_err",
+			s.id,
+			{ type: "restore_full_timeline" },
+			"",
+			documents,
+		);
+		expect(result.success).toBe(false);
+		if (result.success) return;
+		expect(result.error).toBe("disk is dead");
 	});
 });

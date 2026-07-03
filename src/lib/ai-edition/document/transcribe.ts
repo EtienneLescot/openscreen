@@ -33,9 +33,17 @@ export async function transcribeAsset(
 	});
 
 	options.onStatus?.("transcribing");
+	// Only pass `language` to the worker when the caller forced a specific
+	// code. `"auto"` (or any falsy value) leaves Whisper to detect from
+	// the audio. The pipeline tags every chunk with the language it used
+	// (forced or detected) and we read it back via `result.detectedLanguage`
+	// so the stored transcript reflects reality, not the input option.
+	const forcedLanguage =
+		options.language && options.language !== "auto" ? options.language : undefined;
 	const result = await transcribeMono16kToSegments(audioResult.samples, {
 		trimRegions: [],
 		signal: options.signal,
+		language: forcedLanguage,
 	});
 
 	const segments: AxcutTranscriptSegment[] = [];
@@ -76,7 +84,10 @@ export async function transcribeAsset(
 
 	return {
 		assetId,
-		language: options.language ?? "auto",
+		// Prefer the model-reported language (covers both forced picks and
+		// auto-detect); fall back to the input option, then "auto" when
+		// nothing was detected (very rare on tiny.en — usually a no-audio run).
+		language: result.detectedLanguage ?? options.language ?? "auto",
 		segments,
 		words,
 	};

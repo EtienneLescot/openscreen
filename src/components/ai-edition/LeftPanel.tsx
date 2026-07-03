@@ -5,8 +5,13 @@ import { toast } from "sonner";
 import { AI_FEATURES_ENABLED } from "@/components/video-editor/featureFlags";
 import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { useOptimisticTimelineOps } from "@/lib/ai-edition/store/useOptimisticTimelineOps";
 import { nativeBridgeClient } from "@/native/client";
-import type { AiEditionLlmConfig, AiEditionToolCallSummary } from "@/native/contracts";
+import type {
+	AiEditionLlmConfig,
+	AiEditionToolCallSummary,
+	AxcutTimelineOperation,
+} from "@/native/contracts";
 import {
 	PROVIDER_DEFINITIONS,
 	REASONING_EFFORT_OPTIONS,
@@ -1062,6 +1067,58 @@ function ChatStripPanel() {
 		[projectId],
 	);
 
+	// ponytail: inline session rename. Click the title to edit, Enter saves,
+	// Escape cancels, blur saves when the value is non-empty (axcut parity).
+	const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+	const [editingTitle, setEditingTitle] = useState("");
+	const editingInputRef = useRef<HTMLInputElement | null>(null);
+	const beginEditTitle = useCallback((id: string, currentTitle: string) => {
+		setEditingSessionId(id);
+		setEditingTitle(currentTitle);
+	}, []);
+	const cancelEditTitle = useCallback(() => {
+		setEditingSessionId(null);
+		setEditingTitle("");
+	}, []);
+	const commitEditTitle = useCallback(
+		async (id: string) => {
+			const next = editingTitle.trim();
+			if (!next) {
+				cancelEditTitle();
+				return;
+			}
+			setEditingSessionId(null);
+			await handleRename(id, next);
+		},
+		[editingTitle, handleRename, cancelEditTitle],
+	);
+
+	const { queue: queueTimelineOp, busy: queueBusy } = useOptimisticTimelineOps(
+		projectId,
+		activeSessionId,
+	);
+	const runAddSkip = useCallback(() => {
+		const raw = window.prompt("Add skip range\nFormat: startSec-endSec (e.g. 1.2-3.4)", "5-8");
+		if (!raw) return;
+		const m = raw.match(/^\s*(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*$/);
+		if (!m) {
+			toast.error("Use startSec-endSec, e.g. 1.2-3.4");
+			return;
+		}
+		const startSec = Number(m[1]);
+		const endSec = Number(m[2]);
+		if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec) {
+			toast.error("endSec must be greater than startSec.");
+			return;
+		}
+		const op: AxcutTimelineOperation = {
+			type: "add_skip_range",
+			startSec,
+			endSec,
+		};
+		void queueTimelineOp(op, `Added skip ${startSec}–${endSec}s.`);
+	}, [queueTimelineOp]);
+
 	return (
 		<aside className={styles.panel}>
 			<div className={styles.chatStrip}>
@@ -1176,35 +1233,65 @@ function ChatStripPanel() {
 						background: "var(--surface-warm)",
 					}}
 				>
-					<span
-						style={{
-							font: "500 12px/1.3 var(--font-body)",
-							color: "var(--fg-2)",
-							overflow: "hidden",
-							textOverflow: "ellipsis",
-							whiteSpace: "nowrap",
-							flex: 1,
-							cursor: "text",
-						}}
-						title="Click to rename"
-						onClick={() => {
-							const current = sessions.find((s) => s.id === activeSessionId);
-							if (!current) return;
-							const next = window.prompt("Rename conversation", current.title);
-							if (next !== null) void handleRename(activeSessionId, next);
-						}}
-					>
-						{sessions.find((s) => s.id === activeSessionId)?.title ?? "Conversation"}
-					</span>
+					{editingSessionId === activeSessionId ? (
+						<input
+							ref={editingInputRef}
+							type="text"
+							autoFocus
+							value={editingTitle}
+							onChange={(event) => setEditingTitle(event.target.value)}
+							onFocus={(event) => event.currentTarget.select()}
+							onBlur={() => {
+								if (editingSessionId) void commitEditTitle(editingSessionId);
+							}}
+							onKeyDown={(event) => {
+								if (event.key === "Enter") {
+									event.preventDefault();
+									if (editingSessionId) void commitEditTitle(editingSessionId);
+								} else if (event.key === "Escape") {
+									event.preventDefault();
+									cancelEditTitle();
+								}
+							}}
+							style={{
+								font: "500 12px/1.3 var(--font-body)",
+								color: "var(--fg)",
+								background: "var(--surface)",
+								border: "1px solid var(--accent)",
+								borderRadius: "var(--r-sm)",
+								padding: "2px 6px",
+								flex: 1,
+								minWidth: 0,
+							}}
+						/>
+					) : (
+						<span
+							style={{
+								font: "500 12px/1.3 var(--font-body)",
+								color: "var(--fg-2)",
+								overflow: "hidden",
+								textOverflow: "ellipsis",
+								whiteSpace: "nowrap",
+								flex: 1,
+								cursor: "text",
+							}}
+							title="Click to rename"
+							onClick={() => {
+								const current = sessions.find((s) => s.id === activeSessionId);
+								if (current) beginEditTitle(activeSessionId, current.title);
+							}}
+						>
+							{sessions.find((s) => s.id === activeSessionId)?.title ?? "Conversation"}
+						</span>
+					)}
 					<button
 						type="button"
 						title="Rename conversation"
 						aria-label="Rename conversation"
+						disabled={editingSessionId === activeSessionId}
 						onClick={() => {
 							const current = sessions.find((s) => s.id === activeSessionId);
-							if (!current) return;
-							const next = window.prompt("Rename conversation", current.title);
-							if (next !== null) void handleRename(activeSessionId, next);
+							if (current) beginEditTitle(activeSessionId, current.title);
 						}}
 						style={{
 							background: "transparent",
@@ -1263,6 +1350,25 @@ function ChatStripPanel() {
 							<path d="M14 11v6" />
 							<path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
 						</svg>
+					</button>
+					<button
+						type="button"
+						title="Add skip range"
+						aria-label="Add skip range"
+						disabled={!activeSessionId || queueBusy}
+						onClick={runAddSkip}
+						style={{
+							background: "transparent",
+							border: "1px solid var(--border-soft)",
+							borderRadius: "var(--r-sm)",
+							color: "var(--fg-2)",
+							font: "500 10px var(--font-body)",
+							padding: "2px 6px",
+							cursor: queueBusy ? "wait" : "pointer",
+							whiteSpace: "nowrap",
+						}}
+					>
+						+ skip
 					</button>
 				</div>
 			) : null}
