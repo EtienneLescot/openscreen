@@ -11,7 +11,8 @@
 
 import type { AxcutDocument } from "../schema";
 import {
-	byStart,
+	duplicateClip,
+	moveClip,
 	normalizeIntervals,
 	primaryAssetDuration,
 	replaceTimeline,
@@ -39,6 +40,18 @@ export type AxcutTimelineOperation =
 			reason?: string;
 	  }
 	| {
+			type: "update_skip_range";
+			skipId: string;
+			startSec: number;
+			endSec: number;
+			reason?: string;
+	  }
+	| {
+			type: "remove_skip_range";
+			skipId: string;
+			reason?: string;
+	  }
+	| {
 			type: "restore_full_timeline";
 			reason?: string;
 	  }
@@ -47,6 +60,17 @@ export type AxcutTimelineOperation =
 			clipId: string;
 			sourceStartSec: number;
 			sourceEndSec: number;
+			reason?: string;
+	  }
+	| {
+			type: "move_clip";
+			clipId: string;
+			insertIndex: number;
+			reason?: string;
+	  }
+	| {
+			type: "duplicate_clip";
+			clipId: string;
 			reason?: string;
 	  };
 
@@ -155,7 +179,14 @@ export function applyTimelineOperation(
 			const lo = Math.max(0, Math.min(op.startSec, op.endSec));
 			const hi = Math.max(lo, Math.max(op.startSec, op.endSec));
 			const existing = document.timeline.skipRanges.filter((s) => s.assetId === assetId);
-			const merged = normalizeIntervals(primaryAssetDuration(document), [
+			// ponytail: bound by the skip-range asset's duration, not the
+			// primary asset's. Recording projects can have a short primary
+			// asset (snippet) while the clip uses a long video — using
+			// primaryAssetDuration here would truncate the skip range and
+			// only trim a few words instead of the user's full selection.
+			const asset = document.assets.find((a) => a.id === assetId);
+			const duration = asset?.durationSec ?? Infinity;
+			const merged = normalizeIntervals(duration, [
 				{ startSec: lo, endSec: hi },
 				...existing.map((s) => ({ startSec: s.startSec, endSec: s.endSec })),
 			]);
@@ -177,6 +208,42 @@ export function applyTimelineOperation(
 			return {
 				document: next,
 				summary: `added skip ${formatSec(lo)}–${formatSec(hi)}`,
+			};
+		}
+		case "update_skip_range": {
+			const lo = Math.max(0, Math.min(op.startSec, op.endSec));
+			const hi = Math.max(lo, Math.max(op.startSec, op.endSec));
+			let found = false;
+			const next: AxcutDocument = {
+				...document,
+				timeline: {
+					...document.timeline,
+					skipRanges: document.timeline.skipRanges.map((s) => {
+						if (s.id !== op.skipId) return s;
+						found = true;
+						return { ...s, startSec: lo, endSec: hi, reason: op.reason ?? s.reason };
+					}),
+				},
+				preview: { ...document.preview, revision: document.preview.revision + 1 },
+			};
+			if (!found) return { document, summary: `unknown skip ${op.skipId}` };
+			return {
+				document: next,
+				summary: `updated skip ${op.skipId} to ${formatSec(lo)}–${formatSec(hi)}`,
+			};
+		}
+		case "remove_skip_range": {
+			const next: AxcutDocument = {
+				...document,
+				timeline: {
+					...document.timeline,
+					skipRanges: document.timeline.skipRanges.filter((s) => s.id !== op.skipId),
+				},
+				preview: { ...document.preview, revision: document.preview.revision + 1 },
+			};
+			return {
+				document: next,
+				summary: `removed skip ${op.skipId}`,
 			};
 		}
 		case "restore_full_timeline": {
@@ -215,6 +282,14 @@ export function applyTimelineOperation(
 				document: next,
 				summary: `trimmed clip to ${formatSec(Math.min(op.sourceStartSec, op.sourceEndSec))}–${formatSec(Math.max(op.sourceStartSec, op.sourceEndSec))}`,
 			};
+		}
+		case "move_clip": {
+			const next = moveClip(document, op.clipId, op.insertIndex, "user", op.reason ?? "");
+			return { document: next, summary: `moved clip ${op.clipId} to position ${op.insertIndex}` };
+		}
+		case "duplicate_clip": {
+			const next = duplicateClip(document, op.clipId, "user", op.reason ?? "");
+			return { document: next, summary: `duplicated clip ${op.clipId}` };
 		}
 		default: {
 			// ponytail: exhaustive — TS errors here when a new variant is added.

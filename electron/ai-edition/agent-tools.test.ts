@@ -176,8 +176,15 @@ describe("executeAgentTool", () => {
 	});
 
 	it("replaceTimeline rebuilds clips and inverse skip ranges", () => {
+		const doc = fixtureDocument();
+		// Test the rebuild path: strip user-placed clips first so the tool
+		// is allowed to operate (it refuses when origin:user clips are present).
+		const stripped: AxcutDocument = {
+			...doc,
+			timeline: { ...doc.timeline, clips: [] },
+		};
 		const result = executeAgentTool(
-			fixtureDocument(),
+			stripped,
 			"replaceTimeline",
 			JSON.stringify({
 				intervals: [
@@ -195,6 +202,21 @@ describe("executeAgentTool", () => {
 			[30, 60],
 		]);
 		expect(result.summary).toMatch(/2 intervals/);
+	});
+
+	it("replaceTimeline refuses when the timeline has user-placed clips", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"replaceTimeline",
+			JSON.stringify({
+				intervals: [{ startSec: 0, endSec: 30 }],
+				reason: "remove silences",
+			}),
+		);
+		expect(result.ok).toBe(false);
+		const payload = JSON.parse(result.resultJson) as { error: string };
+		expect(payload.error).toMatch(/user-placed clip/);
+		expect(payload.error).toMatch(/addSkip/);
 	});
 
 	it("rejects malformed JSON arguments and unknown tools", () => {
