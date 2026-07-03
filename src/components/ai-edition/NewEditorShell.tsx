@@ -51,7 +51,6 @@ export function NewEditorShell() {
 	const lastSavedAt = useProjectStore((s) => s.lastSavedAt);
 	const createProject = useProjectStore((s) => s.createProject);
 	const addAsset = useProjectStore((s) => s.addAsset);
-	const replaceTimeline = useProjectStore((s) => s.replaceTimeline);
 	const setTranscript = useProjectStore((s) => s.setTranscript);
 	const setCurrentTime = useProjectStore((s) => s.setCurrentTime);
 	const setSourceDuration = useProjectStore((s) => s.setSourceDuration);
@@ -100,6 +99,12 @@ export function NewEditorShell() {
 	}, []);
 	const seekSeqRef = useRef(0);
 	const initRef = useRef(false);
+
+	// ponytail: serialise timeline-edit saves so two rapid Backspaces
+	// don't race each other's IPC save and overwrite one another in the
+	// store. Each new save chains off the previous one, so the store is
+	// always updated in the order the user issued the trims.
+	const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
 
 	const promptUnsaved = useCallback(
 		(action: "close" | "new" | "open" | "record"): Promise<UnsavedChoice> => {
@@ -417,20 +422,68 @@ export function NewEditorShell() {
 		}
 	}, [loadProject]);
 
-	const handleDropWordRange = useCallback(
-		async (startSec: number, endSec: number) => {
-			if (!document) return;
-			const { subtractInterval, timelineIntervals: getIntervals } = await import(
-				"@/lib/ai-edition/document/timeline"
+	// ponytail: transcript-pane → timeline skip ranges. The right pane's
+	// contentEditable region converts user Backspace/Delete into a new
+	// skipRange (NOT a destructive word removal — the source text stays
+	// intact, the word is just hidden by the skip overlay). Mirrors
+	// axcut's `queueAddSkipRange` / `queueRemoveSkipRange` callbacks in
+	// apps/web/src/App.tsx.
+	const handleAddSkipRange = useCallback(
+		(assetId: string, startSec: number, endSec: number, reason: string) => {
+			// ponytail: read the latest document from the store, not the
+			// closure. The closure captures the document at render time; if
+			// the user fires two rapid Backspaces before React re-renders,
+			// the second call would see the same stale document and add the
+			// second skip to a base that already has the first skip's
+			// pending-state. Then the two saveDocument calls race and the
+			// last one to call set() wins. Reading from getState() always
+			// returns the latest committed value.
+			const doc = useProjectStore.getState().document ?? document;
+			if (!doc) return;
+			// ponytail: serialise via saveQueueRef so two rapid trims
+			// can't race each other's IPC save and overwrite one another.
+			const queued = saveQueueRef.current
+				.then(() => import("@/lib/ai-edition/document/operations"))
+				.then(({ applyTimelineOperation }) =>
+					applyTimelineOperation(doc, {
+						type: "add_skip_range",
+						assetId,
+						startSec,
+						endSec,
+						reason,
+					}),
+				)
+				.then((next) => saveDocument(next.document));
+			saveQueueRef.current = queued.then(
+				() => undefined,
+				() => undefined,
 			);
-			const intervals = getIntervals(document);
-			const next = subtractInterval(intervals, { startSec, endSec });
-			await replaceTimeline(
-				next,
-				`Dropped word range ${startSec.toFixed(1)}s-${endSec.toFixed(1)}s`,
-			);
+			return queued;
 		},
-		[document, replaceTimeline],
+		[document, saveDocument],
+	);
+
+	const handleRemoveSkipRange = useCallback(
+		(skipId: string) => {
+			const doc = useProjectStore.getState().document ?? document;
+			if (!doc) return;
+			const queued = saveQueueRef.current
+				.then(() => import("@/lib/ai-edition/document/operations"))
+				.then(({ applyTimelineOperation }) =>
+					applyTimelineOperation(doc, {
+						type: "remove_skip_range",
+						skipId,
+						reason: "Restored from transcript pane.",
+					}),
+				)
+				.then((next) => saveDocument(next.document));
+			saveQueueRef.current = queued.then(
+				() => undefined,
+				() => undefined,
+			);
+			return queued;
+		},
+		[document, saveDocument],
 	);
 
 	const handleSelectProject = useCallback(
@@ -957,11 +1010,15 @@ export function NewEditorShell() {
 						active={rightPane}
 						onChange={setRightPane}
 						onCrop={() => setCropOpen(true)}
-						transcript={document?.transcript ?? null}
+						transcripts={document?.transcripts ?? []}
+						assets={document?.assets ?? []}
 						clips={clips}
+						skipRanges={document?.timeline?.skipRanges ?? []}
+						busy={isTranscribing}
 						currentTimeSec={currentTimeSec}
 						onSeek={handleSeek}
-						onDropWordRange={handleDropWordRange}
+						onAddSkipRange={handleAddSkipRange}
+						onRemoveSkipRange={handleRemoveSkipRange}
 						onTranscribe={handleTranscribe}
 						canTranscribe={hasAsset}
 						isTranscribing={isTranscribing}

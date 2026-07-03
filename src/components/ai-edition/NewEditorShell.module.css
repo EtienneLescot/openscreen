@@ -253,6 +253,13 @@
 	border-left: 1px solid var(--border-soft);
 }
 
+.leftPanel {
+	display: flex;
+	flex-direction: column;
+	overflow: hidden;
+	min-height: 0;
+}
+
 /* ─── rails — vertical icon strips ─────────────────────────────── */
 .rail {
 	display: flex;
@@ -303,12 +310,22 @@
 
 /* ─── panels (chat, transcript, etc.) ──────────────────────────── */
 .panel {
-	display: grid;
-	grid-template-rows: auto 1fr auto;
+	display: flex;
+	flex-direction: column;
+	flex: 1 1 0;
 	min-width: 0;
 	min-height: 0;
 	background: var(--bg);
 	overflow: hidden;
+}
+
+/* Direct children of .panel: panelHeader (auto), panelBody (1fr), chatInput (auto). */
+.panel > .panelHeader,
+.panel > .chatInput {
+	flex: 0 0 auto;
+}
+.panel > .panelBody {
+	flex: 1 1 0;
 }
 .panelHead {
 	display: flex;
@@ -1125,6 +1142,10 @@
 	background: var(--surface-3);
 	color: var(--fg-2);
 }
+.stripActions button:disabled {
+	opacity: 0.4;
+	cursor: not-allowed;
+}
 .chatHint {
 	font-size: var(--fs-app-sm);
 	color: var(--muted);
@@ -1312,15 +1333,7 @@
 	vertical-align: middle;
 	white-space: nowrap;
 }
-.transcriptFlow .filler {
-	display: inline-block;
-	padding: 1px 6px;
-	margin: 0 1px;
-	background: var(--danger-soft);
-	color: var(--danger);
-	border-radius: var(--r-sm);
-	font-weight: 500;
-}
+
 
 /* ─── bottombar / timeline ─────────────────────────────────────── */
 .bottombar {

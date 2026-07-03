@@ -20,8 +20,10 @@ import {
 } from "@/components/video-editor/types";
 import type {
 	AxcutAnnotationRegion,
+	AxcutAsset,
 	AxcutClip,
 	AxcutDocument,
+	AxcutSkipRange,
 	AxcutTranscript,
 } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -47,11 +49,15 @@ interface RightPanelStackProps {
 	active: RightPaneId;
 	onChange: (id: RightPaneId) => void;
 	onCrop: () => void;
-	transcript: AxcutTranscript | null;
+	transcripts: AxcutTranscript[];
+	assets: AxcutAsset[];
 	clips: AxcutClip[];
+	skipRanges: AxcutSkipRange[];
+	busy: boolean;
 	currentTimeSec: number;
 	onSeek: (sec: number) => void;
-	onDropWordRange: (start: number, end: number) => void;
+	onAddSkipRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
+	onRemoveSkipRange: (skipId: string) => void;
 	onTranscribe: () => void;
 	canTranscribe: boolean;
 	isTranscribing: boolean;
@@ -77,11 +83,15 @@ export function RightPanelStack({
 	active,
 	onChange,
 	onCrop,
-	transcript,
+	transcripts,
+	assets,
 	clips,
+	skipRanges,
+	busy,
 	currentTimeSec,
 	onSeek,
-	onDropWordRange,
+	onAddSkipRange,
+	onRemoveSkipRange,
 	onTranscribe,
 	canTranscribe,
 	isTranscribing,
@@ -109,11 +119,15 @@ export function RightPanelStack({
 				{active === "background" ? <BackgroundPane /> : null}
 				{active === "transcript" ? (
 					<TranscriptPane
-						transcript={transcript}
+						transcripts={transcripts}
+						assets={assets}
 						clips={clips}
+						skipRanges={skipRanges}
+						busy={busy}
 						currentTimeSec={currentTimeSec}
 						onSeek={onSeek}
-						onDropWordRange={onDropWordRange}
+						onAddSkipRange={onAddSkipRange}
+						onRemoveSkipRange={onRemoveSkipRange}
 						onTranscribe={onTranscribe}
 						canTranscribe={canTranscribe}
 						isTranscribing={isTranscribing}

@@ -1,10 +1,7 @@
-// Ported from axcut/apps/server/src/lib/timeline.ts — pure interval math for
-// the clip/skip model. No DOM, no IPC, no side effects. The caller (store,
-// exporter, agent) feeds an AxcutDocument and gets back intervals or a new
-// document with updated clips.
-//
-// ponytail: only the ops Phase 1 needs (replaceTimeline, dropRange, restore).
-// The full 11-op dispatcher lands in Phase 6 with the agent runtime.
+// Ported from axcut/apps/server/src/lib/timeline.ts — pure interval math
+// for the clip/skip model. No DOM, no IPC, no side effects. The caller
+// (store, exporter, agent) feeds an AxcutDocument and gets back intervals
+// or a new document with updated clips.
 
 import type { AxcutClip, AxcutDocument, AxcutTranscript } from "../schema";
 
@@ -175,6 +172,81 @@ export function replaceTimeline(
 			clips,
 			skipRanges,
 			gaps: [],
+		},
+		preview: {
+			...document.preview,
+			revision: document.preview.revision + 1,
+		},
+	};
+}
+
+// ponytail: reorder an existing clip by removing it from its current
+// position and inserting at `insertIndex` (clamped to the array length).
+// Used for "move this clip there" / "swap these clips" — preserves all
+// user-placed clip ids, origins, and source ranges. Mirrors axcut's
+// apps/server/src/lib/timeline.ts#moveClip.
+export function moveClip(
+	document: AxcutDocument,
+	clipId: string,
+	insertIndex: number,
+	origin: "system" | "agent" | "user" = "user",
+	reason: string = "",
+): AxcutDocument {
+	const index = document.timeline.clips.findIndex((c) => c.id === clipId);
+	if (index < 0) {
+		throw new Error(`Unknown clip ${clipId}.`);
+	}
+	const movingClip = {
+		...document.timeline.clips[index],
+		origin,
+		reason: reason || document.timeline.clips[index].reason,
+	};
+	const remaining = document.timeline.clips.filter((c) => c.id !== clipId);
+	const bounded = Math.max(0, Math.min(insertIndex, remaining.length));
+	const reordered = [...remaining.slice(0, bounded), movingClip, ...remaining.slice(bounded)];
+	return {
+		...document,
+		timeline: {
+			...document.timeline,
+			clips: resequenceClips(reordered),
+		},
+		preview: {
+			...document.preview,
+			revision: document.preview.revision + 1,
+		},
+	};
+}
+
+// ponytail: duplicate a clip (preserves the original). Used for "split this
+// clip into two" or "make a copy". Mirrors axcut's
+// apps/server/src/lib/timeline.ts#duplicateClip.
+export function duplicateClip(
+	document: AxcutDocument,
+	clipId: string,
+	origin: "system" | "agent" | "user" = "user",
+	reason: string = "",
+): AxcutDocument {
+	const index = document.timeline.clips.findIndex((c) => c.id === clipId);
+	if (index < 0) {
+		throw new Error(`Unknown clip ${clipId}.`);
+	}
+	const original = document.timeline.clips[index];
+	const copy = {
+		...original,
+		id: `clip_${document.timeline.clips.length + 1}_copy`,
+		origin,
+		reason: reason || original.reason,
+	};
+	const next = [
+		...document.timeline.clips.slice(0, index + 1),
+		copy,
+		...document.timeline.clips.slice(index + 1),
+	];
+	return {
+		...document,
+		timeline: {
+			...document.timeline,
+			clips: resequenceClips(next),
 		},
 		preview: {
 			...document.preview,

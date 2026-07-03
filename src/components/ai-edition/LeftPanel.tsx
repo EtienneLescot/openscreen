@@ -773,6 +773,20 @@ function ChatStripPanel() {
 		const text = input.trim();
 		setInput("");
 		setBusy(true);
+		// ponytail: pre-seed the user message so the rewind ↩ button is
+		// available before the server confirms. Mirrors axcut's
+		// `before-message` checkpoint that runChat records in chat-service.
+		const optimisticUserId = `local_${Date.now()}_u`;
+		setMessages((prev) => [
+			...prev,
+			{
+				id: optimisticUserId,
+				role: "user",
+				content: text,
+				time: new Date().toLocaleTimeString(),
+				checkpointId: optimisticUserId,
+			},
+		]);
 		try {
 			// Mirror axcut's `getOrCreateSession`: the composer works with zero
 			// setup, so the first message on a project with no sessions yet
@@ -793,10 +807,6 @@ function ChatStripPanel() {
 				text,
 				documentSnapshot,
 			);
-			setMessages((prev) => [
-				...prev,
-				{ role: "user", content: text, time: new Date().toLocaleTimeString() },
-			]);
 			const assistant = result.assistantMessage;
 			if (result.success && assistant) {
 				if (result.document) {
@@ -980,8 +990,10 @@ function ChatStripPanel() {
 	// change so the % tracks the live history.
 	const budget = computeBudget(messages);
 
+	const [compactNowPending, setCompactNowPending] = useState(false);
 	const compactNow = useCallback(async () => {
-		if (!projectId || !activeSessionId) return;
+		if (!projectId || !activeSessionId || compactNowPending) return;
+		setCompactNowPending(true);
 		try {
 			const result = await nativeBridgeClient.aiEdition.chatCompact(projectId, activeSessionId);
 			if (!result) {
@@ -1003,8 +1015,10 @@ function ChatStripPanel() {
 			toast.error("Compact failed", {
 				description: err instanceof Error ? err.message : String(err),
 			});
+		} finally {
+			setCompactNowPending(false);
 		}
-	}, [projectId, activeSessionId]);
+	}, [projectId, activeSessionId, compactNowPending]);
 
 	const newChat = useCallback(async () => {
 		if (!projectId) return;
@@ -1121,257 +1135,261 @@ function ChatStripPanel() {
 
 	return (
 		<aside className={styles.panel}>
-			<div className={styles.chatStrip}>
-				<div className={styles.chatStripRow}>
-					<span
-						className={styles.ctxPill}
-						title={`${budget.usedTokens} / ${budget.budgetTokens} estimated tokens`}
-					>
-						<span className={styles.d} aria-hidden />
-						{Math.min(100, Math.round(budget.ratio * 100))}% context
-					</span>
-					<span className={styles.stripActions}>
-						<button
-							type="button"
-							title="Compact"
-							aria-label="Compact"
-							onClick={() => void compactNow()}
-						>
-							<svg
-								width={14}
-								height={14}
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							>
-								<path d="M 6 6 L 12 10 L 18 6" />
-								<path d="M 4 12 L 20 12" />
-								<path d="M 6 18 L 12 14 L 18 18" />
-							</svg>
-						</button>
-						<button
-							type="button"
-							title="AI settings"
-							aria-label="AI settings"
-							onClick={() => setSettingsOpen(true)}
-						>
-							<svg
-								width={14}
-								height={14}
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							>
-								<circle cx="12" cy="12" r="3" />
-								<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
-							</svg>
-						</button>
-					</span>
-					<span className={styles.stripActions}>
-						<button
-							type="button"
-							title="History"
-							aria-label="History"
-							onClick={() => setChatsOpen(true)}
-						>
-							<svg
-								width={14}
-								height={14}
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							>
-								<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
-								<path d="M3 3v5h5" />
-								<path d="M12 7v5l4 2" />
-							</svg>
-						</button>
-						<button
-							type="button"
-							title="New conversation"
-							aria-label="New conversation"
-							onClick={newChat}
-						>
-							<svg
-								width={14}
-								height={14}
-								viewBox="0 0 24 24"
-								fill="none"
-								stroke="currentColor"
-								strokeWidth="2"
-								strokeLinecap="round"
-								strokeLinejoin="round"
-							>
-								<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
-								<path d="M12 7v6" />
-								<path d="M9 10h6" />
-							</svg>
-						</button>
-					</span>
-				</div>
-				<div className={styles.chatHint}>Describe the edit you want…</div>
-			</div>
-
-			{activeSessionId ? (
-				<div
-					style={{
-						display: "flex",
-						alignItems: "center",
-						justifyContent: "space-between",
-						gap: 8,
-						padding: "6px var(--sp-3)",
-						borderTop: "1px solid var(--border-soft)",
-						background: "var(--surface-warm)",
-					}}
-				>
-					{editingSessionId === activeSessionId ? (
-						<input
-							ref={editingInputRef}
-							type="text"
-							autoFocus
-							value={editingTitle}
-							onChange={(event) => setEditingTitle(event.target.value)}
-							onFocus={(event) => event.currentTarget.select()}
-							onBlur={() => {
-								if (editingSessionId) void commitEditTitle(editingSessionId);
-							}}
-							onKeyDown={(event) => {
-								if (event.key === "Enter") {
-									event.preventDefault();
-									if (editingSessionId) void commitEditTitle(editingSessionId);
-								} else if (event.key === "Escape") {
-									event.preventDefault();
-									cancelEditTitle();
-								}
-							}}
-							style={{
-								font: "500 12px/1.3 var(--font-body)",
-								color: "var(--fg)",
-								background: "var(--surface)",
-								border: "1px solid var(--accent)",
-								borderRadius: "var(--r-sm)",
-								padding: "2px 6px",
-								flex: 1,
-								minWidth: 0,
-							}}
-						/>
-					) : (
+			<div className={styles.panelHeader}>
+				<div className={styles.chatStrip}>
+					<div className={styles.chatStripRow}>
 						<span
-							style={{
-								font: "500 12px/1.3 var(--font-body)",
-								color: "var(--fg-2)",
-								overflow: "hidden",
-								textOverflow: "ellipsis",
-								whiteSpace: "nowrap",
-								flex: 1,
-								cursor: "text",
-							}}
-							title="Click to rename"
+							className={styles.ctxPill}
+							title={`${budget.usedTokens} / ${budget.budgetTokens} estimated tokens`}
+						>
+							<span className={styles.d} aria-hidden />
+							{Math.min(100, Math.round(budget.ratio * 100))}% context
+						</span>
+						<span className={styles.stripActions}>
+							<button
+								type="button"
+								title="Compact context"
+								aria-label="Compact context"
+								className={styles.iconBtn}
+								onClick={() => void compactNow()}
+								disabled={!activeSessionId || compactNowPending}
+							>
+								<svg
+									width={14}
+									height={14}
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+									aria-hidden="true"
+								>
+									<path d="M8 4l4 4 4-4" />
+									<path d="M8 20l4-4 4 4" />
+									<path d="M6 12h12" />
+								</svg>
+							</button>
+							<button
+								type="button"
+								title="AI settings"
+								aria-label="AI settings"
+								onClick={() => setSettingsOpen(true)}
+							>
+								<svg
+									width={14}
+									height={14}
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+								>
+									<circle cx="12" cy="12" r="3" />
+									<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+								</svg>
+							</button>
+						</span>
+						<span className={styles.stripActions}>
+							<button
+								type="button"
+								title="History"
+								aria-label="History"
+								onClick={() => setChatsOpen(true)}
+							>
+								<svg
+									width={14}
+									height={14}
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+								>
+									<path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8" />
+									<path d="M3 3v5h5" />
+									<path d="M12 7v5l4 2" />
+								</svg>
+							</button>
+							<button
+								type="button"
+								title="New conversation"
+								aria-label="New conversation"
+								onClick={newChat}
+							>
+								<svg
+									width={14}
+									height={14}
+									viewBox="0 0 24 24"
+									fill="none"
+									stroke="currentColor"
+									strokeWidth="2"
+									strokeLinecap="round"
+									strokeLinejoin="round"
+								>
+									<path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" />
+									<path d="M12 7v6" />
+									<path d="M9 10h6" />
+								</svg>
+							</button>
+						</span>
+					</div>
+				</div>
+
+				{activeSessionId ? (
+					<div
+						style={{
+							display: "flex",
+							alignItems: "center",
+							justifyContent: "space-between",
+							gap: 8,
+							padding: "6px var(--sp-3)",
+							borderTop: "1px solid var(--border-soft)",
+							background: "var(--surface-warm)",
+						}}
+					>
+						{editingSessionId === activeSessionId ? (
+							<input
+								ref={editingInputRef}
+								type="text"
+								autoFocus
+								value={editingTitle}
+								onChange={(event) => setEditingTitle(event.target.value)}
+								onFocus={(event) => event.currentTarget.select()}
+								onBlur={() => {
+									if (editingSessionId) void commitEditTitle(editingSessionId);
+								}}
+								onKeyDown={(event) => {
+									if (event.key === "Enter") {
+										event.preventDefault();
+										if (editingSessionId) void commitEditTitle(editingSessionId);
+									} else if (event.key === "Escape") {
+										event.preventDefault();
+										cancelEditTitle();
+									}
+								}}
+								style={{
+									font: "500 12px/1.3 var(--font-body)",
+									color: "var(--fg)",
+									background: "var(--surface)",
+									border: "1px solid var(--accent)",
+									borderRadius: "var(--r-sm)",
+									padding: "2px 6px",
+									flex: 1,
+									minWidth: 0,
+								}}
+							/>
+						) : (
+							<span
+								style={{
+									font: "500 12px/1.3 var(--font-body)",
+									color: "var(--fg-2)",
+									overflow: "hidden",
+									textOverflow: "ellipsis",
+									whiteSpace: "nowrap",
+									flex: 1,
+									cursor: "text",
+								}}
+								title="Click to rename"
+								onClick={() => {
+									const current = sessions.find((s) => s.id === activeSessionId);
+									if (current) beginEditTitle(activeSessionId, current.title);
+								}}
+							>
+								{sessions.find((s) => s.id === activeSessionId)?.title ?? "Conversation"}
+							</span>
+						)}
+						<button
+							type="button"
+							title="Rename conversation"
+							aria-label="Rename conversation"
+							disabled={editingSessionId === activeSessionId}
 							onClick={() => {
 								const current = sessions.find((s) => s.id === activeSessionId);
 								if (current) beginEditTitle(activeSessionId, current.title);
 							}}
+							style={{
+								background: "transparent",
+								border: 0,
+								color: "var(--meta)",
+								cursor: "pointer",
+								padding: 2,
+							}}
 						>
-							{sessions.find((s) => s.id === activeSessionId)?.title ?? "Conversation"}
-						</span>
-					)}
-					<button
-						type="button"
-						title="Rename conversation"
-						aria-label="Rename conversation"
-						disabled={editingSessionId === activeSessionId}
-						onClick={() => {
-							const current = sessions.find((s) => s.id === activeSessionId);
-							if (current) beginEditTitle(activeSessionId, current.title);
-						}}
-						style={{
-							background: "transparent",
-							border: 0,
-							color: "var(--meta)",
-							cursor: "pointer",
-							padding: 2,
-						}}
-					>
-						<svg
-							width={12}
-							height={12}
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2"
-							strokeLinecap="round"
-							strokeLinejoin="round"
+							<svg
+								width={12}
+								height={12}
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+							>
+								<path d="M12 20h9" />
+								<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
+							</svg>
+						</button>
+						<button
+							type="button"
+							title="Delete conversation"
+							aria-label="Delete conversation"
+							onClick={() => {
+								const current = sessions.find((s) => s.id === activeSessionId);
+								if (!current) return;
+								if (window.confirm(`Delete "${current.title}"?`)) {
+									void handleDelete(activeSessionId);
+								}
+							}}
+							style={{
+								background: "transparent",
+								border: 0,
+								color: "var(--meta)",
+								cursor: "pointer",
+								padding: 2,
+							}}
 						>
-							<path d="M12 20h9" />
-							<path d="M16.5 3.5a2.12 2.12 0 0 1 3 3L7 19l-4 1 1-4z" />
-						</svg>
-					</button>
-					<button
-						type="button"
-						title="Delete conversation"
-						aria-label="Delete conversation"
-						onClick={() => {
-							const current = sessions.find((s) => s.id === activeSessionId);
-							if (!current) return;
-							if (window.confirm(`Delete "${current.title}"?`)) {
-								void handleDelete(activeSessionId);
-							}
-						}}
-						style={{
-							background: "transparent",
-							border: 0,
-							color: "var(--meta)",
-							cursor: "pointer",
-							padding: 2,
-						}}
-					>
-						<svg
-							width={12}
-							height={12}
-							viewBox="0 0 24 24"
-							fill="none"
-							stroke="currentColor"
-							strokeWidth="2"
-							strokeLinecap="round"
-							strokeLinejoin="round"
+							<svg
+								width={12}
+								height={12}
+								viewBox="0 0 24 24"
+								fill="none"
+								stroke="currentColor"
+								strokeWidth="2"
+								strokeLinecap="round"
+								strokeLinejoin="round"
+							>
+								<polyline points="3 6 5 6 21 6" />
+								<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
+								<path d="M10 11v6" />
+								<path d="M14 11v6" />
+								<path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
+							</svg>
+						</button>
+						<button
+							type="button"
+							title="Add skip range"
+							aria-label="Add skip range"
+							disabled={!activeSessionId || queueBusy}
+							onClick={runAddSkip}
+							style={{
+								background: "transparent",
+								border: "1px solid var(--border-soft)",
+								borderRadius: "var(--r-sm)",
+								color: "var(--fg-2)",
+								font: "500 10px var(--font-body)",
+								padding: "2px 6px",
+								cursor: queueBusy ? "wait" : "pointer",
+								whiteSpace: "nowrap",
+							}}
 						>
-							<polyline points="3 6 5 6 21 6" />
-							<path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6" />
-							<path d="M10 11v6" />
-							<path d="M14 11v6" />
-							<path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
-						</svg>
-					</button>
-					<button
-						type="button"
-						title="Add skip range"
-						aria-label="Add skip range"
-						disabled={!activeSessionId || queueBusy}
-						onClick={runAddSkip}
-						style={{
-							background: "transparent",
-							border: "1px solid var(--border-soft)",
-							borderRadius: "var(--r-sm)",
-							color: "var(--fg-2)",
-							font: "500 10px var(--font-body)",
-							padding: "2px 6px",
-							cursor: queueBusy ? "wait" : "pointer",
-							whiteSpace: "nowrap",
-						}}
-					>
-						+ skip
-					</button>
-				</div>
-			) : null}
+							+ skip
+						</button>
+					</div>
+				) : null}
+			</div>
 
 			<div className={styles.panelBody} ref={scrollRef}>
 				{messages.length === 0 ? (
