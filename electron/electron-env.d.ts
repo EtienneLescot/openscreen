@@ -49,6 +49,9 @@ interface Window {
 		getSelectedSource: () => Promise<ProcessedDesktopSource | null>;
 		onSelectedSourceChanged: (callback: (source: ProcessedDesktopSource) => void) => () => void;
 		onSourceSelectorClosed: (callback: () => void) => () => void;
+		onAiEditionChatEvent: (
+			callback: (event: import("../src/native/contracts").AiEditionChatEvent) => void,
+		) => () => void;
 		requestCameraAccess: () => Promise<{
 			success: boolean;
 			granted: boolean;

@@ -176,6 +176,12 @@ export interface AiEditionChatMessage {
 	content: string;
 	createdAt: string;
 	toolCalls?: AiEditionToolCallSummary[];
+	/**
+	 * ponytail: id of the rewind-able document snapshot taken right before
+	 * the user message triggered its chat turn. Non-null = the per-message
+	 * ↩ button is shown. Matches axcut's Message.checkpointId.
+	 */
+	checkpointId?: string | null;
 }
 
 export interface AiEditionChatResult {
@@ -185,6 +191,16 @@ export interface AiEditionChatResult {
 	document?: unknown;
 	toolCalls?: AiEditionToolCallSummary[];
 	error?: string;
+	/** Document checkpoint id recorded for the user message that triggered this turn (axcut parity). */
+	userMessageCheckpointId?: string;
+}
+
+export interface AiEditionChatRewindResult {
+	success: true;
+	document: unknown;
+	messages: AiEditionChatMessage[];
+	/** The user message content of the rewound turn, prefilled back into the composer. */
+	prompt: string;
 }
 
 export interface AiEditionChatSessionSummary {
@@ -207,6 +223,8 @@ export interface AiEditionChatBudget {
 	usedTokens: number;
 	budgetTokens: number;
 	ratio: number;
+	/** Ratio * 100, clamped to 0..100 — what the "% context" pill shows. */
+	fillPercent: number;
 }
 
 export interface AiEditionChatCompactResult {
@@ -527,12 +545,42 @@ export type NativeBridgeRequest =
 			action: "chat.compact";
 			payload: { projectId: string; sessionId: string };
 			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.rewind";
+			payload: { projectId: string; sessionId: string; messageId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.contextUsage";
+			payload: { projectId: string; sessionId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "chat.compactNow";
+			payload: { projectId: string; sessionId: string };
+			requestId?: string;
 	  };
 
 export type NativeBridgeEventName =
 	| "project.contextChanged"
 	| "cursor.providerChanged"
-	| "cursor.telemetryLoaded";
+	| "cursor.telemetryLoaded"
+	| "ai-edition.chat-event";
+
+// ponytail: streamed chat-progress event broadcast by runChat so the renderer
+// can render text deltas + tool ops live instead of waiting for the final RPC
+// return. Empty `assistant` slot + `kind: "error"` means the upstream
+// provider failed and the toast was a side-channel; the renderer shows it
+// inline so the chat doesn't appear to "echo back my question".
+export type AiEditionChatEvent =
+	| { kind: "text"; sessionId: string; delta: string }
+	| { kind: "toolStart"; sessionId: string; name: string; args: unknown }
+	| { kind: "toolEnd"; sessionId: string; name: string; ok: boolean; summary?: string }
+	| { kind: "error"; sessionId: string; message: string };
 
 export interface NativeBridgeEvent<TPayload = unknown> {
 	name: NativeBridgeEventName;
