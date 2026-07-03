@@ -13,6 +13,23 @@ export type TranscriberFn = (
 	opts: Record<string, unknown>,
 ) => Promise<unknown>;
 
+/**
+ * Pull the language Whisper settled on from a chunk stream. The pipeline
+ * tags every chunk with the language code it used (forced via the
+ * `language` arg, or auto-detected when no `language` was given). We
+ * surface the first non-null value — later chunks only differ when the
+ * model genuinely switched, which is rare and we don't expose it.
+ */
+function pickDetectedLanguage(result: unknown): string | null {
+	const chunks = (result as { chunks?: unknown[] })?.chunks;
+	if (!Array.isArray(chunks)) return null;
+	for (const c of chunks) {
+		const lang = (c as { language?: unknown })?.language;
+		if (typeof lang === "string" && lang.length > 0) return lang;
+	}
+	return null;
+}
+
 function segmentOverlapsTrim(startMs: number, endMs: number, trims: TrimRegion[]): boolean {
 	return trims.some((t) => startMs < t.endMs && endMs > t.startMs);
 }
@@ -127,16 +144,29 @@ function segmentsFromTranscriberChunks(
 async function runTranscriberOnSlice(
 	transcriber: TranscriberFn,
 	samples: Float32Array,
-	opts: { forceFullSequences: boolean; timestampMode: "word" | "phrase" },
-): Promise<unknown> {
+	opts: {
+		forceFullSequences: boolean;
+		timestampMode: "word" | "phrase";
+		language?: string;
+	},
+): Promise<{ result: unknown; detectedLanguage: string | null }> {
 	const durationSec = samples.length / 16_000;
 	// Only chunk long clips; short-audio chunking regressed some Whisper.js runs (empty chunks).
 	const chunking = durationSec > 30 ? { chunk_length_s: 30, stride_length_s: 5 } : {};
-	return transcriber(samples, {
+	// `return_language` makes the pipeline keep the `language` field on each
+	// output chunk so we can read back what Whisper settled on (forced or
+	// auto-detected). Without it the tokenizer strips language from chunks
+	// and we lose the detection.
+	const result = await transcriber(samples, {
 		return_timestamps: opts.timestampMode === "word" ? "word" : true,
 		force_full_sequences: opts.forceFullSequences,
+		// Only set `language` when explicitly forced. Omitting it lets Whisper
+		// auto-detect from the audio, which is what the "Auto" picker wants.
+		...(opts.language ? { language: opts.language } : {}),
+		return_language: true,
 		...chunking,
 	});
+	return { result, detectedLanguage: pickDetectedLanguage(result) };
 }
 
 /** Flattens the various shapes a Transformers.js ASR result can take into a chunk list. */
@@ -185,29 +215,36 @@ export async function runTranscription(
 	transcriber: TranscriberFn,
 	samples: Float32Array,
 	trims: TrimRegion[],
+	options?: { language?: string },
 ): Promise<TranscribeMono16kResult> {
+	const forcedLanguage = options?.language;
 	const transcribeOne = async (
 		ignoreTrims: boolean,
 		forceFullSequences: boolean,
 		timestampMode: "word" | "phrase",
-	): Promise<CaptionSegment[]> => {
+	): Promise<{ segments: CaptionSegment[]; detectedLanguage: string | null }> => {
 		try {
 			const activeTrims = ignoreTrims ? [] : trims;
 			if (samples.length <= TRANSCRIBE_SLICE_SAMPLES) {
 				const { slice, realDurationSec } = padTailSliceForTranscribe(samples);
-				const result = await runTranscriberOnSlice(transcriber, slice, {
+				const { result, detectedLanguage } = await runTranscriberOnSlice(transcriber, slice, {
 					forceFullSequences,
 					timestampMode,
+					language: forcedLanguage,
 				});
-				return segmentsFromTranscriberChunks(
-					extractChunksFromAsrResult(result),
-					0,
-					activeTrims,
-					realDurationSec,
-				);
+				return {
+					segments: segmentsFromTranscriberChunks(
+						extractChunksFromAsrResult(result),
+						0,
+						activeTrims,
+						realDurationSec,
+					),
+					detectedLanguage,
+				};
 			}
 
 			const all: CaptionSegment[] = [];
+			let detectedLanguage: string | null = null;
 			for (let offset = 0; offset < samples.length; offset += TRANSCRIBE_SLICE_SAMPLES) {
 				const end = Math.min(offset + TRANSCRIBE_SLICE_SAMPLES, samples.length);
 				const sliceRaw = samples.subarray(offset, end);
@@ -220,10 +257,16 @@ export async function runTranscription(
 						? padTailSliceForTranscribe(sliceRaw)
 						: { slice: sliceRaw, realDurationSec: sliceRaw.length / 16_000 };
 
-				const result = await runTranscriberOnSlice(transcriber, slice, {
-					forceFullSequences,
-					timestampMode,
-				});
+				const { result, detectedLanguage: sliceLang } = await runTranscriberOnSlice(
+					transcriber,
+					slice,
+					{
+						forceFullSequences,
+						timestampMode,
+						language: forcedLanguage,
+					},
+				);
+				if (detectedLanguage === null && sliceLang) detectedLanguage = sliceLang;
 				const tOff = offset / 16_000;
 				all.push(
 					...segmentsFromTranscriberChunks(
@@ -234,35 +277,37 @@ export async function runTranscription(
 					),
 				);
 			}
-			return all;
+			return { segments: all, detectedLanguage };
 		} catch (e) {
 			console.warn("[captioning] Whisper pass failed:", e);
-			return [];
+			return { segments: [], detectedLanguage: null };
 		}
 	};
 
 	const attemptModes: Array<"word" | "phrase"> = ["word", "phrase"];
 	for (const timestampMode of attemptModes) {
-		let segments = await transcribeOne(false, true, timestampMode);
+		let pass = await transcribeOne(false, true, timestampMode);
+		let segments = pass.segments;
+		let detectedLanguage = pass.detectedLanguage;
 		if (segments.length === 0) {
-			segments = await transcribeOne(false, false, timestampMode);
+			pass = await transcribeOne(false, false, timestampMode);
+			segments = pass.segments;
+			detectedLanguage = pass.detectedLanguage;
 		}
 		if (segments.length === 0 && trims.length > 0) {
-			segments = dropSegmentsOverlappingTrimRegions(
-				await transcribeOne(true, true, timestampMode),
-				trims,
-			);
+			pass = await transcribeOne(true, true, timestampMode);
+			segments = dropSegmentsOverlappingTrimRegions(pass.segments, trims);
+			detectedLanguage = pass.detectedLanguage;
 			if (segments.length === 0) {
-				segments = dropSegmentsOverlappingTrimRegions(
-					await transcribeOne(true, false, timestampMode),
-					trims,
-				);
+				pass = await transcribeOne(true, false, timestampMode);
+				segments = dropSegmentsOverlappingTrimRegions(pass.segments, trims);
+				detectedLanguage = pass.detectedLanguage;
 			}
 		}
 		if (segments.length > 0) {
-			return { segments, granularity: timestampMode };
+			return { segments, granularity: timestampMode, detectedLanguage };
 		}
 	}
 
-	return { segments: [], granularity: "phrase" };
+	return { segments: [], granularity: "phrase", detectedLanguage: null };
 }

@@ -8,7 +8,7 @@
 
 import type { AxcutClip, AxcutDocument, AxcutTranscript } from "../schema";
 
-function byStart(a: { startSec: number }, b: { startSec: number }): number {
+export function byStart(a: { startSec: number }, b: { startSec: number }): number {
 	return a.startSec - b.startSec;
 }
 
