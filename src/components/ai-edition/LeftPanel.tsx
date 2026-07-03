@@ -341,10 +341,14 @@ export function LeftPanel({
 }
 
 interface ChatDisplayMessage {
+	id?: string;
 	role: string;
 	content: string;
 	time?: string;
 	toolCalls?: AiEditionToolCallSummary[];
+	// ponytail: axcut parity — non-null on user messages that have a
+	// rewind-able document snapshot, so the per-message ↩ button shows.
+	checkpointId?: string | null;
 }
 
 // Quick-access model picker anchored to the composer's model pill — mirrors
@@ -728,10 +732,12 @@ function ChatStripPanel() {
 				if (session) {
 					setMessages(
 						session.messages.map((m) => ({
+							id: m.id,
 							role: m.role,
 							content: m.content,
 							time: m.createdAt,
 							toolCalls: m.toolCalls,
+							checkpointId: m.checkpointId ?? null,
 						})),
 					);
 				} else {
@@ -819,27 +825,71 @@ function ChatStripPanel() {
 		}
 	};
 
-	// P1.8 — one click reverts the last tool batch by re-applying the
-	// pre-batch checkpoint held by the chat service.
-	const undoLastBatch = useCallback(async () => {
-		if (!projectId || !activeSessionId) return;
-		try {
-			const result = await nativeBridgeClient.aiEdition.chatUndoLastBatch(
-				projectId,
-				activeSessionId,
-			);
-			if (result.success && result.document) {
-				await applyAgentDocument(result.document);
-				toast.success("Reverted the agent's last edits");
-			} else {
-				toast.error(result.error ?? "Nothing to undo");
+	// ponytail: per-user-message rewind. Pops a confirmation popover, then
+	// asks the main process to roll the session + document back to the
+	// snapshot taken right before the user hit Send. axcut parity.
+	const [rewindFor, setRewindFor] = useState<{
+		messageId: string;
+		anchor: { left: number; bottom: number } | null;
+	} | null>(null);
+	const confirmRewind = useCallback(
+		async (messageId: string) => {
+			if (!projectId || !activeSessionId) return;
+			try {
+				const result = await nativeBridgeClient.aiEdition.chatRewind(
+					projectId,
+					activeSessionId,
+					messageId,
+				);
+				if (!result.success) {
+					toast.error(result.error ?? "Rewind failed");
+					setRewindFor(null);
+					return;
+				}
+				const doc = (result as { document?: unknown }).document;
+				if (doc) await applyAgentDocument(doc);
+				setMessages(
+					result.messages.map((m) => ({
+						id: m.id,
+						role: m.role,
+						content: m.content,
+						time: m.createdAt,
+						toolCalls: m.toolCalls,
+						checkpointId: m.checkpointId ?? null,
+					})),
+				);
+				setInput(result.prompt);
+				toast.success("Rewound to the start of that message");
+			} catch (err) {
+				toast.error("Rewind failed", {
+					description: err instanceof Error ? err.message : String(err),
+				});
+			} finally {
+				setRewindFor(null);
 			}
-		} catch (err) {
-			toast.error("Undo failed", {
-				description: err instanceof Error ? err.message : String(err),
-			});
-		}
-	}, [projectId, activeSessionId, applyAgentDocument]);
+		},
+		[projectId, activeSessionId, applyAgentDocument],
+	);
+
+	useEffect(() => {
+		if (!rewindFor) return;
+		const handlePointerDown = (event: PointerEvent) => {
+			const target = event.target instanceof Element ? event.target : null;
+			if (target?.closest("[data-rewind-confirmation], [data-rewind-trigger]")) {
+				return;
+			}
+			setRewindFor(null);
+		};
+		const handleKeyDown = (event: KeyboardEvent) => {
+			if (event.key === "Escape") setRewindFor(null);
+		};
+		globalThis.document.addEventListener("pointerdown", handlePointerDown);
+		globalThis.document.addEventListener("keydown", handleKeyDown);
+		return () => {
+			globalThis.document.removeEventListener("pointerdown", handlePointerDown);
+			globalThis.document.removeEventListener("keydown", handleKeyDown);
+		};
+	}, [rewindFor]);
 
 	const modelLabel = llmConfig
 		? `${llmConfig.provider} / ${llmConfig.model}`
@@ -935,10 +985,12 @@ function ChatStripPanel() {
 			}
 			setMessages(
 				result.session.messages.map((m) => ({
+					id: m.id,
 					role: m.role,
 					content: m.content,
 					time: m.createdAt,
 					toolCalls: m.toolCalls,
+					checkpointId: m.checkpointId ?? null,
 				})),
 			);
 			toast.success("Compacted earlier context");
@@ -1246,6 +1298,98 @@ function ChatStripPanel() {
 									) : null}
 								</div>
 								<div className={styles.msgBubble}>{m.content}</div>
+								<div
+									style={{
+										display: "flex",
+										alignItems: "center",
+										gap: 4,
+										marginTop: 4,
+										justifyContent: "flex-end",
+									}}
+								>
+									{m.role === "user" && m.checkpointId ? (
+										<button
+											type="button"
+											data-rewind-trigger="true"
+											title="Rewind to this message"
+											aria-label="Rewind to this message"
+											aria-expanded={rewindFor?.messageId === m.id}
+											onClick={(event) => {
+												const rect = event.currentTarget.getBoundingClientRect();
+												setRewindFor({
+													messageId: m.id ?? "",
+													anchor: {
+														left: rect.left + rect.width / 2,
+														bottom: window.innerHeight - rect.top + 6,
+													},
+												});
+											}}
+											style={{
+												width: 22,
+												height: 22,
+												display: "inline-flex",
+												alignItems: "center",
+												justifyContent: "center",
+												background: "transparent",
+												border: "1px solid var(--border-soft)",
+												borderRadius: "var(--r-sm)",
+												color: "var(--fg-2)",
+												cursor: "pointer",
+											}}
+										>
+											<svg
+												width={12}
+												height={12}
+												viewBox="0 0 24 24"
+												fill="none"
+												stroke="currentColor"
+												strokeWidth="2"
+												strokeLinecap="round"
+												strokeLinejoin="round"
+											>
+												<path d="M3 7v6h6" />
+												<path d="M21 17a9 9 0 0 0-15-6.7L3 13" />
+											</svg>
+										</button>
+									) : null}
+									<button
+										type="button"
+										title="Copy message"
+										aria-label="Copy message"
+										onClick={() => {
+											void navigator.clipboard.writeText(m.content).then(
+												() => toast.success("Copied to clipboard"),
+												() => toast.error("Couldn't copy"),
+											);
+										}}
+										style={{
+											width: 22,
+											height: 22,
+											display: "inline-flex",
+											alignItems: "center",
+											justifyContent: "center",
+											background: "transparent",
+											border: "1px solid var(--border-soft)",
+											borderRadius: "var(--r-sm)",
+											color: "var(--fg-2)",
+											cursor: "pointer",
+										}}
+									>
+										<svg
+											width={12}
+											height={12}
+											viewBox="0 0 24 24"
+											fill="none"
+											stroke="currentColor"
+											strokeWidth="2"
+											strokeLinecap="round"
+											strokeLinejoin="round"
+										>
+											<rect x="9" y="9" width="13" height="13" rx="2" />
+											<path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+										</svg>
+									</button>
+								</div>
 								{m.toolCalls?.length ? (
 									<div style={{ marginTop: 4, display: "flex", flexDirection: "column", gap: 2 }}>
 										{m.toolCalls.map((call, j) => (
@@ -1259,25 +1403,6 @@ function ChatStripPanel() {
 												applied: {call.summary}
 											</div>
 										))}
-										{i === messages.length - 1 ? (
-											<button
-												type="button"
-												onClick={() => void undoLastBatch()}
-												style={{
-													alignSelf: "flex-start",
-													marginTop: 2,
-													padding: "3px 8px",
-													background: "transparent",
-													border: "1px solid var(--border-soft)",
-													borderRadius: "var(--r-md)",
-													color: "var(--fg-2)",
-													font: "500 10px var(--font-body)",
-													cursor: "pointer",
-												}}
-											>
-												Undo these edits
-											</button>
-										) : null}
 									</div>
 								) : null}
 							</div>
@@ -1455,6 +1580,72 @@ function ChatStripPanel() {
 				onSelect={selectSession}
 				onNew={newChat}
 			/>
+			{rewindFor && rewindFor.anchor
+				? createPortal(
+						<div
+							data-rewind-confirmation="true"
+							role="dialog"
+							aria-label="Confirm rewind"
+							style={{
+								position: "fixed",
+								left: rewindFor.anchor.left - 130,
+								bottom: rewindFor.anchor.bottom,
+								width: 260,
+								background: "var(--surface)",
+								border: "1px solid var(--border)",
+								borderRadius: "var(--r-md)",
+								boxShadow: "var(--elev-pop)",
+								padding: 12,
+								zIndex: 1000,
+							}}
+						>
+							<strong style={{ display: "block", marginBottom: 4 }}>Rewind here?</strong>
+							<p
+								style={{
+									font: "400 12px/1.4 var(--font-body)",
+									color: "var(--muted)",
+									margin: "0 0 8px",
+								}}
+							>
+								The agent's edits and follow-up turns after this point get rolled back. Project,
+								conversation, and agent state will be restored.
+							</p>
+							<div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
+								<button
+									type="button"
+									onClick={() => setRewindFor(null)}
+									style={{
+										padding: "4px 10px",
+										background: "transparent",
+										border: "1px solid var(--border-soft)",
+										borderRadius: "var(--r-sm)",
+										color: "var(--fg-2)",
+										font: "500 12px var(--font-body)",
+										cursor: "pointer",
+									}}
+								>
+									Cancel
+								</button>
+								<button
+									type="button"
+									onClick={() => void confirmRewind(rewindFor.messageId)}
+									style={{
+										padding: "4px 10px",
+										background: "var(--accent)",
+										border: "1px solid var(--accent)",
+										borderRadius: "var(--r-sm)",
+										color: "var(--bg)",
+										font: "500 12px var(--font-body)",
+										cursor: "pointer",
+									}}
+								>
+									Rewind
+								</button>
+							</div>
+						</div>,
+						document.body,
+					)
+				: null}
 		</aside>
 	);
 }

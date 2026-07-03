@@ -4,6 +4,7 @@ import {
 	type AiEditionChatCompactResult,
 	type AiEditionChatMessage,
 	type AiEditionChatResult,
+	type AiEditionChatRewindResult,
 	type AiEditionChatSession,
 	type AiEditionChatSessionSummary,
 	type AiEditionDeviceChallenge,
@@ -331,6 +332,24 @@ export const nativeBridgeClient = {
 			requireNativeBridgeData<AiEditionChatCompactResult | null>({
 				domain: "aiEdition",
 				action: "chat.compact",
+				payload: { projectId, sessionId },
+			}),
+		chatRewind: (projectId: string, sessionId: string, messageId: string) =>
+			requireNativeBridgeData<AiEditionChatRewindResult | { success: false; error: string }>({
+				domain: "aiEdition",
+				action: "chat.rewind",
+				payload: { projectId, sessionId, messageId },
+			}),
+		chatContextUsage: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<AiEditionChatBudget | null>({
+				domain: "aiEdition",
+				action: "chat.contextUsage",
+				payload: { projectId, sessionId },
+			}),
+		chatCompactNow: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<AiEditionChatCompactResult | null>({
+				domain: "aiEdition",
+				action: "chat.compactNow",
 				payload: { projectId, sessionId },
 			}),
 	},
