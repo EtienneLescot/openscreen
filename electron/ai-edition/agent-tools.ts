@@ -351,6 +351,20 @@ export function executeAgentTool(
 		case "replaceTimeline": {
 			const parsed = replaceTimelineArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
+			const userPlaced = document.timeline.clips.filter((c) => c.origin === "user");
+			if (userPlaced.length > 0) {
+				return {
+					ok: false,
+					resultJson: JSON.stringify({
+						error: `Refused: ${userPlaced.length} user-placed clip(s) would be discarded. ` +
+							`For 'remove silences' / 'cut pauses' use addSkip (one call per silent range), ` +
+							`which preserves the placed clips and adds the cuts. ` +
+							`For 'trim this clip' use setClipRange. ` +
+							`Only call replaceTimeline when the user explicitly asks to rebuild the timeline from scratch ` +
+							`(after they have already cleared their placed clips).`,
+					}),
+				};
+			}
 			let next: AxcutDocument;
 			try {
 				next = replaceTimeline(document, parsed.data.intervals, parsed.data.reason, "agent");

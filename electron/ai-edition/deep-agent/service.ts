@@ -60,20 +60,27 @@ const SYSTEM_PROMPT = [
 	"Help them cut silences, tighten pacing, add captions, and rewrite titles.",
 	"Be concise, action-oriented, and reference the timeline or transcript by time when relevant.",
 	"You can call the tools below against the live document snapshot; the runtime executes each edit and feeds the result back into the loop.",
-].join(" ");
+	"The AxcutDocument is the single source of truth. The timeline, the transcript editor, and the chat panel are all direct editors of the same document — when the user places a clip on the timeline, the document updates immediately, and when the timeline is empty, the document has no clips. Your edits operate on the live document, so preserve the user's placed clips.",
+	"",
+	"Tool-selection rules (these are non-negotiable):",
+	"- 'remove silences' / 'cut pauses' / 'cut the silence' / 'kill the silence' / 'tighten pacing': call addSkip ONCE PER SILENT RANGE. Do NOT call setClipRange, do NOT call replaceTimeline. The placed clip is the canonical cut, the silence becomes a skip range inside it.",
+	"- 'trim this clip to 0-30' / 'cut the end of this clip' / 'shorten this clip': call setClipRange with the new sourceStartSec/sourceEndSec.",
+	"- 'replace the timeline' / 'rebuild the timeline' / 'start over with these intervals': call replaceTimeline. Only when the user explicitly asks for a full rebuild.",
+	"Anything else (move a clip, resize a skip, change a clip's order, etc.) — pick the most specific tool. If the request is ambiguous, prefer the smallest edit that satisfies it.",
+].join("\n");
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
 	getCurrentDocument:
-		"Read a compact snapshot of the current project: assets (with durations), timeline clips, skip ranges, and counts of annotations/zoom regions. Call this before editing if the snapshot in the system prompt may be stale.",
+		"Read a compact snapshot of the current project: assets (with durations), timeline clips, skip ranges, and counts of annotations/zoom ranges. Call this before editing if the snapshot in the system prompt may be stale. The AxcutDocument is the single source of truth — your edits should preserve the user's placed clips and any timeline state they have already set up.",
 	getTranscript:
 		"Read the transcript segments (speech and silence, with start/end seconds and text) for an asset. Omit assetId to read the primary asset's transcript.",
 	addSkip:
-		"Add a skip range (a cut — this source-time span will not be played or exported). Times are in seconds of the asset's source time.",
+		"Add a skip range (a cut — this source-time span will not be played or exported). Times are in seconds of the asset's source time. This is the preferred (and for 'remove silences' requests, the only) way to handle silences; it preserves the user's placed clips and only adds a cut. Call this once per silent range.",
 	setSkipRange: "Move or resize an existing skip range by id. Times are source-time seconds.",
 	setClipRange:
-		"Trim a clip: set its source in/out points (seconds). All clips are re-laid back-to-back afterwards, so downstream clips shift automatically.",
+		"Trim a clip: set its source in/out points (seconds). All clips are re-laid back-to-back afterwards, so downstream clips shift automatically. Use this ONLY when the user explicitly asks to shorten or extend a user-placed clip. Do NOT use this for 'remove silences' or 'cut pauses' — for those, use addSkip.",
 	replaceTimeline:
-		"Replace the whole timeline with the given kept intervals of the primary asset's source time. Everything outside the intervals becomes a skip. Use for bulk edits like 'cut all silences'.",
+		"Replace the whole timeline with the given kept intervals of the primary asset's source time. Everything outside the intervals becomes a skip. DO NOT use this for 'cut silences' or 'remove pauses' — the user has likely placed clips on the timeline that you'd be discarding. Use this ONLY when the user explicitly asks you to rebuild the timeline from scratch (e.g. 'start over with the kept intervals from the transcript' or 'replace everything with these intervals').",
 };
 
 // ponytail: mutable document holder so a write-tool that updates the snapshot
