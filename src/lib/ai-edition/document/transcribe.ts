@@ -82,6 +82,52 @@ export async function transcribeAsset(
 	};
 }
 
+// ponytail: emit the upstream `AXCUT_TRANSCRIPT v1` plain-text DSL for display
+// in the Source Transcript modal. Mirrors `axcut_core/dsl.py` just enough for
+// the modal's <pre> body — a small segment/word loop, no Python needed. The
+// runtime still uses the structured `AxcutTranscript`; this string is the
+// "what the user reads" view of the same data.
+// Escape both single and double quotes — the DSL wraps every string in
+// double quotes and uses SQL/Python-style `''` doubling for an embedded
+// single quote.
+function escapeDslString(s: string): string {
+	return s.replace(/"/g, '""').replace(/'/g, "''");
+}
+
+export function toAxcutTranscriptDsl(
+	transcript: AxcutTranscript,
+	sourceLabel?: string,
+	durationSec?: number,
+): string {
+	const lines: string[] = ["AXCUT_TRANSCRIPT v1"];
+	const meta: string[] = [];
+	if (sourceLabel) meta.push(`source_video="${sourceLabel}"`);
+	if (typeof durationSec === "number" && Number.isFinite(durationSec)) {
+		meta.push(`duration=${durationSec.toFixed(3)}`);
+	}
+	meta.push(`language="${transcript.language || "auto"}"`, `kind="source"`);
+	lines.push(`META ${meta.join(" ")}`);
+
+	const segIndexById = new Map<string, number>();
+	transcript.segments.forEach((seg, i) => segIndexById.set(seg.id, i + 1));
+
+	for (const seg of transcript.segments) {
+		lines.push(
+			`SEGMENT id=s${String(segIndexById.get(seg.id) ?? 0).padStart(4, "0")} start=${seg.startSec.toFixed(3)} end=${seg.endSec.toFixed(3)} text="${escapeDslString(seg.text)}"`,
+		);
+		for (const wordId of seg.wordIds) {
+			const word = transcript.words.find((w) => w.id === wordId);
+			if (!word) continue;
+			const wSegIdx = segIndexById.get(word.segmentId) ?? 0;
+			lines.push(
+				`WORD id=w${String(transcript.words.indexOf(word) + 1).padStart(6, "0")} segment=s${String(wSegIdx).padStart(4, "0")} start=${word.startSec.toFixed(3)} end=${word.endSec.toFixed(3)} text="${escapeDslString(word.text)}"`,
+			);
+		}
+		lines.push("ENDSEGMENT");
+	}
+	return lines.join("\n");
+}
+
 export function withTranscript(
 	document: AxcutDocument,
 	transcript: AxcutTranscript,
