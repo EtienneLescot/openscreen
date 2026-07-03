@@ -113,7 +113,11 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
 		authKind: "api-key",
 		supportsReasoningEffort: true,
 		wireProtocol: "anthropic",
-		baseUrl: "https://api.minimax.io/anthropic",
+		// ponytail: docs (platform.minimax.io) tell you to set ANTHROPIC_BASE_URL
+		// to https://api.minimax.io/anthropic — but the real `/messages` path
+		// is /anthropic/v1/messages, and `/anthropic/messages` returns a 404
+		// from the upstream gateway. Empirically verified against the live API.
+		baseUrl: "https://api.minimax.io/anthropic/v1",
 		envKeys: ["MINIMAX_API_KEY"],
 		setupHint: "Use MINIMAX_API_KEY or paste a MiniMax API key.",
 	},
@@ -124,7 +128,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
 		authKind: "api-key",
 		supportsReasoningEffort: true,
 		wireProtocol: "anthropic",
-		baseUrl: "https://api.minimax.io/anthropic",
+		baseUrl: "https://api.minimax.io/anthropic/v1",
 		envKeys: ["MINIMAX_TOKEN_PLAN_API_KEY"],
 		setupHint: "Use MINIMAX_TOKEN_PLAN_API_KEY or paste a MiniMax token-plan API key.",
 	},

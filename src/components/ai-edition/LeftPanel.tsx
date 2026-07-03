@@ -28,21 +28,6 @@ const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
 
 export type LeftTab = "chat" | "media";
 
-function formatTranscriptText(t: unknown): string {
-	if (!t || typeof t !== "object") return "";
-	const obj = t as Record<string, unknown>;
-	const segments = (obj.segments as Array<Record<string, unknown>>) ?? [];
-	if (segments.length === 0) return "";
-	return segments
-		.map((s, i) => {
-			const start = s.startSec ?? s.start ?? "?";
-			const end = s.endSec ?? s.end ?? "?";
-			const text = s.text ?? "";
-			return `[${i + 1}] ${start}s–${end}s: ${text}`;
-		})
-		.join("\n");
-}
-
 const THUMB_PALETTE = ["thumbRed", "thumbGreen", "thumbAmber", "thumbCyan"] as const;
 
 function formatTimecode(sec: number | undefined): string {
@@ -186,8 +171,10 @@ function MediaList({
 
 export function MediaPane({
 	assetStatuses,
+	onRegenerateAsset,
 }: {
 	assetStatuses?: Record<string, "pending" | "running" | "failed">;
+	onRegenerateAsset?: (assetId: string, language: string) => Promise<void>;
 }) {
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
@@ -321,14 +308,17 @@ export function MediaPane({
 				assetLabel={srcTranscriptAsset?.label ?? ""}
 				assetPath={srcTranscriptAsset?.originalPath ?? ""}
 				tcFormatted={formatTimecode(srcTranscriptAsset?.durationSec)}
-				transcriptText={
+				transcript={
 					srcTranscriptAsset && document?.transcripts
-						? (() => {
-								const t = document.transcripts.find((t) => t.assetId === srcTranscriptAsset.id);
-								return t ? formatTranscriptText(t) : null;
-							})()
+						? (document.transcripts.find((t) => t.assetId === srcTranscriptAsset.id) ?? null)
 						: null
 				}
+				isTranscribing={assetStatuses?.[srcTranscriptAsset?.id ?? ""] === "running"}
+				isFailed={assetStatuses?.[srcTranscriptAsset?.id ?? ""] === "failed"}
+				onRegenerate={(language) => {
+					if (!srcTranscriptAsset || !onRegenerateAsset) return Promise.resolve();
+					return onRegenerateAsset(srcTranscriptAsset.id, language);
+				}}
 			/>
 		</aside>
 	);
@@ -337,14 +327,16 @@ export function MediaPane({
 export function LeftPanel({
 	active,
 	assetStatuses,
+	onRegenerateAsset,
 }: {
 	active: LeftTab;
 	assetStatuses?: Record<string, "pending" | "running" | "failed">;
+	onRegenerateAsset?: (assetId: string, language: string) => Promise<void>;
 }) {
 	return active === "chat" && AI_FEATURES_ENABLED ? (
 		<ChatStripPanel />
 	) : (
-		<MediaPane assetStatuses={assetStatuses} />
+		<MediaPane assetStatuses={assetStatuses} onRegenerateAsset={onRegenerateAsset} />
 	);
 }
 

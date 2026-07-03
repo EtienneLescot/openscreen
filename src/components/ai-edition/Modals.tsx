@@ -1,4 +1,17 @@
-import { AlertTriangle, Crop, FolderOpen, FolderPlus, Pencil, Plus, X } from "lucide-react";
+import {
+	AlertTriangle,
+	Crop,
+	FolderOpen,
+	FolderPlus,
+	Loader2,
+	Maximize2,
+	Pencil,
+	Plus,
+	RefreshCw,
+	RotateCcw,
+	Triangle,
+	X,
+} from "lucide-react";
 import {
 	type ReactNode,
 	type PointerEvent as ReactPointerEvent,
@@ -6,11 +19,53 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { CropRegion } from "@/components/video-editor/types";
-import type { AxcutClip } from "@/lib/ai-edition/schema";
+import { toAxcutTranscriptDsl } from "@/lib/ai-edition/document/transcribe";
+import type { AxcutClip, AxcutTranscript } from "@/lib/ai-edition/schema";
 import { formatSeconds } from "@/lib/ai-edition/timeline/virtual-preview";
 import styles from "./NewEditorShell.module.css";
 import { type VideoSource, VirtualPreview } from "./VirtualPreview";
+
+// ponytail: keep the UI's language list literal in one place. Mirrors
+// `transcriptLanguageSchema` in schema/index.ts; if the schema gains a
+// language, add it here too.
+const REGEN_LANGUAGES = [
+	"auto",
+	"en",
+	"fr",
+	"de",
+	"es",
+	"it",
+	"pt",
+	"nl",
+	"ja",
+	"ko",
+	"zh",
+] as const;
+
+type TranscriptLanguage = (typeof REGEN_LANGUAGES)[number];
+
+const LANGUAGE_LABELS: Record<TranscriptLanguage, string> = {
+	auto: "Auto",
+	en: "EN",
+	fr: "FR",
+	de: "DE",
+	es: "ES",
+	it: "IT",
+	pt: "PT",
+	nl: "NL",
+	ja: "JA",
+	ko: "KO",
+	zh: "ZH",
+};
+
+function formatTc(sec: number): string {
+	if (!Number.isFinite(sec) || sec < 0) return "0:00.0";
+	const m = Math.floor(sec / 60);
+	const s = sec - m * 60;
+	return `${m}:${s.toFixed(1).padStart(4, "0")}`;
+}
 
 interface BaseModalProps {
 	open: boolean;
@@ -1075,42 +1130,390 @@ export interface SourceTranscriptModalProps extends BaseModalProps {
 	assetLabel: string;
 	assetPath: string;
 	tcFormatted: string;
-	transcriptText: string | null;
+	transcript: AxcutTranscript | null;
+	isTranscribing: boolean;
+	isFailed: boolean;
+	onRegenerate: (language: TranscriptLanguage) => void;
 }
 
 export function SourceTranscriptModal({
 	open,
 	onClose,
 	assetLabel,
+	assetPath,
 	tcFormatted,
-	transcriptText,
+	transcript,
+	isTranscribing,
+	isFailed,
+	onRegenerate,
 }: SourceTranscriptModalProps) {
+	const videoRef = useRef<HTMLVideoElement | null>(null);
+	const [isPlaying, setIsPlaying] = useState(false);
+	const [playTime, setPlayTime] = useState(0);
+	const [duration, setDuration] = useState<number | null>(null);
+	const [regenLang, setRegenLang] = useState<TranscriptLanguage>(
+		(transcript?.language as TranscriptLanguage) ?? "auto",
+	);
+
+	// ponytail: sync the language picker to whatever the stored transcript was
+	// generated with. Avoids surprising the user with a different selection on
+	// every open after a regenerate.
+	useEffect(() => {
+		if (open) setRegenLang((transcript?.language as TranscriptLanguage) ?? "auto");
+	}, [open, transcript?.language]);
+
+	useEffect(() => {
+		if (!open) {
+			setIsPlaying(false);
+			setPlayTime(0);
+			setDuration(null);
+			const v = videoRef.current;
+			if (v) {
+				v.pause();
+				v.currentTime = 0;
+			}
+		}
+	}, [open]);
+
+	const detectedLanguage =
+		transcript?.language && transcript.language !== "auto" ? transcript.language : null;
+
+	const statusLabel = isTranscribing
+		? "Generating"
+		: isFailed
+			? "Generation failed"
+			: transcript
+				? "Generated"
+				: "Not generated yet";
+
+	const transcriptBody = transcript
+		? toAxcutTranscriptDsl(transcript, assetLabel || undefined, duration ?? undefined)
+		: null;
+
+	const playLabel = isPlaying ? "Pause" : "Play";
+
+	const togglePlay = () => {
+		const v = videoRef.current;
+		if (!v) return;
+		if (v.paused) {
+			void v.play();
+		} else {
+			v.pause();
+		}
+	};
+
+	const restart = () => {
+		const v = videoRef.current;
+		if (!v) return;
+		v.currentTime = 0;
+		setPlayTime(0);
+	};
+
+	const requestFullscreen = () => {
+		const v = videoRef.current;
+		if (!v) return;
+		void v.requestFullscreen?.();
+	};
+
 	return (
-		<ModalShell open={open} onClose={onClose} title="Source transcript" subtitle={assetLabel} wide>
-			<div style={{ display: "flex", gap: 12, marginBottom: 12, flexWrap: "wrap" }}>
-				<span
+		<ModalShell open={open} onClose={onClose} title="Source Transcript" subtitle={assetLabel} wide>
+			<div
+				style={{
+					display: "grid",
+					gridTemplateColumns: "minmax(220px, 320px) 1fr",
+					gap: 14,
+				}}
+			>
+				<div
 					style={{
-						padding: "4px 10px",
-						borderRadius: 999,
-						background: "var(--success-soft)",
-						color: "var(--success)",
-						font: "500 12px var(--font-body)",
-						border: "1px solid color-mix(in srgb, var(--success) 22%, transparent)",
+						position: "relative",
+						aspectRatio: "16 / 9",
+						borderRadius: "var(--r-md)",
+						overflow: "hidden",
+						background: "linear-gradient(135deg, #16171d, #16171d)",
+						border: "1px solid var(--border)",
 					}}
 				>
-					{transcriptText ? "Generated" : "Not generated yet"}
-				</span>
-				<span
-					style={{
-						font: "500 12px/1.4 var(--font-mono)",
-						color: "var(--muted)",
-						alignSelf: "center",
-					}}
-				>
-					{tcFormatted}
-				</span>
+					{assetPath ? (
+						<video
+							ref={videoRef}
+							src={toFileUrl(assetPath)}
+							style={{
+								width: "100%",
+								height: "100%",
+								objectFit: "contain",
+								background: "#16171d",
+							}}
+							preload="metadata"
+							onLoadedMetadata={(e) => setDuration(e.currentTarget.duration)}
+							onTimeUpdate={(e) => setPlayTime(e.currentTarget.currentTime)}
+							onPlay={() => setIsPlaying(true)}
+							onPause={() => setIsPlaying(false)}
+							onEnded={() => setIsPlaying(false)}
+						/>
+					) : (
+						<div
+							style={{
+								width: "100%",
+								height: "100%",
+								display: "grid",
+								placeItems: "center",
+								color: "var(--muted)",
+								font: "500 12px var(--font-body)",
+							}}
+						>
+							No preview available
+						</div>
+					)}
+					<div
+						style={{
+							position: "absolute",
+							left: 0,
+							right: 0,
+							bottom: 0,
+							display: "flex",
+							alignItems: "center",
+							gap: 8,
+							padding: "8px 10px",
+							background: "linear-gradient(180deg, transparent, rgba(22,23,29,.55))",
+							color: "#fff",
+						}}
+					>
+						<button
+							type="button"
+							aria-label={playLabel}
+							title={playLabel}
+							onClick={togglePlay}
+							style={{
+								background: "transparent",
+								border: 0,
+								color: "inherit",
+								cursor: "pointer",
+								padding: 2,
+								borderRadius: 4,
+								display: "inline-flex",
+								alignItems: "center",
+								justifyContent: "center",
+							}}
+						>
+							{isPlaying ? (
+								<span style={{ display: "inline-flex", gap: 2 }}>
+									<span
+										style={{
+											width: 4,
+											height: 12,
+											background: "currentColor",
+											borderRadius: 1,
+										}}
+									/>
+									<span
+										style={{
+											width: 4,
+											height: 12,
+											background: "currentColor",
+											borderRadius: 1,
+										}}
+									/>
+								</span>
+							) : (
+								<Triangle size={12} fill="currentColor" style={{ transform: "rotate(0deg)" }} />
+							)}
+						</button>
+						<button
+							type="button"
+							aria-label="Restart"
+							title="Restart"
+							onClick={restart}
+							style={{
+								background: "transparent",
+								border: 0,
+								color: "inherit",
+								cursor: "pointer",
+								padding: 2,
+								borderRadius: 4,
+								display: "inline-flex",
+								alignItems: "center",
+								justifyContent: "center",
+							}}
+						>
+							<RotateCcw size={13} />
+						</button>
+						<button
+							type="button"
+							aria-label="Fullscreen"
+							title="Fullscreen"
+							onClick={requestFullscreen}
+							style={{
+								background: "transparent",
+								border: 0,
+								color: "inherit",
+								cursor: "pointer",
+								padding: 2,
+								borderRadius: 4,
+								display: "inline-flex",
+								alignItems: "center",
+								justifyContent: "center",
+							}}
+						>
+							<Maximize2 size={13} />
+						</button>
+						<span
+							style={{
+								marginLeft: "auto",
+								font: "500 12px/1 var(--font-mono)",
+								display: "inline-flex",
+								alignItems: "baseline",
+								gap: 4,
+							}}
+						>
+							<strong>{formatTc(playTime)}</strong>
+							<i style={{ fontStyle: "normal", opacity: 0.55, margin: "0 2px" }}>/</i>
+							<span style={{ opacity: 0.8 }}>{duration ? formatTc(duration) : tcFormatted}</span>
+						</span>
+						{isTranscribing ? (
+							<span
+								style={{
+									width: 8,
+									height: 8,
+									borderRadius: "50%",
+									background: "var(--accent)",
+									boxShadow: "0 0 0 3px var(--accent-soft)",
+									marginLeft: 6,
+								}}
+								aria-label="Transcribing"
+							/>
+						) : (
+							<span
+								style={{
+									width: 8,
+									height: 8,
+									borderRadius: "50%",
+									background: isFailed ? "var(--danger)" : "var(--danger)",
+									boxShadow: isFailed
+										? "0 0 0 3px var(--danger-soft)"
+										: "0 0 0 3px rgba(239, 68, 68, 0.2)",
+									marginLeft: 6,
+								}}
+								aria-hidden
+							/>
+						)}
+					</div>
+				</div>
+				<div style={{ display: "flex", flexDirection: "column", gap: 12, minWidth: 0 }}>
+					<div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+						<span
+							style={{
+								display: "inline-flex",
+								alignItems: "center",
+								gap: 6,
+								padding: "6px 12px",
+								borderRadius: 999,
+								background: isFailed ? "var(--danger-soft)" : "var(--success-soft)",
+								color: isFailed ? "var(--danger)" : "var(--success)",
+								font: "500 12px var(--font-body)",
+								border: `1px solid color-mix(in srgb, ${isFailed ? "var(--danger)" : "var(--success)"} 22%, transparent)`,
+							}}
+						>
+							{isTranscribing ? (
+								<Loader2 size={11} className="animate-spin" />
+							) : (
+								<span
+									style={{
+										width: 7,
+										height: 7,
+										borderRadius: "50%",
+										background: isFailed ? "var(--danger)" : "var(--success)",
+									}}
+								/>
+							)}
+							{statusLabel}
+						</span>
+						{detectedLanguage ? (
+							<span
+								style={{
+									display: "inline-flex",
+									alignItems: "center",
+									padding: "6px 12px",
+									borderRadius: 999,
+									background: "var(--success-soft)",
+									color: "var(--success)",
+									font: "500 12px var(--font-body)",
+									border: "1px solid color-mix(in srgb, var(--success) 22%, transparent)",
+								}}
+							>
+								Detected language: {detectedLanguage}
+							</span>
+						) : null}
+					</div>
+					<div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+						<label
+							style={{
+								font: "500 12px/1 var(--font-body)",
+								color: "var(--muted)",
+							}}
+						>
+							Regenerate as
+						</label>
+						<div
+							style={{
+								display: "grid",
+								gridTemplateColumns: "1fr auto",
+								gap: 8,
+								alignItems: "center",
+							}}
+						>
+							<select
+								aria-label="Regenerate as"
+								value={regenLang}
+								disabled={isTranscribing}
+								onChange={(e) => setRegenLang(e.target.value as TranscriptLanguage)}
+								style={{
+									width: "100%",
+									padding: "10px 12px",
+									borderRadius: "var(--r-md)",
+									border: "1px solid var(--border)",
+									background: "var(--surface)",
+									color: "var(--fg)",
+									font: "500 13px var(--font-body)",
+								}}
+							>
+								{REGEN_LANGUAGES.map((code) => (
+									<option key={code} value={code}>
+										{LANGUAGE_LABELS[code]}
+									</option>
+								))}
+							</select>
+							<button
+								type="button"
+								title="Regenerate"
+								aria-label="Regenerate"
+								disabled={isTranscribing}
+								onClick={() => onRegenerate(regenLang)}
+								style={{
+									width: 38,
+									height: 38,
+									borderRadius: "var(--r-md)",
+									border: "1px solid var(--border)",
+									background: "var(--surface)",
+									color: "var(--fg)",
+									cursor: isTranscribing ? "not-allowed" : "pointer",
+									display: "inline-flex",
+									alignItems: "center",
+									justifyContent: "center",
+									opacity: isTranscribing ? 0.6 : 1,
+								}}
+							>
+								{isTranscribing ? (
+									<Loader2 size={15} className="animate-spin" />
+								) : (
+									<RefreshCw size={15} />
+								)}
+							</button>
+						</div>
+					</div>
+				</div>
 			</div>
-			{transcriptText ? (
+			{transcriptBody ? (
 				<pre
 					style={{
 						margin: 0,
@@ -1122,10 +1525,10 @@ export function SourceTranscriptModal({
 						color: "var(--fg)",
 						whiteSpace: "pre",
 						overflow: "auto",
-						maxHeight: "40vh",
+						maxHeight: "38vh",
 					}}
 				>
-					{transcriptText}
+					{transcriptBody}
 				</pre>
 			) : (
 				<div
@@ -1134,9 +1537,15 @@ export function SourceTranscriptModal({
 						textAlign: "center",
 						color: "var(--muted)",
 						font: "500 13px var(--font-body)",
+						border: "1px dashed var(--border)",
+						borderRadius: "var(--r-md)",
 					}}
 				>
-					Transcribe the asset first using the Transcript pane on the right.
+					{isFailed
+						? "Generation failed — pick a language and regenerate."
+						: isTranscribing
+							? "Transcribing…"
+							: "Not generated yet — pick a language and click regenerate."}
 				</div>
 			)}
 		</ModalShell>
