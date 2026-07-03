@@ -12,6 +12,12 @@ export type CaptionTimestampGranularity = "word" | "phrase";
 export interface TranscribeMono16kResult {
 	segments: CaptionSegment[];
 	granularity: CaptionTimestampGranularity;
+	/**
+	 * ISO 639-1 code Whisper settled on for the chunk stream — either the
+	 * forced one (when `language` was supplied) or what it auto-detected.
+	 * `null` if the model produced no language token (very rare on tiny.en).
+	 */
+	detectedLanguage?: string | null;
 }
 
 /** Request payload posted from the renderer to the transcription worker. */
@@ -26,12 +32,19 @@ export interface TranscribeWorkerRequest {
 	useLocalModels: boolean;
 	/** Base URL of bundled resources (packaged: resourcesPath file:// URL); used when `useLocalModels`. */
 	assetBaseUrl?: string;
+	/** ISO 639-1 code (e.g. "en", "fr") to force. Omit for auto-detect. */
+	language?: string;
 }
 
 /** Messages the transcription worker posts back to the renderer. */
 export type TranscribeWorkerResponse =
 	| { type: "status"; phase: "model" | "transcribe" }
-	| { type: "result"; segments: CaptionSegment[]; granularity: CaptionTimestampGranularity }
+	| {
+			type: "result";
+			segments: CaptionSegment[];
+			granularity: CaptionTimestampGranularity;
+			detectedLanguage?: string | null;
+	  }
 	| { type: "error"; message: string };
 
 /**
@@ -47,6 +60,7 @@ export function transcribeMono16kToSegments(
 		trimRegions?: TrimRegion[];
 		onStatus?: (phase: "model" | "transcribe") => void;
 		signal?: AbortSignal;
+		language?: string;
 	},
 ): Promise<TranscribeMono16kResult> {
 	if (options?.signal?.aborted) {
@@ -77,7 +91,13 @@ export function transcribeMono16kToSegments(
 				return;
 			}
 			if (msg.type === "result") {
-				finish(() => resolve({ segments: msg.segments, granularity: msg.granularity }));
+				finish(() =>
+					resolve({
+						segments: msg.segments,
+						granularity: msg.granularity,
+						detectedLanguage: msg.detectedLanguage,
+					}),
+				);
 				return;
 			}
 			finish(() => reject(new Error(msg.message)));
@@ -100,6 +120,7 @@ export function transcribeMono16kToSegments(
 			trimRegions: options?.trimRegions ?? [],
 			useLocalModels,
 			assetBaseUrl,
+			language: options?.language,
 		};
 		worker.postMessage(request);
 	});

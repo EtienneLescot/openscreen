@@ -7,6 +7,10 @@
 
 import { v4 as uuidv4 } from "uuid";
 import {
+	type AxcutTimelineOperation,
+	applyTimelineOperation,
+} from "../../src/lib/ai-edition/document/operations";
+import {
 	type AxcutDocument,
 	createEmptyDocument,
 	documentSchema,
@@ -24,6 +28,7 @@ import {
 	DEFAULT_BUDGET_TOKENS,
 	shouldCompact,
 } from "./chat-compaction";
+import type { DocumentService } from "./document-service";
 import { streamLlm } from "./llm-call";
 import type { LlmConfigStore } from "./llm-config-store";
 import { PROVIDER_DEFINITIONS } from "./provider-registry";
@@ -429,6 +434,75 @@ export function rewindToMessage(
 		prompt: target.content,
 		document: cp.document,
 		messages: [...survived],
+	};
+}
+
+// ponytail: renderer-initiated timeline operation. Reads the doc from disk,
+// applies `op`, saves the result, and records a chat assistant message that
+// summarises the change so the conversation history reflects the manual
+// edit (axcut's `applyOperation` does the same).
+//
+// The renderer applies an optimistic copy to its local store before calling
+// this; if the call fails we roll back to the previous document by re-reading
+// the saved state, so the cache and disk stay aligned.
+export interface TimelineOperationResult {
+	document: AxcutDocument;
+	summary: string;
+}
+
+export async function runTimelineOperation(
+	projectId: string,
+	sessionId: string,
+	op: AxcutTimelineOperation,
+	conversationMessage: string,
+	documents: DocumentService,
+): Promise<{ success: true; result: TimelineOperationResult } | { success: false; error: string }> {
+	let session = sessionsByProject.get(projectId)?.get(sessionId);
+	const created = !session;
+	if (created) {
+		const summary = createSession(projectId);
+		session = selectSession(projectId, summary.id) ?? undefined;
+		if (!session) return { success: false, error: "Could not create session." };
+	}
+
+	let current: AxcutDocument;
+	try {
+		current = await documents.getProject(projectId);
+	} catch (error) {
+		return {
+			success: false,
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
+
+	const applied = applyTimelineOperation(current, op);
+
+	let saved: AxcutDocument;
+	try {
+		saved = await documents.saveProject(applied.document);
+	} catch (error) {
+		return {
+			success: false,
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
+
+	if (conversationMessage.trim() && session) {
+		const assistantMessage: AiEditionChatMessage = {
+			id: `msg_${uuidv4()}`,
+			role: "assistant",
+			content: conversationMessage.trim(),
+			createdAt: new Date().toISOString(),
+		};
+		session.messages.push(assistantMessage);
+	}
+
+	return {
+		success: true,
+		result: {
+			document: saved,
+			summary: applied.summary,
+		},
 	};
 }
 

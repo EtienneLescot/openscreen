@@ -47,6 +47,7 @@ import {
 	rewindToMessage,
 	runChat,
 	runChatDefault,
+	runTimelineOperation,
 	selectSession,
 } from "../ai-edition/chat-service";
 import { DocumentService } from "../ai-edition/document-service";
@@ -3169,6 +3170,14 @@ export function registerIpcHandlers(
 			rewindToMessage(projectId, sessionId, messageId),
 		compactNow: (projectId, sessionId) =>
 			compactSessionNow(projectId, sessionId, new LlmConfigStore(app.getPath("userData"))),
+		runTimelineOperation: (projectId, sessionId, op, conversationMessage) =>
+			runTimelineOperation(
+				projectId,
+				sessionId,
+				op,
+				conversationMessage,
+				new DocumentService(path.join(app.getPath("userData"), "projects")),
+			),
 		getContextUsage: getSessionContextUsage,
 		runAiEditionChatDefault: (projectId, message, sink) =>
 			runChatDefault(projectId, message, new LlmConfigStore(app.getPath("userData")), sink),
