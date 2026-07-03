@@ -363,6 +363,40 @@ export function NewEditorShell() {
 		}
 	}, [document, setTranscript]);
 
+	// Per-asset regenerate fired from the Source Transcript modal. Same
+	// pipeline as `handleTranscribe` but takes any assetId + a target
+	// language — `transcribeAsset` already accepts `language` and `setTranscript`
+	// replaces the matching entry in `doc.transcripts`.
+	const handleRegenerateAsset = useCallback(
+		async (assetId: string, language: string) => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			setAssetStatuses((prev) => ({ ...prev, [assetId]: "running" }));
+			toast.loading(`Regenerating: ${language}`, { id: `regen-${assetId}` });
+			try {
+				const transcript = await transcribeAsset(doc, assetId, {
+					language,
+					onStatus: (s) => toast.loading(`Regenerating: ${s}`, { id: `regen-${assetId}` }),
+				});
+				await setTranscript(transcript);
+				setAssetStatuses((prev) => {
+					const next = { ...prev };
+					delete next[assetId];
+					return next;
+				});
+				toast.dismiss(`regen-${assetId}`);
+				toast.success("Transcript regenerated");
+			} catch (err) {
+				toast.dismiss(`regen-${assetId}`);
+				toast.error("Transcription failed", {
+					description: err instanceof Error ? err.message : String(err),
+				});
+				setAssetStatuses((prev) => ({ ...prev, [assetId]: "failed" }));
+			}
+		},
+		[setTranscript],
+	);
+
 	const handleLoadLegacyProject = useCallback(async () => {
 		try {
 			const result = await window.electronAPI?.loadProjectFile();
@@ -858,7 +892,11 @@ export function NewEditorShell() {
 				{/* Left content panel */}
 				{!leftCollapsed ? (
 					<div className={styles.leftPanel}>
-						<LeftPanel active={leftTab} assetStatuses={assetStatuses} />
+						<LeftPanel
+							active={leftTab}
+							assetStatuses={assetStatuses}
+							onRegenerateAsset={handleRegenerateAsset}
+						/>
 					</div>
 				) : null}
 
