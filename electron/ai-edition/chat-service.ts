@@ -1,23 +1,21 @@
-// In-memory chat service. ponytail: no SQLite, no LangGraph, no checkpoints
-// for Phase 6 scaffolding. Stores sessions per project in a nested Map. The
-// actual LLM call goes through `llm-call.ts` (no LangChain dep — direct fetch
-// to the provider's /chat/completions endpoint).
-//
-// Phase 8 upgrades this to SQLite-backed sessions with checkpoint restore.
+// In-memory chat service. ponytail: chat sessions live in a nested Map; the
+// agentic loop itself lives in `deep-agent/service.ts` and is a port of
+// axcut's AxcutDeepAgentService (LangGraph stateful thread via
+// `createDeepAgent`). The IPC bridge streams `text` deltas + `toolStart` /
+// `toolEnd` lifecycle + `error` events into the renderer through the
+// ChatEventSink.
 
 import { v4 as uuidv4 } from "uuid";
-import { type AxcutDocument, documentSchema } from "../../src/lib/ai-edition/schema";
+import {
+	type AxcutDocument,
+	createEmptyDocument,
+	documentSchema,
+} from "../../src/lib/ai-edition/schema";
 import type {
 	AiEditionChatMessage,
 	AiEditionChatResult,
 	AiEditionToolCallSummary,
 } from "../../src/native/contracts";
-import {
-	AGENT_TOOL_SPECS,
-	documentSnapshotForModel,
-	executeAgentTool,
-	isMutatingTool,
-} from "./agent-tools";
 import {
 	applyCompaction,
 	budgetSnapshot,
@@ -26,35 +24,85 @@ import {
 	DEFAULT_BUDGET_TOKENS,
 	shouldCompact,
 } from "./chat-compaction";
-import { type ChatMessage, type LlmToolCall, streamLlm } from "./llm-call";
+import { streamLlm } from "./llm-call";
 import type { LlmConfigStore } from "./llm-config-store";
 import { PROVIDER_DEFINITIONS } from "./provider-registry";
 
 const sessionsByProject = new Map<string, Map<string, ChatSession>>();
 
-// P1.3/P1.8 — pre-batch document snapshot per session, taken right before the
-// first write tool of a chat turn runs. undoLastToolBatch() re-applies it.
-const checkpointsBySession = new Map<string, { document: AxcutDocument; createdAt: string }>();
+// ponytail: per-message checkpoints, stored as an ordered list per session
+// (insertion order == the session's message order). Each entry captures the
+// document *right before* the agent runs that user message — same restore
+// semantics as axcut's per-user-message checkpoint. The renderer surfaces a
+// ↩ button on every user message that has a checkpoint.
+interface MessageCheckpoint {
+	userMessageId: string;
+	document: AxcutDocument;
+	createdAt: string;
+}
+const messageCheckpointsBySession = new Map<string, MessageCheckpoint[]>();
 
-// P1.4 — the model may chain tools (getTranscript → replaceTimeline → …).
-// Cap iterations so a confused model can't loop forever.
-const MAX_TOOL_ITERATIONS = 8;
+function sessionKey(projectId: string, sessionId: string): string {
+	return `${projectId}::${sessionId}`;
+}
 
-const SYSTEM_PROMPT =
-	"You are an AI video editor. The user is editing a recording in OpenScreen. " +
-	"Help them cut silences, tighten pacing, add captions, and rewrite titles. " +
-	"Be concise, action-oriented, and reference the timeline or transcript by time when relevant.";
+function checkpointsForSession(projectId: string, sessionId: string): MessageCheckpoint[] {
+	return messageCheckpointsBySession.get(sessionKey(projectId, sessionId)) ?? [];
+}
 
-// P1.5 — tool-aware prompt: lists what the tools do and embeds a compact
-// document snapshot the model can edit against without a read round-trip.
-function buildToolSystemPrompt(document: AxcutDocument): string {
+function recordMessageCheckpoint(
+	projectId: string,
+	sessionId: string,
+	userMessageId: string,
+	document: AxcutDocument,
+): void {
+	const key = sessionKey(projectId, sessionId);
+	const list = messageCheckpointsBySession.get(key) ?? [];
+	list.push({
+		userMessageId,
+		document,
+		createdAt: new Date().toISOString(),
+	});
+	messageCheckpointsBySession.set(key, list);
+}
+
+function findCheckpointForMessage(
+	projectId: string,
+	sessionId: string,
+	userMessageId: string,
+): MessageCheckpoint | null {
 	return (
-		`${SYSTEM_PROMPT}\n\n` +
-		"You can edit the project directly with tools. Times are seconds in the asset's " +
-		"source time. Read the transcript with getTranscript before cutting speech. " +
-		"Prefer addSkip/setSkipRange for local cuts and replaceTimeline for bulk re-cuts. " +
-		"After editing, tell the user in one or two sentences what you changed.\n\n" +
-		`Current document snapshot:\n${JSON.stringify(documentSnapshotForModel(document))}`
+		checkpointsForSession(projectId, sessionId).find((c) => c.userMessageId === userMessageId) ??
+		null
+	);
+}
+
+// ponytail: drop every checkpoint at or after the given user message id.
+// Called after a rewind truncates the message list, so future checkpoints
+// stay aligned with the surviving messages. We compare against the
+// session's current message order; if the target message is gone we drop
+// all checkpoints created after the surviving tail.
+function dropCheckpointsFrom(
+	projectId: string,
+	sessionId: string,
+	fromUserMessageId: string,
+): void {
+	const key = sessionKey(projectId, sessionId);
+	const list = messageCheckpointsBySession.get(key);
+	if (!list) return;
+	const session = sessionsByProject.get(projectId)?.get(sessionId);
+	const surviving = session?.messages.find((m) => m.id === fromUserMessageId);
+	const cutIndex = surviving ? list.findIndex((c) => c.userMessageId === fromUserMessageId) : -1;
+	if (cutIndex === -1) {
+		// ponytail: target message vanished (e.g. already rewound past it).
+		// Drop the entire session's checkpoints — they all reference a
+		// lineage that's no longer valid.
+		messageCheckpointsBySession.delete(key);
+		return;
+	}
+	messageCheckpointsBySession.set(
+		key,
+		list.filter((_c, i) => i < cutIndex),
 	);
 }
 
@@ -148,19 +196,27 @@ export function deleteSession(projectId: string, sessionId: string): boolean {
 	return true;
 }
 
-function sessionKey(projectId: string, sessionId: string): string {
-	return `${projectId}::${sessionId}`;
+export interface ChatEventSink {
+	/** Streamed text delta from the model. */
+	text?: (delta: string) => void;
+	/** A tool call is about to execute. */
+	toolStart?: (name: string, args: unknown) => void;
+	/** A tool call has finished. `ok=false` carries the model's error message. */
+	toolEnd?: (name: string, ok: boolean, summary?: string) => void;
+	/** The agent loop hit a fatal error (provider 4xx, network, parse). */
+	error?: (message: string) => void;
 }
 
-// P1.8 — return the pre-batch checkpoint document so the renderer can
-// re-apply it. The checkpoint survives the undo (re-undo is idempotent).
-export function undoLastToolBatch(projectId: string, sessionId: string): AiEditionChatResult {
-	const checkpoint = checkpointsBySession.get(sessionKey(projectId, sessionId));
-	if (!checkpoint) {
-		return { success: false, error: "Nothing to undo — the agent has not edited this project." };
-	}
-	return { success: true, document: checkpoint.document };
-}
+// ponytail: zero-config noop for sink callbacks that the caller did not provide.
+const noop = () => undefined;
+
+/** ponytail: zero-config sink that swallows every event. */
+const NOOP_SINK: Required<ChatEventSink> = {
+	text: noop,
+	toolStart: noop,
+	toolEnd: noop,
+	error: noop,
+};
 
 export async function runChat(
 	projectId: string,
@@ -168,7 +224,9 @@ export async function runChat(
 	message: string,
 	llmConfig: LlmConfigStore,
 	documentInput?: unknown,
+	sink: ChatEventSink = {},
 ): Promise<AiEditionChatResult> {
+	const emit: Required<ChatEventSink> = { ...NOOP_SINK, ...sink };
 	const config = llmConfig.getConfig();
 	if (!config) {
 		return {
@@ -220,7 +278,22 @@ export async function runChat(
 		content: message,
 		createdAt: new Date().toISOString(),
 	};
+
+	// ponytail: snapshot the document *right before* this user message
+	// triggers a turn — same restore semantics as axcut's per-message
+	// checkpoint. We hold a stable `workingDocument` ref so this snapshot
+	// reflects what the user saw when they hit Send.
+	const documentForCheckpoint: AxcutDocument | null = workingDocument
+		? structuredClone(workingDocument)
+		: null;
+	if (documentForCheckpoint) {
+		recordMessageCheckpoint(projectId, sessionId, userMessage.id, documentForCheckpoint);
+	}
+	userMessage.checkpointId = documentForCheckpoint ? userMessage.id : null;
+
 	session.messages.push(userMessage);
+
+	const editsAllowed = config.allowAgentEdits !== false;
 
 	// P3.7 — context compaction: when the session grows past the heuristic
 	// budget, summarize the older half into a single "Earlier context"
@@ -240,117 +313,55 @@ export async function runChat(
 		});
 	}
 
-	const systemPrompt = workingDocument ? buildToolSystemPrompt(workingDocument) : SYSTEM_PROMPT;
-	const loopMessages: ChatMessage[] = [
-		{ role: "system", content: systemPrompt },
-		...session.messages.slice(-20).map((m): ChatMessage => ({ role: m.role, content: m.content })),
-	];
-
-	// P2.5 — write tools are gated behind the allowAgentEdits flag. Undefined
-	// means enabled (edits are checkpointed and undoable).
-	const editsAllowed = config.allowAgentEdits !== false;
+	const history = session.messages
+		.slice(-20)
+		.map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }));
 
 	const appliedToolCalls: AiEditionToolCallSummary[] = [];
-	let documentChanged = false;
-	let checkpointSaved = false;
-	let finalContent = "";
 
-	for (let iteration = 0; iteration < MAX_TOOL_ITERATIONS; iteration += 1) {
-		const collectedToolCalls: LlmToolCall[] = [];
-		const result = await streamLlm(
-			{
-				provider: config.provider,
-				model: config.model,
-				apiKey: apiKey ?? "",
-				baseUrl: config.baseUrl,
-				reasoningEffort: config.reasoningEffort,
-				accountId,
-				messages: loopMessages,
-				tools: workingDocument ? AGENT_TOOL_SPECS : undefined,
-			},
-			{
-				// ponytail: streamLlm already accumulates the deltas internally
-				// and the renderer's chat panel still consumes the finalized
-				// `result.content`. Collecting tool calls here so the existing
-				// tool-execution flow keeps working unchanged.
-				onToolCall: (call) => collectedToolCalls.push(call),
-			},
-		);
-
-		if (!result.success) {
-			return { success: false, error: result.error ?? "Empty response from model." };
-		}
-
-		const toolCalls = collectedToolCalls.length ? collectedToolCalls : (result.toolCalls ?? []);
-
-		if (!toolCalls.length) {
-			finalContent = result.content ?? "";
-			break;
-		}
-
-		loopMessages.push({
-			role: "assistant",
-			content: result.content ?? "",
-			toolCalls,
-		});
-
-		for (const call of toolCalls) {
-			if (!workingDocument) {
-				loopMessages.push({
-					role: "tool",
-					toolCallId: call.id,
-					content: JSON.stringify({ error: "No document available." }),
-				});
-				continue;
+	const agentSink = {
+		text: (delta: string) => emit.text(delta),
+		toolStart: (name: string, args: unknown) => {
+			emit.toolStart(name, args);
+			void editsAllowed;
+		},
+		toolEnd: (name: string, ok: boolean, summary?: string) => {
+			emit.toolEnd(name, ok, summary);
+			if (ok && summary) {
+				appliedToolCalls.push({ name, summary });
 			}
-			if (isMutatingTool(call.name) && !editsAllowed) {
-				loopMessages.push({
-					role: "tool",
-					toolCallId: call.id,
-					content: JSON.stringify({
-						error:
-							"Project edits are disabled in the AI settings. Ask the user to enable " +
-							"'Allow the agent to edit the project', then try again.",
-					}),
-				});
-				continue;
-			}
-			// P1.3 — checkpoint the pre-batch document before the first write.
-			if (isMutatingTool(call.name) && !checkpointSaved) {
-				checkpointsBySession.set(sessionKey(projectId, sessionId), {
-					document: workingDocument,
-					createdAt: new Date().toISOString(),
-				});
-				checkpointSaved = true;
-			}
-			const execution = executeAgentTool(workingDocument, call.name, call.arguments);
-			if (execution.ok && execution.document) {
-				workingDocument = execution.document;
-				documentChanged = true;
-				if (execution.summary) {
-					appliedToolCalls.push({ name: call.name, summary: execution.summary });
-				}
-			}
-			loopMessages.push({ role: "tool", toolCallId: call.id, content: execution.resultJson });
-		}
+		},
+		error: (message: string) => emit.error(message),
+	};
 
-		// The loop continues: the model sees the tool results and either chains
-		// more tools or produces the final text answer.
-		if (iteration === MAX_TOOL_ITERATIONS - 1) {
-			finalContent =
-				result.content ||
-				"I hit the tool-call limit for one message. The edits so far have been applied.";
-		}
-	}
+	const { invokeOpenScreenAgent } = await import("./deep-agent/service");
 
-	if (!finalContent && appliedToolCalls.length === 0) {
-		return { success: false, error: "Empty response from model." };
+	const result = await invokeOpenScreenAgent({
+		document: workingDocument ?? emptyDocumentForTextOnly(projectId),
+		model: {
+			provider: config.provider,
+			model: config.model,
+			apiKey: apiKey ?? undefined,
+			baseUrl: config.baseUrl,
+			reasoningEffort: config.reasoningEffort,
+			accountId,
+		},
+		history,
+		userMessage: message,
+		sink: agentSink,
+	});
+
+	if (!result.text) {
+		return {
+			success: false,
+			error: "Empty response from model.",
+		};
 	}
 
 	const assistantMessage: AiEditionChatMessage = {
 		id: uuidv4(),
 		role: "assistant",
-		content: finalContent || "Done.",
+		content: result.text,
 		createdAt: new Date().toISOString(),
 		toolCalls: appliedToolCalls.length ? appliedToolCalls : undefined,
 	};
@@ -359,9 +370,134 @@ export async function runChat(
 	return {
 		success: true,
 		assistantMessage,
-		document: documentChanged && workingDocument ? workingDocument : undefined,
+		document: result.mutated ? result.document : undefined,
 		toolCalls: appliedToolCalls.length ? appliedToolCalls : undefined,
+		userMessageCheckpointId: userMessage.checkpointId ?? undefined,
 	};
+}
+
+// ponytail: port of axcut's AxcutAgentRuntime.rewindToMessage. Restores the
+// document snapshot taken right before the given user message, truncates the
+// session's message list (exclusive of the rewound message), drops every
+// checkpoint at or after that message id, and returns the rewound message
+// content so the renderer can put it back in the composer.
+//
+// The renderer is responsible for applying the returned document — that
+// mirrors axcut's exact "the assistant rewrites itself" flow, including
+// the same projectId's local files going back to that state (we hit
+// DocumentService in the IPC handler).
+export function rewindToMessage(
+	projectId: string,
+	sessionId: string,
+	messageId: string,
+):
+	| { success: true; prompt: string; document: AxcutDocument; messages: AiEditionChatMessage[] }
+	| {
+			success: false;
+			error: string;
+	  } {
+	const session = sessionsByProject.get(projectId)?.get(sessionId);
+	if (!session) return { success: false, error: "Chat session not found." };
+	const messageIndex = session.messages.findIndex((m) => m.id === messageId);
+	if (messageIndex === -1) {
+		return { success: false, error: "Message not found in this session." };
+	}
+	const target = session.messages[messageIndex];
+	if (target.role !== "user") {
+		return { success: false, error: "Rewind must target a user message." };
+	}
+	if (!target.checkpointId) {
+		return { success: false, error: "No checkpoint stored for this message." };
+	}
+	const cp = findCheckpointForMessage(projectId, sessionId, target.checkpointId);
+	if (!cp) {
+		return {
+			success: false,
+			error: "Checkpoint expired — start a fresh chat to recover state.",
+		};
+	}
+
+	const survived = session.messages.slice(0, messageIndex + 1).map((m) => ({
+		...m,
+		toolCalls: m.toolCalls ? [...m.toolCalls] : undefined,
+	}));
+	session.messages = survived;
+	dropCheckpointsFrom(projectId, sessionId, target.checkpointId);
+
+	return {
+		success: true,
+		prompt: target.content,
+		document: cp.document,
+		messages: [...survived],
+	};
+}
+
+// ponytail: port of axcut's compactSession — manual compaction from a button
+// press. Returns the latest session snapshot + the inserted summary message
+// id, so the renderer can highlight it.
+export async function compactSessionNow(
+	projectId: string,
+	sessionId: string,
+	llmConfig: LlmConfigStore,
+): Promise<{ summaryMessageId: string | null; summary: string; session: ChatSession } | null> {
+	const session = sessionsByProject.get(projectId)?.get(sessionId);
+	if (!session) return null;
+	const config = llmConfig.getConfig();
+	if (!config) return null;
+	const def = PROVIDER_DEFINITIONS.find((d) => d.id === config.provider);
+	if (!def) return null;
+	const credential = llmConfig.getCredential(def.id, def.envKeys);
+	const apiKey = credential?.value ?? "";
+	const accountId =
+		credential?.entry.kind === "codex" ? (credential.entry.accountId ?? undefined) : undefined;
+
+	const decision = shouldCompact(session.messages);
+	if (!decision || !decision.compact) return null;
+
+	const ok = await tryCompactSession({
+		session,
+		splitIndex: decision.splitIndex,
+		apiKey,
+		provider: config.provider,
+		model: config.model,
+		baseUrl: config.baseUrl,
+		reasoningEffort: config.reasoningEffort,
+		accountId,
+	});
+	if (!ok) return null;
+	return {
+		summaryMessageId: ok.summaryMessageId,
+		summary: ok.summary,
+		session: selectSession(projectId, sessionId) as ChatSession,
+	};
+}
+
+// ponytail: port of axcut's getContextUsage. Returns the current session's
+// token estimate + window budget so the renderer can fill the "% context"
+// pill with real numbers (no probe — char-based heuristic matching the
+// in-call compaction one).
+export function getSessionContextUsage(
+	projectId: string,
+	sessionId: string,
+	budgetTokens: number = DEFAULT_BUDGET_TOKENS,
+): { usedTokens: number; budgetTokens: number; ratio: number; fillPercent: number } | null {
+	const session = sessionsByProject.get(projectId)?.get(sessionId);
+	if (!session) return null;
+	const snap = budgetSnapshot(session.messages, budgetTokens);
+	const fillPercent = Math.min(100, Math.round(snap.ratio * 100));
+	return {
+		usedTokens: snap.usedTokens,
+		budgetTokens: snap.budgetTokens,
+		ratio: snap.ratio,
+		fillPercent,
+	};
+}
+
+// ponytail: when no document snapshot exists the agent has no edit surface.
+// We still hand it an empty (schema-valid) document so the LangGraph thread
+// can run, and the model simply won't call write tools against it.
+function emptyDocumentForTextOnly(projectId: string): AxcutDocument {
+	return createEmptyDocument({ title: "Untitled project", projectId });
 }
 
 // ponytail: legacy single-session compatibility for the simpler ChatPanel
@@ -383,9 +519,10 @@ export async function runChatDefault(
 	projectId: string,
 	message: string,
 	llmConfig: LlmConfigStore,
+	sink?: ChatEventSink,
 ): Promise<AiEditionChatResult> {
 	const session = getOrCreateDefaultSession(projectId);
-	return runChat(projectId, session.id, message, llmConfig);
+	return runChat(projectId, session.id, message, llmConfig, undefined, sink);
 }
 
 export function getDefaultChatHistory(projectId: string): AiEditionChatMessage[] {
@@ -407,6 +544,7 @@ export interface SessionBudgetSnapshot {
 	usedTokens: number;
 	budgetTokens: number;
 	ratio: number;
+	fillPercent: number;
 }
 
 export function getSessionBudget(
@@ -421,6 +559,7 @@ export function getSessionBudget(
 		usedTokens: snap.usedTokens,
 		budgetTokens: snap.budgetTokens,
 		ratio: snap.ratio,
+		fillPercent: Math.min(100, Math.round(snap.ratio * 100)),
 	};
 }
 

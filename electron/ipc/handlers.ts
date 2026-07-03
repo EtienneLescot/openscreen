@@ -37,15 +37,17 @@ import type {
 } from "../../src/native/contracts";
 import {
 	clearDefaultChatHistory,
+	compactSessionNow,
 	createSession,
 	deleteSession,
 	getDefaultChatHistory,
+	getSessionContextUsage,
 	listSessions,
 	renameSession,
+	rewindToMessage,
 	runChat,
 	runChatDefault,
 	selectSession,
-	undoLastToolBatch,
 } from "../ai-edition/chat-service";
 import { DocumentService } from "../ai-edition/document-service";
 import { LlmConfigStore } from "../ai-edition/llm-config-store";
@@ -3150,11 +3152,26 @@ export function registerIpcHandlers(
 		getAiEditionDocuments: () =>
 			new DocumentService(path.join(app.getPath("userData"), "projects")),
 		getAiEditionLlmConfig: () => new LlmConfigStore(app.getPath("userData")),
-		runAiEditionChat: (projectId, sessionId, message, document) =>
-			runChat(projectId, sessionId, message, new LlmConfigStore(app.getPath("userData")), document),
-		undoAiEditionToolBatch: (projectId, sessionId) => undoLastToolBatch(projectId, sessionId),
-		runAiEditionChatDefault: (projectId, message) =>
-			runChatDefault(projectId, message, new LlmConfigStore(app.getPath("userData"))),
+		runAiEditionChat: (projectId, sessionId, message, document, sink) =>
+			runChat(
+				projectId,
+				sessionId,
+				message,
+				new LlmConfigStore(app.getPath("userData")),
+				document,
+				sink,
+			),
+		undoAiEditionToolBatch: (_projectId, _sessionId) => ({
+			success: false,
+			error: "Per-tool-batch undo retired in favor of per-message rewind.",
+		}),
+		rewindToMessage: (projectId, sessionId, messageId) =>
+			rewindToMessage(projectId, sessionId, messageId),
+		compactNow: (projectId, sessionId) =>
+			compactSessionNow(projectId, sessionId, new LlmConfigStore(app.getPath("userData"))),
+		getContextUsage: getSessionContextUsage,
+		runAiEditionChatDefault: (projectId, message, sink) =>
+			runChatDefault(projectId, message, new LlmConfigStore(app.getPath("userData")), sink),
 		getAiEditionChatHistoryDefault: (projectId) => getDefaultChatHistory(projectId),
 		clearAiEditionChatHistoryDefault: (projectId) => clearDefaultChatHistory(projectId),
 		listAiEditionChatSessions: (projectId) => listSessions(projectId),
