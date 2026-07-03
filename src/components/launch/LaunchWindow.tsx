@@ -900,7 +900,7 @@ export function LaunchWindow() {
 				ref={setHudBarEl}
 				data-hud-interactive="true"
 				data-tray-layout={trayLayout}
-				className={`fixed bottom-5 left-1/2 -translate-x-1/2 flex rounded-2xl border border-white/[0.10] bg-[#07080a]/90 shadow-[0_20px_60px_rgba(0,0,0,0.42),inset_0_1px_0_rgba(255,255,255,0.06)] backdrop-blur-2xl backdrop-saturate-[140%] ${
+				className={`fixed bottom-5 left-1/2 -translate-x-1/2 flex rounded-2xl border border-white/[0.10] bg-[#07080a]/90 backdrop-blur-2xl backdrop-saturate-[140%] ${
 					trayLayout === "vertical"
 						? "max-h-[calc(100vh-2.5rem)] flex-col items-center gap-1 overflow-y-auto px-1 py-1.5"
 						: "items-center gap-1.5 px-2 py-1.5"
