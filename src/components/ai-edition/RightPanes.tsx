@@ -37,6 +37,7 @@ import type {
 	AxcutTranscript,
 	AxcutWord,
 } from "@/lib/ai-edition/schema";
+import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import {
 	buildAggregatedSections,
@@ -45,6 +46,7 @@ import {
 	findCueWordId,
 	type SkipRun,
 } from "@/lib/ai-edition/timeline/aggregated-transcript";
+import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatMs } from "@/lib/ai-edition/timeline/format";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import { getAssetPath } from "@/lib/assetPath";
@@ -1161,11 +1163,20 @@ const CAMERA_SHAPES: Array<{
 
 export function LayoutPane() {
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+	const document = useProjectStore((s) => s.document);
 	// ponytail: the mask shape picker only makes sense for Picture-in-Picture.
 	// Dual-frame (side-by-side) and vertical-stack (top/bottom) hardcode a
 	// rectangle in the legacy layout math, so we hide those controls when the
 	// preset isn't PiP.
 	const isPip = settings.webcamLayoutPreset === "picture-in-picture";
+	// P4 — a project can hold clips with no camera attached at all (plain
+	// imported videos, or a recording made without a webcam). The layout
+	// controls have nothing to act on in that case, so they're disabled
+	// rather than left live for a preset that will never show anything.
+	const hasAnyCamera = document
+		? hasAnyClipWithCamera(document.assets, document.timeline.clips)
+		: false;
+	const layoutControlsDisabled = !hasDocument || !hasAnyCamera;
 	return (
 		<Pane
 			title="Layout"
@@ -1177,7 +1188,7 @@ export function LayoutPane() {
 				<label>Layout</label>
 				<select
 					value={settings.webcamLayoutPreset}
-					disabled={!hasDocument}
+					disabled={layoutControlsDisabled}
 					onChange={(e) =>
 						void set({ webcamLayoutPreset: e.target.value as typeof settings.webcamLayoutPreset })
 					}
@@ -1193,7 +1204,7 @@ export function LayoutPane() {
 				<span className="label">Mirror webcam</span>
 				<Toggle
 					checked={settings.webcamMirrored}
-					disabled={!hasDocument}
+					disabled={layoutControlsDisabled}
 					onChange={(v) => void set({ webcamMirrored: v })}
 				/>
 			</div>
@@ -1201,7 +1212,7 @@ export function LayoutPane() {
 				<span className="label">Shrink on zoom</span>
 				<Toggle
 					checked={settings.webcamReactiveZoom}
-					disabled={!hasDocument}
+					disabled={layoutControlsDisabled}
 					onChange={(v) => void set({ webcamReactiveZoom: v })}
 				/>
 			</div>
@@ -1230,7 +1241,7 @@ export function LayoutPane() {
 										display: "flex",
 										alignItems: "center",
 									}}
-									disabled={!hasDocument}
+									disabled={layoutControlsDisabled}
 									onClick={() => void set({ webcamMaskShape: shape.value })}
 								>
 									<svg
@@ -1263,7 +1274,7 @@ export function LayoutPane() {
 							max={50}
 							step={1}
 							defaultValue={settings.webcamSizePreset}
-							disabled={!hasDocument}
+							disabled={layoutControlsDisabled}
 							onChange={(e) => setLive({ webcamSizePreset: Number(e.target.value) })}
 							onMouseUp={() => void commit()}
 							onTouchEnd={() => void commit()}

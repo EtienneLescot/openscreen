@@ -132,11 +132,15 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 			document.assets.at(-1) ??
 			null;
 
-		// ponytail: auto-link the camera track from the recording session
-		// sidecar when the imported path is a recording's screen file. The
-		// camera DSL is read-only — cuts/zoom/speed live on the main timeline
-		// and apply to the camera via the shared source-time progression.
-		if (addedAsset && document.cameraTrack === null && window.electronAPI?.findRecordingCamera) {
+		// P4 — auto-link the camera track from the recording-links registry (or
+		// its legacy sidecar) for EVERY asset added, not just the first one in
+		// the project: a project can hold multiple recordings, each with its
+		// own camera (or none). The link is stored on the asset itself, not a
+		// document-global field, so it follows the right clip in the timeline.
+		// The camera DSL is read-only — cuts/zoom/speed live on the main
+		// timeline and apply to the camera via the shared source-time
+		// progression.
+		if (addedAsset && window.electronAPI?.findRecordingCamera) {
 			try {
 				const camera = await window.electronAPI.findRecordingCamera(addedAsset.originalPath);
 				if (camera.success && camera.webcamVideoPath) {
@@ -146,17 +150,22 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 						offsetMs: camera.offsetMs ?? 0,
 						visible: true,
 					};
-					const next = { ...document, cameraTrack: linked };
+					const next: AxcutDocument = {
+						...document,
+						assets: document.assets.map((a) =>
+							a.id === addedAsset.id ? { ...a, cameraTrack: linked } : a,
+						),
+					};
 					await get().saveDocument(next);
 					document = parseDocument(next);
 				}
+				// success:false just means no camera was found for this asset —
+				// the normal case for a plain imported video. Nothing to surface.
 			} catch (err) {
-				// P3.2 — a missing sidecar is normal (success:false above), but a
-				// *failing* lookup means the recording should have had a camera
-				// and something went wrong. Surface it instead of eating it.
+				// An actual lookup failure (not "no camera found") — worth surfacing.
 				const name = addedAsset.originalPath.split(/[\\/]/).pop() ?? addedAsset.originalPath;
 				void import("sonner").then(({ toast }) =>
-					toast.error(`No camera file found next to ${name}`, {
+					toast.error(`Could not check for a camera recording near ${name}`, {
 						description: err instanceof Error ? err.message : String(err),
 					}),
 				);

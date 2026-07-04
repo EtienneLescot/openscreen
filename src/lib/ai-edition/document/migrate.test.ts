@@ -43,7 +43,7 @@ describe("migrateProjectDataToAxcutDocument", () => {
 	it("produces a v3 document with one asset and one clip from a v2 single-recording project", () => {
 		const doc = migrateProjectDataToAxcutDocument(makeV2Project());
 
-		expect(doc.schemaVersion).toBe(3);
+		expect(doc.schemaVersion).toBe(4);
 		expect(doc.assets).toHaveLength(1);
 		const asset = doc.assets[0];
 		expect(asset.kind).toBe("video");
@@ -190,7 +190,7 @@ describe("migrateProjectDataToAxcutDocument", () => {
 		expect(doc.assets[0].originalPath).toBe("/legacy/recording.webm");
 	});
 
-	it("ignores webcamPath on forward migration (renderer-side concern)", () => {
+	it("carries a known webcamVideoPath onto the migrated asset's cameraTrack", () => {
 		const doc = migrateProjectDataToAxcutDocument(
 			makeV2Project({
 				media: {
@@ -202,6 +202,13 @@ describe("migrateProjectDataToAxcutDocument", () => {
 		);
 		expect(doc.assets).toHaveLength(1);
 		expect(doc.assets[0].originalPath).toBe("/screen.webm");
+		expect(doc.assets[0].cameraTrack?.sourcePath).toBe("/webcam.webm");
+		expect(doc.assets[0].cameraTrack?.visible).toBe(true);
+	});
+
+	it("leaves cameraTrack null when there is no webcamVideoPath", () => {
+		const doc = migrateProjectDataToAxcutDocument(makeV2Project());
+		expect(doc.assets[0].cameraTrack).toBeNull();
 	});
 });
 
@@ -280,6 +287,18 @@ describe("migrateAxcutDocumentToProjectData", () => {
 		const back = migrateAxcutDocumentToProjectData(doc);
 		expect(back.media?.screenVideoPath).toBe("/recordings/screen.webm");
 		expect(back.videoPath).toBe("/recordings/screen.webm");
+	});
+
+	it("surfaces the primary asset's cameraTrack as media.webcamVideoPath", () => {
+		const v2 = makeV2Project({
+			media: {
+				screenVideoPath: "/recordings/screen.webm",
+				webcamVideoPath: "/recordings/screen-webcam.webm",
+			},
+		});
+		const doc = migrateProjectDataToAxcutDocument(v2);
+		const back = migrateAxcutDocumentToProjectData(doc);
+		expect(back.media?.webcamVideoPath).toBe("/recordings/screen-webcam.webm");
 	});
 
 	it("clamps bad zoom focus to [0, 1] on forward migration", () => {

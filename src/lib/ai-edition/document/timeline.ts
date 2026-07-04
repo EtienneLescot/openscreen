@@ -4,6 +4,7 @@
 // or a new document with updated clips.
 
 import type { AxcutClip, AxcutDocument, AxcutTranscript } from "../schema";
+import { createId } from "./ids";
 
 export function byStart(a: { startSec: number }, b: { startSec: number }): number {
 	return a.startSec - b.startSec;
@@ -233,7 +234,7 @@ export function duplicateClip(
 	const original = document.timeline.clips[index];
 	const copy = {
 		...original,
-		id: `clip_${document.timeline.clips.length + 1}_copy`,
+		id: createId("clip"),
 		origin,
 		reason: reason || original.reason,
 	};

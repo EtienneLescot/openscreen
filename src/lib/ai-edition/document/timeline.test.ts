@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { AxcutDocument } from "../schema";
+import type { AxcutClip, AxcutDocument } from "../schema";
 import {
 	buildTimelineFromIntervals,
+	duplicateClip,
 	invertIntervals,
+	moveClip,
 	normalizeIntervals,
 	primaryAssetDuration,
 	replaceTimeline,
@@ -226,5 +228,71 @@ describe("timeline pure functions", () => {
 			});
 			expect(timelineIntervals(doc)).toEqual([{ startSec: 5, endSec: 15 }]);
 		});
+	});
+});
+
+function makeClip(overrides: Partial<AxcutClip> = {}): AxcutClip {
+	return {
+		id: "clip_a",
+		assetId: "asset_1",
+		sourceStartSec: 0,
+		sourceEndSec: 5,
+		timelineStartSec: 0,
+		timelineEndSec: 5,
+		wordRefs: [],
+		origin: "user",
+		reason: "",
+		...overrides,
+	};
+}
+
+describe("duplicateClip / moveClip", () => {
+	it("duplicateClip gives the copy a fresh, collision-free id even when called repeatedly", () => {
+		// Regression test: this used to id the copy as `clip_${clips.length + 1}_copy`,
+		// a counter that collides across repeated duplicates of a shrinking/growing
+		// array (e.g. duplicate then delete then duplicate again).
+		let doc = makeDoc({ timeline: { ...makeDoc().timeline, clips: [makeClip()] } });
+		doc = duplicateClip(doc, "clip_a");
+		doc = duplicateClip(doc, "clip_a");
+		const ids = doc.timeline.clips.map((c) => c.id);
+		expect(new Set(ids).size).toBe(ids.length);
+	});
+
+	it("duplicateClip inserts the copy immediately after the original and bumps preview.revision", () => {
+		const doc = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [
+					makeClip({ id: "clip_a" }),
+					makeClip({ id: "clip_b", timelineStartSec: 5, timelineEndSec: 10 }),
+				],
+			},
+		});
+		const next = duplicateClip(doc, "clip_a");
+		expect(next.timeline.clips.map((c) => c.id)[1]).not.toBe("clip_b");
+		expect(next.timeline.clips[0].id).toBe("clip_a");
+		expect(next.timeline.clips[2].id).toBe("clip_b");
+		expect(next.preview.revision).toBe(doc.preview.revision + 1);
+	});
+
+	it("moveClip reorders clips and bumps preview.revision", () => {
+		const doc = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [
+					makeClip({ id: "clip_a" }),
+					makeClip({ id: "clip_b", timelineStartSec: 5, timelineEndSec: 10 }),
+				],
+			},
+		});
+		const next = moveClip(doc, "clip_a", 1);
+		expect(next.timeline.clips.map((c) => c.id)).toEqual(["clip_b", "clip_a"]);
+		expect(next.preview.revision).toBe(doc.preview.revision + 1);
+	});
+
+	it("throws for an unknown clip id", () => {
+		const doc = makeDoc({ timeline: { ...makeDoc().timeline, clips: [makeClip()] } });
+		expect(() => duplicateClip(doc, "missing")).toThrow();
+		expect(() => moveClip(doc, "missing", 0)).toThrow();
 	});
 });

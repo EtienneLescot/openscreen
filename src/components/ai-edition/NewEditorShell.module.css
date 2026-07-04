@@ -795,18 +795,17 @@
 	letter-spacing: 0.02em;
 }
 
-/* ─── transport bar ────────────────────────────────────────────── */
+/* ─── transport bar (lives inside .timelineHead, next to the tool icons) ─ */
 .transport {
 	display: flex;
 	align-items: center;
-	gap: var(--sp-2);
-	padding: var(--sp-2) var(--sp-4);
-	background: var(--bg);
-	border-top: 1px solid var(--border-soft);
+	gap: 6px;
+	flex: 1;
+	min-width: 0;
 }
 .transport .tbtn {
-	width: 32px;
-	height: 32px;
+	width: 28px;
+	height: 28px;
 	display: grid;
 	place-items: center;
 	border-radius: var(--r-sm);
@@ -814,6 +813,7 @@
 	background: transparent;
 	border: 0;
 	cursor: pointer;
+	flex-shrink: 0;
 	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
 }
 .transport .tbtn:hover {
@@ -821,8 +821,8 @@
 	color: var(--fg);
 }
 .transport .tbtn.play {
-	width: 36px;
-	height: 36px;
+	width: 28px;
+	height: 28px;
 	background: var(--fg);
 	color: var(--bg);
 	border-radius: 50%;
@@ -837,6 +837,7 @@
 	letter-spacing: 0.02em;
 	min-width: 96px;
 	text-align: center;
+	flex-shrink: 0;
 }
 .transport .time .sep { color: var(--meta); margin-inline: 4px; }
 .transport .time .total { color: var(--muted); }
@@ -968,6 +969,8 @@
 }
 .field select:focus,
 .field input:focus { border-color: var(--brand); }
+.field select:disabled,
+.field input:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ─── bg thumb grid ────────────────────────────────────────────── */
 .bgGrid {
@@ -1017,6 +1020,7 @@
 }
 .toggle.isOn { background: var(--brand); }
 .toggle.isOn::after { transform: translateX(16px); }
+.toggle:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ─── slider cell (effect) ─────────────────────────────────────── */
 .sliderGrid {
@@ -1065,6 +1069,7 @@
 	cursor: pointer;
 }
 .sliderCell.full { grid-column: 1 / -1; }
+.sliderCell input[type=range]:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ─── cursor style grid ────────────────────────────────────────── */
 .cursorGrid {
@@ -1085,6 +1090,8 @@
 	color: var(--muted);
 }
 .cursorCell:hover { border-color: var(--border-hi); color: var(--fg-2); }
+.cursorCell:disabled { opacity: 0.5; cursor: not-allowed; }
+.cursorCell:disabled:hover { border-color: var(--border); color: var(--muted); }
 .cursorCell.isActive {
 	border-color: var(--brand);
 	box-shadow: 0 0 0 2px color-mix(in oklab, var(--brand), transparent 75%);
@@ -1203,21 +1210,22 @@
 .msgBubble .msgAuthor { color: var(--accent); }
 
 .chatInput {
-	padding: var(--sp-3) var(--sp-4);
+	padding: var(--sp-2) var(--sp-4) var(--sp-3);
 	border-top: 1px solid var(--border-soft);
 	background: var(--bg);
 }
 .chatInput textarea {
 	width: 100%;
-	min-height: 64px;
+	min-height: 36px;
+	max-height: 120px;
 	resize: none;
-	padding: var(--sp-3);
+	padding: 8px var(--sp-3);
 	border-radius: var(--r-md);
 	border: 1px solid var(--border);
 	background: var(--bg);
 	font-family: var(--font-body);
 	font-size: var(--fs-app);
-	line-height: 1.5;
+	line-height: 1.4;
 	color: var(--fg);
 	outline: none;
 	transition: border-color var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease);
@@ -1231,7 +1239,7 @@
 	display: flex;
 	align-items: center;
 	gap: var(--sp-2);
-	margin-top: var(--sp-2);
+	margin-top: 6px;
 }
 .modelPicker {
 	display: inline-flex;
@@ -1249,8 +1257,16 @@
 	border: 0;
 }
 .modelPicker:hover { background: var(--surface-3); }
-.modelPicker .chip {
-	padding: 3px 8px;
+.reasoningBtn {
+	display: inline-flex;
+	align-items: center;
+	background: transparent;
+	border: 0;
+	padding: 0;
+	cursor: pointer;
+}
+.chip {
+	padding: 5px 10px;
 	border-radius: var(--r-pill);
 	background: var(--success-soft);
 	color: var(--success);
@@ -1260,8 +1276,10 @@
 	display: inline-flex;
 	align-items: center;
 	gap: 4px;
+	transition: background var(--motion-fast) var(--ease);
 }
-.modelPicker .chip .d {
+.reasoningBtn:hover .chip { background: var(--success-soft); filter: brightness(1.1); }
+.chip .d {
 	width: 5px;
 	height: 5px;
 	border-radius: 50%;

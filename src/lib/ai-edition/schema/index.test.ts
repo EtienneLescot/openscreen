@@ -14,9 +14,9 @@ import {
 	zoomRegionSchema,
 } from "./index";
 
-describe("axcut-schema v3", () => {
-	it("uses schema version 3", () => {
-		expect(axcutSchemaVersion).toBe(3);
+describe("axcut-schema v4", () => {
+	it("uses schema version 4", () => {
+		expect(axcutSchemaVersion).toBe(4);
 	});
 
 	it("rejects unknown schema versions", () => {
@@ -28,9 +28,9 @@ describe("axcut-schema v3", () => {
 		).toThrow();
 	});
 
-	it("createEmptyDocument returns a valid v3 doc with empty collections", () => {
+	it("createEmptyDocument returns a valid v4 doc with empty collections", () => {
 		const doc = createEmptyDocument({ projectId: "proj_1", title: "Demo" });
-		expect(doc.schemaVersion).toBe(3);
+		expect(doc.schemaVersion).toBe(4);
 		expect(doc.assets).toEqual([]);
 		expect(doc.timeline.clips).toEqual([]);
 		expect(doc.timeline.skipRanges).toEqual([]);
@@ -186,6 +186,64 @@ describe("axcut-schema v3", () => {
 				history: {},
 			}),
 		).not.toThrow();
+	});
+
+	it("assetSchema defaults cameraTrack to null", () => {
+		const asset = assetSchema.parse({
+			id: "asset_1",
+			kind: "video",
+			label: "x",
+			originalPath: "/x.mp4",
+		});
+		expect(asset.cameraTrack).toBeNull();
+	});
+
+	describe("v3 -> v4 cameraTrack migration", () => {
+		function v3Doc(overrides: Record<string, unknown> = {}) {
+			return {
+				schemaVersion: 3,
+				project: {
+					id: "p",
+					title: "t",
+					createdAt: new Date().toISOString(),
+					updatedAt: new Date().toISOString(),
+				},
+				assets: [
+					{ id: "asset_1", kind: "video", label: "a1", originalPath: "/a1.mp4" },
+					{ id: "asset_2", kind: "video", label: "a2", originalPath: "/a2.mp4" },
+				],
+				cameraTrack: { sourcePath: "/cam.mp4", startMs: 0, offsetMs: 0, visible: true },
+				...overrides,
+			};
+		}
+
+		it("relocates a legacy top-level cameraTrack onto the primaryAssetId asset", () => {
+			const doc = documentSchema.parse(
+				v3Doc({ project: { ...v3Doc().project, primaryAssetId: "asset_2" } }),
+			);
+			expect(doc.schemaVersion).toBe(4);
+			expect((doc as Record<string, unknown>).cameraTrack).toBeUndefined();
+			expect(doc.assets.find((a) => a.id === "asset_1")?.cameraTrack).toBeNull();
+			expect(doc.assets.find((a) => a.id === "asset_2")?.cameraTrack?.sourcePath).toBe("/cam.mp4");
+		});
+
+		it("falls back to the first asset when there is no primaryAssetId", () => {
+			const doc = documentSchema.parse(v3Doc());
+			expect(doc.assets[0].cameraTrack?.sourcePath).toBe("/cam.mp4");
+			expect(doc.assets[1].cameraTrack).toBeNull();
+		});
+
+		it("is a no-op when the v3 document has no legacy cameraTrack", () => {
+			const doc = documentSchema.parse(v3Doc({ cameraTrack: null }));
+			expect(doc.schemaVersion).toBe(4);
+			for (const asset of doc.assets) {
+				expect(asset.cameraTrack).toBeNull();
+			}
+		});
+
+		it("still rejects schemaVersion 2 (only v3 is auto-upgraded)", () => {
+			expect(() => documentSchema.parse(v3Doc({ schemaVersion: 2 }))).toThrow();
+		});
 	});
 
 	describe("range ordering validation", () => {

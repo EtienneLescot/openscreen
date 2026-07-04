@@ -55,6 +55,7 @@ import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
 import { RECORDINGS_DIR } from "../main";
+import { findMediaLinksByFingerprint, registerMediaLinks } from "../media/mediaLinksRegistry";
 import { createCursorRecordingSession } from "../native-bridge/cursor/recording/factory";
 import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
@@ -509,8 +510,7 @@ function normalizeCursorAsset(asset: unknown): NativeCursorAsset | null {
 	};
 }
 
-async function readCursorRecordingFile(targetVideoPath: string): Promise<CursorRecordingData> {
-	const telemetryPath = `${targetVideoPath}.cursor.json`;
+async function readCursorRecordingFileAt(telemetryPath: string): Promise<CursorRecordingData> {
 	try {
 		const content = await fs.readFile(telemetryPath, "utf-8");
 		const parsed = JSON.parse(content);
@@ -553,6 +553,40 @@ async function readCursorRecordingFile(targetVideoPath: string): Promise<CursorR
 		console.error("Failed to load cursor telemetry:", error);
 		throw error;
 	}
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+	try {
+		await fs.access(filePath, fsConstants.F_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+// P4 — the sidecar convention (`<videoPath>.cursor.json`) only holds while the
+// video stays exactly where it was recorded. If it's missing (file moved,
+// renamed, or imported from elsewhere), fall back to the fingerprint registry
+// (electron/media/mediaLinksRegistry.ts) to re-find the same telemetry file.
+async function readCursorRecordingFile(targetVideoPath: string): Promise<CursorRecordingData> {
+	const directPath = `${targetVideoPath}.cursor.json`;
+	if (await fileExists(directPath)) {
+		return readCursorRecordingFileAt(directPath);
+	}
+	try {
+		const links = await findMediaLinksByFingerprint(RECORDINGS_DIR, targetVideoPath);
+		if (links?.cursorTelemetryPath) {
+			return readCursorRecordingFileAt(links.cursorTelemetryPath);
+		}
+	} catch (error) {
+		console.warn("[media-links] fingerprint lookup failed for cursor telemetry:", error);
+	}
+	return {
+		version: CURSOR_TELEMETRY_VERSION,
+		provider: "none",
+		samples: [],
+		assets: [],
+	};
 }
 
 async function readCursorTelemetryFile(targetVideoPath: string) {
@@ -855,6 +889,30 @@ async function writePendingCursorTelemetry(videoPath: string) {
 		await fs.writeFile(telemetryPath, JSON.stringify(pendingCursorRecordingData, null, 2), "utf-8");
 	}
 	pendingCursorRecordingData = null;
+}
+
+// P4 — proactively seeds the media-links registry for a fresh recording so
+// its camera/cursor-telemetry links can still be found later even if the
+// screen video is moved, renamed, or imported into a different project.
+// Best-effort: a registry write hiccup must never fail the recording flow.
+async function registerRecordingMediaLinks(
+	screenVideoPath: string,
+	options: { webcamVideoPath?: string; cursorCaptureMode?: CursorCaptureMode },
+) {
+	try {
+		const cursorTelemetryPath = `${screenVideoPath}.cursor.json`;
+		const hasCursorTelemetry = await fs
+			.access(cursorTelemetryPath, fsConstants.F_OK)
+			.then(() => true)
+			.catch(() => false);
+		await registerMediaLinks(RECORDINGS_DIR, screenVideoPath, {
+			...(options.webcamVideoPath ? { webcamVideoPath: options.webcamVideoPath } : {}),
+			...(hasCursorTelemetry ? { cursorTelemetryPath } : {}),
+			...(options.cursorCaptureMode ? { cursorCaptureMode: options.cursorCaptureMode } : {}),
+		});
+	} catch (error) {
+		console.warn("[media-links] failed to register recording links:", error);
+	}
 }
 
 function shiftPendingCursorTelemetry(offsetMs: number) {
@@ -1310,6 +1368,63 @@ async function loadRecordedSessionForVideoPath(
 		}
 		return null;
 	}
+}
+
+// P4 — resolves the camera (and cursor-telemetry path, though callers that
+// only care about the camera can ignore it) for a screen-recording video,
+// trying the cheap path-adjacency sidecar first (handles "just recorded" and
+// pre-existing recordings) and falling back to the fingerprint registry
+// (handles the file having been moved/renamed/imported from elsewhere).
+// `videoPath` must already be normalized + approved by the caller.
+async function resolveMediaLinksForVideo(videoPath: string): Promise<{
+	webcamVideoPath?: string;
+	webcamOffsetMs?: number;
+	cursorTelemetryPath?: string;
+	resolvedVia: "sidecar" | "fingerprint" | "none";
+}> {
+	const session = await loadRecordedSessionForVideoPath(videoPath);
+	const cursorTelemetryPath = `${videoPath}.cursor.json`;
+	const hasCursorTelemetry = await fs
+		.access(cursorTelemetryPath, fsConstants.F_OK)
+		.then(() => true)
+		.catch(() => false);
+
+	if (session?.webcamVideoPath || hasCursorTelemetry) {
+		// Opportunistic backfill so the link survives a later move even if this
+		// recording predates the registry, or if its sidecar doesn't travel with it.
+		await registerMediaLinks(RECORDINGS_DIR, videoPath, {
+			...(session?.webcamVideoPath ? { webcamVideoPath: session.webcamVideoPath } : {}),
+			...(hasCursorTelemetry ? { cursorTelemetryPath } : {}),
+		}).catch((error) => console.warn("[media-links] backfill failed:", error));
+
+		return {
+			...(session?.webcamVideoPath
+				? { webcamVideoPath: session.webcamVideoPath, webcamOffsetMs: 0 }
+				: {}),
+			...(hasCursorTelemetry ? { cursorTelemetryPath } : {}),
+			resolvedVia: "sidecar",
+		};
+	}
+
+	try {
+		const links = await findMediaLinksByFingerprint(RECORDINGS_DIR, videoPath);
+		if (links?.webcamVideoPath || links?.cursorTelemetryPath) {
+			let webcamVideoPath = links.webcamVideoPath;
+			if (webcamVideoPath && !isPathAllowed(webcamVideoPath)) {
+				webcamVideoPath =
+					(await approveReadableVideoPath(webcamVideoPath, [RECORDINGS_DIR])) ?? undefined;
+			}
+			return {
+				...(webcamVideoPath ? { webcamVideoPath, webcamOffsetMs: links.webcamOffsetMs ?? 0 } : {}),
+				...(links.cursorTelemetryPath ? { cursorTelemetryPath: links.cursorTelemetryPath } : {}),
+				resolvedVia: "fingerprint",
+			};
+		}
+	} catch (error) {
+		console.warn("[media-links] fingerprint lookup failed:", error);
+	}
+
+	return { resolvedVia: "none" };
 }
 
 export function registerIpcHandlers(
@@ -2105,6 +2220,7 @@ export function registerIpcHandlers(
 				`${path.parse(screenVideoPath).name}${RECORDING_SESSION_SUFFIX}`,
 			);
 			await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
+			await registerRecordingMediaLinks(screenVideoPath, { webcamVideoPath, cursorCaptureMode });
 
 			return {
 				success: true,
@@ -2191,6 +2307,7 @@ export function registerIpcHandlers(
 				`${path.parse(screenVideoPath).name}${RECORDING_SESSION_SUFFIX}`,
 			);
 			await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
+			await registerRecordingMediaLinks(screenVideoPath, { cursorCaptureMode });
 
 			return {
 				success: true,
@@ -2264,6 +2381,7 @@ export function registerIpcHandlers(
 					`${path.parse(screenVideoPath).name}${RECORDING_SESSION_SUFFIX}`,
 				);
 				await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
+				await registerRecordingMediaLinks(screenVideoPath, { webcamVideoPath, cursorCaptureMode });
 
 				return {
 					success: true,
@@ -2387,6 +2505,7 @@ export function registerIpcHandlers(
 			`${path.parse(payload.screen.fileName).name}${RECORDING_SESSION_SUFFIX}`,
 		);
 		await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
+		await registerRecordingMediaLinks(screenVideoPath, { webcamVideoPath, cursorCaptureMode });
 
 		return {
 			success: true,
@@ -3003,14 +3122,14 @@ export function registerIpcHandlers(
 				if (!normalized || !isPathAllowed(normalized)) {
 					return { success: false, error: "Video path has not been approved" };
 				}
-				const session = await loadRecordedSessionForVideoPath(normalized);
-				if (!session?.webcamVideoPath) {
+				const resolution = await resolveMediaLinksForVideo(normalized);
+				if (!resolution.webcamVideoPath) {
 					return { success: false, error: "No camera attached to this recording" };
 				}
 				return {
 					success: true,
-					webcamVideoPath: session.webcamVideoPath,
-					offsetMs: 0,
+					webcamVideoPath: resolution.webcamVideoPath,
+					offsetMs: resolution.webcamOffsetMs ?? 0,
 				};
 			} catch (err) {
 				return {
