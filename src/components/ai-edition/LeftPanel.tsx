@@ -906,9 +906,7 @@ function ChatStripPanel() {
 		};
 	}, [rewindFor]);
 
-	const modelLabel = llmConfig
-		? `${llmConfig.provider} / ${llmConfig.model}`
-		: "Configure AI Model";
+	const modelLabel = llmConfig ? llmConfig.model : "Configure AI Model";
 	const providerSupportsReasoning = Boolean(
 		llmConfig &&
 			PROVIDER_DEFINITIONS.find((d) => d.id === llmConfig.provider)?.supportsReasoningEffort,
@@ -1565,7 +1563,7 @@ function ChatStripPanel() {
 						}
 					}}
 				/>
-				<div className="actions">
+				<div className={styles.actions}>
 					<button
 						ref={modelButtonRef}
 						type="button"
@@ -1595,15 +1593,15 @@ function ChatStripPanel() {
 						<button
 							ref={reasoningButtonRef}
 							type="button"
-							className={styles.modelPicker}
+							className={styles.reasoningBtn}
 							aria-label="Reasoning effort"
 							aria-haspopup="menu"
 							aria-expanded={reasoningOpen}
 							onClick={toggleReasoningOpen}
 						>
-							<span className="chip">
-								<span className="d" />
-								Reasoning {reasoningLabel}
+							<span className={styles.chip}>
+								<span className={styles.d} />
+								{reasoningLabel}
 							</span>
 						</button>
 					) : null}
@@ -1683,8 +1681,8 @@ function ChatStripPanel() {
 							strokeLinecap="round"
 							strokeLinejoin="round"
 						>
-							<line x1="22" y1="2" x2="11" y2="13" />
-							<polygon points="22 2 15 22 11 13 2 9 22 2" />
+							<path d="M3.714 3.048a.498.498 0 0 0-.683.627l2.843 7.627a2 2 0 0 1 0 1.396l-2.843 7.627a.498.498 0 0 0 .683.627l18-8.5a.5.5 0 0 0 0-.904Z" />
+							<path d="M6 12h16" />
 						</svg>
 					</button>
 				</div>

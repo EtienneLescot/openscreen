@@ -1,3 +1,26 @@
+// Single-canvas Pixi/WebGL compositor for the screen recording, replacing
+// the CSS-transform + plain <video> approach `VirtualPreview` used.
+//
+// Why: the screen recording used to be a bare <video> element with zoom/pan
+// applied as a CSS `transform` on its wrapper div, re-computed on every
+// virtual-time tick. That's a DOM style write + layout/paint cost 60x/sec on
+// top of the browser's own video decode/paint — main branch instead decodes
+// the video straight into a Pixi texture and applies zoom/pan as a Pixi
+// container transform, so the whole frame (video + mask + zoom) is one GPU
+// draw call per tick with no DOM reflow. This component ports that approach
+// for the screen source only (the webcam stays a plain <video> — see
+// WebcamOverlay.tsx and playback-clock.ts for its own, separately-fixed,
+// sync story; main doesn't Pixi-composite the webcam either).
+//
+// The actual timeline-aware playback logic (clip-boundary advancement, skip
+// ranges, speed regions, asset switching, seeking) is unchanged from
+// VirtualPreview — only the RENDERING of the active frame moved from
+// CSS+<video> to Pixi+<canvas>. The <video> element itself is kept in the
+// DOM (invisible) purely as the decode source Pixi's VideoSource wraps, and
+// so CursorPreviewLayer's existing "measure the sibling <video>" sizing
+// keeps working unmodified.
+
+import { Application, Container, Graphics, Sprite, Texture, VideoSource } from "pixi.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fromFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AxcutClip, AxcutSkipRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
@@ -14,17 +37,17 @@ import {
 	computeZoomPreviewTransform,
 	IDENTITY_ZOOM_TRANSFORM,
 } from "@/lib/ai-edition/timeline/zoom-preview";
-import { CursorPreviewLayer } from "./CursorPreviewLayer";
-import styles from "./VirtualPreview.module.css";
+import { CursorPreviewLayer } from "../CursorPreviewLayer";
+import styles from "./PreviewCompositor.module.css";
 
-export interface VideoSource {
+export interface VideoSourceDescriptor {
 	id: string;
 	src: string;
 	label: string;
 }
 
-interface VirtualPreviewProps {
-	videoSources: VideoSource[];
+interface PreviewCompositorProps {
+	videoSources: VideoSourceDescriptor[];
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
@@ -33,17 +56,17 @@ interface VirtualPreviewProps {
 	onTimeChange?: (timeSec: number) => void;
 	onLoadedMetadata?: (durationSec: number, assetId: string) => void;
 	onVideoElement?: (element: HTMLVideoElement | null) => void;
-	videoStyle?: React.CSSProperties;
 	onVideoError?: () => void;
-	/**
-	 * Written every rAF tick with this video's live position/rate so other
-	 * media elements (the webcam overlay) can read it directly instead of
-	 * waiting for a React state round trip. See playback-clock.ts.
-	 */
+	/** Written every tick so the webcam overlay can stay locked to this clock. */
 	clockRef?: PlaybackClockRef;
 }
 
-export function VirtualPreview({
+interface Size {
+	width: number;
+	height: number;
+}
+
+export function PreviewCompositor({
 	videoSources,
 	clips,
 	zoomRegions = [],
@@ -53,13 +76,13 @@ export function VirtualPreview({
 	onTimeChange,
 	onLoadedMetadata,
 	onVideoElement,
-	videoStyle,
 	onVideoError,
 	clockRef,
-}: VirtualPreviewProps) {
+}: PreviewCompositorProps) {
 	const { settings } = useEditorSettings();
 	const videoRef = useRef<HTMLVideoElement | null>(null);
-	const videoFrameRef = useRef<HTMLDivElement | null>(null);
+	const frameRef = useRef<HTMLDivElement | null>(null);
+	const canvasHostRef = useRef<HTMLDivElement | null>(null);
 
 	const isProgrammaticSeekRef = useRef(false);
 	const pendingSeekRef = useRef<{ sourceTimeSec: number; play: boolean } | null>(null);
@@ -67,34 +90,17 @@ export function VirtualPreview({
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [loadState, setLoadState] = useState<"idle" | "loading" | "ready" | "error">("idle");
 	const [sourceIndex, setSourceIndex] = useState(0);
+	const [canvasSize, setCanvasSize] = useState<Size>({ width: 0, height: 0 });
 
 	const virtualDurationSec = useMemo(() => totalVirtualDuration(clips), [clips]);
 	const activeSource = videoSources[sourceIndex] ?? null;
 
-	// ponytail: the cursor overlay wants source-media time (the recorded
-	// cursor samples live on the original mp4 timeline, not the edited
-	// virtual timeline). `setSourceTimeSec` is called from the 60 Hz rAF
-	// below so the cursor follows the playhead even when the user scrubs.
+	// See VirtualPreview's original comment: the cursor overlay wants
+	// source-media time, not virtual-timeline time.
 	const [sourceTimeSec, setSourceTimeSec] = useState(0);
 
-	// Drive the virtual-time preview clock at 60 Hz (the <video> timeupdate
-	// event only fires ~4×/s, which is too slow to keep the webcam <video>
-	// and any future audio element in sync — a 4 Hz sync lets the webcam
-	// drift up to ~250 ms between corrections and produces a visible
-	// audio/video desync). The virtual-time read here mirrors what
-	// handleTimeUpdate does on every timeupdate; running it 60×/s keeps
-	// the drift under a single frame (~16 ms). Inlined here so the rAF
-	// can also handle clip-end advancement and the !position fall-back
-	// without a separate <video onTimeUpdate> event firing at ~4 Hz.
 	const sourceTimeSecRef = useRef(0);
 	sourceTimeSecRef.current = sourceTimeSec;
-	// ponytail: the rAF closure captured the props at mount time. The
-	// auto-created clip arrives a tick after the source swaps, so reads
-	// from the closure would forever see `clips: []` and the rAF would
-	// bail at the `clips.length === 0` guard — leaving the scrub thumb
-	// stuck at 0% and the drag range at `max=1`. The refs let the rAF
-	// always see the latest values without re-creating on every clip
-	// mutation.
 	const clipsRef = useRef(clips);
 	clipsRef.current = clips;
 	const videoSourcesRef = useRef(videoSources);
@@ -109,7 +115,27 @@ export function VirtualPreview({
 	speedRegionsRef.current = speedRegions;
 	const skipRangesRef = useRef(skipRanges);
 	skipRangesRef.current = skipRanges;
-	// biome-ignore lint/correctness/useExhaustiveDependencies: re-create the rAF when the active source swaps.
+
+	const updateVirtualTime = useCallback(
+		(nextTimeSec: number) => {
+			setVirtualTimeSec(nextTimeSec);
+			onTimeChange?.(nextTimeSec);
+			const v = videoRef.current;
+			if (v) {
+				const activeRegion = findActiveSpeedRegion(
+					speedRegionsRef.current,
+					Math.round(nextTimeSec * 1000),
+				);
+				const rate = activeRegion?.speed ?? 1;
+				if (v.playbackRate !== rate) v.playbackRate = rate;
+			}
+		},
+		[onTimeChange],
+	);
+
+	// Playback/time-mapping rAF — ported verbatim from VirtualPreview, plus
+	// publishing this frame's state to the shared clock for the webcam.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: re-create when the active source swaps.
 	useEffect(() => {
 		let raf = 0;
 		const tick = () => {
@@ -118,9 +144,6 @@ export function VirtualPreview({
 			if (!v || !Number.isFinite(v.currentTime)) {
 				return;
 			}
-			// Publish this frame's live position/rate for other media elements
-			// (webcam) to read directly — see playback-clock.ts for why this
-			// bypasses React state entirely.
 			if (clockRef) {
 				clockRef.current.sourceTimeSec = v.currentTime;
 				clockRef.current.isPlaying = !v.paused;
@@ -128,11 +151,6 @@ export function VirtualPreview({
 				clockRef.current.virtualTimeSec = virtualTimeSecRef.current;
 			}
 			const activeSourceId = videoSourcesRef.current[sourceIndexRef.current]?.id;
-			// Skip regions only skip ahead during actual playback — mirrors
-			// main's videoEventHandlers.ts (findActiveTrimRegion + jump to
-			// endMs, gated on `!video.paused`). Scrubbing/paused seeks are
-			// intentionally NOT clamped: the user can navigate freely inside
-			// a skip while editing; only Play/export treats it as a cut.
 			if (!v.paused) {
 				const activeSkip = skipRangesRef.current.find(
 					(skip) =>
@@ -144,31 +162,15 @@ export function VirtualPreview({
 					if (activeSkip.endSec >= (v.duration || Infinity)) {
 						v.pause();
 					} else {
-						// ponytail: seeking to exactly `endSec` can land the decoder a
-						// hair before it (frame/sample quantization), which still
-						// satisfies `currentTime < skip.endSec` — the next tick
-						// re-seeks to the same spot, forever, so playback never
-						// actually progresses past the skip (looked like a hard
-						// stop instead of an invisible cut). A small epsilon past
-						// the boundary guarantees each re-check reads past it.
 						v.currentTime = activeSkip.endSec + 0.05;
 					}
 					return;
 				}
 			}
-			// ponytail: also push setSourceTimeSec every frame (was previously
-			// in a separate rAF effect). Cheap; <video>.readyState >= 2 guards
-			// against drawing a black frame into the cursor overlay.
 			if (v.readyState >= 2) {
 				setSourceTimeSec(v.currentTime);
 			}
 			if (clipsRef.current.length === 0) {
-				// ponytail: no clip yet (auto-create runs from
-				// handleLoadedMetadata on the next tick). Push the raw
-				// source time as the virtual time so the scrub thumb
-				// advances and the timecode shows real progress during
-				// playback. The proper timeline-aware mapping kicks in
-				// when the auto-created clip arrives.
 				updateVirtualTime(v.currentTime);
 				return;
 			}
@@ -180,8 +182,6 @@ export function VirtualPreview({
 			}
 			const position = locateSourcePosition(clipsRef.current, v.currentTime, activeSourceId);
 			if (!position) {
-				// ponytail: fall back to timeline order so cross-asset / reordered
-				// clips don't keep playing unmapped media.
 				const nextClip = clipsRef.current.find(
 					(clip) => clip.timelineStartSec > virtualTimeSecRef.current + 0.001,
 				);
@@ -209,62 +209,14 @@ export function VirtualPreview({
 		};
 		raf = window.requestAnimationFrame(tick);
 		return () => window.cancelAnimationFrame(raf);
-		// re-create the rAF when the active source swaps
 	}, [activeSource?.src]);
 
-	// report the video element up; re-notify (and clear) whenever the active
-	// source changes so the parent doesn't keep a stale node after the keyed
-	// <video> is swapped for a new asset.
 	const activeSourceKey = activeSource?.src ?? null;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: re-run on source swap
 	useEffect(() => {
 		onVideoElement?.(videoRef.current);
 		return () => onVideoElement?.(null);
 	}, [onVideoElement, activeSourceKey]);
-
-	const updateVirtualTime = useCallback(
-		(nextTimeSec: number) => {
-			setVirtualTimeSec(nextTimeSec);
-			onTimeChange?.(nextTimeSec);
-			// ponytail: mirrors main's per-frame `video.playbackRate = ...`
-			// (videoEventHandlers.ts) — the browser does the actual time
-			// warping, so this is the only thing speed regions need. No
-			// virtual-timeline remap: a sped-up region still occupies its
-			// original span on the ruler, it's just played through faster.
-			const v = videoRef.current;
-			if (v) {
-				const activeRegion = findActiveSpeedRegion(
-					speedRegionsRef.current,
-					Math.round(nextTimeSec * 1000),
-				);
-				const rate = activeRegion?.speed ?? 1;
-				if (v.playbackRate !== rate) v.playbackRate = rate;
-			}
-		},
-		[onTimeChange],
-	);
-
-	// Apply the zoom-region transform directly to the DOM (bypassing React
-	// render) so it stays in lockstep with the 60 Hz virtual-time updates
-	// above without adding a style-prop re-render on every frame.
-	useEffect(() => {
-		const frame = videoFrameRef.current;
-		if (!frame) return;
-		// ponytail: scale the zoom-in/out transition windows by the current
-		// playback rate so the transition stays wall-clock constant inside
-		// speed regions. The cursor still flies through (ruler + playhead
-		// read source-time), only the easing duration is decoupled.
-		const activeSpeedRegion = findActiveSpeedRegion(
-			speedRegionsRef.current,
-			Math.round(virtualTimeSec * 1000),
-		);
-		const playbackRate = activeSpeedRegion?.speed ?? 1;
-		const transform =
-			zoomRegions.length === 0
-				? IDENTITY_ZOOM_TRANSFORM
-				: computeZoomPreviewTransform(zoomRegions, virtualTimeSec * 1000, undefined, playbackRate);
-		frame.style.transform = `translate(${transform.translateXPercent}%, ${transform.translateYPercent}%) scale(${transform.scale})`;
-	}, [zoomRegions, virtualTimeSec]);
 
 	const seekToVirtualTime = useCallback(
 		(nextVirtualTimeSec: number, preservePlayback = false) => {
@@ -274,7 +226,6 @@ export function VirtualPreview({
 				setIsPlaying(false);
 				return;
 			}
-
 			const targetIndex = videoSources.findIndex((vs) => vs.id === position.clip.assetId);
 			const isAssetSwitch = targetIndex >= 0 && targetIndex !== sourceIndex;
 			const shouldContinuePlayback = preservePlayback && isPlaying;
@@ -323,34 +274,163 @@ export function VirtualPreview({
 		}
 	}, [seekTarget, seekToVirtualTime, seekToSourceTime]);
 
+	// --- Pixi compositor -----------------------------------------------
+
+	const appRef = useRef<Application | null>(null);
+	const spriteRef = useRef<Sprite | null>(null);
+	const maskRef = useRef<Graphics | null>(null);
+	const cameraContainerRef = useRef<Container | null>(null);
+	const [pixiReady, setPixiReady] = useState(false);
+
+	// Keep the canvas host positioned/sized exactly over the hidden video's
+	// rendered (contain-fit) box — same rect-tracking technique
+	// CursorPreviewLayer already uses for its own overlay.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: re-run on source swap so the observer re-attaches
+	useEffect(() => {
+		const video = videoRef.current;
+		const frame = frameRef.current;
+		const host = canvasHostRef.current;
+		if (!video || !frame || !host) return;
+		const update = () => {
+			const videoRect = video.getBoundingClientRect();
+			const frameRect = frame.getBoundingClientRect();
+			if (videoRect.width <= 0 || videoRect.height <= 0) return;
+			const width = Math.round(videoRect.width);
+			const height = Math.round(videoRect.height);
+			host.style.left = `${Math.round(videoRect.left - frameRect.left)}px`;
+			host.style.top = `${Math.round(videoRect.top - frameRect.top)}px`;
+			host.style.width = `${width}px`;
+			host.style.height = `${height}px`;
+			setCanvasSize((prev) =>
+				prev.width === width && prev.height === height ? prev : { width, height },
+			);
+		};
+		update();
+		const ro = new ResizeObserver(update);
+		ro.observe(video);
+		ro.observe(frame);
+		return () => ro.disconnect();
+	}, [activeSourceKey]);
+
+	// Create the Pixi Application + video sprite once per active source.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: re-create when the active source swaps
+	useEffect(() => {
+		const video = videoRef.current;
+		const host = canvasHostRef.current;
+		if (!video || !host || !activeSource) return;
+		let mounted = true;
+		let app: Application | null = null;
+
+		(async () => {
+			app = new Application();
+			await app.init({
+				width: canvasSize.width || 1,
+				height: canvasSize.height || 1,
+				backgroundAlpha: 0,
+				antialias: true,
+				resolution: window.devicePixelRatio || 1,
+				autoDensity: true,
+			});
+			if (!mounted) {
+				app.destroy(true, { children: true, texture: true, textureSource: true });
+				return;
+			}
+			app.ticker.maxFPS = 60;
+			host.appendChild(app.canvas);
+			appRef.current = app;
+
+			const source = VideoSource.from(video);
+			(source as unknown as { autoPlay: boolean }).autoPlay = false;
+			(source as unknown as { autoUpdate: boolean }).autoUpdate = true;
+			const texture = Texture.from(source);
+			const sprite = new Sprite(texture);
+			const mask = new Graphics();
+			const cameraContainer = new Container();
+			cameraContainer.addChild(sprite);
+			cameraContainer.mask = mask;
+			app.stage.addChild(mask, cameraContainer);
+
+			spriteRef.current = sprite;
+			maskRef.current = mask;
+			cameraContainerRef.current = cameraContainer;
+			setPixiReady(true);
+		})();
+
+		return () => {
+			mounted = false;
+			setPixiReady(false);
+			if (app?.renderer) {
+				const canvas = app.canvas;
+				if (canvas.parentElement === host) host.removeChild(canvas);
+				app.destroy(true, { children: true, texture: true, textureSource: true });
+			}
+			appRef.current = null;
+			spriteRef.current = null;
+			maskRef.current = null;
+			cameraContainerRef.current = null;
+		};
+	}, [activeSourceKey]);
+
+	// Resize the renderer + redraw the rounded-corner mask whenever the
+	// measured box or the border-radius setting changes.
+	useEffect(() => {
+		if (!pixiReady) return;
+		const app = appRef.current;
+		const mask = maskRef.current;
+		const sprite = spriteRef.current;
+		if (!app || !mask || !sprite) return;
+		const { width, height } = canvasSize;
+		if (width <= 0 || height <= 0) return;
+		app.renderer.resize(width, height);
+		sprite.width = width;
+		sprite.height = height;
+		mask.clear();
+		mask.roundRect(0, 0, width, height, settings.borderRadius).fill({ color: 0xffffff });
+	}, [pixiReady, canvasSize, settings.borderRadius]);
+
+	// Zoom/pan: same easing math as before (computeZoomPreviewTransform),
+	// applied as a Pixi container transform instead of a CSS `transform`
+	// string. Pixi composes scale-then-position around origin (0,0) by
+	// default, matching CSS's `translate() scale()` composition order with
+	// `transform-origin: 0 0` — so the percentage-based translate output
+	// maps directly onto pixel offsets of the (pre-scale) canvas size.
+	useEffect(() => {
+		if (!pixiReady) return;
+		const cameraContainer = cameraContainerRef.current;
+		if (!cameraContainer) return;
+		const activeSpeedRegion = findActiveSpeedRegion(
+			speedRegionsRef.current,
+			Math.round(virtualTimeSec * 1000),
+		);
+		const playbackRate = activeSpeedRegion?.speed ?? 1;
+		const transform =
+			zoomRegions.length === 0
+				? IDENTITY_ZOOM_TRANSFORM
+				: computeZoomPreviewTransform(zoomRegions, virtualTimeSec * 1000, undefined, playbackRate);
+		cameraContainer.scale.set(transform.scale);
+		cameraContainer.position.set(
+			(transform.translateXPercent / 100) * canvasSize.width,
+			(transform.translateYPercent / 100) * canvasSize.height,
+		);
+	}, [pixiReady, zoomRegions, virtualTimeSec, canvasSize]);
+
 	return (
 		<div className={styles.container}>
 			{activeSource ? (
-				<div ref={videoFrameRef} className={styles.videoFrame}>
+				<div
+					ref={frameRef}
+					className={styles.videoFrame}
+					style={{ cursor: settings.cursorShow ? "none" : undefined }}
+				>
 					<video
 						key={activeSource.src}
 						ref={videoRef}
 						src={activeSource.src}
 						className={styles.video}
-						// When a synthetic cursor is being drawn on top (CursorPreviewLayer),
-						// hide the real OS pointer here so it doesn't compete with it.
-						style={{ ...videoStyle, cursor: settings.cursorShow ? "none" : undefined }}
 						preload="metadata"
 						playsInline
 						onLoadedMetadata={(e) => {
 							setLoadState("ready");
-							// ponytail: forward the raw duration (possibly NaN for
-							// MediaRecorder WebMs) to the parent. handleLoadedMetadata
-							// falls back to a 60s seed when it isn't finite so the
-							// timeline gets a populated clip even before the EBML fix
-							// lands. Previously this gate skipped the callback for
-							// non-finite durations and stranded the editor on
-							// "No clips yet" until manual intervention. The assetId is
-							// forwarded so the parent only ever corrects clips that
-							// belong to the asset which actually fired this event —
-							// without it, switching between clips of different assets
-							// during multi-clip playback clobbered clip[0]'s duration
-							// with whichever asset's video happened to load last.
 							onLoadedMetadata?.(e.currentTarget.duration, activeSource.id);
 							if (pendingSeekRef.current) {
 								const { sourceTimeSec, play } = pendingSeekRef.current;
@@ -366,10 +446,6 @@ export function VirtualPreview({
 						onWaiting={() => setLoadState("loading")}
 						onCanPlay={() => setLoadState("ready")}
 						onError={() => {
-							// ponytail: don't blindly advance to the next source — if
-							// the failed source owns the current virtual clip, the
-							// next sourceIndex will seekToVirtualTime right back into
-							// the same failed asset, looping. Fail the preview.
 							pendingSeekRef.current = null;
 							setLoadState("error");
 							setIsPlaying(false);
@@ -378,13 +454,8 @@ export function VirtualPreview({
 						onPause={() => setIsPlaying(false)}
 						onPlay={() => setIsPlaying(true)}
 						onEnded={() => setIsPlaying(false)}
-						// ponytail: handleTimeUpdate is now driven by the rAF loop
-						// above (60 Hz) instead of the <video> onTimeUpdate event
-						// (~4 Hz) — the 4 Hz sync was too slow to keep the webcam
-						// <video> and any audio in sync. The rAF tick also
-						// handles clip-end advancement, so dropping the event
-						// handler here is safe.
 					/>
+					<div ref={canvasHostRef} className={styles.canvasHost} />
 					{loadState !== "ready" && (
 						<div className={styles.overlay}>
 							{loadState === "error" ? "Video preview could not be loaded." : "Loading preview…"}

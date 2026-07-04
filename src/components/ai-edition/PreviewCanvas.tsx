@@ -35,7 +35,10 @@ import type {
 	AxcutSkipRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
+import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
+import { resolveActiveCameraTrack } from "@/lib/ai-edition/timeline/camera";
+import { createPlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import {
 	computeCompositeLayout,
@@ -46,14 +49,17 @@ import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import { getAspectRatioValue } from "@/utils/aspectRatioUtils";
 import { AnnotationLayer } from "./AnnotationLayer";
 import styles from "./NewEditorShell.module.css";
-import { type VideoSource, VirtualPreview } from "./VirtualPreview";
+import {
+	PreviewCompositor,
+	type VideoSourceDescriptor,
+} from "./preview-compositor/PreviewCompositor";
 import { WebcamOverlay } from "./WebcamOverlay";
 import { ZoomFocusOverlay } from "./ZoomFocusOverlay";
 
 type BlurData = NonNullable<AxcutAnnotationRegion["blurData"]>;
 
 interface PreviewCanvasProps {
-	videoSources: VideoSource[];
+	videoSources: VideoSourceDescriptor[];
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
@@ -86,8 +92,14 @@ const WEBCAM_SOURCE_SIZE = { width: 960, height: 720 };
 
 export function PreviewCanvas(props: PreviewCanvasProps) {
 	const { settings, setLive, commit } = useEditorSettings();
+	const assets = useProjectStore((s) => s.document?.assets ?? []);
 	const frameRef = useRef<HTMLDivElement | null>(null);
 	const webcamSlotRef = useRef<HTMLDivElement | null>(null);
+	// One clock per mounted canvas, shared between the screen preview (writer)
+	// and the webcam overlay (reader) — see playback-clock.ts.
+	const clockRefHolder = useRef<ReturnType<typeof createPlaybackClockRef>>();
+	if (!clockRefHolder.current) clockRefHolder.current = createPlaybackClockRef();
+	const clockRef = clockRefHolder.current;
 	const [canvasSize, setCanvasSize] = useState({ width: 1280, height: 720 });
 	// ponytail: contain-fit the frame within its wrapper ourselves. CSS
 	// `aspect-ratio` + `width: 100%` + `max-height: 100%` only clamps height —
@@ -130,7 +142,8 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	const frameSize = useMemo(() => {
 		const ratio = getAspectRatioValue(settings.aspectRatio);
 		const { width: containerWidth, height: containerHeight } = containerSize;
-		if (containerWidth <= 0 || containerHeight <= 0) return { width: containerWidth, height: containerHeight };
+		if (containerWidth <= 0 || containerHeight <= 0)
+			return { width: containerWidth, height: containerHeight };
 		if (containerWidth / containerHeight > ratio) {
 			const height = containerHeight;
 			return { width: Math.round(height * ratio), height: Math.round(height) };
@@ -185,6 +198,17 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		() => buildWebcamStyle(layout, settings, canvasSize),
 		[layout, settings, canvasSize],
 	);
+	// P4 — the layout math above only knows the user's chosen preset
+	// (PiP/dual/stack), not whether the clip under the playhead actually has a
+	// camera. Without this, an empty (but styled — shadow, background) webcam
+	// slot stays visible for clips with no camera attached.
+	const activeCameraTrack = useMemo(
+		() => resolveActiveCameraTrack(assets, props.clips, props.currentTimeSec),
+		[assets, props.clips, props.currentTimeSec],
+	);
+	const showWebcamSlot = Boolean(
+		layout?.webcamRect && activeCameraTrack?.visible && activeCameraTrack.sourcePath,
+	);
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
 	const handleVideoElement = useMemo(() => props.onVideoElement, [props.onVideoElement]);
@@ -193,7 +217,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		setIsPlaying(!el?.paused);
 		setVideoEl(el);
 	};
-	const relayProps = { ...props, onVideoElement: relayIsPlaying };
+	const relayProps = { ...props, onVideoElement: relayIsPlaying, clockRef };
 
 	const handleWebcamPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
 		if (settings.webcamLayoutPreset !== "picture-in-picture") return;
@@ -247,7 +271,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 			<div className={styles.bgBlur} style={blurStyle} aria-hidden />
 			{layout?.screenRect ? (
 				<div className={styles.screenStage} style={screenStyle}>
-					<VirtualPreview {...relayProps} videoStyle={videoBorderRadiusStyle(settings)} />
+					<PreviewCompositor {...relayProps} />
 					{selectedZoomRegion && props.onZoomFocusChange ? (
 						<ZoomFocusOverlay
 							region={selectedZoomRegion}
@@ -278,7 +302,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 					) : null}
 				</div>
 			) : null}
-			{layout?.webcamRect ? (
+			{layout?.webcamRect && showWebcamSlot ? (
 				<div
 					ref={webcamSlotRef}
 					className={styles.webcamSlot}
@@ -295,6 +319,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 						currentTimeSec={props.currentTimeSec}
 						onTimeChange={props.onTimeChange}
 						isPlaying={isPlaying}
+						clockRef={clockRef}
 						borderRadius={layout.webcamRect.borderRadius}
 						webcamMaskShape={settings.webcamMaskShape}
 						layoutPreset={settings.webcamLayoutPreset}
@@ -360,12 +385,6 @@ function buildScreenStyle(
 		display: "flex",
 		boxShadow: shadow,
 	};
-}
-
-function videoBorderRadiusStyle(
-	settings: ReturnType<typeof useEditorSettings>["settings"],
-): React.CSSProperties {
-	return { borderRadius: `${settings.borderRadius}px` };
 }
 
 // Webcam slot: full composite-layout rect with mask shape + shadow. NO
