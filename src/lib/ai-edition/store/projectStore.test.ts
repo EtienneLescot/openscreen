@@ -10,6 +10,10 @@ const bridgeMocks = vi.hoisted(() => ({
 	listProjects: vi.fn(),
 }));
 
+const toastMocks = vi.hoisted(() => ({
+	error: vi.fn(),
+}));
+
 vi.mock("@/native/client", () => ({
 	nativeBridgeClient: {
 		aiEdition: {
@@ -21,6 +25,10 @@ vi.mock("@/native/client", () => ({
 			listProjects: bridgeMocks.listProjects,
 		},
 	},
+}));
+
+vi.mock("sonner", () => ({
+	toast: { error: toastMocks.error },
 }));
 
 const sampleDoc = {
@@ -57,10 +65,15 @@ describe("useProjectStore", () => {
 		for (const mock of Object.values(bridgeMocks)) {
 			mock.mockReset();
 		}
+		toastMocks.error.mockReset();
+		// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the legacy contextBridge surface
+		(window as any).electronAPI = { findRecordingCamera: vi.fn() };
 	});
 
 	afterEach(() => {
 		vi.clearAllMocks();
+		// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the legacy contextBridge surface
+		delete (window as any).electronAPI;
 	});
 
 	it("createProject stores the returned document and bumps revision", async () => {
@@ -113,6 +126,130 @@ describe("useProjectStore", () => {
 		expect(asset?.id).toBe("asset_1");
 		expect(useProjectStore.getState().revision).toBe(2);
 		expect(useProjectStore.getState().document?.assets).toHaveLength(1);
+	});
+
+	it("addAsset resolves an independent camera for every asset added, not just the first", async () => {
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		bridgeMocks.save.mockImplementation(async (document) => ({ success: true, document }));
+		// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the legacy contextBridge surface
+		(window as any).electronAPI.findRecordingCamera.mockImplementation(async (path: string) => {
+			if (path === "/tmp/screen1.webm") {
+				return { success: true, webcamVideoPath: "/tmp/screen1-webcam.webm", offsetMs: 0 };
+			}
+			if (path === "/tmp/screen2.webm") {
+				return { success: true, webcamVideoPath: "/tmp/screen2-webcam.webm", offsetMs: 0 };
+			}
+			return { success: false, error: "No camera attached to this recording" };
+		});
+
+		bridgeMocks.addAsset.mockResolvedValueOnce({
+			assetId: "asset_1",
+			document: {
+				...sampleDoc,
+				assets: [
+					{
+						id: "asset_1",
+						kind: "video",
+						label: "screen1.webm",
+						originalPath: "/tmp/screen1.webm",
+					},
+				],
+				project: { ...sampleDoc.project, primaryAssetId: "asset_1" },
+			},
+		});
+		await useProjectStore.getState().addAsset("/tmp/screen1.webm");
+
+		bridgeMocks.addAsset.mockResolvedValueOnce({
+			assetId: "asset_2",
+			document: {
+				...useProjectStore.getState().document,
+				assets: [
+					...useProjectStore.getState().document!.assets,
+					{
+						id: "asset_2",
+						kind: "video",
+						label: "screen2.webm",
+						originalPath: "/tmp/screen2.webm",
+					},
+				],
+			},
+		});
+		await useProjectStore.getState().addAsset("/tmp/screen2.webm");
+
+		const assets = useProjectStore.getState().document?.assets ?? [];
+		expect(assets).toHaveLength(2);
+		expect(assets.find((a) => a.id === "asset_1")?.cameraTrack?.sourcePath).toBe(
+			"/tmp/screen1-webcam.webm",
+		);
+		expect(assets.find((a) => a.id === "asset_2")?.cameraTrack?.sourcePath).toBe(
+			"/tmp/screen2-webcam.webm",
+		);
+	});
+
+	it("addAsset stays silent (no toast) when a plain imported video has no camera", async () => {
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the legacy contextBridge surface
+		(window as any).electronAPI.findRecordingCamera.mockResolvedValue({
+			success: false,
+			error: "No camera attached to this recording",
+		});
+		bridgeMocks.addAsset.mockResolvedValue({
+			assetId: "asset_1",
+			document: {
+				...sampleDoc,
+				assets: [
+					{ id: "asset_1", kind: "video", label: "video.mp4", originalPath: "/tmp/video.mp4" },
+				],
+				project: { ...sampleDoc.project, primaryAssetId: "asset_1" },
+			},
+		});
+
+		await useProjectStore.getState().addAsset("/tmp/video.mp4");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(toastMocks.error).not.toHaveBeenCalled();
+		expect(bridgeMocks.save).not.toHaveBeenCalled();
+		expect(useProjectStore.getState().document?.assets[0]?.cameraTrack).toBeNull();
+	});
+
+	it("addAsset toasts when the camera lookup itself throws", async () => {
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the legacy contextBridge surface
+		(window as any).electronAPI.findRecordingCamera.mockRejectedValue(new Error("bridge exploded"));
+		bridgeMocks.addAsset.mockResolvedValue({
+			assetId: "asset_1",
+			document: {
+				...sampleDoc,
+				assets: [
+					{ id: "asset_1", kind: "video", label: "video.mp4", originalPath: "/tmp/video.mp4" },
+				],
+				project: { ...sampleDoc.project, primaryAssetId: "asset_1" },
+			},
+		});
+
+		await useProjectStore.getState().addAsset("/tmp/video.mp4");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(toastMocks.error).toHaveBeenCalledTimes(1);
+		expect(toastMocks.error.mock.calls[0][0]).toContain("video.mp4");
 	});
 
 	it("removeAsset requires a loaded project", async () => {

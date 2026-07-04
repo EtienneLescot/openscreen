@@ -12,7 +12,7 @@
 
 import { z } from "zod";
 
-export const axcutSchemaVersion = 3;
+export const axcutSchemaVersion = 4;
 
 export const isoDateSchema = z.string().datetime({ offset: true });
 
@@ -65,6 +65,25 @@ export const assetAudioSchema = z.object({
 	channels: z.number().int().nonnegative().default(0),
 });
 
+// ponytail: the webcam is a derived stream — it is NOT edited. Cut / zoom /
+// speed live on the main timeline and apply to the camera as a render of the
+// same source-time progression. Source path comes from the recording
+// session sidecar (auto-linked when an asset is imported from a recording).
+// `offsetMs` accounts for the camera starting before/after the screen.
+//
+// Lives on the asset (not the document) since P4 (per-asset media links) —
+// a project can hold multiple assets, each recorded with its own camera (or
+// none). See docs/architecture/ai-edition-roadmap.md.
+export const cameraTrackSchema = z
+	.object({
+		sourcePath: z.string().min(1),
+		startMs: z.number().nonnegative().default(0),
+		offsetMs: z.number().int().default(0),
+		visible: z.boolean().default(true),
+	})
+	.nullable()
+	.default(null);
+
 export const assetSchema = z.object({
 	id: z.string().min(1),
 	kind: z.literal("video"),
@@ -77,6 +96,7 @@ export const assetSchema = z.object({
 	sizeBytes: z.number().int().nonnegative().optional(),
 	video: assetVideoSchema.optional(),
 	audio: assetAudioSchema.optional(),
+	cameraTrack: cameraTrackSchema,
 });
 
 export const clipSchema = z
@@ -392,22 +412,7 @@ export const zoomRegionSchema = z
 // Round-trip through the migration must be lossless for now.
 export const legacyEditorSchema = z.object({}).passthrough().nullable().default(null);
 
-// ponytail: the webcam is a derived stream — it is NOT edited. Cut / zoom /
-// speed live on the main timeline and apply to the camera as a render of the
-// same source-time progression. Source path comes from the recording
-// session sidecar (auto-linked when an asset is imported from a recording).
-// `offsetMs` accounts for the camera starting before/after the screen.
-export const cameraTrackSchema = z
-	.object({
-		sourcePath: z.string().min(1),
-		startMs: z.number().nonnegative().default(0),
-		offsetMs: z.number().int().default(0),
-		visible: z.boolean().default(true),
-	})
-	.nullable()
-	.default(null);
-
-export const documentSchema = z.object({
+const documentSchemaShape = z.object({
 	schemaVersion: z.literal(axcutSchemaVersion),
 	project: z.object({
 		id: z.string().min(1),
@@ -417,7 +422,6 @@ export const documentSchema = z.object({
 		primaryAssetId: z.string().optional(),
 	}),
 	assets: z.array(assetSchema).default([]),
-	cameraTrack: cameraTrackSchema,
 	transcript: transcriptSchema.nullable().default(null),
 	transcripts: z.array(transcriptSchema).default([]),
 	timeline: timelineSchema.default({
@@ -444,6 +448,39 @@ export const documentSchema = z.object({
 		})
 		.default({ revisions: [] }),
 });
+
+// P4 — v3 documents carried a single project-level `cameraTrack` (one project
+// = one camera, inherited from the pre-multi-clip editor). v4 moves it onto
+// the owning asset (see `assetSchema.cameraTrack` above) so each asset in a
+// multi-clip project can carry its own camera link. This preprocess upgrades
+// any v3 document transparently at every `documentSchema.parse(...)` call
+// site — it does NOT touch v2 (still handled solely by the separate
+// `migrateProjectDataToAxcutDocument` pure function) or reject unknown
+// versions; anything that isn't exactly v3 passes through unchanged and is
+// rejected by the `schemaVersion` literal check below as before.
+function upgradeV3DocumentToV4(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object") return raw;
+	const doc = raw as Record<string, unknown>;
+	if (doc.schemaVersion !== 3) return raw;
+
+	const legacyCameraTrack = doc.cameraTrack ?? null;
+	const assets = Array.isArray(doc.assets) ? doc.assets : [];
+	const project = (doc.project ?? {}) as { primaryAssetId?: string };
+	const targetAssetId = project.primaryAssetId ?? (assets[0] as { id?: string } | undefined)?.id;
+
+	const nextAssets = assets.map((asset) => {
+		if (!asset || typeof asset !== "object") return asset;
+		const a = asset as Record<string, unknown>;
+		return legacyCameraTrack && a.id === targetAssetId && a.cameraTrack === undefined
+			? { ...a, cameraTrack: legacyCameraTrack }
+			: a;
+	});
+
+	const { cameraTrack: _legacyCameraTrack, ...rest } = doc;
+	return { ...rest, schemaVersion: 4, assets: nextAssets };
+}
+
+export const documentSchema = z.preprocess(upgradeV3DocumentToV4, documentSchemaShape);
 
 export const createProjectInputSchema = z.object({
 	title: z.string().trim().min(1).default("Untitled Project"),
@@ -527,7 +564,6 @@ export function createEmptyDocument(
 			updatedAt: createdAt,
 		},
 		assets: [],
-		cameraTrack: null,
 		transcript: null,
 		transcripts: [],
 		timeline: {

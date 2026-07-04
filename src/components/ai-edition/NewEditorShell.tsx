@@ -63,7 +63,9 @@ export function NewEditorShell() {
 	const [assetStatuses, setAssetStatuses] = useState<
 		Record<string, "pending" | "running" | "failed">
 	>({});
-	const [, setVideoElement] = useState<HTMLVideoElement | null>(null);
+	const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
+	const [playing, setPlaying] = useState(false);
+	const [loop, setLoop] = useState(false);
 	const [leftTab, setLeftTab] = useState<LeftTab>("media");
 	const [rightPane, setRightPane] = useState<RightPaneId>("background");
 	const [leftCollapsed, setLeftCollapsed] = useState(COLLAPSE_INITIAL.left);
@@ -338,6 +340,77 @@ export function NewEditorShell() {
 		},
 		[setCurrentTime],
 	);
+
+	// ponytail: the transport bar (play/pause, prev/next, loop, fullscreen)
+	// lives in the timeline header now, not under the preview canvas — it
+	// needs the video element, so this state/these handlers moved up here
+	// from Preview.tsx to be shared with Bottombar.
+	useEffect(() => {
+		const el = videoElement;
+		if (!el) return;
+		const onPlay = () => setPlaying(true);
+		const onPause = () => setPlaying(false);
+		const onEnded = () => setPlaying(false);
+		el.addEventListener("play", onPlay);
+		el.addEventListener("pause", onPause);
+		el.addEventListener("ended", onEnded);
+		setPlaying(!el.paused);
+		return () => {
+			el.removeEventListener("play", onPlay);
+			el.removeEventListener("pause", onPause);
+			el.removeEventListener("ended", onEnded);
+		};
+	}, [videoElement]);
+
+	const togglePlay = useCallback(() => {
+		if (!videoElement) return;
+		if (videoElement.paused) {
+			void videoElement.play();
+		} else {
+			videoElement.pause();
+		}
+	}, [videoElement]);
+
+	const handlePrevClip = useCallback(() => {
+		if (clips.length === 0) return;
+		// ponytail: navigate in virtual timeline space, not source-media time.
+		let prevStart = 0;
+		for (let i = clips.length - 1; i >= 0; i--) {
+			const c = clips[i];
+			if (c.timelineEndSec <= currentTimeSec - 0.1) {
+				prevStart = c.timelineStartSec;
+				break;
+			}
+		}
+		handleSeek(prevStart);
+		handleTimeChange(prevStart);
+	}, [clips, currentTimeSec, handleSeek, handleTimeChange]);
+
+	const handleNextClip = useCallback(() => {
+		if (clips.length === 0) return;
+		const next = clips.find((c) => c.timelineStartSec > currentTimeSec + 0.1);
+		if (!next) return;
+		handleSeek(next.timelineStartSec);
+		handleTimeChange(next.timelineStartSec);
+	}, [clips, currentTimeSec, handleSeek, handleTimeChange]);
+
+	const handleToggleLoop = useCallback(() => {
+		setLoop((v) => {
+			const next = !v;
+			if (videoElement) videoElement.loop = next;
+			return next;
+		});
+	}, [videoElement]);
+
+	const handleExpand = useCallback(() => {
+		const el = videoElement?.parentElement;
+		if (!el) return;
+		if (globalThis.document.fullscreenElement) {
+			void globalThis.document.exitFullscreen();
+		} else {
+			void el.requestFullscreen?.();
+		}
+	}, [videoElement]);
 
 	const handleTranscribe = useCallback(async () => {
 		if (!document || !document.project.primaryAssetId) return;
@@ -995,6 +1068,7 @@ export function NewEditorShell() {
 					onLoadedMetadata={handleLoadedMetadata}
 					onVideoElement={setVideoElement}
 					currentTimeSec={currentTimeSec}
+					playing={playing}
 				/>
 
 				{/* Resize handle: right */}
@@ -1060,6 +1134,13 @@ export function NewEditorShell() {
 					setTogglePlaceSkip={setTogglePlaceSkip}
 					onSelectRegion={(kind, id, additive) => tl.selectRegion(kind, id, { additive })}
 					onCaptions={handleCaptions}
+					playing={playing}
+					loop={loop}
+					onTogglePlay={togglePlay}
+					onPrevClip={handlePrevClip}
+					onNextClip={handleNextClip}
+					onToggleLoop={handleToggleLoop}
+					onExpand={handleExpand}
 				/>
 			) : null}
 

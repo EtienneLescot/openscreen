@@ -23,6 +23,7 @@ import { EditClipModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 import { type Span } from "./RegionTimeline";
 import { TimelinePane } from "./TimelinePane";
+import { TransportBar } from "./TransportBar";
 import type { VideoSource } from "./VirtualPreview";
 
 type RegionKind = "zoom" | "skip" | "annotation" | "speed";
@@ -55,6 +56,17 @@ interface BottombarProps {
 	setTogglePlaceSkip?: (fn: () => void) => void;
 	onSelectRegion: (kind: RegionKind, id: string, additive?: boolean) => void;
 	onCaptions: () => void;
+	// ponytail: the video transport now renders in this header (merged into
+	// the same row as the zoom/cut/etc. tools) instead of under the preview
+	// canvas — state lives in the parent shell (NewEditorShell), which also
+	// owns the video element.
+	playing: boolean;
+	loop: boolean;
+	onTogglePlay: () => void;
+	onPrevClip: () => void;
+	onNextClip: () => void;
+	onToggleLoop: () => void;
+	onExpand: () => void;
 }
 
 const RATIO_LABELS: Record<AspectRatio, string> = {
@@ -86,6 +98,13 @@ export function Bottombar({
 	setTogglePlaceSkip,
 	onSelectRegion,
 	onCaptions,
+	playing,
+	loop,
+	onTogglePlay,
+	onPrevClip,
+	onNextClip,
+	onToggleLoop,
+	onExpand,
 }: BottombarProps) {
 	const { settings, set } = useEditorSettings();
 	const tl = useTimeline();
@@ -96,9 +115,7 @@ export function Bottombar({
 	// its box -- including this menu. Render it through a portal, positioned
 	// from the button's live viewport rect, so it paints above everything
 	// regardless of ancestor overflow/stacking.
-	const [ratioMenuRect, setRatioMenuRect] = useState<{ left: number; bottom: number } | null>(
-		null,
-	);
+	const [ratioMenuRect, setRatioMenuRect] = useState<{ left: number; bottom: number } | null>(null);
 	useEffect(() => {
 		if (!ratioOpen) return;
 		const button = ratioButtonRef.current;
@@ -342,6 +359,18 @@ export function Bottombar({
 								: null}
 						</div>
 					</div>
+					<TransportBar
+						playing={playing}
+						loop={loop}
+						currentTimeSec={currentTimeSec}
+						clips={clips}
+						onTogglePlay={onTogglePlay}
+						onPrevClip={onPrevClip}
+						onNextClip={onNextClip}
+						onToggleLoop={onToggleLoop}
+						onExpand={onExpand}
+						onSeek={onSeek}
+					/>
 					<div className={styles.hintRow}>
 						<span className={styles.hint}>
 							<span className={styles.kbd}>Scroll</span>

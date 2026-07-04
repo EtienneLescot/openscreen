@@ -1,11 +1,13 @@
 // Bidirectional migration between OpenScreen's v2 EditorProjectData and the
-// new v3 AxcutDocument. See docs/architecture/ai-edition-roadmap.md §2
+// current AxcutDocument. See docs/architecture/ai-edition-roadmap.md §2
 // for the field-by-field mapping. The migration is pure (no DOM, no fs, no
 // network) — the renderer probes asset duration at runtime.
 //
-// ponytail: this is the only code path that produces v3 documents today. Phase 1
-// adds direct v3 writers (recording -> asset + clip) and the migration becomes
-// the back-compat reader. Until then it is the front door for AI-edition.
+// ponytail: this is the only code path that produces v2->current documents
+// today. Phase 1 adds direct writers (recording -> asset + clip) and the
+// migration becomes the back-compat reader. Until then it is the front door
+// for AI-edition. (schemaVersion 3->4 upgrades for already-existing v3
+// documents are handled transparently inside documentSchema itself.)
 
 import {
 	type EditorProjectData,
@@ -26,6 +28,7 @@ import {
 	type AxcutLegacyEditor,
 	type AxcutSkipRange,
 	type AxcutZoomRegion,
+	axcutSchemaVersion,
 	documentSchema,
 } from "../schema";
 import { createId } from "./ids";
@@ -80,6 +83,8 @@ export function migrateProjectDataToAxcutDocument(
 				? input.videoPath
 				: null;
 
+	const webcamVideoPath = input.media?.webcamVideoPath;
+
 	const assets = screenPath
 		? [
 				{
@@ -87,6 +92,9 @@ export function migrateProjectDataToAxcutDocument(
 					kind: "video" as const,
 					label: screenPath.split(/[\\/]/).pop() || "Recording",
 					originalPath: screenPath,
+					cameraTrack: webcamVideoPath
+						? { sourcePath: webcamVideoPath, startMs: 0, offsetMs: 0, visible: true }
+						: null,
 				},
 			]
 		: [];
@@ -190,7 +198,7 @@ export function migrateProjectDataToAxcutDocument(
 	const legacyEditor: AxcutLegacyEditor = input.editor ? { ...input.editor } : null;
 
 	const draft: AxcutDocument = {
-		schemaVersion: 3 as const,
+		schemaVersion: axcutSchemaVersion,
 		project: {
 			id: projectId,
 			title,
@@ -199,7 +207,6 @@ export function migrateProjectDataToAxcutDocument(
 			...(primaryAssetId ? { primaryAssetId } : {}),
 		},
 		assets,
-		cameraTrack: null,
 		transcript: null,
 		transcripts: [],
 		timeline: {
@@ -244,8 +251,8 @@ export function migrateAxcutDocumentToProjectData(input: AxcutDocument): EditorP
 	const media: ProjectMedia | null = primary
 		? toLegacyMedia({
 				screenVideoPath: primary.originalPath,
-				...(document.cameraTrack?.sourcePath
-					? { webcamVideoPath: document.cameraTrack.sourcePath }
+				...(primary.cameraTrack?.sourcePath
+					? { webcamVideoPath: primary.cameraTrack.sourcePath }
 					: {}),
 			})
 		: null;

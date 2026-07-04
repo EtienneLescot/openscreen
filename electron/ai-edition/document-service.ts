@@ -188,6 +188,7 @@ export class DocumentService {
 			label: input.label?.trim() || path.basename(absolutePath),
 			originalPath: absolutePath,
 			sizeBytes,
+			cameraTrack: null,
 		};
 		const next: AxcutDocument = {
 			...doc,

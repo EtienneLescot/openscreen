@@ -7,7 +7,11 @@ import { useCallback, useState } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
 import { createId } from "../document/ids";
-import { resequenceClips } from "../document/timeline";
+import {
+	duplicateClip as duplicateClipInDocument,
+	moveClip as moveClipInDocument,
+	resequenceClips,
+} from "../document/timeline";
 import type { AxcutDocument } from "../schema";
 import { probeVideoDuration } from "../timeline/duration";
 import { useProjectStore } from "./projectStore";
@@ -617,21 +621,18 @@ export function useTimeline() {
 				clip.sourceStartSec === 0 &&
 				Math.abs((clip.sourceEndSec ?? 0) - PLACEHOLDER_DURATION_SEC) < 0.01;
 			if (!stillPlaceholder) return;
-			const shiftSec = probed - (clip.sourceEndSec ?? PLACEHOLDER_DURATION_SEC);
-			const nextClips = doc.timeline.clips.map((c) => {
-				if (c.id !== clipId) {
-					return {
-						...c,
-						timelineStartSec: c.timelineStartSec + shiftSec,
-						timelineEndSec: c.timelineEndSec + shiftSec,
-					};
-				}
-				return {
-					...c,
-					sourceEndSec: probed,
-					timelineEndSec: c.timelineStartSec + probed,
-				};
-			});
+			// Only correct the probed clip's own length here — do NOT hand-shift
+			// every sibling by the delta, since that has no notion of which clips
+			// sit before vs. after this one in timeline order (it used to shift
+			// earlier clips too, corrupting their positions). resequenceClips lays
+			// everything back-to-back from t=0 using each clip's own (now correct)
+			// length, so it's the correct + already-shared way to renormalize.
+			const correctedClips = doc.timeline.clips.map((c) =>
+				c.id === clipId
+					? { ...c, sourceEndSec: probed, timelineEndSec: c.timelineStartSec + probed }
+					: c,
+			);
+			const nextClips = resequenceClips(correctedClips);
 			const nextAssets = doc.assets.map((a) =>
 				a.id === assetId ? { ...a, durationSec: probed } : a,
 			);
@@ -697,45 +698,32 @@ export function useTimeline() {
 	);
 
 	// Reorder a clip to a new index, then resequence timeline positions.
+	// Delegates to the shared document/timeline.ts implementation — the same
+	// function the agent tool-executor uses for "move_clip" ops — so both
+	// paths bump preview.revision consistently instead of maintaining two
+	// copies of the splice/resequence logic that could drift.
 	const moveClip = useCallback(
 		async (clipId: string, toIndex: number) => {
 			if (!document) return;
-			const arr = [...document.timeline.clips];
-			const from = arr.findIndex((c) => c.id === clipId);
-			if (from === -1) return;
-			const [moved] = arr.splice(from, 1);
-			const at = Math.max(0, Math.min(arr.length, toIndex));
-			arr.splice(at, 0, moved);
-			const next: AxcutDocument = {
-				...document,
-				timeline: { ...document.timeline, clips: resequenceClips(arr) },
-			};
-			await saveDocument(next);
+			if (!document.timeline.clips.some((c) => c.id === clipId)) return;
+			await saveDocument(moveClipInDocument(document, clipId, toIndex));
 		},
 		[document, saveDocument],
 	);
 
 	// Duplicate a clip in place (same asset + source range), inserted right
 	// after the original, then resequenced. Mirrors Axcut's Ctrl+C/Ctrl+V.
+	// Delegates to the shared implementation (see moveClip above).
 	const duplicateClip = useCallback(
 		async (clipId: string) => {
 			if (!document) return;
-			const arr = [...document.timeline.clips];
-			const from = arr.findIndex((c) => c.id === clipId);
-			if (from === -1) return;
-			const source = arr[from];
-			const copy: Clip = {
-				...source,
-				id: createId("clip"),
-				reason: "Duplicated clip",
-			};
-			arr.splice(from + 1, 0, copy);
-			const next: AxcutDocument = {
-				...document,
-				timeline: { ...document.timeline, clips: resequenceClips(arr) },
-			};
+			if (!document.timeline.clips.some((c) => c.id === clipId)) return;
+			// duplicateClipInDocument inserts the copy immediately after the
+			// original, so its index in the result is the original's index + 1.
+			const insertedIndex = document.timeline.clips.findIndex((c) => c.id === clipId) + 1;
+			const next = duplicateClipInDocument(document, clipId, "user", "Duplicated clip");
 			await saveDocument(next);
-			setClipSelection(copy.id);
+			setClipSelection(next.timeline.clips[insertedIndex]?.id ?? null);
 		},
 		[document, saveDocument],
 	);
