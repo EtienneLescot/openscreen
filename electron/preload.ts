@@ -5,6 +5,11 @@ import type { RecordingSession, StoreRecordedSessionInput } from "../src/lib/rec
 import type { ShortcutBinding } from "../src/lib/shortcuts";
 import type { AiEditionChatEvent } from "../src/native/contracts";
 import { NATIVE_BRIDGE_CHANNEL, type NativeBridgeRequest } from "../src/native/contracts";
+import type {
+	SttStatusEvent,
+	SttTranscribeRequest,
+	SttTranscribeResponse,
+} from "./stt/transcriptionContract";
 
 // Asset base URL is passed from the main process via webPreferences.additionalArguments
 // (see windows.ts). Sandboxed preloads cannot import node:path / node:url, so we
@@ -316,5 +321,15 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		const listener = (_e: unknown, payload: AiEditionChatEvent) => callback(payload);
 		ipcRenderer.on("ai-edition.chat-event", listener);
 		return () => ipcRenderer.removeListener("ai-edition.chat-event", listener);
+	},
+	stt: {
+		transcribe: (request: SttTranscribeRequest): Promise<SttTranscribeResponse> => {
+			return ipcRenderer.invoke("stt:transcribe", request) as Promise<SttTranscribeResponse>;
+		},
+		onStatus: (callback: (event: SttStatusEvent) => void) => {
+			const listener = (_event: unknown, payload: SttStatusEvent) => callback(payload);
+			ipcRenderer.on("stt:status", listener);
+			return () => ipcRenderer.removeListener("stt:status", listener);
+		},
 	},
 });

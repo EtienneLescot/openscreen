@@ -1,0 +1,117 @@
+name: Build ctranslate2-server binaries
+
+# Builds the bundled `ctranslate2-server` variants — CUDA (NVIDIA) and CPU
+# fallback — then uploads them as GitHub artifacts so `build.yml` can attach
+# them to installer builds.
+#
+# Triggered:
+#   * manually via workflow_dispatch (release-blocking binary refresh)
+#   * automatically when the build script or its companion files change
+#
+# ponytail: single-host CPU builds are cheap; the CUDA variant requires a
+# self-hosted runner with the matching SDK. Linux matrix entries probe for
+# nvcc + exit 0 with a hint when the toolchain is missing rather than
+# failing CI outright — useful smoke-test signal.
+#
+# Replaces `build-whisper-binaries.yml`. See
+# docs/engineering/stt-ctranslate2-migration.md for the full decision.
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: "CTranslate2 ref to checkout (default v4.4.0 — pinned in CMakeLists.txt)"
+        required: false
+        default: "v4.4.0"
+        type: string
+      enable_cuda:
+        description: "Build the CUDA variant when the host has an nvcc toolchain"
+        required: false
+        default: "true"
+        type: choice
+        options:
+          - "true"
+          - "false"
+  push:
+    paths:
+      - "scripts/build-ctranslate2-server.sh"
+      - "electron/native/ctranslate2-server/**"
+      - ".github/workflows/build-ctranslate2-server.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+            label: macOS arm64 (CPU via Apple Accelerate)
+            variants: "cpu"
+          - os: ubuntu-latest
+            arch: x64
+            label: Linux x64 (CUDA + CPU fallback)
+            variants: "cuda cpu"
+          - os: windows-latest
+            arch: x64
+            label: Windows x64 (CPU fallback only — CUDA on self-hosted GPU runners)"
+            variants: "cpu"
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: ./.github/actions/setup
+
+      - name: Setup CMake / Ninja
+        if: matrix.os != 'windows-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build build-essential
+      - name: Setup CMake / Ninja (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-cmake-build@v1
+        with:
+          cmake-path: "C:\\Program Files\\CMake\\bin"
+
+      - name: Run ctranslate2-server build script
+        env:
+          ENABLE_CUDA: ${{ github.event.inputs.enable_cuda || 'true' }}
+        run: bash scripts/build-ctranslate2-server.sh
+
+      - name: Stage binaries for upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          BAG="ctranslate2-server-${{ matrix.os }}-${{ matrix.arch }}"
+          mkdir -p "$BAG"
+          # Ship every variant that resolved, even when the host could only
+          # build CPU — `gpuDetector` falls back to CPU when no better match
+          # is present.
+          find electron/native/bin -type f -name 'ctranslate2-server-*' \
+            -exec cp -v {} "$BAG/" \;
+          tar -czf "${BAG}.tar.gz" "$BAG"
+          echo "Staged ${BAG}.tar.gz"
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: ctranslate2-server-${{ matrix.os }}-${{ matrix.arch }}
+          path: ctranslate2-server-${{ matrix.os }}-${{ matrix.arch }}.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Workflow summary
+        if: always()
+        run: |
+          {
+            echo "## ctranslate2-server build"
+            echo ""
+            echo "- Matrix: \`${{ matrix.label }}\`"
+            echo "- Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"
