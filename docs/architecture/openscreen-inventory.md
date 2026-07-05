@@ -387,12 +387,9 @@ The renderer client (Zustand-free) is `nativeBridgeClient.system|project|cursor`
 All under `src/lib/captioning/`. The renderer can transcribe a video's audio in-browser using Whisper via transformers.js, then convert the word/phrase timings into `AnnotationRegion`s.
 
 ### Files
-- `transcribe.ts` (106 lines) — public entry point.
-- `transcribe.worker.ts` (93 lines) — Web Worker that loads transformers.js.
-- `transcribeCore.ts` (268 lines) — pure algorithm, no DOM / Workers / Transformers imports.
+- `transcribe.ts` (105 lines) — public entry point, thin IPC adapter.
 - `extractMono16k.ts` (159 lines) — `extractMono16kFromVideoUrl`.
 - `extractMono16kWebDemuxer.ts` (162 lines) — fallback that uses `web-demuxer` + `AudioDecoder`.
-- `leadingSilence.ts` (78 lines) — drops leading silence before Whisper runs.
 - `annotationsFromCaptions.ts` (604 lines) — turns `CaptionSegment[]` into `AnnotationRegion[]`.
 - `captionConstants.ts` — `MAX_CAPTION_AUDIO_SEC`.
 - `index.ts` — barrel.
@@ -430,10 +427,19 @@ All under `src/lib/captioning/`. The renderer can transcribe a video's audio in-
 ### Renderer trigger
 - `VideoEditor.tsx:2209-2232` `handleGenerateCaptions()`:
   1. `extractMono16kFromVideoUrl(videoPath, { signal })` (`extractMono16k.ts:110`) — tries `decodeAudioData`, falls back to `extractMonoPcmViaWebDemuxer`.
-  2. `trimLeadingSilenceMono16k(samples)` (`leadingSilence.ts:25`).
-  3. `shiftTrimRegionsMsForCaptionBuffer(trimRegions, trimSec)` (`leadingSilence.ts:66`).
-  4. `transcribeMono16kToSegments(samples, { trimRegions, signal })`.
-  5. `captionSegmentsToAnnotationRegions(segments, …)` (`annotationsFromCaptions.ts:544`).
+  2. `transcribeMono16kToSegments(samples, { trimRegions, signal })`.
+  3. `captionSegmentsToAnnotationRegions(segments, …)` (`annotationsFromCaptions.ts:544`).
+
+> **Leading-silence handling:** timestamps come back absolute from
+> whisper.cpp; its built-in Silero VAD (started on the server with
+> `--vad --vad-model ggml-silero-v6.2.0.bin`) splits audio into speech
+> regions before the ASR decoder runs and offsets each region's timestamps
+> to its position in the original audio. No renderer-side trim + offset
+> arithmetic remains. The earlier `trimLeadingSilenceMono16k` and
+> `shiftTrimRegionsMsForCaptionBuffer` lived in
+> `src/lib/captioning/leadingSilence.ts` until 2026-07 — the peak detector
+> had false positives on quiet music intros / room tone, and was deleted
+> when VAD shipped.
 
 ### Linking to time ranges in the editor
 - `annotationsFromCaptions.ts:544` `captionSegmentsToAnnotationRegions` produces `AnnotationRegion[]` with:

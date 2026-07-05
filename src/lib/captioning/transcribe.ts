@@ -1,4 +1,5 @@
 import type { TrimRegion } from "@/components/video-editor/types";
+import type { SttWordSegment } from "../../../electron/stt/transcriptionContract";
 
 export interface CaptionSegment {
 	startSec: number;
@@ -6,7 +7,12 @@ export interface CaptionSegment {
 	text: string;
 }
 
-/** How caption layout should interpret `CaptionSegment` times from `transcribeMono16kToSegments`. */
+/**
+ * How caption layout should interpret `CaptionSegment` times from
+ * `transcribeMono16kToSegments`. The native pipeline gets per-word timestamps
+ * from whisper.cpp's own output; `"phrase"` is a fallback for the rare case
+ * where whisper reports zero words for a segment.
+ */
 export type CaptionTimestampGranularity = "word" | "phrase";
 
 export interface TranscribeMono16kResult {
@@ -15,50 +21,38 @@ export interface TranscribeMono16kResult {
 	/**
 	 * ISO 639-1 code Whisper settled on for the chunk stream — either the
 	 * forced one (when `language` was supplied) or what it auto-detected.
-	 * `null` if the model produced no language token (very rare on tiny.en).
+	 * Null when the model produced no language token.
 	 */
 	detectedLanguage?: string | null;
 }
 
-/** Request payload posted from the renderer to the transcription worker. */
-export interface TranscribeWorkerRequest {
-	samples: Float32Array;
-	trimRegions: TrimRegion[];
-	/**
-	 * Load the Whisper model + ORT wasm from bundled `caption-assets` instead of remote CDNs.
-	 * Required in the packaged app (runs from `file://` where remote fetches fail). The worker
-	 * can't read `window.electronAPI`, so the renderer resolves this here.
-	 */
-	useLocalModels: boolean;
-	/** Base URL of bundled resources (packaged: resourcesPath file:// URL); used when `useLocalModels`. */
-	assetBaseUrl?: string;
-	/** ISO 639-1 code (e.g. "en", "fr") to force. Omit for auto-detect. */
-	language?: string;
+export type SttRendererStatusPhase = "model" | "transcribe";
+
+interface RendererSttApi {
+	transcribe: (request: { samples: Float32Array; language?: string }) => Promise<{
+		segments: CaptionSegment[];
+		wordSegments: SttWordSegment[];
+		detectedLanguage: string;
+		backend: string;
+	}>;
+	onStatus?: (callback: (event: { phase: SttRendererStatusPhase }) => void) => () => void;
 }
 
-/** Messages the transcription worker posts back to the renderer. */
-export type TranscribeWorkerResponse =
-	| { type: "status"; phase: "model" | "transcribe" }
-	| {
-			type: "result";
-			segments: CaptionSegment[];
-			granularity: CaptionTimestampGranularity;
-			detectedLanguage?: string | null;
-	  }
-	| { type: "error"; message: string };
-
 /**
- * Transcribes mono 16 kHz audio into timed caption segments using in-browser Whisper.
+ * Transcribes mono 16 kHz audio into per-word timed caption segments. The
+ * renderer is a thin IPC adapter: it forwards the audio to the Electron main
+ * process where `whisper-server` runs recognition and emits its own
+ * per-word timestamps in the same pass.
  *
- * Runs in a Web Worker so the editor's main thread stays responsive (WASM inference
- * doesn't yield). First run downloads model weights. Aborting via `options.signal`
- * terminates the worker, since load/inference can't be cooperatively cancelled.
+ * The previous in-Web-Worker implementation (Transformers.js + ORT-WASM) was
+ * 0.5× realtime on tiny models and had no word-level accuracy under 50 ms;
+ * see `docs/engineering/transcription-engine-migration.md` for context.
  */
 export function transcribeMono16kToSegments(
 	samples: Float32Array,
 	options?: {
 		trimRegions?: TrimRegion[];
-		onStatus?: (phase: "model" | "transcribe") => void;
+		onStatus?: (phase: SttRendererStatusPhase) => void;
 		signal?: AbortSignal;
 		language?: string;
 	},
@@ -66,62 +60,51 @@ export function transcribeMono16kToSegments(
 	if (options?.signal?.aborted) {
 		return Promise.reject(new DOMException("Aborted", "AbortError"));
 	}
+	const api = (window as Window & { electronAPI?: { stt?: RendererSttApi } }).electronAPI?.stt;
+	if (!api?.transcribe) {
+		// Renderer-only fallback (browser tests, dev tooling without Electron).
+		// We don't try to run any model here — the worker migration is permanent.
+		return Promise.resolve({ segments: [], granularity: "word" });
+	}
 
-	return new Promise<TranscribeMono16kResult>((resolve, reject) => {
-		const worker = new Worker(new URL("./transcribe.worker.ts", import.meta.url), {
-			type: "module",
+	const unsubscribe =
+		options?.onStatus && api.onStatus?.((event) => options.onStatus?.(event.phase));
+	const forcedLanguage =
+		options?.language && options.language !== "auto" ? options.language : undefined;
+	// ponytail: word timestamps come back already absolute from whisper.cpp
+	// because its built-in Silero VAD (started on the server with
+	// `--vad --vad-model`) splits audio into speech regions *before* the ASR
+	// decoder runs and offsets each region's timestamps to its position in the
+	// original audio. No trim + offset math here on purpose: an earlier
+	// iteration trimmed leading silence with a peak detector and got false
+	// positives on quiet music intros / room tone. VAD or nothing.
+	return api
+		.transcribe({ samples, language: forcedLanguage })
+		.then((result) => {
+			const words = result.wordSegments ?? [];
+			let segments: CaptionSegment[];
+			let granularity: CaptionTimestampGranularity;
+			if (words.length > 0) {
+				segments = words.map((w) => ({
+					startSec: w.startSec,
+					endSec: w.endSec,
+					text: w.word,
+				}));
+				granularity = "word";
+			} else {
+				// ponytail: whisper dropped every word for a segment (e.g. OOV
+				// heavy); fall back to raw phrase spans so the user still gets
+				// captions to edit.
+				segments = (result.segments ?? []).map((s) => ({
+					startSec: s.startSec,
+					endSec: s.endSec,
+					text: s.text,
+				}));
+				granularity = "phrase";
+			}
+			return { segments, granularity, detectedLanguage: result.detectedLanguage };
+		})
+		.finally(() => {
+			unsubscribe?.();
 		});
-
-		let settled = false;
-		const finish = (fn: () => void) => {
-			if (settled) return;
-			settled = true;
-			options?.signal?.removeEventListener("abort", onAbort);
-			worker.terminate();
-			fn();
-		};
-
-		const onAbort = () => finish(() => reject(new DOMException("Aborted", "AbortError")));
-		options?.signal?.addEventListener("abort", onAbort, { once: true });
-
-		worker.onmessage = (e: MessageEvent<TranscribeWorkerResponse>) => {
-			const msg = e.data;
-			if (msg.type === "status") {
-				options?.onStatus?.(msg.phase);
-				return;
-			}
-			if (msg.type === "result") {
-				finish(() =>
-					resolve({
-						segments: msg.segments,
-						granularity: msg.granularity,
-						detectedLanguage: msg.detectedLanguage,
-					}),
-				);
-				return;
-			}
-			finish(() => reject(new Error(msg.message)));
-		};
-
-		worker.onerror = (e) => {
-			finish(() => reject(new Error(e.message || "Caption transcription worker failed")));
-		};
-
-		// Packaged app runs from file:// (remote fetches fail), so load bundled assets.
-		// Dev runs from http://localhost where the remote path works.
-		const useLocalModels = typeof window !== "undefined" && window.location?.protocol === "file:";
-		const assetBaseUrl =
-			typeof window !== "undefined" ? window.electronAPI?.assetBaseUrl : undefined;
-
-		// Structured-clone copy, not a transfer: the caller may reuse `samples` for the
-		// full-buffer retry pass, so the buffer must stay valid here.
-		const request: TranscribeWorkerRequest = {
-			samples,
-			trimRegions: options?.trimRegions ?? [],
-			useLocalModels,
-			assetBaseUrl,
-			language: options?.language,
-		};
-		worker.postMessage(request);
-	});
 }
