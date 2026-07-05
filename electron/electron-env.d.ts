@@ -321,6 +321,14 @@ interface Window {
 		onRequestSaveBeforeClose: (callback: () => Promise<boolean> | boolean) => () => void;
 		onRequestCloseConfirm: (callback: () => void) => () => void;
 		sendCloseConfirmResponse: (choice: "save" | "discard" | "cancel") => void;
+		stt: {
+			transcribe: (
+				request: import("./stt/transcriptionContract").SttTranscribeRequest,
+			) => Promise<import("./stt/transcriptionContract").SttTranscribeResponse>;
+			onStatus: (
+				callback: (event: import("./stt/transcriptionContract").SttStatusEvent) => void,
+			) => () => void;
+		};
 		setLocale: (locale: string) => Promise<void>;
 		saveDiagnostic: (payload: {
 			error: string;
