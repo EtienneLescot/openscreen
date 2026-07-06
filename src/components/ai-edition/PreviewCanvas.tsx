@@ -49,17 +49,14 @@ import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import { getAspectRatioValue } from "@/utils/aspectRatioUtils";
 import { AnnotationLayer } from "./AnnotationLayer";
 import styles from "./NewEditorShell.module.css";
-import {
-	PreviewCompositor,
-	type VideoSourceDescriptor,
-} from "./preview-compositor/PreviewCompositor";
+import { type VideoSource, VirtualPreview } from "./VirtualPreview";
 import { WebcamOverlay } from "./WebcamOverlay";
 import { ZoomFocusOverlay } from "./ZoomFocusOverlay";
 
 type BlurData = NonNullable<AxcutAnnotationRegion["blurData"]>;
 
 interface PreviewCanvasProps {
-	videoSources: VideoSourceDescriptor[];
+	videoSources: VideoSource[];
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
@@ -271,7 +268,23 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 			<div className={styles.bgBlur} style={blurStyle} aria-hidden />
 			{layout?.screenRect ? (
 				<div className={styles.screenStage} style={screenStyle}>
-					<PreviewCompositor {...relayProps} />
+					{(() => {
+						// ponytail: PreviewCompositor (Pixi v8) regressed the screen
+						// preview — the `<video>` is `visibility: hidden` while it's
+						// the decode source for a Pixi VideoSource, and the
+						// combination of `setPixiReady` + `canvasSize === {0,0}` on
+						// mount produces a 1x1 canvas that the resize effect never
+						// widens (the user reports either an empty stage showing
+						// the wallpaper through, or a black rectangle where the
+						// screen recording should be). Falling back to the legacy
+						// VirtualPreview path — CSS-transformed <video> + measure
+						// on ResizeObserver — until the Pixi path is hardened
+						// behind a flag with its own tests.
+						// See docs/engineering/ai-edition-preview-pixi-rollback.md
+						// (todo) for the failure write-up.
+						void relayProps.clockRef;
+						return <VirtualPreview {...relayProps} videoStyle={videoBorderRadiusStyle(settings)} />;
+					})()}
 					{selectedZoomRegion && props.onZoomFocusChange ? (
 						<ZoomFocusOverlay
 							region={selectedZoomRegion}
@@ -385,6 +398,12 @@ function buildScreenStyle(
 		display: "flex",
 		boxShadow: shadow,
 	};
+}
+
+function videoBorderRadiusStyle(
+	settings: ReturnType<typeof useEditorSettings>["settings"],
+): React.CSSProperties {
+	return { borderRadius: `${settings.borderRadius}px` };
 }
 
 // Webcam slot: full composite-layout rect with mask shape + shadow. NO
