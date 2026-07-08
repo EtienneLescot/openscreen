@@ -227,7 +227,19 @@ async function streamOpenAiCompatible(
 		signal: opts.signal,
 	});
 	if (!res.ok || !res.body) {
-		return { success: false, error: `Upstream ${res.status} ${res.statusText}` };
+		// ponytail: include a sample of the upstream body so callers can see
+		// whether MiniMax (or any other anthropic-shaped provider) is
+		// returning a non-streaming error JSON even when stream:true was sent.
+		let bodySample = "";
+		if (res.body) {
+			try {
+				bodySample = (await new Response(res.body).text()).slice(0, 1024);
+			} catch {
+				/* ignore */
+			}
+		}
+		const suffix = bodySample ? ` body=${bodySample}` : "";
+		return { success: false, error: `Upstream ${res.status} ${res.statusText}${suffix}` };
 	}
 
 	const toolCalls: OpenAiToolCall[] = [];
@@ -284,7 +296,7 @@ async function streamAnthropic(
 	cb: LlmStreamCallbacks,
 ): Promise<CallLlmResult> {
 	const def = getProviderDefinition(opts.provider) ?? getProviderDefinition("anthropic");
-	const baseUrl = (opts.baseUrl || def?.baseUrl || "https://api.anthropic.com/v1").replace(
+	const baseUrl = (opts.baseUrl || def?.baseUrl || "https://api.anthropic.com").replace(
 		/\/+$/,
 		"",
 	);
@@ -317,11 +329,9 @@ async function streamAnthropic(
 			body.output_config = reasoning.requestBodyPatch.outputConfig;
 		}
 	}
-	// MiniMax rides this same Anthropic-shaped wire path but takes its
-	// reasoning knob as a plain extraBody field (see agent-provider-capabilities.ts).
 	if (reasoning.extraBody) Object.assign(body, reasoning.extraBody);
 
-	const res = await fetch(`${baseUrl}/messages`, {
+	const res = await fetch(`${baseUrl}/v1/messages`, {
 		method: "POST",
 		headers: {
 			"Content-Type": "application/json",
@@ -332,14 +342,30 @@ async function streamAnthropic(
 		signal: opts.signal,
 	});
 	if (!res.ok || !res.body) {
-		return { success: false, error: `Upstream ${res.status} ${res.statusText}` };
+		// ponytail: include a sample of the upstream body so callers can see
+		// whether MiniMax (or any other anthropic-shaped provider) is
+		// returning a non-streaming error JSON even when stream:true was sent.
+		let bodySample = "";
+		if (res.body) {
+			try {
+				bodySample = (await new Response(res.body).text()).slice(0, 1024);
+			} catch {
+				/* ignore */
+			}
+		}
+		const suffix = bodySample ? ` body=${bodySample}` : "";
+		return { success: false, error: `Upstream ${res.status} ${res.statusText}${suffix}` };
 	}
 
 	let text = "";
 	const toolCalls: LlmToolCall[] = [];
 	const inFlight = new Map<string, { name: string; args: string; index: number }>();
+	const eventTypes = new Set<string>();
+	let lastEventSample: Record<string, unknown> | undefined;
 
 	for await (const event of parseAnthropicEvents(res.body)) {
+		eventTypes.add(event.type);
+		lastEventSample = event as Record<string, unknown>;
 		if (event.type === "content_block_start") {
 			const block = (event.content_block ?? {}) as Record<string, unknown>;
 			if (block.type === "tool_use") {
@@ -379,7 +405,18 @@ async function streamAnthropic(
 	}
 
 	if (!text && toolCalls.length === 0) {
-		return { success: false, error: "Empty response from Anthropic." };
+		// ponytail: include the event types that arrived + a sample of the
+		// last one so the caller can tell whether the SSE stream was
+		// genuinely empty, used a different event vocabulary, or carried
+		// a non-text payload (e.g. thinking blocks, refusals).
+		const types = Array.from(eventTypes).join(",");
+		const lastSample = lastEventSample
+			? JSON.stringify(lastEventSample).slice(0, 1024)
+			: "(no events parsed)";
+		return {
+			success: false,
+			error: `Empty response from Anthropic. events=[${types}] last=${lastSample}`,
+		};
 	}
 	return {
 		success: true,

@@ -487,10 +487,15 @@ const MINIMAX_DISCOVERY_CANDIDATE_MODELS = [
  */
 export async function probeMiniMaxModels(apiKey: string, baseUrl?: string): Promise<string[]> {
 	const resolvedBaseUrl = baseUrl || "https://api.minimax.io/anthropic";
-	const discoveryUrl = resolvedBaseUrl.endsWith("/anthropic")
-		? resolvedBaseUrl.replace(/\/anthropic\/?$/, "/v1/chat/completions")
-		: `${resolvedBaseUrl.replace(/\/$/, "")}/v1/chat/completions`;
+	// `baseUrl` is the Anthropic-shaped sibling — either the docs URL
+	// (`/anthropic`) or the real one (`/anthropic/v1`). The OpenAI-compat
+	// `/v1/chat/completions` path lives at the origin, not under `/anthropic`,
+	// so strip that segment (and an optional trailing `/v\d+`) before appending
+	// the probe path. Strips a trailing slash too, to keep the URL tidy.
+	const origin = resolvedBaseUrl.replace(/\/anthropic(\/v\d+)?\/?$/, "").replace(/\/$/, "");
+	const discoveryUrl = `${origin}/v1/chat/completions`;
 
+	let firstFailure: { status: number; model: string } | undefined;
 	const checks = await Promise.all(
 		MINIMAX_DISCOVERY_CANDIDATE_MODELS.map(async (model) => {
 			try {
@@ -503,15 +508,34 @@ export async function probeMiniMaxModels(apiKey: string, baseUrl?: string): Prom
 						max_tokens: 1,
 					}),
 				});
-				return response.ok ? model : undefined;
-			} catch {
+				if (response.ok) return model;
+				if (!firstFailure) firstFailure = { status: response.status, model };
+				return undefined;
+			} catch (error) {
+				if (!firstFailure) {
+					firstFailure = {
+						status: 0,
+						model: `${model} (${error instanceof Error ? error.message : String(error)})`,
+					};
+				}
 				return undefined;
 			}
 		}),
 	);
-	return checks.filter((model): model is (typeof MINIMAX_DISCOVERY_CANDIDATE_MODELS)[number] =>
-		Boolean(model),
+	const reachable = checks.filter(
+		(model): model is (typeof MINIMAX_DISCOVERY_CANDIDATE_MODELS)[number] => Boolean(model),
 	);
+	if (reachable.length === 0 && firstFailure) {
+		// All probes failed — surface the first failure so the UI can show a
+		// meaningful reason instead of a silent empty list. A status of 0
+		// indicates a network-level error (DNS, TLS, refused, …).
+		const reason =
+			firstFailure.status === 0
+				? `network error probing ${firstFailure.model}`
+				: `HTTP ${firstFailure.status} probing ${firstFailure.model}`;
+		throw new Error(`No MiniMax models reachable at ${origin} (${reason})`);
+	}
+	return reachable;
 }
 
 async function safeErrorDetail(response: Response): Promise<string | undefined> {
