@@ -10,9 +10,9 @@
  * contract and don't need to move.
  */
 
-/** A word-level segment with timestamps from CTranslate2's `.align()` (DTW over
- *  the Whisper model's cross-attention weights — see
- *  docs/engineering/stt-ctranslate2-migration.md § Decision). Absolute seconds
+/** A word-level segment with timestamps from whisper.cpp's native DTW token
+ *  timestamps (`t_dtw`, computed with the SMALL aheads preset — see
+ *  docs/engineering/stt-spec.md § Decision rationale). Absolute seconds
  *  in the source recording. */
 export interface SttWordSegment {
 	word: string;
@@ -29,8 +29,14 @@ export interface SttPhraseSegment {
 	endSec: number;
 }
 
-/** GPU/backend tag picked by `gpuDetector`. Mirrors the bundled binary variant. */
-export type SttBackend = "ctranslate2-cuda" | "ctranslate2-cpu";
+/** GPU/backend tag reported by the whisper.cpp helper (read from the device it
+ *  actually bound at runtime). `gpuDetector` only picks the binary; the real
+ *  backend is corrected from the helper response. */
+export type SttBackend =
+	| "whispercpp-metal"
+	| "whispercpp-vulkan"
+	| "whispercpp-cuda"
+	| "whispercpp-cpu";
 
 /** Status phase the renderer surfaces over `onStatus("model" | "transcribe")`. */
 export type SttStatusPhase = "model" | "transcribe";
