@@ -1,0 +1,55 @@
+/* ============================================================
+   OpenScreen — Spacing, radius & sizing tokens
+   The chrome is compact: 8px grid at heart, but control heights
+   land on real values from the source (h-7=28, h-8=32, h-9=36,
+   h-10=40). Radii run large & soft — the product's whole look is
+   rounded windows on wallpaper, so nothing is sharp.
+   ============================================================ */
+
+:root {
+	/* ---- Spacing scale (Tailwind-derived, px) --------------- */
+	--space-0: 0;
+	--space-0-5: 2px;
+	--space-1: 4px;
+	--space-1-5: 6px;
+	--space-2: 8px;
+	--space-2-5: 10px;
+	--space-3: 12px;
+	--space-3-5: 14px;   /* panel padding in the workspace        */
+	--space-4: 16px;
+	--space-5: 20px;
+	--space-6: 24px;     /* dialog / card padding                 */
+	--space-8: 32px;
+	--space-10: 40px;
+	--space-12: 48px;
+
+	/* ---- Radius --------------------------------------------- */
+	/* shadcn --radius is 0.5rem; the app layers larger radii on
+	   floating chrome. corner-shape: squircle is used on the
+	   source selector + cards for the iOS-style continuous curve. */
+	--radius: 0.5rem;          /* shadcn base (8px)               */
+	--radius-sm: 6px;          /* small pills, list items         */
+	--radius-md: 8px;          /* controls, inputs                */
+	--radius-lg: 10px;         /* control surfaces, popovers      */
+	--radius-xl: 13px;         /* cards (source selector)         */
+	--radius-2xl: 16px;        /* editor panels                   */
+	--radius-3xl: 18px;        /* preview / timeline panels       */
+	--radius-window: 24px;     /* floating windows, glass shells  */
+	--radius-full: 9999px;     /* record button, meters, switches */
+
+	/* ---- Control heights (from source) ---------------------- */
+	--control-h-xs: 28px;      /* h-7 aux HUD buttons             */
+	--control-h-sm: 32px;      /* h-8 HUD buttons, sm buttons     */
+	--control-h-md: 36px;      /* h-9 default button, tabs list   */
+	--control-h-lg: 40px;      /* h-10 input, select, lg toggle   */
+
+	/* ---- Icon sizing ---------------------------------------- */
+	--icon-xs: 11px;
+	--icon-sm: 13px;           /* language / small chrome         */
+	--icon-md: 16px;           /* shadcn default [&_svg]:size-4   */
+	--icon-lg: 20px;           /* HUD control icons (ICON_SIZE)   */
+
+	/* ---- Layout ---------------------------------------------- */
+	--rail-width: clamp(286px, 20vw, 352px); /* editor settings rail */
+	--workspace-pad: 14px;
+}

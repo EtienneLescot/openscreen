@@ -1,0 +1,16 @@
+/* ─────────────────────────────────────────────────────────────
+   RADII
+   Nested-radius rhythm: small controls 6–9px, mid controls/cards
+   10–12px, panels & popovers 14–16px, pills fully round. Bigger
+   containers always round more than the controls nested inside them.
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --radius-xs: 2px;     /* tick marks, tiny swatches */
+  --radius-sm: 6px;     /* toolbar icon buttons, lane pills, menu rows */
+  --radius-md: 9px;     /* topbar buttons, inputs, selects */
+  --radius-lg: 11px;    /* chips, timeline clips, setting cards */
+  --radius-xl: 12px;    /* popover menus, media cards */
+  --radius-2xl: 14px;   /* composer, proposal cards, facet rail */
+  --radius-3xl: 16px;   /* inspector panel, transport bar, big rec btn */
+  --radius-pill: 9999px; /* status badges, quick-action chips */
+}

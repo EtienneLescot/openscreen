@@ -1,0 +1,256 @@
+<!-- @dsCard group="Editor" viewport="1360x840" subtitle="Full OpenScreen editor — Edit mode" -->
+<!-- @startingPoint section="Editor" subtitle="OpenScreen editor shell (chat + stage + timeline)" viewport="1360x840" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OpenScreen Editor</title>
+<link rel="stylesheet" href="../../styles.css">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>
+  html,body{margin:0;height:100%;}
+  body{background:var(--bg);color:var(--fg);font-family:var(--font-display);font-size:13px;line-height:1.5;-webkit-font-smoothing:antialiased;overflow:hidden;}
+  #root{height:100vh;}
+</style></head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+function pick(name){ for(const k in window){ try{ const v=window[k]; if(v&&typeof v==='object'&&typeof v[name]==='function') return v[name]; }catch(e){} } return ()=>null; }
+const Button=pick('Button'), IconButton=pick('IconButton'), SegmentedControl=pick('SegmentedControl'),
+      Switch=pick('Switch'), Slider=pick('Slider'), Chip=pick('Chip'), TextField=pick('TextField'),
+      Badge=pick('Badge'), ChatBubble=pick('ChatBubble'), ProposalCard=pick('ProposalCard'),
+      MediaCard=pick('MediaCard'), TimelinePill=pick('TimelinePill'), FacetRailButton=pick('FacetRailButton');
+const I=(n,s=16)=><i data-lucide={n} style={{width:s,height:s,display:'block'}}></i>;
+const Bot=<svg width="15" height="15" viewBox="0 0 16 16" shapeRendering="crispEdges"><rect x="7" y="0" width="2" height="2" fill="currentColor"/><rect x="3" y="3" width="10" height="9" rx="1" fill="none" stroke="currentColor" strokeWidth="1.4"/><rect x="5" y="6" width="2" height="2" fill="currentColor"/><rect x="9" y="6" width="2" height="2" fill="currentColor"/><rect x="5.5" y="9.5" width="5" height="1.4" fill="currentColor"/></svg>;
+const HR=()=><span style={{width:1,height:18,background:'var(--border)',flexShrink:0}}></span>;
+
+function wave(seed,count){ let x=seed*9301+49297; const r=()=>{x=(x*9301+49297)%233280;return x/233280;}; const b=[]; let v=0.55; for(let i=0;i<count;i++){v=v*0.6+r()*0.4;b.push(0.3+v*0.7);} return b; }
+
+function Editor(){
+  const [theme,setTheme]=React.useState('dark');
+  const [mode,setMode]=React.useState('Edit');
+  const [facet,setFacet]=React.useState('fx');
+  const [msg,setMsg]=React.useState('');
+  const [playing,setPlaying]=React.useState(false);
+  const [sh,setSh]=React.useState(24),[rd,setRd]=React.useState(42),[pd,setPd]=React.useState(30);
+  const [blur,setBlur]=React.useState(false),[mir,setMir]=React.useState(false);
+  const root=React.useRef(null);
+  React.useEffect(()=>{ window.lucide && window.lucide.createIcons(); });
+
+  const facets=[['bg','Background','image'],['fx','Effects','sliders-horizontal'],['layout','Layout','layout'],
+    ['cursor','Cursor','mouse-pointer-2'],['cap','Captions','captions'],['ch','Chapters','git-fork'],
+    ['tr','Transcript','file-text'],['crop','Crop','crop']];
+  const facetTitle={bg:'Background',fx:'Video Effects',layout:'Layout',cursor:'Cursor',cap:'Captions',ch:'Chapters',tr:'Transcript',crop:'Crop'}[facet];
+
+  const clipWave=wave(2,90);
+
+  return (
+    <div ref={root} data-theme={theme} style={{height:'100vh',background:'var(--bg-grad)',color:'var(--fg)',overflow:'hidden'}}>
+      <div style={{display:'grid',gridTemplateRows:'58px 1fr 308px',height:'100vh'}}>
+
+        {/* TOPBAR */}
+        <header style={{display:'flex',alignItems:'center',gap:14,padding:'0 18px',borderBottom:'1px solid var(--border-soft)'}}>
+          <IconButton title="Toggle chat">{I('panel-left',17)}</IconButton>
+          <HR/>
+          <span style={{display:'inline-flex',alignItems:'center',gap:9}}>
+            <img src="../../assets/logo-icon.png" alt="" style={{width:22,height:22,objectFit:'contain'}}/>
+            <span style={{fontSize:15,fontWeight:600,letterSpacing:'-0.015em',color:'var(--fg-emphasis)'}}>OpenScreen</span>
+          </span>
+          <HR/>
+          <Button variant="ghost" size="sm" iconRight={I('chevron-down',11)}>demo2</Button>
+          <HR/>
+          <IconButton title="Open project">{I('folder-open',16)}</IconButton>
+          <IconButton title="Save project">{I('save',16)}</IconButton>
+          <span style={{display:'inline-flex',alignItems:'center',gap:6,fontFamily:'var(--font-mono)',fontSize:11,color:'var(--muted)'}}>
+            <span style={{width:6,height:6,borderRadius:'50%',background:'var(--accent)',boxShadow:'0 0 0 3px var(--accent-soft)'}}></span>Saved
+          </span>
+          <div style={{margin:'0 auto'}}>
+            <SegmentedControl options={['Media','Edit','Rec']} value={mode} onChange={setMode}/>
+          </div>
+          <IconButton title="Toggle theme" onClick={()=>setTheme(t=>t==='dark'?'light':'dark')}>{theme==='dark'?I('moon',16):I('sun',16)}</IconButton>
+          <IconButton title="Settings">{I('settings',16)}</IconButton>
+          <Button variant="primary" icon={I('download',15)}>Export</Button>
+        </header>
+
+        {/* BODY */}
+        <div style={{display:'grid',gridTemplateColumns:'392px 1fr',minHeight:0}}>
+
+          {/* AGENT PANEL */}
+          <aside style={{display:'grid',gridTemplateRows:'auto 1fr auto',minHeight:0,background:'var(--surface)',borderRight:'1px solid var(--border)'}}>
+            <div style={{padding:'12px 18px 0',borderBottom:'1px solid var(--border-soft)'}}>
+              <div style={{display:'flex',alignItems:'center',gap:10,marginBottom:10}}>
+                <span style={{fontSize:13.5,fontWeight:600,color:'var(--fg-emphasis)',letterSpacing:'-0.01em'}}>OpenScreen Agent</span>
+                <Badge dot>0% context</Badge>
+              </div>
+              <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+                <span style={{fontFamily:'var(--font-mono)',fontSize:9,letterSpacing:'0.08em',color:'var(--meta)'}}>RECIPE</span>
+                <span style={{flex:1,minWidth:0,fontSize:12,color:'var(--fg-2)',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>Remove blanks, silences and hesitations…</span>
+                <span style={{fontFamily:'var(--font-mono)',fontSize:9.5,color:'var(--muted)'}}>3/5</span>
+              </div>
+              <div style={{height:3,background:'var(--surface-3)',position:'relative'}}><div style={{position:'absolute',left:0,top:0,bottom:0,width:'60%',background:'linear-gradient(90deg,var(--brand-lo),var(--brand))'}}></div></div>
+            </div>
+
+            <div style={{overflowY:'auto',minHeight:0,padding:'14px 20px'}}>
+              <div style={{display:'flex',flexDirection:'column',gap:16}}>
+                <ChatBubble role="user" author="YOU">Hey, can you clean up the intro on this recording? There's a bunch of dead air while I was reading my notes.</ChatBubble>
+                <ChatBubble role="assistant" author="OpenScreen" time="10:41" avatar={Bot}>On it — scanning track 1 for silences and filler words now. I'll flag anything over 600ms.</ChatBubble>
+                <ProposalCard total="0:44.1" applyLabel="Apply 3 cuts"
+                  items={[{range:'0:31.0 – 0:37.3',dur:'6.3s'},{range:'1:23.0 – 1:27.0',dur:'4.0s'},{range:'1:35.0 – 2:34.0',dur:'30.3s'}]}
+                  rationale="Detected 3 silences over 600ms and 4 filler words across the intro. Pacing tightened to 1.1×."/>
+                <ChatBubble role="system">Applied 3 cuts · saved</ChatBubble>
+              </div>
+            </div>
+
+            <div style={{borderTop:'1px solid var(--border-soft)',background:'var(--surface)'}}>
+              <div style={{display:'flex',gap:6,padding:'8px 20px 0',overflowX:'auto'}}>
+                <Chip icon={I('arrow-right',11)} onClick={()=>setMsg('Remove all silences over 500ms')}>Remove silences</Chip>
+                <Chip icon={I('arrow-right',11)} onClick={()=>setMsg('Tighten the pacing across both clips')}>Tighten pacing</Chip>
+                <Chip icon={I('arrow-right',11)} onClick={()=>setMsg('Add captions in a bold center style')}>Add captions</Chip>
+              </div>
+              <div style={{padding:'6px 20px 10px'}}>
+                <TextField multiline placeholder="Describe the edit you want, or pick an action above…" value={msg} onChange={setMsg}
+                  wrapStyle={{borderRadius:14}}/>
+                <div style={{display:'flex',alignItems:'center',gap:8,marginTop:-38,padding:'0 11px 0',position:'relative',pointerEvents:'none'}}></div>
+              </div>
+            </div>
+          </aside>
+
+          {/* STAGE */}
+          <section style={{position:'relative',overflow:'hidden',background:'radial-gradient(ellipse 68% 54% at 52% 32%, var(--surface-1) 0%, var(--bg) 66%)'}}>
+            <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'center',padding:'40px 360px 110px 80px',boxSizing:'border-box'}}>
+              <div style={{position:'relative',aspectRatio:'16/9',width:'100%',maxWidth:820,maxHeight:'100%',background:'radial-gradient(ellipse at 50% 34%, #e6e8ea 0%, #b7bbc2 34%, #676d78 68%, #14161c 100%)',borderRadius:16,boxShadow:'0 40px 90px -30px rgba(0,0,0,0.75), inset 0 0 0 1px rgba(255,255,255,0.09)',overflow:'hidden'}}>
+                <div aria-hidden="true" style={{position:'absolute',inset:0,opacity:0.16,pointerEvents:'none'}}>
+                  <div style={{position:'absolute',left:'33.33%',top:0,bottom:0,width:1,background:'rgba(255,255,255,0.6)'}}></div>
+                  <div style={{position:'absolute',left:'66.66%',top:0,bottom:0,width:1,background:'rgba(255,255,255,0.6)'}}></div>
+                  <div style={{position:'absolute',top:'33.33%',left:0,right:0,height:1,background:'rgba(255,255,255,0.6)'}}></div>
+                  <div style={{position:'absolute',top:'66.66%',left:0,right:0,height:1,background:'rgba(255,255,255,0.6)'}}></div>
+                </div>
+                <span style={{position:'absolute',top:14,left:14,padding:'5px 10px',borderRadius:9,background:'rgba(8,10,13,0.5)',backdropFilter:'blur(12px)',border:'1px solid rgba(255,255,255,0.14)',color:'#fff',fontFamily:'var(--font-mono)',fontSize:11}}>00:00:12.4</span>
+                <span style={{position:'absolute',top:14,right:14,padding:'5px 10px',borderRadius:9,background:'rgba(8,10,13,0.42)',backdropFilter:'blur(12px)',border:'1px solid rgba(255,255,255,0.14)',color:'#fff',fontFamily:'var(--font-mono)',fontSize:10}}>1920 × 1080 · 60 fps</span>
+                <div style={{position:'absolute',inset:0,display:'grid',placeItems:'center',color:'rgba(255,255,255,0.5)',fontFamily:'var(--font-mono)',fontSize:10,letterSpacing:'0.1em',textTransform:'uppercase'}}>preview · 16:9</div>
+                <div style={{position:'absolute',right:16,bottom:16,width:132,aspectRatio:'16/9',borderRadius:12,background:'linear-gradient(135deg,#1a1c22,#0e0f14)',border:'2px solid rgba(255,255,255,0.1)',boxShadow:'0 12px 28px -10px rgba(0,0,0,0.7)',display:'grid',placeItems:'center'}}>
+                  <span style={{width:34,height:34,borderRadius:'50%',background:'linear-gradient(180deg,#c2c6cc,#676d78)'}}></span>
+                </div>
+              </div>
+            </div>
+
+            {/* transport */}
+            <div style={{position:'absolute',left:0,right:0,bottom:22,display:'flex',justifyContent:'center',zIndex:15}}>
+              <div role="toolbar" style={{display:'inline-flex',alignItems:'center',gap:8,padding:'8px 10px',borderRadius:16,background:'var(--surface-1)',border:'1px solid var(--border)',boxShadow:'var(--elev-pop)'}}>
+                <IconButton title="Previous" size={34}>{I('skip-back',15)}</IconButton>
+                <button onClick={()=>setPlaying(p=>!p)} style={{width:44,height:44,display:'grid',placeItems:'center',borderRadius:12,background:'var(--accent)',color:'#fff',border:0,cursor:'pointer',boxShadow:'0 4px 14px -4px var(--accent-soft)'}}>{playing?I('pause',16):I('play',16)}</button>
+                <IconButton title="Next" size={34}>{I('skip-forward',15)}</IconButton>
+                <HR/>
+                <span style={{fontFamily:'var(--font-mono)',fontSize:13,color:'var(--fg)',minWidth:104,textAlign:'center'}}><b>0:00.0</b><span style={{color:'var(--meta)',margin:'0 5px'}}>/</span><span style={{color:'var(--muted)'}}>7:03.6</span></span>
+                <IconButton title="Loop" size={34}>{I('repeat',15)}</IconButton>
+                <IconButton title="Fullscreen" size={34}>{I('maximize',15)}</IconButton>
+              </div>
+            </div>
+
+            {/* INSPECTOR */}
+            <div style={{position:'absolute',top:20,right:20,bottom:16,display:'flex',alignItems:'flex-start',gap:10,zIndex:20}}>
+              <div style={{width:288,maxHeight:'100%',display:'flex',flexDirection:'column',background:'var(--surface-1)',border:'1px solid var(--border)',borderRadius:16,boxShadow:'var(--elev-pop)',overflow:'hidden',backdropFilter:'blur(18px)'}}>
+                <header style={{display:'flex',alignItems:'center',gap:8,padding:'14px 16px 12px',borderBottom:'1px solid var(--border-soft)'}}>
+                  <h2 style={{margin:0,fontSize:14,fontWeight:600,color:'var(--fg-emphasis)',letterSpacing:'-0.01em'}}>{facetTitle}</h2>
+                  <IconButton title="Collapse" size={26} style={{marginLeft:'auto'}}>{I('chevron-right',15)}</IconButton>
+                </header>
+                <div style={{overflowY:'auto',minHeight:0,padding:'14px 16px 16px'}}>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,padding:'12px 14px',marginBottom:12,border:'1px solid var(--border)',borderRadius:12,background:'var(--surface)'}}>
+                    <span style={{fontSize:13,fontWeight:500,color:'var(--fg-2)'}}>Blur background</span>
+                    <Switch checked={blur} onChange={setBlur}/>
+                  </div>
+                  <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',gap:12,padding:'12px 14px',marginBottom:12,border:'1px solid var(--border)',borderRadius:12,background:'var(--surface)'}}>
+                    <span style={{fontSize:13,fontWeight:500,color:'var(--fg-2)'}}>Mirror webcam</span>
+                    <Switch checked={mir} onChange={setMir}/>
+                  </div>
+                  <div style={{display:'flex',flexDirection:'column',gap:10}}>
+                    <Slider label="Shadow" value={sh} onChange={setSh} format={v=>`${v}%`}/>
+                    <Slider label="Roundness" value={rd} onChange={setRd} format={v=>`${v}%`}/>
+                    <Slider label="Padding" value={pd} onChange={setPd} format={v=>`${v}%`}/>
+                  </div>
+                </div>
+              </div>
+              <div style={{display:'flex',flexDirection:'column',gap:4,padding:6,background:'var(--surface-1)',border:'1px solid var(--border)',borderRadius:14,boxShadow:'var(--elev-pop)',backdropFilter:'blur(18px)'}}>
+                {facets.map(([k,label,ic])=>(<FacetRailButton key={k} title={label} active={facet===k} onClick={()=>setFacet(k)}>{I(ic,17)}</FacetRailButton>))}
+              </div>
+            </div>
+          </section>
+        </div>
+
+        {/* TIMELINE */}
+        <footer style={{position:'relative',background:'var(--surface)',borderTop:'1px solid var(--border)',minHeight:0}}>
+          <div style={{display:'flex',alignItems:'center',gap:8,padding:'0 16px',height:40,borderBottom:'1px solid var(--border-soft)'}}>
+            <div role="toolbar" style={{display:'flex',alignItems:'center',gap:1}}>
+              {[['mouse-pointer-2','Select',true],['film','Capture frame'],['scissors','Split'],['message-square','Comment'],['gauge','Speed'],['sparkles','Auto-enhance']].map(([ic,lbl,act],i)=>(
+                <IconButton key={i} title={lbl} size={28} active={!!act}>{I(ic,15)}</IconButton>
+              ))}
+            </div>
+            <HR/>
+            <Button variant="ghost" size="sm" iconRight={I('chevron-down',10)}>Widescreen 16:9</Button>
+            <div style={{marginLeft:'auto',display:'flex',alignItems:'center',gap:10}}>
+              <span style={{display:'inline-flex',alignItems:'center',gap:7,height:26,padding:'0 10px',background:'var(--surface-1)',border:'1px solid var(--border)',borderRadius:7}}>
+                <span style={{fontFamily:'var(--font-mono)',fontSize:10.5,fontWeight:600,color:'var(--fg-2)'}}>Scroll</span>{I('arrow-right',11)}<span style={{fontSize:11,color:'var(--muted)'}}>Pan</span>
+              </span>
+              <span style={{display:'inline-flex',alignItems:'center',gap:7,height:26,padding:'0 10px',background:'var(--surface-1)',border:'1px solid var(--border)',borderRadius:7}}>
+                <span style={{fontFamily:'var(--font-mono)',fontSize:10.5,fontWeight:600,color:'var(--fg-2)'}}>Ctrl+Scroll</span>{I('arrow-right',11)}<span style={{fontSize:11,color:'var(--muted)'}}>Zoom</span>
+              </span>
+            </div>
+          </div>
+
+          <div style={{position:'relative',padding:'8px 20px 0'}}>
+            {/* playhead */}
+            <div aria-hidden="true" style={{position:'absolute',top:2,bottom:66,left:'42%',width:2,background:'var(--accent)',zIndex:6,boxShadow:'0 0 10px var(--accent-soft)'}}>
+              <span style={{position:'absolute',top:-5,left:'50%',transform:'translateX(-50%) rotate(45deg)',width:9,height:9,background:'var(--accent)',borderRadius:2}}></span>
+            </div>
+            <div style={{display:'flex',justifyContent:'space-between',height:15,marginBottom:7}}>
+              {['0:00','0:15','0:30','0:45','1:00','1:15','1:30','1:45','2:00','2:15','2:30'].map(t=><span key={t} style={{fontFamily:'var(--font-mono)',fontSize:10,color:'var(--meta)'}}>{t}</span>)}
+            </div>
+            {/* lanes */}
+            <div style={{position:'relative',height:24,marginBottom:5,borderRadius:6,background:'var(--surface-1)'}}>
+              <TimelinePill tone="annotation" leftPct={19} icon={I('message-square',11)}>New annotation</TimelinePill>
+              <TimelinePill tone="annotation" leftPct={72} icon={I('message-square',11)}>New annotation</TimelinePill>
+            </div>
+            <div style={{position:'relative',height:24,marginBottom:5,borderRadius:6,background:'var(--surface-1)'}}>
+              <TimelinePill tone="speed" leftPct={18} widthPct={5} icon={I('clock',11)}>1.5×</TimelinePill>
+              <TimelinePill tone="speed" leftPct={76} widthPct={14} icon={I('clock',11)}>1.5×</TimelinePill>
+            </div>
+            <div style={{position:'relative',height:24,marginBottom:5,borderRadius:6,background:'var(--surface-1)'}}>
+              <TimelinePill tone="danger" leftPct={10} widthPct={10} icon={I('scissors',11)}>0:37.3</TimelinePill>
+              <TimelinePill tone="danger" leftPct={27} widthPct={2}></TimelinePill>
+              <TimelinePill tone="danger" leftPct={31} widthPct={19} icon={I('scissors',11)}>0:30.3</TimelinePill>
+            </div>
+            <div style={{position:'relative',height:24,marginBottom:8,borderRadius:6,background:'var(--surface-1)'}}>
+              <TimelinePill tone="accent" leftPct={11} widthPct={7} icon={I('zoom-in',11)}>1.8×</TimelinePill>
+              <TimelinePill tone="accent" leftPct={47} widthPct={6} icon={I('zoom-in',11)}>1.5×</TimelinePill>
+            </div>
+            {/* clips */}
+            <div style={{position:'relative',display:'flex',gap:6,height:66}}>
+              {[0,1].map(ci=>(
+                <div key={ci} style={{position:'relative',flex:1,borderRadius:11,border:`1.5px solid ${ci===1?'var(--accent)':'var(--border)'}`,background:'var(--surface-1)',overflow:'hidden',boxShadow:'inset 0 1px 8px rgba(255,255,255,0.09)'}}>
+                  <div style={{position:'absolute',inset:0,display:'flex',alignItems:'center',justifyContent:'space-between',gap:1,padding:'0 2px'}}>
+                    {clipWave.map((h,i)=><span key={i} style={{flex:'1 1 0',alignSelf:'center',height:`${Math.round(h*100)}%`,maxWidth:2,background:'var(--accent)',opacity:(0.5+h*0.5).toFixed(2),borderRadius:2}}></span>)}
+                  </div>
+                  <div style={{position:'absolute',left:10,top:8,display:'inline-flex',alignItems:'center',gap:8,padding:'3px 9px 3px 6px',borderRadius:8,background:'rgba(8,10,13,0.55)',backdropFilter:'blur(8px)',border:'1px solid rgba(255,255,255,0.08)'}}>
+                    <span style={{width:16,height:16,display:'grid',placeItems:'center',borderRadius:5,background:'var(--surface)',color:'var(--fg)'}}>{I('pencil',9)}</span>
+                    <span style={{fontSize:11,fontWeight:500,color:'#fff'}}>demo-n8n-as-code-1.mp4</span>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          {/* nav bar */}
+          <div style={{position:'relative',height:20,margin:'8px 20px 12px'}}>
+            <div style={{position:'absolute',top:7,left:0,right:0,height:6,borderRadius:3,background:'var(--surface-3)'}}></div>
+            <div style={{position:'absolute',top:5,left:'6%',width:'62%',height:10,borderRadius:5,background:'var(--surface-hi)',border:'1px solid var(--border-hi)'}}></div>
+          </div>
+        </footer>
+      </div>
+    </div>
+  );
+}
+ReactDOM.createRoot(document.getElementById('root')).render(<Editor/>);
+</script>
+</body></html>

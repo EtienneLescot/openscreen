@@ -1,0 +1,22 @@
+<!-- @dsCard group="Colors" viewport="700x160" subtitle="Near-black blue-grey, low → high" name="Surfaces & borders" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-display);padding:20px;}
+  .row{display:flex;gap:10px;flex-wrap:wrap;}
+  .sw{display:flex;flex-direction:column;gap:7px;}
+  .chip{width:84px;height:48px;border-radius:var(--radius-md);border:1px solid var(--border);}
+  .lab{font-size:10.5px;color:var(--fg-2);font-weight:500;}
+  .hex{font-family:var(--font-mono);font-size:9.5px;color:var(--meta);}
+</style></head>
+<body>
+  <div class="row">
+    <div class="sw"><div class="chip" style="background:var(--bg);"></div><span class="lab">bg</span><span class="hex">#080a0d</span></div>
+    <div class="sw"><div class="chip" style="background:var(--surface);"></div><span class="lab">surface</span><span class="hex">#0f1216</span></div>
+    <div class="sw"><div class="chip" style="background:var(--surface-1);"></div><span class="lab">surface-1</span><span class="hex">#14171c</span></div>
+    <div class="sw"><div class="chip" style="background:var(--surface-2);"></div><span class="lab">surface-2</span><span class="hex">#1a1e25</span></div>
+    <div class="sw"><div class="chip" style="background:var(--surface-3);"></div><span class="lab">surface-3</span><span class="hex">#232830</span></div>
+    <div class="sw"><div class="chip" style="background:var(--surface-hi);"></div><span class="lab">surface-hi</span><span class="hex">#2b313b</span></div>
+    <div class="sw"><div class="chip" style="background:var(--surface);border-color:var(--border-hi);"></div><span class="lab">border-hi</span><span class="hex">#333a45</span></div>
+  </div>
+</body></html>

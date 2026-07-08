@@ -1,0 +1,85 @@
+/* ─────────────────────────────────────────────────────────────
+   BASE
+   Motion, focus, selection, and the range-slider chrome that the
+   product relies on. Import last. These are the ONLY global rules —
+   everything else is component-scoped inline style.
+   ───────────────────────────────────────────────────────────── */
+:root {
+  --ease: cubic-bezier(0.2, 0, 0, 1);
+  --dur: 0.15s;
+}
+
+/* the standard transition surface for every interactive element */
+button,
+[role="button"],
+a,
+select,
+textarea,
+input {
+  transition:
+    background-color var(--dur) var(--ease),
+    color var(--dur) var(--ease),
+    border-color var(--dur) var(--ease),
+    box-shadow var(--dur) var(--ease),
+    transform var(--dur) var(--ease);
+}
+
+:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+::selection {
+  background: var(--accent-ring);
+  color: var(--fg-emphasis);
+}
+
+/* Links — define defaults so consumer-added <a> never renders browser blue */
+a { color: var(--accent); text-decoration: none; }
+a:hover { color: var(--brand-lo); }
+
+/* ── Range slider (used across the inspector) ────────────────── */
+input[type="range"] {
+  -webkit-appearance: none;
+  appearance: none;
+  height: 14px;
+  cursor: pointer;
+  border-radius: 999px;
+  background-color: transparent;
+  background-repeat: no-repeat;
+  background-position: 0 center;
+  background-size: 100% 5px;
+}
+input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--surface);
+  border: 2px solid var(--brand);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.4);
+  transition: transform 0.12s ease, box-shadow 0.12s ease;
+}
+input[type="range"]:hover::-webkit-slider-thumb {
+  transform: scale(1.14);
+  box-shadow: 0 0 0 5px var(--accent-soft);
+}
+input[type="range"]::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border: 2px solid var(--brand);
+  border-radius: 50%;
+  background: var(--surface);
+}
+input[type="range"]::-moz-range-track {
+  height: 5px;
+  border-radius: 999px;
+  background: transparent;
+}
+
+/* keyframes referenced by product (rec pulse, fades, etc.) */
+@keyframes os-pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.35; } }
+@keyframes os-fade  { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: translateY(0); } }
+@keyframes os-glow  { 0%,100% { opacity: 0.5; } 50% { opacity: 1; } }
+@keyframes os-bounce{ 0%,100% { transform: translateY(0); } 50% { transform: translateY(4px); } }
