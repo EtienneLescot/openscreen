@@ -24,6 +24,7 @@ export interface ReasoningCapability {
 		| "custom-openai-account"
 		| "openai-responses"
 		| "anthropic-thinking"
+		| "minimax-thinking"
 		| "openrouter-reasoning"
 		| "google-thinking";
 }
@@ -76,15 +77,24 @@ export function getReasoningCapability(provider: string, model?: string): Reason
 			strategy: "openai-responses",
 		};
 	}
-	if (
-		def?.id === "anthropic" &&
-		(normalizedModel.startsWith("MiniMax-M3") || isAnthropicReasoningModel(normalizedModel))
-	) {
+	if (def?.id === "anthropic" && isAnthropicReasoningModel(normalizedModel)) {
 		return {
 			supported: true,
 			efforts: ANTHROPIC_REASONING_EFFORTS,
 			defaultEffort: "medium",
 			strategy: "anthropic-thinking",
+		};
+	}
+	if (provider === "minimax" || provider === "minimax-token-plan") {
+		// MiniMax's thinking block is binary — `{type: "adaptive"}` (on) or
+		// `{type: "disabled"}` (off, ignored on M2.x which is always-on) — no
+		// budget_tokens tiers like native Anthropic. Any non-"none" effort
+		// just turns it on; see buildLangChainReasoningOptions below.
+		return {
+			supported: true,
+			efforts: ANTHROPIC_REASONING_EFFORTS,
+			defaultEffort: "medium",
+			strategy: "minimax-thinking",
 		};
 	}
 	if (provider === "openrouter" && isOpenRouterReasoningModel(normalizedModel)) {
@@ -137,6 +147,10 @@ export function buildLangChainReasoningOptions(
 			};
 		case "anthropic-thinking":
 			return buildAnthropicReasoningOptions(model, normalizedEffort);
+		case "minimax-thinking":
+			// No "none" case needed — normalizedEffort === "none" already
+			// short-circuits to {} above, which omits `thinking` (= off).
+			return { thinking: { type: "adaptive" } };
 		case "openrouter-reasoning":
 			return {
 				modelKwargs: {

@@ -21,6 +21,7 @@ import { normalizeProviderId, type ReasoningEffort } from "./provider-registry";
 export type ReasoningStrategy =
 	| "openai-responses"
 	| "anthropic-thinking"
+	| "minimax-thinking"
 	| "openrouter-reasoning"
 	| "google-thinking"
 	| "custom-openai-account"
@@ -116,13 +117,14 @@ export function getReasoningCapability(provider: string, model?: string): Reason
 		};
 	}
 	if (id === "minimax" || id === "minimax-token-plan") {
-		// MiniMax ships its own reasoning tiers behind its anthropic-compatible
-		// endpoint. Map effort to its `reasoning_effort` field rather than the
-		// Anthropic thinking block (the proxy translates the rest).
+		// MiniMax's thinking block is binary — `{type: "adaptive"}` (on) or
+		// `{type: "disabled"}` (off, ignored on M2.x which is always-on) — not
+		// the OpenAI `reasoning.effort` field, and no budget_tokens tiers like
+		// native Anthropic.
 		return {
 			supported: true,
-			strategy: "openai-responses",
-			efforts: OPENAI_REASONING_EFFORTS,
+			strategy: "minimax-thinking",
+			efforts: ANTHROPIC_REASONING_EFFORTS,
 			defaultEffort: "medium",
 		};
 	}
@@ -174,6 +176,12 @@ export function getReasoningCallOptions(
 						},
 			};
 		}
+		case "minimax-thinking":
+			return {
+				strategy: cap.strategy,
+				effort,
+				requestBodyPatch: { thinking: { type: "adaptive" } },
+			};
 		case "openrouter-reasoning":
 			return {
 				strategy: cap.strategy,

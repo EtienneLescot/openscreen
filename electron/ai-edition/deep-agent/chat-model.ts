@@ -50,7 +50,7 @@ export async function createOpenScreenChatModel(
 		config.provider === "minimax" ||
 		config.provider === "minimax-token-plan"
 	) {
-		return createLocalProviderChatModel(config);
+		return createLocalProviderChatModel(config, reasoningOptions);
 	}
 
 	if (config.provider === "anthropic") {
@@ -100,6 +100,7 @@ export async function createOpenScreenChatModel(
 
 async function createLocalProviderChatModel(
 	config: OpenScreenChatModelConfig,
+	reasoningOptions: ReturnType<typeof buildLangChainReasoningOptions>,
 ): Promise<BaseChatModel> {
 	switch (config.provider) {
 		case "openai-oauth":
@@ -128,12 +129,15 @@ async function createLocalProviderChatModel(
 		}
 		case "minimax":
 		case "minimax-token-plan":
-			// ponytail: MiniMax is Anthropic-API-shaped. The provider-registry
-			// already gives us the corrected base URL (`/anthropic/v1`).
+			// ponytail: MiniMax is Anthropic-API-shaped. ChatAnthropic wraps
+			// @anthropic-ai/sdk, which appends `/v1/messages` itself, so the
+			// base URL here must be the bare `/anthropic` origin (matching
+			// provider-registry.ts's baseUrl) — not `/anthropic/v1`.
 			return new ChatAnthropic({
 				apiKey: config.apiKey,
 				model: config.model,
-				anthropicApiUrl: config.baseUrl ?? "https://api.minimax.io/anthropic/v1",
+				anthropicApiUrl: config.baseUrl ?? "https://api.minimax.io/anthropic",
+				...(reasoningOptions.thinking ? { thinking: reasoningOptions.thinking as never } : {}),
 			});
 		default:
 			// ponytail: providers that should already have been handled by the

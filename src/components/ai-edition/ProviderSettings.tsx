@@ -40,9 +40,10 @@ import type {
 	AiEditionLlmSnapshot,
 } from "@/native/contracts";
 import {
+	getReasoningEffortLabel,
+	getReasoningEffortOptions,
 	PROVIDER_DEFINITIONS,
 	type ProviderDefinition,
-	REASONING_EFFORT_OPTIONS,
 } from "../../../electron/ai-edition/provider-registry";
 import { ModalShell } from "./Modals";
 import styles from "./NewEditorShell.module.css";
@@ -581,9 +582,9 @@ function ProviderForm({
 						}
 						disabled={busy}
 					>
-						{REASONING_EFFORT_OPTIONS.map((r: string) => (
+						{getReasoningEffortOptions(def.id).map((r) => (
 							<option key={r} value={r}>
-								{r}
+								{getReasoningEffortLabel(def.id, r)}
 							</option>
 						))}
 					</select>
