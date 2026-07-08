@@ -1,0 +1,61 @@
+/* ============================================================
+   OpenScreen — Typography tokens
+   The app UI ships in Inter (via Tailwind default sans on the
+   Electron shell). The editor ALSO bundles a large font picker
+   for on-canvas captions/annotations — those Google families are
+   imported here so caption specimens render true. UI text is
+   tight, small, and functional: 9–14px is the working range.
+   ============================================================ */
+
+@import url("https://fonts.googleapis.com/css2?family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&family=IBM+Plex+Mono:wght@400;500;700&family=Fira+Code:wght@400;700&family=Caveat:wght@400;700&family=Permanent+Marker&family=Bebas+Neue&family=Oswald:wght@400;700&family=Space+Grotesk:wght@400;700&family=Playfair+Display:ital,wght@0,400;0,700;1,400&display=swap");
+
+:root {
+	/* ---- Families ------------------------------------------- */
+	/* UI: Inter everywhere in the chrome. */
+	--font-sans: "Inter", ui-sans-serif, system-ui, -apple-system,
+		"Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+	/* Mono: timers, timecodes, tabular numerals (the app uses
+	   tabular-nums heavily on the record timer + scrubber). */
+	--font-mono: "IBM Plex Mono", "Fira Code", ui-monospace,
+		SFMono-Regular, Menlo, Consolas, monospace;
+
+	/* Caption / annotation display families (editor font picker).
+	   Not used in UI chrome — only for text drawn onto the video. */
+	--font-caption-marker: "Permanent Marker", cursive;
+	--font-caption-hand: "Caveat", cursive;
+	--font-caption-impact: "Bebas Neue", "Oswald", sans-serif;
+	--font-caption-serif: "Playfair Display", Georgia, serif;
+	--font-caption-grotesk: "Space Grotesk", sans-serif;
+
+	/* ---- Weights -------------------------------------------- */
+	--fw-regular: 400;
+	--fw-medium: 500;   /* default for buttons, labels           */
+	--fw-semibold: 600; /* section titles, emphasis              */
+	--fw-bold: 700;
+
+	/* ---- UI type scale (px — the app is dense) --------------- */
+	/* Names map to real usage seen across the recorder + editor. */
+	--text-9: 9px;      /* scrubber timecode                     */
+	--text-10: 10px;    /* device labels, badges                 */
+	--text-11: 11px;    /* the workhorse: buttons, tabs, tooltips*/
+	--text-12: 12px;    /* xs body                               */
+	--text-13: 13px;    /* prompt titles                         */
+	--text-sm: 14px;    /* body / dialog copy (0.875rem)         */
+	--text-base: 16px;  /* dialog/section headings               */
+	--text-lg: 18px;    /* dialog title                          */
+	--text-xl: 20px;    /* empty-state title                     */
+	--text-2xl: 24px;   /* rare, marketing                       */
+
+	/* ---- Line heights --------------------------------------- */
+	--lh-none: 1;
+	--lh-tight: 1.15;
+	--lh-snug: 1.35;
+	--lh-normal: 1.5;
+	--lh-relaxed: 1.6;
+
+	/* ---- Tracking ------------------------------------------- */
+	/* The inspector explicitly zeroes letter-spacing everywhere;
+	   OpenScreen UI text is never tracked out. */
+	--tracking-tight: -0.01em;
+	--tracking-normal: 0;
+}

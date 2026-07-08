@@ -1,0 +1,74 @@
+<!-- @dsCard group="Components" viewport="700x430" subtitle="Button · IconButton · SegmentedControl · Switch · Slider · Select · TextField" name="Forms" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-display);padding:22px;}
+  #root{display:flex;flex-direction:column;gap:18px;}
+  .grp{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+  .cap{font-family:var(--font-mono);font-size:9.5px;letter-spacing:0.08em;color:var(--meta);width:100%;}
+  .col{display:flex;flex-direction:column;gap:12px;width:260px;}
+</style></head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+  // Resolve the generated bundle namespace regardless of its name.
+  function pick(name){
+    for(const k in window){ try{ const v=window[k]; if(v && typeof v==='object' && typeof v[name]==='function') return v[name]; }catch(e){} }
+    return () => null;
+  }
+  const Button = pick('Button'), IconButton = pick('IconButton'),
+        SegmentedControl = pick('SegmentedControl'), Switch = pick('Switch'),
+        Slider = pick('Slider'), Select = pick('Select'), TextField = pick('TextField');
+  const I = (n, s=15) => <i data-lucide={n} style={{width:s,height:s}}></i>;
+
+  function Demo(){
+    const [mode,setMode] = React.useState('Edit');
+    const [on,setOn] = React.useState(true);
+    const [sh,setSh] = React.useState(24);
+    const [q,setQ] = React.useState('');
+    React.useEffect(()=>{ window.lucide && window.lucide.createIcons(); });
+    return (
+      <React.Fragment>
+        <div className="grp"><span className="cap">BUTTON</span>
+          <Button variant="primary" icon={I('download')}>Export</Button>
+          <Button variant="secondary">Review each</Button>
+          <Button variant="ghost" size="sm" iconRight={I('chevron-down',11)}>demo2</Button>
+          <Button variant="primary" disabled>Disabled</Button>
+        </div>
+        <div className="grp"><span className="cap">ICONBUTTON</span>
+          <IconButton title="Settings">{I('settings')}</IconButton>
+          <IconButton title="Loop" active>{I('repeat')}</IconButton>
+          <IconButton title="Delete" tone="danger">{I('trash-2')}</IconButton>
+          <IconButton title="Split" size={28}>{I('scissors',13)}</IconButton>
+        </div>
+        <div className="grp"><span className="cap">SEGMENTED</span>
+          <SegmentedControl options={['Media','Edit','Rec']} value={mode} onChange={setMode} />
+          <SegmentedControl size="sm" options={['Screen','Window']} value={mode==='Rec'?'Window':'Screen'} onChange={()=>{}} />
+        </div>
+        <div className="grp"><span className="cap">SWITCH</span>
+          <Switch checked={on} onChange={setOn} />
+          <Switch checked={!on} onChange={()=>setOn(!on)} />
+          <span style={{fontSize:13,color:'var(--fg-2)'}}>Blur background</span>
+        </div>
+        <div className="grp">
+          <div className="col"><span className="cap">SLIDER</span>
+            <Slider label="Shadow" value={sh} onChange={setSh} format={v=>`${v}%`} />
+          </div>
+          <div className="col"><span className="cap">SELECT</span>
+            <Select options={['Bold Center','Minimal Bottom','Karaoke','Boxed']} value="Bold Center" onChange={()=>{}} />
+          </div>
+          <div className="col"><span className="cap">TEXTFIELD</span>
+            <TextField leadingIcon={I('search')} placeholder="Search media…" value={q} onChange={setQ} />
+          </div>
+        </div>
+      </React.Fragment>
+    );
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script>
+</body></html>
