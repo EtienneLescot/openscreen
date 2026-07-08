@@ -1,0 +1,82 @@
+/* ============================================================
+   OpenScreen — Effects: shadows, glass, gradients, motion
+   The signature look is DEPTH ON DARK: floating chrome with a
+   big soft outer shadow + a 1px inner top highlight, sat over a
+   heavy backdrop-blur. Nothing is flat. Motion is quick and
+   functional (120–300ms ease), with subtle scale on press.
+   ============================================================ */
+
+:root {
+	/* ---- Elevation shadows (dark shell) --------------------- */
+	/* Floating HUD bar — the archetype: deep drop + inner top light. */
+	--shadow-hud: 0 20px 60px rgba(0, 0, 0, 0.42),
+		inset 0 1px 0 rgba(255, 255, 255, 0.06);
+	/* Editor panels. */
+	--shadow-panel: 0 24px 70px rgba(0, 0, 0, 0.42),
+		inset 0 1px 0 rgba(255, 255, 255, 0.045);
+	/* Popovers / menus (device selector, language menu). */
+	--shadow-popover: 0 18px 42px rgba(0, 0, 0, 0.48),
+		inset 0 1px 0 rgba(255, 255, 255, 0.045);
+	/* Cards at rest / on hover. */
+	--shadow-card: inset 0 1px 0 rgba(255, 255, 255, 0.035);
+	--shadow-card-hover: 0 10px 24px rgba(0, 0, 0, 0.22),
+		inset 0 1px 0 rgba(255, 255, 255, 0.04);
+	/* Small badges (selection check). */
+	--shadow-badge: 0 6px 14px rgba(0, 0, 0, 0.35);
+	/* Inner top highlight used alone on control surfaces. */
+	--shadow-inset-hi: inset 0 1px 0 rgba(255, 255, 255, 0.025);
+
+	/* ---- The "beautified recording" shadow ------------------ */
+	/* What OpenScreen renders around the captured window sitting
+	   on a wallpaper. Big, soft, slightly lifted. */
+	--shadow-capture: 0 40px 90px rgba(0, 0, 0, 0.45),
+		0 12px 32px rgba(0, 0, 0, 0.35);
+
+	/* ---- Glass / backdrop ----------------------------------- */
+	--glass-blur: blur(24px) saturate(150%);
+	--glass-blur-strong: blur(24px) saturate(140%);
+	--glass-shell: linear-gradient(
+		145deg,
+		rgba(13, 14, 17, 0.94) 0%,
+		rgba(8, 9, 12, 0.9) 100%
+	);
+	--glass-hud: rgba(7, 8, 10, 0.9);      /* #07080a/90          */
+	--glass-popover: rgba(8, 9, 12, 0.96);
+
+	/* ---- Surface gradients ---------------------------------- */
+	/* The workspace backdrop: a faint green glow up top over a
+	   near-black vertical fade. This green wash is a brand tell. */
+	--gradient-workspace: radial-gradient(
+			circle at 18% 0%,
+			rgba(52, 178, 123, 0.08),
+			transparent 30%
+		),
+		linear-gradient(180deg, #08090b 0%, #050606 100%);
+	/* Panel face: barely-there white top sheen. */
+	--gradient-panel: linear-gradient(
+			180deg,
+			rgba(255, 255, 255, 0.035),
+			rgba(255, 255, 255, 0.012)
+		),
+		#090a0c;
+	/* Selected card wash (green tint → glass). */
+	--gradient-selected: linear-gradient(
+		145deg,
+		rgba(52, 178, 123, 0.13),
+		rgba(255, 255, 255, 0.045)
+	);
+
+	/* ---- Motion --------------------------------------------- */
+	/* Fast + linear-to-ease. No bounce, no spring in the chrome. */
+	--ease: cubic-bezier(0.4, 0, 0.2, 1);
+	--dur-fast: 120ms;    /* hovers, color swaps                  */
+	--dur-base: 150ms;    /* buttons, most transitions            */
+	--dur-mid: 200ms;     /* cards, dialogs                       */
+	--dur-slow: 300ms;    /* expanding device selectors           */
+	/* Press feedback: the app scales controls to 0.95 on active. */
+	--press-scale: 0.95;
+
+	/* ---- Focus ---------------------------------------------- */
+	--ring-focus: 0 0 0 2px var(--brand-green-ring);
+	--ring-slider: 0 0 0 4px rgba(52, 178, 123, 0.12);
+}

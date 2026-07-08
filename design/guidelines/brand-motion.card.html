@@ -1,0 +1,16 @@
+<!-- @dsCard group="Brand" viewport="700x150" subtitle="One easing, 0.15s; record dot pulses" name="Motion" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-display);padding:24px 22px;display:flex;gap:34px;align-items:center;}
+  .sw{display:flex;flex-direction:column;gap:10px;}
+  .lab{font-size:11.5px;color:var(--fg-2);font-weight:500;}
+  .n{font-family:var(--font-mono);font-size:10px;color:var(--meta);}
+  .demo{height:34px;padding:0 16px;display:inline-flex;align-items:center;gap:9px;border-radius:var(--radius-md);background:var(--accent);color:#fff;font-size:12.5px;font-weight:600;cursor:pointer;box-shadow:var(--glow-accent);align-self:flex-start;}
+  .demo:hover{background:var(--brand-lo);}
+  .dot{width:9px;height:9px;border-radius:50%;background:var(--danger);animation:os-pulse 1.4s ease-in-out infinite;}
+</style></head>
+<body>
+  <div class="sw"><span class="lab">Hover me — 0.15s ease</span><span class="demo">Apply 3 cuts</span><span class="n">cubic-bezier(0.2,0,0,1)</span></div>
+  <div class="sw"><span class="lab">Recording pulse</span><span style="display:inline-flex;align-items:center;gap:8px;"><span class="dot"></span><span class="n">os-pulse · 1.4s</span></span></div>
+</body></html>

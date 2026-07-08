@@ -1,0 +1,58 @@
+<!-- @dsCard group="Components" viewport="700x300" subtitle="Badge · Chip · Card · ProgressBar" name="Display" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-display);padding:22px;}
+  #root{display:flex;flex-direction:column;gap:18px;}
+  .grp{display:flex;align-items:center;gap:12px;flex-wrap:wrap;}
+  .cap{font-family:var(--font-mono);font-size:9.5px;letter-spacing:0.08em;color:var(--meta);width:100%;}
+</style></head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+  function pick(name){ for(const k in window){ try{ const v=window[k]; if(v&&typeof v==='object'&&typeof v[name]==='function') return v[name]; }catch(e){} } return ()=>null; }
+  const Badge=pick('Badge'), Chip=pick('Chip'), Card=pick('Card'), ProgressBar=pick('ProgressBar');
+  const I=(n,s=11)=><i data-lucide={n} style={{width:s,height:s}}></i>;
+  function Demo(){
+    React.useEffect(()=>{ window.lucide && window.lucide.createIcons(); });
+    return (
+      <React.Fragment>
+        <div className="grp"><span className="cap">BADGE</span>
+          <Badge dot>Saved</Badge>
+          <Badge dot>0% context</Badge>
+          <Badge soft={false} dot>High confidence</Badge>
+          <Badge tone="neutral" mono={false}>Not generated yet</Badge>
+          <Badge tone="danger" dot>3 skips</Badge>
+        </div>
+        <div className="grp"><span className="cap">CHIP</span>
+          <Chip icon={I('arrow-right')}>Remove silences</Chip>
+          <Chip icon={I('arrow-right')}>Tighten pacing</Chip>
+          <Chip icon={I('arrow-right')}>Add captions</Chip>
+        </div>
+        <div className="grp"><span className="cap">PROGRESSBAR</span>
+          <div style={{width:220}}><ProgressBar value={60}/></div>
+          <span style={{fontFamily:'var(--font-mono)',fontSize:10.5,color:'var(--muted)'}}>3/5</span>
+        </div>
+        <div className="grp"><span className="cap">CARD</span>
+          <div style={{width:260}}>
+            <Card title="Proposed cuts" headerRight={<Badge soft={false} dot>High</Badge>}>
+              <div style={{fontSize:12,color:'var(--fg-2)'}}>3 silences over 600ms found in track 1.</div>
+            </Card>
+          </div>
+          <div style={{width:200}}>
+            <Card elevation="pop" level={1}>
+              <div style={{fontSize:12,color:'var(--fg-2)'}}>Floating popover surface.</div>
+            </Card>
+          </div>
+        </div>
+      </React.Fragment>
+    );
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script>
+</body></html>

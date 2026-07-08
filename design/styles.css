@@ -1,0 +1,17 @@
+/* ============================================================
+   OpenScreen Design System — global entry point.
+   Consumers link THIS file. It is a manifest of @imports only;
+   never add rules here. Everything reachable from these imports
+   (tokens + @font-face + Google font @imports) ships to
+   consumers and is indexed by the compiler.
+   Source of truth: getopenscreen/openscreen (src/index.css).
+   ============================================================ */
+
+@import url("./tokens/base.css");
+@import url("./tokens/fonts.css");
+@import url("./tokens/colors.css");
+@import url("./tokens/typography.css");
+@import url("./tokens/spacing.css");
+@import url("./tokens/radii.css");
+@import url("./tokens/elevation.css");
+@import url("./tokens/effects.css");

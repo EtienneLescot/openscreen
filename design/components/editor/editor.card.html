@@ -1,0 +1,73 @@
+<!-- @dsCard group="Components" viewport="700x520" subtitle="ChatBubble · ProposalCard · MediaCard · TimelinePill · FacetRailButton" name="Editor" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../../styles.css">
+<script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+<script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<script src="https://unpkg.com/lucide@latest"></script>
+<script src="../../_ds_bundle.js"></script>
+<style>
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-display);padding:22px;}
+  #root{display:grid;grid-template-columns:1fr 300px;gap:22px;align-items:start;}
+  .cap{font-family:var(--font-mono);font-size:9.5px;letter-spacing:0.08em;color:var(--meta);margin-bottom:10px;}
+  .stack{display:flex;flex-direction:column;gap:16px;}
+</style></head>
+<body>
+<div id="root"></div>
+<script type="text/babel">
+  function pick(name){ for(const k in window){ try{ const v=window[k]; if(v&&typeof v==='object'&&typeof v[name]==='function') return v[name]; }catch(e){} } return ()=>null; }
+  const ChatBubble=pick('ChatBubble'), ProposalCard=pick('ProposalCard'), MediaCard=pick('MediaCard'),
+        TimelinePill=pick('TimelinePill'), FacetRailButton=pick('FacetRailButton');
+  const I=(n,s=17)=><i data-lucide={n} style={{width:s,height:s}}></i>;
+  const Bot=<svg width="15" height="15" viewBox="0 0 16 16" shapeRendering="crispEdges"><rect x="7" y="0" width="2" height="2" fill="currentColor"/><rect x="3" y="3" width="10" height="9" rx="1" fill="none" stroke="currentColor" strokeWidth="1.4"/><rect x="5" y="6" width="2" height="2" fill="currentColor"/><rect x="9" y="6" width="2" height="2" fill="currentColor"/><rect x="5.5" y="9.5" width="5" height="1.4" fill="currentColor"/></svg>;
+
+  function Demo(){
+    const [facet,setFacet]=React.useState('bg');
+    React.useEffect(()=>{ window.lucide && window.lucide.createIcons(); });
+    const facets=[['bg','image'],['fx','sliders-horizontal'],['layout','layout'],['cursor','mouse-pointer-2'],['cap','captions'],['crop','crop']];
+    return (
+      <React.Fragment>
+        <div>
+          <div className="cap">CHATBUBBLE + PROPOSALCARD</div>
+          <div className="stack">
+            <ChatBubble role="user" author="YOU">Clean up the intro — lots of dead air while I read my notes.</ChatBubble>
+            <ChatBubble role="assistant" author="OpenScreen" time="10:41" avatar={Bot}>
+              On it — scanning track 1 for silences and filler words. I'll flag anything over 600ms.
+            </ChatBubble>
+            <ProposalCard total="0:44.1" applyLabel="Apply 3 cuts"
+              items={[{range:'0:31.0 – 0:37.3',dur:'6.3s'},{range:'1:23.0 – 1:27.0',dur:'4.0s'},{range:'1:35.0 – 2:34.0',dur:'30.3s'}]}
+              rationale="Detected 3 silences over 600ms and 4 filler words across the intro."/>
+            <ChatBubble role="system">Applied 3 cuts · saved</ChatBubble>
+          </div>
+          <div className="cap" style={{marginTop:22}}>TIMELINEPILL</div>
+          <div style={{display:'flex',flexDirection:'column',gap:6}}>
+            <div style={{position:'relative',height:24,borderRadius:6,background:'var(--surface-1)'}}>
+              <TimelinePill tone="annotation" leftPct={8} icon={I('message-square',11)}>New annotation</TimelinePill>
+              <TimelinePill tone="annotation" leftPct={55} icon={I('message-square',11)}>New annotation</TimelinePill>
+            </div>
+            <div style={{position:'relative',height:24,borderRadius:6,background:'var(--surface-1)'}}>
+              <TimelinePill tone="speed" leftPct={18} widthPct={12} icon={I('clock',11)}>1.5×</TimelinePill>
+              <TimelinePill tone="danger" leftPct={40} widthPct={18}>0:37.3</TimelinePill>
+              <TimelinePill tone="accent" leftPct={70} widthPct={10} icon={I('zoom-in',11)}>1.8×</TimelinePill>
+            </div>
+          </div>
+        </div>
+
+        <div>
+          <div className="cap">MEDIACARD</div>
+          <MediaCard name="demo-n8n-as-code-1.mp4" duration="0:02:34.7" size="110 MB" from="#10b981" to="#0d986a" selected/>
+          <div style={{height:14}}></div>
+          <MediaCard name="intro-take-3.mp4" duration="0:00:41.2" size="24 MB" from="#fbbf24" to="#f59e0b"/>
+          <div className="cap" style={{marginTop:22}}>FACETRAILBUTTON</div>
+          <div style={{display:'inline-flex',flexDirection:'column',gap:4,padding:6,background:'var(--surface-1)',border:'1px solid var(--border)',borderRadius:14,boxShadow:'var(--elev-pop)'}}>
+            {facets.map(([k,ic])=>(
+              <FacetRailButton key={k} title={k} active={facet===k} onClick={()=>setFacet(k)}>{I(ic)}</FacetRailButton>
+            ))}
+          </div>
+        </div>
+      </React.Fragment>
+    );
+  }
+  ReactDOM.createRoot(document.getElementById('root')).render(<Demo/>);
+</script>
+</body></html>
