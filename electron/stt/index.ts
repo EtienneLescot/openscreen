@@ -1,25 +1,24 @@
 import path from "node:path";
 import { app, type IpcMain } from "electron";
-
-import { CTranslate2ServerManager } from "./ctranslate2Server";
 import { ensureModels, modelPaths } from "./modelManager";
 import type {
 	SttStatusEvent,
 	SttTranscribeRequest,
 	SttTranscribeResponse,
 } from "./transcriptionContract";
+import { WhisperServerManager } from "./whisperServer";
 
 /**
  * Owner of the long-lived STT pipeline. One instance per Electron app.
  *
  * Workflow:
- *   1. `init()` spawns `ctranslate2-server` (or queues the call if it's busy).
+ *   1. `init()` spawns `whisper-stt-server` (or queues the call if it's busy).
  *   2. `transcribe()` proxies the renderer's `Float32Array` through
- *      ctranslate2-server's HTTP `/inference`, which returns both phrase- and
- *      word-level segments in one pass (see ctranslate2Server.ts). Word
- *      timestamps come out absolute already — CTranslate2's `.align()`
- *      computes DTW directly over the Whisper model's cross-attention
- *      weights, see docs/engineering/stt-ctranslate2-migration.md § Decision.
+ *      whisper-stt-server's HTTP `/inference`, which returns both phrase- and
+ *      word-level segments in one pass (see whisperServer.ts). Word
+ *      timestamps come from whisper.cpp's native DTW token timestamps
+ *      (`t_dtw`, SMALL aheads preset, `flash_attn = false`), see
+ *      docs/engineering/stt-spec.md § Decision rationale.
  *   3. `shutdown()` tears down on app quit.
  *
  * Status events fan out via `statusSink` so the renderer can drive its
@@ -33,7 +32,7 @@ export interface SttManagerInitOptions {
 }
 
 export class SttManager {
-	private readonly server = new CTranslate2ServerManager();
+	private readonly server = new WhisperServerManager();
 	private modelsBaseDir: string | null = null;
 	private statusSink: ((event: SttStatusEvent) => void) | null = null;
 	private initPromise: Promise<void> | null = null;
@@ -87,11 +86,11 @@ export class SttManager {
 		});
 
 		const paths = modelPaths(modelsDir);
-		await this.server.start({ modelPath: paths.whisper, useInt8: true });
+		await this.server.start({ modelPath: paths.whisper });
 		this.emit({ phase: "transcribe" });
 	}
 
-	/** Run one transcription request through ctranslate2-server. */
+	/** Run one transcription request through whisper-stt-server. */
 	async transcribe(req: SttTranscribeRequest): Promise<SttTranscribeResponse> {
 		await this.init();
 		this.emit({ phase: "transcribe" });
@@ -99,7 +98,7 @@ export class SttManager {
 			samples: req.samples,
 			language: req.language,
 		});
-		const backend = this.server.status.backend ?? "ctranslate2-cpu";
+		const backend = phrase.backend ?? this.server.status.backend ?? "whispercpp-cpu";
 		return {
 			segments: phrase.segments,
 			wordSegments: phrase.wordSegments,

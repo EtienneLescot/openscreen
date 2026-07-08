@@ -68,12 +68,23 @@ result-*
 # Auto-caption model + ORT wasm — regenerated at build by scripts/fetch-caption-model.mjs
 /caption-assets/
 
-# Native STT artifacts — ctranslate2-server binary and model artifacts.
+# Native STT artifacts — whisper-stt-server binaries + ggml backend sidecars.
 /electron/native/bin/
 /electron/native/models/
 
 # Build cache for the native STT server (FetchContent clones + CMake build).
 /.cache/
+
+# whisper.cpp DTW POC (tools/stt-eval/whispercpp-dtw-poc) — vendored engine
+# clone, downloaded GGML models, and generated build/results artifacts.
+# See docs/engineering/stt-whispercpp-dtw-poc-plan.md.
+/tools/stt-eval/whispercpp-dtw-poc/whisper.cpp/
+/tools/stt-eval/whispercpp-dtw-poc/build-cpu/
+/tools/stt-eval/whispercpp-dtw-poc/build-vulkan/
+/tools/stt-eval/whispercpp-dtw-poc/build-cuda/
+/tools/stt-eval/whispercpp-dtw-poc/build-harness/
+/tools/stt-eval/whispercpp-dtw-poc/fixtures/*.wav
+/tools/stt-eval/whispercpp-dtw-poc/results/
 
 opencode.json
 opencode.json

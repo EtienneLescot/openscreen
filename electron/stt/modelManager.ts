@@ -1,33 +1,33 @@
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, readdir, rename, stat } from "node:fs/promises";
+import { mkdir, rename, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
 
 /**
- * Manages the lifetime of the on-disk model artifacts used by the STT stack.
+ * Manages the lifetime of the on-disk model artifact used by the STT stack.
  *
- * The model is downloaded as individual files from HuggingFace (SYSTRAN's
- * CTranslate2-format export of whisper-small). The files are placed in a
- * directory that CTranslate2's runtime loads directly.
+ * The model is a single GGML file downloaded from HuggingFace
+ * (`ggerganov/whisper.cpp` — the model-file repo predates and is separate
+ * from the `ggml-org` GitHub org the engine itself now lives under;
+ * `ggml-org/whisper.cpp` on HuggingFace is a different, access-gated repo
+ * and returns 401 on every file including README.md — confirmed by curl).
+ * whisper.cpp bakes precision into the file, so
+ * there is no runtime `--int8` flag; OpenScreen ships the q8_0 quantized
+ * `small` multilingual model by default.
  *
- * Each file is downloaded individually from HuggingFace's CDN, verified by
- * SHA-256, and written to the model directory atomically (via .partial rename)
+ * The file is verified by SHA-256 and written atomically (via .partial rename)
  * to prevent partial downloads from being treated as complete.
  *
- * VAD is gone: word timestamps come from CTranslate2's `.align()` (real DTW
- * over Whisper's cross-attention weights), which makes Silero VAD unnecessary
- * for correctness. See `docs/engineering/stt-ctranslate2-migration.md`.
- *
- * SHA-256 verification stays — a tampered or partially-downloaded file is
- * surfaced as a "hash mismatch", not silently-wrong output.
+ * Word timestamps come from whisper.cpp's native DTW token timestamps, so no
+ * separate VAD model is required. See `docs/engineering/stt-spec.md`.
  */
 
 export type SttModelId = "whisper";
 
 export interface SttModelFile {
-	/** Relative path within the model directory (e.g. "model.bin"). */
+	/** Relative path within the model directory (e.g. "ggml-small-q8_0.bin"). */
 	name: string;
 	/** HuggingFace resolve URL for this file. */
 	url: string;
@@ -40,55 +40,32 @@ export interface SttModelFile {
 export interface SttModelDescriptor {
 	/** Display + cache directory name. */
 	cacheDir: string;
-	/** HuggingFace repo identifier (e.g. "SYSTRAN/faster-whisper-small"). */
+	/** HuggingFace repo identifier (e.g. "ggerganov/whisper.cpp"). */
 	repoId: string;
-	/** List of individual model files to download. */
+	/** List of model files to download (currently a single GGML file). */
 	files: SttModelFile[];
 }
 
 const MODEL_BASE = "https://huggingface.co";
-// ponytail: SYSTRAN/faster-whisper-small was fp16 (~470 MB on disk,
-// CTranslate2 dequantizes to fp32 at load + runs Ruy/fp32 in our previous
-// build → ~0.15× RTF, i.e. 3 min for a 30 s clip on the dev's Ryzen).
-// The matching `.int8` variant ships weights already quantized to int8
-// (~150 MB) and CTranslate2's INT8 compute path produces equivalent WER
-// at ~5–10× the throughput on a real GEMM backend (oneDNN / OpenBLAS).
-// File layout (model.bin + config.json + tokenizer.json + vocabulary.txt)
-// matches the fp16 release.
-const MODEL_REPO = "SYSTRAN/faster-whisper-small.int8";
+// ponytail: this is deliberately NOT "ggml-org/whisper.cpp" — that HF repo
+// (matching the GitHub org the engine now lives under) is access-gated and
+// returns 401 Unauthorized on every file, confirmed by curl. whisper.cpp's
+// own models/download-ggml-model.sh pulls from ggerganov/whisper.cpp, the
+// long-standing public model-file repo that never moved when the engine's
+// GitHub org was renamed.
+const MODEL_REPO = "ggerganov/whisper.cpp";
+const MODEL_FILE = "ggml-small-q8_0.bin";
 
 export const STT_MODELS: Record<SttModelId, SttModelDescriptor> = {
 	whisper: {
-		cacheDir: "whisper-ct2",
+		cacheDir: "whisper-ggml",
 		repoId: MODEL_REPO,
 		files: [
 			{
-				name: "model.bin",
-				url: `${MODEL_BASE}/${MODEL_REPO}/resolve/main/model.bin`,
-				// ponytail: SHA-256 of the model.bin file from the SYSTRAN
-				// faster-whisper-small int8 release on HuggingFace. Verify
-				// against your own download before shipping a release, then
-				// pin the actual digest here and remove the null.
-				expectedSha256: null,
-				approximateBytes: 150_000_000,
-			},
-			{
-				name: "config.json",
-				url: `${MODEL_BASE}/${MODEL_REPO}/resolve/main/config.json`,
-				expectedSha256: null,
-				approximateBytes: 1_000,
-			},
-			{
-				name: "tokenizer.json",
-				url: `${MODEL_BASE}/${MODEL_REPO}/resolve/main/tokenizer.json`,
-				expectedSha256: null,
-				approximateBytes: 5_000_000,
-			},
-			{
-				name: "vocabulary.txt",
-				url: `${MODEL_BASE}/${MODEL_REPO}/resolve/main/vocabulary.txt`,
-				expectedSha256: null,
-				approximateBytes: 900_000,
+				name: MODEL_FILE,
+				url: `${MODEL_BASE}/${MODEL_REPO}/resolve/main/${MODEL_FILE}`,
+				expectedSha256: "49C8FB02B65E6049D5FA6C04F81F53B867B5EC9540406812C643F177317F779F",
+				approximateBytes: 264_000_000,
 			},
 		],
 	},
@@ -96,24 +73,18 @@ export const STT_MODELS: Record<SttModelId, SttModelDescriptor> = {
 
 export function modelPaths(baseDir: string): Record<SttModelId, string> {
 	return {
-		whisper: path.join(baseDir, STT_MODELS.whisper.cacheDir),
+		whisper: path.join(baseDir, STT_MODELS.whisper.cacheDir, MODEL_FILE),
 	};
 }
 
 /**
- * True when the unpacked CTranslate2 model directory exists and contains all
- * expected files (not just a partial download).
+ * True when the GGML model file exists and is non-empty.
  */
 export async function areModelsPresent(baseDir: string): Promise<boolean> {
 	const paths = modelPaths(baseDir);
-	const descriptor = STT_MODELS.whisper;
 	try {
 		const s = await stat(paths.whisper);
-		if (!s.isDirectory()) return false;
-		const entries = await readdir(paths.whisper);
-		const expectedNames = new Set(descriptor.files.map((f) => f.name));
-		const found = entries.filter((e) => expectedNames.has(e));
-		return found.length === descriptor.files.length;
+		return s.isFile() && s.size > 0;
 	} catch {
 		return false;
 	}
@@ -190,7 +161,6 @@ async function ensureFile(
 	expectedSha256: string | null,
 	options: DownloadOptions = {},
 ): Promise<void> {
-	// Skip if file already exists
 	if (existsSync(filePath)) {
 		const s = await stat(filePath);
 		if (s.isFile() && s.size > 0) {
@@ -238,31 +208,29 @@ export interface EnsureModelsOptions {
 	fetcher?: typeof fetch;
 }
 
-/** Ensure every required model file is present locally; downloads with progress + retry. */
+/** Ensure the GGML model file is present locally; downloads with progress + retry. */
 export async function ensureModels(opts: EnsureModelsOptions): Promise<void> {
 	const targets = (opts.only ?? (["whisper"] as SttModelId[])).map((id) => ({
 		id,
 		descriptor: STT_MODELS[id],
-		dir: modelPaths(opts.baseDir)[id],
+		filePath: modelPaths(opts.baseDir)[id],
 	}));
 
-	for (const { id, descriptor, dir } of targets) {
+	for (const { id, descriptor, filePath } of targets) {
 		if (await areModelsPresent(opts.baseDir)) continue;
 
-		await mkdir(dir, { recursive: true });
+		await mkdir(path.dirname(filePath), { recursive: true });
 
-		for (const file of descriptor.files) {
-			const filePath = path.join(dir, file.name);
-			await ensureFile(filePath, file.url, file.expectedSha256, {
-				onProgress: (bytes) =>
-					opts.onProgress?.({
-						id,
-						file: file.name,
-						downloadedBytes: bytes,
-						totalBytes: file.approximateBytes,
-					}),
-				fetcher: opts.fetcher,
-			});
-		}
+		const file = descriptor.files[0];
+		await ensureFile(filePath, file.url, file.expectedSha256, {
+			onProgress: (bytes) =>
+				opts.onProgress?.({
+					id,
+					file: file.name,
+					downloadedBytes: bytes,
+					totalBytes: file.approximateBytes,
+				}),
+			fetcher: opts.fetcher,
+		});
 	}
 }

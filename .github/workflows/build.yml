@@ -44,11 +44,9 @@ jobs:
           path: caption-assets
           key: caption-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-caption-model.mjs') }}
 
-      # ponytail: no VAD fetch here — the CTranslate2 server provides word
-      # timestamps via its built-in `.align()` (real DTW over Whisper's
-      # cross-attention weights), so the bundled Silero VAD model used by
-      # whisper.cpp is gone. See docs/engineering/stt-ctranslate2-migration.md
-      # § "What gets removed".
+      # ponytail: STT is handled by the bundled whisper-stt-server (whisper.cpp
+      # with native DTW token timestamps). No separate VAD model is fetched
+      # here. See docs/engineering/stt-spec.md for the full architecture.
 
       - name: Build Windows app
         run: npm run build:win -- --publish never
@@ -91,7 +89,8 @@ jobs:
           path: caption-assets
           key: caption-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-caption-model.mjs') }}
 
-      # ponytail: no VAD fetch here either (see build-windows comment).
+      # ponytail: STT is handled by the bundled whisper-stt-server (see the
+      # build-windows comment); no VAD model is fetched here.
       - name: Resolve macOS signing
         id: signing
         env:

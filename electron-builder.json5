@@ -31,15 +31,14 @@
   ],
   // Asset layout contract: "wallpapers/" and "cursors/" under resourcesPath must
   // align with assetBaseDir in electron/preload.ts (packaged branch).
-  // Native capture helpers + ctranslate2-server binaries live under
-  // `electron/native/bin/<platform>-<arch>/` and the per-platform sections
-  // below limit them to the matching arch in each installer.
+  // Native capture helpers + whisper-stt-server binaries (and their ggml
+  // backend sidecars) live under `electron/native/bin/<platform>-<arch>/`
+  // and the per-platform sections below limit them to the matching arch in
+  // each installer.
   //
-  // ponytail: bundled model files (used by whisper.cpp's Silero VAD) used to
-  // ship under `electron/native/models/`. CTranslate2's runtime downloads
-  // its own model into the userData cache on first use — see
-  // electron/stt/modelManager.ts — so the build-time model directory is
-  // gone too.
+  // ponytail: the STT model (ggml-small-q8_0.bin) is downloaded into the
+  // userData cache on first use by electron/stt/modelManager.ts, so no model
+  // files are bundled at build time.
   "extraResources": [
     {
       "from": "public/wallpapers",
@@ -88,7 +87,14 @@
     "icon": "icons/icons/png",
     "artifactName": "${productName}-Linux-${version}.${ext}",
     "maintainer": "Etienne Lescot <etiennelescot@gmail.com>",
-    "category": "AudioVideo"
+    "category": "AudioVideo",
+    "extraResources": [
+      {
+        "from": "electron/native/bin",
+        "to": "electron/native/bin",
+        "filter": ["linux-*/*"]
+      }
+    ]
   },
   "win": {
     "target": [

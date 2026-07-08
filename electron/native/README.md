@@ -64,7 +64,6 @@ Current V2 JSON shape:
   "videoWidth": 1920,
   "videoHeight": 1080,
   "fps": 60,
-  "preferSoftwareEncoder": false,
   "captureSystemAudio": false,
   "captureMic": false,
   "microphoneDeviceId": "default",
@@ -84,49 +83,18 @@ Current V2 JSON shape:
 
 The current helper implementation supports display/window video capture, system audio loopback, selected-microphone capture, Media Foundation webcam capture, and a DirectShow webcam fallback for virtual cameras that are not exposed through Media Foundation. Webcam frames are currently composed into the primary MP4 as a bottom-right picture-in-picture overlay. Browser `deviceId` values do not always map to Media Foundation symbolic links or WASAPI endpoint IDs, so the renderer passes both browser IDs and user-visible device names. For microphones, the helper tries the requested WASAPI endpoint ID first, then resolves an active capture endpoint by `microphoneDeviceName`, then falls back to the default endpoint. For webcams, Electron resolves a matching DirectShow filter CLSID for the selected label; the helper uses Media Foundation first, then that exact DirectShow filter when the requested camera is absent from Media Foundation.
 
-Encoder selection: by default the helper keeps the existing sink-writer path first. If that path fails while setting up H.264, it retries with the Microsoft software H.264 encoder (`mfh264enc.dll`). The key of this retry is registering that encoder locally in the helper process via `MFTRegisterLocalByCLSID`, which makes a software H.264 encoder available even when the machine's hardware encoders are missing or broken; hardware transforms are disabled for the retry only as a secondary guard so the sink writer prefers the locally registered software encoder, not as the fallback mechanism itself. Set `preferSoftwareEncoder: true` in the helper JSON, or set `OPENSCREEN_WGC_PREFER_SOFTWARE_ENCODER=true` before launching Electron, to force the software path from the first attempt.
-
-The helper reports the outcome through the `encoder-selection` stdout event (`video` is `default`, `software-preferred`, or `software-fallback`). When the app sees `software-fallback` — the default encoder failed and the helper switched on its own — it shows a small dismissible notice in the recording HUD with a "Don't show again" option, because software encoding can raise CPU usage. An explicit `software-preferred` selection shows no notice, and the event stays available for diagnostics either way.
-
-Encoder diagnostic on final sink-writer failure: when the final `MFCreateSinkWriterFromURL` attempt fails, the helper logs the registered H.264 video encoder MFT count (via `MFTEnumEx`), the registered AAC encoder count when audio was requested, and the hex HRESULT. If no H.264 encoder is registered, it additionally emits the four-bullet actionable error (missing Media Feature Pack / GPU driver registration / empty `HKLM:\SOFTWARE\Microsoft\Windows Media Foundation\Transforms` / reboot). If an H.264 encoder IS registered but the sink writer still failed, it logs a hint pointing at invalid output path, missing MP4 mux, or GPU driver incompatibility. There is still no fail-fast pre-flight gate because `MFTEnumEx` and `MFCreateSinkWriterFromURL` can disagree about which H.264 encoders are available in non-interactive / Session 0 contexts.
+Encoder diagnostic on sink-writer failure: when `MFCreateSinkWriterFromURL` fails, the helper logs the registered H.264 video encoder MFT count (via `MFTEnumEx`), the registered AAC encoder count when audio was requested, and the hex HRESULT. If no H.264 encoder is registered, it additionally emits the four-bullet actionable error (missing Media Feature Pack / GPU driver registration / empty `HKLM:\SOFTWARE\Microsoft\Windows Media Foundation\Transforms` / reboot). If an H.264 encoder IS registered but the sink writer still failed, it logs a hint pointing at invalid output path, missing MP4 mux, or GPU driver incompatibility. The diagnostic runs only on the failure path — there is no pre-flight gating check, because `MFTEnumEx` and `MFCreateSinkWriterFromURL` can disagree about which H.264 encoders are "available" in non-interactive / Session 0 contexts, and a pre-flight zero-count would block a recording the sink writer can otherwise complete.
 
 Smoke-test the helper with:
 
 ```powershell
 npm run test:wgc-helper:win
-npm run test:wgc-helper:win -- --software-encoder
-npm run test:wgc-helper:win -- --software-fallback
 npm run test:wgc-window:win
 npm run test:wgc-audio:win
 npm run test:wgc-mic:win
 npm run test:wgc-mixed-audio:win
 npm run test:wgc-webcam:win
 ```
-
-`--software-encoder` keeps testing the explicit `software-preferred` path with
-`preferSoftwareEncoder: true`. `--software-fallback` keeps
-`preferSoftwareEncoder: false` and sets
-`OPENSCREEN_WGC_TEST_INJECT_DEFAULT_SINK_WRITER_FAILURE_ONCE=1` only for the helper
-child process. At the first default/non-software `MFCreateSinkWriterFromURL` call, the
-helper returns `HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND)` (`0x80070003`) exactly once.
-The existing retry then performs the real local Microsoft software H.264 MFT registration,
-creates the real fallback sink writer, captures and encodes real frames, and must report
-`software-fallback`.
-
-For a full-application test, set the same test-only variable before launching Electron and
-remove it afterward:
-
-```powershell
-$env:OPENSCREEN_WGC_TEST_INJECT_DEFAULT_SINK_WRITER_FAILURE_ONCE = "1"
-npm run dev
-Remove-Item Env:OPENSCREEN_WGC_TEST_INJECT_DEFAULT_SINK_WRITER_FAILURE_ONCE
-```
-
-Only the exact value `1` enables this native test hook. It is not a preference or UI option,
-and it is inert when absent. This is deterministic fault injection at the original
-sink-writer failure boundary. It proves the application's automatic fallback behavior after
-that controlled failure; it does **not** claim validation on a naturally affected machine
-with a genuinely broken GPU driver or naturally missing hardware H.264 MFT.
 
 To validate a specific native webcam manually:
 
@@ -143,3 +111,9 @@ $env:OPENSCREEN_WGC_TEST_MICROPHONE_DEVICE_NAME = "Microphone (NVIDIA Broadcast)
 npm run test:wgc-mic:win
 Remove-Item Env:OPENSCREEN_WGC_TEST_MICROPHONE_DEVICE_NAME
 ```
+
+## STT helper
+
+The speech-to-text helper (`whisper-stt-server`) is built separately from the
+capture helpers. See `docs/engineering/stt-spec.md` for the architecture and
+`scripts/build-whisper-stt.sh` for the build command.
