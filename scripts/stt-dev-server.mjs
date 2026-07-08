@@ -1,13 +1,13 @@
 /**
- * Dev-mode fallback STT server for when the CTranslate2 C++ binary hasn't been
+ * Dev-mode fallback STT server for when the whisper.cpp C++ binary hasn't been
  * built yet. Listens on a configurable port and responds to /inference with
  * mock transcription data so the renderer and IPC pipeline can be tested end-to-end.
  *
  * Usage:
  *   node scripts/stt-dev-server.mjs --port 20199
  *
- * Then set OPENSCREEN_CT2_SERVER_EXE to a script that spawns this,
- * or copy the binary name to electron/native/bin/win32-x64/ctranslate2-server-cpu.exe
+ * Then set OPENSCREEN_WHISPER_SERVER_EXE to a script that spawns this,
+ * or copy the binary name to electron/native/bin/win32-x64/whisper-stt-server.exe
  */
 
 import { readFileSync, writeFileSync } from "node:fs";
@@ -83,7 +83,7 @@ function generateMockTranscript(audioDurationSec, language) {
 		"using",
 		"the",
 		"new",
-		"CTranslate2",
+		"whisper.cpp",
 		"backend",
 	];
 
@@ -136,6 +136,7 @@ function generateMockTranscript(audioDurationSec, language) {
 	return {
 		language,
 		detected_language: language,
+		backend: "whispercpp-cpu",
 		segments,
 	};
 }

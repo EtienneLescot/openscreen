@@ -1,13 +1,13 @@
-// End-to-end STT smoke test: spawns ctranslate2-server directly (same
-// binary/args as ctranslate2Server.ts) and transcribes the actual user
-// recording (12-second webm), same way the IPC handler does.
+// End-to-end STT smoke test: spawns whisper-stt-server directly (same
+// binary/args as whisperServer.ts) and transcribes the actual user recording
+// (12-second webm), same way the IPC handler does.
 //
 // Run: node scripts/e2e-stt-smoke.mjs
 //
 // ponytail: the recording path + the desktop model cache layout both match
-// what production hands to the ctranslate2-server wrapper. If you want to
-// point this at a different recording, override RECORDING at runtime:
-//   RECORDING=/path/to/audio.webm MODEL_DIR=/path/to/ct2-model node scripts/e2e-stt-smoke.mjs
+// what production hands to the whisper-stt-server wrapper. If you want to
+// point this at a different recording or model, override at runtime:
+//   RECORDING=/path/to/audio.webm MODEL=/path/to/ggml-small-q8_0.bin node scripts/e2e-stt-smoke.mjs
 
 import { spawn } from "node:child_process";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
@@ -24,22 +24,25 @@ const RECORDING = join(
 	"recordings",
 	"recording-1783174040055.webm",
 );
-const CT2_BIN = join(
+const WHISPER_BIN = join(
 	ROOT,
 	"electron",
 	"native",
 	"bin",
 	"win32-x64",
-	process.platform === "win32"
-		? "ctranslate2-server-ctranslate2-cpu.exe"
-		: "ctranslate2-server-ctranslate2-cpu",
+	process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
 );
-// ponytail: the unpacked model directory. CTranslate2's runtime expects a
-// directory (multiple files), not a single .bin blob — production hands it
-// whatever modelManager.ensureModels() left under userData/stt-models/whisper-ct2.
-const MODEL_DIR =
-	process.env.MODEL_DIR ||
-	join(process.env.APPDATA || tmpdir(), "Electron", "stt-models", "whisper-ct2");
+// ponytail: the GGML model file. Production hands it whatever
+// modelManager.ensureModels() left under userData/stt-models/whisper-ggml/ggml-small-q8_0.bin.
+const MODEL =
+	process.env.MODEL ||
+	join(
+		process.env.APPDATA || tmpdir(),
+		"Electron",
+		"stt-models",
+		"whisper-ggml",
+		"ggml-small-q8_0.bin",
+	);
 
 async function extractWav(src, dst) {
 	const ffmpeg = spawn("ffmpeg", ["-y", "-i", src, "-ar", "16000", "-ac", "1", "-f", "wav", dst], {
@@ -62,18 +65,18 @@ async function main() {
 	const tmpDir = join(tmpdir(), "openscreen-stt-e2e");
 	await mkdir(tmpDir, { recursive: true });
 	const wavPath = join(tmpDir, "audio.wav");
-	console.log(`Converting ${RECORDING} → ${wavPath}`);
+	console.log(`Converting ${RECORDING} -> ${wavPath}`);
 	await extractWav(RECORDING, wavPath);
 	const { size } = await stat(wavPath);
 	console.log(`WAV ready: ${size} bytes`);
 
-	// 2. Spawn ctranslate2-server directly (skip the wrapper module to keep
+	// 2. Spawn whisper-stt-server directly (skip the wrapper module to keep
 	//    the smoke test dependency-light).
 	const port = 18800;
-	console.log(`Spawning ctranslate2-server on 127.0.0.1:${port}`);
+	console.log(`Spawning whisper-stt-server on 127.0.0.1:${port}`);
 	const server = spawn(
-		CT2_BIN,
-		["--model", MODEL_DIR, "--port", String(port), "--host", "127.0.0.1"],
+		WHISPER_BIN,
+		["--model", MODEL, "--port", String(port), "--host", "127.0.0.1"],
 		{ stdio: ["ignore", "pipe", "pipe"] },
 	);
 	server.stderr.on("data", (c) => {
@@ -109,7 +112,8 @@ async function main() {
 	const json = await response.json();
 	const elapsed = Date.now() - t0;
 	console.log(`Inference took ${elapsed}ms`);
-	console.log("--- ctranslate2-server output ---");
+	console.log("--- whisper-stt-server output ---");
+	console.log(`backend: ${json.backend}`);
 	if (json.text) console.log(`text: ${JSON.stringify(json.text)}`);
 	if (Array.isArray(json.segments)) {
 		for (const seg of json.segments) {

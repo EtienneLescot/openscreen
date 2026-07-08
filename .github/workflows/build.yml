@@ -44,11 +44,9 @@ jobs:
           path: caption-assets
           key: caption-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-caption-model.mjs') }}
 
-      # ponytail: no VAD fetch here — the CTranslate2 server provides word
-      # timestamps via its built-in `.align()` (real DTW over Whisper's
-      # cross-attention weights), so the bundled Silero VAD model used by
-      # whisper.cpp is gone. See docs/engineering/stt-ctranslate2-migration.md
-      # § "What gets removed".
+      # ponytail: STT is handled by the bundled whisper-stt-server (whisper.cpp
+      # with native DTW token timestamps). No separate VAD model is fetched
+      # here. See docs/engineering/stt-spec.md for the full architecture.
 
       - name: Build Windows app
         run: npm run build:win -- --publish never
@@ -58,33 +56,6 @@ jobs:
         with:
           name: openscreen-windows
           path: release/**/Openscreen.Setup.*.exe
-          if-no-files-found: error
-          retention-days: 30
-
-  build-windows-store:
-    name: Windows Store package
-    runs-on: windows-latest
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Setup Node.js
-        uses: ./.github/actions/setup
-
-      - name: Cache caption assets
-        uses: actions/cache@v4
-        with:
-          path: caption-assets
-          key: caption-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-caption-model.mjs') }}
-
-      - name: Build Windows Store package
-        run: npm run build:win:store -- --publish never
-
-      - name: Upload Windows Store package
-        uses: actions/upload-artifact@v4
-        with:
-          name: openscreen-windows-store
-          path: release/**/Openscreen.Setup.*.appx
           if-no-files-found: error
           retention-days: 30
 
@@ -118,7 +89,8 @@ jobs:
           path: caption-assets
           key: caption-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-caption-model.mjs') }}
 
-      # ponytail: no VAD fetch here either (see build-windows comment).
+      # ponytail: STT is handled by the bundled whisper-stt-server (see the
+      # build-windows comment); no VAD model is fetched here.
       - name: Resolve macOS signing
         id: signing
         env:

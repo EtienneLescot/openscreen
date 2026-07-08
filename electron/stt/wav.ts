@@ -4,9 +4,9 @@ import path from "node:path";
 
 /**
  * WAV serialization + temp-file hygiene shared by every native STT backend
- * the Electron main process talks to. Engine-agnostic on purpose: the new
- * CTranslate2 server (and any future replacement) reads the same 16-bit LE
- * PCM, 16 kHz, mono format whisper.cpp used to, so we don't pay the cost of
+ * the Electron main process talks to. Engine-agnostic on purpose: the
+ * whisper.cpp helper reads the same 16-bit LE PCM, 16 kHz, mono format, so we
+ * don't pay the cost of
  * a multiplexer here.
  *
  * ponytail: a per-call mkdtemp is genuinely cheap (~1ms on every platform
