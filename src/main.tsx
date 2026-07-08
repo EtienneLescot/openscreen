@@ -2,11 +2,8 @@ import React from "react";
 import ReactDOM from "react-dom/client";
 import App from "./App.tsx";
 import { I18nProvider } from "./contexts/I18nContext";
-<<<<<<< HEAD
 import { clearStaleSourceCache } from "./lib/exporter/localSourceFile";
-=======
 import "./hooks/rendererConsoleForwarder";
->>>>>>> a46ac8c (feat(ai-edition): make the Axcut editor the only editor + fix 0-byte recording + wire cursor panel + dead-code purge)
 import "./index.css";
 
 const windowType = new URLSearchParams(window.location.search).get("windowType") || "";
