@@ -13,23 +13,15 @@ import type {
 	AxcutTimelineOperation,
 } from "@/native/contracts";
 import {
+	getReasoningEffortLabel,
+	getReasoningEffortOptions,
 	PROVIDER_DEFINITIONS,
-	REASONING_EFFORT_OPTIONS,
 	type ReasoningEffort,
 } from "../../../electron/ai-edition/provider-registry";
 import { computeBudget } from "./chatBudget";
 import { ChatHistoryModal, SourceTranscriptModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 import { ProviderSettings } from "./ProviderSettings";
-
-const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
-	none: "None",
-	minimal: "Minimal",
-	low: "Low",
-	medium: "Medium",
-	high: "High",
-	xhigh: "Extra high",
-};
 
 export type LeftTab = "chat" | "media";
 
@@ -913,9 +905,10 @@ function ChatStripPanel() {
 	);
 	const currentReasoningEffort: ReasoningEffort =
 		(llmConfig?.reasoningEffort as ReasoningEffort | undefined) ?? "medium";
-	const reasoningLabel = providerSupportsReasoning
-		? REASONING_EFFORT_LABELS[currentReasoningEffort]
-		: null;
+	const reasoningLabel =
+		providerSupportsReasoning && llmConfig
+			? getReasoningEffortLabel(llmConfig.provider, currentReasoningEffort)
+			: null;
 
 	const selectReasoningEffort = useCallback(
 		async (effort: ReasoningEffort) => {
@@ -1622,7 +1615,7 @@ function ChatStripPanel() {
 										zIndex: 1000,
 									}}
 								>
-									{REASONING_EFFORT_OPTIONS.map((option) => (
+									{getReasoningEffortOptions(llmConfig?.provider ?? "").map((option) => (
 										<button
 											type="button"
 											key={option}
@@ -1645,7 +1638,7 @@ function ChatStripPanel() {
 												fontSize: 12.5,
 											}}
 										>
-											{REASONING_EFFORT_LABELS[option]}
+											{getReasoningEffortLabel(llmConfig?.provider ?? "", option)}
 											{option === currentReasoningEffort ? <Check size={12} /> : null}
 										</button>
 									))}

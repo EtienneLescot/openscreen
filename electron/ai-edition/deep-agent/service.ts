@@ -194,6 +194,11 @@ export interface InvokeResult {
 	text: string;
 	document: AxcutDocument;
 	mutated: boolean;
+	/** Set when the stream finished without producing a final text (e.g. all
+	 * chunks had empty `content`, or the provider returned no
+	 * `content_block_delta` events). Carries a short diagnostic describing
+	 * what the LangChain layer actually saw. */
+	reason?: string;
 }
 
 export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeResult> {
@@ -217,6 +222,11 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 
 	const messages = [...history, { role: "user" as const, content: userMessage }];
 
+	// ponytail: declared outside the try block so the catch handler can
+	// include any chunks we already saw in the diagnostic when the stream
+	// throws partway through.
+	let chatModelChunks: unknown[] = [];
+
 	try {
 		// ponytail: streamEvents (legacy mode, no `version: "v3"`) returns the
 		// same on_chat_model_stream / on_tool_start / on_tool_end / on_chain_end
@@ -229,6 +239,7 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		).streamEvents({ messages }, undefined);
 
 		let finalText = "";
+		const nonChatEvents: Array<{ event: string; name: string }> = [];
 
 		for await (const event of stream) {
 			const eventType = typeof event.event === "string" ? event.event : "";
@@ -237,6 +248,7 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 
 			if (eventType === "on_chat_model_stream") {
 				const chunk = data?.chunk as Record<string, unknown> | undefined;
+				if (chunk) chatModelChunks.push(chunk);
 				const content = chunk?.content;
 				const delta = extractDelta(content);
 				if (delta) {
@@ -250,22 +262,56 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				sink.toolEnd(name, true);
 			} else if (eventType === "on_tool_error") {
 				sink.toolEnd(name, false, extractError(data));
+			} else if (eventType) {
+				nonChatEvents.push({ event: eventType, name });
 			}
 		}
 
 		const mutated = JSON.stringify(holder.current) !== initialDocumentJSON;
 		if (!finalText.trim()) {
-			sink.error("Empty response from model.");
-			return { text: "", document: holder.current, mutated };
+			// ponytail: surface the upstream payload so we can see why MiniMax
+			// (or any other anthropic-shaped provider) is producing no text.
+			// The chat-model chunks are the post-parse LangChain views of
+			// each SSE event; their `content`/`additional_kwargs`/
+			// `response_metadata` fields tell us whether the issue is in the
+			// wire format, the parser, or our `extractDelta` shape. Capped at
+			// 1 chunk + a 1kB slice to keep the toast readable.
+			const lastChunk = chatModelChunks[chatModelChunks.length - 1];
+			const sample = lastChunk
+				? JSON.stringify(lastChunk).slice(0, 1024)
+				: "(no on_chat_model_stream events)";
+			const reason =
+				`Empty response from model (provider=${model.provider}, ` +
+				`model=${model.model}, chat_model_chunks=${chatModelChunks.length}, ` +
+				`other_events=${nonChatEvents.length}:${nonChatEvents
+					.slice(0, 5)
+					.map((e) => e.event)
+					.join(",")}). Last chunk: ${sample}`;
+			sink.error(reason);
+			return { text: "", document: holder.current, mutated, reason };
 		}
 		return { text: finalText.trim(), document: holder.current, mutated };
 	} catch (err) {
-		const message = err instanceof Error ? err.message : String(err);
-		sink.error(message);
+		// ponytail: surface the LangChain/HTTP error (with name + truncated
+		// stack) so we can tell whether the stream threw (e.g. MiniMax
+		// returning a non-Anthropic JSON envelope that the SDK rejects) or
+		// completed with empty content. Mirrors the diagnostic shape used in
+		// the success-but-empty path above.
+		const e = err instanceof Error ? err : new Error(String(err));
+		const stackHead = (e.stack ?? "").split("\n").slice(0, 3).join(" | ");
+		const reason = `Empty response from model (provider=${model.provider}, ` +
+			`model=${model.model}, error=${e.name}: ${e.message}` +
+			(stackHead ? ` stack=${stackHead}` : "") +
+			`). Last chunk: ${(chatModelChunks[chatModelChunks.length - 1]
+				? JSON.stringify(chatModelChunks[chatModelChunks.length - 1])
+				: "(no on_chat_model_stream events)"
+			).slice(0, 1024)}`;
+		sink.error(reason);
 		return {
 			text: "",
 			document: holder.current,
 			mutated: JSON.stringify(holder.current) !== initialDocumentJSON,
+			reason,
 		};
 	}
 }

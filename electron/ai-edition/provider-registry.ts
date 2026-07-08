@@ -114,10 +114,12 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
 		supportsReasoningEffort: true,
 		wireProtocol: "anthropic",
 		// ponytail: docs (platform.minimax.io) tell you to set ANTHROPIC_BASE_URL
-		// to https://api.minimax.io/anthropic — but the real `/messages` path
-		// is /anthropic/v1/messages, and `/anthropic/messages` returns a 404
-		// from the upstream gateway. Empirically verified against the live API.
-		baseUrl: "https://api.minimax.io/anthropic/v1",
+		// to https://api.minimax.io/anthropic, with the real `/messages` path
+		// at /anthropic/v1/messages — same convention as api.anthropic.com.
+		// Every consumer of this baseUrl (the raw-fetch path in llm-call.ts
+		// and the @anthropic-ai/sdk-backed ChatAnthropic in chat-model.ts)
+		// appends `/v1/messages` itself, so this must NOT include `/v1`.
+		baseUrl: "https://api.minimax.io/anthropic",
 		envKeys: ["MINIMAX_API_KEY"],
 		setupHint: "Use MINIMAX_API_KEY or paste a MiniMax API key.",
 	},
@@ -128,7 +130,7 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
 		authKind: "api-key",
 		supportsReasoningEffort: true,
 		wireProtocol: "anthropic",
-		baseUrl: "https://api.minimax.io/anthropic/v1",
+		baseUrl: "https://api.minimax.io/anthropic",
 		envKeys: ["MINIMAX_TOKEN_PLAN_API_KEY"],
 		setupHint: "Use MINIMAX_TOKEN_PLAN_API_KEY or paste a MiniMax token-plan API key.",
 	},
@@ -153,6 +155,42 @@ export const REASONING_EFFORT_OPTIONS = [
 	"xhigh",
 ] as const;
 export type ReasoningEffort = (typeof REASONING_EFFORT_OPTIONS)[number];
+
+/**
+ * Effort options to show in the provider settings dropdown for a given
+ * provider. Most providers accept the full graduated scale, but MiniMax's
+ * `thinking` block is binary (on/off, see agent-provider-capabilities.ts) —
+ * showing all six tiers would imply a granularity it doesn't have, since
+ * "minimal" through "xhigh" all wire up identically.
+ */
+export function getReasoningEffortOptions(providerId: string): readonly ReasoningEffort[] {
+	if (providerId === "minimax" || providerId === "minimax-token-plan") {
+		return ["none", "medium"];
+	}
+	return REASONING_EFFORT_OPTIONS;
+}
+
+/**
+ * Display label per effort value. SSOT for both the provider-settings
+ * dropdown (ProviderSettings.tsx) and the in-chat quick-pick popover
+ * (LeftPanel.tsx) — MiniMax overrides "medium" to "On" since its `thinking`
+ * block is binary, not a graduated tier (see getReasoningEffortOptions).
+ */
+export function getReasoningEffortLabel(providerId: string, effort: ReasoningEffort): string {
+	if ((providerId === "minimax" || providerId === "minimax-token-plan") && effort === "medium") {
+		return "On";
+	}
+	return REASONING_EFFORT_LABELS[effort];
+}
+
+export const REASONING_EFFORT_LABELS: Record<ReasoningEffort, string> = {
+	none: "None",
+	minimal: "Minimal",
+	low: "Low",
+	medium: "Medium",
+	high: "High",
+	xhigh: "Extra high",
+};
 
 /**
  * Coerce free-form provider strings (including historical aliases and the
