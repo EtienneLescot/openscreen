@@ -8,7 +8,6 @@ build/
 
 # Generated files
 .bundle-stats
-next/dist/
 
 # Misc
 .DS_Store

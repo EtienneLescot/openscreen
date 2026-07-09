@@ -1,0 +1,80 @@
+.footer {
+	border-top: 1px solid var(--os-border-soft);
+	background: var(--os-surface);
+	padding: 48px 28px 28px;
+}
+
+.inner {
+	max-width: 1040px;
+	margin: 0 auto;
+}
+
+.columns {
+	display: grid;
+	grid-template-columns: 1.4fr 1fr 1fr;
+	gap: 32px;
+	margin-bottom: 36px;
+}
+
+@media (max-width: 700px) {
+	.columns {
+		grid-template-columns: 1fr;
+		gap: 28px;
+	}
+}
+
+.brand {
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 10px;
+}
+
+.brandLogo {
+	width: 20px;
+	height: 20px;
+	object-fit: contain;
+}
+
+.brandName {
+	font-size: 14px;
+	font-weight: 600;
+	color: var(--os-fg-emphasis);
+}
+
+.brandDescription {
+	margin: 0;
+	font-size: 12.5px;
+	line-height: 1.6;
+	color: var(--os-muted);
+	max-width: 280px;
+}
+
+.colTitle {
+	font-size: 11.5px;
+	font-weight: 600;
+	color: var(--os-fg-2);
+	margin-bottom: 12px;
+}
+
+.colLinks {
+	display: flex;
+	flex-direction: column;
+	gap: 9px;
+}
+
+.colLinks a {
+	font-size: 12.5px;
+	color: var(--os-muted);
+}
+
+.colLinks a:hover {
+	color: var(--os-accent);
+}
+
+.bottomBar {
+	border-top: 1px solid var(--os-border-soft);
+	padding-top: 20px;
+	font-size: 11.5px;
+	color: var(--os-meta);
+}
