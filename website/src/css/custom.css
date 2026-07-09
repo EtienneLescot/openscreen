@@ -1,27 +1,432 @@
 /**
- * OpenScreen docs site — global customizations.
- * Mostly relying on Infima variables; tweak accent here.
+ * OpenScreen docs site — global theme.
+ *
+ * Tokens and light/dark values are lifted verbatim from the OpenScreen
+ * Design System ("OpenScreen Docs Site.dc.html", claude.ai/design) —
+ * same --os-* names, same values, including its light-theme token swap.
+ * Infima's variables are retargeted at --os-* instead of layering a
+ * separate override on top, so the whole site — navbar, sidebar, TOC,
+ * footer, code blocks — inherits the exact design palette in both modes.
  */
 
-:root {
-	--ifm-color-primary: #6366f1;
-	--ifm-color-primary-dark: #4f46e5;
-	--ifm-color-primary-darker: #4338ca;
-	--ifm-color-primary-darkest: #3730a3;
-	--ifm-color-primary-light: #818cf8;
-	--ifm-color-primary-lighter: #a5b4fc;
-	--ifm-color-primary-lightest: #c7d2fe;
-	--ifm-code-font-size: 95%;
-	--docusaurus-highlighted-code-line-bg: rgba(0, 0, 0, 0.1);
+:root,
+[data-theme="dark"] {
+	--os-bg: #080a0d;
+	--os-surface: #0f1216;
+	--os-surface-1: #14171c;
+	--os-surface-2: #1a1e25;
+	--os-surface-3: #232830;
+	--os-surface-hi: #2b313b;
+	--os-border: rgba(255, 255, 255, 0.09);
+	--os-border-soft: rgba(255, 255, 255, 0.06);
+	--os-border-hi: #333a45;
+	--os-fg-emphasis: #ffffff;
+	--os-fg-2: #f5f7fa;
+	--os-fg: #e9edf3;
+	--os-muted: #828c99;
+	--os-meta: #565f6b;
+	--os-accent: #10b981;
+	--os-brand-lo: #0d986a;
+	--os-accent-soft: rgba(16, 185, 129, 0.14);
+	--os-accent-wash: rgba(16, 185, 129, 0.07);
+	--os-accent-border: rgba(16, 185, 129, 0.26);
+	--os-accent-ring: rgba(16, 185, 129, 0.32);
+	--os-danger: #f87171;
+	--os-danger-soft: rgba(248, 113, 113, 0.14);
+	--os-annotation: #fbbf24;
+	--os-annotation-wash: rgba(251, 191, 36, 0.14);
+	--os-speed: #fb923c;
+	--os-speed-wash: rgba(251, 146, 60, 0.14);
+	--os-nav-bg: rgba(8, 10, 13, 0.82);
+	--os-elev-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 12px 28px -12px rgba(0, 0, 0, 0.5);
+	--os-elev-pop: 0 24px 60px -20px rgba(0, 0, 0, 0.65);
 }
 
-[data-theme="dark"] {
-	--ifm-color-primary: #a5b4fc;
-	--ifm-color-primary-dark: #818cf8;
-	--ifm-color-primary-darker: #6366f1;
-	--ifm-color-primary-darkest: #4f46e5;
-	--ifm-color-primary-light: #c7d2fe;
-	--ifm-color-primary-lighter: #e0e7ff;
-	--ifm-color-primary-lightest: #eef2ff;
-	--docusaurus-highlighted-code-line-bg: rgba(255, 255, 255, 0.1);
+[data-theme="light"] {
+	--os-bg: #fafbfc;
+	--os-surface: #ffffff;
+	--os-surface-1: #ffffff;
+	--os-surface-2: #f1f3f5;
+	--os-surface-3: #e6e9ec;
+	--os-surface-hi: #d5d9e0;
+	--os-border: rgba(15, 23, 32, 0.1);
+	--os-border-soft: rgba(15, 23, 32, 0.07);
+	--os-border-hi: #ced3da;
+	--os-fg-emphasis: #0d1117;
+	--os-fg-2: #23272e;
+	--os-fg: #3a3f47;
+	--os-muted: #6b7280;
+	--os-meta: #98a0aa;
+	--os-accent: #0d9668;
+	--os-brand-lo: #0b7f59;
+	--os-accent-soft: rgba(13, 150, 104, 0.11);
+	--os-accent-wash: rgba(13, 150, 104, 0.06);
+	--os-accent-border: rgba(13, 150, 104, 0.25);
+	--os-accent-ring: rgba(13, 150, 104, 0.28);
+	--os-danger: #dc2626;
+	--os-danger-soft: rgba(220, 38, 38, 0.11);
+	--os-annotation: #b45309;
+	--os-annotation-wash: rgba(180, 83, 9, 0.11);
+	--os-speed: #c2410c;
+	--os-speed-wash: rgba(194, 65, 12, 0.11);
+	--os-nav-bg: rgba(255, 255, 255, 0.82);
+	--os-elev-card: 0 1px 2px rgba(15, 23, 32, 0.06), 0 12px 28px -12px rgba(15, 23, 32, 0.12);
+	--os-elev-pop: 0 24px 60px -20px rgba(15, 23, 32, 0.18);
+}
+
+:root {
+	--ifm-color-primary: var(--os-accent);
+	--ifm-color-primary-dark: var(--os-brand-lo);
+	--ifm-color-primary-darker: color-mix(in srgb, var(--os-accent) 80%, black);
+	--ifm-color-primary-darkest: color-mix(in srgb, var(--os-accent) 65%, black);
+	--ifm-color-primary-light: color-mix(in srgb, var(--os-accent) 85%, white);
+	--ifm-color-primary-lighter: color-mix(in srgb, var(--os-accent) 70%, white);
+	--ifm-color-primary-lightest: color-mix(in srgb, var(--os-accent) 45%, white);
+	--ifm-code-font-size: 95%;
+	--docusaurus-highlighted-code-line-bg: rgba(127, 127, 127, 0.12);
+
+	--ifm-background-color: var(--os-bg);
+	--ifm-background-surface-color: var(--os-surface-1);
+	--ifm-font-color-base: var(--os-fg);
+	--ifm-heading-color: var(--os-fg-emphasis);
+
+	--ifm-color-content: var(--os-fg);
+	--ifm-color-content-secondary: var(--os-muted);
+	--ifm-color-emphasis-0: var(--os-bg);
+	--ifm-color-emphasis-100: var(--os-surface);
+	--ifm-color-emphasis-200: var(--os-surface-2);
+	--ifm-color-emphasis-300: var(--os-border-hi);
+	--ifm-color-emphasis-400: var(--os-border-hi);
+	--ifm-color-emphasis-600: var(--os-muted);
+	--ifm-color-emphasis-700: var(--os-fg-2);
+	--ifm-color-emphasis-800: var(--os-fg-2);
+	--ifm-color-emphasis-900: var(--os-fg-emphasis);
+
+	--ifm-hero-background-color: var(--os-bg);
+	--ifm-hero-text-color: var(--os-fg-2);
+
+	--ifm-navbar-background-color: var(--os-nav-bg);
+	--ifm-navbar-link-color: var(--os-fg-2);
+	--ifm-navbar-link-hover-color: var(--os-fg-emphasis);
+	--ifm-navbar-shadow: none;
+
+	--ifm-footer-background-color: var(--os-surface);
+	--ifm-footer-color: var(--os-muted);
+	--ifm-footer-link-color: var(--os-muted);
+	--ifm-footer-link-hover-color: var(--os-accent);
+	--ifm-footer-title-color: var(--os-fg-2);
+
+	--ifm-card-background-color: var(--os-surface-1);
+	--ifm-toc-border-color: var(--os-border-soft);
+	--ifm-table-border-color: var(--os-border);
+	--ifm-table-stripe-background: var(--os-surface);
+
+	--ifm-code-background: var(--os-surface-2);
+	--ifm-pre-background: var(--os-surface-1);
+
+	--ifm-alert-background-color: var(--os-annotation-wash);
+	--ifm-alert-border-color: var(--os-annotation);
+	--ifm-alert-color: var(--os-fg-2);
+
+	--ifm-blockquote-color: var(--os-fg-2);
+	--ifm-blockquote-border-color: var(--os-border);
+
+	--ifm-menu-color: var(--os-fg-2);
+	--ifm-menu-color-background-active: var(--os-accent-soft);
+	--ifm-menu-color-background-hover: var(--os-surface-2);
+	--ifm-scrollbar-track-background-color: var(--os-surface);
+	--ifm-scrollbar-thumb-background-color: var(--os-surface-3);
+	--ifm-scrollbar-thumb-hover-background-color: var(--os-border-hi);
+}
+
+body {
+	background: var(--os-bg);
+}
+
+/* ---- navbar ----
+   Matches "OpenScreen Docs Site.dc.html" header 1:1: 60px height,
+   28px side padding, 18px item gap, divider after the brand lockup,
+   muted secondary nav links, a bordered icon-box theme toggle, a
+   bordered GitHub pill, and a filled Download pill — in that order. */
+
+.navbar {
+	height: 60px;
+	min-height: 60px;
+	padding: 0 28px;
+	backdrop-filter: blur(16px) saturate(140%);
+	border-bottom: 1px solid var(--os-border-soft);
+}
+
+.navbar__inner {
+	gap: 18px;
+}
+
+.navbar__items {
+	gap: 4px;
+}
+
+.navbar__brand {
+	gap: 9px;
+	margin-right: 18px;
+	position: relative;
+	padding-right: 18px;
+}
+
+.navbar__brand::after {
+	content: "";
+	position: absolute;
+	right: 0;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 1px;
+	height: 20px;
+	background: var(--os-border);
+}
+
+.navbar__logo {
+	width: 24px;
+	height: 24px;
+}
+
+.navbar__title {
+	font-size: 15px;
+	font-weight: 600;
+	letter-spacing: -0.015em;
+	color: var(--os-fg-emphasis);
+}
+
+.navbar__link {
+	padding: 7px 12px;
+	border-radius: 9px;
+	font-weight: 500;
+	font-size: 13px;
+	color: var(--os-muted);
+}
+
+.navbar__link:hover {
+	background: var(--os-surface-2);
+	color: var(--os-fg-2);
+}
+
+.navbar-link-strong {
+	color: var(--os-fg-2) !important;
+}
+
+/* Docusaurus auto-appends an "opens in new tab" glyph to every external
+   navbar link; the design has none, so it's suppressed here. */
+.navbar__link [class*="iconExternalLink"] {
+	display: none;
+}
+
+.navbar-github-link {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	padding: 7px 12px;
+	border-radius: 9px;
+	border: 1px solid var(--os-border);
+	color: var(--os-fg-2);
+	font-size: 12.5px;
+	font-weight: 500;
+}
+
+.navbar-github-link:hover {
+	color: var(--os-fg-2);
+	border-color: var(--os-border-hi);
+}
+
+.navbar-github-stars {
+	display: inline-flex;
+	align-items: center;
+	gap: 3px;
+	color: var(--os-muted);
+	font-family: var(--ifm-font-family-monospace);
+	font-size: 11px;
+}
+
+.navbar-download-cta {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 7px 14px !important;
+	border-radius: 9px;
+	background: var(--os-accent);
+	color: #fff !important;
+	font-size: 12.5px;
+	font-weight: 600;
+}
+
+.navbar-download-cta:hover {
+	background: var(--os-brand-lo);
+}
+
+.navbar__items--right {
+	gap: 10px;
+}
+
+.navbar__items--right [class*="colorModeToggle"] {
+	order: -1;
+}
+
+.navbar__items--right [class*="colorModeToggle"] button {
+	width: 32px;
+	height: 32px;
+	border-radius: 9px;
+	border: 1px solid var(--os-border);
+	color: var(--os-muted);
+}
+
+.navbar__items--right [class*="colorModeToggle"] button:hover {
+	color: var(--os-fg-2);
+	border-color: var(--os-border-hi);
+}
+
+[class*="navbarSearchContainer"]:empty {
+	display: none;
+}
+
+/* ---- footer ---- */
+
+.footer {
+	border-top: 1px solid var(--os-border-soft);
+}
+
+.footer__title {
+	font-size: 11.5px;
+	font-weight: 600;
+}
+
+.footer__link-item {
+	font-size: 12.5px;
+}
+
+/* ===================================================================
+   Docs layout — sidebar / article / TOC restyled after the
+   OpenScreen Design System's docs screen: rounded active states,
+   quiet borders, monospace kickers, borderless "fact card" tables.
+   =================================================================== */
+
+.theme-doc-sidebar-container {
+	border-right: 1px solid var(--os-border) !important;
+	background: var(--os-surface);
+}
+
+.menu__list-item-collapsible {
+	font-family: var(--ifm-font-family-monospace);
+	font-size: 0.7rem;
+	letter-spacing: 0.06em;
+	text-transform: uppercase;
+	color: var(--os-meta);
+}
+
+.menu__link {
+	border-radius: 8px;
+	font-weight: 500;
+	color: var(--os-fg-2);
+	transition: background-color 0.15s ease, color 0.15s ease;
+}
+
+.menu__link--active:not(.menu__link--sublist) {
+	background: var(--os-accent-soft);
+	color: var(--os-accent);
+	font-weight: 600;
+}
+
+.menu__link:hover {
+	background: var(--os-surface-2);
+}
+
+.table-of-contents {
+	border-left: 1px solid var(--os-border-soft);
+	font-size: 0.8rem;
+}
+
+.table-of-contents__link {
+	color: var(--os-muted);
+	transition: color 0.15s ease;
+}
+
+.table-of-contents__link:hover,
+.table-of-contents__link--active {
+	color: var(--os-accent);
+}
+
+.theme-doc-markdown h1 {
+	font-weight: 700;
+	letter-spacing: -0.02em;
+	color: var(--os-fg-emphasis);
+}
+
+.theme-doc-markdown h2 {
+	font-weight: 600;
+	letter-spacing: -0.01em;
+	color: var(--os-fg-emphasis);
+	margin-top: 2.25rem;
+}
+
+.theme-doc-markdown table {
+	display: table;
+	width: 100%;
+	border-radius: 12px;
+	overflow: hidden;
+	border: 1px solid var(--os-border);
+	background: var(--os-surface-1);
+	box-shadow: none;
+}
+
+.theme-doc-markdown table thead {
+	display: none;
+}
+
+.theme-doc-markdown table tr {
+	border-top: 1px solid var(--os-border-soft);
+	background: transparent;
+}
+
+.theme-doc-markdown table tr:first-child {
+	border-top: none;
+}
+
+.theme-doc-markdown table td {
+	border: none;
+	padding: 0.75rem 1rem;
+}
+
+.theme-doc-markdown table td:first-child {
+	width: 160px;
+	color: var(--os-muted);
+	font-weight: 400;
+}
+
+.theme-doc-markdown pre {
+	border-radius: 12px;
+	border: 1px solid var(--os-border);
+}
+
+.theme-doc-markdown a {
+	color: var(--os-accent);
+}
+
+.alert {
+	border-radius: 11px;
+	--ifm-alert-border-width: 1px;
+}
+
+.breadcrumbs__link {
+	color: var(--os-muted);
+}
+
+.theme-edit-this-page {
+	border-radius: 8px;
+	color: var(--os-accent);
+}
+
+.pagination-nav__link {
+	border-radius: 12px;
+	border-color: var(--os-border);
+	background: var(--os-surface-1);
+}
+
+.pagination-nav__link:hover {
+	border-color: var(--os-accent-border);
 }
