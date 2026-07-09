@@ -155,6 +155,10 @@ Acceptance:
 
 ### 4. Webcam Capture
 
+Status: the webcam encoder's `writeBgraFrame()` calls are paced to real elapsed wall-clock time, anchored to the same recording-start origin used by screen video and the audio mixer (`CaptureControl::recordingStartedAt`) and reduced by the same accumulated pause duration (`CaptureControl::pausedDurationHns()`), duplicating the latest available camera frame when the camera hasn't produced a newer one by the next due slot. This replaced a `frameIndex / fps` clock that was purely a local counter with no anchor to the recording's actual start time or accumulated pause duration, so it drifted out of alignment with screen video and audio.
+
+Note: an earlier iteration of this fix tried timestamping each webcam frame with its true per-frame host-clock capture time (i.e. genuine variable-frame-rate timestamps) and passing that through to the encoder. That was verified *not* to work: Media Foundation's H.264 encoder MFT does not honor irregular per-sample timestamps for a VFR source -- empirically, correctly-varying, monotonically increasing input `SampleTime` values still produced perfectly evenly-spaced output samples, because the encoder numbers output samples sequentially at its configured nominal frame rate regardless of the timestamp attached to each input sample. Since the encoder can't be made to respect real capture time, the encoder's assumption is instead made true by controlling *when* `writeBgraFrame()` is called (a real-time-paced cadence), rather than *what timestamp* is attached to each call.
+
 - Add Media Foundation webcam source reader.
 - Select requested dimensions/fps or the nearest format accepted by Media Foundation.
 - Convert webcam samples to BGRA and compose them into the primary helper MP4 as an initial bottom-right picture-in-picture overlay.
