@@ -11,6 +11,7 @@
 	--surface-1: #f1f5f9;
 	--surface-2: #e2e8f0;
 	--surface-3: #cbd5e1;
+	--surface-hi: #ffffff;
 	--surface-warm: #f1f5f9;
 
 	/* lines */
@@ -37,6 +38,9 @@
 	--accent-on: #04221a;
 	--accent-soft: rgba(16, 185, 129, 0.10);
 	--accent-wash: rgba(16, 185, 129, 0.06);
+	--accent-border: rgba(16, 185, 129, 0.26);
+	--accent-ring: rgba(16, 185, 129, 0.28);
+	--accent-stripe: rgba(16, 185, 129, 0.30);
 
 	/* legacy shadcn-style aliases → canonical tokens. Referenced by the
 	   TimelinePane / TranscriptEditor / VirtualPreview / NewEditorShell module
@@ -61,8 +65,10 @@
 	/* timeline pills */
 	--annotation: #eab308;
 	--annotation-soft: rgba(234, 179, 8, 0.14);
+	--annotation-wash: rgba(234, 179, 8, 0.14);
 	--speed: #f97316;
 	--speed-soft: rgba(249, 115, 22, 0.14);
+	--speed-wash: rgba(249, 115, 22, 0.14);
 
 	--success: #10b981;
 	--success-soft: rgba(16, 185, 129, 0.10);
@@ -149,8 +155,10 @@
 	--surface-1: #14181f;
 	--surface-2: #1c2029;
 	--surface-3: #252a35;
+	--surface-hi: #2b313b;
 	--surface-warm: #1c2029;
 
+	--fg-emphasis: #ffffff;
 	--border: #252a35;
 	--border-soft: #1c2029;
 	--border-hi: #3a4150;
@@ -170,6 +178,9 @@
 	--accent-on: #0a0d12;
 	--accent-soft: rgba(16, 185, 129, 0.14);
 	--accent-wash: rgba(16, 185, 129, 0.06);
+	--accent-border: rgba(16, 185, 129, 0.26);
+	--accent-ring: rgba(16, 185, 129, 0.32);
+	--accent-stripe: rgba(16, 185, 129, 0.34);
 
 	--danger: #f87171;
 	--danger-lo: #ef4444;
@@ -182,8 +193,10 @@
 
 	--annotation: #fbbf24;
 	--annotation-soft: rgba(251, 191, 36, 0.16);
+	--annotation-wash: rgba(251, 191, 36, 0.16);
 	--speed: #fb923c;
 	--speed-soft: rgba(251, 146, 60, 0.16);
+	--speed-wash: rgba(251, 146, 60, 0.16);
 
 	--success: #10b981;
 	--success-soft: rgba(16, 185, 129, 0.14);

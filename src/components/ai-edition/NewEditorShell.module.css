@@ -1457,9 +1457,9 @@
 }
 .laneTrackRow {
 	position: relative;
-	height: 22px;
-	background: var(--surface-2);
-	border: 1px dashed var(--border-soft);
+	height: 24px;
+	background: var(--surface-1);
+	border: 1px solid var(--border-soft);
 	border-radius: var(--r-sm);
 	overflow: hidden;
 }
@@ -1475,99 +1475,55 @@
 	pointer-events: none;
 }
 
-/* Lane pills: zoom / speed / annotation. Visuals match the design — tab caps
- * on each side, frame color per kind, gradient sheen on top. */
+/* Lane pills: zoom / speed / annotation / skip. Flat wash fill + 1.5px frame
+ * per the v4 design (design/OpenScreen Editor v4.dc.html pillStyle) — no
+ * gradient, no tab caps. Selected pills gain an accent ring. */
 .zoomPill,
 .speedPill,
 .annotationPill,
 .skipPill {
 	--_pill: var(--accent);
+	--_wash: var(--accent-soft);
 	position: absolute;
 	top: 50%;
 	transform: translateY(-50%);
+	height: 22px;
 	display: inline-flex;
 	align-items: center;
-	gap: 6px;
-	padding: 4px 10px;
-	background: linear-gradient(
-		180deg,
-		color-mix(in oklch, var(--_pill) 14%, var(--bg)) 0%,
-		color-mix(in oklch, var(--_pill) 6%, var(--bg)) 60%,
-		var(--bg) 100%
-	);
+	gap: 5px;
+	padding: 0 8px 0 7px;
+	background: var(--_wash);
 	border: 1.5px solid var(--_pill);
-	border-radius: var(--r-md);
+	border-radius: var(--r-sm);
 	color: var(--fg);
 	font: 600 11px/1 var(--font-display);
 	letter-spacing: 0.01em;
 	font-variant-numeric: tabular-nums;
 	white-space: nowrap;
+	overflow: hidden;
+	box-sizing: border-box;
 	pointer-events: auto;
-	box-shadow:
-		0 4px 12px -8px color-mix(in oklch, var(--_pill) 60%, transparent),
-		inset 0 1px 0 color-mix(in oklch, var(--_pill) 30%, transparent);
 	cursor: pointer;
 	z-index: 2;
 }
 .zoomPill {
 	--_pill: var(--accent);
+	--_wash: var(--accent-soft);
 }
 .speedPill {
 	--_pill: var(--speed);
+	--_wash: var(--speed-wash);
 }
 .annotationPill {
 	--_pill: var(--annotation);
+	--_wash: var(--annotation-wash);
 }
 .skipPill {
 	--_pill: var(--danger);
+	--_wash: var(--danger-soft);
 }
 .lanePillSelected {
-	box-shadow:
-		0 4px 12px -8px color-mix(in oklch, var(--_pill) 60%, transparent),
-		inset 0 1px 0 color-mix(in oklch, var(--_pill) 30%, transparent),
-		0 0 0 3px color-mix(in oklch, var(--_pill) 35%, transparent);
-}
-.lanePillSelected::before,
-.lanePillSelected::after {
-	background: color-mix(in oklch, var(--_pill) 80%, var(--bg));
-	box-shadow:
-		0 0 0 1px var(--bg),
-		0 2px 6px -2px color-mix(in oklch, var(--_pill) 65%, transparent);
-}
-/* tab caps at the ends */
-.zoomPill::before,
-.zoomPill::after,
-.speedPill::before,
-.speedPill::after,
-.annotationPill::before,
-.annotationPill::after,
-.skipPill::before,
-.skipPill::after {
-	content: "";
-	position: absolute;
-	top: 50%;
-	width: 6px;
-	height: 14px;
-	background: var(--_pill);
-	border-radius: 3px;
-	transform: translateY(-50%);
-	pointer-events: none;
-	z-index: 1;
-	box-shadow:
-		0 0 0 1px var(--bg),
-		0 2px 6px -2px color-mix(in oklch, var(--_pill) 55%, transparent);
-}
-.zoomPill::before,
-.speedPill::before,
-.annotationPill::before,
-.skipPill::before {
-	left: -4px;
-}
-.zoomPill::after,
-.speedPill::after,
-.annotationPill::after,
-.skipPill::after {
-	right: -4px;
+	box-shadow: 0 0 0 3px color-mix(in oklch, var(--_pill) 35%, transparent);
 }
 .pillIcon {
 	width: 11px;

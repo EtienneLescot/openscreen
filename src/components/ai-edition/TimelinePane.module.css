@@ -121,10 +121,11 @@ body:global(.timeline-placing-cut) [class*="vtBtn"] {
 	left: 2px;
 	top: 0;
 	font-family: var(--font-mono);
-	font-size: 11px;
+	font-size: 10px;
 	font-weight: 500;
 	letter-spacing: 0.02em;
-	color: var(--muted);
+	/* v4 design ruler labels read in --meta. */
+	color: var(--meta);
 	white-space: nowrap;
 	pointer-events: none;
 }
@@ -156,9 +157,10 @@ body:global(.timeline-placing-cut) [class*="vtBtn"] {
 	min-width: 68px;
 	display: flex;
 	flex-direction: column;
-	background: var(--surface-2);
-	border: 1px solid var(--border);
-	border-radius: var(--r-md);
+	/* v4 design clip card: --surface-1 fill, 1.5px frame, 11px radius. */
+	background: var(--surface-1);
+	border: 1.5px solid var(--border);
+	border-radius: 11px;
 	box-shadow: var(--elev-card-soft);
 	cursor: grab;
 	overflow: hidden;
@@ -183,12 +185,13 @@ body:global(.timeline-placing-cut) [class*="vtBtn"] {
 }
 
 .trackVisual {
-	flex: 0 0 auto;
-	height: 26px;
+	/* v4 design: the waveform fills the whole clip card; the label + delete
+	   float over it as blur chips (see .trackInfo / .clipDelete). */
+	position: absolute;
+	inset: 0;
 	display: flex;
 	overflow: hidden;
 	background: var(--surface);
-	border-bottom: 1px solid var(--border);
 }
 .segment {
 	height: 100%;
@@ -254,26 +257,35 @@ body:global(.timeline-placing-cut) [class*="vtBtn"] {
 }
 
 .trackInfo {
-	flex: 1;
-	min-height: 0;
-	display: flex;
+	/* Floating label chip, top-left over the waveform (v4 design). */
+	position: absolute;
+	top: 8px;
+	left: 10px;
+	right: 40px;
+	z-index: 2;
+	display: inline-flex;
 	align-items: center;
-	gap: 10px;
-	padding: 10px 12px;
+	gap: 8px;
+	width: max-content;
+	max-width: calc(100% - 50px);
+	padding: 3px 9px 3px 6px;
+	border-radius: 8px;
+	background: color-mix(in srgb, #080a0d 55%, transparent);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
 	overflow: hidden;
 }
 .editIcon {
 	flex: 0 0 auto;
-	width: 30px;
-	height: 30px;
-	display: flex;
-	align-items: center;
-	justify-content: center;
+	width: 16px;
+	height: 16px;
+	display: grid;
+	place-items: center;
 	background: var(--surface);
-	border: 1px solid var(--border);
-	border-radius: var(--r-sm);
+	border: 0;
+	border-radius: 5px;
 	color: var(--fg);
-	box-shadow: var(--elev-card-soft);
 	cursor: pointer;
 	transition:
 		border-color var(--motion-fast) var(--ease),
@@ -286,44 +298,41 @@ body:global(.timeline-placing-cut) [class*="vtBtn"] {
 .trackText {
 	display: flex;
 	flex-direction: column;
-	gap: 2px;
 	min-width: 0;
 	flex: 1;
 }
 .trackTitle {
 	margin: 0;
-	font-size: 13px;
+	font-size: 11px;
 	font-weight: 500;
 	letter-spacing: -0.005em;
-	color: var(--fg);
+	color: #fff;
 	white-space: nowrap;
 	overflow: hidden;
 	text-overflow: ellipsis;
 }
+/* v4 design: the clip chip shows only the filename — the range/source
+   readout is not part of the floating label. */
 .trackSubtitle {
-	margin: 0;
-	font-family: var(--font-mono);
-	font-size: 10.5px;
-	letter-spacing: 0.02em;
-	color: var(--muted);
-	white-space: nowrap;
-	overflow: hidden;
-	text-overflow: ellipsis;
-}
-.trackSubtitle span {
-	margin: 0 4px;
-	color: var(--dim);
+	display: none;
 }
 .clipDelete {
-	flex: 0 0 auto;
+	/* Floating delete, top-right over the waveform (v4 design), shown on
+	   hover / selection. */
+	position: absolute;
+	top: 8px;
+	right: 8px;
+	z-index: 2;
 	width: 26px;
 	height: 26px;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	background: transparent;
-	border: 0;
-	border-radius: var(--r-sm);
+	background: color-mix(in srgb, #080a0d 55%, transparent);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
+	border-radius: 7px;
 	color: var(--muted);
 	cursor: pointer;
 	opacity: 0;
@@ -545,10 +554,10 @@ body:global(.timeline-placing-cut) [class*="vtBtn"] {
 	height: 1.15rem;
 	flex-shrink: 0;
 	margin: 4px var(--sp-3) 4px var(--sp-3);
-	border: 1px solid var(--border-soft);
-	border-radius: 6px;
-	background: color-mix(in oklch, var(--surface-2) 60%, transparent);
-	overflow: hidden;
+	border-radius: 3px;
+	/* v4 design: a subtle grey track (--surface-3), no border. */
+	background: var(--surface-3);
+	overflow: visible;
 }
 .timelineNavigator.navigating {
 	border-color: var(--accent);
@@ -571,15 +580,14 @@ body:global(.timeline-placing-cut) [class*="vtBtn"] {
 }
 .timelineNavigatorWindow {
 	position: absolute;
-	top: 0;
-	bottom: 0;
+	top: 50%;
+	transform: translateY(-50%);
+	height: calc(100% + 4px);
 	min-width: 1.8rem;
-	border: 2px solid color-mix(in oklch, var(--accent) 92%, transparent);
-	border-radius: 6px;
-	background: color-mix(in oklch, var(--accent) 16%, transparent);
-	box-shadow:
-		0 0 0 1px rgba(0, 0, 0, 0.45),
-		inset 0 0 0 1px rgba(0, 0, 0, 0.25);
+	/* v4 design: neutral raised window (--surface-hi) with a --border-hi frame. */
+	border: 1px solid var(--border-hi);
+	border-radius: 5px;
+	background: var(--surface-hi);
 	cursor: grab;
 }
 .timelineNavigator.navigating .timelineNavigatorWindow {
@@ -588,14 +596,29 @@ body:global(.timeline-placing-cut) [class*="vtBtn"] {
 .timelineNavigatorHandleStart,
 .timelineNavigatorHandleEnd {
 	position: absolute;
-	top: 0;
-	bottom: 0;
-	width: 6px;
+	top: 50%;
+	transform: translateY(-50%);
+	width: 12px;
+	height: calc(100% + 8px);
+	display: flex;
+	align-items: center;
+	justify-content: center;
 	cursor: ew-resize;
+	z-index: 3;
+}
+/* grip bar per the v4 design (4px wide, --fg-2, haloed by the track). */
+.timelineNavigatorHandleStart::after,
+.timelineNavigatorHandleEnd::after {
+	content: "";
+	width: 4px;
+	height: 14px;
+	border-radius: 2px;
+	background: var(--fg-2);
+	box-shadow: 0 0 0 2px var(--surface);
 }
 .timelineNavigatorHandleStart {
-	left: 0;
+	left: -6px;
 }
 .timelineNavigatorHandleEnd {
-	right: 0;
+	right: -6px;
 }
