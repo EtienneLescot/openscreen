@@ -67,6 +67,12 @@ interface BottombarProps {
 	onNextClip: () => void;
 	onToggleLoop: () => void;
 	onExpand: () => void;
+	// v4 Edit mode renders a floating transport over the stage instead, so the
+	// timeline header suppresses its own copy to avoid a duplicate.
+	hideTransport?: boolean;
+	// v4 Media mode swaps the edit-tool row for the design's "Arrange clips"
+	// caption and hides the region lanes (there is nothing to annotate yet).
+	timelineVariant?: "edit" | "media";
 }
 
 const RATIO_LABELS: Record<AspectRatio, string> = {
@@ -105,7 +111,10 @@ export function Bottombar({
 	onNextClip,
 	onToggleLoop,
 	onExpand,
+	hideTransport,
+	timelineVariant = "edit",
 }: BottombarProps) {
+	const isMediaVariant = timelineVariant === "media";
 	const { settings, set } = useEditorSettings();
 	const tl = useTimeline();
 	const [ratioOpen, setRatioOpen] = useState(false);
@@ -239,7 +248,22 @@ export function Bottombar({
 				style={{ minWidth: 0, display: "grid", gridTemplateRows: "auto 1fr auto", minHeight: 0 }}
 			>
 				<header className={styles.timelineHead}>
-					<div className={styles.viewTools} role="toolbar" aria-label="View tools">
+					{isMediaVariant ? (
+						<div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+							<span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg-2)" }}>
+								Arrange clips
+							</span>
+							<span style={{ fontSize: 11.5, color: "var(--meta)" }}>
+								Drag clips below to reorder or drop new ones in
+							</span>
+						</div>
+					) : null}
+					<div
+						className={styles.viewTools}
+						role="toolbar"
+						aria-label="View tools"
+						style={isMediaVariant ? { display: "none" } : undefined}
+					>
 						<VtBtn label="Add zoom" title="Add zoom (Z)" onClick={onAddZoom} disabled={!hasDoc}>
 							<ZoomIn size={17} />
 						</VtBtn>
@@ -359,19 +383,21 @@ export function Bottombar({
 								: null}
 						</div>
 					</div>
-					<TransportBar
-						playing={playing}
-						loop={loop}
-						currentTimeSec={currentTimeSec}
-						clips={clips}
-						onTogglePlay={onTogglePlay}
-						onPrevClip={onPrevClip}
-						onNextClip={onNextClip}
-						onToggleLoop={onToggleLoop}
-						onExpand={onExpand}
-						onSeek={onSeek}
-					/>
-					<div className={styles.hintRow}>
+					{hideTransport ? null : (
+						<TransportBar
+							playing={playing}
+							loop={loop}
+							currentTimeSec={currentTimeSec}
+							clips={clips}
+							onTogglePlay={onTogglePlay}
+							onPrevClip={onPrevClip}
+							onNextClip={onNextClip}
+							onToggleLoop={onToggleLoop}
+							onExpand={onExpand}
+							onSeek={onSeek}
+						/>
+					)}
+					<div className={styles.hintRow} style={isMediaVariant ? { display: "none" } : undefined}>
 						<span className={styles.hint}>
 							<span className={styles.kbd}>Scroll</span>
 							<span>Pan</span>

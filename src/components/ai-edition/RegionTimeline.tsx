@@ -12,7 +12,7 @@ import {
 
 export type { Span };
 
-import { createContext, useCallback, useContext, useState } from "react";
+import { Children, createContext, useCallback, useContext, useState } from "react";
 import { formatMs } from "@/lib/ai-edition/timeline/format";
 import styles from "./NewEditorShell.module.css";
 
@@ -237,9 +237,12 @@ export function RegionRow({
 	children: React.ReactNode;
 }) {
 	const { setNodeRef, rowStyle, rowWrapperStyle } = useRow({ id });
+	// v4 design: the lane's watermark label only shows while the lane is empty —
+	// once it holds pills, the label is hidden (design skipsLaneLabel etc.).
+	const hasChildren = Children.count(children) > 0;
 	return (
 		<div style={rowWrapperStyle} className={styles.laneTrackRow}>
-			{empty ? <span className={styles.laneEmpty}>{empty}</span> : null}
+			{empty && !hasChildren ? <span className={styles.laneEmpty}>{empty}</span> : null}
 			<div ref={setNodeRef} style={rowStyle}>
 				{children}
 			</div>
