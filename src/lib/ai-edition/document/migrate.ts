@@ -59,6 +59,7 @@ function toLegacyMedia(input: ProjectMedia | undefined): ProjectMedia | null {
 	if (!input) return null;
 	const media: ProjectMedia = { screenVideoPath: input.screenVideoPath };
 	if (input.webcamVideoPath) media.webcamVideoPath = input.webcamVideoPath;
+	if (typeof input.webcamOffsetMs === "number") media.webcamOffsetMs = input.webcamOffsetMs;
 	if (input.cursorCaptureMode) media.cursorCaptureMode = input.cursorCaptureMode;
 	return media;
 }
@@ -84,6 +85,7 @@ export function migrateProjectDataToAxcutDocument(
 				: null;
 
 	const webcamVideoPath = input.media?.webcamVideoPath;
+	const webcamOffsetMs = input.media?.webcamOffsetMs ?? 0;
 
 	const assets = screenPath
 		? [
@@ -93,7 +95,7 @@ export function migrateProjectDataToAxcutDocument(
 					label: screenPath.split(/[\\/]/).pop() || "Recording",
 					originalPath: screenPath,
 					cameraTrack: webcamVideoPath
-						? { sourcePath: webcamVideoPath, startMs: 0, offsetMs: 0, visible: true }
+						? { sourcePath: webcamVideoPath, startMs: 0, offsetMs: webcamOffsetMs, visible: true }
 						: null,
 				},
 			]

@@ -1,6 +1,15 @@
 export interface ProjectMedia {
 	screenVideoPath: string;
 	webcamVideoPath?: string;
+	/**
+	 * Milliseconds to shift the webcam asset's playback position relative to
+	 * the screen recording. Negative when the webcam started capturing before
+	 * the screen recording's real start (e.g. the browser MediaRecorder for
+	 * the webcam is started in the renderer before the native Windows helper
+	 * process finishes spawning and confirms recording), so the editor skips
+	 * that much extra leading footage instead of showing stale camera frames.
+	 */
+	webcamOffsetMs?: number;
 	cursorCaptureMode?: CursorCaptureMode;
 }
 
@@ -27,6 +36,8 @@ export interface StoreRecordedSessionInput {
 	 * timeline for anything that took the streaming path.
 	 */
 	durationMs?: number;
+	/** See {@link ProjectMedia.webcamOffsetMs}. */
+	webcamOffsetMs?: number;
 }
 
 export function normalizeCursorCaptureMode(value: unknown): CursorCaptureMode | undefined {
@@ -56,10 +67,15 @@ export function normalizeProjectMedia(candidate: unknown): ProjectMedia | null {
 
 	const webcamVideoPath = normalizePath(raw.webcamVideoPath);
 	const cursorCaptureMode = normalizeCursorCaptureMode(raw.cursorCaptureMode);
+	const webcamOffsetMs =
+		typeof raw.webcamOffsetMs === "number" && Number.isFinite(raw.webcamOffsetMs)
+			? raw.webcamOffsetMs
+			: undefined;
 
 	return {
 		screenVideoPath,
 		...(webcamVideoPath ? { webcamVideoPath } : {}),
+		...(webcamOffsetMs !== undefined ? { webcamOffsetMs } : {}),
 		...(cursorCaptureMode ? { cursorCaptureMode } : {}),
 	};
 }

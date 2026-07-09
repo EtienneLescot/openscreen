@@ -242,11 +242,15 @@ bool WebcamCapture::selectDevice(const std::wstring& deviceId, const std::wstrin
 
 bool WebcamCapture::configureReader(int requestedWidth, int requestedHeight, int requestedFps) {
     Microsoft::WRL::ComPtr<IMFAttributes> attributes;
-    if (!succeeded(MFCreateAttributes(&attributes, 2), "MFCreateAttributes(webcam reader)")) {
+    if (!succeeded(MFCreateAttributes(&attributes, 3), "MFCreateAttributes(webcam reader)")) {
         return false;
     }
     attributes->SetUINT32(MF_SOURCE_READER_ENABLE_VIDEO_PROCESSING, TRUE);
     attributes->SetUINT32(MF_READWRITE_DISABLE_CONVERTERS, FALSE);
+    // Ask the pipeline to minimize internal buffering/lookahead so a frame
+    // reaches ReadSample() as soon as possible after the driver delivers it,
+    // rather than sitting queued behind MF's default lookahead buffering.
+    attributes->SetUINT32(MF_LOW_LATENCY, TRUE);
 
     if (!succeeded(MFCreateSourceReaderFromMediaSource(mediaSource_.Get(), attributes.Get(), &sourceReader_),
                    "MFCreateSourceReaderFromMediaSource(webcam)")) {

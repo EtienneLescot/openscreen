@@ -17,6 +17,7 @@
 #include <iostream>
 #include <memory>
 #include <mutex>
+#include <ratio>
 #include <string>
 #include <thread>
 
@@ -59,6 +60,10 @@ struct CaptureControl {
     std::condition_variable cv;
     std::chrono::steady_clock::time_point pauseStartedAt;
     std::chrono::steady_clock::duration totalPausedDuration{};
+    // Shared T0 for every stream's timeline (screen video, audio, webcam).
+    // Set once, right before the video writer thread starts, so all streams
+    // measure elapsed time from the same real-world instant.
+    std::chrono::steady_clock::time_point recordingStartedAt;
 
     int64_t pausedDurationHns() {
         std::scoped_lock lock(mutex);
@@ -457,15 +462,25 @@ int main(int argc, char* argv[]) {
                 config.webcamWidth,
                 config.webcamHeight,
                 config.webcamFps > 0 ? config.webcamFps : config.fps)) {
-            std::cerr << "ERROR: Failed to initialize native webcam capture" << std::endl;
-            return 1;
+            // Non-fatal: a screen+audio recording the user can still use is far
+            // better than losing the whole recording because one camera device
+            // didn't match. Report it so the renderer can inform the user (and,
+            // historically, fall back to a browser-recorded webcam sidecar), but
+            // let capture continue without a native webcam track.
+            std::cerr << "WARNING: Failed to initialize native webcam capture; continuing without webcam"
+                      << std::endl;
+            std::cout << "{\"event\":\"warning\",\"code\":\"webcam-unavailable\",\"message\":"
+                         "\"Failed to initialize native webcam capture\"}"
+                      << std::endl;
+            config.webcamEnabled = false;
+        } else {
+            std::cout << "{\"event\":\"webcam-format\",\"schemaVersion\":2,\"width\":" << webcamCapture.width()
+                      << ",\"height\":" << webcamCapture.height()
+                      << ",\"fps\":" << webcamCapture.fps()
+                      << ",\"deviceName\":\"" << jsonEscape(wideToUtf8(webcamCapture.selectedDeviceName()))
+                      << "\"}" << std::endl;
+            writeSeparateWebcam = !config.webcamOutputPath.empty();
         }
-        std::cout << "{\"event\":\"webcam-format\",\"schemaVersion\":2,\"width\":" << webcamCapture.width()
-                  << ",\"height\":" << webcamCapture.height()
-                  << ",\"fps\":" << webcamCapture.fps()
-                  << ",\"deviceName\":\"" << jsonEscape(wideToUtf8(webcamCapture.selectedDeviceName()))
-                  << "\"}" << std::endl;
-        writeSeparateWebcam = !config.webcamOutputPath.empty();
     }
 
     WasapiLoopbackCapture loopbackCapture;
@@ -601,9 +616,21 @@ int main(int argc, char* argv[]) {
         const auto frameDuration = std::chrono::duration_cast<std::chrono::steady_clock::duration>(
             std::chrono::duration<double>(1.0 / config.fps));
         uint64_t frameIndex = 0;
-        uint64_t lastWrittenWebcamSequence = 0;
-        uint64_t webcamOutputFrameIndex = 0;
         int64_t lastEncodedVideoTimestampHns = -1;
+        int64_t lastWebcamTimestampHns = -1;
+        // Media Foundation's H.264 encoder MFT does not honor irregular input
+        // sample times for a VFR source: it numbers output samples
+        // sequentially at its configured nominal frame rate regardless of the
+        // SampleTime we attach (confirmed empirically -- varying, correctly
+        // increasing input timestamps still produced perfectly even output
+        // spacing). Since we cannot make the encoder respect real capture
+        // time, we instead make the encoder's assumption true: call
+        // writeBgraFrame() on a real-time-paced cadence (duplicating the
+        // latest available camera frame when the camera hasn't produced a
+        // newer one yet), so "sample N is at N/fps" is actually correct.
+        int64_t nextWebcamWriteDueHns = 0;
+        const int64_t nominalWebcamIntervalHns =
+            static_cast<int64_t>(10'000'000ULL / std::max(1, webcamCapture.fps()));
 
         while (!control.stopRequested && !encodeFailed) {
             {
@@ -649,18 +676,43 @@ int main(int argc, char* argv[]) {
                     frameTimestampHns =
                         lastEncodedVideoTimestampHns + static_cast<int64_t>(10'000'000ULL / config.fps);
                 }
-                if (writeSeparateWebcam && webcamFrame.data &&
-                    latestWebcamSequence != lastWrittenWebcamSequence) {
-                    const int64_t webcamTimestampHns = static_cast<int64_t>(
-                        (webcamOutputFrameIndex * 10'000'000ULL) / std::max(1, webcamCapture.fps()));
-                    if (!webcamEncoder.writeBgraFrame(webcamFrame, webcamTimestampHns)) {
-                        encodeFailed = true;
-                        control.stopRequested = true;
-                        control.cv.notify_all();
-                        return;
+                if (writeSeparateWebcam && webcamFrame.data) {
+                    // Anchor to the same recording-start origin as screen video/audio,
+                    // using real elapsed host-clock time (not a synthetic frame-index
+                    // clock) so a long recording can't accumulate clock-origin drift.
+                    const auto elapsedSinceStart = std::chrono::steady_clock::now() - control.recordingStartedAt;
+                    const int64_t elapsedHns = std::chrono::duration_cast<
+                        std::chrono::duration<int64_t, std::ratio<1, 10'000'000>>>(elapsedSinceStart)
+                                                    .count();
+                    const int64_t targetElapsedHns =
+                        std::max<int64_t>(0, elapsedHns - control.pausedDurationHns());
+                    // The H.264 encoder MFT does not honor irregular per-sample
+                    // timestamps for a VFR source -- it numbers output samples
+                    // sequentially at its configured nominal rate regardless of the
+                    // SampleTime attached to each input sample. So the only way to
+                    // keep the encoded webcam file in sync with real elapsed time is
+                    // to call writeBgraFrame() *at* that nominal cadence, duplicating
+                    // the latest available camera frame when the camera hasn't
+                    // produced a newer one yet (VFR capture -> CFR encode resampling).
+                    if (targetElapsedHns >= nextWebcamWriteDueHns) {
+                        int64_t webcamTimestampHns = targetElapsedHns;
+                        if (lastWebcamTimestampHns >= 0 && webcamTimestampHns <= lastWebcamTimestampHns) {
+                            webcamTimestampHns = lastWebcamTimestampHns + nominalWebcamIntervalHns;
+                        }
+                        if (!webcamEncoder.writeBgraFrame(webcamFrame, webcamTimestampHns)) {
+                            encodeFailed = true;
+                            control.stopRequested = true;
+                            control.cv.notify_all();
+                            return;
+                        }
+                        lastWebcamTimestampHns = webcamTimestampHns;
+                        nextWebcamWriteDueHns += nominalWebcamIntervalHns;
+                        if (nextWebcamWriteDueHns <= targetElapsedHns) {
+                            // Fell behind (e.g. coming out of a pause, or a stall) --
+                            // resync to now instead of trying to catch up frame-by-frame.
+                            nextWebcamWriteDueHns = targetElapsedHns + nominalWebcamIntervalHns;
+                        }
                     }
-                    lastWrittenWebcamSequence = latestWebcamSequence;
-                    webcamOutputFrameIndex += 1;
                 }
                 if (latestFrameTexture && !encoder.writeFrame(
                         latestFrameTexture.Get(),
@@ -834,6 +886,7 @@ int main(int argc, char* argv[]) {
     if (audioMixer) {
         audioMixer->beginTimeline();
     }
+    control.recordingStartedAt = std::chrono::steady_clock::now();
     startVideoWriter();
 
     std::cout << "{\"event\":\"recording-started\",\"schemaVersion\":2}" << std::endl;
