@@ -42,24 +42,52 @@ function findVcVarsAll() {
 		}
 	}
 
-	const roots = [
-		process.env.VSINSTALLDIR,
-		"C:\\Program Files\\Microsoft Visual Studio\\2026\\Community",
-		"C:\\Program Files\\Microsoft Visual Studio\\2026\\Professional",
-		"C:\\Program Files\\Microsoft Visual Studio\\2026\\Enterprise",
-		"C:\\Program Files (x86)\\Microsoft Visual Studio\\2026\\BuildTools",
-		"C:\\Program Files (x86)\\Microsoft Visual Studio\\2026\\Community",
-		"C:\\Program Files\\Microsoft Visual Studio\\2022\\Community",
-		"C:\\Program Files\\Microsoft Visual Studio\\2022\\Professional",
-		"C:\\Program Files\\Microsoft Visual Studio\\2022\\Enterprise",
-		"C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\BuildTools",
-		"C:\\Program Files (x86)\\Microsoft Visual Studio\\2022\\Community",
-	];
-
-	for (const root of roots.filter(Boolean)) {
-		const candidate = path.join(root, "VC", "Auxiliary", "Build", "vcvarsall.bat");
+	if (process.env.VSINSTALLDIR) {
+		const candidate = path.join(process.env.VSINSTALLDIR, "VC", "Auxiliary", "Build", "vcvarsall.bat");
 		if (fs.existsSync(candidate)) {
 			return candidate;
+		}
+	}
+
+	// vswhere doesn't always enumerate pre-release channels (e.g. "Insiders"
+	// builds), and the on-disk layout for those isn't a stable "<year>\<edition>"
+	// path -- Visual Studio 2026 Insiders installs under a numeric product
+	// version folder like "18\Insiders\<edition>" instead of "2026\<edition>".
+	// Walk the install roots generically instead of hard-coding version/channel
+	// names so new VS releases and preview channels are found automatically.
+	const editions = ["Community", "Professional", "Enterprise", "BuildTools"];
+	const installRoots = [
+		"C:\\Program Files\\Microsoft Visual Studio",
+		"C:\\Program Files (x86)\\Microsoft Visual Studio",
+	];
+
+	const listDirs = (dir) => {
+		try {
+			return fs
+				.readdirSync(dir, { withFileTypes: true })
+				.filter((entry) => entry.isDirectory())
+				.map((entry) => path.join(dir, entry.name));
+		} catch {
+			return [];
+		}
+	};
+
+	for (const installRoot of installRoots) {
+		for (const versionDir of listDirs(installRoot)) {
+			// versionDir is either an edition directly ("2022\Community") or a
+			// channel that nests editions ("18\Insiders\Community").
+			for (const channelDir of [versionDir, ...listDirs(versionDir)]) {
+				const direct = path.join(channelDir, "VC", "Auxiliary", "Build", "vcvarsall.bat");
+				if (fs.existsSync(direct)) {
+					return direct;
+				}
+				for (const edition of editions) {
+					const nested = path.join(channelDir, edition, "VC", "Auxiliary", "Build", "vcvarsall.bat");
+					if (fs.existsSync(nested)) {
+						return nested;
+					}
+				}
+			}
 		}
 	}
 
