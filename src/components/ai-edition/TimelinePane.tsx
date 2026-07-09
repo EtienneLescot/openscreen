@@ -1068,7 +1068,7 @@ export function TimelinePane({
 													onEditClip(clip);
 												}}
 											>
-												<Pencil size={13} />
+												<Pencil size={9} />
 											</button>
 											<div className={styles.trackText}>
 												<h3 className={styles.trackTitle}>{assetLabel(clip.assetId)}</h3>

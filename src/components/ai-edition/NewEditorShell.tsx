@@ -1,4 +1,3 @@
-import { EyeOff, Film, Sparkles } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { EditorProjectData } from "@/components/video-editor/projectPersistence";
@@ -16,7 +15,7 @@ import { nativeBridgeClient } from "@/native";
 import type { AiEditionProjectSummary } from "@/native/contracts";
 import { Bottombar } from "./Bottombar";
 import { ExportDialog } from "./ExportDialog";
-import { LeftPanel, LeftRail, type LeftTab } from "./LeftPanel";
+import { LeftPanel } from "./LeftPanel";
 import {
 	AutoCaptionsModal,
 	CropModal,
@@ -25,11 +24,13 @@ import {
 	UnsavedChangesModal,
 	type UnsavedChoice,
 } from "./Modals";
-import styles from "./NewEditorShell.module.css";
 import { Preview } from "./Preview";
-import { RightPanelStack } from "./RightPanelStack";
-import type { RightPaneId } from "./RightPanes";
-import { Titlebar } from "./Titlebar";
+import v4 from "./v4/EditorShellV4.module.css";
+import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
+import { type Facet, FloatingInspector } from "./v4/FloatingInspector";
+import { FloatingTransport } from "./v4/FloatingTransport";
+import { MediaStage } from "./v4/MediaStage";
+import { RecStage } from "./v4/RecStage";
 
 interface SeekTarget {
 	timeSec: number;
@@ -37,18 +38,11 @@ interface SeekTarget {
 	requestId: number;
 }
 
-const COLLAPSE_INITIAL = {
-	left: false,
-	right: true,
-	bottom: false,
-};
-
 export function NewEditorShell() {
 	const document = useProjectStore((s) => s.document);
 	const projectId = useProjectStore((s) => s.projectId);
 	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
 	const dirty = useProjectStore((s) => s.dirty);
-	const lastSavedAt = useProjectStore((s) => s.lastSavedAt);
 	const createProject = useProjectStore((s) => s.createProject);
 	const addAsset = useProjectStore((s) => s.addAsset);
 	const setTranscript = useProjectStore((s) => s.setTranscript);
@@ -56,7 +50,6 @@ export function NewEditorShell() {
 	const setSourceDuration = useProjectStore((s) => s.setSourceDuration);
 	const loadProject = useProjectStore((s) => s.loadProject);
 	const saveDocument = useProjectStore((s) => s.saveDocument);
-	const markClean = useProjectStore((s) => s.markClean);
 
 	const [seekTarget, setSeekTarget] = useState<SeekTarget | null>(null);
 	const [isTranscribing, setIsTranscribing] = useState(false);
@@ -66,11 +59,12 @@ export function NewEditorShell() {
 	const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
 	const [playing, setPlaying] = useState(false);
 	const [loop, setLoop] = useState(false);
-	const [leftTab, setLeftTab] = useState<LeftTab>("media");
-	const [rightPane, setRightPane] = useState<RightPaneId>("background");
-	const [leftCollapsed, setLeftCollapsed] = useState(COLLAPSE_INITIAL.left);
-	const [rightCollapsed, setRightCollapsed] = useState(COLLAPSE_INITIAL.right);
-	const [bottomCollapsed, setBottomCollapsed] = useState(COLLAPSE_INITIAL.bottom);
+	// v4 shell: three modes (Media / Edit / Rec), a collapsible agent (chat)
+	// column, and a floating facet inspector over the stage.
+	const [mode, setMode] = useState<EditorMode>("edit");
+	const [chatOpen, setChatOpen] = useState(true);
+	const [inspectorOpen, setInspectorOpen] = useState(true);
+	const [facet, setFacet] = useState<Facet>("effects");
 	const [openProjectOpen, setOpenProjectOpen] = useState(false);
 	const [newProjectOpen, setNewProjectOpen] = useState(false);
 	const [cropOpen, setCropOpen] = useState(false);
@@ -101,6 +95,13 @@ export function NewEditorShell() {
 	}, []);
 	const seekSeqRef = useRef(0);
 	const initRef = useRef(false);
+
+	// Dev-only: expose the project store so the browser preview harness can
+	// seed a populated document for design QA. Tree-shaken out of prod builds.
+	if (import.meta.env.DEV) {
+		(window as unknown as { __osProjectStore?: typeof useProjectStore }).__osProjectStore =
+			useProjectStore;
+	}
 
 	// ponytail: serialise timeline-edit saves so two rapid Backspaces
 	// don't race each other's IPC save and overwrite one another in the
@@ -423,7 +424,9 @@ export function NewEditorShell() {
 			});
 			toast.dismiss("transcribe");
 			await setTranscript(transcript);
-			setRightPane("transcript");
+			setMode("edit");
+			setFacet("transcript");
+			setInspectorOpen(true);
 			toast.success("Transcript ready");
 			setAssetStatuses((prev) => {
 				const next = { ...prev };
@@ -598,30 +601,6 @@ export function NewEditorShell() {
 		}
 	}, [saveDocument]);
 
-	const handleSaveAs = useCallback(async () => {
-		const doc = useProjectStore.getState().document;
-		if (!doc) return;
-		try {
-			const result = await nativeBridgeClient.aiEdition.save(doc);
-			if (!result.success || !result.document) {
-				throw new Error(result.error ?? "Failed to save project");
-			}
-			const title = window.prompt("Save project as", doc.project.title);
-			if (!title || title === doc.project.title) {
-				markClean();
-				toast.success("Project saved");
-				return;
-			}
-			const renamed = { ...doc, project: { ...doc.project, title } };
-			await saveDocument(renamed);
-			toast.success(`Saved as "${title}"`);
-		} catch (err) {
-			toast.error("Save failed", {
-				description: err instanceof Error ? err.message : String(err),
-			});
-		}
-	}, [markClean, saveDocument]);
-
 	const handleRenameProject = useCallback(
 		async (title: string) => {
 			const doc = useProjectStore.getState().document;
@@ -678,10 +657,6 @@ export function NewEditorShell() {
 			void window.electronAPI?.startNewRecording?.();
 		}
 	}, [promptUnsaved]);
-
-	const handleReturnToRecorder = useCallback(() => {
-		void window.electronAPI?.switchToHud?.();
-	}, []);
 
 	const handleExport = useCallback(() => {
 		if (!hasAsset) {
@@ -977,145 +952,135 @@ export function NewEditorShell() {
 		copiedClipId,
 	]);
 
-	const collapseAttr = useMemo(() => {
-		const list: string[] = [];
-		if (leftCollapsed) list.push("left");
-		if (rightCollapsed) list.push("right");
-		if (bottomCollapsed) list.push("bottom");
-		return list.join(" ");
-	}, [leftCollapsed, rightCollapsed, bottomCollapsed]);
+	const showTimeline = mode !== "rec";
+	const timelineRow = mode === "media" ? "188px" : "308px";
+	const bodyColumns = mode === "edit" && chatOpen ? "392px 1fr" : "1fr";
+
+	const transcriptProps = {
+		clips,
+		transcripts: document?.transcripts ?? [],
+		assets: document?.assets ?? [],
+		skipRanges: document?.timeline?.skipRanges ?? [],
+		busy: isTranscribing,
+		currentTimeSec,
+		onSeek: handleSeek,
+		onAddSkipRange: handleAddSkipRange,
+		onRemoveSkipRange: handleRemoveSkipRange,
+		onTranscribe: handleTranscribe,
+		canTranscribe: hasAsset,
+		isTranscribing,
+	};
 
 	return (
-		<div className={styles.app} data-collapse={collapseAttr || undefined}>
-			<Titlebar
-				project={project}
+		<div
+			className={v4.app}
+			style={{ gridTemplateRows: `58px 1fr ${showTimeline ? timelineRow : "0px"}` }}
+		>
+			<EditorTopBar
+				mode={mode}
+				onModeChange={setMode}
+				projectTitle={project?.title ?? null}
 				dirty={dirty}
-				lastSavedAt={lastSavedAt}
 				canExport={hasAsset}
-				leftCollapsed={leftCollapsed}
-				rightCollapsed={rightCollapsed}
-				bottomCollapsed={bottomCollapsed}
+				chatOpen={chatOpen}
 				actions={{
 					openProject: () => setOpenProjectOpen(true),
 					newProject: () => setNewProjectOpen(true),
 					save: () => void handleSave(),
-					saveAs: () => void handleSaveAs(),
 					newRecording: () => void handleNewRecording(),
-					recorder: handleReturnToRecorder,
 					export: handleExport,
-					toggleLeft: () => setLeftCollapsed((v) => !v),
-					toggleRight: () => setRightCollapsed((v) => !v),
-					toggleBottom: () => setBottomCollapsed((v) => !v),
 					openSettings: handleOpenSettings,
 					renameProject: handleRenameProject,
+					toggleChat: () => setChatOpen((v) => !v),
 				}}
 			/>
 
-			<main className={styles.workbench}>
-				{/* Left rail */}
-				<LeftRail active={leftTab} onChange={setLeftTab} />
-
-				{/* Left content panel */}
-				{!leftCollapsed ? (
-					<div className={styles.leftPanel}>
+			<div className={v4.body} style={{ gridTemplateColumns: bodyColumns }}>
+				{mode === "edit" && chatOpen ? (
+					<aside className={v4.agent} aria-label="AI editor">
 						<LeftPanel
-							active={leftTab}
+							active="chat"
 							assetStatuses={assetStatuses}
 							onRegenerateAsset={handleRegenerateAsset}
 						/>
-					</div>
+					</aside>
 				) : null}
 
-				{/* Resize handle: left */}
-				<div
-					className={`${styles.handle} ${styles.handleCol} ${styles.handleLeft}`}
-					aria-label="Resize left panel"
-					onPointerDown={(e) => startResize(e, "left")}
-				/>
+				<section className={v4.stage} aria-label="Preview stage">
+					{mode === "edit" ? (
+						<>
+							<div style={{ position: "absolute", inset: 0 }}>
+								<Preview
+									hasProject={hasProject}
+									hasAsset={hasAsset}
+									videoSources={videoSources}
+									clips={clips}
+									zoomRegions={tl.zoomRegions}
+									speedRegions={tl.speedRegions}
+									skipRanges={tl.skipRanges}
+									selectedZoomRegionId={tl.selection?.kind === "zoom" ? tl.selection.id : null}
+									onZoomFocusChange={tl.updateZoomFocusLive}
+									onZoomFocusCommit={() => void tl.commitZoomFocus()}
+									annotationRegions={tl.annotationRegions}
+									selectedAnnotationId={
+										tl.selection?.kind === "annotation" ? tl.selection.id : null
+									}
+									onSelectAnnotation={(id) => tl.selectRegion("annotation", id)}
+									onAnnotationPositionChange={(id, position) => {
+										tl.updateAnnotationLive(id, { position });
+										void tl.commitAnnotationChange();
+									}}
+									onAnnotationSizeChange={(id, size) => {
+										tl.updateAnnotationLive(id, { size });
+										void tl.commitAnnotationChange();
+									}}
+									onAnnotationBlurDataChange={(id, blurData) =>
+										tl.updateAnnotationLive(id, { blurData })
+									}
+									onAnnotationCommit={() => void tl.commitAnnotationChange()}
+									seekTarget={seekTarget}
+									onTimeChange={handleTimeChange}
+									onSeek={handleSeek}
+									onLoadedMetadata={handleLoadedMetadata}
+									onVideoElement={setVideoElement}
+									currentTimeSec={currentTimeSec}
+									playing={playing}
+								/>
+							</div>
+							<FloatingTransport
+								playing={playing}
+								loop={loop}
+								currentTimeSec={currentTimeSec}
+								clips={clips}
+								onTogglePlay={togglePlay}
+								onPrevClip={handlePrevClip}
+								onNextClip={handleNextClip}
+								onToggleLoop={handleToggleLoop}
+								onExpand={handleExpand}
+							/>
+							<FloatingInspector
+								facet={facet}
+								open={inspectorOpen}
+								onFacetChange={(f) => {
+									setFacet(f);
+									setInspectorOpen(true);
+								}}
+								onToggleOpen={() => setInspectorOpen((v) => !v)}
+								onCrop={() => setCropOpen(true)}
+								onCaptions={handleCaptions}
+								transcriptProps={transcriptProps}
+							/>
+						</>
+					) : mode === "media" ? (
+						<MediaStage assetStatuses={assetStatuses} onRegenerateAsset={handleRegenerateAsset} />
+					) : (
+						<RecStage onStartRecording={() => void handleNewRecording()} />
+					)}
+				</section>
+			</div>
 
-				{/* Preview center */}
-				<Preview
-					hasProject={hasProject}
-					hasAsset={hasAsset}
-					videoSources={videoSources}
-					clips={clips}
-					zoomRegions={tl.zoomRegions}
-					speedRegions={tl.speedRegions}
-					skipRanges={tl.skipRanges}
-					selectedZoomRegionId={tl.selection?.kind === "zoom" ? tl.selection.id : null}
-					onZoomFocusChange={tl.updateZoomFocusLive}
-					onZoomFocusCommit={() => void tl.commitZoomFocus()}
-					annotationRegions={tl.annotationRegions}
-					selectedAnnotationId={tl.selection?.kind === "annotation" ? tl.selection.id : null}
-					onSelectAnnotation={(id) => tl.selectRegion("annotation", id)}
-					onAnnotationPositionChange={(id, position) => {
-						// ponytail: Rnd only calls this once per drag gesture (on
-						// dragStop, not on every pointermove), so — unlike the zoom
-						// focus overlay — there's no per-frame IPC risk here; commit
-						// immediately.
-						tl.updateAnnotationLive(id, { position });
-						void tl.commitAnnotationChange();
-					}}
-					onAnnotationSizeChange={(id, size) => {
-						tl.updateAnnotationLive(id, { size });
-						void tl.commitAnnotationChange();
-					}}
-					onAnnotationBlurDataChange={(id, blurData) => tl.updateAnnotationLive(id, { blurData })}
-					onAnnotationCommit={() => void tl.commitAnnotationChange()}
-					seekTarget={seekTarget}
-					onTimeChange={handleTimeChange}
-					onSeek={handleSeek}
-					onLoadedMetadata={handleLoadedMetadata}
-					onVideoElement={setVideoElement}
-					currentTimeSec={currentTimeSec}
-					playing={playing}
-				/>
-
-				{/* Resize handle: right */}
-				<div
-					className={`${styles.handle} ${styles.handleCol} ${styles.handleRight}`}
-					aria-label="Resize right panel"
-					onPointerDown={(e) => startResize(e, "right")}
-				/>
-
-				{/* Right panel stack + rail */}
-				{!rightCollapsed ? (
-					<RightPanelStack
-						active={rightPane}
-						onChange={setRightPane}
-						onCrop={() => setCropOpen(true)}
-						transcripts={document?.transcripts ?? []}
-						assets={document?.assets ?? []}
-						clips={clips}
-						skipRanges={document?.timeline?.skipRanges ?? []}
-						busy={isTranscribing}
-						currentTimeSec={currentTimeSec}
-						onSeek={handleSeek}
-						onAddSkipRange={handleAddSkipRange}
-						onRemoveSkipRange={handleRemoveSkipRange}
-						onTranscribe={handleTranscribe}
-						canTranscribe={hasAsset}
-						isTranscribing={isTranscribing}
-						selection={tl.selection}
-						onClearSelection={tl.clearSelection}
-						onRemoveSelection={(kind, id) => void tl.removeRegion(kind, id)}
-					/>
-				) : (
-					<aside className={`${styles.rail} ${styles.rightRail}`} aria-label="Right tools">
-						<RightRailCompact onChange={setRightPane} onCrop={() => setCropOpen(true)} />
-					</aside>
-				)}
-			</main>
-
-			{/* Resize handle: bottom */}
-			<div
-				className={`${styles.handle} ${styles.handleRow} ${styles.handleBottom}`}
-				aria-label="Resize timeline"
-				onPointerDown={(e) => startResize(e, "bottom")}
-			/>
-
-			{/* Bottom timeline */}
-			{!bottomCollapsed ? (
+			{/* Timeline footer (hidden in Rec mode) */}
+			{showTimeline ? (
 				<Bottombar
 					clips={clips}
 					videoSources={videoSources}
@@ -1141,6 +1106,8 @@ export function NewEditorShell() {
 					onNextClip={handleNextClip}
 					onToggleLoop={handleToggleLoop}
 					onExpand={handleExpand}
+					hideTransport={mode === "edit"}
+					timelineVariant={mode === "media" ? "media" : "edit"}
 				/>
 			) : null}
 
@@ -1185,72 +1152,4 @@ export function NewEditorShell() {
 			/>
 		</div>
 	);
-}
-
-function RightRailCompact({
-	onChange,
-	onCrop,
-}: {
-	onChange: (id: RightPaneId) => void;
-	onCrop: () => void;
-}) {
-	const buttons: Array<{ id: RightPaneId; label: string; icon: React.ElementType }> = [
-		{ id: "background", label: "Background", icon: Sparkles },
-		{ id: "effects", label: "Video effects", icon: Film },
-	];
-	return (
-		<>
-			{buttons.map(({ id, label, icon: Icon }) => (
-				<button
-					type="button"
-					key={id}
-					title={label}
-					aria-label={label}
-					onClick={() => onChange(id)}
-				>
-					<Icon size={18} />
-				</button>
-			))}
-			<button type="button" title="Crop" aria-label="Crop" onClick={onCrop}>
-				<EyeOff size={18} />
-			</button>
-		</>
-	);
-}
-
-function startResize(e: React.PointerEvent<HTMLDivElement>, axis: "left" | "right" | "bottom") {
-	e.preventDefault();
-	const target = e.currentTarget;
-	target.setPointerCapture(e.pointerId);
-	target.classList.add(styles.isDragging);
-	document.body.style.cursor = axis === "bottom" ? "row-resize" : "col-resize";
-
-	const root = document.documentElement;
-	const varName =
-		axis === "left" ? "--panel-w-left" : axis === "right" ? "--panel-w-right" : "--bottom-h";
-	const min = axis === "bottom" ? 140 : 200;
-	const cap = axis === "bottom" ? 0.65 : 0.55;
-	const max = axis === "bottom" ? window.innerHeight * cap : window.innerWidth * cap;
-	const startVal = parseFloat(getComputedStyle(root).getPropertyValue(varName)) || 0;
-	const startX = e.clientX;
-	const startY = e.clientY;
-
-	const onMove = (ev: PointerEvent) => {
-		let next: number;
-		if (axis === "left") next = startVal + (ev.clientX - startX);
-		else if (axis === "right") next = startVal - (ev.clientX - startX);
-		else next = startVal + (startY - ev.clientY);
-		next = Math.max(min, Math.min(next, max));
-		root.style.setProperty(varName, `${next}px`);
-	};
-	const onUp = () => {
-		target.classList.remove(styles.isDragging);
-		document.body.style.cursor = "";
-		target.removeEventListener("pointermove", onMove);
-		target.removeEventListener("pointerup", onUp);
-		target.removeEventListener("pointercancel", onUp);
-	};
-	target.addEventListener("pointermove", onMove);
-	target.addEventListener("pointerup", onUp);
-	target.addEventListener("pointercancel", onUp);
 }
