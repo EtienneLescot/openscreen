@@ -13,7 +13,6 @@ import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { PLACEHOLDER_DURATION_SEC, useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { nativeBridgeClient } from "@/native";
 import type { AiEditionProjectSummary } from "@/native/contracts";
-import { Bottombar } from "./Bottombar";
 import { ExportDialog } from "./ExportDialog";
 import { LeftPanel } from "./LeftPanel";
 import {
@@ -31,6 +30,7 @@ import { type Facet, FloatingInspector } from "./v4/FloatingInspector";
 import { FloatingTransport } from "./v4/FloatingTransport";
 import { MediaStage } from "./v4/MediaStage";
 import { RecStage } from "./v4/RecStage";
+import { V4Timeline } from "./v4/V4Timeline";
 
 interface SeekTarget {
 	timeSec: number;
@@ -84,15 +84,6 @@ export function NewEditorShell() {
 	const [captionsMaxW, setCaptionsMaxW] = useState(7);
 	const [copiedClipId, setCopiedClipId] = useState<string | null>(null);
 	const [projectSummaries, setProjectSummaries] = useState<AiEditionProjectSummary[]>([]);
-	// T15 — Place-skip mode is owned by Bottombar (it owns the
-	// body-class effect, the Esc-to-cancel, the preview-pin). The
-	// keyboard shortcut ("T") here needs to toggle the same state, so
-	// we expose it as a ref. Refs are used (not state) so the keyboard
-	// handler doesn't need to re-bind on every change.
-	const togglePlaceSkipRef = useRef<() => void>(() => undefined);
-	const setTogglePlaceSkip = useCallback((fn: () => void) => {
-		togglePlaceSkipRef.current = fn;
-	}, []);
 	const seekSeqRef = useRef(0);
 	const initRef = useRef(false);
 
@@ -927,7 +918,7 @@ export function NewEditorShell() {
 					break;
 				case "t":
 					e.preventDefault();
-					togglePlaceSkipRef.current();
+					void tl.addSkip();
 					break;
 				case "a":
 					e.preventDefault();
@@ -1079,36 +1070,27 @@ export function NewEditorShell() {
 				</section>
 			</div>
 
-			{/* Timeline footer (hidden in Rec mode) */}
+			{/* Timeline footer (hidden in Rec mode) — rebuilt from the v4 design. */}
 			{showTimeline ? (
-				<Bottombar
-					clips={clips}
-					videoSources={videoSources}
-					currentTimeSec={currentTimeSec}
-					onSeek={handleSeek}
-					zoomRegions={tl.zoomRegions}
-					skipRanges={tl.skipRanges}
-					annotationRegions={tl.annotationRegions}
-					speedRegions={tl.speedRegions}
-					selection={tl.selection}
-					multiSelection={tl.multiSelection}
-					hasDoc={tl.hasDoc}
-					onAddZoom={() => void tl.addZoom()}
-					onAddAnnotation={() => void tl.addAnnotation()}
-					onAddSpeed={() => void tl.addSpeed()}
-					setTogglePlaceSkip={setTogglePlaceSkip}
-					onSelectRegion={(kind, id, additive) => tl.selectRegion(kind, id, { additive })}
-					onCaptions={handleCaptions}
-					playing={playing}
-					loop={loop}
-					onTogglePlay={togglePlay}
-					onPrevClip={handlePrevClip}
-					onNextClip={handleNextClip}
-					onToggleLoop={handleToggleLoop}
-					onExpand={handleExpand}
-					hideTransport={mode === "edit"}
-					timelineVariant={mode === "media" ? "media" : "edit"}
-				/>
+				<div
+					style={{
+						gridRow: 3,
+						minHeight: 0,
+						background: "var(--surface)",
+						borderTop: "1px solid var(--border)",
+					}}
+				>
+					<V4Timeline
+						tl={tl}
+						currentTimeSec={currentTimeSec}
+						setCurrentTime={(sec) => {
+							handleSeek(sec);
+						}}
+						variant={mode === "media" ? "media" : "edit"}
+						onDropAsset={(assetId) => void tl.insertClipAt(assetId, clips.length)}
+						videoSources={videoSources}
+					/>
+				</div>
 			) : null}
 
 			{/* Modals */}

@@ -709,3 +709,401 @@
 	border-radius: 50%;
 	background: #fff;
 }
+
+/* ─── V4Timeline — from-design timeline (footer of the v4 .dc.html) ─── */
+.tl {
+	display: flex;
+	flex-direction: column;
+	min-height: 0;
+	height: 100%;
+	overflow: hidden;
+}
+.tlToolbar {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 0 16px;
+	height: 40px;
+	flex-shrink: 0;
+	border-bottom: 1px solid var(--border-soft);
+}
+.tlTools {
+	display: flex;
+	align-items: center;
+	gap: 1px;
+}
+.tlToolBtn {
+	width: 28px;
+	height: 28px;
+	display: grid;
+	place-items: center;
+	border: 0;
+	background: transparent;
+	color: var(--muted);
+	border-radius: 6px;
+	cursor: pointer;
+	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
+}
+.tlToolBtn:hover {
+	background: var(--surface-3);
+	color: var(--fg);
+}
+.tlToolBtn.on {
+	background: var(--accent-wash);
+	color: var(--accent);
+}
+.tlHints {
+	margin-left: auto;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.tlHint {
+	display: inline-flex;
+	align-items: center;
+	gap: 7px;
+	height: 26px;
+	padding: 0 10px;
+	background: var(--surface-1);
+	border: 1px solid var(--border);
+	border-radius: 7px;
+	font-size: 11px;
+	font-weight: 500;
+	color: var(--muted);
+}
+.tlKbd {
+	font-family: var(--font-mono);
+	font-size: 10.5px;
+	font-weight: 600;
+	color: var(--fg-2);
+}
+.tlTracks {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	padding: 8px 20px 0;
+	overflow: hidden;
+	cursor: text;
+}
+.tlCanvas {
+	position: relative;
+	min-width: 100%;
+	will-change: transform, width;
+}
+.tlPlayhead {
+	position: absolute;
+	top: 2px;
+	bottom: 66px;
+	width: 2px;
+	background: var(--accent);
+	border-radius: 1px;
+	z-index: 6;
+	box-shadow: 0 0 10px var(--accent-soft);
+	pointer-events: none;
+}
+.tlPlayheadDiamond {
+	position: absolute;
+	top: -5px;
+	left: 50%;
+	transform: translateX(-50%) rotate(45deg);
+	width: 9px;
+	height: 9px;
+	background: var(--accent);
+	border-radius: 2px;
+	box-shadow: 0 0 8px var(--accent-soft);
+}
+.tlRuler {
+	display: flex;
+	justify-content: space-between;
+	height: 15px;
+	margin-bottom: 7px;
+	padding-inline: 2px;
+}
+.tlRuler span {
+	font-family: var(--font-mono);
+	font-size: 10px;
+	color: var(--meta);
+}
+.tlLane {
+	position: relative;
+	height: 24px;
+	margin-bottom: 5px;
+	border-radius: 6px;
+	background: var(--surface-1);
+}
+.laneEmpty {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	font-size: 11px;
+	color: var(--meta);
+	pointer-events: none;
+}
+.lanePill {
+	position: absolute;
+	top: 1px;
+	height: 22px;
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	padding: 0 8px 0 7px;
+	border-radius: 6px;
+	border: 1.5px solid var(--accent);
+	background: var(--accent-soft);
+	color: var(--fg);
+	font-size: 11px;
+	font-weight: 600;
+	white-space: nowrap;
+	overflow: hidden;
+	box-sizing: border-box;
+	cursor: grab;
+	z-index: 2;
+}
+.lanePill:active {
+	cursor: grabbing;
+}
+.lanePillSel {
+	box-shadow: 0 0 0 3px var(--accent-ring);
+}
+.lanePillLabel {
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.laneAnnotation {
+	border-color: var(--annotation);
+	background: var(--annotation-wash);
+}
+.laneSpeed {
+	border-color: var(--speed);
+	background: var(--speed-wash);
+}
+.laneSkip {
+	border-color: var(--danger);
+	background: var(--danger-soft);
+}
+.laneZoom {
+	border-color: var(--accent);
+	background: var(--accent-soft);
+}
+.tlClips {
+	position: relative;
+	display: flex;
+	gap: 6px;
+	height: 66px;
+	width: 100%;
+	padding: 0;
+	border: 0;
+	background: transparent;
+	text-align: left;
+	cursor: default;
+}
+.tlClipsDrag::after {
+	content: "";
+	position: absolute;
+	inset: 0;
+	border: 2px dashed var(--accent);
+	border-radius: 11px;
+	background: var(--accent-wash);
+	pointer-events: none;
+}
+.tlClip {
+	position: relative;
+	flex: 1 0 0;
+	min-width: 0;
+	border-radius: 11px;
+	border: 1.5px solid var(--border);
+	background: var(--surface-1);
+	overflow: hidden;
+	cursor: pointer;
+	box-sizing: border-box;
+	box-shadow: inset 0 1px 8px rgba(255, 255, 255, 0.06);
+}
+.tlClipSel {
+	border-color: var(--accent);
+}
+.tlWave {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 1px;
+	padding: 0 2px;
+	pointer-events: none;
+}
+.tlWave span {
+	flex: 1 1 0;
+	align-self: center;
+	min-height: 2px;
+	max-width: 2px;
+	border-radius: 2px;
+	background: var(--accent);
+}
+.tlClipLabel {
+	position: absolute;
+	left: 10px;
+	top: 8px;
+	z-index: 2;
+	display: inline-flex;
+	align-items: center;
+	gap: 8px;
+	max-width: calc(100% - 50px);
+	padding: 3px 9px 3px 6px;
+	border-radius: 8px;
+	background: color-mix(in srgb, #080a0d 55%, transparent);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
+}
+.tlClipIcon {
+	width: 16px;
+	height: 16px;
+	display: grid;
+	place-items: center;
+	border-radius: 5px;
+	background: var(--surface);
+	color: var(--fg);
+	flex-shrink: 0;
+}
+.tlClipName {
+	font-size: 11px;
+	font-weight: 500;
+	color: #fff;
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.tlClipDelete {
+	position: absolute;
+	right: 8px;
+	top: 8px;
+	z-index: 2;
+	width: 26px;
+	height: 26px;
+	display: grid;
+	place-items: center;
+	border-radius: 7px;
+	color: var(--muted);
+	background: color-mix(in srgb, #080a0d 55%, transparent);
+	border: 1px solid rgba(255, 255, 255, 0.08);
+	backdrop-filter: blur(8px);
+	-webkit-backdrop-filter: blur(8px);
+	cursor: pointer;
+	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
+}
+.tlClipDelete:hover {
+	background: var(--danger-soft);
+	color: var(--danger);
+}
+.tlDropHint {
+	position: absolute;
+	inset: 0;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 8px;
+	border: 2px dashed var(--accent);
+	border-radius: 11px;
+	background: var(--accent-wash);
+	color: var(--accent);
+	font-size: 12.5px;
+	font-weight: 600;
+	pointer-events: none;
+}
+.tlNav {
+	position: relative;
+	height: 20px;
+	margin: 8px 20px 12px;
+	flex-shrink: 0;
+}
+.tlNavTrack {
+	position: absolute;
+	top: 7px;
+	left: 0;
+	right: 0;
+	height: 6px;
+	border-radius: 3px;
+	background: var(--surface-3);
+}
+.tlNavWindow {
+	position: absolute;
+	top: 5px;
+	height: 10px;
+	border-radius: 5px;
+	background: var(--surface-hi);
+	border: 1px solid var(--border-hi);
+	box-sizing: border-box;
+	cursor: grab;
+}
+.tlNavWindow:active {
+	cursor: grabbing;
+}
+.tlNavHandle {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 12px;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	cursor: ew-resize;
+	z-index: 3;
+}
+.tlNavHandle span {
+	width: 4px;
+	height: 14px;
+	border-radius: 2px;
+	background: var(--fg-2);
+	box-shadow: 0 0 0 2px var(--surface);
+}
+
+/* V4Timeline — region resize handles, toolbar aspect control */
+.lanePillHandle {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 6px;
+	cursor: ew-resize;
+	z-index: 3;
+}
+.tlToolSep {
+	width: 1px;
+	height: 20px;
+	background: var(--border);
+	margin: 0 4px;
+}
+.tlAspect {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 28px;
+	padding: 0 9px;
+	border: 0;
+	background: transparent;
+	color: var(--fg-2);
+	font-size: 11.5px;
+	font-weight: 500;
+	border-radius: 7px;
+	cursor: pointer;
+	transition: background var(--motion-fast) var(--ease);
+}
+.tlAspect:hover {
+	background: var(--surface-3);
+}
+.tlAspect svg {
+	color: var(--muted);
+}
+
+/* V4Timeline — snap guide during region drag/resize */
+.tlSnapGuide {
+	position: absolute;
+	top: 0;
+	bottom: 66px;
+	width: 2px;
+	background: var(--danger);
+	box-shadow: 0 0 6px color-mix(in oklch, var(--danger) 60%, transparent);
+	pointer-events: none;
+	z-index: 14;
+}
