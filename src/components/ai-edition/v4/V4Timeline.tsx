@@ -17,10 +17,11 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
-import { ASPECT_RATIOS, type AspectRatio } from "@/utils/aspectRatioUtils";
+import { ASPECT_RATIOS } from "@/utils/aspectRatioUtils";
 import { EditClipModal } from "../Modals";
 import type { VideoSource } from "../VirtualPreview";
 import styles from "./EditorShellV4.module.css";
@@ -115,10 +116,7 @@ export function V4Timeline({
 		window.addEventListener("keydown", onKey);
 		return () => window.removeEventListener("keydown", onKey);
 	}, [placingSkip]);
-	const cycleAspect = () => {
-		const i = ASPECT_RATIOS.indexOf(settings.aspectRatio as AspectRatio);
-		void setSettings({ aspectRatio: ASPECT_RATIOS[(i + 1) % ASPECT_RATIOS.length] });
-	};
+	const [aspectMenuOpen, setAspectMenuOpen] = useState(false);
 
 	const clips = tl.clips;
 	const total = useMemo(
@@ -417,16 +415,46 @@ export function V4Timeline({
 							<ZoomIn size={15} />
 						</button>
 						<span className={styles.tlToolSep} aria-hidden />
-						<button
-							type="button"
-							className={styles.tlAspect}
-							title="Cycle aspect ratio"
-							aria-label="Cycle aspect ratio"
-							onClick={cycleAspect}
-						>
-							{settings.aspectRatio}
-							<ChevronDown size={10} />
-						</button>
+						<Popover open={aspectMenuOpen} onOpenChange={setAspectMenuOpen}>
+							<PopoverTrigger asChild>
+								<button
+									type="button"
+									className={styles.tlAspect}
+									title="Aspect ratio"
+									aria-label="Aspect ratio"
+								>
+									{settings.aspectRatio}
+									<ChevronDown size={10} />
+								</button>
+							</PopoverTrigger>
+							<PopoverContent
+								align="end"
+								sideOffset={6}
+								animated={false}
+								className="w-auto border-0 bg-transparent p-0 shadow-none"
+							>
+								<div
+									className={styles.recMenu}
+									style={{ position: "relative", bottom: "auto", width: 150 }}
+								>
+									{ASPECT_RATIOS.map((ratio) => (
+										<button
+											type="button"
+											key={ratio}
+											className={`${styles.recMenuRow}${
+												ratio === settings.aspectRatio ? ` ${styles.active}` : ""
+											}`}
+											onClick={() => {
+												void setSettings({ aspectRatio: ratio });
+												setAspectMenuOpen(false);
+											}}
+										>
+											{ratio}
+										</button>
+									))}
+								</div>
+							</PopoverContent>
+						</Popover>
 					</div>
 				) : (
 					<div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
