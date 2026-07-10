@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AxcutAsset, AxcutClip, AxcutSkipRange, AxcutTranscript } from "../schema";
+import type { AxcutAsset, AxcutClip, AxcutTranscript, AxcutTrimRange } from "../schema";
 import { buildAggregatedSections, buildClipSection, findCueWordId } from "./aggregated-transcript";
 
 function makeClip(overrides: Partial<AxcutClip> = {}): AxcutClip {
@@ -32,9 +32,9 @@ function makeTranscript(words: AxcutTranscript["words"]): AxcutTranscript {
 	return { assetId: "asset_1", language: "en", segments: [], words };
 }
 
-function makeSkip(overrides: Partial<AxcutSkipRange>): AxcutSkipRange {
+function makeTrim(overrides: Partial<AxcutTrimRange>): AxcutTrimRange {
 	return {
-		id: overrides.id ?? "skip_1",
+		id: overrides.id ?? "trim_1",
 		assetId: overrides.assetId ?? "asset_1",
 		startSec: overrides.startSec ?? 0,
 		endSec: overrides.endSec ?? 0,
@@ -44,7 +44,7 @@ function makeSkip(overrides: Partial<AxcutSkipRange>): AxcutSkipRange {
 }
 
 describe("buildClipSection", () => {
-	it("marks every word in source range as kept when no skips exist", () => {
+	it("marks every word in source range as kept when no trims exist", () => {
 		const clip = makeClip({ sourceStartSec: 0, sourceEndSec: 3 });
 		const transcript = makeTranscript([
 			{ id: "w1", segmentId: "s1", startSec: 0, endSec: 1, text: "hi" },
@@ -54,10 +54,10 @@ describe("buildClipSection", () => {
 
 		const section = buildClipSection(clip, transcript, makeAsset(), []);
 		expect(section.words.map((cw) => cw.kept)).toEqual([true, true, true]);
-		expect(section.skipRuns).toEqual([]);
+		expect(section.trimRuns).toEqual([]);
 	});
 
-	it("flags words inside a skip range as removed and groups them into one SkipRun", () => {
+	it("flags words inside a trim range as removed and groups them into one TrimRun", () => {
 		const clip = makeClip({ sourceStartSec: 0, sourceEndSec: 5 });
 		const transcript = makeTranscript([
 			{ id: "w1", segmentId: "s1", startSec: 0, endSec: 1, text: "hi" },
@@ -66,27 +66,27 @@ describe("buildClipSection", () => {
 			{ id: "w4", segmentId: "s1", startSec: 3, endSec: 4, text: "pause" },
 			{ id: "w5", segmentId: "s1", startSec: 4, endSec: 5, text: "bye" },
 		]);
-		const skip = makeSkip({ id: "skip_a", startSec: 1, endSec: 4 });
+		const trim = makeTrim({ id: "trim_a", startSec: 1, endSec: 4 });
 
-		const section = buildClipSection(clip, transcript, makeAsset(), [skip]);
+		const section = buildClipSection(clip, transcript, makeAsset(), [trim]);
 		expect(section.words.map((cw) => cw.kept)).toEqual([true, false, false, false, true]);
-		expect(section.words.map((cw) => cw.skipId)).toEqual([
+		expect(section.words.map((cw) => cw.trimId)).toEqual([
 			null,
-			"skip_a",
-			"skip_a",
-			"skip_a",
+			"trim_a",
+			"trim_a",
+			"trim_a",
 			null,
 		]);
-		expect(section.skipRuns).toHaveLength(1);
-		expect(section.skipRuns[0]).toMatchObject({
-			skipId: "skip_a",
+		expect(section.trimRuns).toHaveLength(1);
+		expect(section.trimRuns[0]).toMatchObject({
+			trimId: "trim_a",
 			startWordIndex: 1,
 			endWordIndex: 3,
 			durationSec: 3,
 		});
 	});
 
-	it("splits separated skip ranges into multiple SkipRuns", () => {
+	it("splits separated trim ranges into multiple TrimRuns", () => {
 		const clip = makeClip({ sourceStartSec: 0, sourceEndSec: 6 });
 		const transcript = makeTranscript([
 			{ id: "w1", segmentId: "s1", startSec: 0, endSec: 1, text: "a" },
@@ -96,34 +96,34 @@ describe("buildClipSection", () => {
 			{ id: "w5", segmentId: "s1", startSec: 4, endSec: 5, text: "e" },
 			{ id: "w6", segmentId: "s1", startSec: 5, endSec: 6, text: "f" },
 		]);
-		const skips = [
-			makeSkip({ id: "skip_a", startSec: 1, endSec: 2 }),
-			makeSkip({ id: "skip_b", startSec: 3, endSec: 4 }),
+		const trims = [
+			makeTrim({ id: "trim_a", startSec: 1, endSec: 2 }),
+			makeTrim({ id: "trim_b", startSec: 3, endSec: 4 }),
 		];
 
-		const section = buildClipSection(clip, transcript, makeAsset(), skips);
-		expect(section.skipRuns).toHaveLength(2);
-		expect(section.skipRuns[0]).toMatchObject({
-			skipId: "skip_a",
+		const section = buildClipSection(clip, transcript, makeAsset(), trims);
+		expect(section.trimRuns).toHaveLength(2);
+		expect(section.trimRuns[0]).toMatchObject({
+			trimId: "trim_a",
 			startWordIndex: 1,
 			endWordIndex: 1,
 		});
-		expect(section.skipRuns[1]).toMatchObject({
-			skipId: "skip_b",
+		expect(section.trimRuns[1]).toMatchObject({
+			trimId: "trim_b",
 			startWordIndex: 3,
 			endWordIndex: 3,
 		});
 	});
 
-	it("does NOT apply skips from a different asset", () => {
+	it("does NOT apply trims from a different asset", () => {
 		const clip = makeClip({ sourceStartSec: 0, sourceEndSec: 3 });
 		const transcript = makeTranscript([
 			{ id: "w1", segmentId: "s1", startSec: 0, endSec: 1, text: "hi" },
 			{ id: "w2", segmentId: "s1", startSec: 1, endSec: 2, text: "there" },
 		]);
-		const skip = makeSkip({ id: "skip_x", assetId: "asset_2", startSec: 0.5, endSec: 2.5 });
+		const trim = makeTrim({ id: "trim_x", assetId: "asset_2", startSec: 0.5, endSec: 2.5 });
 
-		const section = buildClipSection(clip, transcript, makeAsset(), [skip]);
+		const section = buildClipSection(clip, transcript, makeAsset(), [trim]);
 		expect(section.words.map((cw) => cw.kept)).toEqual([true, true]);
 	});
 
@@ -139,7 +139,7 @@ describe("buildClipSection", () => {
 		// ponytail: the LLM (not the renderer) decides what is a filler. Every
 		// word renders as plain text in the right pane.
 		expect(section.words.map((cw) => cw.kept)).toEqual([true, true, true]);
-		expect(section.words.map((cw) => cw.skipId)).toEqual([null, null, null]);
+		expect(section.words.map((cw) => cw.trimId)).toEqual([null, null, null]);
 	});
 
 	it("returns an empty words list when the clip has no matching transcript", () => {
@@ -147,16 +147,16 @@ describe("buildClipSection", () => {
 		const section = buildClipSection(clip, null, makeAsset(), []);
 
 		expect(section.words).toEqual([]);
-		expect(section.skipRuns).toEqual([]);
+		expect(section.trimRuns).toEqual([]);
 		expect(section.transcript).toBeNull();
 	});
 
 	it("ignores transcript words outside the clip's source range", () => {
 		const clip = makeClip({ sourceStartSec: 2, sourceEndSec: 4 });
 		const transcript = makeTranscript([
-			{ id: "w_before", segmentId: "s1", startSec: 0, endSec: 1, text: "skip" },
+			{ id: "w_before", segmentId: "s1", startSec: 0, endSec: 1, text: "trim" },
 			{ id: "w_mid", segmentId: "s1", startSec: 2.5, endSec: 3.5, text: "in" },
-			{ id: "w_after", segmentId: "s1", startSec: 5, endSec: 6, text: "skip" },
+			{ id: "w_after", segmentId: "s1", startSec: 5, endSec: 6, text: "trim" },
 		]);
 
 		const section = buildClipSection(clip, transcript, makeAsset(), []);
@@ -231,9 +231,9 @@ describe("findCueWordId", () => {
 			words: wordTimes.map(([id, start, end]) => ({
 				word: { id, segmentId: "s1", startSec: start, endSec: end, text: id },
 				kept: true,
-				skipId: null,
+				trimId: null,
 			})),
-			skipRuns: [],
+			trimRuns: [],
 		};
 	}
 

@@ -48,6 +48,13 @@ interface Window {
 		selectSource: (source: ProcessedDesktopSource) => Promise<ProcessedDesktopSource | null>;
 		getSelectedSource: () => Promise<ProcessedDesktopSource | null>;
 		onSelectedSourceChanged: (callback: (source: ProcessedDesktopSource) => void) => () => void;
+		getRecordingPrefs: () => Promise<import("./ipc/handlers").RecordingPrefs>;
+		setRecordingPrefs: (
+			prefs: Partial<import("./ipc/handlers").RecordingPrefs>,
+		) => Promise<import("./ipc/handlers").RecordingPrefs>;
+		onRecordingPrefsChanged: (
+			callback: (prefs: import("./ipc/handlers").RecordingPrefs) => void,
+		) => () => void;
 		onSourceSelectorClosed: (callback: () => void) => () => void;
 		onAiEditionChatEvent: (
 			callback: (event: import("../src/native/contracts").AiEditionChatEvent) => void,

@@ -63,6 +63,12 @@ export function NewEditorShell() {
 	// column, and a floating facet inspector over the stage.
 	const [mode, setMode] = useState<EditorMode>("edit");
 	const [chatOpen, setChatOpen] = useState(true);
+	const [chatWidthPx, setChatWidthPx] = useState(
+		() => Number(localStorage.getItem("os-editor-chat-width")) || 392,
+	);
+	const [timelineHeightPx, setTimelineHeightPx] = useState(
+		() => Number(localStorage.getItem("os-editor-timeline-height")) || 308,
+	);
 	const [inspectorOpen, setInspectorOpen] = useState(true);
 	const [facet, setFacet] = useState<Facet>("effects");
 	const [openProjectOpen, setOpenProjectOpen] = useState(false);
@@ -260,7 +266,13 @@ export function NewEditorShell() {
 		if (!document) return [];
 		return document.assets.map((asset) => ({
 			id: asset.id,
-			src: toFileUrl(asset.originalPath),
+			// Real Electron assets are filesystem paths and go through toFileUrl.
+			// In the browser preview an asset can already point at an http(s)/
+			// blob/data URL served by Vite; toFileUrl would mangle those into a
+			// broken file:// URL, so pass web URLs through untouched.
+			src: /^(https?|blob|data):/.test(asset.originalPath)
+				? asset.originalPath
+				: toFileUrl(asset.originalPath),
 			label: asset.label,
 		}));
 	}, [document]);
@@ -491,11 +503,11 @@ export function NewEditorShell() {
 
 	// ponytail: transcript-pane → timeline skip ranges. The right pane's
 	// contentEditable region converts user Backspace/Delete into a new
-	// skipRange (NOT a destructive word removal — the source text stays
+	// trimRange (NOT a destructive word removal — the source text stays
 	// intact, the word is just hidden by the skip overlay). Mirrors
-	// axcut's `queueAddSkipRange` / `queueRemoveSkipRange` callbacks in
+	// axcut's `queueAddTrimRange` / `queueRemoveTrimRange` callbacks in
 	// apps/web/src/App.tsx.
-	const handleAddSkipRange = useCallback(
+	const handleAddTrimRange = useCallback(
 		(assetId: string, startSec: number, endSec: number, reason: string) => {
 			// ponytail: read the latest document from the store, not the
 			// closure. The closure captures the document at render time; if
@@ -513,7 +525,7 @@ export function NewEditorShell() {
 				.then(() => import("@/lib/ai-edition/document/operations"))
 				.then(({ applyTimelineOperation }) =>
 					applyTimelineOperation(doc, {
-						type: "add_skip_range",
+						type: "add_trim_range",
 						assetId,
 						startSec,
 						endSec,
@@ -530,16 +542,16 @@ export function NewEditorShell() {
 		[document, saveDocument],
 	);
 
-	const handleRemoveSkipRange = useCallback(
-		(skipId: string) => {
+	const handleRemoveTrimRange = useCallback(
+		(trimId: string) => {
 			const doc = useProjectStore.getState().document ?? document;
 			if (!doc) return;
 			const queued = saveQueueRef.current
 				.then(() => import("@/lib/ai-edition/document/operations"))
 				.then(({ applyTimelineOperation }) =>
 					applyTimelineOperation(doc, {
-						type: "remove_skip_range",
-						skipId,
+						type: "remove_trim_range",
+						trimId,
 						reason: "Restored from transcript pane.",
 					}),
 				)
@@ -715,7 +727,7 @@ export function NewEditorShell() {
 						);
 		if (region) {
 			copyRegion({
-				kind: tl.selection.kind === "skip" ? "zoom" : tl.selection.kind,
+				kind: tl.selection.kind === "trim" ? "zoom" : tl.selection.kind,
 				region: region as Record<string, unknown>,
 			});
 			toast.success("Region copied");
@@ -863,7 +875,7 @@ export function NewEditorShell() {
 			}
 			if (ctrl && e.key.toLowerCase() === "x") {
 				// F2.8 — cut: remember the region in the clipboard, then remove it.
-				if (tl.selection && tl.selection.kind !== "skip") {
+				if (tl.selection && tl.selection.kind !== "trim") {
 					e.preventDefault();
 					const cut = tl.selection;
 					void handleCopyRegion().then(() => tl.removeRegion(cut.kind, cut.id));
@@ -918,7 +930,7 @@ export function NewEditorShell() {
 					break;
 				case "t":
 					e.preventDefault();
-					void tl.addSkip();
+					void tl.addTrim();
 					break;
 				case "a":
 					e.preventDefault();
@@ -944,19 +956,69 @@ export function NewEditorShell() {
 	]);
 
 	const showTimeline = mode !== "rec";
-	const timelineRow = mode === "media" ? "188px" : "308px";
-	const bodyColumns = mode === "edit" && chatOpen ? "392px 1fr" : "1fr";
+	const timelineRow = mode === "media" ? "188px" : `${timelineHeightPx}px`;
+	const bodyColumns = mode === "edit" && chatOpen ? `${chatWidthPx}px 1fr` : "1fr";
+
+	// Drag the chat/stage divider (col-resize) or the timeline's top edge
+	// (row-resize) to resize. Pointer-driven like V4Timeline's pill/nav/clip
+	// drags — pointerdown arms a window-level pointermove/pointerup pair, no
+	// drag library. Persisted to localStorage (a UI layout preference, not
+	// project content, so it doesn't belong in the document/useEditorSettings
+	// round-trip).
+	const startChatResize = useCallback(
+		(e: React.PointerEvent) => {
+			e.preventDefault();
+			const startX = e.clientX;
+			const startWidth = chatWidthPx;
+			let latest = startWidth;
+			const move = (ev: PointerEvent) => {
+				latest = Math.min(560, Math.max(280, startWidth + (ev.clientX - startX)));
+				setChatWidthPx(latest);
+			};
+			const up = () => {
+				window.removeEventListener("pointermove", move);
+				window.removeEventListener("pointerup", up);
+				localStorage.setItem("os-editor-chat-width", String(latest));
+			};
+			window.addEventListener("pointermove", move);
+			window.addEventListener("pointerup", up);
+		},
+		[chatWidthPx],
+	);
+
+	const startTimelineResize = useCallback(
+		(e: React.PointerEvent) => {
+			e.preventDefault();
+			const startY = e.clientY;
+			const startHeight = timelineHeightPx;
+			let latest = startHeight;
+			const move = (ev: PointerEvent) => {
+				// Dragging the handle up (negative clientY delta) enlarges the
+				// timeline, since it sits below the handle.
+				latest = Math.min(480, Math.max(160, startHeight - (ev.clientY - startY)));
+				setTimelineHeightPx(latest);
+			};
+			const up = () => {
+				window.removeEventListener("pointermove", move);
+				window.removeEventListener("pointerup", up);
+				localStorage.setItem("os-editor-timeline-height", String(latest));
+			};
+			window.addEventListener("pointermove", move);
+			window.addEventListener("pointerup", up);
+		},
+		[timelineHeightPx],
+	);
 
 	const transcriptProps = {
 		clips,
 		transcripts: document?.transcripts ?? [],
 		assets: document?.assets ?? [],
-		skipRanges: document?.timeline?.skipRanges ?? [],
+		trimRanges: document?.timeline?.trimRanges ?? [],
 		busy: isTranscribing,
 		currentTimeSec,
 		onSeek: handleSeek,
-		onAddSkipRange: handleAddSkipRange,
-		onRemoveSkipRange: handleRemoveSkipRange,
+		onAddTrimRange: handleAddTrimRange,
+		onRemoveTrimRange: handleRemoveTrimRange,
 		onTranscribe: handleTranscribe,
 		canTranscribe: hasAsset,
 		isTranscribing,
@@ -978,7 +1040,6 @@ export function NewEditorShell() {
 					openProject: () => setOpenProjectOpen(true),
 					newProject: () => setNewProjectOpen(true),
 					save: () => void handleSave(),
-					newRecording: () => void handleNewRecording(),
 					export: handleExport,
 					openSettings: handleOpenSettings,
 					renameProject: handleRenameProject,
@@ -988,13 +1049,23 @@ export function NewEditorShell() {
 
 			<div className={v4.body} style={{ gridTemplateColumns: bodyColumns }}>
 				{mode === "edit" && chatOpen ? (
-					<aside className={v4.agent} aria-label="AI editor">
-						<LeftPanel
-							active="chat"
-							assetStatuses={assetStatuses}
-							onRegenerateAsset={handleRegenerateAsset}
+					<>
+						<aside className={v4.agent} aria-label="AI editor">
+							<LeftPanel
+								active="chat"
+								assetStatuses={assetStatuses}
+								onRegenerateAsset={handleRegenerateAsset}
+							/>
+						</aside>
+						<div
+							className={v4.chatResizeHandle}
+							style={{ left: chatWidthPx }}
+							role="separator"
+							aria-orientation="vertical"
+							aria-label="Resize chat panel"
+							onPointerDown={startChatResize}
 						/>
-					</aside>
+					</>
 				) : null}
 
 				<section className={v4.stage} aria-label="Preview stage">
@@ -1004,13 +1075,13 @@ export function NewEditorShell() {
 								style={{
 									position: "absolute",
 									inset: 0,
-									// ponytail: matches the design's stageWrapStyle
-									// (`padding: 40px {inspectorOpen?'360px':'96px'} 110px 80px`)
-									// — reserves room for the floating inspector on the
-									// right (and transport at the bottom) so the video
-									// resizes into the remaining space instead of sitting
-									// underneath the panel.
-									padding: `40px ${inspectorOpen ? 360 : 96}px 110px 80px`,
+									// Reserves room for the floating inspector on the right
+									// so the video resizes into the remaining space instead
+									// of sitting underneath the panel. The transport bar is
+									// a hover-reveal overlay (see .transportWrap) rather than
+									// permanent chrome, so it no longer reserves bottom space
+									// — the video is free to extend underneath it.
+									padding: `40px ${inspectorOpen ? 360 : 96}px 40px 80px`,
 									boxSizing: "border-box",
 								}}
 							>
@@ -1021,7 +1092,7 @@ export function NewEditorShell() {
 									clips={clips}
 									zoomRegions={tl.zoomRegions}
 									speedRegions={tl.speedRegions}
-									skipRanges={tl.skipRanges}
+									trimRanges={tl.trimRanges}
 									selectedZoomRegionId={tl.selection?.kind === "zoom" ? tl.selection.id : null}
 									onZoomFocusChange={tl.updateZoomFocusLive}
 									onZoomFocusCommit={() => void tl.commitZoomFocus()}
@@ -1065,6 +1136,7 @@ export function NewEditorShell() {
 							<FloatingInspector
 								facet={facet}
 								open={inspectorOpen}
+								tl={tl}
 								onFacetChange={(f) => {
 									setFacet(f);
 									setInspectorOpen(true);
@@ -1078,7 +1150,10 @@ export function NewEditorShell() {
 					) : mode === "media" ? (
 						<MediaStage assetStatuses={assetStatuses} onRegenerateAsset={handleRegenerateAsset} />
 					) : (
-						<RecStage onStartRecording={() => void handleNewRecording()} />
+						<RecStage
+							onStartRecording={() => void handleNewRecording()}
+							onClose={() => setMode("edit")}
+						/>
 					)}
 				</section>
 			</div>
@@ -1087,12 +1162,22 @@ export function NewEditorShell() {
 			{showTimeline ? (
 				<div
 					style={{
+						position: "relative",
 						gridRow: 3,
 						minHeight: 0,
 						background: "var(--surface)",
 						borderTop: "1px solid var(--border)",
 					}}
 				>
+					{mode !== "media" ? (
+						<div
+							className={v4.timelineResizeHandle}
+							role="separator"
+							aria-orientation="horizontal"
+							aria-label="Resize timeline"
+							onPointerDown={startTimelineResize}
+						/>
+					) : null}
 					<V4Timeline
 						tl={tl}
 						currentTimeSec={currentTimeSec}
@@ -1125,6 +1210,8 @@ export function NewEditorShell() {
 				onClose={() => setCropOpen(false)}
 				initialRegion={editorSettings.cropRegion}
 				onApply={(region: CropRegion) => void setEditorSettings({ cropRegion: region })}
+				videoSources={videoSources}
+				currentTimeSec={currentTimeSec}
 			/>
 			<UnsavedChangesModal
 				open={unsavedPrompt !== null}

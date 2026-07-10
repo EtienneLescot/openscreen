@@ -34,7 +34,7 @@ describe("estimateHistoryTokens", () => {
 				role: "assistant",
 				content: "done",
 				createdAt: "2026-01-01T00:00:00.000Z",
-				toolCalls: [{ name: "addSkip", summary: "skip 5-8s" }],
+				toolCalls: [{ name: "addTrim", summary: "skip 5-8s" }],
 			},
 		]);
 		// tool adds roughly: 16 + 4-chars-per-token of name+summary
@@ -110,9 +110,9 @@ describe("buildCompactionPrompt", () => {
 				role: "assistant",
 				content: "applied",
 				createdAt: "2026-01-01T00:00:00.000Z",
-				toolCalls: [{ name: "addSkip", summary: "5-8s" }],
+				toolCalls: [{ name: "addTrim", summary: "5-8s" }],
 			},
 		]);
-		expect(prompt).toContain("tools: addSkip (5-8s)");
+		expect(prompt).toContain("tools: addTrim (5-8s)");
 	});
 });

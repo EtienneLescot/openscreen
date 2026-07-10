@@ -439,20 +439,20 @@
 }
 
 /* ─── preview area ─────────────────────────────────────────────── */
+/* ponytail: the stage wrapper (in NewEditorShell.tsx) already provides the
+   padding that reserves room for the floating inspector, and .stage paints the
+   scene gradient. previewWrap is a single transparent, zero-padding centering
+   layer so the wallpaper card floats on that gradient — matching the design's
+   stage-wrap (one framed card, no surface slab, no double padding). It is also
+   the positioned ancestor for the timecode/badge overlays and the box the
+   frame measures for its contain-fit. */
 .previewWrap {
-	display: grid;
-	grid-template-rows: 1fr auto;
-	background: var(--surface-1);
-	min-width: 0;
-	min-height: 0;
-	position: relative;
-}
-.previewCanvas {
 	position: relative;
 	display: grid;
 	place-items: center;
-	overflow: hidden;
-	padding: var(--sp-5);
+	width: 100%;
+	height: 100%;
+	min-width: 0;
 	min-height: 0;
 }
 .previewFrame {
@@ -469,11 +469,16 @@
 			var(--scene-sky-mid) 35%,
 			var(--scene-foliage) 70%,
 			var(--scene-foliage-d) 100%);
-	/* ponytail: don't make the canvas itself a rounded card — the video /
-	   camera apply their own border-radius for content clipping. A square
-	   canvas blends into the editor chrome; the wallpaper is the visible
-	   area, but no "frame around the canvas" effect. */
-	border-radius: 0;
+	/* ponytail: the wallpaper card is a floating, rounded surface (per the v4
+	   design's preview frame) — rounded corners + a layered drop shadow lift it
+	   off the scene gradient. The custom background (buildFrameStyle) fills this
+	   card; the video sits on top with its own padding so the wallpaper shows
+	   around it. */
+	border-radius: 16px;
+	box-shadow:
+		0 40px 90px -30px rgba(0, 0, 0, 0.75),
+		0 12px 28px -12px rgba(0, 0, 0, 0.5),
+		inset 0 0 0 1px rgba(255, 255, 255, 0.09);
 	overflow: hidden;
 	display: grid;
 	place-items: center;
@@ -877,6 +882,7 @@
 }
 .paneBody {
 	overflow-y: auto;
+	overflow-x: hidden;
 	padding: 12px var(--sp-4);
 	scrollbar-width: thin;
 	scrollbar-color: var(--border) transparent;

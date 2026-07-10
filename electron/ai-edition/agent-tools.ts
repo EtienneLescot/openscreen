@@ -6,7 +6,7 @@
 //
 // Read tools return JSON the model can reason over; write tools return the
 // mutated document plus a human-readable summary line for the chat panel
-// ("applied: added skip 0:02.1 – 0:02.4").
+// ("applied: added trim 0:02.1 – 0:02.4").
 
 import { z } from "zod";
 import { createId } from "../../src/lib/ai-edition/document/ids";
@@ -39,17 +39,36 @@ function formatSec(sec: number): string {
 	return `${m}:${s.padStart(4, "0")}`;
 }
 
+function toMs(sec: number): number {
+	return Math.max(0, Math.round(sec * 1000));
+}
+
+// For the effect set* tools: keep the stored span unless the caller passes new
+// edges, and normalise so start ≤ end. Input seconds are virtual-timeline time.
+function resolveSpanMs(
+	existing: { startMs: number; endMs: number },
+	startSec: number | undefined,
+	endSec: number | undefined,
+): { startMs: number; endMs: number } {
+	if (startSec === undefined && endSec === undefined) {
+		return { startMs: existing.startMs, endMs: existing.endMs };
+	}
+	const s = startSec ?? existing.startMs / 1000;
+	const e = endSec ?? existing.endMs / 1000;
+	return { startMs: toMs(Math.min(s, e)), endMs: toMs(Math.max(s, e)) };
+}
+
 const secondsSchema = z.number().finite().nonnegative();
 
-const addSkipArgs = z.object({
+const addTrimArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
 	assetId: z.string().min(1).optional(),
 	reason: z.string().default(""),
 });
 
-const setSkipRangeArgs = z.object({
-	skipRangeId: z.string().min(1),
+const setTrimArgs = z.object({
+	trimRangeId: z.string().min(1),
 	startSec: secondsSchema,
 	endSec: secondsSchema,
 });
@@ -69,11 +88,60 @@ const getTranscriptArgs = z.object({
 	assetId: z.string().min(1).optional(),
 });
 
+// Effects (zoom / speed / annotation) are authored in *virtual* (edited-
+// timeline) seconds — the position on the ruler the user sees — unlike clips
+// and trims, which are source-time. The executor converts to the stored ms.
+const depthSchema = z.number().int().min(1).max(6);
+const focusSchema = z.object({ cx: z.number().min(0).max(1), cy: z.number().min(0).max(1) });
+
+const addZoomArgs = z.object({
+	startSec: secondsSchema,
+	endSec: secondsSchema,
+	depth: depthSchema.default(3),
+	focus: focusSchema.default({ cx: 0.5, cy: 0.5 }),
+});
+
+const setZoomArgs = z.object({
+	zoomId: z.string().min(1),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+	depth: depthSchema.optional(),
+	focus: focusSchema.optional(),
+});
+
+const addSpeedArgs = z.object({
+	startSec: secondsSchema,
+	endSec: secondsSchema,
+	speed: z.number().positive().default(1.5),
+});
+
+const setSpeedArgs = z.object({
+	speedId: z.string().min(1),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+	speed: z.number().positive().optional(),
+});
+
+const addAnnotationArgs = z.object({
+	startSec: secondsSchema,
+	endSec: secondsSchema,
+	text: z.string().default(""),
+	x: z.number().min(0).max(100).default(50),
+	y: z.number().min(0).max(100).default(50),
+});
+
+const setAnnotationArgs = z.object({
+	annotationId: z.string().min(1),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+	text: z.string().optional(),
+});
+
 export const AGENT_TOOL_SPECS: AgentToolSpec[] = [
 	{
 		name: "getCurrentDocument",
 		description:
-			"Read a compact snapshot of the current project: assets (with durations), timeline clips, skip ranges, and counts of annotations/zoom ranges. Call this before editing if the snapshot in the system prompt may be stale.",
+			"Read a compact snapshot of the current project: assets (with durations), timeline clips and trim ranges (source-time), and the zoom / speed / annotation effects (virtual, edited-timeline time). Call this before editing if the snapshot in the system prompt may be stale.",
 		parameters: { type: "object", properties: {}, additionalProperties: false },
 		mutating: false,
 	},
@@ -91,9 +159,9 @@ export const AGENT_TOOL_SPECS: AgentToolSpec[] = [
 		mutating: false,
 	},
 	{
-		name: "addSkip",
+		name: "addTrim",
 		description:
-			"Add a skip range (a cut — this source-time span will not be played or exported). Times are in seconds of the asset's source time.",
+			"Add a trim range: a cut of a span *inside* a clip that removes it from both playback and export without splitting the clip (a long clip with a big trim is cleaner than two clips). Times are seconds of the asset's source time. For shortening a clip's head/tail use setClipRange instead.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -108,16 +176,16 @@ export const AGENT_TOOL_SPECS: AgentToolSpec[] = [
 		mutating: true,
 	},
 	{
-		name: "setSkipRange",
-		description: "Move or resize an existing skip range by id. Times are source-time seconds.",
+		name: "setTrim",
+		description: "Move or resize an existing trim range by id. Times are source-time seconds.",
 		parameters: {
 			type: "object",
 			properties: {
-				skipRangeId: { type: "string" },
+				trimRangeId: { type: "string" },
 				startSec: { type: "number", minimum: 0 },
 				endSec: { type: "number", minimum: 0 },
 			},
-			required: ["skipRangeId", "startSec", "endSec"],
+			required: ["trimRangeId", "startSec", "endSec"],
 			additionalProperties: false,
 		},
 		mutating: true,
@@ -141,7 +209,7 @@ export const AGENT_TOOL_SPECS: AgentToolSpec[] = [
 	{
 		name: "replaceTimeline",
 		description:
-			"Replace the whole timeline with the given kept intervals of the primary asset's source time. Everything outside the intervals becomes a skip. Use for bulk edits like 'cut all silences'.",
+			"Replace the whole timeline with the given kept intervals of the primary asset's source time. Everything outside the intervals becomes a trim. Use for bulk edits like 'cut all silences'.",
 		parameters: {
 			type: "object",
 			properties: {
@@ -165,16 +233,173 @@ export const AGENT_TOOL_SPECS: AgentToolSpec[] = [
 		},
 		mutating: true,
 	},
+	{
+		name: "addZoom",
+		description:
+			"Add a zoom-in effect over a span of the *edited timeline* (virtual seconds, as seen on the ruler — not source time). depth 1–6 maps to 1.0×–3.5× (default 3 ≈ 2.0×). focus is the zoom centre in 0–1 fractions of the frame (default centre). Use for 'zoom in on …' and the smart-zoom pass.",
+		parameters: {
+			type: "object",
+			properties: {
+				startSec: { type: "number", minimum: 0, description: "Virtual-timeline start (seconds)." },
+				endSec: { type: "number", minimum: 0, description: "Virtual-timeline end (seconds)." },
+				depth: {
+					type: "integer",
+					minimum: 1,
+					maximum: 6,
+					description: "Zoom level 1–6 (default 3).",
+				},
+				focus: {
+					type: "object",
+					description: "Zoom centre, fractions of the frame (default {cx:0.5,cy:0.5}).",
+					properties: {
+						cx: { type: "number", minimum: 0, maximum: 1 },
+						cy: { type: "number", minimum: 0, maximum: 1 },
+					},
+					required: ["cx", "cy"],
+					additionalProperties: false,
+				},
+			},
+			required: ["startSec", "endSec"],
+			additionalProperties: false,
+		},
+		mutating: true,
+	},
+	{
+		name: "setZoom",
+		description:
+			"Move, resize, or restyle an existing zoom by id. Times are virtual-timeline seconds. Only the fields you pass are changed.",
+		parameters: {
+			type: "object",
+			properties: {
+				zoomId: { type: "string" },
+				startSec: { type: "number", minimum: 0 },
+				endSec: { type: "number", minimum: 0 },
+				depth: { type: "integer", minimum: 1, maximum: 6 },
+				focus: {
+					type: "object",
+					properties: {
+						cx: { type: "number", minimum: 0, maximum: 1 },
+						cy: { type: "number", minimum: 0, maximum: 1 },
+					},
+					required: ["cx", "cy"],
+					additionalProperties: false,
+				},
+			},
+			required: ["zoomId"],
+			additionalProperties: false,
+		},
+		mutating: true,
+	},
+	{
+		name: "addSpeed",
+		description:
+			"Add a speed-change region over a span of the *edited timeline* (virtual seconds). speed > 1 fast-forwards, < 1 slows down (default 1.5×). Use to speed through slow stretches without cutting them.",
+		parameters: {
+			type: "object",
+			properties: {
+				startSec: { type: "number", minimum: 0, description: "Virtual-timeline start (seconds)." },
+				endSec: { type: "number", minimum: 0, description: "Virtual-timeline end (seconds)." },
+				speed: {
+					type: "number",
+					exclusiveMinimum: 0,
+					description: "Playback multiplier (default 1.5).",
+				},
+			},
+			required: ["startSec", "endSec"],
+			additionalProperties: false,
+		},
+		mutating: true,
+	},
+	{
+		name: "setSpeed",
+		description:
+			"Move, resize, or change the multiplier of an existing speed region by id. Times are virtual-timeline seconds. Only the fields you pass are changed.",
+		parameters: {
+			type: "object",
+			properties: {
+				speedId: { type: "string" },
+				startSec: { type: "number", minimum: 0 },
+				endSec: { type: "number", minimum: 0 },
+				speed: { type: "number", exclusiveMinimum: 0 },
+			},
+			required: ["speedId"],
+			additionalProperties: false,
+		},
+		mutating: true,
+	},
+	{
+		name: "addAnnotation",
+		description:
+			"Add a text annotation over a span of the *edited timeline* (virtual seconds). Position x/y are percentages of the frame (0–100, default centre). Use for callouts and labels.",
+		parameters: {
+			type: "object",
+			properties: {
+				startSec: { type: "number", minimum: 0, description: "Virtual-timeline start (seconds)." },
+				endSec: { type: "number", minimum: 0, description: "Virtual-timeline end (seconds)." },
+				text: { type: "string", description: "The annotation text." },
+				x: {
+					type: "number",
+					minimum: 0,
+					maximum: 100,
+					description: "Horizontal position % (default 50).",
+				},
+				y: {
+					type: "number",
+					minimum: 0,
+					maximum: 100,
+					description: "Vertical position % (default 50).",
+				},
+			},
+			required: ["startSec", "endSec", "text"],
+			additionalProperties: false,
+		},
+		mutating: true,
+	},
+	{
+		name: "setAnnotation",
+		description:
+			"Move, resize, or edit the text of an existing annotation by id. Times are virtual-timeline seconds. Only the fields you pass are changed.",
+		parameters: {
+			type: "object",
+			properties: {
+				annotationId: { type: "string" },
+				startSec: { type: "number", minimum: 0 },
+				endSec: { type: "number", minimum: 0 },
+				text: { type: "string" },
+			},
+			required: ["annotationId"],
+			additionalProperties: false,
+		},
+		mutating: true,
+	},
 ];
 
 export function isMutatingTool(name: string): boolean {
 	return AGENT_TOOL_SPECS.find((t) => t.name === name)?.mutating ?? false;
 }
 
+function roundSec(ms: number): number {
+	return Math.round(ms) / 1000;
+}
+
 // Compact projection of the document for the model: everything it needs to
 // reference ids and times, nothing it doesn't (no waveform paths, no history).
+//
+// Three clearly-separated groups, each with its OWN time-base spelled out so the
+// model never has to guess:
+//   • clips   — arranged segments; source-time in/out + their timeline position.
+//   • trims   — source-time cuts inside a clip (do not split the clip).
+//   • effects — zoom / speed / annotation, in *virtual* (edited-timeline)
+//     seconds, i.e. positions on the ruler after clips + trims are applied.
 export function documentSnapshotForModel(document: AxcutDocument): Record<string, unknown> {
+	const legacy = document.legacyEditor as Record<string, unknown> | null;
+	const speedRegions =
+		(legacy?.speedRegions as
+			| Array<{ id: string; startMs: number; endMs: number; speed: number }>
+			| undefined) ?? [];
 	return {
+		timeBaseNote:
+			"clips and trims are in source-time seconds; zooms, speedRegions and annotations are in virtual (edited-timeline) seconds.",
 		project: { id: document.project.id, title: document.project.title },
 		primaryAssetId: document.project.primaryAssetId ?? document.assets[0]?.id ?? null,
 		assets: document.assets.map((a) => ({
@@ -190,15 +415,33 @@ export function documentSnapshotForModel(document: AxcutDocument): Record<string
 			timelineStartSec: c.timelineStartSec,
 			timelineEndSec: c.timelineEndSec,
 		})),
-		skipRanges: document.timeline.skipRanges.map((s) => ({
+		trimRanges: document.timeline.trimRanges.map((s) => ({
 			id: s.id,
 			assetId: s.assetId,
 			startSec: s.startSec,
 			endSec: s.endSec,
 			reason: s.reason,
 		})),
-		annotationCount: document.annotations.length,
-		zoomRangeCount: document.zoomRanges.length,
+		zoomRanges: document.zoomRanges.map((z) => ({
+			id: z.id,
+			startSec: roundSec(z.startMs),
+			endSec: roundSec(z.endMs),
+			depth: z.depth,
+			focus: z.focus,
+		})),
+		speedRegions: speedRegions.map((s) => ({
+			id: s.id,
+			startSec: roundSec(s.startMs),
+			endSec: roundSec(s.endMs),
+			speed: s.speed,
+		})),
+		annotations: document.annotations.map((a) => ({
+			id: a.id,
+			startSec: roundSec(a.startMs),
+			endSec: roundSec(a.endMs),
+			type: a.type,
+			text: a.textContent ?? a.content ?? "",
+		})),
 		hasTranscript: document.transcripts.length > 0 || document.transcript !== null,
 	};
 }
@@ -252,19 +495,19 @@ export function executeAgentTool(
 			};
 		}
 
-		case "addSkip": {
-			const parsed = addSkipArgs.safeParse(args);
+		case "addTrim": {
+			const parsed = addTrimArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
 			const assetId =
 				parsed.data.assetId ?? document.project.primaryAssetId ?? document.assets[0]?.id;
-			if (!assetId) return failure("Project has no assets — nothing to skip.");
+			if (!assetId) return failure("Project has no assets — nothing to trim.");
 			if (!document.assets.some((a) => a.id === assetId)) {
 				return failure(`Unknown asset: ${assetId}`);
 			}
 			const startSec = Math.min(parsed.data.startSec, parsed.data.endSec);
 			const endSec = Math.max(parsed.data.startSec, parsed.data.endSec);
-			const skip = {
-				id: createId("skip"),
+			const trim = {
+				id: createId("trim"),
 				assetId,
 				startSec,
 				endSec,
@@ -275,23 +518,23 @@ export function executeAgentTool(
 				...document,
 				timeline: {
 					...document.timeline,
-					skipRanges: [...document.timeline.skipRanges, skip],
+					trimRanges: [...document.timeline.trimRanges, trim],
 				},
 			};
 			return {
 				ok: true,
 				document: next,
-				resultJson: JSON.stringify({ skipRangeId: skip.id, startSec, endSec }),
-				summary: `added skip ${formatSec(startSec)} – ${formatSec(endSec)}`,
+				resultJson: JSON.stringify({ trimRangeId: trim.id, startSec, endSec }),
+				summary: `added trim ${formatSec(startSec)} – ${formatSec(endSec)}`,
 			};
 		}
 
-		case "setSkipRange": {
-			const parsed = setSkipRangeArgs.safeParse(args);
+		case "setTrim": {
+			const parsed = setTrimArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
-			const { skipRangeId } = parsed.data;
-			if (!document.timeline.skipRanges.some((r) => r.id === skipRangeId)) {
-				return failure(`Unknown skip range: ${skipRangeId}`);
+			const { trimRangeId } = parsed.data;
+			if (!document.timeline.trimRanges.some((r) => r.id === trimRangeId)) {
+				return failure(`Unknown trim range: ${trimRangeId}`);
 			}
 			const startSec = Math.min(parsed.data.startSec, parsed.data.endSec);
 			const endSec = Math.max(parsed.data.startSec, parsed.data.endSec);
@@ -299,16 +542,16 @@ export function executeAgentTool(
 				...document,
 				timeline: {
 					...document.timeline,
-					skipRanges: document.timeline.skipRanges.map((r) =>
-						r.id === skipRangeId ? { ...r, startSec, endSec } : r,
+					trimRanges: document.timeline.trimRanges.map((r) =>
+						r.id === trimRangeId ? { ...r, startSec, endSec } : r,
 					),
 				},
 			};
 			return {
 				ok: true,
 				document: next,
-				resultJson: JSON.stringify({ skipRangeId, startSec, endSec }),
-				summary: `moved skip to ${formatSec(startSec)} – ${formatSec(endSec)}`,
+				resultJson: JSON.stringify({ trimRangeId, startSec, endSec }),
+				summary: `moved trim to ${formatSec(startSec)} – ${formatSec(endSec)}`,
 			};
 		}
 
@@ -356,8 +599,9 @@ export function executeAgentTool(
 				return {
 					ok: false,
 					resultJson: JSON.stringify({
-						error: `Refused: ${userPlaced.length} user-placed clip(s) would be discarded. ` +
-							`For 'remove silences' / 'cut pauses' use addSkip (one call per silent range), ` +
+						error:
+							`Refused: ${userPlaced.length} user-placed clip(s) would be discarded. ` +
+							`For 'remove silences' / 'cut pauses' use addTrim (one call per silent range), ` +
 							`which preserves the placed clips and adds the cuts. ` +
 							`For 'trim this clip' use setClipRange. ` +
 							`Only call replaceTimeline when the user explicitly asks to rebuild the timeline from scratch ` +
@@ -377,9 +621,206 @@ export function executeAgentTool(
 				document: next,
 				resultJson: JSON.stringify({
 					clipCount: next.timeline.clips.length,
-					skipCount: next.timeline.skipRanges.length,
+					trimCount: next.timeline.trimRanges.length,
 				}),
-				summary: `rebuilt timeline from ${kept} interval${kept === 1 ? "" : "s"} (${next.timeline.clips.length} clips, ${next.timeline.skipRanges.length} skips)`,
+				summary: `rebuilt timeline from ${kept} interval${kept === 1 ? "" : "s"} (${next.timeline.clips.length} clips, ${next.timeline.trimRanges.length} trims)`,
+			};
+		}
+
+		case "addZoom": {
+			const parsed = addZoomArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const startMs = toMs(Math.min(parsed.data.startSec, parsed.data.endSec));
+			const endMs = toMs(Math.max(parsed.data.startSec, parsed.data.endSec));
+			const zoom = {
+				id: createId("zoom"),
+				startMs,
+				endMs,
+				depth: parsed.data.depth as 1 | 2 | 3 | 4 | 5 | 6,
+				focus: parsed.data.focus,
+				focusMode: "manual" as const,
+				source: "manual" as const,
+			};
+			const next: AxcutDocument = {
+				...document,
+				zoomRanges: [...document.zoomRanges, zoom] as AxcutDocument["zoomRanges"],
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					zoomId: zoom.id,
+					startSec: startMs / 1000,
+					endSec: endMs / 1000,
+					depth: zoom.depth,
+				}),
+				summary: `added zoom ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
+			};
+		}
+
+		case "setZoom": {
+			const parsed = setZoomArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { zoomId } = parsed.data;
+			const existing = document.zoomRanges.find((z) => z.id === zoomId);
+			if (!existing) return failure(`Unknown zoom: ${zoomId}`);
+			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
+			const next: AxcutDocument = {
+				...document,
+				zoomRanges: document.zoomRanges.map((z) =>
+					z.id === zoomId
+						? {
+								...z,
+								startMs,
+								endMs,
+								...(parsed.data.depth !== undefined
+									? { depth: parsed.data.depth as 1 | 2 | 3 | 4 | 5 | 6 }
+									: {}),
+								...(parsed.data.focus ? { focus: parsed.data.focus } : {}),
+							}
+						: z,
+				) as AxcutDocument["zoomRanges"],
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({ zoomId, startSec: startMs / 1000, endSec: endMs / 1000 }),
+				summary: `updated zoom ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
+			};
+		}
+
+		case "addSpeed": {
+			const parsed = addSpeedArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const startMs = toMs(Math.min(parsed.data.startSec, parsed.data.endSec));
+			const endMs = toMs(Math.max(parsed.data.startSec, parsed.data.endSec));
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prev = (legacy.speedRegions as unknown[] | undefined) ?? [];
+			const region = { id: createId("speed"), startMs, endMs, speed: parsed.data.speed };
+			const next: AxcutDocument = {
+				...document,
+				legacyEditor: { ...legacy, speedRegions: [...prev, region] },
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					speedId: region.id,
+					startSec: startMs / 1000,
+					endSec: endMs / 1000,
+					speed: region.speed,
+				}),
+				summary: `added ${parsed.data.speed}× speed ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
+			};
+		}
+
+		case "setSpeed": {
+			const parsed = setSpeedArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prev =
+				(legacy.speedRegions as
+					| Array<{ id: string; startMs: number; endMs: number; speed: number }>
+					| undefined) ?? [];
+			const existing = prev.find((s) => s.id === parsed.data.speedId);
+			if (!existing) return failure(`Unknown speed region: ${parsed.data.speedId}`);
+			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
+			const speed = parsed.data.speed ?? existing.speed;
+			const next: AxcutDocument = {
+				...document,
+				legacyEditor: {
+					...legacy,
+					speedRegions: prev.map((s) =>
+						s.id === parsed.data.speedId ? { ...s, startMs, endMs, speed } : s,
+					),
+				},
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					speedId: parsed.data.speedId,
+					startSec: startMs / 1000,
+					endSec: endMs / 1000,
+					speed,
+				}),
+				summary: `updated speed to ${speed}×`,
+			};
+		}
+
+		case "addAnnotation": {
+			const parsed = addAnnotationArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const startMs = toMs(Math.min(parsed.data.startSec, parsed.data.endSec));
+			const endMs = toMs(Math.max(parsed.data.startSec, parsed.data.endSec));
+			const ann = {
+				id: createId("ann"),
+				startMs,
+				endMs,
+				type: "text" as const,
+				content: parsed.data.text,
+				textContent: parsed.data.text,
+				position: { x: parsed.data.x, y: parsed.data.y },
+				size: { width: 30, height: 20 },
+				style: {
+					color: "#ffffff",
+					backgroundColor: "transparent",
+					fontSize: 32,
+					fontFamily: "Inter",
+					fontWeight: "bold" as const,
+					fontStyle: "normal" as const,
+					textDecoration: "none" as const,
+					textAlign: "center" as const,
+				},
+				zIndex: document.annotations.length + 1,
+			};
+			const next: AxcutDocument = {
+				...document,
+				annotations: [...document.annotations, ann] as AxcutDocument["annotations"],
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					annotationId: ann.id,
+					startSec: startMs / 1000,
+					endSec: endMs / 1000,
+				}),
+				summary: `added annotation "${parsed.data.text.slice(0, 24)}"`,
+			};
+		}
+
+		case "setAnnotation": {
+			const parsed = setAnnotationArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { annotationId } = parsed.data;
+			const existing = document.annotations.find((a) => a.id === annotationId);
+			if (!existing) return failure(`Unknown annotation: ${annotationId}`);
+			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
+			const next: AxcutDocument = {
+				...document,
+				annotations: document.annotations.map((a) =>
+					a.id === annotationId
+						? {
+								...a,
+								startMs,
+								endMs,
+								...(parsed.data.text !== undefined
+									? { content: parsed.data.text, textContent: parsed.data.text }
+									: {}),
+							}
+						: a,
+				),
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					annotationId,
+					startSec: startMs / 1000,
+					endSec: endMs / 1000,
+				}),
+				summary: `updated annotation ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
 			};
 		}
 

@@ -17,6 +17,53 @@ function isBrowserMode(): boolean {
 	return detectBrowserMode();
 }
 
+// ponytail: RecStage's source picker + recording-prefs need something to talk
+// to in browser-mode preview too — real desktopCapturer isn't available in a
+// plain browser tab, so fake a couple of plausible screen/window entries
+// (no thumbnails; RecStage already falls back to an icon when thumbnail is
+// null). Prefs persist to localStorage, same pattern as the LLM config shim
+// below, so toggles survive a reload like the real main-process store would.
+type ShimDesktopSource = {
+	id: string;
+	name: string;
+	display_id: string;
+	thumbnail: string | null;
+	appIcon: string | null;
+};
+const SHIM_SOURCES: ShimDesktopSource[] = [
+	{ id: "screen:0", name: "Entire Screen", display_id: "0", thumbnail: null, appIcon: null },
+	{ id: "screen:1", name: "Display 2", display_id: "1", thumbnail: null, appIcon: null },
+	{ id: "window:100", name: "OpenScreen", display_id: "", thumbnail: null, appIcon: null },
+	{ id: "window:101", name: "Terminal", display_id: "", thumbnail: null, appIcon: null },
+];
+let shimSelectedSource: ShimDesktopSource | null = null;
+
+type ShimRecordingPrefs = {
+	micEnabled: boolean;
+	micDeviceId: string | null;
+	camEnabled: boolean;
+	camDeviceId: string | null;
+	systemAudioEnabled: boolean;
+	cursorCaptureMode: "editable-overlay" | "system";
+};
+const recordingPrefsStorageKey = "browser-shim-recording-prefs";
+let shimRecordingPrefs: ShimRecordingPrefs = {
+	micEnabled: false,
+	micDeviceId: null,
+	camEnabled: false,
+	camDeviceId: null,
+	systemAudioEnabled: false,
+	cursorCaptureMode: "editable-overlay",
+};
+(() => {
+	try {
+		const raw = localStorage.getItem(recordingPrefsStorageKey);
+		if (raw) shimRecordingPrefs = { ...shimRecordingPrefs, ...JSON.parse(raw) };
+	} catch {
+		// ponytail: corrupt/unavailable localStorage — start fresh.
+	}
+})();
+
 function createShimElectronAPI() {
 	return {
 		assetBaseUrl: "",
@@ -35,6 +82,24 @@ function createShimElectronAPI() {
 		onRequestSaveBeforeClose: () => () => undefined,
 		loadProjectFileFromPath: () => Promise.resolve({ success: false, canceled: true }),
 		getPathForFile: () => "",
+		getSources: () => Promise.resolve(SHIM_SOURCES),
+		selectSource: (source: ShimDesktopSource) => {
+			shimSelectedSource = source;
+			return Promise.resolve(source);
+		},
+		getSelectedSource: () => Promise.resolve(shimSelectedSource),
+		onSelectedSourceChanged: () => () => undefined,
+		getRecordingPrefs: () => Promise.resolve(shimRecordingPrefs),
+		setRecordingPrefs: (patch: Partial<ShimRecordingPrefs>) => {
+			shimRecordingPrefs = { ...shimRecordingPrefs, ...patch };
+			try {
+				localStorage.setItem(recordingPrefsStorageKey, JSON.stringify(shimRecordingPrefs));
+			} catch {
+				// ponytail: localStorage may be full or unavailable; silently skip
+			}
+			return Promise.resolve(shimRecordingPrefs);
+		},
+		onRecordingPrefsChanged: () => () => undefined,
 		invokeNativeBridge: (req: { domain: string; action: string; payload?: unknown }) => {
 			console.info("[browser-shim] invokeNativeBridge", req.domain, req.action, req.payload);
 			return Promise.resolve({
@@ -241,7 +306,7 @@ function createShimBridgeClient() {
 					timeline: {
 						clips: [],
 						gaps: [],
-						skipRanges: [],
+						trimRanges: [],
 						muteRanges: [],
 						speedRanges: [],
 						captionRanges: [],

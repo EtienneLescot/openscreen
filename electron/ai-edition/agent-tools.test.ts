@@ -57,9 +57,9 @@ function fixtureDocument(): AxcutDocument {
 					reason: "",
 				},
 			],
-			skipRanges: [
+			trimRanges: [
 				{
-					id: "skip_1",
+					id: "trim_1",
 					assetId: "asset_1",
 					startSec: 10,
 					endSec: 12,
@@ -72,18 +72,26 @@ function fixtureDocument(): AxcutDocument {
 }
 
 describe("agent-tools specs", () => {
-	it("declares the six roadmap tools with mutation flags", () => {
+	it("declares the clip/trim + effect tools with mutation flags", () => {
 		const names = AGENT_TOOL_SPECS.map((t) => t.name);
 		expect(names).toEqual([
 			"getCurrentDocument",
 			"getTranscript",
-			"addSkip",
-			"setSkipRange",
+			"addTrim",
+			"setTrim",
 			"setClipRange",
 			"replaceTimeline",
+			"addZoom",
+			"setZoom",
+			"addSpeed",
+			"setSpeed",
+			"addAnnotation",
+			"setAnnotation",
 		]);
 		expect(isMutatingTool("getTranscript")).toBe(false);
 		expect(isMutatingTool("replaceTimeline")).toBe(true);
+		expect(isMutatingTool("addZoom")).toBe(true);
+		expect(isMutatingTool("setAnnotation")).toBe(true);
 		expect(isMutatingTool("nope")).toBe(false);
 	});
 });
@@ -95,7 +103,7 @@ describe("executeAgentTool", () => {
 		const snapshot = JSON.parse(result.resultJson);
 		expect(snapshot.primaryAssetId).toBe("asset_1");
 		expect(snapshot.clips.map((c: { id: string }) => c.id)).toEqual(["clip_1", "clip_2"]);
-		expect(snapshot.skipRanges[0].id).toBe("skip_1");
+		expect(snapshot.trimRanges[0].id).toBe("trim_1");
 		expect(snapshot.hasTranscript).toBe(true);
 		expect(result.document).toBeUndefined();
 	});
@@ -116,44 +124,44 @@ describe("executeAgentTool", () => {
 		expect(JSON.parse(result.resultJson).error).toMatch(/No transcript/);
 	});
 
-	it("addSkip appends an agent-origin skip range and normalizes reversed bounds", () => {
+	it("addTrim appends an agent-origin skip range and normalizes reversed bounds", () => {
 		const result = executeAgentTool(
 			fixtureDocument(),
-			"addSkip",
+			"addTrim",
 			JSON.stringify({ startSec: 22, endSec: 20, reason: "silence" }),
 		);
 		expect(result.ok).toBe(true);
 		expect(result.document).toBeDefined();
-		const added = result.document?.timeline.skipRanges.at(-1);
+		const added = result.document?.timeline.trimRanges.at(-1);
 		expect(added?.startSec).toBe(20);
 		expect(added?.endSec).toBe(22);
 		expect(added?.origin).toBe("agent");
-		expect(result.summary).toMatch(/added skip 0:20\.0 – 0:22\.0/);
+		expect(result.summary).toMatch(/added trim 0:20\.0 – 0:22\.0/);
 	});
 
-	it("addSkip rejects unknown assets", () => {
+	it("addTrim rejects unknown assets", () => {
 		const result = executeAgentTool(
 			fixtureDocument(),
-			"addSkip",
+			"addTrim",
 			JSON.stringify({ startSec: 0, endSec: 1, assetId: "asset_missing" }),
 		);
 		expect(result.ok).toBe(false);
 		expect(result.document).toBeUndefined();
 	});
 
-	it("setSkipRange moves an existing range and errors on unknown ids", () => {
+	it("setTrim moves an existing range and errors on unknown ids", () => {
 		const ok = executeAgentTool(
 			fixtureDocument(),
-			"setSkipRange",
-			JSON.stringify({ skipRangeId: "skip_1", startSec: 14, endSec: 18 }),
+			"setTrim",
+			JSON.stringify({ trimRangeId: "trim_1", startSec: 14, endSec: 18 }),
 		);
 		expect(ok.ok).toBe(true);
-		expect(ok.document?.timeline.skipRanges[0]).toMatchObject({ startSec: 14, endSec: 18 });
+		expect(ok.document?.timeline.trimRanges[0]).toMatchObject({ startSec: 14, endSec: 18 });
 
 		const missing = executeAgentTool(
 			fixtureDocument(),
-			"setSkipRange",
-			JSON.stringify({ skipRangeId: "skip_x", startSec: 0, endSec: 1 }),
+			"setTrim",
+			JSON.stringify({ trimRangeId: "trim_x", startSec: 0, endSec: 1 }),
 		);
 		expect(missing.ok).toBe(false);
 	});
@@ -197,7 +205,7 @@ describe("executeAgentTool", () => {
 		expect(result.ok).toBe(true);
 		const timeline = result.document?.timeline;
 		expect(timeline?.clips).toHaveLength(2);
-		expect(timeline?.skipRanges.map((s) => [s.startSec, s.endSec])).toEqual([
+		expect(timeline?.trimRanges.map((s) => [s.startSec, s.endSec])).toEqual([
 			[10, 20],
 			[30, 60],
 		]);
@@ -216,11 +224,90 @@ describe("executeAgentTool", () => {
 		expect(result.ok).toBe(false);
 		const payload = JSON.parse(result.resultJson) as { error: string };
 		expect(payload.error).toMatch(/user-placed clip/);
-		expect(payload.error).toMatch(/addSkip/);
+		expect(payload.error).toMatch(/addTrim/);
 	});
 
 	it("rejects malformed JSON arguments and unknown tools", () => {
-		expect(executeAgentTool(fixtureDocument(), "addSkip", "{not json").ok).toBe(false);
+		expect(executeAgentTool(fixtureDocument(), "addTrim", "{not json").ok).toBe(false);
 		expect(executeAgentTool(fixtureDocument(), "flyToTheMoon", "{}").ok).toBe(false);
+	});
+
+	it("addZoom adds a schema-valid zoom in virtual-ms and normalizes bounds", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addZoom",
+			JSON.stringify({ startSec: 12, endSec: 8, depth: 4, focus: { cx: 0.3, cy: 0.7 } }),
+		);
+		expect(result.ok).toBe(true);
+		const zoom = result.document?.zoomRanges.at(-1);
+		expect(zoom).toMatchObject({
+			startMs: 8000,
+			endMs: 12000,
+			depth: 4,
+			focus: { cx: 0.3, cy: 0.7 },
+		});
+		// The produced document must round-trip through the schema.
+		expect(() => documentSchema.parse(result.document)).not.toThrow();
+	});
+
+	it("setZoom patches only the fields passed", () => {
+		const withZoom = executeAgentTool(
+			fixtureDocument(),
+			"addZoom",
+			JSON.stringify({ startSec: 2, endSec: 4 }),
+		).document as AxcutDocument;
+		const id = withZoom.zoomRanges[0].id;
+		const result = executeAgentTool(withZoom, "setZoom", JSON.stringify({ zoomId: id, depth: 6 }));
+		expect(result.ok).toBe(true);
+		expect(result.document?.zoomRanges[0]).toMatchObject({ startMs: 2000, endMs: 4000, depth: 6 });
+		expect(executeAgentTool(withZoom, "setZoom", JSON.stringify({ zoomId: "nope" })).ok).toBe(
+			false,
+		);
+	});
+
+	it("addSpeed writes a legacyEditor speed region the snapshot exposes", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addSpeed",
+			JSON.stringify({ startSec: 5, endSec: 9, speed: 2 }),
+		);
+		expect(result.ok).toBe(true);
+		const legacy = result.document?.legacyEditor as Record<string, unknown>;
+		const regions = legacy.speedRegions as Array<{ startMs: number; endMs: number; speed: number }>;
+		expect(regions.at(-1)).toMatchObject({ startMs: 5000, endMs: 9000, speed: 2 });
+		expect(() => documentSchema.parse(result.document)).not.toThrow();
+	});
+
+	it("addAnnotation adds a schema-valid text annotation", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addAnnotation",
+			JSON.stringify({ startSec: 1, endSec: 3, text: "Look here", x: 20, y: 80 }),
+		);
+		expect(result.ok).toBe(true);
+		const ann = result.document?.annotations.at(-1);
+		expect(ann).toMatchObject({
+			startMs: 1000,
+			endMs: 3000,
+			type: "text",
+			textContent: "Look here",
+			position: { x: 20, y: 80 },
+		});
+		expect(() => documentSchema.parse(result.document)).not.toThrow();
+	});
+
+	it("snapshot exposes clips/trims/effects as virtual-time groups with a time-base note", () => {
+		const withEffects = executeAgentTool(
+			fixtureDocument(),
+			"addZoom",
+			JSON.stringify({ startSec: 3, endSec: 6, depth: 2 }),
+		).document as AxcutDocument;
+		const snapshot = JSON.parse(executeAgentTool(withEffects, "getCurrentDocument", "").resultJson);
+		expect(snapshot.timeBaseNote).toMatch(/virtual/);
+		expect(snapshot.zoomRanges[0]).toMatchObject({ startSec: 3, endSec: 6, depth: 2 });
+		expect(snapshot.trimRanges[0].id).toBe("trim_1");
+		// counts-only fields are gone in favour of the labelled effect lists.
+		expect(snapshot.zoomRangeCount).toBeUndefined();
+		expect(snapshot.annotationCount).toBeUndefined();
 	});
 });

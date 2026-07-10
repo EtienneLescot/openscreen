@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { AI_FEATURES_ENABLED } from "@/components/video-editor/featureFlags";
 import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useOptimisticTimelineOps } from "@/lib/ai-edition/store/useOptimisticTimelineOps";
 import { nativeBridgeClient } from "@/native/client";
 import type {
@@ -760,9 +761,9 @@ function ChatStripPanel() {
 		await store.saveDocument(parsed);
 	}, []);
 
-	const send = async () => {
-		if (!projectId || !input.trim() || busy) return;
-		const text = input.trim();
+	const send = async (overrideText?: string) => {
+		const text = (overrideText ?? input).trim();
+		if (!projectId || !text || busy) return;
 		setInput("");
 		setBusy(true);
 		// ponytail: pre-seed the user message so the rewind ↩ button is
@@ -831,6 +832,19 @@ function ChatStripPanel() {
 			setBusy(false);
 		}
 	};
+
+	// Auto-send a prompt handed over by another part of the UI (e.g. the
+	// timeline's Auto-enhance → "Smart zooms + cuts with AI"). Routes through
+	// the normal send() so sessions/checkpoints/rewind all keep working; the
+	// message shows in the composer's history exactly as if typed.
+	const pendingPrompt = useChatPromptBus((s) => s.pending);
+	const consumePrompt = useChatPromptBus((s) => s.consume);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: send() is intentionally not a dep (recreated each render); consume() clears `pending` so this fires once per queued prompt.
+	useEffect(() => {
+		if (!pendingPrompt || !projectId || busy) return;
+		consumePrompt();
+		void send(pendingPrompt);
+	}, [pendingPrompt, projectId, busy, consumePrompt]);
 
 	// ponytail: per-user-message rewind. Pops a confirmation popover, then
 	// asks the main process to roll the session + document back to the
@@ -1102,7 +1116,7 @@ function ChatStripPanel() {
 		projectId,
 		activeSessionId,
 	);
-	const runAddSkip = useCallback(() => {
+	const runAddTrim = useCallback(() => {
 		const raw = window.prompt("Add skip range\nFormat: startSec-endSec (e.g. 1.2-3.4)", "5-8");
 		if (!raw) return;
 		const m = raw.match(/^\s*(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*$/);
@@ -1117,7 +1131,7 @@ function ChatStripPanel() {
 			return;
 		}
 		const op: AxcutTimelineOperation = {
-			type: "add_skip_range",
+			type: "add_trim_range",
 			startSec,
 			endSec,
 		};
@@ -1364,7 +1378,7 @@ function ChatStripPanel() {
 							title="Add skip range"
 							aria-label="Add skip range"
 							disabled={!activeSessionId || queueBusy}
-							onClick={runAddSkip}
+							onClick={runAddTrim}
 							style={{
 								background: "transparent",
 								border: "1px solid var(--border-soft)",
@@ -1661,7 +1675,7 @@ function ChatStripPanel() {
 						className={styles.sendBtn}
 						title="Send (Enter)"
 						aria-label="Send"
-						onClick={send}
+						onClick={() => void send()}
 						disabled={busy || !input.trim()}
 					>
 						<svg

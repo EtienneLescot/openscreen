@@ -28,7 +28,7 @@ const sampleDoc = vi.hoisted(() => ({
 	timeline: {
 		clips: [],
 		gaps: [],
-		skipRanges: [],
+		trimRanges: [],
 		muteRanges: [],
 		speedRegions: [],
 		captionRanges: [],

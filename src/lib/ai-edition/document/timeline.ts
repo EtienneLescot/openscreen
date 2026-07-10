@@ -1,9 +1,10 @@
 // Ported from axcut/apps/server/src/lib/timeline.ts — pure interval math
-// for the clip/skip model. No DOM, no IPC, no side effects. The caller
+// for the clip/trim model. No DOM, no IPC, no side effects. The caller
 // (store, exporter, agent) feeds an AxcutDocument and gets back intervals
 // or a new document with updated clips.
 
 import type { AxcutClip, AxcutDocument, AxcutTranscript } from "../schema";
+import { reprojectRegionsForReorder } from "../timeline/region-ventilation";
 import { createId } from "./ids";
 
 export function byStart(a: { startSec: number }, b: { startSec: number }): number {
@@ -158,8 +159,8 @@ export function replaceTimeline(
 		reason,
 		transcript: document.transcript,
 	});
-	const skipRanges = invertIntervals(normalized, duration).map((cut, i) => ({
-		id: `skip_${i + 1}`,
+	const trimRanges = invertIntervals(normalized, duration).map((cut, i) => ({
+		id: `trim_${i + 1}`,
 		assetId,
 		startSec: cut.startSec,
 		endSec: cut.endSec,
@@ -171,7 +172,7 @@ export function replaceTimeline(
 		timeline: {
 			...document.timeline,
 			clips,
-			skipRanges,
+			trimRanges,
 			gaps: [],
 		},
 		preview: {
@@ -205,11 +206,37 @@ export function moveClip(
 	const remaining = document.timeline.clips.filter((c) => c.id !== clipId);
 	const bounded = Math.max(0, Math.min(insertIndex, remaining.length));
 	const reordered = [...remaining.slice(0, bounded), movingClip, ...remaining.slice(bounded)];
+	const oldClips = document.timeline.clips;
+	const newClips = resequenceClips(reordered);
+	// Carry the user's timeline work (zoom/speed/annotation) along with the clip
+	// it sits on, so reordering clips doesn't strand regions over unrelated
+	// content. Regions are *ventilated*: a region straddling several clips is
+	// split into one piece per clip (each following its clip), and pieces that
+	// stay contiguous after the move are merged back. Trims need no shift — they
+	// follow via their source anchor.
+	const legacy = document.legacyEditor as Record<string, unknown> | null;
+	const speedRegions = legacy?.speedRegions as
+		| Array<{ id: string; startMs: number; endMs: number }>
+		| undefined;
 	return {
 		...document,
+		zoomRanges: reprojectRegionsForReorder(document.zoomRanges, oldClips, newClips, () =>
+			createId("zoom"),
+		) as AxcutDocument["zoomRanges"],
+		annotations: reprojectRegionsForReorder(document.annotations, oldClips, newClips, () =>
+			createId("ann"),
+		) as AxcutDocument["annotations"],
+		legacyEditor: speedRegions
+			? {
+					...legacy,
+					speedRegions: reprojectRegionsForReorder(speedRegions, oldClips, newClips, () =>
+						createId("speed"),
+					),
+				}
+			: document.legacyEditor,
 		timeline: {
 			...document.timeline,
-			clips: resequenceClips(reordered),
+			clips: newClips,
 		},
 		preview: {
 			...document.preview,

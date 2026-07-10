@@ -169,14 +169,14 @@ describe("runTimelineOperation", () => {
 		const result = await runTimelineOperation(
 			"proj_run",
 			s.id,
-			{ type: "add_skip_range", startSec: 5, endSec: 8 },
+			{ type: "add_trim_range", startSec: 5, endSec: 8 },
 			"Trimmed silence",
 			documents,
 		);
 		expect(result.success).toBe(true);
 		if (!result.success) return;
-		expect(result.result.summary).toMatch(/added skip/);
-		const saved = file.stored?.timeline.skipRanges ?? [];
+		expect(result.result.summary).toMatch(/added trim/);
+		const saved = file.stored?.timeline.trimRanges ?? [];
 		expect(saved.some((s) => s.startSec === 5)).toBe(true);
 		const session = selectSession("proj_run", s.id);
 		expect(session?.messages).toHaveLength(1);

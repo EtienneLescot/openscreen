@@ -33,8 +33,8 @@ import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
 import type {
 	AxcutAsset,
 	AxcutClip,
-	AxcutSkipRange,
 	AxcutTranscript,
+	AxcutTrimRange,
 	AxcutWord,
 } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -44,7 +44,7 @@ import {
 	type ClipSection,
 	type ClipWord,
 	findCueWordId,
-	type SkipRun,
+	type TrimRun,
 } from "@/lib/ai-edition/timeline/aggregated-transcript";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatMs } from "@/lib/ai-edition/timeline/format";
@@ -409,14 +409,14 @@ function normaliseHex(raw: string): string | null {
 // ─── Transcript ────────────────────────────────────────────────────
 // Aggregated transcript view: one contentEditable region per clip on the
 // timeline, in timeline order. Each word is rendered as a `<span
-// data-word-id>` inside the editable div. Words inside any `skipRange`
+// data-word-id>` inside the editable div. Words inside any `trimRange`
 // for the clip's asset are styled red+strikethrough and show a bin icon
 // on hover (removing the skip restores them). User actions:
 //
 //   - Click on a word    → seek (timeline.playhead)
 //   - Backspace / Delete → convert selection (or caret-adjacent word)
-//                          into a new skipRange (the document's
-//                          `timeline.skipRanges[]`, NOT the transcript
+//                          into a new trimRange (the document's
+//                          `timeline.trimRanges[]`, NOT the transcript
 //                          text). The deleted word stays in the DOM as
 //                          red text — nothing destructive.
 //
@@ -425,12 +425,12 @@ export function TranscriptPane({
 	clips,
 	transcripts,
 	assets,
-	skipRanges,
+	trimRanges,
 	busy,
 	currentTimeSec,
 	onSeek,
-	onAddSkipRange,
-	onRemoveSkipRange,
+	onAddTrimRange,
+	onRemoveTrimRange,
 	onTranscribe,
 	canTranscribe,
 	isTranscribing,
@@ -438,19 +438,19 @@ export function TranscriptPane({
 	clips: AxcutClip[];
 	transcripts: AxcutTranscript[];
 	assets: AxcutAsset[];
-	skipRanges: AxcutSkipRange[];
+	trimRanges: AxcutTrimRange[];
 	busy: boolean;
 	currentTimeSec: number;
 	onSeek: (sec: number) => void;
-	onAddSkipRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
-	onRemoveSkipRange: (skipId: string) => void;
+	onAddTrimRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
+	onRemoveTrimRange: (trimId: string) => void;
 	onTranscribe: () => void;
 	canTranscribe: boolean;
 	isTranscribing: boolean;
 }) {
 	const sections = useMemo(
-		() => buildAggregatedSections(clips, transcripts, assets, skipRanges),
-		[clips, transcripts, assets, skipRanges],
+		() => buildAggregatedSections(clips, transcripts, assets, trimRanges),
+		[clips, transcripts, assets, trimRanges],
 	);
 
 	// ponytail: the cue position is the playback head's location in the
@@ -525,8 +525,8 @@ export function TranscriptPane({
 						busy={busy}
 						cueWordId={cueWordId}
 						onSeek={onSeek}
-						onAddSkipRange={onAddSkipRange}
-						onRemoveSkipRange={onRemoveSkipRange}
+						onAddTrimRange={onAddTrimRange}
+						onRemoveTrimRange={onRemoveTrimRange}
 					/>
 				))}
 			</div>
@@ -537,24 +537,24 @@ export function TranscriptPane({
 // One contentEditable block per clip — header (vignette + filename +
 // range) and a flowing word stream. The stream contains every transcript
 // word inside the clip's source range, color-coded by whether the word
-// is inside any skipRange. Backspace/Delete adds a new skipRange via
-// onAddSkipRange; hover-bin on a skip run removes it via onRemoveSkipRange.
+// is inside any trimRange. Backspace/Delete adds a new trimRange via
+// onAddTrimRange; hover-bin on a skip run removes it via onRemoveTrimRange.
 function TranscriptClipBlock({
 	index,
 	section,
 	busy,
 	cueWordId,
 	onSeek,
-	onAddSkipRange,
-	onRemoveSkipRange,
+	onAddTrimRange,
+	onRemoveTrimRange,
 }: {
 	index: number;
 	section: ClipSection;
 	busy: boolean;
 	cueWordId: string | null;
 	onSeek: (sec: number) => void;
-	onAddSkipRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
-	onRemoveSkipRange: (skipId: string) => void;
+	onAddTrimRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
+	onRemoveTrimRange: (trimId: string) => void;
 }) {
 	const { clip, asset, words } = section;
 	const filename = asset?.label ?? clip.assetId;
@@ -605,7 +605,7 @@ function TranscriptClipBlock({
 	}, [cueWordId]);
 
 	// ponytail: keep the caret anchored to the next kept word after a
-	// skipRange is added (so the user can keep deleting without the caret
+	// trimRange is added (so the user can keep deleting without the caret
 	// jumping to the start of the block).
 	useLayoutEffect(() => {
 		const wordId = pendingCaretWordIdRef.current;
@@ -623,22 +623,22 @@ function TranscriptClipBlock({
 			pendingCaretWordIdRef.current = keptRange[0].word.id;
 			const startSec = Math.min(...keptRange.map((w) => w.word.startSec));
 			const endSec = Math.max(...keptRange.map((w) => w.word.endSec));
-			onAddSkipRange(
+			onAddTrimRange(
 				clip.assetId,
 				startSec,
 				endSec,
 				`Skip ${formatMs(startSec * 1000)}-${formatMs(endSec * 1000)} from ${clip.assetId}.`,
 			);
 		},
-		[busy, clip.assetId, onAddSkipRange],
+		[busy, clip.assetId, onAddTrimRange],
 	);
 
-	const removeSkipRun = useCallback(
-		(run: SkipRun) => {
-			if (busy || !run.skipId) return;
-			onRemoveSkipRange(run.skipId);
+	const removeTrimRun = useCallback(
+		(run: TrimRun) => {
+			if (busy || !run.trimId) return;
+			onRemoveTrimRange(run.trimId);
 		},
-		[busy, onRemoveSkipRange],
+		[busy, onRemoveTrimRange],
 	);
 
 	const cutNativeSelection = useCallback(
@@ -853,7 +853,7 @@ function TranscriptClipBlock({
 							key={cw.word.id}
 							cw={cw}
 							isCue={cw.word.id === cueWordId}
-							onRestore={removeSkipRun}
+							onRestore={removeTrimRun}
 						/>
 					))}
 				</div>
@@ -873,7 +873,7 @@ function TranscriptWord({
 }: {
 	cw: ClipWord;
 	isCue: boolean;
-	onRestore: (run: SkipRun) => void;
+	onRestore: (run: TrimRun) => void;
 }) {
 	const [hover, setHover] = useState(false);
 	const removed = !cw.kept;
@@ -882,7 +882,7 @@ function TranscriptWord({
 			data-word-id={cw.word.id}
 			data-start-sec={cw.word.startSec}
 			data-end-sec={cw.word.endSec}
-			data-skip-id={cw.skipId ?? undefined}
+			data-skip-id={cw.trimId ?? undefined}
 			data-cue={isCue ? "true" : undefined}
 			style={{
 				display: "inline",
@@ -901,7 +901,7 @@ function TranscriptWord({
 			    the LLM is the only place that names a word a filler (via the
 			    filler_or_hesitation reason when generating suggestions). */}
 			{cw.word.text}{" "}
-			{removed && hover && cw.skipId ? (
+			{removed && hover && cw.trimId ? (
 				<button
 					type="button"
 					contentEditable={false}
@@ -909,10 +909,10 @@ function TranscriptWord({
 					aria-label={`Restore "${cw.word.text}"`}
 					onClick={(e) => {
 						e.stopPropagation();
-						// ponytail: build a minimal SkipRun stub — only skipId is
+						// ponytail: build a minimal TrimRun stub — only trimId is
 						// read by onRestore.
 						onRestore({
-							skipId: cw.skipId ?? "",
+							trimId: cw.trimId ?? "",
 							assetId: "",
 							startWordIndex: 0,
 							endWordIndex: 0,
@@ -961,7 +961,7 @@ function findCollapsedDeletionWordId(
 ): string | null {
 	// ponytail: read the kept/skip state from the words array, not the
 	// DOM's data-skip-id. The DOM may be lagging a render behind (its
-	// skipId is only set on the next React commit), so a DOM check would
+	// trimId is only set on the next React commit), so a DOM check would
 	// re-trim an already-trimmed word. The words array is the React state
 	// captured at the call site — always current.
 	const skippedIds = new Set(words.filter((w) => !w.kept).map((w) => w.word.id));

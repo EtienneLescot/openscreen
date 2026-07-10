@@ -1,5 +1,5 @@
 // Hook: region mutations for the new editor shell. Wraps the project store
-// with typed add/remove/select operations for zoom, skip, annotation, and
+// with typed add/remove/select operations for zoom, trim, annotation, and
 // speed regions. Each add creates a 2-second region at the current playhead
 // (a reasonable default for the user to then resize).
 
@@ -14,9 +14,11 @@ import {
 } from "../document/timeline";
 import type { AxcutDocument } from "../schema";
 import { probeVideoDuration } from "../timeline/duration";
+import { resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
+import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
 import { useProjectStore } from "./projectStore";
 
-type RegionKind = "zoom" | "skip" | "annotation" | "speed";
+type RegionKind = "zoom" | "trim" | "annotation" | "speed";
 
 // Placeholder duration applied to a freshly-inserted clip whose source asset
 // hasn't reported its real duration yet (media drag → drop before the preview
@@ -68,23 +70,59 @@ export function useTimeline() {
 		await saveDocument(next);
 	}, [document, currentTimeSec, saveDocument]);
 
-	const addSkip = useCallback(async () => {
+	// Append several auto-generated zoom regions in one save (auto-enhance).
+	// Suggestions come from buildAutoZoomSuggestions, which already reserves
+	// existing zoom spans, so no extra overlap filtering is needed here.
+	// Returns the count actually added (0 when there's no doc/suggestions).
+	const addZoomsBulk = useCallback(
+		async (suggestions: AutoZoomSuggestion[]) => {
+			if (!document || suggestions.length === 0) return 0;
+			const next: AxcutDocument = {
+				...document,
+				zoomRanges: [
+					...document.zoomRanges,
+					...suggestions.map((s) => ({
+						id: createId("zoom"),
+						startMs: Math.round(s.span.start),
+						endMs: Math.round(s.span.end),
+						depth: 3 as const,
+						focus: { cx: s.focus.cx, cy: s.focus.cy },
+						focusMode: "auto" as const,
+					})),
+				] as AxcutDocument["zoomRanges"],
+			};
+			await saveDocument(next);
+			return suggestions.length;
+		},
+		[document, saveDocument],
+	);
+
+	const addTrim = useCallback(async () => {
 		if (!document) return;
+		// Insert a 2s trim at the playhead in *timeline* time, then resolve it
+		// down to the correct clip's asset + source-time. Writing currentTimeSec
+		// straight into startSec (as before) only happened to be right for an
+		// identity single-clip project — for trimmed/reordered clips it landed
+		// the trim at the wrong source position.
+		const resolved = resolveTimelineSpanToTrim(
+			currentTimeSec,
+			currentTimeSec + 2,
+			document.timeline.clips,
+		);
 		const asset =
 			document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
-		if (!asset) return;
-		const id = createId("skip");
+		if (!resolved && !asset) return;
 		const next: AxcutDocument = {
 			...document,
 			timeline: {
 				...document.timeline,
-				skipRanges: [
-					...document.timeline.skipRanges,
+				trimRanges: [
+					...document.timeline.trimRanges,
 					{
-						id,
-						assetId: asset.id,
-						startSec: currentTimeSec,
-						endSec: currentTimeSec + 2,
+						id: createId("trim"),
+						assetId: resolved?.assetId ?? asset!.id,
+						startSec: resolved?.sourceStartSec ?? currentTimeSec,
+						endSec: resolved?.sourceEndSec ?? currentTimeSec + 2,
 						reason: "manual",
 						origin: "user" as const,
 					},
@@ -94,20 +132,20 @@ export function useTimeline() {
 		await saveDocument(next);
 	}, [document, currentTimeSec, saveDocument]);
 
-	// T15 — add a skip at a specific (assetId, sourceStartSec, sourceEndSec).
-	// Used by the place-skip mode in TimelinePane where the cursor lands
+	// T15 — add a trim at a specific (assetId, sourceStartSec, sourceEndSec).
+	// Used by the place-trim mode in TimelinePane where the cursor lands
 	// inside a specific clip's source range, not just at currentTimeSec.
-	const addSkipAt = useCallback(
+	const addTrimAt = useCallback(
 		async (assetId: string, sourceStartSec: number, sourceEndSec: number) => {
 			if (!document) return;
 			const next: AxcutDocument = {
 				...document,
 				timeline: {
 					...document.timeline,
-					skipRanges: [
-						...document.timeline.skipRanges,
+					trimRanges: [
+						...document.timeline.trimRanges,
 						{
-							id: createId("skip"),
+							id: createId("trim"),
 							assetId,
 							startSec: sourceStartSec,
 							endSec: sourceEndSec,
@@ -177,8 +215,8 @@ export function useTimeline() {
 		await saveDocument(next);
 	}, [document, currentTimeSec, saveDocument]);
 
-	const updateSkipRange = useCallback(
-		async (skipId: string, startSec: number, endSec: number) => {
+	const updateTrimRange = useCallback(
+		async (trimId: string, startSec: number, endSec: number) => {
 			if (!document) return;
 			const clamp = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
 			const s = clamp(startSec);
@@ -187,14 +225,82 @@ export function useTimeline() {
 				...document,
 				timeline: {
 					...document.timeline,
-					skipRanges: document.timeline.skipRanges.map((r) =>
-						r.id === skipId ? { ...r, startSec: Math.min(s, e), endSec: Math.max(s, e) } : r,
+					trimRanges: document.timeline.trimRanges.map((r) =>
+						r.id === trimId ? { ...r, startSec: Math.min(s, e), endSec: Math.max(s, e) } : r,
 					),
 				},
 			};
 			await saveDocument(next);
 		},
 		[document, saveDocument],
+	);
+
+	// Like updateTrimRange but also re-attaches the trim to a (possibly
+	// different) asset — needed when a trim is dragged across a clip boundary
+	// onto a clip backed by another asset. Callers resolve the timeline span to
+	// { assetId, sourceStartSec, sourceEndSec } via resolveTimelineSpanToTrim.
+	const updateTrim = useCallback(
+		async (trimId: string, next: { assetId: string; startSec: number; endSec: number }) => {
+			if (!document) return;
+			const clamp = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
+			const s = clamp(next.startSec);
+			const e = clamp(next.endSec);
+			const nextDoc: AxcutDocument = {
+				...document,
+				timeline: {
+					...document.timeline,
+					trimRanges: document.timeline.trimRanges.map((r) =>
+						r.id === trimId
+							? { ...r, assetId: next.assetId, startSec: Math.min(s, e), endSec: Math.max(s, e) }
+							: r,
+					),
+				},
+			};
+			await saveDocument(nextDoc);
+		},
+		[document, saveDocument],
+	);
+
+	// Reconcile the set of trim entries "owned" by one drag with a freshly
+	// ventilated result. A trim resized across a clip boundary can't stay a
+	// single source range (source-time is per asset), so it materialises as one
+	// entry per covered clip — the caller passes explicit, stable ids (so the
+	// dragged pill keeps its identity across frames) plus `dropIds` for entries a
+	// shrinking span no longer needs. Trims not owned by this drag are untouched.
+	const setTrimEntries = useCallback(
+		async (
+			entries: Array<{
+				id: string;
+				assetId: string;
+				sourceStartSec: number;
+				sourceEndSec: number;
+			}>,
+			dropIds: string[],
+		) => {
+			const doc = useProjectStore.getState().document;
+			if (!doc) return;
+			const managed = new Set<string>([...entries.map((e) => e.id), ...dropIds]);
+			const others = doc.timeline.trimRanges.filter((r) => !managed.has(r.id));
+			const clamp = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
+			const rebuilt = entries.map((e) => {
+				const prev = doc.timeline.trimRanges.find((r) => r.id === e.id);
+				const s = clamp(e.sourceStartSec);
+				const en = clamp(e.sourceEndSec);
+				return {
+					id: e.id,
+					assetId: e.assetId,
+					startSec: Math.min(s, en),
+					endSec: Math.max(s, en),
+					reason: prev?.reason ?? "manual",
+					origin: prev?.origin ?? ("user" as const),
+				};
+			});
+			await saveDocument({
+				...doc,
+				timeline: { ...doc.timeline, trimRanges: [...others, ...rebuilt] },
+			});
+		},
+		[saveDocument],
 	);
 
 	const updateZoomSpan = useCallback(
@@ -240,6 +346,23 @@ export function useTimeline() {
 		if (!doc) return;
 		await saveDocument(doc);
 	}, [saveDocument]);
+
+	// Zoom-level control for the region-settings panel (1-6, matches
+	// zoomRegionSchema's depth literal union — 1.0x..3.5x in 0.5x steps per
+	// the `depth/2 + 0.5` label formula used throughout the timeline UI).
+	const updateZoomDepth = useCallback(
+		async (id: string, depth: 1 | 2 | 3 | 4 | 5 | 6) => {
+			if (!document) return;
+			const next: AxcutDocument = {
+				...document,
+				zoomRanges: document.zoomRanges.map((z) =>
+					z.id === id ? { ...z, depth } : z,
+				) as AxcutDocument["zoomRanges"],
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
 
 	const updateAnnotationSpan = useCallback(
 		async (id: string, startMs: number, endMs: number) => {
@@ -307,6 +430,28 @@ export function useTimeline() {
 		[document, saveDocument],
 	);
 
+	const updateSpeedValue = useCallback(
+		async (id: string, speed: number) => {
+			if (!document) return;
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prev = ((legacy.speedRegions as unknown[]) ?? []) as Array<{
+				id: string;
+				startMs: number;
+				endMs: number;
+				speed: number;
+			}>;
+			const next: AxcutDocument = {
+				...document,
+				legacyEditor: {
+					...legacy,
+					speedRegions: prev.map((r) => (r.id === id ? { ...r, speed } : r)),
+				},
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
+
 	const removeRegion = useCallback(
 		async (kind: RegionKind, id: string) => {
 			if (!document) return;
@@ -316,12 +461,12 @@ export function useTimeline() {
 					...document,
 					zoomRanges: document.zoomRanges.filter((z) => z.id !== id) as AxcutDocument["zoomRanges"],
 				};
-			} else if (kind === "skip") {
+			} else if (kind === "trim") {
 				next = {
 					...document,
 					timeline: {
 						...document.timeline,
-						skipRanges: document.timeline.skipRanges.filter((s) => s.id !== id),
+						trimRanges: document.timeline.trimRanges.filter((s) => s.id !== id),
 					},
 				};
 			} else if (kind === "annotation") {
@@ -352,7 +497,7 @@ export function useTimeline() {
 		async (handles: RegionHandle[]) => {
 			if (!document || handles.length === 0) return;
 			const zoomIds = new Set(handles.filter((h) => h.kind === "zoom").map((h) => h.id));
-			const skipIds = new Set(handles.filter((h) => h.kind === "skip").map((h) => h.id));
+			const trimIds = new Set(handles.filter((h) => h.kind === "trim").map((h) => h.id));
 			const annotationIds = new Set(
 				handles.filter((h) => h.kind === "annotation").map((h) => h.id),
 			);
@@ -369,7 +514,7 @@ export function useTimeline() {
 				annotations: document.annotations.filter((a) => !annotationIds.has(a.id)),
 				timeline: {
 					...document.timeline,
-					skipRanges: document.timeline.skipRanges.filter((s) => !skipIds.has(s.id)),
+					trimRanges: document.timeline.trimRanges.filter((s) => !trimIds.has(s.id)),
 				},
 				legacyEditor:
 					speedIds.size > 0 ? { ...legacy, speedRegions: prevSpeed } : document.legacyEditor,
@@ -602,7 +747,7 @@ export function useTimeline() {
 	);
 
 	// Background probe: read the asset's actual duration and patch the
-	// freshly-inserted clip to use it. Skips if the clip has already been
+	// freshly-inserted clip to use it. Trims if the clip has already been
 	// trimmed (sourceEndSec != PLACEHOLDER_DURATION_SEC) so we never stomp
 	// on user edits. Also persists the duration back onto the asset so
 	// subsequent inserts use the cached value without re-probing.
@@ -756,7 +901,7 @@ export function useTimeline() {
 
 	return {
 		zoomRegions: document?.zoomRanges ?? [],
-		skipRanges: document?.timeline.skipRanges ?? [],
+		trimRanges: document?.timeline.trimRanges ?? [],
 		annotationRegions: (document?.annotations ?? []) as unknown as AnnotationRegion[],
 		speedRegions,
 		clips: document?.timeline.clips ?? [],
@@ -766,8 +911,9 @@ export function useTimeline() {
 		multiSelection,
 		clipSelection,
 		addZoom,
-		addSkip,
-		addSkipAt,
+		addZoomsBulk,
+		addTrim,
+		addTrimAt,
 		addAnnotation,
 		addSpeed,
 		removeRegion,
@@ -785,15 +931,19 @@ export function useTimeline() {
 		removeClip,
 		selectClip,
 		clearClipSelection,
-		updateSkipRange,
+		updateTrimRange,
+		updateTrim,
+		setTrimEntries,
 		updateZoomSpan,
 		updateZoomFocusLive,
 		commitZoomFocus,
+		updateZoomDepth,
 		updateAnnotationSpan,
 		updateAnnotationLive,
 		commitAnnotationChange,
 		updateSpeedSpan,
-		// T19 — drives the preview video during skip-edge resize.
+		updateSpeedValue,
+		// T19 — drives the preview video during trim-edge resize.
 		setCurrentTime: useProjectStore((s) => s.setCurrentTime),
 	};
 }

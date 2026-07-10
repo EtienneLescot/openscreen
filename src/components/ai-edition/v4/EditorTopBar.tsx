@@ -9,7 +9,6 @@ import {
 	Save,
 	Settings,
 	Sun,
-	Video,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { useI18n } from "@/contexts/I18nContext";
@@ -23,7 +22,6 @@ export interface TopBarActions {
 	openProject: () => void;
 	newProject: () => void;
 	save: () => void;
-	newRecording: () => void;
 	export: () => void;
 	openSettings: () => void;
 	renameProject: (title: string) => void;
@@ -93,7 +91,11 @@ export function EditorTopBar({
 				<span className={styles.name}>OpenScreen</span>
 			</span>
 			<span className={styles.sep} aria-hidden />
-			<ProjectNameField title={projectTitle} onRename={actions.renameProject} />
+			<ProjectNameField
+				title={projectTitle}
+				onRename={actions.renameProject}
+				onOpenProjects={actions.openProject}
+			/>
 			<span className={styles.sep} aria-hidden />
 			<button
 				type="button"
@@ -174,15 +176,6 @@ export function EditorTopBar({
 			<button
 				type="button"
 				className={styles.iconBtn}
-				title="New recording"
-				aria-label="New recording"
-				onClick={actions.newRecording}
-			>
-				<Video size={16} />
-			</button>
-			<button
-				type="button"
-				className={styles.iconBtn}
 				title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
 				aria-label="Toggle theme"
 				onClick={toggleTheme}
@@ -216,9 +209,11 @@ export function EditorTopBar({
 function ProjectNameField({
 	title,
 	onRename,
+	onOpenProjects,
 }: {
 	title: string | null;
 	onRename: (title: string) => void;
+	onOpenProjects: () => void;
 }) {
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState(title ?? "");
@@ -268,17 +263,41 @@ function ProjectNameField({
 	}
 
 	return (
-		<button
-			type="button"
-			className={styles.ghostBtn}
-			title="Rename project"
-			aria-label="Rename project"
-			disabled={!title}
-			onClick={() => setEditing(true)}
-		>
-			<span>{title ?? "No project"}</span>
-			<ChevronDown size={11} style={{ color: "var(--muted)" }} />
-		</button>
+		<span className={styles.ghostBtn}>
+			<button
+				type="button"
+				title="Rename project"
+				aria-label="Rename project"
+				disabled={!title}
+				onClick={() => setEditing(true)}
+				style={{
+					all: "unset",
+					cursor: title ? "pointer" : "default",
+					color: "inherit",
+					font: "inherit",
+				}}
+			>
+				{title ?? "No project"}
+			</button>
+			<button
+				type="button"
+				title="Switch project"
+				aria-label="Switch project"
+				onClick={(e) => {
+					e.stopPropagation();
+					onOpenProjects();
+				}}
+				style={{
+					all: "unset",
+					display: "grid",
+					placeItems: "center",
+					cursor: "pointer",
+					padding: 2,
+				}}
+			>
+				<ChevronDown size={11} style={{ color: "var(--muted)" }} />
+			</button>
+		</span>
 	);
 }
 

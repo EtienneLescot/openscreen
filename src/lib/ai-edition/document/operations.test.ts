@@ -40,16 +40,16 @@ function makeDoc(): AxcutDocument {
 	};
 }
 
-describe("applyTimelineOperation.add_skip_range", () => {
+describe("applyTimelineOperation.add_trim_range", () => {
 	it("appends a user-origin skip and returns a one-line summary", () => {
 		const result = applyTimelineOperation(makeDoc(), {
-			type: "add_skip_range",
+			type: "add_trim_range",
 			startSec: 5,
 			endSec: 8,
 		});
-		expect(result.summary).toMatch(/added skip 0:05\.0.0:08\.0/);
+		expect(result.summary).toMatch(/added trim 0:05\.0.0:08\.0/);
 		const next = result.document;
-		const skips = next.timeline.skipRanges.filter((s) => s.assetId === "asset_1");
+		const skips = next.timeline.trimRanges.filter((s) => s.assetId === "asset_1");
 		expect(skips).toHaveLength(1);
 		expect(skips[0]).toMatchObject({
 			startSec: 5,
@@ -61,11 +61,11 @@ describe("applyTimelineOperation.add_skip_range", () => {
 
 	it("normalises reversed bounds (end < start)", () => {
 		const result = applyTimelineOperation(makeDoc(), {
-			type: "add_skip_range",
+			type: "add_trim_range",
 			startSec: 10,
 			endSec: 4,
 		});
-		const skip = result.document.timeline.skipRanges.find((s) => s.assetId === "asset_1");
+		const skip = result.document.timeline.trimRanges.find((s) => s.assetId === "asset_1");
 		expect(skip?.startSec).toBe(4);
 		expect(skip?.endSec).toBe(10);
 	});
@@ -111,7 +111,7 @@ describe("applyTimelineOperation.replace_timeline", () => {
 describe("applyTimelineOperation.restore_full_timeline", () => {
 	it("drops every skip and restores a single full clip", () => {
 		const doc = applyTimelineOperation(makeDoc(), {
-			type: "add_skip_range",
+			type: "add_trim_range",
 			startSec: 5,
 			endSec: 10,
 		}).document;
@@ -123,7 +123,7 @@ describe("applyTimelineOperation.restore_full_timeline", () => {
 			.filter((c) => c.assetId === "asset_1")
 			.reduce((s, c) => s + (c.sourceEndSec - c.sourceStartSec), 0);
 		expect(totalClip).toBe(60);
-		expect(restored.document.timeline.skipRanges).toHaveLength(0);
+		expect(restored.document.timeline.trimRanges).toHaveLength(0);
 	});
 });
 

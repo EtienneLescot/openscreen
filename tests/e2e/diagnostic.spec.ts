@@ -41,7 +41,7 @@ const DOC = {
 			},
 		],
 		gaps: [],
-		skipRanges: [],
+		trimRanges: [],
 		muteRanges: [],
 		speedRanges: [],
 		captionRanges: [],

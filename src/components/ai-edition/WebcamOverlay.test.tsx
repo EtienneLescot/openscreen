@@ -65,7 +65,7 @@ function makeDocument(): AxcutDocument {
 		timeline: {
 			clips: [CLIP_WITH_CAMERA, CLIP_WITHOUT_CAMERA],
 			gaps: [],
-			skipRanges: [],
+			trimRanges: [],
 			muteRanges: [],
 			speedRanges: [],
 			captionRanges: [],
