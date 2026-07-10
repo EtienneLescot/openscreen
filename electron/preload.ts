@@ -5,6 +5,7 @@ import type { RecordingSession, StoreRecordedSessionInput } from "../src/lib/rec
 import type { ShortcutBinding } from "../src/lib/shortcuts";
 import type { AiEditionChatEvent } from "../src/native/contracts";
 import { NATIVE_BRIDGE_CHANNEL, type NativeBridgeRequest } from "../src/native/contracts";
+import type { RecordingPrefs } from "./ipc/handlers";
 import type {
 	SttStatusEvent,
 	SttTranscribeRequest,
@@ -61,6 +62,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	},
 	getSelectedSource: () => {
 		return ipcRenderer.invoke("get-selected-source");
+	},
+	getRecordingPrefs: () => {
+		return ipcRenderer.invoke("get-recording-prefs");
+	},
+	setRecordingPrefs: (prefs: Partial<RecordingPrefs>) => {
+		return ipcRenderer.invoke("set-recording-prefs", prefs);
+	},
+	onRecordingPrefsChanged: (callback: (prefs: RecordingPrefs) => void) => {
+		const listener = (_event: unknown, prefs: RecordingPrefs) => callback(prefs);
+		ipcRenderer.on("recording-prefs-changed", listener);
+		return () => ipcRenderer.removeListener("recording-prefs-changed", listener);
 	},
 	onSelectedSourceChanged: (callback: (source: ProcessedDesktopSource) => void) => {
 		const listener = (_event: unknown, source: ProcessedDesktopSource) => callback(source);

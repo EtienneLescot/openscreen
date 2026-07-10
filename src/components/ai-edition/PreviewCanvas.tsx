@@ -32,7 +32,7 @@ import type {
 import type {
 	AxcutAnnotationRegion,
 	AxcutClip,
-	AxcutSkipRange,
+	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -45,6 +45,7 @@ import {
 	getWebcamLayoutCssBoxShadow,
 	type WebcamCompositeLayout,
 } from "@/lib/compositeLayout";
+import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import { getAspectRatioValue } from "@/utils/aspectRatioUtils";
 import { AnnotationLayer } from "./AnnotationLayer";
@@ -60,7 +61,7 @@ interface PreviewCanvasProps {
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
-	skipRanges?: AxcutSkipRange[];
+	trimRanges?: AxcutTrimRange[];
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
 	onZoomFocusCommit?: () => void;
@@ -109,12 +110,12 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	useEffect(() => {
 		const el = frameRef.current?.parentElement;
 		if (!el) return;
-		// ponytail: clientWidth/clientHeight include the container's padding
-		// (.previewCanvas has var(--sp-5) on all sides). Sizing the frame to
-		// that full padded box, then centering it in the smaller content-box
-		// grid track, pushed it past the padding edge on every axis —
-		// overflow:hidden then clipped the video instead of letting it fit.
-		// Subtracting the computed padding gives the actual content box.
+		// ponytail: measure the parent's content box, not its border box —
+		// clientWidth/clientHeight include any padding, and sizing the frame to
+		// the full padded box while it's centered in the smaller content area
+		// pushed it past the padding edge, where overflow:hidden clipped the
+		// video. The parent (.previewWrap) is currently zero-padding, but
+		// subtracting computed padding keeps this correct if that ever changes.
 		const update = () => {
 			const cs = getComputedStyle(el);
 			const paddingX = Number.parseFloat(cs.paddingLeft) + Number.parseFloat(cs.paddingRight);
@@ -353,30 +354,35 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	);
 }
 
+// ponytail: resolve `settings.wallpaper` to an actual CSS background. Image
+// wallpapers must go through resolveImageWallpaperUrl (→ getAssetPath): in the
+// packaged Electron app the renderer loads over file://, where a bare
+// `/wallpapers/foo.jpg` points at the filesystem root and 404s, so the custom
+// background silently failed to paint (worked in the http dev server only).
+// classifyWallpaper also handles color-function (rgb/hsl/…) and every gradient
+// variant, which the old ad-hoc startsWith checks missed.
+function resolveWallpaperImageUrl(imagePath: string): string | null {
+	try {
+		return resolveImageWallpaperUrl(imagePath);
+	} catch {
+		return null;
+	}
+}
+
 // Canvas: wallpaper only — no padding, no shadow.
 function buildFrameStyle(
 	settings: ReturnType<typeof useEditorSettings>["settings"],
 ): React.CSSProperties {
-	const wallpaper = settings.wallpaper;
-	const isImageWallpaper = wallpaper.startsWith("/wallpapers/") || wallpaper.startsWith("data:");
-	const isColor = wallpaper.startsWith("#");
-	const isGradient =
-		wallpaper.startsWith("linear-") ||
-		wallpaper.startsWith("radial-") ||
-		wallpaper.startsWith("conic-");
-
-	if (isImageWallpaper) {
-		return {
-			backgroundImage: `url(${wallpaper})`,
-			backgroundSize: "cover",
-			backgroundPosition: "center",
-			backgroundRepeat: "no-repeat",
-		};
-	}
-	if (isColor) return { backgroundColor: wallpaper };
+	const w = classifyWallpaper(settings.wallpaper);
+	if (w.kind === "color") return { backgroundColor: w.value };
+	if (w.kind === "gradient") return { backgroundImage: w.value, backgroundSize: "cover" };
+	const url = resolveWallpaperImageUrl(w.path);
+	if (!url) return {};
 	return {
-		backgroundImage: isGradient ? wallpaper : undefined,
+		backgroundImage: `url(${url})`,
 		backgroundSize: "cover",
+		backgroundPosition: "center",
+		backgroundRepeat: "no-repeat",
 	};
 }
 
@@ -449,39 +455,22 @@ function buildBlurStyle(
 	settings: ReturnType<typeof useEditorSettings>["settings"],
 ): React.CSSProperties {
 	if (!settings.showBlur) return { display: "none" };
-	const wallpaper = settings.wallpaper;
-	const isImageWallpaper = wallpaper.startsWith("/wallpapers/") || wallpaper.startsWith("data:");
-	const isColor = wallpaper.startsWith("#");
-	const isGradient =
-		wallpaper.startsWith("linear-") ||
-		wallpaper.startsWith("radial-") ||
-		wallpaper.startsWith("conic-");
-
-	if (isImageWallpaper) {
-		return {
-			backgroundImage: `url(${wallpaper})`,
-			backgroundSize: "cover",
-			backgroundPosition: "center",
-			filter: "blur(28px)",
-			opacity: 1,
-		};
+	const w = classifyWallpaper(settings.wallpaper);
+	if (w.kind === "color") {
+		return { backgroundColor: w.value, filter: "blur(28px)", opacity: 1 };
 	}
-	if (isColor) {
-		return {
-			backgroundColor: wallpaper,
-			filter: "blur(28px)",
-			opacity: 1,
-		};
+	if (w.kind === "gradient") {
+		return { background: w.value, backgroundSize: "cover", filter: "blur(28px)", opacity: 1 };
 	}
-	if (isGradient) {
-		return {
-			background: wallpaper,
-			backgroundSize: "cover",
-			filter: "blur(28px)",
-			opacity: 1,
-		};
-	}
-	return { display: "none" };
+	const url = resolveWallpaperImageUrl(w.path);
+	if (!url) return { display: "none" };
+	return {
+		backgroundImage: `url(${url})`,
+		backgroundSize: "cover",
+		backgroundPosition: "center",
+		filter: "blur(28px)",
+		opacity: 1,
+	};
 }
 
 function clamp(v: number, min: number, max: number): number {

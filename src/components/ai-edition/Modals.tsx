@@ -495,8 +495,14 @@ function TemplateCell({
 interface CropModalProps extends BaseModalProps {
 	initialRegion: CropRegion;
 	onApply: (region: CropRegion) => void;
+	/** Primary video source to show as the real crop-preview frame. */
+	videoSources?: VideoSource[];
+	/** Seek the preview frame to this time (source-media seconds). */
+	currentTimeSec?: number;
 }
 
+// `ratio` is width/height (matches the label directly: "16:9" → 16/9 means
+// a region 16 units wide for every 9 tall).
 const CROP_RATIOS: Array<{ value: string; label: string; ratio: number | null }> = [
 	{ value: "free", label: "Free", ratio: null },
 	{ value: "16:9", label: "16:9", ratio: 16 / 9 },
@@ -509,20 +515,35 @@ const CROP_RATIOS: Array<{ value: string; label: string; ratio: number | null }>
 
 function detectRatio(r: CropRegion): string {
 	const candidates = CROP_RATIOS.filter((c) => c.ratio !== null);
-	const ratio = r.width === 0 ? 0 : r.height / r.width;
+	const whRatio = r.height === 0 ? 0 : r.width / r.height;
 	for (const c of candidates) {
 		if (c.ratio === null) continue;
-		if (Math.abs(ratio - c.ratio) < 0.01) return c.value;
+		if (Math.abs(whRatio - c.ratio) < 0.01) return c.value;
 	}
 	return "free";
 }
 
-export function CropModal({ open, onClose, initialRegion, onApply }: CropModalProps) {
+const MIN_PCT = 4;
+const clampPct = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
+
+type ResizeEdges = { left?: boolean; right?: boolean; top?: boolean; bottom?: boolean };
+
+export function CropModal({
+	open,
+	onClose,
+	initialRegion,
+	onApply,
+	videoSources = [],
+	currentTimeSec = 0,
+}: CropModalProps) {
 	const [xPct, setXPct] = useState(0);
 	const [yPct, setYPct] = useState(0);
 	const [wPct, setWPct] = useState(100);
 	const [hPct, setHPct] = useState(100);
 	const [ratio, setRatio] = useState("free");
+	const frameRef = useRef<HTMLDivElement | null>(null);
+	const videoRef = useRef<HTMLVideoElement | null>(null);
+	const activeSource = videoSources[0] ?? null;
 
 	// ponytail: sync local form state to the document region every time the
 	// modal opens. Doesn't run on every doc change — `open` is the trigger.
@@ -535,12 +556,27 @@ export function CropModal({ open, onClose, initialRegion, onApply }: CropModalPr
 		setRatio(detectRatio(initialRegion));
 	}, [open, initialRegion]);
 
+	// Show the frame at the same point the user was looking at in the editor
+	// — a still, paused frame is enough to judge the crop, no playback needed.
+	useEffect(() => {
+		if (!open) return;
+		const v = videoRef.current;
+		if (!v) return;
+		const seek = () => {
+			v.pause();
+			if (Number.isFinite(currentTimeSec)) v.currentTime = currentTimeSec;
+		};
+		if (v.readyState >= 1) seek();
+		else v.addEventListener("loadedmetadata", seek, { once: true });
+		return () => v.removeEventListener("loadedmetadata", seek);
+	}, [open, currentTimeSec]);
+
 	const handleRatioChange = (next: string) => {
 		setRatio(next);
 		const candidate = CROP_RATIOS.find((c) => c.value === next);
 		if (candidate?.ratio && wPct > 0) {
-			const newH = Math.round(wPct * candidate.ratio);
-			setHPct(Math.min(100, Math.max(1, newH)));
+			const newH = Math.round(wPct / candidate.ratio);
+			setHPct(clampPct(newH, MIN_PCT, 100));
 		}
 	};
 
@@ -555,23 +591,123 @@ export function CropModal({ open, onClose, initialRegion, onApply }: CropModalPr
 		onClose();
 	};
 
+	// Drag the whole region (keeps size, moves x/y).
+	const startMove = (e: ReactPointerEvent) => {
+		e.preventDefault();
+		e.stopPropagation();
+		const el = frameRef.current;
+		if (!el) return;
+		const r = el.getBoundingClientRect();
+		const startX = e.clientX;
+		const startY = e.clientY;
+		const start = { x: xPct, y: yPct, w: wPct, h: hPct };
+		const move = (ev: PointerEvent) => {
+			const dxPct = ((ev.clientX - startX) / r.width) * 100;
+			const dyPct = ((ev.clientY - startY) / r.height) * 100;
+			setXPct(Math.round(clampPct(start.x + dxPct, 0, 100 - start.w)));
+			setYPct(Math.round(clampPct(start.y + dyPct, 0, 100 - start.h)));
+		};
+		const up = () => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+	};
+
+	// Drag one of the 8 edge/corner handles to resize. When a fixed ratio is
+	// active, the opposite dimension follows to keep width/height locked.
+	const startResize = (edges: ResizeEdges) => (e: ReactPointerEvent) => {
+		e.preventDefault();
+		e.stopPropagation();
+		const el = frameRef.current;
+		if (!el) return;
+		const r = el.getBoundingClientRect();
+		const startX = e.clientX;
+		const startY = e.clientY;
+		const start = { x: xPct, y: yPct, w: wPct, h: hPct };
+		const activeRatio = CROP_RATIOS.find((c) => c.value === ratio)?.ratio ?? null;
+		const move = (ev: PointerEvent) => {
+			const dxPct = ((ev.clientX - startX) / r.width) * 100;
+			const dyPct = ((ev.clientY - startY) / r.height) * 100;
+			let { x, y, w, h } = start;
+			if (edges.left) {
+				const nx = clampPct(start.x + dxPct, 0, start.x + start.w - MIN_PCT);
+				w = start.w - (nx - start.x);
+				x = nx;
+			}
+			if (edges.right) {
+				w = clampPct(start.w + dxPct, MIN_PCT, 100 - start.x);
+			}
+			if (edges.top) {
+				const ny = clampPct(start.y + dyPct, 0, start.y + start.h - MIN_PCT);
+				h = start.h - (ny - start.y);
+				y = ny;
+			}
+			if (edges.bottom) {
+				h = clampPct(start.h + dyPct, MIN_PCT, 100 - start.y);
+			}
+			if (activeRatio) {
+				if (edges.left || edges.right) h = clampPct(w / activeRatio, MIN_PCT, 100 - y);
+				else if (edges.top || edges.bottom) w = clampPct(h * activeRatio, MIN_PCT, 100 - x);
+			}
+			setXPct(Math.round(x));
+			setYPct(Math.round(y));
+			setWPct(Math.round(w));
+			setHPct(Math.round(h));
+		};
+		const up = () => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+	};
+
+	const handleStyle = (pos: React.CSSProperties): React.CSSProperties => ({
+		position: "absolute",
+		width: 10,
+		height: 10,
+		borderRadius: 3,
+		background: "var(--fg)",
+		border: "1px solid var(--overlay-dark)",
+		...pos,
+	});
+
 	return (
 		<ModalShell
 			open={open}
 			onClose={onClose}
 			title="Crop video"
-			subtitle="Drag on each side to adjust the crop area"
+			subtitle="Drag the region or its handles to adjust the crop area"
 		>
 			<div
+				ref={frameRef}
 				style={{
 					position: "relative",
 					aspectRatio: "16 / 9",
-					background: "linear-gradient(135deg, #16171d, #16171d)",
+					background: "#0a0b0e",
 					borderRadius: "var(--r-md)",
 					border: "1px solid var(--border)",
 					overflow: "hidden",
 				}}
 			>
+				{activeSource ? (
+					<video
+						ref={videoRef}
+						src={activeSource.src}
+						muted
+						playsInline
+						style={{
+							position: "absolute",
+							inset: 0,
+							width: "100%",
+							height: "100%",
+							objectFit: "contain",
+							background: "#000",
+						}}
+					/>
+				) : null}
 				<div
 					style={{
 						position: "absolute",
@@ -584,7 +720,41 @@ export function CropModal({ open, onClose, initialRegion, onApply }: CropModalPr
 						boxShadow: "0 0 0 9999px var(--overlay-dark)",
 						cursor: "move",
 					}}
-				/>
+					onPointerDown={startMove}
+				>
+					<div
+						onPointerDown={startResize({ left: true, top: true })}
+						style={handleStyle({ left: -5, top: -5, cursor: "nwse-resize" })}
+					/>
+					<div
+						onPointerDown={startResize({ right: true, top: true })}
+						style={handleStyle({ right: -5, top: -5, cursor: "nesw-resize" })}
+					/>
+					<div
+						onPointerDown={startResize({ left: true, bottom: true })}
+						style={handleStyle({ left: -5, bottom: -5, cursor: "nesw-resize" })}
+					/>
+					<div
+						onPointerDown={startResize({ right: true, bottom: true })}
+						style={handleStyle({ right: -5, bottom: -5, cursor: "nwse-resize" })}
+					/>
+					<div
+						onPointerDown={startResize({ top: true })}
+						style={handleStyle({ left: "50%", top: -5, marginLeft: -5, cursor: "ns-resize" })}
+					/>
+					<div
+						onPointerDown={startResize({ bottom: true })}
+						style={handleStyle({ left: "50%", bottom: -5, marginLeft: -5, cursor: "ns-resize" })}
+					/>
+					<div
+						onPointerDown={startResize({ left: true })}
+						style={handleStyle({ top: "50%", left: -5, marginTop: -5, cursor: "ew-resize" })}
+					/>
+					<div
+						onPointerDown={startResize({ right: true })}
+						style={handleStyle({ top: "50%", right: -5, marginTop: -5, cursor: "ew-resize" })}
+					/>
+				</div>
 			</div>
 			<div
 				style={{

@@ -33,22 +33,22 @@ export type AxcutTimelineOperation =
 			reason?: string;
 	  }
 	| {
-			type: "add_skip_range";
+			type: "add_trim_range";
 			assetId?: string;
 			startSec: number;
 			endSec: number;
 			reason?: string;
 	  }
 	| {
-			type: "update_skip_range";
-			skipId: string;
+			type: "update_trim_range";
+			trimId: string;
 			startSec: number;
 			endSec: number;
 			reason?: string;
 	  }
 	| {
-			type: "remove_skip_range";
-			skipId: string;
+			type: "remove_trim_range";
+			trimId: string;
 			reason?: string;
 	  }
 	| {
@@ -173,16 +173,16 @@ export function applyTimelineOperation(
 				summary: `dropped ${formatSec(op.startSec)}–${formatSec(op.endSec)}`,
 			};
 		}
-		case "add_skip_range": {
+		case "add_trim_range": {
 			const assetId = pickAssetId(document, op.assetId);
-			if (!assetId) return { document, summary: "no asset to skip" };
+			if (!assetId) return { document, summary: "no asset to trim" };
 			const lo = Math.max(0, Math.min(op.startSec, op.endSec));
 			const hi = Math.max(lo, Math.max(op.startSec, op.endSec));
-			const existing = document.timeline.skipRanges.filter((s) => s.assetId === assetId);
-			// ponytail: bound by the skip-range asset's duration, not the
+			const existing = document.timeline.trimRanges.filter((s) => s.assetId === assetId);
+			// ponytail: bound by the trim-range asset's duration, not the
 			// primary asset's. Recording projects can have a short primary
 			// asset (snippet) while the clip uses a long video — using
-			// primaryAssetDuration here would truncate the skip range and
+			// primaryAssetDuration here would truncate the trim range and
 			// only trim a few words instead of the user's full selection.
 			const asset = document.assets.find((a) => a.id === assetId);
 			const duration = asset?.durationSec ?? Infinity;
@@ -194,8 +194,8 @@ export function applyTimelineOperation(
 				...document,
 				timeline: {
 					...document.timeline,
-					skipRanges: merged.map((iv, i) => ({
-						id: `skip_${i + 1}`,
+					trimRanges: merged.map((iv, i) => ({
+						id: `trim_${i + 1}`,
 						assetId,
 						startSec: iv.startSec,
 						endSec: iv.endSec,
@@ -207,10 +207,10 @@ export function applyTimelineOperation(
 			};
 			return {
 				document: next,
-				summary: `added skip ${formatSec(lo)}–${formatSec(hi)}`,
+				summary: `added trim ${formatSec(lo)}–${formatSec(hi)}`,
 			};
 		}
-		case "update_skip_range": {
+		case "update_trim_range": {
 			const lo = Math.max(0, Math.min(op.startSec, op.endSec));
 			const hi = Math.max(lo, Math.max(op.startSec, op.endSec));
 			let found = false;
@@ -218,32 +218,32 @@ export function applyTimelineOperation(
 				...document,
 				timeline: {
 					...document.timeline,
-					skipRanges: document.timeline.skipRanges.map((s) => {
-						if (s.id !== op.skipId) return s;
+					trimRanges: document.timeline.trimRanges.map((s) => {
+						if (s.id !== op.trimId) return s;
 						found = true;
 						return { ...s, startSec: lo, endSec: hi, reason: op.reason ?? s.reason };
 					}),
 				},
 				preview: { ...document.preview, revision: document.preview.revision + 1 },
 			};
-			if (!found) return { document, summary: `unknown skip ${op.skipId}` };
+			if (!found) return { document, summary: `unknown trim ${op.trimId}` };
 			return {
 				document: next,
-				summary: `updated skip ${op.skipId} to ${formatSec(lo)}–${formatSec(hi)}`,
+				summary: `updated trim ${op.trimId} to ${formatSec(lo)}–${formatSec(hi)}`,
 			};
 		}
-		case "remove_skip_range": {
+		case "remove_trim_range": {
 			const next: AxcutDocument = {
 				...document,
 				timeline: {
 					...document.timeline,
-					skipRanges: document.timeline.skipRanges.filter((s) => s.id !== op.skipId),
+					trimRanges: document.timeline.trimRanges.filter((s) => s.id !== op.trimId),
 				},
 				preview: { ...document.preview, revision: document.preview.revision + 1 },
 			};
 			return {
 				document: next,
-				summary: `removed skip ${op.skipId}`,
+				summary: `removed trim ${op.trimId}`,
 			};
 		}
 		case "restore_full_timeline": {

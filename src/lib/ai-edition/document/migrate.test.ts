@@ -57,7 +57,7 @@ describe("migrateProjectDataToAxcutDocument", () => {
 		expect(clip.sourceEndSec).toBeUndefined();
 	});
 
-	it("converts trimRegions to skipRanges on the primary asset (1.5s cut)", () => {
+	it("converts trimRegions to trimRanges on the primary asset (1.5s cut)", () => {
 		const doc = migrateProjectDataToAxcutDocument(
 			makeV2Project({
 				editor: {
@@ -67,8 +67,8 @@ describe("migrateProjectDataToAxcutDocument", () => {
 			}),
 		);
 
-		expect(doc.timeline.skipRanges).toHaveLength(1);
-		const skip = doc.timeline.skipRanges[0];
+		expect(doc.timeline.trimRanges).toHaveLength(1);
+		const skip = doc.timeline.trimRanges[0];
 		expect(skip.assetId).toBe(doc.assets[0].id);
 		expect(skip.startSec).toBeCloseTo(1.0, 3);
 		expect(skip.endSec).toBeCloseTo(2.5, 3);
@@ -213,7 +213,7 @@ describe("migrateProjectDataToAxcutDocument", () => {
 });
 
 describe("migrateAxcutDocumentToProjectData", () => {
-	it("round-trips skipRanges back to trimRegions", () => {
+	it("round-trips trimRanges back to trimRegions", () => {
 		const v2 = makeV2Project({
 			editor: {
 				...makeV2Project().editor,

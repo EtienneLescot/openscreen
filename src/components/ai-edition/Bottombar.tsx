@@ -26,7 +26,7 @@ import { TimelinePane } from "./TimelinePane";
 import { TransportBar } from "./TransportBar";
 import type { VideoSource } from "./VirtualPreview";
 
-type RegionKind = "zoom" | "skip" | "annotation" | "speed";
+type RegionKind = "zoom" | "trim" | "annotation" | "speed";
 
 interface RegionHandle {
 	kind: RegionKind;
@@ -39,7 +39,7 @@ interface BottombarProps {
 	currentTimeSec: number;
 	onSeek: (timelineSec: number) => void;
 	zoomRegions: AxcutDocument["zoomRanges"];
-	skipRanges: AxcutDocument["timeline"]["skipRanges"];
+	trimRanges: AxcutDocument["timeline"]["trimRanges"];
 	annotationRegions: AnnotationRegion[];
 	speedRegions: Array<{ id: string; startMs: number; endMs: number; speed: number }>;
 	selection: RegionHandle | null;
@@ -50,10 +50,10 @@ interface BottombarProps {
 	onAddAnnotation: () => void;
 	onAddSpeed: () => void;
 	// T15 — receives a setter so the parent's "T" keyboard shortcut can
-	// call into our togglePlaceSkip (state lives here, body-class + Esc
+	// call into our togglePlaceTrim (state lives here, body-class + Esc
 	// handler live here). The Scissors button in this component calls
-	// togglePlaceSkip directly.
-	setTogglePlaceSkip?: (fn: () => void) => void;
+	// togglePlaceTrim directly.
+	setTogglePlaceTrim?: (fn: () => void) => void;
 	onSelectRegion: (kind: RegionKind, id: string, additive?: boolean) => void;
 	onCaptions: () => void;
 	// ponytail: the video transport now renders in this header (merged into
@@ -92,7 +92,7 @@ export function Bottombar({
 	currentTimeSec,
 	onSeek,
 	zoomRegions,
-	skipRanges,
+	trimRanges,
 	annotationRegions,
 	speedRegions,
 	selection,
@@ -101,7 +101,7 @@ export function Bottombar({
 	onAddZoom,
 	onAddAnnotation,
 	onAddSpeed,
-	setTogglePlaceSkip,
+	setTogglePlaceTrim,
 	onSelectRegion,
 	onCaptions,
 	playing,
@@ -147,7 +147,7 @@ export function Bottombar({
 	// right away (axcut's behavior).
 	const [pendingCutPlacement, setPendingCutPlacement] = useState(false);
 	const [pendingCutPreviewSec, setPendingCutPreviewSec] = useState<number | null>(null);
-	const togglePlaceSkip = useCallback(() => {
+	const togglePlaceTrim = useCallback(() => {
 		setPendingCutPlacement((active) => {
 			if (active) {
 				setPendingCutPreviewSec(null);
@@ -211,12 +211,12 @@ export function Bottombar({
 
 	// ponytail: register our toggler with the parent (NewEditorShell)
 	// so the "T" keyboard shortcut can call the same function the
-	// Scissors button does. Uses an effect so re-renders (togglePlaceSkip
+	// Scissors button does. Uses an effect so re-renders (togglePlaceTrim
 	// identity is stable but the ref it points to may change) always
 	// see the latest implementation.
 	useEffect(() => {
-		setTogglePlaceSkip?.(togglePlaceSkip);
-	}, [togglePlaceSkip, setTogglePlaceSkip]);
+		setTogglePlaceTrim?.(togglePlaceTrim);
+	}, [togglePlaceTrim, setTogglePlaceTrim]);
 
 	const sourceDurationSec = Math.max(0.001, ...clips.map((c) => c.timelineEndSec));
 	const visibleEndSec = Math.min(visibleStartSec + sourceDurationSec, sourceDurationSec);
@@ -225,15 +225,15 @@ export function Bottombar({
 		if (zoomRegions.some((z) => z.id === id)) void tl.updateZoomSpan(id, span.start, span.end);
 		else if (speedRegions.some((s) => s.id === id))
 			void tl.updateSpeedSpan(id, span.start, span.end);
-		else if (skipRanges.some((s) => s.id === id)) {
+		else if (trimRanges.some((s) => s.id === id)) {
 			// ponytail: skip spans are edited in timeline (virtual) ms via the
 			// same lane drag/resize as zoom/speed/annotation, but persisted in
-			// source-time seconds (skipRangeSchema) — map back through the
+			// source-time seconds (trimRangeSchema) — map back through the
 			// clip the span resolves to.
 			const startPos = locateVirtualPosition(clips, span.start / 1000);
 			const endPos = locateVirtualPosition(clips, span.end / 1000);
 			if (startPos && endPos) {
-				void tl.updateSkipRange(id, startPos.sourceTimeSec, endPos.sourceTimeSec);
+				void tl.updateTrimRange(id, startPos.sourceTimeSec, endPos.sourceTimeSec);
 			}
 		} else void tl.updateAnnotationSpan(id, span.start, span.end);
 	};
@@ -300,7 +300,7 @@ export function Bottombar({
 									? "Click on the timeline to place a 1s skip (Esc to cancel)"
 									: "Arm the place-skip tool (T) — next click drops a 1s skip"
 							}
-							onClick={togglePlaceSkip}
+							onClick={togglePlaceTrim}
 							disabled={!hasDoc}
 							on={pendingCutPlacement}
 						>
@@ -437,7 +437,7 @@ export function Bottombar({
 						<TimelinePane
 							clips={clips}
 							assets={tl.assets}
-							skipRanges={skipRanges}
+							trimRanges={trimRanges}
 							zoomRegions={zoomRegions}
 							annotationRegions={annotationRegions}
 							speedRegions={speedRegions}
@@ -452,7 +452,7 @@ export function Bottombar({
 							onMoveClip={(clipId, toIndex) => void tl.moveClip(clipId, toIndex)}
 							onEditClip={(clip) => setEditClipTarget(clip)}
 							onRemoveClip={(clipId) => void tl.removeClip(clipId)}
-							onAddSkip={(assetId, s, e) => void tl.addSkipAt(assetId, s, e)}
+							onAddTrim={(assetId, s, e) => void tl.addTrimAt(assetId, s, e)}
 							onRegionSpanChange={(id, span) => handleRegionSpanChange(id, span)}
 							zoom={zoom}
 							visibleStartSec={visibleStartSec}
@@ -461,7 +461,7 @@ export function Bottombar({
 							pendingCutPlacement={pendingCutPlacement}
 							pendingCutPreviewSec={pendingCutPreviewSec}
 							setPendingCutPreviewSec={setPendingCutPreviewSec}
-							onCancelPlaceSkip={() => togglePlaceSkip()}
+							onCancelPlaceTrim={() => togglePlaceTrim()}
 						/>
 					</div>
 				</div>

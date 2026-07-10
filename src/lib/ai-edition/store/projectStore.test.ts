@@ -45,7 +45,7 @@ const sampleDoc = {
 	timeline: {
 		clips: [],
 		gaps: [],
-		skipRanges: [],
+		trimRanges: [],
 		muteRanges: [],
 		speedRanges: [],
 		captionRanges: [],

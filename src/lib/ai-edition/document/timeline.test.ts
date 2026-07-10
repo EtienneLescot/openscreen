@@ -37,7 +37,7 @@ function makeDoc(overrides: Partial<AxcutDocument> = {}): AxcutDocument {
 		timeline: {
 			clips: [],
 			gaps: [],
-			skipRanges: [],
+			trimRanges: [],
 			muteRanges: [],
 			speedRanges: [],
 			captionRanges: [],
@@ -147,7 +147,7 @@ describe("timeline pure functions", () => {
 	});
 
 	describe("replaceTimeline", () => {
-		it("rebuilds clips and derives skipRanges from the inverse", () => {
+		it("rebuilds clips and derives trimRanges from the inverse", () => {
 			const doc = makeDoc();
 			const updated = replaceTimeline(
 				doc,
@@ -158,8 +158,8 @@ describe("timeline pure functions", () => {
 				"test cut",
 			);
 			expect(updated.timeline.clips).toHaveLength(2);
-			expect(updated.timeline.skipRanges).toHaveLength(1);
-			expect(updated.timeline.skipRanges[0]).toMatchObject({
+			expect(updated.timeline.trimRanges).toHaveLength(1);
+			expect(updated.timeline.trimRanges[0]).toMatchObject({
 				startSec: 20,
 				endSec: 30,
 			});
@@ -181,7 +181,7 @@ describe("timeline pure functions", () => {
 				timeline: {
 					clips: [],
 					gaps: [],
-					skipRanges: [
+					trimRanges: [
 						{ id: "s1", assetId: "asset_1", startSec: 10, endSec: 20, origin: "user", reason: "" },
 					],
 					muteRanges: [],
@@ -195,7 +195,7 @@ describe("timeline pure functions", () => {
 				sourceStartSec: 0,
 				sourceEndSec: 60,
 			});
-			expect(restored.timeline.skipRanges).toHaveLength(0);
+			expect(restored.timeline.trimRanges).toHaveLength(0);
 		});
 	});
 
@@ -220,7 +220,7 @@ describe("timeline pure functions", () => {
 						},
 					],
 					gaps: [],
-					skipRanges: [],
+					trimRanges: [],
 					muteRanges: [],
 					speedRanges: [],
 					captionRanges: [],
@@ -294,5 +294,80 @@ describe("duplicateClip / moveClip", () => {
 		const doc = makeDoc({ timeline: { ...makeDoc().timeline, clips: [makeClip()] } });
 		expect(() => duplicateClip(doc, "missing")).toThrow();
 		expect(() => moveClip(doc, "missing", 0)).toThrow();
+	});
+
+	it("carries zoom/annotation/speed regions along with the clip they sit on", () => {
+		// clip_a tl 0-10, clip_b tl 10-20. A zoom (tl 12-14), an annotation
+		// (tl 15-16) and a speed region (tl 11-13) all sit over clip_b.
+		const doc = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [
+					makeClip({ id: "clip_a", timelineStartSec: 0, timelineEndSec: 10 }),
+					makeClip({
+						id: "clip_b",
+						sourceStartSec: 20,
+						sourceEndSec: 30,
+						timelineStartSec: 10,
+						timelineEndSec: 20,
+					}),
+				],
+			},
+			zoomRanges: [
+				{ id: "z1", startMs: 12000, endMs: 14000, depth: 3, focus: { cx: 0.5, cy: 0.5 } },
+			],
+			annotations: [
+				{
+					id: "a1",
+					startMs: 15000,
+					endMs: 16000,
+					type: "text",
+					content: "hi",
+					position: { x: 50, y: 50 },
+					size: { width: 30, height: 20 },
+					style: {
+						color: "#fff",
+						backgroundColor: "transparent",
+						fontSize: 32,
+						fontFamily: "Inter",
+						fontWeight: "bold",
+						fontStyle: "normal",
+						textDecoration: "none",
+						textAlign: "center",
+						textAnimation: "none",
+					},
+					zIndex: 1,
+				},
+			] as unknown as AxcutDocument["annotations"],
+			legacyEditor: { speedRegions: [{ id: "s1", startMs: 11000, endMs: 13000, speed: 1.5 }] },
+		});
+		// Move clip_b to the front → clip_b now tl 0-10 (delta -10s). Regions
+		// over clip_b shift by -10s; the zoom now sits at tl 2-4, etc.
+		const next = moveClip(doc, "clip_b", 0);
+		expect(next.timeline.clips.map((c) => c.id)).toEqual(["clip_b", "clip_a"]);
+		expect(next.zoomRanges[0]).toMatchObject({ startMs: 2000, endMs: 4000 });
+		expect(next.annotations[0]).toMatchObject({ startMs: 5000, endMs: 6000 });
+		const speed = (next.legacyEditor as { speedRegions: Array<{ startMs: number; endMs: number }> })
+			.speedRegions[0];
+		expect(speed).toMatchObject({ startMs: 1000, endMs: 3000 });
+	});
+
+	it("leaves regions over a clip that did not move untouched", () => {
+		const doc = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [
+					makeClip({ id: "clip_a", timelineStartSec: 0, timelineEndSec: 10 }),
+					makeClip({ id: "clip_b", timelineStartSec: 10, timelineEndSec: 20 }),
+					makeClip({ id: "clip_c", timelineStartSec: 20, timelineEndSec: 30 }),
+				],
+			},
+			zoomRanges: [{ id: "z1", startMs: 3000, endMs: 5000, depth: 3, focus: { cx: 0.5, cy: 0.5 } }],
+		});
+		// Swapping clip_b and clip_c leaves clip_a (tl 0-10) put, so a zoom over
+		// clip_a stays exactly where it was.
+		const next = moveClip(doc, "clip_c", 1);
+		expect(next.timeline.clips.map((c) => c.id)).toEqual(["clip_a", "clip_c", "clip_b"]);
+		expect(next.zoomRanges[0]).toMatchObject({ startMs: 3000, endMs: 5000 });
 	});
 });

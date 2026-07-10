@@ -12,7 +12,7 @@ const baseDoc: AxcutDocument = {
 	schemaVersion: 3,
 	project: { id: "p1", title: "Test", primaryAssetId: "a1" },
 	assets: [{ id: "a1", kind: "video", label: "clip", originalPath: "/x.mp4" }],
-	timeline: { clips: [], skipRanges: [] },
+	timeline: { clips: [], trimRanges: [] },
 	annotations: [],
 	zoomRanges: [],
 	transcripts: [],

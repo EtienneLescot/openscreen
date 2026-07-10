@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fromFileUrl } from "@/components/video-editor/projectPersistence";
-import type { AxcutClip, AxcutSkipRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import type { AxcutClip, AxcutTrimRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
@@ -28,7 +28,7 @@ interface VirtualPreviewProps {
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
-	skipRanges?: AxcutSkipRange[];
+	trimRanges?: AxcutTrimRange[];
 	seekTarget?: { timeSec: number; isSource?: boolean; requestId: number } | null;
 	onTimeChange?: (timeSec: number) => void;
 	onLoadedMetadata?: (durationSec: number, assetId: string) => void;
@@ -48,7 +48,7 @@ export function VirtualPreview({
 	clips,
 	zoomRegions = [],
 	speedRegions = [],
-	skipRanges = [],
+	trimRanges = [],
 	seekTarget,
 	onTimeChange,
 	onLoadedMetadata,
@@ -107,8 +107,8 @@ export function VirtualPreview({
 	virtualDurationSecRef.current = virtualDurationSec;
 	const speedRegionsRef = useRef(speedRegions);
 	speedRegionsRef.current = speedRegions;
-	const skipRangesRef = useRef(skipRanges);
-	skipRangesRef.current = skipRanges;
+	const trimRangesRef = useRef(trimRanges);
+	trimRangesRef.current = trimRanges;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: re-create the rAF when the active source swaps.
 	useEffect(() => {
 		let raf = 0;
@@ -128,30 +128,30 @@ export function VirtualPreview({
 				clockRef.current.virtualTimeSec = virtualTimeSecRef.current;
 			}
 			const activeSourceId = videoSourcesRef.current[sourceIndexRef.current]?.id;
-			// Skip regions only skip ahead during actual playback — mirrors
+			// Trim regions only trim ahead during actual playback — mirrors
 			// main's videoEventHandlers.ts (findActiveTrimRegion + jump to
 			// endMs, gated on `!video.paused`). Scrubbing/paused seeks are
 			// intentionally NOT clamped: the user can navigate freely inside
-			// a skip while editing; only Play/export treats it as a cut.
+			// a trim while editing; only Play/export treats it as a cut.
 			if (!v.paused) {
-				const activeSkip = skipRangesRef.current.find(
-					(skip) =>
-						skip.assetId === activeSourceId &&
-						v.currentTime >= skip.startSec &&
-						v.currentTime < skip.endSec,
+				const activeTrim = trimRangesRef.current.find(
+					(trim) =>
+						trim.assetId === activeSourceId &&
+						v.currentTime >= trim.startSec &&
+						v.currentTime < trim.endSec,
 				);
-				if (activeSkip) {
-					if (activeSkip.endSec >= (v.duration || Infinity)) {
+				if (activeTrim) {
+					if (activeTrim.endSec >= (v.duration || Infinity)) {
 						v.pause();
 					} else {
 						// ponytail: seeking to exactly `endSec` can land the decoder a
 						// hair before it (frame/sample quantization), which still
-						// satisfies `currentTime < skip.endSec` — the next tick
+						// satisfies `currentTime < trim.endSec` — the next tick
 						// re-seeks to the same spot, forever, so playback never
-						// actually progresses past the skip (looked like a hard
+						// actually progresses past the trim (looked like a hard
 						// stop instead of an invisible cut). A small epsilon past
 						// the boundary guarantees each re-check reads past it.
-						v.currentTime = activeSkip.endSec + 0.05;
+						v.currentTime = activeTrim.endSec + 0.05;
 					}
 					return;
 				}
@@ -209,13 +209,14 @@ export function VirtualPreview({
 		};
 		raf = window.requestAnimationFrame(tick);
 		return () => window.cancelAnimationFrame(raf);
-		// re-create the rAF when the active source swaps
-	}, [activeSource?.src]);
+		// re-create the rAF when the active source swaps (by asset id, not src —
+		// two clips can point at distinct assets that resolve to the same URL).
+	}, [activeSource?.id]);
 
 	// report the video element up; re-notify (and clear) whenever the active
 	// source changes so the parent doesn't keep a stale node after the keyed
 	// <video> is swapped for a new asset.
-	const activeSourceKey = activeSource?.src ?? null;
+	const activeSourceKey = activeSource?.id ?? null;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: re-run on source swap
 	useEffect(() => {
 		onVideoElement?.(videoRef.current);
@@ -277,7 +278,11 @@ export function VirtualPreview({
 
 			const targetIndex = videoSources.findIndex((vs) => vs.id === position.clip.assetId);
 			const isAssetSwitch = targetIndex >= 0 && targetIndex !== sourceIndex;
-			const shouldContinuePlayback = preservePlayback && isPlaying;
+			// Read the live paused state, not the captured `isPlaying` prop: the rAF
+			// clip-end auto-advance calls a `seekToVirtualTime` closure captured when
+			// the rAF was created (before playback started), so the captured
+			// `isPlaying` is stale-false and the cross-asset resume never fired.
+			const shouldContinuePlayback = preservePlayback && !videoRef.current?.paused;
 
 			if (isAssetSwitch) {
 				setSourceIndex(targetIndex);
@@ -302,7 +307,7 @@ export function VirtualPreview({
 				void video.play().catch(() => setIsPlaying(false));
 			}
 		},
-		[clips, videoSources, sourceIndex, isPlaying, updateVirtualTime],
+		[clips, videoSources, sourceIndex, updateVirtualTime],
 	);
 
 	const seekToSourceTime = useCallback((sourceTimeSec: number) => {
@@ -328,7 +333,11 @@ export function VirtualPreview({
 			{activeSource ? (
 				<div ref={videoFrameRef} className={styles.videoFrame}>
 					<video
-						key={activeSource.src}
+						// Key on the asset id, not the URL: distinct assets that resolve
+						// to the same file URL must still remount the <video> on switch so
+						// onLoadedMetadata refires and the pending cross-asset seek/resume
+						// runs (otherwise playback stalls at the clip boundary).
+						key={activeSource.id}
 						ref={videoRef}
 						src={activeSource.src}
 						className={styles.video}

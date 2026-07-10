@@ -23,8 +23,8 @@ import type {
 	AxcutAsset,
 	AxcutClip,
 	AxcutDocument,
-	AxcutSkipRange,
 	AxcutTranscript,
+	AxcutTrimRange,
 } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import styles from "./NewEditorShell.module.css";
@@ -38,7 +38,7 @@ import {
 	VideoEffectsPane,
 } from "./RightPanes";
 
-type RegionKind = "zoom" | "skip" | "annotation" | "speed";
+type RegionKind = "zoom" | "trim" | "annotation" | "speed";
 
 interface RegionHandle {
 	kind: RegionKind;
@@ -52,12 +52,12 @@ interface RightPanelStackProps {
 	transcripts: AxcutTranscript[];
 	assets: AxcutAsset[];
 	clips: AxcutClip[];
-	skipRanges: AxcutSkipRange[];
+	trimRanges: AxcutTrimRange[];
 	busy: boolean;
 	currentTimeSec: number;
 	onSeek: (sec: number) => void;
-	onAddSkipRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
-	onRemoveSkipRange: (skipId: string) => void;
+	onAddTrimRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
+	onRemoveTrimRange: (trimId: string) => void;
 	onTranscribe: () => void;
 	canTranscribe: boolean;
 	isTranscribing: boolean;
@@ -86,12 +86,12 @@ export function RightPanelStack({
 	transcripts,
 	assets,
 	clips,
-	skipRanges,
+	trimRanges,
 	busy,
 	currentTimeSec,
 	onSeek,
-	onAddSkipRange,
-	onRemoveSkipRange,
+	onAddTrimRange,
+	onRemoveTrimRange,
 	onTranscribe,
 	canTranscribe,
 	isTranscribing,
@@ -122,12 +122,12 @@ export function RightPanelStack({
 						transcripts={transcripts}
 						assets={assets}
 						clips={clips}
-						skipRanges={skipRanges}
+						trimRanges={trimRanges}
 						busy={busy}
 						currentTimeSec={currentTimeSec}
 						onSeek={onSeek}
-						onAddSkipRange={onAddSkipRange}
-						onRemoveSkipRange={onRemoveSkipRange}
+						onAddTrimRange={onAddTrimRange}
+						onRemoveTrimRange={onRemoveTrimRange}
 						onTranscribe={onTranscribe}
 						canTranscribe={canTranscribe}
 						isTranscribing={isTranscribing}
@@ -609,7 +609,7 @@ function RegionInspector({
 							) : null}
 						</>
 					) : null
-				) : selection.kind === "skip" ? (
+				) : selection.kind === "trim" ? (
 					<div
 						style={{ font: "500 12px var(--font-body)", color: "var(--muted)", padding: "0 4px" }}
 					>
@@ -715,7 +715,7 @@ function kindLabel(kind: RegionKind): string {
 	switch (kind) {
 		case "zoom":
 			return "Zoom region";
-		case "skip":
+		case "trim":
 			return "Trim region";
 		case "annotation":
 			return "Annotation";

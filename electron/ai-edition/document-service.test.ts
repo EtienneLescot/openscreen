@@ -119,13 +119,13 @@ describe("DocumentService", () => {
 	});
 
 	describe("removeAsset", () => {
-		it("removes the asset and cascades clips + skipRanges", async () => {
+		it("removes the asset and cascades clips + trimRanges", async () => {
 			const doc = await service.createProject("P");
 			const withAsset = await service.addAsset(doc.project.id, { path: "/tmp/a.mp4" });
 			const assetId = withAsset.assets[0]?.id;
 			expect(assetId).toBeTruthy();
 
-			// Manually add a clip + skipRange so we can verify cascade
+			// Manually add a clip + trimRange so we can verify cascade
 			const docWithTimeline = await service.saveProject({
 				...withAsset,
 				timeline: {
@@ -141,9 +141,9 @@ describe("DocumentService", () => {
 							origin: "system",
 						},
 					],
-					skipRanges: [
+					trimRanges: [
 						{
-							id: "skip_1",
+							id: "trim_1",
 							assetId,
 							startSec: 0,
 							endSec: 1,
@@ -156,7 +156,7 @@ describe("DocumentService", () => {
 			const after = await service.removeAsset(docWithTimeline.project.id, assetId ?? "");
 			expect(after.assets).toHaveLength(0);
 			expect(after.timeline.clips).toHaveLength(0);
-			expect(after.timeline.skipRanges).toHaveLength(0);
+			expect(after.timeline.trimRanges).toHaveLength(0);
 			expect(after.project.primaryAssetId).toBeUndefined();
 		});
 

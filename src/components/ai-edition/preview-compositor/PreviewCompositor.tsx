@@ -23,7 +23,7 @@
 import { Application, Container, Graphics, Sprite, Texture, VideoSource } from "pixi.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fromFileUrl } from "@/components/video-editor/projectPersistence";
-import type { AxcutClip, AxcutSkipRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import type { AxcutClip, AxcutTrimRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
@@ -51,7 +51,7 @@ interface PreviewCompositorProps {
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
-	skipRanges?: AxcutSkipRange[];
+	trimRanges?: AxcutTrimRange[];
 	seekTarget?: { timeSec: number; isSource?: boolean; requestId: number } | null;
 	onTimeChange?: (timeSec: number) => void;
 	onLoadedMetadata?: (durationSec: number, assetId: string) => void;
@@ -71,7 +71,7 @@ export function PreviewCompositor({
 	clips,
 	zoomRegions = [],
 	speedRegions = [],
-	skipRanges = [],
+	trimRanges = [],
 	seekTarget,
 	onTimeChange,
 	onLoadedMetadata,
@@ -113,8 +113,8 @@ export function PreviewCompositor({
 	virtualDurationSecRef.current = virtualDurationSec;
 	const speedRegionsRef = useRef(speedRegions);
 	speedRegionsRef.current = speedRegions;
-	const skipRangesRef = useRef(skipRanges);
-	skipRangesRef.current = skipRanges;
+	const trimRangesRef = useRef(trimRanges);
+	trimRangesRef.current = trimRanges;
 
 	const updateVirtualTime = useCallback(
 		(nextTimeSec: number) => {
@@ -152,17 +152,17 @@ export function PreviewCompositor({
 			}
 			const activeSourceId = videoSourcesRef.current[sourceIndexRef.current]?.id;
 			if (!v.paused) {
-				const activeSkip = skipRangesRef.current.find(
+				const activeTrim = trimRangesRef.current.find(
 					(skip) =>
 						skip.assetId === activeSourceId &&
 						v.currentTime >= skip.startSec &&
 						v.currentTime < skip.endSec,
 				);
-				if (activeSkip) {
-					if (activeSkip.endSec >= (v.duration || Infinity)) {
+				if (activeTrim) {
+					if (activeTrim.endSec >= (v.duration || Infinity)) {
 						v.pause();
 					} else {
-						v.currentTime = activeSkip.endSec + 0.05;
+						v.currentTime = activeTrim.endSec + 0.05;
 					}
 					return;
 				}

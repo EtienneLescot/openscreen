@@ -3,7 +3,7 @@ import type { ZoomFocus } from "@/components/video-editor/types";
 import type {
 	AxcutAnnotationRegion,
 	AxcutClip,
-	AxcutSkipRange,
+	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
@@ -21,7 +21,7 @@ interface PreviewProps {
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
-	skipRanges?: AxcutSkipRange[];
+	trimRanges?: AxcutTrimRange[];
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
 	onZoomFocusCommit?: () => void;
@@ -59,7 +59,7 @@ export function Preview({
 	clips,
 	zoomRegions,
 	speedRegions,
-	skipRanges,
+	trimRanges,
 	selectedZoomRegionId,
 	onZoomFocusChange,
 	onZoomFocusCommit,
@@ -103,44 +103,42 @@ export function Preview({
 			data-current-time-sec={currentTimeSec.toFixed(3)}
 			data-is-playing={playing ? "true" : "false"}
 		>
-			<div className={styles.previewCanvas}>
-				{hasProject && hasAsset && !videoError ? (
-					<PreviewCanvas
-						videoSources={videoSources}
-						clips={clips}
-						zoomRegions={zoomRegions}
-						speedRegions={speedRegions}
-						skipRanges={skipRanges}
-						selectedZoomRegionId={selectedZoomRegionId}
-						onZoomFocusChange={onZoomFocusChange}
-						onZoomFocusCommit={onZoomFocusCommit}
-						annotationRegions={annotationRegions}
-						selectedAnnotationId={selectedAnnotationId}
-						onSelectAnnotation={onSelectAnnotation}
-						onAnnotationPositionChange={onAnnotationPositionChange}
-						onAnnotationSizeChange={onAnnotationSizeChange}
-						onAnnotationBlurDataChange={onAnnotationBlurDataChange}
-						onAnnotationCommit={onAnnotationCommit}
-						seekTarget={seekTarget}
-						onTimeChange={onTimeChange}
-						onSeek={onSeek}
-						onLoadedMetadata={onLoadedMetadata}
-						onVideoElement={onVideoElement}
-						currentTimeSec={currentTimeSec}
-						onVideoError={() => setVideoError(true)}
-					/>
-				) : (
-					<EditorEmptyState hasProject={hasProject} />
-				)}
-				{hasProject && hasAsset ? (
-					<span className={styles.previewTimecode}>{formatTC(currentTimeSec)}</span>
-				) : null}
-				{hasProject && hasAsset ? (
-					<span className={styles.previewBadge}>
-						{editorSettings.cursorShow ? "Cursor on" : "Cursor off"} · {aspectRatioLabel} · 60 fps
-					</span>
-				) : null}
-			</div>
+			{hasProject && hasAsset && !videoError ? (
+				<PreviewCanvas
+					videoSources={videoSources}
+					clips={clips}
+					zoomRegions={zoomRegions}
+					speedRegions={speedRegions}
+					trimRanges={trimRanges}
+					selectedZoomRegionId={selectedZoomRegionId}
+					onZoomFocusChange={onZoomFocusChange}
+					onZoomFocusCommit={onZoomFocusCommit}
+					annotationRegions={annotationRegions}
+					selectedAnnotationId={selectedAnnotationId}
+					onSelectAnnotation={onSelectAnnotation}
+					onAnnotationPositionChange={onAnnotationPositionChange}
+					onAnnotationSizeChange={onAnnotationSizeChange}
+					onAnnotationBlurDataChange={onAnnotationBlurDataChange}
+					onAnnotationCommit={onAnnotationCommit}
+					seekTarget={seekTarget}
+					onTimeChange={onTimeChange}
+					onSeek={onSeek}
+					onLoadedMetadata={onLoadedMetadata}
+					onVideoElement={onVideoElement}
+					currentTimeSec={currentTimeSec}
+					onVideoError={() => setVideoError(true)}
+				/>
+			) : (
+				<EditorEmptyState hasProject={hasProject} />
+			)}
+			{hasProject && hasAsset ? (
+				<span className={styles.previewTimecode}>{formatTC(currentTimeSec)}</span>
+			) : null}
+			{hasProject && hasAsset ? (
+				<span className={styles.previewBadge}>
+					{editorSettings.cursorShow ? "Cursor on" : "Cursor off"} · {aspectRatioLabel} · 60 fps
+				</span>
+			) : null}
 		</section>
 	);
 }

@@ -93,7 +93,7 @@ function makeDoc(
 		timeline: {
 			clips,
 			gaps: [],
-			skipRanges: [],
+			trimRanges: [],
 			muteRanges: [],
 			speedRanges: (opts.speedRegions ?? []).map((r) => ({ ...r, speed: 1.5 })),
 			captionRanges: [],

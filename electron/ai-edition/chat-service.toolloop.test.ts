@@ -143,8 +143,8 @@ async function streamAgent(
 describe("runChat tool loop", () => {
 	it("executes tool calls, chains turns, and returns the mutated document", async () => {
 		invokeMock.mockImplementationOnce(async (args) => {
-			args.sink.toolStart("addSkip", { startSec: 5, endSec: 8, reason: "silence" });
-			args.sink.toolEnd("addSkip", true, "added skip 0:05.0 – 0:08.0");
+			args.sink.toolStart("addTrim", { startSec: 5, endSec: 8, reason: "silence" });
+			args.sink.toolEnd("addTrim", true, "added trim 0:05.0 – 0:08.0");
 			return { text: "Done.", document: args.document, mutated: true };
 		});
 
@@ -160,13 +160,13 @@ describe("runChat tool loop", () => {
 		expect(result.success).toBe(true);
 		expect(result.assistantMessage?.content).toBe("Done.");
 		expect(result.toolCalls).toHaveLength(1);
-		expect(result.toolCalls?.[0].summary).toMatch(/added skip/);
+		expect(result.toolCalls?.[0].summary).toMatch(/added trim/);
 	});
 
 	it("rewinds to before the user message, restoring the document", async () => {
 		invokeMock.mockImplementationOnce(async (args) => {
-			args.sink.toolStart("addSkip", { startSec: 1, endSec: 2 });
-			args.sink.toolEnd("addSkip", true, "added skip 0:01.0 – 0:02.0");
+			args.sink.toolStart("addTrim", { startSec: 1, endSec: 2 });
+			args.sink.toolEnd("addTrim", true, "added trim 0:01.0 – 0:02.0");
 			return { text: "Done.", document: args.document, mutated: true };
 		});
 
@@ -195,7 +195,7 @@ describe("runChat tool loop", () => {
 		expect(undo.success).toBe(true);
 		if (!undo.success) return;
 		const restored = documentSchema.parse(undo.document);
-		expect(restored.timeline.skipRanges).toHaveLength(0);
+		expect(restored.timeline.trimRanges).toHaveLength(0);
 		expect(undo.prompt).toBe("cut the silence");
 	});
 
@@ -245,8 +245,8 @@ describe("runChat tool loop", () => {
 			events.push({ kind: "captured", payload: args.userMessage });
 			args.sink.text("Hi ");
 			args.sink.text("there.");
-			args.sink.toolStart("addSkip", { startSec: 1, endSec: 2 });
-			args.sink.toolEnd("addSkip", true, "added skip 0:01.0 – 0:02.0");
+			args.sink.toolStart("addTrim", { startSec: 1, endSec: 2 });
+			args.sink.toolEnd("addTrim", true, "added trim 0:01.0 – 0:02.0");
 			return { text: "Done.", document: args.document, mutated: true };
 		});
 
@@ -266,11 +266,11 @@ describe("runChat tool loop", () => {
 		expect((fixture.events[0].payload as string) + (fixture.events[1].payload as string)).toBe(
 			"Hi there.",
 		);
-		expect(fixture.events[2].payload).toMatchObject({ name: "addSkip" });
+		expect(fixture.events[2].payload).toMatchObject({ name: "addTrim" });
 		expect(fixture.events[3].payload).toMatchObject({
-			name: "addSkip",
+			name: "addTrim",
 			ok: true,
-			summary: expect.stringMatching(/added skip/),
+			summary: expect.stringMatching(/added trim/),
 		});
 
 		// ponytail: empty-result path. When the deep agent returns no text,

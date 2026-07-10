@@ -26,7 +26,7 @@ import {
 	type AxcutAnnotationRegion,
 	type AxcutDocument,
 	type AxcutLegacyEditor,
-	type AxcutSkipRange,
+	type AxcutTrimRange,
 	type AxcutZoomRegion,
 	axcutSchemaVersion,
 	documentSchema,
@@ -67,7 +67,7 @@ function toLegacyMedia(input: ProjectMedia | undefined): ProjectMedia | null {
 /**
  * Migrate a v2 EditorProjectData into a v3 AxcutDocument. The single recording
  * becomes one asset + one clip spanning the source. trimRegions become
- * skipRanges on that asset (semantically identical: both are cuts).
+ * trimRanges on that asset (semantically identical: both are cuts).
  */
 export function migrateProjectDataToAxcutDocument(
 	input: EditorProjectData,
@@ -129,14 +129,14 @@ export function migrateProjectDataToAxcutDocument(
 			}
 		: null;
 
-	const skipRanges: AxcutSkipRange[] = primaryAssetId
+	const trimRanges: AxcutTrimRange[] = primaryAssetId
 		? trimRegions
 				.filter((region) => region && typeof region.id === "string")
 				.map((region) => {
 					const startMs = Math.max(0, Math.min(region.startMs ?? 0, region.endMs ?? 0));
 					const endMs = Math.max(startMs + 1, region.endMs ?? startMs + 1);
 					return {
-						id: createId("skip"),
+						id: createId("trim"),
 						assetId: primaryAssetId,
 						startSec: clampSec(msToSec(startMs)),
 						endSec: clampSec(msToSec(endMs)),
@@ -157,7 +157,7 @@ export function migrateProjectDataToAxcutDocument(
 
 	// ponytail: annotations[] and zoomRanges[] mirror editor.annotationRegions
 	// and editor.zoomRegions directly (same ms units) so the renderer can swap
-	// them in/out without conversion. The timeline (skipRanges, speedRanges,
+	// them in/out without conversion. The timeline (trimRanges, speedRanges,
 	// clip) uses axcut's seconds because the new timeline ops land there.
 	const migratedZoomRanges: AxcutZoomRegion[] = zoomRegions
 		.filter((region) => region && typeof region.id === "string")
@@ -214,7 +214,7 @@ export function migrateProjectDataToAxcutDocument(
 		timeline: {
 			clips: clip ? [clip] : [],
 			gaps: [],
-			skipRanges,
+			trimRanges,
 			muteRanges: [],
 			speedRanges,
 			captionRanges: [],
@@ -238,7 +238,7 @@ export function migrateProjectDataToAxcutDocument(
 /**
  * Migrate a v3 AxcutDocument back to a v2 EditorProjectData. Used when the
  * user toggles AI-edition off after a project was opened as v3. Round-trip is
- * not perfectly lossless — skipRanges map back to trimRegions (1:1), but the
+ * not perfectly lossless — trimRanges map back to trimRegions (1:1), but the
  * timeline rebuild for clip ranges is best-effort and the speed regions remain
  * in the legacyEditor envelope where the migration put them.
  */
@@ -259,7 +259,7 @@ export function migrateAxcutDocumentToProjectData(input: AxcutDocument): EditorP
 			})
 		: null;
 
-	const trimRegions: TrimRegion[] = (document.timeline?.skipRanges ?? []).map((region, index) => ({
+	const trimRegions: TrimRegion[] = (document.timeline?.trimRanges ?? []).map((region, index) => ({
 		id: region.id ?? `trim-${index + 1}`,
 		startMs: secToMs(clampSec(region.startSec ?? 0)),
 		endMs: secToMs(Math.max(clampSec(region.startSec ?? 0) + 0.001, clampSec(region.endSec ?? 0))),

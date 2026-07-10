@@ -9,8 +9,8 @@ import {
 	ensureDocument,
 	legacyEditorSchema,
 	rangeSchema,
-	skipRangeSchema,
 	timelineSchema,
+	trimRangeSchema,
 	zoomRegionSchema,
 } from "./index";
 
@@ -33,7 +33,7 @@ describe("axcut-schema v4", () => {
 		expect(doc.schemaVersion).toBe(4);
 		expect(doc.assets).toEqual([]);
 		expect(doc.timeline.clips).toEqual([]);
-		expect(doc.timeline.skipRanges).toEqual([]);
+		expect(doc.timeline.trimRanges).toEqual([]);
 		expect(doc.timeline.speedRanges).toEqual([]);
 		expect(doc.timeline.muteRanges).toEqual([]);
 		expect(doc.timeline.captionRanges).toEqual([]);
@@ -84,9 +84,9 @@ describe("axcut-schema v4", () => {
 		).toThrow();
 	});
 
-	it("skipRangeSchema carries assetId and origin", () => {
-		const skip = skipRangeSchema.parse({
-			id: "skip_1",
+	it("trimRangeSchema carries assetId and origin", () => {
+		const skip = trimRangeSchema.parse({
+			id: "trim_1",
 			assetId: "asset_1",
 			startSec: 1.5,
 			endSec: 3.0,
@@ -101,11 +101,23 @@ describe("axcut-schema v4", () => {
 		expect(r.reason).toBe("");
 	});
 
-	it("timelineSchema defaults skipRanges to []", () => {
+	it("timelineSchema defaults trimRanges to []", () => {
 		const t = timelineSchema.parse({});
-		expect(t.skipRanges).toEqual([]);
+		expect(t.trimRanges).toEqual([]);
 		expect(t.muteRanges).toEqual([]);
 		expect(t.captionRanges).toEqual([]);
+	});
+
+	it("timelineSchema migrates legacy skipRanges → trimRanges", () => {
+		// Documents persisted before the skip→trim rename carry `skipRanges`.
+		const t = timelineSchema.parse({
+			skipRanges: [
+				{ id: "skip_1", assetId: "a", startSec: 3, endSec: 5, reason: "", origin: "user" },
+			],
+		});
+		expect(t.trimRanges).toEqual([
+			{ id: "skip_1", assetId: "a", startSec: 3, endSec: 5, reason: "", origin: "user" },
+		]);
 	});
 
 	it("annotationRegionSchema accepts OpenScreen-shape regions", () => {
@@ -253,9 +265,9 @@ describe("axcut-schema v4", () => {
 			expect(rangeSchema.parse({ startSec: 5, endSec: 5 })).toBeTruthy();
 		});
 
-		it("skipRangeSchema rejects endSec < startSec", () => {
+		it("trimRangeSchema rejects endSec < startSec", () => {
 			expect(() =>
-				skipRangeSchema.parse({
+				trimRangeSchema.parse({
 					id: "s1",
 					assetId: "a1",
 					startSec: 10,
