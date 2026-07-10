@@ -296,10 +296,7 @@ async function streamAnthropic(
 	cb: LlmStreamCallbacks,
 ): Promise<CallLlmResult> {
 	const def = getProviderDefinition(opts.provider) ?? getProviderDefinition("anthropic");
-	const baseUrl = (opts.baseUrl || def?.baseUrl || "https://api.anthropic.com").replace(
-		/\/+$/,
-		"",
-	);
+	const baseUrl = (opts.baseUrl || def?.baseUrl || "https://api.anthropic.com").replace(/\/+$/, "");
 	const systemMessage = opts.messages.find((m) => m.role === "system")?.content;
 	const conversation = opts.messages.filter((m) => m.role !== "system");
 

@@ -4,7 +4,7 @@
 // ponytail: pure functions, no React. Mirrors axcut's
 // apps/web/src/components/CurrentTranscriptView.tsx#buildClipTranscriptProjections
 // + buildTranscriptRuns. Word kept/removed is decided by whether the word
-// falls inside one of the document's `timeline.skipRanges` for the same
+// falls inside one of the document's `timeline.trimRanges` for the same
 // asset — not by `clip.wordRefs` (which is now only used by the timeline
 // retime math, not by the right pane).
 //
@@ -14,17 +14,17 @@
 // names a word a filler. The transcript view shows plain text for every
 // kept word; the user or the LLM decides what to mark as skipped.
 
-import type { AxcutAsset, AxcutClip, AxcutSkipRange, AxcutTranscript, AxcutWord } from "../schema";
+import type { AxcutAsset, AxcutClip, AxcutTranscript, AxcutTrimRange, AxcutWord } from "../schema";
 
 /** A contiguous run of removed words inside one clip's source range. */
-export interface SkipRun {
-	/** Id of the skip range this run came from (used by the bin-icon restore). */
-	skipId: string;
+export interface TrimRun {
+	/** Id of the trim range this run came from (used by the bin-icon restore). */
+	trimId: string;
 	/** Index of the first removed word in `words`. */
 	startWordIndex: number;
 	/** Inclusive index of the last removed word in `words`. */
 	endWordIndex: number;
-	/** Asset id the skip belongs to. */
+	/** Asset id the trim belongs to. */
 	assetId: string;
 	/** Wall-clock seconds from the first removed word's start to the last removed word's end. */
 	durationSec: number;
@@ -33,10 +33,10 @@ export interface SkipRun {
 /** One word in the clip's source range, tagged kept / removed. */
 export interface ClipWord {
 	word: AxcutWord;
-	/** Whether the word is inside a skipRange for this clip's asset. */
+	/** Whether the word is inside a trimRange for this clip's asset. */
 	kept: boolean;
-	/** Id of the skip range that removed this word, if any. */
-	skipId: string | null;
+	/** Id of the trim range that removed this word, if any. */
+	trimId: string | null;
 }
 
 /** One clip's contribution to the aggregated flow. */
@@ -45,63 +45,63 @@ export interface ClipSection {
 	asset: AxcutAsset | null;
 	transcript: AxcutTranscript | null;
 	words: ClipWord[];
-	skipRuns: SkipRun[];
+	trimRuns: TrimRun[];
 }
 
 function wordsInRange(transcript: AxcutTranscript, startSec: number, endSec: number): AxcutWord[] {
 	return transcript.words.filter((w) => w.endSec > startSec && w.startSec < endSec);
 }
 
-/** Find the skip range covering this word's center (returns the deepest match). */
-function findCoveringSkip(word: AxcutWord, skipRanges: AxcutSkipRange[]): AxcutSkipRange | null {
+/** Find the trim range covering this word's center (returns the deepest match). */
+function findCoveringTrim(word: AxcutWord, trimRanges: AxcutTrimRange[]): AxcutTrimRange | null {
 	const center = (word.startSec + word.endSec) / 2;
-	for (const skip of skipRanges) {
-		if (center >= skip.startSec && center <= skip.endSec) return skip;
+	for (const trim of trimRanges) {
+		if (center >= trim.startSec && center <= trim.endSec) return trim;
 	}
 	return null;
 }
 
 /**
  * Build one clip section. Words inside the clip's source range that fall
- * inside any skip range for the same asset are marked removed; the rest
- * are kept. Contiguous removed words from the same skip range group into
- * one `SkipRun` (for the trim-duration pill + bin-icon restore).
+ * inside any trim range for the same asset are marked removed; the rest
+ * are kept. Contiguous removed words from the same trim range group into
+ * one `TrimRun` (for the trim-duration pill + bin-icon restore).
  */
 export function buildClipSection(
 	clip: AxcutClip,
 	transcript: AxcutTranscript | null,
 	asset: AxcutAsset | null,
-	skipRanges: AxcutSkipRange[],
+	trimRanges: AxcutTrimRange[],
 ): ClipSection {
-	const clipSkips = skipRanges.filter(
-		(skip) =>
-			skip.assetId === clip.assetId &&
-			skip.endSec > clip.sourceStartSec &&
-			skip.startSec < (clip.sourceEndSec ?? Infinity),
+	const clipTrims = trimRanges.filter(
+		(trim) =>
+			trim.assetId === clip.assetId &&
+			trim.endSec > clip.sourceStartSec &&
+			trim.startSec < (clip.sourceEndSec ?? Infinity),
 	);
 
 	const words = transcript
 		? wordsInRange(transcript, clip.sourceStartSec, clip.sourceEndSec ?? Infinity)
 		: [];
 	const tagged: ClipWord[] = words.map((word) => {
-		const covering = findCoveringSkip(word, clipSkips);
+		const covering = findCoveringTrim(word, clipTrims);
 		return {
 			word,
 			kept: covering === null,
-			skipId: covering?.id ?? null,
+			trimId: covering?.id ?? null,
 		};
 	});
 
-	const skipRuns: SkipRun[] = [];
+	const trimRuns: TrimRun[] = [];
 	let runStart = -1;
 	let runEnd = -1;
-	let runSkipId = "";
+	let runTrimId = "";
 	let runMinStart = 0;
 	let runMaxEnd = 0;
 	const flush = () => {
 		if (runStart >= 0) {
-			skipRuns.push({
-				skipId: runSkipId,
+			trimRuns.push({
+				trimId: runTrimId,
 				assetId: clip.assetId,
 				startWordIndex: runStart,
 				endWordIndex: runEnd,
@@ -110,7 +110,7 @@ export function buildClipSection(
 		}
 		runStart = -1;
 		runEnd = -1;
-		runSkipId = "";
+		runTrimId = "";
 		runMinStart = 0;
 		runMaxEnd = 0;
 	};
@@ -119,21 +119,21 @@ export function buildClipSection(
 			flush();
 			return;
 		}
-		// Split the run if the skip range id changes (overlapping skips).
-		if (runStart >= 0 && cw.skipId !== runSkipId) {
+		// Split the run if the trim range id changes (overlapping trims).
+		if (runStart >= 0 && cw.trimId !== runTrimId) {
 			flush();
 		}
 		if (runStart < 0) {
 			runStart = i;
 			runMinStart = cw.word.startSec;
-			runSkipId = cw.skipId ?? "";
+			runTrimId = cw.trimId ?? "";
 		}
 		runEnd = i;
 		runMaxEnd = Math.max(runMaxEnd, cw.word.endSec);
 	});
 	flush();
 
-	return { clip, asset, transcript, words: tagged, skipRuns };
+	return { clip, asset, transcript, words: tagged, trimRuns };
 }
 
 /**
@@ -145,7 +145,7 @@ export function buildAggregatedSections(
 	clips: AxcutClip[],
 	transcripts: AxcutTranscript[],
 	assets: AxcutAsset[],
-	skipRanges: AxcutSkipRange[],
+	trimRanges: AxcutTrimRange[],
 ): ClipSection[] {
 	const transcriptById = new Map(transcripts.map((t) => [t.assetId, t]));
 	const assetById = new Map(assets.map((a) => [a.id, a]));
@@ -154,7 +154,7 @@ export function buildAggregatedSections(
 			clip,
 			transcriptById.get(clip.assetId) ?? null,
 			assetById.get(clip.assetId) ?? null,
-			skipRanges,
+			trimRanges,
 		),
 	);
 }

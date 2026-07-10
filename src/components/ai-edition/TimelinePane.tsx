@@ -42,7 +42,7 @@ interface AssetMeta {
 	durationSec?: number;
 }
 
-interface SkipRange {
+interface TrimRange {
 	id: string;
 	assetId: string;
 	startSec: number;
@@ -72,14 +72,14 @@ interface SpeedRegion {
 }
 
 interface RegionSelection {
-	kind: "zoom" | "skip" | "annotation" | "speed";
+	kind: "zoom" | "trim" | "annotation" | "speed";
 	id: string;
 }
 
 interface TimelinePaneProps {
 	clips: AxcutClip[];
 	assets: AssetMeta[];
-	skipRanges: SkipRange[];
+	trimRanges: TrimRange[];
 	zoomRegions: ZoomRegion[];
 	annotationRegions: AnnotationRegion[];
 	speedRegions: SpeedRegion[];
@@ -96,10 +96,10 @@ interface TimelinePaneProps {
 	onEditClip: (clip: AxcutClip) => void;
 	onRemoveClip: (clipId: string) => void;
 	// T15 — Place-skip callback. Bottombar wires this to
-	// tl.addSkipAt(assetId, sourceStartSec, sourceEndSec) so the timeline
+	// tl.addTrimAt(assetId, sourceStartSec, sourceEndSec) so the timeline
 	// pane can add a skip at the cursor's source position without jumping
-	// the playhead (which onAddSkip / onAddSkipRange can't do).
-	onAddSkip?: (assetId: string, sourceStartSec: number, sourceEndSec: number) => void;
+	// the playhead (which onAddTrim / onAddTrimRange can't do).
+	onAddTrim?: (assetId: string, sourceStartSec: number, sourceEndSec: number) => void;
 	// T10 — dnd-timeline drag/resize dispatch. Bottombar wires this to the
 	// per-kind updaters (updateZoomSpan / updateAnnotationSpan / etc).
 	onRegionSpanChange: (id: string, span: Span) => void;
@@ -120,7 +120,7 @@ interface TimelinePaneProps {
 	pendingCutPreviewSec: number | null;
 	setPendingCutPreviewSec: (next: number | null) => void;
 	// T15 — disarms the place-skip mode after a successful click.
-	onCancelPlaceSkip: () => void;
+	onCancelPlaceTrim: () => void;
 }
 
 // T07 — Pan via Alt+drag or middle-click-drag. Refs only; no state needed
@@ -193,7 +193,7 @@ function buildRulerTicks(durationSec: number, pxPerSec: number): RulerTick[] {
 export function TimelinePane({
 	clips,
 	assets,
-	skipRanges,
+	trimRanges,
 	zoomRegions,
 	annotationRegions,
 	speedRegions,
@@ -211,13 +211,13 @@ export function TimelinePane({
 	pendingCutPlacement,
 	pendingCutPreviewSec,
 	setPendingCutPreviewSec,
-	onCancelPlaceSkip,
+	onCancelPlaceTrim,
 	onSeek,
 	onInsertAsset,
 	onMoveClip,
 	onEditClip,
 	onRemoveClip,
-	onAddSkip,
+	onAddTrim,
 	onRegionSpanChange,
 }: TimelinePaneProps) {
 	const viewportRef = useRef<HTMLDivElement | null>(null);
@@ -284,9 +284,9 @@ export function TimelinePane({
 	// skip's source-time span through whichever clip it falls within to
 	// get a timeline(ms) span for the lane — same coordinate space the
 	// zoom/speed/annotation lanes already use.
-	const skipRegionSpans = useMemo(() => {
+	const trimRegionSpans = useMemo(() => {
 		const spans: Array<{ id: string; start: number; end: number; durationSec: number }> = [];
-		for (const skip of skipRanges) {
+		for (const skip of trimRanges) {
 			const startPos = locateSourcePosition(orderedClips, skip.startSec, skip.assetId);
 			const endPos = locateSourcePosition(orderedClips, skip.endSec, skip.assetId);
 			if (!startPos || !endPos) continue;
@@ -298,7 +298,7 @@ export function TimelinePane({
 			});
 		}
 		return spans;
-	}, [skipRanges, orderedClips]);
+	}, [trimRanges, orderedClips]);
 
 	useEffect(() => {
 		const el = viewportRef.current;
@@ -369,7 +369,7 @@ export function TimelinePane({
 	// addCut helper.
 	const addCut = useCallback(
 		(centerSec: number) => {
-			if (orderedClips.length === 0 || !onAddSkip) return;
+			if (orderedClips.length === 0 || !onAddTrim) return;
 			const position = locateVirtualPosition(orderedClips, centerSec);
 			if (!position) return;
 			const clip = position.clip;
@@ -380,9 +380,9 @@ export function TimelinePane({
 				Math.max(clip.sourceStartSec, clipEnd - 0.1),
 			);
 			const sourceEndSec = clamp(position.sourceTimeSec + 0.5, sourceStartSec + 0.1, clipEnd);
-			onAddSkip(clip.assetId, sourceStartSec, sourceEndSec);
+			onAddTrim(clip.assetId, sourceStartSec, sourceEndSec);
 		},
-		[orderedClips, onAddSkip],
+		[orderedClips, onAddTrim],
 	);
 
 	// Convert screen-x (PointerEvent.clientX) to source-time, accounting for
@@ -621,7 +621,7 @@ export function TimelinePane({
 				event.stopPropagation();
 				addCut(sourceSecFromClientX(event.clientX));
 				setPendingCutPreviewSec(null);
-				onCancelPlaceSkip();
+				onCancelPlaceTrim();
 				return;
 			}
 			if (event.altKey || event.button === 1) {
@@ -635,7 +635,7 @@ export function TimelinePane({
 			addCut,
 			sourceSecFromClientX,
 			setPendingCutPreviewSec,
-			onCancelPlaceSkip,
+			onCancelPlaceTrim,
 			startPan,
 			startScrub,
 		],
@@ -813,7 +813,7 @@ export function TimelinePane({
 			className={styles.pane}
 			data-testid="timeline-pane"
 			data-clip-count={orderedClips.length}
-			data-skip-count={skipRanges.length}
+			data-skip-count={trimRanges.length}
 			data-zoom-range-count={zoomRegions.length}
 			data-annotation-count={annotationRegions.length}
 			data-current-time-sec={currentTimeSec.toFixed(3)}
@@ -923,9 +923,9 @@ export function TimelinePane({
 										start: s.startMs,
 										end: s.endMs,
 									})),
-									...skipRegionSpans.map((s) => ({
+									...trimRegionSpans.map((s) => ({
 										id: s.id,
-										rowId: "skip",
+										rowId: "trim",
 										start: s.start,
 										end: s.end,
 									})),
@@ -963,18 +963,18 @@ export function TimelinePane({
 											/>
 										))}
 									</RegionRow>
-									<RegionRow id="skip" empty="No skips">
-										{skipRegionSpans.map((s) => (
+									<RegionRow id="trim" empty="No skips">
+										{trimRegionSpans.map((s) => (
 											<RegionItem
 												key={s.id}
 												id={s.id}
-												rowId="skip"
+												rowId="trim"
 												span={{ start: s.start, end: s.end }}
 												label={formatSeconds(s.durationSec)}
 												icon={<Scissors size={11} strokeWidth={2} aria-hidden="true" />}
-												selected={isRegionSelected("skip", s.id)}
-												onSelect={(additive) => onSelectRegion("skip", s.id, additive)}
-												variant="skip"
+												selected={isRegionSelected("trim", s.id)}
+												onSelect={(additive) => onSelectRegion("trim", s.id, additive)}
+												variant="trim"
 											/>
 										))}
 									</RegionRow>
@@ -1140,7 +1140,7 @@ export function TimelinePane({
 				</span>
 				<span className={styles.headerDivider}>·</span>
 				<span className={styles.headerStat}>
-					{skipRanges.length} skip{skipRanges.length === 1 ? "" : "s"}
+					{trimRanges.length} skip{trimRanges.length === 1 ? "" : "s"}
 				</span>
 				<span className={styles.headerDivider}>·</span>
 				<span className={styles.headerStat}>{formatSeconds(virtualDurationSec)} total</span>
@@ -1164,7 +1164,7 @@ export function TimelinePane({
 			    direct access to setVisibleWindow (the navigator needs the
 			    usable-width to recompute pxPerSec on handle drag). */}
 			<Navigator
-				skipRanges={skipRanges}
+				trimRanges={trimRanges}
 				sourceDurationSec={sourceDuration}
 				visibleStartSec={visibleStartSec}
 				visibleEndSec={visibleStartSec + visibleDurationSec}
@@ -1177,7 +1177,7 @@ export function TimelinePane({
 // T11/T12 — Navigator subcomponent. Self-contained; uses
 // NewEditorShell.module.css styles via the parent's CSS module import.
 interface NavigatorProps {
-	skipRanges: SkipRange[];
+	trimRanges: TrimRange[];
 	sourceDurationSec: number;
 	visibleStartSec: number;
 	visibleEndSec: number;
@@ -1187,7 +1187,7 @@ interface NavigatorProps {
 type NavigatorDragMode = "move" | "start" | "end";
 
 function Navigator({
-	skipRanges,
+	trimRanges,
 	sourceDurationSec,
 	visibleStartSec,
 	visibleEndSec,
@@ -1282,7 +1282,7 @@ function Navigator({
 			aria-label="Timeline zoom and pan navigator"
 		>
 			<div className={styles.timelineNavigatorContent}>
-				{skipRanges.map((skip) => (
+				{trimRanges.map((skip) => (
 					<span
 						key={skip.id}
 						className={styles.timelineNavigatorSkip}

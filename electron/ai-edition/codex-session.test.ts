@@ -68,13 +68,13 @@ describe("consumeCodexStream", () => {
 		const stream = sseStream([
 			{
 				type: "response.output_item.added",
-				item: { type: "function_call", call_id: "c1", name: "addSkip" },
+				item: { type: "function_call", call_id: "c1", name: "addTrim" },
 			},
 			{ type: "response.function_call_arguments.delta", call_id: "c1", delta: '{"a":' },
 			{ type: "response.function_call_arguments.delta", call_id: "c1", delta: "1}" },
 			{
 				type: "response.output_item.done",
-				item: { type: "function_call", call_id: "c1", name: "addSkip" },
+				item: { type: "function_call", call_id: "c1", name: "addTrim" },
 			},
 			{ type: "response.completed", response: { id: "r42" } },
 		]);
@@ -115,7 +115,7 @@ describe("toCodexInput", () => {
 			{
 				role: "assistant",
 				content: "",
-				toolCalls: [{ id: "c1", name: "addSkip", arguments: '{"a":1}' }],
+				toolCalls: [{ id: "c1", name: "addTrim", arguments: '{"a":1}' }],
 			},
 			{ role: "tool", content: '{"ok":true}', toolCallId: "c1" },
 		]);
@@ -123,7 +123,7 @@ describe("toCodexInput", () => {
 			{ role: "user", content: "cut it" },
 			{
 				role: "assistant",
-				content: [{ type: "tool_call", name: "addSkip", arguments: '{"a":1}', call_id: "c1" }],
+				content: [{ type: "tool_call", name: "addTrim", arguments: '{"a":1}', call_id: "c1" }],
 			},
 			{ type: "tool_result", role: "tool", tool_call_id: "c1", content: '{"ok":true}' },
 		]);

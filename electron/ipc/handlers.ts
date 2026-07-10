@@ -378,6 +378,30 @@ let lastEnumeratedSources = new Map<string, DesktopCapturerSource>();
 let currentProjectPath: string | null = null;
 let currentRecordingSession: RecordingSession | null = null;
 
+// ponytail: single source of truth for the mic/camera/system-audio/cursor
+// choices a user makes in the editor's Rec-mode stage, so the HUD window's
+// useScreenRecorder (a separate renderer, own process, own React tree) picks
+// up those choices instead of silently reverting to its own defaults when
+// startNewRecording() switches windows. Mirrors the selectedSource pattern
+// above (in-memory, broadcast on change) rather than persisting to disk —
+// this is a live session preference, not project content.
+export interface RecordingPrefs {
+	micEnabled: boolean;
+	micDeviceId: string | null;
+	camEnabled: boolean;
+	camDeviceId: string | null;
+	systemAudioEnabled: boolean;
+	cursorCaptureMode: CursorCaptureMode;
+}
+let recordingPrefs: RecordingPrefs = {
+	micEnabled: false,
+	micDeviceId: null,
+	camEnabled: false,
+	camDeviceId: null,
+	systemAudioEnabled: false,
+	cursorCaptureMode: "editable-overlay",
+};
+
 // Cached source from the user's pick. Used by setDisplayMediaRequestHandler in main.ts for cursor-free capture.
 export function getSelectedDesktopSource(): DesktopCapturerSource | null {
 	return selectedDesktopSource;
@@ -1536,6 +1560,19 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("get-selected-source", () => {
 		return selectedSource;
+	});
+
+	ipcMain.handle("get-recording-prefs", () => {
+		return recordingPrefs;
+	});
+
+	ipcMain.handle("set-recording-prefs", (_, prefs: Partial<RecordingPrefs>) => {
+		recordingPrefs = { ...recordingPrefs, ...prefs };
+		const mainWin = getMainWindow();
+		if (mainWin && !mainWin.isDestroyed()) {
+			mainWin.webContents.send("recording-prefs-changed", recordingPrefs);
+		}
+		return recordingPrefs;
 	});
 
 	ipcMain.handle("request-camera-access", async () => {

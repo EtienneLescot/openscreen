@@ -110,6 +110,27 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	const [systemAudioEnabled, setSystemAudioEnabled] = useState(false);
 	const [webcamEnabled, setWebcamEnabledState] = useState(false);
 	const [cursorCaptureMode, setCursorCaptureMode] = useState<CursorCaptureMode>("editable-overlay");
+
+	// Seed from the main-process recording-prefs SSOT on mount, so choices
+	// made in the editor's Rec-mode stage (a different renderer window) carry
+	// over instead of this hook silently reverting to its own hardcoded
+	// defaults every time startNewRecording() switches to the HUD window.
+	useEffect(() => {
+		let cancelled = false;
+		void window.electronAPI?.getRecordingPrefs?.().then((prefs) => {
+			if (cancelled || !prefs) return;
+			setMicrophoneEnabled(prefs.micEnabled);
+			if (prefs.micDeviceId) setMicrophoneDeviceId(prefs.micDeviceId);
+			setWebcamEnabledState(prefs.camEnabled);
+			if (prefs.camDeviceId) setWebcamDeviceId(prefs.camDeviceId);
+			setSystemAudioEnabled(prefs.systemAudioEnabled);
+			setCursorCaptureMode(prefs.cursorCaptureMode);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, []);
+
 	const screenRecorder = useRef<RecorderHandle | null>(null);
 	const webcamRecorder = useRef<RecorderHandle | null>(null);
 	const nativeWindowsRecording = useRef<NativeWindowsRecordingHandle | null>(null);

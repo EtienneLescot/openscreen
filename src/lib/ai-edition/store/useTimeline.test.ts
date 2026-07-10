@@ -67,7 +67,7 @@ const sampleDoc = {
 			},
 		],
 		gaps: [],
-		skipRanges: [],
+		trimRanges: [],
 		muteRanges: [],
 		speedRanges: [],
 		captionRanges: [],

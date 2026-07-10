@@ -185,10 +185,41 @@
 
 /* ─── BODY ─────────────────────────────────────────────────────────── */
 .body {
+	position: relative;
 	grid-row: 2;
 	display: grid;
 	min-height: 0;
 	min-width: 0;
+}
+/* ─── RESIZE HANDLES (chat panel width, timeline height) ───────────── */
+.chatResizeHandle {
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	width: 8px;
+	margin-left: -4px;
+	cursor: col-resize;
+	z-index: 30;
+	background: transparent;
+	touch-action: none;
+}
+.chatResizeHandle:hover {
+	background: var(--accent-soft);
+}
+.timelineResizeHandle {
+	position: absolute;
+	top: 0;
+	left: 0;
+	right: 0;
+	height: 8px;
+	margin-top: -4px;
+	cursor: row-resize;
+	z-index: 30;
+	background: transparent;
+	touch-action: none;
+}
+.timelineResizeHandle:hover {
+	background: var(--accent-soft);
 }
 .agent {
 	display: flex;
@@ -208,19 +239,20 @@
 }
 
 /* ─── FLOATING INSPECTOR + FACET RAIL ──────────────────────────────── */
+/* bottom used to reserve room for the (permanently visible) transport bar;
+   the transport is now a hover-reveal overlay (see .transportWrap) and no
+   longer needs reserved space, so every facet gets the same tight margin
+   down to just above the timeline — same fix as the stage padding. */
 .inspectorWrap {
 	position: absolute;
 	top: 20px;
 	right: 20px;
-	bottom: 96px;
+	bottom: 20px;
 	display: flex;
 	align-items: flex-start;
 	gap: 10px;
 	z-index: 20;
 	pointer-events: none;
-}
-.inspectorWrap.tall {
-	bottom: 16px;
 }
 .inspector {
 	pointer-events: auto;
@@ -277,6 +309,9 @@
 }
 
 /* ─── FLOATING TRANSPORT (Edit mode) ───────────────────────────────── */
+/* Hover-reveal overlay: hidden until the pointer is over the stage (or the
+   bar itself has focus, for keyboard users), so it never reserves space
+   for the video and never gets in the way of watching playback. */
 .transportWrap {
 	position: absolute;
 	left: 0;
@@ -286,9 +321,17 @@
 	justify-content: center;
 	z-index: 15;
 	pointer-events: none;
+	opacity: 0;
+	transition: opacity var(--motion-med) var(--ease);
+}
+.stage:hover .transportWrap,
+.transportWrap:focus-within {
+	opacity: 1;
+	pointer-events: auto;
 }
 .transport {
-	pointer-events: auto;
+	/* pointer-events follows .transportWrap (none while hidden, auto on
+	   hover/focus-within) — no independent override here. */
 	display: inline-flex;
 	align-items: center;
 	gap: 8px;
@@ -638,6 +681,28 @@
 	background: rgba(255, 255, 255, 0.14);
 	margin: 0 3px;
 }
+.recDragHandle {
+	display: grid;
+	grid-auto-rows: 3.5px;
+	gap: 3.5px;
+	width: 36px;
+	height: 32px;
+	place-items: center;
+	justify-content: center;
+	align-content: center;
+	cursor: grab;
+	flex-shrink: 0;
+	touch-action: none;
+}
+.recDragHandle:active {
+	cursor: grabbing;
+}
+.recDragDot {
+	width: 3.5px;
+	height: 3.5px;
+	border-radius: 50%;
+	background: rgba(255, 255, 255, 0.3);
+}
 .recMenu {
 	position: absolute;
 	bottom: 46px;
@@ -671,6 +736,146 @@
 	background: var(--accent-soft);
 	color: var(--accent);
 }
+
+/* ─── REC-MODE SOURCE PICKER MODAL ──────────────────────────────────── */
+.sourceModalOverlay {
+	position: fixed;
+	inset: 0;
+	z-index: 100;
+	background: rgba(4, 5, 7, 0.6);
+	backdrop-filter: blur(3px);
+	-webkit-backdrop-filter: blur(3px);
+	display: grid;
+	place-items: center;
+	padding: 24px;
+}
+.sourceModalCard {
+	width: 660px;
+	max-width: 100%;
+	max-height: 86vh;
+	display: flex;
+	flex-direction: column;
+	background: var(--surface-1);
+	border: 1px solid var(--border-hi);
+	border-radius: 20px;
+	box-shadow: 0 40px 90px -20px rgba(0, 0, 0, 0.7), 0 8px 24px rgba(0, 0, 0, 0.5);
+	overflow: hidden;
+}
+.sourceModalTabs {
+	display: flex;
+	align-items: center;
+	gap: 6px;
+	padding: 14px;
+	border-bottom: 1px solid var(--border-soft);
+	flex-shrink: 0;
+}
+.sourceModalTab {
+	flex: 1;
+	height: 40px;
+	border-radius: 11px;
+	background: transparent;
+	border: 1px solid transparent;
+	color: var(--muted);
+	font-size: 13.5px;
+	font-weight: 500;
+	cursor: pointer;
+}
+.sourceModalTab.active {
+	background: var(--surface-3);
+	border-color: var(--border-hi);
+	color: var(--fg-emphasis);
+	font-weight: 600;
+}
+.sourceGrid {
+	overflow-y: auto;
+	padding: 18px 18px 6px;
+	display: grid;
+	grid-template-columns: 1fr 1fr;
+	gap: 14px;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border-hi) transparent;
+}
+.sourceModalEmpty {
+	grid-column: 1 / -1;
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	padding: 40px 16px;
+	color: var(--muted);
+	font-size: 12.5px;
+}
+.sourceCard {
+	position: relative;
+	display: flex;
+	flex-direction: column;
+	text-align: left;
+	background: var(--surface);
+	border: 1.5px solid var(--border);
+	border-radius: 14px;
+	overflow: hidden;
+	cursor: pointer;
+	padding: 0;
+	transition: border-color var(--motion-fast) var(--ease), box-shadow var(--motion-fast) var(--ease),
+		transform var(--motion-fast) var(--ease);
+}
+.sourceCard:hover {
+	border-color: var(--border-hi);
+	transform: translateY(-2px);
+}
+.sourceCard.active {
+	border-color: var(--accent);
+	box-shadow: 0 0 0 3px var(--accent-soft);
+}
+.sourceCardThumb {
+	position: relative;
+	aspect-ratio: 16 / 10.5;
+	display: grid;
+	place-items: center;
+	background: #0a0c10;
+	color: var(--muted);
+	overflow: hidden;
+}
+.sourceCardThumb img {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+}
+.sourceCardName {
+	display: block;
+	padding: 9px 11px;
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--fg-2);
+	white-space: nowrap;
+	overflow: hidden;
+	text-overflow: ellipsis;
+}
+.sourceModalFooter {
+	display: flex;
+	align-items: center;
+	justify-content: flex-end;
+	gap: 10px;
+	padding: 16px 18px;
+	border-top: 1px solid var(--border-soft);
+	flex-shrink: 0;
+}
+.sourceModalCancelBtn {
+	height: 36px;
+	padding: 0 16px;
+	border-radius: 9px;
+	background: transparent;
+	border: 1px solid var(--border-hi);
+	color: var(--fg-2);
+	font-size: 13px;
+	font-weight: 500;
+	cursor: pointer;
+}
+.sourceModalCancelBtn:hover {
+	background: var(--surface-2);
+}
+
 .bigRecWrap {
 	position: absolute;
 	left: 0;
@@ -747,10 +952,6 @@
 .tlToolBtn:hover {
 	background: var(--surface-3);
 	color: var(--fg);
-}
-.tlToolBtn.on {
-	background: var(--accent-wash);
-	color: var(--accent);
 }
 .tlHints {
 	margin-left: auto;
@@ -879,7 +1080,7 @@
 	border-color: var(--speed);
 	background: var(--speed-wash);
 }
-.laneSkip {
+.laneTrim {
 	border-color: var(--danger);
 	background: var(--danger-soft);
 }
@@ -916,12 +1117,28 @@
 	border: 1.5px solid var(--border);
 	background: var(--surface-1);
 	overflow: hidden;
-	cursor: pointer;
+	cursor: grab;
 	box-sizing: border-box;
 	box-shadow: inset 0 1px 8px rgba(255, 255, 255, 0.06);
+	/* pointer-driven reorder: suppress native touch scroll + text selection */
+	touch-action: none;
+	user-select: none;
+	transition: box-shadow var(--motion-fast) var(--ease), opacity var(--motion-fast) var(--ease),
+		transform 150ms var(--ease);
 }
 .tlClipSel {
 	border-color: var(--accent);
+}
+/* The clip being carried during a reorder drag — follows the pointer 1:1
+   (no transition lag) while its siblings slide out of the way with the
+   base .tlClip transform transition above. */
+.tlClipDragging {
+	cursor: grabbing;
+	opacity: 0.9;
+	z-index: 5;
+	border-color: var(--accent);
+	box-shadow: 0 10px 26px rgba(0, 0, 0, 0.5), inset 0 1px 8px rgba(255, 255, 255, 0.06);
+	transition: box-shadow var(--motion-fast) var(--ease), opacity var(--motion-fast) var(--ease);
 }
 .tlWave {
 	position: absolute;

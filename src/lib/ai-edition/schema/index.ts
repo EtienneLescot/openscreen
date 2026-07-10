@@ -146,9 +146,9 @@ export const rangeSchema = z
 		path: ["endSec"],
 	});
 
-// ponytail: skipRanges reference asset source-time (not timeline). trimRegions
+// ponytail: trimRanges reference asset source-time (not timeline). trimRegions
 // in v2 are the inverse — a skip = the region inside the source we DON'T keep.
-export const skipRangeSchema = z
+export const trimRangeSchema = z
 	.object({
 		id: z.string().min(1),
 		assetId: z.string().min(1),
@@ -162,14 +162,28 @@ export const skipRangeSchema = z
 		path: ["endSec"],
 	});
 
-export const timelineSchema = z.object({
-	clips: z.array(clipSchema).default([]),
-	gaps: z.array(gapSchema).default([]),
-	skipRanges: z.array(skipRangeSchema).default([]),
-	muteRanges: z.array(rangeSchema).default([]),
-	speedRanges: z.array(rangeSchema).default([]),
-	captionRanges: z.array(rangeSchema).default([]),
-});
+export const timelineSchema = z.preprocess(
+	// Back-compat: the field was renamed skipRanges → trimRanges. Old persisted
+	// documents (disk + browser-shim localStorage) still carry `skipRanges`;
+	// fold it into `trimRanges` on load so trims aren't silently dropped.
+	(value) => {
+		if (value && typeof value === "object" && !Array.isArray(value)) {
+			const v = value as Record<string, unknown>;
+			if (v.skipRanges !== undefined && v.trimRanges === undefined) {
+				return { ...v, trimRanges: v.skipRanges };
+			}
+		}
+		return value;
+	},
+	z.object({
+		clips: z.array(clipSchema).default([]),
+		gaps: z.array(gapSchema).default([]),
+		trimRanges: z.array(trimRangeSchema).default([]),
+		muteRanges: z.array(rangeSchema).default([]),
+		speedRanges: z.array(rangeSchema).default([]),
+		captionRanges: z.array(rangeSchema).default([]),
+	}),
+);
 
 export const pendingQuestionSchema = z.object({
 	id: z.string().min(1),
@@ -210,23 +224,23 @@ export const timelineOperationSchema = z.discriminatedUnion("type", [
 		endWordId: z.string().min(1),
 	}),
 	z.object({
-		type: z.literal("add_skip_range"),
+		type: z.literal("add_trim_range"),
 		reason: z.string().default(""),
 		assetId: z.string().min(1),
 		startSec: z.number().nonnegative(),
 		endSec: z.number().nonnegative(),
 	}),
 	z.object({
-		type: z.literal("update_skip_range"),
+		type: z.literal("update_trim_range"),
 		reason: z.string().default(""),
-		skipRangeId: z.string().min(1),
+		trimRangeId: z.string().min(1),
 		startSec: z.number().nonnegative(),
 		endSec: z.number().nonnegative(),
 	}),
 	z.object({
-		type: z.literal("remove_skip_range"),
+		type: z.literal("remove_trim_range"),
 		reason: z.string().default(""),
-		skipRangeId: z.string().min(1),
+		trimRangeId: z.string().min(1),
 	}),
 	z.object({
 		type: z.literal("update_clip_range"),
@@ -427,7 +441,7 @@ const documentSchemaShape = z.object({
 	timeline: timelineSchema.default({
 		clips: [],
 		gaps: [],
-		skipRanges: [],
+		trimRanges: [],
 		muteRanges: [],
 		speedRanges: [],
 		captionRanges: [],
@@ -531,7 +545,7 @@ export type AxcutTranscript = z.infer<typeof transcriptSchema>;
 export type AxcutAsset = z.infer<typeof assetSchema>;
 export type AxcutClip = z.infer<typeof clipSchema>;
 export type AxcutGap = z.infer<typeof gapSchema>;
-export type AxcutSkipRange = z.infer<typeof skipRangeSchema>;
+export type AxcutTrimRange = z.infer<typeof trimRangeSchema>;
 export type AxcutTimeline = z.infer<typeof timelineSchema>;
 export type AxcutSuggestion = z.infer<typeof suggestionSchema>;
 export type AxcutAgentState = z.infer<typeof agentStateSchema>;
@@ -569,7 +583,7 @@ export function createEmptyDocument(
 		timeline: {
 			clips: [],
 			gaps: [],
-			skipRanges: [],
+			trimRanges: [],
 			muteRanges: [],
 			speedRanges: [],
 			captionRanges: [],

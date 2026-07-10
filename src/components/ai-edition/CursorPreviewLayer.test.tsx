@@ -99,7 +99,7 @@ const SAMPLE_DOC = {
 	timeline: {
 		clips: [],
 		gaps: [],
-		skipRanges: [],
+		trimRanges: [],
 		muteRanges: [],
 		speedRegions: [],
 		captionRanges: [],

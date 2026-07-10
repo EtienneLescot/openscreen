@@ -259,7 +259,7 @@ interface RegionItemProps {
 	selected: boolean;
 	/** F2.7 — `additive` is true on shift-click (adds to the multi-selection). */
 	onSelect: (additive: boolean) => void;
-	variant: "zoom" | "annotation" | "speed" | "skip";
+	variant: "zoom" | "annotation" | "speed" | "trim";
 }
 
 export function RegionItem({
@@ -282,8 +282,8 @@ export function RegionItem({
 			? styles.zoomPill
 			: variant === "speed"
 				? styles.speedPill
-				: variant === "skip"
-					? styles.skipPill
+				: variant === "trim"
+					? styles.trimPill
 					: styles.annotationPill;
 	return (
 		<div

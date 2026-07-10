@@ -218,7 +218,7 @@ export class DocumentService {
 			timeline: {
 				...doc.timeline,
 				clips: doc.timeline.clips.filter((c) => c.assetId !== assetId),
-				skipRanges: doc.timeline.skipRanges.filter((r) => r.assetId !== assetId),
+				trimRanges: doc.timeline.trimRanges.filter((r) => r.assetId !== assetId),
 			},
 			project: {
 				...doc.project,

@@ -24,15 +24,15 @@ export interface OpenScreenAgentSink {
 // stays the source of truth for the UI's "applied: ..." chip.
 const secondsSchema = z.number().finite().nonnegative();
 
-const addSkipArgs = z.object({
+const addTrimArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
 	assetId: z.string().min(1).optional(),
 	reason: z.string().default(""),
 });
 
-const setSkipRangeArgs = z.object({
-	skipRangeId: z.string().min(1),
+const setTrimArgs = z.object({
+	trimRangeId: z.string().min(1),
 	startSec: secondsSchema,
 	endSec: secondsSchema,
 });
@@ -55,6 +55,54 @@ const replaceTimelineArgs = z.object({
 	reason: z.string().default(""),
 });
 
+// Effects (zoom / speed / annotation) — authored in virtual (edited-timeline)
+// seconds, mirroring the JSON-schema specs in agent-tools.ts.
+const depthSchema = z.number().int().min(1).max(6);
+const focusSchema = z.object({ cx: z.number().min(0).max(1), cy: z.number().min(0).max(1) });
+
+const addZoomArgs = z.object({
+	startSec: secondsSchema,
+	endSec: secondsSchema,
+	depth: depthSchema.default(3),
+	focus: focusSchema.default({ cx: 0.5, cy: 0.5 }),
+});
+
+const setZoomArgs = z.object({
+	zoomId: z.string().min(1),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+	depth: depthSchema.optional(),
+	focus: focusSchema.optional(),
+});
+
+const addSpeedArgs = z.object({
+	startSec: secondsSchema,
+	endSec: secondsSchema,
+	speed: z.number().positive().default(1.5),
+});
+
+const setSpeedArgs = z.object({
+	speedId: z.string().min(1),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+	speed: z.number().positive().optional(),
+});
+
+const addAnnotationArgs = z.object({
+	startSec: secondsSchema,
+	endSec: secondsSchema,
+	text: z.string().default(""),
+	x: z.number().min(0).max(100).default(50),
+	y: z.number().min(0).max(100).default(50),
+});
+
+const setAnnotationArgs = z.object({
+	annotationId: z.string().min(1),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+	text: z.string().optional(),
+});
+
 const SYSTEM_PROMPT = [
 	"You are an AI video editor working inside OpenScreen. The user is editing a recording.",
 	"Help them cut silences, tighten pacing, add captions, and rewrite titles.",
@@ -62,25 +110,40 @@ const SYSTEM_PROMPT = [
 	"You can call the tools below against the live document snapshot; the runtime executes each edit and feeds the result back into the loop.",
 	"The AxcutDocument is the single source of truth. The timeline, the transcript editor, and the chat panel are all direct editors of the same document — when the user places a clip on the timeline, the document updates immediately, and when the timeline is empty, the document has no clips. Your edits operate on the live document, so preserve the user's placed clips.",
 	"",
+	"Time-bases (do not mix them up): clips and trims are in SOURCE-time seconds of an asset; zooms, speed regions and annotations are in VIRTUAL (edited-timeline) seconds — the position on the ruler after clips + trims are applied. getCurrentDocument returns both, clearly labelled.",
+	"",
 	"Tool-selection rules (these are non-negotiable):",
-	"- 'remove silences' / 'cut pauses' / 'cut the silence' / 'kill the silence' / 'tighten pacing': call addSkip ONCE PER SILENT RANGE. Do NOT call setClipRange, do NOT call replaceTimeline. The placed clip is the canonical cut, the silence becomes a skip range inside it.",
-	"- 'trim this clip to 0-30' / 'cut the end of this clip' / 'shorten this clip': call setClipRange with the new sourceStartSec/sourceEndSec.",
+	"- 'remove silences' / 'cut pauses' / 'cut the silence' / 'kill the silence' / 'tighten pacing': call addTrim ONCE PER SILENT RANGE. Do NOT call setClipRange, do NOT call replaceTimeline. The placed clip is the canonical cut, the silence becomes a trim inside it.",
+	"- 'trim this clip to 0-30' / 'cut the end of this clip' / 'shorten this clip': call setClipRange with the new sourceStartSec/sourceEndSec (this is the clip's in/out, distinct from a trim).",
+	"- 'zoom in on …' / smart zooms: call addZoom over the virtual-timeline span (depth 1–6, focus in 0–1 frame fractions). 'speed through …': addSpeed. 'add a caption/label': addAnnotation.",
 	"- 'replace the timeline' / 'rebuild the timeline' / 'start over with these intervals': call replaceTimeline. Only when the user explicitly asks for a full rebuild.",
-	"Anything else (move a clip, resize a skip, change a clip's order, etc.) — pick the most specific tool. If the request is ambiguous, prefer the smallest edit that satisfies it.",
+	"Anything else (move a clip, resize a trim, restyle a zoom, change a clip's order, etc.) — pick the most specific tool. If the request is ambiguous, prefer the smallest edit that satisfies it.",
 ].join("\n");
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
 	getCurrentDocument:
-		"Read a compact snapshot of the current project: assets (with durations), timeline clips, skip ranges, and counts of annotations/zoom ranges. Call this before editing if the snapshot in the system prompt may be stale. The AxcutDocument is the single source of truth — your edits should preserve the user's placed clips and any timeline state they have already set up.",
+		"Read a compact snapshot of the current project: assets (with durations), timeline clips and trim ranges (source-time), and the zoom / speed / annotation effects (virtual, edited-timeline time). Call this before editing if the snapshot in the system prompt may be stale. The AxcutDocument is the single source of truth — your edits should preserve the user's placed clips and any timeline state they have already set up.",
 	getTranscript:
 		"Read the transcript segments (speech and silence, with start/end seconds and text) for an asset. Omit assetId to read the primary asset's transcript.",
-	addSkip:
-		"Add a skip range (a cut — this source-time span will not be played or exported). Times are in seconds of the asset's source time. This is the preferred (and for 'remove silences' requests, the only) way to handle silences; it preserves the user's placed clips and only adds a cut. Call this once per silent range.",
-	setSkipRange: "Move or resize an existing skip range by id. Times are source-time seconds.",
+	addTrim:
+		"Add a trim range: a cut of a span inside a clip (this source-time span will not be played or exported) that does NOT split the clip. Times are in seconds of the asset's source time. This is the preferred (and for 'remove silences' requests, the only) way to handle silences; it preserves the user's placed clips and only adds a cut. Call this once per silent range.",
+	setTrim: "Move or resize an existing trim range by id. Times are source-time seconds.",
 	setClipRange:
-		"Trim a clip: set its source in/out points (seconds). All clips are re-laid back-to-back afterwards, so downstream clips shift automatically. Use this ONLY when the user explicitly asks to shorten or extend a user-placed clip. Do NOT use this for 'remove silences' or 'cut pauses' — for those, use addSkip.",
+		"Set a clip's in/out points (source-time seconds) to shorten its head or tail — distinct from a trim (which cuts a span inside the clip). All clips are re-laid back-to-back afterwards, so downstream clips shift automatically. Use this ONLY when the user explicitly asks to shorten or extend a user-placed clip. Do NOT use this for 'remove silences' or 'cut pauses' — for those, use addTrim.",
 	replaceTimeline:
-		"Replace the whole timeline with the given kept intervals of the primary asset's source time. Everything outside the intervals becomes a skip. DO NOT use this for 'cut silences' or 'remove pauses' — the user has likely placed clips on the timeline that you'd be discarding. Use this ONLY when the user explicitly asks you to rebuild the timeline from scratch (e.g. 'start over with the kept intervals from the transcript' or 'replace everything with these intervals').",
+		"Replace the whole timeline with the given kept intervals of the primary asset's source time. Everything outside the intervals becomes a trim. DO NOT use this for 'cut silences' or 'remove pauses' — the user has likely placed clips on the timeline that you'd be discarding. Use this ONLY when the user explicitly asks you to rebuild the timeline from scratch (e.g. 'start over with the kept intervals from the transcript' or 'replace everything with these intervals').",
+	addZoom:
+		"Add a zoom-in over a span of the edited timeline (virtual seconds). depth 1–6 maps to 1.0×–3.5× (default 3). focus is the zoom centre in 0–1 fractions of the frame (default centre). Use for 'zoom in on …' and the smart-zoom pass.",
+	setZoom:
+		"Move, resize, or restyle an existing zoom by id (virtual-timeline seconds). Only the fields you pass are changed.",
+	addSpeed:
+		"Add a speed-change region over a span of the edited timeline (virtual seconds). speed > 1 fast-forwards, < 1 slows down (default 1.5×). Use to speed through slow stretches without cutting them.",
+	setSpeed:
+		"Move, resize, or change the multiplier of an existing speed region by id (virtual-timeline seconds). Only the fields you pass are changed.",
+	addAnnotation:
+		"Add a text annotation over a span of the edited timeline (virtual seconds). x/y are frame percentages (0–100, default centre). Use for callouts and labels.",
+	setAnnotation:
+		"Move, resize, or edit the text of an existing annotation by id (virtual-timeline seconds). Only the fields you pass are changed.",
 };
 
 // ponytail: mutable document holder so a write-tool that updates the snapshot
@@ -88,6 +151,28 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
 // `tool()` factory captures the document by reference via the holder, so
 // each tool sees the latest mutated snapshot.
 type DocumentHolder = { current: AxcutDocument };
+
+// One mutating document tool: run it through the shared executor, advance the
+// holder so the next tool in the turn sees the edit, and emit start/end chips.
+// (All write tools share this exact flow — factored out so adding a tool is one
+// line instead of a 20-line copy.)
+function mutatingTool<S extends z.ZodType>(
+	holder: DocumentHolder,
+	sink: OpenScreenAgentSink,
+	name: string,
+	schema: S,
+) {
+	return tool(
+		async (args: z.infer<S>) => {
+			sink.toolStart(name, args);
+			const execution = executeAgentTool(holder.current, name, JSON.stringify(args));
+			if (execution.document) holder.current = execution.document;
+			sink.toolEnd(name, execution.ok, execution.summary);
+			return execution.resultJson;
+		},
+		{ name, description: TOOL_DESCRIPTIONS[name], schema },
+	);
+}
 
 function buildTools(holder: DocumentHolder, sink: OpenScreenAgentSink) {
 	return [
@@ -107,78 +192,16 @@ function buildTools(holder: DocumentHolder, sink: OpenScreenAgentSink) {
 				schema: z.object({ assetId: z.string().min(1).optional() }),
 			},
 		),
-		tool(
-			async (args: z.infer<typeof addSkipArgs>) => {
-				sink.toolStart("addSkip", args);
-				const execution = executeAgentTool(holder.current, "addSkip", JSON.stringify(args));
-				if (execution.document) {
-					holder.current = execution.document;
-					sink.toolEnd("addSkip", execution.ok, execution.summary);
-				} else {
-					sink.toolEnd("addSkip", execution.ok, execution.summary);
-				}
-				return execution.resultJson;
-			},
-			{
-				name: "addSkip",
-				description: TOOL_DESCRIPTIONS.addSkip,
-				schema: addSkipArgs,
-			},
-		),
-		tool(
-			async (args: z.infer<typeof setSkipRangeArgs>) => {
-				sink.toolStart("setSkipRange", args);
-				const execution = executeAgentTool(holder.current, "setSkipRange", JSON.stringify(args));
-				if (execution.document) {
-					holder.current = execution.document;
-					sink.toolEnd("setSkipRange", execution.ok, execution.summary);
-				} else {
-					sink.toolEnd("setSkipRange", execution.ok, execution.summary);
-				}
-				return execution.resultJson;
-			},
-			{
-				name: "setSkipRange",
-				description: TOOL_DESCRIPTIONS.setSkipRange,
-				schema: setSkipRangeArgs,
-			},
-		),
-		tool(
-			async (args: z.infer<typeof setClipRangeArgs>) => {
-				sink.toolStart("setClipRange", args);
-				const execution = executeAgentTool(holder.current, "setClipRange", JSON.stringify(args));
-				if (execution.document) {
-					holder.current = execution.document;
-					sink.toolEnd("setClipRange", execution.ok, execution.summary);
-				} else {
-					sink.toolEnd("setClipRange", execution.ok, execution.summary);
-				}
-				return execution.resultJson;
-			},
-			{
-				name: "setClipRange",
-				description: TOOL_DESCRIPTIONS.setClipRange,
-				schema: setClipRangeArgs,
-			},
-		),
-		tool(
-			async (args: z.infer<typeof replaceTimelineArgs>) => {
-				sink.toolStart("replaceTimeline", args);
-				const execution = executeAgentTool(holder.current, "replaceTimeline", JSON.stringify(args));
-				if (execution.document) {
-					holder.current = execution.document;
-					sink.toolEnd("replaceTimeline", execution.ok, execution.summary);
-				} else {
-					sink.toolEnd("replaceTimeline", execution.ok, execution.summary);
-				}
-				return execution.resultJson;
-			},
-			{
-				name: "replaceTimeline",
-				description: TOOL_DESCRIPTIONS.replaceTimeline,
-				schema: replaceTimelineArgs,
-			},
-		),
+		mutatingTool(holder, sink, "addTrim", addTrimArgs),
+		mutatingTool(holder, sink, "setTrim", setTrimArgs),
+		mutatingTool(holder, sink, "setClipRange", setClipRangeArgs),
+		mutatingTool(holder, sink, "replaceTimeline", replaceTimelineArgs),
+		mutatingTool(holder, sink, "addZoom", addZoomArgs),
+		mutatingTool(holder, sink, "setZoom", setZoomArgs),
+		mutatingTool(holder, sink, "addSpeed", addSpeedArgs),
+		mutatingTool(holder, sink, "setSpeed", setSpeedArgs),
+		mutatingTool(holder, sink, "addAnnotation", addAnnotationArgs),
+		mutatingTool(holder, sink, "setAnnotation", setAnnotationArgs),
 	];
 }
 
@@ -299,12 +322,14 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 		// the success-but-empty path above.
 		const e = err instanceof Error ? err : new Error(String(err));
 		const stackHead = (e.stack ?? "").split("\n").slice(0, 3).join(" | ");
-		const reason = `Empty response from model (provider=${model.provider}, ` +
+		const reason =
+			`Empty response from model (provider=${model.provider}, ` +
 			`model=${model.model}, error=${e.name}: ${e.message}` +
 			(stackHead ? ` stack=${stackHead}` : "") +
-			`). Last chunk: ${(chatModelChunks[chatModelChunks.length - 1]
-				? JSON.stringify(chatModelChunks[chatModelChunks.length - 1])
-				: "(no on_chat_model_stream events)"
+			`). Last chunk: ${(
+				chatModelChunks[chatModelChunks.length - 1]
+					? JSON.stringify(chatModelChunks[chatModelChunks.length - 1])
+					: "(no on_chat_model_stream events)"
 			).slice(0, 1024)}`;
 		sink.error(reason);
 		return {
