@@ -109,11 +109,21 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	useEffect(() => {
 		const el = frameRef.current?.parentElement;
 		if (!el) return;
-		const update = () =>
+		// ponytail: clientWidth/clientHeight include the container's padding
+		// (.previewCanvas has var(--sp-5) on all sides). Sizing the frame to
+		// that full padded box, then centering it in the smaller content-box
+		// grid track, pushed it past the padding edge on every axis —
+		// overflow:hidden then clipped the video instead of letting it fit.
+		// Subtracting the computed padding gives the actual content box.
+		const update = () => {
+			const cs = getComputedStyle(el);
+			const paddingX = Number.parseFloat(cs.paddingLeft) + Number.parseFloat(cs.paddingRight);
+			const paddingY = Number.parseFloat(cs.paddingTop) + Number.parseFloat(cs.paddingBottom);
 			setContainerSize({
-				width: el.clientWidth || 1280,
-				height: el.clientHeight || 720,
+				width: (el.clientWidth || 1280) - (Number.isFinite(paddingX) ? paddingX : 0),
+				height: (el.clientHeight || 720) - (Number.isFinite(paddingY) ? paddingY : 0),
 			});
+		};
 		update();
 		if (typeof ResizeObserver === "undefined") return;
 		const observer = new ResizeObserver(update);
