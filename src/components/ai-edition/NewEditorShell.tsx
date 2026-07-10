@@ -1000,7 +1000,20 @@ export function NewEditorShell() {
 				<section className={v4.stage} aria-label="Preview stage">
 					{mode === "edit" ? (
 						<>
-							<div style={{ position: "absolute", inset: 0 }}>
+							<div
+								style={{
+									position: "absolute",
+									inset: 0,
+									// ponytail: matches the design's stageWrapStyle
+									// (`padding: 40px {inspectorOpen?'360px':'96px'} 110px 80px`)
+									// — reserves room for the floating inspector on the
+									// right (and transport at the bottom) so the video
+									// resizes into the remaining space instead of sitting
+									// underneath the panel.
+									padding: `40px ${inspectorOpen ? 360 : 96}px 110px 80px`,
+									boxSizing: "border-box",
+								}}
+							>
 								<Preview
 									hasProject={hasProject}
 									hasAsset={hasAsset}
