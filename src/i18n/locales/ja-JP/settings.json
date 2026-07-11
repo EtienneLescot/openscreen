@@ -8,7 +8,8 @@
 			"title": "フォーカスモード",
 			"manual": "手動",
 			"auto": "自動",
-			"autoDescription": "表示範囲が録画中のカーソル位置に追従します"
+			"autoDescription": "表示範囲が録画中のカーソル位置に追従します",
+			"lockedDisclaimer": "タイムラインの全体オートフォーカス切り替えによって制御されます。オフにすると、ズームごとにフォーカスモードを設定できます。"
 		},
 		"threeD": {
 			"title": "3D回転",
@@ -211,6 +212,7 @@
 		"errorLoadFailed": "フォントを読み込めませんでした。GoogleフォントのURLが正しいことを確認してください。"
 	},
 	"cursor": {
+		"title": "カーソル",
 		"theme": "カーソルのスタイル",
 		"themeDefault": "デフォルト",
 		"show": "カーソルを表示",
@@ -218,7 +220,8 @@
 		"smoothing": "スムージング",
 		"motionBlur": "モーションブラー",
 		"clickBounce": "クリックバウンス",
-		"clipToBounds": "キャンバスにクリップ"
+		"clipToBounds": "キャンバスにクリップ",
+		"clipToBoundsDescription": "カーソルを映像フレーム内に保ちます。オフにするとカーソルが端からはみ出せるようになります。ズームやパン時に便利です。"
 	},
 	"language": {
 		"title": "言語"
@@ -226,5 +229,9 @@
 	"timeline": {
 		"title": "タイムライン",
 		"waveform": "トリムトラックにオーディオ波形を表示"
+	},
+	"facets": {
+		"captions": "字幕",
+		"transcript": "文字起こし"
 	}
 }

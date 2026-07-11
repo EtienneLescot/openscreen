@@ -12,7 +12,7 @@ import {
 	moveClip as moveClipInDocument,
 	resequenceClips,
 } from "../document/timeline";
-import type { AxcutDocument } from "../schema";
+import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
 import { probeVideoDuration } from "../timeline/duration";
 import { resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
@@ -683,6 +683,25 @@ export function useTimeline() {
 		[document, saveDocument],
 	);
 
+	// Crop is a per-clip framing, not a document-wide setting — two clips
+	// (even from the same asset) can reasonably want different crops. Passing
+	// `null` clears it back to "no crop" (full frame) instead of storing the
+	// identity region explicitly.
+	const updateClipCrop = useCallback(
+		async (clipId: string, region: AxcutClipCropRegion | null) => {
+			if (!document) return;
+			const arr = document.timeline.clips.map((c) =>
+				c.id === clipId ? { ...c, cropRegion: region ?? undefined } : c,
+			);
+			const next: AxcutDocument = {
+				...document,
+				timeline: { ...document.timeline, clips: arr },
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
+
 	const splitAndInsert = useCallback(
 		async (assetId: string, splitTimeSec: number) => {
 			if (!document) return;
@@ -924,6 +943,7 @@ export function useTimeline() {
 		addClipAfter,
 		editClip,
 		updateClipSourceRange,
+		updateClipCrop,
 		splitAndInsert,
 		insertClipAt,
 		moveClip,

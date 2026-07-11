@@ -11,9 +11,9 @@ import {
 	Sun,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
-import { useI18n } from "@/contexts/I18nContext";
+import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { useTheme } from "@/hooks/useTheme";
-import type { Locale } from "@/i18n/config";
+import { getAvailableLocales, getLocaleName, getLocaleShort } from "@/i18n/loader";
 import styles from "./EditorShellV4.module.css";
 
 export type EditorMode = "media" | "edit" | "rec";
@@ -38,26 +38,10 @@ interface EditorTopBarProps {
 	actions: TopBarActions;
 }
 
-const LANGS: Array<{ code: string; label: string }> = [
-	{ code: "en", label: "English" },
-	{ code: "fr", label: "Français" },
-	{ code: "es", label: "Español" },
-	{ code: "de", label: "Deutsch" },
-	{ code: "it", label: "Italiano" },
-	{ code: "ja-JP", label: "日本語" },
-	{ code: "ko-KR", label: "한국어" },
-	{ code: "pt-BR", label: "Português (BR)" },
-	{ code: "ru", label: "Русский" },
-	{ code: "tr", label: "Türkçe" },
-	{ code: "vi", label: "Tiếng Việt" },
-	{ code: "zh-CN", label: "简体中文" },
-	{ code: "zh-TW", label: "繁體中文" },
-];
-
-const MODES: Array<{ id: EditorMode; label: string }> = [
-	{ id: "media", label: "Media" },
-	{ id: "edit", label: "Edit" },
-	{ id: "rec", label: "Rec" },
+const MODES: Array<{ id: EditorMode; labelKey: string }> = [
+	{ id: "media", labelKey: "topbar.modes.media" },
+	{ id: "edit", labelKey: "topbar.modes.edit" },
+	{ id: "rec", labelKey: "topbar.modes.rec" },
 ];
 
 export function EditorTopBar({
@@ -70,14 +54,15 @@ export function EditorTopBar({
 	actions,
 }: EditorTopBarProps) {
 	const { theme, toggle: toggleTheme } = useTheme();
+	const t = useScopedT("editor");
 
 	return (
 		<header className={styles.topbar}>
 			<button
 				type="button"
 				className={`${styles.iconBtn}${chatOpen ? ` ${styles.on}` : ""}`}
-				title="Toggle chat panel"
-				aria-label="Toggle chat panel"
+				title={t("topbar.toggleChatPanel")}
+				aria-label={t("topbar.toggleChatPanel")}
 				aria-pressed={chatOpen}
 				onClick={actions.toggleChat}
 			>
@@ -91,17 +76,13 @@ export function EditorTopBar({
 				<span className={styles.name}>OpenScreen</span>
 			</span>
 			<span className={styles.sep} aria-hidden />
-			<ProjectNameField
-				title={projectTitle}
-				onRename={actions.renameProject}
-				onOpenProjects={actions.openProject}
-			/>
+			<ProjectNameField title={projectTitle} onRename={actions.renameProject} />
 			<span className={styles.sep} aria-hidden />
 			<button
 				type="button"
 				className={styles.iconBtn}
-				title="Open project"
-				aria-label="Open project"
+				title={t("topbar.openProject")}
+				aria-label={t("topbar.openProject")}
 				onClick={actions.openProject}
 			>
 				<FolderOpen size={16} />
@@ -109,8 +90,8 @@ export function EditorTopBar({
 			<button
 				type="button"
 				className={styles.iconBtn}
-				title="New project"
-				aria-label="New project"
+				title={t("topbar.newProject")}
+				aria-label={t("topbar.newProject")}
 				onClick={actions.newProject}
 			>
 				<FolderPlus size={16} />
@@ -118,8 +99,8 @@ export function EditorTopBar({
 			<button
 				type="button"
 				className={styles.iconBtn}
-				title="Save project"
-				aria-label="Save project"
+				title={t("topbar.saveProject")}
+				aria-label={t("topbar.saveProject")}
 				onClick={actions.save}
 				style={{ position: "relative" }}
 			>
@@ -149,17 +130,17 @@ export function EditorTopBar({
 							aria-hidden
 							style={{ background: "var(--warn)", boxShadow: "0 0 0 3px var(--warn-soft)" }}
 						/>
-						Unsaved
+						{t("topbar.unsaved")}
 					</>
 				) : (
 					<>
 						<span className={styles.dot} aria-hidden />
-						Saved
+						{t("topbar.saved")}
 					</>
 				)}
 			</span>
 
-			<div className={styles.modeSwitch} role="tablist" aria-label="Editor mode">
+			<div className={styles.modeSwitch} role="tablist" aria-label={t("topbar.editorMode")}>
 				{MODES.map((m) => (
 					<button
 						key={m.id}
@@ -168,7 +149,7 @@ export function EditorTopBar({
 						aria-selected={mode === m.id}
 						onClick={() => onModeChange(m.id)}
 					>
-						{m.label}
+						{t(m.labelKey)}
 					</button>
 				))}
 			</div>
@@ -176,8 +157,8 @@ export function EditorTopBar({
 			<button
 				type="button"
 				className={styles.iconBtn}
-				title={theme === "dark" ? "Switch to light theme" : "Switch to dark theme"}
-				aria-label="Toggle theme"
+				title={theme === "dark" ? t("topbar.switchToLightTheme") : t("topbar.switchToDarkTheme")}
+				aria-label={t("topbar.toggleTheme")}
 				onClick={toggleTheme}
 			>
 				{theme === "dark" ? <Moon size={16} /> : <Sun size={16} />}
@@ -185,8 +166,8 @@ export function EditorTopBar({
 			<button
 				type="button"
 				className={styles.iconBtn}
-				title="Settings"
-				aria-label="Settings"
+				title={t("topbar.settings")}
+				aria-label={t("topbar.settings")}
 				onClick={actions.openSettings}
 			>
 				<Settings size={16} />
@@ -194,13 +175,13 @@ export function EditorTopBar({
 			<button
 				type="button"
 				className={styles.exportBtn}
-				title="Export"
-				aria-label="Export"
+				title={t("topbar.export")}
+				aria-label={t("topbar.export")}
 				onClick={actions.export}
 				disabled={!canExport}
 			>
 				<Download size={15} />
-				Export
+				{t("topbar.export")}
 			</button>
 		</header>
 	);
@@ -209,12 +190,11 @@ export function EditorTopBar({
 function ProjectNameField({
 	title,
 	onRename,
-	onOpenProjects,
 }: {
 	title: string | null;
 	onRename: (title: string) => void;
-	onOpenProjects: () => void;
 }) {
+	const t = useScopedT("editor");
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState(title ?? "");
 	const inputRef = useRef<HTMLInputElement | null>(null);
@@ -266,8 +246,8 @@ function ProjectNameField({
 		<span className={styles.ghostBtn}>
 			<button
 				type="button"
-				title="Rename project"
-				aria-label="Rename project"
+				title={t("topbar.renameProject")}
+				aria-label={t("topbar.renameProject")}
 				disabled={!title}
 				onClick={() => setEditing(true)}
 				style={{
@@ -277,25 +257,7 @@ function ProjectNameField({
 					font: "inherit",
 				}}
 			>
-				{title ?? "No project"}
-			</button>
-			<button
-				type="button"
-				title="Switch project"
-				aria-label="Switch project"
-				onClick={(e) => {
-					e.stopPropagation();
-					onOpenProjects();
-				}}
-				style={{
-					all: "unset",
-					display: "grid",
-					placeItems: "center",
-					cursor: "pointer",
-					padding: 2,
-				}}
-			>
-				<ChevronDown size={11} style={{ color: "var(--muted)" }} />
+				{title ?? t("topbar.noProject")}
 			</button>
 		</span>
 	);
@@ -303,6 +265,7 @@ function ProjectNameField({
 
 function LangButton() {
 	const { locale, setLocale } = useI18n();
+	const t = useScopedT("editor");
 	const [open, setOpen] = useState(false);
 	const ref = useRef<HTMLDivElement | null>(null);
 	useEffect(() => {
@@ -320,12 +283,12 @@ function LangButton() {
 				className={styles.iconBtn}
 				style={{ width: "auto", padding: "0 8px", gap: 6, display: "inline-flex" }}
 				onClick={() => setOpen((v) => !v)}
-				aria-label="Change language"
+				aria-label={t("topbar.changeLanguage")}
 				aria-pressed={open}
 			>
 				<Languages size={15} />
 				<span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600 }}>
-					{locale.toUpperCase()}
+					{getLocaleShort(locale)}
 				</span>
 				<ChevronDown size={9} style={{ color: "var(--muted)" }} />
 			</button>
@@ -344,9 +307,9 @@ function LangButton() {
 						zIndex: 60,
 					}}
 				>
-					{LANGS.map((l) => (
+					{getAvailableLocales().map((code) => (
 						<button
-							key={l.code}
+							key={code}
 							type="button"
 							style={{
 								display: "block",
@@ -354,18 +317,18 @@ function LangButton() {
 								textAlign: "left",
 								padding: "6px 10px",
 								border: 0,
-								background: l.code === locale ? "var(--accent-wash)" : "transparent",
-								color: l.code === locale ? "var(--accent)" : "var(--fg-2)",
+								background: code === locale ? "var(--accent-wash)" : "transparent",
+								color: code === locale ? "var(--accent)" : "var(--fg-2)",
 								borderRadius: "var(--r-sm)",
 								cursor: "pointer",
 								font: "500 12px var(--font-body)",
 							}}
 							onClick={() => {
-								setLocale(l.code as Locale);
+								setLocale(code);
 								setOpen(false);
 							}}
 						>
-							{l.label}
+							{getLocaleName(code)}
 						</button>
 					))}
 				</div>

@@ -1,6 +1,7 @@
 import { ArrowDown, Film, Plus, RotateCw, Search, X } from "lucide-react";
 import { useMemo, useState } from "react";
 import { toast } from "sonner";
+import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutAsset } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import styles from "./EditorShellV4.module.css";
@@ -41,6 +42,7 @@ export function MediaStage({
 	assetStatuses?: Record<string, "pending" | "running" | "failed">;
 	onRegenerateAsset?: (assetId: string, language: string) => Promise<void>;
 }) {
+	const t = useScopedT("editor");
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
 	const addAsset = useProjectStore((s) => s.addAsset);
@@ -66,17 +68,18 @@ export function MediaStage({
 
 	const handleImport = async () => {
 		if (!projectId) {
-			toast.error("Open a project first");
+			toast.error(t("mediaStage.openProjectFirst"));
 			return;
 		}
 		const picker = await window.electronAPI?.openVideoFilePicker();
 		if (!picker?.success || !picker.path) return;
 		setBusy(true);
 		try {
-			await addAsset(picker.path);
-			toast.success(`Added ${basename(picker.path)}`);
+			const label = picker.name || basename(picker.path);
+			await addAsset(picker.path, label);
+			toast.success(t("mediaStage.added", { label }));
 		} catch (err) {
-			toast.error("Could not add asset", {
+			toast.error(t("mediaStage.couldNotAddAsset"), {
 				description: err instanceof Error ? err.message : String(err),
 			});
 		} finally {
@@ -97,7 +100,7 @@ export function MediaStage({
 					<input
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
-						placeholder="Search media…"
+						placeholder={t("mediaStage.searchPlaceholder")}
 					/>
 				</div>
 				<div className={styles.mediaCols}>
@@ -166,12 +169,10 @@ export function MediaStage({
 						{assets.length > 0 ? (
 							<div className={styles.mediaHint}>
 								<ArrowDown size={12} />
-								Drag a clip onto the timeline below to add it
+								{t("mediaStage.dragHint")}
 							</div>
 						) : (
-							<div className={styles.mediaHint}>
-								No media yet — import a recording to get started.
-							</div>
+							<div className={styles.mediaHint}>{t("mediaStage.emptyHint")}</div>
 						)}
 						<button
 							type="button"
@@ -180,7 +181,7 @@ export function MediaStage({
 							disabled={!projectId || busy}
 						>
 							<Plus size={14} />
-							Import media
+							{t("mediaStage.importMedia")}
 						</button>
 					</div>
 
@@ -204,12 +205,12 @@ export function MediaStage({
 										letterSpacing: "-0.01em",
 									}}
 								>
-									Source Transcript
+									{t("mediaStage.sourceTranscript")}
 								</h2>
 								<button
 									type="button"
-									title="Close"
-									aria-label="Close"
+									title={t("mediaStage.close")}
+									aria-label={t("mediaStage.close")}
 									onClick={() => setDetailOpen(false)}
 									style={{
 										width: 26,
@@ -262,7 +263,7 @@ export function MediaStage({
 											background: transcript ? "var(--success)" : "var(--accent)",
 										}}
 									/>
-									{transcript ? "Transcript ready" : "Not generated yet"}
+									{transcript ? t("mediaStage.transcriptReady") : t("mediaStage.notGeneratedYet")}
 								</span>
 							</div>
 
@@ -275,7 +276,7 @@ export function MediaStage({
 										marginBottom: 6,
 									}}
 								>
-									Regenerate as
+									{t("mediaStage.regenerateAs")}
 								</div>
 								<div style={{ display: "flex", gap: 8 }}>
 									<select
@@ -295,15 +296,15 @@ export function MediaStage({
 											outline: "none",
 										}}
 									>
-										<option value="auto">Auto</option>
+										<option value="auto">{t("mediaStage.auto")}</option>
 										<option value="en">English</option>
 										<option value="fr">Français</option>
 										<option value="es">Español</option>
 									</select>
 									<button
 										type="button"
-										title="Regenerate"
-										aria-label="Regenerate"
+										title={t("mediaStage.regenerate")}
+										aria-label={t("mediaStage.regenerate")}
 										disabled={!onRegenerateAsset || assetStatuses?.[selected.id] === "running"}
 										onClick={() => {
 											if (onRegenerateAsset) void onRegenerateAsset(selected.id, lang);
@@ -342,11 +343,9 @@ export function MediaStage({
 								{transcript ? (
 									(transcript.segments ?? [])
 										.map((seg) => (seg as { text?: string }).text ?? "")
-										.join(" ") || "Transcript is empty."
+										.join(" ") || t("mediaStage.transcriptEmpty")
 								) : (
-									<span style={{ color: "var(--muted)" }}>
-										Not generated yet — pick a language and click regenerate.
-									</span>
+									<span style={{ color: "var(--muted)" }}>{t("mediaStage.notGeneratedHint")}</span>
 								)}
 							</div>
 						</div>

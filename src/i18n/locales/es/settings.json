@@ -8,7 +8,8 @@
 			"title": "Modo de enfoque",
 			"manual": "Manual",
 			"auto": "Auto",
-			"autoDescription": "La cámara sigue la posición del cursor grabado"
+			"autoDescription": "La cámara sigue la posición del cursor grabado",
+			"lockedDisclaimer": "Controlado por el interruptor global de enfoque automático en la línea de tiempo. Desactívalo para configurar el modo de enfoque por cada zoom."
 		},
 		"threeD": {
 			"title": "Rotación 3D",
@@ -211,6 +212,7 @@
 		"errorLoadFailed": "No se pudo cargar la fuente. Por favor verifica que la URL de Google Fonts sea correcta."
 	},
 	"cursor": {
+		"title": "Cursor",
 		"theme": "Estilo del cursor",
 		"themeDefault": "Predeterminado",
 		"show": "Mostrar cursor",
@@ -218,7 +220,8 @@
 		"smoothing": "Suavizado",
 		"motionBlur": "Desenfoque de movimiento",
 		"clickBounce": "Rebote al clic",
-		"clipToBounds": "Recortar al lienzo"
+		"clipToBounds": "Recortar al lienzo",
+		"clipToBoundsDescription": "Mantiene el cursor dentro del cuadro del vídeo. Desactívalo para dejar que el cursor sobrepase los bordes; útil al hacer zoom o desplazar la imagen."
 	},
 	"language": {
 		"title": "Idioma"
@@ -226,5 +229,9 @@
 	"timeline": {
 		"title": "Línea de tiempo",
 		"waveform": "Mostrar forma de onda en pista de recorte"
+	},
+	"facets": {
+		"captions": "Subtítulos",
+		"transcript": "Transcripción"
 	}
 }

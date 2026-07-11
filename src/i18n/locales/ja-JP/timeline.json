@@ -2,6 +2,10 @@
 	"buttons": {
 		"addZoom": "ズームを追加 (Z)",
 		"suggestZooms": "カーソル位置からズームを提案",
+		"autoZoomOn": "自動ズーム提案がオン — クリックすると提案されたズームを削除します",
+		"autoZoomOff": "自動ズーム提案がオフ — クリックするとカーソル位置からズームを提案します",
+		"autoFocusAllOn": "すべてのズームでオートフォーカスがオン — クリックするとすべて手動に切り替わります",
+		"autoFocusAllOff": "すべてのズームでオートフォーカスをオンにする（カメラがカーソルに追従）",
 		"addTrim": "トリムを追加 (T)",
 		"addAnnotation": "注釈を追加 (A)",
 		"addBlur": "ぼかしを追加 (B)",
@@ -57,5 +61,32 @@
 	"success": {
 		"addedZoomSuggestions": "カーソルに基づくズーム提案を {{count}} 件追加しました",
 		"addedZoomSuggestionsPlural": "カーソルに基づくズーム提案を {{count}} 件追加しました"
+	},
+	"toolbar": {
+		"autoEnhance": "自動強化",
+		"automaticZooms": "自動ズーム",
+		"automaticZoomsHint": "記録されたカーソルの動きから",
+		"smartZoomsAndCuts": "スマートズーム＋カット",
+		"smartZoomsAndCutsHint": "AIを使用",
+		"comment": "コメント",
+		"aspectRatio": "アスペクト比",
+		"timelineTools": "タイムラインツール",
+		"arrangeClips": "クリップを配置",
+		"arrangeClipsHint": "下のクリップをドラッグして並べ替えるか、新しいクリップをドロップします",
+		"newAnnotation": "新しい注釈",
+		"noAnnotationsYet": "まだ注釈がありません",
+		"constantSpeed": "一定速度",
+		"noTrims": "トリムなし",
+		"dragToReorderHint": "ドラッグして並べ替え・ダブルクリックでイン/アウトポイントを編集",
+		"editInOutPoints": "イン/アウトポイントを編集",
+		"deleteClip": "クリップを削除",
+		"dropToAdd": "ドロップしてタイムラインに追加",
+		"importRecordingFirst": "先に録画をインポートしてください",
+		"noAutoZoomMoments": "自動ズームの瞬間が見つかりません",
+		"noAutoZoomMomentsDescription": "この録画にはカーソルの動きのデータがないか、既存のズームがすでに重要な瞬間をカバーしています。",
+		"addedAutoZoom": "自動ズームを {{count}} 件追加しました",
+		"addedAutoZoomPlural": "自動ズームを {{count}} 件追加しました",
+		"autoZoomFailed": "自動ズームに失敗しました",
+		"aiEnhanceRequested": "AIエージェントにこの録画の強化を依頼しました"
 	}
 }

@@ -16,6 +16,53 @@
 
 import type { AxcutAsset, AxcutClip, AxcutTranscript, AxcutTrimRange, AxcutWord } from "../schema";
 
+/** Gaps between words at least this long are surfaced as a `[silence]` token. */
+export const SILENCE_THRESHOLD_SEC = 0.2;
+
+/** True for the synthetic `[silence]` pseudo-words inserted by `withSilenceGaps`. */
+export function isSilenceWord(word: AxcutWord): boolean {
+	return word.id.startsWith("silence_");
+}
+
+/**
+ * Insert a synthetic `[silence]` pseudo-word into every gap of at least
+ * `SILENCE_THRESHOLD_SEC` between consecutive words (and at the clip's
+ * leading/trailing edges). These behave like any other word for trim
+ * tagging/runs — `buildClipSection` marks them kept/removed the same way —
+ * so the transcript panel can show already-trimmed silences distinctly
+ * from untrimmed ones and let the user trim/restore them directly.
+ */
+function withSilenceGaps(
+	words: AxcutWord[],
+	clipStartSec: number,
+	clipEndSec: number | undefined,
+): AxcutWord[] {
+	const sorted = [...words].sort((a, b) => a.startSec - b.startSec);
+	const result: AxcutWord[] = [];
+	let cursor = clipStartSec;
+	let n = 0;
+	const pushGap = (start: number, end: number) => {
+		if (end - start < SILENCE_THRESHOLD_SEC) return;
+		n += 1;
+		result.push({
+			id: `silence_${n}`,
+			segmentId: "silence",
+			startSec: start,
+			endSec: end,
+			text: "[silence]",
+		});
+	};
+	for (const word of sorted) {
+		pushGap(cursor, word.startSec);
+		result.push(word);
+		cursor = Math.max(cursor, word.endSec);
+	}
+	if (typeof clipEndSec === "number" && Number.isFinite(clipEndSec)) {
+		pushGap(cursor, clipEndSec);
+	}
+	return result;
+}
+
 /** A contiguous run of removed words inside one clip's source range. */
 export interface TrimRun {
 	/** Id of the trim range this run came from (used by the bin-icon restore). */
@@ -81,7 +128,11 @@ export function buildClipSection(
 	);
 
 	const words = transcript
-		? wordsInRange(transcript, clip.sourceStartSec, clip.sourceEndSec ?? Infinity)
+		? withSilenceGaps(
+				wordsInRange(transcript, clip.sourceStartSec, clip.sourceEndSec ?? Infinity),
+				clip.sourceStartSec,
+				clip.sourceEndSec,
+			)
 		: [];
 	const tagged: ClipWord[] = words.map((word) => {
 		const covering = findCoveringTrim(word, clipTrims);

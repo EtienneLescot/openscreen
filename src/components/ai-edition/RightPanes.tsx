@@ -44,6 +44,7 @@ import {
 	type ClipSection,
 	type ClipWord,
 	findCueWordId,
+	isSilenceWord,
 	type TrimRun,
 } from "@/lib/ai-edition/timeline/aggregated-transcript";
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
@@ -853,7 +854,9 @@ function TranscriptClipBlock({
 							key={cw.word.id}
 							cw={cw}
 							isCue={cw.word.id === cueWordId}
+							assetId={clip.assetId}
 							onRestore={removeTrimRun}
+							onAddTrimRange={onAddTrimRange}
 						/>
 					))}
 				</div>
@@ -869,14 +872,94 @@ function TranscriptClipBlock({
 function TranscriptWord({
 	cw,
 	isCue,
+	assetId,
 	onRestore,
+	onAddTrimRange,
 }: {
 	cw: ClipWord;
 	isCue: boolean;
+	assetId: string;
 	onRestore: (run: TrimRun) => void;
+	onAddTrimRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
 }) {
 	const [hover, setHover] = useState(false);
 	const removed = !cw.kept;
+
+	if (isSilenceWord(cw.word)) {
+		const durationSec = cw.word.endSec - cw.word.startSec;
+		const label = `[silence ${durationSec.toFixed(1)}s]`;
+		if (removed) {
+			return (
+				<button
+					type="button"
+					contentEditable={false}
+					data-word-id={cw.word.id}
+					data-silence="true"
+					title={`Restore silence (${durationSec.toFixed(1)}s)`}
+					aria-label={`Restore silence (${durationSec.toFixed(1)}s)`}
+					onClick={(e) => {
+						e.stopPropagation();
+						onRestore({
+							trimId: cw.trimId ?? "",
+							assetId: "",
+							startWordIndex: 0,
+							endWordIndex: 0,
+							durationSec: 0,
+						});
+					}}
+					style={{
+						display: "inline-flex",
+						alignItems: "center",
+						margin: "0 3px 2px 0",
+						padding: "1px 6px",
+						borderRadius: 999,
+						border: "1px solid var(--danger)",
+						background: "var(--danger-soft)",
+						color: "var(--danger)",
+						font: "600 11px/1.5 var(--font-mono)",
+						textDecoration: "line-through",
+						cursor: "pointer",
+					}}
+				>
+					{label}
+				</button>
+			);
+		}
+		return (
+			<button
+				type="button"
+				contentEditable={false}
+				data-word-id={cw.word.id}
+				data-silence="true"
+				title={`Trim silence (${durationSec.toFixed(1)}s)`}
+				aria-label={`Trim silence (${durationSec.toFixed(1)}s)`}
+				onClick={(e) => {
+					e.stopPropagation();
+					onAddTrimRange(
+						assetId,
+						cw.word.startSec,
+						cw.word.endSec,
+						`Skip silence ${formatMs(cw.word.startSec * 1000)}-${formatMs(cw.word.endSec * 1000)}.`,
+					);
+				}}
+				style={{
+					display: "inline-flex",
+					alignItems: "center",
+					margin: "0 3px 2px 0",
+					padding: "1px 6px",
+					borderRadius: 999,
+					border: "1px dashed var(--border-hi)",
+					background: "transparent",
+					color: "var(--muted)",
+					font: "500 11px/1.5 var(--font-mono)",
+					cursor: "pointer",
+				}}
+			>
+				{label}
+			</button>
+		);
+	}
+
 	return (
 		<span
 			data-word-id={cw.word.id}

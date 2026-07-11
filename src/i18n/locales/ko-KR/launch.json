@@ -10,6 +10,7 @@
 		"openProject": "프로젝트 열기",
 		"useVerticalTray": "세로 트레이 사용",
 		"useHorizontalTray": "가로 트레이 사용",
+		"openStudio": "스튜디오 열기",
 		"openNotes": "노트 열기",
 		"openNotesPlaceholder": "여기에 메모를 입력하세요...",
 		"notesToolbar": {
@@ -27,7 +28,12 @@
 		"disableSystemAudio": "시스템 오디오 비활성화",
 		"enableMicrophone": "마이크 활성화",
 		"disableMicrophone": "마이크 비활성화",
-		"defaultMicrophone": "기본 마이크"
+		"defaultMicrophone": "기본 마이크",
+		"systemAudio": "시스템 오디오",
+		"microphone": "마이크",
+		"on": "켜짐",
+		"off": "꺼짐",
+		"inputDevice": "입력 장치"
 	},
 	"webcam": {
 		"enableWebcam": "웹캠 활성화",
@@ -35,7 +41,9 @@
 		"defaultCamera": "기본 카메라",
 		"searching": "검색 중...",
 		"noneFound": "카메라를 찾을 수 없음",
-		"unavailable": "카메라를 사용할 수 없음"
+		"unavailable": "카메라를 사용할 수 없음",
+		"camera": "카메라",
+		"cameraDevice": "카메라 장치"
 	},
 	"cursor": {
 		"useEditableCursor": "편집 가능한 커서 사용",
@@ -45,6 +53,9 @@
 		"loading": "소스 불러오는 중...",
 		"screens": "화면 ({{count}}개)",
 		"windows": "창 ({{count}}개)",
+		"emptyTitle": "화면이나 창을 찾을 수 없음",
+		"emptyDescription": "화면 녹화 권한을 방금 허용했다면 이 선택기를 새로고침하세요. macOS에서는 OpenScreen을 다시 열어야 할 수도 있습니다.",
+		"loadFailedDescription": "OpenScreen이 캡처 소스를 불러오지 못했습니다. 이 선택기를 새로고침한 후 다시 시도하세요.",
 		"defaultSourceName": "화면"
 	},
 	"recording": {

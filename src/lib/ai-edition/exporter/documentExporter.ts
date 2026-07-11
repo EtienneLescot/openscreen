@@ -22,6 +22,7 @@ import {
 	type ZoomRegion,
 } from "@/components/video-editor/types";
 import {
+	type CropScheduleEntry,
 	type ExportFormat,
 	type ExportQuality,
 	GifExporter,
@@ -116,6 +117,29 @@ export function computeExportTrimRegions(
 	}));
 }
 
+const IDENTITY_CROP: CropRegion = { x: 0, y: 0, width: 1, height: 1 };
+
+// Crop is per-clip (clipSchema.cropRegion), applied clip-by-clip — not
+// per-frame interpolation. The export renderer switches to whichever entry's
+// [startSec, endSec) covers the current frame's SOURCE time right before
+// rendering it (see VideoExporter/GifExporter + FrameRenderer.setCropRegion).
+// Only clips on `primaryAssetId` matter here — export renders one continuous
+// source video (the primary asset), so a clip pointing at a different asset
+// has no meaningful source-time range against this one.
+export function computeCropSchedule(
+	clips: AxcutDocument["timeline"]["clips"],
+	sourceDurationSec: number,
+	primaryAssetId: string,
+): CropScheduleEntry[] {
+	return clips
+		.filter((c) => c.assetId === primaryAssetId)
+		.map((c) => ({
+			startSec: c.sourceStartSec,
+			endSec: c.sourceEndSec ?? sourceDurationSec,
+			cropRegion: c.cropRegion ?? IDENTITY_CROP,
+		}));
+}
+
 function extractLegacyField<T>(
 	legacy: Record<string, unknown> | null,
 	key: string,
@@ -170,12 +194,8 @@ export async function exportAxcutDocument(
 	const motionBlurAmount = extractLegacyField(legacy, "motionBlurAmount", 0);
 	const borderRadius = extractLegacyField(legacy, "borderRadius", 0);
 	const padding = extractLegacyField(legacy, "padding", 50);
-	const cropRegion = extractLegacyField<CropRegion>(legacy, "cropRegion", {
-		x: 0,
-		y: 0,
-		width: 1,
-		height: 1,
-	});
+	const cropSchedule = computeCropSchedule(clips, sourceDurationSec, asset.id);
+	const cropRegion: CropRegion = IDENTITY_CROP;
 	const webcamLayoutPreset = extractLegacyField(legacy, "webcamLayoutPreset", "picture-in-picture");
 	const webcamMaskShape = extractLegacyField(legacy, "webcamMaskShape", "rectangle");
 	const webcamMirrored = extractLegacyField(legacy, "webcamMirrored", false);
@@ -221,6 +241,7 @@ export async function exportAxcutDocument(
 		borderRadius,
 		padding,
 		cropRegion,
+		cropSchedule,
 		annotationRegions,
 		webcamLayoutPreset: webcamLayoutPreset as
 			| "picture-in-picture"

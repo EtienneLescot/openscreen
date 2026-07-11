@@ -21,11 +21,12 @@ import {
 } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { CropRegion } from "@/components/video-editor/types";
+import { useScopedT } from "@/contexts/I18nContext";
 import { toAxcutTranscriptDsl } from "@/lib/ai-edition/document/transcribe";
 import type { AxcutClip, AxcutTranscript } from "@/lib/ai-edition/schema";
 import { formatSeconds } from "@/lib/ai-edition/timeline/virtual-preview";
 import styles from "./NewEditorShell.module.css";
-import { type VideoSource, VirtualPreview } from "./VirtualPreview";
+import type { VideoSource } from "./VirtualPreview";
 
 // ponytail: keep the UI's language list literal in one place. Mirrors
 // `transcriptLanguageSchema` in schema/index.ts; if the schema gains a
@@ -96,6 +97,7 @@ export function ModalShell({
 	wide?: boolean;
 	children: ReactNode;
 }) {
+	const tc = useScopedT("common");
 	useEscape(open, onClose);
 	if (!open) return null;
 	return (
@@ -116,8 +118,8 @@ export function ModalShell({
 						type="button"
 						className={styles.closeBtn}
 						onClick={onClose}
-						title="Close"
-						aria-label="Close"
+						title={tc("actions.close")}
+						aria-label={tc("actions.close")}
 					>
 						<X size={18} />
 					</button>
@@ -149,21 +151,22 @@ export function OpenProjectModal({
 	onSelect,
 	onBrowse,
 }: OpenProjectModalProps) {
+	const t = useScopedT("editor");
 	const [query, setQuery] = useState("");
 	const filtered = projects.filter((p) => p.title.toLowerCase().includes(query.toLowerCase()));
 	return (
 		<ModalShell
 			open={open}
 			onClose={onClose}
-			title="Open project"
-			subtitle="Pick up an existing project or browse your files"
+			title={t("openProjectDialog.title")}
+			subtitle={t("openProjectDialog.subtitle")}
 			wide
 		>
 			<div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12 }}>
 				<FolderOpen size={14} style={{ color: "var(--muted)" }} />
 				<input
 					type="search"
-					placeholder="Search projects…"
+					placeholder={t("openProjectDialog.searchPlaceholder")}
 					value={query}
 					onChange={(e) => setQuery(e.target.value)}
 					style={{
@@ -182,7 +185,7 @@ export function OpenProjectModal({
 			<div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 12 }}>
 				{filtered.length === 0 ? (
 					<p style={{ color: "var(--muted)", fontSize: 12, padding: 16, textAlign: "center" }}>
-						No projects match "{query}".
+						{t("openProjectDialog.noMatches", { query })}
 					</p>
 				) : (
 					filtered.map((p) => {
@@ -281,7 +284,7 @@ export function OpenProjectModal({
 					>
 						↑↓
 					</kbd>{" "}
-					to navigate ·{" "}
+					{t("openProjectDialog.navigateHint")}{" "}
 					<kbd
 						style={{
 							font: "500 11px/1 var(--font-mono)",
@@ -294,7 +297,7 @@ export function OpenProjectModal({
 					>
 						Enter
 					</kbd>{" "}
-					to open
+					{t("openProjectDialog.openHint")}
 				</span>
 				<button
 					type="button"
@@ -305,7 +308,7 @@ export function OpenProjectModal({
 					}}
 				>
 					<FolderOpen size={14} />
-					Browse files…
+					{t("openProjectDialog.browseFiles")}
 				</button>
 			</div>
 		</ModalShell>
@@ -319,14 +322,16 @@ interface NewProjectModalProps extends BaseModalProps {
 }
 
 export function NewProjectModal({ open, onClose, onCreate }: NewProjectModalProps) {
-	const [title, setTitle] = useState("Untitled project");
+	const t = useScopedT("editor");
+	const tc = useScopedT("common");
+	const [title, setTitle] = useState(t("newProjectDialog.defaultTitle"));
 	const [template, setTemplate] = useState<Template>("blank");
 	return (
 		<ModalShell
 			open={open}
 			onClose={onClose}
-			title="New project"
-			subtitle="Choose a starting point and give it a name"
+			title={t("newProjectDialog.title")}
+			subtitle={t("newProjectDialog.subtitle")}
 		>
 			<div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
 				<div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
@@ -339,7 +344,7 @@ export function NewProjectModal({ open, onClose, onCreate }: NewProjectModalProp
 							color: "var(--muted)",
 						}}
 					>
-						Project name
+						{t("newProjectDialog.nameLabel")}
 					</label>
 					<input
 						id="np-name"
@@ -367,7 +372,7 @@ export function NewProjectModal({ open, onClose, onCreate }: NewProjectModalProp
 							color: "var(--muted)",
 						}}
 					>
-						Starting point
+						{t("newProjectDialog.startingPointLabel")}
 					</label>
 					<div
 						style={{
@@ -378,29 +383,29 @@ export function NewProjectModal({ open, onClose, onCreate }: NewProjectModalProp
 					>
 						<TemplateCell
 							icon={<FolderPlus size={18} />}
-							title="Blank project"
-							desc="Empty timeline, ready to import"
+							title={t("newProjectDialog.templates.blankTitle")}
+							desc={t("newProjectDialog.templates.blankDesc")}
 							active={template === "blank"}
 							onClick={() => setTemplate("blank")}
 						/>
 						<TemplateCell
 							icon={<Crop size={18} />}
-							title="Screen recording"
-							desc="Start system capture"
+							title={t("newProjectDialog.templates.screenRecordingTitle")}
+							desc={t("newProjectDialog.templates.screenRecordingDesc")}
 							active={template === "screen-recording"}
 							onClick={() => setTemplate("screen-recording")}
 						/>
 						<TemplateCell
 							icon={<Plus size={18} />}
-							title="Import media"
-							desc="Video, audio, images from disk"
+							title={t("mediaStage.importMedia")}
+							desc={t("newProjectDialog.templates.importMediaDesc")}
 							active={template === "import"}
 							onClick={() => setTemplate("import")}
 						/>
 						<TemplateCell
 							icon={<Crop size={18} />}
-							title="From template"
-							desc="Predefined storyboard"
+							title={t("newProjectDialog.templates.fromTemplateTitle")}
+							desc={t("newProjectDialog.templates.fromTemplateDesc")}
 							active={template === "template"}
 							onClick={() => setTemplate("template")}
 						/>
@@ -421,18 +426,18 @@ export function NewProjectModal({ open, onClose, onCreate }: NewProjectModalProp
 						className={`${styles.btn} ${styles.btnSecondary}`}
 						onClick={onClose}
 					>
-						Cancel
+						{tc("actions.cancel")}
 					</button>
 					<button
 						type="button"
 						className={`${styles.btn} ${styles.btnPrimary}`}
 						onClick={() => {
-							onCreate(title.trim() || "Untitled project");
+							onCreate(title.trim() || t("newProjectDialog.defaultTitle"));
 							onClose();
 						}}
 					>
 						<Plus size={14} />
-						Create project
+						{t("newProjectDialog.create")}
 					</button>
 				</div>
 			</div>
@@ -492,15 +497,6 @@ function TemplateCell({
 	);
 }
 
-interface CropModalProps extends BaseModalProps {
-	initialRegion: CropRegion;
-	onApply: (region: CropRegion) => void;
-	/** Primary video source to show as the real crop-preview frame. */
-	videoSources?: VideoSource[];
-	/** Seek the preview frame to this time (source-media seconds). */
-	currentTimeSec?: number;
-}
-
 // `ratio` is width/height (matches the label directly: "16:9" → 16/9 means
 // a region 16 units wide for every 9 tall).
 const CROP_RATIOS: Array<{ value: string; label: string; ratio: number | null }> = [
@@ -513,12 +509,19 @@ const CROP_RATIOS: Array<{ value: string; label: string; ratio: number | null }>
 	{ value: "21:9", label: "21:9", ratio: 21 / 9 },
 ];
 
-function detectRatio(r: CropRegion): string {
+// `region.width`/`region.height` are fractions of the source frame, not a
+// visual aspect ratio — a region that's 100% wide and 56.25% tall on a 16:9
+// source renders as a 16:9 rectangle on screen, not a "1 : 0.5625" one. The
+// actual on-screen ratio is the fraction ratio scaled by the source video's
+// own pixel aspect ratio, so detecting/applying a preset must go through
+// `videoAspectRatio` (source width/height in pixels) in both directions.
+function detectRatio(r: CropRegion, videoAspectRatio: number): string {
 	const candidates = CROP_RATIOS.filter((c) => c.ratio !== null);
-	const whRatio = r.height === 0 ? 0 : r.width / r.height;
+	if (r.height === 0) return "free";
+	const visualRatio = (r.width / r.height) * videoAspectRatio;
 	for (const c of candidates) {
 		if (c.ratio === null) continue;
-		if (Math.abs(whRatio - c.ratio) < 0.01) return c.value;
+		if (Math.abs(visualRatio - c.ratio) / c.ratio < 0.02) return c.value;
 	}
 	return "free";
 }
@@ -527,278 +530,6 @@ const MIN_PCT = 4;
 const clampPct = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
 type ResizeEdges = { left?: boolean; right?: boolean; top?: boolean; bottom?: boolean };
-
-export function CropModal({
-	open,
-	onClose,
-	initialRegion,
-	onApply,
-	videoSources = [],
-	currentTimeSec = 0,
-}: CropModalProps) {
-	const [xPct, setXPct] = useState(0);
-	const [yPct, setYPct] = useState(0);
-	const [wPct, setWPct] = useState(100);
-	const [hPct, setHPct] = useState(100);
-	const [ratio, setRatio] = useState("free");
-	const frameRef = useRef<HTMLDivElement | null>(null);
-	const videoRef = useRef<HTMLVideoElement | null>(null);
-	const activeSource = videoSources[0] ?? null;
-
-	// ponytail: sync local form state to the document region every time the
-	// modal opens. Doesn't run on every doc change — `open` is the trigger.
-	useEffect(() => {
-		if (!open) return;
-		setXPct(Math.round(initialRegion.x * 100));
-		setYPct(Math.round(initialRegion.y * 100));
-		setWPct(Math.round(initialRegion.width * 100));
-		setHPct(Math.round(initialRegion.height * 100));
-		setRatio(detectRatio(initialRegion));
-	}, [open, initialRegion]);
-
-	// Show the frame at the same point the user was looking at in the editor
-	// — a still, paused frame is enough to judge the crop, no playback needed.
-	useEffect(() => {
-		if (!open) return;
-		const v = videoRef.current;
-		if (!v) return;
-		const seek = () => {
-			v.pause();
-			if (Number.isFinite(currentTimeSec)) v.currentTime = currentTimeSec;
-		};
-		if (v.readyState >= 1) seek();
-		else v.addEventListener("loadedmetadata", seek, { once: true });
-		return () => v.removeEventListener("loadedmetadata", seek);
-	}, [open, currentTimeSec]);
-
-	const handleRatioChange = (next: string) => {
-		setRatio(next);
-		const candidate = CROP_RATIOS.find((c) => c.value === next);
-		if (candidate?.ratio && wPct > 0) {
-			const newH = Math.round(wPct / candidate.ratio);
-			setHPct(clampPct(newH, MIN_PCT, 100));
-		}
-	};
-
-	const handleApply = () => {
-		const next: CropRegion = {
-			x: Math.max(0, Math.min(1, xPct / 100)),
-			y: Math.max(0, Math.min(1, yPct / 100)),
-			width: Math.max(0.01, Math.min(1, wPct / 100)),
-			height: Math.max(0.01, Math.min(1, hPct / 100)),
-		};
-		onApply(next);
-		onClose();
-	};
-
-	// Drag the whole region (keeps size, moves x/y).
-	const startMove = (e: ReactPointerEvent) => {
-		e.preventDefault();
-		e.stopPropagation();
-		const el = frameRef.current;
-		if (!el) return;
-		const r = el.getBoundingClientRect();
-		const startX = e.clientX;
-		const startY = e.clientY;
-		const start = { x: xPct, y: yPct, w: wPct, h: hPct };
-		const move = (ev: PointerEvent) => {
-			const dxPct = ((ev.clientX - startX) / r.width) * 100;
-			const dyPct = ((ev.clientY - startY) / r.height) * 100;
-			setXPct(Math.round(clampPct(start.x + dxPct, 0, 100 - start.w)));
-			setYPct(Math.round(clampPct(start.y + dyPct, 0, 100 - start.h)));
-		};
-		const up = () => {
-			window.removeEventListener("pointermove", move);
-			window.removeEventListener("pointerup", up);
-		};
-		window.addEventListener("pointermove", move);
-		window.addEventListener("pointerup", up);
-	};
-
-	// Drag one of the 8 edge/corner handles to resize. When a fixed ratio is
-	// active, the opposite dimension follows to keep width/height locked.
-	const startResize = (edges: ResizeEdges) => (e: ReactPointerEvent) => {
-		e.preventDefault();
-		e.stopPropagation();
-		const el = frameRef.current;
-		if (!el) return;
-		const r = el.getBoundingClientRect();
-		const startX = e.clientX;
-		const startY = e.clientY;
-		const start = { x: xPct, y: yPct, w: wPct, h: hPct };
-		const activeRatio = CROP_RATIOS.find((c) => c.value === ratio)?.ratio ?? null;
-		const move = (ev: PointerEvent) => {
-			const dxPct = ((ev.clientX - startX) / r.width) * 100;
-			const dyPct = ((ev.clientY - startY) / r.height) * 100;
-			let { x, y, w, h } = start;
-			if (edges.left) {
-				const nx = clampPct(start.x + dxPct, 0, start.x + start.w - MIN_PCT);
-				w = start.w - (nx - start.x);
-				x = nx;
-			}
-			if (edges.right) {
-				w = clampPct(start.w + dxPct, MIN_PCT, 100 - start.x);
-			}
-			if (edges.top) {
-				const ny = clampPct(start.y + dyPct, 0, start.y + start.h - MIN_PCT);
-				h = start.h - (ny - start.y);
-				y = ny;
-			}
-			if (edges.bottom) {
-				h = clampPct(start.h + dyPct, MIN_PCT, 100 - start.y);
-			}
-			if (activeRatio) {
-				if (edges.left || edges.right) h = clampPct(w / activeRatio, MIN_PCT, 100 - y);
-				else if (edges.top || edges.bottom) w = clampPct(h * activeRatio, MIN_PCT, 100 - x);
-			}
-			setXPct(Math.round(x));
-			setYPct(Math.round(y));
-			setWPct(Math.round(w));
-			setHPct(Math.round(h));
-		};
-		const up = () => {
-			window.removeEventListener("pointermove", move);
-			window.removeEventListener("pointerup", up);
-		};
-		window.addEventListener("pointermove", move);
-		window.addEventListener("pointerup", up);
-	};
-
-	const handleStyle = (pos: React.CSSProperties): React.CSSProperties => ({
-		position: "absolute",
-		width: 10,
-		height: 10,
-		borderRadius: 3,
-		background: "var(--fg)",
-		border: "1px solid var(--overlay-dark)",
-		...pos,
-	});
-
-	return (
-		<ModalShell
-			open={open}
-			onClose={onClose}
-			title="Crop video"
-			subtitle="Drag the region or its handles to adjust the crop area"
-		>
-			<div
-				ref={frameRef}
-				style={{
-					position: "relative",
-					aspectRatio: "16 / 9",
-					background: "#0a0b0e",
-					borderRadius: "var(--r-md)",
-					border: "1px solid var(--border)",
-					overflow: "hidden",
-				}}
-			>
-				{activeSource ? (
-					<video
-						ref={videoRef}
-						src={activeSource.src}
-						muted
-						playsInline
-						style={{
-							position: "absolute",
-							inset: 0,
-							width: "100%",
-							height: "100%",
-							objectFit: "contain",
-							background: "#000",
-						}}
-					/>
-				) : null}
-				<div
-					style={{
-						position: "absolute",
-						left: `${xPct}%`,
-						top: `${yPct}%`,
-						width: `${wPct}%`,
-						height: `${hPct}%`,
-						border: "1.5px solid var(--fg)",
-						borderRadius: 4,
-						boxShadow: "0 0 0 9999px var(--overlay-dark)",
-						cursor: "move",
-					}}
-					onPointerDown={startMove}
-				>
-					<div
-						onPointerDown={startResize({ left: true, top: true })}
-						style={handleStyle({ left: -5, top: -5, cursor: "nwse-resize" })}
-					/>
-					<div
-						onPointerDown={startResize({ right: true, top: true })}
-						style={handleStyle({ right: -5, top: -5, cursor: "nesw-resize" })}
-					/>
-					<div
-						onPointerDown={startResize({ left: true, bottom: true })}
-						style={handleStyle({ left: -5, bottom: -5, cursor: "nesw-resize" })}
-					/>
-					<div
-						onPointerDown={startResize({ right: true, bottom: true })}
-						style={handleStyle({ right: -5, bottom: -5, cursor: "nwse-resize" })}
-					/>
-					<div
-						onPointerDown={startResize({ top: true })}
-						style={handleStyle({ left: "50%", top: -5, marginLeft: -5, cursor: "ns-resize" })}
-					/>
-					<div
-						onPointerDown={startResize({ bottom: true })}
-						style={handleStyle({ left: "50%", bottom: -5, marginLeft: -5, cursor: "ns-resize" })}
-					/>
-					<div
-						onPointerDown={startResize({ left: true })}
-						style={handleStyle({ top: "50%", left: -5, marginTop: -5, cursor: "ew-resize" })}
-					/>
-					<div
-						onPointerDown={startResize({ right: true })}
-						style={handleStyle({ top: "50%", right: -5, marginTop: -5, cursor: "ew-resize" })}
-					/>
-				</div>
-			</div>
-			<div
-				style={{
-					display: "grid",
-					gridTemplateColumns: "repeat(5, auto) 1fr auto",
-					gap: 10,
-					alignItems: "end",
-				}}
-			>
-				<CropField label="X" value={xPct} onChange={setXPct} />
-				<CropField label="Y" value={yPct} onChange={setYPct} />
-				<CropField label="W" value={wPct} onChange={setWPct} />
-				<CropField label="H" value={hPct} onChange={setHPct} />
-				<div className={styles.field} style={{ minWidth: 96 }}>
-					<label>Ratio</label>
-					<select value={ratio} onChange={(e) => handleRatioChange(e.target.value)}>
-						{CROP_RATIOS.map((r) => (
-							<option key={r.value} value={r.value}>
-								{r.label}
-							</option>
-						))}
-					</select>
-				</div>
-				<span
-					style={{
-						font: "500 11px/1 var(--font-mono)",
-						color: "var(--muted)",
-						alignSelf: "center",
-					}}
-				>
-					{wPct}% × {hPct}%
-				</span>
-				<button
-					type="button"
-					className={`${styles.btn} ${styles.btnPrimary}`}
-					style={{ height: 36, padding: "0 20px" }}
-					onClick={handleApply}
-				>
-					Done
-				</button>
-			</div>
-		</ModalShell>
-	);
-}
 
 function CropField({
 	label,
@@ -810,14 +541,33 @@ function CropField({
 	onChange: (n: number) => void;
 }) {
 	return (
-		<div className={styles.field}>
-			<label>{label}</label>
+		<div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 0 }}>
+			<label
+				style={{
+					font: "600 10px/1 var(--font-mono)",
+					letterSpacing: "0.04em",
+					textTransform: "uppercase",
+					color: "var(--muted)",
+				}}
+			>
+				{label}
+			</label>
 			<input
 				type="number"
 				value={value}
 				min={0}
 				max={100}
 				onChange={(e) => onChange(Number(e.target.value))}
+				style={{
+					width: "100%",
+					padding: "8px 10px",
+					font: "500 14px/1 var(--font-mono)",
+					color: "var(--fg-2)",
+					background: "var(--surface)",
+					border: "1px solid var(--border)",
+					borderRadius: 6,
+					outline: "none",
+				}}
 			/>
 		</div>
 	);
@@ -828,18 +578,25 @@ export interface AssetMeta {
 	durationSec?: number;
 }
 
+const IDENTITY_CROP: CropRegion = { x: 0, y: 0, width: 1, height: 1 };
+
 interface EditClipModalProps extends BaseModalProps {
 	clip: AxcutClip | null;
 	assetMeta: AssetMeta | null;
 	videoSources: VideoSource[];
-	onApply: (sourceStartSec: number, sourceEndSec: number) => void;
+	/** `cropRegion` is `undefined` when the crop section wasn't touched (Reset
+	 * back to the clip's stored value) — the caller can skip the write in that
+	 * case — and `null` when the user explicitly reset it to "no crop". */
+	onApply: (sourceStartSec: number, sourceEndSec: number, cropRegion?: CropRegion | null) => void;
 }
 
 // Mirrors Axcut's ClipEditDialog: an embedded preview of just this clip plus
 // a draggable dual-handle range over the asset's full source duration —
-// replaces the old numeric-input-only form. Only the source range is
-// editable here; the clip's timeline position is derived from resequencing
-// (see useTimeline.updateClipSourceRange), same as every other clip op.
+// replaces the old numeric-input-only form. Trim range AND crop are both
+// per-clip and both edited here (see clipSchema.cropRegion / useTimeline's
+// updateClipSourceRange + updateClipCrop) — crop used to be a document-wide
+// setting behind its own facet-rail button; it's a framing choice for one
+// piece of footage, so it belongs with the rest of this clip's edits.
 export function EditClipModal({
 	open,
 	onClose,
@@ -848,10 +605,29 @@ export function EditClipModal({
 	videoSources,
 	onApply,
 }: EditClipModalProps) {
+	const t = useScopedT("editor");
+	const tc = useScopedT("common");
+	const ts = useScopedT("settings");
 	const trackRef = useRef<HTMLDivElement | null>(null);
 	const [draftStart, setDraftStart] = useState(0);
 	const [draftEnd, setDraftEnd] = useState(0);
 	const [activeEdge, setActiveEdge] = useState<"start" | "end" | null>(null);
+
+	// Crop draft — percentages (0-100), same shape/units CropModal used to
+	// keep locally before it was folded in here.
+	const [cropXPct, setCropXPct] = useState(0);
+	const [cropYPct, setCropYPct] = useState(0);
+	const [cropWPct, setCropWPct] = useState(100);
+	const [cropHPct, setCropHPct] = useState(100);
+	const [cropRatio, setCropRatio] = useState("free");
+	const [cropTouched, setCropTouched] = useState(false);
+	// Source video's real pixel aspect ratio (width/height) — needed to convert
+	// between a preset's visual ratio (e.g. 16/9) and the crop region's
+	// fraction-of-frame width/height. 16/9 is just a placeholder until the
+	// crop <video>'s real metadata loads (see the effect below).
+	const [videoAspectRatio, setVideoAspectRatio] = useState(16 / 9);
+	const cropFrameRef = useRef<HTMLDivElement | null>(null);
+	const cropVideoRef = useRef<HTMLVideoElement | null>(null);
 
 	// ponytail: sync local drag state to the clip every time the modal opens.
 	// `open` is the trigger so external clip changes don't fight the user mid-edit.
@@ -860,24 +636,55 @@ export function EditClipModal({
 		setDraftStart(clip.sourceStartSec);
 		setDraftEnd(clip.sourceEndSec ?? clip.sourceStartSec);
 		setActiveEdge(null);
+		const region = clip.cropRegion ?? IDENTITY_CROP;
+		setCropXPct(Math.round(region.x * 100));
+		setCropYPct(Math.round(region.y * 100));
+		setCropWPct(Math.round(region.width * 100));
+		setCropHPct(Math.round(region.height * 100));
+		setCropTouched(false);
+	}, [open, clip]);
+
+	// Re-detect the active ratio preset whenever the stored region or the
+	// video's real aspect ratio changes — the latter only becomes accurate
+	// once the crop <video>'s metadata loads (see the effect below), so this
+	// re-runs a beat after the sync-on-open effect above with the real value.
+	// Skipped once the user starts touching the crop so it doesn't fight
+	// their own free-form edits.
+	useEffect(() => {
+		if (!open || !clip || cropTouched) return;
+		const region = clip.cropRegion ?? IDENTITY_CROP;
+		setCropRatio(detectRatio(region, videoAspectRatio));
+	}, [open, clip, videoAspectRatio, cropTouched]);
+
+	// Crop preview: a paused still frame is enough to judge a crop (mirrors
+	// the standalone CropModal this replaced) — seek once per open to the
+	// clip's original in-point, not on every trim drag.
+	useEffect(() => {
+		if (!open || !clip) return;
+		const v = cropVideoRef.current;
+		if (!v) return;
+		const seek = () => {
+			v.pause();
+			if (Number.isFinite(clip.sourceStartSec)) v.currentTime = clip.sourceStartSec;
+			if (v.videoWidth > 0 && v.videoHeight > 0) {
+				setVideoAspectRatio(v.videoWidth / v.videoHeight);
+			}
+		};
+		if (v.readyState >= 1) seek();
+		else v.addEventListener("loadedmetadata", seek, { once: true });
+		return () => v.removeEventListener("loadedmetadata", seek);
 	}, [open, clip]);
 
 	if (!clip) return null;
 
 	const sourceDurationSec = Math.max(assetMeta?.durationSec ?? 0, clip.sourceEndSec ?? 0, 0.001);
 	const durationSec = Math.max(0.001, draftEnd - draftStart);
-	const hasChanges =
+	const hasTrimChanges =
 		Math.abs(draftStart - clip.sourceStartSec) > 0.001 ||
 		Math.abs(draftEnd - (clip.sourceEndSec ?? 0)) > 0.001;
-	const previewClip: AxcutClip = {
-		...clip,
-		id: `${clip.id}:edit-preview`,
-		sourceStartSec: draftStart,
-		sourceEndSec: draftEnd,
-		timelineStartSec: 0,
-		timelineEndSec: durationSec,
-	};
+	const hasChanges = hasTrimChanges || cropTouched;
 	const clipSources = videoSources.filter((s) => s.id === clip.assetId);
+	const cropPreviewSource = clipSources[0] ?? null;
 
 	const startDrag = (edge: "start" | "end", event: ReactPointerEvent<HTMLButtonElement>) => {
 		const track = trackRef.current;
@@ -908,12 +715,128 @@ export function EditClipModal({
 		window.addEventListener("pointerup", end, { once: true });
 	};
 
+	const handleCropRatioChange = (next: string) => {
+		setCropTouched(true);
+		setCropRatio(next);
+		const candidate = CROP_RATIOS.find((c) => c.value === next);
+		if (candidate?.ratio && cropWPct > 0) {
+			// Convert the preset's visual ratio into the fraction-space ratio
+			// this crop's width/height percentages actually live in.
+			const fractionRatio = candidate.ratio / videoAspectRatio;
+			const newH = Math.round(cropWPct / fractionRatio);
+			setCropHPct(clampPct(newH, MIN_PCT, 100));
+		}
+	};
+
+	// Drag the whole crop region (keeps size, moves x/y).
+	const startCropMove = (e: ReactPointerEvent) => {
+		e.preventDefault();
+		e.stopPropagation();
+		const el = cropFrameRef.current;
+		if (!el) return;
+		const r = el.getBoundingClientRect();
+		const startX = e.clientX;
+		const startY = e.clientY;
+		const start = { x: cropXPct, y: cropYPct, w: cropWPct, h: cropHPct };
+		setCropTouched(true);
+		const move = (ev: PointerEvent) => {
+			const dxPct = ((ev.clientX - startX) / r.width) * 100;
+			const dyPct = ((ev.clientY - startY) / r.height) * 100;
+			setCropXPct(Math.round(clampPct(start.x + dxPct, 0, 100 - start.w)));
+			setCropYPct(Math.round(clampPct(start.y + dyPct, 0, 100 - start.h)));
+		};
+		const up = () => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+	};
+
+	// Drag one of the 8 edge/corner handles to resize. When a fixed ratio is
+	// active, the opposite dimension follows to keep width/height locked.
+	const startCropResize = (edges: ResizeEdges) => (e: ReactPointerEvent) => {
+		e.preventDefault();
+		e.stopPropagation();
+		const el = cropFrameRef.current;
+		if (!el) return;
+		const r = el.getBoundingClientRect();
+		const startX = e.clientX;
+		const startY = e.clientY;
+		const start = { x: cropXPct, y: cropYPct, w: cropWPct, h: cropHPct };
+		const activeRatio = CROP_RATIOS.find((c) => c.value === cropRatio)?.ratio ?? null;
+		// Same fraction-space conversion as handleCropRatioChange — locking to
+		// the raw visual ratio here would fight the source's own aspect ratio.
+		const activeFractionRatio = activeRatio ? activeRatio / videoAspectRatio : null;
+		setCropTouched(true);
+		const move = (ev: PointerEvent) => {
+			const dxPct = ((ev.clientX - startX) / r.width) * 100;
+			const dyPct = ((ev.clientY - startY) / r.height) * 100;
+			let { x, y, w, h } = start;
+			if (edges.left) {
+				const nx = clampPct(start.x + dxPct, 0, start.x + start.w - MIN_PCT);
+				w = start.w - (nx - start.x);
+				x = nx;
+			}
+			if (edges.right) {
+				w = clampPct(start.w + dxPct, MIN_PCT, 100 - start.x);
+			}
+			if (edges.top) {
+				const ny = clampPct(start.y + dyPct, 0, start.y + start.h - MIN_PCT);
+				h = start.h - (ny - start.y);
+				y = ny;
+			}
+			if (edges.bottom) {
+				h = clampPct(start.h + dyPct, MIN_PCT, 100 - start.y);
+			}
+			if (activeFractionRatio) {
+				if (edges.left || edges.right) h = clampPct(w / activeFractionRatio, MIN_PCT, 100 - y);
+				else if (edges.top || edges.bottom) w = clampPct(h * activeFractionRatio, MIN_PCT, 100 - x);
+			}
+			setCropXPct(Math.round(x));
+			setCropYPct(Math.round(y));
+			setCropWPct(Math.round(w));
+			setCropHPct(Math.round(h));
+		};
+		const up = () => {
+			window.removeEventListener("pointermove", move);
+			window.removeEventListener("pointerup", up);
+		};
+		window.addEventListener("pointermove", move);
+		window.addEventListener("pointerup", up);
+	};
+
+	const cropHandleStyle = (pos: React.CSSProperties): React.CSSProperties => ({
+		position: "absolute",
+		width: 10,
+		height: 10,
+		borderRadius: 3,
+		background: "var(--fg)",
+		border: "1px solid var(--overlay-dark)",
+		...pos,
+	});
+
 	const handleReset = () => {
 		setDraftStart(clip.sourceStartSec);
 		setDraftEnd(clip.sourceEndSec ?? clip.sourceStartSec);
+		const region = clip.cropRegion ?? IDENTITY_CROP;
+		setCropXPct(Math.round(region.x * 100));
+		setCropYPct(Math.round(region.y * 100));
+		setCropWPct(Math.round(region.width * 100));
+		setCropHPct(Math.round(region.height * 100));
+		setCropRatio(detectRatio(region, videoAspectRatio));
+		setCropTouched(false);
 	};
 	const handleApply = () => {
-		onApply(draftStart, draftEnd);
+		const nextCrop: CropRegion = {
+			x: Math.max(0, Math.min(1, cropXPct / 100)),
+			y: Math.max(0, Math.min(1, cropYPct / 100)),
+			width: Math.max(0.01, Math.min(1, cropWPct / 100)),
+			height: Math.max(0.01, Math.min(1, cropHPct / 100)),
+		};
+		const isIdentity =
+			nextCrop.x === 0 && nextCrop.y === 0 && nextCrop.width === 1 && nextCrop.height === 1;
+		onApply(draftStart, draftEnd, cropTouched ? (isIdentity ? null : nextCrop) : undefined);
 		onClose();
 	};
 
@@ -921,132 +844,306 @@ export function EditClipModal({
 		<ModalShell
 			open={open}
 			onClose={onClose}
-			title="Edit clip"
+			title={t("editClipDialog.title")}
 			subtitle={assetMeta?.label ?? undefined}
 			wide
 		>
 			<div
-				style={{
-					height: 220,
-					marginBottom: 16,
-					borderRadius: "var(--r-md)",
-					overflow: "hidden",
-					background: "var(--surface-2)",
-				}}
-			>
-				<VirtualPreview videoSources={clipSources} clips={[previewClip]} />
-			</div>
-
-			<div style={{ display: "flex", gap: 24, marginBottom: 16 }}>
-				<RangeStat label="Start" value={formatSeconds(draftStart)} />
-				<RangeStat label="End" value={formatSeconds(draftEnd)} />
-				<RangeStat label="Duration" value={formatSeconds(durationSec)} />
-			</div>
-
-			<div
-				style={{
-					display: "flex",
-					justifyContent: "space-between",
-					font: "500 10px/1.4 var(--font-mono)",
-					color: "var(--muted)",
-					marginBottom: 4,
-				}}
-			>
-				<span>0:00.0</span>
-				<span>{formatSeconds(sourceDurationSec)}</span>
-			</div>
-			<div
-				ref={trackRef}
+				ref={cropFrameRef}
 				style={{
 					position: "relative",
-					height: 32,
-					background: "var(--surface-2)",
-					borderRadius: "var(--r-sm)",
+					width: "100%",
+					height: 230,
+					maxWidth: 409,
+					margin: "0 auto 14px",
+					flexShrink: 0,
+					background: "#0a0b0e",
+					borderRadius: "var(--r-md)",
+					border: "1px solid var(--border)",
+					overflow: "hidden",
 				}}
 			>
-				<div
-					style={{
-						position: "absolute",
-						inset: 0,
-						width: `${(draftStart / sourceDurationSec) * 100}%`,
-						background: "var(--overlay-dark)",
-						borderRadius: "var(--r-sm) 0 0 var(--r-sm)",
-					}}
-				/>
-				<div
-					className={activeEdge ? styles.editClipRangeDragging : undefined}
-					style={{
-						position: "absolute",
-						top: 0,
-						bottom: 0,
-						left: `${(draftStart / sourceDurationSec) * 100}%`,
-						width: `${Math.max(0.5, (durationSec / sourceDurationSec) * 100)}%`,
-						background: "var(--accent-wash)",
-						border: "1px solid var(--accent)",
-						borderRadius: "var(--r-sm)",
-						display: "flex",
-						alignItems: "center",
-						justifyContent: "center",
-					}}
-				>
-					<button
-						type="button"
-						onPointerDown={(e) => startDrag("start", e)}
-						aria-label="Adjust clip start"
-						title="Adjust clip start"
+				{cropPreviewSource ? (
+					<video
+						ref={cropVideoRef}
+						src={cropPreviewSource.src}
+						muted
+						playsInline
 						style={{
 							position: "absolute",
-							left: -6,
-							top: 0,
-							bottom: 0,
-							width: 12,
-							cursor: "ew-resize",
-							background: "var(--accent)",
-							border: 0,
-							borderRadius: 3,
-							padding: 0,
+							inset: 0,
+							width: "100%",
+							height: "100%",
+							objectFit: "contain",
+							background: "#000",
 						}}
 					/>
-					<span
-						style={{
-							font: "500 11px/1.4 var(--font-mono)",
-							color: "var(--accent-on)",
-							pointerEvents: "none",
-							whiteSpace: "nowrap",
-						}}
-					>
-						{formatSeconds(draftStart)}–{formatSeconds(draftEnd)}
-					</span>
-					<button
-						type="button"
-						onPointerDown={(e) => startDrag("end", e)}
-						aria-label="Adjust clip end"
-						title="Adjust clip end"
+				) : null}
+				<div
+					style={{
+						position: "absolute",
+						left: `${cropXPct}%`,
+						top: `${cropYPct}%`,
+						width: `${cropWPct}%`,
+						height: `${cropHPct}%`,
+						border: "1.5px solid var(--fg)",
+						borderRadius: 4,
+						boxShadow: "0 0 0 9999px var(--overlay-dark)",
+						cursor: "move",
+					}}
+					onPointerDown={startCropMove}
+				>
+					<div
+						onPointerDown={startCropResize({ left: true, top: true })}
+						style={cropHandleStyle({ left: -5, top: -5, cursor: "nwse-resize" })}
+					/>
+					<div
+						onPointerDown={startCropResize({ right: true, top: true })}
+						style={cropHandleStyle({ right: -5, top: -5, cursor: "nesw-resize" })}
+					/>
+					<div
+						onPointerDown={startCropResize({ left: true, bottom: true })}
+						style={cropHandleStyle({ left: -5, bottom: -5, cursor: "nesw-resize" })}
+					/>
+					<div
+						onPointerDown={startCropResize({ right: true, bottom: true })}
+						style={cropHandleStyle({ right: -5, bottom: -5, cursor: "nwse-resize" })}
+					/>
+					<div
+						onPointerDown={startCropResize({ top: true })}
+						style={cropHandleStyle({ left: "50%", top: -5, marginLeft: -5, cursor: "ns-resize" })}
+					/>
+					<div
+						onPointerDown={startCropResize({ bottom: true })}
+						style={cropHandleStyle({
+							left: "50%",
+							bottom: -5,
+							marginLeft: -5,
+							cursor: "ns-resize",
+						})}
+					/>
+					<div
+						onPointerDown={startCropResize({ left: true })}
+						style={cropHandleStyle({ top: "50%", left: -5, marginTop: -5, cursor: "ew-resize" })}
+					/>
+					<div
+						onPointerDown={startCropResize({ right: true })}
+						style={cropHandleStyle({
+							top: "50%",
+							right: -5,
+							marginTop: -5,
+							cursor: "ew-resize",
+						})}
+					/>
+				</div>
+			</div>
+
+			<div style={{ flexShrink: 0 }}>
+				<div style={{ display: "flex", gap: 24, marginBottom: 10 }}>
+					<RangeStat label={t("editClipDialog.start")} value={formatSeconds(draftStart)} />
+					<RangeStat label={t("editClipDialog.end")} value={formatSeconds(draftEnd)} />
+					<RangeStat label={t("editClipDialog.duration")} value={formatSeconds(durationSec)} />
+				</div>
+
+				<div
+					style={{
+						display: "flex",
+						justifyContent: "space-between",
+						font: "500 10px/1.4 var(--font-mono)",
+						color: "var(--muted)",
+						marginBottom: 4,
+					}}
+				>
+					<span>0:00.0</span>
+					<span>{formatSeconds(sourceDurationSec)}</span>
+				</div>
+				<div
+					ref={trackRef}
+					style={{
+						position: "relative",
+						height: 32,
+						flexShrink: 0,
+						background: "var(--surface-2)",
+						borderRadius: "var(--r-sm)",
+					}}
+				>
+					<div
 						style={{
 							position: "absolute",
-							right: -6,
+							inset: 0,
+							width: `${(draftStart / sourceDurationSec) * 100}%`,
+							background: "var(--overlay-dark)",
+							borderRadius: "var(--r-sm) 0 0 var(--r-sm)",
+						}}
+					/>
+					<div
+						className={activeEdge ? styles.editClipRangeDragging : undefined}
+						style={{
+							position: "absolute",
 							top: 0,
 							bottom: 0,
-							width: 12,
-							cursor: "ew-resize",
-							background: "var(--accent)",
-							border: 0,
-							borderRadius: 3,
-							padding: 0,
+							left: `${(draftStart / sourceDurationSec) * 100}%`,
+							width: `${Math.max(0.5, (durationSec / sourceDurationSec) * 100)}%`,
+							background: "var(--accent-wash)",
+							border: "1px solid var(--accent)",
+							borderRadius: "var(--r-sm)",
+							display: "flex",
+							alignItems: "center",
+							justifyContent: "center",
+						}}
+					>
+						<button
+							type="button"
+							onPointerDown={(e) => startDrag("start", e)}
+							aria-label={t("editClipDialog.adjustStart")}
+							title={t("editClipDialog.adjustStart")}
+							style={{
+								position: "absolute",
+								left: -6,
+								top: 0,
+								bottom: 0,
+								width: 12,
+								cursor: "ew-resize",
+								background: "var(--accent)",
+								border: 0,
+								borderRadius: 3,
+								padding: 0,
+							}}
+						/>
+						<span
+							style={{
+								font: "500 11px/1.4 var(--font-mono)",
+								color: "var(--accent-on)",
+								pointerEvents: "none",
+								whiteSpace: "nowrap",
+							}}
+						>
+							{formatSeconds(draftStart)}–{formatSeconds(draftEnd)}
+						</span>
+						<button
+							type="button"
+							onPointerDown={(e) => startDrag("end", e)}
+							aria-label={t("editClipDialog.adjustEnd")}
+							title={t("editClipDialog.adjustEnd")}
+							style={{
+								position: "absolute",
+								right: -6,
+								top: 0,
+								bottom: 0,
+								width: 12,
+								cursor: "ew-resize",
+								background: "var(--accent)",
+								border: 0,
+								borderRadius: 3,
+								padding: 0,
+							}}
+						/>
+					</div>
+					<div
+						style={{
+							position: "absolute",
+							top: 0,
+							bottom: 0,
+							right: 0,
+							width: `${Math.max(0, ((sourceDurationSec - draftEnd) / sourceDurationSec) * 100)}%`,
+							background: "var(--overlay-dark)",
+							borderRadius: "0 var(--r-sm) var(--r-sm) 0",
 						}}
 					/>
 				</div>
+			</div>
+
+			<div
+				style={{
+					paddingTop: 8,
+					marginTop: 8,
+					flexShrink: 0,
+					borderTop: "1px solid var(--border-soft)",
+				}}
+			>
 				<div
 					style={{
-						position: "absolute",
-						top: 0,
-						bottom: 0,
-						right: 0,
-						width: `${Math.max(0, ((sourceDurationSec - draftEnd) / sourceDurationSec) * 100)}%`,
-						background: "var(--overlay-dark)",
-						borderRadius: "0 var(--r-sm) var(--r-sm) 0",
+						display: "grid",
+						gridTemplateColumns: "repeat(4, 1fr) 1.2fr auto",
+						gap: 10,
+						alignItems: "end",
 					}}
-				/>
+				>
+					<CropField
+						label={t("cropDialog.fieldX")}
+						value={cropXPct}
+						onChange={(v) => {
+							setCropTouched(true);
+							setCropXPct(v);
+						}}
+					/>
+					<CropField
+						label={t("cropDialog.fieldY")}
+						value={cropYPct}
+						onChange={(v) => {
+							setCropTouched(true);
+							setCropYPct(v);
+						}}
+					/>
+					<CropField
+						label={t("cropDialog.fieldW")}
+						value={cropWPct}
+						onChange={(v) => {
+							setCropTouched(true);
+							setCropWPct(v);
+						}}
+					/>
+					<CropField
+						label={t("cropDialog.fieldH")}
+						value={cropHPct}
+						onChange={(v) => {
+							setCropTouched(true);
+							setCropHPct(v);
+						}}
+					/>
+					<div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 110 }}>
+						<label
+							style={{
+								font: "600 10px/1 var(--font-mono)",
+								letterSpacing: "0.04em",
+								textTransform: "uppercase",
+								color: "var(--muted)",
+							}}
+						>
+							{ts("crop.ratio")}
+						</label>
+						<select
+							value={cropRatio}
+							onChange={(e) => handleCropRatioChange(e.target.value)}
+							style={{
+								width: "100%",
+								padding: "8px 10px",
+								font: "500 13px/1 var(--font-body)",
+								color: "var(--fg-2)",
+								background: "var(--surface)",
+								border: "1px solid var(--border)",
+								borderRadius: 6,
+								outline: "none",
+							}}
+						>
+							{CROP_RATIOS.map((r) => (
+								<option key={r.value} value={r.value}>
+									{r.value === "free" ? ts("crop.free") : r.label}
+								</option>
+							))}
+						</select>
+					</div>
+					<span
+						style={{
+							font: "500 11px/1 var(--font-mono)",
+							color: "var(--muted)",
+							alignSelf: "center",
+							whiteSpace: "nowrap",
+						}}
+					>
+						{cropWPct}% × {cropHPct}%
+					</span>
+				</div>
 			</div>
 
 			<div
@@ -1054,8 +1151,9 @@ export function EditClipModal({
 					display: "flex",
 					justifyContent: "space-between",
 					alignItems: "center",
-					paddingTop: 16,
-					marginTop: 16,
+					paddingTop: 10,
+					marginTop: 10,
+					flexShrink: 0,
 					borderTop: "1px solid var(--border-soft)",
 				}}
 			>
@@ -1065,7 +1163,7 @@ export function EditClipModal({
 					onClick={handleReset}
 					disabled={!hasChanges}
 				>
-					Reset
+					{t("editClipDialog.reset")}
 				</button>
 				<div style={{ display: "flex", gap: 8 }}>
 					<button
@@ -1073,7 +1171,7 @@ export function EditClipModal({
 						className={`${styles.btn} ${styles.btnSecondary}`}
 						onClick={onClose}
 					>
-						Cancel
+						{tc("actions.cancel")}
 					</button>
 					<button
 						type="button"
@@ -1082,7 +1180,7 @@ export function EditClipModal({
 						disabled={!hasChanges}
 					>
 						<Pencil size={14} />
-						Apply
+						{t("editClipDialog.apply")}
 					</button>
 				</div>
 			</div>
@@ -1109,25 +1207,6 @@ interface UnsavedChangesModalProps extends BaseModalProps {
 	onChoose: (choice: UnsavedChoice) => void;
 }
 
-const ACTION_COPY: Record<UnsavedChangesModalProps["action"], { title: string; body: string }> = {
-	close: {
-		title: "Save changes before closing?",
-		body: "Your project has unsaved changes. Save them now, discard them, or stay in the editor.",
-	},
-	new: {
-		title: "Save changes before creating a new project?",
-		body: "The current project has unsaved changes. Save them first, discard them, or cancel.",
-	},
-	open: {
-		title: "Save changes before opening another project?",
-		body: "The current project has unsaved changes. Save them first, discard them, or cancel.",
-	},
-	record: {
-		title: "Save changes before starting a new recording?",
-		body: "The current project has unsaved changes. Save them first, discard them, or cancel.",
-	},
-};
-
 export function UnsavedChangesModal({
 	open,
 	onClose,
@@ -1135,7 +1214,18 @@ export function UnsavedChangesModal({
 	busy,
 	onChoose,
 }: UnsavedChangesModalProps) {
-	const copy = ACTION_COPY[action];
+	const td = useScopedT("dialogs");
+	const tc = useScopedT("common");
+	const titleKeys: Record<UnsavedChangesModalProps["action"], string> = {
+		close: "modal.closeTitle",
+		new: "modal.newTitle",
+		open: "modal.openTitle",
+		record: "modal.recordTitle",
+	};
+	const copy = {
+		title: td(titleKeys[action]),
+		body: action === "close" ? td("modal.closeBody") : td("modal.sharedBody"),
+	};
 	return (
 		<ModalShell open={open} onClose={onClose} title={copy.title} subtitle={copy.body}>
 			<div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 4 }}>
@@ -1158,7 +1248,7 @@ export function UnsavedChangesModal({
 						color: "var(--fg-2)",
 					}}
 				>
-					The current project has not been saved to disk yet.
+					{td("modal.notSavedYet")}
 				</div>
 			</div>
 			<div
@@ -1176,7 +1266,7 @@ export function UnsavedChangesModal({
 					onClick={() => onChoose("cancel")}
 					disabled={busy}
 				>
-					Cancel
+					{tc("actions.cancel")}
 				</button>
 				<button
 					type="button"
@@ -1184,7 +1274,7 @@ export function UnsavedChangesModal({
 					onClick={() => onChoose("discard")}
 					disabled={busy}
 				>
-					Discard
+					{td("modal.discard")}
 				</button>
 				<button
 					type="button"
@@ -1192,7 +1282,7 @@ export function UnsavedChangesModal({
 					onClick={() => onChoose("save")}
 					disabled={busy}
 				>
-					{busy ? "Saving…" : "Save & continue"}
+					{busy ? td("modal.saving") : td("modal.saveAndContinue")}
 				</button>
 			</div>
 		</ModalShell>
@@ -1220,12 +1310,13 @@ export function InsertSourceModal({
 	onAddAfter,
 	onSplit,
 }: InsertSourceModalProps) {
+	const t = useScopedT("editor");
 	return (
 		<ModalShell
 			open={open}
 			onClose={onClose}
-			title="Insert source"
-			subtitle={`Where to place "${assetLabel}" on the timeline?`}
+			title={t("insertSourceDialog.title")}
+			subtitle={t("insertSourceDialog.subtitle", { assetLabel })}
 		>
 			<div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
 				<button
@@ -1244,9 +1335,9 @@ export function InsertSourceModal({
 						opacity: canAddBefore ? 1 : 0.5,
 					}}
 				>
-					<strong>Add before</strong>
+					<strong>{t("insertSourceDialog.addBefore")}</strong>
 					<div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-						Insert the whole source before the target clip.
+						{t("insertSourceDialog.addBeforeDesc")}
 					</div>
 				</button>
 				<button
@@ -1265,9 +1356,9 @@ export function InsertSourceModal({
 						opacity: canAddAfter ? 1 : 0.5,
 					}}
 				>
-					<strong>Add after</strong>
+					<strong>{t("insertSourceDialog.addAfter")}</strong>
 					<div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-						Insert the whole source after the target clip.
+						{t("insertSourceDialog.addAfterDesc")}
 					</div>
 				</button>
 				<button
@@ -1286,9 +1377,9 @@ export function InsertSourceModal({
 						opacity: canSplit ? 1 : 0.5,
 					}}
 				>
-					<strong>Split here and insert</strong>
+					<strong>{t("insertSourceDialog.split")}</strong>
 					<div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-						Split the target clip at the drop point and insert the source in between.
+						{t("insertSourceDialog.splitDesc")}
 					</div>
 				</button>
 			</div>
@@ -1317,6 +1408,8 @@ export function SourceTranscriptModal({
 	isFailed,
 	onRegenerate,
 }: SourceTranscriptModalProps) {
+	const t = useScopedT("editor");
+	const tc = useScopedT("common");
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [playTime, setPlayTime] = useState(0);
@@ -1349,18 +1442,18 @@ export function SourceTranscriptModal({
 		transcript?.language && transcript.language !== "auto" ? transcript.language : null;
 
 	const statusLabel = isTranscribing
-		? "Generating"
+		? t("mediaStage.generating")
 		: isFailed
-			? "Generation failed"
+			? t("mediaStage.generationFailed")
 			: transcript
-				? "Generated"
-				: "Not generated yet";
+				? t("mediaStage.generated")
+				: t("mediaStage.notGeneratedYet");
 
 	const transcriptBody = transcript
 		? toAxcutTranscriptDsl(transcript, assetLabel || undefined, duration ?? undefined)
 		: null;
 
-	const playLabel = isPlaying ? "Pause" : "Play";
+	const playLabel = isPlaying ? tc("playback.pause") : tc("playback.play");
 
 	const togglePlay = () => {
 		const v = videoRef.current;
@@ -1386,7 +1479,13 @@ export function SourceTranscriptModal({
 	};
 
 	return (
-		<ModalShell open={open} onClose={onClose} title="Source Transcript" subtitle={assetLabel} wide>
+		<ModalShell
+			open={open}
+			onClose={onClose}
+			title={t("mediaStage.sourceTranscript")}
+			subtitle={assetLabel}
+			wide
+		>
 			<div
 				style={{
 					display: "grid",
@@ -1432,7 +1531,7 @@ export function SourceTranscriptModal({
 								font: "500 12px var(--font-body)",
 							}}
 						>
-							No preview available
+							{t("mediaStage.noPreviewAvailable")}
 						</div>
 					)}
 					<div
@@ -1491,8 +1590,8 @@ export function SourceTranscriptModal({
 						</button>
 						<button
 							type="button"
-							aria-label="Restart"
-							title="Restart"
+							aria-label={t("mediaStage.restart")}
+							title={t("mediaStage.restart")}
 							onClick={restart}
 							style={{
 								background: "transparent",
@@ -1510,8 +1609,8 @@ export function SourceTranscriptModal({
 						</button>
 						<button
 							type="button"
-							aria-label="Fullscreen"
-							title="Fullscreen"
+							aria-label={tc("playback.fullscreen")}
+							title={tc("playback.fullscreen")}
 							onClick={requestFullscreen}
 							style={{
 								background: "transparent",
@@ -1550,7 +1649,7 @@ export function SourceTranscriptModal({
 									boxShadow: "0 0 0 3px var(--accent-soft)",
 									marginLeft: 6,
 								}}
-								aria-label="Transcribing"
+								aria-label={t("mediaStage.transcribing")}
 							/>
 						) : (
 							<span
@@ -1611,7 +1710,7 @@ export function SourceTranscriptModal({
 									border: "1px solid color-mix(in srgb, var(--success) 22%, transparent)",
 								}}
 							>
-								Detected language: {detectedLanguage}
+								{t("mediaStage.detectedLanguage", { language: detectedLanguage })}
 							</span>
 						) : null}
 					</div>
@@ -1622,7 +1721,7 @@ export function SourceTranscriptModal({
 								color: "var(--muted)",
 							}}
 						>
-							Regenerate as
+							{t("mediaStage.regenerateAs")}
 						</label>
 						<div
 							style={{
@@ -1633,7 +1732,7 @@ export function SourceTranscriptModal({
 							}}
 						>
 							<select
-								aria-label="Regenerate as"
+								aria-label={t("mediaStage.regenerateAs")}
 								value={regenLang}
 								disabled={isTranscribing}
 								onChange={(e) => setRegenLang(e.target.value as TranscriptLanguage)}
@@ -1649,14 +1748,14 @@ export function SourceTranscriptModal({
 							>
 								{REGEN_LANGUAGES.map((code) => (
 									<option key={code} value={code}>
-										{LANGUAGE_LABELS[code]}
+										{code === "auto" ? t("mediaStage.auto") : LANGUAGE_LABELS[code]}
 									</option>
 								))}
 							</select>
 							<button
 								type="button"
-								title="Regenerate"
-								aria-label="Regenerate"
+								title={t("mediaStage.regenerate")}
+								aria-label={t("mediaStage.regenerate")}
 								disabled={isTranscribing}
 								onClick={() => onRegenerate(regenLang)}
 								style={{
@@ -1712,10 +1811,10 @@ export function SourceTranscriptModal({
 					}}
 				>
 					{isFailed
-						? "Generation failed — pick a language and regenerate."
+						? t("mediaStage.generationFailedHint")
 						: isTranscribing
-							? "Transcribing…"
-							: "Not generated yet — pick a language and click regenerate."}
+							? t("mediaStage.transcribingEllipsis")
+							: t("mediaStage.notGeneratedHint")}
 				</div>
 			)}
 		</ModalShell>
@@ -1739,12 +1838,14 @@ export function AutoCaptionsModal({
 	onMaxWords,
 	onGenerate,
 }: CaptionsModalProps) {
+	const t = useScopedT("editor");
+	const tc = useScopedT("common");
 	return (
 		<ModalShell
 			open={open}
 			onClose={onClose}
-			title="Auto captions"
-			subtitle="Choose roughly how many words each caption shows at once. Timing is spread across the words in that phrase."
+			title={t("autoCaptions.dialogTitle")}
+			subtitle={t("autoCaptions.dialogDescription")}
 		>
 			<div style={{ display: "flex", gap: 12 }}>
 				<div style={{ display: "flex", flexDirection: "column", gap: 4, flex: 1 }}>
@@ -1756,7 +1857,7 @@ export function AutoCaptionsModal({
 							color: "var(--muted)",
 						}}
 					>
-						Min words per caption
+						{t("autoCaptions.minWords")}
 					</label>
 					<select
 						value={minWords}
@@ -1772,7 +1873,7 @@ export function AutoCaptionsModal({
 					>
 						{Array.from({ length: 12 }, (_, i) => i + 1).map((n) => (
 							<option key={n} value={n}>
-								{n} word{n === 1 ? "" : "s"}
+								{t("autoCaptions.wordsCount", { count: n })}
 							</option>
 						))}
 					</select>
@@ -1786,7 +1887,7 @@ export function AutoCaptionsModal({
 							color: "var(--muted)",
 						}}
 					>
-						Max words per caption
+						{t("autoCaptions.maxWords")}
 					</label>
 					<select
 						value={maxWords}
@@ -1802,7 +1903,7 @@ export function AutoCaptionsModal({
 					>
 						{Array.from({ length: 12 }, (_, i) => i + 1).map((n) => (
 							<option key={n} value={n} disabled={n < minWords}>
-								{n} word{n === 1 ? "" : "s"}
+								{t("autoCaptions.wordsCount", { count: n })}
 							</option>
 						))}
 					</select>
@@ -1818,10 +1919,10 @@ export function AutoCaptionsModal({
 				}}
 			>
 				<button type="button" className={`${styles.btn} ${styles.btnSecondary}`} onClick={onClose}>
-					Cancel
+					{tc("actions.cancel")}
 				</button>
 				<button type="button" className={`${styles.btn} ${styles.btnPrimary}`} onClick={onGenerate}>
-					Generate
+					{t("autoCaptions.generate")}
 				</button>
 			</div>
 		</ModalShell>
@@ -1844,12 +1945,14 @@ export function ChatHistoryModal({
 	onNew: _onNew,
 }: ChatHistoryModalProps) {
 	void _onNew;
+	const t = useScopedT("editor");
+	const tc = useScopedT("common");
 	return (
 		<ModalShell
 			open={open}
 			onClose={onClose}
-			title="Conversation history"
-			subtitle="Switch or create sessions"
+			title={t("chat.historyDialog.title")}
+			subtitle={t("chat.historyDialog.subtitle")}
 		>
 			{sessions.length === 0 ? (
 				<div
@@ -1860,7 +1963,7 @@ export function ChatHistoryModal({
 						font: "500 13px var(--font-body)",
 					}}
 				>
-					No conversations yet.
+					{t("chat.historyDialog.empty")}
 				</div>
 			) : (
 				<div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
@@ -1891,7 +1994,10 @@ export function ChatHistoryModal({
 							>
 								<span style={{ fontWeight: isActive ? 600 : 500 }}>{s.title}</span>
 								<span style={{ font: "500 11px/1 var(--font-mono)", color: "var(--muted)" }}>
-									{s.messageCount} msgs · {new Date(s.createdAt).toLocaleDateString()}
+									{t("chat.historyDialog.msgsCount", {
+										count: s.messageCount,
+										date: new Date(s.createdAt).toLocaleDateString(),
+									})}
 								</span>
 							</button>
 						);
@@ -1908,7 +2014,7 @@ export function ChatHistoryModal({
 				}}
 			>
 				<button type="button" className={`${styles.btn} ${styles.btnSecondary}`} onClick={onClose}>
-					Close
+					{tc("actions.close")}
 				</button>
 			</div>
 		</ModalShell>

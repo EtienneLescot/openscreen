@@ -10,6 +10,7 @@
 		"openProject": "Abrir proyecto",
 		"useVerticalTray": "Usar bandeja vertical",
 		"useHorizontalTray": "Usar bandeja horizontal",
+		"openStudio": "Abrir Studio",
 		"openNotes": "Abrir notas",
 		"openNotesPlaceholder": "Escribe tus notas aquí...",
 		"notesToolbar": {
@@ -27,7 +28,12 @@
 		"disableSystemAudio": "Desactivar audio del sistema",
 		"enableMicrophone": "Activar micrófono",
 		"disableMicrophone": "Desactivar micrófono",
-		"defaultMicrophone": "Micrófono predeterminado"
+		"defaultMicrophone": "Micrófono predeterminado",
+		"systemAudio": "Audio del sistema",
+		"microphone": "Micrófono",
+		"on": "Activado",
+		"off": "Desactivado",
+		"inputDevice": "Dispositivo de entrada"
 	},
 	"webcam": {
 		"enableWebcam": "Activar cámara web",
@@ -35,7 +41,9 @@
 		"defaultCamera": "Cámara predeterminada",
 		"searching": "Buscando...",
 		"noneFound": "No se encontró cámara",
-		"unavailable": "Cámara no disponible"
+		"unavailable": "Cámara no disponible",
+		"camera": "Cámara",
+		"cameraDevice": "Dispositivo de cámara"
 	},
 	"cursor": {
 		"useEditableCursor": "Usar cursor editable",
@@ -45,6 +53,9 @@
 		"loading": "Cargando fuentes...",
 		"screens": "Pantallas ({{count}})",
 		"windows": "Ventanas ({{count}})",
+		"emptyTitle": "No se encontraron pantallas ni ventanas",
+		"emptyDescription": "Si acabas de conceder permiso de grabación de pantalla, recarga este selector. En macOS puede que debas volver a abrir OpenScreen.",
+		"loadFailedDescription": "OpenScreen no pudo cargar las fuentes de captura. Recarga este selector e inténtalo de nuevo.",
 		"defaultSourceName": "Pantalla"
 	},
 	"recording": {

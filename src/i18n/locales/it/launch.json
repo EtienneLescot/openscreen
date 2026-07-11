@@ -10,6 +10,7 @@
 		"openProject": "Apri progetto",
 		"useVerticalTray": "Usa barra verticale",
 		"useHorizontalTray": "Usa barra orizzontale",
+		"openStudio": "Apri Studio",
 		"openNotes": "Apri note",
 		"openNotesPlaceholder": "Scrivi le tue note qui...",
 		"notesToolbar": {
@@ -27,7 +28,12 @@
 		"disableSystemAudio": "Disabilita audio di sistema",
 		"enableMicrophone": "Abilita microfono",
 		"disableMicrophone": "Disabilita microfono",
-		"defaultMicrophone": "Microfono predefinito"
+		"defaultMicrophone": "Microfono predefinito",
+		"systemAudio": "Audio di sistema",
+		"microphone": "Microfono",
+		"on": "Attivo",
+		"off": "Disattivo",
+		"inputDevice": "Dispositivo di input"
 	},
 	"webcam": {
 		"enableWebcam": "Abilita webcam",
@@ -35,7 +41,9 @@
 		"defaultCamera": "Fotocamera predefinita",
 		"searching": "Ricerca in corso...",
 		"noneFound": "Nessuna fotocamera trovata",
-		"unavailable": "Fotocamera non disponibile"
+		"unavailable": "Fotocamera non disponibile",
+		"camera": "Fotocamera",
+		"cameraDevice": "Dispositivo fotocamera"
 	},
 	"cursor": {
 		"useEditableCursor": "Usa cursore modificabile",
@@ -45,6 +53,9 @@
 		"loading": "Caricamento sorgenti...",
 		"screens": "Schermi ({{count}})",
 		"windows": "Finestre ({{count}})",
+		"emptyTitle": "Nessuno schermo o finestra trovati",
+		"emptyDescription": "Se hai appena concesso il permesso di registrazione dello schermo, ricarica questo selettore. Su macOS potrebbe essere necessario riaprire OpenScreen.",
+		"loadFailedDescription": "OpenScreen non è riuscito a caricare le sorgenti di cattura. Ricarica questo selettore e riprova.",
 		"defaultSourceName": "Schermo"
 	},
 	"recording": {

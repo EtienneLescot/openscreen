@@ -10,6 +10,7 @@
 		"openProject": "Открыть проект",
 		"useVerticalTray": "Использовать вертикальную панель",
 		"useHorizontalTray": "Использовать горизонтальную панель",
+		"openStudio": "Открыть студию",
 		"openNotes": "Открыть заметки",
 		"openNotesPlaceholder": "Пишите заметки здесь...",
 		"notesToolbar": {
@@ -27,7 +28,12 @@
 		"disableSystemAudio": "Отключить системное аудио",
 		"enableMicrophone": "Включить микрофон",
 		"disableMicrophone": "Отключить микрофон",
-		"defaultMicrophone": "Микрофон по умолчанию"
+		"defaultMicrophone": "Микрофон по умолчанию",
+		"systemAudio": "Системный звук",
+		"microphone": "Микрофон",
+		"on": "Вкл",
+		"off": "Выкл",
+		"inputDevice": "Устройство ввода"
 	},
 	"webcam": {
 		"enableWebcam": "Включить веб-камеру",
@@ -35,12 +41,17 @@
 		"defaultCamera": "Камера по умолчанию",
 		"searching": "Поиск...",
 		"noneFound": "Камера не найдена",
-		"unavailable": "Камера недоступна"
+		"unavailable": "Камера недоступна",
+		"camera": "Камера",
+		"cameraDevice": "Устройство камеры"
 	},
 	"sourceSelector": {
 		"loading": "Загрузка источников...",
 		"screens": "Экраны ({{count}})",
 		"windows": "Окна ({{count}})",
+		"emptyTitle": "Экраны или окна не найдены",
+		"emptyDescription": "Если вы только что предоставили разрешение на запись экрана, перезагрузите этот выбор источника. На macOS может потребоваться заново открыть OpenScreen.",
+		"loadFailedDescription": "OpenScreen не удалось загрузить источники захвата. Перезагрузите этот выбор источника и попробуйте снова.",
 		"defaultSourceName": "Экран"
 	},
 	"recording": {

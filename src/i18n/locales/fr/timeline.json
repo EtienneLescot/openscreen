@@ -2,6 +2,10 @@
 	"buttons": {
 		"addZoom": "Ajouter un zoom (Z)",
 		"suggestZooms": "Suggérer des zooms depuis le curseur",
+		"autoZoomOn": "Suggestions de zoom automatique activées — cliquez pour retirer les zooms suggérés",
+		"autoZoomOff": "Suggestions de zoom automatique désactivées — cliquez pour suggérer des zooms depuis le curseur",
+		"autoFocusAllOn": "Mise au point automatique activée pour tous les zooms — cliquez pour tout passer en manuel",
+		"autoFocusAllOff": "Activer la mise au point automatique pour tous les zooms (la caméra suit le curseur)",
 		"addTrim": "Ajouter une coupe (T)",
 		"addAnnotation": "Ajouter une annotation (A)",
 		"addSpeed": "Ajouter une vitesse (S)",
@@ -57,5 +61,32 @@
 	"success": {
 		"addedZoomSuggestions": "{{count}} suggestion de zoom basée sur le curseur ajoutée",
 		"addedZoomSuggestionsPlural": "{{count}} suggestions de zoom basées sur le curseur ajoutées"
+	},
+	"toolbar": {
+		"autoEnhance": "Amélioration auto",
+		"automaticZooms": "Zooms automatiques",
+		"automaticZoomsHint": "Basé sur le mouvement du curseur enregistré",
+		"smartZoomsAndCuts": "Zooms et coupes intelligents",
+		"smartZoomsAndCutsHint": "Avec l'IA",
+		"comment": "Commentaire",
+		"aspectRatio": "Format",
+		"timelineTools": "Outils de la timeline",
+		"arrangeClips": "Organiser les clips",
+		"arrangeClipsHint": "Glissez les clips ci-dessous pour les réorganiser ou en déposer de nouveaux",
+		"newAnnotation": "Nouvelle annotation",
+		"noAnnotationsYet": "Aucune annotation pour l'instant",
+		"constantSpeed": "Vitesse constante",
+		"noTrims": "Aucune coupe",
+		"dragToReorderHint": "Glissez pour réorganiser · double-cliquez pour modifier les points d'entrée/sortie",
+		"editInOutPoints": "Modifier les points d'entrée/sortie",
+		"deleteClip": "Supprimer le clip",
+		"dropToAdd": "Déposez pour ajouter à la timeline",
+		"importRecordingFirst": "Importez d'abord un enregistrement",
+		"noAutoZoomMoments": "Aucun moment de zoom automatique trouvé",
+		"noAutoZoomMomentsDescription": "Cet enregistrement n'a pas de données de mouvement du curseur, ou les zooms existants couvrent déjà les moments importants.",
+		"addedAutoZoom": "{{count}} zoom automatique ajouté",
+		"addedAutoZoomPlural": "{{count}} zooms automatiques ajoutés",
+		"autoZoomFailed": "Échec du zoom automatique",
+		"aiEnhanceRequested": "L'agent IA a été sollicité pour améliorer cet enregistrement"
 	}
 }

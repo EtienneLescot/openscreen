@@ -26,4 +26,4 @@ export {
 	VALID_GIF_FRAME_RATES,
 } from "./types";
 export { VideoFileDecoder } from "./videoDecoder";
-export { VideoExporter } from "./videoExporter";
+export { type CropScheduleEntry, resolveCropAt, VideoExporter } from "./videoExporter";

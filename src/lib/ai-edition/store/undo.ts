@@ -72,6 +72,11 @@ export function useUndoRedoShortcuts(onAfter: () => void) {
 				if (redo()) onAfterRef.current();
 				return;
 			}
+			if (ctrl && e.key.toLowerCase() === "y") {
+				e.preventDefault();
+				if (redo()) onAfterRef.current();
+				return;
+			}
 			if (ctrl && e.key === "z") {
 				e.preventDefault();
 				if (undo()) onAfterRef.current();

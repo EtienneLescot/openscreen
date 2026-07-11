@@ -64,10 +64,49 @@ let shimRecordingPrefs: ShimRecordingPrefs = {
 	}
 })();
 
+// ponytail: real file dialogs/ffmpeg probing aren't available in a plain
+// browser tab, but a hidden <input type="file"> + blob URL gets us a real,
+// playable video without any native bridge — NewEditorShell/toFileUrl
+// already special-case blob:/http(s):/data: asset paths and pass them
+// through untouched, so this just has to produce one.
+type PickVideoResult =
+	| { success: true; canceled: false; path: string; name: string }
+	| { success: false; canceled: true };
+
+function pickVideoFileViaInput(): Promise<PickVideoResult> {
+	return new Promise((resolve) => {
+		const input = document.createElement("input");
+		input.type = "file";
+		input.accept =
+			"video/mp4,video/quicktime,video/webm,video/x-matroska,video/x-msvideo,video/x-ms-wmv,video/*";
+		input.style.position = "fixed";
+		input.style.top = "-9999px";
+		let settled = false;
+		const finish = (result: PickVideoResult) => {
+			if (settled) return;
+			settled = true;
+			input.remove();
+			resolve(result);
+		};
+		input.addEventListener("change", () => {
+			const file = input.files?.[0];
+			if (!file) {
+				finish({ success: false, canceled: true });
+				return;
+			}
+			finish({ success: true, canceled: false, path: URL.createObjectURL(file), name: file.name });
+		});
+		// Chrome fires this when the picker is dismissed without a selection.
+		input.addEventListener("cancel", () => finish({ success: false, canceled: true }));
+		document.body.appendChild(input);
+		input.click();
+	});
+}
+
 function createShimElectronAPI() {
 	return {
 		assetBaseUrl: "",
-		openVideoFilePicker: () => Promise.resolve({ success: false, canceled: true }),
+		openVideoFilePicker: pickVideoFileViaInput,
 		openProjectFile: () => Promise.resolve({ success: false, canceled: true }),
 		pickExportSavePath: () => Promise.resolve({ success: false, canceled: true }),
 		writeExportToPath: () => Promise.resolve({ success: false }),

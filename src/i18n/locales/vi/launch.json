@@ -10,6 +10,7 @@
 		"openProject": "Mở dự án",
 		"useVerticalTray": "Dùng khay dọc",
 		"useHorizontalTray": "Dùng khay ngang",
+		"openStudio": "Mở Studio",
 		"openNotes": "Mở ghi chú",
 		"openNotesPlaceholder": "Ghi chú của bạn tại đây...",
 		"notesToolbar": {
@@ -27,7 +28,12 @@
 		"disableSystemAudio": "Tắt âm thanh hệ thống",
 		"enableMicrophone": "Bật micro",
 		"disableMicrophone": "Tắt micro",
-		"defaultMicrophone": "Micro Mặc định"
+		"defaultMicrophone": "Micro Mặc định",
+		"systemAudio": "Âm thanh hệ thống",
+		"microphone": "Micro",
+		"on": "Bật",
+		"off": "Tắt",
+		"inputDevice": "Thiết bị đầu vào"
 	},
 	"webcam": {
 		"enableWebcam": "Bật webcam",
@@ -35,12 +41,17 @@
 		"defaultCamera": "Máy ảnh Mặc định",
 		"searching": "Đang tìm kiếm...",
 		"noneFound": "Không tìm thấy máy ảnh",
-		"unavailable": "Máy ảnh không khả dụng"
+		"unavailable": "Máy ảnh không khả dụng",
+		"camera": "Máy ảnh",
+		"cameraDevice": "Thiết bị máy ảnh"
 	},
 	"sourceSelector": {
 		"loading": "Đang tải nguồn...",
 		"screens": "Màn hình ({{count}})",
 		"windows": "Cửa sổ ({{count}})",
+		"emptyTitle": "Không tìm thấy màn hình hoặc cửa sổ nào",
+		"emptyDescription": "Nếu bạn vừa cấp quyền ghi màn hình, hãy tải lại bộ chọn này. Trên macOS, bạn có thể cần mở lại OpenScreen.",
+		"loadFailedDescription": "OpenScreen không thể tải các nguồn ghi hình. Hãy tải lại bộ chọn này và thử lại.",
 		"defaultSourceName": "Màn hình"
 	},
 	"recording": {

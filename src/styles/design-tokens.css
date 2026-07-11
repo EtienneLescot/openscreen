@@ -3,7 +3,14 @@
  * Mint #10b981 is the sole chromatic accent. Red is reserved for
  * REC / cut / skip / trim / transcript-highlight only. */
 
-:root {
+/* :root:root (doubled pseudo-class) deliberately outranks a plain `:root` —
+ * src/index.css's shadcn/Tailwind base ALSO declares --accent/--border/
+ * --muted (as space-separated HSL triples, a different convention than
+ * this file's hex values) in a plain `:root` block. Both are equal-weight
+ * declarations otherwise, so whichever stylesheet the bundler happens to
+ * emit last silently wins the collision — pin it here instead of
+ * depending on import order. */
+:root:root {
 	/* canvas */
 	--bg: #f8fafc;
 	--bg-grad: radial-gradient(ellipse 1200px 800px at 50% -200px, #ffffff 0%, #f1f5f9 80%);
@@ -16,7 +23,7 @@
 
 	/* lines */
 	--border: #e2e8f0;
-	--border-soft: #f1f5f9;
+	--border-soft: #e6eaef;
 	--border-hi: #cbd5e1;
 	--border-dark: #0f172a;
 
@@ -26,8 +33,8 @@
 	--fg-emphasis: #020617;
 	--muted: #64748b;
 	--muted-soft: #94a3b8;
-	--meta: #94a3b8;
-	--dim: #cbd5e1;
+	--meta: #7c8aa0;
+	--dim: #b6c2d1;
 
 	/* mint brand */
 	--brand: #10b981;
