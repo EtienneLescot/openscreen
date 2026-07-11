@@ -8,7 +8,7 @@
 }
 
 .languageMenuScroll {
-	max-height: 16rem;
+	max-height: 20rem;
 	overflow-y: auto;
 	overflow-x: hidden;
 	overscroll-behavior: contain;
@@ -40,17 +40,19 @@
 	z-index: 20;
 }
 
+/* Matches the mic/camera device-picker popovers' visual language (see the
+   activeDeviceMenu panel in LaunchWindow.tsx) so every HUD popover reads as
+   one coherent design. Anchored with `bottom` (set inline) instead of `top`
+   so it opens upward, above the widget, sized to its own content. */
 .languageMenuPanel {
 	position: fixed;
 	right: 0;
-	top: 0;
-	width: 11rem;
-	padding: 0.25rem;
-	border-radius: 0.625rem;
+	width: 220px;
+	padding: 6px;
+	border-radius: 15px;
 	border: 1px solid rgba(255, 255, 255, 0.1);
-	background: rgba(8, 9, 12, 0.96);
-	box-shadow: 0 18px 42px rgba(0, 0, 0, 0.48), inset 0 1px 0 rgba(255, 255, 255, 0.045);
-	backdrop-filter: blur(18px) saturate(140%);
+	background: #1a1e25;
+	box-shadow: 0 20px 44px -14px rgba(0, 0, 0, 0.6), 0 4px 12px rgba(0, 0, 0, 0.4);
 	pointer-events: auto;
 	box-sizing: border-box;
 }
@@ -80,4 +82,32 @@
 .languageMenuItemActive {
 	background: rgba(52, 178, 123, 0.14);
 	color: #ffffff;
+}
+
+/* Device-picker popovers (microphone / camera) — reuse the language menu's
+   panel/item/checkmark shell (same floating-menu shape), just add the
+   section-label piece the language menu doesn't need since it has no
+   device grouping. These only ever open while the device is off, so there's
+   no on/off header toggle — the device list is the whole popover body. */
+.hudMenuSectionLabel {
+	padding: 6px 10px 4px;
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: 9.5px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: rgba(255, 255, 255, 0.4);
+}
+
+/* Thin separators between HUD toolbar control groups. */
+.hudDivider {
+	flex-shrink: 0;
+	background: rgba(255, 255, 255, 0.1);
+}
+.hudDividerHorizontal {
+	width: 1px;
+	height: 22px;
+}
+.hudDividerVertical {
+	width: 22px;
+	height: 1px;
 }

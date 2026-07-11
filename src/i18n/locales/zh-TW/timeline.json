@@ -2,6 +2,10 @@
 	"buttons": {
 		"addZoom": "新增縮放 (Z)",
 		"suggestZooms": "根據游標建議縮放",
+		"autoZoomOn": "自動縮放建議已開啟 — 點擊可移除建議的縮放",
+		"autoZoomOff": "自動縮放建議已關閉 — 點擊可根據游標建議縮放",
+		"autoFocusAllOn": "所有縮放的自動對焦已開啟 — 點擊可將全部切換為手動",
+		"autoFocusAllOff": "為所有縮放開啟自動對焦（攝影機跟隨游標）",
 		"addTrim": "新增剪輯 (T)",
 		"addAnnotation": "新增標註 (A)",
 		"addSpeed": "新增速度 (S)",
@@ -57,5 +61,32 @@
 	"success": {
 		"addedZoomSuggestions": "已新增 {{count}} 個基於游標的縮放建議",
 		"addedZoomSuggestionsPlural": "已新增 {{count}} 個基於游標的縮放建議"
+	},
+	"toolbar": {
+		"autoEnhance": "自動加強",
+		"automaticZooms": "自動縮放",
+		"automaticZoomsHint": "根據錄製的游標移動",
+		"smartZoomsAndCuts": "智慧縮放與剪輯",
+		"smartZoomsAndCutsHint": "使用 AI",
+		"comment": "留言",
+		"aspectRatio": "長寬比",
+		"timelineTools": "時間軸工具",
+		"arrangeClips": "排列片段",
+		"arrangeClipsHint": "拖曳下方片段以重新排序，或拖曳新片段至此",
+		"newAnnotation": "新增註解",
+		"noAnnotationsYet": "尚無註解",
+		"constantSpeed": "恆定速度",
+		"noTrims": "無剪輯片段",
+		"dragToReorderHint": "拖曳以重新排序 · 按兩下以編輯入點/出點",
+		"editInOutPoints": "編輯入點/出點",
+		"deleteClip": "刪除片段",
+		"dropToAdd": "拖放以新增至時間軸",
+		"importRecordingFirst": "請先匯入錄製內容",
+		"noAutoZoomMoments": "找不到自動縮放時刻",
+		"noAutoZoomMomentsDescription": "此錄製內容沒有游標移動資料，或現有縮放已涵蓋忙碌時刻。",
+		"addedAutoZoom": "已新增 {{count}} 個自動縮放",
+		"addedAutoZoomPlural": "已新增 {{count}} 個自動縮放",
+		"autoZoomFailed": "自動縮放失敗",
+		"aiEnhanceRequested": "已請求 AI 代理程式加強此錄製內容"
 	}
 }

@@ -2,6 +2,10 @@
 	"buttons": {
 		"addZoom": "إضافة تكبير (Z)",
 		"suggestZooms": "اقتراح تكبير من المؤشر",
+		"autoZoomOn": "اقتراحات التكبير التلقائي مفعّلة — انقر لإزالة التكبيرات المقترحة",
+		"autoZoomOff": "اقتراحات التكبير التلقائي معطّلة — انقر لاقتراح تكبيرات من المؤشر",
+		"autoFocusAllOn": "التركيز التلقائي مفعّل لجميع التكبيرات — انقر للتبديل إلى يدوي للجميع",
+		"autoFocusAllOff": "تفعيل التركيز التلقائي لجميع التكبيرات (الكاميرا تتبع المؤشر)",
 		"addTrim": "إضافة قص (T)",
 		"addAnnotation": "إضافة شرح (A)",
 		"addBlur": "إضافة تمويه (B)",
@@ -57,5 +61,32 @@
 	"success": {
 		"addedZoomSuggestions": "تمت إضافة {{count}} اقتراح تكبير بناءً على المؤشر",
 		"addedZoomSuggestionsPlural": "تمت إضافة {{count}} اقتراحات تكبير بناءً على المؤشر"
+	},
+	"toolbar": {
+		"autoEnhance": "تحسين تلقائي",
+		"automaticZooms": "تكبيرات تلقائية",
+		"automaticZoomsHint": "من حركة المؤشر المسجلة",
+		"smartZoomsAndCuts": "تكبيرات وقصات ذكية",
+		"smartZoomsAndCutsHint": "باستخدام الذكاء الاصطناعي",
+		"comment": "تعليق",
+		"aspectRatio": "نسبة العرض إلى الارتفاع",
+		"timelineTools": "أدوات المخطط الزمني",
+		"arrangeClips": "ترتيب المقاطع",
+		"arrangeClipsHint": "اسحب المقاطع أدناه لإعادة ترتيبها أو إسقاط مقاطع جديدة",
+		"newAnnotation": "شرح جديد",
+		"noAnnotationsYet": "لا توجد شروح بعد",
+		"constantSpeed": "سرعة ثابتة",
+		"noTrims": "لا يوجد قص",
+		"dragToReorderHint": "اسحب لإعادة الترتيب · انقر نقرًا مزدوجًا لتعديل نقطتي البداية والنهاية",
+		"editInOutPoints": "تعديل نقطتي البداية والنهاية",
+		"deleteClip": "حذف المقطع",
+		"dropToAdd": "أفلت للإضافة إلى المخطط الزمني",
+		"importRecordingFirst": "استورد تسجيلاً أولاً",
+		"noAutoZoomMoments": "لم يتم العثور على لحظات تكبير تلقائي",
+		"noAutoZoomMomentsDescription": "لا يحتوي هذا التسجيل على بيانات حركة مؤشر، أو أن التكبيرات الحالية تغطي بالفعل اللحظات المزدحمة.",
+		"addedAutoZoom": "تمت إضافة {{count}} تكبير تلقائي",
+		"addedAutoZoomPlural": "تمت إضافة {{count}} تكبيرات تلقائية",
+		"autoZoomFailed": "فشل التكبير التلقائي",
+		"aiEnhanceRequested": "تم طلب تحسين هذا التسجيل من وكيل الذكاء الاصطناعي"
 	}
 }

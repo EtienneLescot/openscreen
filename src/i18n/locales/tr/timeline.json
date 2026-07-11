@@ -2,6 +2,10 @@
 	"buttons": {
 		"addZoom": "Yakınlaştırma Ekle (Z)",
 		"suggestZooms": "İmleçten Yakınlaştırma Öner",
+		"autoZoomOn": "Otomatik yakınlaştırma önerileri açık — önerilen yakınlaştırmaları kaldırmak için tıklayın",
+		"autoZoomOff": "Otomatik yakınlaştırma önerileri kapalı — imleçten yakınlaştırma önermek için tıklayın",
+		"autoFocusAllOn": "Tüm yakınlaştırmalarda Otomatik Odak açık — hepsini manuel yapmak için tıklayın",
+		"autoFocusAllOff": "Tüm yakınlaştırmalarda Otomatik Odağı aç (kamera imleci takip eder)",
 		"addTrim": "Kırpma Ekle (T)",
 		"addAnnotation": "Açıklama Ekle (A)",
 		"addSpeed": "Hız Ekle (S)",
@@ -57,5 +61,32 @@
 	"success": {
 		"addedZoomSuggestions": "{{count}} imleç tabanlı yakınlaştırma önerisi eklendi",
 		"addedZoomSuggestionsPlural": "{{count}} imleç tabanlı yakınlaştırma önerisi eklendi"
+	},
+	"toolbar": {
+		"autoEnhance": "Otomatik iyileştirme",
+		"automaticZooms": "Otomatik yakınlaştırmalar",
+		"automaticZoomsHint": "Kaydedilen imleç hareketinden",
+		"smartZoomsAndCuts": "Akıllı yakınlaştırma + kırpma",
+		"smartZoomsAndCutsHint": "Yapay zeka ile",
+		"comment": "Yorum",
+		"aspectRatio": "En-boy oranı",
+		"timelineTools": "Zaman çizelgesi araçları",
+		"arrangeClips": "Klipleri düzenle",
+		"arrangeClipsHint": "Yeniden sıralamak için aşağıdaki klipleri sürükleyin veya yenilerini bırakın",
+		"newAnnotation": "Yeni açıklama",
+		"noAnnotationsYet": "Henüz açıklama yok",
+		"constantSpeed": "Sabit hız",
+		"noTrims": "Kırpma yok",
+		"dragToReorderHint": "Yeniden sıralamak için sürükleyin · giriş/çıkış noktalarını düzenlemek için çift tıklayın",
+		"editInOutPoints": "Giriş/çıkış noktalarını düzenle",
+		"deleteClip": "Klibi sil",
+		"dropToAdd": "Zaman çizelgesine eklemek için bırakın",
+		"importRecordingFirst": "Önce bir kayıt içe aktarın",
+		"noAutoZoomMoments": "Otomatik yakınlaştırma anı bulunamadı",
+		"noAutoZoomMomentsDescription": "Bu kayıtta imleç hareket verisi yok veya mevcut yakınlaştırmalar zaten yoğun anları kapsıyor.",
+		"addedAutoZoom": "{{count}} otomatik yakınlaştırma eklendi",
+		"addedAutoZoomPlural": "{{count}} otomatik yakınlaştırma eklendi",
+		"autoZoomFailed": "Otomatik yakınlaştırma başarısız oldu",
+		"aiEnhanceRequested": "Yapay zeka aracısından bu kaydı iyileştirmesi istendi"
 	}
 }

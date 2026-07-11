@@ -8,7 +8,8 @@
 			"title": "Chế độ lấy nét",
 			"manual": "Thủ công",
 			"auto": "Tự động",
-			"autoDescription": "Máy ảnh đi theo vị trí con trỏ đã ghi"
+			"autoDescription": "Máy ảnh đi theo vị trí con trỏ đã ghi",
+			"lockedDisclaimer": "Được điều khiển bởi công tắc Lấy nét tự động chung trên dòng thời gian. Tắt để đặt chế độ lấy nét riêng cho từng lần thu phóng."
 		},
 		"customScale": "Thu phóng tùy chỉnh",
 		"position": {
@@ -135,8 +136,6 @@
 		"textPlaceholder": "Nhập văn bản của bạn...",
 		"fontStyle": "Kiểu phông chữ",
 		"selectStyle": "Chọn kiểu",
-		"textAnimation": "Hoạt ảnh văn bản",
-		"selectAnimation": "Chọn hoạt ảnh",
 		"size": "Kích thước",
 		"customFonts": "Phông chữ tùy chỉnh",
 		"textColor": "Màu văn bản",
@@ -182,6 +181,17 @@
 		"modern": "Hiện đại",
 		"clean": "Sạch sẽ"
 	},
+	"textAnimation": {
+		"title": "Hoạt ảnh văn bản",
+		"selectAnimation": "Chọn hoạt ảnh",
+		"none": "Không có",
+		"fade": "Mờ dần",
+		"rise": "Trồi lên",
+		"pop": "Bật lên",
+		"slideLeft": "Trượt sang trái",
+		"typewriter": "Máy đánh chữ",
+		"pulse": "Nhấp nháy"
+	},
 	"customFont": {
 		"dialogTitle": "Thêm Google Font",
 		"urlLabel": "URL nhập Google Fonts",
@@ -202,6 +212,7 @@
 		"errorLoadFailed": "Không thể tải phông chữ. Vui lòng xác minh URL Google Fonts là chính xác."
 	},
 	"cursor": {
+		"title": "Con trỏ",
 		"theme": "Kiểu con trỏ",
 		"themeDefault": "Mặc định",
 		"show": "Hiện con trỏ",
@@ -209,7 +220,8 @@
 		"smoothing": "Làm mượt",
 		"motionBlur": "Làm mờ chuyển động",
 		"clickBounce": "Nảy khi nhấp",
-		"clipToBounds": "Cắt theo khung"
+		"clipToBounds": "Cắt theo khung",
+		"clipToBoundsDescription": "Giữ con trỏ bên trong khung hình video. Tắt để cho phép con trỏ vượt ra ngoài mép — hữu ích khi phóng to hoặc lia máy."
 	},
 	"language": {
 		"title": "Ngôn ngữ"
@@ -217,5 +229,9 @@
 	"timeline": {
 		"title": "Dòng thời gian",
 		"waveform": "Hiển thị dạng sóng âm thanh trên rãnh cắt"
+	},
+	"facets": {
+		"captions": "Phụ đề",
+		"transcript": "Bản ghi lời thoại"
 	}
 }

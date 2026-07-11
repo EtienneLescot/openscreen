@@ -28,7 +28,12 @@
 		"disableSystemAudio": "Disable system audio",
 		"enableMicrophone": "Enable microphone",
 		"disableMicrophone": "Disable microphone",
-		"defaultMicrophone": "Default Microphone"
+		"defaultMicrophone": "Default Microphone",
+		"systemAudio": "System audio",
+		"microphone": "Microphone",
+		"on": "On",
+		"off": "Off",
+		"inputDevice": "Input device"
 	},
 	"webcam": {
 		"enableWebcam": "Enable webcam",
@@ -36,7 +41,9 @@
 		"defaultCamera": "Default Camera",
 		"searching": "Searching...",
 		"noneFound": "No camera found",
-		"unavailable": "Camera unavailable"
+		"unavailable": "Camera unavailable",
+		"camera": "Camera",
+		"cameraDevice": "Camera device"
 	},
 	"cursor": {
 		"useEditableCursor": "Use editable cursor",

@@ -11,6 +11,7 @@
 import { Download, FileVideo, Loader2 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
+import { useScopedT } from "@/contexts/I18nContext";
 import {
 	type DocumentExportOptions,
 	type ExportVideoCodec,
@@ -34,12 +35,16 @@ type Phase = "idle" | "configuring" | "rendering" | "writing" | "done" | "error"
 
 const QUALITY_OPTIONS: Array<{
 	value: ExportQuality;
-	label: string;
-	hint: string;
+	labelKey: string;
+	hintKey: string;
 }> = [
-	{ value: "medium", label: "720p", hint: "Smaller file" },
-	{ value: "good", label: "1080p", hint: "Recommended" },
-	{ value: "source", label: "Source", hint: "Match recording" },
+	{ value: "medium", labelKey: "exportQuality.low", hintKey: "exportDialog.qualitySmallerFile" },
+	{ value: "good", labelKey: "exportQuality.medium", hintKey: "exportDialog.qualityRecommended" },
+	{
+		value: "source",
+		labelKey: "exportQuality.high",
+		hintKey: "exportDialog.qualityMatchRecording",
+	},
 ];
 
 interface ExportDialogProps {
@@ -49,6 +54,8 @@ interface ExportDialogProps {
 }
 
 export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
+	const t = useScopedT("editor");
+	const ts = useScopedT("settings");
 	const [format, setFormat] = useState<ExportFormat>("mp4");
 	const [quality, setQuality] = useState<ExportQuality>("good");
 	const [fps, setFps] = useState<24 | 30 | 60>(60);
@@ -82,7 +89,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		const asset =
 			document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
 		if (!asset) {
-			setError("Add a video before exporting.");
+			setError(t("exportDialog.addVideoBeforeExporting"));
 			setPhase("error");
 			return;
 		}
@@ -129,32 +136,35 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		try {
 			const result = await exportAxcutDocument(document, options);
 			if (!result.success || !result.blob) {
-				throw new Error(result.error ?? "Export failed");
+				throw new Error(result.error ?? t("exportDialog.exportFailed"));
 			}
 			setPhase("writing");
 			const arrayBuffer = await result.blob.arrayBuffer();
 			const writeResult = await window.electronAPI?.writeExportToPath?.(arrayBuffer, pickedPath);
 			if (!writeResult?.success) {
-				throw new Error(writeResult?.error ?? "Failed to write file");
+				throw new Error(writeResult?.error ?? t("exportDialog.failedToWriteFile"));
 			}
 			setSavedPath(pickedPath);
 			setPhase("done");
-			toast.success(`${format === "gif" ? "GIF" : "Video"} exported`, {
-				description: pickedPath,
-				action: {
-					label: "Show in folder",
-					onClick: () => {
-						void window.electronAPI?.revealInFolder?.(pickedPath);
+			toast.success(
+				format === "gif" ? t("exportDialog.exportedGif") : t("exportDialog.exportedVideo"),
+				{
+					description: pickedPath,
+					action: {
+						label: t("exportDialog.showInFolder"),
+						onClick: () => {
+							void window.electronAPI?.revealInFolder?.(pickedPath);
+						},
 					},
 				},
-			});
+			);
 			// Touch the bridge so it stays referenced even when export
 			// is invoked from a non-Electron shim.
 			void nativeBridgeClient.aiEdition.llmGetSnapshot;
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
 			setPhase("error");
-			toast.error("Export failed", {
+			toast.error(t("exportDialog.exportFailed"), {
 				description: err instanceof Error ? err.message : String(err),
 			});
 		}
@@ -168,8 +178,8 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		<ModalShell
 			open={open}
 			onClose={handleClose}
-			title="Export"
-			subtitle="Render the timeline to a file"
+			title={t("exportDialog.title")}
+			subtitle={t("exportDialog.subtitle")}
 		>
 			<div style={{ display: "flex", flexDirection: "column", gap: 18 }}>
 				<div
@@ -181,14 +191,14 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 				>
 					<FormatToggle
 						active={format === "mp4"}
-						label="MP4"
+						label={ts("exportFormat.mp4")}
 						icon={<FileVideo size={18} />}
 						onClick={() => setFormat("mp4")}
 						disabled={isBusy}
 					/>
 					<FormatToggle
 						active={format === "gif"}
-						label="GIF"
+						label={ts("exportFormat.gif")}
 						icon={<Download size={18} />}
 						onClick={() => setFormat("gif")}
 						disabled={isBusy}
@@ -206,7 +216,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 								marginBottom: 8,
 							}}
 						>
-							Quality
+							{t("exportDialog.quality")}
 						</div>
 						<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 8 }}>
 							{QUALITY_OPTIONS.map((q) => (
@@ -228,9 +238,9 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 										font: "500 13px/1 var(--font-body)",
 									}}
 								>
-									<span style={{ color: "var(--fg)", fontWeight: 600 }}>{q.label}</span>
+									<span style={{ color: "var(--fg)", fontWeight: 600 }}>{ts(q.labelKey)}</span>
 									<span style={{ font: "500 11px var(--font-body)", color: "var(--muted)" }}>
-										{q.hint}
+										{t(q.hintKey)}
 									</span>
 								</button>
 							))}
@@ -253,7 +263,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 										marginBottom: 8,
 									}}
 								>
-									Frame rate
+									{t("exportDialog.frameRate")}
 								</div>
 								<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
 									{([24, 30, 60] as const).map((r) => (
@@ -279,7 +289,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 										marginBottom: 8,
 									}}
 								>
-									Codec
+									{t("exportDialog.codec")}
 								</div>
 								<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
 									{(
@@ -297,8 +307,8 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 											style={segStyle(codec === value)}
 											title={
 												value === "h264"
-													? "Best compatibility"
-													: "May not be supported by every system encoder"
+													? t("exportDialog.codecBestCompatibility")
+													: t("exportDialog.codecMaySupportVary")
 											}
 										>
 											{label}
@@ -320,7 +330,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 									marginBottom: 8,
 								}}
 							>
-								Frame rate
+								{t("exportDialog.frameRate")}
 							</div>
 							<div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 6 }}>
 								{GIF_FRAME_RATES.map((r) => (
@@ -346,7 +356,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 									marginBottom: 8,
 								}}
 							>
-								Size
+								{t("exportDialog.size")}
 							</div>
 							<div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 6 }}>
 								{(Object.keys(GIF_SIZE_PRESETS) as GifSizePreset[]).map((s) => (
@@ -363,7 +373,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 							</div>
 						</div>
 						<div className={styles.paneRow} style={{ margin: 0 }}>
-							<span className="label">Loop GIF</span>
+							<span className="label">{t("exportDialog.loopGif")}</span>
 							<button
 								type="button"
 								className={`${styles.toggle} ${gifLoop ? styles.isOn : ""}`}
@@ -379,7 +389,8 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 								letterSpacing: "0.04em",
 							}}
 						>
-							{gifFrameRate} FPS · {gifSizeLabel} · {gifLoop ? "Loop on" : "Loop off"}
+							{gifFrameRate} FPS · {gifSizeLabel} ·{" "}
+							{gifLoop ? t("exportDialog.loopOn") : t("exportDialog.loopOff")}
 						</div>
 					</section>
 				)}
@@ -407,7 +418,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 						onClick={handleClose}
 						disabled={isBusy}
 					>
-						{phase === "done" ? "Close" : "Cancel"}
+						{phase === "done" ? t("exportDialog.close") : t("exportDialog.cancel")}
 					</button>
 					<button
 						type="button"
@@ -419,15 +430,15 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 							<>
 								<Loader2 size={14} className="animate-spin" />
 								{phase === "rendering"
-									? "Rendering…"
+									? t("exportDialog.rendering")
 									: phase === "writing"
-										? "Saving…"
-										: "Starting…"}
+										? t("exportDialog.saving")
+										: t("exportDialog.starting")}
 							</>
 						) : (
 							<>
 								<Download size={14} />
-								Export {format === "gif" ? "GIF" : "MP4"}
+								{format === "gif" ? t("exportDialog.exportGif") : t("exportDialog.exportMp4")}
 							</>
 						)}
 					</button>
@@ -488,6 +499,7 @@ function ProgressBlock({
 	pct: number;
 	savedPath: string | null;
 }) {
+	const t = useScopedT("editor");
 	if (phase === "idle" || phase === "configuring") {
 		return (
 			<div
@@ -501,7 +513,7 @@ function ProgressBlock({
 					textAlign: "center",
 				}}
 			>
-				Pick a format and press Export to start.
+				{t("exportDialog.pickFormatAndExport")}
 			</div>
 		);
 	}
@@ -517,7 +529,8 @@ function ProgressBlock({
 					font: "500 12px var(--font-body)",
 				}}
 			>
-				Saved to <span style={{ fontFamily: "var(--font-mono)" }}>{savedPath}</span>
+				{t("exportDialog.savedTo")}{" "}
+				<span style={{ fontFamily: "var(--font-mono)" }}>{savedPath}</span>
 			</div>
 		);
 	}
@@ -533,7 +546,7 @@ function ProgressBlock({
 					font: "500 12px var(--font-body)",
 				}}
 			>
-				{error ?? "Export failed."}
+				{error ?? t("exportDialog.exportFailedGeneric")}
 			</div>
 		);
 	}
@@ -560,7 +573,7 @@ function ProgressBlock({
 				}}
 			>
 				<span style={{ font: "500 12px var(--font-body)", color: "var(--fg-2)" }}>
-					{phase === "writing" ? "Writing file…" : "Rendering frames"}
+					{phase === "writing" ? t("exportDialog.writingFile") : t("exportDialog.renderingFrames")}
 				</span>
 				<span
 					style={{
@@ -598,8 +611,8 @@ function ProgressBlock({
 				}}
 			>
 				{total > 0
-					? `${current} / ${total} frames · ETA ${Math.max(0, Math.round(eta))}s`
-					: "Preparing encoder…"}
+					? t("exportDialog.framesEta", { current, total, eta: Math.max(0, Math.round(eta)) })
+					: t("exportDialog.preparingEncoder")}
 			</div>
 		</div>
 	);

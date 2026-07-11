@@ -10,6 +10,7 @@
 		"openProject": "プロジェクトを開く",
 		"useVerticalTray": "縦型トレイを使用",
 		"useHorizontalTray": "横型トレイを使用",
+		"openStudio": "スタジオを開く",
 		"openNotes": "ノートを開く",
 		"openNotesPlaceholder": "ここにメモを入力...",
 		"notesToolbar": {
@@ -27,7 +28,12 @@
 		"disableSystemAudio": "システム音声を無効にする",
 		"enableMicrophone": "マイクを有効にする",
 		"disableMicrophone": "マイクを無効にする",
-		"defaultMicrophone": "デフォルトのマイク"
+		"defaultMicrophone": "デフォルトのマイク",
+		"systemAudio": "システム音声",
+		"microphone": "マイク",
+		"on": "オン",
+		"off": "オフ",
+		"inputDevice": "入力デバイス"
 	},
 	"webcam": {
 		"enableWebcam": "ウェブカメラを有効にする",
@@ -35,7 +41,9 @@
 		"defaultCamera": "デフォルトのカメラ",
 		"searching": "検索中...",
 		"noneFound": "カメラが見つかりません",
-		"unavailable": "カメラが利用できません"
+		"unavailable": "カメラが利用できません",
+		"camera": "カメラ",
+		"cameraDevice": "カメラデバイス"
 	},
 	"cursor": {
 		"useEditableCursor": "編集可能なカーソルを使う",
@@ -45,6 +53,9 @@
 		"loading": "ソースを読み込み中...",
 		"screens": "画面 ({{count}})",
 		"windows": "ウィンドウ ({{count}})",
+		"emptyTitle": "画面またはウィンドウが見つかりません",
+		"emptyDescription": "画面収録の権限を許可したばかりの場合は、このピッカーを再読み込みしてください。macOSではOpenScreenの再起動が必要な場合があります。",
+		"loadFailedDescription": "OpenScreenはキャプチャソースを読み込めませんでした。このピッカーを再読み込みしてもう一度お試しください。",
 		"defaultSourceName": "画面"
 	},
 	"recording": {

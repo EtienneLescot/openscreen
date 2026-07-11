@@ -57,9 +57,23 @@
 		"detailLoadProject": "Voulez-vous enregistrer votre projet avant d'en charger un autre ?",
 		"saveAndLoadProject": "Enregistrer et charger un projet",
 		"discardAndLoadProject": "Ignorer et charger un projet",
+		"newProject": "Nouveau projet",
+		"importVideo": "Importer un fichier vidéo…",
 		"loadProject": "Charger un projet…",
 		"saveProject": "Enregistrer le projet…",
-		"saveProjectAs": "Enregistrer le projet sous…"
+		"saveProjectAs": "Enregistrer le projet sous…",
+		"modal": {
+			"closeTitle": "Enregistrer les modifications avant de fermer ?",
+			"closeBody": "Votre projet contient des modifications non enregistrées. Enregistrez-les maintenant, ignorez-les ou restez dans l'éditeur.",
+			"newTitle": "Enregistrer les modifications avant de créer un nouveau projet ?",
+			"openTitle": "Enregistrer les modifications avant d'ouvrir un autre projet ?",
+			"recordTitle": "Enregistrer les modifications avant de démarrer un nouvel enregistrement ?",
+			"sharedBody": "Le projet actuel contient des modifications non enregistrées. Enregistrez-les d'abord, ignorez-les ou annulez.",
+			"notSavedYet": "Le projet actuel n'a pas encore été enregistré sur le disque.",
+			"discard": "Ignorer",
+			"saveAndContinue": "Enregistrer et continuer",
+			"saving": "Enregistrement…"
+		}
 	},
 	"fileDialogs": {
 		"saveGif": "Enregistrer le GIF exporté",

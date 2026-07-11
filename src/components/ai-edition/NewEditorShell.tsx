@@ -2,22 +2,22 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { EditorProjectData } from "@/components/video-editor/projectPersistence";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
-import type { CropRegion } from "@/components/video-editor/types";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
 import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
+import { replaceTimeline as replaceTimelineOp } from "@/lib/ai-edition/document/timeline";
 import { transcribeAsset } from "@/lib/ai-edition/document/transcribe";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
-import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { PLACEHOLDER_DURATION_SEC, useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { matchesShortcut } from "@/lib/shortcuts";
 import { nativeBridgeClient } from "@/native";
 import type { AiEditionProjectSummary } from "@/native/contracts";
 import { ExportDialog } from "./ExportDialog";
 import { LeftPanel } from "./LeftPanel";
 import {
 	AutoCaptionsModal,
-	CropModal,
+	EditClipModal,
 	NewProjectModal,
 	OpenProjectModal,
 	UnsavedChangesModal,
@@ -27,7 +27,6 @@ import { Preview } from "./Preview";
 import v4 from "./v4/EditorShellV4.module.css";
 import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
 import { type Facet, FloatingInspector } from "./v4/FloatingInspector";
-import { FloatingTransport } from "./v4/FloatingTransport";
 import { MediaStage } from "./v4/MediaStage";
 import { RecStage } from "./v4/RecStage";
 import { V4Timeline } from "./v4/V4Timeline";
@@ -73,14 +72,17 @@ export function NewEditorShell() {
 	const [facet, setFacet] = useState<Facet>("effects");
 	const [openProjectOpen, setOpenProjectOpen] = useState(false);
 	const [newProjectOpen, setNewProjectOpen] = useState(false);
-	const [cropOpen, setCropOpen] = useState(false);
+	// Crop + trim in/out both live in EditClipModal now (per-clip), reachable
+	// from the timeline (double-click / pencil icon) and the inspector's
+	// "Edit clip" rail button — a single shell-level instance instead of one
+	// mounted per trigger site.
+	const [editClipTarget, setEditClipTarget] = useState<AxcutClip | null>(null);
 	const [exportOpen, setExportOpen] = useState(false);
 	const [unsavedPrompt, setUnsavedPrompt] = useState<{
 		action: "close" | "new" | "open" | "record";
 		resolve: (choice: UnsavedChoice) => void;
 	} | null>(null);
-	const { settings: editorSettings, set: setEditorSettings } = useEditorSettings();
-	const { openConfig: openShortcutsConfig } = useShortcuts();
+	const { shortcuts, isMac, openConfig: openShortcutsConfig } = useShortcuts();
 	const tl = useTimeline();
 	useUndoRedoShortcuts(() => {
 		// ponytail: placeholder, wire when undo stack merges with history
@@ -290,10 +292,25 @@ export function NewEditorShell() {
 			const doc = state.document;
 			if (!doc || doc.assets.length === 0) return;
 			if (doc.timeline.clips.length === 0) {
-				void state.replaceTimeline(
+				// ponytail: replaceTimeline derives clip length from
+				// asset.durationSec, which import never populates — without this
+				// patch the first auto-created clip silently comes out empty
+				// (normalizeIntervals clamps against a 0 duration and drops it).
+				const primaryAssetId = doc.project.primaryAssetId ?? doc.assets[0]?.id;
+				const docWithDuration = primaryAssetId
+					? {
+							...doc,
+							assets: doc.assets.map((a) =>
+								a.id === primaryAssetId ? { ...a, durationSec: known } : a,
+							),
+						}
+					: doc;
+				const next = replaceTimelineOp(
+					docWithDuration,
 					[{ startSec: 0, endSec: known }],
 					"Auto-created full-duration clip",
 				);
+				void state.saveDocument(next);
 				return;
 			}
 			// Only correct clips belonging to the asset that actually fired this
@@ -855,13 +872,29 @@ export function NewEditorShell() {
 				return;
 			}
 			if (!hasProject && e.key !== "?") return;
-			if (ctrl && e.key === "z") return;
+			if (ctrl && (e.key === "z" || e.key.toLowerCase() === "y")) return;
 			if (e.key === "?" || (e.shiftKey && e.key === "/")) {
 				e.preventDefault();
-				window.dispatchEvent(new CustomEvent("openscreen:open-shortcuts"));
+				openShortcutsConfig();
 				return;
 			}
-			if (ctrl && e.key.toLowerCase() === "c") {
+
+			const deleteSelection = () => {
+				// F2.7 — a shift-click multi-selection deletes as one batch (one
+				// undo snapshot); a single selection keeps the original path.
+				if (tl.multiSelection.length > 1) {
+					void tl.removeRegions(tl.multiSelection);
+					return;
+				}
+				if (tl.selection) {
+					void tl.removeRegion(tl.selection.kind, tl.selection.id);
+				}
+			};
+
+			// F2.9 — configurable actions read the user's saved bindings instead
+			// of hardcoded keys, so rebinding in the shortcuts dialog actually
+			// changes runtime behavior.
+			if (matchesShortcut(e, shortcuts.copySelected, isMac)) {
 				if (tl.clipSelection) {
 					e.preventDefault();
 					setCopiedClipId(tl.clipSelection);
@@ -882,7 +915,7 @@ export function NewEditorShell() {
 					return;
 				}
 			}
-			if (ctrl && e.key.toLowerCase() === "v") {
+			if (matchesShortcut(e, shortcuts.paste, isMac)) {
 				e.preventDefault();
 				// A selected/copied clip takes priority — pasting with a clip in
 				// hand is unambiguously "duplicate this clip", even if a region
@@ -895,51 +928,66 @@ export function NewEditorShell() {
 				void pasteRegion();
 				return;
 			}
-			if (e.key === " ") {
-				const v = window.document.querySelector("video");
-				if (v) {
-					e.preventDefault();
-					if (v.paused) {
-						void v.play();
-					} else {
-						v.pause();
-					}
-				}
+			if (matchesShortcut(e, shortcuts.playPause, isMac)) {
+				e.preventDefault();
+				togglePlay();
+				return;
+			}
+			if (matchesShortcut(e, shortcuts.deleteSelected, isMac)) {
+				e.preventDefault();
+				deleteSelection();
 				return;
 			}
 			if (e.key === "Delete" || e.key === "Backspace") {
-				// F2.7 — a shift-click multi-selection deletes as one batch (one
-				// undo snapshot); a single selection keeps the original path.
-				if (tl.multiSelection.length > 1) {
+				e.preventDefault();
+				deleteSelection();
+				return;
+			}
+			if (matchesShortcut(e, shortcuts.addZoom, isMac)) {
+				e.preventDefault();
+				void tl.addZoom();
+				return;
+			}
+			if (matchesShortcut(e, shortcuts.addTrim, isMac)) {
+				e.preventDefault();
+				void tl.addTrim();
+				return;
+			}
+			if (matchesShortcut(e, shortcuts.addAnnotation, isMac)) {
+				e.preventDefault();
+				void tl.addAnnotation();
+				return;
+			}
+			if (matchesShortcut(e, shortcuts.addSpeed, isMac)) {
+				e.preventDefault();
+				void tl.addSpeed();
+				return;
+			}
+
+			// Fixed (non-configurable) shortcuts advertised in the shortcuts dialog.
+			if (e.key === "Tab") {
+				const annotations = [...tl.annotationRegions].sort((a, b) => a.startMs - b.startMs);
+				if (annotations.length > 0) {
 					e.preventDefault();
-					void tl.removeRegions(tl.multiSelection);
-					return;
-				}
-				if (tl.selection) {
-					e.preventDefault();
-					void tl.removeRegion(tl.selection.kind, tl.selection.id);
+					const direction = e.shiftKey ? -1 : 1;
+					const currentId = tl.selection?.kind === "annotation" ? tl.selection.id : null;
+					const currentIndex = currentId ? annotations.findIndex((a) => a.id === currentId) : -1;
+					const nextIndex =
+						currentIndex === -1
+							? direction === 1
+								? 0
+								: annotations.length - 1
+							: (currentIndex + direction + annotations.length) % annotations.length;
+					tl.selectRegion("annotation", annotations[nextIndex].id);
 				}
 				return;
 			}
-			switch (e.key.toLowerCase()) {
-				case "z":
-					if (!ctrl) {
-						e.preventDefault();
-						void tl.addZoom();
-					}
-					break;
-				case "t":
-					e.preventDefault();
-					void tl.addTrim();
-					break;
-				case "a":
-					e.preventDefault();
-					void tl.addAnnotation();
-					break;
-				case "s":
-					e.preventDefault();
-					void tl.addSpeed();
-					break;
+			if (e.key === "ArrowLeft" || e.key === "ArrowRight") {
+				e.preventDefault();
+				const frameStepSec = 1 / 60;
+				const direction = e.key === "ArrowLeft" ? -1 : 1;
+				handleSeek(Math.max(0, currentTimeSec + direction * frameStepSec));
+				return;
 			}
 		};
 		window.addEventListener("keydown", onKey);
@@ -953,6 +1001,12 @@ export function NewEditorShell() {
 		promptUnsaved,
 		saveDocument,
 		copiedClipId,
+		openShortcutsConfig,
+		shortcuts,
+		isMac,
+		togglePlay,
+		handleSeek,
+		currentTimeSec,
 	]);
 
 	const showTimeline = mode !== "rec";
@@ -1075,13 +1129,16 @@ export function NewEditorShell() {
 								style={{
 									position: "absolute",
 									inset: 0,
-									// Reserves room for the floating inspector on the right
-									// so the video resizes into the remaining space instead
-									// of sitting underneath the panel. The transport bar is
-									// a hover-reveal overlay (see .transportWrap) rather than
-									// permanent chrome, so it no longer reserves bottom space
-									// — the video is free to extend underneath it.
-									padding: `40px ${inspectorOpen ? 360 : 96}px 40px 80px`,
+									// Right padding reserves just enough room for the floating
+									// inspector (facet rail ~74px, or the full panel ~320px when
+									// open) so the video resizes into the remaining space instead
+									// of sitting underneath it. Nothing floats over the other
+									// edges — playback transport lives in the timeline header
+									// (TransportBar, rendered from V4Timeline) instead of
+									// overlaying the preview — so top/bottom/left only need a
+									// thin margin off the stage's rounded corners, not a large
+									// fixed chunk that dwarfs the card on smaller windows.
+									padding: `16px ${inspectorOpen ? 320 : 74}px 16px 16px`,
 									boxSizing: "border-box",
 								}}
 							>
@@ -1122,17 +1179,6 @@ export function NewEditorShell() {
 									playing={playing}
 								/>
 							</div>
-							<FloatingTransport
-								playing={playing}
-								loop={loop}
-								currentTimeSec={currentTimeSec}
-								clips={clips}
-								onTogglePlay={togglePlay}
-								onPrevClip={handlePrevClip}
-								onNextClip={handleNextClip}
-								onToggleLoop={handleToggleLoop}
-								onExpand={handleExpand}
-							/>
 							<FloatingInspector
 								facet={facet}
 								open={inspectorOpen}
@@ -1142,7 +1188,8 @@ export function NewEditorShell() {
 									setInspectorOpen(true);
 								}}
 								onToggleOpen={() => setInspectorOpen((v) => !v)}
-								onCrop={() => setCropOpen(true)}
+								clips={tl.clips}
+								onEditClip={setEditClipTarget}
 								onCaptions={handleCaptions}
 								transcriptProps={transcriptProps}
 							/>
@@ -1187,6 +1234,14 @@ export function NewEditorShell() {
 						variant={mode === "media" ? "media" : "edit"}
 						onDropAsset={(assetId) => void tl.insertClipAt(assetId, clips.length)}
 						videoSources={videoSources}
+						playing={playing}
+						loop={loop}
+						onTogglePlay={togglePlay}
+						onPrevClip={handlePrevClip}
+						onNextClip={handleNextClip}
+						onToggleLoop={handleToggleLoop}
+						onExpand={handleExpand}
+						onEditClip={setEditClipTarget}
 					/>
 				</div>
 			) : null}
@@ -1205,13 +1260,28 @@ export function NewEditorShell() {
 				onClose={() => setNewProjectOpen(false)}
 				onCreate={handleCreateProject}
 			/>
-			<CropModal
-				open={cropOpen}
-				onClose={() => setCropOpen(false)}
-				initialRegion={editorSettings.cropRegion}
-				onApply={(region: CropRegion) => void setEditorSettings({ cropRegion: region })}
+			<EditClipModal
+				open={editClipTarget !== null}
+				onClose={() => setEditClipTarget(null)}
+				clip={editClipTarget}
+				assetMeta={
+					editClipTarget
+						? {
+								label:
+									document?.assets.find((a) => a.id === editClipTarget.assetId)?.label ??
+									editClipTarget.assetId,
+								durationSec: document?.assets.find((a) => a.id === editClipTarget.assetId)
+									?.durationSec,
+							}
+						: null
+				}
 				videoSources={videoSources}
-				currentTimeSec={currentTimeSec}
+				onApply={(sStart, sEnd, cropRegion) => {
+					if (!editClipTarget) return;
+					void tl.updateClipSourceRange(editClipTarget.id, sStart, sEnd);
+					if (cropRegion !== undefined) void tl.updateClipCrop(editClipTarget.id, cropRegion);
+					setEditClipTarget(null);
+				}}
 			/>
 			<UnsavedChangesModal
 				open={unsavedPrompt !== null}

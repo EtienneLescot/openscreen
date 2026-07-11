@@ -2,6 +2,10 @@
 	"buttons": {
 		"addZoom": "Adicionar Zoom (Z)",
 		"suggestZooms": "Sugerir Zooms a partir do Cursor",
+		"autoZoomOn": "Sugestões de zoom automático ativadas — clique para remover os zooms sugeridos",
+		"autoZoomOff": "Sugestões de zoom automático desativadas — clique para sugerir zooms a partir do cursor",
+		"autoFocusAllOn": "Foco automático ativado para todos os zooms — clique para mudar todos para manual",
+		"autoFocusAllOff": "Ativar foco automático para todos os zooms (a câmera segue o cursor)",
 		"addTrim": "Adicionar Recorte (T)",
 		"addAnnotation": "Adicionar Anotação (A)",
 		"addBlur": "Adicionar Desfoque (B)",
@@ -57,5 +61,32 @@
 	"success": {
 		"addedZoomSuggestions": "Adicionada {{count}} sugestão de zoom baseada no cursor",
 		"addedZoomSuggestionsPlural": "Adicionadas {{count}} sugestões de zoom baseadas no cursor"
+	},
+	"toolbar": {
+		"autoEnhance": "Melhoria automática",
+		"automaticZooms": "Zooms automáticos",
+		"automaticZoomsHint": "Do movimento do cursor gravado",
+		"smartZoomsAndCuts": "Zooms e cortes inteligentes",
+		"smartZoomsAndCutsHint": "Com IA",
+		"comment": "Comentário",
+		"aspectRatio": "Proporção",
+		"timelineTools": "Ferramentas da linha do tempo",
+		"arrangeClips": "Organizar clipes",
+		"arrangeClipsHint": "Arraste os clipes abaixo para reordená-los ou solte novos",
+		"newAnnotation": "Nova anotação",
+		"noAnnotationsYet": "Ainda não há anotações",
+		"constantSpeed": "Velocidade constante",
+		"noTrims": "Sem recortes",
+		"dragToReorderHint": "Arraste para reordenar · clique duas vezes para editar os pontos de entrada/saída",
+		"editInOutPoints": "Editar pontos de entrada/saída",
+		"deleteClip": "Excluir clipe",
+		"dropToAdd": "Solte para adicionar à linha do tempo",
+		"importRecordingFirst": "Importe uma gravação primeiro",
+		"noAutoZoomMoments": "Nenhum momento de zoom automático encontrado",
+		"noAutoZoomMomentsDescription": "Esta gravação não tem dados de movimento do cursor, ou os zooms existentes já cobrem os momentos de destaque.",
+		"addedAutoZoom": "{{count}} zoom automático adicionado",
+		"addedAutoZoomPlural": "{{count}} zooms automáticos adicionados",
+		"autoZoomFailed": "Falha no zoom automático",
+		"aiEnhanceRequested": "Foi solicitado ao agente de IA que melhore esta gravação"
 	}
 }

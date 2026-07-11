@@ -2,6 +2,10 @@
 	"buttons": {
 		"addZoom": "Thêm Thu phóng (Z)",
 		"suggestZooms": "Đề xuất Thu phóng từ Con trỏ",
+		"autoZoomOn": "Đề xuất thu phóng tự động đang bật — nhấp để loại bỏ các thu phóng được đề xuất",
+		"autoZoomOff": "Đề xuất thu phóng tự động đang tắt — nhấp để đề xuất thu phóng từ con trỏ",
+		"autoFocusAllOn": "Lấy nét tự động đang bật cho tất cả các thu phóng — nhấp để chuyển tất cả sang thủ công",
+		"autoFocusAllOff": "Bật lấy nét tự động cho tất cả các thu phóng (máy ảnh theo dõi con trỏ)",
 		"addTrim": "Thêm Cắt (T)",
 		"addAnnotation": "Thêm Chú thích (A)",
 		"addBlur": "Thêm Làm mờ (B)",
@@ -57,5 +61,32 @@
 	"success": {
 		"addedZoomSuggestions": "Đã thêm {{count}} đề xuất thu phóng dựa trên con trỏ",
 		"addedZoomSuggestionsPlural": "Đã thêm {{count}} đề xuất thu phóng dựa trên con trỏ"
+	},
+	"toolbar": {
+		"autoEnhance": "Tự động nâng cao",
+		"automaticZooms": "Thu phóng tự động",
+		"automaticZoomsHint": "Từ chuyển động con trỏ đã ghi",
+		"smartZoomsAndCuts": "Thu phóng + cắt thông minh",
+		"smartZoomsAndCutsHint": "Với AI",
+		"comment": "Bình luận",
+		"aspectRatio": "Tỷ lệ khung hình",
+		"timelineTools": "Công cụ dòng thời gian",
+		"arrangeClips": "Sắp xếp clip",
+		"arrangeClipsHint": "Kéo các clip bên dưới để sắp xếp lại hoặc thả clip mới vào",
+		"newAnnotation": "Chú thích mới",
+		"noAnnotationsYet": "Chưa có chú thích nào",
+		"constantSpeed": "Tốc độ không đổi",
+		"noTrims": "Không có cắt nào",
+		"dragToReorderHint": "Kéo để sắp xếp lại · nhấp đúp để chỉnh sửa điểm vào/ra",
+		"editInOutPoints": "Chỉnh sửa điểm vào/ra",
+		"deleteClip": "Xóa clip",
+		"dropToAdd": "Thả để thêm vào dòng thời gian",
+		"importRecordingFirst": "Hãy nhập một bản ghi trước",
+		"noAutoZoomMoments": "Không tìm thấy khoảnh khắc thu phóng tự động",
+		"noAutoZoomMomentsDescription": "Bản ghi này không có dữ liệu chuyển động con trỏ, hoặc các thu phóng hiện có đã bao phủ các khoảnh khắc bận rộn.",
+		"addedAutoZoom": "Đã thêm {{count}} thu phóng tự động",
+		"addedAutoZoomPlural": "Đã thêm {{count}} thu phóng tự động",
+		"autoZoomFailed": "Thu phóng tự động thất bại",
+		"aiEnhanceRequested": "Đã yêu cầu AI cải thiện bản ghi này"
 	}
 }

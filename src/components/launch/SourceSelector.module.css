@@ -1,104 +1,99 @@
 .glassContainer {
-	background: linear-gradient(145deg, rgba(13, 14, 17, 0.94) 0%, rgba(8, 9, 12, 0.9) 100%);
-	backdrop-filter: blur(24px) saturate(150%);
-	-webkit-backdrop-filter: blur(24px) saturate(150%);
-	border-radius: 24px;
+	background: #14171c;
+	border-radius: 20px;
 	corner-shape: squircle;
 	/*
-		Removed box-shadow here because electron doesn't round corners of the shadow, thereby leaving a square border shadow conflicting with the rounded corners of the SourceSelector.
-		The result is easily visible when you place a white window just behind the SourceSelector
+		No box-shadow: Electron doesn't round the shadow's corners on this
+		transparent frameless window, leaving a square shadow that clashes with
+		the rounded card. Border + surface contrast carries the elevation instead.
 	*/
-	/* box-shadow:
-		0 0px 16px 0 rgba(0, 0, 0, 0.32),
-		0 1px 3px 0 rgba(0, 0, 0, 0.18) inset; */
-	border: 1px solid rgba(255, 255, 255, 0.1);
+	border: 1px solid #333a45;
 }
 
 .sourceCard {
+	position: relative;
 	corner-shape: squircle;
-	border-radius: 13px;
-	background: rgba(255, 255, 255, 0.045);
-	border: 1px solid rgba(255, 255, 255, 0.07);
-	box-shadow: inset 0 1px 0 rgba(255, 255, 255, 0.035);
-	transition:
-		box-shadow 0.2s ease,
-		border-color 0.2s ease,
-		background-color 0.2s ease,
-		transform 0.2s ease;
+	border-radius: 14px;
+	background: #0f1216;
+	border: 1.5px solid #242932;
+	overflow: hidden;
 	cursor: pointer;
+	transition:
+		border-color 0.15s ease,
+		box-shadow 0.15s ease,
+		transform 0.15s ease;
 }
 
 .sourceCard:hover {
-	background: rgba(255, 255, 255, 0.065);
-	border-color: rgba(255, 255, 255, 0.14);
-	transform: translateY(-1px);
-	box-shadow: 0 10px 24px rgba(0, 0, 0, 0.22), inset 0 1px 0 rgba(255, 255, 255, 0.04);
+	border-color: #333a45;
+	transform: translateY(-2px);
+}
+
+.sourceCard:active {
+	transform: translateY(-1px) scale(0.98);
 }
 
 .selected {
-	border-color: rgba(52, 178, 123, 0.68);
-	background: linear-gradient(145deg, rgba(52, 178, 123, 0.13), rgba(255, 255, 255, 0.045));
-	box-shadow:
-		0 0 0 1px rgba(52, 178, 123, 0.18) inset,
-		0 12px 28px rgba(0, 0, 0, 0.22);
+	border-color: #10b981;
+	box-shadow: 0 0 0 3px rgba(16, 185, 129, 0.16);
 }
 
 .selected:hover {
-	transform: translateY(0);
+	border-color: #10b981;
+	transform: translateY(-2px);
+}
+
+.thumb {
+	position: relative;
+	aspect-ratio: 16 / 10.5;
+	background: #0a0c10;
+	overflow: hidden;
 }
 
 .icon {
-	width: 12px;
-	height: 12px;
-	color: #c7d2fe;
-}
-
-.name {
-	font-size: 0.72rem;
-	color: #e4e4e7;
-	font-weight: 500;
-	letter-spacing: 0;
-}
-
-.cardText {
-	color: #a1a1aa;
-	font-size: 0.75rem;
-}
-
-/* Checkmark badge */
-.checkBadge {
-	width: 17px;
-	height: 17px;
-	background: #34b27b;
+	width: 15px;
+	height: 15px;
 	border-radius: 9999px;
+	object-fit: cover;
+	flex-shrink: 0;
+	border: 1px solid #333a45;
+}
+
+.iconFallback {
+	width: 15px;
+	height: 15px;
+	border-radius: 9999px;
+	background: #232830;
+	border: 1px solid #333a45;
+	color: #828c99;
 	display: flex;
 	align-items: center;
 	justify-content: center;
-	box-shadow: 0 6px 14px rgba(0, 0, 0, 0.35);
+	flex-shrink: 0;
+}
+
+.name {
+	font-size: 12.5px;
+	color: #f5f7fa;
+	font-weight: 600;
+	letter-spacing: 0;
 }
 
 /* scrollbar */
 
 .sourceGridScroll::-webkit-scrollbar {
-	width: 3px;
+	width: 6px;
 }
 
 .sourceGridScroll::-webkit-scrollbar-track {
-	background: rgba(30, 30, 38, 0.3);
-	border-radius: 4px;
+	background: transparent;
 }
 
 .sourceGridScroll::-webkit-scrollbar-thumb {
-	background: rgba(52, 178, 123, 0.5);
-	border-radius: 10px;
+	background: #333a45;
+	border-radius: 999px;
 }
 
 .sourceGridScroll::-webkit-scrollbar-thumb:hover {
-	background: rgba(52, 178, 123, 0.6);
-	cursor: grab;
-}
-
-.sourceGridScroll::-webkit-scrollbar-thumb:active {
-	background: rgba(52, 178, 123, 0.8);
-	cursor: grabbing;
+	background: #3a4150;
 }

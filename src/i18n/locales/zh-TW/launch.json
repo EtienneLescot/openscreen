@@ -10,6 +10,7 @@
 		"openProject": "開啟專案",
 		"useVerticalTray": "使用直向托盤",
 		"useHorizontalTray": "使用橫向托盤",
+		"openStudio": "開啟工作室",
 		"openNotes": "開啟筆記",
 		"openNotesPlaceholder": "在此輸入筆記...",
 		"notesToolbar": {
@@ -27,7 +28,12 @@
 		"disableSystemAudio": "停用系統音訊",
 		"enableMicrophone": "啟用麥克風",
 		"disableMicrophone": "停用麥克風",
-		"defaultMicrophone": "預設麥克風"
+		"defaultMicrophone": "預設麥克風",
+		"systemAudio": "系統音訊",
+		"microphone": "麥克風",
+		"on": "開",
+		"off": "關",
+		"inputDevice": "輸入裝置"
 	},
 	"webcam": {
 		"enableWebcam": "啟用攝影機",
@@ -35,7 +41,9 @@
 		"defaultCamera": "預設攝影機",
 		"searching": "正在搜尋...",
 		"noneFound": "未找到攝影機",
-		"unavailable": "攝影機不可用"
+		"unavailable": "攝影機不可用",
+		"camera": "攝影機",
+		"cameraDevice": "攝影機裝置"
 	},
 	"cursor": {
 		"useEditableCursor": "使用可編輯游標",
@@ -45,6 +53,9 @@
 		"loading": "正在載入來源...",
 		"screens": "螢幕 ({{count}})",
 		"windows": "視窗 ({{count}})",
+		"emptyTitle": "找不到螢幕或視窗",
+		"emptyDescription": "如果您剛授予螢幕錄製權限，請重新載入此選擇器。在 macOS 上，您可能需要重新開啟 OpenScreen。",
+		"loadFailedDescription": "OpenScreen 無法載入擷取來源。請重新載入此選擇器並再試一次。",
 		"defaultSourceName": "螢幕"
 	},
 	"recording": {

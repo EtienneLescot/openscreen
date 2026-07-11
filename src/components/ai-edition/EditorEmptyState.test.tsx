@@ -1,8 +1,14 @@
 import "@testing-library/jest-dom";
 import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { I18nProvider } from "@/contexts/I18nContext";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { EditorEmptyState } from "./EditorEmptyState";
+
+function renderWithI18n(ui: ReactElement) {
+	return render(<I18nProvider>{ui}</I18nProvider>);
+}
 
 const bridgeMocks = vi.hoisted(() => ({
 	create: vi.fn(),
@@ -100,7 +106,7 @@ describe("EditorEmptyState (new editor)", () => {
 			lastSavedAt: new Date(),
 		});
 
-		render(<EditorEmptyState hasProject={true} />);
+		renderWithI18n(<EditorEmptyState hasProject={true} />);
 
 		expect(screen.getByText(/add a video to get started/i)).toBeInTheDocument();
 		// ponytail: no "Open project" button when a project is already loaded —
@@ -109,7 +115,7 @@ describe("EditorEmptyState (new editor)", () => {
 	});
 
 	it("shows both import + open-project buttons when no project is loaded", () => {
-		render(<EditorEmptyState hasProject={false} />);
+		renderWithI18n(<EditorEmptyState hasProject={false} />);
 
 		expect(screen.getByText(/no project open/i)).toBeInTheDocument();
 		expect(
@@ -150,7 +156,7 @@ describe("EditorEmptyState (new editor)", () => {
 			},
 		});
 
-		render(<EditorEmptyState hasProject={true} />);
+		renderWithI18n(<EditorEmptyState hasProject={true} />);
 
 		await act(async () => {
 			fireEvent.click(screen.getByRole("button", { name: /import video/i }));
@@ -178,7 +184,7 @@ describe("EditorEmptyState (new editor)", () => {
 			document: sampleDoc,
 		});
 
-		render(<EditorEmptyState hasProject={false} />);
+		renderWithI18n(<EditorEmptyState hasProject={false} />);
 
 		await act(async () => {
 			fireEvent.click(screen.getByRole("button", { name: /new project \+ import video/i }));
@@ -201,7 +207,7 @@ describe("EditorEmptyState (new editor)", () => {
 		});
 		bridgeMocks.save.mockResolvedValue({ success: true, document: sampleDoc });
 
-		render(<EditorEmptyState hasProject={false} />);
+		renderWithI18n(<EditorEmptyState hasProject={false} />);
 
 		await act(async () => {
 			fireEvent.click(screen.getByRole("button", { name: /open project/i }));
@@ -214,7 +220,7 @@ describe("EditorEmptyState (new editor)", () => {
 	});
 
 	it("shows the unsupported-format dialog when a non-.openscreen file is dropped", async () => {
-		render(<EditorEmptyState hasProject={false} />);
+		renderWithI18n(<EditorEmptyState hasProject={false} />);
 
 		const file = new File([new Uint8Array([0, 1, 2])], "recording.mp4", { type: "video/mp4" });
 		const dropZone = screen.getByText(/no project open/i).parentElement?.parentElement

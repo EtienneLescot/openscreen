@@ -51,9 +51,29 @@
 		"detail": "Vuoi salvare il progetto prima di chiudere?",
 		"saveAndClose": "Salva e chiudi",
 		"discardAndClose": "Scarta e chiudi",
+		"detailNewProject": "Vuoi salvare il progetto prima di crearne uno nuovo?",
+		"saveAndNewProject": "Salva e nuovo progetto",
+		"discardAndNewProject": "Scarta e nuovo progetto",
+		"detailLoadProject": "Vuoi salvare il progetto prima di caricarne un altro?",
+		"saveAndLoadProject": "Salva e carica progetto",
+		"discardAndLoadProject": "Scarta e carica progetto",
+		"newProject": "Nuovo progetto",
+		"importVideo": "Importa file video…",
 		"loadProject": "Carica progetto…",
 		"saveProject": "Salva progetto…",
-		"saveProjectAs": "Salva progetto come…"
+		"saveProjectAs": "Salva progetto come…",
+		"modal": {
+			"closeTitle": "Salvare le modifiche prima di chiudere?",
+			"closeBody": "Il tuo progetto ha modifiche non salvate. Salvale ora, scartale o resta nell'editor.",
+			"newTitle": "Salvare le modifiche prima di creare un nuovo progetto?",
+			"openTitle": "Salvare le modifiche prima di aprire un altro progetto?",
+			"recordTitle": "Salvare le modifiche prima di avviare una nuova registrazione?",
+			"sharedBody": "Il progetto attuale ha modifiche non salvate. Salvale prima, scartale o annulla.",
+			"notSavedYet": "Il progetto attuale non è ancora stato salvato su disco.",
+			"discard": "Scarta",
+			"saveAndContinue": "Salva e continua",
+			"saving": "Salvataggio…"
+		}
 	},
 	"fileDialogs": {
 		"saveGif": "Salva GIF esportata",

@@ -10,6 +10,7 @@
 		"openProject": "Ouvrir un projet",
 		"useVerticalTray": "Utiliser la barre verticale",
 		"useHorizontalTray": "Utiliser la barre horizontale",
+		"openStudio": "Ouvrir le Studio",
 		"openNotes": "Ouvrir les notes",
 		"openNotesPlaceholder": "Prenez des notes ici...",
 		"notesToolbar": {
@@ -27,7 +28,12 @@
 		"disableSystemAudio": "Désactiver l'audio système",
 		"enableMicrophone": "Activer le microphone",
 		"disableMicrophone": "Désactiver le microphone",
-		"defaultMicrophone": "Microphone par défaut"
+		"defaultMicrophone": "Microphone par défaut",
+		"systemAudio": "Audio système",
+		"microphone": "Microphone",
+		"on": "Activé",
+		"off": "Désactivé",
+		"inputDevice": "Périphérique d'entrée"
 	},
 	"webcam": {
 		"enableWebcam": "Activer la webcam",
@@ -35,7 +41,9 @@
 		"defaultCamera": "Caméra par défaut",
 		"searching": "Recherche en cours...",
 		"noneFound": "Aucune caméra trouvée",
-		"unavailable": "Caméra non disponible"
+		"unavailable": "Caméra non disponible",
+		"camera": "Caméra",
+		"cameraDevice": "Périphérique caméra"
 	},
 	"cursor": {
 		"useEditableCursor": "Utiliser le curseur éditable",
@@ -45,6 +53,9 @@
 		"loading": "Chargement des sources...",
 		"screens": "Écrans ({{count}})",
 		"windows": "Fenêtres ({{count}})",
+		"emptyTitle": "Aucun écran ni fenêtre trouvé",
+		"emptyDescription": "Si vous venez d'accorder l'autorisation d'enregistrement d'écran, rechargez ce sélecteur. Sur macOS, il peut être nécessaire de rouvrir OpenScreen.",
+		"loadFailedDescription": "OpenScreen n'a pas pu charger les sources de capture. Rechargez ce sélecteur et réessayez.",
 		"defaultSourceName": "Écran"
 	},
 	"recording": {

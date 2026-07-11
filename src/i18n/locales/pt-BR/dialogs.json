@@ -42,7 +42,6 @@
 		"step1Title": "1. Adicionar Recorte",
 		"step1DescriptionBefore": "Pressione ",
 		"step1DescriptionAfter": " ou clique no ícone da tesoura para marcar uma seção para remoção.",
-
 		"step2Title": "2. Ajustar",
 		"step2Description": "Arraste as bordas da região vermelha para cobrir exatamente o que você deseja cortar."
 	},
@@ -52,9 +51,29 @@
 		"detail": "Deseja salvar seu projeto antes de fechar?",
 		"saveAndClose": "Salvar e Fechar",
 		"discardAndClose": "Descartar e Fechar",
+		"detailNewProject": "Deseja salvar seu projeto antes de criar um novo?",
+		"saveAndNewProject": "Salvar e Novo Projeto",
+		"discardAndNewProject": "Descartar e Novo Projeto",
+		"detailLoadProject": "Deseja salvar seu projeto antes de carregar outro?",
+		"saveAndLoadProject": "Salvar e Carregar Projeto",
+		"discardAndLoadProject": "Descartar e Carregar Projeto",
+		"newProject": "Novo Projeto",
+		"importVideo": "Importar Arquivo de Vídeo…",
 		"loadProject": "Carregar Projeto…",
 		"saveProject": "Salvar Projeto…",
-		"saveProjectAs": "Salvar Projeto Como…"
+		"saveProjectAs": "Salvar Projeto Como…",
+		"modal": {
+			"closeTitle": "Salvar alterações antes de fechar?",
+			"closeBody": "Seu projeto tem alterações não salvas. Salve agora, descarte ou permaneça no editor.",
+			"newTitle": "Salvar alterações antes de criar um novo projeto?",
+			"openTitle": "Salvar alterações antes de abrir outro projeto?",
+			"recordTitle": "Salvar alterações antes de iniciar uma nova gravação?",
+			"sharedBody": "O projeto atual tem alterações não salvas. Salve primeiro, descarte ou cancele.",
+			"notSavedYet": "O projeto atual ainda não foi salvo no disco.",
+			"discard": "Descartar",
+			"saveAndContinue": "Salvar e continuar",
+			"saving": "Salvando…"
+		}
 	},
 	"fileDialogs": {
 		"saveGif": "Salvar GIF Exportado",

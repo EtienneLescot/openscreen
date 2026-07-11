@@ -62,7 +62,19 @@
 		"importVideo": "Import Video File…",
 		"loadProject": "Load Project…",
 		"saveProject": "Save Project…",
-		"saveProjectAs": "Save Project As…"
+		"saveProjectAs": "Save Project As…",
+		"modal": {
+			"closeTitle": "Save changes before closing?",
+			"closeBody": "Your project has unsaved changes. Save them now, discard them, or stay in the editor.",
+			"newTitle": "Save changes before creating a new project?",
+			"openTitle": "Save changes before opening another project?",
+			"recordTitle": "Save changes before starting a new recording?",
+			"sharedBody": "The current project has unsaved changes. Save them first, discard them, or cancel.",
+			"notSavedYet": "The current project has not been saved to disk yet.",
+			"discard": "Discard",
+			"saveAndContinue": "Save & continue",
+			"saving": "Saving…"
+		}
 	},
 	"fileDialogs": {
 		"saveGif": "Save Exported GIF",

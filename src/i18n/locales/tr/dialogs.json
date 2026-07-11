@@ -57,9 +57,23 @@
 		"detailLoadProject": "Başka bir proje yüklemeden önce kaydetmek ister misiniz?",
 		"saveAndLoadProject": "Kaydet ve Proje Yükle",
 		"discardAndLoadProject": "Kaydetmeden Proje Yükle",
+		"newProject": "Yeni Proje",
+		"importVideo": "Video Dosyası İçe Aktar…",
 		"loadProject": "Proje Yükle…",
 		"saveProject": "Proje Kaydet…",
-		"saveProjectAs": "Farklı Kaydet…"
+		"saveProjectAs": "Farklı Kaydet…",
+		"modal": {
+			"closeTitle": "Kapatmadan önce değişiklikler kaydedilsin mi?",
+			"closeBody": "Projenizde kaydedilmemiş değişiklikler var. Şimdi kaydedin, atın veya düzenleyicide kalın.",
+			"newTitle": "Yeni bir proje oluşturmadan önce değişiklikler kaydedilsin mi?",
+			"openTitle": "Başka bir projeyi açmadan önce değişiklikler kaydedilsin mi?",
+			"recordTitle": "Yeni bir kayıt başlatmadan önce değişiklikler kaydedilsin mi?",
+			"sharedBody": "Geçerli projede kaydedilmemiş değişiklikler var. Önce kaydedin, atın veya vazgeçin.",
+			"notSavedYet": "Geçerli proje henüz diske kaydedilmedi.",
+			"discard": "At",
+			"saveAndContinue": "Kaydet ve devam et",
+			"saving": "Kaydediliyor…"
+		}
 	},
 	"fileDialogs": {
 		"saveGif": "Dışa Aktarılan GIF'i Kaydet",

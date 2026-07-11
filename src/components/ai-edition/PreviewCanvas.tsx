@@ -24,10 +24,12 @@
 
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import type {
-	WebcamLayoutPreset,
-	WebcamMaskShape,
-	ZoomFocus,
+import {
+	type CropRegion,
+	DEFAULT_CROP_REGION,
+	type WebcamLayoutPreset,
+	type WebcamMaskShape,
+	type ZoomFocus,
 } from "@/components/video-editor/types";
 import type {
 	AxcutAnnotationRegion,
@@ -40,6 +42,7 @@ import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { resolveActiveCameraTrack } from "@/lib/ai-edition/timeline/camera";
 import { createPlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
+import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import {
 	computeCompositeLayout,
 	getWebcamLayoutCssBoxShadow,
@@ -81,6 +84,14 @@ interface PreviewCanvasProps {
 	onVideoError?: () => void;
 }
 
+// ponytail: fallback only — used until the active source's <video> reports
+// its real intrinsic size via onLoadedMetadata. Nothing in the import/record
+// pipeline ever probes/stores a recording's actual resolution (AxcutAsset's
+// `video.width/height` is never populated), so without this the composite
+// layout always assumed 16:9 regardless of the real capture — a recording at
+// any other aspect then letterboxed a SECOND time inside its own screenRect
+// (the <video> contain-fits its true ratio within a box sized for the wrong
+// one), on top of the intentional `settings.padding` margin.
 const SCREEN_SOURCE_SIZE = { width: 1920, height: 1080 };
 // ponytail: live preview defaults until the camera <video> reports its real
 // dimensions via loadedmetadata. 4:3 is the legacy default — typical webcams
@@ -99,6 +110,13 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	if (!clockRefHolder.current) clockRefHolder.current = createPlaybackClockRef();
 	const clockRef = clockRefHolder.current;
 	const [canvasSize, setCanvasSize] = useState({ width: 1280, height: 720 });
+	// Real dimensions of the active source, from the <video>'s own
+	// onLoadedMetadata (videoWidth/videoHeight) — null until the first source
+	// loads, then falls back to SCREEN_SOURCE_SIZE.
+	const [screenNativeSize, setScreenNativeSize] = useState<{
+		width: number;
+		height: number;
+	} | null>(null);
 	// ponytail: contain-fit the frame within its wrapper ourselves. CSS
 	// `aspect-ratio` + `width: 100%` + `max-height: 100%` only clamps height —
 	// it never shrinks width back down to match, so portrait ratios (9:16 etc)
@@ -106,6 +124,19 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	// (not the frame, which we're about to size) lets us compute an explicit
 	// pixel box that actually respects the ratio on both axes.
 	const [containerSize, setContainerSize] = useState({ width: 1280, height: 720 });
+	// ponytail: StrictMode's dev-only mount→cleanup→remount double-invoke
+	// creates a fresh ResizeObserver, disconnects it, then creates ANOTHER
+	// fresh one observing the same element in the same tick. Chromium
+	// silently drops all FUTURE notifications for that element when this
+	// exact disconnect-then-immediately-recreate pattern happens (confirmed
+	// live: a raw counter in the callback never incremented past the initial
+	// synchronous calls, even across a real viewport resize) — the frame
+	// would freeze at its first-paint size and never resize again. Holding
+	// the observer instance in a ref (surviving the double-invoke, since
+	// only the effect body reruns) and just toggling observe/unobserve on it
+	// avoids ever recreating the instance, which sidesteps the bug.
+	const containerObserverRef = useRef<ResizeObserver | null>(null);
+	const canvasObserverRef = useRef<ResizeObserver | null>(null);
 
 	useEffect(() => {
 		const el = frameRef.current?.parentElement;
@@ -127,9 +158,12 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		};
 		update();
 		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(update);
+		if (!containerObserverRef.current) {
+			containerObserverRef.current = new ResizeObserver(update);
+		}
+		const observer = containerObserverRef.current;
 		observer.observe(el);
-		return () => observer.disconnect();
+		return () => observer.unobserve(el);
 	}, []);
 
 	useEffect(() => {
@@ -142,9 +176,12 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 			});
 		update();
 		if (typeof ResizeObserver === "undefined") return;
-		const observer = new ResizeObserver(update);
+		if (!canvasObserverRef.current) {
+			canvasObserverRef.current = new ResizeObserver(update);
+		}
+		const observer = canvasObserverRef.current;
 		observer.observe(el);
-		return () => observer.disconnect();
+		return () => observer.unobserve(el);
 	}, []);
 
 	const frameSize = useMemo(() => {
@@ -160,6 +197,16 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		return { width: Math.round(width), height: Math.round(width / ratio) };
 	}, [containerSize, settings.aspectRatio]);
 
+	// Crop is per-clip (see clipSchema.cropRegion) — resolve it from whichever
+	// clip the playhead is currently inside, the same lookup VirtualPreview
+	// itself uses to map playback position back to a clip. `undefined` (no
+	// crop stored) normalises to the identity region.
+	const activeClip = useMemo(
+		() => locateVirtualPosition(props.clips, props.currentTimeSec)?.clip ?? null,
+		[props.clips, props.currentTimeSec],
+	);
+	const cropRegion: CropRegion = activeClip?.cropRegion ?? DEFAULT_CROP_REGION;
+
 	const layout = useMemo(() => {
 		const preset = settings.webcamLayoutPreset as WebcamLayoutPreset;
 		const mask = settings.webcamMaskShape as WebcamMaskShape;
@@ -173,10 +220,19 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 			width: Math.round(canvasSize.width * paddingFit),
 			height: Math.round(canvasSize.height * paddingFit),
 		};
+		// The screen box must be fit to the CROPPED aspect ratio, not the full
+		// source frame's — otherwise VirtualPreview's crop math (which assumes
+		// its container is already correctly proportioned for the crop) would
+		// stretch the video to fill a mis-shaped box.
+		const fullScreenSize = screenNativeSize ?? SCREEN_SOURCE_SIZE;
+		const croppedScreenSize = {
+			width: Math.max(1, Math.round(fullScreenSize.width * cropRegion.width)),
+			height: Math.max(1, Math.round(fullScreenSize.height * cropRegion.height)),
+		};
 		return computeCompositeLayout({
 			canvasSize,
 			maxContentSize,
-			screenSize: SCREEN_SOURCE_SIZE,
+			screenSize: croppedScreenSize,
 			webcamSize: settings.webcamLayoutPreset === "no-webcam" ? null : WEBCAM_SOURCE_SIZE,
 			layoutPreset: preset,
 			webcamSizePreset: settings.webcamSizePreset,
@@ -189,6 +245,8 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		});
 	}, [
 		canvasSize,
+		screenNativeSize,
+		cropRegion,
 		settings.webcamLayoutPreset,
 		settings.webcamMaskShape,
 		settings.webcamSizePreset,
@@ -225,7 +283,28 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		setIsPlaying(!el?.paused);
 		setVideoEl(el);
 	};
-	const relayProps = { ...props, onVideoElement: relayIsPlaying, clockRef };
+	const relayLoadedMetadata = (
+		durationSec: number,
+		assetId: string,
+		videoWidth: number,
+		videoHeight: number,
+	) => {
+		if (videoWidth > 0 && videoHeight > 0) {
+			setScreenNativeSize((prev) =>
+				prev?.width === videoWidth && prev?.height === videoHeight
+					? prev
+					: { width: videoWidth, height: videoHeight },
+			);
+		}
+		props.onLoadedMetadata(durationSec, assetId);
+	};
+	const relayProps = {
+		...props,
+		onVideoElement: relayIsPlaying,
+		onLoadedMetadata: relayLoadedMetadata,
+		cropRegion,
+		clockRef,
+	};
 
 	const handleWebcamPointerDown = (event: ReactPointerEvent<HTMLDivElement>) => {
 		if (settings.webcamLayoutPreset !== "picture-in-picture") return;
@@ -294,7 +373,12 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 						// See docs/engineering/ai-edition-preview-pixi-rollback.md
 						// (todo) for the failure write-up.
 						void relayProps.clockRef;
-						return <VirtualPreview {...relayProps} videoStyle={videoBorderRadiusStyle(settings)} />;
+						return (
+							<VirtualPreview
+								{...relayProps}
+								videoStyle={videoBorderRadiusStyle(layout, settings)}
+							/>
+						);
 					})()}
 					{selectedZoomRegion && props.onZoomFocusChange ? (
 						<ZoomFocusOverlay
@@ -387,9 +471,11 @@ function buildFrameStyle(
 }
 
 // Screen stage: rectangle from the composite layout, converted to percentages
-// of the canvas. NO borderRadius on the container — the rounded corners are
-// applied on the <video> itself so they actually clip the video content
-// rather than drawing a border around it. Box-shadow follows the user's
+// of the canvas. The container carries the SAME borderRadius as the <video>
+// inside it (still clipped via the video's own radius, this is belt-and-
+// braces) — a box-shadow only follows the shape of the element it's applied
+// to, so a square container behind a rounded video drew a squared-off shadow
+// poking out past the video's rounded corners. Box-shadow follows the user's
 // `shadowIntensity` setting only — at intensity 0 the stage is flat so it
 // bleeds into the canvas cleanly.
 function buildScreenStyle(
@@ -402,8 +488,7 @@ function buildScreenStyle(
 	const shadow = settings.shadowIntensity
 		? `0 ${4 + settings.shadowIntensity * 20}px ${16 + settings.shadowIntensity * 36}px rgba(0,0,0,${0.18 + settings.shadowIntensity * 0.45})`
 		: undefined;
-	void layout.screenBorderRadius;
-	void settings.borderRadius;
+	const borderRadius = layout.screenBorderRadius ?? settings.borderRadius;
 	return {
 		position: "absolute",
 		left: `${(r.x / canvasSize.width) * 100}%`,
@@ -412,19 +497,25 @@ function buildScreenStyle(
 		height: `${(r.height / canvasSize.height) * 100}%`,
 		overflow: "hidden",
 		display: "flex",
+		borderRadius: `${borderRadius}px`,
 		boxShadow: shadow,
 	};
 }
 
 function videoBorderRadiusStyle(
+	layout: WebcamCompositeLayout | null,
 	settings: ReturnType<typeof useEditorSettings>["settings"],
 ): React.CSSProperties {
-	return { borderRadius: `${settings.borderRadius}px` };
+	const borderRadius = layout?.screenBorderRadius ?? settings.borderRadius;
+	return { borderRadius: `${borderRadius}px` };
 }
 
-// Webcam slot: full composite-layout rect with mask shape + shadow. NO
-// borderRadius here — the rounded corners live on the <video> inside so they
-// actually clip the camera content rather than drawing a frame around it.
+// Webcam slot: full composite-layout rect with mask shape + shadow. The
+// container's own borderRadius matches r.borderRadius (same radius the inner
+// <video> clips to, and for "circle" that's already a half-dimension radius)
+// so the box-shadow — which only ever follows border-radius, never
+// clip-path — traces the same rounded/circular shape instead of a square
+// poking out behind the masked content.
 function buildWebcamStyle(
 	layout: WebcamCompositeLayout | null,
 	settings: ReturnType<typeof useEditorSettings>["settings"],
@@ -443,10 +534,9 @@ function buildWebcamStyle(
 		overflow: "hidden",
 		display: "flex",
 		background: "transparent",
+		borderRadius: `${r.borderRadius}px`,
 		boxShadow: getWebcamLayoutCssBoxShadow(settings.webcamLayoutPreset as WebcamLayoutPreset),
 	};
-	void r.borderRadius;
-	void mask;
 	return clipPath ? { ...base, clipPath } : base;
 }
 

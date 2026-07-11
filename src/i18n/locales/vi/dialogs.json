@@ -57,9 +57,23 @@
 		"detailLoadProject": "Bạn có muốn lưu dự án của mình trước khi tải dự án khác không?",
 		"saveAndLoadProject": "Lưu & Tải dự án",
 		"discardAndLoadProject": "Bỏ qua & Tải dự án",
+		"newProject": "Dự án mới",
+		"importVideo": "Nhập tệp video…",
 		"loadProject": "Tải dự án…",
 		"saveProject": "Lưu dự án…",
-		"saveProjectAs": "Lưu dự án thành…"
+		"saveProjectAs": "Lưu dự án thành…",
+		"modal": {
+			"closeTitle": "Lưu thay đổi trước khi đóng?",
+			"closeBody": "Dự án của bạn có các thay đổi chưa lưu. Lưu ngay, hủy bỏ, hoặc ở lại trình chỉnh sửa.",
+			"newTitle": "Lưu thay đổi trước khi tạo dự án mới?",
+			"openTitle": "Lưu thay đổi trước khi mở dự án khác?",
+			"recordTitle": "Lưu thay đổi trước khi bắt đầu bản ghi mới?",
+			"sharedBody": "Dự án hiện tại có các thay đổi chưa lưu. Lưu trước, hủy bỏ, hoặc hủy thao tác.",
+			"notSavedYet": "Dự án hiện tại chưa được lưu vào ổ đĩa.",
+			"discard": "Hủy bỏ",
+			"saveAndContinue": "Lưu và tiếp tục",
+			"saving": "Đang lưu…"
+		}
 	},
 	"fileDialogs": {
 		"saveGif": "Lưu GIF đã xuất",

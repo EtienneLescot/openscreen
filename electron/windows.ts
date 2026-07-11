@@ -18,6 +18,51 @@ const ASSET_BASE_URL_ARG = `--asset-base-url=${pathToFileURL(`${ASSET_BASE_DIR}$
 
 let hudOverlayWindow: BrowserWindow | null = null;
 
+interface HudBounds {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+// Smoothly tweens the HUD's bounds instead of snapping, so every content-driven
+// resize (recording state changing which controls are shown, a device popover
+// opening, etc.) reads as a fluid grow/shrink rather than a jarring jump.
+let hudResizeAnimationTimer: NodeJS.Timeout | null = null;
+const HUD_RESIZE_DURATION_MS = 160;
+const HUD_RESIZE_FRAME_MS = 1000 / 60;
+const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
+
+function animateHudBounds(win: BrowserWindow, from: HudBounds, to: HudBounds) {
+	if (hudResizeAnimationTimer) {
+		clearInterval(hudResizeAnimationTimer);
+		hudResizeAnimationTimer = null;
+	}
+
+	const start = Date.now();
+	hudResizeAnimationTimer = setInterval(() => {
+		if (win.isDestroyed()) {
+			if (hudResizeAnimationTimer) clearInterval(hudResizeAnimationTimer);
+			hudResizeAnimationTimer = null;
+			return;
+		}
+
+		const t = Math.min(1, (Date.now() - start) / HUD_RESIZE_DURATION_MS);
+		const e = easeOutCubic(t);
+		win.setBounds({
+			x: Math.round(from.x + (to.x - from.x) * e),
+			y: Math.round(from.y + (to.y - from.y) * e),
+			width: Math.round(from.width + (to.width - from.width) * e),
+			height: Math.round(from.height + (to.height - from.height) * e),
+		});
+
+		if (t >= 1) {
+			if (hudResizeAnimationTimer) clearInterval(hudResizeAnimationTimer);
+			hudResizeAnimationTimer = null;
+		}
+	}, HUD_RESIZE_FRAME_MS);
+}
+
 ipcMain.on("hud-overlay-hide", () => {
 	if (hudOverlayWindow && !hudOverlayWindow.isDestroyed()) {
 		hudOverlayWindow.minimize();
@@ -72,9 +117,25 @@ ipcMain.on("hud-overlay-set-size", (_event, width: number, height: number) => {
 	const centerX = bounds.x + bounds.width / 2;
 	const bottomY = bounds.y + bounds.height;
 
-	hudOverlayWindow.setBounds({
-		x: Math.round(centerX - nextWidth / 2),
-		y: Math.round(bottomY - nextHeight),
+	// Growing height keeps the bottom edge anchored (so the vertical tray grows
+	// upward from where the user left it), but that alone can push the top edge
+	// above the screen — e.g. switching to the tall vertical layout while sitting
+	// low/mid-screen. The drag handle lives at the tray's start (top, in vertical
+	// mode), so an off-screen top edge makes the HUD both invisible and
+	// undraggable back into view. Clamp both axes to the display's work area so
+	// the window (and its drag handle) always stays fully reachable.
+	const nextX = Math.min(
+		Math.max(workArea.x, Math.round(centerX - nextWidth / 2)),
+		workArea.x + workArea.width - nextWidth,
+	);
+	const nextY = Math.min(
+		Math.max(workArea.y, Math.round(bottomY - nextHeight)),
+		workArea.y + workArea.height - nextHeight,
+	);
+
+	animateHudBounds(hudOverlayWindow, bounds, {
+		x: nextX,
+		y: nextY,
 		width: nextWidth,
 		height: nextHeight,
 	});
@@ -239,12 +300,12 @@ export function createSourceSelectorWindow(): BrowserWindow {
 	const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
 	const win = new BrowserWindow({
-		width: 620,
-		height: 420,
-		minHeight: 350,
-		maxHeight: 500,
-		x: Math.round((width - 620) / 2),
-		y: Math.round((height - 420) / 2),
+		width: 680,
+		height: 580,
+		minHeight: 420,
+		maxHeight: 680,
+		x: Math.round((width - 680) / 2),
+		y: Math.round((height - 580) / 2),
 		frame: false,
 		resizable: false,
 		alwaysOnTop: true,

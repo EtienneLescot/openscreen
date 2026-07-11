@@ -15,6 +15,7 @@
 	display: flex;
 	align-items: center;
 	justify-content: center;
+	overflow: hidden;
 	transform-origin: 0 0;
 	will-change: transform;
 }
@@ -23,6 +24,14 @@
 	max-width: 100%;
 	max-height: 100%;
 	border-radius: 0.5rem;
+}
+
+/* Cropped video: oversized and offset (via inline style, see VirtualPreview.tsx)
+   so only the cropped sub-rect is visible — .videoFrame's overflow:hidden
+   above does the actual clipping. */
+.videoCropped {
+	max-width: none;
+	max-height: none;
 }
 
 .overlay {

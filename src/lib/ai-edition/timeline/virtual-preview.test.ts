@@ -111,4 +111,52 @@ describe("virtual-preview pure functions", () => {
 		const posNone = locateSourcePosition(multiClips, 5, "a3");
 		expect(posNone).toBeNull();
 	});
+
+	it("locateSourcePosition prefers the given clip id when two clips share an asset and overlap in source-time", () => {
+		// Same asset, identical (untrimmed) source range — e.g. the same clip
+		// duplicated, or the same recording dropped onto the timeline twice.
+		const duplicateClips: AxcutClip[] = [
+			{
+				id: "clip_1",
+				assetId: "a1",
+				sourceStartSec: 0,
+				sourceEndSec: 10,
+				timelineStartSec: 0,
+				timelineEndSec: 10,
+				wordRefs: [],
+				origin: "system",
+				reason: "",
+			},
+			{
+				id: "clip_2",
+				assetId: "a1",
+				sourceStartSec: 0,
+				sourceEndSec: 10,
+				timelineStartSec: 10,
+				timelineEndSec: 20,
+				wordRefs: [],
+				origin: "system",
+				reason: "",
+			},
+		];
+
+		// Without a preferred clip id, the ambiguous scan always resolves to
+		// the earliest matching clip — this is the bug: playing back the
+		// second clip's segment would still report position/identity for the
+		// first.
+		const ambiguous = locateSourcePosition(duplicateClips, 5, "a1");
+		expect(ambiguous?.clip.id).toBe("clip_1");
+
+		// With the currently-active clip id passed through, it's preferred
+		// even though clip_1 also matches (assetId, sourceTime).
+		const disambiguated = locateSourcePosition(duplicateClips, 5, "a1", 0.05, "clip_2");
+		expect(disambiguated?.clip.id).toBe("clip_2");
+		expect(disambiguated?.virtualTimeSec).toBe(15);
+
+		// A preferred clip id that no longer applies (source time moved
+		// outside its range) falls back to the ambiguous scan rather than
+		// forcing a stale match.
+		const outOfRange = locateSourcePosition(duplicateClips, 5, "a1", 0.05, "clip_3");
+		expect(outOfRange?.clip.id).toBe("clip_1");
+	});
 });

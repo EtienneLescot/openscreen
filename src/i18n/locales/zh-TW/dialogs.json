@@ -57,9 +57,23 @@
 		"detailLoadProject": "是否在載入其他專案前儲存目前的專案？",
 		"saveAndLoadProject": "儲存並載入專案",
 		"discardAndLoadProject": "捨棄並載入專案",
+		"newProject": "新專案",
+		"importVideo": "匯入影片檔案…",
 		"loadProject": "載入專案…",
 		"saveProject": "儲存專案…",
-		"saveProjectAs": "專案另存新檔…"
+		"saveProjectAs": "專案另存新檔…",
+		"modal": {
+			"closeTitle": "關閉前要儲存變更嗎？",
+			"closeBody": "專案中有未儲存的變更。立即儲存、捨棄，或留在編輯器中。",
+			"newTitle": "建立新專案前要儲存變更嗎？",
+			"openTitle": "開啟其他專案前要儲存變更嗎？",
+			"recordTitle": "開始新錄製前要儲存變更嗎？",
+			"sharedBody": "目前專案有未儲存的變更。請先儲存、捨棄變更，或取消操作。",
+			"notSavedYet": "目前專案尚未儲存到磁碟。",
+			"discard": "捨棄",
+			"saveAndContinue": "儲存並繼續",
+			"saving": "正在儲存…"
+		}
 	},
 	"fileDialogs": {
 		"saveGif": "儲存匯出的 GIF",

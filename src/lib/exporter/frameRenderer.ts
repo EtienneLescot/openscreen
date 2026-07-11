@@ -187,6 +187,18 @@ export class FrameRenderer {
 		};
 	}
 
+	/**
+	 * Swaps the active crop before rendering the next frame — crop is per-clip
+	 * (see clipSchema.cropRegion), not a single value for the whole export.
+	 * `updateLayout()` (called at the top of every `renderFrame`) reads
+	 * `this.config.cropRegion` fresh each time, and the cursor overlay does
+	 * the same, so mutating it here is picked up correctly by both without
+	 * any extra cache invalidation.
+	 */
+	setCropRegion(cropRegion: CropRegion): void {
+		this.config.cropRegion = cropRegion;
+	}
+
 	async initialize(): Promise<void> {
 		const canvas = document.createElement("canvas");
 		canvas.width = this.config.width;

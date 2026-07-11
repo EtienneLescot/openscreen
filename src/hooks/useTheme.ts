@@ -19,6 +19,12 @@ function applyTheme(theme: Theme) {
 	} else {
 		document.documentElement.removeAttribute("data-theme");
 	}
+	// Keep the legacy shadcn/Tailwind `.dark` class (index.css's `--accent`/
+	// `--border`/`--muted` HSL-triplet tokens) in sync with the ai-edition
+	// `data-theme` attribute — these are two separate token systems that
+	// happen to share property names, so leaving `.dark` stuck on regardless
+	// of the real theme silently overrides design-tokens.css's light values.
+	document.documentElement.classList.toggle("dark", theme === "dark");
 }
 
 export function useTheme(): { theme: Theme; toggle: () => void; setTheme: (t: Theme) => void } {

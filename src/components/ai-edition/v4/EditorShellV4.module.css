@@ -239,10 +239,9 @@
 }
 
 /* ─── FLOATING INSPECTOR + FACET RAIL ──────────────────────────────── */
-/* bottom used to reserve room for the (permanently visible) transport bar;
-   the transport is now a hover-reveal overlay (see .transportWrap) and no
-   longer needs reserved space, so every facet gets the same tight margin
-   down to just above the timeline — same fix as the stage padding. */
+/* Playback transport lives in the timeline header now (TransportBar, via
+   V4Timeline), not over the stage, so every facet gets the same tight
+   margin down to just above the timeline. */
 .inspectorWrap {
 	position: absolute;
 	top: 20px;
@@ -306,95 +305,6 @@
 .facetRail button[aria-pressed="true"] {
 	color: var(--accent);
 	background: var(--accent-soft);
-}
-
-/* ─── FLOATING TRANSPORT (Edit mode) ───────────────────────────────── */
-/* Hover-reveal overlay: hidden until the pointer is over the stage (or the
-   bar itself has focus, for keyboard users), so it never reserves space
-   for the video and never gets in the way of watching playback. */
-.transportWrap {
-	position: absolute;
-	left: 0;
-	right: 0;
-	bottom: 22px;
-	display: flex;
-	justify-content: center;
-	z-index: 15;
-	pointer-events: none;
-	opacity: 0;
-	transition: opacity var(--motion-med) var(--ease);
-}
-.stage:hover .transportWrap,
-.transportWrap:focus-within {
-	opacity: 1;
-	pointer-events: auto;
-}
-.transport {
-	/* pointer-events follows .transportWrap (none while hidden, auto on
-	   hover/focus-within) — no independent override here. */
-	display: inline-flex;
-	align-items: center;
-	gap: 8px;
-	padding: 8px 10px;
-	border-radius: 16px;
-	background: var(--surface-1);
-	border: 1px solid var(--border);
-	box-shadow: var(--elev-pop);
-}
-.transport .tbtn {
-	width: 34px;
-	height: 34px;
-	display: grid;
-	place-items: center;
-	border-radius: 9px;
-	color: var(--fg-2);
-	background: transparent;
-	border: 0;
-	cursor: pointer;
-	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
-}
-.transport .tbtn:hover {
-	background: var(--surface-3);
-	color: var(--fg);
-}
-.transport .tbtn.on {
-	color: var(--accent);
-	background: var(--accent-soft);
-}
-.transport .play {
-	width: 44px;
-	height: 44px;
-	border-radius: 12px;
-	background: var(--accent);
-	color: #fff;
-	box-shadow: 0 4px 14px -4px var(--accent-soft);
-}
-.transport .play:hover {
-	background: var(--brand-lo);
-	color: #fff;
-}
-.transport .time {
-	font-family: var(--font-mono);
-	font-size: 13px;
-	color: var(--fg);
-	min-width: 104px;
-	text-align: center;
-}
-.transport .time b {
-	font-weight: 600;
-}
-.transport .time .slash {
-	color: var(--meta);
-	margin: 0 5px;
-}
-.transport .time .total {
-	color: var(--muted);
-}
-.transport .vsep {
-	width: 1px;
-	height: 22px;
-	background: var(--border);
-	margin: 0 2px;
 }
 
 /* ─── TIMELINE FOOTER ──────────────────────────────────────────────── */
@@ -523,7 +433,7 @@
 .mediaCardStats .size {
 	font-family: var(--font-mono);
 	font-size: 10.5px;
-	color: var(--meta);
+	color: var(--muted);
 }
 .mediaHint {
 	display: flex;
@@ -571,20 +481,41 @@
 }
 
 /* ─── REC STAGE ────────────────────────────────────────────────────── */
+/* A settings panel sized for the editor's real estate — not a copy of the
+   floating HUD's small draggable pill toolbar (no drag handle, orientation
+   toggle, or collapse affordance; those only make sense on a cramped OS
+   overlay). Source/mic/camera state is read from the same cross-window
+   prefs bridge the HUD hook seeds itself from, so the two stay in sync. */
 .recStage {
 	position: absolute;
 	inset: 0;
 	display: flex;
+	flex-direction: column;
+	padding: 24px 28px;
+	gap: 14px;
+}
+.recCols {
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: row;
+	align-items: stretch;
+	gap: 20px;
+}
+.recPreviewCol {
+	flex: 1;
+	min-width: 0;
+	min-height: 0;
+	display: flex;
 	align-items: center;
 	justify-content: center;
-	padding: 24px 48px 110px;
 }
-.recFrame {
+.recPreviewFrame {
 	position: relative;
-	aspect-ratio: 16 / 9;
 	width: 100%;
-	max-width: 820px;
-	max-height: 100%;
+	max-width: 720px;
+	aspect-ratio: 16 / 9;
+	margin: 0;
 	background: linear-gradient(135deg, #1a1c22, #0e0f14);
 	border-radius: 16px;
 	box-shadow: 0 40px 90px -30px rgba(0, 0, 0, 0.75), 0 12px 28px -12px rgba(0, 0, 0, 0.5),
@@ -592,6 +523,26 @@
 	overflow: hidden;
 	display: grid;
 	place-items: center;
+}
+.recCameraVideo {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
+	transform: scaleX(-1);
+}
+.recPreviewPlaceholder {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: 8px;
+	color: rgba(255, 255, 255, 0.45);
+	font-size: 13px;
+	font-weight: 500;
+}
+.recPreviewHint {
+	color: rgba(255, 255, 255, 0.3);
+	font-size: 11.5px;
+	font-weight: 400;
 }
 .recBadge {
 	position: absolute;
@@ -616,92 +567,155 @@
 	border-radius: 50%;
 	background: var(--danger);
 }
-.recBarWrap {
-	position: absolute;
-	bottom: 22px;
-	left: 0;
-	right: 0;
+.recPanel {
+	width: 360px;
+	flex-shrink: 0;
+	min-height: 0;
+	margin: 0;
 	display: flex;
-	justify-content: center;
-}
-.recBar {
-	display: inline-flex;
-	align-items: center;
-	gap: 3px;
-	padding: 5px;
+	flex-direction: column;
+	background: var(--surface-1);
+	border: 1px solid var(--border);
 	border-radius: 16px;
-	background: rgba(20, 22, 27, 0.72);
-	backdrop-filter: blur(20px) saturate(1.4);
-	-webkit-backdrop-filter: blur(20px) saturate(1.4);
-	border: 1px solid rgba(255, 255, 255, 0.12);
-	box-shadow: 0 16px 40px -14px rgba(0, 0, 0, 0.6), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+	overflow-y: auto;
+	scrollbar-width: thin;
+	scrollbar-color: var(--border-hi) transparent;
 }
-.recBarBtn {
+@media (max-width: 760px) {
+	.recCols {
+		flex-direction: column;
+		overflow-y: auto;
+	}
+	.recPreviewCol {
+		flex: 0 0 auto;
+	}
+	.recPanel {
+		width: 100%;
+	}
+}
+.recRow {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding: 13px 16px;
+	border-bottom: 1px solid var(--border-soft);
+}
+.recRow:last-child {
+	border-bottom: 0;
+}
+.recRowLabel {
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	color: var(--fg-2);
+	font-size: 13px;
+	font-weight: 500;
+}
+.recRowControl {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+}
+.recRowMuted {
 	display: inline-flex;
 	align-items: center;
-	gap: 7px;
-	height: 36px;
+	gap: 6px;
+	color: var(--muted);
+	font-size: 12px;
+}
+.recRowSourceBtn {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	height: 32px;
 	padding: 0 12px;
-	border-radius: 10px;
-	border: 0;
-	background: rgba(255, 255, 255, 0.1);
-	color: #fff;
+	border-radius: 9px;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--fg);
 	font-size: 12.5px;
 	font-weight: 500;
 	cursor: pointer;
+	max-width: 220px;
+}
+.recRowSourceBtn > span,
+.recRowSourceBtn {
 	white-space: nowrap;
-	transition: background var(--motion-fast) var(--ease);
+	overflow: hidden;
+	text-overflow: ellipsis;
 }
-.recBarBtn:hover {
-	background: rgba(255, 255, 255, 0.16);
+.recRowSourceBtn:hover {
+	border-color: var(--border-hi);
+	background: var(--surface-2);
 }
-.recIconBtn {
-	width: 36px;
-	height: 36px;
-	display: grid;
-	place-items: center;
-	border-radius: 10px;
-	border: 0;
-	background: transparent;
-	color: rgba(255, 255, 255, 0.72);
+.recSelect {
+	height: 32px;
+	max-width: 200px;
+	padding: 0 8px;
+	border-radius: 9px;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--fg);
+	font-size: 12.5px;
 	cursor: pointer;
-	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
 }
-.recIconBtn:hover {
-	background: rgba(255, 255, 255, 0.14);
-	color: #fff;
+.recLevelMeter {
+	width: 56px;
+	height: 18px;
 }
-.recIconBtn.on {
+.recToggleBtn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	min-width: 44px;
+	height: 28px;
+	padding: 0 10px;
+	border-radius: 8px;
+	border: 1px solid var(--border);
+	background: var(--surface);
+	color: var(--muted);
+	font-size: 12px;
+	font-weight: 600;
+	cursor: pointer;
+	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease),
+		border-color var(--motion-fast) var(--ease);
+}
+.recToggleBtn:hover {
+	border-color: var(--border-hi);
+}
+.recToggleBtn.on {
 	background: var(--accent-soft);
+	border-color: var(--accent-border);
 	color: var(--accent);
 }
-.recBarSep {
-	width: 1px;
-	height: 20px;
-	background: rgba(255, 255, 255, 0.14);
-	margin: 0 3px;
-}
-.recDragHandle {
-	display: grid;
-	grid-auto-rows: 3.5px;
-	gap: 3.5px;
-	width: 36px;
-	height: 32px;
-	place-items: center;
-	justify-content: center;
-	align-content: center;
-	cursor: grab;
+.recActions {
 	flex-shrink: 0;
-	touch-action: none;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
 }
-.recDragHandle:active {
-	cursor: grabbing;
+.recActionsHint {
+	flex-shrink: 0;
+	text-align: center;
+	color: var(--muted);
+	font-size: 11.5px;
+	margin: -6px 0 0;
 }
-.recDragDot {
-	width: 3.5px;
-	height: 3.5px;
-	border-radius: 50%;
-	background: rgba(255, 255, 255, 0.3);
+.recCancelBtn {
+	height: 44px;
+	padding: 0 18px;
+	border-radius: 12px;
+	border: 1px solid var(--border);
+	background: transparent;
+	color: var(--fg-2);
+	font-size: 13.5px;
+	font-weight: 500;
+	cursor: pointer;
+}
+.recCancelBtn:hover {
+	background: var(--surface-2);
 }
 .recMenu {
 	position: absolute;
@@ -876,15 +890,6 @@
 	background: var(--surface-2);
 }
 
-.bigRecWrap {
-	position: absolute;
-	left: 0;
-	right: 0;
-	bottom: 22px;
-	display: flex;
-	justify-content: center;
-	z-index: 15;
-}
 .bigRecBtn {
 	display: inline-flex;
 	align-items: center;
@@ -1023,7 +1028,7 @@
 .tlRuler span {
 	font-family: var(--font-mono);
 	font-size: 10px;
-	color: var(--meta);
+	color: var(--muted);
 }
 .tlLane {
 	position: relative;
@@ -1039,7 +1044,7 @@
 	align-items: center;
 	justify-content: center;
 	font-size: 11px;
-	color: var(--meta);
+	color: var(--muted);
 	pointer-events: none;
 }
 .lanePill {

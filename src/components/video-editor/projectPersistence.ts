@@ -148,6 +148,12 @@ function encodePathSegments(pathname: string, keepWindowsDrive = false): string 
 }
 
 export function toFileUrl(filePath: string): string {
+	// Browser-mode assets (blob:/http(s):/data: URLs from an <input type=file>
+	// or Vite-served asset) are already valid URLs — passing them through the
+	// file:// encoder below would mangle them (e.g. "file:///blob:...").
+	if (/^(https?|blob|data):/.test(filePath)) {
+		return filePath;
+	}
 	const normalized = filePath.replace(/\\/g, "/");
 	if (normalized.match(/^[a-zA-Z]:/)) {
 		return `file:///${encodePathSegments(normalized, true)}`;
