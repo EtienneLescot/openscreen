@@ -41,22 +41,11 @@ export function locateVirtualPosition(
 	};
 }
 
-export function locateSourcePosition(
+function toPositionAt(
 	clips: AxcutClip[],
+	clipIndex: number,
 	sourceTimeSec: number,
-	assetId?: string,
-	epsilon = 0.05,
-): VirtualPosition | null {
-	const clipIndex = clips.findIndex((clip, index) => {
-		if (assetId && clip.assetId !== assetId) return false;
-		const lowerBound = clip.sourceStartSec - epsilon;
-		const upperBound =
-			index === clips.length - 1
-				? (clip.sourceEndSec ?? 0) + epsilon
-				: (clip.sourceEndSec ?? 0) - epsilon;
-		return sourceTimeSec >= lowerBound && sourceTimeSec <= upperBound;
-	});
-	if (clipIndex < 0) return null;
+): VirtualPosition {
 	const clip = clips[clipIndex];
 	const sourceOffset = Math.max(
 		0,
@@ -68,6 +57,57 @@ export function locateSourcePosition(
 		virtualTimeSec: clip.timelineStartSec + sourceOffset,
 		sourceTimeSec,
 	};
+}
+
+function isWithinClipBounds(
+	clip: AxcutClip,
+	index: number,
+	total: number,
+	sourceTimeSec: number,
+	epsilon: number,
+): boolean {
+	const lowerBound = clip.sourceStartSec - epsilon;
+	const upperBound =
+		index === total - 1 ? (clip.sourceEndSec ?? 0) + epsilon : (clip.sourceEndSec ?? 0) - epsilon;
+	return sourceTimeSec >= lowerBound && sourceTimeSec <= upperBound;
+}
+
+export function locateSourcePosition(
+	clips: AxcutClip[],
+	sourceTimeSec: number,
+	assetId?: string,
+	epsilon = 0.05,
+	// When two clips share the same source asset (and possibly overlapping
+	// source ranges — a duplicated clip, or simply not trimmed yet), scanning
+	// by (assetId, sourceTime) alone is ambiguous and always resolves to the
+	// earliest matching clip in array order — even while a *later* clip of
+	// that same asset is the one actually playing. Callers that already know
+	// which clip they're tracking (VirtualPreview, mid-playback) should pass
+	// its id here so it's preferred whenever the source time still falls
+	// inside it, before falling back to the ambiguous asset-wide scan.
+	preferredClipId?: string,
+): VirtualPosition | null {
+	if (preferredClipId) {
+		const preferredIndex = clips.findIndex((clip) => clip.id === preferredClipId);
+		if (
+			preferredIndex >= 0 &&
+			isWithinClipBounds(
+				clips[preferredIndex],
+				preferredIndex,
+				clips.length,
+				sourceTimeSec,
+				epsilon,
+			)
+		) {
+			return toPositionAt(clips, preferredIndex, sourceTimeSec);
+		}
+	}
+	const clipIndex = clips.findIndex((clip, index) => {
+		if (assetId && clip.assetId !== assetId) return false;
+		return isWithinClipBounds(clip, index, clips.length, sourceTimeSec, epsilon);
+	});
+	if (clipIndex < 0) return null;
+	return toPositionAt(clips, clipIndex, sourceTimeSec);
 }
 
 export function keptWordIdSet(clips: AxcutClip[]): Set<string> {

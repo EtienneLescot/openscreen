@@ -10,6 +10,7 @@
 		"openProject": "فتح مشروع",
 		"useVerticalTray": "استخدام الشريط العمودي",
 		"useHorizontalTray": "استخدام الشريط الأفقي",
+		"openStudio": "فتح الاستوديو",
 		"openNotes": "فتح الملاحظات",
 		"openNotesPlaceholder": "اكتب ملاحظاتك هنا...",
 		"notesToolbar": {
@@ -27,7 +28,12 @@
 		"disableSystemAudio": "تعطيل صوت النظام",
 		"enableMicrophone": "تفعيل الميكروفون",
 		"disableMicrophone": "تعطيل الميكروفون",
-		"defaultMicrophone": "الميكروفون الافتراضي"
+		"defaultMicrophone": "الميكروفون الافتراضي",
+		"systemAudio": "صوت النظام",
+		"microphone": "الميكروفون",
+		"on": "قيد التشغيل",
+		"off": "متوقف",
+		"inputDevice": "جهاز الإدخال"
 	},
 	"webcam": {
 		"enableWebcam": "تفعيل كاميرا الويب",
@@ -35,12 +41,17 @@
 		"defaultCamera": "الكاميرا الافتراضية",
 		"searching": "جاري البحث...",
 		"noneFound": "لم يتم العثور على كاميرا",
-		"unavailable": "الكاميرا غير متوفرة"
+		"unavailable": "الكاميرا غير متوفرة",
+		"camera": "الكاميرا",
+		"cameraDevice": "جهاز الكاميرا"
 	},
 	"sourceSelector": {
 		"loading": "جاري تحميل المصادر...",
 		"screens": "الشاشات ({{count}})",
 		"windows": "النوافذ ({{count}})",
+		"emptyTitle": "لم يتم العثور على شاشات أو نوافذ",
+		"emptyDescription": "إذا كنت قد منحت للتو إذن تسجيل الشاشة، أعد تحميل هذه النافذة. قد تحتاج على macOS إلى إعادة فتح OpenScreen.",
+		"loadFailedDescription": "تعذّر على OpenScreen تحميل مصادر الالتقاط. أعد تحميل هذه النافذة وحاول مرة أخرى.",
 		"defaultSourceName": "الشاشة"
 	},
 	"recording": {

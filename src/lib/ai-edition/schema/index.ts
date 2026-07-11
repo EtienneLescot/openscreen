@@ -99,6 +99,20 @@ export const assetSchema = z.object({
 	cameraTrack: cameraTrackSchema,
 });
 
+// A crop is a sub-rectangle of the source video, expressed as fractions
+// (0-1) of its full frame. Lives on the clip (not the document/legacyEditor
+// envelope) since a crop frames one specific piece of footage — two clips
+// cut from the same or different assets can reasonably want different
+// framings. Mirrors `CropRegion` in `src/components/video-editor/types.ts`;
+// duplicated here so the schema package has no dependency on the React
+// editor module (same rationale as AnnotationRegion/ZoomRegion above).
+export const clipCropRegionSchema = z.object({
+	x: z.number().min(0).max(1),
+	y: z.number().min(0).max(1),
+	width: z.number().min(0).max(1),
+	height: z.number().min(0).max(1),
+});
+
 export const clipSchema = z
 	.object({
 		id: z.string().min(1),
@@ -113,6 +127,10 @@ export const clipSchema = z
 		wordRefs: z.array(z.string().min(1)).default([]),
 		origin: z.enum(["system", "agent", "user"]),
 		reason: z.string().default(""),
+		// Absent/undefined means "no crop" (full frame) — callers should treat
+		// that as the identity region {x:0,y:0,width:1,height:1} rather than
+		// storing the identity explicitly, so untouched clips stay lean.
+		cropRegion: clipCropRegionSchema.optional(),
 	})
 	.refine((data) => data.timelineEndSec >= data.timelineStartSec, {
 		message: "timelineEndSec must be greater than or equal to timelineStartSec",
@@ -544,6 +562,7 @@ export type AxcutTranscriptSegment = z.infer<typeof transcriptSegmentSchema>;
 export type AxcutTranscript = z.infer<typeof transcriptSchema>;
 export type AxcutAsset = z.infer<typeof assetSchema>;
 export type AxcutClip = z.infer<typeof clipSchema>;
+export type AxcutClipCropRegion = z.infer<typeof clipCropRegionSchema>;
 export type AxcutGap = z.infer<typeof gapSchema>;
 export type AxcutTrimRange = z.infer<typeof trimRangeSchema>;
 export type AxcutTimeline = z.infer<typeof timelineSchema>;

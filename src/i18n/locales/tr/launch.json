@@ -10,6 +10,7 @@
 		"openProject": "Proje aç",
 		"useVerticalTray": "Dikey araç çubuğunu kullan",
 		"useHorizontalTray": "Yatay araç çubuğunu kullan",
+		"openStudio": "Stüdyoyu aç",
 		"openNotes": "Notları aç",
 		"openNotesPlaceholder": "Notlarınızı buraya yazın...",
 		"notesToolbar": {
@@ -27,7 +28,12 @@
 		"disableSystemAudio": "Sistem sesini devre dışı bırak",
 		"enableMicrophone": "Mikrofonu etkinleştir",
 		"disableMicrophone": "Mikrofonu devre dışı bırak",
-		"defaultMicrophone": "Varsayılan Mikrofon"
+		"defaultMicrophone": "Varsayılan Mikrofon",
+		"systemAudio": "Sistem sesi",
+		"microphone": "Mikrofon",
+		"on": "Açık",
+		"off": "Kapalı",
+		"inputDevice": "Giriş cihazı"
 	},
 	"webcam": {
 		"enableWebcam": "Kamerayı etkinleştir",
@@ -35,7 +41,9 @@
 		"defaultCamera": "Varsayılan Kamera",
 		"searching": "Aranıyor...",
 		"noneFound": "Kamera bulunamadı",
-		"unavailable": "Kamera kullanılamıyor"
+		"unavailable": "Kamera kullanılamıyor",
+		"camera": "Kamera",
+		"cameraDevice": "Kamera cihazı"
 	},
 	"cursor": {
 		"useEditableCursor": "Düzenlenebilir imleci kullan",
@@ -45,6 +53,9 @@
 		"loading": "Kaynaklar yükleniyor...",
 		"screens": "Ekranlar ({{count}})",
 		"windows": "Pencereler ({{count}})",
+		"emptyTitle": "Ekran veya pencere bulunamadı",
+		"emptyDescription": "Ekran kaydı iznini az önce verdiyseniz bu seçiciyi yeniden yükleyin. macOS'ta OpenScreen'i yeniden açmanız gerekebilir.",
+		"loadFailedDescription": "OpenScreen yakalama kaynaklarını yükleyemedi. Bu seçiciyi yeniden yükleyip tekrar deneyin.",
 		"defaultSourceName": "Ekran"
 	},
 	"recording": {

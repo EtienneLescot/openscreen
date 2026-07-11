@@ -22,6 +22,7 @@ import type {
 	GifFrameRate,
 	GifSizePreset,
 } from "./types";
+import { type CropScheduleEntry, resolveCropAt } from "./videoExporter";
 
 const GIF_WORKER_URL = new URL("gif.js/dist/gif.worker.js", import.meta.url).toString();
 
@@ -46,6 +47,8 @@ interface GifExporterConfig {
 	padding?: number;
 	videoPadding?: number;
 	cropRegion: CropRegion;
+	/** Per-clip crop, in source-media time — see VideoExporterConfig.cropSchedule. */
+	cropSchedule?: CropScheduleEntry[];
 	webcamLayoutPreset?: WebcamLayoutPreset;
 	webcamMaskShape?: import("@/components/video-editor/types").WebcamMaskShape;
 	webcamMirrored?: boolean;
@@ -281,6 +284,13 @@ export class GifExporter {
 						}
 
 						const sourceTimestampUs = sourceTimestampMs * 1000; // us
+						renderer.setCropRegion(
+							resolveCropAt(
+								this.config.cropSchedule,
+								sourceTimestampMs / 1000,
+								this.config.cropRegion,
+							),
+						);
 						await renderer.renderFrame(videoFrame, sourceTimestampUs, webcamFrame);
 
 						const canvas = renderer.getCanvas();

@@ -13,7 +13,7 @@ import type { CursorRecordingData } from "@/native/contracts";
 import { getPlatform } from "@/utils/platformUtils";
 import { AudioProcessor } from "./audioEncoder";
 import { FrameRenderer } from "./frameRenderer";
-import { VideoMuxer } from "./muxer";
+import { VideoMuxer, videoCodecFamily } from "./muxer";
 import { MAX_IN_MEMORY_SOURCE_BYTES } from "./sourceFileLimits";
 import { StreamingVideoDecoder } from "./streamingDecoder";
 import { TimestampedVideoFrameQueue } from "./timestampedVideoFrameQueue";
@@ -53,6 +53,16 @@ export async function waitForEncoderQueueSpace(params: {
 	}
 }
 
+/** One clip's crop, in SOURCE-media time — the export renderer switches to
+ * the covering entry's `cropRegion` before rendering each frame, so a crop
+ * applies to its own clip only (see clipSchema.cropRegion), not the whole
+ * export. */
+export interface CropScheduleEntry {
+	startSec: number;
+	endSec: number;
+	cropRegion: CropRegion;
+}
+
 export interface VideoExporterConfig extends ExportConfig {
 	videoUrl: string;
 	webcamVideoUrl?: string;
@@ -68,7 +78,13 @@ export interface VideoExporterConfig extends ExportConfig {
 	borderRadius?: number;
 	padding?: number;
 	videoPadding?: number;
+	/** Fallback crop when `cropSchedule` is absent or a source timestamp
+	 * doesn't fall in any entry (e.g. no clips info available). */
 	cropRegion: CropRegion;
+	/** Per-clip crop, in source-media time. When present, takes priority over
+	 * the flat `cropRegion` for every frame that falls inside one of its
+	 * entries. */
+	cropSchedule?: CropScheduleEntry[];
 	webcamLayoutPreset?: WebcamLayoutPreset;
 	webcamMaskShape?: import("@/components/video-editor/types").WebcamMaskShape;
 	webcamMirrored?: boolean;
@@ -91,6 +107,10 @@ export interface VideoExporterConfig extends ExportConfig {
 }
 
 const SOURCE_COPY_EPSILON = 0.0001;
+// Looser than SOURCE_COPY_EPSILON: container-reported avg frame rate is a
+// rounded rational (e.g. 59.94 for a "60fps" recording), so this only needs
+// to catch a genuinely different rate selection (24/30/60), not that noise.
+const FRAME_RATE_EPSILON = 0.5;
 
 function hasActiveTimeRegions(regions?: Array<{ startMs: number; endMs: number }>) {
 	return Boolean(regions?.some((region) => region.endMs - region.startMs > SOURCE_COPY_EPSILON));
@@ -119,16 +139,45 @@ function isDefaultCrop(cropRegion: CropRegion) {
 	);
 }
 
+function hasNonDefaultCrop(config: VideoExporterConfig): boolean {
+	if (config.cropSchedule && config.cropSchedule.length > 0) {
+		return config.cropSchedule.some((entry) => !isDefaultCrop(entry.cropRegion));
+	}
+	return !isDefaultCrop(config.cropRegion);
+}
+
+/** Finds which clip's crop applies at a given SOURCE-media timestamp — the
+ * first schedule entry whose [startSec, endSec) covers it, falling back to
+ * `fallback` when the schedule is absent or nothing covers it (e.g. a gap). */
+export function resolveCropAt(
+	schedule: CropScheduleEntry[] | undefined,
+	sourceSec: number,
+	fallback: CropRegion,
+): CropRegion {
+	if (!schedule || schedule.length === 0) return fallback;
+	const covering = schedule.find(
+		(entry) => sourceSec >= entry.startSec && sourceSec < entry.endSec,
+	);
+	return covering?.cropRegion ?? fallback;
+}
+
+interface SourceCopyVideoInfo {
+	width: number;
+	height: number;
+	frameRate: number;
+	codec: string;
+}
+
 export function isSourceCopyFastPathEligible(
 	config: VideoExporterConfig,
-	videoInfo: { width: number; height: number },
+	videoInfo: SourceCopyVideoInfo,
 ) {
 	return getSourceCopyFastPathBlockers(config, videoInfo).length === 0;
 }
 
 export function getSourceCopyFastPathBlockers(
 	config: VideoExporterConfig,
-	videoInfo: { width: number; height: number },
+	videoInfo: SourceCopyVideoInfo,
 ) {
 	const blockers: string[] = [];
 
@@ -136,6 +185,16 @@ export function getSourceCopyFastPathBlockers(
 		blockers.push(
 			`output-size ${config.width}x${config.height} differs from source ${videoInfo.width}x${videoInfo.height}`,
 		);
+	}
+	// A copied file keeps the source's exact frame rate/codec — if the user
+	// picked a different one in the export dialog, honor it by re-encoding
+	// instead of silently shipping the source's encoding under a different
+	// label.
+	if (Math.abs(config.frameRate - videoInfo.frameRate) > FRAME_RATE_EPSILON) {
+		blockers.push(`frame rate ${config.frameRate} differs from source ${videoInfo.frameRate}`);
+	}
+	if (config.codec && videoCodecFamily(config.codec) !== videoCodecFamily(videoInfo.codec)) {
+		blockers.push(`codec ${config.codec} differs from source ${videoInfo.codec}`);
 	}
 	if (config.webcamVideoUrl) blockers.push("webcam overlay is enabled");
 	if (hasActiveTimeRegions(config.trimRegions)) blockers.push("trim regions are present");
@@ -146,7 +205,7 @@ export function getSourceCopyFastPathBlockers(
 	if (hasActiveTimeRegions(config.annotationRegions))
 		blockers.push("annotation regions are present");
 	if (hasNativeCursorOverlay(config)) blockers.push("editable cursor overlay is enabled");
-	if (!isDefaultCrop(config.cropRegion)) blockers.push("crop is not default");
+	if (hasNonDefaultCrop(config)) blockers.push("crop is not default");
 	if ((config.padding ?? 0) > SOURCE_COPY_EPSILON) blockers.push("padding is not zero");
 	if ((config.videoPadding ?? 0) > SOURCE_COPY_EPSILON) blockers.push("video padding is not zero");
 	if ((config.borderRadius ?? 0) > SOURCE_COPY_EPSILON) blockers.push("roundness is not zero");
@@ -405,6 +464,16 @@ export class VideoExporter {
 						}
 
 						const sourceTimestampUs = sourceTimestampMs * 1000;
+						// Crop is per-clip — switch to whichever clip's crop covers this
+						// frame's source time before rendering it (see
+						// FrameRenderer.setCropRegion / resolveCropAt).
+						renderer.setCropRegion(
+							resolveCropAt(
+								this.config.cropSchedule,
+								sourceTimestampMs / 1000,
+								this.config.cropRegion,
+							),
+						);
 						await renderer.renderFrame(videoFrame, sourceTimestampUs, webcamFrame);
 
 						const canvas = renderer.getCanvas();
@@ -701,7 +770,7 @@ export class VideoExporter {
 		return ["prefer-hardware", "prefer-software"];
 	}
 
-	private async trySourceCopyFastPath(videoInfo: { width: number; height: number }) {
+	private async trySourceCopyFastPath(videoInfo: SourceCopyVideoInfo) {
 		const blockers = getSourceCopyFastPathBlockers(this.config, videoInfo);
 		if (blockers.length > 0) {
 			console.info("[VideoExporter] source-copy fast path disabled", {

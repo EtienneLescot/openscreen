@@ -1,11 +1,11 @@
 import {
 	Captions as CaptionsIcon,
 	ChevronRight,
-	Crop as CropIcon,
 	FileText,
 	Image as ImageIcon,
 	Layout as LayoutIcon,
 	MousePointer2,
+	Pencil,
 	Scissors,
 	SlidersHorizontal,
 	Trash2,
@@ -13,8 +13,12 @@ import {
 	ZoomIn,
 } from "lucide-react";
 import type { ComponentProps } from "react";
+import { useState } from "react";
+import { useScopedT } from "@/contexts/I18nContext";
+import type { AxcutClip } from "@/lib/ai-edition/schema";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { coalescedTrimGroups } from "@/lib/ai-edition/timeline/trim-mapping";
+import { formatSeconds } from "@/lib/ai-edition/timeline/virtual-preview";
 import {
 	BackgroundPane,
 	CursorPane,
@@ -26,23 +30,15 @@ import styles from "./EditorShellV4.module.css";
 
 type TimelineApi = ReturnType<typeof useTimeline>;
 
-export type Facet =
-	| "background"
-	| "effects"
-	| "layout"
-	| "cursor"
-	| "captions"
-	| "transcript"
-	| "crop";
+export type Facet = "background" | "effects" | "layout" | "cursor" | "captions" | "transcript";
 
-const FACETS: Array<{ id: Facet; label: string; icon: typeof ImageIcon }> = [
-	{ id: "background", label: "Background", icon: ImageIcon },
-	{ id: "effects", label: "Effects", icon: SlidersHorizontal },
-	{ id: "layout", label: "Layout", icon: LayoutIcon },
-	{ id: "cursor", label: "Cursor", icon: MousePointer2 },
-	{ id: "captions", label: "Captions", icon: CaptionsIcon },
-	{ id: "transcript", label: "Transcript", icon: FileText },
-	{ id: "crop", label: "Crop", icon: CropIcon },
+const FACETS: Array<{ id: Facet; labelKey: string; icon: typeof ImageIcon }> = [
+	{ id: "background", labelKey: "background.title", icon: ImageIcon },
+	{ id: "effects", labelKey: "effects.title", icon: SlidersHorizontal },
+	{ id: "layout", labelKey: "layout.title", icon: LayoutIcon },
+	{ id: "cursor", labelKey: "cursor.title", icon: MousePointer2 },
+	{ id: "captions", labelKey: "facets.captions", icon: CaptionsIcon },
+	{ id: "transcript", labelKey: "facets.transcript", icon: FileText },
 ];
 
 type TranscriptProps = ComponentProps<typeof TranscriptPane>;
@@ -52,7 +48,12 @@ interface FloatingInspectorProps {
 	open: boolean;
 	onFacetChange: (facet: Facet) => void;
 	onToggleOpen: () => void;
-	onCrop: () => void;
+	/** Clips on the timeline, for the "Edit clip" picker — crop + trim now live
+	 * per-clip (see clipSchema.cropRegion) instead of behind a document-wide
+	 * facet, so this button opens EditClipModal directly instead of routing
+	 * through a facet body. */
+	clips: AxcutClip[];
+	onEditClip: (clip: AxcutClip) => void;
 	onCaptions: () => void;
 	transcriptProps: TranscriptProps;
 	/** Drives the selected-element settings pane (zoom/speed/annotation/trim) —
@@ -67,11 +68,15 @@ export function FloatingInspector({
 	open,
 	onFacetChange,
 	onToggleOpen,
-	onCrop,
+	clips,
+	onEditClip,
 	onCaptions,
 	transcriptProps,
 	tl,
 }: FloatingInspectorProps) {
+	const ts = useScopedT("settings");
+	const te = useScopedT("editor");
+	const [clipPickerOpen, setClipPickerOpen] = useState(false);
 	const selection = tl.selection;
 	const effectiveOpen = open || selection !== null;
 	return (
@@ -83,7 +88,6 @@ export function FloatingInspector({
 					) : (
 						<FacetBody
 							facet={facet}
-							onCrop={onCrop}
 							onCaptions={onCaptions}
 							onCollapse={onToggleOpen}
 							transcriptProps={transcriptProps}
@@ -92,24 +96,17 @@ export function FloatingInspector({
 				</div>
 			) : null}
 			<div className={styles.facetRail}>
-				{FACETS.map(({ id, label, icon: Icon }) => (
+				{FACETS.map(({ id, labelKey, icon: Icon }) => (
 					<button
 						key={id}
 						type="button"
-						title={label}
-						aria-label={label}
+						title={ts(labelKey)}
+						aria-label={ts(labelKey)}
 						aria-pressed={!selection && open && facet === id}
 						onClick={() => {
 							// Switching facets while an element is selected should show
 							// the facet, not leave the selection pane on top of it.
 							if (selection) tl.clearSelection();
-							// Crop has no useful "settings" pane of its own — jump straight
-							// to the crop modal instead of routing through FacetBody's
-							// now-removed intermediate "Open crop…" pane.
-							if (id === "crop") {
-								onCrop();
-								return;
-							}
 							if (facet === id && open) {
 								onToggleOpen();
 							} else {
@@ -120,12 +117,97 @@ export function FloatingInspector({
 						<Icon size={17} />
 					</button>
 				))}
+				<div style={{ position: "relative" }}>
+					<button
+						type="button"
+						title={te("editClipDialog.title")}
+						aria-label={te("editClipDialog.title")}
+						aria-haspopup={clips.length > 1 ? "menu" : undefined}
+						aria-expanded={clips.length > 1 ? clipPickerOpen : undefined}
+						onClick={() => {
+							if (selection) tl.clearSelection();
+							if (clips.length === 0) return;
+							if (clips.length === 1) {
+								onEditClip(clips[0]);
+								return;
+							}
+							setClipPickerOpen((v) => !v);
+						}}
+					>
+						<Pencil size={17} />
+					</button>
+					{clipPickerOpen && clips.length > 1 ? (
+						<div
+							role="menu"
+							aria-label={te("editClipDialog.pickClipTitle")}
+							style={{
+								position: "absolute",
+								top: 0,
+								right: "calc(100% + 8px)",
+								minWidth: 200,
+								maxHeight: 320,
+								overflowY: "auto",
+								background: "var(--surface-1)",
+								border: "1px solid var(--border)",
+								borderRadius: 12,
+								boxShadow: "var(--elev-pop)",
+								backdropFilter: "blur(18px)",
+								padding: 6,
+								zIndex: 30,
+							}}
+						>
+							<p
+								style={{
+									margin: "4px 8px 6px",
+									fontSize: 11,
+									fontWeight: 600,
+									textTransform: "uppercase",
+									letterSpacing: "0.04em",
+									color: "var(--muted)",
+								}}
+							>
+								{te("editClipDialog.pickClipTitle")}
+							</p>
+							{clips.map((clip, index) => (
+								<button
+									key={clip.id}
+									type="button"
+									role="menuitem"
+									onClick={() => {
+										setClipPickerOpen(false);
+										onEditClip(clip);
+									}}
+									style={{
+										display: "flex",
+										flexDirection: "column",
+										alignItems: "flex-start",
+										width: "100%",
+										padding: "7px 8px",
+										border: "none",
+										borderRadius: 8,
+										background: "transparent",
+										color: "var(--fg)",
+										cursor: "pointer",
+										textAlign: "left",
+									}}
+								>
+									<span style={{ font: "600 12.5px var(--font-display)" }}>
+										{te("editClipDialog.clipLabel", { index: index + 1 })}
+									</span>
+									<span style={{ font: "500 11px var(--font-mono)", color: "var(--muted)" }}>
+										{formatSeconds(clip.timelineStartSec)}–{formatSeconds(clip.timelineEndSec)}
+									</span>
+								</button>
+							))}
+						</div>
+					) : null}
+				</div>
 			</div>
 		</div>
 	);
 }
 
-function paneHeader(icon: React.ReactNode, title: string, onClose: () => void) {
+function paneHeader(icon: React.ReactNode, title: string, onClose: () => void, closeLabel: string) {
 	return (
 		<header
 			style={{
@@ -151,8 +233,8 @@ function paneHeader(icon: React.ReactNode, title: string, onClose: () => void) {
 			</h2>
 			<button
 				type="button"
-				title="Close"
-				aria-label="Close"
+				title={closeLabel}
+				aria-label={closeLabel}
 				onClick={onClose}
 				style={{
 					width: 26,
@@ -192,6 +274,10 @@ const ZOOM_DEPTHS = [1, 2, 3, 4, 5, 6] as const;
 const SPEED_VALUES = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
 
 function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }) {
+	const ts = useScopedT("settings");
+	const tt = useScopedT("timeline");
+	const tc = useScopedT("common");
+	const te = useScopedT("editor");
 	const selection = tl.selection;
 	if (!selection) return null;
 
@@ -225,10 +311,10 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 		if (!region) return null;
 		return (
 			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-				{paneHeader(<ZoomIn size={15} />, "Zoom", onClose)}
+				{paneHeader(<ZoomIn size={15} />, tt("labels.zoom"), onClose, tc("actions.close"))}
 				<div style={bodyStyle}>
 					{paneRow(
-						"Zoom level",
+						ts("zoom.level"),
 						<select
 							value={region.depth}
 							onChange={(e) =>
@@ -251,11 +337,11 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 						}}
 						style={secondaryBtnStyle}
 					>
-						Reset focus point
+						{te("inspector.resetFocusPoint")}
 					</button>
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
 						<Trash2 size={14} />
-						Delete zoom
+						{ts("zoom.deleteZoom")}
 					</button>
 				</div>
 			</div>
@@ -267,10 +353,10 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 		if (!region) return null;
 		return (
 			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-				{paneHeader(<ZoomIn size={15} />, "Speed", onClose)}
+				{paneHeader(<ZoomIn size={15} />, tt("labels.speed"), onClose, tc("actions.close"))}
 				<div style={bodyStyle}>
 					{paneRow(
-						"Playback speed",
+						ts("speed.playbackSpeed"),
 						<select
 							value={region.speed}
 							onChange={(e) => void tl.updateSpeedValue(region.id, Number(e.target.value))}
@@ -285,7 +371,7 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					)}
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
 						<Trash2 size={14} />
-						Delete speed region
+						{ts("speed.deleteRegion")}
 					</button>
 				</div>
 			</div>
@@ -298,10 +384,17 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 		const colors = ["#ffffff", "#0f172a", "#10b981", "#f59e0b", "#f43f5e", "#6366f1"];
 		return (
 			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-				{paneHeader(<FileText size={15} />, "Annotation", onClose)}
+				{paneHeader(
+					<FileText size={15} />,
+					tt("labels.annotationItem"),
+					onClose,
+					tc("actions.close"),
+				)}
 				<div style={bodyStyle}>
 					<div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-						<span style={{ fontSize: 12.5, color: "var(--fg-2)", fontWeight: 500 }}>Text</span>
+						<span style={{ fontSize: 12.5, color: "var(--fg-2)", fontWeight: 500 }}>
+							{ts("annotation.textContent")}
+						</span>
 						<textarea
 							value={region.content ?? ""}
 							onChange={(e) => tl.updateAnnotationLive(region.id, { content: e.target.value })}
@@ -319,14 +412,14 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 						/>
 					</div>
 					{paneRow(
-						"Color",
+						ts("annotation.color"),
 						<div style={{ display: "flex", gap: 6 }}>
 							{colors.map((c) => (
 								<button
 									key={c}
 									type="button"
 									title={c}
-									aria-label={`Set color ${c}`}
+									aria-label={te("inspector.setColor", { color: c })}
 									aria-pressed={region.style?.color === c}
 									onClick={() => {
 										tl.updateAnnotationLive(region.id, {
@@ -351,7 +444,7 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					)}
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
 						<Trash2 size={14} />
-						Delete annotation
+						{ts("annotation.deleteAnnotation")}
 					</button>
 				</div>
 			</div>
@@ -373,14 +466,14 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 	};
 	return (
 		<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-			{paneHeader(<Scissors size={15} />, "Trim", onClose)}
+			{paneHeader(<Scissors size={15} />, tt("labels.trim"), onClose, tc("actions.close"))}
 			<div style={bodyStyle}>
 				<p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: "var(--muted)" }}>
-					{durationSec.toFixed(1)}s of source media hidden from the edited timeline.
+					{te("inspector.trimHiddenDuration", { duration: durationSec.toFixed(1) })}
 				</p>
 				<button type="button" onClick={deleteTrimGroup} style={deleteBtnStyle}>
 					<Trash2 size={14} />
-					Restore (delete trim)
+					{te("inspector.restoreDeleteTrim")}
 				</button>
 			</div>
 		</div>
@@ -409,23 +502,23 @@ const secondaryBtnStyle: React.CSSProperties = {
 
 function FacetBody({
 	facet,
-	onCrop,
 	onCaptions,
 	onCollapse,
 	transcriptProps,
 }: {
 	facet: Facet;
-	onCrop: () => void;
 	onCaptions: () => void;
 	onCollapse: () => void;
 	transcriptProps: TranscriptProps;
 }) {
+	const te = useScopedT("editor");
+	const ts = useScopedT("settings");
 	// A small collapse affordance floated over the reused pane header.
 	const collapse = (
 		<button
 			type="button"
-			title="Collapse inspector"
-			aria-label="Collapse inspector"
+			title={te("inspector.collapseInspector")}
+			aria-label={te("inspector.collapseInspector")}
 			onClick={onCollapse}
 			style={{
 				position: "absolute",
@@ -452,27 +545,13 @@ function FacetBody({
 	if (facet === "layout") return wrap(collapse, <LayoutPane />);
 	if (facet === "cursor") return wrap(collapse, <CursorPane />);
 	if (facet === "transcript") return wrap(collapse, <TranscriptPane {...transcriptProps} />);
-	if (facet === "captions")
-		return wrap(
-			collapse,
-			<SimpleFacet
-				title="Captions"
-				description="Generate word-timed captions from the transcript and drop them onto the timeline."
-				actionLabel="Generate captions"
-				onAction={onCaptions}
-			/>,
-		);
-	// crop: the rail button bypasses FacetBody and opens CropModal directly
-	// (see the facet rail's onClick above) — this is a defensive fallback for
-	// the unlikely case `facet` state is ever "crop" without going through
-	// the rail.
 	return wrap(
 		collapse,
 		<SimpleFacet
-			title="Crop"
-			description="Reframe the recording — pick an aspect ratio and zoom into the region you want to keep."
-			actionLabel="Open crop…"
-			onAction={onCrop}
+			title={ts("facets.captions")}
+			description={te("inspector.captionsDescription")}
+			actionLabel={te("inspector.generateCaptions")}
+			onAction={onCaptions}
 		/>,
 	);
 }

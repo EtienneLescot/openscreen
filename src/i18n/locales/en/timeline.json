@@ -61,5 +61,32 @@
 	"success": {
 		"addedZoomSuggestions": "Added {{count}} cursor-based zoom suggestion",
 		"addedZoomSuggestionsPlural": "Added {{count}} cursor-based zoom suggestions"
+	},
+	"toolbar": {
+		"autoEnhance": "Auto-enhance",
+		"automaticZooms": "Automatic zooms",
+		"automaticZoomsHint": "From recorded cursor movement",
+		"smartZoomsAndCuts": "Smart zooms + cuts",
+		"smartZoomsAndCutsHint": "With AI",
+		"comment": "Comment",
+		"aspectRatio": "Aspect ratio",
+		"timelineTools": "Timeline tools",
+		"arrangeClips": "Arrange clips",
+		"arrangeClipsHint": "Drag clips below to reorder or drop new ones in",
+		"newAnnotation": "New annotation",
+		"noAnnotationsYet": "No annotations yet",
+		"constantSpeed": "Constant speed",
+		"noTrims": "No trims",
+		"dragToReorderHint": "Drag to reorder · double-click to edit in/out points",
+		"editInOutPoints": "Edit in/out points",
+		"deleteClip": "Delete clip",
+		"dropToAdd": "Drop to add to timeline",
+		"importRecordingFirst": "Import a recording first",
+		"noAutoZoomMoments": "No auto-zoom moments found",
+		"noAutoZoomMomentsDescription": "This recording has no cursor movement data, or existing zooms already cover the busy moments.",
+		"addedAutoZoom": "Added {{count}} automatic zoom",
+		"addedAutoZoomPlural": "Added {{count}} automatic zooms",
+		"autoZoomFailed": "Auto-zoom failed",
+		"aiEnhanceRequested": "Asked the AI agent to enhance this recording"
 	}
 }

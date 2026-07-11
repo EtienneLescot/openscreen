@@ -56,6 +56,7 @@ interface Window {
 			callback: (prefs: import("./ipc/handlers").RecordingPrefs) => void,
 		) => () => void;
 		onSourceSelectorClosed: (callback: () => void) => () => void;
+		onAutoStartRecording: (callback: () => void) => () => void;
 		onAiEditionChatEvent: (
 			callback: (event: import("../src/native/contracts").AiEditionChatEvent) => void,
 		) => () => void;
@@ -207,7 +208,14 @@ interface Window {
 			message?: string;
 			error?: string;
 		}>;
-		openVideoFilePicker: () => Promise<{ success: boolean; path?: string; canceled?: boolean }>;
+		openVideoFilePicker: () => Promise<{
+			success: boolean;
+			path?: string;
+			// Browser-mode shim only: a blob: URL has no meaningful basename, so
+			// the shim carries the picked File's real name here for the label.
+			name?: string;
+			canceled?: boolean;
+		}>;
 		setCurrentVideoPath: (path: string) => Promise<{ success: boolean }>;
 		setCurrentRecordingSession: (
 			session: import("../src/lib/recordingSession").RecordingSession | null,

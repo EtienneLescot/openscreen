@@ -8,7 +8,8 @@
 			"title": "وضع التركيز",
 			"manual": "يدوي",
 			"auto": "تلقائي",
-			"autoDescription": "الكاميرا تتبع موضع المؤشر المسجل"
+			"autoDescription": "الكاميرا تتبع موضع المؤشر المسجل",
+			"lockedDisclaimer": "يتم التحكم به بواسطة مفتاح التركيز التلقائي العام في الخط الزمني. أوقف تشغيله لضبط وضع التركيز لكل تكبير على حدة."
 		},
 		"customScale": "تكبير مخصص",
 		"position": {
@@ -135,8 +136,6 @@
 		"textPlaceholder": "أدخل النص هنا...",
 		"fontStyle": "نمط الخط",
 		"selectStyle": "حدد النمط",
-		"textAnimation": "تحريك النص",
-		"selectAnimation": "حدد الحركة",
 		"size": "الحجم",
 		"customFonts": "خطوط مخصصة",
 		"textColor": "لون النص",
@@ -182,6 +181,17 @@
 		"modern": "حديث",
 		"clean": "نظيف"
 	},
+	"textAnimation": {
+		"title": "تحريك النص",
+		"selectAnimation": "حدد الحركة",
+		"none": "بدون",
+		"fade": "تلاشي",
+		"rise": "ارتفاع",
+		"pop": "ظهور",
+		"slideLeft": "انزلاق لليسار",
+		"typewriter": "آلة كاتبة",
+		"pulse": "نبض"
+	},
 	"customFont": {
 		"dialogTitle": "إضافة خط Google",
 		"urlLabel": "رابط استيراد خطوط Google",
@@ -202,6 +212,7 @@
 		"errorLoadFailed": "تعذر تحميل الخط. يرجى التحقق من صحة رابط خطوط Google."
 	},
 	"cursor": {
+		"title": "المؤشر",
 		"theme": "نمط المؤشر",
 		"themeDefault": "افتراضي",
 		"show": "إظهار المؤشر",
@@ -209,7 +220,8 @@
 		"smoothing": "التنعيم",
 		"motionBlur": "ضبابية الحركة",
 		"clickBounce": "ارتداد النقر",
-		"clipToBounds": "القص ضمن اللوحة"
+		"clipToBounds": "القص ضمن اللوحة",
+		"clipToBoundsDescription": "يبقي المؤشر داخل إطار الفيديو. أوقف التشغيل للسماح للمؤشر بتجاوز الحواف - مفيد عند التكبير أو التحريك."
 	},
 	"language": {
 		"title": "اللغة"
@@ -217,5 +229,9 @@
 	"timeline": {
 		"title": "المخطط الزمني",
 		"waveform": "عرض الموجة الصوتية على مسار القطع"
+	},
+	"facets": {
+		"captions": "الترجمة",
+		"transcript": "النص"
 	}
 }

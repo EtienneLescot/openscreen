@@ -1,5 +1,6 @@
 {
 	"zoom": {
+		"previewHold": "Mantenha pressionado para pré-visualizar o efeito de zoom",
 		"level": "Nível de Zoom",
 		"customScale": "Zoom Personalizado",
 		"selectRegion": "Selecione uma região de zoom para ajustar",
@@ -8,7 +9,8 @@
 			"title": "Modo de Foco",
 			"manual": "Manual",
 			"auto": "Automático",
-			"autoDescription": "A câmera segue a posição do cursor gravado"
+			"autoDescription": "A câmera segue a posição do cursor gravado",
+			"lockedDisclaimer": "Controlado pelo interruptor global de Foco Automático na linha do tempo. Desative-o para definir o modo de foco por zoom."
 		},
 		"threeD": {
 			"title": "Rotação 3D",
@@ -46,6 +48,7 @@
 		"noWebcam": "Sem Webcam",
 		"webcamShape": "Formato da Câmera",
 		"webcamSize": "Tamanho da Webcam",
+		"mirrorWebcam": "Espelhar Webcam",
 		"reactiveWebcam": "Encolher ao ampliar",
 		"reactiveWebcamDescription": "A câmera diminui suavemente enquanto o vídeo está ampliado, para não atrapalhar."
 	},
@@ -102,15 +105,17 @@
 	},
 	"project": {
 		"save": "Salvar Projeto",
-		"load": "Carregar Projeto"
+		"load": "Carregar Projeto",
+		"new": "Novo Projeto"
 	},
 	"export": {
 		"videoButton": "Exportar Vídeo",
 		"gifButton": "Exportar GIF",
 		"chooseSaveLocation": "Escolher Local para Salvar"
 	},
-	"links": {
+	"support": {
 		"reportBug": "Relatar Bug",
+		"saveDiagnostics": "Salvar Diagnósticos",
 		"starOnGithub": "Dar Estrela no GitHub"
 	},
 	"imageUpload": {
@@ -176,6 +181,17 @@
 		"modern": "Moderno",
 		"clean": "Clean"
 	},
+	"textAnimation": {
+		"title": "Animação de Texto",
+		"selectAnimation": "Selecionar animação",
+		"none": "Nenhuma",
+		"fade": "Esmaecer",
+		"rise": "Subir",
+		"pop": "Aparecer",
+		"slideLeft": "Deslizar à Esquerda",
+		"typewriter": "Máquina de Escrever",
+		"pulse": "Pulsar"
+	},
 	"customFont": {
 		"dialogTitle": "Adicionar Google Font",
 		"urlLabel": "URL de Importação do Google Fonts",
@@ -196,6 +212,7 @@
 		"errorLoadFailed": "A fonte não pôde ser carregada. Por favor, verifique se a URL do Google Fonts está correta."
 	},
 	"cursor": {
+		"title": "Cursor",
 		"theme": "Estilo do cursor",
 		"themeDefault": "Padrão",
 		"show": "Mostrar cursor",
@@ -208,5 +225,13 @@
 	},
 	"language": {
 		"title": "Idioma"
+	},
+	"timeline": {
+		"title": "Linha do Tempo",
+		"waveform": "Mostrar Forma de Onda de Áudio na Faixa de Corte"
+	},
+	"facets": {
+		"captions": "Legendas",
+		"transcript": "Transcrição"
 	}
 }

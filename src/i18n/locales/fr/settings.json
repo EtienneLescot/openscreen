@@ -8,7 +8,8 @@
 			"title": "Mode focus",
 			"manual": "Manuel",
 			"auto": "Auto",
-			"autoDescription": "La caméra suit la position du curseur enregistré"
+			"autoDescription": "La caméra suit la position du curseur enregistré",
+			"lockedDisclaimer": "Contrôlé par le bouton global de mise au point automatique dans la timeline. Désactivez-le pour régler le mode de mise au point par zoom."
 		},
 		"threeD": {
 			"title": "Rotation 3D",
@@ -211,6 +212,7 @@
 		"errorLoadFailed": "La police n'a pas pu être chargée. Vérifiez que l'URL Google Fonts est correcte."
 	},
 	"cursor": {
+		"title": "Curseur",
 		"theme": "Style du curseur",
 		"themeDefault": "Par défaut",
 		"show": "Afficher le curseur",
@@ -218,7 +220,8 @@
 		"smoothing": "Lissage",
 		"motionBlur": "Flou de mouvement",
 		"clickBounce": "Rebond au clic",
-		"clipToBounds": "Rogner au canevas"
+		"clipToBounds": "Rogner au canevas",
+		"clipToBoundsDescription": "Garde le curseur à l'intérieur du cadre vidéo. Désactivez pour laisser le curseur dépasser les bords — utile en cas de zoom ou de panoramique."
 	},
 	"language": {
 		"title": "Langue"
@@ -226,5 +229,9 @@
 	"timeline": {
 		"title": "Montage",
 		"waveform": "Afficher la forme d'onde sur la piste de découpe"
+	},
+	"facets": {
+		"captions": "Sous-titres",
+		"transcript": "Transcription"
 	}
 }

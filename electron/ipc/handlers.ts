@@ -1709,6 +1709,15 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("start-new-recording", () => {
 		_switchToHud?.();
+		const hudWindow = getMainWindow();
+		if (hudWindow && !hudWindow.isDestroyed()) {
+			const sendAutoStart = () => hudWindow.webContents.send("hud-auto-start-recording");
+			if (hudWindow.webContents.isLoading()) {
+				hudWindow.webContents.once("did-finish-load", sendAutoStart);
+			} else {
+				sendAutoStart();
+			}
+		}
 		return { success: true };
 	});
 

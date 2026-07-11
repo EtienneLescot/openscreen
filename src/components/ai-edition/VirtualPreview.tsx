@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fromFileUrl } from "@/components/video-editor/projectPersistence";
+import { type CropRegion, DEFAULT_CROP_REGION } from "@/components/video-editor/types";
 import type { AxcutClip, AxcutTrimRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
@@ -31,10 +32,19 @@ interface VirtualPreviewProps {
 	trimRanges?: AxcutTrimRange[];
 	seekTarget?: { timeSec: number; isSource?: boolean; requestId: number } | null;
 	onTimeChange?: (timeSec: number) => void;
-	onLoadedMetadata?: (durationSec: number, assetId: string) => void;
+	onLoadedMetadata?: (
+		durationSec: number,
+		assetId: string,
+		videoWidth: number,
+		videoHeight: number,
+	) => void;
 	onVideoElement?: (element: HTMLVideoElement | null) => void;
 	videoStyle?: React.CSSProperties;
 	onVideoError?: () => void;
+	/** Crop of the active clip, as fractions (0-1) of the source frame. Absent/
+	 * identity ({x:0,y:0,width:1,height:1}) renders the full frame, unchanged
+	 * from before crop support existed. */
+	cropRegion?: CropRegion | null;
 	/**
 	 * Written every rAF tick with this video's live position/rate so other
 	 * media elements (the webcam overlay) can read it directly instead of
@@ -55,14 +65,43 @@ export function VirtualPreview({
 	onVideoElement,
 	videoStyle,
 	onVideoError,
+	cropRegion,
 	clockRef,
 }: VirtualPreviewProps) {
 	const { settings } = useEditorSettings();
+	// ponytail: an oversized, offset video inside .videoFrame's overflow:hidden
+	// box — the same "scale + negative-position the full frame, let the
+	// container clip the rest" technique the export renderer uses via a Pixi
+	// sprite offset (frameRenderer.ts's updateLayout). Percentages here
+	// resolve against .videoFrame's own (already crop-corrected, see
+	// PreviewCanvas's screenSize) box, so this stays correct at any size
+	// without measuring pixels. Identity crop reduces to 100%/100%/0/0 — the
+	// exact same box the video rendered in before crop support existed.
+	const region = cropRegion ?? DEFAULT_CROP_REGION;
+	const isIdentityCrop =
+		region.x === 0 && region.y === 0 && region.width === 1 && region.height === 1;
+	const cropVideoStyle: React.CSSProperties = isIdentityCrop
+		? {}
+		: {
+				position: "absolute",
+				width: `${100 / region.width}%`,
+				height: `${100 / region.height}%`,
+				left: `${(-region.x * 100) / region.width}%`,
+				top: `${(-region.y * 100) / region.height}%`,
+			};
 	const videoRef = useRef<HTMLVideoElement | null>(null);
 	const videoFrameRef = useRef<HTMLDivElement | null>(null);
 
 	const isProgrammaticSeekRef = useRef(false);
 	const pendingSeekRef = useRef<{ sourceTimeSec: number; play: boolean } | null>(null);
+	// Which clip the rAF tick below believes is currently playing — set
+	// whenever a seek unambiguously resolves one (via locateVirtualPosition,
+	// timeline position → clip). Passed back into locateSourcePosition so
+	// two clips that share the same source asset (and possibly the same
+	// source range) don't get conflated: without this, resolving "current
+	// clip" from (assetId, sourceTime) alone always picks the earliest
+	// matching clip, even while a later one is the one actually playing.
+	const activeClipIdRef = useRef<string | null>(null);
 	const [virtualTimeSec, setVirtualTimeSec] = useState(0);
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [loadState, setLoadState] = useState<"idle" | "loading" | "ready" | "error">("idle");
@@ -174,11 +213,26 @@ export function VirtualPreview({
 			}
 			if (isProgrammaticSeekRef.current) {
 				isProgrammaticSeekRef.current = false;
-				const pos = locateSourcePosition(clipsRef.current, v.currentTime, activeSourceId);
-				if (pos) updateVirtualTime(clampVirtualTime(clipsRef.current, pos.virtualTimeSec));
+				const pos = locateSourcePosition(
+					clipsRef.current,
+					v.currentTime,
+					activeSourceId,
+					0.05,
+					activeClipIdRef.current ?? undefined,
+				);
+				if (pos) {
+					activeClipIdRef.current = pos.clip.id;
+					updateVirtualTime(clampVirtualTime(clipsRef.current, pos.virtualTimeSec));
+				}
 				return;
 			}
-			const position = locateSourcePosition(clipsRef.current, v.currentTime, activeSourceId);
+			const position = locateSourcePosition(
+				clipsRef.current,
+				v.currentTime,
+				activeSourceId,
+				0.05,
+				activeClipIdRef.current ?? undefined,
+			);
 			if (!position) {
 				// ponytail: fall back to timeline order so cross-asset / reordered
 				// clips don't keep playing unmapped media.
@@ -193,6 +247,7 @@ export function VirtualPreview({
 				}
 				return;
 			}
+			activeClipIdRef.current = position.clip.id;
 			const reachedClipEnd = v.currentTime >= (position.clip.sourceEndSec ?? Infinity) - 0.04;
 			if (reachedClipEnd) {
 				const nextClip = clipsRef.current[position.clipIndex + 1];
@@ -275,6 +330,7 @@ export function VirtualPreview({
 				setIsPlaying(false);
 				return;
 			}
+			activeClipIdRef.current = position.clip.id;
 
 			const targetIndex = videoSources.findIndex((vs) => vs.id === position.clip.assetId);
 			const isAssetSwitch = targetIndex >= 0 && targetIndex !== sourceIndex;
@@ -340,10 +396,14 @@ export function VirtualPreview({
 						key={activeSource.id}
 						ref={videoRef}
 						src={activeSource.src}
-						className={styles.video}
+						className={`${styles.video}${isIdentityCrop ? "" : ` ${styles.videoCropped}`}`}
 						// When a synthetic cursor is being drawn on top (CursorPreviewLayer),
 						// hide the real OS pointer here so it doesn't compete with it.
-						style={{ ...videoStyle, cursor: settings.cursorShow ? "none" : undefined }}
+						style={{
+							...cropVideoStyle,
+							...videoStyle,
+							cursor: settings.cursorShow ? "none" : undefined,
+						}}
 						preload="metadata"
 						playsInline
 						onLoadedMetadata={(e) => {
@@ -360,7 +420,12 @@ export function VirtualPreview({
 							// without it, switching between clips of different assets
 							// during multi-clip playback clobbered clip[0]'s duration
 							// with whichever asset's video happened to load last.
-							onLoadedMetadata?.(e.currentTarget.duration, activeSource.id);
+							onLoadedMetadata?.(
+								e.currentTarget.duration,
+								activeSource.id,
+								e.currentTarget.videoWidth,
+								e.currentTarget.videoHeight,
+							);
 							if (pendingSeekRef.current) {
 								const { sourceTimeSec, play } = pendingSeekRef.current;
 								pendingSeekRef.current = null;

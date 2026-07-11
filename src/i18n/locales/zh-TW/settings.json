@@ -8,7 +8,8 @@
 			"title": "對焦模式",
 			"manual": "手動",
 			"auto": "自動",
-			"autoDescription": "攝影機跟隨錄製時的游標位置"
+			"autoDescription": "攝影機跟隨錄製時的游標位置",
+			"lockedDisclaimer": "由時間軸中的全域自動對焦開關控制。關閉後可為每個縮放個別設定對焦模式。"
 		},
 		"speed": {},
 		"threeD": {
@@ -136,8 +137,6 @@
 		"textPlaceholder": "輸入您的文字...",
 		"fontStyle": "字體樣式",
 		"selectStyle": "選擇樣式",
-		"textAnimation": "文字動畫",
-		"selectAnimation": "選擇動畫",
 		"size": "大小",
 		"customFonts": "自訂字體",
 		"textColor": "文字顏色",
@@ -183,6 +182,17 @@
 		"modern": "現代",
 		"clean": "簡潔"
 	},
+	"textAnimation": {
+		"title": "文字動畫",
+		"selectAnimation": "選擇動畫",
+		"none": "無",
+		"fade": "淡入淡出",
+		"rise": "上升",
+		"pop": "彈出",
+		"slideLeft": "向左滑動",
+		"typewriter": "打字機",
+		"pulse": "脈動"
+	},
 	"customFont": {
 		"dialogTitle": "新增 Google 字體",
 		"urlLabel": "Google Fonts 匯入 URL",
@@ -203,6 +213,7 @@
 		"errorLoadFailed": "無法載入該字體。請確認 Google Fonts URL 是否正確。"
 	},
 	"cursor": {
+		"title": "游標",
 		"theme": "游標樣式",
 		"themeDefault": "預設",
 		"show": "顯示游標",
@@ -210,7 +221,8 @@
 		"smoothing": "平滑",
 		"motionBlur": "動態模糊",
 		"clickBounce": "點擊彈跳",
-		"clipToBounds": "裁切至畫布"
+		"clipToBounds": "裁切至畫布",
+		"clipToBoundsDescription": "讓游標保持在影片畫面內。關閉後游標可超出邊緣——在縮放或平移時很有用。"
 	},
 	"language": {
 		"title": "語言"
@@ -218,5 +230,9 @@
 	"timeline": {
 		"title": "時間軸",
 		"waveform": "在剪輯軌道上顯示音訊波形"
+	},
+	"facets": {
+		"captions": "字幕",
+		"transcript": "逐字稿"
 	}
 }

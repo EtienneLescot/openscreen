@@ -8,6 +8,9 @@
 		"resumeRecording": "Retomar gravação",
 		"openVideoFile": "Abrir arquivo de vídeo",
 		"openProject": "Abrir projeto",
+		"useVerticalTray": "Usar bandeja vertical",
+		"useHorizontalTray": "Usar bandeja horizontal",
+		"openStudio": "Abrir Studio",
 		"openNotes": "Abrir notas",
 		"openNotesPlaceholder": "Escreva suas notas aqui...",
 		"notesToolbar": {
@@ -25,7 +28,12 @@
 		"disableSystemAudio": "Desativar áudio do sistema",
 		"enableMicrophone": "Ativar microfone",
 		"disableMicrophone": "Desativar microfone",
-		"defaultMicrophone": "Microfone Padrão"
+		"defaultMicrophone": "Microfone Padrão",
+		"systemAudio": "Áudio do sistema",
+		"microphone": "Microfone",
+		"on": "Ativado",
+		"off": "Desativado",
+		"inputDevice": "Dispositivo de entrada"
 	},
 	"webcam": {
 		"enableWebcam": "Ativar webcam",
@@ -33,7 +41,9 @@
 		"defaultCamera": "Câmera Padrão",
 		"searching": "Procurando...",
 		"noneFound": "Nenhuma câmera encontrada",
-		"unavailable": "Câmera indisponível"
+		"unavailable": "Câmera indisponível",
+		"camera": "Câmera",
+		"cameraDevice": "Dispositivo de câmera"
 	},
 	"cursor": {
 		"useEditableCursor": "Usar cursor editável",
@@ -43,6 +53,9 @@
 		"loading": "Carregando fontes...",
 		"screens": "Telas ({{count}})",
 		"windows": "Janelas ({{count}})",
+		"emptyTitle": "Nenhuma tela ou janela encontrada",
+		"emptyDescription": "Se você acabou de conceder a permissão de gravação de tela, recarregue este seletor. No macOS, pode ser necessário reabrir o OpenScreen.",
+		"loadFailedDescription": "O OpenScreen não conseguiu carregar as fontes de captura. Recarregue este seletor e tente novamente.",
 		"defaultSourceName": "Tela"
 	},
 	"recording": {

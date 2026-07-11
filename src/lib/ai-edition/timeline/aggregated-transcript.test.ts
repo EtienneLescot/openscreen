@@ -1,6 +1,11 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutAsset, AxcutClip, AxcutTranscript, AxcutTrimRange } from "../schema";
-import { buildAggregatedSections, buildClipSection, findCueWordId } from "./aggregated-transcript";
+import {
+	buildAggregatedSections,
+	buildClipSection,
+	findCueWordId,
+	isSilenceWord,
+} from "./aggregated-transcript";
 
 function makeClip(overrides: Partial<AxcutClip> = {}): AxcutClip {
 	return {
@@ -124,7 +129,9 @@ describe("buildClipSection", () => {
 		const trim = makeTrim({ id: "trim_x", assetId: "asset_2", startSec: 0.5, endSec: 2.5 });
 
 		const section = buildClipSection(clip, transcript, makeAsset(), [trim]);
-		expect(section.words.map((cw) => cw.kept)).toEqual([true, true]);
+		// Trailing gap 2s→3s is a silence — the different-asset trim doesn't
+		// cover any of the three entries, so all stay kept.
+		expect(section.words.map((cw) => cw.kept)).toEqual([true, true, true]);
 	});
 
 	it("treats every word the same (no filler concept)", () => {
@@ -160,7 +167,49 @@ describe("buildClipSection", () => {
 		]);
 
 		const section = buildClipSection(clip, transcript, makeAsset(), []);
-		expect(section.words.map((cw) => cw.word.id)).toEqual(["w_mid"]);
+		// Leading (2s→2.5s) and trailing (3.5s→4s) gaps are both silences.
+		expect(section.words.map((cw) => cw.word.id)).toEqual(["silence_1", "w_mid", "silence_2"]);
+	});
+});
+
+describe("silence gaps", () => {
+	it("inserts a [silence] pseudo-word for gaps at or above the threshold", () => {
+		const clip = makeClip({ sourceStartSec: 0, sourceEndSec: 3 });
+		const transcript = makeTranscript([
+			{ id: "w1", segmentId: "s1", startSec: 0, endSec: 1, text: "hi" },
+			{ id: "w2", segmentId: "s1", startSec: 1.3, endSec: 2, text: "there" },
+		]);
+
+		const section = buildClipSection(clip, transcript, makeAsset(), []);
+		const ids = section.words.map((cw) => cw.word.id);
+		expect(ids).toEqual(["w1", "silence_1", "w2", "silence_2"]);
+		expect(section.words.filter((cw) => isSilenceWord(cw.word))).toHaveLength(2);
+		expect(section.words[1]?.word.text).toBe("[silence]");
+	});
+
+	it("does not insert a silence for gaps under the threshold", () => {
+		const clip = makeClip({ sourceStartSec: 0, sourceEndSec: 2 });
+		const transcript = makeTranscript([
+			{ id: "w1", segmentId: "s1", startSec: 0, endSec: 1, text: "hi" },
+			{ id: "w2", segmentId: "s1", startSec: 1.1, endSec: 2, text: "there" },
+		]);
+
+		const section = buildClipSection(clip, transcript, makeAsset(), []);
+		expect(section.words.map((cw) => cw.word.id)).toEqual(["w1", "w2"]);
+	});
+
+	it("marks a silence as removed when a trim range covers it, restorable via its trimId", () => {
+		const clip = makeClip({ sourceStartSec: 0, sourceEndSec: 3 });
+		const transcript = makeTranscript([
+			{ id: "w1", segmentId: "s1", startSec: 0, endSec: 1, text: "hi" },
+			{ id: "w2", segmentId: "s1", startSec: 2, endSec: 3, text: "there" },
+		]);
+		const trim = makeTrim({ id: "trim_silence", startSec: 1, endSec: 2 });
+
+		const section = buildClipSection(clip, transcript, makeAsset(), [trim]);
+		const silence = section.words.find((cw) => isSilenceWord(cw.word));
+		expect(silence?.kept).toBe(false);
+		expect(silence?.trimId).toBe("trim_silence");
 	});
 });
 

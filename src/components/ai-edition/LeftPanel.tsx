@@ -3,6 +3,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { AI_FEATURES_ENABLED } from "@/components/video-editor/featureFlags";
+import { useScopedT } from "@/contexts/I18nContext";
 import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
@@ -59,6 +60,7 @@ function MediaList({
 	transcriptReadyIds?: Set<string>;
 	assetStatuses?: Record<string, "pending" | "running" | "failed">;
 }) {
+	const t = useScopedT("editor");
 	if (assets.length === 0) {
 		return (
 			<p
@@ -70,7 +72,7 @@ function MediaList({
 					lineHeight: 1.5,
 				}}
 			>
-				No media in this project yet. Import a video below.
+				{t("leftPanel.emptyHint")}
 			</p>
 		);
 	}
@@ -145,14 +147,14 @@ function MediaList({
 										}}
 										aria-label={
 											status === "complete"
-												? "Transcript ready"
+												? t("mediaStage.transcriptReady")
 												: status === "running"
-													? "Transcribing"
+													? t("mediaStage.transcribing")
 													: status === "pending"
-														? "Pending transcription"
+														? t("mediaStage.pendingTranscription")
 														: status === "failed"
-															? "Transcription failed"
-															: "No transcript"
+															? t("mediaStage.transcriptionFailed")
+															: t("mediaStage.noTranscript")
 										}
 									/>
 									<span className={styles.timecode}>{tc}</span>
@@ -174,6 +176,7 @@ export function MediaPane({
 	assetStatuses?: Record<string, "pending" | "running" | "failed">;
 	onRegenerateAsset?: (assetId: string, language: string) => Promise<void>;
 }) {
+	const t = useScopedT("editor");
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
 	const addAsset = useProjectStore((s) => s.addAsset);
@@ -183,17 +186,18 @@ export function MediaPane({
 
 	const handleImport = async () => {
 		if (!projectId) {
-			toast.error("Open a project first");
+			toast.error(t("mediaStage.openProjectFirst"));
 			return;
 		}
 		const picker = await window.electronAPI?.openVideoFilePicker();
 		if (!picker?.success || !picker.path) return;
 		setBusy(true);
 		try {
-			await addAsset(picker.path);
-			toast.success(`Added ${basename(picker.path)}`);
+			const label = picker.name || basename(picker.path);
+			await addAsset(picker.path, label);
+			toast.success(t("mediaStage.added", { label }));
 		} catch (err) {
-			toast.error("Could not add asset", {
+			toast.error(t("mediaStage.couldNotAddAsset"), {
 				description: err instanceof Error ? err.message : String(err),
 			});
 		} finally {
@@ -210,7 +214,7 @@ export function MediaPane({
 	return (
 		<aside className={styles.panel}>
 			<header className={styles.panelHead}>
-				<h2>Media</h2>
+				<h2>{t("leftPanel.mediaTitle")}</h2>
 			</header>
 			<div style={{ padding: "10px var(--sp-3) 8px" }}>
 				<div
@@ -228,7 +232,7 @@ export function MediaPane({
 					<Search size={14} />
 					<input
 						type="text"
-						placeholder="Search…"
+						placeholder={t("leftPanel.searchPlaceholder")}
 						value={query}
 						onChange={(e) => setQuery(e.target.value)}
 						style={{
@@ -244,7 +248,7 @@ export function MediaPane({
 						<button
 							type="button"
 							onClick={() => setQuery("")}
-							aria-label="Clear search"
+							aria-label={t("leftPanel.clearSearch")}
 							style={{
 								background: "transparent",
 								border: 0,
@@ -272,7 +276,7 @@ export function MediaPane({
 				disabled={!projectId || busy}
 			>
 				<Plus size={14} />
-				Import media
+				{t("mediaStage.importMedia")}
 			</button>
 			{document?.transcript ? (
 				<div
@@ -297,7 +301,7 @@ export function MediaPane({
 							background: "var(--success)",
 						}}
 					/>
-					TRANSCRIPT READY
+					{t("leftPanel.transcriptReadyBadge")}
 				</div>
 			) : null}
 			<SourceTranscriptModal
@@ -369,6 +373,8 @@ function ModelQuickPopover({
 	onConfigChange: () => void;
 	onOpenFullSettings: () => void;
 }) {
+	const t = useScopedT("editor");
+	const tc = useScopedT("common");
 	const [screen, setScreen] = useState<"models" | "providers">("models");
 	const [browseProviderId, setBrowseProviderId] = useState(llmConfig.provider);
 	const [models, setModels] = useState<string[]>([]);
@@ -416,7 +422,7 @@ function ModelQuickPopover({
 				onConfigChange();
 				onClose();
 			} else {
-				setModelsError(result.error ?? "Could not select model");
+				setModelsError(result.error ?? t("chat.selectModelFailed"));
 			}
 		} finally {
 			setBusy(false);
@@ -478,12 +484,12 @@ function ModelQuickPopover({
 						}}
 					>
 						<ArrowLeft size={14} />
-						{screen === "models" ? "Change provider" : "Back"}
+						{screen === "models" ? t("chat.changeProvider") : t("chat.back")}
 					</button>
 					<button
 						type="button"
 						onClick={onClose}
-						aria-label="Close"
+						aria-label={tc("actions.close")}
 						style={{
 							background: "transparent",
 							border: "none",
@@ -503,16 +509,16 @@ function ModelQuickPopover({
 									{browseDef?.label ?? browseProviderId}
 								</div>
 								<div style={{ fontSize: 11.5, color: "var(--muted)" }}>
-									Current model:{" "}
+									{t("chat.currentModel")}{" "}
 									{browseProviderId === llmConfig.provider
 										? llmConfig.model
-										: (browseDef?.defaultModel ?? "Not selected")}
+										: (browseDef?.defaultModel ?? t("chat.notSelected"))}
 								</div>
 							</div>
 							<input
 								value={search}
 								onChange={(e) => setSearch(e.target.value)}
-								placeholder={modelsLoading ? "Loading models…" : "Search models…"}
+								placeholder={modelsLoading ? t("chat.loadingModels") : t("chat.searchModels")}
 								disabled={modelsLoading || !models.length}
 								style={{
 									width: "100%",
@@ -527,10 +533,10 @@ function ModelQuickPopover({
 							{!models.length ? (
 								<div style={{ fontSize: 12, color: "var(--muted)", padding: "8px 0" }}>
 									{modelsLoading
-										? "Loading models…"
+										? t("chat.loadingModels")
 										: modelsError
-											? `Couldn't fetch live models (${modelsError}); open provider settings to type a model id manually.`
-											: "No models available from this provider."}
+											? t("chat.fetchModelsFailed", { error: modelsError })
+											: t("chat.noModelsAvailable")}
 								</div>
 							) : (
 								<div>
@@ -566,7 +572,7 @@ function ModelQuickPopover({
 									))}
 									{filteredModels.length === 0 ? (
 										<div style={{ fontSize: 12, color: "var(--muted)" }}>
-											No models match this search.
+											{t("chat.noModelsMatch")}
 										</div>
 									) : null}
 								</div>
@@ -609,7 +615,7 @@ function ModelQuickPopover({
 							})}
 							{connectedProviders.length === 0 ? (
 								<div style={{ fontSize: 12, color: "var(--muted)", marginBottom: 8 }}>
-									No connected providers yet.
+									{t("chat.noProvidersConnected")}
 								</div>
 							) : null}
 							<button
@@ -632,7 +638,7 @@ function ModelQuickPopover({
 									marginTop: 6,
 								}}
 							>
-								Provider settings…
+								{t("chat.providerSettings")}
 							</button>
 						</>
 					)}
@@ -644,6 +650,8 @@ function ModelQuickPopover({
 }
 
 function ChatStripPanel() {
+	const t = useScopedT("editor");
+	const tc = useScopedT("common");
 	const projectId = useProjectStore((s) => s.projectId);
 	const [messages, setMessages] = useState<ChatDisplayMessage[]>([]);
 	const [input, setInput] = useState("");
@@ -806,7 +814,7 @@ function ChatStripPanel() {
 					try {
 						await applyAgentDocument(result.document);
 					} catch (err) {
-						toast.error("Could not apply the agent's edits", {
+						toast.error(t("chat.applyEditsFailed"), {
 							description: err instanceof Error ? err.message : String(err),
 						});
 					}
@@ -822,10 +830,10 @@ function ChatStripPanel() {
 				]);
 				void refreshSessions(projectId);
 			} else {
-				toast.error(result.error ?? "Chat failed");
+				toast.error(result.error ?? t("chat.chatFailed"));
 			}
 		} catch (err) {
-			toast.error("Chat failed", {
+			toast.error(t("chat.chatFailed"), {
 				description: err instanceof Error ? err.message : String(err),
 			});
 		} finally {
@@ -863,7 +871,7 @@ function ChatStripPanel() {
 					messageId,
 				);
 				if (!result.success) {
-					toast.error(result.error ?? "Rewind failed");
+					toast.error(result.error ?? t("chat.rewindFailed"));
 					setRewindFor(null);
 					return;
 				}
@@ -880,16 +888,16 @@ function ChatStripPanel() {
 					})),
 				);
 				setInput(result.prompt);
-				toast.success("Rewound to the start of that message");
+				toast.success(t("chat.rewoundSuccess"));
 			} catch (err) {
-				toast.error("Rewind failed", {
+				toast.error(t("chat.rewindFailed"), {
 					description: err instanceof Error ? err.message : String(err),
 				});
 			} finally {
 				setRewindFor(null);
 			}
 		},
-		[projectId, activeSessionId, applyAgentDocument],
+		[projectId, activeSessionId, applyAgentDocument, t],
 	);
 
 	useEffect(() => {
@@ -912,7 +920,7 @@ function ChatStripPanel() {
 		};
 	}, [rewindFor]);
 
-	const modelLabel = llmConfig ? llmConfig.model : "Configure AI Model";
+	const modelLabel = llmConfig ? llmConfig.model : t("chat.configureModel");
 	const providerSupportsReasoning = Boolean(
 		llmConfig &&
 			PROVIDER_DEFINITIONS.find((d) => d.id === llmConfig.provider)?.supportsReasoningEffort,
@@ -937,17 +945,17 @@ function ChatStripPanel() {
 					setLlmConfig({ ...llmConfig, reasoningEffort: effort });
 					setReasoningOpen(false);
 				} else {
-					toast.error(result.error ?? "Could not update reasoning effort");
+					toast.error(result.error ?? t("chat.reasoningEffortUpdateFailed"));
 				}
 			} catch (err) {
-				toast.error("Could not update reasoning effort", {
+				toast.error(t("chat.reasoningEffortUpdateFailed"), {
 					description: err instanceof Error ? err.message : String(err),
 				});
 			} finally {
 				setReasoningBusy(false);
 			}
 		},
-		[llmConfig],
+		[llmConfig, t],
 	);
 
 	const toggleReasoningOpen = useCallback(() => {
@@ -1002,7 +1010,7 @@ function ChatStripPanel() {
 		try {
 			const result = await nativeBridgeClient.aiEdition.chatCompact(projectId, activeSessionId);
 			if (!result) {
-				toast.info("Not enough history to compact yet.");
+				toast.info(t("chat.notEnoughHistory"));
 				return;
 			}
 			setMessages(
@@ -1015,15 +1023,15 @@ function ChatStripPanel() {
 					checkpointId: m.checkpointId ?? null,
 				})),
 			);
-			toast.success("Compacted earlier context");
+			toast.success(t("chat.compactedSuccess"));
 		} catch (err) {
-			toast.error("Compact failed", {
+			toast.error(t("chat.compactFailed"), {
 				description: err instanceof Error ? err.message : String(err),
 			});
 		} finally {
 			setCompactNowPending(false);
 		}
-	}, [projectId, activeSessionId, compactNowPending]);
+	}, [projectId, activeSessionId, compactNowPending, t]);
 
 	const newChat = useCallback(async () => {
 		if (!projectId) return;
@@ -1033,11 +1041,11 @@ function ChatStripPanel() {
 			setActiveSessionId(created.id);
 			setMessages([]);
 		} catch (err) {
-			toast.error("Could not create conversation", {
+			toast.error(t("chat.createSessionFailed"), {
 				description: err instanceof Error ? err.message : String(err),
 			});
 		}
-	}, [projectId]);
+	}, [projectId, t]);
 
 	const selectSession = useCallback((id: string) => {
 		setActiveSessionId(id);
@@ -1055,12 +1063,12 @@ function ChatStripPanel() {
 					setMessages([]);
 				}
 			} catch (err) {
-				toast.error("Could not delete conversation", {
+				toast.error(t("chat.deleteSessionFailed"), {
 					description: err instanceof Error ? err.message : String(err),
 				});
 			}
 		},
-		[projectId, activeSessionId],
+		[projectId, activeSessionId, t],
 	);
 
 	const handleRename = useCallback(
@@ -1078,12 +1086,12 @@ function ChatStripPanel() {
 					setSessions((prev) => prev.map((s) => (s.id === id ? updated : s)));
 				}
 			} catch (err) {
-				toast.error("Could not rename conversation", {
+				toast.error(t("chat.renameSessionFailed"), {
 					description: err instanceof Error ? err.message : String(err),
 				});
 			}
 		},
-		[projectId],
+		[projectId, t],
 	);
 
 	// ponytail: inline session rename. Click the title to edit, Enter saves,
@@ -1117,17 +1125,17 @@ function ChatStripPanel() {
 		activeSessionId,
 	);
 	const runAddTrim = useCallback(() => {
-		const raw = window.prompt("Add skip range\nFormat: startSec-endSec (e.g. 1.2-3.4)", "5-8");
+		const raw = window.prompt(t("chat.addSkipRangePrompt"), "5-8");
 		if (!raw) return;
 		const m = raw.match(/^\s*(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*$/);
 		if (!m) {
-			toast.error("Use startSec-endSec, e.g. 1.2-3.4");
+			toast.error(t("chat.addSkipRangeFormatError"));
 			return;
 		}
 		const startSec = Number(m[1]);
 		const endSec = Number(m[2]);
 		if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec) {
-			toast.error("endSec must be greater than startSec.");
+			toast.error(t("chat.addSkipRangeOrderError"));
 			return;
 		}
 		const op: AxcutTimelineOperation = {
@@ -1135,8 +1143,8 @@ function ChatStripPanel() {
 			startSec,
 			endSec,
 		};
-		void queueTimelineOp(op, `Added skip ${startSec}–${endSec}s.`);
-	}, [queueTimelineOp]);
+		void queueTimelineOp(op, t("chat.addSkipRangeApplied", { startSec, endSec }));
+	}, [queueTimelineOp, t]);
 
 	return (
 		<aside className={styles.panel}>
@@ -1145,16 +1153,19 @@ function ChatStripPanel() {
 					<div className={styles.chatStripRow}>
 						<span
 							className={styles.ctxPill}
-							title={`${budget.usedTokens} / ${budget.budgetTokens} estimated tokens`}
+							title={t("chat.contextTooltip", {
+								usedTokens: budget.usedTokens,
+								budgetTokens: budget.budgetTokens,
+							})}
 						>
 							<span className={styles.d} aria-hidden />
-							{Math.min(100, Math.round(budget.ratio * 100))}% context
+							{t("chat.contextPercent", { percent: Math.min(100, Math.round(budget.ratio * 100)) })}
 						</span>
 						<span className={styles.stripActions}>
 							<button
 								type="button"
-								title="Compact context"
-								aria-label="Compact context"
+								title={t("chat.compactContext")}
+								aria-label={t("chat.compactContext")}
 								className={styles.iconBtn}
 								onClick={() => void compactNow()}
 								disabled={!activeSessionId || compactNowPending}
@@ -1177,8 +1188,8 @@ function ChatStripPanel() {
 							</button>
 							<button
 								type="button"
-								title="AI settings"
-								aria-label="AI settings"
+								title={t("chat.aiSettings")}
+								aria-label={t("chat.aiSettings")}
 								onClick={() => setSettingsOpen(true)}
 							>
 								<svg
@@ -1195,12 +1206,10 @@ function ChatStripPanel() {
 									<path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
 								</svg>
 							</button>
-						</span>
-						<span className={styles.stripActions}>
 							<button
 								type="button"
-								title="History"
-								aria-label="History"
+								title={t("chat.history")}
+								aria-label={t("chat.history")}
 								onClick={() => setChatsOpen(true)}
 							>
 								<svg
@@ -1220,8 +1229,8 @@ function ChatStripPanel() {
 							</button>
 							<button
 								type="button"
-								title="New conversation"
-								aria-label="New conversation"
+								title={t("chat.newConversation")}
+								aria-label={t("chat.newConversation")}
 								onClick={newChat}
 							>
 								<svg
@@ -1297,19 +1306,20 @@ function ChatStripPanel() {
 									flex: 1,
 									cursor: "text",
 								}}
-								title="Click to rename"
+								title={t("chat.clickToRename")}
 								onClick={() => {
 									const current = sessions.find((s) => s.id === activeSessionId);
 									if (current) beginEditTitle(activeSessionId, current.title);
 								}}
 							>
-								{sessions.find((s) => s.id === activeSessionId)?.title ?? "Conversation"}
+								{sessions.find((s) => s.id === activeSessionId)?.title ??
+									t("chat.untitledConversation")}
 							</span>
 						)}
 						<button
 							type="button"
-							title="Rename conversation"
-							aria-label="Rename conversation"
+							title={t("chat.renameConversation")}
+							aria-label={t("chat.renameConversation")}
 							disabled={editingSessionId === activeSessionId}
 							onClick={() => {
 								const current = sessions.find((s) => s.id === activeSessionId);
@@ -1339,12 +1349,12 @@ function ChatStripPanel() {
 						</button>
 						<button
 							type="button"
-							title="Delete conversation"
-							aria-label="Delete conversation"
+							title={t("chat.deleteConversation")}
+							aria-label={t("chat.deleteConversation")}
 							onClick={() => {
 								const current = sessions.find((s) => s.id === activeSessionId);
 								if (!current) return;
-								if (window.confirm(`Delete "${current.title}"?`)) {
+								if (window.confirm(t("chat.confirmDeleteConversation", { title: current.title }))) {
 									void handleDelete(activeSessionId);
 								}
 							}}
@@ -1375,8 +1385,8 @@ function ChatStripPanel() {
 						</button>
 						<button
 							type="button"
-							title="Add skip range"
-							aria-label="Add skip range"
+							title={t("chat.addSkipRange")}
+							aria-label={t("chat.addSkipRange")}
 							disabled={!activeSessionId || queueBusy}
 							onClick={runAddTrim}
 							style={{
@@ -1390,7 +1400,7 @@ function ChatStripPanel() {
 								whiteSpace: "nowrap",
 							}}
 						>
-							+ skip
+							{t("chat.skipButtonShort")}
 						</button>
 					</div>
 				) : null}
@@ -1407,7 +1417,7 @@ function ChatStripPanel() {
 							lineHeight: 1.5,
 						}}
 					>
-						No messages yet. Ask the agent to cut silences, tighten pauses, or add captions.
+						{t("chat.emptyState")}
 					</p>
 				) : (
 					<>
@@ -1415,7 +1425,7 @@ function ChatStripPanel() {
 							<div className={styles.msg} key={i}>
 								<div className={styles.msgHead}>
 									<span className={styles.msgAuthor}>
-										{m.role === "user" ? "You" : "OpenScreen"}
+										{m.role === "user" ? t("chat.authorUser") : t("chat.authorAssistant")}
 									</span>
 									{m.time ? (
 										<span
@@ -1440,8 +1450,8 @@ function ChatStripPanel() {
 										<button
 											type="button"
 											data-rewind-trigger="true"
-											title="Rewind to this message"
-											aria-label="Rewind to this message"
+											title={t("chat.rewindToMessage")}
+											aria-label={t("chat.rewindToMessage")}
 											aria-expanded={rewindFor?.messageId === m.id}
 											onClick={(event) => {
 												const rect = event.currentTarget.getBoundingClientRect();
@@ -1483,12 +1493,12 @@ function ChatStripPanel() {
 									) : null}
 									<button
 										type="button"
-										title="Copy message"
-										aria-label="Copy message"
+										title={t("chat.copyMessage")}
+										aria-label={t("chat.copyMessage")}
 										onClick={() => {
 											void navigator.clipboard.writeText(m.content).then(
-												() => toast.success("Copied to clipboard"),
-												() => toast.error("Couldn't copy"),
+												() => toast.success(t("chat.copiedToClipboard")),
+												() => toast.error(t("chat.copyFailed")),
 											);
 										}}
 										style={{
@@ -1529,7 +1539,7 @@ function ChatStripPanel() {
 													color: "var(--success)",
 												}}
 											>
-												applied: {call.summary}
+												{t("chat.appliedPrefix")} {call.summary}
 											</div>
 										))}
 									</div>
@@ -1539,7 +1549,7 @@ function ChatStripPanel() {
 						{busy ? (
 							<div className={styles.msg} aria-live="polite">
 								<div className={styles.msgHead}>
-									<span className={styles.msgAuthor}>OpenScreen</span>
+									<span className={styles.msgAuthor}>{t("chat.authorAssistant")}</span>
 								</div>
 								<div
 									className={styles.msgBubble}
@@ -1550,7 +1560,7 @@ function ChatStripPanel() {
 										className="animate-spin"
 										style={{ marginRight: 6, verticalAlign: "middle" }}
 									/>
-									Thinking…
+									{t("chat.thinking")}
 								</div>
 							</div>
 						) : null}
@@ -1560,7 +1570,7 @@ function ChatStripPanel() {
 
 			<div className={styles.chatInput}>
 				<textarea
-					placeholder="Describe the edit you want."
+					placeholder={t("chat.composerPlaceholder")}
 					value={input}
 					onChange={(e) => setInput(e.target.value)}
 					onKeyDown={(e) => {
@@ -1575,7 +1585,7 @@ function ChatStripPanel() {
 						ref={modelButtonRef}
 						type="button"
 						className={styles.modelPicker}
-						aria-label="Model"
+						aria-label={t("chat.modelLabel")}
 						aria-haspopup="menu"
 						aria-expanded={modelPopoverOpen}
 						onClick={toggleModelPopoverOpen}
@@ -1601,7 +1611,7 @@ function ChatStripPanel() {
 							ref={reasoningButtonRef}
 							type="button"
 							className={styles.reasoningBtn}
-							aria-label="Reasoning effort"
+							aria-label={t("chat.reasoningEffortLabel")}
 							aria-haspopup="menu"
 							aria-expanded={reasoningOpen}
 							onClick={toggleReasoningOpen}
@@ -1673,8 +1683,8 @@ function ChatStripPanel() {
 					<button
 						type="button"
 						className={styles.sendBtn}
-						title="Send (Enter)"
-						aria-label="Send"
+						title={t("chat.sendTitle")}
+						aria-label={t("chat.send")}
 						onClick={() => void send()}
 						disabled={busy || !input.trim()}
 					>
@@ -1714,7 +1724,7 @@ function ChatStripPanel() {
 						<div
 							data-rewind-confirmation="true"
 							role="dialog"
-							aria-label="Confirm rewind"
+							aria-label={t("chat.rewindConfirmTitle")}
 							style={{
 								position: "fixed",
 								left: rewindFor.anchor.left - 130,
@@ -1728,7 +1738,9 @@ function ChatStripPanel() {
 								zIndex: 1000,
 							}}
 						>
-							<strong style={{ display: "block", marginBottom: 4 }}>Rewind here?</strong>
+							<strong style={{ display: "block", marginBottom: 4 }}>
+								{t("chat.rewindConfirmTitle")}
+							</strong>
 							<p
 								style={{
 									font: "400 12px/1.4 var(--font-body)",
@@ -1736,8 +1748,7 @@ function ChatStripPanel() {
 									margin: "0 0 8px",
 								}}
 							>
-								The agent's edits and follow-up turns after this point get rolled back. Project,
-								conversation, and agent state will be restored.
+								{t("chat.rewindConfirmBody")}
 							</p>
 							<div style={{ display: "flex", justifyContent: "flex-end", gap: 6 }}>
 								<button
@@ -1753,7 +1764,7 @@ function ChatStripPanel() {
 										cursor: "pointer",
 									}}
 								>
-									Cancel
+									{tc("actions.cancel")}
 								</button>
 								<button
 									type="button"
@@ -1768,7 +1779,7 @@ function ChatStripPanel() {
 										cursor: "pointer",
 									}}
 								>
-									Rewind
+									{t("chat.rewindConfirm")}
 								</button>
 							</div>
 						</div>,
@@ -1779,9 +1790,11 @@ function ChatStripPanel() {
 	);
 }
 
-const RAIL_BUTTONS: Array<{ id: LeftTab; label: string; icon: React.ElementType }> = [
-	...(AI_FEATURES_ENABLED ? [{ id: "chat" as LeftTab, label: "Chat", icon: MessageSquare }] : []),
-	{ id: "media", label: "Media", icon: Film },
+const RAIL_BUTTONS: Array<{ id: LeftTab; labelKey: string; icon: React.ElementType }> = [
+	...(AI_FEATURES_ENABLED
+		? [{ id: "chat" as LeftTab, labelKey: "leftRail.chat", icon: MessageSquare }]
+		: []),
+	{ id: "media", labelKey: "leftRail.media", icon: Film },
 ];
 
 export function LeftRail({
@@ -1791,14 +1804,15 @@ export function LeftRail({
 	active: LeftTab;
 	onChange: (id: LeftTab) => void;
 }) {
+	const t = useScopedT("editor");
 	return (
-		<aside className={`${styles.rail} ${styles.leftRail}`} aria-label="Left tools">
-			{RAIL_BUTTONS.map(({ id, label, icon: Icon }) => (
+		<aside className={`${styles.rail} ${styles.leftRail}`} aria-label={t("leftRail.ariaLabel")}>
+			{RAIL_BUTTONS.map(({ id, labelKey, icon: Icon }) => (
 				<button
 					type="button"
 					key={id}
-					title={label}
-					aria-label={label}
+					title={t(labelKey)}
+					aria-label={t(labelKey)}
 					aria-pressed={active === id}
 					onClick={() => onChange(id)}
 				>

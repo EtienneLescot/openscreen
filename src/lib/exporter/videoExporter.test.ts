@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import {
 	getSourceCopyFastPathBlockers,
 	isSourceCopyFastPathEligible,
+	resolveCropAt,
 	type VideoExporterConfig,
 	waitForEncoderQueueSpace,
 } from "./videoExporter";
@@ -31,12 +32,28 @@ describe("isSourceCopyFastPathEligible", () => {
 			isSourceCopyFastPathEligible(createConfig(), {
 				width: 1920,
 				height: 1080,
+				frameRate: 60,
+				codec: "avc1.640033",
 			}),
 		).toBe(true);
 	});
 
+	it("rejects a frame rate or codec that differs from the source", () => {
+		const videoInfo = { width: 1920, height: 1080, frameRate: 60, codec: "avc1.640033" };
+
+		expect(isSourceCopyFastPathEligible(createConfig({ frameRate: 30 }), videoInfo)).toBe(false);
+		expect(
+			isSourceCopyFastPathEligible(createConfig({ codec: "hvc1.1.6.L120.90" }), videoInfo),
+		).toBe(false);
+		// A container-rounded rate (59.94 vs the nominal 60) shouldn't force a
+		// re-encode on its own.
+		expect(isSourceCopyFastPathEligible(createConfig(), { ...videoInfo, frameRate: 59.94 })).toBe(
+			true,
+		);
+	});
+
 	it("rejects timeline edits and frame-level effects", () => {
-		const videoInfo = { width: 1920, height: 1080 };
+		const videoInfo = { width: 1920, height: 1080, frameRate: 60, codec: "avc1.640033" };
 
 		expect(
 			isSourceCopyFastPathEligible(
@@ -82,7 +99,7 @@ describe("isSourceCopyFastPathEligible", () => {
 	});
 
 	it("rejects resizing and overlays", () => {
-		const videoInfo = { width: 1920, height: 1080 };
+		const videoInfo = { width: 1920, height: 1080, frameRate: 60, codec: "avc1.640033" };
 
 		expect(isSourceCopyFastPathEligible(createConfig({ width: 1280 }), videoInfo)).toBe(false);
 		expect(
@@ -126,8 +143,63 @@ describe("getSourceCopyFastPathBlockers", () => {
 			getSourceCopyFastPathBlockers(createConfig({ height: 1080 }), {
 				width: 1920,
 				height: 1032,
+				frameRate: 60,
+				codec: "avc1.640033",
 			}),
 		).toContain("output-size 1920x1080 differs from source 1920x1032");
+	});
+
+	it("blocks the fast path when any clip in the crop schedule has a non-default crop", () => {
+		const videoInfo = { width: 1920, height: 1080, frameRate: 60, codec: "avc1.640033" };
+		const blockers = getSourceCopyFastPathBlockers(
+			createConfig({
+				cropSchedule: [
+					{ startSec: 0, endSec: 3, cropRegion: { x: 0, y: 0, width: 1, height: 1 } },
+					{ startSec: 3, endSec: 6, cropRegion: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 } },
+				],
+			}),
+			videoInfo,
+		);
+		expect(blockers).toContain("crop is not default");
+	});
+
+	it("allows the fast path when every clip in the crop schedule is default", () => {
+		const videoInfo = { width: 1920, height: 1080, frameRate: 60, codec: "avc1.640033" };
+		const blockers = getSourceCopyFastPathBlockers(
+			createConfig({
+				cropSchedule: [
+					{ startSec: 0, endSec: 3, cropRegion: { x: 0, y: 0, width: 1, height: 1 } },
+					{ startSec: 3, endSec: 6, cropRegion: { x: 0, y: 0, width: 1, height: 1 } },
+				],
+			}),
+			videoInfo,
+		);
+		expect(blockers).not.toContain("crop is not default");
+	});
+});
+
+describe("resolveCropAt", () => {
+	const identity = { x: 0, y: 0, width: 1, height: 1 };
+	const halfCrop = { x: 0.25, y: 0.25, width: 0.5, height: 0.5 };
+	const schedule = [
+		{ startSec: 0, endSec: 3, cropRegion: halfCrop },
+		{ startSec: 3, endSec: 6, cropRegion: identity },
+	];
+
+	it("picks the schedule entry covering the given source time", () => {
+		expect(resolveCropAt(schedule, 1.5, identity)).toBe(halfCrop);
+		expect(resolveCropAt(schedule, 4, identity)).toBe(identity);
+	});
+
+	it("treats entry end as exclusive so back-to-back clips don't overlap", () => {
+		expect(resolveCropAt(schedule, 3, identity)).toBe(identity);
+	});
+
+	it("falls back when nothing covers the timestamp or the schedule is absent", () => {
+		const fallback = { x: 0.1, y: 0.1, width: 0.8, height: 0.8 };
+		expect(resolveCropAt(schedule, 10, fallback)).toBe(fallback);
+		expect(resolveCropAt(undefined, 1.5, fallback)).toBe(fallback);
+		expect(resolveCropAt([], 1.5, fallback)).toBe(fallback);
 	});
 });
 

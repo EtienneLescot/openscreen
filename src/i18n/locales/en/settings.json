@@ -212,6 +212,7 @@
 		"errorLoadFailed": "The font could not be loaded. Please verify the Google Fonts URL is correct."
 	},
 	"cursor": {
+		"title": "Cursor",
 		"theme": "Cursor Style",
 		"themeDefault": "Default",
 		"show": "Show Cursor",
@@ -228,5 +229,9 @@
 	"timeline": {
 		"title": "Timeline",
 		"waveform": "Show Audio Waveform on Trim Track"
+	},
+	"facets": {
+		"captions": "Captions",
+		"transcript": "Transcript"
 	}
 }

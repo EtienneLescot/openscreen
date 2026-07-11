@@ -2,6 +2,10 @@
 	"buttons": {
 		"addZoom": "줌 추가 (Z)",
 		"suggestZooms": "커서 기반 줌 제안",
+		"autoZoomOn": "자동 줌 제안 켜짐 — 클릭하면 제안된 줌을 제거합니다",
+		"autoZoomOff": "자동 줌 제안 꺼짐 — 클릭하면 커서 기반으로 줌을 제안합니다",
+		"autoFocusAllOn": "모든 줌에 자동 초점 켜짐 — 클릭하면 모두 수동으로 전환합니다",
+		"autoFocusAllOff": "모든 줌에 자동 초점 켜기 (카메라가 커서를 따라갑니다)",
 		"addTrim": "트림 추가 (T)",
 		"addAnnotation": "주석 추가 (A)",
 		"addSpeed": "속도 추가 (S)",
@@ -57,5 +61,32 @@
 	"success": {
 		"addedZoomSuggestions": "커서 기반 줌 제안 {{count}}개가 추가되었습니다",
 		"addedZoomSuggestionsPlural": "커서 기반 줌 제안 {{count}}개가 추가되었습니다"
+	},
+	"toolbar": {
+		"autoEnhance": "자동 향상",
+		"automaticZooms": "자동 줌",
+		"automaticZoomsHint": "녹화된 커서 움직임 기반",
+		"smartZoomsAndCuts": "스마트 줌 + 컷",
+		"smartZoomsAndCutsHint": "AI 사용",
+		"comment": "코멘트",
+		"aspectRatio": "화면 비율",
+		"timelineTools": "타임라인 도구",
+		"arrangeClips": "클립 정리",
+		"arrangeClipsHint": "아래 클립을 드래그하여 순서를 바꾸거나 새 클립을 놓으세요",
+		"newAnnotation": "새 주석",
+		"noAnnotationsYet": "아직 주석이 없습니다",
+		"constantSpeed": "일정한 속도",
+		"noTrims": "트림 없음",
+		"dragToReorderHint": "드래그하여 순서 변경 · 더블클릭하여 시작/종료 지점 편집",
+		"editInOutPoints": "시작/종료 지점 편집",
+		"deleteClip": "클립 삭제",
+		"dropToAdd": "타임라인에 추가하려면 놓으세요",
+		"importRecordingFirst": "먼저 녹화 파일을 가져오세요",
+		"noAutoZoomMoments": "자동 줌 순간을 찾을 수 없음",
+		"noAutoZoomMomentsDescription": "이 녹화에는 커서 이동 데이터가 없거나 기존 줌이 이미 주요 순간을 다루고 있습니다.",
+		"addedAutoZoom": "자동 줌 {{count}}개가 추가되었습니다",
+		"addedAutoZoomPlural": "자동 줌 {{count}}개가 추가되었습니다",
+		"autoZoomFailed": "자동 줌 실패",
+		"aiEnhanceRequested": "AI 에이전트에게 이 녹화 개선을 요청했습니다"
 	}
 }

@@ -84,6 +84,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.on("source-selector-closed", listener);
 		return () => ipcRenderer.removeListener("source-selector-closed", listener);
 	},
+	onAutoStartRecording: (callback: () => void) => {
+		const listener = () => callback();
+		ipcRenderer.on("hud-auto-start-recording", listener);
+		return () => ipcRenderer.removeListener("hud-auto-start-recording", listener);
+	},
 	requestCameraAccess: () => {
 		return ipcRenderer.invoke("request-camera-access");
 	},

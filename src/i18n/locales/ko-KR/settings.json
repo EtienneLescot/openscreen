@@ -9,7 +9,8 @@
 			"title": "포커스 모드",
 			"manual": "수동",
 			"auto": "자동",
-			"autoDescription": "녹화된 커서 위치를 따라 카메라가 이동합니다"
+			"autoDescription": "녹화된 커서 위치를 따라 카메라가 이동합니다",
+			"lockedDisclaimer": "타임라인의 전역 자동 포커스 스위치로 제어됩니다. 줌마다 포커스 모드를 설정하려면 이 옵션을 꺼주세요."
 		},
 		"threeD": {
 			"title": "3D 회전",
@@ -211,6 +212,7 @@
 		"errorLoadFailed": "폰트를 불러올 수 없습니다. Google Fonts URL이 올바른지 확인해 주세요."
 	},
 	"cursor": {
+		"title": "커서",
 		"theme": "커서 스타일",
 		"themeDefault": "기본",
 		"show": "커서 표시",
@@ -218,7 +220,8 @@
 		"smoothing": "부드러움",
 		"motionBlur": "모션 블러",
 		"clickBounce": "클릭 바운스",
-		"clipToBounds": "캔버스에 맞춰 자르기"
+		"clipToBounds": "캔버스에 맞춰 자르기",
+		"clipToBoundsDescription": "커서를 비디오 프레임 안에 유지합니다. 꺼두면 확대하거나 이동할 때 커서가 가장자리를 벗어날 수 있습니다."
 	},
 	"language": {
 		"title": "언어"
@@ -226,5 +229,9 @@
 	"timeline": {
 		"title": "타임라인",
 		"waveform": "트림 트랙에 오디오 파형 표시"
+	},
+	"facets": {
+		"captions": "자막",
+		"transcript": "대본"
 	}
 }

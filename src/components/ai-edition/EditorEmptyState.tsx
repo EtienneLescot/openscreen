@@ -16,6 +16,7 @@
 import { AlertCircle, Film, FolderOpen, Upload, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { useScopedT } from "@/contexts/I18nContext";
 import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { nativeBridgeClient } from "@/native";
@@ -34,6 +35,8 @@ export function EditorEmptyState({
 	hasProject,
 	showLoadProjectButton = true,
 }: EditorEmptyStateProps) {
+	const t = useScopedT("editor");
+	const tc = useScopedT("common");
 	const [isDraggingOver, setIsDraggingOver] = useState(false);
 	const [dropError, setDropError] = useState<DropError>(null);
 	const lastDropErrorRef = useRef<Exclude<DropError, null>>("unsupported-format");
@@ -58,7 +61,7 @@ export function EditorEmptyState({
 		try {
 			const projectId = await ensureProject();
 			if (!projectId) return;
-			const label = result.path.split(/[\\/]/).pop() || "Recording";
+			const label = result.name || result.path.split(/[\\/]/).pop() || "Recording";
 			await addAsset(result.path, label);
 		} catch (err) {
 			setDropError("load-failed");
@@ -151,7 +154,7 @@ export function EditorEmptyState({
 			{isDraggingOver ? (
 				<div className={styles.previewEmptyDropOverlay}>
 					<Upload className={styles.previewEmptyDropIcon} />
-					<p className={styles.previewEmptyDropLabel}>Drop a .openscreen project file</p>
+					<p className={styles.previewEmptyDropLabel}>{t("emptyState.dropOverlay")}</p>
 				</div>
 			) : null}
 
@@ -167,8 +170,8 @@ export function EditorEmptyState({
 							/>
 							<DialogTitle className={styles.previewEmptyDialogTitle}>
 								{lastDropErrorRef.current === "unsupported-format"
-									? "Unsupported format"
-									: "Could not open project"}
+									? t("emptyState.dropErrors.unsupportedFormatTitle")
+									: t("emptyState.dropErrors.couldNotOpenTitle")}
 							</DialogTitle>
 						</div>
 					</DialogHeader>
@@ -178,8 +181,8 @@ export function EditorEmptyState({
 						</div>
 						<p className={styles.previewEmptyDialogMessage}>
 							{lastDropErrorRef.current === "unsupported-format"
-								? "Only .openscreen project files are supported. Drop a recording to import it, or use the buttons above."
-								: "We couldn't read that project file. Try re-opening it from the file picker."}
+								? t("emptyState.dropErrors.unsupportedFormatMessage")
+								: t("emptyState.dropErrors.couldNotOpenMessage")}
 						</p>
 					</div>
 					<button
@@ -188,7 +191,7 @@ export function EditorEmptyState({
 						className={styles.previewEmptyDialogClose}
 					>
 						<X className={styles.previewEmptyDialogCloseIcon} />
-						Close
+						{tc("actions.close")}
 					</button>
 				</DialogContent>
 			</Dialog>
@@ -197,12 +200,10 @@ export function EditorEmptyState({
 				<img src="./openscreen.png" alt="" aria-hidden="true" className={styles.previewEmptyLogo} />
 				<div className={styles.previewEmptyHeading}>
 					<h2 className={styles.previewEmptyTitle}>
-						{hasProject ? "Add a video to get started" : "No project open"}
+						{hasProject ? t("emptyState.titleHasAsset") : t("emptyState.title")}
 					</h2>
 					<p className={styles.previewEmptyDescription}>
-						{hasProject
-							? "Import a recording to begin editing."
-							: "Create a new project or open an existing one."}
+						{hasProject ? t("emptyState.descriptionHasAsset") : t("emptyState.description")}
 					</p>
 				</div>
 				<div className={styles.previewEmptyActions}>
@@ -212,7 +213,7 @@ export function EditorEmptyState({
 						className={styles.previewEmptyPrimaryButton}
 					>
 						<Film className={styles.previewEmptyButtonIcon} />
-						{hasProject ? "Import video" : "New project + import video"}
+						{hasProject ? t("emptyState.importVideoButton") : t("emptyState.newProjectButton")}
 					</button>
 					{showLoadProjectButton && !hasProject ? (
 						<button
@@ -221,16 +222,14 @@ export function EditorEmptyState({
 							className={styles.previewEmptySecondaryButton}
 						>
 							<FolderOpen className={styles.previewEmptyButtonIcon} />
-							Open project
+							{t("emptyState.loadProjectButton")}
 						</button>
 					) : null}
 				</div>
-				<p className={styles.previewEmptyHint}>
-					Supported formats: MP4, MOV, WebM, MKV, AVI, M4V, WMV.
-				</p>
+				<p className={styles.previewEmptyHint}>{t("emptyState.supportedFormats")}</p>
 				<p className={styles.previewEmptyDragHint}>
 					<Upload className={styles.previewEmptyDragHintIcon} />
-					Or drop a .openscreen project file here.
+					{t("emptyState.dragDropHint")}
 				</p>
 			</div>
 		</div>

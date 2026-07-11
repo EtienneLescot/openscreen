@@ -6,7 +6,6 @@ import type {
 	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
-import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import { EditorEmptyState } from "./EditorEmptyState";
 import styles from "./NewEditorShell.module.css";
@@ -43,13 +42,6 @@ interface PreviewProps {
 	// the parent shell — Preview only needs `playing` to report it on the
 	// data-is-playing test attribute.
 	playing: boolean;
-}
-
-function formatTC(sec: number): string {
-	if (!sec || !Number.isFinite(sec) || sec < 0) sec = 0;
-	const m = Math.floor(sec / 60);
-	const s = (sec % 60).toFixed(1);
-	return `${m}:${s.padStart(4, "0")}`;
 }
 
 export function Preview({
@@ -92,9 +84,6 @@ export function Preview({
 		}
 	}, [activeSourceKey]);
 
-	const { settings: editorSettings } = useEditorSettings();
-	const aspectRatioLabel = editorSettings.aspectRatio;
-
 	return (
 		<section
 			className={styles.previewWrap}
@@ -131,14 +120,6 @@ export function Preview({
 			) : (
 				<EditorEmptyState hasProject={hasProject} />
 			)}
-			{hasProject && hasAsset ? (
-				<span className={styles.previewTimecode}>{formatTC(currentTimeSec)}</span>
-			) : null}
-			{hasProject && hasAsset ? (
-				<span className={styles.previewBadge}>
-					{editorSettings.cursorShow ? "Cursor on" : "Cursor off"} · {aspectRatioLabel} · 60 fps
-				</span>
-			) : null}
 		</section>
 	);
 }
