@@ -3030,9 +3030,19 @@ export function registerIpcHandlers(
 
 	async function loadProjectFile(projectFolder?: string): Promise<ProjectFileResult> {
 		try {
-			// Prefer the user's last opened-project folder if it still exists, else
-			// RECORDINGS_DIR. Validate here because the renderer can't stat the filesystem.
+			// Default to the projects directory, where the editor actually stores
+			// openable project files (one `.openscreen` per project). Prefer the user's
+			// last opened-project folder if given and still valid; only fall back to
+			// RECORDINGS_DIR if the projects dir doesn't exist yet (fresh install).
+			// Validate here because the renderer can't stat the filesystem.
+			const projectsDir = path.join(app.getPath("userData"), "projects");
 			let defaultDir = RECORDINGS_DIR;
+			try {
+				const stats = await fs.stat(projectsDir);
+				if (stats.isDirectory()) defaultDir = projectsDir;
+			} catch {
+				// projects dir not created yet — keep RECORDINGS_DIR fallback.
+			}
 			if (projectFolder) {
 				try {
 					const stats = await fs.stat(projectFolder);
@@ -3043,7 +3053,7 @@ export function registerIpcHandlers(
 					// Stat can fail if the folder was moved/deleted (expected) or on a
 					// permission error (worth surfacing). We fall back either way, but log it.
 					console.warn(
-						`Could not access remembered project folder "${projectFolder}", falling back to RECORDINGS_DIR:`,
+						`Could not access remembered project folder "${projectFolder}", falling back to default:`,
 						err,
 					);
 				}
@@ -3055,7 +3065,9 @@ export function registerIpcHandlers(
 					filters: [
 						{
 							name: mainT("dialogs", "fileDialogs.openscreenProject"),
-							extensions: [PROJECT_FILE_EXTENSION],
+							// All projects are `.openscreen`; `.axcut` is kept only so files
+							// written by older builds (pre-migration) still show up.
+							extensions: [PROJECT_FILE_EXTENSION, "axcut"],
 						},
 						{ name: "JSON", extensions: ["json"] },
 						{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },

@@ -18,6 +18,7 @@ import { useCallback, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useScopedT } from "@/contexts/I18nContext";
 import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
+import { documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { nativeBridgeClient } from "@/native";
 import styles from "./NewEditorShell.module.css";
@@ -71,23 +72,37 @@ export function EditorEmptyState({
 		}
 	}, [addAsset, ensureProject]);
 
+	// A loaded project JSON is either a current AxcutDocument (has its own
+	// `schemaVersion`) or a legacy EditorProjectData that must be migrated.
+	// Discriminate on the version field so a current document is never fed to
+	// the legacy migrator (which reads `.media`/`.editor` and would yield an
+	// empty doc). Returns true once the project is saved and loaded.
+	const openLoadedProject = useCallback(
+		async (raw: unknown): Promise<boolean> => {
+			const isAxcutDocument =
+				typeof raw === "object" && raw !== null && "schemaVersion" in raw && "timeline" in raw;
+			const doc = isAxcutDocument
+				? documentSchema.parse(raw)
+				: migrateProjectDataToAxcutDocument(raw as never);
+			const saved = await nativeBridgeClient.aiEdition.save(doc);
+			if (!saved.success || !saved.document) return false;
+			await loadProject(doc.project.id);
+			return true;
+		},
+		[loadProject],
+	);
+
 	const handleLoadProject = useCallback(async () => {
 		try {
 			const result = await window.electronAPI?.loadProjectFile?.();
 			if (!result?.success || !result.project) return;
-			// ponytail: legacy v2 projects round-trip through the migrator.
-			// The bridge expects a v3 AxcutDocument.
-			const migrated = migrateProjectDataToAxcutDocument(result.project as never);
-			const saved = await nativeBridgeClient.aiEdition.save(migrated);
-			if (saved.success && saved.document) {
-				await loadProject(migrated.project.id);
-			} else {
+			if (!(await openLoadedProject(result.project))) {
 				setDropError("load-failed");
 			}
 		} catch {
 			setDropError("load-failed");
 		}
-	}, [loadProject]);
+	}, [openLoadedProject]);
 
 	const handleDragOver = useCallback((e: React.DragEvent) => {
 		e.preventDefault();
@@ -130,18 +145,14 @@ export function EditorEmptyState({
 				return;
 			}
 			try {
-				const migrated = migrateProjectDataToAxcutDocument(result.project as never);
-				const saved = await nativeBridgeClient.aiEdition.save(migrated);
-				if (saved.success && saved.document) {
-					await loadProject(migrated.project.id);
-				} else {
+				if (!(await openLoadedProject(result.project))) {
 					setDropError("load-failed");
 				}
 			} catch {
 				setDropError("load-failed");
 			}
 		},
-		[loadProject],
+		[openLoadedProject],
 	);
 
 	return (

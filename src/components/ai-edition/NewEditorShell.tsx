@@ -6,7 +6,7 @@ import { useShortcuts } from "@/contexts/ShortcutsContext";
 import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
 import { replaceTimeline as replaceTimelineOp } from "@/lib/ai-edition/document/timeline";
 import { transcribeAsset } from "@/lib/ai-edition/document/transcribe";
-import type { AxcutClip } from "@/lib/ai-edition/schema";
+import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { PLACEHOLDER_DURATION_SEC, useTimeline } from "@/lib/ai-edition/store/useTimeline";
@@ -498,18 +498,27 @@ export function NewEditorShell() {
 		[setTranscript],
 	);
 
-	const handleLoadLegacyProject = useCallback(async () => {
+	const handleBrowseProject = useCallback(async () => {
 		try {
 			const result = await window.electronAPI?.loadProjectFile();
 			if (!result?.success || !result.project) return;
-			const legacy = result.project as EditorProjectData;
-			const migrated = migrateProjectDataToAxcutDocument(legacy);
-			const saved = await nativeBridgeClient.aiEdition.save(migrated);
+			const raw = result.project as unknown;
+			// A current project file already carries its own `schemaVersion` (v3/v4
+			// AxcutDocument); an older legacy export is EditorProjectData and must be
+			// migrated. Discriminate on the version field so a current document is
+			// never fed to the legacy migrator (which reads `.media`/`.editor` and
+			// would yield an empty doc).
+			const isAxcutDocument =
+				typeof raw === "object" && raw !== null && "schemaVersion" in raw && "timeline" in raw;
+			const doc = isAxcutDocument
+				? documentSchema.parse(raw) // validates + upgrades v3 → v4
+				: migrateProjectDataToAxcutDocument(raw as EditorProjectData);
+			const saved = await nativeBridgeClient.aiEdition.save(doc);
 			if (saved.success && saved.document) {
-				await loadProject(migrated.project.id);
-				toast.success("Legacy project migrated and loaded");
+				await loadProject(doc.project.id);
+				toast.success(isAxcutDocument ? "Project opened" : "Legacy project migrated and loaded");
 			} else {
-				toast.error(saved.error ?? "Failed to save migrated project");
+				toast.error(saved.error ?? "Failed to open project");
 			}
 		} catch (err) {
 			toast.error("Could not load project", {
@@ -1253,7 +1262,7 @@ export function NewEditorShell() {
 				projects={projectSummaries}
 				activeProjectId={projectId}
 				onSelect={handleSelectProject}
-				onBrowse={handleLoadLegacyProject}
+				onBrowse={handleBrowseProject}
 			/>
 			<NewProjectModal
 				open={newProjectOpen}

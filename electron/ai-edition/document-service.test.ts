@@ -30,7 +30,7 @@ describe("DocumentService", () => {
 			expect(doc.project.id).toMatch(/^proj_/);
 			expect(doc.assets).toEqual([]);
 
-			const filePath = path.join(tempDir, `${doc.project.id}.axcut`);
+			const filePath = path.join(tempDir, `${doc.project.id}.openscreen`);
 			const raw = await fs.readFile(filePath, "utf8");
 			expect(JSON.parse(raw)).toMatchObject({
 				schemaVersion: 4,
@@ -75,9 +75,28 @@ describe("DocumentService", () => {
 
 		it("skips files that fail to parse rather than throwing", async () => {
 			const a = await service.createProject("OK");
-			await fs.writeFile(path.join(tempDir, "garbage.axcut"), "not json", "utf8");
+			await fs.writeFile(path.join(tempDir, "garbage.openscreen"), "not json", "utf8");
 			const summaries = await service.listProjects();
 			expect(summaries.map((s) => s.id)).toEqual([a.project.id]);
+		});
+
+		it("migrates a legacy .axcut project to .openscreen on access", async () => {
+			// A project written by an older build: same document bytes, `.axcut` name.
+			const created = await service.createProject("Legacy");
+			const openscreenPath = path.join(tempDir, `${created.project.id}.openscreen`);
+			const axcutPath = path.join(tempDir, `${created.project.id}.axcut`);
+			await fs.rename(openscreenPath, axcutPath);
+
+			// A fresh service (new process) must still surface and load it, renaming
+			// the file across in the process.
+			const fresh = new DocumentService(tempDir);
+			const summaries = await fresh.listProjects();
+			expect(summaries.map((s) => s.id)).toEqual([created.project.id]);
+			await expect(fresh.getProject(created.project.id)).resolves.toMatchObject({
+				project: { id: created.project.id, title: "Legacy" },
+			});
+			await expect(fs.access(axcutPath)).rejects.toBeTruthy();
+			await expect(fs.access(openscreenPath)).resolves.toBeUndefined();
 		});
 	});
 
@@ -179,7 +198,7 @@ describe("DocumentService", () => {
 	});
 
 	describe("deleteProject", () => {
-		it("removes the .axcut file", async () => {
+		it("removes the project file", async () => {
 			const doc = await service.createProject("Bye");
 			await service.deleteProject(doc.project.id);
 			await expect(service.getProject(doc.project.id)).rejects.toBeInstanceOf(
