@@ -9,7 +9,7 @@
 // the new shell's modal style.
 
 import { Download, FileVideo, Loader2 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
 import {
@@ -33,18 +33,21 @@ import styles from "./NewEditorShell.module.css";
 
 type Phase = "idle" | "configuring" | "rendering" | "writing" | "done" | "error";
 
+// Target short side (px) for the two fixed quality tiers -- mirrors the legacy
+// editor's SettingsPanel (MP4_EXPORT_SHORT_SIDES), used only to decide whether
+// picking that tier would upscale past the source's actual resolution.
+const MEDIUM_SHORT_SIDE = 720;
+const HIGH_SHORT_SIDE = 1080;
+
 const QUALITY_OPTIONS: Array<{
 	value: ExportQuality;
 	labelKey: string;
-	hintKey: string;
+	/** Target short side for the upscale check; undefined for "source" (no fixed target). */
+	targetShortSide?: number;
 }> = [
-	{ value: "medium", labelKey: "exportQuality.low", hintKey: "exportDialog.qualitySmallerFile" },
-	{ value: "good", labelKey: "exportQuality.medium", hintKey: "exportDialog.qualityRecommended" },
-	{
-		value: "source",
-		labelKey: "exportQuality.high",
-		hintKey: "exportDialog.qualityMatchRecording",
-	},
+	{ value: "medium", labelKey: "exportQuality.low", targetShortSide: MEDIUM_SHORT_SIDE },
+	{ value: "good", labelKey: "exportQuality.medium", targetShortSide: HIGH_SHORT_SIDE },
+	{ value: "source", labelKey: "exportQuality.high" },
 ];
 
 interface ExportDialogProps {
@@ -69,6 +72,21 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 	const [savedPath, setSavedPath] = useState<string | null>(null);
 	const cancelRef = useRef<{ cancel: () => void } | null>(null);
 
+	const primaryAsset = useMemo(
+		() =>
+			document
+				? (document.assets.find((a) => a.id === document.project.primaryAssetId) ??
+					document.assets[0])
+				: null,
+		[document],
+	);
+	// 0 means "not probed yet" (assetVideoSchema defaults) -- treat as unknown
+	// rather than a real 0x0 source, else every tier would wrongly show Upscale.
+	const sourceShortSide =
+		primaryAsset?.video && primaryAsset.video.width > 0 && primaryAsset.video.height > 0
+			? Math.min(primaryAsset.video.width, primaryAsset.video.height)
+			: null;
+
 	useEffect(() => {
 		if (!open) {
 			setPhase("idle");
@@ -86,8 +104,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 
 	const handleStart = async () => {
 		if (!document) return;
-		const asset =
-			document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
+		const asset = primaryAsset;
 		if (!asset) {
 			setError(t("exportDialog.addVideoBeforeExporting"));
 			setPhase("error");
@@ -239,9 +256,18 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 									}}
 								>
 									<span style={{ color: "var(--fg)", fontWeight: 600 }}>{ts(q.labelKey)}</span>
-									<span style={{ font: "500 11px var(--font-body)", color: "var(--muted)" }}>
-										{t(q.hintKey)}
-									</span>
+									{q.targetShortSide === undefined ? (
+										<span style={{ font: "500 11px var(--font-body)", color: "var(--muted)" }}>
+											{t("exportDialog.qualityMatchRecording")}
+										</span>
+									) : (
+										sourceShortSide !== null &&
+										sourceShortSide < q.targetShortSide && (
+											<span style={{ font: "500 11px var(--font-body)", color: "var(--warn)" }}>
+												{t("exportDialog.qualityUpscaleWarning")}
+											</span>
+										)
+									)}
 								</button>
 							))}
 						</div>
@@ -475,7 +501,11 @@ function FormatToggle({
 				border: `1px solid ${active ? "var(--accent)" : "var(--border)"}`,
 				borderRadius: 10,
 				background: active ? "var(--accent-wash)" : "var(--surface)",
-				color: active ? "var(--accent-on)" : "var(--fg-2)",
+				// Selection is conveyed by border + wash background (like the quality
+				// cards below), not by swapping text color -- `--accent-on` is meant
+				// for text on a SOLID accent fill, and paired with the near-transparent
+				// `--accent-wash` it read as near-invisible dark-on-dark text.
+				color: "var(--fg)",
 				cursor: "pointer",
 				font: "600 14px/1 var(--font-body)",
 			}}

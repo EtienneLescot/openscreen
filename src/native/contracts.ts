@@ -91,8 +91,9 @@ export interface ProjectFileResult {
 }
 
 // ---- AI Edition domain (Phase 1+) -----------------------------------------
-// v3 AxcutDocument projects live under userData/projects/<id>.axcut. Project
-// ids are uuid-prefixed strings (e.g. "proj_<uuid>"). Asset ids likewise.
+// v3/v4 AxcutDocument projects live under userData/projects/<id>.openscreen
+// (older builds used <id>.axcut, migrated on access). Project ids are
+// uuid-prefixed strings (e.g. "proj_<uuid>"). Asset ids likewise.
 
 export interface AiEditionProjectSummary {
 	id: string;

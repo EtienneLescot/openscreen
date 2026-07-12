@@ -182,7 +182,21 @@ export function OpenProjectModal({
 					}}
 				/>
 			</div>
-			<div style={{ display: "flex", flexDirection: "column", gap: 2, marginBottom: 12 }}>
+			<div
+				style={{
+					display: "flex",
+					flexDirection: "column",
+					gap: 2,
+					marginBottom: 12,
+					// Cap the list so the footer's "Browse files" button stays visible
+					// instead of being pushed below the fold when there are many projects;
+					// the list scrolls internally.
+					maxHeight: "48vh",
+					overflowY: "auto",
+					scrollbarWidth: "thin",
+					scrollbarColor: "var(--border-hi) transparent",
+				}}
+			>
 				{filtered.length === 0 ? (
 					<p style={{ color: "var(--muted)", fontSize: 12, padding: 16, textAlign: "center" }}>
 						{t("openProjectDialog.noMatches", { query })}
@@ -526,6 +540,20 @@ function detectRatio(r: CropRegion, videoAspectRatio: number): string {
 	return "free";
 }
 
+// Largest crop rectangle (percentages of the frame) whose fraction-space ratio
+// is `fr` (= width/height, already converted from the visual ratio through the
+// source's pixel aspect ratio), centered on whichever axis has slack. One
+// dimension fills the frame; the other is derived so the result never overflows.
+function centeredFitPct(fr: number): { x: number; y: number; w: number; h: number } {
+	if (!(fr > 0)) return { x: 0, y: 0, w: 100, h: 100 };
+	if (fr >= 1) {
+		const h = 100 / fr;
+		return { x: 0, y: (100 - h) / 2, w: 100, h };
+	}
+	const w = 100 * fr;
+	return { x: (100 - w) / 2, y: 0, w, h: 100 };
+}
+
 const MIN_PCT = 4;
 const clampPct = (v: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, v));
 
@@ -719,12 +747,62 @@ export function EditClipModal({
 		setCropTouched(true);
 		setCropRatio(next);
 		const candidate = CROP_RATIOS.find((c) => c.value === next);
-		if (candidate?.ratio && cropWPct > 0) {
-			// Convert the preset's visual ratio into the fraction-space ratio
-			// this crop's width/height percentages actually live in.
-			const fractionRatio = candidate.ratio / videoAspectRatio;
-			const newH = Math.round(cropWPct / fractionRatio);
-			setCropHPct(clampPct(newH, MIN_PCT, 100));
+		// "Free" keeps whatever the user currently has; a preset snaps the crop to
+		// the largest centered rectangle of that exact ratio (and, via the locked
+		// field/handle logic below, keeps every later edit at that ratio).
+		if (!candidate?.ratio) return;
+		const fit = centeredFitPct(candidate.ratio / videoAspectRatio);
+		setCropXPct(Math.round(fit.x));
+		setCropYPct(Math.round(fit.y));
+		setCropWPct(Math.round(fit.w));
+		setCropHPct(Math.round(fit.h));
+	};
+
+	// Fraction-space width/height ratio the crop is locked to while a preset is
+	// active (null for "Free"). Numeric fields and resize handles both honor it so
+	// the user can move/scale the crop but never change its aspect ratio.
+	const activePresetRatio = CROP_RATIOS.find((c) => c.value === cropRatio)?.ratio ?? null;
+	const lockedFractionRatio = activePresetRatio ? activePresetRatio / videoAspectRatio : null;
+
+	// Ratio-aware numeric field setters. With a preset active, changing one side
+	// derives the other (and clamps both to the frame); "Free" edits each axis
+	// independently. All keep the rectangle inside the frame.
+	const applyCropX = (v: number) => {
+		setCropTouched(true);
+		setCropXPct(Math.round(clampPct(v, 0, 100 - cropWPct)));
+	};
+	const applyCropY = (v: number) => {
+		setCropTouched(true);
+		setCropYPct(Math.round(clampPct(v, 0, 100 - cropHPct)));
+	};
+	const applyCropW = (v: number) => {
+		setCropTouched(true);
+		if (lockedFractionRatio) {
+			let w = clampPct(v, MIN_PCT, 100 - cropXPct);
+			let h = w / lockedFractionRatio;
+			if (h > 100 - cropYPct) {
+				h = 100 - cropYPct;
+				w = h * lockedFractionRatio;
+			}
+			setCropWPct(Math.round(w));
+			setCropHPct(Math.round(h));
+		} else {
+			setCropWPct(Math.round(clampPct(v, MIN_PCT, 100 - cropXPct)));
+		}
+	};
+	const applyCropH = (v: number) => {
+		setCropTouched(true);
+		if (lockedFractionRatio) {
+			let h = clampPct(v, MIN_PCT, 100 - cropYPct);
+			let w = h * lockedFractionRatio;
+			if (w > 100 - cropXPct) {
+				w = 100 - cropXPct;
+				h = w / lockedFractionRatio;
+			}
+			setCropWPct(Math.round(w));
+			setCropHPct(Math.round(h));
+		} else {
+			setCropHPct(Math.round(clampPct(v, MIN_PCT, 100 - cropYPct)));
 		}
 	};
 
@@ -764,10 +842,8 @@ export function EditClipModal({
 		const startX = e.clientX;
 		const startY = e.clientY;
 		const start = { x: cropXPct, y: cropYPct, w: cropWPct, h: cropHPct };
-		const activeRatio = CROP_RATIOS.find((c) => c.value === cropRatio)?.ratio ?? null;
-		// Same fraction-space conversion as handleCropRatioChange — locking to
-		// the raw visual ratio here would fight the source's own aspect ratio.
-		const activeFractionRatio = activeRatio ? activeRatio / videoAspectRatio : null;
+		// Fraction-space ratio the resize is locked to (null for "Free").
+		const fr = lockedFractionRatio;
 		setCropTouched(true);
 		const move = (ev: PointerEvent) => {
 			const dxPct = ((ev.clientX - startX) / r.width) * 100;
@@ -789,9 +865,31 @@ export function EditClipModal({
 			if (edges.bottom) {
 				h = clampPct(start.h + dyPct, MIN_PCT, 100 - start.y);
 			}
-			if (activeFractionRatio) {
-				if (edges.left || edges.right) h = clampPct(w / activeFractionRatio, MIN_PCT, 100 - y);
-				else if (edges.top || edges.bottom) w = clampPct(h * activeFractionRatio, MIN_PCT, 100 - x);
+			if (fr) {
+				// Locked ratio: the crop stays a fixed shape anchored at the corner the
+				// user isn't dragging. The dragged size is capped at the largest rect of
+				// this ratio that fits from that anchor — so it's simply sized to fit,
+				// never placed out of frame. (A crop can't leave the frame, so there is
+				// no out-of-bounds state to correct after the fact.)
+				const fixedLeft = !edges.left; // the x-edge that stays put
+				const fixedTop = !edges.top; // the y-edge that stays put
+				const anchorX = fixedLeft ? start.x : start.x + start.w;
+				const anchorY = fixedTop ? start.y : start.y + start.h;
+				const roomW = fixedLeft ? 100 - anchorX : anchorX;
+				const roomH = fixedTop ? 100 - anchorY : anchorY;
+				// Which axis the pointer drives; the other is derived from the ratio.
+				const drivenByHeight = (edges.top || edges.bottom) && !(edges.left || edges.right);
+				let nextW = Math.min(drivenByHeight ? h * fr : w, roomW, roomH * fr);
+				nextW = Math.max(MIN_PCT, nextW);
+				let nextH = nextW / fr;
+				if (nextH < MIN_PCT) {
+					nextH = MIN_PCT;
+					nextW = nextH * fr;
+				}
+				w = nextW;
+				h = nextH;
+				x = fixedLeft ? anchorX : anchorX - w;
+				y = fixedTop ? anchorY : anchorY - h;
 			}
 			setCropXPct(Math.round(x));
 			setCropYPct(Math.round(y));
@@ -1069,38 +1167,10 @@ export function EditClipModal({
 						alignItems: "end",
 					}}
 				>
-					<CropField
-						label={t("cropDialog.fieldX")}
-						value={cropXPct}
-						onChange={(v) => {
-							setCropTouched(true);
-							setCropXPct(v);
-						}}
-					/>
-					<CropField
-						label={t("cropDialog.fieldY")}
-						value={cropYPct}
-						onChange={(v) => {
-							setCropTouched(true);
-							setCropYPct(v);
-						}}
-					/>
-					<CropField
-						label={t("cropDialog.fieldW")}
-						value={cropWPct}
-						onChange={(v) => {
-							setCropTouched(true);
-							setCropWPct(v);
-						}}
-					/>
-					<CropField
-						label={t("cropDialog.fieldH")}
-						value={cropHPct}
-						onChange={(v) => {
-							setCropTouched(true);
-							setCropHPct(v);
-						}}
-					/>
+					<CropField label={t("cropDialog.fieldX")} value={cropXPct} onChange={applyCropX} />
+					<CropField label={t("cropDialog.fieldY")} value={cropYPct} onChange={applyCropY} />
+					<CropField label={t("cropDialog.fieldW")} value={cropWPct} onChange={applyCropW} />
+					<CropField label={t("cropDialog.fieldH")} value={cropHPct} onChange={applyCropH} />
 					<div style={{ display: "flex", flexDirection: "column", gap: 4, minWidth: 110 }}>
 						<label
 							style={{

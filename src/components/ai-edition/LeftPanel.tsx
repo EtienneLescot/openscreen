@@ -663,6 +663,14 @@ function ChatStripPanel() {
 		Array<{ id: string; title: string; messageCount: number; createdAt: string }>
 	>([]);
 	const [activeSessionId, setActiveSessionId] = useState<string | null>(null);
+	// Mirror in a ref so refreshSessions can read the current selection without
+	// listing activeSessionId in its deps — otherwise refreshSessions is recreated
+	// on every selection change, which re-runs the project effect below (with
+	// preferFirst=true) and forces the selection back to list[0]. That feedback
+	// loop is what made "new conversation" jump to the oldest chat instead of the
+	// freshly-created empty one.
+	const activeSessionIdRef = useRef<string | null>(activeSessionId);
+	activeSessionIdRef.current = activeSessionId;
 	const scrollRef = useRef<HTMLDivElement | null>(null);
 	const [reasoningOpen, setReasoningOpen] = useState(false);
 	const reasoningButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -690,25 +698,22 @@ function ChatStripPanel() {
 		}
 	}, []);
 
-	const refreshSessions = useCallback(
-		async (pid: string, preferFirst = false) => {
-			try {
-				const list = await nativeBridgeClient.aiEdition.chatListSessions(pid);
-				setSessions(list);
-				if (list.length === 0) {
-					setActiveSessionId(null);
-					setMessages([]);
-					return;
-				}
-				if (preferFirst || !list.some((s) => s.id === activeSessionId)) {
-					setActiveSessionId(list[0].id);
-				}
-			} catch {
-				// ponytail: silent — shim mode or missing project
+	const refreshSessions = useCallback(async (pid: string, preferFirst = false) => {
+		try {
+			const list = await nativeBridgeClient.aiEdition.chatListSessions(pid);
+			setSessions(list);
+			if (list.length === 0) {
+				setActiveSessionId(null);
+				setMessages([]);
+				return;
 			}
-		},
-		[activeSessionId],
-	);
+			if (preferFirst || !list.some((s) => s.id === activeSessionIdRef.current)) {
+				setActiveSessionId(list[0].id);
+			}
+		} catch {
+			// ponytail: silent — shim mode or missing project
+		}
+	}, []);
 
 	useEffect(() => {
 		void refreshLlm();
