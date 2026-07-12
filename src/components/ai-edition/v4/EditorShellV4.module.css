@@ -5,6 +5,11 @@
 
 .app {
 	display: grid;
+	/* Single column pinned to the window width. Without an explicit column the
+	   implicit `auto` track is sized to its widest row's content, so any wide
+	   child (e.g. a long clip's timeline) would stretch the grid past the window
+	   and push the top bar's right-side buttons off-screen. minmax(0,1fr) caps it. */
+	grid-template-columns: minmax(0, 1fr);
 	height: 100vh;
 	width: 100%;
 	min-width: 0;
@@ -983,35 +988,98 @@
 	font-weight: 600;
 	color: var(--fg-2);
 }
-.tlTracks {
+/* Ruler + tracks live in one relative wrapper (between the toolbar and the zoom
+   bar) so a single playhead overlay can span both. */
+.tlBody {
 	position: relative;
 	flex: 1;
 	min-height: 0;
+	display: flex;
+	flex-direction: column;
+}
+/* Fixed ruler header — the ruler ticks sit here, pinned right under the toolbar
+   so they move with the header (not with the scrolling tracks) when the panel is
+   resized. overflow:hidden clips the zoom-transformed canvas horizontally. Its
+   canvas is exactly as wide as .tlTracks' because the tracks scrollbar is hidden
+   (takes no width), so ticks stay aligned with the clips + playhead. */
+.tlRulerRow {
+	position: relative;
+	flex-shrink: 0;
 	padding: 8px 20px 0;
 	overflow: hidden;
 	cursor: text;
 }
+.tlTracks {
+	position: relative;
+	flex: 1;
+	min-height: 0;
+	/* Top padding lives on .tlRulerRow now; keep the sides + bottom gap here. */
+	padding: 0 20px 8px;
+	/* Horizontal zoom/pan is done by transforming .tlCanvas, so x stays clipped;
+	   y scrolls when the panel is too short to show every lane + the main track. */
+	overflow-x: hidden;
+	overflow-y: auto;
+	/* Hide the scrollbar so it NEVER consumes layout width. A space-taking
+	   scrollbar narrowed the content box only while visible, shifting the clips
+	   (and ruler/playhead) horizontally when it appeared and desyncing clicks from
+	   times. With it hidden, all three canvases stay full width and identical;
+	   scrolling still works via the wheel (see the wheel handler). */
+	scrollbar-width: none;
+	/* Bottom-anchor via column-reverse (the single child is .tlCanvas, so its
+	   internal lane→clip order is untouched): the main clip track sits at the
+	   bottom edge and stays visible as the panel shrinks, while the edit lanes
+	   above overflow the top and REMAIN reachable by scrolling up. `flex-end`
+	   would bottom-anchor too, but content it pushes past the top edge isn't
+	   scrollable — which is why the lanes couldn't be reached before. */
+	display: flex;
+	flex-direction: column-reverse;
+	cursor: text;
+}
+.tlTracks::-webkit-scrollbar {
+	display: none;
+}
 .tlCanvas {
 	position: relative;
 	min-width: 100%;
+	/* Keep natural height so .tlTracks (not the canvas) is what scrolls; without
+	   this the flex column would shrink the canvas and clip its own content. */
+	flex-shrink: 0;
 	will-change: transform, width;
 }
+/* Playhead overlay: absolutely covers the ruler + tracks, fixed vertically (a
+   cursor, so it doesn't scroll with the lanes). Same horizontal padding as the
+   canvases (and the tracks scrollbar is hidden, so equal width) → its transformed
+   line/head aligns exactly with ticks/clips. pointer-events pass through (except
+   the diamond) so scrubbing still works. */
+.tlPlayheadLayer {
+	position: absolute;
+	inset: 0;
+	padding: 8px 20px;
+	overflow: hidden;
+	pointer-events: none;
+	z-index: 6;
+}
+.tlPlayheadLayer .tlCanvas {
+	height: 100%;
+}
+/* One continuous line from the ruler down through the clips, stopping just above
+   the zoom/nav bar, with the draggable diamond head at the top (in the ruler). */
 .tlPlayhead {
 	position: absolute;
-	top: 2px;
-	bottom: 66px;
+	top: 0;
+	bottom: 0;
 	width: 2px;
 	background: var(--accent);
 	border-radius: 1px;
-	z-index: 6;
 	box-shadow: 0 0 10px var(--accent-soft);
 	pointer-events: none;
 }
 .tlPlayheadDiamond {
 	position: absolute;
-	top: -5px;
+	/* Caps the very top of the playhead line (the line runs down from here). */
+	top: 0;
 	left: 50%;
-	transform: translateX(-50%) rotate(45deg);
+	transform: translate(-50%, -50%) rotate(45deg);
 	width: 9px;
 	height: 9px;
 	background: var(--accent);
@@ -1028,7 +1096,7 @@
 .tlRuler span {
 	font-family: var(--font-mono);
 	font-size: 10px;
-	color: var(--muted);
+	color: var(--meta);
 }
 .tlLane {
 	position: relative;

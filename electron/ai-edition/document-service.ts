@@ -1,5 +1,8 @@
 // DocumentService — main-process owner of v3 AxcutDocument projects.
-// Persists one .axcut JSON per project under userData/projects/. Slim port of
+// Persists one .openscreen JSON per project under userData/projects/ (the file
+// carries its own `schemaVersion`, so migration keys off the content, not the
+// extension). Older builds wrote these same documents as `.axcut`; those are
+// renamed to `.openscreen` on first access. Slim port of
 // axcut's apps/server/src/services/document-service.ts (no separate paths.ts —
 // uses app.getPath("userData") directly; no Python probe_media — assets carry
 // only path metadata, duration is filled in by the renderer).
@@ -17,7 +20,10 @@ import {
 	documentSchema,
 } from "../../src/lib/ai-edition/schema";
 
-const PROJECT_FILE_EXTENSION = ".axcut";
+const PROJECT_FILE_EXTENSION = ".openscreen";
+// Older builds stored these same v3/v4 AxcutDocuments under `.axcut`. We read
+// them for back-compat and rename them to PROJECT_FILE_EXTENSION on access.
+const LEGACY_PROJECT_FILE_EXTENSION = ".axcut";
 
 export interface ProjectSummary {
 	id: string;
@@ -74,6 +80,7 @@ function safeProjectId(raw: string): string {
 
 export class DocumentService {
 	private readonly projectsRoot: string;
+	private legacyMigrationDone = false;
 
 	constructor(projectsRoot: string) {
 		this.projectsRoot = projectsRoot;
@@ -81,6 +88,42 @@ export class DocumentService {
 
 	async ensureProjectsDir(): Promise<void> {
 		await fs.mkdir(this.projectsRoot, { recursive: true });
+		await this.migrateLegacyExtensions();
+	}
+
+	// One-time-per-process pass renaming any legacy `.axcut` project files to
+	// `.openscreen`. The document bytes are identical (same schemaVersion), so
+	// this is a pure rename — no content migration involved.
+	private async migrateLegacyExtensions(): Promise<void> {
+		if (this.legacyMigrationDone) return;
+		this.legacyMigrationDone = true;
+		let entries: string[];
+		try {
+			entries = await fs.readdir(this.projectsRoot);
+		} catch {
+			return;
+		}
+		await Promise.all(
+			entries
+				.filter((name) => name.endsWith(LEGACY_PROJECT_FILE_EXTENSION))
+				.map(async (name) => {
+					const from = path.join(this.projectsRoot, name);
+					const base = name.slice(0, -LEGACY_PROJECT_FILE_EXTENSION.length);
+					const to = path.join(this.projectsRoot, `${base}${PROJECT_FILE_EXTENSION}`);
+					try {
+						// If a `.openscreen` already exists for this id it's authoritative;
+						// drop the stale `.axcut`. Otherwise rename the legacy file across.
+						await fs.access(to);
+						await fs.unlink(from);
+					} catch {
+						await fs
+							.rename(from, to)
+							.catch((err) =>
+								console.warn(`[ai-edition] failed to migrate ${from} -> ${to}:`, err),
+							);
+					}
+				}),
+		);
 	}
 
 	private fileFor(projectId: string): string {
@@ -88,12 +131,18 @@ export class DocumentService {
 		return path.join(this.projectsRoot, `${safe}${PROJECT_FILE_EXTENSION}`);
 	}
 
+	private legacyFileFor(projectId: string): string {
+		const safe = safeProjectId(projectId);
+		return path.join(this.projectsRoot, `${safe}${LEGACY_PROJECT_FILE_EXTENSION}`);
+	}
+
 	async listProjects(): Promise<ProjectSummary[]> {
 		await this.ensureProjectsDir();
 		const entries = await fs.readdir(this.projectsRoot);
-		const axcutFiles = entries.filter((name) => name.endsWith(PROJECT_FILE_EXTENSION));
+		// ensureProjectsDir (above) already migrated any legacy `.axcut` files.
+		const projectFiles = entries.filter((name) => name.endsWith(PROJECT_FILE_EXTENSION));
 		const summaries: ProjectSummary[] = [];
-		for (const name of axcutFiles) {
+		for (const name of projectFiles) {
 			const filePath = path.join(this.projectsRoot, name);
 			try {
 				const raw = await fs.readFile(filePath, "utf8");
@@ -115,19 +164,31 @@ export class DocumentService {
 	}
 
 	async getProject(projectId: string): Promise<AxcutDocument> {
-		const filePath = this.fileFor(projectId);
+		// Prefer the canonical `.openscreen` file, falling back to a not-yet-migrated
+		// legacy `.axcut` so a project opened before its migration pass still loads.
+		let raw: string;
 		try {
-			const raw = await fs.readFile(filePath, "utf8");
-			return documentSchema.parse(JSON.parse(raw));
+			raw = await fs.readFile(this.fileFor(projectId), "utf8");
 		} catch (error) {
-			if ((error as NodeJS.ErrnoException)?.code === "ENOENT") {
-				throw new DocumentNotFoundError(projectId);
+			if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+				throw new ProjectFileError(
+					`Failed to read project ${projectId}: ${error instanceof Error ? error.message : String(error)}`,
+					projectId,
+				);
 			}
-			throw new ProjectFileError(
-				`Failed to read project ${projectId}: ${error instanceof Error ? error.message : String(error)}`,
-				projectId,
-			);
+			try {
+				raw = await fs.readFile(this.legacyFileFor(projectId), "utf8");
+			} catch (legacyError) {
+				if ((legacyError as NodeJS.ErrnoException)?.code === "ENOENT") {
+					throw new DocumentNotFoundError(projectId);
+				}
+				throw new ProjectFileError(
+					`Failed to read project ${projectId}: ${legacyError instanceof Error ? legacyError.message : String(legacyError)}`,
+					projectId,
+				);
+			}
 		}
+		return documentSchema.parse(JSON.parse(raw));
 	}
 
 	async createProject(title: string): Promise<AxcutDocument> {
@@ -152,12 +213,14 @@ export class DocumentService {
 	}
 
 	async deleteProject(projectId: string): Promise<void> {
-		const filePath = this.fileFor(projectId);
-		try {
-			await fs.unlink(filePath);
-		} catch (error) {
-			if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
-				throw error;
+		// Remove the canonical file and any lingering legacy `.axcut` for this id.
+		for (const filePath of [this.fileFor(projectId), this.legacyFileFor(projectId)]) {
+			try {
+				await fs.unlink(filePath);
+			} catch (error) {
+				if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") {
+					throw error;
+				}
 			}
 		}
 	}
@@ -233,5 +296,8 @@ export class DocumentService {
 		await this.ensureProjectsDir();
 		const filePath = this.fileFor(doc.project.id);
 		await fs.writeFile(filePath, JSON.stringify(doc, null, 2), "utf8");
+		// A save supersedes any legacy `.axcut` for this id (ensureProjectsDir
+		// usually renamed it already; this is a belt-and-braces cleanup).
+		await fs.unlink(this.legacyFileFor(doc.project.id)).catch(() => undefined);
 	}
 }

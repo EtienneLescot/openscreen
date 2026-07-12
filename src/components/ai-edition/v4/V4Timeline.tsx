@@ -61,6 +61,17 @@ function fmt(sec: number): string {
 	return `${m}:${s.padStart(4, "0")}`;
 }
 
+// Ruler tick labels sit on whole-second "nice" steps, so tenths are always
+// ".0" noise — show clean M:SS (H:MM:SS past an hour) instead.
+function fmtTick(sec: number): string {
+	if (!Number.isFinite(sec) || sec < 0) sec = 0;
+	const total = Math.round(sec);
+	const h = Math.floor(total / 3600);
+	const m = Math.floor((total % 3600) / 60);
+	const ss = String(total % 60).padStart(2, "0");
+	return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+}
+
 // Real per-clip audio waveform, sliced from the underlying asset's decoded
 // peaks (useAudioPeaks) down to this clip's [sourceStartSec, sourceEndSec]
 // range. A separate component (not inline in the clips .map) so each clip
@@ -88,8 +99,10 @@ function ClipWaveform({
 		const endBlock = Math.min(totalBlocks, Math.ceil(sourceEndSec * blocksPerSec));
 		const rangeBlocks = Math.max(1, endBlock - startBlock);
 		// One bar per ~120ms of clip duration — dense enough to read as a
-		// continuous waveform rather than a handful of scattered ticks.
-		const barCount = Math.max(20, Math.round((sourceEndSec - sourceStartSec) * 8));
+		// continuous waveform — but capped so a long recording doesn't spawn
+		// thousands of DOM nodes in a single clip (a clip is at most ~the timeline
+		// width on screen, so beyond a few hundred bars they're sub-pixel anyway).
+		const barCount = Math.min(400, Math.max(20, Math.round((sourceEndSec - sourceStartSec) * 8)));
 		const result: number[] = [];
 		for (let i = 0; i < barCount; i++) {
 			const blockStart = startBlock + Math.floor((i / barCount) * rangeBlocks);
@@ -169,6 +182,11 @@ export function V4Timeline({
 }) {
 	const t = useScopedT("timeline");
 	const tracksRef = useRef<HTMLDivElement | null>(null);
+	// The transformed canvas is the true timeline coordinate frame — clips, pills
+	// and the playhead are all positioned inside it. Time↔x math must measure THIS
+	// (not the padded/scrollbar-inset tracks box), else clicks map to the wrong
+	// time and the mapping drifts as the scrollbar appears/disappears.
+	const canvasRef = useRef<HTMLDivElement | null>(null);
 	const navRef = useRef<HTMLDivElement | null>(null);
 	const clipsRef = useRef<HTMLDivElement | null>(null);
 	// True while a clip pointer-drag actually moved the pointer past the
@@ -254,15 +272,22 @@ export function V4Timeline({
 	}));
 
 	const rulerTicks = useMemo(() => {
+		// Adaptive interval so a long recording shows ~a dozen labels instead of
+		// one every 15s (which crams the ruler unreadably past a few minutes).
+		const NICE_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
+		const step = NICE_STEPS.find((s) => total / s <= 12) ?? NICE_STEPS[NICE_STEPS.length - 1];
 		const out: string[] = [];
-		for (let t = 0; t <= total; t += 15) out.push(fmt(t));
+		for (let t = 0; t <= total; t += step) out.push(fmtTick(t));
 		return out;
 	}, [total]);
 
 	// ── interactions ────────────────────────────────────────────────
 	const seekToClientX = useCallback(
 		(clientX: number) => {
-			const el = tracksRef.current;
+			// Measure the canvas (the zoomed timeline frame): (clientX - left)/width
+			// is the fraction along the FULL timeline under the cursor, so it stays
+			// correct under zoom/pan and is unaffected by padding or the scrollbar.
+			const el = canvasRef.current;
 			if (!el) return;
 			const r = el.getBoundingClientRect();
 			const pct = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
@@ -305,7 +330,9 @@ export function V4Timeline({
 			e.preventDefault();
 			e.stopPropagation();
 			tl.selectRegion(pill.kind, pill.id, { additive: e.shiftKey });
-			const el = tracksRef.current;
+			// Scale drag deltas against the canvas (full zoomed timeline) width, so a
+			// drag tracks the cursor exactly regardless of padding, scrollbar or zoom.
+			const el = canvasRef.current;
 			if (!el) return;
 			const r = el.getBoundingClientRect();
 			const startX = e.clientX;
@@ -422,7 +449,9 @@ export function V4Timeline({
 		[nav],
 	);
 
-	// Scroll = pan, Ctrl+scroll = zoom around the cursor's timeline position.
+	// Plain scroll = vertical scroll (the panel can be too short to show every
+	// lane + the main track). Shift+scroll = horizontal pan. Ctrl+scroll = zoom
+	// around the cursor's timeline position.
 	// Attached as a native (non-passive) listener rather than React's onWheel:
 	// React marks wheel handlers passive by default, so e.preventDefault()
 	// there silently no-ops and the browser/OS still intercepts Ctrl+wheel as
@@ -431,10 +460,10 @@ export function V4Timeline({
 		const el = tracksRef.current;
 		if (!el) return;
 		const onWheelNative = (e: WheelEvent) => {
-			e.preventDefault();
 			const r = el.getBoundingClientRect();
 			const viewportPct = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
 			if (e.ctrlKey) {
+				e.preventDefault();
 				setNav((prev) => {
 					const width = prev.end - prev.start;
 					const cursorFrac = prev.start + viewportPct * width;
@@ -443,14 +472,18 @@ export function V4Timeline({
 					const start = Math.max(0, Math.min(1 - nextWidth, cursorFrac - viewportPct * nextWidth));
 					return { start, end: start + nextWidth };
 				});
-			} else {
+			} else if (e.shiftKey) {
+				e.preventDefault();
 				setNav((prev) => {
 					const width = prev.end - prev.start;
-					const delta = (e.deltaY / r.width) * width;
+					// Shift often routes the wheel onto deltaX; accept whichever axis moved.
+					const wheelDelta = e.deltaX !== 0 ? e.deltaX : e.deltaY;
+					const delta = (wheelDelta / r.width) * width;
 					const start = Math.max(0, Math.min(1 - width, prev.start + delta));
 					return { start, end: start + width };
 				});
 			}
+			// Otherwise let the native vertical scroll of .tlTracks run (no preventDefault).
 		};
 		el.addEventListener("wheel", onWheelNative, { passive: false });
 		return () => el.removeEventListener("wheel", onWheelNative);
@@ -928,7 +961,7 @@ export function V4Timeline({
 				/>
 				<div className={styles.tlHints}>
 					<span className={styles.tlHint}>
-						<span className={styles.tlKbd}>Scroll</span> {t("labels.pan")}
+						<span className={styles.tlKbd}>Shift+Scroll</span> {t("labels.pan")}
 					</span>
 					<span className={styles.tlHint}>
 						<span className={styles.tlKbd}>Ctrl+Scroll</span> {t("labels.zoom")}
@@ -936,152 +969,170 @@ export function V4Timeline({
 				</div>
 			</div>
 
-			<div ref={tracksRef} className={styles.tlTracks} onPointerDown={startScrub}>
-				<div className={styles.tlCanvas} style={canvasStyle}>
-					<div
-						aria-hidden
-						className={styles.tlPlayhead}
-						style={{ left: `${pctOf(currentTimeSec)}%` }}
-					>
-						<span
-							className={styles.tlPlayheadDiamond}
-							style={{ pointerEvents: "auto", cursor: "grab" }}
-							onPointerDown={(e) => {
-								e.stopPropagation();
-								startScrub(e);
-							}}
-						/>
+			{/* Ruler + tracks share one relative wrapper so a single playhead overlay
+			    (below) can span both — one continuous line whose head aligns with the
+			    clips regardless of the tracks' scrollbar (scrollbar-gutter keeps all
+			    three canvases the same width). */}
+			<div className={styles.tlBody}>
+				{/* Fixed ruler header: the ruler ticks stay pinned right below the toolbar
+			    so they don't scroll off when the panel is short — only the lanes/clips
+			    below scroll. Shares the tracks' zoom/pan transform so ticks line up. */}
+				<div className={styles.tlRulerRow} onPointerDown={startScrub}>
+					<div className={styles.tlCanvas} style={canvasStyle}>
+						<div className={styles.tlRuler}>
+							{rulerTicks.map((t, i) => (
+								<span key={`${t}-${i}`}>{t}</span>
+							))}
+						</div>
 					</div>
-					{snapPct !== null ? (
-						<div aria-hidden className={styles.tlSnapGuide} style={{ left: `${snapPct}%` }} />
-					) : null}
+				</div>
 
-					<div className={styles.tlRuler}>
-						{rulerTicks.map((t, i) => (
-							<span key={`${t}-${i}`}>{t}</span>
-						))}
-					</div>
-
-					{showLanes ? (
-						<>
-							<div className={styles.tlLane}>
-								{renderPills(annPills, t("toolbar.noAnnotationsYet"))}
-							</div>
-							<div className={styles.tlLane}>
-								{renderPills(speedPills, t("toolbar.constantSpeed"))}
-							</div>
-							<div className={styles.tlLane}>{renderPills(trimPills, t("toolbar.noTrims"))}</div>
-							<div className={styles.tlLane}>{renderPills(zoomPills, "")}</div>
-						</>
-					) : null}
-
-					<div
-						ref={clipsRef}
-						className={`${styles.tlClips}${dragOver ? ` ${styles.tlClipsDrag}` : ""}`}
-						onDragOver={(e) => {
-							e.preventDefault();
-							e.dataTransfer.dropEffect = "copy";
-							if (!dragOver) setDragOver(true);
-						}}
-						onDragLeave={() => setDragOver(false)}
-						onDrop={(e) => {
-							e.preventDefault();
-							setDragOver(false);
-							const id = e.dataTransfer.getData(ASSET_MIME);
-							if (id && onDropAsset) onDropAsset(id);
-						}}
-					>
-						{clips.map((c, i) => {
-							const dur = c.timelineEndSec - c.timelineStartSec;
-							const asset = tl.assets.find((a) => a.id === c.assetId);
-							const clipVideoUrl = videoSources.find((v) => v.id === c.assetId)?.src;
-							const selected = tl.clipSelection === c.id;
-							const dragging = clipDrag?.id === c.id;
-							// Siblings between the dragged clip's origin and its live
-							// target slide sideways (via the base .tlClip transition) to
-							// open a gap at the drop point; the dragged clip itself
-							// follows the pointer directly (see .tlClipDragging's
-							// transition:none override).
-							let clipTransform: string | undefined;
-							if (dragging) {
-								clipTransform = `translateX(${clipDrag.pointerDeltaX}px)`;
-							} else if (clipDrag) {
-								const { from, target, shiftPx } = clipDrag;
-								if (target > from && i > from && i <= target)
-									clipTransform = `translateX(${-shiftPx}px)`;
-								else if (target < from && i >= target && i < from)
-									clipTransform = `translateX(${shiftPx}px)`;
-							}
-							return (
-								<div
-									key={c.id}
-									data-clip-id={c.id}
-									className={`${styles.tlClip}${selected ? ` ${styles.tlClipSel}` : ""}${
-										dragging ? ` ${styles.tlClipDragging}` : ""
-									}`}
-									style={{ flex: `${dur} 0 0`, transform: clipTransform }}
-									onPointerDown={(e) => startClipDrag(e, c)}
-									onClick={(e) => {
-										e.stopPropagation();
-										// A completed reorder-drag also fires a click; don't let it
-										// double as a selection.
-										if (didClipDragRef.current) {
-											didClipDragRef.current = false;
-											return;
-										}
-										tl.selectClip(c.id);
-									}}
-									onDoubleClick={(e) => {
-										e.stopPropagation();
-										onEditClip(c);
-									}}
-									title={t("toolbar.dragToReorderHint")}
-								>
-									<ClipWaveform
-										videoUrl={clipVideoUrl}
-										assetDurationSec={asset?.durationSec}
-										sourceStartSec={c.sourceStartSec}
-										sourceEndSec={c.sourceEndSec ?? c.sourceStartSec + dur}
-									/>
-									<div className={styles.tlClipLabel}>
-										<span
-											className={styles.tlClipIcon}
-											data-no-clip-drag
-											title={t("toolbar.editInOutPoints")}
-											onClick={(e) => {
-												e.stopPropagation();
-												onEditClip(c);
-											}}
-										>
-											<Pencil size={9} />
-										</span>
-										<span className={styles.tlClipName}>
-											{tl.assets.find((a) => a.id === c.assetId)?.label ?? c.assetId}
-										</span>
-									</div>
-									{selected ? (
-										<button
-											type="button"
-											data-no-clip-drag
-											className={styles.tlClipDelete}
-											title={t("toolbar.deleteClip")}
-											aria-label={t("toolbar.deleteClip")}
-											onClick={(e) => {
-												e.stopPropagation();
-												void tl.removeClip(c.id);
-											}}
-										>
-											<Trash2 size={13} />
-										</button>
-									) : null}
-								</div>
-							);
-						})}
-						{dragOver ? (
-							<div aria-hidden className={styles.tlDropHint}>
-								{t("toolbar.dropToAdd")}
-							</div>
+				<div ref={tracksRef} className={styles.tlTracks} onPointerDown={startScrub}>
+					<div ref={canvasRef} className={styles.tlCanvas} style={canvasStyle}>
+						{snapPct !== null ? (
+							<div aria-hidden className={styles.tlSnapGuide} style={{ left: `${snapPct}%` }} />
 						) : null}
+
+						{showLanes ? (
+							<>
+								<div className={styles.tlLane}>
+									{renderPills(annPills, t("toolbar.noAnnotationsYet"))}
+								</div>
+								<div className={styles.tlLane}>
+									{renderPills(speedPills, t("toolbar.constantSpeed"))}
+								</div>
+								<div className={styles.tlLane}>{renderPills(trimPills, t("toolbar.noTrims"))}</div>
+								<div className={styles.tlLane}>{renderPills(zoomPills, "")}</div>
+							</>
+						) : null}
+
+						<div
+							ref={clipsRef}
+							className={`${styles.tlClips}${dragOver ? ` ${styles.tlClipsDrag}` : ""}`}
+							onDragOver={(e) => {
+								e.preventDefault();
+								e.dataTransfer.dropEffect = "copy";
+								if (!dragOver) setDragOver(true);
+							}}
+							onDragLeave={() => setDragOver(false)}
+							onDrop={(e) => {
+								e.preventDefault();
+								setDragOver(false);
+								const id = e.dataTransfer.getData(ASSET_MIME);
+								if (id && onDropAsset) onDropAsset(id);
+							}}
+						>
+							{clips.map((c, i) => {
+								const dur = c.timelineEndSec - c.timelineStartSec;
+								const asset = tl.assets.find((a) => a.id === c.assetId);
+								const clipVideoUrl = videoSources.find((v) => v.id === c.assetId)?.src;
+								const selected = tl.clipSelection === c.id;
+								const dragging = clipDrag?.id === c.id;
+								// Siblings between the dragged clip's origin and its live
+								// target slide sideways (via the base .tlClip transition) to
+								// open a gap at the drop point; the dragged clip itself
+								// follows the pointer directly (see .tlClipDragging's
+								// transition:none override).
+								let clipTransform: string | undefined;
+								if (dragging) {
+									clipTransform = `translateX(${clipDrag.pointerDeltaX}px)`;
+								} else if (clipDrag) {
+									const { from, target, shiftPx } = clipDrag;
+									if (target > from && i > from && i <= target)
+										clipTransform = `translateX(${-shiftPx}px)`;
+									else if (target < from && i >= target && i < from)
+										clipTransform = `translateX(${shiftPx}px)`;
+								}
+								return (
+									<div
+										key={c.id}
+										data-clip-id={c.id}
+										className={`${styles.tlClip}${selected ? ` ${styles.tlClipSel}` : ""}${
+											dragging ? ` ${styles.tlClipDragging}` : ""
+										}`}
+										style={{ flex: `${dur} 0 0`, transform: clipTransform }}
+										onPointerDown={(e) => startClipDrag(e, c)}
+										onClick={(e) => {
+											e.stopPropagation();
+											// A completed reorder-drag also fires a click; don't let it
+											// double as a selection.
+											if (didClipDragRef.current) {
+												didClipDragRef.current = false;
+												return;
+											}
+											tl.selectClip(c.id);
+										}}
+										onDoubleClick={(e) => {
+											e.stopPropagation();
+											onEditClip(c);
+										}}
+										title={t("toolbar.dragToReorderHint")}
+									>
+										<ClipWaveform
+											videoUrl={clipVideoUrl}
+											assetDurationSec={asset?.durationSec}
+											sourceStartSec={c.sourceStartSec}
+											sourceEndSec={c.sourceEndSec ?? c.sourceStartSec + dur}
+										/>
+										<div className={styles.tlClipLabel}>
+											<span
+												className={styles.tlClipIcon}
+												data-no-clip-drag
+												title={t("toolbar.editInOutPoints")}
+												onClick={(e) => {
+													e.stopPropagation();
+													onEditClip(c);
+												}}
+											>
+												<Pencil size={9} />
+											</span>
+											<span className={styles.tlClipName}>
+												{tl.assets.find((a) => a.id === c.assetId)?.label ?? c.assetId}
+											</span>
+										</div>
+										{selected ? (
+											<button
+												type="button"
+												data-no-clip-drag
+												className={styles.tlClipDelete}
+												title={t("toolbar.deleteClip")}
+												aria-label={t("toolbar.deleteClip")}
+												onClick={(e) => {
+													e.stopPropagation();
+													void tl.removeClip(c.id);
+												}}
+											>
+												<Trash2 size={13} />
+											</button>
+										) : null}
+									</div>
+								);
+							})}
+							{dragOver ? (
+								<div aria-hidden className={styles.tlDropHint}>
+									{t("toolbar.dropToAdd")}
+								</div>
+							) : null}
+						</div>
+					</div>
+				</div>
+
+				{/* Single playhead overlay spanning the ruler + tracks: fixed vertically
+			    (a cursor, so it doesn't scroll with the lanes) and sharing the exact
+			    same zoom/pan transform + width as the canvases, so its line stays
+			    continuous from the ruler down through the clips and its head aligns. */}
+				<div className={styles.tlPlayheadLayer} aria-hidden>
+					<div className={styles.tlCanvas} style={canvasStyle}>
+						<div className={styles.tlPlayhead} style={{ left: `${pctOf(currentTimeSec)}%` }}>
+							<span
+								className={styles.tlPlayheadDiamond}
+								style={{ pointerEvents: "auto", cursor: "grab" }}
+								onPointerDown={(e) => {
+									e.stopPropagation();
+									startScrub(e);
+								}}
+							/>
+						</div>
 					</div>
 				</div>
 			</div>
