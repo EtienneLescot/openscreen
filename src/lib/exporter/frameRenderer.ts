@@ -199,6 +199,33 @@ export class FrameRenderer {
 		this.config.cropRegion = cropRegion;
 	}
 
+	/**
+	 * Reconfigure the renderer's INPUT for the next segment of a multi-asset
+	 * export (v2 segment loop). Output dimensions stay fixed for the whole
+	 * export; only the source-dependent fields change. `updateLayout()` reads
+	 * these from `this.config` fresh every frame and `renderFrame` swaps the
+	 * video texture per frame, so mutating config here is picked up with no
+	 * teardown. Virtual-time zoom/annotation state is intentionally preserved
+	 * (those effects span segments), but per-source cursor/auto-focus continuity
+	 * is reset so a new asset doesn't inherit the previous one's smoothed motion.
+	 */
+	setSource(source: {
+		videoWidth: number;
+		videoHeight: number;
+		webcamSize?: Size | null;
+		cursorRecordingData?: CursorRecordingData | null;
+		cursorScale?: number;
+	}): void {
+		this.config.videoWidth = source.videoWidth;
+		this.config.videoHeight = source.videoHeight;
+		this.config.webcamSize = source.webcamSize ?? null;
+		this.config.cursorRecordingData = source.cursorRecordingData ?? null;
+		this.config.cursorScale = source.cursorScale ?? 0;
+		this.layoutCache = null;
+		this.smoothedAutoFocus = null;
+		resetNativeCursorMotionBlurState(this.nativeCursorMotionBlurState);
+	}
+
 	async initialize(): Promise<void> {
 		const canvas = document.createElement("canvas");
 		canvas.width = this.config.width;

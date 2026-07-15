@@ -1149,6 +1149,78 @@ export class AudioProcessor {
 		return offset;
 	}
 
+	/**
+	 * Encodes an already-assembled planar PCM timeline (one Float32Array per
+	 * channel, at `sampleRate`) into `exportCodec` and muxes the chunks. Used by
+	 * the v2 multi-asset segment loop: per-segment audio is decoded, concatenated
+	 * and boundary-faded upstream (audioConcatAssembler), then handed here as one
+	 * continuous buffer — so this method only chops it into encoder-sized frames.
+	 */
+	async encodePcmToMuxer(
+		pcm: Float32Array[],
+		sampleRate: number,
+		muxer: VideoMuxer,
+		exportCodec: ExportAudioCodec,
+	): Promise<void> {
+		if (this.cancelled) return;
+		const channels = pcm.length;
+		const totalFrames = pcm[0]?.length ?? 0;
+		if (channels === 0 || totalFrames === 0) return;
+
+		const encodeConfig: AudioEncoderConfig = {
+			codec: exportCodec.encoderCodec,
+			sampleRate,
+			numberOfChannels: channels,
+			bitrate: AUDIO_BITRATE,
+		};
+		const support = await AudioEncoder.isConfigSupported(encodeConfig);
+		if (!support.supported) {
+			console.warn(`[AudioProcessor] ${exportCodec.label} encoding not supported, skipping audio`);
+			return;
+		}
+
+		const encodedChunks: { chunk: EncodedAudioChunk; meta?: EncodedAudioChunkMetadata }[] = [];
+		const encoder = new AudioEncoder({
+			output: (chunk, meta) => encodedChunks.push({ chunk, meta }),
+			error: (e: DOMException) => console.error("[AudioProcessor] Encode error:", e),
+		});
+		encoder.configure(encodeConfig);
+
+		let offset = 0;
+		while (offset < totalFrames && !this.cancelled) {
+			const count = Math.min(OFFLINE_OUTPUT_FRAMES, totalFrames - offset);
+			// f32-planar layout: channel 0's `count` samples, then channel 1's, …
+			const planar = new Float32Array(count * channels);
+			for (let c = 0; c < channels; c++) {
+				planar.set(pcm[c].subarray(offset, offset + count), c * count);
+			}
+			const audioData = new AudioData({
+				format: "f32-planar",
+				sampleRate,
+				numberOfFrames: count,
+				numberOfChannels: channels,
+				timestamp: Math.round((offset / sampleRate) * 1_000_000),
+				data: planar.buffer as ArrayBuffer,
+			});
+			encoder.encode(audioData);
+			audioData.close();
+			offset += count;
+			while (encoder.encodeQueueSize > ENCODE_BACKPRESSURE_LIMIT && !this.cancelled) {
+				await new Promise((resolve) => setTimeout(resolve, 1));
+			}
+		}
+
+		if (encoder.state === "configured") {
+			await encoder.flush();
+			encoder.close();
+		}
+		for (const { chunk, meta } of encodedChunks) {
+			if (this.cancelled) break;
+			await muxer.addAudioChunk(chunk, meta);
+		}
+		console.log(`[AudioProcessor] Segmented audio: ${encodedChunks.length} chunks`);
+	}
+
 	cancel(): void {
 		this.cancelled = true;
 	}
