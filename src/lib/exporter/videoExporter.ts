@@ -15,11 +15,13 @@ import { BackgroundLoadError } from "@/lib/wallpaper";
 import type { CursorRecordingData } from "@/native/contracts";
 import { getPlatform } from "@/utils/platformUtils";
 import { AudioProcessor, downmixPlanarChannelsForExport } from "./audioEncoder";
+import { WsolaTimeStretcher } from "./audioTimeStretch";
 import { FrameRenderer } from "./frameRenderer";
 import { materializeLocalSourceFile, releaseLocalSourceFile } from "./localSourceFile";
 import { VideoMuxer, videoCodecFamily } from "./muxer";
 import { MAX_IN_MEMORY_SOURCE_BYTES } from "./sourceFileLimits";
 import { StreamingVideoDecoder } from "./streamingDecoder";
+import { computeKeepSegments, splitBySpeed } from "./timelineSegments";
 import { TimestampedVideoFrameQueue } from "./timestampedVideoFrameQueue";
 import type { ExportConfig, ExportProgress, ExportResult } from "./types";
 
@@ -226,6 +228,37 @@ export function getSourceCopyFastPathBlockers(
 	return blockers;
 }
 
+/** Projects timeline-authored regions (zoom/annotation/speed, in virtual/timeline
+ * ms) onto ONE segment's SOURCE time. Timeline↔source is 1:1 within a clip, so
+ * the covered part of each region maps by its offset from the clip's timeline
+ * start; regions not covering the segment are dropped. Speed is applied on top
+ * by the decoder over the projected source span, and the frame loop matches
+ * zoom/annotation/cursor by the frame's SOURCE time — so everything stays
+ * aligned even when speed makes output time diverge from timeline time. */
+function projectRegionsToSegmentSource<T extends { startMs: number; endMs: number }>(
+	regions: T[],
+	segment: RenderSegment,
+): T[] {
+	const out: T[] = [];
+	const tStart = segment.timelineStartSec;
+	const tEnd = segment.timelineEndSec;
+	for (const region of regions) {
+		const lo = Math.min(region.startMs, region.endMs) / 1000;
+		const hi = Math.max(region.startMs, region.endMs) / 1000;
+		const s = Math.max(lo, tStart);
+		const e = Math.min(hi, tEnd);
+		if (e <= s) continue; // region does not cover this segment
+		const srcStart = segment.sourceStartSec + (s - tStart);
+		const srcEnd = segment.sourceStartSec + (e - tStart);
+		out.push({
+			...region,
+			startMs: Math.round(srcStart * 1000),
+			endMs: Math.round(srcEnd * 1000),
+		});
+	}
+	return out;
+}
+
 /** Source-time spans to CUT for one segment so its decoder emits exactly
  * [sourceStart, sourceEnd) minus the clip's intra-trims: the complement of the
  * kept window over [0, sourceDuration] plus the intra-trims (v2 segment loop). */
@@ -360,6 +393,115 @@ async function decodeSegmentAudioPcm(
 	}
 }
 
+/** Pitch-preserving (WSOLA) time-stretch of a segment's planar PCM to exactly
+ * `targetSamples` per channel, so audio matches the segment's speed-retimed
+ * video length and A/V stays locked. Pass-through when already the right length
+ * (constant 1× segment). A single stretch factor is applied across the segment
+ * (uniform over any speed variation within it — total length is exact, which is
+ * what keeps the joins synced; per-region audio retiming is a refinement). */
+function timeStretchPcmToLength(
+	pcm: Float32Array[],
+	sampleRate: number,
+	channels: number,
+	targetSamples: number,
+): Float32Array[] {
+	if (targetSamples <= 0) return Array.from({ length: channels }, () => new Float32Array(0));
+	const sourceSamples = pcm[0]?.length ?? 0;
+	if (sourceSamples === 0 || Math.abs(sourceSamples - targetSamples) <= 1) return pcm;
+
+	const speed = sourceSamples / targetSamples; // >1 = speed up (compress)
+	const stretcher = new WsolaTimeStretcher({
+		sampleRate,
+		channels,
+		speed,
+		expectedOutputSamples: targetSamples,
+	});
+	const chunks = [stretcher.push(pcm), stretcher.flush()];
+	const result: Float32Array[] = [];
+	for (let c = 0; c < channels; c++) {
+		const out = new Float32Array(targetSamples);
+		let w = 0;
+		for (const chunk of chunks) {
+			const src = chunk[c];
+			if (!src) continue;
+			const n = Math.min(src.length, targetSamples - w);
+			if (n > 0) {
+				out.set(src.subarray(0, n), w);
+				w += n;
+			}
+		}
+		result.push(out);
+	}
+	return result;
+}
+
+/** Concatenate planar PCM chunks (one array-of-channels per chunk) per channel. */
+function concatPlanarChunks(chunks: Float32Array[][], channels: number): Float32Array[] {
+	const result: Float32Array[] = [];
+	for (let c = 0; c < channels; c++) {
+		let total = 0;
+		for (const chunk of chunks) total += chunk[c]?.length ?? 0;
+		const out = new Float32Array(total);
+		let w = 0;
+		for (const chunk of chunks) {
+			const src = chunk[c];
+			if (!src) continue;
+			out.set(src, w);
+			w += src.length;
+		}
+		result.push(out);
+	}
+	return result;
+}
+
+/** Time-stretch a segment's kept audio PER speed sub-segment (not uniformly), so
+ * a partial speed region inside a clip retimes only its own span — matching how
+ * the video decoder applies speed. The sub-segments and their output frame counts
+ * are computed EXACTLY as the decoder does (splitBySpeed of the kept intervals,
+ * then ceil((dur-ε)/speed·fps) frames each), so audio stays frame-locked to the
+ * video. The kept PCM (decodeSegmentAudioPcm) is the concatenation of those same
+ * kept intervals, so a running cursor slices it in order. */
+function stretchSegmentAudioBySpeed(
+	pcm: Float32Array[],
+	segment: RenderSegment,
+	speedRegions: SpeedRegion[],
+	sampleRate: number,
+	channels: number,
+	frameRate: number,
+): Float32Array[] {
+	const segmentTrims = buildSegmentRenderTrims(segment, segment.sourceEndSec);
+	const speedSegs = splitBySpeed(
+		computeKeepSegments(segment.sourceEndSec, segmentTrims),
+		speedRegions,
+	);
+	if (speedSegs.length === 0) return pcm;
+
+	const VIDEO_EPSILON_SEC = 0.001; // must match streamingDecoder's per-segment quantization
+	const totalKept = pcm[0]?.length ?? 0;
+	const chunks: Float32Array[][] = [];
+	let keptCursor = 0;
+	for (const seg of speedSegs) {
+		const inSamples = Math.round((seg.endSec - seg.startSec) * sampleRate);
+		const inStart = keptCursor;
+		const inEnd = Math.min(inStart + inSamples, totalKept);
+		keptCursor = inStart + inSamples;
+
+		const frameCount = Math.ceil(
+			((seg.endSec - seg.startSec - VIDEO_EPSILON_SEC) / seg.speed) * frameRate,
+		);
+		const outSamples = Math.max(0, Math.round((frameCount / frameRate) * sampleRate));
+
+		if (inEnd <= inStart) {
+			// No source audio for this span (past the buffer) → silence of its length.
+			chunks.push(Array.from({ length: channels }, () => new Float32Array(outSamples)));
+			continue;
+		}
+		const slice = pcm.map((ch) => ch.subarray(inStart, inEnd));
+		chunks.push(timeStretchPcmToLength(slice, sampleRate, channels, outSamples));
+	}
+	return concatPlanarChunks(chunks, channels);
+}
+
 function isMp4Source(videoUrl: string, blob: Blob) {
 	if (blob.type.toLowerCase().includes("mp4")) {
 		return true;
@@ -447,11 +589,12 @@ export class VideoExporter {
 		this.fatalEncoderError = null;
 
 		try {
-			// v2 multi-asset path: a plan with >1 segment can't be rendered by the
-			// single-stream pipeline below (it would drop every non-primary clip —
-			// the P1 bug). Single-segment exports stay on the proven legacy path.
+			// v2 path: ALL AI-edition exports (single- or multi-clip) render through
+			// the segment loop — one unified path, no mono-asset special-casing. The
+			// single-stream pipeline below survives only for legacy callers that pass
+			// no renderPlan (the out-of-scope components/video-editor exporter).
 			const segmentPlan = this.config.renderPlan;
-			if (segmentPlan && segmentPlan.segments.length > 1) {
+			if (segmentPlan && segmentPlan.segments.length > 0) {
 				return await this.runSegmentLoop(encoderPreference, segmentPlan);
 			}
 
@@ -890,6 +1033,12 @@ export class VideoExporter {
 			try {
 				const info = await decoder.loadMetadata(segment.videoUrl);
 				const segmentTrims = buildSegmentRenderTrims(segment, info.duration);
+				// Timeline effects projected to THIS segment's source time. Speed
+				// drives the decoder's frame timing; zoom/annotation are matched by
+				// each frame's source time in the renderer.
+				const segmentSpeed = projectRegionsToSegmentSource(plan.speedRegions, segment);
+				const segmentZoom = projectRegionsToSegmentSource(plan.zoomRegions, segment);
+				const segmentAnnotations = projectRegionsToSegmentSource(plan.annotationRegions, segment);
 
 				let webcamSize: { width: number; height: number } | null = null;
 				if (segment.camera) {
@@ -903,7 +1052,7 @@ export class VideoExporter {
 						.decodeAll(
 							this.config.frameRate,
 							segmentTrims,
-							undefined,
+							segmentSpeed,
 							async (webcamFrame, _exportTs, webcamSourceMs) => {
 								while (queue.length >= 12 && !this.cancelled && !stopWebcamDecode) {
 									await new Promise((resolve) => setTimeout(resolve, 2));
@@ -932,13 +1081,16 @@ export class VideoExporter {
 					webcamSize,
 					cursorRecordingData: segmentCursorRecording(plan, segment),
 					cursorScale: plan.cursor?.scale ?? 0,
+					zoomRegions: segmentZoom,
+					annotationRegions: segmentAnnotations,
+					speedRegions: segmentSpeed,
 				});
 				renderer.setCropRegion(segment.cropRegion);
 
 				await decoder.decodeAll(
 					this.config.frameRate,
 					segmentTrims,
-					undefined,
+					segmentSpeed,
 					async (videoFrame, _exportTs, sourceTimestampMs) => {
 						let webcamFrame: VideoFrame | null = null;
 						try {
@@ -950,9 +1102,11 @@ export class VideoExporter {
 								: null;
 							if (this.cancelled) return;
 
-							// Continuous virtual-time clock across segments → seamless joins.
+							// Encoder timestamp = contiguous OUTPUT time (seamless joins);
+							// renderFrame gets SOURCE time so zoom/annotation/cursor match
+							// the frame's content even when speed retimes the segment.
 							const timestamp = frameIndex * frameDuration;
-							await renderer.renderFrame(videoFrame, timestamp, webcamFrame);
+							await renderer.renderFrame(videoFrame, sourceTimestampMs * 1000, webcamFrame);
 
 							const canvas = renderer.getCanvas();
 							let exportFrame: VideoFrame;
@@ -1068,8 +1222,22 @@ export class VideoExporter {
 					channels: AUDIO_OUTPUT_CHANNELS,
 				},
 			);
+			// Retime each segment's audio PER speed sub-segment (pitch preserved) so
+			// a partial speed region only speeds up its own span, matching the video.
+			const stretchedPcm = segmentAudioPcm.map((pcm, i) =>
+				pcm
+					? stretchSegmentAudioBySpeed(
+							pcm,
+							segments[i],
+							projectRegionsToSegmentSource(plan.speedRegions, segments[i]),
+							AUDIO_OUTPUT_SAMPLE_RATE,
+							AUDIO_OUTPUT_CHANNELS,
+							this.config.frameRate,
+						)
+					: null,
+			);
 			const assembled = assembleConcatenatedPcm(
-				segmentAudioPcm.map((pcm) => ({ pcm })),
+				stretchedPcm.map((pcm) => ({ pcm })),
 				audioPlan,
 				{ boundaryFadeSamples: Math.round(AUDIO_OUTPUT_SAMPLE_RATE * AUDIO_BOUNDARY_FADE_SEC) },
 			);
