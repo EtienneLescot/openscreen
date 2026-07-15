@@ -218,6 +218,9 @@ export function moveClip(
 	const speedRegions = legacy?.speedRegions as
 		| Array<{ id: string; startMs: number; endMs: number }>
 		| undefined;
+	const cameraFullscreenRegions = legacy?.cameraFullscreenRegions as
+		| Array<{ id: string; startMs: number; endMs: number }>
+		| undefined;
 	return {
 		...document,
 		zoomRanges: reprojectRegionsForReorder(document.zoomRanges, oldClips, newClips, () =>
@@ -226,14 +229,29 @@ export function moveClip(
 		annotations: reprojectRegionsForReorder(document.annotations, oldClips, newClips, () =>
 			createId("ann"),
 		) as AxcutDocument["annotations"],
-		legacyEditor: speedRegions
-			? {
-					...legacy,
-					speedRegions: reprojectRegionsForReorder(speedRegions, oldClips, newClips, () =>
-						createId("speed"),
-					),
-				}
-			: document.legacyEditor,
+		legacyEditor:
+			legacy && (speedRegions || cameraFullscreenRegions)
+				? {
+						...legacy,
+						...(speedRegions
+							? {
+									speedRegions: reprojectRegionsForReorder(speedRegions, oldClips, newClips, () =>
+										createId("speed"),
+									),
+								}
+							: {}),
+						...(cameraFullscreenRegions
+							? {
+									cameraFullscreenRegions: reprojectRegionsForReorder(
+										cameraFullscreenRegions,
+										oldClips,
+										newClips,
+										() => createId("camfull"),
+									),
+								}
+							: {}),
+					}
+				: document.legacyEditor,
 		timeline: {
 			...document.timeline,
 			clips: newClips,

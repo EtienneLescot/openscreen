@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fromFileUrl } from "@/components/video-editor/projectPersistence";
-import { type CropRegion, DEFAULT_CROP_REGION } from "@/components/video-editor/types";
+import {
+	type CropRegion,
+	DEFAULT_CROP_REGION,
+	MAX_NATIVE_PLAYBACK_RATE,
+} from "@/components/video-editor/types";
 import type { AxcutClip, AxcutTrimRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
@@ -293,7 +297,9 @@ export function VirtualPreview({
 					speedRegionsRef.current,
 					Math.round(nextTimeSec * 1000),
 				);
-				const rate = activeRegion?.speed ?? 1;
+				// Clamp to the browser's 16× playbackRate ceiling; >16× is rendered at
+				// its true speed only on the offline export path, not the live preview.
+				const rate = Math.min(activeRegion?.speed ?? 1, MAX_NATIVE_PLAYBACK_RATE);
 				if (v.playbackRate !== rate) v.playbackRate = rate;
 			}
 		},

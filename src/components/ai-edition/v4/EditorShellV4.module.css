@@ -1161,6 +1161,10 @@
 	border-color: var(--accent);
 	background: var(--accent-soft);
 }
+.laneCameraFullscreen {
+	border-color: #a855f7;
+	background: rgba(168, 85, 247, 0.14);
+}
 .tlClips {
 	position: relative;
 	display: flex;

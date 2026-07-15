@@ -2,6 +2,7 @@ import {
 	ChevronDown,
 	Clock,
 	Loader2,
+	Maximize2,
 	MessageSquare,
 	Pencil,
 	Scissors,
@@ -139,7 +140,7 @@ function ClipWaveform({
 
 interface LanePill {
 	id: string;
-	kind: "annotation" | "speed" | "trim" | "zoom";
+	kind: "annotation" | "speed" | "trim" | "zoom" | "cameraFullscreen";
 	start: number;
 	end: number;
 	label: string;
@@ -245,6 +246,14 @@ export function V4Timeline({
 		end: s.endMs / 1000,
 		label: `${(s as { speed?: number }).speed ?? 1.5}×`,
 		sourceIds: [s.id],
+	}));
+	const cameraFullscreenPills: LanePill[] = tl.cameraFullscreenRegions.map((c) => ({
+		id: c.id,
+		kind: "cameraFullscreen",
+		start: c.startMs / 1000,
+		end: c.endMs / 1000,
+		label: "Full Camera",
+		sourceIds: [c.id],
 	}));
 	const zoomPills: LanePill[] = tl.zoomRegions.map((z) => ({
 		id: z.id,
@@ -374,6 +383,8 @@ export function V4Timeline({
 				else if (pill.kind === "speed") void tl.updateSpeedSpan(pill.id, s * 1000, en * 1000);
 				else if (pill.kind === "annotation")
 					void tl.updateAnnotationSpan(pill.id, s * 1000, en * 1000);
+				else if (pill.kind === "cameraFullscreen")
+					void tl.updateCameraFullscreenSpan(pill.id, s * 1000, en * 1000);
 				else {
 					// Trims are stored in source-time per asset but manipulated on the
 					// timeline like every other pill. Ventilate the new span across the
@@ -503,7 +514,9 @@ export function V4Timeline({
 				? styles.laneSpeed
 				: kind === "trim"
 					? styles.laneTrim
-					: styles.laneZoom;
+					: kind === "cameraFullscreen"
+						? styles.laneCameraFullscreen
+						: styles.laneZoom;
 	const pillIcon = (kind: LanePill["kind"]) =>
 		kind === "annotation" ? (
 			<MessageSquare size={11} />
@@ -511,6 +524,8 @@ export function V4Timeline({
 			<Clock size={11} />
 		) : kind === "trim" ? (
 			<Scissors size={11} />
+		) : kind === "cameraFullscreen" ? (
+			<Maximize2 size={11} />
 		) : (
 			<ZoomIn size={11} />
 		);
@@ -895,6 +910,15 @@ export function V4Timeline({
 						>
 							<ZoomIn size={15} />
 						</button>
+						<button
+							type="button"
+							className={styles.tlToolBtn}
+							title="Full Camera"
+							aria-label="Full Camera"
+							onClick={() => void tl.addCameraFullscreen()}
+						>
+							<Maximize2 size={15} />
+						</button>
 						<span className={styles.tlToolSep} aria-hidden />
 						<Popover open={aspectMenuOpen} onOpenChange={setAspectMenuOpen}>
 							<PopoverTrigger asChild>
@@ -1003,6 +1027,7 @@ export function V4Timeline({
 								</div>
 								<div className={styles.tlLane}>{renderPills(trimPills, t("toolbar.noTrims"))}</div>
 								<div className={styles.tlLane}>{renderPills(zoomPills, "")}</div>
+								<div className={styles.tlLane}>{renderPills(cameraFullscreenPills, "")}</div>
 							</>
 						) : null}
 
