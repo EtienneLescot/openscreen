@@ -18,7 +18,7 @@ import { resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
 import { useProjectStore } from "./projectStore";
 
-type RegionKind = "zoom" | "trim" | "annotation" | "speed";
+type RegionKind = "zoom" | "trim" | "annotation" | "speed" | "cameraFullscreen";
 
 // Placeholder duration applied to a freshly-inserted clip whose source asset
 // hasn't reported its real duration yet (media drag → drop before the preview
@@ -208,6 +208,30 @@ export function useTimeline() {
 						startMs: timeMs,
 						endMs: timeMs + 2000,
 						speed: 1.5 as const,
+					},
+				],
+			},
+		};
+		await saveDocument(next);
+	}, [document, currentTimeSec, saveDocument]);
+
+	// Full Camera: a plain time span (no value) during which the preview/export
+	// grows the webcam overlay to (almost) fill the canvas and eases it back.
+	const addCameraFullscreen = useCallback(async () => {
+		if (!document) return;
+		const timeMs = Math.round(currentTimeSec * 1000);
+		const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+		const prev = (legacy.cameraFullscreenRegions as unknown[]) ?? [];
+		const next: AxcutDocument = {
+			...document,
+			legacyEditor: {
+				...legacy,
+				cameraFullscreenRegions: [
+					...prev,
+					{
+						id: createId("camfull"),
+						startMs: timeMs,
+						endMs: timeMs + 2000,
 					},
 				],
 			},
@@ -430,6 +454,32 @@ export function useTimeline() {
 		[document, saveDocument],
 	);
 
+	const updateCameraFullscreenSpan = useCallback(
+		async (id: string, startMs: number, endMs: number) => {
+			if (!document) return;
+			const clampMs = (n: number) => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0);
+			const s = clampMs(startMs);
+			const e = clampMs(endMs);
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prev = ((legacy.cameraFullscreenRegions as unknown[]) ?? []) as Array<{
+				id: string;
+				startMs: number;
+				endMs: number;
+			}>;
+			const next: AxcutDocument = {
+				...document,
+				legacyEditor: {
+					...legacy,
+					cameraFullscreenRegions: prev.map((r) =>
+						r.id === id ? { ...r, startMs: Math.min(s, e), endMs: Math.max(s, e) } : r,
+					),
+				},
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
+
 	const updateSpeedValue = useCallback(
 		async (id: string, speed: number) => {
 			if (!document) return;
@@ -474,7 +524,7 @@ export function useTimeline() {
 					...document,
 					annotations: document.annotations.filter((a) => a.id !== id),
 				};
-			} else {
+			} else if (kind === "speed") {
 				const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
 				const prev = ((legacy.speedRegions as unknown[]) ?? []).filter(
 					(s) => (s as { id: string }).id !== id,
@@ -482,6 +532,15 @@ export function useTimeline() {
 				next = {
 					...document,
 					legacyEditor: { ...legacy, speedRegions: prev },
+				};
+			} else {
+				const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+				const prev = ((legacy.cameraFullscreenRegions as unknown[]) ?? []).filter(
+					(s) => (s as { id: string }).id !== id,
+				);
+				next = {
+					...document,
+					legacyEditor: { ...legacy, cameraFullscreenRegions: prev },
 				};
 			}
 			await saveDocument(next);
@@ -502,9 +561,15 @@ export function useTimeline() {
 				handles.filter((h) => h.kind === "annotation").map((h) => h.id),
 			);
 			const speedIds = new Set(handles.filter((h) => h.kind === "speed").map((h) => h.id));
+			const cameraFullscreenIds = new Set(
+				handles.filter((h) => h.kind === "cameraFullscreen").map((h) => h.id),
+			);
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
 			const prevSpeed = ((legacy.speedRegions as unknown[]) ?? []).filter(
 				(s) => !speedIds.has((s as { id: string }).id),
+			);
+			const prevCameraFullscreen = ((legacy.cameraFullscreenRegions as unknown[]) ?? []).filter(
+				(s) => !cameraFullscreenIds.has((s as { id: string }).id),
 			);
 			const next: AxcutDocument = {
 				...document,
@@ -517,7 +582,9 @@ export function useTimeline() {
 					trimRanges: document.timeline.trimRanges.filter((s) => !trimIds.has(s.id)),
 				},
 				legacyEditor:
-					speedIds.size > 0 ? { ...legacy, speedRegions: prevSpeed } : document.legacyEditor,
+					speedIds.size > 0 || cameraFullscreenIds.size > 0
+						? { ...legacy, speedRegions: prevSpeed, cameraFullscreenRegions: prevCameraFullscreen }
+						: document.legacyEditor,
 			};
 			await saveDocument(next);
 			setSelection(null);
@@ -918,11 +985,21 @@ export function useTimeline() {
 			}>) ?? [])
 		: [];
 
+	const cameraFullscreenRegions = hasDoc
+		? (((document.legacyEditor as Record<string, unknown> | null)
+				?.cameraFullscreenRegions as Array<{
+				id: string;
+				startMs: number;
+				endMs: number;
+			}>) ?? [])
+		: [];
+
 	return {
 		zoomRegions: document?.zoomRanges ?? [],
 		trimRanges: document?.timeline.trimRanges ?? [],
 		annotationRegions: (document?.annotations ?? []) as unknown as AnnotationRegion[],
 		speedRegions,
+		cameraFullscreenRegions,
 		clips: document?.timeline.clips ?? [],
 		assets: document?.assets ?? [],
 		hasDoc,
@@ -935,6 +1012,7 @@ export function useTimeline() {
 		addTrimAt,
 		addAnnotation,
 		addSpeed,
+		addCameraFullscreen,
 		removeRegion,
 		removeRegions,
 		selectRegion,
@@ -963,6 +1041,7 @@ export function useTimeline() {
 		commitAnnotationChange,
 		updateSpeedSpan,
 		updateSpeedValue,
+		updateCameraFullscreenSpan,
 		// T19 — drives the preview video during trim-edge resize.
 		setCurrentTime: useProjectStore((s) => s.setCurrentTime),
 	};

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import type { ZoomFocus } from "@/components/video-editor/types";
+import type { CameraFullscreenRegion, ZoomFocus } from "@/components/video-editor/types";
 import type {
 	AxcutAnnotationRegion,
 	AxcutClip,
@@ -20,6 +20,7 @@ interface PreviewProps {
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
+	cameraFullscreenRegions?: CameraFullscreenRegion[];
 	trimRanges?: AxcutTrimRange[];
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
@@ -51,6 +52,7 @@ export function Preview({
 	clips,
 	zoomRegions,
 	speedRegions,
+	cameraFullscreenRegions,
 	trimRanges,
 	selectedZoomRegionId,
 	onZoomFocusChange,
@@ -98,6 +100,7 @@ export function Preview({
 					clips={clips}
 					zoomRegions={zoomRegions}
 					speedRegions={speedRegions}
+					cameraFullscreenRegions={cameraFullscreenRegions}
 					trimRanges={trimRanges}
 					selectedZoomRegionId={selectedZoomRegionId}
 					onZoomFocusChange={onZoomFocusChange}

@@ -23,6 +23,7 @@
 import { Application, Container, Graphics, Sprite, Texture, VideoSource } from "pixi.js";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fromFileUrl } from "@/components/video-editor/projectPersistence";
+import { MAX_NATIVE_PLAYBACK_RATE } from "@/components/video-editor/types";
 import type { AxcutClip, AxcutTrimRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
@@ -126,7 +127,12 @@ export function PreviewCompositor({
 					speedRegionsRef.current,
 					Math.round(nextTimeSec * 1000),
 				);
-				const rate = activeRegion?.speed ?? 1;
+				// Chromium hard-caps HTMLMediaElement.playbackRate at 16×; above that the
+				// element can't actually play faster and the shared clock (below) would
+				// desync from the real frame advance. Clamp the live preview to the native
+				// ceiling — the export path renders the true speed offline (WSOLA audio +
+				// offline frame retiming, gated on MAX_NATIVE_PLAYBACK_RATE).
+				const rate = Math.min(activeRegion?.speed ?? 1, MAX_NATIVE_PLAYBACK_RATE);
 				if (v.playbackRate !== rate) v.playbackRate = rate;
 			}
 		},

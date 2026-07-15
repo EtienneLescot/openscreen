@@ -30,6 +30,7 @@ import {
 	useState,
 } from "react";
 import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
+import GradientEditor, { type GradientEditorState } from "@/components/ui/gradient-editor";
 import type {
 	AxcutAsset,
 	AxcutClip,
@@ -52,6 +53,7 @@ import { formatMs } from "@/lib/ai-edition/timeline/format";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import { getAssetPath } from "@/lib/assetPath";
 import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
+import { buildGradientFromEditor } from "@/lib/gradientBuilder";
 import { resolveImageWallpaperUrl, WALLPAPER_PATHS } from "@/lib/wallpaper";
 import styles from "./NewEditorShell.module.css";
 
@@ -170,10 +172,36 @@ const IMAGE_ACCEPT = ".jpg,.jpeg,.png,image/jpeg,image/png";
 // paths are restricted to `/wallpapers/...` or the user's own data: URLs from
 // the upload custom flow.
 export function BackgroundPane() {
-	const { settings, set, hasDocument } = useEditorSettings();
+	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	const [tab, setTab] = useState<"image" | "color" | "gradient">("image");
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
 	const customUrls = useMemoCustomWallpapers(settings.wallpaper);
+
+	// The custom gradient editor emits continuously while the user drags a
+	// color point / angle knob / brightness slider, so mirror the SliderCell
+	// model: preview live with setLive, then persist once the changes settle.
+	const gradientCommitTimer = useRef<number | null>(null);
+	const handleGradientChange = useCallback(
+		(state: GradientEditorState) => {
+			setLive({ wallpaper: buildGradientFromEditor(state) });
+			if (gradientCommitTimer.current !== null) {
+				window.clearTimeout(gradientCommitTimer.current);
+			}
+			gradientCommitTimer.current = window.setTimeout(() => {
+				gradientCommitTimer.current = null;
+				void commit();
+			}, 400);
+		},
+		[setLive, commit],
+	);
+	useEffect(
+		() => () => {
+			if (gradientCommitTimer.current !== null) {
+				window.clearTimeout(gradientCommitTimer.current);
+			}
+		},
+		[],
+	);
 
 	const isSelected = (value: string) => settings.wallpaper === value;
 
@@ -282,19 +310,22 @@ export function BackgroundPane() {
 					onPick={(color) => void set({ wallpaper: color })}
 				/>
 			) : (
-				<div className={styles.bgGrid}>
-					{GRAD_PRESETS.map((bg, i) => (
-						<button
-							type="button"
-							key={bg}
-							className={`${styles.bgThumb} ${isSelected(bg) ? styles.isActive : ""}`}
-							style={{ background: bg }}
-							aria-label={`Gradient ${i + 1}`}
-							disabled={!hasDocument}
-							onClick={() => void set({ wallpaper: bg })}
-						/>
-					))}
-				</div>
+				<>
+					<div className={styles.bgGrid}>
+						{GRAD_PRESETS.map((bg, i) => (
+							<button
+								type="button"
+								key={bg}
+								className={`${styles.bgThumb} ${isSelected(bg) ? styles.isActive : ""}`}
+								style={{ background: bg }}
+								aria-label={`Gradient ${i + 1}`}
+								disabled={!hasDocument}
+								onClick={() => void set({ wallpaper: bg })}
+							/>
+						))}
+					</div>
+					{hasDocument ? <GradientEditor onChange={handleGradientChange} /> : null}
+				</>
 			)}
 		</Pane>
 	);

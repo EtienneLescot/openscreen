@@ -4,6 +4,7 @@ import {
 	FileText,
 	Image as ImageIcon,
 	Layout as LayoutIcon,
+	Maximize2,
 	MousePointer2,
 	Pencil,
 	Scissors,
@@ -445,6 +446,27 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
 						<Trash2 size={14} />
 						{ts("annotation.deleteAnnotation")}
+					</button>
+				</div>
+			</div>
+		);
+	}
+
+	if (selection.kind === "cameraFullscreen") {
+		const region = tl.cameraFullscreenRegions.find((c) => c.id === selection.id);
+		if (!region) return null;
+		return (
+			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
+				{paneHeader(<Maximize2 size={15} />, "Full Camera", onClose, tc("actions.close"))}
+				<div style={bodyStyle}>
+					<p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: "var(--muted)" }}>
+						While this region plays, the webcam grows to (almost) fill the frame and eases back at
+						the end. Drag the region's edges on the timeline to change when it starts and how long
+						it lasts.
+					</p>
+					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
+						<Trash2 size={14} />
+						Delete region
 					</button>
 				</div>
 			</div>

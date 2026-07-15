@@ -25,12 +25,14 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
+	type CameraFullscreenRegion,
 	type CropRegion,
 	DEFAULT_CROP_REGION,
 	type WebcamLayoutPreset,
 	type WebcamMaskShape,
 	type ZoomFocus,
 } from "@/components/video-editor/types";
+import { computeCameraFullscreenProgress } from "@/components/video-editor/videoPlayback/cameraFullscreenUtils";
 import type {
 	AxcutAnnotationRegion,
 	AxcutClip,
@@ -44,8 +46,10 @@ import { createPlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock
 import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import {
+	computeCameraFullscreenTargetRect,
 	computeCompositeLayout,
 	getWebcamLayoutCssBoxShadow,
+	lerpRect,
 	type WebcamCompositeLayout,
 } from "@/lib/compositeLayout";
 import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
@@ -64,6 +68,7 @@ interface PreviewCanvasProps {
 	clips: AxcutClip[];
 	zoomRegions?: AxcutZoomRegion[];
 	speedRegions?: SpeedRegion[];
+	cameraFullscreenRegions?: CameraFullscreenRegion[];
 	trimRanges?: AxcutTrimRange[];
 	selectedZoomRegionId?: string | null;
 	onZoomFocusChange?: (id: string, focus: ZoomFocus) => void;
@@ -254,6 +259,35 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		settings.padding,
 	]);
 
+	// Full Camera: during a cameraFullscreen region the webcam overlay grows to
+	// (almost) fill the canvas and eases back. Mirror the exporter's frameRenderer
+	// exactly — lerp the PiP rect toward computeCameraFullscreenTargetRect (radius
+	// 0 at full) — so preview and export animate to the identical rect.
+	const cameraFullscreenProgress = useMemo(
+		() =>
+			computeCameraFullscreenProgress(
+				props.cameraFullscreenRegions ?? [],
+				Math.round(props.currentTimeSec * 1000),
+			),
+		[props.cameraFullscreenRegions, props.currentTimeSec],
+	);
+	const effectiveLayout = useMemo<WebcamCompositeLayout | null>(() => {
+		if (!layout?.webcamRect || cameraFullscreenProgress <= 0) return layout;
+		const target = computeCameraFullscreenTargetRect(canvasSize, layout.webcamRect);
+		const fullRect = {
+			x: target.x,
+			y: target.y,
+			width: target.width,
+			height: target.height,
+			borderRadius: 0,
+			maskShape: layout.webcamRect.maskShape,
+		};
+		return {
+			...layout,
+			webcamRect: lerpRect(layout.webcamRect, fullRect, cameraFullscreenProgress),
+		};
+	}, [layout, cameraFullscreenProgress, canvasSize]);
+
 	const frameStyle = useMemo(() => buildFrameStyle(settings), [settings]);
 	const blurStyle = useMemo(() => buildBlurStyle(settings), [settings]);
 	const screenStyle = useMemo(
@@ -261,8 +295,8 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		[layout, settings, canvasSize],
 	);
 	const webcamStyle = useMemo(
-		() => buildWebcamStyle(layout, settings, canvasSize),
-		[layout, settings, canvasSize],
+		() => buildWebcamStyle(effectiveLayout, settings, canvasSize),
+		[effectiveLayout, settings, canvasSize],
 	);
 	// P4 — the layout math above only knows the user's chosen preset
 	// (PiP/dual/stack), not whether the clip under the playhead actually has a
@@ -428,7 +462,9 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 						onTimeChange={props.onTimeChange}
 						isPlaying={isPlaying}
 						clockRef={clockRef}
-						borderRadius={layout.webcamRect.borderRadius}
+						borderRadius={
+							effectiveLayout?.webcamRect?.borderRadius ?? layout.webcamRect.borderRadius
+						}
 						webcamMaskShape={settings.webcamMaskShape}
 						layoutPreset={settings.webcamLayoutPreset}
 					/>

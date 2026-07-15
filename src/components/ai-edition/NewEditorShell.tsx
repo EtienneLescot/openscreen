@@ -630,6 +630,26 @@ export function NewEditorShell() {
 		}
 	}, [saveDocument]);
 
+	// Native File menu (electron/main.ts) → v4 actions. The menu is shown via
+	// Menu.setApplicationMenu and dispatches these IPC events; the old editor
+	// listened to them, but the v4 shell replaced it, leaving the File items
+	// dead. Wire them to the same handlers the top-bar buttons use so the
+	// File/Edit/View menu bar works again (Edit/View items use Electron roles).
+	// The v4 editor has no separate "Save As" location, so it maps to Save.
+	useEffect(() => {
+		const api = window.electronAPI;
+		if (!api) return;
+		const unsubscribers = [
+			api.onMenuNewProject?.(() => setNewProjectOpen(true)),
+			api.onMenuLoadProject?.(() => setOpenProjectOpen(true)),
+			api.onMenuSaveProject?.(() => void handleSave()),
+			api.onMenuSaveProjectAs?.(() => void handleSave()),
+		];
+		return () => {
+			for (const unsub of unsubscribers) unsub?.();
+		};
+	}, [handleSave]);
+
 	const handleRenameProject = useCallback(
 		async (title: string) => {
 			const doc = useProjectStore.getState().document;
@@ -972,6 +992,11 @@ export function NewEditorShell() {
 				void tl.addSpeed();
 				return;
 			}
+			if (matchesShortcut(e, shortcuts.addCameraFullscreen, isMac)) {
+				e.preventDefault();
+				void tl.addCameraFullscreen();
+				return;
+			}
 
 			// Fixed (non-configurable) shortcuts advertised in the shortcuts dialog.
 			if (e.key === "Tab") {
@@ -1158,6 +1183,7 @@ export function NewEditorShell() {
 									clips={clips}
 									zoomRegions={tl.zoomRegions}
 									speedRegions={tl.speedRegions}
+									cameraFullscreenRegions={tl.cameraFullscreenRegions}
 									trimRanges={tl.trimRanges}
 									selectedZoomRegionId={tl.selection?.kind === "zoom" ? tl.selection.id : null}
 									onZoomFocusChange={tl.updateZoomFocusLive}
