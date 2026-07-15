@@ -18,6 +18,9 @@ import type {
 	AnnotationRegion,
 	CropRegion,
 	SpeedRegion,
+	WebcamLayoutPreset,
+	WebcamMaskShape,
+	WebcamSizePreset,
 	ZoomRegion,
 } from "@/components/video-editor/types";
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
@@ -120,6 +123,18 @@ export interface RenderPlanCursor {
 	theme?: string;
 }
 
+// Global webcam layout/style (from legacyEditor) shared by every segment. The
+// per-segment webcam SOURCE (file + offset) lives on `RenderSegment.camera`; a
+// segment renders a webcam overlay only when its asset has a camera track.
+export interface RenderPlanWebcam {
+	layoutPreset: WebcamLayoutPreset;
+	maskShape: WebcamMaskShape;
+	mirrored: boolean;
+	reactiveZoom: boolean;
+	sizePreset: WebcamSizePreset;
+	position: { cx: number; cy: number } | null;
+}
+
 export interface RenderPlan {
 	output: RenderPlanOutput;
 	aspectRatioValue: number;
@@ -137,6 +152,8 @@ export interface RenderPlan {
 	// Shared cursor style + sprite atlas (per-segment samples live on each
 	// segment). `null` when there is no recording or cursor is disabled.
 	cursor: RenderPlanCursor | null;
+	// Shared webcam layout/style (per-segment webcam source is on the segment).
+	webcam: RenderPlanWebcam;
 }
 
 export interface BuildRenderPlanCursorOptions {
@@ -322,6 +339,25 @@ export function buildRenderPlan(
 			}
 		: null;
 
+	// --- Webcam (global layout/style, read from legacyEditor exactly as the
+	// legacy exporter does; per-segment source lives on segment.camera) ---
+	const webcam: RenderPlanWebcam = {
+		layoutPreset: extractLegacyField<string>(
+			legacy,
+			"webcamLayoutPreset",
+			"picture-in-picture",
+		) as WebcamLayoutPreset,
+		maskShape: extractLegacyField<string>(
+			legacy,
+			"webcamMaskShape",
+			"rectangle",
+		) as WebcamMaskShape,
+		mirrored: extractLegacyField(legacy, "webcamMirrored", false),
+		reactiveZoom: extractLegacyField(legacy, "webcamReactiveZoom", true),
+		sizePreset: extractLegacyField(legacy, "webcamSizePreset", 25),
+		position: extractLegacyField<{ cx: number; cy: number } | null>(legacy, "webcamPosition", null),
+	};
+
 	return {
 		output: {
 			width: settings.width,
@@ -337,6 +373,7 @@ export function buildRenderPlan(
 		speedRegions,
 		appearance,
 		cursor,
+		webcam,
 	};
 }
 
