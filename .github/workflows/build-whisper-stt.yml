@@ -147,11 +147,17 @@ jobs:
           path: ${{ runner.os == 'Windows' && 'C:/wstbuild' || '.cache/whisper-stt-build' }}
           # Keyed on the pinned WHISPER_REF/backend flags in CMakeLists.txt so a
           # bump there invalidates the cache instead of silently reusing a stale
-          # FetchContent checkout; falls back to the newest same-platform cache
-          # on a miss so incremental compilation still helps.
-          key: whisper-stt-build-${{ matrix.tag }}-${{ hashFiles('electron/native/whisper-stt/CMakeLists.txt') }}
+          # FetchContent checkout; falls back to the newest cache for the same
+          # platform + runner image on a miss so incremental compilation still
+          # helps. The runner image version ($ImageOS/$ImageVersion) is part of
+          # the key AND the restore-keys prefix because CMake bakes absolute
+          # toolchain paths (e.g. the Xcode SDK's libz.tbd) into the cached build
+          # tree — when GitHub rolls the image's Xcode/SDK, those paths vanish and
+          # a restored tree fails with "No rule to make target …libz.tbd". Scoping
+          # the cache to the image version auto-busts it on every toolchain roll.
+          key: whisper-stt-build-${{ matrix.tag }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ hashFiles('electron/native/whisper-stt/CMakeLists.txt') }}
           restore-keys: |
-            whisper-stt-build-${{ matrix.tag }}-
+            whisper-stt-build-${{ matrix.tag }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-
 
       - name: Run whisper-stt build script
         env:
