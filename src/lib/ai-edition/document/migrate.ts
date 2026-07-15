@@ -275,6 +275,7 @@ export function migrateAxcutDocumentToProjectData(input: AxcutDocument): EditorP
 		padding: 50,
 		cropRegion: { x: 0, y: 0, width: 1, height: 1 } as CropRegion,
 		zoomRegions: [],
+		cameraFullscreenRegions: [],
 		autoZoomEnabled: false,
 		autoFocusAll: false,
 		trimRegions,
