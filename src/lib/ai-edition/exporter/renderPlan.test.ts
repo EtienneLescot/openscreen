@@ -134,6 +134,8 @@ describe("buildRenderPlan — segments", () => {
 			videoUrl: "file:///tmp/a.mp4",
 			sourceStartSec: 0,
 			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
 			intraTrims: [],
 			cropRegion: { x: 0, y: 0, width: 1, height: 1 },
 			sourceWidth: 1920,

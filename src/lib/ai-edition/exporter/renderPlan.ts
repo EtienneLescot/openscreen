@@ -66,6 +66,11 @@ export interface RenderSegment {
 	videoUrl: string;
 	sourceStartSec: number;
 	sourceEndSec: number;
+	// The clip's position on the (1:1-with-source, pre-speed) virtual timeline.
+	// Timeline-authored effects (zoom/annotation/speed) are projected onto this
+	// segment's source time through [timelineStart,timelineEnd)↔[sourceStart,…).
+	timelineStartSec: number;
+	timelineEndSec: number;
 	// Cuts INSIDE this clip, scoped per segment (unlike today's single global
 	// complement in `computeExportTrimRegions`). Pre-merged + clamped via
 	// `normalizeIntervals` so the renderer can drop straight in.
@@ -285,6 +290,8 @@ export function buildRenderPlan(
 			videoUrl: toFileUrl(asset.originalPath),
 			sourceStartSec,
 			sourceEndSec,
+			timelineStartSec: clip.timelineStartSec,
+			timelineEndSec: clip.timelineEndSec,
 			intraTrims: buildIntraTrims(document, clip, sourceStartSec, sourceEndSec),
 			cropRegion: clip.cropRegion ?? IDENTITY_CROP,
 			sourceWidth,

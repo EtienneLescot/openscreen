@@ -215,14 +215,25 @@ export class FrameRenderer {
 		webcamSize?: Size | null;
 		cursorRecordingData?: CursorRecordingData | null;
 		cursorScale?: number;
+		// Timeline-authored effects PROJECTED to this segment's SOURCE time — the
+		// export loop passes each frame its source timestamp, so zoom/annotation
+		// (and cursor samples) all match in one coordinate system even under speed.
+		zoomRegions?: ZoomRegion[];
+		annotationRegions?: AnnotationRegion[];
+		speedRegions?: SpeedRegion[];
 	}): void {
 		this.config.videoWidth = source.videoWidth;
 		this.config.videoHeight = source.videoHeight;
 		this.config.webcamSize = source.webcamSize ?? null;
 		this.config.cursorRecordingData = source.cursorRecordingData ?? null;
 		this.config.cursorScale = source.cursorScale ?? 0;
+		if (source.zoomRegions) this.config.zoomRegions = source.zoomRegions;
+		if (source.annotationRegions) this.config.annotationRegions = source.annotationRegions;
+		if (source.speedRegions) this.config.speedRegions = source.speedRegions;
 		this.layoutCache = null;
 		this.smoothedAutoFocus = null;
+		this.zoomSpringState = createZoomSpringState();
+		this.prevAnimationTimeMs = null;
 		resetNativeCursorMotionBlurState(this.nativeCursorMotionBlurState);
 	}
 
