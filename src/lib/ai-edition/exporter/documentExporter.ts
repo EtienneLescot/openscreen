@@ -16,6 +16,7 @@
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import {
 	type AnnotationRegion,
+	type CameraFullscreenRegion,
 	type CropRegion,
 	type SpeedRegion,
 	type TrimRegion,
@@ -213,6 +214,11 @@ export async function exportAxcutDocument(
 		clips,
 		() => createId("speed"),
 	);
+	const cameraFullscreenRegions: CameraFullscreenRegion[] = projectRegionsToSourceTime(
+		extractLegacyField<CameraFullscreenRegion[]>(legacy, "cameraFullscreenRegions", []),
+		clips,
+		() => createId("camfull"),
+	);
 
 	const sourceWidth = options.sourceWidth || 1920;
 	const sourceHeight = options.sourceHeight || 1080;
@@ -246,6 +252,7 @@ export async function exportAxcutDocument(
 		zoomRegions,
 		trimRegions,
 		speedRegions,
+		cameraFullscreenRegions,
 		showShadow: shadowIntensity > 0,
 		shadowIntensity,
 		showBlur,

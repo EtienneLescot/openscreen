@@ -9,7 +9,8 @@ import { useCallback, useEffect, useState } from "react";
 export type RegionSnapshot =
 	| { kind: "zoom"; region: Record<string, unknown> }
 	| { kind: "annotation"; region: Record<string, unknown> }
-	| { kind: "speed"; region: Record<string, unknown> };
+	| { kind: "speed"; region: Record<string, unknown> }
+	| { kind: "cameraFullscreen"; region: Record<string, unknown> };
 
 let clipboard: RegionSnapshot | null = null;
 const listeners = new Set<() => void>();

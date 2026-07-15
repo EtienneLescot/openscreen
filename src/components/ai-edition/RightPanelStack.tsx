@@ -12,6 +12,8 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { parseCustomPlaybackSpeedInput } from "@/components/video-editor/customPlaybackSpeed";
 import {
+	MAX_NATIVE_PLAYBACK_RATE,
+	MAX_PLAYBACK_SPEED,
 	MAX_ZOOM_SCALE,
 	MIN_ZOOM_SCALE,
 	SPEED_OPTIONS,
@@ -38,7 +40,7 @@ import {
 	VideoEffectsPane,
 } from "./RightPanes";
 
-type RegionKind = "zoom" | "trim" | "annotation" | "speed";
+type RegionKind = "zoom" | "trim" | "annotation" | "speed" | "cameraFullscreen";
 
 interface RegionHandle {
 	kind: RegionKind;
@@ -666,7 +668,8 @@ function RegionInspector({
 									const result = parseCustomPlaybackSpeedInput(speedDraft);
 									if (result.status === "valid") patchSpeed(result.speed);
 									else {
-										if (result.status === "too-fast") toast.error("Speed can't exceed 16×.");
+										if (result.status === "too-fast")
+											toast.error(`Speed can't exceed ${MAX_PLAYBACK_SPEED}×.`);
 										setSpeedDraft(
 											SPEED_OPTIONS.some((o) => o.speed === speedValue) ? "" : String(speedValue),
 										);
@@ -676,13 +679,38 @@ function RegionInspector({
 									if (e.key !== "Enter") return;
 									const result = parseCustomPlaybackSpeedInput(speedDraft);
 									if (result.status === "valid") patchSpeed(result.speed);
-									else if (result.status === "too-fast") toast.error("Speed can't exceed 16×.");
+									else if (result.status === "too-fast")
+										toast.error(`Speed can't exceed ${MAX_PLAYBACK_SPEED}×.`);
 									e.currentTarget.blur();
 								}}
 								style={{ width: "100%" }}
 							/>
+							{speedValue > MAX_NATIVE_PLAYBACK_RATE ? (
+								<p
+									style={{
+										margin: "6px 0 0",
+										font: "400 10px/1.4 var(--font-sans)",
+										color: "var(--fg-2)",
+									}}
+								>
+									{`Above ${MAX_NATIVE_PLAYBACK_RATE}× the preview plays at ${MAX_NATIVE_PLAYBACK_RATE}×; the export renders the true speed.`}
+								</p>
+							) : null}
 						</Field>
 					</>
+				) : null}
+				{selection.kind === "cameraFullscreen" ? (
+					<p
+						style={{
+							margin: "0 0 4px",
+							font: "400 12px/1.5 var(--font-sans)",
+							color: "var(--fg-2)",
+						}}
+					>
+						While this region plays, the webcam grows to (almost) fill the frame and eases back at
+						the end. Drag the region's edges on the timeline to change when it starts and how long
+						it lasts.
+					</p>
 				) : null}
 				<button
 					type="button"
@@ -721,6 +749,8 @@ function kindLabel(kind: RegionKind): string {
 			return "Annotation";
 		case "speed":
 			return "Speed region";
+		case "cameraFullscreen":
+			return "Full Camera";
 	}
 }
 
