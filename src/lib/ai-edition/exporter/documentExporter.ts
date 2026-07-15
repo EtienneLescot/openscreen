@@ -43,6 +43,7 @@ import { createId } from "../document/ids";
 import { type Interval, normalizeIntervals, primaryAssetDuration } from "../document/timeline";
 import type { AxcutDocument } from "../schema";
 import { projectRegionsToSourceTime } from "../timeline/region-ventilation";
+import { buildRenderPlan, type RenderPlan } from "./renderPlan";
 
 export type ExportVideoCodec = "h264" | "h265" | "vp9";
 
@@ -155,6 +156,36 @@ function extractLegacyField<T>(
 		return legacy[key] as T;
 	}
 	return fallback;
+}
+
+// Maps the dialog's DocumentExportOptions onto the v2 RenderPlan (multi-asset,
+// virtual-time effects, per-segment cursor). This is the single boundary where
+// the document + export options become the plan the segment-loop renderer will
+// consume. It runs today alongside the legacy config assembly below — the plan
+// is threaded to VideoExporter but only drives rendering once the segment loop
+// is enabled (see VideoExporterConfig.renderPlan). Cursor scale/theme come from
+// options + legacyEditor exactly as the legacy path reads them.
+export function buildDocumentRenderPlan(
+	document: AxcutDocument,
+	options: DocumentExportOptions,
+): RenderPlan {
+	const legacy = document.legacyEditor as Record<string, unknown> | null;
+	return buildRenderPlan(document, {
+		quality: options.quality,
+		frameRate: options.frameRate ?? 60,
+		codec: options.codec ?? "h264",
+		fallbackSourceWidth: options.sourceWidth,
+		fallbackSourceHeight: options.sourceHeight,
+		cursor: {
+			recordingData: options.cursorRecordingData ?? null,
+			scale: options.cursorScale ?? 0,
+			smoothing: options.cursorSmoothing,
+			motionBlur: options.cursorMotionBlur,
+			clickBounce: options.cursorClickBounce,
+			clipToBounds: options.cursorClipToBounds,
+			theme: extractLegacyField(legacy, "cursorTheme", ""),
+		},
+	});
 }
 
 export async function exportAxcutDocument(
@@ -305,6 +336,10 @@ export async function exportAxcutDocument(
 		frameRate: options.frameRate ?? 60,
 		bitrate: settings.bitrate,
 		codec: CODEC_STRINGS[options.codec ?? "h264"],
+		// v2 multi-asset plan, threaded to the exporter. Consumed only once the
+		// segment-loop path is enabled; the legacy single-asset config above still
+		// drives rendering until then.
+		renderPlan: buildDocumentRenderPlan(document, options),
 	});
 	return exporter.export();
 }
