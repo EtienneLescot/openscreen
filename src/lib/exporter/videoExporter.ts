@@ -8,6 +8,7 @@ import type {
 	WebcamSizePreset,
 	ZoomRegion,
 } from "@/components/video-editor/types";
+import type { RenderPlan } from "@/lib/ai-edition/exporter/renderPlan";
 import { BackgroundLoadError } from "@/lib/wallpaper";
 import type { CursorRecordingData } from "@/native/contracts";
 import { getPlatform } from "@/utils/platformUtils";
@@ -104,6 +105,10 @@ export interface VideoExporterConfig extends ExportConfig {
 	cursorTelemetry?: import("@/components/video-editor/types").CursorTelemetryPoint[];
 	cursorClickTimestamps?: number[];
 	onProgress?: (progress: ExportProgress) => void;
+	// v2 multi-asset render plan (ordered segments, virtual-time effects,
+	// per-segment cursor). Present when built by documentExporter; the segment
+	// loop consumes it. Absent for the legacy single-asset callers.
+	renderPlan?: RenderPlan;
 }
 
 const SOURCE_COPY_EPSILON = 0.0001;
