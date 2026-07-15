@@ -133,7 +133,14 @@ jobs:
           # GITHUB_TOKEN tag pushes don't fire the build.yml trigger in this setup,
           # so dispatch it explicitly. The PAT ensures the build's release creation
           # propagates to Tier 3 (homebrew/winget/nix/aur) via release: published.
+          #
+          # --ref is REQUIRED: the RC version bump lives ONLY on the release branch /
+          # RC tag, never on the default branch. Without --ref the build runs on main
+          # (still the previous stable version), so build.yml's publish-release step
+          # fails its guard ("package.json version X does not match <rc> from tag").
+          # Pin the build to the RC tag so checkout gets the bumped package.json + code.
           gh workflow run build.yml \
+            --ref "${RC_TAG}" \
             -f release_tag="${RC_TAG}" \
             -f arch=both \
             --repo "$GITHUB_REPOSITORY"
