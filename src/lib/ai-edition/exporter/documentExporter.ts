@@ -33,6 +33,11 @@ import {
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
 import type { ExportProgress } from "@/lib/exporter/types";
 import type { CursorRecordingData, CursorTelemetryPoint } from "@/native/contracts";
+import {
+	type AspectRatio,
+	getAspectRatioValue,
+	getNativeAspectRatioValue,
+} from "@/utils/aspectRatioUtils";
 import { createId } from "../document/ids";
 import { type Interval, normalizeIntervals, primaryAssetDuration } from "../document/timeline";
 import type { AxcutDocument } from "../schema";
@@ -211,7 +216,14 @@ export async function exportAxcutDocument(
 
 	const sourceWidth = options.sourceWidth || 1920;
 	const sourceHeight = options.sourceHeight || 1080;
-	const aspectRatioValue = 16 / 9;
+	// Respect the timeline's selected aspect ratio (the whole-canvas framing set
+	// in the editor), not a hardcoded 16:9. "native" follows the source's own
+	// pixel aspect. This is a per-timeline choice, not per-clip.
+	const aspectRatio = extractLegacyField<AspectRatio>(legacy, "aspectRatio", "16:9");
+	const aspectRatioValue =
+		aspectRatio === "native"
+			? getNativeAspectRatioValue(sourceWidth, sourceHeight)
+			: getAspectRatioValue(aspectRatio);
 
 	const settings = calculateMp4ExportSettings({
 		quality: options.quality,

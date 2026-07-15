@@ -27,7 +27,13 @@ import {
 	type GifFrameRate,
 	type GifSizePreset,
 } from "@/lib/exporter";
+import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
 import { nativeBridgeClient } from "@/native/client";
+import {
+	type AspectRatio,
+	getAspectRatioValue,
+	getNativeAspectRatioValue,
+} from "@/utils/aspectRatioUtils";
 import { ModalShell } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 
@@ -80,11 +86,51 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 				: null,
 		[document],
 	);
-	// 0 means "not probed yet" (assetVideoSchema defaults) -- treat as unknown
-	// rather than a real 0x0 source, else every tier would wrongly show Upscale.
-	const sourceShortSide =
-		primaryAsset?.video && primaryAsset.video.width > 0 && primaryAsset.video.height > 0
-			? Math.min(primaryAsset.video.width, primaryAsset.video.height)
+
+	// The output is a single video at one resolution, so it's sized to the LARGEST
+	// media on the timeline (by pixel count) — never gratuitously downscaling the
+	// best footage. This reference drives both the "Source" export size and the
+	// per-tier upscale/output-size labels. Falls back to any asset with known dims
+	// if no clip-referenced one has them yet (e.g. duration/size still probing).
+	const referenceSource = useMemo<{ width: number; height: number } | null>(() => {
+		if (!document) return null;
+		const usedAssetIds = new Set(document.timeline.clips.map((c) => c.assetId));
+		let best: { width: number; height: number } | null = null;
+		const consider = (w: number, h: number) => {
+			if (w > 0 && h > 0 && (!best || w * h > best.width * best.height))
+				best = { width: w, height: h };
+		};
+		for (const a of document.assets) {
+			if (usedAssetIds.has(a.id)) consider(a.video?.width ?? 0, a.video?.height ?? 0);
+		}
+		if (!best) for (const a of document.assets) consider(a.video?.width ?? 0, a.video?.height ?? 0);
+		return best;
+	}, [document]);
+	// Short side of the reference — the axis the 720p/1080p tiers target — or null
+	// while dims are still unknown (0x0 default), so tiers show no label rather
+	// than a wrong one.
+	const sourceShortSide = referenceSource
+		? Math.min(referenceSource.width, referenceSource.height)
+		: null;
+
+	// Aspect the export normalizes to: the timeline's selected ratio (mirrors
+	// documentExporter), so the sizes shown match what the export produces.
+	const timelineAspect =
+		(document?.legacyEditor as { aspectRatio?: AspectRatio } | null)?.aspectRatio ?? "16:9";
+	const EXPORT_ASPECT =
+		timelineAspect === "native" && referenceSource
+			? getNativeAspectRatioValue(referenceSource.width, referenceSource.height)
+			: getAspectRatioValue(timelineAspect);
+	// Output dimensions the export will produce for a given tier, from the
+	// reference source — so each tier's subtitle is the real pixel size.
+	const tierOutputDims = (value: ExportQuality) =>
+		referenceSource
+			? calculateMp4ExportSettings({
+					quality: value,
+					sourceWidth: referenceSource.width,
+					sourceHeight: referenceSource.height,
+					aspectRatioValue: EXPORT_ASPECT,
+				})
 			: null;
 
 	useEffect(() => {
@@ -145,8 +191,10 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 			gifFrameRate,
 			gifLoop,
 			gifSizePreset: gifSize,
-			sourceWidth: asset.video?.width,
-			sourceHeight: asset.video?.height,
+			// Size the output to the largest clip on the timeline (see referenceSource),
+			// not just the primary asset, so "Source" matches the shown size.
+			sourceWidth: referenceSource?.width ?? asset.video?.width,
+			sourceHeight: referenceSource?.height ?? asset.video?.height,
 			onProgress: (p) => setProgress(p),
 		};
 
@@ -256,18 +304,27 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 									}}
 								>
 									<span style={{ color: "var(--fg)", fontWeight: 600 }}>{ts(q.labelKey)}</span>
-									{q.targetShortSide === undefined ? (
-										<span style={{ font: "500 11px var(--font-body)", color: "var(--muted)" }}>
-											{t("exportDialog.qualityMatchRecording")}
-										</span>
-									) : (
-										sourceShortSide !== null &&
-										sourceShortSide < q.targetShortSide && (
-											<span style={{ font: "500 11px var(--font-body)", color: "var(--warn)" }}>
-												{t("exportDialog.qualityUpscaleWarning")}
+									{(() => {
+										const dims = tierOutputDims(q.value);
+										if (!dims) return null;
+										// A fixed tier upscales when its target short side exceeds the
+										// largest clip's short side (Source never does).
+										const isUpscale =
+											q.targetShortSide !== undefined &&
+											sourceShortSide !== null &&
+											q.targetShortSide > sourceShortSide;
+										return (
+											<span
+												style={{
+													font: "500 11px var(--font-body)",
+													color: isUpscale ? "var(--warn)" : "var(--muted)",
+												}}
+											>
+												{dims.width} × {dims.height}
+												{isUpscale ? ` · ${t("exportDialog.qualityUpscaleWarning")}` : ""}
 											</span>
-										)
-									)}
+										);
+									})()}
 								</button>
 							))}
 						</div>
