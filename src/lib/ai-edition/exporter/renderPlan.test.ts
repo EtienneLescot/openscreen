@@ -715,6 +715,58 @@ describe("buildRenderPlan — cursor", () => {
 	});
 });
 
+// --- buildRenderPlan: webcam layout (global, from legacyEditor) --------------
+
+describe("buildRenderPlan — webcam layout", () => {
+	const assets = [
+		asset({
+			id: "a",
+			originalPath: "/tmp/a.mp4",
+			durationSec: 30,
+			video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
+		}),
+	];
+	const clips = [clip({ id: "c1", assetId: "a", sourceStartSec: 0, sourceEndSec: 10 })];
+
+	it("uses the documented defaults when legacyEditor is null", () => {
+		const plan = buildRenderPlan(doc({ assets, clips }), { quality: "source" });
+		expect(plan.webcam).toEqual({
+			layoutPreset: "picture-in-picture",
+			maskShape: "rectangle",
+			mirrored: false,
+			reactiveZoom: true,
+			sizePreset: 25,
+			position: null,
+		});
+	});
+
+	it("reads webcam layout/style from legacyEditor", () => {
+		const plan = buildRenderPlan(
+			doc({
+				assets,
+				clips,
+				legacyEditor: {
+					webcamLayoutPreset: "vertical-stack",
+					webcamMaskShape: "circle",
+					webcamMirrored: true,
+					webcamReactiveZoom: false,
+					webcamSizePreset: 40,
+					webcamPosition: { cx: 0.8, cy: 0.7 },
+				},
+			}),
+			{ quality: "source" },
+		);
+		expect(plan.webcam).toEqual({
+			layoutPreset: "vertical-stack",
+			maskShape: "circle",
+			mirrored: true,
+			reactiveZoom: false,
+			sizePreset: 40,
+			position: { cx: 0.8, cy: 0.7 },
+		});
+	});
+});
+
 // --- isIdentityFastPathEligible -----------------------------------------------
 
 describe("isIdentityFastPathEligible", () => {

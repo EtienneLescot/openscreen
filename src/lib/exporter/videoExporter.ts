@@ -8,12 +8,15 @@ import type {
 	WebcamSizePreset,
 	ZoomRegion,
 } from "@/components/video-editor/types";
-import type { RenderPlan } from "@/lib/ai-edition/exporter/renderPlan";
+import { assembleConcatenatedPcm } from "@/lib/ai-edition/exporter/audioConcatAssembler";
+import { buildAudioConcatPlan } from "@/lib/ai-edition/exporter/audioConcatPlan";
+import type { RenderPlan, RenderSegment } from "@/lib/ai-edition/exporter/renderPlan";
 import { BackgroundLoadError } from "@/lib/wallpaper";
 import type { CursorRecordingData } from "@/native/contracts";
 import { getPlatform } from "@/utils/platformUtils";
-import { AudioProcessor } from "./audioEncoder";
+import { AudioProcessor, downmixPlanarChannelsForExport } from "./audioEncoder";
 import { FrameRenderer } from "./frameRenderer";
+import { materializeLocalSourceFile, releaseLocalSourceFile } from "./localSourceFile";
 import { VideoMuxer, videoCodecFamily } from "./muxer";
 import { MAX_IN_MEMORY_SOURCE_BYTES } from "./sourceFileLimits";
 import { StreamingVideoDecoder } from "./streamingDecoder";
@@ -223,6 +226,140 @@ export function getSourceCopyFastPathBlockers(
 	return blockers;
 }
 
+/** Source-time spans to CUT for one segment so its decoder emits exactly
+ * [sourceStart, sourceEnd) minus the clip's intra-trims: the complement of the
+ * kept window over [0, sourceDuration] plus the intra-trims (v2 segment loop). */
+function buildSegmentRenderTrims(segment: RenderSegment, sourceDurationSec: number): TrimRegion[] {
+	const cuts: Array<{ startSec: number; endSec: number }> = [];
+	if (segment.sourceStartSec > 0) {
+		cuts.push({ startSec: 0, endSec: segment.sourceStartSec });
+	}
+	const keptEnd = Math.min(segment.sourceEndSec, sourceDurationSec);
+	if (keptEnd < sourceDurationSec) {
+		cuts.push({ startSec: keptEnd, endSec: sourceDurationSec });
+	}
+	for (const trim of segment.intraTrims) {
+		cuts.push({ startSec: trim.startSec, endSec: trim.endSec });
+	}
+	return cuts.map((cut, i) => ({
+		id: `seg_trim_${i + 1}`,
+		startMs: Math.round(cut.startSec * 1000),
+		endMs: Math.round(cut.endSec * 1000),
+	}));
+}
+
+/** Per-segment cursor recording for the renderer: the plan's shared cursor
+ * atlas/style + THIS segment's asset samples (empty → no overlay). */
+function segmentCursorRecording(
+	plan: RenderPlan,
+	segment: RenderSegment,
+): CursorRecordingData | null {
+	if (!plan.cursor) return null;
+	return {
+		version: plan.cursor.version,
+		provider: plan.cursor.provider,
+		assets: plan.cursor.assets,
+		samples: segment.cursorSamples,
+	};
+}
+
+// v2 multi-asset audio output layout. Both recording formats are 48 kHz, so
+// decodeAudioData is an identity resample; only channel counts get normalized.
+const AUDIO_OUTPUT_SAMPLE_RATE = 48_000;
+const AUDIO_OUTPUT_CHANNELS = 2;
+// Short equal-power fade applied at each segment audio join (seamless audio).
+const AUDIO_BOUNDARY_FADE_SEC = 0.005;
+
+/** Source-time sub-intervals of a segment that are KEPT — its window minus
+ * intra-trims (the complement of buildSegmentRenderTrims within the clip) — so
+ * the segment's audio removes exactly the same cuts as its video. */
+function keptSourceIntervals(segment: RenderSegment): Array<{ startSec: number; endSec: number }> {
+	const kept: Array<{ startSec: number; endSec: number }> = [];
+	let cursor = segment.sourceStartSec;
+	const trims = [...segment.intraTrims].sort((a, b) => a.startSec - b.startSec);
+	for (const trim of trims) {
+		const trimStart = Math.max(trim.startSec, segment.sourceStartSec);
+		const trimEnd = Math.min(trim.endSec, segment.sourceEndSec);
+		if (trimEnd <= cursor) continue;
+		if (trimStart > cursor) {
+			kept.push({ startSec: cursor, endSec: Math.min(trimStart, segment.sourceEndSec) });
+		}
+		cursor = Math.max(cursor, trimEnd);
+	}
+	if (cursor < segment.sourceEndSec) {
+		kept.push({ startSec: cursor, endSec: segment.sourceEndSec });
+	}
+	return kept;
+}
+
+/** Decodes ONE segment's audio to planar PCM at the common export layout
+ * (sampleRate/channels), keeping only the clip's source window minus its
+ * intra-trims. Channel counts are normalized via the shared downmix. Returns
+ * null when the source has no decodable audio track. */
+async function decodeSegmentAudioPcm(
+	segment: RenderSegment,
+	sampleRate: number,
+	channels: number,
+): Promise<Float32Array[] | null> {
+	let file: File | null = null;
+	try {
+		file = await materializeLocalSourceFile(segment.videoUrl, `seg-${segment.clipId}-audio`);
+		const bytes = await file.arrayBuffer();
+		const ctx = new OfflineAudioContext(Math.max(1, channels), 1, sampleRate);
+		let audioBuffer: AudioBuffer;
+		try {
+			audioBuffer = await ctx.decodeAudioData(bytes);
+		} catch {
+			return null; // no decodable audio track
+		}
+		const sourceChannels = audioBuffer.numberOfChannels;
+		if (sourceChannels === 0) return null;
+
+		const sourcePlanes: Float32Array[] = [];
+		for (let c = 0; c < sourceChannels; c++) sourcePlanes.push(audioBuffer.getChannelData(c));
+
+		// Concatenate the kept source sub-intervals (intra-trims removed), per channel.
+		const kept = keptSourceIntervals(segment);
+		const keptChannels: Float32Array[] = [];
+		for (let c = 0; c < sourceChannels; c++) {
+			const total = kept.reduce((acc, iv) => {
+				const s0 = Math.max(0, Math.round(iv.startSec * sampleRate));
+				const s1 = Math.min(sourcePlanes[c].length, Math.round(iv.endSec * sampleRate));
+				return acc + Math.max(0, s1 - s0);
+			}, 0);
+			const out = new Float32Array(total);
+			let w = 0;
+			for (const iv of kept) {
+				const s0 = Math.max(0, Math.round(iv.startSec * sampleRate));
+				const s1 = Math.min(sourcePlanes[c].length, Math.round(iv.endSec * sampleRate));
+				if (s1 > s0) {
+					out.set(sourcePlanes[c].subarray(s0, s1), w);
+					w += s1 - s0;
+				}
+			}
+			keptChannels.push(out);
+		}
+
+		if (sourceChannels === channels) return keptChannels;
+
+		// Normalize channel count (e.g. mono → stereo) with the shared downmix,
+		// which returns one planar Float32Array (ch0 samples, then ch1, …).
+		const frameCount = keptChannels[0]?.length ?? 0;
+		if (frameCount === 0) return [];
+		const downmixed = downmixPlanarChannelsForExport(keptChannels, channels);
+		const result: Float32Array[] = [];
+		for (let c = 0; c < channels; c++) {
+			result.push(downmixed.subarray(c * frameCount, (c + 1) * frameCount));
+		}
+		return result;
+	} catch (error) {
+		console.warn("[VideoExporter] segment audio decode failed:", error);
+		return null;
+	} finally {
+		if (file) releaseLocalSourceFile(file.name);
+	}
+}
+
 function isMp4Source(videoUrl: string, blob: Blob) {
 	if (blob.type.toLowerCase().includes("mp4")) {
 		return true;
@@ -310,6 +447,14 @@ export class VideoExporter {
 		this.fatalEncoderError = null;
 
 		try {
+			// v2 multi-asset path: a plan with >1 segment can't be rendered by the
+			// single-stream pipeline below (it would drop every non-primary clip —
+			// the P1 bug). Single-segment exports stay on the proven legacy path.
+			const segmentPlan = this.config.renderPlan;
+			if (segmentPlan && segmentPlan.segments.length > 1) {
+				return await this.runSegmentLoop(encoderPreference, segmentPlan);
+			}
+
 			const platform = await getPlatform();
 
 			const streamingDecoder = new StreamingVideoDecoder();
@@ -610,6 +755,335 @@ export class VideoExporter {
 				await webcamDecodePromise.catch(() => undefined);
 			}
 		}
+	}
+
+	/**
+	 * v2 multi-asset segment loop. Walks the RenderPlan's ordered segments,
+	 * decoding each from its OWN source asset into ONE renderer + encoder + muxer,
+	 * advancing a single continuous virtual-time frame clock across segment
+	 * boundaries so the joins are seamless. Fixes P1 (non-primary clips dropped).
+	 *
+	 * Renders per-segment video + webcam overlay + cursor, each drawn from its
+	 * OWN asset (webcam source + cursor samples switch at every segment boundary).
+	 * Per-segment audio concat (see audioConcatPlan) and virtual-time speed
+	 * mapping are the remaining increments. The caller has already run
+	 * cleanup()/reset.
+	 */
+	private async runSegmentLoop(
+		encoderPreference: HardwareAcceleration,
+		plan: RenderPlan,
+	): Promise<ExportResult> {
+		const warnings: string[] = [];
+		const onWarning = (message: string) => warnings.push(message);
+		const platform = await getPlatform();
+		const segments = plan.segments;
+		const firstSegment = segments[0];
+
+		// One renderer for the whole export — output size is fixed; only the
+		// source-dependent fields change per segment via renderer.setSource().
+		const renderer = new FrameRenderer({
+			width: this.config.width,
+			height: this.config.height,
+			wallpaper: plan.appearance.wallpaper,
+			zoomRegions: plan.zoomRegions,
+			annotationRegions: plan.annotationRegions,
+			speedRegions: plan.speedRegions,
+			showShadow: plan.appearance.shadowIntensity > 0,
+			shadowIntensity: plan.appearance.shadowIntensity,
+			showBlur: plan.appearance.showBlur,
+			motionBlurAmount: plan.appearance.motionBlurAmount,
+			borderRadius: plan.appearance.borderRadius,
+			padding: plan.appearance.padding,
+			cropRegion: firstSegment.cropRegion,
+			videoWidth: firstSegment.sourceWidth,
+			videoHeight: firstSegment.sourceHeight,
+			// Source-dependent fields (webcamSize, cursor samples/scale) are set per
+			// segment via setSource; webcam layout + cursor style are global.
+			webcamSize: null,
+			webcamLayoutPreset: plan.webcam.layoutPreset,
+			webcamMaskShape: plan.webcam.maskShape,
+			webcamMirrored: plan.webcam.mirrored,
+			webcamReactiveZoom: plan.webcam.reactiveZoom,
+			webcamSizePreset: plan.webcam.sizePreset,
+			webcamPosition: plan.webcam.position,
+			cursorScale: plan.cursor?.scale ?? 0,
+			cursorSmoothing: plan.cursor?.smoothing,
+			cursorMotionBlur: plan.cursor?.motionBlur,
+			cursorClickBounce: plan.cursor?.clickBounce,
+			cursorClipToBounds: plan.cursor?.clipToBounds,
+			cursorTheme: plan.cursor?.theme,
+			platform,
+		});
+		this.renderer = renderer;
+		await renderer.initialize();
+
+		await this.initializeEncoder(encoderPreference);
+
+		// Audio pre-pass: decode each segment's audio to the common export layout
+		// up-front, so we know whether to declare an audio track on the muxer (mp4
+		// needs that at construction). The concatenation TIMING is applied later,
+		// once the video loop has produced each segment's real frame count.
+		const segmentAudioPcm: (Float32Array[] | null)[] = [];
+		let anySegmentAudio = false;
+		for (const segment of segments) {
+			if (this.cancelled) break;
+			const pcm = await decodeSegmentAudioPcm(
+				segment,
+				AUDIO_OUTPUT_SAMPLE_RATE,
+				AUDIO_OUTPUT_CHANNELS,
+			);
+			if (pcm && pcm.length > 0 && (pcm[0]?.length ?? 0) > 0) anySegmentAudio = true;
+			segmentAudioPcm.push(pcm);
+		}
+		const audioExportCodec = anySegmentAudio
+			? await AudioProcessor.selectSupportedExportCodec(
+					AUDIO_OUTPUT_SAMPLE_RATE,
+					AUDIO_OUTPUT_CHANNELS,
+				)
+			: null;
+		const hasAudio = Boolean(audioExportCodec);
+
+		const muxer = new VideoMuxer(this.config, hasAudio, audioExportCodec?.muxerCodec);
+		this.muxer = muxer;
+		await muxer.initialize();
+
+		const frameDuration = 1_000_000 / this.config.frameRate;
+		const maxEncodeQueue =
+			encoderPreference === "prefer-software"
+				? Math.min(this.MAX_ENCODE_QUEUE, 32)
+				: this.MAX_ENCODE_QUEUE;
+
+		// Progress estimate from the plan (no decoder metadata needed): kept
+		// virtual duration of every segment × fps.
+		const estTotalFrames = Math.max(
+			1,
+			Math.round(
+				segments.reduce((acc, s) => {
+					const intra = s.intraTrims.reduce((a, iv) => a + (iv.endSec - iv.startSec), 0);
+					const kept = Math.max(0, s.sourceEndSec - s.sourceStartSec - intra);
+					return acc + kept * this.config.frameRate;
+				}, 0),
+			),
+		);
+
+		let frameIndex = 0;
+		// Real per-segment video frame count — audio is sized from this so the
+		// concatenated audio stays locked to the (independently retimed) video.
+		const segmentFrameCounts: number[] = [];
+
+		for (const segment of segments) {
+			if (this.cancelled) break;
+			if (this.fatalEncoderError) throw this.fatalEncoderError;
+
+			const framesBeforeSegment = frameIndex;
+			const decoder = new StreamingVideoDecoder();
+			this.streamingDecoder = decoder;
+
+			// Per-segment webcam overlay (this asset's camera track), decoded
+			// concurrently and matched to each screen frame by source time —
+			// mirrors the legacy single-asset webcam path.
+			let webcamDecoder: StreamingVideoDecoder | null = null;
+			let webcamFrameQueue: TimestampedVideoFrameQueue | null = null;
+			let webcamDecodePromise: Promise<void> | null = null;
+			let stopWebcamDecode = false;
+
+			try {
+				const info = await decoder.loadMetadata(segment.videoUrl);
+				const segmentTrims = buildSegmentRenderTrims(segment, info.duration);
+
+				let webcamSize: { width: number; height: number } | null = null;
+				if (segment.camera) {
+					webcamDecoder = new StreamingVideoDecoder();
+					this.webcamDecoder = webcamDecoder;
+					const webcamInfo = await webcamDecoder.loadMetadata(segment.camera.videoUrl);
+					webcamSize = { width: webcamInfo.width, height: webcamInfo.height };
+					webcamFrameQueue = new TimestampedVideoFrameQueue();
+					const queue = webcamFrameQueue;
+					webcamDecodePromise = webcamDecoder
+						.decodeAll(
+							this.config.frameRate,
+							segmentTrims,
+							undefined,
+							async (webcamFrame, _exportTs, webcamSourceMs) => {
+								while (queue.length >= 12 && !this.cancelled && !stopWebcamDecode) {
+									await new Promise((resolve) => setTimeout(resolve, 2));
+								}
+								if (this.cancelled || stopWebcamDecode) {
+									webcamFrame.close();
+									return;
+								}
+								queue.enqueue(webcamFrame, webcamSourceMs);
+							},
+							onWarning,
+						)
+						.catch((error) => {
+							const err = error instanceof Error ? error : new Error(String(error));
+							this.fatalEncoderError ??= err;
+							queue.fail(err);
+						})
+						.finally(() => {
+							if (!this.cancelled) queue.close();
+						});
+				}
+
+				renderer.setSource({
+					videoWidth: segment.sourceWidth,
+					videoHeight: segment.sourceHeight,
+					webcamSize,
+					cursorRecordingData: segmentCursorRecording(plan, segment),
+					cursorScale: plan.cursor?.scale ?? 0,
+				});
+				renderer.setCropRegion(segment.cropRegion);
+
+				await decoder.decodeAll(
+					this.config.frameRate,
+					segmentTrims,
+					undefined,
+					async (videoFrame, _exportTs, sourceTimestampMs) => {
+						let webcamFrame: VideoFrame | null = null;
+						try {
+							if (this.cancelled) return;
+							if (this.fatalEncoderError) throw this.fatalEncoderError;
+
+							webcamFrame = webcamFrameQueue
+								? await webcamFrameQueue.frameAt(sourceTimestampMs)
+								: null;
+							if (this.cancelled) return;
+
+							// Continuous virtual-time clock across segments → seamless joins.
+							const timestamp = frameIndex * frameDuration;
+							await renderer.renderFrame(videoFrame, timestamp, webcamFrame);
+
+							const canvas = renderer.getCanvas();
+							let exportFrame: VideoFrame;
+							if (platform === "linux") {
+								const canvasCtx = canvas.getContext("2d")!;
+								const imageData = canvasCtx.getImageData(0, 0, canvas.width, canvas.height);
+								exportFrame = new VideoFrame(imageData.data.buffer, {
+									format: "RGBA",
+									codedWidth: canvas.width,
+									codedHeight: canvas.height,
+									timestamp,
+									duration: frameDuration,
+									colorSpace: {
+										primaries: "bt709",
+										transfer: "iec61966-2-1",
+										matrix: "rgb",
+										fullRange: true,
+									},
+								});
+							} else {
+								exportFrame = new VideoFrame(canvas, { timestamp, duration: frameDuration });
+							}
+
+							try {
+								await waitForEncoderQueueSpace({
+									getQueueSize: () => this.encoder?.encodeQueueSize ?? 0,
+									maxEncodeQueue,
+									isCancelled: () => this.cancelled,
+									encoderPreference,
+								});
+							} catch (error) {
+								exportFrame.close();
+								throw error;
+							}
+
+							if (this.encoder && this.encoder.state === "configured") {
+								this.encodeQueue++;
+								this.encoder.encode(exportFrame, { keyFrame: frameIndex % 150 === 0 });
+							}
+
+							exportFrame.close();
+							frameIndex++;
+							this.reportProgress({
+								currentFrame: frameIndex,
+								totalFrames: estTotalFrames,
+								percentage: Math.min(100, (frameIndex / estTotalFrames) * 100),
+								estimatedTimeRemaining: 0,
+							});
+						} finally {
+							videoFrame.close();
+							webcamFrame?.close();
+						}
+					},
+					onWarning,
+				);
+			} finally {
+				stopWebcamDecode = true;
+				webcamFrameQueue?.destroy();
+				webcamDecoder?.cancel();
+				if (webcamDecodePromise) {
+					await webcamDecodePromise.catch(() => undefined);
+				}
+				if (this.webcamDecoder === webcamDecoder) this.webcamDecoder = null;
+				decoder.destroy();
+				if (this.streamingDecoder === decoder) this.streamingDecoder = null;
+			}
+			segmentFrameCounts.push(frameIndex - framesBeforeSegment);
+		}
+
+		if (this.cancelled) {
+			return { success: false, error: "Export cancelled" };
+		}
+		if (this.fatalEncoderError) {
+			throw this.fatalEncoderError;
+		}
+
+		if (this.encoder && this.encoder.state === "configured") {
+			await this.withTimeout(
+				this.encoder.flush(),
+				ENCODER_FLUSH_TIMEOUT_MS,
+				encoderPreference === "prefer-hardware"
+					? "The hardware video encoder stopped responding while finalizing the export."
+					: "The video encoder stopped responding while finalizing the export.",
+			);
+		}
+		if (this.fatalEncoderError) {
+			throw this.fatalEncoderError;
+		}
+
+		await Promise.all(this.muxingPromises);
+		this.reportProgress({
+			currentFrame: estTotalFrames,
+			totalFrames: estTotalFrames,
+			percentage: 100,
+			estimatedTimeRemaining: 0,
+			phase: "finalizing",
+		});
+
+		// --- Audio: concatenate every segment's decoded PCM at the plan's offsets
+		// (sized from the REAL per-segment video frame counts so A/V stays locked),
+		// apply an equal-power fade at each join, then encode once and mux. ---
+		if (hasAudio && audioExportCodec && !this.cancelled) {
+			const audioPlan = buildAudioConcatPlan(
+				segments.map((s, i) => ({
+					clipId: s.clipId,
+					outputFrameCount: segmentFrameCounts[i] ?? 0,
+					hasAudio:
+						(segmentAudioPcm[i]?.length ?? 0) > 0 && (segmentAudioPcm[i]?.[0]?.length ?? 0) > 0,
+				})),
+				{
+					frameRate: this.config.frameRate,
+					sampleRate: AUDIO_OUTPUT_SAMPLE_RATE,
+					channels: AUDIO_OUTPUT_CHANNELS,
+				},
+			);
+			const assembled = assembleConcatenatedPcm(
+				segmentAudioPcm.map((pcm) => ({ pcm })),
+				audioPlan,
+				{ boundaryFadeSamples: Math.round(AUDIO_OUTPUT_SAMPLE_RATE * AUDIO_BOUNDARY_FADE_SEC) },
+			);
+			this.audioProcessor = new AudioProcessor();
+			await this.audioProcessor.encodePcmToMuxer(
+				assembled,
+				AUDIO_OUTPUT_SAMPLE_RATE,
+				muxer,
+				audioExportCodec,
+			);
+		}
+
+		const blob = await muxer.finalize();
+		return { success: true, blob, warnings: warnings.length > 0 ? warnings : undefined };
 	}
 
 	private async initializeEncoder(hardwareAcceleration: HardwareAcceleration): Promise<void> {
