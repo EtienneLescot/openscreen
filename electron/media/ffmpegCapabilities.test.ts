@@ -1,10 +1,12 @@
 import { describe, expect, it } from "vitest";
 import {
 	candidateFfmpegPaths,
+	candidateVideoEncoders,
 	FFMPEG_BINARY_NAME,
 	isLgplBuild,
 	parseAvailableEncoders,
-	selectVideoEncoder,
+	pickWorkingEncoder,
+	smokeTestArgs,
 } from "./ffmpegCapabilities";
 
 // Realistic slice of `ffmpeg -encoders` output (truncated for the test):
@@ -85,59 +87,107 @@ describe("ffmpegCapabilities", () => {
 		});
 	});
 
-	describe("selectVideoEncoder", () => {
-		it("win32 prefers nvenc over qsv over amf", () => {
-			expect(selectVideoEncoder(new Set(["h264_nvenc", "h264_qsv", "h264_amf"]), "win32")).toBe(
+	describe("candidateVideoEncoders", () => {
+		// libopenh264 is bundled in our LGPL ffmpeg, so it is present everywhere and
+		// sits at the floor of every list. There is no WebCodecs path any more, so a
+		// machine with no hardware must still export - just slowly.
+		const SW = "libopenh264";
+
+		it("win32 orders nvidia, intel, amd, then the OS, then software", () => {
+			const all = new Set(["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf", SW]);
+			expect(candidateVideoEncoders(all, "win32")).toEqual([
 				"h264_nvenc",
-			);
+				"h264_qsv",
+				"h264_amf",
+				"h264_mf",
+				SW,
+			]);
 		});
 
-		it("win32 falls back to qsv when nvenc is missing", () => {
-			expect(selectVideoEncoder(new Set(["h264_qsv", "h264_amf"]), "win32")).toBe("h264_qsv");
+		it("drops what the build does not carry", () => {
+			expect(candidateVideoEncoders(new Set(["h264_amf", SW]), "win32")).toEqual(["h264_amf", SW]);
 		});
 
-		it("win32 falls back to amf when only amf is available", () => {
-			expect(selectVideoEncoder(new Set(["h264_amf"]), "win32")).toBe("h264_amf");
-		});
-
-		it("win32 returns null when none of its candidates are available", () => {
-			expect(selectVideoEncoder(new Set(["libx264", "aac"]), "win32")).toBeNull();
-		});
-
-		it("darwin selects h264_videotoolbox", () => {
-			expect(selectVideoEncoder(new Set(["h264_videotoolbox"]), "darwin")).toBe(
+		it("darwin is videotoolbox then software", () => {
+			expect(candidateVideoEncoders(new Set(["h264_videotoolbox", SW]), "darwin")).toEqual([
 				"h264_videotoolbox",
+				SW,
+			]);
+		});
+
+		it("linux is nvenc, vaapi, then software", () => {
+			expect(candidateVideoEncoders(new Set(["h264_nvenc", "h264_vaapi", SW]), "linux")).toEqual([
+				"h264_nvenc",
+				"h264_vaapi",
+				SW,
+			]);
+		});
+
+		it("falls back to software on a platform we have no list for", () => {
+			expect(candidateVideoEncoders(new Set([SW]), "freebsd")).toEqual([SW]);
+		});
+
+		it("never offers libx264, the fastest thing we measured, because it is GPL", () => {
+			expect(candidateVideoEncoders(new Set(["libx264", "libx265"]), "win32")).toEqual([]);
+		});
+	});
+
+	describe("pickWorkingEncoder", () => {
+		const ALL = new Set(["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf", "libopenh264"]);
+		const encoderIn = (args: string[]) => args[args.indexOf("-c:v") + 1];
+
+		it("skips encoders the build carries but the machine cannot run", async () => {
+			// The real failure this exists to prevent: our bundled binary lists
+			// nvenc/qsv/amf on every machine, so on an AMD box nvenc is present and
+			// dies with "Cannot load nvcuda.dll". Presence is not capability.
+			const works = new Set(["h264_amf", "h264_mf", "libopenh264"]);
+			const picked = await pickWorkingEncoder(ALL, "win32", (args) => works.has(encoderIn(args)));
+			expect(picked).toBe("h264_amf");
+		});
+
+		it("takes the first that works, in preference order", async () => {
+			const picked = await pickWorkingEncoder(ALL, "win32", () => true);
+			expect(picked).toBe("h264_nvenc");
+		});
+
+		it("lands on software when no hardware encoder runs", async () => {
+			const picked = await pickWorkingEncoder(
+				ALL,
+				"win32",
+				(args) => encoderIn(args) === "libopenh264",
 			);
+			expect(picked).toBe("libopenh264");
 		});
 
-		it("darwin returns null when videotoolbox is missing", () => {
-			expect(selectVideoEncoder(new Set(["libx264"]), "darwin")).toBeNull();
+		it("returns null when nothing works - the bundled ffmpeg is broken, not the machine", async () => {
+			expect(await pickWorkingEncoder(ALL, "win32", () => false)).toBeNull();
 		});
 
-		it("linux prefers nvenc over vaapi", () => {
-			expect(selectVideoEncoder(new Set(["h264_nvenc", "h264_vaapi"]), "linux")).toBe("h264_nvenc");
+		it("stops probing once one passes", async () => {
+			const tried: string[] = [];
+			await pickWorkingEncoder(ALL, "win32", (args) => {
+				tried.push(encoderIn(args));
+				return encoderIn(args) === "h264_qsv";
+			});
+			expect(tried).toEqual(["h264_nvenc", "h264_qsv"]);
 		});
 
-		it("linux falls back to vaapi when nvenc is missing", () => {
-			expect(selectVideoEncoder(new Set(["h264_vaapi"]), "linux")).toBe("h264_vaapi");
+		it("awaits an async probe", async () => {
+			const picked = await pickWorkingEncoder(ALL, "win32", async (args) => {
+				await new Promise((r) => setTimeout(r, 1));
+				return encoderIn(args) === "h264_mf";
+			});
+			expect(picked).toBe("h264_mf");
 		});
+	});
 
-		it("linux returns null when neither candidate is available", () => {
-			expect(selectVideoEncoder(new Set(["libx264"]), "linux")).toBeNull();
-		});
-
-		it("returns null on platforms we have no encoder preference for", () => {
-			// Same set that would resolve on win32 should NOT resolve on freebsd.
-			const available = new Set(["h264_nvenc", "h264_qsv", "h264_amf"]);
-			expect(selectVideoEncoder(available, "freebsd")).toBeNull();
-			expect(selectVideoEncoder(available, "openbsd")).toBeNull();
-			expect(selectVideoEncoder(available, "aix")).toBeNull();
-		});
-
-		it("returns null on an empty availability set for every supported platform", () => {
-			expect(selectVideoEncoder(new Set(), "win32")).toBeNull();
-			expect(selectVideoEncoder(new Set(), "darwin")).toBeNull();
-			expect(selectVideoEncoder(new Set(), "linux")).toBeNull();
+	describe("smokeTestArgs", () => {
+		it("encodes one synthetic frame to nowhere, so it touches no files", () => {
+			const a = smokeTestArgs("h264_amf");
+			expect(a[a.indexOf("-f") + 1]).toBe("lavfi");
+			expect(a[a.indexOf("-c:v") + 1]).toBe("h264_amf");
+			expect(a[a.indexOf("-frames:v") + 1]).toBe("1");
+			expect(a.slice(-3)).toEqual(["-f", "null", "-"]);
 		});
 	});
 

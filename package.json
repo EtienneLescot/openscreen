@@ -29,7 +29,7 @@
 		"build:native:mac": "node scripts/build-macos-screencapturekit-helper.mjs",
 		"build:mac": "npm run build:native:mac && tsc && vite build && electron-builder --mac",
 		"build:native:win": "node scripts/build-windows-wgc-helper.mjs",
-		"build:win": "npm run build:native:win && tsc && vite build && electron-builder --win --config.npmRebuild=false",
+		"build:win": "npm run build:native:win && npm run fetch:ffmpeg && tsc && vite build && electron-builder --win --config.npmRebuild=false",
 		"build:linux": "tsc && vite build && electron-builder --linux AppImage deb pacman --config.npmRebuild=false",
 		"build:whisper-binaries": "bash scripts/build-whisper-stt.sh",
 		"test": "vitest --run",
@@ -51,7 +51,8 @@
 		"test:browser:install": "playwright install --with-deps chromium-headless-shell",
 		"test:e2e": "playwright test",
 		"test:e2e:windows-native-checklist": "playwright test tests/e2e/windows-native-checklist.spec.ts",
-		"prepare": "husky"
+		"prepare": "husky",
+		"fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs"
 	},
 	"dependencies": {
 		"@fix-webm-duration/fix": "^1.0.1",

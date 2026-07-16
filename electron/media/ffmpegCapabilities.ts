@@ -30,7 +30,14 @@ export type VideoEncoderId =
 	| "h264_qsv"
 	| "h264_amf"
 	| "h264_videotoolbox"
-	| "h264_vaapi";
+	| "h264_vaapi"
+	/** Media Foundation: reaches AMD/Intel/NVIDIA through the OS rather than a
+	 *  vendor SDK. A useful net when the vendor encoder is missing or broken. */
+	| "h264_mf"
+	/** Cisco's OpenH264 — BSD, so LGPL-safe, and present in our bundled build.
+	 *  Software, therefore slow; it exists so that a machine with no usable
+	 *  hardware encoder can still export rather than being told it cannot. */
+	| "libopenh264";
 
 /**
  * Conventional binary name. Win32's loader requires the .exe suffix; on
@@ -41,26 +48,34 @@ export const FFMPEG_BINARY_NAME: (platform: NodeJS.Platform) => string = (platfo
 	platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
 
 /**
- * Best hardware encoder per platform, in preference order. First match in
- * available wins; anything missing falls through to the next candidate,
- * and a platform with no entries returns null so the caller keeps the
- * existing WebCodecs encoder.
+ * Encoder preference per platform, best first. The first entry present in
+ * `available` wins.
  *
- * Windows prefers NVIDIA, then Intel, then AMD: NVENC is the strongest and
- * most predictable of the three, QSV next, AMF last. AMF being last is about
+ * Windows prefers NVIDIA, then Intel, then AMD: NVENC is the strongest and most
+ * predictable of the three, QSV next, AMF last. AMF being last is about
  * throughput headroom, not quality — measured output was frame-identical to
- * software on the reference machine. Even AMF on an integrated Radeon
- * measured ~165 fps at 1080p versus ~8 fps for WebCodecs, so last place here
- * is still ~20x what we ship today.
+ * software on the reference machine. Even AMF on an integrated Radeon measured
+ * ~165 fps at 1080p versus ~8 fps for WebCodecs, so last place is still ~20x
+ * what we shipped before.
  *
- * On Linux there is no QSV/AMF path worth having, so the realistic options
- * are NVENC (proprietary driver) and VAAPI.
+ * `h264_mf` (Media Foundation) sits after the vendor encoders as an OS-level
+ * net: it reaches AMD/Intel/NVIDIA silicon without their SDKs, so it can save a
+ * machine whose vendor path is missing or broken.
+ *
+ * Every list ends in `libopenh264` — software, BSD-licensed, bundled. It is the
+ * floor, not a fallback to somewhere else: there is deliberately no WebCodecs
+ * path any more, so a machine with no usable hardware encoder still exports
+ * through this same code, mux and all, just slowly. That is why this function
+ * cannot return null.
  */
 const ENCODER_PREFERENCE: Partial<Record<NodeJS.Platform, readonly VideoEncoderId[]>> = {
-	win32: ["h264_nvenc", "h264_qsv", "h264_amf"],
-	darwin: ["h264_videotoolbox"],
-	linux: ["h264_nvenc", "h264_vaapi"],
+	win32: ["h264_nvenc", "h264_qsv", "h264_amf", "h264_mf", "libopenh264"],
+	darwin: ["h264_videotoolbox", "libopenh264"],
+	linux: ["h264_nvenc", "h264_vaapi", "libopenh264"],
 };
+
+/** Last resort on an unrecognised platform: if ffmpeg runs at all, this is there. */
+const UNIVERSAL_FALLBACK: VideoEncoderId = "libopenh264";
 
 /** Match ffmpeg -encoders flag columns: 6 capability characters from
  *  V/A/S/D plus . (unset) and - (also unset on some builds). The flag
@@ -159,21 +174,70 @@ export function parseAvailableEncoders(stdout: string): Set<string> {
 }
 
 /**
- * Best hardware encoder for platform given the set of encoders ffmpeg
- * reported. Returns null when no candidate for that platform is present —
- * the caller keeps WebCodecs rather than reaching for a software encoder.
- * That is a licensing call, not a speed one: libx264 is actually the fastest
- * thing we measured (201 fps), but it is GPL and would relicense the binary
- * (see isLgplBuild). WebCodecs is slow but already shipped and MIT-clean.
+ * The encoders worth *trying* on `platform`, best first, filtered to those the
+ * binary actually carries.
+ *
+ * **This is a shortlist, not a choice.** `ffmpeg -encoders` reports what was
+ * compiled in, which for a portable build is every vendor at once: our own
+ * bundled binary offers h264_nvenc, h264_qsv and h264_amf on a machine that has
+ * only an AMD GPU, where nvenc dies with "Cannot load nvcuda.dll" and qsv with
+ * "Error creating a MFX session". Presence proves nothing about the hardware.
+ * Only {@link smokeTestArgs} settles it — see {@link pickWorkingEncoder}.
+ *
+ * Note we never reach for libx264 even though it is the fastest thing we
+ * measured (201 fps). That is a licensing call, not a speed one — it is GPL and
+ * would relicense this MIT app (see isLgplBuild). libopenh264 is BSD and costs
+ * us nothing but throughput on the rare machine that needs it.
  */
-export function selectVideoEncoder(
+export function candidateVideoEncoders(
 	available: ReadonlySet<string>,
 	platform: NodeJS.Platform,
-): VideoEncoderId | null {
-	const order = ENCODER_PREFERENCE[platform];
-	if (!order) return null;
-	for (const id of order) {
-		if (available.has(id)) return id;
+): VideoEncoderId[] {
+	const order = ENCODER_PREFERENCE[platform] ?? [UNIVERSAL_FALLBACK];
+	return order.filter((id) => available.has(id));
+}
+
+/**
+ * argv for a one-frame encode that answers the only question that matters: does
+ * this encoder work *on this machine*? Synthesises its own input (`lavfi`) and
+ * throws the output away (`-f null`), so it touches no files and takes ~100 ms.
+ */
+export function smokeTestArgs(encoder: VideoEncoderId): string[] {
+	return [
+		"-hide_banner",
+		"-v",
+		"error",
+		"-f",
+		"lavfi",
+		"-i",
+		"color=c=black:s=320x240:d=0.1",
+		"-frames:v",
+		"1",
+		"-c:v",
+		encoder,
+		"-f",
+		"null",
+		"-",
+	];
+}
+
+/**
+ * First encoder in the platform's preference order that survives a real one-frame
+ * encode. `runSmokeTest` returns true when ffmpeg exits 0 for the given argv —
+ * injected so this stays pure and testable without spawning anything.
+ *
+ * Returns null only when nothing works, which means the bundled ffmpeg is broken
+ * or missing rather than the machine being unsupported: libopenh264 is software
+ * and part of the build, so it should always pass. Callers must treat null as a
+ * hard error — with no WebCodecs path any more, there is nothing else to try.
+ */
+export async function pickWorkingEncoder(
+	available: ReadonlySet<string>,
+	platform: NodeJS.Platform,
+	runSmokeTest: (args: string[]) => Promise<boolean> | boolean,
+): Promise<VideoEncoderId | null> {
+	for (const id of candidateVideoEncoders(available, platform)) {
+		if (await runSmokeTest(smokeTestArgs(id))) return id;
 	}
 	return null;
 }
