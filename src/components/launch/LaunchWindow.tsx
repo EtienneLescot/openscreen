@@ -453,6 +453,7 @@ export function LaunchWindow() {
 	// (instant, GPU-composited, no native resize at all), and only a genuinely new maximum
 	// triggers the animated resize -- rare enough that its motion is acceptable.
 	const hudAllocatedSizeRef = useRef({ width: 0, height: 0, orientation: trayLayout });
+	const isDraggingHudRef = useRef(false);
 	const measureHudSize = useCallback(() => {
 		const barEl = hudBarRef.current;
 		if (!barEl || !window.electronAPI?.setHudOverlaySize) return;
@@ -1046,6 +1047,7 @@ export function LaunchWindow() {
 			>
 				{/* Drag handle */}
 				<div
+					data-testid="hud-drag-handle"
 					className={`flex ${trayLayout === "vertical" ? "h-6 w-8" : "h-8 w-7"} shrink-0 cursor-grab items-center justify-center active:cursor-grabbing ${styles.electronNoDrag}`}
 					onPointerDown={handleHudDragPointerDown}
 					onPointerMove={handleHudDragPointerMove}
