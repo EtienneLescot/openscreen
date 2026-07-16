@@ -21,6 +21,34 @@ const assetBaseUrl = assetBaseUrlArg ? assetBaseUrlArg.slice(ASSET_BASE_URL_ARG_
 
 contextBridge.exposeInMainWorld("electronAPI", {
 	assetBaseUrl,
+
+	// --- Native export encoder -------------------------------------------------
+	// The renderer composites and extracts frames but cannot spawn ffmpeg (it is
+	// sandboxed, deliberately), so frames cross to main and it feeds ffmpeg's
+	// stdin. Frames go one-way via send(); flow control is the caller's credit
+	// window, acked on exportOnFrameAck.
+	exportCapabilities: () =>
+		ipcRenderer.invoke("export:capabilities") as Promise<{ encoder: string }>,
+	exportStart: (req: unknown) =>
+		ipcRenderer.invoke("export:start", req) as Promise<{ sessionId: string; encoder: string }>,
+	exportWriteFrame: (sessionId: string, frame: ArrayBuffer) => {
+		// send() structured-clones, i.e. copies the frame. That is not an oversight
+		// and it is not fixable here: Electron's transfer list takes MessagePort[]
+		// only, and transferring an ArrayBuffer renderer->main silently drops the
+		// whole message (electron#34905 - it works renderer->renderer, not to main).
+		// The copy is what caps the crossing at ~390 MB/s, which is why the export
+		// ships NV12 (3.0 MB/frame) rather than BGRA (7.9 MB).
+		ipcRenderer.send("export:frame", sessionId, frame);
+	},
+	exportOnFrameAck: (cb: (sessionId: string, error: string | null) => void) => {
+		const handler = (_e: unknown, sessionId: string, error: string | null) => cb(sessionId, error);
+		ipcRenderer.on("export:frame-ack", handler);
+		return () => ipcRenderer.off("export:frame-ack", handler);
+	},
+	exportFinish: (sessionId: string) =>
+		ipcRenderer.invoke("export:finish", sessionId) as Promise<{ outputPath: string }>,
+	exportCancel: (sessionId: string) =>
+		ipcRenderer.invoke("export:cancel", sessionId) as Promise<void>,
 	invokeNativeBridge: <TData>(request: NativeBridgeRequest) => {
 		return ipcRenderer.invoke(NATIVE_BRIDGE_CHANNEL, request) as Promise<TData>;
 	},
