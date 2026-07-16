@@ -32,6 +32,28 @@ int64_t timeSpanToHns(wf::TimeSpan const& value) {
     return value.count();
 }
 
+// H.264 encoding (and the RGB32->NV12 conversion feeding it) requires even
+// frame dimensions. Monitor resolutions are always even in practice, so
+// CreateForMonitor items never hit this. Windows, however, frequently have
+// odd client-area dimensions (arbitrary drag-resize, DPI rounding), and
+// GraphicsCaptureItem::Size() reports the window's *actual* size verbatim.
+// If we requested a Direct3D11CaptureFramePool sized to that odd value while
+// the rest of the pipeline (main.cpp's bitrate calc, MFEncoder) rounds down
+// to even, the frame pool's real DXGI textures end up one pixel wider/taller
+// than the staging texture the encoder allocates. ID3D11DeviceContext::
+// CopyResource silently no-ops on a size mismatch (it only emits a debug-
+// layer warning), so the staging texture never receives pixel data and the
+// output is solid black for the entire recording -- or, if the mismatch
+// trips up the video MFT's input negotiation, SetInputMediaType fails
+// outright. Rounding up to the nearest even size here, and using that
+// rounded size (not the raw item size) for both the frame pool and
+// `captureWidth()`/`captureHeight()`, keeps every consumer of this session
+// looking at the exact same dimensions as the real captured texture.
+int roundUpToEven(int value) {
+    const int clamped = std::max(2, value);
+    return (clamped % 2 == 0) ? clamped : clamped + 1;
+}
+
 } // namespace
 
 WgcSession::~WgcSession() {
@@ -135,8 +157,8 @@ bool WgcSession::createCaptureItem(HWND window) {
 
     item_ = item;
     const auto size = item_.Size();
-    width_ = static_cast<int>(size.Width);
-    height_ = static_cast<int>(size.Height);
+    width_ = roundUpToEven(static_cast<int>(size.Width));
+    height_ = roundUpToEven(static_cast<int>(size.Height));
     return width_ > 0 && height_ > 0;
 }
 
@@ -199,7 +221,7 @@ bool WgcSession::initialize(HMONITOR monitor, int fps, bool captureCursor) {
         winrtDevice_,
         wgdx::DirectXPixelFormat::B8G8R8A8UIntNormalized,
         2,
-        item_.Size());
+        winrt::Windows::Graphics::SizeInt32{width_, height_});
     session_ = framePool_.CreateCaptureSession(item_);
 
     if (!applySessionOptions(captureCursor)) {
@@ -223,7 +245,7 @@ bool WgcSession::initialize(HWND window, int fps, bool captureCursor) {
         winrtDevice_,
         wgdx::DirectXPixelFormat::B8G8R8A8UIntNormalized,
         2,
-        item_.Size());
+        winrt::Windows::Graphics::SizeInt32{width_, height_});
     session_ = framePool_.CreateCaptureSession(item_);
 
     if (!applySessionOptions(captureCursor)) {

@@ -603,23 +603,38 @@ bool MFEncoder::copyBgraFrameToBuffer(const BgraFrameView& frame, BYTE* destinat
     return true;
 }
 
-bool MFEncoder::writeFrame(ID3D11Texture2D* texture, int64_t timestampHns, const BgraFrameView* webcamFrame) {
-    std::scoped_lock writerLock(writerMutex_);
-    if (!sinkWriter_ || finalized_) {
-        return false;
-    }
+bool MFEncoder::captureVideoSample(
+    ID3D11Texture2D* texture,
+    int64_t timestampHns,
+    const BgraFrameView* webcamFrame,
+    Microsoft::WRL::ComPtr<IMFSample>& outSample) {
+    outSample.Reset();
 
-    if (firstTimestampHns_ < 0) {
-        firstTimestampHns_ = timestampHns;
-    }
-
-    int64_t sampleTime = timestampHns - firstTimestampHns_;
-    if (sampleTime <= lastTimestampHns_) {
-        sampleTime = lastTimestampHns_ + (10'000'000LL / fps_);
-    }
     const int64_t sampleDuration = 10'000'000LL / fps_;
-    lastTimestampHns_ = sampleTime;
+    int64_t sampleTime = 0;
+    {
+        std::scoped_lock writerLock(writerMutex_);
+        if (!sinkWriter_ || finalized_) {
+            return false;
+        }
 
+        if (firstTimestampHns_ < 0) {
+            firstTimestampHns_ = timestampHns;
+        }
+
+        sampleTime = timestampHns - firstTimestampHns_;
+        if (sampleTime <= lastTimestampHns_) {
+            sampleTime = lastTimestampHns_ + sampleDuration;
+        }
+        lastTimestampHns_ = sampleTime;
+    }
+
+    // The GPU readback below (copyFrameToBuffer -> CopyResource/Map on
+    // `texture`) is not internally synchronized here. Callers must hold their
+    // own lock around this call that also serializes against whatever thread
+    // writes new frame data into `texture` (see main.cpp's writeVideoFrames,
+    // which holds the shared frame-state mutex across this call but not
+    // across submitVideoSample).
     Microsoft::WRL::ComPtr<IMFMediaBuffer> buffer;
     const DWORD frameBytes = static_cast<DWORD>(width_ * height_ * 4);
     if (!succeeded(MFCreateMemoryBuffer(frameBytes, &buffer), "MFCreateMemoryBuffer")) {
@@ -648,25 +663,34 @@ bool MFEncoder::writeFrame(ID3D11Texture2D* texture, int64_t timestampHns, const
     sample->SetSampleTime(sampleTime);
     sample->SetSampleDuration(sampleDuration);
 
-    return succeeded(sinkWriter_->WriteSample(videoStreamIndex_, sample.Get()), "WriteSample");
+    outSample = sample;
+    return true;
 }
 
-bool MFEncoder::writeBgraFrame(const BgraFrameView& frame, int64_t timestampHns) {
-    std::scoped_lock writerLock(writerMutex_);
-    if (!sinkWriter_ || finalized_) {
-        return false;
-    }
+bool MFEncoder::captureBgraSample(
+    const BgraFrameView& frame,
+    int64_t timestampHns,
+    Microsoft::WRL::ComPtr<IMFSample>& outSample) {
+    outSample.Reset();
 
-    if (firstTimestampHns_ < 0) {
-        firstTimestampHns_ = timestampHns;
-    }
-
-    int64_t sampleTime = timestampHns - firstTimestampHns_;
-    if (sampleTime <= lastTimestampHns_) {
-        sampleTime = lastTimestampHns_ + (10'000'000LL / fps_);
-    }
     const int64_t sampleDuration = 10'000'000LL / fps_;
-    lastTimestampHns_ = sampleTime;
+    int64_t sampleTime = 0;
+    {
+        std::scoped_lock writerLock(writerMutex_);
+        if (!sinkWriter_ || finalized_) {
+            return false;
+        }
+
+        if (firstTimestampHns_ < 0) {
+            firstTimestampHns_ = timestampHns;
+        }
+
+        sampleTime = timestampHns - firstTimestampHns_;
+        if (sampleTime <= lastTimestampHns_) {
+            sampleTime = lastTimestampHns_ + sampleDuration;
+        }
+        lastTimestampHns_ = sampleTime;
+    }
 
     Microsoft::WRL::ComPtr<IMFMediaBuffer> buffer;
     const DWORD frameBytes = static_cast<DWORD>(width_ * height_ * 4);
@@ -696,7 +720,25 @@ bool MFEncoder::writeBgraFrame(const BgraFrameView& frame, int64_t timestampHns)
     sample->SetSampleTime(sampleTime);
     sample->SetSampleDuration(sampleDuration);
 
-    return succeeded(sinkWriter_->WriteSample(videoStreamIndex_, sample.Get()), "WriteSample(webcam)");
+    outSample = sample;
+    return true;
+}
+
+bool MFEncoder::submitVideoSample(IMFSample* sample) {
+    if (!sample) {
+        return false;
+    }
+
+    // This is the potentially slow, blocking step (especially with the
+    // software H.264 encoder fallback): IMFSinkWriter::WriteSample runs the
+    // encode synchronously on the calling thread. Callers must NOT hold any
+    // lock shared with a thread that needs to make timely progress (e.g. a
+    // stop-request check) across this call.
+    std::scoped_lock writerLock(writerMutex_);
+    if (!sinkWriter_ || finalized_) {
+        return false;
+    }
+    return succeeded(sinkWriter_->WriteSample(videoStreamIndex_, sample), "WriteSample");
 }
 
 bool MFEncoder::writeAudio(const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns) {
