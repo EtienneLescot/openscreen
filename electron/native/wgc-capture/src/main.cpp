@@ -624,8 +624,8 @@ int main(int argc, char* argv[]) {
         // SampleTime we attach (confirmed empirically -- varying, correctly
         // increasing input timestamps still produced perfectly even output
         // spacing). Since we cannot make the encoder respect real capture
-        // time, we instead make the encoder's assumption true: call
-        // writeBgraFrame() on a real-time-paced cadence (duplicating the
+        // time, we instead make the encoder's assumption true: feed the
+        // webcam encoder on a real-time-paced cadence (duplicating the
         // latest available camera frame when the camera hasn't produced a
         // newer one yet), so "sample N is at N/fps" is actually correct.
         int64_t nextWebcamWriteDueHns = 0;
@@ -696,7 +696,7 @@ int main(int argc, char* argv[]) {
                     // sequentially at its configured nominal rate regardless of the
                     // SampleTime attached to each input sample. So the only way to
                     // keep the encoded webcam file in sync with real elapsed time is
-                    // to call writeBgraFrame() *at* that nominal cadence, duplicating
+                    // to feed the encoder *at* that nominal cadence, duplicating
                     // the latest available camera frame when the camera hasn't
                     // produced a newer one yet (VFR capture -> CFR encode resampling).
                     if (targetElapsedHns >= nextWebcamWriteDueHns) {
@@ -704,11 +704,16 @@ int main(int argc, char* argv[]) {
                         if (lastWebcamTimestampHns >= 0 && webcamTimestampHns <= lastWebcamTimestampHns) {
                             webcamTimestampHns = lastWebcamTimestampHns + nominalWebcamIntervalHns;
                         }
-                        if (!webcamEncoder.writeBgraFrame(webcamFrame, webcamTimestampHns)) {
+                        // Capture the sample under `mutex` (the frame copy), but
+                        // submit it to the sink writer OUTSIDE the mutex below
+                        // (issue #115) so a slow WriteSample can't starve the main
+                        // thread's stop-wait.
+                        hasWebcamSample = webcamEncoder.captureBgraSample(webcamFrame, webcamTimestampHns, webcamSample);
+                        if (!hasWebcamSample) {
                             encodeFailed = true;
                             control.stopRequested = true;
                             control.cv.notify_all();
-                            return;
+                            break;
                         }
                         lastWebcamTimestampHns = webcamTimestampHns;
                         nextWebcamWriteDueHns += nominalWebcamIntervalHns;
