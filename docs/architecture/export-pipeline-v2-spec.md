@@ -15,7 +15,7 @@ Scope: the `.axcut` (AI‑edition) export path only. The legacy `components/vide
 
 ### Constraints
 - **The app is MIT and must stay MIT.** No GPL component may end up in what we ship (§7.2).
-- **Windows + macOS + Linux**, x64 and arm64 (Apple Silicon). No platform gets a degraded export.
+- **Windows + macOS + Linux**, x64 and arm64 (Apple Silicon). **No platform gets a degraded export.** Native encode ships on all three. *(Etienne, 2026‑07‑16 — see the rejected option below.)*
 - Must degrade gracefully where no hardware encoder exists (→ WebCodecs fallback).
 - **Bundle size is not a constraint** *(Etienne, 2026‑07‑16)*: ~200 MB per platform is acceptable. Do not trade features, codec coverage or simplicity for bytes. Precedent: the app already ships native binaries (`wgc-capture.exe`, `cursor-sampler.exe`, `whisper.dll`, `ggml-*.dll`).
 
@@ -24,6 +24,7 @@ Scope: the `.axcut` (AI‑edition) export path only. The legacy `components/vide
 - Compositing multiple assets **simultaneously** (picture‑in‑picture of two screen recordings). The webcam overlay is the only simultaneous second source and stays as‑is.
 - ~~Replacing WebCodecs with a native ffmpeg binary as the primary encoder (WebCodecs already *is* the hardware path; native ffmpeg is only a fallback).~~ **Inverted — this is now Goal 2.** WebCodecs reaches the same silicon but at **8 fps vs 165 fps** for native ffmpeg (§3.1). It becomes the *fallback*; native ffmpeg is the primary encoder (§7).
 - Shipping a **GPL** ffmpeg build (x264/x265). We build LGPL only, so the app stays MIT (§7.2).
+- **Keeping WebCodecs as the primary encoder on macOS** because the gap is smaller there. **Rejected — do not reintroduce this.** It is a tempting argument and it will come back, so here it is with its rebuttal: WebCodecs *is* closer to native on VideoToolbox (~3.5× off, per [w3c/webcodecs#492](https://github.com/w3c/webcodecs/issues/492)) than on our Windows/AMD reference (~20×), and skipping the macOS ffmpeg build would dodge real work — BtbN publishes prebuilt LGPL binaries for Windows and Linux but **not macOS**, so macOS is the one platform we must build (and notarise) ourselves. We are still not doing it: "3.5× slower, but only on Macs" is a degraded export on a platform where our users edit, sold as an engineering convenience. Native encode ships on all three, or the plan is wrong.
 - Rewriting the compositor. The Canvas2D composite stays; only the encoder changes (§4.4).
 - GIF export changes beyond what falls out of the shared render plan.
 
@@ -289,7 +290,19 @@ Each phase is independently shippable and independently verifiable.
 ### Phase 3 — **Native ffmpeg encode (L) — the actual win** ← *next*
 Replace the WebCodecs encoder + JS muxer with a bundled LGPL ffmpeg subprocess (§7).
 
-1. **Build & bundle.** ffmpeg per platform, built **without** `--enable-gpl` and without `--enable-nonfree` — that is what makes it LGPL, and it is the *only* control that matters (those flags are what pull x264/x265; absent them ffmpeg simply won't build a GPL component, whatever else is enabled). **Binary size is not a constraint** (~200 MB/platform is fine), so do **not** strip for size — enable the codecs we may want next (HEVC, AV1, VP9, ProRes) so a future format doesn't need a rebuild + re‑qualification. Ship next to the existing native binaries in `electron/native/bin/<platform>/`. Add the LGPL notice + source offer.
+1. **Build & bundle.** ffmpeg per platform, built **without** `--enable-gpl` and without `--enable-nonfree` — that is what makes it LGPL, and it is the *only* control that matters (those flags are what pull x264/x265; absent them ffmpeg simply won't build a GPL component, whatever else is enabled). **Binary size is not a constraint** (~200 MB/platform is fine), so do **not** strip for size — enable the codecs we may want next (HEVC, AV1, VP9, ProRes) so a future format doesn't need a rebuild + re‑qualification. Ship next to the existing native binaries in `electron/native/bin/<platform>-<arch>/`. Add the LGPL notice + source offer.
+
+   **Where each platform's binary comes from:**
+
+   | platform | source | effort |
+   |---|---|---|
+   | Windows x64 + arm64 | **[BtbN prebuilt LGPL](https://github.com/BtbN/FFmpeg-Builds)** — daily builds, `h264_amf`/`h264_nvenc`/`h264_qsv` compiled in | just verify + vendor |
+   | Linux x64 + arm64 | **BtbN prebuilt LGPL** | just verify + vendor |
+   | **macOS x64 + arm64** | **we build it** — BtbN has no macOS target | **real work: build + sign + notarise** |
+
+   macOS is the one we own end‑to‑end, and skipping it is not on the table (§1 non‑goals). A VideoToolbox‑only macOS build is inherently x264‑free, which makes the LGPL gate easy there — the cost is the build/notarisation pipeline, not the licence.
+
+   **Verify every binary before vendoring it**, whatever the source: `ffmpeg -version` must print `License: LGPL version 2.1 or later`, its `configuration:` line must contain neither `--enable-gpl` nor `--enable-nonfree`, and `ffmpeg -encoders` must not list `libx264`/`libx265`. `isLgplBuild()` in `electron/media/ffmpegCapabilities.ts` encodes exactly this check — wire it into CI so a "just add x264" patch cannot silently relicense the app.
 2. **Capability probe** (§7.1), cached per machine.
 3. **Encode service** (main process): spawn ffmpeg, stream **BGRA** frames to stdin **honouring `drain`** (the measured 489–589 MB/s depends on it), parse progress from stderr, handle cancel (kill the tree) and non‑zero exit.
 4. **Renderer side:** after `renderFrame`, extract with `new VideoFrame(canvas).copyTo(buf)` (**not** `getImageData` — 1.43 ms vs 7.00, §4.4.1) and ship the frame to the service over a **credit window of 8**. Keep the WebCodecs path behind the capability probe as the fallback.
