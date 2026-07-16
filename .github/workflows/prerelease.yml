@@ -75,34 +75,43 @@ jobs:
           NEXT: ${{ steps.version.outputs.next }}
         run: node .github/scripts/release-milestone-migrate.mjs
 
-      - name: Bump package.json to pre-release version
-        env:
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
-        run: |
-          set -euo pipefail
-          sed -i -E "s|(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*(\")|\1${PRERELEASE}\2|" package.json
-          echo "package.json version:"
-          grep '"version"' package.json
-
-      - name: Commit package.json bump on a release branch
+      - name: Create or reuse the release branch and bump package.json
         env:
           TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
           PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          NEXT: ${{ steps.version.outputs.next }}
         run: |
           set -euo pipefail
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          # The release branch is FROZEN between RC cut and stable promotion. The bump
-          # commit lives on release/v${PRERELEASE} only; nothing is merged into main
-          # until promote.yml publishes the stable tag, so any features merged into
-          # main after this step are NOT in the RC build.
-          BRANCH="release/v${PRERELEASE}"
-          # Delete remote branch first so the push below is always fast-forward (idempotent on rerun).
-          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" ":${BRANCH}" 2>/dev/null || true
-          git checkout -b "$BRANCH"
+          # ONE release branch per STABLE version (release/vX.Y.Z), created at rc.1 and
+          # FROZEN until promote publishes the stable tag. Later RCs (rc.2, rc.3, ...) are
+          # cut from this same branch, so they carry the rc.1 snapshot plus any
+          # cherry-picked bugfixes and NOT whatever has landed on main since.
+          #
+          # The name must stay in sync with promote.yml, which resolves
+          # release/v${STABLE_VERSION}. Naming this branch release/v${PRERELEASE}
+          # (with the -rc.N suffix) breaks promote and makes every re-cut a fresh
+          # branch off main, which silently defeats the freeze.
+          BRANCH="release/v${NEXT}"
+          REMOTE="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          if git ls-remote --exit-code --heads origin "$BRANCH" >/dev/null 2>&1; then
+            # Re-cut (rc.2+): build on the frozen branch. Never delete it — it carries the
+            # cherry-picks that make this RC differ from the previous one.
+            echo "Reusing frozen release branch ${BRANCH}"
+            git fetch origin "$BRANCH"
+            git checkout -B "$BRANCH" "origin/${BRANCH}"
+          else
+            # First cut (rc.1): branch from the dispatched ref (main).
+            echo "Creating release branch ${BRANCH} from ${GITHUB_REF_NAME}"
+            git checkout -b "$BRANCH"
+          fi
+          sed -i -E "s|(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*(\")|\1${PRERELEASE}\2|" package.json
+          echo "package.json version:"
+          grep '"version"' package.json
           git add package.json
-          git commit -m "chore(release): bump to ${PRERELEASE} [skip ci]"
-          git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
+          git commit -m "chore(release): bump to ${PRERELEASE} [skip ci]" || echo "(version already at ${PRERELEASE})"
+          git push "$REMOTE" "$BRANCH"
 
       - name: Push RC tag on the release branch
         env:
@@ -111,10 +120,10 @@ jobs:
           # Note: GITHUB_TOKEN tag pushes do NOT trigger build.yml in this org's setup,
           # so we explicitly trigger it via gh workflow run right after.
           RC_TAG: ${{ steps.version.outputs.rc_tag }}
-          PRERELEASE: ${{ steps.version.outputs.prerelease }}
+          NEXT: ${{ steps.version.outputs.next }}
         run: |
           set -euo pipefail
-          BRANCH="release/v${PRERELEASE}"
+          BRANCH="release/v${NEXT}"
           git fetch origin "$BRANCH"
           git checkout "$BRANCH"
           git reset --hard "origin/${BRANCH}"
