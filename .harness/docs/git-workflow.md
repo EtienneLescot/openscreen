@@ -57,8 +57,8 @@ The workflow:
 
 1. Computes the next SemVer from `package.json` + `bump`, builds `vX.Y.Z-rc.N`.
 2. Migrates every issue/PR in the rolling `Next Release` milestone into a fresh `vX.Y.Z` milestone. Each migrated item gets a hidden marker comment so re-running is idempotent.
-3. Commits `package.json` → `X.Y.Z-rc.N` on a fresh branch `release/vX.Y.Z-rc.N`. **The branch is NOT merged into `main`** — it stays frozen so the RC build only contains what was on `main` at the moment of cut.
-4. Pushes the tag `vX.Y.Z-rc.N` at the release branch tip. This triggers `build.yml`, which publishes a **GitHub pre-release** (badged as such, does not become "Latest"). RC tags are signed and notarized like stable ones, so testers do not have to clear the quarantine attribute by hand.
+3. Creates `release/vX.Y.Z` (at rc.1) or reuses it (rc.2+), and commits `package.json` → `X.Y.Z-rc.N` there. **The branch is NOT merged into `main`** — it stays frozen, so the RC contains the cut snapshot plus cherry-picks only. The branch is named for the **stable** version, with no `-rc.N` suffix, because `promote.yml` has to resolve the same ref.
+4. Pushes the tag `vX.Y.Z-rc.N` at the release branch tip, then **explicitly dispatches `build.yml` with `--ref` pinned to that tag**, which publishes a **GitHub pre-release** (badged as such, does not become "Latest"). Two reasons the dispatch is explicit and pinned: a `GITHUB_TOKEN` tag push does not fire `build.yml`'s `push:` trigger, and the build must check out the *tag* — `main` still carries the previous stable version and would fail the publish step's version guard. RC tags are signed and notarized like stable ones, so testers do not have to clear the quarantine attribute by hand.
 5. Posts in `#rc-testing` on Discord with the download link.
 
 Tier 3 (homebrew/winget/nix/aur) does **not** run on pre-releases — they're already gated on `!prerelease`.
@@ -67,9 +67,9 @@ Tier 3 (homebrew/winget/nix/aur) does **not** run on pre-releases — they're al
 
 Pin the pre-release link in `#rc-testing`. Get the maintainer team + a few early adopters to install and smoke-test.
 
-**Between RC cut and promote**, the only thing that may happen on `release/vX.Y.Z-rc.N` is **cherry-picks of bugfixes** that address problems discovered in the RC. Features, refactors, and CI/docs changes are **not** applied to the release branch — they live on `main` and ship in the next release cycle.
+**Between RC cut and promote**, the only thing that may happen on `release/vX.Y.Z` is **cherry-picks of bugfixes** that address problems discovered in the RC. Features, refactors, and CI/docs changes are **not** applied to the release branch — they live on `main` and ship in the next release cycle.
 
-If the RC has a regression, fix forward on `main`, then **cherry-pick the fix commit onto the release branch** with `git cherry-pick <sha>`, then re-cut as `vX.Y.Z-rc.(N+1)` (the rerun of `prerelease.yml` re-tags the release branch tip; no rebase required because the branch is frozen). The previous RC is auto-superseded by GitHub.
+If the RC has a regression, fix forward on `main`, then **cherry-pick the fix commit onto the release branch** with `git cherry-pick <sha>`, then re-cut as `vX.Y.Z-rc.(N+1)` (the rerun of `prerelease.yml` reuses the frozen branch and re-tags its tip; no rebase required). The previous RC is auto-superseded by GitHub.
 
 ### Step 3: promote to stable
 
@@ -82,8 +82,8 @@ The workflow:
 
 1. Validates the tag matches `^vX.Y.Z-(rc|beta|alpha)\.N$`.
 2. Closes the `vX.Y.Z` milestone (snapshotting it for the release notes).
-3. Checks out `release/vX.Y.Z-rc.N` (the frozen branch), strips `-rc.N` from `package.json`, and commits the bump there. The stable tag points at this tip — the released code is the exact RC + cherry-picks.
-4. Pushes the tag `vX.Y.Z` and triggers `build.yml` (full notarization). The `release: published` event fires Tier 3 (homebrew/winget/nix/aur) thanks to `OPENSCREEN_RELEASE_TOKEN`.
+3. Checks out `release/vX.Y.Z` (the frozen branch), strips `-rc.N` from `package.json`, and commits the bump there. The stable tag points at this tip — the released code is the exact RC + cherry-picks.
+4. Pushes the tag `vX.Y.Z` and dispatches `build.yml` pinned to that tag (full notarization). The `release: published` event fires Tier 3 (homebrew/winget/nix/aur) thanks to `OPENSCREEN_RELEASE_TOKEN`.
 5. Opens a **release-sync PR** (e.g. `release/v1.6.0-sync → main`) that brings `main` into line with the released snapshot. Rebase-merged via PAT (EtienneLescot is a ruleset bypass actor).
 6. Posts in `#announcements` on Discord with the release notes + a "Closed issues in this release" list pulled from the milestone.
 
@@ -91,20 +91,21 @@ The release branch itself **stays around** indefinitely — it is the frozen his
 
 ### Release branches (the contract)
 
-Every released version has a corresponding **frozen branch**:
+Every released version has **exactly one frozen branch**, named for the stable version, living from the first RC cut onward:
 
 ```
-release/vX.Y.Z-rc.N    exists from RC cut until promote finishes
+release/vX.Y.Z         created at rc.1, frozen through promote, kept for backports
 release/vX.Y.Z-sync    ephemeral, created by promote to merge into main
-release/vX.Y.Z         stable snapshot post-promote (kept for backports)
 ```
+
+The name carries **no `-rc.N` suffix**. `prerelease.yml` and `promote.yml` must resolve the same ref, and every RC of a version re-cuts from this one branch.
 
 Key rules:
 
-1. **`prerelease.yml` creates the branch.** Nothing else pushes to it except the cherry-pick workflow during the RC window.
+1. **`prerelease.yml` creates the branch at rc.1 and reuses it for later RCs.** It must never delete or recreate it: that would drop the cherry-picks and silently re-cut from `main`, which defeats the freeze this contract exists to guarantee.
 2. **`promote.yml` is the only writer** that turns `-rc.N` into the stable version on the branch.
 3. **`main` is never frozen.** Develop as usual. The release branch is the freeze.
-4. **Cherry-picks during the RC window** are committed manually by a maintainer (`git checkout release/vX.Y.Z-rc.N && git cherry-pick <sha>`), or rerun `prerelease.yml` to re-tag the branch tip with the same RC version (then bump rc_number).
+4. **Cherry-picks during the RC window** are committed manually by a maintainer (`git checkout release/vX.Y.Z && git cherry-pick <sha>`), then rerun `prerelease.yml` with the next `rc_number` to re-tag the branch tip.
 
 This exists because of the v1.6.0 incident (2026-07-05): the original `promote.yml` checked out `main`, so the stable tag captured the post-RC tip of `main` rather than the RC snapshot. Twenty-three commits (Tiptap, NotesWindow, an in-recorder lint button, AI handoff) ended up in v1.6.0 without ever being in v1.6.0-rc.1. The re-release of v1.6.0 on 2026-07-05 used `release/v1.6.0` and cherry-picked only the truly safe commits.
 
@@ -114,21 +115,21 @@ If the dispatch UI is unavailable, the workflow still works from a shell:
 
 ```bash
 # Cut RC (skips milestone migration and Discord announce)
-git checkout -b release/v1.5.0-rc.1 main
+git checkout -b release/v1.5.0 main    # rc.2+: git checkout release/v1.5.0 instead
 sed -i -E 's|("version"[[:space:]]*:[[:space:]]*")[^"]*(")|\11.5.0-rc.1\2|' package.json
 git add package.json && git commit -m "chore(release): bump to 1.5.0-rc.1 [skip ci]"
-git push origin release/v1.5.0-rc.1
-git push origin v1.5.0-rc.1
+git push origin release/v1.5.0
+git tag v1.5.0-rc.1 && git push origin v1.5.0-rc.1
 
 # Promote (skips milestone close and Discord announce)
-git checkout release/v1.5.0-rc.1
+git checkout release/v1.5.0
 sed -i -E 's|("version"[[:space:]]*:[[:space:]]*")[^"]*(")|\11.5.0\2|' package.json
 git commit -am "chore(release): bump to 1.5.0 [skip ci]"
 git push origin release/v1.5.0
-git push origin v1.5.0
+git tag v1.5.0 && git push origin v1.5.0
 ```
 
-The pipeline can't tell the difference between a manually-pushed tag and a workflow-pushed one — same `build.yml` runs either way.
+A tag pushed manually with your own credentials **does** fire `build.yml`'s `push:` trigger, so the release publishes on its own. (The workflows push tags with `GITHUB_TOKEN`, which does *not* fire it — that's why they dispatch `build.yml` explicitly.) Either way the same `build.yml` builds and publishes.
 
 ### Backports / patch on a previous line
 

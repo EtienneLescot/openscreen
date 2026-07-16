@@ -14,6 +14,15 @@ OpenScreen is a free, open-source screen recorder and video editor (Electron + R
 - Format:       `npm run format` (Biome, tabs, double quotes, 100-col)
 - i18n check:   `npm run i18n:check` (validates the 13 locale files)
 
+**Use npm, not bun/pnpm/yarn/Deno.** Not a style preference: the native Swift (macOS) and C++ (Windows) capture helpers are rebuilt against Electron's ABI by electron-builder + `@electron/rebuild` resolving `package-lock.json`, and other package managers break that path. `packageManager` + `engines` in `package.json` pin the versions; CI installs with `npm ci`.
+
+## Development principles
+
+- Prefer the simplest solution that stays readable. No abstraction for hypothetical needs (YAGNI).
+- **No mandated app-stack choice yet.** Contributors pick their own state/data library. Don't impose one across the codebase and don't refactor existing code onto a different one — keep each addition self-contained and consistent within its own module. A single choice may be enforced later.
+- Don't optimize for line count. A dense one-liner that hides control flow is worse than the explicit version.
+- Match the surrounding code's idiom rather than introducing a new pattern next to it.
+
 ## Project layout
 
 - `src/` — React app: UI, editor components, timeline, i18n, captioning/cursor/exporter libs
@@ -118,15 +127,13 @@ Unit/browser tests can't exercise real capture (native screen recording, a physi
 
 ## Release flow
 
-Two `workflow_dispatch` workflows cut a release with a pre-release candidate (RC) first, then promote to stable. Trunk-based, no extra branch. Full operational guide in `.harness/docs/git-workflow.md` § Release flow.
+Two `workflow_dispatch` workflows: cut an RC, then promote it to stable. **Full operational guide, branch contract, cherry-pick rules, and manual fallback: `.harness/docs/git-workflow.md` § Release flow.** Read it before touching a release.
 
-- **Cut RC**: Actions → "Cut a release candidate" → Run workflow. Inputs: `bump` (patch|minor|major), `rc_number` (default 1), optional `target_version` override. Snaps issues out of the rolling `Next Release` milestone into a versioned `vX.Y.Z` milestone, bumps `package.json`, pushes the `vX.Y.Z-rc.N` tag, which triggers the existing `build.yml` to publish a GitHub pre-release. RCs are notarized like stable releases, which also rehearses the credentials before the promotion build depends on them. Notifies `#rc-testing` on Discord.
-- **Promote RC**: Actions → "Promote RC to stable release" → Run workflow. Input: `rc_tag` (e.g. `v1.5.0-rc.2`), optional `release_notes_extra`. Closes the `vX.Y.Z` milestone, strips `-rc.N` from `package.json`, pushes `vX.Y.Z` tag, which triggers `build.yml` to publish a stable release (full notarization, Tier 3 homebrew/winget/nix/aur fires). Notifies `#announcements` on Discord.
-- **Manual fallback**: `git tag vX.Y.Z-rc.N <sha> && git push origin vX.Y.Z-rc.N` does the same as Cut RC (minus the milestone migration and Discord announce) — useful for emergency cuts.
+- **Cut RC**: Actions → "Cut a release candidate". Inputs: `bump` (patch|minor|major), `rc_number`, optional `target_version`. Migrates the rolling `Next Release` milestone into a versioned one, creates or reuses `release/vX.Y.Z`, bumps `package.json`, pushes `vX.Y.Z-rc.N`, then dispatches `build.yml` **pinned to that tag** to publish a GitHub pre-release. RCs are notarized like stable releases, which rehearses the credentials before the promotion build depends on them. Announces in `#rc-testing`.
+- **Promote**: Actions → "Promote RC to stable release". Input: `rc_tag`. Closes the milestone, strips `-rc.N` on the same branch, tags `vX.Y.Z`, publishes a stable release (notarized; Tier 3 homebrew/winget/nix/aur fires), and opens a `release/vX.Y.Z-sync → main` PR. Announces in `#announcements`.
+- **One release branch per stable version** (`release/vX.Y.Z`), created at rc.1 and **frozen** until promote: only cherry-picked bugfixes land on it, so anything merged to `main` after the cut ships in the next cycle. Later RCs re-cut from that same branch.
 
-Both workflows require the `OPENSCREEN_RELEASE_TOKEN` secret (a fine-grained PAT with `contents: write` + `issues: write`). This is the standard fix for `release: published` not triggering downstream workflows when the release is created by `GITHUB_TOKEN`. See `technical-documentation/engineering/release-and-secrets.md`.
-
-**Release branches freeze the build between cut and promote.** Every RC cut creates `release/vX.Y.Z-rc.N`. The branch is *not* merged into `main` until the stable tag is published; only cherry-picks of bugfixes land on the release branch during the RC window. The stable tag points at the branch tip (RC + cherry-picks), then `promote.yml` opens a `release/vX.Y.Z-sync → main` PR to bring main into line. This contract exists because of the v1.6.0 incident (2026-07-05) where the original promote workflow tagged `main` instead of the RC snapshot, causing 23 unreleased commits to ship in `v1.6.0`. Full rules in `.harness/docs/git-workflow.md` § Release branches.
+Both workflows need the `OPENSCREEN_RELEASE_TOKEN` secret (see `technical-documentation/engineering/release-and-secrets.md`); `GITHUB_TOKEN`-created releases don't fire the downstream `release: published` workflows.
 
 ## Security
 
@@ -140,4 +147,4 @@ Both workflows require the `OPENSCREEN_RELEASE_TOKEN` secret (a fine-grained PAT
 - **Pixi.js v8** is the rendering engine. Filters come from `pixi-filters` and `@pixi/filter-drop-shadow`. GSAP + `motion` for animation.
 - **i18n**: 13 locales in `src/i18n/locales/<locale>/` (e.g. `src/i18n/locales/en/settings.json`). The `i18n:check` script validates them — run it after touching translation files.
 - **Build pipeline**: `npm run build` is full electron-builder. For iterating on renderer only, use `npm run build-vite` (Vite + tsc, no packaging).
-- **README tone**: the project is explicitly "not production-grade" and free forever — don't add paywalls, premium tiers, or upsell language to UI/copy.
+- **Product constraints**: the project is free forever and explicitly "not production-grade". Don't add paywalls, premium tiers, or feature-gating logic, and don't add upsell language to the README or UI copy. This is a hard constraint, not a judgement call.
