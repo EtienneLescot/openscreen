@@ -30,7 +30,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	exportCapabilities: () =>
 		ipcRenderer.invoke("export:capabilities") as Promise<{ encoder: string }>,
 	exportStart: (req: unknown) =>
-		ipcRenderer.invoke("export:start", req) as Promise<{ sessionId: string; encoder: string }>,
+		ipcRenderer.invoke("export:start", req) as Promise<{
+			sessionId: string;
+			encoder: string;
+			outputPath: string;
+		}>,
 	exportWriteFrame: (sessionId: string, frame: ArrayBuffer) => {
 		// send() structured-clones, i.e. copies the frame. That is not an oversight
 		// and it is not fixable here: Electron's transfer list takes MessagePort[]
@@ -49,6 +53,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.invoke("export:finish", sessionId) as Promise<{ outputPath: string }>,
 	exportCancel: (sessionId: string) =>
 		ipcRenderer.invoke("export:cancel", sessionId) as Promise<void>,
+	/** Export bench only (--bench=): tells main the run is over so it can quit. */
+	benchFinished: () => ipcRenderer.invoke("bench:finished") as Promise<void>,
 	invokeNativeBridge: <TData>(request: NativeBridgeRequest) => {
 		return ipcRenderer.invoke(NATIVE_BRIDGE_CHANNEL, request) as Promise<TData>;
 	},

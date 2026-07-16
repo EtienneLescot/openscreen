@@ -225,8 +225,13 @@ export function createHudOverlayWindow(): BrowserWindow {
 /**
  * Main editor window. Starts maximised with a hidden title bar on macOS; not
  * always-on-top and appears in the taskbar/dock.
+ *
+ * `query` overrides the renderer's routing params. The export bench passes
+ * windowType=bench so it runs under THIS window's webPreferences — same
+ * preload, same sandbox, same backgroundThrottling:false — because a bench that
+ * configures its own window measures a different app than the one we ship.
  */
-export function createEditorWindow(): BrowserWindow {
+export function createEditorWindow(query: Record<string, string> = {}): BrowserWindow {
 	const isMac = process.platform === "darwin";
 
 	const win = new BrowserWindow({
@@ -281,12 +286,11 @@ export function createEditorWindow(): BrowserWindow {
 		win?.webContents.send("main-process-message", new Date().toLocaleString());
 	});
 
+	const routing = { windowType: "editor", ...query };
 	if (VITE_DEV_SERVER_URL) {
-		win.loadURL(VITE_DEV_SERVER_URL + "?windowType=editor");
+		win.loadURL(`${VITE_DEV_SERVER_URL}?${new URLSearchParams(routing).toString()}`);
 	} else {
-		win.loadFile(path.join(RENDERER_DIST, "index.html"), {
-			query: { windowType: "editor" },
-		});
+		win.loadFile(path.join(RENDERER_DIST, "index.html"), { query: routing });
 	}
 
 	return win;

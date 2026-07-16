@@ -651,5 +651,19 @@ appReady?.then(async () => {
 
 	await loadAndRegisterGlobalShortcut(showMainWindow);
 
+	// --bench=<query>: run the export bench instead of the app. Opens the real
+	// editor window (same webPreferences, same preload) pointed at the bench
+	// entry, and quits when it reports back. See src/bench/runBench.ts.
+	const benchArg = process.argv.find((a) => a.startsWith("--bench="));
+	if (benchArg) {
+		ipcMain.handle("bench:finished", () => {
+			// Let the reply reach the renderer before the process goes away.
+			setTimeout(() => app.exit(0), 100);
+		});
+		const query = Object.fromEntries(new URLSearchParams(benchArg.slice("--bench=".length)));
+		mainWindow = createEditorWindow({ ...query, windowType: "bench" });
+		return;
+	}
+
 	createWindow();
 });

@@ -77,6 +77,29 @@ import {
 import { createThreeDPass, type ThreeDPass } from "./threeDPass";
 import { drawWebcamFrameImage } from "./webcamFrameDrawing";
 
+/**
+ * Ask for CPU-backed 2D canvases (`willReadFrequently`) outside Linux.
+ *
+ * The default is GPU-backed, which makes compositing cheap and reading back
+ * expensive. That is the right trade for WebCodecs, which encodes straight from
+ * the GPU texture and never descends. It is the wrong trade for the native
+ * encoder, which needs the pixels on the CPU for EVERY frame — there, the
+ * readback measured 54-87ms/frame and became ~75% of the loop.
+ *
+ * Read at runtime so one app session can measure both settings:
+ *   localStorage.setItem("openscreen.readFrequently", "1")
+ *
+ * Temporary scaffold: once the native path is the only path, this becomes a
+ * plain constant rather than a question.
+ */
+function cpuCanvasRequested(): boolean {
+	try {
+		return localStorage.getItem("openscreen.readFrequently") === "1";
+	} catch {
+		return false;
+	}
+}
+
 interface FrameRenderConfig {
 	width: number;
 	height: number;
@@ -171,10 +194,13 @@ export class FrameRenderer {
 	private zoomSpringState = createZoomSpringState();
 	private prevTargetProgress = 0;
 	private isLinux = false;
+	/** CPU-backed 2D canvases — see cpuCanvasRequested(). Fixed per instance. */
+	private cpuCanvas = false;
 
 	constructor(config: FrameRenderConfig) {
 		this.config = config;
 		this.isLinux = config.platform === "linux";
+		this.cpuCanvas = this.isLinux || cpuCanvasRequested();
 		this.animationState = {
 			scale: 1,
 			focusX: DEFAULT_FOCUS.cx,
@@ -282,14 +308,24 @@ export class FrameRenderer {
 		this.compositeCanvas.width = this.config.width;
 		this.compositeCanvas.height = this.config.height;
 
-		// On Linux getImageData() runs frequently, so hint frequent CPU readback
+		// Hint frequent CPU readback: Linux exports via getImageData every frame,
+		// and so does the native encoder path (see cpuCanvasRequested).
 		this.compositeCtx = this.compositeCanvas.getContext("2d", {
-			willReadFrequently: this.isLinux,
+			willReadFrequently: this.cpuCanvas,
 		});
 
 		if (!this.compositeCtx) {
 			throw new Error("Failed to get 2D context for composite canvas");
 		}
+
+		// willReadFrequently is a HINT: report what Chromium actually granted, not
+		// what we asked for. An arm that silently no-ops would otherwise read as
+		// "the lever does not help" when it means "the lever was never pulled".
+		console.warn(
+			`[export perf] canvas requested willReadFrequently=${this.cpuCanvas} granted=${
+				this.compositeCtx.getContextAttributes?.()?.willReadFrequently
+			}`,
+		);
 
 		this.rasterCanvas = document.createElement("canvas");
 		this.rasterCanvas.width = this.config.width;
@@ -304,8 +340,11 @@ export class FrameRenderer {
 		this.foregroundCanvas = document.createElement("canvas");
 		this.foregroundCanvas.width = this.config.width;
 		this.foregroundCanvas.height = this.config.height;
+		// Flips WITH the composite canvas, never against it: a GPU-backed
+		// foreground drawn onto a CPU-backed composite would force its own
+		// readback on every drawImage — worse than either setting alone.
 		this.foregroundCtx = this.foregroundCanvas.getContext("2d", {
-			willReadFrequently: this.isLinux,
+			willReadFrequently: this.cpuCanvas,
 		});
 		if (!this.foregroundCtx) {
 			throw new Error("Failed to get 2D context for foreground canvas");
