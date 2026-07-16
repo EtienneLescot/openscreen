@@ -1,6 +1,20 @@
 # Export Pipeline v2 — Multi‑Asset Rendering + Performance
 
 Status: **Revised 2026‑07‑16** — multi‑asset shipped; the **perf half was rewritten after measurement disproved its central premise**. Read §3.1 first: the bottleneck is the WebCodecs API (~90 % of wall), not the readback (0.1 %). The plan is now native ffmpeg encode (§7), not GPU‑resident compositing (§4.4, cancelled).
+
+> ⛔ **The perf half is refuted again — do not implement Phase 3 or Phase 4 as written.**
+> Native ffmpeg fed from the renderer was built and measured end‑to‑end: it is **2.1× SLOWER** than
+> WebCodecs (38.5 s → 80.8 s on 1418 frames, 1080p60, spread 3–4 %). ffmpeg consumes frames *faster*
+> (`encodeWait` −29 %, `flush` −94 %) — but it needs the pixels in RAM, and that descent costs
+> 38.9 ms/frame that WebCodecs never pays because it encodes straight off the GPU texture. §3.1's
+> "readback is 0.1 %" holds **only while nothing forces the descent**, and feeding a native encoder
+> is exactly what forces it. Phase 4 (NV12) cannot rescue it either — best case is parity.
+>
+> **The wall is the descent, not the crossing.** With the crossing at *exactly zero* (frames
+> descended then discarded: no IPC, no ffmpeg, no muxer) the pipeline still runs 40.5 fps vs
+> WebCodecs' 44.0 — and WebCodecs is also writing the file. That ceiling excludes option A′
+> (`sandbox: false`), shared memory and zero‑copy transfer **without building any of them**.
+> **Full evidence, method and consequences: [`export-native-encode-measurement.md`](./export-native-encode-measurement.md) (2026‑07‑16).**
 Owners: ai-edition editor team
 Scope: the `.axcut` (AI‑edition) export path only. The legacy `components/video-editor` exporter is out of scope.
 
@@ -287,7 +301,16 @@ Each phase is independently shippable and independently verifiable.
 - GPU‑resident composite: built, measured, **reverted** (§4.4) — target was 2.3 % of wall.
 - Worker + OffscreenCanvas: **demoted to Phase 5**. It buys UI responsiveness, not throughput, and is not worth its portability risk (R2) until the encoder is fixed.
 
-### Phase 3 — **Native ffmpeg encode (L) — the actual win** ← *next*
+### Phase 3 — ~~Native ffmpeg encode (L) — the actual win~~ — ❌ **REFUTED (2026‑07‑16)**
+> Built and measured end‑to‑end: **2.1× slower** than WebCodecs. The encoder half worked exactly as
+> designed (`encodeWait` −29 %, `flush` −94 %); the frame's descent to RAM — which WebCodecs never
+> performs — costs 38.9 ms/frame and swamps it. See
+> [`export-native-encode-measurement.md`](./export-native-encode-measurement.md).
+> A native encoder only pays if the frame never descends, i.e. compositing and encoding on one
+> device: [`native-core-tauri-spec.md`](./native-core-tauri-spec.md) (option C), not this.
+> The reusable parts (`ffmpegCapabilities` smoke‑tested election, `ffmpegEncodeSession`, the pinned
+> LGPL binary + `fetch-ffmpeg.mjs`) all survive — option C still needs a native H.264 encoder.
+
 Replace the WebCodecs encoder + JS muxer with a bundled LGPL ffmpeg subprocess (§7).
 
 1. **Build & bundle.** ffmpeg per platform, built **without** `--enable-gpl` and without `--enable-nonfree` — that is what makes it LGPL, and it is the *only* control that matters (those flags are what pull x264/x265; absent them ffmpeg simply won't build a GPL component, whatever else is enabled). **Binary size is not a constraint** (~200 MB/platform is fine), so do **not** strip for size — enable the codecs we may want next (HEVC, AV1, VP9, ProRes) so a future format doesn't need a rebuild + re‑qualification. Ship next to the existing native binaries in `electron/native/bin/<platform>-<arch>/`. Add the LGPL notice + source offer.
@@ -310,7 +333,15 @@ Replace the WebCodecs encoder + JS muxer with a bundled LGPL ffmpeg subprocess (
 
 - **Exit criteria:** the frame pipeline reaches **≥30 fps** (measured ceiling 34, §4.4.1) vs 8 today with frame‑diff parity vs the current output and A/V still locked; WebCodecs fallback still produces a correct file when no hardware encoder is present; cancel leaves no orphan process.
 
-### Phase 4 — Halve the crossing: GPU BGRA→NV12 packing (M, measure‑gated)
+### Phase 4 — ~~Halve the crossing: GPU BGRA→NV12 packing (M, measure‑gated)~~ — ❌ **CANNOT RESCUE PHASE 3 (2026‑07‑16)**
+> The 34→81 fps figures below came from a **bench harness, not the app**: it materialised frames once
+> and then timed the pipe, so it never priced the per‑frame descent. Measured in the real pipeline,
+> that descent is **6.7 ms fixed + 3.9 ms/MB** (257 MB/s marginal — a sync, not a copy). NV12
+> therefore halves the readback to ~18.8 ms/frame and lands at **29.5 fps** projected, vs **36.9 fps
+> measured for WebCodecs today**; even assuming the IPC scales perfectly it only reaches parity.
+> Halving the bytes is real and still not enough. See
+> [`export-native-encode-measurement.md`](./export-native-encode-measurement.md) §4.
+
 - The renderer→main crossing is the bottleneck at **34 fps**, purely because Chromium only hands us **7.9 MB BGRA** (it refuses NV12, §4.4.1) and Electron cannot transfer buffers zero‑copy. The crossing is **bandwidth‑bound** — measured 387 MB/s at 3.0 MB/frame vs 418 MB/s at 7.9 MB/frame — so halving the bytes really does double the rate: NV12 measures **81 fps** end‑to‑end (≈10× vs today).
 - **Gate:** GL‑canvas readback measured 8× slower than 2D (11.23 vs 1.43 ms) — the packing must not reintroduce that. Prototype and measure the packing + readback together before committing.
 

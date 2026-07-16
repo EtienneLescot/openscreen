@@ -22,7 +22,15 @@ import { type FfmpegEncodeSession, startFfmpegEncodeSession } from "./ffmpegEnco
  */
 
 export interface StartExportRequest {
-	outputPath: string;
+	/**
+	 * Omit to have main write to a temp file and return the path.
+	 *
+	 * The renderer is sandboxed and does not get to name a path main will write
+	 * to — that would hand a compromised renderer an arbitrary file write. A
+	 * user-chosen destination must come from a main-side save dialog, and the
+	 * finished temp file is moved there.
+	 */
+	outputPath?: string;
 	width: number;
 	height: number;
 	frameRate: number;
@@ -35,6 +43,8 @@ export interface StartExportRequest {
 export interface StartExportResult {
 	sessionId: string;
 	encoder: VideoEncoderId;
+	/** Where ffmpeg is actually writing — main's choice when the caller omitted one. */
+	outputPath: string;
 }
 
 /** Resolved once per process: the probe costs a few spawns, the answer never changes. */
@@ -130,6 +140,8 @@ let nextId = 1;
 export async function startExport(req: StartExportRequest): Promise<StartExportResult> {
 	const { ffmpegPath, encoder } = await resolveExportCapabilities();
 
+	const sessionId = `export-${nextId++}`;
+
 	let audioPath: string | null = null;
 	let tmpDir: string | null = null;
 	if (req.audio && req.audio.pcm.byteLength > 0) {
@@ -140,10 +152,14 @@ export async function startExport(req: StartExportRequest): Promise<StartExportR
 		await fs.writeFile(audioPath, Buffer.from(req.audio.pcm));
 	}
 
+	// Deliberately NOT inside tmpDir: dispose() wipes that, and the output has to
+	// outlive the session so it can be moved to the user's destination.
+	const outputPath = req.outputPath ?? path.join(os.tmpdir(), `openscreen-${sessionId}.mp4`);
+
 	const session = startFfmpegEncodeSession({
 		ffmpegPath,
 		encoder,
-		outputPath: req.outputPath,
+		outputPath,
 		width: req.width,
 		height: req.height,
 		frameRate: req.frameRate,
@@ -160,9 +176,8 @@ export async function startExport(req: StartExportRequest): Promise<StartExportR
 				: undefined,
 	});
 
-	const sessionId = `export-${nextId++}`;
 	sessions.set(sessionId, { session, audioPath, tmpDir });
-	return { sessionId, encoder };
+	return { sessionId, encoder, outputPath };
 }
 
 function requireSession(sessionId: string): LiveSession {
