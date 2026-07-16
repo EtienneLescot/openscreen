@@ -16,9 +16,11 @@ import type { CursorRecordingData } from "@/native/contracts";
 import { getPlatform } from "@/utils/platformUtils";
 import { AudioProcessor, downmixPlanarChannelsForExport } from "./audioEncoder";
 import { WsolaTimeStretcher } from "./audioTimeStretch";
+import { CanvasFrameExtractor } from "./frameExtract";
 import { FrameRenderer } from "./frameRenderer";
 import { materializeLocalSourceFile, releaseLocalSourceFile } from "./localSourceFile";
 import { VideoMuxer, videoCodecFamily } from "./muxer";
+import { NativeFrameSink, type NativeSinkApi } from "./nativeFrameSink";
 import { StageTimings } from "./perfTimings";
 import { MAX_IN_MEMORY_SOURCE_BYTES } from "./sourceFileLimits";
 import { StreamingVideoDecoder } from "./streamingDecoder";
@@ -63,7 +65,51 @@ export async function waitForEncoderQueueSpace(params: {
 // D4 diagnostic: measure the ENCODER ALONE (synthetic frames, no decode/render)
 // to separate platform encoder throughput from our pipeline's feeding path.
 // Temporary — flip off/remove once the bottleneck is identified.
-const ENCODER_PROBE = true;
+const ENCODER_PROBE = false;
+
+/**
+ * Route frames to the bundled native ffmpeg instead of WebCodecs.
+ *
+ * Read at runtime, from localStorage, ON PURPOSE: it lets one app session export
+ * the same timeline both ways, so the A/B compares two runs that share a source,
+ * a plan, a machine and a thermal state. A build-time constant would compare two
+ * different sessions and invite us to believe the difference.
+ *
+ *   localStorage.setItem("openscreen.nativeEncode", "1")
+ *
+ * Temporary scaffold: WebCodecs goes away once the numbers are in.
+ */
+function nativeEncodeEnabled(): boolean {
+	try {
+		return localStorage.getItem("openscreen.nativeEncode") === "1";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Diagnostic: extract every frame to RAM, then throw it away.
+ *
+ * Produces no video — it measures the CEILING of any architecture that gets
+ * pixels to the CPU, by pricing the descent with the crossing set to exactly
+ * zero. That bounds every "remove the crossing" proposal at once — option A'
+ * (sandbox:false, spawning ffmpeg from the renderer), shared memory, a
+ * transferable that Electron won't transfer — without building any of them,
+ * because none of them can avoid the readback: ffmpeg needs the pixels in RAM
+ * whoever spawns it.
+ *
+ * If this ceiling sits below the WebCodecs arm, every such proposal is dead and
+ * the only way out is not descending at all (native-core-tauri-spec.md).
+ *
+ *   localStorage.setItem("openscreen.dropFrames", "1")
+ */
+function dropFramesEnabled(): boolean {
+	try {
+		return localStorage.getItem("openscreen.dropFrames") === "1";
+	} catch {
+		return false;
+	}
+}
 
 async function probeOneEncoder(opts: {
 	label: string;
@@ -672,6 +718,7 @@ export class VideoExporter {
 	private renderer: FrameRenderer | null = null;
 	private encoder: VideoEncoder | null = null;
 	private muxer: VideoMuxer | null = null;
+	private nativeSink: NativeFrameSink | null = null;
 	private audioProcessor: AudioProcessor | null = null;
 	private webcamDecoder: StreamingVideoDecoder | null = null;
 	private cancelled = false;
@@ -1123,7 +1170,39 @@ export class VideoExporter {
 		this.renderer = renderer;
 		await renderer.initialize();
 
-		await this.initializeEncoder(encoderPreference);
+		// --- Frame sink: native ffmpeg, or the WebCodecs path it is replacing ---
+		const api = window.electronAPI as unknown as NativeSinkApi | undefined;
+		const useNative = nativeEncodeEnabled() && typeof api?.exportStart === "function";
+		// Ceiling diagnostic: extract but never ship, and start no ffmpeg. The
+		// export produces NO FILE — it exists to price the descent alone.
+		const dropFrames = useNative && dropFramesEnabled();
+		let sink: NativeFrameSink | null = null;
+		let extractor: CanvasFrameExtractor | null = null;
+		if (useNative && api) {
+			extractor = new CanvasFrameExtractor(this.config.width, this.config.height);
+			if (dropFrames) {
+				console.warn("[export perf] readback ceiling: extract and discard, NO FILE WRITTEN");
+			} else {
+				sink = await NativeFrameSink.start(
+					{
+						width: this.config.width,
+						height: this.config.height,
+						frameRate: this.config.frameRate,
+						// Same field the WebCodecs encoder is configured from, so the A/B
+						// compares two runs at one bitrate.
+						bitrate: this.config.bitrate,
+						// BGRA is all Chromium will copy out of a canvas; NV12 packing is
+						// the next step (see frameExtract.ts).
+						pixelFormat: extractor.pixelFormat,
+					},
+					api,
+				);
+				this.nativeSink = sink;
+				console.warn(`[export perf] native encode via ${sink.encoder} -> ${sink.outputPath}`);
+			}
+		} else {
+			await this.initializeEncoder(encoderPreference);
+		}
 
 		// Audio pre-pass: decode each segment's audio to the common export layout
 		// up-front, so we know whether to declare an audio track on the muxer (mp4
@@ -1151,9 +1230,14 @@ export class VideoExporter {
 			: null;
 		const hasAudio = Boolean(audioExportCodec);
 
-		const muxer = new VideoMuxer(this.config, hasAudio, audioExportCodec?.muxerCodec);
-		this.muxer = muxer;
-		await muxer.initialize();
+		// ffmpeg does its own muxing and writes the file, so the JS muxer only
+		// exists on the WebCodecs path.
+		let muxer: VideoMuxer | null = null;
+		if (!useNative) {
+			muxer = new VideoMuxer(this.config, hasAudio, audioExportCodec?.muxerCodec);
+			this.muxer = muxer;
+			await muxer.initialize();
+		}
 
 		const frameDuration = 1_000_000 / this.config.frameRate;
 		const maxEncodeQueue =
@@ -1319,52 +1403,70 @@ export class VideoExporter {
 							await renderer.renderFrame(videoFrame, sourceTimestampMs * 1000, webcamFrame);
 							stopRender();
 
-							const stopReadback = timings.start("readback");
-							const canvas = renderer.getCanvas();
-							let exportFrame: VideoFrame;
-							if (platform === "linux") {
-								const canvasCtx = canvas.getContext("2d")!;
-								const imageData = canvasCtx.getImageData(0, 0, canvas.width, canvas.height);
-								exportFrame = new VideoFrame(imageData.data.buffer, {
-									format: "RGBA",
-									codedWidth: canvas.width,
-									codedHeight: canvas.height,
-									timestamp,
-									duration: frameDuration,
-									colorSpace: {
-										primaries: "bt709",
-										transfer: "iec61966-2-1",
-										matrix: "rgb",
-										fullRange: true,
-									},
-								});
+							// Both paths report the same two stages so the A/B diffs stage by
+							// stage: "readback" is getting pixels off the canvas, "encodeWait" is
+							// blocking on the consumer — the encoder queue, or the credit window.
+							if (extractor) {
+								const stopExtract = timings.start("readback");
+								// The GPU->CPU descent happens here, inside copyTo — not in the
+								// VideoFrame constructor, which is lazy.
+								const bytes = await extractor.extract(renderer.getCanvas());
+								stopExtract();
+
+								const stopShip = timings.start("encodeWait");
+								// IPC copies the buffer during send(), so the extractor is free to
+								// refill it as soon as this resolves. With no sink, the frame is
+								// discarded here: that IS the ceiling arm — the crossing costs zero.
+								if (sink) await sink.write(bytes);
+								stopShip();
 							} else {
-								exportFrame = new VideoFrame(canvas, { timestamp, duration: frameDuration });
-							}
-							stopReadback();
+								const stopReadback = timings.start("readback");
+								const canvas = renderer.getCanvas();
+								let exportFrame: VideoFrame;
+								if (platform === "linux") {
+									const canvasCtx = canvas.getContext("2d")!;
+									const imageData = canvasCtx.getImageData(0, 0, canvas.width, canvas.height);
+									exportFrame = new VideoFrame(imageData.data.buffer, {
+										format: "RGBA",
+										codedWidth: canvas.width,
+										codedHeight: canvas.height,
+										timestamp,
+										duration: frameDuration,
+										colorSpace: {
+											primaries: "bt709",
+											transfer: "iec61966-2-1",
+											matrix: "rgb",
+											fullRange: true,
+										},
+									});
+								} else {
+									exportFrame = new VideoFrame(canvas, { timestamp, duration: frameDuration });
+								}
+								stopReadback();
 
-							const stopEncodeWait = timings.start("encodeWait");
-							try {
-								await waitForEncoderQueueSpace({
-									getQueueSize: () => this.encoder?.encodeQueueSize ?? 0,
-									maxEncodeQueue,
-									isCancelled: () => this.cancelled,
-									encoderPreference,
-								});
-							} catch (error) {
+								const stopEncodeWait = timings.start("encodeWait");
+								try {
+									await waitForEncoderQueueSpace({
+										getQueueSize: () => this.encoder?.encodeQueueSize ?? 0,
+										maxEncodeQueue,
+										isCancelled: () => this.cancelled,
+										encoderPreference,
+									});
+								} catch (error) {
+									exportFrame.close();
+									throw error;
+								}
+								stopEncodeWait();
+
+								if (this.encoder && this.encoder.state === "configured") {
+									this.encodeQueue++;
+									const stopEncode = timings.start("encode");
+									this.encoder.encode(exportFrame, { keyFrame: frameIndex % 150 === 0 });
+									stopEncode();
+								}
+
 								exportFrame.close();
-								throw error;
 							}
-							stopEncodeWait();
-
-							if (this.encoder && this.encoder.state === "configured") {
-								this.encodeQueue++;
-								const stopEncode = timings.start("encode");
-								this.encoder.encode(exportFrame, { keyFrame: frameIndex % 150 === 0 });
-								stopEncode();
-							}
-
-							exportFrame.close();
 							frameIndex++;
 							this.reportProgress({
 								currentFrame: frameIndex,
@@ -1394,12 +1496,19 @@ export class VideoExporter {
 		}
 
 		if (this.cancelled) {
+			// Leaves no orphaned ffmpeg behind, and unblocks anything parked on a
+			// credit that is never coming.
+			await sink?.cancel();
 			return { success: false, error: "Export cancelled" };
 		}
 		if (this.fatalEncoderError) {
 			throw this.fatalEncoderError;
 		}
 
+		// Drain the in-flight window and close ffmpeg's stdin. This is where a
+		// truncated file would come from, so it happens before anything else.
+		const stopFlush = timings.start("flush");
+		const nativeOutput = sink ? await sink.finish() : null;
 		if (this.encoder && this.encoder.state === "configured") {
 			await this.withTimeout(
 				this.encoder.flush(),
@@ -1409,6 +1518,7 @@ export class VideoExporter {
 					: "The video encoder stopped responding while finalizing the export.",
 			);
 		}
+		stopFlush();
 		if (this.fatalEncoderError) {
 			throw this.fatalEncoderError;
 		}
@@ -1435,7 +1545,13 @@ export class VideoExporter {
 		stopAudioStretch();
 
 		const stopAudioEncode = timings.start("audioEncode");
-		if (hasAudio && audioExportCodec && !this.cancelled) {
+		// The decode and the WSOLA stretch above run on BOTH paths on purpose: they
+		// share the video loop's CPU, so dropping them under native would hand the
+		// native run a speedup the shipped product will never see. Only the encode
+		// and mux are WebCodecs-only — ffmpeg will take the PCM as a second input
+		// once the A/V-lock ordering is resolved (the plan needs the real frame
+		// counts, which only exist after the loop).
+		if (hasAudio && audioExportCodec && !this.cancelled && muxer) {
 			const audioPlan = buildAudioConcatPlan(
 				segments.map((s, i) => ({
 					clipId: s.clipId,
@@ -1471,7 +1587,19 @@ export class VideoExporter {
 				timings.formatSummary({ frames: frameIndex, hardwareAcceleration: encoderPreference }),
 		);
 
-		const blob = await muxer.finalize();
+		if (dropFrames) {
+			warnings.push("Readback ceiling diagnostic: frames were discarded, no file was written.");
+			return { success: true, warnings };
+		}
+		if (nativeOutput) {
+			// Scaffold: ffmpeg already wrote the file, so there is no blob to hand
+			// back and the save flow does not yet know about it. The measurement is
+			// the point here; the save path lands with the WebCodecs removal.
+			warnings.push(`Native encode wrote ${nativeOutput.outputPath} (audio not muxed yet)`);
+			return { success: true, warnings };
+		}
+
+		const blob = await muxer!.finalize();
 		return { success: true, blob, warnings: warnings.length > 0 ? warnings : undefined };
 	}
 
@@ -1578,6 +1706,12 @@ export class VideoExporter {
 		}
 		if (this.audioProcessor) {
 			this.audioProcessor.cancel();
+		}
+		if (this.nativeSink) {
+			// Fire-and-forget: cancel() is sync by contract. Main kills the ffmpeg
+			// process tree, so an abandoned export leaves nothing running.
+			void this.nativeSink.cancel();
+			this.nativeSink = null;
 		}
 		this.cleanup();
 	}

@@ -1,0 +1,293 @@
+/**
+ * Headless export bench — the real pipeline, driven from a command line.
+ *
+ * Runs inside the app's own editor window (windowType=bench), so it exercises
+ * the real preload, the real sandbox, the real GPU and the real main-process
+ * ffmpeg. It loads a real saved project and calls exportAxcutDocument, the same
+ * entry point ExportDialog uses — nothing about the export path is simulated.
+ *
+ * Why it exists: driving the export through the UI costs ~5 minutes a run and
+ * silently injects confounds (an open DevTools panel handicapped one arm of the
+ * first A/B; a window that lost focus stole another). A command gives repeats
+ * cheaply, and repeats are what tell drift apart from effect.
+ *
+ * Deliberately NOT React: the bench replaces the app's UI entirely, so nothing
+ * renders alongside the export.
+ *
+ *   npm run bench:export -- --project=os_parity --arms=webcodecs,native --runs=3
+ */
+
+import { exportAxcutDocument } from "@/lib/ai-edition/exporter/documentExporter";
+import type { AxcutDocument } from "@/lib/ai-edition/schema";
+import type { ExportQuality } from "@/lib/exporter";
+import { nativeBridgeClient } from "@/native/client";
+
+export interface BenchArm {
+	/** localStorage flags applied before the run — the levers under test. */
+	nativeEncode: boolean;
+	readFrequently: boolean;
+	/** Extract every frame and discard it. Diagnostic only — writes no file. */
+	dropFrames?: boolean;
+}
+
+export interface BenchRunResult {
+	arm: string;
+	run: number;
+	ok: boolean;
+	error?: string;
+	/** The exporter's frame-loop wall — what the arms are compared on. */
+	wallMs: number;
+	/** Everything outside the loop (project load, renderer init), reported not compared. */
+	setupMs?: number;
+	frames: number;
+	fps: number;
+	/** Per-stage totals in ms, keyed as StageTimings names it. */
+	stages: Record<string, number>;
+}
+
+const params = new URLSearchParams(window.location.search);
+
+/** The dialog's labels, so the bench is asked for what the UI shows. */
+const QUALITY: Record<string, ExportQuality> = {
+	"720p": "medium",
+	"1080p": "good",
+	source: "source",
+};
+
+const BENCH_PARAMS = {
+	project: params.get("project"),
+	arms: (params.get("arms") ?? "webcodecs,native").split(",").filter(Boolean),
+	runs: Number(params.get("runs") ?? "2"),
+	fps: Number(params.get("fps") ?? "60"),
+	// "good" is the dialog's own default, i.e. what the UI A/B measured.
+	quality: QUALITY[params.get("quality") ?? "1080p"] ?? "good",
+};
+
+const ARMS: Record<string, BenchArm> = {
+	// The path we ship today: WebCodecs encodes straight off the GPU texture.
+	webcodecs: { nativeEncode: false, readFrequently: false },
+	// Frames descend to the CPU and cross to ffmpeg.
+	native: { nativeEncode: true, readFrequently: false },
+	// Native, but with CPU-backed canvases (what Linux already does) so the
+	// per-frame descent is a memcpy rather than a GPU round-trip.
+	"native-cpu": { nativeEncode: true, readFrequently: true },
+	// Control: isolates the canvas change from the encoder change. Without this
+	// arm a native-cpu win could be the canvas, the encoder, or neither.
+	"webcodecs-cpu": { nativeEncode: false, readFrequently: true },
+	// Ceiling, not a candidate: descend every frame to RAM, then discard it —
+	// the crossing costs exactly zero. Bounds EVERY "remove the crossing"
+	// proposal at once (option A' sandbox:false, shared memory, zero-copy
+	// transfer), because none of them can skip the readback. Writes no file.
+	"readback-ceiling": { nativeEncode: true, readFrequently: false, dropFrames: true },
+};
+
+function applyArm(arm: BenchArm): void {
+	localStorage.setItem("openscreen.nativeEncode", arm.nativeEncode ? "1" : "0");
+	localStorage.setItem("openscreen.readFrequently", arm.readFrequently ? "1" : "0");
+	localStorage.setItem("openscreen.dropFrames", arm.dropFrames ? "1" : "0");
+}
+
+/**
+ * aiEdition.get() reports failure as {success:false, error} rather than
+ * throwing, so an unchecked read of .document turns every load error into a
+ * silent null — which is exactly how "project not found" masked the real reason
+ * once already. Surface it.
+ */
+async function loadDocument(id: string): Promise<AxcutDocument> {
+	const result = (await nativeBridgeClient.aiEdition.get(id)) as {
+		success?: boolean;
+		document?: AxcutDocument;
+		error?: string;
+	};
+	if (!result?.success || !result.document) {
+		throw new Error(`Cannot load project ${id}: ${result?.error ?? "no document returned"}`);
+	}
+	return result.document;
+}
+
+/**
+ * Accepts a project id, an id prefix, or a title.
+ *
+ * Titles need care: a summary's title is the name the project was CREATED with
+ * ("Recording 15/07/2026 18:38:53") and does not follow a rename, so the one
+ * shown in the editor — the document's own project.title — may match nothing in
+ * the summary list. Hence the fallback that opens documents to check. It is the
+ * slow path on purpose: only reached when the cheap matches miss.
+ */
+async function resolveDocument(projectRef: string | null): Promise<AxcutDocument> {
+	const projects = await nativeBridgeClient.aiEdition.listProjects();
+	if (projects.length === 0) throw new Error("No saved projects to bench against");
+	if (!projectRef) return loadDocument(projects[0].id);
+
+	const summary =
+		projects.find((p) => p.id === projectRef) ??
+		projects.find((p) => p.id.startsWith(projectRef)) ??
+		projects.find((p) => p.title === projectRef);
+	if (summary) return loadDocument(summary.id);
+
+	const failures: string[] = [];
+	for (const p of projects) {
+		try {
+			const doc = await loadDocument(p.id);
+			if (doc.project?.title === projectRef) return doc;
+		} catch (error) {
+			failures.push(error instanceof Error ? error.message : String(error));
+		}
+	}
+	throw new Error(
+		`Project "${projectRef}" not found by id, id prefix, or title ` +
+			`(${projects.length} searched, ${failures.length} failed to load).` +
+			(failures.length ? `\nFirst load failure: ${failures[0]}` : ""),
+	);
+}
+
+/**
+ * Largest source on the timeline — mirrors ExportDialog's referenceSource so
+ * "Source" quality picks the same output size the UI would.
+ */
+function referenceSource(doc: AxcutDocument): { width?: number; height?: number } {
+	let best: { width?: number; height?: number } = {};
+	let bestArea = 0;
+	for (const asset of doc.assets ?? []) {
+		const w = asset.video?.width;
+		const h = asset.video?.height;
+		if (!w || !h) continue;
+		if (w * h > bestArea) {
+			bestArea = w * h;
+			best = { width: w, height: h };
+		}
+	}
+	return best;
+}
+
+interface Captured {
+	stages: Record<string, number>;
+	/** The exporter's own loop numbers, which exclude the bench's setup. */
+	loop: { wallMs: number; frames: number; fps: number } | null;
+	restore: () => void;
+}
+
+/** The perf line the exporter prints is for humans; the bench needs the numbers. */
+function captureStages(): Captured {
+	const captured: Captured = {
+		stages: {},
+		loop: null,
+		restore: () => {
+			console.warn = original;
+		},
+	};
+	const original = console.warn;
+	console.warn = (...args: unknown[]) => {
+		const text = args.map(String).join(" ");
+		if (text.includes("[export perf]")) {
+			// "[export perf] wall 77557ms · 546 frames · 7.0 fps"
+			const head = /wall\s+([\d.]+)ms\D+(\d+)\s+frames\D+([\d.]+)\s+fps/.exec(text);
+			if (head) {
+				captured.loop = {
+					wallMs: Number(head[1]),
+					frames: Number(head[2]),
+					fps: Number(head[3]),
+				};
+			}
+			for (const line of text.split("\n")) {
+				// "  render     1680.0    3.0%     3.08  n=546"
+				const m = /^\s*([a-zA-Z]+)\s+([\d.]+)\s+[\d.]+%/.exec(line);
+				if (m && m[1] !== "TOTAL") captured.stages[m[1]] = Number(m[2]);
+			}
+		}
+		original(...args);
+	};
+	return captured;
+}
+
+async function runOnce(
+	doc: AxcutDocument,
+	armName: string,
+	arm: BenchArm,
+	run: number,
+): Promise<BenchRunResult> {
+	applyArm(arm);
+	const src = referenceSource(doc);
+	const capture = captureStages();
+	const started = performance.now();
+	try {
+		const result = await exportAxcutDocument(doc, {
+			format: "mp4",
+			quality: BENCH_PARAMS.quality,
+			frameRate: BENCH_PARAMS.fps,
+			codec: "h264",
+			sourceWidth: src.width,
+			sourceHeight: src.height,
+		});
+		const wallMs = performance.now() - started;
+		// The native arm returns no blob (ffmpeg wrote the file itself), so a
+		// missing blob is not a failure here the way it is in ExportDialog.
+		if (!result.success) throw new Error(result.error ?? "export failed");
+		if (!capture.loop) throw new Error("exporter printed no [export perf] line");
+		return {
+			arm: armName,
+			run,
+			ok: true,
+			// The exporter's own loop wall, not the bench's: comparing arms means
+			// comparing the frame loop, not project loading.
+			wallMs: capture.loop.wallMs,
+			setupMs: wallMs - capture.loop.wallMs,
+			frames: capture.loop.frames,
+			fps: capture.loop.fps,
+			stages: capture.stages,
+		};
+	} catch (error) {
+		return {
+			arm: armName,
+			run,
+			ok: false,
+			error: error instanceof Error ? error.message : String(error),
+			wallMs: performance.now() - started,
+			frames: 0,
+			fps: 0,
+			stages: capture.stages,
+		};
+	} finally {
+		capture.restore();
+	}
+}
+
+/**
+ * Interleaves arms rather than running each arm's repeats together: A,B,A,B.
+ * Same-arm repeats then bracket the other arm in time, so drift shows up as
+ * disagreement between a run and its own repeat instead of masquerading as the
+ * effect under test. The first A/B on this machine drifted 26% between two
+ * identical runs — enough to invert the conclusion.
+ */
+export async function runBench(): Promise<void> {
+	const results: BenchRunResult[] = [];
+	const emit = (event: string, payload: unknown) =>
+		// Picked up by the runner off stdout; console.warn is what the app's
+		// console forwarder actually relays to the main process.
+		console.warn(`[bench] ${JSON.stringify({ event, ...(payload as object) })}`);
+
+	try {
+		for (const armName of BENCH_PARAMS.arms) {
+			if (!ARMS[armName]) throw new Error(`Unknown arm "${armName}"`);
+		}
+		// Loaded once and shared by every run: each arm must see byte-identical
+		// input, and the title fallback can open every project on disk.
+		const doc = await resolveDocument(BENCH_PARAMS.project);
+		emit("start", {
+			arms: BENCH_PARAMS.arms,
+			runs: BENCH_PARAMS.runs,
+			project: doc.project?.title ?? "(untitled)",
+		});
+		for (let run = 1; run <= BENCH_PARAMS.runs; run++) {
+			for (const armName of BENCH_PARAMS.arms) {
+				const result = await runOnce(doc, armName, ARMS[armName], run);
+				results.push(result);
+				emit("run", result);
+			}
+		}
+		emit("done", { results });
+	} catch (error) {
+		emit("fatal", { error: error instanceof Error ? error.message : String(error) });
+	}
+	await window.electronAPI?.benchFinished?.();
+}

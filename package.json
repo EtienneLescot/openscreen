@@ -52,7 +52,8 @@
 		"test:e2e": "playwright test",
 		"test:e2e:windows-native-checklist": "playwright test tests/e2e/windows-native-checklist.spec.ts",
 		"prepare": "husky",
-		"fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs"
+		"fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs",
+		"bench:export": "node scripts/bench-export.mjs"
 	},
 	"dependencies": {
 		"@fix-webm-duration/fix": "^1.0.1",
