@@ -545,6 +545,97 @@ its own bug, unrelated to rendering.
 
 ---
 
+## Annex C — The standalone POC, and the number Step 4 was waiting for
+
+`poc/` — its own directory, its own server, no Electron, no app code, nothing
+imported from the existing compositor. Two real recordings (screen + webcam), one
+layout, animated: two eased zooms with a focus point, and a layout move where the
+webcam grows from a docked circle into a panel, its shape morphing through the
+same SDF. Decode and mux via mediabunny, composite in WGSL, out to a watchable
+mp4. The layout, the easings and the effects are written from zero — the point was
+to prove the paradigm reconstructs the product, not to reuse what exists.
+
+**Measured by the product owner, on a visible window, interleaved A/B, one
+discarded warm-up round, 4-second exports at 1080p on an AMD RDNA-3 iGPU:**
+
+| arm | cruise | spread | runs |
+|---|---:|---:|---|
+| optimised | **85.1 fps** | 6 % | 88.9 / 84.0 / 85.1 |
+| naive | 46.3 fps | 35 % | 46.3 / 53.8 / 37.5 |
+
+**+84 % — it roughly doubles.** Read honestly: the naive arm's 35 % spread makes
+the *size* loose (85.1 against its best run is +58 %, against its worst +127 %);
+the direction and the order of magnitude are not in doubt. The optimised arm is
+steady at 6 % because it does less work, so it has less to vary.
+
+**Against the shipping compositor** (Annex B, different project — the comparison
+is an order of magnitude, not a measurement): 29.5 fps on a still frame, ~17 fps
+while the camera moves. The POC is 3–5× that, and it does not slow down when the
+camera moves, because there is no cache to miss.
+
+**85 fps at 1080p is past 60.** That is priority 1 of this document — preview
+fluidity — reachable on the *weakest* machine in the fleet, with room over.
+
+### C.1 — What produced the 84 %
+
+Three changes, all exact, all verified by the picture (optimised and naive render
+the same frame, checked on a zoomed frame where the culling is active):
+
+1. **The background was recomputing a constant.** 16 gradient evaluations per
+   pixel per frame, 210 times, for an image that never changes. Baked into a
+   texture once at init; the frame reads one texel. This is *not* the §7.2 shadow
+   cache in disguise, and the difference is the whole argument: a cache guesses
+   its input has not changed and needs a key to find out. A constant has no input.
+2. **The shadow ran everywhere.** 12 taps on every pixel, including under the
+   opaque video and far outside the rect where the answer is zero. Every tap lands
+   within `spread` of the pixel, so the box grown by spread bounds where any tap
+   can hit, and the box shrunk by spread bounds where all of them do — Minkowski
+   sums with the tap disc, the same number by arithmetic rather than by twelve
+   samples.
+3. **The frame was drawn as one fullscreen triangle with `if`s.** It paid for
+   every pixel of every effect and threw most of it away. Now each element is a
+   quad sized to its own rect: the rasterizer runs the fragment shader only where
+   the element is and clips what leaves the stage, in fixed function, with no
+   branch. A zoomed recording is 2.7× the stage — two thirds of it is off-screen
+   and now costs nothing. Plus CPU culling from the rects `evaluate` already
+   produced: when the recording covers the stage (every zoom), the background and
+   its shadow are not drawn at all; an off-stage webcam is not drawn at all.
+
+**§8b needs one correction.** Its cache list — "wallpaper 1× · **shadow
+per-geometry** · masks per-shape · …" — carries a 2D reflex into the target: the
+shadow cache exists because a CSS filter costs 14 ms on a CPU, and it misses by
+construction whenever the camera moves, which the product owner confirms is the
+norm. In a shader there is nothing to cache: the shadow is recomputed every frame
+and the frame still runs at 85 fps. The wallpaper entry stays — that one is a
+constant, not a cache.
+
+### C.2 — Measurement hazards this POC surfaced
+
+Every one of these produced a confident, wrong number first:
+
+- **A hidden tab is a throttled tab**, and Chromium escalates the longer it stays
+  hidden. Same code, same machine, one session: 58.3 → 42.8 → 35.5 → 6.0 fps, and
+  an A/B that reported 6.0 on *both* arms with a 401 % spread. The harness now
+  refuses to run when `document.hidden`. **Nothing measured from an agent-driven
+  browser pane is admissible; this annex's numbers were taken by a human, on a
+  visible window.**
+- **The instruments cost 17 %.** `onSubmittedWorkDone()` per frame is a fence that
+  forbids decode/composite/encode from overlapping; `mapAsync()` for the GPU
+  timestamps is a sync per frame. Both are switchable, and the harness measures
+  itself: instrumented 35.5 fps vs clean 42.8. The phase breakdown attributes; it
+  does not price.
+- **Average fps is not cruise fps.** The first frames of a 4-second export cost
+  358/113/28/350 ms — 10.3 ms/frame of drag, and the mean lands 26 % under the
+  real rate. Cruise = median of the last three quarters.
+- **A canvas in the document is presented every frame** — 35 ms/frame of
+  compositing an export never does. The render target is an OffscreenCanvas.
+- **`getSample(t)` per frame is a seek per frame**: 122 ms/frame, three times
+  everything else combined, on a long-GOP screen recording. Forward streams: 0.6.
+- **The harness leaked its GPU device**, and six back-to-back runs decayed
+  19.9 → 8.6 → 7.5 fps during the very A/B meant to settle a question.
+
+---
+
 **Step-0 note (data loss, §13).** The record's reference project `os_parity`
 (`proj_de6ffaaa…openscreen`) was found corrupted with exactly the §13 signature:
 a complete, valid save (updatedAt 2026-07-16T18:00:26Z) followed by the tail of a

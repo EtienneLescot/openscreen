@@ -161,6 +161,16 @@ async function openVideo(url) {
 
 async function run(override = {}) {
 	const started = performance.now();
+	// A hidden tab is a throttled tab. Chromium de-prioritises everything in one —
+	// the GPU work included — and clamps chained timers to a second. Measured
+	// here: the same code that cruises at 58 fps visible reports 6.0 fps hidden,
+	// on BOTH arms, with a 401% spread. Every number taken from a background tab
+	// is fiction, so this refuses rather than reports.
+	if (document.hidden) {
+		throw new Error(
+			"tab is hidden — Chromium throttles background tabs. Bring it to the front and re-run.",
+		);
+	}
 	document.querySelector("#run").disabled = true;
 	log("opening sources…");
 
@@ -223,11 +233,64 @@ async function run(override = {}) {
 	const code = await (await fetch("composite.wgsl")).text();
 	const module = device.createShaderModule({ code });
 	device.pushErrorScope("validation");
-	const pipeline = device.createRenderPipeline({
-		layout: "auto",
-		vertex: { module, entryPoint: "vs" },
-		fragment: { module, entryPoint: "fs", targets: [{ format }] },
+
+	// One explicit layout for every pass, so a shader that happens not to sample
+	// bgTex does not silently get a different bind group. `auto` derives the
+	// layout from what the entry point USES, which makes the layout an accident of
+	// dead-code elimination.
+	const bindGroupLayout = device.createBindGroupLayout({
+		entries: [
+			{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
+			{ binding: 1, visibility: GPUShaderStage.FRAGMENT, sampler: {} },
+			{ binding: 2, visibility: GPUShaderStage.FRAGMENT, externalTexture: {} },
+			{ binding: 3, visibility: GPUShaderStage.FRAGMENT, externalTexture: {} },
+			{ binding: 4, visibility: GPUShaderStage.FRAGMENT, texture: {} },
+		],
+	});
+	const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] });
+
+	// Straight-alpha "over": the compositor's only blend.
+	const OVER = {
+		color: { srcFactor: "src-alpha", dstFactor: "one-minus-src-alpha", operation: "add" },
+		alpha: { srcFactor: "one", dstFactor: "one-minus-src-alpha", operation: "add" },
+	};
+	const makePass = (vs, fs, blend) =>
+		device.createRenderPipeline({
+			label: fs,
+			layout: pipelineLayout,
+			vertex: { module, entryPoint: vs },
+			fragment: { module, entryPoint: fs, targets: [{ format, ...(blend ? { blend } : {}) }] },
+			primitive: { topology: "triangle-list" },
+		});
+
+	// Five passes, each a quad sized to its element. The rasterizer clips whatever
+	// leaves the stage — which, during a zoom, is most of the recording.
+	const passes = {
+		background: makePass("vsFull", "fsBackground", null),
+		screenShadow: makePass("vsScreenShadow", "fsScreenShadow", OVER),
+		screen: makePass("vsScreen", "fsScreen", OVER),
+		webcamShadow: makePass("vsWebcamShadow", "fsWebcamShadow", OVER),
+		webcam: makePass("vsWebcam", "fsWebcam", OVER),
+	};
+
+	// The bake runs before any video exists, so it gets a layout of its own: the
+	// uniforms and nothing else.
+	const bakeLayout = device.createBindGroupLayout({
+		entries: [
+			{ binding: 0, visibility: GPUShaderStage.VERTEX | GPUShaderStage.FRAGMENT, buffer: {} },
+		],
+	});
+	const bgPipeline = device.createRenderPipeline({
+		label: "bake",
+		layout: device.createPipelineLayout({ bindGroupLayouts: [bakeLayout] }),
+		vertex: { module, entryPoint: "vsFull" },
+		fragment: { module, entryPoint: "fsBake", targets: [{ format: "rgba8unorm" }] },
 		primitive: { topology: "triangle-list" },
+	});
+	const bgTexture = device.createTexture({
+		size: [OUT.width, OUT.height],
+		format: "rgba8unorm",
+		usage: GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
 	});
 	const shaderError = await device.popErrorScope();
 	if (shaderError) throw new Error(`shader: ${shaderError.message}`);
@@ -255,6 +318,35 @@ async function run(override = {}) {
 	const bgBlur = Number(document.querySelector("#blur").value);
 	const camAspect = webcam.track.displayWidth / webcam.track.displayHeight;
 	let memo = null;
+
+	// Bake the background. Once, here — not 210 times inside the loop.
+	uniforms.set([OUT.width, OUT.height, 0, 0], 0);
+	uniforms.set([shadowIntensity, bgBlur, 18, 42], 12);
+	device.queue.writeBuffer(uniformBuffer, 0, uniforms);
+	{
+		const enc = device.createCommandEncoder();
+		const pass = enc.beginRenderPass({
+			colorAttachments: [
+				{
+					view: bgTexture.createView(),
+					clearValue: { r: 0, g: 0, b: 0, a: 1 },
+					loadOp: "clear",
+					storeOp: "store",
+				},
+			],
+		});
+		pass.setPipeline(bgPipeline);
+		pass.setBindGroup(
+			0,
+			device.createBindGroup({
+				layout: bakeLayout,
+				entries: [{ binding: 0, resource: { buffer: uniformBuffer } }],
+			}),
+		);
+		pass.draw(3);
+		pass.end();
+		device.queue.submit([enc.finish()]);
+	}
 
 	// ---- decode: forward streams, not seeks ----
 	// getSample(t) per frame is a random-access SEEK per frame: on a long-GOP
@@ -298,6 +390,7 @@ async function run(override = {}) {
 	// across the two. If they disagree, the breakdown describes a program that
 	// only exists while being measured.
 	const instrumented = override.instrumented ?? document.querySelector("#instrument").checked;
+	const optimised = override.optimised ?? document.querySelector("#optimise").checked;
 	const frames = [];
 	const t0 = performance.now();
 	let rendered = 0;
@@ -331,15 +424,16 @@ async function run(override = {}) {
 		uniforms.set([f.screen.x, f.screen.y, f.screen.w, f.screen.h], 4);
 		uniforms.set([f.webcam.x, f.webcam.y, f.webcam.w, f.webcam.h], 8);
 		uniforms.set([shadowIntensity, bgBlur, 18, 42], 12); // intensity | bgBlur | offsetY | spread
-		uniforms.set([f.webcamRadius, f.motionBlurPx, camAspect, 0], 16);
+		uniforms.set([f.webcamRadius, f.motionBlurPx, camAspect, optimised ? 1 : 0], 16);
 		device.queue.writeBuffer(uniformBuffer, 0, uniforms);
 		const bind = device.createBindGroup({
-			layout: pipeline.getBindGroupLayout(0),
+			layout: bindGroupLayout,
 			entries: [
 				{ binding: 0, resource: { buffer: uniformBuffer } },
 				{ binding: 1, resource: sampler },
 				{ binding: 2, resource: screenTex },
 				{ binding: 3, resource: webcamTex },
+				{ binding: 4, resource: bgTexture.createView() },
 			],
 		});
 		p.evaluate = mark() - m;
@@ -359,9 +453,42 @@ async function run(override = {}) {
 				? { timestampWrites: { querySet, beginningOfPassWriteIndex: 0, endOfPassWriteIndex: 1 } }
 				: {}),
 		});
-		pass.setPipeline(pipeline);
+		// CULLING, on the CPU, before anything is submitted.
+		//
+		// The cheapest fragment is the one never dispatched. Two tests, both from
+		// the rects evaluate() already produced:
+		//  - the recording covers the stage (every zoom does): nothing underneath
+		//    can show, so the background and its shadow are not drawn at all. The
+		//    test insets by the corner radius, because a rounded corner is where
+		//    the background WOULD peek through.
+		//  - the webcam is entirely off-stage: it and its shadow are not drawn.
+		const r = f.screen;
+		const rad = 28;
+		const screenCoversStage =
+			optimised &&
+			r.x + rad <= 0 &&
+			r.y + rad <= 0 &&
+			r.x + r.w - rad >= OUT.width &&
+			r.y + r.h - rad >= OUT.height;
+		const w = f.webcam;
+		const webcamVisible =
+			!optimised || (w.x < OUT.width && w.y < OUT.height && w.x + w.w > 0 && w.y + w.h > 0);
+
 		pass.setBindGroup(0, bind);
-		pass.draw(3);
+		if (!screenCoversStage) {
+			pass.setPipeline(passes.background);
+			pass.draw(6);
+			pass.setPipeline(passes.screenShadow);
+			pass.draw(6);
+		}
+		pass.setPipeline(passes.screen);
+		pass.draw(6);
+		if (webcamVisible) {
+			pass.setPipeline(passes.webcamShadow);
+			pass.draw(6);
+			pass.setPipeline(passes.webcam);
+			pass.draw(6);
+		}
 		pass.end();
 		if (useQueries) {
 			encoder.resolveQuerySet(querySet, 0, 2, resolveBuffer, 0);
@@ -404,10 +531,17 @@ async function run(override = {}) {
 		rendered++;
 		if (i % 15 === 0) {
 			setStat("progress", `${i}/${totalFrames}`);
-			// A 640px preview every 15 frames. It is OFF the clock — the frame's
-			// timer has already stopped — and it never touches the render path.
+			// A 640px preview every 15 frames. OFF the clock — the frame's timer has
+			// already stopped — and it never touches the render path.
 			preview.drawImage(canvas, 0, 0, previewCanvas.width, previewCanvas.height);
-			await new Promise((r) => setTimeout(r, 0));
+			// Yield through a MessageChannel, not setTimeout: a chained setTimeout is
+			// clamped to 1000 ms in a background tab, which would put eight seconds of
+			// pure waiting into a four-second export's wall.
+			await new Promise((r) => {
+				const ch = new MessageChannel();
+				ch.port1.onmessage = () => r();
+				ch.port2.postMessage(0);
+			});
 		}
 	}
 
@@ -436,9 +570,12 @@ async function run(override = {}) {
 	setStat("fps", cruiseFps.toFixed(1));
 	setStat("progress", `${rendered}/${totalFrames}`);
 	setStat("perframe", `${cruiseMs.toFixed(1)} ms`);
-	setStat("render", `${median(warm.map((f) => f.fence)).toFixed(1)} ms`);
-	setStat("decode", `${median(warm.map((f) => f.decode)).toFixed(1)} ms`);
-	setStat("encode", `${median(warm.map((f) => f.encode)).toFixed(1)} ms`);
+	// `?? 0`: the clean pass has no phase timers by construction — that is what
+	// makes it clean. Reading them back as undefined is not an error, it is the
+	// point.
+	setStat("render", instrumented ? `${median(warm.map((f) => f.fence ?? 0)).toFixed(1)} ms` : "—");
+	setStat("decode", instrumented ? `${median(warm.map((f) => f.decode ?? 0)).toFixed(1)} ms` : "—");
+	setStat("encode", instrumented ? `${median(warm.map((f) => f.encode ?? 0)).toFixed(1)} ms` : "—");
 
 	log(
 		`\n=== [${instrumented ? "INSTRUMENTED" : "CLEAN"}] cruise ${cruiseFps.toFixed(1)} fps — ${cruiseMs.toFixed(1)} ms/frame (median of the last ${warm.length}) ===`,
@@ -513,6 +650,7 @@ async function run(override = {}) {
 	await webcamStream.return?.();
 	screen.input.dispose();
 	webcam.input.dispose();
+	bgTexture.destroy();
 	device.destroy();
 
 	document.querySelector("#run").disabled = false;
@@ -520,14 +658,17 @@ async function run(override = {}) {
 }
 
 /**
- * Do the instruments change the answer? Interleaved A/B/A/B, because they can
- * only be compared against drift.
+ * Interleaved A/B/A/B, because an effect can only be told apart from drift.
  *
- * Two identical instrumented runs measured 34.8 and 28.3 fps on this machine —
- * 23% apart, which is the size of the effect under test. Back-to-back runs
- * therefore prove nothing: the arms have to alternate so drift shows up as a run
- * disagreeing with its OWN repeat, instead of masquerading as the instruments'
- * cost. Same rule, and same reason, as the app's export bench.
+ * Two identical runs measured 34.8 and 28.3 fps on this machine — 23% apart,
+ * which is the size of the effects under test. Sequential arms therefore prove
+ * nothing: they alternate so drift shows up as a run disagreeing with its OWN
+ * repeat instead of masquerading as the change. Same rule, and same reason, as
+ * the app's export bench.
+ *
+ * Both shader variants live in the same module, chosen by a uniform, so the two
+ * arms differ by that uniform and nothing else — no reload, no recompile, no
+ * second session.
  */
 async function compare(rounds = 3) {
 	const median = (xs) => {
@@ -535,42 +676,43 @@ async function compare(rounds = 3) {
 		return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
 	};
 	const spread = (xs) => (Math.max(...xs) - Math.min(...xs)) / median(xs);
-	const arms = { INSTRUMENTED: [], CLEAN: [] };
+	const arms = { OPTIMISED: [], NAIVE: [] };
 
 	// Round 0 is thrown away. Both arms climb monotonically across the first
 	// rounds — 15.0 → 28.4 → 33.3 and 27.9 → 37.2 → 42.0 — which is the browser
 	// and the GPU waking up, not the arms differing. Keeping it put a 64% spread
 	// on a 23% effect and voided the comparison by itself.
 	for (let r = 0; r <= rounds; r++) {
-		for (const [name, instrumented] of [
-			["INSTRUMENTED", true],
-			["CLEAN", false],
+		for (const [name, optimised] of [
+			["OPTIMISED", true],
+			["NAIVE", false],
 		]) {
-			const res = await run({ instrumented });
+			// Clean on both sides: the instruments cost 17%, and they are not what
+			// is being compared here.
+			const res = await run({ optimised, instrumented: false });
 			if (r > 0) arms[name].push(res.cruiseFps);
 		}
 	}
 
 	document.querySelector("#log").textContent = "";
-	log("=== do the instruments change the answer? (interleaved A/B) ===\n");
+	log("=== baked background + shadow early-out, vs neither (interleaved A/B) ===\n");
 	for (const [name, xs] of Object.entries(arms)) {
 		log(
 			`${name.padEnd(13)} cruise ${median(xs).toFixed(1).padStart(5)} fps   spread ${(spread(xs) * 100).toFixed(0)}%   runs: ${xs.map((x) => x.toFixed(1)).join(" / ")}`,
 		);
 	}
-	const cost = median(arms.CLEAN) - median(arms.INSTRUMENTED);
-	const worst = Math.max(spread(arms.CLEAN), spread(arms.INSTRUMENTED)) * 100;
-	log(
-		`\ninstruments cost: ${cost.toFixed(1)} fps (${((cost / median(arms.CLEAN)) * 100).toFixed(0)}%)`,
-	);
-	if (worst >= Math.abs((cost / median(arms.CLEAN)) * 100)) {
+	const gain = median(arms.OPTIMISED) - median(arms.NAIVE);
+	const gainPct = (gain / median(arms.NAIVE)) * 100;
+	const worst = Math.max(spread(arms.OPTIMISED), spread(arms.NAIVE)) * 100;
+	log(`\ngain: ${gain > 0 ? "+" : ""}${gain.toFixed(1)} fps (${gainPct.toFixed(0)}%)`);
+	if (worst >= Math.abs(gainPct)) {
 		log(
 			`\n!! VOID: same-arm spread reaches ${worst.toFixed(0)}%, as large as the effect.\n   This run says nothing. Repeat on a steadier machine.`,
 		);
 	} else {
 		log(`\nsame-arm spread ${worst.toFixed(0)}% — smaller than the effect, so the effect is real.`);
 	}
-	setStat("fps", median(arms.CLEAN).toFixed(1));
+	setStat("fps", median(arms.OPTIMISED).toFixed(1));
 }
 
 document.querySelector("#run").addEventListener("click", () => {
