@@ -724,6 +724,37 @@ quoted as "native loses."**
    the only path that can turn the 256 fps encoder ceiling into real throughput.
    It is deep unsafe interop (days, not hours).
 
+**D.5 — The CPU-native path was pushed to its ceiling, and it loses by
+construction (measured 2026-07-17).** The product owner rejected "31 fps is a pipe
+artifact, so native might still win" and asked to actually beat the browser. The
+CPU path was driven as far as it goes:
+
+| native pipeline | throughput |
+|---|---:|
+| subprocess pipes (decode+encode) | 31 fps |
+| in-process CPU decode, synchronous | 25 fps |
+| in-process CPU decode, **threaded** (overlapped), no encode | 61 fps |
+| threaded decode + composite + h264_amf | ~48 fps |
+| threaded, no readback, no encode (isolates the descent) | 68 fps |
+| — WebCodecs (browser) | 79 fps |
+| — d3d11va decode → h264_amf, all on GPU | 256 fps |
+
+Threading the decode was the real lever (25 → 61): the subprocess version's
+advantage was never "pipes", it was parallel decode. But the CPU path plateaus
+UNDER the browser, and the reason is now pinned by the no-readback probe: the
+descent (GPU→CPU) is only ~10 % (61 → 68); the wall is **CPU↔GPU transport** — 9 MB
+uploaded per frame on input, 8 MB read back on output, plus CPU swscale at both
+ends (YUV→RGBA decode, RGBA→NV12 encode). The browser pays none of this: WebCodecs
+decodes into GPU-backed `VideoFrame`s that `importExternalTexture` wraps with no
+CPU copy. **Its edge is GPU-residency, and no CPU-side trick can match it.**
+
+So the product owner is right in principle — native's *ceiling* (256 fps) crushes
+the browser (79) — but only the GPU-resident path reaches it: hardware decode
+straight into GPU textures (no upload) + zero-descent GPU→encoder (no readback).
+That is the deep D3D11/D3D12 (or Vulkan Video) interop, unbuilt, and it is the only
+thing that turns 256 into real throughput. The CPU-transport native pipeline is
+measured out at ~48–68 fps; that is its ceiling.
+
 **The standing conclusion is unchanged but now grounded on both sides:** the web
 platform (WebCodecs) hands you the on-device fast path for free (79 fps, no interop
 written); native offers a much higher ceiling (256 fps encoder) but only behind
