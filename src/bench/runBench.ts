@@ -18,7 +18,7 @@
  */
 
 import { exportAxcutDocument } from "@/lib/ai-edition/exporter/documentExporter";
-import type { AxcutDocument } from "@/lib/ai-edition/schema";
+import { type AxcutDocument, zoomRegionSchema } from "@/lib/ai-edition/schema";
 import type { ExportQuality } from "@/lib/exporter";
 import { nativeBridgeClient } from "@/native/client";
 
@@ -34,6 +34,18 @@ export interface BenchArm {
 	legacyCompositor?: boolean;
 	/** Gate G0: sync the GPU after compositing, in a `fence` stage of its own. */
 	gpuFence?: boolean;
+	/** Diagnostic: shadow path minus the gaussians. Renders no shadow. */
+	shadowNoFilter?: boolean;
+	/**
+	 * Effects this arm adds to --effects, so an effect can be A/B'd INSIDE one
+	 * interleaved run.
+	 *
+	 * --effects alone cannot answer "what does this effect cost": it is one value
+	 * for the whole session, so the comparison becomes two sessions — and this
+	 * machine drifts further between sessions (up to 62%) than any effect is
+	 * worth. That is the mistake this bench exists to prevent.
+	 */
+	addEffects?: string[];
 }
 
 export interface BenchRunResult {
@@ -49,6 +61,8 @@ export interface BenchRunResult {
 	fps: number;
 	/** Per-stage totals in ms, keyed as StageTimings names it. */
 	stages: Record<string, number>;
+	/** Shadow cache hits/misses for the run — see BenchArm.addEffects / Step 3. */
+	shadow?: { hits: number; misses: number };
 }
 
 const params = new URLSearchParams(window.location.search);
@@ -73,6 +87,12 @@ const BENCH_PARAMS = {
 	// what 820 say, at a quarter of the wait. Wall/fps from a capped run are NOT
 	// comparable with full-length runs — compare per-frame, or same-cap runs.
 	clip: params.get("clip") ? Number(params.get("clip")) : null,
+	// Discarded runs before the measured ones. The session's FIRST export pays for
+	// shader compilation, decoder setup and JIT, and it lands on whichever arm ran
+	// first: measured at 9.3 s against 5.6/6.6/5.8 s for its own repeats — a 60%
+	// same-arm spread that voided the run all by itself, while the arm that merely
+	// went second looked better. One warm-up costs ~5 s at --clip=4.
+	warmup: Number(params.get("warmup") ?? "1"),
 };
 
 /**
@@ -94,6 +114,12 @@ const EFFECT_PATCHES: Record<string, Record<string, unknown>> = {
 	blur: { showBlur: true },
 	radius: { borderRadius: 24 },
 	motionBlur: { motionBlurAmount: 1 },
+	// Turning an effect OFF is not the same as omitting it: a saved project has
+	// its own appearance (this bench's reference carries shadowIntensity 0.52 and
+	// motionBlurAmount 0.31), so an arm that "doesn't add shadow" still renders
+	// the project's. These patches are what make an arm PAIR isolate one effect.
+	noShadow: { shadowIntensity: 0 },
+	noMotionBlur: { motionBlurAmount: 0 },
 };
 
 /**
@@ -103,18 +129,26 @@ const EFFECT_PATCHES: Record<string, Record<string, unknown>> = {
  * GEOMETRY every frame, so it is what invalidates any geometry-keyed cache. A
  * parity test on a project without zoom would happily pass with a broken cache
  * key, because nothing would ever ask it to invalidate.
+ *
+ * Parsed through the real schema before it is injected, because this region was
+ * born with `depth: "medium"` — a value nothing accepts. `ZOOM_DEPTH_SCALES`
+ * keys on 1..6, so the lookup returned undefined and the zoom silently did
+ * NOTHING: the arm reported a clean number for an effect that never ran. The
+ * schema is the only thing that knows what the pipeline accepts, so ask it.
  */
 function zoomRanges(doc: AxcutDocument): unknown[] {
 	const clips = (doc as { timeline?: { clips?: { timelineEndSec?: number }[] } }).timeline?.clips;
 	const endSec = clips?.[0]?.timelineEndSec ?? 5;
 	return [
-		{
+		zoomRegionSchema.parse({
 			id: "bench-zoom",
 			startMs: 500,
 			endMs: Math.max(1500, Math.round(endSec * 1000) - 500),
-			depth: "medium",
+			// 3 is DEFAULT_ZOOM_DEPTH, and what the reference project's own zoom uses.
+			depth: 3,
 			focus: { cx: 0.5, cy: 0.5 },
-		},
+			focusMode: "manual",
+		}),
 	];
 }
 
@@ -234,6 +268,49 @@ const ARMS: Record<string, BenchArm> = {
 		legacyCompositor: true,
 		gpuFence: true,
 	},
+	// Step 3 (rendering-architecture.md §13): the missing L7 row. A zoom is the one
+	// effect that moves the composited geometry every frame, so it is what the
+	// shadow cache cannot hold — pair it with `webcodecs-fence` in ONE interleaved
+	// run and the difference is the cost of a moving camera, on one thermal state.
+	// Fenced on both sides so the compositor's cost lands in `fence` on both,
+	// instead of hiding in the encoder's queue on both.
+	"webcodecs-fence-zoom": {
+		nativeEncode: false,
+		readFrequently: false,
+		gpuFence: true,
+		addEffects: ["zoom"],
+	},
+	// The other half of the Step-3 question. A zoom does not only miss the shadow
+	// cache — it also puts the camera in motion, which switches the motion-blur
+	// filter on. Run these two against the pair above and the arithmetic separates
+	// the shadow from everything else the zoom drags in:
+	//   (zoom − zoom-noshadow)  = the shadow with the cache MISSING every frame
+	//   (still − still-noshadow) = the shadow with the cache HOLDING
+	// Without them, "zoom is slower" is true and says nothing about what to fix.
+	"webcodecs-fence-noshadow": {
+		nativeEncode: false,
+		readFrequently: false,
+		gpuFence: true,
+		addEffects: ["noShadow"],
+	},
+	"webcodecs-fence-zoom-noshadow": {
+		nativeEncode: false,
+		readFrequently: false,
+		gpuFence: true,
+		addEffects: ["zoom", "noShadow"],
+	},
+	// Splits the 16.7 ms cache miss in two, which is what decides the SHAPE of the
+	// fix. Against `webcodecs-fence-zoom` it prices the three gaussians; against
+	// `webcodecs-fence-zoom-noshadow` it prices the full-frame plumbing that feeds
+	// them. A shader is the answer to the first; touching less of the frame is the
+	// answer to the second. Renders no shadow — measurement only, never shipped.
+	"webcodecs-fence-zoom-nofilter": {
+		nativeEncode: false,
+		readFrequently: false,
+		gpuFence: true,
+		shadowNoFilter: true,
+		addEffects: ["zoom"],
+	},
 	// These two WRITE FILES, which is what makes them the parity gate: encode the
 	// same timeline with the old and new compositor through the same encoder at
 	// the same bitrate, then diff the results (SSIM). Unit tests never look at a
@@ -248,6 +325,7 @@ function applyArm(arm: BenchArm): void {
 	localStorage.setItem("openscreen.compositeOnly", arm.compositeOnly ? "1" : "0");
 	localStorage.setItem("openscreen.legacyCompositor", arm.legacyCompositor ? "1" : "0");
 	localStorage.setItem("openscreen.gpuFence", arm.gpuFence ? "1" : "0");
+	localStorage.setItem("openscreen.shadowNoFilter", arm.shadowNoFilter ? "1" : "0");
 }
 
 /**
@@ -327,6 +405,8 @@ interface Captured {
 	stages: Record<string, number>;
 	/** The exporter's own loop numbers, which exclude the bench's setup. */
 	loop: { wallMs: number; frames: number; fps: number } | null;
+	/** Shadow cache hits/misses — the Step-3 decision input. */
+	shadow: { hits: number; misses: number } | null;
 	restore: () => void;
 }
 
@@ -335,6 +415,7 @@ function captureStages(): Captured {
 	const captured: Captured = {
 		stages: {},
 		loop: null,
+		shadow: null,
 		restore: () => {
 			console.warn = original;
 		},
@@ -351,6 +432,11 @@ function captureStages(): Captured {
 					frames: Number(head[2]),
 					fps: Number(head[3]),
 				};
+			}
+			// "[export perf] shadow cache: 100 hits, 20 misses (16.7% miss of 120)"
+			const shadow = /shadow cache:\s*(\d+)\s+hits,\s*(\d+)\s+misses/.exec(text);
+			if (shadow) {
+				captured.shadow = { hits: Number(shadow[1]), misses: Number(shadow[2]) };
 			}
 			for (const line of text.split("\n")) {
 				// "  render     1680.0    3.0%     3.08  n=546"
@@ -398,6 +484,7 @@ async function runOnce(
 			frames: capture.loop.frames,
 			fps: capture.loop.fps,
 			stages: capture.stages,
+			shadow: capture.shadow ?? undefined,
 		};
 	} catch (error) {
 		return {
@@ -433,23 +520,46 @@ export async function runBench(): Promise<void> {
 		for (const armName of BENCH_PARAMS.arms) {
 			if (!ARMS[armName]) throw new Error(`Unknown arm "${armName}"`);
 		}
-		// Loaded once and shared by every run: each arm must see byte-identical
-		// input, and the title fallback can open every project on disk.
+		// Loaded once: the title fallback can open every project on disk, and every
+		// arm must see the same source document.
 		// Cap BEFORE effects, so the injected zoom fits inside the capped window.
-		const doc = withEffects(
-			withClipCap(await resolveDocument(BENCH_PARAMS.project), BENCH_PARAMS.clip),
-			BENCH_PARAMS.effects,
-		);
+		const base = withClipCap(await resolveDocument(BENCH_PARAMS.project), BENCH_PARAMS.clip);
+		// One document per EFFECT SET, not per arm: arms sharing a set share the
+		// exact object, so they cannot differ by anything but their own flags.
+		const docs = new Map<string, AxcutDocument>();
+		const docFor = (arm: BenchArm): AxcutDocument => {
+			const effects = [...BENCH_PARAMS.effects, ...(arm.addEffects ?? [])];
+			const key = effects.join(",");
+			const existing = docs.get(key);
+			if (existing) return existing;
+			const built = withEffects(base, effects);
+			docs.set(key, built);
+			return built;
+		};
 		emit("start", {
 			arms: BENCH_PARAMS.arms,
 			runs: BENCH_PARAMS.runs,
-			project: doc.project?.title ?? "(untitled)",
+			project: base.project?.title ?? "(untitled)",
 			effects: BENCH_PARAMS.effects.length ? BENCH_PARAMS.effects.join("+") : "(project default)",
 			clip: BENCH_PARAMS.clip,
+			warmup: BENCH_PARAMS.warmup,
 		});
+		// Warm up EVERY arm, not just the first: each one's first pass is the one
+		// that pays. Results are dropped on the floor.
+		for (let w = 0; w < BENCH_PARAMS.warmup; w++) {
+			for (const armName of BENCH_PARAMS.arms) {
+				const arm = ARMS[armName];
+				const result = await runOnce(docFor(arm), armName, arm, 0);
+				// A warm-up that FAILS is still a broken arm — say so now rather than
+				// let the measured pass report the same failure four times.
+				if (!result.ok) throw new Error(`warm-up failed for ${armName}: ${result.error}`);
+				emit("warmup", { arm: armName, wallMs: result.wallMs, fps: result.fps });
+			}
+		}
 		for (let run = 1; run <= BENCH_PARAMS.runs; run++) {
 			for (const armName of BENCH_PARAMS.arms) {
-				const result = await runOnce(doc, armName, ARMS[armName], run);
+				const arm = ARMS[armName];
+				const result = await runOnce(docFor(arm), armName, arm, run);
 				results.push(result);
 				emit("run", result);
 			}

@@ -412,6 +412,139 @@ Two additional findings the gate did not ask for:
 2. **The Step-2 fixes are confirmed in-run**: legacy 9.8 → shipping 14.6 fps
    (+49 %) on a project whose per-frame webcam compositing they never touched.
 
+---
+
+## Annex B — Step 3: the L7 row, and what it decides (measured 2026-07-17)
+
+Same machine, same harness, `--clip=4` (122 frames), 4 runs per arm plus one
+discarded warm-up, four arms interleaved. **Spread 2–4 %** — the run is valid.
+All arms fenced (Annex A), so the compositor's cost is billed to `fence` and not
+to the encoder. Shadow is isolated by *pairs*: an arm's twin sets
+`shadowIntensity: 0`, because omitting the effect still renders the project's own.
+
+| arm | camera | shadow | wall | ms/frame |
+|---|---|---|---:|---:|
+| webcodecs-fence | still | on | 4144 ms | 34.0 |
+| webcodecs-fence-noshadow | still | off | 3990 ms | 32.7 |
+| webcodecs-fence-zoom | moving | on | 5835 ms | 47.8 |
+| webcodecs-fence-zoom-noshadow | moving | off | 4659 ms | 38.2 |
+
+Shadow cache: **0.8 % miss** with a still camera (121 hits / 1 miss), **54.1 %
+miss** during the zoom (56 / 66) — byte-identical across all four runs, so the
+miss rate is a property of the timeline, not of the machine.
+
+**The arithmetic, per frame:**
+
+| item | cost |
+|---|---:|
+| shadow, cache HOLDING (still camera) | **1.3 ms** |
+| shadow, cache MISSING (moving camera) | **16.7 ms** |
+| everything else the zoom adds (motion-blur filter, transform) | ~10.1 ms |
+| a still frame, all in | 34.0 ms |
+| a moving frame, all in | ~59 ms |
+
+So the Step-2 cache is doing exactly what it was built for — it takes the shadow
+to ~0 on still frames — and it cannot help on a moving one, by construction. On a
+moving frame the shadow alone costs half again as much as the *entire rest* of the
+compositor (16.7 vs 32.7 ms). It is the single largest per-frame item there.
+
+**Two findings the ship order did not anticipate:**
+
+1. **§13's decision rule cannot be answered by fps.** It asks for the share of
+   *zoom* frames; the cost tracks the share of **moving** frames — the eased
+   in/out, not the plateau. A settled zoom holds the cache (that is why 56 of the
+   zoom arm's frames still hit). The expensive case is therefore not "a timeline
+   with zooms" but auto-focus, which pans with the cursor and moves *every* frame
+   of its region. The product question — "how much of a typical timeline has a
+   MOVING camera" — is the user's, not the bench's.
+   **Answered, 2026-07-17 (product owner): a moving camera is the norm.** Screen
+   presentations carry zooms by nature; the webcam is commonly set to resize
+   reactively *during* those zooms; and Full Camera animates the webcam across the
+   whole stage. That is §13's "≳ 50 %" branch — **Step 4 is warranted**, subject
+   to B.1 below.
+2. **Step 4 as specified does not fix this.** §8b lists the compositor's caches as
+   "wallpaper 1× · **shadow per-geometry** · masks per-shape · …" — the same
+   geometry key, hence the same 54 % miss during motion. The unified WGSL
+   compositor only removes this cost if the shadow is *computed* per frame in the
+   shader rather than cached — and §13 explicitly forbids the SDF/`smoothstep`
+   approximation that would make that cheap, because the cascaded falloff has
+   burned this codebase twice. **Unresolved: a shader that reproduces the exact
+   3-pass cascade at 1080p, and its cost.** That, not the fps, is Step 4's real
+   gate.
+
+### B.1 — What the 16.7 ms actually is, and therefore what fixes it
+
+A cache miss is two stacked things: the three chained gaussians, and the
+full-frame Canvas2D plumbing feeding them (silhouette copy, `source-in` fill,
+filtered blit — 2 Mpx each). They have different fixes, so they were priced apart
+with a third arm that runs the whole miss path with the filter chain switched off
+(`openscreen.shadowNoFilter` — renders no shadow; diagnostic only). Timing the
+ops individually would have answered nothing: Canvas2D is as lazy as the GPU, so
+a timer around a `drawImage` measures submission and bills the work to whatever
+syncs next (§7.4). Hence an arm pair, both fenced.
+
+`fence` totals, 122 frames, 66 of them missing the cache — two independent runs:
+
+| arm | run A | run B |
+|---|---:|---:|
+| zoom + shadow | 3668 ms | 4086 ms |
+| zoom + shadow, no gaussians | 2734 ms | 2964 ms |
+| zoom, no shadow at all | 2513 ms | 2730 ms |
+| **⇒ gaussians** | **934 ms** | **1122 ms** |
+| **⇒ plumbing** | **221 ms** | **234 ms** |
+
+**The gaussian chain is ~81 % of the miss** (~14.2 ms per moving frame, against
+~3.3 ms of plumbing). Run B is VOID on its own spread gate (31 %; the machine had
+been benching continuously for ten minutes and was drifting) — but it is reported
+because the two runs agree on the *ratio* (4.2 : 1 and 4.8 : 1) while disagreeing
+on the absolute, which is exactly what interleaved arms under drift should do.
+A 4 : 1 ratio does not turn over inside that noise.
+
+**So: touching less of the frame recovers ~3 ms; the fix has to be the filter.**
+Which is where §13's prohibition needs a distinction it does not currently make:
+
+> **The ban is on a different falloff, not on a different implementation.** §13
+> forbids replacing the shadow with an SDF/`smoothstep` — rightly: that is an
+> *approximation of a different shape*, and it has burned this codebase twice.
+> But CSS `drop-shadow` is not a black box. It is `feGaussianBlur` on SourceAlpha,
+> and the SVG filter spec **defines** that blur, for our radii, as three
+> successive box blurs of a specified width. Reimplementing that cascade in a
+> shader is the same algorithm on a different device — not an approximation.
+> Box blurs are separable and O(1) per pixel; this is the cheap case on a GPU.
+>
+> That claim is falsifiable and must be falsified before it is built: the spike is
+> a GPU pass rendering the same silhouette, pixel-diffed against the Canvas2D
+> output. If they do not match, this paragraph is wrong. Skia's real path may not
+> follow the spec's letter.
+
+**Consequence for the ship order.** The spike stands alone — it replaces
+`cachedShadowLayer`'s filter with a GPU pass and needs no architecture change, so
+it pays off inside Electron today *and* is exactly the shadow §8b's compositor
+needs. It should be measured before Step 4 is committed to, not during it.
+
+**Bench corrections this measurement forced** (each was silently wrong before):
+
+- The `zoom` effect injected `depth: "medium"`; `ZOOM_DEPTH_SCALES` keys on 1–6,
+  so the lookup returned `undefined` and **the zoom never ran**. Every previous
+  zoom arm reported a clean number for an effect that did nothing. The injected
+  region is now parsed through `zoomRegionSchema` — the pipeline's own contract.
+- The session's **first export** pays for shader compilation, decoder setup and
+  JIT (9.3 s vs 5.6/6.6/5.8 s for its own repeats) and lands on whichever arm ran
+  first: a 60 % same-arm spread that voided two runs by itself. One discarded
+  warm-up per arm brings the spread to 2–4 %.
+- Effects are now per-arm (`addEffects`), so an effect is A/B'd inside ONE
+  interleaved run. `--effects` alone is one value per session, which turns any
+  effect comparison into a cross-session one — the mistake this bench exists to
+  prevent.
+
+**Reference-project caveat.** `proj_5b3ac6bc`'s first clip declares
+`durationSec: 4.03` but holds ~2.03 s of decodable video (its own zooms, authored
+at 3163 ms, are past the end and never fire — which is why the still arms sit at
+0.8 % miss). The measurement stands on the injected zoom; the stale duration is
+its own bug, unrelated to rendering.
+
+---
+
 **Step-0 note (data loss, §13).** The record's reference project `os_parity`
 (`proj_de6ffaaa…openscreen`) was found corrupted with exactly the §13 signature:
 a complete, valid save (updatedAt 2026-07-16T18:00:26Z) followed by the tail of a
