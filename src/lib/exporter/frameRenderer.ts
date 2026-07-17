@@ -1450,6 +1450,25 @@ export class FrameRenderer {
 		return this.compositeCanvas;
 	}
 
+	/**
+	 * Bench-only sync point — gate G0, docs/architecture/rendering-architecture.md §7.1.
+	 *
+	 * Draw calls queue GPU work; the cost lands on whichever operation first needs
+	 * the pixels, which today is the encoder — so the compositor's execution is
+	 * billed to `encodeWait`. Forcing execution HERE moves that cost into the
+	 * caller's `fence` timer and the stage table finally says where the time goes.
+	 *
+	 * gl.finish() drains the Pixi context. Canvas2D has no finish(): the 1×1
+	 * getImageData is the equivalent — it forces the pending raster work of the
+	 * whole surface chain (pixi canvas → shadow/foreground → composite) to
+	 * complete, while transferring a single pixel.
+	 */
+	finishGpuWork(): void {
+		const gl = (this.app?.renderer as unknown as { gl?: WebGLRenderingContext } | null)?.gl;
+		gl?.finish();
+		this.compositeCtx?.getImageData(0, 0, 1, 1);
+	}
+
 	destroy(): void {
 		if (this.videoSprite) {
 			this.videoSprite.destroy();
