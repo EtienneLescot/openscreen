@@ -763,6 +763,107 @@ either place unchanged. So ship on the web platform, keep WGSL + evaluate portab
 (done), and open the native core only if a §12 gate fires, now with the spike's two
 concrete steps named above.
 
+### D.6 — The route was wrong, the principle was right: D3D11 delivers it driver-free (product owner, 2026-07-17)
+
+D.5 concluded the GPU-resident native path was blocked on a driver update, because
+the Vulkan route (`gpu-video`) requires `VK_KHR_video_maintenance1`, which this AMD
+iGPU's driver (24.10.38) predates. **That was true of the Vulkan route only.** The
+product owner built the same idea on **D3D11** instead and reports **110 fps —
+above the browser's 79, on the current driver, no update.**
+
+Architecture (their POC, a from-scratch native Windows app, not a fork): **one
+shared `ID3D11Device`, no CPU readback between any stage** — D3D11VA hardware decode
+(×2, NV12 GPU textures) → **HLSL** compositor (the same effect set: layout, zoom,
+shadows, masks, background blur, motion blur, cursor; NV12→RGB, separable Gaussian,
+SDF corners+shadows, per-velocity blur) → RGB→NV12 (two RTV passes) → `h264_amf`
+encode (GPU→GPU) → MP4 mux. Stack: Rust + `windows-rs`, ffmpeg `libav*` (LGPL) as
+demux/decode/encode/mux plumbing, HLSL compiled at runtime. The measured window
+(§10) is one `Instant::now()` before and one after the WHOLE run — decode, encode
+and mux included — so nothing inside can falsify the clock; benchmark configs run
+cumulatively C0→C8.
+
+The correction that matters: **GPU-residency was always the win** (D.5's diagnosis
+holds — the browser beats the CPU path because WebCodecs keeps frames on-GPU). The
+only error was the *route*: `D3D11VA` decode + `AMF` encode are AMD's D3D-native
+paths and need none of the Vulkan Video extensions the driver lacks, so they reach
+full residency on the shipped driver where Vulkan could not. Native is not
+fundamentally slower than the browser — it is faster (110 > 79) — once both seams
+stay on one device, and D3D11 is how you get there here without touching drivers.
+
+**Verification owed:** the 110 fps is the product owner's reported figure; it has
+not yet been run through this document's interleaved-A/B, discarded-warm-up,
+VOID-on-spread gate (§C.2), and a `--profile detail` mode (decode/composite/encode
+share, serial vs parallel) is still to be built — as a SEPARATE pass, never
+instrumenting the §10 headline clock. The `poc-native/` Vulkan+wgpu work stands as
+the portability proof (the WGSL compositor runs native unchanged) and the cost map;
+the D3D11 POC is the throughput winner.
+
+### D.7 — Going native cross-platform: two axes, and what each actually costs
+
+If the native fast path is pursued beyond Windows, the work splits along two
+independent axes. The headline: **the compositor unifies; the codec does not; and
+the GPU vendor is abstracted away twice, so it multiplies almost nothing.**
+
+**Axis 1 — the OS (this is where the real per-platform work lives).**
+The pipeline has one portable half and one non-portable half:
+
+- *Compositor — unified, like whisper.cpp's Vulkan compute backend.* It is shaders,
+  and shaders run everywhere Vulkan/Metal does. wgpu compiles the one WGSL to
+  DXIL / SPIR-V / MSL. One implementation, three platforms. Proven (D.1).
+- *Hardware decode/encode — NOT unifiable via Vulkan Video.* Vulkan Video is the
+  would-be single codec API, and it fails on all three counts: **macOS is
+  impossible** — MoltenVK does not implement `VK_KHR_video_*` and, per Khronos,
+  "probably never will" (Metal does not expose the capability); **Windows-AMD is
+  driver-gated** (needs `VK_KHR_video_maintenance1`, Adrenalin ≥25.6.1, and encode
+  is absent on this iGPU — D.6); **Linux works** (Mesa). So Vulkan Video covers ~1.5
+  of 3 platforms and is not the unified path.
+- *The unified codec layer that DOES exist is ffmpeg `libav*`* — one demux / decode /
+  encode / mux API surface over every hardware backend (D3D11VA, VAAPI,
+  VideoToolbox, Vulkan Video, AMF, NVENC, QSV). ffmpeg picks the backend per
+  platform; the call sites stay the same. (The D3D11 POC already uses it this way.)
+- *The one irreducibly per-OS piece is the zero-copy BRIDGE* — mapping ffmpeg's
+  decoded hardware frame into a wgpu/Vulkan texture, because the GPU-memory-sharing
+  primitive differs and no single API spans all three:
+
+  | OS | decode | shared surface | encode |
+  |---|---|---|---|
+  | Windows | D3D11VA | **`ID3D11Device` shared texture** | AMF / NVENC / QSV |
+  | Linux | VAAPI / NVDEC | **dma-buf** (`texture_from_dmabuf_fd`) | VAAPI / Vulkan Video |
+  | macOS | VideoToolbox | **IOSurface** → Metal texture | VideoToolbox |
+
+  Three small bridges (`create_texture_from_hal` per backend), not three pipelines.
+  So cross-platform native = **1 compositor + 1 ffmpeg codec layer + 3 bridges**,
+  and Windows can later swap its D3D11 bridge for the Vulkan one (same as Linux)
+  once AMD drivers mature, with no change to compositor or ffmpeg.
+
+**Axis 2 — the GPU vendor (NVIDIA / AMD / Intel / Apple). Barely multiplies.**
+The vendor is abstracted twice — by the OS graphics API (the bridge is per-OS, not
+per-vendor: every Windows GPU speaks D3D11 textures; every Linux GPU exports
+dma-buf; every Mac uses IOSurface) and by ffmpeg (it selects `h264_nvenc` /
+`h264_amf` / `h264_qsv` / `h264_videotoolbox`). The compositor is vendor-agnostic
+too (wgpu). So on a single-GPU machine, NVIDIA vs AMD vs Intel is the same code
+path with a different backend string. What the vendor genuinely adds:
+
+- *Encoder capability gaps + fallback.* Not every vendor/generation has every
+  codec or quality tier (AMD's Vulkan encode is absent here; older Intel lacks AV1
+  encode; NVENC is the most complete). Probe capabilities and fall back
+  (AV1 → HEVC → H.264). Selection logic, not a rewrite.
+- *THE real hardware hazard: hybrid-GPU laptops* (Intel iGPU + NVIDIA dGPU, AMD APU
+  + AMD dGPU). If decode, composite and encode land on **different** adapters, the
+  single-device zero-copy assumption breaks and a cross-adapter copy through
+  system RAM / PCIe is forced — a descent in disguise, reintroducing exactly the
+  wall this whole architecture removes. Mitigation: detect and **pin all three
+  stages to one adapter**, or knowingly accept the copy. This is the one hardware
+  detail that can silently cost the win, and the one to measure on a hybrid laptop.
+- *Apple Silicon vs Intel Mac:* same VideoToolbox → IOSurface → Metal path; Apple
+  Silicon is faster (dedicated Media Engine), Intel Macs use QuickSync and are
+  being deprecated by Apple. No separate code.
+
+The measured 110 fps is on a single-GPU AMD iGPU — the simplest case. A discrete
+NVIDIA desktop would match or beat it through the same D3D11 bridge (NVENC); a
+hybrid laptop is the case that must be measured and adapter-pinned before the
+number is trusted there.
+
 ---
 
 **Step-0 note (data loss, §13).** The record's reference project `os_parity`
