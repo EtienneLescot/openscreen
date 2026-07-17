@@ -1,0 +1,70 @@
+<!doctype html>
+<html lang="fr">
+	<head>
+		<meta charset="utf-8" />
+		<title>POC full-shader — 2 sources, 1 layout, 3 effets</title>
+		<style>
+			body {
+				font-family: ui-sans-serif, system-ui, sans-serif;
+				background: #14141a;
+				color: #e8e8ee;
+				margin: 0;
+				padding: 24px;
+			}
+			h1 { font-size: 17px; font-weight: 500; margin: 0 0 4px; }
+			.sub { color: #8b8b9a; font-size: 13px; margin: 0 0 20px; }
+			.row { display: flex; gap: 20px; align-items: flex-end; flex-wrap: wrap; margin-bottom: 20px; }
+			label { font-size: 12px; color: #8b8b9a; display: block; margin-bottom: 4px; }
+			input { width: 70px; background: #22222c; color: #e8e8ee; border: 1px solid #33333f; border-radius: 6px; padding: 6px 8px; font-size: 13px; }
+			button { background: #3d7dff; color: #fff; border: 0; border-radius: 6px; padding: 9px 18px; font-size: 13px; font-weight: 500; cursor: pointer; }
+			button:disabled { background: #33333f; color: #6a6a78; cursor: default; }
+			.stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(120px, 1fr)); gap: 10px; margin-bottom: 18px; }
+			.stat { background: #1c1c24; border-radius: 8px; padding: 12px 14px; }
+			.stat .k { font-size: 11px; color: #8b8b9a; text-transform: uppercase; letter-spacing: 0.04em; }
+			.stat .v { font-size: 22px; font-weight: 500; margin-top: 3px; }
+			.hero .v { color: #4ade80; font-size: 32px; }
+			pre { background: #1c1c24; border-radius: 8px; padding: 14px; font-size: 12px; line-height: 1.55; min-height: 90px; overflow-x: auto; margin: 0 0 18px; }
+			video, canvas { width: 100%; max-width: 860px; border-radius: 8px; display: block; background: #000; }
+			canvas { margin-bottom: 14px; }
+			a { color: #3d7dff; font-size: 13px; }
+		</style>
+	</head>
+	<body>
+		<h1>POC full-shader — 2 sources, 1 layout, 3 effets</h1>
+		<p class="sub">
+			écran + webcam → un programme WGSL (flou, ombre, masque) → mp4. Aucun Electron, aucun
+			code de l'app.
+		</p>
+
+		<div class="row">
+			<div><label for="seconds">secondes</label><input id="seconds" type="number" value="4" min="1" max="30" /></div>
+			<div><label for="padding">padding</label><input id="padding" type="number" value="45" min="0" max="90" /></div>
+			<div><label for="shadow">ombre</label><input id="shadow" type="number" value="0.65" min="0" max="1" step="0.05" /></div>
+			<div><label for="blur">flou fond (px)</label><input id="blur" type="number" value="40" min="0" max="200" /></div>
+			<div>
+				<label for="instrument">instrumenté</label>
+				<input id="instrument" type="checkbox" checked style="width: auto" />
+			</div>
+			<button id="run">Lancer</button>
+			<button id="compare" style="background: #22222c; border: 1px solid #33333f">
+				Comparer A/B
+			</button>
+		</div>
+
+		<div class="stats">
+			<div class="stat hero"><div class="k">fps</div><div class="v" id="fps">—</div></div>
+			<div class="stat"><div class="k">par image</div><div class="v" id="perframe">—</div></div>
+			<div class="stat"><div class="k">composite</div><div class="v" id="render">—</div></div>
+			<div class="stat"><div class="k">décodage</div><div class="v" id="decode">—</div></div>
+			<div class="stat"><div class="k">encodage</div><div class="v" id="encode">—</div></div>
+			<div class="stat"><div class="k">frames</div><div class="v" id="progress">—</div></div>
+		</div>
+
+		<pre id="log"></pre>
+		<canvas id="stage"></canvas>
+		<video id="result" controls hidden></video>
+		<a id="download" hidden>télécharger poc.mp4</a>
+
+		<script type="module" src="./main.js"></script>
+	</body>
+</html>

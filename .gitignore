@@ -88,3 +88,10 @@ result-*
 
 opencode.json
 opencode.json
+
+# Frames dumped by `npm run bench:export -- --dumpFrame=N`, for eyes only.
+bench-frame-*.png
+
+# POC inputs (real recordings) and outputs — big, and not source.
+poc/media/
+poc/out/
