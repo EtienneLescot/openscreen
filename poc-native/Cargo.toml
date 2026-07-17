@@ -10,10 +10,12 @@ edition = "2021"
 # native possible" path the web POC could not measure.
 
 [dependencies]
-wgpu = "22"
+wgpu = "29"
 pollster = "0.3"
 bytemuck = { version = "1", features = ["derive"] }
 ffmpeg-next = "8.1.0"
+gpu-video = "0.4.0"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 
 [profile.release]
 opt-level = 3
