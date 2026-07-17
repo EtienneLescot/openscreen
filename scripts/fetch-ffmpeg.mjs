@@ -28,10 +28,14 @@
 //   we got before vendoring. Never swap in a "gpl" asset for the extra encoders:
 //   there is nothing in them we need — the hardware encoders are all LGPL.
 //
-// macOS: BtbN publishes no macOS target, so darwin is not handled here. It has
-// to be built and notarised separately — see docs/architecture/
-// export-pipeline-v2-spec.md, Phase 3. Native encode ships on all three
-// platforms; there is no "macOS keeps WebCodecs" option.
+// NOTE: the plan this was vendored for is REFUTED. Feeding native ffmpeg from
+// the renderer measured 2.1x SLOWER than the WebCodecs path it was to replace —
+// the wall is the compositor, not the encoder. See
+// docs/architecture/export-pipeline.md §5. The binary stays because the bench's
+// `native` arms use it, and because a future native core would still need a
+// licence-gated H.264 encoder; nothing here ships on the export path today.
+//
+// macOS: BtbN publishes no macOS target, so darwin is not handled here.
 
 import { spawnSync } from "node:child_process";
 import crypto from "node:crypto";
@@ -205,8 +209,8 @@ async function main() {
 	if (process.platform === "darwin") {
 		console.error(
 			"macOS is not provisioned by this script: BtbN publishes no macOS build.\n" +
-				"It must be built and notarised separately (docs/architecture/export-pipeline-v2-spec.md,\n" +
-				"Phase 3). A VideoToolbox-only build is inherently x264-free, so the LGPL gate is easy there.",
+				"It would have to be built and notarised separately. Note the native-encode plan\n" +
+				"is refuted (docs/architecture/export-pipeline.md §5), so this is bench-only today.",
 		);
 		process.exit(1);
 	}
