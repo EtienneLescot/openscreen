@@ -1,7 +1,8 @@
 import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
 import { DocumentNotFoundError, DocumentService, ProjectFileError } from "./document-service";
 
 async function makeTempDir(): Promise<string> {
@@ -208,6 +209,126 @@ describe("DocumentService", () => {
 
 		it("is a no-op when the file doesn't exist", async () => {
 			await expect(service.deleteProject("proj_never-existed")).resolves.toBeUndefined();
+		});
+	});
+
+	// These reproduce a bug that destroyed two real project files: fs.writeFile
+	// truncates and writes from offset 0, so two concurrent saves of one project
+	// spliced together — a short document over a long one's head, the long one's
+	// tail surviving past its end. The file parsed as JSON up to the splice and
+	// then died, taking the user's edits with it.
+	describe("concurrent saves", () => {
+		/** A document whose serialised length is driven by `annotations`. */
+		const withBulk = (doc: AxcutDocument, count: number): AxcutDocument => ({
+			...doc,
+			annotations: Array.from({ length: count }, (_, i) => ({
+				id: `ann_${i}`,
+				startMs: i,
+				endMs: i + 1,
+				type: "text" as const,
+				content: `annotation ${i} ${"x".repeat(200)}`,
+				position: { x: 10, y: 10 },
+				size: { width: 20, height: 10 },
+				style: {
+					color: "#ffffff",
+					backgroundColor: "transparent",
+					fontSize: 32,
+					fontFamily: "Inter",
+					fontWeight: "bold" as const,
+					fontStyle: "normal" as const,
+					textDecoration: "none" as const,
+					textAlign: "center" as const,
+				},
+				zIndex: i,
+			})),
+		});
+
+		// Repeated, because the race is a coin flip: measured on the pre-fix code,
+		// one long/short race spliced the file ~5 times out of 10. A single attempt
+		// passed against the very bug it was written for. 12 rounds miss it once in
+		// ~4000 runs; the loop is the test, not decoration.
+		it("leaves valid JSON when a long and a short save race", async () => {
+			for (let round = 0; round < 12; round++) {
+				const doc = await service.createProject(`Race ${round}`);
+				const file = path.join(tempDir, `${doc.project.id}.openscreen`);
+
+				// Unawaited on purpose: this is the exact shape of the real failure —
+				// two saves of one project in flight at once.
+				await Promise.all([
+					service.saveProject(withBulk(doc, 400)),
+					service.saveProject(withBulk(doc, 1)),
+				]);
+
+				const raw = await fs.readFile(file, "utf8");
+				// The destroyed projects died exactly here, at the splice point: the
+				// short document's bytes, then the long one's tail past its end.
+				const parsed = JSON.parse(raw);
+				// Whichever save landed last must be on disk WHOLE — never a mix.
+				expect([1, 400]).toContain(parsed.annotations.length);
+				expect(raw.trimEnd().endsWith("}")).toBe(true);
+			}
+		});
+
+		it("applies racing saves in call order, last one winning", async () => {
+			const doc = await service.createProject("Order");
+			await Promise.all([
+				service.saveProject(withBulk(doc, 300)),
+				service.saveProject(withBulk(doc, 5)),
+				service.saveProject(withBulk(doc, 120)),
+			]);
+			const onDisk = await service.getProject(doc.project.id);
+			expect(onDisk.annotations).toHaveLength(120);
+		});
+
+		it("survives many interleaved saves of one project", async () => {
+			const doc = await service.createProject("Storm");
+			// Sizes deliberately alternate long/short: equal-length writes overwrite
+			// each other cleanly and would prove nothing.
+			await Promise.all(
+				Array.from({ length: 20 }, (_, i) => service.saveProject(withBulk(doc, i % 2 ? 300 : 2))),
+			);
+			const onDisk = await service.getProject(doc.project.id);
+			expect(onDisk.annotations).toHaveLength(300);
+		});
+
+		it("keeps the previous document when a save fails mid-write", async () => {
+			const doc = await service.createProject("Durable");
+			await service.saveProject(withBulk(doc, 3));
+
+			// Fail the write itself, not the validation before it: a full disk or an
+			// EIO lands here, where the old pipeline had already truncated the file.
+			const open = vi.spyOn(fs, "open").mockRejectedValueOnce(new Error("ENOSPC: disk full"));
+			await expect(service.saveProject(withBulk(doc, 99))).rejects.toThrow(ProjectFileError);
+			open.mockRestore();
+
+			// The point of temp+rename: the good document is still there, intact.
+			const after = await service.getProject(doc.project.id);
+			expect(after.annotations).toHaveLength(3);
+		});
+
+		it("does not leave temp files behind", async () => {
+			const doc = await service.createProject("Tidy");
+			await Promise.all([
+				service.saveProject(withBulk(doc, 50)),
+				service.saveProject(withBulk(doc, 2)),
+			]);
+			const entries = await fs.readdir(tempDir);
+			expect(entries.filter((name) => name.includes(".tmp-"))).toEqual([]);
+		});
+
+		it("a failed save does not block later saves of the same project", async () => {
+			const doc = await service.createProject("Recover");
+			// The queue chains one save onto the last. If it chained on success only,
+			// this rejection would strand every save behind it for the session.
+			const open = vi.spyOn(fs, "open").mockRejectedValueOnce(new Error("EIO"));
+
+			const failing = service.saveProject(withBulk(doc, 2));
+			const following = service.saveProject(withBulk(doc, 7));
+			await expect(failing).rejects.toThrow(ProjectFileError);
+			await expect(following).resolves.toBeTruthy();
+			open.mockRestore();
+
+			expect((await service.getProject(doc.project.id)).annotations).toHaveLength(7);
 		});
 	});
 });
