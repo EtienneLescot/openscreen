@@ -50,9 +50,21 @@
 				<input id="optimise" type="checkbox" checked style="width: auto" />
 			</div>
 			<button id="run">Lancer</button>
+		</div>
+
+		<div class="row" style="border-top: 1px solid #2a2a34; padding-top: 16px;">
+			<div>
+				<label for="compareMode">comparer</label>
+				<select id="compareMode" style="width: auto; min-width: 210px; background: #22222c; color: #e8e8ee; border: 1px solid #33333f; border-radius: 6px; padding: 6px 8px; font-size: 13px;">
+					<option value="perf">Perf : optimisé vs naïf</option>
+					<option value="effects">Effets : activés vs coupés</option>
+					<option value="instruments">Mesure : instrumenté vs propre</option>
+				</select>
+			</div>
 			<button id="compare" style="background: #22222c; border: 1px solid #33333f">
-				Comparer A/B
+				Comparer A/B (8 exports)
 			</button>
+			<span id="compareNote" style="font-size: 12px; color: #8b8b9a; align-self: center;"></span>
 		</div>
 
 		<div class="stats">

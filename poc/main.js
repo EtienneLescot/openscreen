@@ -41,6 +41,7 @@ function regionStrength(t, start, end, ramp) {
 }
 
 const lerp = (a, b, t) => a + (b - a) * t;
+const clampAbs = (x, m) => Math.max(-m, Math.min(m, x));
 const lerpRect = (a, b, t) => ({
 	x: lerp(a.x, b.x, t),
 	y: lerp(a.y, b.y, t),
@@ -129,12 +130,26 @@ function evaluate(sc, t, prev) {
 	// Circle when docked (radius = half the bubble), rounded rect when grown.
 	const webcamRadius = lerp(Math.min(base.webcam.w, base.webcam.h) / 2, 26, move);
 
-	// --- velocity: what the motion blur is for ---
+	// --- motion blur: a VECTOR, along the camera's real travel ---
+	// The recording smears along how its centre moved since last frame, plus a
+	// term for the zoom scaling the content outward. A pan is diagonal; a
+	// horizontal-only smear would be wrong for most of what a screen demo does.
 	const cx = screen.x + screen.w / 2;
 	const cy = screen.y + screen.h / 2;
-	let velocity = 0;
+	const wcx = webcam.x + webcam.w / 2;
+	const wcy = webcam.y + webcam.h / 2;
+	let screenBlur = { x: 0, y: 0 };
+	let webcamBlur = { x: 0, y: 0 };
 	if (prev) {
-		velocity = Math.hypot(cx - prev.cx, cy - prev.cy) + Math.abs(screen.w - prev.w) * 0.5;
+		const k = 0.9;
+		screenBlur = {
+			x: clampAbs((cx - prev.cx) * k, 22),
+			y: clampAbs((cy - prev.cy) * k, 22),
+		};
+		webcamBlur = {
+			x: clampAbs((wcx - prev.wcx) * k, 18),
+			y: clampAbs((wcy - prev.wcy) * k, 18),
+		};
 	}
 
 	return {
@@ -142,8 +157,57 @@ function evaluate(sc, t, prev) {
 		webcam,
 		webcamRadius,
 		zoomScale,
-		motionBlurPx: Math.min(velocity * 0.35, 24),
-		memo: { cx, cy, w: screen.w },
+		screenBlur,
+		webcamBlur,
+		memo: { cx, cy, wcx, wcy },
+	};
+}
+
+// ---- the cursor: from the recorded trace, drawn synthetically ---------------
+//
+// The real product records positions + clicks and draws the cursor each frame
+// from that data — never baked into the video. This loads a REAL trace (the one
+// shipped with the screen recording) so the POC exercises the actual shape of the
+// data: normalised positions at irregular timestamps, and click/mouseup events.
+
+async function loadCursor(url) {
+	const doc = await (await fetch(url)).json();
+	// Dedup by timestamp (the trace repeats samples) and sort.
+	const byTime = new Map();
+	for (const s of doc.samples) byTime.set(s.timeMs, s);
+	const samples = [...byTime.values()].sort((a, b) => a.timeMs - b.timeMs);
+	const clicks = doc.samples.filter((s) => s.interactionType === "click").map((s) => s.timeMs);
+	return { samples, clicks };
+}
+
+/** Position (normalised to the recording) and click bounce at time t. */
+function cursorAt(trace, timeMs) {
+	const s = trace.samples;
+	if (s.length === 0) return null;
+	// Linear scan is fine at ~290 samples; a binary search is the same code later.
+	let i = 0;
+	while (i < s.length - 1 && s[i + 1].timeMs <= timeMs) i++;
+	const a = s[i];
+	const b = s[Math.min(i + 1, s.length - 1)];
+	const span = b.timeMs - a.timeMs;
+	const f = span > 0 ? Math.max(0, Math.min(1, (timeMs - a.timeMs) / span)) : 0;
+
+	// Click bounce: the pointer dips to 0.82 and springs back over ~140 ms after a
+	// real click — the same cue the app gives, driven by the recorded event.
+	let clickScale = 1;
+	for (const c of trace.clicks) {
+		const dt = timeMs - c;
+		if (dt >= 0 && dt < 140) {
+			const p = dt / 140;
+			clickScale = 1 - 0.18 * Math.sin(p * Math.PI);
+		}
+	}
+
+	return {
+		cx: lerp(a.cx, b.cx, f),
+		cy: lerp(a.cy, b.cy, f),
+		visible: a.visible !== false,
+		clickScale,
 	};
 }
 
@@ -174,10 +238,12 @@ async function run(override = {}) {
 	document.querySelector("#run").disabled = true;
 	log("opening sources…");
 
-	const [screen, webcam] = await Promise.all([
+	const [screen, webcam, cursor] = await Promise.all([
 		openVideo("media/screen.mp4"),
 		openVideo("media/webcam.mp4"),
+		loadCursor("media/cursor.json"),
 	]);
+	log(`cursor: ${cursor.samples.length} samples, ${cursor.clicks.length} clicks`);
 	const seconds = Number(document.querySelector("#seconds").value);
 	const screenDuration = await screen.track.computeDuration();
 	const duration = Math.min(seconds, screenDuration);
@@ -271,6 +337,7 @@ async function run(override = {}) {
 		screen: makePass("vsScreen", "fsScreen", OVER),
 		webcamShadow: makePass("vsWebcamShadow", "fsWebcamShadow", OVER),
 		webcam: makePass("vsWebcam", "fsWebcam", OVER),
+		cursor: makePass("vsCursor", "fsCursor", OVER),
 	};
 
 	// The bake runs before any video exists, so it gets a layout of its own: the
@@ -300,7 +367,7 @@ async function run(override = {}) {
 	// packing has to reproduce the holes exactly — get one offset wrong and the
 	// shader reads a radius where a rect belongs, draws nothing, and reports no
 	// error at all.
-	const uniforms = new Float32Array(20);
+	const uniforms = new Float32Array(32);
 	const uniformBuffer = device.createBuffer({
 		size: uniforms.byteLength,
 		usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST,
@@ -314,14 +381,18 @@ async function run(override = {}) {
 	await output.start();
 
 	const sc = scene(OUT, Number(document.querySelector("#padding").value));
-	const shadowIntensity = Number(document.querySelector("#shadow").value);
-	const bgBlur = Number(document.querySelector("#blur").value);
+	// effectsOn === false forces the effects OFF (not just absent) so the "effects
+	// on vs off" comparison isolates their cost against the same everything-else.
+	const effectsOn = override.effectsOn ?? true;
+	const shadowIntensity = effectsOn ? Number(document.querySelector("#shadow").value) : 0;
+	const bgBlur = effectsOn ? Number(document.querySelector("#blur").value) : 0;
 	const camAspect = webcam.track.displayWidth / webcam.track.displayHeight;
 	let memo = null;
+	let curMemo = null;
 
 	// Bake the background. Once, here — not 210 times inside the loop.
 	uniforms.set([OUT.width, OUT.height, 0, 0], 0);
-	uniforms.set([shadowIntensity, bgBlur, 18, 42], 12);
+	uniforms.set([shadowIntensity, bgBlur, 16, 22], 12);
 	device.queue.writeBuffer(uniformBuffer, 0, uniforms);
 	{
 		const enc = device.createCommandEncoder();
@@ -419,12 +490,32 @@ async function run(override = {}) {
 		m = mark();
 		const f = evaluate(sc, t, memo);
 		memo = f.memo;
+
+		// The cursor: interpolate the recorded trace, then place it in the SCREEN's
+		// coordinate space, so it rides the zoom for free — its position is carried
+		// through the same rect the recording is.
+		const cur = cursorAt(cursor, t * 1000);
+		const curX = f.screen.x + (cur?.cx ?? 0) * f.screen.w;
+		const curY = f.screen.y + (cur?.cy ?? 0) * f.screen.h;
+		const curSize = OUT.height * 0.05;
+		let curBlurX = 0;
+		let curBlurY = 0;
+		if (cur && curMemo) {
+			curBlurX = clampAbs((curX - curMemo.x) * 0.8, 30);
+			curBlurY = clampAbs((curY - curMemo.y) * 0.8, 30);
+		}
+		curMemo = cur ? { x: curX, y: curY } : null;
+		const curVisible = !!cur && cur.visible;
+
 		// Field n at float 4n — the struct is all-vec4 so this stays true.
 		uniforms.set([OUT.width, OUT.height, t, 28], 0); // stage | time | radius
 		uniforms.set([f.screen.x, f.screen.y, f.screen.w, f.screen.h], 4);
 		uniforms.set([f.webcam.x, f.webcam.y, f.webcam.w, f.webcam.h], 8);
-		uniforms.set([shadowIntensity, bgBlur, 18, 42], 12); // intensity | bgBlur | offsetY | spread
-		uniforms.set([f.webcamRadius, f.motionBlurPx, camAspect, optimised ? 1 : 0], 16);
+		uniforms.set([shadowIntensity, bgBlur, 16, 22], 12); // intensity | bgBlur | shadowOffsetY | sigma
+		uniforms.set([f.webcamRadius, 0, camAspect, optimised ? 1 : 0], 16); // radius | - | coverScale | opt
+		uniforms.set([f.screenBlur.x, f.screenBlur.y, f.webcamBlur.x, f.webcamBlur.y], 20); // mb
+		uniforms.set([curX, curY, curSize, curVisible ? 1 : 0], 24); // cursor
+		uniforms.set([curBlurX, curBlurY, cur?.clickScale ?? 1, 0], 28); // cursorFx
 		device.queue.writeBuffer(uniformBuffer, 0, uniforms);
 		const bind = device.createBindGroup({
 			layout: bindGroupLayout,
@@ -487,6 +578,12 @@ async function run(override = {}) {
 			pass.setPipeline(passes.webcamShadow);
 			pass.draw(6);
 			pass.setPipeline(passes.webcam);
+			pass.draw(6);
+		}
+		// The cursor, on top of everything — drawn each frame from the trace, culled
+		// when the recorded position is off-stage.
+		if (curVisible && curX > -curSize && curY > -curSize && curX < OUT.width && curY < OUT.height) {
+			pass.setPipeline(passes.cursor);
 			pass.draw(6);
 		}
 		pass.end();
@@ -670,49 +767,86 @@ async function run(override = {}) {
  * arms differ by that uniform and nothing else — no reload, no recompile, no
  * second session.
  */
+// Every A/B this POC can run, each naming EXACTLY the two things it compares and
+// what one run() override turns one arm into the other. Each holds everything
+// else fixed, so the difference is the named lever and nothing else.
+const COMPARISONS = {
+	perf: {
+		title: "Perf : optimisé vs naïf",
+		a: { label: "optimisé", over: { optimised: true, instrumented: false } },
+		b: { label: "naïf", over: { optimised: false, instrumented: false } },
+		note: "fond cuit + culling, vs fond recalculé + tout dessiné. Même image.",
+	},
+	effects: {
+		title: "Effets : activés vs coupés",
+		a: { label: "effets ON", over: { effectsOn: true, optimised: true, instrumented: false } },
+		b: { label: "effets OFF", over: { effectsOn: false, optimised: true, instrumented: false } },
+		note: "ombre + flou de fond présents, vs à zéro. Le prix des effets eux-mêmes.",
+	},
+	instruments: {
+		title: "Mesure : instrumenté vs propre",
+		a: { label: "instrumenté", over: { instrumented: true, optimised: true } },
+		b: { label: "propre", over: { instrumented: false, optimised: true } },
+		note: "fence + lecture des timestamps par image, vs rien. Le coût de la mesure.",
+	},
+};
+
+/**
+ * Interleaved A/B/A/B, because an effect can only be told apart from drift.
+ *
+ * Two identical runs measured 34.8 and 28.3 fps on this machine — 23% apart,
+ * which is the size of the effects under test. Sequential arms therefore prove
+ * nothing: they alternate so drift shows up as a run disagreeing with its OWN
+ * repeat instead of masquerading as the change. Same rule, and same reason, as
+ * the app's export bench. The shader variants all live in one module, chosen by a
+ * uniform, so an arm differs from its pair by that uniform and nothing else.
+ */
 async function compare(rounds = 3) {
+	const spec = COMPARISONS[document.querySelector("#compareMode").value] ?? COMPARISONS.perf;
 	const median = (xs) => {
 		const s = [...xs].sort((a, b) => a - b);
 		return s.length % 2 ? s[(s.length - 1) / 2] : (s[s.length / 2 - 1] + s[s.length / 2]) / 2;
 	};
 	const spread = (xs) => (Math.max(...xs) - Math.min(...xs)) / median(xs);
-	const arms = { OPTIMISED: [], NAIVE: [] };
+	const arms = [
+		{ ...spec.a, runs: [] },
+		{ ...spec.b, runs: [] },
+	];
 
 	// Round 0 is thrown away. Both arms climb monotonically across the first
-	// rounds — 15.0 → 28.4 → 33.3 and 27.9 → 37.2 → 42.0 — which is the browser
-	// and the GPU waking up, not the arms differing. Keeping it put a 64% spread
-	// on a 23% effect and voided the comparison by itself.
+	// rounds — 15.0 → 28.4 → 33.3 — which is the browser and the GPU waking up,
+	// not the arms differing. Keeping it put a 64% spread on a 23% effect and
+	// voided the comparison by itself.
 	for (let r = 0; r <= rounds; r++) {
-		for (const [name, optimised] of [
-			["OPTIMISED", true],
-			["NAIVE", false],
-		]) {
-			// Clean on both sides: the instruments cost 17%, and they are not what
-			// is being compared here.
-			const res = await run({ optimised, instrumented: false });
-			if (r > 0) arms[name].push(res.cruiseFps);
+		for (const arm of arms) {
+			const res = await run(arm.over);
+			if (r > 0) arm.runs.push(res.cruiseFps);
 		}
 	}
 
 	document.querySelector("#log").textContent = "";
-	log("=== baked background + shadow early-out, vs neither (interleaved A/B) ===\n");
-	for (const [name, xs] of Object.entries(arms)) {
+	log(`=== ${spec.title} — A/B interleavé, ${rounds} tours + 1 chauffe ===`);
+	log(`${spec.note}\n`);
+	for (const arm of arms) {
 		log(
-			`${name.padEnd(13)} cruise ${median(xs).toFixed(1).padStart(5)} fps   spread ${(spread(xs) * 100).toFixed(0)}%   runs: ${xs.map((x) => x.toFixed(1)).join(" / ")}`,
+			`${arm.label.padEnd(13)} croisière ${median(arm.runs).toFixed(1).padStart(5)} fps   spread ${(spread(arm.runs) * 100).toFixed(0)}%   ${arm.runs.map((x) => x.toFixed(1)).join(" / ")}`,
 		);
 	}
-	const gain = median(arms.OPTIMISED) - median(arms.NAIVE);
-	const gainPct = (gain / median(arms.NAIVE)) * 100;
-	const worst = Math.max(spread(arms.OPTIMISED), spread(arms.NAIVE)) * 100;
-	log(`\ngain: ${gain > 0 ? "+" : ""}${gain.toFixed(1)} fps (${gainPct.toFixed(0)}%)`);
+	const [A, B] = arms;
+	const gain = median(A.runs) - median(B.runs);
+	const gainPct = (gain / median(B.runs)) * 100;
+	const worst = Math.max(spread(A.runs), spread(B.runs)) * 100;
+	log(
+		`\n${A.label} vs ${B.label}: ${gain > 0 ? "+" : ""}${gain.toFixed(1)} fps (${gainPct.toFixed(0)}%)`,
+	);
 	if (worst >= Math.abs(gainPct)) {
 		log(
-			`\n!! VOID: same-arm spread reaches ${worst.toFixed(0)}%, as large as the effect.\n   This run says nothing. Repeat on a steadier machine.`,
+			`\n!! VOID : spread intra-bras ${worst.toFixed(0)}%, aussi grand que l'effet.\n   Ce run ne dit rien — refaire sur une machine calme.`,
 		);
 	} else {
-		log(`\nsame-arm spread ${worst.toFixed(0)}% — smaller than the effect, so the effect is real.`);
+		log(`\nspread intra-bras ${worst.toFixed(0)}% < l'effet — le résultat tient.`);
 	}
-	setStat("fps", median(arms.OPTIMISED).toFixed(1));
+	setStat("fps", median(A.runs).toFixed(1));
 }
 
 document.querySelector("#run").addEventListener("click", () => {
@@ -725,10 +859,18 @@ document.querySelector("#run").addEventListener("click", () => {
 });
 
 document.querySelector("#compare").addEventListener("click", () => {
-	document.querySelector("#log").textContent = "comparing, please wait…\n";
+	document.querySelector("#log").textContent = "comparaison en cours, patientez…\n";
 	compare().catch((error) => {
 		log(`\nFAILED: ${error.message}`);
 		console.error(error);
 		document.querySelector("#run").disabled = false;
 	});
 });
+
+// Show the selected comparison's plain-language note next to the dropdown.
+const modeSelect = document.querySelector("#compareMode");
+const updateNote = () => {
+	document.querySelector("#compareNote").textContent = COMPARISONS[modeSelect.value]?.note ?? "";
+};
+modeSelect.addEventListener("change", updateNote);
+updateNote();
