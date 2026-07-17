@@ -229,8 +229,36 @@ Consequence: the project is unopenable in the editor today.
 
 ---
 
-## 11. Open questions
+## 11. PoC findings: the hardware is willing, the ffmpeg CLI is not
+
+Probing option C on this machine with the bundled ffmpeg (2026‑07‑17), before writing any Rust:
+
+| measured | fps |
+|----------|----:|
+| **GPU decode (d3d11va) → GPU encode (h264_amf), no compositing, no descent** | **234** |
+| WebCodecs export today, full effect set | 44 |
+
+234 fps is the **floor of the native‑GPU path** on this laptop: 5.3× today's export before a single effect is composited. The physics has room.
+
+What does *not* work here is the plumbing between ffmpeg's filter graph and the encoder:
+
+| API | decode | filters | encode | bridge to AMF |
+|-----|:------:|:-------:|:------:|---------------|
+| **Vulkan** | ✅ | ✅ (`scale_vulkan`, `overlay_vulkan`, `gblur_vulkan`, `color_vulkan`) | ❌ driver exposes `video_decode_queue` only — **no encode queue** | ❌ *"AMF initialisation from a vulkan device is not supported"* |
+| **D3D11** | ✅ | ❌ `scale_d3d11` fails to create its texture (`80070057`) on every format | ✅ AMF | — |
+| **OpenCL** | — | ✅ but **no scaler** | — | ❌ `hwmap` from d3d11 fails on NV12's UV plane |
+
+So **the ffmpeg CLI cannot express GPU‑composite → GPU‑encode on this hardware.** That is a limit of the CLI's plumbing, not of the GPU: the same GPU decodes at 234 fps, encodes at 234 fps, and already composites the entire scene at **1.7 ms/frame** (the `render` stage, measured on every bench run above).
+
+**This does not test option C** — it tests ffmpeg's filter graph, which no native core would use. A real one decodes with libavcodec into a D3D11 texture, composites with wgpu/D3D11 **on that same device**, and hands the texture to AMF. The CLI is built for linear transcode, not multi‑layer compositing; running out of road here says nothing about the architecture, only that the PoC needs code.
+
+**What this does settle for the PoC's design, on AMD/Windows:** Vulkan is a dead end for the encoder (no encode queue, no AMF interop), so the compositor must own a **D3D11** device and hand D3D11 textures to AMF — not Vulkan, not OpenCL, whatever wgpu's default backend would pick.
+
+---
+
+## 12. Open questions
 
 1. **Does the descent behave differently on a discrete GPU, or on Intel QSV?** One bench run per machine.
-2. **Can option C actually keep the frame on‑device end to end?** That is the load‑bearing assumption of the whole native‑core case, and it is currently unmeasured. It should be prototyped and benched *before* committing to a Tauri migration — this report exists because the last "obvious" architectural win was 2.1× backwards.
+2. **Can option C actually keep the frame on‑device end to end?** Still the load‑bearing assumption of the whole native‑core case, and still unmeasured — §11 raised the floor (234 fps) and mapped the constraint (D3D11, not Vulkan), but the compositing‑to‑encoder handoff needs real code. Prototype and bench it *before* committing to a migration; this report exists because the last "obvious" architectural win was 2.1× backwards.
 3. **Is WebCodecs' 18.85 ms/frame `encodeWait` improvable at all?** It is now the largest single cost in the fastest path we have. §3.1's isolated probe says the same silicon does 165 fps (6 ms/frame) under ffmpeg, so ~13 ms/frame is Chromium overhead on a path we do not control.
+4. **Is `render` = 1.7 ms/frame the true GPU compositing cost, or an artefact of async?** `renderFrame` returns before the GPU finishes, so part of that work may be billed to whatever forces the sync next. It matters: 1.7 ms is what makes the native‑GPU projection (~167 fps) attractive.

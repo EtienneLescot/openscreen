@@ -38,14 +38,20 @@ function parseArgs(argv) {
  */
 function checkSingleInstance() {
 	const lock = path.join(os.tmpdir(), `openscreen-single-instance-${os.userInfo().username}.lock`);
-	const running = spawnSync("tasklist", ["/FI", "IMAGENAME eq electron.exe", "/NH"], {
-		encoding: "utf8",
-	});
-	if (running.stdout?.includes("electron.exe")) {
-		throw new Error(
-			"An Electron instance is already running and holds the single-instance lock;\n" +
-				"the bench would launch, exit 0 and report nothing. Close the app first.",
-		);
+	// Both names matter: the dev build runs as electron.exe, the INSTALLED app as
+	// openscreen.exe, and they share one userData — so one lock. Checking only
+	// electron.exe let the installed app hold it while the bench launched, exited
+	// 0 and reported nothing, with no log line to say why.
+	for (const image of ["electron.exe", "openscreen.exe"]) {
+		const running = spawnSync("tasklist", ["/FI", `IMAGENAME eq ${image}`, "/NH"], {
+			encoding: "utf8",
+		});
+		if (running.stdout?.includes(image)) {
+			throw new Error(
+				`${image} is already running and holds the single-instance lock;\n` +
+					"the bench would launch, exit 0 and report nothing. Close the app first.",
+			);
+		}
 	}
 	if (existsSync(lock)) rmSync(lock, { recursive: true, force: true });
 }
@@ -180,6 +186,7 @@ async function main() {
 	const args = parseArgs(process.argv.slice(2));
 	const query = new URLSearchParams({
 		...(args.project ? { project: args.project } : {}),
+		...(args.effects ? { effects: args.effects } : {}),
 		arms: args.arms ?? "webcodecs,native",
 		runs: args.runs ?? "2",
 		fps: args.fps ?? "60",
@@ -220,7 +227,7 @@ async function main() {
 				// Configuration the exporter reports about itself (which encoder, what
 				// the canvas actually granted). Always shown: an arm that silently
 				// no-ops must not be mistaken for an arm that was tested and lost.
-				const note = /\[export perf\] (canvas .*|native encode .*)$/.exec(line);
+				const note = /\[export perf\] (canvas .*|native encode .*|shadow .*)$/.exec(line);
 				if (note) console.log(`    · ${note[1]}`);
 				continue;
 			}
@@ -240,6 +247,7 @@ async function main() {
 				fatal = event.error;
 			} else if (event.event === "start") {
 				console.log(`  project: ${event.project}`);
+				console.log(`  effects: ${event.effects}`);
 				console.log(`  arms: ${event.arms.join(", ")} x${event.runs}\n`);
 			}
 		}

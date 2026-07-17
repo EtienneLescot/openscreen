@@ -111,6 +111,30 @@ function dropFramesEnabled(): boolean {
 	}
 }
 
+/**
+ * Diagnostic: decode and composite every frame, then stop. No extract, no
+ * encode, no file.
+ *
+ * Prices the GPU compositing of the REAL effect set — the number the whole
+ * native-core case rests on. The `render` stage reads 1.7 ms/frame, but
+ * renderFrame is async: it returns before the GPU is done, so that figure may be
+ * charging someone else for the work. Here nothing downstream can absorb it, so
+ * the wall is the compositor's own throughput.
+ *
+ * Combined with the measured GPU decode+encode floor (234 fps with no
+ * compositing), this bounds a native GPU pipeline without building one:
+ * an architecture that composites on-device cannot beat decode + THIS + encode.
+ *
+ *   localStorage.setItem("openscreen.compositeOnly", "1")
+ */
+function compositeOnlyEnabled(): boolean {
+	try {
+		return localStorage.getItem("openscreen.compositeOnly") === "1";
+	} catch {
+		return false;
+	}
+}
+
 async function probeOneEncoder(opts: {
 	label: string;
 	width: number;
@@ -1173,12 +1197,15 @@ export class VideoExporter {
 		// --- Frame sink: native ffmpeg, or the WebCodecs path it is replacing ---
 		const api = window.electronAPI as unknown as NativeSinkApi | undefined;
 		const useNative = nativeEncodeEnabled() && typeof api?.exportStart === "function";
-		// Ceiling diagnostic: extract but never ship, and start no ffmpeg. The
-		// export produces NO FILE — it exists to price the descent alone.
-		const dropFrames = useNative && dropFramesEnabled();
+		// Ceiling diagnostics: extract but never ship, or do not even extract.
+		// Both produce NO FILE — they price one stage in isolation.
+		const compositeOnly = useNative && compositeOnlyEnabled();
+		const dropFrames = useNative && !compositeOnly && dropFramesEnabled();
 		let sink: NativeFrameSink | null = null;
 		let extractor: CanvasFrameExtractor | null = null;
-		if (useNative && api) {
+		if (useNative && api && compositeOnly) {
+			console.warn("[export perf] composite ceiling: render only, NO EXTRACT, NO FILE WRITTEN");
+		} else if (useNative && api) {
 			extractor = new CanvasFrameExtractor(this.config.width, this.config.height);
 			if (dropFrames) {
 				console.warn("[export perf] readback ceiling: extract and discard, NO FILE WRITTEN");
@@ -1406,7 +1433,10 @@ export class VideoExporter {
 							// Both paths report the same two stages so the A/B diffs stage by
 							// stage: "readback" is getting pixels off the canvas, "encodeWait" is
 							// blocking on the consumer — the encoder queue, or the credit window.
-							if (extractor) {
+							if (compositeOnly) {
+								// Nothing downstream: the frame was composited and is dropped, so
+								// the wall measures the compositor and nothing else.
+							} else if (extractor) {
 								const stopExtract = timings.start("readback");
 								// The GPU->CPU descent happens here, inside copyTo — not in the
 								// VideoFrame constructor, which is lazy.
@@ -1587,6 +1617,10 @@ export class VideoExporter {
 				timings.formatSummary({ frames: frameIndex, hardwareAcceleration: encoderPreference }),
 		);
 
+		if (compositeOnly) {
+			warnings.push("Composite ceiling diagnostic: rendered only, no file was written.");
+			return { success: true, warnings };
+		}
 		if (dropFrames) {
 			warnings.push("Readback ceiling diagnostic: frames were discarded, no file was written.");
 			return { success: true, warnings };
