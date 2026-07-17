@@ -56,6 +56,12 @@ The real question is not *Electron vs Tauri*. It is:
 
 > **Where does the compositor live, and how does the preview display its output?**
 
+It is not *Node vs Rust* either. Neither the language nor the shell is what forces the descent — **the browser engine is**. The compositor is Pixi/WebGL/Canvas2D inside Chromium's renderer, and Chromium exposes its GPU textures to nobody: there is no API to obtain the D3D11 texture behind a canvas. So any encoder outside Chromium must have the pixels come down. Tauri's webview on Windows *is* Chromium (WebView2) — **composite in the webview under Tauri and you pay the identical descent.**
+
+Zero descent requires one thing only: **the compositor stops being a web canvas** and becomes our own GPU code, owning the same device as the encoder. That is reachable **from Electron too** — an N‑API native addon in the main process, or a native sidecar. Rust is the sane choice for new GPU code, not a requirement.
+
+**So the shell is a consequence, not a cause.** Tauri earns its place *after* that decision, on bundle size, memory and not shipping a second Chromium — never on this measurement. What actually forces the shell question is the **preview** (§4): once the compositor is native, the preview must come from it too, or the product ships two compositors (option B) and loses the parity that is its entire value.
+
 | option | compositor | preview display | crossing? | parity | other cost |
 |---|---|---|---|---|---|
 | **A. status quo + Phase 4** | Pixi/WebGL in renderer | canvas in the webview | yes (3.0 MB/frame) | ✅ one compositor | — |
@@ -63,6 +69,16 @@ The real question is not *Electron vs Tauri*. It is:
 | **B. Rust compositor, export only** | Rust/wgpu | Pixi (unchanged) | export: no | ❌ **two compositors** | months |
 | **C. Rust compositor + native preview surface** | Rust/wgpu | native surface in the window | no | ⚠️ *promised*, not given (see below) | months + shell migration |
 | **D. Rust compositor, preview via webview** | Rust/wgpu | frames pushed to the webview | **yes, reversed** | ✅ one compositor | months, for nothing |
+
+> ❌ **A′ is dead — measured 2026‑07‑16, see [`export-native-encode-measurement.md`](./export-native-encode-measurement.md) §5.**
+> The paragraph below is preserved because its *reasoning* is the trap worth remembering, not because
+> its conclusion holds. It is wrong in one specific way: `pipebench.cjs` measured the **pipe**, having
+> materialised frames once, outside the timed loop. It never priced getting a *composited* frame out
+> of the GPU — which is per‑frame, ~20–39 ms, and which A′ does **not** remove. A′ deletes the
+> structured clone; it keeps the descent. The `crossing? no` in the table above should read
+> **"IPC no, descent yes"**.
+> Measured ceiling with the crossing at *exactly zero*: **40.5 fps vs WebCodecs' 44.0**. A′ cannot
+> reach 165 fps, and it cannot beat what we already ship.
 
 **A′ is the option this document originally missed, and it matters.** The crossing is not purely architectural — it is partly *configuration*. With `sandbox:false` + `nodeIntegration:true`, the renderer **is** a Node process: it can `spawn('ffmpeg')` and write frames straight to `stdin`. V8 heap → pipe, no Mojo, no structured clone. (That is literally what our 165 fps `pipebench.cjs` measured.) **A′ reaches the same ~165 fps as C, for a boolean.**
 
