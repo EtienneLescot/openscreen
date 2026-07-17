@@ -121,6 +121,32 @@ function legacyCompositorRequested(): boolean {
 }
 
 /**
+ * Diagnostic: run the shadow's cache-miss path but SKIP the filter chain.
+ *
+ * A cache miss costs 16.7 ms/frame (Annex B), and that number is two different
+ * things stacked: three chained gaussians, and the full-frame Canvas2D plumbing
+ * that feeds them (a silhouette copy, a source-in fill, a filtered blit — 2 Mpx
+ * each). They do not have the same fix. A shader only helps if the gaussians are
+ * the cost; if it is the plumbing, the fix is to stop touching the whole frame.
+ *
+ * Timing the ops individually would answer nothing — Canvas2D is as lazy as the
+ * GPU, so a timer around a drawImage measures submission and bills the work to
+ * whatever syncs next (§7.4). Hence a flag and an arm PAIR instead: same path,
+ * one filter, one none, both fenced.
+ *
+ * The output is wrong on purpose (no shadow is drawn). Diagnostic only.
+ *
+ *   localStorage.setItem("openscreen.shadowNoFilter", "1")
+ */
+function shadowFilterDisabled(): boolean {
+	try {
+		return localStorage.getItem("openscreen.shadowNoFilter") === "1";
+	} catch {
+		return false;
+	}
+}
+
+/**
  * The recording's drop shadow, as a CSS filter chain.
  *
  * Three chained shadows, each blurring the alpha of the PREVIOUS stage's output
@@ -211,8 +237,19 @@ export class FrameRenderer {
 	private maskShape: { width: number; height: number; radius: number } | null = null;
 	/** Bench-only: undo the compositor fixes so they can be measured. */
 	private legacyCompositor = legacyCompositorRequested();
+	/** Bench-only: price the filter chain apart from the plumbing feeding it. */
+	private shadowNoFilter = shadowFilterDisabled();
 	/** Shadow filter output, keyed by the geometry it was computed for. */
 	private shadowCache: { key: string; canvas: HTMLCanvasElement } | null = null;
+	/**
+	 * How often the geometry key held, and how often it paid for the filter chain.
+	 *
+	 * The miss rate IS the Step-3 decision input (see rendering-architecture.md
+	 * §13): the cache captures the shadow's cost on still frames, and a moving
+	 * camera must miss by design. Only a count says which case a real timeline is.
+	 */
+	private shadowCacheHits = 0;
+	private shadowCacheMisses = 0;
 	/** Scratch holding videoCanvas's alpha as an opaque black shape. */
 	private shadowSilhouetteCanvas: HTMLCanvasElement | null = null;
 	/** The wallpaper, blurred once. It is a still image — see blurredBackgroundLayer. */
@@ -1223,7 +1260,11 @@ export class FrameRenderer {
 		h: number,
 	): HTMLCanvasElement | null {
 		const key = this.shadowGeometryKey();
-		if (this.shadowCache?.key === key) return this.shadowCache.canvas;
+		if (this.shadowCache?.key === key) {
+			this.shadowCacheHits++;
+			return this.shadowCache.canvas;
+		}
+		this.shadowCacheMisses++;
 
 		if (!this.shadowSilhouetteCanvas) {
 			this.shadowSilhouetteCanvas = document.createElement("canvas");
@@ -1249,7 +1290,8 @@ export class FrameRenderer {
 		silCtx.globalCompositeOperation = "source-over";
 
 		outCtx.globalCompositeOperation = "copy";
-		outCtx.filter = shadowFilterChain(this.config.shadowIntensity);
+		// Diagnostic arm: everything but the gaussians, so the pair prices them.
+		if (!this.shadowNoFilter) outCtx.filter = shadowFilterChain(this.config.shadowIntensity);
 		outCtx.drawImage(this.shadowSilhouetteCanvas, 0, 0, w, h);
 		outCtx.filter = "none";
 		outCtx.globalCompositeOperation = "source-over";
@@ -1448,6 +1490,11 @@ export class FrameRenderer {
 			throw new Error("Renderer not initialized");
 		}
 		return this.compositeCanvas;
+	}
+
+	/** Shadow cache hits/misses for the frames rendered so far — see the fields. */
+	shadowCacheStats(): { hits: number; misses: number } {
+		return { hits: this.shadowCacheHits, misses: this.shadowCacheMisses };
 	}
 
 	/**

@@ -158,6 +158,27 @@ function report(results) {
 	console.log("\n=== export bench ===");
 	console.table(rows);
 
+	// The shadow cache only holds while the geometry is still, so its miss rate is
+	// what a moving camera (zoom, auto-focus pan) actually costs — see Step 3.
+	const shadowRows = [];
+	for (const arm of arms) {
+		const runs = results.filter((r) => r.arm === arm && r.ok && r.shadow);
+		if (runs.length === 0) continue;
+		const hits = median(runs.map((r) => r.shadow.hits));
+		const misses = median(runs.map((r) => r.shadow.misses));
+		const total = hits + misses;
+		shadowRows.push({
+			arm,
+			hits,
+			misses,
+			"miss %": total === 0 ? "n/a" : `${((misses / total) * 100).toFixed(1)}%`,
+		});
+	}
+	if (shadowRows.length) {
+		console.log("shadow cache (median):");
+		console.table(shadowRows);
+	}
+
 	const stageKeys = [...new Set(results.flatMap((r) => Object.keys(r.stages ?? {})))];
 	const stageRows = stageKeys.map((stage) => {
 		const row = { stage };
@@ -190,6 +211,7 @@ async function main() {
 		// Iteration cap: bench only the first N seconds of timeline. Numbers from
 		// capped runs compare per-frame, or against runs with the SAME cap.
 		...(args.clip ? { clip: args.clip } : {}),
+		...(args.warmup ? { warmup: args.warmup } : {}),
 		arms: args.arms ?? "webcodecs,native",
 		runs: args.runs ?? "2",
 		fps: args.fps ?? "60",
@@ -248,11 +270,14 @@ async function main() {
 				console.log(`  ${event.arm} run ${event.run}: ${status}`);
 			} else if (event.event === "fatal") {
 				fatal = event.error;
+			} else if (event.event === "warmup") {
+				console.log(`  (warm-up) ${event.arm}: ${Math.round(event.wallMs)}ms — discarded`);
 			} else if (event.event === "start") {
 				console.log(`  project: ${event.project}`);
 				console.log(`  effects: ${event.effects}`);
 				if (event.clip) console.log(`  clip: first ${event.clip}s only (iteration cap)`);
-				console.log(`  arms: ${event.arms.join(", ")} x${event.runs}\n`);
+				console.log(`  arms: ${event.arms.join(", ")} x${event.runs}`);
+				console.log(`  warm-up: ${event.warmup} discarded run(s) per arm\n`);
 			}
 		}
 	};
