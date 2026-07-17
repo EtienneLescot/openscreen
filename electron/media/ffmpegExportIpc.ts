@@ -12,9 +12,14 @@ import {
  * IPC surface for the native export encoder.
  *
  * The renderer composites and extracts frames but cannot spawn ffmpeg — it is
- * sandboxed and stays that way (see docs/architecture/native-core-tauri-spec.md
- * §3.2: dropping the sandbox buys ~2x and costs the lock that guards
- * user-supplied media). So frames cross here and main feeds ffmpeg's stdin.
+ * sandboxed and stays that way. Dropping the sandbox (option A') was measured
+ * and buys nothing: with the crossing at exactly zero the pipeline still loses
+ * to WebCodecs, because the wall is the compositor, not this path. See
+ * docs/architecture/export-pipeline.md §5.
+ *
+ * This whole path is REFUTED (§5): feeding native ffmpeg from the renderer is
+ * 2.1x SLOWER than what we ship. It survives as bench scaffolding, not as a
+ * plan.
  *
  * Frames are `send`, not `invoke`: they are one-way and there is nothing to
  * return. Flow control is the renderer's credit window (8 frames in flight),
