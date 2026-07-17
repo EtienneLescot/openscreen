@@ -336,6 +336,12 @@ WGSL runs unmodified in the browser (WebGPU) *and* natively (wgpu). The evaluato
 | G-C | a platform ships hardware codecs Chromium won't expose | per-codec encoder *sidecar* — no host change |
 | none | — | host question stays closed |
 
+> **Native fast-path resolved (D.6, 2026-07-18).** Row B's open question — "the
+> wgpu(D3D12)↔AMF(D3D11) interop is unmeasured" — and gate G-A's blocking premise are
+> settled: the native GPU-resident path is measured on **D3D11** (`poc-d3d/`, ~126 fps,
+> above the browser), driver-free. Web stays the launch host here; but if a gate opens
+> native, the retained native stack is **D3D11**, not the Vulkan route the driver gates.
+
 ### 13. Ship order
 
 **Step 0 — the data-loss bug, before any of this.** `writeProject` (`src/lib/.../document-service.ts`) allows two concurrent saves to interleave (`O_TRUNC` + offset writes), which has already destroyed a real project file (valid JSON prefix + tail of a longer version; effects unrecoverable). Fix: serialise saves + atomic write (temp file + rename). Audit every writer in the file. **A performance spec is worthless next to projects that destroy themselves on save.**
@@ -763,7 +769,21 @@ either place unchanged. So ship on the web platform, keep WGSL + evaluate portab
 (done), and open the native core only if a §12 gate fires, now with the spike's two
 concrete steps named above.
 
+> **Superseded by D.6 (read this before quoting D.5 as "native is blocked").** The
+> "much higher ceiling behind hard, UNBUILT interop" was true of the **Vulkan** route
+> only. D3D11 builds the GPU-resident path on the shipped driver and clears the
+> browser (D.6). Read D.5 as what it measured — the **CPU-transport** native ceiling
+> (~48–68 fps) and the wgpu cost map — not as a verdict on native. Native is not
+> blocked; the fast path is D3D11.
+
 ### D.6 — The route was wrong, the principle was right: D3D11 delivers it driver-free (product owner, 2026-07-17)
+
+> **DECISION — the native fast-path is D3D11 (`poc-d3d/`), measured and retained.**
+> GPU-resident, driver-free, measured above the browser on the shipped driver. Web
+> (`poc/`) stays the portable launch host (§12); the wgpu path (`poc-native/`) stays
+> the portability proof and the cost map. When native is opened — a §12 gate — it
+> opens on **D3D11**, not the Vulkan route the driver still gates. This resolves the
+> exploration: web = launch host · wgpu = portability proof · **D3D11 = native fast-path.**
 
 D.5 concluded the GPU-resident native path was blocked on a driver update, because
 the Vulkan route (`gpu-video`) requires `VK_KHR_video_maintenance1`, which this AMD
@@ -774,7 +794,7 @@ above the browser's 79, on the current driver, no update.**
 Architecture (their POC, a from-scratch native Windows app, not a fork): **one
 shared `ID3D11Device`, no CPU readback between any stage** — D3D11VA hardware decode
 (×2, NV12 GPU textures) → **HLSL** compositor (the same effect set: layout, zoom,
-shadows, masks, background blur, motion blur, cursor; NV12→RGB, separable Gaussian,
+shadows, masks, background blur, motion blur, cursor; NV12→RGB, dual-Kawase blur,
 SDF corners+shadows, per-velocity blur) → RGB→NV12 (two RTV passes) → `h264_amf`
 encode (GPU→GPU) → MP4 mux. Stack: Rust + `windows-rs`, ffmpeg `libav*` (LGPL) as
 demux/decode/encode/mux plumbing, HLSL compiled at runtime. The measured window
@@ -790,13 +810,41 @@ full residency on the shipped driver where Vulkan could not. Native is not
 fundamentally slower than the browser — it is faster (110 > 79) — once both seams
 stay on one device, and D3D11 is how you get there here without touching drivers.
 
-**Verification owed:** the 110 fps is the product owner's reported figure; it has
-not yet been run through this document's interleaved-A/B, discarded-warm-up,
-VOID-on-spread gate (§C.2), and a `--profile detail` mode (decode/composite/encode
-share, serial vs parallel) is still to be built — as a SEPARATE pass, never
-instrumenting the §10 headline clock. The `poc-native/` Vulkan+wgpu work stands as
-the portability proof (the WGSL compositor runs native unchanged) and the cost map;
-the D3D11 POC is the throughput winner.
+**Verified — run through this document's protocol (measured 2026-07-18).** The POC
+now lives in `poc-d3d/` and the reported figure has been through the §C.2 gate:
+interleaved against the C0 decode+encode baseline, one warm-up round discarded,
+sustained regime (repeated exports, not a cold-boost burst). The full-effects config
+— all nine effects: layout, zoom, shadows, masks, background blur, motion blur,
+cursor — holds **~126 fps at 1080p60** (median 125.9, spread 11.8 %, admissible),
+confirming and slightly exceeding the reported 110. The clock is §10-clean (one
+`Instant::now()` before, one after the whole run — decode, encode and mux inside).
+The direction is thermal-robust: absolute fps drift with the passive iGPU's
+boost/throttle, but at **every state measured** the full-effects config beats the
+browser (79) and the wgpu path (48–68), the throttled floor included.
+
+**The `--profile detail` question was answered externally**, without instrumenting
+the §10 clock, via Windows per-engine GPU counters (`\GPU Engine\Utilization` — no
+elevation, no in-process probe, so it cannot poison the headline):
+
+- *Decode/composite/encode share, and where the wall is:* **the bottleneck shifts
+  with load.** Light configs are **encode-bound** (video-codec engine ~71 %); heavy
+  configs are **composite-bound** (3d engine ~84 %). Decode never bounds — a fast,
+  bursty ~2 ms. The VCN encoder is the hard ceiling (~210 fps decode+encode,
+  fixed-function; `-quality speed` buys +2 %), so composite is the only optimisable
+  surface on heavy configs — which is why the background blur was moved to
+  dual-Kawase (C8 104 → 126).
+- *Serial vs parallel:* **already parallel on the GPU.** The 3d and codec engines are
+  both busy over the same window (84 % + 61 % = 145 %, impossible if serialised) — the
+  GPU pipelines the stages across frames on its own, the single-threaded CPU loop
+  notwithstanding. So an explicit CPU-side pipeline adds ~nothing (confirmed by a
+  no-op SRV-cache trial: reducing CPU overhead moved neither bound). **This is the
+  native twin of §C.3** — pipelining the encoder LOSES on this iGPU — for the same
+  reason: on a shared-memory-bus integrated GPU, the overlap is already free and
+  forcing more only contends for bandwidth.
+
+The `poc-native/` Vulkan+wgpu work stands as the portability proof (the WGSL
+compositor runs native unchanged) and the cost map; **`poc-d3d/` is the retained
+native fast-path** — the throughput winner, now measured, not reported.
 
 ### D.7 — Going native cross-platform: two axes, and what each actually costs
 
@@ -859,10 +907,10 @@ path with a different backend string. What the vendor genuinely adds:
   Silicon is faster (dedicated Media Engine), Intel Macs use QuickSync and are
   being deprecated by Apple. No separate code.
 
-The measured 110 fps is on a single-GPU AMD iGPU — the simplest case. A discrete
-NVIDIA desktop would match or beat it through the same D3D11 bridge (NVENC); a
-hybrid laptop is the case that must be measured and adapter-pinned before the
-number is trusted there.
+The measured ~126 fps (D.6, full-effects, protocol-verified) is on a single-GPU AMD
+iGPU — the simplest case. A discrete NVIDIA desktop would match or beat it through
+the same D3D11 bridge (NVENC); a hybrid laptop is the case that must be measured and
+adapter-pinned before the number is trusted there.
 
 ---
 
