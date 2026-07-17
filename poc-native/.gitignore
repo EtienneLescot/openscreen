@@ -3,3 +3,4 @@
 *.bmp
 out-preview.png
 out.mp4
+/ffmpeg-dev
