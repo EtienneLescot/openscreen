@@ -1654,6 +1654,18 @@ export class VideoExporter {
 				timings.formatSummary({ frames: frameIndex, hardwareAcceleration: encoderPreference }),
 		);
 
+		// The shadow cache only pays off on frames whose geometry is still, so its
+		// miss rate — not the wall — is what says whether a moving camera leaves the
+		// per-frame shadow in place (rendering-architecture.md §13, Step 3).
+		const shadowStats = renderer.shadowCacheStats();
+		const shadowLookups = shadowStats.hits + shadowStats.misses;
+		if (shadowLookups > 0) {
+			const missPct = ((shadowStats.misses / shadowLookups) * 100).toFixed(1);
+			console.warn(
+				`[export perf] shadow cache: ${shadowStats.hits} hits, ${shadowStats.misses} misses (${missPct}% miss of ${shadowLookups})`,
+			);
+		}
+
 		if (compositeOnly) {
 			warnings.push("Composite ceiling diagnostic: rendered only, no file was written.");
 			return { success: true, warnings };
