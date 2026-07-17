@@ -1,0 +1,18 @@
+[package]
+name = "poc-native"
+version = "0.1.0"
+edition = "2021"
+
+# Native full-shader compositor POC. No browser, no Electron, no WebCodecs:
+# wgpu runs the same WGSL as the web POC (adapted from texture_external to plain
+# 2D textures, a WebGPU-only feature that native wgpu does not have), and the
+# hardware H.264 encoder is reached natively. This is the "most performant and
+# native possible" path the web POC could not measure.
+
+[dependencies]
+wgpu = "22"
+pollster = "0.3"
+bytemuck = { version = "1", features = ["derive"] }
+
+[profile.release]
+opt-level = 3

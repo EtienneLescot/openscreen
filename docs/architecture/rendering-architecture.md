@@ -674,6 +674,66 @@ multiple encoder instances, not a deeper queue on one), not the shader's.
 
 ---
 
+## Annex D — The native POC (Rust + wgpu), measured 2026-07-17
+
+Built at the product owner's insistence: forget Electron, measure the most native,
+most performant path. `poc-native/` — Rust, wgpu (Vulkan on the reference AMD
+iGPU), the AMD hardware encoder via ffmpeg `h264_amf`. No browser, no WebCodecs.
+
+**D.1 — The compositor is portable, proven.** wgpu runs `composite.wgsl`
+**unchanged** — the only edits are the two the web platform forces and native
+lacks (`texture_external` → `texture_2d`, `textureSampleBaseClampToEdge` →
+`textureSampleLevel`). The native frame at t=0.5s is pixel-identical to the web
+POC: padded recording, analytic erf shadow, circular webcam, rimmed cursor. §12's
+portability bet — "WGSL + evaluate move to native unchanged" — is now demonstrated,
+not asserted. This is the single most important native result: the product's
+substance is host-agnostic.
+
+**D.2 — Encoder ceilings, native, no browser (ffmpeg, `-benchmark`):**
+
+| path | throughput |
+|---|---:|
+| `h264_amf`, CPU-decoded frames | ~180 fps |
+| `d3d11va` decode → `h264_amf`, frames stay on GPU | **256 fps** |
+
+The hardware encoder is not the wall — 256 fps at 1080p when the frame never
+leaves the GPU.
+
+**D.3 — The naive native pipeline is 31 fps, and that is PIPE-BOUND, not native.**
+Stream-decode both sources, composite each on wgpu, encode with `h264_amf`, real
+animated timeline: **31 fps** — slower than the web POC's 79. But the cause was
+measured before it was concluded (this project punishes the reverse):
+
+- with encode pipe 31.2 fps; without it 31.7 fps → the encoder is not the wall;
+- **the decode pipe alone** (ffmpeg → /dev/null, 180 frames) is **30 fps**, 3.9 s
+  of it system time — 8 MB/frame × 180 = 1.4 GB of *uncompressed* pixels shoved
+  between subprocesses.
+
+So the wall is the **subprocess raw-RGBA pipes**, an artifact of reaching ffmpeg
+as a child process — not the descent, not the compositor (1.9 ms), not the encoder
+(256 fps). The browser wins *today* only because WebCodecs keeps frames in-process
+(`VideoFrame`s in memory), which no raw pipe crosses. **The 31 fps must never be
+quoted as "native loses."**
+
+**D.4 — What the native ceiling actually needs, still unbuilt:**
+1. **In-process codecs** (libavcodec via `ffmpeg-next`, or Media Foundation) — no
+   raw-frame pipes. Removes the 1.4 GB IPC that caps D.3.
+2. **Zero-descent GPU → encoder** — the composited wgpu texture handed to the
+   hardware encoder without the CPU readback, via Vulkan Video encode or
+   D3D12↔D3D11/AMF shared textures. This is the unmeasured §12 G-A premise, and
+   the only path that can turn the 256 fps encoder ceiling into real throughput.
+   It is deep unsafe interop (days, not hours).
+
+**The standing conclusion is unchanged but now grounded on both sides:** the web
+platform (WebCodecs) hands you the on-device fast path for free (79 fps, no interop
+written); native offers a much higher ceiling (256 fps encoder) but only behind
+hard, unbuilt interop. The compositor — the product's actual substance — runs
+either place unchanged. So ship on the web platform, keep WGSL + evaluate portable
+(done), and open the native core only if a §12 gate fires, now with the spike's two
+concrete steps named above.
+
+---
+
 **Step-0 note (data loss, §13).** The record's reference project `os_parity`
 (`proj_de6ffaaa…openscreen`) was found corrupted with exactly the §13 signature:
 a complete, valid save (updatedAt 2026-07-16T18:00:26Z) followed by the tail of a
