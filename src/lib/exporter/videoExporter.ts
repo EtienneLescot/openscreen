@@ -137,6 +137,27 @@ function compositeOnlyEnabled(): boolean {
 	}
 }
 
+/**
+ * Gate G0 — docs/architecture/rendering-architecture.md §7.1.
+ *
+ * Force the GPU to FINISH compositing before the encode timers start, in a
+ * `fence` stage of its own. If §7.1 is right, `encodeWait` collapses to the
+ * encoder's own time and the difference reappears under `fence`; if it does
+ * not, the architecture document's premise is wrong and work on it stops.
+ *
+ * The fence serialises compositor and encoder (no overlap), so it perturbs the
+ * wall it measures: this is a measurement arm, never a shipping default.
+ *
+ *   localStorage.setItem("openscreen.gpuFence", "1")
+ */
+function gpuFenceEnabled(): boolean {
+	try {
+		return localStorage.getItem("openscreen.gpuFence") === "1";
+	} catch {
+		return false;
+	}
+}
+
 async function probeOneEncoder(opts: {
 	label: string;
 	width: number;
@@ -1203,6 +1224,11 @@ export class VideoExporter {
 		// Both produce NO FILE — they price one stage in isolation.
 		const compositeOnly = useNative && compositeOnlyEnabled();
 		const dropFrames = useNative && !compositeOnly && dropFramesEnabled();
+		// Gate G0: sync the GPU after compositing, before anything downstream runs.
+		const gpuFence = gpuFenceEnabled();
+		if (gpuFence) {
+			console.warn("[export perf] G0 fence: GPU synced after compositing, per frame");
+		}
 		let sink: NativeFrameSink | null = null;
 		let extractor: CanvasFrameExtractor | null = null;
 		if (useNative && api && compositeOnly) {
@@ -1431,6 +1457,15 @@ export class VideoExporter {
 							const stopRender = timings.start("render");
 							await renderer.renderFrame(videoFrame, sourceTimestampMs * 1000, webcamFrame);
 							stopRender();
+
+							// Gate G0: everything renderFrame queued must EXECUTE before the
+							// next timer starts, so `fence` absorbs the compositor's real cost
+							// and the stages below stop being billed for it.
+							if (gpuFence) {
+								const stopFence = timings.start("fence");
+								renderer.finishGpuWork();
+								stopFence();
+							}
 
 							// Both paths report the same two stages so the A/B diffs stage by
 							// stage: "readback" is getting pixels off the canvas, "encodeWait" is

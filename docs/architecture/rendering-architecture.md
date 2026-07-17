@@ -374,3 +374,49 @@ Audio internals (WSOLA/AAC/sync — orthogonal, untouched) · cuts & speed regio
 ---
 
 *Provenance: every number in Part II is a gated measurement on the reference machine; §7.1's closing arithmetic is a deduction with G0 as its named falsifier; the 213-fps-beats-165-fps comparison is same-machine, same-frames. The two prior specs' full measurement reports remain the source of record for methodology details.*
+
+---
+
+## Annex A — Gate G0: PASSED (measured 2026-07-17)
+
+Run on the reference machine, real bench harness (`npm run bench:export`), four arms
+interleaved, 2 runs each, effects `shadow,blur,radius`, 1080p60, 820 frames.
+Project: `proj_5b3ac6bc` ("Recording 15/07/2026 18:38:53") — **not** the record's
+`os_parity`, which was found destroyed by the §13 Step-0 bug (see note below).
+This project is heavier than the record's: two clips, both with a visible webcam
+track — absolute numbers are therefore not comparable with §6; the arm-vs-arm
+attribution, which is all G0 claims, is.
+
+| arm | wall | fps | spread | encodeWait total | fence total |
+|---|---:|---:|---:|---:|---:|
+| webcodecs-legacy | 83.3 s | 9.8 | 5 % | 58 305 ms | — |
+| webcodecs-legacy-fence | 64.4 s | 12.8 | 8 % | **3 181 ms** | 44 538 ms |
+| webcodecs | 56.6 s | 14.6 | 5 % | 32 368 ms | — |
+| webcodecs-fence | 50.1 s | 16.4 | 9 % | **3 013 ms** | 28 199 ms |
+
+Per frame (820 frames): legacy `encodeWait` 71.1 → **3.9 ms** (×18 collapse), the
+difference reappearing under `fence` (54.3 ms/frame); shipping compositor 39.5 →
+**3.7 ms** (×10.7), `fence` 34.4 ms/frame. `encode` itself is ~0.03 ms/frame.
+
+**§7.1 is confirmed.** `encodeWait` was billing the compositor's GPU execution;
+the encoder's own residual wait is ~3.7–3.9 ms/frame on this machine. The wall is
+the compositor — here even more so than §7.1 estimated, because this project
+composites a webcam bubble on every frame of both clips.
+
+Two additional findings the gate did not ask for:
+
+1. **The fenced arms are FASTER end-to-end** (legacy −23 %, shipping −11 %).
+   Draining the GPU once per frame beats letting Chromium queue unboundedly —
+   deep uncontrolled pipelining is actively harmful here. §11's "pipeline, don't
+   await" needs the nuance: *bounded* in-flight work, not maximal.
+2. **The Step-2 fixes are confirmed in-run**: legacy 9.8 → shipping 14.6 fps
+   (+49 %) on a project whose per-frame webcam compositing they never touched.
+
+**Step-0 note (data loss, §13).** The record's reference project `os_parity`
+(`proj_de6ffaaa…openscreen`) was found corrupted with exactly the §13 signature:
+a complete, valid save (updatedAt 2026-07-16T18:00:26Z) followed by the tail of a
+longer, older version — `JSON.parse` fails at byte 3485 and the app can no longer
+list it. A byte-identical backup was taken (`….openscreen.corrupt.bak`, alongside
+an older victim `proj_05a4bb1c….corrupt.bak`). Recovery is mechanical — truncate
+to the valid 3485-byte prefix — pending the user's go-ahead. That is **two**
+destroyed project files; Step 0 stays the first line of the ship order.

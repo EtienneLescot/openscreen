@@ -187,6 +187,9 @@ async function main() {
 	const query = new URLSearchParams({
 		...(args.project ? { project: args.project } : {}),
 		...(args.effects ? { effects: args.effects } : {}),
+		// Iteration cap: bench only the first N seconds of timeline. Numbers from
+		// capped runs compare per-frame, or against runs with the SAME cap.
+		...(args.clip ? { clip: args.clip } : {}),
 		arms: args.arms ?? "webcodecs,native",
 		runs: args.runs ?? "2",
 		fps: args.fps ?? "60",
@@ -248,6 +251,7 @@ async function main() {
 			} else if (event.event === "start") {
 				console.log(`  project: ${event.project}`);
 				console.log(`  effects: ${event.effects}`);
+				if (event.clip) console.log(`  clip: first ${event.clip}s only (iteration cap)`);
 				console.log(`  arms: ${event.arms.join(", ")} x${event.runs}\n`);
 			}
 		}
