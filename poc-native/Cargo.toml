@@ -13,6 +13,7 @@ edition = "2021"
 wgpu = "22"
 pollster = "0.3"
 bytemuck = { version = "1", features = ["derive"] }
+ffmpeg-next = "8.1.0"
 
 [profile.release]
 opt-level = 3
