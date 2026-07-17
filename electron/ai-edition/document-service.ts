@@ -10,7 +10,7 @@
 // ponytail: Phase 1 surface area is intentionally narrow (list / get / create
 // / save / addAsset / removeAsset). ops/history/agent runtime land in Phase 6.
 
-import fs from "node:fs/promises";
+import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { createId } from "../../src/lib/ai-edition/document/ids";
 import {
@@ -78,9 +78,32 @@ function safeProjectId(raw: string): string {
 	return raw;
 }
 
+/**
+ * Windows fails a rename onto an open file with EPERM/EBUSY: an indexer, an
+ * antivirus or a backup agent can hold the destination for a few milliseconds
+ * after we last touched it. The write itself is sound, so retry briefly rather
+ * than surface a save error the user cannot act on. POSIX renames don't hit this
+ * and take the first attempt.
+ */
+async function renameWithRetry(from: string, to: string): Promise<void> {
+	const RETRYABLE = new Set(["EPERM", "EACCES", "EBUSY"]);
+	for (let attempt = 0; ; attempt++) {
+		try {
+			await fs.rename(from, to);
+			return;
+		} catch (error) {
+			const code = (error as NodeJS.ErrnoException)?.code ?? "";
+			if (attempt >= 5 || !RETRYABLE.has(code)) throw error;
+			await new Promise((resolve) => setTimeout(resolve, 10 * 2 ** attempt));
+		}
+	}
+}
+
 export class DocumentService {
 	private readonly projectsRoot: string;
 	private legacyMigrationDone = false;
+	/** Tail of the in-flight save chain per project id — see writeProject. */
+	private readonly writeQueues = new Map<string, Promise<void>>();
 
 	constructor(projectsRoot: string) {
 		this.projectsRoot = projectsRoot;
@@ -292,10 +315,79 @@ export class DocumentService {
 		return this.saveProject(next);
 	}
 
-	private async writeProject(doc: AxcutDocument): Promise<void> {
+	/**
+	 * Serialise saves per project, then write atomically.
+	 *
+	 * This has destroyed real project files. `fs.writeFile` opens with O_TRUNC and
+	 * writes from offset 0, so two concurrent saves of the SAME project interleave
+	 * onto one path: the short document lands over the long one's opening bytes and
+	 * the long one's tail survives past its end. The result parses as JSON right up
+	 * to the splice and then dies — the file is unreadable and the edits in it are
+	 * gone. Two projects on this machine were lost exactly that way (a complete
+	 * document followed by the tail of a longer, older version).
+	 *
+	 * Both halves are load-bearing:
+	 *  - the queue makes concurrent saves of one project sequential, so a save
+	 *    always writes over a settled file, never a half-written one;
+	 *  - temp + rename makes each save all-or-nothing, so a crash (or a full disk)
+	 *    mid-write leaves the previous document intact instead of a truncated one.
+	 * The queue alone would still leave a torn file on a crash; the rename alone
+	 * would still let two saves race for the same destination.
+	 */
+	private writeProject(doc: AxcutDocument): Promise<void> {
+		const projectId = doc.project.id;
+		const tail = this.writeQueues.get(projectId) ?? Promise.resolve();
+		// Chained on both settlements: one save failing must not cancel the next.
+		const run = tail.then(
+			() => this.writeProjectNow(doc),
+			() => this.writeProjectNow(doc),
+		);
+		const settled = run.catch(() => undefined);
+		this.writeQueues.set(projectId, settled);
+		void settled.then(() => {
+			// Only the tail clears the entry — a later save may already own it.
+			if (this.writeQueues.get(projectId) === settled) this.writeQueues.delete(projectId);
+		});
+		return run;
+	}
+
+	private async writeProjectNow(doc: AxcutDocument): Promise<void> {
 		await this.ensureProjectsDir();
 		const filePath = this.fileFor(doc.project.id);
-		await fs.writeFile(filePath, JSON.stringify(doc, null, 2), "utf8");
+		// The suffix goes AFTER the extension on purpose: listProjects matches on a
+		// trailing `.openscreen`, so an interrupted write's leftover is invisible to
+		// it rather than showing up as a corrupt project. Unique per write, so two
+		// queues (or two processes) never share a temp path.
+		const tempPath = `${filePath}.tmp-${process.pid}-${createId("w")}`;
+		const json = JSON.stringify(doc, null, 2);
+
+		let handle: FileHandle | undefined;
+		try {
+			handle = await fs.open(tempPath, "w");
+			await handle.writeFile(json, "utf8");
+			// Flush before the rename: without it the rename can reach the disk first
+			// and a power loss leaves the new name pointing at unwritten blocks.
+			await handle.sync();
+		} catch (error) {
+			await handle?.close().catch(() => undefined);
+			await fs.unlink(tempPath).catch(() => undefined);
+			throw new ProjectFileError(
+				`Failed to write project ${doc.project.id}: ${error instanceof Error ? error.message : String(error)}`,
+				doc.project.id,
+			);
+		}
+		await handle.close();
+
+		try {
+			await renameWithRetry(tempPath, filePath);
+		} catch (error) {
+			await fs.unlink(tempPath).catch(() => undefined);
+			throw new ProjectFileError(
+				`Failed to save project ${doc.project.id}: ${error instanceof Error ? error.message : String(error)}`,
+				doc.project.id,
+			);
+		}
+
 		// A save supersedes any legacy `.axcut` for this id (ensureProjectsDir
 		// usually renamed it already; this is a belt-and-braces cleanup).
 		await fs.unlink(this.legacyFileFor(doc.project.id)).catch(() => undefined);
