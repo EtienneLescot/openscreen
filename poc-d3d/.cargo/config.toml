@@ -1,0 +1,6 @@
+# FFMPEG_DIR relatif au dossier poc-d3d/ (portable dans le repo). Y déposer le build
+# ffmpeg LGPL-shared (voir README). LIBCLANG_PATH = install LLVM locale (bindgen).
+# Ces valeurs cèdent à une vraie variable d'environnement (force=false par défaut).
+[env]
+FFMPEG_DIR = { value = "thirdparty/ffmpeg-master-latest-win64-lgpl-shared", relative = true }
+LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"

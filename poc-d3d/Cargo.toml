@@ -1,0 +1,36 @@
+[package]
+name = "poc-d3d"
+version = "0.0.0"
+edition = "2021"
+description = "POC OpenScreen : compositeur natif D3D11 zéro-copie, effets HLSL, mesuré en fps (fast-path natif)."
+
+[[bin]]
+name = "poc-d3d"
+path = "src/main.rs"
+
+[profile.release]
+opt-level = 3
+lto = true
+debug = false
+# §10 : debug_assertions OFF dans tout run mesuré
+overflow-checks = false
+
+[build-dependencies]
+bindgen = "0.70"
+cc = "1"
+
+[dependencies]
+anyhow = "1"
+serde_json = "1"
+
+[dependencies.windows]
+version = "0.58"
+features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Direct3D",
+    "Win32_Graphics_Direct3D_Fxc",   # D3DCompile (HLSL runtime)
+    "Win32_Graphics_Direct3D11",
+    "Win32_Graphics_Dxgi",
+    "Win32_Graphics_Dxgi_Common",
+    "Win32_System_Performance",   # QueryPerformanceCounter / Frequency (§10)
+]

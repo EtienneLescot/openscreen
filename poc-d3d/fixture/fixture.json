@@ -1,0 +1,64 @@
+{
+	"_comment": "Fixture gelée pour spike-native. Coupée en -c copy : le bitstream est EXACTEMENT celui produit par la capture openscreen. Ne pas ré-encoder — cela changerait la complexité du flux et viderait C0 de son sens.",
+	"frozen_at": "2026-07-17",
+	"duration_s": 6.0,
+	"frames_per_source": 360,
+	"sources": {
+		"screen": {
+			"file": "screen.mp4",
+			"role": "source 1 — quad 16:9 scalé/positionné, coins arrondis (§6)",
+			"provenance": {
+				"origin": "C:\\Users\\camil\\AppData\\Roaming\\openscreen\\recordings\\recording-1783845220910.mp4",
+				"origin_duration_s": 111.6,
+				"cut_offset_s": 100,
+				"cut_method": "ffmpeg -ss 100 -t 6 -c copy (IDR-aligned, GOP=60)"
+			},
+			"codec": "h264",
+			"profile": "Constrained Baseline",
+			"profile_idc": 66,
+			"constraint_set1_flag": 1,
+			"level_idc": 42,
+			"width": 1920,
+			"height": 1080,
+			"pix_fmt": "yuv420p",
+			"frame_rate": "60/1",
+			"cfr": true,
+			"frames": 360,
+			"color_space": "bt709 (MESURÉ, non taggé dans le flux)",
+			"color_range": "limited/tv (MESURÉ, non taggé dans le flux)",
+			"d3d11va_decode": "OK — pixfmt:d3d11",
+			"content": "navigateur plein écran, scroll de page GitHub. MAD=1.367, 16.7% des frames en mouvement (MAD>1), 81.1% de doublons."
+		},
+		"webcam": {
+			"file": "webcam.mp4",
+			"role": "source 2 — center-crop carré + masque circulaire (§6/E5). Simule une webcam HQ : deuxième flux screen, pas la vraie webcam.",
+			"provenance": {
+				"origin": "C:\\Users\\camil\\AppData\\Roaming\\openscreen\\recordings\\recording-1783894784128.mp4",
+				"origin_duration_s": 866.5,
+				"cut_offset_s": 428,
+				"cut_method": "ffmpeg -ss 428 -t 6 -c copy (IDR-aligned, GOP=60)"
+			},
+			"codec": "h264",
+			"profile": "Constrained Baseline",
+			"profile_idc": 66,
+			"constraint_set1_flag": 1,
+			"level_idc": 42,
+			"width": 1920,
+			"height": 1032,
+			"_height_note": "1032, pas 1080 — capture fenêtrée. Sans conséquence : cette source est center-croppée en carré (1032x1032) par le §6.",
+			"pix_fmt": "yuv420p",
+			"frame_rate": "60/1",
+			"cfr": true,
+			"frames": 360,
+			"color_space": "bt709 (MESURÉ, non taggé)",
+			"color_range": "limited/tv (MESURÉ, non taggé)",
+			"d3d11va_decode": "OK — pixfmt:d3d11",
+			"content": "fenêtre Claude Code, texte qui défile. MAD=1.310, 21.1% des frames en mouvement, 78.1% de doublons."
+		}
+	},
+	"decoder_surface_note": "Le décodeur D3D11VA aligne en macroblocs : 1080 -> texture 1920x1088, 1032 -> 1920x1040. Seules les N premières lignes sont utiles. Les SRV/UV doivent en tenir compte (§5).",
+	"e1_matrix": {
+		"decision": "BT.709 limited/tv pour LES DEUX sources — une seule matrice.",
+		"basis": "Mesuré, pas lu : aucune des deux sources ne tague color_range. Histogramme du plan Y sur 3 enregistrements x 12 frames : pic massif à Y=235 (21-71% des pixels), ZÉRO pixel à 255, zéro au-dessus de 242 (la queue 236-242 est du ringing autour du plat à 235), zéro sous 16. Le §4 supposait full range pour une capture d'écran — la mesure dit l'inverse."
+	}
+}
