@@ -633,6 +633,44 @@ Every one of these produced a confident, wrong number first:
   everything else combined, on a long-GOP screen recording. Forward streams: 0.6.
 - **The harness leaked its GPU device**, and six back-to-back runs decayed
   19.9 → 8.6 → 7.5 fps during the very A/B meant to settle a question.
+- **Per-loop fps measured an empty loop, not throughput.** Under the pipeline the
+  loop does not wait for the work — `submit()` is non-blocking, encode is awaited
+  only on backpressure — so a SLOWER composite blocks the loop LESS and reads
+  FASTER: the naive arm reported 588 fps, 5× the optimised arm's, doing more work.
+  Throughput is now frames ÷ wall until they are actually composited, encoded and
+  muxed (finalize() forces completion), which is immune to the artifact. The
+  product owner caught this one from the numbers alone.
+
+### C.3 — Pipelining the encoder LOSES on this iGPU (measured 2026-07-17)
+
+§11 says "pipeline, don't await": keep the encoder queue full so the compositor
+and the encoder overlap. Measured on the reference integrated GPU, with the
+corrected throughput metric, interleaved A/B, spread 7–11 % (so real):
+
+| encoder queue depth | throughput |
+|---|---:|
+| 4 (buffered / pipelined) | 49 fps |
+| 1 (serialised, await each frame) | **79 fps** |
+
+**Pipelining is 38 % SLOWER here, not faster.** The likely cause is that an
+integrated GPU shares one memory bus between the WebGPU compositor and the
+fixed-function H.264 encoder: overlapping them makes them contend for bandwidth,
+where serialising lets each have it in full per turn. (A first, larger "gain"
+from pipelining — +205 % — was the empty-loop artifact of C.2, not real.)
+
+Consequence, now the default: **serialise the encoder on integrated GPUs.** The
+pipeline path stays reachable behind a `queueDepth` override because a DISCRETE
+GPU — separate encoder silicon, dedicated VRAM — may well flip this, and that is
+exactly the discrete-GPU run still owed (bench G3). §11's rule is not wrong in
+general; it is wrong for the memory topology of the weakest, most common machine,
+which is the one the whole document optimises for.
+
+The honest, trustworthy rate for the POC is therefore **~79 fps at 1080p30**, all
+effects on, serialised, on the reference iGPU — comfortably past 60. The frame is
+**encoder-bound**: the compositor's own GPU pass is 1.9 ms (C, throttle-immune),
+and the encode is the largest remaining slice, so the next levers are the
+encoder's (bitrate/preset, and segment-parallel encode across GOPs — which needs
+multiple encoder instances, not a deeper queue on one), not the shader's.
 
 ---
 
