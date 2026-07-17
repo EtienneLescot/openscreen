@@ -36,6 +36,8 @@ export interface BenchArm {
 	gpuFence?: boolean;
 	/** Diagnostic: shadow path minus the gaussians. Renders no shadow. */
 	shadowNoFilter?: boolean;
+	/** The §8b compositor: one WGSL program. POC — renders no text/cursor/3D. */
+	wgslCompositor?: boolean;
 	/**
 	 * Effects this arm adds to --effects, so an effect can be A/B'd INSIDE one
 	 * interleaved run.
@@ -93,6 +95,9 @@ const BENCH_PARAMS = {
 	// same-arm spread that voided the run all by itself, while the arm that merely
 	// went second looked better. One warm-up costs ~5 s at --clip=4.
 	warmup: Number(params.get("warmup") ?? "1"),
+	// Emit this frame of every arm as a PNG, so the pictures can be compared. The
+	// only thing that says a compositor WORKS; fps says only that it ran.
+	dumpFrame: params.get("dumpFrame"),
 };
 
 /**
@@ -114,6 +119,11 @@ const EFFECT_PATCHES: Record<string, Record<string, unknown>> = {
 	blur: { showBlur: true },
 	radius: { borderRadius: 24 },
 	motionBlur: { motionBlurAmount: 1 },
+	// Without padding the recording covers the whole stage, so the background, the
+	// rounded corners and the shadow are all computed and then hidden behind it.
+	// The COST is real either way — which is why the timing arms never needed this
+	// — but a parity check has to be able to SEE what it is comparing.
+	padding: { padding: 45 },
 	// Turning an effect OFF is not the same as omitting it: a saved project has
 	// its own appearance (this bench's reference carries shadowIntensity 0.52 and
 	// motionBlurAmount 0.31), so an arm that "doesn't add shadow" still renders
@@ -311,6 +321,45 @@ const ARMS: Record<string, BenchArm> = {
 		shadowNoFilter: true,
 		addEffects: ["zoom"],
 	},
+	// The POC (Step 4). Pair each against its Canvas2D twin above — same decode,
+	// same encoder, same document, one interleaved run — and the difference is the
+	// compositor and nothing else. The zoom pair is the one that matters: it is
+	// the case the 2D cache cannot hold and the shader has no cache to miss.
+	wgsl: { nativeEncode: false, readFrequently: false, wgslCompositor: true },
+	// The parity gate, not a speed arm: the native sink WRITES AN MP4, so this pair
+	// produces one file each — same timeline, same encoder, same bitrate, one
+	// compositor apart — and the two pictures can be diffed. The descent to ffmpeg
+	// makes them slow, which does not matter: nobody is timing a correctness check.
+	"wgsl-native-zoom": {
+		nativeEncode: true,
+		readFrequently: false,
+		wgslCompositor: true,
+		addEffects: ["zoom"],
+	},
+	"native-zoom": { nativeEncode: true, readFrequently: false, addEffects: ["zoom"] },
+	"wgsl-fence": {
+		nativeEncode: false,
+		readFrequently: false,
+		gpuFence: true,
+		wgslCompositor: true,
+	},
+	"wgsl-fence-zoom": {
+		nativeEncode: false,
+		readFrequently: false,
+		gpuFence: true,
+		wgslCompositor: true,
+		addEffects: ["zoom"],
+	},
+	// The shader compositor minus the shadow cascade. Against `wgsl-fence` it
+	// prices the cascade — 18 full-frame passes, which is the naive version of an
+	// algorithm whose whole point was that it is cheap on a GPU.
+	"wgsl-fence-noshadow": {
+		nativeEncode: false,
+		readFrequently: false,
+		gpuFence: true,
+		wgslCompositor: true,
+		addEffects: ["noShadow"],
+	},
 	// These two WRITE FILES, which is what makes them the parity gate: encode the
 	// same timeline with the old and new compositor through the same encoder at
 	// the same bitrate, then diff the results (SSIM). Unit tests never look at a
@@ -326,6 +375,9 @@ function applyArm(arm: BenchArm): void {
 	localStorage.setItem("openscreen.legacyCompositor", arm.legacyCompositor ? "1" : "0");
 	localStorage.setItem("openscreen.gpuFence", arm.gpuFence ? "1" : "0");
 	localStorage.setItem("openscreen.shadowNoFilter", arm.shadowNoFilter ? "1" : "0");
+	localStorage.setItem("openscreen.wgslCompositor", arm.wgslCompositor ? "1" : "0");
+	if (BENCH_PARAMS.dumpFrame) localStorage.setItem("openscreen.dumpFrame", BENCH_PARAMS.dumpFrame);
+	else localStorage.removeItem("openscreen.dumpFrame");
 }
 
 /**
@@ -559,6 +611,9 @@ export async function runBench(): Promise<void> {
 		for (let run = 1; run <= BENCH_PARAMS.runs; run++) {
 			for (const armName of BENCH_PARAMS.arms) {
 				const arm = ARMS[armName];
+				// The runner needs to know whose frame a dumped PNG is: the exporter
+				// emits it mid-run, before the result that would have named the arm.
+				emit("armStart", { arm: armName, run });
 				const result = await runOnce(docFor(arm), armName, arm, run);
 				results.push(result);
 				emit("run", result);
