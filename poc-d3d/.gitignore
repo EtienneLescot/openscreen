@@ -1,0 +1,19 @@
+# build
+/target
+
+# dépendance téléchargée : build ffmpeg LGPL-shared BtbN (~160 Mo, voir README)
+/thirdparty
+
+# sorties générées (vidéos C*.mp4, PNG, GIF, dumps)
+/out
+*.raw
+*.nv12
+
+# médias de fixture (régénérables via docs/S1-sources.md ; fixture.json est suivi)
+fixture/*.mp4
+fixture/*.cursor.json
+
+# artefacts des spikes S0
+/spikes/*.exe
+/spikes/*.obj
+/spikes/*.log
