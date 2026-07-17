@@ -100,6 +100,44 @@ function cpuCanvasRequested(): boolean {
 	}
 }
 
+/**
+ * Restore the pre-2026-07-17 compositor: a fresh GPU texture per frame, the mask
+ * retessellated per frame, and clearRect before every full-frame draw.
+ *
+ * Exists so the three fixes can be ATTRIBUTED. Comparing across bench sessions
+ * would not do: this machine drifts more between sessions than the fixes are
+ * worth, which is the failure mode this whole investigation keeps tripping over.
+ * With the flag, one interleaved run measures old against new on one thermal
+ * state, and the repeat proves it.
+ *
+ *   localStorage.setItem("openscreen.legacyCompositor", "1")
+ */
+function legacyCompositorRequested(): boolean {
+	try {
+		return localStorage.getItem("openscreen.legacyCompositor") === "1";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The recording's drop shadow, as a CSS filter chain.
+ *
+ * Three chained shadows, each blurring the alpha of the PREVIOUS stage's output
+ * (its own shadow included) — that cascade is what gives the falloff, and it is
+ * why this cannot be swapped for an SDF without changing the picture.
+ *
+ * Was duplicated verbatim on the flat and the 3D path; they must not drift.
+ */
+function shadowFilterChain(intensity: number): string {
+	const offset = 12 * intensity;
+	return (
+		`drop-shadow(0 ${offset}px ${48 * intensity}px rgba(0,0,0,${0.7 * intensity})) ` +
+		`drop-shadow(0 ${offset / 3}px ${16 * intensity}px rgba(0,0,0,${0.5 * intensity})) ` +
+		`drop-shadow(0 ${offset / 6}px ${8 * intensity}px rgba(0,0,0,${0.3 * intensity}))`
+	);
+}
+
 interface FrameRenderConfig {
 	width: number;
 	height: number;
@@ -167,6 +205,20 @@ export class FrameRenderer {
 	private cameraContainer: Container | null = null;
 	private videoContainer: Container | null = null;
 	private videoSprite: Sprite | null = null;
+	/** Source geometry behind videoSprite's texture — see renderFrame's reuse. */
+	private videoFrameSize: { width: number; height: number } | null = null;
+	/** Shape currently tessellated into maskGraphics, so it is rebuilt only on change. */
+	private maskShape: { width: number; height: number; radius: number } | null = null;
+	/** Bench-only: undo the compositor fixes so they can be measured. */
+	private legacyCompositor = legacyCompositorRequested();
+	/** Shadow filter output, keyed by the geometry it was computed for. */
+	private shadowCache: { key: string; canvas: HTMLCanvasElement } | null = null;
+	/** Scratch holding videoCanvas's alpha as an opaque black shape. */
+	private shadowSilhouetteCanvas: HTMLCanvasElement | null = null;
+	/** The wallpaper, blurred once. It is a still image — see blurredBackgroundLayer. */
+	private blurredBackground: HTMLCanvasElement | null = null;
+	/** Which backgroundSprite blurredBackground was built from, so a reload invalidates it. */
+	private blurredBackgroundSource: HTMLCanvasElement | null = null;
 	private backgroundSprite: HTMLCanvasElement | null = null;
 	private maskGraphics: Graphics | null = null;
 	private blurFilter: BlurFilter | null = null;
@@ -479,16 +531,37 @@ export class FrameRenderer {
 
 		this.currentVideoTime = timestamp / 1000000;
 
+		// Reuse the GPU texture across frames. Texture.from() allocates a new
+		// TextureSource per call (every VideoFrame is a distinct object, so nothing
+		// caches), and destroy(true) frees the GL texture behind it — an allocate +
+		// upload + free of a 1080p texture on every single frame. Swapping the
+		// resource re-uploads the pixels into the texture we already have.
+		//
+		// Only valid while the geometry is unchanged: segments can carry different
+		// source sizes, so a size change still rebuilds (and frees) the source.
+		const frameWidth = videoFrame.displayWidth;
+		const frameHeight = videoFrame.displayHeight;
+		const sizeUnchanged =
+			!this.legacyCompositor &&
+			this.videoFrameSize?.width === frameWidth &&
+			this.videoFrameSize?.height === frameHeight;
+
 		if (!this.videoSprite) {
 			const texture = Texture.from(videoFrame as unknown as TextureSourceLike);
 			this.videoSprite = new Sprite(texture);
 			this.videoContainer.addChild(this.videoSprite);
+			this.videoFrameSize = { width: frameWidth, height: frameHeight };
+		} else if (sizeUnchanged) {
+			const source = this.videoSprite.texture.source;
+			source.resource = videoFrame;
+			source.update();
 		} else {
 			// Destroy old texture before swapping to avoid a leak
 			const oldTexture = this.videoSprite.texture;
 			const newTexture = Texture.from(videoFrame as unknown as TextureSourceLike);
 			this.videoSprite.texture = newTexture;
 			oldTexture.destroy(true);
+			this.videoFrameSize = { width: frameWidth, height: frameHeight };
 		}
 
 		this.updateLayout(webcamFrame);
@@ -599,15 +672,11 @@ export class FrameRenderer {
 			const h = this.foregroundCanvas.height;
 			shadowCtx.clearRect(0, 0, w, h);
 			shadowCtx.save();
-			const intensity = this.config.shadowIntensity;
-			const baseBlur1 = 48 * intensity;
-			const baseBlur2 = 16 * intensity;
-			const baseBlur3 = 8 * intensity;
-			const baseAlpha1 = 0.7 * intensity;
-			const baseAlpha2 = 0.5 * intensity;
-			const baseAlpha3 = 0.3 * intensity;
-			const baseOffset = 12 * intensity;
-			shadowCtx.filter = `drop-shadow(0 ${baseOffset}px ${baseBlur1}px rgba(0,0,0,${baseAlpha1})) drop-shadow(0 ${baseOffset / 3}px ${baseBlur2}px rgba(0,0,0,${baseAlpha2})) drop-shadow(0 ${baseOffset / 6}px ${baseBlur3}px rgba(0,0,0,${baseAlpha3}))`;
+			// NOT cacheable, unlike the flat path: this blurs foregroundCanvas, whose
+			// alpha carries the webcam, the cursor and the annotations — it changes
+			// every frame, so there is no geometry to key on. The 3D path stays at
+			// full price until it is restructured.
+			shadowCtx.filter = shadowFilterChain(this.config.shadowIntensity);
 			shadowCtx.drawImage(this.foregroundCanvas, 0, 0, w, h);
 			shadowCtx.restore();
 			if (this.compositeCtx) {
@@ -843,9 +912,25 @@ export class FrameRenderer {
 					? 0
 					: borderRadius * canvasScaleFactor;
 
-		this.maskGraphics.clear();
-		this.maskGraphics.roundRect(0, 0, screenRect.width, screenRect.height, scaledBorderRadius);
-		this.maskGraphics.fill({ color: 0xffffff });
+		// Retessellate only when the shape actually changes. The mask is a rounded
+		// rect: while nothing zooms or resizes it is byte-identical from frame to
+		// frame, and clear()/roundRect()/fill() rebuilds its geometry every time.
+		// A zoom easing does change it per frame — that is the case this cannot help.
+		if (
+			this.legacyCompositor ||
+			this.maskShape?.width !== screenRect.width ||
+			this.maskShape?.height !== screenRect.height ||
+			this.maskShape?.radius !== scaledBorderRadius
+		) {
+			this.maskGraphics.clear();
+			this.maskGraphics.roundRect(0, 0, screenRect.width, screenRect.height, scaledBorderRadius);
+			this.maskGraphics.fill({ color: 0xffffff });
+			this.maskShape = {
+				width: screenRect.width,
+				height: screenRect.height,
+				radius: scaledBorderRadius,
+			};
+		}
 
 		// baseOffset is the stage position of the full (uncropped) sprite's top-left, matching
 		// preview semantics, so consumers (e.g. cursor highlight) can map normalized
@@ -1057,6 +1142,122 @@ export class FrameRenderer {
 
 	// applyShadowToRecording is false when the 3D pass will rotate this canvas next;
 	// the shadow is re-applied after rotation to avoid aliasing.
+	/**
+	 * The wallpaper, blurred once instead of 1418 times.
+	 *
+	 * backgroundSprite is rasterised once at load and never touched again — it is
+	 * a still image. Blurring it per frame recomputes an identical result every
+	 * time; measured at ~5 ms/frame.
+	 *
+	 * Byte-identical by construction: the original blurs while scaling to w*h, so
+	 * the blur lands in destination space. Doing that once into a w*h canvas and
+	 * blitting it 1:1 is the same operation, hoisted.
+	 *
+	 * Returns null when there is nothing to hoist (no blur), so the caller keeps
+	 * drawing the sprite directly rather than through a pointless copy.
+	 */
+	private blurredBackgroundLayer(w: number, h: number): HTMLCanvasElement | null {
+		if (!this.config.showBlur || !this.backgroundSprite || this.legacyCompositor) return null;
+		// Keyed on the sprite's identity, not just the size: loading a different
+		// wallpaper replaces the sprite, and a size-only check would keep serving
+		// the previous one's blur.
+		if (
+			this.blurredBackgroundSource === this.backgroundSprite &&
+			this.blurredBackground?.width === w &&
+			this.blurredBackground.height === h
+		) {
+			return this.blurredBackground;
+		}
+		const canvas = document.createElement("canvas");
+		canvas.width = w;
+		canvas.height = h;
+		const ctx = canvas.getContext("2d");
+		if (!ctx) return null;
+		ctx.filter = "blur(6px)"; // Canvas blur is weaker than CSS
+		ctx.drawImage(this.backgroundSprite, 0, 0, w, h);
+		ctx.filter = "none";
+		this.blurredBackground = canvas;
+		this.blurredBackgroundSource = this.backgroundSprite;
+		return canvas;
+	}
+
+	/**
+	 * Everything the shadow's shape depends on. If two frames agree here, the
+	 * filter output is identical and re-running it is pure waste.
+	 *
+	 * Taken from the world transforms rather than from the layout inputs, so a
+	 * new way to move the recording cannot silently bypass the cache and serve a
+	 * stale shadow. A zoom easing changes this every frame — by design: that case
+	 * MUST miss.
+	 */
+	private shadowGeometryKey(): string {
+		const v = this.videoContainer?.worldTransform;
+		const s = this.app?.stage?.worldTransform;
+		const m = this.maskShape;
+		return [
+			v ? `${v.a},${v.b},${v.c},${v.d},${v.tx},${v.ty}` : "-",
+			s ? `${s.a},${s.b},${s.c},${s.d},${s.tx},${s.ty}` : "-",
+			m ? `${m.width},${m.height},${m.radius}` : "-",
+			this.config.shadowIntensity,
+		].join("|");
+	}
+
+	/**
+	 * The shadow layer, rebuilt only when the geometry moves.
+	 *
+	 * drop-shadow reads SourceAlpha only, and videoCanvas's alpha is just the
+	 * masked rounded rect — so the filter blurs 2M pixels of VIDEO to compute
+	 * something that depends on nothing but the silhouette. Measured: ~30 ms per
+	 * frame, twice the cost of the entire rest of the compositor.
+	 *
+	 * So it runs against the silhouette instead, and the silhouette is taken from
+	 * videoCanvas's own alpha (source-in over black) rather than re-derived from
+	 * the layout — same pixels, same anti-aliasing, nothing to keep in sync.
+	 *
+	 * Returns the filter output, which is `silhouette OVER shadow`: the caller
+	 * draws videoCanvas on top, and it covers the silhouette exactly.
+	 */
+	private cachedShadowLayer(
+		videoCanvas: HTMLCanvasElement,
+		w: number,
+		h: number,
+	): HTMLCanvasElement | null {
+		const key = this.shadowGeometryKey();
+		if (this.shadowCache?.key === key) return this.shadowCache.canvas;
+
+		if (!this.shadowSilhouetteCanvas) {
+			this.shadowSilhouetteCanvas = document.createElement("canvas");
+			this.shadowSilhouetteCanvas.width = w;
+			this.shadowSilhouetteCanvas.height = h;
+		}
+		if (!this.shadowCache) {
+			const canvas = document.createElement("canvas");
+			canvas.width = w;
+			canvas.height = h;
+			this.shadowCache = { key: "", canvas };
+		}
+		const silCtx = this.shadowSilhouetteCanvas.getContext("2d");
+		const outCtx = this.shadowCache.canvas.getContext("2d");
+		if (!silCtx || !outCtx) return null;
+
+		// Silhouette: videoCanvas's exact alpha, filled black.
+		silCtx.globalCompositeOperation = "copy";
+		silCtx.drawImage(videoCanvas, 0, 0, w, h);
+		silCtx.globalCompositeOperation = "source-in";
+		silCtx.fillStyle = "#000";
+		silCtx.fillRect(0, 0, w, h);
+		silCtx.globalCompositeOperation = "source-over";
+
+		outCtx.globalCompositeOperation = "copy";
+		outCtx.filter = shadowFilterChain(this.config.shadowIntensity);
+		outCtx.drawImage(this.shadowSilhouetteCanvas, 0, 0, w, h);
+		outCtx.filter = "none";
+		outCtx.globalCompositeOperation = "source-over";
+
+		this.shadowCache.key = key;
+		return this.shadowCache.canvas;
+	}
+
 	private compositeWithShadows(
 		webcamFrame: VideoFrame | null | undefined,
 		applyShadowToRecording: boolean,
@@ -1081,24 +1282,37 @@ export class FrameRenderer {
 
 		// Background (compositeCanvas): wallpaper only. Stays flat, never touched by the
 		// 3D rotation pass, matching the preview.
-		bgCtx.clearRect(0, 0, w, h);
+		//
+		// "copy" replaces the whole destination, so the clearRect that used to
+		// precede it is redundant: the draw below covers all w*h. Two full-frame
+		// passes become one. It is only safe BECAUSE the draw covers everything —
+		// hence the else branch below still clears explicitly.
+		if (this.legacyCompositor) bgCtx.clearRect(0, 0, w, h);
 		if (this.backgroundSprite) {
-			const bgCanvas = this.backgroundSprite;
-			if (this.config.showBlur) {
-				bgCtx.save();
+			const bgCanvas = this.blurredBackgroundLayer(w, h) ?? this.backgroundSprite;
+			const stillNeedsBlur = this.config.showBlur && bgCanvas === this.backgroundSprite;
+			bgCtx.save();
+			if (!this.legacyCompositor) bgCtx.globalCompositeOperation = "copy";
+			if (stillNeedsBlur) {
 				bgCtx.filter = "blur(6px)"; // Canvas blur is weaker than CSS
-				bgCtx.drawImage(bgCanvas, 0, 0, w, h);
-				bgCtx.restore();
-			} else {
-				bgCtx.drawImage(bgCanvas, 0, 0, w, h);
 			}
+			bgCtx.drawImage(bgCanvas, 0, 0, w, h);
+			bgCtx.restore();
 		} else {
+			// Nothing is drawn, so this is the only thing dropping the previous frame.
+			bgCtx.clearRect(0, 0, w, h);
 			console.warn("[FrameRenderer] No background sprite found during compositing!");
 		}
 
 		// Foreground (transparent): recording + webcam. Shadow baked here only on the
 		// flat path; the 3D path applies it after rotation (see renderFrame).
-		fgCtx.clearRect(0, 0, w, h);
+		//
+		// Same trick as the background: both branches below draw a full w*h image,
+		// so "copy" subsumes the clear. restore() puts source-over back before the
+		// webcam is drawn on top — with "copy" still set, it would wipe the frame.
+		if (this.legacyCompositor) fgCtx.clearRect(0, 0, w, h);
+		fgCtx.save();
+		if (!this.legacyCompositor) fgCtx.globalCompositeOperation = "copy";
 		if (
 			applyShadowToRecording &&
 			this.config.showShadow &&
@@ -1106,26 +1320,25 @@ export class FrameRenderer {
 			this.shadowCanvas &&
 			this.shadowCtx
 		) {
-			const shadowCtx = this.shadowCtx;
-			shadowCtx.clearRect(0, 0, w, h);
-			shadowCtx.save();
-
-			const intensity = this.config.shadowIntensity;
-			const baseBlur1 = 48 * intensity;
-			const baseBlur2 = 16 * intensity;
-			const baseBlur3 = 8 * intensity;
-			const baseAlpha1 = 0.7 * intensity;
-			const baseAlpha2 = 0.5 * intensity;
-			const baseAlpha3 = 0.3 * intensity;
-			const baseOffset = 12 * intensity;
-
-			shadowCtx.filter = `drop-shadow(0 ${baseOffset}px ${baseBlur1}px rgba(0,0,0,${baseAlpha1})) drop-shadow(0 ${baseOffset / 3}px ${baseBlur2}px rgba(0,0,0,${baseAlpha2})) drop-shadow(0 ${baseOffset / 6}px ${baseBlur3}px rgba(0,0,0,${baseAlpha3}))`;
-			shadowCtx.drawImage(videoCanvas, 0, 0, w, h);
-			shadowCtx.restore();
-			fgCtx.drawImage(this.shadowCanvas, 0, 0, w, h);
+			const cached = this.legacyCompositor ? null : this.cachedShadowLayer(videoCanvas, w, h);
+			if (cached) {
+				// The filter ran once for this geometry; per frame this is one blit.
+				fgCtx.drawImage(cached, 0, 0, w, h);
+				fgCtx.globalCompositeOperation = "source-over";
+				fgCtx.drawImage(videoCanvas, 0, 0, w, h);
+			} else {
+				const shadowCtx = this.shadowCtx;
+				shadowCtx.clearRect(0, 0, w, h);
+				shadowCtx.save();
+				shadowCtx.filter = shadowFilterChain(this.config.shadowIntensity);
+				shadowCtx.drawImage(videoCanvas, 0, 0, w, h);
+				shadowCtx.restore();
+				fgCtx.drawImage(this.shadowCanvas, 0, 0, w, h);
+			}
 		} else {
 			fgCtx.drawImage(videoCanvas, 0, 0, w, h);
 		}
+		fgCtx.restore();
 
 		const webcamRect = this.layoutCache?.webcamRect ?? null;
 		if (webcamFrame && webcamRect) {

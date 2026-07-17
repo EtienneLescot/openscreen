@@ -28,6 +28,10 @@ export interface BenchArm {
 	readFrequently: boolean;
 	/** Extract every frame and discard it. Diagnostic only — writes no file. */
 	dropFrames?: boolean;
+	/** Composite every frame and stop there. Diagnostic only — writes no file. */
+	compositeOnly?: boolean;
+	/** Undo the 2026-07-17 compositor fixes, to attribute them. */
+	legacyCompositor?: boolean;
 }
 
 export interface BenchRunResult {
@@ -61,7 +65,76 @@ const BENCH_PARAMS = {
 	fps: Number(params.get("fps") ?? "60"),
 	// "good" is the dialog's own default, i.e. what the UI A/B measured.
 	quality: QUALITY[params.get("quality") ?? "1080p"] ?? "good",
+	effects: (params.get("effects") ?? "").split(",").filter(Boolean),
 };
+
+/**
+ * Appearance the exporter reads out of `legacyEditor`, patched onto an in-memory
+ * COPY of the document.
+ *
+ * Most saved projects carry no appearance at all, so the defaults apply:
+ * shadowIntensity 0, showBlur false, borderRadius 0, wallpaper "". Whole effects
+ * therefore never execute, and "fixing" them would have measured exactly zero on
+ * a project that never ran them. This turns them on without writing to the
+ * user's project store — nothing here reaches disk.
+ *
+ *   --effects=shadow,blur,radius
+ */
+const EFFECT_PATCHES: Record<string, Record<string, unknown>> = {
+	// Three chained drop-shadows over the full frame, every frame.
+	shadow: { shadowIntensity: 1 },
+	// A static wallpaper, re-blurred every frame.
+	blur: { showBlur: true },
+	radius: { borderRadius: 24 },
+	motionBlur: { motionBlurAmount: 1 },
+};
+
+/**
+ * A zoom region, injected the same way: the saved projects have `zoomRanges: []`.
+ *
+ * It is not decoration. Zoom is the one effect that changes the composited
+ * GEOMETRY every frame, so it is what invalidates any geometry-keyed cache. A
+ * parity test on a project without zoom would happily pass with a broken cache
+ * key, because nothing would ever ask it to invalidate.
+ */
+function zoomRanges(doc: AxcutDocument): unknown[] {
+	const clips = (doc as { timeline?: { clips?: { timelineEndSec?: number }[] } }).timeline?.clips;
+	const endSec = clips?.[0]?.timelineEndSec ?? 5;
+	return [
+		{
+			id: "bench-zoom",
+			startMs: 500,
+			endMs: Math.max(1500, Math.round(endSec * 1000) - 500),
+			depth: "medium",
+			focus: { cx: 0.5, cy: 0.5 },
+		},
+	];
+}
+
+function withEffects(doc: AxcutDocument, effects: string[]): AxcutDocument {
+	if (effects.length === 0) return doc;
+	const legacy: Record<string, unknown> = {
+		...((doc as { legacyEditor?: Record<string, unknown> }).legacyEditor ?? {}),
+	};
+	let patched = doc;
+	for (const name of effects) {
+		if (name === "zoom") {
+			patched = { ...patched, zoomRanges: zoomRanges(doc) } as AxcutDocument;
+			continue;
+		}
+		const patch = EFFECT_PATCHES[name];
+		if (!patch) {
+			throw new Error(`Unknown effect "${name}". Known: ${Object.keys(EFFECT_PATCHES)}, zoom`);
+		}
+		Object.assign(legacy, patch);
+	}
+	// `blur` only does anything against a real wallpaper; a project with none
+	// would silently skip the very pass being measured.
+	if (effects.includes("blur") && !legacy.wallpaper) {
+		legacy.wallpaper = "wallpaper13.jpg";
+	}
+	return { ...patched, legacyEditor: legacy } as AxcutDocument;
+}
 
 const ARMS: Record<string, BenchArm> = {
 	// The path we ship today: WebCodecs encodes straight off the GPU texture.
@@ -79,12 +152,34 @@ const ARMS: Record<string, BenchArm> = {
 	// proposal at once (option A' sandbox:false, shared memory, zero-copy
 	// transfer), because none of them can skip the readback. Writes no file.
 	"readback-ceiling": { nativeEncode: true, readFrequently: false, dropFrames: true },
+	// Prices the GPU compositing of the real effect set, with nothing downstream
+	// to absorb it. This is the number the native-core case rests on: a pipeline
+	// that composites on-device cannot beat decode + this + encode. Writes no file.
+	"composite-ceiling": { nativeEncode: true, readFrequently: false, compositeOnly: true },
+	// The same ceiling with the compositor fixes undone. Pairing these two in one
+	// interleaved run is the only honest way to price the fixes: across sessions
+	// this machine drifts further than they are worth.
+	"composite-ceiling-legacy": {
+		nativeEncode: true,
+		readFrequently: false,
+		compositeOnly: true,
+		legacyCompositor: true,
+	},
+	/** Today's shipping path, with the compositor fixes undone. */
+	"webcodecs-legacy": { nativeEncode: false, readFrequently: false, legacyCompositor: true },
+	// These two WRITE FILES, which is what makes them the parity gate: encode the
+	// same timeline with the old and new compositor through the same encoder at
+	// the same bitrate, then diff the results (SSIM). Unit tests never look at a
+	// pixel, and "obviously equivalent" is what this investigation keeps punishing.
+	"native-legacy": { nativeEncode: true, readFrequently: false, legacyCompositor: true },
 };
 
 function applyArm(arm: BenchArm): void {
 	localStorage.setItem("openscreen.nativeEncode", arm.nativeEncode ? "1" : "0");
 	localStorage.setItem("openscreen.readFrequently", arm.readFrequently ? "1" : "0");
 	localStorage.setItem("openscreen.dropFrames", arm.dropFrames ? "1" : "0");
+	localStorage.setItem("openscreen.compositeOnly", arm.compositeOnly ? "1" : "0");
+	localStorage.setItem("openscreen.legacyCompositor", arm.legacyCompositor ? "1" : "0");
 }
 
 /**
@@ -272,11 +367,12 @@ export async function runBench(): Promise<void> {
 		}
 		// Loaded once and shared by every run: each arm must see byte-identical
 		// input, and the title fallback can open every project on disk.
-		const doc = await resolveDocument(BENCH_PARAMS.project);
+		const doc = withEffects(await resolveDocument(BENCH_PARAMS.project), BENCH_PARAMS.effects);
 		emit("start", {
 			arms: BENCH_PARAMS.arms,
 			runs: BENCH_PARAMS.runs,
 			project: doc.project?.title ?? "(untitled)",
+			effects: BENCH_PARAMS.effects.length ? BENCH_PARAMS.effects.join("+") : "(project default)",
 		});
 		for (let run = 1; run <= BENCH_PARAMS.runs; run++) {
 			for (const armName of BENCH_PARAMS.arms) {
