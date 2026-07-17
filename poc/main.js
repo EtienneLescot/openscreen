@@ -462,11 +462,35 @@ async function run(override = {}) {
 	// only exists while being measured.
 	const instrumented = override.instrumented ?? document.querySelector("#instrument").checked;
 	const optimised = override.optimised ?? document.querySelector("#optimise").checked;
+	const encodeOn = override.encode ?? true;
+	// How many encodes may be in flight before composite blocks.
+	//
+	// Default 1 (serialised) BECAUSE IT IS FASTER HERE, measured: buffered depth-4
+	// throughput 49 fps vs serialised 79 fps on this iGPU (spread 7-11%, so real).
+	// §11's "pipeline, don't await" assumed overlap helps; on an integrated GPU the
+	// compositor and the hardware H.264 encoder share one memory bus, so running
+	// them at once makes them contend rather than parallelise — serialising lets
+	// each have the full bandwidth in turn. The pipeline stays reachable
+	// (queueDepth override) because a DISCRETE GPU, with its own VRAM and separate
+	// encoder silicon, may flip the result — untested (that is bench G3).
+	const queueDepth = instrumented ? 1 : (override.queueDepth ?? 1);
+	const inflight = [];
 	const frames = [];
 	const t0 = performance.now();
+	// The steady-state window starts after the first quarter (warm-up). We time it
+	// on the WALL, from here to after the final drain+flush — not per loop
+	// iteration — because with the pipeline the loop does not wait for the work:
+	// submit() is non-blocking and encode is only awaited on backpressure. A
+	// per-frame timer then measures an empty loop distributing orders (naive
+	// composite is slower, so it feeds the encoder slower, so the loop blocks LESS
+	// and reads FASTER — 588 fps of nothing). True throughput is frames ÷ the wall
+	// until they have actually completed, which finalize() forces.
+	const warmStart = Math.ceil(totalFrames / 4);
+	let warmWall = 0;
 	let rendered = 0;
 
 	for (let i = 0; i < totalFrames; i++) {
+		if (i === warmStart) warmWall = performance.now();
 		const t = i / OUT.fps;
 		const fStart = performance.now();
 		const p = {};
@@ -614,12 +638,32 @@ async function run(override = {}) {
 			}
 		}
 
+		// ENCODE — pipelined, not awaited per frame.
+		//
+		// source.add snapshots the canvas synchronously (new VideoSample(canvas)),
+		// and everything rides one GPU queue, so submission order already guarantees
+		// each encoded frame reflects its own composite — no fence needed for
+		// correctness. Awaiting add() every frame only enforces BACKPRESSURE, and
+		// doing it per frame is what serialised the loop: composite waited on the
+		// encoder accepting the previous frame. Keep `queueDepth` frames in flight
+		// instead, so the hardware encoder runs concurrently with the next
+		// composite. This is §11 — pipeline, don't await.
 		m = mark();
-		await source.add(t, 1 / OUT.fps);
+		if (encodeOn) {
+			const addP = source.add(t, 1 / OUT.fps);
+			if (queueDepth <= 1) {
+				await addP;
+			} else {
+				inflight.push(addP);
+				if (inflight.length >= queueDepth) await inflight.shift();
+			}
+		}
 		p.encode = mark() - m;
 
-		// The VideoFrames are ours; the samples belong to the streams, which close
-		// them when they advance.
+		// The decode VideoFrames are ours; the samples belong to the streams, which
+		// close them when they advance. Safe to close after submit: Chromium holds
+		// its own reference to an imported external texture until the submit that
+		// used it completes.
 		screenFrame.close();
 		webcamFrame?.close();
 
@@ -642,8 +686,19 @@ async function run(override = {}) {
 		}
 	}
 
-	const wallMs = performance.now() - t0;
+	// Drain the encoder pipeline, then flush+mux: only after finalize() has all
+	// frames actually completed. The throughput window closes HERE, not at the end
+	// of the loop, because the loop returns before the GPU and the encoder are
+	// done.
+	if (inflight.length) await Promise.all(inflight);
 	await output.finalize();
+	const endWall = performance.now();
+	const wallMs = endWall - t0;
+	// The honest steady-state throughput: frames rendered after warm-up, over the
+	// wall time until they are fully composited, encoded and muxed.
+	const warmFrames = rendered - warmStart;
+	const throughputFps =
+		warmWall > 0 ? warmFrames / ((endWall - warmWall) / 1000) : rendered / (wallMs / 1000);
 
 	// ---- report ----
 	//
@@ -659,14 +714,17 @@ async function run(override = {}) {
 	const totals = frames.map((f) => f.total);
 	// Cruise = the steady state: drop the first quarter, then take the MEDIAN, so
 	// one scheduler hiccup cannot move the number.
-	const warm = frames.slice(Math.ceil(frames.length / 4));
+	const warm = frames.slice(warmStart);
 	const cruiseMs = median(warm.map((f) => f.total));
 	const cruiseFps = 1000 / cruiseMs;
 	const avgFps = rendered / (wallMs / 1000);
 
-	setStat("fps", cruiseFps.toFixed(1));
+	// Throughput is the headline. Cruise (per-frame loop time) is kept for the
+	// instrumented breakdown, where the fence makes each iteration wait for its own
+	// work — there it equals throughput; under the pipeline it does not.
+	setStat("fps", throughputFps.toFixed(1));
 	setStat("progress", `${rendered}/${totalFrames}`);
-	setStat("perframe", `${cruiseMs.toFixed(1)} ms`);
+	setStat("perframe", `${(1000 / throughputFps).toFixed(1)} ms`);
 	// `?? 0`: the clean pass has no phase timers by construction — that is what
 	// makes it clean. Reading them back as undefined is not an error, it is the
 	// point.
@@ -675,7 +733,10 @@ async function run(override = {}) {
 	setStat("encode", instrumented ? `${median(warm.map((f) => f.encode ?? 0)).toFixed(1)} ms` : "—");
 
 	log(
-		`\n=== [${instrumented ? "INSTRUMENTED" : "CLEAN"}] cruise ${cruiseFps.toFixed(1)} fps — ${cruiseMs.toFixed(1)} ms/frame (median of the last ${warm.length}) ===`,
+		`\n=== [${instrumented ? "INSTRUMENTED" : "CLEAN"}] throughput ${throughputFps.toFixed(1)} fps — ${warmFrames} frames in ${((endWall - warmWall) / 1000).toFixed(2)}s (wall, incl. drain+mux) ===`,
+	);
+	log(
+		`per-loop cruise ${cruiseFps.toFixed(1)} fps (${cruiseMs.toFixed(1)} ms) — under the pipeline this measures the LOOP, not completion; throughput above is the honest number.`,
 	);
 	log(
 		`average ${avgFps.toFixed(1)} fps over all ${rendered} frames (${(wallMs / 1000).toFixed(2)}s wall)`,
@@ -751,7 +812,7 @@ async function run(override = {}) {
 	device.destroy();
 
 	document.querySelector("#run").disabled = false;
-	return { cruiseMs, cruiseFps, avgFps, instrumented };
+	return { cruiseMs, cruiseFps, avgFps, throughputFps, instrumented };
 }
 
 /**
@@ -782,6 +843,18 @@ const COMPARISONS = {
 		a: { label: "effets ON", over: { effectsOn: true, optimised: true, instrumented: false } },
 		b: { label: "effets OFF", over: { effectsOn: false, optimised: true, instrumented: false } },
 		note: "ombre + flou de fond présents, vs à zéro. Le prix des effets eux-mêmes.",
+	},
+	pipeline: {
+		title: "Pipeline : bufférisé vs sérialisé",
+		a: { label: "bufférisé", over: { queueDepth: 4, instrumented: false, optimised: true } },
+		b: { label: "sérialisé", over: { queueDepth: 1, instrumented: false, optimised: true } },
+		note: "encodage recouvert (4 en vol) vs attendu à chaque image. Le levier §11.",
+	},
+	encode: {
+		title: "Encodage : avec vs sans",
+		a: { label: "avec encodage", over: { encode: true, instrumented: false, optimised: true } },
+		b: { label: "sans encodage", over: { encode: false, instrumented: false, optimised: true } },
+		note: "compose + encode vs compose seul. Ce que coûte l'encodeur matériel.",
 	},
 	instruments: {
 		title: "Mesure : instrumenté vs propre",
@@ -820,7 +893,7 @@ async function compare(rounds = 3) {
 	for (let r = 0; r <= rounds; r++) {
 		for (const arm of arms) {
 			const res = await run(arm.over);
-			if (r > 0) arm.runs.push(res.cruiseFps);
+			if (r > 0) arm.runs.push(res.throughputFps);
 		}
 	}
 
@@ -829,7 +902,7 @@ async function compare(rounds = 3) {
 	log(`${spec.note}\n`);
 	for (const arm of arms) {
 		log(
-			`${arm.label.padEnd(13)} croisière ${median(arm.runs).toFixed(1).padStart(5)} fps   spread ${(spread(arm.runs) * 100).toFixed(0)}%   ${arm.runs.map((x) => x.toFixed(1)).join(" / ")}`,
+			`${arm.label.padEnd(13)} débit ${median(arm.runs).toFixed(1).padStart(5)} fps   spread ${(spread(arm.runs) * 100).toFixed(0)}%   ${arm.runs.map((x) => x.toFixed(1)).join(" / ")}`,
 		);
 	}
 	const [A, B] = arms;
@@ -839,12 +912,25 @@ async function compare(rounds = 3) {
 	log(
 		`\n${A.label} vs ${B.label}: ${gain > 0 ? "+" : ""}${gain.toFixed(1)} fps (${gainPct.toFixed(0)}%)`,
 	);
-	if (worst >= Math.abs(gainPct)) {
+	// Two gates, not one. The old gate only checked spread against the EFFECT, so a
+	// big effect waved through big noise — a 66% spread "held" against a 205% gain
+	// while the tab was throttled and the arm swung 117→235 fps. An ABSOLUTE
+	// threshold catches that: above ~15% same-arm spread the machine is not steady
+	// enough to trust the magnitude, whatever the effect size. (The app's export
+	// bench uses 10%; this browser setup is noisier, so 15%.)
+	const SPREAD_LIMIT = 15;
+	if (worst >= SPREAD_LIMIT) {
 		log(
-			`\n!! VOID : spread intra-bras ${worst.toFixed(0)}%, aussi grand que l'effet.\n   Ce run ne dit rien — refaire sur une machine calme.`,
+			`\n!! VOID : spread intra-bras ${worst.toFixed(0)}% > ${SPREAD_LIMIT}% — la machine dérive.` +
+				`\n   La DIRECTION peut tenir (regarde si un bras gagne à chaque tour), mais` +
+				`\n   le CHIFFRE ne vaut rien. Ferme les autres apps GPU, secteur branché, refais.`,
 		);
+	} else if (worst >= Math.abs(gainPct)) {
+		log(`\n!! VOID : spread intra-bras ${worst.toFixed(0)}%, aussi grand que l'effet — run muet.`);
 	} else {
-		log(`\nspread intra-bras ${worst.toFixed(0)}% < l'effet — le résultat tient.`);
+		log(
+			`\nspread intra-bras ${worst.toFixed(0)}% < ${SPREAD_LIMIT}% et < l'effet — le résultat tient.`,
+		);
 	}
 	setStat("fps", median(A.runs).toFixed(1));
 }
