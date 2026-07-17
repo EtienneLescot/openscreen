@@ -1,0 +1,5 @@
+/target
+*.rgba
+*.bmp
+out-preview.png
+out.mp4
