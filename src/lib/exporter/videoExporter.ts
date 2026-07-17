@@ -27,6 +27,7 @@ import { StreamingVideoDecoder } from "./streamingDecoder";
 import { computeKeepSegments, splitBySpeed } from "./timelineSegments";
 import { TimestampedVideoFrameQueue } from "./timestampedVideoFrameQueue";
 import type { ExportConfig, ExportProgress, ExportResult } from "./types";
+import { WgslFrameRenderer } from "./wgslFrameRenderer";
 
 const ENCODER_STALL_TIMEOUT_MS = 15_000;
 const ENCODER_FLUSH_TIMEOUT_MS = 20_000;
@@ -156,6 +157,61 @@ function gpuFenceEnabled(): boolean {
 	} catch {
 		return false;
 	}
+}
+
+/**
+ * The §8b compositor: one WGSL program instead of Pixi + four Canvas2D surfaces
+ * + a second GL context.
+ *
+ * POC (rendering-architecture.md Step 4). It renders no captions, annotations,
+ * cursor or 3D rotation yet — so its OUTPUT is not yet the product's, and it must
+ * never become a default by accident. It shares the exporter's decode, encode,
+ * mux and audio, so the bench can run it against the Canvas2D compositor in one
+ * interleaved pass and the difference is the compositor alone.
+ *
+ *   localStorage.setItem("openscreen.wgslCompositor", "1")
+ */
+function wgslCompositorEnabled(): boolean {
+	try {
+		return localStorage.getItem("openscreen.wgslCompositor") === "1";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Emit frame N of the export as a PNG on the console, for eyes.
+ *
+ * A compositor that runs and renders garbage produces a clean fps number, so a
+ * speed arm cannot tell you whether it works. This is the cheapest path to the
+ * only thing that can: the picture. It goes through the console because the
+ * renderer has no file access and the alternative — encoding an mp4 — drags in a
+ * 100 MB ffmpeg download to look at one frame.
+ *
+ *   localStorage.setItem("openscreen.dumpFrame", "60")
+ */
+function dumpFrameIndex(): number | null {
+	try {
+		const raw = localStorage.getItem("openscreen.dumpFrame");
+		if (!raw) return null;
+		const n = Number(raw);
+		return Number.isFinite(n) && n >= 0 ? n : null;
+	} catch {
+		return null;
+	}
+}
+
+async function dumpFrameToConsole(canvas: HTMLCanvasElement, index: number): Promise<void> {
+	// Via a 2D surface, so this works for the WebGPU canvas and the Canvas2D one
+	// alike — drawImage is what both have in common.
+	const out = document.createElement("canvas");
+	out.width = canvas.width;
+	out.height = canvas.height;
+	const ctx = out.getContext("2d");
+	if (!ctx) return;
+	ctx.drawImage(canvas, 0, 0);
+	const png = out.toDataURL("image/png");
+	console.warn(`[bench] ${JSON.stringify({ event: "frame", index, png })}`);
 }
 
 async function probeOneEncoder(opts: {
@@ -1181,7 +1237,14 @@ export class VideoExporter {
 
 		// One renderer for the whole export — output size is fixed; only the
 		// source-dependent fields change per segment via renderer.setSource().
-		const renderer = new FrameRenderer({
+		const useWgsl = wgslCompositorEnabled();
+		if (useWgsl) {
+			console.warn("[export perf] WGSL compositor: POC — no captions, annotations, cursor or 3D");
+		}
+		const RendererClass = useWgsl
+			? (WgslFrameRenderer as unknown as typeof FrameRenderer)
+			: FrameRenderer;
+		const renderer = new RendererClass({
 			width: this.config.width,
 			height: this.config.height,
 			wallpaper: plan.appearance.wallpaper,
@@ -1229,6 +1292,7 @@ export class VideoExporter {
 		if (gpuFence) {
 			console.warn("[export perf] G0 fence: GPU synced after compositing, per frame");
 		}
+		const dumpAt = dumpFrameIndex();
 		let sink: NativeFrameSink | null = null;
 		let extractor: CanvasFrameExtractor | null = null;
 		if (useNative && api && compositeOnly) {
@@ -1465,6 +1529,10 @@ export class VideoExporter {
 								const stopFence = timings.start("fence");
 								renderer.finishGpuWork();
 								stopFence();
+							}
+
+							if (dumpAt !== null && frameIndex === dumpAt) {
+								await dumpFrameToConsole(renderer.getCanvas(), frameIndex);
 							}
 
 							// Both paths report the same two stages so the A/B diffs stage by

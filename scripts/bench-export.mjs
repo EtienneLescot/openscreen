@@ -13,7 +13,7 @@
  */
 
 import { spawn, spawnSync } from "node:child_process";
-import { existsSync, readdirSync, readFileSync, rmSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -212,6 +212,7 @@ async function main() {
 		// capped runs compare per-frame, or against runs with the SAME cap.
 		...(args.clip ? { clip: args.clip } : {}),
 		...(args.warmup ? { warmup: args.warmup } : {}),
+		...(args.dumpFrame ? { dumpFrame: args.dumpFrame } : {}),
 		arms: args.arms ?? "webcodecs,native",
 		runs: args.runs ?? "2",
 		fps: args.fps ?? "60",
@@ -237,6 +238,7 @@ async function main() {
 	const results = [];
 	let fatal = null;
 	let buffer = "";
+	let currentArm = "unknown";
 	// The app's own stdout/stderr, kept so a failure can show WHY. Dropping it
 	// once cost a long detour: listProjects was warning that it had skipped the
 	// very project being benched, and the runner threw that line away.
@@ -252,8 +254,15 @@ async function main() {
 				// Configuration the exporter reports about itself (which encoder, what
 				// the canvas actually granted). Always shown: an arm that silently
 				// no-ops must not be mistaken for an arm that was tested and lost.
-				const note = /\[export perf\] (canvas .*|native encode .*|shadow .*)$/.exec(line);
+				const note = /\[export perf\] (canvas .*|native encode .*|shadow .*|WGSL .*|G0 .*)$/.exec(
+					line,
+				);
 				if (note) console.log(`    · ${note[1]}`);
+				// The WGSL compositor's own diagnostics. Shown always, not just on
+				// failure: a validation error draws NOTHING and reports no error to
+				// the caller, which reads as a very fast compositor rendering black.
+				const wgsl = /\[wgsl\] (.*)$/.exec(line);
+				if (wgsl) console.log(`    · wgsl: ${wgsl[1]}`);
 				continue;
 			}
 			let event;
@@ -270,6 +279,14 @@ async function main() {
 				console.log(`  ${event.arm} run ${event.run}: ${status}`);
 			} else if (event.event === "fatal") {
 				fatal = event.error;
+			} else if (event.event === "armStart") {
+				currentArm = event.arm;
+			} else if (event.event === "frame") {
+				// Written next to the run, named for the arm that drew it, so two arms
+				// leave two pictures to compare.
+				const file = path.join(ROOT, `bench-frame-${currentArm}-${event.index}.png`);
+				writeFileSync(file, Buffer.from(event.png.split(",")[1], "base64"));
+				console.log(`  frame ${event.index} of ${currentArm} -> ${path.basename(file)}`);
 			} else if (event.event === "warmup") {
 				console.log(`  (warm-up) ${event.arm}: ${Math.round(event.wallMs)}ms — discarded`);
 			} else if (event.event === "start") {
