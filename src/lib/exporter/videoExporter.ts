@@ -476,6 +476,10 @@ interface SourceCopyVideoInfo {
 	height: number;
 	frameRate: number;
 	codec: string;
+	// Populated from the demux probe so the source-copy fast path can refuse a
+	// multi-track source (native macOS writes system audio + mic separately),
+	// which must be re-encoded through the mixing pipeline (issue #108).
+	audioStreamCount?: number;
 }
 
 export function isSourceCopyFastPathEligible(
@@ -505,6 +509,13 @@ export function getSourceCopyFastPathBlockers(
 	}
 	if (config.codec && videoCodecFamily(config.codec) !== videoCodecFamily(videoInfo.codec)) {
 		blockers.push(`codec ${config.codec} differs from source ${videoInfo.codec}`);
+	}
+	// Copying the source verbatim would carry over its multiple audio tracks (native
+	// macOS writes system audio + mic separately). Most players play only the first,
+	// which is often the silent system track — so multi-track sources must go through
+	// the full pipeline, which mixes every track into one (issue #108).
+	if ((videoInfo.audioStreamCount ?? 0) > 1) {
+		blockers.push("source has multiple audio tracks (must be mixed)");
 	}
 	if (config.webcamVideoUrl) blockers.push("webcam overlay is enabled");
 	if (hasActiveTimeRegions(config.trimRegions)) blockers.push("trim regions are present");

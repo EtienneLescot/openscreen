@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { AudioProcessor, downmixPlanarChannelsForExport } from "./audioEncoder";
+import { AudioProcessor, downmixPlanarChannelsForExport, mixPlanarSources } from "./audioEncoder";
 
 describe("AudioProcessor.selectSupportedExportCodec", () => {
 	afterEach(() => {
@@ -68,5 +68,97 @@ describe("downmixPlanarChannelsForExport", () => {
 		const stereo = downmixPlanarChannelsForExport([mono], 2);
 
 		expect(Array.from(stereo)).toEqual([0.25, -0.5, 0.25, -0.5]);
+	});
+});
+
+describe("mixPlanarSources", () => {
+	it("sums overlapping stereo sources sample-aligned", () => {
+		const system = {
+			planes: [new Float32Array([0.1, 0.2, 0.3]), new Float32Array([0.1, 0.2, 0.3])],
+			startFrame: 0,
+		};
+		const mic = {
+			planes: [new Float32Array([0.2, 0.2, 0.2]), new Float32Array([0.4, 0.4, 0.4])],
+			startFrame: 0,
+		};
+
+		const mixed = mixPlanarSources([system, mic], 2, 3);
+
+		expect(mixed).toHaveLength(2);
+		expect(Array.from(mixed[0])).toEqual([
+			expect.closeTo(0.3, 5),
+			expect.closeTo(0.4, 5),
+			expect.closeTo(0.5, 5),
+		]);
+		expect(Array.from(mixed[1])).toEqual([
+			expect.closeTo(0.5, 5),
+			expect.closeTo(0.6, 5),
+			expect.closeTo(0.7, 5),
+		]);
+	});
+
+	it("recovers a track when the other is silent (the #108 case)", () => {
+		// System audio captured silence; the microphone track holds the real signal.
+		const silentSystem = {
+			planes: [new Float32Array([0, 0, 0]), new Float32Array([0, 0, 0])],
+			startFrame: 0,
+		};
+		const mic = {
+			planes: [new Float32Array([0.5, -0.5, 0.25]), new Float32Array([0.5, -0.5, 0.25])],
+			startFrame: 0,
+		};
+
+		const mixed = mixPlanarSources([silentSystem, mic], 2, 3);
+
+		expect(Array.from(mixed[0])).toEqual([
+			expect.closeTo(0.5, 5),
+			expect.closeTo(-0.5, 5),
+			expect.closeTo(0.25, 5),
+		]);
+	});
+
+	it("aligns each source at its startFrame offset", () => {
+		const early = { planes: [new Float32Array([1, 1])], startFrame: 0 };
+		// Mic packets often start slightly after the video (source start_time > 0).
+		const late = { planes: [new Float32Array([0.5, 0.5])], startFrame: 2 };
+
+		const mixed = mixPlanarSources([early, late], 1, 4);
+
+		expect(Array.from(mixed[0])).toEqual([
+			expect.closeTo(1, 5),
+			expect.closeTo(1, 5),
+			expect.closeTo(0.5, 5),
+			expect.closeTo(0.5, 5),
+		]);
+	});
+
+	it("upmixes a mono source to stereo before mixing", () => {
+		const mono = { planes: [new Float32Array([0.3, 0.3])], startFrame: 0 };
+		const stereo = {
+			planes: [new Float32Array([0.1, 0.1]), new Float32Array([0.2, 0.2])],
+			startFrame: 0,
+		};
+
+		const mixed = mixPlanarSources([mono, stereo], 2, 2);
+
+		expect(Array.from(mixed[0])).toEqual([expect.closeTo(0.4, 5), expect.closeTo(0.4, 5)]);
+		expect(Array.from(mixed[1])).toEqual([expect.closeTo(0.5, 5), expect.closeTo(0.5, 5)]);
+	});
+
+	it("clamps the summed signal to [-1, 1] to avoid overflow", () => {
+		const a = { planes: [new Float32Array([0.8, -0.8])], startFrame: 0 };
+		const b = { planes: [new Float32Array([0.8, -0.8])], startFrame: 0 };
+
+		const mixed = mixPlanarSources([a, b], 1, 2);
+
+		expect(Array.from(mixed[0])).toEqual([1, -1]);
+	});
+
+	it("ignores samples that fall beyond the mixed length", () => {
+		const source = { planes: [new Float32Array([0.5, 0.5, 0.5])], startFrame: 1 };
+
+		const mixed = mixPlanarSources([source], 1, 2);
+
+		expect(Array.from(mixed[0])).toEqual([expect.closeTo(0, 5), expect.closeTo(0.5, 5)]);
 	});
 });
