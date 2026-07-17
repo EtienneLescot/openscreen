@@ -88,18 +88,20 @@ function nativeEncodeEnabled(): boolean {
 }
 
 /**
- * Diagnostic: extract every frame to RAM, then throw it away.
+ * Diagnostic: extract every frame to RAM, then throw it away. Writes no file.
  *
- * Produces no video — it measures the CEILING of any architecture that gets
- * pixels to the CPU, by pricing the descent with the crossing set to exactly
- * zero. That bounds every "remove the crossing" proposal at once — option A'
- * (sandbox:false, spawning ffmpeg from the renderer), shared memory, a
- * transferable that Electron won't transfer — without building any of them,
- * because none of them can avoid the readback: ffmpeg needs the pixels in RAM
- * whoever spawns it.
+ * Pairs with compositeOnly, and the PAIR is the point: this arm is that one plus
+ * a full copyTo(), so the difference between them is what the descent actually
+ * costs. Measured: 0.03 ms/frame — nothing.
  *
- * If this ceiling sits below the WebCodecs arm, every such proposal is dead and
- * the only way out is not descending at all (native-core-tauri-spec.md).
+ * That result bounds every "remove the crossing" proposal at once (option A'
+ * sandbox:false, shared memory, a transferable Electron won't transfer) without
+ * building any of them — but not for the reason this arm was built. It was built
+ * to price the descent; it proved there is nothing there to price, and that the
+ * 32 seconds previously blamed on readback were the compositor finishing its GPU
+ * work at the first stage that forced a sync.
+ *
+ * See docs/architecture/export-pipeline.md §3.
  *
  *   localStorage.setItem("openscreen.dropFrames", "1")
  */
