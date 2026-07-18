@@ -15,6 +15,7 @@ import type { DocumentService } from "../ai-edition/document-service";
 import type { CursorTelemetryLoadResult } from "../native-bridge/cursor/adapter";
 import { TelemetryCursorAdapter } from "../native-bridge/cursor/telemetryCursorAdapter";
 import { AiEditionService } from "../native-bridge/services/aiEditionService";
+import { CompositorViewService } from "../native-bridge/services/compositorViewService";
 import { CursorService } from "../native-bridge/services/cursorService";
 import { ProjectService } from "../native-bridge/services/projectService";
 import { SystemService } from "../native-bridge/services/systemService";
@@ -41,6 +42,14 @@ export interface NativeBridgeContext {
 		videoPath: string,
 	) => Promise<import("../../src/native/contracts").CursorRecordingData>;
 	loadCursorTelemetry: (videoPath: string) => Promise<CursorTelemetryLoadResult>;
+	/**
+	 * returns the native (HWND / NSView / xcb_window) handle buffer
+	 * for the BrowserWindow that hosts the requesting renderer. Used by the
+	 * compositor domain's `createView` to wire the embedded native window
+	 * to its D3D11 parent. May return `null` if the sender has no live window
+	 * (e.g. mid-teardown), in which case `createView` fails with UNAVAILABLE.
+	 */
+	getNativeWindowHandle?: (sender: import("electron").WebContents) => Buffer | null;
 	getAiEditionDocuments: () => DocumentService;
 	getAiEditionLlmConfig: () => import("../ai-edition/llm-config-store").LlmConfigStore;
 	runAiEditionChat: (
@@ -164,7 +173,7 @@ function isBridgeRequest(value: unknown): value is NativeBridgeRequest {
 	return typeof candidate.domain === "string" && typeof candidate.action === "string";
 }
 
-// ponytail: build a ChatEventSink that broadcasts each event to the renderer
+// build a ChatEventSink that broadcasts each event to the renderer
 // that requested the chat run. The webContents may be gone by the time a late
 // delta fires (tab closed, window destroyed) — webContents.send throws, so we
 // swallow the error to keep the loop running. The renderer treats a missing
@@ -174,7 +183,7 @@ function buildChatEventSink(sender: Electron.WebContents, sessionId: string): Ch
 		try {
 			sender.send("ai-edition.chat-event", payload);
 		} catch {
-			// ponytail: webContents gone — keep the loop running silently.
+			// webContents gone — keep the loop running silently.
 		}
 	};
 	return {
@@ -216,6 +225,7 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 		getAssetBasePath: context.resolveAssetBasePath,
 		getCursorCapabilities: () => cursorService.getCapabilities(),
 	});
+	const compositorViewService = new CompositorViewService();
 	const aiEditionService = new AiEditionService({
 		documents: context.getAiEditionDocuments(),
 		llmConfig: context.getAiEditionLlmConfig(),
@@ -330,6 +340,47 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 								requestId,
 								"UNSUPPORTED_ACTION",
 								`Unsupported cursor action: ${action}`,
+							);
+					}
+				}
+
+				case "compositor": {
+					const action = request.action as string;
+					switch (request.action) {
+						case "createView": {
+							const sender = event.sender;
+							const handle = context.getNativeWindowHandle?.(sender) ?? null;
+							if (!handle) {
+								return createErrorResponse(
+									requestId,
+									"UNAVAILABLE",
+									"No native window handle available for the requesting renderer.",
+								);
+							}
+							const id = compositorViewService.createView(handle, request.payload.rect);
+							return createSuccessResponse(requestId, { id });
+						}
+						case "setRect":
+							compositorViewService.setRect(request.payload.id, request.payload.rect);
+							return createSuccessResponse(requestId, { ok: true });
+						case "setParam":
+							compositorViewService.setParam(
+								request.payload.id,
+								request.payload.key,
+								request.payload.value,
+							);
+							return createSuccessResponse(requestId, { ok: true });
+						case "setPlaying":
+							compositorViewService.setPlaying(request.payload.id, request.payload.playing);
+							return createSuccessResponse(requestId, { ok: true });
+						case "destroyView":
+							compositorViewService.destroyView(request.payload.id);
+							return createSuccessResponse(requestId, { ok: true });
+						default:
+							return createErrorResponse(
+								requestId,
+								"UNSUPPORTED_ACTION",
+								`Unsupported compositor action: ${action}`,
 							);
 					}
 				}

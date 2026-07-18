@@ -14,7 +14,8 @@ use crate::compositor::{Compositor, FIXTURE_FRAMES, OUT_H, OUT_W};
 use crate::config::{self, Cfg};
 use crate::cursor::CursorTrack;
 use crate::d3d::Gpu;
-use crate::pipeline::{self, Decoder};
+use crate::live::Player;
+use crate::pipeline;
 use anyhow::Result;
 use std::ffi::c_void;
 use std::time::Instant;
@@ -68,56 +69,6 @@ fn letterbox(cw: f32, ch: f32) -> (f32, f32, f32, f32) {
         h = cw / ar;
     }
     ((cw - w) * 0.5, (ch - h) * 0.5, w, h)
-}
-
-/// Lit deux sources en lockstep et compose la frame courante dans le RT du compositeur.
-/// Boucle sur EOF (rewind zéro-réalloc). `idx` = prochaine frame à produire.
-struct Player {
-    sdec: Decoder,
-    wdec: Decoder,
-    idx: u32,
-}
-
-impl Player {
-    unsafe fn open(screen: &str, webcam: &str, gpu: &Gpu) -> Result<Player> {
-        Ok(Player {
-            sdec: Decoder::open(screen, gpu)?,
-            wdec: Decoder::open(webcam, gpu)?,
-            idx: 0,
-        })
-    }
-
-    /// Compose la frame suivante (→ `comp.rt`). Retourne `false` si aucune frame (fixture vide).
-    unsafe fn step(&mut self, comp: &Compositor, cfg: &Cfg) -> Result<bool> {
-        let mut sf = self.sdec.next()?;
-        let mut wf = self.wdec.next()?;
-        if sf.is_null() || wf.is_null() {
-            self.sdec.rewind()?;
-            self.wdec.rewind()?;
-            self.idx = 0;
-            sf = self.sdec.next()?;
-            wf = self.wdec.next()?;
-        }
-        if sf.is_null() || wf.is_null() {
-            return Ok(false);
-        }
-        comp.compose_frame(sf, wf, self.idx as f32, cfg)?;
-        self.idx = self.idx.wrapping_add(1);
-        Ok(true)
-    }
-
-    /// Recompose la frame courante (déjà décodée) avec `cfg` — pour rafraîchir la preview
-    /// après un changement de preset sans réavancer le temps.
-    unsafe fn recompose(&self, comp: &Compositor, cfg: &Cfg) -> Result<bool> {
-        let sf = self.sdec.cur_frame();
-        let wf = self.wdec.cur_frame();
-        if sf.is_null() || wf.is_null() {
-            return Ok(false);
-        }
-        let f = self.idx.saturating_sub(1);
-        comp.compose_frame(sf, wf, f as f32, cfg)?;
-        Ok(true)
-    }
 }
 
 /// État applicatif complet (possédé par la fenêtre via GWLP_USERDATA).

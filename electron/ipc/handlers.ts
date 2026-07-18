@@ -378,7 +378,7 @@ let lastEnumeratedSources = new Map<string, DesktopCapturerSource>();
 let currentProjectPath: string | null = null;
 let currentRecordingSession: RecordingSession | null = null;
 
-// ponytail: single source of truth for the mic/camera/system-audio/cursor
+// single source of truth for the mic/camera/system-audio/cursor
 // choices a user makes in the editor's Rec-mode stage, so the HUD window's
 // useScreenRecorder (a separate renderer, own process, own React tree) picks
 // up those choices instead of silently reverting to its own defaults when
@@ -2512,7 +2512,7 @@ export function registerIpcHandlers(
 			);
 		}
 
-		// ponytail: MediaRecorder occasionally produces a 0-byte file on Windows
+		// MediaRecorder occasionally produces a 0-byte file on Windows
 		// when the display stream is captured but no frames are produced (the
 		// streaming WriteStream was opened but never received any chunks). Detect
 		// the bad file here so the recording fails loudly instead of opening the
@@ -3193,7 +3193,7 @@ export function registerIpcHandlers(
 			: { success: false };
 	});
 
-	// ponytail: returns the webcam path (if any) for a given screen video by
+	// returns the webcam path (if any) for a given screen video by
 	// reading its sibling session.json — drives the cameraTrack auto-link on
 	// `addAsset` in the new editor's project store.
 	ipcMain.handle(
@@ -3359,6 +3359,23 @@ export function registerIpcHandlers(
 			normalizeVideoSourcePath(videoPath ?? currentVideoPath),
 		loadCursorRecordingData: readCursorRecordingFile,
 		loadCursorTelemetry: readCursorTelemetryFile,
+		// compositor view's createView needs the renderer-owning
+		// BrowserWindow's native handle (HWND on Windows, NSView* on macOS).
+		// Same ownership rules as desktopCapturer: `BrowserWindow.fromWebContents`
+		// gives us the window that hosts this sender; `getNativeWindowHandle`
+		// is the platform-native parent handle the D3D11 addon parents its
+		// child window to.
+		getNativeWindowHandle: (sender) => {
+			const window = BrowserWindow.fromWebContents(sender);
+			if (!window || window.isDestroyed()) {
+				return null;
+			}
+			try {
+				return window.getNativeWindowHandle();
+			} catch {
+				return null;
+			}
+		},
 		getAiEditionDocuments: () =>
 			new DocumentService(path.join(app.getPath("userData"), "projects")),
 		getAiEditionLlmConfig: () => new LlmConfigStore(app.getPath("userData")),
