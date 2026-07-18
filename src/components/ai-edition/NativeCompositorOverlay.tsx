@@ -39,6 +39,10 @@ export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 		return {
 			screenPath: primary.originalPath,
 			webcamPath: primary.cameraTrack?.sourcePath ?? undefined,
+			// sidecar convention (electron/ipc/handlers.ts readCursorRecordingFile) : la
+			// télémétrie curseur vit à côté de la vidéo tant qu'elle n'a pas bougé. Absente →
+			// le natif ignore juste le curseur (CursorTrack::load échoue silencieusement).
+			cursorPath: `${primary.originalPath}.cursor.json`,
 		};
 	}, [document]);
 

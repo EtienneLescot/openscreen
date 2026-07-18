@@ -1526,10 +1526,18 @@ export function CursorPane() {
 			setNativeParam("cursorShow", settings.cursorShow);
 			setNativeParam("cursorSize", settings.cursor.size);
 			setNativeParam("cursorClickBounce", settings.cursor.clickBounce);
+			setNativeParam("cursorSmoothing", settings.cursor.smoothing);
+			setNativeParam("cursorMotionBlur", settings.cursor.motionBlur);
 		};
 		syncToNative();
 		return subscribeNativeCompositor(syncToNative);
-	}, [settings.cursorShow, settings.cursor.size, settings.cursor.clickBounce]);
+	}, [
+		settings.cursorShow,
+		settings.cursor.size,
+		settings.cursor.clickBounce,
+		settings.cursor.smoothing,
+		settings.cursor.motionBlur,
+	]);
 
 	// Built-in "Default" plus each bundled theme. Thumbnails use the theme's
 	// arrow asset; the persisted value is the theme id. Same shape as the
@@ -1631,7 +1639,12 @@ export function CursorPane() {
 					max={100}
 					suffix="%"
 					disabled={!hasDocument}
-					onChange={(v) => setLive({ cursor: { smoothing: v / 100 } })}
+					onChange={(v) => {
+						setLive({ cursor: { smoothing: v / 100 } });
+						if (isNativeCompositorActive()) {
+							setNativeParam("cursorSmoothing", v / 100);
+						}
+					}}
 					onCommit={() => void commit()}
 				/>
 				<SliderCell
@@ -1641,7 +1654,12 @@ export function CursorPane() {
 					max={100}
 					suffix="%"
 					disabled={!hasDocument}
-					onChange={(v) => setLive({ cursor: { motionBlur: v / 100 } })}
+					onChange={(v) => {
+						setLive({ cursor: { motionBlur: v / 100 } });
+						if (isNativeCompositorActive()) {
+							setNativeParam("cursorMotionBlur", v / 100);
+						}
+					}}
 					onCommit={() => void commit()}
 				/>
 				<SliderCell

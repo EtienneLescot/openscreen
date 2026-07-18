@@ -153,6 +153,12 @@ struct InspectorParams {
     cursor_show: bool,
     cursor_size_scale: f32,
     cursor_bounce_scale: f32,
+    /// 0..1 : force du lissage ressort-amortisseur de la position (0 = brut). Reconstruit la
+    /// piste (voir `raw_cursor.smoothed()` dans `run_live`) plutôt qu'un simple scalaire de
+    /// dessin — d'où le suivi séparé de sa dernière valeur appliquée.
+    cursor_smoothing: f32,
+    /// 0..1 : force du flou de mouvement DU CURSEUR (indépendant du motion blur écran).
+    cursor_motion_blur: f32,
 }
 
 impl Default for InspectorParams {
@@ -170,6 +176,8 @@ impl Default for InspectorParams {
             cursor_show: true,
             cursor_size_scale: 1.0,
             cursor_bounce_scale: 1.0,
+            cursor_smoothing: 0.0,
+            cursor_motion_blur: 0.0,
         }
     }
 }
@@ -294,6 +302,8 @@ impl LiveView {
                 "webcamSize" => p.webcam_size_scale = v.max(0.05),
                 "cursorSize" => p.cursor_size_scale = v.max(0.0),
                 "cursorClickBounce" => p.cursor_bounce_scale = v.max(0.0),
+                "cursorSmoothing" => p.cursor_smoothing = v.clamp(0.0, 1.0),
+                "cursorMotionBlur" => p.cursor_motion_blur = v.clamp(0.0, 1.0),
                 _ => {}
             }
         }
@@ -427,8 +437,13 @@ unsafe fn render_thread(
     let parent = HWND(parent_val as *mut c_void);
     let gpu = Gpu::create(false)?;
     let mut comp = Compositor::new(&gpu)?;
-    if let Ok(track) = CursorTrack::load(cursor_json, 100_000.0, 6.0) {
-        comp.set_cursor(track);
+    // Vue live = le VRAI enregistrement, pas la fenêtre fixture (100s@6s, taillée pour l'ancien
+    // fixture POC). On charge toute la piste depuis t=0 ; 24h couvre large toute recording réelle.
+    // Gardée à part (raw_cursor) pour pouvoir régénérer une variante lissée sans relire le
+    // fichier à chaque changement du slider "smoothing" (voir la boucle plus bas).
+    let raw_cursor = CursorTrack::load(cursor_json, 0.0, 24.0 * 3600.0).ok();
+    if let Some(track) = &raw_cursor {
+        comp.set_cursor(track.smoothed(0.0));
     }
     let mut player = Player::open(screen, webcam, &gpu)?;
 
@@ -452,6 +467,11 @@ unsafe fn render_thread(
     let mut first = true;
     let mut last_screen = [i32::MIN; 4];
     let mut last_ip: Option<InspectorParams> = None;
+    let mut last_smoothing: f32 = -1.0; // force la 1re application (0.0 est une valeur valide)
+    // La vue live est TOUJOURS pilotée par la scène de l'app. Tant qu'aucune scène n'a été
+    // appliquée, on refuse de jouer le layout fixture (POC) : un fallback fixture ne ferait que
+    // MASQUER un scene-push cassé. Fond neutre jusqu'à réception → toute panne est visible.
+    let mut scene_applied = false;
 
     while !shared.stop.load(Ordering::SeqCst) {
         // params inspector : booléens/taps → cfg ; valeurs continues → live_params
@@ -469,7 +489,16 @@ unsafe fn render_thread(
             webcam_shape: ip.webcam_shape,
             cursor_size_scale: ip.cursor_size_scale,
             cursor_bounce_scale: ip.cursor_bounce_scale,
+            cursor_motion_blur: ip.cursor_motion_blur,
         });
+        // Lissage ressort-amortisseur : re-génère la piste (240 Hz) uniquement quand la valeur
+        // change (pas à chaque frame — le resample+ressort parcourt tout l'enregistrement).
+        if let Some(raw) = &raw_cursor {
+            if ip.cursor_smoothing != last_smoothing {
+                comp.set_cursor(raw.smoothed(ip.cursor_smoothing));
+                last_smoothing = ip.cursor_smoothing;
+            }
+        }
         // un changement de param doit se voir même en pause (édition live des sliders) :
         // on recompose la frame courante dans la branche pause ci-dessous.
         let ip_changed = last_ip != Some(ip);
@@ -479,6 +508,9 @@ unsafe fn render_thread(
         let scene_changed = shared.scene_dirty.swap(false, Ordering::Relaxed);
         if scene_changed {
             let scene = shared.scene.lock().unwrap().clone();
+            if scene.is_some() {
+                scene_applied = true;
+            }
             comp.set_scene(scene);
         }
 
@@ -510,6 +542,17 @@ unsafe fn render_thread(
             w = nw;
             h = nh;
             resized = true;
+        }
+
+        // Pas encore de scène → on ne compose RIEN (pas de fixture masquante). Fond neutre,
+        // puis on attend la scène. Un scene-push cassé reste ainsi visible (preview noire).
+        if !scene_applied {
+            if w > 0 && h > 0 {
+                gpu.context.ClearRenderTargetView(&bb_rtv, &[0.0, 0.0, 0.0, 1.0]);
+                let _ = swap.Present(1, DXGI_PRESENT(0));
+            }
+            std::thread::sleep(Duration::from_millis(8));
+            continue;
         }
 
         // avance : seek app-piloté (presentTime) prioritaire, sinon lecture libre (60 fps)

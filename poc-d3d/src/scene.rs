@@ -95,8 +95,13 @@ pub struct SceneCursor {
     pub motion_blur: f32,
     pub click_bounce: f32,
     pub clip_to_bounds: bool,
-    /// id du thème (jeu de sprites).
+    /// id du thème (jeu de sprites) — "default" = pas d'override, curseur math dot+ring.
     pub theme: String,
+    /// Chemin absolu du sprite "arrow" du thème, résolu côté app (compositorViewService,
+    /// même mécanisme que le wallpaper image). Absent/`None` → curseur math par défaut.
+    /// `#[serde(default)]` : champ ajouté après coup, absent des JSON de test existants.
+    #[serde(default)]
+    pub cursor_sprite_path: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

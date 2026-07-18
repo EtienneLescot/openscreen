@@ -3,6 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app } from "electron";
+import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "../../../src/lib/cursor/cursorThemes";
 import type {
 	ClipInput,
 	CompositorParamValue,
@@ -19,6 +20,57 @@ import type {
  * binary.
  */
 const localRequire: NodeRequire = createRequire(import.meta.url) as unknown as NodeRequire;
+
+/**
+ * The native compositor is a separate process and can only read absolute
+ * filesystem paths — it can't resolve renderer-relative asset URLs like
+ * `/wallpapers/wallpaper1.jpg` or fetch `http(s)://`/`data:` URLs. Bundled
+ * wallpapers live under `process.env.VITE_PUBLIC` (dev: `<root>/public`,
+ * packaged: the renderer dist), so rewrite an image background's root-relative
+ * path to that absolute location before handing the scene to the addon. Other
+ * schemes (data:, http:) are left as-is; the native side falls back to a flat
+ * colour when it can't load them. Malformed JSON passes through untouched.
+ */
+/** Absolute path of a theme's "arrow" sprite under `publicDir`, or null (unknown theme /
+ *  default / theme ships no arrow override — same fallback the web renderer applies). */
+function resolveCursorThemeArrowPath(themeId: string, publicDir: string): string | null {
+	if (!themeId || themeId === DEFAULT_CURSOR_THEME_ID) {
+		return null;
+	}
+	const theme = CURSOR_THEMES.find((t) => t.id === themeId);
+	const arrow = theme?.assets.arrow;
+	if (!arrow) {
+		return null;
+	}
+	return path.join(publicDir, arrow.assetPath);
+}
+
+function resolveSceneAssetPaths(sceneJson: string): string {
+	const publicDir = process.env.VITE_PUBLIC;
+	if (!publicDir) {
+		return sceneJson;
+	}
+	try {
+		const scene = JSON.parse(sceneJson) as {
+			background?: { kind?: string; path?: string };
+			cursor?: { theme?: string; cursorSpritePath?: string | null };
+		};
+		let changed = false;
+		const bg = scene.background;
+		if (bg?.kind === "image" && typeof bg.path === "string" && bg.path.startsWith("/")) {
+			// strip the leading slash so path.join keeps it under publicDir
+			bg.path = path.join(publicDir, bg.path.replace(/^\/+/, ""));
+			changed = true;
+		}
+		if (scene.cursor && typeof scene.cursor.theme === "string") {
+			scene.cursor.cursorSpritePath = resolveCursorThemeArrowPath(scene.cursor.theme, publicDir);
+			changed = true;
+		}
+		return changed ? JSON.stringify(scene) : sceneJson;
+	} catch {
+		return sceneJson;
+	}
+}
 
 export interface CompositorViewServiceOptions {
 	/**
@@ -221,7 +273,7 @@ export class CompositorViewService {
 		if (!addon) {
 			return;
 		}
-		addon.setScene(id, sceneJson);
+		addon.setScene(id, resolveSceneAssetPaths(sceneJson));
 	}
 
 	destroyView(id: number): void {

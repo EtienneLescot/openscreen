@@ -3,7 +3,7 @@
 
 use crate::config::Cfg;
 use crate::cursor::CursorTrack;
-use crate::scene::Scene;
+use crate::scene::{Scene, SceneBackground};
 use crate::d3d::Gpu;
 use crate::ffi::AVFrame;
 use anyhow::{bail, Result};
@@ -20,6 +20,25 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 pub const OUT_W: u32 = 1920;
 pub const OUT_H: u32 = 1080;
+
+/// Parse une couleur "#rgb" / "#rrggbb" (sRGB, comme les wallpapers web) → [r,g,b,a] 0..1.
+/// Les couleurs plates suivent le même chemin que `bg_color` (pas de linéarisation).
+fn parse_hex(s: &str) -> Option<[f32; 4]> {
+    let h = s.trim().trim_start_matches('#');
+    let (r, g, b) = match h.len() {
+        3 => {
+            let d = |i: usize| u8::from_str_radix(&h[i..=i], 16).ok().map(|v| v * 17);
+            (d(0)?, d(1)?, d(2)?)
+        }
+        6 => (
+            u8::from_str_radix(&h[0..2], 16).ok()?,
+            u8::from_str_radix(&h[2..4], 16).ok()?,
+            u8::from_str_radix(&h[4..6], 16).ok()?,
+        ),
+        _ => return None,
+    };
+    Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0])
+}
 
 /// Constant buffer d'un calque (doit matcher `cbuffer Layer` du HLSL, 64 octets).
 #[repr(C)]
@@ -52,6 +71,11 @@ pub struct LiveParams {
     pub webcam_shape: u32,        // 0=rect, 1=circle, 2=square, 3=rounded (défaut)
     pub cursor_size_scale: f32,   // multiplie la taille du curseur (1 = défaut)
     pub cursor_bounce_scale: f32, // multiplie l'amplitude du click-bounce (1 = défaut, 0 = off)
+    /// 0..1 : flou de mouvement DU CURSEUR (indépendant du motion blur écran/`cfg.mblur_n`).
+    /// Approximé par le même mécanisme de traînée fantôme (taps décalés le long de la
+    /// vélocité), pas par un flou gaussien variable comme le canvas web — plus simple à
+    /// réutiliser côté GPU, effet de streak équivalent.
+    pub cursor_motion_blur: f32,
 }
 
 impl Default for LiveParams {
@@ -66,6 +90,7 @@ impl Default for LiveParams {
             webcam_shape: 3,
             cursor_size_scale: 1.0,
             cursor_bounce_scale: 1.0,
+            cursor_motion_blur: 0.0,
         }
     }
 }
@@ -116,6 +141,9 @@ pub struct Compositor {
     /// Scène pilotée par l'app (contrat) : quand présente, remplace le layout fixture de
     /// `timeline()`. Voir `scene.rs` / `SceneDescription` (TS).
     scene: RefCell<Option<Scene>>,
+    /// Cache des textures wallpaper image (clé = chemin absolu) : décodage/upload une seule
+    /// fois, puis réutilisées par frame. (SRV, largeur, hauteur).
+    img_cache: RefCell<HashMap<String, (ID3D11ShaderResourceView, u32, u32)>>,
 }
 
 pub const HALF_W: u32 = OUT_W / 2;
@@ -221,7 +249,8 @@ fn timeline(frame: f32, cfg: &Cfg) -> FrameParams {
 /// remplace le planning A↔B fixture de `timeline()`. Zoom = 1 (les zoom regions viennent ensuite).
 /// La taille/forme/miroir webcam restent appliqués par-dessus via `LiveParams`.
 fn preset_placements(preset: &str) -> FrameParams {
-    let full_screen = Placement { dst: [0.05, 0.05, 0.90, 0.90], radius: 24.0 };
+    // plein cadre : le padding l'insère ensuite (padding 0 → bord à bord).
+    let full_screen = Placement { dst: [0.0, 0.0, 1.0, 1.0], radius: 24.0 };
     // PiP bas-droite (≈ layout A fixture).
     let a_side = 320.0_f32;
     let pip_webcam = Placement {
@@ -583,6 +612,7 @@ impl Compositor {
             srv_cache: RefCell::new(HashMap::new()),
             live_params: RefCell::new(LiveParams::default()),
             scene: RefCell::new(None),
+            img_cache: RefCell::new(HashMap::new()),
         })
     }
 
@@ -745,12 +775,81 @@ impl Compositor {
         self.ctx.Draw(4, 0);
     }
 
+    /// Fond wallpaper image (cover-fit). `path` = chemin absolu (résolu côté app). Décodé et
+    /// uploadé une fois (cache), puis échantillonné en mode 6. Err → l'appelant retombe sur une
+    /// couleur plate. Le rect uv `src` recouvre toute la sortie en rognant le débordement.
+    unsafe fn draw_image_bg(&self, path: &str) -> Result<()> {
+        // NB : la recherche est isolée dans un `let` pour que l'emprunt immuable soit relâché
+        // AVANT le `borrow_mut()` (sinon double-emprunt RefCell → panic sur la 1re frame image).
+        let cached = self.img_cache.borrow().get(path).cloned();
+        let (srv, iw, ih) = match cached {
+            Some(v) => v,
+            None => {
+                let loaded = self.load_image_srv(path)?;
+                self.img_cache.borrow_mut().insert(path.to_string(), loaded.clone());
+                loaded
+            }
+        };
+        let ai = iw as f32 / ih as f32;
+        let ao = OUT_W as f32 / OUT_H as f32;
+        let (u0, v0, u1, v1) = if ai > ao {
+            let vis = ao / ai; // rogne horizontalement
+            ((1.0 - vis) * 0.5, 0.0, 1.0 - (1.0 - vis) * 0.5, 1.0)
+        } else {
+            let vis = ai / ao; // rogne verticalement
+            (0.0, (1.0 - vis) * 0.5, 1.0, 1.0 - (1.0 - vis) * 0.5)
+        };
+        self.upload_cb(&LayerCB {
+            dst: [0.0, 0.0, 1.0, 1.0],
+            src: [u0, v0, u1, v1],
+            mode: 6.0,
+            ..Default::default()
+        });
+        self.ctx.PSSetShaderResources(2, Some(&[Some(srv)]));
+        self.ctx.Draw(4, 0);
+        Ok(())
+    }
+
+    /// Décode un fichier image (jpg/png) → texture RGBA immuable + SRV.
+    unsafe fn load_image_srv(&self, path: &str) -> Result<(ID3D11ShaderResourceView, u32, u32)> {
+        let img = image::open(path)
+            .map_err(|e| anyhow::anyhow!("wallpaper {}: {}", path, e))?
+            .to_rgba8();
+        let (w, h) = (img.width(), img.height());
+        let pixels = img.into_raw();
+        let td = D3D11_TEXTURE2D_DESC {
+            Width: w,
+            Height: h,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_IMMUTABLE,
+            BindFlags: D3D11_BIND_SHADER_RESOURCE.0 as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let init = D3D11_SUBRESOURCE_DATA {
+            pSysMem: pixels.as_ptr() as *const c_void,
+            SysMemPitch: w * 4,
+            SysMemSlicePitch: 0,
+        };
+        let mut tex: Option<ID3D11Texture2D> = None;
+        self.dev.CreateTexture2D(&td, Some(&init), Some(&mut tex))?;
+        let tex = tex.unwrap();
+        let mut srv: Option<ID3D11ShaderResourceView> = None;
+        self.dev.CreateShaderResourceView(&tex, None, Some(&mut srv))?;
+        Ok((srv.unwrap(), w, h))
+    }
+
     pub fn set_cursor(&mut self, track: CursorTrack) {
         self.cursor = Some(track);
     }
 
     /// Curseur custom (dot+ring) centré en `center` (0..1 sortie), taille `size_px`, opacité `a`.
-    unsafe fn draw_cursor(&self, center: [f32; 2], size_px: f32, a: f32) {
+    /// `clip` = rect "Clip to canvas" en espace sortie [x,y,w,h] ; passer un rect englobant tout
+    /// (ex. [-1,-1,3,3]) pour désactiver l'effet.
+    unsafe fn draw_cursor(&self, center: [f32; 2], size_px: f32, a: f32, clip: [f32; 4]) {
         let w = size_px / OUT_W as f32;
         let h = size_px / OUT_H as f32;
         self.draw_solid(&LayerCB {
@@ -758,8 +857,63 @@ impl Compositor {
             quad_px: [size_px, size_px],
             mode: 4.0,
             color: [1.0, 1.0, 1.0, a],
+            fx: clip,
             ..Default::default()
         });
+    }
+
+    /// Curseur thème (sprite PNG, ex. arrow.png) centré en `center`, taille de référence
+    /// `size_px` (ancré centre — l'ajustement fin du hotspot par thème est un raffinement
+    /// futur). `Err` → l'appelant retombe sur `draw_cursor` (math dot+ring).
+    unsafe fn draw_cursor_sprite(
+        &self,
+        center: [f32; 2],
+        size_px: f32,
+        a: f32,
+        path: &str,
+        clip: [f32; 4],
+    ) -> Result<()> {
+        let cached = self.img_cache.borrow().get(path).cloned();
+        let (srv, iw, ih) = match cached {
+            Some(v) => v,
+            None => {
+                let loaded = self.load_image_srv(path)?;
+                self.img_cache.borrow_mut().insert(path.to_string(), loaded.clone());
+                loaded
+            }
+        };
+        let ar = iw as f32 / ih as f32;
+        let (pw, ph) = if ar >= 1.0 { (size_px, size_px / ar) } else { (size_px * ar, size_px) };
+        let w = pw / OUT_W as f32;
+        let h = ph / OUT_H as f32;
+        self.upload_cb(&LayerCB {
+            dst: [center[0] - w * 0.5, center[1] - h * 0.5, w, h],
+            src: [0.0, 0.0, 1.0, 1.0],
+            mode: 7.0,
+            color: [1.0, 1.0, 1.0, a],
+            fx: clip,
+            ..Default::default()
+        });
+        self.ctx.PSSetShaderResources(2, Some(&[Some(srv)]));
+        self.ctx.Draw(4, 0);
+        Ok(())
+    }
+
+    /// Sprite du thème si résolu et chargeable, sinon le curseur math (dot+ring).
+    unsafe fn draw_cur_themed(
+        &self,
+        sprite: &Option<String>,
+        center: [f32; 2],
+        size_px: f32,
+        a: f32,
+        clip: [f32; 4],
+    ) {
+        if let Some(path) = sprite {
+            if self.draw_cursor_sprite(center, size_px, a, path, clip).is_ok() {
+                return;
+            }
+        }
+        self.draw_cursor(center, size_px, a, clip);
     }
 
     /// Ombre portée (§7 E4) sous un quad `dst` (normalisé) de taille `size_px`.
@@ -807,46 +961,124 @@ impl Compositor {
         let u_max = scw / stw as f32;
         let v_max = sch / sth as f32;
 
-        // Scène de l'app (contrat) présente → placements pilotés par le layout preset ; sinon
-        // planning fixture (harnais/bench). Layout statique → pas d'animation → vélocité nulle.
-        let (p, pp) = match self.scene.borrow().as_ref() {
-            Some(s) => {
-                let fp = preset_placements(&s.layout.preset);
-                (fp, fp)
+        // Scène de l'app présente → placements du layout preset ; sinon planning fixture (bench).
+        let scene_preset: Option<String> =
+            self.scene.borrow().as_ref().map(|s| s.layout.preset.clone());
+        let (p, pp) = match &scene_preset {
+            Some(preset) => {
+                let fp = preset_placements(preset);
+                (fp, fp) // layout statique → vélocité nulle
             }
             None => (timeline(frame, cfg), timeline(frame - 1.0, cfg)),
         };
+        let is_vstack = scene_preset.as_deref() == Some("vertical-stack");
         let lp = *self.live_params.borrow();
         let mb_taps = cfg.mblur_n as f32;
 
-        // Scale un rect dst normalisé autour de son centre — sert padding (screen) et
-        // taille (webcam). Appliqué aussi à la frame précédente → vecteurs de motion blur
-        // cohérents. Défauts (padding 0, size 1) reproduisent la fixture au pixel près.
-        let scale_about = |dst: [f32; 4], s: f32| -> [f32; 4] {
-            let cx = dst[0] + dst[2] * 0.5;
-            let cy = dst[1] + dst[3] * 0.5;
-            [cx - dst[2] * s * 0.5, cy - dst[3] * s * 0.5, dst[2] * s, dst[3] * s]
+        // padding : échelle globale du layout autour du centre du cadre (parité web frameRenderer :
+        // paddingScale = 1 - padding*0.4 → padding 0 = plein cadre). Vertical-stack l'ignore.
+        let padding_scale = if is_vstack { 1.0 } else { 1.0 - lp.padding * 0.4 };
+        let scale_frame = |dst: [f32; 4], s: f32| -> [f32; 4] {
+            [0.5 + (dst[0] - 0.5) * s, 0.5 + (dst[1] - 0.5) * s, dst[2] * s, dst[3] * s]
         };
-        let pad_s = (1.0 - lp.padding).max(0.05);
-        let s_dst = scale_about(p.screen.dst, pad_s);
-        let s_dst_prev = scale_about(pp.screen.dst, pad_s);
-        let w_dst = scale_about(p.webcam.dst, lp.webcam_size_scale);
-        let w_dst_prev = scale_about(pp.webcam.dst, lp.webcam_size_scale);
+        // webcam : ancrée à son coin bas-droite (grandit vers le haut-gauche, pas depuis le centre).
+        let scale_corner_br = |dst: [f32; 4], s: f32| -> [f32; 4] {
+            let (brx, bry) = (dst[0] + dst[2], dst[1] + dst[3]);
+            let (nw, nh) = (dst[2] * s, dst[3] * s);
+            [brx - nw, bry - nh, nw, nh]
+        };
+        // parité web (compositeLayout) : rectangle/rounded gardent le ratio natif de la webcam ;
+        // square/circle forcent un carré (side = min). Le placement de base est carré → on ajuste
+        // ici, en gardant le coin bas-droite fixe (cohérent avec le size-scale).
+        let is_square_shape = matches!(lp.webcam_shape, 1 | 2); // circle | square
+        let cam_ar = if is_square_shape { 1.0 } else { (wcw / wch).max(0.01) };
+        let fit_cam_aspect = |dst: [f32; 4]| -> [f32; 4] {
+            let s = (dst[2] * OUT_W as f32).min(dst[3] * OUT_H as f32); // côté carré de base (px)
+            let (pw, ph) = if cam_ar >= 1.0 { (s, s / cam_ar) } else { (s * cam_ar, s) };
+            let (nw, nh) = (pw / OUT_W as f32, ph / OUT_H as f32);
+            let (brx, bry) = (dst[0] + dst[2], dst[1] + dst[3]);
+            [brx - nw, bry - nh, nw, nh]
+        };
+        let s_dst = scale_frame(p.screen.dst, padding_scale);
+        let s_dst_prev = scale_frame(pp.screen.dst, padding_scale);
+        // le padding n'affecte QUE l'écran (la quantité de fond révélée). La webcam reste ancrée
+        // en bas-droite à sa marge fixe, quelle que soit la valeur de padding (pas de scale_frame).
+        let w_dst = fit_cam_aspect(scale_corner_br(p.webcam.dst, lp.webcam_size_scale));
+        let w_dst_prev = fit_cam_aspect(scale_corner_br(pp.webcam.dst, lp.webcam_size_scale));
 
         let s_radius = if cfg.rounded { p.screen.radius * lp.radius_scale } else { 0.0 };
         let w_px = [w_dst[2] * OUT_W as f32, w_dst[3] * OUT_H as f32];
-        // forme webcam : rayon SDF dérivé de la forme choisie (le rond = rayon = demi-côté).
+        // forme webcam : rayon SDF dérivé de la SEULE forme choisie. Le slider Roundness ne
+        // s'applique qu'à l'ÉCRAN, jamais à la caméra. Parité web (compositeLayout) : rectangle
+        // ET square ont un léger arrondi (fraction 0.12) — ils ne diffèrent que par le ratio ;
+        // rounded est nettement plus arrondi (0.3) ; circle = demi-côté.
+        let w_min = w_px[0].min(w_px[1]);
         let w_radius = match lp.webcam_shape {
-            1 => w_px[0].min(w_px[1]) * 0.5,                                  // circle
-            0 | 2 => 0.0,                                                     // rectangle / square
-            _ if cfg.rounded => p.webcam.radius * lp.radius_scale,           // rounded (défaut)
-            _ => 0.0,
+            1 => w_min * 0.5,  // circle
+            3 => w_min * 0.3,  // rounded (nettement plus arrondi)
+            _ => w_min * 0.12, // rectangle / square → léger arrondi (identique)
         };
 
         self.begin([0.0, 0.0, 0.0, 1.0]);
 
-        // --- fond : flouté (screen plein cadre + gaussien) ou couleur plate ---
-        if cfg.bg_blur {
+        // --- fond ---
+        // Parité web (frameRenderer.blurredBackgroundLayer) : le fond est le WALLPAPER sélectionné
+        // (image/couleur/gradient) et « Blur BG » floute CE wallpaper, PAS la vidéo. Le natif
+        // dupliquait la vidéo floutée → le « vieux flou ». Côté APP (scène présente) on dessine
+        // donc le wallpaper (couleur pour l'instant ; gradient/image rendus depuis la scène
+        // ensuite ; pour une couleur plate le flou est un no-op visuel). Côté fixture/bench
+        // (pas de scène) on garde le fond screen-flouté, dont le coût est mesuré (C4).
+        let scene_bg = self.scene.borrow().as_ref().map(|s| (s.background.clone(), s.effects.blur));
+        if let Some((bg, blur_wallpaper)) = scene_bg {
+            match bg {
+                SceneBackground::Color { color } => {
+                    let c = parse_hex(&color).unwrap_or(lp.bg_color);
+                    self.draw_solid(&LayerCB {
+                        dst: [0.0, 0.0, 1.0, 1.0],
+                        mode: 1.0,
+                        color: c,
+                        ..Default::default()
+                    });
+                }
+                SceneBackground::Gradient { angle_deg, stops } => {
+                    let c0 = stops.first().and_then(|s| parse_hex(s)).unwrap_or(lp.bg_color);
+                    let c1 = stops.last().and_then(|s| parse_hex(s)).unwrap_or(c0);
+                    // angle CSS → direction unitaire (espace sortie, y vers le bas) :
+                    // 0° = vers le haut, 90° = vers la droite.
+                    let a = angle_deg.to_radians();
+                    let dir = [a.sin(), -a.cos()];
+                    self.draw_solid(&LayerCB {
+                        dst: [0.0, 0.0, 1.0, 1.0],
+                        src: [c1[0], c1[1], c1[2], c1[3]],
+                        mode: 5.0,
+                        color: c0,
+                        fx: [dir[0], dir[1], 0.0, 0.0],
+                        ..Default::default()
+                    });
+                }
+                SceneBackground::Image { path } => {
+                    // image bg (cover-fit, mise en cache) ; fallback couleur si chargement échoue
+                    // (loggé — un fallback silencieux masquerait un chemin cassé, cf. le panic
+                    // borrow qu'on a déjà eu : toute panne doit être visible/traçable).
+                    if let Err(e) = self.draw_image_bg(&path) {
+                        eprintln!("[compositor] wallpaper image \"{}\" : {:#}", path, e);
+                        self.draw_solid(&LayerCB {
+                            dst: [0.0, 0.0, 1.0, 1.0],
+                            mode: 1.0,
+                            color: lp.bg_color,
+                            ..Default::default()
+                        });
+                    }
+                }
+            }
+            // « Blur BG » (parité web blurredBackgroundLayer) : floute CE wallpaper qu'on vient
+            // de dessiner (dual-Kawase, déjà utilisé pour le fond fixture ci-dessous). No-op
+            // visuel sur une couleur plate, effet réel sur gradient/image.
+            if blur_wallpaper {
+                self.blur_bg(18.0);
+                self.bind_compose_state();
+            }
+        } else if cfg.bg_blur {
             let over = 0.06;
             self.draw_video(
                 &LayerCB {
@@ -912,6 +1144,17 @@ impl Compositor {
 
         // --- curseur custom : suit le mapping src/dst (zoom+layout), click bounce,
         // et flou de mouvement par fantômes le long de sa vélocité (frame-1 -> frame) ---
+        // Thème (sprite) si résolu par l'app, sinon math dot+ring (défaut / fallback si le
+        // sprite ne charge pas).
+        let cursor_sprite: Option<String> =
+            self.scene.borrow().as_ref().and_then(|s| s.cursor.cursor_sprite_path.clone());
+        // « Clip to canvas » : tronque le curseur aux bords de l'écran (utile quand le padding
+        // crée une marge et que la pointe, près du bord de la vidéo, dépasserait dedans).
+        // Rect englobant tout par défaut = pas d'effet (le mode 4/7 du shader clippe sur `fx`).
+        let cursor_clip_rect: [f32; 4] = match self.scene.borrow().as_ref() {
+            Some(s) if s.cursor.clip_to_bounds => s_dst,
+            _ => [-1.0, -1.0, 3.0, 3.0],
+        };
         if cfg.cursor {
             if let Some(track) = &self.cursor {
                 let t = frame / FPS;
@@ -929,32 +1172,90 @@ impl Compositor {
                 };
                 if let Some(cur) = map(track.at(t), [su0, sv0], [hu, hv], s_dst) {
                     // taille + amplitude du bounce pilotées par l'inspector (défauts = fixture).
+                    // `padding_scale` : le curseur est un recouvrement synthétique, pas cuit dans
+                    // la vidéo — quand le padding rétrécit l'écran, le curseur doit rétrécir
+                    // pareil pour rester à l'échelle du contenu (sinon sa pointe semble se
+                    // décaler/dériver à mesure que le padding grandit).
                     let bounce = 1.0 + (track.bounce(t) - 1.0) * lp.cursor_bounce_scale;
-                    let sz = 34.0 * lp.cursor_size_scale * bounce;
-                    let taps = cfg.mblur_n;
-                    if taps <= 1 {
-                        self.draw_cursor(cur, sz, 1.0);
+                    let sz = 34.0 * lp.cursor_size_scale * bounce * padding_scale;
+                    // flou de mouvement DU CURSEUR, indépendant de cfg.mblur_n (écran/vidéo).
+                    // BUG corrigé : augmenter l'intensité ne faisait auparavant que sur-échantillonner
+                    // (plus de taps) un écart figé d'1 frame (1/60s) -> la traînée ne s'allongeait
+                    // JAMAIS, donc restait quasi invisible quel que soit le réglage. L'intensité doit
+                    // étirer la FENÊTRE temporelle de la traînée, pas seulement sa densité d'échantillons.
+                    // 0 -> 1 frame en arrière (net) ; 1 -> ~8 frames (~130 ms à 60fps, traînée nette).
+                    let blur01 = lp.cursor_motion_blur.clamp(0.0, 1.0);
+                    let has_scene = self.scene.borrow().is_some();
+                    let trail_frames = if has_scene { 1.0 + blur01 * 7.0 } else { 1.0 };
+                    // BUG corrigé : le plancher était 2 (pas 1) -> même à blur=0 le curseur
+                    // passait TOUJOURS par le chemin additif multi-tap (poids 1/taps=0.5 chacun),
+                    // et comme prev≠cur au pixel près, les deux copies à 0.5 d'alpha ne se
+                    // recouvraient jamais parfaitement -> curseur en permanence semi-transparent
+                    // (quasi invisible sur fond clair), même sans aucun flou demandé.
+                    let taps = if has_scene {
+                        (1.0 + blur01 * 10.0).round() as u32 // 0 -> 1 (net) ; 1 -> 11 (traînée)
                     } else {
-                        let tp = (frame - 1.0) / FPS;
+                        cfg.mblur_n // fixture/bench : comportement historique inchangé
+                    };
+                    if taps <= 1 {
+                        self.draw_cur_themed(&cursor_sprite, cur, sz, 1.0, cursor_clip_rect);
+                    } else {
+                        let tp = (frame - trail_frames) / FPS;
                         let prev = map(track.at(tp), [su0_p, sv0_p], [hu_p, hv_p], s_dst_prev)
                             .unwrap_or(cur);
+                        // Flou RÉEL, pas des copies discrètes : accumule les N échantillons dans un
+                        // buffer ISOLÉ (transparent), pas directement sur la scène déjà composée.
+                        // BUG précédent : additionner directement sur `self.rtv` revient à AJOUTER
+                        // la couleur du curseur (blanc) à ce qu'il y a déjà dessous — sur un fond
+                        // clair, ajouter du blanc*petit-alpha ne change presque rien de visible
+                        // (déjà proche du blanc) -> curseur quasi invisible. En accumulant d'abord
+                        // dans un buffer à part (parti de zéro, même mécanisme que le motion blur
+                        // écran de `compose_frame_mb`), la somme reste correctement normalisée
+                        // (alpha final ~1 si les échantillons se recouvrent), puis on la composite
+                        // sur la scène par un blend "over" classique — correct quel que soit le fond.
+                        self.ctx.ClearRenderTargetView(&self.accum_rtv, &[0.0, 0.0, 0.0, 0.0]);
+                        self.ctx.OMSetRenderTargets(Some(&[Some(self.accum_rtv.clone())]), None);
+                        let w = 1.0 / taps as f32;
+                        self.ctx.OMSetBlendState(&self.blend_add, Some(&[w, w, w, w]), 0xffffffff);
                         for k in 0..taps {
                             let f = k as f32 / (taps - 1) as f32;
                             let c = [prev[0] + (cur[0] - prev[0]) * f, prev[1] + (cur[1] - prev[1]) * f];
-                            let a = (k as f32 + 1.0) / taps as f32; // traîne -> tête
-                            self.draw_cursor(c, sz, a);
+                            self.draw_cur_themed(&cursor_sprite, c, sz, 1.0, cursor_clip_rect);
                         }
+                        // composite le buffer accumulé sur la scène (blend "over" normal, prémultiplié).
+                        self.ctx.OMSetRenderTargets(Some(&[Some(self.rtv.clone())]), None);
+                        self.ctx.PSSetShaderResources(0, Some(&[Some(self.accum_srv.clone())]));
+                        self.ctx.VSSetShader(&self.vs_fs, None);
+                        self.ctx.PSSetShader(&self.ps_tex, None);
+                        self.ctx.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+                        let vp = D3D11_VIEWPORT {
+                            TopLeftX: 0.0, TopLeftY: 0.0,
+                            Width: OUT_W as f32, Height: OUT_H as f32, MinDepth: 0.0, MaxDepth: 1.0,
+                        };
+                        self.ctx.RSSetViewports(Some(&[vp]));
+                        self.ctx.OMSetBlendState(&self.blend, None, 0xffffffff);
+                        self.ctx.Draw(3, 0);
+                        self.ctx.PSSetShaderResources(0, Some(&[None]));
+                        // restaure l'état de composition standard (VS/PS/topologie quad-strip) pour
+                        // le dessin de la webcam qui suit juste après.
+                        self.bind_compose_state();
                     }
                 }
             }
         }
 
-        // --- webcam : center-crop carré (miroir horizontal optionnel) ---
-        let sq = wch;
-        let cu0 = (wcw - sq) * 0.5 / wtw as f32;
-        let cu1 = cu0 + sq / wtw as f32;
+        // --- webcam : source selon la forme (miroir horizontal optionnel) ---
+        // rectangle/rounded → frame entière (ratio natif, dst déjà ajustée) ; square/circle →
+        // center-crop carré. Évite toute distorsion : le dst matche le ratio de la source.
+        let (su0, su1) = if is_square_shape {
+            let sq = wch.min(wcw);
+            let cu0 = (wcw - sq) * 0.5 / wtw as f32;
+            (cu0, cu0 + sq / wtw as f32)
+        } else {
+            (0.0, wcw / wtw as f32)
+        };
         // miroir = échanger les bornes u du rect source (flip horizontal).
-        let (u0, u1) = if lp.webcam_mirror { (cu1, cu0) } else { (cu0, cu1) };
+        let (u0, u1) = if lp.webcam_mirror { (su1, su0) } else { (su0, su1) };
         let wv = wch / wth as f32;
         if cfg.shadow {
             self.draw_shadow(w_dst, w_px, w_radius, 32.0, [0.0, 12.0], 0.5 * lp.shadow_scale);
