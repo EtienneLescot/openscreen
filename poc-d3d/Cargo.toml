@@ -34,6 +34,9 @@ cc = "1"
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+# Décodage des wallpapers image (jpg/png) pour le fond natif. default-features off →
+# on ne tire que les décodeurs nécessaires (build plus léger).
+image = { version = "0.25", default-features = false, features = ["jpeg", "png"] }
 
 [dependencies.windows]
 version = "0.58"
