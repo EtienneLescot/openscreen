@@ -15,6 +15,7 @@ use windows::core::Interface;
 // Macros libav non générées par bindgen (function-like). Valeurs Windows/MSVC.
 const AVERROR_EAGAIN: i32 = -11; // -EAGAIN (EAGAIN=11 sur MSVC)
 const AVERROR_EOF: i32 = -541478725; // -MKTAG('E','O','F',' ')
+const AVSEEK_FLAG_BACKWARD: i32 = 1; // seek vers la keyframe <= ts (macro non générée)
 
 // Accesseurs shim.c (AVFormatContext opaque côté bindgen).
 extern "C" {
@@ -349,7 +350,8 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
 }
 
 /// Décodeur qui rend une frame à la fois (pour composer 2 sources en lockstep).
-struct Decoder {
+/// `pub(crate)` : réutilisé par la preview/playback (voir `app.rs`).
+pub(crate) struct Decoder {
     fmt: *mut AVFormatContext,
     dctx: *mut AVCodecContext,
     hwdev: *mut AVBufferRef,
@@ -360,7 +362,7 @@ struct Decoder {
 }
 
 impl Decoder {
-    unsafe fn open(path: &str, gpu: &Gpu) -> Result<Decoder> {
+    pub(crate) unsafe fn open(path: &str, gpu: &Gpu) -> Result<Decoder> {
         let mut fmt: *mut AVFormatContext = ptr::null_mut();
         let cpath = CString::new(path)?;
         averr(
@@ -400,8 +402,23 @@ impl Decoder {
         })
     }
 
+    /// Dernière frame décodée (valide jusqu'au prochain `next`) — pour recomposer
+    /// la frame courante après un changement de config, sans réavancer (preview).
+    pub(crate) fn cur_frame(&self) -> *mut AVFrame {
+        self.frame
+    }
+
+    /// Repositionne le flux à la première keyframe (t=0) et vide le codec — pour boucler
+    /// la playback sans réallouer les décodeurs. La fixture démarre sur un IDR (§11).
+    pub(crate) unsafe fn rewind(&mut self) -> Result<()> {
+        averr(av_seek_frame(self.fmt, self.vidx, 0, AVSEEK_FLAG_BACKWARD), "seek")?;
+        avcodec_flush_buffers(self.dctx);
+        self.sent_eof = false;
+        Ok(())
+    }
+
     /// Rend la prochaine frame (valide jusqu'au prochain appel), ou null à EOF.
-    unsafe fn next(&mut self) -> Result<*mut AVFrame> {
+    pub(crate) unsafe fn next(&mut self) -> Result<*mut AVFrame> {
         loop {
             let r = avcodec_receive_frame(self.dctx, self.frame);
             if r == 0 {
@@ -471,6 +488,9 @@ unsafe fn make_enc_frames(gpu: &Gpu, w: i32, h: i32) -> Result<(*mut AVBufferRef
 }
 
 /// C1..C8 (§9) : composite 2 sources → encode, effets gatés par `cfg`. Mesuré au plus extérieur (§10).
+/// `progress(frames_encodées)` est appelé à chaque frame — no-op côté bench (mesure inchangée),
+/// alimente la barre de progression côté GUI. La mesure reste enveloppante (§10) : la sonde est
+/// un simple `SendMessage` throttlé (µs), négligeable devant ~8 ms/frame GPU.
 pub fn run_composited(
     screen: &str,
     webcam: &str,
@@ -478,8 +498,9 @@ pub fn run_composited(
     gpu: &Gpu,
     comp: &Compositor,
     cfg: &Cfg,
+    progress: &mut dyn FnMut(u64),
 ) -> Result<Stats> {
-    unsafe { run_c1_inner(screen, webcam, out, gpu, comp, cfg) }
+    unsafe { run_c1_inner(screen, webcam, out, gpu, comp, cfg, progress) }
 }
 
 unsafe fn run_c1_inner(
@@ -489,6 +510,7 @@ unsafe fn run_c1_inner(
     gpu: &Gpu,
     comp: &Compositor,
     cfg: &Cfg,
+    progress: &mut dyn FnMut(u64),
 ) -> Result<Stats> {
     let mut sdec = Decoder::open(screen, gpu)?;
     let mut wdec = Decoder::open(webcam, gpu)?;
@@ -548,6 +570,7 @@ unsafe fn run_c1_inner(
         drain_encoder(ectx, octx, ostream, opkt)?;
         av_frame_free(&mut (outf as *mut _));
         frames += 1;
+        progress(frames);
     }
 
     avcodec_send_frame(ectx, ptr::null_mut());
@@ -591,5 +614,41 @@ unsafe fn drain_encoder(
         )
         .map_err(|e| anyhow!("{e}"))?;
         av_packet_unref(opkt);
+    }
+}
+
+/// Nombre de frames du flux vidéo (borne de la barre de progression export). `nb_frames`
+/// si présent (le cas de la fixture MP4), sinon estimé par durée × cadence, sinon fallback.
+pub fn probe_frame_count(path: &str) -> Result<u64> {
+    unsafe {
+        let mut fmt: *mut AVFormatContext = ptr::null_mut();
+        let cpath = CString::new(path)?;
+        averr(
+            avformat_open_input(&mut fmt, cpath.as_ptr(), ptr::null_mut(), ptr::null_mut()),
+            "open_input",
+        )?;
+        averr(avformat_find_stream_info(fmt, ptr::null_mut()), "find_stream_info")?;
+        let vidx = av_find_best_stream(fmt, AVMediaType::AVMEDIA_TYPE_VIDEO, -1, -1, ptr::null_mut(), 0);
+        let mut n: u64 = 0;
+        if vidx >= 0 {
+            let stream = sn_fmt_stream(fmt, vidx);
+            let nb = (*stream).nb_frames;
+            if nb > 0 {
+                n = nb as u64;
+            } else {
+                let afr = (*stream).avg_frame_rate;
+                let dur = (*stream).duration;
+                let tb = (*stream).time_base;
+                if afr.num != 0 && afr.den != 0 && dur > 0 && tb.den != 0 {
+                    let secs = dur as f64 * tb.num as f64 / tb.den as f64;
+                    n = (secs * afr.num as f64 / afr.den as f64).round() as u64;
+                }
+            }
+        }
+        avformat_close_input(&mut fmt);
+        if n == 0 {
+            n = crate::compositor::FIXTURE_FRAMES as u64;
+        }
+        Ok(n)
     }
 }

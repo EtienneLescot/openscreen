@@ -47,10 +47,23 @@ compositeur (WGSL natif à l'identique) + la carte des coûts.
 
 ## Build & run
 
-`x.bat` encapsule vcvars + ffmpeg/bin sur le PATH runtime :
+`x.bat` encapsule vcvars + ffmpeg/bin sur le PATH runtime. Deux modes :
+
+**GUI (défaut)** — preview/playback interactive + export. Rapproche le POC d'une intégration
+app : le même compositeur/pipeline mesuré alimente une vraie boucle de rendu.
 
 ```
-x.bat run --release -- --fixture fixture --cfg C0..C8 --repeat 3 --out out/
+x.bat run --release [-- --fixture fixture --out out]
+```
+
+Fenêtre native : preview du compositing en lecture bouclée (swapchain DXGI flip, blit
+zéro-copie du RT), sélecteur de preset C0→C8, Play/Pause, **Export** (barre de progression +
+bilan _temps + fps_). Écrit `out/export.mp4`. Détail : `docs/S7-preview-export.md`.
+
+**Bench (§9/§10)** — la mesure fps headless, inchangée :
+
+```
+x.bat run --release -- --cfg C0..C8 --fixture fixture --repeat 3 --out out/
 ```
 
 Produit `out/C{0..8}.mp4` (1080p60, 360 frames), `out/C{n}_f{60,180,300}.png`,
@@ -64,6 +77,7 @@ dans `docs/S1-sources.md` ; `fixture/fixture.json` (le manifeste mesuré) est su
 
 ## Docs
 
-`docs/` = le parcours S0→S6 du POC : S0 décision framework, S1 sources/chaîne matérielle,
-S2 pipeline C0, S6 rapport + mesure des moteurs GPU + optimisations. `spikes/` = les probes
-jetables de S0 (Direct2D, NV12 render-target) conservés comme preuve.
+`docs/` = le parcours S0→S7 du POC : S0 décision framework, S1 sources/chaîne matérielle,
+S2 pipeline C0, S6 rapport + mesure des moteurs GPU + optimisations, S7 preview/export
+interactive (marche vers l'intégration app). `spikes/` = les probes jetables de S0
+(Direct2D, NV12 render-target) conservés comme preuve.

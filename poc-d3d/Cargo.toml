@@ -32,5 +32,10 @@ features = [
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
-    "Win32_System_Performance",   # QueryPerformanceCounter / Frequency (§10)
+    "Win32_Graphics_Gdi",            # brosses/police GUI de la preview (app.rs)
+    "Win32_System_Performance",      # QueryPerformanceCounter / Frequency (§10)
+    "Win32_System_LibraryLoader",    # GetModuleHandleW (hInstance, app.rs)
+    "Win32_UI_WindowsAndMessaging",  # fenêtre + contrôles natifs (app.rs)
+    "Win32_UI_Controls",             # barre de progression (app.rs)
+    "Win32_UI_Input_KeyboardAndMouse", # EnableWindow (app.rs)
 ]
