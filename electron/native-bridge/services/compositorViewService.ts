@@ -7,6 +7,7 @@ import type {
 	CompositorParamValue,
 	CompositorViewAddon,
 	CompositorViewRect,
+	ExportStats,
 } from "../../native/compositor-view/addon";
 
 /**
@@ -203,5 +204,16 @@ export class CompositorViewService {
 			return;
 		}
 		addon.destroyView(id);
+	}
+
+	/** Native export (fixture -> MP4, C8). Auto-pauses live previews to free the GPU.
+	 *  Returns null when the addon is absent. */
+	async export(outPath?: string): Promise<ExportStats | null> {
+		const addon = this.ensureAddon();
+		if (!addon) {
+			return null;
+		}
+		const target = outPath ?? path.join(app.getPath("temp"), "openscreen-native-export.mp4");
+		return addon.export(target);
 	}
 }

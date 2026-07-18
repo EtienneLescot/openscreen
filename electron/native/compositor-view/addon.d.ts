@@ -16,12 +16,20 @@ export interface CompositorViewRect {
 
 export type CompositorParamValue = boolean | number | string;
 
+export interface ExportStats {
+	frames: number;
+	wallS: number;
+	fps: number;
+}
+
 export interface CompositorViewAddon {
 	createView(parentHandle: Buffer, rect: CompositorViewRect): number;
 	setRect(id: number, rect: CompositorViewRect): void;
 	setParam(id: number, key: string, value: CompositorParamValue): void;
 	setPlaying(id: number, playing: boolean): void;
 	destroyView(id: number): void;
+	/** Renders the fixture to `outPath` (C8), auto-pausing live previews. */
+	export(outPath: string): Promise<ExportStats>;
 }
 
 /**

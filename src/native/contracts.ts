@@ -113,6 +113,13 @@ export interface CompositorViewResult {
 	id: number;
 }
 
+/** Bilan d'un export natif (mesure enveloppante §10 : frames, durée, fps). */
+export interface CompositorExportResult {
+	frames: number;
+	wallS: number;
+	fps: number;
+}
+
 // ---- AI Edition domain (Phase 1+) -----------------------------------------
 // v3/v4 AxcutDocument projects live under userData/projects/<id>.openscreen
 // (older builds used <id>.axcut, migrated on access). Project ids are
@@ -638,6 +645,12 @@ export type NativeBridgeRequest =
 			domain: "compositor";
 			action: "destroyView";
 			payload: { id: number };
+			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "export";
+			payload: { outPath?: string };
 			requestId?: string;
 	  };
 

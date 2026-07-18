@@ -7,7 +7,12 @@
  */
 
 import { requireNativeBridgeData } from "./client";
-import type { CompositorParamValue, CompositorViewRect, CompositorViewResult } from "./contracts";
+import type {
+	CompositorExportResult,
+	CompositorParamValue,
+	CompositorViewRect,
+	CompositorViewResult,
+} from "./contracts";
 
 export function createCompositorView(rect: CompositorViewRect): Promise<CompositorViewResult> {
 	return requireNativeBridgeData<CompositorViewResult>({
@@ -50,5 +55,13 @@ export function destroyCompositorView(id: number): Promise<{ ok: true }> {
 		domain: "compositor",
 		action: "destroyView",
 		payload: { id },
+	});
+}
+
+export function exportNative(outPath?: string): Promise<CompositorExportResult> {
+	return requireNativeBridgeData<CompositorExportResult>({
+		domain: "compositor",
+		action: "export",
+		payload: { outPath },
 	});
 }
