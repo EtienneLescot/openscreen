@@ -357,7 +357,11 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 									"No native window handle available for the requesting renderer.",
 								);
 							}
-							const id = compositorViewService.createView(handle, request.payload.rect);
+							const id = compositorViewService.createView(handle, request.payload.rect, {
+								screenPath: request.payload.screenPath,
+								webcamPath: request.payload.webcamPath,
+								cursorPath: request.payload.cursorPath,
+							});
 							return createSuccessResponse(requestId, { id });
 						}
 						case "setRect":

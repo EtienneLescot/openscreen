@@ -49,19 +49,31 @@ fn fixture_dir() -> String {
     })
 }
 
+/// Crée une vue. Si `screen_path`/`webcam_path` sont fournis (F3 : le vrai enregistrement
+/// de l'app — deux fichiers H264 séparés), on rend ces sources ; sinon on retombe sur la
+/// fixture POC. `cursor_path` optionnel (télémétrie curseur ; absent → pas de curseur).
 #[napi]
-pub fn create_view(parent_handle: Buffer, rect: CompositorViewRect) -> Result<i32> {
+pub fn create_view(
+    parent_handle: Buffer,
+    rect: CompositorViewRect,
+    screen_path: Option<String>,
+    webcam_path: Option<String>,
+    cursor_path: Option<String>,
+) -> Result<i32> {
     let hwnd = hwnd_from_buffer(&parent_handle);
     let dir = fixture_dir();
+    let screen = screen_path.unwrap_or_else(|| format!("{dir}/screen.mp4"));
+    let webcam = webcam_path.unwrap_or_else(|| format!("{dir}/webcam.mp4"));
+    let cursor = cursor_path.unwrap_or_else(|| format!("{dir}/screen.cursor.json"));
     let view = LiveView::create(
         hwnd,
         rect.x,
         rect.y,
         rect.width,
         rect.height,
-        &format!("{dir}/screen.mp4"),
-        &format!("{dir}/webcam.mp4"),
-        &format!("{dir}/screen.cursor.json"),
+        &screen,
+        &webcam,
+        &cursor,
     )
     .map_err(|e| Error::from_reason(format!("{e:#}")))?;
     let id = {

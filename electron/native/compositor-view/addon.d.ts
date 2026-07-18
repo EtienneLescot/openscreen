@@ -23,7 +23,15 @@ export interface ExportStats {
 }
 
 export interface CompositorViewAddon {
-	createView(parentHandle: Buffer, rect: CompositorViewRect): number;
+	/** Optional screen/webcam/cursor paths (F3 — the app's real recording, two separate H264
+	 *  files); omitted → the POC fixture. */
+	createView(
+		parentHandle: Buffer,
+		rect: CompositorViewRect,
+		screenPath?: string,
+		webcamPath?: string,
+		cursorPath?: string,
+	): number;
 	setRect(id: number, rect: CompositorViewRect): void;
 	setParam(id: number, key: string, value: CompositorParamValue): void;
 	setPlaying(id: number, playing: boolean): void;

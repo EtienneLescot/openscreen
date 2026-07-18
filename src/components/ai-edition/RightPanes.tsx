@@ -1221,6 +1221,7 @@ export function VideoEffectsPane() {
 			setNativeParam("motionBlur", settings.motionBlurAmount);
 			setNativeParam("shadow", settings.shadowIntensity);
 			setNativeParam("roundness", settings.borderRadius / ROUNDNESS_MAX);
+			setNativeParam("padding", settings.padding / 100);
 			const bg = settings.wallpaper;
 			if (bg.startsWith("#")) {
 				setNativeParam("backgroundColor", bg);
@@ -1233,6 +1234,7 @@ export function VideoEffectsPane() {
 		settings.motionBlurAmount,
 		settings.shadowIntensity,
 		settings.borderRadius,
+		settings.padding,
 		settings.wallpaper,
 	]);
 
@@ -1302,7 +1304,6 @@ export function VideoEffectsPane() {
 					}}
 					onCommit={() => void commit()}
 				/>
-				{/* TODO: native padding */}
 				<SliderCell
 					label="Padding"
 					value={settings.padding}
@@ -1310,7 +1311,12 @@ export function VideoEffectsPane() {
 					max={100}
 					suffix="%"
 					disabled={!hasDocument}
-					onChange={(v) => setLive({ padding: v })}
+					onChange={(v) => {
+						setLive({ padding: v });
+						if (isNativeCompositorActive()) {
+							setNativeParam("padding", v / 100);
+						}
+					}}
 					onCommit={() => void commit()}
 				/>
 			</div>
@@ -1327,6 +1333,11 @@ const WEBCAM_PRESETS = [
 	{ value: "no-webcam", label: "Screen only" },
 ] as const;
 
+// Webcam size (% of frame width) that maps to the native compositor's default PiP webcam
+// (fixture a_side = 320px @ 1920 ≈ 16.7%). `webcamSizePreset / this` = the native size scale
+// (1 = fixture default), so the slider reads as a direct multiplier on the shipped webcam.
+const NATIVE_WEBCAM_BASE_PCT = 16.7;
+
 const CAMERA_SHAPES: Array<{
 	value: "rectangle" | "circle" | "square" | "rounded";
 	label: string;
@@ -1341,6 +1352,18 @@ const CAMERA_SHAPES: Array<{
 export function LayoutPane() {
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	const document = useProjectStore((s) => s.document);
+
+	// Push webcam-layout settings into the native compositor (initial values + on view
+	// activation); the per-control handlers below also push their diffs live.
+	useEffect(() => {
+		const syncToNative = () => {
+			setNativeParam("webcamSize", settings.webcamSizePreset / NATIVE_WEBCAM_BASE_PCT);
+			setNativeParam("webcamMirror", settings.webcamMirrored);
+			setNativeParam("webcamShape", settings.webcamMaskShape);
+		};
+		syncToNative();
+		return subscribeNativeCompositor(syncToNative);
+	}, [settings.webcamSizePreset, settings.webcamMirrored, settings.webcamMaskShape]);
 	// the mask shape picker only makes sense for Picture-in-Picture.
 	// Dual-frame (side-by-side) and vertical-stack (top/bottom) hardcode a
 	// rectangle in the legacy layout math, so we hide those controls when the
@@ -1382,7 +1405,12 @@ export function LayoutPane() {
 				<Toggle
 					checked={settings.webcamMirrored}
 					disabled={layoutControlsDisabled}
-					onChange={(v) => void set({ webcamMirrored: v })}
+					onChange={(v) => {
+						void set({ webcamMirrored: v });
+						if (isNativeCompositorActive()) {
+							setNativeParam("webcamMirror", v);
+						}
+					}}
 				/>
 			</div>
 			<div className={styles.paneRow}>
@@ -1419,7 +1447,12 @@ export function LayoutPane() {
 										alignItems: "center",
 									}}
 									disabled={layoutControlsDisabled}
-									onClick={() => void set({ webcamMaskShape: shape.value })}
+									onClick={() => {
+										void set({ webcamMaskShape: shape.value });
+										if (isNativeCompositorActive()) {
+											setNativeParam("webcamShape", shape.value);
+										}
+									}}
 								>
 									<svg
 										viewBox="0 0 24 24"
@@ -1452,7 +1485,13 @@ export function LayoutPane() {
 							step={1}
 							defaultValue={settings.webcamSizePreset}
 							disabled={layoutControlsDisabled}
-							onChange={(e) => setLive({ webcamSizePreset: Number(e.target.value) })}
+							onChange={(e) => {
+								const next = Number(e.target.value);
+								setLive({ webcamSizePreset: next });
+								if (isNativeCompositorActive()) {
+									setNativeParam("webcamSize", next / NATIVE_WEBCAM_BASE_PCT);
+								}
+							}}
 							onMouseUp={() => void commit()}
 							onTouchEnd={() => void commit()}
 							onKeyUp={() => void commit()}
@@ -1476,6 +1515,18 @@ function safeAssetUrl(relativePath: string): string {
 
 export function CursorPane() {
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+
+	// Push cursor settings into the native compositor (initial + on view activation); the
+	// handlers below push diffs live. Sizes are sent as direct scales (1 = fixture default).
+	useEffect(() => {
+		const syncToNative = () => {
+			setNativeParam("cursorShow", settings.cursorShow);
+			setNativeParam("cursorSize", settings.cursor.size);
+			setNativeParam("cursorClickBounce", settings.cursor.clickBounce);
+		};
+		syncToNative();
+		return subscribeNativeCompositor(syncToNative);
+	}, [settings.cursorShow, settings.cursor.size, settings.cursor.clickBounce]);
 
 	// Built-in "Default" plus each bundled theme. Thumbnails use the theme's
 	// arrow asset; the persisted value is the theme id. Same shape as the
@@ -1510,7 +1561,12 @@ export function CursorPane() {
 				<Toggle
 					checked={settings.cursorShow}
 					disabled={!hasDocument}
-					onChange={(v) => void set({ cursor: { show: v } })}
+					onChange={(v) => {
+						void set({ cursor: { show: v } });
+						if (isNativeCompositorActive()) {
+							setNativeParam("cursorShow", v);
+						}
+					}}
 				/>
 			</div>
 			<div className={styles.paneRow}>
@@ -1557,7 +1613,12 @@ export function CursorPane() {
 					step={0.1}
 					decimals={1}
 					disabled={!hasDocument}
-					onChange={(v) => setLive({ cursor: { size: v / 10 } })}
+					onChange={(v) => {
+						setLive({ cursor: { size: v / 10 } });
+						if (isNativeCompositorActive()) {
+							setNativeParam("cursorSize", v / 10);
+						}
+					}}
 					onCommit={() => void commit()}
 				/>
 				<SliderCell
@@ -1588,7 +1649,12 @@ export function CursorPane() {
 					step={0.1}
 					decimals={1}
 					disabled={!hasDocument}
-					onChange={(v) => setLive({ cursor: { clickBounce: v / 10 } })}
+					onChange={(v) => {
+						setLive({ cursor: { clickBounce: v / 10 } });
+						if (isNativeCompositorActive()) {
+							setNativeParam("cursorClickBounce", v / 10);
+						}
+					}}
 					onCommit={() => void commit()}
 				/>
 			</div>

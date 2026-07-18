@@ -620,7 +620,14 @@ export type NativeBridgeRequest =
 	| {
 			domain: "compositor";
 			action: "createView";
-			payload: { rect: CompositorViewRect };
+			/** F3: optional real-recording sources (screen + webcam, two separate H264 files) +
+			 *  cursor telemetry; omitted → the POC fixture. */
+			payload: {
+				rect: CompositorViewRect;
+				screenPath?: string;
+				webcamPath?: string;
+				cursorPath?: string;
+			};
 			requestId?: string;
 	  }
 	| {
