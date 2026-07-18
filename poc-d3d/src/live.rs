@@ -9,6 +9,7 @@
 //! objets COM restent sur le thread de rendu (le HWND, lui, traverse en `isize`).
 
 use crate::compositor::{Compositor, LiveParams};
+use crate::scene::Scene;
 use crate::config::{self, Cfg};
 use crate::cursor::CursorTrack;
 use crate::d3d::Gpu;
@@ -181,6 +182,9 @@ struct Shared {
     inspector: Mutex<InspectorParams>,
     /// frame demandée par l'app (presentTime/seek) ; prioritaire sur la lecture libre.
     requested_frame: Mutex<Option<u32>>,
+    /// scène de l'app (contrat) ; appliquée au compositeur quand `scene_dirty`.
+    scene: Mutex<Option<Scene>>,
+    scene_dirty: AtomicBool,
     playing: AtomicBool,
     stop: AtomicBool,
 }
@@ -237,6 +241,8 @@ impl LiveView {
                 rect: Mutex::new([x, y, w, h]),
                 inspector: Mutex::new(InspectorParams::default()),
                 requested_frame: Mutex::new(None),
+                scene: Mutex::new(None),
+                scene_dirty: AtomicBool::new(false),
                 playing: AtomicBool::new(true),
                 stop: AtomicBool::new(false),
             });
@@ -317,6 +323,20 @@ impl LiveView {
 
     pub fn set_playing(&self, playing: bool) {
         self.shared.playing.store(playing, Ordering::Relaxed);
+    }
+
+    /// Installe la scène de l'app (JSON `SceneDescription`). Parsé ici (hors thread de rendu) ;
+    /// appliqué au compositeur au prochain tour via le flag `scene_dirty`. JSON invalide → ignoré.
+    pub fn set_scene(&self, json: &str) {
+        match Scene::from_json(json) {
+            Ok(scene) => {
+                if let Ok(mut s) = self.shared.scene.lock() {
+                    *s = Some(scene);
+                    self.shared.scene_dirty.store(true, Ordering::Relaxed);
+                }
+            }
+            Err(e) => eprintln!("[live] set_scene: JSON invalide: {e:#}"),
+        }
     }
 
     /// Positionne la vue sur le temps `seconds` (seek, piloté par la playhead de l'app).
@@ -455,6 +475,13 @@ unsafe fn render_thread(
         let ip_changed = last_ip != Some(ip);
         last_ip = Some(ip);
 
+        // scène de l'app : appliquée au compositeur quand elle change (dirty).
+        let scene_changed = shared.scene_dirty.swap(false, Ordering::Relaxed);
+        if scene_changed {
+            let scene = shared.scene.lock().unwrap().clone();
+            comp.set_scene(scene);
+        }
+
         // rect viewport → coords écran : suit le rect DOM (set_rect) ET le déplacement du parent
         let [vx, vy, vw, vh] = *shared.rect.lock().unwrap();
         let mut pt = POINT { x: vx, y: vy };
@@ -510,8 +537,8 @@ unsafe fn render_thread(
             if acc > step {
                 acc = 0.0;
             }
-        } else if resized || first || ip_changed {
-            // pause : recompose la frame courante (nouvelle taille OU édition live d'un param).
+        } else if resized || first || ip_changed || scene_changed {
+            // pause : recompose la frame courante (taille / param / scène changés).
             let _ = player.recompose(&comp, &cfg);
             stepped = true;
         }
