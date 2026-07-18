@@ -8,6 +8,7 @@
 
 import { requireNativeBridgeData } from "./client";
 import type {
+	CompositorClipInput,
 	CompositorExportResult,
 	CompositorParamValue,
 	CompositorViewRect,
@@ -74,5 +75,16 @@ export function exportNative(outPath?: string): Promise<CompositorExportResult> 
 		domain: "compositor",
 		action: "export",
 		payload: { outPath },
+	});
+}
+
+export function exportMultiNative(
+	clips: CompositorClipInput[],
+	outPath?: string,
+): Promise<CompositorExportResult> {
+	return requireNativeBridgeData<CompositorExportResult>({
+		domain: "compositor",
+		action: "exportMulti",
+		payload: { clips, outPath },
 	});
 }

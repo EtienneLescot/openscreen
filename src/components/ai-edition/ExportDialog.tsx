@@ -28,8 +28,9 @@ import {
 	type GifSizePreset,
 } from "@/lib/exporter";
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
-import { exportNative } from "@/native";
+import { exportMultiNative, exportNative } from "@/native";
 import { nativeBridgeClient } from "@/native/client";
+import type { CompositorClipInput } from "@/native/contracts";
 import {
 	type AspectRatio,
 	getAspectRatioValue,
@@ -40,6 +41,35 @@ import styles from "./NewEditorShell.module.css";
 import { NATIVE_COMPOSITOR_ENABLED } from "./Preview";
 
 type Phase = "idle" | "configuring" | "rendering" | "writing" | "done" | "error";
+
+/** Maps the document's timeline to the native multiclip export contract: ordered clips, each
+ *  with its asset's screen file + camera file (falls back to the screen when a clip has no
+ *  camera — the no-webcam layout is a later step) and its source trim. */
+function buildNativeClipList(document: AxcutDocument): CompositorClipInput[] {
+	const assetById = new Map(document.assets.map((a) => [a.id, a]));
+	return [...document.timeline.clips]
+		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
+		.flatMap((clip) => {
+			const asset = assetById.get(clip.assetId);
+			if (!asset?.originalPath) {
+				return [];
+			}
+			const cam = asset.cameraTrack;
+			// sourceEndSec is optional in the schema (unknown until probed) — fall back to the
+			// clip's timeline duration (speed 1).
+			const sourceEndSec =
+				clip.sourceEndSec ?? clip.sourceStartSec + (clip.timelineEndSec - clip.timelineStartSec);
+			return [
+				{
+					screenPath: asset.originalPath,
+					webcamPath: cam?.sourcePath ?? asset.originalPath,
+					sourceStartSec: clip.sourceStartSec,
+					sourceEndSec,
+					webcamOffsetSec: cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
+				},
+			];
+		});
+}
 
 // Target short side (px) for the two fixed quality tiers -- mirrors the legacy
 // editor's SettingsPanel (MP4_EXPORT_SHORT_SIDES), used only to decide whether
@@ -192,7 +222,12 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		if (NATIVE_COMPOSITOR_ENABLED) {
 			setPhase("rendering");
 			try {
-				const stats = await exportNative(pickedPath);
+				// Render the real timeline when there are clips; else fall back to the fixture.
+				const clips = buildNativeClipList(document);
+				const stats =
+					clips.length > 0
+						? await exportMultiNative(clips, pickedPath)
+						: await exportNative(pickedPath);
 				setSavedPath(pickedPath);
 				setPhase("done");
 				toast.success(t("exportDialog.exportedVideo"), {

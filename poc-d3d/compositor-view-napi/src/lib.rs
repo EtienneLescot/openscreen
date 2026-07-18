@@ -197,3 +197,72 @@ impl Task for ExportTask {
 pub fn export(out_path: String) -> AsyncTask<ExportTask> {
     AsyncTask::new(ExportTask { out_path })
 }
+
+/// Un clip de la timeline pour l'export multiclip (JS : camelCase).
+#[napi(object)]
+pub struct ClipInput {
+    pub screen_path: String,
+    pub webcam_path: String,
+    pub source_start_sec: f64,
+    pub source_end_sec: f64,
+    /// Décalage caméra (s) : temps source webcam = temps source screen - offset.
+    pub webcam_offset_sec: f64,
+}
+
+/// Export multiclip mesuré (worker libuv). Rend la vraie timeline (clips + trims) en un MP4.
+/// Layout statique (zoom/anim off, motion blur de layout off, curseur off) → composite propre
+/// des vraies sources sans surcoût. Réactive les previews après le rendu (même en erreur).
+pub struct ExportMultiTask {
+    out_path: String,
+    clips: Vec<pipeline::ClipSource>,
+}
+
+impl Task for ExportMultiTask {
+    type Output = (u32, f64, f64);
+    type JsValue = ExportStats;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        set_all_previews_playing(false);
+        let result = (|| {
+            let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
+            let comp = Compositor::new(&gpu).map_err(|e| Error::from_reason(format!("{e:#}")))?;
+            let mut cfg = config::all().pop().expect("au moins une config"); // C8
+            cfg.zoom = false;
+            cfg.layout_anim = false;
+            cfg.cursor = false; // pas de télémétrie curseur mappée encore
+            cfg.mblur_n = 1; // layout statique → pas de motion blur de layout (pas de surcoût)
+            let s = pipeline::run_composited_multi(
+                &self.clips,
+                &self.out_path,
+                &gpu,
+                &comp,
+                &cfg,
+                &mut |_| {},
+            )
+            .map_err(|e| Error::from_reason(format!("{e:#}")))?;
+            Ok((s.frames as u32, s.wall_s, s.fps))
+        })();
+        set_all_previews_playing(true);
+        result
+    }
+
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
+        Ok(ExportStats { frames: out.0, wall_s: out.1, fps: out.2 })
+    }
+}
+
+/// Lance un export multiclip natif (vraie timeline → MP4) et résout `Promise<ExportStats>`.
+#[napi]
+pub fn export_multi(clips: Vec<ClipInput>, out_path: String) -> AsyncTask<ExportMultiTask> {
+    let clips = clips
+        .into_iter()
+        .map(|c| pipeline::ClipSource {
+            screen: c.screen_path,
+            webcam: c.webcam_path,
+            source_start_sec: c.source_start_sec,
+            source_end_sec: c.source_end_sec,
+            webcam_offset_sec: c.webcam_offset_sec,
+        })
+        .collect();
+    AsyncTask::new(ExportMultiTask { out_path, clips })
+}

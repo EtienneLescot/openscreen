@@ -7,6 +7,7 @@ use crate::config::Cfg;
 use crate::d3d::Gpu;
 use crate::ffi::*;
 use anyhow::{anyhow, bail, Result};
+use std::collections::HashMap;
 use std::ffi::{c_void, CString};
 use std::ptr;
 use std::time::Instant;
@@ -417,6 +418,50 @@ impl Decoder {
         Ok(())
     }
 
+    /// Time_base du flux vidéo (secondes par unité de pts).
+    unsafe fn tb_sec(&self) -> f64 {
+        let tb = (*sn_fmt_stream(self.fmt, self.vidx)).time_base;
+        if tb.den != 0 { tb.num as f64 / tb.den as f64 } else { 0.0 }
+    }
+
+    /// Seek keyframe vers `seconds` puis décode-avant jusqu'à la 1re frame dont le temps
+    /// ≥ `seconds`. Réutilise le décodeur ouvert (pas de réouverture) : c'est LE point de
+    /// perf multiclip — un seul seek par frontière de clip, décodage séquentiel ensuite,
+    /// donc le débit par frame ne change pas. Renvoie la frame (ou null à EOF).
+    pub(crate) unsafe fn seek_to(&mut self, seconds: f64) -> Result<*mut AVFrame> {
+        let tb_sec = self.tb_sec();
+        let target = if tb_sec > 0.0 { (seconds / tb_sec) as i64 } else { 0 };
+        averr(av_seek_frame(self.fmt, self.vidx, target, AVSEEK_FLAG_BACKWARD), "seek_to")?;
+        avcodec_flush_buffers(self.dctx);
+        self.sent_eof = false;
+        loop {
+            let f = self.next()?;
+            if f.is_null() {
+                return Ok(ptr::null_mut());
+            }
+            let pts = (*f).best_effort_timestamp;
+            // pas de pts fiable ou pas de time_base → on prend la 1re frame après la keyframe.
+            if pts == i64::MIN || tb_sec <= 0.0 {
+                return Ok(f);
+            }
+            if (pts as f64) * tb_sec >= seconds - tb_sec * 0.5 {
+                return Ok(f);
+            }
+        }
+    }
+
+    /// Temps (s) de la frame courante, via son pts. 0 si pas de pts fiable.
+    pub(crate) unsafe fn cur_time_sec(&self) -> f64 {
+        let pts = (*self.frame).best_effort_timestamp;
+        if pts == i64::MIN { 0.0 } else { pts as f64 * self.tb_sec() }
+    }
+
+    /// Cadence moyenne du flux (fps). 30 par défaut si indéterminée.
+    pub(crate) unsafe fn fps(&self) -> f64 {
+        let r = (*sn_fmt_stream(self.fmt, self.vidx)).avg_frame_rate;
+        if r.den != 0 && r.num != 0 { r.num as f64 / r.den as f64 } else { 30.0 }
+    }
+
     /// Rend la prochaine frame (valide jusqu'au prochain appel), ou null à EOF.
     pub(crate) unsafe fn next(&mut self) -> Result<*mut AVFrame> {
         loop {
@@ -579,6 +624,156 @@ unsafe fn run_c1_inner(
 
     let wall_s = t0.elapsed().as_secs_f64();
 
+    av_packet_free(&mut (opkt as *mut _));
+    let mut pb2 = sn_fmt_get_pb(octx);
+    if !pb2.is_null() {
+        avio_closep(&mut pb2);
+        sn_fmt_set_pb(octx, ptr::null_mut());
+    }
+    avformat_free_context(octx);
+    avcodec_free_context(&mut (ectx as *mut _));
+    av_buffer_unref(&mut enc_frames);
+    av_buffer_unref(&mut enc_hwdev);
+
+    let fps = frames as f64 / wall_s;
+    Ok(Stats { frames, wall_s, fps })
+}
+
+/// Une source de clip pour l'export multiclip : fichiers screen+webcam + fenêtre source
+/// (trim, en secondes). `webcam_offset_sec` : temps source webcam = temps source screen - offset.
+pub struct ClipSource {
+    pub screen: String,
+    pub webcam: String,
+    pub source_start_sec: f64,
+    pub source_end_sec: f64,
+    pub webcam_offset_sec: f64,
+}
+
+/// Export **multiclip** : rend la timeline (clips ordonnés, avec trims) en un seul MP4.
+/// Perf (contrainte §multiclip) : décodeurs ouverts une fois par source (cache) et réutilisés
+/// entre clips du même asset ; **un seul seek keyframe par frontière de clip** ; décodage
+/// séquentiel dans le clip → coût/frame identique au mono-clip (~120fps préservés). Cadence de
+/// sortie = fps du 1er clip (la conversion de cadence viendra avec les params d'export).
+pub fn run_composited_multi(
+    clips: &[ClipSource],
+    out: &str,
+    gpu: &Gpu,
+    comp: &Compositor,
+    cfg: &Cfg,
+    progress: &mut dyn FnMut(u64),
+) -> Result<Stats> {
+    unsafe { run_multi_inner(clips, out, gpu, comp, cfg, progress) }
+}
+
+unsafe fn run_multi_inner(
+    clips: &[ClipSource],
+    out: &str,
+    gpu: &Gpu,
+    comp: &Compositor,
+    cfg: &Cfg,
+    progress: &mut dyn FnMut(u64),
+) -> Result<Stats> {
+    if clips.is_empty() {
+        bail!("aucun clip à exporter");
+    }
+    // décodeurs ouverts une fois par chemin, réutilisés entre clips (screen ≠ webcam → 2 maps
+    // pour deux &mut indépendants).
+    let mut screen_decs: HashMap<String, Decoder> = HashMap::new();
+    let mut webcam_decs: HashMap<String, Decoder> = HashMap::new();
+
+    // fps de sortie = fps du 1er clip (recordings uniformes).
+    screen_decs.insert(clips[0].screen.clone(), Decoder::open(&clips[0].screen, gpu)?);
+    let out_fps = screen_decs[&clips[0].screen].fps().round().max(1.0) as i32;
+
+    // ---- encodeur h264_amf + mux (identique à run_c1_inner, à la cadence près) ----
+    let (mut enc_hwdev, mut enc_frames) = make_enc_frames(gpu, OUT_W as i32, OUT_H as i32)?;
+    let enc_name = CString::new("h264_amf")?;
+    let enc = avcodec_find_encoder_by_name(enc_name.as_ptr());
+    if enc.is_null() {
+        bail!("h264_amf introuvable");
+    }
+    let ectx = avcodec_alloc_context3(enc);
+    (*ectx).width = OUT_W as i32;
+    (*ectx).height = OUT_H as i32;
+    (*ectx).pix_fmt = AVPixelFormat::AV_PIX_FMT_D3D11;
+    (*ectx).time_base = AVRational { num: 1, den: out_fps };
+    (*ectx).framerate = AVRational { num: out_fps, den: 1 };
+    (*ectx).bit_rate = 8_000_000;
+    (*ectx).hw_frames_ctx = av_buffer_ref(enc_frames);
+    averr(avcodec_open2(ectx, enc, ptr::null_mut()), "avcodec_open2(enc)")?;
+
+    let mut octx: *mut AVFormatContext = ptr::null_mut();
+    let outc = CString::new(out)?;
+    averr(
+        avformat_alloc_output_context2(&mut octx, ptr::null(), ptr::null(), outc.as_ptr()),
+        "alloc_output_context2",
+    )?;
+    let ostream = avformat_new_stream(octx, ptr::null());
+    averr(avcodec_parameters_from_context((*ostream).codecpar, ectx), "params_from_ctx")?;
+    (*ostream).time_base = (*ectx).time_base;
+    let mut pb: *mut AVIOContext = ptr::null_mut();
+    averr(avio_open(&mut pb, outc.as_ptr(), AVIO_FLAG_WRITE as i32), "avio_open")?;
+    sn_fmt_set_pb(octx, pb);
+    averr(avformat_write_header(octx, ptr::null_mut()), "write_header")?;
+
+    let opkt = av_packet_alloc();
+    let mut frames: u64 = 0;
+    let t0 = Instant::now();
+
+    for clip in clips {
+        if !screen_decs.contains_key(&clip.screen) {
+            screen_decs.insert(clip.screen.clone(), Decoder::open(&clip.screen, gpu)?);
+        }
+        if !webcam_decs.contains_key(&clip.webcam) {
+            webcam_decs.insert(clip.webcam.clone(), Decoder::open(&clip.webcam, gpu)?);
+        }
+        let sdec = screen_decs.get_mut(&clip.screen).unwrap();
+        let wdec = webcam_decs.get_mut(&clip.webcam).unwrap();
+
+        // un seul seek keyframe, puis décodage séquentiel jusqu'à source_end.
+        if sdec.seek_to(clip.source_start_sec)?.is_null() {
+            continue; // clip vide / au-delà de la source
+        }
+        wdec.seek_to((clip.source_start_sec - clip.webcam_offset_sec).max(0.0))?;
+
+        loop {
+            let sf = sdec.cur_frame();
+            let wf = wdec.cur_frame();
+            if sf.is_null() || wf.is_null() {
+                break;
+            }
+            if sdec.cur_time_sec() >= clip.source_end_sec {
+                break;
+            }
+            comp.compose_frame(sf, wf, frames as f32, cfg)?;
+
+            let outf = av_frame_alloc();
+            averr(av_hwframe_get_buffer(enc_frames, outf, 0), "hwframe_get_buffer")?;
+            let out_tex = (*outf).data[0] as *mut c_void;
+            let out_slice = (*outf).data[1] as u32;
+            comp.rgb_to_nv12(out_tex, out_slice)?;
+            (*outf).pts = frames as i64;
+            averr(avcodec_send_frame(ectx, outf), "send_frame")?;
+            drain_encoder(ectx, octx, ostream, opkt)?;
+            av_frame_free(&mut (outf as *mut _));
+            frames += 1;
+            progress(frames);
+
+            if sdec.next()?.is_null() {
+                break;
+            }
+            if wdec.next()?.is_null() {
+                break;
+            }
+        }
+    }
+
+    avcodec_send_frame(ectx, ptr::null_mut());
+    drain_encoder(ectx, octx, ostream, opkt)?;
+    averr(av_write_trailer(octx), "write_trailer")?;
+    let wall_s = t0.elapsed().as_secs_f64();
+
+    // teardown (les décodeurs du cache sont droppés en fin de scope).
     av_packet_free(&mut (opkt as *mut _));
     let mut pb2 = sn_fmt_get_pb(octx);
     if !pb2.is_null() {

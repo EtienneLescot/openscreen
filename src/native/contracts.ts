@@ -113,6 +113,16 @@ export interface CompositorViewResult {
 	id: number;
 }
 
+/** Un clip de la timeline pour l'export multiclip natif (fichiers screen+webcam + trim). */
+export interface CompositorClipInput {
+	screenPath: string;
+	webcamPath: string;
+	sourceStartSec: number;
+	sourceEndSec: number;
+	/** temps source webcam = temps source screen − ceci. */
+	webcamOffsetSec: number;
+}
+
 /** Bilan d'un export natif (mesure enveloppante §10 : frames, durée, fps). */
 export interface CompositorExportResult {
 	frames: number;
@@ -658,6 +668,12 @@ export type NativeBridgeRequest =
 			domain: "compositor";
 			action: "export";
 			payload: { outPath?: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "exportMulti";
+			payload: { clips: CompositorClipInput[]; outPath?: string };
 			requestId?: string;
 	  }
 	| {
