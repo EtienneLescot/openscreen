@@ -373,6 +373,9 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 						case "setPlaying":
 							compositorViewService.setPlaying(request.payload.id, request.payload.playing);
 							return createSuccessResponse(requestId, { ok: true });
+						case "presentTime":
+							compositorViewService.presentTime(request.payload.id, request.payload.seconds);
+							return createSuccessResponse(requestId, { ok: true });
 						case "destroyView":
 							compositorViewService.destroyView(request.payload.id);
 							return createSuccessResponse(requestId, { ok: true });

@@ -50,6 +50,14 @@ export function setCompositorPlaying(id: number, playing: boolean): Promise<{ ok
 	});
 }
 
+export function setCompositorTime(id: number, seconds: number): Promise<{ ok: true }> {
+	return requireNativeBridgeData<{ ok: true }>({
+		domain: "compositor",
+		action: "presentTime",
+		payload: { id, seconds },
+	});
+}
+
 export function destroyCompositorView(id: number): Promise<{ ok: true }> {
 	return requireNativeBridgeData<{ ok: true }>({
 		domain: "compositor",

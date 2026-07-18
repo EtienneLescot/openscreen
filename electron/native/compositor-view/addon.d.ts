@@ -27,6 +27,8 @@ export interface CompositorViewAddon {
 	setRect(id: number, rect: CompositorViewRect): void;
 	setParam(id: number, key: string, value: CompositorParamValue): void;
 	setPlaying(id: number, playing: boolean): void;
+	/** Seeks the view to `seconds` (app playhead-driven). */
+	presentTime(id: number, seconds: number): void;
 	destroyView(id: number): void;
 	/** Renders the fixture to `outPath` (C8), auto-pausing live previews. */
 	export(outPath: string): Promise<ExportStats>;

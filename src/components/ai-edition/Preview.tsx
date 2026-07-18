@@ -15,7 +15,7 @@ import { PreviewCanvas } from "./PreviewCanvas";
 type BlurData = NonNullable<AxcutAnnotationRegion["blurData"]>;
 
 // POC Option A : preview rendue par la fenêtre D3D native embarquée (opt-in via flag Vite).
-const NATIVE_COMPOSITOR_ENABLED =
+export const NATIVE_COMPOSITOR_ENABLED =
 	(import.meta.env as Record<string, string | undefined>).VITE_NATIVE_COMPOSITOR === "1";
 
 interface PreviewProps {
