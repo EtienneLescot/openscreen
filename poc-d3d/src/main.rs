@@ -1,3 +1,4 @@
+mod app;
 mod compositor;
 mod config;
 mod cursor;
@@ -9,12 +10,33 @@ use anyhow::Result;
 use compositor::Compositor;
 use std::fmt::Write as _;
 
-// spike-native.exe --fixture <dir> --cfg C0..C8 --repeat 3 --out out/
+fn arg(args: &[String], k: &str, d: &str) -> String {
+    args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned().unwrap_or_else(|| d.to_string())
+}
+
+// Deux modes :
+//   GUI (défaut)  : poc-d3d.exe [--fixture <dir>] [--out <dir>]  → preview + export
+//   Bench (§9/10) : poc-d3d.exe --cfg C0..C8 [--fixture <dir>] [--repeat N] [--out <dir>]
 fn main() -> Result<()> {
     let args: Vec<String> = std::env::args().collect();
-    let get = |k: &str, d: &str| -> String {
-        args.iter().position(|a| a == k).and_then(|i| args.get(i + 1)).cloned().unwrap_or_else(|| d.to_string())
-    };
+    let is_bench = args.iter().any(|a| a == "--cfg" || a == "--bench");
+    if is_bench {
+        run_bench(&args)
+    } else {
+        let fixture = arg(&args, "--fixture", "fixture");
+        let out = arg(&args, "--out", "out");
+        app::run_gui(
+            &format!("{fixture}/screen.mp4"),
+            &format!("{fixture}/webcam.mp4"),
+            &format!("{fixture}/screen.cursor.json"),
+            &out,
+        )
+    }
+}
+
+// spike-native.exe --cfg C0..C8 --fixture <dir> --repeat 3 --out out/
+fn run_bench(args: &[String]) -> Result<()> {
+    let get = |k: &str, d: &str| -> String { arg(args, k, d) };
     let fixture = get("--fixture", "fixture");
     let out = get("--out", "out");
     let repeat: u32 = get("--repeat", "3").parse().unwrap_or(3);
@@ -50,7 +72,7 @@ fn main() -> Result<()> {
         for r in 0..repeat {
             let path = format!("{out}/{}.mp4", cfg.name);
             let s = if cfg.composite {
-                pipeline::run_composited(&screen, &webcam, &path, &gpu, &comp, cfg)?
+                pipeline::run_composited(&screen, &webcam, &path, &gpu, &comp, cfg, &mut |_| {})?
             } else {
                 pipeline::run_c0(&screen, &path, &gpu)?
             };

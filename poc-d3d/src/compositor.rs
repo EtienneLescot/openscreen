@@ -971,4 +971,31 @@ impl Compositor {
         std::fs::write(path, &out)?;
         Ok(())
     }
+
+    /// Blit du RT composité (RGBA) vers un render target externe (backbuffer swapchain),
+    /// mis à l'échelle dans le viewport `(x,y,w,h)` en pixels — sert la preview (§preview).
+    /// Passe de copie `ps_tex` : même échantillonnage que `render_nv12`, sans conversion.
+    /// Le caller a déjà clear le RTV (barres letterbox) avant l'appel.
+    pub unsafe fn blit_to(&self, rtv: &ID3D11RenderTargetView, x: f32, y: f32, w: f32, h: f32) {
+        self.ctx.OMSetBlendState(&self.blend_none, None, 0xffffffff);
+        self.ctx.OMSetRenderTargets(Some(&[Some(rtv.clone())]), None);
+        self.ctx.PSSetShaderResources(0, Some(&[Some(self.rt_srv.clone())]));
+        self.ctx.VSSetShader(&self.vs_fs, None);
+        self.ctx.PSSetShader(&self.ps_tex, None);
+        self.ctx.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+        self.ctx.IASetPrimitiveTopology(D3D_PRIMITIVE_TOPOLOGY_TRIANGLESTRIP);
+        let vp = D3D11_VIEWPORT {
+            TopLeftX: x, TopLeftY: y, Width: w, Height: h, MinDepth: 0.0, MaxDepth: 1.0,
+        };
+        self.ctx.RSSetViewports(Some(&[vp]));
+        self.upload_cb(&LayerCB::default());
+        self.ctx.Draw(3, 0);
+        self.ctx.PSSetShaderResources(0, Some(&[None]));
+    }
+
+    /// Vide le cache de SRV décodeur. À appeler après la fermeture d'un jeu de décodeurs
+    /// (p.ex. après un export) pour ne pas retenir indéfiniment des textures de pool.
+    pub fn clear_srv_cache(&self) {
+        self.srv_cache.borrow_mut().clear();
+    }
 }
