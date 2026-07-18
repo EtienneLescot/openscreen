@@ -8,7 +8,7 @@
 //! Present) tourne sur un **thread dédié** — le thread JS/UI n'est jamais bloqué. Les
 //! objets COM restent sur le thread de rendu (le HWND, lui, traverse en `isize`).
 
-use crate::compositor::Compositor;
+use crate::compositor::{Compositor, LiveParams};
 use crate::config::{self, Cfg};
 use crate::cursor::CursorTrack;
 use crate::d3d::Gpu;
@@ -38,6 +38,18 @@ use crate::compositor::{OUT_H, OUT_W};
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+/// "#rrggbb" (ou "rrggbb") → [r, g, b, 1] en 0..1. None si invalide.
+fn parse_hex_color(s: &str) -> Option<[f32; 4]> {
+    let h = s.trim().trim_start_matches('#');
+    if h.len() != 6 {
+        return None;
+    }
+    let r = u8::from_str_radix(&h[0..2], 16).ok()? as f32 / 255.0;
+    let g = u8::from_str_radix(&h[2..4], 16).ok()? as f32 / 255.0;
+    let b = u8::from_str_radix(&h[4..6], 16).ok()? as f32 / 255.0;
+    Some([r, g, b, 1.0])
 }
 
 /// Lit deux sources en lockstep et compose la frame courante dans le RT du compositeur.
@@ -89,12 +101,35 @@ impl Player {
     }
 }
 
+/// Paramètres inspector pilotés depuis l'UI (setParam). Le thread de rendu les applique :
+/// booléens/taps → reconstruits dans le `Cfg` ; valeurs continues → `set_live_params`.
+#[derive(Clone, Copy)]
+struct InspectorParams {
+    bg_blur: bool,
+    bg_color: [f32; 4],
+    shadow_scale: f32,
+    radius_scale: f32,
+    mblur_taps: u32,
+}
+
+impl Default for InspectorParams {
+    fn default() -> Self {
+        Self {
+            bg_blur: false,
+            bg_color: [0.10, 0.11, 0.14, 1.0],
+            shadow_scale: 1.0,
+            radius_scale: 1.0,
+            mblur_taps: 8,
+        }
+    }
+}
+
 /// État partagé thread appelant → thread de rendu (commandes sans blocage).
 struct Shared {
     /// rect viewport en px device [x, y, w, h], relatif au client de la fenêtre parente.
     /// Le thread de rendu le mappe en coords écran (le parent peut bouger) et repositionne.
     rect: Mutex<[i32; 4]>,
-    bg_blur: AtomicBool,
+    inspector: Mutex<InspectorParams>,
     playing: AtomicBool,
     stop: AtomicBool,
 }
@@ -149,7 +184,7 @@ impl LiveView {
 
             let shared = Arc::new(Shared {
                 rect: Mutex::new([x, y, w, h]),
-                bg_blur: AtomicBool::new(false),
+                inspector: Mutex::new(InspectorParams::default()),
                 playing: AtomicBool::new(true),
                 stop: AtomicBool::new(false),
             });
@@ -175,10 +210,37 @@ impl LiveView {
         }
     }
 
-    /// Paramètre live (Phase 1 : un seul, le fond flouté).
-    pub fn set_param(&self, key: &str, value: bool) {
-        if key == "backgroundBlur" {
-            self.shared.bg_blur.store(value, Ordering::Relaxed);
+    /// Switch inspector (booléen).
+    pub fn set_param_bool(&self, key: &str, value: bool) {
+        if let Ok(mut p) = self.shared.inspector.lock() {
+            if key == "backgroundBlur" {
+                p.bg_blur = value;
+            }
+        }
+    }
+
+    /// Slider inspector (numérique). Conventions : `shadow`/`roundness` = échelle (1 = défaut),
+    /// `motionBlur` = 0..1 mappé sur 1..16 taps.
+    pub fn set_param_num(&self, key: &str, value: f64) {
+        if let Ok(mut p) = self.shared.inspector.lock() {
+            let v = value as f32;
+            match key {
+                "shadow" => p.shadow_scale = v.max(0.0),
+                "roundness" => p.radius_scale = v.max(0.0),
+                "motionBlur" => p.mblur_taps = (1.0 + value.clamp(0.0, 1.0) * 15.0).round() as u32,
+                _ => {}
+            }
+        }
+    }
+
+    /// Sélection de fond (couleur "#rrggbb").
+    pub fn set_param_str(&self, key: &str, value: &str) {
+        if key == "backgroundColor" {
+            if let Some(c) = parse_hex_color(value) {
+                if let Ok(mut p) = self.shared.inspector.lock() {
+                    p.bg_color = c;
+                }
+            }
         }
     }
 
@@ -284,7 +346,17 @@ unsafe fn render_thread(
     let mut last_screen = [i32::MIN; 4];
 
     while !shared.stop.load(Ordering::SeqCst) {
-        cfg.bg_blur = shared.bg_blur.load(Ordering::Relaxed);
+        // params inspector : booléens/taps → cfg ; valeurs continues → live_params
+        {
+            let ip = *shared.inspector.lock().unwrap();
+            cfg.bg_blur = ip.bg_blur;
+            cfg.mblur_n = ip.mblur_taps;
+            comp.set_live_params(LiveParams {
+                bg_color: ip.bg_color,
+                shadow_scale: ip.shadow_scale,
+                radius_scale: ip.radius_scale,
+            });
+        }
 
         // rect viewport → coords écran : suit le rect DOM (set_rect) ET le déplacement du parent
         let [vx, vy, vw, vh] = *shared.rect.lock().unwrap();
@@ -454,7 +526,7 @@ pub fn run_standalone(screen: &str, webcam: &str, cursor_json: &str) -> Result<(
                         0x42 => {
                             // 'B' : bascule le fond flouté via set_param — chemin param → D3D
                             blur = !blur;
-                            view.set_param("backgroundBlur", blur);
+                            view.set_param_bool("backgroundBlur", blur);
                             set_title(blur, playing);
                         }
                         0x20 => {

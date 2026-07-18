@@ -81,11 +81,17 @@ pub fn set_rect(id: i32, rect: CompositorViewRect) {
     }
 }
 
-/// Param live. Phase 1 : seul `backgroundBlur` (booléen) est branché côté compositeur.
+/// Param live (inspector). Le type de valeur route vers le bon setter :
+/// bool = switch (backgroundBlur…), number = slider (shadow/roundness/motionBlur),
+/// string = sélection (backgroundColor "#rrggbb").
 #[napi]
-pub fn set_param(id: i32, key: String, value: bool) {
+pub fn set_param(id: i32, key: String, value: Either3<bool, f64, String>) {
     if let Some(v) = registry().lock().unwrap().get(&id) {
-        v.set_param(&key, value);
+        match value {
+            Either3::A(b) => v.set_param_bool(&key, b),
+            Either3::B(n) => v.set_param_num(&key, n),
+            Either3::C(s) => v.set_param_str(&key, &s),
+        }
     }
 }
 

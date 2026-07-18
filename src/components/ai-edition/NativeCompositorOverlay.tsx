@@ -1,5 +1,5 @@
-import { useRef, useState } from "react";
-import { exportNative, useNativeCompositorView } from "@/native";
+import { useEffect, useRef, useState } from "react";
+import { exportNative, setCurrentNativeViewId, useNativeCompositorView } from "@/native";
 
 /**
  * POC Option A — monte une fenêtre D3D11 native (compositeur poc-d3d, via
@@ -13,8 +13,15 @@ import { exportNative, useNativeCompositorView } from "@/native";
  */
 export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 	const mountRef = useRef<HTMLDivElement>(null);
-	const { setParam } = useNativeCompositorView(mountRef, { enabled });
+	const { setParam, viewId } = useNativeCompositorView(mountRef, { enabled });
 	const [blur, setBlur] = useState(false);
+
+	// publie l'id de la vue active dans le store → l'inspector (autre composant) peut
+	// pousser des params via setNativeParam sans connaître cet overlay.
+	useEffect(() => {
+		setCurrentNativeViewId(viewId);
+		return () => setCurrentNativeViewId(null);
+	}, [viewId]);
 	const [exporting, setExporting] = useState(false);
 	const [exportStatus, setExportStatus] = useState("");
 
