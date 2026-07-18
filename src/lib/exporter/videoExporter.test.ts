@@ -176,6 +176,33 @@ describe("getSourceCopyFastPathBlockers", () => {
 		);
 		expect(blockers).not.toContain("crop is not default");
 	});
+
+	// A verbatim source copy would carry over every audio track; most players play only
+	// the first, which on native macOS captures is often the silent system track — the
+	// #108 bug. Multi-track sources must be blocked from the copy path so they get mixed.
+	it("blocks the copy path when the source has multiple audio tracks (#108)", () => {
+		expect(
+			getSourceCopyFastPathBlockers(createConfig(), {
+				width: 1920,
+				height: 1080,
+				frameRate: 60,
+				codec: "avc1.640033",
+				audioStreamCount: 2,
+			}),
+		).toContain("source has multiple audio tracks (must be mixed)");
+	});
+
+	it("does not report the audio-track blocker for a single-track source", () => {
+		expect(
+			getSourceCopyFastPathBlockers(createConfig(), {
+				width: 1920,
+				height: 1080,
+				frameRate: 60,
+				codec: "avc1.640033",
+				audioStreamCount: 1,
+			}),
+		).not.toContain("source has multiple audio tracks (must be mixed)");
+	});
 });
 
 describe("resolveCropAt", () => {

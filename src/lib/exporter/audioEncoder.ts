@@ -153,8 +153,11 @@ export interface PlanarAudioSource {
  * into one track before encoding.
  *
  * Each source is first downmixed to `targetChannels`, then summed sample-aligned at
- * its `startFrame`. The result is clamped to [-1, 1] so a loud overlap can't wrap or
- * overflow the encoder. Sources of differing lengths and offsets are supported;
+ * its `startFrame`. The result is hard-clamped to [-1, 1] so a loud overlap can't wrap
+ * or overflow the encoder. Hard clipping (rather than a 1/N gain pre-sum or soft-knee
+ * limiter) can add harmonic distortion when two sources are simultaneously near unity —
+ * an acceptable trade-off for a screen recorder, where keeping both tracks at full level
+ * matters more than headroom. Sources of differing lengths and offsets are supported;
  * samples past `totalFrames` are dropped.
  */
 export function mixPlanarSources(
@@ -384,8 +387,11 @@ export class AudioProcessor {
 		const numberOfChannels = decoded[0].numberOfChannels;
 		// Absolute timeline position of this stream's first sample (mic tracks often
 		// start slightly after the video, e.g. start_time ~0.17s), so mixing keeps
-		// every track locked to the same source-time origin the video uses.
-		const startFrame = Math.max(0, Math.round((decoded[0].timestamp / 1_000_000) * sampleRate));
+		// every track locked to the same source-time origin the video uses. Kept signed:
+		// AAC preroll carries a negative timestamp, and clamping it to zero would land the
+		// preroll and the real timestamp-zero frame on the same offset. mixPlanarSources()
+		// discards frames before zero, so the signed origin stays correct.
+		const startFrame = Math.round((decoded[0].timestamp / 1_000_000) * sampleRate);
 
 		let totalFrames = 0;
 		for (const d of decoded) {
@@ -435,12 +441,17 @@ export class AudioProcessor {
 		}
 
 		if (sources.length === 0) return null;
-		// A single decodable stream can't be "mixed" — fall back to the normal path.
-		if (sources.length === 1) return null;
+		// If only one of several streams decoded, keep it rather than falling back to the
+		// demuxer's best stream — that fallback can re-select the stream that just failed
+		// to decode and export silence. mixPlanarSources() handles a single source fine.
 
 		const sampleRate = sources[0].sampleRate;
 		if (sources.some((s) => s.sampleRate !== sampleRate)) {
-			console.warn("[AudioProcessor] Audio streams differ in sample rate; skipping mix");
+			console.warn(
+				`[AudioProcessor] Audio streams differ in sample rate; skipping mix (rates: ${sources
+					.map((s) => s.sampleRate)
+					.join(", ")}Hz)`,
+			);
 			return null;
 		}
 

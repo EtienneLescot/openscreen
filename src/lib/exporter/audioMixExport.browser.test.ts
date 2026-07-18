@@ -57,9 +57,9 @@ describe("Multi-track audio export (real browser)", () => {
 		const { rms, hasAudio } = await measureAudioRms(result.blob!);
 		expect(hasAudio).toBe(true);
 		// Silence (the first track alone) sits near 0; the mixed-in 440 Hz tone lifts
-		// RMS well above the noise floor. A comfortable threshold below the tone's
-		// real level (~0.08) but far above silence.
-		expect(rms).toBeGreaterThan(0.01);
+		// RMS to ~0.08. Threshold sits below the tone's real level but well above the
+		// noise floor, so a near-silent fallback (the old #108 bug) still fails.
+		expect(rms).toBeGreaterThan(0.05);
 	});
 
 	it("mixes both audio tracks through the speed-region (offline) path too", async () => {
@@ -85,6 +85,6 @@ describe("Multi-track audio export (real browser)", () => {
 
 		const { rms, hasAudio } = await measureAudioRms(result.blob!);
 		expect(hasAudio).toBe(true);
-		expect(rms).toBeGreaterThan(0.01);
+		expect(rms).toBeGreaterThan(0.05);
 	});
 });

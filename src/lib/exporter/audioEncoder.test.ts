@@ -132,6 +132,21 @@ describe("mixPlanarSources", () => {
 		]);
 	});
 
+	it("discards samples before frame zero from a negative startFrame (AAC preroll)", () => {
+		// AAC preroll gives the first decoded frame a negative timestamp, so the source's
+		// startFrame is signed. The preroll samples (timeline < 0) must be dropped while
+		// the real timestamp-zero sample keeps its true offset.
+		const withPreroll = {
+			planes: [new Float32Array([0.9, 0.5, 0.5])],
+			startFrame: -2,
+		};
+
+		const mixed = mixPlanarSources([withPreroll], 1, 2);
+
+		// Frames -2 and -1 (0.9, 0.5) are discarded; frame 0 keeps the real sample.
+		expect(Array.from(mixed[0])).toEqual([expect.closeTo(0.5, 5), expect.closeTo(0, 5)]);
+	});
+
 	it("upmixes a mono source to stereo before mixing", () => {
 		const mono = { planes: [new Float32Array([0.3, 0.3])], startFrame: 0 };
 		const stereo = {
