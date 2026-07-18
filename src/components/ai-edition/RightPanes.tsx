@@ -55,6 +55,7 @@ import { getAssetPath } from "@/lib/assetPath";
 import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { buildGradientFromEditor } from "@/lib/gradientBuilder";
 import { resolveImageWallpaperUrl, WALLPAPER_PATHS } from "@/lib/wallpaper";
+import { isNativeCompositorActive, setNativeParam, subscribeNativeCompositor } from "@/native";
 import styles from "./NewEditorShell.module.css";
 
 export type RightPaneId =
@@ -123,7 +124,7 @@ function Pane({ title, icon, helpLabel, helpText, children }: PaneProps) {
 
 // ─── Background ────────────────────────────────────────────────────
 
-// ponytail: keep the gradient palette small and curated — every block renders
+// keep the gradient palette small and curated — every block renders
 // in the picker and gets serialized to legacyEditor on save.
 const GRAD_PRESETS: readonly string[] = [
 	"linear-gradient(135deg, #eaebed, #bcc0c6)",
@@ -331,7 +332,7 @@ export function BackgroundPane() {
 	);
 }
 
-// ponytail: keep the user's last data: URL after they switch tabs so the Image
+// keep the user's last data: URL after they switch tabs so the Image
 // tab can keep showing it without immediately pushing it back through `set`.
 function useMemoCustomWallpapers(current: string): string[] {
 	const [cached, setCached] = useState<string[]>([]);
@@ -365,7 +366,12 @@ function BackgroundColorTab({
 	}, [value]);
 	const commitHex = () => {
 		const next = normaliseHex(hexDraft);
-		if (next) onPick(next);
+		if (next) {
+			onPick(next);
+			if (isNativeCompositorActive()) {
+				setNativeParam("backgroundColor", next);
+			}
+		}
 	};
 	return (
 		<>
@@ -378,7 +384,12 @@ function BackgroundColorTab({
 						style={{ background: c }}
 						aria-label={`Color ${c}`}
 						disabled={!hasDocument}
-						onClick={() => onPick(c)}
+						onClick={() => {
+							onPick(c);
+							if (isNativeCompositorActive()) {
+								setNativeParam("backgroundColor", c);
+							}
+						}}
 					/>
 				))}
 			</div>
@@ -485,7 +496,7 @@ export function TranscriptPane({
 		[clips, transcripts, assets, trimRanges],
 	);
 
-	// ponytail: the cue position is the playback head's location in the
+	// the cue position is the playback head's location in the
 	// current clip's source time. `locateVirtualPosition` already accounts
 	// for skip ranges and clipped durations — the cue word naturally
 	// jumps over gaps the user has trimmed.
@@ -598,7 +609,7 @@ function TranscriptClipBlock({
 	const editorRef = useRef<HTMLDivElement | null>(null);
 	const pendingCaretWordIdRef = useRef<string | null>(null);
 
-	// ponytail: auto-scroll the cue word into view as the playback head
+	// auto-scroll the cue word into view as the playback head
 	// moves. The right pane has ONE scroll container (paneBody, which
 	// already has overflow-y: auto) — the per-clip editor itself is not
 	// scrollable, so the cue scroll always lands on the paneBody.
@@ -610,7 +621,7 @@ function TranscriptClipBlock({
 		if (!editor || !cueWordId) return;
 		const wordElement = editor.querySelector<HTMLElement>(`[data-word-id="${cueWordId}"]`);
 		if (!wordElement) return;
-		// ponytail: walk up to the first scrollable ancestor (paneBody)
+		// walk up to the first scrollable ancestor (paneBody)
 		// and scroll so the word element lands inside its viewport.
 		let ancestor: HTMLElement | null = wordElement.parentElement;
 		while (ancestor && ancestor !== document.body) {
@@ -636,7 +647,7 @@ function TranscriptClipBlock({
 		}
 	}, [cueWordId]);
 
-	// ponytail: keep the caret anchored to the next kept word after a
+	// keep the caret anchored to the next kept word after a
 	// trimRange is added (so the user can keep deleting without the caret
 	// jumping to the start of the block).
 	useLayoutEffect(() => {
@@ -695,7 +706,7 @@ function TranscriptClipBlock({
 				skipWordRange([cw]);
 				return true;
 			}
-			// ponytail: for a non-collapsed selection, the anchor/focus
+			// for a non-collapsed selection, the anchor/focus
 			// already identify the endpoints — no need to apply the
 			// "Backspace at start of word" / "Delete at end of word"
 			// boundary heuristic (that fallback is for collapsed carets
@@ -735,7 +746,7 @@ function TranscriptClipBlock({
 				);
 				return;
 			}
-			// ponytail: typing/pasting free text is non-destructive by design
+			// typing/pasting free text is non-destructive by design
 			// (the user's transcript edits come via the Source Transcript
 			// modal, not here). Block inserts to keep the projection stable.
 			if (inputEvent.inputType === "insertText" || inputEvent.inputType === "insertFromPaste") {
@@ -752,7 +763,7 @@ function TranscriptClipBlock({
 	const handlePointerUp = useCallback(
 		(event: ReactPointerEvent<HTMLDivElement>) => {
 			if (event.button !== 0) return;
-			// ponytail: a click on the trim-pill button (bin) bubbles up here
+			// a click on the trim-pill button (bin) bubbles up here
 			// before the button's onClick fires. Skip those — the bin's own
 			// handler is responsible for restoring the skip range.
 			if (event.target instanceof Element && event.target.closest("button")) return;
@@ -761,7 +772,7 @@ function TranscriptClipBlock({
 			const selection = globalThis.getSelection();
 			if (selection && !selection.isCollapsed) return; // user is selecting text — let them
 
-			// ponytail: clicks land on the deepest element under the cursor,
+			// clicks land on the deepest element under the cursor,
 			// which is usually the text node inside a word span. Text nodes
 			// don't have `closest`, and a non-filler word's text is rendered
 			// as a bare text node (no inner span). Walk up to an Element
@@ -873,7 +884,7 @@ function TranscriptClipBlock({
 						textWrap: "pretty",
 						cursor: "text",
 						outline: "none",
-						// ponytail: no overflow on the per-clip editor — the
+						// no overflow on the per-clip editor — the
 						// parent paneBody (already overflow-y: auto) is the
 						// single scroll container for the whole transcript.
 						// Scrolling within the editor would create a nested
@@ -1011,7 +1022,7 @@ function TranscriptWord({
 			onMouseEnter={() => setHover(true)}
 			onMouseLeave={() => setHover(false)}
 		>
-			{/* ponytail: no filler chip. axcut renders every word the same way;
+			{/* no filler chip. axcut renders every word the same way;
 			    the LLM is the only place that names a word a filler (via the
 			    filler_or_hesitation reason when generating suggestions). */}
 			{cw.word.text}{" "}
@@ -1023,7 +1034,7 @@ function TranscriptWord({
 					aria-label={`Restore "${cw.word.text}"`}
 					onClick={(e) => {
 						e.stopPropagation();
-						// ponytail: build a minimal TrimRun stub — only trimId is
+						// build a minimal TrimRun stub — only trimId is
 						// read by onRestore.
 						onRestore({
 							trimId: cw.trimId ?? "",
@@ -1073,7 +1084,7 @@ function findCollapsedDeletionWordId(
 	direction: "backward" | "forward",
 	words: ClipWord[],
 ): string | null {
-	// ponytail: read the kept/skip state from the words array, not the
+	// read the kept/skip state from the words array, not the
 	// DOM's data-skip-id. The DOM may be lagging a render behind (its
 	// trimId is only set on the next React commit), so a DOM check would
 	// re-trim an already-trimmed word. The words array is the React state
@@ -1085,7 +1096,7 @@ function findCollapsedDeletionWordId(
 		const textLength = node?.textContent?.length ?? 0;
 		if (node?.nodeType === Node.TEXT_NODE) {
 			if (direction === "backward" && offset <= 0) {
-				// ponytail: clicking at the start of a word normally deletes
+				// clicking at the start of a word normally deletes
 				// the previous word, but when the previous word is already
 				// trimmed, that would be a no-op. Fall back to the current
 				// word so Backspace always does something.
@@ -1112,7 +1123,7 @@ function findCollapsedDeletionWordId(
 	if (!boundaryNode) return null;
 	const childNodes = Array.from(boundaryNode.childNodes);
 
-	// ponytail: when restoreCaretBeforeWord places the caret before word W
+	// when restoreCaretBeforeWord places the caret before word W
 	// (via setStartBefore), `anchorNode` becomes the parent div and
 	// `anchorOffset` is W's index. The naive "previous sibling" lookup
 	// below would always return the word that was *just* trimmed, which
@@ -1194,6 +1205,37 @@ export type { AxcutWord };
 
 export function VideoEffectsPane() {
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+
+	// Push the current frame-styling settings into the native D3D compositor
+	// view whenever it becomes active (or the settings change while it's up).
+	// The onChange handlers above already push per-control diffs; this effect
+	// also covers the "user tweaked a setting before the native view was
+	// mounted" case so the view doesn't render with stale defaults.
+	const ROUNDNESS_MAX = 64;
+	useEffect(() => {
+		const syncToNative = () => {
+			// pas de garde `isNativeCompositorActive` : setNativeParam mémorise les valeurs
+			// même sans vue active, et le store les rejoue quand une vue s'active (fix du
+			// démarrage sur les défauts, indépendant de l'ordre de montage).
+			setNativeParam("backgroundBlur", settings.showBlur);
+			setNativeParam("motionBlur", settings.motionBlurAmount);
+			setNativeParam("shadow", settings.shadowIntensity);
+			setNativeParam("roundness", settings.borderRadius / ROUNDNESS_MAX);
+			const bg = settings.wallpaper;
+			if (bg.startsWith("#")) {
+				setNativeParam("backgroundColor", bg);
+			}
+		};
+		syncToNative();
+		return subscribeNativeCompositor(syncToNative);
+	}, [
+		settings.showBlur,
+		settings.motionBlurAmount,
+		settings.shadowIntensity,
+		settings.borderRadius,
+		settings.wallpaper,
+	]);
+
 	return (
 		<Pane
 			title="Video effects"
@@ -1205,7 +1247,12 @@ export function VideoEffectsPane() {
 				<Toggle
 					checked={settings.showBlur}
 					disabled={!hasDocument}
-					onChange={(v) => void set({ showBlur: v })}
+					onChange={(v) => {
+						void set({ showBlur: v });
+						if (isNativeCompositorActive()) {
+							setNativeParam("backgroundBlur", v);
+						}
+					}}
 				/>
 			</div>
 			<div className={styles.sliderGrid}>
@@ -1216,7 +1263,12 @@ export function VideoEffectsPane() {
 					max={100}
 					suffix="%"
 					disabled={!hasDocument}
-					onChange={(v) => setLive({ motionBlurAmount: v / 100 })}
+					onChange={(v) => {
+						setLive({ motionBlurAmount: v / 100 });
+						if (isNativeCompositorActive()) {
+							setNativeParam("motionBlur", v / 100);
+						}
+					}}
 					onCommit={() => void commit()}
 				/>
 				<SliderCell
@@ -1226,7 +1278,12 @@ export function VideoEffectsPane() {
 					max={100}
 					suffix="%"
 					disabled={!hasDocument}
-					onChange={(v) => setLive({ shadowIntensity: v / 100 })}
+					onChange={(v) => {
+						setLive({ shadowIntensity: v / 100 });
+						if (isNativeCompositorActive()) {
+							setNativeParam("shadow", v / 100);
+						}
+					}}
 					onCommit={() => void commit()}
 				/>
 				<SliderCell
@@ -1237,9 +1294,15 @@ export function VideoEffectsPane() {
 					step={0.5}
 					suffix="px"
 					disabled={!hasDocument}
-					onChange={(v) => setLive({ borderRadius: v })}
+					onChange={(v) => {
+						setLive({ borderRadius: v });
+						if (isNativeCompositorActive()) {
+							setNativeParam("roundness", v / ROUNDNESS_MAX);
+						}
+					}}
 					onCommit={() => void commit()}
 				/>
+				{/* TODO: native padding */}
 				<SliderCell
 					label="Padding"
 					value={settings.padding}
@@ -1278,7 +1341,7 @@ const CAMERA_SHAPES: Array<{
 export function LayoutPane() {
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	const document = useProjectStore((s) => s.document);
-	// ponytail: the mask shape picker only makes sense for Picture-in-Picture.
+	// the mask shape picker only makes sense for Picture-in-Picture.
 	// Dual-frame (side-by-side) and vertical-stack (top/bottom) hardcode a
 	// rectangle in the legacy layout math, so we hide those controls when the
 	// preset isn't PiP.
@@ -1625,6 +1688,6 @@ function SliderCell({
 	);
 }
 
-// ponytail: legacy color wheel / hue track styling was a cosmetic placeholder —
+// legacy color wheel / hue track styling was a cosmetic placeholder —
 // the active BackgroundColorTab uses real pickers (color input + hex text) so
 // the static style helpers are no longer needed.

@@ -36,6 +36,23 @@ pub struct LayerCB {
     pub mb: [f32; 4], // mb[0] = nombre de taps de motion blur
 }
 
+/// Valeurs continues pilotées par l'inspector (celles qui étaient codées en dur dans
+/// `compose_frame`). Le défaut reproduit le rendu actuel → bench/export inchangés.
+/// Les booléens/taps (fond flouté, ombre on/off, coins on/off, motion blur) restent
+/// portés par le `Cfg` que le thread live reconstruit depuis les switches.
+#[derive(Clone, Copy)]
+pub struct LiveParams {
+    pub bg_color: [f32; 4], // fond plat (mode couleur) quand non flouté
+    pub shadow_scale: f32,  // multiplie l'opacité des ombres (1 = défaut, 0 = off)
+    pub radius_scale: f32,  // multiplie le rayon des coins (1 = défaut, 0 = carré)
+}
+
+impl Default for LiveParams {
+    fn default() -> Self {
+        Self { bg_color: [0.10, 0.11, 0.14, 1.0], shadow_scale: 1.0, radius_scale: 1.0 }
+    }
+}
+
 pub struct Compositor {
     dev: ID3D11Device,
     ctx: ID3D11DeviceContext,
@@ -78,6 +95,7 @@ pub struct Compositor {
     // cache des SRV décodeur par (texture array, slice) : le pool réutilise ~32 textures,
     // donc après warmup plus aucune création de SRV par frame (overhead CPU supprimé).
     srv_cache: RefCell<HashMap<(usize, u32), (ID3D11ShaderResourceView, ID3D11ShaderResourceView)>>,
+    live_params: RefCell<LiveParams>,
 }
 
 pub const HALF_W: u32 = OUT_W / 2;
@@ -483,7 +501,13 @@ impl Compositor {
             blend_add: blend_add.unwrap(),
             cursor: None,
             srv_cache: RefCell::new(HashMap::new()),
+            live_params: RefCell::new(LiveParams::default()),
         })
+    }
+
+    /// Met à jour les paramètres continus pilotés par l'inspector (thread live uniquement).
+    pub fn set_live_params(&self, p: LiveParams) {
+        *self.live_params.borrow_mut() = p;
     }
 
     /// Crée les SRV Y (R8) et UV (R8G8) sur la tranche d'array de la frame décodeur.
@@ -698,9 +722,10 @@ impl Compositor {
 
         let p = timeline(frame, cfg);
         let pp = timeline(frame - 1.0, cfg); // frame précédente, pour la vélocité (§8)
+        let lp = *self.live_params.borrow();
         let mb_taps = cfg.mblur_n as f32;
-        let s_radius = if cfg.rounded { p.screen.radius } else { 0.0 };
-        let w_radius = if cfg.rounded { p.webcam.radius } else { 0.0 };
+        let s_radius = if cfg.rounded { p.screen.radius * lp.radius_scale } else { 0.0 };
+        let w_radius = if cfg.rounded { p.webcam.radius * lp.radius_scale } else { 0.0 };
 
         self.begin([0.0, 0.0, 0.0, 1.0]);
 
@@ -731,7 +756,7 @@ impl Compositor {
             self.draw_solid(&LayerCB {
                 dst: [0.0, 0.0, 1.0, 1.0],
                 mode: 1.0,
-                color: [0.10, 0.11, 0.14, 1.0],
+                color: lp.bg_color,
                 ..Default::default()
             });
         }
@@ -750,7 +775,7 @@ impl Compositor {
         let sv0_p = (cy - hv_p).clamp(0.0, v_max - 2.0 * hv_p);
         let s_px = [p.screen.dst[2] * OUT_W as f32, p.screen.dst[3] * OUT_H as f32];
         if cfg.shadow {
-            self.draw_shadow(p.screen.dst, s_px, s_radius, 40.0, [0.0, 16.0], 0.45);
+            self.draw_shadow(p.screen.dst, s_px, s_radius, 40.0, [0.0, 16.0], 0.45 * lp.shadow_scale);
         }
         self.draw_video(
             &LayerCB {
@@ -812,7 +837,7 @@ impl Compositor {
         let u1 = u0 + sq / wtw as f32;
         let w_px = [p.webcam.dst[2] * OUT_W as f32, p.webcam.dst[3] * OUT_H as f32];
         if cfg.shadow {
-            self.draw_shadow(p.webcam.dst, w_px, w_radius, 32.0, [0.0, 12.0], 0.5);
+            self.draw_shadow(p.webcam.dst, w_px, w_radius, 32.0, [0.0, 12.0], 0.5 * lp.shadow_scale);
         }
         self.draw_video(
             &LayerCB {
