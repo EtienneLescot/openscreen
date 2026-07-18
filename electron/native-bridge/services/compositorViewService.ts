@@ -197,6 +197,14 @@ export class CompositorViewService {
 		addon.setPlaying(id, playing);
 	}
 
+	presentTime(id: number, seconds: number): void {
+		const addon = this.ensureAddon();
+		if (!addon) {
+			return;
+		}
+		addon.presentTime(id, seconds);
+	}
+
 	destroyView(id: number): void {
 		const addon = this.ensureAddon();
 		this.rects.delete(id);

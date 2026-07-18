@@ -34,7 +34,7 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::compositor::{OUT_H, OUT_W};
+use crate::compositor::{FIXTURE_FRAMES, OUT_H, OUT_W};
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -99,6 +99,41 @@ impl Player {
         comp.compose_frame(sf, wf, f as f32, cfg)?;
         Ok(true)
     }
+
+    /// Compose la frame à l'index `target` (seek). Seek arrière → rewind puis décodage avant ;
+    /// seek avant → décodage avant en jetant les frames intermédiaires. Simple et robuste
+    /// (pas de calcul PTS/keyframe ; optimisation keyframe possible plus tard).
+    pub unsafe fn present_frame(&mut self, comp: &Compositor, cfg: &Cfg, target: u32) -> Result<bool> {
+        if target < self.idx {
+            self.sdec.rewind()?;
+            self.wdec.rewind()?;
+            self.idx = 0;
+        }
+        loop {
+            let sf = self.sdec.next()?;
+            let wf = self.wdec.next()?;
+            if sf.is_null() || wf.is_null() {
+                // au-delà de la fixture → clamp sur la frame 0
+                self.sdec.rewind()?;
+                self.wdec.rewind()?;
+                self.idx = 0;
+                let sf = self.sdec.next()?;
+                let wf = self.wdec.next()?;
+                if sf.is_null() || wf.is_null() {
+                    return Ok(false);
+                }
+                comp.compose_frame(sf, wf, 0.0, cfg)?;
+                self.idx = 1;
+                return Ok(true);
+            }
+            let produced = self.idx;
+            self.idx += 1;
+            if produced == target {
+                comp.compose_frame(sf, wf, produced as f32, cfg)?;
+                return Ok(true);
+            }
+        }
+    }
 }
 
 /// Paramètres inspector pilotés depuis l'UI (setParam). Le thread de rendu les applique :
@@ -130,6 +165,8 @@ struct Shared {
     /// Le thread de rendu le mappe en coords écran (le parent peut bouger) et repositionne.
     rect: Mutex<[i32; 4]>,
     inspector: Mutex<InspectorParams>,
+    /// frame demandée par l'app (presentTime/seek) ; prioritaire sur la lecture libre.
+    requested_frame: Mutex<Option<u32>>,
     playing: AtomicBool,
     stop: AtomicBool,
 }
@@ -185,6 +222,7 @@ impl LiveView {
             let shared = Arc::new(Shared {
                 rect: Mutex::new([x, y, w, h]),
                 inspector: Mutex::new(InspectorParams::default()),
+                requested_frame: Mutex::new(None),
                 playing: AtomicBool::new(true),
                 stop: AtomicBool::new(false),
             });
@@ -246,6 +284,16 @@ impl LiveView {
 
     pub fn set_playing(&self, playing: bool) {
         self.shared.playing.store(playing, Ordering::Relaxed);
+    }
+
+    /// Positionne la vue sur le temps `seconds` (seek, piloté par la playhead de l'app).
+    /// La fixture boucle (6 s) : le temps est ramené modulo la durée.
+    pub fn set_time(&self, seconds: f64) {
+        let frame = (seconds * 60.0).round() as i64;
+        let frame = frame.rem_euclid(FIXTURE_FRAMES as i64) as u32;
+        if let Ok(mut r) = self.shared.requested_frame.lock() {
+            *r = Some(frame);
+        }
     }
 }
 
@@ -388,12 +436,18 @@ unsafe fn render_thread(
             resized = true;
         }
 
-        // avance temporelle (60 fps, horloge murale)
+        // avance : seek app-piloté (presentTime) prioritaire, sinon lecture libre (60 fps)
+        let requested = shared.requested_frame.lock().unwrap().take();
         let now = Instant::now();
         let dt = (now - last).as_secs_f64().min(0.1);
         last = now;
         let mut stepped = false;
-        if shared.playing.load(Ordering::Relaxed) {
+        if let Some(target) = requested {
+            if player.present_frame(&comp, &cfg, target)? {
+                stepped = true;
+            }
+            acc = 0.0; // resynchronise l'accumulateur de lecture libre après un seek
+        } else if shared.playing.load(Ordering::Relaxed) {
             acc += dt;
             let step = 1.0 / 60.0;
             let mut n = 0;

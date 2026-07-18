@@ -652,6 +652,12 @@ export type NativeBridgeRequest =
 			action: "export";
 			payload: { outPath?: string };
 			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "presentTime";
+			payload: { id: number; seconds: number };
+			requestId?: string;
 	  };
 
 export type NativeBridgeEventName =
