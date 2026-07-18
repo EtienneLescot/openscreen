@@ -394,6 +394,20 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 							}
 							return createSuccessResponse(requestId, stats);
 						}
+						case "exportMulti": {
+							const stats = await compositorViewService.exportMulti(
+								request.payload.clips,
+								request.payload.outPath,
+							);
+							if (!stats) {
+								return createErrorResponse(
+									requestId,
+									"UNAVAILABLE",
+									"Native compositor addon not present.",
+								);
+							}
+							return createSuccessResponse(requestId, stats);
+						}
 						default:
 							return createErrorResponse(
 								requestId,

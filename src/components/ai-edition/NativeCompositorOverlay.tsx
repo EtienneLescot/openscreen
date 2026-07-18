@@ -1,4 +1,5 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef } from "react";
+import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { setCurrentNativeViewId, useNativeCompositorView } from "@/native";
 
 /**
@@ -8,55 +9,37 @@ import { setCurrentNativeViewId, useNativeCompositorView } from "@/native";
  * le compositing ; le `<div>` ne sert qu'à donner sa géométrie (le hook sync le
  * rect natif au resize/scroll).
  *
- * F3 : avant de créer la vue, on résout les vraies sources de l'enregistrement
- * (screen + webcam, deux fichiers H264 séparés) via la session courante, pour que
- * le natif compose TON clip et pas la fixture. Session absente (projet rechargé,
- * web pur) → fallback fixture. Enregistrement sans caméra → webcam fixture (le
- * compositeur compose toujours une webcam ; le no-webcam viendra avec les presets).
+ * F3 : les sources natives (screen + webcam) sont résolues depuis l'**asset primaire
+ * du document courant** — donc ce que l'éditeur affiche réellement. (On lisait avant
+ * `getCurrentRecordingSession()` = le dernier *enregistré*, qui pouvait pointer sur un
+ * ancien clip → on voyait « l'ancien clip » sous le blur.) Pas d'asset / pas de doc →
+ * fallback fixture. Le hook recrée la vue si le chemin screen change (changement de projet).
  *
- * Aucun contrôle ici : les paramètres viennent de l'inspector (barre latérale) via
- * le store `nativeCompositorStore` (`setNativeParam`), la lecture via
- * `useNativePlaybackSync`, l'export via la vraie modale (`ExportDialog`).
+ * Aucun contrôle ici : paramètres via l'inspector (`setNativeParam`), lecture via
+ * `useNativePlaybackSync`, export via la vraie modale (`ExportDialog`).
  *
  * Opt-in via le flag Vite `VITE_NATIVE_COMPOSITOR=1`.
  */
 export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 	const mountRef = useRef<HTMLDivElement>(null);
-	// `null` = résolution en cours ; `{}` = résolu sans session (→ fixture) ;
-	// `{screenPath,…}` = vraies sources. On attend la résolution avant de créer la
-	// vue (sources lues une fois à la création) pour éviter un re-create fixture→réel.
-	const [sources, setSources] = useState<{
-		screenPath?: string;
-		webcamPath?: string;
-	} | null>(null);
+	const document = useProjectStore((s) => s.document);
 
-	useEffect(() => {
-		if (!enabled) {
-			return;
+	// `null` = document pas encore chargé (on attend) ; `{}` = chargé sans asset (→ fixture) ;
+	// `{screenPath,…}` = vraies sources de l'asset primaire.
+	const sources = useMemo(() => {
+		if (!document) {
+			return null;
 		}
-		let cancelled = false;
-		void (async () => {
-			try {
-				const result = await window.electronAPI?.getCurrentRecordingSession?.();
-				if (cancelled) {
-					return;
-				}
-				const session = result?.success ? result.session : null;
-				setSources(
-					session?.screenVideoPath
-						? { screenPath: session.screenVideoPath, webcamPath: session.webcamVideoPath }
-						: {},
-				);
-			} catch {
-				if (!cancelled) {
-					setSources({});
-				}
-			}
-		})();
-		return () => {
-			cancelled = true;
+		const primary =
+			document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
+		if (!primary?.originalPath) {
+			return {};
+		}
+		return {
+			screenPath: primary.originalPath,
+			webcamPath: primary.cameraTrack?.sourcePath ?? undefined,
 		};
-	}, [enabled]);
+	}, [document]);
 
 	const ready = sources !== null;
 	const { viewId } = useNativeCompositorView(mountRef, {

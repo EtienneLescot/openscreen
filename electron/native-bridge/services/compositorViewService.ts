@@ -4,6 +4,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app } from "electron";
 import type {
+	ClipInput,
 	CompositorParamValue,
 	CompositorViewAddon,
 	CompositorViewRect,
@@ -233,5 +234,16 @@ export class CompositorViewService {
 		}
 		const target = outPath ?? path.join(app.getPath("temp"), "openscreen-native-export.mp4");
 		return addon.export(target);
+	}
+
+	/** Native multiclip export (real timeline -> MP4). Auto-pauses previews via the addon.
+	 *  Returns null when the addon is absent. */
+	async exportMulti(clips: ClipInput[], outPath?: string): Promise<ExportStats | null> {
+		const addon = this.ensureAddon();
+		if (!addon) {
+			return null;
+		}
+		const target = outPath ?? path.join(app.getPath("temp"), "openscreen-native-export.mp4");
+		return addon.exportMulti(clips, target);
 	}
 }

@@ -61,6 +61,9 @@ export function useNativeCompositorView(
 	opts: UseNativeCompositorViewOptions = {},
 ): UseNativeCompositorViewResult {
 	const enabled = opts.enabled !== false;
+	// Re-create the native view when the screen source changes (e.g. loading a different
+	// project) so it never keeps showing a stale clip.
+	const screenPath = opts.sources?.screenPath;
 	const [viewId, setViewId] = useState<number | null>(null);
 	// Mirror into a ref so async callbacks always see the freshest id without
 	// re-subscribing the main effect.
@@ -142,9 +145,9 @@ export function useNativeCompositorView(
 				safelyCall("destroyView", () => destroyCompositorView(id));
 			}
 		};
-		// `ref` is a stable RefObject; we only re-run the effect when
-		// the enabled flag flips.
-	}, [enabled, ref]);
+		// `ref` is a stable RefObject; we re-run (destroy + re-create the view) when the
+		// enabled flag flips or the screen source changes.
+	}, [enabled, ref, screenPath]);
 
 	const setParam = useCallback((key: string, value: CompositorParamValue) => {
 		const id = viewIdRef.current;
