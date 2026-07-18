@@ -1211,7 +1211,10 @@ export function VideoEffectsPane() {
 	// The onChange handlers above already push per-control diffs; this effect
 	// also covers the "user tweaked a setting before the native view was
 	// mounted" case so the view doesn't render with stale defaults.
-	const ROUNDNESS_MAX = 64;
+	// Le rayon natif = rayon de base de la fixture (~24px @1920) × cette échelle. Diviser la
+	// valeur px de l'UI par ce même rayon de base fait que le coin natif ≈ les px affichés
+	// (au lieu de plafonner à ~24px comme avec /64).
+	const NATIVE_SCREEN_BASE_RADIUS_PX = 24;
 	useEffect(() => {
 		const syncToNative = () => {
 			// pas de garde `isNativeCompositorActive` : setNativeParam mémorise les valeurs
@@ -1220,7 +1223,7 @@ export function VideoEffectsPane() {
 			setNativeParam("backgroundBlur", settings.showBlur);
 			setNativeParam("motionBlur", settings.motionBlurAmount);
 			setNativeParam("shadow", settings.shadowIntensity);
-			setNativeParam("roundness", settings.borderRadius / ROUNDNESS_MAX);
+			setNativeParam("roundness", settings.borderRadius / NATIVE_SCREEN_BASE_RADIUS_PX);
 			setNativeParam("padding", settings.padding / 100);
 			const bg = settings.wallpaper;
 			if (bg.startsWith("#")) {
@@ -1299,7 +1302,7 @@ export function VideoEffectsPane() {
 					onChange={(v) => {
 						setLive({ borderRadius: v });
 						if (isNativeCompositorActive()) {
-							setNativeParam("roundness", v / ROUNDNESS_MAX);
+							setNativeParam("roundness", v / NATIVE_SCREEN_BASE_RADIUS_PX);
 						}
 					}}
 					onCommit={() => void commit()}

@@ -22,6 +22,16 @@ export interface ExportStats {
 	fps: number;
 }
 
+/** One timeline clip for the native multiclip export (screen + webcam files + source trim). */
+export interface ClipInput {
+	screenPath: string;
+	webcamPath: string;
+	sourceStartSec: number;
+	sourceEndSec: number;
+	/** webcam source time = screen source time − this. */
+	webcamOffsetSec: number;
+}
+
 export interface CompositorViewAddon {
 	/** Optional screen/webcam/cursor paths (F3 — the app's real recording, two separate H264
 	 *  files); omitted → the POC fixture. */
@@ -40,6 +50,8 @@ export interface CompositorViewAddon {
 	destroyView(id: number): void;
 	/** Renders the fixture to `outPath` (C8), auto-pausing live previews. */
 	export(outPath: string): Promise<ExportStats>;
+	/** Renders the real timeline (ordered clips + trims) to `outPath`, auto-pausing previews. */
+	exportMulti(clips: ClipInput[], outPath: string): Promise<ExportStats>;
 }
 
 /**
