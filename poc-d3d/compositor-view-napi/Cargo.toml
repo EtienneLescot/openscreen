@@ -1,0 +1,22 @@
+[package]
+name = "compositor-view-napi"
+version = "0.0.0"
+edition = "2021"
+description = "Addon napi-rs : expose poc_d3d::live::LiveView (fenêtre D3D enfant) à Electron."
+
+[lib]
+crate-type = ["cdylib"]
+name = "compositor_view"
+
+[dependencies]
+napi = { version = "2", default-features = false, features = ["napi6"] }
+napi-derive = "2"
+poc-d3d = { path = ".." }
+anyhow = "1"
+
+[dependencies.windows]
+version = "0.58"
+features = ["Win32_Foundation"]
+
+[build-dependencies]
+napi-build = "2"

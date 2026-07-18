@@ -16,6 +16,7 @@ dist-ssr
 
 # Native helper build outputs
 /electron/native/wgc-capture/build/
+/electron/native/compositor-view/build/
 /electron/native/screencapturekit/build/
 /electron/native/screencapturekit/.build/
 /electron/native/screencapturekit/.swiftpm/

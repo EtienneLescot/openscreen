@@ -8,10 +8,15 @@ import type {
 } from "@/lib/ai-edition/schema";
 import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import { EditorEmptyState } from "./EditorEmptyState";
+import { NativeCompositorOverlay } from "./NativeCompositorOverlay";
 import styles from "./NewEditorShell.module.css";
 import { PreviewCanvas } from "./PreviewCanvas";
 
 type BlurData = NonNullable<AxcutAnnotationRegion["blurData"]>;
+
+// POC Option A : preview rendue par la fenêtre D3D native embarquée (opt-in via flag Vite).
+const NATIVE_COMPOSITOR_ENABLED =
+	(import.meta.env as Record<string, string | undefined>).VITE_NATIVE_COMPOSITOR === "1";
 
 interface PreviewProps {
 	hasProject: boolean;
@@ -94,6 +99,7 @@ export function Preview({
 			data-current-time-sec={currentTimeSec.toFixed(3)}
 			data-is-playing={playing ? "true" : "false"}
 		>
+			<NativeCompositorOverlay enabled={NATIVE_COMPOSITOR_ENABLED} />
 			{hasProject && hasAsset && !videoError ? (
 				<PreviewCanvas
 					videoSources={videoSources}
