@@ -14,11 +14,14 @@ import type {
 	CompositorViewResult,
 } from "./contracts";
 
-export function createCompositorView(rect: CompositorViewRect): Promise<CompositorViewResult> {
+export function createCompositorView(
+	rect: CompositorViewRect,
+	sources?: { screenPath?: string; webcamPath?: string; cursorPath?: string },
+): Promise<CompositorViewResult> {
 	return requireNativeBridgeData<CompositorViewResult>({
 		domain: "compositor",
 		action: "createView",
-		payload: { rect },
+		payload: { rect, ...sources },
 	});
 }
 
