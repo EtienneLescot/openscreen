@@ -38,6 +38,7 @@ VSOut vs_main(uint vid : SV_VertexID)
 
 Texture2D<float>  texY  : register(t0);
 Texture2D<float2> texUV : register(t1);
+Texture2D<float4> texImg : register(t2); // wallpaper image RGBA (fond, mode 6)
 SamplerState samp : register(s0);
 
 // BT.709 limited -> RGB (§7 E1), matrice en dur, range mesuré en S1.
@@ -69,9 +70,48 @@ float sd_round_rect(float2 p, float2 halfsz, float r)
 
 float4 ps_main(VSOut i) : SV_Target
 {
+    // mode 7 : sprite curseur thème (PNG alpha droite, arrow.png etc.). Prémultiplie ici
+    // (le blend state attend du prémultiplié partout ailleurs). fx = rect de clip "Clip to
+    // canvas" en espace sortie 0..1 [x,y,w,h] (= s_dst quand actif, sinon un rect englobant
+    // tout -> aucun effet).
+    if (mode > 6.5)
+    {
+        if (i.pout.x < fx.x || i.pout.x > fx.x + fx.z || i.pout.y < fx.y || i.pout.y > fx.y + fx.w)
+        {
+            return float4(0.0, 0.0, 0.0, 0.0);
+        }
+        float4 s = texImg.Sample(samp, i.uv);
+        float a = s.a * color.a; // color.a = opacité globale (fade éventuel)
+        return float4(s.rgb * a, a);
+    }
+
+    // mode 6 : wallpaper image RGBA (cover-fit). src = rect uv déjà calculé (crop de
+    // recouvrement), i.uv l'interpole. Opaque.
+    if (mode > 5.5)
+    {
+        return float4(texImg.Sample(samp, i.uv).rgb, 1.0);
+    }
+
+    // mode 5 : gradient linéaire 2 stops (parité web wallpaper dégradé). color = stop0,
+    // src.xyz = stop1, fx.xy = direction unitaire (espace sortie, y vers le bas). t est
+    // normalisé coin-à-coin (dénominateur = |dx|+|dy|) pour couvrir toute la diagonale.
+    if (mode > 4.5)
+    {
+        float2 dir = fx.xy;
+        float denom = max(abs(dir.x) + abs(dir.y), 1e-4);
+        float t = saturate(0.5 + dot(i.pout - 0.5, dir) / denom);
+        float3 g = lerp(color.rgb, src.xyz, t);
+        return float4(g, 1.0); // opaque, prémultiplié (a=1)
+    }
+
     // mode 4 : curseur custom (dot + ring, dessiné depuis les maths). color = teinte.
+    // fx = rect de clip "Clip to canvas" (mêmes conventions que le mode 7 ci-dessus).
     if (mode > 3.5)
     {
+        if (i.pout.x < fx.x || i.pout.x > fx.x + fx.z || i.pout.y < fx.y || i.pout.y > fx.y + fx.w)
+        {
+            return float4(0.0, 0.0, 0.0, 0.0);
+        }
         float2 p = i.local - quad_px * 0.5;
         float r = length(p);
         float R = quad_px.x * 0.5;
