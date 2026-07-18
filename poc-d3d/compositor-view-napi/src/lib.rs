@@ -102,6 +102,14 @@ pub fn set_playing(id: i32, playing: bool) {
     }
 }
 
+/// Positionne la vue au temps `seconds` (seek piloté par la playhead de l'app).
+#[napi]
+pub fn present_time(id: i32, seconds: f64) {
+    if let Some(v) = registry().lock().unwrap().get(&id) {
+        v.set_time(seconds);
+    }
+}
+
 #[napi]
 pub fn destroy_view(id: i32) {
     // remove hors du lock : le Drop (join du thread de rendu + DestroyWindow) ne le tient pas.

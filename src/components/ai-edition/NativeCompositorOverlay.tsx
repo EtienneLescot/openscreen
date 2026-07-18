@@ -1,5 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-import { exportNative, setCurrentNativeViewId, useNativeCompositorView } from "@/native";
+import { useEffect, useRef } from "react";
+import { setCurrentNativeViewId, useNativeCompositorView } from "@/native";
 
 /**
  * POC Option A — monte une fenêtre D3D11 native (compositeur poc-d3d, via
@@ -8,13 +8,17 @@ import { exportNative, setCurrentNativeViewId, useNativeCompositorView } from "@
  * le compositing ; le `<div>` ne sert qu'à donner sa géométrie (le hook sync le
  * rect natif au resize/scroll).
  *
+ * Aucun contrôle ici : les paramètres viennent de l'inspector (barre latérale) via
+ * le store `nativeCompositorStore` (`setNativeParam`), la lecture via
+ * `useNativePlaybackSync`, et l'export via la vraie modale (`ExportDialog`). Le
+ * `<div>` est recouvert par la fenêtre native, donc on n'y met rien de cliquable.
+ *
  * Opt-in via le flag Vite `VITE_NATIVE_COMPOSITOR=1` : par défaut le composant ne
  * rend rien et la preview web existante reste inchangée.
  */
 export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 	const mountRef = useRef<HTMLDivElement>(null);
-	const { setParam, viewId } = useNativeCompositorView(mountRef, { enabled });
-	const [blur, setBlur] = useState(false);
+	const { viewId } = useNativeCompositorView(mountRef, { enabled });
 
 	// publie l'id de la vue active dans le store → l'inspector (autre composant) peut
 	// pousser des params via setNativeParam sans connaître cet overlay.
@@ -22,83 +26,17 @@ export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 		setCurrentNativeViewId(viewId);
 		return () => setCurrentNativeViewId(null);
 	}, [viewId]);
-	const [exporting, setExporting] = useState(false);
-	const [exportStatus, setExportStatus] = useState("");
 
 	if (!enabled) {
 		return null;
 	}
 
-	const runExport = async () => {
-		setExporting(true);
-		setExportStatus("Exporting… (preview paused)");
-		try {
-			const s = await exportNative();
-			setExportStatus(`${s.fps.toFixed(1)} fps · ${s.wallS.toFixed(2)}s · ${s.frames} frames`);
-		} catch (err) {
-			setExportStatus("export failed");
-			console.warn("[compositor-view] export failed:", err);
-		} finally {
-			setExporting(false);
-		}
-	};
-
+	// placeholder : sert de géométrie à la fenêtre D3D native (le hook sync le rect).
 	return (
-		<>
-			{/* placeholder : sert de géométrie à la fenêtre D3D native (le hook sync le rect).
-			    Il est recouvert par la fenêtre native, donc on n'y met aucun contrôle. */}
-			<div
-				ref={mountRef}
-				data-testid="native-compositor-mount"
-				style={{ position: "absolute", inset: 0, zIndex: 5 }}
-			/>
-			{/* contrôles en position fixe hors de la zone preview → non recouverts par l'overlay natif */}
-			<div
-				style={{
-					position: "fixed",
-					top: 64,
-					left: 16,
-					zIndex: 99999,
-					display: "flex",
-					flexDirection: "column",
-					gap: 6,
-					background: "rgba(0,0,0,0.72)",
-					color: "#fff",
-					padding: "8px 10px",
-					borderRadius: 8,
-					font: "12px system-ui",
-					pointerEvents: "auto",
-				}}
-			>
-				<label style={{ display: "flex", alignItems: "center", gap: 6 }}>
-					<input
-						type="checkbox"
-						checked={blur}
-						onChange={(e) => {
-							setBlur(e.target.checked);
-							setParam("backgroundBlur", e.target.checked);
-						}}
-					/>
-					Background blur (native)
-				</label>
-				<button
-					type="button"
-					disabled={exporting}
-					onClick={runExport}
-					style={{
-						cursor: exporting ? "default" : "pointer",
-						padding: "4px 8px",
-						borderRadius: 5,
-						border: "none",
-						background: "#22dd88",
-						color: "#000",
-						font: "12px system-ui",
-					}}
-				>
-					{exporting ? "Exporting…" : "Export (native)"}
-				</button>
-				{exportStatus && <div style={{ opacity: 0.9 }}>{exportStatus}</div>}
-			</div>
-		</>
+		<div
+			ref={mountRef}
+			data-testid="native-compositor-mount"
+			style={{ position: "absolute", inset: 0, zIndex: 5 }}
+		/>
 	);
 }

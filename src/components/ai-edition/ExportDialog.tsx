@@ -28,6 +28,7 @@ import {
 	type GifSizePreset,
 } from "@/lib/exporter";
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
+import { exportNative } from "@/native";
 import { nativeBridgeClient } from "@/native/client";
 import {
 	type AspectRatio,
@@ -36,6 +37,7 @@ import {
 } from "@/utils/aspectRatioUtils";
 import { ModalShell } from "./Modals";
 import styles from "./NewEditorShell.module.css";
+import { NATIVE_COMPOSITOR_ENABLED } from "./Preview";
 
 type Phase = "idle" | "configuring" | "rendering" | "writing" | "done" | "error";
 
@@ -179,6 +181,36 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		}
 		if (!pickedPath) {
 			setPhase("idle");
+			return;
+		}
+
+		// Native compositor POC: route the real export modal to the native D3D
+		// exporter. It renders the fixture (not yet the document) straight to the
+		// picked path and returns measured stats; the format/quality/codec options
+		// above don't feed the POC pipeline yet. Flag-gated so the web exporter is
+		// the default path and untouched when the flag is off.
+		if (NATIVE_COMPOSITOR_ENABLED) {
+			setPhase("rendering");
+			try {
+				const stats = await exportNative(pickedPath);
+				setSavedPath(pickedPath);
+				setPhase("done");
+				toast.success(t("exportDialog.exportedVideo"), {
+					description: `${pickedPath} · ${stats.fps.toFixed(1)} fps · ${stats.frames} frames · ${stats.wallS.toFixed(2)}s`,
+					action: {
+						label: t("exportDialog.showInFolder"),
+						onClick: () => {
+							void window.electronAPI?.revealInFolder?.(pickedPath);
+						},
+					},
+				});
+			} catch (err) {
+				setError(err instanceof Error ? err.message : String(err));
+				setPhase("error");
+				toast.error(t("exportDialog.exportFailed"), {
+					description: err instanceof Error ? err.message : String(err),
+				});
+			}
 			return;
 		}
 

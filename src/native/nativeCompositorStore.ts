@@ -4,7 +4,11 @@
  * pousser un paramètre via `setNativeParam` sans connaître l'overlay. No-op tant qu'aucune
  * vue n'est active (flag `VITE_NATIVE_COMPOSITOR` off ou addon absent).
  */
-import { setCompositorParam } from "./compositorViewClient";
+import {
+	setCompositorParam,
+	setCompositorPlaying,
+	setCompositorTime,
+} from "./compositorViewClient";
 import type { CompositorParamValue } from "./contracts";
 
 let currentViewId: number | null = null;
@@ -49,6 +53,27 @@ export function setNativeParam(key: string, value: CompositorParamValue): void {
 	}
 	setCompositorParam(currentViewId, key, value).catch((error: unknown) => {
 		console.warn(`[compositor-view] setNativeParam(${key}) failed:`, error);
+	});
+}
+
+/** Seek la vue native active au temps `seconds` (playhead de l'app). No-op si aucune vue.
+ *  Transitoire (position de lecture) → non mémorisé/rejoué, contrairement à setNativeParam. */
+export function setNativeTime(seconds: number): void {
+	if (currentViewId === null) {
+		return;
+	}
+	setCompositorTime(currentViewId, seconds).catch((error: unknown) => {
+		console.warn("[compositor-view] setNativeTime failed:", error);
+	});
+}
+
+/** Play/pause de la vue native active (lecture libre côté natif). No-op si aucune vue. */
+export function setNativePlaying(playing: boolean): void {
+	if (currentViewId === null) {
+		return;
+	}
+	setCompositorPlaying(currentViewId, playing).catch((error: unknown) => {
+		console.warn("[compositor-view] setNativePlaying failed:", error);
 	});
 }
 
