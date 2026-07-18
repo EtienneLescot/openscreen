@@ -90,6 +90,29 @@ export interface ProjectFileResult {
 	error?: string;
 }
 
+// ---- Compositor view domain (Option A embed) -----------------------------
+// Drives a native D3D11 compositor preview window embedded in the main app
+// window. The Rust napi-rs addon (`compositor_view.node`) lives at
+// `electron/native/compositor-view/` and is built OUT OF SCOPE for the TS
+// layer; the service falls back to a safe no-op when the addon is absent so
+// the renderer keeps running. Defined here (not in the addon .d.ts) so the
+// renderer, the IPC contract, and the main-side service all import from a
+// single TS source — never from the native `.d.ts`.
+
+export interface CompositorViewRect {
+	/** Device pixels, relative to the parent window's client area. */
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
+export type CompositorParamValue = boolean | number | string;
+
+export interface CompositorViewResult {
+	id: number;
+}
+
 // ---- AI Edition domain (Phase 1+) -----------------------------------------
 // v3/v4 AxcutDocument projects live under userData/projects/<id>.openscreen
 // (older builds used <id>.axcut, migrated on access). Project ids are
@@ -178,7 +201,7 @@ export interface AiEditionChatMessage {
 	createdAt: string;
 	toolCalls?: AiEditionToolCallSummary[];
 	/**
-	 * ponytail: id of the rewind-able document snapshot taken right before
+	 * id of the rewind-able document snapshot taken right before
 	 * the user message triggered its chat turn. Non-null = the per-message
 	 * ↩ button is shown. Matches axcut's Message.checkpointId.
 	 */
@@ -228,7 +251,7 @@ export interface AiEditionChatBudget {
 	fillPercent: number;
 }
 
-// ponytail: re-export of the timeline-operation discriminated union so the
+// re-export of the timeline-operation discriminated union so the
 // IPC contract type and the renderer share one shape. Kept here (not in
 // src/lib/ai-edition/document/operations) so the IPC type bundle stays
 // self-contained.
@@ -586,6 +609,36 @@ export type NativeBridgeRequest =
 				conversationMessage: string;
 			};
 			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "createView";
+			payload: { rect: CompositorViewRect };
+			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "setRect";
+			payload: { id: number; rect: CompositorViewRect };
+			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "setParam";
+			payload: { id: number; key: string; value: CompositorParamValue };
+			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "setPlaying";
+			payload: { id: number; playing: boolean };
+			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "destroyView";
+			payload: { id: number };
+			requestId?: string;
 	  };
 
 export type NativeBridgeEventName =
@@ -594,7 +647,7 @@ export type NativeBridgeEventName =
 	| "cursor.telemetryLoaded"
 	| "ai-edition.chat-event";
 
-// ponytail: streamed chat-progress event broadcast by runChat so the renderer
+// streamed chat-progress event broadcast by runChat so the renderer
 // can render text deltas + tool ops live instead of waiting for the final RPC
 // return. Empty `assistant` slot + `kind: "error"` means the upstream
 // provider failed and the toast was a side-channel; the renderer shows it
