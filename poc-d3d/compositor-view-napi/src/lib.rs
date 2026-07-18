@@ -4,8 +4,13 @@
 //! fenêtre enfant est créée sur ce thread ; le rendu vit sur le thread de `LiveView`.
 
 use napi::bindgen_prelude::*;
+use napi::{Env, Task};
 use napi_derive::napi;
+use poc_d3d::compositor::Compositor;
+use poc_d3d::cursor::CursorTrack;
+use poc_d3d::d3d::Gpu;
 use poc_d3d::live::LiveView;
+use poc_d3d::{config, pipeline};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 use windows::Win32::Foundation::HWND;
@@ -96,4 +101,73 @@ pub fn destroy_view(id: i32) {
     // remove hors du lock : le Drop (join du thread de rendu + DestroyWindow) ne le tient pas.
     let removed = registry().lock().unwrap().remove(&id);
     drop(removed);
+}
+
+/// Bilan d'un export natif (mesure §10 : une lecture d'horloge avant/après tout le run).
+#[napi(object)]
+pub struct ExportStats {
+    pub frames: u32,
+    pub wall_s: f64,
+    pub fps: f64,
+}
+
+/// Export mesuré, exécuté sur un thread worker libuv (l'UI n'est pas bloquée ; la mesure
+/// reste enveloppante dans `run_composited`). Config = C8 (tous effets), pour comparer
+/// directement au bench headless. Le device/compositeur/encodeur vivent sur ce thread.
+pub struct ExportTask {
+    out_path: String,
+}
+
+/// Active/désactive la composition de toutes les previews vivantes (même process).
+/// Désactivées, leurs threads de rendu cessent de composer/présenter → GPU libéré.
+fn set_all_previews_playing(playing: bool) {
+    if let Ok(reg) = registry().lock() {
+        for v in reg.values() {
+            v.set_playing(playing);
+        }
+    }
+}
+
+impl Task for ExportTask {
+    type Output = (u32, f64, f64);
+    type JsValue = ExportStats;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        // Désactive les previews pendant le rendu pour libérer le moteur 3D du GPU
+        // (mesuré : preview active ~72 fps → preview off ~125 fps). Réactivées ensuite,
+        // même en cas d'erreur.
+        set_all_previews_playing(false);
+        let result = (|| {
+            let dir = fixture_dir();
+            let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
+            let mut comp = Compositor::new(&gpu).map_err(|e| Error::from_reason(format!("{e:#}")))?;
+            if let Ok(t) = CursorTrack::load(&format!("{dir}/screen.cursor.json"), 100_000.0, 6.0) {
+                comp.set_cursor(t);
+            }
+            let cfg = config::all().pop().expect("au moins une config"); // C8
+            let s = pipeline::run_composited(
+                &format!("{dir}/screen.mp4"),
+                &format!("{dir}/webcam.mp4"),
+                &self.out_path,
+                &gpu,
+                &comp,
+                &cfg,
+                &mut |_| {},
+            )
+            .map_err(|e| Error::from_reason(format!("{e:#}")))?;
+            Ok((s.frames as u32, s.wall_s, s.fps))
+        })();
+        set_all_previews_playing(true);
+        result
+    }
+
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
+        Ok(ExportStats { frames: out.0, wall_s: out.1, fps: out.2 })
+    }
+}
+
+/// Lance un export natif (fixture → MP4, C8) et résout `Promise<ExportStats>`.
+#[napi]
+pub fn export(out_path: String) -> AsyncTask<ExportTask> {
+    AsyncTask::new(ExportTask { out_path })
 }
