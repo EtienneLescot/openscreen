@@ -47,6 +47,9 @@ export interface CompositorViewAddon {
 	setPlaying(id: number, playing: boolean): void;
 	/** Seeks the view to `seconds` (app playhead-driven). */
 	presentTime(id: number, seconds: number): void;
+	/** Installs the app scene (JSON `SceneDescription`) — layout preset etc. drive the render
+	 *  instead of the fixture. Invalid JSON is ignored native-side. */
+	setScene(id: number, sceneJson: string): void;
 	destroyView(id: number): void;
 	/** Renders the fixture to `outPath` (C8), auto-pausing live previews. */
 	export(outPath: string): Promise<ExportStats>;

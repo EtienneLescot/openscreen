@@ -3,6 +3,7 @@
 
 use crate::config::Cfg;
 use crate::cursor::CursorTrack;
+use crate::scene::Scene;
 use crate::d3d::Gpu;
 use crate::ffi::AVFrame;
 use anyhow::{bail, Result};
@@ -112,6 +113,9 @@ pub struct Compositor {
     // donc après warmup plus aucune création de SRV par frame (overhead CPU supprimé).
     srv_cache: RefCell<HashMap<(usize, u32), (ID3D11ShaderResourceView, ID3D11ShaderResourceView)>>,
     live_params: RefCell<LiveParams>,
+    /// Scène pilotée par l'app (contrat) : quand présente, remplace le layout fixture de
+    /// `timeline()`. Voir `scene.rs` / `SceneDescription` (TS).
+    scene: RefCell<Option<Scene>>,
 }
 
 pub const HALF_W: u32 = OUT_W / 2;
@@ -143,6 +147,7 @@ struct Placement {
 }
 
 /// Paramètres d'une frame : dérivés du temps par la timeline (§8).
+#[derive(Clone, Copy)]
 struct FrameParams {
     zoom: f32,
     focus: [f32; 2],
@@ -210,6 +215,65 @@ fn timeline(frame: f32, cfg: &Cfg) -> FrameParams {
         screen: Placement { dst: lerp4(a_screen.dst, b_screen.dst, lf), radius: lerp(a_screen.radius, b_screen.radius, lf) },
         webcam: Placement { dst: lerp4(a_webcam.dst, b_webcam.dst, lf), radius: lerp(a_webcam.radius, b_webcam.radius, lf) },
     }
+}
+
+/// Placements statiques screen+webcam pour un preset de layout de l'app (contrat de scène) —
+/// remplace le planning A↔B fixture de `timeline()`. Zoom = 1 (les zoom regions viennent ensuite).
+/// La taille/forme/miroir webcam restent appliqués par-dessus via `LiveParams`.
+fn preset_placements(preset: &str) -> FrameParams {
+    let full_screen = Placement { dst: [0.05, 0.05, 0.90, 0.90], radius: 24.0 };
+    // PiP bas-droite (≈ layout A fixture).
+    let a_side = 320.0_f32;
+    let pip_webcam = Placement {
+        dst: [
+            (OUT_W as f32 - 40.0 - a_side) / OUT_W as f32,
+            (OUT_H as f32 - 40.0 - a_side) / OUT_H as f32,
+            a_side / OUT_W as f32,
+            a_side / OUT_H as f32,
+        ],
+        radius: 40.0,
+    };
+    // webcam hors écran (no-webcam) : quad de taille nulle, jamais visible.
+    let off_webcam = Placement { dst: [2.0, 2.0, 0.0, 0.0], radius: 0.0 };
+
+    let (screen, webcam) = match preset {
+        "dual-frame" => {
+            // côte à côte : screen 16:9 à gauche, webcam carré à droite (≈ layout B fixture).
+            let b_side = 520.0_f32;
+            (
+                Placement { dst: [0.035, 0.22, 0.60, 0.5625], radius: 20.0 },
+                Placement {
+                    dst: [
+                        0.70,
+                        (OUT_H as f32 - b_side) * 0.5 / OUT_H as f32,
+                        b_side / OUT_W as f32,
+                        b_side / OUT_H as f32,
+                    ],
+                    radius: 40.0,
+                },
+            )
+        }
+        "vertical-stack" => {
+            // haut/bas : screen en haut, webcam carré centré en bas.
+            let w_side = 360.0_f32;
+            (
+                Placement { dst: [0.13, 0.04, 0.74, 0.52], radius: 20.0 },
+                Placement {
+                    dst: [
+                        0.5 - (w_side * 0.5) / OUT_W as f32,
+                        0.60,
+                        w_side / OUT_W as f32,
+                        w_side / OUT_H as f32,
+                    ],
+                    radius: 40.0,
+                },
+            )
+        }
+        "no-webcam" => (full_screen, off_webcam),
+        _ => (full_screen, pip_webcam), // "picture-in-picture" (défaut)
+    };
+
+    FrameParams { zoom: 1.0, focus: [0.5, 0.5], screen, webcam }
 }
 
 unsafe fn compile(src: &[u8], entry: &[u8], target: &[u8]) -> Result<ID3DBlob> {
@@ -518,12 +582,19 @@ impl Compositor {
             cursor: None,
             srv_cache: RefCell::new(HashMap::new()),
             live_params: RefCell::new(LiveParams::default()),
+            scene: RefCell::new(None),
         })
     }
 
     /// Met à jour les paramètres continus pilotés par l'inspector (thread live uniquement).
     pub fn set_live_params(&self, p: LiveParams) {
         *self.live_params.borrow_mut() = p;
+    }
+
+    /// Installe (ou retire) la scène de l'app. Présente → `compose_frame` prend ses placements
+    /// depuis le layout preset au lieu du planning fixture.
+    pub fn set_scene(&self, s: Option<Scene>) {
+        *self.scene.borrow_mut() = s;
     }
 
     /// Crée les SRV Y (R8) et UV (R8G8) sur la tranche d'array de la frame décodeur.
@@ -736,8 +807,15 @@ impl Compositor {
         let u_max = scw / stw as f32;
         let v_max = sch / sth as f32;
 
-        let p = timeline(frame, cfg);
-        let pp = timeline(frame - 1.0, cfg); // frame précédente, pour la vélocité (§8)
+        // Scène de l'app (contrat) présente → placements pilotés par le layout preset ; sinon
+        // planning fixture (harnais/bench). Layout statique → pas d'animation → vélocité nulle.
+        let (p, pp) = match self.scene.borrow().as_ref() {
+            Some(s) => {
+                let fp = preset_placements(&s.layout.preset);
+                (fp, fp)
+            }
+            None => (timeline(frame, cfg), timeline(frame - 1.0, cfg)),
+        };
         let lp = *self.live_params.borrow();
         let mb_taps = cfg.mblur_n as f32;
 
