@@ -414,6 +414,12 @@ unsafe fn render_thread(
 
     // config de base = C8 (tous effets) ; le fond flouté est piloté par le param live.
     let mut cfg = config::all().pop().expect("au moins une config");
+    // Migration D3D : le layout et le zoom viennent de l'app (contrat de scène), pas du planning
+    // fixture. On désactive l'animation de layout A↔B et le zoom codés en dur de `timeline()` —
+    // sinon la preview d'un vrai enregistrement joue la « scène fixture » (le bug d'animation vu).
+    // Layout statique (PiP) par défaut ; les zoom regions / presets seront rebranchés via la scène.
+    cfg.zoom = false;
+    cfg.layout_anim = false;
 
     let (mut w, mut h) = {
         let r = *shared.rect.lock().unwrap();
