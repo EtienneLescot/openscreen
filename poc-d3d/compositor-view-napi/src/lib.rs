@@ -122,6 +122,15 @@ pub fn present_time(id: i32, seconds: f64) {
     }
 }
 
+/// Installe la scène de l'app (JSON `SceneDescription`) sur la vue : layout preset piloté par
+/// l'app au lieu de la fixture. JSON invalide → ignoré côté natif.
+#[napi]
+pub fn set_scene(id: i32, scene_json: String) {
+    if let Some(v) = registry().lock().unwrap().get(&id) {
+        v.set_scene(&scene_json);
+    }
+}
+
 #[napi]
 pub fn destroy_view(id: i32) {
     // remove hors du lock : le Drop (join du thread de rendu + DestroyWindow) ne le tient pas.

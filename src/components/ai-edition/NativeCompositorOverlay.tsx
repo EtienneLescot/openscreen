@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
-import { setCurrentNativeViewId, useNativeCompositorView } from "@/native";
+import { setCurrentNativeViewId, setNativeScene, useNativeCompositorView } from "@/native";
+import { buildSceneDescription } from "@/native/sceneDescription";
 
 /**
  * POC Option A — monte une fenêtre D3D11 native (compositeur poc-d3d, via
@@ -53,6 +54,20 @@ export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 		setCurrentNativeViewId(viewId);
 		return () => setCurrentNativeViewId(null);
 	}, [viewId]);
+
+	// Pousse la scène (document → SceneDescription → JSON) au natif quand le document change ou
+	// la vue s'active : le layout preset et cie pilotent le rendu (remplace le layout fixture).
+	// Effet APRÈS celui du viewId ci-dessus → currentViewId est déjà publié quand on pousse.
+	useEffect(() => {
+		if (viewId === null || !document) {
+			return;
+		}
+		try {
+			setNativeScene(JSON.stringify(buildSceneDescription(document)));
+		} catch (error) {
+			console.warn("[compositor-view] build/push scene failed:", error);
+		}
+	}, [viewId, document]);
 
 	if (!enabled) {
 		return null;

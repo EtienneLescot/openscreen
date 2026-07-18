@@ -7,6 +7,7 @@
 import {
 	setCompositorParam,
 	setCompositorPlaying,
+	setCompositorScene,
 	setCompositorTime,
 } from "./compositorViewClient";
 import type { CompositorParamValue } from "./contracts";
@@ -64,6 +65,17 @@ export function setNativeTime(seconds: number): void {
 	}
 	setCompositorTime(currentViewId, seconds).catch((error: unknown) => {
 		console.warn("[compositor-view] setNativeTime failed:", error);
+	});
+}
+
+/** Pousse la scène de l'app (JSON `SceneDescription`) à la vue native active — layout preset
+ *  etc. pilotent le rendu au lieu de la fixture. No-op si aucune vue. */
+export function setNativeScene(sceneJson: string): void {
+	if (currentViewId === null) {
+		return;
+	}
+	setCompositorScene(currentViewId, sceneJson).catch((error: unknown) => {
+		console.warn("[compositor-view] setNativeScene failed:", error);
 	});
 }
 

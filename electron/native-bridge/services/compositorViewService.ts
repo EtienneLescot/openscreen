@@ -216,6 +216,14 @@ export class CompositorViewService {
 		addon.presentTime(id, seconds);
 	}
 
+	setScene(id: number, sceneJson: string): void {
+		const addon = this.ensureAddon();
+		if (!addon) {
+			return;
+		}
+		addon.setScene(id, sceneJson);
+	}
+
 	destroyView(id: number): void {
 		const addon = this.ensureAddon();
 		this.rects.delete(id);

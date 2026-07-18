@@ -62,6 +62,14 @@ export function setCompositorTime(id: number, seconds: number): Promise<{ ok: tr
 	});
 }
 
+export function setCompositorScene(id: number, sceneJson: string): Promise<{ ok: true }> {
+	return requireNativeBridgeData<{ ok: true }>({
+		domain: "compositor",
+		action: "setScene",
+		payload: { id, sceneJson },
+	});
+}
+
 export function destroyCompositorView(id: number): Promise<{ ok: true }> {
 	return requireNativeBridgeData<{ ok: true }>({
 		domain: "compositor",

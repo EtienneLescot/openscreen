@@ -681,6 +681,12 @@ export type NativeBridgeRequest =
 			action: "presentTime";
 			payload: { id: number; seconds: number };
 			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "setScene";
+			payload: { id: number; sceneJson: string };
+			requestId?: string;
 	  };
 
 export type NativeBridgeEventName =
