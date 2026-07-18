@@ -42,14 +42,30 @@ pub struct LayerCB {
 /// portés par le `Cfg` que le thread live reconstruit depuis les switches.
 #[derive(Clone, Copy)]
 pub struct LiveParams {
-    pub bg_color: [f32; 4], // fond plat (mode couleur) quand non flouté
-    pub shadow_scale: f32,  // multiplie l'opacité des ombres (1 = défaut, 0 = off)
-    pub radius_scale: f32,  // multiplie le rayon des coins (1 = défaut, 0 = carré)
+    pub bg_color: [f32; 4],       // fond plat (mode couleur) quand non flouté
+    pub shadow_scale: f32,        // multiplie l'opacité des ombres (1 = défaut, 0 = off)
+    pub radius_scale: f32,        // multiplie le rayon des coins (1 = défaut, 0 = carré)
+    pub padding: f32,             // 0..1 : inset supplémentaire du screen (0 = défaut fixture)
+    pub webcam_size_scale: f32,   // multiplie la taille de la webcam (1 = défaut)
+    pub webcam_mirror: bool,      // miroir horizontal de la webcam
+    pub webcam_shape: u32,        // 0=rect, 1=circle, 2=square, 3=rounded (défaut)
+    pub cursor_size_scale: f32,   // multiplie la taille du curseur (1 = défaut)
+    pub cursor_bounce_scale: f32, // multiplie l'amplitude du click-bounce (1 = défaut, 0 = off)
 }
 
 impl Default for LiveParams {
     fn default() -> Self {
-        Self { bg_color: [0.10, 0.11, 0.14, 1.0], shadow_scale: 1.0, radius_scale: 1.0 }
+        Self {
+            bg_color: [0.10, 0.11, 0.14, 1.0],
+            shadow_scale: 1.0,
+            radius_scale: 1.0,
+            padding: 0.0,
+            webcam_size_scale: 1.0,
+            webcam_mirror: false,
+            webcam_shape: 3,
+            cursor_size_scale: 1.0,
+            cursor_bounce_scale: 1.0,
+        }
     }
 }
 
@@ -724,8 +740,30 @@ impl Compositor {
         let pp = timeline(frame - 1.0, cfg); // frame précédente, pour la vélocité (§8)
         let lp = *self.live_params.borrow();
         let mb_taps = cfg.mblur_n as f32;
+
+        // Scale un rect dst normalisé autour de son centre — sert padding (screen) et
+        // taille (webcam). Appliqué aussi à la frame précédente → vecteurs de motion blur
+        // cohérents. Défauts (padding 0, size 1) reproduisent la fixture au pixel près.
+        let scale_about = |dst: [f32; 4], s: f32| -> [f32; 4] {
+            let cx = dst[0] + dst[2] * 0.5;
+            let cy = dst[1] + dst[3] * 0.5;
+            [cx - dst[2] * s * 0.5, cy - dst[3] * s * 0.5, dst[2] * s, dst[3] * s]
+        };
+        let pad_s = (1.0 - lp.padding).max(0.05);
+        let s_dst = scale_about(p.screen.dst, pad_s);
+        let s_dst_prev = scale_about(pp.screen.dst, pad_s);
+        let w_dst = scale_about(p.webcam.dst, lp.webcam_size_scale);
+        let w_dst_prev = scale_about(pp.webcam.dst, lp.webcam_size_scale);
+
         let s_radius = if cfg.rounded { p.screen.radius * lp.radius_scale } else { 0.0 };
-        let w_radius = if cfg.rounded { p.webcam.radius * lp.radius_scale } else { 0.0 };
+        let w_px = [w_dst[2] * OUT_W as f32, w_dst[3] * OUT_H as f32];
+        // forme webcam : rayon SDF dérivé de la forme choisie (le rond = rayon = demi-côté).
+        let w_radius = match lp.webcam_shape {
+            1 => w_px[0].min(w_px[1]) * 0.5,                                  // circle
+            0 | 2 => 0.0,                                                     // rectangle / square
+            _ if cfg.rounded => p.webcam.radius * lp.radius_scale,           // rounded (défaut)
+            _ => 0.0,
+        };
 
         self.begin([0.0, 0.0, 0.0, 1.0]);
 
@@ -773,20 +811,20 @@ impl Compositor {
         let hv_p = v_max / (2.0 * pp.zoom);
         let su0_p = (cx - hu_p).clamp(0.0, u_max - 2.0 * hu_p);
         let sv0_p = (cy - hv_p).clamp(0.0, v_max - 2.0 * hv_p);
-        let s_px = [p.screen.dst[2] * OUT_W as f32, p.screen.dst[3] * OUT_H as f32];
+        let s_px = [s_dst[2] * OUT_W as f32, s_dst[3] * OUT_H as f32];
         if cfg.shadow {
-            self.draw_shadow(p.screen.dst, s_px, s_radius, 40.0, [0.0, 16.0], 0.45 * lp.shadow_scale);
+            self.draw_shadow(s_dst, s_px, s_radius, 40.0, [0.0, 16.0], 0.45 * lp.shadow_scale);
         }
         self.draw_video(
             &LayerCB {
-                dst: p.screen.dst,
+                dst: s_dst,
                 src: [su0, sv0, su0 + 2.0 * hu, sv0 + 2.0 * hv],
                 quad_px: s_px,
                 radius_px: s_radius,
                 mode: 0.0,
                 color: [0.0, 0.0, 0.0, 1.0],
                 src_prev: [su0_p, sv0_p, su0_p + 2.0 * hu_p, sv0_p + 2.0 * hv_p],
-                dst_prev: pp.screen.dst,
+                dst_prev: s_dst_prev,
                 mb: [mb_taps, 0.0, 0.0, 0.0],
                 ..Default::default()
             },
@@ -811,14 +849,16 @@ impl Compositor {
                         }
                     })
                 };
-                if let Some(cur) = map(track.at(t), [su0, sv0], [hu, hv], p.screen.dst) {
-                    let sz = 34.0 * track.bounce(t);
+                if let Some(cur) = map(track.at(t), [su0, sv0], [hu, hv], s_dst) {
+                    // taille + amplitude du bounce pilotées par l'inspector (défauts = fixture).
+                    let bounce = 1.0 + (track.bounce(t) - 1.0) * lp.cursor_bounce_scale;
+                    let sz = 34.0 * lp.cursor_size_scale * bounce;
                     let taps = cfg.mblur_n;
                     if taps <= 1 {
                         self.draw_cursor(cur, sz, 1.0);
                     } else {
                         let tp = (frame - 1.0) / FPS;
-                        let prev = map(track.at(tp), [su0_p, sv0_p], [hu_p, hv_p], pp.screen.dst)
+                        let prev = map(track.at(tp), [su0_p, sv0_p], [hu_p, hv_p], s_dst_prev)
                             .unwrap_or(cur);
                         for k in 0..taps {
                             let f = k as f32 / (taps - 1) as f32;
@@ -831,24 +871,26 @@ impl Compositor {
             }
         }
 
-        // --- webcam : center-crop carré ---
+        // --- webcam : center-crop carré (miroir horizontal optionnel) ---
         let sq = wch;
-        let u0 = (wcw - sq) * 0.5 / wtw as f32;
-        let u1 = u0 + sq / wtw as f32;
-        let w_px = [p.webcam.dst[2] * OUT_W as f32, p.webcam.dst[3] * OUT_H as f32];
+        let cu0 = (wcw - sq) * 0.5 / wtw as f32;
+        let cu1 = cu0 + sq / wtw as f32;
+        // miroir = échanger les bornes u du rect source (flip horizontal).
+        let (u0, u1) = if lp.webcam_mirror { (cu1, cu0) } else { (cu0, cu1) };
+        let wv = wch / wth as f32;
         if cfg.shadow {
-            self.draw_shadow(p.webcam.dst, w_px, w_radius, 32.0, [0.0, 12.0], 0.5 * lp.shadow_scale);
+            self.draw_shadow(w_dst, w_px, w_radius, 32.0, [0.0, 12.0], 0.5 * lp.shadow_scale);
         }
         self.draw_video(
             &LayerCB {
-                dst: p.webcam.dst,
-                src: [u0, 0.0, u1, wch / wth as f32],
+                dst: w_dst,
+                src: [u0, 0.0, u1, wv],
                 quad_px: w_px,
                 radius_px: w_radius,
                 mode: 0.0,
                 color: [0.0, 0.0, 0.0, 1.0],
-                src_prev: [u0, 0.0, u1, wch / wth as f32], // src fixe (pas de zoom webcam)
-                dst_prev: pp.webcam.dst,
+                src_prev: [u0, 0.0, u1, wv], // src fixe (pas de zoom webcam)
+                dst_prev: w_dst_prev,
                 mb: [mb_taps, 0.0, 0.0, 0.0],
                 ..Default::default()
             },

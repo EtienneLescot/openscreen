@@ -138,13 +138,20 @@ impl Player {
 
 /// Paramètres inspector pilotés depuis l'UI (setParam). Le thread de rendu les applique :
 /// booléens/taps → reconstruits dans le `Cfg` ; valeurs continues → `set_live_params`.
-#[derive(Clone, Copy)]
+#[derive(Clone, Copy, PartialEq)]
 struct InspectorParams {
     bg_blur: bool,
     bg_color: [f32; 4],
     shadow_scale: f32,
     radius_scale: f32,
     mblur_taps: u32,
+    padding: f32,
+    webcam_size_scale: f32,
+    webcam_mirror: bool,
+    webcam_shape: u32,
+    cursor_show: bool,
+    cursor_size_scale: f32,
+    cursor_bounce_scale: f32,
 }
 
 impl Default for InspectorParams {
@@ -155,6 +162,13 @@ impl Default for InspectorParams {
             shadow_scale: 1.0,
             radius_scale: 1.0,
             mblur_taps: 8,
+            padding: 0.0,
+            webcam_size_scale: 1.0,
+            webcam_mirror: false,
+            webcam_shape: 3,
+            cursor_show: true,
+            cursor_size_scale: 1.0,
+            cursor_bounce_scale: 1.0,
         }
     }
 }
@@ -251,13 +265,17 @@ impl LiveView {
     /// Switch inspector (booléen).
     pub fn set_param_bool(&self, key: &str, value: bool) {
         if let Ok(mut p) = self.shared.inspector.lock() {
-            if key == "backgroundBlur" {
-                p.bg_blur = value;
+            match key {
+                "backgroundBlur" => p.bg_blur = value,
+                "webcamMirror" => p.webcam_mirror = value,
+                "cursorShow" => p.cursor_show = value,
+                _ => {}
             }
         }
     }
 
-    /// Slider inspector (numérique). Conventions : `shadow`/`roundness` = échelle (1 = défaut),
+    /// Slider inspector (numérique). Conventions : `shadow`/`roundness`/`webcamSize`/
+    /// `cursorSize`/`cursorClickBounce` = échelle (1 = défaut) ; `padding` = 0..1 ;
     /// `motionBlur` = 0..1 mappé sur 1..16 taps.
     pub fn set_param_num(&self, key: &str, value: f64) {
         if let Ok(mut p) = self.shared.inspector.lock() {
@@ -266,18 +284,33 @@ impl LiveView {
                 "shadow" => p.shadow_scale = v.max(0.0),
                 "roundness" => p.radius_scale = v.max(0.0),
                 "motionBlur" => p.mblur_taps = (1.0 + value.clamp(0.0, 1.0) * 15.0).round() as u32,
+                "padding" => p.padding = v.clamp(0.0, 1.0),
+                "webcamSize" => p.webcam_size_scale = v.max(0.05),
+                "cursorSize" => p.cursor_size_scale = v.max(0.0),
+                "cursorClickBounce" => p.cursor_bounce_scale = v.max(0.0),
                 _ => {}
             }
         }
     }
 
-    /// Sélection de fond (couleur "#rrggbb").
+    /// Sélection de chaîne : couleur de fond "#rrggbb" ou forme webcam.
     pub fn set_param_str(&self, key: &str, value: &str) {
-        if key == "backgroundColor" {
-            if let Some(c) = parse_hex_color(value) {
-                if let Ok(mut p) = self.shared.inspector.lock() {
-                    p.bg_color = c;
+        if let Ok(mut p) = self.shared.inspector.lock() {
+            match key {
+                "backgroundColor" => {
+                    if let Some(c) = parse_hex_color(value) {
+                        p.bg_color = c;
+                    }
                 }
+                "webcamShape" => {
+                    p.webcam_shape = match value {
+                        "rectangle" => 0,
+                        "circle" => 1,
+                        "square" => 2,
+                        _ => 3, // rounded (défaut)
+                    };
+                }
+                _ => {}
             }
         }
     }
@@ -392,19 +425,29 @@ unsafe fn render_thread(
     let mut acc = 0.0f64;
     let mut first = true;
     let mut last_screen = [i32::MIN; 4];
+    let mut last_ip: Option<InspectorParams> = None;
 
     while !shared.stop.load(Ordering::SeqCst) {
         // params inspector : booléens/taps → cfg ; valeurs continues → live_params
-        {
-            let ip = *shared.inspector.lock().unwrap();
-            cfg.bg_blur = ip.bg_blur;
-            cfg.mblur_n = ip.mblur_taps;
-            comp.set_live_params(LiveParams {
-                bg_color: ip.bg_color,
-                shadow_scale: ip.shadow_scale,
-                radius_scale: ip.radius_scale,
-            });
-        }
+        let ip = *shared.inspector.lock().unwrap();
+        cfg.bg_blur = ip.bg_blur;
+        cfg.mblur_n = ip.mblur_taps;
+        cfg.cursor = ip.cursor_show;
+        comp.set_live_params(LiveParams {
+            bg_color: ip.bg_color,
+            shadow_scale: ip.shadow_scale,
+            radius_scale: ip.radius_scale,
+            padding: ip.padding,
+            webcam_size_scale: ip.webcam_size_scale,
+            webcam_mirror: ip.webcam_mirror,
+            webcam_shape: ip.webcam_shape,
+            cursor_size_scale: ip.cursor_size_scale,
+            cursor_bounce_scale: ip.cursor_bounce_scale,
+        });
+        // un changement de param doit se voir même en pause (édition live des sliders) :
+        // on recompose la frame courante dans la branche pause ci-dessous.
+        let ip_changed = last_ip != Some(ip);
+        last_ip = Some(ip);
 
         // rect viewport → coords écran : suit le rect DOM (set_rect) ET le déplacement du parent
         let [vx, vy, vw, vh] = *shared.rect.lock().unwrap();
@@ -461,8 +504,8 @@ unsafe fn render_thread(
             if acc > step {
                 acc = 0.0;
             }
-        } else if resized || first {
-            // pause : recompose la frame courante pour un present à la nouvelle taille
+        } else if resized || first || ip_changed {
+            // pause : recompose la frame courante (nouvelle taille OU édition live d'un param).
             let _ = player.recompose(&comp, &cfg);
             stepped = true;
         }

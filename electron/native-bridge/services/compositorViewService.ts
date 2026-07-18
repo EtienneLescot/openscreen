@@ -155,7 +155,11 @@ export class CompositorViewService {
 		return this.ensureAddon() !== null;
 	}
 
-	createView(parentHandle: Buffer, rect: CompositorViewRect): number {
+	createView(
+		parentHandle: Buffer,
+		rect: CompositorViewRect,
+		paths?: { screenPath?: string; webcamPath?: string; cursorPath?: string },
+	): number {
 		const addon = this.ensureAddon();
 		if (!addon) {
 			// synthetic negative ids let callers do bookkeeping
@@ -167,7 +171,13 @@ export class CompositorViewService {
 			this.rects.set(id, rect);
 			return id;
 		}
-		const id = addon.createView(parentHandle, rect);
+		const id = addon.createView(
+			parentHandle,
+			rect,
+			paths?.screenPath,
+			paths?.webcamPath,
+			paths?.cursorPath,
+		);
 		this.rects.set(id, rect);
 		return id;
 	}

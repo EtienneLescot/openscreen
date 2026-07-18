@@ -27,6 +27,11 @@ export interface UseNativeCompositorViewOptions {
 	/** When false, the hook does nothing on mount and destroys nothing on
 	 * unmount. Defaults to true. */
 	enabled?: boolean;
+	/** F3: real recording sources (screen + webcam H264 files + cursor telemetry).
+	 * Omitted → the native side falls back to the POC fixture. Read once at view
+	 * creation, so resolve them before enabling the hook to avoid a fixture→real
+	 * re-create. */
+	sources?: { screenPath?: string; webcamPath?: string; cursorPath?: string };
 }
 
 export interface UseNativeCompositorViewResult {
@@ -107,7 +112,7 @@ export function useNativeCompositorView(
 		const initialRect = computeDeviceRect(el.getBoundingClientRect(), window.devicePixelRatio);
 		lastRect = initialRect;
 		safelyCall("createView", async () => {
-			const result = await createCompositorView(initialRect);
+			const result = await createCompositorView(initialRect, opts.sources);
 			if (disposed) {
 				// The element unmounted before the response came back; clean up.
 				safelyCall("destroyView (late)", () => destroyCompositorView(result.id));
