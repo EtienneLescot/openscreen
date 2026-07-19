@@ -1,5 +1,4 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { fromFileUrl } from "@/components/video-editor/projectPersistence";
 import {
 	type CropRegion,
 	DEFAULT_CROP_REGION,
@@ -19,7 +18,6 @@ import {
 	computeZoomPreviewTransform,
 	IDENTITY_ZOOM_TRANSFORM,
 } from "@/lib/ai-edition/timeline/zoom-preview";
-import { CursorPreviewLayer } from "./CursorPreviewLayer";
 import styles from "./VirtualPreview.module.css";
 
 export interface VideoSource {
@@ -107,7 +105,7 @@ export function VirtualPreview({
 	// matching clip, even while a later one is the one actually playing.
 	const activeClipIdRef = useRef<string | null>(null);
 	const [virtualTimeSec, setVirtualTimeSec] = useState(0);
-	const [isPlaying, setIsPlaying] = useState(false);
+	const [, setIsPlaying] = useState(false);
 	const [loadState, setLoadState] = useState<"idle" | "loading" | "ready" | "error">("idle");
 	const [sourceIndex, setSourceIndex] = useState(0);
 
@@ -472,22 +470,9 @@ export function VirtualPreview({
 							</div>
 						)}
 					</div>
-					{/* ponytail: CursorPreviewLayer must NOT nest inside .videoFrame — that
-					    container has a hardcoded `overflow: hidden` (needed for the oversized/
-					    offset video crop trick, see .videoFrame in the CSS module) which clips
-					    ANY child regardless of that child's own overflow/clip-path. A child's
-					    `overflow: visible` can never escape an ancestor's `overflow: hidden`, so
-					    the "Clip to canvas" toggle's internal CSS override was silently powerless
-					    whenever it lived inside .videoFrame — the cursor was always cut at the
-					    video frame edge no matter the setting. Rendered here as a sibling instead,
-					    positioned absolutely over the same box (.container has no overflow
-					    clipping of its own), so the toggle's own clip-path/overflow logic is the
-					    only thing constraining it. */}
-					<CursorPreviewLayer
-						videoPath={activeSource ? fromFileUrl(activeSource.src) : null}
-						currentTimeSec={sourceTimeSec}
-						isPlaying={isPlaying}
-					/>
+					{/* The native D3D canvas already draws the recorded-cursor sprite as part
+					    of the composited frame (same cursor sidecar file, single source of
+					    truth) — this CPU-rendered duplicate (CursorPreviewLayer) is removed. */}
 				</>
 			) : (
 				<div className={styles.placeholder}>Attach a video to start previewing.</div>

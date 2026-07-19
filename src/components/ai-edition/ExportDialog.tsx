@@ -42,7 +42,6 @@ import {
 } from "@/utils/aspectRatioUtils";
 import { ModalShell } from "./Modals";
 import styles from "./NewEditorShell.module.css";
-import { NATIVE_COMPOSITOR_ENABLED } from "./Preview";
 
 type Phase = "idle" | "configuring" | "rendering" | "writing" | "done" | "error";
 
@@ -314,11 +313,11 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 			return;
 		}
 
-		// Native compositor POC: route the real export modal to the native D3D exporter.
-		// Background/layout/webcam/cursor/effects come from the same scene as the live
-		// preview; size/fps/codec below are now plugged in too. Flag-gated so the web
-		// exporter is the default path and untouched when the flag is off.
-		if (NATIVE_COMPOSITOR_ENABLED) {
+		// MP4: the native D3D exporter is the only path (no CPU/web fallback — that
+		// path silently regressed to an ultra-slow CPU render once, which is exactly
+		// the failure mode a flag-gated fallback invites). Background/layout/webcam/
+		// cursor/effects come from the same scene as the live preview.
+		if (format === "mp4") {
 			setPhase("rendering");
 			try {
 				// Render the real timeline when there are clips; else fall back to the fixture.
@@ -355,6 +354,8 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 			return;
 		}
 
+		// GIF: no native encoder for this format yet, so this is the only
+		// implementation — not a fallback for MP4, a distinct code path.
 		setPhase("rendering");
 		const options: DocumentExportOptions = {
 			format,
@@ -384,18 +385,15 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 			}
 			setSavedPath(pickedPath);
 			setPhase("done");
-			toast.success(
-				format === "gif" ? t("exportDialog.exportedGif") : t("exportDialog.exportedVideo"),
-				{
-					description: pickedPath,
-					action: {
-						label: t("exportDialog.showInFolder"),
-						onClick: () => {
-							void window.electronAPI?.revealInFolder?.(pickedPath);
-						},
+			toast.success(t("exportDialog.exportedGif"), {
+				description: pickedPath,
+				action: {
+					label: t("exportDialog.showInFolder"),
+					onClick: () => {
+						void window.electronAPI?.revealInFolder?.(pickedPath);
 					},
 				},
-			);
+			});
 			// Touch the bridge so it stays referenced even when export
 			// is invoked from a non-Electron shim.
 			void nativeBridgeClient.aiEdition.llmGetSnapshot;
@@ -552,9 +550,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 								<div
 									style={{
 										display: "grid",
-										gridTemplateColumns: NATIVE_COMPOSITOR_ENABLED
-											? "repeat(2, 1fr)"
-											: "repeat(3, 1fr)",
+										gridTemplateColumns: "repeat(2, 1fr)",
 										gap: 6,
 									}}
 								>
@@ -563,10 +559,9 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 											["h264", "H.264"],
 											["h265", "H.265"],
 											// VP9 has no AMF hardware encoder on this GPU — the native pipeline
-											// rejects it outright (tested: a software libvpx-vp9 fallback worked
-											// but was too slow to be worth shipping). Hidden here rather than
-											// left selectable-then-erroring, only while native export is active.
-											...(NATIVE_COMPOSITOR_ENABLED ? [] : [["vp9", "VP9"]]),
+											// (the only MP4 export path now) rejects it outright (tested: a
+											// software libvpx-vp9 fallback worked but was too slow to ship).
+											// Hidden here rather than left selectable-then-erroring.
 										] as Array<[ExportVideoCodec, string]>
 									).map(([value, label]) => (
 										<button

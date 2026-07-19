@@ -2,7 +2,7 @@
  * Petit store global de la vue native active. `NativeCompositorOverlay` crée la vue et
  * enregistre son id ici ; n'importe quel contrôle (inspector, transport…) peut alors
  * pousser un paramètre via `setNativeParam` sans connaître l'overlay. No-op tant qu'aucune
- * vue n'est active (flag `VITE_NATIVE_COMPOSITOR` off ou addon absent).
+ * vue n'est active (pas encore de document/asset chargé, ou addon absent).
  */
 import {
 	setCompositorParam,
