@@ -393,89 +393,102 @@ export function VirtualPreview({
 	return (
 		<div className={styles.container}>
 			{activeSource ? (
-				<div ref={videoFrameRef} className={styles.videoFrame}>
-					<video
-						// Key on the asset id, not the URL: distinct assets that resolve
-						// to the same file URL must still remount the <video> on switch so
-						// onLoadedMetadata refires and the pending cross-asset seek/resume
-						// runs (otherwise playback stalls at the clip boundary).
-						key={activeSource.id}
-						ref={videoRef}
-						src={activeSource.src}
-						className={`${styles.video}${isIdentityCrop ? "" : ` ${styles.videoCropped}`}`}
-						// When a synthetic cursor is being drawn on top (CursorPreviewLayer),
-						// hide the real OS pointer here so it doesn't compete with it.
-						style={{
-							...cropVideoStyle,
-							...videoStyle,
-							cursor: settings.cursorShow ? "none" : undefined,
-						}}
-						preload="metadata"
-						playsInline
-						onLoadedMetadata={(e) => {
-							setLoadState("ready");
-							// ponytail: forward the raw duration (possibly NaN for
-							// MediaRecorder WebMs) to the parent. handleLoadedMetadata
-							// falls back to a 60s seed when it isn't finite so the
-							// timeline gets a populated clip even before the EBML fix
-							// lands. Previously this gate skipped the callback for
-							// non-finite durations and stranded the editor on
-							// "No clips yet" until manual intervention. The assetId is
-							// forwarded so the parent only ever corrects clips that
-							// belong to the asset which actually fired this event —
-							// without it, switching between clips of different assets
-							// during multi-clip playback clobbered clip[0]'s duration
-							// with whichever asset's video happened to load last.
-							onLoadedMetadata?.(
-								e.currentTarget.duration,
-								activeSource.id,
-								e.currentTarget.videoWidth,
-								e.currentTarget.videoHeight,
-							);
-							if (pendingSeekRef.current) {
-								const { sourceTimeSec, play } = pendingSeekRef.current;
-								pendingSeekRef.current = null;
-								e.currentTarget.currentTime = sourceTimeSec;
-								if (play) {
-									void e.currentTarget.play().catch(() => setIsPlaying(false));
+				<>
+					<div ref={videoFrameRef} className={styles.videoFrame}>
+						<video
+							// Key on the asset id, not the URL: distinct assets that resolve
+							// to the same file URL must still remount the <video> on switch so
+							// onLoadedMetadata refires and the pending cross-asset seek/resume
+							// runs (otherwise playback stalls at the clip boundary).
+							key={activeSource.id}
+							ref={videoRef}
+							src={activeSource.src}
+							className={`${styles.video}${isIdentityCrop ? "" : ` ${styles.videoCropped}`}`}
+							// When a synthetic cursor is being drawn on top (CursorPreviewLayer),
+							// hide the real OS pointer here so it doesn't compete with it.
+							style={{
+								...cropVideoStyle,
+								...videoStyle,
+								cursor: settings.cursorShow ? "none" : undefined,
+							}}
+							preload="metadata"
+							playsInline
+							onLoadedMetadata={(e) => {
+								setLoadState("ready");
+								// ponytail: forward the raw duration (possibly NaN for
+								// MediaRecorder WebMs) to the parent. handleLoadedMetadata
+								// falls back to a 60s seed when it isn't finite so the
+								// timeline gets a populated clip even before the EBML fix
+								// lands. Previously this gate skipped the callback for
+								// non-finite durations and stranded the editor on
+								// "No clips yet" until manual intervention. The assetId is
+								// forwarded so the parent only ever corrects clips that
+								// belong to the asset which actually fired this event —
+								// without it, switching between clips of different assets
+								// during multi-clip playback clobbered clip[0]'s duration
+								// with whichever asset's video happened to load last.
+								onLoadedMetadata?.(
+									e.currentTarget.duration,
+									activeSource.id,
+									e.currentTarget.videoWidth,
+									e.currentTarget.videoHeight,
+								);
+								if (pendingSeekRef.current) {
+									const { sourceTimeSec, play } = pendingSeekRef.current;
+									pendingSeekRef.current = null;
+									e.currentTarget.currentTime = sourceTimeSec;
+									if (play) {
+										void e.currentTarget.play().catch(() => setIsPlaying(false));
+									}
+								} else if (clips.length > 0) {
+									seekToVirtualTime(virtualTimeSec);
 								}
-							} else if (clips.length > 0) {
-								seekToVirtualTime(virtualTimeSec);
-							}
-						}}
-						onWaiting={() => setLoadState("loading")}
-						onCanPlay={() => setLoadState("ready")}
-						onError={() => {
-							// ponytail: don't blindly advance to the next source — if
-							// the failed source owns the current virtual clip, the
-							// next sourceIndex will seekToVirtualTime right back into
-							// the same failed asset, looping. Fail the preview.
-							pendingSeekRef.current = null;
-							setLoadState("error");
-							setIsPlaying(false);
-							onVideoError?.();
-						}}
-						onPause={() => setIsPlaying(false)}
-						onPlay={() => setIsPlaying(true)}
-						onEnded={() => setIsPlaying(false)}
-						// ponytail: handleTimeUpdate is now driven by the rAF loop
-						// above (60 Hz) instead of the <video> onTimeUpdate event
-						// (~4 Hz) — the 4 Hz sync was too slow to keep the webcam
-						// <video> and any audio in sync. The rAF tick also
-						// handles clip-end advancement, so dropping the event
-						// handler here is safe.
-					/>
-					{loadState !== "ready" && (
-						<div className={styles.overlay}>
-							{loadState === "error" ? "Video preview could not be loaded." : "Loading preview…"}
-						</div>
-					)}
+							}}
+							onWaiting={() => setLoadState("loading")}
+							onCanPlay={() => setLoadState("ready")}
+							onError={() => {
+								// ponytail: don't blindly advance to the next source — if
+								// the failed source owns the current virtual clip, the
+								// next sourceIndex will seekToVirtualTime right back into
+								// the same failed asset, looping. Fail the preview.
+								pendingSeekRef.current = null;
+								setLoadState("error");
+								setIsPlaying(false);
+								onVideoError?.();
+							}}
+							onPause={() => setIsPlaying(false)}
+							onPlay={() => setIsPlaying(true)}
+							onEnded={() => setIsPlaying(false)}
+							// ponytail: handleTimeUpdate is now driven by the rAF loop
+							// above (60 Hz) instead of the <video> onTimeUpdate event
+							// (~4 Hz) — the 4 Hz sync was too slow to keep the webcam
+							// <video> and any audio in sync. The rAF tick also
+							// handles clip-end advancement, so dropping the event
+							// handler here is safe.
+						/>
+						{loadState !== "ready" && (
+							<div className={styles.overlay}>
+								{loadState === "error" ? "Video preview could not be loaded." : "Loading preview…"}
+							</div>
+						)}
+					</div>
+					{/* ponytail: CursorPreviewLayer must NOT nest inside .videoFrame — that
+					    container has a hardcoded `overflow: hidden` (needed for the oversized/
+					    offset video crop trick, see .videoFrame in the CSS module) which clips
+					    ANY child regardless of that child's own overflow/clip-path. A child's
+					    `overflow: visible` can never escape an ancestor's `overflow: hidden`, so
+					    the "Clip to canvas" toggle's internal CSS override was silently powerless
+					    whenever it lived inside .videoFrame — the cursor was always cut at the
+					    video frame edge no matter the setting. Rendered here as a sibling instead,
+					    positioned absolutely over the same box (.container has no overflow
+					    clipping of its own), so the toggle's own clip-path/overflow logic is the
+					    only thing constraining it. */}
 					<CursorPreviewLayer
 						videoPath={activeSource ? fromFileUrl(activeSource.src) : null}
 						currentTimeSec={sourceTimeSec}
 						isPlaying={isPlaying}
 					/>
-				</div>
+				</>
 			) : (
 				<div className={styles.placeholder}>Attach a video to start previewing.</div>
 			)}

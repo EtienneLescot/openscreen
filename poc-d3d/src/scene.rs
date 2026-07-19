@@ -43,6 +43,26 @@ pub struct SceneLayout {
     pub webcam_position: Option<WebcamPosition>,
     /// la webcam rétrécit pendant un zoom actif.
     pub webcam_reactive_zoom: bool,
+    /// Rect webcam résolu côté app (0..1 fractions du cadre de sortie), en PARITÉ EXACTE avec
+    /// `computeCompositeLayout` (TS). Permet à TS et Rust de partager la même source de vérité :
+    /// le natif ne dérive PLUS ses propres placements pour PiP/dual-frame/vertical-stack — il
+    /// consomme ce rect directement et applique par-dessus les ajustements purement par-frame
+    /// (`webcam_size_scale`, `reactive_scale`, Full Camera).
+    ///
+    /// `#[serde(default)]` : champ ajouté après coup ; les anciens JSON (et les tests) omettent
+    /// ce champ, ce qui active le fallback `preset_placements` Rust historique (PiP codé en dur).
+    #[serde(default)]
+    pub webcam_rect: Option<SceneRect>,
+}
+
+/// Rect normalisé 0..1 du cadre de sortie : x, y en haut-gauche ; width, height.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneRect {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
 }
 
 /// Effets de cadre (padding, blur, ombre, coins, motion blur).
@@ -263,5 +283,48 @@ mod tests {
             _ => panic!("expected color"),
         }
         assert_eq!(s.output.fps, Some(30.0));
+    }
+
+    #[test]
+    fn parses_webcam_rect_payload() {
+        // webcamRect est une fraction 0..1 du cadre de sortie ; sa présence doit désactiver
+        // le fallback `preset_placements` Rust côté `compose_frame` (voir `compositor.rs`).
+        let json = r##"{
+            "clips": [],
+            "layout": {
+                "preset": "picture-in-picture",
+                "webcamSize": 0.25,
+                "webcamShape": "rounded",
+                "webcamMirror": false,
+                "webcamPosition": null,
+                "webcamReactiveZoom": false,
+                "webcamRect": { "x": 0.8125, "y": 0.8125, "width": 0.1666667, "height": 0.1666667 }
+            },
+            "effects": {"padding": 0, "blur": false, "shadow": 0, "roundnessPx": 24, "motionBlur": 0},
+            "background": {"kind":"color","color":"#000000"},
+            "zoomRegions": [],
+            "cursor": {"show": true, "size": 1, "smoothing": 0, "motionBlur": 0, "clickBounce": 1, "clipToBounds": false, "theme": "default"},
+            "cropByClip": [],
+            "output": {"width": 1920, "height": 1080, "fps": null}
+        }"##;
+        let s = Scene::from_json(json).expect("parse w/ webcamRect");
+        let r = s
+            .layout
+            .webcam_rect
+            .expect("webcam_rect doit être présent pour ce payload");
+        // bornes + ratio cohérent avec `computeCompositeLayout` (TS) pour le preset PiP @25%.
+        assert!((0.0..=1.0).contains(&r.x) && (0.0..=1.0).contains(&r.y));
+        assert!(r.width > 0.0 && r.width <= 1.0);
+        assert!((r.width - r.height).abs() < 1e-5);
+    }
+
+    #[test]
+    fn webcam_rect_field_optional_in_payload() {
+        // L'ancien payload sans `webcamRect` doit toujours parser sans erreur (le champ est
+        // `#[serde(default)]`) ; `webcam_rect` est alors None → fallback `preset_placements`.
+        let json = r##"{"clips":[],"layout":{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0,"blur":false,"shadow":0,"roundnessPx":0,"motionBlur":0},"background":{"kind":"color","color":"#000000"},"zoomRegions":[],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"cropByClip":[],"output":{"width":1920,"height":1080,"fps":null}}"##;
+        let s = Scene::from_json(json).expect("parse sans webcam_rect");
+        assert!(s.layout.webcam_rect.is_none());
+        assert_eq!(s.layout.preset, "picture-in-picture");
     }
 }

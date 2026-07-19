@@ -1052,23 +1052,45 @@ impl Compositor {
         let u_max = scw / stw as f32;
         let v_max = sch / sth as f32;
 
-        // Scène de l'app présente → placements du layout preset ; sinon planning fixture (bench).
+        // Scène de l'app présente → placements du layout preset (ou, mieux, le rect résolu par
+        // l'app dans `layout.webcam_rect`) ; sinon planning fixture (bench).
+        let scene_ref = self.scene.borrow();
         let scene_preset: Option<String> =
-            self.scene.borrow().as_ref().map(|s| s.layout.preset.clone());
-        let (mut p, mut pp) = match &scene_preset {
-            Some(preset) => {
-                let fp = preset_placements(preset);
+            scene_ref.as_ref().map(|s| s.layout.preset.clone());
+        // Webcam rect résolu par l'app (= `computeCompositeLayout`, source de vérité unique
+        // entre preview et natif) : quand il est présent ET que la scène est posée, on l'utilise
+        // COMME placement de base. Sinon, fallback sur `preset_placements` historique (PiP
+        // codé en dur à 320 px + 40 px de marge — l'arrangement qui dérivait de la preview).
+        let app_webcam_rect: Option<[f32; 4]> = scene_ref
+            .as_ref()
+            .and_then(|s| s.layout.webcam_rect)
+            .map(|r| [r.x, r.y, r.width, r.height]);
+        let (mut p, mut pp) = match (&scene_preset, app_webcam_rect) {
+            (Some(_preset), Some(wr)) => {
+                // webcam rect résolu côté app → on s'aligne strictement ; l'écran reste plein
+                // cadre (le padding slider l'insètera ensuite dans `scale_frame`).
+                let mut fp = preset_placements(_preset);
+                fp.webcam.dst = wr;
                 (fp, fp) // layout statique → vélocité nulle
             }
-            None => (timeline(frame, cfg), timeline(frame - 1.0, cfg)),
+            (Some(preset), None) => {
+                let fp = preset_placements(preset);
+                (fp, fp)
+            }
+            (None, _) => (timeline(frame, cfg), timeline(frame - 1.0, cfg)),
         };
         let is_vstack = scene_preset.as_deref() == Some("vertical-stack");
         let lp = *self.live_params.borrow();
-        let mb_taps = cfg.mblur_n as f32;
+        // Motion blur écran : quand la scène (contrat de l'app) est posée, c'est elle qui pilote
+        // (parité inspector : 1.0 + motion_blur*15 taps), sinon on retombe sur `cfg.mblur_n`
+        // (le bench fixture continue d'utiliser ses taps explicites).
+        let mb_taps = scene_ref
+            .as_ref()
+            .map(|s| 1.0 + s.effects.motion_blur.clamp(0.0, 1.0) * 15.0)
+            .unwrap_or(cfg.mblur_n as f32);
 
         // Zoom regions + Full Camera : filtrées en amont pour le clip actif et échantillonnées
         // dans le même référentiel source que le PTS du décodeur écran.
-        let scene_ref = self.scene.borrow();
         let empty_zoom: Vec<crate::scene::SceneZoomRegion> = Vec::new();
         let empty_cam: Vec<crate::scene::SceneCameraFullscreenRegion> = Vec::new();
         let zoom_regions = scene_ref.as_ref().map(|s| &s.zoom_regions).unwrap_or(&empty_zoom);
@@ -1365,7 +1387,13 @@ impl Compositor {
             Some(s) if s.cursor.clip_to_bounds => s_dst,
             _ => [-1.0, -1.0, 3.0, 3.0],
         };
-        if cfg.cursor {
+        // « Show cursor » : piloté par la scène (contrat de l'app) quand elle est posée ; sinon
+        // par `cfg.cursor` (inspector / bench fixture).
+        let cursor_show = scene_ref
+            .as_ref()
+            .map(|s| s.cursor.show)
+            .unwrap_or(cfg.cursor);
+        if cursor_show {
             let cursor_ref = self.cursor.borrow();
             if let Some(track) = cursor_ref.as_ref() {
                 let t = self.cursor_t_override.borrow().unwrap_or(frame / FPS);
@@ -1381,7 +1409,11 @@ impl Compositor {
                         }
                     })
                 };
-                if let Some(cur) = map(track.at(t), [su0, sv0], [hu, hv], s_dst) {
+                let raw_xy = track.at(t);
+                // Hors de [0,1] = pointeur hors du rect source actuel (zoom serré / hors écran) —
+                // état normal en cours de lecture, pas une erreur : rien à dessiner cette frame.
+                let mapped = map(raw_xy, [su0, sv0], [hu, hv], s_dst);
+                if let Some(cur) = mapped {
                     // taille + amplitude du bounce pilotées par l'inspector (défauts = fixture).
                     // `padding_scale` : le curseur est un recouvrement synthétique, pas cuit dans
                     // la vidéo — quand le padding rétrécit l'écran, le curseur doit rétrécir
@@ -1655,19 +1687,38 @@ impl Compositor {
         target_w: u32,
         target_h: u32,
     ) -> Result<Vec<u8>> {
-        let w = target_w.max(1);
-        let h = target_h.max(1);
+        // `ensure_resize_target` (partagé avec l'export) crée INCONDITIONNELLEMENT une
+        // texture NV12 en plus de la RGBA, même si ce chemin RGBA-only ne s'en sert jamais —
+        // et NV12 (4:2:0, chroma sous-échantillonnée 2×2) exige des dimensions PAIRES.
+        // Le canvas Electron (taille device-pixel arbitraire, ex. 910×513) atterrit souvent
+        // sur une dimension impaire → `CreateTexture2D` de la texture NV12 échouait avec
+        // E_INVALIDARG (0x80070057), et donc TOUT le readback live (jamais une seule frame
+        // publiée). On arrondit au pair supérieur ici uniquement — l'export appelle
+        // `rgb_to_nv12_scaled`/`blit_resized` directement avec ses propres dimensions et
+        // n'est pas concerné par cet arrondi.
+        let w = (target_w.max(1) + 1) & !1;
+        let h = (target_h.max(1) + 1) & !1;
+        // Dims RÉELLEMENT demandées par l'appelant — le buffer retourné doit rester à cette
+        // taille exacte (le canvas JS attend `target_w*target_h*4` octets pile), même si le GPU
+        // travaille en interne à `w`×`h` (arrondi pair) pour satisfaire la contrainte NV12.
+        let out_w = target_w.max(1);
+        let out_h = target_h.max(1);
 
         // 1) Resize GPU exactement comme `rgb_to_nv12_scaled` : remplit le `resize_target`
         //    RGBA à `w`×`h`. On s'arrête avant la conversion NV12 — on copie le RGBA.
         self.blit_resized(w, h)?;
-        // On a besoin de l'`ID3D11Texture2D` réel sous le SRV du resize_target pour
-        // `CopyResource` (qui prend un `ID3D11Resource`). Le SRV partage la même
-        // ressource, donc `cast::<ID3D11Texture2D>()` est valide.
-        let rgba_tex: ID3D11Texture2D = {
+        // BUG corrigé : un SRV n'est PAS la ressource (`ID3D11ShaderResourceView` et
+        // `ID3D11Texture2D` sont des interfaces COM sans rapport de parenté) — un
+        // `.cast::<ID3D11Texture2D>()` direct sur le SRV échoue avec E_NOINTERFACE
+        // (0x80004002, confirmé à l'exécution). Il faut passer par `GetResource()`
+        // (méthode de `ID3D11View`, implémentée par tout SRV/RTV) pour récupérer la
+        // ressource sous-jacente, ici directement en `ID3D11Resource` — le type que
+        // `CopyResource` attend de toute façon, donc pas besoin d'aller jusqu'à
+        // `ID3D11Texture2D`.
+        let rgba_resource: ID3D11Resource = {
             let cache = self.resize_target.borrow();
             let t = cache.as_ref().unwrap();
-            t.rgba_srv.cast()?
+            t.rgba_srv.GetResource()?
         };
 
         // 2) Staging texture CPU-readable à la taille cible, recréée paresseusement
@@ -1703,14 +1754,17 @@ impl Compositor {
 
         // 3) GPU → CPU : `CopyResource` resize_target → staging, puis `Map` + copie
         //    ligne par ligne qui respecte `RowPitch` (cf. `dump_nv12`/`dump_raw`).
-        let src: ID3D11Resource = rgba_tex.cast()?;
+        // `ID3D11Texture2D` hérite réellement de `ID3D11Resource` (contrairement au
+        // SRV plus haut) donc ce `.cast()` est valide.
         let dst: ID3D11Resource = staging.cast()?;
-        self.ctx.CopyResource(&dst, &src);
+        self.ctx.CopyResource(&dst, &rgba_resource);
         let mut m = D3D11_MAPPED_SUBRESOURCE::default();
         self.ctx.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut m))?;
-        let mut out: Vec<u8> = vec![0u8; (w * h * 4) as usize];
-        let row_bytes = (w * 4) as usize;
-        for y in 0..h as usize {
+        // Crop implicite : on ne lit que les `out_w`×`out_h` premiers pixels de la texture
+        // (arrondie pair) — le reliquat éventuel (au plus 1px en largeur/hauteur) est ignoré.
+        let mut out: Vec<u8> = vec![0u8; (out_w * out_h * 4) as usize];
+        let row_bytes = (out_w * 4) as usize;
+        for y in 0..out_h as usize {
             let src_row = (m.pData as *const u8).add(y * m.RowPitch as usize);
             let dst_row = out.as_mut_ptr().add(y * row_bytes);
             std::ptr::copy_nonoverlapping(src_row, dst_row, row_bytes);
