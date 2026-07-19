@@ -16,6 +16,9 @@ pub struct SceneClip {
     pub source_end_sec: f64,
     /// temps source webcam = temps source screen − ceci.
     pub webcam_offset_sec: f64,
+    /// Une source sans piste audio décodable garde sa durée via du silence natif.
+    #[serde(default)]
+    pub has_audio: bool,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]
@@ -95,6 +98,18 @@ pub struct SceneZoomRegion {
     pub rotation: Option<String>,
 }
 
+/// Une zone de vitesse portée par le temps source d'un clip.
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneSpeedRegion {
+    /// Index du clip dont les temps source portent cette région (voir `SceneZoomRegion`).
+    #[serde(default)]
+    pub clip_index: Option<usize>,
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub speed: f64,
+}
+
 /// Une zone "Full Camera" de la timeline (temps en secondes) : la webcam grandit pour couvrir
 /// (presque) tout le cadre pendant cette fenêtre. Pas de champs au-delà des bornes temporelles
 /// (miroir de `CameraFullscreenRegion`, TS).
@@ -157,6 +172,9 @@ pub struct Scene {
     pub zoom_regions: Vec<SceneZoomRegion>,
     /// `#[serde(default)]` : champ ajouté après coup, absent des JSON de test existants.
     #[serde(default)]
+    pub speed_regions: Vec<SceneSpeedRegion>,
+    /// `#[serde(default)]` : champ ajouté après coup, absent des JSON de test existants.
+    #[serde(default)]
     pub camera_fullscreen_regions: Vec<SceneCameraFullscreenRegion>,
     pub cursor: SceneCursor,
     /// Crop écran par clip, dans le même ordre que `clips` (`cropByClip` côté TS).
@@ -188,6 +206,9 @@ impl Scene {
         scene.zoom_regions.retain(|region| {
             belongs(region.clip_index, region.start_sec, region.end_sec)
         });
+        scene.speed_regions.retain(|region| {
+            belongs(region.clip_index, region.start_sec, region.end_sec)
+        });
         scene.camera_fullscreen_regions.retain(|region| {
             belongs(region.clip_index, region.start_sec, region.end_sec)
         });
@@ -202,11 +223,12 @@ mod tests {
     #[test]
     fn parses_a_minimal_scene_json() {
         let json = r##"{
-            "clips": [{"screenPath":"/s.mp4","webcamPath":"/w.mp4","sourceStartSec":0,"sourceEndSec":4,"webcamOffsetSec":0}],
+            "clips": [{"screenPath":"/s.mp4","webcamPath":"/w.mp4","sourceStartSec":0,"sourceEndSec":4,"webcamOffsetSec":0,"hasAudio":true}],
             "layout": {"preset":"picture-in-picture","webcamSize":1.5,"webcamShape":"circle","webcamMirror":true,"webcamPosition":null,"webcamReactiveZoom":false},
             "effects": {"padding":0.5,"blur":true,"shadow":0.8,"roundnessPx":24,"motionBlur":0.0},
             "background": {"kind":"gradient","angleDeg":135,"stops":["#eaebed","#bcc0c6"]},
             "zoomRegions": [{"clipIndex":0,"startSec":1.0,"endSec":3.0,"scale":2.0,"focusX":0.5,"focusY":0.3,"rotation":"iso"}],
+            "speedRegions": [{"clipIndex":0,"startSec":1.0,"endSec":2.0,"speed":2.0}],
             "cursor": {"show":true,"size":1,"smoothing":0.5,"motionBlur":0.2,"clickBounce":1,"clipToBounds":false,"theme":"default"},
             "cropByClip": [null],
             "output": {"width":1920,"height":1080,"fps":null}
@@ -226,6 +248,8 @@ mod tests {
         }
         assert_eq!(scene.zoom_regions[0].scale, 2.0);
         assert_eq!(scene.zoom_regions[0].clip_index, Some(0));
+        assert_eq!(scene.speed_regions[0].speed, 2.0);
+        assert!(scene.clips[0].has_audio);
         assert_eq!(scene.crop_by_clip.len(), 1);
         assert_eq!(scene.output.width, 1920);
     }

@@ -2,11 +2,16 @@
 //! Aucun composite. Mesuré au plus extérieur (§10) : Instant (mappe QPC) autour de
 //! tout le run, deux lectures seulement. Rien dans la boucle ne peut fausser le fps.
 
+use crate::audio::{
+    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio,
+    stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
+};
 use crate::compositor::{Compositor, OUT_H, OUT_W};
 use crate::config::Cfg;
 use crate::cursor::CursorTrack;
 use crate::d3d::Gpu;
 use crate::ffi::*;
+use crate::regions::speed_segments_for_window;
 use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 use std::ffi::{c_void, CString};
@@ -530,6 +535,27 @@ impl Drop for Decoder {
     }
 }
 
+/// Avance un décodeur jusqu'au premier pts dans le référentiel écran qui atteint la cible.
+/// `timeline_offset_sec` remet les pts webcam dans ce référentiel (`webcam + offset = screen`) :
+/// chaque source garde ainsi sa cadence propre au lieu d'être consommée 1:1 avec l'autre.
+unsafe fn advance_decoder_to(
+    decoder: &mut Decoder,
+    target_source_time: f64,
+    timeline_offset_sec: f64,
+) -> Result<bool> {
+    loop {
+        if decoder.cur_frame().is_null() {
+            return Ok(false);
+        }
+        if decoder.cur_time_sec() + timeline_offset_sec >= target_source_time {
+            return Ok(true);
+        }
+        if decoder.next()?.is_null() {
+            return Ok(false);
+        }
+    }
+}
+
 /// Frames-context de l'encodeur : NV12 sur notre device, bind RENDER_TARGET (§5) pour
 /// que le compositeur rende directement dans les surfaces de l'encodeur.
 unsafe fn make_enc_frames(gpu: &Gpu, w: i32, h: i32) -> Result<(*mut AVBufferRef, *mut AVBufferRef)> {
@@ -672,6 +698,7 @@ pub struct ClipSource {
     pub source_start_sec: f64,
     pub source_end_sec: f64,
     pub webcam_offset_sec: f64,
+    pub has_audio: bool,
 }
 
 /// Export **multiclip** : rend la timeline (clips ordonnés, avec trims) en un seul MP4.
@@ -787,8 +814,14 @@ unsafe fn run_multi_inner(
         "alloc_output_context2",
     )?;
     let ostream = avformat_new_stream(octx, ptr::null());
+    if ostream.is_null() {
+        bail!("video avformat_new_stream");
+    }
     averr(avcodec_parameters_from_context((*ostream).codecpar, ectx), "params_from_ctx")?;
     (*ostream).time_base = (*ectx).time_base;
+    // Les deux streams doivent exister avant le header MP4 ; l'AAC reste ouvert pendant le
+    // rendu puis reçoit le PCM assemblé à partir des comptes de frames réellement produits.
+    let mut audio_encoder = AacEncoder::open(octx)?;
     let mut pb: *mut AVIOContext = ptr::null_mut();
     averr(avio_open(&mut pb, outc.as_ptr(), AVIO_FLAG_WRITE as i32), "avio_open")?;
     sn_fmt_set_pb(octx, pb);
@@ -796,6 +829,9 @@ unsafe fn run_multi_inner(
 
     let opkt = av_packet_alloc();
     let mut frames: u64 = 0;
+    let mut clip_frame_counts = vec![0u64; clips.len()];
+    let mut clip_pcm: Vec<Option<PlanarPcm>> =
+        std::iter::repeat_with(|| None).take(clips.len()).collect();
     let t0 = Instant::now();
 
     for (clip_index, clip) in clips.iter().enumerate() {
@@ -849,15 +885,24 @@ unsafe fn run_multi_inner(
             continue;
         }
 
-        if let Some(base_scene) = scene.as_ref() {
-            comp.set_scene(Some(base_scene.for_clip_window(
-                clip_index,
-                clip.source_start_sec,
-                source_end_sec,
-            )));
+        let clip_scene = scene.as_ref().map(|base_scene| {
+            base_scene.for_clip_window(clip_index, clip.source_start_sec, source_end_sec)
+        });
+        let speed_segments = speed_segments_for_window(
+            clip_scene
+                .as_ref()
+                .map(|s| s.speed_regions.as_slice())
+                .unwrap_or(&[]),
+            clip.source_start_sec,
+            source_end_sec,
+            out_fps as f64,
+        );
+        if clip_scene.is_some() {
+            comp.set_scene(clip_scene);
         }
 
-        // un seul seek keyframe, puis décodage séquentiel jusqu'à source_end.
+        // un seul seek keyframe, puis chaque décodeur avance selon son propre pts jusqu'aux
+        // temps source demandés par les spans de vitesse.
         if sdec.seek_to(clip.source_start_sec)?.is_null() {
             continue; // clip vide / au-delà de la source
         }
@@ -889,39 +934,64 @@ unsafe fn run_multi_inner(
             }
         }
 
-        loop {
-            let sf = sdec.cur_frame();
-            let wf = wdec.cur_frame();
-            if sf.is_null() || wf.is_null() {
-                break;
-            }
-            let source_t = sdec.cur_time_sec();
-            if source_t >= source_end_sec {
-                break;
-            }
-            comp.set_timeline_time(Some(source_t as f32));
-            if cursor_enabled && cursor_active_path.is_some() {
-                comp.set_cursor_time(Some(source_t as f32));
-            }
-            comp.compose_frame(sf, wf, frames as f32, cfg)?;
+        let frames_before_clip = frames;
+        'clip_frames: for segment in &speed_segments {
+            for segment_frame in 0..segment.frame_count {
+                let target_source_time = segment.start_sec
+                    + segment_frame as f64 * segment.speed / out_fps as f64;
+                if !advance_decoder_to(sdec, target_source_time, 0.0)? {
+                    break 'clip_frames;
+                }
+                if !advance_decoder_to(
+                    wdec,
+                    target_source_time,
+                    clip.webcam_offset_sec,
+                )? {
+                    break 'clip_frames;
+                }
+                let sf = sdec.cur_frame();
+                let wf = wdec.cur_frame();
+                if sf.is_null() || wf.is_null() {
+                    break 'clip_frames;
+                }
 
-            let outf = av_frame_alloc();
-            averr(av_hwframe_get_buffer(enc_frames, outf, 0), "hwframe_get_buffer")?;
-            let out_tex = (*outf).data[0] as *mut c_void;
-            let out_slice = (*outf).data[1] as u32;
-            comp.rgb_to_nv12_scaled(out_w, out_h, out_tex, out_slice)?;
-            (*outf).pts = frames as i64;
-            averr(avcodec_send_frame(ectx, outf), "send_frame")?;
-            drain_encoder(ectx, octx, ostream, opkt)?;
-            av_frame_free(&mut (outf as *mut _));
-            frames += 1;
-            progress(frames);
+                comp.set_timeline_time(Some(target_source_time as f32));
+                if cursor_enabled && cursor_active_path.is_some() {
+                    comp.set_cursor_time(Some(target_source_time as f32));
+                }
+                comp.compose_frame(sf, wf, frames as f32, cfg)?;
 
-            if sdec.next()?.is_null() {
-                break;
+                let outf = av_frame_alloc();
+                averr(av_hwframe_get_buffer(enc_frames, outf, 0), "hwframe_get_buffer")?;
+                let out_tex = (*outf).data[0] as *mut c_void;
+                let out_slice = (*outf).data[1] as u32;
+                comp.rgb_to_nv12_scaled(out_w, out_h, out_tex, out_slice)?;
+                (*outf).pts = frames as i64;
+                averr(avcodec_send_frame(ectx, outf), "send_frame")?;
+                drain_encoder(ectx, octx, ostream, opkt)?;
+                av_frame_free(&mut (outf as *mut _));
+                frames += 1;
+                progress(frames);
             }
-            if wdec.next()?.is_null() {
-                break;
+        }
+        clip_frame_counts[clip_index] = frames - frames_before_clip;
+        if clip.has_audio && clip_frame_counts[clip_index] > 0 {
+            match decode_clip_audio(&clip.screen, clip.source_start_sec, source_end_sec) {
+                Ok(Some(pcm)) => {
+                    clip_pcm[clip_index] = Some(stretch_clip_pcm_by_speed(
+                        &pcm,
+                        &speed_segments,
+                        out_fps as f64,
+                    ));
+                }
+                Ok(None) => eprintln!(
+                    "[pipeline] warning: clip #{} déclaré audio mais sans flux décodable; silence conservé",
+                    clip_index,
+                ),
+                Err(error) => eprintln!(
+                    "[pipeline] warning: décodage audio du clip #{} échoué ({error:#}); silence conservé",
+                    clip_index,
+                ),
             }
         }
     }
@@ -932,6 +1002,16 @@ unsafe fn run_multi_inner(
 
     avcodec_send_frame(ectx, ptr::null_mut());
     drain_encoder(ectx, octx, ostream, opkt)?;
+
+    let declared_audio: Vec<bool> = clips.iter().map(|clip| clip.has_audio).collect();
+    let audio_plan = build_audio_concat_plan(
+        &clip_frame_counts,
+        &declared_audio,
+        out_fps as f64,
+    );
+    let assembled_audio = assemble_concatenated_pcm(&clip_pcm, &audio_plan);
+    audio_encoder.encode(&assembled_audio, octx)?;
+
     averr(av_write_trailer(octx), "write_trailer")?;
     let wall_s = t0.elapsed().as_secs_f64();
 
@@ -963,7 +1043,7 @@ unsafe fn drain_encoder(
             return Ok(());
         }
         averr(r, "receive_packet")?;
-        (*opkt).stream_index = 0;
+        (*opkt).stream_index = (*ostream).index;
         av_packet_rescale_ts(opkt, (*ectx).time_base, (*ostream).time_base);
         averr(
             av_interleaved_write_frame(octx, opkt),
