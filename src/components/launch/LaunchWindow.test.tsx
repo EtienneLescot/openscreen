@@ -460,6 +460,75 @@ describe("LaunchWindow system language prompt", () => {
 	});
 });
 
+describe("LaunchWindow HUD drag", () => {
+	beforeEach(() => {
+		platformState.value = "darwin";
+		resetLaunchMocks();
+		resizeCallbacks.length = 0;
+		vi.stubGlobal("ResizeObserver", CapturingResizeObserver);
+		// jsdom doesn't implement the Pointer Capture API; stub it so the drag handlers
+		// (which call set/has/releasePointerCapture) don't throw.
+		HTMLElement.prototype.setPointerCapture = vi.fn();
+		HTMLElement.prototype.hasPointerCapture = vi.fn(() => true);
+		HTMLElement.prototype.releasePointerCapture = vi.fn();
+	});
+
+	afterEach(() => {
+		cleanup();
+		vi.unstubAllGlobals();
+	});
+
+	it("suppresses ResizeObserver-driven measurement while dragging, and measures once on release", async () => {
+		renderLaunchWindow();
+
+		const dragHandle = await screen.findByTestId("hud-drag-handle");
+
+		// Give the bar a non-zero, changing size so a resize observation would actually
+		// trigger a `setHudOverlaySize` call if it weren't suppressed during the drag.
+		const bar = dragHandle.closest("[data-tray-layout]") as HTMLElement | null;
+		if (bar) {
+			vi.spyOn(bar, "getBoundingClientRect").mockReturnValue({
+				top: 700,
+				left: 200,
+				right: 600,
+				bottom: 756,
+				width: 400,
+				height: 56,
+				x: 200,
+				y: 700,
+				toJSON: () => ({}),
+			});
+			Object.defineProperty(bar, "scrollHeight", { value: 56, configurable: true });
+			Object.defineProperty(bar, "scrollWidth", { value: 400, configurable: true });
+		}
+
+		const sizeMock = window.electronAPI.setHudOverlaySize as unknown as {
+			mockClear: () => void;
+		};
+		sizeMock.mockClear();
+
+		fireEvent.pointerDown(dragHandle, { screenX: 100, screenY: 100 });
+
+		// Simulate a ResizeObserver firing mid-drag (e.g. transient reflow) -- this must
+		// NOT reposition/resize the HUD while the user's pointer is still down.
+		await act(async () => {
+			for (const callback of resizeCallbacks) {
+				callback([], {} as ResizeObserver);
+			}
+		});
+		expect(window.electronAPI.setHudOverlaySize).not.toHaveBeenCalled();
+
+		fireEvent.pointerMove(dragHandle, { screenX: 140, screenY: 130 });
+		fireEvent.pointerUp(dragHandle, { screenX: 140, screenY: 130 });
+
+		// Content is re-measured once the drag ends, so a real size change made mid-drag
+		// still gets picked up promptly.
+		await waitFor(() => {
+			expect(window.electronAPI.setHudOverlaySize).toHaveBeenCalled();
+		});
+	});
+});
+
 describe("LaunchWindow software encoder fallback notice", () => {
 	beforeEach(() => {
 		platformState.value = "darwin";
