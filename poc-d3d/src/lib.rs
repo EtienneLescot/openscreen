@@ -3,6 +3,7 @@
 //! Electron. Le binaire (`main.rs`) n'est qu'un mince consommateur (`run()`).
 
 pub mod app;
+pub mod audio;
 pub mod compositor;
 pub mod config;
 pub mod cursor;

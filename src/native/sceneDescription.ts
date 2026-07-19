@@ -15,7 +15,7 @@
  * contract — do not change the exported types.
  */
 
-import type { CameraFullscreenRegion } from "@/components/video-editor/types";
+import type { CameraFullscreenRegion, SpeedRegion } from "@/components/video-editor/types";
 import { DEFAULT_CROP_REGION } from "@/components/video-editor/types";
 import { createId } from "@/lib/ai-edition/document/ids";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
@@ -52,6 +52,19 @@ export interface SceneZoomRegion {
 export interface SceneCameraFullscreenRegion {
 	startSec: number;
 	endSec: number;
+}
+
+/** A speed region projected onto each clip's source time. The native compositor matches
+ *  these against each decoded frame's SOURCE time, the same way zoom regions do — that's
+ *  why the spans live in seconds and the underlying projection is `projectRegionsToSourceTime`.
+ *  A region straddling a clip boundary splits into one entry per covered clip; both fragments
+ *  carry the SAME `speed` value (the projection function only rewrites `startMs`/`endMs`/`id`,
+ *  every other field passes through verbatim). */
+export interface SceneSpeedRegion {
+	startSec: number;
+	endSec: number;
+	/** Playback rate multiplier (1 = unchanged). */
+	speed: number;
 }
 
 /** Webcam layout, from the editor settings. */
@@ -118,6 +131,22 @@ export interface SceneDescription {
 	 * source-time span after `projectRegionsToSourceTime`). Empty when none set.
 	 */
 	cameraFullscreenRegions: SceneCameraFullscreenRegion[];
+	/**
+	 * Speed regions projected onto each clip's source time (one entry per
+	 * source-time span after `projectRegionsToSourceTime`). Empty when none set.
+	 *
+	 * ponytail: speed regions today live at `document.legacyEditor.speedRegions`
+	 * — the new `timeline.speedRanges` schema field is `z.array(rangeSchema)` and
+	 * `rangeSchema` is `{startSec, endSec, reason}`, which does NOT carry a `speed`
+	 * value (see migrate.ts comment "speedRegions stay on the legacy editor envelope
+	 * — axcut's rangeSchema doesn't carry a speed value, and Phase 1 timeline rewrite
+	 * is when speed becomes a first-class timeline concept"). We read from
+	 * `legacyEditor.speedRegions` (where the `speed` multiplier actually lives) so
+	 * the native compositor gets a populated `speed`, matching the legacy web
+	 * exporter's read site. When the schema rewrite lands, swap the source to
+	 * `document.timeline.speedRanges` and keep the same projection call.
+	 */
+	speedRegions: SceneSpeedRegion[];
 	cursor: SceneCursor;
 	/**
 	 * Per-clip screen crop (fractions of the frame), or null for the identity
@@ -206,6 +235,16 @@ export function buildSceneDescription(document: AxcutDocument): SceneDescription
 		const asset = assetById.get(clip.assetId);
 		if (!asset?.originalPath) return [];
 		const cam = asset.cameraTrack;
+		// ponytail: screen recordings from this app always carry a decodable audio
+		// track (confirmed via ffprobe on real recordings); webcam files never do
+		// and clips only ever reference their SCREEN path for the main video. The
+		// `asset.audio` schema slot exists but is never populated by the probe
+		// pipeline today, so we can't rely on it as an "is there a track?" signal —
+		// matching the legacy web exporter (which just tries-and-catches in
+		// `decodeSegmentAudioPcm`), we default `hasAudio: true` for every clip whose
+		// asset has an `originalPath`. The visibleClips filter above already
+		// guarantees that precondition by the time we reach this branch. If a
+		// per-asset audio-probe flag is added later, swap to `Boolean(asset.audio)`.
 		return [
 			{
 				screenPath: asset.originalPath,
@@ -213,6 +252,7 @@ export function buildSceneDescription(document: AxcutDocument): SceneDescription
 				sourceStartSec: clip.sourceStartSec,
 				sourceEndSec: resolveClipSourceEndSec(clip, asset),
 				webcamOffsetSec: cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
+				hasAudio: true,
 			},
 		];
 	});
@@ -253,6 +293,19 @@ export function buildSceneDescription(document: AxcutDocument): SceneDescription
 			| undefined) ?? [],
 		docClips,
 		() => createId("camfull"),
+	);
+	// Speed regions carry an extra `speed` field the standard `rangeSchema` does not, so we
+	// can't read from `document.timeline.speedRanges` today (see SceneDescription.speedRegions
+	// comment). The legacy web exporter reads from `legacyEditor.speedRegions`; we mirror it.
+	// `projectRegionsToSourceTime` accepts any `T extends { id; startMs; endMs }` and copies
+	// every other field verbatim via `{...region}` — so the `speed` field passes through,
+	// and the splitting-across-clips semantics match zoomRegions / cameraFullscreenRegions.
+	const projectedSpeedRegions = projectRegionsToSourceTime(
+		((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as
+			| SpeedRegion[]
+			| undefined) ?? [],
+		docClips,
+		() => createId("speed"),
 	);
 
 	return {
@@ -297,6 +350,11 @@ export function buildSceneDescription(document: AxcutDocument): SceneDescription
 		cameraFullscreenRegions: projectedCameraFullscreenRegions.map((region) => ({
 			startSec: region.startMs / 1000,
 			endSec: region.endMs / 1000,
+		})),
+		speedRegions: projectedSpeedRegions.map((region) => ({
+			startSec: region.startMs / 1000,
+			endSec: region.endMs / 1000,
+			speed: region.speed,
 		})),
 		cropByClip,
 		output: { ...pickOutputDims(document), fps: null },

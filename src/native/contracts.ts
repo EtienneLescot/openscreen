@@ -121,6 +121,12 @@ export interface CompositorClipInput {
 	sourceEndSec: number;
 	/** temps source webcam = temps source screen − ceci. */
 	webcamOffsetSec: number;
+	/** `true` when this clip's screen asset has a decodable audio track the native
+	 *  compositor should mix into the export. `false` skips audio decode/encode/mux
+	 *  for this clip entirely (and the webcam path never carries audio by product
+	 *  convention). Populated by `buildSceneDescription` and `buildNativeClipList`;
+	 *  see the comment on the producer side for the exact rule. */
+	hasAudio: boolean;
 }
 
 /** Bilan d'un export natif (mesure enveloppante §10 : frames, durée, fps). */
