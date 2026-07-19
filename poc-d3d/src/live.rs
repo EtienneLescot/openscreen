@@ -570,8 +570,22 @@ unsafe fn render_thread(
                     }
                     let cursor_path = format!("{}.cursor.json", active_screen_path);
                     raw_cursor = CursorTrack::load(&cursor_path, 0.0, 24.0 * 3600.0).ok();
-                    if raw_cursor.is_none() {
-                        comp.clear_cursor();
+                    match &raw_cursor {
+                        Some(track) => {
+                            eprintln!(
+                                "[live] cursor: path={} loaded=ok samples={}",
+                                cursor_path,
+                                track.sample_count(),
+                            );
+                            comp.set_cursor(track.smoothed(0.0));
+                        }
+                        None => {
+                            eprintln!(
+                                "[live] cursor: path={} loaded=FAIL — clear_cursor()",
+                                cursor_path,
+                            );
+                            comp.clear_cursor();
+                        }
                     }
                     last_smoothing = -1.0;
                     clip_changed = true;

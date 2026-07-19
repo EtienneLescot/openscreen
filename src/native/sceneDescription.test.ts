@@ -665,6 +665,60 @@ describe("buildSceneDescription.settings mapping", () => {
 		expect(scene.cursor.show).toBe(false);
 		expect(scene.cursor.theme).toBe("macos-dark");
 	});
+
+	it("populates layout.webcamRect with computeCompositeLayout's webcamRect, in fractions", () => {
+		// PiP @ 25% doit produire un rect (fractions) aligné avec `computeCompositeLayout`.
+		// Parité preview ↔ natif : la valeur que `PreviewCanvas` pose dans `.webcamSlot` est
+		// exactement celle que reçoit le natif dans `layout.webcamRect`. Ce test couvre
+		// principalement la conversion pixels → fractions (width/height du canvas = output dims).
+		const asset = makeAsset({
+			id: "a",
+			originalPath: "/a.mp4",
+			video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
+		});
+		const doc = makeDoc({
+			assets: [asset],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 1,
+					timelineStartSec: 0,
+					timelineEndSec: 1,
+				}),
+			],
+			legacyEditor: { webcamSizePreset: 25 },
+		});
+		const scene = buildSceneDescription(doc);
+		const rect = scene.layout.webcamRect;
+		expect(rect).not.toBeNull();
+		// Le preset picture-in-picture à size=25% (default) place la webcam en bas-droite avec
+		// une marge ~2% du canvas (cf. `compositeLayout.ts:162`). Pour un canvas 1920×1080 :
+		// - côté ≈ sqrt(1920*1080) * 0.25 ≈ 360px ; avec aspect 4:3 → ~360x270
+		// - x ≈ (1920 - margin - 360) / 1920 ≈ 0.795 ; y similaire pour h
+		// Les valeurs exactes sont issues de computeCompositeLayout ; on vérifie surtout :
+		//  • bornes 0..1 strictes ; • ratio PIXELS ≈ webcamSize (4:3 conservé) ; • x/y > 0.5 (bas-droite).
+		expect(rect!.x).toBeGreaterThan(0.5);
+		expect(rect!.y).toBeGreaterThan(0.5);
+		expect(rect!.x + rect!.width).toBeLessThanOrEqual(1.0);
+		expect(rect!.y + rect!.height).toBeLessThanOrEqual(1.0);
+		// ratio cohérent en PIXELS (largeur*canvasW / hauteur*canvasH ~ 960/720 = 4/3 ≈ 1.333) —
+		// PAS le ratio des fractions brutes, qui diffère du ratio pixel dès que le canvas n'est
+		// pas carré (ici 1920x1080 : une fraction-ratio de 0.75 correspond bien à un pixel-ratio
+		// de 4/3, puisque 1920/1080 = 16/9 redistribue les deux axes différemment).
+		const pixelWidth = rect!.width * scene.output.width;
+		const pixelHeight = rect!.height * scene.output.height;
+		expect(pixelWidth / pixelHeight).toBeCloseTo(4 / 3, 1);
+	});
+
+	it("layout.webcamRect is null when no-webcam preset is selected", () => {
+		const doc = makeDoc({
+			legacyEditor: { webcamLayoutPreset: "no-webcam" },
+		});
+		const scene = buildSceneDescription(doc);
+		expect(scene.layout.webcamRect).toBeNull();
+	});
 });
 
 // --- output dims -----------------------------------------------------------
