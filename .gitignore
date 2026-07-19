@@ -96,3 +96,6 @@ bench-frame-*.png
 # POC inputs (real recordings) and outputs — big, and not source.
 poc/media/
 poc/out/
+
+# cc-delegate worker worktrees/branches + scratch test artifacts.
+.cc-delegate/

@@ -1,6 +1,11 @@
 import { useEffect, useMemo, useRef } from "react";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
-import { setCurrentNativeViewId, setNativeScene, useNativeCompositorView } from "@/native";
+import {
+	setActiveClip,
+	setCurrentNativeViewId,
+	setNativeScene,
+	useNativeCompositorView,
+} from "@/native";
 import { buildSceneDescription } from "@/native/sceneDescription";
 
 /**
@@ -10,11 +15,10 @@ import { buildSceneDescription } from "@/native/sceneDescription";
  * le compositing ; le `<div>` ne sert qu'à donner sa géométrie (le hook sync le
  * rect natif au resize/scroll).
  *
- * F3 : les sources natives (screen + webcam) sont résolues depuis l'**asset primaire
- * du document courant** — donc ce que l'éditeur affiche réellement. (On lisait avant
- * `getCurrentRecordingSession()` = le dernier *enregistré*, qui pouvait pointer sur un
- * ancien clip → on voyait « l'ancien clip » sous le blur.) Pas d'asset / pas de doc →
- * fallback fixture. Le hook recrée la vue si le chemin screen change (changement de projet).
+ * F3 : la vue est amorcée avec les sources de l'**asset primaire du document courant**
+ * (fallback fixture sans asset/document), puis `setActiveClip` remplace screen + webcam quand
+ * le playhead entre dans un autre clip. Le hook recrée seulement la vue si le chemin screen
+ * primaire change (changement de projet), pas à chaque frontière de clip.
  *
  * Aucun contrôle ici : paramètres via l'inspector (`setNativeParam`), lecture via
  * `useNativePlaybackSync`, export via la vraie modale (`ExportDialog`).
@@ -23,7 +27,29 @@ import { buildSceneDescription } from "@/native/sceneDescription";
  */
 export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 	const mountRef = useRef<HTMLDivElement>(null);
+	const previousActiveClipIdRef = useRef<string | null>(null);
 	const document = useProjectStore((s) => s.document);
+	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
+
+	const orderedClips = useMemo(
+		() =>
+			document
+				? [...document.timeline.clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec)
+				: [],
+		[document],
+	);
+	const activeClip = useMemo(() => {
+		return (
+			orderedClips.find((clip, index) => {
+				const isLast = index === orderedClips.length - 1;
+				return (
+					currentTimeSec >= clip.timelineStartSec &&
+					(currentTimeSec < clip.timelineEndSec ||
+						(isLast && currentTimeSec <= clip.timelineEndSec))
+				);
+			}) ?? null
+		);
+	}, [orderedClips, currentTimeSec]);
 
 	// `null` = document pas encore chargé (on attend) ; `{}` = chargé sans asset (→ fixture) ;
 	// `{screenPath,…}` = vraies sources de l'asset primaire.
@@ -55,6 +81,7 @@ export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 	// publie l'id de la vue active dans le store → l'inspector peut pousser des params
 	// via setNativeParam sans connaître cet overlay.
 	useEffect(() => {
+		previousActiveClipIdRef.current = null;
 		setCurrentNativeViewId(viewId);
 		return () => setCurrentNativeViewId(null);
 	}, [viewId]);
@@ -72,6 +99,35 @@ export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 			console.warn("[compositor-view] build/push scene failed:", error);
 		}
 	}, [viewId, document]);
+
+	// Change les décodeurs screen/webcam uniquement quand le playhead entre dans un autre clip.
+	// `currentTimeSec` est déjà rafraîchi par la boucle de lecture existante ; aucun timer dédié.
+	useEffect(() => {
+		if (viewId === null || !document) {
+			return;
+		}
+		if (!activeClip) {
+			previousActiveClipIdRef.current = null;
+			return;
+		}
+		if (previousActiveClipIdRef.current === activeClip.id) {
+			return;
+		}
+		const asset = document.assets.find((candidate) => candidate.id === activeClip.assetId);
+		if (!asset?.originalPath) {
+			return;
+		}
+		const cam = asset.cameraTrack;
+		setActiveClip(
+			viewId,
+			asset.originalPath,
+			cam?.sourcePath ?? asset.originalPath,
+			cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
+		).catch((error: unknown) => {
+			console.warn("[compositor-view] setActiveClip failed:", error);
+		});
+		previousActiveClipIdRef.current = activeClip.id;
+	}, [viewId, document, activeClip]);
 
 	if (!enabled) {
 		return null;

@@ -155,8 +155,8 @@ fn connected_pairs(regions: &[SceneZoomRegion]) -> Vec<(usize, usize, f32, f32)>
     pairs
 }
 
-/// État de zoom au temps `t` (secondes, référentiel TIMELINE — pas le temps source d'un clip
-/// individuel). Port de `findDominantRegion` (TS) : régions chaînées d'abord (transition puis
+/// État de zoom au temps `t` (secondes source du clip actif). Port de
+/// `findDominantRegion` (TS) : régions chaînées d'abord (transition puis
 /// hold), sinon la région "dominante" indépendante la plus forte (ties → la plus récente).
 /// Hors de toute région → identité (échelle 1, focus centre, tilt nul).
 pub fn zoom_state_at(regions: &[SceneZoomRegion], t: f32, cursor: Option<&CursorTrack>) -> ZoomState {

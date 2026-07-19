@@ -466,6 +466,27 @@ impl Decoder {
         if r.den != 0 && r.num != 0 { r.num as f64 / r.den as f64 } else { 30.0 }
     }
 
+    /// Durée réellement annoncée par le flux vidéo. La durée du stream est prioritaire ;
+    /// `nb_frames / fps` sert de repli pour les conteneurs qui omettent `duration`.
+    pub(crate) unsafe fn available_duration_sec(&self) -> Option<f64> {
+        let stream = sn_fmt_stream(self.fmt, self.vidx);
+        let duration = (*stream).duration;
+        let tb_sec = self.tb_sec();
+        if duration > 0 && tb_sec > 0.0 {
+            let seconds = duration as f64 * tb_sec;
+            if seconds.is_finite() && seconds > 0.0 {
+                return Some(seconds);
+            }
+        }
+        let nb_frames = (*stream).nb_frames;
+        let fps = self.fps();
+        if nb_frames > 0 && fps.is_finite() && fps > 0.0 {
+            Some(nb_frames as f64 / fps)
+        } else {
+            None
+        }
+    }
+
     /// Rend la prochaine frame (valide jusqu'au prochain appel), ou null à EOF.
     pub(crate) unsafe fn next(&mut self) -> Result<*mut AVFrame> {
         loop {
@@ -777,7 +798,7 @@ unsafe fn run_multi_inner(
     let mut frames: u64 = 0;
     let t0 = Instant::now();
 
-    for clip in clips {
+    for (clip_index, clip) in clips.iter().enumerate() {
         if !screen_decs.contains_key(&clip.screen) {
             screen_decs.insert(clip.screen.clone(), Decoder::open(&clip.screen, gpu)?);
         }
@@ -787,11 +808,65 @@ unsafe fn run_multi_inner(
         let sdec = screen_decs.get_mut(&clip.screen).unwrap();
         let wdec = webcam_decs.get_mut(&clip.webcam).unwrap();
 
+        let screen_available_duration = sdec.available_duration_sec();
+        let webcam_available_duration = wdec.available_duration_sec();
+        if screen_available_duration.is_none() || webcam_available_duration.is_none() {
+            eprintln!(
+                "[pipeline] warning: clip #{}: durée de flux indéterminée (screen={}, webcam={}); la borne demandée {:.3}s ne peut pas être entièrement validée",
+                clip_index,
+                screen_available_duration
+                    .map(|v| format!("{v:.3}s"))
+                    .unwrap_or_else(|| "inconnue".to_string()),
+                webcam_available_duration
+                    .map(|v| format!("{v:.3}s"))
+                    .unwrap_or_else(|| "inconnue".to_string()),
+                clip.source_end_sec,
+            );
+        }
+        // Les bornes de clip sont en temps écran. La disponibilité webcam est donc translatée
+        // par le même offset que le seek (`webcam_time = screen_time - offset`).
+        let webcam_available_screen_end =
+            webcam_available_duration.map(|duration| duration + clip.webcam_offset_sec);
+        let mut source_end_sec = clip.source_end_sec;
+        if let Some(duration) = screen_available_duration {
+            source_end_sec = source_end_sec.min(duration);
+        }
+        if let Some(duration) = webcam_available_screen_end {
+            source_end_sec = source_end_sec.min(duration);
+        }
+        if source_end_sec + 1e-6 < clip.source_end_sec {
+            eprintln!(
+                "[pipeline] warning: clip #{} raccourci de {:.3}s (fin demandée {:.3}s, fin disponible {:.3}s; screen=\"{}\", webcam=\"{}\")",
+                clip_index,
+                clip.source_end_sec - source_end_sec,
+                clip.source_end_sec,
+                source_end_sec,
+                clip.screen,
+                clip.webcam,
+            );
+        }
+        if source_end_sec <= clip.source_start_sec {
+            continue;
+        }
+
+        if let Some(base_scene) = scene.as_ref() {
+            comp.set_scene(Some(base_scene.for_clip_window(
+                clip_index,
+                clip.source_start_sec,
+                source_end_sec,
+            )));
+        }
+
         // un seul seek keyframe, puis décodage séquentiel jusqu'à source_end.
         if sdec.seek_to(clip.source_start_sec)?.is_null() {
             continue; // clip vide / au-delà de la source
         }
-        wdec.seek_to((clip.source_start_sec - clip.webcam_offset_sec).max(0.0))?;
+        if wdec
+            .seek_to((clip.source_start_sec - clip.webcam_offset_sec).max(0.0))?
+            .is_null()
+        {
+            continue;
+        }
 
         if cursor_enabled {
             if !cursor_tracks.contains_key(&clip.screen) {
@@ -807,6 +882,8 @@ unsafe fn run_multi_inner(
                     comp.set_cursor(track.clone());
                     cursor_active_path = Some(clip.screen.clone());
                 } else {
+                    comp.clear_cursor();
+                    comp.set_cursor_time(None);
                     cursor_active_path = None;
                 }
             }
@@ -818,11 +895,13 @@ unsafe fn run_multi_inner(
             if sf.is_null() || wf.is_null() {
                 break;
             }
-            if sdec.cur_time_sec() >= clip.source_end_sec {
+            let source_t = sdec.cur_time_sec();
+            if source_t >= source_end_sec {
                 break;
             }
+            comp.set_timeline_time(Some(source_t as f32));
             if cursor_enabled && cursor_active_path.is_some() {
-                comp.set_cursor_time(Some(sdec.cur_time_sec() as f32));
+                comp.set_cursor_time(Some(source_t as f32));
             }
             comp.compose_frame(sf, wf, frames as f32, cfg)?;
 
@@ -846,6 +925,10 @@ unsafe fn run_multi_inner(
             }
         }
     }
+
+    comp.set_cursor_time(None);
+    comp.set_timeline_time(None);
+    comp.set_scene(scene);
 
     avcodec_send_frame(ectx, ptr::null_mut());
     drain_encoder(ectx, octx, ostream, opkt)?;
