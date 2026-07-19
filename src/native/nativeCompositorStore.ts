@@ -9,7 +9,6 @@ import {
 	setCompositorPlaying,
 	setCompositorScene,
 	setCompositorTime,
-	setCompositorVisible,
 } from "./compositorViewClient";
 import type { CompositorParamValue } from "./contracts";
 
@@ -90,18 +89,6 @@ export function setNativePlaying(playing: boolean): void {
 	}
 	setCompositorPlaying(currentViewId, playing).catch((error: unknown) => {
 		console.warn("[compositor-view] setNativePlaying failed:", error);
-	});
-}
-
-/** Masque/affiche la vue native active. No-op si aucune vue. Nécessaire pour toute modale web
- *  (export…) censée passer devant : l'overlay est une fenêtre top-level hors de la surface
- *  Chromium, le z-index CSS n'a aucune prise dessus (cf. `LiveView::set_visible`). */
-export function setNativeCompositorVisible(visible: boolean): void {
-	if (currentViewId === null) {
-		return;
-	}
-	setCompositorVisible(currentViewId, visible).catch((error: unknown) => {
-		console.warn("[compositor-view] setNativeCompositorVisible failed:", error);
 	});
 }
 

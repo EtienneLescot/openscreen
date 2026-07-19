@@ -348,16 +348,7 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 					const action = request.action as string;
 					switch (request.action) {
 						case "createView": {
-							const sender = event.sender;
-							const handle = context.getNativeWindowHandle?.(sender) ?? null;
-							if (!handle) {
-								return createErrorResponse(
-									requestId,
-									"UNAVAILABLE",
-									"No native window handle available for the requesting renderer.",
-								);
-							}
-							const id = compositorViewService.createView(handle, request.payload.rect, {
+							const id = compositorViewService.createView(request.payload.rect, {
 								screenPath: request.payload.screenPath,
 								webcamPath: request.payload.webcamPath,
 								cursorPath: request.payload.cursorPath,
@@ -367,9 +358,17 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 						case "setRect":
 							compositorViewService.setRect(request.payload.id, request.payload.rect);
 							return createSuccessResponse(requestId, { ok: true });
-						case "setVisible":
-							compositorViewService.setVisible(request.payload.id, request.payload.visible);
-							return createSuccessResponse(requestId, { ok: true });
+						case "readFrame": {
+							// The renderer polls this every rAF tick (~30fps) and paints the
+							// returned buffer into a `<canvas>`. The response wrapper does NOT
+							// JSON-stringify — `ipcMain.handle` round-trips via structured clone,
+							// which preserves `Buffer`/`Uint8Array` instances as binary. We return
+							// the raw `Buffer | null` straight through; the success wrapper is fine
+							// here because `{ ok: true, data: <Buffer>, meta: {...} }` is a plain
+							// object whose `.data` field IS the Buffer — structured clone keeps it.
+							const frame = compositorViewService.readFrame(request.payload.id);
+							return createSuccessResponse(requestId, frame);
+						}
 						case "setParam":
 							compositorViewService.setParam(
 								request.payload.id,

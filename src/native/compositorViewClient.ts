@@ -1,9 +1,10 @@
 /**
  * Renderer-side client for the native D3D11 compositor view. Each function
  * sends a `compositor` domain `NativeBridgeRequest` over the existing
- * `native-bridge:invoke` channel. The parent window handle is supplied
- * main-side (it never crosses the IPC boundary), so the renderer's
- * `createCompositorView` only takes the rect.
+ * `native-bridge:invoke` channel. The compositor renders OFFSCREEN now —
+ * there's no native OS window to embed, so no HWND crosses the IPC boundary
+ * in either direction. The renderer instead pulls rendered frames via
+ * `readCompositorFrame` and paints them into a `<canvas>`.
  */
 
 import { requireNativeBridgeData } from "./client";
@@ -35,13 +36,16 @@ export function setCompositorRect(id: number, rect: CompositorViewRect): Promise
 	});
 }
 
-/** Shows/hides the native overlay. A top-level OS window, not part of the Chromium surface —
- *  DOM z-index has no effect on it. Hide it while a web modal (export…) must appear in front. */
-export function setCompositorVisible(id: number, visible: boolean): Promise<{ ok: true }> {
-	return requireNativeBridgeData<{ ok: true }>({
+/** Polls the most recently rendered frame for `id` as a raw RGBA pixel buffer.
+ *  Returns `null` when the addon is absent OR no frame is ready yet (e.g.
+ *  still decoding the first clip). The renderer is expected to draw the
+ *  returned buffer into a `<canvas>` via `putImageData` (or equivalent) on
+ *  every rAF tick (target ~30fps to keep IPC + GPU readback cheap). */
+export function readCompositorFrame(id: number): Promise<Buffer | null> {
+	return requireNativeBridgeData<Buffer | null>({
 		domain: "compositor",
-		action: "setVisible",
-		payload: { id, visible },
+		action: "readFrame",
+		payload: { id },
 	});
 }
 

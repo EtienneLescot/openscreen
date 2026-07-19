@@ -209,8 +209,12 @@ export class CompositorViewService {
 		return this.ensureAddon() !== null;
 	}
 
+	/** Allocates an offscreen compositor view sized to `rect.width`x`rect.height`.
+	 *  `rect.x` / `rect.y` are vestigial (ignored native-side) — the renderer
+	 *  keeps them on the wire so the existing `CompositorViewRect` shape stays
+	 *  source-compatible. No HWND/native-window-handle is passed: there's no
+	 *  OS window to parent to. */
 	createView(
-		parentHandle: Buffer,
 		rect: CompositorViewRect,
 		paths?: { screenPath?: string; webcamPath?: string; cursorPath?: string },
 	): number {
@@ -225,13 +229,7 @@ export class CompositorViewService {
 			this.rects.set(id, rect);
 			return id;
 		}
-		const id = addon.createView(
-			parentHandle,
-			rect,
-			paths?.screenPath,
-			paths?.webcamPath,
-			paths?.cursorPath,
-		);
+		const id = addon.createView(rect, paths?.screenPath, paths?.webcamPath, paths?.cursorPath);
 		this.rects.set(id, rect);
 		return id;
 	}
@@ -245,12 +243,17 @@ export class CompositorViewService {
 		addon.setRect(id, rect);
 	}
 
-	setVisible(id: number, visible: boolean): void {
+	/** Reads the most recently rendered frame for `id` back to the renderer as
+	 *  a raw RGBA pixel buffer. Returns `null` when the addon is absent OR
+	 *  when the native side has no frame ready yet (e.g. view not started,
+	 *  still decoding the first clip). Byte order is RGBA per the new native
+	 *  contract; TODO confirms against the real addon once buildable. */
+	readFrame(id: number): Buffer | null {
 		const addon = this.ensureAddon();
 		if (!addon) {
-			return;
+			return null;
 		}
-		addon.setViewVisible(id, visible);
+		return addon.readFrame(id);
 	}
 
 	setParam(id: number, key: string, value: CompositorParamValue): void {
