@@ -81,6 +81,19 @@ export function setCompositorScene(id: number, sceneJson: string): Promise<{ ok:
 	});
 }
 
+export function setActiveClip(
+	id: number,
+	screenPath: string,
+	webcamPath: string,
+	webcamOffsetSec: number,
+): Promise<{ ok: true }> {
+	return requireNativeBridgeData<{ ok: true }>({
+		domain: "compositor",
+		action: "setActiveClip",
+		payload: { id, screenPath, webcamPath, webcamOffsetSec },
+	});
+}
+
 export function destroyCompositorView(id: number): Promise<{ ok: true }> {
 	return requireNativeBridgeData<{ ok: true }>({
 		domain: "compositor",

@@ -386,6 +386,14 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 						case "setScene":
 							compositorViewService.setScene(request.payload.id, request.payload.sceneJson);
 							return createSuccessResponse(requestId, { ok: true });
+						case "setActiveClip":
+							compositorViewService.setActiveClip(
+								request.payload.id,
+								request.payload.screenPath,
+								request.payload.webcamPath,
+								request.payload.webcamOffsetSec,
+							);
+							return createSuccessResponse(requestId, { ok: true });
 						case "destroyView":
 							compositorViewService.destroyView(request.payload.id);
 							return createSuccessResponse(requestId, { ok: true });

@@ -133,6 +133,19 @@ pub fn present_time(id: i32, seconds: f64) {
     }
 }
 
+/// Remplace les sources du clip actif sans recréer la vue ni son thread de rendu.
+#[napi]
+pub fn set_active_clip(
+    id: i32,
+    screen_path: String,
+    webcam_path: String,
+    webcam_offset_sec: f64,
+) {
+    if let Some(v) = registry().lock().unwrap().get(&id) {
+        v.set_active_clip(&screen_path, &webcam_path, webcam_offset_sec);
+    }
+}
+
 /// Installe la scène de l'app (JSON `SceneDescription`) sur la vue : layout preset piloté par
 /// l'app au lieu de la fixture. JSON invalide → ignoré côté natif.
 #[napi]

@@ -78,6 +78,10 @@ pub struct SceneZoomRegion {
     /// `#[serde(default)]` : champ ajouté après coup.
     #[serde(default)]
     pub id: String,
+    /// Index du clip dont les temps source portent cette région. `None` garde la compatibilité
+    /// avec les payloads antérieurs et déclenche le repli par chevauchement de fenêtre source.
+    #[serde(default)]
+    pub clip_index: Option<usize>,
     pub start_sec: f64,
     pub end_sec: f64,
     /// échelle cible (>1 = zoom avant).
@@ -97,6 +101,9 @@ pub struct SceneZoomRegion {
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneCameraFullscreenRegion {
+    /// Index du clip dont les temps source portent cette région (voir `SceneZoomRegion`).
+    #[serde(default)]
+    pub clip_index: Option<usize>,
     pub start_sec: f64,
     pub end_sec: f64,
 }
@@ -152,7 +159,9 @@ pub struct Scene {
     #[serde(default)]
     pub camera_fullscreen_regions: Vec<SceneCameraFullscreenRegion>,
     pub cursor: SceneCursor,
-    pub crop: Option<SceneCrop>,
+    /// Crop écran par clip, dans le même ordre que `clips` (`cropByClip` côté TS).
+    #[serde(default)]
+    pub crop_by_clip: Vec<Option<SceneCrop>>,
     pub output: SceneOutput,
 }
 
@@ -160,6 +169,29 @@ impl Scene {
     /// Parse le JSON produit par `buildSceneDescription` (TS).
     pub fn from_json(json: &str) -> anyhow::Result<Scene> {
         Ok(serde_json::from_str(json)?)
+    }
+
+    /// Copie de scène limitée aux régions du clip actif. `clipIndex` est l'identité fiable
+    /// lorsque plusieurs clips réutilisent les mêmes temps source ; son absence retombe sur le
+    /// chevauchement avec la fenêtre source pour accepter les anciens payloads.
+    pub(crate) fn for_clip_window(
+        &self,
+        clip_index: usize,
+        source_start_sec: f64,
+        source_end_sec: f64,
+    ) -> Scene {
+        let belongs = |region_clip_index: Option<usize>, start_sec: f64, end_sec: f64| {
+            let overlaps_window = end_sec > source_start_sec && start_sec < source_end_sec;
+            overlaps_window && region_clip_index.map(|i| i == clip_index).unwrap_or(true)
+        };
+        let mut scene = self.clone();
+        scene.zoom_regions.retain(|region| {
+            belongs(region.clip_index, region.start_sec, region.end_sec)
+        });
+        scene.camera_fullscreen_regions.retain(|region| {
+            belongs(region.clip_index, region.start_sec, region.end_sec)
+        });
+        scene
     }
 }
 
@@ -174,9 +206,9 @@ mod tests {
             "layout": {"preset":"picture-in-picture","webcamSize":1.5,"webcamShape":"circle","webcamMirror":true,"webcamPosition":null,"webcamReactiveZoom":false},
             "effects": {"padding":0.5,"blur":true,"shadow":0.8,"roundnessPx":24,"motionBlur":0.0},
             "background": {"kind":"gradient","angleDeg":135,"stops":["#eaebed","#bcc0c6"]},
-            "zoomRegions": [{"startSec":1.0,"endSec":3.0,"scale":2.0,"focusX":0.5,"focusY":0.3,"rotation":"iso"}],
+            "zoomRegions": [{"clipIndex":0,"startSec":1.0,"endSec":3.0,"scale":2.0,"focusX":0.5,"focusY":0.3,"rotation":"iso"}],
             "cursor": {"show":true,"size":1,"smoothing":0.5,"motionBlur":0.2,"clickBounce":1,"clipToBounds":false,"theme":"default"},
-            "crop": null,
+            "cropByClip": [null],
             "output": {"width":1920,"height":1080,"fps":null}
         }"##;
         let scene = Scene::from_json(json).expect("parse");
@@ -193,12 +225,14 @@ mod tests {
             _ => panic!("expected gradient"),
         }
         assert_eq!(scene.zoom_regions[0].scale, 2.0);
+        assert_eq!(scene.zoom_regions[0].clip_index, Some(0));
+        assert_eq!(scene.crop_by_clip.len(), 1);
         assert_eq!(scene.output.width, 1920);
     }
 
     #[test]
     fn parses_color_and_image_backgrounds() {
-        let color = r##"{"clips":[],"layout":{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0,"blur":false,"shadow":0,"roundnessPx":0,"motionBlur":0},"background":{"kind":"color","color":"#123456"},"zoomRegions":[],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"crop":null,"output":{"width":1280,"height":720,"fps":30}}"##;
+        let color = r##"{"clips":[],"layout":{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0,"blur":false,"shadow":0,"roundnessPx":0,"motionBlur":0},"background":{"kind":"color","color":"#123456"},"zoomRegions":[],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"cropByClip":[],"output":{"width":1280,"height":720,"fps":30}}"##;
         let s = Scene::from_json(color).expect("parse color");
         match s.background {
             SceneBackground::Color { ref color } => assert_eq!(color, "#123456"),

@@ -66,6 +66,7 @@ export interface CompositorViewAddon {
 	/** Installs the app scene (JSON `SceneDescription`) — layout preset etc. drive the render
 	 *  instead of the fixture. Invalid JSON is ignored native-side. */
 	setScene(id: number, sceneJson: string): void;
+	setActiveClip(id: number, screenPath: string, webcamPath: string, webcamOffsetSec: number): void;
 	destroyView(id: number): void;
 	/** Renders the fixture to `outPath` (C8), auto-pausing live previews. */
 	export(outPath: string): Promise<ExportStats>;

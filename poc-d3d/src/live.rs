@@ -58,6 +58,10 @@ fn parse_hex_color(s: &str) -> Option<[f32; 4]> {
 pub struct Player {
     sdec: Decoder,
     wdec: Decoder,
+    gpu: Gpu,
+    webcam_offset_sec: f64,
+    has_current_frame: bool,
+    use_current_on_next_step: bool,
     idx: u32,
 }
 
@@ -66,32 +70,69 @@ impl Player {
         Ok(Player {
             sdec: Decoder::open(screen, gpu)?,
             wdec: Decoder::open(webcam, gpu)?,
+            gpu: Gpu {
+                device: gpu.device.clone(),
+                context: gpu.context.clone(),
+                feature_level: gpu.feature_level,
+            },
+            webcam_offset_sec: 0.0,
+            has_current_frame: false,
+            use_current_on_next_step: false,
             idx: 0,
         })
     }
 
+    /// Remplace atomiquement la paire de décodeurs du clip actif. Les nouvelles sources sont
+    /// ouvertes et positionnées avant de libérer l'ancienne paire, qui reste donc utilisable si
+    /// l'ouverture échoue.
+    pub unsafe fn set_active_clip(
+        &mut self,
+        screen_path: &str,
+        webcam_path: &str,
+        webcam_offset_sec: f64,
+    ) -> Result<()> {
+        let mut sdec = Decoder::open(screen_path, &self.gpu)?;
+        let mut wdec = Decoder::open(webcam_path, &self.gpu)?;
+        let sf = sdec.seek_to(0.0)?;
+        let wf = wdec.seek_to((0.0 - webcam_offset_sec).max(0.0))?;
+        if sf.is_null() || wf.is_null() {
+            anyhow::bail!("clip actif vide (screen=\"{screen_path}\", webcam=\"{webcam_path}\")");
+        }
+        self.sdec = sdec;
+        self.wdec = wdec;
+        self.webcam_offset_sec = webcam_offset_sec;
+        self.has_current_frame = true;
+        self.use_current_on_next_step = true;
+        self.idx = 0;
+        Ok(())
+    }
+
     /// Compose la frame suivante (→ `comp.rt`). Boucle sur EOF. `false` si fixture vide.
     pub unsafe fn step(&mut self, comp: &Compositor, cfg: &Cfg) -> Result<bool> {
-        let mut sf = self.sdec.next()?;
-        let mut wf = self.wdec.next()?;
+        let (mut sf, mut wf) = if self.use_current_on_next_step {
+            self.use_current_on_next_step = false;
+            (self.sdec.cur_frame(), self.wdec.cur_frame())
+        } else {
+            (self.sdec.next()?, self.wdec.next()?)
+        };
         if sf.is_null() || wf.is_null() {
-            self.sdec.rewind()?;
-            self.wdec.rewind()?;
+            sf = self.sdec.seek_to(0.0)?;
+            wf = self.wdec.seek_to((0.0 - self.webcam_offset_sec).max(0.0))?;
             self.idx = 0;
-            sf = self.sdec.next()?;
-            wf = self.wdec.next()?;
         }
         if sf.is_null() || wf.is_null() {
+            self.has_current_frame = false;
             return Ok(false);
         }
+        self.has_current_frame = true;
         self.sync_time(comp);
         comp.compose_frame(sf, wf, self.idx as f32, cfg)?;
         self.idx = self.idx.wrapping_add(1);
         Ok(true)
     }
 
-    /// Positionne `comp` sur le temps RÉEL (pts) de la frame écran courante, pour que le
-    /// curseur ET les zoom/full-camera regions (référentiel timeline) restent exacts quelle
+    /// Positionne `comp` sur le temps source RÉEL (pts) de la frame écran courante, pour que le
+    /// curseur ET les zoom/full-camera regions du clip actif restent exacts quelle
     /// que soit la cadence réelle de l'enregistrement — BUG corrigé : tout dérivait auparavant
     /// de `frame / 60.0` (un compteur de frames supposant 60fps pile), qui dérive
     /// silencieusement de plus en plus au fil de la lecture dès que le fichier n'est pas
@@ -105,6 +146,9 @@ impl Player {
 
     /// Recompose la frame courante (déjà décodée) — rafraîchit après un changement de param.
     pub unsafe fn recompose(&self, comp: &Compositor, cfg: &Cfg) -> Result<bool> {
+        if !self.has_current_frame {
+            return Ok(false);
+        }
         let sf = self.sdec.cur_frame();
         let wf = self.wdec.cur_frame();
         if sf.is_null() || wf.is_null() {
@@ -116,17 +160,22 @@ impl Player {
         Ok(true)
     }
 
-    /// Seek à `target_sec` (secondes TIMELINE) : keyframe-seek + décodage-avant (réutilise
-    /// `Decoder::seek_to`, même mécanisme robuste que l'export) — remplace l'ancien modèle
+    /// Seek à `target_sec` (secondes source du clip actif) : keyframe-seek + décodage-avant
+    /// (`Decoder::seek_to`, même mécanisme robuste que l'export) — remplace l'ancien modèle
     /// "compte de frames" qui rewindait tout au frame 0 pour le moindre seek arrière et n'avait
     /// aucun raccourci keyframe pour les seeks avant lointains (lent ET, combiné au bug de
     /// `set_time`, incorrect au-delà de 6s sur un enregistrement réel).
     pub unsafe fn present_frame(&mut self, comp: &Compositor, cfg: &Cfg, target_sec: f64) -> Result<bool> {
         let sf = self.sdec.seek_to(target_sec)?;
-        let wf = self.wdec.seek_to(target_sec)?;
+        let wf = self
+            .wdec
+            .seek_to((target_sec - self.webcam_offset_sec).max(0.0))?;
         if sf.is_null() || wf.is_null() {
+            self.has_current_frame = false;
             return Ok(false);
         }
+        self.has_current_frame = true;
+        self.use_current_on_next_step = false;
         self.sync_time(comp);
         // "idx" ne sert plus qu'au fallback fixture (jamais lu si une scène est posée) — dérivé
         // du temps réel pour rester cohérent si jamais consulté.
@@ -181,20 +230,66 @@ impl Default for InspectorParams {
     }
 }
 
+#[derive(Clone)]
+struct ActiveClipRequest {
+    screen_path: String,
+    webcam_path: String,
+    webcam_offset_sec: f64,
+}
+
+fn same_source_path(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+fn find_scene_clip_index(
+    scene: &Scene,
+    screen_path: &str,
+    webcam_path: &str,
+    webcam_offset_sec: f64,
+) -> Option<usize> {
+    scene
+        .clips
+        .iter()
+        .position(|clip| {
+            same_source_path(&clip.screen_path, screen_path)
+                && same_source_path(&clip.webcam_path, webcam_path)
+                && (clip.webcam_offset_sec - webcam_offset_sec).abs() <= 1e-6
+        })
+        .or_else(|| {
+            scene.clips.iter().position(|clip| {
+                same_source_path(&clip.screen_path, screen_path)
+                    && same_source_path(&clip.webcam_path, webcam_path)
+            })
+        })
+}
+
+fn scene_for_clip(scene: &Scene, clip_index: usize) -> Scene {
+    match scene.clips.get(clip_index) {
+        Some(clip) => scene.for_clip_window(
+            clip_index,
+            clip.source_start_sec,
+            clip.source_end_sec,
+        ),
+        None => scene.clone(),
+    }
+}
+
 /// État partagé thread appelant → thread de rendu (commandes sans blocage).
 struct Shared {
     /// rect viewport en px device [x, y, w, h], relatif au client de la fenêtre parente.
     /// Le thread de rendu le mappe en coords écran (le parent peut bouger) et repositionne.
     rect: Mutex<[i32; 4]>,
     inspector: Mutex<InspectorParams>,
-    /// Temps (secondes TIMELINE) demandé par l'app (presentTime/seek) ; prioritaire sur la
-    /// lecture libre. En SECONDES (pas un index de frame) : `Player::present_frame` fait un
+    /// Temps source (secondes) demandé par l'app pour le clip actif (presentTime/seek), prioritaire
+    /// sur la lecture libre. En SECONDES (pas un index de frame) : `Player::present_frame` fait un
     /// vrai seek keyframe (`Decoder::seek_to`, comme l'export) au lieu de compter des frames —
     /// BUG corrigé : l'ancien `set_time` convertissait en index de frame à 60fps fixe PUIS le
     /// wrappait modulo `FIXTURE_FRAMES` (360 = 6s) — un reliquat du bench fixture qui faisait
     /// boucler silencieusement tout seek au-delà de 6s sur un enregistrement réel, exactement
     /// la cause du "zoom timeline désynchronisé" observé.
     requested_frame: Mutex<Option<f64>>,
+    /// Changement de sources consommé par le thread de rendu, seul propriétaire des décodeurs.
+    active_clip_request: Mutex<Option<ActiveClipRequest>>,
     /// scène de l'app (contrat) ; appliquée au compositeur quand `scene_dirty`.
     scene: Mutex<Option<Scene>>,
     scene_dirty: AtomicBool,
@@ -254,6 +349,7 @@ impl LiveView {
                 rect: Mutex::new([x, y, w, h]),
                 inspector: Mutex::new(InspectorParams::default()),
                 requested_frame: Mutex::new(None),
+                active_clip_request: Mutex::new(None),
                 scene: Mutex::new(None),
                 scene_dirty: AtomicBool::new(false),
                 playing: AtomicBool::new(true),
@@ -360,12 +456,27 @@ impl LiveView {
         }
     }
 
-    /// Positionne la vue sur le temps `seconds` (seek, piloté par la playhead de l'app) — un
-    /// vrai temps timeline, plus de conversion en index de frame ni de wrap fixture ici (voir
-    /// doc de `requested_frame`).
+    /// Positionne la vue sur le temps source `seconds` du clip actif — plus de conversion en
+    /// index de frame ni de wrap fixture ici (voir `requested_frame`).
     pub fn set_time(&self, seconds: f64) {
         if let Ok(mut r) = self.shared.requested_frame.lock() {
             *r = Some(seconds.max(0.0));
+        }
+    }
+
+    /// Programme le remplacement de la paire screen/webcam sur le thread de rendu.
+    pub fn set_active_clip(
+        &self,
+        screen_path: &str,
+        webcam_path: &str,
+        webcam_offset_sec: f64,
+    ) {
+        if let Ok(mut request) = self.shared.active_clip_request.lock() {
+            *request = Some(ActiveClipRequest {
+                screen_path: screen_path.to_string(),
+                webcam_path: webcam_path.to_string(),
+                webcam_offset_sec,
+            });
         }
     }
 }
@@ -451,11 +562,15 @@ unsafe fn render_thread(
     // fixture POC). On charge toute la piste depuis t=0 ; 24h couvre large toute recording réelle.
     // Gardée à part (raw_cursor) pour pouvoir régénérer une variante lissée sans relire le
     // fichier à chaque changement du slider "smoothing" (voir la boucle plus bas).
-    let raw_cursor = CursorTrack::load(cursor_json, 0.0, 24.0 * 3600.0).ok();
+    let mut raw_cursor = CursorTrack::load(cursor_json, 0.0, 24.0 * 3600.0).ok();
     if let Some(track) = &raw_cursor {
         comp.set_cursor(track.smoothed(0.0));
     }
     let mut player = Player::open(screen, webcam, &gpu)?;
+    let mut active_screen_path = screen.to_string();
+    let mut active_webcam_path = webcam.to_string();
+    let mut active_webcam_offset_sec = 0.0f64;
+    let mut active_clip_index = 0usize;
 
     // config de base = C8 (tous effets) ; le fond flouté est piloté par le param live.
     let mut cfg = config::all().pop().expect("au moins une config");
@@ -486,6 +601,47 @@ unsafe fn render_thread(
     while !shared.stop.load(Ordering::SeqCst) {
         // params inspector : booléens/taps → cfg ; valeurs continues → live_params
         let ip = *shared.inspector.lock().unwrap();
+        let mut clip_changed = false;
+        let clip_request = shared.active_clip_request.lock().unwrap().take();
+        if let Some(request) = clip_request {
+            match player.set_active_clip(
+                &request.screen_path,
+                &request.webcam_path,
+                request.webcam_offset_sec,
+            ) {
+                Ok(()) => {
+                    active_screen_path = request.screen_path;
+                    active_webcam_path = request.webcam_path;
+                    active_webcam_offset_sec = request.webcam_offset_sec;
+                    let scene = shared.scene.lock().unwrap().clone();
+                    if let Some(base_scene) = scene {
+                        if let Some(index) = find_scene_clip_index(
+                            &base_scene,
+                            &active_screen_path,
+                            &active_webcam_path,
+                            active_webcam_offset_sec,
+                        ) {
+                            active_clip_index = index;
+                        } else {
+                            eprintln!(
+                                "[live] set_active_clip: sources absentes de la scène (screen=\"{}\", webcam=\"{}\")",
+                                active_screen_path, active_webcam_path
+                            );
+                        }
+                        comp.set_scene(Some(scene_for_clip(&base_scene, active_clip_index)));
+                        scene_applied = true;
+                    }
+                    let cursor_path = format!("{}.cursor.json", active_screen_path);
+                    raw_cursor = CursorTrack::load(&cursor_path, 0.0, 24.0 * 3600.0).ok();
+                    if raw_cursor.is_none() {
+                        comp.clear_cursor();
+                    }
+                    last_smoothing = -1.0;
+                    clip_changed = true;
+                }
+                Err(e) => eprintln!("[live] set_active_clip: {e:#}"),
+            }
+        }
         cfg.bg_blur = ip.bg_blur;
         cfg.mblur_n = ip.mblur_taps;
         cfg.cursor = ip.cursor_show;
@@ -518,9 +674,18 @@ unsafe fn render_thread(
         let scene_changed = shared.scene_dirty.swap(false, Ordering::Relaxed);
         if scene_changed {
             let scene = shared.scene.lock().unwrap().clone();
-            if scene.is_some() {
+            let scene = scene.map(|base_scene| {
                 scene_applied = true;
-            }
+                if let Some(index) = find_scene_clip_index(
+                    &base_scene,
+                    &active_screen_path,
+                    &active_webcam_path,
+                    active_webcam_offset_sec,
+                ) {
+                    active_clip_index = index;
+                }
+                scene_for_clip(&base_scene, active_clip_index)
+            });
             comp.set_scene(scene);
         }
 
@@ -590,8 +755,8 @@ unsafe fn render_thread(
             if acc > step {
                 acc = 0.0;
             }
-        } else if resized || first || ip_changed || scene_changed {
-            // pause : recompose la frame courante (taille / param / scène changés).
+        } else if resized || first || ip_changed || scene_changed || clip_changed {
+            // pause : recompose la frame courante (taille / param / scène / clip changés).
             let _ = player.recompose(&comp, &cfg);
             stepped = true;
         }
