@@ -1,22 +1,20 @@
-// CSS-driven canvas shell that wraps the active source video with the
-// editor's background, frame, and overlay settings.
+// Hosts the native D3D preview canvas (the sole pixel source) plus the
+// interactive-only DOM overlays (zoom gimbal, annotations, webcam drag) that
+// still need real hitboxes. The shared source of truth is `useEditorSettings`,
+// so toggling a slider here updates both the live preview (via the pushed
+// scene) and the eventual native export.
 //
-// ponytail: mouse-driven overlays (cursor, zoom, annotations) and motion blur
-// still render through the legacy canvas preview pipeline for export. The
-// shared source of truth is `useEditorSettings`, so toggling a slider here
-// updates both the live preview and the eventual render.
-//
-// Architecture (matches the legacy `compositeLayout.computeCompositeLayout`):
-//   .previewFrame           → canvas (wallpaper bg + blurred copy behind the
-//                             video when showBlur is on; never receives padding
+// Architecture (matches the legacy `compositeLayout.computeCompositeLayout`,
+// which this file still uses to POSITION the interactive overlays/hitboxes —
+// the actual pixels come from the native canvas, not from this layout):
+//   .previewFrame           → canvas (wallpaper bg; never receives padding
 //                             from the slider directly).
-//   .screenStage            → active source video; positioned/sized by the
-//                             composite-layout math (PiP/dual/stack/no-cam).
-//                             Carries the drop-shadow that gives the active
-//                             recording its lifted look.
-//   .webcamSlot             → live WebcamOverlay container; positioned/sized
-//                             by the same math.
-//   .bgBlur                 → blurred wallpaper peeking around the video.
+//   .screenStage            → sizes/positions the zoom/annotation overlays by
+//                             the composite-layout math (PiP/dual/stack/no-cam);
+//                             its own <video> is CSS-hidden (decode/clock only).
+//   .webcamSlot             → drag-to-reposition hitbox for the webcam PiP,
+//                             positioned by the same math; its <video> is
+//                             CSS-hidden too.
 //
 // The composite layout is computed from `.previewFrame`'s actual rendered
 // size (via ResizeObserver), so the camera + screen both resize correctly
@@ -56,6 +54,7 @@ import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
 import { getAspectRatioValue } from "@/utils/aspectRatioUtils";
 import { AnnotationLayer } from "./AnnotationLayer";
+import { NativeCompositorOverlay } from "./NativeCompositorOverlay";
 import styles from "./NewEditorShell.module.css";
 import { type VideoSource, VirtualPreview } from "./VirtualPreview";
 import { WebcamOverlay } from "./WebcamOverlay";
@@ -289,7 +288,6 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	}, [layout, cameraFullscreenProgress, canvasSize]);
 
 	const frameStyle = useMemo(() => buildFrameStyle(settings), [settings]);
-	const blurStyle = useMemo(() => buildBlurStyle(settings), [settings]);
 	const screenStyle = useMemo(
 		() => buildScreenStyle(layout, settings, canvasSize),
 		[layout, settings, canvasSize],
@@ -389,7 +387,14 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 			className={styles.previewFrame}
 			style={{ ...frameStyle, width: frameSize.width, height: frameSize.height }}
 		>
-			<div className={styles.bgBlur} style={blurStyle} aria-hidden />
+			{/* Sole pixel source: the D3D-composited frame (wallpaper + screen + webcam +
+			    cursor), streamed into a canvas. The <video> elements below are CSS-hidden
+			    (visibility only — they stay mounted for decode/playback-clock/metadata
+			    duties, since the native compositor doesn't drive playback itself), and the
+			    interactive-only layers (ZoomFocusOverlay, AnnotationLayer, webcam drag
+			    hitbox) still render on top as normal DOM so they stay clickable. No more
+			    dual preview path. */}
+			<NativeCompositorOverlay />
 			{layout?.screenRect ? (
 				<div className={styles.screenStage} style={screenStyle}>
 					{(() => {
@@ -574,29 +579,6 @@ function buildWebcamStyle(
 		boxShadow: getWebcamLayoutCssBoxShadow(settings.webcamLayoutPreset as WebcamLayoutPreset),
 	};
 	return clipPath ? { ...base, clipPath } : base;
-}
-
-// Blurred wallpaper copy. Hidden when showBlur is off.
-function buildBlurStyle(
-	settings: ReturnType<typeof useEditorSettings>["settings"],
-): React.CSSProperties {
-	if (!settings.showBlur) return { display: "none" };
-	const w = classifyWallpaper(settings.wallpaper);
-	if (w.kind === "color") {
-		return { backgroundColor: w.value, filter: "blur(28px)", opacity: 1 };
-	}
-	if (w.kind === "gradient") {
-		return { background: w.value, backgroundSize: "cover", filter: "blur(28px)", opacity: 1 };
-	}
-	const url = resolveWallpaperImageUrl(w.path);
-	if (!url) return { display: "none" };
-	return {
-		backgroundImage: `url(${url})`,
-		backgroundSize: "cover",
-		backgroundPosition: "center",
-		filter: "blur(28px)",
-		opacity: 1,
-	};
 }
 
 function clamp(v: number, min: number, max: number): number {

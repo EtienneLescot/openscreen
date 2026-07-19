@@ -24,7 +24,7 @@ import {
 	UnsavedChangesModal,
 	type UnsavedChoice,
 } from "./Modals";
-import { NATIVE_COMPOSITOR_ENABLED, Preview } from "./Preview";
+import { Preview } from "./Preview";
 import v4 from "./v4/EditorShellV4.module.css";
 import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
 import { type Facet, FloatingInspector } from "./v4/FloatingInspector";
@@ -1177,15 +1177,12 @@ export function NewEditorShell() {
 									// fixed chunk that dwarfs the card on smaller windows.
 									//
 									// Native compositor: the D3D overlay is an opaque, always-on-top
-									// window that would DRAW OVER the floating inspector (airspace —
-									// it can't sit behind a DOM layer), truncating the panel. The web
-									// design lets the translucent panel float over the video (320 < the
-									// inspector's real 380px footprint = right:20 + rail:50 + gap:10 +
-									// panel:300), but in native mode we must reserve the full footprint
-									// so the overlay stops clear of it (≈400 = 380 + a small gap).
-									padding: `16px ${
-										inspectorOpen ? (NATIVE_COMPOSITOR_ENABLED ? 400 : 320) : 74
-									}px 16px 16px`,
+									// design lets the translucent panel float over the video, but the
+									// preview is now a plain in-DOM <canvas> (no OS window/airspace
+									// issue) — still reserve the inspector's real footprint (right:20 +
+									// rail:50 + gap:10 + panel:300 ≈ 380, +a small gap) so it doesn't
+									// draw its own translucent panel flush against the canvas edge.
+									padding: `16px ${inspectorOpen ? 400 : 74}px 16px 16px`,
 									boxSizing: "border-box",
 								}}
 							>
