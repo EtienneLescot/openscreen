@@ -624,8 +624,8 @@ int main(int argc, char* argv[]) {
         // SampleTime we attach (confirmed empirically -- varying, correctly
         // increasing input timestamps still produced perfectly even output
         // spacing). Since we cannot make the encoder respect real capture
-        // time, we instead make the encoder's assumption true: call
-        // writeBgraFrame() on a real-time-paced cadence (duplicating the
+        // time, we instead make the encoder's assumption true: feed the
+        // webcam encoder on a real-time-paced cadence (duplicating the
         // latest available camera frame when the camera hasn't produced a
         // newer one yet), so "sample N is at N/fps" is actually correct.
         int64_t nextWebcamWriteDueHns = 0;
@@ -633,6 +633,11 @@ int main(int argc, char* argv[]) {
             static_cast<int64_t>(10'000'000ULL / std::max(1, webcamCapture.fps()));
 
         while (!control.stopRequested && !encodeFailed) {
+            Microsoft::WRL::ComPtr<IMFSample> videoSample;
+            Microsoft::WRL::ComPtr<IMFSample> webcamSample;
+            bool hasVideoSample = false;
+            bool hasWebcamSample = false;
+
             {
                 std::unique_lock lock(mutex);
                 control.cv.wait(lock, [&] {
@@ -691,7 +696,7 @@ int main(int argc, char* argv[]) {
                     // sequentially at its configured nominal rate regardless of the
                     // SampleTime attached to each input sample. So the only way to
                     // keep the encoded webcam file in sync with real elapsed time is
-                    // to call writeBgraFrame() *at* that nominal cadence, duplicating
+                    // to feed the encoder *at* that nominal cadence, duplicating
                     // the latest available camera frame when the camera hasn't
                     // produced a newer one yet (VFR capture -> CFR encode resampling).
                     if (targetElapsedHns >= nextWebcamWriteDueHns) {
@@ -699,11 +704,16 @@ int main(int argc, char* argv[]) {
                         if (lastWebcamTimestampHns >= 0 && webcamTimestampHns <= lastWebcamTimestampHns) {
                             webcamTimestampHns = lastWebcamTimestampHns + nominalWebcamIntervalHns;
                         }
-                        if (!webcamEncoder.writeBgraFrame(webcamFrame, webcamTimestampHns)) {
+                        // Capture the sample under `mutex` (the frame copy), but
+                        // submit it to the sink writer OUTSIDE the mutex below
+                        // (issue #115) so a slow WriteSample can't starve the main
+                        // thread's stop-wait.
+                        hasWebcamSample = webcamEncoder.captureBgraSample(webcamFrame, webcamTimestampHns, webcamSample);
+                        if (!hasWebcamSample) {
                             encodeFailed = true;
                             control.stopRequested = true;
                             control.cv.notify_all();
-                            return;
+                            break;
                         }
                         lastWebcamTimestampHns = webcamTimestampHns;
                         nextWebcamWriteDueHns += nominalWebcamIntervalHns;
@@ -714,18 +724,47 @@ int main(int argc, char* argv[]) {
                         }
                     }
                 }
-                if (latestFrameTexture && !encoder.writeFrame(
+                if (latestFrameTexture) {
+                    // captureVideoSample performs the GPU readback
+                    // (CopyResource/Map) from latestFrameTexture, which must
+                    // stay serialized (via `mutex`) against the WGC
+                    // frame-arrival callback above, which writes new data
+                    // into the same texture on another thread.
+                    hasVideoSample = encoder.captureVideoSample(
                         latestFrameTexture.Get(),
                         frameTimestampHns,
-                        !writeSeparateWebcam && webcamFrame.data ? &webcamFrame : nullptr)) {
-                    encodeFailed = true;
-                    control.stopRequested = true;
-                    control.cv.notify_all();
-                    return;
-                }
-                if (latestFrameTexture) {
+                        !writeSeparateWebcam && webcamFrame.data ? &webcamFrame : nullptr,
+                        videoSample);
+                    if (!hasVideoSample) {
+                        encodeFailed = true;
+                        control.stopRequested = true;
+                        control.cv.notify_all();
+                        break;
+                    }
                     lastEncodedVideoTimestampHns = frameTimestampHns;
                 }
+            }
+
+            // Submit the captured samples to their sink writers OUTSIDE
+            // `mutex`. IMFSinkWriter::WriteSample runs the H.264 encode
+            // synchronously and can be slow (especially the software encoder
+            // fallback used when preferSoftwareEncoder is set). Holding
+            // `mutex` across it would block the main thread's stop-wait
+            // (which locks the same mutex to check control.stopRequested)
+            // for as long as this thread keeps re-acquiring the lock faster
+            // than the main thread can, hanging the helper indefinitely
+            // after a stop request (issue #115).
+            if (hasWebcamSample && !webcamEncoder.submitVideoSample(webcamSample.Get())) {
+                encodeFailed = true;
+                control.stopRequested = true;
+                control.cv.notify_all();
+                break;
+            }
+            if (hasVideoSample && !encoder.submitVideoSample(videoSample.Get())) {
+                encodeFailed = true;
+                control.stopRequested = true;
+                control.cv.notify_all();
+                break;
             }
 
             frameIndex += 1;
