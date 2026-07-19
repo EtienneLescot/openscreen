@@ -4,6 +4,7 @@
 
 use crate::compositor::{Compositor, OUT_H, OUT_W};
 use crate::config::Cfg;
+use crate::cursor::CursorTrack;
 use crate::d3d::Gpu;
 use crate::ffi::*;
 use anyhow::{anyhow, bail, Result};
@@ -30,6 +31,9 @@ pub struct Stats {
     pub frames: u64,
     pub wall_s: f64,
     pub fps: f64,
+    /// Durée de la vidéo exportée (secondes) = frames / cadence de sortie. Distincte de
+    /// `wall_s` (temps de rendu réel) — sert au message de succès ("vidéo de Xs exportée en Ys").
+    pub video_duration_s: f64,
 }
 
 /// Garde RAII sur une AVFrame (la libère au Drop).
@@ -347,7 +351,7 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
     avformat_close_input(&mut fmt);
 
     let fps = frames as f64 / wall_s;
-    Ok(Stats { frames, wall_s, fps })
+    Ok(Stats { frames, wall_s, fps, video_duration_s: frames as f64 / 60.0 })
 }
 
 /// Décodeur qui rend une frame à la fois (pour composer 2 sources en lockstep).
@@ -636,7 +640,7 @@ unsafe fn run_c1_inner(
     av_buffer_unref(&mut enc_hwdev);
 
     let fps = frames as f64 / wall_s;
-    Ok(Stats { frames, wall_s, fps })
+    Ok(Stats { frames, wall_s, fps, video_duration_s: frames as f64 / 60.0 })
 }
 
 /// Une source de clip pour l'export multiclip : fichiers screen+webcam + fenêtre source
@@ -652,17 +656,51 @@ pub struct ClipSource {
 /// Export **multiclip** : rend la timeline (clips ordonnés, avec trims) en un seul MP4.
 /// Perf (contrainte §multiclip) : décodeurs ouverts une fois par source (cache) et réutilisés
 /// entre clips du même asset ; **un seul seek keyframe par frontière de clip** ; décodage
-/// séquentiel dans le clip → coût/frame identique au mono-clip (~120fps préservés). Cadence de
-/// sortie = fps du 1er clip (la conversion de cadence viendra avec les params d'export).
+/// séquentiel dans le clip → coût/frame identique au mono-clip (~120fps préservés).
 pub fn run_composited_multi(
     clips: &[ClipSource],
     out: &str,
     gpu: &Gpu,
     comp: &Compositor,
     cfg: &Cfg,
+    params: &ExportParams,
     progress: &mut dyn FnMut(u64),
 ) -> Result<Stats> {
-    unsafe { run_multi_inner(clips, out, gpu, comp, cfg, progress) }
+    unsafe { run_multi_inner(clips, out, gpu, comp, cfg, params, progress) }
+}
+
+/// Codec vidéo de sortie — mappé sur un encodeur matériel AMF (même famille que h264_amf,
+/// déjà mesuré). VP9 a été essayé via un chemin logiciel (libvpx-vp9, pas d'équivalent
+/// matériel AMF sur cet iGPU) mais retiré : trop lent pour être utile en pratique sur ce
+/// matériel, pas la peine de maintenir ce chemin. Choisir VP9 échoue avec un message clair
+/// plutôt que de silencieusement retomber sur H264.
+pub enum ExportCodec {
+    H264,
+    H265,
+}
+
+impl ExportCodec {
+    fn encoder_name(&self) -> &'static str {
+        match self {
+            ExportCodec::H264 => "h264_amf",
+            ExportCodec::H265 => "hevc_amf",
+        }
+    }
+}
+
+/// Résolution/cadence/codec de sortie. `fps: None` = dérivé du 1er clip (comportement
+/// historique) ; `width`/`height` doivent être pairs (NV12 4:2:0) — l'appelant napi arrondit.
+pub struct ExportParams {
+    pub width: u32,
+    pub height: u32,
+    pub fps: Option<u32>,
+    pub codec: ExportCodec,
+}
+
+impl Default for ExportParams {
+    fn default() -> Self {
+        Self { width: OUT_W, height: OUT_H, fps: None, codec: ExportCodec::H264 }
+    }
 }
 
 unsafe fn run_multi_inner(
@@ -671,34 +709,53 @@ unsafe fn run_multi_inner(
     gpu: &Gpu,
     comp: &Compositor,
     cfg: &Cfg,
+    params: &ExportParams,
     progress: &mut dyn FnMut(u64),
 ) -> Result<Stats> {
     if clips.is_empty() {
         bail!("aucun clip à exporter");
     }
+    let (out_w, out_h) = (params.width, params.height);
     // décodeurs ouverts une fois par chemin, réutilisés entre clips (screen ≠ webcam → 2 maps
     // pour deux &mut indépendants).
     let mut screen_decs: HashMap<String, Decoder> = HashMap::new();
     let mut webcam_decs: HashMap<String, Decoder> = HashMap::new();
 
-    // fps de sortie = fps du 1er clip (recordings uniformes).
+    // fps de sortie : choix explicite de l'app si fourni, sinon dérivé du 1er clip (recordings
+    // uniformes) — comportement historique.
     screen_decs.insert(clips[0].screen.clone(), Decoder::open(&clips[0].screen, gpu)?);
-    let out_fps = screen_decs[&clips[0].screen].fps().round().max(1.0) as i32;
+    let out_fps = params
+        .fps
+        .unwrap_or_else(|| screen_decs[&clips[0].screen].fps().round().max(1.0) as u32)
+        as i32;
 
-    // ---- encodeur h264_amf + mux (identique à run_c1_inner, à la cadence près) ----
-    let (mut enc_hwdev, mut enc_frames) = make_enc_frames(gpu, OUT_W as i32, OUT_H as i32)?;
-    let enc_name = CString::new("h264_amf")?;
+    // Curseur : la scène (déjà posée par l'appelant via comp.set_scene) pilote tout — même
+    // parité que le live. Piste par chemin ÉCRAN distinct (convention sidecar `<screen>.cursor.json`,
+    // temps ABSOLU non re-basé : chaque décodeur avance dans le même référentiel que la piste).
+    let scene = comp.scene_snapshot();
+    let cursor_enabled = scene.as_ref().map(|s| s.cursor.show).unwrap_or(false);
+    let cursor_smoothing = scene.as_ref().map(|s| s.cursor.smoothing).unwrap_or(0.0);
+    let mut cursor_tracks: HashMap<String, CursorTrack> = HashMap::new();
+    let mut cursor_active_path: Option<String> = None;
+
+    // ---- encodeur (h264/h265 AMF) + mux, à la taille/cadence demandées ----
+    let (mut enc_hwdev, mut enc_frames) = make_enc_frames(gpu, out_w as i32, out_h as i32)?;
+    let enc_name_str = params.codec.encoder_name();
+    let enc_name = CString::new(enc_name_str)?;
     let enc = avcodec_find_encoder_by_name(enc_name.as_ptr());
     if enc.is_null() {
-        bail!("h264_amf introuvable");
+        bail!("{enc_name_str} introuvable");
     }
     let ectx = avcodec_alloc_context3(enc);
-    (*ectx).width = OUT_W as i32;
-    (*ectx).height = OUT_H as i32;
+    (*ectx).width = out_w as i32;
+    (*ectx).height = out_h as i32;
     (*ectx).pix_fmt = AVPixelFormat::AV_PIX_FMT_D3D11;
     (*ectx).time_base = AVRational { num: 1, den: out_fps };
     (*ectx).framerate = AVRational { num: out_fps, den: 1 };
-    (*ectx).bit_rate = 8_000_000;
+    // proportionnel à la surface de sortie (référence : 8Mbps @ 1920x1080), plancher 2Mbps
+    // pour rester regardable sur les petites tailles.
+    (*ectx).bit_rate =
+        ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
     (*ectx).hw_frames_ctx = av_buffer_ref(enc_frames);
     averr(avcodec_open2(ectx, enc, ptr::null_mut()), "avcodec_open2(enc)")?;
 
@@ -736,6 +793,25 @@ unsafe fn run_multi_inner(
         }
         wdec.seek_to((clip.source_start_sec - clip.webcam_offset_sec).max(0.0))?;
 
+        if cursor_enabled {
+            if !cursor_tracks.contains_key(&clip.screen) {
+                let path = format!("{}.cursor.json", clip.screen);
+                if let Ok(raw) = CursorTrack::load(&path, 0.0, 24.0 * 3600.0) {
+                    cursor_tracks.insert(clip.screen.clone(), raw.smoothed(cursor_smoothing));
+                }
+                // absente/illisible → pas d'entrée : ce clip s'exporte sans curseur (visible,
+                // pas masqué en un curseur fantôme d'un autre clip).
+            }
+            if cursor_active_path.as_deref() != Some(clip.screen.as_str()) {
+                if let Some(track) = cursor_tracks.get(&clip.screen) {
+                    comp.set_cursor(track.clone());
+                    cursor_active_path = Some(clip.screen.clone());
+                } else {
+                    cursor_active_path = None;
+                }
+            }
+        }
+
         loop {
             let sf = sdec.cur_frame();
             let wf = wdec.cur_frame();
@@ -745,13 +821,16 @@ unsafe fn run_multi_inner(
             if sdec.cur_time_sec() >= clip.source_end_sec {
                 break;
             }
+            if cursor_enabled && cursor_active_path.is_some() {
+                comp.set_cursor_time(Some(sdec.cur_time_sec() as f32));
+            }
             comp.compose_frame(sf, wf, frames as f32, cfg)?;
 
             let outf = av_frame_alloc();
             averr(av_hwframe_get_buffer(enc_frames, outf, 0), "hwframe_get_buffer")?;
             let out_tex = (*outf).data[0] as *mut c_void;
             let out_slice = (*outf).data[1] as u32;
-            comp.rgb_to_nv12(out_tex, out_slice)?;
+            comp.rgb_to_nv12_scaled(out_w, out_h, out_tex, out_slice)?;
             (*outf).pts = frames as i64;
             averr(avcodec_send_frame(ectx, outf), "send_frame")?;
             drain_encoder(ectx, octx, ostream, opkt)?;
@@ -786,7 +865,7 @@ unsafe fn run_multi_inner(
     av_buffer_unref(&mut enc_hwdev);
 
     let fps = frames as f64 / wall_s;
-    Ok(Stats { frames, wall_s, fps })
+    Ok(Stats { frames, wall_s, fps, video_duration_s: frames as f64 / out_fps as f64 })
 }
 
 unsafe fn drain_encoder(

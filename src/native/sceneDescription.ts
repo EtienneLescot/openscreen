@@ -28,6 +28,8 @@ export type SceneBackground =
 
 /** A timeline zoom region (from `document.zoomRanges`). Times in seconds. */
 export interface SceneZoomRegion {
+	/** Stable id — native uses it to pair adjacent regions for connected zoom-pan. */
+	id: string;
 	startSec: number;
 	endSec: number;
 	/** Target scale (>1 zooms in). Derived from `depth` (or `customScale` when present). */
@@ -35,6 +37,8 @@ export interface SceneZoomRegion {
 	/** Focus point, 0..1 of the frame. */
 	focusX: number;
 	focusY: number;
+	/** "auto" follows cursor telemetry instead of the fixed focus point. */
+	focusMode: "manual" | "auto" | null;
 	/** Optional rotation preset for the zoom. */
 	rotation: "iso" | "left" | "right" | null;
 }
@@ -222,11 +226,13 @@ export function buildSceneDescription(document: AxcutDocument): SceneDescription
 		},
 		background: parseWallpaper(settings.wallpaper),
 		zoomRegions: (document.zoomRanges ?? []).map((region) => ({
+			id: region.id,
 			startSec: region.startMs / 1000,
 			endSec: region.endMs / 1000,
 			scale: region.customScale ?? region.depth / 2 + 0.5,
 			focusX: region.focus.cx,
 			focusY: region.focus.cy,
+			focusMode: region.focusMode ?? null,
 			rotation: region.rotationPreset ?? null,
 		})),
 		crop,

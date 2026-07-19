@@ -9,6 +9,7 @@
 import { requireNativeBridgeData } from "./client";
 import type {
 	CompositorClipInput,
+	CompositorExportParams,
 	CompositorExportResult,
 	CompositorParamValue,
 	CompositorViewRect,
@@ -31,6 +32,16 @@ export function setCompositorRect(id: number, rect: CompositorViewRect): Promise
 		domain: "compositor",
 		action: "setRect",
 		payload: { id, rect },
+	});
+}
+
+/** Shows/hides the native overlay. A top-level OS window, not part of the Chromium surface —
+ *  DOM z-index has no effect on it. Hide it while a web modal (export…) must appear in front. */
+export function setCompositorVisible(id: number, visible: boolean): Promise<{ ok: true }> {
+	return requireNativeBridgeData<{ ok: true }>({
+		domain: "compositor",
+		action: "setVisible",
+		payload: { id, visible },
 	});
 }
 
@@ -89,10 +100,12 @@ export function exportNative(outPath?: string): Promise<CompositorExportResult> 
 export function exportMultiNative(
 	clips: CompositorClipInput[],
 	outPath?: string,
+	sceneJson?: string,
+	params?: CompositorExportParams,
 ): Promise<CompositorExportResult> {
 	return requireNativeBridgeData<CompositorExportResult>({
 		domain: "compositor",
 		action: "exportMulti",
-		payload: { clips, outPath },
+		payload: { clips, outPath, sceneJson, params },
 	});
 }

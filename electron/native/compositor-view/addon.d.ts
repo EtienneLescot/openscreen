@@ -20,6 +20,19 @@ export interface ExportStats {
 	frames: number;
 	wallS: number;
 	fps: number;
+	/** Duration of the exported video (seconds) — distinct from `wallS` (real render time). */
+	videoDurationS: number;
+}
+
+/** Output size/framerate/codec the app wants. All optional — omitted → 1920x1080 / first
+ *  clip's fps / h264. `width`/`height` are rounded to the nearest even number (NV12 4:2:0). */
+export interface ExportParamsInput {
+	width?: number;
+	height?: number;
+	fps?: number;
+	/** "h264" | "h265". Anything else (e.g. "vp9", no AMF hardware equivalent) fails the export
+	 *  with a clear error instead of silently falling back to h264. */
+	codec?: string;
 }
 
 /** One timeline clip for the native multiclip export (screen + webcam files + source trim). */
@@ -43,6 +56,9 @@ export interface CompositorViewAddon {
 		cursorPath?: string,
 	): number;
 	setRect(id: number, rect: CompositorViewRect): void;
+	/** Shows/hides the overlay. It's a top-level window outside the Chromium surface, so CSS
+	 *  z-index can't put a web modal in front of it — the app must hide it explicitly. */
+	setViewVisible(id: number, visible: boolean): void;
 	setParam(id: number, key: string, value: CompositorParamValue): void;
 	setPlaying(id: number, playing: boolean): void;
 	/** Seeks the view to `seconds` (app playhead-driven). */
@@ -53,8 +69,16 @@ export interface CompositorViewAddon {
 	destroyView(id: number): void;
 	/** Renders the fixture to `outPath` (C8), auto-pausing live previews. */
 	export(outPath: string): Promise<ExportStats>;
-	/** Renders the real timeline (ordered clips + trims) to `outPath`, auto-pausing previews. */
-	exportMulti(clips: ClipInput[], outPath: string): Promise<ExportStats>;
+	/** Renders the real timeline (ordered clips + trims) to `outPath`, auto-pausing previews.
+	 *  `sceneJson` — same `SceneDescription` as the live preview (background/layout/webcam/cursor/
+	 *  effects); omitted or invalid → nothing configured is applied (not a masking fallback).
+	 *  `params` — output size/fps/codec; omitted → 1920x1080/first clip's fps/h264. */
+	exportMulti(
+		clips: ClipInput[],
+		outPath: string,
+		sceneJson?: string,
+		params?: ExportParamsInput,
+	): Promise<ExportStats>;
 }
 
 /**

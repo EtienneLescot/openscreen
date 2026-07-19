@@ -10,6 +10,7 @@ pub mod d3d;
 pub mod ffi;
 pub mod live;
 pub mod pipeline;
+pub mod regions;
 pub mod scene;
 
 use anyhow::Result;

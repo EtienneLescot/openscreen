@@ -9,6 +9,7 @@ import {
 	setCompositorPlaying,
 	setCompositorScene,
 	setCompositorTime,
+	setCompositorVisible,
 } from "./compositorViewClient";
 import type { CompositorParamValue } from "./contracts";
 
@@ -28,7 +29,10 @@ export function setCurrentNativeViewId(id: number | null): void {
 	// (memoïsée par setNativeParam) est appliquée ici, pas seulement les changements futurs.
 	if (id !== null) {
 		for (const [key, value] of lastParams) {
-			setCompositorParam(id, key, value).catch(() => {});
+			setCompositorParam(id, key, value).catch(() => {
+				// no-op : rejeu au mieux-effort, une vue tout juste (re)créée peut ignorer
+				// un param encore invalide sans que ce soit une erreur à remonter.
+			});
 		}
 	}
 	for (const l of listeners) {
@@ -86,6 +90,18 @@ export function setNativePlaying(playing: boolean): void {
 	}
 	setCompositorPlaying(currentViewId, playing).catch((error: unknown) => {
 		console.warn("[compositor-view] setNativePlaying failed:", error);
+	});
+}
+
+/** Masque/affiche la vue native active. No-op si aucune vue. Nécessaire pour toute modale web
+ *  (export…) censée passer devant : l'overlay est une fenêtre top-level hors de la surface
+ *  Chromium, le z-index CSS n'a aucune prise dessus (cf. `LiveView::set_visible`). */
+export function setNativeCompositorVisible(visible: boolean): void {
+	if (currentViewId === null) {
+		return;
+	}
+	setCompositorVisible(currentViewId, visible).catch((error: unknown) => {
+		console.warn("[compositor-view] setNativeCompositorVisible failed:", error);
 	});
 }
 

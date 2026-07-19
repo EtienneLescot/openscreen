@@ -74,14 +74,31 @@ pub enum SceneBackground {
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneZoomRegion {
+    /// Identifiant stable — nécessaire pour apparier les régions adjacentes (connected pan).
+    /// `#[serde(default)]` : champ ajouté après coup.
+    #[serde(default)]
+    pub id: String,
     pub start_sec: f64,
     pub end_sec: f64,
     /// échelle cible (>1 = zoom avant).
     pub scale: f32,
     pub focus_x: f32,
     pub focus_y: f32,
+    /// "manual" | "auto" (suit la télémétrie curseur) | null (= manual).
+    #[serde(default)]
+    pub focus_mode: Option<String>,
     /// "iso" | "left" | "right" | null.
     pub rotation: Option<String>,
+}
+
+/// Une zone "Full Camera" de la timeline (temps en secondes) : la webcam grandit pour couvrir
+/// (presque) tout le cadre pendant cette fenêtre. Pas de champs au-delà des bornes temporelles
+/// (miroir de `CameraFullscreenRegion`, TS).
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneCameraFullscreenRegion {
+    pub start_sec: f64,
+    pub end_sec: f64,
 }
 
 /// Rendu du curseur.
@@ -131,6 +148,9 @@ pub struct Scene {
     pub effects: SceneEffects,
     pub background: SceneBackground,
     pub zoom_regions: Vec<SceneZoomRegion>,
+    /// `#[serde(default)]` : champ ajouté après coup, absent des JSON de test existants.
+    #[serde(default)]
+    pub camera_fullscreen_regions: Vec<SceneCameraFullscreenRegion>,
     pub cursor: SceneCursor,
     pub crop: Option<SceneCrop>,
     pub output: SceneOutput,

@@ -4,6 +4,7 @@
 
 use anyhow::{Context, Result};
 
+#[derive(Clone)]
 pub struct CursorTrack {
     /// (t_secondes, cx, cy) normalisés dans le cadre screen, triés.
     samples: Vec<(f32, f32, f32)>,
