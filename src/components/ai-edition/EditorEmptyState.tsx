@@ -223,6 +223,7 @@ export function EditorEmptyState({
 				<div className={styles.previewEmptyActions}>
 					<button
 						type="button"
+						data-testid="editor-empty-import-video-button"
 						onClick={() => void handleImportVideo()}
 						className={styles.previewEmptyPrimaryButton}
 					>
@@ -232,6 +233,7 @@ export function EditorEmptyState({
 					{showLoadProjectButton && !hasProject ? (
 						<button
 							type="button"
+							data-testid="editor-empty-load-project-button"
 							onClick={() => void handleLoadProject()}
 							className={styles.previewEmptySecondaryButton}
 						>
