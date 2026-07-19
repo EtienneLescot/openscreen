@@ -15,9 +15,14 @@
  * contract — do not change the exported types.
  */
 
+import type { CameraFullscreenRegion } from "@/components/video-editor/types";
 import { DEFAULT_CROP_REGION } from "@/components/video-editor/types";
+import { createId } from "@/lib/ai-edition/document/ids";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
+import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
+import { projectRegionsToSourceTime } from "@/lib/ai-edition/timeline/region-ventilation";
+import { webcamSizeToFraction } from "@/lib/compositeLayout";
 import type { CompositorClipInput } from "./contracts";
 
 /** Background behind the screen. Parsed from `settings.wallpaper`. */
@@ -43,10 +48,26 @@ export interface SceneZoomRegion {
 	rotation: "iso" | "left" | "right" | null;
 }
 
+/** A "Full Camera" timeline region (from `legacyEditor.cameraFullscreenRegions`). Times in seconds. */
+export interface SceneCameraFullscreenRegion {
+	startSec: number;
+	endSec: number;
+}
+
 /** Webcam layout, from the editor settings. */
 export interface SceneLayout {
 	preset: "picture-in-picture" | "dual-frame" | "vertical-stack" | "no-webcam";
-	/** Native size scale (1 = the compositor's default PiP webcam). */
+	/**
+	 * Webcam size as a fraction (0..1) of the canvas reference dimension, derived from
+	 * `webcamSizeToFraction(settings.webcamSizePreset)`. Matches the web's canonical
+	 * composite-layout helper (0.10 = small, 0.25 ≈ default, 0.50 = max). The native
+	 * compositor must consume this directly as a fraction of the reference dimension —
+	 * an earlier revision emitted `settings.webcamSizePreset / 16.7` (a multiplier
+	 * where ~1 ≈ default PiP size); that unit was incorrect vs. the web pipeline and has
+	 * been replaced here. If you are touching the Rust consumer of this field, treat the
+	 * incoming value as a 0..1 fraction of the canvas reference dimension, NOT as a
+	 * size-multiplier.
+	 */
 	webcamSize: number;
 	webcamShape: "rectangle" | "circle" | "square" | "rounded";
 	webcamMirror: boolean;
@@ -92,36 +113,22 @@ export interface SceneDescription {
 	effects: SceneEffects;
 	background: SceneBackground;
 	zoomRegions: SceneZoomRegion[];
+	/**
+	 * "Full Camera" regions projected onto each clip's source time (one entry per
+	 * source-time span after `projectRegionsToSourceTime`). Empty when none set.
+	 */
+	cameraFullscreenRegions: SceneCameraFullscreenRegion[];
 	cursor: SceneCursor;
-	/** Screen source crop (fractions of the frame), or null for the full frame. */
-	crop: { x: number; y: number; width: number; height: number } | null;
+	/**
+	 * Per-clip screen crop (fractions of the frame), or null for the identity
+	 * (full-frame) crop. One entry per clip in the same order as `clips`, so a
+	 * clip that owns its own cropRegion is rendered with that crop and a clip
+	 * without one stays at the full frame. Replaces the old single global
+	 * `crop` field, which lost per-clip crops on multi-clip documents.
+	 */
+	cropByClip: Array<{ x: number; y: number; width: number; height: number } | null>;
 	/** Output frame. `fps` null = use the first clip's source fps. */
 	output: { width: number; height: number; fps: number | null };
-}
-
-/** Mirror of `buildNativeClipList` in src/components/ai-edition/ExportDialog.tsx — keep these
- *  two derivation paths in lock-step so the native multiclip export and the in-process preview
- *  composer see the same clip stream. */
-function buildNativeClipList(document: AxcutDocument) {
-	const assetById = new Map(document.assets.map((a) => [a.id, a]));
-	return [...document.timeline.clips]
-		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
-		.flatMap((clip) => {
-			const asset = assetById.get(clip.assetId);
-			if (!asset?.originalPath) return [];
-			const cam = asset.cameraTrack;
-			const sourceEndSec =
-				clip.sourceEndSec ?? clip.sourceStartSec + (clip.timelineEndSec - clip.timelineStartSec);
-			return [
-				{
-					screenPath: asset.originalPath,
-					webcamPath: cam?.sourcePath ?? asset.originalPath,
-					sourceStartSec: clip.sourceStartSec,
-					sourceEndSec,
-					webcamOffsetSec: cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
-				},
-			];
-		});
 }
 
 /** Strip a trailing position percentage (or any whitespace tail) from a gradient stop token,
@@ -185,24 +192,76 @@ function pickOutputDims(document: AxcutDocument): { width: number; height: numbe
 export function buildSceneDescription(document: AxcutDocument): SceneDescription {
 	const settings = getEditorSettings(document);
 
-	const crop =
-		settings.cropRegion.x === DEFAULT_CROP_REGION.x &&
-		settings.cropRegion.y === DEFAULT_CROP_REGION.y &&
-		settings.cropRegion.width === DEFAULT_CROP_REGION.width &&
-		settings.cropRegion.height === DEFAULT_CROP_REGION.height
-			? null
-			: {
-					x: settings.cropRegion.x,
-					y: settings.cropRegion.y,
-					width: settings.cropRegion.width,
-					height: settings.cropRegion.height,
-				};
+	// Sort+filter the clips once, in the order they will appear in the scene's
+	// `clips[]` stream, so the per-clip `cropByClip[]` schedule stays aligned
+	// 1:1 with `clips[]` by index. Mirror of `buildNativeClipList` in
+	// src/components/ai-edition/ExportDialog.tsx — keep these two derivation
+	// paths in lock-step so the native multiclip export and the in-process
+	// preview composer see the same clip stream.
+	const assetById = new Map(document.assets.map((a) => [a.id, a]));
+	const visibleClips = [...document.timeline.clips]
+		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
+		.filter((clip) => assetById.get(clip.assetId)?.originalPath);
+	const clips: CompositorClipInput[] = visibleClips.flatMap((clip) => {
+		const asset = assetById.get(clip.assetId);
+		if (!asset?.originalPath) return [];
+		const cam = asset.cameraTrack;
+		return [
+			{
+				screenPath: asset.originalPath,
+				webcamPath: cam?.sourcePath ?? asset.originalPath,
+				sourceStartSec: clip.sourceStartSec,
+				sourceEndSec: resolveClipSourceEndSec(clip, asset),
+				webcamOffsetSec: cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
+			},
+		];
+	});
+	const cropByClip = visibleClips.map(
+		(clip): { x: number; y: number; width: number; height: number } | null => {
+			const cropRegion = clip.cropRegion;
+			if (!cropRegion) return null;
+			if (
+				cropRegion.x === DEFAULT_CROP_REGION.x &&
+				cropRegion.y === DEFAULT_CROP_REGION.y &&
+				cropRegion.width === DEFAULT_CROP_REGION.width &&
+				cropRegion.height === DEFAULT_CROP_REGION.height
+			) {
+				return null;
+			}
+			return {
+				x: cropRegion.x,
+				y: cropRegion.y,
+				width: cropRegion.width,
+				height: cropRegion.height,
+			};
+		},
+	);
+
+	// Zoom + Full Camera regions are authored in virtual (timeline) ms in the
+	// document, but the compositor matches them against each frame's SOURCE
+	// time the same way the web export's frame loop does. Project them onto the
+	// covered clips' source ranges (splitting any region that straddles a clip
+	// boundary) so the native side gets the same shape the export pipeline
+	// already proves correct.
+	const docClips = document.timeline.clips;
+	const projectedZoomRegions = projectRegionsToSourceTime(document.zoomRanges ?? [], docClips, () =>
+		createId("zoom"),
+	);
+	const projectedCameraFullscreenRegions = projectRegionsToSourceTime(
+		((document.legacyEditor as Record<string, unknown> | null)?.cameraFullscreenRegions as
+			| CameraFullscreenRegion[]
+			| undefined) ?? [],
+		docClips,
+		() => createId("camfull"),
+	);
 
 	return {
-		clips: buildNativeClipList(document),
+		clips,
 		layout: {
 			preset: settings.webcamLayoutPreset,
-			webcamSize: settings.webcamSizePreset / 16.7,
+			// web-consistent 0..1 fraction of the canvas reference dimension
+			// (see `SceneLayout.webcamSize` for the consumer-facing semantics).
+			webcamSize: webcamSizeToFraction(settings.webcamSizePreset),
 			webcamShape: settings.webcamMaskShape,
 			webcamMirror: settings.webcamMirrored,
 			webcamPosition: settings.webcamPosition,
@@ -225,7 +284,7 @@ export function buildSceneDescription(document: AxcutDocument): SceneDescription
 			theme: settings.cursorTheme,
 		},
 		background: parseWallpaper(settings.wallpaper),
-		zoomRegions: (document.zoomRanges ?? []).map((region) => ({
+		zoomRegions: projectedZoomRegions.map((region) => ({
 			id: region.id,
 			startSec: region.startMs / 1000,
 			endSec: region.endMs / 1000,
@@ -235,7 +294,11 @@ export function buildSceneDescription(document: AxcutDocument): SceneDescription
 			focusMode: region.focusMode ?? null,
 			rotation: region.rotationPreset ?? null,
 		})),
-		crop,
+		cameraFullscreenRegions: projectedCameraFullscreenRegions.map((region) => ({
+			startSec: region.startMs / 1000,
+			endSec: region.endMs / 1000,
+		})),
+		cropByClip,
 		output: { ...pickOutputDims(document), fps: null },
 	};
 }
