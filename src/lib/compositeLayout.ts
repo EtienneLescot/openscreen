@@ -152,8 +152,8 @@ export interface WebcamCompositeLayout {
 	screenCover?: boolean;
 }
 
-/** Convert a webcam size percentage (10–50) to a fraction of the reference dimension. */
-function webcamSizeToFraction(percent: number): number {
+/** Convert a webcam size percentage (10–50) to a fraction (0..1) of the reference dimension. */
+export function webcamSizeToFraction(percent: number): number {
 	const safe = Number.isFinite(percent) ? percent : 25;
 	const clamped = Math.max(10, Math.min(50, safe));
 	return clamped / 100;

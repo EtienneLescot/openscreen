@@ -19,6 +19,7 @@ import {
 	exportAxcutDocument,
 } from "@/lib/ai-edition/exporter/documentExporter";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
+import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { probeVideoDimensions } from "@/lib/ai-edition/timeline/duration";
 import {
 	type ExportFormat,
@@ -68,10 +69,10 @@ function buildNativeClipList(document: AxcutDocument): CompositorClipInput[] {
 				return [];
 			}
 			const cam = asset.cameraTrack;
-			// sourceEndSec is optional in the schema (unknown until probed) — fall back to the
-			// clip's timeline duration (speed 1).
-			const sourceEndSec =
-				clip.sourceEndSec ?? clip.sourceStartSec + (clip.timelineEndSec - clip.timelineStartSec);
+			// sourceEndSec is optional in the schema (unknown until probed) — fall back through
+			// the single canonical precedence used by every consumer (clip.probe → asset.duration
+			// → timeline-length guess). See `resolveClipSourceEndSec` for the full order.
+			const sourceEndSec = resolveClipSourceEndSec(clip, asset);
 			return [
 				{
 					screenPath: asset.originalPath,

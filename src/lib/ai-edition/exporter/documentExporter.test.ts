@@ -61,6 +61,17 @@ describe("computeExportTrimRegions", () => {
 });
 
 describe("computeCropSchedule", () => {
+	function assetA(durationSec?: number): AxcutAsset {
+		return {
+			kind: "video",
+			id: "a",
+			label: "Asset A",
+			originalPath: "/a.mp4",
+			cameraTrack: null,
+			...(durationSec !== undefined ? { durationSec } : {}),
+		};
+	}
+
 	it("builds one schedule entry per clip, defaulting to the identity crop", () => {
 		const clips = [
 			clip({ id: "c1", sourceStartSec: 0, sourceEndSec: 3 }),
@@ -71,7 +82,7 @@ describe("computeCropSchedule", () => {
 				cropRegion: { x: 0.25, y: 0.25, width: 0.5, height: 0.5 },
 			}),
 		];
-		expect(computeCropSchedule(clips, 6, "a")).toEqual([
+		expect(computeCropSchedule(clips, assetA(6))).toEqual([
 			{ startSec: 0, endSec: 3, cropRegion: { x: 0, y: 0, width: 1, height: 1 } },
 			{
 				startSec: 3,
@@ -81,9 +92,9 @@ describe("computeCropSchedule", () => {
 		]);
 	});
 
-	it("falls back to sourceDurationSec when a clip's sourceEndSec is unset", () => {
+	it("falls back to asset.durationSec when a clip's sourceEndSec is unset", () => {
 		const clips = [clip({ id: "c1", sourceStartSec: 0, sourceEndSec: undefined })];
-		expect(computeCropSchedule(clips, 12, "a")).toEqual([
+		expect(computeCropSchedule(clips, assetA(12))).toEqual([
 			{ startSec: 0, endSec: 12, cropRegion: { x: 0, y: 0, width: 1, height: 1 } },
 		]);
 	});
@@ -93,7 +104,7 @@ describe("computeCropSchedule", () => {
 			clip({ id: "c1", assetId: "a" }),
 			clip({ id: "c2", assetId: "other", cropRegion: { x: 0.1, y: 0.1, width: 0.5, height: 0.5 } }),
 		];
-		expect(computeCropSchedule(clips, 10, "a")).toEqual([
+		expect(computeCropSchedule(clips, assetA(10))).toEqual([
 			{ startSec: 0, endSec: 10, cropRegion: { x: 0, y: 0, width: 1, height: 1 } },
 		]);
 	});
