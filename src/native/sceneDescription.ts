@@ -22,7 +22,7 @@ import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { projectRegionsToSourceTime } from "@/lib/ai-edition/timeline/region-ventilation";
-import { webcamSizeToFraction } from "@/lib/compositeLayout";
+import { computeCompositeLayout, webcamSizeToFraction } from "@/lib/compositeLayout";
 import type { CompositorClipInput } from "./contracts";
 
 /** Background behind the screen. Parsed from `settings.wallpaper`. */
@@ -67,6 +67,14 @@ export interface SceneSpeedRegion {
 	speed: number;
 }
 
+/** Normalized rect in 0..1 of the output frame (x, y top-left; width, height). */
+export interface SceneRect {
+	x: number;
+	y: number;
+	width: number;
+	height: number;
+}
+
 /** Webcam layout, from the editor settings. */
 export interface SceneLayout {
 	preset: "picture-in-picture" | "dual-frame" | "vertical-stack" | "no-webcam";
@@ -88,6 +96,15 @@ export interface SceneLayout {
 	webcamPosition: { cx: number; cy: number } | null;
 	/** Webcam shrinks while a zoom region is active. */
 	webcamReactiveZoom: boolean;
+	/**
+	 * Webcam rect resolved by the app (= `computeCompositeLayout(...).webcamRect`, pixels
+	 * → fractions of the output frame, parity EXACTE entre preview et natif). When set, the
+	 * native compositor consumes it directly for the base webcam placement instead of its
+	 * own hardcoded PiP math; it still applies `webcamSize` (slider) + reactive-zoom scaling
+	 * + Full Camera lerp on top. Absent (older payloads / passthrough) → the native side
+	 * falls back to its legacy `preset_placements` for the affected preset.
+	 */
+	webcamRect?: SceneRect | null;
 }
 
 /** Frame-styling effects, from the editor settings. */
@@ -308,6 +325,33 @@ export function buildSceneDescription(document: AxcutDocument): SceneDescription
 		() => createId("speed"),
 	);
 
+	// Webcam rect, single source of truth between preview & native :
+	// on résout le rect AVEC LA MÊME maths que `PreviewCanvas.computeCompositeLayout` et on
+	// l'envoie au natif dans `layout.webcamRect` (fractions du cadre de sortie). Le natif le
+	// consomme tel quel (voir `compositor.rs::preset_placements` bypass). La résolution ici se
+	// fait sur la résolution de sortie (= taille du canvas rendu) avec les unités sources du
+	// premier asset visible — la même convention que `pickOutputDims` + SCREEN_SOURCE_SIZE /
+	// WEBCAM_SOURCE_SIZE dans PreviewCanvas — ce qui garde preview/export/natif alignés.
+	const outputDims = pickOutputDims(document);
+	const computedLayout = computeCompositeLayout({
+		canvasSize: outputDims,
+		screenSize: { width: 1920, height: 1080 },
+		webcamSize: settings.webcamLayoutPreset === "no-webcam" ? null : { width: 960, height: 720 },
+		layoutPreset: settings.webcamLayoutPreset,
+		webcamSizePreset: settings.webcamSizePreset,
+		webcamPosition:
+			settings.webcamLayoutPreset === "picture-in-picture" ? settings.webcamPosition : null,
+		webcamMaskShape: settings.webcamMaskShape,
+	});
+	const webcamRect = computedLayout?.webcamRect
+		? {
+				x: computedLayout.webcamRect.x / outputDims.width,
+				y: computedLayout.webcamRect.y / outputDims.height,
+				width: computedLayout.webcamRect.width / outputDims.width,
+				height: computedLayout.webcamRect.height / outputDims.height,
+			}
+		: null;
+
 	return {
 		clips,
 		layout: {
@@ -319,6 +363,7 @@ export function buildSceneDescription(document: AxcutDocument): SceneDescription
 			webcamMirror: settings.webcamMirrored,
 			webcamPosition: settings.webcamPosition,
 			webcamReactiveZoom: settings.webcamReactiveZoom,
+			webcamRect,
 		},
 		effects: {
 			padding: settings.padding / 100,

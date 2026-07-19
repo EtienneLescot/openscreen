@@ -13,6 +13,11 @@ pub struct CursorTrack {
 }
 
 impl CursorTrack {
+    /// Nombre d'échantillons de la piste (utile au diag de chargement).
+    pub fn sample_count(&self) -> usize {
+        self.samples.len()
+    }
+
     /// Charge la fenêtre [offset_ms, offset_ms + dur_s*1000] et la ramène à t=0.
     pub fn load(path: &str, offset_ms: f64, dur_s: f64) -> Result<CursorTrack> {
         let txt = std::fs::read_to_string(path).with_context(|| format!("lecture {path}"))?;
