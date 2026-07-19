@@ -35,7 +35,7 @@ use windows::Win32::Graphics::Dxgi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
 
-use crate::compositor::{FIXTURE_FRAMES, OUT_H, OUT_W};
+use crate::compositor::{OUT_H, OUT_W};
 
 fn wide(s: &str) -> Vec<u16> {
     s.encode_utf16().chain(std::iter::once(0)).collect()
@@ -84,9 +84,23 @@ impl Player {
         if sf.is_null() || wf.is_null() {
             return Ok(false);
         }
+        self.sync_time(comp);
         comp.compose_frame(sf, wf, self.idx as f32, cfg)?;
         self.idx = self.idx.wrapping_add(1);
         Ok(true)
+    }
+
+    /// Positionne `comp` sur le temps RÉEL (pts) de la frame écran courante, pour que le
+    /// curseur ET les zoom/full-camera regions (référentiel timeline) restent exacts quelle
+    /// que soit la cadence réelle de l'enregistrement — BUG corrigé : tout dérivait auparavant
+    /// de `frame / 60.0` (un compteur de frames supposant 60fps pile), qui dérive
+    /// silencieusement de plus en plus au fil de la lecture dès que le fichier n'est pas
+    /// exactement à 60fps (30/59.94/etc. sont courants), au lieu de suivre le pts réel du
+    /// décodeur — exactement la cause du "zoom désynchronisé de la timeline" observé.
+    unsafe fn sync_time(&self, comp: &Compositor) {
+        let t = self.sdec.cur_time_sec() as f32;
+        comp.set_cursor_time(Some(t));
+        comp.set_timeline_time(Some(t));
     }
 
     /// Recompose la frame courante (déjà décodée) — rafraîchit après un changement de param.
@@ -96,44 +110,29 @@ impl Player {
         if sf.is_null() || wf.is_null() {
             return Ok(false);
         }
+        self.sync_time(comp);
         let f = self.idx.saturating_sub(1);
         comp.compose_frame(sf, wf, f as f32, cfg)?;
         Ok(true)
     }
 
-    /// Compose la frame à l'index `target` (seek). Seek arrière → rewind puis décodage avant ;
-    /// seek avant → décodage avant en jetant les frames intermédiaires. Simple et robuste
-    /// (pas de calcul PTS/keyframe ; optimisation keyframe possible plus tard).
-    pub unsafe fn present_frame(&mut self, comp: &Compositor, cfg: &Cfg, target: u32) -> Result<bool> {
-        if target < self.idx {
-            self.sdec.rewind()?;
-            self.wdec.rewind()?;
-            self.idx = 0;
+    /// Seek à `target_sec` (secondes TIMELINE) : keyframe-seek + décodage-avant (réutilise
+    /// `Decoder::seek_to`, même mécanisme robuste que l'export) — remplace l'ancien modèle
+    /// "compte de frames" qui rewindait tout au frame 0 pour le moindre seek arrière et n'avait
+    /// aucun raccourci keyframe pour les seeks avant lointains (lent ET, combiné au bug de
+    /// `set_time`, incorrect au-delà de 6s sur un enregistrement réel).
+    pub unsafe fn present_frame(&mut self, comp: &Compositor, cfg: &Cfg, target_sec: f64) -> Result<bool> {
+        let sf = self.sdec.seek_to(target_sec)?;
+        let wf = self.wdec.seek_to(target_sec)?;
+        if sf.is_null() || wf.is_null() {
+            return Ok(false);
         }
-        loop {
-            let sf = self.sdec.next()?;
-            let wf = self.wdec.next()?;
-            if sf.is_null() || wf.is_null() {
-                // au-delà de la fixture → clamp sur la frame 0
-                self.sdec.rewind()?;
-                self.wdec.rewind()?;
-                self.idx = 0;
-                let sf = self.sdec.next()?;
-                let wf = self.wdec.next()?;
-                if sf.is_null() || wf.is_null() {
-                    return Ok(false);
-                }
-                comp.compose_frame(sf, wf, 0.0, cfg)?;
-                self.idx = 1;
-                return Ok(true);
-            }
-            let produced = self.idx;
-            self.idx += 1;
-            if produced == target {
-                comp.compose_frame(sf, wf, produced as f32, cfg)?;
-                return Ok(true);
-            }
-        }
+        self.sync_time(comp);
+        // "idx" ne sert plus qu'au fallback fixture (jamais lu si une scène est posée) — dérivé
+        // du temps réel pour rester cohérent si jamais consulté.
+        self.idx = (target_sec * self.sdec.fps()).round().max(0.0) as u32;
+        comp.compose_frame(sf, wf, self.idx as f32, cfg)?;
+        Ok(true)
     }
 }
 
@@ -188,8 +187,14 @@ struct Shared {
     /// Le thread de rendu le mappe en coords écran (le parent peut bouger) et repositionne.
     rect: Mutex<[i32; 4]>,
     inspector: Mutex<InspectorParams>,
-    /// frame demandée par l'app (presentTime/seek) ; prioritaire sur la lecture libre.
-    requested_frame: Mutex<Option<u32>>,
+    /// Temps (secondes TIMELINE) demandé par l'app (presentTime/seek) ; prioritaire sur la
+    /// lecture libre. En SECONDES (pas un index de frame) : `Player::present_frame` fait un
+    /// vrai seek keyframe (`Decoder::seek_to`, comme l'export) au lieu de compter des frames —
+    /// BUG corrigé : l'ancien `set_time` convertissait en index de frame à 60fps fixe PUIS le
+    /// wrappait modulo `FIXTURE_FRAMES` (360 = 6s) — un reliquat du bench fixture qui faisait
+    /// boucler silencieusement tout seek au-delà de 6s sur un enregistrement réel, exactement
+    /// la cause du "zoom timeline désynchronisé" observé.
+    requested_frame: Mutex<Option<f64>>,
     /// scène de l'app (contrat) ; appliquée au compositeur quand `scene_dirty`.
     scene: Mutex<Option<Scene>>,
     scene_dirty: AtomicBool,
@@ -276,6 +281,17 @@ impl LiveView {
         }
     }
 
+    /// Affiche/masque l'overlay. Nécessaire car c'est une fenêtre top-level OWNED
+    /// (WS_POPUP), donc HORS de la surface Chromium — le z-index CSS n'a AUCUN effet sur elle
+    /// (ex. une modale web dessinée "au-dessus" dans le DOM se retrouve quand même EN DESSOUS,
+    /// visuellement, de l'overlay natif). L'app doit la masquer explicitement quand une modale
+    /// doit passer devant (export, etc.) puis la réafficher à la fermeture.
+    pub fn set_visible(&self, visible: bool) {
+        unsafe {
+            let _ = ShowWindow(self.hwnd, if visible { SW_SHOW } else { SW_HIDE });
+        }
+    }
+
     /// Switch inspector (booléen).
     pub fn set_param_bool(&self, key: &str, value: bool) {
         if let Ok(mut p) = self.shared.inspector.lock() {
@@ -319,12 +335,7 @@ impl LiveView {
                     }
                 }
                 "webcamShape" => {
-                    p.webcam_shape = match value {
-                        "rectangle" => 0,
-                        "circle" => 1,
-                        "square" => 2,
-                        _ => 3, // rounded (défaut)
-                    };
+                    p.webcam_shape = crate::compositor::webcam_shape_code(value);
                 }
                 _ => {}
             }
@@ -349,13 +360,12 @@ impl LiveView {
         }
     }
 
-    /// Positionne la vue sur le temps `seconds` (seek, piloté par la playhead de l'app).
-    /// La fixture boucle (6 s) : le temps est ramené modulo la durée.
+    /// Positionne la vue sur le temps `seconds` (seek, piloté par la playhead de l'app) — un
+    /// vrai temps timeline, plus de conversion en index de frame ni de wrap fixture ici (voir
+    /// doc de `requested_frame`).
     pub fn set_time(&self, seconds: f64) {
-        let frame = (seconds * 60.0).round() as i64;
-        let frame = frame.rem_euclid(FIXTURE_FRAMES as i64) as u32;
         if let Ok(mut r) = self.shared.requested_frame.lock() {
-            *r = Some(frame);
+            *r = Some(seconds.max(0.0));
         }
     }
 }

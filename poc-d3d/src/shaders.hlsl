@@ -70,6 +70,48 @@ float sd_round_rect(float2 p, float2 halfsz, float r)
 
 float4 ps_main(VSOut i) : SV_Target
 {
+    // mode 8 : écran tilté en 3D (zoom regions "rotation" : iso/left/right). `dst`/`quad_px`
+    // couvrent la BOUNDING BOX des 4 coins projetés (calculée côté CPU, `regions.rs`) ; ce
+    // shader retrouve où tombe chaque pixel DANS le quad tilté (warp bilinéaire inverse — pas
+    // de perspective-correct exact, mais indiscernable à l'œil pour un tilt de 10-22°) et
+    // échantillonne la vidéo à l'UV correspondant, sinon transparent (hors du quad projeté).
+    // fx.xy/fx.zw = coins TL/TR (px locaux, 0..quad_px) ; src_prev.xy/.zw = coins BR/BL.
+    if (mode > 7.5)
+    {
+        float2 c00 = fx.xy, c10 = fx.zw, c11 = src_prev.xy, c01 = src_prev.zw;
+        float2 P = i.local;
+        float2 e = c10 - c00;
+        float2 f = c01 - c00;
+        float2 g = c00 - c10 - c01 + c11;
+        float2 h = P - c00;
+        float k2 = g.x * f.y - g.y * f.x;
+        float k1 = e.x * f.y - e.y * f.x + h.x * g.y - h.y * g.x;
+        float k0 = h.x * e.y - h.y * e.x;
+        float t;
+        if (abs(k2) < 0.001)
+        {
+            t = (abs(k1) < 0.0001) ? 0.0 : -k0 / k1;
+        }
+        else
+        {
+            float disc = k1 * k1 - 4.0 * k2 * k0;
+            if (disc < 0.0) return float4(0.0, 0.0, 0.0, 0.0);
+            float sq = sqrt(disc);
+            float t1 = (-k1 + sq) / (2.0 * k2);
+            float t2 = (-k1 - sq) / (2.0 * k2);
+            t = (t1 >= -0.02 && t1 <= 1.02) ? t1 : t2;
+        }
+        float denomX = e.x + g.x * t;
+        float denomY = e.y + g.y * t;
+        float s = (abs(denomX) > abs(denomY)) ? (h.x - f.x * t) / denomX : (h.y - f.y * t) / denomY;
+        if (s < -0.02 || s > 1.02 || t < -0.02 || t > 1.02)
+        {
+            return float4(0.0, 0.0, 0.0, 0.0); // hors du quad projeté
+        }
+        float2 uv = float2(lerp(src.x, src.z, saturate(s)), lerp(src.y, src.w, saturate(t)));
+        return float4(sample_yuv(uv), 1.0);
+    }
+
     // mode 7 : sprite curseur thème (PNG alpha droite, arrow.png etc.). Prémultiplie ici
     // (le blend state attend du prémultiplié partout ailleurs). fx = rect de clip "Clip to
     // canvas" en espace sortie 0..1 [x,y,w,h] (= s_dst quand actif, sinon un rect englobant

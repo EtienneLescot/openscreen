@@ -367,6 +367,9 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 						case "setRect":
 							compositorViewService.setRect(request.payload.id, request.payload.rect);
 							return createSuccessResponse(requestId, { ok: true });
+						case "setVisible":
+							compositorViewService.setVisible(request.payload.id, request.payload.visible);
+							return createSuccessResponse(requestId, { ok: true });
 						case "setParam":
 							compositorViewService.setParam(
 								request.payload.id,
@@ -401,6 +404,8 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 							const stats = await compositorViewService.exportMulti(
 								request.payload.clips,
 								request.payload.outPath,
+								request.payload.sceneJson,
+								request.payload.params,
 							);
 							if (!stats) {
 								return createErrorResponse(

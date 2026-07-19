@@ -13,7 +13,7 @@ import {
 	resequenceClips,
 } from "../document/timeline";
 import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
-import { probeVideoDuration } from "../timeline/duration";
+import { probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import { resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
 import { useProjectStore } from "./projectStore";
@@ -839,34 +839,58 @@ export function useTimeline() {
 	// subsequent inserts use the cached value without re-probing.
 	const probeAndCorrectClip = useCallback(
 		async (assetId: string, clipId: string, originalPath: string) => {
-			const probed = await probeVideoDuration(toFileUrl(originalPath));
-			if (probed == null) return;
+			const fileUrl = toFileUrl(originalPath);
+			// Dims probed alongside duration — otherwise `asset.video` stays permanently unset for
+			// most recordings (nothing else populates it), silently breaking anything that reads
+			// real source dimensions later (e.g. the export dialog's downscale/upscale badges).
+			const [probedDuration, probedDims] = await Promise.all([
+				probeVideoDuration(fileUrl),
+				probeVideoDimensions(fileUrl),
+			]);
 			const state = useProjectStore.getState();
 			const doc = state.document;
 			if (!doc) return;
-			const clip = doc.timeline.clips.find((c) => c.id === clipId);
-			if (!clip) return;
+			const asset = doc.assets.find((a) => a.id === assetId);
+			const needsDims = probedDims != null && !asset?.video;
+			if (probedDuration == null && !needsDims) return;
+
 			// Guard: only correct clips still sitting at the 0..60s placeholder.
 			// If the user has since trimmed the clip or moved on, leave it alone.
+			const clip = doc.timeline.clips.find((c) => c.id === clipId);
 			const stillPlaceholder =
+				clip != null &&
 				clip.sourceStartSec === 0 &&
 				Math.abs((clip.sourceEndSec ?? 0) - PLACEHOLDER_DURATION_SEC) < 0.01;
-			if (!stillPlaceholder) return;
+			const correctDuration = probedDuration != null && stillPlaceholder;
+			if (!correctDuration && !needsDims) return;
+
 			// Only correct the probed clip's own length here — do NOT hand-shift
 			// every sibling by the delta, since that has no notion of which clips
 			// sit before vs. after this one in timeline order (it used to shift
 			// earlier clips too, corrupting their positions). resequenceClips lays
 			// everything back-to-back from t=0 using each clip's own (now correct)
 			// length, so it's the correct + already-shared way to renormalize.
-			const correctedClips = doc.timeline.clips.map((c) =>
-				c.id === clipId
-					? { ...c, sourceEndSec: probed, timelineEndSec: c.timelineStartSec + probed }
-					: c,
-			);
-			const nextClips = resequenceClips(correctedClips);
-			const nextAssets = doc.assets.map((a) =>
-				a.id === assetId ? { ...a, durationSec: probed } : a,
-			);
+			const nextClips = correctDuration
+				? resequenceClips(
+						doc.timeline.clips.map((c) =>
+							c.id === clipId
+								? {
+										...c,
+										sourceEndSec: probedDuration as number,
+										timelineEndSec: c.timelineStartSec + (probedDuration as number),
+									}
+								: c,
+						),
+					)
+				: doc.timeline.clips;
+			const nextAssets = doc.assets.map((a) => {
+				if (a.id !== assetId) return a;
+				return {
+					...a,
+					...(correctDuration ? { durationSec: probedDuration as number } : {}),
+					...(needsDims ? { video: { codec: "unknown", fps: 0, ...a.video, ...probedDims } } : {}),
+				};
+			});
 			await state.saveDocument({
 				...doc,
 				assets: nextAssets,
