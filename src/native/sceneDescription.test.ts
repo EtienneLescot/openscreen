@@ -386,18 +386,112 @@ describe("buildSceneDescription.zoomRegions", () => {
 	});
 });
 
-// --- crop ------------------------------------------------------------------
+// --- cameraFullscreenRegions -------------------------------------------------
 
-describe("buildSceneDescription.crop", () => {
-	it("returns null for the identity (DEFAULT_CROP_REGION)", () => {
-		const doc = makeDoc({ legacyEditor: { cropRegion: { ...DEFAULT_CROP_REGION } } });
-		expect(buildSceneDescription(doc).crop).toBeNull();
+describe("buildSceneDescription.cameraFullscreenRegions", () => {
+	it("converts ms->sec for start/end", () => {
+		const doc = makeDoc({
+			legacyEditor: {
+				cameraFullscreenRegions: [{ id: "cf1", startMs: 2000, endMs: 5500 }],
+			},
+		});
+		const { cameraFullscreenRegions } = buildSceneDescription(doc);
+		expect(cameraFullscreenRegions).toEqual([{ startSec: 2, endSec: 5.5 }]);
 	});
 
-	it("returns the region unchanged when non-identity", () => {
+	it("yields [] when legacyEditor.cameraFullscreenRegions is missing", () => {
+		const doc = makeDoc({ legacyEditor: {} });
+		expect(buildSceneDescription(doc).cameraFullscreenRegions).toEqual([]);
+	});
+
+	it("splits a region straddling two clips into one entry per clip's source time", () => {
+		const asset = makeAsset({ id: "a", originalPath: "/a.mp4" });
+		const clip1 = makeClip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 100,
+			sourceEndSec: 105,
+			timelineStartSec: 0,
+			timelineEndSec: 5,
+		});
+		const clip2 = makeClip({
+			id: "c2",
+			assetId: "a",
+			sourceStartSec: 200,
+			sourceEndSec: 205,
+			timelineStartSec: 5,
+			timelineEndSec: 10,
+		});
+		// Region spans timeline [3s, 7s) — 2s over clip1's tail, 2s over clip2's head.
+		const doc = makeDoc({
+			assets: [asset],
+			clips: [clip1, clip2],
+			legacyEditor: {
+				cameraFullscreenRegions: [{ id: "cf1", startMs: 3000, endMs: 7000 }],
+			},
+		});
+		const { cameraFullscreenRegions } = buildSceneDescription(doc);
+		expect(cameraFullscreenRegions).toEqual([
+			{ startSec: 103, endSec: 105 },
+			{ startSec: 200, endSec: 202 },
+		]);
+	});
+});
+
+// --- cropByClip --------------------------------------------------------------
+
+describe("buildSceneDescription.cropByClip", () => {
+	it("is null for a clip without its own cropRegion", () => {
+		const asset = makeAsset({ id: "a", originalPath: "/a.mp4" });
+		const clip = makeClip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 4,
+			timelineStartSec: 0,
+			timelineEndSec: 4,
+		});
+		const doc = makeDoc({ assets: [asset], clips: [clip] });
+		expect(buildSceneDescription(doc).cropByClip).toEqual([null]);
+	});
+
+	it("is null for a clip whose cropRegion equals the identity (DEFAULT_CROP_REGION)", () => {
+		const asset = makeAsset({ id: "a", originalPath: "/a.mp4" });
+		const clip = makeClip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 4,
+			timelineStartSec: 0,
+			timelineEndSec: 4,
+			cropRegion: { ...DEFAULT_CROP_REGION },
+		});
+		const doc = makeDoc({ assets: [asset], clips: [clip] });
+		expect(buildSceneDescription(doc).cropByClip).toEqual([null]);
+	});
+
+	it("carries a non-identity per-clip cropRegion through, one entry per clip in clips[] order", () => {
+		const asset = makeAsset({ id: "a", originalPath: "/a.mp4" });
 		const region = { x: 0.1, y: 0.2, width: 0.5, height: 0.6 };
-		const doc = makeDoc({ legacyEditor: { cropRegion: region } });
-		expect(buildSceneDescription(doc).crop).toEqual(region);
+		const cropped = makeClip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 4,
+			timelineStartSec: 0,
+			timelineEndSec: 4,
+			cropRegion: region,
+		});
+		const plain = makeClip({
+			id: "c2",
+			assetId: "a",
+			sourceStartSec: 4,
+			sourceEndSec: 8,
+			timelineStartSec: 4,
+			timelineEndSec: 8,
+		});
+		const doc = makeDoc({ assets: [asset], clips: [cropped, plain] });
+		expect(buildSceneDescription(doc).cropByClip).toEqual([region, null]);
 	});
 });
 
@@ -414,9 +508,16 @@ describe("buildSceneDescription.settings mapping", () => {
 		expect(buildSceneDescription(doc).effects.roundnessPx).toBe(12);
 	});
 
-	it("webcamSize is webcamSizePreset / 16.7", () => {
+	it("webcamSize is webcamSizeToFraction(webcamSizePreset) — clamp(preset,10,50)/100", () => {
 		const doc = makeDoc({ legacyEditor: { webcamSizePreset: 33.4 } });
-		expect(buildSceneDescription(doc).layout.webcamSize).toBeCloseTo(2, 5);
+		expect(buildSceneDescription(doc).layout.webcamSize).toBeCloseTo(0.334, 5);
+	});
+
+	it("webcamSize clamps below 10 and above 50", () => {
+		const low = makeDoc({ legacyEditor: { webcamSizePreset: 2 } });
+		const high = makeDoc({ legacyEditor: { webcamSizePreset: 90 } });
+		expect(buildSceneDescription(low).layout.webcamSize).toBeCloseTo(0.1, 5);
+		expect(buildSceneDescription(high).layout.webcamSize).toBeCloseTo(0.5, 5);
 	});
 
 	it("maps the cursor sub-settings", () => {

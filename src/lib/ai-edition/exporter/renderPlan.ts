@@ -38,6 +38,7 @@ import {
 } from "@/utils/aspectRatioUtils";
 import { type Interval, normalizeIntervals } from "../document/timeline";
 import type { AxcutDocument } from "../schema";
+import { resolveClipSourceEndSec } from "../timeline/clipDuration";
 
 export type ExportVideoCodec = "h264" | "h265" | "vp9";
 
@@ -275,7 +276,7 @@ export function buildRenderPlan(
 		if (!asset) continue; // orphan clip — can't render, skip silently (matches today).
 
 		const sourceStartSec = clip.sourceStartSec;
-		const sourceEndSec = clip.sourceEndSec ?? asset.durationSec ?? sourceStartSec;
+		const sourceEndSec = resolveClipSourceEndSec(clip, asset);
 		const sourceWidth = asset.video?.width || fallbackWidth || DEFAULT_FALLBACK_SOURCE_WIDTH;
 		const sourceHeight = asset.video?.height || fallbackHeight || DEFAULT_FALLBACK_SOURCE_HEIGHT;
 		const cameraTrack = asset.cameraTrack;

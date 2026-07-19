@@ -41,7 +41,8 @@ import {
 } from "@/utils/aspectRatioUtils";
 import { createId } from "../document/ids";
 import { type Interval, normalizeIntervals, primaryAssetDuration } from "../document/timeline";
-import type { AxcutDocument } from "../schema";
+import type { AxcutAsset, AxcutDocument } from "../schema";
+import { resolveClipSourceEndSec } from "../timeline/clipDuration";
 import { projectRegionsToSourceTime } from "../timeline/region-ventilation";
 import { buildRenderPlan, type RenderPlan } from "./renderPlan";
 
@@ -130,19 +131,19 @@ const IDENTITY_CROP: CropRegion = { x: 0, y: 0, width: 1, height: 1 };
 // per-frame interpolation. The export renderer switches to whichever entry's
 // [startSec, endSec) covers the current frame's SOURCE time right before
 // rendering it (see VideoExporter/GifExporter + FrameRenderer.setCropRegion).
-// Only clips on `primaryAssetId` matter here — export renders one continuous
+// Only clips on `primaryAsset` matter here — export renders one continuous
 // source video (the primary asset), so a clip pointing at a different asset
 // has no meaningful source-time range against this one.
 export function computeCropSchedule(
 	clips: AxcutDocument["timeline"]["clips"],
-	sourceDurationSec: number,
-	primaryAssetId: string,
+	primaryAsset: AxcutAsset,
 ): CropScheduleEntry[] {
+	const primaryAssetId = primaryAsset.id;
 	return clips
 		.filter((c) => c.assetId === primaryAssetId)
 		.map((c) => ({
 			startSec: c.sourceStartSec,
-			endSec: c.sourceEndSec ?? sourceDurationSec,
+			endSec: resolveClipSourceEndSec(c, primaryAsset),
 			cropRegion: c.cropRegion ?? IDENTITY_CROP,
 		}));
 }
@@ -231,7 +232,7 @@ export async function exportAxcutDocument(
 	const motionBlurAmount = extractLegacyField(legacy, "motionBlurAmount", 0);
 	const borderRadius = extractLegacyField(legacy, "borderRadius", 0);
 	const padding = extractLegacyField(legacy, "padding", 50);
-	const cropSchedule = computeCropSchedule(clips, sourceDurationSec, asset.id);
+	const cropSchedule = computeCropSchedule(clips, asset);
 	const cropRegion: CropRegion = IDENTITY_CROP;
 	const webcamLayoutPreset = extractLegacyField(legacy, "webcamLayoutPreset", "picture-in-picture");
 	const webcamMaskShape = extractLegacyField(legacy, "webcamMaskShape", "rectangle");
