@@ -736,17 +736,17 @@
 	letter-spacing: 0.06em;
 	text-transform: uppercase;
 }
-.bgBlur {
-	position: absolute;
-	inset: 0;
-	pointer-events: none;
-	z-index: 0;
-	transform: scale(1.06);
-}
-.previewFrame > .screenStage > video,
-.previewFrame > .screenStage > div > video {
+.previewFrame > .screenStage video {
 	position: relative;
 	z-index: 1;
+	/* Pixels come from the native canvas now; this <video> stays mounted (and
+	   playing) purely as the decode/playback-clock/metadata source. A plain
+	   descendant selector (not a fixed child-depth chain) is required here:
+	   VirtualPreview nests the actual <video> THREE levels down
+	   (.screenStage > .container > .videoFrame > video), not one or two —
+	   the previous `>` chain silently never matched, leaving this video
+	   fully visible (and on top of the native canvas) the whole time. */
+	visibility: hidden;
 }
 .pipCircle {
 	border-radius: 9999px !important;
@@ -771,6 +771,10 @@
 	width: 100%;
 	height: 100%;
 	object-fit: cover;
+	/* Native canvas already draws the composited webcam PiP; this <video> stays
+	   mounted (playing) only to drive the camera's own decode/sync clock. The
+	   slot div itself stays visible/clickable for the drag-to-reposition hitbox. */
+	visibility: hidden;
 	display: block;
 }
 /* ─── transport bar (lives inside .timelineHead, next to the tool icons) ─ */

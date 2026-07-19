@@ -26,9 +26,12 @@ import { buildSceneDescription } from "@/native/sceneDescription";
  * Aucun contrôle ici : paramètres via l'inspector (`setNativeParam`), lecture via
  * `useNativePlaybackSync`, export via la vraie modale (`ExportDialog`).
  *
- * Opt-in via le flag Vite `VITE_NATIVE_COMPOSITOR=1`.
+ * Chemin unique : c'est le SEUL renderer de preview (plus de fallback web/CPU).
+ * Monté par `PreviewCanvas` en premier enfant de `.previewFrame`, sous les
+ * calques interactifs (zoom gimbal, annotations, drag webcam) qui restent des
+ * éléments DOM cliquables au-dessus.
  */
-export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
+export function NativeCompositorOverlay() {
 	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const previousActiveClipIdRef = useRef<string | null>(null);
 	const document = useProjectStore((s) => s.document);
@@ -77,7 +80,7 @@ export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 
 	const ready = sources !== null;
 	const { viewId } = useNativeCompositorView(canvasRef, {
-		enabled: enabled && ready,
+		enabled: ready,
 		sources: sources ?? undefined,
 	});
 
@@ -132,19 +135,22 @@ export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 		previousActiveClipIdRef.current = activeClip.id;
 	}, [viewId, document, activeClip]);
 
-	if (!enabled) {
+	if (!ready) {
 		return null;
 	}
 
 	// The canvas's CSS box (width: 100%; height: 100%) is what drives the
 	// geometry; the hook manages the DRAWING BUFFER (canvas.width/height DOM
 	// attrs) to match the offscreen render-target resolution, and paints each
-	// pulled frame via `ctx.putImageData`.
+	// pulled frame via `ctx.putImageData`. z-index 0: sits below the
+	// interactive-only DOM layers (zoom gimbal, annotations, webcam drag
+	// hitbox) that PreviewCanvas renders after it, but above nothing else —
+	// the CPU-rendered video/webcam/blur pixels it replaces are hidden via CSS.
 	return (
 		<canvas
 			ref={canvasRef}
 			data-testid="native-compositor-mount"
-			style={{ position: "absolute", inset: 0, zIndex: 5, width: "100%", height: "100%" }}
+			style={{ position: "absolute", inset: 0, zIndex: 0, width: "100%", height: "100%" }}
 		/>
 	);
 }
