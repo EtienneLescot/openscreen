@@ -285,6 +285,14 @@ export class CompositorViewService {
 		addon.setScene(id, resolveSceneAssetPaths(sceneJson));
 	}
 
+	setActiveClip(id: number, screenPath: string, webcamPath: string, webcamOffsetSec: number): void {
+		const addon = this.ensureAddon();
+		if (!addon) {
+			return;
+		}
+		addon.setActiveClip(id, screenPath, webcamPath, webcamOffsetSec);
+	}
+
 	destroyView(id: number): void {
 		const addon = this.ensureAddon();
 		this.rects.delete(id);

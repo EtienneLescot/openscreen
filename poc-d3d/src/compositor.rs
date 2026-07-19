@@ -170,18 +170,14 @@ pub struct Compositor {
     /// `set_live_params` — nécessaire pour le rebrancher par clip dans l'export multiclip, qui
     /// n'a qu'une référence partagée au `Compositor`.
     cursor: RefCell<Option<CursorTrack>>,
-    /// Override du temps d'échantillonnage curseur (secondes) — `None` = comportement live
-    /// (`frame / FPS`, valable car `Player::step` avance à 60Hz réel). L'export multiclip le
-    /// positionne à `sdec.cur_time_sec()` (temps source ABSOLU dans la piste curseur, rebasée à
-    /// t=0 sur tout l'enregistrement) car son compteur `frames` global ne correspond à AUCUNE
-    /// notion de temps source une fois plusieurs clips/fichiers enchaînés.
+    /// Override du temps d'échantillonnage curseur (secondes) — `None` = comportement fixture
+    /// (`frame / FPS`). L'export multiclip et le live le positionnent au PTS écran courant,
+    /// c'est-à-dire au temps source absolu du clip actif.
     cursor_t_override: RefCell<Option<f32>>,
-    /// Override du temps TIMELINE (secondes) — référentiel DIFFÉRENT de `cursor_t_override` :
-    /// les zoom regions / camera-fullscreen regions sont définies en temps de la TIMELINE
-    /// composée (peut couvrir plusieurs clips), pas en temps source d'un clip individuel.
-    /// `None` = comportement live (`frame / FPS`, un seul clip ouvert à la fois donc temps
-    /// source ≈ temps timeline). L'export multiclip le positionne au temps timeline cumulé
-    /// (durée des clips précédents + position dans le clip courant).
+    /// Override du temps des zoom/full-camera regions (secondes source du clip actif). Le nom
+    /// `timeline_t_override` est conservé pour l'API existante, mais ce temps n'est plus cumulé
+    /// entre clips : les régions projetées par l'app portent elles aussi des temps source.
+    /// Séparé de l'override curseur pour préserver les chemins fixture sans télémétrie.
     timeline_t_override: RefCell<Option<f32>>,
     // cache des SRV décodeur par (texture array, slice) : le pool réutilise ~32 textures,
     // donc après warmup plus aucune création de SRV par frame (overhead CPU supprimé).
@@ -916,12 +912,16 @@ impl Compositor {
         *self.cursor.borrow_mut() = Some(track);
     }
 
-    /// Voir `cursor_t_override`. `None` restaure le comportement live (`frame / FPS`).
+    pub fn clear_cursor(&self) {
+        *self.cursor.borrow_mut() = None;
+    }
+
+    /// Voir `cursor_t_override`. `None` restaure le comportement fixture (`frame / FPS`).
     pub fn set_cursor_time(&self, t: Option<f32>) {
         *self.cursor_t_override.borrow_mut() = t;
     }
 
-    /// Voir `timeline_t_override`. `None` restaure le comportement live (`frame / FPS`).
+    /// Voir `timeline_t_override`. `None` restaure le comportement fixture (`frame / FPS`).
     pub fn set_timeline_time(&self, t: Option<f32>) {
         *self.timeline_t_override.borrow_mut() = t;
     }
@@ -1061,9 +1061,8 @@ impl Compositor {
         let lp = *self.live_params.borrow();
         let mb_taps = cfg.mblur_n as f32;
 
-        // Zoom regions + Full Camera : lus depuis la scène (référentiel TIMELINE, pas le temps
-        // source d'un clip individuel — cf. doc de `timeline_t_override`). Emprunt tenu pour
-        // toute la fonction (RefCell autorise plusieurs emprunts immuables simultanés).
+        // Zoom regions + Full Camera : filtrées en amont pour le clip actif et échantillonnées
+        // dans le même référentiel source que le PTS du décodeur écran.
         let scene_ref = self.scene.borrow();
         let empty_zoom: Vec<crate::scene::SceneZoomRegion> = Vec::new();
         let empty_cam: Vec<crate::scene::SceneCameraFullscreenRegion> = Vec::new();
@@ -1071,8 +1070,8 @@ impl Compositor {
         let cam_regions =
             scene_ref.as_ref().map(|s| &s.camera_fullscreen_regions).unwrap_or(&empty_cam);
         let webcam_reactive = scene_ref.as_ref().map(|s| s.layout.webcam_reactive_zoom).unwrap_or(false);
-        let timeline_t = self.timeline_t_override.borrow().unwrap_or(frame / FPS);
-        let timeline_t_prev = timeline_t - 1.0 / FPS;
+        let source_t = self.timeline_t_override.borrow().unwrap_or(frame / FPS);
+        let source_t_prev = source_t - 1.0 / FPS;
         // le focus "auto" (suivi curseur) réutilise la même piste que le rendu du curseur.
         let cursor_ref = self.cursor.borrow();
         let cursor_for_zoom = cursor_ref.as_ref();
@@ -1081,19 +1080,19 @@ impl Compositor {
         // écran normal (vélocité pour le motion blur du chemin non-tilté).
         let mut zoom_rotation = [0.0f32; 3];
         if !zoom_regions.is_empty() {
-            let zs = crate::regions::zoom_state_at(zoom_regions, timeline_t, cursor_for_zoom);
+            let zs = crate::regions::zoom_state_at(zoom_regions, source_t, cursor_for_zoom);
             p.zoom = zs.scale;
             p.focus = zs.focus;
             zoom_rotation = zs.rotation;
-            let zs_p = crate::regions::zoom_state_at(zoom_regions, timeline_t_prev, cursor_for_zoom);
+            let zs_p = crate::regions::zoom_state_at(zoom_regions, source_t_prev, cursor_for_zoom);
             pp.zoom = zs_p.scale;
             pp.focus = zs_p.focus;
         }
         // Full Camera ignore le rétrécissement réactif de la webcam (design web : mélanger
         // "rétrécit pour le zoom" et "grandit en plein cadre" dans la même frame n'a pas de sens).
-        let cam_progress = crate::regions::camera_fullscreen_progress_at(cam_regions, timeline_t);
+        let cam_progress = crate::regions::camera_fullscreen_progress_at(cam_regions, source_t);
         let cam_progress_prev =
-            crate::regions::camera_fullscreen_progress_at(cam_regions, timeline_t_prev);
+            crate::regions::camera_fullscreen_progress_at(cam_regions, source_t_prev);
         // rétrécissement réactif : la webcam rétrécit pendant un zoom actif (1/zoom, plancher
         // 0.35 — parité `reactiveWebcamScale`, TS). Ignoré pendant Full Camera (voir ci-dessus).
         let reactive_scale = |zoom: f32, progress: f32| -> f32 {

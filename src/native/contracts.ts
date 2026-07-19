@@ -709,6 +709,17 @@ export type NativeBridgeRequest =
 			action: "setScene";
 			payload: { id: number; sceneJson: string };
 			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "setActiveClip";
+			payload: {
+				id: number;
+				screenPath: string;
+				webcamPath: string;
+				webcamOffsetSec: number;
+			};
+			requestId?: string;
 	  };
 
 export type NativeBridgeEventName =
