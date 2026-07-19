@@ -1,7 +1,9 @@
-//! Addon napi-rs : pont Electron ↔ `poc_d3d::live::LiveView`. Expose la vue D3D enfant
-//! embarquée (Option A) à la glue TS (native-bridge domaine "compositor"). Les `#[napi]`
-//! sont appelés depuis le thread principal Node (là où vit la `BrowserWindow`), donc la
-//! fenêtre enfant est créée sur ce thread ; le rendu vit sur le thread de `LiveView`.
+//! Addon napi-rs : pont Electron ↔ `poc_d3d::live::LiveView`. Expose la vue
+//! offscreen (Option B, post-readback `Vec<u8>` RGBA8 → `<canvas>` HTML) à la
+//! glue TS (native-bridge domaine "compositor"). Les `#[napi]` sont appelés
+//! depuis le thread principal Node (là où vit la `BrowserWindow`) ; le rendu et
+//! la publication de la dernière frame vivent sur le thread dédié de `LiveView`
+//! et sont récupérés via `read_frame`.
 
 use napi::bindgen_prelude::*;
 use napi::{Env, Task};
@@ -14,9 +16,12 @@ use poc_d3d::scene::Scene;
 use poc_d3d::{config, pipeline};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
-use windows::Win32::Foundation::HWND;
 
-/// Rect en pixels device, relatif au client de la fenêtre parente (miroir de la glue TS).
+/// Résolution cible du preview en pixels device (largeur/hauteur du `<canvas>`
+/// Electron affichant la preview). `x`/`y` ne sont plus utilisés (Option B :
+/// la position est gérée par CSS côté web) — conservés dans l'objet pour
+/// compatibilité structurelle avec l'ancien code de la glue TS, simplement
+/// ignorés côté Rust.
 #[napi(object)]
 pub struct CompositorViewRect {
     pub x: i32,
@@ -32,16 +37,6 @@ fn registry() -> &'static Mutex<HashMap<i32, LiveView>> {
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// `getNativeWindowHandle()` d'Electron : buffer little-endian contenant le HWND natif.
-fn hwnd_from_buffer(buf: &Buffer) -> HWND {
-    let bytes: &[u8] = buf.as_ref();
-    let mut v: usize = 0;
-    for (i, b) in bytes.iter().take(std::mem::size_of::<usize>()).enumerate() {
-        v |= (*b as usize) << (8 * i);
-    }
-    HWND(v as *mut core::ffi::c_void)
-}
-
 /// Répertoire fixture (POC) : env `OPENSCREEN_COMPOSITOR_FIXTURE`, sinon défaut local.
 /// Le Lot 3 fournira les vraies sources ; ici on prouve l'embed avec la fixture.
 fn fixture_dir() -> String {
@@ -50,28 +45,34 @@ fn fixture_dir() -> String {
     })
 }
 
-/// Crée une vue. Si `screen_path`/`webcam_path` sont fournis (F3 : le vrai enregistrement
-/// de l'app — deux fichiers H264 séparés), on rend ces sources ; sinon on retombe sur la
-/// fixture POC. `cursor_path` optionnel (télémétrie curseur ; absent → pas de curseur).
+/// Crée une vue **offscreen** (pas de HWND, pas de fenêtre native). Démarre juste
+/// un thread de rendu qui compose chaque frame, blit-resize vers `rect.width`×
+/// `rect.height` (réutilise le même `ensure_resize_target`/`blit_resized` que
+/// l'export), lit le résultat vers CPU via staging `D3D11_USAGE_STAGING` +
+/// `Map`/`Unmap` et stocke un `Vec<u8>` RGBA8 tightly-packed dans la vue pour
+/// que `read_frame` le retourne à la glue TS.
+///
+/// Si `screen_path`/`webcam_path` sont fournis (F3 : le vrai enregistrement de
+/// l'app — deux fichiers H264 séparés), on rend ces sources ; sinon on retombe
+/// sur la fixture POC. `cursor_path` optionnel (télémétrie curseur ; absent →
+/// pas de curseur).
+///
+/// `rect` ne sert plus que pour `width`/`height` (résolution cible du preview) ;
+/// `x`/`y` sont ignorés (compat structurelle — la position est gérée par CSS).
 #[napi]
 pub fn create_view(
-    parent_handle: Buffer,
     rect: CompositorViewRect,
     screen_path: Option<String>,
     webcam_path: Option<String>,
     cursor_path: Option<String>,
 ) -> Result<i32> {
-    let hwnd = hwnd_from_buffer(&parent_handle);
     let dir = fixture_dir();
     let screen = screen_path.unwrap_or_else(|| format!("{dir}/screen.mp4"));
     let webcam = webcam_path.unwrap_or_else(|| format!("{dir}/webcam.mp4"));
     let cursor = cursor_path.unwrap_or_else(|| format!("{dir}/screen.cursor.json"));
     let view = LiveView::create(
-        hwnd,
-        rect.x,
-        rect.y,
-        rect.width,
-        rect.height,
+        rect.width.max(1) as u32,
+        rect.height.max(1) as u32,
         &screen,
         &webcam,
         &cursor,
@@ -87,20 +88,61 @@ pub fn create_view(
     Ok(id)
 }
 
+/// Met à jour la résolution cible du preview. L'ancienne sémantique « position
+/// + taille de la fenêtre overlay » (`x, y, w, h`) n'a plus lieu d'être (la
+/// preview est un bitmap posé sur un `<canvas>` Electron, positionné en CSS) :
+/// on garde la même forme d'objet `CompositorViewRect` côté TS pour ne pas
+/// casser l'ABI, mais `x`/`y` sont silencieusement ignorés et seules
+/// `width`/`height` sont propagées au thread de rendu. La résolution prend
+/// effet au prochain tour (`compositor::readback_resized` reconstruit la
+/// staging si `width`/`height` ont changé).
 #[napi]
 pub fn set_rect(id: i32, rect: CompositorViewRect) {
     if let Some(v) = registry().lock().unwrap().get(&id) {
-        v.set_rect(rect.x, rect.y, rect.width, rect.height);
+        v.set_rect(rect.width.max(1) as u32, rect.height.max(1) as u32);
     }
 }
 
-/// Masque/affiche l'overlay natif — nécessaire quand une modale web (export…) doit passer
-/// devant : c'est une fenêtre top-level hors de la surface Chromium, le z-index CSS n'y peut
-/// rien.
+/// Renvoie la dernière frame RGBA8 readback du thread de rendu, dans un
+/// `napi::Buffer` (octets R,G,B,A tightly-packed, `width * height * 4` octets,
+/// même ordre que `putImageData(..., 'rgba8')` attend côté JS).
+///
+/// `Ok(None)` si :
+///   - la vue `id` n'existe pas dans le registre (jamais créée ou déjà détruite),
+///   - ou si aucune frame n'a encore été composée (1er appel avant que le
+///     thread de rendu n'ait publié quoi que ce soit — composition suspendue tant
+///     qu'aucune scène n'a été posée, lecture libre en pause avant la 1re frame,
+///     etc.).
+///
+/// Le `Buffer` retourné est détaché du `Vec<u8>` interne (copie zéro-copy via
+/// le mécanisme de `napi::bindgen_prelude::Buffer` — l'ownership du
+/// stockage sous-jacent est transféré au JS GC). Le thread de rendu continue
+/// à composer/remplacer le buffer interne à chaque frame sans bloquer le
+/// thread Node ; le prochain `read_frame` verra la frame suivante.
+///
+/// Coût dominant : l'alloc `Vec<u8>` côté rendu + la copie `O(w·h)` vers le
+/// Buffer napi — c'est le prix du transport cross-thread + cross-FFI.
 #[napi]
-pub fn set_view_visible(id: i32, visible: bool) {
-    if let Some(v) = registry().lock().unwrap().get(&id) {
-        v.set_visible(visible);
+pub fn read_frame(id: i32) -> Result<Option<Buffer>> {
+    // Snapshot le pixel buffer HORS du lock du registre : on en a besoin vivant
+    // (r#[napi] retourne un Buffer qui consomme l'ownership du Vec). Sinon le
+    // MutexGuard serait tenu pendant que la frame est consommée par JS, ce qui
+    // bloquerait tout autre appel napi (`set_rect`, `destroy_view`, ...).
+    let slot = match registry().lock().unwrap().get(&id) {
+        None => return Ok(None),
+        Some(v) => v.latest_frame(),
+    };
+    match slot {
+        None => Ok(None),
+        Some((w, h, pixels)) => {
+            debug_assert_eq!(pixels.len(), (w as usize) * (h as usize) * 4);
+            // Format : R, G, B, A tightly-packed, ce que `ctx.putImageData(buffer, ...)` attend
+            // via un `Uint8ClampedArray` côté JS (canvas 2D, format natif RGBA8). Le compactage
+            // ignore le canal alpha (constant 255 — pas de transparence côté canvas, on rend sur
+            // fond déjà opaque) mais on garde quand même les 4 octets pour respecter le contrat
+            // `width*height*4` qu'on documente.
+            Ok(Some(Buffer::from(pixels)))
+        }
     }
 }
 
@@ -157,12 +199,12 @@ pub fn set_scene(id: i32, scene_json: String) {
 
 #[napi]
 pub fn destroy_view(id: i32) {
-    // remove hors du lock : le Drop (join du thread de rendu + DestroyWindow) ne le tient pas.
+    // remove hors du lock : le Drop (join du thread de rendu) ne le tient pas.
     let removed = registry().lock().unwrap().remove(&id);
     drop(removed);
 }
 
-/// Bilan d'un export natif (mesure §10 : une lecture d'horloge avant/après tout le run).
+/// Bilan d'un export natif (mesure §10 : une lecture d'horloge avant-après tout le run).
 #[napi(object)]
 pub struct ExportStats {
     pub frames: u32,

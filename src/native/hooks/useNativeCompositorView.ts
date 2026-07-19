@@ -1,10 +1,14 @@
 /**
- * React hook that mounts a native D3D11 compositor preview window on top of a
- * DOM element. On mount it allocates a compositor view (rect only — the
- * native window handle is resolved main-side), then keeps the native view in
- * sync with the DOM element's bounding rect via a single rAF-coalesced
- * ResizeObserver + window resize/scroll listener pair. Cleanup cancels the
- * observer/listeners and destroys the native view.
+ * React hook that drives a canvas-based preview of the native D3D11
+ * compositor. The compositor renders OFFSCREEN (no OS window), so this hook:
+ *   1. Allocates an offscreen compositor view sized to the canvas's device-pixel
+ *      rect (measured via ResizeObserver + window resize/scroll, rAF-coalesced
+ *      — the exact same sync machinery as before, repurposed: it now drives
+ *      the offscreen render-target resolution instead of a window position).
+ *   2. Polls `readCompositorFrame` on every other rAF tick (~30fps) and paints
+ *      the returned RGBA buffer into the canvas via `ctx.putImageData`. The
+ *      buffer is the same size as the rect last pushed (canvas.width/height
+ *      track the rect).
  *
  * Every native-bridge call is wrapped in a try/catch that swallows + warns,
  * because the renderer may run without the bridge (pure web `npm run dev`,
@@ -16,6 +20,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import {
 	createCompositorView,
 	destroyCompositorView,
+	readCompositorFrame,
 	setCompositorParam,
 	setCompositorPlaying,
 	setCompositorRect,
@@ -56,8 +61,13 @@ function safelyCall(label: string, call: () => Promise<unknown>) {
 	}
 }
 
+/** Throttle the rAF pull loop to roughly 30fps: process every other animation
+ *  frame. Keeps IPC + GPU readback + putImageData cheap on high-refresh
+ *  displays (120/144 Hz) without changing perceived preview smoothness. */
+const PULL_LOOP_TICK_DIVISOR = 2;
+
 export function useNativeCompositorView(
-	ref: RefObject<HTMLElement>,
+	canvasRef: RefObject<HTMLCanvasElement>,
 	opts: UseNativeCompositorViewOptions = {},
 ): UseNativeCompositorViewResult {
 	const enabled = opts.enabled !== false;
@@ -74,22 +84,42 @@ export function useNativeCompositorView(
 		if (!enabled) {
 			return;
 		}
-		const el = ref.current;
-		if (!el) {
+		const canvas = canvasRef.current;
+		if (!canvas) {
 			return;
 		}
 
-		let rafHandle = 0;
+		let rectRafHandle = 0;
+		let pullRafHandle = 0;
+		let pullTick = 0;
 		let lastRect: CompositorViewRect | null = null;
 		let disposed = false;
 
+		/** Resize the canvas's DRAWING BUFFER to match the offscreen render
+		 *  target's pixel dimensions. Setting `canvas.width` / `canvas.height`
+		 *  is destructive (clears the bitmap), so we only do it on genuine
+		 *  rect changes — handled together with the setRect push below. */
+		const syncCanvasSize = (rect: CompositorViewRect) => {
+			if (canvas.width !== rect.width) {
+				canvas.width = rect.width;
+			}
+			if (canvas.height !== rect.height) {
+				canvas.height = rect.height;
+			}
+		};
+
 		const applyRectNow = () => {
-			rafHandle = 0;
+			rectRafHandle = 0;
 			if (disposed) {
 				return;
 			}
-			const domRect = el.getBoundingClientRect();
+			// `getBoundingClientRect` on the canvas reflects its CSS layout box;
+			// scaled to device pixels for the native offscreen target.
+			const domRect = canvas.getBoundingClientRect();
 			const next = computeDeviceRect(domRect, window.devicePixelRatio);
+			// `x` / `y` are vestigial in the new contract (ignored native-side),
+			// but `rectsEqual` still compares them — harmless: scrolling will just
+			// re-push the rect, and the native side ignores x/y.
 			if (lastRect && rectsEqual(lastRect, next)) {
 				return;
 			}
@@ -98,22 +128,78 @@ export function useNativeCompositorView(
 			if (id == null) {
 				return;
 			}
+			syncCanvasSize(next);
 			safelyCall("setRect", () => setCompositorRect(id, next));
 		};
 
 		const scheduleRectUpdate = () => {
-			if (rafHandle !== 0) {
+			if (rectRafHandle !== 0) {
 				return;
 			}
-			rafHandle = requestAnimationFrame(applyRectNow);
+			rectRafHandle = requestAnimationFrame(applyRectNow);
+		};
+
+		/** rAF pull loop: throttle to ~30fps and paint the returned buffer
+		 *  into the canvas via `putImageData`. `putImageData` is the natural
+		 *  fit for a raw RGBA pixel buffer (no scaling, no compositing —
+		 *  the bytes ARE the pixels). If the GPU-readback story ever needs
+		 *  to be faster (e.g. higher refresh rates), switching to
+		 *  `createImageBitmap` + `ctx.drawImage` is a localized swap here. */
+		const pullLoop = () => {
+			pullRafHandle = requestAnimationFrame(pullLoop);
+			if (disposed) {
+				return;
+			}
+			pullTick = (pullTick + 1) % PULL_LOOP_TICK_DIVISOR;
+			if (pullTick !== 0) {
+				return;
+			}
+			const id = viewIdRef.current;
+			if (id == null) {
+				return;
+			}
+			const ctx = canvas.getContext("2d");
+			if (!ctx) {
+				return;
+			}
+			readCompositorFrame(id)
+				.then((buffer) => {
+					if (disposed || !buffer) {
+						return;
+					}
+					// Sanity check: the buffer must be exactly
+					// canvas.width * canvas.height * 4 bytes (RGBA). Mismatches
+					// would corrupt the image silently via putImageData — bail.
+					const expected = canvas.width * canvas.height * 4;
+					if (buffer.byteLength !== expected || canvas.width === 0 || canvas.height === 0) {
+						return;
+					}
+					// `buffer` is `Uint8ClampedArray<ArrayBufferLike>` (Node's Buffer
+					// generic defaults to ArrayBufferLike, which the ImageData ctor
+					// rejects — it wants `Uint8ClampedArray<ArrayBuffer>` exactly).
+					// Copying into a fresh ArrayBuffer-backed array keeps the type
+					// system happy; the memcpy is ~1ms at 1080p RGBA on a modern CPU,
+					// well under our 30fps budget.
+					const pixels = new Uint8ClampedArray(buffer.byteLength);
+					pixels.set(buffer);
+					ctx.putImageData(new ImageData(pixels, canvas.width, canvas.height), 0, 0);
+				})
+				.catch((error: unknown) => {
+					console.warn("[compositor-view] readFrame failed:", error);
+				});
 		};
 
 		// Initial mount: allocate the native view with the rect observed at
 		// the moment the effect ran. The async id will be used on subsequent
 		// resize/scroll updates. Without the bridge, this is a swallowed
 		// warning — the rest of the hook stays inert.
-		const initialRect = computeDeviceRect(el.getBoundingClientRect(), window.devicePixelRatio);
+		const initialRect = computeDeviceRect(canvas.getBoundingClientRect(), window.devicePixelRatio);
 		lastRect = initialRect;
+		// Prime the canvas drawing buffer to the resolution we expect the
+		// first pulled frame to have; avoids a 300x150 flash before the
+		// first readFrame resolves.
+		syncCanvasSize(initialRect);
+
 		safelyCall("createView", async () => {
 			const result = await createCompositorView(initialRect, opts.sources);
 			if (disposed) {
@@ -126,16 +212,26 @@ export function useNativeCompositorView(
 		});
 
 		const observer = new ResizeObserver(scheduleRectUpdate);
-		observer.observe(el);
+		observer.observe(canvas);
 		window.addEventListener("resize", scheduleRectUpdate);
 		// capture phase so we observe parent scroll containers too,
 		// not just `window` — the preview pane may scroll independently.
 		window.addEventListener("scroll", scheduleRectUpdate, true);
 
+		// Start the pull loop only after the view id is published — otherwise
+		// every early tick would just hit `id == null` and no-op. Id is set
+		// in the safelyCall above; we also pull here defensively for the
+		// common case (addon absent → synthetic negative id, pull returns null,
+		// no draw happens). The pull loop self-cancels in cleanup.
+		pullRafHandle = requestAnimationFrame(pullLoop);
+
 		return () => {
 			disposed = true;
-			if (rafHandle !== 0) {
-				cancelAnimationFrame(rafHandle);
+			if (rectRafHandle !== 0) {
+				cancelAnimationFrame(rectRafHandle);
+			}
+			if (pullRafHandle !== 0) {
+				cancelAnimationFrame(pullRafHandle);
 			}
 			observer.disconnect();
 			window.removeEventListener("resize", scheduleRectUpdate);
@@ -145,9 +241,9 @@ export function useNativeCompositorView(
 				safelyCall("destroyView", () => destroyCompositorView(id));
 			}
 		};
-		// `ref` is a stable RefObject; we re-run (destroy + re-create the view) when the
+		// `canvasRef` is a stable RefObject; we re-run (destroy + re-create the view) when the
 		// enabled flag flips or the screen source changes.
-	}, [enabled, ref, screenPath]);
+	}, [enabled, canvasRef, screenPath]);
 
 	const setParam = useCallback((key: string, value: CompositorParamValue) => {
 		const id = viewIdRef.current;
