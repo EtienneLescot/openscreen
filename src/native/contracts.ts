@@ -648,7 +648,11 @@ export type NativeBridgeRequest =
 			domain: "compositor";
 			action: "createView";
 			/** F3: optional real-recording sources (screen + webcam, two separate H264 files) +
-			 *  cursor telemetry; omitted → the POC fixture. */
+			 *  cursor telemetry; omitted → the POC fixture. The compositor renders OFFSCREEN
+			 *  at `rect.width`x`rect.height`; no HWND/native-window-handle is carried over IPC
+			 *  anymore (the addon no longer parents a top-level window). `rect.x` / `rect.y`
+			 *  are vestigial — kept on the wire so the existing `CompositorViewRect` shape
+			 *  stays source-compatible. */
 			payload: {
 				rect: CompositorViewRect;
 				screenPath?: string;
@@ -665,8 +669,15 @@ export type NativeBridgeRequest =
 	  }
 	| {
 			domain: "compositor";
-			action: "setVisible";
-			payload: { id: number; visible: boolean };
+			action: "readFrame";
+			/** Polled every rAF tick (target ~30fps) by the renderer's
+			 *  `useNativeCompositorView` hook. The native side reads back the
+			 *  most recently rendered frame as a raw RGBA pixel buffer; the
+			 *  hook paints it into a `<canvas>`. Returns `null` when the
+			 *  addon is absent OR no frame is ready yet (e.g. still decoding
+			 *  the first clip). Bytes survive IPC via Electron's structured
+			 *  clone — `ipcRenderer.invoke` preserves `Buffer` end-to-end. */
+			payload: { id: number };
 			requestId?: string;
 	  }
 	| {

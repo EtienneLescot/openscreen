@@ -31,7 +31,7 @@ import {
 	type GifSizePreset,
 } from "@/lib/exporter";
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
-import { exportMultiNative, exportNative, setNativeCompositorVisible } from "@/native";
+import { exportMultiNative, exportNative } from "@/native";
 import { nativeBridgeClient } from "@/native/client";
 import type { CompositorClipInput } from "@/native/contracts";
 import { buildSceneDescription } from "@/native/sceneDescription";
@@ -131,15 +131,10 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 	const [savedPath, setSavedPath] = useState<string | null>(null);
 	const cancelRef = useRef<{ cancel: () => void } | null>(null);
 
-	// The native compositor overlay is a top-level OS window outside the Chromium surface — CSS
-	// z-index can't put this modal in front of it. Hide it explicitly while open, restore on close.
-	useEffect(() => {
-		if (!open) {
-			return;
-		}
-		setNativeCompositorVisible(false);
-		return () => setNativeCompositorVisible(true);
-	}, [open]);
+	// (Old behavior: the native compositor overlay used to be a top-level OS window outside the
+	//  Chromium surface, so we'd hide it here to put this modal in front. The compositor now
+	//  streams into a normal `<canvas>` inside the DOM — CSS z-index handles stacking naturally
+	//  and there's no OS window to hide. The hide/show dance is now dead code; removed.)
 
 	// Fallback for assets whose `video` dims were never probed (nothing populated them for most
 	// existing recordings until this was fixed at the source — see `probeAndCorrectClip`).

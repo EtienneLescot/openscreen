@@ -5,6 +5,14 @@
  * prebuilt `.node` binary is present the service logs once and falls back to
  * safe no-ops — the type contract here is the only contract renderer code
  * relies on.
+ *
+ * The compositor renders OFFSCREEN at the resolution given by `createView`'s
+ * `rect.width` / `rect.height`; the renderer polls `readFrame` on a timer and
+ * paints the result into an HTML `<canvas>`. There is no OS window — the rect
+ * is purely a target preview resolution, and the `x` / `y` fields are
+ * vestigial (ignored native-side; the TS side keeps them on the wire so the
+ * `CompositorViewRect` shape is unchanged and existing callers don't need a
+ * refactor for fields they never used).
  */
 
 export interface CompositorViewRect {
@@ -46,19 +54,30 @@ export interface ClipInput {
 }
 
 export interface CompositorViewAddon {
-	/** Optional screen/webcam/cursor paths (F3 — the app's real recording, two separate H264
+	/** Allocates an offscreen compositor view sized to `rect.width`x`rect.height` (the
+	 *  target preview resolution; `rect.x` / `rect.y` are vestigial and ignored native-side).
+	 *  No HWND/native-window-handle is passed: there's no OS window to parent to. The
+	 *  renderer reads frames back via `readFrame` and paints them into a canvas.
+	 *
+	 *  Optional screen/webcam/cursor paths (F3 — the app's real recording, two separate H264
 	 *  files); omitted → the POC fixture. */
 	createView(
-		parentHandle: Buffer,
 		rect: CompositorViewRect,
 		screenPath?: string,
 		webcamPath?: string,
 		cursorPath?: string,
 	): number;
 	setRect(id: number, rect: CompositorViewRect): void;
-	/** Shows/hides the overlay. It's a top-level window outside the Chromium surface, so CSS
-	 *  z-index can't put a web modal in front of it — the app must hide it explicitly. */
-	setViewVisible(id: number, visible: boolean): void;
+	/** Returns the most recently rendered frame as a raw pixel buffer (length =
+	 *  `width * height * 4`). Byte order is RGBA per the new contract; if the
+	 *  picture comes back with red/blue swapped once the real addon is
+	 *  buildable, swap to `new ImageData(new Uint8ClampedArray(buffer), w, h)`
+	 *  where the bytes are interpreted as BGRA, or ask the Rust side to match
+	 *  RGBA on the wire. Returns `null` if no frame is ready yet.
+	 *
+	 *  TODO: confirm RGBA vs BGRA byte order against the real addon once it's
+	 *  buildable. */
+	readFrame(id: number): Buffer | null;
 	setParam(id: number, key: string, value: CompositorParamValue): void;
 	setPlaying(id: number, playing: boolean): void;
 	/** Seeks the view to `seconds` (app playhead-driven). */

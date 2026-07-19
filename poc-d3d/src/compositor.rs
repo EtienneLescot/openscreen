@@ -193,6 +193,10 @@ pub struct Compositor {
     /// OUT_W×OUT_H — le live et les exports "Source"/1080p restent sur `rgb_to_nv12` inchangé,
     /// zéro coût). Voir `rgb_to_nv12_scaled`.
     resize_target: RefCell<Option<ResizeTarget>>,
+    /// Cache de la staging texture de readback live, dimensionnée à la dernière taille
+    /// de prévisualisation demandée (variable, contrairement au `staging` fixe à
+    /// OUT_W×OUT_H). Recréée quand la taille change — voir `readback_resized`.
+    live_readback_staging: RefCell<Option<(u32, u32, ID3D11Texture2D)>>,
 }
 
 /// Ressources d'un resize export à une taille cible : RGBA intermédiaire (résultat du
@@ -679,6 +683,7 @@ impl Compositor {
             scene: RefCell::new(None),
             img_cache: RefCell::new(HashMap::new()),
             resize_target: RefCell::new(None),
+            live_readback_staging: RefCell::new(None),
         })
     }
 
@@ -1627,6 +1632,91 @@ impl Compositor {
         self.ctx.Draw(3, 0);
         self.ctx.PSSetShaderResources(0, Some(&[None]));
         Ok(())
+    }
+
+    /// Lit le RT composité (résolu à `target_w`×`target_h`, via le même `blit_resized`
+    /// réutilisé par `rgb_to_nv12_scaled` pour l'export) vers un `Vec<u8>` RGBA8
+    /// tightly-packed (`target_w * target_h * 4` octets, ordre R,G,B,A en mémoire — ce
+    /// que `putImageData(..., 'rgba8')` attend côté JS).
+    ///
+    /// Pourquoi un helper dédié plutôt qu'un open-coding dans `live.rs` : tout le
+    /// pattern GPU→CPU de ce fichier (staging `D3D11_USAGE_STAGING`, `CopyResource`,
+    /// `Map`/`D3D11_MAP_READ` + copie ligne par ligne qui respecte `RowPitch`) vit déjà
+    /// dans `dump_nv12`/`dump_raw` — le partager garde la connaissance D3D11 confinée
+    /// à ce fichier et assure que le live et l'export ne divergent pas sur un détail de
+    /// copie. La staging est cachée par taille (`live_readback_staging`) — recréée quand
+    /// `target_w`/`target_h` changent — pour ne pas payer une allocation par frame.
+    ///
+    /// Pré-requis : `target_w`/`target_h` ≥ 1. Aucun effet sur le pipeline d'export
+    /// (les sites d'appel de `rgb_to_nv12_scaled` et `blit_resized` ne sont pas touchés
+    /// — ce helper réutilise `blit_resized` mais n'est pas sur le chemin d'export).
+    pub unsafe fn readback_resized(
+        &self,
+        target_w: u32,
+        target_h: u32,
+    ) -> Result<Vec<u8>> {
+        let w = target_w.max(1);
+        let h = target_h.max(1);
+
+        // 1) Resize GPU exactement comme `rgb_to_nv12_scaled` : remplit le `resize_target`
+        //    RGBA à `w`×`h`. On s'arrête avant la conversion NV12 — on copie le RGBA.
+        self.blit_resized(w, h)?;
+        // On a besoin de l'`ID3D11Texture2D` réel sous le SRV du resize_target pour
+        // `CopyResource` (qui prend un `ID3D11Resource`). Le SRV partage la même
+        // ressource, donc `cast::<ID3D11Texture2D>()` est valide.
+        let rgba_tex: ID3D11Texture2D = {
+            let cache = self.resize_target.borrow();
+            let t = cache.as_ref().unwrap();
+            t.rgba_srv.cast()?
+        };
+
+        // 2) Staging texture CPU-readable à la taille cible, recréée paresseusement
+        //    quand la taille change (cache : `live_readback_staging`).
+        let staging = {
+            let mut slot = self.live_readback_staging.borrow_mut();
+            match slot.as_ref() {
+                Some((sw, sh, t)) if *sw == w && *sh == h => t.clone(),
+                _ => {
+                    let desc = D3D11_TEXTURE2D_DESC {
+                        Width: w,
+                        Height: h,
+                        MipLevels: 1,
+                        ArraySize: 1,
+                        // Même format que `resize_target.rgba` créé dans
+                        // `ensure_resize_target` (R8G8B8A8_UNORM) — la `CopyResource`
+                        // est valide sans conversion GPU.
+                        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+                        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                        Usage: D3D11_USAGE_STAGING,
+                        BindFlags: 0,
+                        CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                        MiscFlags: 0,
+                    };
+                    let mut tex: Option<ID3D11Texture2D> = None;
+                    self.dev.CreateTexture2D(&desc, None, Some(&mut tex))?;
+                    let tex = tex.unwrap();
+                    *slot = Some((w, h, tex.clone()));
+                    tex
+                }
+            }
+        };
+
+        // 3) GPU → CPU : `CopyResource` resize_target → staging, puis `Map` + copie
+        //    ligne par ligne qui respecte `RowPitch` (cf. `dump_nv12`/`dump_raw`).
+        let src: ID3D11Resource = rgba_tex.cast()?;
+        let dst: ID3D11Resource = staging.cast()?;
+        self.ctx.CopyResource(&dst, &src);
+        let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+        self.ctx.Map(&staging, 0, D3D11_MAP_READ, 0, Some(&mut m))?;
+        let mut out: Vec<u8> = vec![0u8; (w * h * 4) as usize];
+        let row_bytes = (w * 4) as usize;
+        for y in 0..h as usize {
+            let src_row = (m.pData as *const u8).add(y * m.RowPitch as usize);
+            let dst_row = out.as_mut_ptr().add(y * row_bytes);
+            std::ptr::copy_nonoverlapping(src_row, dst_row, row_bytes);
+        }
+        self.ctx.Unmap(&staging, 0);
+        Ok(out)
     }
 
     /// Comme `rgb_to_nv12`, mais redimensionne d'abord (bilinéaire, `ps_tex`/`sampler` déjà

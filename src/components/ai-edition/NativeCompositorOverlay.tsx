@@ -9,11 +9,14 @@ import {
 import { buildSceneDescription } from "@/native/sceneDescription";
 
 /**
- * POC Option A — monte une fenêtre D3D11 native (compositeur poc-d3d, via
- * `compositor_view.node`) par-dessus la zone preview, positionnée sur ce `<div>`
- * placeholder et pilotée par `useNativeCompositorView`. La fenêtre native rend
- * le compositing ; le `<div>` ne sert qu'à donner sa géométrie (le hook sync le
- * rect natif au resize/scroll).
+ * POC Option A — preview rendue par le compositeur D3D11 natif (`compositor_view.node`),
+ * streamée dans un `<canvas>` via `readFrame`. Le compositor tourne OFFSCREEN
+ * (pas de fenêtre OS à parenter), donc il n'y a plus de problème de z-index
+ * Chromium : le canvas EST un élément DOM, et toute la chaîne d'événements
+ * (zoom-region drag handle, modales…) le gère naturellement. La géométrie
+ * de rendu vient du `getBoundingClientRect()` du canvas (le hook sync le rect
+ * natif au resize/scroll, et met à jour `canvas.width`/`height` pour
+ * correspondre au buffer de pixels).
  *
  * F3 : la vue est amorcée avec les sources de l'**asset primaire du document courant**
  * (fallback fixture sans asset/document), puis `setActiveClip` remplace screen + webcam quand
@@ -26,7 +29,7 @@ import { buildSceneDescription } from "@/native/sceneDescription";
  * Opt-in via le flag Vite `VITE_NATIVE_COMPOSITOR=1`.
  */
 export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
-	const mountRef = useRef<HTMLDivElement>(null);
+	const canvasRef = useRef<HTMLCanvasElement>(null);
 	const previousActiveClipIdRef = useRef<string | null>(null);
 	const document = useProjectStore((s) => s.document);
 	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
@@ -73,7 +76,7 @@ export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 	}, [document]);
 
 	const ready = sources !== null;
-	const { viewId } = useNativeCompositorView(mountRef, {
+	const { viewId } = useNativeCompositorView(canvasRef, {
 		enabled: enabled && ready,
 		sources: sources ?? undefined,
 	});
@@ -133,12 +136,15 @@ export function NativeCompositorOverlay({ enabled }: { enabled: boolean }) {
 		return null;
 	}
 
-	// placeholder : sert de géométrie à la fenêtre D3D native (le hook sync le rect).
+	// The canvas's CSS box (width: 100%; height: 100%) is what drives the
+	// geometry; the hook manages the DRAWING BUFFER (canvas.width/height DOM
+	// attrs) to match the offscreen render-target resolution, and paints each
+	// pulled frame via `ctx.putImageData`.
 	return (
-		<div
-			ref={mountRef}
+		<canvas
+			ref={canvasRef}
 			data-testid="native-compositor-mount"
-			style={{ position: "absolute", inset: 0, zIndex: 5 }}
+			style={{ position: "absolute", inset: 0, zIndex: 5, width: "100%", height: "100%" }}
 		/>
 	);
 }

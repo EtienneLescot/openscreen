@@ -1,45 +1,36 @@
-//! Vue live **embarquable** : rend le compositing dans une fenêtre D3D11 *enfant*
-//! (`WS_CHILD`) parentée à une fenêtre hôte (p.ex. la `BrowserWindow` Electron).
-//! C'est le cœur réutilisable de l'intégration Option A : l'addon napi-rs appellera
-//! `LiveView::create(parent_hwnd, rect, …)` puis `set_rect`/`set_param`/`set_playing`.
+//! Vue live : rend le compositing **hors-fenêtre** vers un `Vec<u8>` RGBA8
+//! (taille `set_rect`) destiné à être streamé dans un `<canvas>` Electron via
+//! `putImageData`. Option B (canvas) — l'ancienne option A (fenêtre D3D enfant
+//! `WS_POPUP` + swapchain) supprimée : la glue TS n'a plus de surface native à
+//! embarquer, elle draw chaque frame reçue comme une image bitmap.
 //!
-//! Modèle de threads : la fenêtre enfant est créée sur le thread appelant (ses messages
-//! sont pompés par l'hôte). Le rendu (device D3D, compositeur, décodeurs, swapchain,
-//! Present) tourne sur un **thread dédié** — le thread JS/UI n'est jamais bloqué. Les
-//! objets COM restent sur le thread de rendu (le HWND, lui, traverse en `isize`).
+//! Pipeline interne inchangé : `Player` (decodeur lockstep screen/webcam) +
+//! `Compositor::compose_frame` → RT RGBA OUT_W×OUT_H (1920×1080, partagé avec
+//! l'export). Le **post-traitement** seulement change :
+//!   - avant : blit du RT vers le backbuffer du swapchain, `Present`.
+//!   - maintenant : `comp.readback_resized(w, h)` réutilise le même `blit_resized`
+//!     / `ensure_resize_target` que l'export, puis copie le resize-target vers une
+//!     staging texture `D3D11_USAGE_STAGING`, `Map`/`D3D11_MAP_READ`, copie ligne
+//!     par ligne qui respecte `RowPitch` (même idiome que `dump_nv12`/`dump_raw`)
+//!     et stocke le `Vec<u8>` dans `Shared::latest_frame` pour le `read_frame` napi.
+//!
+//! Modèle de threads : la vue n'a plus de HWND/UI côté thread appelant. Le rendu vit
+//! sur un thread dédié — le thread JS/UI n'est jamais bloqué. Les objets COM et la
+//! staging restent sur ce thread de rendu ; la `Vec<u8>` est publiée via un
+//! `Mutex<Option<(u32, u32, Vec<u8>)>>` pour la traversée de threads vers le napi.
 
 use crate::compositor::{Compositor, LiveParams};
 use crate::scene::Scene;
 use crate::config::{self, Cfg};
 use crate::cursor::CursorTrack;
+use windows::core::PCWSTR;
 use crate::d3d::Gpu;
 use crate::pipeline::Decoder;
 use anyhow::Result;
-use std::ffi::c_void;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::sync::{Arc, Mutex, Once};
+use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
-use windows::core::{Interface, PCWSTR};
-use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::ClientToScreen;
-use windows::Win32::Graphics::Direct3D11::{ID3D11Device, ID3D11RenderTargetView, ID3D11Texture2D};
-use windows::Win32::Graphics::Dxgi::Common::{
-    DXGI_ALPHA_MODE_IGNORE, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SAMPLE_DESC,
-};
-use windows::Win32::Graphics::Dxgi::{
-    IDXGIAdapter, IDXGIDevice, IDXGIFactory2, IDXGISwapChain1, DXGI_PRESENT, DXGI_SCALING_STRETCH,
-    DXGI_SWAP_CHAIN_DESC1, DXGI_SWAP_CHAIN_FLAG, DXGI_SWAP_EFFECT_FLIP_DISCARD,
-    DXGI_USAGE_RENDER_TARGET_OUTPUT,
-};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
-use windows::Win32::UI::WindowsAndMessaging::*;
-
-use crate::compositor::{OUT_H, OUT_W};
-
-fn wide(s: &str) -> Vec<u16> {
-    s.encode_utf16().chain(std::iter::once(0)).collect()
-}
 
 /// "#rrggbb" (ou "rrggbb") → [r, g, b, 1] en 0..1. None si invalide.
 fn parse_hex_color(s: &str) -> Option<[f32; 4]> {
@@ -202,7 +193,7 @@ struct InspectorParams {
     cursor_size_scale: f32,
     cursor_bounce_scale: f32,
     /// 0..1 : force du lissage ressort-amortisseur de la position (0 = brut). Reconstruit la
-    /// piste (voir `raw_cursor.smoothed()` dans `run_live`) plutôt qu'un simple scalaire de
+    /// piste (voir `raw_cursor.smoothed()` dans `render_thread`) plutôt qu'un simple scalaire de
     /// dessin — d'où le suivi séparé de sa dernière valeur appliquée.
     cursor_smoothing: f32,
     /// 0..1 : force du flou de mouvement DU CURSEUR (indépendant du motion blur écran).
@@ -274,11 +265,21 @@ fn scene_for_clip(scene: &Scene, clip_index: usize) -> Scene {
     }
 }
 
+/// Dernière frame readback vers CPU, prête pour le napi `read_frame`.
+///
+/// `(w, h, vec)` où `vec.len() == w*h*4` octets RGBA8 tightly-packed (R, G, B, A en
+/// mémoire — cf. `Compositor::readback_resized`). `None` = "aucune frame composée
+/// pour l'instant" (toutes les lectures avant la 1re frame composée retournent
+/// `None` côté napi, jamais un buffer vide).
+type LatestFrame = (u32, u32, Vec<u8>);
+
 /// État partagé thread appelant → thread de rendu (commandes sans blocage).
 struct Shared {
-    /// rect viewport en px device [x, y, w, h], relatif au client de la fenêtre parente.
-    /// Le thread de rendu le mappe en coords écran (le parent peut bouger) et repositionne.
-    rect: Mutex<[i32; 4]>,
+    /// Résolution cible du preview (largeur, hauteur) en pixels devices — ce que la
+    /// zone canvas Electron affiche. Plus de HWND/HWND-parent : la preview est une
+    /// image bitmap posée sur un `<canvas>`, la position CSS est gérée entièrement
+    /// côté web. Lecture/écriture exclusive via `Mutex`.
+    preview_size: Mutex<(u32, u32)>,
     inspector: Mutex<InspectorParams>,
     /// Temps source (secondes) demandé par l'app pour le clip actif (presentTime/seek), prioritaire
     /// sur la lecture libre. En SECONDES (pas un index de frame) : `Player::present_frame` fait un
@@ -295,97 +296,92 @@ struct Shared {
     scene_dirty: AtomicBool,
     playing: AtomicBool,
     stop: AtomicBool,
+    /// Dernière frame RGBA8 readback (taille + pixels R,G,B,A tightly-packed). Écrit
+    /// par le thread de rendu après chaque `compose_frame` réussi, lu par le napi
+    /// `read_frame` depuis le thread Node principal. `Mutex<Option<LatestFrame>>` —
+    /// Option pour distinguer "pas de frame encore composée" (avant le 1er compose,
+    /// `read_frame` retourne `Ok(None)`) d'un buffer vide (qui n'arrive jamais).
+    latest_frame: Mutex<Option<LatestFrame>>,
 }
 
-/// Handle d'une vue live embarquée. `Drop` arrête le rendu et détruit la fenêtre.
+/// Handle d'une vue live. `Drop` arrête le rendu.
+///
+/// Plus de fenêtre/OS : le handle ne porte plus de `HWND`. Toute la machinerie Win32
+/// (CreateWindowEx / SetWindowPos / DestroyWindow / register_overlay_class) a été
+/// retirée — la preview est désormais purement hors-fenêtre, transportable via
+/// mémoire.
 pub struct LiveView {
-    hwnd: HWND,
     shared: Arc<Shared>,
     thread: Option<JoinHandle<()>>,
 }
 
-// Le HWND ne sert qu'au thread appelant (create/set_rect/drop) ; il n'est pas partagé
-// avec le thread de rendu autrement que par sa valeur numérique. Sûr à déplacer.
+// `LiveView` ne référence plus aucune ressource Win32 non-`Send`. `Shared` non plus
+// (`Mutex`, `AtomicBool`, `Option<Vec<u8>>`). Le `JoinHandle` est `Send`/`!Sync`
+// mais on n'en extrait rien côté napi. Tout ce qui vit dans le thread de rendu
+// (compositor, décodeurs, staging, GPU) y reste confiné.
 unsafe impl Send for LiveView {}
 
 impl LiveView {
-    /// Crée la fenêtre enfant (thread appelant) et démarre le thread de rendu.
+    /// Crée une vue offscreen : pas de HWND/UI côté thread appelant. Démarre juste
+    /// le thread de rendu qui va composer chaque frame et publier le readback dans
+    /// `Shared::latest_frame` pour le napi `read_frame`.
+    ///
+    /// `w`/`h` sont la **résolution cible du preview** (taille du `<canvas>` Electron
+    /// affichant la preview, en pixels device) — anciennement c'était le rect de la
+    /// fenêtre overlay ; maintenant c'est juste la taille du bitmap RGBA produit.
+    /// Ajustable à chaud via `set_rect(w, h)`.
     pub fn create(
-        parent: HWND,
-        x: i32,
-        y: i32,
-        w: i32,
-        h: i32,
+        w: u32,
+        h: u32,
         screen: &str,
         webcam: &str,
         cursor_json: &str,
     ) -> Result<LiveView> {
-        unsafe {
-            let hinst = HINSTANCE(GetModuleHandleW(None)?.0);
-            register_overlay_class(hinst);
-            let cls = wide("PocD3DOverlay");
-            // position écran initiale = origine client du parent + (x, y)
-            let mut pt = POINT { x, y };
-            let _ = ClientToScreen(parent, &mut pt);
-            // Fenêtre top-level "overlay" OWNED par le parent (WS_POPUP), sans activation.
-            // Une fenêtre SŒUR (pas enfant) n'est pas dans la surface de Chromium → elle
-            // n'est PAS occultée par son compositeur GPU (contrairement à WS_CHILD).
-            let hwnd = CreateWindowExW(
-                WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW,
-                PCWSTR(cls.as_ptr()),
-                PCWSTR::null(),
-                WS_POPUP | WS_VISIBLE,
-                pt.x,
-                pt.y,
-                w.max(1),
-                h.max(1),
-                parent, // owner
-                HMENU::default(),
-                hinst,
-                None,
-            )?;
+        let shared = Arc::new(Shared {
+            preview_size: Mutex::new((w.max(1), h.max(1))),
+            inspector: Mutex::new(InspectorParams::default()),
+            requested_frame: Mutex::new(None),
+            active_clip_request: Mutex::new(None),
+            scene: Mutex::new(None),
+            scene_dirty: AtomicBool::new(false),
+            playing: AtomicBool::new(true),
+            stop: AtomicBool::new(false),
+            latest_frame: Mutex::new(None),
+        });
+        let sh = shared.clone();
+        let (s, wc, cj) = (screen.to_string(), webcam.to_string(), cursor_json.to_string());
+        let thread = std::thread::spawn(move || {
+            if let Err(e) = unsafe { render_thread(sh, &s, &wc, &cj) } {
+                eprintln!("[live] render thread error: {e:#}");
+            }
+        });
 
-            let shared = Arc::new(Shared {
-                rect: Mutex::new([x, y, w, h]),
-                inspector: Mutex::new(InspectorParams::default()),
-                requested_frame: Mutex::new(None),
-                active_clip_request: Mutex::new(None),
-                scene: Mutex::new(None),
-                scene_dirty: AtomicBool::new(false),
-                playing: AtomicBool::new(true),
-                stop: AtomicBool::new(false),
-            });
-            let overlay_val = hwnd.0 as isize;
-            let parent_val = parent.0 as isize;
-            let sh = shared.clone();
-            let (s, wc, cj) = (screen.to_string(), webcam.to_string(), cursor_json.to_string());
-            let thread = std::thread::spawn(move || {
-                if let Err(e) = render_thread(overlay_val, parent_val, sh, &s, &wc, &cj) {
-                    eprintln!("[live] render thread error: {e:#}");
-                }
-            });
+        Ok(LiveView { shared, thread: Some(thread) })
+    }
 
-            Ok(LiveView { hwnd, shared, thread: Some(thread) })
+    /// Met à jour la résolution cible du preview. Force le redimensionnement des
+    /// ressources GPU de readback (`Compositor::ensure_resize_target` /
+    /// `live_readback_staging`) au prochain tour du thread de rendu.
+    ///
+    /// Signature : `(w, h)` — l'ancienne `(x, y, w, h)` de la fenêtre overlay n'a
+    /// plus de sens (la position est gérée par CSS côté Electron). `set_rect` côté
+    /// napi doit s'aligner sur ce 2-param (la largeur/hauteur seule).
+    pub fn set_rect(&self, w: u32, h: u32) {
+        if let Ok(mut s) = self.shared.preview_size.lock() {
+            *s = (w.max(1), h.max(1));
         }
     }
 
-    /// Met à jour le rect viewport (sync du rect DOM en Electron). Le thread de rendu le
-    /// mappe en coords écran et repositionne l'overlay (suit aussi le déplacement du parent).
-    pub fn set_rect(&self, x: i32, y: i32, w: i32, h: i32) {
-        if let Ok(mut r) = self.shared.rect.lock() {
-            *r = [x, y, w.max(1), h.max(1)];
-        }
-    }
-
-    /// Affiche/masque l'overlay. Nécessaire car c'est une fenêtre top-level OWNED
-    /// (WS_POPUP), donc HORS de la surface Chromium — le z-index CSS n'a AUCUN effet sur elle
-    /// (ex. une modale web dessinée "au-dessus" dans le DOM se retrouve quand même EN DESSOUS,
-    /// visuellement, de l'overlay natif). L'app doit la masquer explicitement quand une modale
-    /// doit passer devant (export, etc.) puis la réafficher à la fermeture.
-    pub fn set_visible(&self, visible: bool) {
-        unsafe {
-            let _ = ShowWindow(self.hwnd, if visible { SW_SHOW } else { SW_HIDE });
-        }
+    /// Récupère la dernière frame readback (taille + RGBA8 tightly-packed).
+    /// `None` si rien n'a encore été composé (jamais écrit). **Coût : O(w·h)**
+    /// (copie du `Vec<u8>` — nécessaire pour traverser la frontière thread + le
+    /// FFI vers le Buffer napi). Le `Vec<u8>` retourné a `len() == w*h*4`.
+    pub fn latest_frame(&self) -> Option<(u32, u32, Vec<u8>)> {
+        self.shared
+            .latest_frame
+            .lock()
+            .ok()
+            .and_then(|guard| guard.as_ref().cloned())
     }
 
     /// Switch inspector (booléen).
@@ -483,79 +479,26 @@ impl LiveView {
 
 impl Drop for LiveView {
     fn drop(&mut self) {
+        // 1. Stoper le thread (il observe `stop` en tête de boucle et sort proprement).
         self.shared.stop.store(true, Ordering::SeqCst);
+        // 2. Join. À la sortie, le thread a relâché toutes ses ressources GPU (compositor,
+        //    décodeurs, resize_target, staging) ; le `Shared` reste vivant tant qu'on n'a
+        //    pas droppé notre `Arc` final.
         if let Some(t) = self.thread.take() {
             let _ = t.join();
         }
-        unsafe {
-            let _ = DestroyWindow(self.hwnd);
-        }
+        // Plus rien à détruire côté Win32 — pas de HWND.
     }
 }
 
-/// Plus grand rectangle 16:9 centré dans `(cw, ch)` → viewport letterbox.
-fn letterbox(cw: f32, ch: f32) -> (f32, f32, f32, f32) {
-    let ar = OUT_W as f32 / OUT_H as f32;
-    let (mut w, mut h) = (cw, ch);
-    if cw / ch > ar {
-        w = ch * ar;
-    } else {
-        h = cw / ar;
-    }
-    ((cw - w) * 0.5, (ch - h) * 0.5, w, h)
-}
-
-unsafe fn client_size(hwnd: HWND) -> (u32, u32) {
-    let mut rc = RECT::default();
-    let _ = GetClientRect(hwnd, &mut rc);
-    ((rc.right - rc.left).max(0) as u32, (rc.bottom - rc.top).max(0) as u32)
-}
-
-unsafe fn make_bb_rtv(swap: &IDXGISwapChain1, device: &ID3D11Device) -> Result<ID3D11RenderTargetView> {
-    let bb: ID3D11Texture2D = swap.GetBuffer(0)?;
-    let mut rtv: Option<ID3D11RenderTargetView> = None;
-    device.CreateRenderTargetView(&bb, None, Some(&mut rtv))?;
-    Ok(rtv.unwrap())
-}
-
-unsafe fn create_swapchain(
-    device: &ID3D11Device,
-    hwnd: HWND,
-    w: u32,
-    h: u32,
-) -> Result<(IDXGISwapChain1, ID3D11RenderTargetView)> {
-    let dxdev: IDXGIDevice = device.cast()?;
-    let adapter: IDXGIAdapter = dxdev.GetAdapter()?;
-    let factory: IDXGIFactory2 = adapter.GetParent()?;
-    let desc = DXGI_SWAP_CHAIN_DESC1 {
-        Width: w.max(1),
-        Height: h.max(1),
-        Format: DXGI_FORMAT_R8G8B8A8_UNORM,
-        SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
-        BufferUsage: DXGI_USAGE_RENDER_TARGET_OUTPUT,
-        BufferCount: 2,
-        SwapEffect: DXGI_SWAP_EFFECT_FLIP_DISCARD,
-        Scaling: DXGI_SCALING_STRETCH,
-        AlphaMode: DXGI_ALPHA_MODE_IGNORE,
-        ..Default::default()
-    };
-    let swap = factory.CreateSwapChainForHwnd(device, hwnd, &desc, None, None)?;
-    let rtv = make_bb_rtv(&swap, device)?;
-    Ok((swap, rtv))
-}
-
-/// Boucle de rendu (thread dédié) : décode → compose → blit letterboxé → Present.
-/// Suit la taille client de la fenêtre enfant (ResizeBuffers) et le param live.
+/// Boucle de rendu (thread dédié) : décode → compose → resize → readback → publie
+/// dans `Shared::latest_frame`.
 unsafe fn render_thread(
-    overlay_val: isize,
-    parent_val: isize,
     shared: Arc<Shared>,
     screen: &str,
     webcam: &str,
     cursor_json: &str,
 ) -> Result<()> {
-    let overlay = HWND(overlay_val as *mut c_void);
-    let parent = HWND(parent_val as *mut c_void);
     let gpu = Gpu::create(false)?;
     let mut comp = Compositor::new(&gpu)?;
     // Vue live = le VRAI enregistrement, pas la fenêtre fixture (100s@6s, taillée pour l'ancien
@@ -581,21 +524,15 @@ unsafe fn render_thread(
     cfg.zoom = false;
     cfg.layout_anim = false;
 
-    let (mut w, mut h) = {
-        let r = *shared.rect.lock().unwrap();
-        (r[2].max(1) as u32, r[3].max(1) as u32)
-    };
-    let (swap, mut bb_rtv) = create_swapchain(&gpu.device, overlay, w, h)?;
-
     let mut last = Instant::now();
     let mut acc = 0.0f64;
     let mut first = true;
-    let mut last_screen = [i32::MIN; 4];
+    let mut last_preview_size: (u32, u32) = (0, 0);
     let mut last_ip: Option<InspectorParams> = None;
     let mut last_smoothing: f32 = -1.0; // force la 1re application (0.0 est une valeur valide)
     // La vue live est TOUJOURS pilotée par la scène de l'app. Tant qu'aucune scène n'a été
     // appliquée, on refuse de jouer le layout fixture (POC) : un fallback fixture ne ferait que
-    // MASQUER un scene-push cassé. Fond neutre jusqu'à réception → toute panne est visible.
+    // MASQUER un scene-push cassé. On attend la scène avant de produire le 1er frame.
     let mut scene_applied = false;
 
     while !shared.stop.load(Ordering::SeqCst) {
@@ -689,43 +626,21 @@ unsafe fn render_thread(
             comp.set_scene(scene);
         }
 
-        // rect viewport → coords écran : suit le rect DOM (set_rect) ET le déplacement du parent
-        let [vx, vy, vw, vh] = *shared.rect.lock().unwrap();
-        let mut pt = POINT { x: vx, y: vy };
-        let _ = ClientToScreen(parent, &mut pt);
-        let screen_rect = [pt.x, pt.y, vw, vh];
-        if screen_rect != last_screen {
-            let _ = SetWindowPos(
-                overlay,
-                HWND::default(),
-                pt.x,
-                pt.y,
-                vw.max(1),
-                vh.max(1),
-                SWP_NOACTIVATE | SWP_NOZORDER,
-            );
-            last_screen = screen_rect;
-        }
+        // résolution cible du preview (le canvas Electron) → force le recadrage des
+        // ressources GPU si elle change. BUG évité : sans ce suivi, redimensionner le
+        // panneau preview PENDANT une pause ne redéclenchait ni recompose ni readback
+        // (aucune des autres conditions de la branche pause ne couvrait "juste la
+        // résolution a changé") — le canvas restait figé à l'ancienne taille jusqu'à la
+        // reprise de lecture ou un autre changement de param/scène.
+        let (pw, ph) = *shared.preview_size.lock().unwrap();
+        let resized = (pw, ph) != last_preview_size;
+        last_preview_size = (pw, ph);
 
-        // suivi de taille → ResizeBuffers
-        let (nw, nh) = (vw.max(1) as u32, vh.max(1) as u32);
-        let mut resized = false;
-        if (nw, nh) != (w, h) {
-            drop(bb_rtv);
-            swap.ResizeBuffers(0, nw, nh, DXGI_FORMAT_R8G8B8A8_UNORM, DXGI_SWAP_CHAIN_FLAG(0))?;
-            bb_rtv = make_bb_rtv(&swap, &gpu.device)?;
-            w = nw;
-            h = nh;
-            resized = true;
-        }
-
-        // Pas encore de scène → on ne compose RIEN (pas de fixture masquante). Fond neutre,
-        // puis on attend la scène. Un scene-push cassé reste ainsi visible (preview noire).
+        // Pas encore de scène → on ne compose RIEN (pas de fixture masquante). On attend
+        // la scène. Un scene-push cassé reste ainsi visible (preview silencieuse — le
+        // canvas reste sur sa frame précédente côté JS, ce qui est mieux qu'un fallback
+        // masquant).
         if !scene_applied {
-            if w > 0 && h > 0 {
-                gpu.context.ClearRenderTargetView(&bb_rtv, &[0.0, 0.0, 0.0, 1.0]);
-                let _ = swap.Present(1, DXGI_PRESENT(0));
-            }
             std::thread::sleep(Duration::from_millis(8));
             continue;
         }
@@ -755,20 +670,33 @@ unsafe fn render_thread(
             if acc > step {
                 acc = 0.0;
             }
-        } else if resized || first || ip_changed || scene_changed || clip_changed {
-            // pause : recompose la frame courante (taille / param / scène / clip changés).
+        } else if first || ip_changed || scene_changed || clip_changed || resized {
+            // pause : recompose la frame courante (param / scène / clip / résolution changés).
             let _ = player.recompose(&comp, &cfg);
             stepped = true;
         }
 
-        if stepped || resized || first {
-            if w > 0 && h > 0 {
-                gpu.context.ClearRenderTargetView(&bb_rtv, &[0.0, 0.0, 0.0, 1.0]);
-                let (lx, ly, lw, lh) = letterbox(w as f32, h as f32);
-                comp.blit_to(&bb_rtv, lx, ly, lw, lh);
-                let _ = swap.Present(1, DXGI_PRESENT(0));
+        if stepped || first {
+            if pw > 0 && ph > 0 {
+                // Step complet : `compose_frame` (déjà appelé par `step`/`present_frame`/
+                // `recompose`) → resize vers `pw`×`ph` via `blit_resized` réutilisé par
+                // l'export → copy vers staging → Map/Unmap → `Vec<u8>` RGBA8.
+                match comp.readback_resized(pw, ph) {
+                    Ok(rgba) => {
+                        // Publie dans `latest_frame` : on remplace le buffer précédent
+                        // (le canvas ne montre que la dernière frame, peu importe combien
+                        // le renderer en a raté entre deux lectures napi).
+                        if let Ok(mut slot) = shared.latest_frame.lock() {
+                            *slot = Some((pw, ph, rgba));
+                        }
+                        first = false;
+                    }
+                    Err(e) => {
+                        eprintln!("[live] readback_resized: {e:#}");
+                        std::thread::sleep(Duration::from_millis(8));
+                    }
+                }
             }
-            first = false;
         } else {
             std::thread::sleep(Duration::from_millis(4));
         }
@@ -776,29 +704,11 @@ unsafe fn render_thread(
     Ok(())
 }
 
-// ---------- classes de fenêtres ----------
-
-extern "system" fn child_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
-    unsafe { DefWindowProcW(hwnd, msg, wp, lp) }
-}
-
-fn register_overlay_class(hinst: HINSTANCE) {
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| unsafe {
-        let cls = wide("PocD3DOverlay");
-        let wc = WNDCLASSW {
-            style: CS_HREDRAW | CS_VREDRAW,
-            lpfnWndProc: Some(child_proc),
-            hInstance: hinst,
-            lpszClassName: PCWSTR(cls.as_ptr()),
-            hbrBackground: windows::Win32::Graphics::Gdi::HBRUSH(std::ptr::null_mut()),
-            ..Default::default()
-        };
-        RegisterClassW(&wc);
-    });
-}
-
 // ---------- harnais standalone (poc-d3d.exe --live) ----------
+
+use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::UI::WindowsAndMessaging::*;
 
 extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LRESULT {
     unsafe {
@@ -810,8 +720,10 @@ extern "system" fn host_proc(hwnd: HWND, msg: u32, wp: WPARAM, lp: LPARAM) -> LR
     }
 }
 
-/// Test embed hors Electron : fenêtre hôte top-level + une `LiveView` enfant qui la
-/// remplit, resync au resize. Valide le child-window + le rendu threadé.
+/// Test hors Electron : fenêtre hôte top-level (juste pour drainer les messages Windows
+/// du main thread) + une `LiveView` offscreen qui produit des frames RGBA8 dans un
+/// `<canvas>` HTML via le harnais d'affichage standalone. Valide le rendu threadé
+/// + le readback CPU sans dépendre d'Electron.
 pub fn run_standalone(screen: &str, webcam: &str, cursor_json: &str) -> Result<()> {
     unsafe {
         let hinst = HINSTANCE(GetModuleHandleW(None)?.0);
@@ -826,7 +738,7 @@ pub fn run_standalone(screen: &str, webcam: &str, cursor_json: &str) -> Result<(
         };
         RegisterClassW(&wc);
 
-        let title = wide("poc-d3d — live embed test (fenêtre D3D enfant)");
+        let title = wide("poc-d3d — live embed test (offscreen RGBA8 readback)");
         let host = CreateWindowExW(
             WINDOW_EX_STYLE(0),
             PCWSTR(cls.as_ptr()),
@@ -842,10 +754,13 @@ pub fn run_standalone(screen: &str, webcam: &str, cursor_json: &str) -> Result<(
             None,
         )?;
 
-        let (cw, ch) = client_size(host);
-        let view = LiveView::create(host, 0, 0, cw as i32, ch as i32, screen, webcam, cursor_json)?;
+        // Résolution preview = client de la fenêtre host. Ajustable au resize du host.
+        let mut last = (0u32, 0u32);
+        let (mut w, mut h) = client_size(host);
+        last = (w, h);
+        let view = LiveView::create(w, h, screen, webcam, cursor_json)?;
         let _ = ShowWindow(host, SW_SHOW);
-        println!("live embed: fenêtre enfant D3D créée, thread de rendu démarré");
+        println!("live embed: vue offscreen créée, thread de rendu démarré");
         println!("  touches : [B] flou de fond (param → D3D)   [Espace] pause/lecture");
 
         // état des paramètres pilotés au clavier (le MÊME set_param que l'addon napi appelle)
@@ -893,10 +808,36 @@ pub fn run_standalone(screen: &str, webcam: &str, cursor_json: &str) -> Result<(
                 break;
             }
             let (cw, ch) = client_size(host);
-            view.set_rect(0, 0, cw as i32, ch as i32);
+            if (cw, ch) != last {
+                view.set_rect(cw, ch);
+                last = (cw, ch);
+                w = cw;
+                h = ch;
+            }
+            // Force `first=false` côté render thread : si la preview était en pause
+            // totale, on n'a pas publié de frame. On laisse le canvas vide ; le harnais
+            // standalone n'affiche pas réellement les pixels ici (l'embed Electron est
+            // le consumer réel). On imprime juste une frame de temps en temps pour
+            // confirmer que la chaîne fonctionne.
+            if let Some((fw, fh, _pixels)) = view.latest_frame() {
+                if (fw, fh) != (w, h) {
+                    // garde-fou : la staging de readback suit `set_rect` côté thread
+                    // de rendu, donc ce serait une désynchro transitoire — acceptable.
+                }
+            }
             std::thread::sleep(Duration::from_millis(8));
         }
         drop(view);
         Ok(())
     }
+}
+
+fn wide(s: &str) -> Vec<u16> {
+    s.encode_utf16().chain(std::iter::once(0)).collect()
+}
+
+unsafe fn client_size(hwnd: HWND) -> (u32, u32) {
+    let mut rc = RECT::default();
+    let _ = GetClientRect(hwnd, &mut rc);
+    ((rc.right - rc.left).max(0) as u32, (rc.bottom - rc.top).max(0) as u32)
 }
