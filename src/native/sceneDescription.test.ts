@@ -305,6 +305,48 @@ describe("buildSceneDescription.clips", () => {
 		const doc = makeDoc({ assets: [asset], clips: [clip] });
 		expect(buildSceneDescription(doc).clips).toEqual([]);
 	});
+
+	it("sets hasAudio=true for a clip whose screen asset has an originalPath", () => {
+		// ponytail: the rule is "screen recordings from this app always carry a decodable
+		// audio track" (per product convention + ffprobe on real recordings). The visibleClips
+		// filter above guarantees only clips with originalPath reach the producer, so every
+		// produced CompositorClipInput must carry hasAudio=true today.
+		const asset = makeAsset({ id: "a", originalPath: "/screen.mp4" });
+		const clip = makeClip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 4,
+			timelineStartSec: 0,
+			timelineEndSec: 4,
+		});
+		const doc = makeDoc({ assets: [asset], clips: [clip] });
+		expect(buildSceneDescription(doc).clips[0].hasAudio).toBe(true);
+	});
+
+	it("sets hasAudio=true consistently across multiple clips in the same scene", () => {
+		const asset = makeAsset({ id: "a", originalPath: "/screen.mp4" });
+		const clip1 = makeClip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 4,
+			timelineStartSec: 0,
+			timelineEndSec: 4,
+		});
+		const clip2 = makeClip({
+			id: "c2",
+			assetId: "a",
+			sourceStartSec: 4,
+			sourceEndSec: 8,
+			timelineStartSec: 4,
+			timelineEndSec: 8,
+		});
+		const doc = makeDoc({ assets: [asset], clips: [clip1, clip2] });
+		const { clips } = buildSceneDescription(doc);
+		expect(clips).toHaveLength(2);
+		expect(clips.every((c) => c.hasAudio === true)).toBe(true);
+	});
 });
 
 // --- zoomRegions -----------------------------------------------------------
@@ -434,6 +476,76 @@ describe("buildSceneDescription.cameraFullscreenRegions", () => {
 		expect(cameraFullscreenRegions).toEqual([
 			{ startSec: 103, endSec: 105 },
 			{ startSec: 200, endSec: 202 },
+		]);
+	});
+});
+
+// --- speedRegions -----------------------------------------------------------
+// Speed regions today live under `document.legacyEditor.speedRegions` (the schema's
+// `timeline.speedRanges` is `rangeSchema[]` which carries no `speed` value — see
+// src/native/sceneDescription.ts SceneDescription.speedRegions comment). These tests
+// mirror the cameraFullscreenRegions shape but additionally carry the `speed` field
+// through projection (and assert it stays the same on both sides of a clip split).
+
+describe("buildSceneDescription.speedRegions", () => {
+	it("converts ms->sec for start/end and carries the speed value through", () => {
+		const asset = makeAsset({ id: "a", originalPath: "/a.mp4" });
+		const clip = makeClip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const doc = makeDoc({
+			assets: [asset],
+			clips: [clip],
+			legacyEditor: {
+				speedRegions: [{ id: "s1", startMs: 2000, endMs: 5500, speed: 2.5 }],
+			},
+		});
+		const { speedRegions } = buildSceneDescription(doc);
+		expect(speedRegions).toEqual([{ startSec: 2, endSec: 5.5, speed: 2.5 }]);
+	});
+
+	it("yields [] when legacyEditor.speedRegions is missing", () => {
+		const doc = makeDoc({ legacyEditor: {} });
+		expect(buildSceneDescription(doc).speedRegions).toEqual([]);
+	});
+
+	it("splits a region straddling two clips into one entry per clip, both keeping the same speed", () => {
+		const asset = makeAsset({ id: "a", originalPath: "/a.mp4" });
+		const clip1 = makeClip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 100,
+			sourceEndSec: 105,
+			timelineStartSec: 0,
+			timelineEndSec: 5,
+		});
+		const clip2 = makeClip({
+			id: "c2",
+			assetId: "a",
+			sourceStartSec: 200,
+			sourceEndSec: 205,
+			timelineStartSec: 5,
+			timelineEndSec: 10,
+		});
+		// Region spans timeline [3s, 7s) — 2s over clip1's tail, 2s over clip2's head.
+		// Both fragments must carry the original `speed` value (3.0) — the projection
+		// function only rewrites startMs/endMs/id, every other field passes through.
+		const doc = makeDoc({
+			assets: [asset],
+			clips: [clip1, clip2],
+			legacyEditor: {
+				speedRegions: [{ id: "s1", startMs: 3000, endMs: 7000, speed: 3.0 }],
+			},
+		});
+		const { speedRegions } = buildSceneDescription(doc);
+		expect(speedRegions).toEqual([
+			{ startSec: 103, endSec: 105, speed: 3.0 },
+			{ startSec: 200, endSec: 202, speed: 3.0 },
 		]);
 	});
 });

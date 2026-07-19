@@ -73,6 +73,12 @@ function buildNativeClipList(document: AxcutDocument): CompositorClipInput[] {
 			// the single canonical precedence used by every consumer (clip.probe → asset.duration
 			// → timeline-length guess). See `resolveClipSourceEndSec` for the full order.
 			const sourceEndSec = resolveClipSourceEndSec(clip, asset);
+			// ponytail: matches the rule in `buildSceneDescription` — screen recordings
+			// from this app always carry a decodable audio track (the webcam path
+			// never does), so the only clips that reach this branch already have audio.
+			// If a per-asset audio-probe flag lands on the schema later, swap to
+			// `Boolean(asset.audio)` here too and keep these two derivation paths in
+			// lock-step with `buildSceneDescription` in src/native/sceneDescription.ts.
 			return [
 				{
 					screenPath: asset.originalPath,
@@ -80,6 +86,7 @@ function buildNativeClipList(document: AxcutDocument): CompositorClipInput[] {
 					sourceStartSec: clip.sourceStartSec,
 					sourceEndSec,
 					webcamOffsetSec: cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
+					hasAudio: true,
 				},
 			];
 		});

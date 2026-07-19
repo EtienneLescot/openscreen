@@ -6,7 +6,82 @@
 //! tilt perspective — ce module ne fait que le calcul temporel, pas le rendu GPU).
 
 use crate::cursor::CursorTrack;
-use crate::scene::{SceneCameraFullscreenRegion, SceneZoomRegion};
+use crate::scene::{SceneCameraFullscreenRegion, SceneSpeedRegion, SceneZoomRegion};
+
+/// Quantification commune vidéo/audio : le web retranche exactement 1 ms avant `ceil`.
+pub const SPEED_FRAME_EPSILON_SEC: f64 = 0.001;
+const MIN_SPEED_SEGMENT_SEC: f64 = 0.0001;
+
+#[derive(Debug, Clone, Copy)]
+pub struct SpeedSegment {
+    pub start_sec: f64,
+    pub end_sec: f64,
+    pub speed: f64,
+    pub frame_count: u64,
+}
+
+/// Découpe toute la fenêtre gardée en spans contigus ; hors région la vitesse vaut 1×.
+/// Les régions sont ordonnées par début et, si un ancien payload en superpose, la première
+/// conserve la portion déjà couverte pour ne jamais émettre deux fois le même temps source.
+pub fn speed_segments_for_window(
+    regions: &[SceneSpeedRegion],
+    source_start_sec: f64,
+    source_end_sec: f64,
+    fps: f64,
+) -> Vec<SpeedSegment> {
+    if source_end_sec <= source_start_sec || !fps.is_finite() || fps <= 0.0 {
+        return Vec::new();
+    }
+    let mut overlapping: Vec<&SceneSpeedRegion> = regions
+        .iter()
+        .filter(|r| r.start_sec < source_end_sec && r.end_sec > source_start_sec)
+        .collect();
+    overlapping.sort_by(|a, b| {
+        a.start_sec
+            .partial_cmp(&b.start_sec)
+            .unwrap_or(std::cmp::Ordering::Equal)
+    });
+
+    let mut spans = Vec::new();
+    let mut cursor = source_start_sec;
+    for region in overlapping {
+        let start = region.start_sec.max(source_start_sec).max(cursor);
+        let end = region.end_sec.min(source_end_sec);
+        if start > cursor {
+            push_speed_segment(&mut spans, cursor, start, 1.0, fps);
+        }
+        if end > start {
+            let speed = if region.speed.is_finite() && region.speed > 0.0 {
+                region.speed
+            } else {
+                1.0
+            };
+            push_speed_segment(&mut spans, start, end, speed, fps);
+            cursor = end;
+        }
+    }
+    if cursor < source_end_sec {
+        push_speed_segment(&mut spans, cursor, source_end_sec, 1.0, fps);
+    }
+    spans
+}
+
+fn push_speed_segment(
+    spans: &mut Vec<SpeedSegment>,
+    start_sec: f64,
+    end_sec: f64,
+    speed: f64,
+    fps: f64,
+) {
+    let duration = end_sec - start_sec;
+    if duration <= MIN_SPEED_SEGMENT_SEC {
+        return;
+    }
+    let frames = (((duration - SPEED_FRAME_EPSILON_SEC) / speed) * fps)
+        .ceil()
+        .max(0.0) as u64;
+    spans.push(SpeedSegment { start_sec, end_sec, speed, frame_count: frames });
+}
 
 // mêmes fenêtres de transition que le web (TRANSITION_WINDOW_MS etc., converties en secondes).
 const TRANSITION_WINDOW_S: f32 = 1.01505;
@@ -71,7 +146,8 @@ fn lerp(a: f32, b: f32, t: f32) -> f32 {
 
 /// Port de `computeRegionStrength` (TS, `zoomRegionUtils.ts`) : 0 hors fenêtre, ease-in avant
 /// `startSec` (le zoom anticipe légèrement), plein régime pendant la région, ease-out après
-/// `endSec`. `playbackRate` toujours 1 côté natif (pas de speed regions dans l'export natif).
+/// `endSec`. Les temps reçus sont les temps source échantillonnés par le pipeline, donc ces
+/// enveloppes restent alignées quand une speed region répète ou saute des frames.
 fn zoom_region_strength(region: &SceneZoomRegion, t: f32) -> f32 {
     let start = region.start_sec as f32;
     let end = region.end_sec as f32;

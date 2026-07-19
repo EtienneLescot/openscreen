@@ -242,6 +242,8 @@ pub struct ClipInput {
     pub source_end_sec: f64,
     /// Décalage caméra (s) : temps source webcam = temps source screen - offset.
     pub webcam_offset_sec: f64,
+    /// `false` évite une ouverture ffmpeg vouée à échouer et réserve du silence à ce clip.
+    pub has_audio: bool,
 }
 
 /// Taille/cadence/codec de sortie voulus par l'app (modale d'export). Tous optionnels :
@@ -357,6 +359,7 @@ pub fn export_multi(
             source_start_sec: c.source_start_sec,
             source_end_sec: c.source_end_sec,
             webcam_offset_sec: c.webcam_offset_sec,
+            has_audio: c.has_audio,
         })
         .collect();
     AsyncTask::new(ExportMultiTask { out_path, clips, scene_json, params })
