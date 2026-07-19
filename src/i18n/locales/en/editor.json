@@ -177,6 +177,7 @@
 		"addVideoBeforeExporting": "Add a video before exporting.",
 		"quality": "Quality",
 		"qualityUpscaleWarning": "Upscale",
+		"qualityDownscaleWarning": "Downscale",
 		"qualityMatchRecording": "Match recording",
 		"frameRate": "Frame rate",
 		"codec": "Codec",
@@ -202,6 +203,7 @@
 		"exportMp4": "Export MP4",
 		"exportedGif": "GIF exported",
 		"exportedVideo": "Video exported",
+		"exportedVideoOf": "of video exported in",
 		"showInFolder": "Show in folder",
 		"exportFailed": "Export failed",
 		"failedToWriteFile": "Failed to write file"

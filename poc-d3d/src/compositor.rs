@@ -95,6 +95,39 @@ impl Default for LiveParams {
     }
 }
 
+/// "rectangle"|"circle"|"square"|"rounded" -> code webcam_shape (0/1/2/3). Partagé entre le
+/// live (`live.rs::set_param_str`) et l'export (construit `LiveParams` depuis la scène) — une
+/// seule table de vérité pour ce mapping.
+pub fn webcam_shape_code(shape: &str) -> u32 {
+    match shape {
+        "rectangle" => 0,
+        "circle" => 1,
+        "square" => 2,
+        _ => 3, // "rounded" (défaut)
+    }
+}
+
+/// Construit les `LiveParams` équivalents à ce que l'inspector pousse en live, mais depuis la
+/// scène de l'app — l'export est un rendu one-shot sans historique de sliders, donc il doit lire
+/// directement la config déjà posée dans la scène plutôt que dupliquer un mécanisme d'inspector.
+/// Unités identiques à `RightPanes.tsx` (mêmes conversions, pas de re-normalisation) : voir
+/// `sceneDescription.ts` pour la correspondance settings -> champs de scène.
+pub fn live_params_from_scene(s: &crate::scene::Scene) -> LiveParams {
+    const NATIVE_SCREEN_BASE_RADIUS_PX: f32 = 24.0;
+    LiveParams {
+        shadow_scale: s.effects.shadow,
+        radius_scale: s.effects.roundness_px / NATIVE_SCREEN_BASE_RADIUS_PX,
+        padding: s.effects.padding,
+        webcam_size_scale: s.layout.webcam_size,
+        webcam_mirror: s.layout.webcam_mirror,
+        webcam_shape: webcam_shape_code(&s.layout.webcam_shape),
+        cursor_size_scale: s.cursor.size,
+        cursor_bounce_scale: s.cursor.click_bounce,
+        cursor_motion_blur: s.cursor.motion_blur,
+        ..LiveParams::default()
+    }
+}
+
 pub struct Compositor {
     dev: ID3D11Device,
     ctx: ID3D11DeviceContext,
@@ -133,7 +166,23 @@ pub struct Compositor {
     accum_rtv: ID3D11RenderTargetView,
     accum_srv: ID3D11ShaderResourceView,
     blend_add: ID3D11BlendState,
-    cursor: Option<CursorTrack>,
+    /// RefCell (pas un simple champ) pour que `set_cursor` reste `&self`, comme `set_scene` /
+    /// `set_live_params` — nécessaire pour le rebrancher par clip dans l'export multiclip, qui
+    /// n'a qu'une référence partagée au `Compositor`.
+    cursor: RefCell<Option<CursorTrack>>,
+    /// Override du temps d'échantillonnage curseur (secondes) — `None` = comportement live
+    /// (`frame / FPS`, valable car `Player::step` avance à 60Hz réel). L'export multiclip le
+    /// positionne à `sdec.cur_time_sec()` (temps source ABSOLU dans la piste curseur, rebasée à
+    /// t=0 sur tout l'enregistrement) car son compteur `frames` global ne correspond à AUCUNE
+    /// notion de temps source une fois plusieurs clips/fichiers enchaînés.
+    cursor_t_override: RefCell<Option<f32>>,
+    /// Override du temps TIMELINE (secondes) — référentiel DIFFÉRENT de `cursor_t_override` :
+    /// les zoom regions / camera-fullscreen regions sont définies en temps de la TIMELINE
+    /// composée (peut couvrir plusieurs clips), pas en temps source d'un clip individuel.
+    /// `None` = comportement live (`frame / FPS`, un seul clip ouvert à la fois donc temps
+    /// source ≈ temps timeline). L'export multiclip le positionne au temps timeline cumulé
+    /// (durée des clips précédents + position dans le clip courant).
+    timeline_t_override: RefCell<Option<f32>>,
     // cache des SRV décodeur par (texture array, slice) : le pool réutilise ~32 textures,
     // donc après warmup plus aucune création de SRV par frame (overhead CPU supprimé).
     srv_cache: RefCell<HashMap<(usize, u32), (ID3D11ShaderResourceView, ID3D11ShaderResourceView)>>,
@@ -144,6 +193,24 @@ pub struct Compositor {
     /// Cache des textures wallpaper image (clé = chemin absolu) : décodage/upload une seule
     /// fois, puis réutilisées par frame. (SRV, largeur, hauteur).
     img_cache: RefCell<HashMap<String, (ID3D11ShaderResourceView, u32, u32)>>,
+    /// Ressources de resize export (allouées paresseusement à la 1re taille de sortie ≠
+    /// OUT_W×OUT_H — le live et les exports "Source"/1080p restent sur `rgb_to_nv12` inchangé,
+    /// zéro coût). Voir `rgb_to_nv12_scaled`.
+    resize_target: RefCell<Option<ResizeTarget>>,
+}
+
+/// Ressources d'un resize export à une taille cible : RGBA intermédiaire (résultat du
+/// redimensionnement bilinéaire du RT composé, toujours rendu en interne à OUT_W×OUT_H) +
+/// sa propre texture NV12 à cette même taille cible (le NV12 principal du `Compositor` reste
+/// fixé à OUT_W×OUT_H, partagé par le live).
+struct ResizeTarget {
+    w: u32,
+    h: u32,
+    rgba_rtv: ID3D11RenderTargetView,
+    rgba_srv: ID3D11ShaderResourceView,
+    nv12: ID3D11Texture2D,
+    nv12_rtv_y: ID3D11RenderTargetView,
+    nv12_rtv_uv: ID3D11RenderTargetView,
 }
 
 pub const HALF_W: u32 = OUT_W / 2;
@@ -608,11 +675,14 @@ impl Compositor {
             accum_rtv: accum_rtv.unwrap(),
             accum_srv: accum_srv.unwrap(),
             blend_add: blend_add.unwrap(),
-            cursor: None,
+            cursor: RefCell::new(None),
+            cursor_t_override: RefCell::new(None),
+            timeline_t_override: RefCell::new(None),
             srv_cache: RefCell::new(HashMap::new()),
             live_params: RefCell::new(LiveParams::default()),
             scene: RefCell::new(None),
             img_cache: RefCell::new(HashMap::new()),
+            resize_target: RefCell::new(None),
         })
     }
 
@@ -842,8 +912,24 @@ impl Compositor {
         Ok((srv.unwrap(), w, h))
     }
 
-    pub fn set_cursor(&mut self, track: CursorTrack) {
-        self.cursor = Some(track);
+    pub fn set_cursor(&self, track: CursorTrack) {
+        *self.cursor.borrow_mut() = Some(track);
+    }
+
+    /// Voir `cursor_t_override`. `None` restaure le comportement live (`frame / FPS`).
+    pub fn set_cursor_time(&self, t: Option<f32>) {
+        *self.cursor_t_override.borrow_mut() = t;
+    }
+
+    /// Voir `timeline_t_override`. `None` restaure le comportement live (`frame / FPS`).
+    pub fn set_timeline_time(&self, t: Option<f32>) {
+        *self.timeline_t_override.borrow_mut() = t;
+    }
+
+    /// Copie de la scène courante (si présente) — utilisé par l'export multiclip pour lire les
+    /// réglages curseur (thème/lissage/show) sans dupliquer le contrat de scène côté pipeline.
+    pub fn scene_snapshot(&self) -> Option<Scene> {
+        self.scene.borrow().clone()
     }
 
     /// Curseur custom (dot+ring) centré en `center` (0..1 sortie), taille `size_px`, opacité `a`.
@@ -964,7 +1050,7 @@ impl Compositor {
         // Scène de l'app présente → placements du layout preset ; sinon planning fixture (bench).
         let scene_preset: Option<String> =
             self.scene.borrow().as_ref().map(|s| s.layout.preset.clone());
-        let (p, pp) = match &scene_preset {
+        let (mut p, mut pp) = match &scene_preset {
             Some(preset) => {
                 let fp = preset_placements(preset);
                 (fp, fp) // layout statique → vélocité nulle
@@ -974,6 +1060,51 @@ impl Compositor {
         let is_vstack = scene_preset.as_deref() == Some("vertical-stack");
         let lp = *self.live_params.borrow();
         let mb_taps = cfg.mblur_n as f32;
+
+        // Zoom regions + Full Camera : lus depuis la scène (référentiel TIMELINE, pas le temps
+        // source d'un clip individuel — cf. doc de `timeline_t_override`). Emprunt tenu pour
+        // toute la fonction (RefCell autorise plusieurs emprunts immuables simultanés).
+        let scene_ref = self.scene.borrow();
+        let empty_zoom: Vec<crate::scene::SceneZoomRegion> = Vec::new();
+        let empty_cam: Vec<crate::scene::SceneCameraFullscreenRegion> = Vec::new();
+        let zoom_regions = scene_ref.as_ref().map(|s| &s.zoom_regions).unwrap_or(&empty_zoom);
+        let cam_regions =
+            scene_ref.as_ref().map(|s| &s.camera_fullscreen_regions).unwrap_or(&empty_cam);
+        let webcam_reactive = scene_ref.as_ref().map(|s| s.layout.webcam_reactive_zoom).unwrap_or(false);
+        let timeline_t = self.timeline_t_override.borrow().unwrap_or(frame / FPS);
+        let timeline_t_prev = timeline_t - 1.0 / FPS;
+        // le focus "auto" (suivi curseur) réutilise la même piste que le rendu du curseur.
+        let cursor_ref = self.cursor.borrow();
+        let cursor_for_zoom = cursor_ref.as_ref();
+        // La rotation 3D (mode 8, pas de motion blur dans ce chemin — cf. le commentaire au
+        // point d'appel) n'est calculée QUE pour la frame courante ; `pp` ne sert qu'au zoom
+        // écran normal (vélocité pour le motion blur du chemin non-tilté).
+        let mut zoom_rotation = [0.0f32; 3];
+        if !zoom_regions.is_empty() {
+            let zs = crate::regions::zoom_state_at(zoom_regions, timeline_t, cursor_for_zoom);
+            p.zoom = zs.scale;
+            p.focus = zs.focus;
+            zoom_rotation = zs.rotation;
+            let zs_p = crate::regions::zoom_state_at(zoom_regions, timeline_t_prev, cursor_for_zoom);
+            pp.zoom = zs_p.scale;
+            pp.focus = zs_p.focus;
+        }
+        // Full Camera ignore le rétrécissement réactif de la webcam (design web : mélanger
+        // "rétrécit pour le zoom" et "grandit en plein cadre" dans la même frame n'a pas de sens).
+        let cam_progress = crate::regions::camera_fullscreen_progress_at(cam_regions, timeline_t);
+        let cam_progress_prev =
+            crate::regions::camera_fullscreen_progress_at(cam_regions, timeline_t_prev);
+        // rétrécissement réactif : la webcam rétrécit pendant un zoom actif (1/zoom, plancher
+        // 0.35 — parité `reactiveWebcamScale`, TS). Ignoré pendant Full Camera (voir ci-dessus).
+        let reactive_scale = |zoom: f32, progress: f32| -> f32 {
+            if webcam_reactive && progress <= 0.0 && zoom.is_finite() && zoom > 0.0 {
+                (1.0 / zoom).clamp(0.35, 1.0)
+            } else {
+                1.0
+            }
+        };
+        let webcam_size_scale = lp.webcam_size_scale * reactive_scale(p.zoom, cam_progress);
+        let webcam_size_scale_prev = lp.webcam_size_scale * reactive_scale(pp.zoom, cam_progress_prev);
 
         // padding : échelle globale du layout autour du centre du cadre (parité web frameRenderer :
         // paddingScale = 1 - padding*0.4 → padding 0 = plein cadre). Vertical-stack l'ignore.
@@ -1003,8 +1134,41 @@ impl Compositor {
         let s_dst_prev = scale_frame(pp.screen.dst, padding_scale);
         // le padding n'affecte QUE l'écran (la quantité de fond révélée). La webcam reste ancrée
         // en bas-droite à sa marge fixe, quelle que soit la valeur de padding (pas de scale_frame).
-        let w_dst = fit_cam_aspect(scale_corner_br(p.webcam.dst, lp.webcam_size_scale));
-        let w_dst_prev = fit_cam_aspect(scale_corner_br(pp.webcam.dst, lp.webcam_size_scale));
+        let mut w_dst = fit_cam_aspect(scale_corner_br(p.webcam.dst, webcam_size_scale));
+        let mut w_dst_prev = fit_cam_aspect(scale_corner_br(pp.webcam.dst, webcam_size_scale_prev));
+
+        // Full Camera : la webcam grandit pour couvrir (presque) tout le cadre, en conservant
+        // SON ratio actuel (pas celui du cadre) — parité `computeCameraFullscreenTargetRect` (TS) :
+        // marge = 2.5% du plus petit côté du cadre, ajustée pour tenir dans les bornes.
+        let fullscreen_dst = |dst: [f32; 4], progress: f32| -> [f32; 4] {
+            if progress <= 0.0 {
+                return dst;
+            }
+            let margin_px = OUT_W.min(OUT_H) as f32 * 0.025;
+            let bounds_w = (OUT_W as f32 - margin_px * 2.0).max(0.0);
+            let bounds_h = (OUT_H as f32 - margin_px * 2.0).max(0.0);
+            let cur_w_px = dst[2] * OUT_W as f32;
+            let cur_h_px = dst[3] * OUT_H as f32;
+            let aspect = if cur_h_px > 0.0 { cur_w_px / cur_h_px } else { 1.0 };
+            let (mut full_w, mut full_h) = (bounds_w, bounds_w / aspect);
+            if full_h > bounds_h {
+                full_h = bounds_h;
+                full_w = full_h * aspect;
+            }
+            let full_x = margin_px + (bounds_w - full_w) * 0.5;
+            let full_y = margin_px + (bounds_h - full_h) * 0.5;
+            let cur_x_px = dst[0] * OUT_W as f32;
+            let cur_y_px = dst[1] * OUT_H as f32;
+            let lerp = |a: f32, b: f32| a + (b - a) * progress;
+            [
+                lerp(cur_x_px, full_x) / OUT_W as f32,
+                lerp(cur_y_px, full_y) / OUT_H as f32,
+                lerp(cur_w_px, full_w) / OUT_W as f32,
+                lerp(cur_h_px, full_h) / OUT_H as f32,
+            ]
+        };
+        w_dst = fullscreen_dst(w_dst, cam_progress);
+        w_dst_prev = fullscreen_dst(w_dst_prev, cam_progress_prev);
 
         let s_radius = if cfg.rounded { p.screen.radius * lp.radius_scale } else { 0.0 };
         let w_px = [w_dst[2] * OUT_W as f32, w_dst[3] * OUT_H as f32];
@@ -1125,22 +1289,64 @@ impl Compositor {
         if cfg.shadow {
             self.draw_shadow(s_dst, s_px, s_radius, 40.0, [0.0, 16.0], 0.45 * lp.shadow_scale);
         }
-        self.draw_video(
-            &LayerCB {
-                dst: s_dst,
-                src: [su0, sv0, su0 + 2.0 * hu, sv0 + 2.0 * hv],
-                quad_px: s_px,
-                radius_px: s_radius,
-                mode: 0.0,
-                color: [0.0, 0.0, 0.0, 1.0],
-                src_prev: [su0_p, sv0_p, su0_p + 2.0 * hu_p, sv0_p + 2.0 * hv_p],
-                dst_prev: s_dst_prev,
-                mb: [mb_taps, 0.0, 0.0, 0.0],
-                ..Default::default()
-            },
-            &sy,
-            &suv,
-        );
+        if crate::regions::is_identity_rotation(zoom_rotation) {
+            self.draw_video(
+                &LayerCB {
+                    dst: s_dst,
+                    src: [su0, sv0, su0 + 2.0 * hu, sv0 + 2.0 * hv],
+                    quad_px: s_px,
+                    radius_px: s_radius,
+                    mode: 0.0,
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    src_prev: [su0_p, sv0_p, su0_p + 2.0 * hu_p, sv0_p + 2.0 * hv_p],
+                    dst_prev: s_dst_prev,
+                    mb: [mb_taps, 0.0, 0.0, 0.0],
+                    ..Default::default()
+                },
+                &sy,
+                &suv,
+            );
+        } else {
+            // Tilt 3D (zoom "rotation" iso/left/right) : warp bilinéaire inverse (mode 8, voir
+            // shaders.hlsl) — pas de motion blur ni de coins arrondis dans ce chemin (le tilt
+            // est un effet ponctuel bref, cette simplification ne se voit pas).
+            let corners = crate::regions::rotated_quad_corners_px(s_px[0], s_px[1], zoom_rotation);
+            let (cx_px, cy_px) =
+                ((s_dst[0] + s_dst[2] * 0.5) * OUT_W as f32, (s_dst[1] + s_dst[3] * 0.5) * OUT_H as f32);
+            let (min_x, max_x) = corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| {
+                (mn.min(x), mx.max(x))
+            });
+            let (min_y, max_y) = corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| {
+                (mn.min(y), mx.max(y))
+            });
+            let bbox_w = (max_x - min_x).max(1.0);
+            let bbox_h = (max_y - min_y).max(1.0);
+            let bbox_dst = [
+                (cx_px + min_x) / OUT_W as f32,
+                (cy_px + min_y) / OUT_H as f32,
+                bbox_w / OUT_W as f32,
+                bbox_h / OUT_H as f32,
+            ];
+            // coins en px LOCAUX à la bbox (0..bbox_w/h), pour matcher `i.local` du shader.
+            let local = |(x, y): (f32, f32)| -> [f32; 2] { [x - min_x, y - min_y] };
+            let [tl0, tl1] = local(corners[0]);
+            let [tr0, tr1] = local(corners[1]);
+            let [br0, br1] = local(corners[2]);
+            let [bl0, bl1] = local(corners[3]);
+            self.draw_video(
+                &LayerCB {
+                    dst: bbox_dst,
+                    src: [su0, sv0, su0 + 2.0 * hu, sv0 + 2.0 * hv],
+                    quad_px: [bbox_w, bbox_h],
+                    mode: 8.0,
+                    fx: [tl0, tl1, tr0, tr1],
+                    src_prev: [br0, br1, bl0, bl1],
+                    ..Default::default()
+                },
+                &sy,
+                &suv,
+            );
+        }
 
         // --- curseur custom : suit le mapping src/dst (zoom+layout), click bounce,
         // et flou de mouvement par fantômes le long de sa vélocité (frame-1 -> frame) ---
@@ -1156,8 +1362,9 @@ impl Compositor {
             _ => [-1.0, -1.0, 3.0, 3.0],
         };
         if cfg.cursor {
-            if let Some(track) = &self.cursor {
-                let t = frame / FPS;
+            let cursor_ref = self.cursor.borrow();
+            if let Some(track) = cursor_ref.as_ref() {
+                let t = self.cursor_t_override.borrow().unwrap_or(frame / FPS);
                 // position sortie à un temps donné via un mapping screen (src rect + dst)
                 let map = |cxy: Option<(f32, f32)>, s0: [f32; 2], h: [f32; 2], dst: [f32; 4]| {
                     cxy.and_then(|(cx2, cy2)| {
@@ -1200,7 +1407,7 @@ impl Compositor {
                     if taps <= 1 {
                         self.draw_cur_themed(&cursor_sprite, cur, sz, 1.0, cursor_clip_rect);
                     } else {
-                        let tp = (frame - trail_frames) / FPS;
+                        let tp = t - trail_frames / FPS;
                         let prev = map(track.at(tp), [su0_p, sv0_p], [hu_p, hv_p], s_dst_prev)
                             .unwrap_or(cur);
                         // Flou RÉEL, pas des copies discrètes : accumule les N échantillons dans un
@@ -1325,6 +1532,147 @@ impl Compositor {
     pub unsafe fn rgb_to_nv12(&self, out_tex: *mut c_void, slice: u32) -> Result<()> {
         self.render_nv12();
         let src: ID3D11Resource = self.nv12.cast()?;
+        let dst_tex = ID3D11Texture2D::from_raw_borrowed(&out_tex).unwrap().clone();
+        let dst: ID3D11Resource = dst_tex.cast()?;
+        self.ctx.CopySubresourceRegion(&dst, slice, 0, 0, 0, &src, 0, None);
+        Ok(())
+    }
+
+    /// Alloue (une fois par taille) les ressources du resize export : RGBA intermédiaire +
+    /// sa propre texture NV12 à `w`×`h`. `w`/`h` doivent être pairs (exigé par NV12 4:2:0,
+    /// le plan UV fait exactement la moitié) — l'appelant (export_multi côté napi) arrondit.
+    unsafe fn ensure_resize_target(&self, w: u32, h: u32) -> Result<()> {
+        if let Some(t) = self.resize_target.borrow().as_ref() {
+            if t.w == w && t.h == h {
+                return Ok(());
+            }
+        }
+        let rd = D3D11_TEXTURE2D_DESC {
+            Width: w,
+            Height: h,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_R8G8B8A8_UNORM,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut rgba: Option<ID3D11Texture2D> = None;
+        self.dev.CreateTexture2D(&rd, None, Some(&mut rgba))?;
+        let rgba = rgba.unwrap();
+        let mut rgba_rtv: Option<ID3D11RenderTargetView> = None;
+        self.dev.CreateRenderTargetView(&rgba, None, Some(&mut rgba_rtv))?;
+        let mut rgba_srv: Option<ID3D11ShaderResourceView> = None;
+        self.dev.CreateShaderResourceView(&rgba, None, Some(&mut rgba_srv))?;
+
+        // NV12 non-array à la taille cible (même contrainte que le NV12 principal).
+        let nvd = D3D11_TEXTURE2D_DESC {
+            Width: w,
+            Height: h,
+            MipLevels: 1,
+            ArraySize: 1,
+            Format: DXGI_FORMAT_NV12,
+            SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+            Usage: D3D11_USAGE_DEFAULT,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            CPUAccessFlags: 0,
+            MiscFlags: 0,
+        };
+        let mut nv12: Option<ID3D11Texture2D> = None;
+        self.dev.CreateTexture2D(&nvd, None, Some(&mut nv12))?;
+        let nv12 = nv12.unwrap();
+        let mk_rtv = |fmt: DXGI_FORMAT| -> Result<ID3D11RenderTargetView> {
+            let d = D3D11_RENDER_TARGET_VIEW_DESC {
+                Format: fmt,
+                ViewDimension: D3D11_RTV_DIMENSION_TEXTURE2D,
+                Anonymous: D3D11_RENDER_TARGET_VIEW_DESC_0 { Texture2D: D3D11_TEX2D_RTV { MipSlice: 0 } },
+            };
+            let mut rtv: Option<ID3D11RenderTargetView> = None;
+            self.dev.CreateRenderTargetView(&nv12, Some(&d), Some(&mut rtv))?;
+            Ok(rtv.unwrap())
+        };
+        let nv12_rtv_y = mk_rtv(DXGI_FORMAT_R8_UNORM)?;
+        let nv12_rtv_uv = mk_rtv(DXGI_FORMAT_R8G8_UNORM)?;
+
+        *self.resize_target.borrow_mut() = Some(ResizeTarget {
+            w,
+            h,
+            rgba_rtv: rgba_rtv.unwrap(),
+            rgba_srv: rgba_srv.unwrap(),
+            nv12,
+            nv12_rtv_y,
+            nv12_rtv_uv,
+        });
+        Ok(())
+    }
+
+    /// Redimensionne (bilinéaire) le RT composé (OUT_W×OUT_H) vers `resize_target.rgba`, avant
+    /// la conversion NV12 dans `rgb_to_nv12_scaled`.
+    unsafe fn blit_resized(&self, target_w: u32, target_h: u32) -> Result<()> {
+        self.ensure_resize_target(target_w, target_h)?;
+        let cache = self.resize_target.borrow();
+        let t = cache.as_ref().unwrap();
+        self.ctx.OMSetBlendState(&self.blend_none, None, 0xffffffff);
+        self.ctx.OMSetRenderTargets(Some(&[Some(t.rgba_rtv.clone())]), None);
+        self.ctx.PSSetShaderResources(0, Some(&[Some(self.rt_srv.clone())]));
+        self.ctx.VSSetShader(&self.vs_fs, None);
+        self.ctx.PSSetShader(&self.ps_tex, None);
+        self.ctx.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+        let vp = D3D11_VIEWPORT {
+            TopLeftX: 0.0, TopLeftY: 0.0,
+            Width: target_w as f32, Height: target_h as f32, MinDepth: 0.0, MaxDepth: 1.0,
+        };
+        self.ctx.RSSetViewports(Some(&[vp]));
+        self.ctx.Draw(3, 0);
+        self.ctx.PSSetShaderResources(0, Some(&[None]));
+        Ok(())
+    }
+
+    /// Comme `rgb_to_nv12`, mais redimensionne d'abord (bilinéaire, `ps_tex`/`sampler` déjà
+    /// utilisés partout ailleurs dans le fichier) le RT composé — toujours rendu en interne à
+    /// OUT_W×OUT_H, quelle que soit la taille de sortie demandée — vers `target_w`×`target_h`
+    /// avant la conversion NV12. Identique à `rgb_to_nv12` (donc coût inchangé) quand la cible
+    /// égale la résolution interne : le live et les exports "Source"/1080p ne paient rien pour
+    /// cette fonctionnalité.
+    pub unsafe fn rgb_to_nv12_scaled(
+        &self,
+        target_w: u32,
+        target_h: u32,
+        out_tex: *mut c_void,
+        slice: u32,
+    ) -> Result<()> {
+        if target_w == OUT_W && target_h == OUT_H {
+            return self.rgb_to_nv12(out_tex, slice);
+        }
+        self.blit_resized(target_w, target_h)?;
+        let cache = self.resize_target.borrow();
+        let t = cache.as_ref().unwrap();
+
+        // rgba (cible) -> NV12 (cible) : mêmes passes Y/UV que `render_nv12`, paramétrées.
+        self.ctx.OMSetRenderTargets(Some(&[Some(t.nv12_rtv_y.clone())]), None);
+        self.ctx.PSSetShaderResources(0, Some(&[Some(t.rgba_srv.clone())]));
+        let vp_y = D3D11_VIEWPORT {
+            TopLeftX: 0.0, TopLeftY: 0.0,
+            Width: target_w as f32, Height: target_h as f32, MinDepth: 0.0, MaxDepth: 1.0,
+        };
+        self.ctx.RSSetViewports(Some(&[vp_y]));
+        self.ctx.PSSetShader(&self.ps_y, None);
+        self.ctx.Draw(3, 0);
+
+        self.ctx.OMSetRenderTargets(Some(&[Some(t.nv12_rtv_uv.clone())]), None);
+        let vp_uv = D3D11_VIEWPORT {
+            TopLeftX: 0.0, TopLeftY: 0.0,
+            Width: (target_w / 2) as f32, Height: (target_h / 2) as f32, MinDepth: 0.0, MaxDepth: 1.0,
+        };
+        self.ctx.RSSetViewports(Some(&[vp_uv]));
+        self.ctx.PSSetShader(&self.ps_uv, None);
+        self.ctx.Draw(3, 0);
+        self.ctx.PSSetShaderResources(0, Some(&[None]));
+
+        // 3) copie GPU->GPU vers le pool encodeur (identique à rgb_to_nv12).
+        let src: ID3D11Resource = t.nv12.cast()?;
         let dst_tex = ID3D11Texture2D::from_raw_borrowed(&out_tex).unwrap().clone();
         let dst: ID3D11Resource = dst_tex.cast()?;
         self.ctx.CopySubresourceRegion(&dst, slice, 0, 0, 0, &src, 0, None);

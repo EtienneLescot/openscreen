@@ -6,10 +6,11 @@
 use napi::bindgen_prelude::*;
 use napi::{Env, Task};
 use napi_derive::napi;
-use poc_d3d::compositor::Compositor;
+use poc_d3d::compositor::{live_params_from_scene, Compositor};
 use poc_d3d::cursor::CursorTrack;
 use poc_d3d::d3d::Gpu;
 use poc_d3d::live::LiveView;
+use poc_d3d::scene::Scene;
 use poc_d3d::{config, pipeline};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
@@ -93,6 +94,16 @@ pub fn set_rect(id: i32, rect: CompositorViewRect) {
     }
 }
 
+/// Masque/affiche l'overlay natif — nécessaire quand une modale web (export…) doit passer
+/// devant : c'est une fenêtre top-level hors de la surface Chromium, le z-index CSS n'y peut
+/// rien.
+#[napi]
+pub fn set_view_visible(id: i32, visible: bool) {
+    if let Some(v) = registry().lock().unwrap().get(&id) {
+        v.set_visible(visible);
+    }
+}
+
 /// Param live (inspector). Le type de valeur route vers le bon setter :
 /// bool = switch (backgroundBlur…), number = slider (shadow/roundness/motionBlur),
 /// string = sélection (backgroundColor "#rrggbb").
@@ -144,6 +155,8 @@ pub struct ExportStats {
     pub frames: u32,
     pub wall_s: f64,
     pub fps: f64,
+    /// Durée de la vidéo exportée (secondes) — distincte de `wall_s` (temps de rendu réel).
+    pub video_duration_s: f64,
 }
 
 /// Export mesuré, exécuté sur un thread worker libuv (l'UI n'est pas bloquée ; la mesure
@@ -164,7 +177,7 @@ fn set_all_previews_playing(playing: bool) {
 }
 
 impl Task for ExportTask {
-    type Output = (u32, f64, f64);
+    type Output = (u32, f64, f64, f64);
     type JsValue = ExportStats;
 
     fn compute(&mut self) -> Result<Self::Output> {
@@ -175,7 +188,7 @@ impl Task for ExportTask {
         let result = (|| {
             let dir = fixture_dir();
             let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
-            let mut comp = Compositor::new(&gpu).map_err(|e| Error::from_reason(format!("{e:#}")))?;
+            let comp = Compositor::new(&gpu).map_err(|e| Error::from_reason(format!("{e:#}")))?;
             if let Ok(t) = CursorTrack::load(&format!("{dir}/screen.cursor.json"), 100_000.0, 6.0) {
                 comp.set_cursor(t);
             }
@@ -190,14 +203,14 @@ impl Task for ExportTask {
                 &mut |_| {},
             )
             .map_err(|e| Error::from_reason(format!("{e:#}")))?;
-            Ok((s.frames as u32, s.wall_s, s.fps))
+            Ok((s.frames as u32, s.wall_s, s.fps, s.video_duration_s))
         })();
         set_all_previews_playing(true);
         result
     }
 
     fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
-        Ok(ExportStats { frames: out.0, wall_s: out.1, fps: out.2 })
+        Ok(ExportStats { frames: out.0, wall_s: out.1, fps: out.2, video_duration_s: out.3 })
     }
 }
 
@@ -218,16 +231,33 @@ pub struct ClipInput {
     pub webcam_offset_sec: f64,
 }
 
+/// Taille/cadence/codec de sortie voulus par l'app (modale d'export). Tous optionnels :
+/// absent → comportement historique (1920x1080, fps du 1er clip, h264). `width`/`height`
+/// sont arrondis au pair le plus proche (exigence NV12 4:2:0) côté `export_multi`.
+#[napi(object)]
+pub struct ExportParamsInput {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub fps: Option<u32>,
+    /// "h264" | "h265". Toute autre valeur (ex. "vp9", pas d'équivalent matériel AMF) fait
+    /// échouer l'export avec un message clair plutôt que de silencieusement retomber sur h264.
+    pub codec: Option<String>,
+}
+
 /// Export multiclip mesuré (worker libuv). Rend la vraie timeline (clips + trims) en un MP4.
-/// Layout statique (zoom/anim off, motion blur de layout off, curseur off) → composite propre
-/// des vraies sources sans surcoût. Réactive les previews après le rendu (même en erreur).
+/// `scene_json` (optionnel) = la même scène que la preview live : fond/layout/webcam/curseur —
+/// sans elle on ne retomberait QUE sur le layout fixture A↔B, plus du tout ce que l'utilisateur
+/// a configuré (le bug corrigé ici). Layout/zoom restent statiques (pas encore de zoom regions
+/// ni de camera-fullscreen animés côté export). Réactive les previews après coup (même en erreur).
 pub struct ExportMultiTask {
     out_path: String,
     clips: Vec<pipeline::ClipSource>,
+    scene_json: Option<String>,
+    params: Option<ExportParamsInput>,
 }
 
 impl Task for ExportMultiTask {
-    type Output = (u32, f64, f64);
+    type Output = (u32, f64, f64, f64);
     type JsValue = ExportStats;
 
     fn compute(&mut self) -> Result<Self::Output> {
@@ -238,31 +268,74 @@ impl Task for ExportMultiTask {
             let mut cfg = config::all().pop().expect("au moins une config"); // C8
             cfg.zoom = false;
             cfg.layout_anim = false;
-            cfg.cursor = false; // pas de télémétrie curseur mappée encore
             cfg.mblur_n = 1; // layout statique → pas de motion blur de layout (pas de surcoût)
+
+            // scène de l'app = même chemin que la preview live : fond, layout, webcam, curseur.
+            // JSON absent/invalide → pas de scène (fixture), pareil que si la preview n'en avait
+            // jamais reçu — jamais un fallback masquant, juste rien de configuré.
+            let scene = self.scene_json.as_deref().and_then(|j| Scene::from_json(j).ok());
+            if let Some(scene) = &scene {
+                comp.set_live_params(live_params_from_scene(scene));
+                cfg.bg_blur = scene.effects.blur;
+                cfg.cursor = scene.cursor.show;
+            } else {
+                cfg.cursor = false;
+            }
+            comp.set_scene(scene);
+
+            let mut export_params = pipeline::ExportParams::default();
+            if let Some(p) = &self.params {
+                if let Some(w) = p.width {
+                    export_params.width = w.max(2) & !1; // pair le plus proche (>=2, NV12)
+                }
+                if let Some(h) = p.height {
+                    export_params.height = h.max(2) & !1;
+                }
+                export_params.fps = p.fps;
+                if let Some(codec) = &p.codec {
+                    export_params.codec = match codec.as_str() {
+                        "h264" => pipeline::ExportCodec::H264,
+                        "h265" => pipeline::ExportCodec::H265,
+                        other => {
+                            return Err(Error::from_reason(format!(
+                                "codec d'export \"{other}\" non supporté par le pipeline natif (h264/h265 seulement — pas d'équivalent matériel AMF pour VP9, et le chemin logiciel testé était trop lent pour être utile)"
+                            )));
+                        }
+                    };
+                }
+            }
+
             let s = pipeline::run_composited_multi(
                 &self.clips,
                 &self.out_path,
                 &gpu,
                 &comp,
                 &cfg,
+                &export_params,
                 &mut |_| {},
             )
             .map_err(|e| Error::from_reason(format!("{e:#}")))?;
-            Ok((s.frames as u32, s.wall_s, s.fps))
+            Ok((s.frames as u32, s.wall_s, s.fps, s.video_duration_s))
         })();
         set_all_previews_playing(true);
         result
     }
 
     fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
-        Ok(ExportStats { frames: out.0, wall_s: out.1, fps: out.2 })
+        Ok(ExportStats { frames: out.0, wall_s: out.1, fps: out.2, video_duration_s: out.3 })
     }
 }
 
 /// Lance un export multiclip natif (vraie timeline → MP4) et résout `Promise<ExportStats>`.
+/// `scene_json` : même `SceneDescription` que la preview (fond/layout/webcam/effets/curseur).
+/// `params` : taille/cadence/codec de sortie voulus (absent → 1920x1080/fps du 1er clip/h264).
 #[napi]
-pub fn export_multi(clips: Vec<ClipInput>, out_path: String) -> AsyncTask<ExportMultiTask> {
+pub fn export_multi(
+    clips: Vec<ClipInput>,
+    out_path: String,
+    scene_json: Option<String>,
+    params: Option<ExportParamsInput>,
+) -> AsyncTask<ExportMultiTask> {
     let clips = clips
         .into_iter()
         .map(|c| pipeline::ClipSource {
@@ -273,5 +346,5 @@ pub fn export_multi(clips: Vec<ClipInput>, out_path: String) -> AsyncTask<Export
             webcam_offset_sec: c.webcam_offset_sec,
         })
         .collect();
-    AsyncTask::new(ExportMultiTask { out_path, clips })
+    AsyncTask::new(ExportMultiTask { out_path, clips, scene_json, params })
 }

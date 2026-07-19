@@ -128,6 +128,17 @@ export interface CompositorExportResult {
 	frames: number;
 	wallS: number;
 	fps: number;
+	/** Durée de la vidéo exportée (secondes) — distincte de `wallS` (temps de rendu réel). */
+	videoDurationS: number;
+}
+
+/** Taille/cadence/codec de sortie voulus. Tout omis → 1920x1080 / fps du 1er clip / h264. */
+export interface CompositorExportParams {
+	width?: number;
+	height?: number;
+	fps?: number;
+	/** "h264" | "h265" — pas de vp9 (aucun équivalent matériel AMF côté natif). */
+	codec?: string;
 }
 
 // ---- AI Edition domain (Phase 1+) -----------------------------------------
@@ -648,6 +659,12 @@ export type NativeBridgeRequest =
 	  }
 	| {
 			domain: "compositor";
+			action: "setVisible";
+			payload: { id: number; visible: boolean };
+			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
 			action: "setParam";
 			payload: { id: number; key: string; value: CompositorParamValue };
 			requestId?: string;
@@ -673,7 +690,12 @@ export type NativeBridgeRequest =
 	| {
 			domain: "compositor";
 			action: "exportMulti";
-			payload: { clips: CompositorClipInput[]; outPath?: string };
+			payload: {
+				clips: CompositorClipInput[];
+				outPath?: string;
+				sceneJson?: string;
+				params?: CompositorExportParams;
+			};
 			requestId?: string;
 	  }
 	| {

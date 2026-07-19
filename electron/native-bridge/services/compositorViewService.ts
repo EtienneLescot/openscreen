@@ -9,6 +9,7 @@ import type {
 	CompositorParamValue,
 	CompositorViewAddon,
 	CompositorViewRect,
+	ExportParamsInput,
 	ExportStats,
 } from "../../native/compositor-view/addon";
 
@@ -244,6 +245,14 @@ export class CompositorViewService {
 		addon.setRect(id, rect);
 	}
 
+	setVisible(id: number, visible: boolean): void {
+		const addon = this.ensureAddon();
+		if (!addon) {
+			return;
+		}
+		addon.setViewVisible(id, visible);
+	}
+
 	setParam(id: number, key: string, value: CompositorParamValue): void {
 		const addon = this.ensureAddon();
 		if (!addon) {
@@ -297,13 +306,26 @@ export class CompositorViewService {
 	}
 
 	/** Native multiclip export (real timeline -> MP4). Auto-pauses previews via the addon.
+	 *  `sceneJson` — same scene as the live preview (background/layout/webcam/cursor/effects);
+	 *  goes through the same asset-path resolution as `setScene` (wallpaper image, cursor theme
+	 *  sprite) since the native process can't resolve renderer-relative URLs either.
 	 *  Returns null when the addon is absent. */
-	async exportMulti(clips: ClipInput[], outPath?: string): Promise<ExportStats | null> {
+	async exportMulti(
+		clips: ClipInput[],
+		outPath?: string,
+		sceneJson?: string,
+		params?: ExportParamsInput,
+	): Promise<ExportStats | null> {
 		const addon = this.ensureAddon();
 		if (!addon) {
 			return null;
 		}
 		const target = outPath ?? path.join(app.getPath("temp"), "openscreen-native-export.mp4");
-		return addon.exportMulti(clips, target);
+		return addon.exportMulti(
+			clips,
+			target,
+			sceneJson ? resolveSceneAssetPaths(sceneJson) : undefined,
+			params,
+		);
 	}
 }
