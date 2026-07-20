@@ -385,6 +385,13 @@ pub(crate) struct Decoder {
     sent_eof: bool,
 }
 
+// SAFETY: `Decoder` only owns FFI pointers into FFmpeg's own heap-allocated state, which
+// has no OS thread affinity — safe to create on one thread and hand off to another as long
+// as it's touched from a single thread at a time (never concurrently), which is exactly the
+// live-preview prefetch pattern in `live.rs`: a background thread opens+seeks a `Decoder`,
+// then sends it across a channel to the render thread, which alone uses it from then on.
+unsafe impl Send for Decoder {}
+
 impl Decoder {
     pub(crate) unsafe fn open(path: &str, gpu: &Gpu) -> Result<Decoder> {
         let mut fmt: *mut AVFormatContext = ptr::null_mut();

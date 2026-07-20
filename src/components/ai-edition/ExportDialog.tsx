@@ -30,7 +30,10 @@ import {
 	type GifFrameRate,
 	type GifSizePreset,
 } from "@/lib/exporter";
-import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
+import {
+	calculateEffectiveSourceDimensions,
+	calculateMp4ExportSettings,
+} from "@/lib/exporter/mp4ExportSettings";
 import { exportMultiNative, exportNative } from "@/native";
 import { nativeBridgeClient } from "@/native/client";
 import type { CompositorClipInput } from "@/native/contracts";
@@ -108,6 +111,69 @@ const QUALITY_OPTIONS: Array<{
 	{ value: "source", labelKey: "exportQuality.high" },
 ];
 
+type Dims = { width: number; height: number };
+
+/** Single "pick the largest/smallest by pixel count" reducer, shared by every size
+ *  comparison below instead of each one hand-rolling its own reduce + fallback.
+ *  Exported for unit testing only — not part of the component's public surface. */
+export function pickExtremeDims(items: Dims[], direction: "largest" | "smallest"): Dims | null {
+	let best: Dims | null = null;
+	for (const d of items) {
+		if (d.width <= 0 || d.height <= 0) continue;
+		if (!best) {
+			best = d;
+			continue;
+		}
+		const area = d.width * d.height;
+		const bestArea = best.width * best.height;
+		if (direction === "largest" ? area > bestArea : area < bestArea) best = d;
+	}
+	return best;
+}
+
+/** Raw (uncropped) probed dims for every asset the timeline actually uses — falls back to
+ *  ANY asset with known dims if none of the used ones have probed yet (still loading), so the
+ *  dialog shows *something* rather than blank tiers. Two call sites used to hand-roll this same
+ *  fallback independently; centralized here as the one place it's implemented.
+ *  Exported for unit testing only — not part of the component's public surface. */
+export function collectUsedAssetDims(
+	document: AxcutDocument,
+	probedAssetDims: Record<string, Dims>,
+): Dims[] {
+	const usedAssetIds = new Set(document.timeline.clips.map((c) => c.assetId));
+	const dimsOf = (a: AxcutDocument["assets"][number]): Dims => ({
+		width: a.video?.width || probedAssetDims[a.id]?.width || 0,
+		height: a.video?.height || probedAssetDims[a.id]?.height || 0,
+	});
+	const used = document.assets.filter((a) => usedAssetIds.has(a.id)).map(dimsOf);
+	if (used.some((d) => d.width > 0 && d.height > 0)) return used;
+	return document.assets.map(dimsOf);
+}
+
+/** Per-CLIP effective (post-crop) pixel dims — crop is stored per-clip (`clip.cropRegion`), not
+ *  per-asset, since the same recording can be framed differently across clips, so this is the
+ *  true footprint each clip contributes to the timeline. Falls back to `collectUsedAssetDims`'s
+ *  raw dims while nothing has probed yet (crop can't be attributed without a clip to read it from,
+ *  same degraded-but-non-blank behavior as before crop was accounted for).
+ *  Exported for unit testing only — not part of the component's public surface. */
+export function collectEffectiveClipDims(
+	document: AxcutDocument,
+	probedAssetDims: Record<string, Dims>,
+): Dims[] {
+	const assetById = new Map(document.assets.map((a) => [a.id, a]));
+	const dims: Dims[] = [];
+	for (const clip of document.timeline.clips) {
+		const asset = assetById.get(clip.assetId);
+		if (!asset) continue;
+		const rawWidth = asset.video?.width || probedAssetDims[asset.id]?.width || 0;
+		const rawHeight = asset.video?.height || probedAssetDims[asset.id]?.height || 0;
+		if (rawWidth <= 0 || rawHeight <= 0) continue;
+		dims.push(calculateEffectiveSourceDimensions(rawWidth, rawHeight, clip.cropRegion));
+	}
+	if (dims.length > 0) return dims;
+	return collectUsedAssetDims(document, probedAssetDims);
+}
+
 interface ExportDialogProps {
 	open: boolean;
 	onClose: () => void;
@@ -174,36 +240,22 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		[document],
 	);
 
-	// The output is a single video at one resolution, so it's sized to the LARGEST
-	// media on the timeline (by pixel count) — never gratuitously downscaling the
-	// best footage. This reference drives both the "Source" export size and the
-	// per-tier upscale/output-size labels. Falls back to any asset with known dims
-	// if no clip-referenced one has them yet (e.g. duration/size still probing).
-	const referenceSource = useMemo<{ width: number; height: number } | null>(() => {
-		if (!document) return null;
-		const usedAssetIds = new Set(document.timeline.clips.map((c) => c.assetId));
-		let best: { width: number; height: number } | null = null;
-		const consider = (w: number, h: number) => {
-			if (w > 0 && h > 0 && (!best || w * h > best.width * best.height))
-				best = { width: w, height: h };
-		};
-		for (const a of document.assets) {
-			if (usedAssetIds.has(a.id)) {
-				consider(
-					a.video?.width || probedAssetDims[a.id]?.width || 0,
-					a.video?.height || probedAssetDims[a.id]?.height || 0,
-				);
-			}
-		}
-		if (!best)
-			for (const a of document.assets) {
-				consider(
-					a.video?.width || probedAssetDims[a.id]?.width || 0,
-					a.video?.height || probedAssetDims[a.id]?.height || 0,
-				);
-			}
-		return best;
-	}, [document, probedAssetDims]);
+	// Per-clip EFFECTIVE (post-crop) dims — single source of truth for both the "largest"
+	// and "smallest" picks below, computed once instead of two near-identical hand-rolled
+	// reduce+fallback loops. Crop is per-clip, so this must iterate clips, not assets: the
+	// same recording can be cropped differently in two different clips on the timeline.
+	const effectiveClipDims = useMemo<Dims[]>(
+		() => (document ? collectEffectiveClipDims(document, probedAssetDims) : []),
+		[document, probedAssetDims],
+	);
+	// The output is a single video at one resolution, so it's sized to the LARGEST clip's
+	// true (cropped) footprint — never gratuitously downscaling the best footage, and never
+	// treating a narrow crop as if it were the full uncropped frame. Drives both the "Source"
+	// export size and the per-tier upscale/output-size labels below.
+	const referenceSource = useMemo(
+		() => pickExtremeDims(effectiveClipDims, "largest"),
+		[effectiveClipDims],
+	);
 	// Short side of the reference — the axis the 720p/1080p tiers target — or null
 	// while dims are still unknown (0x0 default), so tiers show no label rather
 	// than a wrong one.
@@ -211,49 +263,39 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		? Math.min(referenceSource.width, referenceSource.height)
 		: null;
 
-	// Smallest media on the timeline (by pixel count) — a multiclip timeline can mix
+	// Smallest clip's true (cropped) footprint — a multiclip timeline can mix crops/
 	// resolutions, so the SAME chosen output size can be a downscale relative to the
 	// largest clip and an upscale relative to the smallest one at the same time. Both
 	// badges below need this in addition to `referenceSource` (the largest).
-	const smallestSource = useMemo<{ width: number; height: number } | null>(() => {
-		if (!document) return null;
-		const usedAssetIds = new Set(document.timeline.clips.map((c) => c.assetId));
-		let smallest: { width: number; height: number } | null = null;
-		const consider = (w: number, h: number) => {
-			if (w > 0 && h > 0 && (!smallest || w * h < smallest.width * smallest.height))
-				smallest = { width: w, height: h };
-		};
-		for (const a of document.assets) {
-			if (usedAssetIds.has(a.id)) {
-				consider(
-					a.video?.width || probedAssetDims[a.id]?.width || 0,
-					a.video?.height || probedAssetDims[a.id]?.height || 0,
-				);
-			}
-		}
-		if (!smallest)
-			for (const a of document.assets) {
-				consider(
-					a.video?.width || probedAssetDims[a.id]?.width || 0,
-					a.video?.height || probedAssetDims[a.id]?.height || 0,
-				);
-			}
-		return smallest;
-	}, [document, probedAssetDims]);
+	const smallestSource = useMemo(
+		() => pickExtremeDims(effectiveClipDims, "smallest"),
+		[effectiveClipDims],
+	);
 	const smallestShortSide = smallestSource
 		? Math.min(smallestSource.width, smallestSource.height)
 		: null;
+
+	// Largest clip's RAW (uncropped) asset dims — deliberately separate from the crop-aware
+	// `referenceSource` above: this only feeds the "native" output-ASPECT-RATIO option (the
+	// scene's overall output shape), a different concern from a clip's own cropped pixel size,
+	// and changing its long-standing (uncropped) meaning isn't part of this fix.
+	const rawReferenceSource = useMemo(
+		() =>
+			document ? pickExtremeDims(collectUsedAssetDims(document, probedAssetDims), "largest") : null,
+		[document, probedAssetDims],
+	);
 
 	// Aspect the export normalizes to: the timeline's selected ratio (mirrors
 	// documentExporter), so the sizes shown match what the export produces.
 	const timelineAspect =
 		(document?.legacyEditor as { aspectRatio?: AspectRatio } | null)?.aspectRatio ?? "16:9";
 	const EXPORT_ASPECT =
-		timelineAspect === "native" && referenceSource
-			? getNativeAspectRatioValue(referenceSource.width, referenceSource.height)
+		timelineAspect === "native" && rawReferenceSource
+			? getNativeAspectRatioValue(rawReferenceSource.width, rawReferenceSource.height)
 			: getAspectRatioValue(timelineAspect);
-	// Output dimensions the export will produce for a given tier, from the
-	// reference source — so each tier's subtitle is the real pixel size.
+	// Output dimensions the export will produce for a given tier, from the (crop-aware)
+	// reference source — so each tier's subtitle is the real pixel size, and "Source"
+	// quality never upscales a crop past its own true resolution.
 	const tierOutputDims = (value: ExportQuality) =>
 		referenceSource
 			? calculateMp4ExportSettings({
