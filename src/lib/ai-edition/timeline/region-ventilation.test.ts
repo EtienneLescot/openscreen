@@ -34,28 +34,28 @@ const threeClips = [c1, c2, c3];
 describe("ventilateSpanAcrossClips", () => {
 	it("keeps a span inside one clip as a single clip-local fragment", () => {
 		expect(ventilateSpanAcrossClips(2, 6, threeClips)).toEqual([
-			{ clipId: "c1", localStartSec: 2, localEndSec: 6 },
+			{ clipId: "c1", clipIndex: 0, localStartSec: 2, localEndSec: 6 },
 		]);
 	});
 
 	it("splits a span straddling two clips into per-clip fragments", () => {
 		expect(ventilateSpanAcrossClips(8, 13, threeClips)).toEqual([
-			{ clipId: "c1", localStartSec: 8, localEndSec: 10 },
-			{ clipId: "c2", localStartSec: 0, localEndSec: 3 },
+			{ clipId: "c1", clipIndex: 0, localStartSec: 8, localEndSec: 10 },
+			{ clipId: "c2", clipIndex: 1, localStartSec: 0, localEndSec: 3 },
 		]);
 	});
 
 	it("splits across three clips", () => {
 		expect(ventilateSpanAcrossClips(5, 25, threeClips)).toEqual([
-			{ clipId: "c1", localStartSec: 5, localEndSec: 10 },
-			{ clipId: "c2", localStartSec: 0, localEndSec: 10 },
-			{ clipId: "c3", localStartSec: 0, localEndSec: 5 },
+			{ clipId: "c1", clipIndex: 0, localStartSec: 5, localEndSec: 10 },
+			{ clipId: "c2", clipIndex: 1, localStartSec: 0, localEndSec: 10 },
+			{ clipId: "c3", clipIndex: 2, localStartSec: 0, localEndSec: 5 },
 		]);
 	});
 
 	it("omits clips the span doesn't touch", () => {
 		expect(ventilateSpanAcrossClips(22, 28, threeClips)).toEqual([
-			{ clipId: "c3", localStartSec: 2, localEndSec: 8 },
+			{ clipId: "c3", clipIndex: 2, localStartSec: 2, localEndSec: 8 },
 		]);
 	});
 });
@@ -121,7 +121,9 @@ describe("reprojectRegionsForReorder", () => {
 describe("virtualSpanToSourceSpans (export coherence)", () => {
 	it("is a no-op for an identity single clip (source == virtual)", () => {
 		const clips = [clip("c1", 0, 10, 0)];
-		expect(virtualSpanToSourceSpans(2000, 4000, clips)).toEqual([{ startMs: 2000, endMs: 4000 }]);
+		expect(virtualSpanToSourceSpans(2000, 4000, clips)).toEqual([
+			{ clipIndex: 0, startMs: 2000, endMs: 4000 },
+		]);
 	});
 
 	it("shifts by clip in/out (a virtual span maps to its source range)", () => {
@@ -129,7 +131,9 @@ describe("virtualSpanToSourceSpans (export coherence)", () => {
 		const clips = [clip("c1", 0, 10, 5)];
 		// Zoom at virtual 2..4 → source 7..9 (so the export matches the right frames
 		// instead of source 2..4, which are trimmed off the clip's head).
-		expect(virtualSpanToSourceSpans(2000, 4000, clips)).toEqual([{ startMs: 7000, endMs: 9000 }]);
+		expect(virtualSpanToSourceSpans(2000, 4000, clips)).toEqual([
+			{ clipIndex: 0, startMs: 7000, endMs: 9000 },
+		]);
 	});
 
 	it("splits a span across a clip boundary into two source spans", () => {
@@ -137,8 +141,8 @@ describe("virtualSpanToSourceSpans (export coherence)", () => {
 		const clips = [clip("c1", 0, 10, 0), clip("c2", 10, 10, 20)];
 		// Zoom at virtual 8..12 straddles the boundary → source 8..10 and 20..22.
 		expect(virtualSpanToSourceSpans(8000, 12000, clips)).toEqual([
-			{ startMs: 8000, endMs: 10000 },
-			{ startMs: 20000, endMs: 22000 },
+			{ clipIndex: 0, startMs: 8000, endMs: 10000 },
+			{ clipIndex: 1, startMs: 20000, endMs: 22000 },
 		]);
 	});
 
@@ -152,8 +156,8 @@ describe("projectRegionsToSourceTime (export coherence)", () => {
 		const clips = [clip("c1", 0, 10, 0), clip("c2", 10, 10, 20)];
 		const zooms = [{ id: "z1", startMs: 8000, endMs: 12000, depth: 4 }];
 		expect(projectRegionsToSourceTime(zooms, clips, () => "z2")).toEqual([
-			{ id: "z1", startMs: 8000, endMs: 10000, depth: 4 },
-			{ id: "z2", startMs: 20000, endMs: 22000, depth: 4 },
+			{ id: "z1", startMs: 8000, endMs: 10000, depth: 4, clipIndex: 0 },
+			{ id: "z2", startMs: 20000, endMs: 22000, depth: 4, clipIndex: 1 },
 		]);
 	});
 
