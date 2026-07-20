@@ -55,6 +55,14 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.invoke("export:cancel", sessionId) as Promise<void>,
 	/** Export bench only (--bench=): tells main the run is over so it can quit. */
 	benchFinished: () => ipcRenderer.invoke("bench:finished") as Promise<void>,
+	/** Native (D3D) export progress — frames encoded so far, pushed at ~10 Hz max while
+	 *  `compositor.export`/`compositor.exportMulti` runs. Distinct from `exportOnFrameAck`
+	 *  above, which is the OLD web/CPU pipeline's per-frame ack, not a progress signal. */
+	onNativeExportProgress: (cb: (frames: number) => void) => {
+		const handler = (_e: unknown, frames: number) => cb(frames);
+		ipcRenderer.on("export:native-progress", handler);
+		return () => ipcRenderer.off("export:native-progress", handler);
+	},
 	invokeNativeBridge: <TData>(request: NativeBridgeRequest) => {
 		return ipcRenderer.invoke(NATIVE_BRIDGE_CHANNEL, request) as Promise<TData>;
 	},

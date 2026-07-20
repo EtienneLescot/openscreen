@@ -94,17 +94,22 @@ export interface CompositorViewAddon {
 		sourceTimeSec: number,
 	): void;
 	destroyView(id: number): void;
-	/** Renders the fixture to `outPath` (C8), auto-pausing live previews. */
-	export(outPath: string): Promise<ExportStats>;
+	/** Renders the fixture to `outPath` (C8), auto-pausing live previews. `onProgress`
+	 *  (frames encoded so far) is optional and called at most ~10/s from the render
+	 *  thread — cheap: the encode loop already ticks a progress hook every frame, this
+	 *  just forwards it (throttled) instead of the previous no-op. */
+	export(outPath: string, onProgress?: (frames: number) => void): Promise<ExportStats>;
 	/** Renders the real timeline (ordered clips + trims) to `outPath`, auto-pausing previews.
 	 *  `sceneJson` — same `SceneDescription` as the live preview (background/layout/webcam/cursor/
 	 *  effects); omitted or invalid → nothing configured is applied (not a masking fallback).
-	 *  `params` — output size/fps/codec; omitted → 1920x1080/first clip's fps/h264. */
+	 *  `params` — output size/fps/codec; omitted → 1920x1080/first clip's fps/h264.
+	 *  `onProgress` (frames encoded so far) is optional, throttled to ~10/s. */
 	exportMulti(
 		clips: ClipInput[],
 		outPath: string,
 		sceneJson?: string,
 		params?: ExportParamsInput,
+		onProgress?: (frames: number) => void,
 	): Promise<ExportStats>;
 }
 
