@@ -248,21 +248,28 @@ function referenceAssetDims(document: AxcutDocument): { width: number; height: n
 /** The output frame's dimensions, honoring the timeline's chosen aspect ratio.
  *
  * BUG corrigé : cette fonction ne retournait QUE les dimensions brutes du plus gros asset
- * source (typiquement 16:9), sans jamais tenir compte du sélecteur de ratio de l'utilisateur
- * (`document.legacyEditor.aspectRatio`, même source que `EXPORT_ASPECT` dans
- * ExportDialog.tsx). `output.width`/`height` alimente le calcul "fit" côté natif
+ * source (typiquement 16:9), sans jamais tenir compte du ratio réellement choisi par
+ * l'utilisateur. `output.width`/`height` alimente le calcul "fit" côté natif
  * (`compose_frame`, compositor.rs) qui compare `output` à la résolution interne 16:9 pour
  * savoir de combien corriger l'écran/la webcam avant l'étirement final — avec la valeur
  * précédente (toujours ~16:9), cette correction était systématiquement un no-op, quel que
- * soit le ratio réellement choisi (9:16, 1:1…), d'où la déformation qui persistait.
+ * soit le ratio affiché dans l'UI (9:16, 1:1…), d'où la déformation qui persistait.
+ *
+ * PREMIÈRE tentative fautive : lire `document.legacyEditor.aspectRatio` (comme
+ * `EXPORT_ASPECT` dans ExportDialog.tsx) — sauf que RIEN n'écrit jamais ce champ. Le vrai
+ * sélecteur UI (le dropdown de ratio, V4Timeline.tsx) appelle `setSettings({aspectRatio})`,
+ * qui persiste dans le store `editorSettings` (`settings.aspectRatio`, déjà résolu par
+ * `getEditorSettings(document)` dans `buildSceneDescription` — donc ExportDialog.tsx lit
+ * probablement aussi la mauvaise source, latent bug distinct à vérifier séparément).
  *
  * Convention alignée sur `calculateSourceDimensions` (mp4ExportSettings.ts) : le plus grand
  * côté de l'asset de référence reste la base, l'autre côté est dérivé du ratio choisi.
  */
-function pickOutputDims(document: AxcutDocument): { width: number; height: number } {
+function pickOutputDims(
+	document: AxcutDocument,
+	aspectRatio: AspectRatio,
+): { width: number; height: number } {
 	const reference = referenceAssetDims(document);
-	const aspectRatio =
-		(document.legacyEditor as { aspectRatio?: AspectRatio } | null)?.aspectRatio ?? "16:9";
 	const ratio =
 		aspectRatio === "native"
 			? getNativeAspectRatioValue(reference.width, reference.height)
@@ -386,7 +393,7 @@ export function buildSceneDescription(
 	// fait sur la résolution de sortie (= taille du canvas rendu) avec les unités sources du
 	// premier asset visible — la même convention que `pickOutputDims` + SCREEN_SOURCE_SIZE /
 	// WEBCAM_SOURCE_SIZE dans PreviewCanvas — ce qui garde preview/export/natif alignés.
-	const outputDims = pickOutputDims(document);
+	const outputDims = pickOutputDims(document, settings.aspectRatio);
 	// ponytail: when the active camera has been probed (real webcam dims cached by
 	// WebcamOverlay's loadedmetadata handler), use them so the box matches the actual
 	// camera aspect. Without this the box defaults to a hardcoded 4:3 (960x720) and the
@@ -470,6 +477,6 @@ export function buildSceneDescription(
 			clipIndex: region.clipIndex,
 		})),
 		cropByClip,
-		output: { ...pickOutputDims(document), fps: null },
+		output: { ...pickOutputDims(document, settings.aspectRatio), fps: null },
 	};
 }
