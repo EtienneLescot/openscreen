@@ -735,6 +735,10 @@ export type NativeBridgeRequest =
 				screenPath: string;
 				webcamPath: string;
 				webcamOffsetSec: number;
+				/** Index in the sorted SceneDescription.clips stream (disambiguates shared assets). */
+				clipIndex: number;
+				/** Current screen-source time within the active clip's source window. */
+				sourceTimeSec: number;
 			};
 			requestId?: string;
 	  };

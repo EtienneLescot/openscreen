@@ -60,8 +60,8 @@ export function setNativeParam(key: string, value: CompositorParamValue): void {
 	});
 }
 
-/** Seek la vue native active au temps `seconds` (playhead de l'app). No-op si aucune vue.
- *  Transitoire (position de lecture) → non mémorisé/rejoué, contrairement à setNativeParam. */
+/** Seek la vue native au temps SOURCE du clip actif. La conversion depuis la playhead timeline
+ *  est faite par `useNativePlaybackSync`. Transitoire → non mémorisé/rejoué. */
 export function setNativeTime(seconds: number): void {
 	if (currentViewId === null) {
 		return;

@@ -3,7 +3,7 @@
 
 use crate::config::Cfg;
 use crate::cursor::CursorTrack;
-use crate::scene::{Scene, SceneBackground};
+use crate::scene::{Scene, SceneBackground, SceneCrop};
 use crate::d3d::Gpu;
 use crate::ffi::AVFrame;
 use anyhow::{bail, Result};
@@ -38,6 +38,41 @@ fn parse_hex(s: &str) -> Option<[f32; 4]> {
         _ => return None,
     };
     Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0])
+}
+
+/// Rect source après crop puis zoom, dans les UV de la texture D3D. `u_max`/`v_max`
+/// excluent le padding NV12 ; le crop reste donc exprimé dans le frame visible (0..1),
+/// comme `VirtualPreview.cropVideoStyle`, puis le focus du zoom est remappé dans ce crop.
+fn screen_source_rect(
+    u_max: f32,
+    v_max: f32,
+    crop: Option<SceneCrop>,
+    zoom: f32,
+    focus: [f32; 2],
+) -> [f32; 4] {
+    let normalized_crop = crop.and_then(|crop| {
+        if !crop.x.is_finite() || !crop.y.is_finite()
+            || !crop.width.is_finite() || !crop.height.is_finite()
+        {
+            return None;
+        }
+        let x0 = crop.x.clamp(0.0, 1.0);
+        let y0 = crop.y.clamp(0.0, 1.0);
+        let x1 = (crop.x + crop.width).clamp(x0, 1.0);
+        let y1 = (crop.y + crop.height).clamp(y0, 1.0);
+        (x1 > x0 && y1 > y0).then_some([x0, y0, x1, y1])
+    });
+    let [x0, y0, x1, y1] = normalized_crop.unwrap_or([0.0, 0.0, 1.0, 1.0]);
+    let (cu0, cv0, cu1, cv1) = (x0 * u_max, y0 * v_max, x1 * u_max, y1 * v_max);
+    let (cw, ch) = (cu1 - cu0, cv1 - cv0);
+    let zoom = if zoom.is_finite() && zoom >= 1.0 { zoom } else { 1.0 };
+    let fx = if focus[0].is_finite() { focus[0].clamp(0.0, 1.0) } else { 0.5 };
+    let fy = if focus[1].is_finite() { focus[1].clamp(0.0, 1.0) } else { 0.5 };
+    let (hu, hv) = (cw / (2.0 * zoom), ch / (2.0 * zoom));
+    // `.max(cu0/cv0)` absorbs the tiny float inversion possible at zoom=1.
+    let su0 = (cu0 + fx * cw - hu).clamp(cu0, (cu1 - 2.0 * hu).max(cu0));
+    let sv0 = (cv0 + fy * ch - hv).clamp(cv0, (cv1 - 2.0 * hv).max(cv0));
+    [su0, sv0, su0 + 2.0 * hu, sv0 + 2.0 * hv]
 }
 
 /// Constant buffer d'un calque (doit matcher `cbuffer Layer` du HLSL, 64 octets).
@@ -76,6 +111,13 @@ pub struct LiveParams {
     /// vélocité), pas par un flou gaussien variable comme le canvas web — plus simple à
     /// réutiliser côté GPU, effet de streak équivalent.
     pub cursor_motion_blur: f32,
+    /// False when the "webcam" decoder is actually just the screen video again (the TS side
+    /// falls `webcamPath` back to the screen asset's own path when a clip has no real camera,
+    /// purely so the decoder pipeline has something valid to open) — drawing the PiP box in
+    /// that case duplicates the screen video into its own corner. Live-only: derived in
+    /// `live.rs` by comparing the active clip's screen/webcam paths; defaults `true` (draw)
+    /// so fixture/bench renders and any caller that never sets it keep their old behavior.
+    pub has_webcam: bool,
 }
 
 impl Default for LiveParams {
@@ -91,6 +133,7 @@ impl Default for LiveParams {
             cursor_size_scale: 1.0,
             cursor_bounce_scale: 1.0,
             cursor_motion_blur: 0.0,
+            has_webcam: true,
         }
     }
 }
@@ -1299,18 +1342,17 @@ impl Compositor {
             });
         }
 
-        // --- screen : zoom appliqué au rect source (§8) ---
-        let cx = p.focus[0] * u_max;
-        let cy = p.focus[1] * v_max;
-        let hu = u_max / (2.0 * p.zoom);
-        let hv = v_max / (2.0 * p.zoom);
-        let su0 = (cx - hu).clamp(0.0, u_max - 2.0 * hu);
-        let sv0 = (cy - hv).clamp(0.0, v_max - 2.0 * hv);
-        // rect source à la frame précédente (zoom différent) pour la vélocité
-        let hu_p = u_max / (2.0 * pp.zoom);
-        let hv_p = v_max / (2.0 * pp.zoom);
-        let su0_p = (cx - hu_p).clamp(0.0, u_max - 2.0 * hu_p);
-        let sv0_p = (cy - hv_p).clamp(0.0, v_max - 2.0 * hv_p);
+        // --- screen : crop du clip actif, puis zoom appliqué dans ce rect source (§8) ---
+        // `for_clip_window` conserve l'index pour distinguer plusieurs clips du même asset.
+        let active_crop = scene_ref.as_ref().and_then(|scene| {
+            scene.crop_by_clip.get(scene.active_clip_index).copied().flatten()
+        });
+        let [su0, sv0, su1, sv1] = screen_source_rect(u_max, v_max, active_crop, p.zoom, p.focus);
+        let (hu, hv) = ((su1 - su0) * 0.5, (sv1 - sv0) * 0.5);
+        // Le focus courant reste volontairement utilisé pour la frame précédente, comme avant.
+        let [su0_p, sv0_p, su1_p, sv1_p] =
+            screen_source_rect(u_max, v_max, active_crop, pp.zoom, p.focus);
+        let (hu_p, hv_p) = ((su1_p - su0_p) * 0.5, (sv1_p - sv0_p) * 0.5);
         let s_px = [s_dst[2] * OUT_W as f32, s_dst[3] * OUT_H as f32];
         if cfg.shadow {
             self.draw_shadow(s_dst, s_px, s_radius, 40.0, [0.0, 16.0], 0.45 * lp.shadow_scale);
@@ -1500,25 +1542,27 @@ impl Compositor {
         // miroir = échanger les bornes u du rect source (flip horizontal).
         let (u0, u1) = if lp.webcam_mirror { (su1, su0) } else { (su0, su1) };
         let wv = wch / wth as f32;
-        if cfg.shadow {
-            self.draw_shadow(w_dst, w_px, w_radius, 32.0, [0.0, 12.0], 0.5 * lp.shadow_scale);
+        if lp.has_webcam {
+            if cfg.shadow {
+                self.draw_shadow(w_dst, w_px, w_radius, 32.0, [0.0, 12.0], 0.5 * lp.shadow_scale);
+            }
+            self.draw_video(
+                &LayerCB {
+                    dst: w_dst,
+                    src: [u0, 0.0, u1, wv],
+                    quad_px: w_px,
+                    radius_px: w_radius,
+                    mode: 0.0,
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    src_prev: [u0, 0.0, u1, wv], // src fixe (pas de zoom webcam)
+                    dst_prev: w_dst_prev,
+                    mb: [mb_taps, 0.0, 0.0, 0.0],
+                    ..Default::default()
+                },
+                &wy,
+                &wuv,
+            );
         }
-        self.draw_video(
-            &LayerCB {
-                dst: w_dst,
-                src: [u0, 0.0, u1, wv],
-                quad_px: w_px,
-                radius_px: w_radius,
-                mode: 0.0,
-                color: [0.0, 0.0, 0.0, 1.0],
-                src_prev: [u0, 0.0, u1, wv], // src fixe (pas de zoom webcam)
-                dst_prev: w_dst_prev,
-                mb: [mb_taps, 0.0, 0.0, 0.0],
-                ..Default::default()
-            },
-            &wy,
-            &wuv,
-        );
         Ok(())
     }
 
@@ -1934,5 +1978,30 @@ impl Compositor {
     /// (p.ex. après un export) pour ne pas retenir indéfiniment des textures de pool.
     pub fn clear_srv_cache(&self) {
         self.srv_cache.borrow_mut().clear();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn assert_rect(actual: [f32; 4], expected: [f32; 4]) {
+        for (actual, expected) in actual.into_iter().zip(expected) {
+            assert!((actual - expected).abs() < 1e-6, "actual={actual}, expected={expected}");
+        }
+    }
+
+    #[test]
+    fn crop_maps_visible_frame_fractions_to_texture_uvs() {
+        let crop = SceneCrop { x: 0.25, y: 0.1, width: 0.5, height: 0.6 };
+        assert_rect(screen_source_rect(0.8, 0.9, None, 1.0, [0.2, 0.7]), [0.0, 0.0, 0.8, 0.9]);
+        assert_rect(screen_source_rect(0.8, 0.9, Some(crop), 1.0, [0.5, 0.5]), [0.2, 0.09, 0.6, 0.63]);
+    }
+
+    #[test]
+    fn zoom_focus_is_applied_inside_the_crop() {
+        let crop = SceneCrop { x: 0.25, y: 0.1, width: 0.5, height: 0.6 };
+        assert_rect(screen_source_rect(0.8, 0.9, Some(crop), 2.0, [0.5, 0.5]), [0.3, 0.225, 0.5, 0.495]);
+        assert_rect(screen_source_rect(0.8, 0.9, Some(crop), 2.0, [1.0, 1.0]), [0.4, 0.36, 0.6, 0.63]);
     }
 }

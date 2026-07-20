@@ -90,11 +90,13 @@ export function setActiveClip(
 	screenPath: string,
 	webcamPath: string,
 	webcamOffsetSec: number,
+	clipIndex: number,
+	sourceTimeSec: number,
 ): Promise<{ ok: true }> {
 	return requireNativeBridgeData<{ ok: true }>({
 		domain: "compositor",
 		action: "setActiveClip",
-		payload: { id, screenPath, webcamPath, webcamOffsetSec },
+		payload: { id, screenPath, webcamPath, webcamOffsetSec, clipIndex, sourceTimeSec },
 	});
 }
 
