@@ -1239,6 +1239,34 @@ impl Compositor {
         w_dst = fullscreen_dst(w_dst, cam_progress);
         w_dst_prev = fullscreen_dst(w_dst_prev, cam_progress_prev);
 
+        // Contre-étirement "fit" : le canvas interne compose TOUJOURS en OUT_W×OUT_H (16:9),
+        // puis `blit_resized` étire tout, de façon non uniforme si besoin, vers la résolution
+        // de sortie demandée — voulu pour que le FOND (dessiné plus bas en dst=[0,0,1,1])
+        // remplisse tout le cadre quel que soit le ratio choisi. Mais l'écran et la webcam ne
+        // doivent PAS être déformés par cet étirement : on rétrécit ici leur rect de
+        // destination (centré, dans cet espace 16:9 PRÉ-étirement) par l'inverse du plus fort
+        // des deux facteurs d'étirement, pour qu'après l'étirement final leur ratio d'origine
+        // reste préservé (letterboxé/pillarboxé sur le fond, qui lui reste plein cadre) — mode
+        // "fit"/contain. Si l'utilisateur veut un rendu "fill" (remplir sans bandes), il ajuste
+        // le crop lui-même ; le natif ne fait plus ce choix à sa place en étirant l'image.
+        let (final_out_w, final_out_h) = scene_ref
+            .as_ref()
+            .map(|s| (s.output.width.max(1) as f32, s.output.height.max(1) as f32))
+            .unwrap_or((OUT_W as f32, OUT_H as f32));
+        let stretch_x = final_out_w / OUT_W as f32;
+        let stretch_y = final_out_h / OUT_H as f32;
+        let uniform_stretch = stretch_x.min(stretch_y);
+        let (undistort_x, undistort_y) = (uniform_stretch / stretch_x, uniform_stretch / stretch_y);
+        let undistort = |dst: [f32; 4]| -> [f32; 4] {
+            let (cx, cy) = (dst[0] + dst[2] * 0.5, dst[1] + dst[3] * 0.5);
+            let (nw, nh) = (dst[2] * undistort_x, dst[3] * undistort_y);
+            [cx - nw * 0.5, cy - nh * 0.5, nw, nh]
+        };
+        let s_dst = undistort(s_dst);
+        let s_dst_prev = undistort(s_dst_prev);
+        w_dst = undistort(w_dst);
+        w_dst_prev = undistort(w_dst_prev);
+
         let s_radius = if cfg.rounded { p.screen.radius * lp.radius_scale } else { 0.0 };
         let w_px = [w_dst[2] * OUT_W as f32, w_dst[3] * OUT_H as f32];
         // forme webcam : rayon SDF dérivé de la SEULE forme choisie. Le slider Roundness ne
@@ -1691,31 +1719,27 @@ impl Compositor {
     /// Redimensionne (bilinéaire) le RT composé (OUT_W×OUT_H) vers `resize_target.rgba`, avant
     /// la conversion NV12 dans `rgb_to_nv12_scaled`.
     ///
-    /// Mode "fit"/contain : quand `target_w`×`target_h` n'a pas le même ratio que OUT_W×OUT_H
-    /// (ex. l'utilisateur choisit un format portrait/carré alors que la scène est composée en
-    /// 16:9 interne), on NE remplit PAS tout le viewport — ça étirerait l'image de façon non
-    /// uniforme (écran + webcam déformés). On calcule une échelle uniforme (`min` des deux
-    /// ratios), on centre le rectangle résultant dans la cible, et on clear le reste en noir
-    /// (letterbox/pillarbox) — l'image composée garde son ratio d'origine quel que soit le
-    /// conteneur demandé.
+    /// Étirement PLEIN CADRE volontaire, y compris non uniforme quand `target_w`×`target_h`
+    /// n'a pas le ratio de OUT_W×OUT_H : le fond (wallpaper) doit remplir tout le cadre de
+    /// sortie quel que soit le ratio choisi — ce n'est PAS lui qu'il faut préserver en "fit".
+    /// L'écran et la webcam, eux, sont protégés de cet étirement en amont, dans
+    /// `compose_frame` (rétrécissement inverse de leur rect de destination AVANT ce blit —
+    /// voir le commentaire sur `undistort` juste avant leur dessin) : ils gardent leur ratio
+    /// d'origine (letterboxé/pillarboxé sur le fond, qui lui reste plein cadre) sans qu'il
+    /// faille toucher au viewport ici.
     unsafe fn blit_resized(&self, target_w: u32, target_h: u32) -> Result<()> {
         self.ensure_resize_target(target_w, target_h)?;
         let cache = self.resize_target.borrow();
         let t = cache.as_ref().unwrap();
-        self.ctx.ClearRenderTargetView(&t.rgba_rtv, &[0.0, 0.0, 0.0, 1.0]);
         self.ctx.OMSetBlendState(&self.blend_none, None, 0xffffffff);
         self.ctx.OMSetRenderTargets(Some(&[Some(t.rgba_rtv.clone())]), None);
         self.ctx.PSSetShaderResources(0, Some(&[Some(self.rt_srv.clone())]));
         self.ctx.VSSetShader(&self.vs_fs, None);
         self.ctx.PSSetShader(&self.ps_tex, None);
         self.ctx.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
-        let scale = (target_w as f32 / OUT_W as f32).min(target_h as f32 / OUT_H as f32);
-        let fit_w = OUT_W as f32 * scale;
-        let fit_h = OUT_H as f32 * scale;
         let vp = D3D11_VIEWPORT {
-            TopLeftX: (target_w as f32 - fit_w) * 0.5,
-            TopLeftY: (target_h as f32 - fit_h) * 0.5,
-            Width: fit_w, Height: fit_h, MinDepth: 0.0, MaxDepth: 1.0,
+            TopLeftX: 0.0, TopLeftY: 0.0,
+            Width: target_w as f32, Height: target_h as f32, MinDepth: 0.0, MaxDepth: 1.0,
         };
         self.ctx.RSSetViewports(Some(&[vp]));
         self.ctx.Draw(3, 0);
