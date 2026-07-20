@@ -29,6 +29,10 @@ interface Window {
 		) => Promise<import("../src/native/contracts").NativeBridgeResponse<TData>>;
 		/** Export bench only (--bench=): tells main the run is over so it can quit. */
 		benchFinished?: () => Promise<void>;
+		/** Native (D3D) export progress — frames encoded so far, pushed at ~10 Hz max while
+		 *  `compositor.export`/`compositor.exportMulti` runs. Distinct from `exportOnFrameAck`,
+		 *  the OLD web/CPU pipeline's per-frame ack, not a progress signal. */
+		onNativeExportProgress?: (callback: (frames: number) => void) => () => void;
 		getSources: (opts: Electron.SourcesOptions) => Promise<ProcessedDesktopSource[]>;
 		switchToEditor: () => Promise<void>;
 		switchToHud: () => Promise<void>;
