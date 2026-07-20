@@ -72,6 +72,7 @@ unsafe fn decode_frame_n_inner(path: &str, gpu: &Gpu, n: u32) -> Result<FrameGua
     let dec = avcodec_find_decoder((*codecpar).codec_id);
     let dctx = avcodec_alloc_context3(dec);
     averr(avcodec_parameters_to_context(dctx, codecpar), "params_to_ctx")?;
+    allow_d3d11va_h264_baseline(dctx);
 
     let hwdev = av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA);
     let hwdc = (*hwdev).data as *mut AVHWDeviceContext;
@@ -139,6 +140,18 @@ fn averr(ret: i32, ctx: &str) -> Result<()> {
         bail!("{ctx}: {ret} ({msg})");
     }
     Ok(())
+}
+
+/// FFmpeg's DXVA/D3D11VA profile table accepts Constrained Baseline, Main and High,
+/// but not plain H.264 Baseline. Chrome MediaRecorder emits plain Baseline even when
+/// the bitstream uses the same hardware-decodable subset (no FMO/ASO); without this
+/// opt-in FFmpeg rejects the profile before asking the D3D11 driver for a decoder.
+/// Keep the mismatch allowance restricted to that exact profile rather than weakening
+/// validation for every codec/profile handled by this shared decoder path.
+unsafe fn allow_d3d11va_h264_baseline(dctx: *mut AVCodecContext) {
+    if (*dctx).profile == AV_PROFILE_H264_BASELINE as i32 {
+        (*dctx).hwaccel_flags |= AV_HWACCEL_FLAG_ALLOW_PROFILE_MISMATCH as i32;
+    }
 }
 
 // D3D11_TEXTURE2D_DESC.BindFlags (valeurs SDK)
@@ -215,6 +228,7 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
     }
     let dctx = avcodec_alloc_context3(dec);
     averr(avcodec_parameters_to_context(dctx, codecpar), "params_to_ctx")?;
+    allow_d3d11va_h264_baseline(dctx);
 
     let hwdev = av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA);
     if hwdev.is_null() {
@@ -389,6 +403,7 @@ impl Decoder {
         let dec = avcodec_find_decoder((*codecpar).codec_id);
         let dctx = avcodec_alloc_context3(dec);
         averr(avcodec_parameters_to_context(dctx, codecpar), "params_to_ctx")?;
+        allow_d3d11va_h264_baseline(dctx);
 
         let hwdev = av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA);
         let hwdc = (*hwdev).data as *mut AVHWDeviceContext;
