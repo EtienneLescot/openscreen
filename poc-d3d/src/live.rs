@@ -580,6 +580,62 @@ impl Drop for LiveView {
     }
 }
 
+/// Bascule le `Player` + le compositeur sur le clip suivant de `scene` (reboucle sur le
+/// premier après le dernier). No-op pour une scène à 1 clip (le bouclage léger existant de
+/// `Player::step` suffit et coûte moins cher qu'un `set_active_clip` — reopen des décodeurs).
+///
+/// Partagée entre le déclenchement PROACTIF (seuil `source_end_sec` franchi) et le filet de
+/// sécurité RÉACTIF de `render_thread` (le temps du décodeur a reculé — `Player::step` a
+/// bouclé sur l'EOF RÉEL du fichier avant que le seuil ne soit jamais atteint : cas d'un clip
+/// NON trimmé dont la dernière frame réelle a un PTS strictement inférieur au
+/// `source_end_sec` déclaré, qui égale alors la durée totale du fichier — le seuil `>=` ne se
+/// déclenche jamais dans ce cas, d'où le "ça boucle sur le 1er clip" observé malgré le
+/// déclenchement proactif).
+#[allow(clippy::too_many_arguments)]
+unsafe fn advance_to_next_scene_clip(
+    player: &mut Player,
+    comp: &Compositor,
+    scene: &Scene,
+    active_screen_path: &mut String,
+    active_webcam_path: &mut String,
+    active_webcam_offset_sec: &mut f64,
+    active_clip_index: &mut usize,
+    raw_cursor: &mut Option<CursorTrack>,
+    last_smoothing: &mut f32,
+) {
+    if scene.clips.len() <= 1 {
+        return;
+    }
+    let next_index = if *active_clip_index + 1 < scene.clips.len() {
+        *active_clip_index + 1
+    } else {
+        0
+    };
+    let next_clip = &scene.clips[next_index];
+    match player.set_active_clip(
+        &next_clip.screen_path,
+        &next_clip.webcam_path,
+        next_clip.webcam_offset_sec,
+        next_clip.source_start_sec,
+    ) {
+        Ok(()) => {
+            *active_screen_path = next_clip.screen_path.clone();
+            *active_webcam_path = next_clip.webcam_path.clone();
+            *active_webcam_offset_sec = next_clip.webcam_offset_sec;
+            *active_clip_index = next_index;
+            comp.set_scene(Some(scene_for_clip(scene, *active_clip_index)));
+            let cursor_path = format!("{}.cursor.json", active_screen_path);
+            *raw_cursor = CursorTrack::load(&cursor_path, 0.0, 24.0 * 3600.0).ok();
+            match raw_cursor {
+                Some(track) => comp.set_cursor(track.smoothed(0.0)),
+                None => comp.clear_cursor(),
+            }
+            *last_smoothing = -1.0;
+        }
+        Err(e) => eprintln!("[live] auto-advance clip: {e:#}"),
+    }
+}
+
 /// Boucle de rendu (thread dédié) : décode → compose → resize → readback → publie
 /// dans `Shared::latest_frame`.
 unsafe fn render_thread(
@@ -790,44 +846,46 @@ unsafe fn render_thread(
                 // avait déjà dépassé la fin de la fenêtre, voire atteint l'EOF brut du
                 // fichier et rebouclé sur lui-même — d'où le "retour au 1er clip" observé.
                 if let Some(scene) = &full_scene {
-                    if scene.clips.len() > 1 {
-                        if let Some(clip) = scene.clips.get(active_clip_index) {
-                            if player.screen_time_sec() >= clip.source_end_sec {
-                                let next_index = if active_clip_index + 1 < scene.clips.len() {
-                                    active_clip_index + 1
-                                } else {
-                                    0
-                                };
-                                let next_clip = &scene.clips[next_index];
-                                match player.set_active_clip(
-                                    &next_clip.screen_path,
-                                    &next_clip.webcam_path,
-                                    next_clip.webcam_offset_sec,
-                                    next_clip.source_start_sec,
-                                ) {
-                                    Ok(()) => {
-                                        active_screen_path = next_clip.screen_path.clone();
-                                        active_webcam_path = next_clip.webcam_path.clone();
-                                        active_webcam_offset_sec = next_clip.webcam_offset_sec;
-                                        active_clip_index = next_index;
-                                        comp.set_scene(Some(scene_for_clip(scene, active_clip_index)));
-                                        let cursor_path = format!("{}.cursor.json", active_screen_path);
-                                        raw_cursor =
-                                            CursorTrack::load(&cursor_path, 0.0, 24.0 * 3600.0).ok();
-                                        match &raw_cursor {
-                                            Some(track) => comp.set_cursor(track.smoothed(0.0)),
-                                            None => comp.clear_cursor(),
-                                        }
-                                        last_smoothing = -1.0;
-                                    }
-                                    Err(e) => eprintln!("[live] auto-advance clip: {e:#}"),
-                                }
-                            }
+                    if let Some(clip) = scene.clips.get(active_clip_index) {
+                        if player.screen_time_sec() >= clip.source_end_sec {
+                            advance_to_next_scene_clip(
+                                &mut player,
+                                &comp,
+                                scene,
+                                &mut active_screen_path,
+                                &mut active_webcam_path,
+                                &mut active_webcam_offset_sec,
+                                &mut active_clip_index,
+                                &mut raw_cursor,
+                                &mut last_smoothing,
+                            );
                         }
                     }
                 }
+                let screen_time_before_step = full_scene.as_ref().map(|_| player.screen_time_sec());
                 if player.step(&comp, &cfg)? {
                     stepped = true;
+                }
+                // Filet de sécurité : un clip NON trimmé (source_end_sec == durée totale du
+                // fichier) peut ne jamais franchir le seuil ci-dessus si la dernière frame
+                // réelle a un PTS strictement inférieur à `source_end_sec` déclaré — `step()`
+                // finit alors par boucler tout seul sur l'EOF réel (temps qui recule
+                // brutalement). On détecte ce recul et on corrige immédiatement en enchaînant
+                // sur le clip suivant, plutôt que de rester bloqué sur le 1er clip.
+                if let (Some(scene), Some(t_before)) = (&full_scene, screen_time_before_step) {
+                    if player.screen_time_sec() < t_before {
+                        advance_to_next_scene_clip(
+                            &mut player,
+                            &comp,
+                            scene,
+                            &mut active_screen_path,
+                            &mut active_webcam_path,
+                            &mut active_webcam_offset_sec,
+                            &mut active_clip_index,
+                            &mut raw_cursor,
+                            &mut last_smoothing,
+                        );
+                    }
                 }
                 acc -= step;
                 n += 1;

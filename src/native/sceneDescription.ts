@@ -23,6 +23,8 @@ import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { projectRegionsToSourceTime } from "@/lib/ai-edition/timeline/region-ventilation";
 import { computeCompositeLayout, webcamSizeToFraction } from "@/lib/compositeLayout";
+import type { AspectRatio } from "@/utils/aspectRatioUtils";
+import { getAspectRatioValue, getNativeAspectRatioValue } from "@/utils/aspectRatioUtils";
 import type { CompositorClipInput } from "./contracts";
 
 /** Background behind the screen. Parsed from `settings.wallpaper`. */
@@ -46,12 +48,19 @@ export interface SceneZoomRegion {
 	focusMode: "manual" | "auto" | null;
 	/** Optional rotation preset for the zoom. */
 	rotation: "iso" | "left" | "right" | null;
+	/** Index of the clip (within `SceneDescription.clips`) whose source time this region's
+	 *  `startSec`/`endSec` are expressed in — disambiguates clips whose source windows
+	 *  numerically overlap (same or different asset). Unset only for a region that
+	 *  `projectRegionsToSourceTime` couldn't place on any clip. */
+	clipIndex?: number;
 }
 
 /** A "Full Camera" timeline region (from `legacyEditor.cameraFullscreenRegions`). Times in seconds. */
 export interface SceneCameraFullscreenRegion {
 	startSec: number;
 	endSec: number;
+	/** See `SceneZoomRegion.clipIndex`. */
+	clipIndex?: number;
 }
 
 /** A speed region projected onto each clip's source time. The native compositor matches
@@ -65,6 +74,8 @@ export interface SceneSpeedRegion {
 	endSec: number;
 	/** Playback rate multiplier (1 = unchanged). */
 	speed: number;
+	/** See `SceneZoomRegion.clipIndex`. */
+	clipIndex?: number;
 }
 
 /** Normalized rect in 0..1 of the output frame (x, y top-left; width, height). */
@@ -212,7 +223,7 @@ function parseWallpaper(wallpaper: string) {
 
 /** Largest asset pixel area among the timeline's used assets; falls back to any asset with
  *  dims, then 1920x1080. Mirrors `referenceSource` in ExportDialog.tsx. */
-function pickOutputDims(document: AxcutDocument): { width: number; height: number } {
+function referenceAssetDims(document: AxcutDocument): { width: number; height: number } {
 	const usedAssetIds = new Set(document.timeline.clips.map((c) => c.assetId));
 	const consider = (w: number, h: number, best: { width: number; height: number } | null) => {
 		if (w > 0 && h > 0 && (!best || w * h > best.width * best.height)) {
@@ -232,6 +243,35 @@ function pickOutputDims(document: AxcutDocument): { width: number; height: numbe
 		}
 	}
 	return best ?? { width: 1920, height: 1080 };
+}
+
+/** The output frame's dimensions, honoring the timeline's chosen aspect ratio.
+ *
+ * BUG corrigé : cette fonction ne retournait QUE les dimensions brutes du plus gros asset
+ * source (typiquement 16:9), sans jamais tenir compte du sélecteur de ratio de l'utilisateur
+ * (`document.legacyEditor.aspectRatio`, même source que `EXPORT_ASPECT` dans
+ * ExportDialog.tsx). `output.width`/`height` alimente le calcul "fit" côté natif
+ * (`compose_frame`, compositor.rs) qui compare `output` à la résolution interne 16:9 pour
+ * savoir de combien corriger l'écran/la webcam avant l'étirement final — avec la valeur
+ * précédente (toujours ~16:9), cette correction était systématiquement un no-op, quel que
+ * soit le ratio réellement choisi (9:16, 1:1…), d'où la déformation qui persistait.
+ *
+ * Convention alignée sur `calculateSourceDimensions` (mp4ExportSettings.ts) : le plus grand
+ * côté de l'asset de référence reste la base, l'autre côté est dérivé du ratio choisi.
+ */
+function pickOutputDims(document: AxcutDocument): { width: number; height: number } {
+	const reference = referenceAssetDims(document);
+	const aspectRatio =
+		(document.legacyEditor as { aspectRatio?: AspectRatio } | null)?.aspectRatio ?? "16:9";
+	const ratio =
+		aspectRatio === "native"
+			? getNativeAspectRatioValue(reference.width, reference.height)
+			: getAspectRatioValue(aspectRatio);
+	const longSide = Math.max(reference.width, reference.height);
+	if (ratio >= 1) {
+		return { width: longSide, height: Math.round(longSide / ratio) };
+	}
+	return { width: Math.round(longSide * ratio), height: longSide };
 }
 
 /** Serialize a document into a {@link SceneDescription}. Pure — no per-frame math. */
@@ -303,15 +343,26 @@ export function buildSceneDescription(
 	// covered clips' source ranges (splitting any region that straddles a clip
 	// boundary) so the native side gets the same shape the export pipeline
 	// already proves correct.
-	const docClips = document.timeline.clips;
-	const projectedZoomRegions = projectRegionsToSourceTime(document.zoomRanges ?? [], docClips, () =>
-		createId("zoom"),
+	//
+	// BUG corrigé : ces trois projections utilisaient `document.timeline.clips` BRUT
+	// (ordre non trié, non filtré) au lieu de `visibleClips` (trié par timelineStartSec
+	// + filtré, = l'ordre EXACT de `clips[]` envoyé au natif). Le `clipIndex` projeté sur
+	// chaque région ne correspondait donc jamais à l'index réel dans `Scene.clips`, ET
+	// `clipIndex` n'était de toute façon jamais émis avant ce fix (voir `region-ventilation.ts`)
+	// — le natif retombait alors sur un simple recouvrement temporel (`belongs` dans
+	// `for_clip_window`, compositor.rs), qui laissait fuir un zoom d'un clip vers un autre
+	// dès que leurs fenêtres source se chevauchaient numériquement (typiquement deux clips
+	// qui démarrent tous les deux près du temps source 0 de leur propre fichier).
+	const projectedZoomRegions = projectRegionsToSourceTime(
+		document.zoomRanges ?? [],
+		visibleClips,
+		() => createId("zoom"),
 	);
 	const projectedCameraFullscreenRegions = projectRegionsToSourceTime(
 		((document.legacyEditor as Record<string, unknown> | null)?.cameraFullscreenRegions as
 			| CameraFullscreenRegion[]
 			| undefined) ?? [],
-		docClips,
+		visibleClips,
 		() => createId("camfull"),
 	);
 	// Speed regions carry an extra `speed` field the standard `rangeSchema` does not, so we
@@ -324,7 +375,7 @@ export function buildSceneDescription(
 		((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as
 			| SpeedRegion[]
 			| undefined) ?? [],
-		docClips,
+		visibleClips,
 		() => createId("speed"),
 	);
 
@@ -405,15 +456,18 @@ export function buildSceneDescription(
 			focusY: region.focus.cy,
 			focusMode: region.focusMode ?? null,
 			rotation: region.rotationPreset ?? null,
+			clipIndex: region.clipIndex,
 		})),
 		cameraFullscreenRegions: projectedCameraFullscreenRegions.map((region) => ({
 			startSec: region.startMs / 1000,
 			endSec: region.endMs / 1000,
+			clipIndex: region.clipIndex,
 		})),
 		speedRegions: projectedSpeedRegions.map((region) => ({
 			startSec: region.startMs / 1000,
 			endSec: region.endMs / 1000,
 			speed: region.speed,
+			clipIndex: region.clipIndex,
 		})),
 		cropByClip,
 		output: { ...pickOutputDims(document), fps: null },

@@ -474,8 +474,8 @@ describe("buildSceneDescription.cameraFullscreenRegions", () => {
 		});
 		const { cameraFullscreenRegions } = buildSceneDescription(doc);
 		expect(cameraFullscreenRegions).toEqual([
-			{ startSec: 103, endSec: 105 },
-			{ startSec: 200, endSec: 202 },
+			{ startSec: 103, endSec: 105, clipIndex: 0 },
+			{ startSec: 200, endSec: 202, clipIndex: 1 },
 		]);
 	});
 });
@@ -506,7 +506,7 @@ describe("buildSceneDescription.speedRegions", () => {
 			},
 		});
 		const { speedRegions } = buildSceneDescription(doc);
-		expect(speedRegions).toEqual([{ startSec: 2, endSec: 5.5, speed: 2.5 }]);
+		expect(speedRegions).toEqual([{ startSec: 2, endSec: 5.5, speed: 2.5, clipIndex: 0 }]);
 	});
 
 	it("yields [] when legacyEditor.speedRegions is missing", () => {
@@ -544,8 +544,8 @@ describe("buildSceneDescription.speedRegions", () => {
 		});
 		const { speedRegions } = buildSceneDescription(doc);
 		expect(speedRegions).toEqual([
-			{ startSec: 103, endSec: 105, speed: 3.0 },
-			{ startSec: 200, endSec: 202, speed: 3.0 },
+			{ startSec: 103, endSec: 105, speed: 3.0, clipIndex: 0 },
+			{ startSec: 200, endSec: 202, speed: 3.0, clipIndex: 1 },
 		]);
 	});
 });
@@ -801,5 +801,37 @@ describe("buildSceneDescription.output", () => {
 		});
 		const { output } = buildSceneDescription(doc);
 		expect(output).toEqual({ width: 2560, height: 1440, fps: null });
+	});
+
+	it("honors legacyEditor.aspectRatio instead of always following the source asset's own ratio", () => {
+		// BUG corrigé : output ignorait complètement le sélecteur de ratio et retournait
+		// toujours les dims brutes de l'asset (16:9 ici) — la correction "fit" côté natif
+		// (compose_frame, compositor.rs) compare `output` à sa résolution interne 16:9 pour
+		// savoir combien corriger l'écran/la webcam, donc un `output` toujours ~16:9 rendait
+		// cette correction systématiquement un no-op quel que soit le ratio choisi.
+		const asset = makeAsset({
+			id: "a",
+			originalPath: "/a.mp4",
+			video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
+		});
+		const doc = makeDoc({
+			assets: [asset],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 1,
+					timelineStartSec: 0,
+					timelineEndSec: 1,
+				}),
+			],
+			legacyEditor: { aspectRatio: "9:16" },
+		});
+		const { output } = buildSceneDescription(doc);
+		// Longest side (1920, the source asset's own width) stays pinned; the other side is
+		// derived from the 9:16 ratio — portrait, not the source's native 16:9.
+		expect(output.width).toBe(1080);
+		expect(output.height).toBe(1920);
 	});
 });

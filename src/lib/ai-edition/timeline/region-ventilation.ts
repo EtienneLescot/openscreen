@@ -11,6 +11,11 @@ import type { AxcutClip } from "../schema";
 
 export interface ClipFragment {
 	clipId: string;
+	/** Index of the covering clip within the `clips` array passed in — MUST be the same
+	 *  array (same order) as the one serialized to `Scene.clips` (native side), so this
+	 *  lines up with the native `clip_index` used to disambiguate clips that share a
+	 *  source asset / overlapping source-time windows. */
+	clipIndex: number;
 	/** Offset (seconds) from the covering clip's timelineStartSec. */
 	localStartSec: number;
 	localEndSec: number;
@@ -28,17 +33,18 @@ export function ventilateSpanAcrossClips(
 	const lo = Math.min(startSec, endSec);
 	const hi = Math.max(startSec, endSec);
 	const out: ClipFragment[] = [];
-	for (const c of clips) {
+	clips.forEach((c, clipIndex) => {
 		const s = Math.max(lo, c.timelineStartSec);
 		const e = Math.min(hi, c.timelineEndSec);
 		if (e > s) {
 			out.push({
 				clipId: c.id,
+				clipIndex,
 				localStartSec: s - c.timelineStartSec,
 				localEndSec: e - c.timelineStartSec,
 			});
 		}
-	}
+	});
 	return out;
 }
 
@@ -117,17 +123,26 @@ export function reprojectRegionsForReorder<
  * yields two source spans (which land at the right output frames on each side
  * of the clip boundary). Returns [] when the span sits on no clip.
  */
+export interface SourceSpan extends Span {
+	/** Index of the covering clip within the `clips` array passed in (see `ClipFragment`) —
+	 *  travels through to `clipIndex` on the projected region so the native side can
+	 *  disambiguate clips whose source-time windows numerically overlap (same or different
+	 *  underlying asset) instead of matching by time-overlap alone. */
+	clipIndex: number;
+}
+
 export function virtualSpanToSourceSpans(
 	startMs: number,
 	endMs: number,
 	clips: AxcutClip[],
-): Span[] {
+): SourceSpan[] {
 	const byId = new Map(clips.map((c) => [c.id, c]));
 	return ventilateSpanAcrossClips(startMs / 1000, endMs / 1000, clips).flatMap((f) => {
 		const c = byId.get(f.clipId);
 		if (!c) return [];
 		return [
 			{
+				clipIndex: f.clipIndex,
 				startMs: Math.round((c.sourceStartSec + f.localStartSec) * 1000),
 				endMs: Math.round((c.sourceStartSec + f.localEndSec) * 1000),
 			},
@@ -139,12 +154,16 @@ export function virtualSpanToSourceSpans(
  * Project a list of virtual-ms regions to source-ms for the export matcher
  * (see `virtualSpanToSourceSpans`). Regions straddling clips split into one per
  * covered clip (extra copies get a fresh id from `makeId`; the first keeps the
- * original id). A region over no clip is passed through unchanged (best effort).
+ * original id). A region over no clip is passed through unchanged (best effort,
+ * `clipIndex` left unset — matches the native "belongs to any clip" fallback).
+ *
+ * `clips` MUST be the same array (same order) serialized to `Scene.clips` on the native
+ * side, so the emitted `clipIndex` lines up — see `ClipFragment`.
  */
 export function projectRegionsToSourceTime<
 	T extends { id: string; startMs: number; endMs: number },
->(regions: T[], clips: AxcutClip[], makeId: () => string): T[] {
-	const out: T[] = [];
+>(regions: T[], clips: AxcutClip[], makeId: () => string): (T & { clipIndex?: number })[] {
+	const out: (T & { clipIndex?: number })[] = [];
 	for (const region of regions) {
 		const spans = virtualSpanToSourceSpans(region.startMs, region.endMs, clips);
 		if (spans.length === 0) {
@@ -157,6 +176,7 @@ export function projectRegionsToSourceTime<
 				id: i === 0 ? region.id : makeId(),
 				startMs: span.startMs,
 				endMs: span.endMs,
+				clipIndex: span.clipIndex,
 			});
 		});
 	}
