@@ -44,6 +44,10 @@ fn parse_hex_color(s: &str) -> Option<[f32; 4]> {
     Some([r, g, b, 1.0])
 }
 
+fn webcam_seek_time(screen_source_time_sec: f64, webcam_offset_sec: f64) -> f64 {
+    (screen_source_time_sec - webcam_offset_sec).max(0.0)
+}
+
 /// Lit deux sources en lockstep et compose la frame courante dans le RT du compositeur.
 /// Partagé avec la GUI standalone (`app.rs`).
 pub struct Player {
@@ -74,27 +78,28 @@ impl Player {
     }
 
     /// Remplace atomiquement la paire de décodeurs du clip actif. Les nouvelles sources sont
-    /// ouvertes et positionnées avant de libérer l'ancienne paire, qui reste donc utilisable si
-    /// l'ouverture échoue.
+    /// ouvertes et positionnées au playhead source courant avant de libérer l'ancienne paire.
     pub unsafe fn set_active_clip(
         &mut self,
         screen_path: &str,
         webcam_path: &str,
         webcam_offset_sec: f64,
+        source_time_sec: f64,
     ) -> Result<()> {
+        let source_time_sec = source_time_sec.max(0.0);
         let mut sdec = Decoder::open(screen_path, &self.gpu)?;
         let mut wdec = Decoder::open(webcam_path, &self.gpu)?;
-        let sf = sdec.seek_to(0.0)?;
-        let wf = wdec.seek_to((0.0 - webcam_offset_sec).max(0.0))?;
+        let sf = sdec.seek_to(source_time_sec)?;
+        let wf = wdec.seek_to(webcam_seek_time(source_time_sec, webcam_offset_sec))?;
         if sf.is_null() || wf.is_null() {
-            anyhow::bail!("clip actif vide (screen=\"{screen_path}\", webcam=\"{webcam_path}\")");
+            anyhow::bail!("clip actif vide au temps source {source_time_sec:.3}s (screen=\"{screen_path}\", webcam=\"{webcam_path}\")");
         }
         self.sdec = sdec;
         self.wdec = wdec;
         self.webcam_offset_sec = webcam_offset_sec;
         self.has_current_frame = true;
         self.use_current_on_next_step = true;
-        self.idx = 0;
+        self.idx = (source_time_sec * self.sdec.fps()).round().max(0.0) as u32;
         Ok(())
     }
 
@@ -160,7 +165,7 @@ impl Player {
         let sf = self.sdec.seek_to(target_sec)?;
         let wf = self
             .wdec
-            .seek_to((target_sec - self.webcam_offset_sec).max(0.0))?;
+            .seek_to(webcam_seek_time(target_sec, self.webcam_offset_sec))?;
         if sf.is_null() || wf.is_null() {
             self.has_current_frame = false;
             return Ok(false);
@@ -226,10 +231,25 @@ struct ActiveClipRequest {
     screen_path: String,
     webcam_path: String,
     webcam_offset_sec: f64,
+    /// Identité dans le flux `Scene.clips` trié (les chemins ne suffisent pas pour un asset partagé).
+    clip_index: usize,
+    /// Playhead exprimé sur l'horloge source écran du nouveau clip.
+    source_time_sec: f64,
 }
 
 fn same_source_path(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
+}
+
+fn scene_clip_matches(
+    clip: &crate::scene::SceneClip,
+    screen_path: &str,
+    webcam_path: &str,
+    webcam_offset_sec: f64,
+) -> bool {
+    same_source_path(&clip.screen_path, screen_path)
+        && same_source_path(&clip.webcam_path, webcam_path)
+        && (clip.webcam_offset_sec - webcam_offset_sec).abs() <= 1e-6
 }
 
 fn find_scene_clip_index(
@@ -238,20 +258,30 @@ fn find_scene_clip_index(
     webcam_path: &str,
     webcam_offset_sec: f64,
 ) -> Option<usize> {
-    scene
-        .clips
-        .iter()
-        .position(|clip| {
+    scene.clips.iter()
+        .position(|clip| scene_clip_matches(clip, screen_path, webcam_path, webcam_offset_sec))
+        .or_else(|| scene.clips.iter().position(|clip| {
             same_source_path(&clip.screen_path, screen_path)
                 && same_source_path(&clip.webcam_path, webcam_path)
-                && (clip.webcam_offset_sec - webcam_offset_sec).abs() <= 1e-6
-        })
-        .or_else(|| {
-            scene.clips.iter().position(|clip| {
-                same_source_path(&clip.screen_path, screen_path)
-                    && same_source_path(&clip.webcam_path, webcam_path)
-            })
-        })
+        }))
+}
+
+/// Paths and the asset-level webcam offset are identical for multiple cuts of one recording,
+/// so path lookup alone always returns clip 0. Prefer the explicit timeline identity.
+fn resolve_scene_clip_index(
+    scene: &Scene,
+    requested_clip_index: usize,
+    screen_path: &str,
+    webcam_path: &str,
+    webcam_offset_sec: f64,
+) -> Option<usize> {
+    if scene.clips.get(requested_clip_index)
+        .is_some_and(|clip| scene_clip_matches(clip, screen_path, webcam_path, webcam_offset_sec))
+    {
+        Some(requested_clip_index)
+    } else {
+        find_scene_clip_index(scene, screen_path, webcam_path, webcam_offset_sec)
+    }
 }
 
 fn scene_for_clip(scene: &Scene, clip_index: usize) -> Scene {
@@ -460,18 +490,23 @@ impl LiveView {
         }
     }
 
-    /// Programme le remplacement de la paire screen/webcam sur le thread de rendu.
+    /// Programme le remplacement de la paire screen/webcam sur le thread de rendu. L'identité
+    /// du clip et son playhead source voyagent avec les chemins pour rendre le switch atomique.
     pub fn set_active_clip(
         &self,
         screen_path: &str,
         webcam_path: &str,
         webcam_offset_sec: f64,
+        clip_index: usize,
+        source_time_sec: f64,
     ) {
         if let Ok(mut request) = self.shared.active_clip_request.lock() {
             *request = Some(ActiveClipRequest {
                 screen_path: screen_path.to_string(),
                 webcam_path: webcam_path.to_string(),
                 webcam_offset_sec,
+                clip_index,
+                source_time_sec: source_time_sec.max(0.0),
             });
         }
     }
@@ -545,6 +580,7 @@ unsafe fn render_thread(
                 &request.screen_path,
                 &request.webcam_path,
                 request.webcam_offset_sec,
+                request.source_time_sec,
             ) {
                 Ok(()) => {
                     active_screen_path = request.screen_path;
@@ -552,8 +588,9 @@ unsafe fn render_thread(
                     active_webcam_offset_sec = request.webcam_offset_sec;
                     let scene = shared.scene.lock().unwrap().clone();
                     if let Some(base_scene) = scene {
-                        if let Some(index) = find_scene_clip_index(
+                        if let Some(index) = resolve_scene_clip_index(
                             &base_scene,
+                            request.clip_index,
                             &active_screen_path,
                             &active_webcam_path,
                             active_webcam_offset_sec,
@@ -596,6 +633,11 @@ unsafe fn render_thread(
         cfg.bg_blur = ip.bg_blur;
         cfg.mblur_n = ip.mblur_taps;
         cfg.cursor = ip.cursor_show;
+        // TS falls `webcamPath` back to the screen asset's own path when a clip has no real
+        // camera (so the decoder pipeline always has something valid to open) — if we drew the
+        // PiP box in that case it would just duplicate the screen video into its own corner.
+        // `same_source_path` already exists for exactly this comparison (scene/clip matching).
+        let has_real_webcam = !same_source_path(&active_webcam_path, &active_screen_path);
         comp.set_live_params(LiveParams {
             bg_color: ip.bg_color,
             shadow_scale: ip.shadow_scale,
@@ -607,6 +649,7 @@ unsafe fn render_thread(
             cursor_size_scale: ip.cursor_size_scale,
             cursor_bounce_scale: ip.cursor_bounce_scale,
             cursor_motion_blur: ip.cursor_motion_blur,
+            has_webcam: has_real_webcam,
         });
         // Lissage ressort-amortisseur : re-génère la piste (240 Hz) uniquement quand la valeur
         // change (pas à chaque frame — le resample+ressort parcourt tout l'enregistrement).
@@ -627,8 +670,9 @@ unsafe fn render_thread(
             let scene = shared.scene.lock().unwrap().clone();
             let scene = scene.map(|base_scene| {
                 scene_applied = true;
-                if let Some(index) = find_scene_clip_index(
+                if let Some(index) = resolve_scene_clip_index(
                     &base_scene,
+                    active_clip_index,
                     &active_screen_path,
                     &active_webcam_path,
                     active_webcam_offset_sec,
@@ -854,4 +898,45 @@ unsafe fn client_size(hwnd: HWND) -> (u32, u32) {
     let mut rc = RECT::default();
     let _ = GetClientRect(hwnd, &mut rc);
     ((rc.right - rc.left).max(0) as u32, (rc.bottom - rc.top).max(0) as u32)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn multiclip_scene() -> Scene {
+        Scene::from_json(r##"{
+            "clips": [
+                {"screenPath":"/shared-screen.mp4","webcamPath":"/shared-webcam.mp4","sourceStartSec":0,"sourceEndSec":4,"webcamOffsetSec":1.25,"hasAudio":true},
+                {"screenPath":"/shared-screen.mp4","webcamPath":"/shared-webcam.mp4","sourceStartSec":20,"sourceEndSec":24,"webcamOffsetSec":1.25,"hasAudio":true},
+                {"screenPath":"/distinct-screen.mp4","webcamPath":"/distinct-webcam.mp4","sourceStartSec":100,"sourceEndSec":104,"webcamOffsetSec":0.5,"hasAudio":true}
+            ],
+            "layout":{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},
+            "effects":{"padding":0,"blur":false,"shadow":0,"roundnessPx":0,"motionBlur":0},
+            "background":{"kind":"color","color":"#000000"},
+            "zoomRegions":[],
+            "cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},
+            "cropByClip":[null,null,null],
+            "output":{"width":1920,"height":1080,"fps":30}
+        }"##).expect("multiclip scene")
+    }
+
+    #[test]
+    fn explicit_index_disambiguates_clips_sharing_sources() {
+        let scene = multiclip_scene();
+        assert_eq!(find_scene_clip_index(&scene, "/shared-screen.mp4", "/shared-webcam.mp4", 1.25), Some(0));
+        assert_eq!(resolve_scene_clip_index(&scene, 1, "/shared-screen.mp4", "/shared-webcam.mp4", 1.25), Some(1));
+    }
+
+    #[test]
+    fn explicit_index_tracks_a_distinct_asset() {
+        let scene = multiclip_scene();
+        assert_eq!(resolve_scene_clip_index(&scene, 2, "/distinct-screen.mp4", "/distinct-webcam.mp4", 0.5), Some(2));
+    }
+
+    #[test]
+    fn webcam_seek_uses_screen_source_time_and_offset() {
+        assert_eq!(webcam_seek_time(22.5, 1.25), 21.25);
+        assert_eq!(webcam_seek_time(0.5, 1.25), 0.0);
+    }
 }

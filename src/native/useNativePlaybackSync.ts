@@ -17,15 +17,27 @@
  * drift (independent tickers); acceptable for the fixture (~6 s loop). A pause
  * re-aligns them.
  */
-import { useEffect, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useSyncExternalStore } from "react";
+import type { AxcutClip } from "@/lib/ai-edition/schema";
 import {
 	getCurrentNativeViewId,
 	setNativePlaying,
 	setNativeTime,
 	subscribeNativeCompositor,
 } from "./nativeCompositorStore";
+import { resolveNativePlaybackPosition } from "./nativePlaybackPosition";
 
-export function useNativePlaybackSync(playing: boolean, currentTimeSec: number): void {
+export function useNativePlaybackSync(
+	playing: boolean,
+	currentTimeSec: number,
+	clips: readonly AxcutClip[],
+): void {
+	// `currentTimeSec` is the app's absolute timeline clock. Rust's live player expects the
+	// active clip's source-media clock, including its source trim offset.
+	const sourceTimeSec = useMemo(
+		() => resolveNativePlaybackPosition(clips, currentTimeSec)?.sourceTimeSec ?? null,
+		[clips, currentTimeSec],
+	);
 	// Reactive "is a native view active?" so activation mid-session re-pushes the
 	// current transport/playhead (time & playing aren't memoised in the store).
 	const active = useSyncExternalStore(
@@ -43,9 +55,9 @@ export function useNativePlaybackSync(playing: boolean, currentTimeSec: number):
 
 	// Scrub/step while paused → discrete seek (see header for why not during play).
 	useEffect(() => {
-		if (!active || playing) {
+		if (!active || playing || sourceTimeSec === null) {
 			return;
 		}
-		setNativeTime(currentTimeSec);
-	}, [active, playing, currentTimeSec]);
+		setNativeTime(sourceTimeSec);
+	}, [active, playing, sourceTimeSec]);
 }

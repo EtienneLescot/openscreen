@@ -59,8 +59,6 @@ export function NewEditorShell() {
 	const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
 	const [playing, setPlaying] = useState(false);
 	const [loop, setLoop] = useState(false);
-	// Mirror transport/playhead onto the native compositor view (no-op if inactive).
-	useNativePlaybackSync(playing, currentTimeSec);
 	// v4 shell: three modes (Media / Edit / Rec), a collapsible agent (chat)
 	// column, and a floating facet inspector over the stage.
 	const [mode, setMode] = useState<EditorMode>("edit");
@@ -125,6 +123,9 @@ export function NewEditorShell() {
 		document?.assets.find((a) => a.id === document.project.primaryAssetId)?.originalPath ?? null;
 	void primaryAssetPath;
 	const clips: AxcutClip[] = document?.timeline.clips ?? [];
+	// Mirror transport/playhead onto the native compositor view (no-op if inactive). The hook
+	// maps absolute timeline time into the active clip's trimmed source-media clock.
+	useNativePlaybackSync(playing, currentTimeSec, clips);
 	const hasProject = Boolean(document);
 	const hasAsset = projectId !== null && (document?.assets.length ?? 0) > 0;
 	const project = document?.project

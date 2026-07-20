@@ -200,6 +200,9 @@ pub struct Scene {
     /// Crop écran par clip, dans le même ordre que `clips` (`cropByClip` côté TS).
     #[serde(default)]
     pub crop_by_clip: Vec<Option<SceneCrop>>,
+    /// État de rendu interne, positionné par `for_clip_window` (jamais envoyé par l'app).
+    #[serde(skip)]
+    pub(crate) active_clip_index: usize,
     pub output: SceneOutput,
 }
 
@@ -232,6 +235,7 @@ impl Scene {
         scene.camera_fullscreen_regions.retain(|region| {
             belongs(region.clip_index, region.start_sec, region.end_sec)
         });
+        scene.active_clip_index = clip_index;
         scene
     }
 }

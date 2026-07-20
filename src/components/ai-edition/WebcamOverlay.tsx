@@ -28,6 +28,7 @@ import {
 } from "@/lib/ai-edition/timeline/playback-clock";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
+import { setWebcamNativeSize } from "@/native/webcamSizeCache";
 import styles from "./NewEditorShell.module.css";
 
 interface WebcamOverlayProps {
@@ -184,7 +185,18 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 			playsInline
 			preload="metadata"
 			onError={() => setHasError(true)}
-			onLoadedMetadata={() => {
+			onLoadedMetadata={(event) => {
+				// ponytail: cache the REAL webcam dimensions so the composite layout
+				// shapes its box to match the actual camera aspect (otherwise we'd ship
+				// a 4:3 box for a 16:9 webcam and the Rust `fit_cam_aspect` closure
+				// would shrink the 16:9 content inside a 4:3 box — visible empty margin
+				// inside the PiP container).
+				const target = event.currentTarget;
+				const w = target.videoWidth;
+				const h = target.videoHeight;
+				if (w > 0 && h > 0) {
+					setWebcamNativeSize(cameraTrack.sourcePath, { width: w, height: h });
+				}
 				if (
 					cameraTime !== null &&
 					videoEl &&

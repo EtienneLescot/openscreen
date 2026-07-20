@@ -167,7 +167,7 @@ pub fn set_playing(id: i32, playing: bool) {
     }
 }
 
-/// Positionne la vue au temps `seconds` (seek piloté par la playhead de l'app).
+/// Positionne la vue au temps SOURCE du clip actif (conversion timeline faite côté renderer).
 #[napi]
 pub fn present_time(id: i32, seconds: f64) {
     if let Some(v) = registry().lock().unwrap().get(&id) {
@@ -175,16 +175,26 @@ pub fn present_time(id: i32, seconds: f64) {
     }
 }
 
-/// Remplace les sources du clip actif sans recréer la vue ni son thread de rendu.
+/// Remplace les sources du clip actif sans recréer la vue ni son thread de rendu. L'identité
+/// timeline et le playhead source sont atomiques avec le switch : deux clips partageant les
+/// mêmes fichiers restent distincts, et les deux décodeurs ouvrent directement la bonne frame.
 #[napi]
 pub fn set_active_clip(
     id: i32,
     screen_path: String,
     webcam_path: String,
     webcam_offset_sec: f64,
+    clip_index: u32,
+    source_time_sec: f64,
 ) {
     if let Some(v) = registry().lock().unwrap().get(&id) {
-        v.set_active_clip(&screen_path, &webcam_path, webcam_offset_sec);
+        v.set_active_clip(
+            &screen_path,
+            &webcam_path,
+            webcam_offset_sec,
+            clip_index as usize,
+            source_time_sec,
+        );
     }
 }
 
