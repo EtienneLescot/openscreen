@@ -218,8 +218,18 @@ float4 ps_main(VSOut i) : SV_Target
     float alpha = color.a;
     if (radius_px > 0.0)
     {
-        float2 halfsz = quad_px * 0.5;
-        float d = sd_round_rect(i.local - halfsz, halfsz, radius_px);
+        // Coins non déformés même si `blit_resized` étire le canvas de façon NON uniforme
+        // (ratio de sortie != 16:9) : mb.yz porte (stretch_x, stretch_y), le facteur que ce
+        // calque subira lors de cet étirement final. On pré-déforme ici les coordonnées par ce
+        // même facteur avant la SDF (isotrope) puis on compare `radius_px` (un rayon RÉEL en
+        // px de sortie) directement dans cet espace "pré-étiré" : le cercle qu'on dessine ainsi
+        // devient, après l'étirement anisotrope réel, un cercle — pas une ellipse — quel que
+        // soit stretch_x/stretch_y (cf. `compose_frame` où mb.yz est posé pour l'écran/la
+        // webcam ; seuls calques dont radius_px > 0).
+        float2 stretch = mb.yz;
+        float2 halfsz = quad_px * 0.5 * stretch;
+        float2 p = (i.local - quad_px * 0.5) * stretch;
+        float d = sd_round_rect(p, halfsz, radius_px);
         alpha *= 1.0 - smoothstep(0.0, 1.5, d); // ~1.5px feather (§7 fwidth-like)
     }
     return float4(rgb * alpha, alpha); // prémultiplié
