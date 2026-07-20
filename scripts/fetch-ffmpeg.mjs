@@ -7,6 +7,16 @@
 // but measures ~8 fps @1080p where native ffmpeg does ~165 on the same GPU. The
 // gap is Chromium's per-frame overhead, not the silicon.
 //
+// SECOND PURPOSE (Windows only): the native D3D11 compositor addon
+// (poc-d3d/compositor-view-napi) *dynamically links* against ffmpeg's shared
+// libraries (avcodec/avformat/avutil/…) at `require()` time — a completely
+// different artifact from the static `ffmpeg.exe` above (BtbN's "-shared"
+// build variant vs. its default static one). Without those DLLs reachable on
+// `PATH`, the addon's `require()` fails silently and the app falls back to a
+// no-op compositor (see electron/native-bridge/services/compositorViewService.ts).
+// This script vendors both from the *same* pinned release tag/commit so the
+// static exe and the shared DLLs are always the same audited ffmpeg build.
+//
 // SUPPLY CHAIN. This binary is signed and shipped to every user, so nothing here
 // floats:
 //   - Pinned to an immutable dated release tag, never `latest` (which is an
@@ -72,6 +82,23 @@ const PINNED = {
 		asset: "ffmpeg-n8.1.2-22-g94138f6973-linuxarm64-lgpl-8.1.tar.xz",
 		sha256: "0d4777bde13dcfb61de3541d129df8a37f0e24eb0afddb0bab698fa73ec0aed4",
 		exe: "ffmpeg",
+	},
+};
+
+/**
+ * The "-shared" sibling of PINNED, from the *same* release tag and source
+ * commit (n8.1.2-22-g94138f6973) — same ffmpeg, just built with DLLs instead
+ * of static linking. Only the compositor addon needs this, and it's
+ * Windows-only (D3D11), so there's no linux/darwin entry here.
+ */
+const SHARED_PINNED = {
+	"win32-x64": {
+		asset: "ffmpeg-n8.1.2-22-g94138f6973-win64-lgpl-shared-8.1.zip",
+		sha256: "8bf72607f421282b64f02c6af8683c480e2d299c6b21349ab0f9b5e27c74e223",
+	},
+	"win32-arm64": {
+		asset: "ffmpeg-n8.1.2-22-g94138f6973-winarm64-lgpl-shared-8.1.zip",
+		sha256: "8ee2c32da356883297bac055ccf14e0b6eb1fbb2e5f92f24c569a171207da852",
 	},
 };
 
@@ -203,6 +230,95 @@ function findExe(dir, name) {
 	return null;
 }
 
+/** All `*.dll` files anywhere under `dir` (BtbN's shared builds nest a `bin/` under a versioned dir). */
+function findDlls(dir) {
+	const out = [];
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		const p = path.join(dir, entry.name);
+		if (entry.isDirectory()) {
+			out.push(...findDlls(p));
+		} else if (entry.name.toLowerCase().endsWith(".dll")) {
+			out.push(p);
+		}
+	}
+	return out;
+}
+
+/** Downloads `spec.asset`, verifies its pinned SHA-256, and extracts it into a fresh temp dir. */
+async function downloadAndExtract(spec) {
+	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openscreen-ffmpeg-"));
+	const url = `${BASE}/${spec.asset}`;
+	console.log(`Downloading ${spec.asset}\n  from ${RELEASE_TAG}`);
+	const res = await fetch(url);
+	if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
+	const bytes = Buffer.from(await res.arrayBuffer());
+
+	// Before opening it: is this the exact artifact we pinned?
+	const got = crypto.createHash("sha256").update(bytes).digest("hex");
+	if (got !== spec.sha256) {
+		throw new Error(
+			`SHA-256 mismatch for ${spec.asset}\n  expected ${spec.sha256}\n  got      ${got}\n` +
+				"Refusing to extract. Either the pin is stale or the artifact changed under it.",
+		);
+	}
+	console.log(`  sha256 ok (${(bytes.length / 1048576).toFixed(0)} MB)`);
+
+	const archive = path.join(tmp, spec.asset);
+	fs.writeFileSync(archive, bytes);
+	extract(archive, tmp);
+	return tmp;
+}
+
+/**
+ * Vendors the ffmpeg *shared* DLLs the native D3D11 compositor addon links
+ * against, into the same `electron/native/bin/<tag>/` dir as the static exe
+ * — so both ship as one `extraResources` unit and
+ * `compositorViewService.ts`'s PATH-prepend finds them. Windows only.
+ */
+async function fetchSharedDlls(tag, binDir) {
+	const spec = SHARED_PINNED[tag];
+	if (!spec) {
+		console.log(`\nNo shared-ffmpeg pin for ${tag} (compositor addon is Windows-only) — skipping.`);
+		return;
+	}
+
+	// probe for any previously vendored DLL by name; re-download is driven by
+	// --force same as the static exe, checked once we know what we'd extract.
+	const alreadyVendored = fs
+		.readdirSync(binDir, { withFileTypes: true })
+		.some((e) => e.isFile() && e.name.toLowerCase().endsWith(".dll") && e.name.toLowerCase().startsWith("av"));
+	if (alreadyVendored && !process.argv.includes("--force")) {
+		console.log(`\nShared ffmpeg DLLs already present in ${binDir}. Use --force to re-vendor.`);
+		return;
+	}
+
+	console.log(`\nFetching shared ffmpeg DLLs for the compositor addon (${tag})...`);
+	const tmp = await downloadAndExtract(spec);
+	try {
+		const exe = findExe(tmp, "ffmpeg.exe");
+		if (!exe) throw new Error(`ffmpeg.exe not found inside ${spec.asset} (needed to verify licence)`);
+
+		// Same source commit as the static build, but configure flags are a
+		// separate BtbN job — verify this artifact's licence independently
+		// rather than assuming it matches.
+		console.log("Verifying licence (shared build)...");
+		const banner = assertLgpl(exe);
+		console.log(banner);
+
+		const dlls = findDlls(tmp);
+		if (dlls.length === 0) throw new Error(`No .dll files found inside ${spec.asset}`);
+
+		fs.mkdirSync(binDir, { recursive: true });
+		for (const dll of dlls) {
+			fs.copyFileSync(dll, path.join(binDir, path.basename(dll)));
+		}
+		console.log(`Vendored ${dlls.length} DLL(s) -> ${binDir}`);
+		console.log("LGPL verified: safe to ship with an MIT app.");
+	} finally {
+		fs.rmSync(tmp, { recursive: true, force: true });
+	}
+}
+
 async function main() {
 	const tag = `${process.platform}-${process.arch}`;
 
@@ -229,49 +345,32 @@ async function main() {
 		console.log(assertLgpl(dest));
 		reportEncoders(dest, process.platform);
 		console.log("LGPL verified. Use --force to re-download.");
-		return;
+	} else {
+		const tmp = await downloadAndExtract(spec);
+		try {
+			const found = findExe(tmp, spec.exe);
+			if (!found) throw new Error(`${spec.exe} not found inside ${spec.asset}`);
+
+			// Verify the licence BEFORE vendoring: a GPL binary must never reach
+			// electron/native/bin, where the packager would happily ship it.
+			console.log("Verifying licence...");
+			const banner = assertLgpl(found);
+
+			fs.mkdirSync(binDir, { recursive: true });
+			fs.copyFileSync(found, dest);
+			if (process.platform !== "win32") fs.chmodSync(dest, 0o755);
+
+			console.log(`\n${banner}`);
+			reportEncoders(dest, process.platform);
+			console.log(`\nVendored -> ${dest}`);
+			console.log("LGPL verified: safe to ship with an MIT app.");
+		} finally {
+			fs.rmSync(tmp, { recursive: true, force: true });
+		}
 	}
 
-	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openscreen-ffmpeg-"));
-	try {
-		const url = `${BASE}/${spec.asset}`;
-		console.log(`Downloading ${spec.asset}\n  from ${RELEASE_TAG}`);
-		const res = await fetch(url);
-		if (!res.ok) throw new Error(`Download failed: ${res.status} ${res.statusText}`);
-		const bytes = Buffer.from(await res.arrayBuffer());
-
-		// Before opening it: is this the exact artifact we pinned?
-		const got = crypto.createHash("sha256").update(bytes).digest("hex");
-		if (got !== spec.sha256) {
-			throw new Error(
-				`SHA-256 mismatch for ${spec.asset}\n  expected ${spec.sha256}\n  got      ${got}\n` +
-					"Refusing to extract. Either the pin is stale or the artifact changed under it.",
-			);
-		}
-		console.log(`  sha256 ok (${(bytes.length / 1048576).toFixed(0)} MB)`);
-
-		const archive = path.join(tmp, spec.asset);
-		fs.writeFileSync(archive, bytes);
-		extract(archive, tmp);
-
-		const found = findExe(tmp, spec.exe);
-		if (!found) throw new Error(`${spec.exe} not found inside ${spec.asset}`);
-
-		// Verify the licence BEFORE vendoring: a GPL binary must never reach
-		// electron/native/bin, where the packager would happily ship it.
-		console.log("Verifying licence...");
-		const banner = assertLgpl(found);
-
-		fs.mkdirSync(binDir, { recursive: true });
-		fs.copyFileSync(found, dest);
-		if (process.platform !== "win32") fs.chmodSync(dest, 0o755);
-
-		console.log(`\n${banner}`);
-		reportEncoders(dest, process.platform);
-		console.log(`\nVendored -> ${dest}`);
-		console.log("LGPL verified: safe to ship with an MIT app.");
-	} finally {
-		fs.rmSync(tmp, { recursive: true, force: true });
+	if (process.platform === "win32") {
+		await fetchSharedDlls(tag, binDir);
 	}
 }
 
