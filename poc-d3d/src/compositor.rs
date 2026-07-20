@@ -1690,19 +1690,32 @@ impl Compositor {
 
     /// Redimensionne (bilinéaire) le RT composé (OUT_W×OUT_H) vers `resize_target.rgba`, avant
     /// la conversion NV12 dans `rgb_to_nv12_scaled`.
+    ///
+    /// Mode "fit"/contain : quand `target_w`×`target_h` n'a pas le même ratio que OUT_W×OUT_H
+    /// (ex. l'utilisateur choisit un format portrait/carré alors que la scène est composée en
+    /// 16:9 interne), on NE remplit PAS tout le viewport — ça étirerait l'image de façon non
+    /// uniforme (écran + webcam déformés). On calcule une échelle uniforme (`min` des deux
+    /// ratios), on centre le rectangle résultant dans la cible, et on clear le reste en noir
+    /// (letterbox/pillarbox) — l'image composée garde son ratio d'origine quel que soit le
+    /// conteneur demandé.
     unsafe fn blit_resized(&self, target_w: u32, target_h: u32) -> Result<()> {
         self.ensure_resize_target(target_w, target_h)?;
         let cache = self.resize_target.borrow();
         let t = cache.as_ref().unwrap();
+        self.ctx.ClearRenderTargetView(&t.rgba_rtv, &[0.0, 0.0, 0.0, 1.0]);
         self.ctx.OMSetBlendState(&self.blend_none, None, 0xffffffff);
         self.ctx.OMSetRenderTargets(Some(&[Some(t.rgba_rtv.clone())]), None);
         self.ctx.PSSetShaderResources(0, Some(&[Some(self.rt_srv.clone())]));
         self.ctx.VSSetShader(&self.vs_fs, None);
         self.ctx.PSSetShader(&self.ps_tex, None);
         self.ctx.PSSetSamplers(0, Some(&[Some(self.sampler.clone())]));
+        let scale = (target_w as f32 / OUT_W as f32).min(target_h as f32 / OUT_H as f32);
+        let fit_w = OUT_W as f32 * scale;
+        let fit_h = OUT_H as f32 * scale;
         let vp = D3D11_VIEWPORT {
-            TopLeftX: 0.0, TopLeftY: 0.0,
-            Width: target_w as f32, Height: target_h as f32, MinDepth: 0.0, MaxDepth: 1.0,
+            TopLeftX: (target_w as f32 - fit_w) * 0.5,
+            TopLeftY: (target_h as f32 - fit_h) * 0.5,
+            Width: fit_w, Height: fit_h, MinDepth: 0.0, MaxDepth: 1.0,
         };
         self.ctx.RSSetViewports(Some(&[vp]));
         self.ctx.Draw(3, 0);
