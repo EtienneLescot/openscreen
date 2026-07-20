@@ -80,12 +80,19 @@ export interface CompositorViewAddon {
 	readFrame(id: number): Buffer | null;
 	setParam(id: number, key: string, value: CompositorParamValue): void;
 	setPlaying(id: number, playing: boolean): void;
-	/** Seeks the view to `seconds` (app playhead-driven). */
+	/** Seeks the view to source-media `seconds` for the active clip. */
 	presentTime(id: number, seconds: number): void;
 	/** Installs the app scene (JSON `SceneDescription`) — layout preset etc. drive the render
 	 *  instead of the fixture. Invalid JSON is ignored native-side. */
 	setScene(id: number, sceneJson: string): void;
-	setActiveClip(id: number, screenPath: string, webcamPath: string, webcamOffsetSec: number): void;
+	setActiveClip(
+		id: number,
+		screenPath: string,
+		webcamPath: string,
+		webcamOffsetSec: number,
+		clipIndex: number,
+		sourceTimeSec: number,
+	): void;
 	destroyView(id: number): void;
 	/** Renders the fixture to `outPath` (C8), auto-pausing live previews. */
 	export(outPath: string): Promise<ExportStats>;

@@ -235,7 +235,10 @@ function pickOutputDims(document: AxcutDocument): { width: number; height: numbe
 }
 
 /** Serialize a document into a {@link SceneDescription}. Pure — no per-frame math. */
-export function buildSceneDescription(document: AxcutDocument): SceneDescription {
+export function buildSceneDescription(
+	document: AxcutDocument,
+	webcamSourceSize: { width: number; height: number } | null = null,
+): SceneDescription {
 	const settings = getEditorSettings(document);
 
 	// Sort+filter the clips once, in the order they will appear in the scene's
@@ -333,10 +336,21 @@ export function buildSceneDescription(document: AxcutDocument): SceneDescription
 	// premier asset visible — la même convention que `pickOutputDims` + SCREEN_SOURCE_SIZE /
 	// WEBCAM_SOURCE_SIZE dans PreviewCanvas — ce qui garde preview/export/natif alignés.
 	const outputDims = pickOutputDims(document);
+	// ponytail: when the active camera has been probed (real webcam dims cached by
+	// WebcamOverlay's loadedmetadata handler), use them so the box matches the actual
+	// camera aspect. Without this the box defaults to a hardcoded 4:3 (960x720) and the
+	// Rust `fit_cam_aspect` closure shrinks the real content inside the wrong-aspect box,
+	// leaving visible empty margin inside the PiP container (typical case: a 16:9 webcam
+	// shipped to a 4:3 box). The probed size is keyed by sourcePath and survives across
+	// re-mounts of the same camera — `webcamSourceSize` is the dimension snapshot the
+	// caller (NativeCompositorOverlay) currently knows about.
 	const computedLayout = computeCompositeLayout({
 		canvasSize: outputDims,
 		screenSize: { width: 1920, height: 1080 },
-		webcamSize: settings.webcamLayoutPreset === "no-webcam" ? null : { width: 960, height: 720 },
+		webcamSize:
+			settings.webcamLayoutPreset === "no-webcam"
+				? null
+				: (webcamSourceSize ?? { width: 960, height: 720 }),
 		layoutPreset: settings.webcamLayoutPreset,
 		webcamSizePreset: settings.webcamSizePreset,
 		webcamPosition:

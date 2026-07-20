@@ -46,7 +46,6 @@ import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview
 import {
 	computeCameraFullscreenTargetRect,
 	computeCompositeLayout,
-	getWebcamLayoutCssBoxShadow,
 	lerpRect,
 	type WebcamCompositeLayout,
 } from "@/lib/compositeLayout";
@@ -512,24 +511,21 @@ function buildFrameStyle(
 }
 
 // Screen stage: rectangle from the composite layout, converted to percentages
-// of the canvas. The container carries the SAME borderRadius as the <video>
-// inside it (still clipped via the video's own radius, this is belt-and-
-// braces) — a box-shadow only follows the shape of the element it's applied
-// to, so a square container behind a rounded video drew a squared-off shadow
-// poking out past the video's rounded corners. Box-shadow follows the user's
-// `shadowIntensity` setting only — at intensity 0 the stage is flat so it
-// bleeds into the canvas cleanly.
+// of the canvas. Positions/sizes the interactive overlays (ZoomFocusOverlay,
+// AnnotationLayer) hosted inside it and the CSS-hidden <video> (decode/clock
+// only) — no borderRadius/boxShadow here: the native canvas already draws its
+// own rounded corners + shadow for this exact rect, and this container sits
+// on TOP of it (z-index for the interactive layers). Duplicating the same
+// decoration in CSS produced a visible "double rounded corner" — two
+// slightly-offset rounded edges (native's + this container's own) instead of
+// one.
 function buildScreenStyle(
 	layout: WebcamCompositeLayout | null,
-	settings: ReturnType<typeof useEditorSettings>["settings"],
+	_settings: ReturnType<typeof useEditorSettings>["settings"],
 	canvasSize: { width: number; height: number },
 ): React.CSSProperties {
 	if (!layout?.screenRect) return { display: "none" };
 	const r = layout.screenRect;
-	const shadow = settings.shadowIntensity
-		? `0 ${4 + settings.shadowIntensity * 20}px ${16 + settings.shadowIntensity * 36}px rgba(0,0,0,${0.18 + settings.shadowIntensity * 0.45})`
-		: undefined;
-	const borderRadius = layout.screenBorderRadius ?? settings.borderRadius;
 	return {
 		position: "absolute",
 		left: `${(r.x / canvasSize.width) * 100}%`,
@@ -538,8 +534,6 @@ function buildScreenStyle(
 		height: `${(r.height / canvasSize.height) * 100}%`,
 		overflow: "hidden",
 		display: "flex",
-		borderRadius: `${borderRadius}px`,
-		boxShadow: shadow,
 	};
 }
 
@@ -551,12 +545,14 @@ function videoBorderRadiusStyle(
 	return { borderRadius: `${borderRadius}px` };
 }
 
-// Webcam slot: full composite-layout rect with mask shape + shadow. The
-// container's own borderRadius matches r.borderRadius (same radius the inner
-// <video> clips to, and for "circle" that's already a half-dimension radius)
-// so the box-shadow — which only ever follows border-radius, never
-// clip-path — traces the same rounded/circular shape instead of a square
-// poking out behind the masked content.
+// Webcam slot: full composite-layout rect — sizes/positions the drag hitbox
+// (handleWebcamPointerDown) and the CSS-hidden webcam <video> (decode/clock
+// only). No borderRadius/boxShadow: the native canvas already draws its own
+// rounded/circular shape + shadow for this exact rect (duplicating it here
+// produced a visible "double rounded corner"). `clipPath` is kept — unlike
+// borderRadius/boxShadow it's not just decoration, it also shapes the
+// hitbox's actual pointer-event area (e.g. "circle" mask), which should still
+// match the native-drawn shape.
 function buildWebcamStyle(
 	layout: WebcamCompositeLayout | null,
 	settings: ReturnType<typeof useEditorSettings>["settings"],
@@ -575,8 +571,6 @@ function buildWebcamStyle(
 		overflow: "hidden",
 		display: "flex",
 		background: "transparent",
-		borderRadius: `${r.borderRadius}px`,
-		boxShadow: getWebcamLayoutCssBoxShadow(settings.webcamLayoutPreset as WebcamLayoutPreset),
 	};
 	return clipPath ? { ...base, clipPath } : base;
 }

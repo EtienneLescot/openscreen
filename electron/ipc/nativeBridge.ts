@@ -391,6 +391,8 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 								request.payload.screenPath,
 								request.payload.webcamPath,
 								request.payload.webcamOffsetSec,
+								request.payload.clipIndex,
+								request.payload.sourceTimeSec,
 							);
 							return createSuccessResponse(requestId, { ok: true });
 						case "destroyView":
