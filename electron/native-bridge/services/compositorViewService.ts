@@ -149,6 +149,52 @@ function buildCandidatePaths(
 	return ordered.map((candidate) => candidate.replace(/\.asar([/\\])/, ".asar.unpacked$1"));
 }
 
+/**
+ * Directories that may hold the ffmpeg shared DLLs (avcodec/avformat/avutil/…)
+ * the addon dynamically links against. Node's `require()` of a native addon
+ * does a Win32 `LoadLibrary` under the hood, which resolves dependent DLLs via
+ * the standard search order — including `PATH` — so whichever of these exists
+ * gets prepended to `process.env.PATH` before the `require()` in
+ * `tryLoadAddon`.
+ *
+ * Order: the dev-only vendored location first, then the arch-tagged bin dir
+ * under `appRoot` (dev / `electron-builder --dir` unpacked staging), then the
+ * *same* dir under `process.resourcesPath` — required for real packaged
+ * installers, since `electron/native/bin/**` ships exclusively via
+ * `extraResources` (see `electron-builder.json5`'s `files` list, which only
+ * packs `dist`/`dist-electron`) and is never inside `app.getAppPath()` there.
+ * Mirrors the appPath/resourcePath pattern `stt/gpuDetector.ts` already uses
+ * for the other native binaries in this same directory.
+ */
+export function ffmpegSharedBinCandidates(appRoot: string): string[] {
+	const tag = platformArchTag();
+	const resourcesPath =
+		typeof process.resourcesPath === "string" && process.resourcesPath.length > 0
+			? process.resourcesPath
+			: null;
+	return [
+		path.join(appRoot, "poc-d3d", "thirdparty", "ffmpeg-master-latest-win64-lgpl-shared", "bin"),
+		path.join(appRoot, "electron", "native", "bin", tag),
+		...(resourcesPath ? [path.join(resourcesPath, "electron", "native", "bin", tag)] : []),
+	];
+}
+
+/** Prepends the first existing ffmpeg shared-DLL dir to `PATH` (no-op if already present or none found). */
+function ensureFfmpegSharedDllsOnPath(appRoot: string): void {
+	if (process.platform !== "win32") {
+		return;
+	}
+	const dir = ffmpegSharedBinCandidates(appRoot).find((candidate) => fs.existsSync(candidate));
+	if (!dir) {
+		return;
+	}
+	const current = process.env.PATH ?? "";
+	if (current.split(path.delimiter).includes(dir)) {
+		return;
+	}
+	process.env.PATH = `${dir}${path.delimiter}${current}`;
+}
+
 function tryLoadAddon(candidates: string[]): CompositorViewAddon | null {
 	for (const candidate of candidates) {
 		try {
@@ -162,9 +208,12 @@ function tryLoadAddon(candidates: string[]): CompositorViewAddon | null {
 			if (loaded && typeof loaded === "object") {
 				return loaded as CompositorViewAddon;
 			}
-		} catch {
-			// try the next candidate — a single broken build
-			// shouldn't kill the addon entirely.
+		} catch (err) {
+			// log and try the next candidate — a single broken build
+			// shouldn't kill the addon entirely, but silently swallowing this
+			// is exactly what made a missing-ffmpeg-DLL failure look like a
+			// generic "addon not present" no-op.
+			console.warn(`[compositor-view] failed to load addon candidate ${candidate}:`, err);
 		}
 	}
 	return null;
@@ -192,6 +241,7 @@ export class CompositorViewService {
 		const appRoot = this.options.appRoot ?? defaultAppRoot();
 		const isPackaged = this.options.isPackaged ?? defaultIsPackaged();
 
+		ensureFfmpegSharedDllsOnPath(appRoot);
 		const candidates = buildCandidatePaths(appRoot, isPackaged, envOverride);
 		const loaded = tryLoadAddon(candidates);
 		if (!loaded) {

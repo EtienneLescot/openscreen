@@ -108,6 +108,16 @@
         "to": "electron/native/bin",
         "filter": ["win32-*/*"]
       }
+    ],
+    // Native D3D11 compositor addon (Windows-only). Built by
+    // `npm run build:native:compositor` (scripts/build-windows-compositor-addon.mjs)
+    // before packaging. Packed into asar, then auto-unpacked by the top-level
+    // `asarUnpack: ["**/*.node"]` rule to app.asar.unpacked/... — matches the
+    // `.asar` -> `.asar.unpacked` rewrite compositorViewService.ts's
+    // buildCandidatePaths() already applies for packaged builds. Appends to
+    // (doesn't replace) the top-level `files` list.
+    "files": [
+      "electron/native/compositor-view/build"
     ]
   },
   "nsis": {

@@ -1,6 +1,13 @@
 # FFMPEG_DIR relatif au dossier poc-d3d/ (portable dans le repo). Y déposer le build
 # ffmpeg LGPL-shared (voir README). LIBCLANG_PATH = install LLVM locale (bindgen).
 # Ces valeurs cèdent à une vraie variable d'environnement (force=false par défaut).
+#
+# Pinné sur le MÊME build release-branch (n8.1.2-22-g94138f6973, tag BtbN
+# autobuild-2026-07-15-14-01) que scripts/fetch-ffmpeg.mjs vendorise dans
+# electron/native/bin/<tag>/ pour le packaging — pas un snapshot "master-latest"
+# flottant. L'addon (compositor-view-napi) doit être lié à la même version de
+# ffmpeg que celle shippée, sinon les DLLs vendorisées ne matchent pas les
+# noms de DLL importés (avcodec-NN.dll etc.) et le require() échoue au runtime.
 [env]
-FFMPEG_DIR = { value = "thirdparty/ffmpeg-master-latest-win64-lgpl-shared", relative = true }
+FFMPEG_DIR = { value = "thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared", relative = true }
 LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
