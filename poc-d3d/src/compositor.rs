@@ -1267,7 +1267,18 @@ impl Compositor {
         w_dst = undistort(w_dst);
         w_dst_prev = undistort(w_dst_prev);
 
-        let s_radius = if cfg.rounded { p.screen.radius * lp.radius_scale } else { 0.0 };
+        // `roundness_px` est un px ABSOLU de la résolution de SORTIE (comme un border-radius
+        // CSS) — mais il est appliqué ici dans l'espace PRÉ-étirement 16:9. Sans correction,
+        // le même rayon en px donnerait un résultat visuel différent selon le ratio choisi
+        // (le quad écran est rétréci par `undistort` ci-dessus, mais pas le rayon) : on divise
+        // par `uniform_stretch` pour que le rayon final, après l'étirement de `blit_resized`,
+        // corresponde bien au nombre de pixels demandé quel que soit le ratio/la résolution
+        // de sortie — mode "fit" cohérent, un rayon uniforme quel que soit le conteneur.
+        let s_radius = if cfg.rounded {
+            (p.screen.radius * lp.radius_scale) / uniform_stretch.max(0.0001)
+        } else {
+            0.0
+        };
         let w_px = [w_dst[2] * OUT_W as f32, w_dst[3] * OUT_H as f32];
         // forme webcam : rayon SDF dérivé de la SEULE forme choisie. Le slider Roundness ne
         // s'applique qu'à l'ÉCRAN, jamais à la caméra. Parité web (compositeLayout) : rectangle

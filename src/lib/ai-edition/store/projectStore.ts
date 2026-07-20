@@ -26,6 +26,11 @@ export interface ProjectState {
 	error: string | null;
 	sourceDurationSec: number;
 	currentTimeSec: number;
+	/** Single source of truth for "is the timeline transport playing?" — previously
+	 *  duplicated as separate local state in NewEditorShell AND VirtualPreview, each
+	 *  independently wired to the same raw <video> DOM events, which let one advance
+	 *  a clip boundary while the other unconditionally stopped playback. */
+	playing: boolean;
 	/** True when the in-memory document has local changes that haven't been written to disk yet. */
 	dirty: boolean;
 	/** Timestamp of the most recent successful save (used by the titlebar indicator). */
@@ -43,6 +48,7 @@ export interface ProjectState {
 	setTranscript: (transcript: AxcutTranscript) => Promise<void>;
 	setSourceDuration: (sec: number) => void;
 	setCurrentTime: (sec: number) => void;
+	setPlaying: (playing: boolean) => void;
 	markClean: () => void;
 	clear: () => void;
 }
@@ -59,6 +65,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 	error: null,
 	sourceDurationSec: 0,
 	currentTimeSec: 0,
+	playing: false,
 	dirty: false,
 	lastSavedAt: null,
 
@@ -262,6 +269,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		set({ currentTimeSec: sec });
 	},
 
+	setPlaying(playing) {
+		set({ playing });
+	},
+
 	clear() {
 		set({
 			projectId: null,
@@ -271,6 +282,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 			error: null,
 			sourceDurationSec: 0,
 			currentTimeSec: 0,
+			playing: false,
 			dirty: false,
 			lastSavedAt: null,
 		});
