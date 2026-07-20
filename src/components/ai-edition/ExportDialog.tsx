@@ -319,9 +319,30 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		// cursor/effects come from the same scene as the live preview.
 		if (format === "mp4") {
 			setPhase("rendering");
+			// Render the real timeline when there are clips; else fall back to the fixture.
+			const clips = buildNativeClipList(document);
+			// Total frames the encoder will produce, known upfront from the timeline (sum of
+			// each clip's trimmed source duration) — the native side only reports frames
+			// AFTER encoding one (onNativeExportProgress), it doesn't know/send a total, so
+			// this is computed here to turn that raw count into a percentage.
+			const totalDurationSec = clips.reduce(
+				(sum, c) => sum + Math.max(0, c.sourceEndSec - c.sourceStartSec),
+				0,
+			);
+			const totalFrames = Math.max(1, Math.round(totalDurationSec * fps));
+			const startedAt = Date.now();
+			const unsubscribeProgress = window.electronAPI?.onNativeExportProgress?.((frames) => {
+				const elapsedS = (Date.now() - startedAt) / 1000;
+				const fractionDone = Math.min(1, frames / totalFrames);
+				const estimatedTimeRemaining = fractionDone > 0 ? elapsedS / fractionDone - elapsedS : 0;
+				setProgress({
+					currentFrame: frames,
+					totalFrames,
+					percentage: fractionDone * 100,
+					estimatedTimeRemaining,
+				});
+			});
 			try {
-				// Render the real timeline when there are clips; else fall back to the fixture.
-				const clips = buildNativeClipList(document);
 				const sceneJson = JSON.stringify(buildSceneDescription(document));
 				const outDims = tierOutputDims(quality);
 				const stats =
@@ -350,6 +371,8 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 				toast.error(t("exportDialog.exportFailed"), {
 					description: err instanceof Error ? err.message : String(err),
 				});
+			} finally {
+				unsubscribeProgress?.();
 			}
 			return;
 		}

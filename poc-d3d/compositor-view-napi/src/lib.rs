@@ -6,7 +6,8 @@
 //! et sont récupérés via `read_frame`.
 
 use napi::bindgen_prelude::*;
-use napi::{Env, Task};
+use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
+use napi::{Env, JsFunction, Task};
 use napi_derive::napi;
 use poc_d3d::compositor::{live_params_from_scene, Compositor};
 use poc_d3d::cursor::CursorTrack;
@@ -229,6 +230,29 @@ pub struct ExportStats {
 /// directement au bench headless. Le device/compositeur/encodeur vivent sur ce thread.
 pub struct ExportTask {
     out_path: String,
+    on_progress: Option<ThreadsafeFunction<u32, ErrorStrategy::Fatal>>,
+}
+
+/// Builds a `progress: &mut dyn FnMut(u64)` closure (the shape both `run_composited` and
+/// `run_composited_multi` already call once per encoded frame, for free — measured to not
+/// affect the C8 benchmark's fps) that forwards to `tsfn`, throttled to ~10/s. Encoding at
+/// typical export rates would otherwise cross the JS thread boundary dozens of times a
+/// second for no UI benefit; the throttle keeps that cost negligible regardless of encode
+/// speed. Always reports the very first tick (frame <= 1) so a fast/short export still
+/// shows at least one progress update instead of jumping straight to the final Promise
+/// resolution.
+fn throttled_progress(
+    tsfn: Option<ThreadsafeFunction<u32, ErrorStrategy::Fatal>>,
+) -> impl FnMut(u64) {
+    let mut last_sent = std::time::Instant::now() - std::time::Duration::from_secs(1);
+    move |frames: u64| {
+        let Some(tsfn) = &tsfn else { return };
+        let now = std::time::Instant::now();
+        if frames <= 1 || now.duration_since(last_sent).as_millis() >= 100 {
+            last_sent = now;
+            tsfn.call(frames as u32, ThreadsafeFunctionCallMode::NonBlocking);
+        }
+    }
 }
 
 /// Active/désactive la composition de toutes les previews vivantes (même process).
@@ -258,6 +282,7 @@ impl Task for ExportTask {
                 comp.set_cursor(t);
             }
             let cfg = config::all().pop().expect("au moins une config"); // C8
+            let mut progress = throttled_progress(self.on_progress.take());
             let s = pipeline::run_composited(
                 &format!("{dir}/screen.mp4"),
                 &format!("{dir}/webcam.mp4"),
@@ -265,7 +290,7 @@ impl Task for ExportTask {
                 &gpu,
                 &comp,
                 &cfg,
-                &mut |_| {},
+                &mut progress,
             )
             .map_err(|e| Error::from_reason(format!("{e:#}")))?;
             Ok((s.frames as u32, s.wall_s, s.fps, s.video_duration_s))
@@ -279,10 +304,22 @@ impl Task for ExportTask {
     }
 }
 
+/// Convertit une fonction JS optionnelle en `ThreadsafeFunction` appelable depuis le thread
+/// libuv qui exécute `Task::compute` — c'est la seule façon de rappeler JS depuis là. Chaque
+/// appel transporte juste le nombre de frames encodées (`u32`) ; le JS connaît déjà le total
+/// attendu (durée × fps des clips) et calcule le pourcentage lui-même.
+fn make_progress_tsfn(
+    f: Option<JsFunction>,
+) -> Result<Option<ThreadsafeFunction<u32, ErrorStrategy::Fatal>>> {
+    f.map(|f| f.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value])))
+        .transpose()
+}
+
 /// Lance un export natif (fixture → MP4, C8) et résout `Promise<ExportStats>`.
+/// `on_progress(framesEncodées)` optionnel — rappelé côté JS à ~10 Hz max pendant le rendu.
 #[napi]
-pub fn export(out_path: String) -> AsyncTask<ExportTask> {
-    AsyncTask::new(ExportTask { out_path })
+pub fn export(out_path: String, on_progress: Option<JsFunction>) -> Result<AsyncTask<ExportTask>> {
+    Ok(AsyncTask::new(ExportTask { out_path, on_progress: make_progress_tsfn(on_progress)? }))
 }
 
 /// Un clip de la timeline pour l'export multiclip (JS : camelCase).
@@ -321,6 +358,7 @@ pub struct ExportMultiTask {
     clips: Vec<pipeline::ClipSource>,
     scene_json: Option<String>,
     params: Option<ExportParamsInput>,
+    on_progress: Option<ThreadsafeFunction<u32, ErrorStrategy::Fatal>>,
 }
 
 impl Task for ExportMultiTask {
@@ -372,6 +410,7 @@ impl Task for ExportMultiTask {
                 }
             }
 
+            let mut progress = throttled_progress(self.on_progress.take());
             let s = pipeline::run_composited_multi(
                 &self.clips,
                 &self.out_path,
@@ -379,7 +418,7 @@ impl Task for ExportMultiTask {
                 &comp,
                 &cfg,
                 &export_params,
-                &mut |_| {},
+                &mut progress,
             )
             .map_err(|e| Error::from_reason(format!("{e:#}")))?;
             Ok((s.frames as u32, s.wall_s, s.fps, s.video_duration_s))
@@ -396,13 +435,16 @@ impl Task for ExportMultiTask {
 /// Lance un export multiclip natif (vraie timeline → MP4) et résout `Promise<ExportStats>`.
 /// `scene_json` : même `SceneDescription` que la preview (fond/layout/webcam/effets/curseur).
 /// `params` : taille/cadence/codec de sortie voulus (absent → 1920x1080/fps du 1er clip/h264).
+/// `on_progress(framesEncodées)` optionnel — rappelé côté JS à ~10 Hz max pendant le rendu ;
+/// le JS calcule lui-même le pourcentage (il connaît déjà le total attendu, durée×fps des clips).
 #[napi]
 pub fn export_multi(
     clips: Vec<ClipInput>,
     out_path: String,
     scene_json: Option<String>,
     params: Option<ExportParamsInput>,
-) -> AsyncTask<ExportMultiTask> {
+    on_progress: Option<JsFunction>,
+) -> Result<AsyncTask<ExportMultiTask>> {
     let clips = clips
         .into_iter()
         .map(|c| pipeline::ClipSource {
@@ -414,5 +456,11 @@ pub fn export_multi(
             has_audio: c.has_audio,
         })
         .collect();
-    AsyncTask::new(ExportMultiTask { out_path, clips, scene_json, params })
+    Ok(AsyncTask::new(ExportMultiTask {
+        out_path,
+        clips,
+        scene_json,
+        params,
+        on_progress: make_progress_tsfn(on_progress)?,
+    }))
 }
