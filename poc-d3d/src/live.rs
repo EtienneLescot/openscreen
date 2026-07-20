@@ -48,6 +48,41 @@ fn webcam_seek_time(screen_source_time_sec: f64, webcam_offset_sec: f64) -> f64 
     (screen_source_time_sec - webcam_offset_sec).max(0.0)
 }
 
+/// Décodeurs déjà ouverts ET positionnés au bon playhead pour un clip à venir — le résultat
+/// d'un préchargement en tâche de fond (voir `open_and_seek_clip`/`maybe_start_prefetch`
+/// dans `render_thread`). Appliquer ceci à un `Player` (`apply_prefetched`) ne fait plus
+/// aucune E/S : c'est ce qui rend la bascule à la frontière d'un clip instantanée au lieu de
+/// payer un `Decoder::open` (ouverture fichier + parsing FFmpeg) synchrone pile au moment de
+/// la transition — la pause perceptible observée en usage réel.
+struct PrefetchedClip {
+    sdec: Decoder,
+    wdec: Decoder,
+    webcam_offset_sec: f64,
+    idx: u32,
+}
+
+/// Ouvre + positionne la paire de décodeurs d'un clip (même travail que
+/// `Player::set_active_clip`, mais autonome — sans instance `Player` existante, pour pouvoir
+/// tourner sur un thread dédié pendant que le `Player` réel joue encore le clip actif).
+unsafe fn open_and_seek_clip(
+    screen_path: &str,
+    webcam_path: &str,
+    webcam_offset_sec: f64,
+    source_time_sec: f64,
+    gpu: &Gpu,
+) -> Result<PrefetchedClip> {
+    let source_time_sec = source_time_sec.max(0.0);
+    let mut sdec = Decoder::open(screen_path, gpu)?;
+    let mut wdec = Decoder::open(webcam_path, gpu)?;
+    let sf = sdec.seek_to(source_time_sec)?;
+    let wf = wdec.seek_to(webcam_seek_time(source_time_sec, webcam_offset_sec))?;
+    if sf.is_null() || wf.is_null() {
+        anyhow::bail!("clip préchargé vide au temps source {source_time_sec:.3}s (screen=\"{screen_path}\", webcam=\"{webcam_path}\")");
+    }
+    let idx = (source_time_sec * sdec.fps()).round().max(0.0) as u32;
+    Ok(PrefetchedClip { sdec, wdec, webcam_offset_sec, idx })
+}
+
 /// Lit deux sources en lockstep et compose la frame courante dans le RT du compositeur.
 /// Partagé avec la GUI standalone (`app.rs`).
 pub struct Player {
@@ -79,6 +114,10 @@ impl Player {
 
     /// Remplace atomiquement la paire de décodeurs du clip actif. Les nouvelles sources sont
     /// ouvertes et positionnées au playhead source courant avant de libérer l'ancienne paire.
+    /// Synchrone (bloque le thread appelant le temps de l'ouverture) — `render_thread` préfère
+    /// `apply_prefetched` quand un préchargement en tâche de fond est déjà prêt ; ceci reste le
+    /// repli correct dans tous les autres cas (changement de clip explicite depuis l'app,
+    /// préchargement pas encore prêt, etc).
     pub unsafe fn set_active_clip(
         &mut self,
         screen_path: &str,
@@ -86,21 +125,23 @@ impl Player {
         webcam_offset_sec: f64,
         source_time_sec: f64,
     ) -> Result<()> {
-        let source_time_sec = source_time_sec.max(0.0);
-        let mut sdec = Decoder::open(screen_path, &self.gpu)?;
-        let mut wdec = Decoder::open(webcam_path, &self.gpu)?;
-        let sf = sdec.seek_to(source_time_sec)?;
-        let wf = wdec.seek_to(webcam_seek_time(source_time_sec, webcam_offset_sec))?;
-        if sf.is_null() || wf.is_null() {
-            anyhow::bail!("clip actif vide au temps source {source_time_sec:.3}s (screen=\"{screen_path}\", webcam=\"{webcam_path}\")");
-        }
-        self.sdec = sdec;
-        self.wdec = wdec;
-        self.webcam_offset_sec = webcam_offset_sec;
+        let prefetched =
+            open_and_seek_clip(screen_path, webcam_path, webcam_offset_sec, source_time_sec, &self.gpu)?;
+        self.apply_prefetched(prefetched);
+        Ok(())
+    }
+
+    /// Bascule instantanément sur une paire de décodeurs déjà ouverte + positionnée — aucune
+    /// E/S ici, juste l'échange des champs. Utilisé par `set_active_clip` (juste après son
+    /// propre `open_and_seek_clip`) et directement par `render_thread` quand un préchargement
+    /// en tâche de fond est déjà prêt au moment de franchir la frontière du clip.
+    unsafe fn apply_prefetched(&mut self, prefetched: PrefetchedClip) {
+        self.sdec = prefetched.sdec;
+        self.wdec = prefetched.wdec;
+        self.webcam_offset_sec = prefetched.webcam_offset_sec;
         self.has_current_frame = true;
         self.use_current_on_next_step = true;
-        self.idx = (source_time_sec * self.sdec.fps()).round().max(0.0) as u32;
-        Ok(())
+        self.idx = prefetched.idx;
     }
 
     /// Temps source courant du décodeur écran — utilisé par `render_thread` pour détecter le
@@ -580,6 +621,70 @@ impl Drop for LiveView {
     }
 }
 
+/// Un préchargement en cours : quel `next_index` (dans `Scene.clips`) il prépare, et le canal
+/// par lequel le thread de fond livre le résultat une fois prêt.
+type PendingPrefetch = (usize, std::sync::mpsc::Receiver<Result<PrefetchedClip>>);
+
+/// Combien de secondes avant la fin du clip actif on lance le préchargement du suivant en
+/// tâche de fond. Assez large pour couvrir un `Decoder::open` typique (ouverture fichier +
+/// `avformat_find_stream_info` + init D3D11VA), assez court pour ne pas garder deux paires de
+/// décodeurs ouvertes plus longtemps que nécessaire.
+const PREFETCH_LEAD_SEC: f64 = 0.75;
+
+/// Démarre le préchargement du clip suivant sur un thread dédié dès qu'on entre dans la
+/// fenêtre `PREFETCH_LEAD_SEC` avant la fin du clip actif — pour que la bascule à la
+/// frontière (`advance_to_next_scene_clip`) trouve les décodeurs déjà ouverts et positionnés
+/// au lieu de payer l'E/S + le parsing FFmpeg sur le thread de rendu pile au moment de la
+/// transition (la pause perceptible observée en usage réel). No-op si un préchargement est
+/// déjà en cours, ou pour une scène à 1 clip (voir `advance_to_next_scene_clip`).
+unsafe fn maybe_start_prefetch(
+    scene: &Scene,
+    active_clip_index: usize,
+    screen_time_sec: f64,
+    gpu: &Gpu,
+    prefetch: &mut Option<PendingPrefetch>,
+) {
+    if scene.clips.len() <= 1 || prefetch.is_some() {
+        return;
+    }
+    let Some(clip) = scene.clips.get(active_clip_index) else {
+        return;
+    };
+    let remaining = clip.source_end_sec - screen_time_sec;
+    if !(0.0..PREFETCH_LEAD_SEC).contains(&remaining) {
+        return;
+    }
+    let next_index = if active_clip_index + 1 < scene.clips.len() {
+        active_clip_index + 1
+    } else {
+        0
+    };
+    let next_clip = scene.clips[next_index].clone();
+    // Copie légère (COM refcount, pas de nouveau device) — même motif que `Player::open`.
+    let gpu_clone = Gpu {
+        device: gpu.device.clone(),
+        context: gpu.context.clone(),
+        feature_level: gpu.feature_level,
+    };
+    let (tx, rx) = std::sync::mpsc::channel();
+    std::thread::spawn(move || {
+        let result = unsafe {
+            open_and_seek_clip(
+                &next_clip.screen_path,
+                &next_clip.webcam_path,
+                next_clip.webcam_offset_sec,
+                next_clip.source_start_sec,
+                &gpu_clone,
+            )
+        };
+        // L'appelant a pu abandonner ce préchargement entre-temps (changement de clip
+        // explicite, scène remplacée) — un receiver droppé fait juste échouer `send`
+        // silencieusement ; les décodeurs déjà ouverts sont libérés normalement (`Drop`).
+        let _ = tx.send(result);
+    });
+    *prefetch = Some((next_index, rx));
+}
+
 /// Bascule le `Player` + le compositeur sur le clip suivant de `scene` (reboucle sur le
 /// premier après le dernier). No-op pour une scène à 1 clip (le bouclage léger existant de
 /// `Player::step` suffit et coûte moins cher qu'un `set_active_clip` — reopen des décodeurs).
@@ -591,11 +696,17 @@ impl Drop for LiveView {
 /// `source_end_sec` déclaré, qui égale alors la durée totale du fichier — le seuil `>=` ne se
 /// déclenche jamais dans ce cas, d'où le "ça boucle sur le 1er clip" observé malgré le
 /// déclenchement proactif).
+///
+/// Si `maybe_start_prefetch` a eu le temps de préparer ce même `next_index` à l'avance, la
+/// bascule est instantanée (juste un échange de champs, `Player::apply_prefetched`) ; sinon
+/// on retombe sur l'ouverture synchrone habituelle (`Player::set_active_clip`) — correct dans
+/// tous les cas, juste plus lent quand le préchargement n'a pas eu le temps de finir.
 #[allow(clippy::too_many_arguments)]
 unsafe fn advance_to_next_scene_clip(
     player: &mut Player,
     comp: &Compositor,
     scene: &Scene,
+    prefetch: &mut Option<PendingPrefetch>,
     active_screen_path: &mut String,
     active_webcam_path: &mut String,
     active_webcam_offset_sec: &mut f64,
@@ -612,12 +723,37 @@ unsafe fn advance_to_next_scene_clip(
         0
     };
     let next_clip = &scene.clips[next_index];
-    match player.set_active_clip(
-        &next_clip.screen_path,
-        &next_clip.webcam_path,
-        next_clip.webcam_offset_sec,
-        next_clip.source_start_sec,
-    ) {
+
+    // N'importe quel préchargement en cours ne concerne plus que CETTE frontière (on vient
+    // de la franchir, bien ou mal ciblée) — on le consomme s'il correspond, on l'abandonne
+    // sinon, dans tous les cas il ne doit pas survivre à cet appel.
+    let ready = prefetch.take().and_then(|(idx, rx)| {
+        if idx == next_index { rx.try_recv().ok() } else { None }
+    });
+
+    let applied = match ready {
+        Some(Ok(prefetched)) => {
+            player.apply_prefetched(prefetched);
+            Ok(())
+        }
+        Some(Err(e)) => {
+            eprintln!("[live] préchargement du clip suivant: {e:#} — repli sur ouverture synchrone");
+            player.set_active_clip(
+                &next_clip.screen_path,
+                &next_clip.webcam_path,
+                next_clip.webcam_offset_sec,
+                next_clip.source_start_sec,
+            )
+        }
+        None => player.set_active_clip(
+            &next_clip.screen_path,
+            &next_clip.webcam_path,
+            next_clip.webcam_offset_sec,
+            next_clip.source_start_sec,
+        ),
+    };
+
+    match applied {
         Ok(()) => {
             *active_screen_path = next_clip.screen_path.clone();
             *active_webcam_path = next_clip.webcam_path.clone();
@@ -666,6 +802,12 @@ unsafe fn render_thread(
     // clip : la timeline est un niveau d'abstraction AU-DESSUS des clips, elle se lit
     // dans son entièreté et l'utilisateur ne doit jamais remarquer la frontière.
     let mut full_scene: Option<Scene> = None;
+    // Préchargement du clip suivant en cours (voir `maybe_start_prefetch`) — `None` la
+    // plupart du temps, `Some` seulement dans la fenêtre `PREFETCH_LEAD_SEC` avant une
+    // frontière de clip. Invalidé (mis à `None`) dès que le contexte qui l'a déclenché
+    // devient obsolète (nouvelle scène, changement de clip explicite) pour ne jamais risquer
+    // d'appliquer les décodeurs d'un préchargement qui ne correspond plus à la situation.
+    let mut prefetch: Option<PendingPrefetch> = None;
 
     // config de base = C8 (tous effets) ; le fond flouté est piloté par le param live.
     let mut cfg = config::all().pop().expect("au moins une config");
@@ -693,6 +835,11 @@ unsafe fn render_thread(
         let mut clip_changed = false;
         let clip_request = shared.active_clip_request.lock().unwrap().take();
         if let Some(request) = clip_request {
+            // Un changement de clip explicite depuis l'app rend obsolète tout préchargement
+            // en cours (il visait la suite du clip qu'on est en train de quitter maintenant
+            // autrement) — sans ça, `advance_to_next_scene_clip` pourrait plus tard appliquer
+            // des décodeurs qui ne correspondent plus au contexte réel.
+            prefetch = None;
             match player.set_active_clip(
                 &request.screen_path,
                 &request.webcam_path,
@@ -785,6 +932,9 @@ unsafe fn render_thread(
         // scène de l'app : appliquée au compositeur quand elle change (dirty).
         let scene_changed = shared.scene_dirty.swap(false, Ordering::Relaxed);
         if scene_changed {
+            // La nouvelle scène peut avoir réordonné/modifié les clips — tout index visé par
+            // un préchargement en cours n'est plus fiable.
+            prefetch = None;
             let scene = shared.scene.lock().unwrap().clone();
             full_scene = scene.clone();
             let scene = scene.map(|base_scene| {
@@ -846,12 +996,24 @@ unsafe fn render_thread(
                 // avait déjà dépassé la fin de la fenêtre, voire atteint l'EOF brut du
                 // fichier et rebouclé sur lui-même — d'où le "retour au 1er clip" observé.
                 if let Some(scene) = &full_scene {
+                    // Approche de la frontière : lance (ou laisse tourner) le préchargement
+                    // du clip suivant en tâche de fond, pour que la bascule ci-dessous soit
+                    // instantanée plutôt que de payer un `Decoder::open` synchrone pile au
+                    // moment de la transition — la pause perceptible observée en usage réel.
+                    maybe_start_prefetch(
+                        scene,
+                        active_clip_index,
+                        player.screen_time_sec(),
+                        &gpu,
+                        &mut prefetch,
+                    );
                     if let Some(clip) = scene.clips.get(active_clip_index) {
                         if player.screen_time_sec() >= clip.source_end_sec {
                             advance_to_next_scene_clip(
                                 &mut player,
                                 &comp,
                                 scene,
+                                &mut prefetch,
                                 &mut active_screen_path,
                                 &mut active_webcam_path,
                                 &mut active_webcam_offset_sec,
@@ -878,6 +1040,7 @@ unsafe fn render_thread(
                             &mut player,
                             &comp,
                             scene,
+                            &mut prefetch,
                             &mut active_screen_path,
                             &mut active_webcam_path,
                             &mut active_webcam_offset_sec,
