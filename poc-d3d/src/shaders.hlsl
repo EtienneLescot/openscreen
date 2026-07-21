@@ -176,9 +176,15 @@ float4 ps_main(VSOut i) : SV_Target
     // qui est inséré à l'intérieur du quad d'ombre (élargi de `spread` de chaque côté).
     if (mode > 1.5)
     {
+        // Même pré-déformation anisotrope que l'arrondi normal ci-dessous (mode 0, mb.yz =
+        // stretch_x/stretch_y) : `quad_px`/`spread` arrivent ici en px CANVAS pré-étirement
+        // (voir `Compositor::draw_shadow`, côté Rust) ; sans cette pré-déformation, le halo
+        // (et la courbure de ses coins) ressort elliptique dès que la sortie n'est pas 16:9.
         float spread = fx.x;
-        float2 halfsz = quad_px * 0.5 - spread;        // demi-taille du rect source
-        float d = sd_round_rect(i.local - quad_px * 0.5, halfsz, radius_px);
+        float2 stretch = mb.yz;
+        float2 halfsz = quad_px * 0.5 * stretch - spread; // demi-taille RÉELLE (post-étirement) du rect source
+        float2 p = (i.local - quad_px * 0.5) * stretch;
+        float d = sd_round_rect(p, halfsz, radius_px);
         float a = color.a * (1.0 - smoothstep(0.0, spread, d));
         return float4(color.rgb * a, a);
     }

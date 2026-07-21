@@ -79,6 +79,24 @@ describe("computeCompositeLayout", () => {
 		expect(landscapeArea).toBe(portraitArea);
 	});
 
+	it("keeps the webcam a modest fraction of a narrow (9:16) frame's own width", () => {
+		// Reported bug: dragging the webcam PiP felt stuck in a wide "dead band" near each
+		// edge on a 9:16 preview. Root cause was sizing off sqrt(canvasWidth*canvasHeight)
+		// (the geometric mean, which barely shrinks at an extreme aspect ratio even though the
+		// actual narrow axis is much smaller than that mean) instead of the narrow axis itself.
+		// These are the exact dims logged from a live repro: a 230x408 frame at a 34% size
+		// preset produced a 104px-wide box -- 45% of the frame's own width.
+		const layout = computeCompositeLayout({
+			canvasSize: { width: 230, height: 408 },
+			screenSize: { width: 230, height: 408 },
+			webcamSize: { width: 960, height: 720 },
+			webcamSizePreset: 34,
+		});
+		expect(layout.webcamRect).not.toBeNull();
+		const widthFraction = layout.webcamRect!.width / 230;
+		expect(widthFraction).toBeLessThan(0.4);
+	});
+
 	it("scales the webcam proportionally as webcamSizePreset increases", () => {
 		const canvasSize = { width: 1920, height: 1080 };
 		const screenSize = { width: 1920, height: 1080 };

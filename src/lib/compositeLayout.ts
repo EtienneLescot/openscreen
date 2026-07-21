@@ -463,8 +463,16 @@ export function computeCompositeLayout(params: {
 		transform.minMargin,
 		Math.round(Math.min(canvasWidth, canvasHeight) * transform.marginFraction),
 	);
-	// Geometric mean so the webcam keeps a consistent visual proportion in portrait or landscape.
-	const referenceDim = Math.sqrt(canvasWidth * canvasHeight);
+	// The SHORT axis, not the geometric mean: sqrt(w*h) sits close to the diagonal, so at an
+	// extreme aspect ratio (e.g. 9:16) it barely shrinks even though the actual narrow axis is
+	// much smaller — the webcam box then ends up a large fraction of that narrow axis, eating
+	// most of the room there is to drag it around (reported: dragging the webcam PiP felt stuck
+	// in a wide "dead band" near each edge — confirmed via logging: a 230px-wide 9:16 frame at a
+	// modest 34% size preset produced a 104px-wide box, 45% of the frame's own width). Using the
+	// short axis directly still keeps the box the same size when width/height are swapped
+	// (min(a,b) is symmetric, same as sqrt(a*b) was), but it now actually shrinks with whichever
+	// axis is the tight constraint, instead of only reacting to the frame's overall area.
+	const referenceDim = Math.min(canvasWidth, canvasHeight);
 	const maxWidth = Math.max(transform.minSize, referenceDim * MAX_STAGE_FRACTION);
 	const maxHeight = Math.max(transform.minSize, referenceDim * MAX_STAGE_FRACTION);
 	const scale = Math.min(maxWidth / webcamWidth, maxHeight / webcamHeight);
