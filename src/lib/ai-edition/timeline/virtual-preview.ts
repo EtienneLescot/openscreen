@@ -41,6 +41,52 @@ export function locateVirtualPosition(
 	};
 }
 
+/**
+ * Maps a kept segment (`AxcutClip` from `resolvePlaybackSegments`) back to its
+ * exact start position on the raw (untrimmed) document timeline.
+ */
+export function getRawVirtualStartTime(segment: AxcutClip, rawClips: AxcutClip[]): number {
+	const rawClip =
+		rawClips.find((c) => c.id === segment.id || segment.id.startsWith(`${c.id}_seg`)) ??
+		rawClips.find(
+			(c) =>
+				c.assetId === segment.assetId &&
+				segment.sourceStartSec >= c.sourceStartSec - 0.001 &&
+				(c.sourceEndSec == null || segment.sourceStartSec <= c.sourceEndSec + 0.001),
+		);
+
+	if (!rawClip) return segment.timelineStartSec;
+	return rawClip.timelineStartSec + (segment.sourceStartSec - rawClip.sourceStartSec);
+}
+
+/**
+ * Resolves the next kept segment on the virtual timeline at or after the given position.
+ * `playbackClips` (from `resolvePlaybackSegments`) is the SSOT for kept timeline content.
+ */
+export function findNextKeptSegment(
+	playbackClips: AxcutClip[],
+	rawClips: AxcutClip[],
+	currentRawTime: number,
+	activeSourceId?: string,
+	currentSourceTime?: number,
+): AxcutClip | undefined {
+	for (const seg of playbackClips) {
+		const segRawStart = getRawVirtualStartTime(seg, rawClips);
+		if (segRawStart > currentRawTime + 0.001) {
+			return seg;
+		}
+		if (
+			activeSourceId &&
+			currentSourceTime !== undefined &&
+			seg.assetId === activeSourceId &&
+			seg.sourceStartSec > currentSourceTime + 0.001
+		) {
+			return seg;
+		}
+	}
+	return undefined;
+}
+
 function toPositionAt(
 	clips: AxcutClip[],
 	clipIndex: number,
