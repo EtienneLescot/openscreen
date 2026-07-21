@@ -176,7 +176,6 @@
 		"subtitle": "Esegui il rendering della timeline in un file",
 		"addVideoBeforeExporting": "Aggiungi un video prima di esportare.",
 		"quality": "Qualità",
-		"qualityUpscaleWarning": "Upscaling",
 		"qualityMatchRecording": "Come la registrazione",
 		"frameRate": "Frame rate",
 		"codec": "Codec",
@@ -204,7 +203,8 @@
 		"exportedVideo": "Video esportato",
 		"showInFolder": "Mostra nella cartella",
 		"exportFailed": "Esportazione non riuscita",
-		"failedToWriteFile": "Impossibile scrivere il file"
+		"failedToWriteFile": "Impossibile scrivere il file",
+		"qualityUpscaleWarning": "Upscaling"
 	},
 	"inspector": {
 		"resetFocusPoint": "Reimposta punto di messa a fuoco",

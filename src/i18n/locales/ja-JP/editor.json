@@ -176,7 +176,6 @@
 		"subtitle": "タイムラインをファイルに書き出します",
 		"addVideoBeforeExporting": "エクスポートする前に動画を追加してください。",
 		"quality": "画質",
-		"qualityUpscaleWarning": "アップスケール",
 		"qualityMatchRecording": "録画と同じ",
 		"frameRate": "フレームレート",
 		"codec": "コーデック",
@@ -204,7 +203,8 @@
 		"exportedVideo": "動画をエクスポートしました",
 		"showInFolder": "フォルダーで表示",
 		"exportFailed": "エクスポートに失敗しました",
-		"failedToWriteFile": "ファイルの書き込みに失敗しました"
+		"failedToWriteFile": "ファイルの書き込みに失敗しました",
+		"qualityUpscaleWarning": "アップスケール"
 	},
 	"inspector": {
 		"resetFocusPoint": "フォーカスポイントをリセット",

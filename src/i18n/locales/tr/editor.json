@@ -176,7 +176,6 @@
 		"subtitle": "Zaman çizelgesini bir dosyaya işleyin",
 		"addVideoBeforeExporting": "Dışa aktarmadan önce bir video ekleyin.",
 		"quality": "Kalite",
-		"qualityUpscaleWarning": "Upscale",
 		"qualityMatchRecording": "Kayıtla eşleştir",
 		"frameRate": "Kare hızı",
 		"codec": "Codec",
@@ -204,7 +203,8 @@
 		"exportedVideo": "Video dışa aktarıldı",
 		"showInFolder": "Klasörde göster",
 		"exportFailed": "Dışa aktarma başarısız oldu",
-		"failedToWriteFile": "Dosya yazılamadı"
+		"failedToWriteFile": "Dosya yazılamadı",
+		"qualityUpscaleWarning": "Upscale"
 	},
 	"inspector": {
 		"resetFocusPoint": "Odak noktasını sıfırla",

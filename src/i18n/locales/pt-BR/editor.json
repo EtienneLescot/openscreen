@@ -176,7 +176,6 @@
 		"subtitle": "Renderizar a linha do tempo para um arquivo",
 		"addVideoBeforeExporting": "Adicione um vídeo antes de exportar.",
 		"quality": "Qualidade",
-		"qualityUpscaleWarning": "Upscaling",
 		"qualityMatchRecording": "Igual à gravação",
 		"frameRate": "Taxa de quadros",
 		"codec": "Codec",
@@ -204,7 +203,8 @@
 		"exportedVideo": "Vídeo exportado",
 		"showInFolder": "Mostrar na pasta",
 		"exportFailed": "Falha na exportação",
-		"failedToWriteFile": "Falha ao gravar o arquivo"
+		"failedToWriteFile": "Falha ao gravar o arquivo",
+		"qualityUpscaleWarning": "Upscaling"
 	},
 	"inspector": {
 		"resetFocusPoint": "Redefinir ponto de foco",

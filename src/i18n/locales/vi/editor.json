@@ -176,7 +176,6 @@
 		"subtitle": "Kết xuất dòng thời gian thành tệp",
 		"addVideoBeforeExporting": "Thêm video trước khi xuất.",
 		"quality": "Chất lượng",
-		"qualityUpscaleWarning": "Upscale",
 		"qualityMatchRecording": "Khớp với bản ghi",
 		"frameRate": "Tốc độ khung hình",
 		"codec": "Codec",
@@ -204,7 +203,8 @@
 		"exportedVideo": "Đã xuất video",
 		"showInFolder": "Hiện trong thư mục",
 		"exportFailed": "Xuất thất bại",
-		"failedToWriteFile": "Không thể ghi tệp"
+		"failedToWriteFile": "Không thể ghi tệp",
+		"qualityUpscaleWarning": "Upscale"
 	},
 	"inspector": {
 		"resetFocusPoint": "Đặt lại điểm lấy nét",

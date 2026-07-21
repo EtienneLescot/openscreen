@@ -176,8 +176,6 @@
 		"subtitle": "Rendre la timeline dans un fichier",
 		"addVideoBeforeExporting": "Ajoutez une vidéo avant d'exporter.",
 		"quality": "Qualité",
-		"qualityUpscaleWarning": "Upscaling",
-		"qualityDownscaleWarning": "Downscaling",
 		"qualityMatchRecording": "Comme l'enregistrement",
 		"frameRate": "Fréquence d'images",
 		"codec": "Codec",
@@ -206,7 +204,8 @@
 		"exportedVideoOf": "de vidéo exportée en",
 		"showInFolder": "Afficher dans le dossier",
 		"exportFailed": "Échec de l'export",
-		"failedToWriteFile": "Échec de l'écriture du fichier"
+		"failedToWriteFile": "Échec de l'écriture du fichier",
+		"qualityUpscaleWarning": "Upscaling"
 	},
 	"inspector": {
 		"resetFocusPoint": "Réinitialiser le point de focus",
