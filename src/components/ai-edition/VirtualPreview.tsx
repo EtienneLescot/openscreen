@@ -11,6 +11,8 @@ import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock"
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import {
 	clampVirtualTime,
+	findNextKeptSegment,
+	getRawVirtualStartTime,
 	locateSourcePosition,
 	locateVirtualPosition,
 	totalVirtualDuration,
@@ -39,25 +41,6 @@ function findNextClipByTimelineOrder(
 	return clips
 		.filter((clip) => clip.timelineStartSec > afterTimelineStartSec + 0.001)
 		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)[0];
-}
-
-/** The next KEPT (non-trimmed) source second on this asset, at or after `afterSourceTimeSec` —
- *  where the decode-clock `<video>` should jump to when its own `currentTime` has drifted into
- *  a trimmed span. `playbackClips` (see `resolvePlaybackSegments`) already only contains kept
- *  sub-windows, so "smallest sourceStartSec still ahead" IS the next un-cut content; no new
- *  interval math, just a lookup over the existing trim-narrowed list. */
-function nextKeptSourceTime(
-	playbackClips: AxcutClip[],
-	assetId: string | undefined,
-	afterSourceTimeSec: number,
-): number | null {
-	let best: number | null = null;
-	for (const clip of playbackClips) {
-		if (clip.assetId !== assetId) continue;
-		if (clip.sourceStartSec <= afterSourceTimeSec) continue;
-		if (best === null || clip.sourceStartSec < best) best = clip.sourceStartSec;
-	}
-	return best;
 }
 
 interface VirtualPreviewProps {
@@ -230,18 +213,21 @@ export function VirtualPreview({
 					activeSourceId,
 				);
 				if (!inKeptSegment) {
-					const jumpTo = nextKeptSourceTime(
+					const nextKeptSegment = findNextKeptSegment(
 						playbackClipsRef.current,
+						clipsRef.current,
+						virtualTimeSecRef.current,
 						activeSourceId,
 						v.currentTime,
 					);
-					if (jumpTo !== null) {
-						v.currentTime = jumpTo;
+					if (nextKeptSegment) {
+						const rawTargetTime = getRawVirtualStartTime(nextKeptSegment, clipsRef.current);
+						seekToVirtualTime(rawTargetTime, true);
 						return;
 					}
-					// No more kept content ahead on this asset — fall through to the existing
-					// reachedClipEnd/!position handling below (RAW clips), which already covers
-					// end-of-clip/pause correctly.
+					v.pause();
+					updateVirtualTime(virtualDurationSecRef.current);
+					return;
 				}
 			}
 			// ponytail: also push setSourceTimeSec every frame (was previously

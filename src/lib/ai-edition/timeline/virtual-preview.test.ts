@@ -2,7 +2,9 @@ import { describe, expect, it } from "vitest";
 import type { AxcutClip } from "../schema";
 import {
 	clampVirtualTime,
+	findNextKeptSegment,
 	formatSeconds,
+	getRawVirtualStartTime,
 	keptWordIdSet,
 	locateSourcePosition,
 	locateVirtualPosition,
@@ -158,5 +160,110 @@ describe("virtual-preview pure functions", () => {
 		// forcing a stale match.
 		const outOfRange = locateSourcePosition(duplicateClips, 5, "a1", 0.05, "clip_3");
 		expect(outOfRange?.clip.id).toBe("clip_1");
+	});
+
+	it("getRawVirtualStartTime maps a kept segment back to exact raw virtual start time", () => {
+		const rawClips: AxcutClip[] = [
+			{
+				id: "clip_1",
+				assetId: "a1",
+				sourceStartSec: 0,
+				sourceEndSec: 10,
+				timelineStartSec: 0,
+				timelineEndSec: 10,
+				wordRefs: [],
+				origin: "user",
+				reason: "",
+			},
+			{
+				id: "clip_2",
+				assetId: "a2",
+				sourceStartSec: 0,
+				sourceEndSec: 10,
+				timelineStartSec: 10,
+				timelineEndSec: 20,
+				wordRefs: [],
+				origin: "user",
+				reason: "",
+			},
+		];
+
+		const segClip1Part2: AxcutClip = {
+			...rawClips[0],
+			id: "clip_1_seg2",
+			sourceStartSec: 6,
+			sourceEndSec: 10,
+			timelineStartSec: 3,
+			timelineEndSec: 7,
+		};
+
+		const segClip2Part1: AxcutClip = {
+			...rawClips[1],
+			id: "clip_2",
+			sourceStartSec: 3.2,
+			sourceEndSec: 10,
+			timelineStartSec: 7,
+			timelineEndSec: 13.8,
+		};
+
+		expect(getRawVirtualStartTime(segClip1Part2, rawClips)).toBe(6);
+		expect(getRawVirtualStartTime(segClip2Part1, rawClips)).toBe(13.2);
+	});
+
+	it("findNextKeptSegment finds next kept segment across multi-clip trim boundary", () => {
+		const rawClips: AxcutClip[] = [
+			{
+				id: "clip_1",
+				assetId: "a1",
+				sourceStartSec: 0,
+				sourceEndSec: 7.5,
+				timelineStartSec: 0,
+				timelineEndSec: 7.5,
+				wordRefs: [],
+				origin: "user",
+				reason: "",
+			},
+			{
+				id: "clip_2",
+				assetId: "a2",
+				sourceStartSec: 0,
+				sourceEndSec: 7.5,
+				timelineStartSec: 7.5,
+				timelineEndSec: 15.0,
+				wordRefs: [],
+				origin: "user",
+				reason: "",
+			},
+		];
+
+		// Multi-clip trim cut 2.5..7.5 on clip_1 and 0..3.2 on clip_2.
+		// Kept segments:
+		// seg 0: clip_1, source 0..2.5, timelineStart 0
+		// seg 1: clip_2, source 3.2..7.5, timelineStart 2.5
+		const playbackClips: AxcutClip[] = [
+			{
+				...rawClips[0],
+				id: "clip_1",
+				sourceStartSec: 0,
+				sourceEndSec: 2.5,
+				timelineStartSec: 0,
+				timelineEndSec: 2.5,
+			},
+			{
+				...rawClips[1],
+				id: "clip_2",
+				sourceStartSec: 3.2,
+				sourceEndSec: 7.5,
+				timelineStartSec: 2.5,
+				timelineEndSec: 6.8,
+			},
+		];
+
+		// At current raw virtual time 2.5s (end of seg 0), next kept segment is seg 1 (clip_2)
+		const nextSeg = findNextKeptSegment(playbackClips, rawClips, 2.5, "a1", 2.5);
+		expect(nextSeg).toBeDefined();
+		expect(nextSeg?.id).toBe("clip_2");
+		expect(nextSeg?.assetId).toBe("a2");
+		expect(getRawVirtualStartTime(nextSeg!, rawClips)).toBe(10.7);
 	});
 });

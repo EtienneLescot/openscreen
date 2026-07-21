@@ -139,12 +139,12 @@ export function useNativeCompositorView(
 			rectRafHandle = requestAnimationFrame(applyRectNow);
 		};
 
+		let reusablePixels: Uint8ClampedArray | null = null;
+		let reusableImageData: ImageData | null = null;
+
 		/** rAF pull loop: throttle to ~30fps and paint the returned buffer
-		 *  into the canvas via `putImageData`. `putImageData` is the natural
-		 *  fit for a raw RGBA pixel buffer (no scaling, no compositing —
-		 *  the bytes ARE the pixels). If the GPU-readback story ever needs
-		 *  to be faster (e.g. higher refresh rates), switching to
-		 *  `createImageBitmap` + `ctx.drawImage` is a localized swap here. */
+		 *  into the canvas via createImageBitmap + drawImage (hardware GPU blitting).
+		 *  Runs decoding off the main thread so UI interactions stay at 60/120fps. */
 		const pullLoop = () => {
 			pullRafHandle = requestAnimationFrame(pullLoop);
 			if (disposed) {
@@ -174,15 +174,25 @@ export function useNativeCompositorView(
 					if (buffer.byteLength !== expected || canvas.width === 0 || canvas.height === 0) {
 						return;
 					}
-					// `buffer` is `Uint8ClampedArray<ArrayBufferLike>` (Node's Buffer
-					// generic defaults to ArrayBufferLike, which the ImageData ctor
-					// rejects — it wants `Uint8ClampedArray<ArrayBuffer>` exactly).
-					// Copying into a fresh ArrayBuffer-backed array keeps the type
-					// system happy; the memcpy is ~1ms at 1080p RGBA on a modern CPU,
-					// well under our 30fps budget.
-					const pixels = new Uint8ClampedArray(buffer.byteLength);
-					pixels.set(buffer);
-					ctx.putImageData(new ImageData(pixels, canvas.width, canvas.height), 0, 0);
+					if (!reusablePixels || reusablePixels.byteLength !== buffer.byteLength) {
+						reusablePixels = new Uint8ClampedArray(buffer.byteLength);
+						reusableImageData = new ImageData(reusablePixels, canvas.width, canvas.height);
+					}
+					reusablePixels.set(buffer);
+					if (reusableImageData) {
+						createImageBitmap(reusableImageData)
+							.then((bitmap) => {
+								if (!disposed && ctx) {
+									ctx.drawImage(bitmap, 0, 0);
+								}
+								bitmap.close();
+							})
+							.catch(() => {
+								if (!disposed && reusableImageData && ctx) {
+									ctx.putImageData(reusableImageData, 0, 0);
+								}
+							});
+					}
 				})
 				.catch((error: unknown) => {
 					console.warn("[compositor-view] readFrame failed:", error);

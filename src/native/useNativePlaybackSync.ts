@@ -17,7 +17,7 @@
  * drift (independent tickers); acceptable for the fixture (~6 s loop). A pause
  * re-aligns them.
  */
-import { useEffect, useMemo, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import {
 	getCurrentNativeViewId,
@@ -32,12 +32,13 @@ export function useNativePlaybackSync(
 	currentTimeSec: number,
 	clips: readonly AxcutClip[],
 ): void {
-	// `currentTimeSec` is the app's absolute timeline clock. Rust's live player expects the
-	// active clip's source-media clock, including its source trim offset.
-	const sourceTimeSec = useMemo(
-		() => resolveNativePlaybackPosition(clips, currentTimeSec)?.sourceTimeSec ?? null,
+	const activePosition = useMemo(
+		() => resolveNativePlaybackPosition(clips, currentTimeSec),
 		[clips, currentTimeSec],
 	);
+	const activeClipId = activePosition?.clip.id ?? null;
+	const sourceTimeSec = activePosition?.sourceTimeSec ?? null;
+
 	// Reactive "is a native view active?" so activation mid-session re-pushes the
 	// current transport/playhead (time & playing aren't memoised in the store).
 	const active = useSyncExternalStore(
@@ -53,11 +54,44 @@ export function useNativePlaybackSync(
 		setNativePlaying(playing);
 	}, [active, playing]);
 
-	// Scrub/step while paused → discrete seek (see header for why not during play).
+	// Scrub/step while paused OR periodic resync during playback when drift > 100ms
+	const lastSyncedSourceTimeRef = useRef<number | null>(null);
+	const lastSyncedWallTimeRef = useRef<number>(0);
+	const lastActiveClipIdRef = useRef<string | null>(null);
+
+	// biome-ignore lint/correctness/useExhaustiveDependencies: ref values
 	useEffect(() => {
-		if (!active || playing || sourceTimeSec === null) {
+		if (!active || sourceTimeSec === null || !activeClipId) {
 			return;
 		}
-		setNativeTime(sourceTimeSec);
-	}, [active, playing, sourceTimeSec]);
+		const now = performance.now();
+
+		// When clip changes, let setActiveClip handle the atomic clip-switch-and-seek.
+		if (lastActiveClipIdRef.current !== activeClipId) {
+			lastActiveClipIdRef.current = activeClipId;
+			lastSyncedSourceTimeRef.current = sourceTimeSec;
+			lastSyncedWallTimeRef.current = now;
+			return;
+		}
+
+		if (!playing) {
+			setNativeTime(sourceTimeSec);
+			lastSyncedSourceTimeRef.current = sourceTimeSec;
+			lastSyncedWallTimeRef.current = now;
+			return;
+		}
+		// While playing: periodically verify master clock alignment to prevent drift
+		if (lastSyncedSourceTimeRef.current === null || lastSyncedWallTimeRef.current === 0) {
+			lastSyncedSourceTimeRef.current = sourceTimeSec;
+			lastSyncedWallTimeRef.current = now;
+			return;
+		}
+		const wallElapsedSec = (now - lastSyncedWallTimeRef.current) / 1000;
+		const expectedSourceTimeSec = lastSyncedSourceTimeRef.current + wallElapsedSec;
+		if (Math.abs(sourceTimeSec - expectedSourceTimeSec) > 0.1) {
+			setNativeTime(sourceTimeSec);
+			lastSyncedSourceTimeRef.current = sourceTimeSec;
+			lastSyncedWallTimeRef.current = now;
+		}
+	}, [active, playing, activeClipId, sourceTimeSec]);
 }
