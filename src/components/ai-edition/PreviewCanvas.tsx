@@ -112,7 +112,6 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	const clockRefHolder = useRef<ReturnType<typeof createPlaybackClockRef>>();
 	if (!clockRefHolder.current) clockRefHolder.current = createPlaybackClockRef();
 	const clockRef = clockRefHolder.current;
-	const [canvasSize, setCanvasSize] = useState({ width: 1280, height: 720 });
 	// Real dimensions of the active source, from the <video>'s own
 	// onLoadedMetadata (videoWidth/videoHeight) — null until the first source
 	// loads, then falls back to SCREEN_SOURCE_SIZE.
@@ -139,7 +138,6 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	// only the effect body reruns) and just toggling observe/unobserve on it
 	// avoids ever recreating the instance, which sidesteps the bug.
 	const containerObserverRef = useRef<ResizeObserver | null>(null);
-	const canvasObserverRef = useRef<ResizeObserver | null>(null);
 
 	useEffect(() => {
 		const el = frameRef.current?.parentElement;
@@ -169,24 +167,19 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		return () => observer.unobserve(el);
 	}, []);
 
-	useEffect(() => {
-		const el = frameRef.current;
-		if (!el) return;
-		const update = () =>
-			setCanvasSize({
-				width: el.clientWidth || 1280,
-				height: el.clientHeight || 720,
-			});
-		update();
-		if (typeof ResizeObserver === "undefined") return;
-		if (!canvasObserverRef.current) {
-			canvasObserverRef.current = new ResizeObserver(update);
-		}
-		const observer = canvasObserverRef.current;
-		observer.observe(el);
-		return () => observer.unobserve(el);
-	}, []);
-
+	// ponytail: `canvasSize` used to be a SEPARATE DOM measurement of `frameRef` (its own
+	// ResizeObserver, watching the frame element after it's sized). That was a second source
+	// of truth for the exact same number `frameSize` below already computes synchronously from
+	// `containerSize` + the aspect ratio -- and being observer-driven, it could go stale
+	// relative to `frameSize` (this file's own comment above documents a known Chromium
+	// ResizeObserver double-observe/freeze failure mode; a remount of the frame element would
+	// leave this second observer watching a detached node forever). That staleness meant the
+	// webcam-position math below (which needs to agree with the frame's ACTUAL rendered size)
+	// could clamp against a WRONG canvas size after switching aspect ratio -- manifesting as
+	// "can't drag the webcam flush to the edge" at non-default ratios. `frameSize` is already
+	// exactly what the frame is styled to (`width: frameSize.width` a few lines below), so it's
+	// used directly everywhere `canvasSize` used to be — one source of truth, no separate
+	// observer that can desync from it.
 	const frameSize = useMemo(() => {
 		const ratio = getAspectRatioValue(settings.aspectRatio);
 		const { width: containerWidth, height: containerHeight } = containerSize;
@@ -220,8 +213,8 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		// at padding=100 the screen takes even more.
 		const paddingFit = clamp(1 - (clamp(settings.padding, 0, 100) / 100) * 0.4, 0.4, 1);
 		const maxContentSize = {
-			width: Math.round(canvasSize.width * paddingFit),
-			height: Math.round(canvasSize.height * paddingFit),
+			width: Math.round(frameSize.width * paddingFit),
+			height: Math.round(frameSize.height * paddingFit),
 		};
 		// The screen box must be fit to the CROPPED aspect ratio, not the full
 		// source frame's — otherwise VirtualPreview's crop math (which assumes
@@ -233,7 +226,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 			height: Math.max(1, Math.round(fullScreenSize.height * cropRegion.height)),
 		};
 		return computeCompositeLayout({
-			canvasSize,
+			canvasSize: frameSize,
 			maxContentSize,
 			screenSize: croppedScreenSize,
 			webcamSize: settings.webcamLayoutPreset === "no-webcam" ? null : WEBCAM_SOURCE_SIZE,
@@ -247,7 +240,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 			webcamMaskShape: mask,
 		});
 	}, [
-		canvasSize,
+		frameSize,
 		screenNativeSize,
 		cropRegion,
 		settings.webcamLayoutPreset,
@@ -271,7 +264,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	);
 	const effectiveLayout = useMemo<WebcamCompositeLayout | null>(() => {
 		if (!layout?.webcamRect || cameraFullscreenProgress <= 0) return layout;
-		const target = computeCameraFullscreenTargetRect(canvasSize, layout.webcamRect);
+		const target = computeCameraFullscreenTargetRect(frameSize, layout.webcamRect);
 		const fullRect = {
 			x: target.x,
 			y: target.y,
@@ -284,16 +277,16 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 			...layout,
 			webcamRect: lerpRect(layout.webcamRect, fullRect, cameraFullscreenProgress),
 		};
-	}, [layout, cameraFullscreenProgress, canvasSize]);
+	}, [layout, cameraFullscreenProgress, frameSize]);
 
 	const frameStyle = useMemo(() => buildFrameStyle(settings), [settings]);
 	const screenStyle = useMemo(
-		() => buildScreenStyle(layout, settings, canvasSize),
-		[layout, settings, canvasSize],
+		() => buildScreenStyle(layout, settings, frameSize),
+		[layout, settings, frameSize],
 	);
 	const webcamStyle = useMemo(
-		() => buildWebcamStyle(effectiveLayout, settings, canvasSize),
-		[effectiveLayout, settings, canvasSize],
+		() => buildWebcamStyle(effectiveLayout, settings, frameSize),
+		[effectiveLayout, settings, frameSize],
 	);
 	// P4 — the layout math above only knows the user's chosen preset
 	// (PiP/dual/stack), not whether the clip under the playhead actually has a

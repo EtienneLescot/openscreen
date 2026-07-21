@@ -114,7 +114,8 @@ export function NativeCompositorOverlay() {
 		try {
 			const activeWebcamPath = sources && "webcamPath" in sources ? sources.webcamPath : undefined;
 			const webcamSourceSize = activeWebcamPath ? getWebcamNativeSize(activeWebcamPath) : null;
-			setNativeScene(JSON.stringify(buildSceneDescription(document, webcamSourceSize)));
+			const scene = buildSceneDescription(document, webcamSourceSize);
+			setNativeScene(JSON.stringify(scene));
 		} catch (error) {
 			console.warn("[compositor-view] build/push scene failed:", error);
 		}
