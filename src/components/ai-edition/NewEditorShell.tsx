@@ -381,6 +381,13 @@ export function NewEditorShell() {
 		[setCurrentTime],
 	);
 
+	const handleDropAsset = useCallback(
+		(assetId: string) => {
+			void tl.insertClipAt(assetId, clips.length);
+		},
+		[tl, clips.length],
+	);
+
 	// Refs so the 'ended' listener below always sees the latest clips/playhead without
 	// tearing down and re-registering the DOM listener on every rAF-driven currentTimeSec
 	// update (which would happen every tick during playback if they were plain deps).
@@ -1313,11 +1320,9 @@ export function NewEditorShell() {
 					<V4Timeline
 						tl={tl}
 						currentTimeSec={currentTimeSec}
-						setCurrentTime={(sec) => {
-							handleSeek(sec);
-						}}
+						setCurrentTime={handleSeek}
 						variant={mode === "media" ? "media" : "edit"}
-						onDropAsset={(assetId) => void tl.insertClipAt(assetId, clips.length)}
+						onDropAsset={handleDropAsset}
 						videoSources={videoSources}
 						playing={playing}
 						loop={loop}
