@@ -176,7 +176,6 @@
 		"subtitle": "将时间轴渲染为文件",
 		"addVideoBeforeExporting": "导出前请先添加视频。",
 		"quality": "画质",
-		"qualityUpscaleWarning": "放大",
 		"qualityMatchRecording": "与录制一致",
 		"frameRate": "帧率",
 		"codec": "编码格式",
@@ -204,7 +203,8 @@
 		"exportedVideo": "视频已导出",
 		"showInFolder": "在文件夹中显示",
 		"exportFailed": "导出失败",
-		"failedToWriteFile": "写入文件失败"
+		"failedToWriteFile": "写入文件失败",
+		"qualityUpscaleWarning": "放大"
 	},
 	"inspector": {
 		"resetFocusPoint": "重置焦点",

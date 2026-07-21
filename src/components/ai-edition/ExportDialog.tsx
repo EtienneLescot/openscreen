@@ -248,25 +248,21 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		() => (document ? collectEffectiveClipDims(document, probedAssetDims) : []),
 		[document, probedAssetDims],
 	);
-	// The output is a single video at one resolution, so it's sized to the LARGEST clip's
-	// true (cropped) footprint — never gratuitously downscaling the best footage, and never
-	// treating a narrow crop as if it were the full uncropped frame. Drives both the "Source"
-	// export size and the per-tier upscale/output-size labels below.
+	// Largest clip's true (cropped) footprint — used only by the GIF export path below (its
+	// own, separate sizing option), which sizes to the best available footage the same way
+	// this dialog always has.
 	const referenceSource = useMemo(
 		() => pickExtremeDims(effectiveClipDims, "largest"),
 		[effectiveClipDims],
 	);
-	// Short side of the reference — the axis the 720p/1080p tiers target — or null
-	// while dims are still unknown (0x0 default), so tiers show no label rather
-	// than a wrong one.
-	const sourceShortSide = referenceSource
-		? Math.min(referenceSource.width, referenceSource.height)
-		: null;
 
-	// Smallest clip's true (cropped) footprint — a multiclip timeline can mix crops/
-	// resolutions, so the SAME chosen output size can be a downscale relative to the
-	// largest clip and an upscale relative to the smallest one at the same time. Both
-	// badges below need this in addition to `referenceSource` (the largest).
+	// Smallest clip's true (cropped) footprint on the timeline — a multiclip timeline can mix
+	// crops/resolutions, so this is what "Source" quality actually targets: sizing to the
+	// SMALLEST clip's own resolution means no clip on the timeline is ever upscaled past its
+	// true footprint by picking Source, which is why Source shows no upscale/downscale badge
+	// at all any more (see the tier badges below) — it's upscale-proof by construction. The
+	// fixed 720p/1080p tiers don't have that property (they can still upscale a small clip),
+	// so `smallestShortSide` below still feeds their upscale badge.
 	const smallestSource = useMemo(
 		() => pickExtremeDims(effectiveClipDims, "smallest"),
 		[effectiveClipDims],
@@ -294,14 +290,16 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 			? getNativeAspectRatioValue(rawReferenceSource.width, rawReferenceSource.height)
 			: getAspectRatioValue(timelineAspect);
 	// Output dimensions the export will produce for a given tier, from the (crop-aware)
-	// reference source — so each tier's subtitle is the real pixel size, and "Source"
-	// quality never upscales a crop past its own true resolution.
+	// SMALLEST clip on the timeline — see `smallestSource` above for why. Only "Source"
+	// quality actually uses these as its target size; 720p/1080p target a fixed short side
+	// regardless (`calculateDimensionsForShortSide`), so this only changes what "Source"
+	// resolves to.
 	const tierOutputDims = (value: ExportQuality) =>
-		referenceSource
+		smallestSource
 			? calculateMp4ExportSettings({
 					quality: value,
-					sourceWidth: referenceSource.width,
-					sourceHeight: referenceSource.height,
+					sourceWidth: smallestSource.width,
+					sourceHeight: smallestSource.height,
 					aspectRatioValue: EXPORT_ASPECT,
 				})
 			: null;
@@ -543,22 +541,25 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 									{(() => {
 										const dims = tierOutputDims(q.value);
 										if (!dims) return null;
+										// Downscale badge removed everywhere — restated what picking a lower
+										// tier already means, not actionable. Upscale badge removed only for
+										// "Source": it's upscale-proof by construction now (targets the
+										// smallest clip), so the warning never meant anything there. The fixed
+										// 720p/1080p tiers can still genuinely upscale a small clip, so that
+										// badge stays relevant for them.
 										const outShortSide = Math.min(dims.width, dims.height);
-										// A multiclip timeline can mix resolutions — the chosen output size can
-										// be a downscale relative to the LARGEST clip and an upscale relative to
-										// the SMALLEST one at the same time, so both badges can show together.
-										const isDownscale = sourceShortSide !== null && outShortSide < sourceShortSide;
 										const isUpscale =
-											smallestShortSide !== null && outShortSide > smallestShortSide;
+											q.value !== "source" &&
+											smallestShortSide !== null &&
+											outShortSide > smallestShortSide;
 										return (
 											<span
 												style={{
 													font: "500 11px var(--font-body)",
-													color: isDownscale || isUpscale ? "var(--warn)" : "var(--muted)",
+													color: isUpscale ? "var(--warn)" : "var(--muted)",
 												}}
 											>
 												{dims.width} × {dims.height}
-												{isDownscale ? ` · ${t("exportDialog.qualityDownscaleWarning")}` : ""}
 												{isUpscale ? ` · ${t("exportDialog.qualityUpscaleWarning")}` : ""}
 											</span>
 										);

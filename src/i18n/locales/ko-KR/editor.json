@@ -176,7 +176,6 @@
 		"subtitle": "타임라인을 파일로 렌더링합니다",
 		"addVideoBeforeExporting": "내보내기 전에 동영상을 추가하세요.",
 		"quality": "화질",
-		"qualityUpscaleWarning": "업스케일",
 		"qualityMatchRecording": "녹화와 동일",
 		"frameRate": "프레임 속도",
 		"codec": "코덱",
@@ -204,7 +203,8 @@
 		"exportedVideo": "동영상 내보내기 완료",
 		"showInFolder": "폴더에서 보기",
 		"exportFailed": "내보내기 실패",
-		"failedToWriteFile": "파일 쓰기에 실패했습니다"
+		"failedToWriteFile": "파일 쓰기에 실패했습니다",
+		"qualityUpscaleWarning": "업스케일"
 	},
 	"inspector": {
 		"resetFocusPoint": "포커스 지점 재설정",
