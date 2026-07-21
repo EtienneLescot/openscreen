@@ -20,6 +20,7 @@
 //! `Mutex<Option<(u32, u32, Vec<u8>)>>` pour la traversée de threads vers le napi.
 
 use crate::compositor::{Compositor, LiveParams};
+use crate::regions::speed_at;
 use crate::scene::Scene;
 use crate::config::{self, Cfg};
 use crate::cursor::CursorTrack;
@@ -1008,10 +1009,26 @@ unsafe fn render_thread(
             }
             acc = 0.0; // resynchronise l'accumulateur de lecture libre après un seek
         } else if shared.playing.load(Ordering::Relaxed) {
-            acc += dt;
+            // BUG corrigé : la lecture libre décodait toujours exactement 1 frame par tick de
+            // 1/60s réel, quelle que soit la speed region active au temps source courant — ni
+            // l'écran ni la webcam n'accéléraient/ralentissaient jamais en preview live (seul
+            // l'export, via `speed_segments_for_window`/`advance_decoder_to` dans pipeline.rs,
+            // retimait correctement). Mod 3 corrige déjà le fps-mismatch webcam/écran (la webcam
+            // suit le temps source RÉEL de l'écran, pas un pas 1:1) — reprend ici la même idée :
+            // l'accumulateur de temps réel est mis à l'échelle par le multiplicateur de vitesse
+            // actif, donc `step()` (qui resynchronise la webcam sur le temps écran courant,
+            // cf. plus haut) décode plus/moins de frames par seconde réelle selon la région.
+            let speed = full_scene
+                .as_ref()
+                .map(|scene| speed_at(&scene.speed_regions, active_clip_index, player.screen_time_sec()))
+                .unwrap_or(1.0);
+            acc += dt * speed;
             let step = 1.0 / 60.0;
             let mut n = 0;
-            while acc >= step && n < 3 {
+            // Cap proportionnel à la vitesse (borné) : à vitesse élevée, plus de frames doivent
+            // être décodées par tick réel pour ne pas prendre du retard sur l'accumulateur.
+            let max_steps = ((3.0 * speed.max(1.0)).ceil() as i32).min(64);
+            while acc >= step && n < max_steps {
                 // Timeline = niveau d'abstraction AU-DESSUS des clips : dès que le décodeur
                 // écran atteint la fin de fenêtre du clip actif, on enchaîne nous-mêmes sur
                 // le clip suivant (ou on reboucle sur le premier après le dernier) — sans

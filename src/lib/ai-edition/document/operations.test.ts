@@ -69,6 +69,54 @@ describe("applyTimelineOperation.add_trim_range", () => {
 		expect(skip?.startSec).toBe(4);
 		expect(skip?.endSec).toBe(10);
 	});
+
+	it("preserves an existing trim on a DIFFERENT asset (multi-clip transcript pane repro)", () => {
+		const doc = makeDoc();
+		const otherAsset = {
+			id: "asset_2",
+			kind: "video" as const,
+			label: "Recording 2",
+			originalPath: "C:/videos/rec2.mp4",
+			durationSec: 30,
+		};
+		const docWithTwoAssets: AxcutDocument = {
+			...doc,
+			assets: [...doc.assets, otherAsset],
+			timeline: {
+				...doc.timeline,
+				clips: [
+					...doc.timeline.clips,
+					{
+						id: "clip_2",
+						assetId: otherAsset.id,
+						sourceStartSec: 0,
+						sourceEndSec: 30,
+						timelineStartSec: 60,
+						timelineEndSec: 90,
+						wordRefs: [],
+						origin: "user",
+						reason: "",
+					},
+				],
+			},
+		};
+		// Edit clip 1's word (asset_1) first...
+		const afterFirst = applyTimelineOperation(docWithTwoAssets, {
+			type: "add_trim_range",
+			assetId: "asset_1",
+			startSec: 5,
+			endSec: 8,
+		}).document;
+		// ...then edit clip 2's word (asset_2) — this must NOT wipe asset_1's trim.
+		const afterSecond = applyTimelineOperation(afterFirst, {
+			type: "add_trim_range",
+			assetId: "asset_2",
+			startSec: 2,
+			endSec: 4,
+		}).document;
+		expect(afterSecond.timeline.trimRanges.filter((s) => s.assetId === "asset_1")).toHaveLength(1);
+		expect(afterSecond.timeline.trimRanges.filter((s) => s.assetId === "asset_2")).toHaveLength(1);
+	});
 });
 
 describe("applyTimelineOperation.drop_range", () => {

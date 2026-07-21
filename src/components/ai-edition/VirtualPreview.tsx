@@ -4,6 +4,7 @@ import {
 	DEFAULT_CROP_REGION,
 	MAX_NATIVE_PLAYBACK_RATE,
 } from "@/components/video-editor/types";
+import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
 import type { AxcutClip, AxcutTrimRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
@@ -38,6 +39,25 @@ function findNextClipByTimelineOrder(
 	return clips
 		.filter((clip) => clip.timelineStartSec > afterTimelineStartSec + 0.001)
 		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)[0];
+}
+
+/** The next KEPT (non-trimmed) source second on this asset, at or after `afterSourceTimeSec` —
+ *  where the decode-clock `<video>` should jump to when its own `currentTime` has drifted into
+ *  a trimmed span. `playbackClips` (see `resolvePlaybackSegments`) already only contains kept
+ *  sub-windows, so "smallest sourceStartSec still ahead" IS the next un-cut content; no new
+ *  interval math, just a lookup over the existing trim-narrowed list. */
+function nextKeptSourceTime(
+	playbackClips: AxcutClip[],
+	assetId: string | undefined,
+	afterSourceTimeSec: number,
+): number | null {
+	let best: number | null = null;
+	for (const clip of playbackClips) {
+		if (clip.assetId !== assetId) continue;
+		if (clip.sourceStartSec <= afterSourceTimeSec) continue;
+		if (best === null || clip.sourceStartSec < best) best = clip.sourceStartSec;
+	}
+	return best;
 }
 
 interface VirtualPreviewProps {
@@ -151,6 +171,22 @@ export function VirtualPreview({
 	// mutation.
 	const clipsRef = useRef(clips);
 	clipsRef.current = clips;
+	// Trim-narrowed (`resolvePlaybackSegments`) — used ONLY to detect "has the <video>'s own
+	// currentTime drifted into a trim" and where to jump it back out to. Everything ELSE in
+	// this component (`clips`/`clipsRef` above, virtualTimeSec, zoom/speed region lookups,
+	// what gets reported via `onTimeChange`) stays on the RAW/document timeline — the same
+	// coordinate space the ruler, zoom/speed regions, and the trim marker itself use. Keeping
+	// these two lists separate (rather than swapping `clips` itself to the trim-narrowed one)
+	// is what makes the reported playhead jump OVER a trim marker instead of drifting out of
+	// sync with it: `locateSourcePosition` below, fed RAW clips, maps the underlying video's
+	// source time to a RAW virtual time that jumps discontinuously by exactly the trim's
+	// width the moment the video itself jumps — matching the marker's own pixel span.
+	const playbackClips = useMemo(
+		() => resolvePlaybackSegments(clips, trimRanges),
+		[clips, trimRanges],
+	);
+	const playbackClipsRef = useRef(playbackClips);
+	playbackClipsRef.current = playbackClips;
 	const videoSourcesRef = useRef(videoSources);
 	videoSourcesRef.current = videoSources;
 	const sourceIndexRef = useRef(sourceIndex);
@@ -161,8 +197,6 @@ export function VirtualPreview({
 	virtualDurationSecRef.current = virtualDurationSec;
 	const speedRegionsRef = useRef(speedRegions);
 	speedRegionsRef.current = speedRegions;
-	const trimRangesRef = useRef(trimRanges);
-	trimRangesRef.current = trimRanges;
 	// biome-ignore lint/correctness/useExhaustiveDependencies: re-create the rAF when the active source swaps.
 	useEffect(() => {
 		let raf = 0;
@@ -182,32 +216,32 @@ export function VirtualPreview({
 				clockRef.current.virtualTimeSec = virtualTimeSecRef.current;
 			}
 			const activeSourceId = videoSourcesRef.current[sourceIndexRef.current]?.id;
-			// Trim regions only trim ahead during actual playback — mirrors
-			// main's videoEventHandlers.ts (findActiveTrimRegion + jump to
-			// endMs, gated on `!video.paused`). Scrubbing/paused seeks are
-			// intentionally NOT clamped: the user can navigate freely inside
-			// a trim while editing; only Play/export treats it as a cut.
+			// Trims only trim ahead during actual playback — scrubbing/paused seeks are
+			// intentionally NOT clamped, so the user can navigate freely into a trim while
+			// editing; only Play/export treats it as a cut (mirrors the pre-existing intent
+			// this replaces). Jump is on the SOURCE clock only: the RAW virtual-time report
+			// below (locateSourcePosition against `clipsRef.current`, unchanged) naturally
+			// jumps by the trim's exact width the instant `v.currentTime` does, so the ruler's
+			// playhead visually skips the trim marker instead of drifting through it.
 			if (!v.paused) {
-				const activeTrim = trimRangesRef.current.find(
-					(trim) =>
-						trim.assetId === activeSourceId &&
-						v.currentTime >= trim.startSec &&
-						v.currentTime < trim.endSec,
+				const inKeptSegment = locateSourcePosition(
+					playbackClipsRef.current,
+					v.currentTime,
+					activeSourceId,
 				);
-				if (activeTrim) {
-					if (activeTrim.endSec >= (v.duration || Infinity)) {
-						v.pause();
-					} else {
-						// ponytail: seeking to exactly `endSec` can land the decoder a
-						// hair before it (frame/sample quantization), which still
-						// satisfies `currentTime < trim.endSec` — the next tick
-						// re-seeks to the same spot, forever, so playback never
-						// actually progresses past the trim (looked like a hard
-						// stop instead of an invisible cut). A small epsilon past
-						// the boundary guarantees each re-check reads past it.
-						v.currentTime = activeTrim.endSec + 0.05;
+				if (!inKeptSegment) {
+					const jumpTo = nextKeptSourceTime(
+						playbackClipsRef.current,
+						activeSourceId,
+						v.currentTime,
+					);
+					if (jumpTo !== null) {
+						v.currentTime = jumpTo;
+						return;
 					}
-					return;
+					// No more kept content ahead on this asset — fall through to the existing
+					// reachedClipEnd/!position handling below (RAW clips), which already covers
+					// end-of-clip/pause correctly.
 				}
 			}
 			// ponytail: also push setSourceTimeSec every frame (was previously

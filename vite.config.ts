@@ -34,6 +34,17 @@ export default defineConfig({
 			"@": path.resolve(__dirname, "src"),
 		},
 	},
+	server: {
+		watch: {
+			// Nested worktrees (`.claude/worktrees/**`) and delegate task checkouts
+			// (`.cc-delegate/**`) each carry their own full copy of the repo, including
+			// their own vite/tsconfig files. Without this, deleting/touching one (e.g.
+			// `git worktree remove`) fires hundreds of change events across the main
+			// dev server, forcing repeated full-reloads unrelated to any real source
+			// change — observed as the running app going unresponsive/stale mid-session.
+			ignored: ["**/.claude/worktrees/**", "**/.cc-delegate/**"],
+		},
+	},
 	build: {
 		target: "esnext",
 		minify: "terser",
