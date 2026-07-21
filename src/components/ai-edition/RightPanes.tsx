@@ -499,10 +499,10 @@ export function TranscriptPane({
 		[clips, transcripts, assets, trimRanges],
 	);
 
-	// the cue position is the playback head's location in the
-	// current clip's source time. `locateVirtualPosition` already accounts
-	// for skip ranges and clipped durations — the cue word naturally
-	// jumps over gaps the user has trimmed.
+	// the cue position is the playback head's location in the current clip's source time.
+	// `currentTimeSec` is the RAW/document timeline (same referential as the ruler, see
+	// NewEditorShell) — looked up against the raw `clips`, matching that referential.
+	// `findCueWordId` only reads `assetId`/`sourceTimeSec` off the result.
 	const cue = useMemo(() => {
 		if (clips.length === 0) return null;
 		const position = locateVirtualPosition(clips, currentTimeSec);

@@ -66,6 +66,33 @@ pub fn speed_segments_for_window(
     spans
 }
 
+/// Multiplicateur de vitesse actif au temps source `t` (temps ABSOLU de la source, même
+/// convention que `SceneSpeedRegion.start_sec`/`end_sec` — pas de fenêtre de clip à soustraire).
+/// 1.0 hors de toute région. Utilisé par la preview live (`live.rs`) pour moduler le nombre de
+/// frames décodées par tick réel — contrairement à `speed_segments_for_window` (export), qui a
+/// besoin de pré-découper toute la fenêtre en spans pour connaître le compte de frames total à
+/// l'avance, la lecture live avance tick par tick et n'a besoin que de la vitesse "maintenant".
+///
+/// BUG corrigé : ignorait `region.clip_index`, filtrant seulement par recouvrement temporel sur
+/// la scène BRUTE (non filtrée par clip) — dès qu'un projet a plus d'un clip, deux clips peuvent
+/// tout à fait partager la même fenêtre de temps source (chacun démarrant près de t=0 de son
+/// propre fichier, cas courant), et la région du MAUVAIS clip matchait alors silencieusement (ou
+/// aucune ne matchait quand le clip actif est censé être couvert par une région tournée d'un
+/// autre index). Même garde-fou que `Scene::for_clip_window`'s `belongs` (scene.rs) : accepte la
+/// région seulement si `clip_index` est absent (vieux payload) OU vaut `active_clip_index`.
+pub fn speed_at(regions: &[SceneSpeedRegion], active_clip_index: usize, t: f64) -> f64 {
+    for region in regions {
+        let belongs = region.clip_index.map(|i| i == active_clip_index).unwrap_or(true);
+        if belongs && t >= region.start_sec && t < region.end_sec {
+            if region.speed.is_finite() && region.speed > 0.0 {
+                return region.speed;
+            }
+            return 1.0;
+        }
+    }
+    1.0
+}
+
 fn push_speed_segment(
     spans: &mut Vec<SpeedSegment>,
     start_sec: f64,

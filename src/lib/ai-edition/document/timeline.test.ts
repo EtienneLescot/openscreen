@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { AxcutClip, AxcutDocument } from "../schema";
+import type { AxcutClip, AxcutDocument, AxcutTrimRange } from "../schema";
 import {
 	buildTimelineFromIntervals,
 	duplicateClip,
@@ -8,6 +8,7 @@ import {
 	normalizeIntervals,
 	primaryAssetDuration,
 	replaceTimeline,
+	resolvePlaybackSegments,
 	restoreFullTimeline,
 	subtractInterval,
 	timelineIntervals,
@@ -245,6 +246,122 @@ function makeClip(overrides: Partial<AxcutClip> = {}): AxcutClip {
 		...overrides,
 	};
 }
+
+function makeTrim(overrides: Partial<AxcutTrimRange> = {}): AxcutTrimRange {
+	return {
+		id: "trim_1",
+		assetId: "asset_1",
+		startSec: 0,
+		endSec: 0,
+		origin: "user",
+		reason: "",
+		...overrides,
+	};
+}
+
+describe("resolvePlaybackSegments", () => {
+	it("splits a clip around an interior trim into two contiguous segments", () => {
+		const clip = makeClip({
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const trim = makeTrim({ startSec: 4, endSec: 6 });
+		const segments = resolvePlaybackSegments([clip], [trim]);
+		expect(segments).toHaveLength(2);
+		expect(segments[0]).toMatchObject({
+			sourceStartSec: 0,
+			sourceEndSec: 4,
+			timelineStartSec: 0,
+			timelineEndSec: 4,
+		});
+		expect(segments[1]).toMatchObject({
+			sourceStartSec: 6,
+			sourceEndSec: 10,
+			timelineStartSec: 4,
+			timelineEndSec: 8,
+		});
+	});
+
+	it("leaves a clip untouched when the trim belongs to a different asset", () => {
+		const clip = makeClip({ assetId: "asset_1", sourceStartSec: 0, sourceEndSec: 10 });
+		const trim = makeTrim({ assetId: "asset_2", startSec: 2, endSec: 4 });
+		const segments = resolvePlaybackSegments([clip], [trim]);
+		expect(segments).toHaveLength(1);
+		expect(segments[0]).toMatchObject({ sourceStartSec: 0, sourceEndSec: 10 });
+	});
+
+	it("drops a clip entirely when a trim fully covers it", () => {
+		const clip = makeClip({ sourceStartSec: 0, sourceEndSec: 10 });
+		const trim = makeTrim({ startSec: 0, endSec: 10 });
+		expect(resolvePlaybackSegments([clip], [trim])).toHaveLength(0);
+	});
+
+	it("narrows both clips when a trim is ventilated across a clip boundary (two DSL rows)", () => {
+		// Mirrors ventilateTimelineSpanToTrims's own output shape: one row per covered clip.
+		const clipA = makeClip({
+			id: "clip_a",
+			assetId: "asset_1",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const clipB = makeClip({
+			id: "clip_b",
+			assetId: "asset_1",
+			sourceStartSec: 10,
+			sourceEndSec: 20,
+			timelineStartSec: 10,
+			timelineEndSec: 20,
+		});
+		const trims = [
+			makeTrim({ id: "t1", startSec: 8, endSec: 10 }),
+			makeTrim({ id: "t2", startSec: 10, endSec: 12 }),
+		];
+		const segments = resolvePlaybackSegments([clipA, clipB], trims);
+		expect(segments).toHaveLength(2);
+		expect(segments[0]).toMatchObject({
+			sourceStartSec: 0,
+			sourceEndSec: 8,
+			timelineStartSec: 0,
+			timelineEndSec: 8,
+		});
+		expect(segments[1]).toMatchObject({
+			sourceStartSec: 12,
+			sourceEndSec: 20,
+			timelineStartSec: 8,
+			timelineEndSec: 16,
+		});
+	});
+
+	it("does not let a trim on one clip affect an unrelated same-asset clip elsewhere", () => {
+		// Regression guard for the exact cross-clip bug just fixed in operations.ts:
+		// two clips of the SAME asset, non-adjacent source windows; a trim scoped to
+		// the first must not touch the second.
+		const clipA = makeClip({
+			id: "clip_a",
+			sourceStartSec: 0,
+			sourceEndSec: 5,
+			timelineStartSec: 0,
+			timelineEndSec: 5,
+		});
+		const clipB = makeClip({
+			id: "clip_b",
+			sourceStartSec: 50,
+			sourceEndSec: 55,
+			timelineStartSec: 5,
+			timelineEndSec: 10,
+		});
+		const trim = makeTrim({ startSec: 1, endSec: 2 });
+		const segments = resolvePlaybackSegments([clipA, clipB], [trim]);
+		expect(segments.find((s) => s.id === "clip_b")).toMatchObject({
+			sourceStartSec: 50,
+			sourceEndSec: 55,
+		});
+	});
+});
 
 describe("duplicateClip / moveClip", () => {
 	it("duplicateClip gives the copy a fresh, collision-free id even when called repeatedly", () => {

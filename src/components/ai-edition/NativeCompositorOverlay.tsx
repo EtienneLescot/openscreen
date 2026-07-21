@@ -52,8 +52,15 @@ export function NativeCompositorOverlay() {
 		() => 0,
 	);
 
-	// Match buildSceneDescription's sorted+visible clip stream exactly. The resulting index is
-	// sent to Rust because paths/offsets cannot distinguish multiple cuts of one source asset.
+	// BUG corrigé : ceci pointait vers `resolveVisibleClips` (compacté, trim-rétréci) alors que
+	// `currentTimeSec` reste — et doit rester — le temps RAW/document (voir NewEditorShell) :
+	// un trim ne change jamais quel ASSET/fichier est actif (seul un changement de clip source
+	// le fait), donc cette détection de "playhead entré dans un autre clip" (→ setActiveClip,
+	// bascule de la paire écran/webcam) n'a besoin d'aucune connaissance des trims — juste la
+	// liste RAW triée/filtrée, dans le même référentiel que `currentTimeSec`. Le flux
+	// Le flux COMPACTÉ (`resolveVisibleClips`, dans `buildSceneDescription` ci-dessous) reste
+	// utilisé pour la SCÈNE envoyée au natif (`setNativeScene`), qui elle doit bien refléter
+	// les trims.
 	const nativeClips = useMemo(() => {
 		if (!document) return [];
 		const assetById = new Map(document.assets.map((asset) => [asset.id, asset]));

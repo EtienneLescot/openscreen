@@ -130,6 +130,16 @@ export function NewEditorShell() {
 	const clips: AxcutClip[] = document?.timeline.clips ?? [];
 	// Mirror transport/playhead onto the native compositor view (no-op if inactive). The hook
 	// maps absolute timeline time into the active clip's trimmed source-media clock.
+	//
+	// BUG corrigé : `currentTimeSec` est — et doit rester — la position sur le timeline
+	// RAW/document (celle de la règle, des zoom/speed regions, du marqueur de trim
+	// lui-même). Un instant, `<Preview>` et ce hook recevaient une liste de clips COMPACTÉE
+	// (trim-rétrécie) alors que `currentTimeSec` restait RAW — la tête de lecture visuelle
+	// (règle) et le clock de lecture (natif/scrub) se retrouvaient dans deux référentiels
+	// différents : le marqueur de trim ne représentait plus rien de cohérent, et la tête de
+	// lecture le traversait au lieu de le sauter. Voir `VirtualPreview.tsx` pour où le saut
+	// par-dessus un trim doit réellement se produire (sur l'horloge SOURCE du <video>, pas
+	// sur le timeline virtuel rapporté au parent).
 	useNativePlaybackSync(playing, currentTimeSec, clips);
 	const hasProject = Boolean(document);
 	const hasAsset = projectId !== null && (document?.assets.length ?? 0) > 0;
@@ -568,30 +578,28 @@ export function NewEditorShell() {
 	// apps/web/src/App.tsx.
 	const handleAddTrimRange = useCallback(
 		(assetId: string, startSec: number, endSec: number, reason: string) => {
-			// ponytail: read the latest document from the store, not the
-			// closure. The closure captures the document at render time; if
-			// the user fires two rapid Backspaces before React re-renders,
-			// the second call would see the same stale document and add the
-			// second skip to a base that already has the first skip's
-			// pending-state. Then the two saveDocument calls race and the
-			// last one to call set() wins. Reading from getState() always
-			// returns the latest committed value.
-			const doc = useProjectStore.getState().document ?? document;
-			if (!doc) return;
-			// ponytail: serialise via saveQueueRef so two rapid trims
-			// can't race each other's IPC save and overwrite one another.
+			// BUG corrigé : `doc` était lu de façon SYNCHRONE au moment de l'appel, puis seule la
+			// SAUVEGARDE était sérialisée via `saveQueueRef` — pas la LECTURE. Éditer le clip 1 puis
+			// le clip 2 avant que la chaîne async du premier save (import() + applyTimelineOperation +
+			// saveDocument, qui fait un aller-retour IPC) n'ait commit dans le store faisait lire au
+			// second appel le MÊME doc pré-edit-1 ; son propre saveDocument(next.document) écrasait
+			// alors le store avec un doc qui contient le trim du clip 2 mais PAS celui du clip 1 — les
+			// edits du clip 1 disparaissaient. La lecture doit donc elle aussi être mise dans la
+			// chaîne, après avoir attendu le tour précédent, pour toujours partir du doc déjà commit.
 			const queued = saveQueueRef.current
 				.then(() => import("@/lib/ai-edition/document/operations"))
-				.then(({ applyTimelineOperation }) =>
-					applyTimelineOperation(doc, {
+				.then(({ applyTimelineOperation }) => {
+					const doc = useProjectStore.getState().document ?? document;
+					if (!doc) return null;
+					return applyTimelineOperation(doc, {
 						type: "add_trim_range",
 						assetId,
 						startSec,
 						endSec,
 						reason,
-					}),
-				)
-				.then((next) => saveDocument(next.document));
+					});
+				})
+				.then((next) => next && saveDocument(next.document));
 			saveQueueRef.current = queued.then(
 				() => undefined,
 				() => undefined,
@@ -603,18 +611,20 @@ export function NewEditorShell() {
 
 	const handleRemoveTrimRange = useCallback(
 		(trimId: string) => {
-			const doc = useProjectStore.getState().document ?? document;
-			if (!doc) return;
+			// See handleAddTrimRange above — same fix: the document read must be
+			// inside the queued chain, after awaiting the previous save.
 			const queued = saveQueueRef.current
 				.then(() => import("@/lib/ai-edition/document/operations"))
-				.then(({ applyTimelineOperation }) =>
-					applyTimelineOperation(doc, {
+				.then(({ applyTimelineOperation }) => {
+					const doc = useProjectStore.getState().document ?? document;
+					if (!doc) return null;
+					return applyTimelineOperation(doc, {
 						type: "remove_trim_range",
 						trimId,
 						reason: "Restored from transcript pane.",
-					}),
-				)
-				.then((next) => saveDocument(next.document));
+					});
+				})
+				.then((next) => next && saveDocument(next.document));
 			saveQueueRef.current = queued.then(
 				() => undefined,
 				() => undefined,

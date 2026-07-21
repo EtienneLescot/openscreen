@@ -178,6 +178,14 @@ export function applyTimelineOperation(
 			if (!assetId) return { document, summary: "no asset to trim" };
 			const lo = Math.max(0, Math.min(op.startSec, op.endSec));
 			const hi = Math.max(lo, Math.max(op.startSec, op.endSec));
+			// BUG corrigé : `merged` (calculé UNIQUEMENT à partir des trims de CET assetId)
+			// remplaçait ensuite `document.timeline.trimRanges` EN ENTIER — les trims de tout
+			// autre asset (donc tout autre clip, dès qu'un projet a plus d'un enregistrement)
+			// disparaissaient silencieusement dès qu'on ajoutait un trim sur un asset différent.
+			// C'est exactement le "éditer le clip 2 efface les edits du clip 1" observé : les deux
+			// clips du repro pointent vers deux fichiers distincts. Il faut conserver les trims des
+			// AUTRES assets tels quels et ne remplacer que la tranche de CET asset.
+			const otherAssetsRanges = document.timeline.trimRanges.filter((s) => s.assetId !== assetId);
 			const existing = document.timeline.trimRanges.filter((s) => s.assetId === assetId);
 			// ponytail: bound by the trim-range asset's duration, not the
 			// primary asset's. Recording projects can have a short primary
@@ -194,14 +202,20 @@ export function applyTimelineOperation(
 				...document,
 				timeline: {
 					...document.timeline,
-					trimRanges: merged.map((iv, i) => ({
-						id: `trim_${i + 1}`,
-						assetId,
-						startSec: iv.startSec,
-						endSec: iv.endSec,
-						origin: "user" as const,
-						reason: op.reason ?? "",
-					})),
+					trimRanges: [
+						...otherAssetsRanges,
+						...merged.map((iv, i) => ({
+							// ponytail: id scoped by assetId — plain `trim_${i+1}` collided across
+							// assets (two different assets could each mint "trim_1"), which would
+							// have made remove/update_trim_range act on the wrong asset's range by id.
+							id: `trim_${assetId}_${i + 1}`,
+							assetId,
+							startSec: iv.startSec,
+							endSec: iv.endSec,
+							origin: "user" as const,
+							reason: op.reason ?? "",
+						})),
+					],
 				},
 				preview: { ...document.preview, revision: document.preview.revision + 1 },
 			};
