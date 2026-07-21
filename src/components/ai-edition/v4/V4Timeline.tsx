@@ -290,9 +290,14 @@ export function V4Timeline({
 		return out;
 	}, [total]);
 
+	const [scrubbingTimeSec, setScrubbingTimeSec] = useState<number | null>(null);
+	const effectiveTimeSec = scrubbingTimeSec ?? currentTimeSec;
+	const rafSeekRef = useRef<number>(0);
+	const pendingSeekTimeRef = useRef<number | null>(null);
+
 	// ── interactions ────────────────────────────────────────────────
 	const seekToClientX = useCallback(
-		(clientX: number) => {
+		(clientX: number, isImmediate = false) => {
 			// Measure the canvas (the zoomed timeline frame): (clientX - left)/width
 			// is the fraction along the FULL timeline under the cursor, so it stays
 			// correct under zoom/pan and is unaffected by padding or the scrollbar.
@@ -300,7 +305,30 @@ export function V4Timeline({
 			if (!el) return;
 			const r = el.getBoundingClientRect();
 			const pct = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
-			setCurrentTime(pct * total);
+			const targetTime = pct * total;
+
+			// Optimistic local UI update (0ms latency for playhead line & readout)
+			setScrubbingTimeSec(targetTime);
+			pendingSeekTimeRef.current = targetTime;
+
+			if (isImmediate) {
+				if (rafSeekRef.current !== 0) {
+					cancelAnimationFrame(rafSeekRef.current);
+					rafSeekRef.current = 0;
+				}
+				setCurrentTime(targetTime);
+				return;
+			}
+
+			// Throttled store update / D3D seek via rAF to avoid IPC flooding
+			if (rafSeekRef.current === 0) {
+				rafSeekRef.current = requestAnimationFrame(() => {
+					rafSeekRef.current = 0;
+					if (pendingSeekTimeRef.current !== null) {
+						setCurrentTime(pendingSeekTimeRef.current);
+					}
+				});
+			}
 		},
 		[setCurrentTime, total],
 	);
@@ -319,16 +347,25 @@ export function V4Timeline({
 			const target = e.target as HTMLElement;
 			if (target.closest("[data-clip-id]") || target.closest(`.${styles.lanePill}`)) return;
 			tl.clearSelection();
-			seekToClientX(e.clientX);
+			seekToClientX(e.clientX, true);
 			const move = (ev: PointerEvent) => seekToClientX(ev.clientX);
 			const up = () => {
 				window.removeEventListener("pointermove", move);
 				window.removeEventListener("pointerup", up);
+				if (rafSeekRef.current !== 0) {
+					cancelAnimationFrame(rafSeekRef.current);
+					rafSeekRef.current = 0;
+				}
+				if (pendingSeekTimeRef.current !== null) {
+					setCurrentTime(pendingSeekTimeRef.current);
+					pendingSeekTimeRef.current = null;
+				}
+				setScrubbingTimeSec(null);
 			};
 			window.addEventListener("pointermove", move);
 			window.addEventListener("pointerup", up);
 		},
-		[seekToClientX, tl],
+		[seekToClientX, tl, setCurrentTime],
 	);
 
 	// Drag a lane pill to move it (mode "move", keeps duration) or resize one
@@ -974,7 +1011,7 @@ export function V4Timeline({
 				<TransportBar
 					playing={playing}
 					loop={loop}
-					currentTimeSec={currentTimeSec}
+					currentTimeSec={effectiveTimeSec}
 					clips={clips}
 					onTogglePlay={onTogglePlay}
 					onPrevClip={onPrevClip}
@@ -1148,7 +1185,7 @@ export function V4Timeline({
 			    continuous from the ruler down through the clips and its head aligns. */}
 				<div className={styles.tlPlayheadLayer} aria-hidden>
 					<div className={styles.tlCanvas} style={canvasStyle}>
-						<div className={styles.tlPlayhead} style={{ left: `${pctOf(currentTimeSec)}%` }}>
+						<div className={styles.tlPlayhead} style={{ left: `${pctOf(effectiveTimeSec)}%` }}>
 							<span
 								className={styles.tlPlayheadDiamond}
 								style={{ pointerEvents: "auto", cursor: "grab" }}

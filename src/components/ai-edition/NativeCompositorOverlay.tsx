@@ -133,17 +133,24 @@ export function NativeCompositorOverlay() {
 		// arriving after mount never gets pushed to native).
 	}, [viewId, document, sources, _webcamSizeRevision]);
 
+	const activeClipId = activeClip?.id ?? null;
+	const activeClipIndex = activePosition?.clipIndex ?? null;
+	const activeSourceTimeSec = activePosition?.sourceTimeSec ?? null;
+	const pendingTargetClipIdRef = useRef<string | null>(null);
+
 	// Change les décodeurs screen/webcam uniquement quand le playhead entre dans un autre clip.
-	// `currentTimeSec` est déjà rafraîchi par la boucle de lecture existante ; aucun timer dédié.
 	useEffect(() => {
-		if (viewId === null || !document) {
+		if (
+			viewId === null ||
+			!document ||
+			!activeClipId ||
+			!activeClip ||
+			activeClipIndex === null ||
+			activeSourceTimeSec === null
+		) {
 			return;
 		}
-		if (!activeClip || !activePosition) {
-			previousActiveClipIdRef.current = null;
-			return;
-		}
-		if (previousActiveClipIdRef.current === activeClip.id) {
+		if (previousActiveClipIdRef.current === activeClipId) {
 			return;
 		}
 		const asset = document.assets.find((candidate) => candidate.id === activeClip.assetId);
@@ -151,18 +158,30 @@ export function NativeCompositorOverlay() {
 			return;
 		}
 		const cam = asset.cameraTrack;
+		const targetClipId = activeClipId;
+		pendingTargetClipIdRef.current = targetClipId;
+		previousActiveClipIdRef.current = targetClipId;
+
 		setActiveClip(
 			viewId,
 			asset.originalPath,
 			cam?.sourcePath ?? asset.originalPath,
 			cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
-			activePosition.clipIndex,
-			activePosition.sourceTimeSec,
-		).catch((error: unknown) => {
-			console.warn("[compositor-view] setActiveClip failed:", error);
-		});
-		previousActiveClipIdRef.current = activeClip.id;
-	}, [viewId, document, activeClip, activePosition]);
+			activeClipIndex,
+			activeSourceTimeSec,
+		)
+			.then(() => {
+				if (pendingTargetClipIdRef.current !== targetClipId) {
+					return;
+				}
+			})
+			.catch((error: unknown) => {
+				console.warn("[compositor-view] setActiveClip failed:", error);
+				if (previousActiveClipIdRef.current === targetClipId) {
+					previousActiveClipIdRef.current = null;
+				}
+			});
+	}, [viewId, document, activeClipId, activeClip, activeClipIndex, activeSourceTimeSec]);
 
 	if (!ready) {
 		return null;

@@ -24,12 +24,15 @@ import { Application, Container, Graphics, Sprite, Texture, VideoSource } from "
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { fromFileUrl } from "@/components/video-editor/projectPersistence";
 import { MAX_NATIVE_PLAYBACK_RATE } from "@/components/video-editor/types";
+import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
 import type { AxcutClip, AxcutTrimRange, AxcutZoomRegion } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { PlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
 import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import {
 	clampVirtualTime,
+	findNextKeptSegment,
+	getRawVirtualStartTime,
 	locateSourcePosition,
 	locateVirtualPosition,
 	totalVirtualDuration,
@@ -116,6 +119,12 @@ export function PreviewCompositor({
 	speedRegionsRef.current = speedRegions;
 	const trimRangesRef = useRef(trimRanges);
 	trimRangesRef.current = trimRanges;
+	const playbackClips = useMemo(
+		() => resolvePlaybackSegments(clips, trimRanges),
+		[clips, trimRanges],
+	);
+	const playbackClipsRef = useRef(playbackClips);
+	playbackClipsRef.current = playbackClips;
 
 	const updateVirtualTime = useCallback(
 		(nextTimeSec: number) => {
@@ -158,18 +167,27 @@ export function PreviewCompositor({
 			}
 			const activeSourceId = videoSourcesRef.current[sourceIndexRef.current]?.id;
 			if (!v.paused) {
-				const activeTrim = trimRangesRef.current.find(
-					(skip) =>
-						skip.assetId === activeSourceId &&
-						v.currentTime >= skip.startSec &&
-						v.currentTime < skip.endSec,
+				const inKeptSegment = locateSourcePosition(
+					playbackClipsRef.current,
+					v.currentTime,
+					activeSourceId,
 				);
-				if (activeTrim) {
-					if (activeTrim.endSec >= (v.duration || Infinity)) {
-						v.pause();
-					} else {
-						v.currentTime = activeTrim.endSec + 0.05;
+				if (!inKeptSegment) {
+					const nextKeptSegment = findNextKeptSegment(
+						playbackClipsRef.current,
+						clipsRef.current,
+						virtualTimeSecRef.current,
+						activeSourceId,
+						v.currentTime,
+					);
+					if (nextKeptSegment) {
+						const rawTargetTime = getRawVirtualStartTime(nextKeptSegment, clipsRef.current);
+						seekToVirtualTime(rawTargetTime, true);
+						return;
 					}
+					v.pause();
+					updateVirtualTime(virtualDurationSecRef.current);
+					setIsPlaying(false);
 					return;
 				}
 			}
