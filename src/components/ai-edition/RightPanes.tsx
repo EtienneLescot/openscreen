@@ -54,7 +54,7 @@ import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview
 import { getAssetPath } from "@/lib/assetPath";
 import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { buildGradientFromEditor } from "@/lib/gradientBuilder";
-import { resolveImageWallpaperUrl, WALLPAPER_PATHS } from "@/lib/wallpaper";
+import { resolveImageWallpaperUrl, WALLPAPER_PATHS, WALLPAPER_THUMB_PATHS } from "@/lib/wallpaper";
 import { isNativeCompositorActive, setNativeParam, subscribeNativeCompositor } from "@/native";
 import styles from "./NewEditorShell.module.css";
 
@@ -288,7 +288,10 @@ export function BackgroundPane() {
 							/>
 						))}
 						{WALLPAPER_PATHS.map((path, i) => {
-							const previewUrl = resolveImageWallpaperUrl(path);
+							// Grid swatch paints the small pre-generated thumbnail (see
+							// WALLPAPER_THUMB_PATHS) — selecting it still stores/applies `path`,
+							// the full-res original, unchanged.
+							const previewUrl = resolveImageWallpaperUrl(WALLPAPER_THUMB_PATHS[i]);
 							return (
 								<button
 									type="button"
@@ -1764,7 +1767,7 @@ function SliderCell({
 				min={min}
 				max={max}
 				step={step}
-				defaultValue={value}
+				value={value}
 				disabled={disabled}
 				onChange={(e) => onChange(Number(e.target.value))}
 				onMouseUp={onCommit}

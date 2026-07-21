@@ -7,6 +7,16 @@ export const WALLPAPER_PATHS: readonly string[] = Array.from(
 	(_, i) => `/wallpapers/wallpaper${i + 1}.jpg`,
 );
 
+// Small (240x240, ~3-8KB) pre-generated copies used ONLY for the picker grid's swatches — the
+// full-res originals (up to 4+MB, up to 7680px) are what `settings.wallpaper` still stores and
+// what actually gets rendered/exported. Without this the grid was decoding all 18 originals
+// (~20MB combined) simultaneously just to paint a few dozen px each (reported: picker felt slow
+// to load).
+export const WALLPAPER_THUMB_PATHS: readonly string[] = Array.from(
+	{ length: WALLPAPER_COUNT },
+	(_, i) => `/wallpapers/thumbs/wallpaper${i + 1}.jpg`,
+);
+
 export const DEFAULT_WALLPAPER = WALLPAPER_PATHS[0];
 
 export type WallpaperClassification =

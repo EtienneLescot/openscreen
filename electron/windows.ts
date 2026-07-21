@@ -187,6 +187,11 @@ export function createHudOverlayWindow(): BrowserWindow {
 	});
 	win.setIgnoreMouseEvents(true, { forward: true });
 
+	// Exclude the HUD from any screen/window capture (WGC on Windows uses the same
+	// SetWindowDisplayAffinity affinity this sets) so the recording controls never
+	// end up baked into the recorded video, same as the notes window below.
+	win.setContentProtection(true);
+
 	// Follow the user across macOS Spaces, else the HUD stays pinned to the Space
 	// it was first opened on.
 	if (process.platform === "darwin") {
@@ -196,6 +201,7 @@ export function createHudOverlayWindow(): BrowserWindow {
 	// Show only once painted to avoid the black rectangle flash when a transparent
 	// window is shown before its first paint.
 	win.once("ready-to-show", () => {
+		win.setContentProtection(true);
 		if (!HEADLESS) win.show();
 	});
 
