@@ -1,4 +1,5 @@
 import { Maximize2, Pause, Play, Repeat, SkipBack, SkipForward } from "lucide-react";
+import { memo } from "react";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import styles from "./NewEditorShell.module.css";
 
@@ -24,7 +25,7 @@ interface TransportBarProps {
 
 // ponytail: lives in the timeline header now (not under the preview canvas)
 // so the header row covers both timeline tools and playback in one line.
-export function TransportBar({
+export const TransportBar = memo(function TransportBar({
 	playing,
 	loop,
 	currentTimeSec,
@@ -123,4 +124,4 @@ export function TransportBar({
 			</div>
 		</div>
 	);
-}
+});

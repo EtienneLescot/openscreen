@@ -221,6 +221,20 @@ export function VirtualPreview({
 						v.currentTime,
 					);
 					if (nextKeptSegment) {
+						const rawClip =
+							clipsRef.current.find(
+								(c) => c.id === nextKeptSegment.id || nextKeptSegment.id.startsWith(`${c.id}_seg`),
+							) ??
+							clipsRef.current.find(
+								(c) =>
+									c.assetId === nextKeptSegment.assetId &&
+									nextKeptSegment.sourceStartSec >= c.sourceStartSec - 0.001 &&
+									(c.sourceEndSec == null ||
+										nextKeptSegment.sourceStartSec <= c.sourceEndSec + 0.001),
+							);
+						if (rawClip) {
+							activeClipIdRef.current = rawClip.id;
+						}
 						const rawTargetTime = getRawVirtualStartTime(nextKeptSegment, clipsRef.current);
 						seekToVirtualTime(rawTargetTime, true);
 						return;

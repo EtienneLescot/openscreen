@@ -34,10 +34,16 @@ export function resolveNativePlaybackPosition(
 
 	const clip = ordered[clipIndex];
 	const unclampedSourceTime = clip.sourceStartSec + (timelineTimeSec - clip.timelineStartSec);
-	const sourceEndSec = clip.sourceEndSec ?? unclampedSourceTime;
+	const maxAllowedSourceTime =
+		clip.sourceEndSec !== undefined
+			? Math.max(clip.sourceStartSec, clip.sourceEndSec - 0.033)
+			: unclampedSourceTime;
 	return {
 		clip,
 		clipIndex,
-		sourceTimeSec: Math.max(clip.sourceStartSec, Math.min(sourceEndSec, unclampedSourceTime)),
+		sourceTimeSec: Math.max(
+			clip.sourceStartSec,
+			Math.min(maxAllowedSourceTime, unclampedSourceTime),
+		),
 	};
 }

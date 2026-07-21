@@ -13,6 +13,7 @@ import {
 	ZoomIn,
 } from "lucide-react";
 import {
+	memo,
 	type PointerEvent as ReactPointerEvent,
 	useCallback,
 	useEffect,
@@ -73,13 +74,41 @@ function fmtTick(sec: number): string {
 	return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
 }
 
-// Real per-clip audio waveform, sliced from the underlying asset's decoded
-// peaks (useAudioPeaks) down to this clip's [sourceStartSec, sourceEndSec]
-// range. A separate component (not inline in the clips .map) so each clip
-// gets its own hook call — useAudioPeaks caches by URL, so clips sharing an
+interface PlayheadOverlayProps {
+	pct: number;
+	canvasStyle: React.CSSProperties;
+	onPointerDown: (e: ReactPointerEvent) => void;
+	playheadRef?: React.RefObject<HTMLDivElement | null>;
+}
+
+const PlayheadOverlay = memo(function PlayheadOverlay({
+	pct,
+	canvasStyle,
+	onPointerDown,
+	playheadRef,
+}: PlayheadOverlayProps) {
+	return (
+		<div className={styles.tlPlayheadLayer} aria-hidden>
+			<div className={styles.tlCanvas} style={canvasStyle}>
+				<div ref={playheadRef} className={styles.tlPlayhead} style={{ left: `${pct}%` }}>
+					<span
+						className={styles.tlPlayheadDiamond}
+						style={{ pointerEvents: "auto", cursor: "grab" }}
+						onPointerDown={(e) => {
+							e.stopPropagation();
+							onPointerDown(e);
+						}}
+					/>
+				</div>
+			</div>
+		</div>
+	);
+});
+
+// Waveform preview bars inside a timeline clip. Derived from peaks data;
 // asset only decode once. Renders nothing while decoding or if the source has
 // no audio track, so the clip pill just shows its label until peaks arrive.
-function ClipWaveform({
+const ClipWaveform = memo(function ClipWaveform({
 	videoUrl,
 	assetDurationSec,
 	sourceStartSec,
@@ -136,7 +165,7 @@ function ClipWaveform({
 			))}
 		</div>
 	);
-}
+});
 
 interface LanePill {
 	id: string;
@@ -296,6 +325,9 @@ export function V4Timeline({
 	const pendingSeekTimeRef = useRef<number | null>(null);
 
 	// ── interactions ────────────────────────────────────────────────
+	const playheadElRef = useRef<HTMLDivElement | null>(null);
+
+	// Seek timeline position from a clientX pointer position.
 	const seekToClientX = useCallback(
 		(clientX: number, isImmediate = false) => {
 			// Measure the canvas (the zoomed timeline frame): (clientX - left)/width
@@ -307,7 +339,12 @@ export function V4Timeline({
 			const pct = Math.min(1, Math.max(0, (clientX - r.left) / r.width));
 			const targetTime = pct * total;
 
-			// Optimistic local UI update (0ms latency for playhead line & readout)
+			// Direct DOM playhead update (0ms latency, zero React re-render overhead)
+			if (playheadElRef.current) {
+				playheadElRef.current.style.left = `${pct * 100}%`;
+			}
+
+			// Optimistic local UI state update
 			setScrubbingTimeSec(targetTime);
 			pendingSeekTimeRef.current = targetTime;
 
@@ -368,6 +405,19 @@ export function V4Timeline({
 		[seekToClientX, tl, setCurrentTime],
 	);
 
+	const [activePillDrag, setActivePillDrag] = useState<{
+		id: string;
+		kind: LanePill["kind"];
+		start: number;
+		end: number;
+	} | null>(null);
+	const activePillDragRef = useRef<{
+		id: string;
+		kind: LanePill["kind"];
+		start: number;
+		end: number;
+	} | null>(null);
+
 	// Drag a lane pill to move it (mode "move", keeps duration) or resize one
 	// edge (mode "l"/"r"). Zoom/speed/annotation are timeline-ms; trims map
 	// back to source-seconds through their carrying clip.
@@ -413,15 +463,15 @@ export function V4Timeline({
 				setSnapPct(best === v ? null : (best / total) * 100);
 				return best;
 			};
-			const apply = (start: number, end: number) => {
+			const apply = async (start: number, end: number): Promise<void> => {
 				const s = Math.max(0, Math.min(end - 0.2, start));
 				const en = Math.min(total, Math.max(s + 0.2, end));
-				if (pill.kind === "zoom") void tl.updateZoomSpan(pill.id, s * 1000, en * 1000);
-				else if (pill.kind === "speed") void tl.updateSpeedSpan(pill.id, s * 1000, en * 1000);
+				if (pill.kind === "zoom") await tl.updateZoomSpan(pill.id, s * 1000, en * 1000);
+				else if (pill.kind === "speed") await tl.updateSpeedSpan(pill.id, s * 1000, en * 1000);
 				else if (pill.kind === "annotation")
-					void tl.updateAnnotationSpan(pill.id, s * 1000, en * 1000);
+					await tl.updateAnnotationSpan(pill.id, s * 1000, en * 1000);
 				else if (pill.kind === "cameraFullscreen")
-					void tl.updateCameraFullscreenSpan(pill.id, s * 1000, en * 1000);
+					await tl.updateCameraFullscreenSpan(pill.id, s * 1000, en * 1000);
 				else {
 					// Trims are stored in source-time per asset but manipulated on the
 					// timeline like every other pill. Ventilate the new span across the
@@ -440,24 +490,43 @@ export function V4Timeline({
 					while (trimOwned.length < ranges.length) trimOwned.push(createId("trim"));
 					const entries = ranges.map((rng, i) => ({ id: trimOwned[i], ...rng }));
 					const dropIds = trimOwned.slice(ranges.length);
-					void tl.setTrimEntries(entries, dropIds);
+					await tl.setTrimEntries(entries, dropIds);
 				}
 			};
 			const move = (ev: PointerEvent) => {
 				const dxSec = ((ev.clientX - startX) / r.width) * total;
+				let ns = pill.start;
+				let ne = pill.end;
 				if (dragMode === "move") {
-					const ns = Math.max(0, Math.min(total - dur, snap(pill.start + dxSec)));
-					apply(ns, ns + dur);
+					ns = Math.max(0, Math.min(total - dur, snap(pill.start + dxSec)));
+					ne = ns + dur;
 				} else if (dragMode === "l") {
-					apply(snap(pill.start + dxSec), pill.end);
+					ns = Math.max(0, Math.min(pill.end - 0.2, snap(pill.start + dxSec)));
+					ne = pill.end;
 				} else {
-					apply(pill.start, snap(pill.end + dxSec));
+					ns = pill.start;
+					ne = Math.min(total, Math.max(pill.start + 0.2, snap(pill.end + dxSec)));
 				}
+				const nextState = { id: pill.id, kind: pill.kind, start: ns, end: ne };
+				activePillDragRef.current = nextState;
+				setActivePillDrag(nextState);
 			};
 			const up = () => {
 				setSnapPct(null);
 				window.removeEventListener("pointermove", move);
 				window.removeEventListener("pointerup", up);
+				const finalDrag = activePillDragRef.current;
+				if (finalDrag) {
+					void apply(finalDrag.start, finalDrag.end).finally(() => {
+						if (activePillDragRef.current === finalDrag) {
+							activePillDragRef.current = null;
+							setActivePillDrag(null);
+						}
+					});
+				} else {
+					activePillDragRef.current = null;
+					setActivePillDrag(null);
+				}
 			};
 			window.addEventListener("pointermove", move);
 			window.addEventListener("pointerup", up);
@@ -806,68 +875,80 @@ export function V4Timeline({
 		);
 	};
 
-	const renderPills = (pills: LanePill[], emptyLabel: string) => (
-		<>
-			{pills.length === 0 ? <span className={styles.laneEmpty}>{emptyLabel}</span> : null}
-			{pills.flatMap((p) => {
-				// Eager split preview: the instant a clip is grabbed, a pill that
-				// straddles the dragged clip's junction shows the same per-clip
-				// split it would resolve to on drop (via moveClip's reprojection),
-				// instead of moving as one block glued to whichever clip owns its
-				// start. Only fork into fragments when they'd actually move
-				// differently — a pill unaffected by this drag stays one DOM node.
-				if (clipDrag) {
-					const frags = ventilateSpanAcrossClips(p.start, p.end, clips);
-					if (frags.length >= 2) {
-						const clipById = new Map(clips.map((c) => [c.id, c]));
-						const shifts = frags.map((f) => {
-							const c = clipById.get(f.clipId);
-							return c
-								? regionPreviewShift(c.timelineStartSec + f.localStartSec)
-								: { px: 0, immediate: false };
-						});
-						const first = shifts[0];
-						const differ = shifts.some((s) => s.px !== first.px || s.immediate !== first.immediate);
-						if (differ) {
-							return frags.flatMap((f, i) => {
+	const renderPills = (pills: LanePill[], emptyLabel: string) => {
+		const effectivePills = pills.map((p) => {
+			if (activePillDrag && activePillDrag.id === p.id) {
+				return { ...p, start: activePillDrag.start, end: activePillDrag.end };
+			}
+			return p;
+		});
+		return (
+			<>
+				{effectivePills.length === 0 ? (
+					<span className={styles.laneEmpty}>{emptyLabel}</span>
+				) : null}
+				{effectivePills.flatMap((p) => {
+					// Eager split preview: the instant a clip is grabbed, a pill that
+					// straddles the dragged clip's junction shows the same per-clip
+					// split it would resolve to on drop (via moveClip's reprojection),
+					// instead of moving as one block glued to whichever clip owns its
+					// start. Only fork into fragments when they'd actually move
+					// differently — a pill unaffected by this drag stays one DOM node.
+					if (clipDrag) {
+						const frags = ventilateSpanAcrossClips(p.start, p.end, clips);
+						if (frags.length >= 2) {
+							const clipById = new Map(clips.map((c) => [c.id, c]));
+							const shifts = frags.map((f) => {
 								const c = clipById.get(f.clipId);
-								if (!c) return [];
-								return [
-									renderOnePill({
-										pill: p,
-										key: `${p.id}__f${i}`,
-										segStart: c.timelineStartSec + f.localStartSec,
-										segEnd: c.timelineStartSec + f.localEndSec,
-										shiftPx: shifts[i].px,
-										immediate: shifts[i].immediate,
-										showContent: i === 0,
-										interactive: false,
-										suppressLeftSeam: i > 0,
-										suppressRightSeam: i < frags.length - 1,
-									}),
-								];
+								return c
+									? regionPreviewShift(c.timelineStartSec + f.localStartSec)
+									: { px: 0, immediate: false };
 							});
+							const first = shifts[0];
+							const differ = shifts.some(
+								(s) => s.px !== first.px || s.immediate !== first.immediate,
+							);
+							if (differ) {
+								return frags.flatMap((f, i) => {
+									const c = clipById.get(f.clipId);
+									if (!c) return [];
+									return [
+										renderOnePill({
+											pill: p,
+											key: `${p.id}__f${i}`,
+											segStart: c.timelineStartSec + f.localStartSec,
+											segEnd: c.timelineStartSec + f.localEndSec,
+											shiftPx: shifts[i].px,
+											immediate: shifts[i].immediate,
+											showContent: i === 0,
+											interactive: false,
+											suppressLeftSeam: i > 0,
+											suppressRightSeam: i < frags.length - 1,
+										}),
+									];
+								});
+							}
 						}
 					}
-				}
-				const shift = regionPreviewShift(p.start);
-				return [
-					renderOnePill({
-						pill: p,
-						key: p.id,
-						segStart: p.start,
-						segEnd: p.end,
-						shiftPx: shift.px,
-						immediate: shift.immediate,
-						showContent: true,
-						interactive: true,
-						suppressLeftSeam: false,
-						suppressRightSeam: false,
-					}),
-				];
-			})}
-		</>
-	);
+					const shift = regionPreviewShift(p.start);
+					return [
+						renderOnePill({
+							pill: p,
+							key: p.id,
+							segStart: p.start,
+							segEnd: p.end,
+							shiftPx: shift.px,
+							immediate: shift.immediate,
+							showContent: true,
+							interactive: true,
+							suppressLeftSeam: false,
+							suppressRightSeam: false,
+						}),
+					];
+				})}
+			</>
+		);
+	};
 
 	return (
 		<div className={styles.tl}>
@@ -1183,20 +1264,12 @@ export function V4Timeline({
 			    (a cursor, so it doesn't scroll with the lanes) and sharing the exact
 			    same zoom/pan transform + width as the canvases, so its line stays
 			    continuous from the ruler down through the clips and its head aligns. */}
-				<div className={styles.tlPlayheadLayer} aria-hidden>
-					<div className={styles.tlCanvas} style={canvasStyle}>
-						<div className={styles.tlPlayhead} style={{ left: `${pctOf(effectiveTimeSec)}%` }}>
-							<span
-								className={styles.tlPlayheadDiamond}
-								style={{ pointerEvents: "auto", cursor: "grab" }}
-								onPointerDown={(e) => {
-									e.stopPropagation();
-									startScrub(e);
-								}}
-							/>
-						</div>
-					</div>
-				</div>
+				<PlayheadOverlay
+					pct={pctOf(effectiveTimeSec)}
+					canvasStyle={canvasStyle}
+					onPointerDown={startScrub}
+					playheadRef={playheadElRef}
+				/>
 			</div>
 
 			<div ref={navRef} className={styles.tlNav}>
