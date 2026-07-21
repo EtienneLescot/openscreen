@@ -176,7 +176,6 @@
 		"subtitle": "Рендеринг таймлайна в файл",
 		"addVideoBeforeExporting": "Добавьте видео перед экспортом.",
 		"quality": "Качество",
-		"qualityUpscaleWarning": "Апскейл",
 		"qualityMatchRecording": "Как в записи",
 		"frameRate": "Частота кадров",
 		"codec": "Кодек",
@@ -204,7 +203,8 @@
 		"exportedVideo": "Видео экспортировано",
 		"showInFolder": "Показать в папке",
 		"exportFailed": "Ошибка экспорта",
-		"failedToWriteFile": "Не удалось записать файл"
+		"failedToWriteFile": "Не удалось записать файл",
+		"qualityUpscaleWarning": "Апскейл"
 	},
 	"inspector": {
 		"resetFocusPoint": "Сбросить точку фокуса",

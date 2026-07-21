@@ -59,6 +59,13 @@ struct PrefetchedClip {
     wdec: Decoder,
     webcam_offset_sec: f64,
     idx: u32,
+    /// Piste curseur du clip à venir, préchargée ici pour la même raison que les décodeurs :
+    /// sans ça, la bascule à la frontière restait synchrone sur CE point précis (lecture +
+    /// parsing JSON du `.cursor.json`, potentiellement des milliers d'échantillons pour un
+    /// enregistrement long) même après que le préchargement des décodeurs a supprimé le gros
+    /// de la pause perceptible — un second petit accroc au même endroit, pour la même raison
+    /// (une E/S synchrone pile à la frontière) qu'on venait de corriger pour les décodeurs.
+    cursor_track: Option<CursorTrack>,
 }
 
 /// Ouvre + positionne la paire de décodeurs d'un clip (même travail que
@@ -80,7 +87,8 @@ unsafe fn open_and_seek_clip(
         anyhow::bail!("clip préchargé vide au temps source {source_time_sec:.3}s (screen=\"{screen_path}\", webcam=\"{webcam_path}\")");
     }
     let idx = (source_time_sec * sdec.fps()).round().max(0.0) as u32;
-    Ok(PrefetchedClip { sdec, wdec, webcam_offset_sec, idx })
+    let cursor_track = CursorTrack::load(&format!("{screen_path}.cursor.json"), 0.0, 24.0 * 3600.0).ok();
+    Ok(PrefetchedClip { sdec, wdec, webcam_offset_sec, idx, cursor_track })
 }
 
 /// Lit deux sources en lockstep et compose la frame courante dans le RT du compositeur.
@@ -731,6 +739,14 @@ unsafe fn advance_to_next_scene_clip(
         if idx == next_index { rx.try_recv().ok() } else { None }
     });
 
+    // Le curseur préchargé (voir `PrefetchedClip::cursor_track`) doit être extrait AVANT de
+    // passer `prefetched` (par valeur) à `apply_prefetched`, qui ne s'occupe que des
+    // décodeurs — sinon ce champ serait silencieusement perdu avec le reste de la struct.
+    let prefetched_cursor: Option<Option<CursorTrack>> = match &ready {
+        Some(Ok(p)) => Some(p.cursor_track.clone()),
+        _ => None,
+    };
+
     let applied = match ready {
         Some(Ok(prefetched)) => {
             player.apply_prefetched(prefetched);
@@ -760,8 +776,16 @@ unsafe fn advance_to_next_scene_clip(
             *active_webcam_offset_sec = next_clip.webcam_offset_sec;
             *active_clip_index = next_index;
             comp.set_scene(Some(scene_for_clip(scene, *active_clip_index)));
-            let cursor_path = format!("{}.cursor.json", active_screen_path);
-            *raw_cursor = CursorTrack::load(&cursor_path, 0.0, 24.0 * 3600.0).ok();
+            // Réutilise le curseur préchargé s'il est disponible (voir plus haut) — sinon
+            // (préchargement pas encore prêt / raté) on retombe sur la lecture synchrone
+            // habituelle, comme avant cette optimisation.
+            *raw_cursor = match prefetched_cursor {
+                Some(track) => track,
+                None => {
+                    let cursor_path = format!("{}.cursor.json", active_screen_path);
+                    CursorTrack::load(&cursor_path, 0.0, 24.0 * 3600.0).ok()
+                }
+            };
             match raw_cursor {
                 Some(track) => comp.set_cursor(track.smoothed(0.0)),
                 None => comp.clear_cursor(),
