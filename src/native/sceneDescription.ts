@@ -18,7 +18,8 @@
 import type { CameraFullscreenRegion, SpeedRegion } from "@/components/video-editor/types";
 import { DEFAULT_CROP_REGION } from "@/components/video-editor/types";
 import { createId } from "@/lib/ai-edition/document/ids";
-import type { AxcutDocument } from "@/lib/ai-edition/schema";
+import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
+import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { projectRegionsToSourceTime } from "@/lib/ai-edition/timeline/region-ventilation";
@@ -281,6 +282,22 @@ function pickOutputDims(
 	return { width: Math.round(longSide * ratio), height: longSide };
 }
 
+/**
+ * The ONE clip list every native-facing consumer must build from — trim-narrowed
+ * (`resolvePlaybackSegments`, so word-level cuts from the transcript editor actually reach
+ * native instead of only affecting the transcript panel's own strikethrough), sorted, and
+ * filtered to clips whose asset has a resolvable path. Shared by `buildSceneDescription`
+ * below, `ExportDialog.tsx`'s `buildNativeClipList` (native MP4 export), and
+ * `NativeCompositorOverlay.tsx`'s `nativeClips` (live preview) — previously these three each
+ * hand-rolled their own sort+filter, acknowledged as needing to be "kept in lock-step".
+ */
+export function resolveVisibleClips(document: AxcutDocument): AxcutClip[] {
+	const assetById = new Map(document.assets.map((a) => [a.id, a]));
+	return resolvePlaybackSegments(document.timeline.clips, document.timeline.trimRanges)
+		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
+		.filter((clip) => assetById.get(clip.assetId)?.originalPath);
+}
+
 /** Serialize a document into a {@link SceneDescription}. Pure — no per-frame math. */
 export function buildSceneDescription(
 	document: AxcutDocument,
@@ -288,16 +305,8 @@ export function buildSceneDescription(
 ): SceneDescription {
 	const settings = getEditorSettings(document);
 
-	// Sort+filter the clips once, in the order they will appear in the scene's
-	// `clips[]` stream, so the per-clip `cropByClip[]` schedule stays aligned
-	// 1:1 with `clips[]` by index. Mirror of `buildNativeClipList` in
-	// src/components/ai-edition/ExportDialog.tsx — keep these two derivation
-	// paths in lock-step so the native multiclip export and the in-process
-	// preview composer see the same clip stream.
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
-	const visibleClips = [...document.timeline.clips]
-		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
-		.filter((clip) => assetById.get(clip.assetId)?.originalPath);
+	const visibleClips = resolveVisibleClips(document);
 	const clips: CompositorClipInput[] = visibleClips.flatMap((clip) => {
 		const asset = assetById.get(clip.assetId);
 		if (!asset?.originalPath) return [];

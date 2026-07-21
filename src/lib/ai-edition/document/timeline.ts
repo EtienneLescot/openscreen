@@ -3,7 +3,7 @@
 // (store, exporter, agent) feeds an AxcutDocument and gets back intervals
 // or a new document with updated clips.
 
-import type { AxcutClip, AxcutDocument, AxcutTranscript } from "../schema";
+import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "../schema";
 import { reprojectRegionsForReorder } from "../timeline/region-ventilation";
 import { createId } from "./ids";
 
@@ -125,6 +125,61 @@ export function subtractInterval(intervals: Interval[], cut: Interval): Interval
 		}
 	}
 	return output;
+}
+
+/**
+ * Derived, ephemeral clip list for playback/native/export — never written back to
+ * `document.timeline.clips`. Each clip's own `[sourceStartSec, sourceEndSec]` (its media
+ * in/out, edited via the clip's own modal) is untouched as a concept; this only narrows the
+ * WINDOW of it handed to playback for the trimmed stretch(es), via `subtractInterval`
+ * (existing, tested — no new interval math). Trims are stored per-asset in source time
+ * (`AxcutTrimRange`) and may already be ventilated into multiple entries by
+ * `ventilateTimelineSpanToTrims` when the user drags one across a clip boundary — subtracting
+ * by matching `assetId` against every clip naturally narrows however many clips that produces,
+ * no special-casing. Everything else about the clip (id, assetId, webcam pairing/offset via
+ * the asset, origin/reason) carries through unchanged, which is what makes this apply to the
+ * webcam for free: webcam sync is derived from the clip's own asset, not recomputed here.
+ */
+export function resolvePlaybackSegments(
+	clips: AxcutClip[],
+	trimRanges: AxcutTrimRange[],
+): AxcutClip[] {
+	const ordered = [...clips].sort((a, b) => a.timelineStartSec - b.timelineStartSec);
+	const result: AxcutClip[] = [];
+	let timelineCursor = 0;
+	for (const clip of ordered) {
+		const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
+		if (sourceEnd <= clip.sourceStartSec) {
+			// Duration not probed yet — pass through as a single segment, unchanged.
+			const dur = clip.timelineEndSec - clip.timelineStartSec;
+			result.push({
+				...clip,
+				timelineStartSec: timelineCursor,
+				timelineEndSec: timelineCursor + dur,
+			});
+			timelineCursor += dur;
+			continue;
+		}
+		let kept: Interval[] = [{ startSec: clip.sourceStartSec, endSec: sourceEnd }];
+		for (const trim of trimRanges) {
+			if (trim.assetId !== clip.assetId) continue;
+			kept = subtractInterval(kept, { startSec: trim.startSec, endSec: trim.endSec });
+		}
+		kept.forEach((iv, i) => {
+			const dur = iv.endSec - iv.startSec;
+			if (dur <= 0) return;
+			result.push({
+				...clip,
+				id: kept.length === 1 ? clip.id : `${clip.id}_seg${i + 1}`,
+				sourceStartSec: iv.startSec,
+				sourceEndSec: iv.endSec,
+				timelineStartSec: timelineCursor,
+				timelineEndSec: timelineCursor + dur,
+			});
+			timelineCursor += dur;
+		});
+	}
+	return result;
 }
 
 export function invertIntervals(intervals: Interval[], durationSec: number): Interval[] {

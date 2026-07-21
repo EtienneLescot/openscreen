@@ -37,7 +37,7 @@ import {
 import { exportMultiNative, exportNative } from "@/native";
 import { nativeBridgeClient } from "@/native/client";
 import type { CompositorClipInput } from "@/native/contracts";
-import { buildSceneDescription } from "@/native/sceneDescription";
+import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
 import {
 	type AspectRatio,
 	getAspectRatioValue,
@@ -58,40 +58,40 @@ function formatHms(totalSeconds: number): string {
 	return [h, m, sec].map((v) => v.toString().padStart(2, "0")).join(":");
 }
 
-/** Maps the document's timeline to the native multiclip export contract: ordered clips, each
- *  with its asset's screen file + camera file (falls back to the screen when a clip has no
- *  camera — the no-webcam layout is a later step) and its source trim. */
+/** Maps the document's timeline to the native multiclip export contract: ordered,
+ *  trim-narrowed clips (`resolveVisibleClips` — shared with `buildSceneDescription` and
+ *  `NativeCompositorOverlay`, so export/preview/scene all see the exact same clip stream),
+ *  each with its asset's screen file + camera file (falls back to the screen when a clip has
+ *  no camera — the no-webcam layout is a later step) and its source trim. */
 function buildNativeClipList(document: AxcutDocument): CompositorClipInput[] {
 	const assetById = new Map(document.assets.map((a) => [a.id, a]));
-	return [...document.timeline.clips]
-		.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
-		.flatMap((clip) => {
-			const asset = assetById.get(clip.assetId);
-			if (!asset?.originalPath) {
-				return [];
-			}
-			const cam = asset.cameraTrack;
-			// sourceEndSec is optional in the schema (unknown until probed) — fall back through
-			// the single canonical precedence used by every consumer (clip.probe → asset.duration
-			// → timeline-length guess). See `resolveClipSourceEndSec` for the full order.
-			const sourceEndSec = resolveClipSourceEndSec(clip, asset);
-			// ponytail: matches the rule in `buildSceneDescription` — screen recordings
-			// from this app always carry a decodable audio track (the webcam path
-			// never does), so the only clips that reach this branch already have audio.
-			// If a per-asset audio-probe flag lands on the schema later, swap to
-			// `Boolean(asset.audio)` here too and keep these two derivation paths in
-			// lock-step with `buildSceneDescription` in src/native/sceneDescription.ts.
-			return [
-				{
-					screenPath: asset.originalPath,
-					webcamPath: cam?.sourcePath ?? asset.originalPath,
-					sourceStartSec: clip.sourceStartSec,
-					sourceEndSec,
-					webcamOffsetSec: cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
-					hasAudio: true,
-				},
-			];
-		});
+	return resolveVisibleClips(document).flatMap((clip) => {
+		const asset = assetById.get(clip.assetId);
+		if (!asset?.originalPath) {
+			return [];
+		}
+		const cam = asset.cameraTrack;
+		// sourceEndSec is optional in the schema (unknown until probed) — fall back through
+		// the single canonical precedence used by every consumer (clip.probe → asset.duration
+		// → timeline-length guess). See `resolveClipSourceEndSec` for the full order.
+		const sourceEndSec = resolveClipSourceEndSec(clip, asset);
+		// ponytail: matches the rule in `buildSceneDescription` — screen recordings
+		// from this app always carry a decodable audio track (the webcam path
+		// never does), so the only clips that reach this branch already have audio.
+		// If a per-asset audio-probe flag lands on the schema later, swap to
+		// `Boolean(asset.audio)` here too and keep these two derivation paths in
+		// lock-step with `buildSceneDescription` in src/native/sceneDescription.ts.
+		return [
+			{
+				screenPath: asset.originalPath,
+				webcamPath: cam?.sourcePath ?? asset.originalPath,
+				sourceStartSec: clip.sourceStartSec,
+				sourceEndSec,
+				webcamOffsetSec: cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
+				hasAudio: true,
+			},
+		];
+	});
 }
 
 // Target short side (px) for the two fixed quality tiers -- mirrors the legacy
