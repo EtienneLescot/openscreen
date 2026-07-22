@@ -1193,18 +1193,76 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const screenCapture = (async (): Promise<MediaStream> => {
 				const platform = await window.electronAPI.getPlatform();
 
-				if (platform === "win32") {
+				if (platform === "win32" || platform === "linux") {
 					// getDisplayMedia + setDisplayMediaRequestHandler (main.ts) supplies the
-					// pre-selected source. Editable cursor mode excludes the system cursor so
-					// the editor can render a replacement; system mode bakes it into the video.
+					// pre-selected source. On Windows, editable cursor mode excludes the system
+					// cursor so the editor can render a replacement; system mode bakes it into
+					// the video. Linux has no native cursor-sprite capture (see
+					// createCursorRecordingSession's TelemetryRecordingSession fallback, which
+					// only records position, not a drawable cursor), so there's nothing to draw
+					// as a replacement overlay — the system cursor must always be baked into the
+					// raw frames there, or recordings end up with no cursor at all. The legacy
+					// chromeMediaSource desktop-capture constraints used below for other platforms
+					// have no cursor constraint at all, which is why Linux recordings lost the
+					// cursor when going through PipeWire on Wayland.
+					const cursor: "always" | "never" =
+						platform === "linux"
+							? "always"
+							: cursorCaptureMode === "editable-overlay"
+								? "never"
+								: "always";
+
+					if (platform === "linux" && systemAudioEnabled) {
+						// Electron's getDisplayMedia loopback audio (main.ts's
+						// setDisplayMediaRequestHandler) only supports win32/macOS, so system
+						// audio on Linux still has to go through the legacy desktop-audio
+						// constraints and get merged with the getDisplayMedia video track.
+						const [videoOnlyStream, audioOnlyStream] = await Promise.all([
+							navigator.mediaDevices.getDisplayMedia({
+								video: {
+									cursor,
+									width: { max: TARGET_WIDTH },
+									height: { max: TARGET_HEIGHT },
+									frameRate: { ideal: TARGET_FRAME_RATE },
+								} as MediaTrackConstraints,
+								audio: false,
+							} as DisplayMediaStreamOptions),
+							navigator.mediaDevices
+								.getUserMedia({
+									audio: {
+										mandatory: {
+											chromeMediaSource: CHROME_MEDIA_SOURCE,
+											chromeMediaSourceId: selectedSource.id,
+										},
+									},
+									video: false,
+								} as unknown as MediaStreamConstraints)
+								.catch((audioErr) => {
+									console.warn(
+										"System audio capture failed, falling back to video-only:",
+										audioErr,
+									);
+									toast.error(t("recording.systemAudioUnavailable"));
+									return null;
+								}),
+						]);
+
+						const combined = new MediaStream();
+						for (const track of videoOnlyStream.getVideoTracks()) combined.addTrack(track);
+						if (audioOnlyStream) {
+							for (const track of audioOnlyStream.getAudioTracks()) combined.addTrack(track);
+						}
+						return combined;
+					}
+
 					return navigator.mediaDevices.getDisplayMedia({
 						video: {
-							cursor: cursorCaptureMode === "editable-overlay" ? "never" : "always",
+							cursor,
 							width: { max: TARGET_WIDTH },
 							height: { max: TARGET_HEIGHT },
 							frameRate: { ideal: TARGET_FRAME_RATE },
 						} as MediaTrackConstraints,
-						audio: systemAudioEnabled,
+						audio: platform === "win32" ? systemAudioEnabled : false,
 					} as DisplayMediaStreamOptions);
 				}
 
