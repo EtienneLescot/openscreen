@@ -10,6 +10,7 @@ import { createId } from "../document/ids";
 import {
 	duplicateClip as duplicateClipInDocument,
 	moveClip as moveClipInDocument,
+	reprojectDocumentRegions,
 	resequenceClips,
 } from "../document/timeline";
 import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
@@ -736,16 +737,20 @@ export function useTimeline() {
 			const clamp = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
 			const s = clamp(sourceStartSec);
 			const e = clamp(sourceEndSec);
-			const arr = document.timeline.clips.map((c) =>
+			const oldClips = document.timeline.clips;
+			const arr = oldClips.map((c) =>
 				c.id === clipId
 					? { ...c, sourceStartSec: Math.min(s, e), sourceEndSec: Math.max(s, e) }
 					: c,
 			);
+			const newClips = resequenceClips(arr);
 			const next: AxcutDocument = {
 				...document,
-				timeline: { ...document.timeline, clips: resequenceClips(arr) },
+				timeline: { ...document.timeline, clips: newClips },
 			};
-			await saveDocument(next);
+			const finalDoc =
+				oldClips.length > 0 ? reprojectDocumentRegions(next, oldClips, newClips) : next;
+			await saveDocument(finalDoc);
 		},
 		[document, saveDocument],
 	);
@@ -816,18 +821,22 @@ export function useTimeline() {
 				origin: "user" as const,
 				reason: "Split right",
 			};
+			const oldClips = document.timeline.clips;
 			const nextClips: AxcutDocument["timeline"]["clips"] = [
-				...document.timeline.clips.slice(0, targetIdx),
+				...oldClips.slice(0, targetIdx),
 				left,
 				insert,
 				right as (typeof document.timeline.clips)[number],
-				...document.timeline.clips.slice(targetIdx + 1),
+				...oldClips.slice(targetIdx + 1),
 			];
+			const newClips = resequenceClips(nextClips);
 			const next: AxcutDocument = {
 				...document,
-				timeline: { ...document.timeline, clips: nextClips },
+				timeline: { ...document.timeline, clips: newClips },
 			};
-			await saveDocument(next);
+			const finalDoc =
+				oldClips.length > 0 ? reprojectDocumentRegions(next, oldClips, newClips) : next;
+			await saveDocument(finalDoc);
 		},
 		[document, saveDocument, addClipAfter],
 	);
@@ -870,9 +879,10 @@ export function useTimeline() {
 			// earlier clips too, corrupting their positions). resequenceClips lays
 			// everything back-to-back from t=0 using each clip's own (now correct)
 			// length, so it's the correct + already-shared way to renormalize.
+			const oldClips = doc.timeline.clips;
 			const nextClips = correctDuration
 				? resequenceClips(
-						doc.timeline.clips.map((c) =>
+						oldClips.map((c) =>
 							c.id === clipId
 								? {
 										...c,
@@ -882,7 +892,7 @@ export function useTimeline() {
 								: c,
 						),
 					)
-				: doc.timeline.clips;
+				: oldClips;
 			const nextAssets = doc.assets.map((a) => {
 				if (a.id !== assetId) return a;
 				return {
@@ -932,14 +942,18 @@ export function useTimeline() {
 				origin: "user",
 				reason: "Inserted from media panel",
 			};
-			const arr = [...currentDoc.timeline.clips];
+			const oldClips = currentDoc.timeline.clips;
+			const arr = [...oldClips];
 			const at = Math.max(0, Math.min(arr.length, index));
 			arr.splice(at, 0, newClip);
+			const newClips = resequenceClips(arr);
 			const next: AxcutDocument = {
 				...currentDoc,
-				timeline: { ...currentDoc.timeline, clips: resequenceClips(arr) },
+				timeline: { ...currentDoc.timeline, clips: newClips },
 			};
-			await saveDocument(next);
+			const finalDoc =
+				oldClips.length > 0 ? reprojectDocumentRegions(next, oldClips, newClips) : next;
+			await saveDocument(finalDoc);
 			setClipSelection(newClip.id);
 
 			// If we used the placeholder, kick off the probe in the background.
@@ -986,12 +1000,18 @@ export function useTimeline() {
 	const removeClip = useCallback(
 		async (clipId: string) => {
 			if (!document) return;
-			const arr = document.timeline.clips.filter((c) => c.id !== clipId);
+			const oldClips = document.timeline.clips;
+			const arr = oldClips.filter((c) => c.id !== clipId);
+			const newClips = resequenceClips(arr);
 			const next: AxcutDocument = {
 				...document,
-				timeline: { ...document.timeline, clips: resequenceClips(arr) },
+				timeline: { ...document.timeline, clips: newClips },
 			};
-			await saveDocument(next);
+			const finalDoc =
+				oldClips.length > 0 && newClips.length > 0
+					? reprojectDocumentRegions(next, oldClips, newClips)
+					: next;
+			await saveDocument(finalDoc);
 			if (clipSelection === clipId) setClipSelection(null);
 		},
 		[document, clipSelection, saveDocument],

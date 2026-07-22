@@ -13,6 +13,7 @@ import { PLACEHOLDER_DURATION_SEC, useTimeline } from "@/lib/ai-edition/store/us
 import { matchesShortcut } from "@/lib/shortcuts";
 import { nativeBridgeClient } from "@/native";
 import type { AiEditionProjectSummary } from "@/native/contracts";
+import { resolveVisibleClips } from "@/native/sceneDescription";
 import { useNativePlaybackSync } from "@/native/useNativePlaybackSync";
 import { ExportDialog } from "./ExportDialog";
 import { LeftPanel } from "./LeftPanel";
@@ -128,19 +129,8 @@ export function NewEditorShell() {
 		document?.assets.find((a) => a.id === document.project.primaryAssetId)?.originalPath ?? null;
 	void primaryAssetPath;
 	const clips: AxcutClip[] = document?.timeline.clips ?? [];
-	// Mirror transport/playhead onto the native compositor view (no-op if inactive). The hook
-	// maps absolute timeline time into the active clip's trimmed source-media clock.
-	//
-	// BUG corrigé : `currentTimeSec` est — et doit rester — la position sur le timeline
-	// RAW/document (celle de la règle, des zoom/speed regions, du marqueur de trim
-	// lui-même). Un instant, `<Preview>` et ce hook recevaient une liste de clips COMPACTÉE
-	// (trim-rétrécie) alors que `currentTimeSec` restait RAW — la tête de lecture visuelle
-	// (règle) et le clock de lecture (natif/scrub) se retrouvaient dans deux référentiels
-	// différents : le marqueur de trim ne représentait plus rien de cohérent, et la tête de
-	// lecture le traversait au lieu de le sauter. Voir `VirtualPreview.tsx` pour où le saut
-	// par-dessus un trim doit réellement se produire (sur l'horloge SOURCE du <video>, pas
-	// sur le timeline virtuel rapporté au parent).
-	useNativePlaybackSync(playing, currentTimeSec, clips);
+	const visibleClips = useMemo(() => (document ? resolveVisibleClips(document) : []), [document]);
+	useNativePlaybackSync(playing, currentTimeSec, visibleClips);
 	const hasProject = Boolean(document);
 	const hasAsset = projectId !== null && (document?.assets.length ?? 0) > 0;
 	const project = document?.project
