@@ -325,10 +325,13 @@ export default function VideoEditor() {
 	const { shortcuts, isMac } = useShortcuts();
 	// Windows recordings include captured cursor assets. macOS hides the system
 	// cursor in ScreenCaptureKit and renders telemetry samples with OpenScreen's
-	// default arrow asset for the editable overlay.
+	// default arrow asset for the editable overlay. Linux never captures real
+	// cursor assets either (provider is always "none"), same as the macOS
+	// telemetry fallback, so it renders the same default arrow asset from
+	// position samples alone.
 	const hasEditableCursorRecording =
 		recordingCursorCaptureMode === "editable-overlay" &&
-		(nativePlatform === "win32" || nativePlatform === "darwin") &&
+		(nativePlatform === "win32" || nativePlatform === "darwin" || nativePlatform === "linux") &&
 		hasNativeCursorRecordingData(cursorRecordingData);
 	const effectiveShowCursor = showCursor && hasEditableCursorRecording;
 	const showCursorSettings = hasEditableCursorRecording;
