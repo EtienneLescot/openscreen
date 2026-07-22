@@ -1416,6 +1416,28 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				);
 			}
 
+			// On Linux/PipeWire the capture track can still be muted here (mid-negotiation --
+			// see main.ts's DMA-BUF modifier renegotiation comment, and applyConstraints above
+			// can itself trigger another round). Cursor telemetry anchored to Date.now() right
+			// after acquiring the track, instead of to when frames actually start flowing, makes
+			// every sample know the cursor's position slightly before the frame showing it
+			// exists -- which plays back as the cursor lagging the recording. Start listening
+			// now (cheap, non-blocking) so this is almost always already resolved by the time
+			// it's consumed below; only a genuinely slow negotiation waits, capped at 500ms.
+			const cursorStartTimeMsPromise: Promise<number> = videoTrack.muted
+				? new Promise((resolve) => {
+						const onUnmute = () => {
+							clearTimeout(timeoutId);
+							resolve(Date.now());
+						};
+						const timeoutId = setTimeout(() => {
+							videoTrack.removeEventListener("unmute", onUnmute);
+							resolve(Date.now());
+						}, 500);
+						videoTrack.addEventListener("unmute", onUnmute, { once: true });
+					})
+				: Promise.resolve(Date.now());
+
 			if (!isCountdownRunActive(countdownRunToken)) {
 				teardownMedia();
 				return;
@@ -1480,7 +1502,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			setRecording(true);
 			setPaused(false);
 			setElapsedSeconds(0);
-			window.electronAPI?.setRecordingState(true, recordingId.current, cursorCaptureMode);
+			void cursorStartTimeMsPromise.then((cursorStartTimeMs) => {
+				window.electronAPI?.setRecordingState(true, cursorStartTimeMs, cursorCaptureMode);
+			});
 
 			const activeScreenRecorder = screenRecorder.current;
 			const activeWebcamRecorder = webcamRecorder.current;
