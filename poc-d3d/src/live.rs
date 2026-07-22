@@ -81,11 +81,17 @@ unsafe fn open_and_seek_clip(
 ) -> Result<PrefetchedClip> {
     let source_time_sec = source_time_sec.max(0.0);
     let mut sdec = Decoder::open(screen_path, gpu)?;
-    let mut wdec = Decoder::open(webcam_path, gpu)?;
+    let mut wdec = match Decoder::open(webcam_path, gpu) {
+        Ok(d) => d,
+        Err(_) => Decoder::open(screen_path, gpu)?,
+    };
     let sf = sdec.seek_to(source_time_sec)?;
-    let wf = wdec.seek_to(webcam_seek_time(source_time_sec, webcam_offset_sec))?;
-    if sf.is_null() || wf.is_null() {
-        anyhow::bail!("clip préchargé vide au temps source {source_time_sec:.3}s (screen=\"{screen_path}\", webcam=\"{webcam_path}\")");
+    let mut wf = wdec.seek_to(webcam_seek_time(source_time_sec, webcam_offset_sec))?;
+    if wf.is_null() {
+        wf = wdec.seek_to(0.0)?;
+    }
+    if sf.is_null() {
+        anyhow::bail!("clip préchargé vide au temps source {source_time_sec:.3}s (screen=\"{screen_path}\")");
     }
     let idx = (source_time_sec * sdec.fps()).round().max(0.0) as u32;
     let cursor_track = CursorTrack::load(&format!("{screen_path}.cursor.json"), 0.0, 24.0 * 3600.0).ok();
@@ -106,9 +112,13 @@ pub struct Player {
 
 impl Player {
     pub unsafe fn open(screen: &str, webcam: &str, gpu: &Gpu) -> Result<Player> {
+        let wdec = match Decoder::open(webcam, gpu) {
+            Ok(d) => d,
+            Err(_) => Decoder::open(screen, gpu)?,
+        };
         Ok(Player {
             sdec: Decoder::open(screen, gpu)?,
-            wdec: Decoder::open(webcam, gpu)?,
+            wdec,
             gpu: Gpu {
                 device: gpu.device.clone(),
                 context: gpu.context.clone(),

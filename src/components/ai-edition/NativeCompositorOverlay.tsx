@@ -3,11 +3,12 @@ import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	setActiveClip,
 	setCurrentNativeViewId,
+	setNativePlaying,
 	setNativeScene,
 	useNativeCompositorView,
 } from "@/native";
 import { resolveNativePlaybackPosition } from "@/native/nativePlaybackPosition";
-import { buildSceneDescription } from "@/native/sceneDescription";
+import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
 import {
 	getWebcamNativeSize,
 	getWebcamNativeSizeRevision,
@@ -63,10 +64,7 @@ export function NativeCompositorOverlay() {
 	// les trims.
 	const nativeClips = useMemo(() => {
 		if (!document) return [];
-		const assetById = new Map(document.assets.map((asset) => [asset.id, asset]));
-		return [...document.timeline.clips]
-			.sort((a, b) => a.timelineStartSec - b.timelineStartSec)
-			.filter((clip) => assetById.get(clip.assetId)?.originalPath);
+		return resolveVisibleClips(document);
 	}, [document]);
 	const activePosition = useMemo(
 		() => resolveNativePlaybackPosition(nativeClips, currentTimeSec),
@@ -87,7 +85,10 @@ export function NativeCompositorOverlay() {
 		}
 		return {
 			screenPath: primary.originalPath,
-			webcamPath: primary.cameraTrack?.sourcePath ?? undefined,
+			webcamPath:
+				primary.cameraTrack?.visible && primary.cameraTrack.sourcePath
+					? primary.cameraTrack.sourcePath
+					: undefined,
 			// sidecar convention (electron/ipc/handlers.ts readCursorRecordingFile) : la
 			// télémétrie curseur vit à côté de la vidéo tant qu'elle n'a pas bougé. Absente →
 			// le natif ignore juste le curseur (CursorTrack::load échoue silencieusement).
@@ -97,7 +98,6 @@ export function NativeCompositorOverlay() {
 
 	const ready = sources !== null;
 	const { viewId } = useNativeCompositorView(canvasRef, {
-		enabled: ready,
 		sources: sources ?? undefined,
 	});
 
@@ -114,6 +114,7 @@ export function NativeCompositorOverlay() {
 	// `_webcamSizeRevision` ci-dessus) : le layout preset et cie pilotent le rendu (remplace le
 	// layout fixture). Effet APRÈS celui du viewId ci-dessus → currentViewId est déjà publié
 	// quand on pousse.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: size revision
 	useEffect(() => {
 		if (viewId === null || !document) {
 			return;
@@ -138,6 +139,8 @@ export function NativeCompositorOverlay() {
 	const activeSourceTimeSec = activePosition?.sourceTimeSec ?? null;
 	const pendingTargetClipIdRef = useRef<string | null>(null);
 
+	const playing = useProjectStore((s) => s.playing);
+
 	// Change les décodeurs screen/webcam uniquement quand le playhead entre dans un autre clip.
 	useEffect(() => {
 		if (
@@ -158,14 +161,20 @@ export function NativeCompositorOverlay() {
 			return;
 		}
 		const cam = asset.cameraTrack;
+		const webcamPath = cam && cam.visible && cam.sourcePath ? cam.sourcePath : "";
 		const targetClipId = activeClipId;
 		pendingTargetClipIdRef.current = targetClipId;
 		previousActiveClipIdRef.current = targetClipId;
 
+		const isPlaying = playing;
+		if (isPlaying) {
+			setNativePlaying(false);
+		}
+
 		setActiveClip(
 			viewId,
 			asset.originalPath,
-			cam?.sourcePath ?? asset.originalPath,
+			webcamPath,
 			cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
 			activeClipIndex,
 			activeSourceTimeSec,
@@ -174,6 +183,9 @@ export function NativeCompositorOverlay() {
 				if (pendingTargetClipIdRef.current !== targetClipId) {
 					return;
 				}
+				if (isPlaying) {
+					setNativePlaying(true);
+				}
 			})
 			.catch((error: unknown) => {
 				console.warn("[compositor-view] setActiveClip failed:", error);
@@ -181,7 +193,7 @@ export function NativeCompositorOverlay() {
 					previousActiveClipIdRef.current = null;
 				}
 			});
-	}, [viewId, document, activeClipId, activeClip, activeClipIndex, activeSourceTimeSec]);
+	}, [viewId, document, activeClipId, activeClip, activeClipIndex, activeSourceTimeSec, playing]);
 
 	if (!ready) {
 		return null;

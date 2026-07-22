@@ -22,7 +22,15 @@ import type { AxcutAsset, AxcutClip } from "../schema";
  * to the timeline-duration formula at step 3.
  */
 export function resolveClipSourceEndSec(clip: AxcutClip, asset: AxcutAsset | undefined): number {
-	if (clip.sourceEndSec !== undefined) return clip.sourceEndSec;
-	if (asset?.durationSec !== undefined) return asset.durationSec;
+	const assetDuration =
+		asset?.durationSec !== undefined && asset.durationSec > 0 ? asset.durationSec : undefined;
+	if (clip.sourceEndSec !== undefined) {
+		return assetDuration !== undefined
+			? Math.min(clip.sourceEndSec, assetDuration)
+			: clip.sourceEndSec;
+	}
+	if (assetDuration !== undefined) {
+		return assetDuration;
+	}
 	return clip.sourceStartSec + (clip.timelineEndSec - clip.timelineStartSec);
 }

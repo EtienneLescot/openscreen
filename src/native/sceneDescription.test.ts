@@ -251,11 +251,9 @@ describe("buildSceneDescription.clips", () => {
 		expect(clips[0].webcamOffsetSec).toBe((250 + 750) / 1000);
 	});
 
-	it("falls back to the screen path and 0 offset when no cameraTrack", () => {
-		const asset = makeAsset({ id: "a", originalPath: "/screen.mp4", cameraTrack: null });
+	it("emits empty webcamPath and 0 offset when no cameraTrack", () => {
+		const asset = makeAsset({ originalPath: "/screen.mp4", cameraTrack: null });
 		const clip = makeClip({
-			id: "c1",
-			assetId: "a",
 			sourceStartSec: 0,
 			sourceEndSec: 4,
 			timelineStartSec: 0,
@@ -264,7 +262,7 @@ describe("buildSceneDescription.clips", () => {
 		const doc = makeDoc({ assets: [asset], clips: [clip] });
 		const { clips } = buildSceneDescription(doc);
 		expect(clips[0].screenPath).toBe("/screen.mp4");
-		expect(clips[0].webcamPath).toBe("/screen.mp4");
+		expect(clips[0].webcamPath).toBe("");
 		expect(clips[0].webcamOffsetSec).toBe(0);
 	});
 

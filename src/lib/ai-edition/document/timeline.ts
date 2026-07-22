@@ -197,78 +197,12 @@ export function invertIntervals(intervals: Interval[], durationSec: number): Int
 	return cuts;
 }
 
-export function replaceTimeline(
+export function reprojectDocumentRegions(
 	document: AxcutDocument,
-	intervals: Interval[],
-	reason: string,
-	origin: "system" | "agent" | "user" = "user",
+	oldClips: AxcutClip[],
+	newClips: AxcutClip[],
 ): AxcutDocument {
-	const assetId = document.project.primaryAssetId ?? document.assets[0]?.id;
-	if (!assetId) {
-		throw new Error("Cannot update timeline without a primary asset.");
-	}
-	const duration = primaryAssetDuration(document);
-	const normalized = normalizeIntervals(duration, intervals);
-	const clips = buildTimelineFromIntervals(assetId, normalized, {
-		origin,
-		reason,
-		transcript: document.transcript,
-	});
-	const trimRanges = invertIntervals(normalized, duration).map((cut, i) => ({
-		id: `trim_${i + 1}`,
-		assetId,
-		startSec: cut.startSec,
-		endSec: cut.endSec,
-		origin,
-		reason,
-	}));
-	return {
-		...document,
-		timeline: {
-			...document.timeline,
-			clips,
-			trimRanges,
-			gaps: [],
-		},
-		preview: {
-			...document.preview,
-			revision: document.preview.revision + 1,
-		},
-	};
-}
-
-// ponytail: reorder an existing clip by removing it from its current
-// position and inserting at `insertIndex` (clamped to the array length).
-// Used for "move this clip there" / "swap these clips" — preserves all
-// user-placed clip ids, origins, and source ranges. Mirrors axcut's
-// apps/server/src/lib/timeline.ts#moveClip.
-export function moveClip(
-	document: AxcutDocument,
-	clipId: string,
-	insertIndex: number,
-	origin: "system" | "agent" | "user" = "user",
-	reason: string = "",
-): AxcutDocument {
-	const index = document.timeline.clips.findIndex((c) => c.id === clipId);
-	if (index < 0) {
-		throw new Error(`Unknown clip ${clipId}.`);
-	}
-	const movingClip = {
-		...document.timeline.clips[index],
-		origin,
-		reason: reason || document.timeline.clips[index].reason,
-	};
-	const remaining = document.timeline.clips.filter((c) => c.id !== clipId);
-	const bounded = Math.max(0, Math.min(insertIndex, remaining.length));
-	const reordered = [...remaining.slice(0, bounded), movingClip, ...remaining.slice(bounded)];
-	const oldClips = document.timeline.clips;
-	const newClips = resequenceClips(reordered);
-	// Carry the user's timeline work (zoom/speed/annotation) along with the clip
-	// it sits on, so reordering clips doesn't strand regions over unrelated
-	// content. Regions are *ventilated*: a region straddling several clips is
-	// split into one piece per clip (each following its clip), and pieces that
-	// stay contiguous after the move are merged back. Trims need no shift — they
-	// follow via their source anchor.
+	if (oldClips.length === 0 || newClips.length === 0) return document;
 	const legacy = document.legacyEditor as Record<string, unknown> | null;
 	const speedRegions = legacy?.speedRegions as
 		| Array<{ id: string; startMs: number; endMs: number }>
@@ -276,6 +210,7 @@ export function moveClip(
 	const cameraFullscreenRegions = legacy?.cameraFullscreenRegions as
 		| Array<{ id: string; startMs: number; endMs: number }>
 		| undefined;
+
 	return {
 		...document,
 		zoomRanges: reprojectRegionsForReorder(document.zoomRanges, oldClips, newClips, () =>
@@ -307,6 +242,79 @@ export function moveClip(
 							: {}),
 					}
 				: document.legacyEditor,
+	};
+}
+
+export function replaceTimeline(
+	document: AxcutDocument,
+	intervals: Interval[],
+	reason: string,
+	origin: "system" | "agent" | "user" = "user",
+): AxcutDocument {
+	const assetId = document.project.primaryAssetId ?? document.assets[0]?.id;
+	if (!assetId) {
+		throw new Error("Cannot update timeline without a primary asset.");
+	}
+	const duration = primaryAssetDuration(document);
+	const normalized = normalizeIntervals(duration, intervals);
+	const oldClips = document.timeline.clips;
+	const clips = buildTimelineFromIntervals(assetId, normalized, {
+		origin,
+		reason,
+		transcript: document.transcript,
+	});
+	const trimRanges = invertIntervals(normalized, duration).map((cut, i) => ({
+		id: `trim_${i + 1}`,
+		assetId,
+		startSec: cut.startSec,
+		endSec: cut.endSec,
+		origin,
+		reason,
+	}));
+	const next: AxcutDocument = {
+		...document,
+		timeline: {
+			...document.timeline,
+			clips,
+			trimRanges,
+			gaps: [],
+		},
+		preview: {
+			...document.preview,
+			revision: document.preview.revision + 1,
+		},
+	};
+	return oldClips.length > 0 ? reprojectDocumentRegions(next, oldClips, clips) : next;
+}
+
+// ponytail: reorder an existing clip by removing it from its current
+// position and inserting at `insertIndex` (clamped to the array length).
+// Used for "move this clip there" / "swap these clips" — preserves all
+// user-placed clip ids, origins, and source ranges. Mirrors axcut's
+// apps/server/src/lib/timeline.ts#moveClip.
+export function moveClip(
+	document: AxcutDocument,
+	clipId: string,
+	insertIndex: number,
+	origin: "system" | "agent" | "user" = "user",
+	reason: string = "",
+): AxcutDocument {
+	const index = document.timeline.clips.findIndex((c) => c.id === clipId);
+	if (index < 0) {
+		throw new Error(`Unknown clip ${clipId}.`);
+	}
+	const movingClip = {
+		...document.timeline.clips[index],
+		origin,
+		reason: reason || document.timeline.clips[index].reason,
+	};
+	const remaining = document.timeline.clips.filter((c) => c.id !== clipId);
+	const bounded = Math.max(0, Math.min(insertIndex, remaining.length));
+	const reordered = [...remaining.slice(0, bounded), movingClip, ...remaining.slice(bounded)];
+	const oldClips = document.timeline.clips;
+	const newClips = resequenceClips(reordered);
+	const next: AxcutDocument = {
+		...document,
 		timeline: {
 			...document.timeline,
 			clips: newClips,
@@ -316,6 +324,7 @@ export function moveClip(
 			revision: document.preview.revision + 1,
 		},
 	};
+	return reprojectDocumentRegions(next, oldClips, newClips);
 }
 
 // ponytail: duplicate a clip (preserves the original). Used for "split this
@@ -338,22 +347,21 @@ export function duplicateClip(
 		origin,
 		reason: reason || original.reason,
 	};
-	const next = [
-		...document.timeline.clips.slice(0, index + 1),
-		copy,
-		...document.timeline.clips.slice(index + 1),
-	];
-	return {
+	const oldClips = document.timeline.clips;
+	const next = [...oldClips.slice(0, index + 1), copy, ...oldClips.slice(index + 1)];
+	const newClips = resequenceClips(next);
+	const updatedDoc: AxcutDocument = {
 		...document,
 		timeline: {
 			...document.timeline,
-			clips: resequenceClips(next),
+			clips: newClips,
 		},
 		preview: {
 			...document.preview,
 			revision: document.preview.revision + 1,
 		},
 	};
+	return reprojectDocumentRegions(updatedDoc, oldClips, newClips);
 }
 
 export function restoreFullTimeline(document: AxcutDocument): AxcutDocument {

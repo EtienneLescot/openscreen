@@ -4,10 +4,17 @@ import { useProjectStore } from "./projectStore";
 import { useTimeline } from "./useTimeline";
 
 const probeVideoDurationMock = vi.hoisted(() => vi.fn());
+const probeVideoDimensionsMock = vi.hoisted(() =>
+	vi.fn().mockResolvedValue({ width: 1920, height: 1080 }),
+);
 
 vi.mock("../timeline/duration", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../timeline/duration")>();
-	return { ...actual, probeVideoDuration: probeVideoDurationMock };
+	return {
+		...actual,
+		probeVideoDuration: probeVideoDurationMock,
+		probeVideoDimensions: probeVideoDimensionsMock,
+	};
 });
 
 const bridgeMocks = vi.hoisted(() => ({
