@@ -1197,20 +1197,19 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					// getDisplayMedia + setDisplayMediaRequestHandler (main.ts) supplies the
 					// pre-selected source. On Windows, editable cursor mode excludes the system
 					// cursor so the editor can render a replacement; system mode bakes it into
-					// the video. Linux has no native cursor-sprite capture (see
-					// createCursorRecordingSession's TelemetryRecordingSession fallback, which
-					// only records position, not a drawable cursor), so there's nothing to draw
-					// as a replacement overlay — the system cursor must always be baked into the
-					// raw frames there, or recordings end up with no cursor at all. The legacy
-					// chromeMediaSource desktop-capture constraints used below for other platforms
-					// have no cursor constraint at all, which is why Linux recordings lost the
-					// cursor when going through PipeWire on Wayland.
+					// the video. On Linux, the editor's cursor overlay (see
+					// src/lib/cursor/nativeCursor.ts's provider:"none" handling) always runs —
+					// createCursorRecordingSession's Linux sessions (HyprlandCursorRecordingSession
+					// on Hyprland, TelemetryRecordingSession elsewhere) always produce position
+					// telemetry the overlay draws a generic cursor from. So Linux always requests
+					// "never" here too: on setups where the system cursor *does* end up baked into
+					// the raw frames (e.g. X11, or a Wayland compositor whose portal supports
+					// Embedded cursor mode), requesting "always" would double it up with the
+					// overlay. On Hyprland specifically this constraint has no effect either way
+					// (the portal never bakes the cursor in regardless of what's requested), so the
+					// overlay remains the only cursor source there.
 					const cursor: "always" | "never" =
-						platform === "linux"
-							? "always"
-							: cursorCaptureMode === "editable-overlay"
-								? "never"
-								: "always";
+						platform === "linux" || cursorCaptureMode === "editable-overlay" ? "never" : "always";
 
 					if (platform === "linux" && systemAudioEnabled) {
 						// Electron's getDisplayMedia loopback audio (main.ts's
