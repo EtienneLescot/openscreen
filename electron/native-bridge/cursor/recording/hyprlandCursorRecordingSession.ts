@@ -57,6 +57,11 @@ export class HyprlandCursorRecordingSession implements CursorRecordingSession {
 			return;
 		}
 		this.isSampling = true;
+		// Stamp the sample with the time the query was *sent*, not when the response
+		// came back. Stamping after the await biases every sample's timeMs later than
+		// when the cursor was actually there by one IPC round-trip, which reads as a
+		// constant lag between the cursor overlay and the recording during playback.
+		const requestedAtMs = Date.now();
 		try {
 			const position = (await queryHyprlandCursorPos(this.socketPath)) ?? this.lastPosition;
 			if (!position) {
@@ -70,7 +75,7 @@ export class HyprlandCursorRecordingSession implements CursorRecordingSession {
 			const height = Math.max(1, display.height);
 
 			this.samples.push({
-				timeMs: Math.max(0, Date.now() - this.startTimeMs),
+				timeMs: Math.max(0, requestedAtMs - this.startTimeMs),
 				cx: clamp((position.x - display.x) / width, 0, 1),
 				cy: clamp((position.y - display.y) / height, 0, 1),
 				visible: true,
