@@ -324,7 +324,7 @@ export function buildSceneDescription(
 		return [
 			{
 				screenPath: asset.originalPath,
-				webcamPath: cam?.sourcePath ?? asset.originalPath,
+				webcamPath: cam && cam.visible && cam.sourcePath ? cam.sourcePath : "",
 				sourceStartSec: clip.sourceStartSec,
 				sourceEndSec: resolveClipSourceEndSec(clip, asset),
 				webcamOffsetSec: cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,

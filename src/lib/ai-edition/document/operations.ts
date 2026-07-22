@@ -16,6 +16,7 @@ import {
 	normalizeIntervals,
 	primaryAssetDuration,
 	replaceTimeline,
+	reprojectDocumentRegions,
 	resequenceClips,
 } from "./timeline";
 
@@ -272,7 +273,8 @@ export function applyTimelineOperation(
 			return { document: next, summary: "restored full timeline" };
 		}
 		case "update_clip_range": {
-			const clips = document.timeline.clips.map((c) => {
+			const oldClips = document.timeline.clips;
+			const clips = oldClips.map((c) => {
 				if (c.id !== op.clipId) return c;
 				const lo = Math.max(0, Math.min(op.sourceStartSec, op.sourceEndSec));
 				const hi = Math.max(lo, Math.max(op.sourceStartSec, op.sourceEndSec));
@@ -284,16 +286,18 @@ export function applyTimelineOperation(
 					timelineEndSec: 0,
 				};
 			});
-			const next: AxcutDocument = {
+			const newClips = resequenceClips(clips);
+			const nextDoc: AxcutDocument = {
 				...document,
 				timeline: {
 					...document.timeline,
-					clips: resequenceClips(clips),
+					clips: newClips,
 				},
 				preview: { ...document.preview, revision: document.preview.revision + 1 },
 			};
+			const finalDoc = reprojectDocumentRegions(nextDoc, oldClips, newClips);
 			return {
-				document: next,
+				document: finalDoc,
 				summary: `trimmed clip to ${formatSec(Math.min(op.sourceStartSec, op.sourceEndSec))}–${formatSec(Math.max(op.sourceStartSec, op.sourceEndSec))}`,
 			};
 		}
