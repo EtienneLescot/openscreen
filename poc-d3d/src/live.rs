@@ -4,20 +4,23 @@
 //! `WS_POPUP` + swapchain) supprimée : la glue TS n'a plus de surface native à
 //! embarquer, elle draw chaque frame reçue comme une image bitmap.
 //!
-//! Pipeline interne inchangé : `Player` (decodeur lockstep screen/webcam) +
-//! `Compositor::compose_frame` → RT RGBA OUT_W×OUT_H (1920×1080, partagé avec
-//! l'export). Le **post-traitement** seulement change :
+//! Pipeline interne : `Player` (decodeur lockstep screen/webcam) +
+//! `Compositor::compose_frame` → RT RGBA rastérisé à la GÉOMÉTRIE DE RENDU (depuis la
+//! refonte ratio : géométrie de sortie ramenée à la taille du panneau, plus le canvas
+//! 16:9 figé d'avant). Le **post-traitement** :
 //!   - avant : blit du RT vers le backbuffer du swapchain, `Present`.
-//!   - maintenant : `comp.readback_resized(w, h)` réutilise le même `blit_resized`
-//!     / `ensure_resize_target` que l'export, puis copie le resize-target vers une
-//!     staging texture `D3D11_USAGE_STAGING`, `Map`/`D3D11_MAP_READ`, copie ligne
-//!     par ligne qui respecte `RowPitch` (même idiome que `dump_nv12`/`dump_raw`)
-//!     et stocke le `Vec<u8>` dans `Shared::latest_frame` pour le `read_frame` napi.
+//!   - maintenant : `comp.readback_direct()` copie le RT directement vers la staging
+//!     `D3D11_USAGE_STAGING` (déjà dimensionnée à la résolution de rendu), `Map`/
+//!     `D3D11_MAP_READ`, copie ligne par ligne qui respecte `RowPitch` (même idiome que
+//!     `dump_nv12`/`dump_raw`), et stocke le `Vec<u8>` dans `Shared::latest_frame` pour
+//!     le `read_frame` napi. Plus de resize intermédiaire (`blit_resized`) : le RT est
+//!     déjà à la taille voulue, CSS met à l'échelle vers la boîte du panneau côté JS.
 //!
 //! Modèle de threads : la vue n'a plus de HWND/UI côté thread appelant. Le rendu vit
 //! sur un thread dédié — le thread JS/UI n'est jamais bloqué. Les objets COM et la
-//! staging restent sur ce thread de rendu ; la `Vec<u8>` est publiée via un
-//! `Mutex<Option<(u32, u32, Vec<u8>)>>` pour la traversée de threads vers le napi.
+//! staging restent sur ce thread de rendu ; la frame est publiée via un
+//! `Mutex<Option<(u64 gen, u32 w, u32 h, Vec<u8>)>>` pour la traversée de threads vers
+//! le napi — le `gen` est l'identité de la frame (cf. `LatestFrame`).
 
 use crate::compositor::{Compositor, LiveParams};
 use crate::regions::speed_at;
@@ -411,11 +414,15 @@ fn scene_for_clip(scene: &Scene, clip_index: usize) -> Scene {
 
 /// Dernière frame readback vers CPU, prête pour le napi `read_frame`.
 ///
-/// `(w, h, vec)` où `vec.len() == w*h*4` octets RGBA8 tightly-packed (R, G, B, A en
-/// mémoire — cf. `Compositor::readback_resized`). `None` = "aucune frame composée
-/// pour l'instant" (toutes les lectures avant la 1re frame composée retournent
-/// `None` côté napi, jamais un buffer vide).
-type LatestFrame = (u32, u32, Vec<u8>);
+/// `(gen, w, h, vec)` où `vec.len() == w*h*4` octets RGBA8 tightly-packed (R, G, B, A
+/// en mémoire — cf. `Compositor::readback_resized`). `gen` est une génération monotone
+/// (≥ 1, `0` réservé à « le consommateur n'a encore rien vu ») incrémentée à CHAQUE
+/// publication, càd uniquement quand une nouvelle frame a réellement été composée (le
+/// thread de rendu ne republie pas une frame identique — cf. `stepped || first`). Elle
+/// est l'IDENTITÉ de la frame : le consommateur (`read_frame`) ne repaie le clone + l'IPC
+/// que lorsqu'elle change. `None` = "aucune frame composée pour l'instant" (toutes les
+/// lectures avant la 1re frame composée retournent `None` côté napi, jamais un buffer vide).
+type LatestFrame = (u64, u32, u32, Vec<u8>);
 
 /// État partagé thread appelant → thread de rendu (commandes sans blocage).
 struct Shared {
@@ -516,16 +523,34 @@ impl LiveView {
         }
     }
 
-    /// Récupère la dernière frame readback (taille + RGBA8 tightly-packed).
+    /// Récupère la dernière frame readback (gen + taille + RGBA8 tightly-packed).
     /// `None` si rien n'a encore été composé (jamais écrit). **Coût : O(w·h)**
     /// (copie du `Vec<u8>` — nécessaire pour traverser la frontière thread + le
     /// FFI vers le Buffer napi). Le `Vec<u8>` retourné a `len() == w*h*4`.
-    pub fn latest_frame(&self) -> Option<(u32, u32, Vec<u8>)> {
+    /// Préférer `latest_frame_since` sur le chemin chaud : il évite ce clone quand
+    /// le consommateur possède déjà la génération courante.
+    pub fn latest_frame(&self) -> Option<(u64, u32, u32, Vec<u8>)> {
         self.shared
             .latest_frame
             .lock()
             .ok()
             .and_then(|guard| guard.as_ref().cloned())
+    }
+
+    /// Récupère la dernière frame UNIQUEMENT si sa génération est postérieure à
+    /// `since_gen`. `None` couvre les DEUX cas où le consommateur n'a rien à peindre :
+    ///   - rien n'a encore été composé (aucune frame publiée), ou
+    ///   - il possède déjà la génération courante (`gen <= since_gen`).
+    /// Dans ce second cas — l'essentiel du temps d'édition, preview en pause sur une
+    /// frame figée — on n'exécute PAS le clone `O(w·h)` : c'est tout l'intérêt du
+    /// compteur. Le consommateur passe la dernière génération qu'il a peinte (`0` au
+    /// départ) ; `None` ⇒ il ne fait rien, `Some` ⇒ il peint et retient `gen`.
+    pub fn latest_frame_since(&self, since_gen: u64) -> Option<(u64, u32, u32, Vec<u8>)> {
+        let guard = self.shared.latest_frame.lock().ok()?;
+        match guard.as_ref() {
+            Some((gen, w, h, px)) if *gen > since_gen => Some((*gen, *w, *h, px.clone())),
+            _ => None,
+        }
     }
 
     /// Switch inspector (booléen).
@@ -828,7 +853,11 @@ fn preview_render_size(scene: Option<&Scene>, pw: u32, ph: u32) -> (u32, u32) {
     let (ow, oh) = (scene.output.width.max(1) as f64, scene.output.height.max(1) as f64);
     // "contain" : le plus grand cadre au ratio de sortie qui tienne dans le panneau.
     let scale = (pw as f64 / ow).min(ph as f64 / oh).min(1.0);
-    (((ow * scale).round() as u32).max(2), ((oh * scale).round() as u32).max(2))
+    // Arrondi via la MÊME règle que `new_sized` : la boucle de rendu compare cette
+    // taille à `comp.render_size()` (qui renvoie la valeur arrondie) pour décider de
+    // reconstruire. Sans ce passage par `normalize_render_size`, une cible impaire
+    // ne serait jamais égalée → reconstruction du compositeur à chaque frame.
+    Compositor::normalize_render_size((ow * scale).round() as u32, (oh * scale).round() as u32)
 }
 
 /// Boucle de rendu (thread dédié) : décode → compose → resize → readback → publie
@@ -1158,20 +1187,29 @@ unsafe fn render_thread(
         if stepped || first {
             if pw > 0 && ph > 0 {
                 // Step complet : `compose_frame` (déjà appelé par `step`/`present_frame`/
-                // `recompose`) → resize vers `pw`×`ph` via `blit_resized` réutilisé par
-                // l'export → copy vers staging → Map/Unmap → `Vec<u8>` RGBA8.
-                match comp.readback_resized(pw, ph) {
-                    Ok(rgba) => {
+                // `recompose`) a rastérisé le RT à la géométrie de sortie ramenée au panneau.
+                // On lit ce RT DIRECTEMENT à sa résolution de rendu (`readback_direct` : copy
+                // rt → staging → Map/Unmap), sans le resize `blit_resized` qui, depuis la
+                // refonte ratio, n'était plus qu'une copie identité + une alloc NV12 inutile.
+                match comp.readback_direct() {
+                    Ok((rw, rh, rgba)) => {
                         // Publie dans `latest_frame` : on remplace le buffer précédent
                         // (le canvas ne montre que la dernière frame, peu importe combien
-                        // le renderer en a raté entre deux lectures napi).
+                        // le renderer en a raté entre deux lectures napi). On incrémente
+                        // la génération sous le MÊME lock que l'écriture du buffer, pour
+                        // qu'un lecteur ne puisse jamais voir un `gen` neuf appairé à un
+                        // buffer périmé (ou l'inverse). `+ 1` depuis la précédente, `1` au
+                        // premier publish. Les dims publiées sont celles du RENDU (`rw`×`rh`) :
+                        // le canvas JS s'y dimensionne (packet auto-descriptif) puis CSS met à
+                        // l'échelle vers la boîte du panneau — plus de resize GPU intermédiaire.
                         if let Ok(mut slot) = shared.latest_frame.lock() {
-                            *slot = Some((pw, ph, rgba));
+                            let next_gen = slot.as_ref().map(|(g, ..)| g + 1).unwrap_or(1);
+                            *slot = Some((next_gen, rw, rh, rgba));
                         }
                         first = false;
                     }
                     Err(e) => {
-                        eprintln!("[live] readback_resized: {e:#}");
+                        eprintln!("[live] readback_direct: {e:#}");
                         std::thread::sleep(Duration::from_millis(8));
                     }
                 }
@@ -1298,7 +1336,7 @@ pub fn run_standalone(screen: &str, webcam: &str, cursor_json: &str) -> Result<(
             // standalone n'affiche pas réellement les pixels ici (l'embed Electron est
             // le consumer réel). On imprime juste une frame de temps en temps pour
             // confirmer que la chaîne fonctionne.
-            if let Some((fw, fh, _pixels)) = view.latest_frame() {
+            if let Some((_gen, fw, fh, _pixels)) = view.latest_frame() {
                 if (fw, fh) != (w, h) {
                     // garde-fou : la staging de readback suit `set_rect` côté thread
                     // de rendu, donc ce serait une désynchro transitoire — acceptable.
@@ -1409,5 +1447,24 @@ mod tests {
         let small = scene_with_output(640, 360);
         let (w, h) = preview_render_size(Some(&small), 3000, 2000);
         assert_eq!((w, h), (640, 360));
+    }
+
+    /// Anti-régression du bug de reconstruction en boucle : la taille produite
+    /// doit être un POINT FIXE de `normalize_render_size`. Si ce n'est pas le cas,
+    /// `want != comp.render_size()` reste vrai indéfiniment et le compositeur se
+    /// reconstruit à chaque frame (média qui disparaissent, VRAM qui sature).
+    /// On balaie beaucoup de tailles de panneau : une seule qui produit une
+    /// dimension impaire suffirait à faire boucler la preview en vrai.
+    #[test]
+    fn preview_size_is_always_a_fixed_point_of_the_render_size_rounding() {
+        let scene = scene_with_output(1920, 1080);
+        for pw in 200..1400 {
+            let (w, h) = preview_render_size(Some(&scene), pw, 900);
+            assert_eq!(
+                (w, h),
+                Compositor::normalize_render_size(w, h),
+                "panneau {pw}x900 → {w}x{h} n'est pas stable → reconstruction en boucle",
+            );
+        }
     }
 }

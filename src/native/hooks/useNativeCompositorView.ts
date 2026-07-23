@@ -5,10 +5,13 @@
  *      rect (measured via ResizeObserver + window resize/scroll, rAF-coalesced
  *      — the exact same sync machinery as before, repurposed: it now drives
  *      the offscreen render-target resolution instead of a window position).
- *   2. Polls `readCompositorFrame` on every other rAF tick (~30fps) and paints
- *      the returned RGBA buffer into the canvas via `ctx.putImageData`. The
- *      buffer is the same size as the rect last pushed (canvas.width/height
- *      track the rect).
+ *   2. Polls `readCompositorFrame` on every other rAF tick (~30fps), passing the
+ *      generation it last painted. Native returns a self-describing packet
+ *      (`{ gen, width, height, data }`) ONLY when a newer frame exists — otherwise
+ *      `null`, and the canvas is left untouched. So while the preview sits still
+ *      (paused editing) nothing is cloned, sent over IPC, or repainted. The canvas
+ *      drawing buffer is sized from the packet's own dims, so pixels and canvas
+ *      can never drift apart.
  *
  * Every native-bridge call is wrapped in a try/catch that swallows + warns,
  * because the renderer may run without the bridge (pure web `npm run dev`,
@@ -139,15 +142,25 @@ export function useNativeCompositorView(
 			rectRafHandle = requestAnimationFrame(applyRectNow);
 		};
 
-		let reusablePixels: Uint8ClampedArray | null = null;
-		let reusableImageData: ImageData | null = null;
+		// Generation of the last frame we painted. The native side only publishes a
+		// NEW generation when it actually composed a new frame (it never republishes
+		// an identical one), so passing this back as `sinceGen` means an unchanged
+		// frame is never re-delivered: no clone, no IPC, no canvas copy while the
+		// preview sits still (paused editing — the dominant case). `0` = "painted
+		// nothing yet", which forces delivery of the first frame.
+		let lastGen = 0;
+		// Only one readFrame in flight at a time. Skipping while pending both avoids
+		// redundant IPC and removes any chance of two responses landing out of order
+		// and rewinding `lastGen` (which would re-deliver an already-painted frame).
+		let inFlight = false;
 
-		/** rAF pull loop: throttle to ~30fps and paint the returned buffer
-		 *  into the canvas via createImageBitmap + drawImage (hardware GPU blitting).
-		 *  Runs decoding off the main thread so UI interactions stay at 60/120fps. */
+		/** rAF pull loop: throttle to ~30fps and repaint ONLY when native reports a
+		 *  newer generation. The returned packet is self-describing (`gen` + dims +
+		 *  pixels), so the canvas is sized from the packet — pixels and canvas can
+		 *  never drift out of sync. Runs off the main thread so UI stays at 60/120fps. */
 		const pullLoop = () => {
 			pullRafHandle = requestAnimationFrame(pullLoop);
-			if (disposed) {
+			if (disposed || inFlight) {
 				return;
 			}
 			pullTick = (pullTick + 1) % PULL_LOOP_TICK_DIVISOR;
@@ -162,39 +175,61 @@ export function useNativeCompositorView(
 			if (!ctx) {
 				return;
 			}
-			readCompositorFrame(id)
-				.then((buffer) => {
-					if (disposed || !buffer) {
+			inFlight = true;
+			readCompositorFrame(id, lastGen)
+				.then((frame) => {
+					inFlight = false;
+					// `null` = nothing newer than `lastGen` (idle path — no pixels
+					// crossed IPC) OR no frame yet. Either way, leave the canvas as-is.
+					if (disposed || !frame) {
 						return;
 					}
-					// Sanity check: the buffer must be exactly
-					// canvas.width * canvas.height * 4 bytes (RGBA). Mismatches
-					// would corrupt the image silently via putImageData — bail.
-					const expected = canvas.width * canvas.height * 4;
-					if (buffer.byteLength !== expected || canvas.width === 0 || canvas.height === 0) {
+					const { gen, width, height, data } = frame;
+					// Defensive: the packet's byte count must match its own declared
+					// dimensions. A mismatch would corrupt the image silently — bail.
+					if (data.byteLength !== width * height * 4 || width === 0 || height === 0) {
 						return;
 					}
-					if (!reusablePixels || reusablePixels.byteLength !== buffer.byteLength) {
-						reusablePixels = new Uint8ClampedArray(buffer.byteLength);
-						reusableImageData = new ImageData(reusablePixels, canvas.width, canvas.height);
+					// Size the drawing buffer to the packet (destructive, but we repaint
+					// the whole frame right after). CSS scales it to the canvas box.
+					if (canvas.width !== width) {
+						canvas.width = width;
 					}
-					reusablePixels.set(buffer);
-					if (reusableImageData) {
-						createImageBitmap(reusableImageData)
-							.then((bitmap) => {
-								if (!disposed && ctx) {
-									ctx.drawImage(bitmap, 0, 0);
-								}
-								bitmap.close();
-							})
-							.catch(() => {
-								if (!disposed && reusableImageData && ctx) {
-									ctx.putImageData(reusableImageData, 0, 0);
-								}
-							});
+					if (canvas.height !== height) {
+						canvas.height = height;
 					}
+					// Wrap the received buffer DIRECTLY — no intermediate copy. `data` is a
+					// fresh per-frame Buffer from IPC (never pooled or reused across frames),
+					// so a view over it is valid for the lifetime of this paint, and nothing
+					// mutates it. Cast to `ArrayBuffer` because `ImageData` rejects
+					// `SharedArrayBuffer`-backed arrays (IPC binary is never shared).
+					const pixels = new Uint8ClampedArray(
+						data.buffer as ArrayBuffer,
+						data.byteOffset,
+						data.byteLength,
+					);
+					const image = new ImageData(pixels, width, height);
+					// `createImageBitmap` decodes off the main thread (keeps UI at 60/120fps)
+					// and snapshots `image`, so the view can be released after; `putImageData`
+					// is the synchronous fallback if bitmap creation is unavailable.
+					createImageBitmap(image)
+						.then((bitmap) => {
+							if (!disposed && ctx) {
+								ctx.drawImage(bitmap, 0, 0);
+							}
+							bitmap.close();
+						})
+						.catch(() => {
+							if (!disposed && ctx) {
+								ctx.putImageData(image, 0, 0);
+							}
+						});
+					// Advance only after a successful, validated frame — so a dropped/
+					// malformed packet is retried rather than silently skipped.
+					lastGen = gen;
 				})
 				.catch((error: unknown) => {
+					inFlight = false;
 					console.warn("[compositor-view] readFrame failed:", error);
 				});
 		};
