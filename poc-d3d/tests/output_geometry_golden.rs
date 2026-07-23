@@ -179,3 +179,65 @@ fn golden_frames_per_output_format() {
          sur 9-16, 1-1, 4-5 et 4k-16-9."
     );
 }
+
+/// Rend le preset side-by-side avec un rect webcam en COLONNE — exactement ce que
+/// produit `computeCompositeLayout` (branche dual-frame : `webcamRect = webcamSlot`,
+/// un slot de largeur fixe et de pleine hauteur, sans aucun ajustement d'aspect).
+///
+/// C'est le cas qui étirait la caméra : le natif plaquait la frame entière sur ce
+/// slot. Depuis `cover_crop_uv`, la coupe source suit le ratio de la boîte, donc la
+/// caméra est rognée mais jamais déformée. Écrit un PPM pour inspection visuelle —
+/// la propriété, elle, est verrouillée par les tests unitaires de `cover_crop_uv`.
+#[test]
+fn golden_side_by_side_webcam_is_not_stretched() {
+    let (screen, webcam) = match (
+        std::env::var("OPENSCREEN_GOLDEN_SCREEN"),
+        std::env::var("OPENSCREEN_GOLDEN_WEBCAM"),
+    ) {
+        (Ok(s), Ok(w)) => (s, w),
+        _ => {
+            println!("SKIP: definir OPENSCREEN_GOLDEN_SCREEN / _WEBCAM");
+            return;
+        }
+    };
+    let out_dir = std::env::var("OPENSCREEN_GOLDEN_OUT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("target/golden"));
+    std::fs::create_dir_all(&out_dir).expect("dossier de sortie");
+
+    let (w, h) = (1920u32, 1080u32);
+    let (s, c) = (screen.replace('\\', "/"), webcam.replace('\\', "/"));
+    // slot webcam : colonne droite, ~31% de large, pleine hauteur → ratio ~0.55,
+    // très loin du 16:9 de la caméra. Sans cover, la tête est visiblement étirée.
+    let scene_json = format!(
+        r##"{{
+        "clips": [{{"screenPath":"{s}","webcamPath":"{c}","sourceStartSec":0,"sourceEndSec":30,"webcamOffsetSec":0,"hasAudio":true}}],
+        "layout": {{"preset":"dual-frame","webcamSize":1.0,"webcamShape":"rectangle","webcamMirror":false,
+                    "webcamRect":{{"x":0.66,"y":0.06,"width":0.31,"height":0.88}},"webcamReactiveZoom":false}},
+        "effects": {{"padding":0.0,"blur":true,"shadow":1.0,"roundnessPx":24,"motionBlur":0.0}},
+        "background": {{"kind":"gradient","angleDeg":135,"stops":["#b02a2a","#7a1414"]}},
+        "zoomRegions": [], "speedRegions": [],
+        "cursor": {{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},
+        "cropByClip": [null],
+        "output": {{"width":{w},"height":{h},"fps":null}}
+    }}"##
+    );
+
+    let mut cfg = config::all().pop().expect("au moins une config");
+    cfg.zoom = false;
+    cfg.layout_anim = false;
+
+    let gpu = Gpu::create(false).expect("device d3d11");
+    let comp = Compositor::new_sized(&gpu, w, h).expect("compositor");
+    comp.set_scene(Some(Scene::from_json(&scene_json).expect("scene valide")));
+    comp.clear_cursor();
+
+    let rgba = unsafe {
+        let mut player = Player::open(&screen, &webcam, &gpu).expect("ouvrir les sources");
+        player.present_frame(&comp, &cfg, AT_SEC).expect("composer");
+        comp.readback_resized(w, h).expect("readback")
+    };
+    let path = out_dir.join("side-by-side.ppm");
+    write_ppm(&path, &rgba, w, h).expect("ecrire le ppm");
+    println!("side-by-side ecrit: {}", path.display());
+}

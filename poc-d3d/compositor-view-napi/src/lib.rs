@@ -104,47 +104,59 @@ pub fn set_rect(id: i32, rect: CompositorViewRect) {
     }
 }
 
-/// Renvoie la dernière frame RGBA8 readback du thread de rendu, dans un
-/// `napi::Buffer` (octets R,G,B,A tightly-packed, `width * height * 4` octets,
-/// même ordre que `putImageData(..., 'rgba8')` attend côté JS).
+/// Une frame de preview auto-descriptive : ses pixels PLUS tout ce qu'il faut pour
+/// les interpréter (dimensions) et pour décider s'il faut les repeindre (génération).
+/// Retournée par `read_frame`. Le consommateur JS n'a plus à deviner la taille depuis
+/// `canvas.width` (ancien couplage implicite fragile) : elle voyage avec les octets.
+#[napi(object)]
+pub struct FramePacket {
+    /// Génération monotone de CETTE frame (≥ 1). Le consommateur la retient et la
+    /// repasse en `since_gen` au prochain appel ; tant qu'elle ne change pas, il n'y
+    /// a rien de neuf à peindre. `f64` car napi n'expose pas `u64` — sans risque : la
+    /// génération n'atteindra jamais 2^53 (ce serait des milliards d'années de rendu).
+    pub gen: f64,
+    pub width: u32,
+    pub height: u32,
+    /// R,G,B,A tightly-packed, `width * height * 4` octets — ce que `putImageData` /
+    /// `ImageData` attendent côté JS (canvas 2D, format natif RGBA8).
+    pub data: Buffer,
+}
+
+/// Renvoie la dernière frame readback du thread de rendu SI elle est plus récente que
+/// `since_gen`, sous forme de {@link FramePacket} (génération + dimensions + pixels).
 ///
-/// `Ok(None)` si :
+/// `Ok(None)` — le consommateur n'a rien à peindre — si :
 ///   - la vue `id` n'existe pas dans le registre (jamais créée ou déjà détruite),
-///   - ou si aucune frame n'a encore été composée (1er appel avant que le
-///     thread de rendu n'ait publié quoi que ce soit — composition suspendue tant
-///     qu'aucune scène n'a été posée, lecture libre en pause avant la 1re frame,
-///     etc.).
+///   - aucune frame n'a encore été composée (1er appel avant que le thread de rendu
+///     n'ait publié quoi que ce soit), OU
+///   - le consommateur possède déjà la génération courante (`gen <= since_gen`). C'est
+///     le cas dominant en édition (preview figée en pause) : on renvoie `None` SANS
+///     cloner le buffer ni traverser l'IPC. Tout le coût `O(w·h)` par frame — clone
+///     Rust + structured-clone IPC + copies canvas — disparaît tant que rien ne bouge.
+///     Passer `since_gen = 0` force la livraison de la frame courante (1re lecture).
 ///
-/// Le `Buffer` retourné est détaché du `Vec<u8>` interne (copie zéro-copy via
-/// le mécanisme de `napi::bindgen_prelude::Buffer` — l'ownership du
-/// stockage sous-jacent est transféré au JS GC). Le thread de rendu continue
-/// à composer/remplacer le buffer interne à chaque frame sans bloquer le
-/// thread Node ; le prochain `read_frame` verra la frame suivante.
-///
-/// Coût dominant : l'alloc `Vec<u8>` côté rendu + la copie `O(w·h)` vers le
-/// Buffer napi — c'est le prix du transport cross-thread + cross-FFI.
+/// Quand une frame EST retournée, son `data` est détaché du `Vec<u8>` interne
+/// (l'ownership passe au JS GC) ; le thread de rendu continue à composer sans bloquer
+/// le thread Node.
 #[napi]
-pub fn read_frame(id: i32) -> Result<Option<Buffer>> {
+pub fn read_frame(id: i32, since_gen: f64) -> Result<Option<FramePacket>> {
     // Snapshot le pixel buffer HORS du lock du registre : on en a besoin vivant
     // (r#[napi] retourne un Buffer qui consomme l'ownership du Vec). Sinon le
     // MutexGuard serait tenu pendant que la frame est consommée par JS, ce qui
     // bloquerait tout autre appel napi (`set_rect`, `destroy_view`, ...).
     let slot = match registry().lock().unwrap().get(&id) {
         None => return Ok(None),
-        Some(v) => v.latest_frame(),
+        Some(v) => v.latest_frame_since(since_gen.max(0.0) as u64),
     };
-    match slot {
-        None => Ok(None),
-        Some((w, h, pixels)) => {
-            debug_assert_eq!(pixels.len(), (w as usize) * (h as usize) * 4);
-            // Format : R, G, B, A tightly-packed, ce que `ctx.putImageData(buffer, ...)` attend
-            // via un `Uint8ClampedArray` côté JS (canvas 2D, format natif RGBA8). Le compactage
-            // ignore le canal alpha (constant 255 — pas de transparence côté canvas, on rend sur
-            // fond déjà opaque) mais on garde quand même les 4 octets pour respecter le contrat
-            // `width*height*4` qu'on documente.
-            Ok(Some(Buffer::from(pixels)))
+    Ok(slot.map(|(gen, w, h, pixels)| {
+        debug_assert_eq!(pixels.len(), (w as usize) * (h as usize) * 4);
+        FramePacket {
+            gen: gen as f64,
+            width: w,
+            height: h,
+            data: Buffer::from(pixels),
         }
-    }
+    }))
 }
 
 /// Param live (inspector). Le type de valeur route vers le bon setter :

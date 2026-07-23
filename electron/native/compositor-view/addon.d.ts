@@ -24,6 +24,18 @@ export interface CompositorViewRect {
 
 export type CompositorParamValue = boolean | number | string;
 
+/** A self-describing preview frame from `readFrame`: pixels plus everything needed
+ *  to interpret them (`width`/`height`) and to decide whether to repaint (`gen`).
+ *  `gen` is a monotonic per-frame generation (≥ 1); the renderer keeps the last one
+ *  it painted and passes it back as `sinceGen` so an unchanged frame is never
+ *  re-delivered. `data` is RGBA8, `width * height * 4` bytes. */
+export interface NativeFramePacket {
+	gen: number;
+	width: number;
+	height: number;
+	data: Buffer;
+}
+
 export interface ExportStats {
 	frames: number;
 	wallS: number;
@@ -68,16 +80,17 @@ export interface CompositorViewAddon {
 		cursorPath?: string,
 	): number;
 	setRect(id: number, rect: CompositorViewRect): void;
-	/** Returns the most recently rendered frame as a raw pixel buffer (length =
-	 *  `width * height * 4`). Byte order is RGBA per the new contract; if the
-	 *  picture comes back with red/blue swapped once the real addon is
-	 *  buildable, swap to `new ImageData(new Uint8ClampedArray(buffer), w, h)`
-	 *  where the bytes are interpreted as BGRA, or ask the Rust side to match
-	 *  RGBA on the wire. Returns `null` if no frame is ready yet.
+	/** Returns the most recently rendered frame as a self-describing packet
+	 *  (`{ gen, width, height, data }`) IF its generation is newer than `sinceGen`.
+	 *  `data` is a raw RGBA pixel buffer (length = `width * height * 4`, byte order
+	 *  RGBA — what `ImageData` / `putImageData` expect).
 	 *
-	 *  TODO: confirm RGBA vs BGRA byte order against the real addon once it's
-	 *  buildable. */
-	readFrame(id: number): Buffer | null;
+	 *  Returns `null` — nothing to paint — when the view is unknown, no frame has
+	 *  been composed yet, OR the caller already holds the current generation
+	 *  (`gen <= sinceGen`). That last case is the idle path (preview paused on a
+	 *  still frame): `null` comes back WITHOUT cloning the buffer or crossing IPC.
+	 *  Pass `sinceGen = 0` to force delivery of the current frame. */
+	readFrame(id: number, sinceGen: number): NativeFramePacket | null;
 	setParam(id: number, key: string, value: CompositorParamValue): void;
 	setPlaying(id: number, playing: boolean): void;
 	/** Seeks the view to source-media `seconds` for the active clip. */

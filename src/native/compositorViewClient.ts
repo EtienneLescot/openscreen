@@ -12,6 +12,7 @@ import type {
 	CompositorClipInput,
 	CompositorExportParams,
 	CompositorExportResult,
+	CompositorFramePacket,
 	CompositorParamValue,
 	CompositorViewRect,
 	CompositorViewResult,
@@ -36,16 +37,20 @@ export function setCompositorRect(id: number, rect: CompositorViewRect): Promise
 	});
 }
 
-/** Polls the most recently rendered frame for `id` as a raw RGBA pixel buffer.
- *  Returns `null` when the addon is absent OR no frame is ready yet (e.g.
- *  still decoding the first clip). The renderer is expected to draw the
- *  returned buffer into a `<canvas>` via `putImageData` (or equivalent) on
- *  every rAF tick (target ~30fps to keep IPC + GPU readback cheap). */
-export function readCompositorFrame(id: number): Promise<Buffer | null> {
-	return requireNativeBridgeData<Buffer | null>({
+/** Polls the most recently rendered frame for `id`, but only if its generation is
+ *  newer than `sinceGen` (the generation the caller last painted). Returns a
+ *  {@link CompositorFramePacket} on a new frame, or `null` when the addon is absent,
+ *  no frame is ready yet, OR the caller already holds the current generation — the
+ *  idle path, where `null` returns without any buffer crossing IPC. Pass `sinceGen = 0`
+ *  to force delivery of the current frame. */
+export function readCompositorFrame(
+	id: number,
+	sinceGen: number,
+): Promise<CompositorFramePacket | null> {
+	return requireNativeBridgeData<CompositorFramePacket | null>({
 		domain: "compositor",
 		action: "readFrame",
-		payload: { id },
+		payload: { id, sinceGen },
 	});
 }
 

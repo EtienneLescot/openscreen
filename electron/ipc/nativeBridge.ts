@@ -359,14 +359,16 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 							compositorViewService.setRect(request.payload.id, request.payload.rect);
 							return createSuccessResponse(requestId, { ok: true });
 						case "readFrame": {
-							// The renderer polls this every rAF tick (~30fps) and paints the
-							// returned buffer into a `<canvas>`. The response wrapper does NOT
+							// The renderer polls this every rAF tick (~30fps). It passes the
+							// generation it last painted as `sinceGen`; native returns `null` when
+							// nothing newer exists (idle path — no buffer copy). On a new frame it
+							// returns `{ gen, width, height, data }`. The response wrapper does NOT
 							// JSON-stringify — `ipcMain.handle` round-trips via structured clone,
-							// which preserves `Buffer`/`Uint8Array` instances as binary. We return
-							// the raw `Buffer | null` straight through; the success wrapper is fine
-							// here because `{ ok: true, data: <Buffer>, meta: {...} }` is a plain
-							// object whose `.data` field IS the Buffer — structured clone keeps it.
-							const frame = compositorViewService.readFrame(request.payload.id);
+							// which preserves the nested `Buffer` in `.data` as binary.
+							const frame = compositorViewService.readFrame(
+								request.payload.id,
+								request.payload.sinceGen,
+							);
 							return createSuccessResponse(requestId, frame);
 						}
 						case "setParam":
