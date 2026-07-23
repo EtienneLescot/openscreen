@@ -11,6 +11,7 @@ import type {
 	CompositorViewRect,
 	ExportParamsInput,
 	ExportStats,
+	NativeFramePacket,
 } from "../../native/compositor-view/addon";
 
 /**
@@ -293,17 +294,17 @@ export class CompositorViewService {
 		addon.setRect(id, rect);
 	}
 
-	/** Reads the most recently rendered frame for `id` back to the renderer as
-	 *  a raw RGBA pixel buffer. Returns `null` when the addon is absent OR
-	 *  when the native side has no frame ready yet (e.g. view not started,
-	 *  still decoding the first clip). Byte order is RGBA per the new native
-	 *  contract; TODO confirms against the real addon once buildable. */
-	readFrame(id: number): Buffer | null {
+	/** Reads the most recently rendered frame for `id` as a self-describing packet
+	 *  (`{ gen, width, height, data }`), but only if its generation is newer than
+	 *  `sinceGen`. Returns `null` when the addon is absent, no frame is ready yet,
+	 *  OR the caller already holds the current generation — the idle path, where
+	 *  `null` comes back without any buffer copy. Byte order is RGBA. */
+	readFrame(id: number, sinceGen: number): NativeFramePacket | null {
 		const addon = this.ensureAddon();
 		if (!addon) {
 			return null;
 		}
-		return addon.readFrame(id);
+		return addon.readFrame(id, sinceGen);
 	}
 
 	setParam(id: number, key: string, value: CompositorParamValue): void {

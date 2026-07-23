@@ -113,6 +113,17 @@ export interface CompositorViewResult {
 	id: number;
 }
 
+/** A self-describing preview frame returned by `readFrame` (native → renderer): pixels
+ *  (`data`, RGBA8, `width * height * 4` bytes) plus their dimensions and a monotonic
+ *  generation. The hook keeps `gen` and passes it back as `sinceGen`; an unchanged frame
+ *  is never re-delivered, so the whole per-frame copy cost vanishes while nothing moves. */
+export interface CompositorFramePacket {
+	gen: number;
+	width: number;
+	height: number;
+	data: Buffer;
+}
+
 /** Un clip de la timeline pour l'export multiclip natif (fichiers screen+webcam + trim). */
 export interface CompositorClipInput {
 	screenPath: string;
@@ -671,13 +682,12 @@ export type NativeBridgeRequest =
 			domain: "compositor";
 			action: "readFrame";
 			/** Polled every rAF tick (target ~30fps) by the renderer's
-			 *  `useNativeCompositorView` hook. The native side reads back the
-			 *  most recently rendered frame as a raw RGBA pixel buffer; the
-			 *  hook paints it into a `<canvas>`. Returns `null` when the
-			 *  addon is absent OR no frame is ready yet (e.g. still decoding
-			 *  the first clip). Bytes survive IPC via Electron's structured
-			 *  clone — `ipcRenderer.invoke` preserves `Buffer` end-to-end. */
-			payload: { id: number };
+			 *  `useNativeCompositorView` hook. `sinceGen` is the generation the hook
+			 *  last painted; native returns a {@link CompositorFramePacket} only when a
+			 *  newer frame exists, else `null` (view absent, no frame yet, or the hook
+			 *  already holds the current generation — the idle path, no buffer copied).
+			 *  The nested `data` Buffer survives IPC via Electron's structured clone. */
+			payload: { id: number; sinceGen: number };
 			requestId?: string;
 	  }
 	| {
