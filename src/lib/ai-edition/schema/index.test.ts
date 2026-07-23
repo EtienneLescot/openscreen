@@ -14,9 +14,9 @@ import {
 	zoomRegionSchema,
 } from "./index";
 
-describe("axcut-schema v4", () => {
+describe("axcut-schema v5", () => {
 	it("uses schema version 4", () => {
-		expect(axcutSchemaVersion).toBe(4);
+		expect(axcutSchemaVersion).toBe(5);
 	});
 
 	it("rejects unknown schema versions", () => {
@@ -28,9 +28,9 @@ describe("axcut-schema v4", () => {
 		).toThrow();
 	});
 
-	it("createEmptyDocument returns a valid v4 doc with empty collections", () => {
+	it("createEmptyDocument returns a valid v5 doc with empty collections", () => {
 		const doc = createEmptyDocument({ projectId: "proj_1", title: "Demo" });
-		expect(doc.schemaVersion).toBe(4);
+		expect(doc.schemaVersion).toBe(5);
 		expect(doc.assets).toEqual([]);
 		expect(doc.timeline.clips).toEqual([]);
 		expect(doc.timeline.trimRanges).toEqual([]);
@@ -233,7 +233,7 @@ describe("axcut-schema v4", () => {
 			const doc = documentSchema.parse(
 				v3Doc({ project: { ...v3Doc().project, primaryAssetId: "asset_2" } }),
 			);
-			expect(doc.schemaVersion).toBe(4);
+			expect(doc.schemaVersion).toBe(5);
 			expect((doc as Record<string, unknown>).cameraTrack).toBeUndefined();
 			expect(doc.assets.find((a) => a.id === "asset_1")?.cameraTrack).toBeNull();
 			expect(doc.assets.find((a) => a.id === "asset_2")?.cameraTrack?.sourcePath).toBe("/cam.mp4");
@@ -247,7 +247,7 @@ describe("axcut-schema v4", () => {
 
 		it("is a no-op when the v3 document has no legacy cameraTrack", () => {
 			const doc = documentSchema.parse(v3Doc({ cameraTrack: null }));
-			expect(doc.schemaVersion).toBe(4);
+			expect(doc.schemaVersion).toBe(5);
 			for (const asset of doc.assets) {
 				expect(asset.cameraTrack).toBeNull();
 			}
@@ -330,5 +330,132 @@ describe("axcut-schema v4", () => {
 				}),
 			).toThrow();
 		});
+	});
+});
+
+// --- v4 -> v5 clip-anchoring migration (round-trip) --------------------------
+// Uses goodtest's real layout: clip A [asset_f] src[0,25.557313] raw[0,25.557313],
+// clip B [asset_e] src[0,8.149313] raw[25.557313,33.706626], and its straddling
+// speed region [8149,28575]ms. See docs/architecture/timeline-coordinate-refactor.md §6.
+
+describe("v4 -> v5 clip-anchored modifier migration", () => {
+	const CLIP_A_END = 25.557313;
+	const CLIP_B_END = 33.706626;
+
+	function makeV4Doc(overrides: Record<string, unknown> = {}) {
+		const createdAt = "2024-01-01T00:00:00.000Z";
+		return {
+			schemaVersion: 4,
+			project: { id: "p1", title: "goodtest-like", createdAt, updatedAt: createdAt },
+			assets: [
+				{ id: "asset_f", kind: "video", label: "A", originalPath: "/a.mp4", cameraTrack: null },
+				{ id: "asset_e", kind: "video", label: "B", originalPath: "/b.mp4", cameraTrack: null },
+			],
+			timeline: {
+				clips: [
+					{
+						id: "clip_a",
+						assetId: "asset_f",
+						sourceStartSec: 0,
+						sourceEndSec: CLIP_A_END,
+						timelineStartSec: 0,
+						timelineEndSec: CLIP_A_END,
+						origin: "user",
+					},
+					{
+						id: "clip_b",
+						assetId: "asset_e",
+						sourceStartSec: 0,
+						sourceEndSec: 8.149313,
+						timelineStartSec: CLIP_A_END,
+						timelineEndSec: CLIP_B_END,
+						origin: "user",
+					},
+				],
+			},
+			...overrides,
+		};
+	}
+
+	it("bumps the version and anchors a zoom wholly inside one clip", () => {
+		const doc = documentSchema.parse(
+			makeV4Doc({
+				zoomRanges: [
+					{ id: "z1", startMs: 2000, endMs: 5000, depth: 3, focus: { cx: 0.5, cy: 0.5 } },
+				],
+			}),
+		);
+		expect(doc.schemaVersion).toBe(5);
+		expect(doc.zoomRanges).toHaveLength(1);
+		const z = doc.zoomRanges[0];
+		expect(z).toMatchObject({ id: "z1", clipId: "clip_a", depth: 3 });
+		expect(z.sourceStartSec).toBeCloseTo(2, 5);
+		expect(z.sourceEndSec).toBeCloseTo(5, 5);
+		// derived ms cache stays consistent with the anchor
+		expect(z.startMs).toBe(2000);
+		expect(z.endMs).toBe(5000);
+	});
+
+	it("splits a straddling speed region into two fragments that still read as one pill", () => {
+		const doc = documentSchema.parse(
+			makeV4Doc({
+				legacyEditor: { speedRegions: [{ id: "s1", startMs: 8149, endMs: 28575, speed: 3 }] },
+			}),
+		);
+		const speeds = (doc.legacyEditor as Record<string, unknown>).speedRegions as Array<
+			Record<string, unknown>
+		>;
+		expect(speeds).toHaveLength(2);
+		// No shared marker is stored: equal properties + adjacency is what re-merges them.
+		expect(speeds.every((s) => s.speed === 3)).toBe(true);
+		expect(speeds.map((s) => s.clipId)).toEqual(["clip_a", "clip_b"]);
+		expect(speeds[0].sourceStartSec).toBeCloseTo(8.149, 5);
+		expect(speeds[1].sourceStartSec).toBeCloseTo(0, 5);
+		// The two derived ms spans are contiguous and together cover the original.
+		expect(speeds[0].startMs).toBe(8149);
+		expect(speeds[1].endMs).toBe(28575);
+		expect(speeds[0].endMs).toBe(speeds[1].startMs);
+	});
+
+	it("never drops a region it cannot anchor (unknown clip duration → passes through)", () => {
+		// A v2-imported project before its duration is probed: zero-extent clip.
+		const doc = documentSchema.parse({
+			schemaVersion: 4,
+			project: {
+				id: "p2",
+				title: "unprobed",
+				createdAt: "2024-01-01T00:00:00.000Z",
+				updatedAt: "2024-01-01T00:00:00.000Z",
+			},
+			assets: [{ id: "a", kind: "video", label: "A", originalPath: "/a.mp4", cameraTrack: null }],
+			timeline: {
+				clips: [
+					{
+						id: "c1",
+						assetId: "a",
+						sourceStartSec: 0,
+						timelineStartSec: 0,
+						timelineEndSec: 0,
+						origin: "user",
+					},
+				],
+			},
+			zoomRanges: [{ id: "z1", startMs: 1000, endMs: 2000, depth: 3, focus: { cx: 0.5, cy: 0.5 } }],
+		});
+		expect(doc.zoomRanges).toHaveLength(1);
+		expect(doc.zoomRanges[0]).toMatchObject({ id: "z1", startMs: 1000, endMs: 2000 });
+		expect(doc.zoomRanges[0].clipId).toBeUndefined();
+	});
+
+	it("is idempotent — re-parsing an already-v5 document changes nothing", () => {
+		const once = documentSchema.parse(
+			makeV4Doc({
+				zoomRanges: [
+					{ id: "z1", startMs: 2000, endMs: 5000, depth: 3, focus: { cx: 0.5, cy: 0.5 } },
+				],
+			}),
+		);
+		const twice = documentSchema.parse(once);
+		expect(twice).toEqual(once);
 	});
 });

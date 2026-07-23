@@ -33,6 +33,7 @@ import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { ventilateSpanAcrossClips } from "@/lib/ai-edition/timeline/region-ventilation";
+import { coalesceRegionsForRuler } from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	coalescedTrimGroups,
 	resolveTimelineSpanToTrim,
@@ -260,40 +261,46 @@ export function V4Timeline({
 	// zoom/speed/annotation: one pill per row, never coalesced — each carries
 	// distinct per-instance content (depth/focus, speed value, text) that two
 	// touching-but-different regions must not silently merge into one.
-	const annPills: LanePill[] = tl.annotationRegions.map((a) => ({
-		id: a.id,
+	// Pills follow the universal merge rule (timelineMap): regions of the same kind whose
+	// PROPERTIES are equal and whose spans touch render as ONE pill, however they came to be
+	// adjacent. Different properties never merge (and cannot overlap — they repel on edit).
+	// Trims obey the same rule with an empty property set, so they always merge.
+	const annPills: LanePill[] = coalesceRegionsForRuler(tl.annotationRegions).map((p) => ({
+		id: p.ids[0],
 		kind: "annotation",
-		start: a.startMs / 1000,
-		end: a.endMs / 1000,
+		start: p.start,
+		end: p.end,
 		label: t("toolbar.newAnnotation"),
-		sourceIds: [a.id],
+		sourceIds: p.ids,
 	}));
-	const speedPills: LanePill[] = tl.speedRegions.map((s) => ({
-		id: s.id,
+	const speedPills: LanePill[] = coalesceRegionsForRuler(tl.speedRegions).map((p) => ({
+		id: p.ids[0],
 		kind: "speed",
-		start: s.startMs / 1000,
-		end: s.endMs / 1000,
-		label: `${(s as { speed?: number }).speed ?? 1.5}×`,
-		sourceIds: [s.id],
+		start: p.start,
+		end: p.end,
+		label: `${(p.member as { speed?: number }).speed ?? 1.5}×`,
+		sourceIds: p.ids,
 	}));
-	const cameraFullscreenPills: LanePill[] = tl.cameraFullscreenRegions.map((c) => ({
-		id: c.id,
-		kind: "cameraFullscreen",
-		start: c.startMs / 1000,
-		end: c.endMs / 1000,
-		label: "Full Camera",
-		sourceIds: [c.id],
-	}));
-	const zoomPills: LanePill[] = tl.zoomRegions.map((z) => ({
-		id: z.id,
+	const cameraFullscreenPills: LanePill[] = coalesceRegionsForRuler(tl.cameraFullscreenRegions).map(
+		(p) => ({
+			id: p.ids[0],
+			kind: "cameraFullscreen",
+			start: p.start,
+			end: p.end,
+			label: "Full Camera",
+			sourceIds: p.ids,
+		}),
+	);
+	const zoomPills: LanePill[] = coalesceRegionsForRuler(tl.zoomRegions).map((p) => ({
+		id: p.ids[0],
 		kind: "zoom",
-		start: z.startMs / 1000,
-		end: z.endMs / 1000,
+		start: p.start,
+		end: p.end,
 		// Matches RightPanelStack's effectiveZoomScale: a custom scale (from the
 		// slider) overrides the depth preset; otherwise show the depth's actual
 		// preset value, not a fabricated linear approximation of it.
-		label: `${(z.customScale ?? ZOOM_DEPTH_SCALES[z.depth]).toFixed(2)}×`,
-		sourceIds: [z.id],
+		label: `${(p.member.customScale ?? ZOOM_DEPTH_SCALES[p.member.depth]).toFixed(2)}×`,
+		sourceIds: p.ids,
 	}));
 	// trims: content-free (no per-instance text/settings), so touching rows —
 	// inevitable once a trim is ventilated across a clip boundary — are

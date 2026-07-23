@@ -43,7 +43,7 @@ describe("migrateProjectDataToAxcutDocument", () => {
 	it("produces a v3 document with one asset and one clip from a v2 single-recording project", () => {
 		const doc = migrateProjectDataToAxcutDocument(makeV2Project());
 
-		expect(doc.schemaVersion).toBe(4);
+		expect(doc.schemaVersion).toBe(5);
 		expect(doc.assets).toHaveLength(1);
 		const asset = doc.assets[0];
 		expect(asset.kind).toBe("video");

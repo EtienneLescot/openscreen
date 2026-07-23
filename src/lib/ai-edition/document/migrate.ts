@@ -28,7 +28,6 @@ import {
 	type AxcutLegacyEditor,
 	type AxcutTrimRange,
 	type AxcutZoomRegion,
-	axcutSchemaVersion,
 	documentSchema,
 } from "../schema";
 import { createId } from "./ids";
@@ -199,8 +198,15 @@ export function migrateProjectDataToAxcutDocument(
 
 	const legacyEditor: AxcutLegacyEditor = input.editor ? { ...input.editor } : null;
 
-	const draft: AxcutDocument = {
-		schemaVersion: axcutSchemaVersion,
+	// Emits the **v4** shape (per-asset cameraTrack + RAW-virtual-ms regions) and lets
+	// `documentSchema`'s v4→v5 preprocess perform the clip-anchoring, so the
+	// modifier migration lives in exactly ONE place instead of being duplicated here.
+	// Deliberately not `axcutSchemaVersion`: that would label the draft as already-v5
+	// and the preprocess would skip anchoring, leaving v2-imported regions unanchored.
+	// Untyped on purpose — this is the INPUT to `documentSchema.parse` (which upgrades
+	// and validates it), not an already-valid v5 document.
+	const draft = {
+		schemaVersion: 4,
 		project: {
 			id: projectId,
 			title,

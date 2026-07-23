@@ -15,8 +15,8 @@ import {
 	moveClip,
 	normalizeIntervals,
 	primaryAssetDuration,
+	rederiveRegionMs,
 	replaceTimeline,
-	reprojectDocumentRegions,
 	resequenceClips,
 } from "./timeline";
 
@@ -295,7 +295,7 @@ export function applyTimelineOperation(
 				},
 				preview: { ...document.preview, revision: document.preview.revision + 1 },
 			};
-			const finalDoc = reprojectDocumentRegions(nextDoc, oldClips, newClips);
+			const finalDoc = rederiveRegionMs(nextDoc, newClips);
 			return {
 				document: finalDoc,
 				summary: `trimmed clip to ${formatSec(Math.min(op.sourceStartSec, op.sourceEndSec))}–${formatSec(Math.max(op.sourceStartSec, op.sourceEndSec))}`,

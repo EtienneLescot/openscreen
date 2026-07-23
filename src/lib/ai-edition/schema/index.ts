@@ -11,8 +11,17 @@
 // shape — runtime ops, IPC, and exporter integration land in Phase 1+.
 
 import { z } from "zod";
+// Cycle-safe: `document/ids` only pulls `uuid`, and `timeline/timelineMap`'s
+// transitive value-imports (region-ventilation, virtual-preview) import from this
+// module TYPE-ONLY, so requiring them here never re-enters schema at runtime.
+import { createId } from "../document/ids";
+import { anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
 
-export const axcutSchemaVersion = 4;
+//   4. v5 — modifiers (zoom / annotation / speed / cameraFullscreen) become
+//      CLIP-ANCHORED fragments: `{clipId, sourceStartSec, sourceEndSec}` is the
+//      source of truth, `startMs`/`endMs` stay as a derived cache for the
+//      transition. See docs/architecture/timeline-coordinate-refactor.md §6.
+export const axcutSchemaVersion = 5;
 
 export const isoDateSchema = z.string().datetime({ offset: true });
 
@@ -379,11 +388,24 @@ const annotationStyleSchema = z.object({
 		.optional(),
 });
 
+// v5 clip anchor — the source of truth for a modifier's position. A region the user drew
+// across a clip boundary is stored as one fragment per covered clip; they need no shared
+// marker, because two regions with equal properties that touch render as one pill by the
+// universal merge rule (see timelineMap). Optional during the Stage B transition: the
+// v4→v5 migration fills it in, and regions created by not-yet-migrated code still validate
+// on startMs/endMs alone, which remain a DERIVED cache of the fragment's ruler span.
+const clipAnchorShape = {
+	clipId: z.string().min(1).optional(),
+	sourceStartSec: z.number().nonnegative().optional(),
+	sourceEndSec: z.number().nonnegative().optional(),
+};
+
 export const annotationRegionSchema = z
 	.object({
 		id: z.string().min(1),
 		startMs: z.number().nonnegative(),
 		endMs: z.number().nonnegative(),
+		...clipAnchorShape,
 		type: z.enum(["text", "image", "figure", "blur"]),
 		content: z.string().default(""),
 		textContent: z.string().optional(),
@@ -412,6 +434,7 @@ export const zoomRegionSchema = z
 		id: z.string().min(1),
 		startMs: z.number().nonnegative(),
 		endMs: z.number().nonnegative(),
+		...clipAnchorShape,
 		depth: z.union([
 			z.literal(1),
 			z.literal(2),
@@ -512,7 +535,64 @@ function upgradeV3DocumentToV4(raw: unknown): unknown {
 	return { ...rest, schemaVersion: 4, assets: nextAssets };
 }
 
-export const documentSchema = z.preprocess(upgradeV3DocumentToV4, documentSchemaShape);
+/**
+ * v4 → v5 — modifiers become CLIP-ANCHORED fragments. Every RAW-virtual-ms region
+ * (document `zoomRanges` / `annotations`, plus the `legacyEditor.speedRegions` /
+ * `cameraFullscreenRegions` envelopes) is ventilated across the stored RAW clip
+ * layout it was authored against, yielding one fragment per covered clip, with
+ * `startMs`/`endMs` re-derived as a transition cache. The fragments carry no marker
+ * tying them together: they share the same properties, so the ruler already renders
+ * them as one pill whenever they are adjacent (see timelineMap merge rule).
+ *
+ * A region covering no clip (zero-length, or off the end of the timeline) is
+ * dropped: it could never play. A document with no clips has nothing to anchor to,
+ * so its regions pass through untouched (still valid — the anchor is optional).
+ */
+function upgradeV4DocumentToV5(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object") return raw;
+	const doc = raw as Record<string, unknown>;
+	if (doc.schemaVersion !== 4) return raw;
+
+	const timeline = (doc.timeline ?? {}) as Record<string, unknown>;
+	const clips = (Array.isArray(timeline.clips) ? timeline.clips : []) as unknown as AxcutClip[];
+
+	const anchor = (value: unknown, prefix: string): unknown => {
+		if (!Array.isArray(value) || clips.length === 0) return value;
+		return anchorRegionsWithDerivedMs(
+			value as Array<{ id: string; startMs: number; endMs: number }>,
+			clips,
+			() => createId(prefix),
+		);
+	};
+
+	const legacy =
+		doc.legacyEditor && typeof doc.legacyEditor === "object" && !Array.isArray(doc.legacyEditor)
+			? (doc.legacyEditor as Record<string, unknown>)
+			: null;
+
+	return {
+		...doc,
+		schemaVersion: 5,
+		zoomRanges: anchor(doc.zoomRanges, "zoom"),
+		annotations: anchor(doc.annotations, "ann"),
+		legacyEditor: legacy
+			? {
+					...legacy,
+					...(Array.isArray(legacy.speedRegions)
+						? { speedRegions: anchor(legacy.speedRegions, "speed") }
+						: {}),
+					...(Array.isArray(legacy.cameraFullscreenRegions)
+						? { cameraFullscreenRegions: anchor(legacy.cameraFullscreenRegions, "camfull") }
+						: {}),
+				}
+			: doc.legacyEditor,
+	};
+}
+
+export const documentSchema = z.preprocess(
+	(raw) => upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw)),
+	documentSchemaShape,
+);
 
 export const createProjectInputSchema = z.object({
 	title: z.string().trim().min(1).default("Untitled Project"),

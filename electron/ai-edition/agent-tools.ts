@@ -12,6 +12,12 @@ import { z } from "zod";
 import { createId } from "../../src/lib/ai-edition/document/ids";
 import { replaceTimeline, resequenceClips } from "../../src/lib/ai-edition/document/timeline";
 import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
+import {
+	anchorRegionsWithDerivedMs,
+	coalesceRegionsForRuler,
+	replacePillSpan,
+	resolvePillIds,
+} from "../../src/lib/ai-edition/timeline/timelineMap";
 
 export interface AgentToolSpec {
 	name: string;
@@ -56,6 +62,30 @@ function resolveSpanMs(
 	const s = startSec ?? existing.startMs / 1000;
 	const e = endSec ?? existing.endMs / 1000;
 	return { startMs: toMs(Math.min(s, e)), endMs: toMs(Math.max(s, e)) };
+}
+
+// v5: a modifier is stored as clip-anchored fragment(s), and adjacent regions with the
+// same properties read as ONE pill (timelineMap merge rule). The agent reasons in VIRTUAL
+// seconds over whole regions, so we present exactly the pills the user sees, keyed by the
+// first region under each — which every set*/remove* tool accepts as the id.
+function coalesceForAgent<T extends { id: string; startMs: number; endMs: number }>(
+	regions: T[],
+): T[] {
+	return coalesceRegionsForRuler(regions).map((pill) => ({
+		...pill.member,
+		id: pill.ids[0],
+		startMs: Math.round(pill.start * 1000),
+		endMs: Math.round(pill.end * 1000),
+	}));
+}
+
+/** Every agent write anchors the region to the clip(s) it covers, exactly like the UI. */
+function anchorForAgent<T extends { id: string; startMs: number; endMs: number }>(
+	region: T,
+	document: AxcutDocument,
+	prefix: string,
+) {
+	return anchorRegionsWithDerivedMs([region], document.timeline.clips, () => createId(prefix));
 }
 
 const secondsSchema = z.number().finite().nonnegative();
@@ -422,20 +452,20 @@ export function documentSnapshotForModel(document: AxcutDocument): Record<string
 			endSec: s.endSec,
 			reason: s.reason,
 		})),
-		zoomRanges: document.zoomRanges.map((z) => ({
+		zoomRanges: coalesceForAgent(document.zoomRanges).map((z) => ({
 			id: z.id,
 			startSec: roundSec(z.startMs),
 			endSec: roundSec(z.endMs),
 			depth: z.depth,
 			focus: z.focus,
 		})),
-		speedRegions: speedRegions.map((s) => ({
+		speedRegions: coalesceForAgent(speedRegions).map((s) => ({
 			id: s.id,
 			startSec: roundSec(s.startMs),
 			endSec: roundSec(s.endMs),
 			speed: s.speed,
 		})),
-		annotations: document.annotations.map((a) => ({
+		annotations: coalesceForAgent(document.annotations).map((a) => ({
 			id: a.id,
 			startSec: roundSec(a.startMs),
 			endSec: roundSec(a.endMs),
@@ -643,7 +673,10 @@ export function executeAgentTool(
 			};
 			const next: AxcutDocument = {
 				...document,
-				zoomRanges: [...document.zoomRanges, zoom] as AxcutDocument["zoomRanges"],
+				zoomRanges: [
+					...document.zoomRanges,
+					...anchorForAgent(zoom, document, "zoom"),
+				] as AxcutDocument["zoomRanges"],
 			};
 			return {
 				ok: true,
@@ -665,20 +698,28 @@ export function executeAgentTool(
 			const existing = document.zoomRanges.find((z) => z.id === zoomId);
 			if (!existing) return failure(`Unknown zoom: ${zoomId}`);
 			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
+			const zoomPill = new Set(resolvePillIds(document.zoomRanges, zoomId));
 			const next: AxcutDocument = {
 				...document,
-				zoomRanges: document.zoomRanges.map((z) =>
-					z.id === zoomId
-						? {
-								...z,
-								startMs,
-								endMs,
-								...(parsed.data.depth !== undefined
-									? { depth: parsed.data.depth as 1 | 2 | 3 | 4 | 5 | 6 }
-									: {}),
-								...(parsed.data.focus ? { focus: parsed.data.focus } : {}),
-							}
-						: z,
+				zoomRanges: replacePillSpan(
+					// payload edits first, applied to every region under the pill…
+					document.zoomRanges.map((z) =>
+						zoomPill.has(z.id)
+							? {
+									...z,
+									...(parsed.data.depth !== undefined
+										? { depth: parsed.data.depth as 1 | 2 | 3 | 4 | 5 | 6 }
+										: {}),
+									...(parsed.data.focus ? { focus: parsed.data.focus } : {}),
+								}
+							: z,
+					),
+					// …then the span: clamped against different-property pills, then re-ventilated.
+					zoomId,
+					startMs,
+					endMs,
+					document.timeline.clips,
+					() => createId("zoom"),
 				) as AxcutDocument["zoomRanges"],
 			};
 			return {
@@ -699,7 +740,10 @@ export function executeAgentTool(
 			const region = { id: createId("speed"), startMs, endMs, speed: parsed.data.speed };
 			const next: AxcutDocument = {
 				...document,
-				legacyEditor: { ...legacy, speedRegions: [...prev, region] },
+				legacyEditor: {
+					...legacy,
+					speedRegions: [...prev, ...anchorForAgent(region, document, "speed")],
+				},
 			};
 			return {
 				ok: true,
@@ -723,6 +767,7 @@ export function executeAgentTool(
 					| Array<{ id: string; startMs: number; endMs: number; speed: number }>
 					| undefined) ?? [];
 			const existing = prev.find((s) => s.id === parsed.data.speedId);
+			const speedPill = new Set(resolvePillIds(prev, parsed.data.speedId));
 			if (!existing) return failure(`Unknown speed region: ${parsed.data.speedId}`);
 			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
 			const speed = parsed.data.speed ?? existing.speed;
@@ -730,8 +775,13 @@ export function executeAgentTool(
 				...document,
 				legacyEditor: {
 					...legacy,
-					speedRegions: prev.map((s) =>
-						s.id === parsed.data.speedId ? { ...s, startMs, endMs, speed } : s,
+					speedRegions: replacePillSpan(
+						prev.map((s) => (speedPill.has(s.id) ? { ...s, speed } : s)),
+						parsed.data.speedId,
+						startMs,
+						endMs,
+						document.timeline.clips,
+						() => createId("speed"),
 					),
 				},
 			};
@@ -776,7 +826,10 @@ export function executeAgentTool(
 			};
 			const next: AxcutDocument = {
 				...document,
-				annotations: [...document.annotations, ann] as AxcutDocument["annotations"],
+				annotations: [
+					...document.annotations,
+					...anchorForAgent(ann, document, "ann"),
+				] as AxcutDocument["annotations"],
 			};
 			return {
 				ok: true,
@@ -795,21 +848,27 @@ export function executeAgentTool(
 			if (!parsed.success) return failure(parsed.error.message);
 			const { annotationId } = parsed.data;
 			const existing = document.annotations.find((a) => a.id === annotationId);
+			const annPill = new Set(resolvePillIds(document.annotations, annotationId));
 			if (!existing) return failure(`Unknown annotation: ${annotationId}`);
 			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
 			const next: AxcutDocument = {
 				...document,
-				annotations: document.annotations.map((a) =>
-					a.id === annotationId
-						? {
-								...a,
-								startMs,
-								endMs,
-								...(parsed.data.text !== undefined
-									? { content: parsed.data.text, textContent: parsed.data.text }
-									: {}),
-							}
-						: a,
+				annotations: replacePillSpan(
+					document.annotations.map((a) =>
+						annPill.has(a.id)
+							? {
+									...a,
+									...(parsed.data.text !== undefined
+										? { content: parsed.data.text, textContent: parsed.data.text }
+										: {}),
+								}
+							: a,
+					),
+					annotationId,
+					startMs,
+					endMs,
+					document.timeline.clips,
+					() => createId("ann"),
 				),
 			};
 			return {

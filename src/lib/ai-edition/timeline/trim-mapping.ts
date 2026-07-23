@@ -10,11 +10,8 @@
 // across the ruler and re-attach to whichever clip they land on.
 
 import type { AxcutClip, AxcutTrimRange } from "../schema";
-import {
-	type CoalescedSpan,
-	coalesceTouchingSpans,
-	ventilateSpanAcrossClips,
-} from "./region-ventilation";
+import { type CoalescedSpan, ventilateSpanAcrossClips } from "./region-ventilation";
+import { coalesceByIdentity, regionIdentityKey } from "./timelineMap";
 
 /** A clip's on-timeline extent in source-seconds (how much of the source it plays). */
 function clipSourceLen(clip: AxcutClip): number {
@@ -81,15 +78,17 @@ export function ventilateTimelineSpanToTrims(
 }
 
 /**
- * Group trims whose timeline spans touch into one visual unit — trims carry no
- * user-visible content (no text, no per-instance settings), so unlike zoom /
- * speed / annotation, coalescing them for display and selection loses nothing.
- * This is what lets a trim ventilated across a clip boundary (necessarily 2+
- * DSL rows, see `ventilateTimelineSpanToTrims`) render and act as ONE pill —
- * aligning trims with how zoom/speed/annotation already behave under direct
- * drag (never visibly split). Trims with no mapped timeline span (their
- * carrying clip is gone) are dropped entirely, same as `trimToTimelineSpan`
- * callers already expect.
+ * Group trims whose timeline spans touch into one visual unit.
+ *
+ * This used to be trim-specific logic sitting beside a separate mechanism for the
+ * other region kinds — the duplication is gone: trims now go through the SAME merge
+ * primitive as zoom / speed / annotation (`coalesceByIdentity`). A trim simply has no
+ * user-visible properties, so all trims share one identity and any two that touch
+ * merge; the familiar "trims always merge" behaviour is now a *consequence* of the
+ * general rule rather than a rule of its own. That is what lets a trim ventilated
+ * across a clip boundary (necessarily 2+ DSL rows, see `ventilateTimelineSpanToTrims`)
+ * render and act as ONE pill. Trims with no mapped timeline span (their carrying clip
+ * is gone) are dropped, same as `trimToTimelineSpan` callers already expect.
  */
 export function coalescedTrimGroups(
 	trimRanges: AxcutTrimRange[],
@@ -99,10 +98,23 @@ export function coalescedTrimGroups(
 	const spans = trimRanges
 		.map((t) => {
 			const mapped = trimToTimelineSpan(t, clips);
-			return mapped ? { id: t.id, start: mapped.start, end: mapped.end } : null;
+			return mapped
+				? {
+						id: t.id,
+						start: mapped.start,
+						end: mapped.end,
+						// A trim has no user-visible properties, so every trim shares one identity
+						// and any two that touch merge. That is not a trim-specific rule any more:
+						// it is the SAME merge primitive every modifier uses, reached through an
+						// empty property set. (`regionIdentityKey` excludes position + provenance,
+						// which is all a trim carries.)
+						identity: regionIdentityKey(t as unknown as Record<string, unknown>),
+					}
+				: null;
 		})
-		.filter((x): x is { id: string; start: number; end: number } => x !== null);
-	return coalesceTouchingSpans(spans, epsilonSec);
+		.filter((x): x is { id: string; start: number; end: number; identity: string } => x !== null);
+	// Drop the identity key: it is an internal grouping detail, and every trim shares it.
+	return coalesceByIdentity(spans, epsilonSec).map(({ ids, start, end }) => ({ ids, start, end }));
 }
 
 /**
