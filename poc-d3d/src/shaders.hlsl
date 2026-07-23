@@ -176,14 +176,13 @@ float4 ps_main(VSOut i) : SV_Target
     // qui est inséré à l'intérieur du quad d'ombre (élargi de `spread` de chaque côté).
     if (mode > 1.5)
     {
-        // Même pré-déformation anisotrope que l'arrondi normal ci-dessous (mode 0, mb.yz =
-        // stretch_x/stretch_y) : `quad_px`/`spread` arrivent ici en px CANVAS pré-étirement
-        // (voir `Compositor::draw_shadow`, côté Rust) ; sans cette pré-déformation, le halo
-        // (et la courbure de ses coins) ressort elliptique dès que la sortie n'est pas 16:9.
+        // `quad_px`/`spread` sont en px de SORTIE : le render target porte la géométrie de
+        // sortie, donc aucune pré-déformation n'est nécessaire. (Historiquement le canvas
+        // était figé en 16:9 et étiré en fin de pipeline, d'où un facteur anisotrope transporté
+        // dans `mb.yz` que ce shader devait annuler — le halo ressortait elliptique sans lui.)
         float spread = fx.x;
-        float2 stretch = mb.yz;
-        float2 halfsz = quad_px * 0.5 * stretch - spread; // demi-taille RÉELLE (post-étirement) du rect source
-        float2 p = (i.local - quad_px * 0.5) * stretch;
+        float2 halfsz = quad_px * 0.5 - spread;
+        float2 p = i.local - quad_px * 0.5;
         float d = sd_round_rect(p, halfsz, radius_px);
         float a = color.a * (1.0 - smoothstep(0.0, spread, d));
         return float4(color.rgb * a, a);
@@ -224,17 +223,13 @@ float4 ps_main(VSOut i) : SV_Target
     float alpha = color.a;
     if (radius_px > 0.0)
     {
-        // Coins non déformés même si `blit_resized` étire le canvas de façon NON uniforme
-        // (ratio de sortie != 16:9) : mb.yz porte (stretch_x, stretch_y), le facteur que ce
-        // calque subira lors de cet étirement final. On pré-déforme ici les coordonnées par ce
-        // même facteur avant la SDF (isotrope) puis on compare `radius_px` (un rayon RÉEL en
-        // px de sortie) directement dans cet espace "pré-étiré" : le cercle qu'on dessine ainsi
-        // devient, après l'étirement anisotrope réel, un cercle — pas une ellipse — quel que
-        // soit stretch_x/stretch_y (cf. `compose_frame` où mb.yz est posé pour l'écran/la
-        // webcam ; seuls calques dont radius_px > 0).
-        float2 stretch = mb.yz;
-        float2 halfsz = quad_px * 0.5 * stretch;
-        float2 p = (i.local - quad_px * 0.5) * stretch;
+        // `quad_px` est en px de SORTIE (le render target porte la géométrie de sortie) et
+        // `radius_px` est un rayon réel en px de sortie : la SDF isotrope les compare dans le
+        // même espace, le coin est donc rond par construction. (Avant, le canvas figé en 16:9
+        // était étiré en fin de pipeline et il fallait pré-déformer par `mb.yz` pour que le
+        // cercle ne ressorte pas elliptique.)
+        float2 halfsz = quad_px * 0.5;
+        float2 p = i.local - quad_px * 0.5;
         float d = sd_round_rect(p, halfsz, radius_px);
         alpha *= 1.0 - smoothstep(0.0, 1.5, d); // ~1.5px feather (§7 fwidth-like)
     }
