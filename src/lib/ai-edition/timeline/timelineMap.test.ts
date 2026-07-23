@@ -12,7 +12,7 @@ import {
 	clampSpanAgainstNeighbours,
 	coalesceByIdentity,
 	coalesceRegionsForRuler,
-	projectRawRegionsToSource,
+	projectRegionsToSource,
 	regionIdentityKey,
 	replacePillSpan,
 	resolveNativePosition,
@@ -46,9 +46,9 @@ const region = (id: string, startSec: number, endSec: number, payload?: string):
 	...(payload ? { payload } : {}),
 });
 
-describe("projectRawRegionsToSource", () => {
+describe("projectRegionsToSource", () => {
 	it("passes a region through unchanged (no clipIndex) when there are no segments", () => {
-		const out = projectRawRegionsToSource([region("r", 1.5, 4.25)], [], [], () => "x");
+		const out = projectRegionsToSource([region("r", 1.5, 4.25)], [], [], () => "x");
 		expect(out).toEqual([{ id: "r", startMs: 1500, endMs: 4250 }]);
 	});
 
@@ -60,7 +60,7 @@ describe("projectRawRegionsToSource", () => {
 			sourceEndSec: 10,
 			timelineEndSec: 10,
 		});
-		const out = projectRawRegionsToSource([region("r", 3, 5)], [c], [c], () => "x");
+		const out = projectRegionsToSource([region("r", 3, 5)], [c], [c], () => "x");
 		expect(out).toEqual([{ id: "r", startMs: 3000, endMs: 5000, clipIndex: 0 }]);
 	});
 
@@ -75,7 +75,7 @@ describe("projectRawRegionsToSource", () => {
 			timelineEndSec: 10,
 		});
 		const segments = resolvePlaybackSegments([c], [trim("a", 2, 4)]);
-		const out = projectRawRegionsToSource([region("r", 6, 8)], segments, [c], () => "x");
+		const out = projectRegionsToSource([region("r", 6, 8)], segments, [c], () => "x");
 		expect(out).toEqual([{ id: "r", startMs: 6000, endMs: 8000, clipIndex: 1 }]);
 	});
 
@@ -96,12 +96,7 @@ describe("projectRawRegionsToSource", () => {
 			timelineStartSec: 5,
 			timelineEndSec: 10,
 		});
-		const out = projectRawRegionsToSource(
-			[region("r", 3, 7, "keep")],
-			[c1, c2],
-			[c1, c2],
-			() => "r2",
-		);
+		const out = projectRegionsToSource([region("r", 3, 7, "keep")], [c1, c2], [c1, c2], () => "r2");
 		expect(out).toEqual([
 			{ id: "r", startMs: 103000, endMs: 105000, clipIndex: 0, payload: "keep" },
 			{ id: "r2", startMs: 200000, endMs: 202000, clipIndex: 1, payload: "keep" },
@@ -119,11 +114,101 @@ describe("projectRawRegionsToSource", () => {
 			timelineEndSec: 10,
 		});
 		const segments = resolvePlaybackSegments([c], [trim("a", 4, 6)]);
-		const out = projectRawRegionsToSource([region("r", 3, 8)], segments, [c], () => "r2");
+		const out = projectRegionsToSource([region("r", 3, 8)], segments, [c], () => "r2");
 		expect(out).toEqual([
 			{ id: "r", startMs: 3000, endMs: 4000, clipIndex: 0 },
 			{ id: "r2", startMs: 6000, endMs: 8000, clipIndex: 1 },
 		]);
+	});
+
+	// --- anchored path: the anchor is the SSOT, `startMs`/`endMs` are not consulted ---
+
+	it("places an anchored region from its anchor, ignoring a stale startMs/endMs", () => {
+		// THE property phase 1 buys: the derived ms cache is deliberately WRONG here
+		// (raw[0,1] — nowhere near the truth). A region that reads the anchor lands on
+		// source [6,8]; one that still trusted the cache would land on [0,1].
+		const c = clip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineEndSec: 10,
+		});
+		const stale = {
+			...region("r", 0, 1),
+			clipId: "c1",
+			sourceStartSec: 6,
+			sourceEndSec: 8,
+		};
+		const out = projectRegionsToSource([stale], [c], [c], () => "x");
+		expect(out).toEqual([{ ...stale, startMs: 6000, endMs: 8000, clipIndex: 0 }]);
+	});
+
+	it("splits an anchored region across the kept segments of its own clip", () => {
+		// Same trim geometry as the unanchored split above, driven purely by the anchor.
+		const c = clip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineEndSec: 10,
+		});
+		const segments = resolvePlaybackSegments([c], [trim("a", 4, 6)]);
+		const anchored = {
+			...region("r", 3, 8),
+			clipId: "c1",
+			sourceStartSec: 3,
+			sourceEndSec: 8,
+		};
+		const out = projectRegionsToSource([anchored], segments, [c], () => "r2");
+		expect(out).toEqual([
+			{ ...anchored, id: "r", startMs: 3000, endMs: 4000, clipIndex: 0 },
+			{ ...anchored, id: "r2", startMs: 6000, endMs: 8000, clipIndex: 1 },
+		]);
+	});
+
+	it("never places an anchored region on a different clip that shares the asset", () => {
+		// Two clips, same asset, overlapping source windows. The anchor names c2, so the
+		// region must appear ONCE, on c2 — the camera/record mix-up this model prevents.
+		const c1 = clip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 5,
+			timelineStartSec: 0,
+			timelineEndSec: 5,
+		});
+		const c2 = clip({
+			id: "c2",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 5,
+			timelineStartSec: 5,
+			timelineEndSec: 10,
+		});
+		const anchored = {
+			...region("r", 1, 2),
+			clipId: "c2",
+			sourceStartSec: 1,
+			sourceEndSec: 2,
+		};
+		const out = projectRegionsToSource([anchored], [c1, c2], [c1, c2], () => "x");
+		expect(out).toEqual([{ ...anchored, startMs: 1000, endMs: 2000, clipIndex: 1 }]);
+	});
+
+	it("falls back to the raw mapping when the anchor is incomplete", () => {
+		// Migration keeps un-anchorable regions (never drops them), so a partial anchor
+		// must still resolve via the legacy raw path rather than vanishing.
+		const c = clip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineEndSec: 10,
+		});
+		const partial = { ...region("r", 3, 5), clipId: "c1" }; // no source span
+		const out = projectRegionsToSource([partial], [c], [c], () => "x");
+		expect(out).toEqual([{ ...partial, startMs: 3000, endMs: 5000, clipIndex: 0 }]);
 	});
 });
 

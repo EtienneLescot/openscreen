@@ -22,7 +22,7 @@ import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
-import { projectRawRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
+import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
 import { computeCompositeLayout, webcamSizeToFraction } from "@/lib/compositeLayout";
 import type { AspectRatio } from "@/utils/aspectRatioUtils";
 import { getAspectRatioValue, getNativeAspectRatioValue } from "@/utils/aspectRatioUtils";
@@ -355,7 +355,7 @@ export function buildSceneDescription(
 
 	// Zoom + Full Camera + speed regions are authored in RAW virtual (timeline) ms
 	// in the document — the ruler where trims still occupy their space — but the
-	// compositor matches them against each frame's SOURCE time. `projectRawRegionsToSource`
+	// compositor matches them against each frame's SOURCE time. `projectRegionsToSource`
 	// bridges the two through `timelineMap`: it resolves each region's RAW coordinate
 	// against every visible segment's OWN raw extent (via `document.timeline.clips`,
 	// the un-compressed layout) and maps the overlap to that segment's source range,
@@ -369,13 +369,13 @@ export function buildSceneDescription(
 	// dépassait la position compressée de Δ → la région se déclenchait Δ trop tôt (offset
 	// visible en preview ET au rendu). On passe désormais le layout RAW pour le mapping
 	// raw→source et on ne garde `visibleClips` que pour l'ordre/`clipIndex`.
-	const projectedZoomRegions = projectRawRegionsToSource(
+	const projectedZoomRegions = projectRegionsToSource(
 		document.zoomRanges ?? [],
 		visibleClips,
 		document.timeline.clips,
 		() => createId("zoom"),
 	);
-	const projectedCameraFullscreenRegions = projectRawRegionsToSource(
+	const projectedCameraFullscreenRegions = projectRegionsToSource(
 		((document.legacyEditor as Record<string, unknown> | null)?.cameraFullscreenRegions as
 			| CameraFullscreenRegion[]
 			| undefined) ?? [],
@@ -386,10 +386,10 @@ export function buildSceneDescription(
 	// Speed regions carry an extra `speed` field the standard `rangeSchema` does not, so we
 	// can't read from `document.timeline.speedRanges` today (see SceneDescription.speedRegions
 	// comment). The legacy web exporter reads from `legacyEditor.speedRegions`; we mirror it.
-	// `projectRawRegionsToSource` accepts any `T extends { id; startMs; endMs }` and copies
+	// `projectRegionsToSource` accepts any `T extends { id; startMs; endMs }` and copies
 	// every other field verbatim via `{...region}` — so the `speed` field passes through,
 	// and the splitting-across-clips semantics match zoomRegions / cameraFullscreenRegions.
-	const projectedSpeedRegions = projectRawRegionsToSource(
+	const projectedSpeedRegions = projectRegionsToSource(
 		((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as
 			| SpeedRegion[]
 			| undefined) ?? [],

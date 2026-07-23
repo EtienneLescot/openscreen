@@ -19,7 +19,7 @@
 
 import type { AxcutClip } from "../schema";
 import { ventilateSpanAcrossClips } from "./region-ventilation";
-import { getRawVirtualStartTime } from "./virtual-preview";
+import { findRawClipForSegment, getRawVirtualStartTime } from "./virtual-preview";
 
 /** A modifier fragment anchored to one clip in that clip's own source time — the
  *  Stage B storage shape (see docs/architecture/timeline-coordinate-refactor.md).
@@ -382,49 +382,108 @@ export function segmentRawSpanSec(
 	return { startSec, endSec: startSec + lenSec };
 }
 
+/** The clip anchor a region may carry: WHERE IN THE SOURCE MEDIA it lives. Optional
+ *  by design — migration keeps a region it cannot anchor rather than dropping it. */
+interface RegionClipAnchor {
+	clipId?: string;
+	sourceStartSec?: number;
+	sourceEndSec?: number;
+}
+
+/** True when the anchor is usable on its own (all three parts present), i.e. the
+ *  region can be placed without consulting raw-virtual time at all. */
+function hasCompleteClipAnchor<T extends RegionClipAnchor>(
+	region: T,
+): region is T & Required<RegionClipAnchor> {
+	return (
+		typeof region.clipId === "string" &&
+		typeof region.sourceStartSec === "number" &&
+		typeof region.sourceEndSec === "number"
+	);
+}
+
 /**
- * Project RAW-virtual-ms regions (zoom / speed / camera-fullscreen, as authored
- * on the ruler) onto the SOURCE-ms ranges the native compositor matches against.
- * The raw→source map goes through each visible segment's OWN raw extent, and the
- * trim-compressed order supplies `clipIndex`. A region whose source range a trim
- * splits across two kept segments yields one entry per segment (fresh id for the
- * extra copies, original id on the first — matching the previous contract). A
- * region overlapping no visible segment passes through unchanged with no
- * `clipIndex` (native falls back to time-overlap), same as before.
+ * Resolve regions (zoom / annotation / speed / camera-fullscreen) onto the SOURCE-ms
+ * ranges the native compositor matches against, plus the `clipIndex` into the
+ * trim-compressed stream.
  *
- * `visibleSegments` MUST be the same array (same order) serialized to
- * `Scene.clips` so the emitted `clipIndex` lines up with the native stream;
- * `rawClips` is `document.timeline.clips` (the un-compressed layout the regions
- * were authored against).
+ * Two paths, chosen per region:
+ *  - **anchored** (`{clipId, sourceStartSec, sourceEndSec}` present): the source span
+ *    is read straight off the anchor and intersected with the kept segments of that
+ *    clip. This is the SSOT path — it never consults `startMs`/`endMs` nor raw-virtual
+ *    time, so a stale derived cache or a shifted ruler layout cannot move the region.
+ *  - **unanchored**: the legacy raw→source mapping through each segment's own raw
+ *    extent, kept because migration deliberately preserves un-anchorable regions.
+ *
+ * In both paths a region split across two kept segments by a trim yields one entry per
+ * segment (fresh id for the extra copies, original id on the first), and a region
+ * overlapping no visible segment passes through unchanged with no `clipIndex` (native
+ * falls back to time-overlap) — the contract callers already relied on.
+ *
+ * `visibleSegments` MUST be the same array (same order) serialized to `Scene.clips` so
+ * the emitted `clipIndex` lines up with the native stream; `rawClips` is
+ * `document.timeline.clips`.
  */
-export function projectRawRegionsToSource<T extends { id: string; startMs: number; endMs: number }>(
+export function projectRegionsToSource<
+	T extends { id: string; startMs: number; endMs: number } & RegionClipAnchor,
+>(
 	regions: T[],
 	visibleSegments: AxcutClip[],
 	rawClips: AxcutClip[],
 	makeId: () => string,
 ): (T & { clipIndex?: number })[] {
+	// RAW extents + owning raw clip per visible segment. Both are only consulted by the
+	// path that needs them (raw fallback / anchor match), but resolving them once keeps
+	// the per-region loop free of repeated lookups.
 	const spans = visibleSegments.map((seg) => segmentRawSpanSec(seg, rawClips));
+	const segmentRawClipIds = visibleSegments.map((seg) => findRawClipForSegment(seg, rawClips)?.id);
 	const out: (T & { clipIndex?: number })[] = [];
 	for (const region of regions) {
-		const lo = Math.min(region.startMs, region.endMs) / 1000;
-		const hi = Math.max(region.startMs, region.endMs) / 1000;
 		let emitted = 0;
-		visibleSegments.forEach((seg, clipIndex) => {
-			const { startSec: segRawStart, endSec: segRawEnd } = spans[clipIndex];
-			const s = Math.max(lo, segRawStart);
-			const e = Math.min(hi, segRawEnd);
-			if (e <= s) return;
-			const srcStart = seg.sourceStartSec + (s - segRawStart);
-			const srcEnd = seg.sourceStartSec + (e - segRawStart);
+		const emit = (clipIndex: number, srcStartSec: number, srcEndSec: number) => {
 			out.push({
 				...region,
 				id: emitted === 0 ? region.id : makeId(),
-				startMs: Math.round(srcStart * 1000),
-				endMs: Math.round(srcEnd * 1000),
+				startMs: Math.round(srcStartSec * 1000),
+				endMs: Math.round(srcEndSec * 1000),
 				clipIndex,
 			});
 			emitted += 1;
-		});
+		};
+
+		if (hasCompleteClipAnchor(region)) {
+			// ANCHORED — the region already states where it lives in the source media, so
+			// there is nothing to project: intersect its source span with each kept segment
+			// of its OWN clip. No detour through raw-virtual time means no dependency on the
+			// ruler layout (or on `startMs`/`endMs` being freshly re-derived), which is the
+			// entire class of drift this model exists to remove.
+			const lo = Math.min(region.sourceStartSec, region.sourceEndSec);
+			const hi = Math.max(region.sourceStartSec, region.sourceEndSec);
+			visibleSegments.forEach((seg, clipIndex) => {
+				if (segmentRawClipIds[clipIndex] !== region.clipId) return;
+				const s = Math.max(lo, seg.sourceStartSec);
+				const e = Math.min(hi, seg.sourceEndSec ?? seg.sourceStartSec);
+				if (e <= s) return;
+				emit(clipIndex, s, e);
+			});
+		} else {
+			// UNANCHORED — migration kept this region rather than dropping it (see
+			// `anchorRegionsWithDerivedMs`), so it only has its RAW span. Map that through
+			// each segment's own raw extent, exactly as before the anchor existed.
+			const lo = Math.min(region.startMs, region.endMs) / 1000;
+			const hi = Math.max(region.startMs, region.endMs) / 1000;
+			visibleSegments.forEach((seg, clipIndex) => {
+				const { startSec: segRawStart, endSec: segRawEnd } = spans[clipIndex];
+				const s = Math.max(lo, segRawStart);
+				const e = Math.min(hi, segRawEnd);
+				if (e <= s) return;
+				emit(
+					clipIndex,
+					seg.sourceStartSec + (s - segRawStart),
+					seg.sourceStartSec + (e - segRawStart),
+				);
+			});
+		}
 		if (emitted === 0) out.push(region);
 	}
 	return out;
