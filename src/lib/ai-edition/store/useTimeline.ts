@@ -10,6 +10,7 @@ import { createId } from "../document/ids";
 import {
 	duplicateClip as duplicateClipInDocument,
 	moveClip as moveClipInDocument,
+	PLACEHOLDER_DURATION_SEC,
 	rederiveRegionMs,
 	resequenceClips,
 } from "../document/timeline";
@@ -26,13 +27,13 @@ import { useProjectStore } from "./projectStore";
 
 type RegionKind = "zoom" | "trim" | "annotation" | "speed" | "cameraFullscreen";
 
-// Placeholder duration applied to a freshly-inserted clip whose source asset
-// hasn't reported its real duration yet (media drag → drop before the preview
-// video fires `loadedmetadata`). The renderer's handleLoadedMetadata
-// (NewEditorShell) scans for clips sitting at exactly this value and
-// auto-corrects them to the probed duration once metadata arrives, so the
-// timeline ruler, progress bar, and sourceEndSec all stay in sync.
-export const PLACEHOLDER_DURATION_SEC = 60;
+// Placeholder duration applied to a freshly-inserted clip whose source asset hasn't
+// reported its real duration yet (media drag → drop before the preview video fires
+// `loadedmetadata`). `applyProbedDuration` (document layer) swaps it — and the
+// extent-less clip a legacy v2 import mints — for the real length once metadata
+// arrives. Defined there, re-exported here so existing importers keep working and the
+// value has exactly one definition.
+export { PLACEHOLDER_DURATION_SEC };
 
 interface RegionHandle {
 	kind: RegionKind;

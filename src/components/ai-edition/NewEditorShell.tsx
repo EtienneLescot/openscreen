@@ -4,12 +4,15 @@ import type { EditorProjectData } from "@/components/video-editor/projectPersist
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
 import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
-import { replaceTimeline as replaceTimelineOp } from "@/lib/ai-edition/document/timeline";
+import {
+	applyProbedDuration,
+	replaceTimeline as replaceTimelineOp,
+} from "@/lib/ai-edition/document/timeline";
 import { transcribeAsset } from "@/lib/ai-edition/document/transcribe";
 import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
-import { PLACEHOLDER_DURATION_SEC, useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { matchesShortcut } from "@/lib/shortcuts";
 import { nativeBridgeClient } from "@/native";
 import type { AiEditionProjectSummary } from "@/native/contracts";
@@ -324,36 +327,16 @@ export function NewEditorShell() {
 				void state.saveDocument(next);
 				return;
 			}
-			// Only correct clips belonging to the asset that actually fired this
-			// event, and only while they still sit at the pre-probe 0..60s
-			// placeholder — never a clip the user has since trimmed. Patching by
-			// array index (the previous behavior) clobbered clip[0]'s duration
-			// whenever a *different* asset's video element loaded, e.g. right
-			// after dropping a second clip onto the timeline.
-			const isPlaceholder = (c: (typeof doc.timeline.clips)[number]) =>
-				c.assetId === assetId &&
-				c.sourceStartSec === 0 &&
-				Math.abs((c.sourceEndSec ?? 0) - PLACEHOLDER_DURATION_SEC) < 0.01;
-			if (Math.abs(known - PLACEHOLDER_DURATION_SEC) < 0.01) return;
-			if (!doc.timeline.clips.some(isPlaceholder)) return;
-
-			let shiftSec = 0;
-			const nextClips = doc.timeline.clips.map((c) => {
-				const shifted = { ...c, timelineStartSec: c.timelineStartSec + shiftSec };
-				if (!isPlaceholder(c)) {
-					shifted.timelineEndSec = c.timelineEndSec + shiftSec;
-					return shifted;
-				}
-				const delta = known - PLACEHOLDER_DURATION_SEC;
-				shifted.sourceEndSec = known;
-				shifted.timelineEndSec = shifted.timelineStartSec + known;
-				shiftSec += delta;
-				return shifted;
-			});
-			void state.saveDocument({
-				...doc,
-				timeline: { ...doc.timeline, clips: nextClips },
-			});
+			// Hand the probed duration to the pure document layer: it patches only the
+			// clips of THIS asset that are still waiting for a real length (the
+			// pre-probe placeholder, or the extent-less clip a legacy v2 import mints),
+			// shifts what follows, and brings the modifiers along — anchoring the ones
+			// migration had to leave unanchored. Returns the document untouched when
+			// nothing is waiting, so there is nothing to guard here.
+			const next = applyProbedDuration(doc, assetId, known);
+			if (next !== doc) {
+				void state.saveDocument(next);
+			}
 		},
 		[setSourceDuration],
 	);

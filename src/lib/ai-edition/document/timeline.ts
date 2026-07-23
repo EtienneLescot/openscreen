@@ -7,8 +7,24 @@ import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "
 import { anchoredToRawSpanSec, anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
 import { createId } from "./ids";
 
+/** Length a clip is given before its media has been probed. Lives here, in the pure
+ *  document layer, because that layer decides which clips are still waiting for a real
+ *  duration (`applyProbedDuration`); the store re-exports it for its own callers. */
+export const PLACEHOLDER_DURATION_SEC = 60;
+
 export function byStart(a: { startSec: number }, b: { startSec: number }): number {
 	return a.startSec - b.startSec;
+}
+
+/** A region is anchored once it states WHERE IN THE SOURCE it lives. Anything missing
+ *  a part of `{clipId, sourceStartSec, sourceEndSec}` still relies on its RAW ms.
+ *  One definition, so "is this anchored?" can never be asked two different ways. */
+function isAnchored<T extends { clipId?: string; sourceStartSec?: number; sourceEndSec?: number }>(
+	region: T,
+): region is T & { clipId: string; sourceStartSec: number; sourceEndSec: number } {
+	return (
+		!!region.clipId && region.sourceStartSec !== undefined && region.sourceEndSec !== undefined
+	);
 }
 
 export interface Interval {
@@ -257,11 +273,7 @@ export function rederiveRegionMs(document: AxcutDocument, clips: AxcutClip[]): A
 	if (clips.length === 0) return document;
 	return mapAllRegionCollections(document, (regions) =>
 		regions.flatMap((region) => {
-			if (
-				!region.clipId ||
-				region.sourceStartSec === undefined ||
-				region.sourceEndSec === undefined
-			) {
+			if (!isAnchored(region)) {
 				return [region];
 			}
 			const span = anchoredToRawSpanSec(
@@ -297,6 +309,91 @@ export function reanchorRegions(document: AxcutDocument, clips: AxcutClip[]): Ax
 		document,
 		(regions, prefix) =>
 			anchorRegionsWithDerivedMs(regions, clips, () => createId(prefix)) as StoredRegion[],
+	);
+}
+
+/** A clip that does not yet describe a real stretch of media: either it carries no
+ *  source extent at all (what `migrateProjectDataToAxcutDocument` produces — the
+ *  migration is pure, so it cannot probe the file for a duration), or it still sits at
+ *  the pre-probe placeholder length. Both mean "waiting for the real duration". */
+function clipAwaitsProbedDuration(clip: AxcutClip, assetId: string): boolean {
+	if (clip.assetId !== assetId || clip.sourceStartSec !== 0) return false;
+	const end = clip.sourceEndSec ?? 0;
+	if (end <= clip.sourceStartSec) return true; // no extent at all (v2 migration)
+	return Math.abs(end - PLACEHOLDER_DURATION_SEC) < 0.01; // still the placeholder
+}
+
+/**
+ * Apply a freshly probed media duration to the clips still waiting for it, and bring
+ * the modifiers along.
+ *
+ * This is the moment a project imported from the legacy (v1.7 / `PROJECT_VERSION` 2)
+ * format becomes fully described. That format has no clip list at all — one recording
+ * plus regions — so migration mints a single clip with NO source extent and leaves
+ * every region UNANCHORED (anchoring needs a clip with real extent; dropping the
+ * regions instead would lose user data). The duration only shows up later, when the
+ * renderer loads the media. Without this step the clip keeps a zero extent forever and
+ * the regions never get anchored.
+ *
+ * Regions are handled by provenance, never wholesale: already-anchored ones only get
+ * their derived ms refreshed against the new layout (`rederiveRegionMs`), while
+ * unanchored ones are anchored from the RAW ms they still carry. Re-anchoring
+ * everything would mint fresh fragment ids for regions whose anchors are already
+ * correct.
+ *
+ * Returns the document unchanged when no clip is waiting, so callers can invoke it on
+ * every `loadedmetadata` without guarding.
+ */
+export function applyProbedDuration(
+	document: AxcutDocument,
+	assetId: string,
+	durationSec: number,
+): AxcutDocument {
+	if (!Number.isFinite(durationSec) || durationSec <= 0) return document;
+	const clips = document.timeline.clips;
+	if (!clips.some((clip) => clipAwaitsProbedDuration(clip, assetId))) return document;
+
+	// Widening a clip pushes everything after it down the ruler by the same delta.
+	let shiftSec = 0;
+	const nextClips = clips.map((clip) => {
+		const shifted = {
+			...clip,
+			timelineStartSec: clip.timelineStartSec + shiftSec,
+			timelineEndSec: clip.timelineEndSec + shiftSec,
+		};
+		if (!clipAwaitsProbedDuration(clip, assetId)) return shifted;
+		const previousLength = clip.timelineEndSec - clip.timelineStartSec;
+		shiftSec += durationSec - previousLength;
+		return {
+			...shifted,
+			sourceEndSec: clip.sourceStartSec + durationSec,
+			timelineEndSec: shifted.timelineStartSec + durationSec,
+		};
+	});
+
+	const withClips: AxcutDocument = {
+		...document,
+		assets: document.assets.map((asset) =>
+			asset.id === assetId && asset.durationSec == null
+				? { ...asset, durationSec: durationSec }
+				: asset,
+		),
+		timeline: { ...document.timeline, clips: nextClips },
+	};
+
+	// Anchored regions: refresh the derived cache against the new layout.
+	const refreshed = rederiveRegionMs(withClips, nextClips);
+	// Unanchored regions: NOW anchorable — the clip finally has a real extent. Anchored
+	// one at a time so a region that ventilates into several fragments lands in place,
+	// and so an already-correct anchor is never re-minted.
+	return mapAllRegionCollections(refreshed, (regions, prefix) =>
+		regions.flatMap((region) =>
+			isAnchored(region)
+				? [region]
+				: (anchorRegionsWithDerivedMs([region], nextClips, () =>
+						createId(prefix),
+					) as StoredRegion[]),
+		),
 	);
 }
 
