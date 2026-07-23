@@ -33,6 +33,14 @@ export default defineConfig({
 		alias: {
 			"@": path.resolve(__dirname, "src"),
 		},
+		// This checkout is a git worktree nested under the main repo, and its
+		// node_modules is incomplete (e.g. zustand is absent), so bare deps that
+		// aren't present here resolve UP into the main repo's node_modules and drag
+		// in a SECOND copy of React — "Invalid hook call / more than one copy of
+		// React" → blank editor. Force every importer (app + hoisted deps like
+		// zustand) onto this checkout's single React copy. Harmless in a normal
+		// full install (already a single copy there); required to run from a worktree.
+		dedupe: ["react", "react-dom", "react/jsx-runtime"],
 	},
 	server: {
 		watch: {
