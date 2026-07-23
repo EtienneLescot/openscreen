@@ -369,7 +369,6 @@ impl Task for ExportMultiTask {
         set_all_previews_playing(false);
         let result = (|| {
             let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
-            let comp = Compositor::new(&gpu).map_err(|e| Error::from_reason(format!("{e:#}")))?;
             let mut cfg = config::all().pop().expect("au moins une config"); // C8
             cfg.zoom = false;
             cfg.layout_anim = false;
@@ -380,13 +379,11 @@ impl Task for ExportMultiTask {
             // jamais reçu — jamais un fallback masquant, juste rien de configuré.
             let scene = self.scene_json.as_deref().and_then(|j| Scene::from_json(j).ok());
             if let Some(scene) = &scene {
-                comp.set_live_params(live_params_from_scene(scene));
                 cfg.bg_blur = scene.effects.blur;
                 cfg.cursor = scene.cursor.show;
             } else {
                 cfg.cursor = false;
             }
-            comp.set_scene(scene);
 
             let mut export_params = pipeline::ExportParams::default();
             if let Some(p) = &self.params {
@@ -409,6 +406,23 @@ impl Task for ExportMultiTask {
                     };
                 }
             }
+
+            // Le compositeur rastérise à la taille RÉELLEMENT encodée — d'où sa
+            // construction ici, une fois `export_params` résolu.
+            //
+            // Avant : il composait toujours en 1920×1080 puis `blit_resized` étirait
+            // vers la taille d'export. Deux défauts, une seule cause — tout export
+            // dépassant 1080p sur un axe était un AGRANDISSEMENT (un 4K portait le
+            // quart de l'information), et tout ratio ≠ 16:9 devait passer par une
+            // compensation géométrique. En construisant le compositeur à la
+            // géométrie de sortie, `blit_resized` devient une identité et les pixels
+            // sont rastérisés exactement là où ils seront encodés.
+            let comp = Compositor::new_sized(&gpu, export_params.width, export_params.height)
+                .map_err(|e| Error::from_reason(format!("{e:#}")))?;
+            if let Some(scene) = &scene {
+                comp.set_live_params(live_params_from_scene(scene));
+            }
+            comp.set_scene(scene);
 
             let mut progress = throttled_progress(self.on_progress.take());
             let s = pipeline::run_composited_multi(
