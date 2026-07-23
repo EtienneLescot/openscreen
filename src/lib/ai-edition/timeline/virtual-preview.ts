@@ -42,19 +42,38 @@ export function locateVirtualPosition(
 }
 
 /**
- * Maps a kept segment (`AxcutClip` from `resolvePlaybackSegments`) back to its
- * exact start position on the raw (untrimmed) document timeline.
+ * Maps a kept segment (`AxcutClip` from `resolvePlaybackSegments`) back to the RAW
+ * clip it was cut from — the ONE place that knows the segment-id convention
+ * `resolvePlaybackSegments` produces (`clip.id` when a clip survives whole,
+ * `${clip.id}_segN` when trims split it into several kept pieces). Anything that
+ * needs "which document clip is this segment part of?" — raw positioning, matching a
+ * clip-anchored region's `clipId` — must go through here rather than re-deriving the
+ * convention, so producer and consumers can never drift apart.
+ *
+ * Falls back to an asset+source-window match for segments whose id doesn't follow the
+ * convention (hand-built segments, older data). `undefined` when nothing matches.
  */
-export function getRawVirtualStartTime(segment: AxcutClip, rawClips: AxcutClip[]): number {
-	const rawClip =
+export function findRawClipForSegment(
+	segment: AxcutClip,
+	rawClips: AxcutClip[],
+): AxcutClip | undefined {
+	return (
 		rawClips.find((c) => c.id === segment.id || segment.id.startsWith(`${c.id}_seg`)) ??
 		rawClips.find(
 			(c) =>
 				c.assetId === segment.assetId &&
 				segment.sourceStartSec >= c.sourceStartSec - 0.001 &&
 				(c.sourceEndSec == null || segment.sourceStartSec <= c.sourceEndSec + 0.001),
-		);
+		)
+	);
+}
 
+/**
+ * Maps a kept segment (`AxcutClip` from `resolvePlaybackSegments`) back to its
+ * exact start position on the raw (untrimmed) document timeline.
+ */
+export function getRawVirtualStartTime(segment: AxcutClip, rawClips: AxcutClip[]): number {
+	const rawClip = findRawClipForSegment(segment, rawClips);
 	if (!rawClip) return segment.timelineStartSec;
 	return rawClip.timelineStartSec + (segment.sourceStartSec - rawClip.sourceStartSec);
 }
