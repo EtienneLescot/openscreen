@@ -10,11 +10,16 @@ import { createId } from "../document/ids";
 import {
 	duplicateClip as duplicateClipInDocument,
 	moveClip as moveClipInDocument,
-	reprojectDocumentRegions,
+	rederiveRegionMs,
 	resequenceClips,
 } from "../document/timeline";
 import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
 import { probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
+import {
+	anchorRegionsWithDerivedMs,
+	replacePillSpan,
+	resolvePillIds,
+} from "../timeline/timelineMap";
 import { resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
 import { useProjectStore } from "./projectStore";
@@ -36,6 +41,42 @@ interface RegionHandle {
 
 type Clip = AxcutDocument["timeline"]["clips"][number];
 
+/**
+ * Deleting a pill deletes every region under it. Which regions those are is RESOLVED
+ * from the universal merge rule (same properties + touching = one pill), never from
+ * stored provenance — so it stays correct however they came to be adjacent.
+ */
+function dropPillById<T extends { id: string; startMs: number; endMs: number }>(
+	regions: T[],
+	id: string,
+): T[] {
+	const under = new Set(resolvePillIds(regions, id));
+	return regions.filter((r) => !under.has(r.id));
+}
+
+/**
+ * Patch every region under the pill uid=197609(camil) gid=197609 groups=197609 belongs to. A payload edit must hit them all,
+ * or the pieces of one pill would disagree — and then, by the merge rule, visibly split.
+ */
+function patchPillById<T extends { id: string; startMs: number; endMs: number }>(
+	regions: T[],
+	id: string,
+	patch: Partial<T>,
+): T[] {
+	const under = new Set(resolvePillIds(regions, id));
+	return regions.map((r) => (under.has(r.id) ? { ...r, ...patch } : r));
+}
+
+/** Batch variant of {@link dropPillById} — expands every selected id to its whole pill. */
+function dropPillsByIds<T extends { id: string; startMs: number; endMs: number }>(
+	regions: T[],
+	ids: Iterable<string>,
+): T[] {
+	let out = regions;
+	for (const id of ids) out = dropPillById(out, id);
+	return out;
+}
+
 export function useTimeline() {
 	const document = useProjectStore((s) => s.document);
 	const projectId = useProjectStore((s) => s.projectId);
@@ -51,13 +92,16 @@ export function useTimeline() {
 
 	const hasDoc = document !== null && projectId !== null;
 
+	// Every add* below anchors the new region to the clip(s) it covers before storing it.
+	// A modifier MUST own a clip anchor to survive reorder/trim (see
+	// docs/architecture/timeline-coordinate-refactor.md §6) — writing only startMs/endMs
+	// would strand it. A region created across a clip boundary becomes one fragment per
+	// clip; the ruler renders them as one pill because their properties are equal.
 	const addZoom = useCallback(async () => {
 		if (!document) return;
 		const timeMs = Math.round(currentTimeSec * 1000);
-		const next: AxcutDocument = {
-			...document,
-			zoomRanges: [
-				...document.zoomRanges,
+		const anchored = anchorRegionsWithDerivedMs(
+			[
 				{
 					id: createId("zoom"),
 					startMs: timeMs,
@@ -66,7 +110,13 @@ export function useTimeline() {
 					focus: { cx: 0.5, cy: 0.5 },
 					focusMode: "manual" as const,
 				},
-			] as AxcutDocument["zoomRanges"],
+			],
+			document.timeline.clips,
+			() => createId("zoom"),
+		);
+		const next: AxcutDocument = {
+			...document,
+			zoomRanges: [...document.zoomRanges, ...anchored] as AxcutDocument["zoomRanges"],
 		};
 		await saveDocument(next);
 	}, [document, currentTimeSec, saveDocument]);
@@ -78,19 +128,25 @@ export function useTimeline() {
 	const addZoomsBulk = useCallback(
 		async (suggestions: AutoZoomSuggestion[]) => {
 			if (!document || suggestions.length === 0) return 0;
+			const anchored = suggestions.flatMap((s) =>
+				anchorRegionsWithDerivedMs(
+					[
+						{
+							id: createId("zoom"),
+							startMs: Math.round(s.span.start),
+							endMs: Math.round(s.span.end),
+							depth: 3 as const,
+							focus: { cx: s.focus.cx, cy: s.focus.cy },
+							focusMode: "auto" as const,
+						},
+					],
+					document.timeline.clips,
+					() => createId("zoom"),
+				),
+			);
 			const next: AxcutDocument = {
 				...document,
-				zoomRanges: [
-					...document.zoomRanges,
-					...suggestions.map((s) => ({
-						id: createId("zoom"),
-						startMs: Math.round(s.span.start),
-						endMs: Math.round(s.span.end),
-						depth: 3 as const,
-						focus: { cx: s.focus.cx, cy: s.focus.cy },
-						focusMode: "auto" as const,
-					})),
-				] as AxcutDocument["zoomRanges"],
+				zoomRanges: [...document.zoomRanges, ...anchored] as AxcutDocument["zoomRanges"],
 			};
 			await saveDocument(next);
 			return suggestions.length;
@@ -188,7 +244,10 @@ export function useTimeline() {
 		};
 		const next: AxcutDocument = {
 			...document,
-			annotations: [...document.annotations, ann] as unknown as AxcutDocument["annotations"],
+			annotations: [
+				...document.annotations,
+				...anchorRegionsWithDerivedMs([ann], document.timeline.clips, () => createId("ann")),
+			] as unknown as AxcutDocument["annotations"],
 		};
 		await saveDocument(next);
 	}, [document, currentTimeSec, saveDocument]);
@@ -204,12 +263,11 @@ export function useTimeline() {
 				...legacy,
 				speedRegions: [
 					...prev,
-					{
-						id: createId("speed"),
-						startMs: timeMs,
-						endMs: timeMs + 2000,
-						speed: 1.5 as const,
-					},
+					...anchorRegionsWithDerivedMs(
+						[{ id: createId("speed"), startMs: timeMs, endMs: timeMs + 2000, speed: 1.5 as const }],
+						document.timeline.clips,
+						() => createId("speed"),
+					),
 				],
 			},
 		};
@@ -229,11 +287,11 @@ export function useTimeline() {
 				...legacy,
 				cameraFullscreenRegions: [
 					...prev,
-					{
-						id: createId("camfull"),
-						startMs: timeMs,
-						endMs: timeMs + 2000,
-					},
+					...anchorRegionsWithDerivedMs(
+						[{ id: createId("camfull"), startMs: timeMs, endMs: timeMs + 2000 }],
+						document.timeline.clips,
+						() => createId("camfull"),
+					),
 				],
 			},
 		};
@@ -328,6 +386,10 @@ export function useTimeline() {
 		[saveDocument],
 	);
 
+	// Span edits are GROUP-AWARE: dragging/resizing a pill re-anchors every fragment
+	// under the pill to the new ruler span, so an edit that crosses a clip
+	// boundary re-splits and one dragged back inside a clip collapses — one user edit stays
+	// one pill. See timelineMap.reanchorGroupSpan.
 	const updateZoomSpan = useCallback(
 		async (id: string, startMs: number, endMs: number) => {
 			if (!document) return;
@@ -336,8 +398,13 @@ export function useTimeline() {
 			const e = clampMs(endMs);
 			const next: AxcutDocument = {
 				...document,
-				zoomRanges: document.zoomRanges.map((z) =>
-					z.id === id ? { ...z, startMs: Math.min(s, e), endMs: Math.max(s, e) } : z,
+				zoomRanges: replacePillSpan(
+					document.zoomRanges,
+					id,
+					Math.min(s, e),
+					Math.max(s, e),
+					document.timeline.clips,
+					() => createId("zoom"),
 				) as AxcutDocument["zoomRanges"],
 			};
 			await saveDocument(next);
@@ -357,9 +424,9 @@ export function useTimeline() {
 			const clamp01 = (n: number) => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.5);
 			const next: AxcutDocument = {
 				...doc,
-				zoomRanges: doc.zoomRanges.map((z) =>
-					z.id === id ? { ...z, focus: { cx: clamp01(focus.cx), cy: clamp01(focus.cy) } } : z,
-				) as AxcutDocument["zoomRanges"],
+				zoomRanges: patchPillById(doc.zoomRanges, id, {
+					focus: { cx: clamp01(focus.cx), cy: clamp01(focus.cy) },
+				}) as AxcutDocument["zoomRanges"],
 			};
 			setDocument(next);
 		},
@@ -380,9 +447,9 @@ export function useTimeline() {
 			if (!document) return;
 			const next: AxcutDocument = {
 				...document,
-				zoomRanges: document.zoomRanges.map((z) =>
-					z.id === id ? { ...z, depth } : z,
-				) as AxcutDocument["zoomRanges"],
+				zoomRanges: patchPillById(document.zoomRanges, id, {
+					depth,
+				}) as AxcutDocument["zoomRanges"],
 			};
 			await saveDocument(next);
 		},
@@ -397,8 +464,13 @@ export function useTimeline() {
 			const e = clampMs(endMs);
 			const next: AxcutDocument = {
 				...document,
-				annotations: document.annotations.map((a) =>
-					a.id === id ? { ...a, startMs: Math.min(s, e), endMs: Math.max(s, e) } : a,
+				annotations: replacePillSpan(
+					document.annotations,
+					id,
+					Math.min(s, e),
+					Math.max(s, e),
+					document.timeline.clips,
+					() => createId("ann"),
 				),
 			};
 			await saveDocument(next);
@@ -415,7 +487,7 @@ export function useTimeline() {
 			if (!doc) return;
 			const next: AxcutDocument = {
 				...doc,
-				annotations: doc.annotations.map((a) => (a.id === id ? { ...a, ...patch } : a)),
+				annotations: patchPillById(doc.annotations, id, patch),
 			};
 			setDocument(next);
 		},
@@ -445,8 +517,13 @@ export function useTimeline() {
 				...document,
 				legacyEditor: {
 					...legacy,
-					speedRegions: prev.map((r) =>
-						r.id === id ? { ...r, startMs: Math.min(s, e), endMs: Math.max(s, e) } : r,
+					speedRegions: replacePillSpan(
+						prev,
+						id,
+						Math.min(s, e),
+						Math.max(s, e),
+						document.timeline.clips,
+						() => createId("speed"),
 					),
 				},
 			};
@@ -471,8 +548,13 @@ export function useTimeline() {
 				...document,
 				legacyEditor: {
 					...legacy,
-					cameraFullscreenRegions: prev.map((r) =>
-						r.id === id ? { ...r, startMs: Math.min(s, e), endMs: Math.max(s, e) } : r,
+					cameraFullscreenRegions: replacePillSpan(
+						prev,
+						id,
+						Math.min(s, e),
+						Math.max(s, e),
+						document.timeline.clips,
+						() => createId("camfull"),
 					),
 				},
 			};
@@ -495,7 +577,7 @@ export function useTimeline() {
 				...document,
 				legacyEditor: {
 					...legacy,
-					speedRegions: prev.map((r) => (r.id === id ? { ...r, speed } : r)),
+					speedRegions: patchPillById(prev, id, { speed }),
 				},
 			};
 			await saveDocument(next);
@@ -510,7 +592,7 @@ export function useTimeline() {
 			if (kind === "zoom") {
 				next = {
 					...document,
-					zoomRanges: document.zoomRanges.filter((z) => z.id !== id) as AxcutDocument["zoomRanges"],
+					zoomRanges: dropPillById(document.zoomRanges, id) as AxcutDocument["zoomRanges"],
 				};
 			} else if (kind === "trim") {
 				next = {
@@ -523,12 +605,13 @@ export function useTimeline() {
 			} else if (kind === "annotation") {
 				next = {
 					...document,
-					annotations: document.annotations.filter((a) => a.id !== id),
+					annotations: dropPillById(document.annotations, id),
 				};
 			} else if (kind === "speed") {
 				const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
-				const prev = ((legacy.speedRegions as unknown[]) ?? []).filter(
-					(s) => (s as { id: string }).id !== id,
+				const prev = dropPillById(
+					(legacy.speedRegions as Array<{ id: string; startMs: number; endMs: number }>) ?? [],
+					id,
 				);
 				next = {
 					...document,
@@ -536,8 +619,13 @@ export function useTimeline() {
 				};
 			} else {
 				const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
-				const prev = ((legacy.cameraFullscreenRegions as unknown[]) ?? []).filter(
-					(s) => (s as { id: string }).id !== id,
+				const prev = dropPillById(
+					(legacy.cameraFullscreenRegions as Array<{
+						id: string;
+						startMs: number;
+						endMs: number;
+					}>) ?? [],
+					id,
 				);
 				next = {
 					...document,
@@ -566,18 +654,19 @@ export function useTimeline() {
 				handles.filter((h) => h.kind === "cameraFullscreen").map((h) => h.id),
 			);
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
-			const prevSpeed = ((legacy.speedRegions as unknown[]) ?? []).filter(
-				(s) => !speedIds.has((s as { id: string }).id),
+			const prevSpeed = dropPillsByIds(
+				(legacy.speedRegions as Array<{ id: string; startMs: number; endMs: number }>) ?? [],
+				speedIds,
 			);
-			const prevCameraFullscreen = ((legacy.cameraFullscreenRegions as unknown[]) ?? []).filter(
-				(s) => !cameraFullscreenIds.has((s as { id: string }).id),
+			const prevCameraFullscreen = dropPillsByIds(
+				(legacy.cameraFullscreenRegions as Array<{ id: string; startMs: number; endMs: number }>) ??
+					[],
+				cameraFullscreenIds,
 			);
 			const next: AxcutDocument = {
 				...document,
-				zoomRanges: document.zoomRanges.filter(
-					(z) => !zoomIds.has(z.id),
-				) as AxcutDocument["zoomRanges"],
-				annotations: document.annotations.filter((a) => !annotationIds.has(a.id)),
+				zoomRanges: dropPillsByIds(document.zoomRanges, zoomIds) as AxcutDocument["zoomRanges"],
+				annotations: dropPillsByIds(document.annotations, annotationIds),
 				timeline: {
 					...document.timeline,
 					trimRanges: document.timeline.trimRanges.filter((s) => !trimIds.has(s.id)),
@@ -748,8 +837,7 @@ export function useTimeline() {
 				...document,
 				timeline: { ...document.timeline, clips: newClips },
 			};
-			const finalDoc =
-				oldClips.length > 0 ? reprojectDocumentRegions(next, oldClips, newClips) : next;
+			const finalDoc = rederiveRegionMs(next, newClips);
 			await saveDocument(finalDoc);
 		},
 		[document, saveDocument],
@@ -834,8 +922,7 @@ export function useTimeline() {
 				...document,
 				timeline: { ...document.timeline, clips: newClips },
 			};
-			const finalDoc =
-				oldClips.length > 0 ? reprojectDocumentRegions(next, oldClips, newClips) : next;
+			const finalDoc = rederiveRegionMs(next, newClips);
 			await saveDocument(finalDoc);
 		},
 		[document, saveDocument, addClipAfter],
@@ -951,8 +1038,7 @@ export function useTimeline() {
 				...currentDoc,
 				timeline: { ...currentDoc.timeline, clips: newClips },
 			};
-			const finalDoc =
-				oldClips.length > 0 ? reprojectDocumentRegions(next, oldClips, newClips) : next;
+			const finalDoc = rederiveRegionMs(next, newClips);
 			await saveDocument(finalDoc);
 			setClipSelection(newClip.id);
 
@@ -1008,9 +1094,7 @@ export function useTimeline() {
 				timeline: { ...document.timeline, clips: newClips },
 			};
 			const finalDoc =
-				oldClips.length > 0 && newClips.length > 0
-					? reprojectDocumentRegions(next, oldClips, newClips)
-					: next;
+				oldClips.length > 0 && newClips.length > 0 ? rederiveRegionMs(next, newClips) : next;
 			await saveDocument(finalDoc);
 			if (clipSelection === clipId) setClipSelection(null);
 		},

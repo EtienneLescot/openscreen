@@ -54,67 +54,6 @@ export interface Span {
 }
 
 /**
- * Re-project a virtual-ms span through a clip reorder: decompose over the OLD
- * clip layout, re-place over the NEW layout, then merge fragments that stay
- * contiguous. Returns ≥1 spans — more than one only when the covered clips
- * actually separated. A span not sitting on any clip is returned unchanged.
- */
-export function reprojectSpanForReorder(
-	startMs: number,
-	endMs: number,
-	oldClips: AxcutClip[],
-	newClips: AxcutClip[],
-): Span[] {
-	const frags = ventilateSpanAcrossClips(startMs / 1000, endMs / 1000, oldClips);
-	if (frags.length === 0) return [{ startMs, endMs }];
-	const newById = new Map(newClips.map((c) => [c.id, c]));
-	const spans = frags
-		.map((f): Span | null => {
-			const nc = newById.get(f.clipId);
-			if (!nc) return null;
-			return {
-				startMs: Math.round((nc.timelineStartSec + f.localStartSec) * 1000),
-				endMs: Math.round((nc.timelineStartSec + f.localEndSec) * 1000),
-			};
-		})
-		.filter((x): x is Span => x !== null)
-		.sort((a, b) => a.startMs - b.startMs);
-	if (spans.length === 0) return [{ startMs, endMs }];
-	const merged: Span[] = [];
-	for (const s of spans) {
-		const last = merged.at(-1);
-		// ≤1ms rounding gap counts as contiguous.
-		if (last && s.startMs - last.endMs <= 1) last.endMs = Math.max(last.endMs, s.endMs);
-		else merged.push({ ...s });
-	}
-	return merged;
-}
-
-/**
- * Re-project a list of virtual-ms regions through a clip reorder. A region that
- * ends up split across separated clips becomes several regions (extra copies
- * get a fresh id from `makeId`, keeping every other field). The first fragment
- * keeps the original id so single-piece regions are untouched identity-wise.
- */
-export function reprojectRegionsForReorder<
-	T extends { id: string; startMs: number; endMs: number },
->(regions: T[], oldClips: AxcutClip[], newClips: AxcutClip[], makeId: () => string): T[] {
-	const out: T[] = [];
-	for (const region of regions) {
-		const spans = reprojectSpanForReorder(region.startMs, region.endMs, oldClips, newClips);
-		spans.forEach((span, i) => {
-			out.push({
-				...region,
-				id: i === 0 ? region.id : makeId(),
-				startMs: span.startMs,
-				endMs: span.endMs,
-			});
-		});
-	}
-	return out;
-}
-
-/**
  * Map a virtual-ms span down to **source-ms** spans, one per covered clip.
  * Effects (zoom / speed / annotation) are authored in virtual time, but the
  * export frame loop matches them against each decoded frame's *source* time —

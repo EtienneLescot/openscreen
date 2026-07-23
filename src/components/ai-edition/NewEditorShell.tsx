@@ -130,7 +130,9 @@ export function NewEditorShell() {
 	void primaryAssetPath;
 	const clips: AxcutClip[] = document?.timeline.clips ?? [];
 	const visibleClips = useMemo(() => (document ? resolveVisibleClips(document) : []), [document]);
-	useNativePlaybackSync(playing, currentTimeSec, visibleClips);
+	// visibleClips = trim-compressed native stream; `clips` = RAW layout currentTimeSec
+	// is measured against. resolveNativePosition needs both (see timelineMap).
+	useNativePlaybackSync(playing, currentTimeSec, visibleClips, clips);
 	const hasProject = Boolean(document);
 	const hasAsset = projectId !== null && (document?.assets.length ?? 0) > 0;
 	const project = document?.project

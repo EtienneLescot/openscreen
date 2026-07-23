@@ -19,22 +19,25 @@
  */
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
+import { resolveNativePosition } from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	getCurrentNativeViewId,
 	setNativePlaying,
 	setNativeTime,
 	subscribeNativeCompositor,
 } from "./nativeCompositorStore";
-import { resolveNativePlaybackPosition } from "./nativePlaybackPosition";
 
 export function useNativePlaybackSync(
 	playing: boolean,
 	currentTimeSec: number,
-	clips: readonly AxcutClip[],
+	/** Trim-compressed playback segments (`resolveVisibleClips`) — the native stream. */
+	visibleSegments: readonly AxcutClip[],
+	/** RAW clip layout (`document.timeline.clips`) `currentTimeSec` is expressed against. */
+	rawClips: readonly AxcutClip[],
 ): void {
 	const activePosition = useMemo(
-		() => resolveNativePlaybackPosition(clips, currentTimeSec),
-		[clips, currentTimeSec],
+		() => resolveNativePosition(currentTimeSec, [...visibleSegments], [...rawClips]),
+		[visibleSegments, rawClips, currentTimeSec],
 	);
 	const activeClipId = activePosition?.clip.id ?? null;
 	const sourceTimeSec = activePosition?.sourceTimeSec ?? null;

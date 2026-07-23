@@ -431,11 +431,25 @@ describe("duplicateClip / moveClip", () => {
 				],
 			},
 			zoomRanges: [
-				{ id: "z1", startMs: 12000, endMs: 14000, depth: 3, focus: { cx: 0.5, cy: 0.5 } },
+				{
+					id: "z1",
+					groupId: "z1",
+					clipId: "clip_b",
+					sourceStartSec: 22,
+					sourceEndSec: 24,
+					startMs: 12000,
+					endMs: 14000,
+					depth: 3,
+					focus: { cx: 0.5, cy: 0.5 },
+				},
 			],
 			annotations: [
 				{
 					id: "a1",
+					groupId: "a1",
+					clipId: "clip_b",
+					sourceStartSec: 25,
+					sourceEndSec: 26,
 					startMs: 15000,
 					endMs: 16000,
 					type: "text",
@@ -456,7 +470,20 @@ describe("duplicateClip / moveClip", () => {
 					zIndex: 1,
 				},
 			] as unknown as AxcutDocument["annotations"],
-			legacyEditor: { speedRegions: [{ id: "s1", startMs: 11000, endMs: 13000, speed: 1.5 }] },
+			legacyEditor: {
+				speedRegions: [
+					{
+						id: "s1",
+						groupId: "s1",
+						clipId: "clip_b",
+						sourceStartSec: 21,
+						sourceEndSec: 23,
+						startMs: 11000,
+						endMs: 13000,
+						speed: 1.5,
+					},
+				],
+			},
 		});
 		// Move clip_b to the front → clip_b now tl 0-10 (delta -10s). Regions
 		// over clip_b shift by -10s; the zoom now sits at tl 2-4, etc.

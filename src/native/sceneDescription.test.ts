@@ -59,7 +59,7 @@ function makeDoc(
 	const createdAt = "2024-01-01T00:00:00.000Z";
 	const baseProject = { id: "p1", title: "Test", createdAt, updatedAt: createdAt };
 	return {
-		schemaVersion: 4,
+		schemaVersion: 5,
 		project: {
 			...baseProject,
 			...(overrides.project ?? {}),
@@ -423,6 +423,63 @@ describe("buildSceneDescription.zoomRegions", () => {
 	it("yields [] when zoomRanges is missing", () => {
 		const doc = makeDoc({ zoomRanges: undefined });
 		expect(buildSceneDescription(doc).zoomRegions).toEqual([]);
+	});
+});
+
+// --- zoomRegions × trims (raw↔compressed regression) ------------------------
+// See docs/architecture/timeline-coordinate-refactor.md. Regions are authored in
+// RAW virtual-ms (trims still occupy the ruler), but the scene handed to native is
+// built from TRIM-COMPRESSED playback segments (`resolveVisibleClips`). A region
+// after a trim must still fire at the SAME source moment the user placed it on the
+// raw ruler; today it slips by the total trimmed duration before it. This block is
+// the failing witness for that bug (preview AND export both build the scene here).
+
+describe("buildSceneDescription.zoomRegions with an earlier trim", () => {
+	it("keeps a zoom on the source moment it was authored on, despite a trim before it", () => {
+		// Identity clip: source [0,10] == timeline [0,10] (raw ruler == source time).
+		const asset = makeAsset({ id: "a", originalPath: "/a.mp4" });
+		const clip = makeClip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		// Trim removes source [2,4]. Playback compresses to two kept segments:
+		//   seg1 source [0,2] @ compressed timeline [0,2]
+		//   seg2 source [4,10] @ compressed timeline [2,8]
+		// Zoom authored at RAW timeline [6,8] → identity clip → source [6,8]. Source 6
+		// is kept (after the trim) so it belongs to seg2 (clipIndex 1). The CORRECT
+		// scene zoom is source [6,8] on clipIndex 1 — NOT [8,10] (what raw-coords-vs-
+		// compressed-clips ventilation produces: it shifts the region forward by the 2s
+		// the trim removed earlier on the timeline).
+		const doc = makeDoc({
+			assets: [asset],
+			clips: [clip],
+			timeline: {
+				trimRanges: [
+					{ id: "t1", assetId: "a", startSec: 2, endSec: 4, reason: "", origin: "user" },
+				],
+			},
+			zoomRanges: [
+				makeZoom({ id: "z", startMs: 6000, endMs: 8000, depth: 3, focus: { cx: 0.5, cy: 0.5 } }),
+			],
+		});
+		const { zoomRegions } = buildSceneDescription(doc);
+		expect(zoomRegions).toEqual([
+			{
+				id: "z",
+				startSec: 6,
+				endSec: 8,
+				scale: 2,
+				focusX: 0.5,
+				focusY: 0.5,
+				focusMode: null,
+				rotation: null,
+				clipIndex: 1,
+			},
+		]);
 	});
 });
 

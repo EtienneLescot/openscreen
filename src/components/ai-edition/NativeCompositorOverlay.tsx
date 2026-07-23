@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { resolveNativePosition } from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	setActiveClip,
 	setCurrentNativeViewId,
@@ -7,7 +8,6 @@ import {
 	setNativeScene,
 	useNativeCompositorView,
 } from "@/native";
-import { resolveNativePlaybackPosition } from "@/native/nativePlaybackPosition";
 import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
 import {
 	getWebcamNativeSize,
@@ -53,22 +53,22 @@ export function NativeCompositorOverlay() {
 		() => 0,
 	);
 
-	// BUG corrigé : ceci pointait vers `resolveVisibleClips` (compacté, trim-rétréci) alors que
-	// `currentTimeSec` reste — et doit rester — le temps RAW/document (voir NewEditorShell) :
-	// un trim ne change jamais quel ASSET/fichier est actif (seul un changement de clip source
-	// le fait), donc cette détection de "playhead entré dans un autre clip" (→ setActiveClip,
-	// bascule de la paire écran/webcam) n'a besoin d'aucune connaissance des trims — juste la
-	// liste RAW triée/filtrée, dans le même référentiel que `currentTimeSec`. Le flux
-	// Le flux COMPACTÉ (`resolveVisibleClips`, dans `buildSceneDescription` ci-dessous) reste
-	// utilisé pour la SCÈNE envoyée au natif (`setNativeScene`), qui elle doit bien refléter
-	// les trims.
+	// `currentTimeSec` est en temps RAW/document (la règle où les trims occupent encore leur
+	// place — même référentiel que le playhead V4 et l'overlay webcam web). Le natif, lui, joue
+	// les segments COMPACTÉS (`resolveVisibleClips`, trims retirés) — le même flux que la SCÈNE
+	// envoyée via `setNativeScene`. `resolveNativePosition` fait le pont : il mappe le playhead
+	// RAW → temps source via le layout RAW (`document.timeline.clips`) PUIS localise le segment
+	// compacté correspondant, d'où sortent le `clipIndex` natif et la bonne paire écran/webcam.
+	// Sans ça (ancien `resolveNativePlaybackPosition(nativeClips, currentTimeSec)`), un playhead
+	// RAW lu contre des clips compactés désignait le mauvais clip après un trim → mauvaise caméra
+	// + décalage écran/cam.
 	const nativeClips = useMemo(() => {
 		if (!document) return [];
 		return resolveVisibleClips(document);
 	}, [document]);
 	const activePosition = useMemo(
-		() => resolveNativePlaybackPosition(nativeClips, currentTimeSec),
-		[nativeClips, currentTimeSec],
+		() => resolveNativePosition(currentTimeSec, nativeClips, document?.timeline.clips ?? []),
+		[nativeClips, currentTimeSec, document],
 	);
 	const activeClip = activePosition?.clip ?? null;
 
