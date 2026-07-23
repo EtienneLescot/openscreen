@@ -4,7 +4,7 @@
 // or a new document with updated clips.
 
 import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "../schema";
-import { reprojectRegionsForReorder } from "../timeline/region-ventilation";
+import { anchoredToRawSpanSec, anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
 import { createId } from "./ids";
 
 export function byStart(a: { startSec: number }, b: { startSec: number }): number {
@@ -197,52 +197,107 @@ export function invertIntervals(intervals: Interval[], durationSec: number): Int
 	return cuts;
 }
 
-export function reprojectDocumentRegions(
+/** Shape every stored modifier shares during the v5 transition: the clip anchor is
+ *  the source of truth, `startMs`/`endMs` a derived cache. Anchor fields are optional
+ *  because a not-yet-migrated region (see `anchorRegionsWithDerivedMs`) has none. */
+type StoredRegion = {
+	id: string;
+	startMs: number;
+	endMs: number;
+	clipId?: string;
+	sourceStartSec?: number;
+	sourceEndSec?: number;
+};
+
+/** Apply `fn` to all four modifier collections (document-level + legacyEditor envelopes). */
+function mapAllRegionCollections(
 	document: AxcutDocument,
-	oldClips: AxcutClip[],
-	newClips: AxcutClip[],
+	fn: (regions: StoredRegion[], prefix: string) => StoredRegion[],
 ): AxcutDocument {
-	if (oldClips.length === 0 || newClips.length === 0) return document;
 	const legacy = document.legacyEditor as Record<string, unknown> | null;
-	const speedRegions = legacy?.speedRegions as
-		| Array<{ id: string; startMs: number; endMs: number }>
-		| undefined;
-	const cameraFullscreenRegions = legacy?.cameraFullscreenRegions as
-		| Array<{ id: string; startMs: number; endMs: number }>
-		| undefined;
+	const speedRegions = legacy?.speedRegions as StoredRegion[] | undefined;
+	const cameraFullscreenRegions = legacy?.cameraFullscreenRegions as StoredRegion[] | undefined;
 
 	return {
 		...document,
-		zoomRanges: reprojectRegionsForReorder(document.zoomRanges, oldClips, newClips, () =>
-			createId("zoom"),
-		) as AxcutDocument["zoomRanges"],
-		annotations: reprojectRegionsForReorder(document.annotations, oldClips, newClips, () =>
-			createId("ann"),
-		) as AxcutDocument["annotations"],
+		zoomRanges: fn(
+			document.zoomRanges as unknown as StoredRegion[],
+			"zoom",
+		) as unknown as AxcutDocument["zoomRanges"],
+		annotations: fn(
+			document.annotations as unknown as StoredRegion[],
+			"ann",
+		) as unknown as AxcutDocument["annotations"],
 		legacyEditor:
 			legacy && (speedRegions || cameraFullscreenRegions)
 				? {
 						...legacy,
-						...(speedRegions
-							? {
-									speedRegions: reprojectRegionsForReorder(speedRegions, oldClips, newClips, () =>
-										createId("speed"),
-									),
-								}
-							: {}),
+						...(speedRegions ? { speedRegions: fn(speedRegions, "speed") } : {}),
 						...(cameraFullscreenRegions
-							? {
-									cameraFullscreenRegions: reprojectRegionsForReorder(
-										cameraFullscreenRegions,
-										oldClips,
-										newClips,
-										() => createId("camfull"),
-									),
-								}
+							? { cameraFullscreenRegions: fn(cameraFullscreenRegions, "camfull") }
 							: {}),
 					}
 				: document.legacyEditor,
 	};
+}
+
+/**
+ * Re-derive the transition `startMs`/`endMs` cache of every clip-anchored modifier
+ * from its anchor + the given clip layout.
+ *
+ * Structural ops that PRESERVE clip identity (move / duplicate / trim) leave the
+ * anchors valid — a fragment travels with its clip by `clipId` — so nothing is
+ * reprojected; only the derived cache moves. That is what let the old
+ * `reprojectDocumentRegions` / `reprojectRegionsForReorder` machinery go away.
+ * A fragment whose anchor clip no longer exists is dropped (its content is gone, and
+ * the display coalescer drops it too). Not-yet-anchored regions pass through
+ * untouched. Guards the empty-clip case so a transient wipe can't delete everything.
+ */
+export function rederiveRegionMs(document: AxcutDocument, clips: AxcutClip[]): AxcutDocument {
+	if (clips.length === 0) return document;
+	return mapAllRegionCollections(document, (regions) =>
+		regions.flatMap((region) => {
+			if (
+				!region.clipId ||
+				region.sourceStartSec === undefined ||
+				region.sourceEndSec === undefined
+			) {
+				return [region];
+			}
+			const span = anchoredToRawSpanSec(
+				{
+					clipId: region.clipId,
+					sourceStartSec: region.sourceStartSec,
+					sourceEndSec: region.sourceEndSec,
+				},
+				clips,
+			);
+			if (!span) return [];
+			return [
+				{
+					...region,
+					startMs: Math.round(span.startSec * 1000),
+					endMs: Math.round(span.endSec * 1000),
+				},
+			];
+		}),
+	);
+}
+
+/**
+ * Re-anchor every modifier against a REBUILT clip layout. `replaceTimeline` mints
+ * brand-new clip identities, so existing anchors point at clips that no longer exist;
+ * we re-ventilate each region from its current RAW ms (which still describe where it
+ * sits on the ruler) and rebuild the anchor. Fragments of one region need no shared
+ * marker to keep reading as a single pill: equal properties + adjacency suffice.
+ */
+export function reanchorRegions(document: AxcutDocument, clips: AxcutClip[]): AxcutDocument {
+	if (clips.length === 0) return document;
+	return mapAllRegionCollections(
+		document,
+		(regions, prefix) =>
+			anchorRegionsWithDerivedMs(regions, clips, () => createId(prefix)) as StoredRegion[],
+	);
 }
 
 export function replaceTimeline(
@@ -257,7 +312,6 @@ export function replaceTimeline(
 	}
 	const duration = primaryAssetDuration(document);
 	const normalized = normalizeIntervals(duration, intervals);
-	const oldClips = document.timeline.clips;
 	const clips = buildTimelineFromIntervals(assetId, normalized, {
 		origin,
 		reason,
@@ -284,7 +338,7 @@ export function replaceTimeline(
 			revision: document.preview.revision + 1,
 		},
 	};
-	return oldClips.length > 0 ? reprojectDocumentRegions(next, oldClips, clips) : next;
+	return reanchorRegions(next, clips);
 }
 
 // ponytail: reorder an existing clip by removing it from its current
@@ -311,7 +365,6 @@ export function moveClip(
 	const remaining = document.timeline.clips.filter((c) => c.id !== clipId);
 	const bounded = Math.max(0, Math.min(insertIndex, remaining.length));
 	const reordered = [...remaining.slice(0, bounded), movingClip, ...remaining.slice(bounded)];
-	const oldClips = document.timeline.clips;
 	const newClips = resequenceClips(reordered);
 	const next: AxcutDocument = {
 		...document,
@@ -324,7 +377,7 @@ export function moveClip(
 			revision: document.preview.revision + 1,
 		},
 	};
-	return reprojectDocumentRegions(next, oldClips, newClips);
+	return rederiveRegionMs(next, newClips);
 }
 
 // ponytail: duplicate a clip (preserves the original). Used for "split this
@@ -361,7 +414,7 @@ export function duplicateClip(
 			revision: document.preview.revision + 1,
 		},
 	};
-	return reprojectDocumentRegions(updatedDoc, oldClips, newClips);
+	return rederiveRegionMs(updatedDoc, newClips);
 }
 
 export function restoreFullTimeline(document: AxcutDocument): AxcutDocument {

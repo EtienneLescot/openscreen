@@ -36,7 +36,7 @@ const CLIP_WITHOUT_CAMERA: AxcutClip = {
 
 function makeDocument(): AxcutDocument {
 	return {
-		schemaVersion: 4,
+		schemaVersion: 5,
 		project: {
 			id: "proj_test",
 			title: "Test",

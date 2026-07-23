@@ -3,8 +3,6 @@ import type { AxcutClip } from "../schema";
 import {
 	coalesceTouchingSpans,
 	projectRegionsToSourceTime,
-	reprojectRegionsForReorder,
-	reprojectSpanForReorder,
 	ventilateSpanAcrossClips,
 	virtualSpanToSourceSpans,
 } from "./region-ventilation";
@@ -56,64 +54,6 @@ describe("ventilateSpanAcrossClips", () => {
 	it("omits clips the span doesn't touch", () => {
 		expect(ventilateSpanAcrossClips(22, 28, threeClips)).toEqual([
 			{ clipId: "c3", clipIndex: 2, localStartSec: 2, localEndSec: 8 },
-		]);
-	});
-});
-
-describe("reprojectSpanForReorder", () => {
-	it("shifts a single-clip span to the clip's new position", () => {
-		// Move c2 to the front: new layout c2 [0,10) c1 [10,20) c3 [20,30).
-		const newClips = [clip("c2", 0, 10), clip("c1", 10, 10), c3];
-		// A zoom over c1 (2..6s) must ride c1 to its new [10,20) slot → 12..16s.
-		expect(reprojectSpanForReorder(2000, 6000, threeClips, newClips)).toEqual([
-			{ startMs: 12000, endMs: 16000 },
-		]);
-	});
-
-	it("splits a cross-clip span into two when the clips separate", () => {
-		// Zoom straddling c1 (8..10) + c2 (10..13). Move c3 between them:
-		// new layout c1 [0,10) c3 [10,20) c2 [20,30).
-		const newClips = [c1, clip("c3", 10, 10), clip("c2", 20, 10)];
-		expect(reprojectSpanForReorder(8000, 13000, threeClips, newClips)).toEqual([
-			{ startMs: 8000, endMs: 10000 }, // stays on c1
-			{ startMs: 20000, endMs: 23000 }, // rides c2 to its new slot
-		]);
-	});
-
-	it("merges the pieces back when the clips stay contiguous after the move", () => {
-		// Same straddling zoom, but c1 and c2 remain adjacent (just both shifted):
-		// swap so order is c2,c1 would break adjacency — instead move c3 to front:
-		// new layout c3 [0,10) c1 [10,20) c2 [20,30). c1 then c2 still contiguous.
-		const newClips = [clip("c3", 0, 10), clip("c1", 10, 10), clip("c2", 20, 10)];
-		expect(reprojectSpanForReorder(8000, 13000, threeClips, newClips)).toEqual([
-			{ startMs: 18000, endMs: 23000 },
-		]);
-	});
-
-	it("leaves a span not sitting on any clip unchanged", () => {
-		const newClips = [clip("c2", 0, 10), clip("c1", 10, 10), c3];
-		// 40..45s is past the end of every clip.
-		expect(reprojectSpanForReorder(40000, 45000, threeClips, newClips)).toEqual([
-			{ startMs: 40000, endMs: 45000 },
-		]);
-	});
-});
-
-describe("reprojectRegionsForReorder", () => {
-	it("keeps the id on single-piece regions and preserves extra fields", () => {
-		const newClips = [clip("c2", 0, 10), clip("c1", 10, 10), c3];
-		const regions = [{ id: "z1", startMs: 2000, endMs: 6000, depth: 2 }];
-		expect(reprojectRegionsForReorder(regions, threeClips, newClips, () => "NEW")).toEqual([
-			{ id: "z1", startMs: 12000, endMs: 16000, depth: 2 },
-		]);
-	});
-
-	it("emits a fresh id for the extra fragment of a split region", () => {
-		const newClips = [c1, clip("c3", 10, 10), clip("c2", 20, 10)];
-		const regions = [{ id: "z1", startMs: 8000, endMs: 13000, depth: 3 }];
-		expect(reprojectRegionsForReorder(regions, threeClips, newClips, () => "z2")).toEqual([
-			{ id: "z1", startMs: 8000, endMs: 10000, depth: 3 },
-			{ id: "z2", startMs: 20000, endMs: 23000, depth: 3 },
 		]);
 	});
 });
