@@ -166,8 +166,9 @@ export function NativeCompositorOverlay() {
 		pendingTargetClipIdRef.current = targetClipId;
 		previousActiveClipIdRef.current = targetClipId;
 
-		const isPlaying = playing;
-		if (isPlaying) {
+		// Pause native across the decoder swap. Deliberately NOT kept in a variable to
+		// resume from later — see the `.then` below, which re-reads the live transport.
+		if (playing) {
 			setNativePlaying(false);
 		}
 
@@ -183,7 +184,13 @@ export function NativeCompositorOverlay() {
 				if (pendingTargetClipIdRef.current !== targetClipId) {
 					return;
 				}
-				if (isPlaying) {
+				// Re-read the transport NOW rather than trusting `isPlaying`, captured
+				// before the await. Otherwise pausing *during* a clip transition is
+				// silently undone: the in-flight `.then` resumes native playback on top
+				// of the user's pause, and the preview plays on by itself. The store is
+				// the single source of truth for "is the transport playing", so ask it
+				// at the moment we'd act on it.
+				if (useProjectStore.getState().playing) {
 					setNativePlaying(true);
 				}
 			})
