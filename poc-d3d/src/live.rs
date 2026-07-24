@@ -1371,7 +1371,7 @@ mod tests {
                 {"screenPath":"/distinct-screen.mp4","webcamPath":"/distinct-webcam.mp4","sourceStartSec":100,"sourceEndSec":104,"webcamOffsetSec":0.5,"hasAudio":true}
             ],
             "layout":{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},
-            "effects":{"padding":0,"blur":false,"shadow":0,"roundnessPx":0,"motionBlur":0},
+            "effects":{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0},
             "background":{"kind":"color","color":"#000000"},
             "zoomRegions":[],
             "cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},
@@ -1408,7 +1408,7 @@ mod tests {
 
     fn scene_with_output(w: u32, h: u32) -> Scene {
         Scene::from_json(&format!(
-            r##"{{"clips":[],"layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0,"blur":false,"shadow":0,"roundnessPx":0,"motionBlur":0}},"background":{{"kind":"color","color":"#000000"}},"zoomRegions":[],"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":{w},"height":{h},"fps":null}}}}"##
+            r##"{{"clips":[],"layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0}},"background":{{"kind":"color","color":"#000000"}},"zoomRegions":[],"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":{w},"height":{h},"fps":null}}}}"##
         ))
         .expect("scene valide")
     }

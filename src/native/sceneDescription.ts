@@ -140,12 +140,6 @@ export interface SceneLayout {
 	 */
 	screenRect?: SceneRect | null;
 	/**
-	 * Corner radius of the screen box in pixels of the output frame, when the preset
-	 * imposes one (the block layouts frame screen and camera alike). Null → the native
-	 * side keeps deriving it from the user's Roundness slider.
-	 */
-	screenRadius?: number | null;
-	/**
 	 * Should the screen FILL its box, cropping the overflow (`object-fit: cover`), rather
 	 * than fit inside it? True for the block layouts, whose screen box is an arbitrary-ratio
 	 * slot. This is `computeCompositeLayout(...).screenCover`, which `frameRenderer` already
@@ -170,26 +164,38 @@ export interface SceneLayout {
 	 */
 	layoutByClip?: Array<ResolvedClipLayout | null>;
 	/**
-	 * Corner radius of the webcam box, same output-pixel convention as `screenRadius`
-	 * and resolved by the same `computeCompositeLayout` call — so "the block frames
-	 * screen and camera alike" can actually hold. It could not before: the screen took
-	 * the app's radius while the camera kept a second, independent table in Rust
-	 * (`min * 0.5 | 0.3 | 0.12`, unclamped, keyed off the raw mask shape), so the two
-	 * halves of one welded block were rounded by two different formulas.
+	 * Corner radius of the screen box, as a fraction of that box's own SHORT SIDE, when
+	 * the preset imposes one (the block layouts frame screen and camera alike). Null →
+	 * the native side falls back to the user's Roundness slider.
 	 *
-	 * Given at the webcam's NOMINAL size: the native side rescales it with the box when
-	 * reactive zoom shrinks the bubble or Full Camera grows it, which is what keeps the
-	 * rounding proportional through those animations.
+	 * A fraction, not pixels — see `roundnessFrac` for why the whole contract works this
+	 * way. The denominator is the box rather than the frame on purpose: a corner radius
+	 * belongs to the thing it rounds, so the rounding stays put when the box is resized.
 	 */
-	webcamRadius?: number | null;
+	screenRadiusFrac?: number | null;
+	/**
+	 * Corner radius of the webcam box, as a fraction of ITS own short side — same rule as
+	 * `screenRadiusFrac`, resolved by the same `computeCompositeLayout` call, so "the
+	 * block frames screen and camera alike" can actually hold. It could not before: the
+	 * screen took the app's radius while the camera kept a second, independent table in
+	 * Rust (`min * 0.5 | 0.3 | 0.12`, unclamped, keyed off the raw mask shape), so the two
+	 * halves of one welded block were rounded by two formulas that could not agree.
+	 */
+	webcamRadiusFrac?: number | null;
 }
 
-/** The shape-dependent half of a layout, resolved for one clip. See `layoutByClip`. */
+/**
+ * The shape-dependent half of a layout, resolved for one clip. See `layoutByClip`.
+ *
+ * Radii are fractions of their own box's short side, exactly as the scalar
+ * `screenRadiusFrac`/`webcamRadiusFrac` above — no length crosses this contract in
+ * pixels, per-clip or not.
+ */
 export interface ResolvedClipLayout {
 	screenRect: SceneRect;
 	webcamRect: SceneRect | null;
-	screenRadius: number | null;
-	webcamRadius: number | null;
+	screenRadiusFrac: number | null;
+	webcamRadiusFrac: number | null;
 	webcamShape: "rectangle" | "circle" | "square" | "rounded";
 	screenCover: boolean;
 }
@@ -202,8 +208,21 @@ export interface SceneEffects {
 	blur: boolean;
 	/** 0..1 drop-shadow strength. */
 	shadow: number;
-	/** Corner radius in output px. */
-	roundnessPx: number;
+	/**
+	 * Roundness slider, as a fraction of the output frame's SHORT SIDE.
+	 *
+	 * Every length crossing this contract is a fraction, never a pixel count, and that is
+	 * load-bearing rather than stylistic: the native compositor rasterises the preview
+	 * into a small contain-fitted frame and the export at full output size, so a pixel
+	 * means two different things on the two sides of the boundary. Absolute values used to
+	 * cross it and silently meant "render-target pixels" — which is why the preview drew
+	 * the PiP circle as a shrunken blob while the export was correct, and why a 4K export
+	 * got a proportionally weaker shadow than a 1080p one. A fraction has no unit to get
+	 * wrong; the native side multiplies by whatever its reference measures right now.
+	 *
+	 * The slider itself stays in pixels for the user — the division happens here, once.
+	 */
+	roundnessFrac: number;
 	/** 0..1 motion blur. */
 	motionBlur: number;
 }
@@ -541,13 +560,21 @@ export function buildSceneDescription(
 		width: r.width / outputDims.width,
 		height: r.height / outputDims.height,
 	});
+	// Corner radii leave as a fraction of the box they round (see `screenRadiusFrac`).
+	// Both the radius and the box are measured in output pixels here, so the ratio is
+	// scale-invariant — the clamp `computeCompositeLayout` applies in absolute pixels
+	// still lands exactly where it did, at any render size.
+	const radiusFractionOf = (box: RenderRect | null | undefined, radius: number | undefined) => {
+		const shortSide = box ? Math.min(box.width, box.height) : 0;
+		return box && shortSide > 0 && radius != null ? radius / shortSide : null;
+	};
 	const resolvedLayoutOf = (layout: ReturnType<typeof layoutForScreenSize>) =>
 		layout
 			? {
 					screenRect: toFrameFractions(layout.screenRect),
 					webcamRect: layout.webcamRect ? toFrameFractions(layout.webcamRect) : null,
-					screenRadius: layout.screenBorderRadius ?? null,
-					webcamRadius: layout.webcamRect?.borderRadius ?? null,
+					screenRadiusFrac: radiusFractionOf(layout.screenRect, layout.screenBorderRadius),
+					webcamRadiusFrac: radiusFractionOf(layout.webcamRect, layout.webcamRect?.borderRadius),
 					webcamShape: layout.webcamRect?.maskShape ?? settings.webcamMaskShape,
 					screenCover: layout.screenCover ?? false,
 				}
@@ -588,16 +615,25 @@ export function buildSceneDescription(
 			),
 			webcamRect,
 			screenRect,
-			screenRadius: computedLayout?.screenBorderRadius ?? null,
+			screenRadiusFrac: radiusFractionOf(
+				computedLayout?.screenRect,
+				computedLayout?.screenBorderRadius,
+			),
 			screenCover: computedLayout?.screenCover ?? false,
-			webcamRadius: computedLayout?.webcamRect?.borderRadius ?? null,
+			webcamRadiusFrac: radiusFractionOf(
+				computedLayout?.webcamRect,
+				computedLayout?.webcamRect?.borderRadius,
+			),
 			layoutByClip,
 		},
 		effects: {
 			padding: settings.padding / 100,
 			blur: settings.showBlur,
 			shadow: settings.shadowIntensity,
-			roundnessPx: settings.borderRadius,
+			// The slider is in output pixels; the contract is in fractions of the frame's
+			// short side. This division is the whole conversion — see `roundnessFrac`.
+			roundnessFrac:
+				settings.borderRadius / Math.max(1, Math.min(outputDims.width, outputDims.height)),
 			motionBlur: settings.motionBlurAmount,
 		},
 		cursor: {

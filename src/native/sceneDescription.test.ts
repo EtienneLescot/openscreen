@@ -670,9 +670,45 @@ describe("buildSceneDescription.settings mapping", () => {
 		expect(buildSceneDescription(doc).effects.padding).toBe(0.5);
 	});
 
-	it("roundnessPx equals borderRadius", () => {
+	it("roundnessFrac is the slider divided by the frame's short side, not raw pixels", () => {
+		// The contract carries no pixel counts: the compositor rasterises the preview
+		// smaller than the export, so a pixel means two different things across the
+		// boundary. Absolute values crossing it is what drew the PiP circle as a blob.
 		const doc = makeDoc({ legacyEditor: { borderRadius: 12 } });
-		expect(buildSceneDescription(doc).effects.roundnessPx).toBe(12);
+		const scene = buildSceneDescription(doc);
+		const shortSide = Math.min(scene.output.width, scene.output.height);
+		expect(scene.effects.roundnessFrac).toBeCloseTo(12 / shortSide, 10);
+	});
+
+	it("round-trips the authored pixel value at output size, whatever the resolution", () => {
+		// The slider keeps meaning "N pixels of the finished video" — the fraction only
+		// exists so the native side can rebuild it against whatever it is rasterising
+		// into. Multiplying back by the output's short side must return exactly N.
+		const at = (w: number, h: number) => {
+			const doc = makeDoc({
+				assets: [
+					makeAsset({
+						id: "a",
+						originalPath: "/a.mp4",
+						video: { codec: "h264", width: w, height: h, fps: 30 },
+					}),
+				],
+				clips: [
+					makeClip({
+						id: "c1",
+						assetId: "a",
+						sourceStartSec: 0,
+						timelineStartSec: 0,
+						timelineEndSec: 5,
+					}),
+				],
+				legacyEditor: { borderRadius: 24 },
+			});
+			const scene = buildSceneDescription(doc);
+			return scene.effects.roundnessFrac * Math.min(scene.output.width, scene.output.height);
+		};
+		expect(at(1920, 1080)).toBeCloseTo(24, 6);
+		expect(at(3840, 2160)).toBeCloseTo(24, 6);
 	});
 
 	it("webcamSize is webcamSizeToFraction(webcamSizePreset) — clamp(preset,10,50)/100", () => {
@@ -813,12 +849,12 @@ describe("buildSceneDescription.settings mapping", () => {
 		expect(cam!.x).toBeGreaterThan(screen!.x + screen!.width);
 		expect(cam!.height).toBeCloseTo(screen!.height, 3);
 		// The block layouts impose their corner radius on the screen too.
-		expect(scene.layout.screenRadius).toBeGreaterThan(0);
+		expect(scene.layout.screenRadiusFrac).toBeGreaterThan(0);
 	});
 
-	it("leaves screenRadius null for picture-in-picture, so the Roundness slider still drives it", () => {
+	it("leaves screenRadiusFrac null for picture-in-picture, so the Roundness slider still drives it", () => {
 		const doc = makeDoc({ legacyEditor: { webcamLayoutPreset: "picture-in-picture" } });
-		expect(buildSceneDescription(doc).layout.screenRadius).toBeNull();
+		expect(buildSceneDescription(doc).layout.screenRadiusFrac).toBeNull();
 	});
 
 	/** A document with a camera on its only clip, so the layout resolves a webcam box. */
@@ -869,17 +905,26 @@ describe("buildSceneDescription.settings mapping", () => {
 		const reference = buildSceneDescription(
 			docWithCamera({ webcamLayoutPreset: "dual-frame", webcamMaskShape: "rectangle" }),
 		);
-		expect(scene.layout.webcamRadius).toBe(reference.layout.webcamRadius);
-		expect(scene.layout.webcamRadius).toBeGreaterThan(0);
+		expect(scene.layout.webcamRadiusFrac).toBe(reference.layout.webcamRadiusFrac);
+		expect(scene.layout.webcamRadiusFrac).toBeGreaterThan(0);
 	});
 
 	it("rounds both halves of a block alike — one radius, not two formulas", () => {
 		// The native side used to derive the camera's radius from its own table while the
-		// screen took the app's, so the welded block could never match itself.
+		// screen took the app's, so the welded block could never match itself. Both are
+		// fractions of their OWN box, and the block gives the two boxes different shapes,
+		// so equality has to be checked back in output pixels.
 		const scene = buildSceneDescription(
 			docWithCamera({ webcamLayoutPreset: "vertical-stack", webcamMaskShape: "circle" }),
 		);
-		expect(scene.layout.webcamRadius).toBe(scene.layout.screenRadius);
+		const px = (frac: number | null | undefined, box: { width: number; height: number } | null) =>
+			frac != null && box
+				? frac * Math.min(box.width * scene.output.width, box.height * scene.output.height)
+				: null;
+		expect(px(scene.layout.webcamRadiusFrac, scene.layout.webcamRect ?? null)).toBeCloseTo(
+			px(scene.layout.screenRadiusFrac, scene.layout.screenRect ?? null) ?? 0,
+			6,
+		);
 	});
 
 	it("still honours the shape picker under picture-in-picture", () => {
@@ -887,16 +932,15 @@ describe("buildSceneDescription.settings mapping", () => {
 			docWithCamera({ webcamLayoutPreset: "picture-in-picture", webcamMaskShape: "circle" }),
 		);
 		expect(scene.layout.webcamShape).toBe("circle");
-		// A circle's radius is half its (square) box — what makes the native rounded-box
-		// SDF draw an actual circle.
-		const cam = scene.layout.webcamRect;
-		expect(cam).not.toBeNull();
-		expect(scene.layout.webcamRadius).toBeGreaterThan(0);
+		// A circle is a rounded rect whose radius is HALF its (square) box — that exact
+		// fraction is what makes the native rounded-box SDF draw a disc rather than a
+		// blob, at any render size.
+		expect(scene.layout.webcamRadiusFrac).toBeCloseTo(0.5, 2);
 	});
 
-	it("leaves webcamRadius null when the layout resolves no camera box", () => {
+	it("leaves webcamRadiusFrac null when the layout resolves no camera box", () => {
 		const doc = makeDoc({ legacyEditor: { webcamLayoutPreset: "no-webcam" } });
-		expect(buildSceneDescription(doc).layout.webcamRadius).toBeNull();
+		expect(buildSceneDescription(doc).layout.webcamRadiusFrac).toBeNull();
 	});
 });
 
