@@ -1,6 +1,10 @@
 import { describe, expect, it } from "vitest";
+import {
+	collectEffectiveClipDims,
+	collectUsedAssetDims,
+	pickExtremeDims,
+} from "@/lib/ai-edition/document/outputFormat";
 import type { AxcutAsset, AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
-import { collectEffectiveClipDims, collectUsedAssetDims, pickExtremeDims } from "./ExportDialog";
 
 function asset(p: Partial<AxcutAsset> & Pick<AxcutAsset, "id">): AxcutAsset {
 	return {

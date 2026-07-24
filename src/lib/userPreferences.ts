@@ -3,20 +3,9 @@ import {
 	DEFAULT_EXPORT_SETTINGS,
 } from "@/components/video-editor/editorDefaults";
 import type { ExportFormat, ExportQuality } from "@/lib/exporter";
-import type { AspectRatio } from "@/utils/aspectRatioUtils";
+import { type AspectRatio, isAspectRatio } from "@/utils/aspectRatioUtils";
 
 const PREFS_KEY = "openscreen_user_preferences";
-
-const VALID_ASPECT_RATIOS: readonly string[] = [
-	"16:9",
-	"9:16",
-	"1:1",
-	"4:3",
-	"4:5",
-	"16:10",
-	"10:16",
-	"native",
-];
 
 export interface UserPreferences {
 	/** Default padding % */
@@ -79,10 +68,7 @@ export function loadUserPreferences(): UserPreferences {
 			raw.padding <= 100
 				? raw.padding
 				: DEFAULT_PREFS.padding,
-		aspectRatio:
-			typeof raw.aspectRatio === "string" && VALID_ASPECT_RATIOS.includes(raw.aspectRatio)
-				? (raw.aspectRatio as AspectRatio)
-				: DEFAULT_PREFS.aspectRatio,
+		aspectRatio: isAspectRatio(raw.aspectRatio) ? raw.aspectRatio : DEFAULT_PREFS.aspectRatio,
 		exportQuality:
 			raw.exportQuality === "medium" ||
 			raw.exportQuality === "good" ||

@@ -3,7 +3,7 @@
 // speed regions. Each add creates a 2-second region at the current playhead
 // (a reasonable default for the user to then resize).
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
 import { createId } from "../document/ids";
@@ -92,6 +92,56 @@ export function useTimeline() {
 	const [clipSelection, setClipSelection] = useState<string | null>(null);
 
 	const hasDoc = document !== null && projectId !== null;
+
+	// Backfill missing source dimensions for any USED asset whose `video` was never probed.
+	// `probeAndCorrectClip` only populates dims on INSERT, gated on a null duration, so an asset
+	// saved with a duration but no dims (e.g. a project migrated from before dims were probed
+	// alongside duration) never gets re-probed — opening it triggers no insert. `asset.video` is
+	// the single source of truth for a clip's real shape/size: the ratio picker's ORIGINAL list
+	// (collectNativeFormats), the output resolution (referenceClipDims) and the export badges all
+	// read it, so an unpopulated one silently drops that clip from ALL of them — which is why a
+	// cropped clip could show under ORIGINAL while an un-probed 16:9 sibling was missing entirely.
+	// Probe once on load and persist via saveDocument (which doesn't touch undo/dirty), so the fix
+	// sticks and every consumer agrees without each re-probing on its own (what the export dialog
+	// used to do). Attempt each asset at most once per session, even on failure, so a file that
+	// can't be probed doesn't spin the effect on every document change.
+	const probedAssetIdsRef = useRef<Set<string>>(new Set());
+	useEffect(() => {
+		if (!document) return;
+		const usedAssetIds = new Set(document.timeline.clips.map((c) => c.assetId));
+		const missing = document.assets.filter(
+			(a) =>
+				usedAssetIds.has(a.id) &&
+				a.originalPath &&
+				(!a.video || !a.video.width || !a.video.height) &&
+				!probedAssetIdsRef.current.has(a.id),
+		);
+		if (missing.length === 0) return;
+		let cancelled = false;
+		void (async () => {
+			const probed: Record<string, { width: number; height: number }> = {};
+			for (const a of missing) {
+				probedAssetIdsRef.current.add(a.id);
+				const dims = await probeVideoDimensions(toFileUrl(a.originalPath));
+				if (dims) probed[a.id] = dims;
+			}
+			if (cancelled || Object.keys(probed).length === 0) return;
+			// Re-read fresh state so a concurrent edit made while probing isn't stomped.
+			const current = useProjectStore.getState().document;
+			if (!current) return;
+			await useProjectStore.getState().saveDocument({
+				...current,
+				assets: current.assets.map((a) =>
+					probed[a.id]
+						? { ...a, video: { codec: "unknown", fps: 0, ...a.video, ...probed[a.id] } }
+						: a,
+				),
+			});
+		})();
+		return () => {
+			cancelled = true;
+		};
+	}, [document]);
 
 	// Every add* below anchors the new region to the clip(s) it covers before storing it.
 	// A modifier MUST own a clip anchor to survive reorder/trim (see
