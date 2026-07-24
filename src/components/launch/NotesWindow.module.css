@@ -8,6 +8,14 @@
 	caret-color: #111827;
 }
 
+:global(.notes-teleprompter-content) {
+	transform-origin: center;
+}
+
+:global(.notes-teleprompter-content[data-mirrored="true"]) {
+	transform: scaleX(-1);
+}
+
 :global(.tiptap) :first-child {
 	margin-top: 0;
 }
@@ -66,28 +74,28 @@
 }
 
 :global(.tiptap) h1 {
-	font-size: 1.4rem;
+	font-size: 1.4em;
 }
 
 :global(.tiptap) h2 {
-	font-size: 1.2rem;
+	font-size: 1.2em;
 }
 
 :global(.tiptap) h3 {
-	font-size: 1.1rem;
+	font-size: 1.1em;
 }
 
 :global(.tiptap) h4,
 :global(.tiptap) h5,
 :global(.tiptap) h6 {
-	font-size: 1rem;
+	font-size: 1em;
 }
 
 :global(.tiptap) code {
 	background-color: #ede9fe;
 	border-radius: 0.4rem;
 	color: #111827;
-	font-size: 0.85rem;
+	font-size: 0.85em;
 	padding: 0.25em 0.3em;
 }
 
@@ -103,7 +111,7 @@
 :global(.tiptap) pre code {
 	background: none;
 	color: inherit;
-	font-size: 0.8rem;
+	font-size: 0.8em;
 	padding: 0;
 }
 

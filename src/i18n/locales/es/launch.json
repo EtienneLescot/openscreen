@@ -20,7 +20,16 @@
 			"bulletList": "Lista con viñetas",
 			"numberedList": "Lista numerada",
 			"blockquote": "Cita",
-			"codeBlock": "Bloque de código"
+			"codeBlock": "Bloque de código",
+			"play": "Iniciar desplazamiento automático",
+			"pause": "Pausar desplazamiento automático",
+			"speed": "Velocidad de desplazamiento",
+			"decreaseSpeed": "Reducir velocidad de desplazamiento",
+			"increaseSpeed": "Aumentar velocidad de desplazamiento",
+			"fontSize": "Tamaño de fuente",
+			"decreaseFontSize": "Reducir tamaño de fuente",
+			"increaseFontSize": "Aumentar tamaño de fuente",
+			"mirror": "Reflejar horizontalmente"
 		}
 	},
 	"audio": {
