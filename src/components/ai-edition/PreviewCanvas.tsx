@@ -31,6 +31,7 @@ import {
 	type ZoomFocus,
 } from "@/components/video-editor/types";
 import { computeCameraFullscreenProgress } from "@/components/video-editor/videoPlayback/cameraFullscreenUtils";
+import { resolveAspectRatioValue } from "@/lib/ai-edition/document/outputFormat";
 import type {
 	AxcutAnnotationRegion,
 	AxcutClip,
@@ -50,7 +51,6 @@ import {
 } from "@/lib/compositeLayout";
 import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
-import { getAspectRatioValue } from "@/utils/aspectRatioUtils";
 import { AnnotationLayer } from "./AnnotationLayer";
 import { NativeCompositorOverlay } from "./NativeCompositorOverlay";
 import styles from "./NewEditorShell.module.css";
@@ -103,7 +103,8 @@ const WEBCAM_SOURCE_SIZE = { width: 960, height: 720 };
 
 export function PreviewCanvas(props: PreviewCanvasProps) {
 	const { settings, setLive, commit } = useEditorSettings();
-	const assets = useProjectStore((s) => s.document?.assets ?? []);
+	const document = useProjectStore((s) => s.document);
+	const assets = document?.assets ?? [];
 	const frameRef = useRef<HTMLDivElement | null>(null);
 	const webcamSlotRef = useRef<HTMLDivElement | null>(null);
 	// One clock per mounted canvas, shared between the screen preview (writer)
@@ -179,8 +180,12 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	// exactly what the frame is styled to (`width: frameSize.width` a few lines below), so it's
 	// used directly everywhere `canvasSize` used to be — one source of truth, no separate
 	// observer that can desync from it.
+	// `resolveAspectRatioValue`, not bare `getAspectRatioValue`: the latter has no document to
+	// resolve the legacy "native" selection against and answers 16/9 for it, so a project saved
+	// with "native" over portrait footage framed the preview 16:9 while `pickOutputDims` handed
+	// the compositor a portrait `output` — preview and export disagreed on the frame's shape.
 	const frameSize = useMemo(() => {
-		const ratio = getAspectRatioValue(settings.aspectRatio);
+		const ratio = resolveAspectRatioValue(document, settings.aspectRatio);
 		const { width: containerWidth, height: containerHeight } = containerSize;
 		if (containerWidth <= 0 || containerHeight <= 0)
 			return { width: containerWidth, height: containerHeight };
@@ -190,7 +195,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		}
 		const width = containerWidth;
 		return { width: Math.round(width), height: Math.round(width / ratio) };
-	}, [containerSize, settings.aspectRatio]);
+	}, [containerSize, settings.aspectRatio, document]);
 
 	// Crop is per-clip (see clipSchema.cropRegion) — resolve it from whichever
 	// clip the playhead is currently inside, the same lookup VirtualPreview

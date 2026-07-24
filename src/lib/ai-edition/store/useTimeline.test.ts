@@ -1,4 +1,4 @@
-import { act, renderHook } from "@testing-library/react";
+import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { useProjectStore } from "./projectStore";
 import { useTimeline } from "./useTimeline";
@@ -55,6 +55,7 @@ const sampleDoc = {
 			label: "screen.webm",
 			originalPath: "/tmp/screen.webm",
 			durationSec: 30,
+			video: { codec: "unknown", width: 1920, height: 1080, fps: 0 },
 		},
 	],
 	transcript: null,
@@ -174,6 +175,7 @@ describe("useTimeline.insertClipAt background duration probe", () => {
 						label: "long.webm",
 						originalPath: "/tmp/long.webm",
 						durationSec: undefined,
+						video: { codec: "unknown", width: 1920, height: 1080, fps: 0 },
 					},
 				],
 			},
@@ -297,6 +299,86 @@ describe("useTimeline.moveClip / duplicateClip (delegates to document/timeline.t
 		await act(async () => {
 			await result.current.duplicateClip("clip_missing");
 		});
+		expect(bridgeMocks.save).not.toHaveBeenCalled();
+	});
+});
+
+describe("useTimeline backfills missing source dimensions on load", () => {
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		probeVideoDimensionsMock.mockReset();
+		probeVideoDimensionsMock.mockResolvedValue({ width: 1920, height: 1080 });
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	// The reported bug: a project saved with a duration but no probed `video` dims (nothing
+	// re-probes it on open) drops that clip from everything reading asset.video — the ratio
+	// picker's ORIGINAL list, the output resolution, the export badges.
+	it("probes a used asset that has a duration but no video dims, and persists them", async () => {
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: {
+				...sampleDoc,
+				assets: [{ ...sampleDoc.assets[0], video: undefined }],
+			},
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		renderHook(() => useTimeline());
+		await waitFor(() => expect(bridgeMocks.save).toHaveBeenCalledTimes(1));
+		expect(probeVideoDimensionsMock).toHaveBeenCalledTimes(1);
+		const saved = useProjectStore.getState().document?.assets.find((a) => a.id === "asset_1");
+		expect(saved?.video).toMatchObject({ width: 1920, height: 1080 });
+	});
+
+	it("leaves an asset that already has video dims untouched", async () => {
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc, // asset_1 already carries 1920x1080
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		renderHook(() => useTimeline());
+		// Give any stray effect a chance to fire before asserting it didn't.
+		await act(async () => {
+			await new Promise((r) => setTimeout(r, 0));
+		});
+		expect(probeVideoDimensionsMock).not.toHaveBeenCalled();
+		expect(bridgeMocks.save).not.toHaveBeenCalled();
+	});
+
+	it("does not re-probe a used asset with no reachable file more than once", async () => {
+		probeVideoDimensionsMock.mockResolvedValue(null); // probe fails (unreadable file)
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: {
+				...sampleDoc,
+				assets: [{ ...sampleDoc.assets[0], video: undefined }],
+			},
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		const { rerender } = renderHook(() => useTimeline());
+		await act(async () => {
+			await new Promise((r) => setTimeout(r, 0));
+		});
+		rerender();
+		await act(async () => {
+			await new Promise((r) => setTimeout(r, 0));
+		});
+		// Attempted once; the failure is remembered so a document change doesn't spin it again.
+		expect(probeVideoDimensionsMock).toHaveBeenCalledTimes(1);
 		expect(bridgeMocks.save).not.toHaveBeenCalled();
 	});
 });
