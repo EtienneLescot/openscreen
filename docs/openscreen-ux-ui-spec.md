@@ -300,6 +300,8 @@ Only visible if a webcam video is present.
 
 There is no fixed split anymore: it falls out of those three constraints and adapts to both the capture ratio and the scene ratio. When the geometry allows a near-square camera that also fills the scene, both happen at once (e.g. a 4:3 capture top/bottom in a 9:16 scene → square camera, 100 % fill). Camera Shape and Webcam Size do not apply to either preset. The single tunable is the square tolerance.
 
+Both halves are framed identically: the camera is always a **rectangle** with the *same* corner radius as the screen, whatever shape the user last picked under PiP. The mask picker is hidden here, but the setting survives — so the layout resolves the shape (`webcamRect.maskShape`) and the radius (`webcamRadius`) itself and every renderer, native compositor included, consumes those rather than the raw setting. Shipping the raw one is what used to let a circle chosen in PiP follow the user into Side by side and round the camera off into a disc, with the rounding changing depending on which shape happened to be stored.
+
 The webcam bubble can also be dragged around the canvas (mouse-drag) — the position persists as `webcamPosition`.
 
 ##### Panel: Cursor

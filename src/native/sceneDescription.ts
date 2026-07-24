@@ -107,6 +107,14 @@ export interface SceneLayout {
 	 * size-multiplier.
 	 */
 	webcamSize: number;
+	/**
+	 * The mask shape the layout actually RESOLVED to, not the raw `webcamMaskShape`
+	 * setting. Only picture-in-picture honours the setting; the block layouts cut a
+	 * rectangle out of the welded block whatever the user last picked in the shape
+	 * picker (which the UI hides there). Shipping the raw setting is what let a circle
+	 * chosen in PiP follow the user into "Side by side" and round the camera off into a
+	 * disc — see `computeCompositeLayout`, which is the one place that decides.
+	 */
 	webcamShape: "rectangle" | "circle" | "square" | "rounded";
 	webcamMirror: boolean;
 	/** Normalized position (0..1) for the webcam centre, or null to use the preset default. */
@@ -137,6 +145,19 @@ export interface SceneLayout {
 	 * side keeps deriving it from the user's Roundness slider.
 	 */
 	screenRadius?: number | null;
+	/**
+	 * Corner radius of the webcam box, same output-pixel convention as `screenRadius`
+	 * and resolved by the same `computeCompositeLayout` call — so "the block frames
+	 * screen and camera alike" can actually hold. It could not before: the screen took
+	 * the app's radius while the camera kept a second, independent table in Rust
+	 * (`min * 0.5 | 0.3 | 0.12`, unclamped, keyed off the raw mask shape), so the two
+	 * halves of one welded block were rounded by two different formulas.
+	 *
+	 * Given at the webcam's NOMINAL size: the native side rescales it with the box when
+	 * reactive zoom shrinks the bubble or Full Camera grows it, which is what keeps the
+	 * rounding proportional through those animations.
+	 */
+	webcamRadius?: number | null;
 }
 
 /** Frame-styling effects, from the editor settings. */
@@ -475,7 +496,9 @@ export function buildSceneDescription(
 			// web-consistent 0..1 fraction of the canvas reference dimension
 			// (see `SceneLayout.webcamSize` for the consumer-facing semantics).
 			webcamSize: webcamSizeToFraction(settings.webcamSizePreset),
-			webcamShape: settings.webcamMaskShape,
+			// The RESOLVED shape, not the raw setting — the block layouts always cut a
+			// rectangle, whatever shape the user last picked under picture-in-picture.
+			webcamShape: computedLayout?.webcamRect?.maskShape ?? settings.webcamMaskShape,
 			webcamMirror: settings.webcamMirrored,
 			webcamPosition: settings.webcamPosition,
 			// Gated by the preset: the block layouts size their camera off the screen
@@ -487,6 +510,7 @@ export function buildSceneDescription(
 			webcamRect,
 			screenRect,
 			screenRadius: computedLayout?.screenBorderRadius ?? null,
+			webcamRadius: computedLayout?.webcamRect?.borderRadius ?? null,
 		},
 		effects: {
 			padding: settings.padding / 100,

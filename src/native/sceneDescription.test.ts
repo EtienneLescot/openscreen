@@ -820,6 +820,84 @@ describe("buildSceneDescription.settings mapping", () => {
 		const doc = makeDoc({ legacyEditor: { webcamLayoutPreset: "picture-in-picture" } });
 		expect(buildSceneDescription(doc).layout.screenRadius).toBeNull();
 	});
+
+	/** A document with a camera on its only clip, so the layout resolves a webcam box. */
+	function docWithCamera(legacyEditor: Record<string, unknown>) {
+		const asset = makeAsset({
+			id: "a",
+			originalPath: "/a.mp4",
+			cameraTrack: { sourcePath: "/cam.mp4", startMs: 0, offsetMs: 0, visible: true },
+		});
+		return makeDoc({
+			assets: [asset],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			legacyEditor,
+		});
+	}
+
+	it.each([
+		"dual-frame",
+		"vertical-stack",
+	] as const)("ships a rectangle for %s, whatever shape the user last picked under PiP", (preset) => {
+		// The shape picker is hidden for the block layouts, but the setting survives
+		// from the last time PiP was active — shipping it raw is what rounded the
+		// side-by-side camera off into a disc.
+		const scene = buildSceneDescription(
+			docWithCamera({ webcamLayoutPreset: preset, webcamMaskShape: "circle" }),
+		);
+		expect(scene.layout.webcamShape).toBe("rectangle");
+	});
+
+	it.each([
+		"circle",
+		"rounded",
+		"square",
+		"rectangle",
+	] as const)("ships the same camera radius for a block layout whatever the stored mask shape (%s)", (shape) => {
+		const scene = buildSceneDescription(
+			docWithCamera({ webcamLayoutPreset: "dual-frame", webcamMaskShape: shape }),
+		);
+		const reference = buildSceneDescription(
+			docWithCamera({ webcamLayoutPreset: "dual-frame", webcamMaskShape: "rectangle" }),
+		);
+		expect(scene.layout.webcamRadius).toBe(reference.layout.webcamRadius);
+		expect(scene.layout.webcamRadius).toBeGreaterThan(0);
+	});
+
+	it("rounds both halves of a block alike — one radius, not two formulas", () => {
+		// The native side used to derive the camera's radius from its own table while the
+		// screen took the app's, so the welded block could never match itself.
+		const scene = buildSceneDescription(
+			docWithCamera({ webcamLayoutPreset: "vertical-stack", webcamMaskShape: "circle" }),
+		);
+		expect(scene.layout.webcamRadius).toBe(scene.layout.screenRadius);
+	});
+
+	it("still honours the shape picker under picture-in-picture", () => {
+		const scene = buildSceneDescription(
+			docWithCamera({ webcamLayoutPreset: "picture-in-picture", webcamMaskShape: "circle" }),
+		);
+		expect(scene.layout.webcamShape).toBe("circle");
+		// A circle's radius is half its (square) box — what makes the native rounded-box
+		// SDF draw an actual circle.
+		const cam = scene.layout.webcamRect;
+		expect(cam).not.toBeNull();
+		expect(scene.layout.webcamRadius).toBeGreaterThan(0);
+	});
+
+	it("leaves webcamRadius null when the layout resolves no camera box", () => {
+		const doc = makeDoc({ legacyEditor: { webcamLayoutPreset: "no-webcam" } });
+		expect(buildSceneDescription(doc).layout.webcamRadius).toBeNull();
+	});
 });
 
 // --- output dims -----------------------------------------------------------
