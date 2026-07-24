@@ -1,0 +1,246 @@
+/* ─────────────────────────────────────────────────────────────
+   V4 — the shipped editor's token vocabulary.
+
+   VERBATIM RE-EXPORT of src/styles/design-tokens.css. readme.md names
+   the product the source of truth, and every card and component in this
+   folder is authored against these names (--bg, --fg, --font-display,
+   --surface-N, --accent-*, …) — including tokens/base.css itself, which
+   reaches for --accent-ring and --fg-emphasis. Without this file none of
+   them resolve and every specimen renders unstyled, so the folder cannot
+   be copied out and used standalone the way SKILL.md describes.
+
+   KEEP IN SYNC: the body below is a straight copy. `diff` it against
+   src/styles/design-tokens.css after any token change there — only this
+   header should differ.
+
+   The `:root:root` doubling is carried over from the source file and
+   earns its keep here too: tokens/colors.css declares --accent, --border,
+   --muted, --card and --primary in a plain `:root` as space-separated
+   shadcn HSL triples ("60 4.8% 95.9%"), a different convention that is
+   not a valid colour on its own. Those names have to lose. Doubling the
+   pseudo-class settles it on specificity instead of on @import order.
+   ───────────────────────────────────────────────────────────── */
+
+:root:root {
+	/* canvas */
+	--bg: #f8fafc;
+	--bg-grad: radial-gradient(ellipse 1200px 800px at 50% -200px, #ffffff 0%, #f1f5f9 80%);
+	--surface: #ffffff;
+	--surface-1: #f1f5f9;
+	--surface-2: #e2e8f0;
+	--surface-3: #cbd5e1;
+	--surface-hi: #ffffff;
+	--surface-warm: #f1f5f9;
+
+	/* lines */
+	--border: #e2e8f0;
+	--border-soft: #e6eaef;
+	--border-hi: #cbd5e1;
+	--border-dark: #0f172a;
+
+	/* foreground */
+	--fg: #0f172a;
+	--fg-2: #334155;
+	--fg-emphasis: #020617;
+	--muted: #64748b;
+	--muted-soft: #94a3b8;
+	--meta: #7c8aa0;
+	--dim: #b6c2d1;
+
+	/* mint brand */
+	--brand: #10b981;
+	--brand-lo: #059669;
+	--brand-glow: rgba(16, 185, 129, 0.35);
+	--brand-soft: rgba(16, 185, 129, 0.10);
+	--accent: #10b981;
+	--accent-on: #04221a;
+	--accent-soft: rgba(16, 185, 129, 0.10);
+	--accent-wash: rgba(16, 185, 129, 0.06);
+	--accent-border: rgba(16, 185, 129, 0.26);
+	--accent-ring: rgba(16, 185, 129, 0.28);
+	--accent-stripe: rgba(16, 185, 129, 0.30);
+
+	/* legacy shadcn-style aliases → canonical tokens. Referenced by the
+	   TimelinePane / TranscriptEditor / VirtualPreview / NewEditorShell module
+	   CSS that was ported before the token system existed. Defined via var()
+	   so the dark-theme overrides of the target tokens cascade automatically —
+	   no need to redefine these in the dark block. */
+	--primary: var(--accent);
+	--primary-foreground: var(--accent-on);
+	--card: var(--surface);
+	--card-foreground: var(--fg);
+	--muted-foreground: var(--muted);
+
+	/* semantic */
+	--danger: #ef4444;
+	--danger-lo: #dc2626;
+	--danger-soft: rgba(239, 68, 68, 0.10);
+	--danger-wash: rgba(239, 68, 68, 0.06);
+	--danger-hatch: rgba(239, 68, 68, 0.32);
+	--warn: #f59e0b;
+	--warn-soft: rgba(245, 158, 11, 0.12);
+
+	/* timeline pills */
+	--annotation: #eab308;
+	--annotation-soft: rgba(234, 179, 8, 0.14);
+	--annotation-wash: rgba(234, 179, 8, 0.14);
+	--speed: #f97316;
+	--speed-soft: rgba(249, 115, 22, 0.14);
+	--speed-wash: rgba(249, 115, 22, 0.14);
+
+	--success: #10b981;
+	--success-soft: rgba(16, 185, 129, 0.10);
+
+	/* macOS traffic lights */
+	--light-red: #ff5f57;
+	--light-yellow: #febc2e;
+	--light-green: #28c840;
+
+	/* preview scene placeholders */
+	--scene-sky-hi: #eaebed;
+	--scene-sky-mid: #bcc0c6;
+	--scene-foliage: #6b7280;
+	--scene-foliage-d: #16171d;
+	--scene-overlay: rgba(22, 23, 29, 0.18);
+
+	--pip-bg-1: #16171d;
+	--pip-bg-2: #16171d;
+	--pip-bg-3: #16171d;
+	--pip-skin-hi: #bcc0c6;
+	--pip-skin-lo: #6b7280;
+	--pip-hair: #16171d;
+	--pip-shadow: rgba(22, 23, 29, 0.30);
+
+	--overlay-dark: rgba(22, 23, 29, 0.45);
+	--overlay-light: rgba(255, 255, 255, 0.85);
+	--overlay-text: rgba(255, 255, 255, 0.60);
+	--overlay-text-2: rgba(255, 255, 255, 0.55);
+	--overlay-border: rgba(22, 23, 29, 0.06);
+
+	/* typography */
+	--font-display: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+	--font-body: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+	--font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+
+	/* size */
+	--fs-app: 13px;
+	--fs-app-sm: 12px;
+	--fs-app-lg: 14px;
+	--fs-title: 16px;
+	--fs-section: 11px;
+	--fs-display: 24px;
+
+	/* spacing */
+	--sp-1: 4px;
+	--sp-2: 8px;
+	--sp-3: 12px;
+	--sp-4: 16px;
+	--sp-5: 20px;
+	--sp-6: 24px;
+
+	/* radius */
+	--r-xs: 4px;
+	--r-sm: 6px;
+	--r-md: 8px;
+	--r-lg: 12px;
+	--r-pill: 9999px;
+
+	/* layout */
+	--titlebar-h: 34px;
+	--rail-w: 48px;
+	--panel-w-left: 320px;
+	--panel-w-right: 320px;
+	--handle-w: 6px;
+	--handle-h: 6px;
+	--bottom-h: 224px;
+
+	/* elevation */
+	--elev-card: 0 1px 2px rgba(15, 23, 42, 0.03), 0 2px 8px -2px rgba(15, 23, 42, 0.05);
+	--elev-card-soft: 0 1px 2px rgba(15, 23, 42, 0.03);
+	--elev-pop: 0 8px 24px -8px rgba(15, 23, 42, 0.10), 0 2px 4px rgba(15, 23, 42, 0.04);
+
+	--focus-ring: 0 0 0 3px rgba(16, 185, 129, 0.18);
+
+	--motion-fast: 120ms;
+	--motion-base: 180ms;
+	--ease: cubic-bezier(0.2, 0, 0, 1);
+}
+
+:root[data-theme="dark"] {
+	--bg: #0a0d12;
+	--bg-grad: radial-gradient(ellipse at 50% 0%, #13171f 0%, #0a0d12 60%);
+	--surface: #14181f;
+	--surface-1: #14181f;
+	--surface-2: #1c2029;
+	--surface-3: #252a35;
+	--surface-hi: #2b313b;
+	--surface-warm: #1c2029;
+
+	--fg-emphasis: #ffffff;
+	--border: #252a35;
+	--border-soft: #1c2029;
+	--border-hi: #3a4150;
+	--border-dark: #0a0d12;
+
+	--fg: #e6e9ef;
+	--fg-2: #f3f5f8;
+	--muted: #8b95a3;
+	--meta: #5b6470;
+	--dim: #1c2029;
+
+	--brand: #10b981;
+	--brand-lo: #34d399;
+	--brand-glow: rgba(16, 185, 129, 0.40);
+	--brand-soft: rgba(16, 185, 129, 0.14);
+	--accent: #10b981;
+	--accent-on: #0a0d12;
+	--accent-soft: rgba(16, 185, 129, 0.14);
+	--accent-wash: rgba(16, 185, 129, 0.06);
+	--accent-border: rgba(16, 185, 129, 0.26);
+	--accent-ring: rgba(16, 185, 129, 0.32);
+	--accent-stripe: rgba(16, 185, 129, 0.34);
+
+	--danger: #f87171;
+	--danger-lo: #ef4444;
+	--danger-soft: rgba(248, 113, 113, 0.14);
+	--danger-wash: rgba(248, 113, 113, 0.08);
+	--danger-hatch: rgba(248, 113, 113, 0.40);
+
+	--warn: #fbbf24;
+	--warn-soft: rgba(251, 191, 36, 0.14);
+
+	--annotation: #fbbf24;
+	--annotation-soft: rgba(251, 191, 36, 0.16);
+	--annotation-wash: rgba(251, 191, 36, 0.16);
+	--speed: #fb923c;
+	--speed-soft: rgba(251, 146, 60, 0.16);
+	--speed-wash: rgba(251, 146, 60, 0.16);
+
+	--success: #10b981;
+	--success-soft: rgba(16, 185, 129, 0.14);
+
+	--scene-sky-hi: #2e3440;
+	--scene-sky-mid: #252a35;
+	--scene-foliage: #14181f;
+	--scene-foliage-d: #0a0d12;
+	--scene-overlay: rgba(0, 0, 0, 0.30);
+
+	--pip-bg-1: #14181f;
+	--pip-bg-2: #0a0d12;
+	--pip-bg-3: #252a35;
+	--pip-skin-hi: #bcc0c6;
+	--pip-skin-lo: #8b95a3;
+	--pip-hair: #0a0d12;
+	--pip-shadow: rgba(0, 0, 0, 0.50);
+
+	--overlay-dark: rgba(0, 0, 0, 0.55);
+	--overlay-light: rgba(20, 24, 31, 0.85);
+	--overlay-text: rgba(230, 233, 239, 0.80);
+	--overlay-text-2: rgba(230, 233, 239, 0.70);
+	--overlay-border: rgba(255, 255, 255, 0.08);
+
+	--elev-card: 0 1px 2px rgba(0, 0, 0, 0.40), 0 4px 12px -4px rgba(0, 0, 0, 0.50);
+	--elev-card-soft: 0 1px 2px rgba(0, 0, 0, 0.30);
+	--elev-pop: 0 8px 24px -8px rgba(0, 0, 0, 0.60);
+	--focus-ring: 0 0 0 3px rgba(16, 185, 129, 0.30);
+}
