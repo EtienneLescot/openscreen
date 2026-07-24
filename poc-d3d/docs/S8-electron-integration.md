@@ -17,8 +17,15 @@ contrôle React (case/bouton)
 - **Addon napi-rs** (`compositor-view-napi/`, membre du workspace) : `createView/setRect/
   setParam/setPlaying/destroyView/export`, enveloppe `LiveView` + `run_composited`.
 - **Glue TS** : domaine `compositor` du native-bridge (service + IPC + client) + hook
-  `useNativeCompositorView` (sync du rect DOM) + `NativeCompositorOverlay` monté dans
-  `Preview.tsx` (opt-in `VITE_NATIVE_COMPOSITOR=1`).
+  `useNativeCompositorView` (sync du rect DOM) + `NativeCompositorOverlay`.
+
+  > **Périmé depuis.** À l'époque de S8, l'overlay était monté dans `Preview.tsx` derrière
+  > un opt-in `VITE_NATIVE_COMPOSITOR=1`. Les deux ont disparu : `NativeCompositorOverlay`
+  > est monté **inconditionnellement** par `PreviewCanvas` (« no more dual preview path »),
+  > et **plus aucun code ne lit cette variable** — la passer n'a aucun effet. Lancer l'app
+  > en dev, c'est `npm run dev`, rien de plus. Les `<video>` restent montés mais masqués en
+  > CSS : ils servent au décodage, à l'horloge de lecture et aux métadonnées, pas à
+  > l'affichage.
 
 ## Le point dur résolu : airspace Chromium
 
