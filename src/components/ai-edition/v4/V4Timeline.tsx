@@ -575,7 +575,8 @@ export function V4Timeline({
 
 	// Plain scroll = vertical scroll (the panel can be too short to show every
 	// lane + the main track). Shift+scroll = horizontal pan. Ctrl+scroll = zoom
-	// around the cursor's timeline position.
+	// around the cursor's timeline position. Shift is tested first, so it wins
+	// when both are held: holding Shift always pans, never zooms.
 	// Attached as a native (non-passive) listener rather than React's onWheel:
 	// React marks wheel handlers passive by default, so e.preventDefault()
 	// there silently no-ops and the browser/OS still intercepts Ctrl+wheel as
@@ -586,17 +587,7 @@ export function V4Timeline({
 		const onWheelNative = (e: WheelEvent) => {
 			const r = el.getBoundingClientRect();
 			const viewportPct = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
-			if (e.ctrlKey) {
-				e.preventDefault();
-				setNav((prev) => {
-					const width = prev.end - prev.start;
-					const cursorFrac = prev.start + viewportPct * width;
-					const zoomFactor = e.deltaY > 0 ? 1.12 : 1 / 1.12;
-					const nextWidth = Math.min(1, Math.max(0.02, width * zoomFactor));
-					const start = Math.max(0, Math.min(1 - nextWidth, cursorFrac - viewportPct * nextWidth));
-					return { start, end: start + nextWidth };
-				});
-			} else if (e.shiftKey) {
+			if (e.shiftKey) {
 				e.preventDefault();
 				setNav((prev) => {
 					const width = prev.end - prev.start;
@@ -605,6 +596,21 @@ export function V4Timeline({
 					const delta = (wheelDelta / r.width) * width;
 					const start = Math.max(0, Math.min(1 - width, prev.start + delta));
 					return { start, end: start + width };
+				});
+			} else if (e.ctrlKey) {
+				e.preventDefault();
+				// A trackpad can deliver a horizontal swipe here, leaving deltaY at 0.
+				// Read whichever axis moved, otherwise the sign test below always
+				// reads "up" and the gesture only ever zooms in.
+				const wheelDelta = e.deltaY !== 0 ? e.deltaY : e.deltaX;
+				if (wheelDelta === 0) return;
+				setNav((prev) => {
+					const width = prev.end - prev.start;
+					const cursorFrac = prev.start + viewportPct * width;
+					const zoomFactor = wheelDelta > 0 ? 1.12 : 1 / 1.12;
+					const nextWidth = Math.min(1, Math.max(0.02, width * zoomFactor));
+					const start = Math.max(0, Math.min(1 - nextWidth, cursorFrac - viewportPct * nextWidth));
+					return { start, end: start + nextWidth };
 				});
 			}
 			// Otherwise let the native vertical scroll of .tlTracks run (no preventDefault).
