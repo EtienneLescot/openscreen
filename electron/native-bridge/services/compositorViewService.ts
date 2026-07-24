@@ -151,6 +151,41 @@ function buildCandidatePaths(
 }
 
 /**
+ * The dev-vendored ffmpeg tree, read from the pin that already exists rather
+ * than named a second time here: `poc-d3d/.cargo/config.toml`'s `FFMPEG_DIR`.
+ *
+ * That pin is the one thing the addon is actually built against (see the
+ * config's own comment), so the DLL basenames it imports — `avcodec-62.dll` and
+ * friends — only match the tree it points at. Restating the folder name in this
+ * file is precisely how the previous entry rotted: the pin moved off a floating
+ * `master-latest` snapshot onto the fixed `n8.1.2` release and this list went on
+ * probing a directory that no longer existed. Nothing broke, because the search
+ * silently fell through to the vendored `electron/native/bin/<tag>` — which is
+ * what makes the rot worth removing rather than tolerating.
+ *
+ * Returns null when there is no config to read: packaged builds ship no
+ * `poc-d3d/` at all, and the candidate list simply starts one entry later.
+ */
+function pinnedFfmpegDir(appRoot: string): string | null {
+	const crateDir = path.join(appRoot, "poc-d3d");
+	let toml: string;
+	try {
+		toml = fs.readFileSync(path.join(crateDir, ".cargo", "config.toml"), "utf8");
+	} catch {
+		return null;
+	}
+	// Both spellings cargo accepts carry the path as the first quoted string on
+	// the line: `FFMPEG_DIR = "…"` and `FFMPEG_DIR = { value = "…", relative = true }`.
+	const value = /^\s*FFMPEG_DIR\s*=.*?"([^"]+)"/m.exec(toml)?.[1];
+	if (!value) {
+		return null;
+	}
+	// `relative = true` resolves against the directory the config governs (the
+	// crate root), which is also what the pin's own comment documents.
+	return path.isAbsolute(value) ? value : path.join(crateDir, value);
+}
+
+/**
  * Directories that may hold the ffmpeg shared DLLs (avcodec/avformat/avutil/…)
  * the addon dynamically links against. Node's `require()` of a native addon
  * does a Win32 `LoadLibrary` under the hood, which resolves dependent DLLs via
@@ -158,12 +193,13 @@ function buildCandidatePaths(
  * gets prepended to `process.env.PATH` before the `require()` in
  * `tryLoadAddon`.
  *
- * Order: the dev-only vendored location first, then the arch-tagged bin dir
- * under `appRoot` (dev / `electron-builder --dir` unpacked staging), then the
- * *same* dir under `process.resourcesPath` — required for real packaged
- * installers, since `electron/native/bin/**` ships exclusively via
- * `extraResources` (see `electron-builder.json5`'s `files` list, which only
- * packs `dist`/`dist-electron`) and is never inside `app.getAppPath()` there.
+ * Order: the dev-only vendored location first (absent outside a source
+ * checkout — see `pinnedFfmpegDir`), then the arch-tagged bin dir under
+ * `appRoot` (dev / `electron-builder --dir` unpacked staging), then the *same*
+ * dir under `process.resourcesPath` — required for real packaged installers,
+ * since `electron/native/bin/**` ships exclusively via `extraResources` (see
+ * `electron-builder.json5`'s `files` list, which only packs
+ * `dist`/`dist-electron`) and is never inside `app.getAppPath()` there.
  * Mirrors the appPath/resourcePath pattern `stt/gpuDetector.ts` already uses
  * for the other native binaries in this same directory.
  */
@@ -173,8 +209,9 @@ export function ffmpegSharedBinCandidates(appRoot: string): string[] {
 		typeof process.resourcesPath === "string" && process.resourcesPath.length > 0
 			? process.resourcesPath
 			: null;
+	const devDir = pinnedFfmpegDir(appRoot);
 	return [
-		path.join(appRoot, "poc-d3d", "thirdparty", "ffmpeg-master-latest-win64-lgpl-shared", "bin"),
+		...(devDir ? [path.join(devDir, "bin")] : []),
 		path.join(appRoot, "electron", "native", "bin", tag),
 		...(resourcesPath ? [path.join(resourcesPath, "electron", "native", "bin", tag)] : []),
 	];

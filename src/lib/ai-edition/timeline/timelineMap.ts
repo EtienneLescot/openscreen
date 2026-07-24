@@ -484,7 +484,18 @@ export function projectRegionsToSource<
 				);
 			});
 		}
-		if (emitted === 0) out.push(region);
+		// A region that WAS resolved against real segments but overlapped none of them
+		// sits entirely under a trim (or off the visible timeline) — its content was
+		// removed, so it must NOT render. Re-emitting it here is exactly what let a
+		// fully-trimmed effect resurface elsewhere: it would carry its RAW-virtual
+		// startMs/endMs and NO clipIndex, and native's `belongs()` (scene.rs) accepts a
+		// clipIndex-less region on ANY clip whose SOURCE window numerically overlaps those
+		// raw numbers — so the effect fired *later* on an unrelated clip instead of being
+		// ignored (the same wrong-clip class as the `speed_at` fix in regions.rs). Only
+		// when there are no segments AT ALL is there no layout to resolve against; keep the
+		// passthrough for that degenerate case (it reaches an empty native clip list and so
+		// can never be matched anyway).
+		if (emitted === 0 && visibleSegments.length === 0) out.push(region);
 	}
 	return out;
 }

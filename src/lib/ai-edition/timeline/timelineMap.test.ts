@@ -121,6 +121,50 @@ describe("projectRegionsToSource", () => {
 		]);
 	});
 
+	it("drops a region a trim removes entirely rather than leaking it onto a later clip", () => {
+		// The reported bug: an effect fully UNDER a trim fired later instead of being ignored.
+		// Two clips of DIFFERENT assets whose source windows overlap numerically (c1: asset a
+		// [0,10] @ raw[0,10]; c2: asset b [0,10] @ raw[10,20]). A zoom anchored to c1 at source
+		// [3,5] is then fully trimmed away on c1 (trim removes a[2,8]; c2's asset b is
+		// untouched). It must VANISH — not reappear during c2, whose source window [0,10]
+		// numerically contains [3,5]. A clipIndex-less passthrough used to re-emit it with raw
+		// coords, and native's `belongs()` then matched it on c2 (any overlapping clip).
+		const c1 = clip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 0,
+			timelineEndSec: 10,
+		});
+		const c2 = clip({
+			id: "c2",
+			assetId: "b",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineStartSec: 10,
+			timelineEndSec: 20,
+		});
+		const segments = resolvePlaybackSegments([c1, c2], [trim("a", 2, 8)]);
+		const anchored = { ...region("r", 3, 5), clipId: "c1", sourceStartSec: 3, sourceEndSec: 5 };
+		expect(projectRegionsToSource([anchored], segments, [c1, c2], () => "x")).toEqual([]);
+	});
+
+	it("drops an unanchored region that a trim removes entirely", () => {
+		// The same class for an un-migrated (v1.7-imported) region that has only its RAW span:
+		// raw[4.5,5.5] sits inside the removed stretch a[4,6], so it maps to no kept segment
+		// and must be dropped — not passed through with its raw coords onto the native scene.
+		const c = clip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 10,
+			timelineEndSec: 10,
+		});
+		const segments = resolvePlaybackSegments([c], [trim("a", 4, 6)]);
+		expect(projectRegionsToSource([region("r", 4.5, 5.5)], segments, [c], () => "x")).toEqual([]);
+	});
+
 	// --- anchored path: the anchor is the SSOT, `startMs`/`endMs` are not consulted ---
 
 	it("places an anchored region from its anchor, ignoring a stale startMs/endMs", () => {
