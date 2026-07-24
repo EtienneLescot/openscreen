@@ -15,3 +15,8 @@
 @import url("./tokens/radii.css");
 @import url("./tokens/elevation.css");
 @import url("./tokens/effects.css");
+/* Last on purpose: v4 is the shipped vocabulary every card and component
+   here is written against, and it has to win the handful of names that
+   colors.css / elevation.css / typography.css also declare. It defends
+   that with `:root:root` too, so the order is belt-and-braces. */
+@import url("./tokens/v4.css");

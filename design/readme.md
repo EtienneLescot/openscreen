@@ -108,9 +108,11 @@ How OpenScreen writes.
 
 ### Brand mark
 
-- **`assets/logo-icon.png`** — the OpenScreen app icon (22×22 in the topbar). This is the only
-  provided brand asset. There is **no wordmark file**; the product sets "OpenScreen" in Geist
-  600, 15px, `-0.015em` tracking next to the icon. Do not redraw or recolour the mark.
+- **`assets/logo-icon.png`** — the OpenScreen app icon, transparent (24×24 in the topbar; the
+  mark is a disc, so it needs a little more box than a filled tile to carry the same optical
+  weight). This is the only provided brand asset. There is **no wordmark file**; the product sets
+  "OpenScreen" in Geist 600, 15px, `-0.015em` tracking next to the icon. Do not redraw or
+  recolour the mark.
 
 ---
 
@@ -123,7 +125,13 @@ Root:
 - `assets/logo-icon.png` — brand mark.
 
 `tokens/` — CSS custom properties (all reachable from `styles.css`):
-- `fonts.css` · `colors.css` · `typography.css` · `spacing.css` · `radii.css` · `elevation.css` · `base.css`
+- `fonts.css` · `colors.css` · `typography.css` · `spacing.css` · `radii.css` · `elevation.css` · `effects.css` · `base.css`
+- `v4.css` — **the vocabulary the cards and components actually use** (`--bg`, `--fg`,
+  `--font-display`, `--surface-N`, `--accent-*`, …). A verbatim re-export of the product's
+  `src/styles/design-tokens.css`, imported last so it wins the dozen names the older files
+  also declare. Re-export it after any token change upstream; `diff` the two files and only
+  the header comment should differ. Author new work against these names — the older token
+  files are legacy and largely unreferenced.
 
 `guidelines/` — foundation specimen cards (Design System tab): colors, type, spacing, radii, elevation, motion.
 
