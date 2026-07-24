@@ -96,14 +96,45 @@ fn screen_source_rect(
 fn cover_crop_uv(visible: [f32; 2], tex: [f32; 2], box_ar: f32) -> (f32, f32, f32, f32) {
     let (cam_w, cam_h) = (visible[0].max(1.0), visible[1].max(1.0));
     let (tex_w, tex_h) = (tex[0].max(1.0), tex[1].max(1.0));
-    let box_ar = if box_ar.is_finite() && box_ar > 0.0 { box_ar } else { cam_w / cam_h };
-    let (crop_w, crop_h) = if box_ar >= cam_w / cam_h {
-        (cam_w, cam_w / box_ar) // boîte plus large que la source → pleine largeur, on rogne en hauteur
+    let full = [0.0, 0.0, cam_w / tex_w, cam_h / tex_h];
+    let [u0, v0, u1, v1] = cover_uv_rect(full, tex, box_ar);
+    (u0, v0, u1, v1)
+}
+
+/// Rétrécit un rect SOURCE déjà exprimé en UV (`[u0, v0, u1, v1]`) autour de son
+/// centre pour qu'il porte le ratio `box_ar` une fois rapporté aux pixels de la
+/// texture. C'est la forme générale de `object-fit: cover`, et LA primitive qui
+/// garantit qu'une couche vidéo n'est jamais étirée.
+///
+/// Deux appelants, deux points d'entrée dans le rect :
+///   - la **webcam** part de la frame visible entière (`cover_crop_uv`) ;
+///   - l'**écran** part du rect déjà réduit par le crop utilisateur ET le zoom,
+///     et n'applique ce cover que dans les layouts qui le demandent
+///     (`Scene.layout.screen_cover` — les blocs side-by-side / top-bottom, où le
+///     web fait exactement la même chose via `screenCover`).
+///
+/// Rogner APRÈS le crop et le zoom est ce qui rend l'opération composable : le
+/// crop décide quoi montrer, le zoom où regarder, le cover comment habiller la
+/// boîte. Chacun réduit le rect précédent, jamais ne le déforme.
+///
+/// Quand le rect a déjà le ratio de la boîte, il est renvoyé inchangé — donc
+/// aucun placement déjà correct ne bouge.
+fn cover_uv_rect(uv: [f32; 4], tex: [f32; 2], box_ar: f32) -> [f32; 4] {
+    let (tex_w, tex_h) = (tex[0].max(1.0), tex[1].max(1.0));
+    let (w_uv, h_uv) = ((uv[2] - uv[0]).max(1e-6), (uv[3] - uv[1]).max(1e-6));
+    // ratio du rect courant, en PIXELS (les UV sont anisotropes dès que la
+    // texture n'est pas carrée — d'où le passage par `tex`).
+    let (w_px, h_px) = (w_uv * tex_w, h_uv * tex_h);
+    let cur_ar = w_px / h_px;
+    let box_ar = if box_ar.is_finite() && box_ar > 0.0 { box_ar } else { cur_ar };
+    let (new_w_px, new_h_px) = if box_ar >= cur_ar {
+        (w_px, w_px / box_ar) // boîte plus large → pleine largeur, on rogne en hauteur
     } else {
-        (cam_h * box_ar, cam_h) // boîte plus haute → pleine hauteur, on rogne en largeur
+        (h_px * box_ar, h_px) // boîte plus haute → pleine hauteur, on rogne en largeur
     };
-    let (x0, y0) = ((cam_w - crop_w) * 0.5, (cam_h - crop_h) * 0.5);
-    (x0 / tex_w, y0 / tex_h, (x0 + crop_w) / tex_w, (y0 + crop_h) / tex_h)
+    let (new_w, new_h) = (new_w_px / tex_w, new_h_px / tex_h);
+    let (cx, cy) = (uv[0] + w_uv * 0.5, uv[1] + h_uv * 0.5);
+    [cx - new_w * 0.5, cy - new_h * 0.5, cx + new_w * 0.5, cy + new_h * 0.5]
 }
 
 /// Constant buffer d'un calque (doit matcher `cbuffer Layer` du HLSL, 64 octets).
@@ -1255,23 +1286,29 @@ impl Compositor {
             .as_ref()
             .and_then(|s| s.layout.screen_rect)
             .map(|r| [r.x, r.y, r.width, r.height]);
-        let (mut p, mut pp) = match (&scene_preset, app_webcam_rect) {
-            (Some(_preset), Some(wr)) => {
-                // webcam rect résolu côté app → on s'aligne strictement. Idem pour l'écran quand
-                // l'app le fournit ; sinon il reste plein cadre (le padding slider l'insètera
-                // ensuite dans `scale_frame`).
-                let mut fp = preset_placements(_preset);
-                fp.webcam.dst = wr;
+        let (mut p, mut pp) = match &scene_preset {
+            Some(preset) => {
+                // Chaque rect résolu par l'app remplace INDÉPENDAMMENT sa contrepartie du
+                // preset ; sinon celle du preset reste (le padding slider l'insèrera ensuite
+                // dans `scale_frame`).
+                //
+                // Avant, ce match portait sur `app_webcam_rect` et le rect ÉCRAN n'était donc
+                // honoré que si un rect webcam arrivait aussi. Un layout sans caméra gardait
+                // l'écran plein cadre du preset — pendant que `fit_screen` (plus bas) coupait
+                // quand même son fit au ratio du crop, puisqu'un `app_screen_rect` était bien
+                // présent. Résultat : un clip recadré sans caméra était étiré, et aucune des
+                // deux voies ne le rattrapait. Coupler l'écran à la présence de la caméra
+                // n'avait aucune raison d'être — ce sont deux calques indépendants.
+                let mut fp = preset_placements(preset);
+                if let Some(wr) = app_webcam_rect {
+                    fp.webcam.dst = wr;
+                }
                 if let Some(sr) = app_screen_rect {
                     fp.screen.dst = sr;
                 }
                 (fp, fp) // layout statique → vélocité nulle
             }
-            (Some(preset), None) => {
-                let fp = preset_placements(preset);
-                (fp, fp)
-            }
-            (None, _) => (timeline(frame, cfg), timeline(frame - 1.0, cfg)),
+            None => (timeline(frame, cfg), timeline(frame - 1.0, cfg)),
         };
         let lp = *self.live_params.borrow();
         // Motion blur écran : quand la scène (contrat de l'app) est posée, c'est elle qui pilote
@@ -1649,13 +1686,31 @@ impl Compositor {
         // `for_clip_window` conserve l'index pour distinguer plusieurs clips du même asset.
         // `active_crop` déjà résolu plus haut (utilisé pour dimensionner `s_dst`) — une seule
         // source de vérité pour ce lookup.
-        let [su0, sv0, su1, sv1] = screen_source_rect(u_max, v_max, active_crop, p.zoom, p.focus);
+        let s_px = [s_dst[2] * self.rw(), s_dst[3] * self.rh()];
+        // Layouts "bloc" (side-by-side / top-bottom) : la boîte écran est un SLOT au ratio
+        // arbitraire, et le web y fait tenir l'image en `cover` (`computeCompositeLayout`
+        // renvoie `screenCover: true`, honoré par `frameRenderer`). Le natif l'ignorait, donc
+        // il étirait la source pour remplir le slot — visible dès que le clip est recadré,
+        // puisque le crop éloigne encore le ratio de la source de celui du slot.
+        //
+        // Le cover s'applique APRÈS le crop et le zoom, sur leur rect résultant : le crop
+        // décide quoi montrer, le zoom où regarder, le cover comment habiller la boîte.
+        let cover_box_ar = scene_ref
+            .as_ref()
+            .and_then(|s| s.layout.screen_cover.then_some(s_px[0] / s_px[1].max(0.0001)));
+        let cover = |uv: [f32; 4]| -> [f32; 4] {
+            match cover_box_ar {
+                Some(ar) => cover_uv_rect(uv, [stw as f32, sth as f32], ar),
+                None => uv,
+            }
+        };
+        let [su0, sv0, su1, sv1] =
+            cover(screen_source_rect(u_max, v_max, active_crop, p.zoom, p.focus));
         let (hu, hv) = ((su1 - su0) * 0.5, (sv1 - sv0) * 0.5);
         // Le focus courant reste volontairement utilisé pour la frame précédente, comme avant.
         let [su0_p, sv0_p, su1_p, sv1_p] =
-            screen_source_rect(u_max, v_max, active_crop, pp.zoom, p.focus);
+            cover(screen_source_rect(u_max, v_max, active_crop, pp.zoom, p.focus));
         let (hu_p, hv_p) = ((su1_p - su0_p) * 0.5, (sv1_p - sv0_p) * 0.5);
-        let s_px = [s_dst[2] * self.rw(), s_dst[3] * self.rh()];
         if cfg.shadow {
             self.draw_shadow(s_dst, s_px, s_radius, 40.0, [0.0, 16.0], 0.45 * lp.shadow_scale);
         }
@@ -2406,6 +2461,32 @@ mod tests {
             let (mx, my) = (u0 + u1, v0 + v1);
             assert!((mx - cam[0] / tex[0]).abs() < 1e-6, "pas centre en x");
             assert!((my - cam[1] / tex[1]).abs() < 1e-6, "pas centre en y");
+        }
+    }
+
+    /// L'écran en layout bloc : le cover s'applique au rect DÉJÀ réduit par le crop
+    /// et le zoom. Quel que soit ce rect de départ, ce qui atterrit dans la boîte a
+    /// le ratio de la boîte — c'est ce qui empêche l'étirement.
+    #[test]
+    fn cover_uv_rect_gives_the_box_aspect_whatever_the_crop_and_zoom_left() {
+        let tex = [2048.0, 1024.0];
+        // rects source plausibles : plein cadre, bande verticale (crop portrait), zoom serré
+        for &uv in &[
+            [0.0, 0.0, 0.9375, 0.7031],
+            [0.41, 0.04, 0.55, 0.67],
+            [0.30, 0.20, 0.55, 0.45],
+        ] {
+            for &box_ar in &[0.4, 0.75, 1.0, 1.9, 3.2] {
+                let out = cover_uv_rect(uv, tex, box_ar);
+                let got = ((out[2] - out[0]) * tex[0]) / ((out[3] - out[1]) * tex[1]);
+                assert!(
+                    (got - box_ar).abs() / box_ar < 1e-3,
+                    "uv {uv:?} boite {box_ar} -> ratio {got}",
+                );
+                // le cover RÉDUIT : il ne va jamais chercher des pixels hors du rect source
+                assert!(out[0] >= uv[0] - 1e-6 && out[1] >= uv[1] - 1e-6, "deborde en haut/gauche");
+                assert!(out[2] <= uv[2] + 1e-6 && out[3] <= uv[3] + 1e-6, "deborde en bas/droite");
+            }
         }
     }
 

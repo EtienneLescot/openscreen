@@ -68,6 +68,30 @@ pub struct SceneLayout {
     /// en bloc encadrent écran et caméra à l'identique). None → slider Roundness, comme avant.
     #[serde(default)]
     pub screen_radius: Option<f32>,
+    /// L'écran doit-il REMPLIR sa boîte quitte à être rogné (`object-fit: cover`) plutôt que d'y
+    /// tenir en entier ? Vrai pour les layouts en bloc, dont la boîte écran est un slot au ratio
+    /// arbitraire : c'est ce que `computeCompositeLayout` renvoie sous `screenCover` et que
+    /// `frameRenderer` applique déjà côté web. Sans ce drapeau le natif étirait la source pour
+    /// remplir le slot — d'autant plus visible sur un clip recadré, le crop éloignant encore le
+    /// ratio de la source de celui du slot.
+    ///
+    /// `#[serde(default)]` : absent → `false` → comportement "contain" historique.
+    #[serde(default)]
+    pub screen_cover: bool,
+    /// Un layout résolu PAR CLIP visible, aligné par index sur `Scene::clips` / `crop_by_clip`.
+    /// Les champs scalaires ci-dessus sont ceux du PREMIER clip (repli pour un payload sans ce
+    /// tableau, et valeur de départ tant qu'aucun clip n'est actif).
+    ///
+    /// Par clip parce que la FORME de la source écran l'est : un clip est un enregistrement
+    /// d'écran + une caméra et un son optionnels, et rien n'impose à deux clips d'avoir été
+    /// enregistrés à la même taille ni au même ratio. Le crop n'est qu'une manière de plus de
+    /// faire varier cette forme — un 16:9 recadré en 9:16 doit se disposer exactement comme un
+    /// enregistrement nativement en 9:16. À ne pas confondre avec le ratio de la SCÈNE, global.
+    ///
+    /// `for_clip_window` recopie l'entrée du clip composé dans les champs scalaires, si bien que
+    /// `compose_frame` continue de lire un seul `layout` sans branche supplémentaire.
+    #[serde(default)]
+    pub layout_by_clip: Vec<Option<ResolvedClipLayout>>,
     /// Rayon des coins de la CAMÉRA, même convention px-de-sortie que `screen_radius` et issu du
     /// même appel `computeCompositeLayout`. C'est la seule façon que « le bloc encadre écran et
     /// caméra à l'identique » soit vrai : sans lui l'écran prenait le rayon de l'app pendant que
@@ -80,6 +104,24 @@ pub struct SceneLayout {
     /// `#[serde(default)]` : ancien payload / tests → None → table Rust historique.
     #[serde(default)]
     pub webcam_radius: Option<f32>,
+}
+
+/// La moitié du layout qui dépend de la FORME de la source, résolue pour un clip.
+/// Voir `SceneLayout::layout_by_clip`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedClipLayout {
+    pub screen_rect: SceneRect,
+    #[serde(default)]
+    pub webcam_rect: Option<SceneRect>,
+    #[serde(default)]
+    pub screen_radius: Option<f32>,
+    #[serde(default)]
+    pub webcam_radius: Option<f32>,
+    #[serde(default)]
+    pub webcam_shape: Option<String>,
+    #[serde(default)]
+    pub screen_cover: bool,
 }
 
 /// Rect normalisé 0..1 du cadre de sortie : x, y en haut-gauche ; width, height.
@@ -262,6 +304,20 @@ impl Scene {
         scene.camera_fullscreen_regions.retain(|region| {
             belongs(region.clip_index, region.start_sec, region.end_sec)
         });
+        // Le layout dépend de la FORME de la source du clip (dimensions natives × crop), qui
+        // varie d'un clip à l'autre. On installe donc celui du clip composé dans les champs
+        // scalaires : `compose_frame` continue de lire un seul `layout`, sans jamais avoir à
+        // savoir qu'il en existe un par clip. Absent (payload ancien) → on garde les scalaires.
+        if let Some(Some(l)) = scene.layout.layout_by_clip.get(clip_index).cloned() {
+            scene.layout.screen_rect = Some(l.screen_rect);
+            scene.layout.webcam_rect = l.webcam_rect;
+            scene.layout.screen_radius = l.screen_radius;
+            scene.layout.webcam_radius = l.webcam_radius;
+            scene.layout.screen_cover = l.screen_cover;
+            if let Some(shape) = l.webcam_shape {
+                scene.layout.webcam_shape = shape;
+            }
+        }
         scene.active_clip_index = clip_index;
         scene
     }
