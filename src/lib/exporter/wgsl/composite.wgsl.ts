@@ -40,6 +40,8 @@ struct Uniforms {
   b : vec4f,
   // webcamShape | webcamMirrored | hasWebcam | hasShadow   (0/1 as floats)
   flags : vec4f,
+  // Webcam source sub-rect — the cover crop, normalised: x, y, w, h
+  webcamSrc : vec4f,
 };
 
 @group(0) @binding(0) var<uniform> u : Uniforms;
@@ -176,7 +178,11 @@ fn fs(in : VsOut) -> @location(0) vec4f {
       if (u.flags.y > 0.5) {
         wuv.x = 1.0 - wuv.x;
       }
-      let cam = textureSampleBaseClampToEdge(webcamTex, samp, clamp(wuv, vec2f(0.0), vec2f(1.0)));
+      // Through the cover crop: the box's aspect ratio is not the camera's (a block
+      // layout hands it a column slot, Full Camera walks it out to the whole frame),
+      // so the box selects a sub-rect of the source rather than stretching all of it.
+      let wsrc = u.webcamSrc.xy + clamp(wuv, vec2f(0.0), vec2f(1.0)) * u.webcamSrc.zw;
+      let cam = textureSampleBaseClampToEdge(webcamTex, samp, wsrc);
       colour = overComposite(colour, vec4f(cam.rgb, wc));
     }
   }

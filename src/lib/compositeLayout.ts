@@ -25,69 +25,40 @@ export interface StyledRenderRect extends RenderRect {
 }
 
 /**
- * Linearly interpolates position/size/borderRadius between two rects. Used to grow the
- * webcam overlay from its normal layout to a full-canvas rect during a "Full Camera"
- * timeline region, at progress `t` (0 = from, 1 = to). Pure and shape-agnostic so preview
- * (DOM transform) and export (canvas draw) can share the exact same math.
+ * The camera's rect during a "Full Camera" region: its layout rect at `progress` 0,
+ * the WHOLE frame at 1.
+ *
+ * Full Camera is not a zoom of the picture-in-picture bubble — it is the camera taking
+ * the frame. The endpoint is exactly `[0, 0, canvasWidth, canvasHeight]`: no margin, no
+ * padding, no corner rounding, and nothing of the composition (wallpaper, screen,
+ * shadow) left showing behind it. The box may change aspect ratio on its way there
+ * because every renderer cover-crops the camera into whatever box it is handed, so the
+ * image is never stretched by the animation.
+ *
+ * The mask shape degenerates to a plain rounded rectangle whose radius eases to 0, which
+ * is what makes the morph continuous instead of a pop: `computeCompositeLayout` already
+ * gives a circle mask a radius of half its (square) box, and a rounded rect at that
+ * radius IS that circle — so one lerp carries every shape out of existence with no
+ * per-shape branch.
+ *
+ * Pure, and shared by the preview, both exporters and the native compositor, so all four
+ * animate to the identical rect.
  */
-export function lerpRect(
-	from: StyledRenderRect,
-	to: StyledRenderRect,
-	t: number,
-): StyledRenderRect {
-	const clamped = Math.max(0, Math.min(1, t));
-	return {
-		x: from.x + (to.x - from.x) * clamped,
-		y: from.y + (to.y - from.y) * clamped,
-		width: from.width + (to.width - from.width) * clamped,
-		height: from.height + (to.height - from.height) * clamped,
-		borderRadius: from.borderRadius + (to.borderRadius - from.borderRadius) * clamped,
-		maskShape: from.maskShape,
-	};
-}
-
-/**
- * Inset fraction (of the canvas' shorter dimension) left as a visible border around the
- * webcam when Full Camera expands it, so rounded/circular webcam masks never touch the
- * canvas edge at full screen. Matches the same order of magnitude as `MARGIN_FRACTION`
- * used for the picture-in-picture layout above.
- */
-export const CAMERA_FULLSCREEN_MARGIN_FRACTION = 0.025;
-
-/**
- * Computes the Full Camera "grown" target rect: the largest rect matching `aspectRect`'s
- * aspect ratio that fits centered inside the canvas, inset by `CAMERA_FULLSCREEN_MARGIN_FRACTION`
- * of the canvas' shorter dimension. Preserving the base rect's aspect ratio (rather than
- * filling the canvas' own aspect ratio) keeps the webcam undistorted throughout the lerp,
- * since `lerpRect` only stays proportion-correct if both endpoints share the same ratio.
- * Pure function shared by preview (`VideoPlayback.tsx`) and export (`frameRenderer.ts`) so
- * both animate to the identical rect.
- */
-export function computeCameraFullscreenTargetRect(
+export function computeCameraFullscreenRect(
+	base: StyledRenderRect,
 	canvasSize: Size,
-	aspectRect: { width: number; height: number },
-): RenderRect {
-	const { width: canvasWidth, height: canvasHeight } = canvasSize;
-	const margin = Math.round(
-		Math.min(canvasWidth, canvasHeight) * CAMERA_FULLSCREEN_MARGIN_FRACTION,
-	);
-	const boundsWidth = Math.max(0, canvasWidth - margin * 2);
-	const boundsHeight = Math.max(0, canvasHeight - margin * 2);
-
-	const aspect =
-		aspectRect.width > 0 && aspectRect.height > 0 ? aspectRect.width / aspectRect.height : 1;
-
-	let width = boundsWidth;
-	let height = width / aspect;
-	if (height > boundsHeight) {
-		height = boundsHeight;
-		width = height * aspect;
-	}
-
-	const x = margin + (boundsWidth - width) / 2;
-	const y = margin + (boundsHeight - height) / 2;
-
-	return { x, y, width, height };
+	progress: number,
+): StyledRenderRect {
+	const t = Math.max(0, Math.min(1, progress));
+	const lerp = (from: number, to: number) => from + (to - from) * t;
+	return {
+		x: lerp(base.x, 0),
+		y: lerp(base.y, 0),
+		width: lerp(base.width, canvasSize.width),
+		height: lerp(base.height, canvasSize.height),
+		borderRadius: lerp(base.borderRadius, 0),
+		maskShape: "rectangle",
+	};
 }
 
 export interface Size {
@@ -123,25 +94,54 @@ interface OverlayTransform {
 	minSize: number;
 }
 
-interface StackTransform {
-	type: "stack";
+/**
+ * Screen + camera welded into one solid block that keeps the screen capture's own
+ * aspect ratio, then contain-fits into the (padded) scene — see the design notes in
+ * `computeCompositeLayout`. Used by both "Side by side" and "Top / bottom".
+ */
+interface BlockTransform {
+	type: "block";
+	/** Where the camera sits relative to the screen: beside it, or under it. */
+	direction: "row" | "column";
+	/** Gap between screen and camera, as a fraction of the screen's own width. */
 	gapFraction: number;
-	minGap: number;
-}
-
-interface SplitTransform {
-	type: "split";
-	gapFraction: number;
-	minGap: number;
-	screenUnits: number;
-	webcamUnits: number;
 }
 
 export interface WebcamLayoutPresetDefinition {
 	label: string;
-	transform: OverlayTransform | StackTransform | SplitTransform;
+	transform: OverlayTransform | BlockTransform;
 	borderRadius: BorderRadiusRule;
 	shadow: WebcamLayoutShadow | null;
+}
+
+/**
+ * Presets whose camera box is welded to the screen. Their geometry is fully derived
+ * from the screen capture's aspect ratio, so the webcam-size slider, the mask-shape
+ * picker and the reactive "shrink on zoom" scaling have nothing to act on there.
+ */
+export function isWebcamBlockLayout(preset: WebcamLayoutPreset = "picture-in-picture"): boolean {
+	return preset === "dual-frame" || preset === "vertical-stack";
+}
+
+/**
+ * Whether "shrink on zoom" (the reactive webcam scaling) applies to a preset. Only the
+ * free-floating picture-in-picture bubble can shrink: the block layouts size their
+ * camera off the screen box, so shrinking it would break the "same width / same height
+ * as the screen capture" contract and tear a hole in the block. Single rule shared by
+ * the UI (which hides the toggle), the preview, both exporters and the native scene.
+ */
+export function supportsWebcamReactiveZoom(
+	preset: WebcamLayoutPreset = "picture-in-picture",
+): boolean {
+	return preset === "picture-in-picture";
+}
+
+/** Effective reactive-zoom flag: the stored setting, gated by the active preset. */
+export function resolveWebcamReactiveZoom(
+	preset: WebcamLayoutPreset | undefined,
+	enabled: boolean | undefined,
+): boolean {
+	return Boolean(enabled) && supportsWebcamReactiveZoom(preset);
 }
 
 export interface WebcamCompositeLayout {
@@ -161,6 +161,23 @@ export function webcamSizeToFraction(percent: number): number {
 
 const MARGIN_FRACTION = 0.02;
 const MAX_BORDER_RADIUS = 24;
+/**
+ * Breathing room between the screen box and the camera box inside a block layout,
+ * as a fraction of the screen's own width. Expressed against the screen (not the
+ * canvas) so it scales with the block itself: the same value reads as the same
+ * visual gap whether the block is width- or height-constrained by the scene.
+ */
+const BLOCK_GAP_FRACTION = 0.02;
+/**
+ * How far the camera box may drift from square, as a maximum aspect ratio (its
+ * reciprocal is the minimum). The camera's free side is chosen to make the whole
+ * block match the SCENE's aspect ratio — perfect contain-fit, no bars — but the
+ * result is then held within `[1/T, T]` of square, so the camera never becomes an
+ * extreme slice. This single knob is the whole of "the camera tends toward square,
+ * going only slightly rectangular when filling the scene asks it to". `1.25` keeps
+ * it between 4:5 and 5:4.
+ */
+const BLOCK_CAMERA_ASPECT_TOLERANCE = 1.25;
 const WEBCAM_LAYOUT_PRESET_MAP: Record<WebcamLayoutPreset, WebcamLayoutPresetDefinition> = {
 	"picture-in-picture": {
 		label: "Picture in Picture",
@@ -183,11 +200,11 @@ const WEBCAM_LAYOUT_PRESET_MAP: Record<WebcamLayoutPreset, WebcamLayoutPresetDef
 		},
 	},
 	"vertical-stack": {
-		label: "Vertical Stack",
+		label: "Top / bottom",
 		transform: {
-			type: "stack",
-			gapFraction: 0.02,
-			minGap: 8,
+			type: "block",
+			direction: "column",
+			gapFraction: BLOCK_GAP_FRACTION,
 		},
 		borderRadius: {
 			max: 24,
@@ -197,13 +214,11 @@ const WEBCAM_LAYOUT_PRESET_MAP: Record<WebcamLayoutPreset, WebcamLayoutPresetDef
 		shadow: null,
 	},
 	"dual-frame": {
-		label: "Dual Frame",
+		label: "Side by side",
 		transform: {
-			type: "split",
-			gapFraction: 0.02,
-			minGap: 12,
-			screenUnits: 2,
-			webcamUnits: 1,
+			type: "block",
+			direction: "row",
+			gapFraction: BLOCK_GAP_FRACTION,
 		},
 		borderRadius: {
 			max: MAX_BORDER_RADIUS,
@@ -294,156 +309,98 @@ export function computeCompositeLayout(params: {
 		return null;
 	}
 
-	if (preset.transform.type === "stack") {
+	if (preset.transform.type === "block") {
+		const block = preset.transform;
+
 		if (!webcamWidth || !webcamHeight || webcamWidth <= 0 || webcamHeight <= 0) {
-			// No webcam, so screen fills the whole canvas (cover mode).
+			// No camera on this clip: the block degenerates to the screen alone, which
+			// contain-fits the padded area like every other preset does.
 			return {
-				screenRect: { x: 0, y: 0, width: canvasWidth, height: canvasHeight },
+				screenRect: centerRect({ canvasSize, size: screenSize, maxSize: maxContentSize }),
 				webcamRect: null,
-				screenCover: true,
 			};
 		}
 
-		// ponytail: padding insets the content vertically (like dual-frame
-		// insets it horizontally). `maxContentSize` from `PreviewCanvas` is
-		// already padded to `canvasSize × paddingFit`; we derive a content
-		// area, vertically center the screen+gap+camera stack inside it, and
-		// keep the wallpaper visible at the top and bottom of the canvas.
-		const contentHeight = Math.min(
-			canvasHeight,
-			Math.max(1, Math.round(maxContentSize?.height ?? canvasHeight)),
-		);
-		const contentWidth = Math.min(
-			canvasWidth,
-			Math.max(1, Math.round(maxContentSize?.width ?? canvasWidth)),
-		);
-		const contentY = Math.max(0, Math.floor((canvasHeight - contentHeight) / 2));
+		// The block is laid out in UNIT space first, where the screen is exactly
+		// 1 wide and `h = 1 / screenAspect` tall. The gap and the camera are
+		// expressed against that same unit, so a single contain-fit at the end
+		// scales screen, gap and camera together.
+		//
+		// The camera's SOURCE aspect ratio plays no part: the box is a mask cut
+		// from the block's geometry, and the camera video is cover-cropped into it
+		// downstream (`screenCover` for the screen, the renderers' cover crop for
+		// the camera).
+		const screenAspect = screenWidth / screenHeight;
+		const unitScreenHeight = 1 / screenAspect; // h
+		const gap = block.gapFraction;
+		const isRow = block.direction === "row";
 
-		// ponytail: gap between screen and camera, scaled off the padded
-		// content width so the proportional spacing stays consistent.
-		const gap = Math.max(
-			preset.transform.minGap,
-			Math.round(contentWidth * preset.transform.gapFraction),
-		);
-
-		// Webcam: full content width at the bottom, capped at 40% of the
-		// padded content area so the screen always has room (otherwise a
-		// 16:9 webcam in a 16:9 canvas collapses the screen to 0px). Aspect
-		// is preserved when the request overflows the cap. The 40% follows the
-		// same 1-of-N ratio the dual-frame preset uses for screenUnits/webcamUnits.
-		const webcamAspect = webcamWidth / webcamHeight;
-		const requestedWebcamWidth = contentWidth;
-		const requestedWebcamHeight = Math.round(requestedWebcamWidth / webcamAspect);
-		const stackCapHeight = Math.max(1, Math.round(contentHeight * 0.4));
-		const resolvedWebcamHeight = Math.min(requestedWebcamHeight, stackCapHeight);
-		const resolvedWebcamWidth = Math.round(resolvedWebcamHeight * webcamAspect);
-
-		// Screen: fills remaining space above the camera + gap, content width.
-		const screenRectHeight = Math.max(0, contentHeight - resolvedWebcamHeight - gap);
-
-		// Camera border-radius follows the same preset fraction rule as
-		// dual-frame so the strip gets gentle rounded corners.
-		const webcamBorderRadius = Math.min(
-			preset.borderRadius.max,
-			Math.max(
-				preset.borderRadius.min,
-				Math.round(
-					Math.min(resolvedWebcamWidth, resolvedWebcamHeight) * preset.borderRadius.fraction,
-				),
-			),
+		// The camera shares the screen's cross-edge (same height beside it, same
+		// width under it — the aligned edge that makes them one solid block), so its
+		// size ALONG the split axis is the one free dimension. Three constraints fix
+		// it, in order:
+		//   1. screen keeps its own aspect ratio      → screen is 1 × h, untouched;
+		//   2. the block contain-fits the scene        → pick `along` so the block's
+		//      aspect equals the scene's (fills it, no bars) — see `alongForFill`;
+		//   3. the camera tends toward square          → but clamp `along` so the
+		//      camera stays within `[1/T, T]` of square, so filling the scene only
+		//      nudges it slightly rectangular, never into a slice.
+		// Square is `along === cameraCross`; the clamp is symmetric in both layouts.
+		const cameraCross = isRow ? unitScreenHeight : 1;
+		const sceneAspect = canvasWidth / canvasHeight;
+		const alongForFill = isRow
+			? sceneAspect * unitScreenHeight - 1 - gap // block width  = 1 + gap + along
+			: 1 / sceneAspect - unitScreenHeight - gap; // block height = h + gap + along
+		const cameraAlong = Math.min(
+			cameraCross * BLOCK_CAMERA_ASPECT_TOLERANCE,
+			Math.max(cameraCross / BLOCK_CAMERA_ASPECT_TOLERANCE, alongForFill),
 		);
 
-		return {
-			screenRect: {
-				// ponytail: the content area (padded by `maxContentSize`) is
-				// centered in the canvas — top/bottom from the canvas, and
-				// left/right from the canvas when `maxContentSize` is narrower
-				// than canvasWidth. This matches the dual-frame pattern where
-				// padding = canvas-margin.
-				x: Math.max(0, Math.floor((canvasWidth - contentWidth) / 2)),
-				y: contentY,
-				width: contentWidth,
-				height: screenRectHeight,
-			},
-			webcamRect: {
-				// ponytail: legacy hardcoded x:0 which left-aligned the camera
-				// strip in the bottom-left when its aspect produced a narrower
-				// width than the canvas. Center the strip horizontally within
-				// the padded content area when there's room to spare, and
-				// match the screen's horizontal inset.
-				x:
-					Math.max(0, Math.floor((canvasWidth - contentWidth) / 2)) +
-					Math.floor((contentWidth - resolvedWebcamWidth) / 2),
-				// ponytail: place camera BELOW the gap inside the padded area so
-				// screen and camera don't touch.
-				y: contentY + screenRectHeight + gap,
-				width: resolvedWebcamWidth,
-				height: resolvedWebcamHeight,
-				borderRadius: webcamBorderRadius,
-			},
-			screenCover: true,
-		};
-	}
+		const unitCameraWidth = isRow ? cameraAlong : 1;
+		const unitCameraHeight = isRow ? unitScreenHeight : cameraAlong;
+		const blockWidth = isRow ? 1 + gap + cameraAlong : 1;
+		const blockHeight = isRow ? unitScreenHeight : unitScreenHeight + gap + cameraAlong;
 
-	if (preset.transform.type === "split") {
-		const screenRect = centerRect({
-			canvasSize,
-			size: screenSize,
-			maxSize: maxContentSize,
-		});
+		// Contain-fit the whole block into the padded content area. `maxContentSize`
+		// is `canvasSize × paddingFit`, so padding shrinks the BLOCK (not just the
+		// screen) and padding 0 leaves it flush against the two scene edges its own
+		// ratio makes it touch — bottom/top for a column, left/right for a row.
+		const contentWidth = Math.min(canvasWidth, Math.max(1, maxContentSize.width));
+		const contentHeight = Math.min(canvasHeight, Math.max(1, maxContentSize.height));
+		const scale = Math.min(contentWidth / blockWidth, contentHeight / blockHeight);
 
-		if (!webcamWidth || !webcamHeight || webcamWidth <= 0 || webcamHeight <= 0) {
-			return { screenRect, webcamRect: null };
-		}
+		const originX = (canvasWidth - blockWidth * scale) / 2;
+		const originY = (canvasHeight - blockHeight * scale) / 2;
 
-		const contentWidth = Math.min(canvasWidth, Math.max(1, Math.round(maxContentSize.width)));
-		const contentHeight = Math.min(canvasHeight, Math.max(1, Math.round(maxContentSize.height)));
-		const contentX = Math.max(0, Math.floor((canvasWidth - contentWidth) / 2));
-		const contentY = Math.max(0, Math.floor((canvasHeight - contentHeight) / 2));
-		const gap = Math.max(
-			preset.transform.minGap,
-			Math.round(contentWidth * preset.transform.gapFraction),
+		const screenRect = snapRect(originX, originY, scale, unitScreenHeight * scale);
+		const cameraRect = snapRect(
+			isRow ? originX + (1 + gap) * scale : originX,
+			isRow ? originY : originY + (unitScreenHeight + gap) * scale,
+			unitCameraWidth * scale,
+			unitCameraHeight * scale,
 		);
-		const totalUnits = preset.transform.screenUnits + preset.transform.webcamUnits;
-		const availableWidth = Math.max(1, contentWidth - gap);
-		const screenSlotWidth = Math.max(
-			1,
-			Math.round((availableWidth * preset.transform.screenUnits) / totalUnits),
-		);
-		const webcamSlotWidth = Math.max(1, availableWidth - screenSlotWidth);
-
-		const screenSlot = {
-			x: contentX,
-			y: contentY,
-			width: screenSlotWidth,
-			height: contentHeight,
-		};
-		const webcamSlot = {
-			x: contentX + screenSlotWidth + gap,
-			y: contentY,
-			width: webcamSlotWidth,
-			height: contentHeight,
-		};
 
 		const webcamBorderRadius = Math.min(
 			preset.borderRadius.max,
 			Math.max(
 				preset.borderRadius.min,
-				Math.round(Math.min(webcamSlot.width, webcamSlot.height) * preset.borderRadius.fraction),
+				Math.round(Math.min(cameraRect.width, cameraRect.height) * preset.borderRadius.fraction),
 			),
 		);
 
 		return {
-			screenRect: screenSlot,
+			screenRect,
+			// Both halves of the block are framed alike, so the screen picks up the
+			// camera's corner rounding instead of the free-standing Roundness slider.
 			screenBorderRadius: webcamBorderRadius,
 			webcamRect: {
-				x: webcamSlot.x,
-				y: webcamSlot.y,
-				width: webcamSlot.width,
-				height: webcamSlot.height,
+				...cameraRect,
 				borderRadius: webcamBorderRadius,
 				maskShape: "rectangle",
 			},
+			// The screen box already carries the capture's exact aspect ratio, so
+			// cover and contain agree here; cover just absorbs the ±1px rounding
+			// above instead of letterboxing a hairline of wallpaper into the frame.
 			screenCover: true,
 		};
 	}
@@ -528,6 +485,23 @@ export function computeCompositeLayout(params: {
 			borderRadius,
 			maskShape: webcamMaskShape,
 		},
+	};
+}
+
+/**
+ * Rounds a float rect to whole pixels by rounding its EDGES rather than its origin
+ * and size independently. Adjacent boxes computed from the same float grid then keep
+ * a consistent gap, and the block's outer edges land exactly where the contain-fit
+ * put them, instead of drifting by a pixel per box.
+ */
+function snapRect(x: number, y: number, width: number, height: number): RenderRect {
+	const left = Math.round(x);
+	const top = Math.round(y);
+	return {
+		x: left,
+		y: top,
+		width: Math.max(1, Math.round(x + width) - left),
+		height: Math.max(1, Math.round(y + height) - top),
 	};
 }
 

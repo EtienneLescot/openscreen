@@ -1248,12 +1248,23 @@ impl Compositor {
             .as_ref()
             .and_then(|s| s.layout.webcam_rect)
             .map(|r| [r.x, r.y, r.width, r.height]);
+        // Idem pour l'écran. Les deux rects viennent du MÊME appel `computeCompositeLayout`, donc
+        // les consommer ensemble est la seule façon de garder le bloc écran+caméra cohérent :
+        // n'en prendre qu'un revenait à mélanger la géométrie de l'app et un placement fixture.
+        let app_screen_rect: Option<[f32; 4]> = scene_ref
+            .as_ref()
+            .and_then(|s| s.layout.screen_rect)
+            .map(|r| [r.x, r.y, r.width, r.height]);
         let (mut p, mut pp) = match (&scene_preset, app_webcam_rect) {
             (Some(_preset), Some(wr)) => {
-                // webcam rect résolu côté app → on s'aligne strictement ; l'écran reste plein
-                // cadre (le padding slider l'insètera ensuite dans `scale_frame`).
+                // webcam rect résolu côté app → on s'aligne strictement. Idem pour l'écran quand
+                // l'app le fournit ; sinon il reste plein cadre (le padding slider l'insètera
+                // ensuite dans `scale_frame`).
                 let mut fp = preset_placements(_preset);
                 fp.webcam.dst = wr;
+                if let Some(sr) = app_screen_rect {
+                    fp.screen.dst = sr;
+                }
                 (fp, fp) // layout statique → vélocité nulle
             }
             (Some(preset), None) => {
@@ -1262,7 +1273,6 @@ impl Compositor {
             }
             (None, _) => (timeline(frame, cfg), timeline(frame - 1.0, cfg)),
         };
-        let is_vstack = scene_preset.as_deref() == Some("vertical-stack");
         let lp = *self.live_params.borrow();
         // Motion blur écran : quand la scène (contrat de l'app) est posée, c'est elle qui pilote
         // (parité inspector : 1.0 + motion_blur*15 taps), sinon on retombe sur `cfg.mblur_n`
@@ -1325,8 +1335,11 @@ impl Compositor {
         let webcam_size_scale_prev = base_size_scale * reactive_scale(pp.zoom, cam_progress_prev);
 
         // padding : échelle globale du layout autour du centre du cadre (parité web frameRenderer :
-        // paddingScale = 1 - padding*0.4 → padding 0 = plein cadre). Vertical-stack l'ignore.
-        let padding_scale = if is_vstack { 1.0 } else { 1.0 - lp.padding * 0.4 };
+        // paddingScale = 1 - padding*0.4 → padding 0 = plein cadre). S'applique à TOUS les presets :
+        // côté web, side-by-side et top/bottom soudent écran+caméra en un bloc unique et c'est ce
+        // bloc que le padding rétrécit (cf. `compositeLayout.ts`, branche `block`). Vertical-stack
+        // en était exempté tant qu'il était full-bleed ; il ne l'est plus.
+        let padding_scale = 1.0 - lp.padding * 0.4;
         let scale_frame = |dst: [f32; 4], s: f32| -> [f32; 4] {
             [0.5 + (dst[0] - 0.5) * s, 0.5 + (dst[1] - 0.5) * s, dst[2] * s, dst[3] * s]
         };
@@ -1409,8 +1422,20 @@ impl Compositor {
             let (cx, cy) = (dst[0] + dst[2] * 0.5, dst[1] + dst[3] * 0.5);
             [cx - nw * 0.5, cy - nh * 0.5, nw, nh]
         };
-        let s_dst = fit_dst_to_aspect(scale_frame(p.screen.dst, padding_scale), crop_aspect);
-        let s_dst_prev = fit_dst_to_aspect(scale_frame(pp.screen.dst, padding_scale), crop_aspect);
+        // Quand l'app a résolu la boîte écran, elle a DÉJÀ appliqué le padding (le rect est
+        // calculé contre `maxContentSize`) et l'a DÉJÀ mise au ratio du crop
+        // (`computeCompositeLayout` reçoit la taille de la source recadrée) : rejouer
+        // `scale_frame` + `fit_dst_to_aspect` par-dessus appliquerait le padding deux fois et
+        // re-contiendrait une boîte déjà au bon ratio. Même raisonnement que pour la webcam.
+        let fit_screen = |dst: [f32; 4]| {
+            if app_screen_rect.is_some() {
+                dst
+            } else {
+                fit_dst_to_aspect(scale_frame(dst, padding_scale), crop_aspect)
+            }
+        };
+        let s_dst = fit_screen(p.screen.dst);
+        let s_dst_prev = fit_screen(pp.screen.dst);
         // le padding n'affecte QUE l'écran (la quantité de fond révélée). La webcam reste ancrée
         // en bas-droite à sa marge fixe, quelle que soit la valeur de padding (pas de scale_frame)
         // — SAUF quand l'app a résolu un placement explicite (`app_webcam_rect`, drag-to-reposition
@@ -1437,35 +1462,17 @@ impl Compositor {
             fit_cam_aspect(scale_corner_br(pp.webcam.dst, webcam_size_scale_prev))
         };
 
-        // Full Camera : la webcam grandit pour couvrir (presque) tout le cadre, en conservant
-        // SON ratio actuel (pas celui du cadre) — parité `computeCameraFullscreenTargetRect` (TS) :
-        // marge = 2.5% du plus petit côté du cadre, ajustée pour tenir dans les bornes.
+        // Full Camera : la caméra PREND le cadre — parité `computeCameraFullscreenRect` (TS).
+        // La cible est exactement [0,0,1,1] : pas de marge, pas de padding, pas d'arrondi, et
+        // plus rien de la composition (fond, écran, ombre) derrière. Le rect change de ratio en
+        // chemin, mais `cover_crop_uv` (plus bas) dérive la coupe source du ratio RÉEL de la
+        // boîte à chaque frame : la caméra n'est donc jamais étirée pendant l'animation.
         let fullscreen_dst = |dst: [f32; 4], progress: f32| -> [f32; 4] {
             if progress <= 0.0 {
                 return dst;
             }
-            let margin_px = self.rw().min(self.rh()) * 0.025;
-            let bounds_w = (self.rw() - margin_px * 2.0).max(0.0);
-            let bounds_h = (self.rh() - margin_px * 2.0).max(0.0);
-            let cur_w_px = dst[2] * self.rw();
-            let cur_h_px = dst[3] * self.rh();
-            let aspect = if cur_h_px > 0.0 { cur_w_px / cur_h_px } else { 1.0 };
-            let (mut full_w, mut full_h) = (bounds_w, bounds_w / aspect);
-            if full_h > bounds_h {
-                full_h = bounds_h;
-                full_w = full_h * aspect;
-            }
-            let full_x = margin_px + (bounds_w - full_w) * 0.5;
-            let full_y = margin_px + (bounds_h - full_h) * 0.5;
-            let cur_x_px = dst[0] * self.rw();
-            let cur_y_px = dst[1] * self.rh();
             let lerp = |a: f32, b: f32| a + (b - a) * progress;
-            [
-                lerp(cur_x_px, full_x) / self.rw(),
-                lerp(cur_y_px, full_y) / self.rh(),
-                lerp(cur_w_px, full_w) / self.rw(),
-                lerp(cur_h_px, full_h) / self.rh(),
-            ]
+            [lerp(dst[0], 0.0), lerp(dst[1], 0.0), lerp(dst[2], 1.0), lerp(dst[3], 1.0)]
         };
         w_dst = fullscreen_dst(w_dst, cam_progress);
         w_dst_prev = fullscreen_dst(w_dst_prev, cam_progress_prev);
@@ -1487,7 +1494,14 @@ impl Compositor {
         // (une correction scalaire par `uniform_stretch` seul compenserait la MAGNITUDE mais pas
         // l'ANISOTROPIE : elle laissait les coins elliptiques dès que stretch_x != stretch_y,
         // càd dès que le ratio de sortie n'est pas 16:9 — cf. rapport utilisateur sur le 9:16).
-        let s_radius = if cfg.rounded { p.screen.radius * lp.radius_scale } else { 0.0 };
+        // Rayon écran : celui que le preset impose quand l'app en envoie un (les layouts en bloc
+        // encadrent écran et caméra à l'identique), sinon le slider Roundness comme avant.
+        let app_screen_radius = scene_ref.as_ref().and_then(|s| s.layout.screen_radius);
+        let s_radius = match (cfg.rounded, app_screen_radius) {
+            (false, _) => 0.0,
+            (true, Some(r)) => r,
+            (true, None) => p.screen.radius * lp.radius_scale,
+        };
         let w_px = [w_dst[2] * self.rw(), w_dst[3] * self.rh()];
         // forme webcam : rayon SDF dérivé de la SEULE forme choisie. Le slider Roundness ne
         // s'applique qu'à l'ÉCRAN, jamais à la caméra. Parité web (compositeLayout) : rectangle
@@ -1498,11 +1512,18 @@ impl Compositor {
         // ratio de sortie.
         let w_px_final = w_px;
         let w_min_final = w_px_final[0].min(w_px_final[1]);
-        let w_radius = match lp.webcam_shape {
-            1 => w_min_final * 0.5,  // circle
-            3 => w_min_final * 0.3,  // rounded (nettement plus arrondi)
-            _ => w_min_final * 0.12, // rectangle / square → léger arrondi (identique)
-        };
+        // Full Camera dissout la forme en même temps qu'elle prend le cadre : le rayon fond
+        // vers 0 avec `cam_progress`, donc le cercle devient un rect à coins de plus en plus
+        // francs puis un plein cadre net — aucun masque ne survit au plein écran (parité
+        // `computeCameraFullscreenRect`, qui ramène `maskShape` à "rectangle" et lerpe le
+        // rayon vers 0 pour exactement la même raison).
+        let shape_fade = (1.0 - cam_progress).clamp(0.0, 1.0);
+        let w_radius = shape_fade
+            * match lp.webcam_shape {
+                1 => w_min_final * 0.5,  // circle
+                3 => w_min_final * 0.3,  // rounded (nettement plus arrondi)
+                _ => w_min_final * 0.12, // rectangle / square → léger arrondi (identique)
+            };
 
         self.begin([0.0, 0.0, 0.0, 1.0]);
 
@@ -1802,8 +1823,11 @@ impl Compositor {
         // miroir = échanger les bornes u du rect source (flip horizontal).
         let (u0, u1) = if lp.webcam_mirror { (su1, su0) } else { (su0, su1) };
         if lp.has_webcam {
-            if cfg.shadow {
-                self.draw_shadow(w_dst, w_px, w_radius, 32.0, [0.0, 12.0], 0.5 * lp.shadow_scale);
+            // L'ombre portée appartient à la bulle flottante : elle se retire avec elle
+            // (`shape_fade`), pour qu'au plein écran plus rien n'encadre la caméra.
+            if cfg.shadow && shape_fade > 0.0 {
+                let strength = 0.5 * lp.shadow_scale * shape_fade;
+                self.draw_shadow(w_dst, w_px, w_radius, 32.0, [0.0, 12.0], strength);
             }
             self.draw_video(
                 &LayerCB {

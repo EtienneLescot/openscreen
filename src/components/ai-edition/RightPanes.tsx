@@ -52,6 +52,7 @@ import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatMs } from "@/lib/ai-edition/timeline/format";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import { getAssetPath } from "@/lib/assetPath";
+import { supportsWebcamReactiveZoom } from "@/lib/compositeLayout";
 import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { buildGradientFromEditor } from "@/lib/gradientBuilder";
 import { resolveImageWallpaperUrl, WALLPAPER_PATHS, WALLPAPER_THUMB_PATHS } from "@/lib/wallpaper";
@@ -1371,10 +1372,15 @@ export function LayoutPane() {
 		return subscribeNativeCompositor(syncToNative);
 	}, [settings.webcamSizePreset, settings.webcamMirrored, settings.webcamMaskShape]);
 	// the mask shape picker only makes sense for Picture-in-Picture.
-	// Dual-frame (side-by-side) and vertical-stack (top/bottom) hardcode a
-	// rectangle in the legacy layout math, so we hide those controls when the
-	// preset isn't PiP.
+	// Dual-frame (side-by-side) and vertical-stack (top/bottom) weld the camera
+	// to the screen as one block — the mask is rectangular and sized off the
+	// screen capture — so we hide those controls when the preset isn't PiP.
 	const isPip = settings.webcamLayoutPreset === "picture-in-picture";
+	// Same reason for "Shrink on zoom": shrinking the camera mid-zoom would tear a
+	// hole in the block, so the block layouts force it off (see
+	// `supportsWebcamReactiveZoom`) and the toggle is dropped rather than shown
+	// as a control that does nothing.
+	const supportsReactiveZoom = supportsWebcamReactiveZoom(settings.webcamLayoutPreset);
 	// P4 — a project can hold clips with no camera attached at all (plain
 	// imported videos, or a recording made without a webcam). The layout
 	// controls have nothing to act on in that case, so they're disabled
@@ -1419,14 +1425,16 @@ export function LayoutPane() {
 					}}
 				/>
 			</div>
-			<div className={styles.paneRow}>
-				<span className="label">Shrink on zoom</span>
-				<Toggle
-					checked={settings.webcamReactiveZoom}
-					disabled={layoutControlsDisabled}
-					onChange={(v) => void set({ webcamReactiveZoom: v })}
-				/>
-			</div>
+			{supportsReactiveZoom ? (
+				<div className={styles.paneRow}>
+					<span className="label">Shrink on zoom</span>
+					<Toggle
+						checked={settings.webcamReactiveZoom}
+						disabled={layoutControlsDisabled}
+						onChange={(v) => void set({ webcamReactiveZoom: v })}
+					/>
+				</div>
+			) : null}
 			{isPip ? (
 				<>
 					<div className={styles.sectionLabel}>Camera shape</div>

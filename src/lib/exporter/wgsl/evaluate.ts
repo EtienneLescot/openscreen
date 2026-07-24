@@ -43,10 +43,10 @@ import {
 	computeZoomTransform,
 } from "@/components/video-editor/videoPlayback/zoomTransform";
 import {
-	computeCameraFullscreenTargetRect,
+	computeCameraFullscreenRect,
 	computeCompositeLayout,
-	lerpRect,
 	reactiveWebcamScale,
+	resolveWebcamReactiveZoom,
 	type Size,
 	type StyledRenderRect,
 	type WebcamLayoutPreset,
@@ -140,10 +140,10 @@ export function evaluateLayout(scene: EvaluateScene, hasWebcam: boolean) {
 		height: scene.videoSize.height * crop.height,
 	};
 
-	// Padding is a percentage (0-100) where 50% ~ 0.8 scale; vertical stack is
-	// full-bleed and ignores it. Same constants as the Canvas2D path, on purpose.
-	const effectivePadding = scene.webcamLayoutPreset === "vertical-stack" ? 0 : scene.padding;
-	const paddingScale = 1.0 - (effectivePadding / 100) * 0.4;
+	// Padding is a percentage (0-100) where 50% ~ 0.8 scale, applied to every preset
+	// (in the block layouts it insets the welded screen+camera block as one). Same
+	// constants as the Canvas2D path, on purpose.
+	const paddingScale = 1.0 - (scene.padding / 100) * 0.4;
 
 	const layout = computeCompositeLayout({
 		canvasSize: { width, height },
@@ -344,25 +344,15 @@ function evaluateWebcamRect(
 	const shape = base.maskShape ?? scene.webcamMaskShape ?? "rectangle";
 
 	if (fullscreenProgress > 0) {
-		// Full Camera owns size and position outright; reactive zoom is ignored for
-		// the frame (mixing "shrink for zoom" and "grow to full" means nothing).
-		const target = computeCameraFullscreenTargetRect(scene.outputSize, base);
-		const full: StyledRenderRect = {
-			x: target.x,
-			y: target.y,
-			width: target.width,
-			height: target.height,
-			borderRadius: 0,
-			maskShape: base.maskShape,
-		};
-		const r = lerpRect(base, full, fullscreenProgress);
-		return { ...r, shape };
+		// Full Camera owns size, position AND shape outright; reactive zoom is ignored
+		// for the frame (mixing "shrink for zoom" and "grow to full" means nothing).
+		const r = computeCameraFullscreenRect(base, scene.outputSize, fullscreenProgress);
+		return { ...r, shape: r.maskShape ?? "rectangle" };
 	}
 
-	const reactive =
-		scene.webcamReactiveZoom && scene.webcamLayoutPreset === "picture-in-picture"
-			? reactiveWebcamScale(appliedScale)
-			: 1;
+	const reactive = resolveWebcamReactiveZoom(scene.webcamLayoutPreset, scene.webcamReactiveZoom)
+		? reactiveWebcamScale(appliedScale)
+		: 1;
 	if (!(reactive < 1)) return { ...base, shape };
 
 	// Anchor the shrink to the docked corner (bottom-right by default), like the
