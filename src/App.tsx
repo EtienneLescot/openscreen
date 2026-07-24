@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useState } from "react";
+import "./styles/fonts.css";
 import "./styles/design-tokens.css";
 import { installBrowserShims } from "./native/browserShim";
 

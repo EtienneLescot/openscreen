@@ -106,10 +106,12 @@
 	--overlay-text-2: rgba(255, 255, 255, 0.55);
 	--overlay-border: rgba(22, 23, 29, 0.06);
 
-	/* typography */
-	--font-display: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-	--font-body: system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
-	--font-mono: ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
+	/* typography — Geist / Geist Mono are the brand faces, self-hosted by
+	   styles/fonts.css. The old system stacks stay on as fallback so a failed
+	   font load degrades instead of dropping to a serif default. */
+	--font-display: "Geist", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+	--font-body: "Geist", system-ui, -apple-system, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+	--font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
 
 	/* size */
 	--fs-app: 13px;
