@@ -11,6 +11,7 @@ import {
 	Sun,
 } from "lucide-react";
 import { useEffect, useRef, useState } from "react";
+import logoMark from "@/assets/openscreen-mark.png";
 import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { useTheme } from "@/hooks/useTheme";
 import { getAvailableLocales, getLocaleName, getLocaleShort } from "@/i18n/loader";
@@ -70,9 +71,8 @@ export function EditorTopBar({
 			</button>
 			<span className={styles.sep} aria-hidden />
 			<span className={styles.brand}>
-				<span className={styles.mark} aria-hidden>
-					O
-				</span>
+				{/* Decorative: the wordmark right beside it already names the app. */}
+				<img src={logoMark} alt="" draggable={false} />
 				<span className={styles.name}>OpenScreen</span>
 			</span>
 			<span className={styles.sep} aria-hidden />
