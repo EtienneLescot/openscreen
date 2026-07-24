@@ -20,7 +20,16 @@
 			"bulletList": "Elenco puntato",
 			"numberedList": "Elenco numerato",
 			"blockquote": "Citazione",
-			"codeBlock": "Blocco di codice"
+			"codeBlock": "Blocco di codice",
+			"play": "Avvia scorrimento automatico",
+			"pause": "Metti in pausa lo scorrimento",
+			"speed": "Velocità di scorrimento",
+			"decreaseSpeed": "Riduci velocità di scorrimento",
+			"increaseSpeed": "Aumenta velocità di scorrimento",
+			"fontSize": "Dimensione carattere",
+			"decreaseFontSize": "Riduci dimensione carattere",
+			"increaseFontSize": "Aumenta dimensione carattere",
+			"mirror": "Specchia orizzontalmente"
 		}
 	},
 	"audio": {

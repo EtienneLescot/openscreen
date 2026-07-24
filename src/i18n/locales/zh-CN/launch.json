@@ -20,7 +20,16 @@
 			"bulletList": "无序列表",
 			"numberedList": "有序列表",
 			"blockquote": "引用",
-			"codeBlock": "代码块"
+			"codeBlock": "代码块",
+			"play": "开始自动滚动",
+			"pause": "暂停自动滚动",
+			"speed": "滚动速度",
+			"decreaseSpeed": "降低滚动速度",
+			"increaseSpeed": "提高滚动速度",
+			"fontSize": "字体大小",
+			"decreaseFontSize": "减小字体",
+			"increaseFontSize": "增大字体",
+			"mirror": "水平镜像"
 		}
 	},
 	"audio": {

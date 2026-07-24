@@ -20,7 +20,16 @@
 			"bulletList": "箇条書きリスト",
 			"numberedList": "番号付きリスト",
 			"blockquote": "引用",
-			"codeBlock": "コードブロック"
+			"codeBlock": "コードブロック",
+			"play": "自動スクロールを開始",
+			"pause": "自動スクロールを一時停止",
+			"speed": "スクロール速度",
+			"decreaseSpeed": "スクロール速度を下げる",
+			"increaseSpeed": "スクロール速度を上げる",
+			"fontSize": "フォントサイズ",
+			"decreaseFontSize": "フォントサイズを小さくする",
+			"increaseFontSize": "フォントサイズを大きくする",
+			"mirror": "左右反転"
 		}
 	},
 	"audio": {

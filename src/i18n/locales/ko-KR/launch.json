@@ -20,7 +20,16 @@
 			"bulletList": "글머리 기호 목록",
 			"numberedList": "번호 매기기 목록",
 			"blockquote": "인용문",
-			"codeBlock": "코드 블록"
+			"codeBlock": "코드 블록",
+			"play": "자동 스크롤 시작",
+			"pause": "자동 스크롤 일시 중지",
+			"speed": "스크롤 속도",
+			"decreaseSpeed": "스크롤 속도 낮추기",
+			"increaseSpeed": "스크롤 속도 높이기",
+			"fontSize": "글꼴 크기",
+			"decreaseFontSize": "글꼴 크기 줄이기",
+			"increaseFontSize": "글꼴 크기 늘리기",
+			"mirror": "좌우 반전"
 		}
 	},
 	"audio": {
