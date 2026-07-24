@@ -64,10 +64,11 @@ pub struct SceneLayout {
     /// `#[serde(default)]` : ancien payload / tests → None → fallback `preset_placements`.
     #[serde(default)]
     pub screen_rect: Option<SceneRect>,
-    /// Rayon des coins de l'écran en px de la sortie, quand le preset en impose un (les layouts
-    /// en bloc encadrent écran et caméra à l'identique). None → slider Roundness, comme avant.
+    /// Rayon des coins de l'écran, en FRACTION du petit côté de sa propre boîte, quand le preset
+    /// en impose un (les layouts en bloc encadrent écran et caméra à l'identique). None → slider
+    /// Roundness. Une fraction, pas des px : cf. `SceneEffects::roundness_frac`.
     #[serde(default)]
-    pub screen_radius: Option<f32>,
+    pub screen_radius_frac: Option<f32>,
     /// L'écran doit-il REMPLIR sa boîte quitte à être rogné (`object-fit: cover`) plutôt que d'y
     /// tenir en entier ? Vrai pour les layouts en bloc, dont la boîte écran est un slot au ratio
     /// arbitraire : c'est ce que `computeCompositeLayout` renvoie sous `screenCover` et que
@@ -92,22 +93,24 @@ pub struct SceneLayout {
     /// `compose_frame` continue de lire un seul `layout` sans branche supplémentaire.
     #[serde(default)]
     pub layout_by_clip: Vec<Option<ResolvedClipLayout>>,
-    /// Rayon des coins de la CAMÉRA, même convention px-de-sortie que `screen_radius` et issu du
-    /// même appel `computeCompositeLayout`. C'est la seule façon que « le bloc encadre écran et
-    /// caméra à l'identique » soit vrai : sans lui l'écran prenait le rayon de l'app pendant que
-    /// la caméra gardait la table Rust indépendante ci-dessous (`min * 0.5 | 0.3 | 0.12`, non
-    /// bornée), donc deux moitiés d'un même bloc arrondies par deux formules différentes.
-    ///
-    /// Donné pour la taille NOMINALE de la caméra ; le natif le remet à l'échelle de la boîte
-    /// réellement dessinée (zoom réactif, Full Camera).
+    /// Rayon des coins de la CAMÉRA, en fraction du petit côté de SA boîte — même règle que
+    /// `screen_radius_frac`, issu du même appel `computeCompositeLayout`. C'est la seule façon
+    /// que « le bloc encadre écran et caméra à l'identique » soit vrai : sans lui l'écran prenait
+    /// le rayon de l'app pendant que la caméra gardait la table Rust indépendante
+    /// (`min * 0.5 | 0.3 | 0.12`, non bornée), donc deux moitiés d'un même bloc arrondies par
+    /// deux formules différentes.
     ///
     /// `#[serde(default)]` : ancien payload / tests → None → table Rust historique.
     #[serde(default)]
-    pub webcam_radius: Option<f32>,
+    pub webcam_radius_frac: Option<f32>,
 }
 
 /// La moitié du layout qui dépend de la FORME de la source, résolue pour un clip.
 /// Voir `SceneLayout::layout_by_clip`.
+///
+/// Les rayons sont des fractions du petit côté de LEUR boîte, exactement comme les champs
+/// scalaires `screen_radius_frac`/`webcam_radius_frac` — aucune longueur ne traverse ce
+/// contrat en pixels, par clip ou non.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ResolvedClipLayout {
@@ -115,9 +118,9 @@ pub struct ResolvedClipLayout {
     #[serde(default)]
     pub webcam_rect: Option<SceneRect>,
     #[serde(default)]
-    pub screen_radius: Option<f32>,
+    pub screen_radius_frac: Option<f32>,
     #[serde(default)]
-    pub webcam_radius: Option<f32>,
+    pub webcam_radius_frac: Option<f32>,
     #[serde(default)]
     pub webcam_shape: Option<String>,
     #[serde(default)]
@@ -143,8 +146,17 @@ pub struct SceneEffects {
     pub blur: bool,
     /// 0..1 force de l'ombre.
     pub shadow: f32,
-    /// rayon des coins en px de sortie.
-    pub roundness_px: f32,
+    /// Slider Roundness, en FRACTION du petit côté du cadre de sortie.
+    ///
+    /// Toute longueur qui traverse ce contrat est une fraction, jamais un nombre de pixels, et
+    /// c'est porteur : le compositeur rastérise la preview dans un cadre contain-fitté petit et
+    /// l'export à la pleine résolution, donc « un pixel » ne désigne pas la même chose des deux
+    /// côtés de la frontière. Des valeurs absolues la traversaient et signifiaient en silence
+    /// « px du render target » — d'où le cercle PiP dégénéré en preview alors que l'export était
+    /// juste, et l'ombre proportionnellement plus faible en 4K qu'en 1080p. Une fraction n'a
+    /// pas d'unité à confondre : le natif multiplie par ce que sa référence mesure ici et
+    /// maintenant.
+    pub roundness_frac: f32,
     /// 0..1 flou de mouvement.
     pub motion_blur: f32,
 }
@@ -311,8 +323,8 @@ impl Scene {
         if let Some(Some(l)) = scene.layout.layout_by_clip.get(clip_index).cloned() {
             scene.layout.screen_rect = Some(l.screen_rect);
             scene.layout.webcam_rect = l.webcam_rect;
-            scene.layout.screen_radius = l.screen_radius;
-            scene.layout.webcam_radius = l.webcam_radius;
+            scene.layout.screen_radius_frac = l.screen_radius_frac;
+            scene.layout.webcam_radius_frac = l.webcam_radius_frac;
             scene.layout.screen_cover = l.screen_cover;
             if let Some(shape) = l.webcam_shape {
                 scene.layout.webcam_shape = shape;
@@ -332,7 +344,7 @@ mod tests {
         let json = r##"{
             "clips": [{"screenPath":"/s.mp4","webcamPath":"/w.mp4","sourceStartSec":0,"sourceEndSec":4,"webcamOffsetSec":0,"hasAudio":true}],
             "layout": {"preset":"picture-in-picture","webcamSize":1.5,"webcamShape":"circle","webcamMirror":true,"webcamPosition":null,"webcamReactiveZoom":false},
-            "effects": {"padding":0.5,"blur":true,"shadow":0.8,"roundnessPx":24,"motionBlur":0.0},
+            "effects": {"padding":0.5,"blur":true,"shadow":0.8,"roundnessFrac":0.0222,"motionBlur":0.0},
             "background": {"kind":"gradient","angleDeg":135,"stops":["#eaebed","#bcc0c6"]},
             "zoomRegions": [{"clipIndex":0,"startSec":1.0,"endSec":3.0,"scale":2.0,"focusX":0.5,"focusY":0.3,"rotation":"iso"}],
             "speedRegions": [{"clipIndex":0,"startSec":1.0,"endSec":2.0,"speed":2.0}],
@@ -345,7 +357,7 @@ mod tests {
         assert_eq!(scene.clips[0].screen_path, "/s.mp4");
         assert_eq!(scene.layout.preset, "picture-in-picture");
         assert!(scene.layout.webcam_mirror);
-        assert_eq!(scene.effects.roundness_px, 24.0);
+        assert!((scene.effects.roundness_frac - 0.0222).abs() < 1e-6);
         match scene.background {
             SceneBackground::Gradient { angle_deg, ref stops } => {
                 assert_eq!(angle_deg, 135.0);
@@ -363,7 +375,7 @@ mod tests {
 
     #[test]
     fn parses_color_and_image_backgrounds() {
-        let color = r##"{"clips":[],"layout":{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0,"blur":false,"shadow":0,"roundnessPx":0,"motionBlur":0},"background":{"kind":"color","color":"#123456"},"zoomRegions":[],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"cropByClip":[],"output":{"width":1280,"height":720,"fps":30}}"##;
+        let color = r##"{"clips":[],"layout":{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0},"background":{"kind":"color","color":"#123456"},"zoomRegions":[],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"cropByClip":[],"output":{"width":1280,"height":720,"fps":30}}"##;
         let s = Scene::from_json(color).expect("parse color");
         match s.background {
             SceneBackground::Color { ref color } => assert_eq!(color, "#123456"),
@@ -387,7 +399,7 @@ mod tests {
                 "webcamReactiveZoom": false,
                 "webcamRect": { "x": 0.8125, "y": 0.8125, "width": 0.1666667, "height": 0.1666667 }
             },
-            "effects": {"padding": 0, "blur": false, "shadow": 0, "roundnessPx": 24, "motionBlur": 0},
+            "effects": {"padding": 0, "blur": false, "shadow": 0, "roundnessFrac": 0.0222, "motionBlur": 0},
             "background": {"kind":"color","color":"#000000"},
             "zoomRegions": [],
             "cursor": {"show": true, "size": 1, "smoothing": 0, "motionBlur": 0, "clickBounce": 1, "clipToBounds": false, "theme": "default"},
@@ -409,7 +421,7 @@ mod tests {
     fn webcam_rect_field_optional_in_payload() {
         // L'ancien payload sans `webcamRect` doit toujours parser sans erreur (le champ est
         // `#[serde(default)]`) ; `webcam_rect` est alors None → fallback `preset_placements`.
-        let json = r##"{"clips":[],"layout":{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0,"blur":false,"shadow":0,"roundnessPx":0,"motionBlur":0},"background":{"kind":"color","color":"#000000"},"zoomRegions":[],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"cropByClip":[],"output":{"width":1920,"height":1080,"fps":null}}"##;
+        let json = r##"{"clips":[],"layout":{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0},"background":{"kind":"color","color":"#000000"},"zoomRegions":[],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"cropByClip":[],"output":{"width":1920,"height":1080,"fps":null}}"##;
         let s = Scene::from_json(json).expect("parse sans webcam_rect");
         assert!(s.layout.webcam_rect.is_none());
         assert_eq!(s.layout.preset, "picture-in-picture");

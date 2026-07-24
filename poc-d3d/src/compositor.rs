@@ -218,10 +218,13 @@ pub fn webcam_shape_code(shape: &str) -> u32 {
 /// Unités identiques à `RightPanes.tsx` (mêmes conversions, pas de re-normalisation) : voir
 /// `sceneDescription.ts` pour la correspondance settings -> champs de scène.
 pub fn live_params_from_scene(s: &crate::scene::Scene) -> LiveParams {
-    const NATIVE_SCREEN_BASE_RADIUS_PX: f32 = 24.0;
     LiveParams {
         shadow_scale: s.effects.shadow,
-        radius_scale: s.effects.roundness_px / NATIVE_SCREEN_BASE_RADIUS_PX,
+        // `radius_scale` reste le multiplicateur du chemin INSPECTOR (bench/GUI standalone) ; le
+        // rayon écran d'une scène vient désormais de `effects.roundness_frac`, lu directement
+        // dans `compose_frame`. Le faire transiter ici obligeait à le normaliser par un rayon de
+        // fixture (`p.screen.radius`, 24 px) pour ressortir la valeur de départ — un aller-retour
+        // qui ne servait qu'à faire passer des pixels pour un ratio.
         padding: s.effects.padding,
         webcam_size_scale: s.layout.webcam_size,
         webcam_mirror: s.layout.webcam_mirror,
@@ -340,6 +343,23 @@ pub const HALF_H: u32 = OUT_H / 2;
 
 pub const FIXTURE_FRAMES: u32 = 360;
 const FPS: f32 = 60.0;
+
+/// Longueurs de style exprimées en FRACTION du petit côté du cadre, et non en pixels.
+///
+/// Elles étaient écrites en px bruts au point d'appel, ce qui voulait dire « px du render
+/// target » — donc une proportion DIFFÉRENTE selon la taille de rendu : 40 px, c'est 3,7 % d'un
+/// cadre 1080 mais 1,9 % d'un 2160. L'ombre était donc deux fois plus douce en preview qu'à
+/// l'export, et un export 4K la recevait deux fois plus faible qu'un 1080p — même famille de bug
+/// que les rayons venus de l'app, mais née à l'intérieur du natif. Les valeurs ci-dessous sont
+/// les anciennes constantes rapportées au cadre 1080 contre lequel elles avaient été réglées :
+/// le rendu à cette résolution est donc inchangé, et devient enfin identique partout ailleurs.
+const SHADOW_TUNING_REF_PX: f32 = 1080.0;
+const SCREEN_SHADOW_SPREAD_FRAC: f32 = 40.0 / SHADOW_TUNING_REF_PX;
+const SCREEN_SHADOW_OFFSET_FRAC: f32 = 16.0 / SHADOW_TUNING_REF_PX;
+const WEBCAM_SHADOW_SPREAD_FRAC: f32 = 32.0 / SHADOW_TUNING_REF_PX;
+const WEBCAM_SHADOW_OFFSET_FRAC: f32 = 12.0 / SHADOW_TUNING_REF_PX;
+/// Taille de base du curseur, même convention (34 px réglés contre un cadre 1080).
+const CURSOR_BASE_SIZE_FRAC: f32 = 34.0 / SHADOW_TUNING_REF_PX;
 
 fn ease_in_out_cubic(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
@@ -1511,6 +1531,11 @@ impl Compositor {
             let lerp = |a: f32, b: f32| a + (b - a) * progress;
             [lerp(dst[0], 0.0), lerp(dst[1], 0.0), lerp(dst[2], 1.0), lerp(dst[3], 1.0)]
         };
+        // Petit côté de la boîte caméra AVANT que Full Camera ne la fasse grandir. C'est la
+        // référence du rayon de coin : le zoom réactif est déjà dedans (il rétrécit la boîte,
+        // donc l'arrondi suit tout seul — parité `borderRadius * reactiveFactor` côté TS), alors
+        // que Full Camera ne fait pas grossir l'arrondi, il le DISSOUT (cf. `shape_fade`).
+        let w_nominal_min = (w_dst[2] * self.rw()).min(w_dst[3] * self.rh());
         w_dst = fullscreen_dst(w_dst, cam_progress);
         w_dst_prev = fullscreen_dst(w_dst_prev, cam_progress_prev);
 
@@ -1524,71 +1549,54 @@ impl Compositor {
         // reste préservé (letterboxé/pillarboxé sur le fond, qui lui reste plein cadre) — mode
         // "fit"/contain. Si l'utilisateur veut un rendu "fill" (remplir sans bandes), il ajuste
         // le crop lui-même ; le natif ne fait plus ce choix à sa place en étirant l'image.
-        // `roundness_px` est un px ABSOLU de la résolution de SORTIE (comme un border-radius
-        // CSS). Le dessin du coin (SDF, shaders.hlsl) pré-déforme lui-même ses coordonnées par
-        // `stretch_x`/`stretch_y` (mb.yz) avant de comparer à ce rayon, donc `s_radius` reste
-        // ici une valeur BRUTE en px de sortie réelle — pas de correction scalaire à faire ici
-        // (une correction scalaire par `uniform_stretch` seul compenserait la MAGNITUDE mais pas
-        // l'ANISOTROPIE : elle laissait les coins elliptiques dès que stretch_x != stretch_y,
-        // càd dès que le ratio de sortie n'est pas 16:9 — cf. rapport utilisateur sur le 9:16).
-        // Rayon écran : celui que le preset impose quand l'app en envoie un (les layouts en bloc
-        // encadrent écran et caméra à l'identique), sinon le slider Roundness comme avant.
+        // Le dessin du coin (SDF, shaders.hlsl) compare le rayon à `quad_px`, exprimé en px du
+        // RENDER TARGET : c'est donc dans cet espace-là qu'il faut le lui donner.
         //
-        // Les rayons que l'app résout sont en px de la SORTIE, alors que la SDF les compare à
-        // `quad_px`, exprimé en px du RENDER TARGET. À l'export les deux coïncident ; en preview
-        // le rendu se fait dans un cadre contain-fitté plus petit (même ratio, cf.
-        // `preview_render_size`), et un rayon absolu y devient proportionnellement trop grand.
-        // `sd_round_rect` ne borne PAS r à la demi-boîte : au-delà, la forme ne sature pas en
-        // disque, elle dégénère en tache rétrécie — c'est ce qui cassait le cercle du PiP en
-        // preview alors que l'export, lui, restait juste. Ce facteur ramène ces rayons dans
-        // l'espace du render target ; il vaut exactement 1 à l'export.
-        let app_px_to_render = scene_ref
-            .as_ref()
-            .map(|s| s.output.width as f32)
-            .filter(|w| *w > 0.0)
-            .map(|w| self.rw() / w)
-            .unwrap_or(1.0);
-        let app_screen_radius = scene_ref.as_ref().and_then(|s| s.layout.screen_radius);
-        let s_radius = match (cfg.rounded, app_screen_radius) {
-            (false, _) => 0.0,
-            (true, Some(r)) => r * app_px_to_render,
-            (true, None) => p.screen.radius * lp.radius_scale,
+        // Toutes les longueurs de la scène sont des FRACTIONS ; on les multiplie ici par ce
+        // qu'elles mesurent, dans l'espace du render target. C'est ce qui rend preview et export
+        // identiques : « un pixel » n'y désigne pas la même chose (la preview rastérise dans un
+        // cadre contain-fitté plus petit, cf. `preview_render_size`), alors qu'une fraction, si.
+        // `frame_min_px` est la référence des quantités relatives au CADRE ; un rayon de coin,
+        // lui, se mesure contre sa propre boîte — il doit rester en place quand on redimensionne
+        // la boîte, pas suivre le cadre.
+        let frame_min_px = self.rw().min(self.rh());
+        let s_min_px = (s_dst[2] * self.rw()).min(s_dst[3] * self.rh());
+        let app_screen_radius_frac = scene_ref.as_ref().and_then(|s| s.layout.screen_radius_frac);
+        let scene_roundness_frac = scene_ref.as_ref().map(|s| s.effects.roundness_frac);
+        let s_radius = match (cfg.rounded, app_screen_radius_frac, scene_roundness_frac) {
+            (false, _, _) => 0.0,
+            // Preset en bloc : le rayon appartient à la boîte écran (parité exacte avec la caméra).
+            (true, Some(f), _) => f * s_min_px,
+            // Scène sans rayon imposé : slider Roundness, relatif au cadre.
+            (true, None, Some(f)) => f * frame_min_px,
+            // Fixture/bench (pas de scène) : chemin inspector historique, inchangé.
+            (true, None, None) => p.screen.radius * lp.radius_scale,
         };
         let w_px = [w_dst[2] * self.rw(), w_dst[3] * self.rh()];
         // Rayon caméra. Le slider Roundness ne s'y applique jamais (il ne vaut que pour l'ÉCRAN).
-        // Rayon "brut" (SDF anisotrope, cf. écran ci-dessus) dérivé de la taille FINALE du quad,
-        // pour un rayon proportionnellement correct quel que soit le ratio de sortie.
-        let w_px_final = w_px;
-        let w_min_final = w_px_final[0].min(w_px_final[1]);
-        // Quand l'app résout le rayon (`computeCompositeLayout`, source unique), on le prend :
-        // c'est la seule façon que les deux moitiés d'un layout en bloc soient encadrées à
-        // l'identique, l'écran consommant déjà `screen_radius` du même calcul. La table ci-dessous
-        // en était une SECONDE, indépendante — fractions différentes (0.12 vs 0.06 côté web) et
-        // sans bornes — donc écran et caméra ne pouvaient pas s'accorder.
-        //
-        // Le rayon de l'app vaut pour la taille NOMINALE de la caméra, et `webcam_size_scale` est
-        // précisément ce qui l'en écarte (zoom réactif ; l'échelle du slider est déjà cuite dans
-        // le rect de l'app, cf. `base_size_scale`). Le multiplier redonne mot pour mot ce que fait
-        // le TS — `borderRadius * reactiveFactor` — sans repasser par la taille finale de la boîte.
-        // `app_px_to_render` le ramène ensuite dans l'espace du render target (cf. plus haut).
-        let app_webcam_radius = scene_ref.as_ref().and_then(|s| s.layout.webcam_radius);
+        // Quand l'app le résout (`computeCompositeLayout`, source unique), on le prend : c'est la
+        // seule façon que les deux moitiés d'un layout en bloc soient encadrées à l'identique,
+        // l'écran consommant déjà `screen_radius_frac` du même calcul. La table ci-dessous en
+        // était une SECONDE, indépendante — fraction différente (0.12 vs 0.06 côté web) et sans
+        // bornes — donc écran et caméra ne pouvaient pas s'accorder.
+        let app_webcam_radius_frac = scene_ref.as_ref().and_then(|s| s.layout.webcam_radius_frac);
         // Full Camera dissout la forme en même temps qu'elle prend le cadre : le rayon fond
         // vers 0 avec `cam_progress`, donc le cercle devient un rect à coins de plus en plus
         // francs puis un plein cadre net — aucun masque ne survit au plein écran (parité
         // `computeCameraFullscreenRect`, qui ramène `maskShape` à "rectangle" et lerpe le
-        // rayon vers 0 pour exactement la même raison). `reactive_scale` vaut déjà 1 pendant
-        // Full Camera, donc les deux animations ne se composent pas — comme côté TS.
+        // rayon vers 0 pour exactement la même raison).
         let shape_fade = (1.0 - cam_progress).clamp(0.0, 1.0);
         let w_radius = shape_fade
-            * match app_webcam_radius {
-                Some(r) => r * webcam_size_scale * app_px_to_render,
-                // Fallback (payload sans rayon, fixture/bench) : l'ancienne table, keyée sur la
+            * w_nominal_min
+            * match app_webcam_radius_frac {
+                Some(f) => f,
+                // Fallback (payload sans fraction, fixture/bench) : l'ancienne table, keyée sur la
                 // forme. Rectangle ET square n'ont qu'un léger arrondi (0.12) et ne diffèrent que
                 // par le ratio ; rounded est nettement plus arrondi (0.3) ; circle = demi-côté.
                 None => match lp.webcam_shape {
-                    1 => w_min_final * 0.5,
-                    3 => w_min_final * 0.3,
-                    _ => w_min_final * 0.12,
+                    1 => 0.5,
+                    3 => 0.3,
+                    _ => 0.12,
                 },
             };
 
@@ -1712,7 +1720,14 @@ impl Compositor {
             cover(screen_source_rect(u_max, v_max, active_crop, pp.zoom, p.focus));
         let (hu_p, hv_p) = ((su1_p - su0_p) * 0.5, (sv1_p - sv0_p) * 0.5);
         if cfg.shadow {
-            self.draw_shadow(s_dst, s_px, s_radius, 40.0, [0.0, 16.0], 0.45 * lp.shadow_scale);
+            self.draw_shadow(
+                s_dst,
+                s_px,
+                s_radius,
+                SCREEN_SHADOW_SPREAD_FRAC * frame_min_px,
+                [0.0, SCREEN_SHADOW_OFFSET_FRAC * frame_min_px],
+                0.45 * lp.shadow_scale,
+            );
         }
         if crate::regions::is_identity_rotation(zoom_rotation) {
             self.draw_video(
@@ -1819,7 +1834,9 @@ impl Compositor {
                     // pareil pour rester à l'échelle du contenu (sinon sa pointe semble se
                     // décaler/dériver à mesure que le padding grandit).
                     let bounce = 1.0 + (track.bounce(t) - 1.0) * lp.cursor_bounce_scale;
-                    let sz = 34.0 * lp.cursor_size_scale * bounce * padding_scale;
+                    let sz =
+                        CURSOR_BASE_SIZE_FRAC * frame_min_px * lp.cursor_size_scale * bounce
+                            * padding_scale;
                     // flou de mouvement DU CURSEUR, indépendant de cfg.mblur_n (écran/vidéo).
                     // BUG corrigé : augmenter l'intensité ne faisait auparavant que sur-échantillonner
                     // (plus de taps) un écart figé d'1 frame (1/60s) -> la traînée ne s'allongeait
@@ -1912,7 +1929,14 @@ impl Compositor {
             // (`shape_fade`), pour qu'au plein écran plus rien n'encadre la caméra.
             if cfg.shadow && shape_fade > 0.0 {
                 let strength = 0.5 * lp.shadow_scale * shape_fade;
-                self.draw_shadow(w_dst, w_px, w_radius, 32.0, [0.0, 12.0], strength);
+                self.draw_shadow(
+                    w_dst,
+                    w_px,
+                    w_radius,
+                    WEBCAM_SHADOW_SPREAD_FRAC * frame_min_px,
+                    [0.0, WEBCAM_SHADOW_OFFSET_FRAC * frame_min_px],
+                    strength,
+                );
             }
             self.draw_video(
                 &LayerCB {
