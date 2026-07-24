@@ -241,3 +241,71 @@ fn golden_side_by_side_webcam_is_not_stretched() {
     write_ppm(&path, &rgba, w, h).expect("ecrire le ppm");
     println!("side-by-side ecrit: {}", path.display());
 }
+
+/// Rend un clip RECADRÉ avec le `screenRect` que l'app résout — le chemin qui a
+/// régressé. `compositor.rs::fit_screen` consomme ce rect TEL QUEL (il saute son
+/// propre fit au ratio du crop, le rect étant censé y être déjà) : si le rect ne
+/// porte pas le ratio du crop, la vidéo est étirée pour remplir une boîte mal
+/// formée, sans rien en aval pour rattraper.
+///
+/// `SCREEN_RECT_AR` doit rester le ratio du crop (0.30*1920 / 0.89*1080 ≈ 0.599).
+/// Le PPM permet de vérifier à l'œil que le texte n'est pas étiré.
+#[test]
+fn golden_cropped_clip_is_not_stretched() {
+    let (screen, webcam) = match (
+        std::env::var("OPENSCREEN_GOLDEN_SCREEN"),
+        std::env::var("OPENSCREEN_GOLDEN_WEBCAM"),
+    ) {
+        (Ok(s), Ok(w)) => (s, w),
+        _ => {
+            println!("SKIP: definir OPENSCREEN_GOLDEN_SCREEN / _WEBCAM");
+            return;
+        }
+    };
+    let out_dir = std::env::var("OPENSCREEN_GOLDEN_OUT")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|_| std::path::PathBuf::from("target/golden"));
+    std::fs::create_dir_all(&out_dir).expect("dossier de sortie");
+
+    let (w, h) = (1920u32, 1080u32);
+    let (s, c) = (screen.replace('\\', "/"), webcam.replace('\\', "/"));
+    // Crop du rapport utilisateur : bande verticale 30% x 89% d'une source 16:9.
+    let (crop_w, crop_h) = (0.30f32, 0.89f32);
+    let crop_ar = (1920.0 * crop_w) / (1080.0 * crop_h); // ≈ 0.599
+    // Le rect que l'app DOIT produire : contain de ce ratio dans le cadre de sortie.
+    let rect_h = 0.94f32;
+    let rect_w = rect_h * crop_ar * (h as f32 / w as f32);
+    let scene_json = format!(
+        r##"{{
+        "clips": [{{"screenPath":"{s}","webcamPath":"{c}","sourceStartSec":0,"sourceEndSec":30,"webcamOffsetSec":0,"hasAudio":true}}],
+        "layout": {{"preset":"no-webcam","webcamSize":1.0,"webcamShape":"rectangle","webcamMirror":false,
+                    "screenRect":{{"x":{sx},"y":{sy},"width":{rect_w},"height":{rect_h}}},"webcamReactiveZoom":false}},
+        "effects": {{"padding":0.0,"blur":true,"shadow":1.0,"roundnessPx":24,"motionBlur":0.0}},
+        "background": {{"kind":"gradient","angleDeg":135,"stops":["#1e3a5f","#0d1b2a"]}},
+        "zoomRegions": [], "speedRegions": [],
+        "cursor": {{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},
+        "cropByClip": [{{"x":0.44,"y":0.06,"width":{crop_w},"height":{crop_h}}}],
+        "output": {{"width":{w},"height":{h},"fps":null}}
+    }}"##,
+        sx = 0.5 - rect_w * 0.5,
+        sy = 0.5 - rect_h * 0.5,
+    );
+
+    let mut cfg = config::all().pop().expect("au moins une config");
+    cfg.zoom = false;
+    cfg.layout_anim = false;
+
+    let gpu = Gpu::create(false).expect("device d3d11");
+    let comp = Compositor::new_sized(&gpu, w, h).expect("compositor");
+    comp.set_scene(Some(Scene::from_json(&scene_json).expect("scene valide")));
+    comp.clear_cursor();
+
+    let rgba = unsafe {
+        let mut player = Player::open(&screen, &webcam, &gpu).expect("ouvrir les sources");
+        player.present_frame(&comp, &cfg, AT_SEC).expect("composer");
+        comp.readback_resized(w, h).expect("readback")
+    };
+    let path = out_dir.join("cropped-clip.ppm");
+    write_ppm(&path, &rgba, w, h).expect("ecrire le ppm");
+    println!("crop ar={crop_ar:.3} rect={rect_w:.3}x{rect_h:.3} -> {}", path.display());
+}
