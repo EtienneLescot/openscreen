@@ -1496,33 +1496,63 @@ impl Compositor {
         // càd dès que le ratio de sortie n'est pas 16:9 — cf. rapport utilisateur sur le 9:16).
         // Rayon écran : celui que le preset impose quand l'app en envoie un (les layouts en bloc
         // encadrent écran et caméra à l'identique), sinon le slider Roundness comme avant.
+        //
+        // Les rayons que l'app résout sont en px de la SORTIE, alors que la SDF les compare à
+        // `quad_px`, exprimé en px du RENDER TARGET. À l'export les deux coïncident ; en preview
+        // le rendu se fait dans un cadre contain-fitté plus petit (même ratio, cf.
+        // `preview_render_size`), et un rayon absolu y devient proportionnellement trop grand.
+        // `sd_round_rect` ne borne PAS r à la demi-boîte : au-delà, la forme ne sature pas en
+        // disque, elle dégénère en tache rétrécie — c'est ce qui cassait le cercle du PiP en
+        // preview alors que l'export, lui, restait juste. Ce facteur ramène ces rayons dans
+        // l'espace du render target ; il vaut exactement 1 à l'export.
+        let app_px_to_render = scene_ref
+            .as_ref()
+            .map(|s| s.output.width as f32)
+            .filter(|w| *w > 0.0)
+            .map(|w| self.rw() / w)
+            .unwrap_or(1.0);
         let app_screen_radius = scene_ref.as_ref().and_then(|s| s.layout.screen_radius);
         let s_radius = match (cfg.rounded, app_screen_radius) {
             (false, _) => 0.0,
-            (true, Some(r)) => r,
+            (true, Some(r)) => r * app_px_to_render,
             (true, None) => p.screen.radius * lp.radius_scale,
         };
         let w_px = [w_dst[2] * self.rw(), w_dst[3] * self.rh()];
-        // forme webcam : rayon SDF dérivé de la SEULE forme choisie. Le slider Roundness ne
-        // s'applique qu'à l'ÉCRAN, jamais à la caméra. Parité web (compositeLayout) : rectangle
-        // ET square ont un léger arrondi (fraction 0.12) — ils ne diffèrent que par le ratio ;
-        // rounded est nettement plus arrondi (0.3) ; circle = demi-côté.
-        // Rayon "brut" (SDF anisotrope, cf. écran ci-dessus) dérivé de la taille FINALE (après
-        // étirement) du quad webcam, pour un rayon proportionnellement correct quel que soit le
-        // ratio de sortie.
+        // Rayon caméra. Le slider Roundness ne s'y applique jamais (il ne vaut que pour l'ÉCRAN).
+        // Rayon "brut" (SDF anisotrope, cf. écran ci-dessus) dérivé de la taille FINALE du quad,
+        // pour un rayon proportionnellement correct quel que soit le ratio de sortie.
         let w_px_final = w_px;
         let w_min_final = w_px_final[0].min(w_px_final[1]);
+        // Quand l'app résout le rayon (`computeCompositeLayout`, source unique), on le prend :
+        // c'est la seule façon que les deux moitiés d'un layout en bloc soient encadrées à
+        // l'identique, l'écran consommant déjà `screen_radius` du même calcul. La table ci-dessous
+        // en était une SECONDE, indépendante — fractions différentes (0.12 vs 0.06 côté web) et
+        // sans bornes — donc écran et caméra ne pouvaient pas s'accorder.
+        //
+        // Le rayon de l'app vaut pour la taille NOMINALE de la caméra, et `webcam_size_scale` est
+        // précisément ce qui l'en écarte (zoom réactif ; l'échelle du slider est déjà cuite dans
+        // le rect de l'app, cf. `base_size_scale`). Le multiplier redonne mot pour mot ce que fait
+        // le TS — `borderRadius * reactiveFactor` — sans repasser par la taille finale de la boîte.
+        // `app_px_to_render` le ramène ensuite dans l'espace du render target (cf. plus haut).
+        let app_webcam_radius = scene_ref.as_ref().and_then(|s| s.layout.webcam_radius);
         // Full Camera dissout la forme en même temps qu'elle prend le cadre : le rayon fond
         // vers 0 avec `cam_progress`, donc le cercle devient un rect à coins de plus en plus
         // francs puis un plein cadre net — aucun masque ne survit au plein écran (parité
         // `computeCameraFullscreenRect`, qui ramène `maskShape` à "rectangle" et lerpe le
-        // rayon vers 0 pour exactement la même raison).
+        // rayon vers 0 pour exactement la même raison). `reactive_scale` vaut déjà 1 pendant
+        // Full Camera, donc les deux animations ne se composent pas — comme côté TS.
         let shape_fade = (1.0 - cam_progress).clamp(0.0, 1.0);
         let w_radius = shape_fade
-            * match lp.webcam_shape {
-                1 => w_min_final * 0.5,  // circle
-                3 => w_min_final * 0.3,  // rounded (nettement plus arrondi)
-                _ => w_min_final * 0.12, // rectangle / square → léger arrondi (identique)
+            * match app_webcam_radius {
+                Some(r) => r * webcam_size_scale * app_px_to_render,
+                // Fallback (payload sans rayon, fixture/bench) : l'ancienne table, keyée sur la
+                // forme. Rectangle ET square n'ont qu'un léger arrondi (0.12) et ne diffèrent que
+                // par le ratio ; rounded est nettement plus arrondi (0.3) ; circle = demi-côté.
+                None => match lp.webcam_shape {
+                    1 => w_min_final * 0.5,
+                    3 => w_min_final * 0.3,
+                    _ => w_min_final * 0.12,
+                },
             };
 
         self.begin([0.0, 0.0, 0.0, 1.0]);
