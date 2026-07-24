@@ -1,0 +1,31 @@
+/* Brand faces: Geist (UI) + Geist Mono (numeric / technical), the type system
+ * design/readme.md and design/SKILL.md have specified from the start and
+ * design/_adherence.oxlintrc.json lints for. Bound to --font-display /
+ * --font-body / --font-mono in design-tokens.css.
+ *
+ * Self-hosted rather than pulled from Google Fonts on purpose: this is a
+ * desktop app that has to start with no network, and the whole UI chrome
+ * hangs off these two families. (index.css does @import Google Fonts, but
+ * that set is the on-canvas caption picker — cosmetic, and already only
+ * meaningful for a user who went looking for those faces.)
+ *
+ * One variable file per family covers weights 100-900, so the pair costs
+ * ~138 KB instead of the ~19 static cuts it replaces. Upstream:
+ * github.com/vercel/geist-font, SIL OFL 1.1 — see fonts/OFL.txt, which
+ * ships next to the woff2 as the licence requires. */
+
+@font-face {
+	font-family: "Geist";
+	src: url("../assets/fonts/Geist-Variable.woff2") format("woff2");
+	font-weight: 100 900;
+	font-style: normal;
+	font-display: swap;
+}
+
+@font-face {
+	font-family: "Geist Mono";
+	src: url("../assets/fonts/GeistMono-Variable.woff2") format("woff2");
+	font-weight: 100 900;
+	font-style: normal;
+	font-display: swap;
+}
