@@ -1,4 +1,5 @@
-export const ASPECT_RATIOS = [
+/** The fixed shapes offered in the ratio picker, in menu order. */
+export const ASPECT_RATIO_PRESETS = [
 	"16:9",
 	"9:16",
 	"1:1",
@@ -6,40 +7,79 @@ export const ASPECT_RATIOS = [
 	"4:5",
 	"16:10",
 	"10:16",
-	"native",
 ] as const;
 
-export type AspectRatio = (typeof ASPECT_RATIOS)[number];
+export type AspectRatioPreset = (typeof ASPECT_RATIO_PRESETS)[number];
+
+/**
+ * A concrete `"W:H"` shape. The presets are just the well-known members — the picker also
+ * offers the clips' own native shapes ("Original"), which are stored the same way and can be
+ * anything (`"64:27"` for an ultrawide, `"683:384"` for an odd capture size).
+ *
+ * `"native"` is a LEGACY value kept only so projects saved before the shapes were enumerated
+ * still open. It resolves to the timeline's reference asset (largest pixel area), which is
+ * exactly the silent, drifting behaviour the enumeration replaced — nothing writes it any
+ * more, so it can be dropped once old projects are assumed migrated.
+ */
+export type AspectRatio = AspectRatioPreset | `${number}:${number}` | "native";
 
 const NATIVE_ASPECT_RATIO_FALLBACK = 16 / 9;
 
+/** Split a `"W:H"` token. Returns null for `"native"` and for anything malformed. */
+export function parseAspectRatio(value: string): { width: number; height: number } | null {
+	const match = /^\s*(\d+(?:\.\d+)?)\s*:\s*(\d+(?:\.\d+)?)\s*$/.exec(value);
+	if (!match) return null;
+	const width = Number(match[1]);
+	const height = Number(match[2]);
+	if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+		return null;
+	}
+	return { width, height };
+}
+
+/** Validation gate for anything read back from disk (project files, user prefs). */
+export function isAspectRatio(value: unknown): value is AspectRatio {
+	if (typeof value !== "string") return false;
+	return value === "native" || parseAspectRatio(value) !== null;
+}
+
+function greatestCommonDivisor(a: number, b: number): number {
+	let x = a;
+	let y = b;
+	while (y !== 0) {
+		const next = x % y;
+		x = y;
+		y = next;
+	}
+	return x;
+}
+
 /**
- * Numeric value of an aspect ratio. "native" returns the 16/9 fallback;
- * callers with source/crop context should use getNativeAspectRatioValue().
+ * Pixel dimensions → the reduced `"W:H"` token that identifies their shape. This is what makes
+ * "distinct native formats" a small set: 1920x1080 and 3840x2160 both reduce to `"16:9"`, so a
+ * timeline mixing them offers ONE "Original" entry, not two.
+ */
+export function toAspectRatioToken(width: number, height: number): AspectRatio | null {
+	if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+		return null;
+	}
+	const w = Math.round(width);
+	const h = Math.round(height);
+	if (w <= 0 || h <= 0) return null;
+	const divisor = greatestCommonDivisor(w, h) || 1;
+	return `${w / divisor}:${h / divisor}`;
+}
+
+/**
+ * Numeric value of an aspect ratio. Legacy `"native"` has no document context here so it
+ * returns the 16/9 fallback — callers holding a document must resolve it through
+ * `resolveAspectRatioValue` (lib/ai-edition/document/outputFormat) instead, or preview and
+ * output silently disagree on old projects.
  */
 export function getAspectRatioValue(aspectRatio: AspectRatio): number {
-	switch (aspectRatio) {
-		case "16:9":
-			return 16 / 9;
-		case "9:16":
-			return 9 / 16;
-		case "1:1":
-			return 1;
-		case "4:3":
-			return 4 / 3;
-		case "4:5":
-			return 4 / 5;
-		case "16:10":
-			return 16 / 10;
-		case "10:16":
-			return 10 / 16;
-		case "native":
-			return NATIVE_ASPECT_RATIO_FALLBACK;
-		default: {
-			const _exhaustiveCheck: never = aspectRatio;
-			return _exhaustiveCheck;
-		}
-	}
+	if (aspectRatio === "native") return NATIVE_ASPECT_RATIO_FALLBACK;
+	const parsed = parseAspectRatio(aspectRatio);
+	return parsed ? parsed.width / parsed.height : NATIVE_ASPECT_RATIO_FALLBACK;
 }
 
 export function getNativeAspectRatioValue(

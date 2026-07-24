@@ -18,6 +18,7 @@
 import type { CameraFullscreenRegion, SpeedRegion } from "@/components/video-editor/types";
 import { DEFAULT_CROP_REGION } from "@/components/video-editor/types";
 import { createId } from "@/lib/ai-edition/document/ids";
+import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
 import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
@@ -29,8 +30,6 @@ import {
 	resolveWebcamReactiveZoom,
 	webcamSizeToFraction,
 } from "@/lib/compositeLayout";
-import type { AspectRatio } from "@/utils/aspectRatioUtils";
-import { getAspectRatioValue, getNativeAspectRatioValue } from "@/utils/aspectRatioUtils";
 import type { CompositorClipInput } from "./contracts";
 
 /** Background behind the screen. Parsed from `settings.wallpaper`. */
@@ -314,66 +313,6 @@ function parseWallpaper(wallpaper: string) {
 		return { kind: "gradient", angleDeg, stops } as const;
 	}
 	return { kind: "image", path: wallpaper } as const;
-}
-
-/** Largest asset pixel area among the timeline's used assets; falls back to any asset with
- *  dims, then 1920x1080. Mirrors `referenceSource` in ExportDialog.tsx. */
-function referenceAssetDims(document: AxcutDocument): { width: number; height: number } {
-	const usedAssetIds = new Set(document.timeline.clips.map((c) => c.assetId));
-	const consider = (w: number, h: number, best: { width: number; height: number } | null) => {
-		if (w > 0 && h > 0 && (!best || w * h > best.width * best.height)) {
-			return { width: w, height: h };
-		}
-		return best;
-	};
-	let best: { width: number; height: number } | null = null;
-	for (const a of document.assets) {
-		if (usedAssetIds.has(a.id)) {
-			best = consider(a.video?.width ?? 0, a.video?.height ?? 0, best);
-		}
-	}
-	if (!best) {
-		for (const a of document.assets) {
-			best = consider(a.video?.width ?? 0, a.video?.height ?? 0, best);
-		}
-	}
-	return best ?? { width: 1920, height: 1080 };
-}
-
-/** The output frame's dimensions, honoring the timeline's chosen aspect ratio.
- *
- * BUG corrigé : cette fonction ne retournait QUE les dimensions brutes du plus gros asset
- * source (typiquement 16:9), sans jamais tenir compte du ratio réellement choisi par
- * l'utilisateur. `output.width`/`height` alimente le calcul "fit" côté natif
- * (`compose_frame`, compositor.rs) qui compare `output` à la résolution interne 16:9 pour
- * savoir de combien corriger l'écran/la webcam avant l'étirement final — avec la valeur
- * précédente (toujours ~16:9), cette correction était systématiquement un no-op, quel que
- * soit le ratio affiché dans l'UI (9:16, 1:1…), d'où la déformation qui persistait.
- *
- * PREMIÈRE tentative fautive : lire `document.legacyEditor.aspectRatio` (comme
- * `EXPORT_ASPECT` dans ExportDialog.tsx) — sauf que RIEN n'écrit jamais ce champ. Le vrai
- * sélecteur UI (le dropdown de ratio, V4Timeline.tsx) appelle `setSettings({aspectRatio})`,
- * qui persiste dans le store `editorSettings` (`settings.aspectRatio`, déjà résolu par
- * `getEditorSettings(document)` dans `buildSceneDescription` — donc ExportDialog.tsx lit
- * probablement aussi la mauvaise source, latent bug distinct à vérifier séparément).
- *
- * Convention alignée sur `calculateSourceDimensions` (mp4ExportSettings.ts) : le plus grand
- * côté de l'asset de référence reste la base, l'autre côté est dérivé du ratio choisi.
- */
-function pickOutputDims(
-	document: AxcutDocument,
-	aspectRatio: AspectRatio,
-): { width: number; height: number } {
-	const reference = referenceAssetDims(document);
-	const ratio =
-		aspectRatio === "native"
-			? getNativeAspectRatioValue(reference.width, reference.height)
-			: getAspectRatioValue(aspectRatio);
-	const longSide = Math.max(reference.width, reference.height);
-	if (ratio >= 1) {
-		return { width: longSide, height: Math.round(longSide / ratio) };
-	}
-	return { width: Math.round(longSide * ratio), height: longSide };
 }
 
 /**

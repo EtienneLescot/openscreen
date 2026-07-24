@@ -18,7 +18,7 @@ import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { suggestZoomRegions } from "@/lib/ai-edition/store/zoomSuggestions";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
-import { ASPECT_RATIOS, type AspectRatio } from "@/utils/aspectRatioUtils";
+import { ASPECT_RATIO_PRESETS, getAspectRatioLabel } from "@/utils/aspectRatioUtils";
 import { EditClipModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 import { type Span } from "./RegionTimeline";
@@ -74,17 +74,6 @@ interface BottombarProps {
 	// caption and hides the region lanes (there is nothing to annotate yet).
 	timelineVariant?: "edit" | "media";
 }
-
-const RATIO_LABELS: Record<AspectRatio, string> = {
-	"16:9": "16:9",
-	"9:16": "9:16",
-	"1:1": "1:1",
-	"4:3": "4:3",
-	"4:5": "4:5",
-	"16:10": "16:10",
-	"10:16": "10:16",
-	native: "Original",
-};
 
 export function Bottombar({
 	clips,
@@ -342,7 +331,7 @@ export function Bottombar({
 								aria-haspopup="menu"
 								aria-expanded={ratioOpen}
 							>
-								<span>{RATIO_LABELS[settings.aspectRatio]}</span>
+								<span>{getAspectRatioLabel(settings.aspectRatio)}</span>
 								<ChevronDown size={10} className="caret" />
 							</button>
 							{ratioOpen && ratioMenuRect
@@ -362,7 +351,7 @@ export function Bottombar({
 												zIndex: 1000,
 											}}
 										>
-											{ASPECT_RATIOS.map((r) => (
+											{ASPECT_RATIO_PRESETS.map((r) => (
 												<button
 													type="button"
 													key={r}
@@ -374,7 +363,7 @@ export function Bottombar({
 														setRatioOpen(false);
 													}}
 												>
-													{RATIO_LABELS[r]}
+													{getAspectRatioLabel(r)}
 												</button>
 											))}
 										</div>,
