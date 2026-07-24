@@ -460,9 +460,9 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 				{paneHeader(<Maximize2 size={15} />, "Full Camera", onClose, tc("actions.close"))}
 				<div style={bodyStyle}>
 					<p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: "var(--muted)" }}>
-						While this region plays, the webcam grows to (almost) fill the frame and eases back at
-						the end. Drag the region's edges on the timeline to change when it starts and how long
-						it lasts.
+						While this region plays, the camera takes the whole frame — no border, no rounding, no
+						background — and eases back at the end. Drag the region's edges on the timeline to
+						change when it starts and how long it lasts.
 					</p>
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
 						<Trash2 size={14} />

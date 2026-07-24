@@ -774,6 +774,52 @@ describe("buildSceneDescription.settings mapping", () => {
 		const scene = buildSceneDescription(doc);
 		expect(scene.layout.webcamRect).toBeNull();
 	});
+
+	it("ships the screen box next to the camera box for the block layouts", () => {
+		// Both rects come from the same computeCompositeLayout call; the native side must
+		// consume them together, otherwise it draws the app's camera against its own
+		// hardcoded screen box and the camera lands outside the scene.
+		const asset = makeAsset({
+			id: "a",
+			originalPath: "/a.mp4",
+			cameraTrack: { sourcePath: "/cam.mp4", startMs: 0, offsetMs: 0, visible: true },
+		});
+		const doc = makeDoc({
+			assets: [asset],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec: 0,
+					timelineEndSec: 10,
+				}),
+			],
+			legacyEditor: { webcamLayoutPreset: "dual-frame", padding: 0 },
+		});
+		const scene = buildSceneDescription(doc);
+		const screen = scene.layout.screenRect;
+		const cam = scene.layout.webcamRect;
+		expect(screen).not.toBeNull();
+		expect(cam).not.toBeNull();
+		// Side by side, padding 0: the block spans the full width of the frame.
+		expect(screen!.x).toBeCloseTo(0, 2);
+		expect(cam!.x + cam!.width).toBeCloseTo(1, 2);
+		// …and neither box escapes it.
+		expect(cam!.x + cam!.width).toBeLessThanOrEqual(1.001);
+		expect(cam!.y + cam!.height).toBeLessThanOrEqual(1.001);
+		// Camera sits after the screen, same height, no overlap.
+		expect(cam!.x).toBeGreaterThan(screen!.x + screen!.width);
+		expect(cam!.height).toBeCloseTo(screen!.height, 3);
+		// The block layouts impose their corner radius on the screen too.
+		expect(scene.layout.screenRadius).toBeGreaterThan(0);
+	});
+
+	it("leaves screenRadius null for picture-in-picture, so the Roundness slider still drives it", () => {
+		const doc = makeDoc({ legacyEditor: { webcamLayoutPreset: "picture-in-picture" } });
+		expect(buildSceneDescription(doc).layout.screenRadius).toBeNull();
+	});
 });
 
 // --- output dims -----------------------------------------------------------

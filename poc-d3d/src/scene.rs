@@ -53,6 +53,19 @@ pub struct SceneLayout {
     /// ce champ, ce qui active le fallback `preset_placements` Rust historique (PiP codé en dur).
     #[serde(default)]
     pub webcam_rect: Option<SceneRect>,
+    /// Rect ÉCRAN résolu côté app (mêmes fractions 0..1 du cadre de sortie que `webcam_rect`).
+    /// Déjà paddé et déjà au ratio du crop — le natif le consomme TEL QUEL, sans `padding_scale`
+    /// ni `fit_dst_to_aspect`. Sans lui, le natif gardait sa boîte écran codée en dur
+    /// (`preset_placements`) tout en respectant la boîte caméra de l'app : les deux ne
+    /// s'accordaient plus et la caméra du preset side-by-side sortait du cadre.
+    ///
+    /// `#[serde(default)]` : ancien payload / tests → None → fallback `preset_placements`.
+    #[serde(default)]
+    pub screen_rect: Option<SceneRect>,
+    /// Rayon des coins de l'écran en px de la sortie, quand le preset en impose un (les layouts
+    /// en bloc encadrent écran et caméra à l'identique). None → slider Roundness, comme avant.
+    #[serde(default)]
+    pub screen_radius: Option<f32>,
 }
 
 /// Rect normalisé 0..1 du cadre de sortie : x, y en haut-gauche ; width, height.
@@ -130,9 +143,9 @@ pub struct SceneSpeedRegion {
     pub speed: f64,
 }
 
-/// Une zone "Full Camera" de la timeline (temps en secondes) : la webcam grandit pour couvrir
-/// (presque) tout le cadre pendant cette fenêtre. Pas de champs au-delà des bornes temporelles
-/// (miroir de `CameraFullscreenRegion`, TS).
+/// Une zone "Full Camera" de la timeline (temps en secondes) : la caméra PREND tout le cadre
+/// pendant cette fenêtre (plein écran net — ni marge, ni arrondi, ni masque, ni fond derrière).
+/// Pas de champs au-delà des bornes temporelles (miroir de `CameraFullscreenRegion`, TS).
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneCameraFullscreenRegion {
