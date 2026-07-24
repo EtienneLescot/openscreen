@@ -5,6 +5,18 @@ import electron from "vite-plugin-electron/simple";
 
 // https://vitejs.dev/config/
 export default defineConfig({
+	// Vite's dependency cache defaults to `node_modules/.vite`, and in this repo every
+	// worktree's `node_modules` is a JUNCTION to the main checkout's — so the main repo
+	// and every worktree share ONE cache directory. Running two dev servers at once
+	// (routine here) then has them re-optimising into each other's cache: the second run
+	// rewrites `deps/` while the first has already handed the browser URLs stamped with
+	// the previous `?v=` token, so the renderer ends up holding two generations of the
+	// same dependency at once — "Invalid hook call / more than one copy of React",
+	// `useState` null, blank editor. Same symptom as the `dedupe` note below, different
+	// cause: that one is about resolution, this one about a cache with several writers.
+	// Keeping the cache beside the checkout that owns it (NOT under `node_modules`, which
+	// is the junction) makes concurrent servers independent.
+	cacheDir: path.resolve(__dirname, ".vite-cache"),
 	plugins: [
 		react(),
 		electron({

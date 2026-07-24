@@ -76,6 +76,11 @@ result-*
 # Build cache for the native STT server (FetchContent clones + CMake build).
 /.cache/
 
+# Vite's dependency cache, moved out of node_modules so concurrent dev servers
+# (main checkout + worktrees, which share node_modules via a junction) stop
+# re-optimising into each other's cache. See `cacheDir` in vite.config.ts.
+/.vite-cache/
+
 # whisper.cpp DTW POC (tools/stt-eval/whispercpp-dtw-poc) — vendored engine
 # clone, downloaded GGML models, and generated build/results artifacts.
 # See docs/engineering/stt-whispercpp-dtw-poc-plan.md.
