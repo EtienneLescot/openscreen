@@ -23,7 +23,12 @@ import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
-import { computeCompositeLayout, webcamSizeToFraction } from "@/lib/compositeLayout";
+import {
+	computeCompositeLayout,
+	type RenderRect,
+	resolveWebcamReactiveZoom,
+	webcamSizeToFraction,
+} from "@/lib/compositeLayout";
 import type { AspectRatio } from "@/utils/aspectRatioUtils";
 import { getAspectRatioValue, getNativeAspectRatioValue } from "@/utils/aspectRatioUtils";
 import type { CompositorClipInput } from "./contracts";
@@ -117,6 +122,21 @@ export interface SceneLayout {
 	 * falls back to its legacy `preset_placements` for the affected preset.
 	 */
 	webcamRect?: SceneRect | null;
+	/**
+	 * Screen rect resolved by the app (= `computeCompositeLayout(...).screenRect`, same
+	 * fractions-of-the-output-frame convention as `webcamRect`). Already padded and
+	 * already at the crop's aspect ratio, so the native compositor must consume it as-is
+	 * — no `padding_scale`, no aspect fit. Without it the native side kept its hardcoded
+	 * `preset_placements` screen box while honouring the app's camera box, which is what
+	 * pushed the side-by-side camera past the edge of the scene.
+	 */
+	screenRect?: SceneRect | null;
+	/**
+	 * Corner radius of the screen box in pixels of the output frame, when the preset
+	 * imposes one (the block layouts frame screen and camera alike). Null → the native
+	 * side keeps deriving it from the user's Roundness slider.
+	 */
+	screenRadius?: number | null;
 }
 
 /** Frame-styling effects, from the editor settings. */
@@ -414,8 +434,18 @@ export function buildSceneDescription(
 	// shipped to a 4:3 box). The probed size is keyed by sourcePath and survives across
 	// re-mounts of the same camera — `webcamSourceSize` is the dimension snapshot the
 	// caller (NativeCompositorOverlay) currently knows about.
+	// The block layouts (side-by-side / top-bottom) inset the welded screen+camera
+	// block by the padding, so the rect we ship must be resolved against the same
+	// padded content area the preview uses — `compositor.rs` consumes an app-provided
+	// `webcamRect` verbatim (it only scale_frame's the SCREEN by padding), so an
+	// unpadded rect here would leave the camera behind while the screen moved.
+	const paddingFit = 1 - (Math.min(100, Math.max(0, settings.padding)) / 100) * 0.4;
 	const computedLayout = computeCompositeLayout({
 		canvasSize: outputDims,
+		maxContentSize: {
+			width: Math.round(outputDims.width * paddingFit),
+			height: Math.round(outputDims.height * paddingFit),
+		},
 		screenSize: { width: 1920, height: 1080 },
 		webcamSize:
 			settings.webcamLayoutPreset === "no-webcam"
@@ -427,14 +457,16 @@ export function buildSceneDescription(
 			settings.webcamLayoutPreset === "picture-in-picture" ? settings.webcamPosition : null,
 		webcamMaskShape: settings.webcamMaskShape,
 	});
+	const toFrameFractions = (r: RenderRect) => ({
+		x: r.x / outputDims.width,
+		y: r.y / outputDims.height,
+		width: r.width / outputDims.width,
+		height: r.height / outputDims.height,
+	});
 	const webcamRect = computedLayout?.webcamRect
-		? {
-				x: computedLayout.webcamRect.x / outputDims.width,
-				y: computedLayout.webcamRect.y / outputDims.height,
-				width: computedLayout.webcamRect.width / outputDims.width,
-				height: computedLayout.webcamRect.height / outputDims.height,
-			}
+		? toFrameFractions(computedLayout.webcamRect)
 		: null;
+	const screenRect = computedLayout ? toFrameFractions(computedLayout.screenRect) : null;
 
 	return {
 		clips,
@@ -446,8 +478,15 @@ export function buildSceneDescription(
 			webcamShape: settings.webcamMaskShape,
 			webcamMirror: settings.webcamMirrored,
 			webcamPosition: settings.webcamPosition,
-			webcamReactiveZoom: settings.webcamReactiveZoom,
+			// Gated by the preset: the block layouts size their camera off the screen
+			// box, so it must never shrink mid-zoom (the UI hides the toggle too).
+			webcamReactiveZoom: resolveWebcamReactiveZoom(
+				settings.webcamLayoutPreset,
+				settings.webcamReactiveZoom,
+			),
 			webcamRect,
+			screenRect,
+			screenRadius: computedLayout?.screenBorderRadius ?? null,
 		},
 		effects: {
 			padding: settings.padding / 100,

@@ -44,9 +44,8 @@ import { createPlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock
 import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import {
-	computeCameraFullscreenTargetRect,
+	computeCameraFullscreenRect,
 	computeCompositeLayout,
-	lerpRect,
 	type WebcamCompositeLayout,
 } from "@/lib/compositeLayout";
 import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
@@ -250,10 +249,9 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		settings.padding,
 	]);
 
-	// Full Camera: during a cameraFullscreen region the webcam overlay grows to
-	// (almost) fill the canvas and eases back. Mirror the exporter's frameRenderer
-	// exactly — lerp the PiP rect toward computeCameraFullscreenTargetRect (radius
-	// 0 at full) — so preview and export animate to the identical rect.
+	// Full Camera: during a cameraFullscreen region the webcam takes the whole
+	// frame and eases back. Same `computeCameraFullscreenRect` call as both
+	// exporters and the native compositor, so all four animate identically.
 	const cameraFullscreenProgress = useMemo(
 		() =>
 			computeCameraFullscreenProgress(
@@ -264,18 +262,13 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	);
 	const effectiveLayout = useMemo<WebcamCompositeLayout | null>(() => {
 		if (!layout?.webcamRect || cameraFullscreenProgress <= 0) return layout;
-		const target = computeCameraFullscreenTargetRect(frameSize, layout.webcamRect);
-		const fullRect = {
-			x: target.x,
-			y: target.y,
-			width: target.width,
-			height: target.height,
-			borderRadius: 0,
-			maskShape: layout.webcamRect.maskShape,
-		};
 		return {
 			...layout,
-			webcamRect: lerpRect(layout.webcamRect, fullRect, cameraFullscreenProgress),
+			webcamRect: computeCameraFullscreenRect(
+				layout.webcamRect,
+				frameSize,
+				cameraFullscreenProgress,
+			),
 		};
 	}, [layout, cameraFullscreenProgress, frameSize]);
 
@@ -462,7 +455,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 						borderRadius={
 							effectiveLayout?.webcamRect?.borderRadius ?? layout.webcamRect.borderRadius
 						}
-						webcamMaskShape={settings.webcamMaskShape}
+						webcamMaskShape={effectiveLayout?.webcamRect?.maskShape ?? settings.webcamMaskShape}
 						layoutPreset={settings.webcamLayoutPreset}
 					/>
 				</div>
@@ -553,7 +546,11 @@ function buildWebcamStyle(
 ): React.CSSProperties {
 	if (!layout?.webcamRect) return { display: "none" };
 	const r = layout.webcamRect;
-	const mask = settings.webcamMaskShape as WebcamMaskShape;
+	// The RECT's own shape, not the setting: Full Camera flattens the mask to a
+	// rectangle as it takes the frame, and the hitbox must follow (a circular
+	// clip-path over a full-screen camera would swallow clicks everywhere but a
+	// disc in the middle).
+	const mask = r.maskShape ?? (settings.webcamMaskShape as WebcamMaskShape);
 	const clipPath = getCssClipPath(mask);
 	const base: React.CSSProperties = {
 		position: "absolute",

@@ -78,8 +78,8 @@ const MASK_SHAPE_CODE: Record<string, number> = {
 	square: 3,
 };
 
-/** Uniform block: 24 floats = 96 bytes. §8b budgets ~200; there is room. */
-const UNIFORM_FLOATS = 24;
+/** Uniform block: 28 floats = 112 bytes. §8b budgets ~200; there is room. */
+const UNIFORM_FLOATS = 28;
 
 export class WgslFrameRenderer {
 	private config: WgslFrameRenderConfig;
@@ -422,6 +422,19 @@ export class WgslFrameRenderer {
 		u[21] = state.webcamMirrored ? 1 : 0;
 		u[22] = hasWebcam && w ? 1 : 0;
 		u[23] = state.shadowIntensity > 0 ? 1 : 0;
+		// webcamSrc: the largest centred sub-rect of the camera with the BOX's aspect
+		// ratio — `object-fit: cover`, computed here because the box's ratio is not the
+		// camera's (a block layout hands it a column slot; Full Camera walks it out to
+		// the whole frame) and the shader would otherwise stretch the face into it.
+		const src = this.config.webcamSize;
+		const boxAspect = w && w.height > 0 ? w.width / w.height : 1;
+		const srcAspect = src && src.width > 0 && src.height > 0 ? src.width / src.height : boxAspect;
+		const cropW = srcAspect > boxAspect ? boxAspect / srcAspect : 1;
+		const cropH = srcAspect > boxAspect ? 1 : srcAspect / boxAspect;
+		u[24] = (1 - cropW) / 2;
+		u[25] = (1 - cropH) / 2;
+		u[26] = cropW;
+		u[27] = cropH;
 	}
 
 	getCanvas(): HTMLCanvasElement {
