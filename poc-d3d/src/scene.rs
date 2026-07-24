@@ -36,7 +36,9 @@ pub struct SceneLayout {
     pub preset: String,
     /// échelle taille webcam (1 = défaut PiP du compositeur).
     pub webcam_size: f32,
-    /// "rectangle" | "circle" | "square" | "rounded".
+    /// "rectangle" | "circle" | "square" | "rounded" — la forme RÉSOLUE par le layout, pas le
+    /// réglage brut de l'utilisateur : seul le PiP honore le sélecteur de forme, les layouts en
+    /// bloc découpent toujours un rectangle (côté app, cf. `computeCompositeLayout`).
     pub webcam_shape: String,
     pub webcam_mirror: bool,
     /// position normalisée (0..1) du centre webcam, ou None → défaut du preset.
@@ -66,6 +68,18 @@ pub struct SceneLayout {
     /// en bloc encadrent écran et caméra à l'identique). None → slider Roundness, comme avant.
     #[serde(default)]
     pub screen_radius: Option<f32>,
+    /// Rayon des coins de la CAMÉRA, même convention px-de-sortie que `screen_radius` et issu du
+    /// même appel `computeCompositeLayout`. C'est la seule façon que « le bloc encadre écran et
+    /// caméra à l'identique » soit vrai : sans lui l'écran prenait le rayon de l'app pendant que
+    /// la caméra gardait la table Rust indépendante ci-dessous (`min * 0.5 | 0.3 | 0.12`, non
+    /// bornée), donc deux moitiés d'un même bloc arrondies par deux formules différentes.
+    ///
+    /// Donné pour la taille NOMINALE de la caméra ; le natif le remet à l'échelle de la boîte
+    /// réellement dessinée (zoom réactif, Full Camera).
+    ///
+    /// `#[serde(default)]` : ancien payload / tests → None → table Rust historique.
+    #[serde(default)]
+    pub webcam_radius: Option<f32>,
 }
 
 /// Rect normalisé 0..1 du cadre de sortie : x, y en haut-gauche ; width, height.
