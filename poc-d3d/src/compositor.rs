@@ -269,6 +269,12 @@ pub struct Compositor {
     q_srv: ID3D11ShaderResourceView,
     e_rtv: ID3D11RenderTargetView,
     e_srv: ID3D11ShaderResourceView,
+    /// Copie pleine réso de l'image composée, pour les annotations de type flou : on ne peut pas
+    /// échantillonner le render target sur lequel on dessine, donc on le recopie ici d'abord.
+    /// Distincte de `accum` à dessein — `accum` sert au motion blur, qui appelle `compose_frame`
+    /// plusieurs fois par frame et dont l'accumulation serait écrasée.
+    ann_copy: ID3D11Texture2D,
+    ann_copy_srv: ID3D11ShaderResourceView,
     // accumulateur pour le flou de mouvement (supersampling temporel)
     accum: ID3D11Texture2D,
     accum_rtv: ID3D11RenderTargetView,
@@ -812,6 +818,22 @@ impl Compositor {
         let mut accum_srv: Option<ID3D11ShaderResourceView> = None;
         dev.CreateShaderResourceView(&accum, None, Some(&mut accum_srv))?;
 
+        // Copie de travail des annotations flou. Chaîne de mips COMPLÈTE (`MipLevels: 0`) : c'est
+        // elle qui fournit le flou. Échantillonner un niveau plus bas donne un vrai lissage pour
+        // n'importe quel rayon à coût constant, là où un noyau de quelques taps espacés produit
+        // des copies fantômes au lieu d'un flou.
+        let ann_desc = D3D11_TEXTURE2D_DESC {
+            MipLevels: 0,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            MiscFlags: D3D11_RESOURCE_MISC_GENERATE_MIPS.0 as u32,
+            ..ad
+        };
+        let mut ann_copy: Option<ID3D11Texture2D> = None;
+        dev.CreateTexture2D(&ann_desc, None, Some(&mut ann_copy))?;
+        let ann_copy = ann_copy.unwrap();
+        let mut ann_copy_srv: Option<ID3D11ShaderResourceView> = None;
+        dev.CreateShaderResourceView(&ann_copy, None, Some(&mut ann_copy_srv))?;
+
         let mut bla = D3D11_BLEND_DESC::default();
         bla.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
             BlendEnable: true.into(),
@@ -857,6 +879,8 @@ impl Compositor {
             q_srv,
             e_rtv,
             e_srv,
+            ann_copy,
+            ann_copy_srv: ann_copy_srv.unwrap(),
             accum,
             accum_rtv: accum_rtv.unwrap(),
             accum_srv: accum_srv.unwrap(),
@@ -1992,14 +2016,26 @@ impl Compositor {
         if scene.annotations.is_empty() {
             return;
         }
+        let visible = |a: &crate::scene::SceneAnnotation| {
+            t >= a.start_sec as f32 && t < a.end_sec as f32
+        };
+        // Une seule recopie du render target pour TOUTES les annotations flou de la frame — leur
+        // lecture doit voir l'image composée sans les flous eux-mêmes, sinon deux zones qui se
+        // recouvrent s'échantillonneraient l'une l'autre selon l'ordre de dessin.
+        let needs_copy = scene
+            .annotations
+            .iter()
+            .any(|a| visible(a) && a.kind == "blur" && a.blur.is_some());
+        if needs_copy {
+            // `CopySubresourceRegion` et non `CopyResource` : les deux textures n'ont pas le même
+            // nombre de niveaux, on ne remplit que le mip 0 puis on laisse le GPU dériver le reste.
+            self.ctx.CopySubresourceRegion(&self.ann_copy, 0, 0, 0, 0, &self.rt, 0, None);
+            self.ctx.GenerateMips(&self.ann_copy_srv);
+        }
         // La liste arrive déjà triée par zIndex croissant côté app, donc l'ordre d'itération EST
         // l'ordre de peinture — pas de tri par frame.
         for annotation in &scene.annotations {
-            if t < annotation.start_sec as f32 || t >= annotation.end_sec as f32 {
-                continue;
-            }
-            let Some(figure) = annotation.figure.as_ref() else { continue };
-            if annotation.kind != "figure" {
+            if !visible(annotation) {
                 continue;
             }
             let dst = [
@@ -2012,21 +2048,70 @@ impl Compositor {
             if quad_px[0] <= 0.0 || quad_px[1] <= 0.0 {
                 continue;
             }
-            let (segments, half_stroke) =
-                crate::regions::arrow_local_geometry(&figure.direction, figure.stroke_width, quad_px);
-            let rgba = parse_hex(&figure.color).unwrap_or([1.0, 1.0, 1.0, 1.0]);
-            self.draw_solid(&LayerCB {
-                dst,
-                quad_px,
-                mode: 9.0,
-                color: rgba,
-                fx: segments[0],
-                src_prev: segments[1],
-                dst_prev: segments[2],
-                mb: [1.0, half_stroke, 0.0, 0.0],
-                ..Default::default()
-            });
+            match annotation.kind.as_str() {
+                "figure" => {
+                    let Some(figure) = annotation.figure.as_ref() else { continue };
+                    let (segments, half_stroke) = crate::regions::arrow_local_geometry(
+                        &figure.direction,
+                        figure.stroke_width,
+                        quad_px,
+                    );
+                    let rgba = parse_hex(&figure.color).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                    self.draw_solid(&LayerCB {
+                        dst,
+                        quad_px,
+                        mode: 9.0,
+                        color: rgba,
+                        fx: segments[0],
+                        src_prev: segments[1],
+                        dst_prev: segments[2],
+                        mb: [1.0, half_stroke, 0.0, 0.0],
+                        ..Default::default()
+                    });
+                }
+                "blur" => {
+                    let Some(blur) = annotation.blur.as_ref() else { continue };
+                    // Le masque en tracé libre demande une liste de points côté GPU (buffer
+                    // structuré), pas encore faite : on masque alors la BOÎTE ENGLOBANTE.
+                    //
+                    // Ce choix est délibéré et asymétrique. Ne rien dessiner laisserait passer en
+                    // clair, dans le fichier exporté, ce que l'utilisateur a explicitement désigné
+                    // comme à cacher — un masque de confidentialité qui ne masque pas est pire que
+                    // pas de masque, parce qu'il donne confiance à tort. Sur-flouter une marge
+                    // autour de la zone ne trahit personne.
+                    let freehand_fallback = blur.shape == "freehand";
+                    let is_blur = if blur.style == "blur" { 1.0 } else { 0.0 };
+                    // `intensity` pilote le rayon du flou, `block_size` la grille de mosaïque —
+                    // deux réglages distincts côté app, un seul paramètre ici selon le style.
+                    let amount = if is_blur > 0.5 { blur.intensity } else { blur.block_size };
+                    // Le repli du tracé libre passe par le rectangle, pas l'ovale : un ovale
+                    // inscrit dans la boîte englobante en retirerait les coins, donc une partie de
+                    // ce que l'utilisateur a couvert.
+                    let is_oval = if blur.shape == "oval" && !freehand_fallback { 1.0 } else { 0.0 };
+                    // La teinte n'a de sens qu'en mosaïque : elle sert à marquer visiblement une
+                    // zone caviardée. Un flou teinté ne ressemblerait plus à un flou.
+                    let tinted = if is_blur > 0.5 { 0.0 } else { 1.0 };
+                    let tint = if blur.color == "black" {
+                        [0.0, 0.0, 0.0, 1.0]
+                    } else {
+                        [1.0, 1.0, 1.0, 1.0]
+                    };
+                    self.ctx.PSSetShaderResources(2, Some(&[Some(self.ann_copy_srv.clone())]));
+                    self.draw_solid(&LayerCB {
+                        dst,
+                        quad_px,
+                        mode: 10.0,
+                        color: tint,
+                        fx: [is_blur, amount.max(1.0), is_oval, tinted],
+                        ..Default::default()
+                    });
+                }
+                // texte et image : pas encore rendus. Ignorés en silence — une absence connue vaut
+                // mieux qu'un placeholder qu'on prendrait pour un bug de style.
+                _ => {}
+            }
         }
+        self.ctx.PSSetShaderResources(2, Some(&[None]));
     }
 
     /// Flou de mouvement (§8) : moyenne de `n` sous-frames aux temps intermédiaires

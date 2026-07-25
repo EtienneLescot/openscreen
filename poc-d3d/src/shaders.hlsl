@@ -86,6 +86,64 @@ float4 ps_main(VSOut i) : SV_Target
     // de perspective-correct exact, mais indiscernable à l'œil pour un tilt de 10-22°) et
     // échantillonne la vidéo à l'UV correspondant, sinon transparent (hors du quad projeté).
     // fx.xy/fx.zw = coins TL/TR (px locaux, 0..quad_px) ; src_prev.xy/.zw = coins BR/BL.
+    // mode 10 : annotation « flou » — masque la zone en réutilisant l'image DÉJÀ composée, qui
+    // arrive dans `texImg` (recopie du render target : on ne peut pas échantillonner la cible sur
+    // laquelle on dessine). `i.pout` donne directement l'UV de sortie, donc aucun mapping à
+    // refaire. fx.x = 0 mosaïque / 1 flou ; fx.y = taille de bloc px (mosaïque) ou rayon px
+    // (flou) ; fx.z = 0 rectangle / 1 ovale ; fx.w = 1 si le masque doit être teinté.
+    if (mode > 9.5)
+    {
+        // Masque de forme, en coords locales normalisées du quad.
+        float2 n = i.local / max(quad_px, 1e-6);
+        float cov = 1.0;
+        if (fx.z > 0.5)
+        {
+            // Ovale inscrit : distance au centre en unités de demi-axes, adoucie sur ~1px.
+            float2 d = (n - 0.5) * 2.0;
+            float r = length(d);
+            float aa = 2.0 / max(min(quad_px.x, quad_px.y), 1.0);
+            cov = 1.0 - smoothstep(1.0 - aa, 1.0, r);
+        }
+        if (cov <= 0.0) return float4(0.0, 0.0, 0.0, 0.0);
+
+        float3 rgb;
+        if (fx.x > 0.5)
+        {
+            // Flou : on échantillonne un niveau de mip de l'image composée. `log2(rayon)` donne
+            // le niveau dont un texel couvre à peu près le rayon demandé, et le filtrage
+            // trilinéaire lisse la transition entre deux niveaux quand le rayon varie.
+            //
+            // Un noyau de quelques taps espacés du rayon ne floute PAS : il superpose autant de
+            // copies décalées, ce qui se voit comme du texte fantôme. Atteindre un vrai lissage
+            // par taps demanderait un tap par pixel de rayon ; la pyramide de mips donne le même
+            // résultat à coût constant, et c'est le GPU qui l'a construite.
+            float lod = log2(max(fx.y, 1.0));
+            rgb = texImg.SampleLevel(samp, i.pout, lod).rgb;
+        }
+        else
+        {
+            // Mosaïque : on quantifie l'UV sur une grille de `fx.y` px, alignée sur le quad pour
+            // que les blocs ne rampent pas quand l'annotation bouge.
+            float2 px_uv = dst.zw / max(quad_px, 1e-6);
+            float2 block = max(fx.y, 1.0) * px_uv;
+            float2 origin = dst.xy;
+            float2 q = origin + (floor((i.pout - origin) / block) + 0.5) * block;
+            // `SampleLevel(..., 0)` et non `Sample` : l'UV quantifié est une marche d'escalier,
+            // donc ses dérivées explosent en bord de bloc et le choix automatique de mip
+            // ramollirait justement les arêtes qui font la mosaïque.
+            rgb = texImg.SampleLevel(samp, q, 0.0).rgb;
+        }
+
+        if (fx.w > 0.5)
+        {
+            // Teinte blanc/noir : la couleur choisie, mêlée à moitié, garde la forme lisible sans
+            // effacer complètement ce qu'il y a dessous.
+            rgb = lerp(rgb, color.rgb, 0.5);
+        }
+        float a = cov * color.a;
+        return float4(rgb * a, a); // prémultiplié
+    }
+
     // mode 9 : annotation « figure » — une flèche. Parité EXACTE avec `ArrowSvgs.tsx`, dont
     // chaque direction est un tracé de trois segments à bouts ronds dans un viewBox 0..100 :
     // une hampe et deux barbes. Trois `sd_segment` et un `min` reproduisent donc la forme telle
