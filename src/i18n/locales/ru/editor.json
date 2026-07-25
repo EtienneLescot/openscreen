@@ -303,13 +303,9 @@
 		"create": "Создать проект",
 		"defaultTitle": "Проект без названия",
 		"templates": {
-			"blankTitle": "Пустой проект",
-			"blankDesc": "Пустая таймлиния, готова к импорту",
 			"screenRecordingTitle": "Запись экрана",
 			"screenRecordingDesc": "Начать системный захват",
-			"importMediaDesc": "Видео, аудио, изображения с диска",
-			"fromTemplateTitle": "Из шаблона",
-			"fromTemplateDesc": "Готовая раскадровка"
+			"importMediaDesc": "Видео, аудио, изображения с диска"
 		}
 	},
 	"openProjectDialog": {

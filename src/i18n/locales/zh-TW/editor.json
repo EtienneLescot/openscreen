@@ -303,13 +303,9 @@
 		"create": "建立專案",
 		"defaultTitle": "未命名專案",
 		"templates": {
-			"blankTitle": "空白專案",
-			"blankDesc": "空時間軸，可直接匯入",
 			"screenRecordingTitle": "螢幕錄製",
 			"screenRecordingDesc": "開始系統擷取",
-			"importMediaDesc": "從磁碟匯入影片、音訊、圖片",
-			"fromTemplateTitle": "從範本建立",
-			"fromTemplateDesc": "預先定義的分鏡腳本"
+			"importMediaDesc": "從磁碟匯入影片、音訊、圖片"
 		}
 	},
 	"openProjectDialog": {

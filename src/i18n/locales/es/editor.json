@@ -303,13 +303,9 @@
 		"create": "Crear proyecto",
 		"defaultTitle": "Proyecto sin título",
 		"templates": {
-			"blankTitle": "Proyecto en blanco",
-			"blankDesc": "Línea de tiempo vacía, lista para importar",
 			"screenRecordingTitle": "Grabación de pantalla",
 			"screenRecordingDesc": "Iniciar captura del sistema",
-			"importMediaDesc": "Vídeo, audio, imágenes desde el disco",
-			"fromTemplateTitle": "Desde plantilla",
-			"fromTemplateDesc": "Storyboard predefinido"
+			"importMediaDesc": "Vídeo, audio, imágenes desde el disco"
 		}
 	},
 	"openProjectDialog": {

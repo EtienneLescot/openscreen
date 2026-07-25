@@ -303,13 +303,9 @@
 		"create": "Proje oluştur",
 		"defaultTitle": "Adsız proje",
 		"templates": {
-			"blankTitle": "Boş proje",
-			"blankDesc": "İçe aktarmaya hazır boş zaman çizelgesi",
 			"screenRecordingTitle": "Ekran kaydı",
 			"screenRecordingDesc": "Sistem yakalamayı başlat",
-			"importMediaDesc": "Diskten video, ses, görsel",
-			"fromTemplateTitle": "Şablondan",
-			"fromTemplateDesc": "Önceden tanımlanmış hikaye tahtası"
+			"importMediaDesc": "Diskten video, ses, görsel"
 		}
 	},
 	"openProjectDialog": {

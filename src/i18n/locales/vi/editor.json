@@ -303,13 +303,9 @@
 		"create": "Tạo dự án",
 		"defaultTitle": "Dự án chưa đặt tên",
 		"templates": {
-			"blankTitle": "Dự án trống",
-			"blankDesc": "Dòng thời gian trống, sẵn sàng nhập",
 			"screenRecordingTitle": "Ghi màn hình",
 			"screenRecordingDesc": "Bắt đầu chụp hệ thống",
-			"importMediaDesc": "Video, âm thanh, hình ảnh từ ổ đĩa",
-			"fromTemplateTitle": "Từ mẫu",
-			"fromTemplateDesc": "Bảng phân cảnh dựng sẵn"
+			"importMediaDesc": "Video, âm thanh, hình ảnh từ ổ đĩa"
 		}
 	},
 	"openProjectDialog": {

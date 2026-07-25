@@ -303,13 +303,9 @@
 		"create": "创建项目",
 		"defaultTitle": "未命名项目",
 		"templates": {
-			"blankTitle": "空白项目",
-			"blankDesc": "空时间轴，可直接导入",
 			"screenRecordingTitle": "屏幕录制",
 			"screenRecordingDesc": "开始系统捕获",
-			"importMediaDesc": "从磁盘导入视频、音频、图片",
-			"fromTemplateTitle": "从模板创建",
-			"fromTemplateDesc": "预定义的故事板"
+			"importMediaDesc": "从磁盘导入视频、音频、图片"
 		}
 	},
 	"openProjectDialog": {

@@ -303,13 +303,9 @@
 		"create": "プロジェクトを作成",
 		"defaultTitle": "無題のプロジェクト",
 		"templates": {
-			"blankTitle": "空のプロジェクト",
-			"blankDesc": "空のタイムライン、インポート準備完了",
 			"screenRecordingTitle": "画面録画",
 			"screenRecordingDesc": "システムキャプチャを開始",
-			"importMediaDesc": "ディスクから動画・音声・画像",
-			"fromTemplateTitle": "テンプレートから",
-			"fromTemplateDesc": "定義済みのストーリーボード"
+			"importMediaDesc": "ディスクから動画・音声・画像"
 		}
 	},
 	"openProjectDialog": {

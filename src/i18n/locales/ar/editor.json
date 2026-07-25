@@ -303,13 +303,9 @@
 		"create": "إنشاء المشروع",
 		"defaultTitle": "مشروع بلا عنوان",
 		"templates": {
-			"blankTitle": "مشروع فارغ",
-			"blankDesc": "جدول زمني فارغ، جاهز للاستيراد",
 			"screenRecordingTitle": "تسجيل الشاشة",
 			"screenRecordingDesc": "بدء التقاط النظام",
-			"importMediaDesc": "فيديو، صوت، صور من القرص",
-			"fromTemplateTitle": "من قالب",
-			"fromTemplateDesc": "قصة مصورة محددة مسبقًا"
+			"importMediaDesc": "فيديو، صوت، صور من القرص"
 		}
 	},
 	"openProjectDialog": {

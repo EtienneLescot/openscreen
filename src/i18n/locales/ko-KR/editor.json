@@ -303,13 +303,9 @@
 		"create": "프로젝트 만들기",
 		"defaultTitle": "제목 없는 프로젝트",
 		"templates": {
-			"blankTitle": "빈 프로젝트",
-			"blankDesc": "빈 타임라인, 가져올 준비 완료",
 			"screenRecordingTitle": "화면 녹화",
 			"screenRecordingDesc": "시스템 캡처 시작",
-			"importMediaDesc": "디스크에서 동영상, 오디오, 이미지",
-			"fromTemplateTitle": "템플릿에서",
-			"fromTemplateDesc": "미리 정의된 스토리보드"
+			"importMediaDesc": "디스크에서 동영상, 오디오, 이미지"
 		}
 	},
 	"openProjectDialog": {

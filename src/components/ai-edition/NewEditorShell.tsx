@@ -25,6 +25,7 @@ import {
 	EditClipModal,
 	NewProjectModal,
 	OpenProjectModal,
+	type StartingPoint,
 	UnsavedChangesModal,
 	type UnsavedChoice,
 } from "./Modals";
@@ -629,10 +630,13 @@ export function NewEditorShell() {
 		[loadProject],
 	);
 
+	// The dialog's starting point picks the tab the fresh project opens on:
+	// "import" → Media (browse/drop assets), "screen-recording" → Rec (capture).
 	const handleCreateProject = useCallback(
-		async (title: string) => {
+		async (title: string, startingPoint: StartingPoint) => {
 			try {
 				await createProject(title);
+				setMode(startingPoint === "screen-recording" ? "rec" : "media");
 			} catch (err) {
 				toast.error("Could not create project", {
 					description: err instanceof Error ? err.message : String(err),

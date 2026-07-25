@@ -304,13 +304,9 @@
 		"create": "Create project",
 		"defaultTitle": "Untitled project",
 		"templates": {
-			"blankTitle": "Blank project",
-			"blankDesc": "Empty timeline, ready to import",
 			"screenRecordingTitle": "Screen recording",
 			"screenRecordingDesc": "Start system capture",
-			"importMediaDesc": "Video, audio, images from disk",
-			"fromTemplateTitle": "From template",
-			"fromTemplateDesc": "Predefined storyboard"
+			"importMediaDesc": "Video, audio, images from disk"
 		}
 	},
 	"openProjectDialog": {
