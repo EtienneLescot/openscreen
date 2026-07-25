@@ -183,6 +183,63 @@ describe("executeAgentTool", () => {
 		expect(clips[1]).toMatchObject({ timelineStartSec: 10, timelineEndSec: 40 });
 	});
 
+	it("setClipRange clamps/drops anchored pills and refreshes the reflowed ones' ms cache", () => {
+		const doc = fixtureDocument();
+		const withZooms: AxcutDocument = {
+			...doc,
+			zoomRanges: [
+				// On clip_1 (window becomes [0,10]): one inside survives, one past the new end is dropped.
+				{
+					id: "z_in",
+					startMs: 5000,
+					endMs: 8000,
+					clipId: "clip_1",
+					sourceStartSec: 5,
+					sourceEndSec: 8,
+					depth: 3,
+					focus: { cx: 0.5, cy: 0.5 },
+				},
+				{
+					id: "z_out",
+					startMs: 15000,
+					endMs: 20000,
+					clipId: "clip_1",
+					sourceStartSec: 15,
+					sourceEndSec: 20,
+					depth: 3,
+					focus: { cx: 0.5, cy: 0.5 },
+				},
+				// On clip_2 (reflows 30→10): unchanged window, but its derived ms must follow the shift.
+				{
+					id: "z_shift",
+					startMs: 40000,
+					endMs: 45000,
+					clipId: "clip_2",
+					sourceStartSec: 40,
+					sourceEndSec: 45,
+					depth: 3,
+					focus: { cx: 0.5, cy: 0.5 },
+				},
+			] as unknown as AxcutDocument["zoomRanges"],
+		};
+		const result = executeAgentTool(
+			withZooms,
+			"setClipRange",
+			JSON.stringify({ clipId: "clip_1", sourceStartSec: 0, sourceEndSec: 10 }),
+		);
+		expect(result.ok).toBe(true);
+		const zooms = result.document?.zoomRanges ?? [];
+		expect([...zooms.map((z) => z.id)].sort()).toEqual(["z_in", "z_shift"]);
+		expect(zooms.find((z) => z.id === "z_in")).toMatchObject({
+			sourceStartSec: 5,
+			sourceEndSec: 8,
+			startMs: 5000,
+			endMs: 8000,
+		});
+		// clip_2 moved from tl 30 to tl 10, so z_shift's raw ms drops by 20s.
+		expect(zooms.find((z) => z.id === "z_shift")).toMatchObject({ startMs: 20000, endMs: 25000 });
+	});
+
 	it("replaceTimeline rebuilds clips and inverse skip ranges", () => {
 		const doc = fixtureDocument();
 		// Test the rebuild path: strip user-placed clips first so the tool

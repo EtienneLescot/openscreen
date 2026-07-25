@@ -7,9 +7,12 @@ import {
 	moveClip,
 	normalizeIntervals,
 	primaryAssetDuration,
+	rederiveRegionMs,
 	replaceTimeline,
+	resequenceClips,
 	resolvePlaybackSegments,
 	restoreFullTimeline,
+	setClipSourceRange,
 	subtractInterval,
 	timelineIntervals,
 } from "./timeline";
@@ -513,5 +516,181 @@ describe("duplicateClip / moveClip", () => {
 		const next = moveClip(doc, "clip_c", 1);
 		expect(next.timeline.clips.map((c) => c.id)).toEqual(["clip_a", "clip_c", "clip_b"]);
 		expect(next.zoomRanges[0]).toMatchObject({ startMs: 3000, endMs: 5000 });
+	});
+});
+
+function makeZoom(overrides: Partial<AxcutDocument["zoomRanges"][number]> = {}) {
+	return {
+		id: "z1",
+		startMs: 0,
+		endMs: 0,
+		clipId: "clip_a",
+		sourceStartSec: 0,
+		sourceEndSec: 0,
+		depth: 3 as const,
+		focus: { cx: 0.5, cy: 0.5 },
+		...overrides,
+	};
+}
+
+describe("resequenceClips recomputes a clip's length from its source window when its extent is zeroed", () => {
+	it("uses the source length (not the stale timeline length) once the timeline extent is 0", () => {
+		// The clip's OLD width was 10s; its source window was just narrowed to 3s and its
+		// timeline extent zeroed (the signal both the Edit modal and the agent use). The
+		// resequenced clip must be 3s wide, not the stale 10s.
+		const [clip] = resequenceClips([
+			makeClip({ sourceStartSec: 2, sourceEndSec: 5, timelineStartSec: 0, timelineEndSec: 0 }),
+		]);
+		expect(clip.timelineStartSec).toBe(0);
+		expect(clip.timelineEndSec).toBe(3);
+	});
+});
+
+describe("rederiveRegionMs — clamps anchored regions to their clip's kept source window", () => {
+	const twoClipDoc = () =>
+		makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [
+					makeClip({ id: "clip_a", sourceStartSec: 0, sourceEndSec: 10, timelineEndSec: 10 }),
+				],
+			},
+		});
+
+	it("shortens a fragment that overhangs a tail-trimmed clip to the surviving overlap", () => {
+		// Clip window narrowed to [0,7]; a zoom authored at source 6-8 keeps only 6-7.
+		const doc = twoClipDoc();
+		doc.timeline.clips[0].sourceEndSec = 7;
+		doc.zoomRanges = [makeZoom({ sourceStartSec: 6, sourceEndSec: 8, startMs: 6000, endMs: 8000 })];
+		const next = rederiveRegionMs(doc, doc.timeline.clips);
+		expect(next.zoomRanges).toHaveLength(1);
+		expect(next.zoomRanges[0]).toMatchObject({
+			sourceStartSec: 6,
+			sourceEndSec: 7,
+			startMs: 6000,
+			endMs: 7000,
+		});
+	});
+
+	it("clamps a fragment's head into a clip trimmed at the front", () => {
+		// Head trimmed: clip window is now [4,10]; a zoom at source 3-6 keeps only 4-6, and
+		// its raw span starts at the clip's own start (timelineStart + (4-4) = 0).
+		const doc = twoClipDoc();
+		doc.timeline.clips[0].sourceStartSec = 4;
+		doc.zoomRanges = [makeZoom({ sourceStartSec: 3, sourceEndSec: 6, startMs: 3000, endMs: 6000 })];
+		const next = rederiveRegionMs(doc, doc.timeline.clips);
+		expect(next.zoomRanges[0]).toMatchObject({
+			sourceStartSec: 4,
+			sourceEndSec: 6,
+			startMs: 0,
+			endMs: 2000,
+		});
+	});
+
+	it("drops a fragment that falls entirely outside the narrowed window", () => {
+		const doc = twoClipDoc();
+		doc.timeline.clips[0].sourceEndSec = 5;
+		doc.zoomRanges = [makeZoom({ sourceStartSec: 6, sourceEndSec: 8, startMs: 6000, endMs: 8000 })];
+		const next = rederiveRegionMs(doc, doc.timeline.clips);
+		expect(next.zoomRanges).toHaveLength(0);
+	});
+
+	it("leaves a fragment untouched when its clip is not probed yet (no real window)", () => {
+		// An unprobed clip has no meaningful sourceEndSec; clamping it would nuke every
+		// fragment, so the guard skips it and only refreshes the ms cache.
+		const doc = twoClipDoc();
+		doc.timeline.clips[0].sourceEndSec = undefined;
+		doc.zoomRanges = [makeZoom({ sourceStartSec: 6, sourceEndSec: 8, startMs: 6000, endMs: 8000 })];
+		const next = rederiveRegionMs(doc, doc.timeline.clips);
+		expect(next.zoomRanges).toHaveLength(1);
+		expect(next.zoomRanges[0]).toMatchObject({ sourceStartSec: 6, sourceEndSec: 8 });
+	});
+
+	it("is a no-op for a fragment already inside its clip's window", () => {
+		const doc = twoClipDoc();
+		doc.zoomRanges = [makeZoom({ sourceStartSec: 3, sourceEndSec: 4, startMs: 3000, endMs: 4000 })];
+		const next = rederiveRegionMs(doc, doc.timeline.clips);
+		expect(next.zoomRanges[0]).toMatchObject({
+			sourceStartSec: 3,
+			sourceEndSec: 4,
+			startMs: 3000,
+			endMs: 4000,
+		});
+	});
+});
+
+describe("setClipSourceRange — the one shared clip-trim mutator", () => {
+	const doc = () =>
+		makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [
+					makeClip({ id: "clip_a", sourceStartSec: 0, sourceEndSec: 10, timelineEndSec: 10 }),
+					makeClip({
+						id: "clip_b",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 10,
+						timelineEndSec: 20,
+					}),
+				],
+			},
+			zoomRanges: [
+				makeZoom({
+					id: "z_in",
+					clipId: "clip_a",
+					sourceStartSec: 2,
+					sourceEndSec: 3,
+					startMs: 2000,
+					endMs: 3000,
+				}),
+				makeZoom({
+					id: "z_out",
+					clipId: "clip_a",
+					sourceStartSec: 6,
+					sourceEndSec: 8,
+					startMs: 6000,
+					endMs: 8000,
+				}),
+				makeZoom({
+					id: "z_after",
+					clipId: "clip_b",
+					sourceStartSec: 2,
+					sourceEndSec: 4,
+					startMs: 12000,
+					endMs: 14000,
+				}),
+			] as unknown as AxcutDocument["zoomRanges"],
+		});
+
+	it("recomputes the clip width from the new source window and reflows downstream", () => {
+		const next = setClipSourceRange(doc(), "clip_a", 0, 4);
+		expect(next.timeline.clips[0]).toMatchObject({ timelineStartSec: 0, timelineEndSec: 4 });
+		// clip_b reflows to start where the trimmed clip now ends.
+		expect(next.timeline.clips[1]).toMatchObject({ timelineStartSec: 4, timelineEndSec: 14 });
+	});
+
+	it("clamps/drops the trimmed clip's pills and refreshes the reflowed clip's ms cache", () => {
+		const next = setClipSourceRange(doc(), "clip_a", 0, 4);
+		const byId = Object.fromEntries(next.zoomRanges.map((z) => [z.id, z]));
+		// z_in survives inside [0,4]; z_out sat past the new 4s end → gone.
+		expect(Object.keys(byId).sort()).toEqual(["z_after", "z_in"]);
+		expect(byId.z_in).toMatchObject({ startMs: 2000, endMs: 3000 });
+		// clip_b moved from tl 10 to tl 4, so z_after's derived ms drops by 6s.
+		expect(byId.z_after).toMatchObject({ startMs: 6000, endMs: 8000 });
+	});
+
+	it("orders reversed bounds, clamps negatives, and no-ops an unknown clip", () => {
+		const reversed = setClipSourceRange(doc(), "clip_a", 8, -3);
+		expect(reversed.timeline.clips[0]).toMatchObject({ sourceStartSec: 0, sourceEndSec: 8 });
+		const untouched = setClipSourceRange(doc(), "clip_missing", 0, 2);
+		expect(untouched.timeline.clips.map((c) => c.id)).toEqual(["clip_a", "clip_b"]);
+		expect(untouched.timeline.clips[0]).toMatchObject({ sourceEndSec: 10, timelineEndSec: 10 });
+	});
+
+	it("does not bump preview.revision (the caller owns that)", () => {
+		const before = doc();
+		const next = setClipSourceRange(before, "clip_a", 0, 4);
+		expect(next.preview.revision).toBe(before.preview.revision);
 	});
 });

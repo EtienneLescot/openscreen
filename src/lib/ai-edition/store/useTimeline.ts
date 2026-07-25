@@ -13,6 +13,7 @@ import {
 	PLACEHOLDER_DURATION_SEC,
 	rederiveRegionMs,
 	resequenceClips,
+	setClipSourceRange,
 } from "../document/timeline";
 import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
 import { probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
@@ -871,25 +872,12 @@ export function useTimeline() {
 	// effective duration, so every clip is resequenced back-to-back afterward —
 	// same invariant as insertClipAt/moveClip/removeClip — instead of leaving
 	// downstream clips at their old timeline positions (which would overlap).
+	// The whole recipe (resequence width + clamp/rederive pills) lives in the one
+	// pure `setClipSourceRange`, shared with the op dispatcher and the LLM tool.
 	const updateClipSourceRange = useCallback(
 		async (clipId: string, sourceStartSec: number, sourceEndSec: number) => {
 			if (!document) return;
-			const clamp = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
-			const s = clamp(sourceStartSec);
-			const e = clamp(sourceEndSec);
-			const oldClips = document.timeline.clips;
-			const arr = oldClips.map((c) =>
-				c.id === clipId
-					? { ...c, sourceStartSec: Math.min(s, e), sourceEndSec: Math.max(s, e) }
-					: c,
-			);
-			const newClips = resequenceClips(arr);
-			const next: AxcutDocument = {
-				...document,
-				timeline: { ...document.timeline, clips: newClips },
-			};
-			const finalDoc = rederiveRegionMs(next, newClips);
-			await saveDocument(finalDoc);
+			await saveDocument(setClipSourceRange(document, clipId, sourceStartSec, sourceEndSec));
 		},
 		[document, saveDocument],
 	);
