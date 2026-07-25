@@ -233,13 +233,13 @@ pub fn arrow_segments_viewbox(direction: &str) -> [[f32; 4]; 3] {
         "up" => [[50.0, 20.0, 50.0, 80.0], [50.0, 20.0, 35.0, 35.0], [50.0, 20.0, 65.0, 35.0]],
         "down" => [[50.0, 20.0, 50.0, 80.0], [50.0, 80.0, 35.0, 65.0], [50.0, 80.0, 65.0, 65.0]],
         "left" => [[80.0, 50.0, 20.0, 50.0], [20.0, 50.0, 35.0, 35.0], [20.0, 50.0, 35.0, 65.0]],
-        "up-right" => [[25.0, 75.0, 75.0, 25.0], [75.0, 25.0, 60.0, 30.0], [75.0, 25.0, 70.0, 40.0]],
-        "up-left" => [[75.0, 75.0, 25.0, 25.0], [25.0, 25.0, 40.0, 30.0], [25.0, 25.0, 30.0, 40.0]],
+        "up-right" => [[25.0, 75.0, 75.0, 25.0], [75.0, 25.0, 54.9, 31.7], [75.0, 25.0, 68.3, 45.1]],
+        "up-left" => [[75.0, 75.0, 25.0, 25.0], [25.0, 25.0, 45.1, 31.7], [25.0, 25.0, 31.7, 45.1]],
         "down-right" => {
-            [[25.0, 25.0, 75.0, 75.0], [75.0, 75.0, 70.0, 60.0], [75.0, 75.0, 60.0, 70.0]]
+            [[25.0, 25.0, 75.0, 75.0], [75.0, 75.0, 68.3, 54.9], [75.0, 75.0, 54.9, 68.3]]
         }
         "down-left" => {
-            [[75.0, 25.0, 25.0, 75.0], [25.0, 75.0, 30.0, 60.0], [25.0, 75.0, 40.0, 70.0]]
+            [[75.0, 25.0, 25.0, 75.0], [25.0, 75.0, 31.7, 54.9], [25.0, 75.0, 45.1, 68.3]]
         }
         // "right" et tout ce qui n'est pas reconnu — même défaut que le schéma côté app.
         _ => [[20.0, 50.0, 80.0, 50.0], [80.0, 50.0, 65.0, 35.0], [80.0, 50.0, 65.0, 65.0]],
@@ -589,6 +589,24 @@ mod zoom_focus_tests {
 #[cfg(test)]
 mod arrow_tests {
     use super::*;
+
+    #[test]
+    fn a_diagonal_head_is_as_large_as_a_cardinal_one() {
+        // Les barbes diagonales faisaient 15,8 unités contre 21,2 pour les cardinales : une
+        // flèche en diagonale avait une tête ~25 % plus petite que sa voisine horizontale, ce
+        // qui se lisait comme une déformation. Ce test interdit la divergence de revenir.
+        let barb_len = |seg: [f32; 4]| ((seg[2] - seg[0]).powi(2) + (seg[3] - seg[1]).powi(2)).sqrt();
+        let cardinal = barb_len(arrow_segments_viewbox("up")[1]);
+        for dir in ["up-right", "up-left", "down-right", "down-left"] {
+            for barb in 1..=2 {
+                let len = barb_len(arrow_segments_viewbox(dir)[barb]);
+                assert!(
+                    (len - cardinal).abs() < 0.2,
+                    "{dir} barbe {barb} = {len:.2}, cardinale = {cardinal:.2}"
+                );
+            }
+        }
+    }
 
     #[test]
     fn the_geometry_is_the_svg_geometry_verbatim() {
