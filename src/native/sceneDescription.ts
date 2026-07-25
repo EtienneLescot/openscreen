@@ -17,6 +17,7 @@
 
 import type { CameraFullscreenRegion, SpeedRegion } from "@/components/video-editor/types";
 import { DEFAULT_CROP_REGION } from "@/components/video-editor/types";
+import { annotationFontSizeFraction } from "@/lib/ai-edition/annotationScale";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
 import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
@@ -115,14 +116,11 @@ export interface SceneAnnotation {
 		content: string;
 		color: string;
 		backgroundColor: string;
-		/** ATTENTION — this is the raw authored value, in CSS pixels of whatever size the
-		 *  preview happened to be, because that is how the overlay applies it today
-		 *  (`fontSize: \`${style.fontSize}px\``). It is therefore NOT resolution-independent,
-		 *  unlike `x`/`y`/`w`/`h`. Rendering it verbatim at output resolution would give text
-		 *  roughly half the expected size on a 1080p export previewed in a ~960px-wide panel.
-		 *  Resolving that needs a convention shared with the preview, so it is deliberately left
-		 *  open until the text pass lands rather than guessed at here. */
-		fontSizePx: number;
+		/** Font size as a FRACTION of the screen rect's height, like everything else in this
+		 *  struct — multiply by the rect's height in output pixels. See `annotationScale.ts`:
+		 *  the preview applies the identical product against its own box, so preview and render
+		 *  agree at any resolution. */
+		fontSizeRel: number;
 		fontFamily: string;
 		fontWeight: "normal" | "bold";
 		fontStyle: "normal" | "italic";
@@ -713,7 +711,7 @@ export function buildSceneDescription(
 							content: region.textContent ?? region.content ?? "",
 							color: style.color,
 							backgroundColor: style.backgroundColor,
-							fontSizePx: style.fontSize,
+							fontSizeRel: annotationFontSizeFraction(style.fontSize),
 							fontFamily: style.fontFamily,
 							fontWeight: style.fontWeight,
 							fontStyle: style.fontStyle,

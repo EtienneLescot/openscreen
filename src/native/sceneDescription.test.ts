@@ -1264,7 +1264,8 @@ describe("buildSceneDescription.annotations", () => {
 			content: "live",
 			color: "#ffffff",
 			backgroundColor: "transparent",
-			fontSizePx: 32,
+			// 32 px authored against ANNOTATION_REFERENCE_HEIGHT (1080) -> fraction of the rect.
+			fontSizeRel: 32 / 1080,
 			textAlign: "left",
 			animation: "fade",
 		});

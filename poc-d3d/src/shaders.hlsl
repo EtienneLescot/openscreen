@@ -61,6 +61,16 @@ float3 sample_yuv(float2 uv)
     return yuv709_limited(y, cbcr);
 }
 
+// SDF segment à bouts ronds — la primitive des flèches d'annotation, dont les tracés SVG sont
+// trois segments `stroke-linecap="round"` (cf. ArrowSvgs.tsx).
+float sd_segment(float2 p, float2 a, float2 b)
+{
+    float2 pa = p - a;
+    float2 ba = b - a;
+    float h = saturate(dot(pa, ba) / max(dot(ba, ba), 1e-6));
+    return length(pa - ba * h);
+}
+
 // SDF rectangle à coins arrondis (§7 E2) : <0 dedans.
 float sd_round_rect(float2 p, float2 halfsz, float r)
 {
@@ -76,6 +86,23 @@ float4 ps_main(VSOut i) : SV_Target
     // de perspective-correct exact, mais indiscernable à l'œil pour un tilt de 10-22°) et
     // échantillonne la vidéo à l'UV correspondant, sinon transparent (hors du quad projeté).
     // fx.xy/fx.zw = coins TL/TR (px locaux, 0..quad_px) ; src_prev.xy/.zw = coins BR/BL.
+    // mode 9 : annotation « figure » — une flèche. Parité EXACTE avec `ArrowSvgs.tsx`, dont
+    // chaque direction est un tracé de trois segments à bouts ronds dans un viewBox 0..100 :
+    // une hampe et deux barbes. Trois `sd_segment` et un `min` reproduisent donc la forme telle
+    // quelle, pas une approximation. Les extrémités arrivent déjà converties en px locaux du
+    // quad (échelle uniforme centrée, comme le `preserveAspectRatio` par défaut du SVG).
+    // fx = hampe (a.xy, b.xy), src_prev = barbe 1, dst_prev = barbe 2 ; mb.y = demi-épaisseur px.
+    if (mode > 8.5)
+    {
+        float d = sd_segment(i.local, fx.xy, fx.zw);
+        d = min(d, sd_segment(i.local, src_prev.xy, src_prev.zw));
+        d = min(d, sd_segment(i.local, dst_prev.xy, dst_prev.zw));
+        // Couverture sur ~1 px : le trait reste net sans crénelage, et une flèche fine ne
+        // disparaît pas quand la demi-épaisseur descend sous le pixel.
+        float a = saturate(mb.y - d + 0.5) * color.a;
+        return float4(color.rgb * a, a); // prémultiplié, comme tous les autres modes
+    }
+
     if (mode > 7.5)
     {
         float2 c00 = fx.xy, c10 = fx.zw, c11 = src_prev.xy, c01 = src_prev.zw;

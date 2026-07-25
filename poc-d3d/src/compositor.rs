@@ -1969,7 +1969,64 @@ impl Compositor {
                 &wuv,
             );
         }
+
+        // --- annotations : calque le plus haut, comme dans le DOM de la preview (le calque y est
+        // monté après la vidéo). Ancrées sur `s_dst`, le rect ÉCRAN — c'est le conteneur que reçoit
+        // l'overlay web (`layout.screenRect`) — et volontairement pas sur le rect de sortie, ni
+        // sujettes au crop de zoom : dans la preview l'overlay est frère de l'élément qui porte la
+        // transform, donc les annotations restent en place pendant que le contenu zoome dessous.
+        // `source_t`, la même base de temps que les zoom/speed regions : le temps SOURCE du clip,
+        // pas le compteur de frames. C'est ce qui garde une annotation alignée sur l'image quand
+        // une speed region répète ou saute des frames.
+        self.draw_annotations(scene_ref.as_ref(), source_t, s_dst);
         Ok(())
+    }
+
+    /// Dessine les annotations visibles à `t`. `screen_dst` = rect écran en fractions de sortie.
+    ///
+    /// Seule la « figure » (flèche) est rendue à ce stade ; texte, image et flou suivront. Les
+    /// types non gérés sont ignorés silencieusement plutôt que dessinés de travers : mieux vaut
+    /// l'absence connue qu'un placeholder qui ferait croire à un bug de style.
+    unsafe fn draw_annotations(&self, scene: Option<&Scene>, t: f32, screen_dst: [f32; 4]) {
+        let Some(scene) = scene else { return };
+        if scene.annotations.is_empty() {
+            return;
+        }
+        // La liste arrive déjà triée par zIndex croissant côté app, donc l'ordre d'itération EST
+        // l'ordre de peinture — pas de tri par frame.
+        for annotation in &scene.annotations {
+            if t < annotation.start_sec as f32 || t >= annotation.end_sec as f32 {
+                continue;
+            }
+            let Some(figure) = annotation.figure.as_ref() else { continue };
+            if annotation.kind != "figure" {
+                continue;
+            }
+            let dst = [
+                screen_dst[0] + annotation.x * screen_dst[2],
+                screen_dst[1] + annotation.y * screen_dst[3],
+                annotation.w * screen_dst[2],
+                annotation.h * screen_dst[3],
+            ];
+            let quad_px = [dst[2] * self.rw(), dst[3] * self.rh()];
+            if quad_px[0] <= 0.0 || quad_px[1] <= 0.0 {
+                continue;
+            }
+            let (segments, half_stroke) =
+                crate::regions::arrow_local_geometry(&figure.direction, figure.stroke_width, quad_px);
+            let rgba = parse_hex(&figure.color).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+            self.draw_solid(&LayerCB {
+                dst,
+                quad_px,
+                mode: 9.0,
+                color: rgba,
+                fx: segments[0],
+                src_prev: segments[1],
+                dst_prev: segments[2],
+                mb: [1.0, half_stroke, 0.0, 0.0],
+                ..Default::default()
+            });
+        }
     }
 
     /// Flou de mouvement (§8) : moyenne de `n` sous-frames aux temps intermédiaires

@@ -217,10 +217,11 @@ pub struct SceneAnnotationText {
     /// remplissage.
     pub color: String,
     pub background_color: String,
-    /// ATTENTION : valeur brute en px CSS de la preview, donc **pas** indépendante de la
-    /// résolution, contrairement au rect. Voir le commentaire côté TS (`SceneAnnotation.text`) :
-    /// la convention de mise à l'échelle reste à trancher avec la passe texte.
-    pub font_size_px: f32,
+    /// Taille de police en **fraction de la hauteur du rect écran**, comme tout le reste de ce
+    /// contrat : à multiplier par la hauteur du rect en pixels de sortie. La preview applique le
+    /// même produit contre sa propre boîte (`annotationScale.ts`), donc preview et rendu
+    /// s'accordent à n'importe quelle résolution.
+    pub font_size_rel: f32,
     pub font_family: String,
     pub font_weight: String,
     pub font_style: String,
@@ -543,7 +544,7 @@ mod annotation_tests {
     #[test]
     fn parses_a_text_annotation_with_its_style() {
         let json = scene_json(
-            r##"[{"id":"ann1","clipIndex":0,"startSec":1.0,"endSec":3.0,"kind":"text","x":0.25,"y":0.5,"w":0.4,"h":0.1,"zIndex":2,"text":{"content":"Bonjour","color":"#ffffff","backgroundColor":"transparent","fontSizePx":32,"fontFamily":"Inter","fontWeight":"bold","fontStyle":"normal","textDecoration":"none","textAlign":"center","animation":"fade"}}]"##,
+            r##"[{"id":"ann1","clipIndex":0,"startSec":1.0,"endSec":3.0,"kind":"text","x":0.25,"y":0.5,"w":0.4,"h":0.1,"zIndex":2,"text":{"content":"Bonjour","color":"#ffffff","backgroundColor":"transparent","fontSizeRel":0.0296,"fontFamily":"Inter","fontWeight":"bold","fontStyle":"normal","textDecoration":"none","textAlign":"center","animation":"fade"}}]"##,
         );
         let scene = Scene::from_json(&json).expect("parse texte");
         let ann = &scene.annotations[0];
