@@ -722,7 +722,11 @@ export function buildSceneDescription(
 					};
 				}
 				if (region.type === "image") {
-					return { ...base, imagePath: region.imageContent ?? region.content ?? "" };
+					// `content` first: that is the field the live overlay reads (it checks
+					// `content.startsWith("data:image")`), `imageContent` being the parallel slot
+					// older documents used. Reading them the other way round would render an image
+					// the preview isn't showing.
+					return { ...base, imagePath: region.content || region.imageContent || "" };
 				}
 				if (region.type === "figure") {
 					const figure = region.figureData;
