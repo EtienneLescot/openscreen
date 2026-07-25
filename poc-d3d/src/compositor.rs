@@ -358,6 +358,12 @@ const SCREEN_SHADOW_SPREAD_FRAC: f32 = 40.0 / SHADOW_TUNING_REF_PX;
 const SCREEN_SHADOW_OFFSET_FRAC: f32 = 16.0 / SHADOW_TUNING_REF_PX;
 const WEBCAM_SHADOW_SPREAD_FRAC: f32 = 32.0 / SHADOW_TUNING_REF_PX;
 const WEBCAM_SHADOW_OFFSET_FRAC: f32 = 12.0 / SHADOW_TUNING_REF_PX;
+/// Opacité FIXE de l'ombre portée de la caméra (layout PiP uniquement). Contrairement à
+/// l'ombre de l'écran — dont l'opacité est pilotée par le slider Shadow (`shadow_scale`) —
+/// l'ombre de la caméra est une ombre légère NON paramétrable : même valeur quelle que soit
+/// la position du slider. Parité avec le preset PiP côté web (`compositeLayout.ts`,
+/// `rgba(0,0,0,0.35)`), dont l'ombre est elle aussi un forfait fixe et PiP-only.
+const WEBCAM_SHADOW_OPACITY: f32 = 0.35;
 /// Taille de base du curseur, même convention (34 px réglés contre un cadre 1080).
 const CURSOR_BASE_SIZE_FRAC: f32 = 34.0 / SHADOW_TUNING_REF_PX;
 
@@ -1925,10 +1931,18 @@ impl Compositor {
         // miroir = échanger les bornes u du rect source (flip horizontal).
         let (u0, u1) = if lp.webcam_mirror { (su1, su0) } else { (su0, su1) };
         if lp.has_webcam {
-            // L'ombre portée appartient à la bulle flottante : elle se retire avec elle
-            // (`shape_fade`), pour qu'au plein écran plus rien n'encadre la caméra.
-            if cfg.shadow && shape_fade > 0.0 {
-                let strength = 0.5 * lp.shadow_scale * shape_fade;
+            // L'ombre portée appartient à la bulle flottante PiP : elle se retire avec elle
+            // (`shape_fade`), pour qu'au plein écran plus rien n'encadre la caméra. C'est une
+            // ombre légère NON paramétrable — indépendante du slider Shadow, qui ne pilote plus
+            // que l'écran (`WEBCAM_SHADOW_OPACITY`, pas `shadow_scale`) — et propre au PiP : les
+            // blocs side-by-side / top-bottom soudent la caméra à l'écran et n'en portent aucune
+            // (parité `preset.shadow` web, `null` hors PiP dans `compositeLayout.ts`).
+            let webcam_is_block = matches!(
+                scene_preset.as_deref(),
+                Some("dual-frame") | Some("vertical-stack"),
+            );
+            if cfg.shadow && !webcam_is_block && shape_fade > 0.0 {
+                let strength = WEBCAM_SHADOW_OPACITY * shape_fade;
                 self.draw_shadow(
                     w_dst,
                     w_px,

@@ -176,7 +176,7 @@ describe("applyTimelineOperation.restore_full_timeline", () => {
 });
 
 describe("applyTimelineOperation.update_clip_range", () => {
-	it("trims the named clip and reseats the timeline", () => {
+	it("trims the named clip and reseats the timeline to the new source length", () => {
 		const result = applyTimelineOperation(makeDoc(), {
 			type: "update_clip_range",
 			clipId: "clip_1",
@@ -186,5 +186,57 @@ describe("applyTimelineOperation.update_clip_range", () => {
 		const clip = result.document.timeline.clips.find((c) => c.id === "clip_1");
 		expect(clip?.sourceStartSec).toBe(10);
 		expect(clip?.sourceEndSec).toBe(25);
+		// The clip's width follows its 15s source window, not the stale 60s.
+		expect(clip?.timelineStartSec).toBe(0);
+		expect(clip?.timelineEndSec).toBe(15);
+	});
+
+	it("clamps and drops anchored pills against the narrowed window (façade parity with the modal)", () => {
+		const doc = makeDoc();
+		doc.zoomRanges = [
+			{
+				id: "z_keep",
+				startMs: 12000,
+				endMs: 14000,
+				clipId: "clip_1",
+				sourceStartSec: 12,
+				sourceEndSec: 14,
+				depth: 3,
+				focus: { cx: 0.5, cy: 0.5 },
+			},
+			{
+				id: "z_edge",
+				startMs: 20000,
+				endMs: 30000,
+				clipId: "clip_1",
+				sourceStartSec: 20,
+				sourceEndSec: 30,
+				depth: 3,
+				focus: { cx: 0.5, cy: 0.5 },
+			},
+			{
+				id: "z_drop",
+				startMs: 40000,
+				endMs: 45000,
+				clipId: "clip_1",
+				sourceStartSec: 40,
+				sourceEndSec: 45,
+				depth: 3,
+				focus: { cx: 0.5, cy: 0.5 },
+			},
+		] as unknown as AxcutDocument["zoomRanges"];
+		const result = applyTimelineOperation(doc, {
+			type: "update_clip_range",
+			clipId: "clip_1",
+			sourceStartSec: 10,
+			sourceEndSec: 25,
+		});
+		const zooms = result.document.zoomRanges;
+		expect(zooms.map((z) => z.id)).toEqual(["z_keep", "z_edge"]);
+		// z_edge (20-30) survives only where it overlaps the [10,25] window → 20-25.
+		expect(zooms.find((z) => z.id === "z_edge")).toMatchObject({
+			sourceStartSec: 20,
+			sourceEndSec: 25,
+		});
 	});
 });

@@ -257,37 +257,57 @@ function mapAllRegionCollections(
 	};
 }
 
+/** A clamped fragment this short has no surviving content — treat it as fully
+ *  trimmed away and drop it (also absorbs boundary rounding). Matches the coalescer's
+ *  touch epsilon (`coalesceByIdentity`). */
+const REGION_WINDOW_EPSILON_SEC = 0.001;
+
 /**
- * Re-derive the transition `startMs`/`endMs` cache of every clip-anchored modifier
- * from its anchor + the given clip layout.
+ * Reconcile every clip-anchored modifier with the given clip layout: clamp each
+ * fragment to its clip's CURRENT kept source window, drop the ones with nothing left,
+ * and refresh the transition `startMs`/`endMs` cache from the (possibly clamped) anchor.
  *
- * Structural ops that PRESERVE clip identity (move / duplicate / trim) leave the
- * anchors valid — a fragment travels with its clip by `clipId` — so nothing is
- * reprojected; only the derived cache moves. That is what let the old
- * `reprojectDocumentRegions` / `reprojectRegionsForReorder` machinery go away.
- * A fragment whose anchor clip no longer exists is dropped (its content is gone, and
- * the display coalescer drops it too). Not-yet-anchored regions pass through
- * untouched. Guards the empty-clip case so a transient wipe can't delete everything.
+ * Structural ops that PRESERVE a clip's source window (move / duplicate / reorder) leave
+ * the anchors inside their window, so the clamp is a no-op and only the derived cache
+ * moves — that is what let the old `reprojectDocumentRegions` / `reprojectRegionsForReorder`
+ * machinery go away. A source-range EDIT (the clip's Edit modal / the agent's
+ * `update_clip_range`) narrows the window: a fragment now beyond it has lost its content,
+ * so it is shortened to the surviving overlap or dropped when it falls entirely outside —
+ * the same intersection the export/native path (`projectRegionsToSource`) already applies,
+ * now folded in here so the STORED document and the timeline pills match it and no façade
+ * can forget it. A fragment whose anchor clip no longer exists is dropped (content gone).
+ * A not-yet-probed clip (no real source window) is left un-clamped so a transient
+ * zero-width window can't nuke its fragments. Not-yet-anchored regions pass through
+ * untouched; the empty-clip case is guarded so a transient wipe can't delete everything.
  */
 export function rederiveRegionMs(document: AxcutDocument, clips: AxcutClip[]): AxcutDocument {
 	if (clips.length === 0) return document;
+	const clipById = new Map(clips.map((c) => [c.id, c]));
 	return mapAllRegionCollections(document, (regions) =>
 		regions.flatMap((region) => {
 			if (!isAnchored(region)) {
 				return [region];
 			}
+			const clip = clipById.get(region.clipId);
+			if (!clip) return [];
+			let { sourceStartSec, sourceEndSec } = region;
+			// Only clamp against a real, probed window — an unprobed clip has
+			// `sourceEndSec` at/below `sourceStartSec` and must not shave its fragments.
+			if (clip.sourceEndSec !== undefined && clip.sourceEndSec > clip.sourceStartSec) {
+				sourceStartSec = Math.max(sourceStartSec, clip.sourceStartSec);
+				sourceEndSec = Math.min(sourceEndSec, clip.sourceEndSec);
+				if (sourceEndSec - sourceStartSec <= REGION_WINDOW_EPSILON_SEC) return [];
+			}
 			const span = anchoredToRawSpanSec(
-				{
-					clipId: region.clipId,
-					sourceStartSec: region.sourceStartSec,
-					sourceEndSec: region.sourceEndSec,
-				},
+				{ clipId: region.clipId, sourceStartSec, sourceEndSec },
 				clips,
 			);
 			if (!span) return [];
 			return [
 				{
 					...region,
+					sourceStartSec,
+					sourceEndSec,
 					startMs: Math.round(span.startSec * 1000),
 					endMs: Math.round(span.endSec * 1000),
 				},
@@ -512,6 +532,42 @@ export function duplicateClip(
 		},
 	};
 	return rederiveRegionMs(updatedDoc, newClips);
+}
+
+/**
+ * The single mutator for "narrow/extend a clip's own source in/out" — the edit the
+ * clip's Edit modal, the renderer op dispatcher, and the LLM's `setClipRange` tool all
+ * perform. Extracted here (like `moveClip` / `duplicateClip`) so the recipe lives in one
+ * place instead of being re-derived per façade, which is what let the three drift apart
+ * (stale width, un-clamped pills). Pure; does NOT touch `preview.revision` — a caller that
+ * needs a preview refresh bumps it itself, so this stays a plain document→document transform.
+ *
+ * Recipe: clamp + order the range, zero the clip's timeline extent so `resequenceClips`
+ * recomputes its RAW length from the new source window (a raw clip's timeline length equals
+ * its source length), lay everything back-to-back, then `rederiveRegionMs` clamps every
+ * anchored pill to the clip's kept window (dropping what the trim removed) and refreshes the
+ * derived ms of the clips that reflowed. An unknown `clipId` is a no-op.
+ */
+export function setClipSourceRange(
+	document: AxcutDocument,
+	clipId: string,
+	sourceStartSec: number,
+	sourceEndSec: number,
+): AxcutDocument {
+	const clamp = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
+	const lo = Math.min(clamp(sourceStartSec), clamp(sourceEndSec));
+	const hi = Math.max(clamp(sourceStartSec), clamp(sourceEndSec));
+	const arr = document.timeline.clips.map((c) =>
+		c.id === clipId
+			? { ...c, sourceStartSec: lo, sourceEndSec: hi, timelineStartSec: 0, timelineEndSec: 0 }
+			: c,
+	);
+	const newClips = resequenceClips(arr);
+	const next: AxcutDocument = {
+		...document,
+		timeline: { ...document.timeline, clips: newClips },
+	};
+	return rederiveRegionMs(next, newClips);
 }
 
 export function restoreFullTimeline(document: AxcutDocument): AxcutDocument {
