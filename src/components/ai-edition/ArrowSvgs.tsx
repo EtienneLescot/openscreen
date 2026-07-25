@@ -1,6 +1,11 @@
-// Port of `src/components/video-editor/ArrowSvgs.tsx` verbatim — inline SVG
-// arrows for 8 directions (pure paths, not icon fonts, so export can
-// replicate them identically to the live preview).
+// Inline SVG arrows for 8 directions (pure paths, not icon fonts, so the native
+// compositor replicates them identically — cf. `arrow_segments_viewbox` in regions.rs,
+// which carries the same numbers and is pinned to them by a test).
+//
+// Les barbes des quatre DIAGONALES ont été allongées pour égaler celles des cardinales
+// (21,2 unités de viewBox contre 15,8 auparavant). À l'origine, une flèche diagonale avait
+// une tête ~25 % plus petite que sa voisine horizontale, ce qui se lisait comme une
+// déformation — d'autant plus qu'avec un trait épais la tête se fondait dans la hampe.
 
 import type { AxcutAnnotationRegion } from "@/lib/ai-edition/schema";
 
@@ -105,7 +110,7 @@ export function ArrowUpRight({ color, strokeWidth, className }: ArrowSvgProps) {
 				</filter>
 			</defs>
 			<path
-				d="M 25 75 L 75 25 M 75 25 L 60 30 M 75 25 L 70 40"
+				d="M 25 75 L 75 25 M 75 25 L 54.9 31.7 M 75 25 L 68.3 45.1"
 				stroke={color}
 				strokeWidth={strokeWidth}
 				strokeLinecap="round"
@@ -126,7 +131,7 @@ export function ArrowUpLeft({ color, strokeWidth, className }: ArrowSvgProps) {
 				</filter>
 			</defs>
 			<path
-				d="M 75 75 L 25 25 M 25 25 L 40 30 M 25 25 L 30 40"
+				d="M 75 75 L 25 25 M 25 25 L 45.1 31.7 M 25 25 L 31.7 45.1"
 				stroke={color}
 				strokeWidth={strokeWidth}
 				strokeLinecap="round"
@@ -147,7 +152,7 @@ export function ArrowDownRight({ color, strokeWidth, className }: ArrowSvgProps)
 				</filter>
 			</defs>
 			<path
-				d="M 25 25 L 75 75 M 75 75 L 70 60 M 75 75 L 60 70"
+				d="M 25 25 L 75 75 M 75 75 L 68.3 54.9 M 75 75 L 54.9 68.3"
 				stroke={color}
 				strokeWidth={strokeWidth}
 				strokeLinecap="round"
@@ -168,7 +173,7 @@ export function ArrowDownLeft({ color, strokeWidth, className }: ArrowSvgProps) 
 				</filter>
 			</defs>
 			<path
-				d="M 75 25 L 25 75 M 25 75 L 30 60 M 25 75 L 40 70"
+				d="M 75 25 L 25 75 M 25 75 L 31.7 54.9 M 25 75 L 45.1 68.3"
 				stroke={color}
 				strokeWidth={strokeWidth}
 				strokeLinecap="round"

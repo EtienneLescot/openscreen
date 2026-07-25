@@ -1817,7 +1817,12 @@ impl Compositor {
         let [su0_p, sv0_p, su1_p, sv1_p] =
             cover(screen_source_rect(u_max, v_max, active_crop, pp.zoom, p.focus));
         let (hu_p, hv_p) = ((su1_p - su0_p) * 0.5, (sv1_p - sv0_p) * 0.5);
-        if cfg.shadow {
+        // L'ombre est dessinée à partir du rect NON pivoté. Tant que l'écran est droit, c'est
+        // exactement sa silhouette ; incliné en 3D, ce n'en est plus une — on voyait alors un
+        // rectangle arrondi bien droit derrière un écran penché, détaché de lui. Une ombre fausse
+        // renseigne moins que pas d'ombre : on la supprime pendant le tilt, en attendant une
+        // silhouette qui suive réellement le plan projeté.
+        if cfg.shadow && crate::regions::is_identity_rotation(zoom_rotation) {
             self.draw_shadow(
                 s_dst,
                 s_px,
