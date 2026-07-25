@@ -1,6 +1,7 @@
 import {
 	ChevronDown,
 	Clock,
+	Crosshair,
 	Loader2,
 	Maximize2,
 	MessageSquare,
@@ -1092,6 +1093,20 @@ export function V4Timeline({
 							onClick={() => void tl.addZoom()}
 						>
 							<ZoomIn size={15} />
+						</button>
+						<button
+							type="button"
+							className={styles.tlToolBtn}
+						aria-pressed={settings.autoFocusAll}
+							title={t(
+								settings.autoFocusAll ? "buttons.autoFocusAllOn" : "buttons.autoFocusAllOff",
+							)}
+							aria-label={t(
+								settings.autoFocusAll ? "buttons.autoFocusAllOn" : "buttons.autoFocusAllOff",
+							)}
+							onClick={() => void setSettings({ autoFocusAll: !settings.autoFocusAll })}
+						>
+							<Crosshair size={15} />
 						</button>
 						<button
 							type="button"

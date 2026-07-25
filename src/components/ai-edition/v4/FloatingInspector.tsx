@@ -17,13 +17,10 @@ import type { ComponentProps } from "react";
 import { useState } from "react";
 import { toast } from "sonner";
 import { parseCustomPlaybackSpeedInput } from "@/components/video-editor/customPlaybackSpeed";
-import {
-	MAX_NATIVE_PLAYBACK_RATE,
-	MAX_PLAYBACK_SPEED,
-	SPEED_OPTIONS,
-} from "@/components/video-editor/types";
+import { MAX_PLAYBACK_SPEED, SPEED_OPTIONS } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
+import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { coalescedTrimGroups } from "@/lib/ai-edition/timeline/trim-mapping";
 import { formatSeconds } from "@/lib/ai-edition/timeline/virtual-preview";
@@ -355,11 +352,10 @@ export function SpeedControl({
 					style={{ ...selectStyle, width: 84, textAlign: "right" }}
 				/>,
 			)}
-			{region.speed > MAX_NATIVE_PLAYBACK_RATE ? (
-				<p style={{ margin: 0, font: "400 11px/1.45 var(--font-sans)", color: "var(--fg-2)" }}>
-					{ts("speed.previewFrameSteppingHint", { native: MAX_NATIVE_PLAYBACK_RATE })}
-				</p>
-			) : null}
+			{/* No hint past 16×. There is nothing for the user to do about it and nothing that
+			    changes in what they get: the export renders the true speed either way. The note
+			    that used to sit here described the legacy editor's frame-stepped, silent preview,
+			    which is not this one. */}
 		</>
 	);
 }
@@ -369,6 +365,10 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 	const tt = useScopedT("timeline");
 	const tc = useScopedT("common");
 	const te = useScopedT("editor");
+	// Read here rather than threading it through: the zoom pane is the only consumer, and the
+	// toggle that writes it lives in the timeline toolbar, not on this component's path.
+	const { settings } = useEditorSettings();
+	const autoFocusAll = settings.autoFocusAll;
 	const selection = tl.selection;
 	if (!selection) return null;
 
@@ -422,23 +422,34 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					)}
 					{paneRow(
 						ts("zoom.focusMode.title"),
+						// While the global toggle is on it OVERRIDES every region, so the control shows
+						// the effective mode ("auto") and goes read-only rather than lying about a
+						// per-region value that currently has no effect. The region's own `focusMode` is
+						// never written by the toggle — that is what makes each zoom snap back to its
+						// previous value the moment the toggle goes off.
 						<select
-							value={region.focusMode ?? "manual"}
+							value={autoFocusAll ? "auto" : (region.focusMode ?? "manual")}
+							disabled={autoFocusAll}
 							onChange={(e) =>
 								void tl.updateZoomFocusMode(region.id, e.target.value as "manual" | "auto")
 							}
-							style={selectStyle}
+							style={
+								autoFocusAll ? { ...selectStyle, opacity: 0.5, cursor: "not-allowed" } : selectStyle
+							}
 						>
 							<option value="manual">{ts("zoom.focusMode.manual")}</option>
 							<option value="auto">{ts("zoom.focusMode.auto")}</option>
 						</select>,
 					)}
-					{region.focusMode === "auto" ? (
-						// In auto the focus is resampled from cursor telemetry every frame, so there is
-						// no fixed point to reset and no gimbal on the canvas (ZoomFocusOverlay bows out
-						// for auto regions). Offering the reset button here would offer a no-op.
+					{autoFocusAll || region.focusMode === "auto" ? (
+						// Auto resamples the focus from cursor telemetry every frame, so there is no fixed
+						// point to reset and no gimbal on the canvas (ZoomFocusOverlay bows out) — the
+						// reset button would be a no-op. When the global toggle is what forced auto, say
+						// so, and say where to turn it off.
 						<p style={{ margin: 0, font: "400 11px/1.45 var(--font-sans)", color: "var(--fg-2)" }}>
-							{ts("zoom.focusMode.autoDescription")}
+							{ts(
+								autoFocusAll ? "zoom.focusMode.lockedDisclaimer" : "zoom.focusMode.autoDescription",
+							)}
 						</p>
 					) : (
 						<button
