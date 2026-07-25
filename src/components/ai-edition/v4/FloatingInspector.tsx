@@ -299,6 +299,37 @@ const BLUR_DEFAULTS = {
 	blockSize: 12,
 } as const;
 
+/**
+ * Patch à appliquer quand l'utilisateur change le type d'une annotation.
+ *
+ * `content` est un slot UNIQUE partagé par le texte et l'image : la zone de saisie y écrit, et le
+ * rendu d'image y lit une data URL. Changer de type sans déplacer la valeur déversait donc le
+ * base64 de l'image, souvent plusieurs mégaoctets, dans le champ texte. Chaque contenu est rangé
+ * dans son slot typé (`textContent` / `imageContent`) en sortant et restauré en entrant, si bien
+ * qu'un aller-retour entre deux types ne perd rien.
+ */
+function convertAnnotationKind(
+	region: AxcutAnnotationRegion,
+	next: AnnotationKind,
+): Partial<AxcutAnnotationRegion> {
+	if (region.type === next) return {};
+	const parked: Partial<AxcutAnnotationRegion> =
+		region.type === "text"
+			? { textContent: region.content ?? "" }
+			: region.type === "image"
+				? { imageContent: region.content ?? "" }
+				: {};
+	// Flèche et flou n'ont pas de contenu : on vide `content` plutôt que d'y laisser traîner le
+	// texte ou le base64 du type précédent.
+	const restored =
+		next === "text"
+			? (region.textContent ?? "")
+			: next === "image"
+				? (region.imageContent ?? "")
+				: "";
+	return { ...parked, type: next, content: restored };
+}
+
 const ZOOM_DEPTHS = [1, 2, 3, 4, 5, 6] as const;
 // The ladder the shared editor already ships (`SPEED_OPTIONS`), plus 1× so the select can
 // express "back to normal". It stops at 5×; the free field in `SpeedControl` is what reaches
@@ -557,9 +588,10 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 						<select
 							value={region.type}
 							onChange={(e) => {
-								tl.updateAnnotationLive(region.id, {
-									type: e.target.value as AnnotationKind,
-								});
+								tl.updateAnnotationLive(
+									region.id,
+									convertAnnotationKind(region, e.target.value as AnnotationKind),
+								);
 								void tl.commitAnnotationChange();
 							}}
 							style={selectStyle}
@@ -655,6 +687,23 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 								</select>,
 							)}
 							{paneRow(
+								ts("annotation.arrowColor"),
+								<input
+									type="color"
+									value={region.figureData?.color ?? "#34B27B"}
+									onChange={(e) => {
+										tl.updateAnnotationLive(region.id, {
+											figureData: {
+												...(region.figureData ?? { arrowDirection: "right", strokeWidth: 4 }),
+												color: e.target.value,
+											},
+										});
+										void tl.commitAnnotationChange();
+									}}
+									style={{ width: 34, height: 28, padding: 0, border: "none", background: "none" }}
+								/>,
+							)}
+							{paneRow(
 								ts("annotation.strokeWidth", { width: region.figureData?.strokeWidth ?? 4 }),
 								<input
 									type="range"
@@ -713,7 +762,15 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 								>
 									<option value="rectangle">{ts("annotation.blurShapeRectangle")}</option>
 									<option value="oval">{ts("annotation.blurShapeOval")}</option>
-									<option value="freehand">{ts("annotation.blurShapeFreehand")}</option>
+									{/* Le tracé libre n'est plus proposé à la création : sa saisie était cassée et
+									    le rendu ne couvrait que la boîte englobante. Un outil de confidentialité
+									    à moitié fiable vaut moins que pas d'outil, parce qu'on lui fait confiance.
+									    L'option reste visible pour une annotation qui l'utilise déjà, avec la
+									    phrase qui dit ce que le rendu en fait — plutôt que de la faire disparaître
+									    d'un projet existant. */}
+									{region.blurData?.shape === "freehand" ? (
+										<option value="freehand">{ts("annotation.blurShapeFreehand")}</option>
+									) : null}
 								</select>,
 							)}
 							{region.blurData?.shape === "freehand" ? (
@@ -734,8 +791,93 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					) : null}
 					{region.type === "text"
 						? paneRow(
+								ts("annotation.size"),
+								<input
+									type="number"
+									min={8}
+									max={200}
+									step={1}
+									// Le nombre saisi vaut « pixels à 1080 » (cf. annotationScale.ts) : preview et
+									// rendu le multiplient tous deux par la hauteur de leur boîte, donc ce champ
+									// veut dire la même chose des deux côtés.
+									value={region.style?.fontSize ?? 32}
+									onChange={(e) =>
+										tl.updateAnnotationLive(region.id, {
+											style: { ...region.style, fontSize: Number(e.target.value) },
+										})
+									}
+									onBlur={() => void tl.commitAnnotationChange()}
+									style={{ ...selectStyle, width: 84, textAlign: "right" }}
+								/>,
+							)
+						: null}
+					{region.type === "text"
+						? paneRow(
+								ts("annotation.background"),
+								<div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+									<input
+										type="color"
+										value={
+											region.style?.backgroundColor &&
+											region.style.backgroundColor !== "transparent"
+												? region.style.backgroundColor
+												: "#000000"
+										}
+										onChange={(e) => {
+											tl.updateAnnotationLive(region.id, {
+												style: { ...region.style, backgroundColor: e.target.value },
+											});
+											void tl.commitAnnotationChange();
+										}}
+										style={{
+											width: 34,
+											height: 28,
+											padding: 0,
+											border: "none",
+											background: "none",
+										}}
+									/>
+									<button
+										type="button"
+										onClick={() => {
+											tl.updateAnnotationLive(region.id, {
+												style: { ...region.style, backgroundColor: "transparent" },
+											});
+											void tl.commitAnnotationChange();
+										}}
+										style={{ ...selectStyle, cursor: "pointer" }}
+									>
+										{ts("annotation.clearBackground")}
+									</button>
+								</div>,
+							)
+						: null}
+					{region.type === "text"
+						? paneRow(
 								ts("annotation.color"),
-								<div style={{ display: "flex", gap: 6 }}>
+								// Sélecteur système plutôt que six pastilles : le texte d'une annotation doit
+								// pouvoir prendre n'importe quelle couleur, et une palette figée oblige à
+								// choisir parmi ce que quelqu'un d'autre a décidé. Les raccourcis restent à
+								// côté pour les teintes courantes.
+								<div style={{ display: "flex", alignItems: "center", gap: 6 }}>
+									<input
+										type="color"
+										aria-label={ts("annotation.colorWheel")}
+										value={region.style?.color ?? "#ffffff"}
+										onChange={(e) => {
+											tl.updateAnnotationLive(region.id, {
+												style: { ...region.style, color: e.target.value },
+											});
+											void tl.commitAnnotationChange();
+										}}
+										style={{
+											width: 34,
+											height: 28,
+											padding: 0,
+											border: "none",
+											background: "none",
+										}}
+									/>
 									{colors.map((c) => (
 										<button
 											key={c}
@@ -750,8 +892,8 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 												void tl.commitAnnotationChange();
 											}}
 											style={{
-												width: 22,
-												height: 22,
+												width: 18,
+												height: 18,
 												borderRadius: "50%",
 												background: c,
 												border:

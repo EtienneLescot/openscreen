@@ -164,7 +164,7 @@
 		"strokeWidth": "Largura do Traço: {{width}}px",
 		"arrowColor": "Cor da Seta",
 		"blurType": "Tipo de Desfoque",
-		"blurTypeBlur": "Desfoque",
+		"blurTypeBlur": "Gaussiano",
 		"blurTypeMosaic": "Mosaico",
 		"blurColor": "Cor do Desfoque",
 		"blurColorWhite": "Branco",
