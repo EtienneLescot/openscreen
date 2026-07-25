@@ -495,6 +495,25 @@ export function useTimeline() {
 		[document, saveDocument],
 	);
 
+	// Same story as `focusMode` below: the 3D tilt was implemented end to end — schema
+	// (`rotationPreset`), migration, `sceneDescription` (`rotation:`), `rotation3d_for` in
+	// regions.rs and the perspective shader in compositor.rs — with no control to set it.
+	// `undefined` clears the preset back to a flat frame; `migrate.ts` already drops the field
+	// when it is falsy, so absent and "no rotation" are the same state.
+	const updateZoomRotation = useCallback(
+		async (id: string, rotationPreset: "iso" | "left" | "right" | undefined) => {
+			if (!document) return;
+			const next: AxcutDocument = {
+				...document,
+				zoomRanges: patchPillById(document.zoomRanges, id, {
+					rotationPreset,
+				}) as AxcutDocument["zoomRanges"],
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
+
 	// Nothing could set `focusMode`: "auto" only ever arrived from the automatic suggestion pass
 	// (`zoomSuggestions.ts`), so a hand-drawn zoom stayed pinned to its static focus point with no
 	// way to make it follow the cursor. The capability itself was complete end to end —
@@ -1161,6 +1180,7 @@ export function useTimeline() {
 		updateZoomFocusLive,
 		commitZoomFocus,
 		updateZoomDepth,
+		updateZoomRotation,
 		updateZoomFocusMode,
 		updateAnnotationSpan,
 		updateAnnotationLive,

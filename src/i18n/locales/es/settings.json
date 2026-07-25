@@ -17,7 +17,8 @@
 				"iso": "Iso",
 				"left": "Izquierda",
 				"right": "Derecha"
-			}
+			},
+			"none": "Ninguna"
 		},
 		"customScale": "Zoom personalizado",
 		"position": {

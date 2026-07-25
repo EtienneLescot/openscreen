@@ -18,7 +18,8 @@
 				"iso": "Iso",
 				"left": "Sinistra",
 				"right": "Destra"
-			}
+			},
+			"none": "Nessuna"
 		},
 		"position": {
 			"title": "Posizione messa a fuoco",
