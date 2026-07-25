@@ -78,6 +78,7 @@ export function AnnotationLayer({
 					onSizeChange={onSizeChange}
 					onBlurDataChange={annotation.type === "blur" ? onBlurDataChange : undefined}
 					onBlurDataCommit={annotation.type === "blur" ? onCommit : undefined}
+					onCommit={onCommit}
 					onClick={handleClick}
 					zIndex={annotation.zIndex}
 					isSelectedBoost={annotation.id === selectedAnnotationId}

@@ -1243,7 +1243,7 @@ describe("buildSceneDescription.annotations", () => {
 		});
 	});
 
-	it("carries the text payload, preferring textContent over the legacy content field", () => {
+	it("carries the text payload, reading the field the inspector actually writes", () => {
 		const scene = buildSceneDescription(
 			docWithAnnotations([
 				{
@@ -1260,8 +1260,12 @@ describe("buildSceneDescription.annotations", () => {
 				},
 			]),
 		);
+		// `content` wins: that is the field the inspector's textarea writes to. Asserting the
+		// other way round is what let the empty-string bug through -- `addAnnotation` seeds
+		// `textContent: ""`, so a `??` chain returned that empty string and the compositor drew
+		// nothing.
 		expect(scene.annotations[0].text).toMatchObject({
-			content: "live",
+			content: "migrated",
 			color: "#ffffff",
 			backgroundColor: "transparent",
 			// 32 px authored against ANNOTATION_REFERENCE_HEIGHT (1080) -> fraction of the rect.
@@ -1269,6 +1273,28 @@ describe("buildSceneDescription.annotations", () => {
 			textAlign: "left",
 			animation: "fade",
 		});
+	});
+
+	it("falls back to textContent when content is empty", () => {
+		// Le cas qui casse avec `??` : `content` vaut "" (ni null ni undefined), donc seul un
+		// `||` retombe sur l'autre champ.
+		const scene = buildSceneDescription(
+			docWithAnnotations([
+				{
+					id: "ann1",
+					startMs: 0,
+					endMs: 1000,
+					type: "text",
+					content: "",
+					textContent: "depuis un ancien document",
+					position: { x: 0, y: 0 },
+					size: { width: 10, height: 10 },
+					style,
+					zIndex: 0,
+				},
+			]),
+		);
+		expect(scene.annotations[0].text?.content).toBe("depuis un ancien document");
 	});
 
 	it("defaults a figure's arrow data when the document omits it", () => {

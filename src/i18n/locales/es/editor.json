@@ -218,7 +218,8 @@
 		"cropDescription": "Reencuadra la grabación: elige una relación de aspecto y haz zoom en la región que deseas conservar.",
 		"openCrop": "Abrir recorte…",
 		"cameraFullscreenDescription": "Mientras se reproduce esta región, la cámara ocupa todo el cuadro —sin borde, sin redondeo, sin fondo— y vuelve suavemente al final. Arrastra los bordes de la región en la línea de tiempo para cambiar cuándo empieza y cuánto dura.",
-		"deleteRegion": "Eliminar región"
+		"deleteRegion": "Eliminar región",
+		"freehandRendersAsBox": "En la exportación, una forma libre se cubre con su caja contenedora: cubre de más, nunca de menos."
 	},
 	"leftPanel": {
 		"mediaTitle": "Medios",
