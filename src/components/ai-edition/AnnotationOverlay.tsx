@@ -9,6 +9,7 @@
 import { type CSSProperties, type PointerEvent, useEffect, useRef, useState } from "react";
 import { Rnd } from "react-rnd";
 import { useScopedT } from "@/contexts/I18nContext";
+import { annotationFontSizePx } from "@/lib/ai-edition/annotationScale";
 import {
 	getBlurOverlayColor,
 	getMosaicGridOverlayColor,
@@ -296,7 +297,7 @@ export function AnnotationOverlay({
 							style={{
 								color: annotation.style.color,
 								backgroundColor: annotation.style.backgroundColor,
-								fontSize: `${annotation.style.fontSize}px`,
+								fontSize: `${annotationFontSizePx(annotation.style.fontSize, containerHeight)}px`,
 								fontFamily: annotation.style.fontFamily,
 								fontWeight: annotation.style.fontWeight,
 								fontStyle: annotation.style.fontStyle,
