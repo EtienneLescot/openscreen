@@ -398,6 +398,7 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 						</span>
 						<textarea
 							value={region.content ?? ""}
+							placeholder={ts("annotation.textPlaceholder")}
 							onChange={(e) => tl.updateAnnotationLive(region.id, { content: e.target.value })}
 							onBlur={() => void tl.commitAnnotationChange()}
 							rows={2}
