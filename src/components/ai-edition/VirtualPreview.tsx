@@ -180,6 +180,21 @@ export function VirtualPreview({
 	virtualDurationSecRef.current = virtualDurationSec;
 	const speedRegionsRef = useRef(speedRegions);
 	speedRegionsRef.current = speedRegions;
+	// Same reasoning as `clipsRef` above, for the one thing the rAF calls rather than reads:
+	// `seekToVirtualTime` is a `useCallback` whose deps include `clips`, so it takes a new
+	// identity on every clip mutation — a REORDER included. The rAF below is deliberately
+	// re-created only when the active source swaps, so calling that callback straight from
+	// the closure pins it to the clip order current at the last asset swap. The tick would
+	// then pick the RIGHT next clip (it reads `clipsRef.current`, always fresh) and hand its
+	// timeline time to a `locateVirtualPosition` resolving against the STALE layout, landing
+	// on whichever clip used to occupy that position — the one that just played. That is the
+	// "playback stops at the junction and jumps back to the start of the clip it just
+	// finished, but only after reordering" bug: with no reorder both arrays are identical, so
+	// nothing shows. Assigned after the callback exists, below; read through the ref here so
+	// the tick always invokes the latest closure.
+	const seekToVirtualTimeRef = useRef<
+		((nextVirtualTimeSec: number, preservePlayback?: boolean, forceResume?: boolean) => void) | null
+	>(null);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: re-create the rAF when the active source swaps.
 	useEffect(() => {
 		let raf = 0;
@@ -236,7 +251,7 @@ export function VirtualPreview({
 							activeClipIdRef.current = rawClip.id;
 						}
 						const rawTargetTime = getRawVirtualStartTime(nextKeptSegment, clipsRef.current);
-						seekToVirtualTime(rawTargetTime, true);
+						seekToVirtualTimeRef.current?.(rawTargetTime, true);
 						return;
 					}
 					v.pause();
@@ -286,7 +301,7 @@ export function VirtualPreview({
 				// ponytail: fall back to timeline order so cross-asset / reordered
 				// clips don't keep playing unmapped media.
 				const nextClip = findNextClipByTimelineOrder(clipsRef.current, virtualTimeSecRef.current);
-				if (nextClip) seekToVirtualTime(nextClip.timelineStartSec, true);
+				if (nextClip) seekToVirtualTimeRef.current?.(nextClip.timelineStartSec, true);
 				else {
 					v.pause();
 					updateVirtualTime(virtualDurationSecRef.current);
@@ -313,7 +328,7 @@ export function VirtualPreview({
 					updateVirtualTime(virtualDurationSecRef.current);
 					return;
 				}
-				seekToVirtualTime(nextClip.timelineStartSec, true);
+				seekToVirtualTimeRef.current?.(nextClip.timelineStartSec, true);
 				return;
 			}
 			updateVirtualTime(clampVirtualTime(clipsRef.current, position.virtualTimeSec));
@@ -392,10 +407,14 @@ export function VirtualPreview({
 
 			const targetIndex = videoSources.findIndex((vs) => vs.id === position.clip.assetId);
 			const isAssetSwitch = targetIndex >= 0 && targetIndex !== sourceIndex;
-			// Read the live paused state, not the captured `isPlaying` prop: the rAF
-			// clip-end auto-advance calls a `seekToVirtualTime` closure captured when
-			// the rAF was created (before playback started), so the captured
-			// `isPlaying` is stale-false and the cross-asset resume never fired.
+			// Read the live paused state, not the captured `isPlaying` prop. The prop is the
+			// parent's playback state as of the last render, and a boundary advance can fire
+			// on the very frame playback starts or stops — before that state has round-tripped
+			// back down. Only the DOM's own `paused` flag is guaranteed current at call time.
+			// (This used to be strictly worse: the rAF invoked a closure captured when the rAF
+			// was created, before playback started, so `isPlaying` was permanently stale-false
+			// and the cross-asset resume never fired at all. The rAF now calls through
+			// `seekToVirtualTimeRef`, so the closure itself is fresh — see its declaration.)
 			//
 			// `forceResume` bypasses that live check for the ONE caller where it's
 			// actively wrong: the `<video>` `ended` handler. The browser sets
@@ -460,7 +479,8 @@ export function VirtualPreview({
 	// `null` et l'effet est un no-op, masquant le bug. Seul `seekTarget` (son `requestId`)
 	// doit déclencher un nouveau seek ; les fonctions elles-mêmes sont lues via des refs
 	// tenues à jour à chaque rendu, pour ne jamais rejouer un ancien seek par accident.
-	const seekToVirtualTimeRef = useRef(seekToVirtualTime);
+	// (`seekToVirtualTimeRef` is declared above the rAF effect — see the comment there — so
+	// the boundary-advance path reads the same always-fresh closure this effect does.)
 	seekToVirtualTimeRef.current = seekToVirtualTime;
 	const seekToSourceTimeRef = useRef(seekToSourceTime);
 	seekToSourceTimeRef.current = seekToSourceTime;
@@ -469,7 +489,7 @@ export function VirtualPreview({
 		if (seekTarget.isSource) {
 			seekToSourceTimeRef.current(seekTarget.timeSec);
 		} else {
-			seekToVirtualTimeRef.current(seekTarget.timeSec);
+			seekToVirtualTimeRef.current?.(seekTarget.timeSec);
 		}
 	}, [seekTarget]);
 

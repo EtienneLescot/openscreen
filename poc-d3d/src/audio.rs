@@ -27,6 +27,9 @@ pub type PlanarPcm = Vec<Vec<f32>>;
 
 extern "C" {
     fn sn_fmt_stream(s: *mut AVFormatContext, i: i32) -> *mut AVStream;
+    // bindgen rend `AVFormatContext` opaque (atteinte seulement par pointeur), d'où l'accesseur
+    // compilé contre les vrais headers — voir shim.c.
+    fn sn_fmt_nb_streams(s: *mut AVFormatContext) -> u32;
 }
 
 fn averr(ret: i32, ctx: &str) -> Result<()> {
@@ -155,9 +158,36 @@ impl Drop for AudioResampler {
     }
 }
 
+/// Un décodeur + resampler par piste audio du conteneur, tous alimentés par la même passe de
+/// démux. Chaque piste produit du f32 planaire 48 kHz stéréo recadré sur la même fenêtre
+/// source, si bien que le mixage final est une simple somme échantillon par échantillon.
+struct AudioTrackDecoder {
+    stream_index: i32,
+    dctx: *mut AVCodecContext,
+    tb_sec: f64,
+    resampler: Option<AudioResampler>,
+    decoded: PlanarPcm,
+    origin_sec: Option<f64>,
+    reached_end: bool,
+    decoder_eof: bool,
+}
+
+impl Drop for AudioTrackDecoder {
+    fn drop(&mut self) {
+        unsafe { avcodec_free_context(&mut self.dctx) };
+    }
+}
+
 /// Décode uniquement la fenêtre source conservée. Le seek audio retombe sur une trame
 /// antérieure ; l'origine pts du premier bloc resamplé permet ensuite de couper précisément la
 /// prélecture sans supposer que la piste commence à t=0.
+///
+/// TOUTES les pistes audio sont décodées puis mixées. L'enregistreur natif macOS écrit l'audio
+/// système et le micro en deux pistes AAC distinctes, toutes deux marquées `default` :
+/// `av_find_best_stream` n'en rendait qu'une — la première, silencieuse dès que rien ne joue sur
+/// le système — et le micro disparaissait de l'export (issue #108). La PR #109 avait corrigé ce
+/// défaut dans l'exporteur navigateur ; l'app n'emprunte plus ce chemin, d'où la même correction
+/// ici, dans le chemin natif.
 pub fn decode_clip_audio(path: &str, source_start_sec: f64, source_end_sec: f64) -> Result<Option<PlanarPcm>> {
     unsafe { decode_clip_audio_inner(path, source_start_sec, source_end_sec) }
 }
@@ -174,136 +204,213 @@ unsafe fn decode_clip_audio_inner(
         "audio open_input",
     )?;
     averr(avformat_find_stream_info(fmt, ptr::null_mut()), "audio find_stream_info")?;
-    let audio_index = av_find_best_stream(
-        fmt,
-        AVMediaType::AVMEDIA_TYPE_AUDIO,
-        -1,
-        -1,
-        ptr::null_mut(),
-        0,
-    );
-    if audio_index < 0 {
+    // Énumération de toutes les pistes audio (voir le commentaire de `decode_clip_audio`).
+    let mut audio_stream_count = 0usize;
+    let mut tracks: Vec<AudioTrackDecoder> = Vec::new();
+    for index in 0..sn_fmt_nb_streams(fmt) as i32 {
+        let stream = sn_fmt_stream(fmt, index);
+        let codecpar = (*stream).codecpar;
+        if (*codecpar).codec_type != AVMediaType::AVMEDIA_TYPE_AUDIO {
+            continue;
+        }
+        audio_stream_count += 1;
+        // Une piste qu'on ne sait pas ouvrir est ignorée, pas fatale : avant ce mixage une
+        // seule piste était ouverte, donc une piste annexe exotique ne pouvait pas casser un
+        // export. Le `bail!` plus bas garantit qu'on ne perd pas l'audio en silence pour
+        // autant — c'est précisément le défaut qu'on corrige ici.
+        let decoder = avcodec_find_decoder((*codecpar).codec_id);
+        if decoder.is_null() {
+            continue;
+        }
+        let mut dctx = avcodec_alloc_context3(decoder);
+        if dctx.is_null() {
+            avformat_close_input(&mut fmt);
+            bail!("audio avcodec_alloc_context3");
+        }
+        if avcodec_parameters_to_context(dctx, codecpar) < 0
+            || avcodec_open2(dctx, decoder, ptr::null_mut()) < 0
+        {
+            avcodec_free_context(&mut dctx);
+            continue;
+        }
+        let time_base = (*stream).time_base;
+        tracks.push(AudioTrackDecoder {
+            stream_index: index,
+            dctx,
+            tb_sec: if time_base.den != 0 {
+                time_base.num as f64 / time_base.den as f64
+            } else {
+                0.0
+            },
+            resampler: None,
+            decoded: vec![Vec::<f32>::new(); AUDIO_OUTPUT_CHANNELS],
+            origin_sec: None,
+            reached_end: false,
+            decoder_eof: false,
+        });
+    }
+    if tracks.is_empty() {
         avformat_close_input(&mut fmt);
+        if audio_stream_count > 0 {
+            bail!("audio : {audio_stream_count} piste(s) présentes, aucune décodable");
+        }
         return Ok(None);
     }
 
-    let stream = sn_fmt_stream(fmt, audio_index);
-    let codecpar = (*stream).codecpar;
-    let decoder = avcodec_find_decoder((*codecpar).codec_id);
-    if decoder.is_null() {
-        avformat_close_input(&mut fmt);
-        return Ok(None);
-    }
-    let mut dctx = avcodec_alloc_context3(decoder);
-    if dctx.is_null() {
-        avformat_close_input(&mut fmt);
-        bail!("audio avcodec_alloc_context3");
-    }
-    averr(avcodec_parameters_to_context(dctx, codecpar), "audio params_to_ctx")?;
-    averr(avcodec_open2(dctx, decoder, ptr::null_mut()), "audio avcodec_open2")?;
-
-    let time_base = (*stream).time_base;
-    let tb_sec = if time_base.den != 0 {
-        time_base.num as f64 / time_base.den as f64
-    } else {
-        0.0
-    };
-    if tb_sec > 0.0 {
-        let target = (source_start_sec / tb_sec).floor() as i64;
-        if av_seek_frame(fmt, audio_index, target, AVSEEK_FLAG_BACKWARD) >= 0 {
-            avcodec_flush_buffers(dctx);
+    // Un seul seek : il repositionne le conteneur entier. On le cale sur la première piste
+    // audio puis on vide tous les décodeurs. Si une autre piste reprend légèrement après le
+    // début de la fenêtre demandée, son recadrage (plus bas) la zéro-padde devant — le
+    // décalage inter-pistes est absorbé là, pas ici.
+    let seek_tb_sec = tracks[0].tb_sec;
+    let seek_stream_index = tracks[0].stream_index;
+    if seek_tb_sec > 0.0 {
+        let target = (source_start_sec / seek_tb_sec).floor() as i64;
+        if av_seek_frame(fmt, seek_stream_index, target, AVSEEK_FLAG_BACKWARD) >= 0 {
+            for track in tracks.iter_mut() {
+                avcodec_flush_buffers(track.dctx);
+            }
         }
     }
 
     let mut packet = av_packet_alloc();
     let mut frame = av_frame_alloc();
-    let mut resampler: Option<AudioResampler> = None;
-    let mut decoded = vec![Vec::<f32>::new(); AUDIO_OUTPUT_CHANNELS];
-    let mut decoded_origin_sec: Option<f64> = None;
     let mut input_eof = false;
-    let mut decoder_eof = false;
-    let mut reached_end = false;
 
-    while !reached_end && !decoder_eof {
+    // Une seule passe de démux alimente tous les décodeurs : chaque paquet est routé vers la
+    // piste dont il porte l'index. On continue tant qu'AU MOINS une piste a encore quelque
+    // chose à produire.
+    while tracks.iter().any(|t| !t.reached_end && !t.decoder_eof) {
         if !input_eof {
             let read = av_read_frame(fmt, packet);
             if read == AVERROR_EOF {
-                avcodec_send_packet(dctx, ptr::null());
+                for track in tracks.iter_mut() {
+                    avcodec_send_packet(track.dctx, ptr::null());
+                }
                 input_eof = true;
             } else {
                 averr(read, "audio av_read_frame")?;
-                if (*packet).stream_index == audio_index {
-                    averr(avcodec_send_packet(dctx, packet), "audio send_packet")?;
+                let packet_stream = (*packet).stream_index;
+                if let Some(track) = tracks
+                    .iter_mut()
+                    .find(|t| t.stream_index == packet_stream && !t.reached_end)
+                {
+                    averr(avcodec_send_packet(track.dctx, packet), "audio send_packet")?;
                 }
                 av_packet_unref(packet);
             }
         }
 
-        loop {
-            let ret = avcodec_receive_frame(dctx, frame);
-            if ret == AVERROR_EOF {
-                decoder_eof = true;
-                break;
+        for track in tracks.iter_mut() {
+            if track.reached_end || track.decoder_eof {
+                continue;
             }
-            if ret == AVERROR_EAGAIN {
-                if input_eof {
-                    decoder_eof = true;
+            loop {
+                let ret = avcodec_receive_frame(track.dctx, frame);
+                if ret == AVERROR_EOF {
+                    track.decoder_eof = true;
+                    break;
                 }
-                break;
-            }
-            averr(ret, "audio receive_frame")?;
+                if ret == AVERROR_EAGAIN {
+                    if input_eof {
+                        track.decoder_eof = true;
+                    }
+                    break;
+                }
+                averr(ret, "audio receive_frame")?;
 
-            let pts = (*frame).best_effort_timestamp;
-            let frame_sec = if pts != i64::MIN && tb_sec > 0.0 {
-                pts as f64 * tb_sec
-            } else {
-                decoded_origin_sec.unwrap_or(source_start_sec)
-            };
-            if frame_sec >= source_end_sec {
-                reached_end = true;
+                let pts = (*frame).best_effort_timestamp;
+                let frame_sec = if pts != i64::MIN && track.tb_sec > 0.0 {
+                    pts as f64 * track.tb_sec
+                } else {
+                    track.origin_sec.unwrap_or(source_start_sec)
+                };
+                if frame_sec >= source_end_sec {
+                    track.reached_end = true;
+                    av_frame_unref(frame);
+                    break;
+                }
+                if track.origin_sec.is_none() {
+                    track.origin_sec = Some(frame_sec);
+                }
+                if track.resampler.is_none() {
+                    track.resampler = Some(AudioResampler::from_frame(frame, track.dctx)?);
+                }
+                track
+                    .resampler
+                    .as_mut()
+                    .unwrap()
+                    .push(frame, &mut track.decoded)?;
                 av_frame_unref(frame);
-                break;
             }
-            if decoded_origin_sec.is_none() {
-                decoded_origin_sec = Some(frame_sec);
-            }
-            if resampler.is_none() {
-                resampler = Some(AudioResampler::from_frame(frame, dctx)?);
-            }
-            resampler.as_mut().unwrap().push(frame, &mut decoded)?;
-            av_frame_unref(frame);
         }
     }
 
-    if let Some(r) = resampler.as_mut() {
-        r.flush(&mut decoded)?;
+    for track in tracks.iter_mut() {
+        if let Some(r) = track.resampler.as_mut() {
+            r.flush(&mut track.decoded)?;
+        }
     }
 
     av_frame_free(&mut frame);
     av_packet_free(&mut packet);
-    avcodec_free_context(&mut dctx);
     avformat_close_input(&mut fmt);
 
     let target_samples = (((source_end_sec - source_start_sec).max(0.0)
         * AUDIO_OUTPUT_SAMPLE_RATE as f64)
         .round()) as usize;
-    let mut trimmed = vec![vec![0.0f32; target_samples]; AUDIO_OUTPUT_CHANNELS];
-    let origin_sec = decoded_origin_sec.unwrap_or(source_start_sec);
-    let relative_start = ((source_start_sec - origin_sec) * AUDIO_OUTPUT_SAMPLE_RATE as f64).round() as i64;
-    let (src_start, dst_start) = if relative_start >= 0 {
-        (relative_start as usize, 0usize)
-    } else {
-        (0usize, (-relative_start) as usize)
-    };
-    for channel in 0..AUDIO_OUTPUT_CHANNELS {
-        if src_start >= decoded[channel].len() || dst_start >= target_samples {
-            continue;
+    let aligned: Vec<(f64, &PlanarPcm)> = tracks
+        .iter()
+        .map(|track| (track.origin_sec.unwrap_or(source_start_sec), &track.decoded))
+        .collect();
+    Ok(Some(mix_aligned_tracks(
+        &aligned,
+        source_start_sec,
+        target_samples,
+    )))
+}
+
+/// Recadre chaque piste sur la MÊME fenêtre (`target_samples` échantillons à partir de
+/// `source_start_sec`) puis les somme. Une piste dont le premier paquet décodé arrive après le
+/// début de la fenêtre est zéro-paddée devant ; la prélecture d'une piste décodée trop tôt (le
+/// seek retombe sur une trame antérieure) est coupée. C'est ce recadrage qui absorbe les
+/// décalages de départ entre pistes, si bien que le mixage lui-même n'est qu'une somme.
+///
+/// Séparé du décodage pour être testable sans ffmpeg.
+fn mix_aligned_tracks(
+    tracks: &[(f64, &PlanarPcm)],
+    source_start_sec: f64,
+    target_samples: usize,
+) -> PlanarPcm {
+    let mut mixed = vec![vec![0.0f32; target_samples]; AUDIO_OUTPUT_CHANNELS];
+    for &(origin_sec, decoded) in tracks {
+        let relative_start =
+            ((source_start_sec - origin_sec) * AUDIO_OUTPUT_SAMPLE_RATE as f64).round() as i64;
+        let (src_start, dst_start) = if relative_start >= 0 {
+            (relative_start as usize, 0usize)
+        } else {
+            (0usize, (-relative_start) as usize)
+        };
+        for channel in 0..AUDIO_OUTPUT_CHANNELS {
+            if src_start >= decoded[channel].len() || dst_start >= target_samples {
+                continue;
+            }
+            let count = (decoded[channel].len() - src_start).min(target_samples - dst_start);
+            for offset in 0..count {
+                mixed[channel][dst_start + offset] += decoded[channel][src_start + offset];
+            }
         }
-        let count = (decoded[channel].len() - src_start).min(target_samples - dst_start);
-        trimmed[channel][dst_start..dst_start + count]
-            .copy_from_slice(&decoded[channel][src_start..src_start + count]);
     }
-    Ok(Some(trimmed))
+    // Sommer plusieurs pistes peut dépasser la pleine échelle : on écrête. Sur une source
+    // mono-piste, sommer dans un buffer nul est l'identité et on n'écrête pas — le comportement
+    // d'avant ce mixage est conservé tel quel.
+    if tracks.len() > 1 {
+        for plane in mixed.iter_mut() {
+            for sample in plane.iter_mut() {
+                *sample = sample.clamp(-1.0, 1.0);
+            }
+        }
+    }
+    mixed
 }
 
 fn hann(length: usize) -> Vec<f32> {
@@ -873,5 +980,83 @@ impl Drop for AacEncoder {
             av_packet_free(&mut self.packet);
             avcodec_free_context(&mut self.context);
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Même contenu sur les deux canaux : le mixage travaille canal par canal, donc asserter sur
+    /// un seul suffit, mais les deux plans doivent exister (le format de sortie est stéréo).
+    fn planar(samples: &[f32]) -> PlanarPcm {
+        vec![samples.to_vec(), samples.to_vec()]
+    }
+
+    #[test]
+    fn single_track_passes_through_unchanged() {
+        let track = planar(&[0.25, -0.5, 0.75]);
+        let mixed = mix_aligned_tracks(&[(0.0, &track)], 0.0, 3);
+        assert_eq!(mixed[0], vec![0.25, -0.5, 0.75]);
+        assert_eq!(mixed[1], vec![0.25, -0.5, 0.75]);
+    }
+
+    #[test]
+    fn single_track_is_not_clamped() {
+        // Promesse de non-régression : une source mono-piste ressort telle quelle, y compris
+        // hors pleine échelle. Seul le mixage multipiste écrête.
+        let track = planar(&[1.5, -1.5]);
+        let mixed = mix_aligned_tracks(&[(0.0, &track)], 0.0, 2);
+        assert_eq!(mixed[0], vec![1.5, -1.5]);
+    }
+
+    #[test]
+    fn silent_first_track_does_not_swallow_the_microphone() {
+        // Le cas de l'issue #108 : l'enregistreur natif macOS écrit l'audio système en première
+        // piste (silencieuse si rien ne joue) et le micro en seconde. `av_find_best_stream` ne
+        // rendait que la première, et l'export sortait muet.
+        let system_audio = planar(&[0.0, 0.0, 0.0]);
+        let microphone = planar(&[0.3, -0.4, 0.5]);
+        let mixed = mix_aligned_tracks(&[(0.0, &system_audio), (0.0, &microphone)], 0.0, 3);
+        assert_eq!(mixed[0], vec![0.3, -0.4, 0.5]);
+    }
+
+    #[test]
+    fn tracks_are_summed() {
+        let a = planar(&[0.1, 0.2]);
+        let b = planar(&[0.2, 0.3]);
+        let mixed = mix_aligned_tracks(&[(0.0, &a), (0.0, &b)], 0.0, 2);
+        assert!((mixed[0][0] - 0.3).abs() < 1e-6);
+        assert!((mixed[0][1] - 0.5).abs() < 1e-6);
+    }
+
+    #[test]
+    fn multi_track_sum_is_clamped_to_full_scale() {
+        let a = planar(&[0.8, -0.8]);
+        let b = planar(&[0.8, -0.8]);
+        let mixed = mix_aligned_tracks(&[(0.0, &a), (0.0, &b)], 0.0, 2);
+        assert_eq!(mixed[0], vec![1.0, -1.0]);
+    }
+
+    #[test]
+    fn a_track_starting_late_is_zero_padded_at_the_front() {
+        // La piste commence 1 ms après le début de la fenêtre demandée : 48 échantillons de
+        // silence devant, son contenu ensuite. Sans ce recadrage, sommer désalignerait les pistes.
+        let late = planar(&[0.5; 8]);
+        let mixed = mix_aligned_tracks(&[(0.001, &late)], 0.0, 64);
+        assert_eq!(&mixed[0][..48], &[0.0f32; 48][..]);
+        assert_eq!(&mixed[0][48..56], &[0.5f32; 8][..]);
+        assert_eq!(&mixed[0][56..], &[0.0f32; 8][..]);
+    }
+
+    #[test]
+    fn a_track_decoded_early_has_its_prefetch_trimmed() {
+        // Le seek audio retombe sur une trame antérieure à la fenêtre : cette prélecture est
+        // coupée, pas mixée.
+        let mut samples = vec![0.0f32; 48];
+        samples.extend_from_slice(&[0.5; 8]);
+        let early = planar(&samples);
+        let mixed = mix_aligned_tracks(&[(-0.001, &early)], 0.0, 8);
+        assert_eq!(mixed[0], vec![0.5; 8]);
     }
 }
