@@ -33,8 +33,7 @@
 		"deleteRegion": "속도 구간 삭제",
 		"customPlaybackSpeed": "재생 속도 직접 입력",
 		"maxSpeedError": "속도는 {{max}}×를 초과할 수 없습니다",
-		"previewFrameSteppingHint": "{{native}}×를 초과하면 미리보기가 프레임 단위로 재생되고 음소거됩니다. 내보내기에는 영향이 없습니다.",
-		"previewSpeedCapHint": "{{native}}× 이상에서는 미리보기가 {{native}}×로 재생됩니다. 내보내기는 실제 속도로 렌더링됩니다."
+		"previewFrameSteppingHint": "{{native}}×를 초과하면 미리보기가 프레임 단위로 재생되고 음소거됩니다. 내보내기에는 영향이 없습니다."
 	},
 	"trim": {
 		"deleteRegion": "트림 구간 삭제"

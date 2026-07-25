@@ -33,8 +33,7 @@
 		"deleteRegion": "Eliminar región de velocidad",
 		"customPlaybackSpeed": "Velocidad personalizada",
 		"maxSpeedError": "La velocidad no puede superar {{max}}×",
-		"previewFrameSteppingHint": "Por encima de {{native}}×, la vista previa avanza fotograma a fotograma y sin sonido. La exportación no se ve afectada.",
-		"previewSpeedCapHint": "Por encima de {{native}}×, la vista previa se reproduce a {{native}}×; la exportación aplica la velocidad real."
+		"previewFrameSteppingHint": "Por encima de {{native}}×, la vista previa avanza fotograma a fotograma y sin sonido. La exportación no se ve afectada."
 	},
 	"trim": {
 		"deleteRegion": "Eliminar región de recorte"

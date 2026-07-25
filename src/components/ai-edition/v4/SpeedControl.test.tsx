@@ -79,14 +79,4 @@ describe("SpeedControl", () => {
 		expect(select.value).toBe("25");
 		expect(Array.from(select.options).map((o) => o.value)).toContain("25");
 	});
-
-	it("says the preview is capped once past the native playback rate", () => {
-		renderControl(25);
-		expect(screen.getByText("speed.previewSpeedCapHint:16")).toBeInTheDocument();
-	});
-
-	it("stays quiet at a natively playable speed", () => {
-		renderControl(2);
-		expect(screen.queryByText(/previewSpeedCapHint/)).not.toBeInTheDocument();
-	});
 });

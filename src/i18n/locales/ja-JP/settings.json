@@ -33,8 +33,7 @@
 		"deleteRegion": "再生速度の範囲を削除",
 		"customPlaybackSpeed": "カスタム再生速度",
 		"maxSpeedError": "速度は{{max}}×を超えることはできません",
-		"previewFrameSteppingHint": "{{native}}×を超えるとプレビューはフレーム送りかつ無音になります。書き出しには影響しません。",
-		"previewSpeedCapHint": "{{native}}×を超えると、プレビューは{{native}}×で再生されます。書き出しは実際の速度で処理されます。"
+		"previewFrameSteppingHint": "{{native}}×を超えるとプレビューはフレーム送りかつ無音になります。書き出しには影響しません。"
 	},
 	"trim": {
 		"deleteRegion": "トリム範囲を削除"
