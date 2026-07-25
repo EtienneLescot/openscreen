@@ -218,7 +218,8 @@
 		"cropDescription": "重新構圖錄製內容 — 選擇長寬比並縮放至想保留的區域。",
 		"openCrop": "開啟裁切…",
 		"cameraFullscreenDescription": "此區間播放時，攝影機會佔滿整個畫面 — 沒有邊框、圓角與背景 — 並在結束時平順還原。在時間軸上拖曳區間邊緣，即可調整開始位置與長度。",
-		"deleteRegion": "刪除區間"
+		"deleteRegion": "刪除區間",
+		"freehandRendersAsBox": "匯出時，手繪形狀會以其外接矩形遮蔽——寧可多遮，絕不少遮。"
 	},
 	"leftPanel": {
 		"mediaTitle": "媒體",

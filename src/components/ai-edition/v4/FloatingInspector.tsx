@@ -19,7 +19,7 @@ import { toast } from "sonner";
 import { parseCustomPlaybackSpeedInput } from "@/components/video-editor/customPlaybackSpeed";
 import { MAX_PLAYBACK_SPEED, SPEED_OPTIONS } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
-import type { AxcutClip } from "@/lib/ai-edition/schema";
+import type { AxcutAnnotationRegion, AxcutClip } from "@/lib/ai-edition/schema";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { coalescedTrimGroups } from "@/lib/ai-edition/timeline/trim-mapping";
@@ -275,6 +275,30 @@ function paneRow(label: string, control: React.ReactNode) {
 	);
 }
 
+type AnnotationKind = AxcutAnnotationRegion["type"];
+type ArrowDirectionKind = NonNullable<AxcutAnnotationRegion["figureData"]>["arrowDirection"];
+
+/** Les huit directions de `ArrowSvgs.tsx`, dans l'ordre où elles y sont définies. */
+const ARROW_DIRECTIONS: ArrowDirectionKind[] = [
+	"up",
+	"down",
+	"left",
+	"right",
+	"up-right",
+	"up-left",
+	"down-right",
+	"down-left",
+];
+
+/** Défauts du schéma, pour compléter un `blurData` absent sans écraser ce qui existe. */
+const BLUR_DEFAULTS = {
+	type: "mosaic",
+	shape: "rectangle",
+	color: "white",
+	intensity: 12,
+	blockSize: 12,
+} as const;
+
 const ZOOM_DEPTHS = [1, 2, 3, 4, 5, 6] as const;
 // The ladder the shared editor already ships (`SPEED_OPTIONS`), plus 1× so the select can
 // express "back to normal". It stops at 5×; the free field in `SpeedControl` is what reaches
@@ -524,58 +548,223 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					tc("actions.close"),
 				)}
 				<div style={bodyStyle}>
-					<div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-						<span style={{ fontSize: 12.5, color: "var(--fg-2)", fontWeight: 500 }}>
-							{ts("annotation.textContent")}
-						</span>
-						<textarea
-							value={region.content ?? ""}
-							placeholder={ts("annotation.textPlaceholder")}
-							onChange={(e) => tl.updateAnnotationLive(region.id, { content: e.target.value })}
-							onBlur={() => void tl.commitAnnotationChange()}
-							rows={2}
-							style={{
-								resize: "vertical",
-								padding: "8px 10px",
-								borderRadius: 9,
-								border: "1px solid var(--border)",
-								background: "var(--surface)",
-								color: "var(--fg)",
-								font: "500 13px var(--font-display)",
-							}}
-						/>
-					</div>
+					{/* Type switch. Only text annotations could ever be created, so image, arrow and
+					    blur were unreachable even though the compositor renders all four and every
+					    label here already shipped translated. Converting keeps the span and box, so
+					    a mistake costs one more click rather than redrawing the region. */}
 					{paneRow(
-						ts("annotation.color"),
-						<div style={{ display: "flex", gap: 6 }}>
-							{colors.map((c) => (
-								<button
-									key={c}
-									type="button"
-									title={c}
-									aria-label={te("inspector.setColor", { color: c })}
-									aria-pressed={region.style?.color === c}
-									onClick={() => {
+						ts("annotation.title"),
+						<select
+							value={region.type}
+							onChange={(e) => {
+								tl.updateAnnotationLive(region.id, {
+									type: e.target.value as AnnotationKind,
+								});
+								void tl.commitAnnotationChange();
+							}}
+							style={selectStyle}
+						>
+							<option value="text">{ts("annotation.typeText")}</option>
+							<option value="image">{ts("annotation.typeImage")}</option>
+							<option value="figure">{ts("annotation.typeArrow")}</option>
+							<option value="blur">{ts("annotation.typeBlur")}</option>
+						</select>,
+					)}
+					{region.type === "text" ? (
+						<div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+							<span style={{ fontSize: 12.5, color: "var(--fg-2)", fontWeight: 500 }}>
+								{ts("annotation.textContent")}
+							</span>
+							<textarea
+								value={region.content ?? ""}
+								placeholder={ts("annotation.textPlaceholder")}
+								onChange={(e) => tl.updateAnnotationLive(region.id, { content: e.target.value })}
+								onBlur={() => void tl.commitAnnotationChange()}
+								rows={2}
+								style={{
+									resize: "vertical",
+									padding: "8px 10px",
+									borderRadius: 9,
+									border: "1px solid var(--border)",
+									background: "var(--surface)",
+									color: "var(--fg)",
+									font: "500 13px var(--font-display)",
+								}}
+							/>
+						</div>
+					) : null}
+					{region.type === "image" ? (
+						<div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+							{/* Read as a data URL, which is what the renderer expects: `content` holds
+							    "Separate storage for image data URL" (types.ts) and both the preview
+							    overlay and the compositor read it from there. */}
+							<label
+								style={{ ...secondaryBtnStyle, textAlign: "center", cursor: "pointer" }}
+								htmlFor={`ann-img-${region.id}`}
+							>
+								{ts("annotation.uploadImage")}
+							</label>
+							<input
+								id={`ann-img-${region.id}`}
+								type="file"
+								accept="image/jpeg,image/png,image/gif,image/webp"
+								style={{ display: "none" }}
+								onChange={(e) => {
+									const file = e.target.files?.[0];
+									if (!file) return;
+									if (!/^image\/(jpeg|png|gif|webp)$/.test(file.type)) {
+										toast.error(ts("annotation.imageFormatsOnly"));
+										return;
+									}
+									const reader = new FileReader();
+									reader.onload = () => {
+										tl.updateAnnotationLive(region.id, { content: String(reader.result) });
+										void tl.commitAnnotationChange();
+										toast.success(ts("annotation.imageUploadSuccess"));
+									};
+									reader.readAsDataURL(file);
+								}}
+							/>
+							<span style={{ font: "400 11px/1.4 var(--font-sans)", color: "var(--fg-2)" }}>
+								{ts("annotation.supportedFormats")}
+							</span>
+						</div>
+					) : null}
+					{region.type === "figure" ? (
+						<>
+							{paneRow(
+								ts("annotation.arrowDirection"),
+								<select
+									value={region.figureData?.arrowDirection ?? "right"}
+									onChange={(e) => {
 										tl.updateAnnotationLive(region.id, {
-											style: { ...region.style, color: c },
+											figureData: {
+												...(region.figureData ?? { color: "#34B27B", strokeWidth: 4 }),
+												arrowDirection: e.target.value as ArrowDirectionKind,
+											},
 										});
 										void tl.commitAnnotationChange();
 									}}
-									style={{
-										width: 22,
-										height: 22,
-										borderRadius: "50%",
-										background: c,
-										border:
-											region.style?.color === c
-												? "2px solid var(--accent)"
-												: "1px solid var(--border-hi)",
-										cursor: "pointer",
+									style={selectStyle}
+								>
+									{ARROW_DIRECTIONS.map((d) => (
+										<option key={d} value={d}>
+											{d}
+										</option>
+									))}
+								</select>,
+							)}
+							{paneRow(
+								ts("annotation.strokeWidth", { width: region.figureData?.strokeWidth ?? 4 }),
+								<input
+									type="range"
+									min={1}
+									max={20}
+									step={1}
+									value={region.figureData?.strokeWidth ?? 4}
+									onChange={(e) =>
+										tl.updateAnnotationLive(region.id, {
+											figureData: {
+												...(region.figureData ?? { arrowDirection: "right", color: "#34B27B" }),
+												strokeWidth: Number(e.target.value),
+											},
+										})
+									}
+									onPointerUp={() => void tl.commitAnnotationChange()}
+								/>,
+							)}
+						</>
+					) : null}
+					{region.type === "blur" ? (
+						<>
+							{paneRow(
+								ts("annotation.blurType"),
+								<select
+									value={region.blurData?.type ?? "mosaic"}
+									onChange={(e) => {
+										tl.updateAnnotationLive(region.id, {
+											blurData: {
+												...(region.blurData ?? BLUR_DEFAULTS),
+												type: e.target.value as "blur" | "mosaic",
+											},
+										});
+										void tl.commitAnnotationChange();
 									}}
-								/>
-							))}
-						</div>,
-					)}
+									style={selectStyle}
+								>
+									<option value="blur">{ts("annotation.blurTypeBlur")}</option>
+									<option value="mosaic">{ts("annotation.blurTypeMosaic")}</option>
+								</select>,
+							)}
+							{paneRow(
+								ts("annotation.blurShape"),
+								<select
+									value={region.blurData?.shape ?? "rectangle"}
+									onChange={(e) => {
+										tl.updateAnnotationLive(region.id, {
+											blurData: {
+												...(region.blurData ?? BLUR_DEFAULTS),
+												shape: e.target.value as "rectangle" | "oval" | "freehand",
+											},
+										});
+										void tl.commitAnnotationChange();
+									}}
+									style={selectStyle}
+								>
+									<option value="rectangle">{ts("annotation.blurShapeRectangle")}</option>
+									<option value="oval">{ts("annotation.blurShapeOval")}</option>
+									<option value="freehand">{ts("annotation.blurShapeFreehand")}</option>
+								</select>,
+							)}
+							{region.blurData?.shape === "freehand" ? (
+								// Say it rather than let the user discover it: the compositor masks the
+								// bounding box for a freehand shape, deliberately over-covering instead
+								// of leaving anything the user marked private visible in the export.
+								<p
+									style={{
+										margin: 0,
+										font: "400 11px/1.45 var(--font-sans)",
+										color: "var(--fg-2)",
+									}}
+								>
+									{te("inspector.freehandRendersAsBox")}
+								</p>
+							) : null}
+						</>
+					) : null}
+					{region.type === "text"
+						? paneRow(
+								ts("annotation.color"),
+								<div style={{ display: "flex", gap: 6 }}>
+									{colors.map((c) => (
+										<button
+											key={c}
+											type="button"
+											title={c}
+											aria-label={te("inspector.setColor", { color: c })}
+											aria-pressed={region.style?.color === c}
+											onClick={() => {
+												tl.updateAnnotationLive(region.id, {
+													style: { ...region.style, color: c },
+												});
+												void tl.commitAnnotationChange();
+											}}
+											style={{
+												width: 22,
+												height: 22,
+												borderRadius: "50%",
+												background: c,
+												border:
+													region.style?.color === c
+														? "2px solid var(--accent)"
+														: "1px solid var(--border-hi)",
+												cursor: "pointer",
+											}}
+										/>
+									))}
+								</div>,
+							)
+						: null}
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
 						<Trash2 size={14} />
 						{ts("annotation.deleteAnnotation")}
