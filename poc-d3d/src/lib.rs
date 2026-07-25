@@ -13,8 +13,9 @@ pub mod live;
 pub mod pipeline;
 pub mod regions;
 pub mod scene;
+pub mod text;
 
-use anyhow::Result;
+use anyhow::{Context as _, Result};
 use compositor::Compositor;
 use std::fmt::Write as _;
 
@@ -79,6 +80,18 @@ fn run_bench(args: &[String]) -> Result<()> {
     let mut comp = Compositor::new(&gpu)?;
     let track = cursor::CursorTrack::load(&format!("{fixture}/screen.cursor.json"), 100_000.0, 6.0)?;
     comp.set_cursor(track);
+
+    // `--scene <fichier.json>` : compose avec une VRAIE scène d'app au lieu du planning fixture.
+    // Sert à deux choses : sortir une preuve visuelle pour ce que seule une scène peut décrire
+    // (les annotations, qu'aucune UI ne crée encore pour certains types), et mesurer un
+    // avant/après perf sur une scène représentative.
+    let scene_arg = get("--scene", "");
+    if !scene_arg.is_empty() {
+        let json = std::fs::read_to_string(&scene_arg)
+            .with_context(|| format!("lecture de la scène {scene_arg}"))?;
+        comp.set_scene(Some(scene::Scene::from_json(&json)?));
+        println!("scène chargée depuis {scene_arg}");
+    }
 
     let mut rows: Vec<(String, u64, f64, f64, f64, String)> = Vec::new(); // name, frames, best_wall, fps, ms/f, spread
     let mut json = String::from("{\n  \"runs\": [\n");

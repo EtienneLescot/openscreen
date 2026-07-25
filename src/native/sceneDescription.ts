@@ -17,6 +17,7 @@
 
 import type { CameraFullscreenRegion, SpeedRegion } from "@/components/video-editor/types";
 import { DEFAULT_CROP_REGION } from "@/components/video-editor/types";
+import { annotationFontSizeFraction } from "@/lib/ai-edition/annotationScale";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
 import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
@@ -81,6 +82,78 @@ export interface SceneSpeedRegion {
 	speed: number;
 	/** See `SceneZoomRegion.clipIndex`. */
 	clipIndex?: number;
+}
+
+/** A timeline annotation (`document.annotations`), projected onto each clip's source time the
+ *  same way zoom and speed regions are.
+ *
+ *  Until now annotations never crossed this bridge at all: `AnnotationLayer` draws them as DOM
+ *  siblings of the preview, so they showed up in the preview and were simply absent from every
+ *  render. Sending them here is what lets the compositor draw them into the actual output.
+ *
+ *  Coordinate space, which the renderer must match exactly: `x`/`y`/`w`/`h` are fractions of the
+ *  SCREEN layer's rect, not of the output frame — the web overlay is handed
+ *  `layout.screenRect` as its container. And they are deliberately NOT affected by the zoom
+ *  crop: the overlay is a sibling of the element carrying the zoom transform, so annotations
+ *  hold still while the content zooms underneath them. */
+export interface SceneAnnotation {
+	id: string;
+	startSec: number;
+	endSec: number;
+	/** See `SceneZoomRegion.clipIndex`. */
+	clipIndex?: number;
+	kind: "text" | "image" | "figure" | "blur";
+	/** Rect as fractions of the screen layer (x, y top-left). */
+	x: number;
+	y: number;
+	w: number;
+	h: number;
+	/** Paint order among annotations; the compositor draws ascending. */
+	zIndex: number;
+	/** Present for `kind: "text"`. Colours are CSS strings, parsed native-side like the
+	 *  background colour is (`parse_hex`); `"transparent"` means no fill. */
+	text?: {
+		content: string;
+		color: string;
+		backgroundColor: string;
+		/** Font size as a FRACTION of the screen rect's height, like everything else in this
+		 *  struct — multiply by the rect's height in output pixels. See `annotationScale.ts`:
+		 *  the preview applies the identical product against its own box, so preview and render
+		 *  agree at any resolution. */
+		fontSizeRel: number;
+		fontFamily: string;
+		fontWeight: "normal" | "bold";
+		fontStyle: "normal" | "italic";
+		textDecoration: "none" | "underline";
+		textAlign: "left" | "center" | "right";
+		animation: string | null;
+	};
+	/** Present for `kind: "image"` — the authored `imageContent` (path or data URI). */
+	imagePath?: string;
+	/** Present for `kind: "figure"`. */
+	figure?: {
+		direction:
+			| "up"
+			| "down"
+			| "left"
+			| "right"
+			| "up-right"
+			| "up-left"
+			| "down-right"
+			| "down-left";
+		color: string;
+		strokeWidth: number;
+	};
+	/** Present for `kind: "blur"`. `freehandPoints` are fractions of the screen layer, same
+	 *  space as the rect. */
+	blur?: {
+		style: "blur" | "mosaic";
+		shape: "rectangle" | "oval" | "freehand";
+		color: "white" | "black";
+		intensity: number;
+		blockSize: number;
+		freehandPoints?: Array<{ x: number; y: number }>;
+	};
 }
 
 /** Normalized rect in 0..1 of the output frame (x, y top-left; width, height). */
@@ -249,6 +322,11 @@ export interface SceneDescription {
 	background: SceneBackground;
 	zoomRegions: SceneZoomRegion[];
 	/**
+	 * Annotations projected onto each clip's source time, ascending by `zIndex` so the
+	 * compositor can draw them in order without re-sorting. Empty when none set.
+	 */
+	annotations: SceneAnnotation[];
+	/**
 	 * "Full Camera" regions projected onto each clip's source time (one entry per
 	 * source-time span after `projectRegionsToSourceTime`). Empty when none set.
 	 */
@@ -407,6 +485,14 @@ export function buildSceneDescription(
 		visibleClips,
 		document.timeline.clips,
 		() => createId("zoom"),
+	);
+	// Same raw→source projection as the zoom regions above, for the same reason: annotations are
+	// authored in RAW document time and the compositor matches each frame's SOURCE time.
+	const projectedAnnotations = projectRegionsToSource(
+		document.annotations ?? [],
+		visibleClips,
+		document.timeline.clips,
+		() => createId("ann"),
 	);
 	const projectedCameraFullscreenRegions = projectRegionsToSource(
 		((document.legacyEditor as Record<string, unknown> | null)?.cameraFullscreenRegions as
@@ -600,6 +686,81 @@ export function buildSceneDescription(
 			rotation: region.rotationPreset ?? null,
 			clipIndex: region.clipIndex,
 		})),
+		annotations: projectedAnnotations
+			.map((region) => {
+				const style = region.style;
+				const base = {
+					id: region.id,
+					startSec: region.startMs / 1000,
+					endSec: region.endMs / 1000,
+					clipIndex: region.clipIndex,
+					kind: region.type,
+					// Authored as percentages of the screen rect; the native side wants fractions.
+					x: region.position.x / 100,
+					y: region.position.y / 100,
+					w: region.size.width / 100,
+					h: region.size.height / 100,
+					zIndex: region.zIndex,
+				} as const;
+				if (region.type === "text") {
+					return {
+						...base,
+						text: {
+							// `textContent` is the live field the inspector edits; `content` is the
+							// older single-field form still present on migrated documents.
+							content: region.textContent ?? region.content ?? "",
+							color: style.color,
+							backgroundColor: style.backgroundColor,
+							fontSizeRel: annotationFontSizeFraction(style.fontSize),
+							fontFamily: style.fontFamily,
+							fontWeight: style.fontWeight,
+							fontStyle: style.fontStyle,
+							textDecoration: style.textDecoration,
+							textAlign: style.textAlign,
+							animation: style.textAnimation ?? null,
+						},
+					};
+				}
+				if (region.type === "image") {
+					// `content` first: that is the field the live overlay reads (it checks
+					// `content.startsWith("data:image")`), `imageContent` being the parallel slot
+					// older documents used. Reading them the other way round would render an image
+					// the preview isn't showing.
+					return { ...base, imagePath: region.content || region.imageContent || "" };
+				}
+				if (region.type === "figure") {
+					const figure = region.figureData;
+					return {
+						...base,
+						figure: {
+							direction: figure?.arrowDirection ?? "right",
+							color: figure?.color ?? "#34B27B",
+							strokeWidth: figure?.strokeWidth ?? 4,
+						},
+					};
+				}
+				const blur = region.blurData;
+				return {
+					...base,
+					blur: {
+						style: blur?.type ?? "mosaic",
+						shape: blur?.shape ?? "rectangle",
+						color: blur?.color ?? "white",
+						intensity: blur?.intensity ?? 12,
+						blockSize: blur?.blockSize ?? 12,
+						...(blur?.freehandPoints
+							? {
+									freehandPoints: blur.freehandPoints.map((p) => ({
+										x: p.x / 100,
+										y: p.y / 100,
+									})),
+								}
+							: {}),
+					},
+				};
+			})
+			// Ascending zIndex so the compositor paints in order without sorting per frame.
+			.sort((a, b) => a.zIndex - b.zIndex),
 		cameraFullscreenRegions: projectedCameraFullscreenRegions.map((region) => ({
 			startSec: region.startMs / 1000,
 			endSec: region.endMs / 1000,

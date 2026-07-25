@@ -47,6 +47,10 @@ features = [
     "Win32_Graphics_Direct3D11",
     "Win32_Graphics_Dxgi",
     "Win32_Graphics_Dxgi_Common",
+    "Foundation_Numerics",           # requis par les méthodes D2D à brosse (CreateSolidColorBrush)
+    "Win32_Graphics_Direct2D",       # cible de rendu D2D sur surface DXGI (texte, text.rs)
+    "Win32_Graphics_Direct2D_Common", # D2D1_COLOR_F / PIXEL_FORMAT
+    "Win32_Graphics_DirectWrite",    # mise en page + rastérisation du texte
     "Win32_Graphics_Gdi",            # brosses/police GUI de la preview (app.rs)
     "Win32_System_Performance",      # QueryPerformanceCounter / Frequency (§10)
     "Win32_System_LibraryLoader",    # GetModuleHandleW (hInstance, app.rs)
