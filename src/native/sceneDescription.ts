@@ -706,9 +706,13 @@ export function buildSceneDescription(
 					return {
 						...base,
 						text: {
-							// `textContent` is the live field the inspector edits; `content` is the
-							// older single-field form still present on migrated documents.
-							content: region.textContent ?? region.content ?? "",
+							// `content` first, and with `||` rather than `??`. The inspector's textarea
+							// writes to `content`; `textContent` is the parallel slot, which
+							// `addAnnotation` initialises to "". Since "" is neither null nor undefined,
+							// `textContent ?? content` returned that empty string for every annotation
+							// created since — so the compositor was handed nothing to draw and text
+							// vanished from the preview the moment the DOM overlay stopped painting it.
+							content: region.content || region.textContent || "",
 							color: style.color,
 							backgroundColor: style.backgroundColor,
 							fontSizeRel: annotationFontSizeFraction(style.fontSize),

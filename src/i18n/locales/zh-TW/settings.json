@@ -181,8 +181,8 @@
 		"blurColorBlack": "黑色",
 		"blurColorWhite": "白色",
 		"blurType": "模糊類型",
-		"blurTypeBlur": "模糊",
-		"blurTypeMosaic": "馬賽克模糊",
+		"blurTypeBlur": "高斯",
+		"blurTypeMosaic": "馬賽克",
 		"mosaicBlockSize": "馬賽克區塊大小"
 	},
 	"fontStyles": {

@@ -1750,7 +1750,10 @@ function Toggle({
 	);
 }
 
-function SliderCell({
+/** Le slider commun des panneaux — exporté pour que l'inspecteur V4 s'en serve au lieu de
+ *  restyler un `<input type="range">` isolé qui ne ressemblait à rien de l'app. Il porte aussi
+ *  la bonne cadence : `onChange` en direct, `onCommit` à la fin du geste. */
+export function SliderCell({
 	label,
 	value,
 	min,

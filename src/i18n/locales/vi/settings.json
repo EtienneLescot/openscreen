@@ -162,7 +162,7 @@
 		"strokeWidth": "Độ dày nét: {{width}}px",
 		"arrowColor": "Màu mũi tên",
 		"blurType": "Loại làm mờ",
-		"blurTypeBlur": "Làm mờ",
+		"blurTypeBlur": "Gaussian",
 		"blurTypeMosaic": "Khảm",
 		"blurColor": "Màu làm mờ",
 		"blurColorWhite": "Trắng",

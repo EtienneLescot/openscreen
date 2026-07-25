@@ -218,7 +218,8 @@
 		"cropDescription": "Recadrer l'enregistrement — choisissez un format et zoomez sur la région à conserver.",
 		"openCrop": "Ouvrir le recadrage…",
 		"cameraFullscreenDescription": "Pendant cette zone, la caméra occupe tout le cadre — sans bordure, sans arrondi, sans arrière-plan — puis revient en douceur à la fin. Faites glisser les bords de la zone sur la timeline pour changer son début et sa durée.",
-		"deleteRegion": "Supprimer la zone"
+		"deleteRegion": "Supprimer la zone",
+		"freehandRendersAsBox": "À l'export, un tracé libre est couvert par sa boîte englobante — on couvre trop, jamais trop peu."
 	},
 	"leftPanel": {
 		"mediaTitle": "Médias",

@@ -180,8 +180,8 @@
 		"blurColorBlack": "Siyah",
 		"blurColorWhite": "Beyaz",
 		"blurType": "Bulanıklık Türü",
-		"blurTypeBlur": "Bulanık",
-		"blurTypeMosaic": "Mozaik Bulanıklık",
+		"blurTypeBlur": "Gauss",
+		"blurTypeMosaic": "Mozaik",
 		"mosaicBlockSize": "Mozaik Blok Boyutu"
 	},
 	"fontStyles": {

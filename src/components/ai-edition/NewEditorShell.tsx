@@ -1232,12 +1232,13 @@ export function NewEditorShell() {
 									}
 									onSelectAnnotation={(id) => tl.selectRegion("annotation", id)}
 									onAnnotationPositionChange={(id, position) => {
+										// Live seulement : appelé à chaque mouvement de souris pour que le
+										// compositeur natif suive le geste. L'écriture disque se fait une fois,
+										// au relâchement, via `onAnnotationCommit`.
 										tl.updateAnnotationLive(id, { position });
-										void tl.commitAnnotationChange();
 									}}
 									onAnnotationSizeChange={(id, size) => {
 										tl.updateAnnotationLive(id, { size });
-										void tl.commitAnnotationChange();
 									}}
 									onAnnotationBlurDataChange={(id, blurData) =>
 										tl.updateAnnotationLive(id, { blurData })
