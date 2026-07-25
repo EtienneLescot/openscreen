@@ -592,7 +592,11 @@ export function buildSceneDescription(
 			scale: region.customScale ?? region.depth / 2 + 0.5,
 			focusX: region.focus.cx,
 			focusY: region.focus.cy,
-			focusMode: region.focusMode ?? null,
+			// The global Auto-Focus toggle OVERRIDES each region's own mode rather than merely
+			// seeding it — that's what `settings.zoom.focusMode.lockedDisclaimer` promises the
+			// user ("turn it off to set focus mode per zoom"), and it's what makes the toolbar
+			// button a one-click "make every zoom follow the cursor".
+			focusMode: settings.autoFocusAll ? "auto" : (region.focusMode ?? null),
 			rotation: region.rotationPreset ?? null,
 			clipIndex: region.clipIndex,
 		})),
