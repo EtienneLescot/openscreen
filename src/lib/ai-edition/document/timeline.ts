@@ -4,8 +4,18 @@
 // or a new document with updated clips.
 
 import type { AxcutClip, AxcutDocument, AxcutTranscript, AxcutTrimRange } from "../schema";
-import { anchoredToRawSpanSec, anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
+import {
+	anchoredToRawSpanSec,
+	anchorRegionsWithDerivedMs,
+	dropPillById,
+} from "../timeline/timelineMap";
 import { createId } from "./ids";
+
+/** The region families a delete can target by id. Shared with the store so "which kinds
+ *  exist" has exactly one definition. `trim` is a source-time cut; the rest are pill-merged
+ *  effects (zoom / speed / annotation / camera-fullscreen). Clips are removed via
+ *  {@link removeClip}, not here — deleting a clip reflows the whole timeline. */
+export type RegionKind = "zoom" | "trim" | "annotation" | "speed" | "cameraFullscreen";
 
 /** Length a clip is given before its media has been probed. Lives here, in the pure
  *  document layer, because that layer decides which clips are still waiting for a real
@@ -568,6 +578,76 @@ export function setClipSourceRange(
 		timeline: { ...document.timeline, clips: newClips },
 	};
 	return rederiveRegionMs(next, newClips);
+}
+
+/**
+ * The single mutator for "delete a region by id" — the edit the UI's delete key and the
+ * LLM's `removeTrim` / `removeModifier` tools all perform. Extracted here (like
+ * `setClipSourceRange`) so the recipe lives in one place: a `trim` is a plain filter on the
+ * source-time cut list; every other kind is a pill (`dropPillById` removes every region that
+ * renders as the same pill as `id`, per the merge rule). Speed / camera-fullscreen live under
+ * `legacyEditor`. An id that matches nothing is a no-op. Pure; does NOT touch `preview.revision`.
+ */
+export function removeRegion(document: AxcutDocument, kind: RegionKind, id: string): AxcutDocument {
+	switch (kind) {
+		case "zoom":
+			return {
+				...document,
+				zoomRanges: dropPillById(document.zoomRanges, id) as AxcutDocument["zoomRanges"],
+			};
+		case "annotation":
+			return { ...document, annotations: dropPillById(document.annotations, id) };
+		case "trim":
+			return {
+				...document,
+				timeline: {
+					...document.timeline,
+					trimRanges: document.timeline.trimRanges.filter((s) => s.id !== id),
+				},
+			};
+		case "speed": {
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prev = dropPillById(
+				(legacy.speedRegions as Array<{ id: string; startMs: number; endMs: number }>) ?? [],
+				id,
+			);
+			return { ...document, legacyEditor: { ...legacy, speedRegions: prev } };
+		}
+		case "cameraFullscreen": {
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prev = dropPillById(
+				(legacy.cameraFullscreenRegions as Array<{ id: string; startMs: number; endMs: number }>) ??
+					[],
+				id,
+			);
+			return { ...document, legacyEditor: { ...legacy, cameraFullscreenRegions: prev } };
+		}
+		default: {
+			// ponytail: exhaustive — TS errors here if a new RegionKind is added.
+			const exhaustive: never = kind;
+			void exhaustive;
+			return document;
+		}
+	}
+}
+
+/**
+ * The single mutator for "delete a clip". Removing a clip closes the gap: the survivors are
+ * re-laid back-to-back (`resequenceClips`) and every anchored pill's derived ms is refreshed
+ * against the new layout (`rederiveRegionMs`) — pills anchored to the removed clip drop out,
+ * exactly like `setClipSourceRange`. Shared by the store's delete-clip action and the LLM's
+ * `removeClip` tool. An unknown `clipId` is a no-op. Pure; does NOT touch `preview.revision`.
+ */
+export function removeClip(document: AxcutDocument, clipId: string): AxcutDocument {
+	const oldClips = document.timeline.clips;
+	const arr = oldClips.filter((c) => c.id !== clipId);
+	if (arr.length === oldClips.length) return document;
+	const newClips = resequenceClips(arr);
+	const next: AxcutDocument = {
+		...document,
+		timeline: { ...document.timeline, clips: newClips },
+	};
+	return oldClips.length > 0 && newClips.length > 0 ? rederiveRegionMs(next, newClips) : next;
 }
 
 export function restoreFullTimeline(document: AxcutDocument): AxcutDocument {
