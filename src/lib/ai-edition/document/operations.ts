@@ -15,9 +15,8 @@ import {
 	moveClip,
 	normalizeIntervals,
 	primaryAssetDuration,
-	rederiveRegionMs,
 	replaceTimeline,
-	resequenceClips,
+	setClipSourceRange,
 } from "./timeline";
 
 export type AxcutTimelineOperation =
@@ -273,29 +272,13 @@ export function applyTimelineOperation(
 			return { document: next, summary: "restored full timeline" };
 		}
 		case "update_clip_range": {
-			const oldClips = document.timeline.clips;
-			const clips = oldClips.map((c) => {
-				if (c.id !== op.clipId) return c;
-				const lo = Math.max(0, Math.min(op.sourceStartSec, op.sourceEndSec));
-				const hi = Math.max(lo, Math.max(op.sourceStartSec, op.sourceEndSec));
-				return {
-					...c,
-					sourceStartSec: lo,
-					sourceEndSec: hi,
-					timelineStartSec: 0,
-					timelineEndSec: 0,
-				};
-			});
-			const newClips = resequenceClips(clips);
-			const nextDoc: AxcutDocument = {
-				...document,
-				timeline: {
-					...document.timeline,
-					clips: newClips,
-				},
-				preview: { ...document.preview, revision: document.preview.revision + 1 },
+			// Shared clip-trim recipe (width + pill clamp/rederive); this façade adds its
+			// own preview-revision bump so the rendered frame refreshes after the edit.
+			const base = setClipSourceRange(document, op.clipId, op.sourceStartSec, op.sourceEndSec);
+			const finalDoc: AxcutDocument = {
+				...base,
+				preview: { ...base.preview, revision: base.preview.revision + 1 },
 			};
-			const finalDoc = rederiveRegionMs(nextDoc, newClips);
 			return {
 				document: finalDoc,
 				summary: `trimmed clip to ${formatSec(Math.min(op.sourceStartSec, op.sourceEndSec))}–${formatSec(Math.max(op.sourceStartSec, op.sourceEndSec))}`,

@@ -382,3 +382,92 @@ describe("useTimeline backfills missing source dimensions on load", () => {
 		expect(bridgeMocks.save).not.toHaveBeenCalled();
 	});
 });
+
+describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
+	const anchoredZoom = (id: string, s: number, e: number) => ({
+		id,
+		startMs: s * 1000,
+		endMs: e * 1000,
+		clipId: "clip_a",
+		sourceStartSec: s,
+		sourceEndSec: e,
+		depth: 3 as const,
+		focus: { cx: 0.5, cy: 0.5 },
+	});
+
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: {
+				...sampleDoc,
+				schemaVersion: 5,
+				zoomRanges: [anchoredZoom("z_keep", 2, 3), anchoredZoom("z_drop", 6, 8)],
+			} as unknown as typeof sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("shrinks the clip's timeline width to match the narrowed source window", async () => {
+		const { result } = renderHook(() => useTimeline());
+		// Trim the 10s clip down to its first 4s of source.
+		await act(async () => {
+			await result.current.updateClipSourceRange("clip_a", 0, 4);
+		});
+		const clip = useProjectStore.getState().document?.timeline.clips[0];
+		expect(clip).toMatchObject({ sourceStartSec: 0, sourceEndSec: 4 });
+		// The width followed the edit instead of keeping its stale 10s extent.
+		expect(clip?.timelineStartSec).toBe(0);
+		expect(clip?.timelineEndSec).toBe(4);
+	});
+
+	it("drops a pill sitting over the truncated tail and keeps the one that survives", async () => {
+		const { result } = renderHook(() => useTimeline());
+		await act(async () => {
+			await result.current.updateClipSourceRange("clip_a", 0, 4);
+		});
+		const zooms = useProjectStore.getState().document?.zoomRanges ?? [];
+		// z_keep (source 2-3) stays; z_drop (source 6-8) is entirely past the new 4s end.
+		expect(zooms.map((z) => z.id)).toEqual(["z_keep"]);
+		expect(zooms[0]).toMatchObject({
+			sourceStartSec: 2,
+			sourceEndSec: 3,
+			startMs: 2000,
+			endMs: 3000,
+		});
+	});
+
+	it("shortens a pill that straddles the new clip end to the surviving overlap", async () => {
+		useProjectStore.setState({
+			document: {
+				...sampleDoc,
+				schemaVersion: 5,
+				zoomRanges: [anchoredZoom("z_edge", 3, 7)],
+			} as unknown as typeof sampleDoc,
+		});
+		const { result } = renderHook(() => useTimeline());
+		await act(async () => {
+			await result.current.updateClipSourceRange("clip_a", 0, 5);
+		});
+		const zooms = useProjectStore.getState().document?.zoomRanges ?? [];
+		expect(zooms).toHaveLength(1);
+		// 3-7 clamped to the [0,5] window → 3-5.
+		expect(zooms[0]).toMatchObject({
+			sourceStartSec: 3,
+			sourceEndSec: 5,
+			startMs: 3000,
+			endMs: 5000,
+		});
+	});
+});

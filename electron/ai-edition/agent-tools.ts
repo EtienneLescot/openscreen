@@ -10,7 +10,7 @@
 
 import { z } from "zod";
 import { createId } from "../../src/lib/ai-edition/document/ids";
-import { replaceTimeline, resequenceClips } from "../../src/lib/ai-edition/document/timeline";
+import { replaceTimeline, setClipSourceRange } from "../../src/lib/ai-edition/document/timeline";
 import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
 import {
 	anchorRegionsWithDerivedMs,
@@ -594,25 +594,11 @@ export function executeAgentTool(
 			}
 			const sourceStartSec = Math.min(parsed.data.sourceStartSec, parsed.data.sourceEndSec);
 			const sourceEndSec = Math.max(parsed.data.sourceStartSec, parsed.data.sourceEndSec);
-			const clips = resequenceClips(
-				document.timeline.clips.map((c) =>
-					c.id === clipId
-						? {
-								...c,
-								sourceStartSec,
-								sourceEndSec,
-								// ponytail: zero the timeline span so resequenceClips derives the
-								// clip length from the new source range instead of the stale one.
-								timelineStartSec: 0,
-								timelineEndSec: 0,
-							}
-						: c,
-				),
-			);
-			const next: AxcutDocument = {
-				...document,
-				timeline: { ...document.timeline, clips },
-			};
+			// One shared mutator with the modale + op dispatcher: recomputes the clip's
+			// width from the new source window AND clamps/drops the anchored pills the
+			// trim removed. Hand-rolling it here is exactly what left this façade orphaning
+			// stale pills the other two didn't.
+			const next = setClipSourceRange(document, clipId, sourceStartSec, sourceEndSec);
 			return {
 				ok: true,
 				document: next,
