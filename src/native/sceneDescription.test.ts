@@ -77,7 +77,7 @@ function makeDoc(
 			captionRanges: [],
 			...(overrides.timeline ?? {}),
 		},
-		annotations: [],
+		annotations: overrides.annotations ?? [],
 		zoomRanges: overrides.zoomRanges ?? [],
 		legacyEditor: overrides.legacyEditor ?? null,
 		agent: { pendingQuestions: [], suggestions: [], lastAppliedOperations: [] },
@@ -1176,5 +1176,184 @@ describe("buildSceneDescription.layout.layoutByClip", () => {
 	it("keeps the scalar layout fields as the first clip's entry", () => {
 		const scene = buildSceneDescription(twoClipDoc());
 		expect(scene.layout.screenRect).toEqual(scene.layout.layoutByClip?.[0]?.screenRect);
+	});
+});
+
+// --- annotations -----------------------------------------------------------
+
+describe("buildSceneDescription.annotations", () => {
+	const style = {
+		color: "#ffffff",
+		backgroundColor: "transparent",
+		fontSize: 32,
+		fontFamily: "Inter",
+		fontWeight: "bold" as const,
+		fontStyle: "normal" as const,
+		textDecoration: "none" as const,
+		textAlign: "center" as const,
+	};
+
+	function docWithAnnotations(annotations: AxcutDocument["annotations"]) {
+		return makeDoc({
+			assets: [makeAsset({ id: "a1", originalPath: "/tmp/a1.mp4", durationSec: 30 })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a1",
+					sourceStartSec: 0,
+					sourceEndSec: 30,
+					timelineStartSec: 0,
+					timelineEndSec: 30,
+				}),
+			],
+			annotations,
+		});
+	}
+
+	it("converts the authored percentages into screen-rect fractions", () => {
+		// The web overlay divides by 100 against `layout.screenRect`; native gets the same space
+		// as fractions so it never has to know about percent.
+		const scene = buildSceneDescription(
+			docWithAnnotations([
+				{
+					id: "ann1",
+					startMs: 1000,
+					endMs: 3000,
+					type: "text",
+					content: "",
+					textContent: "Hello",
+					position: { x: 25, y: 50 },
+					size: { width: 40, height: 10 },
+					style,
+					zIndex: 0,
+				},
+			]),
+		);
+		expect(scene.annotations).toHaveLength(1);
+		expect(scene.annotations[0]).toMatchObject({
+			id: "ann1",
+			kind: "text",
+			startSec: 1,
+			endSec: 3,
+			x: 0.25,
+			y: 0.5,
+			w: 0.4,
+			h: 0.1,
+			clipIndex: 0,
+		});
+	});
+
+	it("carries the text payload, preferring textContent over the legacy content field", () => {
+		const scene = buildSceneDescription(
+			docWithAnnotations([
+				{
+					id: "ann1",
+					startMs: 0,
+					endMs: 1000,
+					type: "text",
+					content: "migrated",
+					textContent: "live",
+					position: { x: 0, y: 0 },
+					size: { width: 10, height: 10 },
+					style: { ...style, textAlign: "left", textAnimation: "fade" },
+					zIndex: 0,
+				},
+			]),
+		);
+		expect(scene.annotations[0].text).toMatchObject({
+			content: "live",
+			color: "#ffffff",
+			backgroundColor: "transparent",
+			// 32 px authored against ANNOTATION_REFERENCE_HEIGHT (1080) -> fraction of the rect.
+			fontSizeRel: 32 / 1080,
+			textAlign: "left",
+			animation: "fade",
+		});
+	});
+
+	it("defaults a figure's arrow data when the document omits it", () => {
+		const scene = buildSceneDescription(
+			docWithAnnotations([
+				{
+					id: "ann1",
+					startMs: 0,
+					endMs: 1000,
+					type: "figure",
+					content: "",
+					position: { x: 10, y: 10 },
+					size: { width: 20, height: 20 },
+					style,
+					zIndex: 0,
+				},
+			]),
+		);
+		expect(scene.annotations[0].figure).toEqual({
+			direction: "right",
+			color: "#34B27B",
+			strokeWidth: 4,
+		});
+		expect(scene.annotations[0].text).toBeUndefined();
+	});
+
+	it("normalises freehand blur points into the same space as the rect", () => {
+		const scene = buildSceneDescription(
+			docWithAnnotations([
+				{
+					id: "ann1",
+					startMs: 0,
+					endMs: 1000,
+					type: "blur",
+					content: "",
+					position: { x: 0, y: 0 },
+					size: { width: 50, height: 50 },
+					style,
+					zIndex: 0,
+					blurData: {
+						type: "mosaic",
+						shape: "freehand",
+						color: "black",
+						intensity: 8,
+						blockSize: 16,
+						freehandPoints: [
+							{ x: 10, y: 20 },
+							{ x: 30, y: 40 },
+						],
+					},
+				},
+			]),
+		);
+		expect(scene.annotations[0].blur).toMatchObject({
+			style: "mosaic",
+			shape: "freehand",
+			color: "black",
+			intensity: 8,
+			blockSize: 16,
+			freehandPoints: [
+				{ x: 0.1, y: 0.2 },
+				{ x: 0.3, y: 0.4 },
+			],
+		});
+	});
+
+	it("emits ascending zIndex so the compositor can paint without sorting per frame", () => {
+		const at = (id: string, zIndex: number) => ({
+			id,
+			startMs: 0,
+			endMs: 1000,
+			type: "text" as const,
+			content: "",
+			textContent: id,
+			position: { x: 0, y: 0 },
+			size: { width: 10, height: 10 },
+			style,
+			zIndex,
+		});
+		const scene = buildSceneDescription(docWithAnnotations([at("top", 5), at("bottom", 1)]));
+		expect(scene.annotations.map((a) => a.id)).toEqual(["bottom", "top"]);
+	});
+
+	it("is empty when the document has no annotations", () => {
+		const scene = buildSceneDescription(docWithAnnotations([]));
+		expect(scene.annotations).toEqual([]);
 	});
 });

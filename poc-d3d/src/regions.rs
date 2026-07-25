@@ -224,6 +224,55 @@ fn lerp_rotation3d(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
     [lerp(a[0], b[0], t), lerp(a[1], b[1], t), lerp(a[2], b[2], t)]
 }
 
+/// Les trois segments d'une flèche d'annotation, en unités du viewBox SVG (0..100), repris
+/// VERBATIM des tracés de `ArrowSvgs.tsx` : hampe puis deux barbes, toutes à bouts ronds. Garder
+/// les mêmes nombres est ce qui garantit que le rendu natif et la preview dessinent la même
+/// flèche — inutile de réinventer une géométrie « équivalente ».
+pub fn arrow_segments_viewbox(direction: &str) -> [[f32; 4]; 3] {
+    match direction {
+        "up" => [[50.0, 20.0, 50.0, 80.0], [50.0, 20.0, 35.0, 35.0], [50.0, 20.0, 65.0, 35.0]],
+        "down" => [[50.0, 20.0, 50.0, 80.0], [50.0, 80.0, 35.0, 65.0], [50.0, 80.0, 65.0, 65.0]],
+        "left" => [[80.0, 50.0, 20.0, 50.0], [20.0, 50.0, 35.0, 35.0], [20.0, 50.0, 35.0, 65.0]],
+        "up-right" => [[25.0, 75.0, 75.0, 25.0], [75.0, 25.0, 60.0, 30.0], [75.0, 25.0, 70.0, 40.0]],
+        "up-left" => [[75.0, 75.0, 25.0, 25.0], [25.0, 25.0, 40.0, 30.0], [25.0, 25.0, 30.0, 40.0]],
+        "down-right" => {
+            [[25.0, 25.0, 75.0, 75.0], [75.0, 75.0, 70.0, 60.0], [75.0, 75.0, 60.0, 70.0]]
+        }
+        "down-left" => {
+            [[75.0, 25.0, 25.0, 75.0], [25.0, 75.0, 30.0, 60.0], [25.0, 75.0, 40.0, 70.0]]
+        }
+        // "right" et tout ce qui n'est pas reconnu — même défaut que le schéma côté app.
+        _ => [[20.0, 50.0, 80.0, 50.0], [80.0, 50.0, 65.0, 35.0], [80.0, 50.0, 65.0, 65.0]],
+    }
+}
+
+/// Passe les segments du viewBox aux px locaux du quad, et rend la demi-épaisseur du trait.
+///
+/// Le SVG n'a pas de `preserveAspectRatio` explicite, donc il vaut `xMidYMid meet` : mise à
+/// l'échelle **uniforme** au plus petit côté, centrée. La flèche n'est donc jamais étirée quand la
+/// boîte n'est pas carrée, et `strokeWidth` suit la même échelle — c'est pour ça qu'il n'a pas
+/// besoin de la convention de proportionnalité du `fontSize` : il est déjà exprimé dans le
+/// viewBox, donc déjà relatif à la boîte.
+pub fn arrow_local_geometry(
+    direction: &str,
+    stroke_width_viewbox: f32,
+    quad_px: [f32; 2],
+) -> ([[f32; 4]; 3], f32) {
+    let scale = quad_px[0].min(quad_px[1]) / 100.0;
+    let off = [(quad_px[0] - 100.0 * scale) * 0.5, (quad_px[1] - 100.0 * scale) * 0.5];
+    let to_local = |v: [f32; 4]| {
+        [
+            off[0] + v[0] * scale,
+            off[1] + v[1] * scale,
+            off[0] + v[2] * scale,
+            off[1] + v[3] * scale,
+        ]
+    };
+    let segments = arrow_segments_viewbox(direction);
+    let half_stroke = (stroke_width_viewbox.max(0.0) * scale) * 0.5;
+    ([to_local(segments[0]), to_local(segments[1]), to_local(segments[2])], half_stroke)
+}
+
 /// Focus effectif d'une région à `t` : sa position fixe, sauf en mode "auto" où elle suit la
 /// télémétrie curseur (port de `getResolvedFocus`, sans le clamp — le crop-window de
 /// `compositor.rs` clampe déjà après coup, cf. `su0.clamp(...)`, donc redondant ici).
@@ -534,5 +583,63 @@ mod zoom_focus_tests {
         let state = zoom_state_at(&regions, 0.0, None);
         assert_eq!(state.scale, 1.0);
         assert_eq!(state.focus, [0.5, 0.5]);
+    }
+}
+
+#[cfg(test)]
+mod arrow_tests {
+    use super::*;
+
+    #[test]
+    fn the_geometry_is_the_svg_geometry_verbatim() {
+        // Parité avec `ArrowSvgs.tsx` : si ces nombres divergent, le rendu et la preview
+        // dessinent deux flèches différentes.
+        assert_eq!(
+            arrow_segments_viewbox("right"),
+            [[20.0, 50.0, 80.0, 50.0], [80.0, 50.0, 65.0, 35.0], [80.0, 50.0, 65.0, 65.0]]
+        );
+        assert_eq!(
+            arrow_segments_viewbox("up"),
+            [[50.0, 20.0, 50.0, 80.0], [50.0, 20.0, 35.0, 35.0], [50.0, 20.0, 65.0, 35.0]]
+        );
+    }
+
+    #[test]
+    fn an_unknown_direction_falls_back_to_right() {
+        // Même défaut que le schéma côté app, pour qu'une donnée abîmée dessine quelque chose
+        // de sensé plutôt que rien.
+        assert_eq!(arrow_segments_viewbox("sideways"), arrow_segments_viewbox("right"));
+    }
+
+    #[test]
+    fn a_square_quad_maps_the_viewbox_one_to_one() {
+        let (segments, half) = arrow_local_geometry("right", 10.0, [100.0, 100.0]);
+        // échelle 1, aucun centrage à appliquer
+        assert_eq!(segments[0], [20.0, 50.0, 80.0, 50.0]);
+        assert!((half - 5.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_wide_quad_scales_uniformly_and_centres() {
+        // `preserveAspectRatio` vaut `xMidYMid meet` par défaut : la flèche tient dans le PLUS
+        // PETIT côté et se centre — elle n'est jamais étirée. Ici 400x200 -> échelle 2, et
+        // 200px de marge horizontale à répartir, donc +100 sur les x.
+        let (segments, half) = arrow_local_geometry("right", 4.0, [400.0, 200.0]);
+        assert_eq!(segments[0], [100.0 + 40.0, 100.0, 100.0 + 160.0, 100.0]);
+        // l'épaisseur suit la même échelle uniforme
+        assert!((half - 4.0).abs() < 1e-6);
+    }
+
+    #[test]
+    fn a_tall_quad_centres_vertically() {
+        let (segments, _) = arrow_local_geometry("up", 4.0, [100.0, 300.0]);
+        // échelle 1 (plus petit côté = 100), 200px de marge verticale -> +100 sur les y
+        assert_eq!(segments[0], [50.0, 100.0 + 20.0, 50.0, 100.0 + 80.0]);
+    }
+
+    #[test]
+    fn a_negative_stroke_width_cannot_produce_a_negative_half_width() {
+        let (_, half) = arrow_local_geometry("right", -5.0, [100.0, 100.0]);
+        assert_eq!(half, 0.0);
     }
 }

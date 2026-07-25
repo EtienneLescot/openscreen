@@ -23,6 +23,44 @@ pub const OUT_H: u32 = 1080;
 
 /// Parse une couleur "#rgb" / "#rrggbb" (sRGB, comme les wallpapers web) → [r,g,b,a] 0..1.
 /// Les couleurs plates suivent le même chemin que `bg_color` (pas de linéarisation).
+/// Décode une data URL base64 (`data:image/png;base64,AAAA…`) en octets. `None` si ce n'en est
+/// pas une — l'appelant retombe alors sur une lecture disque.
+///
+/// Écrit à la main plutôt qu'avec une dépendance : c'est le seul usage de base64 du projet, et le
+/// décodeur tient en quinze lignes vérifiables. Les caractères hors alphabet (retours à la ligne
+/// d'un URI replié, `=` de padding) sont ignorés, ce qui rend la fonction tolérante sans être
+/// laxiste : un caractère invalide ne peut pas décaler le flux, il est simplement absent.
+fn decode_data_uri(uri: &str) -> Option<Vec<u8>> {
+    let rest = uri.strip_prefix("data:")?;
+    let comma = rest.find(',')?;
+    if !rest[..comma].contains("base64") {
+        return None;
+    }
+    let payload = &rest[comma + 1..];
+    let sextet = |c: u8| -> Option<u32> {
+        match c {
+            b'A'..=b'Z' => Some((c - b'A') as u32),
+            b'a'..=b'z' => Some((c - b'a') as u32 + 26),
+            b'0'..=b'9' => Some((c - b'0') as u32 + 52),
+            b'+' => Some(62),
+            b'/' => Some(63),
+            _ => None,
+        }
+    };
+    let mut out = Vec::with_capacity(payload.len() / 4 * 3);
+    let (mut acc, mut bits) = (0u32, 0u32);
+    for byte in payload.bytes() {
+        let Some(v) = sextet(byte) else { continue };
+        acc = (acc << 6) | v;
+        bits += 6;
+        if bits >= 8 {
+            bits -= 8;
+            out.push((acc >> bits) as u8);
+        }
+    }
+    Some(out)
+}
+
 fn parse_hex(s: &str) -> Option<[f32; 4]> {
     let h = s.trim().trim_start_matches('#');
     let (r, g, b) = match h.len() {
@@ -269,6 +307,12 @@ pub struct Compositor {
     q_srv: ID3D11ShaderResourceView,
     e_rtv: ID3D11RenderTargetView,
     e_srv: ID3D11ShaderResourceView,
+    /// Copie pleine réso de l'image composée, pour les annotations de type flou : on ne peut pas
+    /// échantillonner le render target sur lequel on dessine, donc on le recopie ici d'abord.
+    /// Distincte de `accum` à dessein — `accum` sert au motion blur, qui appelle `compose_frame`
+    /// plusieurs fois par frame et dont l'accumulation serait écrasée.
+    ann_copy: ID3D11Texture2D,
+    ann_copy_srv: ID3D11ShaderResourceView,
     // accumulateur pour le flou de mouvement (supersampling temporel)
     accum: ID3D11Texture2D,
     accum_rtv: ID3D11RenderTargetView,
@@ -294,6 +338,18 @@ pub struct Compositor {
     /// Scène pilotée par l'app (contrat) : quand présente, remplace le layout fixture de
     /// `timeline()`. Voir `scene.rs` / `SceneDescription` (TS).
     scene: RefCell<Option<Scene>>,
+    /// Rastériseur de texte (Direct2D/DirectWrite). `Option` parce qu'un échec d'init des
+    /// fabriques ne doit pas empêcher tout le compositeur de tourner : sans lui, les annotations
+    /// texte sont simplement absentes, comme avant.
+    text_raster: Option<crate::text::TextRasterizer>,
+    /// Cache des textures de texte, indexé sur l'ID d'annotation. La `u64` est la clé de contenu
+    /// (`TextSpec::cache_key`) : on ne re-rastérise que si elle change, donc jamais pour un
+    /// déplacement ou une animation.
+    text_cache: RefCell<HashMap<String, (ID3D11ShaderResourceView, u64)>>,
+    /// Cache des textures d'annotation image, indexé sur l'ID d'annotation (SRV, w, h, longueur
+    /// de la source). Séparé de `img_cache` : les wallpapers sont des chemins disque, ces images
+    /// des data URL de plusieurs Mo qu'on ne veut pas utiliser comme clés de hachage.
+    ann_img_cache: RefCell<HashMap<String, (ID3D11ShaderResourceView, u32, u32, usize)>>,
     /// Cache des textures wallpaper image (clé = chemin absolu) : décodage/upload une seule
     /// fois, puis réutilisées par frame. (SRV, largeur, hauteur).
     img_cache: RefCell<HashMap<String, (ID3D11ShaderResourceView, u32, u32)>>,
@@ -812,6 +868,22 @@ impl Compositor {
         let mut accum_srv: Option<ID3D11ShaderResourceView> = None;
         dev.CreateShaderResourceView(&accum, None, Some(&mut accum_srv))?;
 
+        // Copie de travail des annotations flou. Chaîne de mips COMPLÈTE (`MipLevels: 0`) : c'est
+        // elle qui fournit le flou. Échantillonner un niveau plus bas donne un vrai lissage pour
+        // n'importe quel rayon à coût constant, là où un noyau de quelques taps espacés produit
+        // des copies fantômes au lieu d'un flou.
+        let ann_desc = D3D11_TEXTURE2D_DESC {
+            MipLevels: 0,
+            BindFlags: (D3D11_BIND_RENDER_TARGET.0 | D3D11_BIND_SHADER_RESOURCE.0) as u32,
+            MiscFlags: D3D11_RESOURCE_MISC_GENERATE_MIPS.0 as u32,
+            ..ad
+        };
+        let mut ann_copy: Option<ID3D11Texture2D> = None;
+        dev.CreateTexture2D(&ann_desc, None, Some(&mut ann_copy))?;
+        let ann_copy = ann_copy.unwrap();
+        let mut ann_copy_srv: Option<ID3D11ShaderResourceView> = None;
+        dev.CreateShaderResourceView(&ann_copy, None, Some(&mut ann_copy_srv))?;
+
         let mut bla = D3D11_BLEND_DESC::default();
         bla.RenderTarget[0] = D3D11_RENDER_TARGET_BLEND_DESC {
             BlendEnable: true.into(),
@@ -857,6 +929,8 @@ impl Compositor {
             q_srv,
             e_rtv,
             e_srv,
+            ann_copy,
+            ann_copy_srv: ann_copy_srv.unwrap(),
             accum,
             accum_rtv: accum_rtv.unwrap(),
             accum_srv: accum_srv.unwrap(),
@@ -867,6 +941,15 @@ impl Compositor {
             srv_cache: RefCell::new(HashMap::new()),
             live_params: RefCell::new(LiveParams::default()),
             scene: RefCell::new(None),
+            text_raster: match crate::text::TextRasterizer::new() {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    eprintln!("[texte] init Direct2D/DirectWrite impossible, annotations texte désactivées: {e}");
+                    None
+                }
+            },
+            text_cache: RefCell::new(HashMap::new()),
+            ann_img_cache: RefCell::new(HashMap::new()),
             img_cache: RefCell::new(HashMap::new()),
             render_size: Cell::new((out_w, out_h)),
             resize_target: RefCell::new(None),
@@ -1110,9 +1193,18 @@ impl Compositor {
 
     /// Décode un fichier image (jpg/png) → texture RGBA immuable + SRV.
     unsafe fn load_image_srv(&self, path: &str) -> Result<(ID3D11ShaderResourceView, u32, u32)> {
-        let img = image::open(path)
-            .map_err(|e| anyhow::anyhow!("wallpaper {}: {}", path, e))?
-            .to_rgba8();
+        // Les annotations image stockent une data URL (cf. `types.ts` : « Separate storage for
+        // image data URL »), pas un chemin : on décode alors depuis la mémoire. Les wallpapers
+        // continuent de passer par le disque.
+        let img = if let Some(bytes) = decode_data_uri(path) {
+            image::load_from_memory(&bytes)
+                .map_err(|e| anyhow::anyhow!("data URI image ({} octets): {}", bytes.len(), e))?
+                .to_rgba8()
+        } else {
+            image::open(path)
+                .map_err(|e| anyhow::anyhow!("wallpaper {}: {}", path, e))?
+                .to_rgba8()
+        };
         let (w, h) = (img.width(), img.height());
         let pixels = img.into_raw();
         let td = D3D11_TEXTURE2D_DESC {
@@ -1969,7 +2061,240 @@ impl Compositor {
                 &wuv,
             );
         }
+
+        // --- annotations : calque le plus haut, comme dans le DOM de la preview (le calque y est
+        // monté après la vidéo). Ancrées sur `s_dst`, le rect ÉCRAN — c'est le conteneur que reçoit
+        // l'overlay web (`layout.screenRect`) — et volontairement pas sur le rect de sortie, ni
+        // sujettes au crop de zoom : dans la preview l'overlay est frère de l'élément qui porte la
+        // transform, donc les annotations restent en place pendant que le contenu zoome dessous.
+        // `source_t`, la même base de temps que les zoom/speed regions : le temps SOURCE du clip,
+        // pas le compteur de frames. C'est ce qui garde une annotation alignée sur l'image quand
+        // une speed region répète ou saute des frames.
+        self.draw_annotations(scene_ref.as_ref(), source_t, s_dst);
         Ok(())
+    }
+
+    /// Dessine les annotations visibles à `t`. `screen_dst` = rect écran en fractions de sortie.
+    ///
+    /// Seule la « figure » (flèche) est rendue à ce stade ; texte, image et flou suivront. Les
+    /// types non gérés sont ignorés silencieusement plutôt que dessinés de travers : mieux vaut
+    /// l'absence connue qu'un placeholder qui ferait croire à un bug de style.
+    unsafe fn draw_annotations(&self, scene: Option<&Scene>, t: f32, screen_dst: [f32; 4]) {
+        let Some(scene) = scene else { return };
+        if scene.annotations.is_empty() {
+            return;
+        }
+        let visible = |a: &crate::scene::SceneAnnotation| {
+            t >= a.start_sec as f32 && t < a.end_sec as f32
+        };
+        // Une seule recopie du render target pour TOUTES les annotations flou de la frame — leur
+        // lecture doit voir l'image composée sans les flous eux-mêmes, sinon deux zones qui se
+        // recouvrent s'échantillonneraient l'une l'autre selon l'ordre de dessin.
+        let needs_copy = scene
+            .annotations
+            .iter()
+            .any(|a| visible(a) && a.kind == "blur" && a.blur.is_some());
+        if needs_copy {
+            // `CopySubresourceRegion` et non `CopyResource` : les deux textures n'ont pas le même
+            // nombre de niveaux, on ne remplit que le mip 0 puis on laisse le GPU dériver le reste.
+            self.ctx.CopySubresourceRegion(&self.ann_copy, 0, 0, 0, 0, &self.rt, 0, None);
+            self.ctx.GenerateMips(&self.ann_copy_srv);
+        }
+        // La liste arrive déjà triée par zIndex croissant côté app, donc l'ordre d'itération EST
+        // l'ordre de peinture — pas de tri par frame.
+        for annotation in &scene.annotations {
+            if !visible(annotation) {
+                continue;
+            }
+            let dst = [
+                screen_dst[0] + annotation.x * screen_dst[2],
+                screen_dst[1] + annotation.y * screen_dst[3],
+                annotation.w * screen_dst[2],
+                annotation.h * screen_dst[3],
+            ];
+            let quad_px = [dst[2] * self.rw(), dst[3] * self.rh()];
+            if quad_px[0] <= 0.0 || quad_px[1] <= 0.0 {
+                continue;
+            }
+            match annotation.kind.as_str() {
+                "figure" => {
+                    let Some(figure) = annotation.figure.as_ref() else { continue };
+                    let (segments, half_stroke) = crate::regions::arrow_local_geometry(
+                        &figure.direction,
+                        figure.stroke_width,
+                        quad_px,
+                    );
+                    let rgba = parse_hex(&figure.color).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                    self.draw_solid(&LayerCB {
+                        dst,
+                        quad_px,
+                        mode: 9.0,
+                        color: rgba,
+                        fx: segments[0],
+                        src_prev: segments[1],
+                        dst_prev: segments[2],
+                        mb: [1.0, half_stroke, 0.0, 0.0],
+                        ..Default::default()
+                    });
+                }
+                "blur" => {
+                    let Some(blur) = annotation.blur.as_ref() else { continue };
+                    // Le masque en tracé libre demande une liste de points côté GPU (buffer
+                    // structuré), pas encore faite : on masque alors la BOÎTE ENGLOBANTE.
+                    //
+                    // Ce choix est délibéré et asymétrique. Ne rien dessiner laisserait passer en
+                    // clair, dans le fichier exporté, ce que l'utilisateur a explicitement désigné
+                    // comme à cacher — un masque de confidentialité qui ne masque pas est pire que
+                    // pas de masque, parce qu'il donne confiance à tort. Sur-flouter une marge
+                    // autour de la zone ne trahit personne.
+                    let freehand_fallback = blur.shape == "freehand";
+                    let is_blur = if blur.style == "blur" { 1.0 } else { 0.0 };
+                    // `intensity` pilote le rayon du flou, `block_size` la grille de mosaïque —
+                    // deux réglages distincts côté app, un seul paramètre ici selon le style.
+                    let amount = if is_blur > 0.5 { blur.intensity } else { blur.block_size };
+                    // Le repli du tracé libre passe par le rectangle, pas l'ovale : un ovale
+                    // inscrit dans la boîte englobante en retirerait les coins, donc une partie de
+                    // ce que l'utilisateur a couvert.
+                    let is_oval = if blur.shape == "oval" && !freehand_fallback { 1.0 } else { 0.0 };
+                    // La teinte n'a de sens qu'en mosaïque : elle sert à marquer visiblement une
+                    // zone caviardée. Un flou teinté ne ressemblerait plus à un flou.
+                    let tinted = if is_blur > 0.5 { 0.0 } else { 1.0 };
+                    let tint = if blur.color == "black" {
+                        [0.0, 0.0, 0.0, 1.0]
+                    } else {
+                        [1.0, 1.0, 1.0, 1.0]
+                    };
+                    self.ctx.PSSetShaderResources(2, Some(&[Some(self.ann_copy_srv.clone())]));
+                    self.draw_solid(&LayerCB {
+                        dst,
+                        quad_px,
+                        mode: 10.0,
+                        color: tint,
+                        fx: [is_blur, amount.max(1.0), is_oval, tinted],
+                        ..Default::default()
+                    });
+                }
+                "image" => {
+                    let Some(src) = annotation.image_path.as_ref() else { continue };
+                    if src.is_empty() {
+                        continue;
+                    }
+                    // Cache indexé sur l'ID de l'annotation, pas sur la data URL : celle-ci pèse
+                    // souvent des mégaoctets, et la prendre comme clé de HashMap la ferait hacher
+                    // à chaque frame. La longueur, stockée à côté, sert de garde-fou quand
+                    // l'utilisateur change l'image (une nouvelle image de longueur identique au
+                    // bit près serait manquée jusqu'au rechargement — coût accepté en connaissance).
+                    let key = annotation.id.clone();
+                    let cached = {
+                        let cache = self.ann_img_cache.borrow();
+                        cache.get(&key).filter(|(_, _, _, len)| *len == src.len()).cloned()
+                    };
+                    let Some((srv, iw, ih, _)) = cached.or_else(|| {
+                        match self.load_image_srv(src) {
+                            Ok((srv, w, h)) => {
+                                let entry = (srv, w, h, src.len());
+                                self.ann_img_cache.borrow_mut().insert(key, entry.clone());
+                                Some(entry)
+                            }
+                            Err(e) => {
+                                eprintln!("[annotation image] {}: {e}", annotation.id);
+                                None
+                            }
+                        }
+                    }) else {
+                        continue;
+                    };
+                    if iw == 0 || ih == 0 {
+                        continue;
+                    }
+                    // `object-contain`, comme la preview : mise à l'échelle uniforme pour tenir
+                    // DANS la boîte, centrée. On rétrécit le rect de destination au ratio de
+                    // l'image plutôt que de recadrer la source, ce qui donne exactement ça.
+                    let box_aspect = quad_px[0] / quad_px[1];
+                    let img_aspect = iw as f32 / ih as f32;
+                    let (fit_w, fit_h) = if img_aspect > box_aspect {
+                        (dst[2], dst[3] * (box_aspect / img_aspect))
+                    } else {
+                        (dst[2] * (img_aspect / box_aspect), dst[3])
+                    };
+                    let fit = [
+                        dst[0] + (dst[2] - fit_w) * 0.5,
+                        dst[1] + (dst[3] - fit_h) * 0.5,
+                        fit_w,
+                        fit_h,
+                    ];
+                    self.ctx.PSSetShaderResources(2, Some(&[Some(srv)]));
+                    self.draw_solid(&LayerCB {
+                        dst: fit,
+                        src: [0.0, 0.0, 1.0, 1.0],
+                        quad_px: [fit_w * self.rw(), fit_h * self.rh()],
+                        // mode 7 = sprite RGBA avec alpha, déjà utilisé par les thèmes de curseur :
+                        // exactement ce qu'il faut ici, donc aucun shader de plus. `fx` est son
+                        // rect de clip — plein cadre, pour ne rien découper.
+                        mode: 7.0,
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        fx: [0.0, 0.0, 1.0, 1.0],
+                        ..Default::default()
+                    });
+                }
+                "text" => {
+                    let Some(text) = annotation.text.as_ref() else { continue };
+                    let Some(raster) = self.text_raster.as_ref() else { continue };
+                    if text.content.trim().is_empty() {
+                        continue;
+                    }
+                    // `font_size_rel` est une fraction de la HAUTEUR DU RECT ÉCRAN (cf. le contrat
+                    // et `annotationScale.ts`) : on la ramène en pixels de sortie ici, avec le même
+                    // produit que la preview applique contre sa propre boîte.
+                    let screen_h_px = screen_dst[3] * self.rh();
+                    let spec = crate::text::TextSpec {
+                        content: text.content.clone(),
+                        color: parse_hex(&text.color).unwrap_or([1.0, 1.0, 1.0, 1.0]),
+                        // "transparent" ne parse pas en hex : alpha 0 => pas de fond, ce qui est
+                        // exactement la sémantique CSS.
+                        background: parse_hex(&text.background_color).unwrap_or([0.0, 0.0, 0.0, 0.0]),
+                        font_size_px: text.font_size_rel * screen_h_px,
+                        font_family: text.font_family.clone(),
+                        bold: text.font_weight == "bold",
+                        italic: text.font_style == "italic",
+                        underline: text.text_decoration == "underline",
+                        align: text.text_align.clone(),
+                        box_px: [quad_px[0].round() as u32, quad_px[1].round() as u32],
+                    };
+                    let key = spec.cache_key();
+                    let cached = {
+                        let cache = self.text_cache.borrow();
+                        cache.get(&annotation.id).filter(|(_, k)| *k == key).map(|(srv, _)| srv.clone())
+                    };
+                    let Some(srv) = cached.or_else(|| match raster.rasterize(&self.dev, &spec) {
+                        Ok(srv) => {
+                            self.text_cache
+                                .borrow_mut()
+                                .insert(annotation.id.clone(), (srv.clone(), key));
+                            Some(srv)
+                        }
+                        Err(e) => {
+                            eprintln!("[annotation texte] {}: {e}", annotation.id);
+                            None
+                        }
+                    }) else {
+                        continue;
+                    };
+                    self.ctx.PSSetShaderResources(2, Some(&[Some(srv)]));
+                    self.draw_solid(&LayerCB {
+                        dst,
+                        src: [0.0, 0.0, 1.0, 1.0],
+                        quad_px,
+                        // mode 11 : sprite en alpha DÉJÀ prémultiplié (ce que produit D2D).
+                        mode: 11.0,
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        ..Default::default()
+                    });
+                }
+                _ => {}
+            }
+        }
+        self.ctx.PSSetShaderResources(2, Some(&[None]));
     }
 
     /// Flou de mouvement (§8) : moyenne de `n` sous-frames aux temps intermédiaires
@@ -2444,6 +2769,35 @@ mod tests {
         for (actual, expected) in actual.into_iter().zip(expected) {
             assert!((actual - expected).abs() < 1e-6, "actual={actual}, expected={expected}");
         }
+    }
+
+    #[test]
+    fn decodes_a_base64_data_uri() {
+        // "Hi!" -> SGkh
+        assert_eq!(decode_data_uri("data:image/png;base64,SGkh").unwrap(), b"Hi!".to_vec());
+    }
+
+    #[test]
+    fn ignores_padding_and_line_breaks_inside_the_payload() {
+        // Un URI replié ou paddé doit décoder à l'identique : les caractères hors alphabet sont
+        // sautés, donc ils ne peuvent pas décaler le flux.
+        let folded = "data:image/png;base64,SGkh
+==";
+        assert_eq!(decode_data_uri(folded).unwrap(), b"Hi!".to_vec());
+    }
+
+    #[test]
+    fn a_plain_path_is_not_a_data_uri() {
+        // Le repli lecture-disque des wallpapers en dépend.
+        assert!(decode_data_uri("/wallpapers/x.jpg").is_none());
+        assert!(decode_data_uri("C:/img/y.png").is_none());
+    }
+
+    #[test]
+    fn a_non_base64_data_uri_is_refused() {
+        // `data:image/svg+xml,<svg…>` n'est pas du base64 : mieux vaut échouer que décoder du
+        // texte comme des octets.
+        assert!(decode_data_uri("data:image/svg+xml,<svg/>").is_none());
     }
 
     #[test]
