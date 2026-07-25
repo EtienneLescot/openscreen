@@ -420,16 +420,38 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 							))}
 						</select>,
 					)}
-					<button
-						type="button"
-						onClick={() => {
-							tl.updateZoomFocusLive(region.id, { cx: 0.5, cy: 0.5 });
-							void tl.commitZoomFocus();
-						}}
-						style={secondaryBtnStyle}
-					>
-						{te("inspector.resetFocusPoint")}
-					</button>
+					{paneRow(
+						ts("zoom.focusMode.title"),
+						<select
+							value={region.focusMode ?? "manual"}
+							onChange={(e) =>
+								void tl.updateZoomFocusMode(region.id, e.target.value as "manual" | "auto")
+							}
+							style={selectStyle}
+						>
+							<option value="manual">{ts("zoom.focusMode.manual")}</option>
+							<option value="auto">{ts("zoom.focusMode.auto")}</option>
+						</select>,
+					)}
+					{region.focusMode === "auto" ? (
+						// In auto the focus is resampled from cursor telemetry every frame, so there is
+						// no fixed point to reset and no gimbal on the canvas (ZoomFocusOverlay bows out
+						// for auto regions). Offering the reset button here would offer a no-op.
+						<p style={{ margin: 0, font: "400 11px/1.45 var(--font-sans)", color: "var(--fg-2)" }}>
+							{ts("zoom.focusMode.autoDescription")}
+						</p>
+					) : (
+						<button
+							type="button"
+							onClick={() => {
+								tl.updateZoomFocusLive(region.id, { cx: 0.5, cy: 0.5 });
+								void tl.commitZoomFocus();
+							}}
+							style={secondaryBtnStyle}
+						>
+							{te("inspector.resetFocusPoint")}
+						</button>
+					)}
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
 						<Trash2 size={14} />
 						{ts("zoom.deleteZoom")}

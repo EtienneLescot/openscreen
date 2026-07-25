@@ -495,6 +495,28 @@ export function useTimeline() {
 		[document, saveDocument],
 	);
 
+	// Nothing could set `focusMode`: "auto" only ever arrived from the automatic suggestion pass
+	// (`zoomSuggestions.ts`), so a hand-drawn zoom stayed pinned to its static focus point with no
+	// way to make it follow the cursor. The capability itself was complete end to end —
+	// `sceneDescription.ts` ships the mode, `scene.rs` parses it, `regions.rs::resolve_focus`
+	// samples the cursor track — only this setter was missing.
+	//
+	// Writing "manual" explicitly is safe even though `migrate.ts` only persists "auto": an absent
+	// field MEANS manual, so both forms resolve identically.
+	const updateZoomFocusMode = useCallback(
+		async (id: string, focusMode: "manual" | "auto") => {
+			if (!document) return;
+			const next: AxcutDocument = {
+				...document,
+				zoomRanges: patchPillById(document.zoomRanges, id, {
+					focusMode,
+				}) as AxcutDocument["zoomRanges"],
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
+
 	const updateAnnotationSpan = useCallback(
 		async (id: string, startMs: number, endMs: number) => {
 			if (!document) return;
@@ -1139,6 +1161,7 @@ export function useTimeline() {
 		updateZoomFocusLive,
 		commitZoomFocus,
 		updateZoomDepth,
+		updateZoomFocusMode,
 		updateAnnotationSpan,
 		updateAnnotationLive,
 		commitAnnotationChange,
