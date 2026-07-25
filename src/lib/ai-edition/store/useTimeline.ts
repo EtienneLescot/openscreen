@@ -256,8 +256,10 @@ export function useTimeline() {
 			startMs: timeMs,
 			endMs: timeMs + 2000,
 			type: "text" as AnnotationType,
-			content: "New annotation",
-			textContent: "New annotation",
+			// Start empty so the inspector's placeholder shows and typing goes into an
+			// empty field, instead of a baked-in default the user must select and clear.
+			content: "",
+			textContent: "",
 			position: { x: 50, y: 50 },
 			size: { width: 30, height: 20 },
 			style: {
@@ -273,14 +275,20 @@ export function useTimeline() {
 			},
 			zIndex: document.annotations.length + 1,
 		};
+		const created = anchorRegionsWithDerivedMs([ann], document.timeline.clips, () =>
+			createId("ann"),
+		);
 		const next: AxcutDocument = {
 			...document,
-			annotations: [
-				...document.annotations,
-				...anchorRegionsWithDerivedMs([ann], document.timeline.clips, () => createId("ann")),
-			] as unknown as AxcutDocument["annotations"],
+			annotations: [...document.annotations, ...created] as unknown as AxcutDocument["annotations"],
 		};
 		await saveDocument(next);
+		// Select the freshly added (empty) annotation so its inspector opens and it
+		// shows a selection box on the canvas — an empty text annotation renders
+		// nothing, so without this it would be invisible and impossible to click.
+		const newId = created[0]?.id ?? ann.id;
+		setMultiSelection([{ kind: "annotation", id: newId }]);
+		setSelection({ kind: "annotation", id: newId });
 	}, [document, currentTimeSec, saveDocument]);
 
 	const addSpeed = useCallback(async () => {

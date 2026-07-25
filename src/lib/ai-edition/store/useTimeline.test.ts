@@ -471,3 +471,45 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 		});
 	});
 });
+
+describe("useTimeline.addAnnotation", () => {
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			currentTimeSec: 1,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("creates an empty text annotation and selects it so the placeholder shows", async () => {
+		const { result } = renderHook(() => useTimeline());
+		await act(async () => {
+			await result.current.addAnnotation();
+		});
+		const annotations = useProjectStore.getState().document?.annotations ?? [];
+		expect(annotations).toHaveLength(1);
+		// Empty content is what lets the inspector's placeholder show, instead of a
+		// baked-in default the user has to select and clear before typing.
+		expect(annotations[0]).toMatchObject({ type: "text", content: "" });
+		// The new (empty) annotation is auto-selected so its inspector opens and it
+		// draws a selection box on the canvas — an empty text annotation renders
+		// nothing, so without selection it would be invisible and unclickable.
+		expect(result.current.selection).toEqual({
+			kind: "annotation",
+			id: (annotations[0] as { id: string }).id,
+		});
+	});
+});
