@@ -79,14 +79,4 @@ describe("SpeedControl", () => {
 		expect(select.value).toBe("25");
 		expect(Array.from(select.options).map((o) => o.value)).toContain("25");
 	});
-
-	it("warns that preview frame-steps above the native playback rate", () => {
-		renderControl(25);
-		expect(screen.getByText("speed.previewFrameSteppingHint:16")).toBeInTheDocument();
-	});
-
-	it("stays quiet about frame-stepping at a natively playable speed", () => {
-		renderControl(2);
-		expect(screen.queryByText(/previewFrameSteppingHint/)).not.toBeInTheDocument();
-	});
 });

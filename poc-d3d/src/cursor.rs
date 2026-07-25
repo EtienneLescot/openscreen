@@ -4,15 +4,94 @@
 
 use anyhow::{Context, Result};
 
+// Paramètres de suivi auto — parité stricte avec
+// `src/components/video-editor/videoPlayback/constants.ts` (AUTO_FOLLOW_PARAMS), partagés
+// là-bas entre preview et export pour que la caméra suive le curseur à l'identique.
+const AUTO_FOLLOW_MIN_FACTOR: f32 = 0.1;
+const AUTO_FOLLOW_MAX_FACTOR: f32 = 0.25;
+const AUTO_FOLLOW_RAMP_DISTANCE: f32 = 0.15;
+const AUTO_FOLLOW_REFERENCE_MS: f32 = 1000.0 / 40.0;
+
 #[derive(Clone)]
 pub struct CursorTrack {
     /// (t_secondes, cx, cy) normalisés dans le cadre screen, triés.
     samples: Vec<(f32, f32, f32)>,
+    /// Même piste après lissage exponentiel adaptatif — ce que le suivi auto du zoom doit
+    /// consommer. `samples` reste la piste BRUTE : le rendu du curseur lui-même et le click
+    /// bounce doivent coller à la position réelle, seule la caméra est amortie.
+    follow_samples: Vec<(f32, f32, f32)>,
     /// instants de clic (secondes) dans la fenêtre.
     clicks: Vec<f32>,
 }
 
+/// Interpolation linéaire dans une liste `(t, x, y)` triée ; saturation aux bornes.
+fn sample_at(samples: &[(f32, f32, f32)], t: f32) -> Option<(f32, f32)> {
+    if samples.is_empty() {
+        return None;
+    }
+    if t <= samples[0].0 {
+        let s = samples[0];
+        return Some((s.1, s.2));
+    }
+    if t >= samples[samples.len() - 1].0 {
+        let s = *samples.last().unwrap();
+        return Some((s.1, s.2));
+    }
+    // recherche du segment encadrant
+    let i = samples.partition_point(|s| s.0 <= t);
+    let a = samples[i - 1];
+    let b = samples[i];
+    let f = if b.0 > a.0 { (t - a.0) / (b.0 - a.0) } else { 0.0 };
+    Some((a.1 + (b.1 - a.1) * f, a.2 + (b.2 - a.2) * f))
+}
+
+/// Port de `advanceFollowFocus` (`cursorFollowUtils.ts`) : lissage exponentiel dont le facteur
+/// croît avec la distance à la cible (loin = rattrape vite, près = décélère), corrigé en temps
+/// pour être indépendant de la cadence.
+///
+/// La version TS est **séquentielle** : elle avance un `prev` d'une frame à l'autre. Rejouer ça
+/// par frame ici ferait dépendre l'image du chemin parcouru pour l'atteindre — deux rendus du
+/// même instant divergeraient selon qu'on y arrive en lecture ou par un seek, et la preview ne
+/// correspondrait plus à l'export. On applique donc le même filtre UNE fois, sur les
+/// échantillons de télémétrie eux-mêmes : le résultat est identique en lecture linéaire et reste
+/// une pure fonction de `t`.
+fn smooth_follow_samples(samples: &[(f32, f32, f32)]) -> Vec<(f32, f32, f32)> {
+    let mut smoothed: Vec<(f32, f32, f32)> = Vec::with_capacity(samples.len());
+    let mut prev: Option<(f32, f32, f32)> = None;
+    for &(t, x, y) in samples {
+        let Some((prev_t, px, py)) = prev else {
+            smoothed.push((t, x, y));
+            prev = Some((t, x, y));
+            continue;
+        };
+        let dt_ms = (t - prev_t) * 1000.0;
+        if !(dt_ms > 0.0) {
+            // Horodatages dupliqués : on garde la valeur déjà lissée plutôt que de diviser par 0.
+            smoothed.push((t, px, py));
+            prev = Some((t, px, py));
+            continue;
+        }
+        let (dx, dy) = (x - px, y - py);
+        let distance = (dx * dx + dy * dy).sqrt();
+        let ramp = (distance / AUTO_FOLLOW_RAMP_DISTANCE).min(1.0);
+        let base = AUTO_FOLLOW_MIN_FACTOR + (AUTO_FOLLOW_MAX_FACTOR - AUTO_FOLLOW_MIN_FACTOR) * ramp;
+        let factor = 1.0 - (1.0 - base).powf(dt_ms / AUTO_FOLLOW_REFERENCE_MS);
+        let (nx, ny) = (px + dx * factor, py + dy * factor);
+        smoothed.push((t, nx, ny));
+        prev = Some((t, nx, ny));
+    }
+    smoothed
+}
+
 impl CursorTrack {
+    /// Seul point de construction : garantit que `follow_samples` est toujours dérivé des
+    /// échantillons courants. Une piste re-lissée (`smoothed`) recalcule donc aussi son suivi,
+    /// pour que la caméra suive la trajectoire que l'utilisateur voit réellement.
+    fn new(samples: Vec<(f32, f32, f32)>, clicks: Vec<f32>) -> CursorTrack {
+        let follow_samples = smooth_follow_samples(&samples);
+        CursorTrack { samples, follow_samples, clicks }
+    }
+
     /// Nombre d'échantillons de la piste (utile au diag de chargement).
     pub fn sample_count(&self) -> usize {
         self.samples.len()
@@ -41,28 +120,19 @@ impl CursorTrack {
         }
         samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         clicks.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        Ok(CursorTrack { samples, clicks })
+        Ok(CursorTrack::new(samples, clicks))
     }
 
-    /// Position (cx, cy) au temps `t` (interpolation linéaire), ou None si hors piste.
+    /// Position lissée au temps `t`, pour le suivi auto du zoom. La télémétrie brute est
+    /// échantillonnée trop finement pour piloter une caméra directement : la suivre au sample
+    /// près donne un pan nerveux. Voir `smooth_follow_samples`.
+    pub fn follow_at(&self, t: f32) -> Option<(f32, f32)> {
+        sample_at(&self.follow_samples, t)
+    }
+
+    /// Position (cx, cy) BRUTE au temps `t` (interpolation linéaire), ou None si hors piste.
     pub fn at(&self, t: f32) -> Option<(f32, f32)> {
-        if self.samples.is_empty() {
-            return None;
-        }
-        if t <= self.samples[0].0 {
-            let s = self.samples[0];
-            return Some((s.1, s.2));
-        }
-        if t >= self.samples[self.samples.len() - 1].0 {
-            let s = *self.samples.last().unwrap();
-            return Some((s.1, s.2));
-        }
-        // recherche du segment encadrant
-        let i = self.samples.partition_point(|s| s.0 <= t);
-        let a = self.samples[i - 1];
-        let b = self.samples[i];
-        let f = if b.0 > a.0 { (t - a.0) / (b.0 - a.0) } else { 0.0 };
-        Some((a.1 + (b.1 - a.1) * f, a.2 + (b.2 - a.2) * f))
+        sample_at(&self.samples, t)
     }
 
     /// Facteur d'échelle « click bounce » — parité `getNativeCursorClickBounceScale` (TS,
@@ -102,7 +172,7 @@ impl CursorTrack {
     /// bruts (le bounce est temporel, pas positionnel — ne doit pas suivre le lissage).
     pub fn smoothed(&self, factor: f32) -> CursorTrack {
         if self.samples.len() < 2 || factor <= 0.0 {
-            return CursorTrack { samples: self.samples.clone(), clicks: self.clicks.clone() };
+            return CursorTrack::new(self.samples.clone(), self.clicks.clone());
         }
         const STEP_S: f32 = 1.0 / 240.0;
         let start = self.samples[0].0;
@@ -123,7 +193,7 @@ impl CursorTrack {
         let xs = spring_smooth(&raw_x, stiffness, damping, mass, STEP_S);
         let ys = spring_smooth(&raw_y, stiffness, damping, mass, STEP_S);
         let samples = times.into_iter().zip(xs).zip(ys).map(|((t, x), y)| (t, x, y)).collect();
-        CursorTrack { samples, clicks: self.clicks.clone() }
+        CursorTrack::new(samples, self.clicks.clone())
     }
 }
 

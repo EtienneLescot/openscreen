@@ -230,7 +230,10 @@ fn lerp_rotation3d(a: [f32; 3], b: [f32; 3], t: f32) -> [f32; 3] {
 fn resolve_focus(region: &SceneZoomRegion, t: f32, cursor: Option<&CursorTrack>) -> [f32; 2] {
     if region.focus_mode.as_deref() == Some("auto") {
         if let Some(track) = cursor {
-            if let Some((cx, cy)) = track.at(t) {
+            // `follow_at`, pas `at` : la caméra suit la piste LISSÉE. Suivre la télémétrie brute
+            // donne un pan nerveux — l'étage de lissage de `cursorFollowUtils.ts` manquait au
+            // portage.
+            if let Some((cx, cy)) = track.follow_at(t) {
                 return [cx, cy];
             }
         }
@@ -323,9 +326,19 @@ pub fn zoom_state_at(regions: &[SceneZoomRegion], t: f32, cursor: Option<&Cursor
         Some((i, strength)) => {
             let r = &regions[i];
             let focus = resolve_focus(r, t, cursor);
+            let scale = lerp(1.0, r.scale, strength);
+            // La référence (`zoomTransform.ts`) fait converger le point de focus vers le centre
+            // de l'écran LINÉAIREMENT : screen(f) = 0.5 + (f - 0.5)(1 - strength). Passer
+            // `lerp(0.5, f, strength)` comme centre de crop ne donne pas ça — le crop mappant
+            // screen(f) = 0.5 + (f - centre) * scale, on obtient
+            // 0.5 + (f - 0.5)(1 - strength) * scale, soit un facteur en trop qui retient le point
+            // loin du centre en milieu de rampe puis le rattrape. Ce balayage parasite se lit
+            // comme si une région manuelle suivait le curseur. On inverse donc le mapping pour
+            // trouver le centre qui produit la trajectoire de référence.
+            let ease = |f: f32| f - (f - 0.5) * (1.0 - strength) / scale.max(1e-3);
             ZoomState {
-                scale: lerp(1.0, r.scale, strength),
-                focus: [lerp(0.5, focus[0], strength), lerp(0.5, focus[1], strength)],
+                scale,
+                focus: [ease(focus[0]), ease(focus[1])],
                 rotation: lerp_rotation3d([0.0, 0.0, 0.0], rotation3d_for(&r.rotation), strength),
             }
         }
@@ -454,4 +467,72 @@ pub fn rotated_quad_corners_px(width: f32, height: f32, rot: [f32; 3]) -> [(f32,
         out[i] = project_corner(x0, y0, rot, perspective).unwrap_or((x0, y0));
     }
     out
+}
+
+#[cfg(test)]
+mod zoom_focus_tests {
+    use super::*;
+    use crate::scene::SceneZoomRegion;
+
+    fn region(scale: f32, focus_x: f32) -> SceneZoomRegion {
+        SceneZoomRegion {
+            id: "z1".into(),
+            clip_index: None,
+            start_sec: 2.0,
+            end_sec: 8.0,
+            scale,
+            focus_x,
+            focus_y: 0.5,
+            focus_mode: Some("manual".into()),
+            rotation: None,
+        }
+    }
+
+    /// Où le point source `f` atterrit à l'écran (0..1) : le crop est centré sur `focus` et
+    /// couvre `1/scale` de la source, donc l'écran mappe `0.5 + (f - focus) * scale`.
+    fn screen_x(state: &ZoomState, f: f32) -> f32 {
+        0.5 + (f - state.focus[0]) * state.scale
+    }
+
+    #[test]
+    fn manual_focus_travels_to_centre_linearly_during_the_ramp() {
+        // L'invariant de `zoomTransform.ts` : screen(f) = 0.5 + (f - 0.5)(1 - progress). La
+        // régression corrigée ici ajoutait un facteur `scale`, qui retenait le point loin du
+        // centre en milieu de rampe puis le rattrapait — lu comme un pan parasite sur une région
+        // pourtant en mode manuel.
+        let f = 0.8;
+        let target_scale = 2.5;
+        let regions = [region(target_scale, f)];
+        // Plusieurs instants de la fenêtre d'ease-in, pour balayer les progressions partielles.
+        for step in 0..=20 {
+            let t = 1.0 + step as f32 * 0.15;
+            let state = zoom_state_at(&regions, t, None);
+            // `progress` déduit du scale rendu, pour ne pas ré-implémenter l'easing dans le test.
+            let progress = (state.scale - 1.0) / (target_scale - 1.0);
+            let expected = 0.5 + (f - 0.5) * (1.0 - progress);
+            assert!(
+                (screen_x(&state, f) - expected).abs() < 1e-4,
+                "t={t} progress={progress} screen={} attendu={expected}",
+                screen_x(&state, f)
+            );
+        }
+    }
+
+    #[test]
+    fn manual_focus_is_dead_centre_at_full_strength() {
+        let f = 0.8;
+        let regions = [region(2.5, f)];
+        let state = zoom_state_at(&regions, 5.0, None);
+        assert!((state.scale - 2.5).abs() < 1e-4, "plein régime attendu, scale={}", state.scale);
+        assert!((screen_x(&state, f) - 0.5).abs() < 1e-4);
+        assert!((state.focus[0] - f).abs() < 1e-4);
+    }
+
+    #[test]
+    fn outside_every_region_the_frame_is_untouched() {
+        let regions = [region(2.5, 0.8)];
+        let state = zoom_state_at(&regions, 0.0, None);
+        assert_eq!(state.scale, 1.0);
+        assert_eq!(state.focus, [0.5, 0.5]);
+    }
 }
