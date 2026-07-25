@@ -7,7 +7,27 @@
 import { tool } from "langchain";
 import { z } from "zod";
 import type { AxcutDocument } from "../../../src/lib/ai-edition/schema";
-import { documentSnapshotForModel, executeAgentTool, isMutatingTool } from "../agent-tools";
+import {
+	addAnnotationArgs,
+	addCameraFullscreenArgs,
+	addSpeedArgs,
+	addTrimArgs,
+	addZoomArgs,
+	documentSnapshotForModel,
+	executeAgentTool,
+	getTranscriptArgs,
+	isMutatingTool,
+	removeClipArgs,
+	removeModifierArgs,
+	removeTrimArgs,
+	replaceTimelineArgs,
+	setAnnotationArgs,
+	setCameraFullscreenArgs,
+	setClipRangeArgs,
+	setSpeedArgs,
+	setTrimArgs,
+	setZoomArgs,
+} from "../agent-tools";
 import { createOpenScreenChatModel, type OpenScreenChatModelConfig } from "./chat-model";
 
 export interface OpenScreenAgentSink {
@@ -17,91 +37,9 @@ export interface OpenScreenAgentSink {
 	error: (message: string) => void;
 }
 
-// ponytail: minimal-effort zod schemas for each of our agent tools. We had
-// JSON-schema specs in agent-tools.ts; here we use Zod because LangChain's
-// `tool()` factory wants Zod (one-line in axcut, one-line here). The
-// executor below still re-validates via executeAgentTool, so the JSON schema
-// stays the source of truth for the UI's "applied: ..." chip.
-const secondsSchema = z.number().finite().nonnegative();
-
-const addTrimArgs = z.object({
-	startSec: secondsSchema,
-	endSec: secondsSchema,
-	assetId: z.string().min(1).optional(),
-	reason: z.string().default(""),
-});
-
-const setTrimArgs = z.object({
-	trimRangeId: z.string().min(1),
-	startSec: secondsSchema,
-	endSec: secondsSchema,
-});
-
-const setClipRangeArgs = z.object({
-	clipId: z.string().min(1),
-	sourceStartSec: secondsSchema,
-	sourceEndSec: secondsSchema,
-});
-
-const replaceTimelineArgs = z.object({
-	intervals: z
-		.array(
-			z.object({
-				startSec: secondsSchema,
-				endSec: secondsSchema,
-			}),
-		)
-		.min(1),
-	reason: z.string().default(""),
-});
-
-// Effects (zoom / speed / annotation) — authored in virtual (edited-timeline)
-// seconds, mirroring the JSON-schema specs in agent-tools.ts.
-const depthSchema = z.number().int().min(1).max(6);
-const focusSchema = z.object({ cx: z.number().min(0).max(1), cy: z.number().min(0).max(1) });
-
-const addZoomArgs = z.object({
-	startSec: secondsSchema,
-	endSec: secondsSchema,
-	depth: depthSchema.default(3),
-	focus: focusSchema.default({ cx: 0.5, cy: 0.5 }),
-});
-
-const setZoomArgs = z.object({
-	zoomId: z.string().min(1),
-	startSec: secondsSchema.optional(),
-	endSec: secondsSchema.optional(),
-	depth: depthSchema.optional(),
-	focus: focusSchema.optional(),
-});
-
-const addSpeedArgs = z.object({
-	startSec: secondsSchema,
-	endSec: secondsSchema,
-	speed: z.number().positive().default(1.5),
-});
-
-const setSpeedArgs = z.object({
-	speedId: z.string().min(1),
-	startSec: secondsSchema.optional(),
-	endSec: secondsSchema.optional(),
-	speed: z.number().positive().optional(),
-});
-
-const addAnnotationArgs = z.object({
-	startSec: secondsSchema,
-	endSec: secondsSchema,
-	text: z.string().default(""),
-	x: z.number().min(0).max(100).default(50),
-	y: z.number().min(0).max(100).default(50),
-});
-
-const setAnnotationArgs = z.object({
-	annotationId: z.string().min(1),
-	startSec: secondsSchema.optional(),
-	endSec: secondsSchema.optional(),
-	text: z.string().optional(),
-});
+// The tool arg schemas live in agent-tools.ts (imported above) — one source of truth for
+// both the executor's validation and the LangChain `tool()`s built here. Only the empty /
+// inline read-tool schemas below stay local.
 
 const SYSTEM_PROMPT = [
 	"You are an AI video editor working inside OpenScreen. The user is editing a recording.",
@@ -110,14 +48,17 @@ const SYSTEM_PROMPT = [
 	"You can call the tools below against the live document snapshot; the runtime executes each edit and feeds the result back into the loop.",
 	"The AxcutDocument is the single source of truth. The timeline, the transcript editor, and the chat panel are all direct editors of the same document — when the user places a clip on the timeline, the document updates immediately, and when the timeline is empty, the document has no clips. Your edits operate on the live document, so preserve the user's placed clips.",
 	"",
-	"Time-bases (do not mix them up): clips and trims are in SOURCE-time seconds of an asset; zooms, speed regions and annotations are in VIRTUAL (edited-timeline) seconds — the position on the ruler after clips + trims are applied. getCurrentDocument returns both, clearly labelled.",
+	"Time-bases (do not mix them up): clips and trims are in SOURCE-time seconds of an asset; zooms, speed regions, annotations and camera-fullscreen regions are in VIRTUAL (edited-timeline) seconds — the position on the ruler after clips + trims are applied. getCurrentDocument returns all of them, clearly labelled.",
 	"",
 	"Tool-selection rules (these are non-negotiable):",
 	"- 'remove silences' / 'cut pauses' / 'cut the silence' / 'kill the silence' / 'tighten pacing': call addTrim ONCE PER SILENT RANGE. Do NOT call setClipRange, do NOT call replaceTimeline. The placed clip is the canonical cut, the silence becomes a trim inside it.",
 	"- 'trim this clip to 0-30' / 'cut the end of this clip' / 'shorten this clip': call setClipRange with the new sourceStartSec/sourceEndSec (this is the clip's in/out, distinct from a trim).",
-	"- 'zoom in on …' / smart zooms: call addZoom over the virtual-timeline span (depth 1–6, focus in 0–1 frame fractions). 'speed through …': addSpeed. 'add a caption/label': addAnnotation.",
+	"- 'zoom in on …' / smart zooms: call addZoom over the virtual-timeline span (depth 1–6, focus in 0–1 frame fractions). 'speed through …': addSpeed. 'add a caption/label': addAnnotation. 'make the webcam fullscreen here': addCameraFullscreen.",
 	"- 'replace the timeline' / 'rebuild the timeline' / 'start over with these intervals': call replaceTimeline. Only when the user explicitly asks for a full rebuild.",
+	"- DELETING is a first-class action, not a workaround. 'remove/delete this trim' → removeTrim; 'remove/delete this zoom/speed/annotation/full-camera' → removeModifier; 'remove/delete this clip' → removeClip. NEVER fake a deletion by re-adding an element or zeroing it out (span 0, speed 1×) — that leaves it in the document and misreports what you did.",
 	"Anything else (move a clip, resize a trim, restyle a zoom, change a clip's order, etc.) — pick the most specific tool. If the request is ambiguous, prefer the smallest edit that satisfies it.",
+	"",
+	"Honesty rules: if a request has NO matching tool (e.g. deleting an asset/recording, exporting), say so plainly — do not substitute a different edit and report it as the requested one. After your edits, if you are at all unsure the document ended up as intended, call getCurrentDocument and reconcile what you claim with the real state; each tool result already tells you exactly what it did, so never report a change the results don't support.",
 ].join("\n");
 
 const TOOL_DESCRIPTIONS: Record<string, string> = {
@@ -144,6 +85,16 @@ const TOOL_DESCRIPTIONS: Record<string, string> = {
 		"Add a text annotation over a span of the edited timeline (virtual seconds). x/y are frame percentages (0–100, default centre). Use for callouts and labels.",
 	setAnnotation:
 		"Move, resize, or edit the text of an existing annotation by id (virtual-timeline seconds). Only the fields you pass are changed.",
+	addCameraFullscreen:
+		"Add a camera-fullscreen region over a span of the edited timeline (virtual seconds): the webcam fills the frame for that span.",
+	setCameraFullscreen:
+		"Move or resize an existing camera-fullscreen region by id (virtual-timeline seconds). Only the fields you pass are changed.",
+	removeTrim:
+		"Delete a trim range by id — the cut is undone and that span plays/exports again. This is how you 'remove a trim'; never re-add a trim to undo one.",
+	removeModifier:
+		"Delete a modifier (zoom / speed / annotation / camera-fullscreen) by id; the kind is resolved from the id. This is how you 'remove'/'delete' one — never neutralise it (span 0, speed 1×), which leaves it in the document. For a trim use removeTrim; for a clip use removeClip.",
+	removeClip:
+		"Delete a placed clip by id; remaining clips close the gap and effects anchored to it are dropped. Use only when the user asks to remove a clip — to shorten one, use setClipRange.",
 };
 
 // ponytail: mutable document holder so a write-tool that updates the snapshot
@@ -189,7 +140,7 @@ function buildTools(holder: DocumentHolder, sink: OpenScreenAgentSink) {
 			{
 				name: "getTranscript",
 				description: TOOL_DESCRIPTIONS.getTranscript,
-				schema: z.object({ assetId: z.string().min(1).optional() }),
+				schema: getTranscriptArgs,
 			},
 		),
 		mutatingTool(holder, sink, "addTrim", addTrimArgs),
@@ -202,6 +153,11 @@ function buildTools(holder: DocumentHolder, sink: OpenScreenAgentSink) {
 		mutatingTool(holder, sink, "setSpeed", setSpeedArgs),
 		mutatingTool(holder, sink, "addAnnotation", addAnnotationArgs),
 		mutatingTool(holder, sink, "setAnnotation", setAnnotationArgs),
+		mutatingTool(holder, sink, "addCameraFullscreen", addCameraFullscreenArgs),
+		mutatingTool(holder, sink, "setCameraFullscreen", setCameraFullscreenArgs),
+		mutatingTool(holder, sink, "removeTrim", removeTrimArgs),
+		mutatingTool(holder, sink, "removeModifier", removeModifierArgs),
+		mutatingTool(holder, sink, "removeClip", removeClipArgs),
 	];
 }
 

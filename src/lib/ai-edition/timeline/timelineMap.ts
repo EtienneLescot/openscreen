@@ -281,6 +281,31 @@ export function resolvePillIds<T extends { id: string; startMs: number; endMs: n
 }
 
 /**
+ * Deleting a pill deletes every region under it. Which regions those are is RESOLVED from
+ * the universal merge rule (same properties + touching = one pill), never from stored
+ * provenance — so it stays correct however they came to be adjacent. Lives here, in the
+ * pure layer, so the store (UI delete) and the document layer (agent delete) drop a pill
+ * exactly the same way.
+ */
+export function dropPillById<T extends { id: string; startMs: number; endMs: number }>(
+	regions: T[],
+	id: string,
+): T[] {
+	const under = new Set(resolvePillIds(regions, id));
+	return regions.filter((r) => !under.has(r.id));
+}
+
+/** Batch variant of {@link dropPillById} — expands every selected id to its whole pill. */
+export function dropPillsByIds<T extends { id: string; startMs: number; endMs: number }>(
+	regions: T[],
+	ids: Iterable<string>,
+): T[] {
+	let out = regions;
+	for (const id of ids) out = dropPillById(out, id);
+	return out;
+}
+
+/**
  * Move/resize the pill containing `id`, obeying both rules: the requested span is first
  * CLAMPED against pills of a different identity (rule 2 — they act as walls and never
  * move), then the pill's regions are replaced by fragments re-anchored to the clamped

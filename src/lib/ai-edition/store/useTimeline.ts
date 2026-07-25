@@ -11,7 +11,10 @@ import {
 	duplicateClip as duplicateClipInDocument,
 	moveClip as moveClipInDocument,
 	PLACEHOLDER_DURATION_SEC,
+	type RegionKind,
 	rederiveRegionMs,
+	removeClip as removeClipInDocument,
+	removeRegion as removeRegionInDocument,
 	resequenceClips,
 	setClipSourceRange,
 } from "../document/timeline";
@@ -19,14 +22,13 @@ import type { AxcutClipCropRegion, AxcutDocument } from "../schema";
 import { probeVideoDimensions, probeVideoDuration } from "../timeline/duration";
 import {
 	anchorRegionsWithDerivedMs,
+	dropPillsByIds,
 	replacePillSpan,
 	resolvePillIds,
 } from "../timeline/timelineMap";
 import { resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
 import { useProjectStore } from "./projectStore";
-
-type RegionKind = "zoom" | "trim" | "annotation" | "speed" | "cameraFullscreen";
 
 // Placeholder duration applied to a freshly-inserted clip whose source asset hasn't
 // reported its real duration yet (media drag → drop before the preview video fires
@@ -44,20 +46,7 @@ interface RegionHandle {
 type Clip = AxcutDocument["timeline"]["clips"][number];
 
 /**
- * Deleting a pill deletes every region under it. Which regions those are is RESOLVED
- * from the universal merge rule (same properties + touching = one pill), never from
- * stored provenance — so it stays correct however they came to be adjacent.
- */
-function dropPillById<T extends { id: string; startMs: number; endMs: number }>(
-	regions: T[],
-	id: string,
-): T[] {
-	const under = new Set(resolvePillIds(regions, id));
-	return regions.filter((r) => !under.has(r.id));
-}
-
-/**
- * Patch every region under the pill uid=197609(camil) gid=197609 groups=197609 belongs to. A payload edit must hit them all,
+ * Patch every region under the pill `id` belongs to. A payload edit must hit them all,
  * or the pieces of one pill would disagree — and then, by the merge rule, visibly split.
  */
 function patchPillById<T extends { id: string; startMs: number; endMs: number }>(
@@ -67,16 +56,6 @@ function patchPillById<T extends { id: string; startMs: number; endMs: number }>
 ): T[] {
 	const under = new Set(resolvePillIds(regions, id));
 	return regions.map((r) => (under.has(r.id) ? { ...r, ...patch } : r));
-}
-
-/** Batch variant of {@link dropPillById} — expands every selected id to its whole pill. */
-function dropPillsByIds<T extends { id: string; startMs: number; endMs: number }>(
-	regions: T[],
-	ids: Iterable<string>,
-): T[] {
-	let out = regions;
-	for (const id of ids) out = dropPillById(out, id);
-	return out;
 }
 
 export function useTimeline() {
@@ -640,51 +619,8 @@ export function useTimeline() {
 	const removeRegion = useCallback(
 		async (kind: RegionKind, id: string) => {
 			if (!document) return;
-			let next: AxcutDocument;
-			if (kind === "zoom") {
-				next = {
-					...document,
-					zoomRanges: dropPillById(document.zoomRanges, id) as AxcutDocument["zoomRanges"],
-				};
-			} else if (kind === "trim") {
-				next = {
-					...document,
-					timeline: {
-						...document.timeline,
-						trimRanges: document.timeline.trimRanges.filter((s) => s.id !== id),
-					},
-				};
-			} else if (kind === "annotation") {
-				next = {
-					...document,
-					annotations: dropPillById(document.annotations, id),
-				};
-			} else if (kind === "speed") {
-				const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
-				const prev = dropPillById(
-					(legacy.speedRegions as Array<{ id: string; startMs: number; endMs: number }>) ?? [],
-					id,
-				);
-				next = {
-					...document,
-					legacyEditor: { ...legacy, speedRegions: prev },
-				};
-			} else {
-				const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
-				const prev = dropPillById(
-					(legacy.cameraFullscreenRegions as Array<{
-						id: string;
-						startMs: number;
-						endMs: number;
-					}>) ?? [],
-					id,
-				);
-				next = {
-					...document,
-					legacyEditor: { ...legacy, cameraFullscreenRegions: prev },
-				};
-			}
-			await saveDocument(next);
+			// One shared mutator with the agent's removeTrim / removeModifier tools.
+			await saveDocument(removeRegionInDocument(document, kind, id));
 			if (selection?.id === id) setSelection(null);
 			setMultiSelection((prev) => prev.filter((h) => h.id !== id));
 		},
@@ -1125,16 +1061,8 @@ export function useTimeline() {
 	const removeClip = useCallback(
 		async (clipId: string) => {
 			if (!document) return;
-			const oldClips = document.timeline.clips;
-			const arr = oldClips.filter((c) => c.id !== clipId);
-			const newClips = resequenceClips(arr);
-			const next: AxcutDocument = {
-				...document,
-				timeline: { ...document.timeline, clips: newClips },
-			};
-			const finalDoc =
-				oldClips.length > 0 && newClips.length > 0 ? rederiveRegionMs(next, newClips) : next;
-			await saveDocument(finalDoc);
+			// One shared mutator with the agent's removeClip tool: reflow survivors + rederive pills.
+			await saveDocument(removeClipInDocument(document, clipId));
 			if (clipSelection === clipId) setClipSelection(null);
 		},
 		[document, clipSelection, saveDocument],
