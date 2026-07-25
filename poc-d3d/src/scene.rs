@@ -174,6 +174,93 @@ pub enum SceneBackground {
     Image { path: String },
 }
 
+/// Une annotation de la timeline (temps en secondes, source du clip).
+///
+/// Espace de coordonnées — à respecter au rendu : `x`/`y`/`w`/`h` sont des fractions du **rect
+/// écran**, pas du cadre de sortie (le calque web reçoit `layout.screenRect` comme conteneur), et
+/// elles ne subissent **pas** le crop de zoom : l'overlay est frère de l'élément qui porte la
+/// transform, donc les annotations restent en place pendant que le contenu zoome dessous.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneAnnotation {
+    #[serde(default)]
+    pub id: String,
+    /// Voir `SceneZoomRegion::clip_index`.
+    #[serde(default)]
+    pub clip_index: Option<usize>,
+    pub start_sec: f64,
+    pub end_sec: f64,
+    /// "text" | "image" | "figure" | "blur".
+    pub kind: String,
+    pub x: f32,
+    pub y: f32,
+    pub w: f32,
+    pub h: f32,
+    /// Ordre de peinture ; l'app envoie déjà la liste triée croissante.
+    #[serde(default)]
+    pub z_index: i32,
+    #[serde(default)]
+    pub text: Option<SceneAnnotationText>,
+    #[serde(default)]
+    pub image_path: Option<String>,
+    #[serde(default)]
+    pub figure: Option<SceneAnnotationFigure>,
+    #[serde(default)]
+    pub blur: Option<SceneAnnotationBlur>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneAnnotationText {
+    pub content: String,
+    /// Chaînes CSS, parsées ici comme la couleur de fond (`parse_hex`) ; "transparent" = pas de
+    /// remplissage.
+    pub color: String,
+    pub background_color: String,
+    /// ATTENTION : valeur brute en px CSS de la preview, donc **pas** indépendante de la
+    /// résolution, contrairement au rect. Voir le commentaire côté TS (`SceneAnnotation.text`) :
+    /// la convention de mise à l'échelle reste à trancher avec la passe texte.
+    pub font_size_px: f32,
+    pub font_family: String,
+    pub font_weight: String,
+    pub font_style: String,
+    pub text_decoration: String,
+    pub text_align: String,
+    #[serde(default)]
+    pub animation: Option<String>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneAnnotationFigure {
+    /// "up" | "down" | "left" | "right" | "up-right" | "up-left" | "down-right" | "down-left".
+    pub direction: String,
+    pub color: String,
+    pub stroke_width: f32,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneAnnotationBlur {
+    /// "blur" | "mosaic".
+    pub style: String,
+    /// "rectangle" | "oval" | "freehand".
+    pub shape: String,
+    /// "white" | "black".
+    pub color: String,
+    pub intensity: f32,
+    pub block_size: f32,
+    /// Fractions du rect écran, même espace que le rect.
+    #[serde(default)]
+    pub freehand_points: Option<Vec<SceneAnnotationPoint>>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SceneAnnotationPoint {
+    pub x: f32,
+    pub y: f32,
+}
+
 /// Une zone de zoom de la timeline (temps en secondes).
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -273,6 +360,9 @@ pub struct Scene {
     pub zoom_regions: Vec<SceneZoomRegion>,
     /// `#[serde(default)]` : champ ajouté après coup, absent des JSON de test existants.
     #[serde(default)]
+    pub annotations: Vec<SceneAnnotation>,
+    /// `#[serde(default)]` : champ ajouté après coup, absent des JSON de test existants.
+    #[serde(default)]
     pub speed_regions: Vec<SceneSpeedRegion>,
     /// `#[serde(default)]` : champ ajouté après coup, absent des JSON de test existants.
     #[serde(default)]
@@ -315,6 +405,9 @@ impl Scene {
         });
         scene.camera_fullscreen_regions.retain(|region| {
             belongs(region.clip_index, region.start_sec, region.end_sec)
+        });
+        scene.annotations.retain(|annotation| {
+            belongs(annotation.clip_index, annotation.start_sec, annotation.end_sec)
         });
         // Le layout dépend de la FORME de la source du clip (dimensions natives × crop), qui
         // varie d'un clip à l'autre. On installe donc celui du clip composé dans les champs
@@ -425,5 +518,76 @@ mod tests {
         let s = Scene::from_json(json).expect("parse sans webcam_rect");
         assert!(s.layout.webcam_rect.is_none());
         assert_eq!(s.layout.preset, "picture-in-picture");
+    }
+}
+
+#[cfg(test)]
+mod annotation_tests {
+    use super::*;
+
+    /// Enveloppe minimale valide + les annotations passées en paramètre.
+    fn scene_json(annotations: &str) -> String {
+        format!(
+            r##"{{"clips":[],"layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0}},"background":{{"kind":"color","color":"#000000"}},"zoomRegions":[],"annotations":{annotations},"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":1920,"height":1080,"fps":30}}}}"##
+        )
+    }
+
+    #[test]
+    fn an_older_payload_without_annotations_still_parses() {
+        // `#[serde(default)]` : tout JSON produit avant ce champ doit continuer à charger.
+        let json = scene_json("[]").replace(r#""annotations":[],"#, "");
+        let scene = Scene::from_json(&json).expect("parse sans annotations");
+        assert!(scene.annotations.is_empty());
+    }
+
+    #[test]
+    fn parses_a_text_annotation_with_its_style() {
+        let json = scene_json(
+            r##"[{"id":"ann1","clipIndex":0,"startSec":1.0,"endSec":3.0,"kind":"text","x":0.25,"y":0.5,"w":0.4,"h":0.1,"zIndex":2,"text":{"content":"Bonjour","color":"#ffffff","backgroundColor":"transparent","fontSizePx":32,"fontFamily":"Inter","fontWeight":"bold","fontStyle":"normal","textDecoration":"none","textAlign":"center","animation":"fade"}}]"##,
+        );
+        let scene = Scene::from_json(&json).expect("parse texte");
+        let ann = &scene.annotations[0];
+        assert_eq!(ann.kind, "text");
+        assert_eq!(ann.clip_index, Some(0));
+        assert_eq!(ann.z_index, 2);
+        assert!((ann.x - 0.25).abs() < 1e-6 && (ann.h - 0.1).abs() < 1e-6);
+        let text = ann.text.as_ref().expect("payload texte");
+        assert_eq!(text.content, "Bonjour");
+        assert_eq!(text.text_align, "center");
+        assert_eq!(text.animation.as_deref(), Some("fade"));
+        assert!(ann.figure.is_none() && ann.blur.is_none());
+    }
+
+    #[test]
+    fn parses_figure_and_blur_payloads() {
+        let json = scene_json(
+            r##"[{"id":"f","startSec":0.0,"endSec":1.0,"kind":"figure","x":0.1,"y":0.1,"w":0.2,"h":0.2,"zIndex":0,"figure":{"direction":"up-left","color":"#34B27B","strokeWidth":6}},
+                 {"id":"b","startSec":0.0,"endSec":1.0,"kind":"blur","x":0.0,"y":0.0,"w":0.5,"h":0.5,"zIndex":1,"blur":{"style":"mosaic","shape":"freehand","color":"black","intensity":8,"blockSize":16,"freehandPoints":[{"x":0.1,"y":0.2},{"x":0.3,"y":0.4}]}}]"##,
+        );
+        let scene = Scene::from_json(&json).expect("parse figure+blur");
+        let figure = scene.annotations[0].figure.as_ref().expect("payload figure");
+        assert_eq!(figure.direction, "up-left");
+        assert!((figure.stroke_width - 6.0).abs() < 1e-6);
+        let blur = scene.annotations[1].blur.as_ref().expect("payload blur");
+        assert_eq!(blur.shape, "freehand");
+        let points = blur.freehand_points.as_ref().expect("points");
+        assert_eq!(points.len(), 2);
+        assert!((points[1].x - 0.3).abs() < 1e-6);
+    }
+
+    #[test]
+    fn for_clip_window_keeps_only_the_annotations_of_the_composed_clip() {
+        // Même règle que les zoom/speed/camera regions : bon clip ET recouvrement de la fenêtre.
+        let json = scene_json(
+            r##"[{"id":"keep","clipIndex":0,"startSec":1.0,"endSec":2.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0},
+                 {"id":"other-clip","clipIndex":1,"startSec":1.0,"endSec":2.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0},
+                 {"id":"out-of-window","clipIndex":0,"startSec":50.0,"endSec":51.0,"kind":"figure","x":0,"y":0,"w":0.1,"h":0.1,"zIndex":0}]"##,
+        );
+        let scene = Scene::from_json(&json).expect("parse");
+        let filtered = scene.for_clip_window(0, 0.0, 10.0);
+        assert_eq!(
+            filtered.annotations.iter().map(|a| a.id.as_str()).collect::<Vec<_>>(),
+            vec!["keep"]
+        );
     }
 }
