@@ -8,6 +8,8 @@ import {
 	normalizeIntervals,
 	primaryAssetDuration,
 	rederiveRegionMs,
+	removeClip,
+	removeRegion,
 	replaceTimeline,
 	resequenceClips,
 	resolvePlaybackSegments,
@@ -691,6 +693,113 @@ describe("setClipSourceRange — the one shared clip-trim mutator", () => {
 	it("does not bump preview.revision (the caller owns that)", () => {
 		const before = doc();
 		const next = setClipSourceRange(before, "clip_a", 0, 4);
+		expect(next.preview.revision).toBe(before.preview.revision);
+	});
+});
+
+describe("removeRegion — the one shared region-delete mutator", () => {
+	it("drops the whole pill a zoom id belongs to, and keeps a different-identity pill", () => {
+		// z1 + z2 are the same identity (depth/focus) and touch → one pill; z3 differs.
+		const doc = makeDoc({
+			zoomRanges: [
+				makeZoom({ id: "z1", startMs: 0, endMs: 2000 }),
+				makeZoom({ id: "z2", startMs: 2000, endMs: 4000 }),
+				makeZoom({ id: "z3", startMs: 5000, endMs: 6000, depth: 5 as const }),
+			] as unknown as AxcutDocument["zoomRanges"],
+		});
+		const next = removeRegion(doc, "zoom", "z1");
+		expect(next.zoomRanges.map((z) => z.id)).toEqual(["z3"]);
+	});
+
+	it("filters a trim by id without touching other trims", () => {
+		const doc = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				trimRanges: [makeTrim({ id: "trim_1" }), makeTrim({ id: "trim_2" })],
+			},
+		});
+		const next = removeRegion(doc, "trim", "trim_1");
+		expect(next.timeline.trimRanges.map((t) => t.id)).toEqual(["trim_2"]);
+	});
+
+	it("removes speed and camera-fullscreen regions under legacyEditor", () => {
+		const doc = makeDoc({
+			legacyEditor: {
+				speedRegions: [{ id: "sp1", startMs: 0, endMs: 1000, speed: 2 }],
+				cameraFullscreenRegions: [{ id: "cf1", startMs: 0, endMs: 1000 }],
+			},
+		});
+		const afterSpeed = removeRegion(doc, "speed", "sp1");
+		expect((afterSpeed.legacyEditor as { speedRegions: unknown[] }).speedRegions).toHaveLength(0);
+		const afterCam = removeRegion(doc, "cameraFullscreen", "cf1");
+		expect(
+			(afterCam.legacyEditor as { cameraFullscreenRegions: unknown[] }).cameraFullscreenRegions,
+		).toHaveLength(0);
+	});
+
+	it("is a no-op for an unknown id and never bumps preview.revision", () => {
+		const doc = makeDoc({
+			zoomRanges: [
+				makeZoom({ id: "z1", startMs: 0, endMs: 2000 }),
+			] as unknown as AxcutDocument["zoomRanges"],
+		});
+		const next = removeRegion(doc, "zoom", "nope");
+		expect(next.zoomRanges.map((z) => z.id)).toEqual(["z1"]);
+		expect(next.preview.revision).toBe(doc.preview.revision);
+	});
+});
+
+describe("removeClip — delete a clip, close the gap, drop its pills", () => {
+	const doc = () =>
+		makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [
+					makeClip({ id: "clip_a", sourceStartSec: 0, sourceEndSec: 10, timelineEndSec: 10 }),
+					makeClip({
+						id: "clip_b",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 10,
+						timelineEndSec: 20,
+					}),
+				],
+			},
+			zoomRanges: [
+				makeZoom({
+					id: "z_a",
+					clipId: "clip_a",
+					sourceStartSec: 2,
+					sourceEndSec: 4,
+					startMs: 2000,
+					endMs: 4000,
+				}),
+				makeZoom({
+					id: "z_b",
+					clipId: "clip_b",
+					sourceStartSec: 2,
+					sourceEndSec: 4,
+					startMs: 12000,
+					endMs: 14000,
+				}),
+			] as unknown as AxcutDocument["zoomRanges"],
+		});
+
+	it("reflows survivors to close the gap and drops pills anchored to the removed clip", () => {
+		const next = removeClip(doc(), "clip_a");
+		expect(next.timeline.clips.map((c) => c.id)).toEqual(["clip_b"]);
+		// clip_b slides to the front.
+		expect(next.timeline.clips[0]).toMatchObject({ timelineStartSec: 0, timelineEndSec: 10 });
+		// z_a's clip is gone → dropped; z_b's derived ms drops by the 10s clip_b moved.
+		expect(next.zoomRanges.map((z) => z.id)).toEqual(["z_b"]);
+		expect(next.zoomRanges[0]).toMatchObject({ startMs: 2000, endMs: 4000 });
+	});
+
+	it("is a no-op for an unknown clip and never bumps preview.revision", () => {
+		const before = doc();
+		const next = removeClip(before, "clip_missing");
+		expect(next.timeline.clips.map((c) => c.id)).toEqual(["clip_a", "clip_b"]);
+		expect(next).toBe(before);
 		expect(next.preview.revision).toBe(before.preview.revision);
 	});
 });

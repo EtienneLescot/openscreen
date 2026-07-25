@@ -10,7 +10,13 @@
 
 import { z } from "zod";
 import { createId } from "../../src/lib/ai-edition/document/ids";
-import { replaceTimeline, setClipSourceRange } from "../../src/lib/ai-edition/document/timeline";
+import {
+	type RegionKind,
+	removeClip,
+	removeRegion,
+	replaceTimeline,
+	setClipSourceRange,
+} from "../../src/lib/ai-edition/document/timeline";
 import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
 import {
 	anchorRegionsWithDerivedMs,
@@ -88,33 +94,38 @@ function anchorForAgent<T extends { id: string; startMs: number; endMs: number }
 	return anchorRegionsWithDerivedMs([region], document.timeline.clips, () => createId(prefix));
 }
 
+// Zod arg schemas — the SINGLE source of truth for every tool's arguments. The executor
+// below validates against them, and the deep-agent (LangChain) layer imports the same
+// objects to build its `tool()`s, so the two can never advertise a different shape than the
+// one we actually validate. (The primitives `secondsSchema`/`depthSchema`/`focusSchema` stay
+// private — callers only ever need the composed `*Args`.)
 const secondsSchema = z.number().finite().nonnegative();
 
-const addTrimArgs = z.object({
+export const addTrimArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
 	assetId: z.string().min(1).optional(),
 	reason: z.string().default(""),
 });
 
-const setTrimArgs = z.object({
+export const setTrimArgs = z.object({
 	trimRangeId: z.string().min(1),
 	startSec: secondsSchema,
 	endSec: secondsSchema,
 });
 
-const setClipRangeArgs = z.object({
+export const setClipRangeArgs = z.object({
 	clipId: z.string().min(1),
 	sourceStartSec: secondsSchema,
 	sourceEndSec: secondsSchema,
 });
 
-const replaceTimelineArgs = z.object({
+export const replaceTimelineArgs = z.object({
 	intervals: z.array(z.object({ startSec: secondsSchema, endSec: secondsSchema })).min(1),
 	reason: z.string().default(""),
 });
 
-const getTranscriptArgs = z.object({
+export const getTranscriptArgs = z.object({
 	assetId: z.string().min(1).optional(),
 });
 
@@ -124,14 +135,14 @@ const getTranscriptArgs = z.object({
 const depthSchema = z.number().int().min(1).max(6);
 const focusSchema = z.object({ cx: z.number().min(0).max(1), cy: z.number().min(0).max(1) });
 
-const addZoomArgs = z.object({
+export const addZoomArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
 	depth: depthSchema.default(3),
 	focus: focusSchema.default({ cx: 0.5, cy: 0.5 }),
 });
 
-const setZoomArgs = z.object({
+export const setZoomArgs = z.object({
 	zoomId: z.string().min(1),
 	startSec: secondsSchema.optional(),
 	endSec: secondsSchema.optional(),
@@ -139,20 +150,20 @@ const setZoomArgs = z.object({
 	focus: focusSchema.optional(),
 });
 
-const addSpeedArgs = z.object({
+export const addSpeedArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
 	speed: z.number().positive().default(1.5),
 });
 
-const setSpeedArgs = z.object({
+export const setSpeedArgs = z.object({
 	speedId: z.string().min(1),
 	startSec: secondsSchema.optional(),
 	endSec: secondsSchema.optional(),
 	speed: z.number().positive().optional(),
 });
 
-const addAnnotationArgs = z.object({
+export const addAnnotationArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
 	text: z.string().default(""),
@@ -160,11 +171,34 @@ const addAnnotationArgs = z.object({
 	y: z.number().min(0).max(100).default(50),
 });
 
-const setAnnotationArgs = z.object({
+export const setAnnotationArgs = z.object({
 	annotationId: z.string().min(1),
 	startSec: secondsSchema.optional(),
 	endSec: secondsSchema.optional(),
 	text: z.string().optional(),
+});
+
+export const addCameraFullscreenArgs = z.object({
+	startSec: secondsSchema,
+	endSec: secondsSchema,
+});
+
+export const setCameraFullscreenArgs = z.object({
+	cameraFullscreenId: z.string().min(1),
+	startSec: secondsSchema.optional(),
+	endSec: secondsSchema.optional(),
+});
+
+export const removeTrimArgs = z.object({
+	trimRangeId: z.string().min(1),
+});
+
+export const removeModifierArgs = z.object({
+	id: z.string().min(1),
+});
+
+export const removeClipArgs = z.object({
+	clipId: z.string().min(1),
 });
 
 export const AGENT_TOOL_SPECS: AgentToolSpec[] = [
@@ -402,6 +436,73 @@ export const AGENT_TOOL_SPECS: AgentToolSpec[] = [
 		},
 		mutating: true,
 	},
+	{
+		name: "addCameraFullscreen",
+		description:
+			"Add a camera-fullscreen region over a span of the *edited timeline* (virtual seconds): the webcam fills the frame for that span. Use for 'go fullscreen on the webcam here'.",
+		parameters: {
+			type: "object",
+			properties: {
+				startSec: { type: "number", minimum: 0, description: "Virtual-timeline start (seconds)." },
+				endSec: { type: "number", minimum: 0, description: "Virtual-timeline end (seconds)." },
+			},
+			required: ["startSec", "endSec"],
+			additionalProperties: false,
+		},
+		mutating: true,
+	},
+	{
+		name: "setCameraFullscreen",
+		description:
+			"Move or resize an existing camera-fullscreen region by id. Times are virtual-timeline seconds. Only the fields you pass are changed.",
+		parameters: {
+			type: "object",
+			properties: {
+				cameraFullscreenId: { type: "string" },
+				startSec: { type: "number", minimum: 0 },
+				endSec: { type: "number", minimum: 0 },
+			},
+			required: ["cameraFullscreenId"],
+			additionalProperties: false,
+		},
+		mutating: true,
+	},
+	{
+		name: "removeTrim",
+		description:
+			"Delete a trim range by id (the cut is un-done — that source span plays and exports again). This is the correct way to 'remove a trim' / 'un-cut' — never re-add a trim to undo one.",
+		parameters: {
+			type: "object",
+			properties: { trimRangeId: { type: "string" } },
+			required: ["trimRangeId"],
+			additionalProperties: false,
+		},
+		mutating: true,
+	},
+	{
+		name: "removeModifier",
+		description:
+			"Delete a modifier (zoom / speed / annotation / camera-fullscreen) by id. Resolves the kind from the id. This is the correct way to 'remove'/'delete' one of these — never neutralise it (span 0, speed 1×): that leaves it in the document. For a trim use removeTrim; for a clip use removeClip.",
+		parameters: {
+			type: "object",
+			properties: { id: { type: "string" } },
+			required: ["id"],
+			additionalProperties: false,
+		},
+		mutating: true,
+	},
+	{
+		name: "removeClip",
+		description:
+			"Delete a placed clip by id. The remaining clips are re-laid back-to-back to close the gap, and any zoom/speed/annotation anchored to the removed clip is dropped. Use only when the user explicitly asks to remove a clip (not to shorten one — that is setClipRange).",
+		parameters: {
+			type: "object",
+			properties: { clipId: { type: "string" } },
+			required: ["clipId"],
+			additionalProperties: false,
+		},
+		mutating: true,
+	},
 ];
 
 export function isMutatingTool(name: string): boolean {
@@ -427,9 +528,13 @@ export function documentSnapshotForModel(document: AxcutDocument): Record<string
 		(legacy?.speedRegions as
 			| Array<{ id: string; startMs: number; endMs: number; speed: number }>
 			| undefined) ?? [];
+	const cameraFullscreenRegions =
+		(legacy?.cameraFullscreenRegions as
+			| Array<{ id: string; startMs: number; endMs: number }>
+			| undefined) ?? [];
 	return {
 		timeBaseNote:
-			"clips and trims are in source-time seconds; zooms, speedRegions and annotations are in virtual (edited-timeline) seconds.",
+			"clips and trims are in source-time seconds; zooms, speedRegions, annotations and cameraFullscreenRegions are in virtual (edited-timeline) seconds.",
 		project: { id: document.project.id, title: document.project.title },
 		primaryAssetId: document.project.primaryAssetId ?? document.assets[0]?.id ?? null,
 		assets: document.assets.map((a) => ({
@@ -471,6 +576,11 @@ export function documentSnapshotForModel(document: AxcutDocument): Record<string
 			endSec: roundSec(a.endMs),
 			type: a.type,
 			text: a.textContent ?? a.content ?? "",
+		})),
+		cameraFullscreenRegions: coalesceForAgent(cameraFullscreenRegions).map((c) => ({
+			id: c.id,
+			startSec: roundSec(c.startMs),
+			endSec: roundSec(c.endMs),
 		})),
 		hasTranscript: document.transcripts.length > 0 || document.transcript !== null,
 	};
@@ -866,6 +976,131 @@ export function executeAgentTool(
 					endSec: endMs / 1000,
 				}),
 				summary: `updated annotation ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
+			};
+		}
+
+		case "addCameraFullscreen": {
+			const parsed = addCameraFullscreenArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const startMs = toMs(Math.min(parsed.data.startSec, parsed.data.endSec));
+			const endMs = toMs(Math.max(parsed.data.startSec, parsed.data.endSec));
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prev = (legacy.cameraFullscreenRegions as unknown[] | undefined) ?? [];
+			const region = { id: createId("camfull"), startMs, endMs };
+			const next: AxcutDocument = {
+				...document,
+				legacyEditor: {
+					...legacy,
+					cameraFullscreenRegions: [...prev, ...anchorForAgent(region, document, "camfull")],
+				},
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					cameraFullscreenId: region.id,
+					startSec: startMs / 1000,
+					endSec: endMs / 1000,
+				}),
+				summary: `full-camera ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
+			};
+		}
+
+		case "setCameraFullscreen": {
+			const parsed = setCameraFullscreenArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prev =
+				(legacy.cameraFullscreenRegions as
+					| Array<{ id: string; startMs: number; endMs: number }>
+					| undefined) ?? [];
+			const existing = prev.find((r) => r.id === parsed.data.cameraFullscreenId);
+			if (!existing)
+				return failure(`Unknown full-camera region: ${parsed.data.cameraFullscreenId}`);
+			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
+			const next: AxcutDocument = {
+				...document,
+				legacyEditor: {
+					...legacy,
+					cameraFullscreenRegions: replacePillSpan(
+						prev,
+						parsed.data.cameraFullscreenId,
+						startMs,
+						endMs,
+						document.timeline.clips,
+						() => createId("camfull"),
+					),
+				},
+			};
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					cameraFullscreenId: parsed.data.cameraFullscreenId,
+					startSec: startMs / 1000,
+					endSec: endMs / 1000,
+				}),
+				summary: `moved full-camera to ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
+			};
+		}
+
+		case "removeTrim": {
+			const parsed = removeTrimArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { trimRangeId } = parsed.data;
+			if (!document.timeline.trimRanges.some((s) => s.id === trimRangeId)) {
+				return failure(`Unknown trim range: ${trimRangeId}`);
+			}
+			const next = removeRegion(document, "trim", trimRangeId);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({ removed: trimRangeId, kind: "trim" }),
+				summary: `removed trim ${trimRangeId}`,
+			};
+		}
+
+		case "removeModifier": {
+			const parsed = removeModifierArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { id } = parsed.data;
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const speedRegions = (legacy.speedRegions as Array<{ id: string }> | undefined) ?? [];
+			const cameraFullscreenRegions =
+				(legacy.cameraFullscreenRegions as Array<{ id: string }> | undefined) ?? [];
+			let kind: RegionKind | null = null;
+			if (document.zoomRanges.some((z) => z.id === id)) kind = "zoom";
+			else if (document.annotations.some((a) => a.id === id)) kind = "annotation";
+			else if (speedRegions.some((s) => s.id === id)) kind = "speed";
+			else if (cameraFullscreenRegions.some((c) => c.id === id)) kind = "cameraFullscreen";
+			if (!kind) {
+				return failure(
+					`No zoom / speed / annotation / full-camera modifier with id ${id}. ` +
+						`For a trim use removeTrim; for a clip use removeClip.`,
+				);
+			}
+			const next = removeRegion(document, kind, id);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({ removed: id, kind }),
+				summary: `removed ${kind} ${id}`,
+			};
+		}
+
+		case "removeClip": {
+			const parsed = removeClipArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { clipId } = parsed.data;
+			if (!document.timeline.clips.some((c) => c.id === clipId)) {
+				return failure(`Unknown clip: ${clipId}`);
+			}
+			const next = removeClip(document, clipId);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({ removed: clipId, clipCount: next.timeline.clips.length }),
+				summary: `removed clip ${clipId}`,
 			};
 		}
 

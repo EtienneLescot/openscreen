@@ -87,11 +87,19 @@ describe("agent-tools specs", () => {
 			"setSpeed",
 			"addAnnotation",
 			"setAnnotation",
+			"addCameraFullscreen",
+			"setCameraFullscreen",
+			"removeTrim",
+			"removeModifier",
+			"removeClip",
 		]);
 		expect(isMutatingTool("getTranscript")).toBe(false);
 		expect(isMutatingTool("replaceTimeline")).toBe(true);
 		expect(isMutatingTool("addZoom")).toBe(true);
 		expect(isMutatingTool("setAnnotation")).toBe(true);
+		expect(isMutatingTool("removeTrim")).toBe(true);
+		expect(isMutatingTool("removeModifier")).toBe(true);
+		expect(isMutatingTool("removeClip")).toBe(true);
 		expect(isMutatingTool("nope")).toBe(false);
 	});
 });
@@ -366,5 +374,121 @@ describe("executeAgentTool", () => {
 		// counts-only fields are gone in favour of the labelled effect lists.
 		expect(snapshot.zoomRangeCount).toBeUndefined();
 		expect(snapshot.annotationCount).toBeUndefined();
+	});
+
+	it("addCameraFullscreen / setCameraFullscreen write a region the snapshot exposes", () => {
+		const added = executeAgentTool(
+			fixtureDocument(),
+			"addCameraFullscreen",
+			JSON.stringify({ startSec: 9, endSec: 5 }),
+		);
+		expect(added.ok).toBe(true);
+		const legacy = added.document?.legacyEditor as Record<string, unknown>;
+		const region = (
+			legacy.cameraFullscreenRegions as Array<{ id: string; startMs: number; endMs: number }>
+		).at(-1);
+		// bounds normalised (start ≤ end).
+		expect(region).toMatchObject({ startMs: 5000, endMs: 9000 });
+		expect(() => documentSchema.parse(added.document)).not.toThrow();
+
+		const snapshot = JSON.parse(
+			executeAgentTool(added.document as AxcutDocument, "getCurrentDocument", "").resultJson,
+		);
+		expect(snapshot.cameraFullscreenRegions[0]).toMatchObject({ startSec: 5, endSec: 9 });
+		expect(snapshot.timeBaseNote).toMatch(/cameraFullscreen/i);
+
+		const moved = executeAgentTool(
+			added.document as AxcutDocument,
+			"setCameraFullscreen",
+			JSON.stringify({ cameraFullscreenId: region?.id, startSec: 1, endSec: 2 }),
+		);
+		expect(moved.ok).toBe(true);
+		const movedRegion = (
+			(moved.document?.legacyEditor as Record<string, unknown>).cameraFullscreenRegions as Array<{
+				startMs: number;
+				endMs: number;
+			}>
+		)[0];
+		expect(movedRegion).toMatchObject({ startMs: 1000, endMs: 2000 });
+		expect(
+			executeAgentTool(
+				fixtureDocument(),
+				"setCameraFullscreen",
+				JSON.stringify({ cameraFullscreenId: "nope" }),
+			).ok,
+		).toBe(false);
+	});
+
+	it("removeTrim deletes a trim by id (and rejects an unknown one)", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"removeTrim",
+			JSON.stringify({ trimRangeId: "trim_1" }),
+		);
+		expect(result.ok).toBe(true);
+		expect(result.document?.timeline.trimRanges).toHaveLength(0);
+		expect(() => documentSchema.parse(result.document)).not.toThrow();
+		expect(
+			executeAgentTool(fixtureDocument(), "removeTrim", JSON.stringify({ trimRangeId: "nope" })).ok,
+		).toBe(false);
+	});
+
+	it("removeModifier resolves the kind from the id across zoom / speed / annotation / full-camera", () => {
+		const withZoom = executeAgentTool(
+			fixtureDocument(),
+			"addZoom",
+			JSON.stringify({ startSec: 2, endSec: 4 }),
+		).document as AxcutDocument;
+		const zoomId = withZoom.zoomRanges[0].id;
+		const removed = executeAgentTool(withZoom, "removeModifier", JSON.stringify({ id: zoomId }));
+		expect(removed.ok).toBe(true);
+		expect(JSON.parse(removed.resultJson)).toMatchObject({ kind: "zoom" });
+		expect(removed.document?.zoomRanges).toHaveLength(0);
+
+		const withSpeed = executeAgentTool(
+			fixtureDocument(),
+			"addSpeed",
+			JSON.stringify({ startSec: 2, endSec: 4, speed: 2 }),
+		).document as AxcutDocument;
+		const speedId = (
+			(withSpeed.legacyEditor as Record<string, unknown>).speedRegions as Array<{ id: string }>
+		)[0].id;
+		const removedSpeed = executeAgentTool(
+			withSpeed,
+			"removeModifier",
+			JSON.stringify({ id: speedId }),
+		);
+		expect(JSON.parse(removedSpeed.resultJson)).toMatchObject({ kind: "speed" });
+		expect(
+			(removedSpeed.document?.legacyEditor as Record<string, unknown>).speedRegions,
+		).toHaveLength(0);
+
+		// A trim id is NOT a modifier — the error steers to removeTrim.
+		const wrong = executeAgentTool(
+			fixtureDocument(),
+			"removeModifier",
+			JSON.stringify({ id: "trim_1" }),
+		);
+		expect(wrong.ok).toBe(false);
+		expect(wrong.resultJson).toMatch(/removeTrim/);
+	});
+
+	it("removeClip deletes a clip and reflows the survivor (rejects an unknown id)", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"removeClip",
+			JSON.stringify({ clipId: "clip_1" }),
+		);
+		expect(result.ok).toBe(true);
+		expect(result.document?.timeline.clips.map((c) => c.id)).toEqual(["clip_2"]);
+		// clip_2 slides to the front of the timeline.
+		expect(result.document?.timeline.clips[0]).toMatchObject({
+			timelineStartSec: 0,
+			timelineEndSec: 30,
+		});
+		expect(() => documentSchema.parse(result.document)).not.toThrow();
+		expect(
+			executeAgentTool(fixtureDocument(), "removeClip", JSON.stringify({ clipId: "nope" })).ok,
+		).toBe(false);
 	});
 });
