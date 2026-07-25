@@ -421,6 +421,28 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 						</select>,
 					)}
 					{paneRow(
+						ts("zoom.threeD.title"),
+						<select
+							value={region.rotationPreset ?? "none"}
+							onChange={(e) =>
+								void tl.updateZoomRotation(
+									region.id,
+									// "none" is the absence of a preset, not a fourth preset — the schema field
+									// is optional and `migrate.ts` drops it when falsy.
+									e.target.value === "none"
+										? undefined
+										: (e.target.value as "iso" | "left" | "right"),
+								)
+							}
+							style={selectStyle}
+						>
+							<option value="none">{ts("zoom.threeD.none")}</option>
+							<option value="iso">{ts("zoom.threeD.preset.iso")}</option>
+							<option value="left">{ts("zoom.threeD.preset.left")}</option>
+							<option value="right">{ts("zoom.threeD.preset.right")}</option>
+						</select>,
+					)}
+					{paneRow(
 						ts("zoom.focusMode.title"),
 						// While the global toggle is on it OVERRIDES every region, so the control shows
 						// the effective mode ("auto") and goes read-only rather than lying about a

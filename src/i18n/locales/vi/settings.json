@@ -24,7 +24,8 @@
 				"iso": "Đẳng phối",
 				"left": "Trái",
 				"right": "Phải"
-			}
+			},
+			"none": "Không"
 		}
 	},
 	"speed": {

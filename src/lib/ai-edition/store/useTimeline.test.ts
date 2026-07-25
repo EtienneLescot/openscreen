@@ -513,3 +513,79 @@ describe("useTimeline.addAnnotation", () => {
 		});
 	});
 });
+
+describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
+	const docWithZoom = {
+		...sampleDoc,
+		zoomRanges: [
+			{
+				id: "zoom_a",
+				startMs: 1000,
+				endMs: 3000,
+				depth: 3,
+				focus: { cx: 0.5, cy: 0.5 },
+				focusMode: "manual" as const,
+				clipId: "clip_a",
+				clipStartOffsetMs: 1000,
+			},
+		],
+	};
+
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: docWithZoom,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("sets a 3D rotation preset on the region", async () => {
+		const { result } = renderHook(() => useTimeline());
+		await act(async () => {
+			await result.current.updateZoomRotation("zoom_a", "iso");
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			id: "zoom_a",
+			rotationPreset: "iso",
+		});
+	});
+
+	it("clears the preset back to a flat frame", async () => {
+		// "None" in the UI is the ABSENCE of a preset, not a fourth one: the schema field is
+		// optional and the native side treats anything unrecognised as zero rotation.
+		const { result } = renderHook(() => useTimeline());
+		await act(async () => {
+			await result.current.updateZoomRotation("zoom_a", "iso");
+		});
+		await act(async () => {
+			await result.current.updateZoomRotation("zoom_a", undefined);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0].rotationPreset).toBeUndefined();
+	});
+
+	it("switches focus mode without disturbing the rotation preset", async () => {
+		const { result } = renderHook(() => useTimeline());
+		await act(async () => {
+			await result.current.updateZoomRotation("zoom_a", "left");
+		});
+		await act(async () => {
+			await result.current.updateZoomFocusMode("zoom_a", "auto");
+		});
+		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
+			rotationPreset: "left",
+			focusMode: "auto",
+		});
+	});
+});

@@ -17,7 +17,8 @@
 				"iso": "Iso",
 				"left": "左",
 				"right": "右"
-			}
+			},
+			"none": "无"
 		},
 		"customScale": "自定义缩放",
 		"position": {

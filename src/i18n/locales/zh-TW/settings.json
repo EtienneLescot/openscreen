@@ -18,7 +18,8 @@
 				"iso": "Iso",
 				"left": "左",
 				"right": "右"
-			}
+			},
+			"none": "無"
 		},
 		"customScale": "自訂縮放",
 		"position": {

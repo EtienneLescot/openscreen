@@ -18,7 +18,8 @@
 				"iso": "Iso",
 				"left": "Esquerda",
 				"right": "Direita"
-			}
+			},
+			"none": "Nenhuma"
 		},
 		"position": {
 			"title": "Posição do Foco",

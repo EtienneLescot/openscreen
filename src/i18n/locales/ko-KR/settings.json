@@ -18,7 +18,8 @@
 				"iso": "Iso",
 				"left": "왼쪽",
 				"right": "오른쪽"
-			}
+			},
+			"none": "없음"
 		},
 		"position": {
 			"title": "포커스 위치",
