@@ -15,13 +15,18 @@ entier** (2.1 réordonnancement, 2.2 mixage audio natif, 2.3 annotation vide), *
 vitesse libre et **3.2** bascule focus zoom. Validation : `tsc` propre, `biome` propre,
 423 tests front + 25 tests Rust verts, dont 15 nouveaux.
 
-Reste ouvert : **3.3** rotation de zoom, **3.4** zoom réactif webcam, **3.5** annotations
-non-texte, le **lot 4** (arbitrage produit), et les trois différés — MSIX, #120 playhead,
-#127 partie 2.
+S'y ajoutent, après une session de test : la rampe d'ease-in du zoom manuel (le focus
+dérivait latéralement), le lissage du suivi auto (étage `cursorFollowUtils` jamais porté),
+le toggle Auto-Focus global de la barre d'outils avec verrouillage du contrôle par région,
+et la suppression de la note « au-delà de 16× » qui décrivait l'éditeur legacy.
 
-Deux points ne sont **pas** vérifiés en application, faute de projet enregistré sous la
-main : le pane vitesse et le pane focus zoom (il faut une région sélectionnée), et l'export
-d'un enregistrement multipiste réel. Le reste de la validation est statique + tests.
+Reste ouvert : **3.3** rotation de zoom, **3.5** annotations non-texte, le **lot 4**
+(arbitrage produit), et les trois différés — MSIX, #120 playhead, #127 partie 2.
+
+Validé en application : rampe manuelle, pan auto lissé, verrou du toggle global, multiclip
+réordonné, enregistrement avec webcam. Reste non vérifié faute de fichier source :
+**l'export d'un enregistrement multipiste réel** (2.2) — la logique de mixage est couverte
+par des tests unitaires, pas par un export bout en bout.
 
 La branche parquée `claude/rebase-ai-edition-main-c65d0d` (PR #154) a été **vidée de ce
 qu'on en voulait** : elle peut être fermée sans merge. Ses deux commits de portage #109
@@ -151,8 +156,16 @@ logique est là, l'UX a disparu avec les conteneurs démontés (`RightPanelStack
 | 3.1 | **Vitesse plafonnée à 3×** : `FloatingInspector.tsx:275` propose un `<select>` `[0.5 … 3]`. | `MAX_PLAYBACK_SPEED = 100` et `MAX_NATIVE_PLAYBACK_RATE = 16` (`types.ts:384/388`) ; l'UX select + champ libre + avertissement au-delà de 16× vit dans `RightPanelStack.tsx:672-696`, non monté. | faible — récupérer l'UX, la brancher sur l'inspecteur V4 |
 | 3.2 | **Pas de bascule zoom auto / manuel** : `focusMode` n'est que *lu* (`ZoomFocusOverlay`), `"auto"` n'arrive que par les suggestions automatiques. | Le suivi curseur fonctionne (`zoomSuggestions.ts:63`). | faible — un contrôle dans le pane Zoom |
 | 3.3 | Pas de preset de **rotation** de zoom. | Le shader de tilt 3D existe dans `compositor.rs`. | moyen |
-| 3.4 | Pas de **zoom réactif** webcam. | — | moyen |
 | 3.5 | Seules les annotations **texte** sont créables. | Image / figure / flou sont rendues par le compositeur, inatteignables faute de chemin de création. | moyen |
+
+**3.4 « zoom réactif webcam » — retiré, l'audit était faux.** La fonction est complète et
+câblée : le contrôle « Shrink on zoom » vit dans `LayoutPane`
+(`RightPanes.tsx:1428`, monté par l'inspecteur V4) et le compositeur natif l'honore
+(`compositor.rs:1381`, `reactive_scale`, parité `reactiveWebcamScale` côté TS — la webcam
+rétrécit pendant un zoom écran, sauf en Full Camera). Cause de l'erreur : le grep de
+recensement cherchait `reactiveZoom`, or le réglage s'appelle `webcamReactiveZoom` — un R
+majuscule suffisait à le rendre invisible à une recherche sensible à la casse. Les deux
+autres lignes de ce tableau ont été re-vérifiées sans casse ; elles tiennent.
 
 Ordre proposé : 3.1 d'abord (meilleur rapport valeur/effort, capacité complète, seul le
 contrôle manque), puis 3.2. Le reste après arbitrage.
