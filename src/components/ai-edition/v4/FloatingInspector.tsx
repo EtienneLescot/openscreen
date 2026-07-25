@@ -28,6 +28,7 @@ import {
 	BackgroundPane,
 	CursorPane,
 	LayoutPane,
+	SliderCell,
 	TranscriptPane,
 	VideoEffectsPane,
 } from "../RightPanes";
@@ -570,6 +571,9 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 		const region = tl.annotationRegions.find((a) => a.id === selection.id);
 		if (!region) return null;
 		const colors = ["#ffffff", "#0f172a", "#10b981", "#f59e0b", "#f43f5e", "#6366f1"];
+		// `transparent` est la façon dont le CSS — et donc le schéma — dit « pas de fond ».
+		const hasBackground =
+			!!region.style?.backgroundColor && region.style.backgroundColor !== "transparent";
 		return (
 			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
 				{paneHeader(
@@ -691,37 +695,35 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 								<input
 									type="color"
 									value={region.figureData?.color ?? "#34B27B"}
-									onChange={(e) => {
+									onChange={(e) =>
 										tl.updateAnnotationLive(region.id, {
 											figureData: {
 												...(region.figureData ?? { arrowDirection: "right", strokeWidth: 4 }),
 												color: e.target.value,
 											},
-										});
-										void tl.commitAnnotationChange();
-									}}
+										})
+									}
+									onBlur={() => void tl.commitAnnotationChange()}
 									style={{ width: 34, height: 28, padding: 0, border: "none", background: "none" }}
 								/>,
 							)}
-							{paneRow(
-								ts("annotation.strokeWidth", { width: region.figureData?.strokeWidth ?? 4 }),
-								<input
-									type="range"
-									min={1}
-									max={20}
-									step={1}
-									value={region.figureData?.strokeWidth ?? 4}
-									onChange={(e) =>
-										tl.updateAnnotationLive(region.id, {
-											figureData: {
-												...(region.figureData ?? { arrowDirection: "right", color: "#34B27B" }),
-												strokeWidth: Number(e.target.value),
-											},
-										})
-									}
-									onPointerUp={() => void tl.commitAnnotationChange()}
-								/>,
-							)}
+							<SliderCell
+								label={ts("annotation.strokeWidth", {
+									width: region.figureData?.strokeWidth ?? 4,
+								})}
+								value={region.figureData?.strokeWidth ?? 4}
+								min={1}
+								max={20}
+								onChange={(next) =>
+									tl.updateAnnotationLive(region.id, {
+										figureData: {
+											...(region.figureData ?? { arrowDirection: "right", color: "#34B27B" }),
+											strokeWidth: next,
+										},
+									})
+								}
+								onCommit={() => void tl.commitAnnotationChange()}
+							/>
 						</>
 					) : null}
 					{region.type === "blur" ? (
@@ -823,12 +825,15 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 												? region.style.backgroundColor
 												: "#000000"
 										}
-										onChange={(e) => {
+										// Live pendant le glissement, une seule écriture disque au relâchement :
+										// un `<input type="color">` émet `onChange` en continu, et committer à
+										// chaque événement rendait le sélecteur inutilisable.
+										onChange={(e) =>
 											tl.updateAnnotationLive(region.id, {
 												style: { ...region.style, backgroundColor: e.target.value },
-											});
-											void tl.commitAnnotationChange();
-										}}
+											})
+										}
+										onBlur={() => void tl.commitAnnotationChange()}
 										style={{
 											width: 34,
 											height: 28,
@@ -837,18 +842,38 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 											background: "none",
 										}}
 									/>
-									<button
-										type="button"
-										onClick={() => {
-											tl.updateAnnotationLive(region.id, {
-												style: { ...region.style, backgroundColor: "transparent" },
-											});
-											void tl.commitAnnotationChange();
+									{/* Une case à cocher plutôt qu'un bouton « effacer » : avoir un fond ou non est
+									    un état, pas une action. La couleur choisie est conservée quand on décoche,
+									    donc recocher la rend telle quelle au lieu d'obliger à la re-sélectionner. */}
+									<label
+										style={{
+											display: "inline-flex",
+											alignItems: "center",
+											gap: 6,
+											fontSize: 12.5,
+											color: "var(--fg-2)",
+											cursor: "pointer",
 										}}
-										style={{ ...selectStyle, cursor: "pointer" }}
 									>
-										{ts("annotation.clearBackground")}
-									</button>
+										<input
+											type="checkbox"
+											checked={hasBackground}
+											onChange={(e) => {
+												tl.updateAnnotationLive(region.id, {
+													style: {
+														...region.style,
+														backgroundColor: e.target.checked
+															? (region.style?.backgroundColor ?? "#000000") === "transparent"
+																? "#000000"
+																: (region.style?.backgroundColor ?? "#000000")
+															: "transparent",
+													},
+												});
+												void tl.commitAnnotationChange();
+											}}
+										/>
+										{ts("annotation.active")}
+									</label>
 								</div>,
 							)
 						: null}
@@ -864,12 +889,12 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 										type="color"
 										aria-label={ts("annotation.colorWheel")}
 										value={region.style?.color ?? "#ffffff"}
-										onChange={(e) => {
+										onChange={(e) =>
 											tl.updateAnnotationLive(region.id, {
 												style: { ...region.style, color: e.target.value },
-											});
-											void tl.commitAnnotationChange();
-										}}
+											})
+										}
+										onBlur={() => void tl.commitAnnotationChange()}
 										style={{
 											width: 34,
 											height: 28,
