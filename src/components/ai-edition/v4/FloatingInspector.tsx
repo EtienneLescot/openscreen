@@ -15,6 +15,13 @@ import {
 } from "lucide-react";
 import type { ComponentProps } from "react";
 import { useState } from "react";
+import { toast } from "sonner";
+import { parseCustomPlaybackSpeedInput } from "@/components/video-editor/customPlaybackSpeed";
+import {
+	MAX_NATIVE_PLAYBACK_RATE,
+	MAX_PLAYBACK_SPEED,
+	SPEED_OPTIONS,
+} from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
@@ -272,7 +279,90 @@ function paneRow(label: string, control: React.ReactNode) {
 }
 
 const ZOOM_DEPTHS = [1, 2, 3, 4, 5, 6] as const;
-const SPEED_VALUES = [0.5, 0.75, 1, 1.25, 1.5, 2, 3];
+// The ladder the shared editor already ships (`SPEED_OPTIONS`), plus 1× so the select can
+// express "back to normal". It stops at 5×; the free field in `SpeedControl` is what reaches
+// `MAX_PLAYBACK_SPEED`.
+const SPEED_PRESETS = [1, ...SPEED_OPTIONS.map((option) => option.speed)].sort((a, b) => a - b);
+
+/**
+ * Preset select + free numeric field, the speed UX this editor already had translations for
+ * (`settings.speed.customPlaybackSpeed` / `maxSpeedError` / `previewFrameSteppingHint`, shipped
+ * in all 13 locales) but no longer any control for: the V4 shell replaced the panel that hosted
+ * it with a preset-only `<select>` capped at 3×, while the underlying capability goes to
+ * `MAX_PLAYBACK_SPEED` (100×). Only the control was missing, so this rewires it rather than
+ * adding anything new.
+ */
+export function SpeedControl({
+	region,
+	tl,
+}: {
+	region: { id: string; speed: number };
+	tl: Pick<TimelineApi, "updateSpeedValue">;
+}) {
+	const ts = useScopedT("settings");
+	// "" means the field is idle and the select is showing the truth. A non-empty draft is
+	// uncommitted text; it's cleared on commit so the placeholder tracks the live speed again.
+	const [draft, setDraft] = useState("");
+
+	const commitDraft = () => {
+		const result = parseCustomPlaybackSpeedInput(draft);
+		if (result.status === "valid") {
+			void tl.updateSpeedValue(region.id, result.speed);
+		} else if (result.status === "too-fast") {
+			toast.error(ts("speed.maxSpeedError", { max: MAX_PLAYBACK_SPEED }));
+		}
+		// Anything else (empty, unparseable, below the floor) just reverts to the live value
+		// rather than guessing at an intent.
+		setDraft("");
+	};
+
+	// A custom speed matches no preset, so surface it as its own option — otherwise the select
+	// would fall back to rendering its first entry and misreport the region.
+	const options = SPEED_PRESETS.includes(region.speed)
+		? SPEED_PRESETS
+		: [...SPEED_PRESETS, region.speed].sort((a, b) => a - b);
+
+	return (
+		<>
+			{paneRow(
+				ts("speed.playbackSpeed"),
+				<select
+					value={region.speed}
+					onChange={(e) => void tl.updateSpeedValue(region.id, Number(e.target.value))}
+					style={selectStyle}
+				>
+					{options.map((speed) => (
+						<option key={speed} value={speed}>
+							{speed}×
+						</option>
+					))}
+				</select>,
+			)}
+			{paneRow(
+				ts("speed.customPlaybackSpeed"),
+				<input
+					type="text"
+					inputMode="decimal"
+					placeholder={`${region.speed}×`}
+					value={draft}
+					onChange={(e) => setDraft(e.target.value)}
+					onBlur={commitDraft}
+					// Enter blurs, and the blur handler commits — one path, so a keyboard commit
+					// can't apply the same draft twice.
+					onKeyDown={(e) => {
+						if (e.key === "Enter") e.currentTarget.blur();
+					}}
+					style={{ ...selectStyle, width: 84, textAlign: "right" }}
+				/>,
+			)}
+			{region.speed > MAX_NATIVE_PLAYBACK_RATE ? (
+				<p style={{ margin: 0, font: "400 11px/1.45 var(--font-sans)", color: "var(--fg-2)" }}>
+					{ts("speed.previewFrameSteppingHint", { native: MAX_NATIVE_PLAYBACK_RATE })}
+				</p>
+			) : null}
+		</>
+	);
+}
 
 function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }) {
 	const ts = useScopedT("settings");
@@ -356,20 +446,7 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
 				{paneHeader(<ZoomIn size={15} />, tt("labels.speed"), onClose, tc("actions.close"))}
 				<div style={bodyStyle}>
-					{paneRow(
-						ts("speed.playbackSpeed"),
-						<select
-							value={region.speed}
-							onChange={(e) => void tl.updateSpeedValue(region.id, Number(e.target.value))}
-							style={selectStyle}
-						>
-							{SPEED_VALUES.map((s) => (
-								<option key={s} value={s}>
-									{s}×
-								</option>
-							))}
-						</select>,
-					)}
+					<SpeedControl region={region} tl={tl} />
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
 						<Trash2 size={14} />
 						{ts("speed.deleteRegion")}
