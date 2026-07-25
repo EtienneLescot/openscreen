@@ -17,7 +17,8 @@
 				"iso": "Iso",
 				"left": "左",
 				"right": "右"
-			}
+			},
+			"none": "なし"
 		},
 		"customScale": "カスタムズーム",
 		"position": {

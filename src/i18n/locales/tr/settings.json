@@ -17,7 +17,8 @@
 				"iso": "Iso",
 				"left": "Sol",
 				"right": "Sağ"
-			}
+			},
+			"none": "Yok"
 		},
 		"customScale": "Özel Yakınlaştırma",
 		"position": {
