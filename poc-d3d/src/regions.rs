@@ -480,25 +480,27 @@ fn project_corner(x0: f32, y0: f32, rot: [f32; 3], perspective: f32) -> Option<(
     Some((px, py))
 }
 
-/// Échelle uniforme max qui garde les 4 coins projetés dans le rect d'origine (port direct,
-/// même formule que `computeRotation3DContainScale`).
-fn contain_scale(rot: [f32; 3], width: f32, height: f32, perspective: f32) -> f32 {
-    let (half_w, half_h) = (width * 0.5, height * 0.5);
-    let corners = [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)];
-    let (mut max_abs_x, mut max_abs_y) = (0.0f32, 0.0f32);
-    for &(x0, y0) in &corners {
-        match project_corner(x0, y0, rot, perspective) {
-            Some((px, py)) => {
-                max_abs_x = max_abs_x.max(px.abs());
-                max_abs_y = max_abs_y.max(py.abs());
-            }
-            None => return 1.0,
-        }
+/// Les 4 coins d'un quad `width`×`height` réduit de `scale`, projetés. `None` si un coin part
+/// derrière le plan de fuite.
+fn project_scaled_corners(
+    width: f32,
+    height: f32,
+    scale: f32,
+    rot: [f32; 3],
+    perspective: f32,
+) -> Option<[(f32, f32); 4]> {
+    let (hw, hh) = (width * 0.5 * scale, height * 0.5 * scale);
+    let source = [(-hw, -hh), (hw, -hh), (hw, hh), (-hw, hh)];
+    let mut out = [(0.0f32, 0.0f32); 4];
+    for (i, &(x0, y0)) in source.iter().enumerate() {
+        out[i] = project_corner(x0, y0, rot, perspective)?;
     }
-    if max_abs_x == 0.0 || max_abs_y == 0.0 {
-        return 1.0;
-    }
-    (half_w / max_abs_x).min(half_h / max_abs_y).min(1.0)
+    Some(out)
+}
+
+/// Demi-étendue des coins projetés sur chaque axe.
+fn projected_extents(corners: &[(f32, f32); 4]) -> (f32, f32) {
+    corners.iter().fold((0.0f32, 0.0f32), |(mx, my), &(x, y)| (mx.max(x.abs()), my.max(y.abs())))
 }
 
 /// Les 4 coins (TL, TR, BR, BL) du quad tilté en 3D, en px relatifs au CENTRE du rect d'origine
@@ -508,14 +510,42 @@ fn contain_scale(rot: [f32; 3], width: f32, height: f32, perspective: f32) -> f3
 pub fn rotated_quad_corners_px(width: f32, height: f32, rot: [f32; 3]) -> [(f32, f32); 4] {
     const PERSPECTIVE_FACTOR: f32 = 2.6; // ROTATION_3D_PERSPECTIVE_FACTOR (TS)
     let perspective = width.min(height) * PERSPECTIVE_FACTOR;
-    let scale = contain_scale(rot, width, height, perspective);
-    let (half_w, half_h) = (width * 0.5 * scale, height * 0.5 * scale);
-    let corners = [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)];
-    let mut out = [(0.0f32, 0.0f32); 4];
-    for (i, &(x0, y0)) in corners.iter().enumerate() {
-        out[i] = project_corner(x0, y0, rot, perspective).unwrap_or((x0, y0));
+    let (half_w, half_h) = (width * 0.5, height * 0.5);
+
+    // BUG corrigé : l'échelle de containment était calculée en projetant les coins PLEINE TAILLE,
+    // puis on projetait les coins RÉDUITS. La division perspective n'étant pas linéaire en la
+    // taille d'entrée — le `z` d'un coin bouge quand on le rapproche du centre —, réduire d'un
+    // facteur mesuré sur le grand quad ne suffisait pas : le quad projeté débordait encore, et le
+    // render target le coupait net (bords droits en haut et à droite d'un écran pourtant penché).
+    //
+    // On mesure donc sur les coins RÉELLEMENT projetés et on répète : chaque passe multiplie
+    // l'échelle par le facteur de débordement observé. Ça converge en deux ou trois tours ; huit
+    // est une borne large qui coûte quelques multiplications une fois par frame.
+    let mut scale = 1.0f32;
+    let mut corners = match project_scaled_corners(width, height, scale, rot, perspective) {
+        Some(c) => c,
+        // Un coin derrière le plan de fuite : on rend le quad non tourné plutôt qu'une projection
+        // absurde (même repli qu'avant).
+        None => return [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)],
+    };
+    for _ in 0..8 {
+        let (max_x, max_y) = projected_extents(&corners);
+        if max_x <= 0.0 || max_y <= 0.0 {
+            break;
+        }
+        let fit = (half_w / max_x).min(half_h / max_y);
+        // `fit >= 1` : le quad tient déjà. On ne l'agrandit jamais — le containment ne fait que
+        // réduire, comme le web.
+        if fit >= 0.999 {
+            break;
+        }
+        scale *= fit;
+        match project_scaled_corners(width, height, scale, rot, perspective) {
+            Some(c) => corners = c,
+            None => break,
+        }
     }
-    out
+    corners
 }
 
 #[cfg(test)]
@@ -659,5 +689,51 @@ mod arrow_tests {
     fn a_negative_stroke_width_cannot_produce_a_negative_half_width() {
         let (_, half) = arrow_local_geometry("right", -5.0, [100.0, 100.0]);
         assert_eq!(half, 0.0);
+    }
+}
+
+#[cfg(test)]
+mod tilt_tests {
+    use super::*;
+
+    /// Le contrat du containment : après projection, aucun coin ne sort du rect d'origine.
+    /// C'est ce qui garantit que le quad incliné n'est jamais coupé par le bord du cadre.
+    #[test]
+    fn every_preset_stays_inside_the_original_rect() {
+        for (name, rot) in [
+            ("iso", rotation3d_for(&Some("iso".into()))),
+            ("left", rotation3d_for(&Some("left".into()))),
+            ("right", rotation3d_for(&Some("right".into()))),
+        ] {
+            // Plusieurs formes de boîte : le débordement dépend du ratio.
+            for (w, h) in [(1920.0f32, 1080.0f32), (1080.0, 1920.0), (800.0, 800.0)] {
+                let corners = rotated_quad_corners_px(w, h, rot);
+                let (max_x, max_y) = projected_extents(&corners);
+                // Tolérance d'un demi-pixel : l'itération s'arrête à 0.1 % près.
+                assert!(
+                    max_x <= w * 0.5 + 0.5 && max_y <= h * 0.5 + 0.5,
+                    "{name} {w}x{h} : étendue ({max_x:.1}, {max_y:.1}) dépasse ({:.1}, {:.1})",
+                    w * 0.5,
+                    h * 0.5
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn a_flat_quad_is_left_alone() {
+        // Sans rotation, aucun containment ne doit s'appliquer : les coins sont ceux du rect.
+        let corners = rotated_quad_corners_px(1000.0, 600.0, [0.0, 0.0, 0.0]);
+        let (max_x, max_y) = projected_extents(&corners);
+        assert!((max_x - 500.0).abs() < 0.5 && (max_y - 300.0).abs() < 0.5);
+    }
+
+    #[test]
+    fn the_tilt_actually_tilts() {
+        // Garde-fou contre un containment trop zélé qui aplatirait l'effet : les quatre coins
+        // d'un quad incliné ne peuvent pas rester alignés deux à deux comme un rectangle droit.
+        let corners = rotated_quad_corners_px(1920.0, 1080.0, rotation3d_for(&Some("iso".into())));
+        let top_edge_slope = (corners[1].1 - corners[0].1).abs();
+        assert!(top_edge_slope > 1.0, "arête supérieure horizontale : le tilt a disparu");
     }
 }
