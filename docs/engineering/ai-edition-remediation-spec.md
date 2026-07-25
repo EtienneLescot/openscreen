@@ -8,6 +8,25 @@ Convention de statut :
 **[C]** cherry-pick depuis la branche parquée · **[N]** à écrire · **[M]** à mesurer avant
 de décider.
 
+## État au 2026-07-25
+
+Livré sur `claude/ai-edition-remediation` : **lot 1 en entier** (1.1 à 1.5), **lot 2 en
+entier** (2.1 réordonnancement, 2.2 mixage audio natif, 2.3 annotation vide), **3.1**
+vitesse libre et **3.2** bascule focus zoom. Validation : `tsc` propre, `biome` propre,
+423 tests front + 25 tests Rust verts, dont 15 nouveaux.
+
+Reste ouvert : **3.3** rotation de zoom, **3.4** zoom réactif webcam, **3.5** annotations
+non-texte, le **lot 4** (arbitrage produit), et les trois différés — MSIX, #120 playhead,
+#127 partie 2.
+
+Deux points ne sont **pas** vérifiés en application, faute de projet enregistré sous la
+main : le pane vitesse et le pane focus zoom (il faut une région sélectionnée), et l'export
+d'un enregistrement multipiste réel. Le reste de la validation est statique + tests.
+
+La branche parquée `claude/rebase-ai-edition-main-c65d0d` (PR #154) a été **vidée de ce
+qu'on en voulait** : elle peut être fermée sans merge. Ses deux commits de portage #109
+(exporteur navigateur) ne sont pas repris — 2.2 les remplace côté Rust.
+
 ---
 
 ## Lot 1 — Correctifs partagés venus de main (risque faible)
