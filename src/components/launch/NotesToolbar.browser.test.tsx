@@ -12,7 +12,8 @@ vi.mock("@/components/ui/tooltip", () => ({
 }));
 
 vi.mock("@/contexts/I18nContext", () => ({
-	useScopedT: () => (key: string) => {
+	useI18n: () => ({ locale: "en" }),
+	useScopedT: () => (key: string, vars?: Record<string, string | number>) => {
 		const labels: Record<string, string> = {
 			"tooltips.notesToolbar.play": "Play",
 			"tooltips.notesToolbar.pause": "Pause",
@@ -23,8 +24,12 @@ vi.mock("@/contexts/I18nContext", () => ({
 			"tooltips.notesToolbar.decreaseFontSize": "Decrease font size",
 			"tooltips.notesToolbar.increaseFontSize": "Increase font size",
 			"tooltips.notesToolbar.mirror": "Mirror",
+			"units.pixelsPerSecond": "{{value}} px/s",
+			"units.pixels": "{{value}} px",
 		};
-		return labels[key] ?? key;
+		return (labels[key] ?? key).replace(/\{\{(\w+)\}\}/g, (_, name: string) =>
+			String(vars?.[name] ?? `{{${name}}}`),
+		);
 	},
 }));
 

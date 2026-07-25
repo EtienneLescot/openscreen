@@ -1,29 +1,14 @@
 import "@testing-library/jest-dom";
-import { render, screen } from "@testing-library/react";
+import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Editor } from "@tiptap/react";
+import { type ReactNode, useLayoutEffect } from "react";
 import { describe, expect, it, vi } from "vitest";
+import { I18nProvider, useI18n } from "@/contexts/I18nContext";
 import { NotesToolbar, type NotesToolbarProps } from "./NotesToolbar";
 
 vi.mock("@/components/ui/tooltip", () => ({
 	Tooltip: ({ children }: { children: React.ReactNode }) => children,
-}));
-
-vi.mock("@/contexts/I18nContext", () => ({
-	useScopedT: () => (key: string) => {
-		const labels: Record<string, string> = {
-			"tooltips.notesToolbar.play": "Play",
-			"tooltips.notesToolbar.pause": "Pause",
-			"tooltips.notesToolbar.speed": "Scroll speed",
-			"tooltips.notesToolbar.decreaseSpeed": "Decrease scroll speed",
-			"tooltips.notesToolbar.increaseSpeed": "Increase scroll speed",
-			"tooltips.notesToolbar.fontSize": "Font size",
-			"tooltips.notesToolbar.decreaseFontSize": "Decrease font size",
-			"tooltips.notesToolbar.increaseFontSize": "Increase font size",
-			"tooltips.notesToolbar.mirror": "Mirror",
-		};
-		return labels[key] ?? key;
-	},
 }));
 
 function createEditor(): Editor {
@@ -68,15 +53,42 @@ function createProps(overrides: Partial<NotesToolbarProps> = {}): NotesToolbarPr
 	};
 }
 
+function ActiveLocale({ children, locale }: { children: ReactNode; locale: string }) {
+	const { setLocale } = useI18n();
+
+	useLayoutEffect(() => {
+		setLocale(locale);
+	}, [locale, setLocale]);
+
+	return children;
+}
+
+function renderToolbar(props: NotesToolbarProps, locale = "en") {
+	return render(
+		<I18nProvider>
+			<ActiveLocale locale={locale}>
+				<NotesToolbar {...props} />
+			</ActiveLocale>
+		</I18nProvider>,
+	);
+}
+
 describe("NotesToolbar teleprompter controls", () => {
 	it("exposes values and dispatches every manual control", async () => {
 		const user = userEvent.setup();
 		const props = createProps();
-		render(<NotesToolbar {...props} />);
+		renderToolbar(props);
 
-		expect(screen.getByRole("status", { name: "Scroll speed" })).toHaveTextContent("40 px/s");
-		expect(screen.getByRole("status", { name: "Font size" })).toHaveTextContent("16 px");
-		expect(screen.getByRole("button", { name: "Mirror" })).toHaveAttribute("aria-pressed", "false");
+		const speed = within(screen.getByRole("group", { name: "Scroll speed" })).getByRole("status");
+		const fontSize = within(screen.getByRole("group", { name: "Font size" })).getByRole("status");
+		expect(speed).not.toHaveAccessibleName();
+		expect(speed).toHaveTextContent("40 px/s");
+		expect(fontSize).not.toHaveAccessibleName();
+		expect(fontSize).toHaveTextContent("16 px");
+		expect(screen.getByRole("button", { name: "Mirror horizontally" })).toHaveAttribute(
+			"aria-pressed",
+			"false",
+		);
 		expect(screen.getByRole("button", { name: "Decrease scroll speed" })).not.toHaveAttribute(
 			"aria-pressed",
 		);
@@ -84,12 +96,12 @@ describe("NotesToolbar teleprompter controls", () => {
 			"aria-pressed",
 		);
 
-		await user.click(screen.getByRole("button", { name: "Play" }));
+		await user.click(screen.getByRole("button", { name: "Start auto-scroll" }));
 		await user.click(screen.getByRole("button", { name: "Decrease scroll speed" }));
 		await user.click(screen.getByRole("button", { name: "Increase scroll speed" }));
 		await user.click(screen.getByRole("button", { name: "Decrease font size" }));
 		await user.click(screen.getByRole("button", { name: "Increase font size" }));
-		await user.click(screen.getByRole("button", { name: "Mirror" }));
+		await user.click(screen.getByRole("button", { name: "Mirror horizontally" }));
 
 		expect(props.onTogglePlaying).toHaveBeenCalledOnce();
 		expect(props.onDecreaseSpeed).toHaveBeenCalledOnce();
@@ -100,18 +112,33 @@ describe("NotesToolbar teleprompter controls", () => {
 	});
 
 	it("disables controls at their bounds", () => {
-		const { rerender } = render(<NotesToolbar {...createProps({ speed: 10, fontSize: 14 })} />);
+		const { rerender } = renderToolbar(createProps({ speed: 10, fontSize: 14 }));
 		expect(screen.getByRole("button", { name: "Decrease scroll speed" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Decrease font size" })).toBeDisabled();
 
-		rerender(<NotesToolbar {...createProps({ speed: 100, fontSize: 48 })} />);
+		rerender(
+			<I18nProvider>
+				<NotesToolbar {...createProps({ speed: 100, fontSize: 48 })} />
+			</I18nProvider>,
+		);
 		expect(screen.getByRole("button", { name: "Increase scroll speed" })).toBeDisabled();
 		expect(screen.getByRole("button", { name: "Increase font size" })).toBeDisabled();
 	});
 
 	it("keeps playback paused and disabled until the editor is ready", () => {
-		render(<NotesToolbar {...createProps({ editor: null })} />);
-		expect(screen.getByRole("button", { name: "Play" })).toBeDisabled();
-		expect(screen.queryByRole("button", { name: "Pause" })).not.toBeInTheDocument();
+		renderToolbar(createProps({ editor: null }));
+		expect(screen.getByRole("button", { name: "Start auto-scroll" })).toBeDisabled();
+		expect(screen.queryByRole("button", { name: "Pause auto-scroll" })).not.toBeInTheDocument();
+	});
+
+	it("formats readout values for the active locale", () => {
+		renderToolbar(createProps(), "ar");
+		const speed = within(screen.getByRole("group", { name: "سرعة التمرير" })).getByRole("status");
+		const fontSize = within(screen.getByRole("group", { name: "حجم الخط" })).getByRole("status");
+
+		expect(speed).not.toHaveAccessibleName();
+		expect(speed).toHaveTextContent(`${new Intl.NumberFormat("ar").format(40)} بكسل/ثانية`);
+		expect(fontSize).not.toHaveAccessibleName();
+		expect(fontSize).toHaveTextContent(`${new Intl.NumberFormat("ar").format(16)} بكسل`);
 	});
 });

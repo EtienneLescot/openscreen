@@ -32,6 +32,10 @@
 			"mirror": "좌우 반전"
 		}
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} px/초",
+		"pixels": "{{value}} px"
+	},
 	"audio": {
 		"enableSystemAudio": "시스템 오디오 활성화",
 		"disableSystemAudio": "시스템 오디오 비활성화",

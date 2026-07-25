@@ -32,6 +32,10 @@
 			"mirror": "左右反転"
 		}
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} px/秒",
+		"pixels": "{{value}} px"
+	},
 	"audio": {
 		"enableSystemAudio": "システム音声を有効にする",
 		"disableSystemAudio": "システム音声を無効にする",

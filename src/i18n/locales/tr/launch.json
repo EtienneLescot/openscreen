@@ -32,6 +32,10 @@
 			"mirror": "Yatay aynala"
 		}
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} piks/sn",
+		"pixels": "{{value}} piks"
+	},
 	"audio": {
 		"enableSystemAudio": "Sistem sesini etkinleştir",
 		"disableSystemAudio": "Sistem sesini devre dışı bırak",

@@ -13,9 +13,9 @@ import {
 	Quote,
 	Strikethrough,
 } from "lucide-react";
-import { type ReactNode, useEffect, useReducer } from "react";
+import { type ReactNode, useEffect, useMemo, useReducer } from "react";
 import { Tooltip } from "@/components/ui/tooltip";
-import { useScopedT } from "@/contexts/I18nContext";
+import { useI18n, useScopedT } from "@/contexts/I18nContext";
 import { cn } from "@/lib/utils";
 import {
 	MAX_NOTES_FONT_SIZE,
@@ -113,7 +113,9 @@ export function NotesToolbar({
 	onToggleMirror,
 }: NotesToolbarProps) {
 	useEditorRevision(editor);
+	const { locale } = useI18n();
 	const t = useScopedT("launch");
+	const numberFormatter = useMemo(() => new Intl.NumberFormat(locale), [locale]);
 
 	return (
 		<div className="flex w-full min-w-0 max-w-full flex-col gap-1.5 rounded-[0.625rem] border border-gray-200 bg-gray-50 p-1.5">
@@ -232,12 +234,8 @@ export function NotesToolbar({
 						>
 							<Minus size={16} />
 						</ToolbarButton>
-						<output
-							aria-label={t("tooltips.notesToolbar.speed")}
-							aria-live="polite"
-							className="min-w-14 text-center text-xs tabular-nums text-gray-700"
-						>
-							{speed} px/s
+						<output className="min-w-14 text-center text-xs tabular-nums text-gray-700">
+							{t("units.pixelsPerSecond", { value: numberFormatter.format(speed) })}
 						</output>
 						<ToolbarButton
 							aria-label={t("tooltips.notesToolbar.increaseSpeed")}
@@ -264,12 +262,8 @@ export function NotesToolbar({
 						>
 							<Minus size={16} />
 						</ToolbarButton>
-						<output
-							aria-label={t("tooltips.notesToolbar.fontSize")}
-							aria-live="polite"
-							className="min-w-10 text-center text-xs tabular-nums text-gray-700"
-						>
-							{fontSize} px
+						<output className="min-w-10 text-center text-xs tabular-nums text-gray-700">
+							{t("units.pixels", { value: numberFormatter.format(fontSize) })}
 						</output>
 						<ToolbarButton
 							aria-label={t("tooltips.notesToolbar.increaseFontSize")}
