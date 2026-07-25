@@ -32,6 +32,10 @@
 			"mirror": "水平鏡像"
 		}
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} 像素/秒",
+		"pixels": "{{value}} 像素"
+	},
 	"audio": {
 		"enableSystemAudio": "啟用系統音訊",
 		"disableSystemAudio": "停用系統音訊",

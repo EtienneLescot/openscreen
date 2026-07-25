@@ -32,6 +32,10 @@
 			"mirror": "عكس أفقي"
 		}
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} بكسل/ثانية",
+		"pixels": "{{value}} بكسل"
+	},
 	"audio": {
 		"enableSystemAudio": "تفعيل صوت النظام",
 		"disableSystemAudio": "تعطيل صوت النظام",

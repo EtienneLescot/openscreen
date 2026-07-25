@@ -32,6 +32,10 @@
 			"mirror": "Espelhar horizontalmente"
 		}
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} pixels/s",
+		"pixels": "{{value}} pixels"
+	},
 	"audio": {
 		"enableSystemAudio": "Ativar áudio do sistema",
 		"disableSystemAudio": "Desativar áudio do sistema",
