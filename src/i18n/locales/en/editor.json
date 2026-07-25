@@ -218,7 +218,8 @@
 		"cropDescription": "Reframe the recording — pick an aspect ratio and zoom into the region you want to keep.",
 		"openCrop": "Open crop…",
 		"cameraFullscreenDescription": "While this region plays, the camera takes the whole frame — no border, no rounding, no background — and eases back at the end. Drag the region's edges on the timeline to change when it starts and how long it lasts.",
-		"deleteRegion": "Delete region"
+		"deleteRegion": "Delete region",
+		"freehandRendersAsBox": "In the export, a freehand shape is covered by its bounding box — over-covered, never under."
 	},
 	"leftPanel": {
 		"mediaTitle": "Media",

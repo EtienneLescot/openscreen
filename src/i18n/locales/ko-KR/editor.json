@@ -218,7 +218,8 @@
 		"cropDescription": "녹화 화면을 다시 프레이밍 — 화면 비율을 선택하고 유지할 영역으로 확대합니다.",
 		"openCrop": "자르기 열기…",
 		"cameraFullscreenDescription": "이 구간이 재생되는 동안 카메라가 화면 전체를 채웁니다. 테두리, 둥근 모서리, 배경이 없으며 끝에서 부드럽게 돌아옵니다. 타임라인에서 구간의 가장자리를 끌어 시작 위치와 길이를 조정하세요.",
-		"deleteRegion": "구간 삭제"
+		"deleteRegion": "구간 삭제",
+		"freehandRendersAsBox": "내보내기에서 자유형 도형은 외곽 사각형으로 덮입니다. 더 많이 덮되, 부족하게 덮지는 않습니다."
 	},
 	"leftPanel": {
 		"mediaTitle": "미디어",

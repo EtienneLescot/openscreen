@@ -38,6 +38,13 @@ function buildBlurFreehandPath(points: Array<{ x: number; y: number }>, closed =
 	return closed ? `${path} Z` : path;
 }
 
+/**
+ * Le compositeur natif est-il responsable des pixels d'annotation ? Constante plutôt que valeur
+ * en dur, pour que le point de bascule soit nommé et qu'on retrouve d'un coup tout ce qui en
+ * dépend le jour où l'on nettoiera le code de peinture devenu inatteignable.
+ */
+const NATIVE_PAINTS_ANNOTATIONS = true;
+
 interface AnnotationOverlayProps {
 	annotation: AxcutAnnotationRegion;
 	isSelected: boolean;
@@ -47,6 +54,8 @@ interface AnnotationOverlayProps {
 	onSizeChange: (id: string, size: { width: number; height: number }) => void;
 	onBlurDataChange?: (id: string, blurData: BlurData) => void;
 	onBlurDataCommit?: () => void;
+	/** Écriture disque, appelée une fois en fin de geste — le drag/resize ne fait que du live. */
+	onCommit?: () => void;
 	onClick: (id: string) => void;
 	zIndex: number;
 	isSelectedBoost: boolean;
@@ -63,6 +72,7 @@ export function AnnotationOverlay({
 	onSizeChange,
 	onBlurDataChange,
 	onBlurDataCommit,
+	onCommit,
 	onClick,
 	zIndex,
 	isSelectedBoost,
@@ -273,6 +283,17 @@ export function AnnotationOverlay({
 	};
 
 	const renderContent = () => {
+		// Le compositeur natif dessine désormais les quatre types d'annotation, PREVIEW COMPRISE.
+		// Les peindre aussi ici donnait deux copies superposées ; et comme les deux ne suivent pas
+		// la même horloge, celle du DOM collait au curseur pendant qu'un fantôme restait en place
+		// jusqu'au relâchement, avant de se recaler avec un écart de taille. Ce composant ne garde
+		// donc que le chrome d'édition — cadre de sélection et poignées — qui n'a rien à faire
+		// dans le rendu final.
+		//
+		// Le code de peinture ci-dessous est laissé en place, inatteignable : le supprimer touche
+		// à ~400 lignes et à la saisie du tracé libre, qui est de toute façon en cours de retrait.
+		// À nettoyer dans un passage dédié plutôt qu'au milieu d'un correctif.
+		if (NATIVE_PAINTS_ANNOTATIONS) return null;
 		switch (annotation.type) {
 			case "text": {
 				const animationState = getTextAnimationState(annotation, currentTimeMs);
@@ -492,12 +513,20 @@ export function AnnotationOverlay({
 			}}
 			onDrag={(_e, d) => {
 				setLiveRect((prev) => ({ ...prev, x: d.x, y: d.y }));
+				// Pousse la position PENDANT le geste : c'est le natif qui peint, il doit donc suivre
+				// le curseur. `onPositionChange` ne met à jour qu'en mémoire ; l'écriture disque se
+				// fait une seule fois, au relâchement (`onCommit`).
+				onPositionChange(annotation.id, {
+					x: (d.x / containerWidth) * 100,
+					y: (d.y / containerHeight) * 100,
+				});
 			}}
 			onDragStop={(_e, d) => {
 				setLiveRect((prev) => ({ ...prev, x: d.x, y: d.y }));
 				const xPercent = (d.x / containerWidth) * 100;
 				const yPercent = (d.y / containerHeight) * 100;
 				onPositionChange(annotation.id, { x: xPercent, y: yPercent });
+				onCommit?.();
 				setTimeout(() => {
 					isDraggingRef.current = false;
 				}, 100);
@@ -508,6 +537,15 @@ export function AnnotationOverlay({
 					y: position.y,
 					width: ref.offsetWidth,
 					height: ref.offsetHeight,
+				});
+				// Même raison que le drag : le natif doit suivre la poignée en direct.
+				onPositionChange(annotation.id, {
+					x: (position.x / containerWidth) * 100,
+					y: (position.y / containerHeight) * 100,
+				});
+				onSizeChange(annotation.id, {
+					width: (ref.offsetWidth / containerWidth) * 100,
+					height: (ref.offsetHeight / containerHeight) * 100,
 				});
 			}}
 			onResizeStop={(_e, _direction, ref, _delta, position) => {
@@ -523,6 +561,7 @@ export function AnnotationOverlay({
 				const heightPercent = (ref.offsetHeight / containerHeight) * 100;
 				onPositionChange(annotation.id, { x: xPercent, y: yPercent });
 				onSizeChange(annotation.id, { width: widthPercent, height: heightPercent });
+				onCommit?.();
 			}}
 			onClick={() => {
 				if (isDraggingRef.current) return;

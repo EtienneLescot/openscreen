@@ -218,7 +218,8 @@
 		"cropDescription": "Đóng khung lại bản ghi — chọn tỷ lệ khung hình và phóng to vào vùng bạn muốn giữ lại.",
 		"openCrop": "Mở cắt…",
 		"cameraFullscreenDescription": "Khi vùng này phát, máy quay chiếm trọn khung hình — không viền, không bo góc, không nền — rồi trở lại mượt mà ở cuối. Kéo hai mép của vùng trên dòng thời gian để thay đổi thời điểm bắt đầu và độ dài.",
-		"deleteRegion": "Xóa vùng"
+		"deleteRegion": "Xóa vùng",
+		"freehandRendersAsBox": "Khi xuất, hình vẽ tay được che bằng khung bao của nó — che dư, không bao giờ che thiếu."
 	},
 	"leftPanel": {
 		"mediaTitle": "Media",
