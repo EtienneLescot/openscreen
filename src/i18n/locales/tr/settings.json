@@ -33,7 +33,8 @@
 		"deleteRegion": "Hız Bölgesini Sil",
 		"customPlaybackSpeed": "Özel Oynatma Hızı",
 		"maxSpeedError": "Hız {{max}}× değerinden yüksek olamaz",
-		"previewFrameSteppingHint": "{{native}}× üzerinde önizleme kare kare ilerler ve sessizdir. Dışa aktarma etkilenmez."
+		"previewFrameSteppingHint": "{{native}}× üzerinde önizleme kare kare ilerler ve sessizdir. Dışa aktarma etkilenmez.",
+		"previewSpeedCapHint": "{{native}}× üzerinde önizleme {{native}}× hızında oynatılır; dışa aktarma gerçek hızı uygular."
 	},
 	"trim": {
 		"deleteRegion": "Kırpma Bölgesini Sil"

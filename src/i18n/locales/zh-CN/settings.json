@@ -33,7 +33,8 @@
 		"deleteRegion": "删除速度区域",
 		"customPlaybackSpeed": "自定义播放速度",
 		"maxSpeedError": "速度不能超过 {{max}}×",
-		"previewFrameSteppingHint": "超过 {{native}}× 时，预览为逐帧跳转且静音，导出不受影响。"
+		"previewFrameSteppingHint": "超过 {{native}}× 时，预览为逐帧跳转且静音，导出不受影响。",
+		"previewSpeedCapHint": "超过 {{native}}× 时，预览以 {{native}}× 播放；导出会按真实速度渲染。"
 	},
 	"trim": {
 		"deleteRegion": "删除剪辑区域"

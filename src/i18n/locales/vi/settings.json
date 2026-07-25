@@ -33,7 +33,8 @@
 		"deleteRegion": "Xóa vùng tốc độ",
 		"customPlaybackSpeed": "Tốc độ phát tùy chỉnh",
 		"maxSpeedError": "Tốc độ không thể cao hơn {{max}}×",
-		"previewFrameSteppingHint": "Trên {{native}}×, bản xem trước tua từng khung hình và tắt tiếng. Xuất video không bị ảnh hưởng."
+		"previewFrameSteppingHint": "Trên {{native}}×, bản xem trước tua từng khung hình và tắt tiếng. Xuất video không bị ảnh hưởng.",
+		"previewSpeedCapHint": "Trên {{native}}×, bản xem trước phát ở {{native}}×; bản xuất dựng đúng tốc độ thật."
 	},
 	"trim": {
 		"deleteRegion": "Xóa vùng cắt"

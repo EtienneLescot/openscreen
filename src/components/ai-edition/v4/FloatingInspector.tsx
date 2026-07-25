@@ -356,8 +356,12 @@ export function SpeedControl({
 				/>,
 			)}
 			{region.speed > MAX_NATIVE_PLAYBACK_RATE ? (
+				// `previewSpeedCapHint`, NOT the older `previewFrameSteppingHint`: that one says the
+				// preview frame-steps and goes silent, which describes the legacy editor. Here the
+				// preview simply clamps to MAX_NATIVE_PLAYBACK_RATE (VirtualPreview's
+				// `Math.min(speed, …)`) and keeps its audio — so the sound plays, sped up.
 				<p style={{ margin: 0, font: "400 11px/1.45 var(--font-sans)", color: "var(--fg-2)" }}>
-					{ts("speed.previewFrameSteppingHint", { native: MAX_NATIVE_PLAYBACK_RATE })}
+					{ts("speed.previewSpeedCapHint", { native: MAX_NATIVE_PLAYBACK_RATE })}
 				</p>
 			) : null}
 		</>

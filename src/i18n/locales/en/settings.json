@@ -33,7 +33,8 @@
 		"deleteRegion": "Delete Speed Region",
 		"customPlaybackSpeed": "Custom Playback Speed",
 		"maxSpeedError": "Speed can't go higher than {{max}}×",
-		"previewFrameSteppingHint": "Above {{native}}×, preview is frame-stepped and muted. Export is unaffected."
+		"previewFrameSteppingHint": "Above {{native}}×, preview is frame-stepped and muted. Export is unaffected.",
+		"previewSpeedCapHint": "Above {{native}}×, preview plays at {{native}}×; the export renders the true speed."
 	},
 	"trim": {
 		"deleteRegion": "Delete Trim Region"

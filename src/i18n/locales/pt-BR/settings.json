@@ -33,7 +33,8 @@
 		"deleteRegion": "Excluir Região de Velocidade",
 		"customPlaybackSpeed": "Velocidade Personalizada",
 		"maxSpeedError": "A velocidade não pode ser superior a {{max}}×",
-		"previewFrameSteppingHint": "Acima de {{native}}×, a prévia avança quadro a quadro e sem som. A exportação não é afetada."
+		"previewFrameSteppingHint": "Acima de {{native}}×, a prévia avança quadro a quadro e sem som. A exportação não é afetada.",
+		"previewSpeedCapHint": "Acima de {{native}}×, a prévia é reproduzida a {{native}}×; a exportação aplica a velocidade real."
 	},
 	"trim": {
 		"deleteRegion": "Excluir Região de Recorte"
