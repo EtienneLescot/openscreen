@@ -13,6 +13,7 @@ pub mod live;
 pub mod pipeline;
 pub mod regions;
 pub mod scene;
+pub mod text;
 
 use anyhow::{Context as _, Result};
 use compositor::Compositor;

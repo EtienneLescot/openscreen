@@ -86,6 +86,17 @@ float4 ps_main(VSOut i) : SV_Target
     // de perspective-correct exact, mais indiscernable à l'œil pour un tilt de 10-22°) et
     // échantillonne la vidéo à l'UV correspondant, sinon transparent (hors du quad projeté).
     // fx.xy/fx.zw = coins TL/TR (px locaux, 0..quad_px) ; src_prev.xy/.zw = coins BR/BL.
+    // mode 11 : texte d'annotation, rastérisé par Direct2D (voir text.rs). D2D écrit sur une
+    // surface DXGI en alpha PRÉMULTIPLIÉ, donc contrairement au mode 7 (sprite curseur, alpha
+    // droit) il ne faut SURTOUT pas re-multiplier ici : les bords adoucis des glyphes
+    // deviendraient deux fois trop transparents et le texte paraîtrait délavé.
+    // `color.a` reste l'opacité globale (fondu d'animation).
+    if (mode > 10.5)
+    {
+        float4 s = texImg.Sample(samp, i.uv);
+        return s * color.a;
+    }
+
     // mode 10 : annotation « flou » — masque la zone en réutilisant l'image DÉJÀ composée, qui
     // arrive dans `texImg` (recopie du render target : on ne peut pas échantillonner la cible sur
     // laquelle on dessine). `i.pout` donne directement l'UV de sortie, donc aucun mapping à

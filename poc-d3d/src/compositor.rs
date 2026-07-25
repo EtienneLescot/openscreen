@@ -338,6 +338,14 @@ pub struct Compositor {
     /// Scène pilotée par l'app (contrat) : quand présente, remplace le layout fixture de
     /// `timeline()`. Voir `scene.rs` / `SceneDescription` (TS).
     scene: RefCell<Option<Scene>>,
+    /// Rastériseur de texte (Direct2D/DirectWrite). `Option` parce qu'un échec d'init des
+    /// fabriques ne doit pas empêcher tout le compositeur de tourner : sans lui, les annotations
+    /// texte sont simplement absentes, comme avant.
+    text_raster: Option<crate::text::TextRasterizer>,
+    /// Cache des textures de texte, indexé sur l'ID d'annotation. La `u64` est la clé de contenu
+    /// (`TextSpec::cache_key`) : on ne re-rastérise que si elle change, donc jamais pour un
+    /// déplacement ou une animation.
+    text_cache: RefCell<HashMap<String, (ID3D11ShaderResourceView, u64)>>,
     /// Cache des textures d'annotation image, indexé sur l'ID d'annotation (SRV, w, h, longueur
     /// de la source). Séparé de `img_cache` : les wallpapers sont des chemins disque, ces images
     /// des data URL de plusieurs Mo qu'on ne veut pas utiliser comme clés de hachage.
@@ -933,6 +941,14 @@ impl Compositor {
             srv_cache: RefCell::new(HashMap::new()),
             live_params: RefCell::new(LiveParams::default()),
             scene: RefCell::new(None),
+            text_raster: match crate::text::TextRasterizer::new() {
+                Ok(r) => Some(r),
+                Err(e) => {
+                    eprintln!("[texte] init Direct2D/DirectWrite impossible, annotations texte désactivées: {e}");
+                    None
+                }
+            },
+            text_cache: RefCell::new(HashMap::new()),
             ann_img_cache: RefCell::new(HashMap::new()),
             img_cache: RefCell::new(HashMap::new()),
             render_size: Cell::new((out_w, out_h)),
@@ -2221,8 +2237,60 @@ impl Compositor {
                         ..Default::default()
                     });
                 }
-                // texte : pas encore rendu. Ignoré en silence — une absence connue vaut mieux
-                // qu'un placeholder qu'on prendrait pour un bug de style.
+                "text" => {
+                    let Some(text) = annotation.text.as_ref() else { continue };
+                    let Some(raster) = self.text_raster.as_ref() else { continue };
+                    if text.content.trim().is_empty() {
+                        continue;
+                    }
+                    // `font_size_rel` est une fraction de la HAUTEUR DU RECT ÉCRAN (cf. le contrat
+                    // et `annotationScale.ts`) : on la ramène en pixels de sortie ici, avec le même
+                    // produit que la preview applique contre sa propre boîte.
+                    let screen_h_px = screen_dst[3] * self.rh();
+                    let spec = crate::text::TextSpec {
+                        content: text.content.clone(),
+                        color: parse_hex(&text.color).unwrap_or([1.0, 1.0, 1.0, 1.0]),
+                        // "transparent" ne parse pas en hex : alpha 0 => pas de fond, ce qui est
+                        // exactement la sémantique CSS.
+                        background: parse_hex(&text.background_color).unwrap_or([0.0, 0.0, 0.0, 0.0]),
+                        font_size_px: text.font_size_rel * screen_h_px,
+                        font_family: text.font_family.clone(),
+                        bold: text.font_weight == "bold",
+                        italic: text.font_style == "italic",
+                        underline: text.text_decoration == "underline",
+                        align: text.text_align.clone(),
+                        box_px: [quad_px[0].round() as u32, quad_px[1].round() as u32],
+                    };
+                    let key = spec.cache_key();
+                    let cached = {
+                        let cache = self.text_cache.borrow();
+                        cache.get(&annotation.id).filter(|(_, k)| *k == key).map(|(srv, _)| srv.clone())
+                    };
+                    let Some(srv) = cached.or_else(|| match raster.rasterize(&self.dev, &spec) {
+                        Ok(srv) => {
+                            self.text_cache
+                                .borrow_mut()
+                                .insert(annotation.id.clone(), (srv.clone(), key));
+                            Some(srv)
+                        }
+                        Err(e) => {
+                            eprintln!("[annotation texte] {}: {e}", annotation.id);
+                            None
+                        }
+                    }) else {
+                        continue;
+                    };
+                    self.ctx.PSSetShaderResources(2, Some(&[Some(srv)]));
+                    self.draw_solid(&LayerCB {
+                        dst,
+                        src: [0.0, 0.0, 1.0, 1.0],
+                        quad_px,
+                        // mode 11 : sprite en alpha DÉJÀ prémultiplié (ce que produit D2D).
+                        mode: 11.0,
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        ..Default::default()
+                    });
+                }
                 _ => {}
             }
         }
