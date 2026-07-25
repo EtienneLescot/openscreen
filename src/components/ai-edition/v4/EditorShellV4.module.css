@@ -961,6 +961,12 @@
 	background: var(--surface-3);
 	color: var(--fg);
 }
+/* Toggle tools (Auto-Focus) read their lit state off aria-pressed, so the styling can't
+   drift from what assistive tech announces. */
+.tlToolBtn[aria-pressed="true"] {
+	background: var(--accent-soft, var(--surface-3));
+	color: var(--accent, var(--fg));
+}
 .tlHints {
 	margin-left: auto;
 	display: flex;
