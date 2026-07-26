@@ -102,7 +102,7 @@ function nativeEncodeEnabled(): boolean {
  * 32 seconds previously blamed on readback were the compositor finishing its GPU
  * work at the first stage that forced a sync.
  *
- * See docs/architecture/export-pipeline.md §3.
+ * See technical-documentation/architecture/export-pipeline.md
  *
  *   localStorage.setItem("openscreen.dropFrames", "1")
  */
@@ -139,7 +139,7 @@ function compositeOnlyEnabled(): boolean {
 }
 
 /**
- * Gate G0 — docs/architecture/rendering-architecture.md §7.1.
+ * Gate G0 — technical-documentation/engineering/rendering-performance.md
  *
  * Force the GPU to FINISH compositing before the encode timers start, in a
  * `fence` stage of its own. If §7.1 is right, `encodeWait` collapses to the

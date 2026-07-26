@@ -462,7 +462,7 @@ describe("buildSceneDescription.zoomRegions", () => {
 });
 
 // --- zoomRegions × trims (raw↔compressed regression) ------------------------
-// See docs/architecture/timeline-coordinate-refactor.md. Regions are authored in
+// See technical-documentation/architecture/timeline-model.md. Regions are authored in
 // RAW virtual-ms (trims still occupy the ruler), but the scene handed to native is
 // built from TRIM-COMPRESSED playback segments (`resolveVisibleClips`). A region
 // after a trim must still fire at the SAME source moment the user placed it on the

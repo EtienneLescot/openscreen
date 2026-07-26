@@ -1,7 +1,7 @@
 # whisper.cpp DTW word-timestamp POC — REPORT
 
 **Branch:** `feat/native-stt-whispercpp`
-**Plan:** [`docs/engineering/stt-whispercpp-dtw-poc-plan.md`](../../../../docs/engineering/stt-whispercpp-dtw-poc-plan.md)
+**Plan:** [`technical-documentation/architecture/transcription-and-captions.md`](../../../../technical-documentation/architecture/transcription-and-captions.md)
 **POC dir:** `tools/stt-eval/whispercpp-dtw-poc/`
 **Status:** all 7 fixtures scored for all available backends; §4.1 guardrail PASS on every run; three verdicts below.
 

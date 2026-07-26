@@ -46,7 +46,7 @@ jobs:
 
       # ponytail: STT is handled by the bundled whisper-stt-server (whisper.cpp
       # with native DTW token timestamps). No separate VAD model is fetched
-      # here. See docs/engineering/stt-spec.md for the full architecture.
+      # here. See technical-documentation/architecture/transcription-and-captions.md for the full architecture.
 
       - name: Build Windows app
         run: npm run build:win -- --publish never
@@ -77,7 +77,7 @@ jobs:
 
       # ponytail: STT is handled by the bundled whisper-stt-server (whisper.cpp
       # with native DTW token timestamps). No separate VAD model is fetched
-      # here. See docs/engineering/stt-spec.md for the full architecture.
+      # here. See technical-documentation/architecture/transcription-and-captions.md for the full architecture.
 
       - name: Build Windows Store package
         run: npm run build:win:store -- --publish never
