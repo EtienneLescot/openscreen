@@ -1,4 +1,5 @@
 import { clamp } from "@/utils/math";
+
 export interface ParsedGradientStop {
 	color: string;
 	offset: number;

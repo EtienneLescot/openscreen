@@ -191,10 +191,13 @@ function nextLegacy(current: LegacyShape | null, patch: EditorSettingsPatch): Le
 	// ...patch} would write undefined over a value the caller left alone.
 	// `cursor` is handled separately below: its keys are renamed (size ->
 	// cursorSize), so it is not a straight passthrough.
+	// The Pick keeps what the 16 `if`s used to check: a patch key with no
+	// LegacyShape counterpart fails to compile instead of leaking into the
+	// persisted blob.
 	const { cursor: _cursor, ...rest } = patch;
 	const defined = Object.fromEntries(
 		Object.entries(rest).filter(([, v]) => v !== undefined),
-	) as Partial<LegacyShape>;
+	) as Partial<Pick<LegacyShape, keyof Omit<EditorSettingsPatch, "cursor">>>;
 	const next: LegacyShape = { ...base, ...defined };
 	if (patch.cursor) {
 		const c = patch.cursor;

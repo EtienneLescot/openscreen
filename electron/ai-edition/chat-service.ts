@@ -5,6 +5,7 @@
 // `toolEnd` lifecycle + `error` events into the renderer through the
 // ChatEventSink.
 
+import { randomUUID } from "node:crypto";
 import {
 	type AxcutTimelineOperation,
 	applyTimelineOperation,
@@ -159,7 +160,7 @@ export function listSessions(projectId: string): ChatSessionSummary[] {
 
 export function createSession(projectId: string, title?: string): ChatSessionSummary {
 	const m = getProjectSessions(projectId);
-	const id = `sess_${crypto.randomUUID()}`;
+	const id = `sess_${randomUUID()}`;
 	const now = new Date().toISOString();
 	const session: ChatSession = {
 		id,
@@ -277,7 +278,7 @@ export async function runChat(
 	}
 
 	const userMessage: AiEditionChatMessage = {
-		id: crypto.randomUUID(),
+		id: randomUUID(),
 		role: "user",
 		content: message,
 		createdAt: new Date().toISOString(),
@@ -368,7 +369,7 @@ export async function runChat(
 	}
 
 	const assistantMessage: AiEditionChatMessage = {
-		id: crypto.randomUUID(),
+		id: randomUUID(),
 		role: "assistant",
 		content: result.text,
 		createdAt: new Date().toISOString(),
@@ -493,7 +494,7 @@ export async function runTimelineOperation(
 
 	if (conversationMessage.trim() && session) {
 		const assistantMessage: AiEditionChatMessage = {
-			id: `msg_${crypto.randomUUID()}`,
+			id: `msg_${randomUUID()}`,
 			role: "assistant",
 			content: conversationMessage.trim(),
 			createdAt: new Date().toISOString(),
