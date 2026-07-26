@@ -212,24 +212,6 @@ export const timelineSchema = z.preprocess(
 	}),
 );
 
-export const pendingQuestionSchema = z.object({
-	id: z.string().min(1),
-	question: z.string().min(1),
-	reason: z.string().default(""),
-	startWordId: z.string().optional(),
-	endWordId: z.string().optional(),
-});
-
-export const previewSchema = z.object({
-	strategy: z.enum(["seek", "mse-proxy"]).default("seek"),
-	revision: z.number().int().nonnegative().default(0),
-});
-
-export const exportStateSchema = z.object({
-	preset: z.enum(["preview-low", "final-balanced", "final-high"]).default("final-balanced"),
-	lastJobId: z.string().nullable().default(null),
-});
-
 export const timelineOperationSchema = z.discriminatedUnion("type", [
 	z.object({
 		type: z.literal("replace_timeline"),
@@ -301,51 +283,6 @@ export const timelineOperationSchema = z.discriminatedUnion("type", [
 		reason: z.string().default(""),
 	}),
 ]);
-
-export const suggestionSchema = z.object({
-	id: z.string().min(1),
-	status: z.enum(["pending", "approved", "rejected"]).default("pending"),
-	category: z
-		.enum(["cut_candidate", "style", "delivery", "topic_focus", "clarification"])
-		.default("cut_candidate"),
-	suggestion: z.string().min(1),
-	reason: z.string().default(""),
-	startWordId: z.string().optional(),
-	endWordId: z.string().optional(),
-	startSec: z.number().nonnegative().optional(),
-	endSec: z.number().nonnegative().optional(),
-	proposedOperation: timelineOperationSchema.optional(),
-});
-
-export const agentStateSchema = z.object({
-	baseIntent: z.string().optional(),
-	pendingQuestions: z.array(pendingQuestionSchema).default([]),
-	suggestions: z.array(suggestionSchema).default([]),
-	lastAppliedOperations: z.array(z.string()).default([]),
-	lastReasoningSummary: z.string().optional(),
-});
-
-export const operationSchema = z.discriminatedUnion("type", [
-	...timelineOperationSchema.options,
-	z.object({
-		type: z.literal("approve_suggestion"),
-		reason: z.string().default(""),
-		suggestionId: z.string().min(1),
-	}),
-	z.object({
-		type: z.literal("reject_suggestion"),
-		reason: z.string().default(""),
-		suggestionId: z.string().min(1),
-	}),
-]);
-
-export const revisionSchema = z.object({
-	id: z.string().min(1),
-	createdAt: isoDateSchema,
-	author: z.enum(["system", "agent", "user"]),
-	summary: z.string().min(1),
-	operations: z.array(operationSchema).default([]),
-});
 
 // OpenScreen additions to the axcut document. Mirrors src/components/video-editor/types.ts
 // (AnnotationRegion / ZoomRegion) — duplicated here so the schema package has no
@@ -496,18 +433,6 @@ const documentSchemaShape = z.object({
 	annotations: z.array(annotationRegionSchema).default([]),
 	zoomRanges: z.array(zoomRegionSchema).default([]),
 	legacyEditor: legacyEditorSchema.nullable().default(null),
-	agent: agentStateSchema.default({
-		pendingQuestions: [],
-		suggestions: [],
-		lastAppliedOperations: [],
-	}),
-	preview: previewSchema.default({ strategy: "seek", revision: 0 }),
-	export: exportStateSchema.default({ preset: "final-balanced", lastJobId: null }),
-	history: z
-		.object({
-			revisions: z.array(revisionSchema).default([]),
-		})
-		.default({ revisions: [] }),
 });
 
 // P4 — v3 documents carried a single project-level `cameraTrack` (one project
@@ -629,20 +554,6 @@ export const transcriptLanguageSchema = z.enum([
 	"zh",
 ]);
 
-export const transcribeInputSchema = z.object({
-	language: transcriptLanguageSchema.default("auto"),
-});
-
-export const exportInputSchema = z.object({
-	preset: exportStateSchema.shape.preset.default("final-balanced"),
-});
-
-export const applyOperationInputSchema = z.object({
-	operation: operationSchema,
-	sessionId: z.string().min(1).optional(),
-	conversationMessage: z.string().min(1).optional(),
-});
-
 export type AxcutWord = z.infer<typeof wordSchema>;
 export type AxcutTranscriptSegment = z.infer<typeof transcriptSegmentSchema>;
 export type AxcutTranscript = z.infer<typeof transcriptSchema>;
@@ -652,11 +563,7 @@ export type AxcutClipCropRegion = z.infer<typeof clipCropRegionSchema>;
 export type AxcutGap = z.infer<typeof gapSchema>;
 export type AxcutTrimRange = z.infer<typeof trimRangeSchema>;
 export type AxcutTimeline = z.infer<typeof timelineSchema>;
-export type AxcutSuggestion = z.infer<typeof suggestionSchema>;
-export type AxcutAgentState = z.infer<typeof agentStateSchema>;
 export type AxcutTimelineOperation = z.infer<typeof timelineOperationSchema>;
-export type AxcutOperation = z.infer<typeof operationSchema>;
-export type AxcutRevision = z.infer<typeof revisionSchema>;
 export type AxcutAnnotationRegion = z.infer<typeof annotationRegionSchema>;
 export type AxcutZoomRegion = z.infer<typeof zoomRegionSchema>;
 export type AxcutCameraTrack = z.infer<typeof cameraTrackSchema>;
@@ -666,9 +573,6 @@ export type AxcutDocumentInput = z.input<typeof documentSchema>;
 export type CreateProjectInput = z.infer<typeof createProjectInputSchema>;
 export type AddAssetInput = z.infer<typeof addAssetInputSchema>;
 export type ChatInput = z.infer<typeof chatInputSchema>;
-export type TranscribeInput = z.infer<typeof transcribeInputSchema>;
-export type ExportInput = z.infer<typeof exportInputSchema>;
-export type ApplyOperationInput = z.infer<typeof applyOperationInputSchema>;
 
 export function createEmptyDocument(
 	input: CreateProjectInput & { projectId: string; createdAt?: string },
@@ -696,10 +600,6 @@ export function createEmptyDocument(
 		annotations: [],
 		zoomRanges: [],
 		legacyEditor: null,
-		agent: { pendingQuestions: [], suggestions: [], lastAppliedOperations: [] },
-		preview: { strategy: "seek", revision: 0 },
-		export: { preset: "final-balanced", lastJobId: null },
-		history: { revisions: [] },
 	});
 }
 

@@ -152,6 +152,5 @@ export function withTranscript(
 		transcript:
 			document.project.primaryAssetId === transcript.assetId ? transcript : document.transcript,
 		transcripts,
-		preview: { ...document.preview, revision: document.preview.revision + 1 },
 	};
 }

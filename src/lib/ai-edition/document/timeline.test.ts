@@ -51,10 +51,6 @@ function makeDoc(overrides: Partial<AxcutDocument> = {}): AxcutDocument {
 		annotations: [],
 		zoomRanges: [],
 		legacyEditor: null,
-		agent: { pendingQuestions: [], suggestions: [], lastAppliedOperations: [] },
-		preview: { strategy: "seek", revision: 0 },
-		export: { preset: "final-balanced", lastJobId: null },
-		history: { revisions: [] },
 		...overrides,
 	};
 }
@@ -169,7 +165,6 @@ describe("timeline pure functions", () => {
 				startSec: 20,
 				endSec: 30,
 			});
-			expect(updated.preview.revision).toBe(1);
 		});
 
 		it("throws when there is no primary asset", () => {
@@ -380,7 +375,7 @@ describe("duplicateClip / moveClip", () => {
 		expect(new Set(ids).size).toBe(ids.length);
 	});
 
-	it("duplicateClip inserts the copy immediately after the original and bumps preview.revision", () => {
+	it("duplicateClip inserts the copy immediately after the original", () => {
 		const doc = makeDoc({
 			timeline: {
 				...makeDoc().timeline,
@@ -394,10 +389,9 @@ describe("duplicateClip / moveClip", () => {
 		expect(next.timeline.clips.map((c) => c.id)[1]).not.toBe("clip_b");
 		expect(next.timeline.clips[0].id).toBe("clip_a");
 		expect(next.timeline.clips[2].id).toBe("clip_b");
-		expect(next.preview.revision).toBe(doc.preview.revision + 1);
 	});
 
-	it("moveClip reorders clips and bumps preview.revision", () => {
+	it("moveClip reorders clips", () => {
 		const doc = makeDoc({
 			timeline: {
 				...makeDoc().timeline,
@@ -409,7 +403,6 @@ describe("duplicateClip / moveClip", () => {
 		});
 		const next = moveClip(doc, "clip_a", 1);
 		expect(next.timeline.clips.map((c) => c.id)).toEqual(["clip_b", "clip_a"]);
-		expect(next.preview.revision).toBe(doc.preview.revision + 1);
 	});
 
 	it("throws for an unknown clip id", () => {
@@ -689,12 +682,6 @@ describe("setClipSourceRange — the one shared clip-trim mutator", () => {
 		expect(untouched.timeline.clips.map((c) => c.id)).toEqual(["clip_a", "clip_b"]);
 		expect(untouched.timeline.clips[0]).toMatchObject({ sourceEndSec: 10, timelineEndSec: 10 });
 	});
-
-	it("does not bump preview.revision (the caller owns that)", () => {
-		const before = doc();
-		const next = setClipSourceRange(before, "clip_a", 0, 4);
-		expect(next.preview.revision).toBe(before.preview.revision);
-	});
 });
 
 describe("removeRegion — the one shared region-delete mutator", () => {
@@ -737,7 +724,7 @@ describe("removeRegion — the one shared region-delete mutator", () => {
 		).toHaveLength(0);
 	});
 
-	it("is a no-op for an unknown id and never bumps preview.revision", () => {
+	it("is a no-op for an unknown id", () => {
 		const doc = makeDoc({
 			zoomRanges: [
 				makeZoom({ id: "z1", startMs: 0, endMs: 2000 }),
@@ -745,7 +732,6 @@ describe("removeRegion — the one shared region-delete mutator", () => {
 		});
 		const next = removeRegion(doc, "zoom", "nope");
 		expect(next.zoomRanges.map((z) => z.id)).toEqual(["z1"]);
-		expect(next.preview.revision).toBe(doc.preview.revision);
 	});
 });
 
@@ -795,11 +781,10 @@ describe("removeClip — delete a clip, close the gap, drop its pills", () => {
 		expect(next.zoomRanges[0]).toMatchObject({ startMs: 2000, endMs: 4000 });
 	});
 
-	it("is a no-op for an unknown clip and never bumps preview.revision", () => {
+	it("is a no-op for an unknown clip", () => {
 		const before = doc();
 		const next = removeClip(before, "clip_missing");
 		expect(next.timeline.clips.map((c) => c.id)).toEqual(["clip_a", "clip_b"]);
 		expect(next).toBe(before);
-		expect(next.preview.revision).toBe(before.preview.revision);
 	});
 });

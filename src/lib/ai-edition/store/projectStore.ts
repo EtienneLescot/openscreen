@@ -256,7 +256,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 			...doc,
 			transcript: doc.project.primaryAssetId === transcript.assetId ? transcript : doc.transcript,
 			transcripts,
-			preview: { ...doc.preview, revision: doc.preview.revision + 1 },
 		};
 		await get().saveDocument(next);
 	},

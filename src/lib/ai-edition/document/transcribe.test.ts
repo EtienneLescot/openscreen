@@ -50,7 +50,6 @@ function makeDoc(): AxcutDocument {
 		agent: null,
 		preview: { revision: 0, playbackRate: 1 },
 		export: null,
-		history: { revisions: [] },
 	};
 }
 
