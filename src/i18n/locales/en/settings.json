@@ -241,11 +241,6 @@
 	"language": {
 		"title": "Language"
 	},
-	"timeline": {
-		"title": "Timeline",
-		"waveform": "Show Audio Waveform on Trim Track",
-		"help": "Timeline display options, like showing the audio waveform on the trim track."
-	},
 	"facets": {
 		"captions": "Captions",
 		"transcript": "Transcript"

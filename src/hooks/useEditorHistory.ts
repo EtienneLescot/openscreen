@@ -40,7 +40,6 @@ export interface EditorState {
 	wallpaper: string;
 	shadowIntensity: number;
 	showBlur: boolean;
-	showTrimWaveform: boolean;
 	motionBlurAmount: number;
 	borderRadius: number;
 	padding: number;
@@ -65,7 +64,6 @@ export const INITIAL_EDITOR_STATE: EditorState = {
 	wallpaper: DEFAULT_EDITOR_LAYOUT_SETTINGS.wallpaper,
 	shadowIntensity: DEFAULT_EDITOR_APPEARANCE_SETTINGS.shadowIntensity,
 	showBlur: DEFAULT_EDITOR_APPEARANCE_SETTINGS.showBlur,
-	showTrimWaveform: DEFAULT_EDITOR_APPEARANCE_SETTINGS.showTrimWaveform,
 	motionBlurAmount: DEFAULT_EDITOR_APPEARANCE_SETTINGS.motionBlurAmount,
 	borderRadius: DEFAULT_EDITOR_APPEARANCE_SETTINGS.borderRadius,
 	padding: DEFAULT_EDITOR_LAYOUT_SETTINGS.padding,

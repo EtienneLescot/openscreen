@@ -242,11 +242,6 @@
 	"language": {
 		"title": "語言"
 	},
-	"timeline": {
-		"title": "時間軸",
-		"waveform": "在剪輯軌道上顯示音訊波形",
-		"help": "時間軸顯示選項，例如在修剪軌道上顯示音訊波形。"
-	},
 	"facets": {
 		"captions": "字幕",
 		"transcript": "逐字稿"
