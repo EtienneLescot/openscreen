@@ -6,7 +6,6 @@
 // self-sufficient).
 
 import {
-	Crop as CropIcon,
 	FileText,
 	HelpCircle,
 	Layout as LayoutIcon,
@@ -59,14 +58,6 @@ import { buildGradientFromEditor } from "@/lib/gradientBuilder";
 import { resolveImageWallpaperUrl, WALLPAPER_PATHS, WALLPAPER_THUMB_PATHS } from "@/lib/wallpaper";
 import { isNativeCompositorActive, setNativeParam, subscribeNativeCompositor } from "@/native";
 import styles from "./NewEditorShell.module.css";
-
-export type RightPaneId =
-	| "background"
-	| "transcript"
-	| "effects"
-	| "layout"
-	| "cursor"
-	| "timeline";
 
 interface PaneProps {
 	title: string;
@@ -1710,23 +1701,6 @@ export function CursorPane() {
 }
 
 // ─── Timeline (trim waveform) ──────────────────────────────────────
-
-export function TimelinePaneBody() {
-	const ts = useScopedT("settings");
-	const { settings, set, hasDocument } = useEditorSettings();
-	return (
-		<Pane title={ts("timeline.title")} icon={<CropIcon size={14} />} helpText={ts("timeline.help")}>
-			<div className={styles.paneRow}>
-				<span className="label">{ts("timeline.waveform")}</span>
-				<Toggle
-					checked={settings.showTrimWaveform}
-					disabled={!hasDocument}
-					onChange={(v) => void set({ showTrimWaveform: v })}
-				/>
-			</div>
-		</Pane>
-	);
-}
 
 // ─── primitives ───────────────────────────────────────────────────
 
