@@ -142,7 +142,13 @@ jobs:
         run: |
           set -euo pipefail
           # GITHUB_TOKEN tag pushes don't fire build.yml in this setup, dispatch it.
+          #
+          # --ref pins the build to the stable tag (the frozen release-branch tip). The
+          # prior main-merge step usually leaves main at the stable version already, but
+          # relying on that is fragile; building the tag guarantees checkout has the
+          # matching package.json + code and enables signing/notarization (tag has no '-').
           gh workflow run build.yml \
+            --ref "${STABLE_TAG}" \
             -f release_tag="${STABLE_TAG}" \
             -f arch=both \
             --repo "$GITHUB_REPOSITORY"

@@ -123,5 +123,18 @@
   "nsis": {
     "oneClick": false,
     "allowToChangeInstallationDirectory": true
+  },
+  // Microsoft Store packaging identity, from Partner Center's "Product identity" page
+  // (Applications et jeux > OpenScreen > Product identity).
+  "appx": {
+    "identityName": "EtienneLescot.OpenScreen",
+    "publisher": "CN=03B0FC8C-2067-45D9-BE82-9F15CE264B4A",
+    "publisherDisplayName": "Etienne Lescot",
+    "applicationId": "Openscreen",
+    "displayName": "OpenScreen",
+    "backgroundColor": "transparent",
+    "capabilities": ["runFullTrust", "microphone", "webcam"],
+    "languages": ["en-US", "fr-FR"],
+    "showNameOnTiles": true
   }
 }
