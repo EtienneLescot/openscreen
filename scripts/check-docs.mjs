@@ -59,6 +59,12 @@ const REQUIRED = [
 	"testing/native-cursor-diagnostics.md",
 ];
 
+// `--only a.md,b/c.md` limits both checks to those docs-relative paths, so a
+// task that owns a slice of the tree can gate on its slice alone.
+const onlyArg = process.argv.find((a) => a.startsWith("--only="));
+const only = onlyArg ? new Set(onlyArg.slice("--only=".length).split(",")) : null;
+const owned = (rel) => !only || only.has(rel);
+
 function walk(dir) {
 	const out = [];
 	for (const entry of readdirSync(dir, { withFileTypes: true })) {
@@ -74,6 +80,7 @@ const errors = [];
 const files = walk(DOCS);
 
 for (const abs of REQUIRED) {
+	if (!owned(abs)) continue;
 	const full = join(DOCS, abs);
 	let lines = -1;
 	try {
@@ -87,6 +94,7 @@ for (const abs of REQUIRED) {
 
 for (const file of files) {
 	const rel = relative(DOCS, file).replaceAll("\\", "/");
+	if (!owned(rel)) continue;
 	const text = readFileSync(file, "utf8");
 
 	// Relative markdown links must resolve.
@@ -95,6 +103,9 @@ for (const file of files) {
 		try {
 			statSync(resolved);
 		} catch {
+			// Scoped runs tolerate links to docs another task still owes.
+			const pending = relative(DOCS, resolved).replaceAll("\\", "/");
+			if (only && REQUIRED.includes(pending)) continue;
 			errors.push(`${rel}: broken link → ${target}`);
 		}
 	}
