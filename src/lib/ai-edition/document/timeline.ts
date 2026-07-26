@@ -460,10 +460,6 @@ export function replaceTimeline(
 			trimRanges,
 			gaps: [],
 		},
-		preview: {
-			...document.preview,
-			revision: document.preview.revision + 1,
-		},
 	};
 	return reanchorRegions(next, clips);
 }
@@ -499,10 +495,6 @@ export function moveClip(
 			...document.timeline,
 			clips: newClips,
 		},
-		preview: {
-			...document.preview,
-			revision: document.preview.revision + 1,
-		},
 	};
 	return rederiveRegionMs(next, newClips);
 }
@@ -535,10 +527,6 @@ export function duplicateClip(
 		timeline: {
 			...document.timeline,
 			clips: newClips,
-		},
-		preview: {
-			...document.preview,
-			revision: document.preview.revision + 1,
 		},
 	};
 	return rederiveRegionMs(updatedDoc, newClips);
