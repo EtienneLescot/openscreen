@@ -205,7 +205,8 @@
 		"exportFailed": "Dışa aktarma başarısız oldu",
 		"failedToWriteFile": "Dosya yazılamadı",
 		"qualityUpscaleWarning": "Upscale",
-		"exportedVideoOf": "video şu sürede dışa aktarıldı:"
+		"exportedVideoOf": "video şu sürede dışa aktarıldı:",
+		"nothingToExport": "Dışa aktarılacak bir şey yok — zaman çizelgesi boş."
 	},
 	"inspector": {
 		"resetFocusPoint": "Odak noktasını sıfırla",

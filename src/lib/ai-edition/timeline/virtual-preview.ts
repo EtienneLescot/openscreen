@@ -178,14 +178,3 @@ export function locateSourcePosition(
 export function keptWordIdSet(clips: AxcutClip[]): Set<string> {
 	return new Set(clips.flatMap((clip) => clip.wordRefs));
 }
-
-export function formatSeconds(value: number): string {
-	const safe = Math.max(0, value);
-	const hours = Math.floor(safe / 3600);
-	const minutes = Math.floor((safe % 3600) / 60);
-	const seconds = safe % 60;
-	if (hours > 0) {
-		return `${hours}:${String(minutes).padStart(2, "0")}:${seconds.toFixed(1).padStart(4, "0")}`;
-	}
-	return `${minutes}:${seconds.toFixed(1).padStart(4, "0")}`;
-}

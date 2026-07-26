@@ -205,7 +205,8 @@
 		"exportFailed": "فشل التصدير",
 		"failedToWriteFile": "فشلت كتابة الملف",
 		"qualityUpscaleWarning": "تكبير الدقة",
-		"exportedVideoOf": "من الفيديو تم تصديره في"
+		"exportedVideoOf": "من الفيديو تم تصديره في",
+		"nothingToExport": "لا يوجد شيء للتصدير — المخطط الزمني فارغ."
 	},
 	"inspector": {
 		"resetFocusPoint": "إعادة تعيين نقطة التركيز",

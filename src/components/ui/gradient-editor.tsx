@@ -1,5 +1,6 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { clamp } from "@/utils/math";
 
 /* ---------- icons ---------- */
 const PlusIcon = () => (
@@ -21,8 +22,6 @@ const RingsIcon = () => (
 		<circle cx="12" cy="16" r="5" stroke="currentColor" strokeWidth="1.6" />
 	</svg>
 );
-
-const clamp = (v: number, min: number, max: number) => Math.min(max, Math.max(min, v));
 
 const MAX_COLORS = 3;
 const MAIN_ID = "main";

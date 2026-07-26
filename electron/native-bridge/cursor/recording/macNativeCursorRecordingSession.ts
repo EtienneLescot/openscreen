@@ -9,6 +9,7 @@ import type {
 	NativeCursorAsset,
 	NativeCursorType,
 } from "../../../../src/native/contracts";
+import { clamp } from "../../../../src/utils/math";
 import type { CursorRecordingSession } from "./session";
 
 interface MacCursorAssetPayload {
@@ -171,10 +172,6 @@ export async function requestMacCursorAccessibilityAccess() {
 			});
 		},
 	);
-}
-
-function clamp(value: number, min: number, max: number) {
-	return Math.min(max, Math.max(min, value));
 }
 
 function normalizeCursorType(value: unknown): NativeCursorType | null {

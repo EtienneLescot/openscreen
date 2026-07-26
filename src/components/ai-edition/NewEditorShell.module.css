@@ -846,6 +846,12 @@
 	align-items: center;
 	gap: var(--sp-2);
 	padding: 12px var(--sp-4);
+	/* Every pane wearing this header is rendered inside FloatingInspector, which
+	   floats its "Collapse inspector" button (right: 12, 26px wide) over the
+	   header's right edge — landing squarely on whatever sits there and
+	   swallowing its clicks. The Help button was the casualty: visible on every
+	   facet, and unclickable. Reserve the floated button its own lane instead. */
+	padding-right: 46px;
 	border-bottom: 1px solid var(--border-soft);
 	min-height: 44px;
 }

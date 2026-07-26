@@ -1,0 +1,151 @@
+// Browser-shim e2e for the v4 editor shell (EditorTopBar + FloatingInspector +
+// V4Timeline). Each test seeds a v5 document into the shim's localStorage, opens
+// the editor, and asserts on what the user can actually see. Selectors come from
+// `src/components/ai-edition/v4/` — stable hooks only (aria-labels, roles,
+// `data-clip-id`), plus `[class*="…"]` for the two CSS-module elements that have
+// no accessible name (the timeline's tracks + nav window).
+//
+// Needs a dev server: `npm run dev` (default 5173, override with E2E_BASE_URL).
+import { expect, type Page, test } from "@playwright/test";
+
+const BASE_URL = process.env.E2E_BASE_URL ?? "http://localhost:5173";
+const EDITOR_URL = `${BASE_URL}/?windowType=editor`;
+
+// 300 MB exactly, so MediaStage's formatSize renders "300 MB".
+const SIZED_BYTES = 314_572_800;
+
+function makeDoc() {
+	const asset = (id: string, label: string, sizeBytes?: number) => ({
+		id,
+		kind: "video" as const,
+		label,
+		originalPath: `C:\\nonexistent\\${id}.mp4`,
+		durationSec: 600,
+		...(sizeBytes === undefined ? {} : { sizeBytes }),
+		video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
+		cameraTrack: null,
+	});
+	return {
+		schemaVersion: 5,
+		project: {
+			id: "proj_e2e",
+			title: "E2E Fixture",
+			createdAt: "2026-07-01T00:00:00.000Z",
+			updatedAt: "2026-07-01T00:00:00.000Z",
+			primaryAssetId: "asset_sized",
+		},
+		assets: [asset("asset_sized", "Sized.mp4", SIZED_BYTES), asset("asset_unsized", "Unsized.mp4")],
+		transcript: null,
+		transcripts: [],
+		timeline: {
+			clips: [
+				{
+					id: "clip_e2e",
+					assetId: "asset_sized",
+					sourceStartSec: 0,
+					sourceEndSec: 600,
+					timelineStartSec: 0,
+					timelineEndSec: 600,
+					wordRefs: [],
+					origin: "system" as const,
+					reason: "",
+				},
+			],
+			gaps: [],
+			trimRanges: [],
+			muteRanges: [],
+			speedRanges: [],
+			captionRanges: [],
+		},
+		annotations: [],
+		zoomRanges: [],
+		legacyEditor: null,
+		agent: { pendingQuestions: [], suggestions: [], lastAppliedOperations: [] },
+		preview: { strategy: "seek" as const, revision: 0 },
+		export: { preset: "final-balanced" as const, lastJobId: null },
+		history: { revisions: [] },
+	};
+}
+
+async function seedAndOpen(page: Page): Promise<void> {
+	await page.addInitScript((serialized) => {
+		const doc = JSON.parse(serialized);
+		// The shim keys documents by project id under one blob (see
+		// `createShimBridgeClient` in src/native/browserShim.ts); the shell's mount
+		// effect calls listProjects() → loadProject(first) on launch, so seeding
+		// this is what lands us in a populated editor.
+		localStorage.setItem(
+			"browser-shim-projects-v2",
+			JSON.stringify({ documents: { [doc.project.id]: doc }, order: [doc.project.id] }),
+		);
+	}, JSON.stringify(makeDoc()));
+	await page.goto(EDITOR_URL, { waitUntil: "domcontentloaded" });
+	// listProjects → loadProject are both async. A rendered clip pill is the
+	// first observable proof the seeded document reached the timeline.
+	await expect(page.locator("[data-clip-id]")).toHaveCount(1, { timeout: 15_000 });
+}
+
+test.describe("v4 editor shell", () => {
+	test("media stage shows each asset's file size, em-dash when unknown", async ({ page }) => {
+		await seedAndOpen(page);
+		await page.getByRole("tab", { name: "Media" }).click();
+
+		const sized = page.getByRole("button", { name: /Sized\.mp4/ }).first();
+		const unsized = page.getByRole("button", { name: /Unsized\.mp4/ }).first();
+		await expect(sized).toContainText("300 MB");
+		// formatSize's placeholder for a missing sizeBytes.
+		await expect(unsized).toContainText("—");
+	});
+
+	test("inspector facet header opens a contextual help popover", async ({ page }) => {
+		await seedAndOpen(page);
+
+		// The inspector opens on the "effects" facet; the rail buttons are labelled
+		// from settings.<facet>.title (FloatingInspector's FACETS).
+		await page.getByRole("button", { name: "Background" }).click();
+		const help = page.getByRole("button", { name: "Help" });
+		await help.click();
+
+		// RightPanes' `Pane` renders the help text in a role="note" popover.
+		const popover = page.locator('[role="note"]');
+		await expect(popover).toBeVisible();
+		// Pane-specific text, not a generic stub: settings.background.help.
+		await expect(popover).toContainText("behind the recording");
+
+		await help.click();
+		await expect(popover).toBeHidden();
+	});
+
+	test("ctrl+wheel over the tracks zooms the timeline, bounded at 2% of its span", async ({
+		page,
+	}) => {
+		await seedAndOpen(page);
+
+		// The nav window's width mirrors the visible fraction of the timeline
+		// (V4Timeline's `nav` state, which the ctrl+wheel handler drives).
+		const navWindow = page.locator('[class*="tlNavWindow"]');
+		const widthPct = () =>
+			navWindow.evaluate((el) => Number.parseFloat((el as HTMLElement).style.width));
+		expect(await widthPct()).toBe(100);
+
+		const tracks = page.locator('[class*="tlTracks"]');
+		const box = await tracks.boundingBox();
+		if (!box) throw new Error("timeline tracks have no bounding box");
+		const zoom = async (notches: number) => {
+			await page.keyboard.down("Control");
+			for (let i = 0; i < notches; i++) {
+				await page.mouse.move(box.x + box.width / 2, box.y + box.height / 2);
+				await page.mouse.wheel(0, -120);
+			}
+			await page.keyboard.up("Control");
+		};
+
+		await zoom(3);
+		await expect.poll(widthPct).toBeLessThan(100);
+
+		// Each notch divides the span by 1.12; the handler clamps at 0.02, which
+		// ~40 more notches overshoots comfortably.
+		await zoom(40);
+		await expect.poll(widthPct).toBe(2);
+	});
+});

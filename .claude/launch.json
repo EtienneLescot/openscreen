@@ -20,12 +20,6 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["node_modules/vite/bin/vite.js", "--config", "vite.v4preview.config.ts"],
       "port": 5207
-    },
-    {
-      "name": "poc",
-      "runtimeExecutable": "npx",
-      "runtimeArgs": ["vite", "--config", "poc/vite.config.js"],
-      "port": 5210
     }
   ]
 }

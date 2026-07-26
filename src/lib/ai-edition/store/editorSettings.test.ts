@@ -91,6 +91,15 @@ describe("patchEditorSettings", () => {
 		expect(snap.shadowIntensity).toBe(0.7);
 	});
 
+	it("treats an explicitly undefined key as absent, not as a clear", () => {
+		const seed = patchEditorSettings(baseDoc, { showBlur: true, shadowIntensity: 0.7 });
+		const next = patchEditorSettings(seed, { showBlur: undefined, padding: 12 });
+		const snap = getEditorSettings(next);
+		expect(snap.showBlur).toBe(true);
+		expect(snap.shadowIntensity).toBe(0.7);
+		expect(snap.padding).toBe(12);
+	});
+
 	it("patches nested cursor settings without clobbering siblings", () => {
 		const seed = patchEditorSettings(baseDoc, { cursor: { size: 4 } });
 		const next = patchEditorSettings(seed, { cursor: { smoothing: 0.9 } });

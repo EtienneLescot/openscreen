@@ -84,7 +84,7 @@ result-*
 
 # whisper.cpp DTW POC (tools/stt-eval/whispercpp-dtw-poc) — vendored engine
 # clone, downloaded GGML models, and generated build/results artifacts.
-# See docs/engineering/stt-whispercpp-dtw-poc-plan.md.
+# See technical-documentation/architecture/transcription-and-captions.md.
 /tools/stt-eval/whispercpp-dtw-poc/whisper.cpp/
 /tools/stt-eval/whispercpp-dtw-poc/build-cpu/
 /tools/stt-eval/whispercpp-dtw-poc/build-vulkan/

@@ -9,11 +9,7 @@ import {
 	MIN_BLUR_BLOCK_SIZE,
 	MIN_BLUR_INTENSITY,
 } from "@/components/video-editor/types";
-
-function clamp(value: number, min: number, max: number) {
-	if (!Number.isFinite(value)) return min;
-	return Math.min(max, Math.max(min, value));
-}
+import { clamp } from "@/utils/math";
 
 export function normalizeBlurType(value: unknown): BlurType {
 	void value;

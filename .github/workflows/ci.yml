@@ -1,10 +1,13 @@
 name: CI
 
+# feat/ai-edition is a long-lived integration branch that PRs land on for
+# months at a time. Without it listed here, every one of those PRs merged with
+# no lint, no typecheck, no tests and no PR-title check.
 on:
   pull_request:
-    branches: [main]
+    branches: [main, feat/ai-edition]
   push:
-    branches: [main]
+    branches: [main, feat/ai-edition]
 
 jobs:
   lint:
@@ -22,6 +25,19 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - run: npx tsc --noEmit
+
+  docs:
+    name: Docs
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # No ./.github/actions/setup: check-docs.mjs imports only node builtins,
+      # so npm ci would be a minute of install for nothing. Node 22 is here for
+      # import.meta.dirname (needs >= 20.11).
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run docs:check
 
   test:
     name: Test

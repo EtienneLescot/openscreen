@@ -30,6 +30,12 @@ import { resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
 import { useProjectStore } from "./projectStore";
 
+// NaN-guarded floors. Timeline inputs arrive from drag deltas and persisted
+// documents, both of which can carry NaN; every action needs the same guard.
+const finiteSec = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
+const finiteMs = (n: number) => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0);
+const finiteFraction = (n: number) => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.5);
+
 // Placeholder duration applied to a freshly-inserted clip whose source asset hasn't
 // reported its real duration yet (media drag → drop before the preview video fires
 // `loadedmetadata`). `applyProbedDuration` (document layer) swaps it — and the
@@ -125,7 +131,7 @@ export function useTimeline() {
 
 	// Every add* below anchors the new region to the clip(s) it covers before storing it.
 	// A modifier MUST own a clip anchor to survive reorder/trim (see
-	// docs/architecture/timeline-coordinate-refactor.md §6) — writing only startMs/endMs
+	// technical-documentation/architecture/timeline-model.md) — writing only startMs/endMs
 	// would strand it. A region created across a clip boundary becomes one fragment per
 	// clip; the ruler renders them as one pill because their properties are equal.
 	const addZoom = useCallback(async () => {
@@ -340,9 +346,8 @@ export function useTimeline() {
 	const updateTrimRange = useCallback(
 		async (trimId: string, startSec: number, endSec: number) => {
 			if (!document) return;
-			const clamp = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
-			const s = clamp(startSec);
-			const e = clamp(endSec);
+			const s = finiteSec(startSec);
+			const e = finiteSec(endSec);
 			const next: AxcutDocument = {
 				...document,
 				timeline: {
@@ -364,9 +369,8 @@ export function useTimeline() {
 	const updateTrim = useCallback(
 		async (trimId: string, next: { assetId: string; startSec: number; endSec: number }) => {
 			if (!document) return;
-			const clamp = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
-			const s = clamp(next.startSec);
-			const e = clamp(next.endSec);
+			const s = finiteSec(next.startSec);
+			const e = finiteSec(next.endSec);
 			const nextDoc: AxcutDocument = {
 				...document,
 				timeline: {
@@ -403,11 +407,10 @@ export function useTimeline() {
 			if (!doc) return;
 			const managed = new Set<string>([...entries.map((e) => e.id), ...dropIds]);
 			const others = doc.timeline.trimRanges.filter((r) => !managed.has(r.id));
-			const clamp = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
 			const rebuilt = entries.map((e) => {
 				const prev = doc.timeline.trimRanges.find((r) => r.id === e.id);
-				const s = clamp(e.sourceStartSec);
-				const en = clamp(e.sourceEndSec);
+				const s = finiteSec(e.sourceStartSec);
+				const en = finiteSec(e.sourceEndSec);
 				return {
 					id: e.id,
 					assetId: e.assetId,
@@ -432,9 +435,8 @@ export function useTimeline() {
 	const updateZoomSpan = useCallback(
 		async (id: string, startMs: number, endMs: number) => {
 			if (!document) return;
-			const clampMs = (n: number) => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0);
-			const s = clampMs(startMs);
-			const e = clampMs(endMs);
+			const s = finiteMs(startMs);
+			const e = finiteMs(endMs);
 			const next: AxcutDocument = {
 				...document,
 				zoomRanges: replacePillSpan(
@@ -460,11 +462,10 @@ export function useTimeline() {
 		(id: string, focus: { cx: number; cy: number }) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
-			const clamp01 = (n: number) => (Number.isFinite(n) ? Math.min(1, Math.max(0, n)) : 0.5);
 			const next: AxcutDocument = {
 				...doc,
 				zoomRanges: patchPillById(doc.zoomRanges, id, {
-					focus: { cx: clamp01(focus.cx), cy: clamp01(focus.cy) },
+					focus: { cx: finiteFraction(focus.cx), cy: finiteFraction(focus.cy) },
 				}) as AxcutDocument["zoomRanges"],
 			};
 			setDocument(next);
@@ -539,9 +540,8 @@ export function useTimeline() {
 	const updateAnnotationSpan = useCallback(
 		async (id: string, startMs: number, endMs: number) => {
 			if (!document) return;
-			const clampMs = (n: number) => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0);
-			const s = clampMs(startMs);
-			const e = clampMs(endMs);
+			const s = finiteMs(startMs);
+			const e = finiteMs(endMs);
 			const next: AxcutDocument = {
 				...document,
 				annotations: replacePillSpan(
@@ -583,9 +583,8 @@ export function useTimeline() {
 	const updateSpeedSpan = useCallback(
 		async (id: string, startMs: number, endMs: number) => {
 			if (!document) return;
-			const clampMs = (n: number) => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0);
-			const s = clampMs(startMs);
-			const e = clampMs(endMs);
+			const s = finiteMs(startMs);
+			const e = finiteMs(endMs);
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
 			const prev = ((legacy.speedRegions as unknown[]) ?? []) as Array<{
 				id: string;
@@ -615,9 +614,8 @@ export function useTimeline() {
 	const updateCameraFullscreenSpan = useCallback(
 		async (id: string, startMs: number, endMs: number) => {
 			if (!document) return;
-			const clampMs = (n: number) => (Number.isFinite(n) ? Math.max(0, Math.round(n)) : 0);
-			const s = clampMs(startMs);
-			const e = clampMs(endMs);
+			const s = finiteMs(startMs);
+			const e = finiteMs(endMs);
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
 			const prev = ((legacy.cameraFullscreenRegions as unknown[]) ?? []) as Array<{
 				id: string;
@@ -822,17 +820,16 @@ export function useTimeline() {
 			// refine doesn't reject the save. Swap when end < start instead of
 			// throwing — a user typing into a number input is expected to be
 			// able to type in any order.
-			const clamp = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
 			const next: AxcutDocument["timeline"]["clips"][number] = {
 				...(document.timeline.clips.find((c) => c.id === clipId) as
 					| AxcutDocument["timeline"]["clips"][number]
 					| undefined),
 			} as AxcutDocument["timeline"]["clips"][number];
 			if (!next?.id) return;
-			const sStart = clamp(patch.sourceStartSec ?? next.sourceStartSec);
-			const sEnd = clamp(patch.sourceEndSec ?? next.sourceEndSec ?? 0);
-			const tStart = clamp(patch.timelineStartSec ?? next.timelineStartSec);
-			const tEnd = clamp(patch.timelineEndSec ?? next.timelineEndSec);
+			const sStart = finiteSec(patch.sourceStartSec ?? next.sourceStartSec);
+			const sEnd = finiteSec(patch.sourceEndSec ?? next.sourceEndSec ?? 0);
+			const tStart = finiteSec(patch.timelineStartSec ?? next.timelineStartSec);
+			const tEnd = finiteSec(patch.timelineEndSec ?? next.timelineEndSec);
 			const updated: AxcutDocument["timeline"]["clips"][number] = {
 				...next,
 				sourceStartSec: Math.min(sStart, sEnd),

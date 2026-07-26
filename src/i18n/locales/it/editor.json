@@ -205,7 +205,8 @@
 		"exportFailed": "Esportazione non riuscita",
 		"failedToWriteFile": "Impossibile scrivere il file",
 		"qualityUpscaleWarning": "Upscaling",
-		"exportedVideoOf": "di video esportato in"
+		"exportedVideoOf": "di video esportato in",
+		"nothingToExport": "Niente da esportare: la timeline è vuota."
 	},
 	"inspector": {
 		"resetFocusPoint": "Reimposta punto di messa a fuoco",

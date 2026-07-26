@@ -24,6 +24,7 @@ import type {
 	NativeCursorAsset,
 	NativeCursorType,
 } from "@/native/contracts";
+import { clamp } from "@/utils/math";
 
 export interface ActiveNativeCursorFrame {
 	asset: NativeCursorAsset;
@@ -46,10 +47,6 @@ interface ProjectNativeCursorOptions {
 interface ProjectNativeCursorToStageOptions extends ProjectNativeCursorOptions {
 	cameraContainer: Container;
 	videoContainerPosition: { x: number; y: number };
-}
-
-function clamp(value: number, min: number, max: number) {
-	return Math.min(max, Math.max(min, value));
 }
 
 const NATIVE_CURSOR_CLICK_ANIMATION_MS = 260;

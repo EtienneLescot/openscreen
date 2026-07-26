@@ -10,6 +10,7 @@
 // and a summary string.
 
 import type { AxcutDocument } from "../schema";
+import { formatSec } from "../timeline/format";
 import {
 	duplicateClip,
 	moveClip,
@@ -77,13 +78,6 @@ export type AxcutTimelineOperation =
 export interface AppliedTimelineOperation {
 	document: AxcutDocument;
 	summary: string;
-}
-
-function formatSec(sec: number): string {
-	const safe = Number.isFinite(sec) && sec > 0 ? sec : 0;
-	const m = Math.floor(safe / 60);
-	const s = (safe % 60).toFixed(1);
-	return `${m}:${s.padStart(4, "0")}`;
 }
 
 function pickAssetId(document: AxcutDocument, explicit?: string): string | null {

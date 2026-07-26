@@ -205,7 +205,8 @@
 		"exportFailed": "내보내기 실패",
 		"failedToWriteFile": "파일 쓰기에 실패했습니다",
 		"qualityUpscaleWarning": "업스케일",
-		"exportedVideoOf": "분량의 영상을 내보냈습니다. 소요 시간:"
+		"exportedVideoOf": "분량의 영상을 내보냈습니다. 소요 시간:",
+		"nothingToExport": "내보낼 항목이 없습니다 — 타임라인이 비어 있습니다."
 	},
 	"inspector": {
 		"resetFocusPoint": "포커스 지점 재설정",

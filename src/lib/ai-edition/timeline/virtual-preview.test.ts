@@ -1,9 +1,9 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutClip } from "../schema";
+import { formatSeconds } from "./format";
 import {
 	clampVirtualTime,
 	findNextKeptSegment,
-	formatSeconds,
 	getRawVirtualStartTime,
 	keptWordIdSet,
 	locateSourcePosition,

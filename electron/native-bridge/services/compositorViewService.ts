@@ -400,22 +400,6 @@ export class CompositorViewService {
 		addon.destroyView(id);
 	}
 
-	/** Native export (fixture -> MP4, C8). Auto-pauses live previews to free the GPU.
-	 *  `onProgress` (frames encoded so far) is optional, forwarded straight from the addon's
-	 *  own throttled (~10/s) callback — cheap, the encode loop already ticks this per frame.
-	 *  Returns null when the addon is absent. */
-	async export(
-		outPath?: string,
-		onProgress?: (frames: number) => void,
-	): Promise<ExportStats | null> {
-		const addon = this.ensureAddon();
-		if (!addon) {
-			return null;
-		}
-		const target = outPath ?? path.join(app.getPath("temp"), "openscreen-native-export.mp4");
-		return addon.export(target, onProgress);
-	}
-
 	/** Native multiclip export (real timeline -> MP4). Auto-pauses previews via the addon.
 	 *  `sceneJson` — same scene as the live preview (background/layout/webcam/cursor/effects);
 	 *  goes through the same asset-path resolution as `setScene` (wallpaper image, cursor theme

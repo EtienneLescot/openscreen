@@ -46,7 +46,7 @@ interface RendererSttApi {
  *
  * The previous in-Web-Worker implementation (Transformers.js + ORT-WASM) was
  * 0.5× realtime on tiny models and had no word-level accuracy under 50 ms;
- * see `docs/engineering/stt-spec.md` § History for context.
+ * see `technical-documentation/architecture/transcription-and-captions.md` § History for context.
  */
 export function transcribeMono16kToSegments(
 	samples: Float32Array,

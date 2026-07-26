@@ -2,7 +2,7 @@
 
 Troisième POC de rendu d'OpenScreen, à côté de [`poc/`](../poc) (web, WebCodecs + WebGPU)
 et [`poc-native/`](../poc-native) (Rust + wgpu/Vulkan). Voir la spec :
-[`docs/architecture/rendering-architecture.md`](../docs/architecture/rendering-architecture.md),
+[`technical-documentation/engineering/rendering-performance.md`](../technical-documentation/engineering/rendering-performance.md),
 annexe D (D.6 en particulier).
 
 **Ce qu'il prouve.** Le chemin natif GPU-résident — celui que `poc-native` a montré bloqué
@@ -22,7 +22,7 @@ NV12→RGB BT.709, coins arrondis + masques (SDF), ombres portées (pénombre SD
 **Résultat mesuré** (protocole §C.2 du doc : régime soutenu, tour de chauffe jeté,
 spread < 15 %) : config tous-effets **~126 fps** en 1080p60, au-dessus du web (79) et de
 wgpu (48–68). Le fps enveloppe demux → décode → composite → encode → mux (§10 : une lecture
-d'horloge avant/après tout le run). Détail des couches C0→C8 : `docs/S6-report.md`.
+d'horloge avant/après tout le run). Détail des couches C0→C8 : [`technical-documentation/architecture/native-compositor.md`](../technical-documentation/architecture/native-compositor.md).
 
 C'est le **fast-path natif retenu** pour Windows (cf. le marqueur de décision dans l'annexe D).
 `poc/` reste l'hôte de lancement portable ; `poc-native` reste la preuve de portabilité du
@@ -31,9 +31,9 @@ compositeur (WGSL natif à l'identique) + la carte des coûts.
 ## Stack
 
 - **Rust + windows-rs**, D3D11 nu (feature level 11_1, `VIDEO_SUPPORT`, multithread-protected).
-  Décision framework en `docs/S0-frameworks.md` (Vulkan/Direct2D/GStreamer/wgpu instruits, écartés).
+  Décision framework en [`technical-documentation/architecture/native-compositor.md`](../technical-documentation/architecture/native-compositor.md) (Vulkan/Direct2D/GStreamer/wgpu instruits, écartés).
 - **ffmpeg (libav\*)** LGPL pour demux / décode D3D11VA / encode `h264_amf` / mux. Bindings
-  générés par `bindgen` (choix vs `ffmpeg-next` : suit ffmpeg 8.x — voir `docs/S2-c0.md`),
+  générés par `bindgen` (choix vs `ffmpeg-next` : suit ffmpeg 8.x — voir [`technical-documentation/architecture/native-compositor.md`](../technical-documentation/architecture/native-compositor.md)),
   shim C (`shim.c`) pour les structs opaques.
 - Compositeur HLSL (`src/shaders.hlsl`) compilé au runtime.
 
@@ -41,7 +41,9 @@ compositeur (WGSL natif à l'identique) + la carte des coûts.
 
 - Rust (toolchain msvc), Visual Studio (MSVC + Windows SDK), LLVM (libclang, pour bindgen).
 - **Build ffmpeg LGPL-shared** dans `thirdparty/` (non versionné) : récupérer
-  `ffmpeg-master-latest-win64-lgpl-shared` (releases BtbN/FFmpeg-Builds), dézipper dans
+  `ffmpeg-n8.1.2-win64-lgpl-shared` (le build pinné dans `.cargo/config.toml` — le
+  MÊME que `scripts/fetch-ffmpeg.mjs` vendorise, sinon le require() de l'addon échoue),
+  dézipper dans
   `thirdparty/`. Le chemin est relatif au dossier, fixé dans `.cargo/config.toml` (`FFMPEG_DIR`).
   `LIBCLANG_PATH` y pointe l'install LLVM. Ajuste le chemin vcvars dans `x.bat` si besoin.
 
@@ -58,7 +60,7 @@ x.bat run --release [-- --fixture fixture --out out]
 
 Fenêtre native : preview du compositing en lecture bouclée (swapchain DXGI flip, blit
 zéro-copie du RT), sélecteur de preset C0→C8, Play/Pause, **Export** (barre de progression +
-bilan _temps + fps_). Écrit `out/export.mp4`. Détail : `docs/S7-preview-export.md`.
+bilan _temps + fps_). Écrit `out/export.mp4`. Détail : [`technical-documentation/architecture/native-compositor.md`](../technical-documentation/architecture/native-compositor.md).
 
 **Bench (§9/§10)** — la mesure fps headless, inchangée :
 
@@ -73,11 +75,13 @@ Produit `out/C{0..8}.mp4` (1080p60, 360 frames), `out/C{n}_f{60,180,300}.png`,
 
 Deux flux screen (le 2ᵉ simule une webcam HQ), 1080p60 CBP, 360 frames, coupés en `-c copy`.
 Médias non versionnés (convention des autres POC) — provenance et commandes de régénération
-dans `docs/S1-sources.md` ; `fixture/fixture.json` (le manifeste mesuré) est suivi.
+dans `fixture/fixture.json`, qui est suivi.
 
 ## Docs
 
-`docs/` = le parcours S0→S7 du POC : S0 décision framework, S1 sources/chaîne matérielle,
-S2 pipeline C0, S6 rapport + mesure des moteurs GPU + optimisations, S7 preview/export
-interactive (marche vers l'intégration app). `spikes/` = les probes jetables de S0
+L'architecture du compositeur est documentée dans
+[`technical-documentation/architecture/native-compositor.md`](../technical-documentation/architecture/native-compositor.md),
+et les mesures qui l'ont choisie dans
+[`technical-documentation/engineering/rendering-performance.md`](../technical-documentation/engineering/rendering-performance.md).
+Ce README ne couvre que le build et le run de la crate. `spikes/` = les probes jetables
 (Direct2D, NV12 render-target) conservés comme preuve.
