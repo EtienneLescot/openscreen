@@ -25,7 +25,10 @@ const ROOT = path.join(__dirname, "..");
 const POC_D3D_DIR = path.join(ROOT, "poc-d3d");
 const BUILD_OUT_DIR = path.join(ROOT, "electron", "native", "compositor-view", "build");
 
-const run = (command, args, options = {}) => spawnStep(command, args, { cwd: ROOT, ...options });
+// cwd defaults to poc-d3d/, not ROOT: cargo reads FFMPEG_DIR and LIBCLANG_PATH
+// from poc-d3d/.cargo/config.toml, which only applies when it runs from there.
+const run = (command, args, options = {}) =>
+	spawnStep(command, args, { cwd: POC_D3D_DIR, ...options });
 
 async function runInVsEnv(command) {
 	const vcvarsAll = findVcVarsAll();

@@ -1,7 +1,8 @@
-import { clamp01 } from "@/utils/math";
 // Port of `src/lib/annotationTextAnimation.ts` — pure, no Pixi/React deps,
 // copied verbatim (only the annotation param type changed to structurally
 // match `AxcutAnnotationRegion` instead of the legacy `AnnotationRegion`).
+
+import { clamp01 } from "@/utils/math";
 
 export type AnnotationTextAnimation =
 	| "none"
