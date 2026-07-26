@@ -9,11 +9,12 @@ import {
 	patchCaptionSettings,
 } from "./settings";
 import {
+	captionTranslationUnits,
 	getCaptionTranslations,
 	putCaptionTranslation,
 	removeCaptionTranslation,
 	translationCoverage,
-	untranslatedSegments,
+	untranslatedUnits,
 } from "./translations";
 
 function transcript(): AxcutTranscript {
@@ -194,13 +195,13 @@ describe("deriveCaptionCues", () => {
 		expect(deriveCaptionCues(cut, ON, {})).toEqual([]);
 	});
 
-	it("shows the translation for a translated segment and the original for the rest", () => {
+	it("shows the translation for a translated unit and the original for the rest", () => {
 		const translations = {
 			fr: {
 				language: "fr",
 				label: "Français",
 				updatedAt: "2026-01-01T00:00:00.000Z",
-				byAsset: { "asset-1": { seg_1: "bonjour mon ami" } },
+				byAsset: { "asset-1": { "u:seg_1": "bonjour mon ami" } },
 			},
 		};
 		const cues = deriveCaptionCues(doc(), { ...ON, language: "fr" }, translations);
@@ -210,13 +211,13 @@ describe("deriveCaptionCues", () => {
 		expect(text).toContain("goodbye");
 	});
 
-	it("keeps the translated line inside its own segment's span", () => {
+	it("keeps the translated line inside its own unit's span", () => {
 		const translations = {
 			fr: {
 				language: "fr",
 				label: "Français",
 				updatedAt: "",
-				byAsset: { "asset-1": { seg_1: "bonjour", seg_2: "au revoir" } },
+				byAsset: { "asset-1": { "u:seg_1": "bonjour", "u:seg_2": "au revoir" } },
 			},
 		};
 		const cues = deriveCaptionCues(doc(), { ...ON, language: "fr" }, translations);
@@ -295,15 +296,15 @@ describe("caption translations", () => {
 		});
 	});
 
-	it("reports only the segments still missing a translation", () => {
+	it("reports only the units still missing a translation", () => {
 		const d = putCaptionTranslation(doc(), {
 			language: "fr",
 			label: "Français",
 			assetId: "asset-1",
-			segments: { seg_1: "bonjour" },
+			segments: { "u:seg_1": "bonjour" },
 		});
-		const pending = untranslatedSegments(transcript(), getCaptionTranslations(d), "fr");
-		expect(pending.map((s) => s.id)).toEqual(["seg_2"]);
+		const pending = untranslatedUnits(transcript(), getCaptionTranslations(d), "fr");
+		expect(pending.map((u) => u.id)).toEqual(["u:seg_2"]);
 		expect(translationCoverage(transcript(), getCaptionTranslations(d), "fr")).toEqual({
 			translated: 1,
 			total: 2,
@@ -326,5 +327,119 @@ describe("caption translations", () => {
 		const after = removeCaptionTranslation(d, "fr");
 		expect(Object.keys(getCaptionTranslations(after))).toEqual(["es"]);
 		expect(after.transcripts).toEqual(doc().transcripts);
+	});
+});
+
+// The bug this suite exists for: a Whisper transcript stores ONE SEGMENT PER
+// WORD (see document/transcribe.ts). Translating and laying out per segment
+// therefore translated word by word and put one word on screen at a time.
+function wordPerSegmentTranscript(): AxcutTranscript {
+	const tokens = ["Bienvenue", "dans", "OpenScreen", "le", "logiciel", "de", "capture"];
+	const segments: AxcutTranscript["segments"] = [];
+	const words: AxcutTranscript["words"] = [];
+	let t = 0;
+	tokens.forEach((text, i) => {
+		const id = `seg_${i + 1}`;
+		const wordId = `w_${i + 1}`;
+		words.push({ id: wordId, segmentId: id, startSec: t, endSec: t + 0.4, text });
+		segments.push({
+			id,
+			kind: "speech",
+			startSec: t,
+			endSec: t + 0.4,
+			text,
+			wordIds: [wordId],
+		});
+		t += 0.45;
+	});
+	return { assetId: "asset-1", language: "fr", segments, words };
+}
+
+function wordPerSegmentDoc(): AxcutDocument {
+	return doc({ transcripts: [wordPerSegmentTranscript()] } as Partial<AxcutDocument>);
+}
+
+describe("captionTranslationUnits", () => {
+	it("joins a word-per-segment transcript into phrase-sized units", () => {
+		const units = captionTranslationUnits(wordPerSegmentTranscript());
+		expect(units).toHaveLength(1);
+		expect(units[0].text).toBe("Bienvenue dans OpenScreen le logiciel de capture");
+		expect(units[0].segmentIds).toHaveLength(7);
+	});
+
+	it("starts a new unit after a real pause", () => {
+		const t = wordPerSegmentTranscript();
+		// Push the last two words out past the pause threshold.
+		t.segments[5].startSec += 2;
+		t.segments[5].endSec += 2;
+		t.segments[6].startSec += 2;
+		t.segments[6].endSec += 2;
+		expect(captionTranslationUnits(t)).toHaveLength(2);
+	});
+
+	it("keys units so they cannot be confused with a bare segment id", () => {
+		const units = captionTranslationUnits(wordPerSegmentTranscript());
+		expect(units[0].id).toBe("u:seg_1");
+		expect(units[0].id).not.toBe(units[0].segmentIds[0]);
+	});
+});
+
+describe("translated caption layout", () => {
+	const withTranslation = (text: string) => ({
+		fr2: {
+			language: "fr2",
+			label: "Test",
+			updatedAt: "",
+			byAsset: { "asset-1": { "u:seg_1": text } },
+		},
+	});
+
+	it("groups translated words into lines instead of one word per line", () => {
+		const translations = withTranslation("Welcome to OpenScreen the screen capture app");
+		const cues = deriveCaptionCues(
+			wordPerSegmentDoc(),
+			{ ...ON, language: "fr2", minWordsPerLine: 2, maxWordsPerLine: 4 },
+			translations,
+		);
+
+		expect(cues.length).toBeGreaterThan(0);
+		for (const cue of cues) {
+			expect(cue.text.split(" ").length).toBeGreaterThan(1);
+			expect(cue.text.split(" ").length).toBeLessThanOrEqual(4);
+		}
+		expect(cues.map((c) => c.text).join(" ")).toBe("Welcome to OpenScreen the screen capture app");
+	});
+
+	it("lays the original out the same way, so switching language only swaps text", () => {
+		const settings = { ...ON, minWordsPerLine: 2, maxWordsPerLine: 4 };
+		const original = deriveCaptionCues(wordPerSegmentDoc(), settings, {});
+		for (const cue of original) {
+			expect(cue.text.split(" ").length).toBeGreaterThan(1);
+		}
+		const translated = deriveCaptionCues(
+			wordPerSegmentDoc(),
+			{ ...settings, language: "fr2" },
+			withTranslation("Welcome to OpenScreen the screen capture app"),
+		);
+		// Same word count in, same number of lines out.
+		expect(translated).toHaveLength(original.length);
+	});
+
+	it("keeps translated cues inside the unit's own span", () => {
+		const cues = deriveCaptionCues(
+			wordPerSegmentDoc(),
+			{ ...ON, language: "fr2" },
+			withTranslation("Welcome to OpenScreen the screen capture app"),
+		);
+		const unit = captionTranslationUnits(wordPerSegmentTranscript())[0];
+		expect(cues[0].startMs).toBeGreaterThanOrEqual(Math.round(unit.startSec * 1000));
+		expect(cues.at(-1)?.endMs).toBeLessThanOrEqual(Math.round(unit.endSec * 1000) + 1);
+	});
+
+	it("falls back to the original words for a unit with no translation", () => {
+		const cues = deriveCaptionCues(wordPerSegmentDoc(), { ...ON, language: "nope" }, {});
+		expect(cues.map((c) => c.text).join(" ")).toBe(
+			"Bienvenue dans OpenScreen le logiciel de capture",
+		);
 	});
 });
