@@ -1,10 +1,13 @@
-// ponytail: agentic-style roadmap coverage. One test per ✅ row in
-// `docs/architecture/ai-edition-roadmap.md` (the ones with specs in
-// `specs/`). Each test seeds the browser-shim with a known project,
-// opens the editor, and asserts on observable behavior (data-*
-// attributes, visible text, console errors). Fails = the roadmap's
-// ✅ is a false claim. The agent would re-snapshot the DOM and patch
-// brittle selectors; we go straight to the contract.
+// ponytail: each test seeds the browser-shim with a known project, opens the
+// editor, and asserts on observable behavior (data-* attributes, visible text,
+// console errors) rather than on the DOM shape.
+//
+// STALE: these were written against the pre-v4 editor shell and still target
+// `data-testid="timeline-pane"` and the old right-panel help popover, neither of
+// which the v4 shell renders. They are kept only as a record of the behaviours
+// worth covering; rewrite them against `src/components/ai-edition/v4/` before
+// trusting a pass. What the suite is checking is described in
+// `technical-documentation/testing/manual-e2e-checklist.md`.
 import { expect, type Page, test } from "@playwright/test";
 
 const EDITOR_URL = "http://localhost:5173/?windowType=editor";
