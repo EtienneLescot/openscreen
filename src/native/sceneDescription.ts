@@ -367,8 +367,6 @@ export interface SceneDescription {
 	output: { width: number; height: number; fps: number | null };
 }
 
-/** Strip a trailing position percentage (or any whitespace tail) from a gradient stop token,
- *  returning the colour piece. The presets never nest parens so a whitespace split is fine. */
 /** Parse the settings wallpaper string into the discriminated SceneBackground union. */
 function parseWallpaper(wallpaper: string) {
 	if (wallpaper.startsWith("#")) {
@@ -377,14 +375,16 @@ function parseWallpaper(wallpaper: string) {
 	if (wallpaper.startsWith("linear-gradient(")) {
 		// parseCssGradient handles nested parens (rgba()/hsl() stops) and the
 		// "to bottom right" keyword directions that a flat comma split drops.
+		// It's anchored on a trailing ")", so it rejects strings this branch
+		// accepts (a trailing space is enough) — stay a gradient when it does,
+		// rather than falling through and handing the native side a CSS string
+		// as an image path.
 		const parsed = parseCssGradient(wallpaper);
-		if (parsed) {
-			return {
-				kind: "gradient",
-				angleDeg: resolveLinearGradientAngle(parsed.descriptor),
-				stops: parsed.stops.map((stop) => stop.color),
-			} as const;
-		}
+		return {
+			kind: "gradient",
+			angleDeg: resolveLinearGradientAngle(parsed?.descriptor ?? null),
+			stops: parsed?.stops.map((stop) => stop.color) ?? [],
+		} as const;
 	}
 	return { kind: "image", path: wallpaper } as const;
 }
