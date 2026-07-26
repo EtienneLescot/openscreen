@@ -187,23 +187,15 @@ export interface EditorSettingsPatch {
 
 function nextLegacy(current: LegacyShape | null, patch: EditorSettingsPatch): LegacyShape {
 	const base: LegacyShape = current ?? {};
-	const next: LegacyShape = { ...base };
-	if (patch.wallpaper !== undefined) next.wallpaper = patch.wallpaper;
-	if (patch.aspectRatio !== undefined) next.aspectRatio = patch.aspectRatio;
-	if (patch.shadowIntensity !== undefined) next.shadowIntensity = patch.shadowIntensity;
-	if (patch.showBlur !== undefined) next.showBlur = patch.showBlur;
-	if (patch.showTrimWaveform !== undefined) next.showTrimWaveform = patch.showTrimWaveform;
-	if (patch.motionBlurAmount !== undefined) next.motionBlurAmount = patch.motionBlurAmount;
-	if (patch.borderRadius !== undefined) next.borderRadius = patch.borderRadius;
-	if (patch.padding !== undefined) next.padding = patch.padding;
-	if (patch.cropRegion !== undefined) next.cropRegion = patch.cropRegion;
-	if (patch.webcamLayoutPreset !== undefined) next.webcamLayoutPreset = patch.webcamLayoutPreset;
-	if (patch.webcamMaskShape !== undefined) next.webcamMaskShape = patch.webcamMaskShape;
-	if (patch.webcamMirrored !== undefined) next.webcamMirrored = patch.webcamMirrored;
-	if (patch.webcamReactiveZoom !== undefined) next.webcamReactiveZoom = patch.webcamReactiveZoom;
-	if (patch.webcamSizePreset !== undefined) next.webcamSizePreset = patch.webcamSizePreset;
-	if (patch.webcamPosition !== undefined) next.webcamPosition = patch.webcamPosition;
-	if (patch.autoFocusAll !== undefined) next.autoFocusAll = patch.autoFocusAll;
+	// Spread, but only over keys the patch actually set — a plain {...base,
+	// ...patch} would write undefined over a value the caller left alone.
+	// `cursor` is handled separately below: its keys are renamed (size ->
+	// cursorSize), so it is not a straight passthrough.
+	const { cursor: _cursor, ...rest } = patch;
+	const defined = Object.fromEntries(
+		Object.entries(rest).filter(([, v]) => v !== undefined),
+	) as Partial<LegacyShape>;
+	const next: LegacyShape = { ...base, ...defined };
 	if (patch.cursor) {
 		const c = patch.cursor;
 		if (c.size !== undefined) next.cursorSize = c.size;
