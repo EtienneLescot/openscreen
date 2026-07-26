@@ -1096,8 +1096,8 @@ export function V4Timeline({
 						<button
 							type="button"
 							className={styles.tlToolBtn}
-							title="Full Camera"
-							aria-label="Full Camera"
+							title={t("buttons.addCameraFullscreen")}
+							aria-label={t("buttons.addCameraFullscreen")}
 							onClick={() => void tl.addCameraFullscreen()}
 						>
 							<Maximize2 size={15} />

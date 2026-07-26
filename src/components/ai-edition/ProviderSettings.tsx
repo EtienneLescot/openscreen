@@ -33,6 +33,7 @@ import {
 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
+import { useScopedT } from "@/contexts/I18nContext";
 import { nativeBridgeClient } from "@/native/client";
 import type {
 	AiEditionDeviceChallenge,
@@ -61,6 +62,7 @@ export function ProviderSettings({
 	onClose,
 	onActiveProviderChanged,
 }: ProviderSettingsProps) {
+	const te = useScopedT("editor");
 	const [snapshot, setSnapshot] = useState<AiEditionLlmSnapshot | null>(null);
 	const [mode, setMode] = useState<Mode>("list");
 	const [active, setActive] = useState<ProviderDefinition | null>(null);
@@ -77,12 +79,12 @@ export function ProviderSettings({
 			if (snap.config) setConfig(snap.config);
 			return snap;
 		} catch (err) {
-			toast.error("Could not load AI settings", {
+			toast.error(te("providerSettings.loadFailed"), {
 				description: err instanceof Error ? err.message : String(err),
 			});
 			throw err;
 		}
-	}, []);
+	}, [te]);
 
 	useEffect(() => {
 		if (!open) return;
@@ -160,7 +162,7 @@ export function ProviderSettings({
 			await nativeBridgeClient.aiEdition.llmSetConfig(config);
 			const snap = await refreshSnapshot();
 			onActiveProviderChanged?.(snap?.config?.provider ?? null);
-			toast.success(`${active.label} saved`);
+			toast.success(te("providerSettings.saved", { provider: active.label }));
 			setMode("list");
 			setActive(null);
 		} catch (err) {
@@ -209,12 +211,12 @@ export function ProviderSettings({
 			if (result.success) {
 				const snap = await refreshSnapshot();
 				onActiveProviderChanged?.(snap?.config?.provider ?? null);
-				toast.success(`${active.label} connected`);
+				toast.success(te("providerSettings.connected", { provider: active.label }));
 				setMode("list");
 				setActive(null);
 				setChallenge(null);
 			} else {
-				setError(result.error ?? "Device flow failed.");
+				setError(result.error ?? te("providerSettings.deviceFlowFailed"));
 			}
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
@@ -232,7 +234,7 @@ export function ProviderSettings({
 			await nativeBridgeClient.aiEdition.llmSetConfig(config);
 			const snap = await refreshSnapshot();
 			onActiveProviderChanged?.(snap?.config?.provider ?? null);
-			toast.success(`${active.label} connected`);
+			toast.success(te("providerSettings.connected", { provider: active.label }));
 			setApiKey("");
 			setMode("list");
 			setActive(null);
@@ -251,7 +253,7 @@ export function ProviderSettings({
 			const result = await nativeBridgeClient.aiEdition.llmDisconnect(active.id);
 			const snap = result.snapshot ?? (await refreshSnapshot());
 			onActiveProviderChanged?.(snap.config?.provider ?? null);
-			toast.success(`${active.label} disconnected`);
+			toast.success(te("providerSettings.disconnected", { provider: active.label }));
 		} catch (err) {
 			setError(err instanceof Error ? err.message : String(err));
 		} finally {
@@ -263,8 +265,8 @@ export function ProviderSettings({
 		<ModalShell
 			open={open}
 			onClose={close}
-			title="AI settings"
-			subtitle="Choose a provider. Credentials are stored in the OS keychain (safeStorage)."
+			title={te("providerSettings.title")}
+			subtitle={te("providerSettings.subtitle")}
 			wide
 		>
 			{mode === "list" ? (
@@ -311,6 +313,7 @@ function ProviderList({
 	activeProvider: string | null;
 	onPick: (def: ProviderDefinition) => void;
 }) {
+	const te = useScopedT("editor");
 	return (
 		<div className={styles.providerGrid}>
 			{PROVIDER_DEFINITIONS.map((def) => {
@@ -328,22 +331,22 @@ function ProviderList({
 							{isConnected ? (
 								<span className={`${styles.statusPill} ${styles.ready}`}>
 									<Check size={10} />
-									Connected
+									{te("providerSettings.pillConnected")}
 								</span>
 							) : authKindPillKind(def.authKind) === "auth" ? (
 								<span className={`${styles.statusPill} ${styles.auth}`}>
 									<LogIn size={10} />
-									OAuth
+									{te("providerSettings.pillOAuth")}
 								</span>
 							) : def.authKind === "pat" ? (
 								<span className={`${styles.statusPill} ${styles.pat}`}>
 									<Plug size={10} />
-									Token
+									{te("providerSettings.pillToken")}
 								</span>
 							) : (
 								<span className={`${styles.statusPill} ${styles.idle}`}>
 									<KeyIcon />
-									API key
+									{te("providerSettings.pillApiKey")}
 								</span>
 							)}
 						</div>
@@ -418,6 +421,7 @@ function ProviderForm({
 	onOpenLoginPage: (uri: string) => void;
 	listProviderModels: (providerId: string) => Promise<{ models: string[]; error?: string }>;
 }) {
+	const te = useScopedT("editor");
 	const showApiKeyField = def.authKind === "api-key" || (def.authKind === "pat" && !isConnected);
 	const showBaseUrl = def.id === "openai-compatible" || Boolean(def.baseUrl);
 	const isCodexOrCopilot = def.authKind === "oauth-device";
@@ -469,32 +473,35 @@ function ProviderForm({
 					className={styles.backBtn}
 					onClick={onBack}
 					disabled={busy}
-					title="Back"
-					aria-label="Back"
+					title={te("providerSettings.back")}
+					aria-label={te("providerSettings.back")}
 				>
 					<X size={14} />
-					Back
+					{te("providerSettings.back")}
 				</button>
 				<h3>{def.label}</h3>
 				{isConnected ? (
 					<span className={`${styles.statusPill} ${styles.ready}`}>
 						<Check size={10} />
-						Connected {credentialKind && credentialKind !== "api-key" ? `· ${credentialKind}` : ""}
+						{te("providerSettings.pillConnected")}{" "}
+						{credentialKind && credentialKind !== "api-key" ? `· ${credentialKind}` : ""}
 					</span>
 				) : (
-					<span className={`${styles.statusPill} ${styles.idle}`}>Not connected</span>
+					<span className={`${styles.statusPill} ${styles.idle}`}>
+						{te("providerSettings.notConnected")}
+					</span>
 				)}
 			</div>
 
 			<Field
-				label="Model"
+				label={te("providerSettings.modelLabel")}
 				hint={
 					modelSelectable
-						? "Models from your account, fetched live."
+						? te("providerSettings.modelHintLive")
 						: modelsError
-							? `Couldn't fetch live models (${modelsError}); type a model id manually.`
+							? te("providerSettings.modelHintError", { error: modelsError })
 							: supportsDynamicModels && isConnected
-								? "Loading live models…"
+								? te("providerSettings.modelHintLoading")
 								: undefined
 				}
 			>
@@ -511,7 +518,9 @@ function ProviderForm({
 					>
 						{!modelOptions.includes(config?.model ?? def.defaultModel) ? (
 							<option value={config?.model ?? def.defaultModel}>
-								{config?.model ?? def.defaultModel} (saved)
+								{te("providerSettings.modelSavedOption", {
+									model: config?.model ?? def.defaultModel,
+								})}
 							</option>
 						) : null}
 						{modelOptions.map((modelSlug) => (
@@ -548,13 +557,16 @@ function ProviderForm({
 						}}
 					>
 						<Loader2 size={10} className="animate-spin" />
-						Loading models…
+						{te("providerSettings.loadingModels")}
 					</span>
 				) : null}
 			</Field>
 
 			{showBaseUrl ? (
-				<Field label="Base URL" hint="Leave blank to use the provider's default.">
+				<Field
+					label={te("providerSettings.baseUrlLabel")}
+					hint={te("providerSettings.baseUrlHint")}
+				>
 					<input
 						type="text"
 						value={config?.baseUrl ?? def.baseUrl ?? ""}
@@ -571,7 +583,7 @@ function ProviderForm({
 			) : null}
 
 			{def.supportsReasoningEffort ? (
-				<Field label="Reasoning effort">
+				<Field label={te("providerSettings.reasoningEffortLabel")}>
 					<select
 						value={config?.reasoningEffort ?? "none"}
 						onChange={(e) =>
@@ -593,12 +605,16 @@ function ProviderForm({
 
 			{showApiKeyField ? (
 				<Field
-					label={def.authKind === "pat" ? "GitHub personal access token" : "API key"}
+					label={
+						def.authKind === "pat"
+							? te("providerSettings.patLabel")
+							: te("providerSettings.apiKeyLabel")
+					}
 					hint={
 						isConnected
-							? "Stored in safeStorage. Leave blank to keep the existing entry."
+							? te("providerSettings.apiKeyHintStored")
 							: def.authKind === "pat"
-								? "Paste a GitHub PAT with `copilot` scope."
+								? te("providerSettings.patHint")
 								: undefined
 					}
 				>
@@ -613,8 +629,8 @@ function ProviderForm({
 			) : null}
 
 			<Field
-				label="Project edits"
-				hint="When off, the agent must ask before changing the timeline. Edits are always undoable."
+				label={te("providerSettings.projectEditsLabel")}
+				hint={te("providerSettings.projectEditsHint")}
 			>
 				<label
 					style={{
@@ -637,7 +653,7 @@ function ProviderForm({
 							})
 						}
 					/>
-					Allow the agent to edit the project
+					{te("providerSettings.allowAgentEdits")}
 				</label>
 			</Field>
 
@@ -666,7 +682,7 @@ function ProviderForm({
 							disabled={busy}
 						>
 							<Unplug size={14} />
-							Disconnect
+							{te("providerSettings.disconnect")}
 						</button>
 					) : null}
 				</div>
@@ -676,7 +692,7 @@ function ProviderForm({
 					onClick={onBack}
 					disabled={busy}
 				>
-					Cancel
+					{te("providerSettings.cancel")}
 				</button>
 				{isConnected ? (
 					<button
@@ -686,7 +702,7 @@ function ProviderForm({
 						disabled={busy || !config}
 					>
 						{busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-						Save
+						{te("providerSettings.save")}
 					</button>
 				) : isCodexOrCopilot ? (
 					<button
@@ -696,7 +712,7 @@ function ProviderForm({
 						disabled={busy || !config}
 					>
 						{busy ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
-						{isConnected ? "Reconnect" : "Start login"}
+						{isConnected ? te("providerSettings.reconnect") : te("providerSettings.startLogin")}
 					</button>
 				) : def.authKind === "pat" && onPatConnect ? (
 					<button
@@ -706,7 +722,7 @@ function ProviderForm({
 						disabled={busy || !apiKey.trim() || !config}
 					>
 						{busy ? <Loader2 size={14} className="animate-spin" /> : <Plug size={14} />}
-						Connect
+						{te("providerSettings.connect")}
 					</button>
 				) : (
 					<button
@@ -716,7 +732,7 @@ function ProviderForm({
 						disabled={busy || !apiKey.trim() || !config}
 					>
 						{busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
-						{apiKey.trim() ? "Save & use" : "Save"}
+						{apiKey.trim() ? te("providerSettings.saveAndUse") : te("providerSettings.save")}
 					</button>
 				)}
 			</div>
@@ -735,6 +751,7 @@ function DeviceChallengePanel({
 	providerLabel: string;
 	onOpenLoginPage: (uri: string) => void;
 }) {
+	const te = useScopedT("editor");
 	const [copied, setCopied] = useState(false);
 
 	const onCopy = async () => {
@@ -759,11 +776,12 @@ function DeviceChallengePanel({
 			data-testid="device-challenge-panel"
 		>
 			<div>
-				<strong>{busy ? "Completing sign-in…" : "Browser login pending"}</strong>
-				<p>
-					Open the {providerLabel} login page and enter this code. We’ll finish connecting
-					automatically once you authorize.
-				</p>
+				<strong>
+					{busy
+						? te("providerSettings.completingSignIn")
+						: te("providerSettings.browserLoginPending")}
+				</strong>
+				<p>{te("providerSettings.deviceCodeInstructions", { provider: providerLabel })}</p>
 			</div>
 			<div className={styles.authCodeRow}>
 				<code data-testid="device-user-code">{challenge.userCode}</code>
@@ -771,12 +789,12 @@ function DeviceChallengePanel({
 					type="button"
 					className={`${styles.btn} ${styles.btnSecondary}`}
 					onClick={onCopy}
-					title="Copy code"
-					aria-label="Copy code"
+					title={te("providerSettings.copyCode")}
+					aria-label={te("providerSettings.copyCode")}
 					disabled={busy}
 				>
 					{copied ? <Check size={14} /> : <Copy size={14} />}
-					{copied ? "Copied" : "Copy code"}
+					{copied ? te("providerSettings.copied") : te("providerSettings.copyCode")}
 				</button>
 			</div>
 			<div>
@@ -791,7 +809,7 @@ function DeviceChallengePanel({
 					}}
 				>
 					<ExternalLink size={14} />
-					Open login page
+					{te("providerSettings.openLoginPage")}
 				</a>
 			</div>
 		</div>

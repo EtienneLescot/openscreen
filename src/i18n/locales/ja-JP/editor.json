@@ -204,7 +204,8 @@
 		"showInFolder": "フォルダーで表示",
 		"exportFailed": "エクスポートに失敗しました",
 		"failedToWriteFile": "ファイルの書き込みに失敗しました",
-		"qualityUpscaleWarning": "アップスケール"
+		"qualityUpscaleWarning": "アップスケール",
+		"exportedVideoOf": "の動画を書き出しました。所要時間:"
 	},
 	"inspector": {
 		"resetFocusPoint": "フォーカスポイントをリセット",
@@ -215,7 +216,9 @@
 		"captionsDescription": "文字起こしから単語ごとにタイミングを合わせたキャプションを生成し、タイムラインに配置します。",
 		"generateCaptions": "キャプションを生成",
 		"cropDescription": "録画をリフレーム — アスペクト比を選び、保持したい範囲にズームします。",
-		"openCrop": "切り抜きを開く…"
+		"openCrop": "切り抜きを開く…",
+		"cameraFullscreenDescription": "この区間の再生中は、カメラが画面全体を占めます（枠・角丸・背景なし）。終わりでは滑らかに元に戻ります。タイムライン上で区間の端をドラッグすると、開始位置と長さを変更できます。",
+		"deleteRegion": "区間を削除"
 	},
 	"leftPanel": {
 		"mediaTitle": "メディア",
@@ -345,5 +348,73 @@
 		"fieldY": "Y",
 		"fieldW": "幅",
 		"fieldH": "高さ"
+	},
+	"transport": {
+		"playbackControls": "再生コントロール",
+		"playPause": "再生 / 一時停止",
+		"playPauseTitle": "再生 / 一時停止（スペース）",
+		"previousClip": "前のクリップ",
+		"nextClip": "次のクリップ",
+		"loop": "ループ",
+		"seekVideo": "動画をシーク"
+	},
+	"shell": {
+		"aiEditor": "AI エディター",
+		"resizeChatPanel": "チャットパネルのサイズを変更",
+		"previewStage": "プレビュー領域",
+		"resizeTimeline": "タイムラインのサイズを変更"
+	},
+	"preview": {
+		"videoPreview": "動画プレビュー",
+		"webcamPreview": "ウェブカメラのプレビュー（ドラッグで位置変更）"
+	},
+	"annotationOverlay": {
+		"imageAlt": "注釈",
+		"noImage": "画像なし",
+		"noArrowData": "矢印データなし"
+	},
+	"providerSettings": {
+		"title": "AI 設定",
+		"subtitle": "プロバイダーを選択してください。認証情報は OS のキーチェーン（safeStorage）に保存されます。",
+		"loadFailed": "AI 設定を読み込めませんでした",
+		"saved": "{{provider}} を保存しました",
+		"connected": "{{provider}} に接続しました",
+		"disconnected": "{{provider}} の接続を解除しました",
+		"deviceFlowFailed": "デバイス認証に失敗しました。",
+		"pillConnected": "接続済み",
+		"pillOAuth": "OAuth",
+		"pillToken": "トークン",
+		"pillApiKey": "API キー",
+		"notConnected": "未接続",
+		"back": "戻る",
+		"modelLabel": "モデル",
+		"modelHintLive": "アカウントから取得した最新のモデル一覧です。",
+		"modelHintError": "モデル一覧を取得できませんでした（{{error}}）。モデル ID を手動で入力してください。",
+		"modelHintLoading": "最新のモデルを読み込み中…",
+		"modelSavedOption": "{{model}}（保存済み）",
+		"loadingModels": "モデルを読み込み中…",
+		"baseUrlLabel": "ベース URL",
+		"baseUrlHint": "空欄にするとプロバイダーの既定値を使用します。",
+		"reasoningEffortLabel": "推論の深さ",
+		"apiKeyLabel": "API キー",
+		"apiKeyHintStored": "safeStorage に保存されています。空欄のままにすると既存の値を保持します。",
+		"patLabel": "GitHub 個人用アクセストークン",
+		"patHint": "`copilot` スコープを持つ GitHub PAT を貼り付けてください。",
+		"projectEditsLabel": "プロジェクトの編集",
+		"projectEditsHint": "オフの場合、エージェントはタイムラインを変更する前に確認します。編集はいつでも元に戻せます。",
+		"allowAgentEdits": "エージェントによるプロジェクトの編集を許可",
+		"disconnect": "接続を解除",
+		"cancel": "キャンセル",
+		"save": "保存",
+		"saveAndUse": "保存して使用",
+		"reconnect": "再接続",
+		"startLogin": "ログインを開始",
+		"connect": "接続",
+		"completingSignIn": "サインインを完了しています…",
+		"browserLoginPending": "ブラウザーでのログイン待ちです",
+		"deviceCodeInstructions": "{{provider}} のログインページを開き、このコードを入力してください。承認が完了すると自動的に接続されます。",
+		"copyCode": "コードをコピー",
+		"copied": "コピーしました",
+		"openLoginPage": "ログインページを開く"
 	}
 }

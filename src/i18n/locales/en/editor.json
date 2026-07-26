@@ -216,7 +216,9 @@
 		"captionsDescription": "Generate word-timed captions from the transcript and drop them onto the timeline.",
 		"generateCaptions": "Generate captions",
 		"cropDescription": "Reframe the recording — pick an aspect ratio and zoom into the region you want to keep.",
-		"openCrop": "Open crop…"
+		"openCrop": "Open crop…",
+		"cameraFullscreenDescription": "While this region plays, the camera takes the whole frame — no border, no rounding, no background — and eases back at the end. Drag the region's edges on the timeline to change when it starts and how long it lasts.",
+		"deleteRegion": "Delete region"
 	},
 	"leftPanel": {
 		"mediaTitle": "Media",
@@ -346,5 +348,73 @@
 		"fieldY": "Y",
 		"fieldW": "W",
 		"fieldH": "H"
+	},
+	"transport": {
+		"playbackControls": "Playback controls",
+		"playPause": "Play / Pause",
+		"playPauseTitle": "Play / Pause (Space)",
+		"previousClip": "Previous clip",
+		"nextClip": "Next clip",
+		"loop": "Loop",
+		"seekVideo": "Seek video"
+	},
+	"shell": {
+		"aiEditor": "AI editor",
+		"resizeChatPanel": "Resize chat panel",
+		"previewStage": "Preview stage",
+		"resizeTimeline": "Resize timeline"
+	},
+	"preview": {
+		"videoPreview": "Video preview",
+		"webcamPreview": "Webcam preview (drag to reposition)"
+	},
+	"annotationOverlay": {
+		"imageAlt": "Annotation",
+		"noImage": "No image",
+		"noArrowData": "No arrow data"
+	},
+	"providerSettings": {
+		"title": "AI settings",
+		"subtitle": "Choose a provider. Credentials are stored in the OS keychain (safeStorage).",
+		"loadFailed": "Could not load AI settings",
+		"saved": "{{provider}} saved",
+		"connected": "{{provider}} connected",
+		"disconnected": "{{provider}} disconnected",
+		"deviceFlowFailed": "Device flow failed.",
+		"pillConnected": "Connected",
+		"pillOAuth": "OAuth",
+		"pillToken": "Token",
+		"pillApiKey": "API key",
+		"notConnected": "Not connected",
+		"back": "Back",
+		"modelLabel": "Model",
+		"modelHintLive": "Models from your account, fetched live.",
+		"modelHintError": "Couldn't fetch live models ({{error}}); type a model id manually.",
+		"modelHintLoading": "Loading live models…",
+		"modelSavedOption": "{{model}} (saved)",
+		"loadingModels": "Loading models…",
+		"baseUrlLabel": "Base URL",
+		"baseUrlHint": "Leave blank to use the provider's default.",
+		"reasoningEffortLabel": "Reasoning effort",
+		"apiKeyLabel": "API key",
+		"apiKeyHintStored": "Stored in safeStorage. Leave blank to keep the existing entry.",
+		"patLabel": "GitHub personal access token",
+		"patHint": "Paste a GitHub PAT with `copilot` scope.",
+		"projectEditsLabel": "Project edits",
+		"projectEditsHint": "When off, the agent must ask before changing the timeline. Edits are always undoable.",
+		"allowAgentEdits": "Allow the agent to edit the project",
+		"disconnect": "Disconnect",
+		"cancel": "Cancel",
+		"save": "Save",
+		"saveAndUse": "Save & use",
+		"reconnect": "Reconnect",
+		"startLogin": "Start login",
+		"connect": "Connect",
+		"completingSignIn": "Completing sign-in…",
+		"browserLoginPending": "Browser login pending",
+		"deviceCodeInstructions": "Open the {{provider}} login page and enter this code. We'll finish connecting automatically once you authorize.",
+		"copyCode": "Copy code",
+		"copied": "Copied",
+		"openLoginPage": "Open login page"
 	}
 }

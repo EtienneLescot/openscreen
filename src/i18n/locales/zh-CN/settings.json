@@ -50,7 +50,14 @@
 		"noWebcam": "无摄像头",
 		"mirrorWebcam": "镜像摄像头",
 		"reactiveWebcam": "缩放时缩小",
-		"reactiveWebcamDescription": "放大视频时摄像头会平滑缩小，以免遮挡内容。"
+		"reactiveWebcamDescription": "放大视频时摄像头会平滑缩小，以免遮挡内容。",
+		"help": "摄像头与屏幕的合成方式：画中画、垂直堆叠、双画面、遮罩形状、大小和镜像。",
+		"shapes": {
+			"rectangle": "矩形",
+			"circle": "圆形",
+			"square": "正方形",
+			"rounded": "圆角"
+		}
 	},
 	"effects": {
 		"title": "视频效果",
@@ -60,7 +67,8 @@
 		"shadow": "阴影",
 		"roundness": "圆角",
 		"padding": "内边距",
-		"on": "开"
+		"on": "开",
+		"help": "录制画面的边框样式：背景模糊、投影、运动模糊、圆角半径以及视频四周的内边距。"
 	},
 	"background": {
 		"title": "背景",
@@ -72,7 +80,11 @@
 		"gradientLabel": "渐变 {{index}}",
 		"colorWheel": "颜色轮",
 		"colorPalette": "颜色调色板",
-		"presets": "预设"
+		"presets": "预设",
+		"help": "选择录制内容背后显示的元素：内置壁纸图片、纯色、渐变，或来自磁盘的自定义图片。",
+		"customWallpaper": "自定义壁纸",
+		"imageLabel": "背景 {{index}}",
+		"colorLabel": "颜色 {{color}}"
 	},
 	"crop": {
 		"title": "裁剪",
@@ -221,17 +233,38 @@
 		"motionBlur": "运动模糊",
 		"clickBounce": "点击弹跳",
 		"clipToBounds": "裁剪到画布",
-		"clipToBoundsDescription": "将光标保持在视频画面内。关闭后光标可以超出边缘——在放大或平移时很有用。"
+		"clipToBoundsDescription": "将光标保持在视频画面内。关闭后光标可以超出边缘——在放大或平移时很有用。",
+		"help": "基于录制遥测数据的光标渲染：主题、大小、平滑、运动模糊和点击回弹。"
 	},
 	"language": {
 		"title": "语言"
 	},
 	"timeline": {
 		"title": "时间轴",
-		"waveform": "在剪辑轨道上显示音频波形"
+		"waveform": "在剪辑轨道上显示音频波形",
+		"help": "时间轴显示选项，例如在修剪轨道上显示音频波形。"
 	},
 	"facets": {
 		"captions": "字幕",
 		"transcript": "转录文本"
+	},
+	"panes": {
+		"help": "帮助"
+	},
+	"transcript": {
+		"title": "当前转录",
+		"help": "时间轴上所有片段的合并转录。对某个词或选区按退格 / Delete 会将其标记为跳过（红色）。将鼠标悬停在红色片段上可恢复。",
+		"noClips": "暂无片段",
+		"noTranscript": "暂无转录",
+		"whisperHint": "转录使用本地 Whisper — 在您的浏览器中运行，数据不会离开本设备。",
+		"transcribeNow": "立即转录",
+		"transcribing": "转录中…",
+		"clipLabel": "片段 {{index}}",
+		"noClipTranscript": "该片段没有转录 — 请打开素材卡片并重新生成。",
+		"editorAria": "{{filename}} 的转录",
+		"silence": "[静音 {{duration}} 秒]",
+		"restoreSilence": "恢复静音（{{duration}} 秒）",
+		"trimSilence": "修剪静音（{{duration}} 秒）",
+		"restoreWord": "恢复“{{word}}”"
 	}
 }

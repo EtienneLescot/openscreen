@@ -204,7 +204,8 @@
 		"showInFolder": "在資料夾中顯示",
 		"exportFailed": "匯出失敗",
 		"failedToWriteFile": "寫入檔案失敗",
-		"qualityUpscaleWarning": "放大"
+		"qualityUpscaleWarning": "放大",
+		"exportedVideoOf": "的影片已匯出，耗時"
 	},
 	"inspector": {
 		"resetFocusPoint": "重設焦點",
@@ -215,7 +216,9 @@
 		"captionsDescription": "根據逐字稿產生逐字計時的字幕，並放置到時間軸上。",
 		"generateCaptions": "產生字幕",
 		"cropDescription": "重新構圖錄製內容 — 選擇長寬比並縮放至想保留的區域。",
-		"openCrop": "開啟裁切…"
+		"openCrop": "開啟裁切…",
+		"cameraFullscreenDescription": "此區間播放時，攝影機會佔滿整個畫面 — 沒有邊框、圓角與背景 — 並在結束時平順還原。在時間軸上拖曳區間邊緣，即可調整開始位置與長度。",
+		"deleteRegion": "刪除區間"
 	},
 	"leftPanel": {
 		"mediaTitle": "媒體",
@@ -345,5 +348,73 @@
 		"fieldY": "Y",
 		"fieldW": "寬",
 		"fieldH": "高"
+	},
+	"transport": {
+		"playbackControls": "播放控制項",
+		"playPause": "播放 / 暫停",
+		"playPauseTitle": "播放 / 暫停（空白鍵）",
+		"previousClip": "上一個片段",
+		"nextClip": "下一個片段",
+		"loop": "循環",
+		"seekVideo": "拖曳影片進度"
+	},
+	"shell": {
+		"aiEditor": "AI 編輯器",
+		"resizeChatPanel": "調整聊天面板大小",
+		"previewStage": "預覽區域",
+		"resizeTimeline": "調整時間軸大小"
+	},
+	"preview": {
+		"videoPreview": "影片預覽",
+		"webcamPreview": "攝影機預覽（拖曳可重新定位）"
+	},
+	"annotationOverlay": {
+		"imageAlt": "註解",
+		"noImage": "沒有圖片",
+		"noArrowData": "沒有箭頭資料"
+	},
+	"providerSettings": {
+		"title": "AI 設定",
+		"subtitle": "選擇一個供應商。憑證會儲存在系統金鑰鏈（safeStorage）中。",
+		"loadFailed": "無法載入 AI 設定",
+		"saved": "已儲存 {{provider}}",
+		"connected": "已連線 {{provider}}",
+		"disconnected": "已中斷 {{provider}}",
+		"deviceFlowFailed": "裝置授權流程失敗。",
+		"pillConnected": "已連線",
+		"pillOAuth": "OAuth",
+		"pillToken": "權杖",
+		"pillApiKey": "API 金鑰",
+		"notConnected": "未連線",
+		"back": "返回",
+		"modelLabel": "模型",
+		"modelHintLive": "從您的帳戶即時取得的模型。",
+		"modelHintError": "無法取得即時模型（{{error}}），請手動輸入模型 ID。",
+		"modelHintLoading": "正在載入即時模型…",
+		"modelSavedOption": "{{model}}（已儲存）",
+		"loadingModels": "正在載入模型…",
+		"baseUrlLabel": "基礎 URL",
+		"baseUrlHint": "留空以使用供應商的預設值。",
+		"reasoningEffortLabel": "推理強度",
+		"apiKeyLabel": "API 金鑰",
+		"apiKeyHintStored": "已儲存在 safeStorage 中。留空可保留現有項目。",
+		"patLabel": "GitHub 個人存取權杖",
+		"patHint": "貼上具有 `copilot` 範圍的 GitHub PAT。",
+		"projectEditsLabel": "專案編輯",
+		"projectEditsHint": "關閉時，代理在變更時間軸前必須先詢問。所有編輯都可以復原。",
+		"allowAgentEdits": "允許代理編輯專案",
+		"disconnect": "中斷連線",
+		"cancel": "取消",
+		"save": "儲存",
+		"saveAndUse": "儲存並使用",
+		"reconnect": "重新連線",
+		"startLogin": "開始登入",
+		"connect": "連線",
+		"completingSignIn": "正在完成登入…",
+		"browserLoginPending": "等待瀏覽器登入",
+		"deviceCodeInstructions": "開啟 {{provider}} 登入頁面並輸入此代碼。您授權後，我們會自動完成連線。",
+		"copyCode": "複製代碼",
+		"copied": "已複製",
+		"openLoginPage": "開啟登入頁面"
 	}
 }

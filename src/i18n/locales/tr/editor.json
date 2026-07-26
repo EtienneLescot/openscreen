@@ -204,7 +204,8 @@
 		"showInFolder": "Klasörde göster",
 		"exportFailed": "Dışa aktarma başarısız oldu",
 		"failedToWriteFile": "Dosya yazılamadı",
-		"qualityUpscaleWarning": "Upscale"
+		"qualityUpscaleWarning": "Upscale",
+		"exportedVideoOf": "video şu sürede dışa aktarıldı:"
 	},
 	"inspector": {
 		"resetFocusPoint": "Odak noktasını sıfırla",
@@ -215,7 +216,9 @@
 		"captionsDescription": "Transkriptten kelime zamanlamalı altyazılar oluşturun ve zaman çizelgesine bırakın.",
 		"generateCaptions": "Altyazı oluştur",
 		"cropDescription": "Kaydı yeniden çerçeveleyin — bir en boy oranı seçin ve saklamak istediğiniz bölgeye yakınlaşın.",
-		"openCrop": "Kırpmayı aç…"
+		"openCrop": "Kırpmayı aç…",
+		"cameraFullscreenDescription": "Bu bölge oynarken kamera tüm kareyi kaplar — kenarlık, yuvarlatma ve arka plan olmadan — ve sonunda yumuşakça geri döner. Ne zaman başlayacağını ve ne kadar süreceğini değiştirmek için zaman çizelgesinde bölgenin kenarlarını sürükleyin.",
+		"deleteRegion": "Bölgeyi sil"
 	},
 	"leftPanel": {
 		"mediaTitle": "Medya",
@@ -345,5 +348,73 @@
 		"fieldY": "Y",
 		"fieldW": "G",
 		"fieldH": "Y"
+	},
+	"transport": {
+		"playbackControls": "Oynatma denetimleri",
+		"playPause": "Oynat / Duraklat",
+		"playPauseTitle": "Oynat / Duraklat (Boşluk)",
+		"previousClip": "Önceki klip",
+		"nextClip": "Sonraki klip",
+		"loop": "Döngü",
+		"seekVideo": "Videoda gezin"
+	},
+	"shell": {
+		"aiEditor": "Yapay zekâ düzenleyici",
+		"resizeChatPanel": "Sohbet panelini yeniden boyutlandır",
+		"previewStage": "Önizleme alanı",
+		"resizeTimeline": "Zaman çizelgesini yeniden boyutlandır"
+	},
+	"preview": {
+		"videoPreview": "Video önizlemesi",
+		"webcamPreview": "Web kamerası önizlemesi (taşımak için sürükleyin)"
+	},
+	"annotationOverlay": {
+		"imageAlt": "Açıklama",
+		"noImage": "Görsel yok",
+		"noArrowData": "Ok verisi yok"
+	},
+	"providerSettings": {
+		"title": "Yapay zekâ ayarları",
+		"subtitle": "Bir sağlayıcı seçin. Kimlik bilgileri işletim sisteminin anahtar zincirinde (safeStorage) saklanır.",
+		"loadFailed": "Yapay zekâ ayarları yüklenemedi",
+		"saved": "{{provider}} kaydedildi",
+		"connected": "{{provider}} bağlandı",
+		"disconnected": "{{provider}} bağlantısı kesildi",
+		"deviceFlowFailed": "Cihaz akışı başarısız oldu.",
+		"pillConnected": "Bağlı",
+		"pillOAuth": "OAuth",
+		"pillToken": "Belirteç",
+		"pillApiKey": "API anahtarı",
+		"notConnected": "Bağlı değil",
+		"back": "Geri",
+		"modelLabel": "Model",
+		"modelHintLive": "Hesabınızdan canlı olarak alınan modeller.",
+		"modelHintError": "Canlı modeller alınamadı ({{error}}); model kimliğini elle yazın.",
+		"modelHintLoading": "Canlı modeller yükleniyor…",
+		"modelSavedOption": "{{model}} (kayıtlı)",
+		"loadingModels": "Modeller yükleniyor…",
+		"baseUrlLabel": "Temel URL",
+		"baseUrlHint": "Sağlayıcının varsayılanını kullanmak için boş bırakın.",
+		"reasoningEffortLabel": "Akıl yürütme düzeyi",
+		"apiKeyLabel": "API anahtarı",
+		"apiKeyHintStored": "safeStorage'da saklanıyor. Mevcut kaydı korumak için boş bırakın.",
+		"patLabel": "GitHub kişisel erişim belirteci",
+		"patHint": "`copilot` kapsamına sahip bir GitHub PAT yapıştırın.",
+		"projectEditsLabel": "Proje düzenlemeleri",
+		"projectEditsHint": "Kapalıyken, aracı zaman çizelgesini değiştirmeden önce izin ister. Düzenlemeler her zaman geri alınabilir.",
+		"allowAgentEdits": "Aracının projeyi düzenlemesine izin ver",
+		"disconnect": "Bağlantıyı kes",
+		"cancel": "İptal",
+		"save": "Kaydet",
+		"saveAndUse": "Kaydet ve kullan",
+		"reconnect": "Yeniden bağlan",
+		"startLogin": "Girişi başlat",
+		"connect": "Bağlan",
+		"completingSignIn": "Oturum açma tamamlanıyor…",
+		"browserLoginPending": "Tarayıcı girişi bekleniyor",
+		"deviceCodeInstructions": "{{provider}} giriş sayfasını açın ve bu kodu girin. İzin verdiğinizde bağlantıyı otomatik olarak tamamlayacağız.",
+		"copyCode": "Kodu kopyala",
+		"copied": "Kopyalandı",
+		"openLoginPage": "Giriş sayfasını aç"
 	}
 }

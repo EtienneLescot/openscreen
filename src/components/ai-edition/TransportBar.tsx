@@ -1,5 +1,6 @@
 import { Maximize2, Pause, Play, Repeat, SkipBack, SkipForward } from "lucide-react";
 import { memo } from "react";
+import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import styles from "./NewEditorShell.module.css";
 
@@ -37,6 +38,8 @@ export const TransportBar = memo(function TransportBar({
 	onExpand,
 	onSeek,
 }: TransportBarProps) {
+	const te = useScopedT("editor");
+	const tc = useScopedT("common");
 	const virtualDurationSec = clips.reduce(
 		(acc, c) => acc + (c.timelineEndSec - c.timelineStartSec),
 		0,
@@ -48,12 +51,12 @@ export const TransportBar = memo(function TransportBar({
 	const progress = (inputValue / inputMax) * 100;
 
 	return (
-		<div className={styles.transport} role="toolbar" aria-label="Playback controls">
+		<div className={styles.transport} role="toolbar" aria-label={te("transport.playbackControls")}>
 			<button
 				type="button"
 				className={`${styles.tbtn} ${styles.play}`}
-				title="Play / Pause (Space)"
-				aria-label="Play / Pause"
+				title={te("transport.playPauseTitle")}
+				aria-label={te("transport.playPause")}
 				data-playing={playing}
 				onClick={onTogglePlay}
 			>
@@ -62,8 +65,8 @@ export const TransportBar = memo(function TransportBar({
 			<button
 				type="button"
 				className={styles.tbtn}
-				title="Previous clip"
-				aria-label="Previous clip"
+				title={te("transport.previousClip")}
+				aria-label={te("transport.previousClip")}
 				onClick={onPrevClip}
 			>
 				<SkipBack size={13} />
@@ -71,8 +74,8 @@ export const TransportBar = memo(function TransportBar({
 			<button
 				type="button"
 				className={styles.tbtn}
-				title="Next clip"
-				aria-label="Next clip"
+				title={te("transport.nextClip")}
+				aria-label={te("transport.nextClip")}
 				onClick={onNextClip}
 			>
 				<SkipForward size={13} />
@@ -80,8 +83,8 @@ export const TransportBar = memo(function TransportBar({
 			<button
 				type="button"
 				className={styles.tbtn}
-				title="Loop"
-				aria-label="Loop"
+				title={te("transport.loop")}
+				aria-label={te("transport.loop")}
 				aria-pressed={loop}
 				onClick={onToggleLoop}
 			>
@@ -90,8 +93,8 @@ export const TransportBar = memo(function TransportBar({
 			<button
 				type="button"
 				className={styles.tbtn}
-				title="Fullscreen"
-				aria-label="Fullscreen"
+				title={tc("playback.fullscreen")}
+				aria-label={tc("playback.fullscreen")}
 				onClick={onExpand}
 			>
 				<Maximize2 size={13} />
@@ -113,7 +116,7 @@ export const TransportBar = memo(function TransportBar({
 					value={inputValue}
 					onChange={(e) => onSeek(Number(e.target.value))}
 					className={styles.scrubInput}
-					aria-label="Seek video"
+					aria-label={te("transport.seekVideo")}
 				/>
 				<div
 					className={styles.scrubThumb}

@@ -204,7 +204,8 @@
 		"showInFolder": "Hiện trong thư mục",
 		"exportFailed": "Xuất thất bại",
 		"failedToWriteFile": "Không thể ghi tệp",
-		"qualityUpscaleWarning": "Upscale"
+		"qualityUpscaleWarning": "Upscale",
+		"exportedVideoOf": "video đã xuất trong"
 	},
 	"inspector": {
 		"resetFocusPoint": "Đặt lại điểm lấy nét",
@@ -215,7 +216,9 @@
 		"captionsDescription": "Tạo phụ đề đồng bộ theo từng từ từ bản ghi lời thoại và thả vào dòng thời gian.",
 		"generateCaptions": "Tạo phụ đề",
 		"cropDescription": "Đóng khung lại bản ghi — chọn tỷ lệ khung hình và phóng to vào vùng bạn muốn giữ lại.",
-		"openCrop": "Mở cắt…"
+		"openCrop": "Mở cắt…",
+		"cameraFullscreenDescription": "Khi vùng này phát, máy quay chiếm trọn khung hình — không viền, không bo góc, không nền — rồi trở lại mượt mà ở cuối. Kéo hai mép của vùng trên dòng thời gian để thay đổi thời điểm bắt đầu và độ dài.",
+		"deleteRegion": "Xóa vùng"
 	},
 	"leftPanel": {
 		"mediaTitle": "Media",
@@ -345,5 +348,73 @@
 		"fieldY": "Y",
 		"fieldW": "R",
 		"fieldH": "C"
+	},
+	"transport": {
+		"playbackControls": "Điều khiển phát lại",
+		"playPause": "Phát / Tạm dừng",
+		"playPauseTitle": "Phát / Tạm dừng (Phím cách)",
+		"previousClip": "Clip trước",
+		"nextClip": "Clip tiếp theo",
+		"loop": "Lặp lại",
+		"seekVideo": "Tua video"
+	},
+	"shell": {
+		"aiEditor": "Trình biên tập AI",
+		"resizeChatPanel": "Đổi kích thước bảng trò chuyện",
+		"previewStage": "Khu vực xem trước",
+		"resizeTimeline": "Đổi kích thước dòng thời gian"
+	},
+	"preview": {
+		"videoPreview": "Xem trước video",
+		"webcamPreview": "Xem trước webcam (kéo để đổi vị trí)"
+	},
+	"annotationOverlay": {
+		"imageAlt": "Chú thích",
+		"noImage": "Không có hình ảnh",
+		"noArrowData": "Không có dữ liệu mũi tên"
+	},
+	"providerSettings": {
+		"title": "Cài đặt AI",
+		"subtitle": "Chọn một nhà cung cấp. Thông tin đăng nhập được lưu trong kho khóa của hệ điều hành (safeStorage).",
+		"loadFailed": "Không thể tải cài đặt AI",
+		"saved": "Đã lưu {{provider}}",
+		"connected": "Đã kết nối {{provider}}",
+		"disconnected": "Đã ngắt kết nối {{provider}}",
+		"deviceFlowFailed": "Luồng xác thực thiết bị thất bại.",
+		"pillConnected": "Đã kết nối",
+		"pillOAuth": "OAuth",
+		"pillToken": "Token",
+		"pillApiKey": "Khóa API",
+		"notConnected": "Chưa kết nối",
+		"back": "Quay lại",
+		"modelLabel": "Mô hình",
+		"modelHintLive": "Các mô hình từ tài khoản của bạn, lấy trực tiếp.",
+		"modelHintError": "Không lấy được danh sách mô hình ({{error}}); hãy nhập id mô hình thủ công.",
+		"modelHintLoading": "Đang tải danh sách mô hình…",
+		"modelSavedOption": "{{model}} (đã lưu)",
+		"loadingModels": "Đang tải mô hình…",
+		"baseUrlLabel": "URL cơ sở",
+		"baseUrlHint": "Để trống để dùng giá trị mặc định của nhà cung cấp.",
+		"reasoningEffortLabel": "Mức độ suy luận",
+		"apiKeyLabel": "Khóa API",
+		"apiKeyHintStored": "Được lưu trong safeStorage. Để trống để giữ mục hiện có.",
+		"patLabel": "Mã truy cập cá nhân GitHub",
+		"patHint": "Dán một GitHub PAT có phạm vi `copilot`.",
+		"projectEditsLabel": "Chỉnh sửa dự án",
+		"projectEditsHint": "Khi tắt, tác nhân phải hỏi trước khi thay đổi dòng thời gian. Mọi chỉnh sửa đều có thể hoàn tác.",
+		"allowAgentEdits": "Cho phép tác nhân chỉnh sửa dự án",
+		"disconnect": "Ngắt kết nối",
+		"cancel": "Hủy",
+		"save": "Lưu",
+		"saveAndUse": "Lưu và dùng",
+		"reconnect": "Kết nối lại",
+		"startLogin": "Bắt đầu đăng nhập",
+		"connect": "Kết nối",
+		"completingSignIn": "Đang hoàn tất đăng nhập…",
+		"browserLoginPending": "Đang chờ đăng nhập trên trình duyệt",
+		"deviceCodeInstructions": "Mở trang đăng nhập {{provider}} và nhập mã này. Chúng tôi sẽ hoàn tất kết nối tự động ngay khi bạn cấp quyền.",
+		"copyCode": "Sao chép mã",
+		"copied": "Đã sao chép",
+		"openLoginPage": "Mở trang đăng nhập"
 	}
 }

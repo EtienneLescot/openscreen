@@ -216,7 +216,9 @@
 		"captionsDescription": "Générer des sous-titres synchronisés aux mots à partir de la transcription et les déposer sur la timeline.",
 		"generateCaptions": "Générer les sous-titres",
 		"cropDescription": "Recadrer l'enregistrement — choisissez un format et zoomez sur la région à conserver.",
-		"openCrop": "Ouvrir le recadrage…"
+		"openCrop": "Ouvrir le recadrage…",
+		"cameraFullscreenDescription": "Pendant cette zone, la caméra occupe tout le cadre — sans bordure, sans arrondi, sans arrière-plan — puis revient en douceur à la fin. Faites glisser les bords de la zone sur la timeline pour changer son début et sa durée.",
+		"deleteRegion": "Supprimer la zone"
 	},
 	"leftPanel": {
 		"mediaTitle": "Médias",
@@ -346,5 +348,73 @@
 		"fieldY": "Y",
 		"fieldW": "L",
 		"fieldH": "H"
+	},
+	"transport": {
+		"playbackControls": "Contrôles de lecture",
+		"playPause": "Lecture / Pause",
+		"playPauseTitle": "Lecture / Pause (Espace)",
+		"previousClip": "Clip précédent",
+		"nextClip": "Clip suivant",
+		"loop": "Boucle",
+		"seekVideo": "Naviguer dans la vidéo"
+	},
+	"shell": {
+		"aiEditor": "Éditeur IA",
+		"resizeChatPanel": "Redimensionner le panneau de discussion",
+		"previewStage": "Zone d'aperçu",
+		"resizeTimeline": "Redimensionner la timeline"
+	},
+	"preview": {
+		"videoPreview": "Aperçu vidéo",
+		"webcamPreview": "Aperçu webcam (glisser pour repositionner)"
+	},
+	"annotationOverlay": {
+		"imageAlt": "Annotation",
+		"noImage": "Aucune image",
+		"noArrowData": "Aucune donnée de flèche"
+	},
+	"providerSettings": {
+		"title": "Paramètres IA",
+		"subtitle": "Choisissez un fournisseur. Les identifiants sont stockés dans le trousseau du système (safeStorage).",
+		"loadFailed": "Impossible de charger les paramètres IA",
+		"saved": "{{provider}} enregistré",
+		"connected": "{{provider}} connecté",
+		"disconnected": "{{provider}} déconnecté",
+		"deviceFlowFailed": "Échec de l'authentification par appareil.",
+		"pillConnected": "Connecté",
+		"pillOAuth": "OAuth",
+		"pillToken": "Jeton",
+		"pillApiKey": "Clé API",
+		"notConnected": "Non connecté",
+		"back": "Retour",
+		"modelLabel": "Modèle",
+		"modelHintLive": "Modèles de votre compte, récupérés en direct.",
+		"modelHintError": "Impossible de récupérer les modèles ({{error}}) ; saisissez un identifiant de modèle manuellement.",
+		"modelHintLoading": "Chargement des modèles en direct…",
+		"modelSavedOption": "{{model}} (enregistré)",
+		"loadingModels": "Chargement des modèles…",
+		"baseUrlLabel": "URL de base",
+		"baseUrlHint": "Laissez vide pour utiliser la valeur par défaut du fournisseur.",
+		"reasoningEffortLabel": "Effort de raisonnement",
+		"apiKeyLabel": "Clé API",
+		"apiKeyHintStored": "Stockée dans safeStorage. Laissez vide pour conserver l'entrée existante.",
+		"patLabel": "Jeton d'accès personnel GitHub",
+		"patHint": "Collez un PAT GitHub avec la portée `copilot`.",
+		"projectEditsLabel": "Modifications du projet",
+		"projectEditsHint": "Si désactivé, l'agent doit demander avant de modifier la timeline. Les modifications sont toujours annulables.",
+		"allowAgentEdits": "Autoriser l'agent à modifier le projet",
+		"disconnect": "Déconnecter",
+		"cancel": "Annuler",
+		"save": "Enregistrer",
+		"saveAndUse": "Enregistrer et utiliser",
+		"reconnect": "Reconnecter",
+		"startLogin": "Démarrer la connexion",
+		"connect": "Connecter",
+		"completingSignIn": "Finalisation de la connexion…",
+		"browserLoginPending": "Connexion navigateur en attente",
+		"deviceCodeInstructions": "Ouvrez la page de connexion {{provider}} et saisissez ce code. La connexion se terminera automatiquement dès que vous aurez autorisé l'accès.",
+		"copyCode": "Copier le code",
+		"copied": "Copié",
+		"openLoginPage": "Ouvrir la page de connexion"
 	}
 }
