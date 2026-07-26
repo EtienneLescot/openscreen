@@ -29,7 +29,7 @@ The current helper implementation supports display/window ScreenCaptureKit video
 
 Electron exposes `is-native-mac-capture-available` for capability probing. It resolves the same helper locations listed above and reports `missing-helper` until a Swift helper binary is present. When available, macOS recording routes screen/window capture through the native helper so editable cursor recordings do not bake the system cursor into the video. Cursor positions are sampled in Electron; when the cursor helper is available and Accessibility is granted, samples are also tagged with link/text cursor hints such as `pointer`.
 
-See `docs/engineering/macos-native-recorder-roadmap.md` for the contract, rollout phases, and SSOT rules.
+See `technical-documentation/architecture/recording.md` for the contract, rollout phases, and SSOT rules.
 
 ## Windows
 
@@ -119,5 +119,5 @@ Remove-Item Env:OPENSCREEN_WGC_TEST_MICROPHONE_DEVICE_NAME
 ## STT helper
 
 The speech-to-text helper (`whisper-stt-server`) is built separately from the
-capture helpers. See `docs/engineering/stt-spec.md` for the architecture and
+capture helpers. See `technical-documentation/architecture/transcription-and-captions.md` for the architecture and
 `scripts/build-whisper-stt.sh` for the build command.

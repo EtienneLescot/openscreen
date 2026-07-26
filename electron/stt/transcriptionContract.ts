@@ -12,7 +12,7 @@
 
 /** A word-level segment with timestamps from whisper.cpp's native DTW token
  *  timestamps (`t_dtw`, computed with the SMALL aheads preset — see
- *  docs/engineering/stt-spec.md § Decision rationale). Absolute seconds
+ *  technical-documentation/architecture/transcription-and-captions.md § Decision rationale). Absolute seconds
  *  in the source recording. */
 export interface SttWordSegment {
 	word: string;

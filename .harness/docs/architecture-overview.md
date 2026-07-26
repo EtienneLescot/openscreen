@@ -1,6 +1,6 @@
 # OpenScreen Architecture Notes
 
-Quick map of how the app fits together, for the Mavis reins. For deeper details, see `../docs/architecture/native-bridge.md` and `../docs/engineering/`.
+Quick map of how the app fits together, for the Mavis reins. For deeper details, see `../technical-documentation/architecture/native-bridge.md` and `../technical-documentation/engineering/`.
 
 ## Process layout
 
