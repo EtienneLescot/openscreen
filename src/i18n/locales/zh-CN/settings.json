@@ -182,7 +182,8 @@
 		"blurType": "模糊类型",
 		"blurTypeBlur": "高斯",
 		"blurTypeMosaic": "马赛克",
-		"mosaicBlockSize": "马赛克块大小"
+		"mosaicBlockSize": "马赛克块大小",
+		"type": "类型"
 	},
 	"fontStyles": {
 		"classic": "经典",

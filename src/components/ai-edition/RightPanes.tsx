@@ -1730,7 +1730,9 @@ export function TimelinePaneBody() {
 
 // ─── primitives ───────────────────────────────────────────────────
 
-function Toggle({
+/** La pilule on/off des panneaux — exportée pour que l'inspecteur V4 l'emploie au lieu d'une
+ *  case à cocher système, qui jurait avec tout le reste. */
+export function Toggle({
 	checked,
 	disabled,
 	onChange,
@@ -1764,6 +1766,7 @@ export function SliderCell({
 	disabled,
 	onChange,
 	onCommit,
+	showValue = true,
 }: {
 	label: string;
 	value: number;
@@ -1775,15 +1778,20 @@ export function SliderCell({
 	disabled?: boolean;
 	onChange: (next: number) => void;
 	onCommit: () => void;
+	/** À passer `false` quand le libellé porte déjà la valeur (certaines chaînes i18n
+	 *  l'interpolent), sans quoi elle s'affiche deux fois. */
+	showValue?: boolean;
 }) {
 	return (
 		<div className={styles.sliderCell}>
 			<div className="head">
 				<span className="label">{label}</span>
-				<span className="val">
-					{value.toFixed(decimals)}
-					{suffix}
-				</span>
+				{showValue ? (
+					<span className="val">
+						{value.toFixed(decimals)}
+						{suffix}
+					</span>
+				) : null}
 			</div>
 			<input
 				type="range"

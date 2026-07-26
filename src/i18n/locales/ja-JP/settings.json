@@ -182,7 +182,8 @@
 		"tipShiftTabCycle": "Shift+Tabキーを使用して逆順に切り替えます。",
 		"invalidImageType": "無効なファイル形式",
 		"imageFormatsOnly": "JPG、PNG、GIF、またはWebP画像ファイルを選択してください。",
-		"imageUploadSuccess": "画像を読み込みました。"
+		"imageUploadSuccess": "画像を読み込みました。",
+		"type": "種類"
 	},
 	"fontStyles": {
 		"classic": "クラシック",

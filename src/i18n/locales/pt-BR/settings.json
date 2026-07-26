@@ -182,7 +182,8 @@
 		"tipShiftTabCycle": "Use Shift+Tab para alternar para trás.",
 		"invalidImageType": "Tipo de imagem inválido",
 		"imageFormatsOnly": "Por favor, envie um arquivo de imagem JPG, PNG, GIF ou WebP.",
-		"imageUploadSuccess": "Imagem enviada com sucesso!"
+		"imageUploadSuccess": "Imagem enviada com sucesso!",
+		"type": "Tipo"
 	},
 	"fontStyles": {
 		"classic": "Clássico",
