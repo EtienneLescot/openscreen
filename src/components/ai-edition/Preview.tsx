@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import type { CameraFullscreenRegion, ZoomFocus } from "@/components/video-editor/types";
+import { useScopedT } from "@/contexts/I18nContext";
 import type {
 	AxcutAnnotationRegion,
 	AxcutClip,
@@ -72,6 +73,7 @@ export function Preview({
 	currentTimeSec,
 	playing,
 }: PreviewProps) {
+	const te = useScopedT("editor");
 	// ponytail: when the <video> fails to load (e.g. a truncated recording
 	// from a bad MediaRecorder capture), swap to the empty state so the user
 	// can import a different file instead of staring at a broken preview.
@@ -89,7 +91,7 @@ export function Preview({
 	return (
 		<section
 			className={styles.previewWrap}
-			aria-label="Video preview"
+			aria-label={te("preview.videoPreview")}
 			data-testid="preview"
 			data-current-time-sec={currentTimeSec.toFixed(3)}
 			data-is-playing={playing ? "true" : "false"}

@@ -204,7 +204,8 @@
 		"showInFolder": "إظهار في المجلد",
 		"exportFailed": "فشل التصدير",
 		"failedToWriteFile": "فشلت كتابة الملف",
-		"qualityUpscaleWarning": "تكبير الدقة"
+		"qualityUpscaleWarning": "تكبير الدقة",
+		"exportedVideoOf": "من الفيديو تم تصديره في"
 	},
 	"inspector": {
 		"resetFocusPoint": "إعادة تعيين نقطة التركيز",
@@ -215,7 +216,9 @@
 		"captionsDescription": "إنشاء ترجمات مؤقتة بالكلمات من النص وإسقاطها على الجدول الزمني.",
 		"generateCaptions": "إنشاء ترجمات",
 		"cropDescription": "أعد تأطير التسجيل — اختر نسبة العرض إلى الارتفاع وقم بالتكبير على المنطقة التي تريد الاحتفاظ بها.",
-		"openCrop": "فتح القص…"
+		"openCrop": "فتح القص…",
+		"cameraFullscreenDescription": "أثناء تشغيل هذه المنطقة تملأ الكاميرا الإطار بالكامل — بلا حدود ولا استدارة ولا خلفية — ثم تعود بسلاسة في النهاية. اسحب حواف المنطقة على المخطط الزمني لتغيير وقت بدايتها ومدتها.",
+		"deleteRegion": "حذف المنطقة"
 	},
 	"leftPanel": {
 		"mediaTitle": "الوسائط",
@@ -303,13 +306,9 @@
 		"create": "إنشاء المشروع",
 		"defaultTitle": "مشروع بلا عنوان",
 		"templates": {
-			"blankTitle": "مشروع فارغ",
-			"blankDesc": "جدول زمني فارغ، جاهز للاستيراد",
 			"screenRecordingTitle": "تسجيل الشاشة",
 			"screenRecordingDesc": "بدء التقاط النظام",
-			"importMediaDesc": "فيديو، صوت، صور من القرص",
-			"fromTemplateTitle": "من قالب",
-			"fromTemplateDesc": "قصة مصورة محددة مسبقًا"
+			"importMediaDesc": "فيديو، صوت، صور من القرص"
 		}
 	},
 	"openProjectDialog": {
@@ -349,5 +348,73 @@
 		"fieldY": "Y",
 		"fieldW": "W",
 		"fieldH": "H"
+	},
+	"transport": {
+		"playbackControls": "عناصر التحكم في التشغيل",
+		"playPause": "تشغيل / إيقاف مؤقت",
+		"playPauseTitle": "تشغيل / إيقاف مؤقت (مسافة)",
+		"previousClip": "المقطع السابق",
+		"nextClip": "المقطع التالي",
+		"loop": "تكرار",
+		"seekVideo": "التنقل في الفيديو"
+	},
+	"shell": {
+		"aiEditor": "محرّر الذكاء الاصطناعي",
+		"resizeChatPanel": "تغيير حجم لوحة المحادثة",
+		"previewStage": "منطقة المعاينة",
+		"resizeTimeline": "تغيير حجم المخطط الزمني"
+	},
+	"preview": {
+		"videoPreview": "معاينة الفيديو",
+		"webcamPreview": "معاينة كاميرا الويب (اسحب لتغيير الموضع)"
+	},
+	"annotationOverlay": {
+		"imageAlt": "تعليق توضيحي",
+		"noImage": "لا توجد صورة",
+		"noArrowData": "لا توجد بيانات سهم"
+	},
+	"providerSettings": {
+		"title": "إعدادات الذكاء الاصطناعي",
+		"subtitle": "اختر مزوّدًا. تُحفظ بيانات الاعتماد في سلسلة مفاتيح النظام (safeStorage).",
+		"loadFailed": "تعذّر تحميل إعدادات الذكاء الاصطناعي",
+		"saved": "تم حفظ {{provider}}",
+		"connected": "تم الاتصال بـ {{provider}}",
+		"disconnected": "تم قطع الاتصال بـ {{provider}}",
+		"deviceFlowFailed": "فشل تدفق مصادقة الجهاز.",
+		"pillConnected": "متصل",
+		"pillOAuth": "OAuth",
+		"pillToken": "رمز مميز",
+		"pillApiKey": "مفتاح API",
+		"notConnected": "غير متصل",
+		"back": "رجوع",
+		"modelLabel": "النموذج",
+		"modelHintLive": "نماذج من حسابك، تم جلبها مباشرةً.",
+		"modelHintError": "تعذّر جلب النماذج المباشرة ({{error}})؛ اكتب معرّف النموذج يدويًا.",
+		"modelHintLoading": "جارٍ تحميل النماذج المباشرة…",
+		"modelSavedOption": "{{model}} (محفوظ)",
+		"loadingModels": "جارٍ تحميل النماذج…",
+		"baseUrlLabel": "عنوان URL الأساسي",
+		"baseUrlHint": "اتركه فارغًا لاستخدام القيمة الافتراضية للمزوّد.",
+		"reasoningEffortLabel": "مستوى الاستدلال",
+		"apiKeyLabel": "مفتاح API",
+		"apiKeyHintStored": "محفوظ في safeStorage. اتركه فارغًا للاحتفاظ بالإدخال الحالي.",
+		"patLabel": "رمز وصول شخصي من GitHub",
+		"patHint": "الصق رمز PAT من GitHub بنطاق `copilot`.",
+		"projectEditsLabel": "تعديلات المشروع",
+		"projectEditsHint": "عند الإيقاف، يجب أن يستأذن الوكيل قبل تغيير المخطط الزمني. يمكن دائمًا التراجع عن التعديلات.",
+		"allowAgentEdits": "السماح للوكيل بتعديل المشروع",
+		"disconnect": "قطع الاتصال",
+		"cancel": "إلغاء",
+		"save": "حفظ",
+		"saveAndUse": "حفظ واستخدام",
+		"reconnect": "إعادة الاتصال",
+		"startLogin": "بدء تسجيل الدخول",
+		"connect": "اتصال",
+		"completingSignIn": "جارٍ إتمام تسجيل الدخول…",
+		"browserLoginPending": "في انتظار تسجيل الدخول عبر المتصفح",
+		"deviceCodeInstructions": "افتح صفحة تسجيل الدخول الخاصة بـ {{provider}} وأدخل هذا الرمز. سنُكمل الاتصال تلقائيًا بمجرد منحك الإذن.",
+		"copyCode": "نسخ الرمز",
+		"copied": "تم النسخ",
+		"openLoginPage": "فتح صفحة تسجيل الدخول"
 	}
 }

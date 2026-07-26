@@ -8,6 +8,7 @@
 
 import { type CSSProperties, type PointerEvent, useEffect, useRef, useState } from "react";
 import { Rnd } from "react-rnd";
+import { useScopedT } from "@/contexts/I18nContext";
 import {
 	getBlurOverlayColor,
 	getMosaicGridOverlayColor,
@@ -67,6 +68,7 @@ export function AnnotationOverlay({
 	videoElement,
 	currentTimeMs,
 }: AnnotationOverlayProps) {
+	const te = useScopedT("editor");
 	const committedX = (annotation.position.x / 100) * containerWidth;
 	const committedY = (annotation.position.y / 100) * containerHeight;
 	const committedWidth = (annotation.size.width / 100) * containerWidth;
@@ -325,7 +327,7 @@ export function AnnotationOverlay({
 					return (
 						<img
 							src={annotation.content}
-							alt="Annotation"
+							alt={te("annotationOverlay.imageAlt")}
 							className="w-full h-full object-contain"
 							draggable={false}
 						/>
@@ -333,7 +335,7 @@ export function AnnotationOverlay({
 				}
 				return (
 					<div className="w-full h-full flex items-center justify-center text-slate-400 text-sm">
-						No image
+						{te("annotationOverlay.noImage")}
 					</div>
 				);
 
@@ -341,7 +343,7 @@ export function AnnotationOverlay({
 				if (!annotation.figureData) {
 					return (
 						<div className="w-full h-full flex items-center justify-center text-slate-400 text-sm">
-							No arrow data
+							{te("annotationOverlay.noArrowData")}
 						</div>
 					);
 				}
