@@ -1,5 +1,6 @@
 import { getCursorSpringConfig } from "@/components/video-editor/videoPlayback/motionSmoothing";
 import type { CursorRecordingData, CursorRecordingSample } from "@/native/contracts";
+import { clamp } from "@/utils/math";
 
 /**
  * Offline cursor-path smoothing for native recordings.
@@ -29,10 +30,6 @@ interface SmoothedRun {
 	times: Float32Array;
 	xs: Float32Array;
 	ys: Float32Array;
-}
-
-function clamp(value: number, min: number, max: number) {
-	return Math.min(max, Math.max(min, value));
 }
 
 function binarySearchAtOrBefore(

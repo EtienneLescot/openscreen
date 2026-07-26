@@ -1,3 +1,4 @@
+import { clamp01 } from "@/utils/math";
 // Port of `src/lib/annotationTextAnimation.ts` — pure, no Pixi/React deps,
 // copied verbatim (only the annotation param type changed to structurally
 // match `AxcutAnnotationRegion` instead of the legacy `AnnotationRegion`).
@@ -32,17 +33,13 @@ export const TEXT_ANIMATION_VALUES: AnnotationTextAnimation[] = [
 	"pulse",
 ];
 
-function clamp(value: number, min = 0, max = 1) {
-	return Math.min(max, Math.max(min, value));
-}
-
 function easeOutCubic(value: number) {
-	const t = clamp(value);
+	const t = clamp01(value);
 	return 1 - (1 - t) ** 3;
 }
 
 function easeOutBack(value: number) {
-	const t = clamp(value);
+	const t = clamp01(value);
 	const c1 = 1.70158;
 	const c3 = c1 + 1;
 	return 1 + c3 * (t - 1) ** 3 + c1 * (t - 1) ** 2;
@@ -64,7 +61,7 @@ export function getTextAnimationState(
 	}
 
 	const elapsedMs = Math.max(0, currentTimeMs - annotation.startMs);
-	const progress = clamp(elapsedMs / TEXT_ANIMATION_DURATION_MS);
+	const progress = clamp01(elapsedMs / TEXT_ANIMATION_DURATION_MS);
 	const eased = easeOutCubic(progress);
 
 	switch (animation) {
