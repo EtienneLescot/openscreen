@@ -21,11 +21,16 @@ export {
 	getCaptionSettings,
 	patchCaptionSettings,
 } from "./settings";
-export type { CaptionTranslation, CaptionTranslations } from "./translations";
+export type {
+	CaptionTranslation,
+	CaptionTranslations,
+	CaptionTranslationUnit,
+} from "./translations";
 export {
+	captionTranslationUnits,
 	getCaptionTranslations,
 	putCaptionTranslation,
 	removeCaptionTranslation,
 	translationCoverage,
-	untranslatedSegments,
+	untranslatedUnits,
 } from "./translations";

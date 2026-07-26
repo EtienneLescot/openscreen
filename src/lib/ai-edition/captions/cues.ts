@@ -24,7 +24,7 @@ import {
 import type { CaptionSegment } from "@/lib/captioning/transcribe";
 import type { AxcutClip, AxcutDocument, AxcutTranscript } from "../schema";
 import { type CaptionSettings, captionBackgroundCss, captionBandRect } from "./settings";
-import type { CaptionTranslations } from "./translations";
+import { type CaptionTranslations, captionTranslationUnits } from "./translations";
 
 /** One on-screen caption line, in whichever time base the producer documented. */
 export interface CaptionCue {
@@ -58,16 +58,33 @@ function segmentWordsAsCaptionSegments(
 }
 
 /**
+ * Spread a piece of text across a span as one entry per word, timed by character
+ * weight. This is how translated text gets timings: a translation has its own
+ * word count and word order, so the source's per-word timestamps cannot carry
+ * over — but the span it was spoken in can, and does.
+ */
+function textAsPseudoWords(startSec: number, endSec: number, text: string): CaptionSegment[] {
+	const trimmed = text.trim();
+	if (!trimmed) return [];
+	return splitMergedCaptionsByWordBounds([{ startSec, endSec, text: trimmed }], 1, 1);
+}
+
+/**
  * One asset's caption lines in SOURCE seconds.
  *
- * Original language: grouped straight from the word timestamps, so a line
- * starts and ends on real speech.
+ * Both languages go through the SAME final step — a stream of timed single words
+ * fed to `groupTimedCaptionWordsIntoLines`. That is the whole point: line layout
+ * (words per line, breaking on real pauses) must not depend on which language is
+ * showing. Only where the words come from differs:
  *
- * Translated language: the translated text replaces the segment's text and is
- * spread across *the segment's own span* by character weight — a translation
- * has a different word count and word order, so per-word timings cannot carry
- * over, but the segment boundary can and does. Segments with no translation yet
- * fall back to their original words, so a partial translation still plays.
+ *   - original:   the transcript's own word timestamps.
+ *   - translated: each translation unit's text spread across the unit's span,
+ *                 falling back to the original words for units not translated
+ *                 yet, so a partial translation still plays.
+ *
+ * Grouping into units before translating also matters upstream: a Whisper
+ * transcript stores one segment per word, so translating per segment would have
+ * translated word by word.
  */
 export function captionLinesForAsset(
 	transcript: AxcutTranscript,
@@ -84,52 +101,42 @@ export function captionLinesForAsset(
 	const polish = (lines: CaptionSegment[]) =>
 		finalizeCaptionSegmentsForPlayback(dedupeAdjacentCaptionRepeats(lines));
 
-	if (settings.language === null) {
-		const words = toCaptionSegments(transcript);
-		if (words.length > 0) {
-			return polish(groupTimedCaptionWordsIntoLines(words, minWords, maxWords));
-		}
-		// A transcript with segments but no words (hand-authored / imported) still
-		// deserves captions — split each segment span proportionally instead.
-		return polish(
-			splitMergedCaptionsByWordBounds(
-				transcript.segments
-					.filter((s) => s.text.trim())
-					.map((s) => ({ startSec: s.startSec, endSec: s.endSec, text: s.text })),
-				minWords,
-				maxWords,
-			),
-		);
-	}
+	const stream =
+		settings.language === null
+			? originalWordStream(transcript)
+			: translatedWordStream(transcript, translations, settings.language);
 
-	const translated = translations[settings.language]?.byAsset[transcript.assetId] ?? {};
-	const out: CaptionSegment[] = [];
-	for (const segment of transcript.segments) {
-		const replacement = translated[segment.id];
+	if (stream.length === 0) return [];
+	return polish(groupTimedCaptionWordsIntoLines(stream, minWords, maxWords));
+}
+
+function originalWordStream(transcript: AxcutTranscript): CaptionSegment[] {
+	const words = toCaptionSegments(transcript);
+	if (words.length > 0) return words;
+	// A transcript with segments but no words (hand-authored / imported) still
+	// deserves captions — spread each segment's own text across its span.
+	return transcript.segments.flatMap((s) => textAsPseudoWords(s.startSec, s.endSec, s.text));
+}
+
+function translatedWordStream(
+	transcript: AxcutTranscript,
+	translations: CaptionTranslations,
+	language: string,
+): CaptionSegment[] {
+	const translated = translations[language]?.byAsset[transcript.assetId] ?? {};
+	return captionTranslationUnits(transcript).flatMap((unit) => {
+		const replacement = translated[unit.id];
 		if (typeof replacement === "string" && replacement.trim()) {
-			out.push(
-				...splitMergedCaptionsByWordBounds(
-					[{ startSec: segment.startSec, endSec: segment.endSec, text: replacement.trim() }],
-					minWords,
-					maxWords,
-				),
-			);
-			continue;
+			return textAsPseudoWords(unit.startSec, unit.endSec, replacement);
 		}
-		const words = segmentWordsAsCaptionSegments(transcript, segment.id);
-		if (words.length > 0) {
-			out.push(...groupTimedCaptionWordsIntoLines(words, minWords, maxWords));
-		} else if (segment.text.trim()) {
-			out.push(
-				...splitMergedCaptionsByWordBounds(
-					[{ startSec: segment.startSec, endSec: segment.endSec, text: segment.text }],
-					minWords,
-					maxWords,
-				),
-			);
-		}
-	}
-	return polish(out);
+		// Not translated yet — keep the original words, with their real timings.
+		const originals = unit.segmentIds.flatMap((id) =>
+			segmentWordsAsCaptionSegments(transcript, id),
+		);
+		return originals.length > 0
+			? originals
+			: textAsPseudoWords(unit.startSec, unit.endSec, unit.text);
+	});
 }
 
 /**

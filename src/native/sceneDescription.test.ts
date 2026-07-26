@@ -1420,3 +1420,71 @@ describe("buildSceneDescription.annotations", () => {
 		expect(scene.annotations).toEqual([]);
 	});
 });
+
+// --- captions --------------------------------------------------------------
+
+describe("buildSceneDescription.captions", () => {
+	function docWithCaptions(enabled: boolean) {
+		const doc = makeDoc({
+			assets: [makeAsset({ id: "a1", originalPath: "/tmp/a1.mp4", durationSec: 30 })],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a1",
+					sourceStartSec: 0,
+					sourceEndSec: 30,
+					timelineStartSec: 0,
+					timelineEndSec: 30,
+				}),
+			],
+			annotations: [],
+		});
+		return {
+			...doc,
+			transcripts: [
+				{
+					assetId: "a1",
+					language: "en",
+					segments: [
+						{
+							id: "seg_1",
+							kind: "speech" as const,
+							startSec: 1,
+							endSec: 3,
+							text: "hello there friend",
+							wordIds: ["w1", "w2", "w3"],
+						},
+					],
+					words: [
+						{ id: "w1", segmentId: "seg_1", startSec: 1, endSec: 1.6, text: "hello" },
+						{ id: "w2", segmentId: "seg_1", startSec: 1.6, endSec: 2.3, text: "there" },
+						{ id: "w3", segmentId: "seg_1", startSec: 2.3, endSec: 3, text: "friend" },
+					],
+				},
+			],
+			legacyEditor: {
+				...((doc.legacyEditor as Record<string, unknown> | null) ?? {}),
+				captions: { enabled, fontSize: 48, minWordsPerLine: 2, maxWordsPerLine: 7 },
+			},
+		} as AxcutDocument;
+	}
+
+	it("sends captions to the compositor as text annotations", () => {
+		// Without this the caption would show in the DOM overlay and be missing from the
+		// composited pixels — the preview/render gap the annotation bridge exists to close.
+		const scene = buildSceneDescription(docWithCaptions(true));
+		expect(scene.annotations).toHaveLength(1);
+		expect(scene.annotations[0]).toMatchObject({ kind: "text" });
+		expect(scene.annotations[0].text?.content).toBe("hello there friend");
+	});
+
+	it("sends nothing while the caption layer is hidden", () => {
+		expect(buildSceneDescription(docWithCaptions(false)).annotations).toHaveLength(0);
+	});
+
+	it("carries the caption font size as a fraction, like every annotation", () => {
+		const scene = buildSceneDescription(docWithCaptions(true));
+		// 48px authored against a 1080-high frame.
+		expect(scene.annotations[0].text?.fontSizeRel).toBeCloseTo(48 / 1080, 6);
+	});
+});
