@@ -21,7 +21,8 @@ export interface TextAnimationState {
 	revealProgress: number;
 }
 
-const TEXT_ANIMATION_VALUES: AnnotationTextAnimation[] = [
+/** Les sept animations, dans l'ordre où le sélecteur les propose. */
+export const TEXT_ANIMATION_VALUES: AnnotationTextAnimation[] = [
 	"none",
 	"fade",
 	"rise",

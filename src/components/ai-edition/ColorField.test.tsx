@@ -16,9 +16,9 @@ beforeAll(() => {
 	vi.stubGlobal(
 		"ResizeObserver",
 		class {
-			observe() {}
-			unobserve() {}
-			disconnect() {}
+			observe = () => undefined;
+			unobserve = () => undefined;
+			disconnect = () => undefined;
 		},
 	);
 });

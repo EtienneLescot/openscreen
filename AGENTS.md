@@ -59,6 +59,8 @@ Unit/browser tests can't exercise real capture (native screen recording, a physi
 
 **The HUD widget** (recording controller)
 
+- **It is invisible in screenshots by default.** The HUD (and the Notes window) call `setContentProtection(true)` so the recording controls never end up baked into a recording — the same `SetWindowDisplayAffinity` that WGC honours also hides them from *your* screenshots. The window is there, and clicks land, but you are aiming blind at a rectangle you cannot see. Set **`OPENSCREEN_DISABLE_CONTENT_PROTECTION=1`** in the app's environment to turn it off for a session; every skipped window logs a warning. Unset it before recording anything real, or the HUD ends up in the video.
+- The HUD is what opens the editor (clapper icon, tooltip *Open Studio*), so without that flag a whole slice of the app is unreachable from automation: killing the app to redeploy a native addon leaves you unable to reopen a project.
 - Frameless, transparent, always-on-top, `skipTaskbar`, centered at the **bottom of the primary display** (`createHudOverlayWindow`, 600×160). It is **click-through** (`setIgnoreMouseEvents(true, { forward: true })`): moving the real cursor over an interactive control makes that region clickable and shows its tooltip, so `mouse_move` → screenshot → `left_click` works; a blind click on empty HUD area passes through to the desktop.
 - Control row (left→right): layout preset, **source** button (`Screen`/`Window` → label becomes the picked source), system-audio toggle, mic toggle, **webcam toggle** (shows the detected camera name), cursor-highlight toggle, **record**, notes, open-editor, language, minimize, close. The record button is disabled until a source is chosen (tooltip: "Please select a source to record").
 
@@ -74,6 +76,11 @@ Unit/browser tests can't exercise real capture (native screen recording, a physi
 3. Stop via the HUD's red button (or tray → *Stop Recording*). The **editor window opens** with the screen recording and the webcam PiP.
 4. Exercise the feature in the editor (e.g. Full Camera: press **C** to add a segment on the timeline, scrub to see the webcam grow to fullscreen and ease back; **Ctrl+Z** / **Ctrl+Shift+Z** undo/redo).
 5. Capture a screenshot as proof. Clean up: stop `npm run dev`, remove temporary worktree junctions/lock.
+
+**Judging the rendered picture**
+
+- A preview screenshot is a **downscaled** view of the compositor's output (a 1920-wide render shown in a ~600px pane, then downscaled again by the screenshot). Fine detail — a corner radius, a 1° edge slope, a soft shadow — does not survive that, and squinting at it produces confident wrong conclusions. To decide anything about pixels, **export and measure**: `Export → MP4 1080p`, then `ffmpeg -ss <t> -i out.mp4 -frames:v 1 -c:v ppm frame.ppm` and walk the raw bytes (a P6 PPM is a 15-line parser) for the exact edges. That is what settled a "the tilt is truncated" report: measured right edge 1539 px against a computed corner at 1540 — no clipping at all, the real defect was elsewhere.
+- ffmpeg lives at `poc-d3d/thirdparty/ffmpeg-*/bin/ffmpeg.exe` (also needed on `PATH` for the compositor addon to load).
 
 ## PR & commit conventions
 

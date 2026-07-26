@@ -6,7 +6,12 @@
 // crop / settings mapping / output dims).
 
 import { describe, expect, it } from "vitest";
-import { DEFAULT_CROP_REGION } from "@/components/video-editor/types";
+import {
+	DEFAULT_CROP_REGION,
+	getZoomScale,
+	ZOOM_DEPTH_SCALES,
+} from "@/components/video-editor/types";
+import { getFocusBoundsForScale } from "@/components/video-editor/videoPlayback/focusUtils";
 import type {
 	AxcutAsset,
 	AxcutClip,
@@ -350,18 +355,48 @@ describe("buildSceneDescription.clips", () => {
 // --- zoomRegions -----------------------------------------------------------
 
 describe("buildSceneDescription.zoomRegions", () => {
-	it("depth 1 → scale 1.0", () => {
+	// Ces deux tests attendaient `depth / 2 + 0.5` — la formule qui vivait dans
+	// `sceneDescription`, à côté de la table que le reste de l'app utilise. Ils verrouillaient donc
+	// le bug : le focus était borné avec la table et la fenêtre source découpée avec la formule.
+	it("depth 1 → the table's scale, not a formula", () => {
 		const z = makeZoom({ id: "z", startMs: 0, endMs: 1000, depth: 1, focus: { cx: 0.5, cy: 0.5 } });
 		const doc = makeDoc({ zoomRanges: [z] });
 		const { zoomRegions } = buildSceneDescription(doc);
-		expect(zoomRegions[0].scale).toBe(1.0);
+		expect(zoomRegions[0].scale).toBe(ZOOM_DEPTH_SCALES[1]);
+		expect(zoomRegions[0].scale).toBe(1.25);
 	});
 
-	it("depth 6 → scale 3.5", () => {
+	it("depth 6 → the table's scale", () => {
 		const z = makeZoom({ id: "z", startMs: 0, endMs: 1000, depth: 6, focus: { cx: 0.5, cy: 0.5 } });
 		const doc = makeDoc({ zoomRanges: [z] });
 		const { zoomRegions } = buildSceneDescription(doc);
-		expect(zoomRegions[0].scale).toBe(3.5);
+		expect(zoomRegions[0].scale).toBe(ZOOM_DEPTH_SCALES[6]);
+		expect(zoomRegions[0].scale).toBe(5.0);
+	});
+
+	// L'invariant qui compte, et que personne ne vérifiait : le compositeur doit recevoir
+	// EXACTEMENT l'échelle avec laquelle l'interface borne le point de focus. Sinon la fenêtre
+	// source ne peut plus atteindre le bord de l'enregistrement — gimbal poussé à fond dans le
+	// coin, 53 px sur 1920 restaient hors d'atteinte à la profondeur 3.
+	it("sends the very scale the focus bounds are computed from, at every depth", () => {
+		for (const depth of [1, 2, 3, 4, 5, 6] as const) {
+			const z = makeZoom({
+				id: "z",
+				startMs: 0,
+				endMs: 1000,
+				depth,
+				focus: { cx: 0.5, cy: 0.5 },
+			});
+			const { zoomRegions } = buildSceneDescription(makeDoc({ zoomRanges: [z] }));
+			const uiScale = getZoomScale({ depth });
+			expect(zoomRegions[0].scale).toBe(uiScale);
+			// Et la conséquence géométrique : au bord du domaine de focus, la fenêtre source touche
+			// bien le bord de la source (à la précision flottante près).
+			const bounds = getFocusBoundsForScale(uiScale);
+			const halfWindow = 1 / (2 * zoomRegions[0].scale);
+			expect(bounds.minX - halfWindow).toBeCloseTo(0, 10);
+			expect(bounds.minY - halfWindow).toBeCloseTo(0, 10);
+		}
 	});
 
 	it("customScale overrides the depth-derived value", () => {
@@ -472,7 +507,9 @@ describe("buildSceneDescription.zoomRegions with an earlier trim", () => {
 				id: "z",
 				startSec: 6,
 				endSec: 8,
-				scale: 2,
+				// profondeur 3 = 1.8 dans `ZOOM_DEPTH_SCALES` ; ce test portait sur la ventilation
+				// du zoom après un trim, pas sur l'échelle, mais il en fixait la valeur au passage.
+				scale: ZOOM_DEPTH_SCALES[3],
 				focusX: 0.5,
 				focusY: 0.5,
 				focusMode: null,
