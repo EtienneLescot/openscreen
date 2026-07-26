@@ -78,6 +78,33 @@ float sd_round_rect(float2 p, float2 halfsz, float r)
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
+// Intersection de deux droites données par (normale, offset) : n·x = d. Cramer.
+float2 line_cross(float2 n1, float d1, float2 n2, float d2)
+{
+    float det = n1.x * n2.y - n1.y * n2.x;
+    if (abs(det) < 1e-6) return float2(0.0, 0.0); // arêtes parallèles : quad dégénéré
+    return float2(d1 * n2.y - d2 * n1.y, d2 * n1.x - d1 * n2.x) / det;
+}
+
+// Distance signée EXACTE à un quadrilatère convexe (<0 dedans). Le max des demi-plans suffit près
+// des arêtes mais donne un coin en pointe ; ici on veut aussi la distance juste au coin, puisque
+// c'est elle qui devient l'arrondi une fois le rayon retranché.
+float sd_convex_quad(float2 p, float2 v0, float2 v1, float2 v2, float2 v3)
+{
+    float2 v[5] = { v0, v1, v2, v3, v0 };
+    float inside = -1e9;
+    float border = 1e9;
+    [unroll] for (int k = 0; k < 4; k++)
+    {
+        float2 a = v[k];
+        float2 e = v[k + 1] - a;
+        float2 n = float2(e.y, -e.x) / max(length(e), 1e-6);
+        inside = max(inside, dot(p - a, n));
+        border = min(border, sd_segment(p, a, v[k + 1]));
+    }
+    return (inside < 0.0) ? -border : border;
+}
+
 // (s, t, ok) du warp inverse du mode 8 pour une racine `t` donnée : `ok` = 1 quand le couple
 // tombe dans le quad projeté (même marge 0.02 qu'ailleurs). Les deux racines doivent être
 // essayées — trancher sur `t` seul retient parfois celle dont le `s` sort du quad, et le pixel
@@ -112,22 +139,26 @@ float4 ps_main(VSOut i) : SV_Target
     // mb.y = étalement de la pénombre en px.
     if (mode > 11.5)
     {
-        float2 c0 = fx.xy, c1 = fx.zw, c2 = src_prev.xy, c3 = src_prev.zw;
-        float2 quad[5] = { c0, c1, c2, c3, c0 };
-        // Distance signée au quadrilatère CONVEXE : le max des demi-plans sortants. Exacte hors
-        // des coins, et la pénombre couvre largement l'écart — inutile de payer une SDF de
-        // polygone complète pour une ombre floue.
-        float d = -1e9;
+        float2 quad[5] = { fx.xy, fx.zw, src_prev.xy, src_prev.zw, fx.xy };
+        // Coins arrondis du même rayon que le plan (`radius_px`). Une ombre à coins vifs derrière
+        // un écran aux coins arrondis dépasse en pointe à chaque coin — visible, et d'autant plus
+        // que le rayon monte. On rentre donc chaque arête de `r`, et retrancher `r` à la distance
+        // du quadrilatère ainsi obtenu redonne un arrondi exactement tangent aux deux arêtes.
+        float r = max(radius_px, 0.0);
+        float2 v[4];
         [unroll] for (int k = 0; k < 4; k++)
         {
-            float2 a = quad[k];
-            float2 ed = quad[k + 1] - a;
-            // TL→TR→BR→BL tourne dans le sens horaire en y-bas, donc (ed.y, -ed.x) sort du quad.
-            // `max` sur la longueur plutôt que `normalize` : une arête dégénérée donnerait un NaN
-            // qui contaminerait le `max` et effacerait l'ombre entière.
-            float2 n = float2(ed.y, -ed.x) / max(length(ed), 1e-6);
-            d = max(d, dot(i.local - a, n));
+            // TL→TR→BR→BL tourne dans le sens horaire en y-bas, donc (e.y, -e.x) sort du quad.
+            // Division par la longueur plutôt que `normalize` : une arête dégénérée donnerait un
+            // NaN qui effacerait l'ombre entière.
+            float2 ep = quad[k] - quad[(k + 3) & 3];       // arête précédente
+            float2 ec = quad[k + 1] - quad[k];             // arête courante
+            float2 np = float2(ep.y, -ep.x) / max(length(ep), 1e-6);
+            float2 nc = float2(ec.y, -ec.x) / max(length(ec), 1e-6);
+            // Chaque arête rentrée de r : n·x = n·a - r. Leur intersection est le coin rentré.
+            v[k] = line_cross(np, dot(quad[(k + 3) & 3], np) - r, nc, dot(quad[k], nc) - r);
         }
+        float d = sd_convex_quad(i.local, v[0], v[1], v[2], v[3]) - r;
         float spread = max(mb.y, 1e-3);
         float a = color.a * (1.0 - smoothstep(0.0, spread, d));
         return float4(color.rgb * a, a);

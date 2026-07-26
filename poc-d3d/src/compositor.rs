@@ -1369,10 +1369,15 @@ impl Compositor {
     /// Ombre d'un écran incliné en 3D : la pénombre suit le QUADRILATÈRE projeté (mode 12), pas
     /// son rect englobant. `corners` sont les 4 coins (TL, TR, BR, BL) en px relatifs au centre,
     /// tels que `rotated_quad_corners_px` les rend ; `center_px` est ce centre à l'écran.
+    ///
+    /// `radius` est le rayon des coins du PLAN, réutilisé tel quel : la projection l'étire de
+    /// ±10 % selon l'endroit du bord, écart invisible sur une ombre floue, alors qu'une ombre à
+    /// coins vifs derrière un écran arrondi dépasse en pointe et se voit tout de suite.
     pub unsafe fn draw_quad_shadow(
         &self,
         corners: &[(f32, f32); 4],
         center_px: [f32; 2],
+        radius: f32,
         spread: f32,
         offset_px: [f32; 2],
         opacity: f32,
@@ -1401,6 +1406,7 @@ impl Compositor {
                 box_h / self.rh(),
             ],
             quad_px: [box_w, box_h],
+            radius_px: radius,
             mode: 12.0,
             color: [0.0, 0.0, 0.0, opacity],
             fx: [tl0, tl1, tr0, tr1],
@@ -1877,9 +1883,15 @@ impl Compositor {
             let opacity = 0.45 * lp.shadow_scale;
             match tilt.as_ref() {
                 None => self.draw_shadow(s_dst, s_px, s_radius, spread, offset, opacity),
-                Some(quad) => {
-                    self.draw_quad_shadow(&quad.corners, quad_center_px, spread, offset, opacity)
-                }
+                Some(quad) => self.draw_quad_shadow(
+                    &quad.corners,
+                    quad_center_px,
+                    // Même rayon que le plan incliné lui-même (cf. le dessin du mode 8).
+                    s_radius * quad.scale,
+                    spread,
+                    offset,
+                    opacity,
+                ),
             }
         }
         if crate::regions::is_identity_rotation(zoom_rotation) {
