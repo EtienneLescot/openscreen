@@ -1,6 +1,4 @@
-export function clamp01(value: number) {
-	return Math.max(0, Math.min(1, value));
-}
+import { clamp01 } from "@/utils/math";
 
 function sampleCubicBezier(a1: number, a2: number, t: number) {
 	const oneMinusT = 1 - t;
@@ -49,30 +47,8 @@ export function cubicBezier(x1: number, y1: number, x2: number, y2: number, t: n
 	return sampleCubicBezier(y1, y2, solvedT);
 }
 
-export function easeOutExpo(t: number) {
-	const clamped = clamp01(t);
-	if (clamped === 1) {
-		return 1;
-	}
-
-	return 1 - Math.pow(2, -7 * clamped);
-}
-
 export function easeOutScreenStudio(t: number) {
 	return cubicBezier(0.16, 1, 0.3, 1, t);
-}
-
-export function smoothStep(t: number) {
-	const clamped = clamp01(t);
-	return clamped * clamped * (3 - 2 * clamped);
-}
-
-/**
- * Ease-in-out cubic. Used for zoom-in transitions.
- */
-export function easeInOutCubic(t: number) {
-	const x = clamp01(t);
-	return x < 0.5 ? 4 * x * x * x : 1 - Math.pow(-2 * x + 2, 3) / 2;
 }
 
 /**

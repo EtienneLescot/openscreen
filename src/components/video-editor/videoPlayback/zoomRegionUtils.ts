@@ -1,9 +1,10 @@
+import { clamp01 } from "@/utils/math";
 import type { CursorTelemetryPoint, Rotation3D, ZoomFocus, ZoomRegion } from "../types";
 import { DEFAULT_ROTATION_3D, getRotation3D, getZoomScale, lerpRotation3D } from "../types";
 import { TRANSITION_WINDOW_MS, ZOOM_IN_TRANSITION_WINDOW_MS } from "./constants";
 import { interpolateCursorAt } from "./cursorFollowUtils";
 import { clampFocusToScale } from "./focusUtils";
-import { clamp01, cubicBezier, easeOutScreenStudio } from "./mathUtils";
+import { cubicBezier, easeOutScreenStudio } from "./mathUtils";
 
 const CHAINED_ZOOM_PAN_GAP_MS = 1500;
 const CONNECTED_ZOOM_PAN_DURATION_MS = 1000;

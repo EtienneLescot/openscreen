@@ -1,4 +1,5 @@
 import type { GradientEditorState } from "@/components/ui/gradient-editor";
+import { clamp } from "@/utils/math";
 
 /* ---------- editor state -> CSS background ----------
    The editor produces a clean 3-stop LINEAR gradient - the same shape
@@ -34,8 +35,4 @@ function applyBrightness(color: string, brightness: number): string {
 function baseForBrightness(brightness: number): string {
 	const l = Math.round((brightness / 100) * 18);
 	return `hsl(0, 0%, ${clamp(l, 0, 22)}%)`;
-}
-
-function clamp(v: number, min: number, max: number): number {
-	return Math.min(max, Math.max(min, v));
 }

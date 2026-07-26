@@ -7,6 +7,7 @@ import {
 	resetSpringState,
 	stepSpringValue,
 } from "@/components/video-editor/videoPlayback/motionSmoothing";
+import { clamp } from "@/utils/math";
 import { UPLOADED_CURSOR_SAMPLE_SIZE, uploadedCursorAssets } from "./uploadedCursorAssets";
 
 type CursorAssetKey = NonNullable<CursorTelemetryPoint["cursorType"]>;
@@ -101,10 +102,6 @@ function loadImage(dataUrl: string) {
 			reject(new Error(`Failed to load cursor image: ${dataUrl.slice(0, 128)}`));
 		image.src = dataUrl;
 	});
-}
-
-function clamp(value: number, min: number, max: number) {
-	return Math.min(max, Math.max(min, value));
 }
 
 function getNormalizedAnchor(

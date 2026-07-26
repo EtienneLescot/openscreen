@@ -1,5 +1,6 @@
 import { type Rectangle, screen } from "electron";
 import type { CursorRecordingData, CursorRecordingSample } from "../../../../src/native/contracts";
+import { clamp } from "../../../../src/utils/math";
 import type { CursorRecordingSession } from "./session";
 
 interface TelemetryRecordingSessionOptions {
@@ -7,10 +8,6 @@ interface TelemetryRecordingSessionOptions {
 	maxSamples: number;
 	sampleIntervalMs: number;
 	startTimeMs?: number;
-}
-
-function clamp(value: number, min: number, max: number) {
-	return Math.min(max, Math.max(min, value));
 }
 
 export class TelemetryRecordingSession implements CursorRecordingSession {
