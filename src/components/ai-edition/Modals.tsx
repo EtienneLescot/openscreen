@@ -24,7 +24,7 @@ import type { CropRegion } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import { toAxcutTranscriptDsl } from "@/lib/ai-edition/document/transcribe";
 import type { AxcutClip, AxcutTranscript } from "@/lib/ai-edition/schema";
-import { formatSeconds } from "@/lib/ai-edition/timeline/virtual-preview";
+import { formatSec, formatSeconds } from "@/lib/ai-edition/timeline/format";
 import styles from "./NewEditorShell.module.css";
 import type { VideoSource } from "./VirtualPreview";
 
@@ -60,13 +60,6 @@ const LANGUAGE_LABELS: Record<TranscriptLanguage, string> = {
 	ko: "KO",
 	zh: "ZH",
 };
-
-function formatTc(sec: number): string {
-	if (!Number.isFinite(sec) || sec < 0) return "0:00.0";
-	const m = Math.floor(sec / 60);
-	const s = sec - m * 60;
-	return `${m}:${s.toFixed(1).padStart(4, "0")}`;
-}
 
 interface BaseModalProps {
 	open: boolean;
@@ -1692,9 +1685,9 @@ export function SourceTranscriptModal({
 								gap: 4,
 							}}
 						>
-							<strong>{formatTc(playTime)}</strong>
+							<strong>{formatSec(playTime)}</strong>
 							<i style={{ fontStyle: "normal", opacity: 0.55, margin: "0 2px" }}>/</i>
-							<span style={{ opacity: 0.8 }}>{duration ? formatTc(duration) : tcFormatted}</span>
+							<span style={{ opacity: 0.8 }}>{duration ? formatSec(duration) : tcFormatted}</span>
 						</span>
 						{isTranscribing ? (
 							<span

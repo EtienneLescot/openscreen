@@ -36,6 +36,7 @@ import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { formatSec } from "@/lib/ai-edition/timeline/format";
 import { ventilateSpanAcrossClips } from "@/lib/ai-edition/timeline/region-ventilation";
 import { coalesceRegionsForRuler } from "@/lib/ai-edition/timeline/timelineMap";
 import {
@@ -64,13 +65,6 @@ type TimelineApi = ReturnType<typeof useTimeline>;
 const ASSET_MIME = "application/x-axcut-asset";
 
 type ToolId = "cut" | "comment" | "speed";
-
-function fmt(sec: number): string {
-	if (!Number.isFinite(sec) || sec < 0) sec = 0;
-	const m = Math.floor(sec / 60);
-	const s = (sec % 60).toFixed(1);
-	return `${m}:${s.padStart(4, "0")}`;
-}
 
 // Ruler tick labels sit on whole-second "nice" steps, so tenths are always
 // ".0" noise — show clean M:SS (H:MM:SS past an hour) instead.
@@ -365,7 +359,7 @@ export function V4Timeline({
 		kind: "trim",
 		start: g.start,
 		end: g.end,
-		label: fmt(g.end - g.start),
+		label: formatSec(g.end - g.start),
 		sourceIds: g.ids,
 	}));
 

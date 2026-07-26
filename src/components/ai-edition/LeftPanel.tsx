@@ -14,6 +14,7 @@ import type {
 	AiEditionToolCallSummary,
 	AxcutTimelineOperation,
 } from "@/native/contracts";
+import { formatBytes } from "@/utils/formatBytes";
 import {
 	getReasoningEffortLabel,
 	getReasoningEffortOptions,
@@ -35,14 +36,6 @@ function formatTimecode(sec: number | undefined): string {
 	const m = Math.floor((sec % 3600) / 60);
 	const s = (sec % 60).toFixed(1);
 	return `${h}:${m.toString().padStart(2, "0")}:${s.padStart(3, "0")}`;
-}
-
-function formatSize(bytes: number | undefined): string {
-	if (!bytes || !Number.isFinite(bytes)) return "—";
-	if (bytes < 1024) return `${bytes} B`;
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-	if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
-	return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
 function basename(path: string): string {
@@ -81,7 +74,7 @@ function MediaList({
 			{assets.map((asset, i) => {
 				const label = asset.label || basename(asset.originalPath);
 				const tc = formatTimecode(asset.durationSec);
-				const size = formatSize(asset.sizeBytes);
+				const size = formatBytes(asset.sizeBytes);
 				const palette = THUMB_PALETTE[i % THUMB_PALETTE.length];
 				const isReady = transcriptReadyIds?.has(asset.id);
 				const status = isReady ? "complete" : (assetStatuses?.[asset.id] ?? "idle");
