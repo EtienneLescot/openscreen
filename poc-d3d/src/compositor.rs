@@ -1864,7 +1864,7 @@ impl Compositor {
         // Géométrie du tilt, calculée UNE fois : l'ombre et l'écran doivent porter exactement le
         // même quadrilatère. Deux calculs séparés, c'est une ombre qui se décolle dès qu'un des
         // deux change.
-        let tilt_corners = (!crate::regions::is_identity_rotation(zoom_rotation))
+        let tilt = (!crate::regions::is_identity_rotation(zoom_rotation))
             .then(|| crate::regions::rotated_quad_corners_px(s_px[0], s_px[1], zoom_rotation));
         let quad_center_px =
             [(s_dst[0] + s_dst[2] * 0.5) * self.rw(), (s_dst[1] + s_dst[3] * 0.5) * self.rh()];
@@ -1875,10 +1875,10 @@ impl Compositor {
             let spread = SCREEN_SHADOW_SPREAD_FRAC * frame_min_px;
             let offset = [0.0, SCREEN_SHADOW_OFFSET_FRAC * frame_min_px];
             let opacity = 0.45 * lp.shadow_scale;
-            match tilt_corners {
+            match tilt.as_ref() {
                 None => self.draw_shadow(s_dst, s_px, s_radius, spread, offset, opacity),
-                Some(corners) => {
-                    self.draw_quad_shadow(&corners, quad_center_px, spread, offset, opacity)
+                Some(quad) => {
+                    self.draw_quad_shadow(&quad.corners, quad_center_px, spread, offset, opacity)
                 }
             }
         }
@@ -1901,11 +1901,19 @@ impl Compositor {
             );
         } else {
             // Tilt 3D (zoom "rotation" iso/left/right) : warp bilinéaire inverse (mode 8, voir
-            // shaders.hlsl) — pas de motion blur ni de coins arrondis dans ce chemin (le tilt
-            // est un effet ponctuel bref, cette simplification ne se voit pas).
-            let corners = tilt_corners.unwrap_or_else(|| {
+            // shaders.hlsl). Pas de motion blur dans ce chemin — le tilt est un effet bref, la
+            // simplification ne se voit pas. Les coins arrondis, eux, se voyaient : sans eux le
+            // plan a des arêtes de couteau qui tranchent le contenu en pleine phrase, et l'œil lit
+            // une découpe (« un overflow hidden qui tronque l'enregistrement ») là où il devrait
+            // lire une inclinaison. Ils sont donc rendus, dans le repère DU PLAN.
+            let quad = tilt.unwrap_or_else(|| {
                 crate::regions::rotated_quad_corners_px(s_px[0], s_px[1], zoom_rotation)
             });
+            let corners = quad.corners;
+            // Taille du plan dans son propre repère, avant projection : c'est là que vit le rayon,
+            // pour qu'il reste un rayon constant le long du bord et non un arrondi qui s'étire avec
+            // la perspective.
+            let plane_px = [s_px[0] * quad.scale, s_px[1] * quad.scale];
             let (cx_px, cy_px) = (quad_center_px[0], quad_center_px[1]);
             let (min_x, max_x) = corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| {
                 (mn.min(x), mx.max(x))
@@ -1932,9 +1940,13 @@ impl Compositor {
                     dst: bbox_dst,
                     src: [su0, sv0, su0 + 2.0 * hu, sv0 + 2.0 * hv],
                     quad_px: [bbox_w, bbox_h],
+                    // Le rayon suit la réduction du plan : l'écran incliné est plus petit, ses
+                    // coins le sont d'autant, exactement comme s'il s'éloignait.
+                    radius_px: s_radius * quad.scale,
                     mode: 8.0,
                     fx: [tl0, tl1, tr0, tr1],
                     src_prev: [br0, br1, bl0, bl1],
+                    dst_prev: [plane_px[0], plane_px[1], 0.0, 0.0],
                     ..Default::default()
                 },
                 &sy,

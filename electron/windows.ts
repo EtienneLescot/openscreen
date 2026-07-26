@@ -9,6 +9,28 @@ const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
 const RENDERER_DIST = path.join(APP_ROOT, "dist");
 const HEADLESS = process.env["HEADLESS"] === "true";
 
+// The HUD and Notes windows are excluded from every screen/window capture (WGC on Windows uses
+// the same SetWindowDisplayAffinity this sets), so the recording controls never end up baked into
+// the recorded video.
+//
+// The side effect is that they are equally invisible to an *agent's* screenshots, and the HUD is
+// what opens the editor — which makes a whole slice of the app unreachable from automation. Hence
+// this escape hatch, for testing only. It warns on every window it skips, because a recording made
+// while it is set WILL contain the HUD.
+const CONTENT_PROTECTION_DISABLED = process.env["OPENSCREEN_DISABLE_CONTENT_PROTECTION"] === "1";
+
+function applyContentProtection(win: BrowserWindow, label: string) {
+	if (CONTENT_PROTECTION_DISABLED) {
+		console.warn(
+			`[content-protection] OFF for the ${label} window ` +
+				"(OPENSCREEN_DISABLE_CONTENT_PROTECTION=1) — it will appear in screen captures, " +
+				"including recordings. Unset it for anything but automated testing.",
+		);
+		return;
+	}
+	win.setContentProtection(true);
+}
+
 // Asset base URL for renderer (wallpapers, etc.). Packaged: extraResources copies
 // public/wallpapers to resources/wallpapers. Unpackaged: <appRoot>/public/.
 const ASSET_BASE_DIR = process.defaultApp
@@ -187,10 +209,8 @@ export function createHudOverlayWindow(): BrowserWindow {
 	});
 	win.setIgnoreMouseEvents(true, { forward: true });
 
-	// Exclude the HUD from any screen/window capture (WGC on Windows uses the same
-	// SetWindowDisplayAffinity affinity this sets) so the recording controls never
-	// end up baked into the recorded video, same as the notes window below.
-	win.setContentProtection(true);
+	// Keep the recording controls out of the recording (see applyContentProtection).
+	applyContentProtection(win, "HUD");
 
 	// Follow the user across macOS Spaces, else the HUD stays pinned to the Space
 	// it was first opened on.
@@ -201,7 +221,7 @@ export function createHudOverlayWindow(): BrowserWindow {
 	// Show only once painted to avoid the black rectangle flash when a transparent
 	// window is shown before its first paint.
 	win.once("ready-to-show", () => {
-		win.setContentProtection(true);
+		applyContentProtection(win, "HUD");
 		if (!HEADLESS) win.show();
 	});
 
@@ -428,9 +448,9 @@ export function createNotesWindow(): BrowserWindow {
 		win.setAutoHideMenuBar(true);
 	}
 
-	win.setContentProtection(true);
+	applyContentProtection(win, "Notes");
 	win.once("ready-to-show", () => {
-		win.setContentProtection(true);
+		applyContentProtection(win, "Notes");
 		win.show();
 	});
 

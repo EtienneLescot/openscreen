@@ -211,11 +211,27 @@ fn ease_connected_pan(t: f32) -> f32 {
 }
 
 /// Port de `getRotation3D`/`ROTATION_3D_PRESETS` (TS, `types.ts`) — degrés (rotationX, Y, Z).
+/// Angles des présets, en degrés X/Y/Z.
+///
+/// Les valeurs d'origine (iso [-10,-16,0], left [0,-22,0], right [0,22,0]) produisaient un quad
+/// dont AU MOINS UNE ARÊTE tombait à moins de 0.1° d'un axe de l'image : les deux bords verticaux
+/// pour left/right (une rotation Y pure laisse les verticales verticales — c'est de la géométrie,
+/// pas un réglage), le bord haut pour iso, dont la remontée due au rotateX était annulée par la
+/// division perspective à cette distance-là.
+///
+/// Une arête parfaitement verticale qui traverse du texte est indiscernable d'un `overflow:
+/// hidden`. C'est ce qui a été rapporté trois fois comme « une troncature de l'enregistrement »,
+/// alors que le plan était rendu en entier — mesuré au pixel sur un export 1920×1080 : bord droit
+/// à 1539, coin calculé à 1540, arrondis présents aux quatre coins.
+///
+/// Chaque préset a donc maintenant ses trois composantes, choisies pour qu'aucune arête ne
+/// s'approche d'un axe à moins de 2° (cf. `no_preset_has_an_axis_aligned_edge`) tout en gardant
+/// l'identité du préset : left penche vers la gauche, right vers la droite, iso est le plus incliné.
 fn rotation3d_for(rotation: &Option<String>) -> [f32; 3] {
     match rotation.as_deref() {
-        Some("iso") => [-10.0, -16.0, 0.0],
-        Some("left") => [0.0, -22.0, 0.0],
-        Some("right") => [0.0, 22.0, 0.0],
+        Some("iso") => [-12.0, -18.0, -2.0],
+        Some("left") => [-8.0, -16.0, -1.0],
+        Some("right") => [-8.0, 16.0, 1.0],
         _ => [0.0, 0.0, 0.0],
     }
 }
@@ -503,12 +519,26 @@ fn projected_extents(corners: &[(f32, f32); 4]) -> (f32, f32) {
     corners.iter().fold((0.0f32, 0.0f32), |(mx, my), &(x, y)| (mx.max(x.abs()), my.max(y.abs())))
 }
 
+/// Un écran incliné : ses 4 coins projetés, et la réduction qu'il a fallu pour qu'ils tiennent.
+pub struct TiltedQuad {
+    /// Coins TL, TR, BR, BL en px relatifs au CENTRE du rect d'origine.
+    pub corners: [(f32, f32); 4],
+    /// Facteur de containment. Le plan mesure donc `taille_du_rect × scale` dans son PROPRE repère,
+    /// avant projection — ce qu'il faut connaître pour y poser un rayon de coin à la bonne échelle.
+    pub scale: f32,
+}
+
 /// Les 4 coins (TL, TR, BR, BL) du quad tilté en 3D, en px relatifs au CENTRE du rect d'origine
 /// (0,0 = centre — l'appelant les recentre sur le centre réel à l'écran). `width`/`height` en
 /// px = la taille du rect d'origine, aussi utilisée comme référence de perspective (comme le
 /// web : la perspective/le containScale sont calculés sur la taille de l'élément lui-même).
-pub fn rotated_quad_corners_px(width: f32, height: f32, rot: [f32; 3]) -> [(f32, f32); 4] {
-    const PERSPECTIVE_FACTOR: f32 = 2.6; // ROTATION_3D_PERSPECTIVE_FACTOR (TS)
+pub fn rotated_quad_corners_px(width: f32, height: f32, rot: [f32; 3]) -> TiltedQuad {
+    // ROTATION_3D_PERSPECTIVE_FACTOR (TS) — à garder synchronisé avec `types.ts`, que la passe 3D
+    // de l'exporteur canvas lit encore. Distance de fuite = facteur × min(w,h) : plus le facteur
+    // est grand, plus la caméra est loin et plus la convergence des arêtes s'aplatit. À 2.6 elle
+    // était si faible que l'inclinaison ne se lisait plus (le bord haut d'iso ressortait à 0.08° de
+    // l'horizontale).
+    const PERSPECTIVE_FACTOR: f32 = 1.6;
     let perspective = width.min(height) * PERSPECTIVE_FACTOR;
     let (half_w, half_h) = (width * 0.5, height * 0.5);
 
@@ -526,7 +556,17 @@ pub fn rotated_quad_corners_px(width: f32, height: f32, rot: [f32; 3]) -> [(f32,
         Some(c) => c,
         // Un coin derrière le plan de fuite : on rend le quad non tourné plutôt qu'une projection
         // absurde (même repli qu'avant).
-        None => return [(-half_w, -half_h), (half_w, -half_h), (half_w, half_h), (-half_w, half_h)],
+        None => {
+            return TiltedQuad {
+                corners: [
+                    (-half_w, -half_h),
+                    (half_w, -half_h),
+                    (half_w, half_h),
+                    (-half_w, half_h),
+                ],
+                scale: 1.0,
+            };
+        }
     };
     for _ in 0..8 {
         let (max_x, max_y) = projected_extents(&corners);
@@ -545,7 +585,7 @@ pub fn rotated_quad_corners_px(width: f32, height: f32, rot: [f32; 3]) -> [(f32,
             None => break,
         }
     }
-    corners
+    TiltedQuad { corners, scale }
 }
 
 #[cfg(test)]
@@ -744,7 +784,7 @@ mod tilt_tests {
         ] {
             // Plusieurs formes de boîte : le débordement dépend du ratio.
             for (w, h) in [(1920.0f32, 1080.0f32), (1080.0, 1920.0), (800.0, 800.0)] {
-                let corners = rotated_quad_corners_px(w, h, rot);
+                let corners = rotated_quad_corners_px(w, h, rot).corners;
                 let (max_x, max_y) = projected_extents(&corners);
                 // Tolérance d'un demi-pixel : l'itération s'arrête à 0.1 % près.
                 assert!(
@@ -757,10 +797,39 @@ mod tilt_tests {
         }
     }
 
+    /// Aucune arête d'un préset ne doit longer un axe de l'image. C'est LE critère qui distingue
+    /// « un écran incliné » d'« un enregistrement tronqué » : un bord parfaitement vertical qui
+    /// coupe une phrase se lit comme un `overflow: hidden`, quelle que soit la justesse du reste.
+    #[test]
+    fn no_preset_has_an_axis_aligned_edge() {
+        for (name, rot) in [
+            ("iso", rotation3d_for(&Some("iso".into()))),
+            ("left", rotation3d_for(&Some("left".into()))),
+            ("right", rotation3d_for(&Some("right".into()))),
+        ] {
+            let c = rotated_quad_corners_px(1920.0, 1080.0, rot).corners;
+            // haut, bas (contre l'horizontale) ; gauche, droite (contre la verticale)
+            let h_angle = |p: (f32, f32), q: (f32, f32)| (q.1 - p.1).atan2(q.0 - p.0).to_degrees();
+            let v_angle = |p: (f32, f32), q: (f32, f32)| (q.0 - p.0).atan2(q.1 - p.1).to_degrees();
+            let edges = [
+                ("haut", h_angle(c[0], c[1])),
+                ("bas", h_angle(c[3], c[2])),
+                ("gauche", v_angle(c[0], c[3])),
+                ("droite", v_angle(c[1], c[2])),
+            ];
+            for (edge, angle) in edges {
+                assert!(
+                    angle.abs() >= 2.0,
+                    "{name} : arête {edge} à {angle:.2}° de son axe — ça se lit comme une découpe"
+                );
+            }
+        }
+    }
+
     #[test]
     fn a_flat_quad_is_left_alone() {
         // Sans rotation, aucun containment ne doit s'appliquer : les coins sont ceux du rect.
-        let corners = rotated_quad_corners_px(1000.0, 600.0, [0.0, 0.0, 0.0]);
+        let corners = rotated_quad_corners_px(1000.0, 600.0, [0.0, 0.0, 0.0]).corners;
         let (max_x, max_y) = projected_extents(&corners);
         assert!((max_x - 500.0).abs() < 0.5 && (max_y - 300.0).abs() < 0.5);
     }
@@ -769,7 +838,7 @@ mod tilt_tests {
     fn the_tilt_actually_tilts() {
         // Garde-fou contre un containment trop zélé qui aplatirait l'effet : les quatre coins
         // d'un quad incliné ne peuvent pas rester alignés deux à deux comme un rectangle droit.
-        let corners = rotated_quad_corners_px(1920.0, 1080.0, rotation3d_for(&Some("iso".into())));
+        let corners = rotated_quad_corners_px(1920.0, 1080.0, rotation3d_for(&Some("iso".into()))).corners;
         let top_edge_slope = (corners[1].1 - corners[0].1).abs();
         assert!(top_edge_slope > 1.0, "arête supérieure horizontale : le tilt a disparu");
     }
@@ -856,7 +925,7 @@ mod tilt_tests {
             ("left", rotation3d_for(&Some("left".into()))),
             ("right", rotation3d_for(&Some("right".into()))),
         ] {
-            let corners = rotated_quad_corners_px(1920.0, 1080.0, rot);
+            let corners = rotated_quad_corners_px(1920.0, 1080.0, rot).corners;
             let mut dropped = Vec::new();
             let n = 64;
             for i in 0..=n {

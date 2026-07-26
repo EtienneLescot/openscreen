@@ -255,7 +255,20 @@ float4 ps_main(VSOut i) : SV_Target
             return float4(0.0, 0.0, 0.0, 0.0); // hors du quad projeté
         }
         float2 uv = float2(lerp(src.x, src.z, saturate(r.x)), lerp(src.y, src.w, saturate(r.y)));
-        return float4(sample_yuv(uv), 1.0);
+        float tilt_a = 1.0;
+        if (radius_px > 0.0)
+        {
+            // Coins arrondis DANS LE REPÈRE DU PLAN (`dst_prev.xy` = sa taille avant projection) :
+            // le rayon reste constant le long du bord, alors qu'un arrondi calculé dans la bbox
+            // s'étirerait avec la perspective. Sans cet arrondi, un écran penché a des arêtes de
+            // couteau qui coupent le contenu en pleine phrase, et ça se lit comme une troncature
+            // plutôt que comme une inclinaison.
+            float2 plane_px = dst_prev.xy;
+            float2 p = float2(r.x, r.y) * plane_px - plane_px * 0.5;
+            float d = sd_round_rect(p, plane_px * 0.5, radius_px);
+            tilt_a = 1.0 - smoothstep(0.0, 1.5, d);
+        }
+        return float4(sample_yuv(uv) * tilt_a, tilt_a); // prémultiplié, comme les autres modes
     }
 
     // mode 7 : sprite curseur thème (PNG alpha droite, arrow.png etc.). Prémultiplie ici
