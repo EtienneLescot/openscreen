@@ -22,7 +22,6 @@ import { useNativePlaybackSync } from "@/native/useNativePlaybackSync";
 import { ExportDialog } from "./ExportDialog";
 import { LeftPanel } from "./LeftPanel";
 import {
-	AutoCaptionsModal,
 	EditClipModal,
 	NewProjectModal,
 	OpenProjectModal,
@@ -100,9 +99,6 @@ export function NewEditorShell() {
 	useUndoRedoShortcuts(() => {
 		// ponytail: placeholder, wire when undo stack merges with history
 	});
-	const [captionsOpen, setCaptionsOpen] = useState(false);
-	const [captionsMinW, setCaptionsMinW] = useState(2);
-	const [captionsMaxW, setCaptionsMaxW] = useState(7);
 	const [copiedClipId, setCopiedClipId] = useState<string | null>(null);
 	const [projectSummaries, setProjectSummaries] = useState<AiEditionProjectSummary[]>([]);
 	const seekSeqRef = useRef(0);
@@ -811,77 +807,44 @@ export function NewEditorShell() {
 		}
 	}, [tl]);
 
-	const handleCaptions = useCallback(() => {
-		if (!document?.project.primaryAssetId) {
-			toast.info("Add a video to the project before generating captions.");
-			return;
-		}
-		setCaptionsOpen(true);
-	}, [document]);
-
-	const handleGenerateCaptions = useCallback(async () => {
+	// Captions are derived from the transcript, so the only caption "action" the
+	// shell still owns is producing that transcript — everything else (styling,
+	// placement, language) is a setting the Captions pane writes directly.
+	const handleTranscribeForCaptions = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
 		const assetId = doc.project.primaryAssetId;
 		if (!assetId) {
-			toast.error("Add a video to the project before generating captions.");
+			toast.info("Add a video to the project before transcribing.");
 			return;
 		}
+		if (doc.transcripts.some((t) => t.assetId === assetId)) return;
 
-		setCaptionsOpen(false);
+		setIsTranscribing(true);
+		setAssetStatuses((prev) => ({ ...prev, [assetId]: "running" }));
 		try {
-			let transcript = doc.transcript;
-			if (!transcript) {
-				toast.loading("Transcribing first…", { id: "captions-gen" });
-				setAssetStatuses((prev) => ({ ...prev, [assetId]: "running" }));
-				try {
-					transcript = await transcribeAsset(doc, assetId, {
-						onStatus: (s) => toast.loading(`Transcribing: ${s}`, { id: "captions-gen" }),
-					});
-					toast.dismiss("captions-gen");
-					await setTranscript(transcript);
-					setAssetStatuses((prev) => {
-						const next = { ...prev };
-						delete next[assetId];
-						return next;
-					});
-				} catch (err) {
-					setAssetStatuses((prev) => ({ ...prev, [assetId]: "failed" }));
-					throw err;
-				}
-			}
-
-			const { captionSegmentsToAnnotationRegions } = await import(
-				"@/lib/captioning/annotationsFromCaptions"
-			);
-			toast.loading("Generating captions…", { id: "captions-gen" });
-			const segments =
-				((transcript as Record<string, unknown>).segments as Array<Record<string, unknown>>) ?? [];
-			const { regions } = captionSegmentsToAnnotationRegions(
-				segments as never,
-				doc.annotations.length + 1,
-				doc.annotations.length + 1,
-				{
-					minWordsPerCaption: captionsMinW,
-					maxWordsPerCaption: captionsMaxW,
-					timestampGranularity: "word",
-				},
-			);
-			const latestDoc = useProjectStore.getState().document ?? doc;
-			const next = {
-				...latestDoc,
-				annotations: [...latestDoc.annotations, ...(regions as never)],
-			};
-			await saveDocument(next);
-			toast.dismiss("captions-gen");
-			toast.success(`Added ${regions.length} captions`);
+			toast.loading("Transcribing…", { id: "captions-transcribe" });
+			const transcript = await transcribeAsset(doc, assetId, {
+				onStatus: (s) => toast.loading(`Transcribing: ${s}`, { id: "captions-transcribe" }),
+			});
+			await setTranscript(transcript);
+			setAssetStatuses((prev) => {
+				const next = { ...prev };
+				delete next[assetId];
+				return next;
+			});
+			toast.dismiss("captions-transcribe");
+			toast.success("Transcript ready — captions are live.");
 		} catch (err) {
-			toast.dismiss("captions-gen");
-			toast.error("Caption generation failed", {
+			setAssetStatuses((prev) => ({ ...prev, [assetId]: "failed" }));
+			toast.dismiss("captions-transcribe");
+			toast.error("Transcription failed", {
 				description: err instanceof Error ? err.message : String(err),
 			});
+		} finally {
+			setIsTranscribing(false);
 		}
-	}, [captionsMinW, captionsMaxW, saveDocument, setTranscript]);
+	}, [setTranscript]);
 
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
@@ -1264,7 +1227,8 @@ export function NewEditorShell() {
 								onToggleOpen={() => setInspectorOpen((v) => !v)}
 								clips={tl.clips}
 								onEditClip={setEditClipTarget}
-								onCaptions={handleCaptions}
+								onTranscribe={() => void handleTranscribeForCaptions()}
+								isTranscribing={isTranscribing}
 								transcriptProps={transcriptProps}
 							/>
 						</>
@@ -1365,15 +1329,6 @@ export function NewEditorShell() {
 				onChoose={handleConfirmUnsaved}
 			/>
 			<ExportDialog open={exportOpen} onClose={() => setExportOpen(false)} document={document} />
-			<AutoCaptionsModal
-				open={captionsOpen}
-				onClose={() => setCaptionsOpen(false)}
-				minWords={captionsMinW}
-				maxWords={captionsMaxW}
-				onMinWords={setCaptionsMinW}
-				onMaxWords={setCaptionsMaxW}
-				onGenerate={handleGenerateCaptions}
-			/>
 		</div>
 	);
 }

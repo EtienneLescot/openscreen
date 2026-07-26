@@ -1,10 +1,10 @@
 import { describe, expect, it } from "vitest";
 
 import {
-	captionSegmentsToAnnotationRegions,
+	dedupeAdjacentCaptionRepeats,
+	finalizeCaptionSegmentsForPlayback,
 	groupPhraseCaptionSegmentsIntoLines,
 	groupTimedCaptionWordsIntoLines,
-	reconcileAutoCaptionTimelineGaps,
 } from "./annotationsFromCaptions";
 
 describe("groupPhraseCaptionSegmentsIntoLines", () => {
@@ -45,23 +45,7 @@ describe("groupPhraseCaptionSegmentsIntoLines", () => {
 	});
 });
 
-describe("captionSegmentsToAnnotationRegions", () => {
-	it("uses raw phrase timing instead of shifting caption boundaries", () => {
-		const { regions } = captionSegmentsToAnnotationRegions(
-			[
-				{ startSec: 0, endSec: 0.5, text: "first second" },
-				{ startSec: 0.62, endSec: 1.2, text: "third fourth" },
-			],
-			1,
-			1,
-			{ minWordsPerCaption: 2, maxWordsPerCaption: 2, timestampGranularity: "phrase" },
-		);
-
-		expect(regions).toHaveLength(2);
-		expect(regions[0]).toMatchObject({ startMs: 0, endMs: 500 });
-		expect(regions[1]).toMatchObject({ startMs: 620, endMs: 1200 });
-	});
-
+describe("groupTimedCaptionWordsIntoLines", () => {
 	it("preserves empty timeline space when word timestamps contain a real pause", () => {
 		const lines = groupTimedCaptionWordsIntoLines(
 			[
@@ -79,100 +63,50 @@ describe("captionSegmentsToAnnotationRegions", () => {
 		expect(lines[1]).toMatchObject({ startSec: 0.7, endSec: 0.98, text: "second caption" });
 	});
 
-	it("preserves repeated words before grouping in word mode", () => {
-		const { regions } = captionSegmentsToAnnotationRegions(
+	it("preserves repeated words instead of collapsing them into one token", () => {
+		const lines = groupTimedCaptionWordsIntoLines(
 			[
 				{ startSec: 0, endSec: 0.12, text: "I" },
 				{ startSec: 0.13, endSec: 0.25, text: "I" },
 			],
-			1,
-			1,
-			{ minWordsPerCaption: 2, maxWordsPerCaption: 2, timestampGranularity: "word" },
+			2,
+			2,
 		);
 
-		expect(regions).toHaveLength(1);
-		expect(regions[0]).toMatchObject({ content: "I I" });
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toMatchObject({ text: "I I" });
 	});
 });
 
-describe("reconcileAutoCaptionTimelineGaps", () => {
-	it("does not change regions when the minimum enforced gap is zero", () => {
-		const regions = reconcileAutoCaptionTimelineGaps([
-			{
-				id: "annotation-1",
-				startMs: 0,
-				endMs: 120,
-				type: "text",
-				content: "one",
-				annotationSource: "auto-caption",
-				position: { x: 0, y: 0 },
-				size: { width: 10, height: 10 },
-				style: {
-					color: "#fff",
-					backgroundColor: "transparent",
-					fontSize: 24,
-					fontFamily: "Inter",
-					fontWeight: "normal",
-					fontStyle: "normal",
-					textDecoration: "none",
-					textAlign: "center",
-				},
-				zIndex: 1,
-			},
-			{
-				id: "manual-1",
-				startMs: 50,
-				endMs: 1000,
-				type: "text",
-				content: "manual",
-				position: { x: 10, y: 10 },
-				size: { width: 10, height: 10 },
-				style: {
-					color: "#fff",
-					backgroundColor: "transparent",
-					fontSize: 24,
-					fontFamily: "Inter",
-					fontWeight: "normal",
-					fontStyle: "normal",
-					textDecoration: "none",
-					textAlign: "center",
-				},
-				zIndex: 2,
-			},
-			{
-				id: "annotation-2",
-				startMs: 130,
-				endMs: 300,
-				type: "text",
-				content: "two",
-				annotationSource: "auto-caption",
-				position: { x: 0, y: 0 },
-				size: { width: 10, height: 10 },
-				style: {
-					color: "#fff",
-					backgroundColor: "transparent",
-					fontSize: 24,
-					fontFamily: "Inter",
-					fontWeight: "normal",
-					fontStyle: "normal",
-					textDecoration: "none",
-					textAlign: "center",
-				},
-				zIndex: 3,
-			},
+describe("dedupeAdjacentCaptionRepeats", () => {
+	it("merges the same line repeated across a chunk boundary", () => {
+		const lines = dedupeAdjacentCaptionRepeats([
+			{ startSec: 0, endSec: 1, text: "hello there" },
+			{ startSec: 0.9, endSec: 1.8, text: "Hello there." },
 		]);
 
-		expect(regions.find((r) => r.id === "manual-1")).toMatchObject({
-			startMs: 50,
-			endMs: 1000,
-		});
-		expect(regions.find((r) => r.id === "annotation-1")).toMatchObject({
-			startMs: 0,
-			endMs: 120,
-		});
-		expect(regions.find((r) => r.id === "annotation-2")).toMatchObject({
-			startMs: 130,
-			endMs: 300,
-		});
+		expect(lines).toHaveLength(1);
+		expect(lines[0]).toMatchObject({ startSec: 0, endSec: 1.8 });
+	});
+
+	it("keeps the same line spoken again after a real silence", () => {
+		const lines = dedupeAdjacentCaptionRepeats([
+			{ startSec: 0, endSec: 1, text: "hello there" },
+			{ startSec: 8, endSec: 9, text: "hello there" },
+		]);
+
+		expect(lines).toHaveLength(2);
+	});
+});
+
+describe("finalizeCaptionSegmentsForPlayback", () => {
+	it("ends a line where the next one starts so two never show at once", () => {
+		const lines = finalizeCaptionSegmentsForPlayback([
+			{ startSec: 0, endSec: 1.5, text: "first" },
+			{ startSec: 1, endSec: 2, text: "second" },
+		]);
+
+		expect(lines[0]!.endSec).toBeCloseTo(1, 5);
+		expect(lines[1]).toMatchObject({ startSec: 1, endSec: 2 });
 	});
 });
