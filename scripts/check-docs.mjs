@@ -113,7 +113,9 @@ for (const file of files) {
 	}
 
 	// No stale `docs/` path prefix.
-	for (const [match] of text.matchAll(/(?<![\w/-])docs\/(?:architecture|engineering|testing|tests)\//g)) {
+	for (const [match] of text.matchAll(
+		/(?<![\w/-])docs\/(?:architecture|engineering|testing|tests)\//g,
+	)) {
 		errors.push(`${rel}: stale path prefix "${match}" (tree is technical-documentation/)`);
 	}
 

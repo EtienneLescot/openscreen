@@ -39,9 +39,9 @@ const MODEL_PATH = join(
 
 // Lazy import — only the type module + the bits we need. The main thing
 // we want to verify is that our Electron modules wire up correctly.
-const transcriptionContract = await import("../electron/stt/transcriptionContract.ts").catch(
-	() => null,
-);
+// The binding is deliberately dropped: the import is attempted for its own
+// sake and the module's value is never read.
+await import("../electron/stt/transcriptionContract.ts").catch(() => null);
 // The .ts file isn't loadable directly via plain Node — that's fine, we
 // only need to confirm the actual server pipeline behaves correctly when
 // invoked the same way the IPC handler does.
