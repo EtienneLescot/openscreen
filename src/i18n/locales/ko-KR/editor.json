@@ -204,7 +204,8 @@
 		"showInFolder": "폴더에서 보기",
 		"exportFailed": "내보내기 실패",
 		"failedToWriteFile": "파일 쓰기에 실패했습니다",
-		"qualityUpscaleWarning": "업스케일"
+		"qualityUpscaleWarning": "업스케일",
+		"exportedVideoOf": "분량의 영상을 내보냈습니다. 소요 시간:"
 	},
 	"inspector": {
 		"resetFocusPoint": "포커스 지점 재설정",
@@ -215,7 +216,9 @@
 		"captionsDescription": "대본에서 단어 단위 타이밍의 자막을 생성하여 타임라인에 배치합니다.",
 		"generateCaptions": "자막 생성",
 		"cropDescription": "녹화 화면을 다시 프레이밍 — 화면 비율을 선택하고 유지할 영역으로 확대합니다.",
-		"openCrop": "자르기 열기…"
+		"openCrop": "자르기 열기…",
+		"cameraFullscreenDescription": "이 구간이 재생되는 동안 카메라가 화면 전체를 채웁니다. 테두리, 둥근 모서리, 배경이 없으며 끝에서 부드럽게 돌아옵니다. 타임라인에서 구간의 가장자리를 끌어 시작 위치와 길이를 조정하세요.",
+		"deleteRegion": "구간 삭제"
 	},
 	"leftPanel": {
 		"mediaTitle": "미디어",
@@ -303,13 +306,9 @@
 		"create": "프로젝트 만들기",
 		"defaultTitle": "제목 없는 프로젝트",
 		"templates": {
-			"blankTitle": "빈 프로젝트",
-			"blankDesc": "빈 타임라인, 가져올 준비 완료",
 			"screenRecordingTitle": "화면 녹화",
 			"screenRecordingDesc": "시스템 캡처 시작",
-			"importMediaDesc": "디스크에서 동영상, 오디오, 이미지",
-			"fromTemplateTitle": "템플릿에서",
-			"fromTemplateDesc": "미리 정의된 스토리보드"
+			"importMediaDesc": "디스크에서 동영상, 오디오, 이미지"
 		}
 	},
 	"openProjectDialog": {
@@ -349,5 +348,73 @@
 		"fieldY": "Y",
 		"fieldW": "너비",
 		"fieldH": "높이"
+	},
+	"transport": {
+		"playbackControls": "재생 컨트롤",
+		"playPause": "재생 / 일시정지",
+		"playPauseTitle": "재생 / 일시정지 (Space)",
+		"previousClip": "이전 클립",
+		"nextClip": "다음 클립",
+		"loop": "반복",
+		"seekVideo": "영상 탐색"
+	},
+	"shell": {
+		"aiEditor": "AI 편집기",
+		"resizeChatPanel": "채팅 패널 크기 조절",
+		"previewStage": "미리보기 영역",
+		"resizeTimeline": "타임라인 크기 조절"
+	},
+	"preview": {
+		"videoPreview": "영상 미리보기",
+		"webcamPreview": "웹캠 미리보기 (끌어서 위치 변경)"
+	},
+	"annotationOverlay": {
+		"imageAlt": "주석",
+		"noImage": "이미지 없음",
+		"noArrowData": "화살표 데이터 없음"
+	},
+	"providerSettings": {
+		"title": "AI 설정",
+		"subtitle": "공급자를 선택하세요. 자격 증명은 OS 키체인(safeStorage)에 저장됩니다.",
+		"loadFailed": "AI 설정을 불러올 수 없습니다",
+		"saved": "{{provider}} 저장됨",
+		"connected": "{{provider}} 연결됨",
+		"disconnected": "{{provider}} 연결 해제됨",
+		"deviceFlowFailed": "기기 인증에 실패했습니다.",
+		"pillConnected": "연결됨",
+		"pillOAuth": "OAuth",
+		"pillToken": "토큰",
+		"pillApiKey": "API 키",
+		"notConnected": "연결되지 않음",
+		"back": "뒤로",
+		"modelLabel": "모델",
+		"modelHintLive": "계정에서 실시간으로 가져온 모델입니다.",
+		"modelHintError": "모델 목록을 가져오지 못했습니다({{error}}). 모델 ID를 직접 입력하세요.",
+		"modelHintLoading": "실시간 모델 불러오는 중…",
+		"modelSavedOption": "{{model}} (저장됨)",
+		"loadingModels": "모델 불러오는 중…",
+		"baseUrlLabel": "기본 URL",
+		"baseUrlHint": "비워 두면 공급자의 기본값을 사용합니다.",
+		"reasoningEffortLabel": "추론 강도",
+		"apiKeyLabel": "API 키",
+		"apiKeyHintStored": "safeStorage에 저장되어 있습니다. 기존 항목을 유지하려면 비워 두세요.",
+		"patLabel": "GitHub 개인 액세스 토큰",
+		"patHint": "`copilot` 범위를 가진 GitHub PAT를 붙여넣으세요.",
+		"projectEditsLabel": "프로젝트 편집",
+		"projectEditsHint": "끄면 에이전트가 타임라인을 변경하기 전에 확인을 요청합니다. 편집은 항상 실행 취소할 수 있습니다.",
+		"allowAgentEdits": "에이전트의 프로젝트 편집 허용",
+		"disconnect": "연결 해제",
+		"cancel": "취소",
+		"save": "저장",
+		"saveAndUse": "저장 후 사용",
+		"reconnect": "다시 연결",
+		"startLogin": "로그인 시작",
+		"connect": "연결",
+		"completingSignIn": "로그인 완료 중…",
+		"browserLoginPending": "브라우저 로그인 대기 중",
+		"deviceCodeInstructions": "{{provider}} 로그인 페이지를 열고 이 코드를 입력하세요. 승인하면 자동으로 연결이 완료됩니다.",
+		"copyCode": "코드 복사",
+		"copied": "복사됨",
+		"openLoginPage": "로그인 페이지 열기"
 	}
 }

@@ -204,7 +204,8 @@
 		"showInFolder": "在文件夹中显示",
 		"exportFailed": "导出失败",
 		"failedToWriteFile": "写入文件失败",
-		"qualityUpscaleWarning": "放大"
+		"qualityUpscaleWarning": "放大",
+		"exportedVideoOf": "的视频已导出，用时"
 	},
 	"inspector": {
 		"resetFocusPoint": "重置焦点",
@@ -215,7 +216,9 @@
 		"captionsDescription": "根据转录文本生成按字词计时的字幕，并将其放置到时间轴上。",
 		"generateCaptions": "生成字幕",
 		"cropDescription": "重新构图录制内容 — 选择宽高比并缩放到要保留的区域。",
-		"openCrop": "打开裁剪…"
+		"openCrop": "打开裁剪…",
+		"cameraFullscreenDescription": "该区间播放时，摄像头会占满整个画面 — 没有边框、圆角和背景 — 并在结束时平滑还原。在时间轴上拖动区间边缘可调整其起始位置和时长。",
+		"deleteRegion": "删除区间"
 	},
 	"leftPanel": {
 		"mediaTitle": "媒体",
@@ -303,13 +306,9 @@
 		"create": "创建项目",
 		"defaultTitle": "未命名项目",
 		"templates": {
-			"blankTitle": "空白项目",
-			"blankDesc": "空时间轴，可直接导入",
 			"screenRecordingTitle": "屏幕录制",
 			"screenRecordingDesc": "开始系统捕获",
-			"importMediaDesc": "从磁盘导入视频、音频、图片",
-			"fromTemplateTitle": "从模板创建",
-			"fromTemplateDesc": "预定义的故事板"
+			"importMediaDesc": "从磁盘导入视频、音频、图片"
 		}
 	},
 	"openProjectDialog": {
@@ -349,5 +348,73 @@
 		"fieldY": "Y",
 		"fieldW": "宽",
 		"fieldH": "高"
+	},
+	"transport": {
+		"playbackControls": "播放控件",
+		"playPause": "播放 / 暂停",
+		"playPauseTitle": "播放 / 暂停（空格）",
+		"previousClip": "上一个片段",
+		"nextClip": "下一个片段",
+		"loop": "循环",
+		"seekVideo": "拖动视频进度"
+	},
+	"shell": {
+		"aiEditor": "AI 编辑器",
+		"resizeChatPanel": "调整聊天面板大小",
+		"previewStage": "预览区域",
+		"resizeTimeline": "调整时间轴大小"
+	},
+	"preview": {
+		"videoPreview": "视频预览",
+		"webcamPreview": "摄像头预览（拖动可重新定位）"
+	},
+	"annotationOverlay": {
+		"imageAlt": "批注",
+		"noImage": "无图片",
+		"noArrowData": "无箭头数据"
+	},
+	"providerSettings": {
+		"title": "AI 设置",
+		"subtitle": "选择一个提供商。凭据存储在系统钥匙串（safeStorage）中。",
+		"loadFailed": "无法加载 AI 设置",
+		"saved": "已保存 {{provider}}",
+		"connected": "已连接 {{provider}}",
+		"disconnected": "已断开 {{provider}}",
+		"deviceFlowFailed": "设备授权流程失败。",
+		"pillConnected": "已连接",
+		"pillOAuth": "OAuth",
+		"pillToken": "令牌",
+		"pillApiKey": "API 密钥",
+		"notConnected": "未连接",
+		"back": "返回",
+		"modelLabel": "模型",
+		"modelHintLive": "从您的账户实时获取的模型。",
+		"modelHintError": "无法获取实时模型（{{error}}），请手动输入模型 ID。",
+		"modelHintLoading": "正在加载实时模型…",
+		"modelSavedOption": "{{model}}（已保存）",
+		"loadingModels": "正在加载模型…",
+		"baseUrlLabel": "基础 URL",
+		"baseUrlHint": "留空以使用提供商的默认值。",
+		"reasoningEffortLabel": "推理强度",
+		"apiKeyLabel": "API 密钥",
+		"apiKeyHintStored": "已存储在 safeStorage 中。留空可保留现有条目。",
+		"patLabel": "GitHub 个人访问令牌",
+		"patHint": "粘贴具有 `copilot` 权限范围的 GitHub PAT。",
+		"projectEditsLabel": "项目编辑",
+		"projectEditsHint": "关闭时，智能体在更改时间轴前必须先询问。所有编辑始终可以撤销。",
+		"allowAgentEdits": "允许智能体编辑项目",
+		"disconnect": "断开连接",
+		"cancel": "取消",
+		"save": "保存",
+		"saveAndUse": "保存并使用",
+		"reconnect": "重新连接",
+		"startLogin": "开始登录",
+		"connect": "连接",
+		"completingSignIn": "正在完成登录…",
+		"browserLoginPending": "等待浏览器登录",
+		"deviceCodeInstructions": "打开 {{provider}} 登录页面并输入此代码。您授权后，我们会自动完成连接。",
+		"copyCode": "复制代码",
+		"copied": "已复制",
+		"openLoginPage": "打开登录页面"
 	}
 }

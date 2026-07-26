@@ -204,7 +204,8 @@
 		"showInFolder": "Mostra nella cartella",
 		"exportFailed": "Esportazione non riuscita",
 		"failedToWriteFile": "Impossibile scrivere il file",
-		"qualityUpscaleWarning": "Upscaling"
+		"qualityUpscaleWarning": "Upscaling",
+		"exportedVideoOf": "di video esportato in"
 	},
 	"inspector": {
 		"resetFocusPoint": "Reimposta punto di messa a fuoco",
@@ -215,7 +216,9 @@
 		"captionsDescription": "Genera sottotitoli sincronizzati con le parole dalla trascrizione e trascinali sulla timeline.",
 		"generateCaptions": "Genera sottotitoli",
 		"cropDescription": "Reinquadra la registrazione — scegli un rapporto d'aspetto e ingrandisci l'area da mantenere.",
-		"openCrop": "Apri ritaglio…"
+		"openCrop": "Apri ritaglio…",
+		"cameraFullscreenDescription": "Mentre questa regione è in riproduzione, la camera occupa l'intero fotogramma — senza bordo, senza arrotondamento, senza sfondo — e rientra dolcemente alla fine. Trascina i bordi della regione sulla timeline per cambiarne l'inizio e la durata.",
+		"deleteRegion": "Elimina regione"
 	},
 	"leftPanel": {
 		"mediaTitle": "Contenuti multimediali",
@@ -303,13 +306,9 @@
 		"create": "Crea progetto",
 		"defaultTitle": "Progetto senza titolo",
 		"templates": {
-			"blankTitle": "Progetto vuoto",
-			"blankDesc": "Timeline vuota, pronta per l'importazione",
 			"screenRecordingTitle": "Registrazione schermo",
 			"screenRecordingDesc": "Avvia acquisizione di sistema",
-			"importMediaDesc": "Video, audio, immagini dal disco",
-			"fromTemplateTitle": "Da modello",
-			"fromTemplateDesc": "Storyboard predefinito"
+			"importMediaDesc": "Video, audio, immagini dal disco"
 		}
 	},
 	"openProjectDialog": {
@@ -349,5 +348,73 @@
 		"fieldY": "Y",
 		"fieldW": "L",
 		"fieldH": "A"
+	},
+	"transport": {
+		"playbackControls": "Controlli di riproduzione",
+		"playPause": "Riproduci / Pausa",
+		"playPauseTitle": "Riproduci / Pausa (Spazio)",
+		"previousClip": "Clip precedente",
+		"nextClip": "Clip successivo",
+		"loop": "Ripeti",
+		"seekVideo": "Scorri il video"
+	},
+	"shell": {
+		"aiEditor": "Editor IA",
+		"resizeChatPanel": "Ridimensiona il pannello chat",
+		"previewStage": "Area di anteprima",
+		"resizeTimeline": "Ridimensiona la timeline"
+	},
+	"preview": {
+		"videoPreview": "Anteprima video",
+		"webcamPreview": "Anteprima webcam (trascina per riposizionare)"
+	},
+	"annotationOverlay": {
+		"imageAlt": "Annotazione",
+		"noImage": "Nessuna immagine",
+		"noArrowData": "Nessun dato freccia"
+	},
+	"providerSettings": {
+		"title": "Impostazioni IA",
+		"subtitle": "Scegli un provider. Le credenziali sono salvate nel portachiavi del sistema (safeStorage).",
+		"loadFailed": "Impossibile caricare le impostazioni IA",
+		"saved": "{{provider}} salvato",
+		"connected": "{{provider}} connesso",
+		"disconnected": "{{provider}} disconnesso",
+		"deviceFlowFailed": "Flusso dispositivo non riuscito.",
+		"pillConnected": "Connesso",
+		"pillOAuth": "OAuth",
+		"pillToken": "Token",
+		"pillApiKey": "Chiave API",
+		"notConnected": "Non connesso",
+		"back": "Indietro",
+		"modelLabel": "Modello",
+		"modelHintLive": "Modelli dal tuo account, recuperati in tempo reale.",
+		"modelHintError": "Impossibile recuperare i modelli ({{error}}); digita manualmente un id di modello.",
+		"modelHintLoading": "Caricamento dei modelli in tempo reale…",
+		"modelSavedOption": "{{model}} (salvato)",
+		"loadingModels": "Caricamento modelli…",
+		"baseUrlLabel": "URL di base",
+		"baseUrlHint": "Lascia vuoto per usare il valore predefinito del provider.",
+		"reasoningEffortLabel": "Sforzo di ragionamento",
+		"apiKeyLabel": "Chiave API",
+		"apiKeyHintStored": "Salvata in safeStorage. Lascia vuoto per mantenere la voce esistente.",
+		"patLabel": "Token di accesso personale GitHub",
+		"patHint": "Incolla un PAT GitHub con ambito `copilot`.",
+		"projectEditsLabel": "Modifiche al progetto",
+		"projectEditsHint": "Se disattivato, l'agente deve chiedere prima di cambiare la timeline. Le modifiche sono sempre annullabili.",
+		"allowAgentEdits": "Consenti all'agente di modificare il progetto",
+		"disconnect": "Disconnetti",
+		"cancel": "Annulla",
+		"save": "Salva",
+		"saveAndUse": "Salva e usa",
+		"reconnect": "Riconnetti",
+		"startLogin": "Avvia accesso",
+		"connect": "Connetti",
+		"completingSignIn": "Completamento accesso…",
+		"browserLoginPending": "Accesso dal browser in sospeso",
+		"deviceCodeInstructions": "Apri la pagina di accesso di {{provider}} e inserisci questo codice. Completeremo la connessione automaticamente non appena autorizzi.",
+		"copyCode": "Copia codice",
+		"copied": "Copiato",
+		"openLoginPage": "Apri pagina di accesso"
 	}
 }

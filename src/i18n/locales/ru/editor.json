@@ -204,7 +204,8 @@
 		"showInFolder": "Показать в папке",
 		"exportFailed": "Ошибка экспорта",
 		"failedToWriteFile": "Не удалось записать файл",
-		"qualityUpscaleWarning": "Апскейл"
+		"qualityUpscaleWarning": "Апскейл",
+		"exportedVideoOf": "видео экспортировано за"
 	},
 	"inspector": {
 		"resetFocusPoint": "Сбросить точку фокуса",
@@ -215,7 +216,9 @@
 		"captionsDescription": "Создайте субтитры с привязкой по словам на основе транскрипции и добавьте их на таймлинию.",
 		"generateCaptions": "Создать субтитры",
 		"cropDescription": "Перекадрируйте запись — выберите соотношение сторон и увеличьте область, которую нужно сохранить.",
-		"openCrop": "Открыть обрезку…"
+		"openCrop": "Открыть обрезку…",
+		"cameraFullscreenDescription": "Пока играет этот участок, камера занимает весь кадр — без рамки, скруглений и фона — и плавно возвращается в конце. Перетаскивайте края участка на таймлайне, чтобы изменить его начало и длительность.",
+		"deleteRegion": "Удалить участок"
 	},
 	"leftPanel": {
 		"mediaTitle": "Медиа",
@@ -303,13 +306,9 @@
 		"create": "Создать проект",
 		"defaultTitle": "Проект без названия",
 		"templates": {
-			"blankTitle": "Пустой проект",
-			"blankDesc": "Пустая таймлиния, готова к импорту",
 			"screenRecordingTitle": "Запись экрана",
 			"screenRecordingDesc": "Начать системный захват",
-			"importMediaDesc": "Видео, аудио, изображения с диска",
-			"fromTemplateTitle": "Из шаблона",
-			"fromTemplateDesc": "Готовая раскадровка"
+			"importMediaDesc": "Видео, аудио, изображения с диска"
 		}
 	},
 	"openProjectDialog": {
@@ -349,5 +348,73 @@
 		"fieldY": "Y",
 		"fieldW": "Ш",
 		"fieldH": "В"
+	},
+	"transport": {
+		"playbackControls": "Элементы управления воспроизведением",
+		"playPause": "Воспроизведение / Пауза",
+		"playPauseTitle": "Воспроизведение / Пауза (Пробел)",
+		"previousClip": "Предыдущий клип",
+		"nextClip": "Следующий клип",
+		"loop": "Повтор",
+		"seekVideo": "Перемотка видео"
+	},
+	"shell": {
+		"aiEditor": "ИИ-редактор",
+		"resizeChatPanel": "Изменить размер панели чата",
+		"previewStage": "Область предпросмотра",
+		"resizeTimeline": "Изменить размер таймлайна"
+	},
+	"preview": {
+		"videoPreview": "Предпросмотр видео",
+		"webcamPreview": "Предпросмотр камеры (перетащите, чтобы переместить)"
+	},
+	"annotationOverlay": {
+		"imageAlt": "Аннотация",
+		"noImage": "Нет изображения",
+		"noArrowData": "Нет данных стрелки"
+	},
+	"providerSettings": {
+		"title": "Настройки ИИ",
+		"subtitle": "Выберите провайдера. Учётные данные хранятся в связке ключей ОС (safeStorage).",
+		"loadFailed": "Не удалось загрузить настройки ИИ",
+		"saved": "{{provider}} сохранён",
+		"connected": "{{provider}} подключён",
+		"disconnected": "{{provider}} отключён",
+		"deviceFlowFailed": "Не удалось выполнить вход через устройство.",
+		"pillConnected": "Подключено",
+		"pillOAuth": "OAuth",
+		"pillToken": "Токен",
+		"pillApiKey": "API-ключ",
+		"notConnected": "Не подключено",
+		"back": "Назад",
+		"modelLabel": "Модель",
+		"modelHintLive": "Модели из вашей учётной записи, загруженные в реальном времени.",
+		"modelHintError": "Не удалось получить список моделей ({{error}}); введите идентификатор модели вручную.",
+		"modelHintLoading": "Загрузка актуальных моделей…",
+		"modelSavedOption": "{{model}} (сохранено)",
+		"loadingModels": "Загрузка моделей…",
+		"baseUrlLabel": "Базовый URL",
+		"baseUrlHint": "Оставьте пустым, чтобы использовать значение провайдера по умолчанию.",
+		"reasoningEffortLabel": "Глубина рассуждений",
+		"apiKeyLabel": "API-ключ",
+		"apiKeyHintStored": "Хранится в safeStorage. Оставьте пустым, чтобы сохранить текущее значение.",
+		"patLabel": "Персональный токен доступа GitHub",
+		"patHint": "Вставьте GitHub PAT с областью `copilot`.",
+		"projectEditsLabel": "Правки проекта",
+		"projectEditsHint": "Если выключено, агент должен спрашивать перед изменением таймлайна. Правки всегда можно отменить.",
+		"allowAgentEdits": "Разрешить агенту редактировать проект",
+		"disconnect": "Отключить",
+		"cancel": "Отмена",
+		"save": "Сохранить",
+		"saveAndUse": "Сохранить и использовать",
+		"reconnect": "Переподключить",
+		"startLogin": "Начать вход",
+		"connect": "Подключить",
+		"completingSignIn": "Завершаем вход…",
+		"browserLoginPending": "Ожидается вход через браузер",
+		"deviceCodeInstructions": "Откройте страницу входа {{provider}} и введите этот код. Как только вы подтвердите доступ, подключение завершится автоматически.",
+		"copyCode": "Скопировать код",
+		"copied": "Скопировано",
+		"openLoginPage": "Открыть страницу входа"
 	}
 }

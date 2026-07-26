@@ -31,6 +31,7 @@ import {
 	type ZoomFocus,
 } from "@/components/video-editor/types";
 import { computeCameraFullscreenProgress } from "@/components/video-editor/videoPlayback/cameraFullscreenUtils";
+import { useScopedT } from "@/contexts/I18nContext";
 import { resolveAspectRatioValue } from "@/lib/ai-edition/document/outputFormat";
 import type {
 	AxcutAnnotationRegion,
@@ -102,6 +103,7 @@ const SCREEN_SOURCE_SIZE = { width: 1920, height: 1080 };
 const WEBCAM_SOURCE_SIZE = { width: 960, height: 720 };
 
 export function PreviewCanvas(props: PreviewCanvasProps) {
+	const te = useScopedT("editor");
 	const { settings, setLive, commit } = useEditorSettings();
 	const document = useProjectStore((s) => s.document);
 	const assets = document?.assets ?? [];
@@ -449,7 +451,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 						touchAction: "none",
 					}}
 					onPointerDown={isPipGrab ? handleWebcamPointerDown : undefined}
-					aria-label="Webcam preview (drag to reposition)"
+					aria-label={te("preview.webcamPreview")}
 				>
 					<WebcamOverlay
 						clips={props.clips}

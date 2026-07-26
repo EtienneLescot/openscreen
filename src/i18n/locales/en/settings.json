@@ -50,7 +50,14 @@
 		"webcamSize": "Webcam Size",
 		"mirrorWebcam": "Mirror Webcam",
 		"reactiveWebcam": "Shrink on Zoom",
-		"reactiveWebcamDescription": "Camera smoothly shrinks while the video is zoomed in, so it stays out of the way."
+		"reactiveWebcamDescription": "Camera smoothly shrinks while the video is zoomed in, so it stays out of the way.",
+		"help": "How the webcam is composed with the screen: picture-in-picture, vertical stack, dual frame, mask shape, size, and mirroring.",
+		"shapes": {
+			"rectangle": "Rect",
+			"circle": "Circle",
+			"square": "Square",
+			"rounded": "Rounded"
+		}
 	},
 	"effects": {
 		"title": "Video Effects",
@@ -60,7 +67,8 @@
 		"on": "on",
 		"shadow": "Shadow",
 		"roundness": "Roundness",
-		"padding": "Padding"
+		"padding": "Padding",
+		"help": "Frame styling for the recording: background blur, drop shadow, motion blur, corner radius, and padding around the video."
 	},
 	"background": {
 		"title": "Background",
@@ -72,7 +80,11 @@
 		"gradientLabel": "Gradient {{index}}",
 		"colorWheel": "Color Wheel",
 		"colorPalette": "Color Palette",
-		"presets": "Presets"
+		"presets": "Presets",
+		"help": "Choose what appears behind the recording: a bundled wallpaper image, a solid color, a gradient, or a custom image from disk.",
+		"customWallpaper": "Custom wallpaper",
+		"imageLabel": "Background {{index}}",
+		"colorLabel": "Color {{color}}"
 	},
 	"crop": {
 		"title": "Crop",
@@ -221,17 +233,38 @@
 		"motionBlur": "Motion Blur",
 		"clickBounce": "Click Bounce",
 		"clipToBounds": "Clip to Canvas",
-		"clipToBoundsDescription": "Keeps the cursor inside the video frame. Turn off to let the cursor extend past the edges - useful when zoomed in or panned."
+		"clipToBoundsDescription": "Keeps the cursor inside the video frame. Turn off to let the cursor extend past the edges - useful when zoomed in or panned.",
+		"help": "Cursor rendering from the recorded telemetry: theme, size, smoothing, motion blur, and click-bounce emphasis."
 	},
 	"language": {
 		"title": "Language"
 	},
 	"timeline": {
 		"title": "Timeline",
-		"waveform": "Show Audio Waveform on Trim Track"
+		"waveform": "Show Audio Waveform on Trim Track",
+		"help": "Timeline display options, like showing the audio waveform on the trim track."
 	},
 	"facets": {
 		"captions": "Captions",
 		"transcript": "Transcript"
+	},
+	"panes": {
+		"help": "Help"
+	},
+	"transcript": {
+		"title": "Current transcription",
+		"help": "Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to mark it as skipped (red). Hover a red span to restore it.",
+		"noClips": "No clips yet",
+		"noTranscript": "No transcript yet",
+		"whisperHint": "Transcribe uses local Whisper — runs in your browser, no data leaves the device.",
+		"transcribeNow": "Transcribe now",
+		"transcribing": "Transcribing…",
+		"clipLabel": "Clip {{index}}",
+		"noClipTranscript": "No transcript for this clip — open the asset card and regenerate.",
+		"editorAria": "Transcript for {{filename}}",
+		"silence": "[silence {{duration}}s]",
+		"restoreSilence": "Restore silence ({{duration}}s)",
+		"trimSilence": "Trim silence ({{duration}}s)",
+		"restoreWord": "Restore \"{{word}}\""
 	}
 }

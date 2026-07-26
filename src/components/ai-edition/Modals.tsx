@@ -329,17 +329,18 @@ export function OpenProjectModal({
 	);
 }
 
-type Template = "blank" | "screen-recording" | "import" | "template";
+/** Where the editor lands once the project exists: the Media or the Rec tab. */
+export type StartingPoint = "import" | "screen-recording";
 
 interface NewProjectModalProps extends BaseModalProps {
-	onCreate: (title: string) => void;
+	onCreate: (title: string, startingPoint: StartingPoint) => void;
 }
 
 export function NewProjectModal({ open, onClose, onCreate }: NewProjectModalProps) {
 	const t = useScopedT("editor");
 	const tc = useScopedT("common");
 	const [title, setTitle] = useState(t("newProjectDialog.defaultTitle"));
-	const [template, setTemplate] = useState<Template>("blank");
+	const [template, setTemplate] = useState<StartingPoint>("import");
 	return (
 		<ModalShell
 			open={open}
@@ -397,20 +398,6 @@ export function NewProjectModal({ open, onClose, onCreate }: NewProjectModalProp
 					>
 						<TemplateCell
 							icon={<FolderPlus size={18} />}
-							title={t("newProjectDialog.templates.blankTitle")}
-							desc={t("newProjectDialog.templates.blankDesc")}
-							active={template === "blank"}
-							onClick={() => setTemplate("blank")}
-						/>
-						<TemplateCell
-							icon={<Crop size={18} />}
-							title={t("newProjectDialog.templates.screenRecordingTitle")}
-							desc={t("newProjectDialog.templates.screenRecordingDesc")}
-							active={template === "screen-recording"}
-							onClick={() => setTemplate("screen-recording")}
-						/>
-						<TemplateCell
-							icon={<Plus size={18} />}
 							title={t("mediaStage.importMedia")}
 							desc={t("newProjectDialog.templates.importMediaDesc")}
 							active={template === "import"}
@@ -418,10 +405,10 @@ export function NewProjectModal({ open, onClose, onCreate }: NewProjectModalProp
 						/>
 						<TemplateCell
 							icon={<Crop size={18} />}
-							title={t("newProjectDialog.templates.fromTemplateTitle")}
-							desc={t("newProjectDialog.templates.fromTemplateDesc")}
-							active={template === "template"}
-							onClick={() => setTemplate("template")}
+							title={t("newProjectDialog.templates.screenRecordingTitle")}
+							desc={t("newProjectDialog.templates.screenRecordingDesc")}
+							active={template === "screen-recording"}
+							onClick={() => setTemplate("screen-recording")}
 						/>
 					</div>
 				</div>
@@ -446,7 +433,7 @@ export function NewProjectModal({ open, onClose, onCreate }: NewProjectModalProp
 						type="button"
 						className={`${styles.btn} ${styles.btnPrimary}`}
 						onClick={() => {
-							onCreate(title.trim() || t("newProjectDialog.defaultTitle"));
+							onCreate(title.trim() || t("newProjectDialog.defaultTitle"), template);
 							onClose();
 						}}
 					>
