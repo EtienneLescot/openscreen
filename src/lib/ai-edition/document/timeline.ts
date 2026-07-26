@@ -537,8 +537,7 @@ export function duplicateClip(
  * clip's Edit modal, the renderer op dispatcher, and the LLM's `setClipRange` tool all
  * perform. Extracted here (like `moveClip` / `duplicateClip`) so the recipe lives in one
  * place instead of being re-derived per façade, which is what let the three drift apart
- * (stale width, un-clamped pills). Pure; does NOT touch `preview.revision` — a caller that
- * needs a preview refresh bumps it itself, so this stays a plain document→document transform.
+ * (stale width, un-clamped pills). Pure — a plain document→document transform.
  *
  * Recipe: clamp + order the range, zero the clip's timeline extent so `resequenceClips`
  * recomputes its RAW length from the new source window (a raw clip's timeline length equals
@@ -574,7 +573,7 @@ export function setClipSourceRange(
  * `setClipSourceRange`) so the recipe lives in one place: a `trim` is a plain filter on the
  * source-time cut list; every other kind is a pill (`dropPillById` removes every region that
  * renders as the same pill as `id`, per the merge rule). Speed / camera-fullscreen live under
- * `legacyEditor`. An id that matches nothing is a no-op. Pure; does NOT touch `preview.revision`.
+ * `legacyEditor`. An id that matches nothing is a no-op. Pure.
  */
 export function removeRegion(document: AxcutDocument, kind: RegionKind, id: string): AxcutDocument {
 	switch (kind) {
@@ -624,7 +623,7 @@ export function removeRegion(document: AxcutDocument, kind: RegionKind, id: stri
  * re-laid back-to-back (`resequenceClips`) and every anchored pill's derived ms is refreshed
  * against the new layout (`rederiveRegionMs`) — pills anchored to the removed clip drop out,
  * exactly like `setClipSourceRange`. Shared by the store's delete-clip action and the LLM's
- * `removeClip` tool. An unknown `clipId` is a no-op. Pure; does NOT touch `preview.revision`.
+ * `removeClip` tool. An unknown `clipId` is a no-op. Pure.
  */
 export function removeClip(document: AxcutDocument, clipId: string): AxcutDocument {
 	const oldClips = document.timeline.clips;
