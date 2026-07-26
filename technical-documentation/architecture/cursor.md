@@ -1,124 +1,38 @@
-# Cursor feature — exhaustive inventory
+# Cursor pipeline
 
-Port of the legacy (`main`) cursor pipeline into the AI-edition editor shell
-(`port/cursor-from-main`). Reference: `docs/architecture/openscreen-inventory.md`
-§ Cursor; rendered pipeline at `src/components/ai-edition/CursorPreviewLayer.tsx`.
+The cursor feature records system-cursor position and, where the native provider is available, cursor assets separately from the screen video, then re-renders the cursor as a themed, smoothed overlay instead of baking it into the capture. Its shared rendering and asset code lives in `src/lib/cursor/`; native capture and IPC adapters live under `electron/native/` and `electron/native-bridge/cursor/`; the editor overlay is `src/components/ai-edition/CursorPreviewLayer.tsx`.
 
-## 1. Capture (native side)
+## Capture
 
-| Surface | Platform | What it does |
-| --- | --- | --- |
-| `electron/native/screencapturekit/Sources/OpenScreenMacOSCursorHelper/main.swift` | macOS | ScreenCaptureKit cursor helper — streams cursor bitmaps + interaction events alongside the screen capture. |
-| `electron/native/wgc-capture/src/cursor-sampler.cpp` | Windows | WGC cursor sampler — captures the system cursor bitmap, hotspot, and type from a desktop duplication session. |
-| `electron/native-bridge/cursor/recording/macNativeCursorRecordingSession.ts` | macOS | Wraps the SCK helper for the main process. |
-| `electron/native-bridge/cursor/recording/windowsNativeRecordingSession.ts` + `.types.ts` | Windows | Wraps the WGC sampler; types describe cursor samples + assets. |
-| `electron/native-bridge/cursor/recording/telemetryRecordingSession.ts` | All | Fallback: cursor samples come from the recorder's telemetry stream (no bitmap). |
-| `electron/native-bridge/cursor/recording/session.ts` | All | Common session interface (start / stop / on-sample). |
-| `electron/native-bridge/cursor/recording/factory.ts` | All | Picks the right session for the OS / source. |
-| `electron/native-bridge/cursor/adapter.ts` | All | Adapter from native session to the `CursorRecordingData` shape used by the renderer. |
-| `electron/native-bridge/cursor/telemetryCursorAdapter.ts` | All | Telemetry-only adapter. |
-| `electron/native-bridge/services/cursorService.ts` | All | IPC entry point; exposes `cursor.getRecordingData` and `cursor.getTelemetry` to the renderer. |
+Native capture keeps cursor data separate from the video frame. On Windows, the WGC cursor sampler in `electron/native/wgc-capture/src/cursor-sampler.cpp` samples the system cursor during desktop duplication and records its position, hotspot, bitmap, and cursor type. On macOS, the ScreenCaptureKit cursor helper at `electron/native/screencapturekit/Sources/OpenScreenMacOSCursorHelper/main.swift` samples the current system cursor, emits unique bitmap assets, and records cursor samples plus left-button interaction events. The recording sessions under `electron/native-bridge/cursor/recording/` select and wrap the platform provider; `telemetryCursorAdapter.ts` provides the position-only fallback when native assets are unavailable. The resulting contracts are `CursorRecordingData` and `CursorRecordingSample` in `src/native/contracts.ts`.
 
-Contracts (`src/native/contracts.ts`): `CursorRecordingData`, `CursorRecordingSample`, `NativeCursorAsset`, `NativeCursorType`.
+## Telemetry
 
-Supported native cursor types: `arrow`, `text`, `pointer`, `crosshair`, `open-hand`, `closed-hand`, `resize-ew`, `resize-ns`, `resize-nesw`, `resize-nwse`, `move`, `not-allowed`, `wait`, `app-starting`, `help`, `up-arrow`. The renderer also has a "telemetry-only" provider (`"none"`) for legacy recordings.
+Position telemetry is represented by `CursorTelemetryPoint` in `src/lib/cursorTelemetryBuffer.ts`. Each point contains `timeMs`, the offset from recording start, and `cx`/`cy`, clamped ratios of the captured surface (`cursorTelemetryBuffer.ts:1-10`). The main-process `CursorTelemetryBuffer` starts a session with a recording id, appends samples, and finalizes them into FIFO batches keyed by that id (`cursorTelemetryBuffer.ts:25-34`). This key keeps asynchronous persistence and discard operations associated with the correct recording. Native cursor samples use the same recording-time convention, and `poc-d3d/src/cursor.rs:100-123` loads a selected window by subtracting its offset so the first sample is at time zero.
 
-## 2. Renderer hooks
+## Rendering
 
-| File | Role |
-| --- | --- |
-| `src/native/hooks/useCursorRecordingData.ts` | Loads `CursorRecordingData` for a given video path via the native bridge. Returns `{ data, loading, error }`. |
-| `src/native/hooks/useCursorTelemetry.ts` | Loads the `CursorTelemetryPoint[]` stream. |
-| `src/lib/cursorTelemetryBuffer.ts` | Buffers telemetry during playback (rate-decoupled from rAF). |
-| `scripts/inspect-native-cursor-click-bounce.mjs` | Diagnostic for the click-bounce animation (loads a recording and prints frame state). |
-| `scripts/test-windows-native-cursor.mjs` | Smoke test for the WGC cursor sampler on a real Windows machine. |
-| `docs/testing/macos-native-cursor.md` / `windows-native-cursor.md` | Manual test recipes. |
+`CursorPreviewLayer` is mounted above the video and loads both native recording data and telemetry through `useCursorRecordingData` and `useCursorTelemetry` (`src/components/ai-edition/CursorPreviewLayer.tsx:42-50`). Its animation loop updates the Pixi telemetry overlay and the native-cursor DOM image from the current playback time (`CursorPreviewLayer.tsx:187-255`). The shared cursor library supplies path smoothing, native asset selection, click bounce, and directional motion blur. The native compositor in `poc-d3d/src/cursor.rs` interpolates raw samples, applies the same 240 Hz spring-style smoothing, and computes click-bounce timing (`cursor.rs:126-196`). Preview and export therefore consume the same telemetry and cursor rules rather than maintaining independent cursor tracks.
 
-## 3. Cursor core library (`src/lib/cursor/`)
+```mermaid
+flowchart LR
+    C["Native capture<br/>position, type, clicks, assets"] --> T["Telemetry and<br/>recording sidecars"]
+    T --> P["Preview overlay<br/>Pixi + native image"]
+    T --> E["Native compositor<br/>export"]
+```
 
-| File | Role |
-| --- | --- |
-| `cursorPathSmoothing.ts` + test | Offline spring-damper smoothing. Resamples the raw cursor path to a 240Hz grid, runs a spring over each visible run, and serves positions by lookup. Deterministic, so preview and export match. Memoized per (recordingData, strength) via a `WeakMap`. |
-| `nativeCursor.ts` + test | Pretty-cursor mapping, native bitmaps, click-bounce progress, motion-blur px. Owns the `PRETTY_NATIVE_CURSOR_ASSETS` table that maps `NativeCursorType` → SVG / hotspot, the themed override resolver (`resolveNativeCursorRenderAsset`), and the `classifyCapturedCursorType` heuristic (macOS doesn't tag samples with a cursor type — we infer arrow / pointer from the hotspot). |
-| `cursorThemes.ts` | Theme registry: 17 Sweezy-cursors packs (arrow + pointer PNGs) + the built-in "default" sentinel id. Helpers: `DEFAULT_CURSOR_THEME_ID`, `CURSOR_THEME_IDS`, `getCursorTheme`, `normalizeCursorThemeId`. |
-| `uploadedCursorAssets.ts` | Bitmaps for the seven supported cursor types. Trim rects are pulled from the 1024px sample sheet. |
-| `pixiCursorRenderer.ts` (renamed from `video-editor/videoPlayback/cursorRenderer.ts`) | The `PixiCursorOverlay` class: builds the Pixi stage for telemetry-driven cursor rendering, applies the SVG drop shadow, runs a 240Hz spring on the cursor position, animates a click ring, and adds a directional motion-blur filter. Owns `DEFAULT_CURSOR_CONFIG` (dotRadius 28, smoothing 0.18, motionBlur 0, clickBounce 1). |
+## Settings
 
-## 4. Preview layer (`src/components/ai-edition/`)
+The cursor settings pane is `CursorPane` in `src/components/ai-edition/RightPanes.tsx`; the current v4 inspector exposes it through the cursor facet in `src/components/ai-edition/v4/FloatingInspector.tsx:57-63,1073`. It controls showing the cursor, clipping it to the canvas, theme, size, smoothing, motion blur, and click bounce. `RightPanes.tsx:1592-1692` binds those controls to editor settings and forwards the rendering parameters to the native compositor. The shared preview reads the same values from `useEditorSettings` (`CursorPreviewLayer.tsx:47,192-202`), so live changes affect both rendering paths.
 
-| File | Role |
-| --- | --- |
-| `CursorPreviewLayer.tsx` + test | Shared overlay rendered above the `<video>` in the editor. Two render paths: Pixi (telemetry) and a DOM `<img>` (native bitmap). Reads `useCursorRecordingData` + `useCursorTelemetry`, and applies the editor settings (size, smoothing, motion blur, click bounce, theme, clip-to-bounds, show). |
-| `CursorPreviewLayer.module.css` | Layer + native-cursor DOM styles. |
-| `VirtualPreview.tsx` (line 292) | Mounts `<CursorPreviewLayer>` inside the live preview. |
+## Auto-follow
 
-## 5. Right-panel pane (UI)
+Cursor telemetry also drives camera focus for auto-follow zooms. `src/components/video-editor/videoPlayback/cursorFollowUtils.ts` interpolates the cursor at content time and applies distance-adaptive, frame-rate-independent smoothing. The zoom-region utilities use that focus for preview, while the export frame renderer uses the corresponding focus during export. The native compositor keeps a raw track for cursor placement and derives a separately smoothed follow track (`poc-d3d/src/cursor.rs:16-24,126-136`), preventing camera motion from changing the cursor's actual recorded position.
 
-`src/components/ai-edition/RightPanes.tsx` → `CursorPane`, mounted from `RightPanelStack.tsx:115`.
+## Bundled assets
 
-| Control | Setting key | Range / type | Default |
-| --- | --- | --- | --- |
-| Show cursor | `cursorShow` (top-level) | toggle | `true` |
-| Clip to canvas | `cursor.clipToBounds` | toggle | `false` |
-| Cursor style (grid) | `cursorTheme` | pick from 18 options (Default + 17 Sweezy packs) | `default` |
-| Size | `cursor.size` | 0.5 – 10.0 (×10 on the slider) | `3.0` |
-| Smoothing | `cursor.smoothing` | 0 – 100% | `0.67` |
-| Motion blur | `cursor.motionBlur` | 0 – 100% | `0.35` |
-| Click bounce | `cursor.clickBounce` | 0 – 5.0 (×10 on the slider) | `2.5` |
+The themed cursor packs are stored under `public/cursors/<id>/` and contain arrow and pointer PNGs registered in `src/lib/cursor/cursorThemes.ts`. The built-in native replacement SVG set is under `src/assets/cursors/` and is selected by `src/lib/cursor/nativeCursor.ts`, which maps captured cursor types to render assets and hotspots.
 
-Defaults live in `src/components/video-editor/types.ts` (`DEFAULT_CURSOR_SIZE`, `DEFAULT_CURSOR_SMOOTHING`, `DEFAULT_CURSOR_MOTION_BLUR`, `DEFAULT_CURSOR_CLICK_BOUNCE`, `DEFAULT_CURSOR_CLIP_TO_BOUNDS`) and are surfaced through `useEditorSettings` (`src/lib/ai-edition/store/editorSettings.ts`).
+## Known gaps
 
-## 6. Settings persistence
-
-- v3 document has a passthrough `legacyEditor` blob; the cursor settings round-trip through it as `cursorShow`, `cursorSize`, `cursorSmoothing`, `cursorMotionBlur`, `cursorClickBounce`, `cursorClipToBounds`, `cursorTheme`.
-- Reader: `getEditorSettings(doc)` in `src/lib/ai-edition/store/editorSettings.ts`. Exposes `settings.cursor` and `settings.cursorTheme`.
-- Writer: `patchEditorSettings(doc, patch)` (and `useEditorSettings().set / setLive / commit`).
-- Hook: `useEditorSettings` in `src/lib/ai-edition/store/useEditorSettings.ts`. `set` persists to disk; `setLive` updates the in-memory document for live preview; `commit` flushes the in-memory doc to disk (used on slider release).
-
-## 7. Auto-follow (zoom / camera)
-
-`src/components/video-editor/videoPlayback/cursorFollowUtils.ts` (kept in the legacy `video-editor` folder because it's shared by the zoom-region focus logic and the export frame renderer).
-
-- `interpolateCursorAt(telemetry, timeMs)` — binary-search the sorted telemetry and lerp to the playback time.
-- `smoothCursorFocus(raw, prev, factor)` — exponential smoothing.
-- `advanceFollowFocus(prev, raw, dtMs, params)` — distance-adaptive factor re-framed in content time so preview (variable fps) and export (fixed fps) converge at the same speed.
-- `timeCorrectedFollowFactor(baseFactor, dtMs, referenceMs)` — frame-rate-independent smoothing.
-- `adaptiveSmoothFactor(raw, prev, min, max, rampDistance)` — natural deceleration as the camera nears the cursor.
-
-Consumers: `src/components/video-editor/videoPlayback/zoomRegionUtils.ts` (camera target for auto-focus zooms) and `src/lib/exporter/frameRenderer.ts` (export).
-
-## 8. Exporter
-
-`src/lib/ai-edition/exporter/documentExporter.ts` reads cursor data from options and passes it down the render pipeline. Forwarded fields: `cursorRecordingData`, `cursorTelemetry`, `cursorClickTimestamps`, `cursorScale`, `cursorSmoothing`, `cursorMotionBlur`, `cursorClickBounce`, `cursorClipToBounds`, `cursorTheme`. The legacy v2 export chain (frame renderer + muxer) consumes the same fields, so the v3 document round-trips through v2 export without losing the cursor pipeline.
-
-## 9. Bundled assets
-
-- 17 Sweezy-cursors theme packs under `public/cursors/<id>/{arrow,pointer}.png`. Each pack has a 32-logical-pixel reference with normalized hotspots (divide 128px-pack hotspots by 4). Add a pack by dropping two PNGs + an entry in `src/lib/cursor/cursorThemes.ts`.
-- 16 native cursor SVGs under `src/assets/cursors/Cursor=*.svg` (default, app-starting, beachball, cross, hand-*, help, menu, move, not-allowed, resize-*, text-cursor, up-arrow, wait, zoom-*).
-
-## 10. i18n
-
-- `src/i18n/locales/en/settings.json` → `cursor` block: `theme`, `themeDefault`, `show`, `size`, `smoothing`, `motionBlur`, `clickBounce`, `clipToBounds`, `clipToBoundsDescription`. The AI-edition shell currently renders the pane in English; the legacy `SettingsPanel` consumed these keys directly.
-
-## 11. What's NOT ported / known gaps
-
-- The right-rail cursor tab is always shown. The legacy `SettingsPanel` hid the tab when `hasCursorData` was false. The new shell treats it as a preference (visible even before recording), which is intentional.
-- The ai-edition shell does not use `useScopedT` for these labels yet — i18n keys exist but are not wired up. This is a separate P2/P3 concern.
-- No tests cover the new `CursorPane` directly (only the shared `CursorPreviewLayer`).
-
-## 12. File map (port branch vs legacy main)
-
-| Concern | Legacy (`main`) | Port branch (`port/cursor-from-main`) |
-| --- | --- | --- |
-| Editor | `src/components/video-editor/SettingsPanel.tsx`, `VideoEditor.tsx`, `videoPlayback/VideoPlayback.tsx` | `src/components/ai-edition/RightPanes.tsx` (`CursorPane`), `RightPanelStack.tsx`, `NewEditorShell.tsx`, `VirtualPreview.tsx` |
-| Pixi overlay | `src/components/video-editor/videoPlayback/cursorRenderer.ts` | `src/lib/cursor/pixiCursorRenderer.ts` (renamed) |
-| Uploaded-cursor bitmaps | `src/components/video-editor/videoPlayback/uploadedCursorAssets.ts` | `src/lib/cursor/uploadedCursorAssets.ts` (renamed) |
-| Auto-follow | `src/components/video-editor/videoPlayback/cursorFollowUtils.ts` | unchanged |
-| Spring config | `src/components/video-editor/videoPlayback/motionSmoothing.ts` | unchanged |
-| Themes | `src/lib/cursor/cursorThemes.ts` | unchanged |
-| Path smoothing | `src/lib/cursor/cursorPathSmoothing.ts` | unchanged |
-| Pretty / native cursor | `src/lib/cursor/nativeCursor.ts` | unchanged |
-| Telemetry buffer | `src/lib/cursorTelemetryBuffer.ts` | unchanged |
-| Hooks | `src/native/hooks/useCursor*.ts` | unchanged |
-| Native capture | `electron/native/{screencapturekit,wgc-capture}/...` + `electron/native-bridge/cursor/*` | unchanged |
-| Export pipeline | `src/lib/exporter/frameRenderer.ts`, `muxer.ts` | adds `src/lib/ai-edition/exporter/documentExporter.ts` (v3 envelope) → forwards to v2 renderer |
+macOS single-window capture can report a cursor offset relative to the captured surface. This remains an open platform-specific alignment issue; display capture does not exhibit the same verified gap.
