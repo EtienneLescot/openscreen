@@ -40,50 +40,11 @@ const ASSET_BASE_URL_ARG = `--asset-base-url=${pathToFileURL(`${ASSET_BASE_DIR}$
 
 let hudOverlayWindow: BrowserWindow | null = null;
 
-interface HudBounds {
-	x: number;
-	y: number;
-	width: number;
-	height: number;
-}
-
-// Smoothly tweens the HUD's bounds instead of snapping, so every content-driven
-// resize (recording state changing which controls are shown, a device popover
-// opening, etc.) reads as a fluid grow/shrink rather than a jarring jump.
-let hudResizeAnimationTimer: NodeJS.Timeout | null = null;
-const HUD_RESIZE_DURATION_MS = 160;
-const HUD_RESIZE_FRAME_MS = 1000 / 60;
-const easeOutCubic = (t: number) => 1 - (1 - t) ** 3;
-
-function animateHudBounds(win: BrowserWindow, from: HudBounds, to: HudBounds) {
-	if (hudResizeAnimationTimer) {
-		clearInterval(hudResizeAnimationTimer);
-		hudResizeAnimationTimer = null;
-	}
-
-	const start = Date.now();
-	hudResizeAnimationTimer = setInterval(() => {
-		if (win.isDestroyed()) {
-			if (hudResizeAnimationTimer) clearInterval(hudResizeAnimationTimer);
-			hudResizeAnimationTimer = null;
-			return;
-		}
-
-		const t = Math.min(1, (Date.now() - start) / HUD_RESIZE_DURATION_MS);
-		const e = easeOutCubic(t);
-		win.setBounds({
-			x: Math.round(from.x + (to.x - from.x) * e),
-			y: Math.round(from.y + (to.y - from.y) * e),
-			width: Math.round(from.width + (to.width - from.width) * e),
-			height: Math.round(from.height + (to.height - from.height) * e),
-		});
-
-		if (t >= 1) {
-			if (hudResizeAnimationTimer) clearInterval(hudResizeAnimationTimer);
-			hudResizeAnimationTimer = null;
-		}
-	}, HUD_RESIZE_FRAME_MS);
-}
+// Origin the current drag gesture started from. The renderer sends the pointer's
+// *total* travel since pointerdown rather than per-frame deltas, so every move is
+// an absolute `origin + delta` — no rounding to accumulate, and a dropped message
+// self-corrects on the next one instead of leaving the window permanently offset.
+let hudDragOrigin: { x: number; y: number } | null = null;
 
 ipcMain.on("hud-overlay-hide", () => {
 	if (hudOverlayWindow && !hudOverlayWindow.isDestroyed()) {
@@ -97,23 +58,46 @@ ipcMain.on("hud-overlay-ignore-mouse-events", (_event, ignore: boolean) => {
 	}
 });
 
-ipcMain.on("hud-overlay-move-by", (_event, deltaX: number, deltaY: number) => {
+ipcMain.on("hud-overlay-drag-start", () => {
+	if (!hudOverlayWindow || hudOverlayWindow.isDestroyed()) {
+		return;
+	}
+
+	const [x, y] = hudOverlayWindow.getPosition();
+	hudDragOrigin = { x, y };
+});
+
+ipcMain.on("hud-overlay-drag-to", (_event, deltaX: number, deltaY: number) => {
 	if (
 		!hudOverlayWindow ||
 		hudOverlayWindow.isDestroyed() ||
+		!hudDragOrigin ||
 		!Number.isFinite(deltaX) ||
 		!Number.isFinite(deltaY)
 	) {
 		return;
 	}
 
-	const [x, y] = hudOverlayWindow.getPosition();
-	hudOverlayWindow.setPosition(Math.round(x + deltaX), Math.round(y + deltaY), false);
+	hudOverlayWindow.setPosition(
+		Math.round(hudDragOrigin.x + deltaX),
+		Math.round(hudDragOrigin.y + deltaY),
+		false,
+	);
+});
+
+ipcMain.on("hud-overlay-drag-end", () => {
+	hudDragOrigin = null;
 });
 
 // Resize the HUD to fit its rendered content. Anchored by its bottom-centre so it
 // stays where the user dragged it while only growing/shrinking, which lets the
 // vertical tray layout grow tall instead of scrolling inside a fixed window.
+//
+// Applied in one shot rather than tweened. The renderer now reserves space for
+// everything that can float above the bar, so a resize only ever accompanies a
+// discrete content change (orientation flip, recording controls appearing) that
+// snaps anyway — tweening the window across 10 frames just meant 10 frames of the
+// bar sitting at an offset that didn't match the content it was drawn with.
 ipcMain.on("hud-overlay-set-size", (_event, width: number, height: number) => {
 	if (
 		!hudOverlayWindow ||
@@ -121,6 +105,12 @@ ipcMain.on("hud-overlay-set-size", (_event, width: number, height: number) => {
 		!Number.isFinite(width) ||
 		!Number.isFinite(height)
 	) {
+		return;
+	}
+
+	// A resize re-anchors from the window's current bounds, which would fight the
+	// position an in-flight drag is applying. The renderer re-measures on release.
+	if (hudDragOrigin) {
 		return;
 	}
 
@@ -155,7 +145,7 @@ ipcMain.on("hud-overlay-set-size", (_event, width: number, height: number) => {
 		workArea.y + workArea.height - nextHeight,
 	);
 
-	animateHudBounds(hudOverlayWindow, bounds, {
+	hudOverlayWindow.setBounds({
 		x: nextX,
 		y: nextY,
 		width: nextWidth,
@@ -171,8 +161,11 @@ export function createHudOverlayWindow(): BrowserWindow {
 	const primaryDisplay = screen.getPrimaryDisplay();
 	const { workArea } = primaryDisplay;
 
-	const windowWidth = 600;
-	const windowHeight = 160;
+	// Close to what the renderer asks for on its very first measurement (bar plus
+	// the reserved space above it), so the HUD doesn't visibly resize itself the
+	// instant it becomes visible. See src/components/launch/hudGeometry.ts.
+	const windowWidth = 820;
+	const windowHeight = 560;
 
 	const x = Math.floor(workArea.x + (workArea.width - windowWidth) / 2);
 	const y = Math.floor(workArea.y + workArea.height - windowHeight - 5);
@@ -234,6 +227,7 @@ export function createHudOverlayWindow(): BrowserWindow {
 	win.on("closed", () => {
 		if (hudOverlayWindow === win) {
 			hudOverlayWindow = null;
+			hudDragOrigin = null;
 		}
 	});
 

@@ -331,7 +331,11 @@ interface Window {
 		hudOverlayHide: () => void;
 		hudOverlayClose: () => void;
 		setHudOverlayIgnoreMouseEvents: (ignore: boolean) => void;
-		moveHudOverlayBy: (deltaX: number, deltaY: number) => void;
+		/** Pins the overlay's current position as the origin for `dragHudOverlayTo`. */
+		beginHudOverlayDrag: () => void;
+		/** Total pointer travel since `beginHudOverlayDrag`, not a per-frame delta. */
+		dragHudOverlayTo: (deltaX: number, deltaY: number) => void;
+		endHudOverlayDrag: () => void;
 		setHudOverlaySize: (width: number, height: number) => void;
 		showCountdownOverlay: (value: number, runId: number) => Promise<void>;
 		setCountdownOverlayValue: (value: number, runId: number) => Promise<void>;

@@ -74,5 +74,14 @@
 		"description": "既定のGPUエンコーダーを開始できなかったため、OpenScreenはソフトウェアH.264エンコードに切り替えました。録画はそのまま続行されますが、CPU使用率が高くなる場合があります。",
 		"dismiss": "OK",
 		"dontShowAgain": "今後表示しない"
+	},
+	"deviceSettings": {
+		"title": "デバイス設定",
+		"done": "完了",
+		"micLevel": "入力レベル",
+		"micHint": "マイクをテストするには話してください",
+		"noMicrophones": "マイクが見つかりません",
+		"preview": "プレビュー",
+		"previewUnavailable": "プレビューを利用できません"
 	}
 }

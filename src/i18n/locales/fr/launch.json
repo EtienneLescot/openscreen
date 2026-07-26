@@ -74,5 +74,14 @@
 		"description": "L'encodeur GPU par défaut n'a pas pu démarrer, OpenScreen est donc passé à l'encodage H.264 logiciel. L'enregistrement devrait continuer normalement, mais l'utilisation du processeur peut être plus élevée.",
 		"dismiss": "Compris",
 		"dontShowAgain": "Ne plus afficher"
+	},
+	"deviceSettings": {
+		"title": "Paramètres des périphériques",
+		"done": "Terminé",
+		"micLevel": "Niveau d'entrée",
+		"micHint": "Parlez pour tester votre microphone",
+		"noMicrophones": "Aucun microphone détecté",
+		"preview": "Aperçu",
+		"previewUnavailable": "Aperçu indisponible"
 	}
 }
