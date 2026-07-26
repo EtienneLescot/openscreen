@@ -33,49 +33,78 @@ A draggable, mouse-passthrough glassmorphic pill that lives on top of the deskto
 
 ### 2.1 Top-level layout
 
-The HUD mounts inside a div with `min-w-0 max-w-full overflow-hidden` and a `body { background: transparent }` override. The bar itself is `fixed bottom-5 left-1/2 -translate-x-1/2`, drag handle to the left, controls in the centre, window controls to the right. The window is mouse-ignored by default (`setHudOverlayIgnoreMouseEvents(true)`); it only becomes interactive when the user hovers a button or opens a popup.
+The HUD mounts inside a div with `min-w-0 max-w-full overflow-hidden` and a `body { background: transparent }` override. Everything sits in one bottom-anchored, upward-growing stack (`fixed bottom-5 left-1/2 -translate-x-1/2`): the bar at the bottom, then any popover, then any notice, laid out by flexbox relative to the bar rather than positioned from measured rects. Drag handle to the left, controls in the centre, window controls to the right. The window is mouse-ignored by default (`setHudOverlayIgnoreMouseEvents(true)`); it only becomes interactive when the user hovers a button or opens a popup.
 
-The window auto-resizes to fit content via a `ResizeObserver` and `window.electronAPI.setHudOverlaySize(w, h)`. Padding ensures the shadow isn't clipped and a system-language prompt can pop up above the bar without overlap.
+The overlay window's size is driven from the renderer via `setHudOverlaySize(w, h)`, but on a **reserve, don't discover** basis — see `src/components/launch/hudGeometry.ts`. Only the bar is measured; every floating panel has a fixed width and a capped, internally-scrolling height whose space is reserved in the window from the first frame. Consequences worth knowing:
+
+- Opening or closing any floating surface — popover, device-settings panel, notice — or a device list changing length, costs **zero** native resizes. The reserve is sized against the tallest of them, not against whichever is open.
+- No measured box may be sized in `vh`/`vw`. A viewport-relative size makes the box depend on the window, and those boxes feed the sizing measurement — which closes a resize → re-layout → re-measure loop. Screen-derived caps (`screen.availHeight`) arrive as `--hud-*` custom properties instead.
+- Resizes are applied in one shot, not tweened: they only ever accompany a discrete content change (orientation flip) that snaps anyway.
+- Allocation is asymmetric — grow as soon as the content stops fitting, shrink only once it has fallen a whole reserve below what was granted. So the bar can grow into its reserve (recording controls, a longer source name) and back out without any resize at all.
 
 ### 2.2 Controls (left → right, horizontal mode is default)
 
 Every control is also vertically stackable — the layout toggle is the first button in the bar (Columns3 / Rows3 icons). The choice is persisted in `localStorage` as `userPreferences.trayLayout`.
 
-1. **Drag handle** — six-dot grip, pointer-captured. Drag moves the HUD overlay (`moveHudOverlayBy`); releases re-ignore mouse events.
+1. **Drag handle** — six-dot grip, pointer-captured. Pointerdown pins the window's origin in the main process (`beginHudOverlayDrag`); each move sends the pointer's *total* travel since then (`dragHudOverlayTo`), so nothing accumulates or drifts; release ends the gesture and re-measures the content.
 2. **Layout toggle** — swaps between horizontal (`Columns3` icon, default) and vertical (`Rows3` icon, `aria-pressed=true` when vertical). Tooltip "Use vertical tray" / "Use horizontal tray".
-3. **Source picker button** — screen icon + truncated source name (e.g. "Entire Screen"). Disabled during recording. Opens `<SourceSelector>` window. Selection is mirrored in the bar every 500ms and whenever the source changes (so the label updates without polling the user).
-4. **Audio group** — three buttons in a single rounded container:
-   - System audio (`MdVolumeUp` / `MdVolumeOff`). Disabled during recording.
-   - Microphone (`MdMic` / `MdMicOff`). When enabled and not recording, an **Audio Level Meter** + mic picker pop-up appears above the bar: shows the current mic name (truncated), a `<select>` of all `getUserMedia` microphones, and a 5-bar level meter driven by `useAudioLevelMeter` (FFT analyser, smoothing 0.8). Pop-up collapses on mouse leave / blur.
-   - Webcam (`MdVideocam` / `MdVideocamOff`). When enabled and not recording, a webcam pop-up shows the camera label + `<select>` and gracefully handles `Searching…`, `Camera unavailable`, `No camera found` states.
-5. **Cursor mode** (only on macOS / Windows, hidden on Linux) — toggles between `editable-overlay` (default, OpenScreen draws a stylised cursor you can theme/edit) and `system` (record OS cursor as-is).
-6. **Record/Stop button**:
+3. **Source picker button** — screen icon + truncated source name (e.g. "Entire Screen"). Disabled during recording. Opens `<SourceSelector>` window. The label is seeded once on mount and then kept in sync by the `onSelectedSourceChanged` event (plus a refresh on window focus) — there is no polling.
+4. **Capture group** — system audio, microphone and webcam, each a standalone icon button, and all three **plain on/off toggles**. One click switches the device on using whatever is currently selected (the system default until the user says otherwise); one click switches it off. Disabled during recording. Choosing *which* device is a separate concern and lives in the settings panel below — overloading one button with both jobs is what made turning a camera on take two clicks.
+5. **Device settings** (gear) — opens the device panel in the stack above the bar (§2.3). Disabled during recording, when devices can't be changed anyway. It sits with the mic and camera toggles it configures inside a hairline-outlined group, tighter than the bar's normal spacing: a fill light enough to read on `#14171c` would land brighter than the buttons' own hover colour and invert the hover affordance, so the grouping is marked with an inset outline instead.
+6. **Cursor mode** (only on macOS / Windows, hidden on Linux) — toggles between `editable-overlay` (default, OpenScreen draws a stylised cursor you can theme/edit) and `system` (record OS cursor as-is).
+7. **Record/Stop button**:
    - When idle and a source is selected: pill with the red **record** icon, plus the source name on hover.
    - When idle and no source: same pill but greyed, clicking it opens the Source Selector first and then auto-starts recording once a source is picked (`recordAfterSourceSelectionRef`).
    - When recording: red/amber pill with the **stop** icon plus a `mm:ss` elapsed timer (`formatTimePadded`) that ticks up live. Background turns red while running, amber when paused.
-7. **Recording-state auxiliary buttons** (only while recording):
+8. **Recording-state auxiliary buttons** (only while recording):
    - **Pause/Resume** (`BsPauseCircle` ↔ `BsPlayCircle`) — only shown if `canPauseRecording`.
    - **Restart** (`MdRestartAlt`) — throws away current take and starts fresh.
    - **Cancel** (`MdCancel`) — discards the current take without saving.
-8. **Open Studio** (`Clapperboard` icon, hidden during recording) — switches to the editor window via `window.electronAPI.switchToEditor()`.
-9. **Language button** (right sidebar) — pill labelled with the current locale short name (e.g. "EN"), opens a portal-rendered language menu above the bar. Each item shows the localized language name with a check next to the current one. Click-outside and `Esc` close it. Width is constrained so it doesn't overflow the desktop. The list of locales is pulled from `getAvailableLocales()`.
-10. **Window controls** (far right) — `−` (hide HUD, keeps app running) and `×` (close app).
+9. **Open Studio** (`Clapperboard` icon, hidden during recording) — switches to the editor window via `window.electronAPI.switchToEditor()`.
+10. **Language button** (right sidebar) — pill labelled with the current locale short name (e.g. "EN"), opens the language menu in the stack above the bar. Each item shows the localized language name with a check next to the current one. Click-outside and `Esc` close it. Its height is a plain CSS cap (320px, scrolls past that) rather than a value measured against the overlay window — that measurement is what used to truncate the list to a couple of entries and then let it grow whenever the window happened to grow. The list of locales is pulled from `getAvailableLocales()`.
+11. **Window controls** (far right) — `−` (hide HUD, keeps app running) and `×` (close app).
 
-### 2.3 Hover behaviour
+### 2.3 Device settings panel
+
+Opened from the gear button, and the only place devices are chosen. It lists the
+microphone and camera inputs with the active one checked, and lets the user
+*verify* each before recording:
+
+- A live segmented **input-level meter** under the microphone list, fed by
+  `useAudioLevelMeter` on the selected device.
+- A live mirrored **camera preview** under the camera list, fed by
+  `useCameraPreviewStream` on the selected device.
+
+Both streams belong to the panel, are torn down when it closes, and are entirely
+separate from the recorder's own capture streams. Neither is opened when the
+corresponding hardware is absent. **Selecting a device never switches it on** —
+if the device is already live the recorder re-acquires it on the id change,
+otherwise the choice simply applies to the next toggle.
+
+It is the tallest floating surface, so it is what the window's vertical reserve
+is sized against (see §2.1) — permanently, open or not. Opening it therefore
+costs **zero** resizes, like every other surface: sizing the reserve to whatever
+happens to be open would grow the window on open, and since the stack is
+bottom-anchored, growing upward shifts all the content down in window
+coordinates a frame or two before the renderer repaints it — which is visible as
+position judder. Click-outside, `Esc` and its own Done control all close it, and
+it is mutually exclusive with the language menu.
+
+### 2.4 Hover behaviour
 
 - Hover/pointer-enter on the bar enables mouse events on the overlay (`setHudOverlayIgnoreMouseEvents(false)`).
-- Pointer-leave disables them again, except while a popup is open.
-- The selected source name refreshes every 500 ms plus on `onSelectedSourceChanged`, so the bar stays in sync if a non-OpenScreen app pops a system picker.
+- Pointer-leave disables them again, except while a popup is open (a popup reaches beyond the bar, and the gap between the two would otherwise flip the overlay back to click-through mid-travel).
+- The selected source name is seeded once on mount and then follows `onSelectedSourceChanged`, with a refresh on window focus to cover anything missed while the window was gone.
 
-### 2.4 System-language prompt
+### 2.5 System-language prompt
 
-If the OS locale differs from the current UI locale and hasn't been resolved, a glassy card slides in at `top-8 center`:
+If the OS locale differs from the current UI locale and hasn't been resolved, a glassy card fades in at the top of the HUD stack, above the bar and above any open popover (a fixed 360px wide, so it can't resize the overlay horizontally):
 
 - Title: "Use your system language?"
 - Body: "We detected X as your system language. Do you want to switch OpenScreen to X?"
 - Two buttons: **Keep current language** / **Switch to X**. Both resolve the prompt so it never reappears.
 
-### 2.5 Loading and error states
+### 2.6 Loading and error states
 
 The HUD itself doesn't have an explicit "loading" state — `useScreenRecorder` handles all of that internally. Errors surface via Sonner toasts triggered from the recorder hook:
 
@@ -87,7 +116,7 @@ The HUD itself doesn't have an explicit "loading" state — `useScreenRecorder` 
 - "Recording permission denied. Please allow screen recording."
 - "Allow Accessibility access for OpenScreen, then press record again to start the countdown." (macOS)
 
-### 2.6 Countdown integration
+### 2.7 Countdown integration
 
 When the user hits Record, the recorder calls `window.electronAPI.showCountdownOverlay(value, runId)` to spawn the `<CountdownOverlay>` window. The HUD doesn't itself render numbers — it just waits for the recorder to flip into the recording state.
 
@@ -571,7 +600,7 @@ The renderer also calls into the main process for:
 - `showCountdownOverlay` / `hideCountdownOverlay` / `onCountdownOverlayValue` — countdown window.
 - `startNativeWindowsRecording` / `pauseNativeWindowsRecording` / `resumeNativeWindowsRecording` / `stopNativeWindowsRecording` / `startNativeMacRecording` / `pauseNativeMacRecording` / `resumeNativeMacRecording` / `stopNativeMacRecording` / `isNativeWindowsCaptureAvailable` / `isNativeMacCaptureAvailable` / `requestNativeMacCursorAccess` / `attachNativeMacWebcamRecording` — native recorder pipeline.
 - `getCurrentRecordingSession` / `setCurrentRecordingSession` / `setHasUnsavedChanges` / `onRequestSaveBeforeClose` / `onRequestCloseConfirm` — session handoff between recorder and editor.
-- `setHudOverlaySize` / `moveHudOverlayBy` / `setHudOverlayIgnoreMouseEvents` — HUD geometry.
+- `setHudOverlaySize` / `beginHudOverlayDrag` + `dragHudOverlayTo` + `endHudOverlayDrag` / `setHudOverlayIgnoreMouseEvents` — HUD geometry.
 - `requestScreenAccess`, `requestCameraAccess`, `openExternalUrl`, `openVideoFilePicker`, `readBinaryFile`, `saveDiagnostic` — utilities.
 
 ---

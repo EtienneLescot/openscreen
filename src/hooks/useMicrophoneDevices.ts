@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export interface MicrophoneDevice {
 	deviceId: string;
@@ -11,6 +11,11 @@ export function useMicrophoneDevices(enabled: boolean = true) {
 	const [selectedDeviceId, setSelectedDeviceId] = useState<string>("default");
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// Read through a ref rather than a dependency: `selectedDeviceId` is written by
+	// this very effect, so depending on it re-ran the whole load — a second
+	// getUserMedia() permission stream acquired and torn down on every open.
+	const selectedDeviceIdRef = useRef(selectedDeviceId);
+	selectedDeviceIdRef.current = selectedDeviceId;
 
 	useEffect(() => {
 		if (!enabled) {
@@ -41,7 +46,9 @@ export function useMicrophoneDevices(enabled: boolean = true) {
 
 				if (mounted) {
 					setDevices(audioInputs);
-					if (selectedDeviceId === "default" && audioInputs.length > 0) {
+					const currentId = selectedDeviceIdRef.current;
+					const stillAvailable = audioInputs.some((d) => d.deviceId === currentId);
+					if ((currentId === "default" || !stillAvailable) && audioInputs.length > 0) {
 						setSelectedDeviceId(audioInputs[0].deviceId);
 					}
 					setIsLoading(false);
@@ -69,7 +76,7 @@ export function useMicrophoneDevices(enabled: boolean = true) {
 			mounted = false;
 			navigator.mediaDevices.removeEventListener("devicechange", handleDeviceChange);
 		};
-	}, [enabled, selectedDeviceId]);
+	}, [enabled]);
 
 	return {
 		devices,

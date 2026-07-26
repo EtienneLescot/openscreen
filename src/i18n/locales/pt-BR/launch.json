@@ -74,5 +74,14 @@
 		"description": "O codificador de GPU padrão não pôde ser iniciado, então o OpenScreen passou a usar a codificação H.264 por software. A gravação deve continuar normalmente, mas o uso da CPU pode ser maior.",
 		"dismiss": "Entendi",
 		"dontShowAgain": "Não mostrar novamente"
+	},
+	"deviceSettings": {
+		"title": "Configurações de dispositivos",
+		"done": "Concluído",
+		"micLevel": "Nível de entrada",
+		"micHint": "Fale para testar seu microfone",
+		"noMicrophones": "Nenhum microfone encontrado",
+		"preview": "Pré-visualização",
+		"previewUnavailable": "Pré-visualização indisponível"
 	}
 }

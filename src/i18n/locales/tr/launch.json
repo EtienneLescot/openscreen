@@ -74,5 +74,14 @@
 		"description": "Varsayılan GPU kodlayıcı başlatılamadığı için OpenScreen yazılım tabanlı H.264 kodlamasına geçti. Kayıt normal şekilde devam eder, ancak CPU kullanımı daha yüksek olabilir.",
 		"dismiss": "Anladım",
 		"dontShowAgain": "Bir daha gösterme"
+	},
+	"deviceSettings": {
+		"title": "Cihaz ayarları",
+		"done": "Tamam",
+		"micLevel": "Giriş seviyesi",
+		"micHint": "Mikrofonunuzu test etmek için konuşun",
+		"noMicrophones": "Mikrofon bulunamadı",
+		"preview": "Önizleme",
+		"previewUnavailable": "Önizleme kullanılamıyor"
 	}
 }

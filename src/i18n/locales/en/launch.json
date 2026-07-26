@@ -74,5 +74,14 @@
 		"description": "The default GPU encoder failed to start, so OpenScreen fell back to software H.264 encoding. Recording should continue as normal, but CPU usage may be higher.",
 		"dismiss": "Got it",
 		"dontShowAgain": "Don't show again"
+	},
+	"deviceSettings": {
+		"title": "Device settings",
+		"done": "Done",
+		"micLevel": "Input level",
+		"micHint": "Speak to check your microphone",
+		"noMicrophones": "No microphone found",
+		"preview": "Preview",
+		"previewUnavailable": "Preview unavailable"
 	}
 }

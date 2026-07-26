@@ -74,5 +74,14 @@
 		"description": "預設 GPU 編碼器啟動失敗，OpenScreen 已改用軟體 H.264 編碼。錄製會照常繼續，但 CPU 使用率可能較高。",
 		"dismiss": "知道了",
 		"dontShowAgain": "不再顯示"
+	},
+	"deviceSettings": {
+		"title": "裝置設定",
+		"done": "完成",
+		"micLevel": "輸入音量",
+		"micHint": "說話以測試麥克風",
+		"noMicrophones": "找不到麥克風",
+		"preview": "預覽",
+		"previewUnavailable": "預覽無法使用"
 	}
 }
