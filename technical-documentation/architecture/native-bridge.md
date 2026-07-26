@@ -6,9 +6,9 @@ The native bridge gives renderer code one typed interface for platform capabilit
 
 ```mermaid
 flowchart LR
-    A[Native adapters\nplatform-specific capture/assets] --> S[Main-process services\nelectron/native-bridge/services]
-    S --> I[Unified IPC transport\nelectron/ipc/nativeBridge.ts]
-    I --> R[Renderer client\nsrc/native/client.ts]
+    A["Native adapters<br/>platform-specific capture/assets"] --> S["Main-process services<br/>electron/native-bridge/services"]
+    S --> I["Unified IPC transport<br/>electron/ipc/nativeBridge.ts"]
+    I --> R["Renderer client<br/>src/native/client.ts"]
     R --> B[React components]
 ```
 
