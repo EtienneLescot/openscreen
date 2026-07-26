@@ -7,54 +7,258 @@
 	-webkit-app-region: no-drag;
 }
 
-.languageMenuScroll {
-	max-height: 20rem;
+/*
+ * The HUD is one bottom-anchored, upward-growing stack: the bar sits at the
+ * bottom, popovers and notices float above it in DOM order. Everything that
+ * floats is a sibling laid out by flexbox rather than a `fixed` element placed
+ * from a measured getBoundingClientRect(), which is what removes the whole
+ * measure -> setState -> re-measure round trip the popovers used to need.
+ *
+ * Nothing in here may be sized in vh/vw: a viewport-relative size makes the
+ * element's box depend on the overlay window's size, and since these boxes feed
+ * the window-sizing measurement that closes a feedback loop (see hudGeometry.ts).
+ * Screen-derived caps arrive as the --hud-* custom properties instead.
+ */
+.hudAnchor {
+	position: fixed;
+	bottom: var(--hud-bar-bottom, 20px);
+	left: 50%;
+	transform: translateX(-50%);
+	display: flex;
+	flex-direction: column-reverse;
+	align-items: center;
+	gap: var(--hud-popover-gap, 8px);
+	/* The stack containers are only layout boxes; the gaps between and around
+	   their children must stay click-through, or the overlay would swallow clicks
+	   meant for whatever is behind it. Only the painted surfaces opt back in. */
+	pointer-events: none;
+}
+
+.hudAbove {
+	display: flex;
+	flex-direction: column-reverse;
+	align-items: center;
+	gap: var(--hud-stack-gap, 10px);
+	pointer-events: none;
+}
+
+.hudBar {
+	pointer-events: auto;
+	display: flex;
+	border-radius: 17px;
+	border: 1px solid #242932;
+	background: #14171c;
+	box-shadow: 0 2px 6px -2px rgba(0, 0, 0, 0.35);
+	backdrop-filter: blur(24px) saturate(140%);
+}
+
+.hudBarHorizontal {
+	align-items: center;
+	gap: 5px;
+	padding: 7px 9px;
+}
+
+.hudBarVertical {
+	flex-direction: column;
+	align-items: center;
+	gap: 5px;
+	padding: 9px 7px;
+	/* Screen-derived, set once at mount — never the window's own height. */
+	max-height: var(--hud-bar-max-h, 900px);
 	overflow-y: auto;
 	overflow-x: hidden;
-	overscroll-behavior: contain;
-	touch-action: pan-y;
-	-webkit-overflow-scrolling: touch;
 }
 
-.languageMenuScroll::-webkit-scrollbar {
-	width: 8px;
-}
-
-.languageMenuScroll::-webkit-scrollbar-track {
-	background: rgba(255, 255, 255, 0.04);
-	border-radius: 999px;
-}
-
-.languageMenuScroll::-webkit-scrollbar-thumb {
-	background: linear-gradient(180deg, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0.2));
-	border-radius: 999px;
-	border: 1px solid rgba(255, 255, 255, 0.15);
-}
-
-.languageMenuScroll::-webkit-scrollbar-thumb:hover {
-	background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.3));
-}
-
-.languageMenuContainer {
-	position: relative;
-	z-index: 20;
-}
-
-/* Matches the mic/camera device-picker popovers' visual language (see the
-   activeDeviceMenu panel in LaunchWindow.tsx) so every HUD popover reads as
-   one coherent design. Anchored with `bottom` (set inline) instead of `top`
-   so it opens upward, above the widget, sized to its own content. */
-.languageMenuPanel {
-	position: fixed;
-	right: 0;
+/* Shared shell for every floating HUD menu (language list, device pickers), so
+   they all read as one design and all reserve the same space in the window. */
+.hudPopover {
+	pointer-events: auto;
 	width: 220px;
+	box-sizing: border-box;
 	padding: 6px;
 	border-radius: 15px;
 	border: 1px solid rgba(255, 255, 255, 0.1);
 	background: #1a1e25;
 	box-shadow: 0 20px 44px -14px rgba(0, 0, 0, 0.6), 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.hudPopoverScroll {
+	/* Capped, and the cap is reserved in the overlay window up front, so a list
+	   growing or shrinking never resizes the native window. */
+	max-height: var(--hud-popover-max-h, 320px);
+	overflow-y: auto;
+	overflow-x: hidden;
+	overscroll-behavior: contain;
+	touch-action: pan-y;
+}
+
+/* Scrollbar skin only — kept separate from the height caps so a surface can pick
+   up the look without also inheriting the popover's (smaller) max-height. */
+.hudScrollbar::-webkit-scrollbar {
+	width: 8px;
+}
+
+.hudScrollbar::-webkit-scrollbar-track {
+	background: rgba(255, 255, 255, 0.04);
+	border-radius: 999px;
+}
+
+.hudScrollbar::-webkit-scrollbar-thumb {
+	background: linear-gradient(180deg, rgba(255, 255, 255, 0.35), rgba(255, 255, 255, 0.2));
+	border-radius: 999px;
+	border: 1px solid rgba(255, 255, 255, 0.15);
+}
+
+.hudScrollbar::-webkit-scrollbar-thumb:hover {
+	background: linear-gradient(180deg, rgba(255, 255, 255, 0.5), rgba(255, 255, 255, 0.3));
+}
+
+/* The mic and camera toggles plus the gear that configures them read as one
+   unit: tighter spacing than the bar's 5px, inside a hairline outline.
+   Deliberately an outline rather than the tinted pill the design rules out —
+   a fill that reads at all on #14171c lands brighter than the buttons' own
+   hover colour, which would invert the hover affordance. */
+.hudControlGroup {
+	display: flex;
+	align-items: center;
+	gap: 2px;
+	margin: 0 1px;
+	padding: 2px;
+	border-radius: 12px;
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+
+.hudControlGroupVertical {
+	flex-direction: column;
+	margin: 1px 0;
+}
+
+/* Device settings. Same shell as the popovers, and deliberately the same width
+   as the notice column (HUD_STACK_WIDTH) so opening it only ever changes the
+   overlay window's height, never its width. */
+.hudModal {
 	pointer-events: auto;
+	width: 360px;
+	/* Its own cap, larger than a popover's — but the window reserves this room
+	   whether the panel is open or not, so opening it never resizes anything. */
+	max-height: var(--hud-modal-max-h, 470px);
+	overflow-y: auto;
+	overflow-x: hidden;
+	overscroll-behavior: contain;
 	box-sizing: border-box;
+	padding: 6px;
+	border-radius: 15px;
+	border: 1px solid rgba(255, 255, 255, 0.1);
+	background: #1a1e25;
+	box-shadow: 0 20px 44px -14px rgba(0, 0, 0, 0.6), 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.hudModalHeader {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	padding: 4px 4px 6px 10px;
+}
+
+.hudModalTitle {
+	font-size: 12px;
+	font-weight: 600;
+	color: #f5f7fa;
+}
+
+.hudModalClose {
+	display: flex;
+	height: 24px;
+	width: 24px;
+	align-items: center;
+	justify-content: center;
+	border: 0;
+	border-radius: 8px;
+	background: transparent;
+	color: rgba(255, 255, 255, 0.55);
+	cursor: pointer;
+	transition: background-color 120ms ease, color 120ms ease;
+}
+
+.hudModalClose:hover {
+	background: rgba(255, 255, 255, 0.08);
+	color: #ffffff;
+}
+
+.hudModalEmpty {
+	padding: 8px 10px;
+	font-size: 11px;
+	font-style: italic;
+	color: rgba(255, 255, 255, 0.4);
+}
+
+.hudModalMeterRow {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 8px 10px 2px;
+}
+
+.hudModalMeterLabel {
+	font-size: 10px;
+	color: rgba(255, 255, 255, 0.45);
+	white-space: nowrap;
+}
+
+.hudModalHint {
+	padding: 0 10px 6px;
+	font-size: 10px;
+	color: rgba(255, 255, 255, 0.35);
+}
+
+.levelMeter {
+	display: flex;
+	flex: 1;
+	align-items: center;
+	gap: 2px;
+	height: 10px;
+}
+
+.levelSegment {
+	flex: 1;
+	height: 100%;
+	border-radius: 1px;
+	background: rgba(255, 255, 255, 0.1);
+	transition: background-color 60ms linear;
+}
+
+.levelSegmentOn {
+	background: #10b981;
+}
+
+.cameraPreview {
+	display: flex;
+	width: 100%;
+	aspect-ratio: 16 / 9;
+	margin-top: 6px;
+	align-items: center;
+	justify-content: center;
+	border-radius: 10px;
+	background: #0d1014;
+	object-fit: cover;
+	/* The preview is a mirror of the user, so flip it like every other self-view. */
+	transform: scaleX(-1);
+}
+
+.cameraPreviewFallback {
+	font-size: 11px;
+	font-style: italic;
+	color: rgba(255, 255, 255, 0.4);
+	transform: scaleX(-1);
+}
+
+/* Fixed width (not `100vw - 1rem`) for the same no-viewport-dependency reason. */
+.hudNoticeColumn {
+	pointer-events: auto;
+	display: flex;
+	width: 360px;
+	flex-direction: column;
+	gap: 8px;
 }
 
 .languageMenuItem {
@@ -84,11 +288,8 @@
 	color: #ffffff;
 }
 
-/* Device-picker popovers (microphone / camera) — reuse the language menu's
-   panel/item/checkmark shell (same floating-menu shape), just add the
-   section-label piece the language menu doesn't need since it has no
-   device grouping. These only ever open while the device is off, so there's
-   no on/off header toggle — the device list is the whole popover body. */
+/* Device-picker popovers (microphone / camera) reuse the language menu's
+   panel/item/checkmark shell; this is the one extra piece they need. */
 .hudMenuSectionLabel {
 	padding: 6px 10px 4px;
 	font-family: var(--font-mono, ui-monospace, monospace);
