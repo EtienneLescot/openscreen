@@ -1,153 +1,131 @@
-# Secrets and tokens
+# Release and secrets
 
-OpenScreen uses a small set of GitHub Actions secrets and repository variables. This file documents what each one does and how to create or rotate it.
+OpenScreen's release machinery lives in `.github/workflows/prerelease.yml`, `promote.yml`, and `build.yml`; its credentials are repository secrets and variables consumed by those workflows and the downstream package and Discord automations. This page is the operational reference for cutting releases and maintaining those credentials.
 
-## Required for releases
+## Release flow
+
+### Cut a release candidate
+
+Run the `Cut a release candidate` workflow (`prerelease.yml`) with:
+
+- `bump`: `patch`, `minor`, or `major`; default `minor`.
+- `rc_number`: the numeric `rc.N` counter; default `1`.
+- `target_version`: optional stable-version override such as `2.0.0`.
+
+The workflow computes `X.Y.Z-rc.N`, migrates items from `Next Release` to the `vX.Y.Z` milestone, creates or reuses `release/vX.Y.Z`, commits the prerelease version there, tags the frozen branch tip, explicitly dispatches `build.yml` at the RC tag, and announces the pre-release in the configured RC Discord channel.
+
+### Promote to stable
+
+Run `Promote RC to stable release` (`promote.yml`) with:
+
+- `rc_tag`: required tag matching `vX.Y.Z-(rc|beta|alpha).N`.
+- `release_notes_extra`: optional text prepended to the stable Discord announcement.
+
+The workflow validates the tag, closes the version milestone, checks out `release/vX.Y.Z`, changes `package.json` to the stable version, tags that branch tip, opens and rebase-merges a release-sync PR into `main`, explicitly dispatches `build.yml` at the stable tag, and announces the stable release. The build publishes signed/notarized artifacts when Apple credentials are complete; publication with `OPENSCREEN_RELEASE_TOKEN` emits the event that starts stable Homebrew, WinGet, Nix, and AUR workflows.
+
+### Release-branch freeze rule
+
+An RC cut creates `release/vX.Y.Z`. That branch is not merged into `main` until the stable tag is published, and only cherry-picked RC bug fixes land on it during the RC window. Subsequent RCs reuse the same branch. This rule exists because a promote workflow once tagged `main` instead of the tested RC snapshot and shipped unreleased commits.
+
+Development continues on `main`; the freeze applies to the release branch. Day-to-day branching, PR, review, and cherry-pick procedure is maintained in [the operational git workflow](../../.harness/docs/git-workflow.md).
+
+### Manual tag fallback
+
+When the dispatch UI is unavailable, prepare the correct prerelease or stable `package.json` commit on the frozen release branch, then push the tag at that exact commit:
+
+```bash
+git tag v1.8.0-rc.1 <release-branch-sha>
+git push origin v1.8.0-rc.1
+
+# After QA and the stable version commit on the same release branch:
+git tag v1.8.0 <stable-release-branch-sha>
+git push origin v1.8.0
+```
+
+Any `v*` tag triggers `build.yml`. The fallback skips milestone migration/closure, release-branch automation, explicit build dispatch, main synchronization, and Discord announcements, so the operator must preserve the freeze and version/tag match manually.
+
+## Required release credential
 
 ### `OPENSCREEN_RELEASE_TOKEN`
 
-A **fine-grained personal access token** used by the release pipeline (`build.yml#publish-release`, `prerelease.yml`, `promote.yml`) for the actions that `GITHUB_TOKEN` cannot perform reliably:
+This fine-grained personal access token is used by `prerelease.yml`, `promote.yml`, and `build.yml`. It migrates and closes issues/milestones, pushes release branches, creates and merges the release-sync PR, dispatches `build.yml`, and creates GitHub releases so `release: published` can start downstream workflows. The automatic `GITHUB_TOKEN` cannot reliably trigger those subsequent workflows.
 
-- Creating a GitHub Release via `gh release create` such that the `release: published` event **does** fire downstream workflows (homebrew/winget/nix/aur). With `GITHUB_TOKEN`, the event is suppressed to prevent recursive workflow runs.
-- Pushing commits and tags to `main` from `prerelease.yml` and `promote.yml` in a way that can later trigger downstream CI.
-- Closing milestones and posting comments during the issue-migration step.
+Grant the token access only to the OpenScreen repository with:
 
-**Why not just use `GITHUB_TOKEN` for everything else?**
+- Contents: read and write.
+- Issues: read and write.
+- Pull requests: read and write.
+- Actions: read and write, for explicit build dispatch.
+- Workflows: read and write, because the pushed release branch contains `.github/workflows/`.
+- Metadata: read-only.
 
-Most of the repo's workflows (CI, build, Tier 3 publishers, Discord sync) only need read access or scoped write access within a single repo. `GITHUB_TOKEN` is fine for those and is the safer default. The release pipeline needs cross-workflow event firing, which only a PAT can provide.
-
-**How to create it:**
-
-1. Go to <https://github.com/settings/tokens?type=beta> (fine-grained PATs).
-2. **Resource owner**: `getopenscreen` (only this org — do not grant access to personal repos).
-3. **Repository access**: `getopenscreen/openscreen` only.
-4. **Permissions**:
-   - `Contents`: Read and write
-   - `Issues`: Read and write
-   - `Pull requests`: Read and write (the release pipeline opens a PR to bump `package.json` and rebase-merges it into `main` because the org-level workflow permissions block `GITHUB_TOKEN` from creating PRs)
-   - `Actions`: Read and write (the release pipeline triggers `build.yml` via `gh workflow run`; GITHUB_TOKEN tag pushes don't fire downstream workflows in this org)
-   - `Workflows`: Read and write (the release branch contains the workflow files; creating it requires writing to `.github/workflows/`)
-   - `Metadata`: Read-only (auto-selected)
-5. **Expiration**: 1 year. Set a calendar reminder to rotate.
-6. Generate the token, copy it once, then add it as a repository secret. The `gh` CLI does **not** accept the value as a positional argument — use `--body` or stdin:
-   ```bash
-   # Either:
-   gh secret set OPENSCREEN_RELEASE_TOKEN --body "ghp_xxxxxxxxxxxxxxxxxxxx" --repo getopenscreen/openscreen
-   # Or:
-   echo "ghp_xxxxxxxxxxxxxxxxxxxx" | gh secret set OPENSCREEN_RELEASE_TOKEN --repo getopenscreen/openscreen
-   ```
-7. Verify by triggering a test `workflow_dispatch` on `prerelease.yml` with `bump=patch`, `rc_number=99` against an empty milestone, then revert the resulting `package.json` bump PR/commit.
-
-**Rotation:**
-
-Old token and new token both work in parallel until the old one expires or is revoked. Rotate by:
-
-1. Generate the new token.
-2. Update the secret.
-3. Revoke the old token.
-
-There's no need to coordinate a rotation window — the release pipeline runs at most a few times per month.
-
-## Required repo ruleset bypass
-
-The `main` branch is protected by the repository ruleset `main-protection` (id `18060803` on this repo), which requires changes to be made through a pull request. The release pipeline (`prerelease.yml` and `promote.yml`) commits `package.json` directly to `main` because the version bump has to land before the tag is pushed and the build runs.
-
-To allow that direct push, the ruleset has two bypass actors:
-
-- **`EtienneLescot`** (id `215859519`) — so manual pushes from the maintainer's local checkout work.
-- **`github-actions[bot]`** (id `41898282`) — so the workflow's `GITHUB_TOKEN` push (the default `actions/checkout@v4` auth) is also accepted.
-
-## Required repo ruleset bypass and PR flow
-
-The `main` branch is protected by the repository ruleset `main-protection` (id `18060803` on this repo). It enforces:
-
-- `deletion` — branches can't be deleted
-- `non_fast_forward` — no force pushes
-- `required_linear_history` — fast-forward only
-- `pull_request` — 1 approving review + code owner review, only rebase merge allowed (`merge` and `squash` are disabled at the repo level)
-
-The release pipeline (`prerelease.yml` and `promote.yml`) cannot bypass this directly because:
-
-- The org policy disables `GITHUB_TOKEN` write permissions (`Allow GitHub Actions to create and approve pull requests` is OFF at the org level), so `GITHUB_TOKEN` cannot create the bump PR.
-- Fine-grained PATs do not satisfy ruleset bypass actors, so a PAT-driven direct push is rejected with `GH013`.
-
-So the workflow:
-
-1. Pushes the bump commit to a `release/vX.Y.Z` branch using the PAT (no rule check on non-main branches).
-2. Opens the PR using the PAT (`gh pr create` with `GH_TOKEN=$OPENSCREEN_RELEASE_TOKEN`).
-3. Rebase-merges the PR using the PAT. EtienneLescot is a ruleset bypass actor with `bypass_mode: "always"`, so the `pull_request` review requirement is skipped for this merge.
-
-The ruleset has two bypass actors:
-
-- **`EtienneLescot`** (id `215859519`) — so the PAT-driven PR merge satisfies the `pull_request` rule.
-- **`github-actions[bot]`** (id `41898282`) — added defensively, though `GITHUB_TOKEN`-driven operations are blocked by the org policy regardless.
-
-To confirm the bypass list:
+Create a fine-grained token from GitHub settings, set a finite expiry, and save it as the repository secret `OPENSCREEN_RELEASE_TOKEN`:
 
 ```bash
-gh api /repos/getopenscreen/openscreen/rulesets/18060803 --jq '.bypass_actors'
-# Expect both 215859519 and 41898282 with bypass_mode "always".
+gh secret set OPENSCREEN_RELEASE_TOKEN --body "<token>" --repo getopenscreen/openscreen
 ```
 
-## Required for Discord announcements
+Rotate it by creating the replacement with the same repository and scopes, updating the secret, verifying a non-destructive workflow/API operation, then revoking the old token. Do not revoke the previous token until the replacement is installed.
 
-### `DISCORD_BOT_TOKEN`
+The repository's main-branch ruleset must also permit the configured maintainer/PAT flow to rebase-merge the release-sync PR with `--admin`; that bypass is repository configuration rather than a secret.
 
-Bot token from a Discord application added to the OpenScreen Discord server with the `bot` scope and at minimum:
+## Apple signing and notarization
 
-- `Send Messages` in any text channels where the bot posts
-- `Create Public Threads` in the forum channels (for the release announce script)
-- `Send Messages in Threads` so the first message in a new thread goes through
-- `Manage Messages` if you want the roadmap-sync workflow to pin its message
-- `Read Message History` (usually default)
+`build.yml` enables signing only when all of these secrets are present:
 
-Stored as a repository secret.
+| Secret | Purpose |
+|---|---|
+| `MAC_CERTIFICATE_P12` | Base64-encoded Developer ID Application certificate and private key imported into a temporary keychain. |
+| `MAC_CERTIFICATE_PASSWORD` | Password protecting the P12 archive. |
+| `MAC_CSC_NAME` | Signing identity passed to electron-builder and `codesign`. |
+| `APPLE_ID` | Apple account used by `notarytool`. |
+| `APPLE_TEAM_ID` | Apple Developer team identifier. |
+| `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password used by `notarytool`. |
 
-### `DISCORD_RC_TESTING_CHANNEL_ID`
+The certificate account needs Developer ID signing capability, and the Apple account/app-specific password must be able to submit notarization requests for the team. Stable tags sign the DMG, notarize, staple, and validate it. Pre-release tags skip DMG signing/notarization. If any value is missing, the macOS job disables signing and still creates an unsigned DMG.
 
-Snowflake ID of the Discord channel where release candidates are announced. Can be a regular text channel or a forum channel — the `discord-release-announce.mjs` script auto-detects the type:
+Rotate the certificate by exporting a replacement P12, base64-encoding it without line-wrap changes, updating the P12/password/name secrets together, testing a stable-format manual build, then revoking the old certificate if required. Rotate the app-specific password in Apple ID settings, replace `APPLE_APP_SPECIFIC_PASSWORD`, verify notarization, and revoke the old password. `APPLE_ID` and `APPLE_TEAM_ID` normally change only when the owning account or team changes.
 
-- **Text channel** (`type=0`): posts the announcement as a regular message.
-- **Forum channel** (`type=15` or `16`): creates a new thread with the announcement as the first message. One thread per release, named like `v1.5.1-rc.1 RC — testing`.
+## Discord secrets and variables
 
-Set as a **repository variable** (not a secret — it's not sensitive):
+| Name | Kind | Used for |
+|---|---|---|
+| `DISCORD_BOT_TOKEN` | Secret | RC/stable announcements, PR forum sync, roadmap sync, and weekly leaderboard posts. |
+| `DISCORD_REVIEWER_ROLE_ID` | Secret | Role mention used by PR-to-Discord synchronization. |
+| `DISCORD_RC_TESTING_CHANNEL_ID` | Variable | RC announcement destination. |
+| `DISCORD_RELEASE_CHANNEL_ID` | Variable | Stable announcement destination. |
+| `DISCORD_PR_FORUM_CHANNEL_ID` | Variable | Forum that receives PR threads. |
+| `DISCORD_ALERT_CHANNEL_ID` | Variable | Optional alert destination for PR sync failures. |
+| `DISCORD_ROADMAP_CHANNEL_ID` | Variable | Channel containing the synchronized roadmap message. |
+| `DISCORD_ROADMAP_MESSAGE_ID` | Variable | Optional explicit message override; pin discovery is otherwise used. |
+| `DISCORD_SPOTLIGHT_CHANNEL_ID` | Variable | Weekly leaderboard destination. |
 
-```bash
-gh variable set DISCORD_RC_TESTING_CHANNEL_ID --body "1521416826146263051" --repo getopenscreen/openscreen
-```
+The bot token comes from a Discord application authorized with the `bot` scope. Grant only the channel permissions each automation needs: View Channel, Send Messages, Embed Links, Create Public Threads and Send Messages in Threads for forum use, Manage Threads for forum state, and Manage Messages when roadmap pinning is required. Rotate by resetting the bot token in the Discord developer portal, updating `DISCORD_BOT_TOKEN`, testing a non-release post/sync, then invalidating the old token automatically through the reset. Channel and role IDs are identifiers rather than credentials; update their repository variable/secret when channels or roles are replaced.
 
-### `DISCORD_RELEASE_CHANNEL_ID`
+## Package registry credentials and variables
 
-Same pattern as above, for the stable release announcement channel.
+| Name | Kind | Required access and use | Rotation |
+|---|---|---|---|
+| `HOMEBREW_TAP_TOKEN` | Secret | Token accepted by checkout/push for the repository named by `HOMEBREW_TAP_OWNER` and `HOMEBREW_TAP_REPO`; contents write is sufficient for a dedicated tap. | Create a replacement, update the secret, manually dispatch `update-homebrew-cask.yml`, then revoke the old token. |
+| `HOMEBREW_TAP_OWNER` | Variable | Owner of the tap repository. | Update when the tap moves. |
+| `HOMEBREW_TAP_REPO` | Variable | Tap repository name. | Update when the tap moves. |
+| `HOMEBREW_CASK_NAME` | Variable | Cask filename/name; defaults to `openscreen` when unset. | Update with the tap's cask rename. |
+| `WINGET_ACC_TOKEN` | Secret | Token consumed by `winget-releaser` to submit to the WinGet community repository; grant the scopes required by that action's upstream submission account and no unrelated repository access. | Replace the token, update the secret, replay `publish-winget.yml` for a stable tag, then revoke the old token. |
+| `WINGET_IDENTIFIER` | Variable | Package identifier passed to the WinGet action. | Update only if the Store/community identifier changes. |
+| `AUR_SSH_PRIVATE_KEY` | Secret | Private SSH key whose public key is authorized for the configured AUR package repository. | Add a replacement public key to AUR, update the private-key secret, manually dispatch and verify, then remove the old AUR key. |
+| `AUR_KNOWN_HOSTS` | Variable | Pinned `aur.archlinux.org` host-key lines; required because strict host checking is enabled. | Replace only after independently verifying an AUR host-key change. |
+| `AUR_PACKAGE_NAME` | Variable | AUR repository/package name and workflow gate. | Update if the package is renamed. |
 
-```bash
-gh variable set DISCORD_RELEASE_CHANNEL_ID --body "<id>" --repo getopenscreen/openscreen
-```
+`bump-nix-package.yml` uses the workflow-scoped `GITHUB_TOKEN`; it requires repository contents and pull-request write permissions as declared in the workflow and has no additional long-lived secret.
 
-### `DISCORD_ROADMAP_CHANNEL_ID` and `DISCORD_ROADMAP_MESSAGE_ID`
+## Automatic `GITHUB_TOKEN`
 
-Used by `discord-roadmap-sync.yml` to keep the pinned roadmap message in sync. Repository variables.
+GitHub supplies `GITHUB_TOKEN` per run. Workflows use it for semantic PR validation, release-asset reads, issue bookkeeping, and the Nix bump PR. Its scopes come from each workflow's `permissions` block and it is not manually created or rotated. Do not replace it with a PAT unless cross-workflow triggering or external-repository access is actually required.
 
-## Tier 3 package registries
+## Secret-handling rules
 
-Each external registry has its own credential set. See the per-workflow README comments at the top of these files:
-
-- `.github/workflows/update-homebrew-cask.yml` — `HOMEBREW_TAP_TOKEN`, `HOMEBREW_TAP_OWNER`, `HOMEBREW_TAP_REPO`, `HOMEBREW_CASK_NAME`
-- `.github/workflows/publish-winget.yml` — `WINGET_ACC_TOKEN`, `WINGET_IDENTIFIER`
-- `.github/workflows/bump-nix-package.yml` — uses `GITHUB_TOKEN` (no extra secret required)
-- `.github/workflows/aur-publish.yml` — `AUR_SSH_PRIVATE_KEY`, `AUR_KNOWN_HOSTS`, `AUR_PACKAGE_NAME`
-
-All four already gate on `!prerelease`, so a `vX.Y.Z-rc.N` tag will not push to homebrew/winget/nix/aur.
-
-## Apple notarization
-
-`build.yml` skips notarization when the tag contains a `-` (i.e. any pre-release), so the macOS secrets below are only consulted for stable releases:
-
-- `MAC_CERTIFICATE_P12` (base64 of the Developer ID Application `.p12`)
-- `MAC_CERTIFICATE_PASSWORD`
-- `MAC_CSC_NAME`
-- `APPLE_ID`
-- `APPLE_TEAM_ID`
-- `APPLE_APP_SPECIFIC_PASSWORD`
-
-If any of these is missing, the build produces an **unsigned** DMG without notarization. This is the expected behavior for forks and CI debug runs. The release pipeline still works; the macOS DMG will trigger a Gatekeeper warning on first install.
+- Store credentials as repository or environment secrets, never repository variables or committed files.
+- Keep non-sensitive channel IDs, package IDs, repository names, and known-host material in variables.
+- Scope tokens to the single repository or external package destination they need.
+- Rotate before expiry and verify the replacement before revoking the previous credential.
+- Treat workflow logs and manual shell commands as public: pass values through secret inputs/environment variables and never echo them.
