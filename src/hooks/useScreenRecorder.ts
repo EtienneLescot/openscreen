@@ -1178,18 +1178,82 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const screenCapture = (async (): Promise<MediaStream> => {
 				const platform = await window.electronAPI.getPlatform();
 
-				if (platform === "win32") {
+				if (platform === "win32" || platform === "linux") {
 					// getDisplayMedia + setDisplayMediaRequestHandler (main.ts) supplies the
 					// pre-selected source. Editable cursor mode excludes the system cursor so
-					// the editor can render a replacement; system mode bakes it into the video.
+					// the editor can render a replacement (its overlay only runs, and cursor
+					// telemetry only gets recorded -- see handlers.ts's "set-recording-state"
+					// handler -- when cursorCaptureMode is "editable-overlay"); system mode
+					// bakes the system cursor into the video instead, same as Windows. On
+					// setups where this constraint actually bakes the cursor in (X11, or a
+					// Wayland compositor whose portal supports Embedded cursor mode),
+					// requesting "always" in editable-overlay mode would double it up with the
+					// overlay, hence "never" there. On Hyprland specifically this constraint
+					// has no effect either way (the portal never bakes the cursor in
+					// regardless of what's requested) -- system mode simply has no cursor
+					// there, a known portal limitation.
+					const cursor: "always" | "never" =
+						cursorCaptureMode === "editable-overlay" ? "never" : "always";
+
+					if (platform === "linux" && systemAudioEnabled) {
+						// Electron's getDisplayMedia loopback audio (main.ts's
+						// setDisplayMediaRequestHandler) only supports win32/macOS, so system
+						// audio on Linux still has to go through the legacy desktop-audio
+						// constraints and get merged with the getDisplayMedia video track.
+						const videoOnlyPromise = navigator.mediaDevices.getDisplayMedia({
+							video: {
+								cursor,
+								width: { max: TARGET_WIDTH },
+								height: { max: TARGET_HEIGHT },
+								frameRate: { ideal: TARGET_FRAME_RATE },
+							} as MediaTrackConstraints,
+							audio: false,
+						} as DisplayMediaStreamOptions);
+						const audioOnlyPromise = navigator.mediaDevices
+							.getUserMedia({
+								audio: {
+									mandatory: {
+										chromeMediaSource: CHROME_MEDIA_SOURCE,
+										chromeMediaSourceId: selectedSource.id,
+									},
+								},
+								video: false,
+							} as unknown as MediaStreamConstraints)
+							.catch((audioErr) => {
+								console.warn("System audio capture failed, falling back to video-only:", audioErr);
+								toast.error(t("recording.systemAudioUnavailable"));
+								return null;
+							});
+
+						// audioOnlyPromise never rejects (caught above), so if the video
+						// capture rejects it wouldn't otherwise be awaited -- leaving a mic
+						// stream that resolves in parallel orphaned (mic indicator stuck on).
+						let videoOnlyStream: MediaStream;
+						try {
+							videoOnlyStream = await videoOnlyPromise;
+						} catch (error) {
+							const audioOnlyStream = await audioOnlyPromise;
+							audioOnlyStream?.getTracks().forEach((track) => track.stop());
+							throw error;
+						}
+						const audioOnlyStream = await audioOnlyPromise;
+
+						const combined = new MediaStream();
+						for (const track of videoOnlyStream.getVideoTracks()) combined.addTrack(track);
+						if (audioOnlyStream) {
+							for (const track of audioOnlyStream.getAudioTracks()) combined.addTrack(track);
+						}
+						return combined;
+					}
+
 					return navigator.mediaDevices.getDisplayMedia({
 						video: {
-							cursor: cursorCaptureMode === "editable-overlay" ? "never" : "always",
+							cursor,
 							width: { max: TARGET_WIDTH },
 							height: { max: TARGET_HEIGHT },
 							frameRate: { ideal: TARGET_FRAME_RATE },
 						} as MediaTrackConstraints,
-						audio: systemAudioEnabled,
+						audio: platform === "win32" ? systemAudioEnabled : false,
 					} as DisplayMediaStreamOptions);
 				}
 
