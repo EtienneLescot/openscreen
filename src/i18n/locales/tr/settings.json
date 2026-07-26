@@ -241,11 +241,6 @@
 	"language": {
 		"title": "Dil"
 	},
-	"timeline": {
-		"title": "Zaman Tüneli",
-		"waveform": "Kırpma Parçasında Ses Dalgasını Göster",
-		"help": "Zaman çizelgesi görüntüleme seçenekleri; örneğin kırpma parçasında ses dalga formunu göstermek."
-	},
 	"facets": {
 		"captions": "Altyazılar",
 		"transcript": "Metin Dökümü"

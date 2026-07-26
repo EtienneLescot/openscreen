@@ -241,11 +241,6 @@
 	"language": {
 		"title": "Idioma"
 	},
-	"timeline": {
-		"title": "Linha do Tempo",
-		"waveform": "Mostrar Forma de Onda de Áudio na Faixa de Corte",
-		"help": "Opções de exibição da linha do tempo, como mostrar a forma de onda de áudio na trilha de corte."
-	},
 	"facets": {
 		"captions": "Legendas",
 		"transcript": "Transcrição"

@@ -241,11 +241,6 @@
 	"language": {
 		"title": "언어"
 	},
-	"timeline": {
-		"title": "타임라인",
-		"waveform": "트림 트랙에 오디오 파형 표시",
-		"help": "타임라인 표시 옵션(예: 트림 트랙에 오디오 파형 표시)."
-	},
 	"facets": {
 		"captions": "자막",
 		"transcript": "대본"

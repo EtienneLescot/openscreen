@@ -241,11 +241,6 @@
 	"language": {
 		"title": "言語"
 	},
-	"timeline": {
-		"title": "タイムライン",
-		"waveform": "トリムトラックにオーディオ波形を表示",
-		"help": "タイムラインの表示オプション（トリムトラックに音声波形を表示するなど）。"
-	},
 	"facets": {
 		"captions": "字幕",
 		"transcript": "文字起こし"

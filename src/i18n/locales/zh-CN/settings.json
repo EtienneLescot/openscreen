@@ -241,11 +241,6 @@
 	"language": {
 		"title": "语言"
 	},
-	"timeline": {
-		"title": "时间轴",
-		"waveform": "在剪辑轨道上显示音频波形",
-		"help": "时间轴显示选项，例如在修剪轨道上显示音频波形。"
-	},
 	"facets": {
 		"captions": "字幕",
 		"transcript": "转录文本"

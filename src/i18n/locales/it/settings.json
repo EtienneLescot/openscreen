@@ -241,11 +241,6 @@
 	"language": {
 		"title": "Lingua"
 	},
-	"timeline": {
-		"title": "Timeline",
-		"waveform": "Mostra la forma d'onda sulla traccia di ritaglio",
-		"help": "Opzioni di visualizzazione della timeline, come mostrare la forma d'onda audio sulla traccia di taglio."
-	},
 	"facets": {
 		"captions": "Sottotitoli",
 		"transcript": "Trascrizione"
