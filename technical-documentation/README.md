@@ -60,5 +60,5 @@ Three rules, in order of how much damage breaking them does:
 3. **Settled questions go in [decisions.md](architecture/decisions.md).** Including the rejected
    routes, with the reason. That file is what stops the same idea being re-proposed every quarter.
 
-`node scripts/check-docs.mjs` enforces the mechanical part: every required doc exists, every
+`npm run docs:check` enforces the mechanical part: every required doc exists, every
 relative link resolves, and no doc presents a removed component as current.
