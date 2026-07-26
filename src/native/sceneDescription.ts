@@ -16,7 +16,7 @@
  */
 
 import type { CameraFullscreenRegion, SpeedRegion } from "@/components/video-editor/types";
-import { DEFAULT_CROP_REGION } from "@/components/video-editor/types";
+import { DEFAULT_CROP_REGION, ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import { annotationFontSizeFraction } from "@/lib/ai-edition/annotationScale";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
@@ -675,7 +675,15 @@ export function buildSceneDescription(
 			id: region.id,
 			startSec: region.startMs / 1000,
 			endSec: region.endMs / 1000,
-			scale: region.customScale ?? region.depth / 2 + 0.5,
+			// `ZOOM_DEPTH_SCALES` et rien d'autre. Cette ligne portait sa propre formule,
+			// `depth / 2 + 0.5`, qui ne coïncide avec la table qu'à la profondeur 2 — et le focus,
+			// lui, est borné avec la table (`getFocusBoundsForScale`, via `getZoomScale`). Les deux
+			// échelles se contredisaient donc : à la profondeur 3 le gimbal butait à 1/(2×1.8) =
+			// 0.2778 pendant que le compositeur découpait une demi-fenêtre de 1/(2×2.0) = 0.25, si
+			// bien que la fenêtre source s'arrêtait 2.78 % avant le bord — 53 px sur 1920
+			// définitivement hors d'atteinte, gimbal à fond dans le coin. Le symptôme rapporté :
+			// « le zoom coupe les bords extérieurs ».
+			scale: region.customScale ?? ZOOM_DEPTH_SCALES[region.depth],
 			focusX: region.focus.cx,
 			focusY: region.focus.cy,
 			// The global Auto-Focus toggle OVERRIDES each region's own mode rather than merely

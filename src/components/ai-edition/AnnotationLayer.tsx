@@ -8,19 +8,15 @@
 import type { AxcutAnnotationRegion } from "@/lib/ai-edition/schema";
 import { AnnotationOverlay } from "./AnnotationOverlay";
 
-type BlurData = NonNullable<AxcutAnnotationRegion["blurData"]>;
-
 interface AnnotationLayerProps {
 	annotations: AxcutAnnotationRegion[];
 	selectedAnnotationId: string | null;
 	currentTimeSec: number;
 	containerWidth: number;
 	containerHeight: number;
-	videoElement?: HTMLVideoElement | null;
 	onSelectAnnotation: (id: string) => void;
 	onPositionChange: (id: string, position: { x: number; y: number }) => void;
 	onSizeChange: (id: string, size: { width: number; height: number }) => void;
-	onBlurDataChange: (id: string, blurData: BlurData) => void;
 	onCommit: () => void;
 }
 
@@ -30,11 +26,9 @@ export function AnnotationLayer({
 	currentTimeSec,
 	containerWidth,
 	containerHeight,
-	videoElement,
 	onSelectAnnotation,
 	onPositionChange,
 	onSizeChange,
-	onBlurDataChange,
 	onCommit,
 }: AnnotationLayerProps) {
 	const currentTimeMs = Math.round(currentTimeSec * 1000);
@@ -65,25 +59,20 @@ export function AnnotationLayer({
 		<div className="absolute inset-0" style={{ pointerEvents: "none" }}>
 			{visible.map((annotation) => (
 				<AnnotationOverlay
-					key={
-						annotation.type === "blur"
-							? `${annotation.id}-${containerWidth}-${containerHeight}-${annotation.blurData?.shape ?? "rectangle"}-${annotation.blurData?.color ?? "white"}-${Math.round(annotation.blurData?.blockSize ?? 0)}-${(annotation.blurData?.freehandPoints ?? []).map((p) => `${Math.round(p.x)}_${Math.round(p.y)}`).join("-")}`
-							: `${annotation.id}-${containerWidth}-${containerHeight}`
-					}
+					// La clé ne porte plus les champs de `blurData` : ils forçaient un remontage à
+					// chaque réglage du flou, pour resynchroniser un canvas de mosaïque qui n'existe
+					// plus. La taille du conteneur y reste, elle, parce qu'elle change le rect en px.
+					key={`${annotation.id}-${containerWidth}-${containerHeight}`}
 					annotation={annotation}
 					isSelected={annotation.id === selectedAnnotationId}
 					containerWidth={containerWidth}
 					containerHeight={containerHeight}
 					onPositionChange={onPositionChange}
 					onSizeChange={onSizeChange}
-					onBlurDataChange={annotation.type === "blur" ? onBlurDataChange : undefined}
-					onBlurDataCommit={annotation.type === "blur" ? onCommit : undefined}
 					onCommit={onCommit}
 					onClick={handleClick}
 					zIndex={annotation.zIndex}
 					isSelectedBoost={annotation.id === selectedAnnotationId}
-					videoElement={videoElement}
-					currentTimeMs={currentTimeMs}
 				/>
 			))}
 		</div>

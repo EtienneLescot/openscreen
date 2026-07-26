@@ -14,6 +14,7 @@ pub mod pipeline;
 pub mod regions;
 pub mod scene;
 pub mod text;
+pub mod text_anim;
 
 use anyhow::{Context as _, Result};
 use compositor::Compositor;
