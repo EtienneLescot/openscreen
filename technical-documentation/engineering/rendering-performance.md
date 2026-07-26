@@ -1,160 +1,41 @@
-# OpenScreen — Target rendering architecture
+# Rendering performance
 
-**Self-contained edition.** This document assumes **no prior knowledge** of the codebase, the previous specs, or the conversation that produced them. Everything an implementing agent needs is inlined: what the product does, how the current pipeline works, what was measured, what to build, and in what order.
+This is the measurement record for preview fluidity and export speed, and the evidence that chose the current stack. The GPU-resident native compositor this record motivated is described in [../architecture/native-compositor.md](../architecture/native-compositor.md); the export architecture that consumes these measurements is in [../architecture/export-pipeline.md](../architecture/export-pipeline.md). The product surface the measurements describe is in [../architecture/overview.md](../architecture/overview.md); the decision narrative is in [../architecture/decisions.md](../architecture/decisions.md).
 
-**Date:** 2026-07-17
-**Source tree referenced:** `getopenscreen/openscreen@a159121` (branch `feat/ai-edition`)
-**Priorities, in order:** (1) preview fluidity, (2) export speed
-**Supersedes:** `export-pipeline-v2-spec.md` Phase 3/Phase 4 conclusions; incorporates `native-encode-measured-e2e.md` (2026-07-16) and the layer bench.
+The reference machine for every number in this document is an AMD Ryzen 5 7520U laptop with the integrated Radeon GPU, running Windows 11 — deliberately the weak case, and the only fully-measured machine. A discrete-GPU and Intel QSV run is owed (see [Known gaps](#known-gaps)).
 
----
+## What was measured
 
-## Part I — Context
+### Bench methodology
 
-### 1. What OpenScreen is
+`npm run bench:export` (`scripts/bench-export.mjs` + `src/bench/runBench.ts`) opens the real editor window — same `webPreferences`, preload, sandbox — loads a real saved project through the same bridge the editor uses, and calls `exportAxcutDocument` (`ExportDialog`'s entry point). React is skipped, so nothing renders alongside.
 
-OpenScreen is an open-source (MIT) desktop app for turning raw screen recordings into polished demo videos — an alternative to Screen Studio. Electron app (Chromium renderer + Node main process), shipped on Windows, macOS and Linux, x64 and arm64.
+Arms interleave A/B/A/B; same-arm spread is reported; a run above **10 %** spread declares itself VOID. Two earlier runs were discarded because battery and thermal drift (up to 62 % spread) inverted the conclusion. Treat any un-gated benchmark on this hardware as noise.
 
-A user records their screen (plus webcam, microphone, and a cursor trace), then edits on a timeline: they cut, speed up boring parts, add zooms that follow the cursor, captions from an auto-transcript, and annotations. The app styles the result — wallpaper background, padding, rounded corners, drop shadow, webcam bubble — and exports an MP4 (or GIF).
+**This machine is not reproducible.** The same arm, same project, same settings has measured **44.0, 36.8, 32.3, 31.8, 22.2 and 11.9 fps** across sessions; the 11.9 run reported 0 % spread over its two samples and did not survive a re-run 40 minutes later (22.2). **Only within-run ratios transfer between machines, never absolute times.** A stable measurement is not a true one.
 
-**The product promise: what you see in the preview is exactly what the export produces.** The entire value of the tool is that styling and motion design require zero skill — you scrub, you tweak, you export, and it looks right.
+### M1 — the starting pipeline
 
-### 2. The feature inventory (functional spec)
+Export ran at **~8 fps** (94.6 s for a 9.1 s clip). 90 % of wall time sat in `encodeWait` (blocked on the encoder queue). The conclusion drawn at the time was *"the encoder is the wall."* It was wrong — see M4 and [What the numbers mean](#what-the-numbers-mean).
 
-This is the complete set of behaviours the rendering architecture must support. If a feature is not in this list, it does not constrain the architecture.
+### M2 — native ffmpeg, fed from the renderer
 
-**Sources (inputs):**
-
-| source | nature | notes |
-|---|---|---|
-| screen recording | H.264/VP8/VP9 video file | high resolution, low motion (screen content), long GOPs |
-| webcam | second video stream | composited as a PiP bubble or fullscreen |
-| cursor trace | recorded positions + click events | rendered **synthetically** (drawn each frame from data, not baked into pixels) |
-| audio | mic / system | waveform peaks shown in the timeline UI |
-| transcript | whisper-generated timed text | becomes captions |
-
-**Timeline edits (the document):**
-
-- **cuts** — remove time ranges
-- **speed regions** — e.g. 3× (audio is time-stretched with WSOLA so pitch is preserved)
-- **zoom regions** — animated zoom-in, eased and spring-smoothed, optional auto-focus that pans with the cursor
-- **camera-fullscreen regions** — the webcam grows to cover the stage
-- **captions** — timed text with progressive reveal (words appear as spoken)
-- **annotations** — `text | image | blur` regions, with arrows
-
-**Per-frame appearance (all deterministic given the document and a time `t`):**
-
-- layout presets (picture-in-picture, vertical-stack), padding that reveals the background
-- background: solid colour, gradient, or image; optional blur
-- rounded corners + mask on the screen video; webcam mask in several shapes
-- drop shadow under the video (intensity-scaled, soft cascaded falloff)
-- motion blur on fast camera moves, and on the cursor
-- cursor click-bounce and shadow
-- optional 3D rotation of the foreground
-- webcam shrinks reactively during zooms
-
-**Sinks (outputs):**
-
-- **preview** — the editor viewport: scrubbing, playback, live tweaking
-- **MP4 export** — H.264 + AAC, reference target 1080p 60 fps
-- **GIF export** — exists today (`src/lib/exporter/gifExporter.ts`)
-- plausible future: HEVC/AV1 export
-
-### 3. Primer — the vocabulary of this document
-
-Skip if you know real-time graphics. Everything later depends on these five ideas.
-
-**Frame budget.** A 60 fps video has one frame every 16.7 ms. Export doesn't need to hit 60 fps in real time — it can run as fast as the machine allows — so the metric is *milliseconds per frame*, and fps = 1000 / ms:
-
-```
-ms/frame :   4.7    9.0    16.7    20.7    54.0   125
-fps      :   213    111     60      48      18.5    8
-             ▲              ▲       ▲               ▲
-          encoder      realtime  today's        where this
-           alone       playback  pipeline     project started
-```
-
-**GPU vs CPU, and "the descent".** Video frames are big: one 1080p RGBA frame is 8.3 MB; at 60 fps that's ~500 MB/s of pixels. GPUs handle this easily *as long as the pixels stay in GPU-managed memory*. Copying a frame from GPU to CPU memory ("readback", or in this doc **the descent**) is slow — not because of raw bandwidth, but because reading pixels back forces the GPU to **finish all queued work first** (a pipeline stall). The single most important measured fact in this project: *forcing every frame to descend to CPU RAM costs more than the entire rest of the export combined* (§7).
-
-**Asynchronous GPU APIs — the trap this project fell into three times.** When code calls a draw function, the GPU hasn't drawn anything yet — the call just *queues* work and returns immediately. The work actually executes later, and its cost lands on **whichever operation first needs the result** (the "sync point"). Consequence: a timer around a draw call measures ~0 ms even if the draw costs 15 ms, and the 15 ms shows up in some *other* stage's timer. Three confident wrong conclusions in this project came from exactly this (§7.4).
-
-**Compositing.** Assembling the final frame from its parts: draw the background, the shadow, the masked screen video, the webcam bubble, the cursor, the captions — in order, into one image. This can be done with the 2D canvas API (CPU-flavoured, easy, slow) or with GPU shaders (one program that computes every output pixel in parallel).
-
-**Encoding.** Compressing raw frames into H.264 (~8.3 MB/frame → ~17 KB/frame at 8 Mbps). Modern chips have a dedicated hardware block for this. In Chromium it's reached through the **WebCodecs** API (`VideoEncoder`); natively through ffmpeg or the OS APIs (Media Foundation, VideoToolbox, VAAPI).
-
-### 4. Hard constraints
-
-- App stays MIT-licensed (no GPL contamination; an LGPL ffmpeg binary pinned by `scripts/fetch-ffmpeg.mjs` exists and is licence-clean, but see §7 — it is currently shelved).
-- Windows + macOS + Linux, x64 + arm64.
-- The Chromium **sandbox stays on** for anything that demuxes/decodes user media (untrusted input; this is the renderer's attack surface).
-- Export output must remain pixel-faithful to the preview.
-- App size is not a constraint (≤ ~200 MB per platform is fine).
-
----
-
-## Part II — The system today, and what was measured
-
-### 5. The current export pipeline
-
-Everything runs in the Chromium renderer process:
-
-```
- ┌─────────┐   ┌──────────────┐   ┌──────────────┐   ┌───────────┐   ┌──────┐
- │ demux    │──▶│ decode        │──▶│ COMPOSITE     │──▶│ encode     │──▶│ mux  │
- │ (WASM    │   │ WebCodecs     │   │ Pixi/WebGL    │   │ WebCodecs  │   │ mp4  │
- │ ffmpeg)  │   │ VideoDecoder  │   │ + 4× Canvas2D │   │ VideoEnc.  │   │(JS)  │
- └─────────┘   │ (hardware)    │   │ + 2nd WebGL   │   │ (hardware) │   └──────┘
-               └──────────────┘   └──────────────┘   └───────────┘
-                                       ▲ this box is the problem
-```
-
-Audio is decoded, WSOLA-stretched per speed region, AAC-encoded, and muxed by timestamp. It never touches the pixel path — keep it that way.
-
-**The composite box in detail** (`src/lib/exporter/frameRenderer.ts`). The frame walks across **six surfaces and two independent GL contexts** per frame:
-
-```
-                Pixi/WebGL (GL#1)                    Canvas2D surfaces
-                ┌────────────────┐
- VideoFrame ───▶│ video sprite    │
-                │ + zoom + mask   │──drawImage──▶ shadowCanvas ──▶ foregroundCanvas
-                │ + motion blur   │              (3× gaussian        │ + webcam
-                └────────────────┘               drop-shadow!)       │ + cursor
-                                                                     │ + annotations
-   threeDPass (GL#2, own context) ◀──texImage2D──────────────────────┤ (if 3D)
-        │ rotate quad                                                │
-        └──drawImage back─────────────────────────────────────────▶  ▼
-                                                              compositeCanvas
-                                              wallpaper ──▶  (final; wallpaper
-                                              re-blurred      re-drawn every
-                                              every frame     frame)
-                                                                     │
-                                                       new VideoFrame(canvas)
-                                                                     ▼
-                                                                  encoder
-```
-
-**The preview is a *different* compositor** (`src/components/ai-edition/preview-compositor/PreviewCompositor.tsx`): Pixi composites *only* the screen recording; the **webcam stays a plain `<video>` DOM element** with its own sync logic; the cursor is a separate DOM layer that measures the sibling `<video>`. Preview/export parity is maintained **by hand across two divergent implementations** — it is a discipline today, not a property.
-
-### 6. The measurement record
-
-All on the reference machine: Ryzen 5 7520U laptop, integrated AMD Radeon GPU, Windows 11. This is deliberately the *weak* case. (Caveat: it is also the *only* fully-measured machine.)
-
-**Bench methodology** (`npm run bench:export`): opens the real editor window, loads a real saved project, calls the real export entry point. Arms interleave A/B/A/B; same-arm spread is reported; a run above 10 % spread declares itself VOID. Two earlier runs were discarded because battery/thermal drift (up to 62 % spread) *inverted the conclusion* — treat any un-gated benchmark on this hardware as noise.
-
-**M1 — the starting point.** Export ran at **~8 fps** (94.6 s for a 9.1 s clip). 90 % of wall time sat in `encodeWait` (blocked on the encoder queue). Conclusion drawn at the time: *"the encoder is the wall."* (Wrong — see §7.4.)
-
-**M2 — native ffmpeg, fed from the renderer.** A bundled LGPL ffmpeg with the AMD hardware encoder (`h264_amf`) measured **165 fps** encoding pre-materialised frames. So it was wired in: composite in the renderer → copy pixels to CPU → IPC to the main process → pipe into ffmpeg. Result, end-to-end, same project:
+A bundled LGPL ffmpeg with the AMD hardware encoder (`h264_amf`) measured **165 fps** encoding pre-materialised frames. So it was wired in: composite in the renderer → copy pixels to CPU → IPC to the main process → pipe into ffmpeg. End-to-end, same project:
 
 | arm | wall | fps | readback time |
 |---|---:|---:|---:|
 | WebCodecs (status quo) | 38.5 s | **36.9** | 0.16 s |
 | native ffmpeg | 80.8 s | 17.5 | **55.2 s** |
 
-**2.1× slower.** ffmpeg itself consumed frames *faster* than WebCodecs (`encodeWait` −29 %) — the loss is entirely the **descent**: `copyTo()` measured 1.43 ms in an isolated probe, but **38.9 ms** inside the real loop (the probe hit an idle GPU; the loop forces a pipeline stall — see "the trap", §3).
+**2.1× slower.** ffmpeg itself consumed frames faster than WebCodecs (`encodeWait` −29 %, `flush` −94 %) — the loss is entirely the **descent**: `copyTo()` measured 1.43 ms in an isolated probe but **38.9 ms** inside the real loop (the probe hit an idle GPU; the loop forces a pipeline stall — see [Measurement hazards](#measurement-hazards)).
 
-**M3 — the ceiling arm.** To bound *every* "make the crossing cheaper" idea at once (removing the sandbox, shared memory, zero-copy IPC): descend every frame and **throw it away** — no IPC, no encoder, no muxer, no audio. Result: **40.5 fps**, vs **44.0 fps** for WebCodecs *doing the whole export including writing the file*. The descent alone, with nothing behind it, loses to the complete shipping pipeline. Every architecture that routes frames through renderer CPU RAM is dead on this machine, and none of them had to be built.
+### M3 — the ceiling arm
 
-**M4 — the layer bench.** Rebuild the pipeline layer by layer and measure each addition:
+To bound every "make the crossing cheaper" idea at once (removing the sandbox, shared memory, zero-copy IPC): descend every frame and **throw it away** — no IPC, no encoder, no muxer, no audio. Result: **40.5 fps**, against **44.0 fps** for WebCodecs *doing the whole export including writing the file*. The descent alone, with nothing behind it, loses to the complete shipping pipeline. Every architecture that routes frames through renderer CPU RAM is dead on this machine, and none of them had to be built.
+
+### M4 — the layer bench
+
+Rebuild the pipeline layer by layer, measure each addition (same project, 1080p60):
 
 | layer | fps | ms/frame | Δ ms |
 |---|---:|---:|---:|
@@ -164,234 +45,27 @@ All on the reference machine: Ryzen 5 7520U laptop, integrated AMD Radeon GPU, W
 | L4 — + rounded corners | 68 | 14.7 | +1.4 |
 | L5 — + drop shadow | 53 | 18.9 | **+4.2** |
 | L6 — + circular webcam mask | 52 | 19.2 | +0.3 |
-| L7 — + animated zoom | *not yet measured* | | |
+| L7 — + animated zoom | (see [L7 row](#the-l7-row-and-the-shadow-cache-2026-07-17)) | | |
 
-Read the first row again. **The full WebCodecs decode→encode loop runs at 213 fps** on this machine. The encoder was never slow.
+**The full WebCodecs decode→encode loop runs at 213 fps** on this machine. The encoder was never slow.
 
-### 7. What the measurements mean
+### M5 — the composite-ceiling re-measurement (2026-07-17)
 
-#### 7.1 The wall was the compositor all along
+A second derivation, on `proj_a7468696` (2 assets, 2 clips, webcam; MP4/1080p/60/H.264; 1418 frames), three arms in one run, each adding one stage to the one above:
 
-```
-compositing (L1→L6):        14.5 ms
-encoder (h264_amf, alone):   6.1 ms
-                            ───────
-                            20.6 ms  →  48.5 fps
-observed WebCodecs export:  20.7 ms  →  48.4 fps      ← the numbers close
-```
+| arm | ms/frame | what it does |
+|---|---:|---|
+| `composite-ceiling` | **24.6** | decode + composite, nothing downstream |
+| `readback-ceiling` | **24.6** | the same + a full `copyTo()` |
+| `webcodecs` | 31.1 | the same + encode + mux + file |
 
-Why it hid: `new VideoFrame(canvas)` is lazy and `encoder.encode()` is the first operation that forces the GPU/canvas work to finish (`src/lib/exporter/videoExporter.ts:477–519`). So the compositor's 14.5 ms was **billed to the encoder's timer**. The `render` timer (1.7 ms) measured *submission*, not execution.
+**Adding the entire GPU→CPU descent moves the wall by 0.03 ms/frame.** The compositor is **79 %** of the export; the encoder is **4.5 %**.
 
-> **Gate G0 — run this before implementing anything else in this document.**
-> Insert a fence (`gl.finish()` or equivalent) after compositing, *before* the `encodeWait` timer starts. If `encodeWait` collapses from ~18.9 ms to ~6 ms, §7.1 is confirmed. If it does not, this document's premise is wrong — stop and re-derive. (~10 lines.)
+### Gate G0 — passed 2026-07-17
 
-#### 7.2 Where the 14.5 ms goes — and why it's recoverable
+The premise under test: a fence (`gl.finish()`) after compositing, before the `encodeWait` timer starts, collapses `encodeWait` if the wall is the compositor.
 
-The three +4 ms layers are not paying for content; each opens a **full-frame Canvas2D operation on static or geometry-only data**:
-
-| cost | what actually happens | why it's waste | site |
-|---|---|---|---|
-| +4.2 ms | **three chained gaussian `drop-shadow` filters over 2.07 Mpx of video, every frame** | `drop-shadow` reads only the alpha channel. The video is opaque and masked by a rounded rect — its alpha *is* the rounded-rect silhouette. The result depends only on `(x, y, w, h, radius, intensity)`, not on a single video pixel. | `frameRenderer.ts:1045` (dup at `:533`) |
-| +4.3 ms | **the wallpaper — a static image — is cleared, re-blurred (`blur(6px)`) and re-blitted every frame** | it never changes; blur it once at init | `frameRenderer.ts:1007–1017` |
-| +4.3 ms (L1) | a `BlurFilter` that is **always zero** (all four writes to `.blur` in the export path set 0) sits permanently in `videoContainer.filters`, forcing Pixi into render-to-texture + a full-screen pass per filter, per frame; plus a GL texture is created and destroyed per frame | dead filter; texture churn | `frameRenderer.ts:235/238/240`, `:409–415` |
-
-Also rebuilt per frame for no reason: the mask tessellation (`:769–771`). The correct patterns already exist elsewhere in the same tree: conditional filter attachment in `pixiCursorRenderer.ts:568`; texture reuse in `threeDPass.ts`.
-
-#### 7.3 Verdicts on the previously-considered options
-
-| option | verdict | why |
-|---|---|---|
-| WebCodecs pipeline | **stays — fastest path measured** | M2/M3 |
-| native ffmpeg fed from the renderer | **dead** | M2: ×0.48 |
-| `sandbox: false` + direct pipe to ffmpeg | **dead** | M3 bounds it; also sacrifices the sandbox for ~1.2× on one leg |
-| GPU→NV12 packing to shrink the descent | **withdrawn** | best case parity, against a compositor about to get 3× faster |
-| full Tauri/Rust rewrite ("option C") | **deferred, gated** | its premise (composited texture → encoder with zero descent, via wgpu↔D3D11/VideoToolbox interop) is *unmeasured*; spike required before any migration (§12) |
-
-#### 7.4 The trap, named once for the whole document
-
-**An isolated component benchmark cannot price the cost of connecting the component.** Three confident wrong answers came from probes that didn't force the work the real loop forces: the pipe probe (489 MB/s "≈3 %" — frames materialised outside the loop), the `copyTo` probe (1.43 ms idle vs 38.9 ms in-loop), and the `render` timer (1.7 ms submission vs 14.5 ms execution). Any new benchmark an agent writes for this project must answer: *what sync point am I including, and does the real loop include the same one?*
-
----
-
-## Part III — The target architecture
-
-### 8. Three structural conclusions
-
-**(a) The frame is a pure function.** Every §2 appearance feature is deterministic given `(document, t)`. So extract:
-
-```
-evaluate : (Document, t) → FrameState
-FrameState = { sourceTimes, rects, transforms, velocity, maskParams,
-               shadowGeom, activeCaptions, annotations }
-```
-
-CPU, microseconds, testable without a GPU. **Parity lives here**: preview and export call the *same* `evaluate`, so they cannot drift on layout, easing, timing, or reveal logic. (The geometry code already exists, smeared across `compositeLayout.ts`, `zoomTransform.ts`, `updateAnimationState` — this is an extraction, not a rewrite.)
-
-**(b) The compositor is tiny.** The entire feature set compiles to:
-
-```
-4 textures      screen · webcam · background · glyph/annotation atlas
-1 uniform block ~200 bytes: rects, matrices, velocity, radii, shadow
-                params, mask selector, reveal progress
-2 passes        P1: directional motion blur   (only when |velocity| > 0)
-                P2: composite — one draw call
-                (P3: 3D rotation — folds into P2's vertex stage)
-caches          wallpaper 1× · shadow per-geometry · masks per-shape ·
-                caption rasters per-segment · cursor sprites 1×
-```
-
-Any 2015-class GPU runs this in **< 2 ms** at 1080p. Compositing cost therefore justifies **no** stack choice. Text is the one thing that stays CPU-rasterised (glyphs → offscreen → texture, cached per segment, raster only the caption's ~1920×200 rect).
-
-**(c) Only two seams matter.** With (a) at ~0 ms and (b) at ≤2 ms, the architecture is decided by two data handoffs:
-
-```
-S1 : decoded frame ──▶ compositor texture   (decode → GPU)
-S2 : composited target ──▶ encoder          (GPU → encode)
-```
-
-Every measured disaster in §6 happened at a seam. **Design rule: both seams stay on the GPU device and are crossed exactly once per frame.** The web platform's S1 (`VideoFrame` → texture import) and S2 (`VideoFrame(canvas)` → `VideoEncoder`) are the designed fast paths and are what L0's 213 fps already includes.
-
-### 9. The reference diagram
-
-```
-┌──────────────────────────────────────────────────────────────────┐
-│  UI shell — timeline, panels, inspector (React/DOM)              │
-│  never touches pixels                                            │
-└──────────────┬───────────────────────────────────────────────────┘
-               │ edits (pure data operations)
-┌──────────────▼───────────────┐
-│  Document store               │   atomic writes: temp + rename,
-│  undo/redo = data             │   serialised saves (§13 — bug)
-└──────────────┬───────────────┘
-               │ (Document, t)
-┌──────────────▼───────────────┐      ┌───────────────────────────┐
-│  EVALUATOR — pure CPU fn      │      │  AUDIO ENGINE             │
-│  (Document, t) → FrameState   │      │  decode · WSOLA · mix     │
-└──────────────┬───────────────┘      │  playback: MASTER CLOCK   │
-               │ uniforms              │  export:   AAC → mux      │
-┌──────────────▼───────────────┐      └─────────────┬─────────────┘
-│  MEDIA I/O                    │                    │
-│  demux · HW decode · seek     │                    │
-│  decode-ahead ring        S1  │                    │
-└──────────────┬───────────────┘                    │
-               │ GPU-resident textures               │
-┌──────────────▼───────────────┐                    │
-│  COMPOSITOR — one WGSL prog   │                    │
-│  P1? · P2 · (P3)  + caches    │                    │
-└──────┬───────────────┬───────┘                    │
-       │ swapchain     │ offscreen  S2               │
-┌──────▼──────┐  ┌─────▼───────────┐                │
-│  PREVIEW    │  │  ENCODER         │◀── mux by ─────┘
-│  vsync/rAF  │  │  HW, pipelined,  │    timestamp
-│  viewport   │  │  queue depth ≥ 2 │
-└─────────────┘  └─────────────────┘
-```
-
-Sinks differ by **three parameters only** — target, clock, resolution:
-
-| sink | target | clock | resolution |
-|---|---|---|---|
-| preview | swapchain | display (rAF/vsync) | viewport |
-| MP4 | offscreen texture | frame index | output |
-| GIF | offscreen texture | frame index (low fps) | output (+ palette pass) |
-
-One pixel path, N sinks ⇒ the "two divergent compositors" problem of §5 becomes *unconstructible*. This also means the unified compositor must absorb the **preview's** webcam and cursor (currently DOM), not just the export path.
-
-### 10. Preview fluidity — priority 1, engineered as three separate problems
-
-| mode | requirement | mechanism |
-|---|---|---|
-| **tweak** — drag a slider, move the webcam | ≤ 1 frame latency at display Hz | parameter changes are **uniform-only**: no re-layout, no re-decode, no cache invalidation except the touched cache (shadow on geometry change). Redraw = pass P2 alone ⇒ 120 Hz is trivial |
-| **play** | 60 fps with A/V lock | audio is the master clock; decode-ahead ring of 3–4 frames per stream; late *video* frames drop, audio never skips |
-| **scrub** | perceived-instant seek | (a) keyframe-aware seek + decode-forward; (b) a **pre-generated low-res proxy strip** (thumbnail keyframes every N ms) displayed instantly while the exact frame decodes; (c) seek coalescing — only the last requested time is decoded |
-
-The proxy strip is the one genuinely new component: screen recordings have long GOPs, so exact-seek latency is decode-bound and irreducible — the proxy is what makes scrubbing *feel* instant anyway. No prior spec addressed scrubbing at all.
-
-### 11. Export speed — priority 2
-
-With both seams on-device and the compositor ≤2 ms, the pipeline is **encoder-bound by construction** — the correct steady state. Pipeline, don't await: keep encoder queue depth ≥ 2; never sync the device per frame; the only backpressure is the encoder's own.
-
-Projection on the weakest measured machine: 213 fps encoder ceiling ⇒ a 546-frame export in **~2.6–3.3 s** (vs 94.6 s at the start of this project, ×30). Parallel GOP-segment encoding stays in the drawer — at 213 fps it buys nothing at 1080p.
-
-### 12. Stack — decided last, and made reversible
-
-Evaluated against the seams, the three preview modes, one-compositor parity, a small OSS team, and full platform coverage:
-
-| candidate | seams | verdict |
-|---|---|---|
-| **A. Web platform done right** (Electron, one WebGPU context, WebCodecs) | S1+S2 measured at 213 fps — *faster than the native encode leg (165 fps) on the same machine* | **launch host** |
-| B. Rust core (wgpu) + Tauri webview UI | S2 better in principle (texture → AMF/VideoToolbox directly), **but** a new seam appears — composited frames must reach the webview viewport — and the wgpu(D3D12)↔AMF(D3D11) interop is unmeasured | open, behind a spike gate |
-| C. Full native per platform | optimal seams, three compositors, three CI matrices | eliminated on cost for this team, not on merit |
-
-**The reversibility mechanism — the one instruction that shapes code written today:**
-
-> **Write the compositor in WGSL (WebGPU), not GLSL/Pixi. Keep `evaluate` pure and host-agnostic.**
-
-WGSL runs unmodified in the browser (WebGPU) *and* natively (wgpu). The evaluator and the shader — the product's actual substance — become portable by construction. Only the shell, the Media I/O bindings and the encoder binding are host-locked. Electron-vs-Tauri stops being an architectural bet and becomes a bindings swap behind pre-committed triggers:
-
-| gate | trigger | response |
-|---|---|---|
-| G-A | after the §8b compositor ships, export < 100 fps on the reference machine *and* profiling pins the loss inside Chromium's S1/S2 | run the B spike: wgpu renders a triangle → native texture handle → AMF → mp4 (~200 lines, no compositor, no UI). If the handoff holds, move Media I/O + encode to a Rust core; WGSL + evaluator move unchanged |
-| G-B | tweak mode can't hold display Hz with uniform-only updates | same |
-| G-C | a platform ships hardware codecs Chromium won't expose | per-codec encoder *sidecar* — no host change |
-| none | — | host question stays closed |
-
-> **Native fast-path resolved (D.6, 2026-07-18).** Row B's open question — "the
-> wgpu(D3D12)↔AMF(D3D11) interop is unmeasured" — and gate G-A's blocking premise are
-> settled: the native GPU-resident path is measured on **D3D11** (`poc-d3d/`, ~126 fps,
-> above the browser), driver-free. Web stays the launch host here; but if a gate opens
-> native, the retained native stack is **D3D11**, not the Vulkan route the driver gates.
-
-### 13. Ship order
-
-**Step 0 — the data-loss bug, before any of this.** `writeProject` (`src/lib/.../document-service.ts`) allows two concurrent saves to interleave (`O_TRUNC` + offset writes), which has already destroyed a real project file (valid JSON prefix + tail of a longer version; effects unrecoverable). Fix: serialise saves + atomic write (temp file + rename). Audit every writer in the file. **A performance spec is worthless next to projects that destroy themselves on save.**
-
-**Step 1 — G0** (§7.1): the fence. 10 lines. If it fails, stop.
-
-**Step 2 — exact fixes, ~50 lines total, byte-identical output, no parity review** (details §7.2):
-
-| fix | site |
-|---|---|
-| pre-blur wallpaper at init; per-frame draw = plain blit with `globalCompositeOperation='copy'` | `frameRenderer.ts:1007–1017` |
-| shadow: render the same 3-filter chain **once per geometry** onto a white rounded-rect silhouette, cache by `(rect, radius, intensity)`, per-frame = 2 `drawImage` | `:1045` (and `:533`) |
-| delete the always-zero `BlurFilter`; attach `motionBlurFilter` only when `velocity > 0` (pattern: `pixiCursorRenderer.ts:568`) | `:235/238/240` |
-| reuse one GL texture, stop create/destroy per frame (pattern: `threeDPass.ts`) | `:409–415` |
-| rebuild mask only on layout change | `:769–771` |
-
-Do **not** replace the shadow with an SDF/`smoothstep` approximation: the cascaded falloff is exact-cached instead, because this codebase has already been burned twice by shadow-falloff/corner-AA approximations (see the comments in `threeDPass.ts`).
-
-Projected result: 14.5 → ~4 ms compositing ⇒ **~90 fps export**, still inside Electron, zero architecture change. *Projection, not measurement* — hence:
-
-**Step 3 — measure.** Re-run the layer bench (G1). Measure **L7 (animated zoom)** — the missing row — because it decides everything downstream: the shadow cache misses during zooms (geometry changes every frame), so the fraction of zoomed frames determines whether Step 4 exists.
-
-- zoom frames ≲ 20 % of a typical timeline → the cache captured ~90 % of the win → **stop here**; ship
-- zoom frames ≳ 50 % → the per-frame shadow is still the wall where it matters → Step 4
-
-Also owed: one bench run on a discrete GPU and on Intel QSV (G3) — every number in this document is from a single iGPU laptop.
-
-**Step 4 (conditional) — the unified WGSL compositor** (§8b + §9): one context, two passes, caches; absorbs the preview's webcam + cursor; text via cached atlas textures. Built inside Electron/WebGPU, where a working baseline exists to measure against — and where the WGSL is already the portable artifact if gate G-A ever fires.
-
-**Step 5 (gated) — host swap**, only if a §12 gate fires, only after its spike passes.
-
-### 14. Non-goals
-
-Audio internals (WSOLA/AAC/sync — orthogonal, untouched) · cuts & speed regions (they select source frames; not compositing) · the `.axcut` document format · the React shell · HEVC/AV1 (behind the sink decision) · parallel segment encoding (nothing to gain at current ceilings).
-
----
-
-*Provenance: every number in Part II is a gated measurement on the reference machine; §7.1's closing arithmetic is a deduction with G0 as its named falsifier; the 213-fps-beats-165-fps comparison is same-machine, same-frames. The two prior specs' full measurement reports remain the source of record for methodology details.*
-
----
-
-## Annex A — Gate G0: PASSED (measured 2026-07-17)
-
-Run on the reference machine, real bench harness (`npm run bench:export`), four arms
-interleaved, 2 runs each, effects `shadow,blur,radius`, 1080p60, 820 frames.
-Project: `proj_5b3ac6bc` ("Recording 15/07/2026 18:38:53") — **not** the record's
-`os_parity`, which was found destroyed by the §13 Step-0 bug (see note below).
-This project is heavier than the record's: two clips, both with a visible webcam
-track — absolute numbers are therefore not comparable with §6; the arm-vs-arm
-attribution, which is all G0 claims, is.
+Reference machine, real bench harness, four arms interleaved, 2 runs each, effects `shadow,blur,radius`, 1080p60, 820 frames. Project: `proj_5b3ac6bc` ("Recording 15/07/2026 18:38:53") — **not** the record's `os_parity`, which was found destroyed by the [data-loss bug](#known-gaps). This project is heavier than the record's: two clips, both with a visible webcam track — absolute numbers are therefore not comparable with M1–M4; the arm-vs-arm attribution, which is all G0 claims, is.
 
 | arm | wall | fps | spread | encodeWait total | fence total |
 |---|---:|---:|---:|---:|---:|
@@ -400,33 +74,18 @@ attribution, which is all G0 claims, is.
 | webcodecs | 56.6 s | 14.6 | 5 % | 32 368 ms | — |
 | webcodecs-fence | 50.1 s | 16.4 | 9 % | **3 013 ms** | 28 199 ms |
 
-Per frame (820 frames): legacy `encodeWait` 71.1 → **3.9 ms** (×18 collapse), the
-difference reappearing under `fence` (54.3 ms/frame); shipping compositor 39.5 →
-**3.7 ms** (×10.7), `fence` 34.4 ms/frame. `encode` itself is ~0.03 ms/frame.
+Per frame (820 frames): legacy `encodeWait` 71.1 → **3.9 ms** (×18 collapse), the difference reappearing under `fence` (54.3 ms/frame); shipping compositor 39.5 → **3.7 ms** (×10.7), `fence` 34.4 ms/frame. `encode` itself is ~0.03 ms/frame.
 
-**§7.1 is confirmed.** `encodeWait` was billing the compositor's GPU execution;
-the encoder's own residual wait is ~3.7–3.9 ms/frame on this machine. The wall is
-the compositor — here even more so than §7.1 estimated, because this project
-composites a webcam bubble on every frame of both clips.
+**G0 confirmed.** `encodeWait` was billing the compositor's GPU execution; the encoder's own residual wait is ~3.7–3.9 ms/frame on this machine. The wall is the compositor — here even more so than M4 estimated, because this project composites a webcam bubble on every frame of both clips.
 
-Two additional findings the gate did not ask for:
+Two findings G0 did not set out to test:
 
-1. **The fenced arms are FASTER end-to-end** (legacy −23 %, shipping −11 %).
-   Draining the GPU once per frame beats letting Chromium queue unboundedly —
-   deep uncontrolled pipelining is actively harmful here. §11's "pipeline, don't
-   await" needs the nuance: *bounded* in-flight work, not maximal.
-2. **The Step-2 fixes are confirmed in-run**: legacy 9.8 → shipping 14.6 fps
-   (+49 %) on a project whose per-frame webcam compositing they never touched.
+- **The fenced arms are FASTER end-to-end** (legacy −23 %, shipping −11 %). Draining the GPU once per frame beats letting Chromium queue unboundedly — deep uncontrolled pipelining is actively harmful here. The "pipeline, don't await" rule needs the nuance: **bounded in-flight work, not maximal**.
+- **The compositor changes are confirmed in-run**: legacy 9.8 → shipping 14.6 fps (+49 %) on a project whose per-frame webcam compositing the changes never touched.
 
----
+### The L7 row and the shadow cache (2026-07-17)
 
-## Annex B — Step 3: the L7 row, and what it decides (measured 2026-07-17)
-
-Same machine, same harness, `--clip=4` (122 frames), 4 runs per arm plus one
-discarded warm-up, four arms interleaved. **Spread 2–4 %** — the run is valid.
-All arms fenced (Annex A), so the compositor's cost is billed to `fence` and not
-to the encoder. Shadow is isolated by *pairs*: an arm's twin sets
-`shadowIntensity: 0`, because omitting the effect still renders the project's own.
+Same machine, same harness, `--clip=4` (122 frames), 4 runs per arm plus one discarded warm-up, four arms interleaved. **Spread 2–4 %** — the run is valid. All arms fenced, so the compositor's cost is billed to `fence` and not to the encoder. Shadow is isolated by *pairs*: an arm's twin sets `shadowIntensity: 0`, because omitting the effect still renders the project's own.
 
 | arm | camera | shadow | wall | ms/frame |
 |---|---|---|---:|---:|
@@ -435,11 +94,9 @@ to the encoder. Shadow is isolated by *pairs*: an arm's twin sets
 | webcodecs-fence-zoom | moving | on | 5835 ms | 47.8 |
 | webcodecs-fence-zoom-noshadow | moving | off | 4659 ms | 38.2 |
 
-Shadow cache: **0.8 % miss** with a still camera (121 hits / 1 miss), **54.1 %
-miss** during the zoom (56 / 66) — byte-identical across all four runs, so the
-miss rate is a property of the timeline, not of the machine.
+Shadow cache: **0.8 % miss** with a still camera (121 hits / 1 miss), **54.1 % miss** during the zoom (56 / 66) — byte-identical across all four runs, so the miss rate is a property of the timeline, not of the machine.
 
-**The arithmetic, per frame:**
+The arithmetic, per frame:
 
 | item | cost |
 |---|---:|
@@ -449,47 +106,11 @@ miss rate is a property of the timeline, not of the machine.
 | a still frame, all in | 34.0 ms |
 | a moving frame, all in | ~59 ms |
 
-So the Step-2 cache is doing exactly what it was built for — it takes the shadow
-to ~0 on still frames — and it cannot help on a moving one, by construction. On a
-moving frame the shadow alone costs half again as much as the *entire rest* of the
-compositor (16.7 vs 32.7 ms). It is the single largest per-frame item there.
+So the shadow cache is doing exactly what it was built for — it takes the shadow to ~0 on still frames — and it cannot help on a moving one, by construction. On a moving frame the shadow alone costs half again as much as the *entire rest* of the compositor (16.7 vs 32.7 ms). It is the single largest per-frame item there.
 
-**Two findings the ship order did not anticipate:**
+#### What the 16.7 ms is
 
-1. **§13's decision rule cannot be answered by fps.** It asks for the share of
-   *zoom* frames; the cost tracks the share of **moving** frames — the eased
-   in/out, not the plateau. A settled zoom holds the cache (that is why 56 of the
-   zoom arm's frames still hit). The expensive case is therefore not "a timeline
-   with zooms" but auto-focus, which pans with the cursor and moves *every* frame
-   of its region. The product question — "how much of a typical timeline has a
-   MOVING camera" — is the user's, not the bench's.
-   **Answered, 2026-07-17 (product owner): a moving camera is the norm.** Screen
-   presentations carry zooms by nature; the webcam is commonly set to resize
-   reactively *during* those zooms; and Full Camera animates the webcam across the
-   whole stage. That is §13's "≳ 50 %" branch — **Step 4 is warranted**, subject
-   to B.1 below.
-2. **Step 4 as specified does not fix this.** §8b lists the compositor's caches as
-   "wallpaper 1× · **shadow per-geometry** · masks per-shape · …" — the same
-   geometry key, hence the same 54 % miss during motion. The unified WGSL
-   compositor only removes this cost if the shadow is *computed* per frame in the
-   shader rather than cached — and §13 explicitly forbids the SDF/`smoothstep`
-   approximation that would make that cheap, because the cascaded falloff has
-   burned this codebase twice. **Unresolved: a shader that reproduces the exact
-   3-pass cascade at 1080p, and its cost.** That, not the fps, is Step 4's real
-   gate.
-
-### B.1 — What the 16.7 ms actually is, and therefore what fixes it
-
-A cache miss is two stacked things: the three chained gaussians, and the
-full-frame Canvas2D plumbing feeding them (silhouette copy, `source-in` fill,
-filtered blit — 2 Mpx each). They have different fixes, so they were priced apart
-with a third arm that runs the whole miss path with the filter chain switched off
-(`openscreen.shadowNoFilter` — renders no shadow; diagnostic only). Timing the
-ops individually would have answered nothing: Canvas2D is as lazy as the GPU, so
-a timer around a `drawImage` measures submission and bills the work to whatever
-syncs next (§7.4). Hence an arm pair, both fenced.
-
-`fence` totals, 122 frames, 66 of them missing the cache — two independent runs:
+A cache miss is two stacked things: the three chained gaussians, and the full-frame Canvas2D plumbing feeding them (silhouette copy, `source-in` fill, filtered blit — 2 Mpx each). They have different fixes, so they were priced apart with a third arm that runs the whole miss path with the filter chain switched off (`openscreen.shadowNoFilter` — renders no shadow; diagnostic only). Both arms fenced, 122 frames, 66 of them missing the cache, two independent runs:
 
 | arm | run A | run B |
 |---|---:|---:|
@@ -499,426 +120,230 @@ syncs next (§7.4). Hence an arm pair, both fenced.
 | **⇒ gaussians** | **934 ms** | **1122 ms** |
 | **⇒ plumbing** | **221 ms** | **234 ms** |
 
-**The gaussian chain is ~81 % of the miss** (~14.2 ms per moving frame, against
-~3.3 ms of plumbing). Run B is VOID on its own spread gate (31 %; the machine had
-been benching continuously for ten minutes and was drifting) — but it is reported
-because the two runs agree on the *ratio* (4.2 : 1 and 4.8 : 1) while disagreeing
-on the absolute, which is exactly what interleaved arms under drift should do.
-A 4 : 1 ratio does not turn over inside that noise.
+**The gaussian chain is ~81 % of the miss** (~14.2 ms per moving frame, against ~3.3 ms of plumbing). Run B is VOID on its own spread gate (31 %; the machine had been benching continuously for ten minutes and was drifting) — but it is reported because the two runs agree on the *ratio* (4.2 : 1 and 4.8 : 1) while disagreeing on the absolute, which is exactly what interleaved arms under drift should do. **A 4 : 1 ratio does not turn over inside that noise.**
 
-**So: touching less of the frame recovers ~3 ms; the fix has to be the filter.**
-Which is where §13's prohibition needs a distinction it does not currently make:
+**So: touching less of the frame recovers ~3 ms; the fix has to be the filter.** The CSS `drop-shadow` is `feGaussianBlur` on SourceAlpha, and the SVG filter spec defines that blur, for the project's radii, as three successive box blurs of a specified width. Reimplementing that cascade in a shader is the same algorithm on a different device — not an approximation. Box blurs are separable and O(1) per pixel; this is the cheap case on a GPU.
 
-> **The ban is on a different falloff, not on a different implementation.** §13
-> forbids replacing the shadow with an SDF/`smoothstep` — rightly: that is an
-> *approximation of a different shape*, and it has burned this codebase twice.
-> But CSS `drop-shadow` is not a black box. It is `feGaussianBlur` on SourceAlpha,
-> and the SVG filter spec **defines** that blur, for our radii, as three
-> successive box blurs of a specified width. Reimplementing that cascade in a
-> shader is the same algorithm on a different device — not an approximation.
-> Box blurs are separable and O(1) per pixel; this is the cheap case on a GPU.
->
-> That claim is falsifiable and must be falsified before it is built: the spike is
-> a GPU pass rendering the same silhouette, pixel-diffed against the Canvas2D
-> output. If they do not match, this paragraph is wrong. Skia's real path may not
-> follow the spec's letter.
+That claim is falsifiable and must be falsified before it is built: the spike is a GPU pass rendering the same silhouette, pixel-diffed against the Canvas2D output. If they do not match, the claim is wrong. Skia's real path may not follow the spec's letter.
 
-**Consequence for the ship order.** The spike stands alone — it replaces
-`cachedShadowLayer`'s filter with a GPU pass and needs no architecture change, so
-it pays off inside Electron today *and* is exactly the shadow §8b's compositor
-needs. It should be measured before Step 4 is committed to, not during it.
+#### The moving-camera decision
 
-**Bench corrections this measurement forced** (each was silently wrong before):
+The product question — "how much of a typical timeline has a MOVING camera" — is the user's, not the bench's. **Answered, 2026-07-17 (product owner): a moving camera is the norm.** Screen presentations carry zooms by nature; the webcam is commonly set to resize reactively *during* those zooms; and Full Camera animates the webcam across the whole stage.
 
-- The `zoom` effect injected `depth: "medium"`; `ZOOM_DEPTH_SCALES` keys on 1–6,
-  so the lookup returned `undefined` and **the zoom never ran**. Every previous
-  zoom arm reported a clean number for an effect that did nothing. The injected
-  region is now parsed through `zoomRegionSchema` — the pipeline's own contract.
-- The session's **first export** pays for shader compilation, decoder setup and
-  JIT (9.3 s vs 5.6/6.6/5.8 s for its own repeats) and lands on whichever arm ran
-  first: a 60 % same-arm spread that voided two runs by itself. One discarded
-  warm-up per arm brings the spread to 2–4 %.
-- Effects are now per-arm (`addEffects`), so an effect is A/B'd inside ONE
-  interleaved run. `--effects` alone is one value per session, which turns any
-  effect comparison into a cross-session one — the mistake this bench exists to
-  prevent.
+### The standalone POC (`poc/`) — 2026-07-17
 
-**Reference-project caveat.** `proj_5b3ac6bc`'s first clip declares
-`durationSec: 4.03` but holds ~2.03 s of decodable video (its own zooms, authored
-at 3163 ms, are past the end and never fire — which is why the still arms sit at
-0.8 % miss). The measurement stands on the injected zoom; the stale duration is
-its own bug, unrelated to rendering.
+`poc/` — its own directory, its own server, no Electron, no app code, nothing imported from the existing compositor. Two real recordings (screen + webcam), one layout, animated: two eased zooms with a focus point, and a layout move where the webcam grows from a docked circle into a panel, its shape morphing through the same SDF. Decode and mux via mediabunny, composite in WGSL, out to a watchable mp4. The layout, the easings and the effects are written from zero — the point was to prove the paradigm reconstructs the product, not to reuse what exists.
 
----
-
-## Annex C — The standalone POC, and the number Step 4 was waiting for
-
-`poc/` — its own directory, its own server, no Electron, no app code, nothing
-imported from the existing compositor. Two real recordings (screen + webcam), one
-layout, animated: two eased zooms with a focus point, and a layout move where the
-webcam grows from a docked circle into a panel, its shape morphing through the
-same SDF. Decode and mux via mediabunny, composite in WGSL, out to a watchable
-mp4. The layout, the easings and the effects are written from zero — the point was
-to prove the paradigm reconstructs the product, not to reuse what exists.
-
-**Measured by the product owner, on a visible window, interleaved A/B, one
-discarded warm-up round, 4-second exports at 1080p on an AMD RDNA-3 iGPU:**
+**Measured by the product owner, on a visible window, interleaved A/B, one discarded warm-up round, 4-second exports at 1080p on an AMD RDNA-3 iGPU:**
 
 | arm | cruise | spread | runs |
 |---|---:|---:|---|
 | optimised | **85.1 fps** | 6 % | 88.9 / 84.0 / 85.1 |
 | naive | 46.3 fps | 35 % | 46.3 / 53.8 / 37.5 |
 
-**+84 % — it roughly doubles.** Read honestly: the naive arm's 35 % spread makes
-the *size* loose (85.1 against its best run is +58 %, against its worst +127 %);
-the direction and the order of magnitude are not in doubt. The optimised arm is
-steady at 6 % because it does less work, so it has less to vary.
+**+84 % — it roughly doubles.** Read honestly: the naive arm's 35 % spread makes the *size* loose (85.1 against its best run is +58 %, against its worst +127 %); the direction and the order of magnitude are not in doubt. The optimised arm is steady at 6 % because it does less work, so it has less to vary.
 
-**Against the shipping compositor** (Annex B, different project — the comparison
-is an order of magnitude, not a measurement): 29.5 fps on a still frame, ~17 fps
-while the camera moves. The POC is 3–5× that, and it does not slow down when the
-camera moves, because there is no cache to miss.
+Against the shipping compositor (different project — the comparison is an order of magnitude, not a measurement): 29.5 fps on a still frame, ~17 fps while the camera moves. The POC is 3–5× that, and it does not slow down when the camera moves, because there is no cache to miss.
 
-**85 fps at 1080p is past 60.** That is priority 1 of this document — preview
-fluidity — reachable on the *weakest* machine in the fleet, with room over.
+**85 fps at 1080p is past 60.** That is the preview-fluidity target, reachable on the *weakest* machine in the fleet, with room over.
 
-### C.1 — What produced the 84 %
+The three changes that produced the 84 %:
 
-Three changes, all exact, all verified by the picture (optimised and naive render
-the same frame, checked on a zoomed frame where the culling is active):
+- **The background was recomputing a constant.** 16 gradient evaluations per pixel per frame, 210 times, for an image that never changes. Baked into a texture once at init; the frame reads one texel. This is *not* the shadow cache in disguise, and the difference is the whole argument: a cache guesses its input has not changed and needs a key to find out. A constant has no input.
+- **The shadow ran everywhere.** 12 taps on every pixel, including under the opaque video and far outside the rect where the answer is zero. Every tap lands within `spread` of the pixel, so the box grown by spread bounds where any tap can hit, and the box shrunk by spread bounds where all of them do — Minkowski sums with the tap disc, the same number by arithmetic rather than by twelve samples.
+- **The frame was drawn as one fullscreen triangle with `if`s.** It paid for every pixel of every effect and threw most of it away. Now each element is a quad sized to its own rect: the rasterizer runs the fragment shader only where the element is and clips what leaves the stage, in fixed function, with no branch. A zoomed recording is 2.7× the stage — two thirds of it is off-screen and now costs nothing. Plus CPU culling from the rects the pure-function `evaluate` already produced: when the recording covers the stage (every zoom), the background and its shadow are not drawn at all; an off-stage webcam is not drawn at all.
 
-1. **The background was recomputing a constant.** 16 gradient evaluations per
-   pixel per frame, 210 times, for an image that never changes. Baked into a
-   texture once at init; the frame reads one texel. This is *not* the §7.2 shadow
-   cache in disguise, and the difference is the whole argument: a cache guesses
-   its input has not changed and needs a key to find out. A constant has no input.
-2. **The shadow ran everywhere.** 12 taps on every pixel, including under the
-   opaque video and far outside the rect where the answer is zero. Every tap lands
-   within `spread` of the pixel, so the box grown by spread bounds where any tap
-   can hit, and the box shrunk by spread bounds where all of them do — Minkowski
-   sums with the tap disc, the same number by arithmetic rather than by twelve
-   samples.
-3. **The frame was drawn as one fullscreen triangle with `if`s.** It paid for
-   every pixel of every effect and threw most of it away. Now each element is a
-   quad sized to its own rect: the rasterizer runs the fragment shader only where
-   the element is and clips what leaves the stage, in fixed function, with no
-   branch. A zoomed recording is 2.7× the stage — two thirds of it is off-screen
-   and now costs nothing. Plus CPU culling from the rects `evaluate` already
-   produced: when the recording covers the stage (every zoom), the background and
-   its shadow are not drawn at all; an off-stage webcam is not drawn at all.
+### The D3D11 native fast path (`poc-d3d/`) — 2026-07-18
 
-**§8b needs one correction.** Its cache list — "wallpaper 1× · **shadow
-per-geometry** · masks per-shape · …" — carries a 2D reflex into the target: the
-shadow cache exists because a CSS filter costs 14 ms on a CPU, and it misses by
-construction whenever the camera moves, which the product owner confirms is the
-norm. In a shader there is nothing to cache: the shadow is recomputed every frame
-and the frame still runs at 85 fps. The wallpaper entry stays — that one is a
-constant, not a cache.
+One `ID3D11Device`, no CPU readback between any stage — D3D11VA hardware decode (×2, NV12 GPU textures) → HLSL compositor (the same effect set: layout, zoom, shadows, masks, background blur, motion blur, cursor; NV12→RGB, dual-Kawase blur, SDF corners+shadows, per-velocity blur) → RGB→NV12 (two RTV passes) → `h264_amf` encode (GPU→GPU) → MP4 mux. Stack: Rust + `windows-rs`, ffmpeg `libav*` (LGPL) as demux/decode/encode/mux plumbing, HLSL compiled at runtime. The measured window is one `Instant::now()` before and one after the WHOLE run — decode, encode and mux included — so nothing inside can falsify the clock.
 
-### C.2 — Measurement hazards this POC surfaced
+The full-effects config — all nine effects — holds **~126 fps at 1080p60** (median 125.9, spread 11.8 %, admissible), confirming and slightly exceeding the reported 110 fps. The direction is thermal-robust: absolute fps drifts with the passive iGPU's boost/throttle, but at **every state measured** the full-effects config beats the browser (79 fps) and the wgpu path (48–68 fps), the throttled floor included.
 
-Every one of these produced a confident, wrong number first:
+Windows per-engine GPU counters (`\GPU Engine\Utilization`, no elevation, no in-process probe — cannot poison the headline):
 
-- **A hidden tab is a throttled tab**, and Chromium escalates the longer it stays
-  hidden. Same code, same machine, one session: 58.3 → 42.8 → 35.5 → 6.0 fps, and
-  an A/B that reported 6.0 on *both* arms with a 401 % spread. The harness now
-  refuses to run when `document.hidden`. **Nothing measured from an agent-driven
-  browser pane is admissible; this annex's numbers were taken by a human, on a
-  visible window.**
-- **The instruments cost 17 %.** `onSubmittedWorkDone()` per frame is a fence that
-  forbids decode/composite/encode from overlapping; `mapAsync()` for the GPU
-  timestamps is a sync per frame. Both are switchable, and the harness measures
-  itself: instrumented 35.5 fps vs clean 42.8. The phase breakdown attributes; it
-  does not price.
-- **Average fps is not cruise fps.** The first frames of a 4-second export cost
-  358/113/28/350 ms — 10.3 ms/frame of drag, and the mean lands 26 % under the
-  real rate. Cruise = median of the last three quarters.
-- **A canvas in the document is presented every frame** — 35 ms/frame of
-  compositing an export never does. The render target is an OffscreenCanvas.
-- **`getSample(t)` per frame is a seek per frame**: 122 ms/frame, three times
-  everything else combined, on a long-GOP screen recording. Forward streams: 0.6.
-- **The harness leaked its GPU device**, and six back-to-back runs decayed
-  19.9 → 8.6 → 7.5 fps during the very A/B meant to settle a question.
-- **Per-loop fps measured an empty loop, not throughput.** Under the pipeline the
-  loop does not wait for the work — `submit()` is non-blocking, encode is awaited
-  only on backpressure — so a SLOWER composite blocks the loop LESS and reads
-  FASTER: the naive arm reported 588 fps, 5× the optimised arm's, doing more work.
-  Throughput is now frames ÷ wall until they are actually composited, encoded and
-  muxed (finalize() forces completion), which is immune to the artifact. The
-  product owner caught this one from the numbers alone.
+- **Light configs are encode-bound** (video-codec engine ~71 %); **heavy configs are composite-bound** (3d engine ~84 %). Decode never bounds — a fast, bursty ~2 ms.
+- The VCN encoder is the hard ceiling (~210 fps decode+encode, fixed-function; `-quality speed` buys +2 %), so composite is the only optimisable surface on heavy configs.
+- **Serial vs parallel: already parallel on the GPU.** The 3d and codec engines are both busy over the same window (84 % + 61 % = 145 %, impossible if serialised) — the GPU pipelines the stages across frames on its own, the single-threaded CPU loop notwithstanding. An explicit CPU-side pipeline adds ~nothing (confirmed by a no-op SRV-cache trial: reducing CPU overhead moved neither bound). This is the native twin of the [encoder-pipelining loss](#encoder-pipelining) on the iGPU — same reason, same result.
 
-### C.3 — Pipelining the encoder LOSES on this iGPU (measured 2026-07-17)
+## Measurement hazards
 
-§11 says "pipeline, don't await": keep the encoder queue full so the compositor
-and the encoder overlap. Measured on the reference integrated GPU, with the
-corrected throughput metric, interleaved A/B, spread 7–11 % (so real):
+### Asynchronous GPU APIs
 
-| encoder queue depth | throughput |
-|---|---:|
-| 4 (buffered / pipelined) | 49 fps |
-| 1 (serialised, await each frame) | **79 fps** |
+When code calls a draw function, the GPU hasn't drawn anything yet — the call just *queues* work and returns immediately. The work actually executes later, and its cost lands on **whichever operation first needs the result** (the "sync point"). Consequence: a timer around a draw call measures ~0 ms even if the draw costs 15 ms, and the 15 ms shows up in some *other* stage's timer. Three confident wrong conclusions in this project came from exactly this: the `render` timer (1.7 ms submission vs 14.5 ms execution), the pipe probe (489 MB/s "≈3 %" — frames materialised *outside* the loop), and the `copyTo` probe (1.43 ms idle vs 38.9 ms in-loop).
 
-**Pipelining is 38 % SLOWER here, not faster.** The likely cause is that an
-integrated GPU shares one memory bus between the WebGPU compositor and the
-fixed-function H.264 encoder: overlapping them makes them contend for bandwidth,
-where serialising lets each have it in full per turn. (A first, larger "gain"
-from pipelining — +205 % — was the empty-loop artifact of C.2, not real.)
+**Rule for any new benchmark in this project:** *what sync point am I including, and does the real loop include the same one?* If the probe does not force the work the real loop forces, it cannot price the cost of connecting the component.
 
-Consequence, now the default: **serialise the encoder on integrated GPUs.** The
-pipeline path stays reachable behind a `queueDepth` override because a DISCRETE
-GPU — separate encoder silicon, dedicated VRAM — may well flip this, and that is
-exactly the discrete-GPU run still owed (bench G3). §11's rule is not wrong in
-general; it is wrong for the memory topology of the weakest, most common machine,
-which is the one the whole document optimises for.
+The same trap produced three disguises of one wall in this pipeline: an `encodeWait` at "90 % of wall", a "readback" of 32 seconds, and a "descent" of 38.9 ms/frame. One wall, three names. **This retires "≈13 ms/frame of Chromium overhead on a path we do not control"**: it is our compositor, and we control all of it. Trust the ceiling arms, not `StageTimings`.
 
-The honest, trustworthy rate for the POC is therefore **~79 fps at 1080p30**, all
-effects on, serialised, on the reference iGPU — comfortably past 60. The frame is
-**encoder-bound**: the compositor's own GPU pass is 1.9 ms (C, throttle-immune),
-and the encode is the largest remaining slice, so the next levers are the
-encoder's (bitrate/preset, and segment-parallel encode across GOPs — which needs
-multiple encoder instances, not a deeper queue on one), not the shader's.
+### Warm-up rounds, sustained vs burst regime
 
----
+- **First export pays for shader compilation, decoder setup and JIT** (9.3 s vs 5.6/6.6/5.8 s for its own repeats) and lands on whichever arm ran first: a 60 % same-arm spread that voided two runs by itself. **One discarded warm-up per arm brings the spread to 2–4 %.**
+- Battery and thermal drift has inverted conclusions on this hardware — up to 62 % spread on two earlier runs. Un-gated benchmarks on this hardware are noise.
+- **A hidden tab is a throttled tab**, and Chromium escalates the longer it stays hidden. Same code, same machine, one session: 58.3 → 42.8 → 35.5 → 6.0 fps, and an A/B that reported 6.0 on *both* arms with a 401 % spread. The harness refuses to run when `document.hidden`. **Nothing measured from an agent-driven browser pane is admissible; the numbers in this document were taken by a human, on a visible window.**
 
-## Annex D — The native POC (Rust + wgpu), measured 2026-07-17
+### Clock-read placement
 
-Built at the product owner's insistence: forget Electron, measure the most native,
-most performant path. `poc-native/` — Rust, wgpu (Vulkan on the reference AMD
-iGPU), the AMD hardware encoder via ffmpeg `h264_amf`. No browser, no WebCodecs.
+- A canvas in the document is presented every frame — 35 ms/frame of compositing an export never does. The render target is an OffscreenCanvas.
+- `getSample(t)` per frame is a seek per frame: 122 ms/frame, three times everything else combined, on a long-GOP screen recording. Forward streams: 0.6 ms/frame.
+- The harness leaked its GPU device, and six back-to-back runs decayed 19.9 → 8.6 → 7.5 fps during the very A/B meant to settle a question.
+- The D3D11 POC's measured window is one `Instant::now()` before and one after the WHOLE run — decode, encode and mux inside; nothing inside can falsify the clock.
 
-**D.1 — The compositor is portable, proven.** wgpu runs `composite.wgsl`
-**unchanged** — the only edits are the two the web platform forces and native
-lacks (`texture_external` → `texture_2d`, `textureSampleBaseClampToEdge` →
-`textureSampleLevel`). The native frame at t=0.5s is pixel-identical to the web
-POC: padded recording, analytic erf shadow, circular webcam, rimmed cursor. §12's
-portability bet — "WGSL + evaluate move to native unchanged" — is now demonstrated,
-not asserted. This is the single most important native result: the product's
-substance is host-agnostic.
+### Per-loop fps measured an empty loop, not throughput
 
-**D.2 — Encoder ceilings, native, no browser (ffmpeg, `-benchmark`):**
+`submit()` is non-blocking; encode is awaited only on backpressure. Under the pipeline the loop does not wait for the work — so a SLOWER composite blocks the loop LESS and reads FASTER. The naive POC arm reported 588 fps, 5× the optimised arm's, doing more work. Throughput is frames ÷ wall until they are actually composited, encoded and muxed (`finalize()` forces completion); that is the metric the harness now computes. The product owner caught this from the numbers alone.
 
-| path | throughput |
-|---|---:|
-| `h264_amf`, CPU-decoded frames | ~180 fps |
-| `d3d11va` decode → `h264_amf`, frames stay on GPU | **256 fps** |
+The same artifact produced a first, larger encoder-pipelining "gain" (+205 %) that disappeared under the corrected throughput metric.
 
-The hardware encoder is not the wall — 256 fps at 1080p when the frame never
-leaves the GPU.
+### Average fps is not cruise fps
 
-**D.3 — The naive native pipeline is 31 fps, and that is PIPE-BOUND, not native.**
-Stream-decode both sources, composite each on wgpu, encode with `h264_amf`, real
-animated timeline: **31 fps** — slower than the web POC's 79. But the cause was
-measured before it was concluded (this project punishes the reverse):
+The first frames of a 4-second export cost 358/113/28/350 ms — 10.3 ms/frame of drag, and the mean lands 26 % under the real rate. **Cruise = median of the last three quarters.**
 
-- with encode pipe 31.2 fps; without it 31.7 fps → the encoder is not the wall;
-- **the decode pipe alone** (ffmpeg → /dev/null, 180 frames) is **30 fps**, 3.9 s
-  of it system time — 8 MB/frame × 180 = 1.4 GB of *uncompressed* pixels shoved
-  between subprocesses.
+### The instruments cost 17 %
 
-So the wall is the **subprocess raw-RGBA pipes**, an artifact of reaching ffmpeg
-as a child process — not the descent, not the compositor (1.9 ms), not the encoder
-(256 fps). The browser wins *today* only because WebCodecs keeps frames in-process
-(`VideoFrame`s in memory), which no raw pipe crosses. **The 31 fps must never be
-quoted as "native loses."**
+`onSubmittedWorkDone()` per frame is a fence that forbids decode/composite/encode from overlapping; `mapAsync()` for the GPU timestamps is a sync per frame. Both are switchable, and the harness measures itself: instrumented 35.5 fps vs clean 42.8. The phase breakdown attributes; it does not price.
 
-**D.4 — What the native ceiling actually needs, still unbuilt:**
-1. **In-process codecs** (libavcodec via `ffmpeg-next`, or Media Foundation) — no
-   raw-frame pipes. Removes the 1.4 GB IPC that caps D.3.
-2. **Zero-descent GPU → encoder** — the composited wgpu texture handed to the
-   hardware encoder without the CPU readback, via Vulkan Video encode or
-   D3D12↔D3D11/AMF shared textures. This is the unmeasured §12 G-A premise, and
-   the only path that can turn the 256 fps encoder ceiling into real throughput.
-   It is deep unsafe interop (days, not hours).
+### Spread thresholds
 
-**D.5 — The CPU-native path was pushed to its ceiling, and it loses by
-construction (measured 2026-07-17).** The product owner rejected "31 fps is a pipe
-artifact, so native might still win" and asked to actually beat the browser. The
-CPU path was driven as far as it goes:
+- Same-arm spread above **10 %** declares the run VOID. The reference machine has voided runs at 31 % spread (B.1) and 35 % spread (naive POC arm) for real reasons; the run is still reported when the *ratio* survives the noise.
+- A single 0 % spread is a warning sign, not reassurance. The 11.9 fps run above reported 0 % spread over two samples and did not survive 40 minutes later (22.2 fps).
 
-| native pipeline | throughput |
-|---|---:|
-| subprocess pipes (decode+encode) | 31 fps |
-| in-process CPU decode, synchronous | 25 fps |
-| in-process CPU decode, **threaded** (overlapped), no encode | 61 fps |
-| threaded decode + composite + h264_amf | ~48 fps |
-| threaded, no readback, no encode (isolates the descent) | 68 fps |
-| — WebCodecs (browser) | 79 fps |
-| — d3d11va decode → h264_amf, all on GPU | 256 fps |
+### Bench-methodology traps
 
-Threading the decode was the real lever (25 → 61): the subprocess version's
-advantage was never "pipes", it was parallel decode. But the CPU path plateaus
-UNDER the browser, and the reason is now pinned by the no-readback probe: the
-descent (GPU→CPU) is only ~10 % (61 → 68); the wall is **CPU↔GPU transport** — 9 MB
-uploaded per frame on input, 8 MB read back on output, plus CPU swscale at both
-ends (YUV→RGBA decode, RGBA→NV12 encode). The browser pays none of this: WebCodecs
-decodes into GPU-backed `VideoFrame`s that `importExternalTexture` wraps with no
-CPU copy. **Its edge is GPU-residency, and no CPU-side trick can match it.**
+- `--effects` is per-session, not per-arm. Two effects A/B'd across two sessions is a cross-session comparison — the mistake this bench exists to prevent. Effects are now per-arm (`addEffects`), so an effect is A/B'd inside ONE interleaved run.
+- The `zoom` effect injected `depth: "medium"`; `ZOOM_DEPTH_SCALES` keys on 1–6, so the lookup returned `undefined` and **the zoom never ran** — every previous zoom arm reported a clean number for an effect that did nothing. The injected region is now parsed through `zoomRegionSchema` — the pipeline's own contract.
+- Saved projects carry no appearance at all (`shadowIntensity` defaults to 0), so whole effects never execute; "fixing" the shadow on a default project measures exactly zero. The `zoom` effect matters beyond its own cost: it is the only effect that changes geometry per frame, so it is what invalidates a geometry-keyed cache. **A parity test without it passes with a broken cache key**, because nothing ever asks the cache to invalidate.
+- `app.getGPUFeatureStatus()` from a windowless script reports everything `disabled_software`. Probe with a real window.
+- Piping via `cat` under Git Bash caps at ~70 MB/s — MSYS emulation, not Windows.
+- `new VideoFrame(canvas)` is lazy. Timing the constructor measures nothing.
+- `-encoders` lists what was compiled in, not what the machine can run. A portable build lists nvenc/qsv/amf everywhere; on this AMD laptop nvenc dies with "Cannot load nvcuda.dll". A one-frame smoke encode is the only way to settle it — and the unit tests passed *because the fixtures encoded the same wrong assumption as the code*.
+- Electron cannot transfer an ArrayBuffer renderer→main. The transfer list takes `MessagePort[]`; transferring a buffer silently drops the whole message ([electron#34905](https://github.com/electron/electron/issues/34905)) — it works renderer→renderer.
+- `Buffer.from(typedArray)` copies. Wrapping (`Buffer.from(buf.buffer, byteOffset, byteLength)`) measured +31 %.
+- A stale `dist-electron` bundle runs the *previous* main process against the new renderer. It read as "export IPC not registered" once and as "the bench flag does nothing" once. The bench now refuses to run against one.
+- The installed app (`openscreen.exe`) holds the same single-instance lock as the dev build. A launch exits 0 and reports nothing — silently.
 
-So the product owner is right in principle — native's *ceiling* (256 fps) crushes
-the browser (79) — but only the GPU-resident path reaches it: hardware decode
-straight into GPU textures (no upload) + zero-descent GPU→encoder (no readback).
-That is the deep D3D11/D3D12 (or Vulkan Video) interop, unbuilt, and it is the only
-thing that turns 256 into real throughput. The CPU-transport native pipeline is
-measured out at ~48–68 fps; that is its ceiling.
+## What the numbers mean
 
-**The standing conclusion is unchanged but now grounded on both sides:** the web
-platform (WebCodecs) hands you the on-device fast path for free (79 fps, no interop
-written); native offers a much higher ceiling (256 fps encoder) but only behind
-hard, unbuilt interop. The compositor — the product's actual substance — runs
-either place unchanged. So ship on the web platform, keep WGSL + evaluate portable
-(done), and open the native core only if a §12 gate fires, now with the spike's two
-concrete steps named above.
+### The wall is the compositor
 
-> **Superseded by D.6 (read this before quoting D.5 as "native is blocked").** The
-> "much higher ceiling behind hard, UNBUILT interop" was true of the **Vulkan** route
-> only. D3D11 builds the GPU-resident path on the shipped driver and clears the
-> browser (D.6). Read D.5 as what it measured — the **CPU-transport** native ceiling
-> (~48–68 fps) and the wgpu cost map — not as a verdict on native. Native is not
-> blocked; the fast path is D3D11.
+```
+compositing (L1→L6):        14.5 ms
+encoder (h264_amf, alone):   6.1 ms
+                            ───────
+                            20.6 ms  →  48.5 fps
+observed WebCodecs export:  20.7 ms  →  48.4 fps      ← the numbers close
+```
 
-### D.6 — The route was wrong, the principle was right: D3D11 delivers it driver-free (product owner, 2026-07-17)
+Confirmed by the M5 re-measurement on a different project: `composite-ceiling` 24.6 ms, `readback-ceiling` 24.6 ms (the descent adds **0.03 ms/frame**), `webcodecs` 31.1 ms. The compositor is **79 %** of the export; the encoder is **4.5 %**.
 
-> **DECISION — the native fast-path is D3D11 (`poc-d3d/`), measured and retained.**
-> GPU-resident, driver-free, measured above the browser on the shipped driver. Web
-> (`poc/`) stays the portable launch host (§12); the wgpu path (`poc-native/`) stays
-> the portability proof and the cost map. When native is opened — a §12 gate — it
-> opens on **D3D11**, not the Vulkan route the driver still gates. This resolves the
-> exploration: web = launch host · wgpu = portability proof · **D3D11 = native fast-path.**
+**Why it hid:** `new VideoFrame(canvas)` is lazy and `encoder.encode()` is the first operation that forces the GPU/canvas work to finish (`src/lib/exporter/videoExporter.ts:477–519`). So the compositor's 14.5 ms was **billed to the encoder's timer**. The `render` timer (1.7 ms) measured *submission*, not execution.
 
-D.5 concluded the GPU-resident native path was blocked on a driver update, because
-the Vulkan route (`gpu-video`) requires `VK_KHR_video_maintenance1`, which this AMD
-iGPU's driver (24.10.38) predates. **That was true of the Vulkan route only.** The
-product owner built the same idea on **D3D11** instead and reports **110 fps —
-above the browser's 79, on the current driver, no update.**
+### What the compositor was rebuilding per frame
 
-Architecture (their POC, a from-scratch native Windows app, not a fork): **one
-shared `ID3D11Device`, no CPU readback between any stage** — D3D11VA hardware decode
-(×2, NV12 GPU textures) → **HLSL** compositor (the same effect set: layout, zoom,
-shadows, masks, background blur, motion blur, cursor; NV12→RGB, dual-Kawase blur,
-SDF corners+shadows, per-velocity blur) → RGB→NV12 (two RTV passes) → `h264_amf`
-encode (GPU→GPU) → MP4 mux. Stack: Rust + `windows-rs`, ffmpeg `libav*` (LGPL) as
-demux/decode/encode/mux plumbing, HLSL compiled at runtime. The measured window
-(§10) is one `Instant::now()` before and one after the WHOLE run — decode, encode
-and mux included — so nothing inside can falsify the clock; benchmark configs run
-cumulatively C0→C8.
+| what it did | what the data was | wasted work | source | measured |
+|---|---|---|---|---:|
+| three chained `drop-shadow` over 2.07 Mpx of video, every frame | `drop-shadow` reads **only the alpha channel**. The video is opaque and masked by a rounded rect — its alpha *is* the rounded-rect silhouette. The result depends only on `(x, y, w, h, radius, intensity)`, not on a single video pixel. | the video pixels, 2.07 Mpx of them, blurred three times | `frameRenderer.ts:1045` (dup at `:533`) | **~30 ms/frame** (M2 + M5 re-measurement: **43.5 ms** isolated, spread 3–4 %) |
+| the wallpaper — a static image — cleared, re-blurred (`blur(6px)`) and re-blitted every frame | it never changes; blur it once at init | 1418 re-blurs for an image loaded once | `frameRenderer.ts:1007–1017` | ~5 ms/frame (M5 re-measurement: **17.9 ms** isolated) |
+| a `BlurFilter` that is **always zero** (all four writes to `.blur` in the export path set 0) sits permanently in `videoContainer.filters` | dead filter | forces Pixi into render-to-texture + a full-screen pass per filter, per frame; plus a GL texture is created and destroyed per frame | `frameRenderer.ts:235/238/240`, `:409–415` | the L1 +4.3 ms delta (zoom-blur cost the same data path) |
+| the rounded-rect mask retessellated per frame | identical from frame to frame | `clear()` / `roundRect()` / `fill()` over the same geometry | `frameRenderer.ts:769–771` | the L4 +1.4 ms delta |
 
-The correction that matters: **GPU-residency was always the win** (D.5's diagnosis
-holds — the browser beats the CPU path because WebCodecs keeps frames on-GPU). The
-only error was the *route*: `D3D11VA` decode + `AMF` encode are AMD's D3D-native
-paths and need none of the Vulkan Video extensions the driver lacks, so they reach
-full residency on the shipped driver where Vulkan could not. Native is not
-fundamentally slower than the browser — it is faster (110 > 79) — once both seams
-stay on one device, and D3D11 is how you get there here without touching drivers.
+The radius change is ~free — it draws inside a pass that already exists (M5 re-measurement: radius 13.3 ms/frame isolated vs 17.9 ms/frame for blur, vs 43.5 ms/frame for shadow; the radius number is the cost of the pass, not the cost of the radius change).
 
-**Verified — run through this document's protocol (measured 2026-07-18).** The POC
-now lives in `poc-d3d/` and the reported figure has been through the §C.2 gate:
-interleaved against the C0 decode+encode baseline, one warm-up round discarded,
-sustained regime (repeated exports, not a cold-boost burst). The full-effects config
-— all nine effects: layout, zoom, shadows, masks, background blur, motion blur,
-cursor — holds **~126 fps at 1080p60** (median 125.9, spread 11.8 %, admissible),
-confirming and slightly exceeding the reported 110. The clock is §10-clean (one
-`Instant::now()` before, one after the whole run — decode, encode and mux inside).
-The direction is thermal-robust: absolute fps drift with the passive iGPU's
-boost/throttle, but at **every state measured** the full-effects config beats the
-browser (79) and the wgpu path (48–68), the throttled floor included.
+### The structural conclusions that follow
 
-**The `--profile detail` question was answered externally**, without instrumenting
-the §10 clock, via Windows per-engine GPU counters (`\GPU Engine\Utilization` — no
-elevation, no in-process probe, so it cannot poison the headline):
+- **(a) The frame is a pure function of `(document, t)`.** Extract `evaluate: (Document, t) → FrameState`, where `FrameState = { sourceTimes, rects, transforms, velocity, maskParams, shadowGeom, activeCaptions, annotations }`. CPU, microseconds, testable without a GPU. Parity lives here: preview and export call the *same* `evaluate`, so they cannot drift on layout, easing, timing, or reveal logic. (The geometry code already exists, smeared across `compositeLayout.ts`, `zoomTransform.ts`, `updateAnimationState` — this is an extraction, not a rewrite.)
+- **(b) The compositor is tiny.** The full feature set compiles to: 4 textures (screen · webcam · background · glyph/annotation atlas), 1 uniform block (~200 bytes: rects, matrices, velocity, radii, shadow params, mask selector, reveal progress), 2 passes (P1: directional motion blur, only when `|velocity| > 0`; P2: composite, one draw call; P3: 3D rotation, folds into P2's vertex stage), caches (wallpaper 1×, shadow per-geometry, masks per-shape, caption rasters per-segment, cursor sprites 1×). Any 2015-class GPU runs this in **< 2 ms** at 1080p. Text is the one thing that stays CPU-rasterised (glyphs → offscreen → texture, cached per segment, raster only the caption's ~1920×200 rect).
+- **(c) Only two seams matter.** With (a) at ~0 ms and (b) at ≤ 2 ms, the architecture is decided by two data handoffs: S1: decoded frame → compositor texture (decode → GPU); S2: composited target → encoder (GPU → encode). **Every measured disaster in this project happened at a seam.** The design rule: both seams stay on the GPU device and are crossed exactly once per frame. The web platform's S1 (`VideoFrame` → texture import) and S2 (`VideoFrame(canvas)` → `VideoEncoder`) are the designed fast paths and are what L0's 213 fps already includes.
 
-- *Decode/composite/encode share, and where the wall is:* **the bottleneck shifts
-  with load.** Light configs are **encode-bound** (video-codec engine ~71 %); heavy
-  configs are **composite-bound** (3d engine ~84 %). Decode never bounds — a fast,
-  bursty ~2 ms. The VCN encoder is the hard ceiling (~210 fps decode+encode,
-  fixed-function; `-quality speed` buys +2 %), so composite is the only optimisable
-  surface on heavy configs — which is why the background blur was moved to
-  dual-Kawase (C8 104 → 126).
-- *Serial vs parallel:* **already parallel on the GPU.** The 3d and codec engines are
-  both busy over the same window (84 % + 61 % = 145 %, impossible if serialised) — the
-  GPU pipelines the stages across frames on its own, the single-threaded CPU loop
-  notwithstanding. So an explicit CPU-side pipeline adds ~nothing (confirmed by a
-  no-op SRV-cache trial: reducing CPU overhead moved neither bound). **This is the
-  native twin of §C.3** — pipelining the encoder LOSES on this iGPU — for the same
-  reason: on a shared-memory-bus integrated GPU, the overlap is already free and
-  forcing more only contends for bandwidth.
+## The fix, and what it bought
 
-The `poc-native/` Vulkan+wgpu work stands as the portability proof (the WGSL
-compositor runs native unchanged) and the cost map; **`poc-d3d/` is the retained
-native fast-path** — the throughput winner, now measured, not reported.
+### The change
 
-### D.7 — Going native cross-platform: two axes, and what each actually costs
+The compositor was rebuilt to classify by what invalidates a cache, not by layer:
 
-If the native fast path is pursued beyond Windows, the work splits along two
-independent axes. The headline: **the compositor unifies; the codec does not; and
-the GPU vendor is abstracted away twice, so it multiplies almost nothing.**
+| never | on geometry | every frame |
+|---|---|---|
+| wallpaper blur | drop shadow, rounded mask, video texture | video, cursor, webcam, annotations |
 
-**Axis 1 — the OS (this is where the real per-platform work lives).**
-The pipeline has one portable half and one non-portable half:
+Concretely:
 
-- *Compositor — unified, like whisper.cpp's Vulkan compute backend.* It is shaders,
-  and shaders run everywhere Vulkan/Metal does. wgpu compiles the one WGSL to
-  DXIL / SPIR-V / MSL. One implementation, three platforms. Proven (D.1).
-- *Hardware decode/encode — NOT unifiable via Vulkan Video.* Vulkan Video is the
-  would-be single codec API, and it fails on all three counts: **macOS is
-  impossible** — MoltenVK does not implement `VK_KHR_video_*` and, per Khronos,
-  "probably never will" (Metal does not expose the capability); **Windows-AMD is
-  driver-gated** (needs `VK_KHR_video_maintenance1`, Adrenalin ≥25.6.1, and encode
-  is absent on this iGPU — D.6); **Linux works** (Mesa). So Vulkan Video covers ~1.5
-  of 3 platforms and is not the unified path.
-- *The unified codec layer that DOES exist is ffmpeg `libav*`* — one demux / decode /
-  encode / mux API surface over every hardware backend (D3D11VA, VAAPI,
-  VideoToolbox, Vulkan Video, AMF, NVENC, QSV). ffmpeg picks the backend per
-  platform; the call sites stay the same. (The D3D11 POC already uses it this way.)
-- *The one irreducibly per-OS piece is the zero-copy BRIDGE* — mapping ffmpeg's
-  decoded hardware frame into a wgpu/Vulkan texture, because the GPU-memory-sharing
-  primitive differs and no single API spans all three:
+- Pre-blur wallpaper at init; per-frame draw = plain blit with `globalCompositeOperation='copy'` (`frameRenderer.ts:1007–1017`).
+- Shadow: render the same 3-filter chain **once per geometry** onto a white rounded-rect silhouette, cache by `(rect, radius, intensity)`, per-frame = 2 `drawImage` (`:1045` and `:533`). The silhouette is taken from `videoCanvas`'s own alpha (`drawImage` + `source-in` over black), so nothing has to stay in sync as layout code evolves; the shadow output is `silhouette OVER shadow`, so drawing `videoCanvas` on top covers the silhouette exactly, **including the anti-aliased corners**.
+- Delete the always-zero `BlurFilter`; attach `motionBlurFilter` only when `velocity > 0` (pattern: `pixiCursorRenderer.ts:568`) (`:235/238/240`).
+- Reuse one GL texture, stop create/destroy per frame (pattern: `threeDPass.ts`) (`:409–415`).
+- Rebuild mask only on layout change (`:769–771`).
+- `clearRect(w,h)` before a `drawImage(w,h)` that covers the canvas is two full-frame passes where `globalCompositeOperation = "copy"` is one.
 
-  | OS | decode | shared surface | encode |
-  |---|---|---|---|
-  | Windows | D3D11VA | **`ID3D11Device` shared texture** | AMF / NVENC / QSV |
-  | Linux | VAAPI / NVDEC | **dma-buf** (`texture_from_dmabuf_fd`) | VAAPI / Vulkan Video |
-  | macOS | VideoToolbox | **IOSurface** → Metal texture | VideoToolbox |
+**Do not** replace the shadow with an SDF/`smoothstep` approximation: the cascaded falloff is exact-cached instead, because this codebase has already been burned twice by shadow-falloff/corner-AA approximations (see the comments in `threeDPass.ts`). The separately-falsifiable shadow-on-GPU spike (three successive box blurs in a shader, pixel-diffed against the Canvas2D output) is a separate item — see [Known gaps](#known-gaps).
 
-  Three small bridges (`create_texture_from_hal` per backend), not three pipelines.
-  So cross-platform native = **1 compositor + 1 ffmpeg codec layer + 3 bridges**,
-  and Windows can later swap its D3D11 bridge for the Vulkan one (same as Linux)
-  once AMD drivers mature, with no change to compositor or ffmpeg.
+### The measured delta
 
-**Axis 2 — the GPU vendor (NVIDIA / AMD / Intel / Apple). Barely multiplies.**
-The vendor is abstracted twice — by the OS graphics API (the bridge is per-OS, not
-per-vendor: every Windows GPU speaks D3D11 textures; every Linux GPU exports
-dma-buf; every Mac uses IOSurface) and by ffmpeg (it selects `h264_nvenc` /
-`h264_amf` / `h264_qsv` / `h264_videotoolbox`). The compositor is vendor-agnostic
-too (wgpu). So on a single-GPU machine, NVIDIA vs AMD vs Intel is the same code
-path with a different backend string. What the vendor genuinely adds:
+Within-run ratios only (this machine is not reproducible):
 
-- *Encoder capability gaps + fallback.* Not every vendor/generation has every
-  codec or quality tier (AMD's Vulkan encode is absent here; older Intel lacks AV1
-  encode; NVENC is the most complete). Probe capabilities and fall back
-  (AV1 → HEVC → H.264). Selection logic, not a rewrite.
-- *THE real hardware hazard: hybrid-GPU laptops* (Intel iGPU + NVIDIA dGPU, AMD APU
-  + AMD dGPU). If decode, composite and encode land on **different** adapters, the
-  single-device zero-copy assumption breaks and a cross-adapter copy through
-  system RAM / PCIe is forced — a descent in disguise, reintroducing exactly the
-  wall this whole architecture removes. Mitigation: detect and **pin all three
-  stages to one adapter**, or knowingly accept the copy. This is the one hardware
-  detail that can silently cost the win, and the one to measure on a hybrid laptop.
-- *Apple Silicon vs Intel Mac:* same VideoToolbox → IOSurface → Metal path; Apple
-  Silicon is faster (dedicated Media Engine), Intel Macs use QuickSync and are
-  being deprecated by Apple. No separate code.
+| run | before | after | ratio |
+|---|---:|---:|---:|
+| `composite-ceiling`, shadow+radius | 39.45 ms/frame | 20.22 | **1.95×** |
+| `webcodecs`, blur+shadow+radius | 67 717 ms | 33 707 | **2.01×** |
+| `webcodecs`, shadow+radius | 63 825 ms | 39 839 | **1.60×** |
 
-The measured ~126 fps (D.6, full-effects, protocol-verified) is on a single-GPU AMD
-iGPU — the simplest case. A discrete NVIDIA desktop would match or beat it through
-the same D3D11 bridge (NVENC); a hybrid laptop is the case that must be measured and
-adapter-pinned before the number is trusted there.
+**Output is byte-identical.** Same timeline, same encoder, old compositor vs new → the files are identical byte for byte, SSIM 1.000000 across all 1418 frames. Not a pixel moved.
 
----
+Gate G0 measured the in-run effect: legacy 9.8 → shipping 14.6 fps (+49 %) on a project whose per-frame webcam compositing the changes never touched. The L7 row confirms the ceiling: compositor cache hits at 0.8 % miss on a still camera, so the shadow drops to ~1.3 ms/frame there.
 
-**Step-0 note (data loss, §13).** The record's reference project `os_parity`
-(`proj_de6ffaaa…openscreen`) was found corrupted with exactly the §13 signature:
-a complete, valid save (updatedAt 2026-07-16T18:00:26Z) followed by the tail of a
-longer, older version — `JSON.parse` fails at byte 3485 and the app can no longer
-list it. A byte-identical backup was taken (`….openscreen.corrupt.bak`, alongside
-an older victim `proj_05a4bb1c….corrupt.bak`). Recovery is mechanical — truncate
-to the valid 3485-byte prefix — pending the user's go-ahead. That is **two**
-destroyed project files; Step 0 stays the first line of the ship order.
+## The bench
+
+### Command
+
+```bash
+npm run bench:export -- --project=<id|title> --arms=webcodecs,native --runs=2 --effects=shadow,blur
+```
+
+`scripts/bench-export.mjs` + `src/bench/runBench.ts`. It **simulates nothing**: it opens the real editor window (same `webPreferences`, preload and sandbox), loads a real saved project through the same bridge the editor uses, and calls `exportAxcutDocument` — `ExportDialog`'s own entry point. Only React is skipped, so nothing renders alongside the export.
+
+It exists because driving this through the UI cost ~5 minutes a run and kept injecting confounds: one A/B ran with DevTools open on **one arm only**; another ran on a laptop at 5 % battery whose SoC budget drifted 26 % *between the two arms* — enough to invert the conclusion.
+
+### Arms
+
+Arms set `localStorage` flags read at runtime, so one app session measures every arm against one document: `webcodecs`, `native`, `*-legacy` (the pre-2026-07-17 compositor, for attribution), `composite-ceiling` (render only), `readback-ceiling` (render + `copyTo`, discard).
+
+### Fixture
+
+`--effects=shadow,blur,radius,zoom` patches an in-memory **copy** of the document; nothing reaches disk. Saved projects carry no appearance at all (`shadowIntensity` defaults to **0**), so whole effects never execute — "fixing" the shadow on a default project measures exactly zero. The `zoom` effect matters beyond its own cost: it is the only effect that changes geometry per frame, so it is what invalidates a geometry-keyed cache. **A parity test without it passes with a broken cache key**, because nothing ever asks the cache to invalidate.
+
+### Parity is gated, not argued
+
+Unit tests never look at a pixel. The `native*` arms write real files: export the same timeline through the same encoder with each compositor, then `cmp` and `ffmpeg -lavfi ssim`. Every compositor change above cleared it byte-for-byte. **"Obviously equivalent" is what this pipeline keeps punishing** — gate it.
+
+### Ratios only
+
+**Only within-run ratios transfer between machines, never absolute times.** Arms interleave (A, B, A, B), and the bench reports same-arm spread and declares itself VOID above 10 %. A stable measurement is not a true one — see [Measurement hazards](#measurement-hazards) for the full set of traps this bench exists to prevent.
+
+## Rejected routes
+
+### Rust + wgpu native POC (`poc-native/`)
+
+**What it was.** `poc-native/` — Rust, wgpu (Vulkan on the reference AMD iGPU), the AMD hardware encoder via ffmpeg `h264_amf`. No browser, no WebCodecs. **What the measurement said.** The compositor is portable, proven: wgpu runs `composite.wgsl` **unchanged** — the only edits are the two the web platform forces and native lacks (`texture_external` → `texture_2d`, `textureSampleBaseClampToEdge` → `textureSampleLevel`); the native frame at t=0.5 s is pixel-identical to the web POC. Encoder ceilings measured (ffmpeg, `-benchmark`): `h264_amf` with CPU-decoded frames ~180 fps; `d3d11va` decode → `h264_amf`, frames stay on GPU **256 fps** — the hardware encoder is not the wall. The naive Vulkan pipeline measured 31 fps end-to-end (decoded via wgpu, composite in WGSL, encode `h264_amf`), but the cause was measured before it was concluded: with encode pipe 31.2 fps vs without 31.7 fps, the encoder isn't the wall; the decode pipe alone (ffmpeg → /dev/null, 180 frames) is **30 fps**, 3.9 s of system time — 8 MB/frame × 180 = 1.4 GB of *uncompressed* pixels shoved between subprocesses. The wall is the subprocess raw-RGBA pipes, an artifact of reaching ffmpeg as a child process, not the descent, not the compositor (1.9 ms), not the encoder (256 fps). The CPU path was pushed to its ceiling and loses by construction: subprocess pipes 31 fps, in-process CPU decode synchronous 25 fps, in-process CPU decode threaded (overlapped) no encode 61 fps, threaded decode + composite + `h264_amf` ~48 fps, threaded no-readback no encode 68 fps — against WebCodecs 79 fps and `d3d11va` → `h264_amf` all on GPU 256 fps. Threading the decode was the real lever (25 → 61): the subprocess version's advantage was never "pipes", it was parallel decode. The CPU path plateaus UNDER the browser, and the reason is pinned by the no-readback probe: the descent (GPU→CPU) is only ~10 % (61 → 68); the wall is **CPU↔GPU transport** — 9 MB uploaded per frame on input, 8 MB read back on output, plus CPU swscale at both ends (YUV→RGBA decode, RGBA→NV12 encode). The browser pays none of this: WebCodecs decodes into GPU-backed `VideoFrame`s that `importExternalTexture` wraps with no CPU copy. **The Vulkan route is blocked on the driver:** `VK_KHR_video_maintenance1` is required and the AMD iGPU's driver (24.10.38) predates it. `poc-d3d/` delivers the same GPU-resident principle on the shipped driver and is the retained native fast path (see [D3D11](#the-d3d11-native-fast-path-poc-d3d--2026-07-18) above). **One-line reason not to re-propose:** portability is proven but the GPU-resident native ceiling requires a path the AMD driver doesn't expose; the same goal is reached on D3D11.
+
+### Tauri / a separate native core
+
+**What it was.** OpenScreen, but on Tauri, with the compositor in a Rust core. **What the measurement said.** It is not Node vs Rust, and not Electron vs Tauri. Neither the language nor the shell forces the descent — **the browser engine does.** The compositor is Pixi/WebGL/Canvas2D inside Chromium's renderer, and Chromium exposes its GPU textures to nobody. Tauri's webview on Windows is Chromium (WebView2): composite in the webview under Tauri and you pay the identical descent. Zero descent requires the compositor to stop being a web canvas and become the project's own GPU code, owning the same device as the encoder. That is reachable **from Electron too** — an N-API addon, or a native sidecar. **The shell is a consequence, not a cause**; it earns its place on bundle size and memory, never on this measurement. What would actually force the shell question is the preview: once the compositor is native, the preview must come from it too, or the product ships two compositors and loses the parity that is its entire value. Hardware findings (measured 2026-07-17, bundled ffmpeg, reference laptop): GPU decode → GPU encode, no descent, no compositing = 234 fps; Vulkan is a dead end for the encoder here (the driver exposes `video_decode_queue` only, no encode queue; AMF refuses to initialise from a Vulkan device — *"not supported"*, explicitly); `scale_d3d11` fails to create its texture (`80070057`) on every format tried; d3d11 → OpenCL `hwmap` fails on NV12's UV plane. So **the ffmpeg CLI cannot express GPU-composite → GPU-encode on this hardware** — a limit of its filter plumbing, not of the GPU. **One-line reason not to re-propose:** the engine forces the descent, not the shell; the same engine runs under Tauri.
+
+### Native ffmpeg encode driven from the renderer
+
+**What it was.** M2 above: composite in the Chromium renderer, copy pixels to CPU, IPC to the main process, pipe into a bundled LGPL ffmpeg with the AMD hardware encoder. **What the measurement said.** **2.1× SLOWER end-to-end** (38.5 s → 80.8 s, spread 3–4 %). ffmpeg itself consumed frames faster than WebCodecs (`encodeWait` −29 %, `flush` −94 %) — but WebCodecs encodes straight off the GPU texture and never brings a frame to the CPU. The M3 ceiling arm bounds the related "sandbox: false, direct pipe" variant: with the crossing at exactly zero (frames descended then discarded: no IPC, no ffmpeg, no muxer) the pipeline still lost, **while WebCodecs was also writing the file**. It does not even remove the crossing — it swaps a structured clone (~390 MB/s) for a pipe write (~500 MB/s), ~1.2× on one leg, bought by giving up the sandbox that guards demux/decode of untrusted media. Phase-4 GPU BGRA→NV12 packing cannot rescue either: the descent measured 6.7 ms fixed + 3.9 ms/MB (257 MB/s marginal — a sync, not a copy), so NV12 halves it and still lands at parity at best. Worker + OffscreenCanvas buys UI responsiveness, not speed; the main thread was never the throughput limit. A previous attempt to keep the composited texture on the GPU side (`a31cf49` → reverted `e6cbb45`) was implemented, measured, reverted: it moved the work, left the synchronisation where it was. **One-line reason not to re-propose:** WebCodecs encodes straight off the GPU texture and never brings a frame to the CPU; adding a descent to a wall that was already there.
+
+### Encoder pipelining
+
+**What it was.** Keep the encoder queue full (queue depth ≥ 2) so the compositor and the encoder overlap, rather than awaiting each frame. **What the measurement said.** C.3 (2026-07-17, reference iGPU, corrected throughput metric, interleaved A/B, spread 7–11 %, so real): encoder queue depth 4 (buffered / pipelined) **49 fps**; encoder queue depth 1 (serialised, await each frame) **79 fps**. **Pipelining is 38 % SLOWER here, not faster.** The likely cause is that an integrated GPU shares one memory bus between the WebGPU compositor and the fixed-function H.264 encoder: overlapping them makes them contend for bandwidth, where serialising lets each have it in full per turn. A first, larger "gain" from pipelining — +205 % — was the empty-loop artifact (see [Measurement hazards](#measurement-hazards)), not real. The native twin on the D3D11 path confirms: 3d 84 % + codec 61 % = 145 % over the same window, so the GPU already pipelines the stages across frames on its own; a no-op SRV-cache trial that reduced CPU overhead moved neither bound. **One-line reason not to re-propose:** a loss on the target integrated GPU; default is serialise on iGPU, keep the pipeline path behind a `queueDepth` override for discrete-GPU machines (a discrete-GPU run is owed — see [Known gaps](#known-gaps)).
+
+### Software VP9
+
+**What it was.** `libvpx-vp9` software encode as a fallback for the absence of a hardware VP9 encoder. **What the measurement said.** Correct output, no hardware VP9 encoder on the target reference machine (the AMD iGPU ships `h264_amf` and HEVC encode, not VP9). It is the only VP9 path available on this hardware, but it is far too slow for either preview or export — the gap to the hardware H.264 path the product actually uses is several orders of magnitude, and no in-house benchmark number survives the question of what it would buy. **One-line reason not to re-propose:** with no hardware VP9 to fall back on, software VP9 cannot reach the frame rate the product requires.
+
+## Known gaps
+
+- **One bench fixture is still corrupt, from a bug since fixed.** Two concurrent saves used to be able to interleave and truncate a project file, which destroyed at least two real ones (a valid JSON prefix followed by the tail of a longer version). `proj_de6ffaaa` (`os_parity`) is still in that state — 4006 bytes, 3485 of them valid JSON — with a byte-exact backup beside it (`*.corrupt-backup-20260716`); recovery is mechanical (truncate to the 3485-byte prefix). The bug itself is gone: `DocumentService` now serialises saves through a per-project write queue and writes atomically (unique temp file → `fsync` → rename), which is why Gate G0 was run on `proj_5b3ac6bc` instead. The reference project for M1–M4 is `proj_a7468696`.
+- **A discrete-GPU and Intel QSV run is owed** (G3). Every number in this record is from a single iGPU laptop. A hybrid-GPU laptop (Intel iGPU + NVIDIA dGPU; AMD APU + AMD dGPU) is the case that must be measured and adapter-pinned before any native number is trusted there: if decode, composite and encode land on **different** adapters, the single-device zero-copy assumption breaks and a cross-adapter copy through system RAM / PCIe is forced — a descent in disguise, reintroducing exactly the wall this architecture removes.
+- **Shadow-on-GPU spike.** Reimplement the exact 3-pass cascade (the SVG `feGaussianBlur` for the project's radii) in a shader, pixel-diffed against the Canvas2D output. Falsifiable: if the GPU and Canvas2D outputs do not match, the claim is wrong. Skia's real path may not follow the spec's letter. The product call (2026-07-17) that a moving camera is the norm is what makes this the remaining lever on heavy timelines.
+- **Software VP9 under any target hardware is not measured** — it is recorded as a refuted route, not as a benchmarked number.
+- **The "moving camera is the norm" product call** is the product owner's standing answer, not a measurement. The L7 row's 0.8 % / 54.1 % cache-miss split is the bench's answer; the user's call is what determines what fraction of a typical timeline exercises the moving-camera path. The decision the call enables — the unified GPU-resident compositor — is recorded in [../architecture/decisions.md](../architecture/decisions.md).
+- **The "average fps vs cruise fps" correction** lives in the harness, not in the bench UI: cruise = median of the last three quarters. The same metric is reported everywhere.
