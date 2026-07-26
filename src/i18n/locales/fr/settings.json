@@ -84,6 +84,8 @@
 		"presets": "Préréglages",
 		"help": "Choisissez ce qui apparaît derrière l'enregistrement : un fond d'écran fourni, une couleur unie, un dégradé, ou une image personnelle depuis le disque.",
 		"customWallpaper": "Fond personnalisé",
+		"unsupportedImage": "Image non prise en charge. Utilisez un fichier JPG ou PNG.",
+		"imageReadFailed": "Impossible de lire ce fichier image.",
 		"imageLabel": "Fond {{index}}",
 		"colorLabel": "Couleur {{color}}"
 	},
