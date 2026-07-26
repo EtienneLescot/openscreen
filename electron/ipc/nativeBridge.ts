@@ -658,6 +658,15 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 									request.payload.sessionId,
 								),
 							);
+						case "captions.translate":
+							return createSuccessResponse(
+								requestId,
+								await aiEditionService.captionsTranslate({
+									segments: request.payload.segments,
+									targetLanguage: request.payload.targetLanguage,
+									sourceLanguage: request.payload.sourceLanguage,
+								}),
+							);
 						case "timeline.run":
 							return createSuccessResponse(
 								requestId,

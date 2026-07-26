@@ -1097,7 +1097,7 @@ export function V4Timeline({
 						<button
 							type="button"
 							className={styles.tlToolBtn}
-						aria-pressed={settings.autoFocusAll}
+							aria-pressed={settings.autoFocusAll}
 							title={t(
 								settings.autoFocusAll ? "buttons.autoFocusAllOn" : "buttons.autoFocusAllOff",
 							)}

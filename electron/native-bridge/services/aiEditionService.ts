@@ -1,6 +1,7 @@
 import { documentSchema } from "../../../src/lib/ai-edition/schema";
 import type {
 	AiEditionAssetResult,
+	AiEditionCaptionTranslateResult,
 	AiEditionChatBudget,
 	AiEditionChatCompactResult,
 	AiEditionChatMessage,
@@ -17,6 +18,10 @@ import type {
 	AiEditionProjectSummary,
 	AxcutTimelineOperation,
 } from "../../../src/native/contracts";
+import {
+	type CaptionTranslateSegment,
+	translateCaptionSegments,
+} from "../../ai-edition/caption-translate";
 import type { ChatEventSink } from "../../ai-edition/chat-service";
 import type { DocumentService } from "../../ai-edition/document-service";
 import type { LlmConfigStore, LlmCredential } from "../../ai-edition/llm-config-store";
@@ -450,5 +455,43 @@ export class AiEditionService {
 		const result = await this.options.compactNow(projectId, sessionId);
 		if (!result) return null;
 		return result;
+	}
+
+	/**
+	 * Translate transcript segments for the caption layer, using whichever
+	 * provider/model the chat is already configured with. Returns a plain
+	 * `segmentId → text` map: the caller writes it into the document's caption
+	 * translation layer, so nothing here can touch the transcript SSOT.
+	 */
+	async captionsTranslate(input: {
+		segments: CaptionTranslateSegment[];
+		targetLanguage: string;
+		sourceLanguage?: string;
+	}): Promise<AiEditionCaptionTranslateResult> {
+		const config = this.options.llmConfig.getConfig();
+		if (!config) {
+			return {
+				success: false,
+				segments: {},
+				error: "No AI provider is configured. Connect one in the agent settings first.",
+			};
+		}
+		const def = PROVIDER_DEFINITIONS.find((d) => d.id === config.provider);
+		const credential = def ? this.options.llmConfig.getCredential(def.id, def.envKeys) : null;
+		const accountId =
+			credential?.entry.kind === "codex" ? (credential.entry.accountId ?? undefined) : undefined;
+
+		const result = await translateCaptionSegments({
+			segments: input.segments,
+			targetLanguage: input.targetLanguage,
+			sourceLanguage: input.sourceLanguage,
+			provider: config.provider,
+			model: config.model,
+			apiKey: credential?.value ?? "",
+			baseUrl: config.baseUrl,
+			reasoningEffort: config.reasoningEffort,
+			accountId,
+		});
+		return { ...result, model: config.model };
 	}
 }

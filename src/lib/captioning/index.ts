@@ -1,10 +1,9 @@
 export type { CaptionSegmentLayoutOptions } from "./annotationsFromCaptions";
 export {
-	captionSegmentsToAnnotationRegions,
-	DEFAULT_AUTO_CAPTION_MIN_GAP_MS,
+	dedupeAdjacentCaptionRepeats,
+	finalizeCaptionSegmentsForPlayback,
 	groupTimedCaptionWordsIntoLines,
 	mergeAdjacentCaptionSegments,
-	reconcileAutoCaptionTimelineGaps,
 	splitMergedCaptionsByWordBounds,
 } from "./annotationsFromCaptions";
 export { extractMono16kFromVideoUrl, MAX_CAPTION_AUDIO_SEC } from "./extractMono16k";

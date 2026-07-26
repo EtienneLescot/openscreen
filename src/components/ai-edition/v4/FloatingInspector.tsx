@@ -39,6 +39,7 @@ import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { coalescedTrimGroups } from "@/lib/ai-edition/timeline/trim-mapping";
 import { formatSeconds } from "@/lib/ai-edition/timeline/virtual-preview";
+import { CaptionsPane } from "../CaptionsPane";
 import { ColorField } from "../ColorField";
 import {
 	BackgroundPane,
@@ -77,7 +78,10 @@ interface FloatingInspectorProps {
 	 * through a facet body. */
 	clips: AxcutClip[];
 	onEditClip: (clip: AxcutClip) => void;
-	onCaptions: () => void;
+	/** Runs the transcription the caption layer reads from. Captions are derived
+	 *  from the transcript, so this is the only caption action the shell owns. */
+	onTranscribe: () => void;
+	isTranscribing: boolean;
 	transcriptProps: TranscriptProps;
 	/** Drives the selected-element settings pane (zoom/speed/annotation/trim) —
 	 * takes over the inspector, forcing it open, whenever a timeline region is
@@ -93,7 +97,8 @@ export function FloatingInspector({
 	onToggleOpen,
 	clips,
 	onEditClip,
-	onCaptions,
+	onTranscribe,
+	isTranscribing,
 	transcriptProps,
 	tl,
 }: FloatingInspectorProps) {
@@ -111,7 +116,8 @@ export function FloatingInspector({
 					) : (
 						<FacetBody
 							facet={facet}
-							onCaptions={onCaptions}
+							onTranscribe={onTranscribe}
+							isTranscribing={isTranscribing}
 							onCollapse={onToggleOpen}
 							transcriptProps={transcriptProps}
 						/>
@@ -1022,17 +1028,18 @@ const secondaryBtnStyle: React.CSSProperties = {
 
 function FacetBody({
 	facet,
-	onCaptions,
+	onTranscribe,
+	isTranscribing,
 	onCollapse,
 	transcriptProps,
 }: {
 	facet: Facet;
-	onCaptions: () => void;
+	onTranscribe: () => void;
+	isTranscribing: boolean;
 	onCollapse: () => void;
 	transcriptProps: TranscriptProps;
 }) {
 	const te = useScopedT("editor");
-	const ts = useScopedT("settings");
 	// A small collapse affordance floated over the reused pane header.
 	const collapse = (
 		<button
@@ -1067,12 +1074,7 @@ function FacetBody({
 	if (facet === "transcript") return wrap(collapse, <TranscriptPane {...transcriptProps} />);
 	return wrap(
 		collapse,
-		<SimpleFacet
-			title={ts("facets.captions")}
-			description={te("inspector.captionsDescription")}
-			actionLabel={te("inspector.generateCaptions")}
-			onAction={onCaptions}
-		/>,
+		<CaptionsPane onTranscribe={onTranscribe} isTranscribing={isTranscribing} />,
 	);
 }
 
@@ -1081,94 +1083,6 @@ function wrap(collapse: React.ReactNode, body: React.ReactNode) {
 		<div style={{ position: "relative", display: "flex", flexDirection: "column", minHeight: 0 }}>
 			{collapse}
 			{body}
-		</div>
-	);
-}
-
-function SimpleFacet({
-	title,
-	description,
-	actionLabel,
-	onAction,
-	emptyLabel,
-}: {
-	title: string;
-	description: string;
-	actionLabel?: string;
-	onAction?: () => void;
-	emptyLabel?: string;
-}) {
-	return (
-		<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
-			<header
-				style={{
-					display: "flex",
-					alignItems: "center",
-					padding: "14px 16px 12px",
-					borderBottom: "1px solid var(--border-soft)",
-					flexShrink: 0,
-				}}
-			>
-				<h2
-					style={{
-						margin: 0,
-						fontSize: 14,
-						fontWeight: 600,
-						color: "var(--fg-emphasis)",
-						letterSpacing: "-0.01em",
-					}}
-				>
-					{title}
-				</h2>
-			</header>
-			<div
-				style={{
-					padding: "16px",
-					display: "flex",
-					flexDirection: "column",
-					gap: 14,
-					flex: "1 1 auto",
-					minHeight: 0,
-					overflowY: "auto",
-					scrollbarWidth: "thin",
-					scrollbarColor: "var(--border) transparent",
-				}}
-			>
-				<p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: "var(--muted)" }}>
-					{description}
-				</p>
-				{emptyLabel ? (
-					<div
-						style={{
-							padding: "20px 16px",
-							border: "1px dashed var(--border-hi)",
-							borderRadius: 12,
-							textAlign: "center",
-							color: "var(--muted)",
-							fontSize: 12,
-						}}
-					>
-						{emptyLabel}
-					</div>
-				) : null}
-				{actionLabel && onAction ? (
-					<button
-						type="button"
-						onClick={onAction}
-						style={{
-							padding: "10px 14px",
-							borderRadius: 10,
-							border: "1px solid var(--accent)",
-							background: "var(--accent)",
-							color: "#fff",
-							font: "600 13px var(--font-display)",
-							cursor: "pointer",
-						}}
-					>
-						{actionLabel}
-					</button>
-				) : null}
-			</div>
 		</div>
 	);
 }

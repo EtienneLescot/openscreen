@@ -585,6 +585,15 @@ function createShimBridgeClient() {
 					summary: "(browser shim compaction is a no-op)",
 				});
 			},
+			// ponytail: no provider credentials in browser mode, so this reports the
+			// same "configure a provider" failure the real bridge would, rather than
+			// inventing fake translations that would land in the document.
+			translateCaptions: () =>
+				Promise.resolve({
+					success: false,
+					segments: {},
+					error: "Caption translation needs the desktop app's AI provider.",
+				}),
 		},
 		project: {
 			getCurrentContext: () =>

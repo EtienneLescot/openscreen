@@ -313,6 +313,20 @@ export interface AiEditionChatCompactResult {
 	summary: string;
 }
 
+/**
+ * Result of a caption translation run. `segments` maps TRANSCRIPT SEGMENT ID →
+ * translated text; it is written into the document's caption translation layer,
+ * never back onto the transcript. Partial maps are valid — a run that fails
+ * halfway still returns what it managed to translate.
+ */
+export interface AiEditionCaptionTranslateResult {
+	success: boolean;
+	segments: Record<string, string>;
+	/** Model that produced the translation, for provenance in the UI. */
+	model?: string;
+	error?: string;
+}
+
 export type NativeBridgeErrorCode =
 	| "INVALID_REQUEST"
 	| "UNSUPPORTED_ACTION"
@@ -642,6 +656,19 @@ export type NativeBridgeRequest =
 			domain: "aiEdition";
 			action: "chat.compactNow";
 			payload: { projectId: string; sessionId: string };
+			requestId?: string;
+	  }
+	| {
+			domain: "aiEdition";
+			action: "captions.translate";
+			/** `segments` are TRANSCRIPT segments, sent by id so the reply can be
+			 *  re-keyed exactly. Stateless: no projectId, and nothing is written to
+			 *  the document on the main side. */
+			payload: {
+				segments: Array<{ id: string; text: string }>;
+				targetLanguage: string;
+				sourceLanguage?: string;
+			};
 			requestId?: string;
 	  }
 	| {
