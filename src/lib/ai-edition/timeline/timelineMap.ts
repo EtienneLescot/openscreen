@@ -1,5 +1,5 @@
 // The single place that maps between the timeline's three coordinate systems.
-// See docs/architecture/timeline-coordinate-refactor.md.
+// See technical-documentation/architecture/timeline-model.md.
 //
 //   RAW virtual   — the ruler the user manipulates; trims still occupy their
 //                   space. `currentTimeSec`, the playhead, region authoring, and
@@ -22,7 +22,7 @@ import { ventilateSpanAcrossClips } from "./region-ventilation";
 import { findRawClipForSegment, getRawVirtualStartTime } from "./virtual-preview";
 
 /** A modifier fragment anchored to one clip in that clip's own source time — the
- *  Stage B storage shape (see docs/architecture/timeline-coordinate-refactor.md).
+ *  Stage B storage shape (see technical-documentation/architecture/timeline-model.md).
  *  Trims narrow the clip's kept source ranges, so an anchored fragment is clipped/
  *  hidden by the same interval math with no reprojection; a reorder carries it with
  *  its clip by `clipId`.

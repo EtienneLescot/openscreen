@@ -21,7 +21,7 @@ import { pipeline } from "node:stream/promises";
  * to prevent partial downloads from being treated as complete.
  *
  * Word timestamps come from whisper.cpp's native DTW token timestamps, so no
- * separate VAD model is required. See `docs/engineering/stt-spec.md`.
+ * separate VAD model is required. See `technical-documentation/architecture/transcription-and-captions.md`.
  */
 
 export type SttModelId = "whisper";

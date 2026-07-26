@@ -52,10 +52,15 @@ describe("ffmpegSharedBinCandidates", () => {
 	});
 
 	it("keeps an absolute pin absolute rather than nesting it under the crate dir", () => {
-		writeCargoConfig(tmpRoot, `FFMPEG_DIR = "C:/vendor/ffmpeg"`);
+		// `path.isAbsolute` is platform-dependent — "C:/vendor" is absolute on
+		// Windows and relative on POSIX — so spell the pin through path.resolve
+		// and assert the behaviour rather than one platform's drive letter.
+		const absolutePin = path.resolve("/vendor/ffmpeg").replace(/\\/g, "/");
+		writeCargoConfig(tmpRoot, `FFMPEG_DIR = "${absolutePin}"`);
 		const candidates = ffmpegSharedBinCandidates(tmpRoot).map((p) => p.replace(/\\/g, "/"));
 
-		expect(candidates[0]).toBe("C:/vendor/ffmpeg/bin");
+		expect(candidates[0]).toBe(`${absolutePin}/bin`);
+		expect(candidates[0]).not.toContain("poc-d3d");
 	});
 
 	it("starts at the arch-tagged native bin dir when there is no cargo pin to read", () => {

@@ -15,7 +15,7 @@ You are the test specialist for the OpenScreen project — a free, open-source s
 ## How you work
 
 - Read `AGENTS.md` at the repo root for commands and conventions.
-- Read `docs/tests/writing-tests.md` for the project's test style guide.
+- Read `technical-documentation/testing/writing-tests.md` for the project's test style guide.
 - Match the style of neighboring `*.test.<ext>` files in the same package — don't invent new patterns.
 - Unit tests: `npm run test` (Vitest, jsdom). Browser tests: `npm run test:browser` (needs `npm run test:browser:install` once). E2E: `npm run test:e2e` (Playwright).
 - E2E specs in `tests/e2e/windows-native-checklist.spec.ts` are Windows-only — gate with `test.skip` for other platforms rather than deleting.

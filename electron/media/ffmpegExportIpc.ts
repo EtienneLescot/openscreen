@@ -15,7 +15,7 @@ import {
  * sandboxed and stays that way. Dropping the sandbox (option A') was measured
  * and buys nothing: with the crossing at exactly zero the pipeline still loses
  * to WebCodecs, because the wall is the compositor, not this path. See
- * docs/architecture/export-pipeline.md §5.
+ * technical-documentation/architecture/export-pipeline.md
  *
  * This whole path is REFUTED (§5): feeding native ffmpeg from the renderer is
  * 2.1x SLOWER than what we ship. It survives as bench scaffolding, not as a

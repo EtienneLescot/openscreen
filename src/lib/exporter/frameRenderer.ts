@@ -1498,7 +1498,7 @@ export class FrameRenderer {
 	}
 
 	/**
-	 * Bench-only sync point — gate G0, docs/architecture/rendering-architecture.md §7.1.
+	 * Bench-only sync point — gate G0, technical-documentation/engineering/rendering-performance.md
 	 *
 	 * Draw calls queue GPU work; the cost lands on whichever operation first needs
 	 * the pixels, which today is the encoder — so the compositor's execution is

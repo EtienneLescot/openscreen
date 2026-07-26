@@ -1,6 +1,6 @@
 // Vendored from @axcut/schema (https://github.com/EtienneLescot/axcut) —
 // original file: packages/axcut-schema/src/index.ts. Modifications for
-// OpenScreen's AI-edition merge (Phase 0, see docs/architecture/ai-edition-roadmap.md):
+// OpenScreen's AI-edition merge (Phase 0, see technical-documentation/architecture/document-model.md):
 //
 //   1. axcutSchemaVersion bumped 2 -> 3.
 //   2. clip.sourceEndSec made optional (duration is unknown until asset is probed).
@@ -20,7 +20,7 @@ import { anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
 //   4. v5 — modifiers (zoom / annotation / speed / cameraFullscreen) become
 //      CLIP-ANCHORED fragments: `{clipId, sourceStartSec, sourceEndSec}` is the
 //      source of truth, `startMs`/`endMs` stay as a derived cache for the
-//      transition. See docs/architecture/timeline-coordinate-refactor.md §6.
+//      transition. See technical-documentation/architecture/timeline-model.md
 export const axcutSchemaVersion = 5;
 
 export const isoDateSchema = z.string().datetime({ offset: true });
@@ -82,7 +82,7 @@ export const assetAudioSchema = z.object({
 //
 // Lives on the asset (not the document) since P4 (per-asset media links) —
 // a project can hold multiple assets, each recorded with its own camera (or
-// none). See docs/architecture/ai-edition-roadmap.md.
+// none). See technical-documentation/architecture/document-model.md.
 export const cameraTrackSchema = z
 	.object({
 		sourcePath: z.string().min(1),
@@ -465,7 +465,7 @@ export const zoomRegionSchema = z
 
 // Legacy OpenScreen appearance / export settings that the v3 schema doesn't
 // normalize into the timeline / assets model. They are applied at export time
-// by the existing pipeline (see docs/architecture/ai-edition-roadmap.md §2).
+// by the existing pipeline (see technical-documentation/architecture/document-model.md).
 //
 // ponytail: passthrough blob — v2 ProjectEditorState carries ~25 fields, several
 // of which (autoZoomEnabled, autoFocusAll, cursorTheme, …) have no first-class

@@ -18,7 +18,7 @@ import { WhisperServerManager } from "./whisperServer";
  *      word-level segments in one pass (see whisperServer.ts). Word
  *      timestamps come from whisper.cpp's native DTW token timestamps
  *      (`t_dtw`, SMALL aheads preset, `flash_attn = false`), see
- *      docs/engineering/stt-spec.md § Decision rationale.
+ *      technical-documentation/architecture/transcription-and-captions.md § Decision rationale.
  *   3. `shutdown()` tears down on app quit.
  *
  * Status events fan out via `statusSink` so the renderer can drive its

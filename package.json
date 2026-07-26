@@ -25,6 +25,7 @@
 		"lint:fix": "biome check --write .",
 		"format": "biome format --write .",
 		"i18n:check": "node scripts/i18n-check.mjs",
+		"docs:check": "node scripts/check-docs.mjs",
 		"preview": "vite preview",
 		"build:native:mac": "node scripts/build-macos-screencapturekit-helper.mjs",
 		"build:mac": "npm run build:native:mac && tsc && vite build && electron-builder --mac",
