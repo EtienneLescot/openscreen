@@ -36,6 +36,12 @@ import {
 	getAspectRatioValue,
 	getNativeAspectRatioValue,
 } from "@/utils/aspectRatioUtils";
+import {
+	captionCuesToTextRegions,
+	deriveCaptionCues,
+	getCaptionSettings,
+	getCaptionTranslations,
+} from "../captions";
 import { type Interval, normalizeIntervals } from "../document/timeline";
 import type { AxcutDocument } from "../schema";
 import { resolveClipSourceEndSec } from "../timeline/clipDuration";
@@ -319,7 +325,19 @@ export function buildRenderPlan(
 
 	// --- Effects (virtual time, pass-through, NO projection) ---
 	const zoomRegions = document.zoomRanges as unknown as ZoomRegion[];
-	const annotationRegions = document.annotations as unknown as AnnotationRegion[];
+	// Captions are derived from the transcript and joined to the annotations here,
+	// because they render through the same text path. They must be part of the plan
+	// (and not only of the legacy config) or the segment-loop renderer would export
+	// a caption-less file — and `isIdentityFastPathEligible` would happily
+	// stream-copy a video whose captions never got drawn.
+	const captionSettings = getCaptionSettings(document);
+	const annotationRegions = [
+		...(document.annotations as unknown as AnnotationRegion[]),
+		...captionCuesToTextRegions(
+			deriveCaptionCues(document, captionSettings, getCaptionTranslations(document)),
+			captionSettings,
+		),
+	];
 	const speedRegions = extractLegacyField<SpeedRegion[]>(legacy, "speedRegions", []);
 
 	// --- Appearance ---
