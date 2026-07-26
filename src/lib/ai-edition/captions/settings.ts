@@ -9,6 +9,7 @@
 // `legacyEditor` passthrough blob), so caption settings round-trip through save
 // / load / undo with every other appearance setting and need no schema bump.
 
+import { clamp } from "@/utils/math";
 import type { AxcutDocument } from "../schema";
 
 /** Vertical anchor of the caption band inside the frame. */
@@ -81,10 +82,6 @@ const TEXT_ALIGNS: readonly CaptionTextAlign[] = ["left", "center", "right"];
 
 function isFiniteNumber(value: unknown): value is number {
 	return typeof value === "number" && Number.isFinite(value);
-}
-
-function clamp(value: number, min: number, max: number): number {
-	return Math.min(max, Math.max(min, value));
 }
 
 function readNumber(value: unknown, fallback: number, min: number, max: number): number {

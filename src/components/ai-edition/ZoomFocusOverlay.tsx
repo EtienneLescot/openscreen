@@ -12,6 +12,7 @@ import { useCallback, useRef } from "react";
 import { getZoomScale, type ZoomFocus } from "@/components/video-editor/types";
 import { getFocusBoundsForScale } from "@/components/video-editor/videoPlayback/focusUtils";
 import type { AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import { clamp01 } from "@/utils/math";
 import styles from "./ZoomFocusOverlay.module.css";
 
 interface ZoomFocusOverlayProps {
@@ -21,10 +22,6 @@ interface ZoomFocusOverlayProps {
 	onFocusChange: (id: string, focus: ZoomFocus) => void;
 	/** Called once on pointer release to persist the final position. */
 	onFocusCommit?: () => void;
-}
-
-function clamp01(v: number): number {
-	return Math.min(1, Math.max(0, v));
 }
 
 export function ZoomFocusOverlay({

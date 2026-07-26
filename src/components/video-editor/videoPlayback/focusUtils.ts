@@ -1,12 +1,9 @@
+import { clamp } from "@/utils/math";
 import { clampFocusToDepth, ZOOM_DEPTH_SCALES, type ZoomDepth, type ZoomFocus } from "../types";
 
 interface StageSize {
 	width: number;
 	height: number;
-}
-
-function clamp(value: number, min: number, max: number) {
-	return Math.max(min, Math.min(max, value));
 }
 
 function easeIntoBoundary(normalized: number) {

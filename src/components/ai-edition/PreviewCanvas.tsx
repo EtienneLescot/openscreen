@@ -53,6 +53,7 @@ import {
 } from "@/lib/compositeLayout";
 import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
+import { clamp, clamp01 } from "@/utils/math";
 import { AnnotationLayer } from "./AnnotationLayer";
 import { CaptionLayer } from "./CaptionLayer";
 import { NativeCompositorOverlay } from "./NativeCompositorOverlay";
@@ -579,12 +580,4 @@ function buildWebcamStyle(
 		background: "transparent",
 	};
 	return clipPath ? { ...base, clipPath } : base;
-}
-
-function clamp(v: number, min: number, max: number): number {
-	return Math.min(Math.max(v, min), max);
-}
-
-function clamp01(v: number, min = 0, max = 1): number {
-	return clamp(v, min, max);
 }

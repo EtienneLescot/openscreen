@@ -6,6 +6,7 @@ import type { ProjectMedia } from "@/lib/recordingSession";
 import { normalizeProjectMedia } from "@/lib/recordingSession";
 import { DEFAULT_WALLPAPER, WALLPAPER_PATHS } from "@/lib/wallpaper";
 import { type AspectRatio, isAspectRatio, isPortraitAspectRatio } from "@/utils/aspectRatioUtils";
+import { clamp } from "@/utils/math";
 import {
 	DEFAULT_EDITOR_APPEARANCE_SETTINGS,
 	DEFAULT_EDITOR_LAYOUT_SETTINGS,
@@ -126,10 +127,6 @@ function computeNormalizedWebcamLayoutPreset(
 		default:
 			return DEFAULT_WEBCAM_SETTINGS.layoutPreset;
 	}
-}
-
-function clamp(value: number, min: number, max: number) {
-	return Math.min(max, Math.max(min, value));
 }
 
 function encodePathSegments(pathname: string, keepWindowsDrive = false): string {
