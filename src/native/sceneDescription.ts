@@ -37,6 +37,7 @@ import {
 	resolveWebcamReactiveZoom,
 	webcamSizeToFraction,
 } from "@/lib/compositeLayout";
+import { parseCssGradient, resolveLinearGradientAngle } from "@/lib/exporter/gradientParser";
 import type { CompositorClipInput } from "./contracts";
 
 /** Background behind the screen. Parsed from `settings.wallpaper`. */
@@ -368,33 +369,22 @@ export interface SceneDescription {
 
 /** Strip a trailing position percentage (or any whitespace tail) from a gradient stop token,
  *  returning the colour piece. The presets never nest parens so a whitespace split is fine. */
-function firstTokenOf(stop: string): string {
-	const trimmed = stop.trim();
-	if (trimmed.length === 0) return trimmed;
-	const spaceIdx = trimmed.indexOf(" ");
-	return spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
-}
-
 /** Parse the settings wallpaper string into the discriminated SceneBackground union. */
 function parseWallpaper(wallpaper: string) {
 	if (wallpaper.startsWith("#")) {
 		return { kind: "color", color: wallpaper } as const;
 	}
 	if (wallpaper.startsWith("linear-gradient(")) {
-		// Strip the outer wrapper once — assume well-formed `linear-gradient(...)`.
-		const openIdx = wallpaper.indexOf("(");
-		const closeIdx = wallpaper.lastIndexOf(")");
-		const inner = wallpaper.slice(openIdx + 1, closeIdx);
-		// Presets never contain nested parens; a flat comma split is sufficient.
-		const tokens = inner
-			.split(",")
-			.map((t) => t.trim())
-			.filter((t) => t.length > 0);
-		const angleMatch = /^-?\d+(\.\d+)?deg$/.exec(tokens[0] ?? "");
-		const angleDeg = angleMatch ? parseFloat(tokens[0]) : 180;
-		const stopsRaw = angleMatch ? tokens.slice(1) : tokens;
-		const stops = stopsRaw.map(firstTokenOf).filter((s) => s.length > 0);
-		return { kind: "gradient", angleDeg, stops } as const;
+		// parseCssGradient handles nested parens (rgba()/hsl() stops) and the
+		// "to bottom right" keyword directions that a flat comma split drops.
+		const parsed = parseCssGradient(wallpaper);
+		if (parsed) {
+			return {
+				kind: "gradient",
+				angleDeg: resolveLinearGradientAngle(parsed.descriptor),
+				stops: parsed.stops.map((stop) => stop.color),
+			} as const;
+		}
 	}
 	return { kind: "image", path: wallpaper } as const;
 }
