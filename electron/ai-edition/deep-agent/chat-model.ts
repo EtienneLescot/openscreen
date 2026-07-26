@@ -9,6 +9,12 @@ import type { BaseChatModel } from "@langchain/core/language_models/chat_models"
 import { ChatMistralAI } from "@langchain/mistralai";
 import { ChatOpenAI } from "@langchain/openai";
 import {
+	exchangeGithubCopilotRuntimeToken,
+	GITHUB_COPILOT_EDITOR_VERSION,
+	GITHUB_COPILOT_PLUGIN_VERSION,
+	GITHUB_COPILOT_USER_AGENT,
+} from "../llm-provider-auth";
+import {
 	buildLangChainReasoningOptions,
 	shouldDisableModelStreamingForToolCalling,
 } from "./agent-provider-capabilities";
@@ -116,14 +122,22 @@ async function createLocalProviderChatModel(
 				},
 			});
 		case "copilot-proxy": {
-			// ponytail: GitHub Copilot runs through its own runtime-token swap;
-			// for v1 we just hit the public Copilot base URL with the PAT. The
-			// runtime-token refresh from axcut can land as a follow-up.
+			// Copilot does not accept the PAT directly: it is exchanged for a
+			// short-lived runtime token, which also names the base URL to use.
+			// The editor-identifying headers are part of the contract — the
+			// endpoint rejects requests without them.
+			const runtime = await exchangeGithubCopilotRuntimeToken(config.apiKey ?? "");
 			return new ChatOpenAI({
-				apiKey: config.apiKey,
+				apiKey: runtime.token,
 				model: config.model,
 				configuration: {
-					baseURL: config.baseUrl || "https://api.individual.githubcopilot.com",
+					baseURL: config.baseUrl || runtime.baseUrl || "https://api.individual.githubcopilot.com",
+					defaultHeaders: {
+						"User-Agent": GITHUB_COPILOT_USER_AGENT,
+						"Editor-Version": GITHUB_COPILOT_EDITOR_VERSION,
+						"Editor-Plugin-Version": GITHUB_COPILOT_PLUGIN_VERSION,
+						"Openai-Intent": "copilot-gpt-chat-completions",
+					},
 				},
 			});
 		}

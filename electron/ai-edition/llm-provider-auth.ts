@@ -55,9 +55,9 @@ const GITHUB_DEVICE_CLIENT_ID = "Iv1.b507a08c87ecfe98";
 const GITHUB_DEVICE_SCOPE = "read:user";
 const GITHUB_DEVICE_POLLING_SAFETY_MARGIN_MS = 3_000;
 const COPILOT_TOKEN_ENDPOINT = "https://api.github.com/copilot_internal/v2/token";
-const GITHUB_COPILOT_USER_AGENT = "GitHubCopilotChat/0.26.7";
-const GITHUB_COPILOT_EDITOR_VERSION = "vscode/1.96.2";
-const GITHUB_COPILOT_PLUGIN_VERSION = "copilot-chat/0.26.7";
+export const GITHUB_COPILOT_USER_AGENT = "GitHubCopilotChat/0.26.7";
+export const GITHUB_COPILOT_EDITOR_VERSION = "vscode/1.96.2";
+export const GITHUB_COPILOT_PLUGIN_VERSION = "copilot-chat/0.26.7";
 
 /**
  * Begin the Codex (ChatGPT) device flow. Returns the user code and the

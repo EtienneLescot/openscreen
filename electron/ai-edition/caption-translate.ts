@@ -11,7 +11,9 @@
 // be re-keyed exactly; anything it fails to return is simply left untranslated
 // and shows the original text, which is the honest fallback for a partial run.
 
-import { streamLlm } from "./llm-call";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { createOpenScreenChatModel } from "./deep-agent/chat-model";
+import { extractDelta } from "./deep-agent/service";
 
 /** One transcript segment to translate. */
 export interface CaptionTranslateSegment {
@@ -134,33 +136,29 @@ export async function translateCaptionSegments(
 		const batch = segments.slice(i, i + batchSize);
 		let reply = "";
 		try {
-			const result = await streamLlm(
-				{
-					provider: options.provider,
-					model: options.model,
-					apiKey: options.apiKey,
-					baseUrl: options.baseUrl,
-					reasoningEffort: options.reasoningEffort,
-					accountId: options.accountId,
-					signal: options.signal,
-					messages: [
-						{ role: "system", content: SYSTEM_PROMPT },
-						{
-							role: "user",
-							content: buildUserPrompt(batch, options.targetLanguage, options.sourceLanguage),
-						},
-					],
-				},
-				{ onTextDelta: (delta) => (reply = `${reply}${delta}`) },
+			const model = await createOpenScreenChatModel({
+				provider: options.provider,
+				model: options.model,
+				apiKey: options.apiKey,
+				baseUrl: options.baseUrl,
+				reasoningEffort: options.reasoningEffort,
+				accountId: options.accountId,
+			});
+			const result = await model.invoke(
+				[
+					new SystemMessage(SYSTEM_PROMPT),
+					new HumanMessage(buildUserPrompt(batch, options.targetLanguage, options.sourceLanguage)),
+				],
+				{ signal: options.signal },
 			);
-			if (!result.success) {
+			reply = extractDelta(result.content);
+			if (!reply) {
 				return {
 					success: false,
 					segments: out,
-					error: result.error ?? "The model did not return a translation.",
+					error: "The model did not return a translation.",
 				};
 			}
-			reply = result.content ?? reply;
 		} catch (error) {
 			return {
 				success: false,
