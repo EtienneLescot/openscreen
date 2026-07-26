@@ -182,7 +182,8 @@
 		"tipShiftTabCycle": "Usa Shift+Tab para recorrer hacia atrás.",
 		"invalidImageType": "Tipo de archivo no válido",
 		"imageFormatsOnly": "Por favor sube un archivo de imagen JPG, PNG, GIF o WebP.",
-		"imageUploadSuccess": "¡Imagen subida exitosamente!"
+		"imageUploadSuccess": "¡Imagen subida exitosamente!",
+		"type": "Tipo"
 	},
 	"fontStyles": {
 		"classic": "Clásico",

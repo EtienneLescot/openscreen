@@ -182,7 +182,8 @@
 		"tipShiftTabCycle": "Shift+Tab으로 역방향 순환할 수 있습니다.",
 		"invalidImageType": "지원하지 않는 파일 형식입니다",
 		"imageFormatsOnly": "JPG, PNG, GIF 또는 WebP 이미지 파일을 업로드해 주세요.",
-		"imageUploadSuccess": "이미지가 성공적으로 업로드되었습니다!"
+		"imageUploadSuccess": "이미지가 성공적으로 업로드되었습니다!",
+		"type": "유형"
 	},
 	"fontStyles": {
 		"classic": "클래식",

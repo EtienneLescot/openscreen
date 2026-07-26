@@ -182,7 +182,8 @@
 		"blurType": "Bulanıklık Türü",
 		"blurTypeBlur": "Gauss",
 		"blurTypeMosaic": "Mozaik",
-		"mosaicBlockSize": "Mozaik Blok Boyutu"
+		"mosaicBlockSize": "Mozaik Blok Boyutu",
+		"type": "Tür"
 	},
 	"fontStyles": {
 		"classic": "Klasik",

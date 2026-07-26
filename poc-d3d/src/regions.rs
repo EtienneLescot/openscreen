@@ -233,13 +233,13 @@ pub fn arrow_segments_viewbox(direction: &str) -> [[f32; 4]; 3] {
         "up" => [[50.0, 20.0, 50.0, 80.0], [50.0, 20.0, 35.0, 35.0], [50.0, 20.0, 65.0, 35.0]],
         "down" => [[50.0, 20.0, 50.0, 80.0], [50.0, 80.0, 35.0, 65.0], [50.0, 80.0, 65.0, 65.0]],
         "left" => [[80.0, 50.0, 20.0, 50.0], [20.0, 50.0, 35.0, 35.0], [20.0, 50.0, 35.0, 65.0]],
-        "up-right" => [[25.0, 75.0, 75.0, 25.0], [75.0, 25.0, 54.9, 31.7], [75.0, 25.0, 68.3, 45.1]],
-        "up-left" => [[75.0, 75.0, 25.0, 25.0], [25.0, 25.0, 45.1, 31.7], [25.0, 25.0, 31.7, 45.1]],
+        "up-right" => [[25.0, 75.0, 75.0, 25.0], [75.0, 25.0, 53.8, 25.0], [75.0, 25.0, 75.0, 46.2]],
+        "up-left" => [[75.0, 75.0, 25.0, 25.0], [25.0, 25.0, 25.0, 46.2], [25.0, 25.0, 46.2, 25.0]],
         "down-right" => {
-            [[25.0, 25.0, 75.0, 75.0], [75.0, 75.0, 68.3, 54.9], [75.0, 75.0, 54.9, 68.3]]
+            [[25.0, 25.0, 75.0, 75.0], [75.0, 75.0, 75.0, 53.8], [75.0, 75.0, 53.8, 75.0]]
         }
         "down-left" => {
-            [[75.0, 25.0, 25.0, 75.0], [25.0, 75.0, 31.7, 54.9], [25.0, 75.0, 45.1, 68.3]]
+            [[75.0, 25.0, 25.0, 75.0], [25.0, 75.0, 46.2, 75.0], [25.0, 75.0, 25.0, 53.8]]
         }
         // "right" et tout ce qui n'est pas reconnu — même défaut que le schéma côté app.
         _ => [[20.0, 50.0, 80.0, 50.0], [80.0, 50.0, 65.0, 35.0], [80.0, 50.0, 65.0, 65.0]],
@@ -619,6 +619,43 @@ mod zoom_focus_tests {
 #[cfg(test)]
 mod arrow_tests {
     use super::*;
+
+    /// Ouverture d'une barbe par rapport au fût, en degrés. C'est ce paramètre — plus que la
+    /// longueur — qui décide si une pointe ressemble à une flèche ou à un crochet.
+    fn barb_opening_deg(dir: &str, barb: usize) -> f32 {
+        let segs = arrow_segments_viewbox(dir);
+        let tip = (segs[barb][0], segs[barb][1]);
+        // direction du fût vue depuis la pointe : c'est celle de ses deux extrémités qui n'est
+        // PAS la pointe.
+        let shaft = segs[0];
+        let back = if (shaft[0] - tip.0).abs() + (shaft[1] - tip.1).abs() < 1e-3 {
+            (shaft[2] - tip.0, shaft[3] - tip.1)
+        } else {
+            (shaft[0] - tip.0, shaft[1] - tip.1)
+        };
+        let b = (segs[barb][2] - tip.0, segs[barb][3] - tip.1);
+        let dot = back.0 * b.0 + back.1 * b.1;
+        let mag = (back.0.hypot(back.1)) * (b.0.hypot(b.1));
+        (dot / mag).clamp(-1.0, 1.0).acos().to_degrees()
+    }
+
+    #[test]
+    fn every_arrowhead_opens_at_the_same_angle() {
+        // La déformation des diagonales ne venait pas que de la taille : leurs barbes ouvraient à
+        // ~25° du fût quand les cardinales ouvrent à 45°, ce qui donnait une pointe étroite,
+        // avalée par le fût dès que le trait épaississait. Corriger la longueur seule ne suffisait
+        // pas — ce test verrouille l'angle, qui est le paramètre réellement visible.
+        for dir in ["up", "down", "left", "right", "up-right", "up-left", "down-right", "down-left"]
+        {
+            for barb in 1..=2 {
+                let deg = barb_opening_deg(dir, barb);
+                assert!(
+                    (deg - 45.0).abs() < 1.0,
+                    "{dir} barbe {barb} ouvre à {deg:.1}°, attendu 45°"
+                );
+            }
+        }
+    }
 
     #[test]
     fn a_diagonal_head_is_as_large_as_a_cardinal_one() {

@@ -377,6 +377,12 @@ const figureDataSchema = z
 const annotationStyleSchema = z.object({
 	color: z.string().default("#ffffff"),
 	backgroundColor: z.string().default("transparent"),
+	// `backgroundColor: "transparent"` is how every renderer reads "no background", so switching
+	// the background off has to overwrite the colour the user picked — and switching it back on had
+	// nothing left to restore, which is why it always came back black. This keeps that last colour
+	// so the toggle is reversible. Nothing renders it: the paint path still reads `backgroundColor`
+	// alone.
+	lastBackgroundColor: z.string().optional(),
 	fontSize: z.number().nonnegative().default(32),
 	fontFamily: z.string().default("Inter"),
 	fontWeight: z.enum(["normal", "bold"]).default("bold"),
