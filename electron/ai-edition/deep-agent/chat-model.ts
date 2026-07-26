@@ -14,6 +14,7 @@ import {
 	GITHUB_COPILOT_PLUGIN_VERSION,
 	GITHUB_COPILOT_USER_AGENT,
 } from "../llm-provider-auth";
+import { normalizeProviderId } from "../provider-registry";
 import {
 	buildLangChainReasoningOptions,
 	shouldDisableModelStreamingForToolCalling,
@@ -37,9 +38,39 @@ export function resolveOpenAIChatApiKey(provider: string, apiKey?: string): stri
 	return provider === "openai-compatible" ? OPENAI_COMPATIBLE_NO_AUTH_API_KEY : undefined;
 }
 
+/** Flattens LangChain MessageContent (a string, or an array of text and
+ * non-text parts) down to plain text. Lives here rather than in
+ * deep-agent/service.ts so the one-shot prompt→text callers can reach it
+ * without dragging the agent tool graph in behind it. */
+export function messageContentToText(content: unknown): string {
+	if (typeof content === "string") return content;
+	if (Array.isArray(content)) {
+		let total = "";
+		for (const part of content) {
+			if (typeof part === "string") {
+				total += part;
+			} else if (part && typeof part === "object") {
+				const text = (part as { text?: unknown }).text;
+				if (typeof text === "string") total += text;
+			}
+		}
+		return total;
+	}
+	return "";
+}
+
 export async function createOpenScreenChatModel(
-	config: OpenScreenChatModelConfig,
+	input: OpenScreenChatModelConfig,
 ): Promise<BaseChatModel> {
+	// Canonicalise once, here: stored configs can still carry historical
+	// aliases (`claude`, `gemini`, `anthropic-proxy`), and every provider
+	// comparison below — and in agent-provider-capabilities — is an exact
+	// match against a registry id.
+	const config: OpenScreenChatModelConfig = {
+		...input,
+		provider: normalizeProviderId(input.provider) ?? input.provider,
+	};
+
 	const reasoningOptions = buildLangChainReasoningOptions(
 		config.provider,
 		config.model,
@@ -114,11 +145,19 @@ async function createLocalProviderChatModel(
 			// ChatCodexOAuth class for this; for v1 we fall back to a generic
 			// ChatOpenAI with the chatgpt.com/backend-api base URL. Streaming
 			// + tool calls work on the gateway, so this is enough for the chat.
+			// `chatgpt-account-id` is not optional — the gateway rejects an
+			// OAuth token without the account it was minted for. The rest of
+			// the Codex header set (originator, x-codex-window-id, the
+			// OpenAI-Beta Responses opt-in) belongs to the Responses dialect
+			// this path does not speak; add it with a real ChatCodexOAuth.
 			return new ChatOpenAI({
 				apiKey: config.apiKey,
 				model: config.model,
 				configuration: {
 					baseURL: config.baseUrl || "https://chatgpt.com/backend-api",
+					...(config.accountId
+						? { defaultHeaders: { "chatgpt-account-id": config.accountId } }
+						: {}),
 				},
 			});
 		case "copilot-proxy": {
