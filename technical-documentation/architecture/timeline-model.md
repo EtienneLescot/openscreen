@@ -1,169 +1,171 @@
-# Timeline coordinate refactor — clip-anchored modifiers
+# Timeline coordinate model — clip-anchored modifiers
 
-**Statut :** planifié (2026-07-22). Corrige le désync zoom/trim (offsets audio/vidéo, couples
-caméra/record mélangés) en preview **et** au rendu. Aligne le code sur le diagramme
-`ai-edition-data-flow` : *« modifiers represented above the timeline UX-wise but flowed down to
-clip data-wise »*.
+A modifier (zoom, speed, annotation, full-camera) in the project document is **anchored
+to a clip in that clip's own source time**, not to an absolute timeline position. The
+single module that knows how the three coordinate frames relate —
+[`src/lib/ai-edition/timeline/timelineMap.ts`](../../src/lib/ai-edition/timeline/timelineMap.ts) —
+is the only place that translates between them. Every consumer — the timeline UI, the
+native preview, the export, the agent LLM, the captions layer — reads the modifier
+through that module and never mixes the frames by hand. The v4→v5 migration that
+introduced the clip anchor is documented in
+[document-model.md](document-model.md); this file is about the model in force and the
+contract of `timelineMap`.
 
-## 1. Cause racine (diagnostic)
+## Two time reference frames
 
-Le code mélange **deux référentiels de temps timeline** :
+The document carries three coordinate systems. A raw clip is identity between
+source-time and raw-virtual-time (no speed is baked into its geometry), so within a
+clip raw↔source is a plain shift by the clip's own start offset. The interesting
+boundary is between the **RAW** ruler and the **COMPRESSED** playback sequence:
 
-| Référentiel | Définition | Qui l'utilise |
+| Frame | Definition | Who works in it |
 |---|---|---|
-| **RAW / document** | les trims occupent encore leur place sur la règle | `currentTimeSec`, playhead, règle V4, authoring des régions, nav clip (`NewEditorShell`) |
-| **COMPRESSÉ / playback** | trims retirés, clips recollés depuis 0 (`resolvePlaybackSegments`) | `buildSceneDescription` → natif (preview+export), `resolveNativePlaybackPosition` |
+| **RAW virtual** (`currentTimeSec`, the ruler, the playhead, `document.timeline.clips[].timelineStartSec`/`timelineEndSec`) | The ruler the user manipulates. **Trims still occupy their space.** Region authoring, clip drag/resize/reorder, and the timeline ruler all happen here. | `NewEditorShell` (transport, seek), `V4Timeline` (drag/resize of clips and pills), `useTimeline` (every region mutation), `document.timeline` ops |
+| **SOURCE** (a clip's own media time: `assetId` + `sourceStartSec`/`sourceEndSec`) | What the decoders and the native compositor actually advance. Region anchors (`clipId` + `sourceStartSec` + `sourceEndSec`) live here. | `NativeCompositorOverlay`, `useNativePlaybackSync`, `sceneDescription` (→ native preview), `documentExporter` (multi-clip export) |
+| **COMPRESSED** (the trim-narrowed `resolvePlaybackSegments` laid out back-to-back from 0) | What the native free-run stream and the export frame counter walk through. Indexed by `clipIndex` into `SceneDescription.clips`. | `buildSceneDescription` (`sceneDescription.ts`), the native compositor's `clip_index` field, `exportMultiNative` |
 
-Les régions (zoom/speed/annotation) sont stockées en **virtual-ms RAW** au niveau *document*, mais
-`buildSceneDescription` les ventile contre des clips **COMPRESSÉS** (`resolveVisibleClips`). Dès
-qu'un trim retire `Δ` s avant une région, la coordonnée RAW dépasse la position compressée de `Δ`
-→ mauvais clip / mauvais offset source → la région se déclenche `Δ` trop tôt, l'active-clip est
-mal résolu → mauvaise caméra + décalage écran/cam. Contradiction visible :
-`NativeCompositorOverlay.tsx:56-67` (le commentaire dit « currentTimeSec est RAW, ne pas utiliser
-resolveVisibleClips » mais le code utilise resolveVisibleClips). 3ᵉ traitement divergent :
-`reprojectDocumentRegions` reprojette RAW→RAW (correct seulement sans trim).
+The model splits the two so each consumer can read what it cares about without having
+to translate. Mixing them desyncs preview from render on zoom and trim: a region
+authored against the RAW ruler but projected against the COMPRESSED segment layout
+slips by exactly the trimmed duration, fires on the wrong clip, and pairs with the
+wrong camera. `timelineMap` is the single line that keeps that line of code from
+existing.
 
-## 2. Modèle cible
+## Clip-anchored modifiers
 
-- **`currentTimeSec` / règle / playhead = RAW virtual time** (inchangé, = ce que l'utilisateur voit).
-- **Un modifier est ancré à un clip, en source-time** : `{ clipId, sourceStartSec, sourceEndSec, …payload }`.
-  Unifie trims (`{assetId, sourceStart, sourceEnd}`) et modifiers.
-  - Trim → soustrait la fenêtre source du clip : le modifier ancré est masqué/découpé par la même
-    math d'intervalles, **sans reprojection**.
-  - Reorder / move / duplicate → le modifier voyage avec son `clipId`, **sans reprojection**.
-  - Natif → le modifier porte déjà `clipId` (→ `clipIndex`) + range source = exactement ce que
-    `SceneZoomRegion`/`setActiveClip` consomment. `projectRegionsToSourceTime` devient un simple
-    lookup par segment.
-  - UI → pill placée par map avant unique : `clip.timelineStartSec + (mod.sourceStartSec − clip.sourceStartSec)`
-    (= `trimToTimelineSpan`, déjà éprouvé).
-- **Un seul module de mapping** `src/lib/ai-edition/timeline/timelineMap.ts`, pur, seul endroit qui
-  connaît RAW ↔ source ↔ compressé.
+Every region (zoom / speed / annotation / cameraFullscreen) is stored as one or more
+**clip-anchored fragments** — `{clipId, sourceStartSec, sourceEndSec, …payload}` — keyed
+to the clip it lives on, in that clip's source media time. A region the user drew
+across a clip boundary is stored as one fragment per covered clip; the fragments carry
+no marker tying them together, but the ruler still renders them as one pill because
+they share the same properties (see rule 1 below). Trims narrow a clip's kept source
+ranges, so an anchored fragment is hidden/clipped by the same interval math with no
+reprojection; reorder carries the fragment with its `clipId`, again with no
+reprojection. The schema field `startMs`/`endMs` is a **derived cache** of the
+fragment's current RAW ruler span — it is present so that un-migrated consumers and
+the agent LLM (which reasons in virtual seconds) keep reading the shape they always
+did, but the anchor is the source of truth. A structural op (move/duplicate/trim)
+re-derives `startMs`/`endMs` from the anchor; if the cache ever disagrees with the
+anchor, the anchor wins.
 
-### Contrat `timelineMap.ts`
+This is the data-level expression of the authoring-levels diagram in
+[overview.md](overview.md#authoring-levels): modifiers are presented above the timeline
+in the UX but stored down on the clip in the data.
 
-| Fonction | Rôle | Remplace |
+## The `timelineMap` contract
+
+Every public export of
+[`src/lib/ai-edition/timeline/timelineMap.ts`](../../src/lib/ai-edition/timeline/timelineMap.ts).
+"Direction" is what flows in vs what flows out.
+
+| Function | What it converts | Direction |
 |---|---|---|
-| `rawVirtualToSource(rawClips, rawSec)` → `{clip, sourceSec}` | playhead RAW → source (clips RAW) | version honnête de `locateVirtualPosition`/`resolveNativePlaybackPosition` |
-| `sourceToRawSpan(clip, srcStart, srcEnd)` → `{start,end}` | range source clip → span RAW (pill) | `trimToTimelineSpan` |
-| `resolveRawSpanToClipSource(rawStart, rawEnd, rawClips)` → `{clipId, srcStart, srcEnd}` | span RAW → ancre clip (authoring) | `resolveTimelineSpanToTrim` |
-| `projectModifierToScene(mod, visibleSegments)` → `SceneRegion[]` | ancre clip → régions source + `clipIndex` (gère trim qui coupe en 2 segments) | `projectRegionsToSourceTime` |
-| `resolveNativePosition(rawSec, rawClips, visibleSegments)` → `{clipIndex, sourceSec}` | playhead RAW → (index compressé, source) pour natif | `resolveNativePlaybackPosition` |
+| `anchorRawRegionsToClips` (`:51`) | v4 RAW-virtual-ms region → one anchored fragment per covered clip (drops zero-length / off-timeline regions) | RAW-virtual → clip-anchored |
+| `anchorRegionsWithDerivedMs` (`:376`) | Same as above but never drops user data: emits `{…fragment, startMs, endMs}` for anchored regions and passes un-anchorable regions through with their original ms | RAW-virtual → v5 stored shape |
+| `anchoredToRawSpanSec` (`:92`) | One anchored fragment → its current RAW-virtual span on the ruler | clip-anchored → RAW-virtual |
+| `regionIdentityKey` (`:163`) | A region → canonical identity key (properties minus position/provenance); equal keys = "same kind, same look" | region → identity string |
+| `coalesceByIdentity` (`:193`) | Set of identified spans → merged runs that touch and share an identity | spans → pills |
+| `clampSpanAgainstNeighbours` (`:223`) | A desired span clamped against different-identity neighbours (no cascade) | desired → clamped span |
+| `coalesceRegionsForRuler` (`:251`) | Region array → ruler pills (one entry per merged run, payload carried by `member`) | regions → pills |
+| `resolvePillIds` (`:275`) | Region id → every region id under its pill (recomputed, not stored) | id → ids |
+| `dropPillById` / `dropPillsByIds` (`:290` / `:299`) | Delete every region under a pill (resolved from the merge rule) | regions → regions |
+| `replacePillSpan` (`:316`) | Move/resize a pill: clamp against different-identity neighbours, then re-anchor to the clamped span | pill + clip layout → re-anchored fragments |
+| `segmentRawSpanSec` (`:401`) | One kept playback segment → its RAW-virtual extent | segment → RAW span |
+| `projectRegionsToSource` (`:452`) | Region array → source-ms entries with `clipIndex` for native (anchored path uses anchor; unanchored path falls back to RAW mapping through each segment's own raw extent — never drops an un-anchorable region onto an unrelated clip) | RAW/anchored → source + `clipIndex` |
+| `resolveNativePosition` (`:556`) | RAW-virtual playhead → `{clip, clipIndex, sourceTimeSec}` for the active native decoder + paired camera (snaps to the next kept segment when the playhead sits over a trimmed-out stretch) | RAW-virtual → source + `clipIndex` |
 
-## 3. Stages
+The two **universal region rules** every region kind obeys are expressed once in this
+file rather than re-derived per kind:
 
-| # | Stage | Livrable | Risque | Désync corrigé ? | État |
-|---|---|---|---|---|---|
-| A0 | Test rouge | `sceneDescription.test.ts` : trim + zoom → source time attendu | nul | prouve le bug | ✅ fait |
-| A1 | Module de mapping | `timelineMap.ts` (`projectRawRegionsToSource`, `resolveNativePosition`, `segmentRawSpanSec`) + `timelineMap.test.ts` | nul | — | ✅ fait |
-| A2 | Corriger la projection runtime (schéma actuel) | `buildSceneDescription` (3 projections) + résolution du clip actif (`resolveNativePosition` remplace `resolveNativePlaybackPosition` dans `useNativePlaybackSync` + `NativeCompositorOverlay`) ; contradiction `NativeCompositorOverlay:56-67` levée ; ancien `nativePlaybackPosition.ts` supprimé | moyen | **oui (preview + export natif)** | ✅ fait |
-| A3 | ~~Aligner l'export legacy~~ | **Non nécessaire** : `documentExporter.ts:216` ventile déjà contre les clips **RAW** (`document.timeline.clips`) + coupe les trims séparément → déjà correct. Seul le chemin natif mélangeait RAW/compressé. | — | déjà correct | ⏭️ écarté |
-| B1 | Schéma clip-ancré | `schema` v5 : zoom/annotation portent `{clipId, sourceStartSec, sourceEndSec}` (anchor **optionnel** pendant la transition) + `startMs/endMs` **dérivés** ; migration v4→v5 dans le préprocess via `anchorRegionsWithDerivedMs` (couvre aussi `legacyEditor.speedRegions`/`cameraFullscreenRegions`) ; `migrate.ts` émet la forme v4 → la logique de migration vit à UN seul endroit | élevé | verrouille | ✅ fait |
-| B2 | Supprimer la reprojection hot-path | `reprojectDocumentRegions` + `reprojectRegionsForReorder` + `reprojectSpanForReorder` **supprimés**. Remplacés par `rederiveRegionMs` (ops qui PRÉSERVENT l'identité des clips : move/duplicate/trim/`update_clip_range` → seul le cache ms bouge) et `reanchorRegions` (rebuild d'identités : `replaceTimeline` → ré-ancrage depuis les ms). Câblé dans `document/timeline.ts`, `document/operations.ts`, `store/useTimeline.ts` | moyen | verrouille | ✅ fait |
-| B3.1 | Authoring ancré (`useTimeline`) | `addZoom`/`addZoomsBulk`/`addAnnotation`/`addSpeed`/`addCameraFullscreen` **ancrent à la création** (`anchorRegionsWithDerivedMs`) ; les 4 `update*Span` passent par `replacePillSpan` (clamp + ré-ancrage : re-split au franchissement, collapse au retour) ; `removeRegion`/`removeRegions` suppriment **toute la pill** (`dropPillById`/`dropPillsByIds`, résolue par `resolvePillIds`). **Ferme le trou de B2.** | moyen | verrouille | ✅ fait |
-| B3.2 | Authoring ancré (agent LLM) | `agent-tools.ts` : `addZoom`/`addSpeed`/`addAnnotation` + updates ancrent aussi ; interface **secondes-virtuelles** conservée côté LLM, conversion à l'intérieur : `anchorForAgent` sur add*, `replacePillSpan` sur set*, et `coalesceForAgent` pour que le snapshot présente **une** entrée par région logique | moyen | verrouille | ✅ fait |
-| B3.3 | Pills par identité | `V4Timeline` via `coalesceRegionsForRuler` (règle 1) ; clé de pill = `ids[0]` (unique — voir révision) ; payload edits sur toute la pill (`patchPillById`) ; `coalescedTrimGroups` délègue à `coalesceByIdentity` → **duplication supprimée** | moyen | verrouille | ✅ fait |
-| B4 | Nettoyage final | natif/export/overlays lisent l'ancre directement ; retirer `startMs`/`endMs` | faible | — | ⬜ à faire |
+1. **Merge** (`coalesceByIdentity`) — two regions of the same kind with the same
+   identity that touch are one pill. How they became adjacent (authored side by side,
+   split by a reorder then rejoined, …) is irrelevant; identity is what a region *is*,
+   not where it came from.
+2. **Repel** (`clampSpanAgainstNeighbours`) — two regions of the same kind with
+   different identities may not overlap. An edit clamps to the neighbour's edge; the
+   neighbour never moves (no cascade).
 
-**Le désync utilisateur est corrigé dès A2** (preview + export natif), prouvé par
-`timelineMap.test.ts` + `sceneDescription.test.ts` (trim + zoom → bon temps source). **B*** paie la
-dette pour qu'il ne puisse plus revenir (élimine le double référentiel et la reprojection à chaque
-reorder). La conversion « virtual-ms RAW → source » de A2 devient le code de migration en B1, pas du
-throwaway.
+A kind with no properties (trim, full-camera) collapses to a constant identity, so its
+regions always merge — the long-standing trim behaviour, now derived from the general
+rule.
 
-### Découverte (2026-07-22)
-- Le bug était **localisé au chemin natif** (preview + export MP4), pas généralisé : `documentExporter`
-  (WebCodecs) projetait déjà contre les clips RAW. La confusion RAW/compressé vivait uniquement dans
-  `buildSceneDescription` (clips compressés utilisés pour le mapping source) et
-  `resolveNativePlaybackPosition` (horloge RAW lue contre clips compressés → mauvaise caméra après trim).
-- **Caveat env. worktree** : les tests qui *montent* des composants React (`EditorEmptyState`,
-  `CursorPreviewLayer`, `WebcamOverlay`, `useTimeline`) échouent AVANT/APRÈS ce changement (React nul :
-  `react`/`zustand` résolus depuis le repo racine, `react-dom` depuis le worktree → double React).
-  Vérifié par `git stash` : 14 échecs identiques sur le commit de base. Non causé par ce refactor ;
-  cf. `desktop-app-testing-worktree` / `cc-delegate-worker-env`. Tous les tests **pure-logic** passent.
+## Invariants
 
-## 4. Invariants de validation
+A change that breaks one of these is wrong even if every test passes; treat them as
+the contract a reviewer can grade against. Each is asserted in
+[`timelineMap.test.ts`](../../src/lib/ai-edition/timeline/timelineMap.test.ts).
 
-- Un projet `1 clip + trim de 2 s au début + zoom 5 s plus loin` : le zoom se déclenche au **même**
-  frame source en preview et à l'export ; playhead RAW ↔ frame affichée cohérents après le trim.
-- 2 assets, chacun sa caméra : le clip actif (donc la caméra) résolu à un temps RAW donné reste le
-  bon après trim/reorder ; `sourceTime − offset` webcam correct.
-- `biome` + `tsc` + `vitest` verts à chaque stage (commandes : voir `os-editor-verify-commands`).
+- **Anchor wins over the cache.** A region with a complete `{clipId, sourceStartSec,
+  sourceEndSec}` lands on its source span regardless of what `startMs`/`endMs` say.
+  (`projectRegionsToSource`, anchored path — see the "places an anchored region from
+  its anchor, ignoring a stale startMs/endMs" test.)
+- **RAW ↔ source within one clip is identity.** A region's anchor `[a, b]` on a clip
+  whose `sourceStartSec = 0` lands on source `[a, b]`. Speed is not baked into the
+  geometry — the clip is a flat re-mapping, never a stretch.
+- **A trim is invisible to a region's source moment.** Identity clip `src[0,10]` with a
+  trim at `[2,4]`: a region authored at RAW `[6,8]` lands on source `[6,8]`, not
+  `[8,10]`. (`resolveNativePosition` / `projectRegionsToSource` "keeps a region on its
+  source moment despite a trim before it".)
+- **A region fully under a trim is dropped, never leaked.** Two clips of *different*
+  assets whose source windows overlap numerically: a zoom fully trimmed away on its
+  own clip must not re-appear on the later clip. (`projectRegionsToSource` "drops a
+  region a trim removes entirely rather than leaking it onto a later clip".)
+- **Same-identity, same-clip stays one pill; different-identity does not merge.** Two
+  regions of equal properties that touch → one pill; touch with one property
+  changed → two pills, with no memory of ever having been one. (`coalesceByIdentity`
+  and `replacePillSpan` "clamps a resize at a neighbouring pill of different
+  properties (magnet)".)
+- **Repel never cascades.** A different-identity neighbour acts as a wall — the
+  edited span stops at its edge and the neighbour never moves. (`clampSpanAgainst
+  Neighbours` "stops at a different-identity neighbour on the right" / "left".)
+- **Identity ignores provenance.** `id`, `clipId`, `sourceStartSec`, `reason`,
+  `origin`, `source`, `annotationSource`, and the legacy `groupId` are *not* part of
+  the identity key. Two regions that differ only in any of those still merge when
+  adjacent. (`regionIdentityKey` "ignores position and provenance entirely" and the
+  regression test "merges two independently authored regions that carry DIFFERENT
+  legacy groupIds".)
+- **Re-anchoring drops `groupId`.** A v4 import may carry a `groupId`; after a write
+  or migration it is gone. (`anchorRegionsWithDerivedMs` "drops groupId when
+  re-anchoring, so it stops propagating".)
+- **`visibleSegments` ordering matches `SceneDescription.clips`.** The `clipIndex`
+  emitted by `projectRegionsToSource` / `resolveNativePosition` lines up with the
+  native stream because both consume the same array in the same order. Passing a
+  different array (e.g. already-sorted segments) to the projection while sending the
+  original to the native bridge silently desyncs the mapping.
+- **A region that covers no clip is dropped by ventilation** (`anchorRawRegionsToClips`
+  / `ventilateSpanAcrossClips`), and `anchorRegionsWithDerivedMs` passes it through
+  unanchored so the data is not lost. The two layers disagree on purpose — the
+  low-level primitive is for explicit projection, the migration wrapper is for
+  preserving user data.
+- **A region authored on a clip that was later deleted disappears** (anchor resolves
+  to null, the fragment is not shown). Its id is preserved in the document so undo
+  restores it with its anchor.
 
-## 5. Blast radius (fichiers)
+## SSOT façades
 
-- **Core** : `timeline/timelineMap.ts` (neuf), `native/sceneDescription.ts`,
-  `native/nativePlaybackPosition.ts`, `native/useNativePlaybackSync.ts`,
-  `components/ai-edition/NativeCompositorOverlay.tsx`.
-- **Export** : `exporter/renderPlan.ts`, `exporter/documentExporter.ts`, `ExportDialog.tsx`.
-- **Schéma/migration (B)** : `schema/index.ts`, `document/migrate.ts`, `document/timeline.ts`
-  (suppr. `reprojectDocumentRegions`), `timeline/region-ventilation.ts` (élaguer).
-- **UI (B)** : `store/useTimeline.ts`, `v4/V4Timeline.tsx`, `v4/FloatingInspector.tsx`,
-  `AnnotationOverlay.tsx`, `RightPanelStack.tsx`/gimbal, `CursorPreviewLayer.tsx`.
-- **Tests** : `timelineMap.test.ts` (neuf), `sceneDescription.test.ts`, `region-ventilation.test.ts`,
-  `document/timeline.test.ts`, `useTimeline.test.ts`, `migrate.test.ts`, `renderPlan.test.ts`.
+When the timeline shape changes — a new field on a region, a new region kind, a
+change to the anchor contract — every one of these readers/writers must be updated
+in the same commit, or the project round-trips into an inconsistent state:
 
-## 6. Stage B — modèle retenu : fragments clip-ancrés + règles universelles
-
-Décidé 2026-07-22, **révisé 2026-07-23** après test in-app (voir « révision » plus bas).
-
-**Stockage.** Une région = un ou plusieurs **fragments**, chacun ancré à UN clip en temps
-source : `{ id, clipId, sourceStartSec, sourceEndSec, …propriétés }`. Une région dessinée à
-cheval sur une frontière est stockée en un fragment par clip couvert. **Aucun marqueur ne
-relie les fragments entre eux.**
-
-- Trim d'un clip → rétrécit sa fenêtre source → le fragment est coupé par la même math
-  d'intervalles. Reorder/move → le fragment voyage avec son `clipId`. **Zéro reprojection.**
-
-**Les deux règles universelles** (`timelineMap`), valables pour TOUS les types de région :
-
-| Règle | Énoncé | Primitive |
+| Consumer | File | What it reads / writes |
 |---|---|---|
-| **1. Fusion** | deux régions de même type, aux **propriétés égales**, qui se touchent → **une** pill. Peu importe comment elles sont devenues voisines. | `coalesceByIdentity` |
-| **2. Répulsion** | deux régions de même type aux **propriétés différentes** ne peuvent pas se chevaucher : l'edit **bute** sur le bord du voisin, qui ne bouge jamais (pas de cascade). | `clampSpanAgainstNeighbours` |
+| **Document layer (ops)** | `src/lib/ai-edition/document/timeline.ts` | Region CRUD; calls `rederiveRegionMs` (cache-only) and `reanchorRegions` (rebuilds identities); routes every mutation through `timelineMap`. |
+| **Schema v4→v5 preprocess** | `src/lib/ai-edition/schema/index.ts` (`documentSchema` v4→v5 preprocess, `:555-595`) | Re-anchors `zoomRanges`, `annotations`, `legacyEditor.speedRegions`, `legacyEditor.cameraFullscreenRegions` on every parse. The single disk-load site. |
+| **Timeline UI** | `src/components/ai-edition/v4/V4Timeline.tsx` | Reads lanes through `coalesceRegionsForRuler` (`:321, :329, :337, :347`) and `coalescedTrimGroups` (`:363`); pill edit hits the pill resolved by `resolvePillIds` via the store. |
+| **Inspector selection pane** | `src/components/ai-edition/v4/FloatingInspector.tsx` (`SelectionPane`, `:444`) | Edits a selected region by pill id; routes through `useTimeline` and therefore through `replacePillSpan`. |
+| **Store / authoring (UI)** | `src/lib/ai-edition/store/useTimeline.ts` | Every `add*`, `update*Span`, `removeRegion` goes through `anchorRegionsWithDerivedMs` (`:134, :163, :278, :305, :329`) and `replacePillSpan` / `dropPillsByIds` / `resolvePillIds`. |
+| **Native preview scene** | `src/native/sceneDescription.ts` (`:489, :508, :517, :531`) | Calls `projectRegionsToSource` for every region kind before serialising to the native compositor. |
+| **Native playback sync** | `src/native/useNativePlaybackSync.ts` (`:22, :39`) | Resolves the RAW playhead through `resolveNativePosition` to feed `setActiveClip` / `presentTime`. |
+| **Native compositor overlay** | `src/components/ai-edition/NativeCompositorOverlay.tsx` (`:3, :70`) | Same — `resolveNativePosition(currentTimeSec, nativeClips, document.timeline.clips)` — to keep preview in sync with the timeline ruler. |
+| **Multi-clip export** | `src/lib/ai-edition/exporter/documentExporter.ts` (`:223, :238, :260, :265`) + `src/lib/ai-edition/exporter/renderPlan.ts` | Projects regions to source per-clip through `region-ventilation`'s `projectRegionsToSourceTime`, then walks the multi-clip render plan; identity single-clip projects are unchanged. |
+| **Captions layer** | `src/lib/ai-edition/captions/cues.ts` (`:14-15` and `captionCuesToTextRegions`) | Caption cues are a derived view of the transcript; the projection to source at export goes through `projectRegionsToSourceTime` from `region-ventilation`, matching the multi-clip export path so preview and file agree. |
+| **Agent LLM tools** | `electron/ai-edition/agent-tools.ts` (`:22-26, :80-95, :560-575, :772-820, :835-880, :952, :1025`) | Writes the same shape via `anchorRegionsWithDerivedMs` / `replacePillSpan` / `resolvePillIds`; reads it through `coalesceRegionsForRuler` (`coalesceForAgent`, `:77-86`) so the model reasons in virtual seconds over whole pills. |
 
-L'**identité** (`regionIdentityKey`) = toutes les propriétés qui affectent le rendu,
-sérialisées canoniquement ; **position** (`clipId`, source, ms) et **provenance** (`id`,
-`origin`, `reason`, `source`) exclues. Une nouvelle propriété participe automatiquement.
+## Known gaps
 
-**Conséquences (toutes dérivées, aucune codée en dur) :**
-- Un **trim** n'a aucune propriété → identité constante → les trims fusionnent toujours.
-  Le comportement historique des trims devient un **cas particulier de la règle 1** :
-  `coalescedTrimGroups` délègue désormais à `coalesceByIdentity`. **La duplication de logique
-  signalée en test est supprimée.**
-- Deux régions **autorées indépendamment**, adjacentes et de mêmes propriétés → fusionnent
-  (ce que le modèle par provenance ne savait pas faire).
-- Split par reorder → on change une propriété d'un morceau → on recolle les clips →
-  **pas de fusion** (mismatch). On remet la propriété → fusion. Sans mémoire du split.
-- Les mutations (resize, suppression, edit de propriété) portent sur **la pill telle qu'elle
-  est vue**, résolue à la volée par `resolvePillIds` — pas sur un groupe mémorisé.
-
-### Révision du 2026-07-23 — pourquoi `groupId` a été supprimé
-La 1ʳᵉ version reliait les fragments par un `groupId` (leur *provenance*). Deux défauts, tous
-deux constatés en test réel :
-1. **Duplication** — les trims fusionnaient par adjacence, les modifiers par provenance : deux
-   mécaniques pour une seule règle, et des voisins identiques qui refusaient de fusionner.
-2. **Collision de clés** — keyer une pill par `groupId` casse dès qu'un groupe se scinde
-   légitimement (deux pills, même clé) : React « duplicates and/or omits » les enfants, l'UI
-   devient non fiable (des régions de goodtest ont été perdues ainsi). **Clé = `ids[0]`.**
-
-L'identité (ce que la région EST) remplace la provenance (d'où elle vient) : plus simple, sans
-bookkeeping, et correcte quelle que soit l'histoire des régions.
-
-### Façades SSOT à ne pas oublier (au-delà de timeline/preview/export)
-La forme des régions zoom/speed/annotation est aussi lue/écrite par d'autres façades :
-- **Chat LLM — `electron/ai-edition/agent-tools.ts` (IMPACT FORT)** : `getCurrentDocument` présente
-  les effets au LLM en **secondes virtuelles (timeline éditée)** (`:425-441`, `:144`) et des tools
-  d'écriture (`addZoom`/`addSpeed`/`addAnnotation` + updates, `:646/:698/:775`) prennent des
-  **secondes virtuelles** et écrivent `startMs/endMs`. **Stratégie** : garder l'interface
-  secondes-virtuelles côté LLM (il raisonne dans le référentiel de la règle, pas en fragments) ; les
-  tools convertissent virtuel↔fragments (`anchorRawRegionsToClips`) et `getCurrentDocument` dérive le
-  span virtuel depuis les fragments. C'est un argument de plus pour la transition additive (ms dérivés).
-- **Transcript agrégé — `aggregated-transcript.ts` + modale (IMPACT MINIMAL)** : consomme clips +
-  mots + trims, PAS la forme des régions ; entêtes = clips (inchangés). Revalider seulement : cuts de
-  mots + annotations `auto-caption` après le flip.
-- **B3 « group-aware »** : pills coalescées par `groupId` (fragments dont les spans ruler se touchent
-  → 1 pill) ; parts sur clips séparés = pills distinctes mais **liées par `groupId`** pour
-  sélection/suppression/resize groupés (calqué sur `coalescedTrimGroups`). Exposer
-  `anchoredToRawSpanSec(fragment, clips)` (le mapping fragment→span ruler qu'utilise
-  `coalesceAnchoredFragments`) pour V4Timeline / FloatingInspector / overlays. **Invariant : un edit
-  cross-clip reste un seul edit côté utilisateur.**
+- `legacyEditor.speedRegions` and `legacyEditor.cameraFullscreenRegions` are migrated
+  on every parse via the schema preprocess, but a project whose `legacyEditor` blob
+  is rewritten by an older code path before the v5 preprocess runs may briefly carry
+  the un-anchored form downstream. The single parse-time entry point keeps the
+  surface small but does not make it impossible; the regression is caught by
+  `migrate.test.ts`.
