@@ -300,12 +300,12 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		layout?.webcamRect && activeCameraTrack?.visible && activeCameraTrack.sourcePath,
 	);
 	const [isPlaying, setIsPlaying] = useState(false);
-	const [videoEl, setVideoEl] = useState<HTMLVideoElement | null>(null);
 	const handleVideoElement = useMemo(() => props.onVideoElement, [props.onVideoElement]);
+	// L'élément `<video>` lui-même n'est plus retenu : il ne servait qu'à échantillonner des pixels
+	// pour la mosaïque dessinée en DOM, que le compositeur natif rend désormais.
 	const relayIsPlaying = (el: HTMLVideoElement | null) => {
 		handleVideoElement(el);
 		setIsPlaying(!el?.paused);
-		setVideoEl(el);
 	};
 	const relayLoadedMetadata = (
 		durationSec: number,
@@ -423,7 +423,6 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 					props.onSelectAnnotation &&
 					props.onAnnotationPositionChange &&
 					props.onAnnotationSizeChange &&
-					props.onAnnotationBlurDataChange &&
 					props.onAnnotationCommit ? (
 						<AnnotationLayer
 							annotations={props.annotationRegions}
@@ -431,11 +430,9 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 							currentTimeSec={props.currentTimeSec}
 							containerWidth={layout.screenRect.width}
 							containerHeight={layout.screenRect.height}
-							videoElement={videoEl}
 							onSelectAnnotation={props.onSelectAnnotation}
 							onPositionChange={props.onAnnotationPositionChange}
 							onSizeChange={props.onAnnotationSizeChange}
-							onBlurDataChange={props.onAnnotationBlurDataChange}
 							onCommit={props.onAnnotationCommit}
 						/>
 					) : null}
