@@ -287,7 +287,12 @@ async function fetchSharedDlls(tag, binDir) {
 	// --force same as the static exe, checked once we know what we'd extract.
 	const alreadyVendored = fs
 		.readdirSync(binDir, { withFileTypes: true })
-		.some((e) => e.isFile() && e.name.toLowerCase().endsWith(".dll") && e.name.toLowerCase().startsWith("av"));
+		.some(
+			(e) =>
+				e.isFile() &&
+				e.name.toLowerCase().endsWith(".dll") &&
+				e.name.toLowerCase().startsWith("av"),
+		);
 	if (alreadyVendored && !process.argv.includes("--force")) {
 		console.log(`\nShared ffmpeg DLLs already present in ${binDir}. Use --force to re-vendor.`);
 		return;
@@ -297,7 +302,8 @@ async function fetchSharedDlls(tag, binDir) {
 	const tmp = await downloadAndExtract(spec);
 	try {
 		const exe = findExe(tmp, "ffmpeg.exe");
-		if (!exe) throw new Error(`ffmpeg.exe not found inside ${spec.asset} (needed to verify licence)`);
+		if (!exe)
+			throw new Error(`ffmpeg.exe not found inside ${spec.asset} (needed to verify licence)`);
 
 		// Same source commit as the static build, but configure flags are a
 		// separate BtbN job — verify this artifact's licence independently

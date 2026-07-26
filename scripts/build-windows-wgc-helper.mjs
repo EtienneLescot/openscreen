@@ -43,7 +43,13 @@ function findVcVarsAll() {
 	}
 
 	if (process.env.VSINSTALLDIR) {
-		const candidate = path.join(process.env.VSINSTALLDIR, "VC", "Auxiliary", "Build", "vcvarsall.bat");
+		const candidate = path.join(
+			process.env.VSINSTALLDIR,
+			"VC",
+			"Auxiliary",
+			"Build",
+			"vcvarsall.bat",
+		);
 		if (fs.existsSync(candidate)) {
 			return candidate;
 		}
@@ -82,7 +88,14 @@ function findVcVarsAll() {
 					return direct;
 				}
 				for (const edition of editions) {
-					const nested = path.join(channelDir, edition, "VC", "Auxiliary", "Build", "vcvarsall.bat");
+					const nested = path.join(
+						channelDir,
+						edition,
+						"VC",
+						"Auxiliary",
+						"Build",
+						"vcvarsall.bat",
+					);
 					if (fs.existsSync(nested)) {
 						return nested;
 					}

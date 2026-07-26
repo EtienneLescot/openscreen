@@ -14,15 +14,7 @@ import http from "node:http";
 import path from "node:path";
 import process from "node:process";
 
-const [
-	,
-	,
-	resultsDir,
-	modeArg,
-	portArg,
-	modelDir,
-	...fixtures
-] = process.argv;
+const [, , resultsDir, modeArg, portArg, modelDir, ...fixtures] = process.argv;
 if (!resultsDir || !modeArg || !portArg || !modelDir || fixtures.length === 0) {
 	process.stderr.write(
 		"usage: node run_ct2.mjs <results-dir> <int8|fp16> <port> <model-dir> <fixture.wav> [...]\n",
@@ -38,14 +30,7 @@ const port = Number.parseInt(portArg, 10);
 const serverExe =
 	"C:/Users/camil/Documents/repos/openscreen-new/electron/native/bin/win32-x64/ctranslate2-server-ctranslate2-cpu.exe";
 
-const args = [
-	"--model",
-	modelDir,
-	"--port",
-	String(port),
-	"--host",
-	"127.0.0.1",
-];
+const args = ["--model", modelDir, "--port", String(port), "--host", "127.0.0.1"];
 if (mode === "int8") args.push("--int8");
 
 await fs.mkdir(resultsDir, { recursive: true });
@@ -147,9 +132,7 @@ for (const fixture of fixtures) {
 
 	const outPath = path.join(resultsDir, `ct2_${mode}_${name}.json`);
 	await fs.writeFile(outPath, body);
-	timingsLines.push(
-		`${name}\t${audio_s.toFixed(4)}\t${wall_s.toFixed(4)}\t${rtf.toFixed(4)}`,
-	);
+	timingsLines.push(`${name}\t${audio_s.toFixed(4)}\t${wall_s.toFixed(4)}\t${rtf.toFixed(4)}`);
 	process.stdout.write(
 		`ct2 ${mode} ${name}: wall=${wall_s.toFixed(3)}s audio=${audio_s.toFixed(3)}s rtf=${rtf.toFixed(3)}\n`,
 	);

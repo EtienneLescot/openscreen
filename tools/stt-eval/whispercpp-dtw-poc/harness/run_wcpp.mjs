@@ -11,15 +11,7 @@ import { promises as fs } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
-const [
-	,
-	,
-	resultsDir,
-	backend,
-	modelPath,
-	benchExe,
-	...fixtures
-] = process.argv;
+const [, , resultsDir, backend, modelPath, benchExe, ...fixtures] = process.argv;
 if (!resultsDir || !backend || !modelPath || !benchExe || fixtures.length === 0) {
 	process.stderr.write(
 		"usage: node run_wcpp.mjs <results-dir> <backend> <model.bin> <bench-exe> <fixture.wav> [...]\n",
@@ -46,10 +38,11 @@ for (const fixture of fixtures) {
 	});
 	const stderr = r.stderr.toString("utf8");
 	const stdout = r.stdout;
-	const guardrailLine = stderr
-		.split(/\r?\n/)
-		.reverse()
-		.find((l) => l.includes("§4.1 guardrail")) || "(no guardrail line in stderr)";
+	const guardrailLine =
+		stderr
+			.split(/\r?\n/)
+			.reverse()
+			.find((l) => l.includes("§4.1 guardrail")) || "(no guardrail line in stderr)";
 	if (r.status !== 0) {
 		process.stderr.write(`FAIL ${name}: exit ${r.status} — ${guardrailLine}\n${stderr}`);
 		continue;
@@ -57,14 +50,12 @@ for (const fixture of fixtures) {
 
 	const jsonPath = path.join(resultsDir, `wcpp_${backend}_${precTag}_${name}.json`);
 	await fs.writeFile(jsonPath, stdout);
-	const elapsed_s = r.signal ? NaN : (process.hrtime.bigint?.() ?? 0); // fallback
-	// We trust the harness's own elapsed_s — read it from JSON.
+	// We trust the harness's own elapsed_s — read it from JSON. `rtf` below is
+	// recomputed from it rather than taken from the report.
 	let wall_s = NaN;
-	let reported_rtf = NaN;
 	try {
 		const parsed = JSON.parse(stdout.toString("utf8"));
-		wall_s      = parsed.timing?.elapsed_s ?? NaN;
-		reported_rtf = parsed.timing?.rtf ?? NaN;
+		wall_s = parsed.timing?.elapsed_s ?? NaN;
 	} catch (e) {
 		process.stderr.write(`WARN ${name}: JSON parse failed: ${e.message}\n`);
 	}

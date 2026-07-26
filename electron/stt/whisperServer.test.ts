@@ -229,7 +229,9 @@ describe("WhisperServerManager", () => {
 				dir,
 				process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
 			);
-			await fs.writeFile(fakeBinaryPath, "x");
+			// mode 0o755: the manager refuses a helper it cannot execute, and the
+			// default write mode is not executable on POSIX.
+			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
 			const fakeChild = {
 				stdout: { on: vi.fn() },
 				stderr: { on: vi.fn() },
@@ -273,7 +275,9 @@ describe("WhisperServerManager", () => {
 				dir,
 				process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
 			);
-			await fs.writeFile(fakeBinaryPath, "x");
+			// Executable on purpose: this test asserts the *model* check fires, so
+			// the binary must get past the executability check first.
+			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
 			const mgr = new WhisperServerManager();
 			await expect(
 				mgr.start({
