@@ -73,7 +73,7 @@ flowchart TD
     MT2["Media transcript<br/>(2nd asset / mic)"]
 
     Timeline["Timeline<br/>v4/V4Timeline.tsx"]
-    VPreview["Preview<br/>Preview.tsx → PreviewCanvas.tsx"]
+    VPreview["Preview<br/>Preview.tsx → PreviewCanvas.tsx<br/>→ NativeCompositorOverlay.tsx"]
     VTranscript["Transcript<br/>CaptionsPane.tsx + src/lib/ai-edition/captions/"]
 
     User <--> Chat
