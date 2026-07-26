@@ -1,4 +1,5 @@
 import type { Rectangle } from "electron";
+import { HyprlandCursorRecordingSession } from "./hyprlandCursorRecordingSession";
 import { MacNativeCursorRecordingSession } from "./macNativeCursorRecordingSession";
 import type { CursorRecordingSession } from "./session";
 import { TelemetryRecordingSession } from "./telemetryRecordingSession";
@@ -35,8 +36,20 @@ export function createCursorRecordingSession(
 		});
 	}
 
-	// Linux: capture cursor positions via Electron's `screen` API on an interval.
-	// No cursor sprites/assets and no clicks, just position telemetry.
+	// Linux: capture cursor positions via an interval sampler. Hyprland's own IPC
+	// socket gives an accurate position at any time (moving or static); Electron's
+	// screen.getCursorScreenPoint() is known-broken (frozen at 0,0) there. Other
+	// compositors don't have an equivalent IPC channel today, so they keep using
+	// the Electron API.
+	if (process.env.HYPRLAND_INSTANCE_SIGNATURE) {
+		return new HyprlandCursorRecordingSession({
+			getDisplayBounds: options.getDisplayBounds,
+			maxSamples: options.maxSamples,
+			sampleIntervalMs: options.sampleIntervalMs,
+			startTimeMs: options.startTimeMs,
+		});
+	}
+
 	return new TelemetryRecordingSession({
 		getDisplayBounds: options.getDisplayBounds,
 		maxSamples: options.maxSamples,
