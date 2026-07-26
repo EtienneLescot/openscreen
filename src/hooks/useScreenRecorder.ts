@@ -38,6 +38,60 @@ const DEFAULT_HEIGHT = 1080;
 const CODEC_ALIGNMENT = 2;
 
 const BITS_PER_MEGABIT = 1_000_000;
+
+const FIRST_FRAME_TIMEOUT_MS = 3000;
+
+/**
+ * Resolve once `track` has produced a real, decodable frame -- not merely once
+ * `track.muted` reads false. On Linux/PipeWire the desktop-capture portal can still be
+ * negotiating (DMA-BUF modifier renegotiation, `no_hardware_cursors`, etc.) well after
+ * the track reports unmuted, so anchoring recording start to "now" makes MediaRecorder's
+ * own internal frame-0 arrive silently late: the declared recording duration (wall time
+ * from button-press to stop) ends up longer than the video's real content span (playback
+ * jumps to the end early), and cursor telemetry -- anchored to the same "now" -- drifts
+ * out of sync with the picture. Waiting for an actual rendered frame here, before
+ * `recorder.start()` is ever called, keeps duration accounting, cursor telemetry, and
+ * MediaRecorder's timeline all pointing at the same wall-clock instant.
+ *
+ * Falls back to `Date.now()` after `FIRST_FRAME_TIMEOUT_MS` if no frame arrives (e.g. a
+ * genuinely stalled capture), so recording start is never blocked indefinitely.
+ */
+function waitForFirstVideoFrame(track: MediaStreamTrack): Promise<number> {
+	return new Promise((resolve) => {
+		const video = document.createElement("video");
+		video.muted = true;
+		video.playsInline = true;
+		video.srcObject = new MediaStream([track]);
+
+		let settled = false;
+		const cleanup = () => {
+			video.srcObject = null;
+			video.remove();
+		};
+		const finish = (timeMs: number) => {
+			if (settled) return;
+			settled = true;
+			clearTimeout(timeoutId);
+			cleanup();
+			resolve(timeMs);
+		};
+
+		const timeoutId = setTimeout(() => finish(Date.now()), FIRST_FRAME_TIMEOUT_MS);
+
+		if (typeof video.requestVideoFrameCallback !== "function") {
+			// API unavailable (older Chromium); fall back to a short settle delay rather
+			// than blocking on the full timeout every time.
+			finish(Date.now());
+			return;
+		}
+
+		video.requestVideoFrameCallback(() => finish(Date.now()));
+		void video.play().catch(() => {
+			// Autoplay/play() rejection still lets requestVideoFrameCallback or the
+			// timeout resolve this promise; nothing else to do here.
+		});
+	});
+}
 const CHROME_MEDIA_SOURCE = "desktop";
 const RECORDING_FILE_PREFIX = "recording-";
 const VIDEO_FILE_EXTENSION = ".webm";
@@ -1416,27 +1470,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				);
 			}
 
-			// On Linux/PipeWire the capture track can still be muted here (mid-negotiation --
-			// see main.ts's DMA-BUF modifier renegotiation comment, and applyConstraints above
-			// can itself trigger another round). Cursor telemetry anchored to Date.now() right
-			// after acquiring the track, instead of to when frames actually start flowing, makes
-			// every sample know the cursor's position slightly before the frame showing it
-			// exists -- which plays back as the cursor lagging the recording. Start listening
-			// now (cheap, non-blocking) so this is almost always already resolved by the time
-			// it's consumed below; only a genuinely slow negotiation waits, capped at 500ms.
-			const cursorStartTimeMsPromise: Promise<number> = videoTrack.muted
-				? new Promise((resolve) => {
-						const onUnmute = () => {
-							clearTimeout(timeoutId);
-							resolve(Date.now());
-						};
-						const timeoutId = setTimeout(() => {
-							videoTrack.removeEventListener("unmute", onUnmute);
-							resolve(Date.now());
-						}, 500);
-						videoTrack.addEventListener("unmute", onUnmute, { once: true });
-					})
-				: Promise.resolve(Date.now());
+			// See waitForFirstVideoFrame's doc comment: block here until the track is
+			// actually producing frames, so duration accounting, cursor telemetry, and
+			// MediaRecorder's own timeline all anchor to the same wall-clock instant.
+			const firstFrameAtMs = await waitForFirstVideoFrame(videoTrack);
 
 			if (!isCountdownRunActive(countdownRunToken)) {
 				teardownMedia();
@@ -1467,7 +1504,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				return;
 			}
 
-			recordingId.current = Date.now();
+			recordingId.current = firstFrameAtMs;
 			const activeRecordingId = recordingId.current;
 			screenRecorder.current = createRecorderHandle(
 				stream.current,
@@ -1497,14 +1534,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 
 			accumulatedDurationMs.current = 0;
-			segmentStartedAt.current = Date.now();
+			segmentStartedAt.current = firstFrameAtMs;
 			allowAutoFinalize.current = true;
 			setRecording(true);
 			setPaused(false);
 			setElapsedSeconds(0);
-			void cursorStartTimeMsPromise.then((cursorStartTimeMs) => {
-				window.electronAPI?.setRecordingState(true, cursorStartTimeMs, cursorCaptureMode);
-			});
+			window.electronAPI?.setRecordingState(true, firstFrameAtMs, cursorCaptureMode);
 
 			const activeScreenRecorder = screenRecorder.current;
 			const activeWebcamRecorder = webcamRecorder.current;
