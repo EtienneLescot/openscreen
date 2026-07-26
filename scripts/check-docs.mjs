@@ -99,7 +99,9 @@ for (const file of files) {
 
 	// Relative markdown links must resolve.
 	for (const [, target] of text.matchAll(/\]\((?!https?:|mailto:|#)([^)#\s]+)/g)) {
-		const resolved = resolve(dirname(file), target);
+		// `foo.ts:42` is the repo's source-anchor convention — the file must exist,
+		// the line number is not part of the path.
+		const resolved = resolve(dirname(file), target.replace(/:\d+$/, ""));
 		try {
 			statSync(resolved);
 		} catch {
