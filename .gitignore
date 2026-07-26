@@ -51,6 +51,7 @@ playwright-report/
 
 # Vitest browser mode screenshots
 __screenshots__/
+.vitest-attachments/
 
 # shell files
 /shell.sh

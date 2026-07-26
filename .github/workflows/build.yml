@@ -59,6 +59,37 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
+  build-windows-store:
+    name: Windows Store package
+    runs-on: windows-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: ./.github/actions/setup
+
+      - name: Cache caption assets
+        uses: actions/cache@v4
+        with:
+          path: caption-assets
+          key: caption-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-caption-model.mjs') }}
+
+      # ponytail: STT is handled by the bundled whisper-stt-server (whisper.cpp
+      # with native DTW token timestamps). No separate VAD model is fetched
+      # here. See docs/engineering/stt-spec.md for the full architecture.
+
+      - name: Build Windows Store package
+        run: npm run build:win:store -- --publish never
+
+      - name: Upload Windows Store package
+        uses: actions/upload-artifact@v4
+        with:
+          name: openscreen-windows-store
+          path: release/**/Openscreen.Setup.*.appx
+          if-no-files-found: error
+          retention-days: 30
+
   build-macos:
     name: macOS ${{ matrix.arch }} DMG
     runs-on: macos-latest
