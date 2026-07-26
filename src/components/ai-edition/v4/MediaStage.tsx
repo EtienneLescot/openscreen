@@ -4,6 +4,8 @@ import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutAsset } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { formatSeconds } from "@/lib/ai-edition/timeline/format";
+import { formatBytes } from "@/utils/formatBytes";
 import styles from "./EditorShellV4.module.css";
 
 const ASSET_MIME = "application/x-axcut-asset";
@@ -16,23 +18,6 @@ const THUMB_GRADIENTS = [
 
 function basename(path: string): string {
 	return path.split(/[\\/]/).pop() ?? path;
-}
-
-function formatTimecode(sec: number | undefined): string {
-	if (!sec || !Number.isFinite(sec)) return "0:00.0";
-	const h = Math.floor(sec / 3600);
-	const m = Math.floor((sec % 3600) / 60);
-	const s = (sec % 60).toFixed(1);
-	return h > 0
-		? `${h}:${m.toString().padStart(2, "0")}:${s.padStart(4, "0")}`
-		: `${m}:${s.padStart(4, "0")}`;
-}
-
-function formatSize(bytes: number | undefined): string {
-	if (!bytes || !Number.isFinite(bytes)) return "—";
-	if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(0)} KB`;
-	if (bytes < 1024 * 1024 * 1024) return `${(bytes / 1024 / 1024).toFixed(0)} MB`;
-	return `${(bytes / 1024 / 1024 / 1024).toFixed(1)} GB`;
 }
 
 export function MediaStage({
@@ -150,8 +135,10 @@ export function MediaStage({
 													{asset.label || basename(asset.originalPath)}
 												</div>
 												<div className={styles.mediaCardStats}>
-													<span className={styles.dur}>{formatTimecode(asset.durationSec)}</span>
-													<span className={styles.size}>{formatSize(asset.sizeBytes)}</span>
+													<span className={styles.dur}>
+														{formatSeconds(asset.durationSec ?? 0)}
+													</span>
+													<span className={styles.size}>{formatBytes(asset.sizeBytes)}</span>
 												</div>
 											</div>
 											{status === "running" ? (
