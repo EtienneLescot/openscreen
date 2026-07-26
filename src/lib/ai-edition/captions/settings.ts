@@ -26,8 +26,9 @@ export interface CaptionSettings {
 	 * layer (see `translations.ts`) — the transcript is never rewritten.
 	 */
 	language: string | null;
-	/** Pixels, in preview-space — same convention as `AnnotationTextStyle.fontSize`
-	 *  (the exporter rescales it by previewWidth → outputWidth). */
+	/** Pixels at a 1080-high frame, the same convention as `AnnotationTextStyle.fontSize`
+	 *  — both the preview overlay and the compositor scale it by the height of the box
+	 *  they draw into (see `annotationScale.ts`), so it is resolution-free. */
 	fontSize: number;
 	fontFamily: string;
 	fontWeight: "normal" | "bold";
@@ -53,7 +54,7 @@ export interface CaptionSettings {
 export const DEFAULT_CAPTION_SETTINGS: CaptionSettings = {
 	enabled: false,
 	language: null,
-	fontSize: 26,
+	fontSize: 48,
 	fontFamily: "Inter",
 	fontWeight: "bold",
 	color: "#ffffff",
@@ -131,7 +132,7 @@ export function getCaptionSettings(doc: AxcutDocument | null | undefined): Capti
 		// `null` is a meaningful value here ("show the original"), so an explicit
 		// null must survive; only a missing/garbage entry falls back to the default.
 		language: raw.language === null || typeof raw.language === "string" ? raw.language : d.language,
-		fontSize: readNumber(raw.fontSize, d.fontSize, 8, 200),
+		fontSize: readNumber(raw.fontSize, d.fontSize, 12, 200),
 		fontFamily: readString(raw.fontFamily, d.fontFamily),
 		fontWeight: readEnum(raw.fontWeight, ["normal", "bold"] as const, d.fontWeight),
 		color: readString(raw.color, d.color),

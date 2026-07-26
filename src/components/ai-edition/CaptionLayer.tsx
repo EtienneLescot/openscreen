@@ -11,6 +11,7 @@
 // preview shows is what the export writes.
 
 import { useMemo } from "react";
+import { annotationFontSizePx } from "@/lib/ai-edition/annotationScale";
 import {
 	type CaptionCue,
 	type CaptionSettings,
@@ -70,7 +71,11 @@ export function CaptionLayer({
 				style={{
 					color: settings.color,
 					backgroundColor: background,
-					fontSize: `${settings.fontSize}px`,
+					// Same rule as annotations (annotationScale.ts): the authored number is
+					// pixels at a 1080-high frame, scaled by the box actually being drawn
+					// into — so the preview is a scale model of the render instead of
+					// showing one size on screen and another in the file.
+					fontSize: `${annotationFontSizePx(settings.fontSize, containerHeight)}px`,
 					fontFamily: settings.fontFamily,
 					fontWeight: settings.fontWeight,
 					textAlign: settings.textAlign,
