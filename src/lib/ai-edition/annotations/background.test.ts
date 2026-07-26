@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_ANNOTATION_STYLE } from "@/components/video-editor/types";
 import type { AxcutAnnotationRegion } from "@/lib/ai-edition/schema";
 import {
 	DEFAULT_TEXT_BACKGROUND,
@@ -7,7 +8,6 @@ import {
 	textBackgroundColor,
 	toggleTextBackground,
 } from "./background";
-import { DEFAULT_ANNOTATION_STYLE } from "./constants";
 
 type AnnotationStyle = AxcutAnnotationRegion["style"];
 

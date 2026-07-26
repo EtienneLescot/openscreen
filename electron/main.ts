@@ -21,8 +21,6 @@ import {
 import { mainT, setMainLocale } from "./i18n";
 import { getSelectedDesktopSource, registerIpcHandlers } from "./ipc/handlers";
 import { installMainProcessErrorGuards } from "./main-process-errors";
-import { registerFfmpegExportIpc } from "./media/ffmpegExportIpc";
-import { cancelAllExports } from "./media/ffmpegExportService";
 import { acquireStableInstanceLock } from "./singleInstanceLock";
 import { registerSttIpc } from "./stt";
 import {
@@ -507,9 +505,6 @@ app.on("activate", () => {
 app.on("will-quit", () => {
 	unregisterAllGlobalShortcuts();
 	stableInstanceLock?.release();
-	// Kill any ffmpeg still encoding, or quitting mid-export leaves it orphaned
-	// holding the output file. Fire-and-forget: will-quit cannot await.
-	void cancelAllExports();
 });
 
 const appReady = hasSingleInstanceLock ? app.whenReady() : null;
@@ -631,7 +626,6 @@ appReady?.then(async () => {
 		showMainWindow();
 	}
 
-	registerFfmpegExportIpc();
 	registerIpcHandlers(
 		createEditorWindowWrapper,
 		createSourceSelectorWindowWrapper,
