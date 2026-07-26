@@ -3,8 +3,8 @@
 The MP4 export drives the same Rust + Direct3D 11 compositor that powers the
 live preview ([preview.md](preview.md) /
 [native-compositor.md](native-compositor.md)), one segment at a time. The
-Electron renderer turns the project document into a `RenderPlan`, the
-renderer hands the plan and the per-segment source files to the napi addon
+Electron renderer turns the project document into the same `SceneDescription`
+the live preview uses plus an ordered clip list, hands both to the napi addon
 through the `compositor` IPC domain, and the addon drives `poc-d3d`'s
 `Player` + `Compositor::compose_frame` + AMF encoder + muxer to write one
 `.mp4`. The renderer only watches progress; the actual rendering does not
@@ -12,79 +12,20 @@ leave the native process. Performance numbers, the bench, and the rejected
 alternatives that drove the design live in
 [engineering/rendering-performance.md](../engineering/rendering-performance.md).
 
-GIF and the legacy browser-side path are out of scope here: GIF has no native
-encoder yet (it has its own dedicated code path in
-`src/lib/exporter/gifExporter.ts`); the legacy path is the one the
-`RenderPlan` is being migrated away from.
+GIF is out of scope here: it has no native encoder yet, so it keeps its own
+dedicated code path in `src/lib/exporter/gifExporter.ts` — the one format
+the document adapter still renders in the renderer.
 
 ```mermaid
 flowchart LR
     DOC["AxcutDocument"]
-    TSD["src/lib/ai-edition/exporter/renderPlan.ts<br/>buildRenderPlan / buildDocumentRenderPlan"]
-    RP["RenderPlan<br/>output + segments + virtual-time effects + appearance + cursor + webcam"]
+    TSD["src/native/sceneDescription.ts<br/>resolveVisibleClips / buildSceneDescription"]
+    RP["clips + SceneDescription JSON<br/>layout + effects + background + zoom + cursor + webcam"]
     ADDON["compositor_view.node addon<br/>exportMulti (Electron IPC)"]
     NATIVE["poc-d3d::live::Player<br/>Compositor::compose_frame<br/>h264_amf encoder + mux"]
     FILE["output.mp4"]
     DOC --> TSD --> RP --> ADDON --> NATIVE --> FILE
 ```
-
-## The `RenderPlan`
-
-`src/lib/ai-edition/exporter/renderPlan.ts` is the pure-logic data model that
-turns an `AxcutDocument` into an ordered, per-clip plan. `documentExporter`'s
-[`buildDocumentRenderPlan`](../../src/lib/ai-edition/exporter/documentExporter.ts)
-is the single boundary that builds it; `ExportDialog` and the bench both go
-through it. Every length that crosses the boundary is in seconds or
-fractions, every output is in fractions of the output frame, and the plan
-itself is JSON-serialisable.
-
-```ts
-interface RenderSegment {
-  clipId: string;
-  assetId: string;
-  videoUrl: string;             // toFileUrl(asset.originalPath) — the doc is self-contained
-  sourceStartSec: number;       // clip in-point in the asset's media time
-  sourceEndSec: number;
-  timelineStartSec: number;     // position on the (1:1-with-source, pre-speed) virtual timeline
-  timelineEndSec: number;
-  intraTrims: Interval[];       // trimRanges of THIS asset inside [start,end)
-  cropRegion: CropRegion;       // per-clip screen crop, fractions of the source
-  sourceWidth: number;
-  sourceHeight: number;
-  camera: { videoUrl: string; offsetMs: number } | null;  // per-asset webcam
-  cursorSamples: CursorRecordingSample[];                  // partitioned by assetId
-}
-
-interface RenderPlan {
-  output: { width, height, frameRate, bitrate, codec };
-  aspectRatioValue: number;
-  segments: RenderSegment[];                  // sorted by timelineStartSec
-  zoomRegions: ZoomRegion[];                  // VIRTUAL (output) time, no projection
-  annotationRegions: AnnotationRegion[];      // same — captions are derived + joined here
-  speedRegions: SpeedRegion[];                // same
-  appearance: RenderPlanAppearance;           // wallpaper, padding, radius, shadow, blur, motion
-  cursor: RenderPlanCursor | null;            // shared atlas + style; per-segment samples above
-  webcam: RenderPlanWebcam;                   // shared layout/style; per-segment source above
-}
-```
-
-Effects (`zoomRegions`, `annotationRegions`, `speedRegions`) live on the
-plan in **virtual** (output) time. The segment loop already tracks the
-virtual-time cursor that an earlier design tried to compute up-front by
-projecting every region onto source time — that projection is what the TS
-exporter still does for the legacy single-source renderer; the segment
-loop does not need it.
-
-The plan also carries the `codec` as a WebCodecs encoder string per
-user-facing choice (`avc1.640033` for H.264, `hvc1.1.6.L120.90` for H.265,
-`vp09.00.10.08` for VP9). The native side's AMF encoder takes those
-strings and produces the matching mp4 track family.
-
-`isIdentityFastPathEligible(plan)` is a single boolean: one segment, no
-intra-trims, identity crop, no zoom/annotation, no cursor overlay, no
-speed, and `output.size === segment.source.size` → the renderer can take a
-stream-copy / remux-only fast path. Everything else goes through the full
-decode → composite → encode round trip.
 
 ## Segment loop
 
@@ -133,35 +74,23 @@ and **one** encoder + muxer pair:
   The WSOLA stretch is kicked off before the video loop so it overlaps
   the encode and does not add to the wall.
 
-- **Output** is sized to the largest clip and honours the timeline's
-  selected aspect ratio. `pickReferenceDimensions` (in `renderPlan.ts`)
-  picks the largest source area, then `calculateMp4ExportSettings` maps
-  quality + source dims + aspect ratio to the encoder width / height /
-  bitrate.
-
-## Per-segment cursor
-
-`CursorRecordingSample.assetId` tags each sample, so the plan partitions
-the shared recording per segment (`cursorSamplesForAsset`,
-[`renderPlan.ts:178`](../../src/lib/ai-edition/exporter/renderPlan.ts)).
-Samples with no `assetId` belong to the primary asset — the convention that
-keeps single-asset projects rendering their cursor exactly as before.
-Untagged samples were the format before multi-asset cursor tagging
-landed; the fallback is the documented behaviour, not a heuristic.
-
-The shared parts of the cursor render — the sprite atlas and the style
-knobs (`scale`, `smoothing`, `motionBlur`, `clickBounce`, `clipToBounds`,
-`theme`) — live on `plan.cursor` once. The time-varying samples live per
-segment on `segment.cursorSamples`. A segment with no cursor samples
-renders with no cursor overlay, which is correct (the asset had no
-recording), not a gap.
+- **Output** honours the timeline's selected aspect ratio
+  (`resolveAspectRatioValue` over `getEditorSettings(document).aspectRatio` —
+  the same typed façade `buildSceneDescription` reads, so the dialog cannot
+  drift from the compositor). `ExportDialog`'s `tierOutputDims` feeds the
+  crop-aware **smallest** clip on the timeline to
+  [`calculateMp4ExportSettings`](../../src/lib/exporter/mp4ExportSettings.ts),
+  which maps quality + source dims + aspect ratio to the encoder
+  width / height / bitrate, and passes `width` / `height` to `exportMulti`.
+  Only "Source" quality targets those source dims; 720p / 1080p target a
+  fixed short side regardless.
 
 ## Output formats and codecs
 
 The native MP4 export takes `width`, `height`, `frameRate`, and `codec` as
-parameters on `exportMulti` and writes H.264 (AMF) by default. The user-
-facing codec choice (H.264 / H.265 / VP9) is mapped by `renderPlan.ts` to
-the WebCodecs encoder string the addon's AMF encoder consumes; VP9
+parameters on `exportMulti` and writes H.264 (AMF) by default. The
+user-facing codec choice crosses as the plain `ExportVideoCodec` string
+(`"h264"` / `"h265"` / `"vp9"`) in those params; VP9
 falls back to the same H.264 path on machines without a hardware VP9
 encoder (software VP9 was measured too slow and removed — see
 [native-compositor.md](native-compositor.md#known-gaps)). GIF is a
