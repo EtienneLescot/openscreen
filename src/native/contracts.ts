@@ -737,12 +737,6 @@ export type NativeBridgeRequest =
 	  }
 	| {
 			domain: "compositor";
-			action: "export";
-			payload: { outPath?: string };
-			requestId?: string;
-	  }
-	| {
-			domain: "compositor";
 			action: "exportMulti";
 			payload: {
 				clips: CompositorClipInput[];

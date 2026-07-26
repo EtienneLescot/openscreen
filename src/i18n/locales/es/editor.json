@@ -205,7 +205,8 @@
 		"exportFailed": "Error al exportar",
 		"failedToWriteFile": "No se pudo escribir el archivo",
 		"qualityUpscaleWarning": "Upscaling",
-		"exportedVideoOf": "de vídeo exportado en"
+		"exportedVideoOf": "de vídeo exportado en",
+		"nothingToExport": "Nada que exportar: la línea de tiempo está vacía."
 	},
 	"inspector": {
 		"resetFocusPoint": "Restablecer punto de enfoque",

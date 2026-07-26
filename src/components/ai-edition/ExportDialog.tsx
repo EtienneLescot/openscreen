@@ -36,7 +36,7 @@ import {
 	type GifSizePreset,
 } from "@/lib/exporter";
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
-import { exportMultiNative, exportNative } from "@/native";
+import { exportMultiNative } from "@/native";
 import { nativeBridgeClient } from "@/native/client";
 import type { CompositorClipInput } from "@/native/contracts";
 import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
@@ -284,15 +284,15 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 			try {
 				const sceneJson = JSON.stringify(buildSceneDescription(document));
 				const outDims = tierOutputDims(quality);
-				const stats =
-					clips.length > 0
-						? await exportMultiNative(clips, pickedPath, sceneJson, {
-								width: outDims?.width,
-								height: outDims?.height,
-								fps,
-								codec,
-							})
-						: await exportNative(pickedPath);
+				if (clips.length === 0) {
+					throw new Error(t("exportDialog.nothingToExport"));
+				}
+				const stats = await exportMultiNative(clips, pickedPath, sceneJson, {
+					width: outDims?.width,
+					height: outDims?.height,
+					fps,
+					codec,
+				});
 				setSavedPath(pickedPath);
 				setPhase("done");
 				toast.success(t("exportDialog.exportedVideo"), {

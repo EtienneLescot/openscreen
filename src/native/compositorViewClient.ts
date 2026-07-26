@@ -113,14 +113,6 @@ export function destroyCompositorView(id: number): Promise<{ ok: true }> {
 	});
 }
 
-export function exportNative(outPath?: string): Promise<CompositorExportResult> {
-	return requireNativeBridgeData<CompositorExportResult>({
-		domain: "compositor",
-		action: "export",
-		payload: { outPath },
-	});
-}
-
 export function exportMultiNative(
 	clips: CompositorClipInput[],
 	outPath?: string,

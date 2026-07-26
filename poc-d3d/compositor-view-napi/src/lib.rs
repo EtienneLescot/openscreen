@@ -10,7 +10,6 @@ use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFun
 use napi::{Env, JsFunction, Task};
 use napi_derive::napi;
 use poc_d3d::compositor::{live_params_from_scene, Compositor};
-use poc_d3d::cursor::CursorTrack;
 use poc_d3d::d3d::Gpu;
 use poc_d3d::live::{LiveView, PausedPreviews};
 use poc_d3d::scene::Scene;
@@ -38,14 +37,6 @@ fn registry() -> &'static Mutex<HashMap<i32, LiveView>> {
     REGISTRY.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-/// Répertoire fixture (POC) : env `OPENSCREEN_COMPOSITOR_FIXTURE`, sinon défaut local.
-/// Le Lot 3 fournira les vraies sources ; ici on prouve l'embed avec la fixture.
-fn fixture_dir() -> String {
-    std::env::var("OPENSCREEN_COMPOSITOR_FIXTURE").unwrap_or_else(|_| {
-        r"C:\Users\camil\Documents\repos\openscreen\.claude\worktrees\prerelease-version-tag-ee96ae\poc-d3d\fixture".to_string()
-    })
-}
-
 /// Crée une vue **offscreen** (pas de HWND, pas de fenêtre native). Démarre juste
 /// un thread de rendu qui compose chaque frame, blit-resize vers `rect.width`×
 /// `rect.height` (réutilise le même `ensure_resize_target`/`blit_resized` que
@@ -53,10 +44,9 @@ fn fixture_dir() -> String {
 /// `Map`/`Unmap` et stocke un `Vec<u8>` RGBA8 tightly-packed dans la vue pour
 /// que `read_frame` le retourne à la glue TS.
 ///
-/// Si `screen_path`/`webcam_path` sont fournis (F3 : le vrai enregistrement de
-/// l'app — deux fichiers H264 séparés), on rend ces sources ; sinon on retombe
-/// sur la fixture POC. `cursor_path` optionnel (télémétrie curseur ; absent →
-/// pas de curseur).
+/// `screen_path` est requis (F3 : le vrai enregistrement de l'app — deux
+/// fichiers H264 séparés). `webcam_path`/`cursor_path` sont optionnels
+/// (absents → pas de caméra / pas de curseur).
 ///
 /// `rect` ne sert plus que pour `width`/`height` (résolution cible du preview) ;
 /// `x`/`y` sont ignorés (compat structurelle — la position est gérée par CSS).
@@ -67,10 +57,10 @@ pub fn create_view(
     webcam_path: Option<String>,
     cursor_path: Option<String>,
 ) -> Result<i32> {
-    let dir = fixture_dir();
-    let screen = screen_path.unwrap_or_else(|| format!("{dir}/screen.mp4"));
-    let webcam = webcam_path.unwrap_or_else(|| format!("{dir}/webcam.mp4"));
-    let cursor = cursor_path.unwrap_or_else(|| format!("{dir}/screen.cursor.json"));
+    let screen = screen_path
+        .ok_or_else(|| Error::from_reason("create_view: screen_path is required"))?;
+    let webcam = webcam_path.unwrap_or_default();
+    let cursor = cursor_path.unwrap_or_default();
     let view = LiveView::create(
         rect.width.max(1) as u32,
         rect.height.max(1) as u32,
@@ -237,14 +227,6 @@ pub struct ExportStats {
     pub video_duration_s: f64,
 }
 
-/// Export mesuré, exécuté sur un thread worker libuv (l'UI n'est pas bloquée ; la mesure
-/// reste enveloppante dans `run_composited`). Config = C8 (tous effets), pour comparer
-/// directement au bench headless. Le device/compositeur/encodeur vivent sur ce thread.
-pub struct ExportTask {
-    out_path: String,
-    on_progress: Option<ThreadsafeFunction<u32, ErrorStrategy::Fatal>>,
-}
-
 /// Builds a `progress: &mut dyn FnMut(u64)` closure (the shape both `run_composited` and
 /// `run_composited_multi` already call once per encoded frame, for free — measured to not
 /// affect the C8 benchmark's fps) that forwards to `tsfn`, throttled to ~10/s. Encoding at
@@ -296,40 +278,6 @@ impl Drop for PreviewPause {
     }
 }
 
-impl Task for ExportTask {
-    type Output = (u32, f64, f64, f64);
-    type JsValue = ExportStats;
-
-    fn compute(&mut self) -> Result<Self::Output> {
-        // Previews paused for the whole render (GPU 3D engine freed) and put back exactly as
-        // found when this guard drops — including on the error paths below.
-        let _previews = PreviewPause::begin();
-        let dir = fixture_dir();
-        let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
-        let comp = Compositor::new(&gpu).map_err(|e| Error::from_reason(format!("{e:#}")))?;
-        if let Ok(t) = CursorTrack::load(&format!("{dir}/screen.cursor.json"), 100_000.0, 6.0) {
-            comp.set_cursor(t);
-        }
-        let cfg = config::all().pop().expect("au moins une config"); // C8
-        let mut progress = throttled_progress(self.on_progress.take());
-        let s = pipeline::run_composited(
-            &format!("{dir}/screen.mp4"),
-            &format!("{dir}/webcam.mp4"),
-            &self.out_path,
-            &gpu,
-            &comp,
-            &cfg,
-            &mut progress,
-        )
-        .map_err(|e| Error::from_reason(format!("{e:#}")))?;
-        Ok((s.frames as u32, s.wall_s, s.fps, s.video_duration_s))
-    }
-
-    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
-        Ok(ExportStats { frames: out.0, wall_s: out.1, fps: out.2, video_duration_s: out.3 })
-    }
-}
-
 /// Convertit une fonction JS optionnelle en `ThreadsafeFunction` appelable depuis le thread
 /// libuv qui exécute `Task::compute` — c'est la seule façon de rappeler JS depuis là. Chaque
 /// appel transporte juste le nombre de frames encodées (`u32`) ; le JS connaît déjà le total
@@ -339,13 +287,6 @@ fn make_progress_tsfn(
 ) -> Result<Option<ThreadsafeFunction<u32, ErrorStrategy::Fatal>>> {
     f.map(|f| f.create_threadsafe_function(0, |ctx| Ok(vec![ctx.value])))
         .transpose()
-}
-
-/// Lance un export natif (fixture → MP4, C8) et résout `Promise<ExportStats>`.
-/// `on_progress(framesEncodées)` optionnel — rappelé côté JS à ~10 Hz max pendant le rendu.
-#[napi]
-pub fn export(out_path: String, on_progress: Option<JsFunction>) -> Result<AsyncTask<ExportTask>> {
-    Ok(AsyncTask::new(ExportTask { out_path, on_progress: make_progress_tsfn(on_progress)? }))
 }
 
 /// Un clip de la timeline pour l'export multiclip (JS : camelCase).
@@ -393,7 +334,8 @@ impl Task for ExportMultiTask {
     type JsValue = ExportStats;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        // See `ExportTask::compute` — same pause-and-restore contract, same guard.
+        // Previews paused for the whole render (GPU 3D engine freed) and restored
+        // exactly as found when this guard drops, including on the error paths.
         let _previews = PreviewPause::begin();
         let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
         let mut cfg = config::all().pop().expect("au moins une config"); // C8

@@ -205,7 +205,8 @@
 		"exportFailed": "エクスポートに失敗しました",
 		"failedToWriteFile": "ファイルの書き込みに失敗しました",
 		"qualityUpscaleWarning": "アップスケール",
-		"exportedVideoOf": "の動画を書き出しました。所要時間:"
+		"exportedVideoOf": "の動画を書き出しました。所要時間:",
+		"nothingToExport": "書き出す内容がありません — タイムラインが空です。"
 	},
 	"inspector": {
 		"resetFocusPoint": "フォーカスポイントをリセット",

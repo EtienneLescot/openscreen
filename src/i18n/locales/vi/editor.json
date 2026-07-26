@@ -205,7 +205,8 @@
 		"exportFailed": "Xuất thất bại",
 		"failedToWriteFile": "Không thể ghi tệp",
 		"qualityUpscaleWarning": "Upscale",
-		"exportedVideoOf": "video đã xuất trong"
+		"exportedVideoOf": "video đã xuất trong",
+		"nothingToExport": "Không có gì để xuất — dòng thời gian trống."
 	},
 	"inspector": {
 		"resetFocusPoint": "Đặt lại điểm lấy nét",
