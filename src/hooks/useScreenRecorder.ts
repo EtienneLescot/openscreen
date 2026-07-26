@@ -16,6 +16,7 @@ import type { CursorCaptureMode, RecordedVideoAssetInput } from "@/lib/recording
 import { requestCameraAccess } from "@/lib/requestCameraAccess";
 import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences";
 import { createRecorderHandle, type RecorderHandle } from "./recorderHandle";
+import { waitForFirstVideoFrame } from "./waitForFirstVideoFrame";
 
 const TARGET_FRAME_RATE = 60;
 const MIN_FRAME_RATE = 30;
@@ -1408,6 +1409,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				);
 			}
 
+			// See waitForFirstVideoFrame's doc comment: block here until the track is
+			// actually producing frames, so duration accounting, cursor telemetry, and
+			// MediaRecorder's own timeline all anchor to the same wall-clock instant.
+			const firstFrameAtMs = await waitForFirstVideoFrame(videoTrack);
+
 			if (!isCountdownRunActive(countdownRunToken)) {
 				teardownMedia();
 				return;
@@ -1437,7 +1443,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				return;
 			}
 
-			recordingId.current = Date.now();
+			recordingId.current = firstFrameAtMs;
 			const activeRecordingId = recordingId.current;
 			screenRecorder.current = createRecorderHandle(
 				stream.current,
@@ -1467,12 +1473,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 
 			accumulatedDurationMs.current = 0;
-			segmentStartedAt.current = Date.now();
+			segmentStartedAt.current = firstFrameAtMs;
 			allowAutoFinalize.current = true;
 			setRecording(true);
 			setPaused(false);
 			setElapsedSeconds(0);
-			window.electronAPI?.setRecordingState(true, recordingId.current, cursorCaptureMode);
+			window.electronAPI?.setRecordingState(true, firstFrameAtMs, cursorCaptureMode);
 
 			const activeScreenRecorder = screenRecorder.current;
 			const activeWebcamRecorder = webcamRecorder.current;
