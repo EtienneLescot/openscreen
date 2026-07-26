@@ -182,7 +182,8 @@
 		"tipShiftTabCycle": "Usa Maiusc+Tab per scorrere all'indietro.",
 		"invalidImageType": "Tipo di file non valido",
 		"imageFormatsOnly": "Carica un file immagine JPG, PNG, GIF o WebP.",
-		"imageUploadSuccess": "Immagine caricata con successo!"
+		"imageUploadSuccess": "Immagine caricata con successo!",
+		"type": "Tipo"
 	},
 	"fontStyles": {
 		"classic": "Classico",
