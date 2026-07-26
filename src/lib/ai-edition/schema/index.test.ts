@@ -41,7 +41,6 @@ describe("axcut-schema v5", () => {
 		expect(doc.zoomRanges).toEqual([]);
 		expect(doc.transcripts).toEqual([]);
 		expect(doc.legacyEditor).toBeNull();
-		expect(doc.history.revisions).toEqual([]);
 	});
 
 	it("ensureDocument rejects garbage", () => {

@@ -233,9 +233,6 @@ export function migrateProjectDataToAxcutDocument(
 			suggestions: [],
 			lastAppliedOperations: [],
 		},
-		preview: { strategy: "seek", revision: 0 },
-		export: { preset: "final-balanced", lastJobId: null },
-		history: { revisions: [] },
 	};
 
 	return documentSchema.parse(draft);
