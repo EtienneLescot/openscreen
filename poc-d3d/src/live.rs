@@ -607,6 +607,13 @@ impl LiveView {
         self.shared.playing.store(playing, Ordering::Relaxed);
     }
 
+    /// Ce que la vue est en train de faire : lecture libre (`true`) ou pause (`false`).
+    /// Lu par l'export, qui met les previews en pause le temps d'encoder et doit pouvoir
+    /// leur rendre CET état plutôt que d'en supposer un (voir `PausedPreviews`).
+    pub fn playing(&self) -> bool {
+        self.shared.playing.load(Ordering::Relaxed)
+    }
+
     /// Installe la scène de l'app (JSON `SceneDescription`). Parsé ici (hors thread de rendu) ;
     /// appliqué au compositeur au prochain tour via le flag `scene_dirty`. JSON invalide → ignoré.
     pub fn set_scene(&self, json: &str) {
@@ -662,6 +669,75 @@ impl Drop for LiveView {
             let _ = t.join();
         }
         // Plus rien à détruire côté Win32 — pas de HWND.
+    }
+}
+
+/// A preview's transport — free-run or paused — readable AND writable without touching the
+/// GPU. It is the only slice of `LiveView` an export needs: it pauses the previews to free
+/// the 3D engine, then hands the transport back. A trait rather than `LiveView` itself so
+/// that `PausedPreviews` can be tested with no D3D device (see this file's tests).
+pub trait PreviewTransport {
+    fn playing(&self) -> bool;
+    fn set_playing(&self, playing: bool);
+}
+
+impl PreviewTransport for LiveView {
+    fn playing(&self) -> bool {
+        // Fully-qualified on purpose: inside a trait impl, `self.playing()` resolving to the
+        // inherent method is a silent coincidence of method resolution, not a guarantee.
+        LiveView::playing(self)
+    }
+
+    fn set_playing(&self, playing: bool) {
+        LiveView::set_playing(self, playing);
+    }
+}
+
+/// What every preview was doing when an export paused them — enough to give EACH ONE back the
+/// state it was found in, instead of resuming them all.
+///
+/// That distinction is the fix for a visible bug, not a nicety. While editing, the preview is
+/// PAUSED; the renderer only pushes `setPlaying` when the transport actually changes, so
+/// nothing ever came along to re-pause a preview an export had resumed on its own authority.
+/// It went back to free-running for its own account: its playhead left the moment the app
+/// believed was on screen (the zoom then sampled at the wrong source time), and at the first
+/// clip boundary it crossed, it swapped its scene over to ANOTHER clip
+/// (`scene_for_clip`) — after which the zoom regions of the clip actually being displayed were
+/// filtered out of the scene, and no amount of seeking brought them back (the app only pushes
+/// `set_active_clip` when ITS active clip changes, and its own had not changed). Only a window
+/// reload, which recreates the view, repaired it.
+///
+/// `K` is the caller's identity for a view (the napi registry id). Previews created AFTER the
+/// pause are absent from the snapshot and are left strictly alone: their transport belongs to
+/// whoever created them.
+pub struct PausedPreviews<K> {
+    was_playing: Vec<(K, bool)>,
+}
+
+impl<K> Default for PausedPreviews<K> {
+    fn default() -> Self {
+        Self { was_playing: Vec::new() }
+    }
+}
+
+impl<K: Copy + PartialEq> PausedPreviews<K> {
+    /// Pauses every preview and reports what each one was doing.
+    pub fn pause<'a, V: PreviewTransport + 'a>(views: impl IntoIterator<Item = (K, &'a V)>) -> Self {
+        let mut was_playing = Vec::new();
+        for (key, view) in views {
+            was_playing.push((key, view.playing()));
+            view.set_playing(false);
+        }
+        Self { was_playing }
+    }
+
+    /// Gives every preview the snapshot knows about the state it was found in.
+    pub fn restore<'a, V: PreviewTransport + 'a>(&self, views: impl IntoIterator<Item = (K, &'a V)>) {
+        for (key, view) in views {
+            if let Some((_, was_playing)) = self.was_playing.iter().find(|(k, _)| *k == key) {
+                view.set_playing(*was_playing);
+            }
+        }
     }
 }
 
@@ -1397,6 +1473,88 @@ mod tests {
     fn webcam_seek_uses_screen_source_time_and_offset() {
         assert_eq!(webcam_seek_time(22.5, 1.25), 21.25);
         assert_eq!(webcam_seek_time(0.5, 1.25), 0.0);
+    }
+
+    // --- transport handed to an export and back -------------------------------
+    // A real `LiveView` needs a D3D device and a decoder; the transport is the only
+    // part an export touches, so these exercise it through `PreviewTransport` alone.
+
+    /// A preview reduced to its transport flag — no GPU, no render thread.
+    struct FakePreview(std::cell::Cell<bool>);
+
+    impl FakePreview {
+        fn new(playing: bool) -> Self {
+            Self(std::cell::Cell::new(playing))
+        }
+    }
+
+    impl PreviewTransport for FakePreview {
+        fn playing(&self) -> bool {
+            self.0.get()
+        }
+
+        fn set_playing(&self, playing: bool) {
+            self.0.set(playing);
+        }
+    }
+
+    /// The regression this exists for: an export used to resume every preview it had
+    /// paused, so exporting while the editor sat paused left the preview free-running —
+    /// it drifted off the app's playhead and out of the zoom region the inspector still
+    /// showed, and only a window reload brought the zoom back.
+    #[test]
+    fn an_export_leaves_a_paused_preview_paused() {
+        let paused = FakePreview::new(false);
+        let snapshot = PausedPreviews::pause([(7, &paused)]);
+        assert!(!paused.playing(), "the export must free the GPU while it encodes");
+
+        snapshot.restore([(7, &paused)]);
+        assert!(!paused.playing(), "the app never asked for playback — it must still be paused");
+    }
+
+    /// The other half of "as found": a preview that WAS playing gets its playback back,
+    /// which is what the blanket resume happened to get right.
+    #[test]
+    fn an_export_gives_a_playing_preview_its_playback_back() {
+        let playing = FakePreview::new(true);
+        let snapshot = PausedPreviews::pause([(1, &playing)]);
+        assert!(!playing.playing(), "paused for the duration of the encode");
+
+        snapshot.restore([(1, &playing)]);
+        assert!(playing.playing());
+    }
+
+    /// Each preview gets ITS state back, not the majority's.
+    #[test]
+    fn each_preview_is_restored_independently() {
+        let (a, b) = (FakePreview::new(true), FakePreview::new(false));
+        let snapshot = PausedPreviews::pause([(1, &a), (2, &b)]);
+        snapshot.restore([(1, &a), (2, &b)]);
+        assert_eq!((a.playing(), b.playing()), (true, false));
+    }
+
+    /// A preview born mid-export was never paused by it, so the export has no state of
+    /// its own to hand back — forcing one would overwrite what its creator just pushed.
+    #[test]
+    fn a_preview_created_during_an_export_keeps_its_own_transport() {
+        let existing = FakePreview::new(false);
+        let snapshot = PausedPreviews::pause([(1, &existing)]);
+
+        let newborn = FakePreview::new(true);
+        snapshot.restore([(1, &existing), (2, &newborn)]);
+        assert!(newborn.playing(), "untouched: it is not in the snapshot");
+        assert!(!existing.playing());
+    }
+
+    /// A preview destroyed during the export simply isn't there to restore — no panic,
+    /// and the survivors are still handled.
+    #[test]
+    fn a_preview_destroyed_during_an_export_is_skipped() {
+        let (kept, doomed) = (FakePreview::new(true), FakePreview::new(true));
+        let snapshot = PausedPreviews::pause([(1, &kept), (2, &doomed)]);
+        drop(doomed);
+        snapshot.restore([(1, &kept)]);
+        assert!(kept.playing());
     }
 
     // --- taille de rastérisation de la preview ---------------------------

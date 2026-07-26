@@ -31,6 +31,7 @@ import {
 } from "react";
 import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
 import GradientEditor, { type GradientEditorState } from "@/components/ui/gradient-editor";
+import { useScopedT } from "@/contexts/I18nContext";
 import type {
 	AxcutAsset,
 	AxcutClip,
@@ -70,13 +71,14 @@ export type RightPaneId =
 interface PaneProps {
 	title: string;
 	icon: ReactNode;
-	helpLabel?: string;
 	// P3.3 — contextual help shown in a popover when the ? button is clicked.
-	helpText?: string;
+	helpText: string;
 	children: ReactNode;
 }
 
-function Pane({ title, icon, helpLabel, helpText, children }: PaneProps) {
+function Pane({ title, icon, helpText, children }: PaneProps) {
+	const ts = useScopedT("settings");
+	const helpLabel = ts("panes.help");
 	const [helpOpen, setHelpOpen] = useState(false);
 	return (
 		<div className={`${styles.pane} ${styles.isActive}`}>
@@ -86,8 +88,8 @@ function Pane({ title, icon, helpLabel, helpText, children }: PaneProps) {
 					<button
 						type="button"
 						className={styles.iconBtn}
-						title={helpLabel ?? "Help"}
-						aria-label={helpLabel ?? "Help"}
+						title={helpLabel}
+						aria-label={helpLabel}
 						aria-expanded={helpOpen}
 						onClick={() => setHelpOpen((v) => !v)}
 					>
@@ -114,7 +116,7 @@ function Pane({ title, icon, helpLabel, helpText, children }: PaneProps) {
 						}}
 						onClick={() => setHelpOpen(false)}
 					>
-						{helpText ?? `Settings for ${title.toLowerCase()}.`}
+						{helpText}
 					</div>
 				) : null}
 			</header>
@@ -174,6 +176,7 @@ const IMAGE_ACCEPT = ".jpg,.jpeg,.png,image/jpeg,image/png";
 // paths are restricted to `/wallpapers/...` or the user's own data: URLs from
 // the upload custom flow.
 export function BackgroundPane() {
+	const ts = useScopedT("settings");
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	const [tab, setTab] = useState<"image" | "color" | "gradient">("image");
 	const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -232,9 +235,9 @@ export function BackgroundPane() {
 
 	return (
 		<Pane
-			title="Background"
+			title={ts("background.title")}
 			icon={<Palette size={14} />}
-			helpText="Choose what appears behind the recording: a bundled wallpaper image, a solid color, a gradient, or a custom image from disk."
+			helpText={ts("background.help")}
 		>
 			<div className={styles.paneTabs} role="tablist">
 				<button
@@ -242,21 +245,21 @@ export function BackgroundPane() {
 					className={tab === "image" ? styles.isActive : ""}
 					onClick={() => handleTabChange("image")}
 				>
-					Image
+					{ts("background.image")}
 				</button>
 				<button
 					type="button"
 					className={tab === "color" ? styles.isActive : ""}
 					onClick={() => handleTabChange("color")}
 				>
-					Color
+					{ts("background.color")}
 				</button>
 				<button
 					type="button"
 					className={tab === "gradient" ? styles.isActive : ""}
 					onClick={() => handleTabChange("gradient")}
 				>
-					Gradient
+					{ts("background.gradient")}
 				</button>
 			</div>
 			{tab === "image" ? (
@@ -267,7 +270,7 @@ export function BackgroundPane() {
 						disabled={!hasDocument}
 						onClick={handlePickFile}
 					>
-						Upload custom
+						{ts("background.uploadCustom")}
 					</button>
 					<input
 						ref={fileInputRef}
@@ -283,7 +286,7 @@ export function BackgroundPane() {
 								key={`custom-${url.slice(-32)}`}
 								className={`${styles.bgThumb} ${isSelected(url) ? styles.isActive : ""}`}
 								style={{ background: `center/cover no-repeat url(${url})` }}
-								aria-label="Custom wallpaper"
+								aria-label={ts("background.customWallpaper")}
 								disabled={!hasDocument}
 								onClick={() => void set({ wallpaper: url })}
 							/>
@@ -299,7 +302,7 @@ export function BackgroundPane() {
 									key={path}
 									className={`${styles.bgThumb} ${isSelected(path) ? styles.isActive : ""}`}
 									style={{ background: `center/cover no-repeat url(${previewUrl})` }}
-									aria-label={`Background ${i + 1}`}
+									aria-label={ts("background.imageLabel", { index: i + 1 })}
 									disabled={!hasDocument}
 									onClick={() => void set({ wallpaper: path })}
 								/>
@@ -323,7 +326,7 @@ export function BackgroundPane() {
 								key={bg}
 								className={`${styles.bgThumb} ${isSelected(bg) ? styles.isActive : ""}`}
 								style={{ background: bg }}
-								aria-label={`Gradient ${i + 1}`}
+								aria-label={ts("background.gradientLabel", { index: i + 1 })}
 								disabled={!hasDocument}
 								onClick={() => void set({ wallpaper: bg })}
 							/>
@@ -364,6 +367,7 @@ function BackgroundColorTab({
 	isSelected: (v: string) => boolean;
 	onPick: (next: string) => void;
 }) {
+	const ts = useScopedT("settings");
 	const [hexDraft, setHexDraft] = useState(value.startsWith("#") ? value : "#000000");
 	useEffect(() => {
 		if (value.startsWith("#")) setHexDraft(value);
@@ -386,7 +390,7 @@ function BackgroundColorTab({
 						key={c}
 						className={`${styles.bgThumb} ${isSelected(c) ? styles.isActive : ""}`}
 						style={{ background: c }}
-						aria-label={`Color ${c}`}
+						aria-label={ts("background.colorLabel", { color: c })}
 						disabled={!hasDocument}
 						onClick={() => {
 							onPick(c);
@@ -495,6 +499,7 @@ export function TranscriptPane({
 	canTranscribe: boolean;
 	isTranscribing: boolean;
 }) {
+	const ts = useScopedT("settings");
 	const sections = useMemo(
 		() => buildAggregatedSections(clips, transcripts, assets, trimRanges),
 		[clips, transcripts, assets, trimRanges],
@@ -522,9 +527,9 @@ export function TranscriptPane({
 	if (clips.length === 0 || !hasAnyTranscript) {
 		return (
 			<Pane
-				title="Current transcription"
+				title={ts("transcript.title")}
 				icon={<FileText size={14} />}
-				helpText="Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to mark it as skipped (red). Hover a red span to restore it."
+				helpText={ts("transcript.help")}
 			>
 				<div
 					style={{
@@ -540,10 +545,10 @@ export function TranscriptPane({
 				>
 					<FileText size={28} style={{ color: "var(--dim)" }} />
 					<p style={{ font: "500 13px var(--font-body)", color: "var(--fg-2)" }}>
-						{clips.length === 0 ? "No clips yet" : "No transcript yet"}
+						{clips.length === 0 ? ts("transcript.noClips") : ts("transcript.noTranscript")}
 					</p>
 					<p style={{ font: "400 12px var(--font-body)", color: "var(--muted)", maxWidth: 260 }}>
-						Transcribe uses local Whisper — runs in your browser, no data leaves the device.
+						{ts("transcript.whisperHint")}
 					</p>
 					<button
 						type="button"
@@ -551,7 +556,7 @@ export function TranscriptPane({
 						onClick={onTranscribe}
 						disabled={!canTranscribe || isTranscribing}
 					>
-						{isTranscribing ? "Transcribing…" : "Transcribe now"}
+						{isTranscribing ? ts("transcript.transcribing") : ts("transcript.transcribeNow")}
 					</button>
 				</div>
 			</Pane>
@@ -561,7 +566,7 @@ export function TranscriptPane({
 	return (
 		<div className={`${styles.pane} ${styles.isActive}`}>
 			<header className={styles.paneHead}>
-				<h2>Current transcription</h2>
+				<h2>{ts("transcript.title")}</h2>
 			</header>
 			<div className={styles.paneBody}>
 				{sections.map((section, idx) => (
@@ -603,6 +608,7 @@ function TranscriptClipBlock({
 	onAddTrimRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
 }) {
+	const ts = useScopedT("settings");
 	const { clip, asset, words } = section;
 	const filename = asset?.label ?? clip.assetId;
 	const sourceRangeLabel =
@@ -851,7 +857,7 @@ function TranscriptClipBlock({
 							marginTop: 2,
 						}}
 					>
-						Clip {index + 1} · {sourceRangeLabel}
+						{ts("transcript.clipLabel", { index: index + 1 })} · {sourceRangeLabel}
 					</span>
 				</span>
 			</span>
@@ -865,7 +871,7 @@ function TranscriptClipBlock({
 						fontStyle: "italic",
 					}}
 				>
-					No transcript for this clip — open the asset card and regenerate.
+					{ts("transcript.noClipTranscript")}
 				</p>
 			) : (
 				<div
@@ -875,7 +881,7 @@ function TranscriptClipBlock({
 					contentEditable={!busy}
 					suppressContentEditableWarning
 					spellCheck={false}
-					aria-label={`Transcript for ${filename}`}
+					aria-label={ts("transcript.editorAria", { filename })}
 					aria-multiline="true"
 					onBeforeInput={handleBeforeInput}
 					onKeyDown={handleKeyDown}
@@ -928,12 +934,14 @@ function TranscriptWord({
 	onRestore: (run: TrimRun) => void;
 	onAddTrimRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
 }) {
+	const ts = useScopedT("settings");
 	const [hover, setHover] = useState(false);
 	const removed = !cw.kept;
 
 	if (isSilenceWord(cw.word)) {
 		const durationSec = cw.word.endSec - cw.word.startSec;
-		const label = `[silence ${durationSec.toFixed(1)}s]`;
+		const duration = durationSec.toFixed(1);
+		const label = ts("transcript.silence", { duration });
 		if (removed) {
 			return (
 				<button
@@ -941,8 +949,8 @@ function TranscriptWord({
 					contentEditable={false}
 					data-word-id={cw.word.id}
 					data-silence="true"
-					title={`Restore silence (${durationSec.toFixed(1)}s)`}
-					aria-label={`Restore silence (${durationSec.toFixed(1)}s)`}
+					title={ts("transcript.restoreSilence", { duration })}
+					aria-label={ts("transcript.restoreSilence", { duration })}
 					onClick={(e) => {
 						e.stopPropagation();
 						onRestore({
@@ -977,8 +985,8 @@ function TranscriptWord({
 				contentEditable={false}
 				data-word-id={cw.word.id}
 				data-silence="true"
-				title={`Trim silence (${durationSec.toFixed(1)}s)`}
-				aria-label={`Trim silence (${durationSec.toFixed(1)}s)`}
+				title={ts("transcript.trimSilence", { duration })}
+				aria-label={ts("transcript.trimSilence", { duration })}
 				onClick={(e) => {
 					e.stopPropagation();
 					onAddTrimRange(
@@ -1034,8 +1042,8 @@ function TranscriptWord({
 				<button
 					type="button"
 					contentEditable={false}
-					title={`Restore "${cw.word.text}"`}
-					aria-label={`Restore "${cw.word.text}"`}
+					title={ts("transcript.restoreWord", { word: cw.word.text })}
+					aria-label={ts("transcript.restoreWord", { word: cw.word.text })}
 					onClick={(e) => {
 						e.stopPropagation();
 						// build a minimal TrimRun stub — only trimId is
@@ -1208,6 +1216,7 @@ export type { AxcutWord };
 // ─── Video Effects ─────────────────────────────────────────────────
 
 export function VideoEffectsPane() {
+	const ts = useScopedT("settings");
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 
 	// Push the current frame-styling settings into the native D3D compositor
@@ -1246,13 +1255,9 @@ export function VideoEffectsPane() {
 	]);
 
 	return (
-		<Pane
-			title="Video effects"
-			icon={<Sliders size={14} />}
-			helpText="Frame styling for the recording: background blur, drop shadow, motion blur, corner radius, and padding around the video."
-		>
+		<Pane title={ts("effects.title")} icon={<Sliders size={14} />} helpText={ts("effects.help")}>
 			<div className={styles.paneRow}>
-				<span className="label">Blur BG</span>
+				<span className="label">{ts("effects.blurBg")}</span>
 				<Toggle
 					checked={settings.showBlur}
 					disabled={!hasDocument}
@@ -1266,7 +1271,7 @@ export function VideoEffectsPane() {
 			</div>
 			<div className={styles.sliderGrid}>
 				<SliderCell
-					label="Motion blur"
+					label={ts("effects.motionBlur")}
 					value={settings.motionBlurAmount * 100}
 					min={0}
 					max={100}
@@ -1281,7 +1286,7 @@ export function VideoEffectsPane() {
 					onCommit={() => void commit()}
 				/>
 				<SliderCell
-					label="Shadow"
+					label={ts("effects.shadow")}
 					value={settings.shadowIntensity * 100}
 					min={0}
 					max={100}
@@ -1296,7 +1301,7 @@ export function VideoEffectsPane() {
 					onCommit={() => void commit()}
 				/>
 				<SliderCell
-					label="Roundness"
+					label={ts("effects.roundness")}
 					value={settings.borderRadius}
 					min={0}
 					max={64}
@@ -1312,7 +1317,7 @@ export function VideoEffectsPane() {
 					onCommit={() => void commit()}
 				/>
 				<SliderCell
-					label="Padding"
+					label={ts("effects.padding")}
 					value={settings.padding}
 					min={0}
 					max={100}
@@ -1334,10 +1339,10 @@ export function VideoEffectsPane() {
 // ─── Layout (webcam) ──────────────────────────────────────────────
 
 const WEBCAM_PRESETS = [
-	{ value: "picture-in-picture", label: "Picture in picture" },
-	{ value: "dual-frame", label: "Side by side" },
-	{ value: "vertical-stack", label: "Top / bottom" },
-	{ value: "no-webcam", label: "Screen only" },
+	{ value: "picture-in-picture", labelKey: "layout.pictureInPicture" },
+	{ value: "dual-frame", labelKey: "layout.dualFrame" },
+	{ value: "vertical-stack", labelKey: "layout.verticalStack" },
+	{ value: "no-webcam", labelKey: "layout.noWebcam" },
 ] as const;
 
 // Webcam size (% of frame width) that maps to the native compositor's default PiP webcam
@@ -1347,16 +1352,29 @@ const NATIVE_WEBCAM_BASE_PCT = 16.7;
 
 const CAMERA_SHAPES: Array<{
 	value: "rectangle" | "circle" | "square" | "rounded";
-	label: string;
+	labelKey: string;
 	icon: ReactNode;
 }> = [
-	{ value: "rectangle", label: "Rect", icon: <rect x="3" y="6" width="18" height="12" rx="1" /> },
-	{ value: "circle", label: "Circle", icon: <circle cx="12" cy="12" r="9" /> },
-	{ value: "square", label: "Square", icon: <rect x="4" y="4" width="16" height="16" rx="1" /> },
-	{ value: "rounded", label: "Rounded", icon: <rect x="3" y="6" width="18" height="12" rx="6" /> },
+	{
+		value: "rectangle",
+		labelKey: "layout.shapes.rectangle",
+		icon: <rect x="3" y="6" width="18" height="12" rx="1" />,
+	},
+	{ value: "circle", labelKey: "layout.shapes.circle", icon: <circle cx="12" cy="12" r="9" /> },
+	{
+		value: "square",
+		labelKey: "layout.shapes.square",
+		icon: <rect x="4" y="4" width="16" height="16" rx="1" />,
+	},
+	{
+		value: "rounded",
+		labelKey: "layout.shapes.rounded",
+		icon: <rect x="3" y="6" width="18" height="12" rx="6" />,
+	},
 ];
 
 export function LayoutPane() {
+	const ts = useScopedT("settings");
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	const document = useProjectStore((s) => s.document);
 
@@ -1390,14 +1408,10 @@ export function LayoutPane() {
 		: false;
 	const layoutControlsDisabled = !hasDocument || !hasAnyCamera;
 	return (
-		<Pane
-			title="Layout"
-			icon={<LayoutIcon size={14} />}
-			helpText="How the webcam is composed with the screen: picture-in-picture, vertical stack, dual frame, mask shape, size, and mirroring."
-		>
-			<div className={styles.sectionLabel}>Preset</div>
+		<Pane title={ts("layout.title")} icon={<LayoutIcon size={14} />} helpText={ts("layout.help")}>
+			<div className={styles.sectionLabel}>{ts("layout.preset")}</div>
 			<div className={styles.field}>
-				<label>Layout</label>
+				<label>{ts("layout.title")}</label>
 				<select
 					value={settings.webcamLayoutPreset}
 					disabled={layoutControlsDisabled}
@@ -1407,13 +1421,13 @@ export function LayoutPane() {
 				>
 					{WEBCAM_PRESETS.map((p) => (
 						<option key={p.value} value={p.value}>
-							{p.label}
+							{ts(p.labelKey)}
 						</option>
 					))}
 				</select>
 			</div>
 			<div className={styles.paneRow}>
-				<span className="label">Mirror webcam</span>
+				<span className="label">{ts("layout.mirrorWebcam")}</span>
 				<Toggle
 					checked={settings.webcamMirrored}
 					disabled={layoutControlsDisabled}
@@ -1427,7 +1441,7 @@ export function LayoutPane() {
 			</div>
 			{supportsReactiveZoom ? (
 				<div className={styles.paneRow}>
-					<span className="label">Shrink on zoom</span>
+					<span className="label">{ts("layout.reactiveWebcam")}</span>
 					<Toggle
 						checked={settings.webcamReactiveZoom}
 						disabled={layoutControlsDisabled}
@@ -1437,7 +1451,7 @@ export function LayoutPane() {
 			) : null}
 			{isPip ? (
 				<>
-					<div className={styles.sectionLabel}>Camera shape</div>
+					<div className={styles.sectionLabel}>{ts("layout.webcamShape")}</div>
 					<div
 						style={{
 							display: "grid",
@@ -1478,7 +1492,7 @@ export function LayoutPane() {
 									>
 										{shape.icon}
 									</svg>
-									<span style={{ font: "500 11px/1 var(--font-body)" }}>{shape.label}</span>
+									<span style={{ font: "500 11px/1 var(--font-body)" }}>{ts(shape.labelKey)}</span>
 								</button>
 							);
 						})}
@@ -1489,7 +1503,7 @@ export function LayoutPane() {
 				<div className={styles.sliderGrid}>
 					<div className={`${styles.sliderCell} ${styles.full}`}>
 						<div className="head">
-							<span className="label">Webcam size</span>
+							<span className="label">{ts("layout.webcamSize")}</span>
 							<span className="val">{Math.round(settings.webcamSizePreset)}%</span>
 						</div>
 						<input
@@ -1528,6 +1542,7 @@ function safeAssetUrl(relativePath: string): string {
 }
 
 export function CursorPane() {
+	const ts = useScopedT("settings");
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 
 	// Push cursor settings into the native compositor (initial + on view activation); the
@@ -1557,7 +1572,7 @@ export function CursorPane() {
 		() => [
 			{
 				id: DEFAULT_CURSOR_THEME_ID,
-				name: "Default",
+				name: ts("cursor.themeDefault"),
 				previewUrl: defaultCursorPreviewUrl,
 			},
 			...CURSOR_THEMES.map((theme) => {
@@ -1569,17 +1584,17 @@ export function CursorPane() {
 				};
 			}),
 		],
-		[],
+		[ts],
 	);
 
 	return (
 		<Pane
-			title="Cursor"
+			title={ts("cursor.title")}
 			icon={<MousePointerClick size={14} />}
-			helpText="Cursor rendering from the recorded telemetry: theme, size, smoothing, motion blur, and click-bounce emphasis."
+			helpText={ts("cursor.help")}
 		>
 			<div className={styles.paneRow}>
-				<span className="label">Show cursor</span>
+				<span className="label">{ts("cursor.show")}</span>
 				<Toggle
 					checked={settings.cursorShow}
 					disabled={!hasDocument}
@@ -1592,14 +1607,14 @@ export function CursorPane() {
 				/>
 			</div>
 			<div className={styles.paneRow}>
-				<span className="label">Clip to canvas</span>
+				<span className="label">{ts("cursor.clipToBounds")}</span>
 				<Toggle
 					checked={settings.cursor.clipToBounds}
 					disabled={!hasDocument}
 					onChange={(v) => void set({ cursor: { clipToBounds: v } })}
 				/>
 			</div>
-			<div className={styles.sectionLabel}>Cursor style</div>
+			<div className={styles.sectionLabel}>{ts("cursor.theme")}</div>
 			<div className={styles.cursorGrid}>
 				{cursorThemeOptions.map((option) => {
 					const isActive = settings.cursorTheme === option.id;
@@ -1628,7 +1643,7 @@ export function CursorPane() {
 			</div>
 			<div className={styles.sliderGrid}>
 				<SliderCell
-					label="Size"
+					label={ts("cursor.size")}
 					value={settings.cursor.size * 10}
 					min={5}
 					max={100}
@@ -1644,7 +1659,7 @@ export function CursorPane() {
 					onCommit={() => void commit()}
 				/>
 				<SliderCell
-					label="Smoothing"
+					label={ts("cursor.smoothing")}
 					value={settings.cursor.smoothing * 100}
 					min={0}
 					max={100}
@@ -1659,7 +1674,7 @@ export function CursorPane() {
 					onCommit={() => void commit()}
 				/>
 				<SliderCell
-					label="Motion blur"
+					label={ts("cursor.motionBlur")}
 					value={settings.cursor.motionBlur * 100}
 					min={0}
 					max={100}
@@ -1674,7 +1689,7 @@ export function CursorPane() {
 					onCommit={() => void commit()}
 				/>
 				<SliderCell
-					label="Click bounce"
+					label={ts("cursor.clickBounce")}
 					value={settings.cursor.clickBounce * 10}
 					min={0}
 					max={50}
@@ -1697,15 +1712,12 @@ export function CursorPane() {
 // ─── Timeline (trim waveform) ──────────────────────────────────────
 
 export function TimelinePaneBody() {
+	const ts = useScopedT("settings");
 	const { settings, set, hasDocument } = useEditorSettings();
 	return (
-		<Pane
-			title="Timeline"
-			icon={<CropIcon size={14} />}
-			helpText="Timeline display options, like showing the audio waveform on the trim track."
-		>
+		<Pane title={ts("timeline.title")} icon={<CropIcon size={14} />} helpText={ts("timeline.help")}>
 			<div className={styles.paneRow}>
-				<span className="label">Show audio waveform on trim track</span>
+				<span className="label">{ts("timeline.waveform")}</span>
 				<Toggle
 					checked={settings.showTrimWaveform}
 					disabled={!hasDocument}

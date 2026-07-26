@@ -50,7 +50,14 @@
 		"noWebcam": "Sin cámara",
 		"mirrorWebcam": "Reflejar cámara",
 		"reactiveWebcam": "Reducir al ampliar",
-		"reactiveWebcamDescription": "La cámara se reduce suavemente mientras el vídeo está ampliado, para no estorbar."
+		"reactiveWebcamDescription": "La cámara se reduce suavemente mientras el vídeo está ampliado, para no estorbar.",
+		"help": "Cómo se compone la webcam con la pantalla: imagen en imagen, pila vertical, marco doble, forma de máscara, tamaño y efecto espejo.",
+		"shapes": {
+			"rectangle": "Rect.",
+			"circle": "Círculo",
+			"square": "Cuadrado",
+			"rounded": "Redondeado"
+		}
 	},
 	"effects": {
 		"title": "Efectos de video",
@@ -60,7 +67,8 @@
 		"shadow": "Sombra",
 		"roundness": "Redondez",
 		"padding": "Relleno",
-		"on": "activado"
+		"on": "activado",
+		"help": "Estilo del marco de la grabación: desenfoque de fondo, sombra, desenfoque de movimiento, radio de esquinas y margen alrededor del vídeo."
 	},
 	"background": {
 		"title": "Fondo",
@@ -72,7 +80,11 @@
 		"gradientLabel": "Degradado {{index}}",
 		"colorWheel": "Rueda de colores",
 		"colorPalette": "Paleta de colores",
-		"presets": "Ajustes preestablecidos"
+		"presets": "Ajustes preestablecidos",
+		"help": "Elige qué aparece detrás de la grabación: un fondo incluido, un color sólido, un degradado o una imagen propia del disco.",
+		"customWallpaper": "Fondo personalizado",
+		"imageLabel": "Fondo {{index}}",
+		"colorLabel": "Color {{color}}"
 	},
 	"crop": {
 		"title": "Recortar",
@@ -221,17 +233,38 @@
 		"motionBlur": "Desenfoque de movimiento",
 		"clickBounce": "Rebote al clic",
 		"clipToBounds": "Recortar al lienzo",
-		"clipToBoundsDescription": "Mantiene el cursor dentro del cuadro del vídeo. Desactívalo para dejar que el cursor sobrepase los bordes; útil al hacer zoom o desplazar la imagen."
+		"clipToBoundsDescription": "Mantiene el cursor dentro del cuadro del vídeo. Desactívalo para dejar que el cursor sobrepase los bordes; útil al hacer zoom o desplazar la imagen.",
+		"help": "Representación del cursor a partir de la telemetría grabada: tema, tamaño, suavizado, desenfoque de movimiento y rebote al hacer clic."
 	},
 	"language": {
 		"title": "Idioma"
 	},
 	"timeline": {
 		"title": "Línea de tiempo",
-		"waveform": "Mostrar forma de onda en pista de recorte"
+		"waveform": "Mostrar forma de onda en pista de recorte",
+		"help": "Opciones de visualización de la línea de tiempo, como mostrar la forma de onda en la pista de recorte."
 	},
 	"facets": {
 		"captions": "Subtítulos",
 		"transcript": "Transcripción"
+	},
+	"panes": {
+		"help": "Ayuda"
+	},
+	"transcript": {
+		"title": "Transcripción actual",
+		"help": "Transcripción agregada de todos los clips de la línea de tiempo. Retroceso / Supr sobre una palabra o selección la marca como omitida (en rojo). Pasa el cursor sobre un fragmento rojo para restaurarlo.",
+		"noClips": "Aún no hay clips",
+		"noTranscript": "Aún no hay transcripción",
+		"whisperHint": "La transcripción usa Whisper local: se ejecuta en tu navegador y ningún dato sale del dispositivo.",
+		"transcribeNow": "Transcribir ahora",
+		"transcribing": "Transcribiendo…",
+		"clipLabel": "Clip {{index}}",
+		"noClipTranscript": "Este clip no tiene transcripción: abre la ficha del recurso y vuelve a generarla.",
+		"editorAria": "Transcripción de {{filename}}",
+		"silence": "[silencio {{duration}} s]",
+		"restoreSilence": "Restaurar silencio ({{duration}} s)",
+		"trimSilence": "Recortar silencio ({{duration}} s)",
+		"restoreWord": "Restaurar «{{word}}»"
 	}
 }

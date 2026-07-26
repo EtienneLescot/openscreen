@@ -50,7 +50,14 @@
 		"noWebcam": "Sans webcam",
 		"mirrorWebcam": "Inverser la webcam",
 		"reactiveWebcam": "Réduire au zoom",
-		"reactiveWebcamDescription": "La caméra rétrécit doucement pendant le zoom, pour ne pas gêner."
+		"reactiveWebcamDescription": "La caméra rétrécit doucement pendant le zoom, pour ne pas gêner.",
+		"help": "Composition de la webcam avec l'écran : incrustation, empilement vertical, double cadre, forme du masque, taille et effet miroir.",
+		"shapes": {
+			"rectangle": "Rect.",
+			"circle": "Cercle",
+			"square": "Carré",
+			"rounded": "Arrondi"
+		}
 	},
 	"effects": {
 		"title": "Effets vidéo",
@@ -60,7 +67,8 @@
 		"shadow": "Ombre",
 		"roundness": "Arrondi",
 		"padding": "Marge",
-		"on": "activé"
+		"on": "activé",
+		"help": "Mise en forme du cadre de l'enregistrement : flou d'arrière-plan, ombre portée, flou de mouvement, arrondi des coins et marge autour de la vidéo."
 	},
 	"background": {
 		"title": "Arrière-plan",
@@ -72,7 +80,11 @@
 		"gradientLabel": "Dégradé {{index}}",
 		"colorWheel": "Roue chromatique",
 		"colorPalette": "Palette de couleurs",
-		"presets": "Préréglages"
+		"presets": "Préréglages",
+		"help": "Choisissez ce qui apparaît derrière l'enregistrement : un fond d'écran fourni, une couleur unie, un dégradé, ou une image personnelle depuis le disque.",
+		"customWallpaper": "Fond personnalisé",
+		"imageLabel": "Fond {{index}}",
+		"colorLabel": "Couleur {{color}}"
 	},
 	"crop": {
 		"title": "Recadrage",
@@ -221,17 +233,38 @@
 		"motionBlur": "Flou de mouvement",
 		"clickBounce": "Rebond au clic",
 		"clipToBounds": "Rogner au canevas",
-		"clipToBoundsDescription": "Garde le curseur à l'intérieur du cadre vidéo. Désactivez pour laisser le curseur dépasser les bords — utile en cas de zoom ou de panoramique."
+		"clipToBoundsDescription": "Garde le curseur à l'intérieur du cadre vidéo. Désactivez pour laisser le curseur dépasser les bords — utile en cas de zoom ou de panoramique.",
+		"help": "Rendu du curseur à partir de la télémétrie enregistrée : thème, taille, lissage, flou de mouvement et rebond au clic."
 	},
 	"language": {
 		"title": "Langue"
 	},
 	"timeline": {
 		"title": "Montage",
-		"waveform": "Afficher la forme d'onde sur la piste de découpe"
+		"waveform": "Afficher la forme d'onde sur la piste de découpe",
+		"help": "Options d'affichage de la timeline, comme la forme d'onde audio sur la piste de découpe."
 	},
 	"facets": {
 		"captions": "Sous-titres",
 		"transcript": "Transcription"
+	},
+	"panes": {
+		"help": "Aide"
+	},
+	"transcript": {
+		"title": "Transcription actuelle",
+		"help": "Transcription agrégée de tous les clips de la timeline. Retour arrière / Suppr sur un mot ou une sélection le marque comme ignoré (en rouge). Survolez un passage rouge pour le restaurer.",
+		"noClips": "Aucun clip pour l'instant",
+		"noTranscript": "Aucune transcription pour l'instant",
+		"whisperHint": "La transcription utilise Whisper en local — tout s'exécute dans votre navigateur, aucune donnée ne quitte l'appareil.",
+		"transcribeNow": "Transcrire maintenant",
+		"transcribing": "Transcription…",
+		"clipLabel": "Clip {{index}}",
+		"noClipTranscript": "Aucune transcription pour ce clip — ouvrez la fiche du média et relancez la génération.",
+		"editorAria": "Transcription de {{filename}}",
+		"silence": "[silence {{duration}} s]",
+		"restoreSilence": "Restaurer le silence ({{duration}} s)",
+		"trimSilence": "Couper le silence ({{duration}} s)",
+		"restoreWord": "Restaurer « {{word}} »"
 	}
 }

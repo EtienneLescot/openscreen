@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import type { EditorProjectData } from "@/components/video-editor/projectPersistence";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
+import { useScopedT } from "@/contexts/I18nContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
 import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
 import {
@@ -25,6 +26,7 @@ import {
 	EditClipModal,
 	NewProjectModal,
 	OpenProjectModal,
+	type StartingPoint,
 	UnsavedChangesModal,
 	type UnsavedChoice,
 } from "./Modals";
@@ -43,6 +45,7 @@ interface SeekTarget {
 }
 
 export function NewEditorShell() {
+	const te = useScopedT("editor");
 	const document = useProjectStore((s) => s.document);
 	const projectId = useProjectStore((s) => s.projectId);
 	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
@@ -629,10 +632,13 @@ export function NewEditorShell() {
 		[loadProject],
 	);
 
+	// The dialog's starting point picks the tab the fresh project opens on:
+	// "import" → Media (browse/drop assets), "screen-recording" → Rec (capture).
 	const handleCreateProject = useCallback(
-		async (title: string) => {
+		async (title: string, startingPoint: StartingPoint) => {
 			try {
 				await createProject(title);
+				setMode(startingPoint === "screen-recording" ? "rec" : "media");
 			} catch (err) {
 				toast.error("Could not create project", {
 					description: err instanceof Error ? err.message : String(err),
@@ -1163,7 +1169,7 @@ export function NewEditorShell() {
 			<div className={v4.body} style={{ gridTemplateColumns: bodyColumns }}>
 				{mode === "edit" && chatOpen ? (
 					<>
-						<aside className={v4.agent} aria-label="AI editor">
+						<aside className={v4.agent} aria-label={te("shell.aiEditor")}>
 							<LeftPanel
 								active="chat"
 								assetStatuses={assetStatuses}
@@ -1175,13 +1181,13 @@ export function NewEditorShell() {
 							style={{ left: chatWidthPx }}
 							role="separator"
 							aria-orientation="vertical"
-							aria-label="Resize chat panel"
+							aria-label={te("shell.resizeChatPanel")}
 							onPointerDown={startChatResize}
 						/>
 					</>
 				) : null}
 
-				<section className={v4.stage} aria-label="Preview stage">
+				<section className={v4.stage} aria-label={te("shell.previewStage")}>
 					{mode === "edit" ? (
 						<>
 							<div
@@ -1288,7 +1294,7 @@ export function NewEditorShell() {
 							className={v4.timelineResizeHandle}
 							role="separator"
 							aria-orientation="horizontal"
-							aria-label="Resize timeline"
+							aria-label={te("shell.resizeTimeline")}
 							onPointerDown={startTimelineResize}
 						/>
 					) : null}

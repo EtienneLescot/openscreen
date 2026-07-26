@@ -12,7 +12,7 @@ use napi_derive::napi;
 use poc_d3d::compositor::{live_params_from_scene, Compositor};
 use poc_d3d::cursor::CursorTrack;
 use poc_d3d::d3d::Gpu;
-use poc_d3d::live::LiveView;
+use poc_d3d::live::{LiveView, PausedPreviews};
 use poc_d3d::scene::Scene;
 use poc_d3d::{config, pipeline};
 use std::collections::HashMap;
@@ -267,12 +267,31 @@ fn throttled_progress(
     }
 }
 
-/// Active/désactive la composition de toutes les previews vivantes (même process).
-/// Désactivées, leurs threads de rendu cessent de composer/présenter → GPU libéré.
-fn set_all_previews_playing(playing: bool) {
-    if let Ok(reg) = registry().lock() {
-        for v in reg.values() {
-            v.set_playing(playing);
+/// Pauses every live preview of this process for the duration of an export — their render
+/// threads stop composing/presenting, which frees the GPU's 3D engine (measured: preview on
+/// ~72 fps → preview off ~125 fps) — and gives each one back the transport it was found with
+/// when dropped, including on an early `return Err` or a panic.
+///
+/// Restoring the saved state instead of resuming everything is the whole point; see
+/// `PausedPreviews` for the bug the blanket resume caused (a preview left free-running behind
+/// a paused editor, ending up on another clip's scene with the zoom regions filtered out).
+struct PreviewPause(PausedPreviews<i32>);
+
+impl PreviewPause {
+    fn begin() -> Self {
+        // A poisoned registry means some other napi call panicked mid-mutation; the export
+        // itself is still worth running, we just have no previews we can speak for.
+        Self(match registry().lock() {
+            Ok(reg) => PausedPreviews::pause(reg.iter().map(|(id, view)| (*id, view))),
+            Err(_) => PausedPreviews::default(),
+        })
+    }
+}
+
+impl Drop for PreviewPause {
+    fn drop(&mut self) {
+        if let Ok(reg) = registry().lock() {
+            self.0.restore(reg.iter().map(|(id, view)| (*id, view)));
         }
     }
 }
@@ -282,33 +301,28 @@ impl Task for ExportTask {
     type JsValue = ExportStats;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        // Désactive les previews pendant le rendu pour libérer le moteur 3D du GPU
-        // (mesuré : preview active ~72 fps → preview off ~125 fps). Réactivées ensuite,
-        // même en cas d'erreur.
-        set_all_previews_playing(false);
-        let result = (|| {
-            let dir = fixture_dir();
-            let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
-            let comp = Compositor::new(&gpu).map_err(|e| Error::from_reason(format!("{e:#}")))?;
-            if let Ok(t) = CursorTrack::load(&format!("{dir}/screen.cursor.json"), 100_000.0, 6.0) {
-                comp.set_cursor(t);
-            }
-            let cfg = config::all().pop().expect("au moins une config"); // C8
-            let mut progress = throttled_progress(self.on_progress.take());
-            let s = pipeline::run_composited(
-                &format!("{dir}/screen.mp4"),
-                &format!("{dir}/webcam.mp4"),
-                &self.out_path,
-                &gpu,
-                &comp,
-                &cfg,
-                &mut progress,
-            )
-            .map_err(|e| Error::from_reason(format!("{e:#}")))?;
-            Ok((s.frames as u32, s.wall_s, s.fps, s.video_duration_s))
-        })();
-        set_all_previews_playing(true);
-        result
+        // Previews paused for the whole render (GPU 3D engine freed) and put back exactly as
+        // found when this guard drops — including on the error paths below.
+        let _previews = PreviewPause::begin();
+        let dir = fixture_dir();
+        let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
+        let comp = Compositor::new(&gpu).map_err(|e| Error::from_reason(format!("{e:#}")))?;
+        if let Ok(t) = CursorTrack::load(&format!("{dir}/screen.cursor.json"), 100_000.0, 6.0) {
+            comp.set_cursor(t);
+        }
+        let cfg = config::all().pop().expect("au moins une config"); // C8
+        let mut progress = throttled_progress(self.on_progress.take());
+        let s = pipeline::run_composited(
+            &format!("{dir}/screen.mp4"),
+            &format!("{dir}/webcam.mp4"),
+            &self.out_path,
+            &gpu,
+            &comp,
+            &cfg,
+            &mut progress,
+        )
+        .map_err(|e| Error::from_reason(format!("{e:#}")))?;
+        Ok((s.frames as u32, s.wall_s, s.fps, s.video_duration_s))
     }
 
     fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
@@ -364,7 +378,8 @@ pub struct ExportParamsInput {
 /// `scene_json` (optionnel) = la même scène que la preview live : fond/layout/webcam/curseur —
 /// sans elle on ne retomberait QUE sur le layout fixture A↔B, plus du tout ce que l'utilisateur
 /// a configuré (le bug corrigé ici). Layout/zoom restent statiques (pas encore de zoom regions
-/// ni de camera-fullscreen animés côté export). Réactive les previews après coup (même en erreur).
+/// ni de camera-fullscreen animés côté export). Rend aux previews le transport qu'elles avaient
+/// (même en erreur) — voir `PreviewPause`.
 pub struct ExportMultiTask {
     out_path: String,
     clips: Vec<pipeline::ClipSource>,
@@ -378,79 +393,76 @@ impl Task for ExportMultiTask {
     type JsValue = ExportStats;
 
     fn compute(&mut self) -> Result<Self::Output> {
-        set_all_previews_playing(false);
-        let result = (|| {
-            let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
-            let mut cfg = config::all().pop().expect("au moins une config"); // C8
-            cfg.zoom = false;
-            cfg.layout_anim = false;
-            cfg.mblur_n = 1; // layout statique → pas de motion blur de layout (pas de surcoût)
+        // See `ExportTask::compute` — same pause-and-restore contract, same guard.
+        let _previews = PreviewPause::begin();
+        let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
+        let mut cfg = config::all().pop().expect("au moins une config"); // C8
+        cfg.zoom = false;
+        cfg.layout_anim = false;
+        cfg.mblur_n = 1; // layout statique → pas de motion blur de layout (pas de surcoût)
 
-            // scène de l'app = même chemin que la preview live : fond, layout, webcam, curseur.
-            // JSON absent/invalide → pas de scène (fixture), pareil que si la preview n'en avait
-            // jamais reçu — jamais un fallback masquant, juste rien de configuré.
-            let scene = self.scene_json.as_deref().and_then(|j| Scene::from_json(j).ok());
-            if let Some(scene) = &scene {
-                cfg.bg_blur = scene.effects.blur;
-                cfg.cursor = scene.cursor.show;
-            } else {
-                cfg.cursor = false;
+        // scène de l'app = même chemin que la preview live : fond, layout, webcam, curseur.
+        // JSON absent/invalide → pas de scène (fixture), pareil que si la preview n'en avait
+        // jamais reçu — jamais un fallback masquant, juste rien de configuré.
+        let scene = self.scene_json.as_deref().and_then(|j| Scene::from_json(j).ok());
+        if let Some(scene) = &scene {
+            cfg.bg_blur = scene.effects.blur;
+            cfg.cursor = scene.cursor.show;
+        } else {
+            cfg.cursor = false;
+        }
+
+        let mut export_params = pipeline::ExportParams::default();
+        if let Some(p) = &self.params {
+            if let Some(w) = p.width {
+                export_params.width = w.max(2) & !1; // pair le plus proche (>=2, NV12)
             }
-
-            let mut export_params = pipeline::ExportParams::default();
-            if let Some(p) = &self.params {
-                if let Some(w) = p.width {
-                    export_params.width = w.max(2) & !1; // pair le plus proche (>=2, NV12)
-                }
-                if let Some(h) = p.height {
-                    export_params.height = h.max(2) & !1;
-                }
-                export_params.fps = p.fps;
-                if let Some(codec) = &p.codec {
-                    export_params.codec = match codec.as_str() {
-                        "h264" => pipeline::ExportCodec::H264,
-                        "h265" => pipeline::ExportCodec::H265,
-                        other => {
-                            return Err(Error::from_reason(format!(
-                                "codec d'export \"{other}\" non supporté par le pipeline natif (h264/h265 seulement — pas d'équivalent matériel AMF pour VP9, et le chemin logiciel testé était trop lent pour être utile)"
-                            )));
-                        }
-                    };
-                }
+            if let Some(h) = p.height {
+                export_params.height = h.max(2) & !1;
             }
-
-            // Le compositeur rastérise à la taille RÉELLEMENT encodée — d'où sa
-            // construction ici, une fois `export_params` résolu.
-            //
-            // Avant : il composait toujours en 1920×1080 puis `blit_resized` étirait
-            // vers la taille d'export. Deux défauts, une seule cause — tout export
-            // dépassant 1080p sur un axe était un AGRANDISSEMENT (un 4K portait le
-            // quart de l'information), et tout ratio ≠ 16:9 devait passer par une
-            // compensation géométrique. En construisant le compositeur à la
-            // géométrie de sortie, `blit_resized` devient une identité et les pixels
-            // sont rastérisés exactement là où ils seront encodés.
-            let comp = Compositor::new_sized(&gpu, export_params.width, export_params.height)
-                .map_err(|e| Error::from_reason(format!("{e:#}")))?;
-            if let Some(scene) = &scene {
-                comp.set_live_params(live_params_from_scene(scene));
+            export_params.fps = p.fps;
+            if let Some(codec) = &p.codec {
+                export_params.codec = match codec.as_str() {
+                    "h264" => pipeline::ExportCodec::H264,
+                    "h265" => pipeline::ExportCodec::H265,
+                    other => {
+                        return Err(Error::from_reason(format!(
+                            "codec d'export \"{other}\" non supporté par le pipeline natif (h264/h265 seulement — pas d'équivalent matériel AMF pour VP9, et le chemin logiciel testé était trop lent pour être utile)"
+                        )));
+                    }
+                };
             }
-            comp.set_scene(scene);
+        }
 
-            let mut progress = throttled_progress(self.on_progress.take());
-            let s = pipeline::run_composited_multi(
-                &self.clips,
-                &self.out_path,
-                &gpu,
-                &comp,
-                &cfg,
-                &export_params,
-                &mut progress,
-            )
+        // Le compositeur rastérise à la taille RÉELLEMENT encodée — d'où sa
+        // construction ici, une fois `export_params` résolu.
+        //
+        // Avant : il composait toujours en 1920×1080 puis `blit_resized` étirait
+        // vers la taille d'export. Deux défauts, une seule cause — tout export
+        // dépassant 1080p sur un axe était un AGRANDISSEMENT (un 4K portait le
+        // quart de l'information), et tout ratio ≠ 16:9 devait passer par une
+        // compensation géométrique. En construisant le compositeur à la
+        // géométrie de sortie, `blit_resized` devient une identité et les pixels
+        // sont rastérisés exactement là où ils seront encodés.
+        let comp = Compositor::new_sized(&gpu, export_params.width, export_params.height)
             .map_err(|e| Error::from_reason(format!("{e:#}")))?;
-            Ok((s.frames as u32, s.wall_s, s.fps, s.video_duration_s))
-        })();
-        set_all_previews_playing(true);
-        result
+        if let Some(scene) = &scene {
+            comp.set_live_params(live_params_from_scene(scene));
+        }
+        comp.set_scene(scene);
+
+        let mut progress = throttled_progress(self.on_progress.take());
+        let s = pipeline::run_composited_multi(
+            &self.clips,
+            &self.out_path,
+            &gpu,
+            &comp,
+            &cfg,
+            &export_params,
+            &mut progress,
+        )
+        .map_err(|e| Error::from_reason(format!("{e:#}")))?;
+        Ok((s.frames as u32, s.wall_s, s.fps, s.video_duration_s))
     }
 
     fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
