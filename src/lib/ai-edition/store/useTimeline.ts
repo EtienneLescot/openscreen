@@ -855,8 +855,8 @@ export function useTimeline() {
 	// Reorder a clip to a new index, then resequence timeline positions.
 	// Delegates to the shared document/timeline.ts implementation — the same
 	// function the agent tool-executor uses for "move_clip" ops — so both
-	// paths bump preview.revision consistently instead of maintaining two
-	// copies of the splice/resequence logic that could drift.
+	// paths stay in step instead of maintaining two copies of the
+	// splice/resequence logic that could drift.
 	const moveClip = useCallback(
 		async (clipId: string, toIndex: number) => {
 			if (!document) return;

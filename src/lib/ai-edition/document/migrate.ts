@@ -228,11 +228,6 @@ export function migrateProjectDataToAxcutDocument(
 		annotations: migratedAnnotations,
 		zoomRanges: migratedZoomRanges,
 		legacyEditor,
-		agent: {
-			pendingQuestions: [],
-			suggestions: [],
-			lastAppliedOperations: [],
-		},
 	};
 
 	return documentSchema.parse(draft);
