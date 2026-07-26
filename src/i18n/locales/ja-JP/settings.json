@@ -84,6 +84,8 @@
 		"presets": "プリセット",
 		"help": "録画の背景に表示するものを選びます。同梱の壁紙画像、単色、グラデーション、またはディスク上の任意の画像から選べます。",
 		"customWallpaper": "カスタム壁紙",
+		"unsupportedImage": "対応していない画像です。JPG または PNG ファイルを使用してください。",
+		"imageReadFailed": "この画像ファイルを読み込めませんでした。",
 		"imageLabel": "背景 {{index}}",
 		"colorLabel": "色 {{color}}"
 	},

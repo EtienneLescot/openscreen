@@ -84,6 +84,8 @@
 		"presets": "预设",
 		"help": "选择录制内容背后显示的元素：内置壁纸图片、纯色、渐变，或来自磁盘的自定义图片。",
 		"customWallpaper": "自定义壁纸",
+		"unsupportedImage": "不支持的图片格式。请使用 JPG 或 PNG 文件。",
+		"imageReadFailed": "无法读取该图片文件。",
 		"imageLabel": "背景 {{index}}",
 		"colorLabel": "颜色 {{color}}"
 	},
