@@ -133,19 +133,111 @@ export function removeCaptionTranslation(doc: AxcutDocument, language: string): 
 }
 
 /**
- * Segments of `transcript` that have no text yet in `language` — the work list
- * for a (re)translation run, so an interrupted or extended translation only
- * costs the missing pieces.
+ * The unit of translation: a run of consecutive transcript segments that reads
+ * as one phrase.
+ *
+ * This exists because a Whisper transcript with word timestamps stores **one
+ * segment per word** (see `document/transcribe.ts`). Translating segment by
+ * segment would therefore translate word by word — which produces nonsense in
+ * any language whose word order or agreement differs from the source, and puts
+ * exactly one word on screen at a time. Grouping first is what makes both the
+ * translation and its line layout correct.
  */
-export function untranslatedSegments(
+export interface CaptionTranslationUnit {
+	/** Storage key. Derived from the first segment's id — stable across renders
+	 *  and across settings changes, since it comes from the transcript alone. */
+	id: string;
+	segmentIds: string[];
+	startSec: number;
+	endSec: number;
+	text: string;
+}
+
+/** A pause this long starts a new phrase even mid-sentence. */
+const UNIT_BREAK_GAP_SEC = 0.6;
+/** Hard cap so one unbroken monologue still gets translated in digestible parts. */
+const UNIT_MAX_WORDS = 40;
+
+/** Sentence-final punctuation, Latin + CJK, allowing trailing quotes/brackets. */
+const SENTENCE_END = /[.!?…。！？](["'”’)\]]*)$/;
+
+/**
+ * Keys are prefixed so they can never collide with a bare segment id. An earlier
+ * revision keyed translations per segment; without the prefix, one of those
+ * word-sized translations would silently be read back as a whole phrase's text.
+ */
+function unitKey(firstSegmentId: string): string {
+	return `u:${firstSegmentId}`;
+}
+
+/** Group a transcript into translation units, in time order. */
+export function captionTranslationUnits(transcript: AxcutTranscript): CaptionTranslationUnit[] {
+	const segments = [...transcript.segments]
+		.filter((s) => s.text.trim())
+		.sort((a, b) => a.startSec - b.startSec || a.endSec - b.endSec);
+
+	const units: CaptionTranslationUnit[] = [];
+	let current: CaptionTranslationUnit | null = null;
+	let wordCount = 0;
+
+	const flush = () => {
+		if (current) units.push(current);
+		current = null;
+		wordCount = 0;
+	};
+
+	for (const segment of segments) {
+		const text = segment.text.trim();
+		if (!current) {
+			current = {
+				id: unitKey(segment.id),
+				segmentIds: [segment.id],
+				startSec: segment.startSec,
+				endSec: segment.endSec,
+				text,
+			};
+			wordCount = text.split(/\s+/).length;
+			continue;
+		}
+
+		if (segment.startSec - current.endSec >= UNIT_BREAK_GAP_SEC) {
+			flush();
+			current = {
+				id: unitKey(segment.id),
+				segmentIds: [segment.id],
+				startSec: segment.startSec,
+				endSec: segment.endSec,
+				text,
+			};
+			wordCount = text.split(/\s+/).length;
+			continue;
+		}
+
+		current.segmentIds.push(segment.id);
+		current.endSec = Math.max(current.endSec, segment.endSec);
+		current.text = `${current.text} ${text}`;
+		wordCount += text.split(/\s+/).length;
+
+		if (SENTENCE_END.test(current.text) || wordCount >= UNIT_MAX_WORDS) flush();
+	}
+	flush();
+
+	return units;
+}
+
+/**
+ * Units of `transcript` that have no text yet in `language` — the work list for
+ * a (re)translation run, so an interrupted or extended translation only costs
+ * the missing pieces.
+ */
+export function untranslatedUnits(
 	transcript: AxcutTranscript,
 	translations: CaptionTranslations,
 	language: string,
-): AxcutTranscript["segments"] {
+): CaptionTranslationUnit[] {
 	const done = translations[language]?.byAsset[transcript.assetId] ?? {};
-	return transcript.segments.filter((segment) => {
-		if (!segment.text.trim()) return false;
-		const existing = done[segment.id];
+	return captionTranslationUnits(transcript).filter((unit) => {
+		const existing = done[unit.id];
 		return typeof existing !== "string" || existing.trim().length === 0;
 	});
 }
@@ -156,9 +248,9 @@ export function translationCoverage(
 	translations: CaptionTranslations,
 	language: string,
 ): { translated: number; total: number } {
-	const total = transcript.segments.filter((s) => s.text.trim()).length;
+	const total = captionTranslationUnits(transcript).length;
 	return {
-		translated: total - untranslatedSegments(transcript, translations, language).length,
+		translated: total - untranslatedUnits(transcript, translations, language).length,
 		total,
 	};
 }

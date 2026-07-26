@@ -11,13 +11,16 @@
 
 import { Captions as CaptionsIcon, Languages, Loader2, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
+import ColorPicker from "@/components/ui/color-picker";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { CaptionTextAlign, CaptionVerticalPosition } from "@/lib/ai-edition/captions";
-import { untranslatedSegments } from "@/lib/ai-edition/captions";
+import { untranslatedUnits } from "@/lib/ai-edition/captions";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useCaptions } from "@/lib/ai-edition/store/useCaptions";
 import { nativeBridgeClient } from "@/native";
 import styles from "./NewEditorShell.module.css";
+import { COLOR_PALETTE } from "./RightPanes";
 
 /** The families `src/index.css` already loads for on-canvas text — anything else
  *  would render in the preview but fall back to a default in the export canvas. */
@@ -39,16 +42,6 @@ const CAPTION_FONTS = [
 	"Permanent Marker",
 	"Fira Code",
 	"IBM Plex Mono",
-] as const;
-
-const TEXT_COLORS = ["#ffffff", "#f8fafc", "#fde047", "#34d399", "#60a5fa", "#0f172a"] as const;
-const BACKGROUND_COLORS = [
-	"#000000",
-	"#16171d",
-	"#1e293b",
-	"#334155",
-	"#10b981",
-	"#ffffff",
 ] as const;
 
 /** Offered as translation targets. Codes double as the storage key. */
@@ -116,14 +109,16 @@ export function CaptionsPane({ onTranscribe, isTranscribing }: CaptionsPaneProps
 		setTranslating(true);
 		setTranslateError(null);
 		try {
-			// Only the assets actually on the timeline, and only the segments that
-			// aren't translated yet — a re-run after adding footage costs just the new
-			// material instead of the whole video.
+			// Only the assets actually on the timeline, and only the units that aren't
+			// translated yet — a re-run after adding footage costs just the new
+			// material instead of the whole video. Units, not segments: a Whisper
+			// transcript is one segment per word, and translating single words gives
+			// nonsense in any language that reorders or agrees differently.
 			const assetIds = new Set(doc.timeline.clips.map((c) => c.assetId));
 			let translatedAny = false;
 			for (const transcript of doc.transcripts) {
 				if (!assetIds.has(transcript.assetId)) continue;
-				const pending = untranslatedSegments(transcript, translations, target);
+				const pending = untranslatedUnits(transcript, translations, target);
 				if (pending.length === 0) {
 					translatedAny = true;
 					continue;
@@ -381,13 +376,11 @@ export function CaptionsPane({ onTranscribe, isTranscribing }: CaptionsPaneProps
 						onCommit={() => void commit()}
 					/>
 				</div>
-				<div className={styles.sectionLabel}>{t("captions.textColor")}</div>
-				<SwatchRow
-					colors={TEXT_COLORS}
+				<ColorRow
+					label={t("captions.textColor")}
 					value={settings.color}
 					disabled={disabled}
 					onPick={(color) => void set({ color })}
-					label={t("captions.textColor")}
 				/>
 
 				{/* ── Background ─────────────────────────────────────────── */}
@@ -405,12 +398,11 @@ export function CaptionsPane({ onTranscribe, isTranscribing }: CaptionsPaneProps
 				</div>
 				{settings.backgroundEnabled ? (
 					<>
-						<SwatchRow
-							colors={BACKGROUND_COLORS}
+						<ColorRow
+							label={t("captions.backgroundColor")}
 							value={settings.backgroundColor}
 							disabled={disabled}
 							onPick={(backgroundColor) => void set({ backgroundColor })}
-							label={t("captions.backgroundColor")}
 						/>
 						<div className={styles.sliderGrid}>
 							<SliderCell
@@ -522,66 +514,58 @@ const selectStyle: React.CSSProperties = {
 	maxWidth: 160,
 };
 
-function SwatchRow({
-	colors,
+/**
+ * One "label + swatch" row that opens the app's standard `ColorPicker` (wheel /
+ * palette / hex) in a popover.
+ *
+ * The pane used to carry its own hard-coded caption swatches. That was a third
+ * private palette in the app, and it meant the caption colours behaved unlike
+ * every other colour surface — so it's gone: this defers to the shared
+ * `COLOR_PALETTE` and the shared picker instead.
+ */
+function ColorRow({
+	label,
 	value,
 	disabled,
 	onPick,
-	label,
 }: {
-	colors: readonly string[];
+	label: string;
 	value: string;
 	disabled?: boolean;
 	onPick: (color: string) => void;
-	label: string;
 }) {
+	const ts = useScopedT("settings");
 	return (
-		<div
-			style={{
-				margin: "0 var(--sp-4) 12px",
-				display: "flex",
-				alignItems: "center",
-				gap: 8,
-				flexWrap: "wrap",
-			}}
-		>
-			{colors.map((color) => (
-				<button
-					type="button"
-					key={color}
-					title={color}
-					aria-label={`${label} ${color}`}
-					aria-pressed={value.toLowerCase() === color.toLowerCase()}
-					disabled={disabled}
-					onClick={() => onPick(color)}
-					style={{
-						width: 24,
-						height: 24,
-						borderRadius: "50%",
-						background: color,
-						border:
-							value.toLowerCase() === color.toLowerCase()
-								? "2px solid var(--accent)"
-								: "1px solid var(--border-hi)",
-						cursor: disabled ? "not-allowed" : "pointer",
-					}}
-				/>
-			))}
-			<input
-				type="color"
-				value={value.startsWith("#") ? value : "#ffffff"}
-				disabled={disabled}
-				aria-label={label}
-				onChange={(e) => onPick(e.target.value)}
-				style={{
-					width: 34,
-					height: 26,
-					padding: 0,
-					border: "1px solid var(--border)",
-					borderRadius: 6,
-					background: "var(--surface)",
-				}}
-			/>
+		<div className={styles.paneRow}>
+			<span className="label">{label}</span>
+			<Popover>
+				<PopoverTrigger asChild>
+					<button
+						type="button"
+						aria-label={label}
+						disabled={disabled}
+						style={{
+							width: 46,
+							height: 26,
+							borderRadius: 7,
+							border: "1px solid var(--border-hi)",
+							background: value,
+							cursor: disabled ? "not-allowed" : "pointer",
+						}}
+					/>
+				</PopoverTrigger>
+				<PopoverContent align="end" side="left" style={{ width: 250 }}>
+					<ColorPicker
+						selectedColor={value}
+						colorPalette={[...COLOR_PALETTE]}
+						onUpdateColor={onPick}
+						translations={{
+							colorWheel: ts("annotation.colorWheel"),
+							colorPalette: ts("annotation.colorPalette"),
+						}}
+					/>
+				</PopoverContent>
+			</Popover>
 		</div>
 	);
 }
