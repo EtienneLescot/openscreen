@@ -54,6 +54,8 @@ const OPENROUTER_REASONING_EFFORTS: readonly AgentReasoningEffort[] = [
 ];
 const GOOGLE_REASONING_EFFORTS: readonly AgentReasoningEffort[] = ["none", "low", "medium", "high"];
 
+// Every branch here compares against canonical registry ids —
+// createOpenScreenChatModel normalizes the provider before calling in.
 export function getReasoningCapability(provider: string, model?: string): ReasoningCapability {
 	const def: ProviderDefinition | undefined = getProviderDefinition(provider);
 	const normalizedModel = normalizeModelName(model);
@@ -215,14 +217,16 @@ function isGeminiThinkingModel(model: string): boolean {
 }
 
 function isOpenRouterReasoningModel(model: string): boolean {
-	if (isOpenAIReasoningModel(model)) return true;
-	if (
-		model.startsWith("anthropic/") &&
-		isAnthropicReasoningModel(model.slice("anthropic/".length))
-	) {
-		return true;
-	}
+	// OpenRouter slugs are `vendor/model`, and both vendor matchers are
+	// anchored at the start — so the prefix has to come off first or
+	// `openai/gpt-5` never matches.
+	if (isOpenAIReasoningModel(stripVendorPrefix(model, "openai/"))) return true;
+	if (isAnthropicReasoningModel(stripVendorPrefix(model, "anthropic/"))) return true;
 	return /deepseek-r1/i.test(model) || /qwen.*thinking/i.test(model) || /grok-4/i.test(model);
+}
+
+function stripVendorPrefix(model: string, prefix: string): string {
+	return model.startsWith(prefix) ? model.slice(prefix.length) : model;
 }
 
 function toOpenAIReasoningEffort(effort: AgentReasoningEffort): "low" | "medium" | "high" {
