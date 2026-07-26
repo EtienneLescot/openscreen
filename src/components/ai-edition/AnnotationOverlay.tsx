@@ -1,49 +1,18 @@
-// Port of `src/components/video-editor/AnnotationOverlay.tsx`, adapted for
-// the new editor's CSS-only preview (no Pixi stage to `extract` a frame
-// from): the mosaic blur effect samples pixels directly from the active
-// <video> element via `drawImage` instead of a Pixi-rendered snapshot
-// canvas. Everything else — Rnd drag/resize math, per-type rendering,
-// freehand blur drawing, text animation — is ported verbatim so the preview
-// behaves identically to the legacy editor.
+// Chrome d'édition d'une annotation : cadre de sélection, glissement, poignées de
+// redimensionnement. Les PIXELS de l'annotation — texte, image, flèche, flou — sont peints par le
+// compositeur natif, aperçu compris.
+//
+// Ce fichier était le port du `AnnotationOverlay` de l'éditeur v2 : il rendait les quatre types en
+// DOM et portait la saisie du tracé libre, soit ~400 lignes qui ne s'exécutaient plus depuis que
+// le natif peint l'aperçu. Les garder ne coûtait pas seulement de la lecture : elles décrivaient un
+// rendu concurrent, sur une autre horloge, ce qui avait déjà produit le bug des annotations
+// affichées en double (une copie collée au curseur, un fantôme resté en place jusqu'au
+// relâchement). Le détail reste dans `git log`.
 
-import { type CSSProperties, type PointerEvent, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Rnd } from "react-rnd";
-import { useScopedT } from "@/contexts/I18nContext";
-import { annotationFontSizePx } from "@/lib/ai-edition/annotationScale";
-import {
-	getBlurOverlayColor,
-	getMosaicGridOverlayColor,
-	getNormalizedMosaicBlockSize,
-} from "@/lib/ai-edition/annotations/blurEffects";
-import { DEFAULT_BLUR_BLOCK_SIZE, DEFAULT_BLUR_DATA } from "@/lib/ai-edition/annotations/constants";
-import { getTextAnimationState } from "@/lib/ai-edition/annotations/textAnimation";
 import type { AxcutAnnotationRegion } from "@/lib/ai-edition/schema";
 import { cn } from "@/lib/utils";
-import { getArrowComponent } from "./ArrowSvgs";
-
-type BlurData = NonNullable<AxcutAnnotationRegion["blurData"]>;
-
-const FREEHAND_POINT_THRESHOLD = 1;
-
-function buildBlurPolygonClipPath(points: Array<{ x: number; y: number }>) {
-	if (points.length < 3) return undefined;
-	const polygon = points.map((point) => `${point.x}% ${point.y}%`).join(", ");
-	return `polygon(${polygon})`;
-}
-
-function buildBlurFreehandPath(points: Array<{ x: number; y: number }>, closed = true) {
-	if (closed ? points.length < 3 : points.length < 2) return null;
-	const [firstPoint, ...rest] = points;
-	const path = `M ${firstPoint.x} ${firstPoint.y} ${rest.map((point) => `L ${point.x} ${point.y}`).join(" ")}`;
-	return closed ? `${path} Z` : path;
-}
-
-/**
- * Le compositeur natif est-il responsable des pixels d'annotation ? Constante plutôt que valeur
- * en dur, pour que le point de bascule soit nommé et qu'on retrouve d'un coup tout ce qui en
- * dépend le jour où l'on nettoiera le code de peinture devenu inatteignable.
- */
-const NATIVE_PAINTS_ANNOTATIONS = true;
 
 interface AnnotationOverlayProps {
 	annotation: AxcutAnnotationRegion;
@@ -52,15 +21,11 @@ interface AnnotationOverlayProps {
 	containerHeight: number;
 	onPositionChange: (id: string, position: { x: number; y: number }) => void;
 	onSizeChange: (id: string, size: { width: number; height: number }) => void;
-	onBlurDataChange?: (id: string, blurData: BlurData) => void;
-	onBlurDataCommit?: () => void;
 	/** Écriture disque, appelée une fois en fin de geste — le drag/resize ne fait que du live. */
 	onCommit?: () => void;
 	onClick: (id: string) => void;
 	zIndex: number;
 	isSelectedBoost: boolean;
-	videoElement?: HTMLVideoElement | null;
-	currentTimeMs: number;
 }
 
 export function AnnotationOverlay({
@@ -70,35 +35,17 @@ export function AnnotationOverlay({
 	containerHeight,
 	onPositionChange,
 	onSizeChange,
-	onBlurDataChange,
-	onBlurDataCommit,
 	onCommit,
 	onClick,
 	zIndex,
 	isSelectedBoost,
-	videoElement,
-	currentTimeMs,
 }: AnnotationOverlayProps) {
-	const te = useScopedT("editor");
 	const committedX = (annotation.position.x / 100) * containerWidth;
 	const committedY = (annotation.position.y / 100) * containerHeight;
 	const committedWidth = (annotation.size.width / 100) * containerWidth;
 	const committedHeight = (annotation.size.height / 100) * containerHeight;
 	const blurShape = annotation.type === "blur" ? (annotation.blurData?.shape ?? "rectangle") : null;
-	const isSelectedFreehandBlur = isSelected && blurShape === "freehand";
 	const isDraggingRef = useRef(false);
-	const isDrawingFreehandRef = useRef(false);
-	const freehandPointsRef = useRef<Array<{ x: number; y: number }>>([]);
-	const [isFreehandDrawing, setIsFreehandDrawing] = useState(false);
-	const [draftFreehandPoints, setDraftFreehandPoints] = useState<Array<{ x: number; y: number }>>(
-		[],
-	);
-	const [livePointerPoint, setLivePointerPoint] = useState<{ x: number; y: number } | null>(null);
-	const mosaicCanvasRef = useRef<HTMLCanvasElement | null>(null);
-	const blurOverlayColor =
-		annotation.type === "blur" ? getBlurOverlayColor(annotation.blurData) : "";
-	const mosaicGridOverlayColor =
-		annotation.type === "blur" ? getMosaicGridOverlayColor(annotation.blurData) : "";
 	const [liveRect, setLiveRect] = useState({
 		x: committedX,
 		y: committedY,
@@ -116,393 +63,6 @@ export function AnnotationOverlay({
 	}, [committedHeight, committedWidth, committedX, committedY]);
 
 	const { x, y, width, height } = liveRect;
-
-	// ponytail: legacy sampled from `app.renderer.extract.canvas(app.stage)` —
-	// a Pixi-composited frame. The new preview has no Pixi stage for the main
-	// video, so this samples the <video> element directly. Visually
-	// equivalent as long as nothing else (zoom, cursor) sits between the
-	// video and this overlay in z-order, which matches today's stacking.
-	useEffect(() => {
-		if (annotation.type !== "blur") return;
-		void currentTimeMs;
-
-		const canvas = mosaicCanvasRef.current;
-		const video = videoElement;
-		if (!canvas || !video || video.readyState < 2) return;
-
-		const sourceWidth = video.videoWidth;
-		const sourceHeight = video.videoHeight;
-		const sourceClientWidth = video.clientWidth || containerWidth || sourceWidth;
-		const sourceClientHeight = video.clientHeight || containerHeight || sourceHeight;
-		if (
-			sourceWidth <= 0 ||
-			sourceHeight <= 0 ||
-			sourceClientWidth <= 0 ||
-			sourceClientHeight <= 0
-		) {
-			return;
-		}
-
-		const drawWidth = Math.max(1, Math.round(width));
-		const drawHeight = Math.max(1, Math.round(height));
-		if (drawWidth <= 0 || drawHeight <= 0) return;
-
-		const context = canvas.getContext("2d", { willReadFrequently: true });
-		if (!context) return;
-
-		const scaleX = sourceWidth / sourceClientWidth;
-		const scaleY = sourceHeight / sourceClientHeight;
-		const sourceX = Math.max(0, Math.floor(x * scaleX));
-		const sourceY = Math.max(0, Math.floor(y * scaleY));
-		const sourceSampleWidth = Math.max(1, Math.ceil(drawWidth * scaleX));
-		const sourceSampleHeight = Math.max(1, Math.ceil(drawHeight * scaleY));
-		const clampedSampleWidth = Math.max(1, Math.min(sourceSampleWidth, sourceWidth - sourceX));
-		const clampedSampleHeight = Math.max(1, Math.min(sourceSampleHeight, sourceHeight - sourceY));
-		const blockSize = getNormalizedMosaicBlockSize(annotation.blurData);
-		const downscaledWidth = Math.max(1, Math.round(drawWidth / blockSize));
-		const downscaledHeight = Math.max(1, Math.round(drawHeight / blockSize));
-		canvas.width = downscaledWidth;
-		canvas.height = downscaledHeight;
-
-		context.clearRect(0, 0, downscaledWidth, downscaledHeight);
-		context.imageSmoothingEnabled = true;
-		context.drawImage(
-			video,
-			sourceX,
-			sourceY,
-			clampedSampleWidth,
-			clampedSampleHeight,
-			0,
-			0,
-			downscaledWidth,
-			downscaledHeight,
-		);
-	}, [
-		annotation,
-		containerHeight,
-		containerWidth,
-		height,
-		videoElement,
-		currentTimeMs,
-		width,
-		x,
-		y,
-	]);
-
-	const renderArrow = () => {
-		const direction = annotation.figureData?.arrowDirection || "right";
-		const color = annotation.figureData?.color || "#34B27B";
-		const strokeWidth = annotation.figureData?.strokeWidth || 4;
-		const ArrowComponent = getArrowComponent(direction);
-		return <ArrowComponent color={color} strokeWidth={strokeWidth} />;
-	};
-
-	const normalizePoint = (event: PointerEvent<HTMLDivElement>) => {
-		const rect = event.currentTarget.getBoundingClientRect();
-		const px = ((event.clientX - rect.left) / rect.width) * 100;
-		const py = ((event.clientY - rect.top) / rect.height) * 100;
-		return { x: Math.max(0, Math.min(100, px)), y: Math.max(0, Math.min(100, py)) };
-	};
-
-	const appendFreehandPoint = (point: { x: number; y: number }) => {
-		const points = freehandPointsRef.current;
-		const lastPoint = points[points.length - 1];
-		if (!lastPoint) {
-			points.push(point);
-			return;
-		}
-		const dx = point.x - lastPoint.x;
-		const dy = point.y - lastPoint.y;
-		if (Math.hypot(dx, dy) >= FREEHAND_POINT_THRESHOLD) {
-			points.push(point);
-		}
-	};
-
-	const handleFreehandPointerDown = (event: PointerEvent<HTMLDivElement>) => {
-		if (
-			!isSelected ||
-			annotation.type !== "blur" ||
-			annotation.blurData?.shape !== "freehand" ||
-			!onBlurDataChange
-		) {
-			return;
-		}
-		event.preventDefault();
-		event.stopPropagation();
-		event.currentTarget.setPointerCapture(event.pointerId);
-		isDrawingFreehandRef.current = true;
-		setIsFreehandDrawing(true);
-		const point = normalizePoint(event);
-		freehandPointsRef.current = [point];
-		setDraftFreehandPoints([point]);
-		setLivePointerPoint(point);
-	};
-
-	const handleFreehandPointerMove = (event: PointerEvent<HTMLDivElement>) => {
-		if (!isDrawingFreehandRef.current) return;
-		event.preventDefault();
-		event.stopPropagation();
-		const point = normalizePoint(event);
-		setLivePointerPoint(point);
-		appendFreehandPoint(point);
-		setDraftFreehandPoints([...freehandPointsRef.current]);
-	};
-
-	const finishFreehandPointer = (event: PointerEvent<HTMLDivElement>) => {
-		if (!isDrawingFreehandRef.current || !onBlurDataChange) return;
-		isDrawingFreehandRef.current = false;
-		setIsFreehandDrawing(false);
-		try {
-			event.currentTarget.releasePointerCapture(event.pointerId);
-		} catch {
-			// no-op if already released
-		}
-		const points = [...freehandPointsRef.current];
-		if (livePointerPoint) {
-			const last = points[points.length - 1];
-			if (!last || Math.hypot(last.x - livePointerPoint.x, last.y - livePointerPoint.y) > 0.001) {
-				points.push(livePointerPoint);
-			}
-		}
-		if (points.length >= 3) {
-			const closedPoints = [...points];
-			const first = closedPoints[0];
-			const last = closedPoints[closedPoints.length - 1];
-			if (Math.hypot(last.x - first.x, last.y - first.y) > 0.001) {
-				closedPoints.push({ ...first });
-			}
-			onBlurDataChange(annotation.id, {
-				...(annotation.blurData || { ...DEFAULT_BLUR_DATA, shape: "freehand" }),
-				shape: "freehand",
-				freehandPoints: closedPoints,
-			});
-			setDraftFreehandPoints(closedPoints);
-			onBlurDataCommit?.();
-		}
-		setLivePointerPoint(null);
-	};
-
-	const renderContent = () => {
-		// Le compositeur natif dessine désormais les quatre types d'annotation, PREVIEW COMPRISE.
-		// Les peindre aussi ici donnait deux copies superposées ; et comme les deux ne suivent pas
-		// la même horloge, celle du DOM collait au curseur pendant qu'un fantôme restait en place
-		// jusqu'au relâchement, avant de se recaler avec un écart de taille. Ce composant ne garde
-		// donc que le chrome d'édition — cadre de sélection et poignées — qui n'a rien à faire
-		// dans le rendu final.
-		//
-		// Le code de peinture ci-dessous est laissé en place, inatteignable : le supprimer touche
-		// à ~400 lignes et à la saisie du tracé libre, qui est de toute façon en cours de retrait.
-		// À nettoyer dans un passage dédié plutôt qu'au milieu d'un correctif.
-		if (NATIVE_PAINTS_ANNOTATIONS) return null;
-		switch (annotation.type) {
-			case "text": {
-				const animationState = getTextAnimationState(annotation, currentTimeMs);
-				const typewriterClip =
-					animationState.revealProgress < 1
-						? `inset(0 ${100 - animationState.revealProgress * 100}% 0 0)`
-						: undefined;
-				return (
-					<div
-						className="w-full h-full flex items-center p-2 overflow-hidden"
-						style={{
-							justifyContent:
-								annotation.style.textAlign === "left"
-									? "flex-start"
-									: annotation.style.textAlign === "right"
-										? "flex-end"
-										: "center",
-							alignItems: "center",
-						}}
-					>
-						<span
-							style={{
-								color: annotation.style.color,
-								backgroundColor: annotation.style.backgroundColor,
-								fontSize: `${annotationFontSizePx(annotation.style.fontSize, containerHeight)}px`,
-								fontFamily: annotation.style.fontFamily,
-								fontWeight: annotation.style.fontWeight,
-								fontStyle: annotation.style.fontStyle,
-								textDecoration: annotation.style.textDecoration,
-								textAlign: annotation.style.textAlign,
-								opacity: animationState.opacity,
-								transform: `translate(${animationState.translateX}px, ${animationState.translateY}px) scale(${animationState.scale})`,
-								transformOrigin: "center",
-								clipPath: typewriterClip,
-								WebkitClipPath: typewriterClip,
-								wordBreak: "break-word",
-								whiteSpace: "pre-wrap",
-								boxDecorationBreak: "clone",
-								WebkitBoxDecorationBreak: "clone",
-								padding: "0.1em 0.2em",
-								borderRadius: "4px",
-								lineHeight: "1.4",
-							}}
-						>
-							{annotation.content}
-						</span>
-					</div>
-				);
-			}
-
-			case "image":
-				if (annotation.content?.startsWith("data:image")) {
-					return (
-						<img
-							src={annotation.content}
-							alt={te("annotationOverlay.imageAlt")}
-							className="w-full h-full object-contain"
-							draggable={false}
-						/>
-					);
-				}
-				return (
-					<div className="w-full h-full flex items-center justify-center text-slate-400 text-sm">
-						{te("annotationOverlay.noImage")}
-					</div>
-				);
-
-			case "figure":
-				if (!annotation.figureData) {
-					return (
-						<div className="w-full h-full flex items-center justify-center text-slate-400 text-sm">
-							{te("annotationOverlay.noArrowData")}
-						</div>
-					);
-				}
-				return (
-					<div className="w-full h-full flex items-center justify-center p-2">{renderArrow()}</div>
-				);
-
-			case "blur": {
-				const shape = annotation.blurData?.shape ?? "rectangle";
-				const blockSize = Math.max(
-					1,
-					Math.round(annotation.blurData?.blockSize ?? DEFAULT_BLUR_BLOCK_SIZE),
-				);
-				const activeFreehandPoints =
-					shape === "freehand"
-						? isFreehandDrawing
-							? draftFreehandPoints
-							: (annotation.blurData?.freehandPoints ?? [])
-						: [];
-				const drawingPoints =
-					isFreehandDrawing && livePointerPoint
-						? (() => {
-								const last = activeFreehandPoints[activeFreehandPoints.length - 1];
-								if (!last) return [livePointerPoint];
-								const dx = livePointerPoint.x - last.x;
-								const dy = livePointerPoint.y - last.y;
-								return Math.hypot(dx, dy) > 0.01
-									? [...activeFreehandPoints, livePointerPoint]
-									: activeFreehandPoints;
-							})()
-						: activeFreehandPoints;
-				const clipPath =
-					shape === "freehand" ? buildBlurPolygonClipPath(activeFreehandPoints) : undefined;
-				const freehandPath =
-					shape === "freehand"
-						? buildBlurFreehandPath(
-								isFreehandDrawing ? drawingPoints : activeFreehandPoints,
-								!isFreehandDrawing,
-							)
-						: null;
-				const currentPointerPoint = isFreehandDrawing
-					? livePointerPoint || drawingPoints[drawingPoints.length - 1] || null
-					: null;
-				const shapeBorderRadius = shape === "oval" ? "50%" : shape === "rectangle" ? "8px" : "0";
-				const shouldShowFreehandBlurFill =
-					shape !== "freehand" || (!!clipPath && !isFreehandDrawing);
-				const shapeMaskStyle: CSSProperties = {
-					borderRadius: shapeBorderRadius,
-					clipPath: isFreehandDrawing ? undefined : clipPath,
-					WebkitClipPath: isFreehandDrawing ? undefined : clipPath,
-				};
-				const isFreehandSelected = isSelectedFreehandBlur;
-				return (
-					<div className="w-full h-full relative">
-						<div
-							className="absolute inset-0 overflow-hidden"
-							style={{ ...shapeMaskStyle, isolation: "isolate" }}
-						>
-							<div
-								className="absolute inset-0"
-								style={{
-									...shapeMaskStyle,
-									backgroundColor: blurOverlayColor,
-									opacity: shouldShowFreehandBlurFill ? 1 : 0,
-								}}
-							/>
-							{shouldShowFreehandBlurFill && (
-								<canvas
-									ref={mosaicCanvasRef}
-									className="absolute inset-0 w-full h-full"
-									style={{ ...shapeMaskStyle, imageRendering: "pixelated" }}
-								/>
-							)}
-							{shouldShowFreehandBlurFill && (
-								<div
-									className="absolute inset-0 pointer-events-none"
-									style={{ ...shapeMaskStyle, backgroundColor: blurOverlayColor }}
-								/>
-							)}
-							<div
-								className="absolute inset-0 pointer-events-none"
-								style={{
-									...shapeMaskStyle,
-									backgroundImage: `linear-gradient(${mosaicGridOverlayColor} 1px, transparent 1px), linear-gradient(90deg, ${mosaicGridOverlayColor} 1px, transparent 1px)`,
-									backgroundSize: `${blockSize}px ${blockSize}px`,
-									mixBlendMode: "screen",
-									opacity: 0.35,
-								}}
-							/>
-							{isSelected && shape !== "freehand" && (
-								<div
-									className="absolute inset-0 pointer-events-none border-2 border-[#34B27B]/80"
-									style={{ borderRadius: shapeBorderRadius }}
-								/>
-							)}
-						</div>
-						{isSelected && shape === "freehand" && freehandPath && (
-							<svg
-								viewBox="0 0 100 100"
-								preserveAspectRatio="none"
-								className="absolute inset-0 pointer-events-none"
-							>
-								<path
-									d={freehandPath}
-									fill="none"
-									stroke="#34B27B"
-									strokeWidth="0.55"
-									strokeLinecap="round"
-									strokeLinejoin="round"
-								/>
-								{currentPointerPoint && (
-									<circle
-										cx={currentPointerPoint.x}
-										cy={currentPointerPoint.y}
-										r="0.6"
-										fill="#34B27B"
-									/>
-								)}
-							</svg>
-						)}
-						{isFreehandSelected && (
-							<div
-								className="absolute inset-0 cursor-crosshair"
-								onPointerDown={handleFreehandPointerDown}
-								onPointerMove={handleFreehandPointerMove}
-								onPointerUp={finishFreehandPointer}
-								onPointerCancel={finishFreehandPointer}
-							/>
-						)}
-					</div>
-				);
-			}
-
-			default:
-				return null;
-		}
-	};
 
 	return (
 		<Rnd
@@ -584,8 +144,11 @@ export function AnnotationOverlay({
 				boxShadow:
 					isSelected && annotation.type !== "blur" ? "0 0 0 1px rgba(52, 178, 123, 0.35)" : "none",
 			}}
-			enableResizing={isSelected && !isSelectedFreehandBlur}
-			disableDragging={!isSelected || isSelectedFreehandBlur}
+			// Un flou en tracé libre se déplace et se redimensionne comme les autres : ce qui le
+			// bloquait, c'était la zone de saisie du tracé qui capturait le pointeur — et elle est
+			// partie avec l'outil.
+			enableResizing={isSelected}
+			disableDragging={!isSelected}
 			resizeHandleStyles={{
 				topLeft: {
 					width: "12px",
@@ -631,12 +194,20 @@ export function AnnotationOverlay({
 		>
 			<div
 				className={cn(
-					"w-full h-full",
+					"w-full h-full relative",
 					annotation.type !== "blur" && "rounded-lg",
 					isSelected && annotation.type !== "blur" && "shadow-lg",
 				)}
 			>
-				{renderContent()}
+				{/* Le cadre d'un flou sélectionné, à la forme du masque. Les autres types portent le
+				    leur sur le `Rnd` lui-même ; un flou n'en a pas, pour ne pas encadrer la zone qu'il
+				    est censé cacher — sans ce liseré il n'aurait AUCUN retour de sélection. */}
+				{isSelected && annotation.type === "blur" ? (
+					<div
+						className="absolute inset-0 pointer-events-none border-2 border-[#34B27B]/80"
+						style={{ borderRadius: blurShape === "oval" ? "50%" : "8px" }}
+					/>
+				) : null}
 			</div>
 		</Rnd>
 	);

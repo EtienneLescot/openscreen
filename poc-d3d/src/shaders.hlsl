@@ -78,6 +78,19 @@ float sd_round_rect(float2 p, float2 halfsz, float r)
     return length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
 }
 
+// (s, t, ok) du warp inverse du mode 8 pour une racine `t` donnée : `ok` = 1 quand le couple
+// tombe dans le quad projeté (même marge 0.02 qu'ailleurs). Les deux racines doivent être
+// essayées — trancher sur `t` seul retient parfois celle dont le `s` sort du quad, et le pixel
+// est alors déclaré dehors alors que l'autre racine le plaçait dedans.
+float3 quad_st_for_root(float t, float2 e, float2 f, float2 g, float2 h)
+{
+    float denomX = e.x + g.x * t;
+    float denomY = e.y + g.y * t;
+    float s = (abs(denomX) > abs(denomY)) ? (h.x - f.x * t) / denomX : (h.y - f.y * t) / denomY;
+    float ok = (s >= -0.02 && s <= 1.02 && t >= -0.02 && t <= 1.02) ? 1.0 : 0.0;
+    return float3(s, t, ok);
+}
+
 float4 ps_main(VSOut i) : SV_Target
 {
     // mode 8 : écran tilté en 3D (zoom regions "rotation" : iso/left/right). `dst`/`quad_px`
@@ -91,6 +104,35 @@ float4 ps_main(VSOut i) : SV_Target
     // droit) il ne faut SURTOUT pas re-multiplier ici : les bords adoucis des glyphes
     // deviendraient deux fois trop transparents et le texte paraîtrait délavé.
     // `color.a` reste l'opacité globale (fondu d'animation).
+    //
+    // mode 12 : ombre du quad PROJETÉ. Même pénombre que le mode 2, mais portée par le
+    // quadrilatère incliné au lieu d'un rect droit — une ombre droite derrière un écran penché ne
+    // se lit pas comme son ombre, mais comme une seconde surface posée derrière. Les coins
+    // arrivent dans la même convention que le mode 8 (fx = TL/TR, src_prev = BR/BL, px locaux) ;
+    // mb.y = étalement de la pénombre en px.
+    if (mode > 11.5)
+    {
+        float2 c0 = fx.xy, c1 = fx.zw, c2 = src_prev.xy, c3 = src_prev.zw;
+        float2 quad[5] = { c0, c1, c2, c3, c0 };
+        // Distance signée au quadrilatère CONVEXE : le max des demi-plans sortants. Exacte hors
+        // des coins, et la pénombre couvre largement l'écart — inutile de payer une SDF de
+        // polygone complète pour une ombre floue.
+        float d = -1e9;
+        [unroll] for (int k = 0; k < 4; k++)
+        {
+            float2 a = quad[k];
+            float2 ed = quad[k + 1] - a;
+            // TL→TR→BR→BL tourne dans le sens horaire en y-bas, donc (ed.y, -ed.x) sort du quad.
+            // `max` sur la longueur plutôt que `normalize` : une arête dégénérée donnerait un NaN
+            // qui contaminerait le `max` et effacerait l'ombre entière.
+            float2 n = float2(ed.y, -ed.x) / max(length(ed), 1e-6);
+            d = max(d, dot(i.local - a, n));
+        }
+        float spread = max(mb.y, 1e-3);
+        float a = color.a * (1.0 - smoothstep(0.0, spread, d));
+        return float4(color.rgb * a, a);
+    }
+
     if (mode > 10.5)
     {
         float4 s = texImg.Sample(samp, i.uv);
@@ -183,28 +225,36 @@ float4 ps_main(VSOut i) : SV_Target
         float k2 = g.x * f.y - g.y * f.x;
         float k1 = e.x * f.y - e.y * f.x + h.x * g.y - h.y * g.x;
         float k0 = h.x * e.y - h.y * e.x;
-        float t;
-        if (abs(k2) < 0.001)
+        float3 r;
+        // Seuil RELATIF. Les présets « left »/« right » sont une rotation Y pure : le quad
+        // projeté est un trapèze symétrique dont `f` et `g` sont tous deux verticaux, donc
+        // k2 = 0 EXACTEMENT — au bruit d'arrondi près, et ce bruit vaut quelques centièmes sur
+        // des produits en 10^6. Un seuil absolu de 0.001 le manquait : l'équation passait dans la
+        // branche quadratique avec k2 ≈ 0, où `(-k1 + sqrt(k1²)) / 2k2` ne renvoie que du bruit —
+        // soustraire deux nombres presque égaux, puis diviser par presque rien. La quasi-totalité
+        // du quad était rejetée, ce qui se voyait comme un écran incliné tranché net.
+        if (abs(k2) < 1e-5 * abs(k1))
         {
-            t = (abs(k1) < 0.0001) ? 0.0 : -k0 / k1;
+            float t = (abs(k1) < 1e-6) ? 0.0 : -k0 / k1;
+            r = quad_st_for_root(t, e, f, g, h);
         }
         else
         {
             float disc = k1 * k1 - 4.0 * k2 * k0;
             if (disc < 0.0) return float4(0.0, 0.0, 0.0, 0.0);
-            float sq = sqrt(disc);
-            float t1 = (-k1 + sq) / (2.0 * k2);
-            float t2 = (-k1 - sq) / (2.0 * k2);
-            t = (t1 >= -0.02 && t1 <= 1.02) ? t1 : t2;
+            // Forme stable : `q` n'oppose jamais deux quantités voisines, et les deux racines
+            // s'en déduisent exactement. `sign()` est évité parce qu'il vaut 0 en 0, ce qui
+            // annulerait `q` là où la formule reste parfaitement définie.
+            float q = -0.5 * (k1 + (k1 >= 0.0 ? 1.0 : -1.0) * sqrt(disc));
+            float3 r0 = quad_st_for_root(q / k2, e, f, g, h);
+            float3 r1 = quad_st_for_root(abs(q) > 0.0 ? k0 / q : q / k2, e, f, g, h);
+            r = (r0.z > 0.5) ? r0 : r1;
         }
-        float denomX = e.x + g.x * t;
-        float denomY = e.y + g.y * t;
-        float s = (abs(denomX) > abs(denomY)) ? (h.x - f.x * t) / denomX : (h.y - f.y * t) / denomY;
-        if (s < -0.02 || s > 1.02 || t < -0.02 || t > 1.02)
+        if (r.z < 0.5)
         {
             return float4(0.0, 0.0, 0.0, 0.0); // hors du quad projeté
         }
-        float2 uv = float2(lerp(src.x, src.z, saturate(s)), lerp(src.y, src.w, saturate(t)));
+        float2 uv = float2(lerp(src.x, src.z, saturate(r.x)), lerp(src.y, src.w, saturate(r.y)));
         return float4(sample_yuv(uv), 1.0);
     }
 

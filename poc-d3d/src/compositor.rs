@@ -1366,6 +1366,50 @@ impl Compositor {
         self.draw_solid(&cb);
     }
 
+    /// Ombre d'un écran incliné en 3D : la pénombre suit le QUADRILATÈRE projeté (mode 12), pas
+    /// son rect englobant. `corners` sont les 4 coins (TL, TR, BR, BL) en px relatifs au centre,
+    /// tels que `rotated_quad_corners_px` les rend ; `center_px` est ce centre à l'écran.
+    pub unsafe fn draw_quad_shadow(
+        &self,
+        corners: &[(f32, f32); 4],
+        center_px: [f32; 2],
+        spread: f32,
+        offset_px: [f32; 2],
+        opacity: f32,
+    ) {
+        let (min_x, max_x) =
+            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| (mn.min(x), mx.max(x)));
+        let (min_y, max_y) =
+            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| (mn.min(y), mx.max(y)));
+        // La boîte de rendu doit contenir la pénombre entière, sinon elle se coupe net — le
+        // quadrilatère seul ne suffit pas.
+        let box_w = (max_x - min_x) + 2.0 * spread;
+        let box_h = (max_y - min_y) + 2.0 * spread;
+        let origin_x = center_px[0] + min_x - spread + offset_px[0];
+        let origin_y = center_px[1] + min_y - spread + offset_px[1];
+        // Coins en px locaux à cette boîte, même convention que le mode 8.
+        let local = |(x, y): (f32, f32)| -> [f32; 2] { [x - min_x + spread, y - min_y + spread] };
+        let [tl0, tl1] = local(corners[0]);
+        let [tr0, tr1] = local(corners[1]);
+        let [br0, br1] = local(corners[2]);
+        let [bl0, bl1] = local(corners[3]);
+        self.draw_solid(&LayerCB {
+            dst: [
+                origin_x / self.rw(),
+                origin_y / self.rh(),
+                box_w / self.rw(),
+                box_h / self.rh(),
+            ],
+            quad_px: [box_w, box_h],
+            mode: 12.0,
+            color: [0.0, 0.0, 0.0, opacity],
+            fx: [tl0, tl1, tr0, tr1],
+            src_prev: [br0, br1, bl0, bl1],
+            mb: [0.0, spread, 1.0, 0.0],
+            ..Default::default()
+        });
+    }
+
     /// Compose une frame animée (§6/§8) : fond flouté + screen zoomé (padding, coins, ombre)
     /// + webcam crop carré (coins, ombre), placements interpolés A↔B par la timeline.
     pub unsafe fn compose_frame(
@@ -1817,20 +1861,26 @@ impl Compositor {
         let [su0_p, sv0_p, su1_p, sv1_p] =
             cover(screen_source_rect(u_max, v_max, active_crop, pp.zoom, p.focus));
         let (hu_p, hv_p) = ((su1_p - su0_p) * 0.5, (sv1_p - sv0_p) * 0.5);
-        // L'ombre est dessinée à partir du rect NON pivoté. Tant que l'écran est droit, c'est
-        // exactement sa silhouette ; incliné en 3D, ce n'en est plus une — on voyait alors un
-        // rectangle arrondi bien droit derrière un écran penché, détaché de lui. Une ombre fausse
-        // renseigne moins que pas d'ombre : on la supprime pendant le tilt, en attendant une
-        // silhouette qui suive réellement le plan projeté.
-        if cfg.shadow && crate::regions::is_identity_rotation(zoom_rotation) {
-            self.draw_shadow(
-                s_dst,
-                s_px,
-                s_radius,
-                SCREEN_SHADOW_SPREAD_FRAC * frame_min_px,
-                [0.0, SCREEN_SHADOW_OFFSET_FRAC * frame_min_px],
-                0.45 * lp.shadow_scale,
-            );
+        // Géométrie du tilt, calculée UNE fois : l'ombre et l'écran doivent porter exactement le
+        // même quadrilatère. Deux calculs séparés, c'est une ombre qui se décolle dès qu'un des
+        // deux change.
+        let tilt_corners = (!crate::regions::is_identity_rotation(zoom_rotation))
+            .then(|| crate::regions::rotated_quad_corners_px(s_px[0], s_px[1], zoom_rotation));
+        let quad_center_px =
+            [(s_dst[0] + s_dst[2] * 0.5) * self.rw(), (s_dst[1] + s_dst[3] * 0.5) * self.rh()];
+        // L'ombre suit la silhouette réellement affichée : le rect arrondi quand l'écran est
+        // droit, le quadrilatère projeté quand il est incliné. Un rect droit derrière un écran
+        // penché ne se lisait pas comme son ombre mais comme une seconde surface.
+        if cfg.shadow {
+            let spread = SCREEN_SHADOW_SPREAD_FRAC * frame_min_px;
+            let offset = [0.0, SCREEN_SHADOW_OFFSET_FRAC * frame_min_px];
+            let opacity = 0.45 * lp.shadow_scale;
+            match tilt_corners {
+                None => self.draw_shadow(s_dst, s_px, s_radius, spread, offset, opacity),
+                Some(corners) => {
+                    self.draw_quad_shadow(&corners, quad_center_px, spread, offset, opacity)
+                }
+            }
         }
         if crate::regions::is_identity_rotation(zoom_rotation) {
             self.draw_video(
@@ -1853,9 +1903,10 @@ impl Compositor {
             // Tilt 3D (zoom "rotation" iso/left/right) : warp bilinéaire inverse (mode 8, voir
             // shaders.hlsl) — pas de motion blur ni de coins arrondis dans ce chemin (le tilt
             // est un effet ponctuel bref, cette simplification ne se voit pas).
-            let corners = crate::regions::rotated_quad_corners_px(s_px[0], s_px[1], zoom_rotation);
-            let (cx_px, cy_px) =
-                ((s_dst[0] + s_dst[2] * 0.5) * self.rw(), (s_dst[1] + s_dst[3] * 0.5) * self.rh());
+            let corners = tilt_corners.unwrap_or_else(|| {
+                crate::regions::rotated_quad_corners_px(s_px[0], s_px[1], zoom_rotation)
+            });
+            let (cx_px, cy_px) = (quad_center_px[0], quad_center_px[1]);
             let (min_x, max_x) = corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| {
                 (mn.min(x), mx.max(x))
             });
@@ -2285,14 +2336,48 @@ impl Compositor {
                     }) else {
                         continue;
                     };
+                    // Animation d'apparition. Elle est comptée en temps SOURCE (le seul dont on
+                    // dispose ici) : dans une région accélérée, elle défile donc au rythme du
+                    // clip. À vitesse 1 — le cas de toutes les annotations existantes — c'est
+                    // exactement le timing de l'aperçu DOM.
+                    let anim = crate::text_anim::text_animation_state(
+                        text.animation.as_deref(),
+                        (t - annotation.start_sec as f32) * 1000.0,
+                    );
+                    // Les décalages sont donnés à la hauteur de référence : on les ramène à la
+                    // sortie, comme la taille de police, pour que l'animation ait la même
+                    // amplitude visuelle quelle que soit la résolution.
+                    let anim_px = self.rh() / crate::text_anim::ANIMATION_REFERENCE_HEIGHT;
+                    let (mut ax, mut ay, mut aw, mut ah) = (
+                        dst[0] + anim.translate_x * anim_px / self.rw(),
+                        dst[1] + anim.translate_y * anim_px / self.rh(),
+                        dst[2],
+                        dst[3],
+                    );
+                    if (anim.scale - 1.0).abs() > 1e-4 {
+                        // Mise à l'échelle autour du CENTRE de la boîte : un texte qui grossit par
+                        // son coin haut-gauche glisserait en biais au lieu de gonfler sur place.
+                        let (cx, cy) = (ax + aw * 0.5, ay + ah * 0.5);
+                        aw *= anim.scale;
+                        ah *= anim.scale;
+                        ax = cx - aw * 0.5;
+                        ay = cy - ah * 0.5;
+                    }
+                    // Machine à écrire : on ne rogne que la LARGEUR, source et destination
+                    // ensemble, ce qui reproduit le `inset(0 X% 0 0)` de l'aperçu sans redemander
+                    // une rastérisation par caractère.
+                    let reveal = anim.reveal.clamp(0.0, 1.0);
+                    if reveal <= 0.0 {
+                        continue;
+                    }
                     self.ctx.PSSetShaderResources(2, Some(&[Some(srv)]));
                     self.draw_solid(&LayerCB {
-                        dst,
-                        src: [0.0, 0.0, 1.0, 1.0],
-                        quad_px,
+                        dst: [ax, ay, aw * reveal, ah],
+                        src: [0.0, 0.0, reveal, 1.0],
+                        quad_px: [aw * reveal * self.rw(), ah * self.rh()],
                         // mode 11 : sprite en alpha DÉJÀ prémultiplié (ce que produit D2D).
                         mode: 11.0,
-                        color: [1.0, 1.0, 1.0, 1.0],
+                        color: [1.0, 1.0, 1.0, anim.opacity],
                         ..Default::default()
                     });
                 }
@@ -2769,6 +2854,30 @@ impl Compositor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Le HLSL est compilé au démarrage du compositeur : jusqu'ici une faute dedans ne se voyait
+    /// qu'à l'exécution, donc après un rebuild du natif ET un relancement de l'app. `D3DCompile`
+    /// ne demande aucun device — le compilateur seul suffit, et ça tient en quelques
+    /// millisecondes.
+    #[test]
+    fn every_shader_entry_point_compiles() {
+        let hlsl = include_bytes!("shaders.hlsl");
+        for (entry, target) in [
+            (&b"vs_main\0"[..], &b"vs_5_0\0"[..]),
+            (&b"ps_main\0"[..], &b"ps_5_0\0"[..]),
+            (&b"vs_fs\0"[..], &b"vs_5_0\0"[..]),
+            (&b"ps_y\0"[..], &b"ps_5_0\0"[..]),
+            (&b"ps_uv\0"[..], &b"ps_5_0\0"[..]),
+            (&b"ps_blur\0"[..], &b"ps_5_0\0"[..]),
+            (&b"ps_tex\0"[..], &b"ps_5_0\0"[..]),
+            (&b"ps_kawase_down\0"[..], &b"ps_5_0\0"[..]),
+            (&b"ps_kawase_up\0"[..], &b"ps_5_0\0"[..]),
+        ] {
+            let name = String::from_utf8_lossy(&entry[..entry.len() - 1]).to_string();
+            unsafe { compile(hlsl, entry, target) }
+                .unwrap_or_else(|e| panic!("{name} ne compile pas : {e}"));
+        }
+    }
 
     fn assert_rect(actual: [f32; 4], expected: [f32; 4]) {
         for (actual, expected) in actual.into_iter().zip(expected) {

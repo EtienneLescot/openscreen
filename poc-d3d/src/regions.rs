@@ -773,4 +773,117 @@ mod tilt_tests {
         let top_edge_slope = (corners[1].1 - corners[0].1).abs();
         assert!(top_edge_slope > 1.0, "arête supérieure horizontale : le tilt a disparu");
     }
+
+    // ---- Mapping inverse du mode 8, reproduit à l'identique -------------------------------
+    // Le pixel shader retrouve (s,t) dans le quad projeté en résolvant un système quadratique.
+    // Le miroir ci-dessous est une COPIE de `shaders.hlsl` (mode 8) : même algèbre, même choix
+    // de racine, mêmes tolérances. Il sert à interroger ce mapping sans GPU — un bord droit qui
+    // tranche un écran penché ne peut venir que de trois endroits (les coins, ce mapping, le
+    // rect source), et c'est le seul des trois qu'on ne pouvait pas encore examiner.
+
+    fn cross2(a: (f32, f32), b: (f32, f32)) -> f32 {
+        a.0 * b.1 - a.1 * b.0
+    }
+
+    fn sub(a: (f32, f32), b: (f32, f32)) -> (f32, f32) {
+        (a.0 - b.0, a.1 - b.1)
+    }
+
+    /// Point du quad pour un couple (s,t) — la direction que le shader inverse.
+    fn forward_bilinear(corners: &[(f32, f32); 4], s: f32, t: f32) -> (f32, f32) {
+        let (c00, c10, c11, c01) = (corners[0], corners[1], corners[2], corners[3]);
+        let e = sub(c10, c00);
+        let f = sub(c01, c00);
+        let g = (c00.0 - c10.0 - c01.0 + c11.0, c00.1 - c10.1 - c01.1 + c11.1);
+        (c00.0 + e.0 * s + f.0 * t + g.0 * s * t, c00.1 + e.1 * s + f.1 * t + g.1 * s * t)
+    }
+
+    /// `None` = le shader rend ce pixel TRANSPARENT (donc un trou dans l'écran incliné).
+    fn shader_inverse_bilinear(corners: &[(f32, f32); 4], p: (f32, f32)) -> Option<(f32, f32)> {
+        let (c00, c10, c11, c01) = (corners[0], corners[1], corners[2], corners[3]);
+        let e = sub(c10, c00);
+        let f = sub(c01, c00);
+        let g = (c00.0 - c10.0 - c01.0 + c11.0, c00.1 - c10.1 - c01.1 + c11.1);
+        let h = sub(p, c00);
+        let k2 = cross2(g, f);
+        let k1 = cross2(e, f) + cross2(h, g);
+        let k0 = cross2(h, e);
+        // Pour une racine `t` candidate, le `s` correspondant — et si le couple tombe dans le quad.
+        let st_for_root = |t: f32| -> Option<(f32, f32)> {
+            let denom_x = e.0 + g.0 * t;
+            let denom_y = e.1 + g.1 * t;
+            let s = if denom_x.abs() > denom_y.abs() {
+                (h.0 - f.0 * t) / denom_x
+            } else {
+                (h.1 - f.1 * t) / denom_y
+            };
+            ((-0.02..=1.02).contains(&s) && (-0.02..=1.02).contains(&t)).then_some((s, t))
+        };
+        // Seuil RELATIF. Un prését « left »/« right » est une rotation Y pure : le quad projeté
+        // est un trapèze symétrique dont `f` et `g` sont tous deux verticaux, donc k2 = 0
+        // exactement — au bruit d'arrondi près, et ce bruit vaut quelques centièmes sur des
+        // produits en 10^6. Un seuil absolu de 0.001 le manquait, l'équation partait dans la
+        // branche quadratique avec un k2 ≈ 0, et `(-k1 + sqrt(k1²)) / 2k2` y perd toute
+        // précision : soustraire deux nombres presque égaux ne laisse que du bruit, divisé
+        // ensuite par un k2 minuscule. C'est ça qui amputait l'écran incliné.
+        if k2.abs() < 1e-5 * k1.abs() {
+            let t = if k1.abs() < 1e-6 { 0.0 } else { -k0 / k1 };
+            return st_for_root(t);
+        }
+        let disc = k1 * k1 - 4.0 * k2 * k0;
+        if disc < 0.0 {
+            return None;
+        }
+        // Forme stable : `q` évite la soustraction catastrophique, et les deux racines s'en
+        // déduisent sans jamais retrancher deux quantités voisines. Le signe s'écrit en ternaire
+        // et non via `signum`, pour coller au shader — où `sign()` vaut 0 en 0 et annulerait `q`.
+        let sign_k1 = if k1 >= 0.0 { 1.0 } else { -1.0 };
+        let q = -0.5 * (k1 + sign_k1 * disc.sqrt());
+        let roots = [q / k2, if q.abs() > 0.0 { k0 / q } else { q / k2 }];
+        // Les DEUX racines sont essayées : trancher sur `t` seul retenait parfois celle dont le
+        // `s` tombe hors du quad, et le pixel était alors déclaré dehors alors que l'autre racine
+        // le plaçait dedans.
+        st_for_root(roots[0]).or_else(|| st_for_root(roots[1]))
+    }
+
+    #[test]
+    fn the_shader_mapping_covers_the_whole_tilted_quad() {
+        // Le bug rapporté : « une sorte d'overflow hidden qui tronque le screen recording ». Si le
+        // mapping inverse perd des pixels pourtant intérieurs au quad, le trou a exactement cette
+        // allure — un bord net, sans rapport avec la géométrie visible.
+        for (name, rot) in [
+            ("iso", rotation3d_for(&Some("iso".into()))),
+            ("left", rotation3d_for(&Some("left".into()))),
+            ("right", rotation3d_for(&Some("right".into()))),
+        ] {
+            let corners = rotated_quad_corners_px(1920.0, 1080.0, rot);
+            let mut dropped = Vec::new();
+            let n = 64;
+            for i in 0..=n {
+                for j in 0..=n {
+                    // On reste à un cheveu des arêtes : le contour exact est une frontière où le
+                    // rejet est légitime.
+                    let s = 0.002 + (i as f32 / n as f32) * 0.996;
+                    let t = 0.002 + (j as f32 / n as f32) * 0.996;
+                    let p = forward_bilinear(&corners, s, t);
+                    match shader_inverse_bilinear(&corners, p) {
+                        None => dropped.push((s, t)),
+                        Some((s2, t2)) => {
+                            // Retrouver le mauvais (s,t) est aussi grave : l'écran afficherait
+                            // alors un morceau de lui-même au mauvais endroit.
+                            if (s2 - s).abs() > 0.01 || (t2 - t).abs() > 0.01 {
+                                dropped.push((s, t));
+                            }
+                        }
+                    }
+                }
+            }
+            assert!(
+                dropped.is_empty(),
+                "{name} : {} points intérieurs perdus par le mapping, p.ex. {:?}",
+                dropped.len(),
+                &dropped[..dropped.len().min(5)]
+            );
+        }
+    }
 }

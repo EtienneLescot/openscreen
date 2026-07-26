@@ -25,6 +25,10 @@ import {
 	textBackgroundColor,
 	toggleTextBackground,
 } from "@/lib/ai-edition/annotations/background";
+import {
+	type AnnotationTextAnimation,
+	TEXT_ANIMATION_VALUES,
+} from "@/lib/ai-edition/annotations/textAnimation";
 import type { AxcutAnnotationRegion, AxcutClip } from "@/lib/ai-edition/schema";
 import { rafCoalesce } from "@/lib/ai-edition/store/rafCoalesce";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
@@ -883,6 +887,34 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 										}}
 									/>
 								</div>,
+							)
+						: null}
+					{region.type === "text"
+						? paneRow(
+								ts("textAnimation.title"),
+								// Les sept animations existaient : nommées dans le schéma, traduites dans les
+								// treize langues, transportées jusqu'au compositeur — et injouables, faute de
+								// ce sélecteur.
+								<select
+									aria-label={ts("textAnimation.selectAnimation")}
+									value={region.style?.textAnimation ?? "none"}
+									onChange={(e) => {
+										tl.updateAnnotationLive(region.id, {
+											style: {
+												...region.style,
+												textAnimation: e.target.value as AnnotationTextAnimation,
+											},
+										});
+										void tl.commitAnnotationChange();
+									}}
+									style={selectStyle}
+								>
+									{TEXT_ANIMATION_VALUES.map((value) => (
+										<option key={value} value={value}>
+											{ts(`textAnimation.${value === "slide-left" ? "slideLeft" : value}`)}
+										</option>
+									))}
+								</select>,
 							)
 						: null}
 					{region.type === "text"
