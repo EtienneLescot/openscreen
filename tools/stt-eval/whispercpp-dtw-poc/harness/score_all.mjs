@@ -8,8 +8,8 @@
 //   - results/wer_table.tsv
 //   - results/timestamp_headtohead.json  (median/p90, gross disagreements)
 
-import { promises as fs } from "node:fs";
 import { spawnSync } from "node:child_process";
+import { promises as fs } from "node:fs";
 import path from "node:path";
 import process from "node:process";
 
@@ -17,7 +17,6 @@ const ROOT = process.cwd();
 const POC = path.join(ROOT, "tools", "stt-eval", "whispercpp-dtw-poc");
 const RESULTS = path.join(POC, "results");
 const REFS = path.join(POC, "fixtures", "refs");
-const FIXTURES = path.join(POC, "fixtures");
 const HARNESS = path.join(POC, "harness");
 
 const audioDur = {
@@ -25,8 +24,8 @@ const audioDur = {
 	librispeech_demo_0: 5.851,
 	librispeech_demo_1: 4.438,
 	librispeech_demo_2: 11.967,
-	librispeech_demo_3: 9.500,
-	librispeech_demo_4: 29.130,
+	librispeech_demo_3: 9.5,
+	librispeech_demo_4: 29.13,
 	"two-min-clip": 130.324,
 };
 
@@ -62,8 +61,6 @@ function flattenWords(json) {
 // Per-fixture WER + analyze.
 const runs = []; // { run, fixture, jsonPath, refPath, audio_s, hyp, ref, edits, refWords, wer, monotonic, maxBacktrack, lastWordEnd, numWords, numSegments, segmentsWithoutWords, zeroStartCountExcludingFirst }
 
-const fixtures = Object.keys(audioDur);
-
 // Read the CT2 timings directly from the timings_*.tsv files, since the
 // CT2 server's JSON response has no `timing` field.
 async function readTimingsTsv(name) {
@@ -77,12 +74,12 @@ async function readTimingsTsv(name) {
 	}
 	return out;
 }
-const ct2Timings      = await readTimingsTsv("timings_int8.tsv");
-const ct2Fp16Timings  = await readTimingsTsv("timings_fp16.tsv");
-const wcppCpuFp16     = await readTimingsTsv("timings_wcpp_cpu_fp16.tsv");
-const wcppCpuQ80      = await readTimingsTsv("timings_wcpp_cpu_q8_0.tsv");
-const wcppVulkanFp16  = await readTimingsTsv("timings_wcpp_vulkan_fp16.tsv");
-const wcppVulkanQ80   = await readTimingsTsv("timings_wcpp_vulkan_q8_0.tsv");
+const ct2Timings = await readTimingsTsv("timings_int8.tsv");
+const ct2Fp16Timings = await readTimingsTsv("timings_fp16.tsv");
+const wcppCpuFp16 = await readTimingsTsv("timings_wcpp_cpu_fp16.tsv");
+const wcppCpuQ80 = await readTimingsTsv("timings_wcpp_cpu_q8_0.tsv");
+const wcppVulkanFp16 = await readTimingsTsv("timings_wcpp_vulkan_fp16.tsv");
+const wcppVulkanQ80 = await readTimingsTsv("timings_wcpp_vulkan_q8_0.tsv");
 
 const jsonFiles = (await fs.readdir(RESULTS))
 	.filter((f) => f.endsWith(".json") && !f.endsWith("error.json"))
@@ -93,14 +90,14 @@ for (const jf of jsonFiles) {
 	const mWc = jf.match(/^(wcpp)_(cpu|vulkan|cuda)_(fp16|q8_0)_(.+)\.json$/);
 	let engine, kind, prec, fixture;
 	if (mCt) {
-		engine  = mCt[1];
-		kind    = mCt[2];
-		prec    = mCt[2];
+		engine = mCt[1];
+		kind = mCt[2];
+		prec = mCt[2];
 		fixture = mCt[3];
 	} else if (mWc) {
-		engine  = mWc[1];
-		kind    = mWc[2];
-		prec    = mWc[3];
+		engine = mWc[1];
+		kind = mWc[2];
+		prec = mWc[3];
 		fixture = mWc[4];
 	} else {
 		continue;
@@ -117,10 +114,16 @@ for (const jf of jsonFiles) {
 	// a re-derivation of the WAV header.
 	let timing = { audio_s: undefined, wall_s: undefined, rtf: undefined };
 	if (engine === "wcpp") {
-		const t = (kind === "cpu" && prec === "fp16") ? wcppCpuFp16 :
-		          (kind === "cpu" && prec === "q8_0") ? wcppCpuQ80 :
-		          (kind === "vulkan" && prec === "fp16") ? wcppVulkanFp16 :
-		          (kind === "vulkan" && prec === "q8_0") ? wcppVulkanQ80 : {};
+		const t =
+			kind === "cpu" && prec === "fp16"
+				? wcppCpuFp16
+				: kind === "cpu" && prec === "q8_0"
+					? wcppCpuQ80
+					: kind === "vulkan" && prec === "fp16"
+						? wcppVulkanFp16
+						: kind === "vulkan" && prec === "q8_0"
+							? wcppVulkanQ80
+							: {};
 		if (t[fixture]) timing = t[fixture];
 	} else if (engine === "ct2") {
 		const t = prec === "int8" ? ct2Timings : ct2Fp16Timings;
@@ -144,9 +147,8 @@ for (const jf of jsonFiles) {
 		...json,
 		segments: (json.segments || []).map((seg) => ({
 			...seg,
-			words: (seg.words || []).filter((w) =>
-				Number.isFinite(w.start) && Number.isFinite(w.end) &&
-				w.start < 1e6 && w.end < 1e6,
+			words: (seg.words || []).filter(
+				(w) => Number.isFinite(w.start) && Number.isFinite(w.end) && w.start < 1e6 && w.end < 1e6,
 			),
 		})),
 	};
@@ -180,21 +182,47 @@ for (const jf of jsonFiles) {
 
 // WER table (TSV).
 const werHeader = [
-	"run", "engine", "backend", "prec", "fixture",
-	"audio_s", "rtf", "refWords", "edits", "wer",
-	"numWords", "numSegments", "monotonic", "maxBacktrack",
-	"lastWordEnd", "zeroStartCount", "segmentsWithoutWords",
+	"run",
+	"engine",
+	"backend",
+	"prec",
+	"fixture",
+	"audio_s",
+	"rtf",
+	"refWords",
+	"edits",
+	"wer",
+	"numWords",
+	"numSegments",
+	"monotonic",
+	"maxBacktrack",
+	"lastWordEnd",
+	"zeroStartCount",
+	"segmentsWithoutWords",
 ];
 const werLines = [werHeader.join("\t")];
 for (const r of runs) {
-	werLines.push([
-		r.run, r.engine, r.kind, r.prec, r.fixture,
-		r.audio_s?.toFixed?.(4) ?? "",
-		r.rtf?.toFixed?.(4) ?? "",
-		r.refWords, r.edits, r.wer?.toFixed?.(4) ?? "",
-		r.numWords, r.numSegments, r.monotonic, r.maxBacktrack?.toFixed?.(3),
-		r.lastWordEnd?.toFixed?.(3), r.zeroStartCount, r.segmentsWithoutWords,
-	].join("\t"));
+	werLines.push(
+		[
+			r.run,
+			r.engine,
+			r.kind,
+			r.prec,
+			r.fixture,
+			r.audio_s?.toFixed?.(4) ?? "",
+			r.rtf?.toFixed?.(4) ?? "",
+			r.refWords,
+			r.edits,
+			r.wer?.toFixed?.(4) ?? "",
+			r.numWords,
+			r.numSegments,
+			r.monotonic,
+			r.maxBacktrack?.toFixed?.(3),
+			r.lastWordEnd?.toFixed?.(3),
+			r.zeroStartCount,
+			r.segmentsWithoutWords,
+		].join("\t"),
+	);
 }
 await fs.writeFile(path.join(RESULTS, "wer_table.tsv"), werLines.join("\n") + "\n", "utf8");
 process.stdout.write(`wrote ${path.join(RESULTS, "wer_table.tsv")} (${runs.length} rows)\n`);
@@ -223,29 +251,47 @@ async function alignHeadToHead(precA, precB) {
 			byFixture.set(r.fixture, e);
 		}
 	}
-	const dStart = [], dEnd = [], dWcppStartToCt2End = [], dWcppMidToCt2Mid = [];
+	const dStart = [],
+		dEnd = [],
+		dWcppStartToCt2End = [],
+		dWcppMidToCt2Mid = [];
 	const gross = [];
 	for (const [fixture, { a, b }] of byFixture.entries()) {
 		if (!a || !b) continue;
 		const jsonA = JSON.parse(await fs.readFile(path.join(RESULTS, `${a.run}.json`), "utf8"));
 		const jsonB = JSON.parse(await fs.readFile(path.join(RESULTS, `${b.run}.json`), "utf8"));
-		const wordsA = flattenWords(jsonA).map((w) => ({ ...w, _key: normalizeWord(w.word) })).filter((w) => w._key);
-		const wordsB = flattenWords(jsonB).map((w) => ({ ...w, _key: normalizeWord(w.word) })).filter((w) => w._key);
-		let i = 0, j = 0;
+		const wordsA = flattenWords(jsonA)
+			.map((w) => ({ ...w, _key: normalizeWord(w.word) }))
+			.filter((w) => w._key);
+		const wordsB = flattenWords(jsonB)
+			.map((w) => ({ ...w, _key: normalizeWord(w.word) }))
+			.filter((w) => w._key);
+		let i = 0,
+			j = 0;
 		while (i < wordsA.length && j < wordsB.length) {
 			if (wordsA[i]._key === wordsB[j]._key) {
 				const ds = Math.abs(wordsA[i].start - wordsB[j].start) * 1000;
-				const de = Math.abs(wordsA[i].end   - wordsB[j].end)   * 1000;
-				const dwx = Math.abs(wordsA[i].start - wordsB[j].end)   * 1000;
-				const dmid = Math.abs((wordsA[i].start + wordsA[i].end)/2 - (wordsB[j].start + wordsB[j].end)/2) * 1000;
+				const de = Math.abs(wordsA[i].end - wordsB[j].end) * 1000;
+				const dwx = Math.abs(wordsA[i].start - wordsB[j].end) * 1000;
+				const dmid =
+					Math.abs((wordsA[i].start + wordsA[i].end) / 2 - (wordsB[j].start + wordsB[j].end) / 2) *
+					1000;
 				dStart.push(ds);
 				dEnd.push(de);
 				dWcppStartToCt2End.push(dwx);
 				dWcppMidToCt2Mid.push(dmid);
 				if (ds > 200 || de > 200) {
-					gross.push({ fixture, word: wordsA[i]._key, wcpp: { s: wordsA[i].start, e: wordsA[i].end }, ct2: { s: wordsB[j].start, e: wordsB[j].end }, ds, de });
+					gross.push({
+						fixture,
+						word: wordsA[i]._key,
+						wcpp: { s: wordsA[i].start, e: wordsA[i].end },
+						ct2: { s: wordsB[j].start, e: wordsB[j].end },
+						ds,
+						de,
+					});
 				}
-				i++; j++;
+				i++;
+				j++;
 			} else {
 				i++;
 			}
@@ -260,22 +306,22 @@ async function alignHeadToHead(precA, precB) {
 	return {
 		count: dStart.length,
 		dStart_median_ms: pct(dStart, 0.5),
-		dStart_p90_ms:    pct(dStart, 0.9),
-		dStart_max_ms:    Math.max(...dStart, 0),
-		dEnd_median_ms:   pct(dEnd,   0.5),
-		dEnd_p90_ms:      pct(dEnd,   0.9),
-		dEnd_max_ms:      Math.max(...dEnd,   0),
+		dStart_p90_ms: pct(dStart, 0.9),
+		dStart_max_ms: Math.max(...dStart, 0),
+		dEnd_median_ms: pct(dEnd, 0.5),
+		dEnd_p90_ms: pct(dEnd, 0.9),
+		dEnd_max_ms: Math.max(...dEnd, 0),
 		dWcppStartToCt2End_median_ms: pct(dWcppStartToCt2End, 0.5),
-		dWcppStartToCt2End_p90_ms:    pct(dWcppStartToCt2End, 0.9),
-		dWcppMidToCt2Mid_median_ms:   pct(dWcppMidToCt2Mid,   0.5),
-		dWcppMidToCt2Mid_p90_ms:      pct(dWcppMidToCt2Mid,   0.9),
-		gross_count:                  gross.length,
-		gross_examples:               gross.slice(0, 20),
+		dWcppStartToCt2End_p90_ms: pct(dWcppStartToCt2End, 0.9),
+		dWcppMidToCt2Mid_median_ms: pct(dWcppMidToCt2Mid, 0.5),
+		dWcppMidToCt2Mid_p90_ms: pct(dWcppMidToCt2Mid, 0.9),
+		gross_count: gross.length,
+		gross_examples: gross.slice(0, 20),
 	};
 }
 
-const h_fp16_vs_fp16  = await alignHeadToHead("fp16", "fp16");
-const h_q8_0_vs_int8  = await alignHeadToHead("q8_0", "int8");
+const h_fp16_vs_fp16 = await alignHeadToHead("fp16", "fp16");
+const h_q8_0_vs_int8 = await alignHeadToHead("q8_0", "int8");
 
 const headToHead = {
 	"fp16-vs-fp16 (wcpp_cpu_fp16 vs ct2_fp16)": h_fp16_vs_fp16,
@@ -299,10 +345,10 @@ process.stdout.write("\n=== §5.1 Word-timestamp head-to-head (4 metrics) ===\n"
 for (const [k, v] of Object.entries(headToHead)) {
 	process.stdout.write(
 		`${k}  (n=${v.count}):\n` +
-		`   Δstart (wcpp.start vs ct2.start):           median=${v.dStart_median_ms?.toFixed(0).padStart(5)}ms  p90=${v.dStart_p90_ms?.toFixed(0).padStart(5)}ms  max=${v.dStart_max_ms?.toFixed(0).padStart(6)}ms\n` +
-		`   Δend   (wcpp.end   vs ct2.end):             median=${v.dEnd_median_ms?.toFixed(0).padStart(5)}ms  p90=${v.dEnd_p90_ms?.toFixed(0).padStart(5)}ms  max=${v.dEnd_max_ms?.toFixed(0).padStart(6)}ms\n` +
-		`   ΔwcppStart↔ct2End   (t_dtw ≈ word-end?):    median=${v.dWcppStartToCt2End_median_ms?.toFixed(0).padStart(5)}ms  p90=${v.dWcppStartToCt2End_p90_ms?.toFixed(0).padStart(5)}ms\n` +
-		`   Δmid    (wcpp.mid   vs ct2.mid):            median=${v.dWcppMidToCt2Mid_median_ms?.toFixed(0).padStart(5)}ms  p90=${v.dWcppMidToCt2Mid_p90_ms?.toFixed(0).padStart(5)}ms\n` +
-		`   gross(>200ms any): ${v.gross_count}\n`,
+			`   Δstart (wcpp.start vs ct2.start):           median=${v.dStart_median_ms?.toFixed(0).padStart(5)}ms  p90=${v.dStart_p90_ms?.toFixed(0).padStart(5)}ms  max=${v.dStart_max_ms?.toFixed(0).padStart(6)}ms\n` +
+			`   Δend   (wcpp.end   vs ct2.end):             median=${v.dEnd_median_ms?.toFixed(0).padStart(5)}ms  p90=${v.dEnd_p90_ms?.toFixed(0).padStart(5)}ms  max=${v.dEnd_max_ms?.toFixed(0).padStart(6)}ms\n` +
+			`   ΔwcppStart↔ct2End   (t_dtw ≈ word-end?):    median=${v.dWcppStartToCt2End_median_ms?.toFixed(0).padStart(5)}ms  p90=${v.dWcppStartToCt2End_p90_ms?.toFixed(0).padStart(5)}ms\n` +
+			`   Δmid    (wcpp.mid   vs ct2.mid):            median=${v.dWcppMidToCt2Mid_median_ms?.toFixed(0).padStart(5)}ms  p90=${v.dWcppMidToCt2Mid_p90_ms?.toFixed(0).padStart(5)}ms\n` +
+			`   gross(>200ms any): ${v.gross_count}\n`,
 	);
 }
