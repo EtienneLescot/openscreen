@@ -19,12 +19,19 @@ import { toast } from "sonner";
 import { parseCustomPlaybackSpeedInput } from "@/components/video-editor/customPlaybackSpeed";
 import { MAX_PLAYBACK_SPEED, SPEED_OPTIONS } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
+import {
+	hasTextBackground,
+	setTextBackgroundColor,
+	textBackgroundColor,
+	toggleTextBackground,
+} from "@/lib/ai-edition/annotations/background";
 import type { AxcutAnnotationRegion, AxcutClip } from "@/lib/ai-edition/schema";
 import { rafCoalesce } from "@/lib/ai-edition/store/rafCoalesce";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { coalescedTrimGroups } from "@/lib/ai-edition/timeline/trim-mapping";
 import { formatSeconds } from "@/lib/ai-edition/timeline/virtual-preview";
+import { ColorField } from "../ColorField";
 import {
 	BackgroundPane,
 	CursorPane,
@@ -224,6 +231,8 @@ function paneHeader(icon: React.ReactNode, title: string, onClose: () => void, c
 				gap: 8,
 				padding: "14px 16px 12px",
 				borderBottom: "1px solid var(--border-soft)",
+				// Le corps défile sous l'en-tête : sans ça, l'en-tête se comprime avec lui.
+				flexShrink: 0,
 			}}
 		>
 			<span style={{ display: "grid", placeItems: "center", color: "var(--muted)" }}>{icon}</span>
@@ -456,11 +465,22 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 		onClose();
 	};
 
+	// Le panneau découpe son contenu (coins arrondis + flou), donc un corps sans ascenseur perd
+	// silencieusement ce qui dépasse — c'est ce qui arrivait au pane d'annotation, le plus haut de
+	// tous, dès qu'on réduisait la fenêtre. L'en-tête reste fixe, le corps défile, comme les
+	// panneaux de facette (cf. `.paneBody` de NewEditorShell).
 	const bodyStyle: React.CSSProperties = {
 		padding: "16px",
 		display: "flex",
 		flexDirection: "column",
 		gap: 16,
+		flex: "1 1 auto",
+		minHeight: 0,
+		overflowY: "auto",
+		overflowX: "hidden",
+		overscrollBehavior: "contain",
+		scrollbarWidth: "thin",
+		scrollbarColor: "var(--border) transparent",
 	};
 	const deleteBtnStyle: React.CSSProperties = {
 		display: "inline-flex",
@@ -593,10 +613,7 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 	if (selection.kind === "annotation") {
 		const region = tl.annotationRegions.find((a) => a.id === selection.id);
 		if (!region) return null;
-		const colors = ["#ffffff", "#0f172a", "#10b981", "#f59e0b", "#f43f5e", "#6366f1"];
-		// `transparent` est la façon dont le CSS — et donc le schéma — dit « pas de fond ».
-		const hasBackground =
-			!!region.style?.backgroundColor && region.style.backgroundColor !== "transparent";
+		const hasBackground = hasTextBackground(region.style);
 		return (
 			<div style={{ display: "flex", flexDirection: "column", minHeight: 0 }}>
 				{paneHeader(
@@ -715,19 +732,18 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 							)}
 							{paneRow(
 								ts("annotation.arrowColor"),
-								<input
-									type="color"
+								<ColorField
+									label={ts("annotation.arrowColor")}
 									value={region.figureData?.color ?? "#34B27B"}
-									onChange={(e) =>
+									onChange={(next) =>
 										liveUpdate(region.id, {
 											figureData: {
 												...(region.figureData ?? { arrowDirection: "right", strokeWidth: 4 }),
-												color: e.target.value,
+												color: next,
 											},
 										})
 									}
-									onBlur={commitAnnotation}
-									style={colorInputStyle}
+									onCommit={commitAnnotation}
 								/>,
 							)}
 							<SliderCell
@@ -841,47 +857,27 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					{region.type === "text"
 						? paneRow(
 								ts("annotation.background"),
-								<div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-									<input
-										type="color"
-										value={
-											region.style?.backgroundColor &&
-											region.style.backgroundColor !== "transparent"
-												? region.style.backgroundColor
-												: "#000000"
-										}
-										// Live pendant le glissement, une seule écriture disque au relâchement :
-										// un `<input type="color">` émet `onChange` en continu, et committer à
-										// chaque événement rendait le sélecteur inutilisable.
-										onChange={(e) =>
+								<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+									{/* La pastille montre la couleur mémorisée même fond éteint : c'est celle que
+									    le rallumage rendra, et un noir affiché à la place mentirait. Choisir une
+									    couleur allume le fond, sinon le sélecteur n'aurait aucun effet visible. */}
+									<ColorField
+										label={ts("annotation.background")}
+										value={textBackgroundColor(region.style)}
+										onChange={(next) =>
 											liveUpdate(region.id, {
-												style: { ...region.style, backgroundColor: e.target.value },
+												style: setTextBackgroundColor(region.style, next),
 											})
 										}
-										onBlur={commitAnnotation}
-										style={colorInputStyle}
+										onCommit={commitAnnotation}
 									/>
-									{/* Une case à cocher plutôt qu'un bouton « effacer » : avoir un fond ou non est
-									    un état, pas une action. La couleur choisie est conservée quand on décoche,
-									    donc recocher la rend telle quelle au lieu d'obliger à la re-sélectionner. */}
-									{/* La pilule des panneaux, pas une case système : c'est le contrôle on/off de
-									    l'app (cf. « Blur BG » dans Video effects), et une checkbox brute jurait
-									    avec tout le reste. */}
+									{/* Une bascule plutôt qu'un bouton « effacer » : avoir un fond ou non est un
+									    état, pas une action. La pilule des panneaux, pas une case système. */}
 									<Toggle
 										checked={hasBackground}
 										onChange={(next) => {
-											const previous = region.style?.backgroundColor;
 											tl.updateAnnotationLive(region.id, {
-												style: {
-													...region.style,
-													// Rallumer restaure la dernière couleur choisie ; "transparent" n'en
-													// est pas une, d'où le repli sur du noir pour un premier allumage.
-													backgroundColor: next
-														? previous && previous !== "transparent"
-															? previous
-															: "#000000"
-														: "transparent",
-												},
+												style: toggleTextBackground(region.style, next),
 											});
 											void tl.commitAnnotationChange();
 										}}
@@ -892,50 +888,16 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					{region.type === "text"
 						? paneRow(
 								ts("annotation.color"),
-								// Sélecteur système plutôt que six pastilles : le texte d'une annotation doit
-								// pouvoir prendre n'importe quelle couleur, et une palette figée oblige à
-								// choisir parmi ce que quelqu'un d'autre a décidé. Les raccourcis restent à
-								// côté pour les teintes courantes.
-								<div style={{ display: "flex", alignItems: "center", gap: 6 }}>
-									<input
-										type="color"
-										aria-label={ts("annotation.colorWheel")}
-										value={region.style?.color ?? "#ffffff"}
-										onChange={(e) =>
-											liveUpdate(region.id, {
-												style: { ...region.style, color: e.target.value },
-											})
-										}
-										onBlur={commitAnnotation}
-										style={colorInputStyle}
-									/>
-									{colors.map((c) => (
-										<button
-											key={c}
-											type="button"
-											title={c}
-											aria-label={te("inspector.setColor", { color: c })}
-											aria-pressed={region.style?.color === c}
-											onClick={() => {
-												tl.updateAnnotationLive(region.id, {
-													style: { ...region.style, color: c },
-												});
-												void tl.commitAnnotationChange();
-											}}
-											style={{
-												width: 18,
-												height: 18,
-												borderRadius: "50%",
-												background: c,
-												border:
-													region.style?.color === c
-														? "2px solid var(--accent)"
-														: "1px solid var(--border-hi)",
-												cursor: "pointer",
-											}}
-										/>
-									))}
-								</div>,
+								<ColorField
+									label={ts("annotation.color")}
+									value={region.style?.color ?? "#ffffff"}
+									onChange={(next) =>
+										liveUpdate(region.id, {
+											style: { ...region.style, color: next },
+										})
+									}
+									onCommit={commitAnnotation}
+								/>,
 							)
 						: null}
 					<button type="button" onClick={deleteAndClose} style={deleteBtnStyle}>
@@ -999,18 +961,6 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 		</div>
 	);
 }
-
-/** Les `<input type="color">` natifs sont des rectangles bruts : on leur donne le même cadre que
- *  les autres contrôles du panneau, sinon ils détonnent complètement. */
-const colorInputStyle: React.CSSProperties = {
-	width: 40,
-	height: 28,
-	padding: 2,
-	borderRadius: 8,
-	border: "1px solid var(--border)",
-	background: "var(--surface)",
-	cursor: "pointer",
-};
 
 const selectStyle: React.CSSProperties = {
 	height: 32,
@@ -1118,6 +1068,7 @@ function SimpleFacet({
 					alignItems: "center",
 					padding: "14px 16px 12px",
 					borderBottom: "1px solid var(--border-soft)",
+					flexShrink: 0,
 				}}
 			>
 				<h2
@@ -1132,7 +1083,19 @@ function SimpleFacet({
 					{title}
 				</h2>
 			</header>
-			<div style={{ padding: "16px", display: "flex", flexDirection: "column", gap: 14 }}>
+			<div
+				style={{
+					padding: "16px",
+					display: "flex",
+					flexDirection: "column",
+					gap: 14,
+					flex: "1 1 auto",
+					minHeight: 0,
+					overflowY: "auto",
+					scrollbarWidth: "thin",
+					scrollbarColor: "var(--border) transparent",
+				}}
+			>
 				<p style={{ margin: 0, fontSize: 12, lineHeight: 1.5, color: "var(--muted)" }}>
 					{description}
 				</p>

@@ -145,6 +145,29 @@ describe("axcut-schema v5", () => {
 		expect(region.annotationSource).toBeUndefined();
 	});
 
+	it("keeps the remembered background colour through a save-path parse", () => {
+		// Le chemin d'enregistrement valide le document dans le processus principal, et zod jette
+		// tout champ non déclaré : une mémoire que l'interface écrit mais que le schéma ignore
+		// disparaît au premier enregistrement — silencieusement, ce qui est le pire cas.
+		const region = annotationRegionSchema.parse({
+			id: "ann_1",
+			startMs: 0,
+			endMs: 1500,
+			type: "text",
+			content: "hello",
+			position: { x: 4, y: 86 },
+			size: { width: 92, height: 12 },
+			style: {
+				color: "#ffffff",
+				backgroundColor: "transparent",
+				lastBackgroundColor: "#3b82f6",
+				fontSize: 24,
+			},
+			zIndex: 1,
+		});
+		expect(region.style.lastBackgroundColor).toBe("#3b82f6");
+	});
+
 	it("zoomRegionSchema rejects unknown depths", () => {
 		expect(() =>
 			zoomRegionSchema.parse({
