@@ -17,7 +17,11 @@ import type { ComponentProps } from "react";
 import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { parseCustomPlaybackSpeedInput } from "@/components/video-editor/customPlaybackSpeed";
-import { MAX_PLAYBACK_SPEED, SPEED_OPTIONS } from "@/components/video-editor/types";
+import {
+	MAX_PLAYBACK_SPEED,
+	SPEED_OPTIONS,
+	ZOOM_DEPTH_SCALES,
+} from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import {
 	hasTextBackground,
@@ -518,7 +522,9 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 						>
 							{ZOOM_DEPTHS.map((d) => (
 								<option key={d} value={d}>
-									{(d / 2 + 0.5).toFixed(1)}×
+									{/* La table, pas une formule : ce libellé annonçait « 2.0× » là où la pastille de la
+									    timeline affiche « 1.80× » et où le rendu applique 1.8. */}
+									{ZOOM_DEPTH_SCALES[d]}×
 								</option>
 							))}
 						</select>,
