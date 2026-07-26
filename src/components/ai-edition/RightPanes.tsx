@@ -148,9 +148,7 @@ const GRAD_PRESETS: readonly string[] = [
 	"linear-gradient(135deg, #bcc0c6, #eaebed)",
 ];
 
-/** Shared swatch set for every colour surface in the editor (background here,
- *  captions in CaptionsPane) so the app offers one palette, not one per pane. */
-export const COLOR_PALETTE: readonly string[] = [
+const COLOR_PALETTE: readonly string[] = [
 	"#16171d",
 	"#6b7280",
 	"#bcc0c6",

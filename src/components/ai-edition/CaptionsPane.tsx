@@ -11,16 +11,15 @@
 
 import { Captions as CaptionsIcon, Languages, Loader2, Trash2 } from "lucide-react";
 import { useMemo, useState } from "react";
-import ColorPicker from "@/components/ui/color-picker";
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { CaptionTextAlign, CaptionVerticalPosition } from "@/lib/ai-edition/captions";
 import { untranslatedUnits } from "@/lib/ai-edition/captions";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useCaptions } from "@/lib/ai-edition/store/useCaptions";
 import { nativeBridgeClient } from "@/native";
+import { ColorField } from "./ColorField";
 import styles from "./NewEditorShell.module.css";
-import { COLOR_PALETTE } from "./RightPanes";
+import { SliderCell, Toggle } from "./RightPanes";
 
 /** The families `src/index.css` already loads for on-canvas text — anything else
  *  would render in the preview but fall back to a default in the export canvas. */
@@ -172,13 +171,10 @@ export function CaptionsPane({ onTranscribe, isTranscribing }: CaptionsPaneProps
 			<div className={styles.paneBody} style={{ padding: 0 }}>
 				<div className={styles.paneRow}>
 					<span className="label">{t("captions.show")}</span>
-					<button
-						type="button"
-						className={`${styles.toggle} ${settings.enabled ? styles.isOn : ""}`}
-						aria-pressed={settings.enabled}
-						aria-label={t("captions.show")}
+					<Toggle
+						checked={settings.enabled}
 						disabled={disabled || !hasTranscript}
-						onClick={() => void set({ enabled: !settings.enabled })}
+						onChange={(next) => void set({ enabled: next })}
 					/>
 				</div>
 
@@ -353,70 +349,70 @@ export function CaptionsPane({ onTranscribe, isTranscribing }: CaptionsPaneProps
 				</div>
 				<div className={styles.paneRow}>
 					<span className="label">{t("captions.bold")}</span>
-					<button
-						type="button"
-						className={`${styles.toggle} ${settings.fontWeight === "bold" ? styles.isOn : ""}`}
-						aria-pressed={settings.fontWeight === "bold"}
-						aria-label={t("captions.bold")}
+					<Toggle
+						checked={settings.fontWeight === "bold"}
 						disabled={disabled}
-						onClick={() =>
-							void set({ fontWeight: settings.fontWeight === "bold" ? "normal" : "bold" })
-						}
+						onChange={(next) => void set({ fontWeight: next ? "bold" : "normal" })}
 					/>
 				</div>
 				<div className={styles.sliderGrid}>
 					<SliderCell
 						label={t("captions.fontSize")}
 						value={settings.fontSize}
-						min={10}
-						max={90}
+						min={16}
+						max={140}
 						suffix="px"
 						disabled={disabled}
 						onChange={(v) => setLive({ fontSize: v })}
 						onCommit={() => void commit()}
 					/>
 				</div>
-				<ColorRow
-					label={t("captions.textColor")}
-					value={settings.color}
-					disabled={disabled}
-					onPick={(color) => void set({ color })}
-				/>
+				<div className={styles.paneRow}>
+					<span className="label">{t("captions.textColor")}</span>
+					<ColorField
+						label={t("captions.textColor")}
+						value={settings.color}
+						disabled={disabled}
+						onChange={(color) => setLive({ color })}
+						onCommit={() => void commit()}
+					/>
+				</div>
 
 				{/* ── Background ─────────────────────────────────────────── */}
 				<div className={styles.sectionLabel}>{t("captions.background")}</div>
+				{/* Colour + switch on one row, exactly like the annotation pane's text
+				    background: the swatch keeps showing the remembered colour while the
+				    plate is off, because that is what turning it back on will draw. */}
 				<div className={styles.paneRow}>
-					<span className="label">{t("captions.showBackground")}</span>
-					<button
-						type="button"
-						className={`${styles.toggle} ${settings.backgroundEnabled ? styles.isOn : ""}`}
-						aria-pressed={settings.backgroundEnabled}
-						aria-label={t("captions.showBackground")}
-						disabled={disabled}
-						onClick={() => void set({ backgroundEnabled: !settings.backgroundEnabled })}
-					/>
-				</div>
-				{settings.backgroundEnabled ? (
-					<>
-						<ColorRow
+					<span className="label">{t("captions.background")}</span>
+					<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+						<ColorField
 							label={t("captions.backgroundColor")}
 							value={settings.backgroundColor}
 							disabled={disabled}
-							onPick={(backgroundColor) => void set({ backgroundColor })}
+							onChange={(backgroundColor) => setLive({ backgroundColor })}
+							onCommit={() => void commit()}
 						/>
-						<div className={styles.sliderGrid}>
-							<SliderCell
-								label={t("captions.backgroundOpacity")}
-								value={Math.round(settings.backgroundOpacity * 100)}
-								min={0}
-								max={100}
-								suffix="%"
-								disabled={disabled}
-								onChange={(v) => setLive({ backgroundOpacity: v / 100 })}
-								onCommit={() => void commit()}
-							/>
-						</div>
-					</>
+						<Toggle
+							checked={settings.backgroundEnabled}
+							disabled={disabled}
+							onChange={(next) => void set({ backgroundEnabled: next })}
+						/>
+					</div>
+				</div>
+				{settings.backgroundEnabled ? (
+					<div className={styles.sliderGrid}>
+						<SliderCell
+							label={t("captions.backgroundOpacity")}
+							value={Math.round(settings.backgroundOpacity * 100)}
+							min={0}
+							max={100}
+							suffix="%"
+							disabled={disabled}
+							onChange={(v) => setLive({ backgroundOpacity: v / 100 })}
+							onCommit={() => void commit()}
+						/>
+					</div>
 				) : null}
 
 				{/* ── Placement ──────────────────────────────────────────── */}
@@ -523,53 +519,6 @@ const selectStyle: React.CSSProperties = {
  * every other colour surface — so it's gone: this defers to the shared
  * `COLOR_PALETTE` and the shared picker instead.
  */
-function ColorRow({
-	label,
-	value,
-	disabled,
-	onPick,
-}: {
-	label: string;
-	value: string;
-	disabled?: boolean;
-	onPick: (color: string) => void;
-}) {
-	const ts = useScopedT("settings");
-	return (
-		<div className={styles.paneRow}>
-			<span className="label">{label}</span>
-			<Popover>
-				<PopoverTrigger asChild>
-					<button
-						type="button"
-						aria-label={label}
-						disabled={disabled}
-						style={{
-							width: 46,
-							height: 26,
-							borderRadius: 7,
-							border: "1px solid var(--border-hi)",
-							background: value,
-							cursor: disabled ? "not-allowed" : "pointer",
-						}}
-					/>
-				</PopoverTrigger>
-				<PopoverContent align="end" side="left" style={{ width: 250 }}>
-					<ColorPicker
-						selectedColor={value}
-						colorPalette={[...COLOR_PALETTE]}
-						onUpdateColor={onPick}
-						translations={{
-							colorWheel: ts("annotation.colorWheel"),
-							colorPalette: ts("annotation.colorPalette"),
-						}}
-					/>
-				</PopoverContent>
-			</Popover>
-		</div>
-	);
-}
-
 function Segmented<T extends string>({
 	value,
 	options,
@@ -595,52 +544,6 @@ function Segmented<T extends string>({
 					{option.label}
 				</button>
 			))}
-		</div>
-	);
-}
-
-function SliderCell({
-	label,
-	value,
-	min,
-	max,
-	step = 1,
-	suffix = "",
-	disabled,
-	onChange,
-	onCommit,
-}: {
-	label: string;
-	value: number;
-	min: number;
-	max: number;
-	step?: number;
-	suffix?: string;
-	disabled?: boolean;
-	onChange: (next: number) => void;
-	onCommit: () => void;
-}) {
-	return (
-		<div className={styles.sliderCell}>
-			<div className="head">
-				<span className="label">{label}</span>
-				<span className="val">
-					{Math.round(value)}
-					{suffix}
-				</span>
-			</div>
-			<input
-				type="range"
-				min={min}
-				max={max}
-				step={step}
-				value={value}
-				disabled={disabled}
-				onChange={(e) => onChange(Number(e.target.value))}
-				onMouseUp={onCommit}
-				onTouchEnd={onCommit}
-				onKeyUp={onCommit}
-			/>
 		</div>
 	);
 }

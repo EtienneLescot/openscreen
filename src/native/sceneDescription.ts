@@ -18,6 +18,12 @@
 import type { CameraFullscreenRegion, SpeedRegion } from "@/components/video-editor/types";
 import { DEFAULT_CROP_REGION, ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import { annotationFontSizeFraction } from "@/lib/ai-edition/annotationScale";
+import {
+	captionCuesToTextRegions,
+	deriveCaptionCues,
+	getCaptionSettings,
+	getCaptionTranslations,
+} from "@/lib/ai-edition/captions";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
 import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
@@ -488,8 +494,22 @@ export function buildSceneDescription(
 	);
 	// Same raw→source projection as the zoom regions above, for the same reason: annotations are
 	// authored in RAW document time and the compositor matches each frame's SOURCE time.
+	//
+	// Captions join the annotations here rather than getting a bridge of their own: they are text
+	// over the screen layer with the same geometry and the same time base, so the compositor
+	// already knows how to draw them. Skipping this would have left them visible in the DOM
+	// overlay and absent from the composited pixels — the exact preview/render gap the annotation
+	// work above closed. They are derived on the fly and never stored (see lib/ai-edition/captions).
+	const captionSettings = getCaptionSettings(document);
+	const captionRegions = captionCuesToTextRegions(
+		deriveCaptionCues(document, captionSettings, getCaptionTranslations(document)),
+		captionSettings,
+	);
 	const projectedAnnotations = projectRegionsToSource(
-		document.annotations ?? [],
+		[
+			...(document.annotations ?? []),
+			...(captionRegions as unknown as NonNullable<AxcutDocument["annotations"]>),
+		],
 		visibleClips,
 		document.timeline.clips,
 		() => createId("ann"),
