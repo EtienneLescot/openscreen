@@ -74,5 +74,14 @@
 		"description": "Bộ mã hóa GPU mặc định không khởi động được, nên OpenScreen đã chuyển sang mã hóa H.264 bằng phần mềm. Quá trình ghi vẫn tiếp tục bình thường, nhưng mức sử dụng CPU có thể cao hơn.",
 		"dismiss": "Đã hiểu",
 		"dontShowAgain": "Không hiển thị lại"
+	},
+	"deviceSettings": {
+		"title": "Cài đặt thiết bị",
+		"done": "Xong",
+		"micLevel": "Mức đầu vào",
+		"micHint": "Hãy nói để kiểm tra micrô",
+		"noMicrophones": "Không tìm thấy micrô",
+		"preview": "Xem trước",
+		"previewUnavailable": "Không thể xem trước"
 	}
 }

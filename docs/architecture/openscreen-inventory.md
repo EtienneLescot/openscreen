@@ -308,7 +308,7 @@ The renderer client (Zustand-free) is `nativeBridgeClient.system|project|cursor`
 
 ### Full IPC channel list (from `electron/ipc/handlers.ts` grep + `electron/preload.ts`)
 - **HUD / window controls** (`windows.ts`, `main.ts`):
-  - `hud-overlay-hide`, `hud-overlay-close`, `hud-overlay-ignore-mouse-events`, `hud-overlay-move-by`, `hud-overlay-set-size` (one-way `ipcMain.on`).
+  - `hud-overlay-hide`, `hud-overlay-close`, `hud-overlay-ignore-mouse-events`, `hud-overlay-drag-start`, `hud-overlay-drag-to`, `hud-overlay-drag-end`, `hud-overlay-set-size` (one-way `ipcMain.on`).
   - `menu-new-project`, `menu-load-project`, `menu-save-project`, `menu-save-project-as`, `menu-import-video` (`preload.ts:202-225`, renderer listeners via `onMenu*`).
   - `hud:setMicrophoneExpanded` (one-way).
   - `set-has-unsaved-changes` (one-way).

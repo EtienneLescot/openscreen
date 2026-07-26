@@ -1,7 +1,8 @@
 import "@testing-library/jest-dom";
-import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TooltipProvider } from "../ui/tooltip";
+import { HUD_BAR_BOTTOM, HUD_POPOVER_GAP, HUD_POPOVER_MAX_HEIGHT } from "./hudGeometry";
 import { LaunchWindow } from "./LaunchWindow";
 
 type SelectedSourceChangedListener = Parameters<
@@ -67,9 +68,13 @@ vi.mock("../../hooks/useScreenRecorder", () => ({
 	useScreenRecorder: () => recorderState.value,
 }));
 
+const micDevicesState = vi.hoisted(() => ({
+	value: [] as Array<{ deviceId: string; label: string; groupId: string }>,
+}));
+
 vi.mock("../../hooks/useMicrophoneDevices", () => ({
 	useMicrophoneDevices: () => ({
-		devices: [],
+		devices: micDevicesState.value,
 		selectedDeviceId: "default",
 		setSelectedDeviceId: vi.fn(),
 	}),
@@ -87,6 +92,10 @@ vi.mock("../../hooks/useCameraDevices", () => ({
 
 vi.mock("../../hooks/useAudioLevelMeter", () => ({
 	useAudioLevelMeter: () => ({ level: 0 }),
+}));
+
+vi.mock("../../hooks/useCameraPreviewStream", () => ({
+	useCameraPreviewStream: () => ({ stream: null, error: null }),
 }));
 
 vi.mock("../../lib/requestCameraAccess", () => ({
@@ -136,6 +145,15 @@ vi.mock("@/contexts/I18nContext", () => ({
 			"webcam.searching": "Searching...",
 			"webcam.noneFound": "No camera found",
 			"webcam.unavailable": "Camera unavailable",
+			"deviceSettings.title": "Device settings",
+			"deviceSettings.done": "Done",
+			"deviceSettings.micLevel": "Input level",
+			"deviceSettings.micHint": "Speak to check your microphone",
+			"deviceSettings.noMicrophones": "No microphone found",
+			"deviceSettings.preview": "Preview",
+			"deviceSettings.previewUnavailable": "Preview unavailable",
+			"audio.inputDevice": "Input device",
+			"webcam.cameraDevice": "Camera device",
 			"cursor.useEditableCursor": "Use editable cursor",
 			"cursor.useSystemCursor": "Use system cursor",
 			"tooltips.openStudio": "Open Studio",
@@ -178,9 +196,12 @@ function stubElectronAPI(getSelectedSource: Window["electronAPI"]["getSelectedSo
 		getPlatform: vi.fn(async () => "darwin"),
 		setHudOverlaySize: vi.fn(),
 		setHudOverlayIgnoreMouseEvents: vi.fn(),
-		moveHudOverlayBy: vi.fn(),
+		beginHudOverlayDrag: vi.fn(),
+		dragHudOverlayTo: vi.fn(),
+		endHudOverlayDrag: vi.fn(),
 		hudOverlayHide: vi.fn(),
 		hudOverlayClose: vi.fn(),
+		openNotes: vi.fn(),
 		switchToEditor: vi.fn(async () => undefined),
 		onSelectedSourceChanged: vi.fn((callback) => {
 			selectedSourceChangedListeners.push(callback);
@@ -232,6 +253,13 @@ function resetLaunchMocks() {
 	recorderState.value.toggleRecording.mockClear();
 	recorderState.value.softwareEncoderFallbackNoticeVisible = false;
 	recorderState.value.dismissSoftwareEncoderFallbackNotice.mockClear();
+	recorderState.value.recording = false;
+	recorderState.value.microphoneEnabled = false;
+	recorderState.value.setMicrophoneEnabled.mockClear();
+	recorderState.value.setMicrophoneDeviceId.mockClear();
+	recorderState.value.webcamEnabled = false;
+	recorderState.value.setWebcamEnabled.mockClear();
+	micDevicesState.value = [];
 	selectedSourceChangedListeners = [];
 	sourceSelectorClosedListeners = [];
 	i18nState.value.systemLocaleSuggestion = null;
@@ -378,7 +406,39 @@ describe("LaunchWindow record button", () => {
 	});
 });
 
-describe("LaunchWindow system language prompt", () => {
+/** jsdom reports zero layout, so fake a rendered box for the elements we measure. */
+function stubBox(element: HTMLElement, width: number, height: number) {
+	vi.spyOn(element, "getBoundingClientRect").mockReturnValue({
+		top: 0,
+		left: 0,
+		right: width,
+		bottom: height,
+		width,
+		height,
+		x: 0,
+		y: 0,
+		toJSON: () => ({}),
+	});
+	Object.defineProperty(element, "scrollWidth", { value: width, configurable: true });
+	Object.defineProperty(element, "scrollHeight", { value: height, configurable: true });
+}
+
+async function flushResizeObservers() {
+	await act(async () => {
+		for (const callback of resizeCallbacks) {
+			callback([], {} as ResizeObserver);
+		}
+	});
+}
+
+function lastRequestedHudSize(): [number, number] {
+	const sizeMock = window.electronAPI.setHudOverlaySize as unknown as {
+		mock: { calls: Array<[number, number]> };
+	};
+	return sizeMock.mock.calls[sizeMock.mock.calls.length - 1];
+}
+
+describe("LaunchWindow overlay sizing", () => {
 	beforeEach(() => {
 		platformState.value = "darwin";
 		resetLaunchMocks();
@@ -391,72 +451,261 @@ describe("LaunchWindow system language prompt", () => {
 		vi.unstubAllGlobals();
 	});
 
-	it("grows the HUD overlay tall enough to fit the prompt so its buttons stay clickable", async () => {
-		i18nState.value.systemLocaleSuggestion = "zh-CN";
-
+	it("reserves room for a popover before one is ever opened", async () => {
 		renderLaunchWindow();
 
-		const prompt = await screen.findByText("Use your system language?");
-		expect(prompt).toBeInTheDocument();
-
-		// jsdom reports zero layout, so stub both the bar and the prompt to mimic a real HUD.
-		const viewportHeight = 800;
-		const barHeight = 56;
-		const bottomMargin = 20;
-		const barBottom = viewportHeight - bottomMargin;
-		const bar = prompt.parentElement?.parentElement?.querySelector(
+		const bar = (await screen.findByTestId("hud-drag-handle")).closest(
 			"[data-tray-layout]",
-		) as HTMLElement | null;
-		if (bar) {
-			vi.spyOn(bar, "getBoundingClientRect").mockReturnValue({
-				top: barBottom - barHeight,
-				left: 200,
-				right: 600,
-				bottom: barBottom,
-				width: 400,
-				height: barHeight,
-				x: 200,
-				y: barBottom - barHeight,
-				toJSON: () => ({}),
-			});
-			Object.defineProperty(bar, "scrollHeight", { value: barHeight, configurable: true });
-			Object.defineProperty(bar, "scrollWidth", { value: 400, configurable: true });
-		}
-
-		const promptBox = { width: 480, height: 130 };
-		const promptPanel = prompt.parentElement as HTMLElement;
-		vi.spyOn(promptPanel, "getBoundingClientRect").mockReturnValue({
-			top: 32,
-			left: 60,
-			right: 60 + promptBox.width,
-			bottom: 32 + promptBox.height,
-			width: promptBox.width,
-			height: promptBox.height,
-			x: 60,
-			y: 32,
-			toJSON: () => ({}),
-		});
-
-		// Fire any observers attached during render so the spied rect is actually consumed.
-		await act(async () => {
-			for (const callback of resizeCallbacks) {
-				callback([], {} as ResizeObserver);
-			}
-		});
+		) as HTMLElement;
+		stubBox(bar, 400, 56);
+		await flushResizeObservers();
 
 		await waitFor(() => {
 			expect(window.electronAPI.setHudOverlaySize).toHaveBeenCalled();
 		});
 
+		const [, height] = lastRequestedHudSize();
+		// The window is already tall enough for a full-height popover, so opening one
+		// costs no native resize -- that is what stops the HUD jumping on first open.
+		expect(height).toBeGreaterThanOrEqual(
+			HUD_BAR_BOTTOM + 56 + HUD_POPOVER_GAP + HUD_POPOVER_MAX_HEIGHT,
+		);
+	});
+
+	it("reclaims the overlay once the content drops well below what was granted", async () => {
+		renderLaunchWindow();
+
+		const bar = (await screen.findByTestId("hud-drag-handle")).closest(
+			"[data-tray-layout]",
+		) as HTMLElement;
+		// A bogus oversized reading (e.g. an unstyled first paint in dev) must not
+		// leave the overlay permanently inflated.
+		stubBox(bar, 1400, 700);
+		await flushResizeObservers();
+		const [inflatedWidth, inflatedHeight] = lastRequestedHudSize();
+
+		stubBox(bar, 400, 56);
+		await flushResizeObservers();
+
+		const [width, height] = lastRequestedHudSize();
+		expect(width).toBeLessThan(inflatedWidth);
+		expect(height).toBeLessThan(inflatedHeight);
+	});
+
+	it("does not resize the overlay when a popover opens", async () => {
+		renderLaunchWindow();
+
+		const bar = (await screen.findByTestId("hud-drag-handle")).closest(
+			"[data-tray-layout]",
+		) as HTMLElement;
+		stubBox(bar, 400, 56);
+		await flushResizeObservers();
+
 		const sizeMock = window.electronAPI.setHudOverlaySize as unknown as {
-			mock: { calls: Array<[number, number]> };
+			mockClear: () => void;
 		};
-		const [, height] = sizeMock.mock.calls[sizeMock.mock.calls.length - 1];
-		// Must at least cover the prompt plus the TOP_MARGIN slack (24).
-		expect(height).toBeGreaterThanOrEqual(32 + promptBox.height + 24);
-		// And must be less than the full viewport — guards against regressions that always
-		// grow to the full viewport because of a missed bottom anchor.
-		expect(height).toBeLessThan(viewportHeight + 24);
+		sizeMock.mockClear();
+
+		fireEvent.click(screen.getByRole("button", { name: "English" }));
+		await screen.findByTestId("hud-language-menu");
+		await flushResizeObservers();
+
+		expect(window.electronAPI.setHudOverlaySize).not.toHaveBeenCalled();
+	});
+
+	it("does not resize the overlay when the device-settings panel opens", async () => {
+		renderLaunchWindow();
+
+		const bar = (await screen.findByTestId("hud-drag-handle")).closest(
+			"[data-tray-layout]",
+		) as HTMLElement;
+		stubBox(bar, 400, 56);
+		await flushResizeObservers();
+
+		const sizeMock = window.electronAPI.setHudOverlaySize as unknown as {
+			mockClear: () => void;
+		};
+		sizeMock.mockClear();
+
+		// The panel is the tallest floating surface, so the window reserves room for
+		// it up front. Growing on open would shift the bottom-anchored stack and
+		// show up as position judder — the exact thing the reserve model prevents.
+		fireEvent.click(screen.getByTestId("launch-device-settings-button"));
+		await screen.findByTestId("hud-device-settings");
+		await flushResizeObservers();
+
+		expect(window.electronAPI.setHudOverlaySize).not.toHaveBeenCalled();
+
+		fireEvent.click(screen.getByTestId("launch-device-settings-button"));
+		await waitFor(() => {
+			expect(screen.queryByTestId("hud-device-settings")).not.toBeInTheDocument();
+		});
+		await flushResizeObservers();
+
+		expect(window.electronAPI.setHudOverlaySize).not.toHaveBeenCalled();
+	});
+
+	it("grows the HUD overlay tall enough to fit the system language prompt", async () => {
+		i18nState.value.systemLocaleSuggestion = "zh-CN";
+
+		renderLaunchWindow();
+
+		expect(await screen.findByText("Use your system language?")).toBeInTheDocument();
+
+		const bar = (await screen.findByTestId("hud-drag-handle")).closest(
+			"[data-tray-layout]",
+		) as HTMLElement;
+		stubBox(bar, 400, 56);
+		const noticeHeight = 130;
+		stubBox(screen.getByTestId("hud-notice-column"), 360, noticeHeight);
+		await flushResizeObservers();
+
+		await waitFor(() => {
+			expect(window.electronAPI.setHudOverlaySize).toHaveBeenCalled();
+		});
+
+		const [, height] = lastRequestedHudSize();
+		// Bar + popover reserve + the notice stacked above it, all of it on screen.
+		expect(height).toBeGreaterThanOrEqual(
+			HUD_BAR_BOTTOM + 56 + HUD_POPOVER_GAP + HUD_POPOVER_MAX_HEIGHT + noticeHeight,
+		);
+	});
+});
+
+describe("LaunchWindow language menu", () => {
+	beforeEach(() => {
+		platformState.value = "darwin";
+		resetLaunchMocks();
+	});
+
+	afterEach(() => {
+		cleanup();
+		vi.unstubAllGlobals();
+	});
+
+	it("sizes the menu from CSS instead of the overlay window's own height", async () => {
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByRole("button", { name: "English" }));
+
+		const menu = await screen.findByTestId("hud-language-menu");
+		// A measured maxHeight/bottom is what used to truncate the list to whatever
+		// the (initially tiny) overlay window could fit, then let it grow later when
+		// the window grew for an unrelated reason -- e.g. after dragging the HUD.
+		expect(menu.style.maxHeight).toBe("");
+		expect(menu.style.bottom).toBe("");
+		// And it lives inside the HUD stack, not portaled out to the document body.
+		expect(menu.closest("[data-tray-layout]")).toBeNull();
+		expect(menu.parentElement?.parentElement).toContainElement(
+			screen.getByTestId("hud-drag-handle"),
+		);
+	});
+});
+
+describe("LaunchWindow device buttons", () => {
+	beforeEach(() => {
+		platformState.value = "darwin";
+		resetLaunchMocks();
+	});
+
+	afterEach(() => {
+		cleanup();
+		vi.unstubAllGlobals();
+	});
+
+	it("turns the microphone on with a single click, without opening anything", async () => {
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-microphone-button"));
+
+		expect(recorderState.value.setMicrophoneEnabled).toHaveBeenCalledWith(true);
+		expect(screen.queryByTestId("hud-device-settings")).not.toBeInTheDocument();
+	});
+
+	it("turns the microphone off with a single click when it is already on", async () => {
+		recorderState.value.microphoneEnabled = true;
+
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-microphone-button"));
+
+		expect(recorderState.value.setMicrophoneEnabled).toHaveBeenCalledWith(false);
+	});
+
+	it("turns the camera on with a single click, without opening anything", async () => {
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-webcam-button"));
+
+		await waitFor(() => {
+			expect(recorderState.value.setWebcamEnabled).toHaveBeenCalledWith(true);
+		});
+		expect(screen.queryByTestId("hud-device-settings")).not.toBeInTheDocument();
+	});
+
+	it("turns the camera off with a single click when it is already on", async () => {
+		recorderState.value.webcamEnabled = true;
+
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-webcam-button"));
+
+		await waitFor(() => {
+			expect(recorderState.value.setWebcamEnabled).toHaveBeenCalledWith(false);
+		});
+	});
+});
+
+describe("LaunchWindow device settings", () => {
+	beforeEach(() => {
+		platformState.value = "darwin";
+		resetLaunchMocks();
+	});
+
+	afterEach(() => {
+		cleanup();
+		vi.unstubAllGlobals();
+	});
+
+	it("opens from the settings button and closes again from its own Done control", async () => {
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-device-settings-button"));
+		const panel = await screen.findByTestId("hud-device-settings");
+		expect(panel).toBeInTheDocument();
+
+		fireEvent.click(within(panel).getByRole("button", { name: "Done" }));
+
+		await waitFor(() => {
+			expect(screen.queryByTestId("hud-device-settings")).not.toBeInTheDocument();
+		});
+	});
+
+	it("selects a device without switching it on", async () => {
+		micDevicesState.value = [
+			{ deviceId: "mic-a", label: "Mic A", groupId: "g" },
+			{ deviceId: "mic-b", label: "Mic B", groupId: "g" },
+		];
+
+		renderLaunchWindow();
+
+		fireEvent.click(await screen.findByTestId("launch-device-settings-button"));
+		const panel = await screen.findByTestId("hud-device-settings");
+
+		fireEvent.click(within(panel).getByRole("menuitemradio", { name: /Mic B/ }));
+
+		// Selection is a preference, not an activation — that separation is the
+		// whole reason the picker moved out of the mic button.
+		expect(recorderState.value.setMicrophoneDeviceId).toHaveBeenCalledWith("mic-b");
+		expect(recorderState.value.setMicrophoneEnabled).not.toHaveBeenCalled();
+	});
+
+	it("is unavailable while recording, when devices can't be changed anyway", async () => {
+		recorderState.value.recording = true;
+
+		renderLaunchWindow();
+
+		expect(await screen.findByTestId("launch-device-settings-button")).toBeDisabled();
 	});
 });
 
@@ -478,29 +727,35 @@ describe("LaunchWindow HUD drag", () => {
 		vi.unstubAllGlobals();
 	});
 
+	it("sends the pointer's total travel, not per-frame deltas", async () => {
+		renderLaunchWindow();
+
+		const dragHandle = await screen.findByTestId("hud-drag-handle");
+
+		fireEvent.pointerDown(dragHandle, { screenX: 100, screenY: 100 });
+		expect(window.electronAPI.beginHudOverlayDrag).toHaveBeenCalledTimes(1);
+
+		fireEvent.pointerMove(dragHandle, { screenX: 140, screenY: 130 });
+		fireEvent.pointerMove(dragHandle, { screenX: 150, screenY: 140 });
+
+		// Absolute offsets from the drag origin: the main process applies them to the
+		// position it pinned at pointerdown, so nothing accumulates or drifts.
+		expect(window.electronAPI.dragHudOverlayTo).toHaveBeenNthCalledWith(1, 40, 30);
+		expect(window.electronAPI.dragHudOverlayTo).toHaveBeenNthCalledWith(2, 50, 40);
+
+		fireEvent.pointerUp(dragHandle, { screenX: 150, screenY: 140 });
+		expect(window.electronAPI.endHudOverlayDrag).toHaveBeenCalledTimes(1);
+	});
+
 	it("suppresses ResizeObserver-driven measurement while dragging, and measures once on release", async () => {
 		renderLaunchWindow();
 
 		const dragHandle = await screen.findByTestId("hud-drag-handle");
 
-		// Give the bar a non-zero, changing size so a resize observation would actually
-		// trigger a `setHudOverlaySize` call if it weren't suppressed during the drag.
-		const bar = dragHandle.closest("[data-tray-layout]") as HTMLElement | null;
-		if (bar) {
-			vi.spyOn(bar, "getBoundingClientRect").mockReturnValue({
-				top: 700,
-				left: 200,
-				right: 600,
-				bottom: 756,
-				width: 400,
-				height: 56,
-				x: 200,
-				y: 700,
-				toJSON: () => ({}),
-			});
-			Object.defineProperty(bar, "scrollHeight", { value: 56, configurable: true });
-			Object.defineProperty(bar, "scrollWidth", { value: 400, configurable: true });
-		}
+		// A bar wide enough that it genuinely outgrows the reserved window width, so a
+		// measurement would produce a `setHudOverlaySize` call if it weren't suppressed.
+		const bar = dragHandle.closest("[data-tray-layout]") as HTMLElement;
+		stubBox(bar, 900, 56);
 
 		const sizeMock = window.electronAPI.setHudOverlaySize as unknown as {
 			mockClear: () => void;
@@ -509,13 +764,7 @@ describe("LaunchWindow HUD drag", () => {
 
 		fireEvent.pointerDown(dragHandle, { screenX: 100, screenY: 100 });
 
-		// Simulate a ResizeObserver firing mid-drag (e.g. transient reflow) -- this must
-		// NOT reposition/resize the HUD while the user's pointer is still down.
-		await act(async () => {
-			for (const callback of resizeCallbacks) {
-				callback([], {} as ResizeObserver);
-			}
-		});
+		await flushResizeObservers();
 		expect(window.electronAPI.setHudOverlaySize).not.toHaveBeenCalled();
 
 		fireEvent.pointerMove(dragHandle, { screenX: 140, screenY: 130 });

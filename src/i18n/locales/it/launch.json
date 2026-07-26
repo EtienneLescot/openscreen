@@ -74,5 +74,14 @@
 		"description": "L'encoder GPU predefinito non si è avviato, quindi OpenScreen è passato alla codifica H.264 software. La registrazione dovrebbe continuare normalmente, ma l'uso della CPU potrebbe essere più alto.",
 		"dismiss": "Ho capito",
 		"dontShowAgain": "Non mostrare più"
+	},
+	"deviceSettings": {
+		"title": "Impostazioni dispositivi",
+		"done": "Fatto",
+		"micLevel": "Livello di ingresso",
+		"micHint": "Parla per testare il microfono",
+		"noMicrophones": "Nessun microfono trovato",
+		"preview": "Anteprima",
+		"previewUnavailable": "Anteprima non disponibile"
 	}
 }
