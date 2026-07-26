@@ -2,7 +2,12 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CompositorViewService, ffmpegSharedBinCandidates } from "./compositorViewService";
+import { CURSOR_THEMES } from "../../../src/lib/cursor/cursorThemes";
+import {
+	CompositorViewService,
+	ffmpegSharedBinCandidates,
+	resolveSceneAssetPaths,
+} from "./compositorViewService";
 
 /** A source checkout's `poc-d3d/.cargo/config.toml`, with `FFMPEG_DIR` written as `body`. */
 function writeCargoConfig(root: string, body: string): void {
@@ -170,5 +175,81 @@ describe("CompositorViewService ffmpeg PATH prepend", () => {
 
 		const occurrences = process.env.PATH?.split(path.delimiter).filter((p) => p === ffmpegDir);
 		expect(occurrences?.length).toBe(1);
+	});
+});
+
+describe("resolveSceneAssetPaths", () => {
+	// A packaged install: `wallpapers/` and `cursors/` exist as real files under
+	// resourcesPath (extraResources), while VITE_PUBLIC points into the asar, where
+	// nothing is readable by the Rust addon — the exact layout that broke both features.
+	let resources: string;
+	let originalResourcesPath: PropertyDescriptor | undefined;
+	let originalVitePublic: string | undefined;
+	const themed = CURSOR_THEMES.find((t) => t.assets.arrow);
+
+	beforeEach(() => {
+		resources = fs.mkdtempSync(path.join(os.tmpdir(), "openscreen-scene-assets-"));
+		fs.mkdirSync(path.join(resources, "wallpapers"), { recursive: true });
+		fs.writeFileSync(path.join(resources, "wallpapers", "wallpaper1.jpg"), "jpg");
+		if (themed?.assets.arrow) {
+			const arrow = path.join(resources, themed.assets.arrow.assetPath);
+			fs.mkdirSync(path.dirname(arrow), { recursive: true });
+			fs.writeFileSync(arrow, "png");
+		}
+		originalResourcesPath = Object.getOwnPropertyDescriptor(process, "resourcesPath");
+		Object.defineProperty(process, "resourcesPath", { value: resources, configurable: true });
+		originalVitePublic = process.env.VITE_PUBLIC;
+		// vite copies public/ into dist, so the names exist inside the archive — but the
+		// archive is a file, so no candidate under it can ever pass an existence check.
+		process.env.VITE_PUBLIC = path.join(resources, "app.asar", "dist");
+	});
+
+	afterEach(() => {
+		if (originalResourcesPath) {
+			Object.defineProperty(process, "resourcesPath", originalResourcesPath);
+		}
+		if (originalVitePublic === undefined) {
+			delete process.env.VITE_PUBLIC;
+		} else {
+			process.env.VITE_PUBLIC = originalVitePublic;
+		}
+		fs.rmSync(resources, { recursive: true, force: true });
+	});
+
+	function resolved(scene: Record<string, unknown>) {
+		return JSON.parse(resolveSceneAssetPaths(JSON.stringify(scene)));
+	}
+
+	it("resolves a bundled wallpaper to the extraResources copy, not the unreadable asar path", () => {
+		const out = resolved({ background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" } });
+
+		expect(out.background.path).toBe(path.join(resources, "wallpapers", "wallpaper1.jpg"));
+		expect(out.background.path).not.toContain("app.asar");
+		expect(fs.existsSync(out.background.path)).toBe(true);
+	});
+
+	it("resolves a cursor theme's arrow sprite to a path that exists on disk", () => {
+		if (!themed) return; // no bundled theme ships an arrow override
+		const out = resolved({ cursor: { theme: themed.id } });
+
+		expect(out.cursor.cursorSpritePath).toBe(path.join(resources, themed.assets.arrow!.assetPath));
+		expect(fs.existsSync(out.cursor.cursorSpritePath)).toBe(true);
+	});
+
+	it("leaves a custom upload's data: URL untouched — the addon decodes it in memory", () => {
+		const dataUrl = "data:image/png;base64,SGkh";
+		const out = resolved({ background: { kind: "image", path: dataUrl } });
+
+		expect(out.background.path).toBe(dataUrl);
+	});
+
+	it("nulls the sprite for the default theme so the built-in art is used", () => {
+		expect(resolved({ cursor: { theme: "default" } }).cursor.cursorSpritePath).toBeNull();
+	});
+
+	it("leaves the scene alone when no base dir holds the asset", () => {
+		const out = resolved({ background: { kind: "image", path: "/wallpapers/absent.jpg" } });
+
+		expect(out.background.path).toBe("/wallpapers/absent.jpg");
 	});
 });

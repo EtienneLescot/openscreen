@@ -33,25 +33,55 @@ const localRequire: NodeRequire = createRequire(import.meta.url) as unknown as N
  * schemes (data:, http:) are left as-is; the native side falls back to a flat
  * colour when it can't load them. Malformed JSON passes through untouched.
  */
-/** Absolute path of a theme's "arrow" sprite under `publicDir`, or null (unknown theme /
- *  default / theme ships no arrow override — same fallback the web renderer applies). */
-function resolveCursorThemeArrowPath(themeId: string, publicDir: string): string | null {
+/**
+ * Bases holding the `wallpapers/` and `cursors/` trees, most specific first.
+ *
+ * `VITE_PUBLIC` is right in dev (`<root>/public`) and WRONG when packaged, where it points at
+ * `<resources>/app.asar/dist`: vite copies `public/` into `dist`, so the files are there — but
+ * inside the asar archive. Only Electron's patched `fs` can read through an asar, and the
+ * compositor is a Rust addon calling `image::open` on a raw OS path, so every themed cursor
+ * sprite and every bundled wallpaper silently failed to load in an installed build. The cursor
+ * fell back to its default art (a theme pick looked like it did nothing) and the background fell
+ * back to a flat colour. A CUSTOM uploaded image kept working throughout, because it travels as a
+ * `data:` URL the addon decodes in memory rather than a path — which is exactly the asymmetry that
+ * pinned this down.
+ *
+ * `extraResources` copies both trees to `<resources>/{wallpapers,cursors}` as real files (see
+ * electron-builder.json5, whose own "Asset layout contract" comment names this), so
+ * `process.resourcesPath` is the packaged answer. Probing for existence rather than branching on
+ * `app.isPackaged` keeps `--dir` staging builds and tests working too, and mirrors the
+ * candidate-list idiom `ffmpegSharedBinCandidates` already uses below. Same base dir as
+ * `ASSET_BASE_DIR` in electron/windows.ts, which resolves these two trees for the renderer.
+ */
+function sceneAssetBaseDirs(): string[] {
+	return [process.env.VITE_PUBLIC, process.resourcesPath].filter(
+		(dir): dir is string => typeof dir === "string" && dir.length > 0,
+	);
+}
+
+/** First base under which `relativePath` actually exists, joined; null when none does (leave the
+ *  scene's own value alone rather than hand the addon a path we know is not there). */
+export function resolveSceneAssetPath(relativePath: string): string | null {
+	for (const base of sceneAssetBaseDirs()) {
+		const candidate = path.join(base, relativePath);
+		if (fs.existsSync(candidate)) {
+			return candidate;
+		}
+	}
+	return null;
+}
+
+/** Absolute path of a theme's "arrow" sprite, or null (unknown theme / default / theme ships no
+ *  arrow override / asset missing — same fallback to built-in art the web renderer applies). */
+function resolveCursorThemeArrowPath(themeId: string): string | null {
 	if (!themeId || themeId === DEFAULT_CURSOR_THEME_ID) {
 		return null;
 	}
-	const theme = CURSOR_THEMES.find((t) => t.id === themeId);
-	const arrow = theme?.assets.arrow;
-	if (!arrow) {
-		return null;
-	}
-	return path.join(publicDir, arrow.assetPath);
+	const arrow = CURSOR_THEMES.find((t) => t.id === themeId)?.assets.arrow;
+	return arrow ? resolveSceneAssetPath(arrow.assetPath) : null;
 }
 
-function resolveSceneAssetPaths(sceneJson: string): string {
-	const publicDir = process.env.VITE_PUBLIC;
-	if (!publicDir) {
-		return sceneJson;
-	}
+export function resolveSceneAssetPaths(sceneJson: string): string {
 	try {
 		const scene = JSON.parse(sceneJson) as {
 			background?: { kind?: string; path?: string };
@@ -60,12 +90,15 @@ function resolveSceneAssetPaths(sceneJson: string): string {
 		let changed = false;
 		const bg = scene.background;
 		if (bg?.kind === "image" && typeof bg.path === "string" && bg.path.startsWith("/")) {
-			// strip the leading slash so path.join keeps it under publicDir
-			bg.path = path.join(publicDir, bg.path.replace(/^\/+/, ""));
-			changed = true;
+			// strip the leading slash so path.join keeps it under the base dir
+			const resolved = resolveSceneAssetPath(bg.path.replace(/^\/+/, ""));
+			if (resolved) {
+				bg.path = resolved;
+				changed = true;
+			}
 		}
 		if (scene.cursor && typeof scene.cursor.theme === "string") {
-			scene.cursor.cursorSpritePath = resolveCursorThemeArrowPath(scene.cursor.theme, publicDir);
+			scene.cursor.cursorSpritePath = resolveCursorThemeArrowPath(scene.cursor.theme);
 			changed = true;
 		}
 		return changed ? JSON.stringify(scene) : sceneJson;
