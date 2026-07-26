@@ -286,19 +286,23 @@ float4 ps_main(VSOut i) : SV_Target
             return float4(0.0, 0.0, 0.0, 0.0); // hors du quad projeté
         }
         float2 uv = float2(lerp(src.x, src.z, saturate(r.x)), lerp(src.y, src.w, saturate(r.y)));
-        float tilt_a = 1.0;
-        if (radius_px > 0.0)
-        {
-            // Coins arrondis DANS LE REPÈRE DU PLAN (`dst_prev.xy` = sa taille avant projection) :
-            // le rayon reste constant le long du bord, alors qu'un arrondi calculé dans la bbox
-            // s'étirerait avec la perspective. Sans cet arrondi, un écran penché a des arêtes de
-            // couteau qui coupent le contenu en pleine phrase, et ça se lit comme une troncature
-            // plutôt que comme une inclinaison.
-            float2 plane_px = dst_prev.xy;
-            float2 p = float2(r.x, r.y) * plane_px - plane_px * 0.5;
-            float d = sd_round_rect(p, plane_px * 0.5, radius_px);
-            tilt_a = 1.0 - smoothstep(0.0, 1.5, d);
-        }
+        // Coins arrondis DANS LE REPÈRE DU PLAN (`dst_prev.xy` = sa taille avant projection) :
+        // le rayon reste constant le long du bord, alors qu'un arrondi calculé dans la bbox
+        // s'étirerait avec la perspective. Sans cet arrondi, un écran penché a des arêtes de
+        // couteau qui coupent le contenu en pleine phrase, et ça se lit comme une troncature
+        // plutôt que comme une inclinaison.
+        //
+        // Inconditionnel, rayon 0 COMPRIS : `sd_round_rect` dégénère alors en SDF de rectangle et
+        // le feather de 1.5 px subsiste, ce qui est précisément ce qui fait lire une arête inclinée
+        // comme une arête. Sous l'ancienne garde `radius_px > 0`, un slider Roundness à 0 laissait
+        // la couverture du plan au seul test binaire `r.z < 0.5` ci-dessus : des marches d'escalier
+        // en escalier franc, soit la troncature même que cette branche existe pour éviter (d'où le
+        // symptôme « le tilt 3D est tronqué, mais pas au-dessus d'un certain arrondi »). L'ombre du
+        // mode 12 applique déjà son `max(radius_px, 0.0)` sans garde, pour la même raison.
+        float2 plane_px = dst_prev.xy;
+        float2 p = float2(r.x, r.y) * plane_px - plane_px * 0.5;
+        float d = sd_round_rect(p, plane_px * 0.5, max(radius_px, 0.0));
+        float tilt_a = 1.0 - smoothstep(0.0, 1.5, d);
         return float4(sample_yuv(uv) * tilt_a, tilt_a); // prémultiplié, comme les autres modes
     }
 
