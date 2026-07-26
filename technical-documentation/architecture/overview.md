@@ -1,80 +1,125 @@
-# AI-Edition — Data Flow
+# Architecture overview
 
-Companion to [`ai-edition-roadmap.md`](ai-edition-roadmap.md) (status/phasing) and
-[`ai-edition-collision-analysis.md`](ai-edition-collision-analysis.md) (why decisions were
-made). This doc answers a narrower question: **what talks to what, and who owns the truth**,
-transcribed from a whiteboard sketch and cross-checked against the current code
-(`feat/ai-edition`, 2026-07-02).
+OpenScreen is an Electron + React + TypeScript screen recorder and video editor. The
+main process lives in `electron/`; the renderer is a single Vite-built SPA whose entry
+point is `src/App.tsx`. `App.tsx` reads `?windowType=` from the URL and lazy-loads one
+window component. The four real window types — verified against `src/App.tsx:71-125`
+and `electron/windows.ts` — are:
 
-## 1. Diagram
+- `editor` — the main studio (`AiEditionShell`, `createEditorWindow`).
+- `hud-overlay` — the floating record bar (`LaunchWindow`, `createHudOverlayWindow`).
+- `source-selector` — the screen/window picker (`SourceSelector`, `createSourceSelectorWindow`).
+- `countdown-overlay` — the pre-roll overlay (`CountdownOverlay`, `createCountdownOverlayWindow`).
+
+A fifth, frameless `NotesWindow` is reached via a separate `showNotes=true` query,
+not `windowType`.
+
+The studio is built on a single source of truth — the `AxcutDocument` v5 Zod schema
+described in [document-model.md](document-model.md). Every pane in the editor is a
+view over the same in-memory document held in a Zustand store
+(`src/lib/ai-edition/store/projectStore.ts`); the main process persists it as JSON in
+the OS-standard user data directory via `electron/ai-edition/document-service.ts`.
+What reads or writes the document, and how the user-facing surfaces hang off it, is
+the subject of the rest of this page.
+
+## Authoring levels
+
+The editor presents three overlapping levels to the user, with one extra layer —
+the document itself — sitting underneath them as the single source of truth:
+
+```mermaid
+flowchart LR
+    subgraph levels["Authoring levels"]
+        direction TB
+        M["<b>Edits / Modifiers level</b><br/>zooms, speeds, trims, …"]
+        T["<b>Timeline level</b><br/>clip order (1, 2, …)"]
+        C["<b>Clip level</b><br/>attached media: screen · camera · mic · system audio<br/>crop + in/out timestamps"]
+    end
+    DSL[["<b>DSL — AxcutDocument</b><br/>single source of truth"]]
+    P["Preview"]
+    R["Render / Export"]
+
+    M -- "authored above the timeline,<br/>stored down on the clip" --> C
+    T --> DSL
+    C --> DSL
+    DSL --> P
+    DSL --> R
+```
+
+The load-bearing point is that **modifiers are presented above the timeline in the
+UX but stored down on the clip in the data**. A zoom the user draws over clip 2 lives
+in `document.zoomRanges[]` but is anchored to that clip's `clipId` in source time; the
+pill on the ruler is then projected back from the clip, not authored in ruler space.
+That is exactly the invariant [timeline-model.md](timeline-model.md) exists to
+protect, and the reason a second authoring layer was added on top of the clip
+geometry instead of competing with it.
+
+## Who reads and writes the document
+
+The renderer holds one in-memory `AxcutDocument` and zero parallel "preview state"
+or "timeline state" copies. Every pane reads from that document; every user action
+goes back through it.
 
 ```mermaid
 flowchart TD
     User(("User"))
-    Chat["Chat UI\n(LeftPanel.tsx)"]
-    LLM["LLM Provider\n(llm-call.ts,\nprovider-registry.ts)"]
-    DSL[["DSL File\n= AxcutDocument\n(schema/index.ts)\n— SSOT —"]]
-    Store["projectStore.ts\n(Zustand, in-memory)"]
-    Disk[(".openscreen v3 file\non disk\n(document-service.ts)")]
+    Chat["LeftPanel.tsx<br/>(chat + media list)"]
+    LLM["LLM provider<br/>electron/ai-edition/llm-call.ts<br/>provider-registry.ts"]
+    DSL[["AxcutDocument<br/>src/lib/ai-edition/schema/index.ts<br/>— SSOT —"]]
+    Store["useProjectStore<br/>(Zustand, in renderer)"]
+    Disk[(".openscreen JSON<br/>userData/projects/<id>.openscreen<br/>document-service.ts")]
 
-    MT1["Media Transcript\n(source A)"]
-    MT2["Media Transcript\n(source B)"]
+    MT1["Media transcript<br/>(local Whisper)"]
+    MT2["Media transcript<br/>(2nd asset / mic)"]
 
-    Timeline["Timeline\n(TimelinePane.tsx)"]
-    VPreview["Virtual Preview\n(VirtualPreview.tsx /\nPreviewCanvas.tsx)"]
-    VTranscript["Virtual Transcript\n(TranscriptEditor.tsx)"]
+    Timeline["Timeline<br/>v4/V4Timeline.tsx"]
+    VPreview["Preview<br/>Preview.tsx → PreviewCanvas.tsx"]
+    VTranscript["Transcript<br/>CaptionsPane.tsx + src/lib/ai-edition/captions/"]
 
     User <--> Chat
     Chat <--> LLM
-    LLM -- "tool calls\n(agent-tools.ts:\naddSkip, setClipRange,\nreplaceTimeline...)" --> DSL
+    LLM -- "tool calls<br/>agent-tools.ts:<br/>addZoom, setClipRange,<br/>replaceTimeline, …" --> DSL
 
-    MT1 -- "ingest on\ntranscribe/import" --> DSL
-    MT2 -- "ingest on\ntranscribe/import" --> DSL
+    MT1 -- "ingest on<br/>transcribe/import" --> DSL
+    MT2 -- "ingest on<br/>transcribe/import" --> DSL
 
-    User -- "direct edits" --> Timeline
-    User -- "direct edits" --> VTranscript
+    User -- "direct edits<br/>(drag, resize, …)" --> Timeline
+    User -- "direct edits<br/>(cue edits, settings)" --> VTranscript
 
     DSL <==> Store
     Store <==> Disk
 
-    DSL <-.->|"read/write\n(store actions)"| Timeline
-    DSL <-.->|"read/write\n(store actions)"| VPreview
-    DSL <-.->|"read/write\n(store actions)"| VTranscript
+    DSL <-.->|"read/write<br/>(store actions)"| Timeline
+    DSL <-.->|"read/write<br/>(store actions)"| VPreview
+    DSL <-.->|"read/write<br/>(store actions)"| VTranscript
 ```
 
-## 2. What each node is, in code
+Read this diagram as two loops:
 
-| Sketch label | Code | Notes |
-|---|---|---|
-| **DSL File / SSOT** | `AxcutDocument` — Zod schema in `src/lib/ai-edition/schema/` | `project · assets[] · transcripts[] · timeline{clips,gaps,skip/mute/speed/captionRanges} · annotations[] · zoomRanges[] · legacyEditor · agent · preview · export · history`. Every pane below is a **view over this one document** — nothing keeps its own parallel state. |
-| **DSL (persistence)** | `store/projectStore.ts` (Zustand, renderer) + `electron/ai-edition/document-service.ts` (main process) | Renderer holds the live document in a Zustand store; main process persists it to `userData/projects/<id>.axcut`. Legacy `.openscreen` v2 files migrate to v3 on first open (`lib/ai-edition/document/migrate*.ts`). |
-| **Chat** | `src/components/ai-edition/LeftPanel.tsx` | Sends user messages to the LLM via IPC into `electron/ai-edition/chat-service.ts`. |
-| **LLM** | `electron/ai-edition/llm-call.ts` + `provider-registry.ts` | Fetch-based calls, OpenAI-compatible + Anthropic today (8 providers registered; OAuth device-flow/PAT still stubbed — roadmap P2.2). |
-| **Edits (LLM → DSL)** | `electron/ai-edition/agent-tools.ts` + tool-loop in `chat-service.ts` | The model doesn't free-write the document; it calls a fixed tool schema (`getCurrentDocument`, `getTranscript`, `addSkip`, `setSkipRange`, `setClipRange`, `replaceTimeline`, …). Each tool call is validated, applied to the store, and checkpointed first so the user can undo a whole batch (roadmap P1.1–P1.8). |
-| **Media Transcript(s)** | Local Whisper (`@xenova/transformers`, in-browser, not gated by `AI_FEATURES_ENABLED`) | Produces `transcripts[]` entries keyed to an asset. The two boxes in the sketch are two independent transcript sources (e.g. two recorded assets / mic + system audio) that both land in the same document — there's no per-source document fork. |
-| **Timeline** | `src/components/ai-edition/TimelinePane.tsx` | Renders `timeline.clips` + lanes (skip/speed/annotation/zoom ranges). Read/write against the store; drag, resize, reorder all dispatch store actions that mutate the DSL document (see roadmap §5 P0 table for the viewport/zoom/pan mechanics). |
-| **Virtual Preview** | `VirtualPreview.tsx` / `PreviewCanvas.tsx` | Renders the composited frame (wallpaper, blur, webcam PiP, cursor overlay, zoom, annotations) by reading the document at the current playhead time — it never owns edit state, only projects it. |
-| **Virtual Transcript** | `TranscriptEditor.tsx` | Editable view of `transcripts[]`; user edits here write back into the DSL document (word-level edits, not a separate buffer). |
+1. **Human loop.** The user edits the Timeline directly (clip reorder, region resize,
+   skip placement) or talks to the Chat panel, which drives the LLM, which edits the
+   document through the fixed tool schema — never raw JSON patches. Both paths
+   converge on the same `AxcutDocument`.
+2. **Machine loop.** Media assets get transcribed locally (Whisper via the renderer
+   worker) and merged into `document.transcripts[]`. Preview and Timeline are pure
+   projections of the document at a given time/zoom — there is no independent
+   "preview state" to desync from the DSL.
 
-## 3. Read this diagram as two loops
+Persistence (`useProjectStore` ↔ `.openscreen` file on disk) is a straight
+serialize/deserialize of the same shape, not a separate model — see
+[document-model.md](document-model.md#persistence).
 
-1. **Human loop** — User edits the Timeline / Transcript directly, or talks to the Chat panel,
-   which drives the LLM, which edits the DSL document through the tool schema (never raw JSON
-   patches). Both paths converge on the same document.
-2. **Machine loop** — Media assets get transcribed locally (Whisper) and merged into the
-   document's `transcripts[]`. Preview and Timeline are pure projections of the document at a
-   given time/zoom — there is no independent "preview state" to desync from the DSL.
+## Where to go next
 
-The one-document-many-views design is why the sketch draws `DSL File` as the hub: every arrow
-either writes into it (Chat/LLM tool calls, direct user edits, transcript ingestion) or reads a
-projection out of it (Timeline, Virtual Preview, Virtual Transcript). Persistence
-(`projectStore.ts` ↔ `.openscreen` file) is a straight serialize/deserialize of the same shape,
-not a separate model.
+The four pages that explain the editing model itself, in the order they build on each
+other:
 
-## 4. Open gaps vs. this flow (see roadmap §5 for detail)
+1. [document-model.md](document-model.md) — the document every surface projects.
+2. [timeline-model.md](timeline-model.md) — how time and modifiers are addressed inside it.
+3. [editor-shell.md](editor-shell.md) — the surfaces the user drives.
+4. [preview.md](preview.md) and [export-pipeline.md](export-pipeline.md) — the two consumers
+   that turn the document back into pixels.
 
-- Chat history is still in-memory per session (`chat-service.ts`), not persisted to SQLite —
-  roadmap P2.1.
-- LLM auth is API-key only; OAuth device-flow/PAT is stubbed — roadmap P2.2.
-- Streaming responses (SSE-style token rendering in Chat) not implemented — roadmap P2.4.
-- Tool-call permission gate (confirm before a write tool runs) not implemented — roadmap P2.5.
+[decisions.md](decisions.md) records what is settled and what was tried and rejected —
+read it before proposing a structural change. The full index of every architecture,
+engineering and testing page is in [the tree README](../README.md).
