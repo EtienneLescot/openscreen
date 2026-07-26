@@ -695,8 +695,9 @@ async function tryCompactSession(opts: {
 	const prompt = buildCompactionPrompt(oldMessages);
 	let summary = "";
 	try {
-		const { createOpenScreenChatModel } = await import("./deep-agent/chat-model");
-		const { extractDelta } = await import("./deep-agent/service");
+		const { createOpenScreenChatModel, messageContentToText } = await import(
+			"./deep-agent/chat-model"
+		);
 		const chatModel = await createOpenScreenChatModel({
 			provider,
 			model,
@@ -709,7 +710,7 @@ async function tryCompactSession(opts: {
 			new SystemMessage(COMPACTION_SYSTEM_PROMPT),
 			new HumanMessage(prompt),
 		]);
-		summary = extractDelta(result.content);
+		summary = messageContentToText(result.content);
 		if (!summary) {
 			return null;
 		}
