@@ -16,12 +16,13 @@ and scene contract; the GPU-resident path it builds on is documented in
 (preview fluidity, bench methodology, the trade-offs that drove this design) live
 in [engineering/rendering-performance.md](../engineering/rendering-performance.md).
 
-## The two paths
+## The compositor path
 
-Two paths exist in the source tree. The native one is live; the Pixi-based second
-implementation is shipped but not reached from the editor surface.
+One compositor exists in the source tree, and it is the live one. A Pixi/WebGL
+single-canvas screen compositor was tried alongside it and removed once it was
+established that nothing mounted it.
 
-### Path A — native D3D compositor overlay (live)
+### Native D3D compositor overlay (live)
 
 Mounted as the first child of `.previewFrame` by
 [`NativeCompositorOverlay.tsx`](../../src/components/ai-edition/NativeCompositorOverlay.tsx).
@@ -59,20 +60,6 @@ ffmpeg shared-DLL directory is prepended to `PATH` before the require so the
 addon's `LoadLibrary("avcodec-NN.dll")` resolves against the same pinned build the
 crate links against
 ([`compositorViewService.ts:206`](../../electron/native-bridge/services/compositorViewService.ts:206)).
-
-### Path B — Pixi/WebGL single-canvas screen compositor (shipped, not mounted)
-
-[`preview-compositor/PreviewCompositor.tsx`](../../src/components/ai-edition/preview-compositor/PreviewCompositor.tsx)
-is the screen-only successor that decodes straight into a Pixi `VideoSource` and
-composites video + zoom + mask in one GPU draw call. It is not mounted by the
-editor shell; `PreviewCanvas.tsx:393-411` deliberately falls back to the
-`VirtualPreview` legacy path with a comment recording why
-("`PreviewCompositor` (Pixi v8) regressed the screen preview … `setPixiReady` +
-`canvasSize === {0,0}` on mount produces a 1x1 canvas that the resize effect never
-widens"). The module stays in the tree as the route the next Pixi hardening
-attempts to revive, but no flag in this branch re-enables it. `PreviewCompositor`
-is therefore dead code today and is referenced in this doc only as the
-"two paths" it was advertised as offering; the live path is the native overlay.
 
 There is no fallback to a CPU/Canvas2D legacy compositor: before the native view
 ships a frame, only the wallpaper painted by CSS is visible, and the cursor / zoom
