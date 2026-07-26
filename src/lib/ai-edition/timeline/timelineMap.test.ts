@@ -1,7 +1,7 @@
 // Tests for the timeline coordinate mapper. The invariant under test: a modifier
 // (or the playhead) authored on the RAW ruler must resolve to the SAME source
 // moment regardless of trims earlier on the timeline — the raw↔compressed↔source
-// bug this module exists to kill. See docs/architecture/timeline-coordinate-refactor.md.
+// bug this module exists to kill. See technical-documentation/architecture/timeline-model.md.
 
 import { describe, expect, it } from "vitest";
 import { resolvePlaybackSegments } from "../document/timeline";

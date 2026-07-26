@@ -359,7 +359,7 @@ describe("axcut-schema v5", () => {
 // --- v4 -> v5 clip-anchoring migration (round-trip) --------------------------
 // Uses goodtest's real layout: clip A [asset_f] src[0,25.557313] raw[0,25.557313],
 // clip B [asset_e] src[0,8.149313] raw[25.557313,33.706626], and its straddling
-// speed region [8149,28575]ms. See docs/architecture/timeline-coordinate-refactor.md §6.
+// speed region [8149,28575]ms. See technical-documentation/architecture/timeline-model.md
 
 describe("v4 -> v5 clip-anchored modifier migration", () => {
 	const CLIP_A_END = 25.557313;

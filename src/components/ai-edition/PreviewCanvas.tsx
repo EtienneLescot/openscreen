@@ -406,7 +406,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 						// VirtualPreview path — CSS-transformed <video> + measure
 						// on ResizeObserver — until the Pixi path is hardened
 						// behind a flag with its own tests.
-						// See docs/engineering/ai-edition-preview-pixi-rollback.md
+						// See technical-documentation/architecture/preview.md
 						// (todo) for the failure write-up.
 						void relayProps.clockRef;
 						return (

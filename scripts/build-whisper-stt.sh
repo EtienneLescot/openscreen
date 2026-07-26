@@ -6,7 +6,7 @@
 # The helper is a long-lived HTTP server that exposes the same
 # spawn -> GET / -> POST /inference contract the previous native STT helper
 # used, but links libwhisper directly and reads whisper.cpp's DTW token timestamps.
-# See docs/engineering/stt-whispercpp-migration-plan.md §2.
+# See technical-documentation/architecture/transcription-and-captions.md
 #
 # Local use:
 #   bash scripts/build-whisper-stt.sh                # default backend for host

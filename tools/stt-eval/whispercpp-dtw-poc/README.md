@@ -6,7 +6,7 @@ on the rest of the repo is reading the already-built CTranslate2 server
 binary + model as a comparison baseline (never rebuilding or modifying it).
 
 **Full plan / instructions:**
-[docs/engineering/stt-whispercpp-dtw-poc-plan.md](../../../docs/engineering/stt-whispercpp-dtw-poc-plan.md)
+[technical-documentation/architecture/transcription-and-captions.md](../../../technical-documentation/architecture/transcription-and-captions.md)
 
 **Verdict:** see [`REPORT.md`](./REPORT.md) — §4.1 guardrail PASS on all 28 runs;
 word-end timestamps agree with CT2 within 20 ms median; wcpp-CPU-q8_0 is

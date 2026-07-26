@@ -125,7 +125,7 @@ export function useTimeline() {
 
 	// Every add* below anchors the new region to the clip(s) it covers before storing it.
 	// A modifier MUST own a clip anchor to survive reorder/trim (see
-	// docs/architecture/timeline-coordinate-refactor.md §6) — writing only startMs/endMs
+	// technical-documentation/architecture/timeline-model.md) — writing only startMs/endMs
 	// would strand it. A region created across a clip boundary becomes one fragment per
 	// clip; the ruler renders them as one pill because their properties are equal.
 	const addZoom = useCallback(async () => {

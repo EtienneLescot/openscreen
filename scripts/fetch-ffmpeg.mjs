@@ -41,7 +41,8 @@
 // NOTE: the plan this was vendored for is REFUTED. Feeding native ffmpeg from
 // the renderer measured 2.1x SLOWER than the WebCodecs path it was to replace —
 // the wall is the compositor, not the encoder. See
-// docs/architecture/export-pipeline.md §5. The binary stays because the bench's
+// technical-documentation/engineering/rendering-performance.md. The binary stays
+// because the bench's
 // `native` arms use it, and because a future native core would still need a
 // licence-gated H.264 encoder; nothing here ships on the export path today.
 //
@@ -326,7 +327,7 @@ async function main() {
 		console.error(
 			"macOS is not provisioned by this script: BtbN publishes no macOS build.\n" +
 				"It would have to be built and notarised separately. Note the native-encode plan\n" +
-				"is refuted (docs/architecture/export-pipeline.md §5), so this is bench-only today.",
+				"is refuted (technical-documentation/engineering/rendering-performance.md), so this is bench-only today.",
 		);
 		process.exit(1);
 	}
