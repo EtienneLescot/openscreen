@@ -84,6 +84,8 @@
 		"presets": "Ön ayarlar",
 		"help": "Kaydın arkasında ne görüneceğini seçin: yerleşik bir duvar kâğıdı, düz renk, gradyan veya diskinizdeki özel bir görsel.",
 		"customWallpaper": "Özel duvar kâğıdı",
+		"unsupportedImage": "Desteklenmeyen görsel. JPG veya PNG dosyası kullanın.",
+		"imageReadFailed": "Bu görsel dosyası okunamadı.",
 		"imageLabel": "Arka plan {{index}}",
 		"colorLabel": "Renk {{color}}"
 	},

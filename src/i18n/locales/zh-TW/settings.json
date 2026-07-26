@@ -85,6 +85,8 @@
 		"presets": "預設",
 		"help": "選擇錄製內容背後顯示的元素：內建桌布圖片、純色、漸層，或來自磁碟的自訂圖片。",
 		"customWallpaper": "自訂桌布",
+		"unsupportedImage": "不支援的圖片格式。請使用 JPG 或 PNG 檔案。",
+		"imageReadFailed": "無法讀取該圖片檔案。",
 		"imageLabel": "背景 {{index}}",
 		"colorLabel": "顏色 {{color}}"
 	},

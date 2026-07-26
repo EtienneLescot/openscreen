@@ -84,6 +84,8 @@
 		"presets": "Predefiniti",
 		"help": "Scegli cosa appare dietro la registrazione: uno sfondo incluso, un colore pieno, un gradiente o un'immagine personale dal disco.",
 		"customWallpaper": "Sfondo personalizzato",
+		"unsupportedImage": "Immagine non supportata. Usa un file JPG o PNG.",
+		"imageReadFailed": "Impossibile leggere quel file immagine.",
 		"imageLabel": "Sfondo {{index}}",
 		"colorLabel": "Colore {{color}}"
 	},
