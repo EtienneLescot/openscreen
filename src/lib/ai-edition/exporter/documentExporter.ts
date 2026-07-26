@@ -39,6 +39,12 @@ import {
 	getAspectRatioValue,
 	getNativeAspectRatioValue,
 } from "@/utils/aspectRatioUtils";
+import {
+	captionCuesToTextRegions,
+	deriveCaptionCues,
+	getCaptionSettings,
+	getCaptionTranslations,
+} from "../captions";
 import { createId } from "../document/ids";
 import { type Interval, normalizeIntervals, primaryAssetDuration } from "../document/timeline";
 import type { AxcutAsset, AxcutDocument } from "../schema";
@@ -219,8 +225,18 @@ export async function exportAxcutDocument(
 		clips,
 		() => createId("zoom"),
 	);
+	// Captions are derived from the transcript at export time, never stored — so a
+	// project exported after re-transcribing or after a style change always writes
+	// the captions the editor was showing, with no regeneration step in between.
+	// They ride the annotation text renderer (same wrapping/plate/alignment) and
+	// go through the same virtual→source projection, so preview and file agree.
+	const captionSettings = getCaptionSettings(document);
+	const captionRegions = captionCuesToTextRegions(
+		deriveCaptionCues(document, captionSettings, getCaptionTranslations(document)),
+		captionSettings,
+	);
 	const annotationRegions = projectRegionsToSourceTime(
-		document.annotations as unknown as AnnotationRegion[],
+		[...(document.annotations as unknown as AnnotationRegion[]), ...captionRegions],
 		clips,
 		() => createId("ann"),
 	);

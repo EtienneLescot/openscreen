@@ -1,5 +1,6 @@
 import {
 	type AiEditionAssetResult,
+	type AiEditionCaptionTranslateResult,
 	type AiEditionChatBudget,
 	type AiEditionChatCompactResult,
 	type AiEditionChatMessage,
@@ -352,6 +353,19 @@ export const nativeBridgeClient = {
 				domain: "aiEdition",
 				action: "chat.compactNow",
 				payload: { projectId, sessionId },
+			}),
+		/** Translate transcript segments for the caption layer through the
+		 *  configured chat provider. Returns segmentId → translated text; the
+		 *  caller stores it in the caption translation layer. */
+		translateCaptions: (input: {
+			segments: Array<{ id: string; text: string }>;
+			targetLanguage: string;
+			sourceLanguage?: string;
+		}) =>
+			requireNativeBridgeData<AiEditionCaptionTranslateResult>({
+				domain: "aiEdition",
+				action: "captions.translate",
+				payload: input,
 			}),
 		runTimelineOperation: (
 			projectId: string,
