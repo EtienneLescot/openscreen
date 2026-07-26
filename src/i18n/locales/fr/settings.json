@@ -241,11 +241,6 @@
 	"language": {
 		"title": "Langue"
 	},
-	"timeline": {
-		"title": "Montage",
-		"waveform": "Afficher la forme d'onde sur la piste de découpe",
-		"help": "Options d'affichage de la timeline, comme la forme d'onde audio sur la piste de découpe."
-	},
 	"facets": {
 		"captions": "Sous-titres",
 		"transcript": "Transcription"

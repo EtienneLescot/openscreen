@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { EditorProjectData } from "@/components/video-editor/projectPersistence";
+import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { migrateAxcutDocumentToProjectData, migrateProjectDataToAxcutDocument } from "./migrate";
 
 function makeV2Project(overrides: Partial<EditorProjectData> = {}): EditorProjectData {
@@ -10,7 +11,6 @@ function makeV2Project(overrides: Partial<EditorProjectData> = {}): EditorProjec
 			wallpaper: "/wallpapers/wallpaper1.jpg",
 			shadowIntensity: 0,
 			showBlur: false,
-			showTrimWaveform: true,
 			motionBlurAmount: 0,
 			borderRadius: 0,
 			padding: 50,
@@ -168,6 +168,22 @@ describe("migrateProjectDataToAxcutDocument", () => {
 			cursorTheme: "default",
 			autoZoomEnabled: false,
 		});
+	});
+
+	it("keeps migrating a project saved with the retired showTrimWaveform key", () => {
+		const v2 = makeV2Project();
+		// Projects saved before the setting was removed still carry it.
+		const stored = {
+			...v2,
+			editor: { ...v2.editor, showTrimWaveform: false },
+		} as EditorProjectData;
+		const doc = migrateProjectDataToAxcutDocument(stored);
+		// legacyEditorSchema is a passthrough object, so the retired key rides
+		// along inertly rather than failing the parse — and nothing reads it.
+		expect(doc.legacyEditor).toMatchObject({ showTrimWaveform: false });
+		expect(getEditorSettings(doc)).toEqual(
+			getEditorSettings(migrateProjectDataToAxcutDocument(v2)),
+		);
 	});
 
 	it("handles missing media by creating an empty document", () => {

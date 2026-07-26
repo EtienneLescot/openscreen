@@ -241,11 +241,6 @@
 	"language": {
 		"title": "Ngôn ngữ"
 	},
-	"timeline": {
-		"title": "Dòng thời gian",
-		"waveform": "Hiển thị dạng sóng âm thanh trên rãnh cắt",
-		"help": "Tùy chọn hiển thị dòng thời gian, chẳng hạn hiện dạng sóng âm thanh trên rãnh cắt."
-	},
 	"facets": {
 		"captions": "Phụ đề",
 		"transcript": "Bản ghi lời thoại"
