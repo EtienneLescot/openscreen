@@ -120,6 +120,43 @@ describe("buildSceneDescription.background", () => {
 		});
 	});
 
+	// The three below are why parseWallpaper delegates to parseCssGradient
+	// instead of splitting on commas: the flat split shredded rgba() stops and
+	// ignored keyword directions. The last one pins the failure mode — an
+	// unparseable gradient stays a gradient (the native side falls back to the
+	// layout background) rather than becoming an image path.
+	it("keeps rgba() stops whole", () => {
+		const doc = makeDoc({
+			legacyEditor: { wallpaper: "linear-gradient(90deg, rgba(1,2,3,0.5), #fff)" },
+		});
+		expect(buildSceneDescription(doc).background).toEqual({
+			kind: "gradient",
+			angleDeg: 90,
+			stops: ["rgba(1,2,3,0.5)", "#fff"],
+		});
+	});
+
+	it('resolves "to bottom right" to 135deg', () => {
+		const doc = makeDoc({
+			legacyEditor: { wallpaper: "linear-gradient(to bottom right, #a1b2c3, #d4e5f6)" },
+		});
+		expect(buildSceneDescription(doc).background).toEqual({
+			kind: "gradient",
+			angleDeg: 135,
+			stops: ["#a1b2c3", "#d4e5f6"],
+		});
+	});
+
+	it("stays a gradient when the parser rejects the string", () => {
+		// parseCssGradient anchors on a trailing ")" — a trailing space is enough.
+		const doc = makeDoc({ legacyEditor: { wallpaper: "linear-gradient(135deg, red, blue) " } });
+		expect(buildSceneDescription(doc).background).toEqual({
+			kind: "gradient",
+			angleDeg: 180,
+			stops: [],
+		});
+	});
+
 	it('"/wallpapers/x.jpg" → image', () => {
 		const doc = makeDoc({ legacyEditor: { wallpaper: "/wallpapers/x.jpg" } });
 		expect(buildSceneDescription(doc).background).toEqual({

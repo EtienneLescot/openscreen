@@ -1,5 +1,5 @@
 import type { WebcamLayoutPreset } from "@/lib/compositeLayout";
-import { clamp } from "@/utils/math";
+import { clamp01 } from "@/utils/math";
 
 export type ZoomDepth = 1 | 2 | 3 | 4 | 5 | 6;
 export type ZoomFocusMode = "manual" | "auto";
@@ -445,9 +445,16 @@ export function getZoomScale(region: ZoomRegion): number {
 	return ZOOM_DEPTH_SCALES[region.depth];
 }
 
+// An unknown focus means "centre", not "top-left" — so this one can't use the
+// shared clamp, which floors non-finite input to `min`. Same convention as
+// `finiteFraction` in useTimeline.ts.
+function focusOrCentre(value: number): number {
+	return Number.isFinite(value) ? clamp01(value) : 0.5;
+}
+
 export function clampFocusToDepth(focus: ZoomFocus, _depth: ZoomDepth): ZoomFocus {
 	return {
-		cx: clamp(focus.cx, 0, 1),
-		cy: clamp(focus.cy, 0, 1),
+		cx: focusOrCentre(focus.cx),
+		cy: focusOrCentre(focus.cy),
 	};
 }
