@@ -182,7 +182,8 @@
 		"tipShiftTabCycle": "Используйте Shift+Tab для циклического переключения в обратном направлении.",
 		"invalidImageType": "Неверный тип файла",
 		"imageFormatsOnly": "Пожалуйста, загрузите изображение JPG, PNG, GIF или WebP.",
-		"imageUploadSuccess": "Изображение успешно загружено!"
+		"imageUploadSuccess": "Изображение успешно загружено!",
+		"type": "Тип"
 	},
 	"fontStyles": {
 		"classic": "Классический",

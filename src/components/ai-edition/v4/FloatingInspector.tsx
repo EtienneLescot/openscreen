@@ -14,12 +14,13 @@ import {
 	ZoomIn,
 } from "lucide-react";
 import type { ComponentProps } from "react";
-import { useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { toast } from "sonner";
 import { parseCustomPlaybackSpeedInput } from "@/components/video-editor/customPlaybackSpeed";
 import { MAX_PLAYBACK_SPEED, SPEED_OPTIONS } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutAnnotationRegion, AxcutClip } from "@/lib/ai-edition/schema";
+import { rafCoalesce } from "@/lib/ai-edition/store/rafCoalesce";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { coalescedTrimGroups } from "@/lib/ai-edition/timeline/trim-mapping";
@@ -29,6 +30,7 @@ import {
 	CursorPane,
 	LayoutPane,
 	SliderCell,
+	Toggle,
 	TranscriptPane,
 	VideoEffectsPane,
 } from "../RightPanes";
@@ -425,6 +427,27 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 	// toggle that writes it lives in the timeline toolbar, not on this component's path.
 	const { settings } = useEditorSettings();
 	const autoFocusAll = settings.autoFocusAll;
+	// Mise à jour en direct regroupée à une par frame. `updateAnnotationLive` remplace le document
+	// dans le store, donc chaque appel fait reconstruire et re-sérialiser toute la scène avant de
+	// la pousser au natif : c'est le juste prix une fois par image, mais un `<input type="color">`
+	// émet un événement par pixel de glissement et saturait le thread. La référence garde la
+	// dernière fonction du store sans recréer le coalesceur, dont l'état en attente doit survivre
+	// aux rendus.
+	const liveUpdateRef = useRef(tl.updateAnnotationLive);
+	liveUpdateRef.current = tl.updateAnnotationLive;
+	const liveUpdate = useMemo(
+		() =>
+			rafCoalesce((id: string, patch: Partial<AxcutAnnotationRegion>) =>
+				liveUpdateRef.current(id, patch),
+			),
+		[],
+	);
+	/** Fin de geste : on applique la dernière valeur en attente AVANT d'enregistrer, sinon la
+	 *  frame en vol serait perdue et le disque garderait l'avant-dernière couleur. */
+	const commitAnnotation = () => {
+		liveUpdate.flush();
+		void tl.commitAnnotationChange();
+	};
 	const selection = tl.selection;
 	if (!selection) return null;
 
@@ -588,7 +611,7 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 					    label here already shipped translated. Converting keeps the span and box, so
 					    a mistake costs one more click rather than redrawing the region. */}
 					{paneRow(
-						ts("annotation.title"),
+						ts("annotation.type"),
 						<select
 							value={region.type}
 							onChange={(e) => {
@@ -615,7 +638,7 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 								value={region.content ?? ""}
 								placeholder={ts("annotation.textPlaceholder")}
 								onChange={(e) => tl.updateAnnotationLive(region.id, { content: e.target.value })}
-								onBlur={() => void tl.commitAnnotationChange()}
+								onBlur={commitAnnotation}
 								rows={2}
 								style={{
 									resize: "vertical",
@@ -696,15 +719,15 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 									type="color"
 									value={region.figureData?.color ?? "#34B27B"}
 									onChange={(e) =>
-										tl.updateAnnotationLive(region.id, {
+										liveUpdate(region.id, {
 											figureData: {
 												...(region.figureData ?? { arrowDirection: "right", strokeWidth: 4 }),
 												color: e.target.value,
 											},
 										})
 									}
-									onBlur={() => void tl.commitAnnotationChange()}
-									style={{ width: 34, height: 28, padding: 0, border: "none", background: "none" }}
+									onBlur={commitAnnotation}
+									style={colorInputStyle}
 								/>,
 							)}
 							<SliderCell
@@ -723,6 +746,8 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 									})
 								}
 								onCommit={() => void tl.commitAnnotationChange()}
+								// Le libellé i18n interpole déjà « : 11px » ; sans ça on lisait « 11px11 ».
+								showValue={false}
 							/>
 						</>
 					) : null}
@@ -808,7 +833,7 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 											style: { ...region.style, fontSize: Number(e.target.value) },
 										})
 									}
-									onBlur={() => void tl.commitAnnotationChange()}
+									onBlur={commitAnnotation}
 									style={{ ...selectStyle, width: 84, textAlign: "right" }}
 								/>,
 							)
@@ -829,51 +854,38 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 										// un `<input type="color">` émet `onChange` en continu, et committer à
 										// chaque événement rendait le sélecteur inutilisable.
 										onChange={(e) =>
-											tl.updateAnnotationLive(region.id, {
+											liveUpdate(region.id, {
 												style: { ...region.style, backgroundColor: e.target.value },
 											})
 										}
-										onBlur={() => void tl.commitAnnotationChange()}
-										style={{
-											width: 34,
-											height: 28,
-											padding: 0,
-											border: "none",
-											background: "none",
-										}}
+										onBlur={commitAnnotation}
+										style={colorInputStyle}
 									/>
 									{/* Une case à cocher plutôt qu'un bouton « effacer » : avoir un fond ou non est
 									    un état, pas une action. La couleur choisie est conservée quand on décoche,
 									    donc recocher la rend telle quelle au lieu d'obliger à la re-sélectionner. */}
-									<label
-										style={{
-											display: "inline-flex",
-											alignItems: "center",
-											gap: 6,
-											fontSize: 12.5,
-											color: "var(--fg-2)",
-											cursor: "pointer",
+									{/* La pilule des panneaux, pas une case système : c'est le contrôle on/off de
+									    l'app (cf. « Blur BG » dans Video effects), et une checkbox brute jurait
+									    avec tout le reste. */}
+									<Toggle
+										checked={hasBackground}
+										onChange={(next) => {
+											const previous = region.style?.backgroundColor;
+											tl.updateAnnotationLive(region.id, {
+												style: {
+													...region.style,
+													// Rallumer restaure la dernière couleur choisie ; "transparent" n'en
+													// est pas une, d'où le repli sur du noir pour un premier allumage.
+													backgroundColor: next
+														? previous && previous !== "transparent"
+															? previous
+															: "#000000"
+														: "transparent",
+												},
+											});
+											void tl.commitAnnotationChange();
 										}}
-									>
-										<input
-											type="checkbox"
-											checked={hasBackground}
-											onChange={(e) => {
-												tl.updateAnnotationLive(region.id, {
-													style: {
-														...region.style,
-														backgroundColor: e.target.checked
-															? (region.style?.backgroundColor ?? "#000000") === "transparent"
-																? "#000000"
-																: (region.style?.backgroundColor ?? "#000000")
-															: "transparent",
-													},
-												});
-												void tl.commitAnnotationChange();
-											}}
-										/>
-										{ts("annotation.active")}
-									</label>
+									/>
 								</div>,
 							)
 						: null}
@@ -890,18 +902,12 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 										aria-label={ts("annotation.colorWheel")}
 										value={region.style?.color ?? "#ffffff"}
 										onChange={(e) =>
-											tl.updateAnnotationLive(region.id, {
+											liveUpdate(region.id, {
 												style: { ...region.style, color: e.target.value },
 											})
 										}
-										onBlur={() => void tl.commitAnnotationChange()}
-										style={{
-											width: 34,
-											height: 28,
-											padding: 0,
-											border: "none",
-											background: "none",
-										}}
+										onBlur={commitAnnotation}
+										style={colorInputStyle}
 									/>
 									{colors.map((c) => (
 										<button
@@ -993,6 +999,18 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 		</div>
 	);
 }
+
+/** Les `<input type="color">` natifs sont des rectangles bruts : on leur donne le même cadre que
+ *  les autres contrôles du panneau, sinon ils détonnent complètement. */
+const colorInputStyle: React.CSSProperties = {
+	width: 40,
+	height: 28,
+	padding: 2,
+	borderRadius: 8,
+	border: "1px solid var(--border)",
+	background: "var(--surface)",
+	cursor: "pointer",
+};
 
 const selectStyle: React.CSSProperties = {
 	height: 32,

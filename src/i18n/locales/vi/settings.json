@@ -182,7 +182,8 @@
 		"imageFormatsOnly": "Vui lòng tải lên tệp hình ảnh JPG, PNG, GIF hoặc WebP.",
 		"imageUploadSuccess": "Tải lên hình ảnh thành công!",
 		"colorPalette": "Bảng màu",
-		"colorWheel": "Vòng màu"
+		"colorWheel": "Vòng màu",
+		"type": "Loại"
 	},
 	"fontStyles": {
 		"classic": "Cổ điển",

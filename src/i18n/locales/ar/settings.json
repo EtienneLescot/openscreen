@@ -182,7 +182,8 @@
 		"tipShiftTabCycle": "استخدم Shift+Tab للتنقل للخلف.",
 		"invalidImageType": "نوع ملف غير صالح",
 		"imageFormatsOnly": "يرجى رفع ملف صورة JPG أو PNG أو GIF أو WebP.",
-		"imageUploadSuccess": "تم رفع الصورة بنجاح!"
+		"imageUploadSuccess": "تم رفع الصورة بنجاح!",
+		"type": "النوع"
 	},
 	"fontStyles": {
 		"classic": "كلاسيكي",
