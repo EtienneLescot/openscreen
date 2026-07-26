@@ -226,34 +226,6 @@ export function useTimeline() {
 		await saveDocument(next);
 	}, [document, currentTimeSec, saveDocument]);
 
-	// T15 — add a trim at a specific (assetId, sourceStartSec, sourceEndSec).
-	// Used by the place-trim mode in TimelinePane where the cursor lands
-	// inside a specific clip's source range, not just at currentTimeSec.
-	const addTrimAt = useCallback(
-		async (assetId: string, sourceStartSec: number, sourceEndSec: number) => {
-			if (!document) return;
-			const next: AxcutDocument = {
-				...document,
-				timeline: {
-					...document.timeline,
-					trimRanges: [
-						...document.timeline.trimRanges,
-						{
-							id: createId("trim"),
-							assetId,
-							startSec: sourceStartSec,
-							endSec: sourceEndSec,
-							reason: "manual",
-							origin: "user" as const,
-						},
-					],
-				},
-			};
-			await saveDocument(next);
-		},
-		[document, saveDocument],
-	);
-
 	const addAnnotation = useCallback(async () => {
 		if (!document) return;
 		const timeMs = Math.round(currentTimeSec * 1000);
@@ -342,25 +314,6 @@ export function useTimeline() {
 		};
 		await saveDocument(next);
 	}, [document, currentTimeSec, saveDocument]);
-
-	const updateTrimRange = useCallback(
-		async (trimId: string, startSec: number, endSec: number) => {
-			if (!document) return;
-			const s = finiteSec(startSec);
-			const e = finiteSec(endSec);
-			const next: AxcutDocument = {
-				...document,
-				timeline: {
-					...document.timeline,
-					trimRanges: document.timeline.trimRanges.map((r) =>
-						r.id === trimId ? { ...r, startSec: Math.min(s, e), endSec: Math.max(s, e) } : r,
-					),
-				},
-			};
-			await saveDocument(next);
-		},
-		[document, saveDocument],
-	);
 
 	// Like updateTrimRange but also re-attaches the trim to a (possibly
 	// different) asset — needed when a trim is dragged across a clip boundary
@@ -741,114 +694,6 @@ export function useTimeline() {
 		setMultiSelection([]);
 	}, []);
 
-	const addClipBefore = useCallback(
-		async (assetId: string) => {
-			if (!document) return;
-			const asset = document.assets.find((a) => a.id === assetId);
-			if (!asset) return;
-			const duration = asset.durationSec ?? PLACEHOLDER_DURATION_SEC;
-			const newClip: AxcutDocument["timeline"]["clips"][number] = {
-				id: createId("clip"),
-				assetId,
-				sourceStartSec: 0,
-				sourceEndSec: duration,
-				timelineStartSec: 0,
-				timelineEndSec: duration,
-				wordRefs: [],
-				origin: "user",
-				reason: "Inserted before all clips",
-			};
-			const shifted = document.timeline.clips.map((c) => ({
-				...c,
-				timelineStartSec: c.timelineStartSec + duration,
-				timelineEndSec: c.timelineEndSec + duration,
-			}));
-			const next: AxcutDocument = {
-				...document,
-				timeline: {
-					...document.timeline,
-					clips: [newClip, ...shifted],
-				},
-			};
-			await saveDocument(next);
-		},
-		[document, saveDocument],
-	);
-
-	const addClipAfter = useCallback(
-		async (assetId: string) => {
-			if (!document) return;
-			const asset = document.assets.find((a) => a.id === assetId);
-			if (!asset) return;
-			const duration = asset.durationSec ?? PLACEHOLDER_DURATION_SEC;
-			const lastEnd = document.timeline.clips.at(-1)?.timelineEndSec ?? 0;
-			const newClip: AxcutDocument["timeline"]["clips"][number] = {
-				id: createId("clip"),
-				assetId,
-				sourceStartSec: 0,
-				sourceEndSec: duration,
-				timelineStartSec: lastEnd,
-				timelineEndSec: lastEnd + duration,
-				wordRefs: [],
-				origin: "user",
-				reason: "Inserted after all clips",
-			};
-			const next: AxcutDocument = {
-				...document,
-				timeline: {
-					...document.timeline,
-					clips: [...document.timeline.clips, newClip],
-				},
-			};
-			await saveDocument(next);
-		},
-		[document, saveDocument],
-	);
-
-	const editClip = useCallback(
-		async (
-			clipId: string,
-			patch: Partial<
-				Pick<
-					AxcutDocument["timeline"]["clips"][number],
-					"sourceStartSec" | "sourceEndSec" | "timelineStartSec" | "timelineEndSec"
-				>
-			>,
-		) => {
-			if (!document) return;
-			// ponytail: clamp negative values and keep end >= start so the schema
-			// refine doesn't reject the save. Swap when end < start instead of
-			// throwing — a user typing into a number input is expected to be
-			// able to type in any order.
-			const next: AxcutDocument["timeline"]["clips"][number] = {
-				...(document.timeline.clips.find((c) => c.id === clipId) as
-					| AxcutDocument["timeline"]["clips"][number]
-					| undefined),
-			} as AxcutDocument["timeline"]["clips"][number];
-			if (!next?.id) return;
-			const sStart = finiteSec(patch.sourceStartSec ?? next.sourceStartSec);
-			const sEnd = finiteSec(patch.sourceEndSec ?? next.sourceEndSec ?? 0);
-			const tStart = finiteSec(patch.timelineStartSec ?? next.timelineStartSec);
-			const tEnd = finiteSec(patch.timelineEndSec ?? next.timelineEndSec);
-			const updated: AxcutDocument["timeline"]["clips"][number] = {
-				...next,
-				sourceStartSec: Math.min(sStart, sEnd),
-				sourceEndSec: Math.max(sStart, sEnd),
-				timelineStartSec: Math.min(tStart, tEnd),
-				timelineEndSec: Math.max(tStart, tEnd),
-			};
-			const nextDoc: AxcutDocument = {
-				...document,
-				timeline: {
-					...document.timeline,
-					clips: document.timeline.clips.map((c) => (c.id === clipId ? updated : c)),
-				},
-			};
-			await saveDocument(nextDoc);
-		},
-		[document, saveDocument],
-	);
-
 	// Axcut-consistent clip trim: only the source range is user-editable (the
 	// Edit Clip dialog's draggable track). Changing it changes the clip's
 	// effective duration, so every clip is resequenced back-to-back afterward —
@@ -881,72 +726,6 @@ export function useTimeline() {
 			await saveDocument(next);
 		},
 		[document, saveDocument],
-	);
-
-	const splitAndInsert = useCallback(
-		async (assetId: string, splitTimeSec: number) => {
-			if (!document) return;
-			const asset = document.assets.find((a) => a.id === assetId);
-			if (!asset) return;
-			const duration = asset.durationSec ?? PLACEHOLDER_DURATION_SEC;
-			const targetIdx = document.timeline.clips.findIndex(
-				(c) => c.timelineStartSec <= splitTimeSec && c.timelineEndSec >= splitTimeSec,
-			);
-			if (targetIdx === -1) {
-				await addClipAfter(assetId);
-				return;
-			}
-			const target = document.timeline.clips[targetIdx];
-			const left = {
-				id: createId("clip"),
-				assetId: target.assetId,
-				sourceStartSec: target.sourceStartSec,
-				sourceEndSec: splitTimeSec,
-				timelineStartSec: target.timelineStartSec,
-				timelineEndSec: splitTimeSec,
-				wordRefs: [] as string[],
-				origin: "user" as const,
-				reason: "Split left",
-			};
-			const insert = {
-				id: createId("clip"),
-				assetId,
-				sourceStartSec: 0,
-				sourceEndSec: duration,
-				timelineStartSec: splitTimeSec,
-				timelineEndSec: splitTimeSec + duration,
-				wordRefs: [] as string[],
-				origin: "user" as const,
-				reason: "Inserted between splits",
-			};
-			const right = {
-				id: createId("clip"),
-				assetId: target.assetId,
-				sourceStartSec: target.sourceStartSec + splitTimeSec - target.timelineStartSec,
-				sourceEndSec: target.sourceEndSec,
-				timelineStartSec: splitTimeSec + duration,
-				timelineEndSec: target.timelineEndSec + duration,
-				wordRefs: [] as string[],
-				origin: "user" as const,
-				reason: "Split right",
-			};
-			const oldClips = document.timeline.clips;
-			const nextClips: AxcutDocument["timeline"]["clips"] = [
-				...oldClips.slice(0, targetIdx),
-				left,
-				insert,
-				right as (typeof document.timeline.clips)[number],
-				...oldClips.slice(targetIdx + 1),
-			];
-			const newClips = resequenceClips(nextClips);
-			const next: AxcutDocument = {
-				...document,
-				timeline: { ...document.timeline, clips: newClips },
-			};
-			const finalDoc = rederiveRegionMs(next, newClips);
-			await saveDocument(finalDoc);
-		},
-		[document, saveDocument, addClipAfter],
 	);
 
 	// Background probe: read the asset's actual duration and patch the
@@ -1115,7 +894,6 @@ export function useTimeline() {
 	);
 
 	const selectClip = useCallback((id: string) => setClipSelection(id), []);
-	const clearClipSelection = useCallback(() => setClipSelection(null), []);
 
 	const speedRegions = hasDoc
 		? (((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as Array<{
@@ -1150,7 +928,6 @@ export function useTimeline() {
 		addZoom,
 		addZoomsBulk,
 		addTrim,
-		addTrimAt,
 		addAnnotation,
 		addSpeed,
 		addCameraFullscreen,
@@ -1158,19 +935,13 @@ export function useTimeline() {
 		removeRegions,
 		selectRegion,
 		clearSelection,
-		addClipBefore,
-		addClipAfter,
-		editClip,
 		updateClipSourceRange,
 		updateClipCrop,
-		splitAndInsert,
 		insertClipAt,
 		moveClip,
 		duplicateClip,
 		removeClip,
 		selectClip,
-		clearClipSelection,
-		updateTrimRange,
 		updateTrim,
 		setTrimEntries,
 		updateZoomSpan,
