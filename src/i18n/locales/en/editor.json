@@ -205,7 +205,8 @@
 		"showInFolder": "Show in folder",
 		"exportFailed": "Export failed",
 		"failedToWriteFile": "Failed to write file",
-		"qualityUpscaleWarning": "Upscale"
+		"qualityUpscaleWarning": "Upscale",
+		"nothingToExport": "Nothing to export — the timeline is empty."
 	},
 	"inspector": {
 		"resetFocusPoint": "Reset focus point",

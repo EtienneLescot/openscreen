@@ -400,25 +400,6 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 						case "destroyView":
 							compositorViewService.destroyView(request.payload.id);
 							return createSuccessResponse(requestId, { ok: true });
-						case "export": {
-							const sender = event.sender;
-							const stats = await compositorViewService.export(
-								request.payload.outPath,
-								(frames) => {
-									if (!sender.isDestroyed()) {
-										sender.send("export:native-progress", frames);
-									}
-								},
-							);
-							if (!stats) {
-								return createErrorResponse(
-									requestId,
-									"UNAVAILABLE",
-									"Native compositor addon not present.",
-								);
-							}
-							return createSuccessResponse(requestId, stats);
-						}
 						case "exportMulti": {
 							const sender = event.sender;
 							const stats = await compositorViewService.exportMulti(

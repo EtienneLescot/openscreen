@@ -205,7 +205,8 @@
 		"exportFailed": "匯出失敗",
 		"failedToWriteFile": "寫入檔案失敗",
 		"qualityUpscaleWarning": "放大",
-		"exportedVideoOf": "的影片已匯出，耗時"
+		"exportedVideoOf": "的影片已匯出，耗時",
+		"nothingToExport": "沒有可匯出的內容 — 時間軸為空。"
 	},
 	"inspector": {
 		"resetFocusPoint": "重設焦點",
