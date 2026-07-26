@@ -297,7 +297,9 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 	}
 }
 
-function extractDelta(content: unknown): string {
+/** Flattens LangChain MessageContent (a string, or an array of text and
+ * non-text parts) down to plain text. */
+export function extractDelta(content: unknown): string {
 	if (typeof content === "string") return content;
 	if (Array.isArray(content)) {
 		let total = "";

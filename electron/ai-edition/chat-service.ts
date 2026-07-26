@@ -6,6 +6,7 @@
 // ChatEventSink.
 
 import { randomUUID } from "node:crypto";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
 import {
 	type AxcutTimelineOperation,
 	applyTimelineOperation,
@@ -29,7 +30,6 @@ import {
 	shouldCompact,
 } from "./chat-compaction";
 import type { DocumentService } from "./document-service";
-import { streamLlm } from "./llm-call";
 import type { LlmConfigStore } from "./llm-config-store";
 import { PROVIDER_DEFINITIONS } from "./provider-registry";
 
@@ -695,27 +695,24 @@ async function tryCompactSession(opts: {
 	const prompt = buildCompactionPrompt(oldMessages);
 	let summary = "";
 	try {
-		const result = await streamLlm(
-			{
-				provider,
-				model,
-				apiKey,
-				baseUrl,
-				reasoningEffort,
-				accountId,
-				messages: [
-					{ role: "system", content: COMPACTION_SYSTEM_PROMPT },
-					{ role: "user", content: prompt },
-				],
-			},
-			{
-				onTextDelta: (d) => (summary = `${summary}${d}`),
-			},
-		);
-		if (!result.success || !result.content) {
+		const { createOpenScreenChatModel } = await import("./deep-agent/chat-model");
+		const { extractDelta } = await import("./deep-agent/service");
+		const chatModel = await createOpenScreenChatModel({
+			provider,
+			model,
+			apiKey,
+			baseUrl,
+			reasoningEffort,
+			accountId,
+		});
+		const result = await chatModel.invoke([
+			new SystemMessage(COMPACTION_SYSTEM_PROMPT),
+			new HumanMessage(prompt),
+		]);
+		summary = extractDelta(result.content);
+		if (!summary) {
 			return null;
 		}
-		summary = result.content;
 	} catch {
 		// ponytail: a failed summarize must not break the chat turn — leave
 		// the session as-is and let the next turn try again.
