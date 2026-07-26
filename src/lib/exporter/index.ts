@@ -1,3 +1,4 @@
+export { type CropScheduleEntry, resolveCropAt } from "./cropSchedule";
 export { FrameRenderer } from "./frameRenderer";
 export { calculateOutputDimensions, GifExporter } from "./gifExporter";
 export {
@@ -5,7 +6,6 @@ export {
 	calculateMp4ExportSettings,
 	type Mp4ExportSettings,
 } from "./mp4ExportSettings";
-export { VideoMuxer } from "./muxer";
 export { StreamingVideoDecoder } from "./streamingDecoder";
 export type {
 	ExportConfig,
@@ -25,5 +25,3 @@ export {
 	isValidGifFrameRate,
 	VALID_GIF_FRAME_RATES,
 } from "./types";
-export { VideoFileDecoder } from "./videoDecoder";
-export { type CropScheduleEntry, resolveCropAt, VideoExporter } from "./videoExporter";

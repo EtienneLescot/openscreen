@@ -1,7 +1,7 @@
-// Adapter: feeds an AxcutDocument into the existing VideoExporter / GifExporter
-// by mapping document fields → VideoExporterConfig. No rewrite of the export
-// pipeline — the existing FrameRenderer + StreamingVideoDecoder + muxer handle
-// all the rendering (annotations, zoom, blur, webcam, cursor).
+// Adapter: feeds an AxcutDocument into GifExporter. GIF is the only format
+// rendered here — MP4 goes through the native D3D exporter, which ExportDialog
+// calls directly. FrameRenderer + StreamingVideoDecoder do the rendering
+// (annotations, zoom, blur, webcam, cursor).
 //
 // ponytail: the existing exporter accepts trimRegions (removed spans in source
 // time). Two contributors are merged into them (see computeExportTrimRegions):
@@ -29,16 +29,9 @@ import {
 	GifExporter,
 	type GifFrameRate,
 	type GifSizePreset,
-	VideoExporter,
 } from "@/lib/exporter";
-import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
 import type { ExportProgress } from "@/lib/exporter/types";
 import type { CursorRecordingData, CursorTelemetryPoint } from "@/native/contracts";
-import {
-	type AspectRatio,
-	getAspectRatioValue,
-	getNativeAspectRatioValue,
-} from "@/utils/aspectRatioUtils";
 import {
 	captionCuesToTextRegions,
 	deriveCaptionCues,
@@ -50,17 +43,8 @@ import { type Interval, normalizeIntervals, primaryAssetDuration } from "../docu
 import type { AxcutAsset, AxcutDocument } from "../schema";
 import { resolveClipSourceEndSec } from "../timeline/clipDuration";
 import { projectRegionsToSourceTime } from "../timeline/region-ventilation";
-import { buildRenderPlan, type RenderPlan } from "./renderPlan";
 
 export type ExportVideoCodec = "h264" | "h265" | "vp9";
-
-// WebCodecs encoder strings per user-facing codec choice (F2.4). The muxer
-// derives its mp4 track family from the same string.
-const CODEC_STRINGS: Record<ExportVideoCodec, string> = {
-	h264: "avc1.640033",
-	h265: "hvc1.1.6.L120.90",
-	vp9: "vp09.00.10.08",
-};
 
 export interface DocumentExportOptions {
 	quality: ExportQuality;
@@ -165,36 +149,6 @@ function extractLegacyField<T>(
 	return fallback;
 }
 
-// Maps the dialog's DocumentExportOptions onto the v2 RenderPlan (multi-asset,
-// virtual-time effects, per-segment cursor). This is the single boundary where
-// the document + export options become the plan the segment-loop renderer will
-// consume. It runs today alongside the legacy config assembly below — the plan
-// is threaded to VideoExporter but only drives rendering once the segment loop
-// is enabled (see VideoExporterConfig.renderPlan). Cursor scale/theme come from
-// options + legacyEditor exactly as the legacy path reads them.
-export function buildDocumentRenderPlan(
-	document: AxcutDocument,
-	options: DocumentExportOptions,
-): RenderPlan {
-	const legacy = document.legacyEditor as Record<string, unknown> | null;
-	return buildRenderPlan(document, {
-		quality: options.quality,
-		frameRate: options.frameRate ?? 60,
-		codec: options.codec ?? "h264",
-		fallbackSourceWidth: options.sourceWidth,
-		fallbackSourceHeight: options.sourceHeight,
-		cursor: {
-			recordingData: options.cursorRecordingData ?? null,
-			scale: options.cursorScale ?? 0,
-			smoothing: options.cursorSmoothing,
-			motionBlur: options.cursorMotionBlur,
-			clickBounce: options.cursorClickBounce,
-			clipToBounds: options.cursorClipToBounds,
-			theme: extractLegacyField(legacy, "cursorTheme", ""),
-		},
-	});
-}
-
 export async function exportAxcutDocument(
 	document: AxcutDocument,
 	options: DocumentExportOptions,
@@ -268,24 +222,6 @@ export async function exportAxcutDocument(
 		() => createId("camfull"),
 	);
 
-	const sourceWidth = options.sourceWidth || 1920;
-	const sourceHeight = options.sourceHeight || 1080;
-	// Respect the timeline's selected aspect ratio (the whole-canvas framing set
-	// in the editor), not a hardcoded 16:9. "native" follows the source's own
-	// pixel aspect. This is a per-timeline choice, not per-clip.
-	const aspectRatio = extractLegacyField<AspectRatio>(legacy, "aspectRatio", "16:9");
-	const aspectRatioValue =
-		aspectRatio === "native"
-			? getNativeAspectRatioValue(sourceWidth, sourceHeight)
-			: getAspectRatioValue(aspectRatio);
-
-	const settings = calculateMp4ExportSettings({
-		quality: options.quality,
-		sourceWidth,
-		sourceHeight,
-		aspectRatioValue,
-	});
-
 	const cameraTrack = asset.cameraTrack;
 
 	const commonConfig = {
@@ -334,30 +270,16 @@ export async function exportAxcutDocument(
 		onProgress: options.onProgress,
 	};
 
-	if (options.format === "gif") {
-		const exporter = new GifExporter({
-			...commonConfig,
-			width: 1280,
-			height: 720,
-			frameRate: options.gifFrameRate ?? 15,
-			loop: options.gifLoop ?? true,
-			sizePreset: options.gifSizePreset ?? "medium",
-		} as unknown as ConstructorParameters<typeof GifExporter>[0]);
-		return exporter.export();
-	}
-
-	const exporter = new VideoExporter({
+	// GIF is the only format this adapter renders. MP4 goes through the native
+	// D3D exporter (`exportMultiNative`), which ExportDialog calls directly.
+	const exporter = new GifExporter({
 		...commonConfig,
-		width: settings.width,
-		height: settings.height,
-		frameRate: options.frameRate ?? 60,
-		bitrate: settings.bitrate,
-		codec: CODEC_STRINGS[options.codec ?? "h264"],
-		// v2 multi-asset plan, threaded to the exporter. Consumed only once the
-		// segment-loop path is enabled; the legacy single-asset config above still
-		// drives rendering until then.
-		renderPlan: buildDocumentRenderPlan(document, options),
-	});
+		width: 1280,
+		height: 720,
+		frameRate: options.gifFrameRate ?? 15,
+		loop: options.gifLoop ?? true,
+		sizePreset: options.gifSizePreset ?? "medium",
+	} as unknown as ConstructorParameters<typeof GifExporter>[0]);
 	return exporter.export();
 }
 

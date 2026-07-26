@@ -12,6 +12,7 @@ import type {
 import { BackgroundLoadError } from "@/lib/wallpaper";
 import type { CursorRecordingData } from "@/native/contracts";
 import { getPlatform } from "@/utils/platformUtils";
+import { type CropScheduleEntry, resolveCropAt } from "./cropSchedule";
 import { FrameRenderer } from "./frameRenderer";
 import { StreamingVideoDecoder } from "./streamingDecoder";
 import { TimestampedVideoFrameQueue } from "./timestampedVideoFrameQueue";
@@ -22,7 +23,6 @@ import type {
 	GifFrameRate,
 	GifSizePreset,
 } from "./types";
-import { type CropScheduleEntry, resolveCropAt } from "./videoExporter";
 
 const GIF_WORKER_URL = new URL("gif.js/dist/gif.worker.js", import.meta.url).toString();
 
