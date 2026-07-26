@@ -1,6 +1,14 @@
 # Writing Tests
 
-This project uses [Vitest](https://vitest.dev/) for both unit/integration tests and browser tests. There are two separate configs — each targets a different set of files.
+This project uses Vitest for unit/integration tests and browser tests, plus Playwright for desktop end-to-end coverage. The configs select distinct file sets and execution environments.
+
+## Test types at a glance
+
+| Test type | Config | What it is for | Run it |
+|---|---|---|---|
+| Unit / jsdom | `vitest.config.ts` | Logic, data transformations, React behavior, and integrations that do not require real browser media/graphics APIs. | `npm run test` or `npm run test:watch` |
+| Browser / Playwright in Vitest | `vitest.browser.config.ts` | Source-level tests in real headless Chromium for Canvas, WebCodecs, MediaRecorder, WebGL, and related APIs. | `npm run test:browser:install`, then `npm run test:browser` |
+| End-to-end / Playwright | `playwright.config.ts` | Full workflows under `tests/e2e`, including Electron/native integration checklists and export flows. | `npm run test:e2e` |
 
 ## Unit tests
 
@@ -147,3 +155,5 @@ npm run test:browser
 | `VideoDecoder` / `VideoEncoder` / `MediaRecorder` | Browser test |
 | `OffscreenCanvas` / WebGL / Pixi.js rendering | Browser test |
 | File export producing a real `Blob` | Browser test |
+
+Automated suites do not exercise every hardware, permission, codec, signing, and packaged-app combination. Use the [manual end-to-end checklist](manual-e2e-checklist.md) for those release and platform checks.

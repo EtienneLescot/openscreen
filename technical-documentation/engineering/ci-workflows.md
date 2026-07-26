@@ -1,261 +1,142 @@
 # GitHub Actions workflows
 
-## Overview
-
-The repository uses 14 workflow files across five functional tiers. This document describes the triggers, job dependencies, and artifact flow for each tier.
+The repository's 15 workflow files under `.github/workflows/` cover application CI, release builds and management, package registries, native STT binaries, documentation deployment, and repository automation. This reference describes their verified triggers, dependencies, and artifact flow.
 
 ## Workflow dependency graph
 
 ```mermaid
-graph TD
-    subgraph Tier 1 - CI
-        ci[ci.yml<br/>push / PR → main]
-        ci_lint[lint]
-        ci_typecheck[typecheck]
-        ci_test[test]
-        ci_build[build]
-        ci_semantic[semantic-pr]
-        ci --> ci_lint
-        ci --> ci_typecheck
-        ci --> ci_test
-        ci --> ci_build
-        ci --> ci_semantic
+flowchart TD
+    subgraph T1["Tier 1 — application and docs CI"]
+        CI["ci.yml<br/>push and PR to main"] --> Lint[lint]
+        CI --> Type[typecheck]
+        CI --> Test[unit and browser tests]
+        CI --> BuildSmoke[Vite build]
+        CI --> Semantic[semantic PR title]
+        Docs["docs.yml<br/>website changes or dispatch"] --> DocsBuild[website build artifact]
+        DocsBuild --> DocsDeploy[GitHub Pages deploy on main]
     end
 
-    subgraph Tier 2 - Release build
-        build[build.yml<br/>tag v* / dispatch]
-        build_win[build-windows]
-        build_mac[build-macos<br/>matrix arm64 x64]
-        build_linux[build-linux]
-        build_release[publish-release]
-        build --> build_win
-        build --> build_mac
-        build --> build_linux
-        build_win --> build_release
-        build_mac --> build_release
-        build_linux --> build_release
+    subgraph T2["Tier 2 — native and release builds"]
+        Whisper["build-whisper-stt.yml<br/>native source changes or dispatch"] --> WhisperArtifacts["four platform STT archives"]
+        ReleaseBuild["build.yml<br/>v* tag or dispatch"] --> Win[Windows NSIS]
+        ReleaseBuild --> Store[Windows AppX]
+        ReleaseBuild --> Mac["macOS arm64 and x64 DMGs"]
+        ReleaseBuild --> Linux["AppImage, deb, pacman"]
+        Win --> Publish[GitHub release]
+        Mac --> Publish
+        Linux --> Publish
     end
 
-    subgraph Tier 2.5 - Release management
-        prerelease[prerelease.yml<br/>dispatch]
-        promote[promote.yml<br/>dispatch]
-        prerelease -->|push tag vX.Y.Z-rc.N| build
-        promote -->|push tag vX.Y.Z| build
+    subgraph T25["Tier 2.5 — release management"]
+        RC["prerelease.yml<br/>workflow_dispatch"] -->|dispatch build at RC tag| ReleaseBuild
+        Promote["promote.yml<br/>workflow_dispatch"] -->|dispatch build at stable tag| ReleaseBuild
     end
 
-    subgraph Tier 3 - Package registries
-        homebrew[update-homebrew-cask.yml<br/>release published]
-        winget[publish-winget.yml<br/>release published]
-        nix[bump-nix-package.yml<br/>release published]
-        aur[aur-publish.yml<br/>release published]
+    subgraph T3["Tier 3 — stable package distribution"]
+        Homebrew[update-homebrew-cask.yml]
+        Winget[publish-winget.yml]
+        Nix[bump-nix-package.yml]
+        AUR[aur-publish.yml]
     end
 
-    subgraph Tier 4 - Automation
-        discord_pr[discord-pr-notify.yml<br/>PR events, review, comment]
-        discord_roadmap[discord-roadmap-sync.yml<br/>push to main]
-        discord_leaderboard[discord-weekly-leaderboard.yml<br/>schedule mon 12:00 UTC]
-        bookkeeping[merged-pr-bookkeeping.yml<br/>PR closed merged]
-        diag[diagnostic-artifact.yml<br/>push / PR / dispatch]
-        diag_win[build-windows]
-        diag_mac[build-macos<br/>matrix arm64 x64]
-        diag --> diag_win
-        diag --> diag_mac
-    end
+    Publish -->|stable release published| Homebrew
+    Publish -->|stable release published| Winget
+    Publish -->|stable release published| Nix
+    Publish -->|stable release published| AUR
 
-    build_release -->|PAT: gh release create| homebrew
-    build_release -->|PAT: gh release create| winget
-    build_release -->|PAT: gh release create| nix
-    build_release -->|PAT: gh release create| aur
-    promote -->|if: success| discord_announce_rc[discord-release-announce.mjs<br/>#rc-testing]
-    prerelease -->|if: success| discord_announce_stable[discord-release-announce.mjs<br/>#announcements]
+    subgraph T4["Tier 4 — automation and diagnostics"]
+        PRDiscord[discord-pr-notify.yml]
+        Roadmap[discord-roadmap-sync.yml]
+        Leaderboard[discord-weekly-leaderboard.yml]
+        Bookkeeping[merged-pr-bookkeeping.yml]
+        Diagnostic[diagnostic-artifact.yml] --> DiagWin[Windows diagnostic ZIP]
+        Diagnostic --> DiagMac[macOS diagnostic archives]
+    end
 ```
 
-> Note: the announce-edge arrows above are inverted for readability — `prerelease.yml` posts to `#rc-testing`, and `promote.yml` posts to `#announcements`.
+The STT workflow uploads standalone archives for binary refresh and does not currently feed `build.yml` automatically; release packages consume binaries already staged in the source snapshot. Stable package workflows are additionally guarded against prereleases.
 
-## Tier 1: CI checks
+## Workflow inventory
 
-**File:** `ci.yml`
-
-Triggered on every push to `main` and every pull request targeting `main`. Four parallel, independent jobs with no interdependencies:
-
-| Job | Runner | Purpose |
+| Tier | Workflow | Trigger |
 |---|---|---|
-| `lint` | ubuntu-latest | Biome check |
-| `typecheck` | ubuntu-latest | `tsc --noEmit` |
-| `test` | ubuntu-latest | Vitest unit tests + Playwright browser tests |
-| `build` | ubuntu-latest | `vite build` (renderer-only, no electron-builder) |
+| 1 | `ci.yml` | Push to `main`; pull request to `main` |
+| 1 | `docs.yml` | Website/workflow changes on `main` or a PR; manual dispatch |
+| 2 | `build.yml` | Any `v*` tag; manual dispatch |
+| 2 | `build-whisper-stt.yml` | Native STT/build-script changes; manual dispatch |
+| 2.5 | `prerelease.yml` | Manual dispatch |
+| 2.5 | `promote.yml` | Manual dispatch |
+| 3 | `update-homebrew-cask.yml` | Published release; manual dispatch |
+| 3 | `publish-winget.yml` | Published release; manual dispatch |
+| 3 | `bump-nix-package.yml` | Published release; manual dispatch |
+| 3 | `aur-publish.yml` | Published release; manual dispatch |
+| 4 | `discord-pr-notify.yml` | PR target, review, and issue-comment events |
+| 4 | `discord-roadmap-sync.yml` | Merged PR to `main`; push to `main` |
+| 4 | `discord-weekly-leaderboard.yml` | Monday 12:00 UTC schedule; manual dispatch |
+| 4 | `merged-pr-bookkeeping.yml` | Closed pull request, conditional on merge to `main` |
+| 4 | `diagnostic-artifact.yml` | Push or PR to `main`; manual dispatch |
 
-All jobs use the shared composite action `.github/actions/setup` for Node.js installation and `npm ci`. Failure of one job does not cancel the others.
+## Tier 1: application and documentation CI
 
-## Tier 2: Release build and publish
+`ci.yml` runs independent `lint`, `typecheck`, `test`, and renderer-build jobs. Pull requests also run `semantic-pr`.
 
-### build.yml
+| Job | Runner | Command or purpose |
+|---|---|---|
+| `lint` | Ubuntu | `npm run lint` |
+| `typecheck` | Ubuntu | `npx tsc --noEmit` |
+| `test` | Ubuntu | Vitest unit tests, Chromium installation, then browser-mode Vitest |
+| `build` | Ubuntu | `npx vite build`; this is not electron-builder packaging |
+| `semantic-pr` | Ubuntu | Validates Conventional Commit-style PR titles |
 
-Triggered by version tags (`v*`) or manual `workflow_dispatch` (with optional macOS architecture selection and release tag override).
+Jobs that need the root dependencies use `.github/actions/setup`, which requests Node 22 and runs `npm ci`; callers perform checkout themselves.
 
-**Jobs:**
+`docs.yml` is separate from the technical-documentation checker. It installs dependencies in `website/`, type-checks and builds the site, uploads a Pages artifact, and deploys only after a push to `main`.
 
-1. **`build-windows`** (windows-latest): Compiles NSIS installer via `electron-builder --win`. Uploads artifact `openscreen-windows` (30-day retention).
+## Tier 2: native and release builds
 
-2. **`build-macos`** (macos-latest, matrix `arm64` / `x64`): Compiles native helpers, runs `tsc && vite build`, builds `.app` bundle, creates and signs a DMG. Uploads artifacts `openscreen-mac-arm64` and `openscreen-mac-x64` (30-day retention). Signing and notarization are conditional on the presence of Apple developer secrets (`MAC_CERTIFICATE_P12`, `APPLE_ID`, etc.). Without secrets, produces an unsigned DMG.
+### `build.yml`
 
-3. **`build-linux`** (ubuntu-latest): Installs `libarchive-tools` for `.pacman` support, runs `electron-builder --linux AppImage deb pacman`. Uploads artifact `openscreen-linux` (30-day retention).
+A `v*` tag or manual dispatch starts platform builds. Dispatch accepts `arch` (`arm64`, `x64`, or `both`) for macOS and an optional `release_tag` that enables publication.
 
-4. **`publish-release`** (ubuntu-latest, needs all three build jobs): Downloads all four artifacts by explicit name, validates that `package.json` version matches the tag, and publishes them to a GitHub Release via `gh release create` or `gh release upload --clobber`. The download step uses explicit `name:` parameters to fail fast on missing artifacts rather than silently skipping them.
+- `build-windows` runs `npm run build:win` and uploads `openscreen-windows` for 30 days.
+- `build-windows-store` runs `npm run build:win:store` and uploads `openscreen-windows-store` for 30 days.
+- `build-macos` is an `arm64`/`x64` matrix. It builds Vite/Electron and native helpers, packages and optionally signs the app, creates DMGs, notarizes stable signed builds, and uploads one artifact per architecture for 30 days.
+- `build-linux` produces AppImage, zsync, deb, and pacman files and uploads `openscreen-linux` for 30 days.
+- `publish-release` waits for Windows NSIS, macOS, and Linux jobs; the Store job is not a dependency. It checks the tag against `package.json`, downloads the NSIS/macOS/Linux artifacts, and creates or updates a GitHub release with `OPENSCREEN_RELEASE_TOKEN`.
 
-All three build jobs use a shared caption-assets cache keyed by `runner.os` and the hash of `scripts/fetch-caption-model.mjs` to avoid cross-platform cache collisions.
+The build comments and package behavior refer to the local Whisper architecture documented in [transcription and captions](../architecture/transcription-and-captions.md). The STT model downloads to user data at runtime and is not a release-build asset.
 
-## Tier 2.5: Release management
+### `build-whisper-stt.yml`
 
-Two `workflow_dispatch` workflows manage the release cycle. Both run on `main` and require the `OPENSCREEN_RELEASE_TOKEN` secret.
+This matrix builds `whisper-stt-server` and its ggml backend sidecars for macOS arm64, macOS x64, Linux x64, and Windows x64. It uploads four 30-day archives named `whisper-stt-<platform>-<arch>`. The workflow installs the platform compiler dependencies and Vulkan SDK where configured. See [transcription and captions](../architecture/transcription-and-captions.md) for the runtime role of these binaries.
 
-### prerelease.yml
+## Tier 2.5: release management
 
-Triggered manually to cut a release candidate.
+`prerelease.yml` and `promote.yml` orchestrate the frozen release branch, version tags, milestones, build dispatch, and Discord announcements. The full procedure, fallback, branch freeze, and credential requirements live in [release and secrets](release-and-secrets.md).
 
-**Inputs:** `bump` (`patch|minor|major`, default `minor`), `rc_number` (default `1`), `target_version` (optional override).
+At a high level, the RC workflow creates or reuses `release/vX.Y.Z`, tags its tip, and dispatches `build.yml` at that tag. Promotion creates the stable version and tag from the same release branch, syncs it back through a PR, and dispatches the stable build at the tag.
 
-**Steps:**
-1. Checkout, setup Node.
-2. Compute next SemVer from `package.json` + `bump`, derive `vX.Y.Z-rc.N` tag.
-3. **Migrate** all items from the rolling `Next Release` milestone into a fresh `vX.Y.Z` milestone (idempotent — each migrated item gets an HTML marker comment).
-4. Bump `package.json` to `X.Y.Z-rc.N` and commit on `main`.
-5. Push the `vX.Y.Z-rc.N` tag → triggers `build.yml`.
-6. Announce in `#rc-testing` on Discord via `discord-release-announce.mjs`.
+## Tier 3: package registries
 
-### promote.yml
+These workflows run for stable published releases and support manual replay with a tag:
 
-Triggered manually to promote an RC to a stable release.
+- `update-homebrew-cask.yml` waits for both macOS DMGs, hashes them, writes a cask, and pushes to the configured tap.
+- `publish-winget.yml` passes the matching NSIS release asset to `winget-releaser`.
+- `bump-nix-package.yml` computes `npmDepsHash`, updates `nix/package.nix`, and opens a PR.
+- `aur-publish.yml` hashes the pacman release asset, updates `PKGBUILD` and `.SRCINFO`, and pushes over SSH.
 
-**Inputs:** `rc_tag` (e.g. `v1.5.0-rc.2`), `release_notes_extra` (optional).
+Each workflow gates itself on its required variables or credentials. `bump-nix-package.yml` uses the repository `GITHUB_TOKEN`; the others require external registry credentials described in [release and secrets](release-and-secrets.md).
 
-**Steps:**
-1. Validate the tag matches `^vX.Y.Z-(rc|beta|alpha)\.N$`; derive `X.Y.Z`.
-2. Close the `vX.Y.Z` milestone (snapshots the closed-issue list for release notes).
-3. Strip `-rc.N` from `package.json` and commit on `main`.
-4. Push the `vX.Y.Z` tag → triggers `build.yml` → publishes a stable release.
-5. Tier 3 fires automatically because the release was created with `OPENSCREEN_RELEASE_TOKEN` (which propagates the `release: published` event).
-6. Announce in `#announcements` on Discord with the release notes + closed-issue list.
+## Tier 4: automation and diagnostics
 
-### Manual fallback
+- `discord-pr-notify.yml` mirrors PR events, reviews, and comments into a Discord forum thread. It is `continue-on-error`, so Discord does not block PR work.
+- `discord-roadmap-sync.yml` updates a pinned Discord roadmap message after a merged PR or push to `main`.
+- `discord-weekly-leaderboard.yml` posts a weekly contributor leaderboard.
+- `merged-pr-bookkeeping.yml` finds closing issue references, applies pending-release labels and the rolling milestone, closes the issue, and adds an idempotent marker comment.
+- `diagnostic-artifact.yml` builds WGC and ScreenCaptureKit helpers and bundles platform diagnostics. Its Windows ZIP and two macOS archives are retained for 14 days.
 
-```bash
-git tag v1.5.0-rc.1 <sha>
-git push origin v1.5.0-rc.1
+## Artifact flow
 
-# later
-git tag v1.5.0 <sha>
-git push origin v1.5.0
-```
+Release platform artifacts have 30-day Actions retention. `publish-release` copies the NSIS installer, two architecture-specific DMGs when present, and Linux packages into the GitHub release. It intentionally does not download the independently uploaded Store artifact. A stable published release then fans out to Homebrew, WinGet, Nix, and AUR.
 
-This works because `build.yml` is triggered by any tag matching `v*`. It skips milestone migration and Discord announcements — useful for emergency cuts when the dispatch UI is unavailable.
-
-### Why a fine-grained PAT (`OPENSCREEN_RELEASE_TOKEN`)?
-
-`GITHUB_TOKEN` cannot trigger downstream workflows from the actions it performs. Specifically, `gh release create` using `GITHUB_TOKEN` does **not** fire the `release: published` event, so homebrew/winget/nix/aur would silently skip every release. The fine-grained PAT (scoped to `getopenscreen/openscreen` with `contents: write` + `issues: write`) is the standard fix. See `docs/secrets.md` for creation and rotation instructions.
-
-## Tier 3: Package registries
-
-These workflows react to `release: published` events and push the release to external package registries. Each also supports `workflow_dispatch` for manual re-runs.
-
-### update-homebrew-cask.yml
-
-Finds both `arm64` and `x64` DMG assets in the release, downloads them, computes SHA-256, generates a Ruby cask file, and pushes it to a separate Homebrew tap repository (`vars.HOMEBREW_TAP_OWNER` / `vars.HOMEBREW_TAP_REPO`).
-
-Before scanning for assets, a polling loop waits up to 12 minutes for DMGs to appear in the release, accounting for the Apple notarization delay.
-
-Conditional on `vars.HOMEBREW_TAP_OWNER`, `vars.HOMEBREW_TAP_REPO`, and `secrets.HOMEBREW_TAP_TOKEN`.
-
-### publish-winget.yml
-
-Delegates to `vedantmgoyal9/winget-releaser@v2`, which finds the Windows installer matching `Setup\..*\.exe$` and publishes a manifest to the WinGet Community Repository.
-
-Conditional on `vars.WINGET_IDENTIFIER` and `secrets.WINGET_ACC_TOKEN`.
-
-### bump-nix-package.yml
-
-Checks out `main`, installs Nix, runs `prefetch-npm-deps` on `package-lock.json` to compute the new `npmDepsHash`, patches `nix/package.nix` with `sed`, and opens a PR against `main` on branch `chore/bump-nix-{version}`.
-
-Conditional on non-prerelease releases.
-
-### aur-publish.yml
-
-Finds the `.pacman` asset in the release, computes SHA-256, clones the AUR repository via SSH, updates `PKGBUILD` and `.SRCINFO`, and pushes the updated package.
-
-Conditional on `vars.AUR_PACKAGE_NAME` and `secrets.AUR_SSH_PRIVATE_KEY`.
-
-## Tier 4: Automation and diagnostics
-
-### discord-pr-notify.yml
-
-Triggered by `pull_request_target` (opened, reopened, synchronize, edited, labeled, unlabeled, closed, converted_to_draft, ready_for_review), `pull_request_review` (submitted), and `issue_comment` (created).
-
-Runs `node .github/scripts/discord-pr-sync.mjs`, which creates or updates a Discord forum thread for each PR. Thread state is persisted via an HTML comment (`<!-- discord-thread-id:... -->`) in the PR body. Tag updates (draft, ready, changes requested, approved, merged, closed) are applied via the Discord API. The job is marked `continue-on-error: true` so that Discord failures never block the PR workflow.
-
-All Discord traffic goes through a single bot (`DISCORD_BOT_TOKEN`, secret). The script creates the forum thread via `POST /channels/{forumChannelId}/threads` and posts review/comment updates into the existing thread via `POST /channels/{threadId}/messages`. Required bot permissions on the PR forum channel: View Channel, Send Messages, Embed Links, **Create Public Threads** (initial thread), **Send Messages in Threads** (subsequent updates), Manage Threads (for tag/archive/lock). Optional failure alerts can be sent to a separate channel via `DISCORD_ALERT_CHANNEL_ID` (variable); unset to silence.
-
-### discord-roadmap-sync.yml
-
-Triggered on push to `main` and on merged PRs targeting `main`. Runs `node .github/scripts/discord-roadmap-sync.mjs`, which:
-
-- Detects whether `ROADMAP.md` changed in the event
-- Fetches the current `ROADMAP.md` from `main`
-- Updates (or creates and pins) a Discord message in the `#roadmap` channel
-- Uses the channel's pinned message as persistent state; self-heals if a moderator unpins it
-
-Requires `DISCORD_BOT_TOKEN` (secret) and `DISCORD_ROADMAP_CHANNEL_ID` (variable). `DISCORD_ROADMAP_MESSAGE_ID` (variable) is an optional escape hatch that bypasses the pin-based lookup.
-
-### discord-weekly-leaderboard.yml
-
-Triggered by schedule (Mondays at 12:00 UTC) and `workflow_dispatch`. Runs `node .github/scripts/discord-weekly-leaderboard.mjs`, which queries the GitHub Search API for merged PRs in the last 7 days, ranks contributors by PR count, and posts a top-10 leaderboard to the `#🌟・contributor-spotlight` channel via the same bot (`DISCORD_BOT_TOKEN`).
-
-Requires `DISCORD_SPOTLIGHT_CHANNEL_ID` (variable) and the bot to have View Channel + Send Messages + Embed Links on that channel.
-
-### merged-pr-bookkeeping.yml
-
-Triggered by `pull_request_target: closed` on merged PRs targeting `main`. Uses a GraphQL query (`closingIssuesReferences`) to find linked issues, then:
-
-- Adds labels `status: fixed in main` and `status: pending release`
-- Removes `status: in progress` and `status: needs triage`
-- Assigns the `Next Release` milestone (creates it if missing)
-- Closes the issue with `state_reason: completed`
-- Posts an idempotent comment with a marker comment
-
-### diagnostic-artifact.yml
-
-Triggered on push to `main`, PRs targeting `main`, and `workflow_dispatch`. Produces platform-specific diagnostic bundles for troubleshooting:
-
-- **`build-windows`** (windows-latest): Compiles the WGC capture helper via CMake, bundles it with diagnostic scripts into a ZIP, smoke-tests the bundle structure.
-- **`build-macos`** (macos-latest, matrix `arm64` / `x64`): Compiles the ScreenCaptureKit helper, bundles it with diagnostic scripts into a `.tar.gz`.
-
-Artifacts are retained for 14 days (shorter than release artifacts).
-
-## Shared infrastructure
-
-### Composite action: `.github/actions/setup`
-
-A single composite action used by all jobs that need Node.js:
-
-```yaml
-runs:
-  using: composite
-  steps:
-    - uses: actions/setup-node@v4
-      with:
-        node-version: 22
-        cache: npm
-    - run: npm ci
-      shell: bash
-```
-
-When the Node.js version needs to change, only this one file is updated. The action does not include `actions/checkout`; callers manage their own checkout step to allow for custom `ref`, `repository`, or `fetch-depth` options.
-
-### Inline scripts: `.github/scripts/`
-
-Scripts previously embedded as `actions/github-script@v7` inline JavaScript blocks are now standalone `.mjs` files invoked via `node`. This allows:
-
-- Biome linting and formatting coverage in CI
-- TypeScript type-checking coverage in CI
-- Local execution and debugging outside of GitHub Actions
-
-The scripts import `@actions/core` and `@actions/github` (added to `devDependencies`) to access the same APIs (`core.info`, `core.warning`, `context`, `getOctokit`) that `actions/github-script@v7` provides as globals.
+Diagnostic artifacts remain Actions-only for 14 days. Whisper archives remain Actions-only for 30 days and are used as a binary-refresh output rather than being downloaded by the release workflow. The website build artifact flows only into GitHub Pages deployment.
