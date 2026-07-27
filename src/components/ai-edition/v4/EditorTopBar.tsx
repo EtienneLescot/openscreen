@@ -57,19 +57,27 @@ export function EditorTopBar({
 	const { theme, toggle: toggleTheme } = useTheme();
 	const t = useScopedT("editor");
 
+	// ponytail: the left side panel only renders in "edit" mode (see
+	// NewEditorShell body), so its toggle is meaningless in Media/Rec —
+	// hide the button (and its separator) there to keep the topbar honest.
+	const showChatToggle = mode === "edit";
 	return (
 		<header className={styles.topbar}>
-			<button
-				type="button"
-				className={`${styles.iconBtn}${chatOpen ? ` ${styles.on}` : ""}`}
-				title={t("topbar.toggleChatPanel")}
-				aria-label={t("topbar.toggleChatPanel")}
-				aria-pressed={chatOpen}
-				onClick={actions.toggleChat}
-			>
-				<PanelLeft size={17} />
-			</button>
-			<span className={styles.sep} aria-hidden />
+			{showChatToggle ? (
+				<>
+					<button
+						type="button"
+						className={`${styles.iconBtn}${chatOpen ? ` ${styles.on}` : ""}`}
+						title={t("topbar.toggleChatPanel")}
+						aria-label={t("topbar.toggleChatPanel")}
+						aria-pressed={chatOpen}
+						onClick={actions.toggleChat}
+					>
+						<PanelLeft size={17} />
+					</button>
+					<span className={styles.sep} aria-hidden />
+				</>
+			) : null}
 			<span className={styles.brand}>
 				{/* Decorative: the wordmark right beside it already names the app. */}
 				<img src={logoMark} alt="" draggable={false} />
