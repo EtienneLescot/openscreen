@@ -7,7 +7,8 @@ use anyhow::{bail, Result};
 use windows::core::Interface;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{
-    D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_FEATURE_LEVEL, D3D_FEATURE_LEVEL_11_1,
+    D3D_DRIVER_TYPE, D3D_DRIVER_TYPE_HARDWARE, D3D_DRIVER_TYPE_WARP, D3D_FEATURE_LEVEL,
+    D3D_FEATURE_LEVEL_11_1,
 };
 use windows::Win32::Graphics::Direct3D11::{
     D3D11CreateDevice, ID3D11Device, ID3D11DeviceContext, ID3D11Multithread,
@@ -15,10 +16,52 @@ use windows::Win32::Graphics::Direct3D11::{
     D3D11_CREATE_DEVICE_VIDEO_SUPPORT, D3D11_SDK_VERSION,
 };
 
+/// Qui exécute le pipeline. Le rendu et le décodage sont DEUX axes distincts, et aucune
+/// plateforme n'a de rastériseur logiciel qui décode aussi la vidéo (WARP ici, lavapipe
+/// sous Linux, rien du tout sous macOS) — un backend fixe donc les deux ensemble.
+///
+/// Le contrat de scène, les shaders HLSL et tout `compositor.rs` sont identiques d'un
+/// backend à l'autre : c'est tout l'intérêt. Un portage Metal/Vulkan remplace ce que fait
+/// ce fichier et `Decoder`, pas le moteur.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Backend {
+    /// GPU : rastérisation matérielle + décodage D3D11VA sur le même device (zéro copie).
+    /// Le seul backend qui puisse exporter — l'encodeur AMF exige lui aussi le vrai GPU.
+    Hardware,
+    /// CPU : rastérisation WARP + décodage logiciel libavcodec, uploadé en NV12.
+    /// Pour les hôtes sans GPU D3D11 utilisable (VM, RDP, Basic Render Driver).
+    Cpu,
+}
+
+impl Backend {
+    fn driver(self) -> D3D_DRIVER_TYPE {
+        match self {
+            Backend::Hardware => D3D_DRIVER_TYPE_HARDWARE,
+            Backend::Cpu => D3D_DRIVER_TYPE_WARP,
+        }
+    }
+
+    /// WARP REFUSE `VIDEO_SUPPORT` (`DXGI_ERROR_UNSUPPORTED`, mesuré dans
+    /// `tests/warp_device_cannot_decode.rs`) : ce flag n'a de sens que sur le device
+    /// matériel, où il conditionne D3D11VA. Le backend CPU ne décode pas sur le GPU,
+    /// il n'en a donc pas besoin.
+    fn base_flags(self) -> D3D11_CREATE_DEVICE_FLAG {
+        match self {
+            Backend::Hardware => {
+                D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT
+            }
+            Backend::Cpu => D3D11_CREATE_DEVICE_BGRA_SUPPORT,
+        }
+    }
+}
+
 pub struct Gpu {
     pub device: ID3D11Device,
     pub context: ID3D11DeviceContext,
     pub feature_level: D3D_FEATURE_LEVEL,
+    /// Lu par `Decoder::open` pour choisir D3D11VA ou le décodage logiciel. Porté par le
+    /// `Gpu` plutôt que passé partout : tout ce qui tient un device sait déjà qui il est.
+    pub backend: Backend,
 }
 
 /// Une tentative `D3D11CreateDevice` à FL 11_1. Extraite pour que le chemin d'échec
@@ -55,14 +98,17 @@ fn try_create(
 
 /// Message d'échec ACTIONNABLE : re-sonde pour distinguer les deux causes réelles.
 ///
-/// PR #162 proposait de retomber sur `D3D_DRIVER_TYPE_WARP`. Mesuré sur cette machine
-/// (`tests/warp_device_cannot_decode.rs`, qui échouera si Windows change d'avis) :
-/// WARP + `VIDEO_SUPPORT` ne se crée même pas (`DXGI_ERROR_UNSUPPORTED`), et WARP sans
-/// ce flag n'expose aucun `ID3D11VideoDevice` (`E_NOINTERFACE`, 0 profil décodeur).
-/// Or `pipeline.rs` passe CE device à ffmpeg comme `AVD3D11VADeviceContext` : preview
-/// comme export décodent chaque frame en D3D11VA. Un device WARP produirait donc zéro
-/// frame et transformerait cet échec net en panne ffmpeg obscure. D'où : pas de repli,
-/// mais un échec qui se lit.
+/// Ce message reste utile MÊME avec `Backend::Cpu` disponible : rien ne bascule tout
+/// seul (voir `create`), donc quelqu'un doit savoir pourquoi le matériel a refusé et si
+/// le repli logiciel est la bonne réponse à son cas.
+///
+/// PR #162 proposait de retomber sur `D3D_DRIVER_TYPE_WARP` en gardant tout le reste.
+/// Mesuré (`tests/warp_device_cannot_decode.rs`) : WARP + `VIDEO_SUPPORT` ne se crée même
+/// pas (`DXGI_ERROR_UNSUPPORTED`), et sans ce flag il n'expose aucun `ID3D11VideoDevice`
+/// (`E_NOINTERFACE`, 0 profil décodeur). Comme `pipeline.rs` passe CE device à ffmpeg
+/// comme `AVD3D11VADeviceContext`, un simple changement de driver type aurait produit zéro
+/// frame. C'est ce qui a donné à `Backend::Cpu` sa forme : WARP pour le rendu PLUS un
+/// décodage logiciel (`cpu_frames.rs`) — le rendu et le décodage sont deux axes.
 fn diagnose(err: &windows::core::Error) -> String {
     // Le décodeur est le point de rupture le plus probable (RDP, VM sans passthrough,
     // Microsoft Basic Render Driver) : si l'appel passe SANS VIDEO_SUPPORT, l'adaptateur
@@ -90,16 +136,27 @@ fn diagnose(err: &windows::core::Error) -> String {
 impl Gpu {
     /// Crée le device conforme au §2. `debug=false` impératif dans tout run mesuré
     /// (§10 : la couche debug valide et sérialise chaque appel — facteur, pas %).
+    ///
+    /// Reste le device MATÉRIEL : le backend CPU ne s'obtient qu'en le demandant
+    /// (`create_backend`). Rien ne bascule tout seul — un repli silencieux vers un
+    /// rendu logiciel serait précisément le « l'app rame aujourd'hui » qu'on veut éviter.
     pub fn create(debug: bool) -> Result<Gpu> {
-        // VIDEO_SUPPORT : requis pour que D3D11VA décode sur CE device.
-        // BGRA_SUPPORT : utile (interop D2D éventuelle) et sans coût.
-        let mut flags = D3D11_CREATE_DEVICE_VIDEO_SUPPORT | D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+        Gpu::create_backend(Backend::Hardware, debug)
+    }
+
+    /// Le device du backend demandé. `Backend::Cpu` ne diagnostique pas : si WARP
+    /// lui-même échoue, il n'y a plus rien derrière à proposer.
+    pub fn create_backend(backend: Backend, debug: bool) -> Result<Gpu> {
+        let mut flags = backend.base_flags();
         if debug {
             flags |= D3D11_CREATE_DEVICE_DEBUG;
         }
 
-        let (device, context, got) = match try_create(D3D_DRIVER_TYPE_HARDWARE, flags) {
+        let (device, context, got) = match try_create(backend.driver(), flags) {
             Ok(gpu) => gpu,
+            Err(err) if backend == Backend::Cpu => {
+                bail!("WARP (rastériseur logiciel) indisponible sur cet hôte : {err}")
+            }
             Err(err) => bail!("{}", diagnose(&err)),
         };
 
@@ -117,6 +174,6 @@ impl Gpu {
             }
         }
 
-        Ok(Gpu { device, context, feature_level: got })
+        Ok(Gpu { device, context, feature_level: got, backend })
     }
 }

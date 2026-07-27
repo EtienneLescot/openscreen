@@ -9,6 +9,7 @@
 pub mod audio;
 pub mod compositor;
 pub mod config;
+mod cpu_frames;
 pub mod cursor;
 pub mod d3d;
 pub mod ffi;
