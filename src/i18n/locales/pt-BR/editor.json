@@ -19,7 +19,8 @@
 		"exportBackgroundLoadFailed": "Falha na exportação: não foi possível carregar a imagem de fundo ({{url}})",
 		"failedToSaveExport": "Falha ao salvar exportação",
 		"failedToSaveExportedVideo": "Falha ao salvar vídeo exportado",
-		"failedToRevealInFolder": "Erro ao mostrar na pasta: {{error}}"
+		"failedToRevealInFolder": "Erro ao mostrar na pasta: {{error}}",
+		"previewCompositorUnavailable": "Pré-visualização indisponível neste computador"
 	},
 	"export": {
 		"canceled": "Exportação cancelada",

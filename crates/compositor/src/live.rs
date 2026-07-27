@@ -510,6 +510,13 @@ struct Shared {
     /// vide la ferait repartir à 1 — donc rejouer des générations déjà peintes. Monotone,
     /// jamais remise à zéro.
     frame_gen: AtomicU64,
+    /// Erreur fatale du thread de rendu (device D3D11 introuvable, décodeur qui refuse
+    /// le fichier…). Le thread meurt sur la première erreur ; sans ce champ, elle
+    /// finissait dans un `eprintln!` que personne ne lit et l'utilisateur n'avait
+    /// qu'un canvas noir — exactement le « on dirait que l'app rame » de la PR #162.
+    /// `read_frame` la relaie en `Err` au prochain tour de la boucle de pull (~33 ms),
+    /// donc elle remonte jusqu'à l'UI par le chemin d'erreur qui existe déjà.
+    fatal: Mutex<Option<String>>,
 }
 
 /// Handle d'une vue live. `Drop` arrête le rendu.
@@ -556,12 +563,16 @@ impl LiveView {
             stop: AtomicBool::new(false),
             latest_frame: Mutex::new(None),
             frame_gen: AtomicU64::new(0),
+            fatal: Mutex::new(None),
         });
         let sh = shared.clone();
         let (s, wc, cj) = (screen.to_string(), webcam.to_string(), cursor_json.to_string());
         let thread = std::thread::spawn(move || {
-            if let Err(e) = unsafe { render_thread(sh, &s, &wc, &cj) } {
+            if let Err(e) = unsafe { render_thread(sh.clone(), &s, &wc, &cj) } {
                 eprintln!("[live] render thread error: {e:#}");
+                if let Ok(mut fatal) = sh.fatal.lock() {
+                    *fatal = Some(format!("{e:#}"));
+                }
             }
         });
 
@@ -579,6 +590,12 @@ impl LiveView {
         if let Ok(mut s) = self.shared.preview_size.lock() {
             *s = (w.max(1), h.max(1));
         }
+    }
+
+    /// Message de l'erreur qui a tué le thread de rendu, `None` tant qu'il tourne.
+    /// Définitif : le thread ne redémarre pas.
+    pub fn fatal_error(&self) -> Option<String> {
+        self.shared.fatal.lock().ok().and_then(|guard| guard.clone())
     }
 
     /// Récupère la dernière frame readback (gen + taille + RGBA8 tightly-packed).

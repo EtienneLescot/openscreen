@@ -19,7 +19,8 @@
 		"exportBackgroundLoadFailed": "导出失败：无法加载背景图片（{{url}}）",
 		"failedToSaveExport": "保存导出文件失败",
 		"failedToSaveExportedVideo": "保存导出的视频失败",
-		"failedToRevealInFolder": "在文件夹中显示时出错：{{error}}"
+		"failedToRevealInFolder": "在文件夹中显示时出错：{{error}}",
+		"previewCompositorUnavailable": "此设备无法使用预览"
 	},
 	"export": {
 		"canceled": "导出已取消",

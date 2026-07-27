@@ -51,6 +51,18 @@ export interface UseNativeCompositorViewResult {
 	viewId: number | null;
 	setParam: (key: string, value: CompositorParamValue) => void;
 	setPlaying: (playing: boolean) => void;
+	/**
+	 * Native message from a render thread that died — no D3D11 device on this host,
+	 * a decoder that refused the recording, etc. `null` while things work AND in every
+	 * environment without the native path (pure web `npm run dev`, jsdom): the pull
+	 * loop that produces this only runs once a real `viewId` exists, so an absent
+	 * bridge or addon reads as "no frames", never as an error.
+	 *
+	 * Terminal: the render thread does not restart, so the pull loop stops with it.
+	 * Callers show it instead of the canvas — it is the only thing that distinguishes
+	 * "this machine cannot run the compositor" from a preview that is merely black.
+	 */
+	error: string | null;
 }
 
 /** swallow+warn wrapper for native-bridge calls. The renderer can run without
@@ -79,6 +91,7 @@ export function useNativeCompositorView(
 	// project) so it never keeps showing a stale clip.
 	const screenPath = opts.sources?.screenPath;
 	const [viewId, setViewId] = useState<number | null>(null);
+	const [error, setError] = useState<string | null>(null);
 	// Mirror into a ref so async callbacks always see the freshest id without
 	// re-subscribing the main effect.
 	const viewIdRef = useRef<number | null>(null);
@@ -98,6 +111,9 @@ export function useNativeCompositorView(
 		let pullTick = 0;
 		let lastRect: CompositorViewRect | null = null;
 		let disposed = false;
+		// Fresh view (source or enablement changed) → the previous view's fatal error
+		// says nothing about this one.
+		setError(null);
 
 		/** Resize the canvas's DRAWING BUFFER to match the offscreen render
 		 *  target's pixel dimensions. Setting `canvas.width` / `canvas.height`
@@ -233,9 +249,20 @@ export function useNativeCompositorView(
 					// plutôt que moyennés avec des périodes de repos.
 					noteUiProbePreviewFrame();
 				})
-				.catch((error: unknown) => {
+				.catch((cause: unknown) => {
 					inFlight = false;
-					console.warn("[compositor-view] readFrame failed:", error);
+					console.warn("[compositor-view] readFrame failed:", cause);
+					// Native reports the render thread's fatal error here (see the addon's
+					// `read_frame`), and it is the ONLY place it can surface: `createView`
+					// has long since returned an id by the time the thread dies. Stop
+					// polling — a dead thread never publishes another frame — and hand the
+					// message up so the user gets it instead of a silent black canvas.
+					if (disposed) {
+						return;
+					}
+					cancelAnimationFrame(pullRafHandle);
+					pullRafHandle = 0;
+					setError(cause instanceof Error ? cause.message : String(cause));
 				});
 		};
 
@@ -311,5 +338,5 @@ export function useNativeCompositorView(
 		safelyCall("setPlaying", () => setCompositorPlaying(id, playing));
 	}, []);
 
-	return { viewId, setParam, setPlaying };
+	return { viewId, setParam, setPlaying, error };
 }
