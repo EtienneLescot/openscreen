@@ -12,7 +12,7 @@ const sidebars: SidebarsConfig = {
 			type: "category",
 			label: "Features",
 			collapsible: false,
-			items: ["recording", "editing-timeline", "captions", "export"],
+			items: ["recording", "media-library", "editing-timeline", "captions", "ai-editing", "export"],
 		},
 		{
 			type: "category",

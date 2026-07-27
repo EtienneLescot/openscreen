@@ -6,7 +6,7 @@ sidebar_position: 1
 
 # Welcome to OpenScreen
 
-OpenScreen is a **free, open-source screen recorder and editor** built on Electron, React, and Pixi.js. It uses native capture APIs (ScreenCaptureKit on macOS, Windows Graphics Capture on Windows) for low-overhead recording, and ships with a real multi-track editor.
+OpenScreen is a **free, open-source screen recorder and editor**. It uses native capture APIs (ScreenCaptureKit on macOS, Windows Graphics Capture on Windows) for low-overhead recording, and composites both the live preview and the final export on the GPU through a native Rust + Direct3D 11 renderer — one path, so what you see in the editor is what comes out of the export.
 
 :::warning
 OpenScreen is **not production-grade**. The project is in active development and rough edges are expected.
@@ -14,14 +14,15 @@ OpenScreen is **not production-grade**. The project is in active development and
 
 ## What you can do
 
-- [Record](./recording.md) a specific window or your whole screen, with system audio and microphone.
-- [Edit](./editing-timeline.md) on a timeline: zooms, trim/skip regions, per-region speed, text/image/arrow annotations, cursor themes, webcam layouts, background/effects.
-- Generate [automatic captions](./captions.md) on-device with Whisper, and edit your recording by deleting words from the transcript.
-- Optionally connect your own LLM key to edit by chat — [off by default](./captions.md#ai-editing-opt-in-bring-your-own-key), never required.
-- [Export](./export.md) to MP4 (720p/1080p/source) or animated GIF.
+- [Record](./recording.md) a specific window or your whole screen, with system audio, microphone, and webcam — from a floating HUD or from the editor itself.
+- Build a project from several sources: [import, trim, crop, reorder, and split clips](./media-library.md) on one timeline.
+- [Edit](./editing-timeline.md) with zooms, trims, per-region speed, Full Camera segments, text/image/arrow/blur annotations, cursor themes, webcam layouts, and background/effects.
+- Transcribe on-device with Whisper, then [burn in captions](./captions.md) — restyled live, translatable into 15 languages — or cut your recording by deleting words from the transcript.
+- Optionally connect your own LLM key to [edit by chat](./ai-editing.md) — off by default, never required.
+- [Export](./export.md) to MP4 (720p/1080p/source, H.264 or H.265) or animated GIF.
 
 :::note
-Recording, editing, captions, and export all work fully offline with no account. AI chat editing is the one opt-in feature that talks to a network — and only once you connect a provider yourself.
+Recording, editing, transcription, captions, and export all work fully offline with no account. AI chat editing and caption translation are the only features that talk to a network — and only once you connect a provider yourself.
 :::
 
 ## Project facts
