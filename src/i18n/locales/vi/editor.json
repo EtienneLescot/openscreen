@@ -395,5 +395,9 @@
 		"cancel": "Hủy",
 		"save": "Lưu",
 		"saveAndUse": "Lưu và dùng"
+	},
+	"cpuCompositor": {
+		"notice": "Không có GPU tương thích — kết xuất trên CPU nên phát lại chậm hơn.",
+		"exportWarning": "Không có GPU tương thích: lần xuất này chạy trên CPU và sẽ lâu hơn bình thường rất nhiều."
 	}
 }

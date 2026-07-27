@@ -395,5 +395,9 @@
 		"cancel": "Annulla",
 		"save": "Salva",
 		"saveAndUse": "Salva e usa"
+	},
+	"cpuCompositor": {
+		"notice": "Nessuna GPU compatibile: il rendering avviene sulla CPU, quindi la riproduzione è più lenta.",
+		"exportWarning": "Nessuna GPU compatibile: questa esportazione viene eseguita sulla CPU e richiederà molto più tempo del solito."
 	}
 }

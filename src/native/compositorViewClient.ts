@@ -9,6 +9,8 @@
 
 import { requireNativeBridgeData } from "./client";
 import type {
+	CompositorBackend,
+	CompositorBackendResult,
 	CompositorClipInput,
 	CompositorExportParams,
 	CompositorExportResult,
@@ -17,6 +19,23 @@ import type {
 	CompositorViewRect,
 	CompositorViewResult,
 } from "./contracts";
+
+/** Which backend the native compositor will use here.
+ *
+ *  Resolves `"none"` rather than rejecting when there is no bridge or no addon — callers
+ *  use this to decide whether to show a "running without a GPU" notice, and a missing
+ *  native path is not a degraded GPU. Only `"cpu"` warrants a warning. */
+export async function probeCompositorBackend(): Promise<CompositorBackend> {
+	try {
+		const result = await requireNativeBridgeData<CompositorBackendResult>({
+			domain: "compositor",
+			action: "probeBackend",
+		});
+		return result.backend;
+	} catch {
+		return "none";
+	}
+}
 
 export function createCompositorView(
 	rect: CompositorViewRect,

@@ -7,6 +7,7 @@ import {
 	setCurrentNativeViewId,
 	setNativePlaying,
 	setNativeScene,
+	useIsCpuCompositor,
 	useNativeCompositorView,
 } from "@/native";
 import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
@@ -102,6 +103,10 @@ export function NativeCompositorOverlay() {
 		sources: sources ?? undefined,
 	});
 	const t = useScopedT("editor");
+	// No usable GPU: the preview still renders every effect, just slowly (~8 fps with
+	// everything on). Nothing is disabled — the output stays identical to the GPU path —
+	// so this is a notice, not a degradation warning.
+	const cpuCompositor = useIsCpuCompositor();
 
 	// publie l'id de la vue active dans le store → l'inspector peut pousser des params
 	// via setNativeParam sans connaître cet overlay.
@@ -247,10 +252,39 @@ export function NativeCompositorOverlay() {
 	// hitbox) that PreviewCanvas renders after it, but above nothing else —
 	// the CPU-rendered video/webcam/blur pixels it replaces are hidden via CSS.
 	return (
-		<canvas
-			ref={canvasRef}
-			data-testid="native-compositor-mount"
-			style={{ position: "absolute", inset: 0, zIndex: 0, width: "100%", height: "100%" }}
-		/>
+		<>
+			<canvas
+				ref={canvasRef}
+				data-testid="native-compositor-mount"
+				style={{ position: "absolute", inset: 0, zIndex: 0, width: "100%", height: "100%" }}
+			/>
+			{cpuCompositor && (
+				// Persistent rather than a toast: the question it answers ("why is this
+				// choppy?") comes up whenever the user looks at the preview, not once at
+				// mount. Kept small, low-contrast and pointer-events-none so it never
+				// competes with the interactive layers PreviewCanvas stacks above.
+				<output
+					data-testid="native-compositor-cpu-notice"
+					style={{
+						position: "absolute",
+						left: "50%",
+						bottom: "0.75rem",
+						transform: "translateX(-50%)",
+						zIndex: 1,
+						pointerEvents: "none",
+						maxWidth: "min(90%, 46ch)",
+						padding: "0.25rem 0.625rem",
+						borderRadius: "999px",
+						fontSize: "0.75rem",
+						lineHeight: 1.3,
+						textAlign: "center",
+						background: "rgb(0 0 0 / 0.55)",
+						color: "rgb(255 255 255 / 0.92)",
+					}}
+				>
+					{t("cpuCompositor.notice")}
+				</output>
+			)}
+		</>
 	);
 }

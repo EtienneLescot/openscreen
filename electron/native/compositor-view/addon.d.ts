@@ -65,7 +65,17 @@ export interface ClipInput {
 	webcamOffsetSec: number;
 }
 
+/** Which backend the compositor will run on. `"cpu"` = WARP rasterisation + software
+ *  decode/encode, used when no usable D3D11 GPU is present: correct output, but roughly
+ *  8 fps preview with all effects and minutes-long exports. `"none"` = no D3D11 device at
+ *  all, so the view will fail with its own, more specific message. */
+export type CompositorBackend = "hardware" | "cpu" | "none";
+
 export interface CompositorViewAddon {
+	/** What this machine offers, asked without allocating a view — the export dialog
+	 *  needs the answer before any preview exists. Cached native-side. */
+	probeBackend(): CompositorBackend;
+
 	/** Allocates an offscreen compositor view sized to `rect.width`x`rect.height` (the
 	 *  target preview resolution; `rect.x` / `rect.y` are vestigial and ignored native-side).
 	 *  No HWND/native-window-handle is passed: there's no OS window to parent to. The

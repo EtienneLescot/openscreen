@@ -395,5 +395,9 @@
 		"cancel": "キャンセル",
 		"save": "保存",
 		"saveAndUse": "保存して使用"
+	},
+	"cpuCompositor": {
+		"notice": "対応 GPU がないため CPU で描画しています。再生が遅くなります。",
+		"exportWarning": "対応 GPU がありません。この書き出しは CPU で実行されるため、通常よりはるかに時間がかかります。"
 	}
 }

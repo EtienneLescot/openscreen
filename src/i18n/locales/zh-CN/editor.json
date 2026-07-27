@@ -395,5 +395,9 @@
 		"cancel": "取消",
 		"save": "保存",
 		"saveAndUse": "保存并使用"
+	},
+	"cpuCompositor": {
+		"notice": "没有兼容的 GPU，正在使用 CPU 渲染，因此播放较慢。",
+		"exportWarning": "没有兼容的 GPU：本次导出将在 CPU 上运行，耗时会比平常长很多。"
 	}
 }

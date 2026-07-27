@@ -395,5 +395,9 @@
 		"cancel": "取消",
 		"save": "儲存",
 		"saveAndUse": "儲存並使用"
+	},
+	"cpuCompositor": {
+		"notice": "沒有相容的 GPU，正在使用 CPU 算繪，因此播放較慢。",
+		"exportWarning": "沒有相容的 GPU：這次匯出將在 CPU 上執行，耗時會比平常長很多。"
 	}
 }

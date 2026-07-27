@@ -963,7 +963,8 @@ unsafe fn render_thread(
     webcam: &str,
     cursor_json: &str,
 ) -> Result<()> {
-    let gpu = Gpu::create(false)?;
+    // Chemin de PRODUCTION : matériel si possible, backend CPU sinon (voir `create_auto`).
+    let gpu = Gpu::create_auto(false)?;
     let mut comp = Compositor::new(&gpu)?;
     // Vue live = le VRAI enregistrement, pas la fenêtre fixture (100s@6s, taillée pour l'ancien
     // fixture POC). On charge toute la piste depuis t=0 ; 24h couvre large toute recording réelle.

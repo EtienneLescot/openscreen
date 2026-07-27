@@ -6,6 +6,7 @@ import { app } from "electron";
 import { resolveCursorSprites } from "../../../src/lib/cursor/cursorThemes";
 import type {
 	ClipInput,
+	CompositorBackend,
 	CompositorParamValue,
 	CompositorViewAddon,
 	CompositorViewRect,
@@ -360,6 +361,26 @@ export class CompositorViewService {
 	/** True when the native `.node` addon was successfully loaded. */
 	hasAddon(): boolean {
 		return this.ensureAddon() !== null;
+	}
+
+	/** Which backend the compositor will use on this machine.
+	 *
+	 *  `"none"` when the addon is absent — no native path at all, so there is nothing to
+	 *  warn about; that is the pure-web/dev case, not a degraded GPU. Callers must not
+	 *  read `"none"` as "slow", only `"cpu"` means that. */
+	probeBackend(): CompositorBackend {
+		const addon = this.ensureAddon();
+		if (!addon) {
+			return "none";
+		}
+		try {
+			return addon.probeBackend();
+		} catch (err) {
+			// An older `.node` predates probeBackend. Treat as unknown rather than
+			// crashing the bridge: a stale addon should not take the editor down.
+			console.warn("[compositor-view] probeBackend unavailable:", err);
+			return "none";
+		}
 	}
 
 	/** Allocates an offscreen compositor view sized to `rect.width`x`rect.height`.

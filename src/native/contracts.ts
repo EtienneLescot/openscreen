@@ -113,6 +113,21 @@ export interface CompositorViewResult {
 	id: number;
 }
 
+/** Which backend the native compositor runs on.
+ *
+ *  `"cpu"` = WARP rasterisation with software decode and encode, selected automatically
+ *  when no usable D3D11 GPU is present. Output is identical to the GPU path — the effects
+ *  all render — but the preview runs at roughly 8 fps with everything on and exports take
+ *  minutes rather than seconds, so it is worth telling the user about.
+ *
+ *  `"none"` = no native compositor at all (addon absent: pure-web dev, jsdom). NOT a
+ *  degraded-GPU signal — never warn on it. */
+export type CompositorBackend = "hardware" | "cpu" | "none";
+
+export interface CompositorBackendResult {
+	backend: CompositorBackend;
+}
+
 /** A self-describing preview frame returned by `readFrame` (native → renderer): pixels
  *  (`data`, RGBA8, `width * height * 4` bytes) plus their dimensions and a monotonic
  *  generation. The hook keeps `gen` and passes it back as `sinceGen`; an unchanged frame
@@ -661,6 +676,11 @@ export type NativeBridgeRequest =
 				webcamPath?: string;
 				cursorPath?: string;
 			};
+			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "probeBackend";
 			requestId?: string;
 	  }
 	| {
