@@ -89,6 +89,9 @@ jobs:
 
   build-macos:
     name: macOS ${{ matrix.arch }} DMG
+    # RELEASE-BRANCH-ONLY: 1.8.0 ships Windows-only. Do NOT let this `if: false`
+    # reach main when promoting, or every later release becomes Windows-only too.
+    if: false
     runs-on: macos-latest
     strategy:
       fail-fast: false
@@ -263,6 +266,8 @@ jobs:
 
   build-linux:
     name: Linux packages
+    # RELEASE-BRANCH-ONLY: see the note on build-macos above.
+    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -298,10 +303,11 @@ jobs:
   publish-release:
     name: Publish GitHub release
     runs-on: ubuntu-latest
+    # RELEASE-BRANCH-ONLY: build-macos / build-linux are disabled for this
+    # Windows-only release. A skipped job in `needs` skips this one too, so they
+    # must come out of the list, not just be gated. Restore all three on main.
     needs:
       - build-windows
-      - build-macos
-      - build-linux
     if: ${{ (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
     steps:
       - name: Checkout code
@@ -383,6 +389,9 @@ jobs:
           path: artifacts/mac-x64
 
       - name: Download Linux packages
+        # RELEASE-BRANCH-ONLY: tolerate the missing artifact from the disabled
+        # Linux job (the macOS downloads below already do). Drop with the rest.
+        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: openscreen-linux
