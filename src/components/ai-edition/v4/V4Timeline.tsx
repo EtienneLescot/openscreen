@@ -210,12 +210,9 @@ export function V4Timeline({
 	onDropAsset,
 	videoSources = [],
 	playing,
-	loop,
 	onTogglePlay,
 	onPrevClip,
 	onNextClip,
-	onToggleLoop,
-	onExpand,
 	onEditClip,
 }: {
 	tl: TimelineApi;
@@ -225,12 +222,9 @@ export function V4Timeline({
 	onDropAsset?: (assetId: string) => void;
 	videoSources?: VideoSource[];
 	playing: boolean;
-	loop: boolean;
 	onTogglePlay: () => void;
 	onPrevClip: () => void;
 	onNextClip: () => void;
-	onToggleLoop: () => void;
-	onExpand: () => void;
 	/** Opens the (now single, shell-level) EditClipModal for this clip —
 	 * trim in/out and crop both live there per-clip. */
 	onEditClip: (clip: AxcutClip) => void;
@@ -1189,14 +1183,11 @@ export function V4Timeline({
 				)}
 				<TransportBar
 					playing={playing}
-					loop={loop}
 					currentTimeSec={effectiveTimeSec}
 					clips={clips}
 					onTogglePlay={onTogglePlay}
 					onPrevClip={onPrevClip}
 					onNextClip={onNextClip}
-					onToggleLoop={onToggleLoop}
-					onExpand={onExpand}
 					onSeek={setCurrentTime}
 				/>
 				<div className={styles.tlHints}>

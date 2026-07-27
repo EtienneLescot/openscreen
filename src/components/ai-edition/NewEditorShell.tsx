@@ -69,7 +69,6 @@ export function NewEditorShell() {
 		Record<string, "pending" | "running" | "failed">
 	>({});
 	const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
-	const [loop, setLoop] = useState(false);
 	// v4 shell: three modes (Media / Edit / Rec), a collapsible agent (chat)
 	// column, and a floating facet inspector over the stage.
 	const [mode, setMode] = useState<EditorMode>("edit");
@@ -438,24 +437,6 @@ export function NewEditorShell() {
 		handleSeek(next.timelineStartSec);
 		handleTimeChange(next.timelineStartSec);
 	}, [clips, currentTimeSec, handleSeek, handleTimeChange]);
-
-	const handleToggleLoop = useCallback(() => {
-		setLoop((v) => {
-			const next = !v;
-			if (videoElement) videoElement.loop = next;
-			return next;
-		});
-	}, [videoElement]);
-
-	const handleExpand = useCallback(() => {
-		const el = videoElement?.parentElement;
-		if (!el) return;
-		if (globalThis.document.fullscreenElement) {
-			void globalThis.document.exitFullscreen();
-		} else {
-			void el.requestFullscreen?.();
-		}
-	}, [videoElement]);
 
 	const handleTranscribe = useCallback(async () => {
 		if (!document || !document.project.primaryAssetId) return;
@@ -1271,12 +1252,9 @@ export function NewEditorShell() {
 						onDropAsset={handleDropAsset}
 						videoSources={videoSources}
 						playing={playing}
-						loop={loop}
 						onTogglePlay={togglePlay}
 						onPrevClip={handlePrevClip}
 						onNextClip={handleNextClip}
-						onToggleLoop={handleToggleLoop}
-						onExpand={handleExpand}
 						onEditClip={setEditClipTarget}
 					/>
 				</div>
