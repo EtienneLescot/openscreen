@@ -58,6 +58,19 @@ The goal of this continuation is to keep OpenScreen alive as a fully open-source
 - Export to MP4 or GIF in multiple aspect ratios and resolutions, rendered and encoded on the GPU (Metal on macOS, D3D11 on Windows, Vulkan on Linux) with an automatic CPU fallback.
 - Languages supported: Arabic, English, Spanish, French, Italian, Japanese, Korean, Portuguese (Brazil), Russian, Turkish, Vietnamese, Simplified Chinese, and Traditional Chinese.
 
+## Command-line interface (headless)
+
+OpenScreen ships a CLI for scripts, CI, and AI coding agents: record the screen
+headlessly, edit the `.openscreen` project JSON programmatically (zooms,
+annotations, trims), and render MP4/GIF with the full export pipeline — no
+visible windows, NDJSON output with `--json`.
+
+```bash
+openscreen record --duration 20 --project demo.openscreen --json
+openscreen export demo.openscreen -o demo.mp4 --json
+```
+
+See [docs/cli.md](./docs/cli.md).
 
 ## Installation
 

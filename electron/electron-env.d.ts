@@ -394,6 +394,12 @@ interface Window {
 				callback: (event: import("./stt/transcriptionContract").SttStatusEvent) => void,
 			) => () => void;
 		};
+		// CLI mode (hidden runner windows; see electron/cli/)
+		cliGetRequest: () => Promise<import("../src/lib/cliContracts").CliRequest>;
+		cliProgress: (progress: import("../src/lib/cliContracts").CliProgressEvent) => void;
+		cliLog: (level: "info" | "error", message: string) => void;
+		cliDone: (result: import("../src/lib/cliContracts").CliDoneResult) => Promise<void>;
+		onCliStopRecording: (callback: () => void) => () => void;
 		setLocale: (locale: string) => Promise<void>;
 		saveDiagnostic: (payload: {
 			error: string;

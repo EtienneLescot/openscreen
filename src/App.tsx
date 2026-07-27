@@ -20,6 +20,8 @@ const VideoEditorEntry = lazy(() =>
 		default: module.default,
 	})),
 );
+const CliExportRunner = lazy(() => import("./cli/CliExportRunner"));
+const CliRecordRunner = lazy(() => import("./cli/CliRecordRunner"));
 const ShortcutsConfigDialog = lazy(() =>
 	import("./components/video-editor/ShortcutsConfigDialog").then((module) => ({
 		default: module.ShortcutsConfigDialog,
@@ -76,6 +78,18 @@ export default function App() {
 				return <SourceSelector />;
 			case "countdown-overlay":
 				return <CountdownOverlay />;
+			case "cli-export":
+				return (
+					<Suspense fallback={null}>
+						<CliExportRunner />
+					</Suspense>
+				);
+			case "cli-record":
+				return (
+					<Suspense fallback={null}>
+						<CliRecordRunner />
+					</Suspense>
+				);
 			case "editor":
 				return (
 					<ShortcutsProvider>

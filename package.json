@@ -62,6 +62,7 @@
 		"diagnostic:run": "node scripts/diagnostic-tool/diagnostic.mjs",
 		"diagnostic:smoke:win": "node scripts/diagnostic-tool/diagnostic.mjs --duration 3",
 		"build-vite": "tsc && vite build",
+		"cli": "electron .",
 		"test:e2e": "playwright test",
 		"test:e2e:windows-native-checklist": "playwright test tests/e2e/windows-native-checklist.spec.ts",
 		"prepare": "husky",
