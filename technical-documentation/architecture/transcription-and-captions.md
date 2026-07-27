@@ -84,6 +84,24 @@ it verbatim in the response.
    `word.end = t_dtw of the next word's first token` (or the segment's `t1`
    for the segment's last word). The result is a monotonic, gap-free timeline
    of word ranges that downstream code can use without rebasing.
+5. **Re-anchor on the audio** — `t_dtw` marks where the decoder *emitted* a
+   token, not where the speaker started saying it, so every boundary lands
+   80–150 ms late (measured across real recordings; the mean correction on
+   the reference clip is 83 ms). Because consecutive words share a boundary,
+   the whole transcript is dragged right by roughly a syllable.
+   [`electron/stt/snapWordBoundaries.ts`](../../electron/stt/snapWordBoundaries.ts)
+   pulls each boundary back to the quietest 10 ms frame in the preceding
+   150 ms of the same samples whisper was given. It is self-limiting: on a
+   decaying tail — a word ending a phrase, where whisper is already right —
+   the quietest frame *is* the reported one and nothing moves. Boundaries
+   past the end of the decoded audio are left untouched.
+
+> Why this matters beyond caption timing: the transcript editor turns a word
+> selection into a trim of exactly `[firstWord.startSec, lastWord.endSec]`,
+> so a late boundary leaves the attack of the first removed word audible and
+> bites into the following kept word. `LOOKBACK_SEC` in that module is the
+> calibration knob — widen it and boundaries inside continuous speech start
+> snapping onto the previous syllable's trough.
 
 The recognition call returns **both** the phrase segments and the per-word
 segments in one pass
@@ -118,6 +136,7 @@ picked up as a usable model.
 | Module | Role |
 |---|---|
 | `electron/stt/whisperServer.ts` | Server lifecycle; `POST /inference` client; verbose_json parser. |
+| `electron/stt/snapWordBoundaries.ts` | Re-anchors DTW word boundaries on the audio's RMS envelope (see step 5 above). |
 | `electron/stt/wav.ts` | WAV write + temp-file cleanup helpers. |
 | `electron/stt/gpuDetector.ts` | Per-platform binary resolver (no GPU probing). |
 | `electron/stt/modelManager.ts` | Single GGML file download, SHA-256 verify, atomic write. |
