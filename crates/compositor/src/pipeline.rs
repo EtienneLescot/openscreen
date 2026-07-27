@@ -246,13 +246,9 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
     (*dctx).get_format = Some(get_hw_format);
     averr(avcodec_open2(dctx, dec, ptr::null_mut()), "avcodec_open2(dec)")?;
 
-    // ---- encodeur h264_amf (ouvert paresseusement à la 1re frame, pour hw_frames_ctx) ----
-    let enc_name = CString::new("h264_amf")?;
-    let enc = avcodec_find_encoder_by_name(enc_name.as_ptr());
-    if enc.is_null() {
-        bail!("h264_amf introuvable");
-    }
-    let ectx = avcodec_alloc_context3(enc);
+    // ---- encodeur (ouvert paresseusement à la 1re frame : il lui faut ses dims + hw_frames_ctx) ----
+    let mut enc: Option<VideoEncoder> = None;
+    let mut ectx: *mut AVCodecContext = ptr::null_mut();
 
     // ---- sortie : mux MP4 ----
     let mut octx: *mut AVFormatContext = ptr::null_mut();
@@ -262,7 +258,6 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
         "alloc_output_context2",
     )?;
     let mut ostream: *mut AVStream = ptr::null_mut();
-    let mut encoder_open = false;
 
     let pkt = av_packet_alloc();
     let opkt = av_packet_alloc();
@@ -294,16 +289,18 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
             }
             averr(r, "receive_frame")?;
 
-            if !encoder_open {
+            if enc.is_none() {
                 // config depuis la 1re frame décodée : dims réelles + frames_ctx D3D11
-                (*ectx).width = (*frame).width;
-                (*ectx).height = (*frame).height;
-                (*ectx).pix_fmt = AVPixelFormat::AV_PIX_FMT_D3D11;
-                (*ectx).time_base = AVRational { num: 1, den: 60 };
-                (*ectx).framerate = AVRational { num: 60, den: 1 };
-                (*ectx).bit_rate = 8_000_000;
-                (*ectx).hw_frames_ctx = av_buffer_ref((*frame).hw_frames_ctx);
-                averr(avcodec_open2(ectx, enc, ptr::null_mut()), "avcodec_open2(enc)")?;
+                let opened = VideoEncoder::open(
+                    &ExportCodec::H264,
+                    (*frame).width,
+                    (*frame).height,
+                    60,
+                    8_000_000,
+                    (*frame).hw_frames_ctx,
+                )?;
+                ectx = opened.ctx;
+                enc = Some(opened);
 
                 ostream = avformat_new_stream(octx, ptr::null());
                 if ostream.is_null() {
@@ -321,11 +318,10 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
                 )?;
                 sn_fmt_set_pb(octx, pb);
                 averr(avformat_write_header(octx, ptr::null_mut()), "write_header")?;
-                encoder_open = true;
             }
 
             (*frame).pts = frames as i64;
-            averr(avcodec_send_frame(ectx, frame), "send_frame")?;
+            enc.as_mut().unwrap().send(frame)?;
             drain_encoder(ectx, octx, ostream, opkt)?;
             frames += 1;
         }
@@ -339,14 +335,17 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
             break;
         }
         averr(r, "flush receive_frame")?;
+        let Some(encoder) = enc.as_mut() else {
+            bail!("flush : première frame reçue au flush, encodeur jamais ouvert");
+        };
         (*frame).pts = frames as i64;
-        averr(avcodec_send_frame(ectx, frame), "flush send_frame")?;
+        encoder.send(frame)?;
         drain_encoder(ectx, octx, ostream, opkt)?;
         frames += 1;
     }
     // flush encodeur
-    if encoder_open {
-        avcodec_send_frame(ectx, ptr::null_mut());
+    if let Some(encoder) = enc.as_mut() {
+        encoder.send(ptr::null_mut())?;
         drain_encoder(ectx, octx, ostream, opkt)?;
         averr(av_write_trailer(octx), "write_trailer")?;
     }
@@ -364,7 +363,7 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
         sn_fmt_set_pb(octx, ptr::null_mut());
     }
     avformat_free_context(octx);
-    avcodec_free_context(&mut (ectx as *mut _));
+    // `enc` est libéré par son Drop en fin de portée (voir run_multi_inner).
     avcodec_free_context(&mut (dctx as *mut _));
     av_buffer_unref(&mut (hwdev as *mut _));
     avformat_close_input(&mut fmt);
@@ -634,20 +633,15 @@ unsafe fn run_c1_inner(
     let mut wdec = Decoder::open(webcam, gpu)?;
     let (mut enc_hwdev, mut enc_frames) = make_enc_frames(gpu, OUT_W as i32, OUT_H as i32)?;
 
-    let enc_name = CString::new("h264_amf")?;
-    let enc = avcodec_find_encoder_by_name(enc_name.as_ptr());
-    if enc.is_null() {
-        bail!("h264_amf introuvable");
-    }
-    let ectx = avcodec_alloc_context3(enc);
-    (*ectx).width = OUT_W as i32;
-    (*ectx).height = OUT_H as i32;
-    (*ectx).pix_fmt = AVPixelFormat::AV_PIX_FMT_D3D11;
-    (*ectx).time_base = AVRational { num: 1, den: 60 };
-    (*ectx).framerate = AVRational { num: 60, den: 1 };
-    (*ectx).bit_rate = 8_000_000;
-    (*ectx).hw_frames_ctx = av_buffer_ref(enc_frames);
-    averr(avcodec_open2(ectx, enc, ptr::null_mut()), "avcodec_open2(enc)")?;
+    let mut enc = VideoEncoder::open(
+        &ExportCodec::H264,
+        OUT_W as i32,
+        OUT_H as i32,
+        60,
+        8_000_000,
+        enc_frames,
+    )?;
+    let ectx = enc.ctx;
 
     let mut octx: *mut AVFormatContext = ptr::null_mut();
     let outc = CString::new(out)?;
@@ -684,14 +678,14 @@ unsafe fn run_c1_inner(
         let out_slice = (*outf).data[1] as u32;
         comp.rgb_to_nv12(out_tex, out_slice)?;
         (*outf).pts = frames as i64;
-        averr(avcodec_send_frame(ectx, outf), "send_frame")?;
+        enc.send(outf)?;
         drain_encoder(ectx, octx, ostream, opkt)?;
         av_frame_free(&mut (outf as *mut _));
         frames += 1;
         progress(frames);
     }
 
-    avcodec_send_frame(ectx, ptr::null_mut());
+    enc.send(ptr::null_mut())?;
     drain_encoder(ectx, octx, ostream, opkt)?;
     averr(av_write_trailer(octx), "write_trailer")?;
 
@@ -704,7 +698,7 @@ unsafe fn run_c1_inner(
         sn_fmt_set_pb(octx, ptr::null_mut());
     }
     avformat_free_context(octx);
-    avcodec_free_context(&mut (ectx as *mut _));
+    // `enc` est libéré par son Drop en fin de portée (voir run_multi_inner).
     av_buffer_unref(&mut enc_frames);
     av_buffer_unref(&mut enc_hwdev);
 
@@ -739,21 +733,241 @@ pub fn run_composited_multi(
     unsafe { run_multi_inner(clips, out, gpu, comp, cfg, params, progress) }
 }
 
-/// Codec vidéo de sortie — mappé sur un encodeur matériel AMF (même famille que h264_amf,
-/// déjà mesuré). VP9 a été essayé via un chemin logiciel (libvpx-vp9, pas d'équivalent
-/// matériel AMF sur cet iGPU) mais retiré : trop lent pour être utile en pratique sur ce
-/// matériel, pas la peine de maintenir ce chemin. Choisir VP9 échoue avec un message clair
-/// plutôt que de silencieusement retomber sur H264.
+/// Codec vidéo de sortie. L'encodeur concret est choisi à l'exécution (voir `candidates`).
+/// VP9 a été essayé via un chemin logiciel (libvpx-vp9) mais retiré : trop lent pour être
+/// utile en pratique, pas la peine de maintenir ce chemin. Choisir VP9 échoue avec un message
+/// clair plutôt que de silencieusement retomber sur H264.
 pub enum ExportCodec {
     H264,
     H265,
 }
 
+/// Un candidat encodeur : son nom ffmpeg, et le format d'entrée qu'on lui présentera.
+/// `AV_PIX_FMT_D3D11` = zéro-copie, la texture du compositeur part telle quelle ; tout autre
+/// format impose une descente GPU→système par frame (voir `VideoEncoder::send`).
+type EncoderCandidate = (&'static str, AVPixelFormat::Type);
+
 impl ExportCodec {
-    fn encoder_name(&self) -> &'static str {
+    /// Ordre de préférence, du plus rapide au plus universel. Le premier dont `avcodec_open2`
+    /// réussit **vraiment** gagne : figurer dans la liste `-encoders` du build ne prouve rien
+    /// (les back-ends AMF/NVENC sont compilés en dur dans ffmpeg, sans le GPU correspondant
+    /// derrière), seule l'ouverture négocie avec le driver.
+    ///
+    /// - `*_amf` / `*_nvenc` — AMD / NVIDIA, avalent nos textures D3D11 directement. AMF
+    ///   d'abord : c'est le chemin mesuré (§9, C0..C8), le garder en tête laisse les chiffres
+    ///   du banc comparables sur la machine de dev.
+    /// - `*_mf` — MediaFoundation, c'est-à-dire *n'importe quel* MFT installé : le seul
+    ///   candidat qui ne présuppose aucun vendeur, et celui qui rattrape le MFT logiciel de
+    ///   Windows (VM, RDP, machine sans encodeur), son `hw_encoding` valant `false` par défaut.
+    ///   **En NV12 seulement.** Il annonce `d3d11` et s'ouvre en d3d11, mais meurt ensuite au
+    ///   premier envoi (« Failed to set D3D manager: 80004001 ») quand MediaFoundation lui a
+    ///   résolu le MFT logiciel — mesuré ici. Comme le choix est acté à l'ouverture, ce
+    ///   candidat-là ferait échouer l'export au lieu de glisser au suivant : ne pas le remettre.
+    /// - `*_qsv` — Intel ; n'accepte pas `AV_PIX_FMT_D3D11`, seulement du NV12 système.
+    /// - `libopenh264` / `libkvazaar` — dernier recours 100 % logiciel. **Pas** libx264/libx265 :
+    ///   le ffmpeg vendorisé est le build LGPL, `--disable-libx264 --disable-libx265`. Ces deux
+    ///   là y sont, et sont les seuls encodeurs logiciels H264/H265 dont on dispose.
+    fn candidates(&self) -> &'static [EncoderCandidate] {
+        const D3D11: AVPixelFormat::Type = AVPixelFormat::AV_PIX_FMT_D3D11;
+        const NV12: AVPixelFormat::Type = AVPixelFormat::AV_PIX_FMT_NV12;
+        const YUV420P: AVPixelFormat::Type = AVPixelFormat::AV_PIX_FMT_YUV420P;
         match self {
-            ExportCodec::H264 => "h264_amf",
-            ExportCodec::H265 => "hevc_amf",
+            ExportCodec::H264 => &[
+                ("h264_amf", D3D11),
+                ("h264_nvenc", D3D11),
+                ("h264_qsv", NV12),
+                ("h264_mf", NV12),
+                ("libopenh264", YUV420P),
+            ],
+            ExportCodec::H265 => &[
+                ("hevc_amf", D3D11),
+                ("hevc_nvenc", D3D11),
+                ("hevc_qsv", NV12),
+                ("hevc_mf", NV12),
+                ("libkvazaar", YUV420P),
+            ],
+        }
+    }
+}
+
+/// L'encodeur vidéo retenu pour ce run, plus ce qu'il faut pour le nourrir.
+///
+/// Le reste du pipeline continue de produire des frames GPU sans savoir qui encode : quand le
+/// candidat retenu n'avale pas les textures D3D11, la descente vers la mémoire système se fait
+/// ici et nulle part ailleurs.
+struct VideoEncoder {
+    ctx: *mut AVCodecContext,
+    /// Frame système au format attendu par l'encodeur. Null si zéro-copie D3D11.
+    sw: *mut AVFrame,
+    /// Intermédiaire NV12 : `av_hwframe_transfer_data` ne convertit pas, il ne sait descendre
+    /// que vers le `sw_format` du pool. Non-null seulement si l'encodeur veut du planaire.
+    nv12: *mut AVFrame,
+}
+
+impl Drop for VideoEncoder {
+    fn drop(&mut self) {
+        unsafe {
+            avcodec_free_context(&mut self.ctx);
+            if !self.sw.is_null() {
+                av_frame_free(&mut self.sw);
+            }
+            if !self.nv12.is_null() {
+                av_frame_free(&mut self.nv12);
+            }
+        }
+    }
+}
+
+impl VideoEncoder {
+    /// Retient le premier candidat que cette machine accepte d'ouvrir, et dit lequel dans les
+    /// logs. `hw_frames` : le pool D3D11 dans lequel le compositeur rend.
+    unsafe fn open(
+        codec: &ExportCodec,
+        w: i32,
+        h: i32,
+        fps: i32,
+        bit_rate: i64,
+        hw_frames: *mut AVBufferRef,
+    ) -> Result<VideoEncoder> {
+        let mut refused: Vec<String> = Vec::new();
+        for &candidate in codec.candidates() {
+            let (name, _) = candidate;
+            let encoder = match Self::try_open(candidate, w, h, fps, bit_rate, hw_frames) {
+                Ok(encoder) => encoder,
+                Err(error) => {
+                    refused.push(format!("{name}: {error}"));
+                    continue;
+                }
+            };
+            // Journalisé sans condition : un rapport de support doit dire qui a encodé.
+            eprintln!(
+                "[pipeline] encodeur vidéo : {name} ({}){}",
+                if encoder.sw.is_null() { "textures D3D11, zéro-copie" } else { "frames système" },
+                if refused.is_empty() {
+                    String::new()
+                } else {
+                    format!(" — écartés : {}", refused.join(" ; "))
+                },
+            );
+            return Ok(encoder);
+        }
+        bail!(
+            "aucun encodeur vidéo utilisable sur cette machine : {}",
+            refused.join(" ; "),
+        );
+    }
+
+    /// Ouvre un candidat. L'ouverture est la sonde : elle négocie pour de bon avec le driver
+    /// (c'est elle qui échoue sur une machine sans AMF), et tous les candidats de la liste
+    /// échouent proprement ici quand ils ne conviennent pas — mesuré sur cette machine :
+    /// `h264_nvenc` « Operation not permitted », `h264_qsv` « Unknown error ».
+    ///
+    /// ponytail: encoder une frame d'essai serait la sonde forte, mais l'essai a été fait et
+    /// retiré : tirer une frame quelconque du pool n'équivaut pas à une vraie frame composée,
+    /// et AMF la refusait dans C0 (pool du décodeur) — faux négatif qui coûtait 179→60 fps sur
+    /// un chemin qui marchait. Le vrai remède serait de sonder avec la 1re frame réelle, avant
+    /// l'écriture de l'en-tête MP4 ; à faire si un candidat se met à passer l'ouverture pour
+    /// mourir ensuite.
+    unsafe fn try_open(
+        (name, pix_fmt): EncoderCandidate,
+        w: i32,
+        h: i32,
+        fps: i32,
+        bit_rate: i64,
+        hw_frames: *mut AVBufferRef,
+    ) -> Result<VideoEncoder> {
+        let cname = CString::new(name)?;
+        let enc = avcodec_find_encoder_by_name(cname.as_ptr());
+        if enc.is_null() {
+            bail!("absent de ce build ffmpeg");
+        }
+        let mut ctx = avcodec_alloc_context3(enc);
+        if ctx.is_null() {
+            bail!("avcodec_alloc_context3");
+        }
+        (*ctx).width = w;
+        (*ctx).height = h;
+        (*ctx).pix_fmt = pix_fmt;
+        (*ctx).time_base = AVRational { num: 1, den: fps };
+        (*ctx).framerate = AVRational { num: fps, den: 1 };
+        (*ctx).bit_rate = bit_rate;
+        if pix_fmt == AVPixelFormat::AV_PIX_FMT_D3D11 {
+            (*ctx).hw_frames_ctx = av_buffer_ref(hw_frames);
+        }
+        if let Err(error) = averr(avcodec_open2(ctx, enc, ptr::null_mut()), "avcodec_open2(enc)") {
+            avcodec_free_context(&mut ctx);
+            return Err(error);
+        }
+
+        // À partir d'ici le contexte est à nous : le mettre dans la struct d'abord, pour que
+        // le Drop le libère si l'allocation des tampons échoue.
+        let mut encoder = VideoEncoder { ctx, sw: ptr::null_mut(), nv12: ptr::null_mut() };
+        if pix_fmt != AVPixelFormat::AV_PIX_FMT_D3D11 {
+            encoder.sw = alloc_sw_frame(pix_fmt, w, h)?;
+            if pix_fmt != AVPixelFormat::AV_PIX_FMT_NV12 {
+                encoder.nv12 = alloc_sw_frame(AVPixelFormat::AV_PIX_FMT_NV12, w, h)?;
+            }
+        }
+        Ok(encoder)
+    }
+
+    /// Envoie une frame du compositeur (texture D3D11) à l'encodeur ; `frame` null = flush.
+    unsafe fn send(&mut self, frame: *mut AVFrame) -> Result<()> {
+        if self.sw.is_null() || frame.is_null() {
+            return averr(avcodec_send_frame(self.ctx, frame), "send_frame");
+        }
+        // L'encodeur garde une référence sur les frames en vol : ne jamais réécrire par-dessus.
+        averr(av_frame_make_writable(self.sw), "frame_make_writable")?;
+        let landing = if self.nv12.is_null() { self.sw } else { self.nv12 };
+        averr(av_hwframe_transfer_data(landing, frame, 0), "hwframe_transfer_data")?;
+        if !self.nv12.is_null() {
+            nv12_to_yuv420p(self.nv12, self.sw);
+        }
+        (*self.sw).pts = (*frame).pts;
+        averr(avcodec_send_frame(self.ctx, self.sw), "send_frame")
+    }
+}
+
+/// Frame système allouée une fois, réutilisée à chaque envoi.
+unsafe fn alloc_sw_frame(pix_fmt: AVPixelFormat::Type, w: i32, h: i32) -> Result<*mut AVFrame> {
+    let frame = av_frame_alloc();
+    if frame.is_null() {
+        bail!("av_frame_alloc (tampon encodeur)");
+    }
+    (*frame).format = pix_fmt;
+    (*frame).width = w;
+    (*frame).height = h;
+    if let Err(error) = averr(av_frame_get_buffer(frame, 0), "av_frame_get_buffer (tampon encodeur)")
+    {
+        av_frame_free(&mut (frame as *mut _));
+        return Err(error);
+    }
+    Ok(frame)
+}
+
+/// NV12 (Y puis UV entrelacé) → YUV420P (Y, U, V séparés), pour les encodeurs logiciels qui
+/// ne prennent que du planaire. Les `linesize` des deux frames diffèrent : copier plan par
+/// plan, ligne par ligne, jamais d'un bloc.
+///
+/// ponytail: désentrelacement scalaire, O(w·h) par frame. Négligeable devant l'encodeur
+/// logiciel qui suit (des dizaines de ms/frame) — c'est le seul chemin qui l'emprunte.
+/// Brancher swscale si ce chemin devient un jour chaud.
+unsafe fn nv12_to_yuv420p(src: *mut AVFrame, dst: *mut AVFrame) {
+    let (w, h) = ((*src).width as usize, (*src).height as usize);
+    for y in 0..h {
+        ptr::copy_nonoverlapping(
+            (*src).data[0].add(y * (*src).linesize[0] as usize),
+            (*dst).data[0].add(y * (*dst).linesize[0] as usize),
+            w,
+        );
+    }
+    for y in 0..h / 2 {
+        let uv = (*src).data[1].add(y * (*src).linesize[1] as usize);
+        let u = (*dst).data[1].add(y * (*dst).linesize[1] as usize);
+        let v = (*dst).data[2].add(y * (*dst).linesize[2] as usize);
+        for x in 0..w / 2 {
+            *u.add(x) = *uv.add(2 * x);
+            *v.add(x) = *uv.add(2 * x + 1);
         }
     }
 }
@@ -808,26 +1022,20 @@ unsafe fn run_multi_inner(
     let mut cursor_tracks: HashMap<String, CursorTrack> = HashMap::new();
     let mut cursor_active_path: Option<String> = None;
 
-    // ---- encodeur (h264/h265 AMF) + mux, à la taille/cadence demandées ----
+    // ---- encodeur (choisi à l'exécution, cf. ExportCodec::candidates) + mux ----
     let (mut enc_hwdev, mut enc_frames) = make_enc_frames(gpu, out_w as i32, out_h as i32)?;
-    let enc_name_str = params.codec.encoder_name();
-    let enc_name = CString::new(enc_name_str)?;
-    let enc = avcodec_find_encoder_by_name(enc_name.as_ptr());
-    if enc.is_null() {
-        bail!("{enc_name_str} introuvable");
-    }
-    let ectx = avcodec_alloc_context3(enc);
-    (*ectx).width = out_w as i32;
-    (*ectx).height = out_h as i32;
-    (*ectx).pix_fmt = AVPixelFormat::AV_PIX_FMT_D3D11;
-    (*ectx).time_base = AVRational { num: 1, den: out_fps };
-    (*ectx).framerate = AVRational { num: out_fps, den: 1 };
-    // proportionnel à la surface de sortie (référence : 8Mbps @ 1920x1080), plancher 2Mbps
-    // pour rester regardable sur les petites tailles.
-    (*ectx).bit_rate =
-        ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
-    (*ectx).hw_frames_ctx = av_buffer_ref(enc_frames);
-    averr(avcodec_open2(ectx, enc, ptr::null_mut()), "avcodec_open2(enc)")?;
+    // débit proportionnel à la surface de sortie (référence : 8Mbps @ 1920x1080), plancher
+    // 2Mbps pour rester regardable sur les petites tailles.
+    let bit_rate = ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
+    let mut enc = VideoEncoder::open(
+        &params.codec,
+        out_w as i32,
+        out_h as i32,
+        out_fps,
+        bit_rate,
+        enc_frames,
+    )?;
+    let ectx = enc.ctx;
 
     let mut octx: *mut AVFormatContext = ptr::null_mut();
     let outc = CString::new(out)?;
@@ -989,7 +1197,7 @@ unsafe fn run_multi_inner(
                 let out_slice = (*outf).data[1] as u32;
                 comp.rgb_to_nv12_scaled(out_w, out_h, out_tex, out_slice)?;
                 (*outf).pts = frames as i64;
-                averr(avcodec_send_frame(ectx, outf), "send_frame")?;
+                enc.send(outf)?;
                 drain_encoder(ectx, octx, ostream, opkt)?;
                 av_frame_free(&mut (outf as *mut _));
                 frames += 1;
@@ -1022,7 +1230,7 @@ unsafe fn run_multi_inner(
     comp.set_timeline_time(None);
     comp.set_scene(scene);
 
-    avcodec_send_frame(ectx, ptr::null_mut());
+    enc.send(ptr::null_mut())?;
     drain_encoder(ectx, octx, ostream, opkt)?;
 
     let declared_audio: Vec<bool> = clips.iter().map(|clip| clip.has_audio).collect();
@@ -1045,12 +1253,105 @@ unsafe fn run_multi_inner(
         sn_fmt_set_pb(octx, ptr::null_mut());
     }
     avformat_free_context(octx);
-    avcodec_free_context(&mut (ectx as *mut _));
+    // `enc` (donc le contexte encodeur) est libéré par son Drop en fin de portée — après
+    // ces unref, ce qui est l'ordre voulu : il garde sa propre référence sur le pool.
     av_buffer_unref(&mut enc_frames);
     av_buffer_unref(&mut enc_hwdev);
 
     let fps = frames as f64 / wall_s;
     Ok(Stats { frames, wall_s, fps, video_duration_s: frames as f64 / out_fps as f64 })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// L'ordre EST le contrat : tous les candidats zéro-copie d'abord, le logiciel en dernier.
+    /// Un candidat système remonté au-dessus d'un D3D11 coûterait une descente GPU→CPU par
+    /// frame sur une machine qui n'en a pas besoin, sans que rien n'échoue — donc sans que
+    /// personne ne le voie.
+    #[test]
+    fn les_candidats_vont_du_zero_copie_au_logiciel() {
+        for codec in [ExportCodec::H264, ExportCodec::H265] {
+            let candidates = codec.candidates();
+            let last_d3d11 = candidates
+                .iter()
+                .rposition(|&(_, fmt)| fmt == AVPixelFormat::AV_PIX_FMT_D3D11)
+                .expect("au moins un candidat zéro-copie");
+            let first_sw = candidates
+                .iter()
+                .position(|&(_, fmt)| fmt != AVPixelFormat::AV_PIX_FMT_D3D11)
+                .expect("au moins un candidat en mémoire système");
+            assert!(last_d3d11 < first_sw, "candidats mal ordonnés : {candidates:?}");
+        }
+    }
+
+    /// Le dernier recours doit être 100 % logiciel, sinon une machine sans encodeur matériel
+    /// (VM, RDP) n'exporte pas du tout — la régression que cette sélection corrige.
+    /// libx264/libx265 sont GPL et absents du build LGPL vendorisé : les nommer ferait un
+    /// filet de sécurité qui n'existe pas.
+    #[test]
+    fn le_dernier_recours_est_un_encodeur_logiciel_present_dans_le_build_lgpl() {
+        let fallbacks: Vec<&str> = [ExportCodec::H264, ExportCodec::H265]
+            .iter()
+            .map(|codec| codec.candidates().last().expect("liste non vide").0)
+            .collect();
+        assert_eq!(fallbacks, ["libopenh264", "libkvazaar"]);
+        for codec in [ExportCodec::H264, ExportCodec::H265] {
+            for &(name, _) in codec.candidates() {
+                assert!(!matches!(name, "libx264" | "libx265"), "{name} absent du build LGPL");
+            }
+        }
+    }
+
+    /// Le désentrelacement chroma est la seule vraie logique du chemin logiciel, et la seule
+    /// qui puisse se tromper en silence (image verte / couleurs inversées plutôt qu'une
+    /// erreur). Les deux frames ont des `linesize` différents — c'est exactement ce qu'un
+    /// `copy` d'un bloc raterait.
+    #[test]
+    fn nv12_vers_yuv420p_desentrelace_le_chroma() {
+        unsafe {
+            let (w, h) = (4usize, 4usize);
+            let src = alloc_sw_frame(AVPixelFormat::AV_PIX_FMT_NV12, w as i32, h as i32).unwrap();
+            let dst =
+                alloc_sw_frame(AVPixelFormat::AV_PIX_FMT_YUV420P, w as i32, h as i32).unwrap();
+
+            // luma = 10, 11, 12... ligne par ligne ; chroma = U pair, V impair, distinguables.
+            for y in 0..h {
+                let row = (*src).data[0].add(y * (*src).linesize[0] as usize);
+                for x in 0..w {
+                    *row.add(x) = (10 + y * w + x) as u8;
+                }
+            }
+            for y in 0..h / 2 {
+                let row = (*src).data[1].add(y * (*src).linesize[1] as usize);
+                for x in 0..w / 2 {
+                    *row.add(2 * x) = (100 + y * (w / 2) + x) as u8; // U
+                    *row.add(2 * x + 1) = (200 + y * (w / 2) + x) as u8; // V
+                }
+            }
+
+            nv12_to_yuv420p(src, dst);
+
+            for y in 0..h {
+                let row = (*dst).data[0].add(y * (*dst).linesize[0] as usize);
+                for x in 0..w {
+                    assert_eq!(*row.add(x), (10 + y * w + x) as u8, "luma ({x},{y})");
+                }
+            }
+            for y in 0..h / 2 {
+                let u = (*dst).data[1].add(y * (*dst).linesize[1] as usize);
+                let v = (*dst).data[2].add(y * (*dst).linesize[2] as usize);
+                for x in 0..w / 2 {
+                    assert_eq!(*u.add(x), (100 + y * (w / 2) + x) as u8, "U ({x},{y})");
+                    assert_eq!(*v.add(x), (200 + y * (w / 2) + x) as u8, "V ({x},{y})");
+                }
+            }
+
+            av_frame_free(&mut (src as *mut _));
+            av_frame_free(&mut (dst as *mut _));
+        }
+    }
 }
 
 unsafe fn drain_encoder(
