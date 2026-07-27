@@ -323,13 +323,33 @@ pub struct SceneCursor {
     pub motion_blur: f32,
     pub click_bounce: f32,
     pub clip_to_bounds: bool,
-    /// id du thème (jeu de sprites) — "default" = pas d'override, curseur math dot+ring.
+    /// id du thème (jeu de sprites) — informatif ici : le natif consomme `cursor_sprites`.
     pub theme: String,
-    /// Chemin absolu du sprite "arrow" du thème, résolu côté app (compositorViewService,
-    /// même mécanisme que le wallpaper image). Absent/`None` → curseur math par défaut.
+    /// Sprites par état de curseur (`"arrow"`, `"text"`, `"pointer"`, `"resize-ew"`, …), chemins
+    /// absolus résolus côté app (compositorViewService, même mécanisme que le wallpaper image).
+    /// Le thème choisi n'y fournit que les états qu'il possède ; l'app complète le reste avec
+    /// l'art intégrée, si bien qu'ici la table est TOUJOURS complète ou vide.
+    ///
+    /// Vide → curseur math dot+ring, qui n'est qu'un filet de sécurité : ce n'est PAS à quoi
+    /// ressemble un pointeur système, et l'afficher en temps normal était le bug « le curseur
+    /// par défaut est un point dans un cercle ».
     /// `#[serde(default)]` : champ ajouté après coup, absent des JSON de test existants.
     #[serde(default)]
-    pub cursor_sprite_path: Option<String>,
+    pub cursor_sprites: std::collections::HashMap<String, SceneCursorSprite>,
+}
+
+/// Un sprite de curseur : image + point de pivot.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SceneCursorSprite {
+    /// Chemin absolu d'un PNG/JPEG déchiffrable par le crate `image`.
+    pub path: String,
+    /// Pivot en FRACTION de l'image (0..1), pas en pixels : le sprite est redimensionné au
+    /// réglage « taille du curseur », et seule une fraction survit à cette mise à l'échelle.
+    /// Un pivot centré (0.5, 0.5) imposé à tous les sprites décalait la pointe d'autant plus
+    /// que le curseur était agrandi — le bug que ce champ corrige.
+    pub hotspot_x: f32,
+    pub hotspot_y: f32,
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

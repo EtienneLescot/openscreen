@@ -138,7 +138,9 @@ const PRETTY_NATIVE_CURSOR_ASSETS: Partial<Record<NativeCursorType, PrettyNative
 		width: 32,
 		height: 32,
 		hotspotX: 16,
-		hotspotY: 9,
+		// Not 9 — that was open-hand's value, and the grabbing fist is drawn lower and
+		// shorter, so it put the hotspot above the artwork entirely. Centred on the fist.
+		hotspotY: 17,
 	},
 	"resize-ew": {
 		imageDataUrl: resizeEwUrl,
