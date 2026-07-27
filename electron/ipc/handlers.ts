@@ -3401,14 +3401,7 @@ export function registerIpcHandlers(
 		getAiEditionDocuments: () => aiEditionDocuments,
 		getAiEditionLlmConfig: () => aiEditionLlmConfig,
 		runAiEditionChat: (projectId, sessionId, message, document, sink) =>
-			runChat(
-				projectId,
-				sessionId,
-				message,
-				aiEditionLlmConfig,
-				document,
-				sink,
-			),
+			runChat(projectId, sessionId, message, aiEditionLlmConfig, document, sink),
 		undoAiEditionToolBatch: (_projectId, _sessionId) => ({
 			success: false,
 			error: "Per-tool-batch undo retired in favor of per-message rewind.",
@@ -3418,13 +3411,7 @@ export function registerIpcHandlers(
 		compactNow: (projectId, sessionId) =>
 			compactSessionNow(projectId, sessionId, aiEditionLlmConfig),
 		runTimelineOperation: (projectId, sessionId, op, conversationMessage) =>
-			runTimelineOperation(
-				projectId,
-				sessionId,
-				op,
-				conversationMessage,
-				aiEditionDocuments,
-			),
+			runTimelineOperation(projectId, sessionId, op, conversationMessage, aiEditionDocuments),
 		getContextUsage: getSessionContextUsage,
 		runAiEditionChatDefault: (projectId, message, sink) =>
 			runChatDefault(projectId, message, aiEditionLlmConfig, sink),

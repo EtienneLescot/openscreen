@@ -1,25 +1,8 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { probeMiniMaxModels } from "./llm-provider-auth";
 
 const ORIGINAL_FETCH = globalThis.fetch;
-
-function mockFetchSequence(
-	responses: Array<{ ok: boolean; status?: number; body: unknown; delayMs?: number }>,
-) {
-	const queue = [...responses];
-	vi.spyOn(globalThis, "fetch").mockImplementation(async () => {
-		const next = queue.shift();
-		if (!next) throw new Error("mock fetch: no response queued");
-		const init = next.delayMs ? await new Promise<void>((r) => setTimeout(r, next.delayMs)) : null;
-		void init;
-		const status = next.status ?? (next.ok ? 200 : 500);
-		return new Response(JSON.stringify(next.body), {
-			status,
-			headers: { "Content-Type": "application/json" },
-		});
-	});
-}
 
 afterEach(() => {
 	vi.restoreAllMocks();

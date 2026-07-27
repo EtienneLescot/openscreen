@@ -38,9 +38,16 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup
 
-      # ponytail: STT is handled by the bundled whisper-stt-server (whisper.cpp
-      # with native DTW token timestamps). No separate VAD model is fetched
-      # here. See technical-documentation/architecture/transcription-and-captions.md for the full architecture.
+      # STT is the bundled whisper-stt-server (whisper.cpp with native DTW token
+      # timestamps); no VAD model is fetched here. The binary is built by
+      # build-whisper-stt.yml and staged below — without that step the installer
+      # ships without speech-to-text. See
+      # technical-documentation/architecture/transcription-and-captions.md.
+      - name: Stage whisper-stt binaries
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/stage-whisper-stt.sh win32-x64
 
       - name: Build Windows app
         run: npm run build:win -- --publish never
@@ -63,9 +70,11 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup
 
-      # ponytail: STT is handled by the bundled whisper-stt-server (whisper.cpp
-      # with native DTW token timestamps). No separate VAD model is fetched
-      # here. See technical-documentation/architecture/transcription-and-captions.md for the full architecture.
+      - name: Stage whisper-stt binaries
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/stage-whisper-stt.sh win32-x64
 
       - name: Build Windows Store package
         run: npm run build:win:store -- --publish never
@@ -102,8 +111,12 @@ jobs:
         env:
           npm_config_build_from_source: "false"
 
-      # ponytail: STT is handled by the bundled whisper-stt-server (see the
-      # build-windows comment); no VAD model is fetched here.
+      - name: Stage whisper-stt binaries
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/stage-whisper-stt.sh darwin-${{ matrix.arch }}
+
       - name: Resolve macOS signing
         id: signing
         env:
@@ -261,7 +274,12 @@ jobs:
       - name: Install pacman build dependencies
         run: sudo apt-get update && sudo apt-get install -y libarchive-tools
 
-      # ponytail: no VAD fetch here either (see build-windows comment).
+      - name: Stage whisper-stt binaries
+        shell: bash
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: bash scripts/stage-whisper-stt.sh linux-x64
+
       - name: Build Linux app
         run: npm run build:linux -- --publish never
 

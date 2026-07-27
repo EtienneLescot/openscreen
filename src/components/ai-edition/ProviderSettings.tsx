@@ -295,18 +295,14 @@ function ProviderForm({
 }) {
 	const te = useScopedT("editor");
 	const showBaseUrl = def.id === "openai-compatible" || Boolean(def.baseUrl);
-	// Every provider now exposes a live model list once connected (matching
-	// axcut's `screen === 'models' && activeProvider?.connected` gate) — API-key
-	// providers hit their own /models endpoint (or, for MiniMax, a probe call)
-	// same as OAuth/PAT providers do.
-	const supportsDynamicModels = true;
-
+	// Every provider exposes a live model list once connected: each hits its own
+	// /models endpoint, or a probe call for MiniMax.
 	const [modelOptions, setModelOptions] = useState<string[]>([]);
 	const [modelsLoading, setModelsLoading] = useState(false);
 	const [modelsError, setModelsError] = useState<string | null>(null);
 
 	useEffect(() => {
-		if (!supportsDynamicModels || !isConnected) {
+		if (!isConnected) {
 			setModelOptions([]);
 			setModelsError(null);
 			return;
@@ -331,7 +327,7 @@ function ProviderForm({
 		return () => {
 			cancelled = true;
 		};
-	}, [def.id, isConnected, supportsDynamicModels, listProviderModels]);
+	}, [def.id, isConnected, listProviderModels]);
 
 	const modelSelectable = modelOptions.length > 0;
 
@@ -370,7 +366,7 @@ function ProviderForm({
 						? te("providerSettings.modelHintLive")
 						: modelsError
 							? te("providerSettings.modelHintError", { error: modelsError })
-							: supportsDynamicModels && isConnected
+							: isConnected
 								? te("providerSettings.modelHintLoading")
 								: undefined
 				}
