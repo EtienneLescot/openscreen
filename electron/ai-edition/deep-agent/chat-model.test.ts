@@ -1,64 +1,17 @@
-// The Codex account header and the provider-alias normalization are both
-// invisible to tsc (an optional field that nothing reads still typechecks),
-// so they get a runtime check.
+// Provider-alias normalization is invisible to tsc (every branch takes the same
+// string type), so it gets a runtime check.
+//
+// The openai-oauth / copilot-proxy suites that lived here went with those
+// providers in 1.8.0 — see provider-registry.ts.
 
-import { describe, expect, it, vi } from "vitest";
+import { describe, expect, it } from "vitest";
 import { createOpenScreenChatModel, messageContentToText } from "./chat-model";
-
-vi.mock("../llm-provider-auth", () => ({
-	exchangeGithubCopilotRuntimeToken: vi.fn(async () => ({
-		token: "runtime-token",
-		expiresAt: Date.now() + 60_000,
-		baseUrl: "https://api.business.githubcopilot.com",
-	})),
-	GITHUB_COPILOT_USER_AGENT: "GitHubCopilotChat/0.26.7",
-	GITHUB_COPILOT_EDITOR_VERSION: "vscode/1.96.2",
-	GITHUB_COPILOT_PLUGIN_VERSION: "copilot-chat/0.26.7",
-}));
 
 /** ChatOpenAI keeps the `configuration` bag it was constructed with on
  * `clientConfig`; that is where the base URL and default headers land. */
 function clientConfig(model: unknown): Record<string, unknown> {
 	return (model as { clientConfig?: Record<string, unknown> }).clientConfig ?? {};
 }
-
-describe("createOpenScreenChatModel — openai-oauth (Codex)", () => {
-	it("sends chatgpt-account-id, which the gateway requires for an OAuth token", async () => {
-		const model = await createOpenScreenChatModel({
-			provider: "openai-oauth",
-			model: "gpt-5",
-			apiKey: "oauth-access-token",
-			accountId: "acct_123",
-		});
-		expect(clientConfig(model).defaultHeaders).toMatchObject({
-			"chatgpt-account-id": "acct_123",
-		});
-	});
-
-	it("omits the header entirely when there is no account id", async () => {
-		const model = await createOpenScreenChatModel({
-			provider: "openai-oauth",
-			model: "gpt-5",
-			apiKey: "oauth-access-token",
-		});
-		expect(clientConfig(model).defaultHeaders).toBeUndefined();
-	});
-});
-
-describe("createOpenScreenChatModel — copilot-proxy", () => {
-	it("uses the exchanged runtime token and the base URL it names", async () => {
-		const model = await createOpenScreenChatModel({
-			provider: "copilot-proxy",
-			model: "gpt-4.1",
-			apiKey: "github-pat",
-		});
-		expect(clientConfig(model).baseURL).toBe("https://api.business.githubcopilot.com");
-		expect(clientConfig(model).defaultHeaders).toMatchObject({
-			"Editor-Version": "vscode/1.96.2",
-			"Openai-Intent": "copilot-gpt-chat-completions",
-		});
-	});
-});
 
 describe("createOpenScreenChatModel — provider aliases", () => {
 	it("routes the `claude` alias to the Anthropic SDK, not the OpenAI fallback", async () => {

@@ -1,19 +1,15 @@
 // ponytail: port of axcut's createAxcutChatModel (apps/server/src/llm/create-chat-model.ts).
 // Picks the right @langchain/* chat model class for the configured provider,
-// honoring MiniMax/OpenAI-OAuth/GitHub Copilot as "local" providers (Anthropic-
-// SDK or OpenAI-SDK shaped) and routing native Anthropic/OpenAI/Mistral calls
-// through their first-party SDKs.
+// honoring MiniMax as a "local" provider (Anthropic-SDK shaped) and routing
+// native Anthropic/OpenAI/Mistral calls through their first-party SDKs.
+//
+// The openai-oauth (Codex) and copilot-proxy branches were removed in 1.8.0
+// along with their providers — see the note in provider-registry.ts.
 
 import { ChatAnthropic } from "@langchain/anthropic";
 import type { BaseChatModel } from "@langchain/core/language_models/chat_models";
 import { ChatMistralAI } from "@langchain/mistralai";
 import { ChatOpenAI } from "@langchain/openai";
-import {
-	exchangeGithubCopilotRuntimeToken,
-	GITHUB_COPILOT_EDITOR_VERSION,
-	GITHUB_COPILOT_PLUGIN_VERSION,
-	GITHUB_COPILOT_USER_AGENT,
-} from "../llm-provider-auth";
 import { normalizeProviderId } from "../provider-registry";
 import {
 	buildLangChainReasoningOptions,
@@ -26,7 +22,6 @@ export interface OpenScreenChatModelConfig {
 	apiKey?: string;
 	baseUrl?: string;
 	reasoningEffort?: string;
-	accountId?: string;
 }
 
 // ponytail: placeholder API key for self-hosted OpenAI-compatible endpoints
@@ -77,16 +72,9 @@ export async function createOpenScreenChatModel(
 		config.reasoningEffort as never,
 	);
 
-	// ponytail: OpenAI-OAuth (Codex), GitHub Copilot, and MiniMax all ride
-	// their non-default SDK path (or a base-URL swap). Anthropic-shaped wire
-	// for MiniMax, ChatGPT-OAuth-shaped for Codex, runtime-token swap for
-	// Copilot. axcut has the same split.
-	if (
-		config.provider === "openai-oauth" ||
-		config.provider === "copilot-proxy" ||
-		config.provider === "minimax" ||
-		config.provider === "minimax-token-plan"
-	) {
+	// ponytail: MiniMax rides a non-default SDK path — its wire format is
+	// Anthropic's, not OpenAI's, despite the OpenAI-looking model names.
+	if (config.provider === "minimax" || config.provider === "minimax-token-plan") {
 		return createLocalProviderChatModel(config, reasoningOptions);
 	}
 
@@ -140,46 +128,6 @@ async function createLocalProviderChatModel(
 	reasoningOptions: ReturnType<typeof buildLangChainReasoningOptions>,
 ): Promise<BaseChatModel> {
 	switch (config.provider) {
-		case "openai-oauth":
-			// ponytail: ChatGPT device-flow OAuth (Codex). axcut has a hand-rolled
-			// ChatCodexOAuth class for this; for v1 we fall back to a generic
-			// ChatOpenAI with the chatgpt.com/backend-api base URL. Streaming
-			// + tool calls work on the gateway, so this is enough for the chat.
-			// `chatgpt-account-id` is not optional — the gateway rejects an
-			// OAuth token without the account it was minted for. The rest of
-			// the Codex header set (originator, x-codex-window-id, the
-			// OpenAI-Beta Responses opt-in) belongs to the Responses dialect
-			// this path does not speak; add it with a real ChatCodexOAuth.
-			return new ChatOpenAI({
-				apiKey: config.apiKey,
-				model: config.model,
-				configuration: {
-					baseURL: config.baseUrl || "https://chatgpt.com/backend-api",
-					...(config.accountId
-						? { defaultHeaders: { "chatgpt-account-id": config.accountId } }
-						: {}),
-				},
-			});
-		case "copilot-proxy": {
-			// Copilot does not accept the PAT directly: it is exchanged for a
-			// short-lived runtime token, which also names the base URL to use.
-			// The editor-identifying headers are part of the contract — the
-			// endpoint rejects requests without them.
-			const runtime = await exchangeGithubCopilotRuntimeToken(config.apiKey ?? "");
-			return new ChatOpenAI({
-				apiKey: runtime.token,
-				model: config.model,
-				configuration: {
-					baseURL: config.baseUrl || runtime.baseUrl || "https://api.individual.githubcopilot.com",
-					defaultHeaders: {
-						"User-Agent": GITHUB_COPILOT_USER_AGENT,
-						"Editor-Version": GITHUB_COPILOT_EDITOR_VERSION,
-						"Editor-Plugin-Version": GITHUB_COPILOT_PLUGIN_VERSION,
-						"Openai-Intent": "copilot-gpt-chat-completions",
-					},
-				},
-			});
-		}
 		case "minimax":
 		case "minimax-token-plan":
 			// ponytail: MiniMax is Anthropic-API-shaped. ChatAnthropic wraps

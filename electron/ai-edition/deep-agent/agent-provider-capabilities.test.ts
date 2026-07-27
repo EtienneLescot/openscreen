@@ -10,13 +10,6 @@ import {
 } from "./agent-provider-capabilities";
 
 describe("getReasoningCapability", () => {
-	it("gives openai-oauth the full 6-step Codex effort range", () => {
-		const cap = getReasoningCapability("openai-oauth", "gpt-5");
-		expect(cap.supported).toBe(true);
-		expect(cap.strategy).toBe("custom-openai-account");
-		expect(cap.efforts).toEqual(["none", "minimal", "low", "medium", "high", "xhigh"]);
-	});
-
 	it("turns reasoning off for non-reasoning OpenAI models", () => {
 		expect(getReasoningCapability("openai", "gpt-4o").supported).toBe(false);
 		expect(getReasoningCapability("openai", "o3-mini").supported).toBe(true);

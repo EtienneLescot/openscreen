@@ -424,14 +424,6 @@ function createShimBridgeClient() {
 				saveLlmState();
 				return Promise.resolve({ success: true, snapshot: buildLlmSnapshot() });
 			},
-			// ponytail: OAuth/PAT device flows need a real network round-trip to
-			// the provider — nothing meaningful to fake here. Reject with a clear
-			// message instead of silently returning undefined (which crashed
-			// callers expecting a challenge object).
-			llmBeginDeviceAuth: () =>
-				Promise.reject(new Error("Device login isn't available in the browser preview.")),
-			llmCompleteDeviceAuth: () =>
-				Promise.reject(new Error("Device login isn't available in the browser preview.")),
 			llmListProviderModels: (providerId: string) =>
 				Promise.resolve({
 					models: [`${providerId}-demo-model-1`, `${providerId}-demo-model-2`],

@@ -31,7 +31,6 @@ export interface CaptionTranslateOptions {
 	apiKey: string;
 	baseUrl?: string;
 	reasoningEffort?: string;
-	accountId?: string;
 	/** Segments per request. Keeps each call small enough to stay reliable while
 	 *  still giving the model surrounding context to translate coherently. */
 	batchSize?: number;
@@ -128,10 +127,8 @@ export async function translateCaptionSegments(
 	const out: Record<string, string> = {};
 	let done = 0;
 
-	// Built once, not per batch: for Copilot this call swaps the PAT for a
-	// runtime token over the network, and a long transcript is a lot of
-	// batches. ponytail: the Copilot runtime token is short-lived, so a
-	// translation running longer than its TTL would need a rebuild here.
+	// Built once, not per batch: a long transcript is a lot of batches and the
+	// model object is reusable across all of them.
 	let model: Awaited<ReturnType<typeof createOpenScreenChatModel>>;
 	try {
 		model = await createOpenScreenChatModel({
@@ -140,7 +137,6 @@ export async function translateCaptionSegments(
 			apiKey: options.apiKey,
 			baseUrl: options.baseUrl,
 			reasoningEffort: options.reasoningEffort,
-			accountId: options.accountId,
 		});
 	} catch (error) {
 		return {
