@@ -89,7 +89,7 @@ You may need to grant screen-recording permission depending on your desktop envi
 
 ## Platform differences
 
-The editor and export are identical across all three platforms — zooms, backgrounds, crop/trim/speed, annotations, auto-captions, projects, and export. The difference is in **capture**:
+The editing tools are the same everywhere — zooms, backgrounds, crop/trim/speed, annotations, transcription, captions, and projects. **Capture** and **MP4 export** differ:
 
 | | macOS | Windows | Linux |
 |---|---|---|---|
@@ -97,5 +97,12 @@ The editor and export are identical across all three platforms — zooms, backgr
 | Custom cursor themes / click effects | ✅ | ✅ | ❌ (position-only, used for auto-zoom) |
 | Webcam | Native capture | Native capture | Browser capture (still works as PiP) |
 | System audio | macOS 13+; permission prompt on 14.2+; not available on macOS 12 and below | Works out of the box | Needs PipeWire (default on Ubuntu 22.04+, Fedora 34+) |
+| MP4 export | ❌ not yet | ✅ | ❌ not yet |
+| GIF export | ✅ | ✅ | ✅ |
+| On-device transcription | Metal (Apple Silicon) / CPU | Vulkan / CPU | Vulkan / CPU |
+
+:::warning MP4 export is Windows-only for now
+The GPU compositor behind the live preview and MP4 export is built on Direct3D 11 and currently ships only in the Windows build. Recording, editing, and GIF export work on all three platforms; MP4 export does not yet. Track it on the [roadmap](https://github.com/getopenscreen/openscreen/blob/main/ROADMAP.md).
+:::
 
 Next: [Quick start](./quick-start.md) walks through your first recording.
