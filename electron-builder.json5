@@ -10,6 +10,11 @@
     "**/*.node"
   ],
   "productName": "Openscreen",
+  // Fails the build when compositor_view.node is older than the crates/ Rust sources. Plain
+  // `npm run build` does not rebuild the addon, and a stale one fails SILENTLY at runtime
+  // (unknown scene fields are #[serde(default)]) rather than erroring. See the script header
+  // and technical-documentation/engineering/build-and-packaging.md.
+  "beforePack": "scripts/before-pack.cjs",
   "npmRebuild": true,
   // sharp ships ABI-stable (napi) prebuilt binaries with bundled libvips. Building it from source
   // needs a system libvips we don't provide and breaks on CI/local ("vips-cpp.42 not found"), so we

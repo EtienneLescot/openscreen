@@ -1,4 +1,4 @@
-//! Addon napi-rs : pont Electron ↔ `poc_d3d::live::LiveView`. Expose la vue
+//! Addon napi-rs : pont Electron ↔ `openscreen_compositor::live::LiveView`. Expose la vue
 //! offscreen (Option B, post-readback `Vec<u8>` RGBA8 → `<canvas>` HTML) à la
 //! glue TS (native-bridge domaine "compositor"). Les `#[napi]` sont appelés
 //! depuis le thread principal Node (là où vit la `BrowserWindow`) ; le rendu et
@@ -9,11 +9,11 @@ use napi::bindgen_prelude::*;
 use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFunctionCallMode};
 use napi::{Env, JsFunction, Task};
 use napi_derive::napi;
-use poc_d3d::compositor::{live_params_from_scene, Compositor};
-use poc_d3d::d3d::Gpu;
-use poc_d3d::live::{LiveView, PausedPreviews};
-use poc_d3d::scene::Scene;
-use poc_d3d::{config, pipeline};
+use openscreen_compositor::compositor::{live_params_from_scene, Compositor};
+use openscreen_compositor::d3d::Gpu;
+use openscreen_compositor::live::{LiveView, PausedPreviews};
+use openscreen_compositor::scene::Scene;
+use openscreen_compositor::{config, pipeline};
 use std::collections::HashMap;
 use std::sync::{Mutex, OnceLock};
 

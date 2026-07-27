@@ -217,7 +217,7 @@ function buildCandidatePaths(
 
 /**
  * The dev-vendored ffmpeg tree, read from the pin that already exists rather
- * than named a second time here: `poc-d3d/.cargo/config.toml`'s `FFMPEG_DIR`.
+ * than named a second time here: `crates/.cargo/config.toml`'s `FFMPEG_DIR`.
  *
  * That pin is the one thing the addon is actually built against (see the
  * config's own comment), so the DLL basenames it imports — `avcodec-62.dll` and
@@ -229,10 +229,10 @@ function buildCandidatePaths(
  * what makes the rot worth removing rather than tolerating.
  *
  * Returns null when there is no config to read: packaged builds ship no
- * `poc-d3d/` at all, and the candidate list simply starts one entry later.
+ * `crates/` at all, and the candidate list simply starts one entry later.
  */
 function pinnedFfmpegDir(appRoot: string): string | null {
-	const crateDir = path.join(appRoot, "poc-d3d");
+	const crateDir = path.join(appRoot, "crates");
 	let toml: string;
 	try {
 		toml = fs.readFileSync(path.join(crateDir, ".cargo", "config.toml"), "utf8");

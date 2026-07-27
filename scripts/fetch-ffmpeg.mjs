@@ -8,7 +8,7 @@
 // gap is Chromium's per-frame overhead, not the silicon.
 //
 // SECOND PURPOSE (Windows only): the native D3D11 compositor addon
-// (poc-d3d/compositor-view-napi) *dynamically links* against ffmpeg's shared
+// (crates/compositor-view-napi) *dynamically links* against ffmpeg's shared
 // libraries (avcodec/avformat/avutil/…) at `require()` time — a completely
 // different artifact from the static `ffmpeg.exe` above (BtbN's "-shared"
 // build variant vs. its default static one). Without those DLLs reachable on

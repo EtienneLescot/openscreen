@@ -1,4 +1,18 @@
-# poc-d3d — POC compositeur natif D3D11 (le fast-path natif retenu)
+# crates/ — le compositeur natif D3D11 (le fast-path natif retenu)
+
+| Crate | Rôle |
+|---|---|
+| [`compositor/`](compositor) | La bibliothèque : D3D11, décodage, pipeline, effets HLSL, scène, curseur, audio, vue live. **Code de production** — la preview et l'export de l'app passent par là. |
+| [`compositor-view-napi/`](compositor-view-napi) | L'addon napi-rs. C'est lui qui produit `compositor_view.node`, **le binaire packagé dans l'app**. |
+| [`poc-d3d/`](poc-d3d) | Le POC d'origine : GUI Win32 de preview/export + harnais de bench fps. **Rien ici n'est packagé** ; conservé comme banc de mesure et pièce d'époque. |
+
+Tout vivait auparavant sous `poc-d3d/`, ce qui laissait croire que la bibliothèque était
+jetable alors que l'app en dépend — un `.node` périmé s'est ainsi retrouvé packagé sans que
+personne tique. Le garde-fou est décrit dans
+[`build-and-packaging.md`](../technical-documentation/engineering/build-and-packaging.md#stale-native-artifacts) ;
+en un mot : sur Windows, packager avec `npm run build:win`, jamais `npm run build`.
+
+Le reste de ce document est l'historique du POC qui a produit ce compositeur.
 
 Troisième POC de rendu d'OpenScreen, à côté de [`poc/`](../poc) (web, WebCodecs + WebGPU)
 et [`poc-native/`](../poc-native) (Rust + wgpu/Vulkan). Voir la spec :

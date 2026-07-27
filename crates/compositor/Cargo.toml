@@ -1,0 +1,20 @@
+[package]
+name = "openscreen-compositor"
+version.workspace = true
+edition.workspace = true
+description = "Compositeur natif D3D11 d'OpenScreen : décodage, pipeline, effets HLSL, scène, curseur, audio et vue live. Code de production — l'addon Electron (compositor-view-napi) s'y lie, le POC (poc-d3d) le consomme aussi."
+
+[lib]
+name = "openscreen_compositor"
+path = "src/lib.rs"
+
+[build-dependencies]
+bindgen = "0.70"
+cc = "1"
+
+[dependencies]
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+image.workspace = true
+windows.workspace = true
