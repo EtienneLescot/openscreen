@@ -284,11 +284,38 @@ licence. D3D11VA + AMF survive the LGPL-shared build (verified:
 
   The WGC capture helper
   ([`electron/native/wgc-capture/src/wgc_session.cpp`](../../electron/native/wgc-capture/src/wgc_session.cpp))
-  is deliberately left hardware-only too. It asks for no `VIDEO_SUPPORT`, so
-  a WARP device *would* be creatable there — but recording on a host whose
-  compositor cannot start would only produce footage the user can neither
-  edit nor export. Capture degrading past the editor is worse than capture
-  failing with it.
+  is left hardware-only too, but for a different reason than the compositor:
+  **WGC capture is not mandatory.** Windows recording already has a non-D3D
+  path — `startNativeWindowsRecordingIfAvailable` returning `false` falls
+  through to `getDisplayMedia` + `MediaRecorder`
+  ([`src/hooks/useScreenRecorder.ts`](../../src/hooks/useScreenRecorder.ts)) —
+  and the compositor is built to ingest its output: `allow_d3d11va_h264_baseline`
+  in `pipeline.rs` exists precisely because Chrome's `MediaRecorder` emits plain
+  H.264 Baseline. So capture has a better fallback available to it than a CPU
+  rasteriser: one that needs no D3D device at all. Giving the helper a WARP
+  device would add a slow path nobody needs alongside a working one.
+
+### Known gap: the capture fallback is unreachable on a host that fails D3D
+
+  That fallback is only reachable through the pre-flight probe, and the probe
+  does not ask the question that matters. `is-native-windows-capture-available`
+  ([`electron/ipc/handlers.ts`](../../electron/ipc/handlers.ts)) checks two
+  things — Windows build ≥ 19041, and the helper binary being on disk. It never
+  touches D3D. So on a host where the helper's own `createD3DDevice` fails, the
+  probe answers `available: true`, the renderer commits to the native path, the
+  helper dies, and `startNativeWindowsRecordingIfAvailable` **rethrows** rather
+  than returning `false` — so the browser path two calls down its own call site
+  is never reached. The recording fails next to a route that would have worked.
+
+  Repairing it is not a one-line `return false`. By the time the helper's
+  failure is known, the renderer has already called `stopWebcamPreviewStream()`
+  — deliberately, because the helper needs exclusive ownership of the webcam
+  device before it opens it. Falling through at that point lands in the browser
+  path's `if (!webcamStream.current)` branch, which disables the camera and
+  records screen-only: a silent downgrade rather than a failure. A correct fix
+  either re-acquires the preview stream on the fallback route, or makes the
+  availability probe truthful by having the helper report its D3D capability
+  before the renderer commits. Neither belongs in this PR's diff.
 - **Software VP9 encoding is not supported.** A software VP9 encoder was
   implemented, measured too slow without a hardware VP9 path on the
   target GPU, and removed. The export pipeline now offers H.264 (AMF) and
