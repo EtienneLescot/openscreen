@@ -407,6 +407,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	sendCloseConfirmResponse: (choice: "save" | "discard" | "cancel") => {
 		ipcRenderer.send("close-confirm-response", choice);
 	},
+<<<<<<< HEAD
 	// ponytail: forward renderer console output to main-process stdout so
 	// recorder diagnostics land next to the main-process logs in dev output.
 	// One-way fire-and-forget; we deliberately don't await the IPC.
@@ -427,5 +428,23 @@ contextBridge.exposeInMainWorld("electronAPI", {
 			ipcRenderer.on("stt:status", listener);
 			return () => ipcRenderer.removeListener("stt:status", listener);
 		},
+	},
+	// --- CLI mode (hidden runner windows; see electron/cli/) ---
+	cliGetRequest: () => {
+		return ipcRenderer.invoke("cli-get-request");
+	},
+	cliProgress: (progress: unknown) => {
+		ipcRenderer.send("cli-progress", progress);
+	},
+	cliLog: (level: "info" | "error", message: string) => {
+		ipcRenderer.send("cli-log", level, message);
+	},
+	cliDone: (result: unknown) => {
+		return ipcRenderer.invoke("cli-done", result);
+	},
+	onCliStopRecording: (callback: () => void) => {
+		const listener = () => callback();
+		ipcRenderer.on("cli-stop-recording", listener);
+		return () => ipcRenderer.removeListener("cli-stop-recording", listener);
 	},
 });

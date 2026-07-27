@@ -88,7 +88,7 @@ function applyContentProtection(win: BrowserWindow, label: string) {
 const ASSET_BASE_DIR = process.defaultApp
 	? path.join(__dirname, "..", "public")
 	: process.resourcesPath;
-const ASSET_BASE_URL_ARG = `--asset-base-url=${pathToFileURL(`${ASSET_BASE_DIR}${path.sep}`).toString()}`;
+export const ASSET_BASE_URL_ARG = `--asset-base-url=${pathToFileURL(`${ASSET_BASE_DIR}${path.sep}`).toString()}`;
 
 let hudOverlayWindow: BrowserWindow | null = null;
 
