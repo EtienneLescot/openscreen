@@ -9,7 +9,6 @@
 		"addTrim": "添加剪辑 (T)",
 		"addAnnotation": "添加标注 (A)",
 		"addSpeed": "添加速度 (S)",
-		"addBlur": "添加模糊 (B)",
 		"addCameraFullscreen": "添加全屏摄像头 (C)"
 	},
 	"hints": {
@@ -17,7 +16,6 @@
 		"pressTrim": "按 T 添加剪辑",
 		"pressAnnotation": "按 A 添加标注",
 		"pressSpeed": "按 S 添加速度",
-		"pressBlur": "按 B 添加模糊区域",
 		"pressCameraFullscreen": "按 C 添加一个全屏摄像头片段"
 	},
 	"labels": {
@@ -32,8 +30,7 @@
 		"imageItem": "图片",
 		"emptyText": "空文本",
 		"cameraFullscreen": "全屏摄像头",
-		"cameraFullscreenItem": "全屏摄像头 {{index}}",
-		"blurItem": "模糊 {{index}}"
+		"cameraFullscreenItem": "全屏摄像头 {{index}}"
 	},
 	"emptyState": {
 		"noVideo": "未加载视频",

@@ -187,16 +187,6 @@
 		"imageUploadSuccess": "Image téléversée avec succès !",
 		"type": "Type"
 	},
-	"fontStyles": {
-		"classic": "Classique",
-		"editor": "Éditeur",
-		"strong": "Gras",
-		"typewriter": "Machine à écrire",
-		"deco": "Déco",
-		"simple": "Simple",
-		"modern": "Moderne",
-		"clean": "Épuré"
-	},
 	"textAnimation": {
 		"title": "Animation de texte",
 		"selectAnimation": "Sélectionner une animation",

@@ -8,7 +8,7 @@ OpenScreen builds its renderer, Electron main process, preload bridge, native he
 |---|---|
 | `npm run dev` | Starts Vite with the Electron plugin; builds and launches main/preload unless `NO_ELECTRON` is set. |
 | `npm run build-vite` | Runs TypeScript checking and Vite only. It produces `dist/` and `dist-electron/` but no installer. |
-| `npm run build` | Runs TypeScript checking, Vite, then unrestricted `electron-builder`. This is the full generic packaging command, but it does not proactively build platform helpers. |
+| `npm run build` | Runs TypeScript checking, Vite, then unrestricted `electron-builder`. This is the full generic packaging command, but it does not proactively build platform helpers. **On Windows, prefer `build:win`** — see [Stale native artifacts](#stale-native-artifacts). |
 | `npm run build:mac` | Builds the ScreenCaptureKit and cursor helpers, checks TypeScript, runs Vite, and packages the macOS target. |
 | `npm run build:win` | Builds WGC/cursor helpers and the D3D11 compositor addon, fetches FFmpeg, checks TypeScript, runs Vite, and packages the Windows NSIS target without npm rebuild. |
 | `npm run build:win:store` | Performs the Windows native and renderer build, then asks electron-builder for the configured AppX Store package. |
@@ -37,7 +37,30 @@ A usable full package depends on generated artifacts that are not committed:
 
 Electron-builder copies only the matching `electron/native/bin/<platform>-<arch>/` directory into each package. The compositor `.node` file is included by the Windows `files` rule and unpacked from ASAR because native addons cannot be loaded from inside the archive.
 
-`electron/native/bin/`, local native build directories, the compositor build output, models, and caches are gitignored. Rebuilding from a source checkout therefore requires the complete platform toolchain and third-party SDKs; running the generic `npm run build` alone does not manufacture missing native artifacts. The Windows compositor's D3D11/FFmpeg prerequisites are described by the source POC in `poc-d3d/README.md`, while capture helper lookup and output conventions are documented in `electron/native/README.md`.
+`electron/native/bin/`, local native build directories, the compositor build output, models, and caches are gitignored. Rebuilding from a source checkout therefore requires the complete platform toolchain and third-party SDKs; running the generic `npm run build` alone does not manufacture missing native artifacts. The Windows compositor's D3D11/FFmpeg prerequisites are described by the source POC in `crates/README.md`, while capture helper lookup and output conventions are documented in `electron/native/README.md`.
+
+### Stale native artifacts
+
+**On Windows, always package with `npm run build:win`, not `npm run build`.**
+
+`compositor_view.node` is gitignored, so it is whatever your last local Rust build produced. `npm run build` is `tsc && vite build && electron-builder` — it never invokes `build:native:compositor`. Only `build:win` does. Two ways this bites:
+
+- You edit `crates/compositor/`, then package with `npm run build`. The installer gets the addon from before your edit.
+- You create a worktree. Git does not copy gitignored files, so the worktree has no addon until one is built or copied in — usually an old one from the main checkout.
+
+A stale addon **fails silently rather than erroring**. Scene fields are `#[serde(default)]` on the Rust side, so an addon that predates a contract change does not reject the payload: it ignores the unknown key, takes the default, and falls back to older behaviour. Nothing appears in any log, and the symptom ("the feature does nothing") is indistinguishable from a TypeScript bug. This is not hypothetical — on 2026-07-27 a build shipped an addon three days older than the commit adding `cursorSprites`, custom cursor themes silently rendered as the built-in art, and the resulting investigation blamed the wrong layer entirely.
+
+`scripts/before-pack.cjs` runs as electron-builder's `beforePack` hook and fails the build when the addon is older than `crates/compositor/src/`, `crates/compositor-view-napi/src/`, or either `Cargo.toml`. It only checks when packaging for Windows. The fix it prints is:
+
+```bash
+npm run build:native:compositor
+```
+
+CI is unaffected: `.github/workflows/build.yml` already uses `build:win`, which rebuilds before packaging.
+
+The check compares modification times, so `git checkout` (which restamps source files) can occasionally flag an addon that is genuinely fine. That trade is deliberate — a false alarm costs one rebuild, whereas a missed stale addon ships a broken installer. Run `node scripts/before-pack.cjs` on its own to see the verdict without packaging.
+
+Diagnosing a suspected stale addon: serde embeds its field-name literals in the compiled binary, so `grep -c <newCamelCaseField> compositor_view.node` returning 0 means the binary predates that contract.
 
 ## Platform packaging
 

@@ -1,42 +1,57 @@
 ---
 id: captions
-title: Captions & AI
-sidebar_position: 6
+title: Captions & transcript
+sidebar_position: 7
 ---
 
-# Captions & AI
+# Captions & transcript
 
-## Automatic captions
+OpenScreen transcribes your recording's audio **entirely on-device** — nothing is uploaded, and it works offline. That one transcript is then the source for two things: the captions burned into your video, and a text view you can edit your recording from.
 
-OpenScreen generates captions from your recording's audio entirely on-device — nothing is uploaded, and it works offline.
+## Transcribing
 
-From the timeline toolbar, click the captions icon to open the **Auto captions** dialog:
-- **Min words per caption** and **Max words per caption** (1–12 each) control how phrases are grouped — timing is spread across the words in each phrase.
-- Hit **Generate**. The first run downloads a local Whisper model (~264MB, verified by checksum); after that, transcription runs fully offline. Language is auto-detected — there's no manual language picker.
+Every clip carries its own transcript. Run it either way:
 
-Generated captions are inserted as text annotations on the timeline, so they use the same styling controls described in [Editing & timeline](./editing-timeline.md#annotations) — edit one caption's font, size, or position, and the change propagates to the rest.
+- From the **Media** stage — select an asset card and hit **Regenerate**. This is also where you force a language (Auto, English, French, Spanish) instead of letting Whisper detect it, and where per-asset status lives (Pending, Transcribing, Generated, Failed).
+- From the **Captions** facet in the editor's inspector — **Transcribe video** runs the same pipeline on the current media.
+
+The first run downloads a local Whisper model (~264 MB, SHA-256 verified, written atomically so a half-download can never be picked up). After that, transcription is fully offline. It runs natively — whisper.cpp with a GPU backend picked at runtime: Metal on Apple Silicon, Vulkan on Windows and Linux, CPU everywhere else.
+
+Word timings come from Whisper's own DTW token timestamps, then get re-anchored on the audio itself — every boundary is pulled back to the quietest moment just before it. This is what makes a transcript-driven cut land where the word actually starts instead of a syllable late.
+
+## Captions
+
+Captions are a **live view of the transcript**, not generated text you then maintain. Change the transcript, change the caption settings, or move clips on the timeline, and the cues follow on the next frame — there's no regeneration step and no stale copy to reconcile.
+
+Open the **Captions** facet in the inspector:
+
+| Section | Controls |
+|---|---|
+| **Show captions** | Master on/off for both preview and export. |
+| **Language** | *Original (transcript)*, or any translation layer you've generated. |
+| **Text** | Font, size, bold, text color. |
+| **Background** | On/off, color, and opacity for the plate behind the text. |
+| **Position** | Top / Middle / Bottom, left / center / right alignment, a fine vertical offset, and band width as a % of the frame. |
+| **Line length** | Min and max words per line (1–12). Lines are packed inside that range. |
+
+Size is expressed in pixels at a 1080-high frame and scales with the real output, so captions look the same at 720p, 1080p, or source. Preview and export share the same layout code — what you see is what gets burned in.
+
+### Translation
+
+Pick a target language and hit **Translate**. Fifteen targets ship in the dropdown: English, French, Spanish, German, Italian, Portuguese, Dutch, Polish, Turkish, Russian, Arabic, Hindi, Japanese, Korean, and Chinese.
+
+Translation goes through the LLM provider you've connected (see [AI editing](./ai-editing.md)) — it's the one caption feature that needs a network. It's stored **beside** the transcript, never in it: the original text and its timings stay untouched, you can switch back to *Original* at any time, and deleting a translation leaves the recording exactly as it was. Re-running after adding footage only costs the new material, and anything the model doesn't return falls back to the original words rather than being invented.
+
+:::note
+Projects made with the older "generate captions" flow carry caption text as real annotations, which would draw on top of the live layer. The Captions pane detects them and offers to remove them — it asks first, since it deletes data.
+:::
 
 ## Transcript editing
 
-Once you've transcribed a clip, a **Transcript** tab shows the aggregated transcript across your whole timeline. It's a live text view of your recording:
+The **Transcript** facet shows the aggregated transcript across every clip on the timeline. It's a live text view of your recording:
 
-- Select a word or range of words and press `Backspace`/`Delete` to mark that span as skipped — it's cut from playback and export, the same as trimming on the timeline, just driven from the text instead.
-- Hover a skipped (struck-through) span to restore it.
+- Select a word or a range of words and press `Backspace`/`Delete` to mark that span as skipped — it's cut from playback and export, exactly like a trim region on the timeline, just driven from the text instead.
+- Skipped spans show struck through in red. Hover one to restore it.
+- Silences are marked inline and can be trimmed or restored the same way.
 
-This runs on the same local transcript as auto-captions — no upload, no cloud.
-
-## AI editing (opt-in, bring your own key)
-
-Beyond captions, OpenScreen has an optional chat panel that can apply structured edits to your project on your behalf — cut a span, adjust the timeline — using a language model. It's off unless you connect a provider:
-
-1. Open **Provider Settings** and pick a provider: Anthropic (Claude), OpenAI, Google (Gemini), Mistral, OpenRouter, or MiniMax — paste an API key for any of these and you're connected.
-2. Use the chat panel to describe an edit in plain language; the agent applies it as a real, undoable timeline operation (there's an Undo action right in the chat).
-3. Your key is stored via your OS's secure credential store — OpenScreen's servers never see it, because it doesn't have any; requests go straight from your machine to the provider you chose.
-
-:::note
-ChatGPT and GitHub Copilot are listed as sign-in options but their OAuth/device-login flow isn't finished yet — stick to an API-key provider (Anthropic, OpenAI, Google, Mistral, OpenRouter, or MiniMax) for now.
-:::
-
-:::tip
-None of this is required. Recording, editing, captions, and export all work with zero network access and no account, whether or not you ever open the chat panel.
-:::
+No upload, no cloud — this runs on the transcript already sitting in your project.

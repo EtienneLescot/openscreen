@@ -24,11 +24,11 @@
 //!     portrait : c'est la mesure du détail regagné, aujourd'hui perdu parce
 //!     que le canvas plafonne à 1080 lignes et que `blit_resized` agrandit.
 
-use poc_d3d::compositor::Compositor;
-use poc_d3d::d3d::Gpu;
-use poc_d3d::live::Player;
-use poc_d3d::scene::Scene;
-use poc_d3d::config;
+use openscreen_compositor::compositor::Compositor;
+use openscreen_compositor::d3d::Gpu;
+use openscreen_compositor::live::Player;
+use openscreen_compositor::scene::Scene;
+use openscreen_compositor::config;
 
 /// Instant fixe dans la source. Un seek explicite (`present_frame`) plutôt que
 /// la lecture libre : le golden doit être reproductible à l'octet près.

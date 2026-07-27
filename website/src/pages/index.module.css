@@ -3,8 +3,7 @@
 .hero,
 .visualSection,
 .features,
-.quickStart,
-.platformStrip {
+.quickStart {
 	background: var(--os-bg);
 	color: var(--os-fg);
 }
@@ -657,19 +656,58 @@
 /* ---- quick start ---- */
 
 .quickStart {
-	padding: 0 28px 96px;
+	padding: 0 28px 100px;
 	display: flex;
 	justify-content: center;
 }
 
 .quickStartInner {
 	width: 100%;
-	max-width: 720px;
+	max-width: 1040px;
 	text-align: center;
 }
 
-.terminal {
+/* Same three-column rhythm as .platformStripInner below, so the two sections
+   line up. Grid items stretch, which is what keeps the three panes equal
+   height even though only two of them carry a command. */
+.installGrid {
 	margin-top: 26px;
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 0.875rem;
+	text-align: left;
+}
+
+@media (max-width: 700px) {
+	.installGrid {
+		grid-template-columns: 1fr;
+	}
+}
+
+.artifactChip {
+	margin-left: auto;
+	padding: 1px 7px;
+	border-radius: 999px;
+	border: 1px solid var(--os-border-soft);
+	font-family: var(--ifm-font-family-monospace);
+	font-size: 10.5px;
+	color: var(--os-meta);
+}
+
+/* Windows has no command to run. Styling the line as prose rather than as
+   accented code keeps the pane the same size without implying it's typed. */
+.plainAction {
+	color: var(--os-fg-2);
+	font-family: var(--ifm-font-family-base);
+	font-style: italic;
+}
+
+/* Flex column so .terminalBody can absorb the slack: the install commands are
+   1–3 lines depending on platform, and without this the foot rule would sit at
+   a different height in each of the three panes. */
+.terminal {
+	display: flex;
+	flex-direction: column;
 	border-radius: 14px;
 	border: 1px solid var(--os-border);
 	background: var(--os-surface-1);
@@ -690,6 +728,7 @@
 }
 
 .terminalBody {
+	flex: 1;
 	margin: 0;
 	padding: 1rem;
 	font-size: 12.5px;
@@ -697,6 +736,17 @@
 	color: var(--os-fg-2);
 	overflow-x: auto;
 	white-space: pre-wrap;
+}
+
+/* Second half of each pane: what the platform actually gives you. Was its own
+   three-card strip below; folded in here so the page has one row, not two. */
+.paneFoot {
+	margin: 0;
+	padding: 0.875rem 1rem;
+	border-top: 1px solid var(--os-border-soft);
+	font-size: 12px;
+	line-height: 1.55;
+	color: var(--os-muted);
 }
 
 .accentText {
@@ -713,50 +763,13 @@
 	color: var(--os-accent);
 }
 
-/* ---- platform strip ---- */
-
-.platformStrip {
-	padding: 0 28px 100px;
-	display: flex;
-	justify-content: center;
+.quickStartNote code {
+	margin: 0 2px;
+	padding: 1px 5px;
+	border-radius: 5px;
+	border: 1px solid var(--os-border-soft);
+	background: var(--os-surface-1);
+	font-size: 11.5px;
+	color: var(--os-fg-2);
 }
 
-.platformStripInner {
-	width: 100%;
-	max-width: 1040px;
-	display: grid;
-	grid-template-columns: repeat(3, 1fr);
-	gap: 0.875rem;
-}
-
-@media (max-width: 700px) {
-	.platformStripInner {
-		grid-template-columns: 1fr;
-	}
-}
-
-.platformCard {
-	border-radius: 14px;
-	border: 1px solid var(--os-border);
-	background: var(--os-surface);
-	padding: 1.25rem;
-	display: flex;
-	flex-direction: column;
-	gap: 0.5rem;
-}
-
-.platformHeader {
-	display: flex;
-	align-items: center;
-	gap: 8px;
-	font-size: 13.5px;
-	font-weight: 600;
-	color: var(--os-fg-emphasis);
-}
-
-.platformCard p {
-	margin: 0;
-	font-size: 12px;
-	line-height: 1.55;
-	color: var(--os-muted);
-}

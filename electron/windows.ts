@@ -259,10 +259,16 @@ export function createEditorWindow(query: Record<string, string> = {}): BrowserW
 		height: 800,
 		minWidth: 800,
 		minHeight: 600,
-		...(isMac && {
-			titleBarStyle: "hiddenInset",
-			trafficLightPosition: { x: 12, y: 12 },
-		}),
+		// Seamless titlebar on every platform: the app's own topbar IS the titlebar
+		// (it already carries the logo, the title and a drag region). macOS keeps its
+		// traffic lights, Windows/Linux get the native Window Controls Overlay — which
+		// preserves Snap Layouts and the system close/maximise semantics instead of
+		// re-implementing them as HTML buttons. Its colours follow the app theme via
+		// the "set-titlebar-overlay" IPC (see handlers.ts).
+		titleBarStyle: "hidden",
+		...(isMac
+			? { trafficLightPosition: { x: 18, y: 21 } }
+			: { titleBarOverlay: { color: "#09090b", symbolColor: "#a1a1aa", height: 58 } }),
 		transparent: false,
 		resizable: true,
 		alwaysOnTop: false,
@@ -297,9 +303,16 @@ export function createEditorWindow(query: Record<string, string> = {}): BrowserW
 	// Inject dark background before any React paint so the sub-titlebar area never
 	// flashes white on a cold Vite load.
 	win.webContents.on("dom-ready", () => {
-		win.webContents.insertCSS("html, body, #root { background: #09090b !important; }").catch(() => {
-			// Best-effort cosmetic; ignore if the page is mid-teardown.
-		});
+		// `--titlebar-inset-left` reserves room for the macOS traffic lights; on
+		// Windows/Linux the topbar uses the `titlebar-area-*` env vars instead.
+		win.webContents
+			.insertCSS(
+				`html, body, #root { background: #09090b !important; }
+				 :root { --titlebar-inset-left: ${isMac ? "68px" : "0px"}; }`,
+			)
+			.catch(() => {
+				// Best-effort cosmetic; ignore if the page is mid-teardown.
+			});
 	});
 
 	win.webContents.on("did-finish-load", () => {

@@ -14,7 +14,6 @@ import {
 	Scissors,
 	SkipBack,
 	SkipForward,
-	Terminal,
 	TerminalSquare,
 } from "lucide-react";
 
@@ -270,55 +269,70 @@ export default function Home() {
 				<div className={styles.quickStartInner}>
 					<div className={styles.sectionKicker}>Quick start</div>
 					<Heading as="h2" className={styles.sectionTitleSm}>
-						Download, or build from source
+						Download and install
 					</Heading>
 
-					<div className={styles.terminal}>
-						<div className={styles.terminalHeader}>
-							<Terminal size={14} />
-							<span>Linux (Debian / Ubuntu)</span>
+					{/* One pane per platform, same chrome and same weight. An earlier
+					    version showed only the Linux command with the other two in a
+					    footnote, which read at a glance as "Linux only". */}
+					<div className={styles.installGrid}>
+						<div className={styles.terminal}>
+							<div className={styles.terminalHeader}>
+								<Apple size={14} />
+								<span>macOS</span>
+								<span className={styles.artifactChip}>.dmg</span>
+							</div>
+							<pre className={styles.terminalBody}>
+								<span className={styles.meta}># drag OpenScreen to Applications, then</span>
+								{"\n"}
+								<span className={styles.accentText}>xattr</span> -rd com.apple.quarantine
+								/Applications/Openscreen.app
+							</pre>
+							<p className={styles.paneFoot}>
+								ScreenCaptureKit native capture, real cursor + click effects, native webcam.
+							</p>
 						</div>
-						<pre className={styles.terminalBody}>
-							<span className={styles.meta}># download the .deb from Releases, then</span>
-							{"\n"}
-							<span className={styles.accentText}>sudo</span> apt install
-							./Openscreen-Linux-latest.deb
-						</pre>
+
+						<div className={styles.terminal}>
+							<div className={styles.terminalHeader}>
+								<AppWindow size={14} />
+								<span>Windows</span>
+								<span className={styles.artifactChip}>.exe</span>
+							</div>
+							<pre className={styles.terminalBody}>
+								<span className={styles.meta}># run the installer</span>
+								{"\n"}
+								<span className={styles.plainAction}>Nothing to type — double-click and go.</span>
+							</pre>
+							<p className={styles.paneFoot}>
+								Windows Graphics Capture, system audio out of the box, native webcam.
+							</p>
+						</div>
+
+						<div className={styles.terminal}>
+							<div className={styles.terminalHeader}>
+								<TerminalSquare size={14} />
+								<span>Linux</span>
+								<span className={styles.artifactChip}>.deb</span>
+							</div>
+							<pre className={styles.terminalBody}>
+								<span className={styles.meta}># download the .deb from Releases, then</span>
+								{"\n"}
+								<span className={styles.accentText}>sudo</span> apt install
+								./Openscreen-Linux-latest.deb
+							</pre>
+							<p className={styles.paneFoot}>
+								Browser-pipeline capture; needs PipeWire for system audio.
+							</p>
+						</div>
 					</div>
 
 					<p className={styles.quickStartNote}>
-						Also available for macOS (.dmg) and Windows (.exe) — see the{" "}
-						<a href="https://github.com/getopenscreen/openscreen/releases">Releases page</a>.
+						The macOS line is only needed if Gatekeeper blocks the app. Linux also ships
+						<code>.pacman</code>, an AppImage, and a Nix flake — every artifact is on the{" "}
+						<a href="https://github.com/getopenscreen/openscreen/releases">Releases page</a>, and{" "}
+						<Link to="/docs/installation">Installation</Link> has the full steps.
 					</p>
-				</div>
-			</section>
-
-			<section className={styles.platformStrip}>
-				<div className={styles.platformStripInner}>
-					<div className={styles.platformCard}>
-						<div className={styles.platformHeader}>
-							<Apple size={16} />
-							<span>macOS</span>
-						</div>
-						<p>ScreenCaptureKit native capture, real cursor + click effects, native webcam.</p>
-					</div>
-					<div className={styles.platformCard}>
-						<div className={styles.platformHeader}>
-							<AppWindow size={16} />
-							<span>Windows</span>
-						</div>
-						<p>Windows Graphics Capture, system audio out of the box, native webcam.</p>
-					</div>
-					<div className={styles.platformCard}>
-						<div className={styles.platformHeader}>
-							<TerminalSquare size={16} />
-							<span>Linux</span>
-						</div>
-						<p>
-							.deb, .pacman, AppImage, and Nix. Browser-pipeline capture; needs PipeWire for system
-							audio.
-						</p>
-					</div>
 				</div>
 			</section>
 		</Layout>

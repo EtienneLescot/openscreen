@@ -29,7 +29,15 @@
 	display: flex;
 	align-items: center;
 	gap: 14px;
-	padding: 0 18px;
+	/* The topbar doubles as the window titlebar, so it keeps clear of the native
+	   window controls: the macOS traffic lights (--titlebar-inset-left, injected
+	   per-platform by the main process) on the left, and the Windows/Linux Window
+	   Controls Overlay on the right. `titlebar-area-width` is 100vw minus the
+	   overlay; without an overlay both terms fall back to a plain 18px gutter. */
+	padding-left: calc(18px + var(--titlebar-inset-left, 0px));
+	padding-right: calc(
+		18px + 100vw - env(titlebar-area-width, 100vw) - env(titlebar-area-x, 0px)
+	);
 	background: transparent;
 	border-bottom: 1px solid var(--border-soft);
 	min-width: 0;

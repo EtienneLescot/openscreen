@@ -1,23 +1,11 @@
-//! `poc-d3d` en bibliothèque : le compositeur/pipeline/d3d mesurés (S2→S6) + la vue
-//! live embarquable (`live`) sont réutilisables par l'addon napi-rs de l'intégration
-//! Electron. Le binaire (`main.rs`) n'est qu'un mince consommateur (`run()`).
-
-pub mod app;
-pub mod audio;
-pub mod compositor;
-pub mod config;
-pub mod cursor;
-pub mod d3d;
-pub mod ffi;
-pub mod live;
-pub mod pipeline;
-pub mod regions;
-pub mod scene;
-pub mod text;
-pub mod text_anim;
+//! Harnais de mesure du POC (§9/§10) et aiguillage des modes.
+//!
+//! Vivait dans `lib.rs` de l'ancienne crate `poc-d3d`, quand bibliothèque et POC étaient le même
+//! paquet. Rien ici n'est packagé : c'est du banc de mesure au-dessus d'`openscreen-compositor`.
 
 use anyhow::{Context as _, Result};
-use compositor::Compositor;
+use openscreen_compositor::compositor::Compositor;
+use openscreen_compositor::{config, cursor, d3d, live, pipeline, scene};
 use std::fmt::Write as _;
 
 fn arg(args: &[String], k: &str, d: &str) -> String {
@@ -44,7 +32,7 @@ pub fn run() -> Result<()> {
     } else {
         let fixture = arg(&args, "--fixture", "fixture");
         let out = arg(&args, "--out", "out");
-        app::run_gui(
+        crate::app::run_gui(
             &format!("{fixture}/screen.mp4"),
             &format!("{fixture}/webcam.mp4"),
             &format!("{fixture}/screen.cursor.json"),

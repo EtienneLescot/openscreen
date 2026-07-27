@@ -62,25 +62,6 @@
 			"couldNotOpenMessage": "Il file di progetto non può essere aperto. Il video a cui fa riferimento potrebbe essere stato spostato o eliminato."
 		}
 	},
-	"autoCaptions": {
-		"button": "Sottotitoli automatici",
-		"dialogTitle": "Sottotitoli automatici",
-		"dialogDescription": "Scegli all'incirca quante parole mostrare per ogni sottotitolo. La temporizzazione viene distribuita tra le parole della frase.",
-		"minWords": "Numero minimo di parole per sottotitolo",
-		"maxWords": "Numero massimo di parole per sottotitolo",
-		"wordsCount": "{{count}} parole",
-		"generate": "Genera",
-		"dialogCancel": "Annulla",
-		"generating": "Generazione dei sottotitoli dall'audio…",
-		"loadingModel": "Caricamento del modello vocale (al primo utilizzo vengono scaricati ~75 MB)…",
-		"transcribing": "Trascrizione del parlato…",
-		"busy": "La generazione dei sottotitoli è già in corso.",
-		"done": "Aggiunti {{count}} sottotitoli.",
-		"noneHeard": "Nessun parlato rilevato.",
-		"noAudio": "Questo video non contiene audio utilizzabile per la trascrizione.",
-		"failed": "Impossibile generare i sottotitoli.",
-		"truncated": "Sono stati trascritti solo i primi {{minutes}} minuti."
-	},
 	"regionClipboard": {
 		"copied": "Attributi di {{region}} copiati",
 		"pasted": "Attributi di {{region}} incollati",
@@ -89,8 +70,7 @@
 		"kinds": {
 			"zoom": "Zoom",
 			"speed": "Velocità",
-			"annotation": "Annotazione",
-			"blur": "Sfocatura"
+			"annotation": "Annotazione"
 		}
 	},
 	"topbar": {

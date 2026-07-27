@@ -62,25 +62,6 @@
 			"couldNotOpenMessage": "O arquivo de projeto não pôde ser aberto. O vídeo referenciado pode ter sido movido ou excluído."
 		}
 	},
-	"autoCaptions": {
-		"button": "Legendas automáticas",
-		"dialogTitle": "Legendas automáticas",
-		"dialogDescription": "Escolha aproximadamente quantas palavras cada legenda mostra de cada vez. O tempo é distribuído entre as palavras da frase.",
-		"minWords": "Mínimo de palavras por legenda",
-		"maxWords": "Máximo de palavras por legenda",
-		"wordsCount": "{{count}} palavras",
-		"generate": "Gerar",
-		"dialogCancel": "Cancelar",
-		"generating": "Gerando legendas a partir do áudio…",
-		"loadingModel": "Carregando o modelo de fala (o primeiro uso baixa ~75 MB)…",
-		"transcribing": "Transcrevendo a fala…",
-		"busy": "A geração de legendas já está em andamento.",
-		"done": "{{count}} legendas adicionadas.",
-		"noneHeard": "Nenhuma fala foi detectada.",
-		"noAudio": "Este vídeo não tem áudio utilizável para transcrição.",
-		"failed": "Não foi possível gerar as legendas.",
-		"truncated": "Apenas os primeiros {{minutes}} minutos foram transcritos."
-	},
 	"regionClipboard": {
 		"copied": "Atributos de {{region}} copiados",
 		"pasted": "Atributos de {{region}} colados",
@@ -89,8 +70,7 @@
 		"kinds": {
 			"zoom": "Zoom",
 			"speed": "Velocidade",
-			"annotation": "Anotação",
-			"blur": "Desfoque"
+			"annotation": "Anotação"
 		}
 	},
 	"topbar": {

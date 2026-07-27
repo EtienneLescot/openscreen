@@ -3287,6 +3287,18 @@ export function registerIpcHandlers(
 		return process.platform;
 	});
 
+	// Keep the native Windows/Linux window-control overlay in the app's theme
+	// colours. The renderer sends the resolved CSS values so the palette stays in
+	// one place. No-op on macOS (traffic lights aren't tintable) and on any window
+	// that wasn't created with an overlay, which is what setTitleBarOverlay throws on.
+	ipcMain.on("set-titlebar-overlay", (event, color: string, symbolColor: string) => {
+		try {
+			BrowserWindow.fromWebContents(event.sender)?.setTitleBarOverlay({ color, symbolColor });
+		} catch {
+			// Best-effort cosmetic.
+		}
+	});
+
 	ipcMain.handle("get-shortcuts", async () => {
 		try {
 			const data = await fs.readFile(SHORTCUTS_FILE, "utf-8");
