@@ -256,6 +256,15 @@
 		"addSkipRange": "Ajouter une plage à ignorer",
 		"skipButtonShort": "+ saut",
 		"emptyState": "Aucun message pour l'instant. Demandez à l'agent de couper les silences, resserrer les pauses ou ajouter des sous-titres.",
+		"welcome": {
+			"title": "Apportez votre IA",
+			"subtitle": "Le chat édite votre vidéo en discutant avec un modèle de langage. Choisissez le fournisseur auquel vous faites confiance et connectez une clé API pour commencer.",
+			"feature1": "Couper les silences, resserrer les pauses, supprimer les tics de langage",
+			"feature2": "Ajouter des sous-titres, zoomer sur la caméra, générer un titre",
+			"feature3": "Réécrire une section, reformuler ou découper un clip à la demande",
+			"cta": "Configurer un fournisseur",
+			"disclaimer": "La transcription de votre vidéo sera envoyée au fournisseur que vous choisissez. Rien n'est partagé tant que vous n'en connectez pas un."
+		},
 		"authorUser": "Vous",
 		"authorAssistant": "OpenScreen",
 		"rewindToMessage": "Revenir à ce message",
@@ -265,6 +274,7 @@
 		"appliedPrefix": "appliqué :",
 		"thinking": "Réflexion en cours…",
 		"composerPlaceholder": "Décrivez la modification souhaitée.",
+		"composerDisabledNoProvider": "Configurez un fournisseur pour commencer à discuter.",
 		"modelLabel": "Modèle",
 		"reasoningEffortLabel": "Effort de raisonnement",
 		"sendTitle": "Envoyer (Entrée)",

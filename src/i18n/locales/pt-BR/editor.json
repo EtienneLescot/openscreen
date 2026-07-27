@@ -256,6 +256,15 @@
 		"addSkipRange": "Adicionar intervalo a pular",
 		"skipButtonShort": "+ pular",
 		"emptyState": "Ainda não há mensagens. Peça ao agente para cortar silêncios, apertar pausas ou adicionar legendas.",
+		"welcome": {
+			"title": "Traga a sua própria IA",
+			"subtitle": "O chat edita o seu vídeo conversando com um modelo de linguagem. Escolha o fornecedor em que confia e conecte uma chave de API para começar.",
+			"feature1": "Corta silêncios, aperta pausas, remove vícios de linguagem",
+			"feature2": "Adiciona legendas, aplica zoom na câmera, gera um título",
+			"feature3": "Reescreve uma seção, reformula ou divide um clipe sob pedido",
+			"cta": "Configurar um fornecedor",
+			"disclaimer": "A transcrição do seu vídeo será enviada ao fornecedor que escolher. Nada é compartilhado até você conectar um."
+		},
 		"authorUser": "Você",
 		"authorAssistant": "OpenScreen",
 		"rewindToMessage": "Rebobinar até esta mensagem",
@@ -265,6 +274,7 @@
 		"appliedPrefix": "aplicado:",
 		"thinking": "Pensando…",
 		"composerPlaceholder": "Descreva a edição que você quer.",
+		"composerDisabledNoProvider": "Configure um fornecedor para começar a conversar.",
 		"modelLabel": "Modelo",
 		"reasoningEffortLabel": "Esforço de raciocínio",
 		"sendTitle": "Enviar (Enter)",

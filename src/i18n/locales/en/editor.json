@@ -256,6 +256,15 @@
 		"addSkipRange": "Add skip range",
 		"skipButtonShort": "+ skip",
 		"emptyState": "No messages yet. Ask the agent to cut silences, tighten pauses, or add captions.",
+		"welcome": {
+			"title": "Bring your own AI",
+			"subtitle": "The chat edits your video by talking to a language model. Pick a provider you trust and connect an API key to get started.",
+			"feature1": "Cut silences, tighten pauses, drop filler words",
+			"feature2": "Add captions, zoom on the camera, generate a title",
+			"feature3": "Rewrite a section, rephrase, or split a clip on request",
+			"cta": "Set up a provider",
+			"disclaimer": "Your video's transcript will be sent to the provider you choose. Nothing is shared until you connect one."
+		},
 		"authorUser": "You",
 		"authorAssistant": "OpenScreen",
 		"rewindToMessage": "Rewind to this message",
@@ -265,6 +274,7 @@
 		"appliedPrefix": "applied:",
 		"thinking": "Thinking…",
 		"composerPlaceholder": "Describe the edit you want.",
+		"composerDisabledNoProvider": "Set up a provider to start chatting.",
 		"modelLabel": "Model",
 		"reasoningEffortLabel": "Reasoning effort",
 		"sendTitle": "Send (Enter)",

@@ -2117,3 +2117,96 @@
 .backBtn:hover { background: var(--surface-3); }
 .backBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
+/* ─── chat welcome (no provider connected) ──────────────────────── */
+/* .panelBody supplies the horizontal inset (var(--sp-3) var(--sp-4)); only the
+   top breathing room is ours, or the card sits twice as far in as the messages. */
+.chatWelcome {
+  display: flex;
+  flex-direction: column;
+  align-items: stretch;
+  gap: var(--sp-3);
+  padding: var(--sp-2) 0 0;
+  text-align: left;
+}
+
+.chatWelcomeHero {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  text-align: center;
+  gap: 6px;
+  padding: 4px 0 0;
+}
+
+.chatWelcomeIcon {
+  color: var(--accent);
+  margin-bottom: 4px;
+}
+
+.chatWelcomeTitle {
+  margin: 0;
+  font: 600 14px/1.3 var(--font-body);
+  color: var(--fg);
+  letter-spacing: -0.01em;
+}
+
+.chatWelcomeSubtitle {
+  margin: 0;
+  font: 400 12px/1.5 var(--font-body);
+  color: var(--muted);
+  max-width: 32ch;
+}
+
+/* Native list markers — no flex on the ul/li, or the items stop being
+   list-items and the markers vanish. padding-inline-start keeps them inside
+   the card in both writing directions. */
+.chatWelcomeFeatures {
+  /* explicit: the global reset sets list-style: none on every ul */
+  list-style: disc;
+  margin: 0;
+  padding: 10px 12px;
+  padding-inline-start: 26px;
+  background: var(--surface);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--r-md);
+  font: 400 12px/1.45 var(--font-body);
+  color: var(--fg-2);
+}
+.chatWelcomeFeatures li + li { margin-top: 6px; }
+.chatWelcomeFeatures li::marker { color: var(--accent); }
+
+.chatWelcomeCta {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  width: 100%;
+  height: 34px;
+  border-radius: var(--r-md);
+  background: var(--accent);
+  color: var(--accent-on);
+  border: 1px solid var(--accent);
+  font: 600 12.5px var(--font-body);
+  cursor: pointer;
+  transition: filter 120ms ease;
+}
+.chatWelcomeCta:hover { filter: brightness(0.95); }
+.chatWelcomeCta:focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+.chatWelcomeDisclaimer {
+  margin: 0;
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  font: 400 10.5px/1.45 var(--font-body);
+  color: var(--muted);
+}
+
+.chatWelcomeDisclaimerIcon {
+  flex: 0 0 auto;
+  margin-top: 2px;
+  opacity: 0.8;
+}
