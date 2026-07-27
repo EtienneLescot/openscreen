@@ -430,16 +430,16 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		},
 	},
 	// --- CLI mode (hidden runner windows; see electron/cli/) ---
-	cliGetRequest: () => {
+	cliGetRequest: (): Promise<import("../src/lib/cliContracts").CliRequest> => {
 		return ipcRenderer.invoke("cli-get-request");
 	},
-	cliProgress: (progress: unknown) => {
+	cliProgress: (progress: import("../src/lib/cliContracts").CliProgressEvent) => {
 		ipcRenderer.send("cli-progress", progress);
 	},
 	cliLog: (level: "info" | "error", message: string) => {
 		ipcRenderer.send("cli-log", level, message);
 	},
-	cliDone: (result: unknown) => {
+	cliDone: (result: import("../src/lib/cliContracts").CliDoneResult) => {
 		return ipcRenderer.invoke("cli-done", result);
 	},
 	onCliStopRecording: (callback: () => void) => {

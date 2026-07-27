@@ -210,9 +210,10 @@ async function runInfoCommand(projectPath: string, json: boolean): Promise<numbe
 	};
 
 	if (json) {
-		process.stdout.write(`${JSON.stringify(summary)}\n`);
+		safeWrite(process.stdout, `${JSON.stringify(summary)}\n`);
 	} else {
-		process.stdout.write(
+		safeWrite(
+			process.stdout,
 			[
 				`Project:  ${summary.projectPath} (version ${summary.version ?? "?"})`,
 				`Video:    ${summary.screenVideoPath ?? "(none)"}${mediaExists ? "" : "  [MISSING]"}`,
@@ -242,12 +243,17 @@ export function runCli(command: CliCommand): void {
 
 	// stdout belongs to the CLI protocol (NDJSON / progress); reroute the app's
 	// own console chatter (e.g. "[native-sck] starting…") to stderr.
+	const stringifyArg = (value: unknown): string => {
+		if (typeof value === "string") return value;
+		try {
+			return JSON.stringify(value) ?? String(value);
+		} catch {
+			return String(value);
+		}
+	};
 	for (const level of ["log", "info", "warn", "error", "debug"] as const) {
 		console[level] = (...args: unknown[]) => {
-			safeWrite(
-				process.stderr,
-				`${args.map((a) => (typeof a === "string" ? a : JSON.stringify(a))).join(" ")}\n`,
-			);
+			safeWrite(process.stderr, `${args.map(stringifyArg).join(" ")}\n`);
 		};
 	}
 
@@ -271,6 +277,10 @@ export function runCli(command: CliCommand): void {
 		app.exit(1);
 	});
 
+	// Set once cli-done has been received; suppresses the window-all-closed
+	// failure path during the normal teardown race after a successful run.
+	let finished = false;
+
 	// GPU may be unavailable in CI/servers; let Chromium fall back to SwiftShader
 	// so the WebGL-based export renderer still works.
 	app.commandLine.appendSwitch("enable-unsafe-swiftshader");
@@ -281,7 +291,9 @@ export function runCli(command: CliCommand): void {
 	}
 
 	app.on("window-all-closed", () => {
-		// Completion is signalled via cli-done; a vanished window is a failure.
+		// Completion is signalled via cli-done; a vanished window is a failure
+		// only while the run is still in flight.
+		if (finished) return;
 		output.error("Renderer window closed unexpectedly");
 		app.exit(1);
 	});
@@ -365,7 +377,6 @@ export function runCli(command: CliCommand): void {
 				output.progress(progress);
 			});
 
-			let finished = false;
 			ipcMain.handle("cli-done", async (_event, result: CliDoneResult) => {
 				if (finished) return;
 				finished = true;

@@ -1,7 +1,9 @@
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { parseCliArgs } from "./args";
 
-const CWD = "/work";
+const CWD = path.resolve("/work");
+const inCwd = (name: string) => path.resolve(CWD, name);
 
 function parse(args: string[]) {
 	return parseCliArgs(["electron", "app-path", ...args], 2, CWD);
@@ -16,7 +18,7 @@ describe("parseCliArgs", () => {
 	it("skips leading Chromium switches before the subcommand (AppImage --no-sandbox)", () => {
 		expect(parse(["--no-sandbox", "export", "demo.openscreen"])).toMatchObject({
 			kind: "export",
-			projectPath: "/work/demo.openscreen",
+			projectPath: inCwd("demo.openscreen"),
 		});
 		expect(parse(["--no-sandbox", "--enable-unsafe-swiftshader", "record"])).toMatchObject({
 			kind: "record",
@@ -29,7 +31,7 @@ describe("parseCliArgs", () => {
 		const cmd = parse(["export", "demo.openscreen"]);
 		expect(cmd).toMatchObject({
 			kind: "export",
-			projectPath: "/work/demo.openscreen",
+			projectPath: inCwd("demo.openscreen"),
 			outPath: null,
 			format: null,
 		});
@@ -49,7 +51,7 @@ describe("parseCliArgs", () => {
 		]);
 		expect(cmd).toMatchObject({
 			kind: "export",
-			outPath: "/work/out.gif",
+			outPath: inCwd("out.gif"),
 			format: "gif",
 			gifFrameRate: 20,
 			previewWidth: 1600,
@@ -80,7 +82,7 @@ describe("parseCliArgs", () => {
 		]);
 		expect(cmd).toMatchObject({
 			kind: "export",
-			audioPath: "/work/voice.mp3",
+			audioPath: inCwd("voice.mp3"),
 			audioMode: "replace",
 			audioOffsetSec: 1.5,
 		});
@@ -131,7 +133,7 @@ describe("parseCliArgs", () => {
 			micDevice: "MacBook",
 			systemAudio: true,
 			durationMs: 12500,
-			projectOut: "/work/demo.openscreen",
+			projectOut: inCwd("demo.openscreen"),
 		});
 	});
 
@@ -144,7 +146,7 @@ describe("parseCliArgs", () => {
 	it("parses info and help", () => {
 		expect(parse(["info", "demo.openscreen", "--json"])).toMatchObject({
 			kind: "info",
-			projectPath: "/work/demo.openscreen",
+			projectPath: inCwd("demo.openscreen"),
 			json: true,
 		});
 		expect(parse(["help"])).toMatchObject({ kind: "help" });

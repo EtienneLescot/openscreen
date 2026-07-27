@@ -44,14 +44,26 @@ function probeVideoDimensions(url: string): Promise<{ width: number; height: num
 		const video = document.createElement("video");
 		video.preload = "metadata";
 		video.muted = true;
+		const cleanup = () => {
+			clearTimeout(timer);
+			video.removeAttribute("src");
+			video.load();
+		};
+		// A stalled load fires neither event; without a deadline the CLI hangs.
+		const timer = setTimeout(() => {
+			cleanup();
+			reject(new Error(`Timed out reading video metadata: ${url}`));
+		}, 30_000);
 		video.onloadedmetadata = () => {
 			const width = video.videoWidth;
 			const height = video.videoHeight;
-			video.removeAttribute("src");
-			video.load();
+			cleanup();
 			resolve({ width, height });
 		};
-		video.onerror = () => reject(new Error(`Failed to load video metadata: ${url}`));
+		video.onerror = () => {
+			cleanup();
+			reject(new Error(`Failed to load video metadata: ${url}`));
+		};
 		video.src = url;
 	});
 }

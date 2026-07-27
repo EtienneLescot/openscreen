@@ -4,7 +4,7 @@ Headless command-line interface for recording the screen and exporting `.openscr
 projects — no visible windows, machine-readable output. Designed so scripts, CI
 pipelines, and AI coding agents can produce polished product demos automatically:
 
-```
+```text
 record → edit the project JSON programmatically → export → MP4/GIF
 ```
 
@@ -102,6 +102,8 @@ openscreen export demo.openscreen --json | while read line; do ...; done
 
 `--audio` re-muxes after the render: video packets are copied untouched, and the
 audio is mixed offline (OfflineAudioContext) and re-encoded to AAC. MP4 only.
+In `mix` mode the original audio is ducked to 40% under the voiceover so the
+sum cannot clip; use `replace` to drop the original entirely.
 
 **Media path rule**: for safety, a project's referenced media is only auto-approved
 when it lives in the app's recordings directory or **next to the project file**.
