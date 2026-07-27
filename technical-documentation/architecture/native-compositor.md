@@ -268,11 +268,20 @@ licence. D3D11VA + AMF survive the LGPL-shared build (verified:
   `AVD3D11VADeviceContext`, a WARP device would have produced no frames at all.
   **Rendering and decoding are two axes**, and no software rasteriser on any
   platform covers the second — so the fallback needed libavcodec software decode
-  (`cpu_frames.rs`) beside the WARP device. The third axis, encoding, is covered
-  by `ExportCodec::candidates()` / `VideoEncoder`, which already probes the host
-  for a working encoder and lands on `libopenh264` / `libkvazaar` when no
-  hardware one opens — the CPU backend simply falls out of that list rather than
-  needing a path of its own. Three axes, three answers.
+  (`cpu_frames.rs`) beside the WARP device.
+
+  Encoding is the third axis, and it is **half** covered by
+  `ExportCodec::candidates()` / `VideoEncoder`: that machinery already probes the
+  host and lands on `h264_mf` / `libopenh264` (`libkvazaar` for H.265) when no
+  hardware encoder opens, so the CPU backend needs no encoder logic of its own.
+  What it did need is a different **frame source**. `VideoEncoder::send` feeds
+  software encoders with `av_hwframe_transfer_data`, which presupposes a D3D11
+  pool — and on WARP there is none: `av_hwdevice_ctx_init(D3D11VA)` fails for the
+  very reason decoding does, no `ID3D11VideoDevice`. So on `Backend::Cpu` the
+  pool is never created, zero-copy candidates are dropped from the list with a
+  stated reason, and `VideoEncoder::send_composited` reads the composed NV12
+  straight out of the compositor (`Compositor::read_nv12_scaled`) into the same
+  buffers the software path already used. Three axes, three answers.
 
   It is never silent. `Gpu::create` (hardware-strict, no fallback) is kept for
   tests and goldens; `create_auto` logs *why* the hardware device was refused

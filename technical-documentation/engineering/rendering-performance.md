@@ -136,6 +136,38 @@ pixel-golden test that spans backends needs a tolerance rather than an exact bas
 > machine. C6's negative delta is the same C5–C7 plateau noise the
 > [admissible hardware run](#one-admissible-run--2026-07-27) documents.
 
+#### CPU export — the third axis
+
+`ExportCodec::candidates()` already picks a working encoder per host, so the CPU backend
+needs no encoder logic of its own. It needed a different **frame source**:
+`VideoEncoder::send` downloads via `av_hwframe_transfer_data`, which presupposes a D3D11
+pool, and WARP cannot create one (`av_hwdevice_ctx_init(D3D11VA)` fails for the same
+missing `ID3D11VideoDevice` that blocks decoding). So on `Backend::Cpu` the pool is
+skipped, zero-copy candidates are dropped with a stated reason, and `send_composited`
+reads the composed NV12 out of the compositor directly.
+
+`x.bat run --release -- --cfg C8 --backend cpu --export` on the fixture (360 frames):
+
+| path | encoder chosen | fps | ms/f |
+|---|---|---:|---:|
+| hardware | `h264_amf` (D3D11, zero-copy) | **88.2** | 11.34 |
+| CPU backend | `h264_mf` (system frames) | **4.8** | 207.87 |
+| CPU, forced last resort | `libopenh264` | **4.6** | 218.91 |
+
+All three produce valid 360-frame 1080p MP4s that decode clean under `ffmpeg -f null -`.
+
+**`h264_mf` winning on the CPU backend is a local artefact, not the no-GPU answer.** Media
+Foundation picks its own encoder MFT independently of our D3D device, so on this machine —
+which *has* an AMD GPU, just not one this compositor is using — it can still reach hardware.
+On a genuinely GPU-less host `h264_mf` would fall to its own software encoder or fail, and
+`libopenh264` is the floor. The forced row is there precisely because the automatic one
+cannot be trusted to represent that host: `OPENSCREEN_EXPORT_ENCODER=libopenh264` is the
+only way to exercise the real last resort from a machine that has a GPU.
+
+The encoder is not the bottleneck either way — the two CPU rows differ by 5 %, while the
+gap to hardware is 18×. That gap is the blur and motion-blur shaders (see the table above),
+not the codec.
+
 ## How we got here — the WebCodecs trail
 
 > **This section is history.** It records the measurements that killed the browser-based export pipeline and motivated the native one. The code it describes is **gone**: `src/lib/exporter/videoExporter.ts`, `src/bench/runBench.ts` and the `npm run bench:export` script were deleted with the web MP4 pipeline. It is kept because it is the evidence for [why the compositor, not the encoder, was the wall](#the-wall-is-the-compositor) — which is the entire reason `crates/compositor/` exists — and because the [measurement hazards](#measurement-hazards) it uncovered still apply to any new benchmark here.
