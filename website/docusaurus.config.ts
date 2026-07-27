@@ -72,7 +72,10 @@ export default async function createConfig(): Promise<Config> {
 		],
 
 		themeConfig: {
-			image: "img/logo-icon.png",
+			// Social cards get the solid app icon, not the transparent mark: an
+			// og:image with alpha is composited on whatever background the platform
+			// picks, so a transparent logo turns into a green smear on some clients.
+			image: "img/og-image.png",
 			colorMode: {
 				defaultMode: "dark",
 				disableSwitch: false,

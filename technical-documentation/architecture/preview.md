@@ -1,7 +1,7 @@
 # Preview
 
 The preview is the editor's frame-at-the-playhead surface. It is composited by the same
-Rust + Direct3D 11 native crate that drives MP4 export — `poc-d3d/` reached via the
+Rust + Direct3D 11 native crate that drives MP4 export — `crates/compositor/` reached via the
 `compositor_view.node` napi-rs addon — and pulled into the renderer as an RGBA8
 bitmap that paints onto an HTML `<canvas>`. The DOM around the canvas hosts the
 interactive-only layers (zoom gimbal, annotation selection, PiP webcam drag) that
@@ -117,9 +117,9 @@ current editor settings to a `SceneDescription` JSON string. It resolves:
   itself stays in pixels for the user — the division happens once, here.
 
 The descriptor mirrors the Rust struct in
-[`poc-d3d/src/scene.rs`](../../poc-d3d/src/scene.rs); field rename is `camelCase`
+[`crates/compositor/src/scene.rs`](../../crates/compositor/src/scene.rs); field rename is `camelCase`
 on both sides. The Rust consumer (`compositor.rs::compose_frame`,
-[`poc-d3d/src/compositor.rs:1421`](../../poc-d3d/src/compositor.rs:1421)) reads
+[`crates/compositor/src/compositor.rs:1421`](../../crates/compositor/src/compositor.rs:1421)) reads
 the JSON per frame, derives the per-clip and per-frame values it needs (zoom
 state from `regions.rs::zoom_state_at`, camera-fullscreen progress from
 `regions.rs::camera_fullscreen_progress_at`, screen crop from
@@ -239,9 +239,9 @@ in the middle of a clip transition is honoured, not silently undone.
 
 ## Known gaps
 
-- **Live preview is video-only.** `poc-d3d/src/live.rs` (1628 lines) handles only
+- **Live preview is video-only.** `crates/compositor/src/live.rs` (1628 lines) handles only
   the video packet stream; audio is decoded and mixed in
-  [`audio.rs::decode_clip_audio`](../../poc-d3d/src/audio.rs) for the export
+  [`audio.rs::decode_clip_audio`](../../crates/compositor/src/audio.rs) for the export
   path and not for the live view. Editing playback is therefore silent against
   the exported file; users hear audio only when the export runs. There is no
   flag in this branch that re-routes live audio.

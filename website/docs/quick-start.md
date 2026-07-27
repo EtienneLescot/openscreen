@@ -38,11 +38,15 @@ Click **Open Studio** (or it opens automatically after stopping) to load your re
 
 ## 6. Trim and export
 
-- Click the scissors **Trim** button (or press `T`) to arm the cut tool, then click anywhere on the timeline to drop a cut — drag its edges to adjust what gets removed.
+- Park the playhead where you want a cut and press `T` (or the scissors button) — a two-second trim region drops there. Drag its edges to adjust what gets removed.
 - Click **Export** in the top bar, choose **MP4** or **GIF**, pick a quality, and hit **Export**.
 - When it finishes, click **Show in folder** to find your file.
 
-That's the core loop. For the full editing toolset — zooms, speed changes, captions, cursor styling, webcam layout — see [Editing & timeline](./editing-timeline.md).
+That's the core loop. For the full editing toolset — zooms, speed changes, annotations, cursor styling, webcam layout — see [Editing & timeline](./editing-timeline.md). To assemble several takes into one video, see [Media library](./media-library.md).
+
+:::note
+The top bar switches the editor between three modes: **Media** (your clips), **Edit** (everything above), and **Rec** (set up the next recording without leaving the app).
+:::
 
 :::tip
 Save your work as a project (`⌘/Ctrl S`) before exporting if you want to come back and keep editing later — `.openscreen` project files keep every layer editable, unlike the exported video.

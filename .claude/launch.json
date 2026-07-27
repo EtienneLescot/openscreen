@@ -20,6 +20,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["node_modules/vite/bin/vite.js", "--config", "vite.v4preview.config.ts"],
       "port": 5207
+    },
+    {
+      "name": "docs",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "website", "run", "serve", "--", "--port", "3111"],
+      "port": 3111
     }
   ]
 }

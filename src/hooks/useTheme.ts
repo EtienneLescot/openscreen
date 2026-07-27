@@ -25,6 +25,15 @@ function applyTheme(theme: Theme) {
 	// happen to share property names, so leaving `.dark` stuck on regardless
 	// of the real theme silently overrides design-tokens.css's light values.
 	document.documentElement.classList.toggle("dark", theme === "dark");
+
+	// Repaint the native Windows/Linux window controls in the new theme, so the
+	// titlebar reads as one continuous surface with the app. Reading the tokens
+	// back keeps the palette in design-tokens.css only. No-op elsewhere.
+	const css = getComputedStyle(document.documentElement);
+	window.electronAPI?.setTitleBarOverlay?.(
+		css.getPropertyValue("--bg").trim(),
+		css.getPropertyValue("--muted").trim(),
+	);
 }
 
 export function useTheme(): { theme: Theme; toggle: () => void; setTheme: (t: Theme) => void } {

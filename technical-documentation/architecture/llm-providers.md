@@ -1,68 +1,126 @@
 # LLM providers
 
-The provider layer lives in `electron/ai-edition/provider-registry.ts`, `llm-config-store.ts`, `llm-provider-auth.ts`, `llm-call.ts`, and `codex-session.ts`, with settings in `src/components/ai-edition/ProviderSettings.tsx`. It defines model metadata, protects credentials, authenticates account-backed providers, discovers models, and translates chat and tool calls to provider wire formats.
+The provider layer defines model metadata, protects credentials, discovers models, and builds the chat model every AI feature runs on. It lives in:
+
+| File | Role |
+|---|---|
+| [`electron/ai-edition/provider-registry.ts`](../../electron/ai-edition/provider-registry.ts) | Static `ProviderDefinition[]`, id normalization, reasoning-effort option lists and labels. No runtime deps. |
+| [`electron/ai-edition/llm-config-store.ts`](../../electron/ai-edition/llm-config-store.ts) | `LlmConfigStore` — plain JSON for selection, `safeStorage` blob for credentials. |
+| [`electron/ai-edition/llm-provider-auth.ts`](../../electron/ai-edition/llm-provider-auth.ts) | Model-list discovery per provider. Despite the filename it performs no authentication any more — see [Known gaps](#known-gaps). |
+| [`electron/ai-edition/deep-agent/chat-model.ts`](../../electron/ai-edition/deep-agent/chat-model.ts) | `createOpenScreenChatModel` — the single transport. Picks a `@langchain/*` chat model class per provider. |
+| [`electron/ai-edition/deep-agent/agent-provider-capabilities.ts`](../../electron/ai-edition/deep-agent/agent-provider-capabilities.ts) | Per-provider reasoning-effort capability and its LangChain wire options. |
+| [`electron/native-bridge/services/aiEditionService.ts`](../../electron/native-bridge/services/aiEditionService.ts) | IPC surface: connect / disconnect, snapshot, `llmListProviderModels`. |
+| [`src/components/ai-edition/ProviderSettings.tsx`](../../src/components/ai-edition/ProviderSettings.tsx) | Renders cards and forms directly from `PROVIDER_DEFINITIONS`. |
+
+> **There is one transport.** `llm-call.ts` (`streamLlm` / `callLlm`) and
+> `codex-session.ts` were deleted in 1.8.0 along with the two account-backed
+> providers that needed them. Everything now goes through
+> `createOpenScreenChatModel`; neither symbol has any remaining reference in
+> the repo. The duplicated fetch-vs-LangChain routing that earlier revisions
+> of this document called out as a gap no longer exists.
 
 ## The registry
 
-Each `ProviderDefinition` contains a stable ID and label, default model, authentication kind, environment-variable fallbacks, reasoning-effort support, and optional base URL, setup hint, required-base-URL marker, and wire protocol. `ProviderSettings` renders its cards and forms directly from `PROVIDER_DEFINITIONS`.
-
-The registered definitions are:
+Each `ProviderDefinition` carries a stable id and label, default model, `authKind`, env-var fallbacks, reasoning-effort support, and optional base URL, setup hint, `requiresBaseUrl` marker, and `wireProtocol`.
 
 | ID | Display name | Default model | Wire shape |
 |---|---|---|---|
-| `anthropic` | Claude API | `claude-haiku-4-5` | Anthropic Messages |
-| `openai` | OpenAI API | `gpt-4o` | OpenAI-compatible |
-| `google` | Gemini API | `gemini-3-flash-preview` | Google's OpenAI-compatible endpoint |
-| `mistral` | Mistral API | `mistral-large-latest` | OpenAI-compatible in `llm-call.ts`; first-party Mistral in the deep-agent model factory |
+| `anthropic` | Claude API | `claude-haiku-4-5` | Anthropic Messages (`ChatAnthropic`) |
+| `openai` | OpenAI API | `gpt-4o` | OpenAI-compatible (`ChatOpenAI`) |
+| `google` | Gemini API | `gemini-3-flash-preview` | Google's OpenAI-compatible endpoint (`/v1beta/openai`) |
+| `mistral` | Mistral API | `mistral-large-latest` | First-party Mistral (`ChatMistralAI`) |
 | `openrouter` | OpenRouter API | `anthropic/claude-3.5-sonnet` | OpenAI-compatible |
-| `openai-oauth` | ChatGPT (OAuth) | `gpt-5.4` | Codex/ChatGPT account path |
-| `copilot-proxy` | GitHub Copilot | `gpt-4.1` | OpenAI-compatible after Copilot token exchange |
-| `minimax` | MiniMax API | `MiniMax-M3` | Anthropic-compatible |
-| `minimax-token-plan` | MiniMax Token Plan | `MiniMax-M3` | Anthropic-compatible |
-| `openai-compatible` | OpenAI Compatible | User-supplied | OpenAI-compatible at a required custom base URL |
+| `minimax` | MiniMax API | `MiniMax-M3` | Anthropic-shaped, via `ChatAnthropic` at `https://api.minimax.io/anthropic` |
+| `minimax-token-plan` | MiniMax Token Plan | `MiniMax-M3` | Same as `minimax`, different env key |
+| `openai-compatible` | OpenAI Compatible | *(user-supplied)* | OpenAI-compatible at a required custom base URL |
 
-Historical aliases normalize before lookup: `claude` and `anthropic-proxy` map to `anthropic`, while `gemini` maps to `google`.
+`normalizeProviderId` coerces historical aliases before lookup: `claude` and `anthropic-proxy` → `anthropic`, `gemini` → `google`. `createOpenScreenChatModel` normalizes once on entry, so every provider comparison downstream is an exact match against a registry id.
 
-## Auth modes
+MiniMax's `baseUrl` deliberately omits `/v1`: `ChatAnthropic` wraps `@anthropic-ai/sdk`, which appends `/v1/messages` itself.
 
-| Mode | How it works | Providers |
-|---|---|---|
-| API key | The user pastes a key, or the main process resolves the first populated environment variable listed by the definition. A custom OpenAI-compatible endpoint may omit authentication; the deep-agent adapter supplies an internal placeholder key. | `anthropic`, `openai`, `google`, `mistral`, `openrouter`, `minimax`, `minimax-token-plan`, `openai-compatible` |
-| OAuth device flow | The main process requests a ChatGPT device challenge, polls for authorization, exchanges the authorization code, extracts the account ID, and stores access and refresh tokens. The UI displays only the code and verification URL. | `openai-oauth` |
-| PAT | The user can paste a GitHub token, which is exchanged for a short-lived Copilot runtime bearer at call time. The same provider also implements GitHub's device flow and stores its resulting token as a `github-device` credential. | `copilot-proxy` |
+### Removed in 1.8.0
 
-The three modes are wired through the renderer and native bridge. There is no registry auth mode that is merely a UI stub. However, the deep-agent model factory's local-provider comments lag the fetch path: it sends the stored ChatGPT token to a generic `ChatOpenAI` backend and sends the stored GitHub token directly to the Copilot base URL, rather than using `llm-call.ts`'s bespoke Codex transport and Copilot runtime-token exchange.
+`openai-oauth` (ChatGPT) and `copilot-proxy` (GitHub Copilot) were deleted. Both reached a user's subscription by presenting GitHub's and OpenAI's own client IDs and an editor `User-Agent` against endpoints reserved for first-party clients (`api.github.com/copilot_internal`, `chatgpt.com/backend-api`) — from inside a signed installer. Both vendors expose a sanctioned surface instead: GitHub's Copilot SDK (register our own OAuth App, pass the user's `gho_` token) and `codex app-server` (drives the user's own `codex login`, ships no client ID at all). Those are separate integrations rather than a header swap, so they return in their own PR.
+
+The removal note lives at [`provider-registry.ts:92`](../../electron/ai-edition/provider-registry.ts). `authKind` is narrowed to the literal `"api-key"` so the type widens again only when one of those lands.
+
+## Auth
+
+One mode. The user pastes a key in `ProviderSettings`, or the main process resolves the first populated env var listed by the definition — `getCredential` checks `envKeys` **before** the stored blob, so an env var always wins.
+
+A custom OpenAI-compatible endpoint may omit authentication entirely; `resolveOpenAIChatApiKey` substitutes the `OPENAI_COMPATIBLE_NO_AUTH_API_KEY` placeholder so the SDK has something to send.
 
 ## Credential storage
 
-`LlmConfigStore` writes non-secret selection data—provider, model, base URL, reasoning effort, and the edit toggle—to `llm-config.json`. Credentials never land in that plain JSON file.
+`LlmConfigStore` writes non-secret selection data — provider, model, base URL, reasoning effort, and the `allowAgentEdits` toggle — to `llm-config.json`. Credentials never land in that file.
 
-API keys, ChatGPT tokens and refresh tokens, account IDs, expiries, GitHub device tokens, and GitHub PATs are serialized together, encrypted with Electron `safeStorage`, and written to `llm-credentials.enc`. Electron delegates encryption to the operating system's credential protection. Writes fail rather than falling back to plaintext when encryption is unavailable. The loader still accepts legacy string-only encrypted entries and normalizes them to typed API-key credentials.
+Keys are serialized together, encrypted with Electron `safeStorage`, and written to `llm-credentials.enc`. Electron delegates the encryption to the OS credential store. `saveCredentials` **throws rather than falling back to plaintext** when `safeStorage.isEncryptionAvailable()` is false.
 
-The main process may use provider-specific environment variables instead of the encrypted entry. Renderer snapshots expose connection and credential-kind summaries, not raw credential values.
+Two compatibility behaviours in the loader are load-bearing:
+
+- A legacy string-only row (`{[providerId]: "sk-…"}`, written before entries were typed) is coerced to `{kind: "api-key", apiKey}`.
+- `getCredential` matches on **a usable `apiKey` field, not on `kind`**. A blob written by a pre-1.8.0 build still carries `kind: "codex"` / `"github-device"` / `"github-pat"` rows; narrowing on the current one-member union would make those unreadable and crash the read. They resolve to nothing instead, because no provider claims those ids — so no migration is needed.
+
+Renderer snapshots expose connection summaries, never raw credential values.
 
 ## Calling a model
 
-`streamLlm` resolves a registry entry, checks its credential requirements, and dispatches to a fetch-based transport:
+`createOpenScreenChatModel({provider, model, apiKey, baseUrl, reasoningEffort})` normalizes the provider id, builds the reasoning options, and returns a `BaseChatModel`:
 
-- OpenAI-compatible providers send streaming `POST {baseUrl}/chat/completions` requests. Messages, fixed function schemas, tool-call deltas, and provider-specific reasoning fields are translated to the OpenAI shape.
-- Anthropic-shaped providers send streaming `POST {baseUrl}/v1/messages` requests with `x-api-key`, Anthropic content blocks, `input_schema` tools, and provider-appropriate thinking fields.
-- ChatGPT OAuth sends the Codex Responses dialect to `/codex/responses`, including account/session identity headers, transformed tools, reasoning options, and an SSE parser for text and function calls.
-- GitHub Copilot first exchanges the stored GitHub token at GitHub's Copilot token endpoint, derives the account-specific API base URL, then uses the OpenAI-compatible streaming path with the short-lived bearer.
+- `minimax` / `minimax-token-plan` → `ChatAnthropic` with `anthropicApiUrl` pointed at the MiniMax base.
+- `anthropic` → `ChatAnthropic`, plus `thinking` / `outputConfig` when reasoning is on.
+- `mistral` → `ChatMistralAI`.
+- everything else (`openai`, `google`, `openrouter`, `openai-compatible`) → `ChatOpenAI`, with the base URL defaulted per provider and `disableStreaming` set for Gemini 3, whose OpenAI-compat path cannot stream and tool-call at the same time.
 
-`callLlm` is the buffered convenience wrapper around `streamLlm`; it collects text and complete tool calls. The active chat editor currently invokes the LangChain-backed deep-agent model factory, which selects `ChatAnthropic`, `ChatMistralAI`, or `ChatOpenAI` adapters and maps reasoning options separately.
+An unrecognised provider reaching `createLocalProviderChatModel` throws rather than silently defaulting to OpenAI.
+
+Three call sites share that factory:
+
+| Caller | What it does |
+|---|---|
+| [`deep-agent/service.ts`](../../electron/ai-edition/deep-agent/service.ts) `invokeOpenScreenAgent` | The chat agent. Builds a fresh `createDeepAgent` per turn with the timeline tools bound; each turn is single-shot (no checkpointer yet). |
+| [`chat-service.ts`](../../electron/ai-edition/chat-service.ts) `tryCompactSession` | One-shot summary of older turns for context compaction. A failure here is swallowed — it must not break the chat turn. |
+| [`caption-translate.ts`](../../electron/ai-edition/caption-translate.ts) | One-shot caption translation. Deliberately not the agent loop: a pure text transform has no reason to hold document-mutating tools. |
+
+`messageContentToText` flattens LangChain `MessageContent` for the two one-shot callers without dragging in the agent tool graph.
+
+## Reasoning effort
+
+`getReasoningCapability(provider, model)` decides whether the *model* supports reasoning at all, and by which strategy — `openai-responses`, `anthropic-thinking`, `minimax-thinking`, `openrouter-reasoning`, or `google-thinking`. The check is model-shaped, not just provider-shaped: `openai` only reports support for `o*`/`gpt-5*`, `anthropic` for `claude-{opus,sonnet,haiku}-4*`, `google` for `gemini-2.5*`/`gemini-3*`.
+
+`buildLangChainReasoningOptions` then maps the effort onto that provider's wire field: `reasoning.effort` + `useResponsesApi` for OpenAI, `thinking` blocks (adaptive with `outputConfig.effort` on Claude 4.6/4.7, otherwise `budget_tokens`) for Anthropic, `modelKwargs.reasoning` for OpenRouter, `thinkingConfig` for Google.
+
+MiniMax's `thinking` block is binary (`{type: "adaptive"}` or absent), so `getReasoningEffortOptions` shows it only `none` / `medium` and `getReasoningEffortLabel` renders that `medium` as **On** — advertising six tiers would imply a granularity it doesn't have. Both helpers are the SSOT shared by `ProviderSettings.tsx` and the in-chat quick-pick in `LeftPanel.tsx`.
+
+## Model discovery
+
+`aiEditionService.llmListProviderModels(providerId)` resolves the credential, then dispatches per provider:
+
+| Provider | Source |
+|---|---|
+| `anthropic` | `GET /v1/models` with `x-api-key` |
+| `google` | `GET /v1beta/openai/models`, filtered to `gemini-*` |
+| `mistral` | `GET /v1/models` |
+| `openrouter` | `GET /api/v1/models` (unauthenticated) |
+| `openai`, `openai-compatible` | `GET {baseUrl}/models` — errors with "Missing base URL" if unset |
+| `minimax`, `minimax-token-plan` | No list endpoint exists: probes nine known slugs with a `max_tokens: 1` completion and keeps the ones that answer |
+
+Everything returns `{models, error?}` rather than throwing, so the settings UI can show a reason instead of an empty list. When every MiniMax probe fails, the first failure's status is surfaced in the message.
 
 ## Adding a provider
 
-1. Add a complete `ProviderDefinition` in `electron/ai-edition/provider-registry.ts`, including auth kind, environment keys, default model, base URL, protocol, and reasoning support.
-2. Add or extend credential and authentication helpers in `llm-config-store.ts` and `llm-provider-auth.ts` when the existing credential kinds do not fit.
-3. Route the provider in `llm-call.ts`, including request/response transformations, streaming parser behavior, model discovery, and reasoning fields.
-4. Add the corresponding deep-agent adapter and capability mapping under `electron/ai-edition/deep-agent/` so chat and direct fetch paths agree.
-5. Extend the native bridge model-list or auth handlers and their contracts when the provider requires new operations.
-6. Verify `ProviderSettings.tsx` renders the right fields and connection action from registry metadata, then add registry, auth, transport, and UI tests.
+1. Add a complete `ProviderDefinition` in `provider-registry.ts` (auth kind, env keys, default model, base URL, `wireProtocol`, reasoning support). Widen `authKind` if the provider is not API-key-based.
+2. Add a branch in `createOpenScreenChatModel` if none of the three existing adapters fits.
+3. Add a capability branch in `agent-provider-capabilities.ts` if the provider exposes reasoning, and constrain `getReasoningEffortOptions` if its scale is not the full six tiers.
+4. Add a discovery branch in `aiEditionService.llmListProviderModels`, plus its fetch helper in `llm-provider-auth.ts`.
+5. Extend the native-bridge contracts if the provider needs operations the existing IPC surface doesn't cover.
+6. Confirm `ProviderSettings.tsx` renders the right fields from the registry metadata alone, then add registry, transport, and UI tests.
 
 ## Known gaps
 
-- The fetch transport and the LangChain deep-agent transport duplicate provider routing and reasoning logic, and the ChatGPT/Copilot deep-agent paths do not yet use the more complete token/session handling implemented by `llm-call.ts`.
-- Copilot runtime bearers are exchanged on demand and are not cached despite carrying an expiry.
-- Token refresh exists for Codex sessions, but the active chat service does not refresh an expired stored ChatGPT credential before creating its deep-agent model.
+- **`normalizeReasoningEffort` in `provider-registry.ts` is dead.** It is exported but has no caller anywhere in the repo; `normalizeReasoningEffortForCapability` in `agent-provider-capabilities.ts` is the live one. The two also disagree — the dead copy's strategy union knows `custom-openai-account` but not `minimax-thinking`. Delete it rather than fixing it.
+- **`custom-openai-account` is a phantom strategy.** It appears in `ReasoningCapability["strategy"]` but no branch of `getReasoningCapability` returns it, and no branch of `buildLangChainReasoningOptions` handles it. Left over from the removed ChatGPT provider.
+- **`llm-provider-auth.ts` is misnamed.** It performs no authentication since the device flows were removed — it is purely model-list discovery. `model-discovery.ts` would say what it does.
+- **MiniMax discovery spends the user's key.** Nine probe requests per discovery click, uncached, at `max_tokens: 1`. Cache per key if it ever moves to a hot path.
+- **No reasoning-effort validation at the IPC boundary.** `LlmConfig.reasoningEffort` is a bare `string` in `llm-config-store.ts` and is cast with `as never` into `buildLangChainReasoningOptions`; an unrecognised value falls through to the capability default rather than being rejected.
+- **The agent is stateless per turn.** `invokeOpenScreenAgent` builds a fresh `createDeepAgent` for every message; conversation continuity comes from replaying `history`. Passing a `checkpointer` would make langgraph threads stateful — noted in the code as a later step.

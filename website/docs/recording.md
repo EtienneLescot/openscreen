@@ -50,12 +50,23 @@ Hitting record triggers a 3‑2‑1 countdown, rendered as a full-desktop overla
 ## Other HUD controls
 
 - **Layout toggle** — switches the HUD between horizontal and vertical, persisted across sessions.
+- **Settings** — device settings for the selected mic and camera without leaving the HUD.
 - **Notes** — opens a small rich-text scratchpad window, handy for a script or cue sheet while you record. It's saved locally between sessions.
 - **Language** — a locale picker (13 languages) that only affects the OpenScreen UI, not your recording.
 - Window controls to hide the HUD or quit the app.
+
+## Recording from the editor (Rec mode)
+
+You don't have to start from the HUD. In the editor, switch the top bar to **Rec** to get a full-size pre-flight page instead of a pill:
+
+- **Source** — same screen/window picker, in a modal.
+- **System audio**, **Microphone**, **Camera** — each an on/off row; mic and camera expand to a device list, and the camera shows a live preview so you can frame yourself before going live.
+- **Cursor highlight** — on means the editable overlay cursor, off means the plain system cursor.
+
+**Start recording** opens the recording widget and closes the editor window; cancelling drops you back into Edit mode. This is also the starting point **New project → Screen recording** takes you to.
 
 ## Native vs. browser capture
 
 macOS (ScreenCaptureKit) and Windows (Windows Graphics Capture) record through a native pipeline for higher-quality, clean window-level capture, including real cursor bitmaps and native webcam capture. Linux records through a browser-based pipeline instead — screen and webcam capture still work, but cursor themes and click effects aren't available since only cursor position is tracked. See the full [platform differences table](./installation.md#platform-differences).
 
-Once you've stopped recording, head to [Editing & timeline](./editing-timeline.md) to cut it into shape.
+Once you've stopped recording, head to [Editing & timeline](./editing-timeline.md) to cut it into shape — or to [Media library](./media-library.md) if you're assembling several takes.

@@ -10,12 +10,12 @@
 //!  - un modèle mono-thread coopératif : WM_TIMER cadence la playback à 60 fps ;
 //!    l'export tourne sur le thread UI et rafraîchit la barre entre frames.
 
-use crate::compositor::{Compositor, FIXTURE_FRAMES, OUT_H, OUT_W};
-use crate::config::{self, Cfg};
-use crate::cursor::CursorTrack;
-use crate::d3d::Gpu;
-use crate::live::Player;
-use crate::pipeline;
+use openscreen_compositor::compositor::{Compositor, FIXTURE_FRAMES, OUT_H, OUT_W};
+use openscreen_compositor::config::{self, Cfg};
+use openscreen_compositor::cursor::CursorTrack;
+use openscreen_compositor::d3d::Gpu;
+use openscreen_compositor::live::Player;
+use openscreen_compositor::pipeline;
 use anyhow::Result;
 use std::ffi::c_void;
 use std::time::Instant;

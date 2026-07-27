@@ -8,7 +8,6 @@
 		"autoFocusAllOff": "Auto-Focus all zooms (camera follows the cursor)",
 		"addTrim": "Add Trim (T)",
 		"addAnnotation": "Add Annotation (A)",
-		"addBlur": "Add Blur (B)",
 		"addSpeed": "Add Speed (S)",
 		"addCameraFullscreen": "Add Full Camera (C)"
 	},
@@ -16,7 +15,6 @@
 		"pressZoom": "Press Z to add zoom",
 		"pressTrim": "Press T to add trim",
 		"pressAnnotation": "Press A to add annotation",
-		"pressBlur": "Press B to add blur region",
 		"pressSpeed": "Press S to add speed",
 		"pressCameraFullscreen": "Press C to add a Full Camera segment"
 	},
@@ -29,7 +27,6 @@
 		"trimItem": "Trim {{index}}",
 		"speedItem": "Speed {{index}}",
 		"annotationItem": "Annotation",
-		"blurItem": "Blur {{index}}",
 		"imageItem": "Image",
 		"emptyText": "Empty text",
 		"cameraFullscreen": "Full Camera",

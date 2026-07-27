@@ -1,8 +1,8 @@
 [package]
 name = "compositor-view-napi"
-version = "0.0.0"
-edition = "2021"
-description = "Addon napi-rs : expose poc_d3d::live::LiveView (fenêtre D3D enfant) à Electron."
+version.workspace = true
+edition.workspace = true
+description = "Addon napi-rs : expose openscreen_compositor::live::LiveView (fenêtre D3D enfant) à Electron. C'est CE crate qui produit compositor_view.node, le binaire packagé dans l'app."
 
 [lib]
 crate-type = ["cdylib"]
@@ -11,8 +11,8 @@ name = "compositor_view"
 [dependencies]
 napi = { version = "2", default-features = false, features = ["napi6"] }
 napi-derive = "2"
-poc-d3d = { path = ".." }
-anyhow = "1"
+openscreen-compositor.workspace = true
+anyhow.workspace = true
 
 [dependencies.windows]
 version = "0.58"

@@ -8,7 +8,6 @@
 		"autoFocusAllOff": "تفعيل التركيز التلقائي لجميع التكبيرات (الكاميرا تتبع المؤشر)",
 		"addTrim": "إضافة قص (T)",
 		"addAnnotation": "إضافة شرح (A)",
-		"addBlur": "إضافة تمويه (B)",
 		"addSpeed": "إضافة سرعة (S)",
 		"addCameraFullscreen": "إضافة كاميرا كاملة الشاشة (C)"
 	},
@@ -16,7 +15,6 @@
 		"pressZoom": "اضغط Z لإضافة تكبير",
 		"pressTrim": "اضغط T لإضافة قص",
 		"pressAnnotation": "اضغط A لإضافة شرح",
-		"pressBlur": "اضغط B لإضافة منطقة تمويه",
 		"pressSpeed": "اضغط S لإضافة سرعة",
 		"pressCameraFullscreen": "اضغط C لإضافة مقطع كاميرا كاملة الشاشة"
 	},
@@ -29,7 +27,6 @@
 		"trimItem": "قص {{index}}",
 		"speedItem": "سرعة {{index}}",
 		"annotationItem": "شرح",
-		"blurItem": "تمويه {{index}}",
 		"imageItem": "صورة",
 		"emptyText": "نص فارغ",
 		"cameraFullscreen": "كاميرا كاملة الشاشة",
