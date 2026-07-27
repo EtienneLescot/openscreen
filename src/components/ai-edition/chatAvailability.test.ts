@@ -7,6 +7,14 @@ function cfg(provider: string, model = "gpt-4o-mini"): AiEditionLlmConfig {
 }
 
 describe("canSendChat", () => {
+	it("stays optimistic while the snapshot is still in flight", () => {
+		// null connectedProviders = not loaded yet. Returning false here would
+		// flash the welcome view on every mount, and leave it up for good when
+		// llmGetSnapshot fails (refreshLlm swallows the error).
+		expect(canSendChat(null, null)).toBe(true);
+		expect(canSendChat(cfg("openai"), null)).toBe(true);
+	});
+
 	it("returns false when there is no config at all", () => {
 		expect(canSendChat(null, [])).toBe(false);
 	});

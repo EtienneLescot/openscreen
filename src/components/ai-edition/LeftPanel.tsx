@@ -674,7 +674,8 @@ function ChatStripPanel() {
 		bottom: number;
 	} | null>(null);
 	const [reasoningBusy, setReasoningBusy] = useState(false);
-	const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
+	// null until the first llmGetSnapshot() lands: "unknown", not "none".
+	const [connectedProviders, setConnectedProviders] = useState<string[] | null>(null);
 	// Derive "can the user actually chat right now?" once, then use it
 	// everywhere. A stale active config that points at a provider with no
 	// credentials still counts as not-ready — the welcome view + disabled
@@ -783,8 +784,11 @@ function ChatStripPanel() {
 		// to the settings modal instead of sending a doomed request and
 		// surfacing a generic LLM error. The composer is also disabled in this
 		// state, but Enter-to-send could still slip through (e.g. focus
-		// restored via shortcut), so the check lives here too.
+		// restored via shortcut), so the check lives here too. The toast is what
+		// explains the modal to prompts that never touched the composer — the
+		// timeline's Auto-enhance hands its text straight to send().
 		if (!canChat) {
+			toast.error(t("chat.composerDisabledNoProvider"));
 			setSettingsOpen(true);
 			return;
 		}
@@ -1423,7 +1427,7 @@ function ChatStripPanel() {
 			</div>
 
 			<div className={styles.panelBody} ref={scrollRef}>
-				{!canChat ? (
+				{!canChat && messages.length === 0 ? (
 					<ChatWelcome onOpenProviderSettings={() => setSettingsOpen(true)} />
 				) : messages.length === 0 ? (
 					<p
@@ -1695,7 +1699,7 @@ function ChatStripPanel() {
 						<ModelQuickPopover
 							anchorRect={modelPopoverRect}
 							llmConfig={llmConfig}
-							connectedProviders={connectedProviders}
+							connectedProviders={connectedProviders ?? []}
 							onClose={() => setModelPopoverOpen(false)}
 							onConfigChange={() => void refreshLlm()}
 							onOpenFullSettings={() => setSettingsOpen(true)}

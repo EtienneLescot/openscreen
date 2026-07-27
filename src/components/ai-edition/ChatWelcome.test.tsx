@@ -47,9 +47,7 @@ describe("ChatWelcome", () => {
 		const onOpen = vi.fn();
 		renderIn("en", <ChatWelcome onOpenProviderSettings={onOpen} />);
 
-		const cta = screen.getByTestId("chat-welcome-cta");
-		expect(cta).toBeInTheDocument();
-		fireEvent.click(cta);
+		fireEvent.click(screen.getByRole("button", { name: /set up a provider/i }));
 
 		expect(onOpen).toHaveBeenCalledTimes(1);
 	});
@@ -83,8 +81,8 @@ describe("ChatWelcome", () => {
 	it("exposes the welcome region to assistive tech", () => {
 		renderIn("en", <ChatWelcome onOpenProviderSettings={vi.fn()} />);
 
-		// The component marks itself as a region with the title as its
-		// accessible name — screen readers announce the title on focus.
+		// The region is labelled by the <h2> itself (aria-labelledby), so the
+		// title is announced once, not duplicated by a redundant aria-label.
 		const region = screen.getByRole("region", { name: /bring your own ai/i });
 		expect(region).toBeInTheDocument();
 	});
