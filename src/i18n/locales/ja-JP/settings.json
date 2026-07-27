@@ -187,16 +187,6 @@
 		"imageUploadSuccess": "画像を読み込みました。",
 		"type": "種類"
 	},
-	"fontStyles": {
-		"classic": "クラシック",
-		"editor": "エディター",
-		"strong": "ストロング",
-		"typewriter": "タイプライター",
-		"deco": "デコ",
-		"simple": "シンプル",
-		"modern": "モダン",
-		"clean": "クリーン"
-	},
 	"textAnimation": {
 		"title": "テキストアニメーション",
 		"selectAnimation": "アニメーションを選択",

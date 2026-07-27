@@ -9,7 +9,6 @@
 		"addTrim": "트림 추가 (T)",
 		"addAnnotation": "주석 추가 (A)",
 		"addSpeed": "속도 추가 (S)",
-		"addBlur": "블러 추가 (B)",
 		"addCameraFullscreen": "전체 화면 카메라 추가 (C)"
 	},
 	"hints": {
@@ -17,7 +16,6 @@
 		"pressTrim": "T를 눌러 트림 추가",
 		"pressAnnotation": "A를 눌러 주석 추가",
 		"pressSpeed": "S를 눌러 속도 추가",
-		"pressBlur": "B 키를 눌러 블러 영역을 추가하세요",
 		"pressCameraFullscreen": "C를 눌러 전체 화면 카메라 구간을 추가하세요"
 	},
 	"labels": {
@@ -32,8 +30,7 @@
 		"imageItem": "이미지",
 		"emptyText": "빈 텍스트",
 		"cameraFullscreen": "전체 화면 카메라",
-		"cameraFullscreenItem": "전체 화면 카메라 {{index}}",
-		"blurItem": "블러 {{index}}"
+		"cameraFullscreenItem": "전체 화면 카메라 {{index}}"
 	},
 	"emptyState": {
 		"noVideo": "불러온 비디오 없음",

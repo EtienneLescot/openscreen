@@ -188,16 +188,6 @@
 		"mosaicBlockSize": "馬賽克區塊大小",
 		"type": "類型"
 	},
-	"fontStyles": {
-		"classic": "經典",
-		"editor": "編輯器",
-		"strong": "粗體",
-		"typewriter": "打字機",
-		"deco": "裝飾",
-		"simple": "簡約",
-		"modern": "現代",
-		"clean": "簡潔"
-	},
 	"textAnimation": {
 		"title": "文字動畫",
 		"selectAnimation": "選擇動畫",

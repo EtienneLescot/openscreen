@@ -187,16 +187,6 @@
 		"imageUploadSuccess": "Изображение успешно загружено!",
 		"type": "Тип"
 	},
-	"fontStyles": {
-		"classic": "Классический",
-		"editor": "Редактор",
-		"strong": "Жирный",
-		"typewriter": "Пишущая машинка",
-		"deco": "Декоративный",
-		"simple": "Простой",
-		"modern": "Современный",
-		"clean": "Чистый"
-	},
 	"textAnimation": {
 		"title": "Анимация текста",
 		"selectAnimation": "Выбрать анимацию",

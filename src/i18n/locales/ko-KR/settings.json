@@ -187,16 +187,6 @@
 		"imageUploadSuccess": "이미지가 성공적으로 업로드되었습니다!",
 		"type": "유형"
 	},
-	"fontStyles": {
-		"classic": "클래식",
-		"editor": "에디터",
-		"strong": "강조",
-		"typewriter": "타자기",
-		"deco": "데코",
-		"simple": "심플",
-		"modern": "모던",
-		"clean": "클린"
-	},
 	"textAnimation": {
 		"title": "텍스트 애니메이션",
 		"selectAnimation": "애니메이션 선택",

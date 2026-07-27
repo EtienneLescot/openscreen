@@ -1,5 +1,3 @@
-export const BLUR_REGIONS_ENABLED = false;
-
 // ponytail: gates ONLY the LLM/agent surface — provider settings dialog, chat
 // panel, suggestions list, "Restore checkpoint" actions. Does NOT gate the
 // new editing model, project panel, timeline, transcript editor, or exporter.

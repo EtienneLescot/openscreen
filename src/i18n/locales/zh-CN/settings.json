@@ -187,16 +187,6 @@
 		"mosaicBlockSize": "马赛克块大小",
 		"type": "类型"
 	},
-	"fontStyles": {
-		"classic": "经典",
-		"editor": "编辑器",
-		"strong": "粗体",
-		"typewriter": "打字机",
-		"deco": "装饰",
-		"simple": "简约",
-		"modern": "现代",
-		"clean": "简洁"
-	},
 	"textAnimation": {
 		"title": "文本动画",
 		"selectAnimation": "选择动画",

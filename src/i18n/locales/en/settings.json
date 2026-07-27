@@ -187,16 +187,6 @@
 		"imageUploadSuccess": "Image uploaded successfully!",
 		"type": "Type"
 	},
-	"fontStyles": {
-		"classic": "Classic",
-		"editor": "Editor",
-		"strong": "Strong",
-		"typewriter": "Typewriter",
-		"deco": "Deco",
-		"simple": "Simple",
-		"modern": "Modern",
-		"clean": "Clean"
-	},
 	"textAnimation": {
 		"title": "Text Animation",
 		"selectAnimation": "Select animation",

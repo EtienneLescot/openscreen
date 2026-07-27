@@ -8,7 +8,6 @@
 		"autoFocusAllOff": "すべてのズームでオートフォーカスをオンにする（カメラがカーソルに追従）",
 		"addTrim": "トリムを追加 (T)",
 		"addAnnotation": "注釈を追加 (A)",
-		"addBlur": "ぼかしを追加 (B)",
 		"addSpeed": "再生速度を追加 (S)",
 		"addCameraFullscreen": "フルスクリーンカメラを追加 (C)"
 	},
@@ -16,7 +15,6 @@
 		"pressZoom": "Zキーを押してズームを追加",
 		"pressTrim": "Tキーを押してトリムを追加",
 		"pressAnnotation": "Aキーを押して注釈を追加",
-		"pressBlur": "Bキーを押してぼかしを追加",
 		"pressSpeed": "Sキーを押して再生速度を追加",
 		"pressCameraFullscreen": "Cキーを押してフルスクリーンカメラのセグメントを追加"
 	},
@@ -29,7 +27,6 @@
 		"trimItem": "トリム {{index}}",
 		"speedItem": "再生速度 {{index}}",
 		"annotationItem": "注釈",
-		"blurItem": "ぼかし {{index}}",
 		"imageItem": "画像",
 		"emptyText": "空のテキスト",
 		"cameraFullscreen": "フルスクリーンカメラ",

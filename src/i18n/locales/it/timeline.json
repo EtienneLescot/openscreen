@@ -8,7 +8,6 @@
 		"autoFocusAllOff": "Attiva la messa a fuoco automatica per tutti gli zoom (la fotocamera segue il cursore)",
 		"addTrim": "Aggiungi taglio (T)",
 		"addAnnotation": "Aggiungi annotazione (A)",
-		"addBlur": "Aggiungi sfocatura (B)",
 		"addSpeed": "Aggiungi velocità (S)",
 		"addCameraFullscreen": "Aggiungi Camera a schermo intero (C)"
 	},
@@ -16,7 +15,6 @@
 		"pressZoom": "Premi Z per aggiungere zoom",
 		"pressTrim": "Premi T per aggiungere taglio",
 		"pressAnnotation": "Premi A per aggiungere annotazione",
-		"pressBlur": "Premi B per aggiungere regione sfocatura",
 		"pressSpeed": "Premi S per aggiungere velocità",
 		"pressCameraFullscreen": "Premi C per aggiungere un segmento Camera a schermo intero"
 	},
@@ -29,7 +27,6 @@
 		"trimItem": "Taglio {{index}}",
 		"speedItem": "Velocità {{index}}",
 		"annotationItem": "Annotazione",
-		"blurItem": "Sfocatura {{index}}",
 		"imageItem": "Immagine",
 		"emptyText": "Testo vuoto",
 		"cameraFullscreen": "Camera a schermo intero",
