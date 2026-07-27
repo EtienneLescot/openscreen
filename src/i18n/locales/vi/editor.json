@@ -19,7 +19,8 @@
 		"exportBackgroundLoadFailed": "Xuất thất bại: không thể tải hình nền ({{url}})",
 		"failedToSaveExport": "Không thể lưu bản xuất",
 		"failedToSaveExportedVideo": "Không thể lưu video đã xuất",
-		"failedToRevealInFolder": "Lỗi khi hiển thị trong thư mục: {{error}}"
+		"failedToRevealInFolder": "Lỗi khi hiển thị trong thư mục: {{error}}",
+		"previewCompositorUnavailable": "Không thể xem trước trên máy này"
 	},
 	"export": {
 		"canceled": "Đã hủy xuất",

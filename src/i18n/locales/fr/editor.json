@@ -17,7 +17,8 @@
 		"exportBackgroundLoadFailed": "L'export a échoué : impossible de charger l'image d'arrière-plan ({{url}})",
 		"failedToSaveExport": "Échec de l'enregistrement de l'export",
 		"failedToSaveExportedVideo": "Échec de l'enregistrement de la vidéo exportée",
-		"failedToRevealInFolder": "Erreur lors de l'affichage dans le dossier : {{error}}"
+		"failedToRevealInFolder": "Erreur lors de l'affichage dans le dossier : {{error}}",
+		"previewCompositorUnavailable": "Aperçu indisponible sur cette machine"
 	},
 	"export": {
 		"canceled": "Export annulé",
