@@ -20,7 +20,7 @@ import {
 export type VoiceoverMixMode = "mix" | "replace";
 
 export interface VoiceoverMixOptions {
-	/** Encoded audio file bytes (mp3/wav/m4a/aiff — anything decodeAudioData accepts). */
+	/** Encoded audio file bytes (mp3/wav/m4a — anything decodeAudioData accepts). */
 	voiceoverData: ArrayBuffer;
 	mode: VoiceoverMixMode;
 	/** Delay before the voiceover starts, in seconds. */
@@ -28,6 +28,10 @@ export interface VoiceoverMixOptions {
 	/** Gain applied to the original track in "mix" mode (0..1). */
 	originalGain?: number;
 }
+
+// Duck the original bed under the voiceover by default so the unity-gain sum
+// of two loud sources doesn't hard-clip.
+const DEFAULT_ORIGINAL_GAIN = 0.4;
 
 const OUTPUT_SAMPLE_RATE = 48_000;
 const OUTPUT_CHANNELS = 2;
@@ -43,7 +47,7 @@ async function decodeToBuffer(
 
 /** Renders the final audio track: original bed (optional) + offset voiceover. */
 async function renderMixedAudio(
-	videoData: ArrayBuffer,
+	videoData: ArrayBuffer | null,
 	durationSec: number,
 	options: VoiceoverMixOptions,
 ): Promise<AudioBuffer> {
@@ -56,13 +60,13 @@ async function renderMixedAudio(
 	voiceoverNode.connect(context.destination);
 	voiceoverNode.start(Math.max(0, options.offsetSec));
 
-	if (options.mode === "mix") {
+	if (options.mode === "mix" && videoData) {
 		try {
 			const original = await decodeToBuffer(context, videoData);
 			const originalNode = context.createBufferSource();
 			originalNode.buffer = original;
 			const gainNode = context.createGain();
-			gainNode.gain.value = options.originalGain ?? 1;
+			gainNode.gain.value = options.originalGain ?? DEFAULT_ORIGINAL_GAIN;
 			originalNode.connect(gainNode);
 			gainNode.connect(context.destination);
 			originalNode.start(0);
@@ -99,7 +103,9 @@ export async function mixVoiceoverIntoVideo(
 		}
 		const durationSec = await input.computeDuration();
 
-		const videoData = await videoBlob.arrayBuffer();
+		// The full-file bytes are only needed to decode the original bed in
+		// "mix" mode; "replace" skips the copy entirely.
+		const videoData = options.mode === "mix" ? await videoBlob.arrayBuffer() : null;
 		const mixedAudio = await renderMixedAudio(videoData, durationSec, options);
 
 		const target = new BufferTarget();
@@ -107,24 +113,29 @@ export async function mixVoiceoverIntoVideo(
 			format: new Mp4OutputFormat({ fastStart: "in-memory" }),
 			target,
 		});
-		const videoSource = new EncodedVideoPacketSource(codec);
-		output.addVideoTrack(videoSource);
-		const audioSource = new AudioBufferSource({
-			codec: "aac",
-			bitrate: VOICEOVER_AUDIO_BITRATE,
-		});
-		output.addAudioTrack(audioSource);
-		await output.start();
+		try {
+			const videoSource = new EncodedVideoPacketSource(codec);
+			output.addVideoTrack(videoSource);
+			const audioSource = new AudioBufferSource({
+				codec: "aac",
+				bitrate: VOICEOVER_AUDIO_BITRATE,
+			});
+			output.addAudioTrack(audioSource);
+			await output.start();
 
-		const sink = new EncodedPacketSink(videoTrack);
-		let isFirstPacket = true;
-		for await (const packet of sink.packets()) {
-			await videoSource.add(packet, isFirstPacket ? { decoderConfig } : undefined);
-			isFirstPacket = false;
+			const sink = new EncodedPacketSink(videoTrack);
+			let isFirstPacket = true;
+			for await (const packet of sink.packets()) {
+				await videoSource.add(packet, isFirstPacket ? { decoderConfig } : undefined);
+				isFirstPacket = false;
+			}
+			await audioSource.add(mixedAudio);
+
+			await output.finalize();
+		} catch (error) {
+			await output.cancel().catch(() => undefined);
+			throw error;
 		}
-		await audioSource.add(mixedAudio);
-
-		await output.finalize();
 		const buffer = target.buffer;
 		if (!buffer) {
 			throw new Error("Voiceover remux produced no output");

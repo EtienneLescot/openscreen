@@ -105,6 +105,9 @@ export function CliRecordRunner() {
 	const [requestReady, setRequestReady] = useState<CliRecordRequest | null>(null);
 	const phaseRef = useRef<Phase>("init");
 	const recordingStartedAtRef = useRef<number | null>(null);
+	// A stop (SIGINT/stdin) can land while the capture helper is still starting;
+	// remember it and apply as soon as recording flips on.
+	const stopRequestedRef = useRef(false);
 	const [status, setStatus] = useState("Preparing recording…");
 
 	const {
@@ -121,9 +124,11 @@ export function CliRecordRunner() {
 
 	// Keep latest values in refs for the stop/finish effects.
 	const toggleRecordingRef = useRef(toggleRecording);
-	toggleRecordingRef.current = toggleRecording;
 	const recordingRef = useRef(recording);
-	recordingRef.current = recording;
+	useEffect(() => {
+		toggleRecordingRef.current = toggleRecording;
+		recordingRef.current = recording;
+	});
 
 	const fail = async (error: unknown) => {
 		phaseRef.current = "done";
@@ -190,6 +195,18 @@ export function CliRecordRunner() {
 		void (async () => {
 			try {
 				await startRecordingImmediately();
+				// The hook reports start failures via toast/console, not by
+				// rejecting — without a deadline a failed start would hang the
+				// CLI forever.
+				setTimeout(() => {
+					if (recordingStartedAtRef.current === null && phaseRef.current === "recording") {
+						void fail(
+							new Error(
+								"Recording did not start within 30s — see stderr for the underlying capture error",
+							),
+						);
+					}
+				}, 30_000);
 			} catch (error) {
 				await fail(error);
 			}
@@ -208,6 +225,13 @@ export function CliRecordRunner() {
 			recordingStartedAtRef.current = Date.now();
 			setStatus("Recording…");
 			window.electronAPI.cliLog("info", "Recording started");
+
+			if (stopRequestedRef.current) {
+				phaseRef.current = "stopping";
+				setStatus("Stopping…");
+				toggleRecordingRef.current();
+				return;
+			}
 
 			if (request?.durationMs) {
 				const timer = setTimeout(() => {
@@ -229,6 +253,9 @@ export function CliRecordRunner() {
 				phaseRef.current = "stopping";
 				setStatus("Stopping…");
 				toggleRecordingRef.current();
+			} else {
+				// Capture is still starting; stop as soon as it comes up.
+				stopRequestedRef.current = true;
 			}
 		});
 	}, []);
