@@ -115,23 +115,28 @@ jobs:
 
       - name: Push RC tag on the release branch
         env:
-          # Use GITHUB_TOKEN for the tag push: a tag is a ref, not a file change, so
-          # the workflows:write permission isn't needed.
+          # Push the tag with the PAT, NOT the checkout's GITHUB_TOKEN remote.
+          # GitHub answers a GITHUB_TOKEN tag push with `remote: Internal Server
+          # Error` (a 500, not a 403) — a tag ruleset rejecting the Actions token.
+          # That failed the whole job cutting v1.8.0-rc.1, which also skipped the
+          # build trigger and the Discord announce below.
           # Note: GITHUB_TOKEN tag pushes do NOT trigger build.yml in this org's setup,
           # so we explicitly trigger it via gh workflow run right after.
+          TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
           RC_TAG: ${{ steps.version.outputs.rc_tag }}
           NEXT: ${{ steps.version.outputs.next }}
         run: |
           set -euo pipefail
           BRANCH="release/v${NEXT}"
+          REMOTE="https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
           git fetch origin "$BRANCH"
           git checkout "$BRANCH"
           git reset --hard "origin/${BRANCH}"
           # Delete remote tag first (idempotent on rerun) and any local tag.
-          git push origin ":${RC_TAG}" 2>/dev/null || true
+          git push "$REMOTE" ":${RC_TAG}" 2>/dev/null || true
           git tag -d "$RC_TAG" 2>/dev/null || true
           git tag "$RC_TAG"
-          git push origin "$RC_TAG"
+          git push "$REMOTE" "$RC_TAG"
 
       - name: Trigger build workflow
         env:
