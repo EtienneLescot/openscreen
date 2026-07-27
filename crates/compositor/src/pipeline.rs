@@ -194,7 +194,23 @@ unsafe extern "C" fn get_hw_format(
 }
 
 pub fn run_c0(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
-    unsafe { run_c0_inner(screen, out, gpu) }
+    discard_partial_output(out, unsafe { run_c0_inner(screen, out, gpu) })
+}
+
+/// Un run interrompu laisse le MP4 sans son `moov` : illisible, et portant exactement le nom du
+/// fichier que l'utilisateur croit avoir exporté. Le retirer plutôt que le laisser traîner.
+///
+/// Posé sur les façades plutôt que sur chaque `?` : les `*_inner` sortent par une trentaine de
+/// points, tous concernés de la même façon.
+///
+/// ponytail: seul le fichier est nettoyé ; les contextes ffmpeg alloués dans les `*_inner` fuient
+/// toujours sur ces sorties-là (il faudrait une garde RAII par pointeur, comme `FrameGuard`).
+/// Un export raté est rare et ne boucle pas — à reprendre si ça devient un mode de marche.
+fn discard_partial_output(out: &str, result: Result<Stats>) -> Result<Stats> {
+    if result.is_err() {
+        let _ = std::fs::remove_file(out);
+    }
+    result
 }
 
 unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
@@ -617,7 +633,9 @@ pub fn run_composited(
     cfg: &Cfg,
     progress: &mut dyn FnMut(u64),
 ) -> Result<Stats> {
-    unsafe { run_c1_inner(screen, webcam, out, gpu, comp, cfg, progress) }
+    discard_partial_output(out, unsafe {
+        run_c1_inner(screen, webcam, out, gpu, comp, cfg, progress)
+    })
 }
 
 unsafe fn run_c1_inner(
@@ -730,7 +748,9 @@ pub fn run_composited_multi(
     params: &ExportParams,
     progress: &mut dyn FnMut(u64),
 ) -> Result<Stats> {
-    unsafe { run_multi_inner(clips, out, gpu, comp, cfg, params, progress) }
+    discard_partial_output(out, unsafe {
+        run_multi_inner(clips, out, gpu, comp, cfg, params, progress)
+    })
 }
 
 /// Codec vidéo de sortie. L'encodeur concret est choisi à l'exécution (voir `candidates`).
@@ -764,6 +784,9 @@ impl ExportCodec {
     ///   résolu le MFT logiciel — mesuré ici. Comme le choix est acté à l'ouverture, ce
     ///   candidat-là ferait échouer l'export au lieu de glisser au suivant : ne pas le remettre.
     /// - `*_qsv` — Intel ; n'accepte pas `AV_PIX_FMT_D3D11`, seulement du NV12 système.
+    ///   ponytail: donc descente GPU→CPU puis remontée CPU→GPU sur Intel, une frame à la fois.
+    ///   Le zéro-copie y demanderait un device QSV dérivé du nôtre et `AV_PIX_FMT_QSV` ; à
+    ///   faire quand on aura une machine Intel pour le mesurer, pas avant.
     /// - `libopenh264` / `libkvazaar` — dernier recours 100 % logiciel. **Pas** libx264/libx265 :
     ///   le ffmpeg vendorisé est le build LGPL, `--disable-libx264 --disable-libx265`. Ces deux
     ///   là y sont, et sont les seuls encodeurs logiciels H264/H265 dont on dispose.
@@ -821,6 +844,11 @@ impl Drop for VideoEncoder {
 impl VideoEncoder {
     /// Retient le premier candidat que cette machine accepte d'ouvrir, et dit lequel dans les
     /// logs. `hw_frames` : le pool D3D11 dans lequel le compositeur rend.
+    ///
+    /// `OPENSCREEN_EXPORT_ENCODER=<nom>` n'essaie que celui-là. C'est le seul moyen d'exercer
+    /// les chemins non-AMD depuis une machine AMD, où `h264_amf` gagne toujours au premier tour
+    /// et laisse la descente mémoire système de `send` jamais exécutée. Le forçage ne retombe
+    /// délibérément sur rien : un repli silencieux sur AMF ferait croire au test d'être passé.
     unsafe fn open(
         codec: &ExportCodec,
         w: i32,
@@ -829,9 +857,13 @@ impl VideoEncoder {
         bit_rate: i64,
         hw_frames: *mut AVBufferRef,
     ) -> Result<VideoEncoder> {
+        let forced = std::env::var("OPENSCREEN_EXPORT_ENCODER").ok();
         let mut refused: Vec<String> = Vec::new();
         for &candidate in codec.candidates() {
             let (name, _) = candidate;
+            if forced.as_deref().is_some_and(|forced| forced != name) {
+                continue;
+            }
             let encoder = match Self::try_open(candidate, w, h, fps, bit_rate, hw_frames) {
                 Ok(encoder) => encoder,
                 Err(error) => {
@@ -851,10 +883,19 @@ impl VideoEncoder {
             );
             return Ok(encoder);
         }
-        bail!(
-            "aucun encodeur vidéo utilisable sur cette machine : {}",
-            refused.join(" ; "),
-        );
+        match forced {
+            // Un nom forcé qui ne figure dans aucune liste ne produit aucun refus : sans ce cas
+            // le message serait un « aucun encodeur : » suivi de rien, et on chercherait le
+            // problème du côté du driver plutôt que du côté de la faute de frappe.
+            Some(name) if refused.is_empty() => {
+                bail!("OPENSCREEN_EXPORT_ENCODER={name} ne nomme aucun candidat de ce codec")
+            }
+            Some(name) => bail!("OPENSCREEN_EXPORT_ENCODER={name} inutilisable ici : {}", refused[0]),
+            None => bail!(
+                "aucun encodeur vidéo utilisable sur cette machine : {}",
+                refused.join(" ; "),
+            ),
+        }
     }
 
     /// Ouvre un candidat. L'ouverture est la sonde : elle négocie pour de bon avec le driver
@@ -891,6 +932,12 @@ impl VideoEncoder {
         (*ctx).time_base = AVRational { num: 1, den: fps };
         (*ctx).framerate = AVRational { num: fps, den: 1 };
         (*ctx).bit_rate = bit_rate;
+        // Toutes nos sorties sont du MP4, qui veut SPS/PPS (et VPS en HEVC) dans l'extradata
+        // plutôt qu'en ligne dans le flux. Le muxer mov sait à défaut les repêcher dans le
+        // premier paquet, mais c'est un rattrapage : les encodeurs logiciels qu'on vient
+        // d'ajouter n'émettent pas d'extradata sans ce drapeau, et personne ici n'a de machine
+        // pour constater le MP4 bancal qui en sortirait.
+        (*ctx).flags |= AV_CODEC_FLAG_GLOBAL_HEADER as i32;
         if pix_fmt == AVPixelFormat::AV_PIX_FMT_D3D11 {
             (*ctx).hw_frames_ctx = av_buffer_ref(hw_frames);
         }
@@ -961,11 +1008,15 @@ unsafe fn nv12_to_yuv420p(src: *mut AVFrame, dst: *mut AVFrame) {
             w,
         );
     }
-    for y in 0..h / 2 {
+    // `div_ceil` et non `/ 2` : en largeur ou hauteur impaire le plan chroma compte une colonne
+    // et une ligne de plus, que la division tronquée laisserait telles que `av_frame_get_buffer`
+    // les a rendues — un bord vert. D3D11 refuse les textures NV12 impaires, donc le cas n'est
+    // pas atteignable aujourd'hui ; au même coût, autant que la fonction soit juste seule.
+    for y in 0..h.div_ceil(2) {
         let uv = (*src).data[1].add(y * (*src).linesize[1] as usize);
         let u = (*dst).data[1].add(y * (*dst).linesize[1] as usize);
         let v = (*dst).data[2].add(y * (*dst).linesize[2] as usize);
-        for x in 0..w / 2 {
+        for x in 0..w.div_ceil(2) {
             *u.add(x) = *uv.add(2 * x);
             *v.add(x) = *uv.add(2 * x + 1);
         }
@@ -1266,12 +1317,13 @@ unsafe fn run_multi_inner(
 mod tests {
     use super::*;
 
-    /// L'ordre EST le contrat : tous les candidats zéro-copie d'abord, le logiciel en dernier.
-    /// Un candidat système remonté au-dessus d'un D3D11 coûterait une descente GPU→CPU par
-    /// frame sur une machine qui n'en a pas besoin, sans que rien n'échoue — donc sans que
-    /// personne ne le voie.
+    /// L'ordre EST le contrat : tous les candidats zéro-copie d'abord, ceux qui exigent la
+    /// mémoire système ensuite (`*_qsv` et `*_mf` sont matériels eux aussi — ce qui les
+    /// distingue est le format d'entrée, pas le silicium). Un candidat système remonté
+    /// au-dessus d'un D3D11 coûterait une descente GPU→CPU par frame sur une machine qui n'en
+    /// a pas besoin, sans que rien n'échoue — donc sans que personne ne le voie.
     #[test]
-    fn les_candidats_vont_du_zero_copie_au_logiciel() {
+    fn les_candidats_vont_du_zero_copie_a_la_memoire_systeme() {
         for codec in [ExportCodec::H264, ExportCodec::H265] {
             let candidates = codec.candidates();
             let last_d3d11 = candidates
@@ -1308,48 +1360,54 @@ mod tests {
     /// qui puisse se tromper en silence (image verte / couleurs inversées plutôt qu'une
     /// erreur). Les deux frames ont des `linesize` différents — c'est exactement ce qu'un
     /// `copy` d'un bloc raterait.
+    ///
+    /// 5x3 autant que 4x4 : en dimension impaire le plan chroma compte une colonne et une ligne
+    /// de plus que la moitié, et une division tronquée les laisserait non initialisées.
     #[test]
     fn nv12_vers_yuv420p_desentrelace_le_chroma() {
-        unsafe {
-            let (w, h) = (4usize, 4usize);
-            let src = alloc_sw_frame(AVPixelFormat::AV_PIX_FMT_NV12, w as i32, h as i32).unwrap();
-            let dst =
-                alloc_sw_frame(AVPixelFormat::AV_PIX_FMT_YUV420P, w as i32, h as i32).unwrap();
+        for (w, h) in [(4usize, 4usize), (5, 3)] {
+            let (cw, ch) = (w.div_ceil(2), h.div_ceil(2));
+            unsafe {
+                let src =
+                    alloc_sw_frame(AVPixelFormat::AV_PIX_FMT_NV12, w as i32, h as i32).unwrap();
+                let dst =
+                    alloc_sw_frame(AVPixelFormat::AV_PIX_FMT_YUV420P, w as i32, h as i32).unwrap();
 
-            // luma = 10, 11, 12... ligne par ligne ; chroma = U pair, V impair, distinguables.
-            for y in 0..h {
-                let row = (*src).data[0].add(y * (*src).linesize[0] as usize);
-                for x in 0..w {
-                    *row.add(x) = (10 + y * w + x) as u8;
+                // luma = 10, 11, 12... ligne par ligne ; chroma = U pair, V impair, distinguables.
+                for y in 0..h {
+                    let row = (*src).data[0].add(y * (*src).linesize[0] as usize);
+                    for x in 0..w {
+                        *row.add(x) = (10 + y * w + x) as u8;
+                    }
                 }
-            }
-            for y in 0..h / 2 {
-                let row = (*src).data[1].add(y * (*src).linesize[1] as usize);
-                for x in 0..w / 2 {
-                    *row.add(2 * x) = (100 + y * (w / 2) + x) as u8; // U
-                    *row.add(2 * x + 1) = (200 + y * (w / 2) + x) as u8; // V
+                for y in 0..ch {
+                    let row = (*src).data[1].add(y * (*src).linesize[1] as usize);
+                    for x in 0..cw {
+                        *row.add(2 * x) = (100 + y * cw + x) as u8; // U
+                        *row.add(2 * x + 1) = (200 + y * cw + x) as u8; // V
+                    }
                 }
-            }
 
-            nv12_to_yuv420p(src, dst);
+                nv12_to_yuv420p(src, dst);
 
-            for y in 0..h {
-                let row = (*dst).data[0].add(y * (*dst).linesize[0] as usize);
-                for x in 0..w {
-                    assert_eq!(*row.add(x), (10 + y * w + x) as u8, "luma ({x},{y})");
+                for y in 0..h {
+                    let row = (*dst).data[0].add(y * (*dst).linesize[0] as usize);
+                    for x in 0..w {
+                        assert_eq!(*row.add(x), (10 + y * w + x) as u8, "luma ({x},{y}) en {w}x{h}");
+                    }
                 }
-            }
-            for y in 0..h / 2 {
-                let u = (*dst).data[1].add(y * (*dst).linesize[1] as usize);
-                let v = (*dst).data[2].add(y * (*dst).linesize[2] as usize);
-                for x in 0..w / 2 {
-                    assert_eq!(*u.add(x), (100 + y * (w / 2) + x) as u8, "U ({x},{y})");
-                    assert_eq!(*v.add(x), (200 + y * (w / 2) + x) as u8, "V ({x},{y})");
+                for y in 0..ch {
+                    let u = (*dst).data[1].add(y * (*dst).linesize[1] as usize);
+                    let v = (*dst).data[2].add(y * (*dst).linesize[2] as usize);
+                    for x in 0..cw {
+                        assert_eq!(*u.add(x), (100 + y * cw + x) as u8, "U ({x},{y}) en {w}x{h}");
+                        assert_eq!(*v.add(x), (200 + y * cw + x) as u8, "V ({x},{y}) en {w}x{h}");
+                    }
                 }
-            }
 
-            av_frame_free(&mut (src as *mut _));
-            av_frame_free(&mut (dst as *mut _));
+                av_frame_free(&mut (src as *mut _));
+                av_frame_free(&mut (dst as *mut _));
+            }
         }
     }
 }
