@@ -2663,9 +2663,21 @@ export function registerIpcHandlers(
 		return readCursorTelemetryFile(targetVideoPath);
 	});
 
+	// Protocol allowlist. `shell.openExternal` hands the string to the OS handler,
+	// so `file:`, `ms-msdt:`, a UNC path, or any registered custom scheme is a
+	// launch primitive — the renderer runs with webSecurity:false and now renders
+	// model-generated content, so "the renderer is trusted" is not a strong enough
+	// premise to skip this. http/https/mailto is everything the app actually opens.
+	const EXTERNAL_URL_PROTOCOLS = new Set(["http:", "https:", "mailto:"]);
+
 	ipcMain.handle("open-external-url", async (_, url: string) => {
 		try {
-			await shell.openExternal(url);
+			const parsed = new URL(url);
+			if (!EXTERNAL_URL_PROTOCOLS.has(parsed.protocol)) {
+				console.warn(`Refused to open external URL with protocol ${parsed.protocol}`);
+				return { success: false, error: `Unsupported URL protocol: ${parsed.protocol}` };
+			}
+			await shell.openExternal(parsed.toString());
 			return { success: true };
 		} catch (error) {
 			console.error("Failed to open URL:", error);
@@ -3343,6 +3355,16 @@ export function registerIpcHandlers(
 		},
 	);
 
+	// One instance each, not one per call. DocumentService serialises saves of a
+	// project through a per-INSTANCE queue (see its writeProject comment — this
+	// race destroyed two real project files), so a second instance means a second
+	// queue racing for the same path: temp+rename still keeps the file valid, but
+	// a save can land under a concurrent one and be silently lost. LlmConfigStore
+	// is hoisted for a duller reason: its constructor does two sync readFileSync
+	// plus a safeStorage decrypt, and it was running on every chat message.
+	const aiEditionDocuments = new DocumentService(path.join(app.getPath("userData"), "projects"));
+	const aiEditionLlmConfig = new LlmConfigStore(app.getPath("userData"));
+
 	registerNativeBridgeHandlers({
 		getPlatform: () => process.platform,
 		getCurrentProjectPath: () => currentProjectPath,
@@ -3376,15 +3398,14 @@ export function registerIpcHandlers(
 				return null;
 			}
 		},
-		getAiEditionDocuments: () =>
-			new DocumentService(path.join(app.getPath("userData"), "projects")),
-		getAiEditionLlmConfig: () => new LlmConfigStore(app.getPath("userData")),
+		getAiEditionDocuments: () => aiEditionDocuments,
+		getAiEditionLlmConfig: () => aiEditionLlmConfig,
 		runAiEditionChat: (projectId, sessionId, message, document, sink) =>
 			runChat(
 				projectId,
 				sessionId,
 				message,
-				new LlmConfigStore(app.getPath("userData")),
+				aiEditionLlmConfig,
 				document,
 				sink,
 			),
@@ -3395,18 +3416,18 @@ export function registerIpcHandlers(
 		rewindToMessage: (projectId, sessionId, messageId) =>
 			rewindToMessage(projectId, sessionId, messageId),
 		compactNow: (projectId, sessionId) =>
-			compactSessionNow(projectId, sessionId, new LlmConfigStore(app.getPath("userData"))),
+			compactSessionNow(projectId, sessionId, aiEditionLlmConfig),
 		runTimelineOperation: (projectId, sessionId, op, conversationMessage) =>
 			runTimelineOperation(
 				projectId,
 				sessionId,
 				op,
 				conversationMessage,
-				new DocumentService(path.join(app.getPath("userData"), "projects")),
+				aiEditionDocuments,
 			),
 		getContextUsage: getSessionContextUsage,
 		runAiEditionChatDefault: (projectId, message, sink) =>
-			runChatDefault(projectId, message, new LlmConfigStore(app.getPath("userData")), sink),
+			runChatDefault(projectId, message, aiEditionLlmConfig, sink),
 		getAiEditionChatHistoryDefault: (projectId) => getDefaultChatHistory(projectId),
 		clearAiEditionChatHistoryDefault: (projectId) => clearDefaultChatHistory(projectId),
 		listAiEditionChatSessions: (projectId) => listSessions(projectId),
