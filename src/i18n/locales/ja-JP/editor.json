@@ -19,7 +19,8 @@
 		"failedToSaveExport": "エクスポートの保存に失敗しました",
 		"failedToSaveExportedVideo": "エクスポートした動画の保存に失敗しました",
 		"failedToRevealInFolder": "フォルダの表示に失敗しました: {{error}}",
-		"exportBackgroundLoadFailed": "エクスポートに失敗しました: 背景画像を読み込めませんでした ({{url}})"
+		"exportBackgroundLoadFailed": "エクスポートに失敗しました: 背景画像を読み込めませんでした ({{url}})",
+		"previewCompositorUnavailable": "このマシンではプレビューを表示できません"
 	},
 	"export": {
 		"canceled": "エクスポートがキャンセルされました",

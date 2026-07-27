@@ -250,16 +250,45 @@ licence. D3D11VA + AMF survive the LGPL-shared build (verified:
 
 ## Known gaps
 
-- **No software/CPU fallback.** `d3d::Gpu::create`
+- **No software/CPU fallback, and WARP cannot be one.** `d3d::Gpu::create`
   ([`crates/compositor/src/d3d.rs`](../../crates/compositor/src/d3d.rs)) requests
-  `D3D_DRIVER_TYPE_HARDWARE` (no `WARP` / no `REFERENCE`) and pins
-  `D3D_FEATURE_LEVEL_11_1` — any other feature level fails with `bail!`,
-  and `VIDEO_SUPPORT` is mandatory for `D3D11VA`. A machine without a
-  GPU that exposes FL 11_1 with video support will hard-fail at startup;
-  there is no path that decodes on CPU or falls back to a reference
-  rasteriser. The compositor is therefore unusable on virtualised
-  environments that do not pass through a compatible adapter, and there
-  is no second renderer behind it.
+  `D3D_DRIVER_TYPE_HARDWARE` and pins `D3D_FEATURE_LEVEL_11_1`, with
+  `VIDEO_SUPPORT` mandatory for `D3D11VA`. A machine without a GPU that
+  exposes FL 11_1 with video support hard-fails at startup; there is no
+  path that decodes on CPU, so the compositor is unusable on virtualised
+  environments that do not pass through a compatible adapter.
+
+  Retrying in `D3D_DRIVER_TYPE_WARP` — the obvious repair, and what PR #162
+  originally scoped — does not work, and the reason is capability, not
+  speed. Measured (`crates/compositor/tests/warp_device_cannot_decode.rs`,
+  which fails if this ever stops being true): WARP **rejects the
+  `VIDEO_SUPPORT` flag outright** (`DXGI_ERROR_UNSUPPORTED`, `0x887A0004`),
+  and dropping the flag yields a FL 11_1 device that exposes no
+  `ID3D11VideoDevice` at all (`E_NOINTERFACE`, zero decoder profiles).
+  Since `pipeline.rs` hands this very device to ffmpeg as the
+  `AVD3D11VADeviceContext`, preview *and* export decode every frame on it —
+  a WARP device would produce none. Shipping the retry would only convert a
+  clear startup failure into an obscure ffmpeg one. So the answer to "is
+  WARP acceptable for export, or preview only?" is neither.
+
+  What the compositor does instead is **fail legibly**: `Gpu::create`
+  re-probes on the failure path (same call, minus `VIDEO_SUPPORT`) to tell
+  "this adapter has no video decoder" — the Remote Desktop / VM case — apart
+  from "no FL 11_1 adapter at all", and says which, plus what to do about it.
+  That message reaches the user rather than a log: the render thread stores
+  its fatal error in `live::Shared`, the addon's `read_frame` returns it as
+  an `Err` on the next pull (~33 ms), and `NativeCompositorOverlay` renders
+  it in place of the canvas. Before this, `create_view` had already returned
+  `Ok` by the time the thread died, so the failure existed only as an
+  `eprintln!` and the user just saw a black preview.
+
+  The WGC capture helper
+  ([`electron/native/wgc-capture/src/wgc_session.cpp`](../../electron/native/wgc-capture/src/wgc_session.cpp))
+  is deliberately left hardware-only too. It asks for no `VIDEO_SUPPORT`, so
+  a WARP device *would* be creatable there — but recording on a host whose
+  compositor cannot start would only produce footage the user can neither
+  edit nor export. Capture degrading past the editor is worse than capture
+  failing with it.
 - **Software VP9 encoding is not supported.** A software VP9 encoder was
   implemented, measured too slow without a hardware VP9 path on the
   target GPU, and removed. The export pipeline now offers H.264 (AMF) and
