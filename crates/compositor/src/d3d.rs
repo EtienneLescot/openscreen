@@ -4,6 +4,7 @@
 //! ffmpeg et notre boucle de rendu toucheront le device depuis des threads distincts.
 
 use anyhow::{bail, Result};
+use std::sync::OnceLock;
 use windows::core::Interface;
 use windows::Win32::Foundation::HMODULE;
 use windows::Win32::Graphics::Direct3D::{
@@ -98,9 +99,11 @@ fn try_create(
 
 /// Message d'échec ACTIONNABLE : re-sonde pour distinguer les deux causes réelles.
 ///
-/// Ce message reste utile MÊME avec `Backend::Cpu` disponible : rien ne bascule tout
-/// seul (voir `create`), donc quelqu'un doit savoir pourquoi le matériel a refusé et si
-/// le repli logiciel est la bonne réponse à son cas.
+/// Ce message reste utile MÊME maintenant que `create_auto` replie sur le backend CPU :
+/// il part dans les logs à chaque repli, et c'est lui qui dit si l'utilisateur subit un
+/// pilote à mettre à jour (réparable en cinq minutes) ou une VM sans GPU (structurel).
+/// Sans lui, un utilisateur au rendu logiciel ne saurait jamais qu'il lui manque un
+/// pilote. Et si WARP échoue aussi, c'est ce message-ci que `create_auto` remonte.
 ///
 /// PR #162 proposait de retomber sur `D3D_DRIVER_TYPE_WARP` en gardant tout le reste.
 /// Mesuré (`tests/warp_device_cannot_decode.rs`) : WARP + `VIDEO_SUPPORT` ne se crée même
@@ -137,11 +140,49 @@ impl Gpu {
     /// Crée le device conforme au §2. `debug=false` impératif dans tout run mesuré
     /// (§10 : la couche debug valide et sérialise chaque appel — facteur, pas %).
     ///
-    /// Reste le device MATÉRIEL : le backend CPU ne s'obtient qu'en le demandant
-    /// (`create_backend`). Rien ne bascule tout seul — un repli silencieux vers un
-    /// rendu logiciel serait précisément le « l'app rame aujourd'hui » qu'on veut éviter.
+    /// MATÉRIEL STRICT, sans repli : échoue plutôt que de rendre un device WARP. C'est ce
+    /// que veulent les tests et les goldens (mesurer ou comparer le chemin GPU n'a aucun
+    /// sens sur un rastériseur logiciel). Le chemin de production, lui, prend `create_auto`.
     pub fn create(debug: bool) -> Result<Gpu> {
         Gpu::create_backend(Backend::Hardware, debug)
+    }
+
+    /// Le device de PRODUCTION : matériel si possible, backend CPU sinon.
+    ///
+    /// C'est ici que le repli devient automatique, et il ne l'est qu'accompagné : l'app
+    /// demande `probe()` et prévient l'utilisateur. Un basculement muet vers un rendu à
+    /// ~8 fps serait exactement le « l'app rame aujourd'hui » que cette branche corrige.
+    ///
+    /// Si les DEUX échouent, c'est le diagnostic MATÉRIEL qu'on remonte en tête : c'est
+    /// lui qui est actionnable (« pas de décodeur vidéo sur cet adaptateur »), pas
+    /// « WARP indisponible », qui ne dit rien à personne.
+    pub fn create_auto(debug: bool) -> Result<Gpu> {
+        let hw_err = match Gpu::create_backend(Backend::Hardware, debug) {
+            Ok(gpu) => return Ok(gpu),
+            Err(err) => err,
+        };
+        eprintln!("[d3d] backend matériel indisponible ({hw_err:#}) — repli sur le backend CPU");
+        Gpu::create_backend(Backend::Cpu, debug).map_err(|cpu_err| {
+            anyhow::anyhow!("{hw_err:#} (le repli logiciel a échoué aussi : {cpu_err:#})")
+        })
+    }
+
+    /// Le backend que cette machine obtiendra, sans créer de vue ni d'export.
+    ///
+    /// Mis en cache : créer un device coûte quelques dizaines de ms et la réponse ne
+    /// change pas en cours de session (un pilote qui tombe en marche est un redémarrage,
+    /// pas un rafraîchissement). `None` = ni matériel ni WARP — la vue échouera, et c'est
+    /// son message d'erreur, plus précis, qui doit parler.
+    pub fn probe() -> Option<Backend> {
+        static PROBED: OnceLock<Option<Backend>> = OnceLock::new();
+        *PROBED.get_or_init(|| {
+            for backend in [Backend::Hardware, Backend::Cpu] {
+                if Gpu::create_backend(backend, false).is_ok() {
+                    return Some(backend);
+                }
+            }
+            None
+        })
     }
 
     /// Le device du backend demandé. `Backend::Cpu` ne diagnostique pas : si WARP
