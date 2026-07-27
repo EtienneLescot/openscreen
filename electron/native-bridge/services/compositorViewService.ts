@@ -24,15 +24,30 @@ import type {
 const localRequire: NodeRequire = createRequire(import.meta.url) as unknown as NodeRequire;
 
 /**
- * The native compositor is a separate process and can only read absolute
- * filesystem paths — it can't resolve renderer-relative asset URLs like
- * `/wallpapers/wallpaper1.jpg` or fetch `http(s)://`/`data:` URLs. Bundled
- * wallpapers live under `process.env.VITE_PUBLIC` (dev: `<root>/public`,
- * packaged: the renderer dist), so rewrite an image background's root-relative
- * path to that absolute location before handing the scene to the addon. Other
- * schemes (data:, http:) are left as-is; the native side falls back to a flat
- * colour when it can't load them. Malformed JSON passes through untouched.
+ * `existsSync` that answers for the REAL filesystem, not Electron's asar-transparent view of it.
+ *
+ * Electron patches `fs` so JS can read `.../app.asar/dist/wallpapers/x.jpg` as if it were a plain
+ * file — that's the entire point of asar. But `existsSync` inherits the same patch: called on an
+ * asar-internal path it returns `true`, even though nothing outside Electron's own patched `fs`
+ * can ever open that path — the Rust addon calls the raw OS `fopen`/`CreateFile`, which has no
+ * concept of asar and gets ENOENT. A candidate-probe loop built on the patched `fs.existsSync`
+ * therefore locks onto the WRONG candidate (VITE_PUBLIC, pointing into the asar) before ever
+ * trying the right one (`resourcesPath`, real files on disk) — confirmed by running this exact
+ * check inside the packaged binary: patched `existsSync` on the asar path answered `true`.
+ *
+ * `original-fs` is Electron's escape hatch for precisely this: the same API, unpatched. It only
+ * exists inside Electron, so fall back to plain `node:fs` where it doesn't — under plain Node
+ * (tests) there is no asar patch to route around in the first place, so plain `fs` already tells
+ * the truth there.
  */
+function realExistsSync(candidate: string): boolean {
+	try {
+		return (localRequire("original-fs") as typeof fs).existsSync(candidate);
+	} catch {
+		return fs.existsSync(candidate);
+	}
+}
+
 /**
  * Bases holding the `wallpapers/` and `cursors/` trees, most specific first.
  *
@@ -64,7 +79,7 @@ function sceneAssetBaseDirs(): string[] {
 export function resolveSceneAssetPath(relativePath: string): string | null {
 	for (const base of sceneAssetBaseDirs()) {
 		const candidate = path.join(base, relativePath);
-		if (fs.existsSync(candidate)) {
+		if (realExistsSync(candidate)) {
 			return candidate;
 		}
 	}
