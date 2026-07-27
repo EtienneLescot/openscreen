@@ -164,6 +164,19 @@ function createErrorResponse(
 	} satisfies NativeBridgeResponse;
 }
 
+/**
+ * Strips absolute filesystem paths out of an error message before it crosses to
+ * the renderer. Main-process errors quote the path they failed on (`ENOENT: no
+ * such file or directory, open 'C:\Users\alice\…'`), and that string is rendered
+ * verbatim in toasts and the chat error rail. Keeps the basename, which is the
+ * part a user can act on. The full message still goes to the main-process log.
+ */
+function redactPaths(message: string): string {
+	return message
+		.replace(/[A-Za-z]:\\(?:[^\\/:*?"<>|\r\n]+\\)*([^\\/:*?"<>|\r\n]*)/g, "…\\$1")
+		.replace(/\/(?:[^/\0\s'"]+\/)+([^/\0\s'"]*)/g, "…/$1");
+}
+
 function isBridgeRequest(value: unknown): value is NativeBridgeRequest {
 	if (!value || typeof value !== "object") {
 		return false;
@@ -658,11 +671,15 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 					);
 			}
 		} catch (error) {
+			// Not retryable by default: most failures here are permanent (a missing
+			// file, a bad payload, an unavailable addon), and a blanket `true` tells
+			// the client to spin on them. The message keeps the reason but drops any
+			// absolute path — it crosses to the renderer and ends up in UI strings.
+			console.error(`native bridge ${domain}.${request.action} failed:`, error);
 			return createErrorResponse(
 				requestId,
 				"INTERNAL_ERROR",
-				error instanceof Error ? error.message : "Unknown native bridge error.",
-				true,
+				redactPaths(error instanceof Error ? error.message : "Unknown native bridge error."),
 			);
 		}
 	});
