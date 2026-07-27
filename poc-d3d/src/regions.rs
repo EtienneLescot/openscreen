@@ -520,6 +520,7 @@ fn projected_extents(corners: &[(f32, f32); 4]) -> (f32, f32) {
 }
 
 /// Un écran incliné : ses 4 coins projetés, et la réduction qu'il a fallu pour qu'ils tiennent.
+#[derive(Clone, Copy)]
 pub struct TiltedQuad {
     /// Coins TL, TR, BR, BL en px relatifs au CENTRE du rect d'origine.
     pub corners: [(f32, f32); 4],
@@ -586,6 +587,29 @@ pub fn rotated_quad_corners_px(width: f32, height: f32, rot: [f32; 3]) -> Tilted
         }
     }
     TiltedQuad { corners, scale }
+}
+
+impl TiltedQuad {
+    /// Où tombe le point `(fx, fy)` du plan (0..1 depuis son coin haut-gauche), en px relatifs
+    /// au CENTRE du rect d'origine — même repère que `corners`.
+    ///
+    /// C'est la correspondance DIRECTE du warp que le pixel shader du mode 8 parcourt à
+    /// l'envers : lui part d'un pixel écran et cherche son (s, t) dans le quad, celle-ci part
+    /// d'un (s, t) et donne le pixel. Bilinéaire des deux côtés — donc tout ce qu'on pose sur
+    /// le plan incliné par cette fonction retombe exactement sur le contenu que le shader y a
+    /// dessiné. Sans elle, un recouvrement comme le curseur reste sur le rect droit d'origine
+    /// pendant que l'image, elle, est penchée.
+    pub fn point_px(&self, fx: f32, fy: f32) -> (f32, f32) {
+        let [tl, tr, br, bl] = self.corners;
+        let top = (tl.0 + (tr.0 - tl.0) * fx, tl.1 + (tr.1 - tl.1) * fx);
+        let bottom = (bl.0 + (br.0 - bl.0) * fx, bl.1 + (br.1 - bl.1) * fx);
+        (top.0 + (bottom.0 - top.0) * fy, top.1 + (bottom.1 - top.1) * fy)
+    }
+
+    /// Demi-largeur / demi-hauteur de la bounding box des coins projetés, en px.
+    pub fn half_extents_px(&self) -> (f32, f32) {
+        projected_extents(&self.corners)
+    }
 }
 
 #[cfg(test)]
@@ -772,6 +796,47 @@ mod arrow_tests {
 #[cfg(test)]
 mod tilt_tests {
     use super::*;
+
+    /// `point_px` doit rendre les coins du plan sur les coins projetés, sans quoi tout ce qu'on
+    /// pose dessus (le curseur) se décale par rapport à l'image que le shader y a dessinée.
+    #[test]
+    fn the_plane_corners_map_to_the_projected_corners() {
+        let quad = rotated_quad_corners_px(1920.0, 1080.0, rotation3d_for(&Some("iso".into())));
+        for (i, (fx, fy)) in [(0.0, 0.0), (1.0, 0.0), (1.0, 1.0), (0.0, 1.0)].into_iter().enumerate()
+        {
+            let (x, y) = quad.point_px(fx, fy);
+            let (ex, ey) = quad.corners[i];
+            assert!((x - ex).abs() < 1e-3 && (y - ey).abs() < 1e-3, "coin {i}: {x},{y} != {ex},{ey}");
+        }
+    }
+
+    /// Et le milieu du plan tombe au barycentre des quatre coins — la propriété qui distingue le
+    /// bilinéaire (ce que fait le shader) d'un simple placement dans la bounding box.
+    #[test]
+    fn the_plane_centre_maps_to_the_centroid() {
+        let quad = rotated_quad_corners_px(1920.0, 1080.0, rotation3d_for(&Some("left".into())));
+        let (x, y) = quad.point_px(0.5, 0.5);
+        let cx = quad.corners.iter().map(|c| c.0).sum::<f32>() / 4.0;
+        let cy = quad.corners.iter().map(|c| c.1).sum::<f32>() / 4.0;
+        assert!((x - cx).abs() < 1e-3 && (y - cy).abs() < 1e-3);
+    }
+
+    /// La raison d'être du correctif : sur un écran incliné, la position tiltée n'est PAS la
+    /// position dans le rect droit. Si ces deux-là coïncidaient, le bug d'origine n'existerait
+    /// pas — et ce test tomberait le jour où quelqu'un remettrait le rect droit.
+    #[test]
+    fn a_tilted_plane_moves_the_cursor_off_the_upright_rect() {
+        let (w, h) = (1920.0f32, 1080.0f32);
+        let quad = rotated_quad_corners_px(w, h, rotation3d_for(&Some("iso".into())));
+        let mut worst: f32 = 0.0;
+        for (fx, fy) in [(0.0, 0.0), (1.0, 0.0), (0.0, 1.0), (1.0, 1.0), (0.5, 0.0)] {
+            let (x, y) = quad.point_px(fx, fy);
+            // Le même point posé sur le rect droit, dans le même repère centré.
+            let (ux, uy) = ((fx - 0.5) * w, (fy - 0.5) * h);
+            worst = worst.max((x - ux).hypot(y - uy));
+        }
+        assert!(worst > 20.0, "ecart max au rect droit trop faible: {worst}px");
+    }
 
     /// Le contrat du containment : après projection, aucun coin ne sort du rect d'origine.
     /// C'est ce qui garantit que le quad incliné n'est jamais coupé par le bord du cadre.

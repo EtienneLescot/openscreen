@@ -62,7 +62,6 @@ export function useNativePlaybackSync(
 	const lastSyncedWallTimeRef = useRef<number>(0);
 	const lastActiveClipIdRef = useRef<string | null>(null);
 
-	// biome-ignore lint/correctness/useExhaustiveDependencies: ref values
 	useEffect(() => {
 		if (!active || sourceTimeSec === null || !activeClipId) {
 			return;

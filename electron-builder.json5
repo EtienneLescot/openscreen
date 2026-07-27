@@ -40,6 +40,17 @@
   // userData cache on first use by electron/stt/modelManager.ts, so no model
   // files are bundled at build time.
   "extraResources": [
+    // Attribution + LGPL source offer for the bundled ffmpeg DLLs and
+    // whisper.cpp binaries. Redistributing LGPL libraries obliges us to ship
+    // the notice with them, so it goes in resources/, not just in the repo.
+    {
+      "from": "THIRD-PARTY-NOTICES.md",
+      "to": "THIRD-PARTY-NOTICES.md"
+    },
+    {
+      "from": "LICENSE",
+      "to": "LICENSE"
+    },
     {
       "from": "public/wallpapers",
       "to": "wallpapers"
@@ -106,7 +117,14 @@
       {
         "from": "electron/native/bin",
         "to": "electron/native/bin",
-        "filter": ["win32-*/*"]
+        // The static ffmpeg.exe is excluded on purpose. scripts/fetch-ffmpeg.mjs
+        // vendors two artifacts into this directory: the shared av*.dll set,
+        // which the D3D11 compositor addon dlopens at require() time and
+        // therefore MUST ship, and a standalone static ffmpeg.exe that nothing
+        // in the app spawns — it exists for scripts/bench-export.mjs. Shipping
+        // it added a large binary to every Windows installer, plus an LGPL
+        // redistribution obligation, for a file no shipped code opens.
+        "filter": ["win32-*/*", "!win32-*/ffmpeg.exe"]
       }
     ],
     // Native D3D11 compositor addon (Windows-only). Built by

@@ -74,9 +74,17 @@ what `shaders.hlsl` actually implements:
    [`compositor.rs:1950`](../../poc-d3d/src/compositor.rs)). Motion blur
    uses the previous frame's UV delta as a per-pixel velocity vector and samples
    along it (the "blur by velocity" optimisation — early-outs on still frames).
-4. **Cursor.** Math dot+ring by default; sprite (loaded from
-   `cursor.cursorSpritePath`) when the app hands the native side a theme
-   path. Motion blur is its own accumulation buffer (additive blend into an
+4. **Cursor.** A sprite picked from `cursor.cursorSprites` by the OS cursor state
+   recorded in the `.cursor.json` track (`arrow`, `text`, `pointer`, the resize
+   handles…), anchored so the sprite's hotspot — a 0..1 fraction of its own image,
+   so it survives the size slider — lands on the recorded position. Falls back to
+   the arrow for an unknown state, then to a math dot+ring if the app supplied no
+   sprites at all. When the screen is tilted the cursor lives *on* the plane: its
+   position is kept in plane coordinates and its four sprite corners go through the
+   same projection as the video, drawn by `mode = 13` — the mode-8 warp sampling the
+   cursor texture instead of the video. It replaces a pointer that was part of the
+   captured image, so a flat sprite over a tilted scene reads as a sticker.
+   Motion blur is its own accumulation buffer (additive blend into an
    isolated RT, then "over"-composited onto the scene), independent of the
    scene's `effects.motionBlur`
    ([`compositor.rs:2038`](../../poc-d3d/src/compositor.rs) /

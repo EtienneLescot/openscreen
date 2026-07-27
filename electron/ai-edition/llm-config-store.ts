@@ -22,38 +22,20 @@ export interface LlmConfig {
 	allowAgentEdits?: boolean;
 }
 
-export type LlmCredentialKind = "api-key" | "codex" | "github-device" | "github-pat";
+// Only `api-key` remains: the OAuth kinds ("codex", "github-device",
+// "github-pat") belonged to the ChatGPT and Copilot providers removed in 1.8.0
+// — see the note in provider-registry.ts. Blobs written by an earlier build may
+// still carry them; getCredential() reads any entry with a usable `apiKey`
+// rather than matching on `kind`, so old rows neither crash nor need a
+// migration. They simply resolve to nothing, since no provider claims them.
+export type LlmCredentialKind = "api-key";
 
 export interface ApiKeyCredential {
 	kind: "api-key";
 	apiKey: string;
 }
 
-export interface CodexCredential {
-	kind: "codex";
-	apiKey: string; // access token
-	refreshToken?: string;
-	accountId?: string;
-	expiresAt?: number;
-}
-
-export interface GithubDeviceCredential {
-	kind: "github-device";
-	apiKey: string; // github pat/secondary token
-	accountLogin?: string;
-	expiresAt?: number;
-}
-
-export interface GithubPatCredential {
-	kind: "github-pat";
-	apiKey: string; // user-pasted GitHub PAT
-}
-
-export type LlmCredential =
-	| ApiKeyCredential
-	| CodexCredential
-	| GithubDeviceCredential
-	| GithubPatCredential;
+export type LlmCredential = ApiKeyCredential;
 
 export type LlmCredentials = { [providerId: string]: LlmCredential | string };
 
@@ -121,13 +103,11 @@ export class LlmConfigStore {
 		if (typeof stored === "string") {
 			return { value: stored, entry: { kind: "api-key", apiKey: stored } };
 		}
-		if (
-			stored.kind === "api-key" ||
-			stored.kind === "codex" ||
-			stored.kind === "github-device" ||
-			stored.kind === "github-pat"
-		) {
-			return { value: stored.apiKey, entry: stored };
+		// Match on a usable secret, not on `kind`: a blob written before the
+		// OAuth providers were removed still carries kind: "codex" etc., and
+		// narrowing on the current union would make those rows unreadable.
+		if (typeof stored.apiKey === "string" && stored.apiKey) {
+			return { value: stored.apiKey, entry: { kind: "api-key", apiKey: stored.apiKey } };
 		}
 		return null;
 	}

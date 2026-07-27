@@ -10,7 +10,10 @@ export interface ProviderDefinition {
 	id: string;
 	label: string;
 	defaultModel: string;
-	authKind: "api-key" | "oauth-device" | "pat";
+	/** Only API-key providers ship today — see the removal note in
+	 * PROVIDER_DEFINITIONS. Widen this again when the Copilot SDK / Codex
+	 * app-server providers land. */
+	authKind: "api-key";
 	supportsReasoningEffort: boolean;
 	/** True when this provider always requires the user to enter a base URL
 	 * (e.g. openai-compatible). False when the default is implicit. */
@@ -86,26 +89,14 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
 		envKeys: ["OPENROUTER_LLM_API_KEY", "OPENROUTER_API_KEY"],
 		setupHint: "Use OPENROUTER_API_KEY or paste an OpenRouter API key.",
 	},
-	{
-		id: "openai-oauth",
-		label: "ChatGPT (OAuth)",
-		defaultModel: "gpt-5.4",
-		authKind: "oauth-device",
-		supportsReasoningEffort: true,
-		envKeys: [],
-		baseUrl: "https://chatgpt.com/backend-api",
-		setupHint: "Connect a ChatGPT account with the device login flow.",
-	},
-	{
-		id: "copilot-proxy",
-		label: "GitHub Copilot",
-		defaultModel: "gpt-4.1",
-		authKind: "pat",
-		supportsReasoningEffort: true,
-		envKeys: ["COPILOT_GITHUB_TOKEN", "GH_TOKEN", "GITHUB_TOKEN"],
-		baseUrl: "https://api.individual.githubcopilot.com",
-		setupHint: "Use a GitHub Copilot token or connect with the device login flow.",
-	},
+	// REMOVED for 1.8.0: "openai-oauth" (ChatGPT) and "copilot-proxy" (GitHub
+	// Copilot). Both reached a user's subscription by presenting GitHub's and
+	// OpenAI's own client IDs and editor User-Agents against endpoints reserved
+	// for first-party clients (api.github.com/copilot_internal, chatgpt.com/
+	// backend-api). Both vendors now offer a sanctioned surface — GitHub's
+	// Copilot SDK (register our own OAuth App) and `codex app-server` (drives
+	// the user's own `codex login`, no client ID shipped at all) — so these come
+	// back on those, not on borrowed credentials. Tracked in the follow-up PR.
 	{
 		id: "minimax",
 		label: "MiniMax API",

@@ -2,44 +2,26 @@
 //
 // UI: 3 screens stacked in the modal, navigated by URL-less state
 // (mirroring axcut apps/web/src/App.tsx _p modal):
-//  1. **list**            — 2-col grid of provider cards (8 of them),
-//                          each shows label, default model, an auth-kind
-//                          pill (CONNECTED / OAUTH / TOKEN / API KEY).
-//  2. **connect-form**    — single form per provider: model + optional
-//                          baseUrl + optional reasoning effort + optional
-//                          api-key field + Connect/Save/Disconnect buttons.
-//  3. **device-challenge** — opens when an oauth-device / PAT provider
-//                          finishes its begin step: the user-code block,
-//                          "Open login page" link, and a copy-code button.
-//                          On completion the snapshot refreshes.
+//  1. **list**         — grid of provider cards, each showing label, default
+//                       model, and a CONNECTED / API KEY pill.
+//  2. **connect-form** — single form per provider: model + optional baseUrl +
+//                       optional reasoning effort + api-key field +
+//                       Save/Disconnect buttons.
 //
-// Credentials are stored in the same safeStorage blob (LLMConfigStore),
-// including OAuth session tokens. The renderer never sees raw keys —
-// only `kind` and the user code / verification URL.
+// Every provider is API-key based since 1.8.0 dropped the ChatGPT and Copilot
+// OAuth providers (see provider-registry.ts); the device-challenge screen went
+// with them. Credentials live in the safeStorage blob (LlmConfigStore) — the
+// renderer never sees raw keys, only `kind`.
 //
 // ponytail: existing consumers (ProviderSettings used as <ProviderSettings open onClose />)
 // must keep working. Internal state is local-only.
 
-import {
-	AlertCircle,
-	Check,
-	Copy,
-	ExternalLink,
-	Loader2,
-	LogIn,
-	Plug,
-	Unplug,
-	X,
-} from "lucide-react";
+import { AlertCircle, Check, Loader2, Unplug, X } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
 import { nativeBridgeClient } from "@/native/client";
-import type {
-	AiEditionDeviceChallenge,
-	AiEditionLlmConfig,
-	AiEditionLlmSnapshot,
-} from "@/native/contracts";
+import type { AiEditionLlmConfig, AiEditionLlmSnapshot } from "@/native/contracts";
 import {
 	getReasoningEffortLabel,
 	getReasoningEffortOptions,
@@ -69,7 +51,6 @@ export function ProviderSettings({
 	const [config, setConfig] = useState<AiEditionLlmConfig | null>(null);
 	const [apiKey, setApiKey] = useState("");
 	const [busy, setBusy] = useState(false);
-	const [challenge, setChallenge] = useState<AiEditionDeviceChallenge | null>(null);
 	const [error, setError] = useState<string | null>(null);
 
 	const refreshSnapshot = useCallback(async (): Promise<AiEditionLlmSnapshot> => {
@@ -96,7 +77,6 @@ export function ProviderSettings({
 			setMode("list");
 			setActive(null);
 			setApiKey("");
-			setChallenge(null);
 			setError(null);
 		}
 	}, [open]);
@@ -106,7 +86,6 @@ export function ProviderSettings({
 		setMode("list");
 		setActive(null);
 		setApiKey("");
-		setChallenge(null);
 		setError(null);
 	}, [busy]);
 
@@ -125,7 +104,6 @@ export function ProviderSettings({
 	const openForm = (def: ProviderDefinition) => {
 		setActive(def);
 		setApiKey("");
-		setChallenge(null);
 		setError(null);
 		setConfig((prev) => {
 			const existing = prev?.provider === def.id ? prev : null;
@@ -146,7 +124,6 @@ export function ProviderSettings({
 		setMode("list");
 		setActive(null);
 		setApiKey("");
-		setChallenge(null);
 		setError(null);
 	};
 
@@ -163,79 +140,6 @@ export function ProviderSettings({
 			const snap = await refreshSnapshot();
 			onActiveProviderChanged?.(snap?.config?.provider ?? null);
 			toast.success(te("providerSettings.saved", { provider: active.label }));
-			setMode("list");
-			setActive(null);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setBusy(false);
-		}
-	};
-
-	const startDeviceFlow = async () => {
-		if (!active) return;
-		setBusy(true);
-		setError(null);
-		try {
-			const challengeResult = await nativeBridgeClient.aiEdition.llmBeginDeviceAuth(
-				active.id as "openai-oauth" | "copilot-proxy",
-				config?.model,
-			);
-			setChallenge(challengeResult);
-			if (active.id === "copilot-proxy") {
-				// GitHub device flow accepts an optional PAT. If the user has pasted one,
-				// pass it through as if they were connecting with the classic token path.
-				if (apiKey.trim() && active.id === "copilot-proxy") {
-					// Skipped for now — Copilot device flow uses its own token.
-				}
-			}
-			// Auto-complete poll: kick off completion in the background, the UI shows
-			// "Completing sign-in…" and the snapshot refresh when the call returns.
-			void completeDeviceFlowInBackground(challengeResult);
-		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setBusy(false);
-		}
-	};
-
-	const completeDeviceFlowInBackground = async (challengeParam: AiEditionDeviceChallenge) => {
-		if (!active) return;
-		setBusy(true);
-		try {
-			const result = await nativeBridgeClient.aiEdition.llmCompleteDeviceAuth(
-				active.id as "openai-oauth" | "copilot-proxy",
-				challengeParam,
-				config?.model,
-			);
-			if (result.success) {
-				const snap = await refreshSnapshot();
-				onActiveProviderChanged?.(snap?.config?.provider ?? null);
-				toast.success(te("providerSettings.connected", { provider: active.label }));
-				setMode("list");
-				setActive(null);
-				setChallenge(null);
-			} else {
-				setError(result.error ?? te("providerSettings.deviceFlowFailed"));
-			}
-		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-		} finally {
-			setBusy(false);
-		}
-	};
-
-	const startPatConnect = async () => {
-		if (!active || !apiKey.trim() || !config) return;
-		setBusy(true);
-		setError(null);
-		try {
-			await nativeBridgeClient.aiEdition.llmSetApiKey(active.id, apiKey.trim());
-			await nativeBridgeClient.aiEdition.llmSetConfig(config);
-			const snap = await refreshSnapshot();
-			onActiveProviderChanged?.(snap?.config?.provider ?? null);
-			toast.success(te("providerSettings.connected", { provider: active.label }));
-			setApiKey("");
 			setMode("list");
 			setActive(null);
 		} catch (err) {
@@ -288,15 +192,10 @@ export function ProviderSettings({
 					config={config}
 					setConfig={setConfig}
 					busy={busy}
-					challenge={challenge}
 					error={error}
 					onBack={goBackToList}
-					onSave={active.authKind === "api-key" ? saveApiKey : startDeviceFlow}
-					onPatConnect={active.authKind === "pat" ? startPatConnect : undefined}
+					onSave={saveApiKey}
 					onDisconnect={disconnect}
-					onOpenLoginPage={(uri) =>
-						typeof window !== "undefined" && window.open(uri, "_blank", "noopener,noreferrer")
-					}
 					listProviderModels={nativeBridgeClient.aiEdition.llmListProviderModels}
 				/>
 			) : null}
@@ -333,16 +232,6 @@ function ProviderList({
 									<Check size={10} />
 									{te("providerSettings.pillConnected")}
 								</span>
-							) : authKindPillKind(def.authKind) === "auth" ? (
-								<span className={`${styles.statusPill} ${styles.auth}`}>
-									<LogIn size={10} />
-									{te("providerSettings.pillOAuth")}
-								</span>
-							) : def.authKind === "pat" ? (
-								<span className={`${styles.statusPill} ${styles.pat}`}>
-									<Plug size={10} />
-									{te("providerSettings.pillToken")}
-								</span>
 							) : (
 								<span className={`${styles.statusPill} ${styles.idle}`}>
 									<KeyIcon />
@@ -356,17 +245,6 @@ function ProviderList({
 			})}
 		</div>
 	);
-}
-
-function authKindPillKind(kind: ProviderDefinition["authKind"]): "auth" | "pat" | "key" {
-	switch (kind) {
-		case "oauth-device":
-			return "auth";
-		case "pat":
-			return "pat";
-		case "api-key":
-			return "key";
-	}
 }
 
 function KeyIcon() {
@@ -395,13 +273,10 @@ function ProviderForm({
 	config,
 	setConfig,
 	busy,
-	challenge,
 	error,
 	onBack,
 	onSave,
-	onPatConnect,
 	onDisconnect,
-	onOpenLoginPage,
 	listProviderModels,
 }: {
 	def: ProviderDefinition;
@@ -412,31 +287,22 @@ function ProviderForm({
 	config: AiEditionLlmConfig | null;
 	setConfig: (c: AiEditionLlmConfig | null) => void;
 	busy: boolean;
-	challenge: AiEditionDeviceChallenge | null;
 	error: string | null;
 	onBack: () => void;
 	onSave: () => void;
-	onPatConnect?: () => void;
 	onDisconnect: () => void;
-	onOpenLoginPage: (uri: string) => void;
 	listProviderModels: (providerId: string) => Promise<{ models: string[]; error?: string }>;
 }) {
 	const te = useScopedT("editor");
-	const showApiKeyField = def.authKind === "api-key" || (def.authKind === "pat" && !isConnected);
 	const showBaseUrl = def.id === "openai-compatible" || Boolean(def.baseUrl);
-	const isCodexOrCopilot = def.authKind === "oauth-device";
-	// Every provider now exposes a live model list once connected (matching
-	// axcut's `screen === 'models' && activeProvider?.connected` gate) — API-key
-	// providers hit their own /models endpoint (or, for MiniMax, a probe call)
-	// same as OAuth/PAT providers do.
-	const supportsDynamicModels = true;
-
+	// Every provider exposes a live model list once connected: each hits its own
+	// /models endpoint, or a probe call for MiniMax.
 	const [modelOptions, setModelOptions] = useState<string[]>([]);
 	const [modelsLoading, setModelsLoading] = useState(false);
 	const [modelsError, setModelsError] = useState<string | null>(null);
 
 	useEffect(() => {
-		if (!supportsDynamicModels || !isConnected) {
+		if (!isConnected) {
 			setModelOptions([]);
 			setModelsError(null);
 			return;
@@ -461,7 +327,7 @@ function ProviderForm({
 		return () => {
 			cancelled = true;
 		};
-	}, [def.id, isConnected, supportsDynamicModels, listProviderModels]);
+	}, [def.id, isConnected, listProviderModels]);
 
 	const modelSelectable = modelOptions.length > 0;
 
@@ -500,7 +366,7 @@ function ProviderForm({
 						? te("providerSettings.modelHintLive")
 						: modelsError
 							? te("providerSettings.modelHintError", { error: modelsError })
-							: supportsDynamicModels && isConnected
+							: isConnected
 								? te("providerSettings.modelHintLoading")
 								: undefined
 				}
@@ -603,30 +469,18 @@ function ProviderForm({
 				</Field>
 			) : null}
 
-			{showApiKeyField ? (
-				<Field
-					label={
-						def.authKind === "pat"
-							? te("providerSettings.patLabel")
-							: te("providerSettings.apiKeyLabel")
-					}
-					hint={
-						isConnected
-							? te("providerSettings.apiKeyHintStored")
-							: def.authKind === "pat"
-								? te("providerSettings.patHint")
-								: undefined
-					}
-				>
-					<input
-						type="password"
-						value={apiKey}
-						placeholder={isConnected ? "••••••" : "sk-…"}
-						onChange={(e) => setApiKey(e.target.value)}
-						disabled={busy}
-					/>
-				</Field>
-			) : null}
+			<Field
+				label={te("providerSettings.apiKeyLabel")}
+				hint={isConnected ? te("providerSettings.apiKeyHintStored") : undefined}
+			>
+				<input
+					type="password"
+					value={apiKey}
+					placeholder={isConnected ? "••••••" : "sk-…"}
+					onChange={(e) => setApiKey(e.target.value)}
+					disabled={busy}
+				/>
+			</Field>
 
 			<Field
 				label={te("providerSettings.projectEditsLabel")}
@@ -657,14 +511,6 @@ function ProviderForm({
 				</label>
 			</Field>
 
-			{challenge ? (
-				<DeviceChallengePanel
-					challenge={challenge}
-					busy={busy}
-					providerLabel={def.label}
-					onOpenLoginPage={onOpenLoginPage}
-				/>
-			) : null}
 			{error ? (
 				<p className={styles.errorRow}>
 					<AlertCircle size={14} style={{ verticalAlign: "middle", marginRight: 6 }} />
@@ -704,26 +550,6 @@ function ProviderForm({
 						{busy ? <Loader2 size={14} className="animate-spin" /> : <Check size={14} />}
 						{te("providerSettings.save")}
 					</button>
-				) : isCodexOrCopilot ? (
-					<button
-						type="button"
-						className={`${styles.btn} ${styles.btnPrimary}`}
-						onClick={onSave}
-						disabled={busy || !config}
-					>
-						{busy ? <Loader2 size={14} className="animate-spin" /> : <LogIn size={14} />}
-						{isConnected ? te("providerSettings.reconnect") : te("providerSettings.startLogin")}
-					</button>
-				) : def.authKind === "pat" && onPatConnect ? (
-					<button
-						type="button"
-						className={`${styles.btn} ${styles.btnPrimary}`}
-						onClick={onPatConnect}
-						disabled={busy || !apiKey.trim() || !config}
-					>
-						{busy ? <Loader2 size={14} className="animate-spin" /> : <Plug size={14} />}
-						{te("providerSettings.connect")}
-					</button>
 				) : (
 					<button
 						type="button"
@@ -735,82 +561,6 @@ function ProviderForm({
 						{apiKey.trim() ? te("providerSettings.saveAndUse") : te("providerSettings.save")}
 					</button>
 				)}
-			</div>
-		</div>
-	);
-}
-
-function DeviceChallengePanel({
-	challenge,
-	busy,
-	providerLabel,
-	onOpenLoginPage,
-}: {
-	challenge: AiEditionDeviceChallenge;
-	busy: boolean;
-	providerLabel: string;
-	onOpenLoginPage: (uri: string) => void;
-}) {
-	const te = useScopedT("editor");
-	const [copied, setCopied] = useState(false);
-
-	const onCopy = async () => {
-		try {
-			if (typeof navigator !== "undefined" && navigator.clipboard) {
-				await navigator.clipboard.writeText(challenge.userCode);
-				setCopied(true);
-				window.setTimeout(() => setCopied(false), 1400);
-			}
-		} catch {
-			/* clipboards may be denied in some sandboxes — silently no-op */
-		}
-	};
-
-	const loginUrl = challenge.verificationUriComplete ?? challenge.verificationUri;
-
-	return (
-		<div
-			className={styles.authPanel}
-			role="status"
-			aria-live="polite"
-			data-testid="device-challenge-panel"
-		>
-			<div>
-				<strong>
-					{busy
-						? te("providerSettings.completingSignIn")
-						: te("providerSettings.browserLoginPending")}
-				</strong>
-				<p>{te("providerSettings.deviceCodeInstructions", { provider: providerLabel })}</p>
-			</div>
-			<div className={styles.authCodeRow}>
-				<code data-testid="device-user-code">{challenge.userCode}</code>
-				<button
-					type="button"
-					className={`${styles.btn} ${styles.btnSecondary}`}
-					onClick={onCopy}
-					title={te("providerSettings.copyCode")}
-					aria-label={te("providerSettings.copyCode")}
-					disabled={busy}
-				>
-					{copied ? <Check size={14} /> : <Copy size={14} />}
-					{copied ? te("providerSettings.copied") : te("providerSettings.copyCode")}
-				</button>
-			</div>
-			<div>
-				<a
-					href={loginUrl}
-					target="_blank"
-					rel="noreferrer noopener"
-					className={styles.linkBtn}
-					onClick={(e) => {
-						e.preventDefault();
-						onOpenLoginPage(loginUrl);
-					}}
-				>
-					<ExternalLink size={14} />
-					{te("providerSettings.openLoginPage")}
-				</a>
 			</div>
 		</div>
 	);
