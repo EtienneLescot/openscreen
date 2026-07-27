@@ -19,7 +19,8 @@
 		"exportBackgroundLoadFailed": "Export failed: could not load background image ({{url}})",
 		"failedToSaveExport": "Failed to save export",
 		"failedToSaveExportedVideo": "Failed to save exported video",
-		"failedToRevealInFolder": "Error revealing in folder: {{error}}"
+		"failedToRevealInFolder": "Error revealing in folder: {{error}}",
+		"previewCompositorUnavailable": "Preview unavailable on this machine"
 	},
 	"export": {
 		"canceled": "Export canceled",
