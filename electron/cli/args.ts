@@ -184,8 +184,13 @@ function parseExport(args: string[], cwd: string): CliCommand {
 				const [value, next] = takeValue(args, i, arg);
 				const match = /^(\d+)x(\d+)$/.exec(value);
 				if (!match) throw new Error(`--preview-size must look like 1280x720, got "${value}"`);
-				request.previewWidth = Number(match[1]);
-				request.previewHeight = Number(match[2]);
+				const previewWidth = Number(match[1]);
+				const previewHeight = Number(match[2]);
+				if (previewWidth <= 0 || previewHeight <= 0) {
+					throw new Error(`--preview-size dimensions must be positive, got "${value}"`);
+				}
+				request.previewWidth = previewWidth;
+				request.previewHeight = previewHeight;
 				i = next;
 				break;
 			}
