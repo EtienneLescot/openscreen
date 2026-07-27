@@ -1,16 +1,19 @@
-//! Pourquoi il n'y a PAS de repli WARP (PR #162).
+//! Pourquoi le backend CPU décode en LOGICIEL et pas sur le device WARP (PR #162).
 //!
-//! `d3d::Gpu::create` demande `D3D_DRIVER_TYPE_HARDWARE` et `VIDEO_SUPPORT`, sans
-//! second choix. La proposition évidente — retenter en `D3D_DRIVER_TYPE_WARP`, le
-//! rastériseur CPU de Microsoft — ne marche pas, et pas pour une raison de vitesse :
-//! WARP n'a tout simplement pas de décodeur vidéo. Or `pipeline.rs` passe le device
-//! de `Gpu` à ffmpeg comme `AVD3D11VADeviceContext` (`(*d3dctx).device = ...`), donc
-//! preview ET export décodent chaque frame en D3D11VA sur CE device. Un device WARP
-//! se créerait puis ne produirait aucune frame.
+//! La proposition initiale était de simplement retenter `D3D11CreateDevice` en
+//! `D3D_DRIVER_TYPE_WARP` quand le matériel échoue. Ça ne suffit pas, et pas pour une
+//! raison de vitesse : WARP n'a pas de décodeur vidéo du tout. Or le chemin matériel
+//! passe le device de `Gpu` à ffmpeg comme `AVD3D11VADeviceContext`
+//! (`pipeline.rs`, `(*d3dctx).device = ...`) — un device WARP branché là se créerait
+//! puis ne produirait aucune frame.
 //!
-//! Ce test verrouille la mesure. S'il ÉCHOUE, c'est que WARP a gagné une capacité
-//! vidéo sur cette machine/version de Windows — et alors le repli redevient une
-//! question ouverte : relire `diagnose()` dans `src/d3d.rs`.
+//! D'où la forme qu'a prise `Backend::Cpu` : WARP pour le RENDU, libavcodec en mémoire
+//! système pour le DÉCODAGE, uploadé en NV12 par `cpu_frames.rs`. Deux axes, deux
+//! solutions — c'est ce test qui dit pourquoi le second existe.
+//!
+//! S'il ÉCHOUE, c'est que WARP a gagné une capacité vidéo sur cette machine/version de
+//! Windows : `Backend::Cpu` pourrait alors décoder directement sur son device et se
+//! passer de tout `cpu_frames.rs`.
 
 #![cfg(windows)]
 
