@@ -2139,12 +2139,6 @@
 }
 
 .chatWelcomeIcon {
-  display: inline-grid;
-  place-items: center;
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
-  background: var(--accent-soft);
   color: var(--accent);
   margin-bottom: 4px;
 }
@@ -2163,35 +2157,23 @@
   max-width: 32ch;
 }
 
+/* Native list markers — no flex on the ul/li, or the items stop being
+   list-items and the markers vanish. padding-inline-start keeps them inside
+   the card in both writing directions. */
 .chatWelcomeFeatures {
-  list-style: none;
+  /* explicit: the global reset sets list-style: none on every ul */
+  list-style: disc;
   margin: 0;
   padding: 10px 12px;
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
+  padding-inline-start: 26px;
   background: var(--surface);
   border: 1px solid var(--border-soft);
   border-radius: var(--r-md);
-}
-
-.chatWelcomeFeature {
-  display: flex;
-  align-items: flex-start;
-  gap: 8px;
   font: 400 12px/1.45 var(--font-body);
   color: var(--fg-2);
 }
-
-.chatWelcomeFeatureDot {
-  flex: 0 0 auto;
-  margin-top: 6px;
-  width: 5px;
-  height: 5px;
-  border-radius: 50%;
-  background: var(--accent);
-  opacity: 0.85;
-}
+.chatWelcomeFeatures li + li { margin-top: 6px; }
+.chatWelcomeFeatures li::marker { color: var(--accent); }
 
 .chatWelcomeCta {
   display: inline-flex;
@@ -2206,7 +2188,7 @@
   border: 1px solid var(--accent);
   font: 600 12.5px var(--font-body);
   cursor: pointer;
-  transition: filter 120ms ease, background 120ms ease;
+  transition: filter 120ms ease;
 }
 .chatWelcomeCta:hover { filter: brightness(0.95); }
 .chatWelcomeCta:focus-visible {
@@ -2226,7 +2208,5 @@
 .chatWelcomeDisclaimerIcon {
   flex: 0 0 auto;
   margin-top: 2px;
-  color: var(--muted);
   opacity: 0.8;
 }
-
