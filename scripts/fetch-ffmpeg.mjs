@@ -240,6 +240,62 @@ function findExe(dir, name) {
 	return null;
 }
 
+/**
+ * Where crates/.cargo/config.toml pins FFMPEG_DIR, resolved to an absolute path.
+ *
+ * Read rather than hardcoded: scripts/build-windows-compositor-addon.mjs refuses
+ * to run cargo unless this exact directory exists, so the pin is the one source
+ * of truth for both ends. Returns null when there is nothing to satisfy.
+ */
+function ffmpegSdkDest() {
+	const cratesDir = path.join(ROOT, "crates");
+	const configPath = path.join(cratesDir, ".cargo", "config.toml");
+	if (!fs.existsSync(configPath)) return null;
+	// FFMPEG_DIR is declared `relative = true`, i.e. relative to crates/.
+	const pin = fs
+		.readFileSync(configPath, "utf8")
+		.match(/FFMPEG_DIR\s*=\s*\{\s*value\s*=\s*"([^"]+)"/);
+	return pin ? path.join(cratesDir, pin[1]) : null;
+}
+
+/**
+ * Vendors the headers and import libs the compositor addon links against at
+ * BUILD time, out of the archive we already downloaded and verified.
+ *
+ * The runtime DLLs alone are not enough: cargo needs include/ and lib/ to link
+ * compositor-view-napi. That tree only ever existed as a local junction on a dev
+ * machine, so CI could never build the addon — which is why the Windows job
+ * started failing the moment build:native:compositor joined build:win. Taking it
+ * from the same SHA-256- and LGPL-verified archive avoids a second download and
+ * keeps the linked ffmpeg identical to the DLLs we ship.
+ */
+function vendorFfmpegSdk(tmp, dest) {
+	// BtbN nests bin/ include/ lib/ under one versioned dir; find it by its headers.
+	const root = findDirContaining(tmp, "include");
+	if (!root) {
+		throw new Error(
+			"No include/ directory inside the shared archive — cannot vendor the ffmpeg SDK.",
+		);
+	}
+	// A dev machine has this as a junction; rm unlinks it rather than eating the
+	// target, and we only get here on --force or when it is genuinely absent.
+	fs.rmSync(dest, { recursive: true, force: true });
+	fs.mkdirSync(path.dirname(dest), { recursive: true });
+	fs.cpSync(root, dest, { recursive: true });
+	console.log(`Vendored ffmpeg SDK (include/ + lib/) -> ${dest}`);
+}
+
+/** First directory at or under `dir` that has a child named `name`. */
+function findDirContaining(dir, name) {
+	if (fs.existsSync(path.join(dir, name))) return dir;
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		if (!entry.isDirectory()) continue;
+		const hit = findDirContaining(path.join(dir, entry.name), name);
+		if (hit) return hit;
+	}
+	return null;
+}
+
 /** All `*.dll` files anywhere under `dir` (BtbN's shared builds nest a `bin/` under a versioned dir). */
 function findDlls(dir) {
 	const out = [];
@@ -302,7 +358,12 @@ async function fetchSharedDlls(tag, binDir) {
 				e.name.toLowerCase().endsWith(".dll") &&
 				e.name.toLowerCase().startsWith("av"),
 		);
-	if (alreadyVendored && !process.argv.includes("--force")) {
+	// The build-time SDK comes out of this same archive, so a tree that has the
+	// DLLs but not the SDK must still re-download — otherwise we skip here and
+	// the compositor build fails afterwards on the missing FFMPEG_DIR.
+	const sdkDest = ffmpegSdkDest();
+	const sdkPresent = sdkDest == null || fs.existsSync(sdkDest);
+	if (alreadyVendored && sdkPresent && !process.argv.includes("--force")) {
 		console.log(`\nShared ffmpeg DLLs already present in ${binDir}. Use --force to re-vendor.`);
 		return;
 	}
@@ -329,6 +390,7 @@ async function fetchSharedDlls(tag, binDir) {
 			fs.copyFileSync(dll, path.join(binDir, path.basename(dll)));
 		}
 		console.log(`Vendored ${dlls.length} DLL(s) -> ${binDir}`);
+		if (sdkDest) vendorFfmpegSdk(tmp, sdkDest);
 		console.log("LGPL verified: safe to ship with an MIT app.");
 	} finally {
 		fs.rmSync(tmp, { recursive: true, force: true });
