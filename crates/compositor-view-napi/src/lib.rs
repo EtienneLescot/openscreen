@@ -10,7 +10,7 @@ use napi::threadsafe_function::{ErrorStrategy, ThreadsafeFunction, ThreadsafeFun
 use napi::{Env, JsFunction, Task};
 use napi_derive::napi;
 use openscreen_compositor::compositor::{live_params_from_scene, Compositor};
-use openscreen_compositor::d3d::Gpu;
+use openscreen_compositor::d3d::{Backend, Gpu};
 use openscreen_compositor::gif_export::{GifExportParams, GifStats};
 use openscreen_compositor::live::{LiveView, PausedPreviews};
 use openscreen_compositor::scene::Scene;
@@ -52,6 +52,24 @@ fn registry() -> &'static Mutex<HashMap<i32, LiveView>> {
 ///
 /// `rect` ne sert plus que pour `width`/`height` (résolution cible du preview) ;
 /// `x`/`y` sont ignorés (compat structurelle — la position est gérée par CSS).
+/// Quel backend cette machine utilisera : `"hardware"`, `"cpu"`, ou `"none"` si aucun
+/// device D3D11 ne se crée (la vue échouera alors avec son propre message, plus précis).
+///
+/// Sert à PRÉVENIR : sur `"cpu"`, le rendu passe par WARP + décodage logiciel — la
+/// preview tombe à ~8 fps avec tous les effets et l'export met des minutes au lieu de
+/// secondes. L'utilisateur doit le savoir AVANT de lancer un export, pas après. D'où une
+/// question posée au système et non à une vue : la modale d'export la pose sans qu'aucune
+/// preview n'existe. Réponse mise en cache côté Rust — c'est une propriété de la machine.
+#[napi]
+pub fn probe_backend() -> String {
+    match Gpu::probe() {
+        Some(Backend::Hardware) => "hardware",
+        Some(Backend::Cpu) => "cpu",
+        None => "none",
+    }
+    .to_string()
+}
+
 #[napi]
 pub fn create_view(
     rect: CompositorViewRect,
@@ -368,7 +386,9 @@ impl Task for ExportMultiTask {
         // Previews paused for the whole render (GPU 3D engine freed) and restored
         // exactly as found when this guard drops, including on the error paths.
         let _previews = PreviewPause::begin();
-        let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
+        // Même sélection que la preview : l'export d'un hôte sans GPU passe par
+        // libopenh264 au lieu d'AMF, plutôt que d'échouer.
+        let gpu = Gpu::create_auto(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
         let mut cfg = config::all().pop().expect("au moins une config"); // C8
         cfg.zoom = false;
         cfg.layout_anim = false;

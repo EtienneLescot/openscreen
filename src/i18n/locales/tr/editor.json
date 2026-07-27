@@ -389,5 +389,9 @@
 		"cancel": "İptal",
 		"save": "Kaydet",
 		"saveAndUse": "Kaydet ve kullan"
+	},
+	"cpuCompositor": {
+		"notice": "Uyumlu GPU yok — işleme CPU üzerinde yapılıyor, bu yüzden oynatma daha yavaş.",
+		"exportWarning": "Uyumlu GPU yok: bu dışa aktarma CPU üzerinde çalışır ve normalden çok daha uzun sürer."
 	}
 }

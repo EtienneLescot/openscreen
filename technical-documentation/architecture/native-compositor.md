@@ -250,53 +250,51 @@ licence. D3D11VA + AMF survive the LGPL-shared build (verified:
 
 ## Known gaps
 
-- **The CPU backend exists, but nothing selects it automatically yet.**
-  `d3d::Backend::Cpu` runs the same pipeline on a WARP device with libavcodec
-  software decode ([`cpu_frames.rs`](../../crates/compositor/src/cpu_frames.rs)),
-  and renders **iso** with the GPU path (max deviation 3/255 across C1–C8 —
-  see [rendering-performance.md](../engineering/rendering-performance.md#the-cpu-backend-warp--software-decode--2026-07-27)).
-  `Gpu::create` still returns the hardware device and never falls back on its
-  own: a silent switch to a 6–9 fps preview is exactly the "the app is slow
-  today" failure this whole thread set out to remove. Selecting it, and the
-  effect policy it needs (background blur and motion blur cost 17× and 23× on
-  WARP and are what make C4+ unusable), is not wired.
-  **Export cannot use it at all**: `h264_amf` requires the real GPU, and encode
-  is a third axis with no software path — though the vendored LGPL build does
-  ship `libopenh264` and `h264_mf`, so that is a wiring gap rather than a wall.
 
-- **The hardware path has no automatic fallback, and WARP alone could not be one.** `d3d::Gpu::create`
-  ([`crates/compositor/src/d3d.rs`](../../crates/compositor/src/d3d.rs)) requests
-  `D3D_DRIVER_TYPE_HARDWARE` and pins `D3D_FEATURE_LEVEL_11_1`, with
-  `VIDEO_SUPPORT` mandatory for `D3D11VA`. A machine without a GPU that
-  exposes FL 11_1 with video support hard-fails at startup; there is no
-  path that decodes on CPU, so the compositor is unusable on virtualised
-  environments that do not pass through a compatible adapter.
+- **The CPU fallback is a whole second backend, because WARP alone could not
+  have been one.** `d3d::Gpu::create_auto` prefers the hardware device
+  (`D3D_DRIVER_TYPE_HARDWARE`, FL 11_1, `VIDEO_SUPPORT` for `D3D11VA`) and falls
+  back to `Backend::Cpu` — described in
+  [rendering-performance.md](../engineering/rendering-performance.md#the-cpu-backend-warp--software-decode--2026-07-27).
 
-  Retrying in `D3D_DRIVER_TYPE_WARP` — the obvious repair, and what PR #162
-  originally scoped — does not work, and the reason is capability, not
-  speed. Measured (`crates/compositor/tests/warp_device_cannot_decode.rs`,
-  which fails if this ever stops being true): WARP **rejects the
-  `VIDEO_SUPPORT` flag outright** (`DXGI_ERROR_UNSUPPORTED`, `0x887A0004`),
-  and dropping the flag yields a FL 11_1 device that exposes no
-  `ID3D11VideoDevice` at all (`E_NOINTERFACE`, zero decoder profiles).
-  Since `pipeline.rs` hands this very device to ffmpeg as the
-  `AVD3D11VADeviceContext`, preview *and* export decode every frame on it —
-  a WARP device would produce none. Shipping the retry would only convert a
-  clear startup failure into an obscure ffmpeg one. So the answer to "is
-  WARP acceptable for export, or preview only?" is neither.
+  Retrying in `D3D_DRIVER_TYPE_WARP` and changing nothing else — the obvious
+  repair, and what PR #162 originally scoped — does not work, and the reason is
+  capability, not speed. Measured
+  (`crates/compositor/tests/warp_device_cannot_decode.rs`, which fails if this
+  ever stops being true): WARP **rejects the `VIDEO_SUPPORT` flag outright**
+  (`DXGI_ERROR_UNSUPPORTED`, `0x887A0004`), and dropping the flag yields a FL
+  11_1 device that exposes no `ID3D11VideoDevice` at all (`E_NOINTERFACE`, zero
+  decoder profiles). Since `pipeline.rs` hands this very device to ffmpeg as the
+  `AVD3D11VADeviceContext`, a WARP device would have produced no frames at all.
+  **Rendering and decoding are two axes**, and no software rasteriser on any
+  platform covers the second — so the fallback needed libavcodec software decode
+  (`cpu_frames.rs`) beside the WARP device. The third axis, encoding, is covered
+  by `ExportCodec::candidates()` / `VideoEncoder`, which already probes the host
+  for a working encoder and lands on `libopenh264` / `libkvazaar` when no
+  hardware one opens — the CPU backend simply falls out of that list rather than
+  needing a path of its own. Three axes, three answers.
 
-  What the compositor does instead is **fail legibly**: `Gpu::create`
-  re-probes on the failure path (same call, minus `VIDEO_SUPPORT`) to tell
-  "this adapter has no video decoder" — the Remote Desktop / VM case — apart
-  from "no FL 11_1 adapter at all", and says which, plus what to do about it.
-  That message reaches the user rather than a log: the render thread stores
-  its fatal error in `live::Shared`, the addon's `read_frame` returns it as
-  an `Err` on the next pull (~33 ms), and `NativeCompositorOverlay` renders
-  it in place of the canvas. Before this, `create_view` had already returned
-  `Ok` by the time the thread died, so the failure existed only as an
-  `eprintln!` and the user just saw a black preview.
+  It is never silent. `Gpu::create` (hardware-strict, no fallback) is kept for
+  tests and goldens; `create_auto` logs *why* the hardware device was refused
+  via `diagnose()` — "this adapter has no video decoder" (Remote Desktop, VMs,
+  Basic Render Driver) versus "no FL 11_1 adapter at all" — which is what tells
+  a user whether a driver update would fix it. The renderer asks
+  `probeBackend()` and shows a notice in the preview and a warning in the export
+  dialog, so ~8 fps playback reads as "this machine has no GPU" rather than as
+  the app hanging. **No effect is disabled on the CPU path**: output stays
+  identical to the GPU path (max deviation 3/255), and 8 fps is what the 1.7.0
+  preview delivered anyway, so trading correctness for frame rate would be a bad
+  bargain in both directions.
 
-  The WGC capture helper
+  If **both** backends fail there is nothing left, and that failure is surfaced
+  rather than logged: the render thread stores its fatal error in
+  `live::Shared`, the addon's `read_frame` returns it as an `Err` on the next
+  pull (~33 ms), and `NativeCompositorOverlay` renders it in place of the
+  canvas. Before this, `create_view` had already returned `Ok` by the time the
+  thread died, so the failure existed only as an `eprintln!` and the user just
+  saw a black preview.
+
+- **Capture is left hardware-only on purpose.** The WGC capture helper
   ([`electron/native/wgc-capture/src/wgc_session.cpp`](../../electron/native/wgc-capture/src/wgc_session.cpp))
   is left hardware-only too, but for a different reason than the compositor:
   **WGC capture is not mandatory.** Windows recording already has a non-D3D
