@@ -84,6 +84,8 @@
 		"presets": "Préréglages",
 		"help": "Choisissez ce qui apparaît derrière l'enregistrement : un fond d'écran fourni, une couleur unie, un dégradé, ou une image personnelle depuis le disque.",
 		"customWallpaper": "Fond personnalisé",
+		"unsupportedImage": "Image non prise en charge. Utilisez un fichier JPG ou PNG.",
+		"imageReadFailed": "Impossible de lire ce fichier image.",
 		"imageLabel": "Fond {{index}}",
 		"colorLabel": "Couleur {{color}}"
 	},
@@ -240,11 +242,6 @@
 	},
 	"language": {
 		"title": "Langue"
-	},
-	"timeline": {
-		"title": "Montage",
-		"waveform": "Afficher la forme d'onde sur la piste de découpe",
-		"help": "Options d'affichage de la timeline, comme la forme d'onde audio sur la piste de découpe."
 	},
 	"facets": {
 		"captions": "Sous-titres",

@@ -84,6 +84,8 @@
 		"presets": "Ön ayarlar",
 		"help": "Kaydın arkasında ne görüneceğini seçin: yerleşik bir duvar kâğıdı, düz renk, gradyan veya diskinizdeki özel bir görsel.",
 		"customWallpaper": "Özel duvar kâğıdı",
+		"unsupportedImage": "Desteklenmeyen görsel. JPG veya PNG dosyası kullanın.",
+		"imageReadFailed": "Bu görsel dosyası okunamadı.",
 		"imageLabel": "Arka plan {{index}}",
 		"colorLabel": "Renk {{color}}"
 	},
@@ -240,11 +242,6 @@
 	},
 	"language": {
 		"title": "Dil"
-	},
-	"timeline": {
-		"title": "Zaman Tüneli",
-		"waveform": "Kırpma Parçasında Ses Dalgasını Göster",
-		"help": "Zaman çizelgesi görüntüleme seçenekleri; örneğin kırpma parçasında ses dalga formunu göstermek."
 	},
 	"facets": {
 		"captions": "Altyazılar",

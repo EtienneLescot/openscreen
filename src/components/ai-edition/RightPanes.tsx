@@ -6,7 +6,6 @@
 // self-sufficient).
 
 import {
-	Crop as CropIcon,
 	FileText,
 	HelpCircle,
 	Layout as LayoutIcon,
@@ -29,6 +28,7 @@ import {
 	useRef,
 	useState,
 } from "react";
+import { toast } from "sonner";
 import defaultCursorPreviewUrl from "@/assets/cursors/Cursor=Default.svg";
 import GradientEditor, { type GradientEditorState } from "@/components/ui/gradient-editor";
 import { useScopedT } from "@/contexts/I18nContext";
@@ -59,14 +59,6 @@ import { buildGradientFromEditor } from "@/lib/gradientBuilder";
 import { resolveImageWallpaperUrl, WALLPAPER_PATHS, WALLPAPER_THUMB_PATHS } from "@/lib/wallpaper";
 import { isNativeCompositorActive, setNativeParam, subscribeNativeCompositor } from "@/native";
 import styles from "./NewEditorShell.module.css";
-
-export type RightPaneId =
-	| "background"
-	| "transcript"
-	| "effects"
-	| "layout"
-	| "cursor"
-	| "timeline";
 
 interface PaneProps {
 	title: string;
@@ -167,7 +159,35 @@ const COLOR_PALETTE: readonly string[] = [
 	"#1e293b",
 ];
 
-const IMAGE_ACCEPT = ".jpg,.jpeg,.png,image/jpeg,image/png";
+// One source for the file dialog's filter AND the post-pick validation. They were separate
+// before — the accept string was an inline copy of a constant living in a module whose
+// extension fallback never got wired up, so the dialog offered files the handler then
+// dropped on the floor.
+const IMAGE_EXTENSIONS = [".jpg", ".jpeg", ".png"];
+// `image/jpg` is not the registered type but real systems emit it, so accept it too.
+const IMAGE_MIME_TYPES = ["image/jpeg", "image/jpg", "image/png"];
+const IMAGE_ACCEPT = [...IMAGE_EXTENSIONS, ...IMAGE_MIME_TYPES].join(",");
+
+/**
+ * Whether a picked file is a background image we can use.
+ *
+ * A blank `type` falls back to the extension: the browser reports no MIME type for some
+ * files and some locales on Windows, and a bare `file.type.startsWith("image/")` then
+ * rejected perfectly good PNGs — silently, since the handler just returned. That is the
+ * case "Allow PNG custom background uploads" fixed once already (its test named a real
+ * one: `生成画像1.png`, arriving with no MIME type at all).
+ *
+ * An explicit non-image type is still a rejection. Only a blank one earns the fallback,
+ * so `notes.txt` renamed to `notes.png` does not sneak through on its extension.
+ */
+export function isSupportedBackgroundImage(type: string, fileName: string): boolean {
+	const mime = type.trim().toLowerCase();
+	if (mime) {
+		return IMAGE_MIME_TYPES.includes(mime);
+	}
+	const name = fileName.trim().toLowerCase();
+	return IMAGE_EXTENSIONS.some((extension) => name.endsWith(extension));
+}
 
 // Wallpaper picker — image / solid color / gradient tabs.
 //
@@ -223,13 +243,20 @@ export function BackgroundPane() {
 		const file = e.target.files?.[0];
 		e.target.value = "";
 		if (!file) return;
-		if (!file.type.startsWith("image/")) return;
+		if (!isSupportedBackgroundImage(file.type, file.name)) {
+			toast.error(ts("background.unsupportedImage"));
+			return;
+		}
 		const reader = new FileReader();
 		reader.onload = () => {
 			const dataUrl = typeof reader.result === "string" ? reader.result : "";
-			if (!dataUrl) return;
+			if (!dataUrl) {
+				toast.error(ts("background.imageReadFailed"));
+				return;
+			}
 			void set({ wallpaper: dataUrl });
 		};
+		reader.onerror = () => toast.error(ts("background.imageReadFailed"));
 		reader.readAsDataURL(file);
 	};
 
@@ -1710,23 +1737,6 @@ export function CursorPane() {
 }
 
 // ─── Timeline (trim waveform) ──────────────────────────────────────
-
-export function TimelinePaneBody() {
-	const ts = useScopedT("settings");
-	const { settings, set, hasDocument } = useEditorSettings();
-	return (
-		<Pane title={ts("timeline.title")} icon={<CropIcon size={14} />} helpText={ts("timeline.help")}>
-			<div className={styles.paneRow}>
-				<span className="label">{ts("timeline.waveform")}</span>
-				<Toggle
-					checked={settings.showTrimWaveform}
-					disabled={!hasDocument}
-					onChange={(v) => void set({ showTrimWaveform: v })}
-				/>
-			</div>
-		</Pane>
-	);
-}
 
 // ─── primitives ───────────────────────────────────────────────────
 

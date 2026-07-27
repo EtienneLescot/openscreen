@@ -28,7 +28,6 @@ describe("getEditorSettings", () => {
 		expect(snap.aspectRatio).toBe("16:9");
 		expect(snap.shadowIntensity).toBe(0);
 		expect(snap.showBlur).toBe(false);
-		expect(snap.showTrimWaveform).toBe(true);
 		expect(snap.webcamLayoutPreset).toBe(DEFAULT_WEBCAM_LAYOUT_PRESET);
 		expect(snap.webcamMaskShape).toBe(DEFAULT_WEBCAM_MASK_SHAPE);
 		expect(snap.cursor.size).toBe(DEFAULT_CURSOR_SIZE);

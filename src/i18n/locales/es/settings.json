@@ -84,6 +84,8 @@
 		"presets": "Ajustes preestablecidos",
 		"help": "Elige qué aparece detrás de la grabación: un fondo incluido, un color sólido, un degradado o una imagen propia del disco.",
 		"customWallpaper": "Fondo personalizado",
+		"unsupportedImage": "Imagen no compatible. Usa un archivo JPG o PNG.",
+		"imageReadFailed": "No se pudo leer ese archivo de imagen.",
 		"imageLabel": "Fondo {{index}}",
 		"colorLabel": "Color {{color}}"
 	},
@@ -240,11 +242,6 @@
 	},
 	"language": {
 		"title": "Idioma"
-	},
-	"timeline": {
-		"title": "Línea de tiempo",
-		"waveform": "Mostrar forma de onda en pista de recorte",
-		"help": "Opciones de visualización de la línea de tiempo, como mostrar la forma de onda en la pista de recorte."
 	},
 	"facets": {
 		"captions": "Subtítulos",

@@ -211,7 +211,6 @@ export function applyTimelineOperation(
 						})),
 					],
 				},
-				preview: { ...document.preview, revision: document.preview.revision + 1 },
 			};
 			return {
 				document: next,
@@ -232,7 +231,6 @@ export function applyTimelineOperation(
 						return { ...s, startSec: lo, endSec: hi, reason: op.reason ?? s.reason };
 					}),
 				},
-				preview: { ...document.preview, revision: document.preview.revision + 1 },
 			};
 			if (!found) return { document, summary: `unknown trim ${op.trimId}` };
 			return {
@@ -247,7 +245,6 @@ export function applyTimelineOperation(
 					...document.timeline,
 					trimRanges: document.timeline.trimRanges.filter((s) => s.id !== op.trimId),
 				},
-				preview: { ...document.preview, revision: document.preview.revision + 1 },
 			};
 			return {
 				document: next,
@@ -271,7 +268,6 @@ export function applyTimelineOperation(
 			const base = setClipSourceRange(document, op.clipId, op.sourceStartSec, op.sourceEndSec);
 			const finalDoc: AxcutDocument = {
 				...base,
-				preview: { ...base.preview, revision: base.preview.revision + 1 },
 			};
 			return {
 				document: finalDoc,

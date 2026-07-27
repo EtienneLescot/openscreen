@@ -43,7 +43,6 @@ export interface EditorSettingsSnapshot {
 	aspectRatio: AspectRatio;
 	shadowIntensity: number;
 	showBlur: boolean;
-	showTrimWaveform: boolean;
 	motionBlurAmount: number;
 	borderRadius: number;
 	padding: number;
@@ -65,7 +64,6 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	aspectRatio: "16:9",
 	shadowIntensity: 0,
 	showBlur: false,
-	showTrimWaveform: true,
 	motionBlurAmount: 0,
 	borderRadius: 0,
 	padding: 50,
@@ -93,7 +91,6 @@ interface LegacyShape {
 	aspectRatio?: AspectRatio;
 	shadowIntensity?: number;
 	showBlur?: boolean;
-	showTrimWaveform?: boolean;
 	motionBlurAmount?: number;
 	borderRadius?: number;
 	padding?: number;
@@ -145,7 +142,6 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 		aspectRatio: legacy?.aspectRatio ?? DEFAULT_EDITOR_SETTINGS.aspectRatio,
 		shadowIntensity: num(legacy?.shadowIntensity, DEFAULT_EDITOR_SETTINGS.shadowIntensity),
 		showBlur: bool(legacy?.showBlur, DEFAULT_EDITOR_SETTINGS.showBlur),
-		showTrimWaveform: bool(legacy?.showTrimWaveform, DEFAULT_EDITOR_SETTINGS.showTrimWaveform),
 		motionBlurAmount: num(legacy?.motionBlurAmount, DEFAULT_EDITOR_SETTINGS.motionBlurAmount),
 		borderRadius: num(legacy?.borderRadius, DEFAULT_EDITOR_SETTINGS.borderRadius),
 		padding: num(legacy?.padding, DEFAULT_EDITOR_SETTINGS.padding),
@@ -170,7 +166,6 @@ export interface EditorSettingsPatch {
 	aspectRatio?: AspectRatio;
 	shadowIntensity?: number;
 	showBlur?: boolean;
-	showTrimWaveform?: boolean;
 	motionBlurAmount?: number;
 	borderRadius?: number;
 	padding?: number;

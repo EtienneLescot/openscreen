@@ -11,7 +11,8 @@
 // be re-keyed exactly; anything it fails to return is simply left untranslated
 // and shows the original text, which is the honest fallback for a partial run.
 
-import { streamLlm } from "./llm-call";
+import { HumanMessage, SystemMessage } from "@langchain/core/messages";
+import { createOpenScreenChatModel, messageContentToText } from "./deep-agent/chat-model";
 
 /** One transcript segment to translate. */
 export interface CaptionTranslateSegment {
@@ -127,6 +128,28 @@ export async function translateCaptionSegments(
 	const out: Record<string, string> = {};
 	let done = 0;
 
+	// Built once, not per batch: for Copilot this call swaps the PAT for a
+	// runtime token over the network, and a long transcript is a lot of
+	// batches. ponytail: the Copilot runtime token is short-lived, so a
+	// translation running longer than its TTL would need a rebuild here.
+	let model: Awaited<ReturnType<typeof createOpenScreenChatModel>>;
+	try {
+		model = await createOpenScreenChatModel({
+			provider: options.provider,
+			model: options.model,
+			apiKey: options.apiKey,
+			baseUrl: options.baseUrl,
+			reasoningEffort: options.reasoningEffort,
+			accountId: options.accountId,
+		});
+	} catch (error) {
+		return {
+			success: false,
+			segments: out,
+			error: error instanceof Error ? error.message : String(error),
+		};
+	}
+
 	for (let i = 0; i < segments.length; i += batchSize) {
 		if (options.signal?.aborted) {
 			return { success: false, segments: out, error: "Translation cancelled." };
@@ -134,33 +157,21 @@ export async function translateCaptionSegments(
 		const batch = segments.slice(i, i + batchSize);
 		let reply = "";
 		try {
-			const result = await streamLlm(
-				{
-					provider: options.provider,
-					model: options.model,
-					apiKey: options.apiKey,
-					baseUrl: options.baseUrl,
-					reasoningEffort: options.reasoningEffort,
-					accountId: options.accountId,
-					signal: options.signal,
-					messages: [
-						{ role: "system", content: SYSTEM_PROMPT },
-						{
-							role: "user",
-							content: buildUserPrompt(batch, options.targetLanguage, options.sourceLanguage),
-						},
-					],
-				},
-				{ onTextDelta: (delta) => (reply = `${reply}${delta}`) },
+			const result = await model.invoke(
+				[
+					new SystemMessage(SYSTEM_PROMPT),
+					new HumanMessage(buildUserPrompt(batch, options.targetLanguage, options.sourceLanguage)),
+				],
+				{ signal: options.signal },
 			);
-			if (!result.success) {
+			reply = messageContentToText(result.content);
+			if (!reply) {
 				return {
 					success: false,
 					segments: out,
-					error: result.error ?? "The model did not return a translation.",
+					error: "The model did not return a translation.",
 				};
 			}
-			reply = result.content ?? reply;
 		} catch (error) {
 			return {
 				success: false,

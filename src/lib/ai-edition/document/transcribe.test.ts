@@ -47,10 +47,6 @@ function makeDoc(): AxcutDocument {
 		annotations: [],
 		zoomRanges: [],
 		legacyEditor: null,
-		agent: null,
-		preview: { revision: 0, playbackRate: 1 },
-		export: null,
-		history: { revisions: [] },
 	};
 }
 

@@ -107,10 +107,6 @@ const SAMPLE_DOC = {
 	annotations: [],
 	zoomRanges: [],
 	legacyEditor: null,
-	agent: { pendingQuestions: [], suggestions: [], lastAppliedOperations: [] },
-	preview: { strategy: "seek", revision: 0 },
-	export: { preset: "final-balanced", lastJobId: null },
-	history: { revisions: [] },
 };
 
 function renderWithVideo(): { host: HTMLDivElement; video: HTMLVideoElement } {

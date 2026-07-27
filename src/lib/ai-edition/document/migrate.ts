@@ -228,14 +228,6 @@ export function migrateProjectDataToAxcutDocument(
 		annotations: migratedAnnotations,
 		zoomRanges: migratedZoomRanges,
 		legacyEditor,
-		agent: {
-			pendingQuestions: [],
-			suggestions: [],
-			lastAppliedOperations: [],
-		},
-		preview: { strategy: "seek", revision: 0 },
-		export: { preset: "final-balanced", lastJobId: null },
-		history: { revisions: [] },
 	};
 
 	return documentSchema.parse(draft);
@@ -275,7 +267,6 @@ export function migrateAxcutDocumentToProjectData(input: AxcutDocument): EditorP
 		wallpaper: "",
 		shadowIntensity: 0,
 		showBlur: false,
-		showTrimWaveform: true,
 		motionBlurAmount: 0,
 		borderRadius: 0,
 		padding: 50,

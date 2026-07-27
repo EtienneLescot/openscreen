@@ -84,6 +84,8 @@
 		"presets": "Presets",
 		"help": "Choose what appears behind the recording: a bundled wallpaper image, a solid color, a gradient, or a custom image from disk.",
 		"customWallpaper": "Custom wallpaper",
+		"unsupportedImage": "Unsupported image. Use a JPG or PNG file.",
+		"imageReadFailed": "Could not read that image file.",
 		"imageLabel": "Background {{index}}",
 		"colorLabel": "Color {{color}}"
 	},
@@ -240,11 +242,6 @@
 	},
 	"language": {
 		"title": "Language"
-	},
-	"timeline": {
-		"title": "Timeline",
-		"waveform": "Show Audio Waveform on Trim Track",
-		"help": "Timeline display options, like showing the audio waveform on the trim track."
 	},
 	"facets": {
 		"captions": "Captions",

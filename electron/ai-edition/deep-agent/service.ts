@@ -28,7 +28,11 @@ import {
 	setTrimArgs,
 	setZoomArgs,
 } from "../agent-tools";
-import { createOpenScreenChatModel, type OpenScreenChatModelConfig } from "./chat-model";
+import {
+	createOpenScreenChatModel,
+	messageContentToText,
+	type OpenScreenChatModelConfig,
+} from "./chat-model";
 
 export interface OpenScreenAgentSink {
 	text: (delta: string) => void;
@@ -229,7 +233,7 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				const chunk = data?.chunk as Record<string, unknown> | undefined;
 				if (chunk) chatModelChunks.push(chunk);
 				const content = chunk?.content;
-				const delta = extractDelta(content);
+				const delta = messageContentToText(content);
 				if (delta) {
 					sink.text(delta);
 					finalText += delta;
@@ -253,7 +257,8 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 			// The chat-model chunks are the post-parse LangChain views of
 			// each SSE event; their `content`/`additional_kwargs`/
 			// `response_metadata` fields tell us whether the issue is in the
-			// wire format, the parser, or our `extractDelta` shape. Capped at
+			// wire format, the parser, or our `messageContentToText` shape.
+			// Capped at
 			// 1 chunk + a 1kB slice to keep the toast readable.
 			const lastChunk = chatModelChunks[chatModelChunks.length - 1];
 			const sample = lastChunk
@@ -295,23 +300,6 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 			reason,
 		};
 	}
-}
-
-function extractDelta(content: unknown): string {
-	if (typeof content === "string") return content;
-	if (Array.isArray(content)) {
-		let total = "";
-		for (const part of content) {
-			if (typeof part === "string") {
-				total += part;
-			} else if (part && typeof part === "object") {
-				const text = (part as { text?: unknown }).text;
-				if (typeof text === "string") total += text;
-			}
-		}
-		return total;
-	}
-	return "";
 }
 
 function extractError(data: Record<string, unknown> | undefined): string | undefined {

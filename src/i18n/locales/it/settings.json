@@ -84,6 +84,8 @@
 		"presets": "Predefiniti",
 		"help": "Scegli cosa appare dietro la registrazione: uno sfondo incluso, un colore pieno, un gradiente o un'immagine personale dal disco.",
 		"customWallpaper": "Sfondo personalizzato",
+		"unsupportedImage": "Immagine non supportata. Usa un file JPG o PNG.",
+		"imageReadFailed": "Impossibile leggere quel file immagine.",
 		"imageLabel": "Sfondo {{index}}",
 		"colorLabel": "Colore {{color}}"
 	},
@@ -240,11 +242,6 @@
 	},
 	"language": {
 		"title": "Lingua"
-	},
-	"timeline": {
-		"title": "Timeline",
-		"waveform": "Mostra la forma d'onda sulla traccia di ritaglio",
-		"help": "Opzioni di visualizzazione della timeline, come mostrare la forma d'onda audio sulla traccia di taglio."
 	},
 	"facets": {
 		"captions": "Sottotitoli",

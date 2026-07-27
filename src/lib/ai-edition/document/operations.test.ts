@@ -56,7 +56,6 @@ describe("applyTimelineOperation.add_trim_range", () => {
 			endSec: 8,
 			origin: "user",
 		});
-		expect(next.preview.revision).toBe(1);
 	});
 
 	it("normalises reversed bounds (end < start)", () => {

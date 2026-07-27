@@ -84,6 +84,8 @@
 		"presets": "Predefinições",
 		"help": "Escolha o que aparece atrás da gravação: um papel de parede incluído, uma cor sólida, um gradiente ou uma imagem sua do disco.",
 		"customWallpaper": "Papel de parede personalizado",
+		"unsupportedImage": "Imagem não suportada. Use um arquivo JPG ou PNG.",
+		"imageReadFailed": "Não foi possível ler esse arquivo de imagem.",
 		"imageLabel": "Fundo {{index}}",
 		"colorLabel": "Cor {{color}}"
 	},
@@ -240,11 +242,6 @@
 	},
 	"language": {
 		"title": "Idioma"
-	},
-	"timeline": {
-		"title": "Linha do Tempo",
-		"waveform": "Mostrar Forma de Onda de Áudio na Faixa de Corte",
-		"help": "Opções de exibição da linha do tempo, como mostrar a forma de onda de áudio na trilha de corte."
 	},
 	"facets": {
 		"captions": "Legendas",

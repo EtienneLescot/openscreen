@@ -116,9 +116,8 @@ export const PROVIDER_DEFINITIONS: ProviderDefinition[] = [
 		// ponytail: docs (platform.minimax.io) tell you to set ANTHROPIC_BASE_URL
 		// to https://api.minimax.io/anthropic, with the real `/messages` path
 		// at /anthropic/v1/messages — same convention as api.anthropic.com.
-		// Every consumer of this baseUrl (the raw-fetch path in llm-call.ts
-		// and the @anthropic-ai/sdk-backed ChatAnthropic in chat-model.ts)
-		// appends `/v1/messages` itself, so this must NOT include `/v1`.
+		// The @anthropic-ai/sdk-backed ChatAnthropic in chat-model.ts appends
+		// `/v1/messages` itself, so this must NOT include `/v1`.
 		baseUrl: "https://api.minimax.io/anthropic",
 		envKeys: ["MINIMAX_API_KEY"],
 		setupHint: "Use MINIMAX_API_KEY or paste a MiniMax API key.",

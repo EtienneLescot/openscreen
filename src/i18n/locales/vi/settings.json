@@ -84,6 +84,8 @@
 		"presets": "Có sẵn",
 		"help": "Chọn nội dung hiển thị phía sau bản ghi: ảnh nền có sẵn, màu đơn sắc, dải màu chuyển sắc, hoặc ảnh riêng của bạn từ ổ đĩa.",
 		"customWallpaper": "Ảnh nền tùy chỉnh",
+		"unsupportedImage": "Ảnh không được hỗ trợ. Hãy dùng tệp JPG hoặc PNG.",
+		"imageReadFailed": "Không thể đọc tệp ảnh này.",
 		"imageLabel": "Nền {{index}}",
 		"colorLabel": "Màu {{color}}"
 	},
@@ -240,11 +242,6 @@
 	},
 	"language": {
 		"title": "Ngôn ngữ"
-	},
-	"timeline": {
-		"title": "Dòng thời gian",
-		"waveform": "Hiển thị dạng sóng âm thanh trên rãnh cắt",
-		"help": "Tùy chọn hiển thị dòng thời gian, chẳng hạn hiện dạng sóng âm thanh trên rãnh cắt."
 	},
 	"facets": {
 		"captions": "Phụ đề",
