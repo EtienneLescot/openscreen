@@ -55,7 +55,7 @@ fn run_bench(args: &[String]) -> Result<()> {
 
     // sélection des cfg
     let all = config::all();
-    let cfgs: Vec<config::Cfg> = if cfg_arg.contains("..") {
+    let mut cfgs: Vec<config::Cfg> = if cfg_arg.contains("..") {
         all
     } else {
         cfg_arg
@@ -64,8 +64,36 @@ fn run_bench(args: &[String]) -> Result<()> {
             .collect()
     };
 
-    let gpu = d3d::Gpu::create(false)?;
-    println!("d3d11 device ok (feature_level 0x{:X})", gpu.feature_level.0 as u32);
+    // `--backend cpu` : rastérisation WARP + décodage logiciel (voir d3d::Backend).
+    // Il n'encode pas (AMF exige le GPU), donc il n'est mesurable qu'en mode preview —
+    // `--preview` est imposé plus bas plutôt que de laisser le run échouer sur l'encodeur.
+    let backend = match get("--backend", "hardware").as_str() {
+        "cpu" | "warp" => d3d::Backend::Cpu,
+        "hardware" | "gpu" => d3d::Backend::Hardware,
+        other => anyhow::bail!("--backend {other} inconnu (hardware|cpu)"),
+    };
+    let preview_only = args.iter().any(|a| a == "--preview") || backend == d3d::Backend::Cpu;
+    // Frames composées par run en mode preview. Assez pour noyer le bruit, assez court
+    // pour qu'un backend lent reste mesurable en une poignée de minutes.
+    let preview_frames: u64 = get("--frames", "300").parse().unwrap_or(300);
+
+    // C0 = « décode + encode, aucun composite ». Sans encodeur, il n'a pas d'équivalent :
+    // le mesurer en preview reviendrait à composer quand même et à publier un C0 qui est
+    // en fait un C1. On le retire plutôt que d'imprimer une ligne trompeuse.
+    if preview_only {
+        cfgs.retain(|c| c.composite);
+        if cfgs.is_empty() {
+            anyhow::bail!("aucune cfg composite à mesurer (C0 n'a pas de sens sans encodeur)");
+        }
+    }
+
+    let gpu = d3d::Gpu::create_backend(backend, false)?;
+    println!(
+        "d3d11 device ok — backend {:?}, feature_level 0x{:X}{}",
+        backend,
+        gpu.feature_level.0 as u32,
+        if preview_only { ", mode preview (décode+compose+readback, sans encodeur)" } else { "" }
+    );
     let mut comp = Compositor::new(&gpu)?;
     let track = cursor::CursorTrack::load(&format!("{fixture}/screen.cursor.json"), 100_000.0, 6.0)?;
     comp.set_cursor(track);
@@ -90,14 +118,26 @@ fn run_bench(args: &[String]) -> Result<()> {
         let mut frames = 0u64;
         for r in 0..repeat {
             let path = format!("{out}/{}.mp4", cfg.name);
-            let s = if cfg.composite {
+            let s = if preview_only {
+                let (stats, (fw, fh, rgba)) =
+                    pipeline::run_preview_bench(&screen, &webcam, &gpu, &comp, cfg, preview_frames)?;
+                // Preuve visuelle, et surtout comparable : un backend qui compose du noir
+                // afficherait un fps flatteur. Le PPM est nommé par backend pour qu'un
+                // diff hardware/cpu soit direct.
+                if r == 0 {
+                    let name = format!("{out}/{}_{:?}.ppm", cfg.name, backend).to_lowercase();
+                    write_ppm(&name, fw, fh, &rgba)?;
+                }
+                stats
+            } else if cfg.composite {
                 pipeline::run_composited(&screen, &webcam, &path, &gpu, &comp, cfg, &mut |_| {})?
             } else {
                 pipeline::run_c0(&screen, &path, &gpu)?
             };
             frames = s.frames;
             fps_runs.push(s.fps);
-            if r == 0 {
+            // Pas de MP4 produit en mode preview (aucun encodeur) — rien à extraire.
+            if r == 0 && !preview_only {
                 // extraction PNG f60/f180/f300 sur le 1er run (§11)
                 extract_pngs(&path, &out, cfg.name);
             }
@@ -128,6 +168,18 @@ fn run_bench(args: &[String]) -> Result<()> {
         println!("{n:<4} {f:<7} {w:<7.3} {fps:<8.1} {msf:<7.2} {sp}");
     }
     println!("\nreport.json + out/C*.mp4 + out/C*_f{{60,180,300}}.png écrits dans {out}/");
+    Ok(())
+}
+
+/// Écrit un readback RGBA8 en PPM binaire (P6, RGB) — format le plus bête qui se lise
+/// partout, et qui se compare octet à octet entre deux backends sans passer par un codec.
+fn write_ppm(path: &str, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
+    let mut buf = format!("P6\n{w} {h}\n255\n").into_bytes();
+    buf.reserve(rgba.len() / 4 * 3);
+    for px in rgba.chunks_exact(4) {
+        buf.extend_from_slice(&px[..3]);
+    }
+    std::fs::write(path, buf).with_context(|| format!("écriture {path}"))?;
     Ok(())
 }
 

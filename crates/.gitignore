@@ -4,8 +4,10 @@
 # dépendance téléchargée : build ffmpeg LGPL-shared BtbN (~160 Mo, voir README)
 /thirdparty
 
-# sorties générées (vidéos C*.mp4, PNG, GIF, dumps)
-/out
+# sorties générées (vidéos C*.mp4, PNG, PPM, GIF, dumps). Le glob couvre les `--out`
+# nommés par backend (out-hw/, out-cpu/) : un PPM de preuve pèse 6 Mo et il en sort un
+# par cfg et par backend.
+/out*
 *.raw
 *.nv12
 

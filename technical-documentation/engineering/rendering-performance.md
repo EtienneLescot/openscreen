@@ -83,6 +83,59 @@ C8's 104.0 fps sits under the ~126 headline above. Different session and thermal
 
 > A first attempt the same day was **VOID** and is not reported: five of nine configs blew the spread gate (up to 42.5 %) while ~40 browser and Electron processes were live, and C3 came out **+15.8 fps faster than C2** — adding a layer. Cumulative configs cannot speed up; that is the tell that noise had swamped the signal. It is recorded here only because it is a clean example of why the gate exists.
 
+### The CPU backend (WARP + software decode) — 2026-07-27
+
+`d3d::Backend::Cpu` runs the *same* pipeline on a WARP device with libavcodec software
+decode ([`cpu_frames.rs`](../../crates/compositor/src/cpu_frames.rs)), for hosts with no
+usable D3D11 GPU. Rendering and decoding are two independent axes — WARP covers the
+first and *nothing* of the second, on any platform — so the fallback needed both halves.
+
+Measured with a preview-shaped workload, because the CPU backend cannot reach the export
+path at all: `h264_amf` requires the real GPU, and encode is a **third** axis with no
+software fallback wired today. So the harness grew `--preview` (decode → compose →
+readback, no encoder) and `--backend`, which is what makes the two comparable:
+
+```bash
+x.bat run --release -- --cfg C1..C8 --backend cpu --preview --frames 300 --repeat 3
+```
+
+C0 is excluded: it is "decode + encode, no composite", which has no meaning without an
+encoder.
+
+| cfg | HW fps | HW ms/f | CPU fps | CPU ms/f | Δ ms/f (CPU) | gap |
+|---|---:|---:|---:|---:|---:|---:|
+| C1 | 65.3 | 15.30 | 30.7 | 32.60 | — | 2.1× |
+| C2 | 65.2 | 15.34 | 30.1 | 33.25 | +0.65 | 2.2× |
+| C3 | 63.1 | 15.84 | 28.5 | 35.06 | +1.81 | 2.2× |
+| C4 | 49.1 | 20.37 | 9.1 | 110.49 | **+75.43** | 5.4× |
+| C5 | 51.2 | 19.54 | 7.9 | 126.14 | +15.65 | 6.5× |
+| C6 | 54.3 | 18.42 | 9.5 | 105.78 | −20.36 | 5.7× |
+| C7 | 53.9 | 18.55 | 9.2 | 108.53 | +2.75 | 5.9× |
+| C8 | 48.0 | 20.85 | 6.2 | 161.18 | **+52.65** | 7.7× |
+
+**Two shaders account for the whole gap, and both are multi-tap sampling loops.**
+Background blur costs +4.53 ms on hardware and **+75.43 ms** on WARP (17×); motion blur
+costs +2.30 ms and **+52.65 ms** (23×). Everything else — compositing, SDF rounded
+corners, drop shadows, zoom, layout animation, cursor — runs within ~2.2× of the GPU.
+So WARP is not uniformly slow: it is fine at single-pass geometry and collapses on
+per-pixel sampling loops. C1–C3 at ~30 fps is a usable editing preview; C4 onward, at
+6–9 fps, is not.
+
+**The render is iso**, which is the property that makes a backend swap worth having at
+all. Comparing the same fixture frame per config, full-image over all 6 220 800 channels:
+93–95 % of channels bit-identical, **max deviation 3/255**, nothing above 2 outside a
+handful of pixels, and matching mean levels (217.77 vs 217.81 — neither frame is blank).
+Every effect layer survives the swap. The residual is rasteriser/FP difference, so any
+pixel-golden test that spans backends needs a tolerance rather than an exact baseline.
+
+> **Not an admissible run under [§ spread thresholds](#spread-thresholds).** Four of
+> sixteen rows blow the 15 % gate (CPU C1 21.3 %, C3 37.7 %, C8 25.5 %; HW C7 18.8 %) —
+> ~14 browser processes were live. The **layer attribution** is what this run claims and
+> it is robust: both cliffs are 3–5× drops bracketed by rows at 3.7 %/10.5 % and
+> 4.9 %/6.5 % spread. The **absolutes are not quotable** until a re-run on a quiet
+> machine. C6's negative delta is the same C5–C7 plateau noise the
+> [admissible hardware run](#one-admissible-run--2026-07-27) documents.
+
 ## How we got here — the WebCodecs trail
 
 > **This section is history.** It records the measurements that killed the browser-based export pipeline and motivated the native one. The code it describes is **gone**: `src/lib/exporter/videoExporter.ts`, `src/bench/runBench.ts` and the `npm run bench:export` script were deleted with the web MP4 pipeline. It is kept because it is the evidence for [why the compositor, not the encoder, was the wall](#the-wall-is-the-compositor) — which is the entire reason `crates/compositor/` exists — and because the [measurement hazards](#measurement-hazards) it uncovered still apply to any new benchmark here.

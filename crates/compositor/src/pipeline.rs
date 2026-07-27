@@ -8,8 +8,9 @@ use crate::audio::{
 };
 use crate::compositor::{Compositor, OUT_H, OUT_W};
 use crate::config::Cfg;
+use crate::cpu_frames::CpuFrames;
 use crate::cursor::CursorTrack;
-use crate::d3d::Gpu;
+use crate::d3d::{Backend, Gpu};
 use crate::ffi::*;
 use crate::regions::speed_segments_for_window;
 use anyhow::{anyhow, bail, Result};
@@ -388,6 +389,77 @@ unsafe fn run_c0_inner(screen: &str, out: &str, gpu: &Gpu) -> Result<Stats> {
     Ok(Stats { frames, wall_s, fps, video_duration_s: frames as f64 / 60.0 })
 }
 
+/// Boucle de PREVIEW mesurée : décode → compose → readback, sans encodeur.
+///
+/// Pourquoi pas `run_composited` : celui-ci encode en h264_amf, qui exige le vrai GPU.
+/// Le backend CPU ne peut donc pas le traverser, et les deux backends ne seraient pas
+/// comparables. L'encodage est de toute façon un TROISIÈME axe (comme le rendu et le
+/// décodage) et il n'a pas de repli logiciel ici — ce qui fait de la preview la seule
+/// surface que le backend CPU vise réellement. C'est exactement ce que cette boucle mesure,
+/// et c'est la même séquence que le thread de rendu de `live.rs`.
+///
+/// `frames` = nombre de frames composées ; la source boucle (`seek_to(0)`) si elle est
+/// plus courte, pour que les deux backends voient exactement la même charge.
+///
+/// Rend aussi le DERNIER readback (`w`, `h`, RGBA8) : un backend qui compose du noir
+/// serait rapide et parfaitement inutile, donc le chiffre ne veut rien dire sans l'image
+/// qui va avec. C'est ce qui permet de comparer pixel à pixel les deux backends.
+pub fn run_preview_bench(
+    screen: &str,
+    webcam: &str,
+    gpu: &Gpu,
+    comp: &Compositor,
+    cfg: &Cfg,
+    frames: u64,
+) -> Result<(Stats, (u32, u32, Vec<u8>))> {
+    unsafe {
+        let mut sdec = Decoder::open(screen, gpu)?;
+        let mut wdec = Decoder::open(webcam, gpu)?;
+
+        // Hors mesure : première frame de chaque source. Le premier décodage porte
+        // l'allocation du pool (matériel) ou de la texture NV12 + du contexte swscale
+        // (CPU) ; le compter fausserait surtout les runs courts.
+        let mut sf = sdec.next()?;
+        let mut wf = wdec.next()?;
+        if sf.is_null() || wf.is_null() {
+            bail!("source vide (screen ou webcam ne rend aucune frame)");
+        }
+        comp.compose_frame(sf, wf, 0.0, cfg)?;
+        let _ = comp.readback_direct()?;
+
+        let mut last = (0u32, 0u32, Vec::new());
+        let t0 = Instant::now();
+        for i in 0..frames {
+            sf = sdec.next()?;
+            if sf.is_null() {
+                sf = sdec.seek_to(0.0)?;
+            }
+            wf = wdec.next()?;
+            if wf.is_null() {
+                wf = wdec.seek_to(0.0)?;
+            }
+            if sf.is_null() || wf.is_null() {
+                bail!("source épuisée après rembobinage à la frame {i}");
+            }
+            comp.compose_frame(sf, wf, i as f32, cfg)?;
+            // Le readback fait partie de la mesure : c'est ce que la preview paie
+            // réellement pour afficher une frame (GPU→CPU puis canvas).
+            last = comp.readback_direct()?;
+        }
+        let wall_s = t0.elapsed().as_secs_f64();
+
+        Ok((
+            Stats {
+                frames,
+                wall_s,
+                fps: frames as f64 / wall_s,
+                video_duration_s: frames as f64 / 60.0,
+            },
+            last,
+        ))
+    }
+}
+
 /// Décodeur qui rend une frame à la fois (pour composer 2 sources en lockstep).
 /// `pub(crate)` : réutilisé par la preview/playback (voir `app.rs`).
 pub(crate) struct Decoder {
@@ -398,6 +470,10 @@ pub(crate) struct Decoder {
     pkt: *mut AVPacket,
     frame: *mut AVFrame,
     sent_eof: bool,
+    /// Backend CPU uniquement : convertit la frame système en texture NV12 et la présente
+    /// sous le même contrat que D3D11VA (voir `cpu_frames`). `None` en matériel — le
+    /// décodeur rend alors directement la texture du pool D3D11VA, sans copie.
+    cpu: Option<CpuFrames>,
 }
 
 // SAFETY: `Decoder` only owns FFI pointers into FFmpeg's own heap-allocated state, which
@@ -427,15 +503,34 @@ impl Decoder {
         averr(avcodec_parameters_to_context(dctx, codecpar), "params_to_ctx")?;
         allow_d3d11va_h264_baseline(dctx);
 
-        let hwdev = av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA);
-        let hwdc = (*hwdev).data as *mut AVHWDeviceContext;
-        let d3dctx = (*hwdc).hwctx as *mut AVD3D11VADeviceContext;
-        let dev_clone = gpu.device.clone();
-        (*d3dctx).device = dev_clone.as_raw() as *mut ID3D11Device;
-        std::mem::forget(dev_clone);
-        averr(av_hwdevice_ctx_init(hwdev), "hwdevice_ctx_init")?;
-        (*dctx).hw_device_ctx = av_buffer_ref(hwdev);
-        (*dctx).get_format = Some(get_hw_format);
+        // Backend CPU : on n'attache AUCUN hw_device_ctx et on ne force pas `get_format`,
+        // donc libavcodec choisit son décodeur logiciel et sort en mémoire système. Passer
+        // le device WARP à D3D11VA ne marcherait pas de toute façon — WARP n'expose pas
+        // d'`ID3D11VideoDevice` (`tests/warp_device_cannot_decode.rs`).
+        let cpu = if gpu.backend == Backend::Cpu {
+            // `threads = 0` : libavcodec prend le nombre de cœurs. C'est le seul réglage
+            // qui compte vraiment ici — sans lui le décodage logiciel est mono-thread et
+            // le benchmark mesurerait surtout ça.
+            (*dctx).thread_count = 0;
+            Some(CpuFrames::new(gpu)?)
+        } else {
+            None
+        };
+
+        let hwdev = if cpu.is_some() {
+            ptr::null_mut()
+        } else {
+            let hwdev = av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA);
+            let hwdc = (*hwdev).data as *mut AVHWDeviceContext;
+            let d3dctx = (*hwdc).hwctx as *mut AVD3D11VADeviceContext;
+            let dev_clone = gpu.device.clone();
+            (*d3dctx).device = dev_clone.as_raw() as *mut ID3D11Device;
+            std::mem::forget(dev_clone);
+            averr(av_hwdevice_ctx_init(hwdev), "hwdevice_ctx_init")?;
+            (*dctx).hw_device_ctx = av_buffer_ref(hwdev);
+            (*dctx).get_format = Some(get_hw_format);
+            hwdev
+        };
         averr(avcodec_open2(dctx, dec, ptr::null_mut()), "avcodec_open2")?;
 
         Ok(Decoder {
@@ -446,13 +541,22 @@ impl Decoder {
             pkt: av_packet_alloc(),
             frame: av_frame_alloc(),
             sent_eof: false,
+            cpu,
         })
     }
 
     /// Dernière frame décodée (valide jusqu'au prochain `next`) — pour recomposer
     /// la frame courante après un changement de config, sans réavancer (preview).
+    ///
+    /// En backend CPU c'est la frame de PRÉSENTATION (la texture NV12 uploadée), pas la
+    /// frame système du décodeur : `cur_frame` alimente `compose_frame` au même titre que
+    /// `next`, donc les deux doivent rendre la même chose. Le temps (`cur_time_sec`), lui,
+    /// continue de se lire sur la vraie frame décodée.
     pub(crate) fn cur_frame(&self) -> *mut AVFrame {
-        self.frame
+        match &self.cpu {
+            Some(cpu) => cpu.current(),
+            None => self.frame,
+        }
     }
 
     /// Repositionne le flux à la première keyframe (t=0) et vide le codec — pour boucler
@@ -534,7 +638,10 @@ impl Decoder {
         loop {
             let r = avcodec_receive_frame(self.dctx, self.frame);
             if r == 0 {
-                return Ok(self.frame);
+                return match &mut self.cpu {
+                    Some(cpu) => cpu.present(self.frame),
+                    None => Ok(self.frame),
+                };
             }
             if r == AVERROR_EOF {
                 return Ok(ptr::null_mut());
