@@ -311,6 +311,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	quitApp: () => {
 		ipcRenderer.send("app-quit");
 	},
+	setTitleBarOverlay: (color: string, symbolColor: string) => {
+		ipcRenderer.send("set-titlebar-overlay", color, symbolColor);
+	},
 	getPlatform: () => {
 		return ipcRenderer.invoke("get-platform");
 	},
