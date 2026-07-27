@@ -22,6 +22,7 @@ import {
 	type ReasoningEffort,
 } from "../../../electron/ai-edition/provider-registry";
 import { ChatWelcome } from "./ChatWelcome";
+import { canSendChat } from "./chatAvailability";
 import { computeBudget } from "./chatBudget";
 import { ChatHistoryModal, SourceTranscriptModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
@@ -674,6 +675,13 @@ function ChatStripPanel() {
 	} | null>(null);
 	const [reasoningBusy, setReasoningBusy] = useState(false);
 	const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
+	// Derive "can the user actually chat right now?" once, then use it
+	// everywhere. A stale active config that points at a provider with no
+	// credentials still counts as not-ready — the welcome view + disabled
+	// composer are the right surface. See chatAvailability.ts for the truth
+	// table; the empty-string provider case is what you get immediately
+	// after `llmDisconnect` writes its reset.
+	const canChat = canSendChat(llmConfig, connectedProviders);
 	const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
 	const modelButtonRef = useRef<HTMLButtonElement | null>(null);
 	const [modelPopoverRect, setModelPopoverRect] = useState<{
@@ -776,7 +784,7 @@ function ChatStripPanel() {
 		// surfacing a generic LLM error. The composer is also disabled in this
 		// state, but Enter-to-send could still slip through (e.g. focus
 		// restored via shortcut), so the check lives here too.
-		if (connectedProviders.length === 0) {
+		if (!canChat) {
 			setSettingsOpen(true);
 			return;
 		}
@@ -1415,7 +1423,7 @@ function ChatStripPanel() {
 			</div>
 
 			<div className={styles.panelBody} ref={scrollRef}>
-				{connectedProviders.length === 0 ? (
+				{!canChat ? (
 					<ChatWelcome onOpenProviderSettings={() => setSettingsOpen(true)} />
 				) : messages.length === 0 ? (
 					<p
@@ -1581,12 +1589,10 @@ function ChatStripPanel() {
 			<div className={styles.chatInput}>
 				<textarea
 					placeholder={
-						connectedProviders.length === 0
-							? t("chat.composerDisabledNoProvider")
-							: t("chat.composerPlaceholder")
+						canChat ? t("chat.composerPlaceholder") : t("chat.composerDisabledNoProvider")
 					}
 					value={input}
-					disabled={connectedProviders.length === 0}
+					disabled={!canChat}
 					onChange={(e) => setInput(e.target.value)}
 					onKeyDown={(e) => {
 						if (e.key === "Enter" && !e.shiftKey) {
@@ -1698,14 +1704,10 @@ function ChatStripPanel() {
 					<button
 						type="button"
 						className={styles.sendBtn}
-						title={
-							connectedProviders.length === 0
-								? t("chat.composerDisabledNoProvider")
-								: t("chat.sendTitle")
-						}
+						title={canChat ? t("chat.sendTitle") : t("chat.composerDisabledNoProvider")}
 						aria-label={t("chat.send")}
 						onClick={() => void send()}
-						disabled={busy || !input.trim() || connectedProviders.length === 0}
+						disabled={busy || !input.trim() || !canChat}
 					>
 						<svg
 							width={14}
