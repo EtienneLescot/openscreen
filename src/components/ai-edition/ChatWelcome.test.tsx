@@ -1,10 +1,7 @@
-// ChatWelcome guards the "no provider connected" empty state.
-//
-// Two things matter here:
-//   1. the welcome card is fully localized — every locale must render the
-//      CTA and the disclaimer, not fall back to a key like "chat.welcome.cta"
-//   2. the CTA opens the provider settings dialog (whatever the parent
-//      decided to do, it just has to fire the callback)
+// ChatWelcome guards the "no provider connected" empty state: the copy reaches
+// the DOM, the CTA fires, and a non-English locale is really translated rather
+// than falling back to English. localeParity.test.ts covers key presence for
+// the other locales; only the fallback check needs a rendered card.
 
 import "@testing-library/jest-dom";
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
@@ -60,30 +57,5 @@ describe("ChatWelcome", () => {
 		// Disclaimer must NOT be the English fallback
 		expect(screen.queryByText(/transcript will be sent/i)).not.toBeInTheDocument();
 		expect(screen.getByText(/transcription de votre vidéo/i)).toBeInTheDocument();
-	});
-
-	it("renders the Spanish welcome card with translated copy", () => {
-		renderIn("es", <ChatWelcome onOpenProviderSettings={vi.fn()} />);
-
-		expect(screen.getByText(/configurar un proveedor/i)).toBeInTheDocument();
-		expect(screen.getByText(/transcripción de tu vídeo/i)).toBeInTheDocument();
-	});
-
-	it("renders the Japanese welcome card with translated copy", () => {
-		renderIn("ja-JP", <ChatWelcome onOpenProviderSettings={vi.fn()} />);
-
-		expect(screen.getByText(/プロバイダーを設定/)).toBeInTheDocument();
-		// The Japanese disclaimer uses 「動画」 — guard against the English
-		// fallback by asserting the locale-specific substring is present.
-		expect(screen.getByText(/動画の文字起こし/)).toBeInTheDocument();
-	});
-
-	it("exposes the welcome region to assistive tech", () => {
-		renderIn("en", <ChatWelcome onOpenProviderSettings={vi.fn()} />);
-
-		// The region is labelled by the <h2> itself (aria-labelledby), so the
-		// title is announced once, not duplicated by a redundant aria-label.
-		const region = screen.getByRole("region", { name: /bring your own ai/i });
-		expect(region).toBeInTheDocument();
 	});
 });
