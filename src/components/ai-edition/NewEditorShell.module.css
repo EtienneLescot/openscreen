@@ -2118,15 +2118,15 @@
 .backBtn:disabled { opacity: 0.5; cursor: not-allowed; }
 
 /* ─── chat welcome (no provider connected) ──────────────────────── */
+/* .panelBody supplies the horizontal inset (var(--sp-3) var(--sp-4)); only the
+   top breathing room is ours, or the card sits twice as far in as the messages. */
 .chatWelcome {
   display: flex;
   flex-direction: column;
   align-items: stretch;
   gap: var(--sp-3);
-  padding: var(--sp-4) var(--sp-4) var(--sp-3);
+  padding: var(--sp-2) 0 0;
   text-align: left;
-  /* The .panelBody parent already centers, but a slightly tighter card
-     keeps the welcome readable when the rail is at its narrowest. */
 }
 
 .chatWelcomeHero {
