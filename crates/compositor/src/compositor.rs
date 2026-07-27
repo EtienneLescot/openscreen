@@ -378,6 +378,10 @@ pub struct Compositor {
     /// de prévisualisation demandée (variable, contrairement au `staging` fixe à
     /// OUT_W×OUT_H). Recréée quand la taille change — voir `readback_resized`.
     live_readback_staging: RefCell<Option<(u32, u32, ID3D11Texture2D)>>,
+    /// Staging NV12 du readback d'ENCODAGE (backend CPU) — même motif de cache par taille
+    /// que `live_readback_staging`, mais en NV12 et non en RGBA : l'encodeur logiciel veut
+    /// les plans Y/UV, pas des pixels RGBA. Voir `read_nv12_scaled`.
+    nv12_readback_staging: RefCell<Option<(u32, u32, ID3D11Texture2D)>>,
 }
 
 /// Ressources d'un resize export à une taille cible : RGBA intermédiaire (résultat du
@@ -1028,6 +1032,7 @@ impl Compositor {
             render_size: Cell::new((out_w, out_h)),
             resize_target: RefCell::new(None),
             live_readback_staging: RefCell::new(None),
+            nv12_readback_staging: RefCell::new(None),
         })
     }
 
@@ -2906,15 +2911,32 @@ impl Compositor {
         // → aucun resize à faire, on convertit le RT directement. Comparé à la
         // taille de rendu COURANTE et non à une constante : une fois le RT aligné
         // sur `output`, c'est justement le cas nominal.
+        // Produire le NV12 (partagé avec l'encodeur logiciel), puis le copier GPU→GPU
+        // vers le pool de l'encodeur matériel — la seule partie qui lui soit propre.
+        let src_tex = self.nv12_source(target_w, target_h)?;
+        let src: ID3D11Resource = src_tex.cast()?;
+        let dst_tex = ID3D11Texture2D::from_raw_borrowed(&out_tex).unwrap().clone();
+        let dst: ID3D11Resource = dst_tex.cast()?;
+        self.ctx.CopySubresourceRegion(&dst, slice, 0, 0, 0, &src, 0, None);
+        Ok(())
+    }
+
+    /// Rastérise le NV12 de sortie à `target_w`×`target_h` et rend LA TEXTURE du
+    /// compositeur qui le porte. C'est la moitié commune aux deux encodeurs : le matériel
+    /// la copie GPU→GPU vers le pool AMF (`rgb_to_nv12_scaled` ci-dessus), le logiciel la
+    /// relit vers la RAM (`read_nv12_scaled` ci-dessous). Extraite pour que les deux
+    /// backends produisent le MÊME NV12 — sinon l'export CPU dériverait du matériel sur
+    /// un détail de conversion, exactement ce que l'iso doit empêcher.
+    unsafe fn nv12_source(&self, target_w: u32, target_h: u32) -> Result<ID3D11Texture2D> {
         let (rw_i, rh_i) = self.render_dims();
         if target_w == rw_i && target_h == rh_i {
-            return self.rgb_to_nv12(out_tex, slice);
+            self.render_nv12();
+            return Ok(self.nv12.clone());
         }
+        // Même séquence que `rgb_to_nv12_scaled`, dont c'est la partie « produire ».
         self.blit_resized(target_w, target_h)?;
         let cache = self.resize_target.borrow();
         let t = cache.as_ref().unwrap();
-
-        // rgba (cible) -> NV12 (cible) : mêmes passes Y/UV que `render_nv12`, paramétrées.
         self.ctx.OMSetRenderTargets(Some(&[Some(t.nv12_rtv_y.clone())]), None);
         self.ctx.PSSetShaderResources(0, Some(&[Some(t.rgba_srv.clone())]));
         let vp_y = D3D11_VIEWPORT {
@@ -2934,12 +2956,73 @@ impl Compositor {
         self.ctx.PSSetShader(&self.ps_uv, None);
         self.ctx.Draw(3, 0);
         self.ctx.PSSetShaderResources(0, Some(&[None]));
+        Ok(t.nv12.clone())
+    }
 
-        // 3) copie GPU->GPU vers le pool encodeur (identique à rgb_to_nv12).
-        let src: ID3D11Resource = t.nv12.cast()?;
-        let dst_tex = ID3D11Texture2D::from_raw_borrowed(&out_tex).unwrap().clone();
-        let dst: ID3D11Resource = dst_tex.cast()?;
-        self.ctx.CopySubresourceRegion(&dst, slice, 0, 0, 0, &src, 0, None);
+    /// Le NV12 de sortie LU vers la mémoire système, plan Y puis plan UV.
+    ///
+    /// Pendant de `rgb_to_nv12_scaled` pour un encodeur LOGICIEL : `libopenh264` ne sait
+    /// pas prendre une texture D3D11, il veut des plans en RAM. C'est la seule copie
+    /// GPU→CPU du chemin d'export CPU, et elle est inévitable — le backend CPU rastérise
+    /// sur WARP (donc déjà en RAM côté pilote) mais D3D11 n'expose pas ces octets
+    /// autrement que par une staging.
+    ///
+    /// `dst_y`/`dst_uv` doivent tenir `target_h * pitch_y` et `target_h/2 * pitch_uv`
+    /// octets — typiquement les `data[0]`/`data[1]` d'une `AVFrame` NV12.
+    pub unsafe fn read_nv12_scaled(
+        &self,
+        target_w: u32,
+        target_h: u32,
+        dst_y: *mut u8,
+        pitch_y: usize,
+        dst_uv: *mut u8,
+        pitch_uv: usize,
+    ) -> Result<()> {
+        let src_tex = self.nv12_source(target_w, target_h)?;
+
+        // Staging NV12 cachée par taille (même idiome que `live_readback_staging`) :
+        // une allocation par changement de résolution, pas une par frame.
+        let mut cache = self.nv12_readback_staging.borrow_mut();
+        if cache.as_ref().map(|(w, h, _)| (*w, *h)) != Some((target_w, target_h)) {
+            let sd = D3D11_TEXTURE2D_DESC {
+                Width: target_w,
+                Height: target_h,
+                MipLevels: 1,
+                ArraySize: 1,
+                Format: DXGI_FORMAT_NV12,
+                SampleDesc: DXGI_SAMPLE_DESC { Count: 1, Quality: 0 },
+                Usage: D3D11_USAGE_STAGING,
+                BindFlags: 0,
+                CPUAccessFlags: D3D11_CPU_ACCESS_READ.0 as u32,
+                MiscFlags: 0,
+            };
+            let mut t: Option<ID3D11Texture2D> = None;
+            self.dev.CreateTexture2D(&sd, None, Some(&mut t))?;
+            *cache = Some((target_w, target_h, t.unwrap()));
+        }
+        let staging = &cache.as_ref().unwrap().2;
+
+        let src: ID3D11Resource = src_tex.cast()?;
+        let dst: ID3D11Resource = staging.cast()?;
+        self.ctx.CopyResource(&dst, &src);
+
+        let mut m = D3D11_MAPPED_SUBRESOURCE::default();
+        self.ctx.Map(&dst, 0, D3D11_MAP_READ, 0, Some(&mut m))?;
+        // Disposition NV12 mappée : Y sur `target_h` lignes de `RowPitch`, puis UV sur
+        // `target_h/2` lignes au même pitch. Copie ligne par ligne — les deux pitchs
+        // diffèrent (le driver pad, ffmpeg aligne sur son propre SIMD).
+        let row = (target_w as usize).min(m.RowPitch as usize).min(pitch_y);
+        for y in 0..target_h as usize {
+            let s = (m.pData as *const u8).add(y * m.RowPitch as usize);
+            std::ptr::copy_nonoverlapping(s, dst_y.add(y * pitch_y), row);
+        }
+        let uv_src = (m.pData as *const u8).add(m.RowPitch as usize * target_h as usize);
+        let uv_row = (target_w as usize).min(m.RowPitch as usize).min(pitch_uv);
+        for y in 0..(target_h as usize / 2) {
+            let s = uv_src.add(y * m.RowPitch as usize);
+            std::ptr::copy_nonoverlapping(s, dst_uv.add(y * pitch_uv), uv_row);
+        }
+        self.ctx.Unmap(&dst, 0);
         Ok(())
     }
 
