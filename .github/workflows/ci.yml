@@ -3,11 +3,16 @@ name: CI
 # feat/ai-edition is a long-lived integration branch that PRs land on for
 # months at a time. Without it listed here, every one of those PRs merged with
 # no lint, no typecheck, no tests and no PR-title check.
+#
+# release/** is here for the same reason and it cost more: PRs #167, #168 and
+# #169 — 30k+ lines of deletion and refactor — merged into release/1.8.0 with
+# every one of those jobs skipped, because a release branch matched neither
+# pattern. A release branch is the LAST place to run a build unguarded.
 on:
   pull_request:
-    branches: [main, feat/ai-edition]
+    branches: [main, feat/ai-edition, "release/**"]
   push:
-    branches: [main, feat/ai-edition]
+    branches: [main, feat/ai-edition, "release/**"]
 
 jobs:
   lint:
@@ -25,6 +30,43 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - run: npx tsc --noEmit
+
+  typecheck-tests:
+    name: Typecheck (tests)
+    runs-on: ubuntu-latest
+    # A RATCHET, not a gate. tsconfig.json includes only src + electron and
+    # excludes **/*.test.ts, so no test file has ever been typechecked, and
+    # vitest transpiles without checking — fixture types have drifted from the
+    # schemas they claim to build for years. Failing on the whole backlog would
+    # put a red X on every PR that nobody can fix, and a check everyone ignores
+    # is worse than no check. So: fail only if the count GROWS. Lower BASELINE
+    # whenever you fix some; delete this job's baseline logic at zero.
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - name: Typecheck tests against a baseline
+        shell: bash
+        env:
+          BASELINE: 80
+        run: |
+          set -uo pipefail
+          COUNT=$(npx tsc -p tsconfig.test.json --noEmit 2>&1 | grep -c 'error TS' || true)
+          {
+            echo "## Test-file typecheck"
+            echo ""
+            echo "| | |"
+            echo "|---|---|"
+            echo "| Errors now | ${COUNT} |"
+            echo "| Baseline | ${BASELINE} |"
+          } >> "$GITHUB_STEP_SUMMARY"
+          if [ "${COUNT}" -gt "${BASELINE}" ]; then
+            echo "::error::Test-file type errors went ${BASELINE} -> ${COUNT}. Fix the new ones, or raise BASELINE in ci.yml with a reason."
+            npx tsc -p tsconfig.test.json --noEmit 2>&1 | grep 'error TS' || true
+            exit 1
+          fi
+          if [ "${COUNT}" -lt "${BASELINE}" ]; then
+            echo "::notice::Test-file type errors down to ${COUNT} (baseline ${BASELINE}). Lower BASELINE in ci.yml to lock the win in."
+          fi
 
   docs:
     name: Docs

@@ -1,0 +1,23 @@
+// Typechecks what tsconfig.json deliberately leaves out.
+//
+// The main config is `include: ["src", "electron"]` with
+// `exclude: ["**/*.test.ts", "**/*.test.tsx"]`, so no test file and nothing
+// under tests/ ever reaches `tsc --noEmit` — and vitest transpiles without
+// checking. A schema refactor on release/1.8.0 rewrote fixtures by hand and
+// left a `preview.playbackRate` that was never in the schema; the typecheck
+// gate it leaned on could not see the files it had edited.
+//
+// Kept separate from tsconfig.json rather than folded in: test files use
+// vitest globals and `any`-ish mock shapes that would have to be loosened for
+// the whole app if they shared one config. Same strictness, wider include.
+{
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		// Vitest's `describe`/`it`/`expect` are ambient in test files only.
+		"types": ["vitest/globals", "node"],
+		// Mocks legitimately shadow parameters they never read.
+		"noUnusedParameters": false
+	},
+	"include": ["src", "electron", "tests", "scripts"],
+	"exclude": []
+}

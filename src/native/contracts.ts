@@ -206,22 +206,6 @@ export interface AiEditionLlmSnapshot {
 	}>;
 }
 
-export interface AiEditionDeviceChallenge {
-	verificationUri: string;
-	verificationUriComplete?: string;
-	userCode: string;
-	deviceCode?: string;
-	deviceAuthId?: string;
-	intervalMs: number;
-	expiresAt: number;
-}
-
-export interface AiEditionDeviceCompletionResult {
-	success: boolean;
-	snapshot?: AiEditionLlmSnapshot;
-	error?: string;
-}
-
 export interface AiEditionLlmDisconnectResult {
 	success: boolean;
 	snapshot: AiEditionLlmSnapshot;
@@ -527,26 +511,6 @@ export type NativeBridgeRequest =
 			domain: "aiEdition";
 			action: "llm.removeApiKey";
 			payload: { providerId: string };
-			requestId?: string;
-	  }
-	| {
-			domain: "aiEdition";
-			action: "llm.beginDeviceAuth";
-			payload: {
-				providerId: "openai-oauth" | "copilot-proxy";
-				/** Optional model — recorded into the config when the device flow completes. */
-				model?: string;
-			};
-			requestId?: string;
-	  }
-	| {
-			domain: "aiEdition";
-			action: "llm.completeDeviceAuth";
-			payload: {
-				providerId: "openai-oauth" | "copilot-proxy";
-				challenge: AiEditionDeviceChallenge;
-				model?: string;
-			};
 			requestId?: string;
 	  }
 	| {

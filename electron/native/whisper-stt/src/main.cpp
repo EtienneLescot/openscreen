@@ -207,13 +207,14 @@ struct Word {
 int main(int argc, char** argv) {
 	std::string model_path;
 	std::string host = "127.0.0.1";
+	bool host_from_flag = false;
 	int port = 0;
 	int threads = std::max(1u, std::thread::hardware_concurrency());
 
 	for (int i = 1; i < argc; ++i) {
 		const std::string a = argv[i];
 		if (a == "--model"   && i + 1 < argc) model_path = argv[++i];
-		else if (a == "--host" && i + 1 < argc) host = argv[++i];
+		else if (a == "--host" && i + 1 < argc) { host = argv[++i]; host_from_flag = true; }
 		else if (a == "--port" && i + 1 < argc) port = std::atoi(argv[++i]);
 		else if (a == "--threads" && i + 1 < argc) threads = std::atoi(argv[++i]);
 	}
@@ -226,7 +227,19 @@ int main(int argc, char** argv) {
 		if (const char* p = std::getenv("OPENSCREEN_WHISPER_PORT")) port = std::atoi(p);
 	}
 	if (const char* p = std::getenv("OPENSCREEN_WHISPER_THREADS")) threads = std::atoi(p);
-	if (const char* p = std::getenv("OPENSCREEN_WHISPER_HOST")) host = p;
+	// Only a fallback, never an override: the app always passes --host 127.0.0.1,
+	// and an env var that can widen a shipped binary's bind address behind an
+	// explicit flag is a hole, not a knob. Anything but loopback is refused
+	// outright — this server has no authentication of any kind.
+	if (!host_from_flag) {
+		if (const char* p = std::getenv("OPENSCREEN_WHISPER_HOST")) host = p;
+	}
+	if (host != "127.0.0.1" && host != "::1" && host != "localhost") {
+		std::cerr << "FATAL: refusing to bind " << host
+		          << " — whisper-stt-server is unauthenticated and loopback-only"
+		          << std::endl;
+		return 2;
+	}
 
 	if (model_path.empty()) {
 		std::cerr << "FATAL: --model <path-to-ggml.bin> or "

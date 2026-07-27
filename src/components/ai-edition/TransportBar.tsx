@@ -1,4 +1,4 @@
-import { Maximize2, Pause, Play, Repeat, SkipBack, SkipForward } from "lucide-react";
+import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { memo } from "react";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
@@ -13,14 +13,11 @@ function formatTC(sec: number): string {
 
 interface TransportBarProps {
 	playing: boolean;
-	loop: boolean;
 	currentTimeSec: number;
 	clips: AxcutClip[];
 	onTogglePlay: () => void;
 	onPrevClip: () => void;
 	onNextClip: () => void;
-	onToggleLoop: () => void;
-	onExpand: () => void;
 	onSeek: (sec: number) => void;
 }
 
@@ -28,18 +25,14 @@ interface TransportBarProps {
 // so the header row covers both timeline tools and playback in one line.
 export const TransportBar = memo(function TransportBar({
 	playing,
-	loop,
 	currentTimeSec,
 	clips,
 	onTogglePlay,
 	onPrevClip,
 	onNextClip,
-	onToggleLoop,
-	onExpand,
 	onSeek,
 }: TransportBarProps) {
 	const te = useScopedT("editor");
-	const tc = useScopedT("common");
 	const virtualDurationSec = clips.reduce(
 		(acc, c) => acc + (c.timelineEndSec - c.timelineStartSec),
 		0,
@@ -79,25 +72,6 @@ export const TransportBar = memo(function TransportBar({
 				onClick={onNextClip}
 			>
 				<SkipForward size={13} />
-			</button>
-			<button
-				type="button"
-				className={styles.tbtn}
-				title={te("transport.loop")}
-				aria-label={te("transport.loop")}
-				aria-pressed={loop}
-				onClick={onToggleLoop}
-			>
-				<Repeat size={13} />
-			</button>
-			<button
-				type="button"
-				className={styles.tbtn}
-				title={tc("playback.fullscreen")}
-				aria-label={tc("playback.fullscreen")}
-				onClick={onExpand}
-			>
-				<Maximize2 size={13} />
 			</button>
 			<span className={styles.time}>
 				<span>{formatTC(currentTimeSec)}</span>

@@ -29,6 +29,8 @@
 //     tag, asset name and digest are one unit.
 //   Source approved by Etienne (2026-07-16). BtbN is linked from ffmpeg.org's
 //   download page and published on winget as BtbN.FFmpeg.LGPL.
+//   Attribution + source offer for what we redistribute: THIRD-PARTY-NOTICES.md,
+//   which electron-builder ships into resources/.
 //
 // LICENSING — the other thing this script exists to protect:
 //   ffmpeg is LGPL *by default*. It becomes GPL only when built with
@@ -37,6 +39,12 @@
 //   would contaminate this MIT app. We take BtbN's *-lgpl assets AND verify what
 //   we got before vendoring. Never swap in a "gpl" asset for the extra encoders:
 //   there is nothing in them we need — the hardware encoders are all LGPL.
+//
+// WHAT ACTUALLY SHIPS: only the shared av*.dll set, which the compositor addon
+// dlopens. electron-builder excludes the static ffmpeg.exe from the installer
+// ("!win32-*/ffmpeg.exe") — it is a bench tool, and shipping a large binary no
+// runtime code opens is cost with no benefit. It still lands in this directory
+// so scripts/bench-export.mjs can use a local checkout.
 //
 // NOTE: the plan this was vendored for is REFUTED. Feeding native ffmpeg from
 // the renderer measured 2.1x SLOWER than the WebCodecs path it was to replace —
@@ -133,9 +141,10 @@ function run(cmd, args, opts = {}) {
 }
 
 /**
- * Refuses to vendor anything that would relicense the app. Mirrors isLgplBuild()
- * in electron/media/ffmpegCapabilities.ts on purpose: that one guards at
- * runtime, this one at build time. If they ever disagree, one of them drifted.
+ * Refuses to vendor anything that would relicense the app. This is now the only
+ * licence gate — the runtime twin it used to mirror
+ * (electron/media/ffmpegCapabilities.ts) went with the web export pipeline, and
+ * nothing in the app spawns ffmpeg any more.
  */
 function assertLgpl(exePath) {
 	const problems = [];

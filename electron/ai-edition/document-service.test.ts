@@ -247,6 +247,11 @@ describe("DocumentService", () => {
 		// one long/short race spliced the file ~5 times out of 10. A single attempt
 		// passed against the very bug it was written for. 12 rounds miss it once in
 		// ~4000 runs; the loop is the test, not decoration.
+		//
+		// Explicit timeout: 12 rounds of real create + fsync + rename take ~1.7s on
+		// an idle machine but blow vitest's 5s default when the full suite runs its
+		// files in parallel — observed failing there and passing alone. 30s is the
+		// "this actually hung" threshold, not the expected runtime.
 		it("leaves valid JSON when a long and a short save race", async () => {
 			for (let round = 0; round < 12; round++) {
 				const doc = await service.createProject(`Race ${round}`);
@@ -267,7 +272,7 @@ describe("DocumentService", () => {
 				expect([1, 400]).toContain(parsed.annotations.length);
 				expect(raw.trimEnd().endsWith("}")).toBe(true);
 			}
-		});
+		}, 30_000);
 
 		it("applies racing saves in call order, last one winning", async () => {
 			const doc = await service.createProject("Order");
