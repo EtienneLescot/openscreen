@@ -57,7 +57,31 @@ C0..C8 are cumulative — each adds one layer, so the fps delta between two rows
 | C7 | + custom cursor (bounce) |
 | C8 | + motion blur (velocity, 8 taps) |
 
-It writes `out/C{0..8}.mp4` (1080p60, 360 frames), frame PNGs at 60/180/300, `out/report.json`, and a markdown table on stdout. The per-config C0→C8 fps table is **not recorded in this document** — only the C8 headline and the C0-ish ~210 fps ceiling are (see [Known gaps](#known-gaps)).
+It writes `out/C{0..8}.mp4` (1080p60, 360 frames), frame PNGs at 60/180/300, `out/report.json`, and a markdown table on stdout.
+
+#### One admissible run — 2026-07-27
+
+Reference machine, `--repeat 3`, one full C0..C8 warm-up sweep discarded first, fixture regenerated from the frozen manifest (`-c copy`, bitstream untouched). Every config passes the protocol's < 15 % spread gate. `fps` is the harness's **best of 3**, not a median — it reports `best` and derives spread from best-vs-worst ([`bench.rs:105`](../../crates/poc-d3d/src/bench.rs)).
+
+| cfg | adds | fps | ms/f | Δ ms/f | spread |
+|---|---|---:|---:|---:|---:|
+| C0 | decode + encode, no composite | **236.5** | 4.23 | — | 0.6 % |
+| C1 | + background, layout, 2 sources | 142.5 | 7.02 | **+2.79** | 1.6 % |
+| C2 | + rounded corners | 141.4 | 7.07 | +0.05 | 5.1 % |
+| C3 | + drop shadows | 134.5 | 7.43 | +0.36 | 0.9 % |
+| C4 | + background blur | 121.9 | 8.21 | **+0.77** | 5.7 % |
+| C5 | + animated zoom | 123.2 | 8.12 | −0.09 | 2.6 % |
+| C6 | + layout animation | 125.4 | 7.97 | −0.14 | 10.6 % |
+| C7 | + custom cursor (bounce) | 127.3 | 7.86 | −0.12 | 9.0 % |
+| C8 | + motion blur (velocity, 8 taps) | **104.0** | 9.62 | **+1.76** | 2.4 % |
+
+**Three layers cost; the rest are free.** Compositing at all is the big step (C0→C1, +2.79 ms/frame — the encoder's whole budget is 4.23), then background blur (+0.77) and motion blur (+1.76). Rounded corners and shadows are near-free because they draw inside a pass that already exists — the same finding the [Canvas2D-era radius measurement](#what-the-compositor-was-rebuilding-per-frame) reached by a different route.
+
+**C5–C7 read as a flat band, and that is the honest reading.** Zoom, layout animation and cursor land at 123.2 / 125.4 / 127.3 — *above* their predecessor, which is impossible for cumulative configs. The violations are +1 to +2 fps against those configs' own spreads of 2.6 / 10.6 / 9.0 %, so they are noise around a plateau, not a measurement: **those three layers do not move the needle.** Reporting them as monotone would be inventing precision the run does not have.
+
+C8's 104.0 fps sits under the ~126 headline above. Different session and thermal state, and a different statistic (that figure is a median under protocol §C.2, this one a best-of-3) — the two are not comparable as levels. **The layer attribution is what this run claims; the absolute is not.**
+
+> A first attempt the same day was **VOID** and is not reported: five of nine configs blew the spread gate (up to 42.5 %) while ~40 browser and Electron processes were live, and C3 came out **+15.8 fps faster than C2** — adding a layer. Cumulative configs cannot speed up; that is the tell that noise had swamped the signal. It is recorded here only because it is a clean example of why the gate exists.
 
 ## How we got here — the WebCodecs trail
 
@@ -397,7 +421,8 @@ Unit tests never look at a pixel. The `native*` arms write real files: export th
 
 ## Known gaps
 
-- **The C0→C8 per-layer table is not recorded here.** Only the C8 headline (~126 fps) and the decode+encode ceiling (~210 fps) are. The bench prints the full table and writes `out/report.json` on every run; landing one admissible run's table in this document would price each effect on the shipped path the way [M4](#m4--the-layer-bench) did for the deleted one — which is the one thing the WebCodecs trail still does better than the D3D11 record.
+- **The C0→C8 table rests on one run, on one machine.** [Recorded above](#one-admissible-run--2026-07-27) and admissible on its own gate, but a single sweep: the C5–C7 plateau is the part most likely to move under a second run, since the layers it prices are individually smaller than the machine's own noise. A repeat on a cool machine — and on the discrete-GPU box that is [owed anyway](#known-gaps) — would settle whether those three are genuinely free or merely under the floor.
+- **The fixture media is not versioned, and its cursor track has no provenance entry.** `crates/fixture/fixture.json` documents the exact `-c copy` cuts for `screen.mp4` and `webcam.mp4` (which is what made the run above reproducible), but says nothing about `screen.cursor.json`, which C7 needs. It happens to be the raw, uncut `.cursor.json` beside the origin recording — the loader windows it itself at `offset 100_000 ms, 6 s` ([`bench.rs:70`](../../crates/poc-d3d/src/bench.rs)), matching the manifest's `cut_offset_s: 100`. That is recoverable by reading the code, not by reading the manifest; the manifest should carry it.
 - **One bench fixture is still corrupt, from a bug since fixed.** Two concurrent saves used to be able to interleave and truncate a project file, which destroyed at least two real ones (a valid JSON prefix followed by the tail of a longer version). `proj_de6ffaaa` (`os_parity`) is still in that state — 4006 bytes, 3485 of them valid JSON — with a byte-exact backup beside it (`*.corrupt-backup-20260716`); recovery is mechanical (truncate to the 3485-byte prefix). The bug itself is gone: `DocumentService` now serialises saves through a per-project write queue and writes atomically (unique temp file → `fsync` → rename), which is why Gate G0 was run on `proj_5b3ac6bc` instead. The reference project for M1–M4 is `proj_a7468696`.
 - **A discrete-GPU and Intel QSV run is owed** (G3). Every number in this record is from a single iGPU laptop. A hybrid-GPU laptop (Intel iGPU + NVIDIA dGPU; AMD APU + AMD dGPU) is the case that must be measured and adapter-pinned before any native number is trusted there: if decode, composite and encode land on **different** adapters, the single-device zero-copy assumption breaks and a cross-adapter copy through system RAM / PCIe is forced — a descent in disguise, reintroducing exactly the wall this architecture removes.
 - **Shadow-on-GPU spike.** Reimplement the exact 3-pass cascade (the SVG `feGaussianBlur` for the project's radii) in a shader, pixel-diffed against the Canvas2D output. Falsifiable: if the GPU and Canvas2D outputs do not match, the claim is wrong. Skia's real path may not follow the spec's letter. The product call (2026-07-17) that a moving camera is the norm is what makes this the remaining lever on heavy timelines.
