@@ -54,6 +54,8 @@ type UseScreenRecorderReturn = {
 	saving: boolean;
 	elapsedSeconds: number;
 	toggleRecording: () => void;
+	/** Starts recording with no countdown overlay. Used by the headless CLI runner. */
+	startRecordingImmediately: () => Promise<void>;
 	togglePaused: () => void;
 	canPauseRecording: boolean;
 	restartRecording: () => void;
@@ -1728,6 +1730,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		saving,
 		elapsedSeconds,
 		toggleRecording,
+		startRecordingImmediately: () => startRecording(),
 		togglePaused,
 		canPauseRecording,
 		restartRecording,

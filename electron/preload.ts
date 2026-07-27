@@ -302,4 +302,22 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	sendCloseConfirmResponse: (choice: "save" | "discard" | "cancel") => {
 		ipcRenderer.send("close-confirm-response", choice);
 	},
+	// --- CLI mode (hidden runner windows; see electron/cli/) ---
+	cliGetRequest: () => {
+		return ipcRenderer.invoke("cli-get-request");
+	},
+	cliProgress: (progress: unknown) => {
+		ipcRenderer.send("cli-progress", progress);
+	},
+	cliLog: (level: "info" | "error", message: string) => {
+		ipcRenderer.send("cli-log", level, message);
+	},
+	cliDone: (result: unknown) => {
+		return ipcRenderer.invoke("cli-done", result);
+	},
+	onCliStopRecording: (callback: () => void) => {
+		const listener = () => callback();
+		ipcRenderer.on("cli-stop-recording", listener);
+		return () => ipcRenderer.removeListener("cli-stop-recording", listener);
+	},
 });

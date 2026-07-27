@@ -12,6 +12,8 @@ import {
 	Tray,
 } from "electron";
 import { ShortcutBinding } from "../src/lib/shortcuts";
+import { parseCliArgs } from "./cli/args";
+import { runCli } from "./cli/cliMain";
 import { isDiagnosticModeEnabled, mainLogBuffer } from "./diagnostics/main-log-buffer";
 import {
 	loadAndRegisterGlobalShortcut,
@@ -30,6 +32,10 @@ import {
 } from "./windows";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
+
+// CLI mode: `openscreen export|record|info|help ...` runs headless without
+// HUD/tray/menu. Parsed before any GUI side effects; see electron/cli/.
+const cliCommand = parseCliArgs(process.argv, app.isPackaged ? 1 : 2);
 
 // Use Screen & System Audio Recording permissions instead of the CoreAudio Tap API on macOS.
 // Tap needs NSAudioCaptureUsageDescription in the parent app's Info.plist, which breaks when
@@ -122,11 +128,15 @@ function showMainWindow() {
 	createWindow();
 }
 
-const stableInstanceLock = acquireStableInstanceLock();
-const hasElectronSingleInstanceLock = app.requestSingleInstanceLock();
+// CLI runs skip the single-instance lock so `openscreen export/record` works
+// while the GUI app is open (they share nothing but the recordings directory).
+const stableInstanceLock = cliCommand ? null : acquireStableInstanceLock();
+const hasElectronSingleInstanceLock = cliCommand ? false : app.requestSingleInstanceLock();
 const hasSingleInstanceLock = Boolean(stableInstanceLock && hasElectronSingleInstanceLock);
 
-if (hasSingleInstanceLock) {
+if (cliCommand) {
+	runCli(cliCommand);
+} else if (hasSingleInstanceLock) {
 	app.on("second-instance", () => {
 		showMainWindow();
 	});
@@ -478,11 +488,15 @@ function createCountdownOverlayWindowWrapper() {
 
 // Closing every window quits the app (tray goes too). The in-app "Return to Recorder"
 // button covers the editor-to-HUD round-trip, so closing the last window means "I'm done".
-app.on("window-all-closed", () => {
-	app.quit();
-});
+// CLI mode owns its own lifecycle (see electron/cli/cliMain.ts).
+if (!cliCommand) {
+	app.on("window-all-closed", () => {
+		app.quit();
+	});
+}
 
 app.on("activate", () => {
+	if (cliCommand) return;
 	// On macOS, re-open a window when the dock icon is clicked and none are open.
 	const hasVisibleWindow = BrowserWindow.getAllWindows().some((window) => {
 		if (window.isDestroyed() || !window.isVisible()) {
@@ -503,7 +517,7 @@ app.on("will-quit", () => {
 	stableInstanceLock?.release();
 });
 
-const appReady = hasSingleInstanceLock ? app.whenReady() : null;
+const appReady = !cliCommand && hasSingleInstanceLock ? app.whenReady() : null;
 
 appReady?.then(async () => {
 	if (isDiagnosticModeEnabled()) {
