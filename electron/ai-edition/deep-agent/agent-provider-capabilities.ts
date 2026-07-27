@@ -60,14 +60,6 @@ export function getReasoningCapability(provider: string, model?: string): Reason
 	const def: ProviderDefinition | undefined = getProviderDefinition(provider);
 	const normalizedModel = normalizeModelName(model);
 
-	if (provider === "openai-oauth") {
-		return {
-			supported: true,
-			efforts: AGENT_REASONING_EFFORTS,
-			defaultEffort: "medium",
-			strategy: "custom-openai-account",
-		};
-	}
 	if (
 		(provider === "openai" || provider === "openai-compatible") &&
 		isOpenAIReasoningModel(normalizedModel)

@@ -493,23 +493,6 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 								requestId,
 								await aiEditionService.llmRemoveApiKey(request.payload.providerId),
 							);
-						case "llm.beginDeviceAuth":
-							return createSuccessResponse(
-								requestId,
-								await aiEditionService.llmBeginDeviceAuth(
-									request.payload.providerId,
-									request.payload.model,
-								),
-							);
-						case "llm.completeDeviceAuth":
-							return createSuccessResponse(
-								requestId,
-								await aiEditionService.llmCompleteDeviceAuth(
-									request.payload.providerId,
-									request.payload.challenge,
-									request.payload.model,
-								),
-							);
 						case "llm.disconnect":
 							return createSuccessResponse(
 								requestId,
