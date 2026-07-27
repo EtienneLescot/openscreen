@@ -256,6 +256,15 @@
 		"addSkipRange": "スキップ範囲を追加",
 		"skipButtonShort": "+ スキップ",
 		"emptyState": "まだメッセージはありません。エージェントに無音のカット、間の調整、字幕の追加を依頼してみましょう。",
+		"welcome": {
+			"title": "自分のAIを持ち込もう",
+			"subtitle": "チャットは言語モデルと会話しながら動画を編集します。信頼できるプロバイダーを選んで API キーを接続すれば始められます。",
+			"feature1": "無音部分をカットし、間を詰め、つなぎ言葉を削除",
+			"feature2": "字幕を追加し、カメラをズームし、タイトルを生成",
+			"feature3": "セクションを言い換えたり、書き直したり、クリップを分割",
+			"cta": "プロバイダーを設定",
+			"disclaimer": "動画の文字起こしは、選択したプロバイダーに送信されます。接続するまでは何も共有されません。"
+		},
 		"authorUser": "あなた",
 		"authorAssistant": "OpenScreen",
 		"rewindToMessage": "このメッセージまで巻き戻す",
@@ -265,6 +274,7 @@
 		"appliedPrefix": "適用済み：",
 		"thinking": "考え中…",
 		"composerPlaceholder": "希望する編集内容を記述してください。",
+		"composerDisabledNoProvider": "チャットを始めるにはプロバイダーを設定してください。",
 		"modelLabel": "モデル",
 		"reasoningEffortLabel": "推論の労力",
 		"sendTitle": "送信（Enter）",

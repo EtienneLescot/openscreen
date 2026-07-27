@@ -256,6 +256,15 @@
 		"addSkipRange": "新增跳過範圍",
 		"skipButtonShort": "+ 跳過",
 		"emptyState": "尚無訊息。可以請代理剪掉靜音、收緊停頓或加入字幕。",
+		"welcome": {
+			"title": "自帶你的 AI",
+			"subtitle": "聊天透過與語言模型對話來編輯你的影片。選擇你信任的提供者並連接一個 API 金鑰即可開始。",
+			"feature1": "剪輯靜音、收緊停頓、去除口頭禪",
+			"feature2": "新增字幕、為鏡頭變焦、產生標題",
+			"feature3": "依需求重寫段落、換種說法或分割片段",
+			"cta": "設定提供者",
+			"disclaimer": "你影片的轉錄文字會送到你選擇的提供者。在你連接之前不會分享任何內容。"
+		},
 		"authorUser": "你",
 		"authorAssistant": "OpenScreen",
 		"rewindToMessage": "倒轉至此訊息",
@@ -265,6 +274,7 @@
 		"appliedPrefix": "已套用：",
 		"thinking": "思考中…",
 		"composerPlaceholder": "描述你想要的編輯內容。",
+		"composerDisabledNoProvider": "請先設定一個提供者再開始聊天。",
 		"modelLabel": "模型",
 		"reasoningEffortLabel": "推理強度",
 		"sendTitle": "傳送（Enter）",

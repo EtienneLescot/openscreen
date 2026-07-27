@@ -256,6 +256,15 @@
 		"addSkipRange": "添加跳过范围",
 		"skipButtonShort": "+ 跳过",
 		"emptyState": "暂无消息。可以让代理剪掉静音、收紧停顿或添加字幕。",
+		"welcome": {
+			"title": "自带你的 AI",
+			"subtitle": "聊天通过与语言模型对话来编辑你的视频。选择你信任的提供方并连接一个 API 密钥即可开始。",
+			"feature1": "剪掉静音、收紧停顿、去除口头禅",
+			"feature2": "添加字幕、为镜头变焦、生成标题",
+			"feature3": "按需重写章节、换种说法或拆分片段",
+			"cta": "设置提供方",
+			"disclaimer": "你视频的转录文本将发送到你选择的提供方。在你连接之前不会共享任何内容。"
+		},
 		"authorUser": "你",
 		"authorAssistant": "OpenScreen",
 		"rewindToMessage": "回退到此消息",
@@ -265,6 +274,7 @@
 		"appliedPrefix": "已应用：",
 		"thinking": "思考中…",
 		"composerPlaceholder": "描述你想要的编辑内容。",
+		"composerDisabledNoProvider": "请先设置一个提供方再开始聊天。",
 		"modelLabel": "模型",
 		"reasoningEffortLabel": "推理强度",
 		"sendTitle": "发送（回车）",

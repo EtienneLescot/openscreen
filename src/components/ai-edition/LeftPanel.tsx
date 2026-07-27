@@ -21,6 +21,7 @@ import {
 	PROVIDER_DEFINITIONS,
 	type ReasoningEffort,
 } from "../../../electron/ai-edition/provider-registry";
+import { ChatWelcome } from "./ChatWelcome";
 import { computeBudget } from "./chatBudget";
 import { ChatHistoryModal, SourceTranscriptModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
@@ -770,6 +771,15 @@ function ChatStripPanel() {
 	const send = async (overrideText?: string) => {
 		const text = (overrideText ?? input).trim();
 		if (!projectId || !text || busy) return;
+		// ponytail: no connected provider = nothing to talk to. Bounce the user
+		// to the settings modal instead of sending a doomed request and
+		// surfacing a generic LLM error. The composer is also disabled in this
+		// state, but Enter-to-send could still slip through (e.g. focus
+		// restored via shortcut), so the check lives here too.
+		if (connectedProviders.length === 0) {
+			setSettingsOpen(true);
+			return;
+		}
 		setInput("");
 		setBusy(true);
 		// ponytail: pre-seed the user message so the rewind ↩ button is
@@ -1405,7 +1415,9 @@ function ChatStripPanel() {
 			</div>
 
 			<div className={styles.panelBody} ref={scrollRef}>
-				{messages.length === 0 ? (
+				{connectedProviders.length === 0 ? (
+					<ChatWelcome onOpenProviderSettings={() => setSettingsOpen(true)} />
+				) : messages.length === 0 ? (
 					<p
 						style={{
 							font: "400 12px var(--font-body)",
@@ -1568,8 +1580,13 @@ function ChatStripPanel() {
 
 			<div className={styles.chatInput}>
 				<textarea
-					placeholder={t("chat.composerPlaceholder")}
+					placeholder={
+						connectedProviders.length === 0
+							? t("chat.composerDisabledNoProvider")
+							: t("chat.composerPlaceholder")
+					}
 					value={input}
+					disabled={connectedProviders.length === 0}
 					onChange={(e) => setInput(e.target.value)}
 					onKeyDown={(e) => {
 						if (e.key === "Enter" && !e.shiftKey) {
@@ -1681,10 +1698,14 @@ function ChatStripPanel() {
 					<button
 						type="button"
 						className={styles.sendBtn}
-						title={t("chat.sendTitle")}
+						title={
+							connectedProviders.length === 0
+								? t("chat.composerDisabledNoProvider")
+								: t("chat.sendTitle")
+						}
 						aria-label={t("chat.send")}
 						onClick={() => void send()}
-						disabled={busy || !input.trim()}
+						disabled={busy || !input.trim() || connectedProviders.length === 0}
 					>
 						<svg
 							width={14}
