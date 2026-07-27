@@ -187,16 +187,6 @@
 		"mosaicBlockSize": "Mozaik Blok Boyutu",
 		"type": "Tür"
 	},
-	"fontStyles": {
-		"classic": "Klasik",
-		"editor": "Editör",
-		"strong": "Kalın",
-		"typewriter": "Daktilo",
-		"deco": "Dekoratif",
-		"simple": "Sade",
-		"modern": "Modern",
-		"clean": "Temiz"
-	},
 	"textAnimation": {
 		"title": "Metin Animasyonu",
 		"selectAnimation": "Animasyon seçin",

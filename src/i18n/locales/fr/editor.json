@@ -44,25 +44,6 @@
 	},
 	"loadingVideo": "Chargement de la vidéo...",
 	"loadingEditor": "Chargement de l'éditeur...",
-	"autoCaptions": {
-		"button": "Sous-titres automatiques",
-		"dialogTitle": "Sous-titres automatiques",
-		"dialogDescription": "Choisissez approximativement combien de mots chaque sous-titre affiche à la fois. Le timing est réparti entre les mots de cette phrase.",
-		"minWords": "Nombre minimum de mots par sous-titre",
-		"maxWords": "Nombre maximum de mots par sous-titre",
-		"wordsCount": "{{count}} mots",
-		"generate": "Générer",
-		"dialogCancel": "Annuler",
-		"generating": "Génération des sous-titres à partir de l'audio…",
-		"loadingModel": "Chargement du modèle vocal (le premier usage télécharge ~75 MB)…",
-		"transcribing": "Transcription de la parole…",
-		"busy": "La génération des sous-titres est déjà en cours.",
-		"done": "{{count}} sous-titres ajoutés.",
-		"noneHeard": "Aucune parole n'a été détectée.",
-		"noAudio": "Cette vidéo ne contient pas d'audio exploitable pour la transcription.",
-		"failed": "Impossible de générer les sous-titres.",
-		"truncated": "Seules les {{minutes}} premières minutes ont été transcrites."
-	},
 	"emptyState": {
 		"title": "Aucun projet ouvert",
 		"description": "Créez un nouveau projet ou ouvrez-en un existant.",
@@ -89,8 +70,7 @@
 		"kinds": {
 			"zoom": "Zoom",
 			"speed": "Vitesse",
-			"annotation": "Annotation",
-			"blur": "Flou"
+			"annotation": "Annotation"
 		}
 	},
 	"topbar": {

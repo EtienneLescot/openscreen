@@ -187,16 +187,6 @@
 		"imageUploadSuccess": "تم رفع الصورة بنجاح!",
 		"type": "النوع"
 	},
-	"fontStyles": {
-		"classic": "كلاسيكي",
-		"editor": "محرر",
-		"strong": "قوي",
-		"typewriter": "آلة كاتبة",
-		"deco": "ديكو",
-		"simple": "بسيط",
-		"modern": "حديث",
-		"clean": "نظيف"
-	},
 	"textAnimation": {
 		"title": "تحريك النص",
 		"selectAnimation": "حدد الحركة",

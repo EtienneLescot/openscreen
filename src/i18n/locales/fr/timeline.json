@@ -9,7 +9,6 @@
 		"addTrim": "Ajouter une coupe (T)",
 		"addAnnotation": "Ajouter une annotation (A)",
 		"addSpeed": "Ajouter une vitesse (S)",
-		"addBlur": "Ajouter un flou (B)",
 		"addCameraFullscreen": "Ajouter Caméra plein écran (C)"
 	},
 	"hints": {
@@ -17,7 +16,6 @@
 		"pressTrim": "Appuyez sur T pour ajouter une coupe",
 		"pressAnnotation": "Appuyez sur A pour ajouter une annotation",
 		"pressSpeed": "Appuyez sur S pour ajouter une vitesse",
-		"pressBlur": "Appuyez sur B pour ajouter une zone de flou",
 		"pressCameraFullscreen": "Appuyez sur C pour ajouter un segment Caméra plein écran"
 	},
 	"labels": {
@@ -32,8 +30,7 @@
 		"imageItem": "Image",
 		"emptyText": "Texte vide",
 		"cameraFullscreen": "Caméra plein écran",
-		"cameraFullscreenItem": "Caméra plein écran {{index}}",
-		"blurItem": "Flou {{index}}"
+		"cameraFullscreenItem": "Caméra plein écran {{index}}"
 	},
 	"emptyState": {
 		"noVideo": "Aucune vidéo chargée",

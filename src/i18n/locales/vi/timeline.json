@@ -8,7 +8,6 @@
 		"autoFocusAllOff": "Bật lấy nét tự động cho tất cả các thu phóng (máy ảnh theo dõi con trỏ)",
 		"addTrim": "Thêm Cắt (T)",
 		"addAnnotation": "Thêm Chú thích (A)",
-		"addBlur": "Thêm Làm mờ (B)",
 		"addSpeed": "Thêm Tốc độ (S)",
 		"addCameraFullscreen": "Thêm Camera Toàn màn hình (C)"
 	},
@@ -16,7 +15,6 @@
 		"pressZoom": "Nhấn Z để thêm thu phóng",
 		"pressTrim": "Nhấn T để thêm cắt",
 		"pressAnnotation": "Nhấn A để thêm chú thích",
-		"pressBlur": "Nhấn B để thêm vùng làm mờ",
 		"pressSpeed": "Nhấn S để thêm tốc độ",
 		"pressCameraFullscreen": "Nhấn C để thêm một đoạn Camera Toàn màn hình"
 	},
@@ -29,7 +27,6 @@
 		"trimItem": "Cắt {{index}}",
 		"speedItem": "Tốc độ {{index}}",
 		"annotationItem": "Chú thích",
-		"blurItem": "Làm mờ {{index}}",
 		"imageItem": "Hình ảnh",
 		"emptyText": "Văn bản trống",
 		"cameraFullscreen": "Camera Toàn màn hình",

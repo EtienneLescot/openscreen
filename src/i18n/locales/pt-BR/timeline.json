@@ -8,7 +8,6 @@
 		"autoFocusAllOff": "Ativar foco automático para todos os zooms (a câmera segue o cursor)",
 		"addTrim": "Adicionar Recorte (T)",
 		"addAnnotation": "Adicionar Anotação (A)",
-		"addBlur": "Adicionar Desfoque (B)",
 		"addSpeed": "Adicionar Velocidade (S)",
 		"addCameraFullscreen": "Adicionar Câmera em Tela Cheia (C)"
 	},
@@ -16,7 +15,6 @@
 		"pressZoom": "Pressione Z para adicionar zoom",
 		"pressTrim": "Pressione T para adicionar recorte",
 		"pressAnnotation": "Pressione A para adicionar anotação",
-		"pressBlur": "Pressione B para adicionar região de desfoque",
 		"pressSpeed": "Pressione S para adicionar velocidade",
 		"pressCameraFullscreen": "Pressione C para adicionar um segmento de Câmera em Tela Cheia"
 	},
@@ -29,7 +27,6 @@
 		"trimItem": "Recorte {{index}}",
 		"speedItem": "Velocidade {{index}}",
 		"annotationItem": "Anotação",
-		"blurItem": "Desfoque {{index}}",
 		"imageItem": "Imagem",
 		"emptyText": "Texto vazio",
 		"cameraFullscreen": "Câmera em Tela Cheia",

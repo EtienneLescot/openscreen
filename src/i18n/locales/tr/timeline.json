@@ -9,7 +9,6 @@
 		"addTrim": "Kırpma Ekle (T)",
 		"addAnnotation": "Açıklama Ekle (A)",
 		"addSpeed": "Hız Ekle (S)",
-		"addBlur": "Bulanık ekle (B)",
 		"addCameraFullscreen": "Tam Ekran Kamera Ekle (C)"
 	},
 	"hints": {
@@ -17,7 +16,6 @@
 		"pressTrim": "Kırpma eklemek için T tuşuna basın",
 		"pressAnnotation": "Açıklama eklemek için A tuşuna basın",
 		"pressSpeed": "Hız eklemek için S tuşuna basın",
-		"pressBlur": "Bulanık bölge eklemek için B tuşuna basın",
 		"pressCameraFullscreen": "Tam Ekran Kamera bölümü eklemek için C tuşuna basın"
 	},
 	"labels": {
@@ -32,8 +30,7 @@
 		"imageItem": "Görüntü",
 		"emptyText": "Boş metin",
 		"cameraFullscreen": "Tam Ekran Kamera",
-		"cameraFullscreenItem": "Tam Ekran Kamera {{index}}",
-		"blurItem": "Bulanık {{index}}"
+		"cameraFullscreenItem": "Tam Ekran Kamera {{index}}"
 	},
 	"emptyState": {
 		"noVideo": "Video Yüklenmedi",

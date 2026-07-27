@@ -187,16 +187,6 @@
 		"colorWheel": "Vòng màu",
 		"type": "Loại"
 	},
-	"fontStyles": {
-		"classic": "Cổ điển",
-		"editor": "Trình chỉnh sửa",
-		"strong": "Đậm",
-		"typewriter": "Máy đánh chữ",
-		"deco": "Trang trí",
-		"simple": "Đơn giản",
-		"modern": "Hiện đại",
-		"clean": "Sạch sẽ"
-	},
 	"textAnimation": {
 		"title": "Hoạt ảnh văn bản",
 		"selectAnimation": "Chọn hoạt ảnh",
