@@ -679,12 +679,7 @@ function ChatStripPanel() {
 	const [reasoningBusy, setReasoningBusy] = useState(false);
 	// null until the first llmGetSnapshot() lands: "unknown", not "none".
 	const [connectedProviders, setConnectedProviders] = useState<string[] | null>(null);
-	// Derive "can the user actually chat right now?" once, then use it
-	// everywhere. A stale active config that points at a provider with no
-	// credentials still counts as not-ready — the welcome view + disabled
-	// composer are the right surface. See chatAvailability.ts for the truth
-	// table; the empty-string provider case is what you get immediately
-	// after `llmDisconnect` writes its reset.
+	// unknown ≠ none; see chatAvailability.ts.
 	const canChat = canSendChat(llmConfig, connectedProviders);
 	const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
 	const modelButtonRef = useRef<HTMLButtonElement | null>(null);
@@ -783,13 +778,9 @@ function ChatStripPanel() {
 	const send = async (overrideText?: string) => {
 		const text = (overrideText ?? input).trim();
 		if (!projectId || !text || busy) return;
-		// ponytail: no connected provider = nothing to talk to. Bounce the user
-		// to the settings modal instead of sending a doomed request and
-		// surfacing a generic LLM error. The composer is also disabled in this
-		// state, but Enter-to-send could still slip through (e.g. focus
-		// restored via shortcut), so the check lives here too. The toast is what
-		// explains the modal to prompts that never touched the composer — the
-		// timeline's Auto-enhance hands its text straight to send().
+		// ponytail: nothing to talk to. Bounce to the settings modal instead of
+		// firing a doomed request. The composer is disabled in this state too,
+		// but Auto-enhance calls send() directly and Enter can slip through.
 		if (!canChat) {
 			toast.error(t("chat.composerDisabledNoProvider"));
 			setSettingsOpen(true);
@@ -868,14 +859,10 @@ function ChatStripPanel() {
 	// timeline's Auto-enhance → "Smart zooms + cuts with AI"). Routes through
 	// the normal send() so sessions/checkpoints/rewind all keep working; the
 	// message shows in the composer's history exactly as if typed.
-	//
-	// The confirmation toast lives here rather than at the submit site because
-	// only this side knows whether the prompt was taken: with no usable
-	// provider send() bounces it to the settings modal, and the producer would
-	// otherwise claim success on a request that never left.
-	// ponytail: one producer today (Auto-enhance), so the queued prompt and the
-	// toast copy are assumed to be that one. A second producer needs the bus to
-	// carry its own confirmation string.
+	// The confirmation toast lives here because only this side knows the prompt
+	// was taken — send() bounces it to the settings modal with no provider.
+	// ponytail: one producer today, so the toast copy is assumed to be its own.
+	// A second producer needs the bus to carry its confirmation string.
 	const pendingPrompt = useChatPromptBus((s) => s.pending);
 	const consumePrompt = useChatPromptBus((s) => s.consume);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: send() is intentionally not a dep (recreated each render); consume() clears `pending` so this fires once per queued prompt.
