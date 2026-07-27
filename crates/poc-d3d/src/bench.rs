@@ -84,7 +84,14 @@ fn run_bench(args: &[String]) -> Result<()> {
         "hardware" | "gpu" => d3d::Backend::Hardware,
         other => anyhow::bail!("--backend {other} inconnu (hardware|cpu)"),
     };
-    let preview_only = args.iter().any(|a| a == "--preview") || backend == d3d::Backend::Cpu;
+    // `--export` : le VRAI chemin d'export (`run_composited_multi` → `VideoEncoder` + mux),
+    // sur le backend demandé. Seul moyen de mesurer l'encodage (le mode preview s'arrête au
+    // readback) et surtout de VÉRIFIER que le backend CPU sort un fichier lisible : sur un
+    // device WARP aucun encodeur matériel n'ouvre, donc `ExportCodec::candidates()` doit
+    // descendre jusqu'à libopenh264 tout seul. C'est cette descente que le test exerce.
+    let exporting = args.iter().any(|a| a == "--export");
+    let preview_only =
+        !exporting && (args.iter().any(|a| a == "--preview") || backend == d3d::Backend::Cpu);
     // Frames composées par run en mode preview. Assez pour noyer le bruit, assez court
     // pour qu'un backend lent reste mesurable en une poignée de minutes.
     let preview_frames: u64 = get("--frames", "300").parse().unwrap_or(300);
@@ -120,6 +127,31 @@ fn run_bench(args: &[String]) -> Result<()> {
             .with_context(|| format!("lecture de la scène {scene_arg}"))?;
         comp.set_scene(Some(scene::Scene::from_json(&json)?));
         println!("scène chargée depuis {scene_arg}");
+    }
+
+    if exporting {
+        let params = pipeline::ExportParams::default();
+        for cfg in &cfgs {
+            // `ClipSource` n'est pas `Clone` et l'appel le prend par tranche : reconstruit
+            // par cfg plutôt que d'ajouter un derive pour le seul harnais de mesure.
+            let clip = pipeline::ClipSource {
+                screen: screen.clone(),
+                webcam: webcam.clone(),
+                source_start_sec: 0.0,
+                source_end_sec: 6.0, // la fixture entière (§ fixture.json : 6 s, 360 frames)
+                webcam_offset_sec: 0.0,
+                has_audio: false,
+            };
+            let path = format!("{out}/{}_{:?}.mp4", cfg.name, backend).to_lowercase();
+            let s = pipeline::run_composited_multi(
+                &[clip], &path, &gpu, &comp, cfg, &params, &mut |_| {},
+            )?;
+            println!(
+                "{:<4} {:>4}f  {:>8.3}s  {:>7.2} fps  {:>7.2} ms/f  → {}",
+                cfg.name, s.frames, s.wall_s, s.fps, 1000.0 / s.fps, path
+            );
+        }
+        return Ok(());
     }
 
     let mut rows: Vec<(String, u64, f64, f64, f64, String)> = Vec::new(); // name, frames, best_wall, fps, ms/f, spread
