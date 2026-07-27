@@ -8,8 +8,6 @@ import {
 	type AiEditionChatRewindResult,
 	type AiEditionChatSession,
 	type AiEditionChatSessionSummary,
-	type AiEditionDeviceChallenge,
-	type AiEditionDeviceCompletionResult,
 	type AiEditionDocumentResult,
 	type AiEditionLlmConfig,
 	type AiEditionLlmDisconnectResult,
@@ -219,22 +217,6 @@ export const nativeBridgeClient = {
 				domain: "aiEdition",
 				action: "llm.removeApiKey",
 				payload: { providerId },
-			}),
-		llmBeginDeviceAuth: (providerId: "openai-oauth" | "copilot-proxy", model?: string) =>
-			requireNativeBridgeData<AiEditionDeviceChallenge>({
-				domain: "aiEdition",
-				action: "llm.beginDeviceAuth",
-				payload: { providerId, model },
-			}),
-		llmCompleteDeviceAuth: (
-			providerId: "openai-oauth" | "copilot-proxy",
-			challenge: AiEditionDeviceChallenge,
-			model?: string,
-		) =>
-			requireNativeBridgeData<AiEditionDeviceCompletionResult>({
-				domain: "aiEdition",
-				action: "llm.completeDeviceAuth",
-				payload: { providerId, challenge, model },
 			}),
 		llmDisconnect: (providerId: string) =>
 			requireNativeBridgeData<AiEditionLlmDisconnectResult>({

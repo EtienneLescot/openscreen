@@ -253,8 +253,6 @@ export async function runChat(
 			error: `No API key for ${def.label}. Add one in Settings → AI.`,
 		};
 	}
-	const accountId =
-		credential?.entry.kind === "codex" ? (credential.entry.accountId ?? undefined) : undefined;
 
 	const sessions = getProjectSessions(projectId);
 	let session = sessions.get(sessionId);
@@ -314,7 +312,6 @@ export async function runChat(
 			model: config.model,
 			baseUrl: config.baseUrl,
 			reasoningEffort: config.reasoningEffort,
-			accountId,
 		});
 	}
 
@@ -349,7 +346,6 @@ export async function runChat(
 			apiKey: apiKey ?? undefined,
 			baseUrl: config.baseUrl,
 			reasoningEffort: config.reasoningEffort,
-			accountId,
 		},
 		history,
 		userMessage: message,
@@ -527,8 +523,6 @@ export async function compactSessionNow(
 	if (!def) return null;
 	const credential = llmConfig.getCredential(def.id, def.envKeys);
 	const apiKey = credential?.value ?? "";
-	const accountId =
-		credential?.entry.kind === "codex" ? (credential.entry.accountId ?? undefined) : undefined;
 
 	const decision = shouldCompact(session.messages);
 	if (!decision || !decision.compact) return null;
@@ -541,7 +535,6 @@ export async function compactSessionNow(
 		model: config.model,
 		baseUrl: config.baseUrl,
 		reasoningEffort: config.reasoningEffort,
-		accountId,
 	});
 	if (!ok) return null;
 	return {
@@ -658,8 +651,6 @@ export async function compactSession(
 	const def = PROVIDER_DEFINITIONS.find((d) => d.id === config.provider);
 	const credential = def ? llmConfig.getCredential(def.id, def.envKeys) : null;
 	const apiKey = credential?.value ?? "";
-	const accountId =
-		credential?.entry.kind === "codex" ? (credential.entry.accountId ?? undefined) : undefined;
 
 	const decision = shouldCompact(session.messages);
 	if (!decision) return { summaryMessageId: null, summary: "" };
@@ -672,7 +663,6 @@ export async function compactSession(
 		model: config.model,
 		baseUrl: config.baseUrl,
 		reasoningEffort: config.reasoningEffort,
-		accountId,
 	});
 	return ok;
 }
@@ -685,10 +675,8 @@ async function tryCompactSession(opts: {
 	model: string;
 	baseUrl?: string;
 	reasoningEffort?: string;
-	accountId?: string;
 }): Promise<{ summaryMessageId: string | null; summary: string } | null> {
-	const { session, splitIndex, apiKey, provider, model, baseUrl, reasoningEffort, accountId } =
-		opts;
+	const { session, splitIndex, apiKey, provider, model, baseUrl, reasoningEffort } = opts;
 	const oldMessages = session.messages.slice(0, splitIndex);
 	if (oldMessages.length === 0) return null;
 
@@ -704,7 +692,6 @@ async function tryCompactSession(opts: {
 			apiKey,
 			baseUrl,
 			reasoningEffort,
-			accountId,
 		});
 		const result = await chatModel.invoke([
 			new SystemMessage(COMPACTION_SYSTEM_PROMPT),
