@@ -250,7 +250,21 @@ licence. D3D11VA + AMF survive the LGPL-shared build (verified:
 
 ## Known gaps
 
-- **No software/CPU fallback, and WARP cannot be one.** `d3d::Gpu::create`
+- **The CPU backend exists, but nothing selects it automatically yet.**
+  `d3d::Backend::Cpu` runs the same pipeline on a WARP device with libavcodec
+  software decode ([`cpu_frames.rs`](../../crates/compositor/src/cpu_frames.rs)),
+  and renders **iso** with the GPU path (max deviation 3/255 across C1–C8 —
+  see [rendering-performance.md](../engineering/rendering-performance.md#the-cpu-backend-warp--software-decode--2026-07-27)).
+  `Gpu::create` still returns the hardware device and never falls back on its
+  own: a silent switch to a 6–9 fps preview is exactly the "the app is slow
+  today" failure this whole thread set out to remove. Selecting it, and the
+  effect policy it needs (background blur and motion blur cost 17× and 23× on
+  WARP and are what make C4+ unusable), is not wired.
+  **Export cannot use it at all**: `h264_amf` requires the real GPU, and encode
+  is a third axis with no software path — though the vendored LGPL build does
+  ship `libopenh264` and `h264_mf`, so that is a wiring gap rather than a wall.
+
+- **The hardware path has no automatic fallback, and WARP alone could not be one.** `d3d::Gpu::create`
   ([`crates/compositor/src/d3d.rs`](../../crates/compositor/src/d3d.rs)) requests
   `D3D_DRIVER_TYPE_HARDWARE` and pins `D3D_FEATURE_LEVEL_11_1`, with
   `VIDEO_SUPPORT` mandatory for `D3D11VA`. A machine without a GPU that

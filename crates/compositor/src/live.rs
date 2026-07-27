@@ -126,6 +126,7 @@ impl Player {
                 device: gpu.device.clone(),
                 context: gpu.context.clone(),
                 feature_level: gpu.feature_level,
+                backend: gpu.backend,
             },
             webcam_offset_sec: 0.0,
             has_current_frame: false,
@@ -871,6 +872,7 @@ unsafe fn maybe_start_prefetch(
         device: gpu.device.clone(),
         context: gpu.context.clone(),
         feature_level: gpu.feature_level,
+        backend: gpu.backend,
     };
     let (tx, rx) = std::sync::mpsc::channel();
     std::thread::spawn(move || {
