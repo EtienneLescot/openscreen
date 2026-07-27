@@ -64,7 +64,7 @@ goes back through it.
 flowchart TD
     User(("User"))
     Chat["LeftPanel.tsx<br/>(chat + media list)"]
-    LLM["LLM provider<br/>electron/ai-edition/llm-call.ts<br/>provider-registry.ts"]
+    LLM["LLM provider<br/>electron/ai-edition/deep-agent/chat-model.ts<br/>provider-registry.ts"]
     DSL[["AxcutDocument<br/>src/lib/ai-edition/schema/index.ts<br/>— SSOT —"]]
     Store["useProjectStore<br/>(Zustand, in renderer)"]
     Disk[(".openscreen JSON<br/>userData/projects/<id>.openscreen<br/>document-service.ts")]
