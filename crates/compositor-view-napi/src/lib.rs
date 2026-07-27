@@ -136,7 +136,18 @@ pub fn read_frame(id: i32, since_gen: f64) -> Result<Option<FramePacket>> {
     // bloquerait tout autre appel napi (`set_rect`, `destroy_view`, ...).
     let slot = match registry().lock().unwrap().get(&id) {
         None => return Ok(None),
-        Some(v) => v.latest_frame_since(since_gen.max(0.0) as u64),
+        Some(v) => {
+            // Le thread de rendu est mort (device D3D11 indisponible, décodeur en échec…) :
+            // il ne publiera plus jamais de frame. Sans ce relais, `create_view` a déjà
+            // répondu Ok et l'échec ne se voyait que dans un `eprintln!` — l'utilisateur
+            // restait devant un canvas noir sans explication (PR #162). La boucle de pull
+            // du renderer appelle ceci ~30×/s, donc l'erreur remonte tout de suite, et par
+            // le chemin d'erreur que `read_frame` a déjà (`Result`), sans changer le contrat.
+            if let Some(fatal) = v.fatal_error() {
+                return Err(Error::from_reason(fatal));
+            }
+            v.latest_frame_since(since_gen.max(0.0) as u64)
+        }
     };
     Ok(slot.map(|(gen, w, h, pixels)| {
         debug_assert_eq!(pixels.len(), (w as usize) * (h as usize) * 4);

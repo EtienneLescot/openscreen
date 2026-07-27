@@ -11,7 +11,8 @@
 		"exportBackgroundLoadFailed": "Dışa aktarım başarısız: arka plan görüntüsü yüklenemedi ({{url}})",
 		"failedToSaveExport": "Dışa aktarım kaydedilemedi",
 		"failedToSaveExportedVideo": "Dışa aktarılan video kaydedilemedi",
-		"failedToRevealInFolder": "Klasörde gösterme hatası: {{error}}"
+		"failedToRevealInFolder": "Klasörde gösterme hatası: {{error}}",
+		"previewCompositorUnavailable": "Bu makinede önizleme kullanılamıyor"
 	},
 	"export": {
 		"canceled": "Dışa aktarım iptal edildi",

@@ -19,7 +19,8 @@
 		"exportBackgroundLoadFailed": "Экспорт не удался: не удалось загрузить фоновое изображение ({{url}})",
 		"failedToSaveExport": "Не удалось сохранить экспорт",
 		"failedToSaveExportedVideo": "Не удалось сохранить экспортированное видео",
-		"failedToRevealInFolder": "Ошибка при показе в папке: {{error}}"
+		"failedToRevealInFolder": "Ошибка при показе в папке: {{error}}",
+		"previewCompositorUnavailable": "Предпросмотр недоступен на этом компьютере"
 	},
 	"export": {
 		"canceled": "Экспорт отменён",

@@ -19,7 +19,8 @@
 		"exportBackgroundLoadFailed": "匯出失敗：無法載入背景圖片（{{url}}）",
 		"failedToSaveExport": "儲存匯出檔案失敗",
 		"failedToSaveExportedVideo": "儲存匯出的影片失敗",
-		"failedToRevealInFolder": "在資料夾中顯示時出錯：{{error}}"
+		"failedToRevealInFolder": "在資料夾中顯示時出錯：{{error}}",
+		"previewCompositorUnavailable": "此裝置無法使用預覽"
 	},
 	"export": {
 		"canceled": "匯出已取消",

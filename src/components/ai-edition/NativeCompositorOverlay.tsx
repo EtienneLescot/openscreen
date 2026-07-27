@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { useScopedT } from "@/contexts/I18nContext";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { resolveNativePosition } from "@/lib/ai-edition/timeline/timelineMap";
 import {
@@ -97,9 +98,10 @@ export function NativeCompositorOverlay() {
 	}, [document]);
 
 	const ready = sources !== null;
-	const { viewId } = useNativeCompositorView(canvasRef, {
+	const { viewId, error } = useNativeCompositorView(canvasRef, {
 		sources: sources ?? undefined,
 	});
+	const t = useScopedT("editor");
 
 	// publie l'id de la vue active dans le store → l'inspector peut pousser des params
 	// via setNativeParam sans connaître cet overlay.
@@ -204,6 +206,37 @@ export function NativeCompositorOverlay() {
 
 	if (!ready) {
 		return null;
+	}
+
+	// The render thread died — no D3D11 device on this host, a decoder that refused the
+	// recording, etc. There is no second renderer to fall back to (the CPU and web preview
+	// paths were removed on purpose), and WARP is not one either: it has no video decoder,
+	// so it could not produce a single frame (see `crates/compositor/src/d3d.rs`). All we
+	// can do is say so. The canvas would otherwise just stay black, which reads as "the app
+	// is slow today" — the native message names the real cause and is worth surfacing raw,
+	// since it is what a bug report needs.
+	if (error) {
+		return (
+			<div
+				data-testid="native-compositor-error"
+				role="alert"
+				style={{
+					position: "absolute",
+					inset: 0,
+					zIndex: 0,
+					display: "flex",
+					flexDirection: "column",
+					gap: "0.5rem",
+					alignItems: "center",
+					justifyContent: "center",
+					padding: "1.5rem",
+					textAlign: "center",
+				}}
+			>
+				<strong>{t("errors.previewCompositorUnavailable")}</strong>
+				<span style={{ maxWidth: "48ch", fontSize: "0.8125rem", opacity: 0.75 }}>{error}</span>
+			</div>
+		);
 	}
 
 	// The canvas's CSS box (width: 100%; height: 100%) is what drives the
