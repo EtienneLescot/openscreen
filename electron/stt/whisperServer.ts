@@ -7,6 +7,7 @@ import path from "node:path";
 import type { Readable } from "node:stream";
 
 import { resolveBinaryPath } from "./gpuDetector";
+import { snapWordBoundariesToAudio } from "./snapWordBoundaries";
 import type { SttBackend, SttPhraseSegment, SttWordSegment } from "./transcriptionContract";
 import { cleanupWav, writeSamplesAsWav } from "./wav";
 
@@ -335,17 +336,23 @@ export class WhisperServerManager {
 					return { text, startSec, endSec: Math.max(endSec, startSec + 0.05) };
 				})
 				.filter((s) => s.text.length > 0);
-			const wordSegments: SttWordSegment[] = raw
-				.flatMap((seg) =>
-					(seg.words ?? []).map((w) => {
-						const word = (w.word ?? "").trim();
-						const startSec = this.toSec(w.start, 0);
-						const endSec = this.toSec(w.end, startSec + 0.05);
-						const confidence = typeof w.probability === "number" ? w.probability : undefined;
-						return { word, startSec, endSec: Math.max(startSec + 0.02, endSec), confidence };
-					}),
-				)
-				.filter((w) => w.word.length > 0);
+			// whisper.cpp's DTW boundaries run ~80–150 ms behind the audio, which the
+			// transcript editor turns into imprecise trims (see snapWordBoundaries.ts).
+			// Re-anchor them on the same samples whisper was given.
+			const wordSegments: SttWordSegment[] = snapWordBoundariesToAudio(
+				raw
+					.flatMap((seg) =>
+						(seg.words ?? []).map((w) => {
+							const word = (w.word ?? "").trim();
+							const startSec = this.toSec(w.start, 0);
+							const endSec = this.toSec(w.end, startSec + 0.05);
+							const confidence = typeof w.probability === "number" ? w.probability : undefined;
+							return { word, startSec, endSec: Math.max(startSec + 0.02, endSec), confidence };
+						}),
+					)
+					.filter((w) => w.word.length > 0),
+				opts.samples,
+			);
 			const detectedLanguage = json.detected_language ?? json.language ?? "auto";
 			const backend = this.toBackend(json.backend);
 			return { segments, wordSegments, detectedLanguage, backend };
