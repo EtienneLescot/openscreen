@@ -99,6 +99,43 @@ jobs:
       - uses: ./.github/actions/setup
       - run: npx vite build
 
+  rust:
+    name: Rust
+    # windows-only by necessity, not preference: crates/compositor is D3D11 and links the
+    # `windows` crate. There is nothing to run on ubuntu.
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      # Provisions include/ + lib/ at the FFMPEG_DIR that crates/.cargo/config.toml names.
+      # bindgen and the linker both need them and the tree is gitignored, so without this a
+      # runner cannot compile the workspace at all. Same pinned, SHA-256-verified archive the
+      # packaged app ships — no second download path to keep in sync.
+      - run: node scripts/fetch-ffmpeg.mjs
+      # The test binary dlopens the same av*.dll set at run time; without them it dies with
+      # STATUS_DLL_NOT_FOUND (0xc0000135) before a single test runs, which reads like a build
+      # failure and isn't. This dir is the fixed one the script vendors to, so no second copy
+      # of the FFMPEG_DIR lookup lives here.
+      - run: Add-Content $env:GITHUB_PATH "$env:GITHUB_WORKSPACE\electron\native\bin\win32-x64"
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: crates
+      # From crates/, not `--manifest-path` from the root: cargo reads .cargo/config.toml
+      # relative to the working directory, and that file is what supplies FFMPEG_DIR and
+      # LIBCLANG_PATH. Invoked from the root the build gets neither.
+      #
+      # --workspace, because `default-members = ["poc-d3d"]` means a bare `cargo test` would
+      # quietly skip the library the app actually links and the napi addon it ships.
+      #
+      # --all-targets is what excludes doctests, and it has to: bindgen copies ffmpeg's C
+      # doxygen comments verbatim into out/ffi.rs, so rustdoc finds 13 "examples" that are C
+      # and fails to compile them as Rust. They are generated, not ours, and there is nothing
+      # to fix in them. Everything else — lib, bins, integration tests — still runs.
+      - run: cargo test --workspace --all-targets
+        working-directory: crates
+
   semantic-pr:
     name: Validate PR title (semantic)
     runs-on: ubuntu-latest

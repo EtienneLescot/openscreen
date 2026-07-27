@@ -254,6 +254,23 @@ function findDlls(dir) {
 	return out;
 }
 
+/**
+ * Where the Rust workspace expects the shared build's headers and import libs, read out of
+ * `crates/.cargo/config.toml` rather than repeated here — the two drifting silently is exactly
+ * how you get a `cargo build` that links yesterday's ffmpeg. Same trick as `pinnedFfmpegDir()`
+ * in electron/native-bridge/services/compositorViewService.ts, which parses the same key for
+ * the runtime PATH. Returns null if the key is gone, so a rename fails loudly upstream.
+ */
+function cargoFfmpegDir() {
+	const config = path.join(ROOT, "crates", ".cargo", "config.toml");
+	if (!fs.existsSync(config)) return null;
+	const match = /^FFMPEG_DIR\s*=\s*\{[^}]*value\s*=\s*"([^"]+)"/m.exec(
+		fs.readFileSync(config, "utf8"),
+	);
+	// `relative = true` in that file means relative to the config's own dir, i.e. crates/.
+	return match ? path.join(ROOT, "crates", match[1]) : null;
+}
+
 /** Downloads `spec.asset`, verifies its pinned SHA-256, and extracts it into a fresh temp dir. */
 async function downloadAndExtract(spec) {
 	const tmp = fs.mkdtempSync(path.join(os.tmpdir(), "openscreen-ffmpeg-"));
@@ -284,6 +301,12 @@ async function downloadAndExtract(spec) {
  * against, into the same `electron/native/bin/<tag>/` dir as the static exe
  * — so both ship as one `extraResources` unit and
  * `compositorViewService.ts`'s PATH-prepend finds them. Windows only.
+ *
+ * Also lands the whole extracted tree at the Rust workspace's `FFMPEG_DIR`. The DLLs alone are
+ * enough to *run* the addon, never to *build* it: bindgen needs `include/` and the linker needs
+ * `lib/`, both of which this archive already carries and this script used to delete with the
+ * temp dir. Without it a clean checkout cannot compile the crates at all — CI could not, and a
+ * new contributor had to hand-place the tree from a wiki step nobody had written down.
  */
 async function fetchSharedDlls(tag, binDir) {
 	const spec = SHARED_PINNED[tag];
@@ -302,7 +325,12 @@ async function fetchSharedDlls(tag, binDir) {
 				e.name.toLowerCase().endsWith(".dll") &&
 				e.name.toLowerCase().startsWith("av"),
 		);
-	if (alreadyVendored && !process.argv.includes("--force")) {
+	// The build tree is a second destination with its own lifetime: it is gitignored, so a fresh
+	// clone or a CI runner has the DLLs cached and the headers missing. Both must be present
+	// before this is a no-op, or that machine silently gets no build tree.
+	const buildDir = cargoFfmpegDir();
+	const buildTreeReady = buildDir !== null && fs.existsSync(path.join(buildDir, "include"));
+	if (alreadyVendored && buildTreeReady && !process.argv.includes("--force")) {
 		console.log(`\nShared ffmpeg DLLs already present in ${binDir}. Use --force to re-vendor.`);
 		return;
 	}
@@ -329,6 +357,21 @@ async function fetchSharedDlls(tag, binDir) {
 			fs.copyFileSync(dll, path.join(binDir, path.basename(dll)));
 		}
 		console.log(`Vendored ${dlls.length} DLL(s) -> ${binDir}`);
+
+		if (buildDir) {
+			// `exe` is <root>/bin/ffmpeg.exe, so its grandparent is the tree root — derived rather
+			// than reconstructed from the asset name, which carries a build suffix the directory
+			// the Rust side wants does not.
+			const extracted = path.dirname(path.dirname(exe));
+			// Overwrite in place, never `rm -rf` first: `crates/thirdparty` is commonly a junction
+			// into poc-d3d/thirdparty, and a recursive delete would follow it and take the real
+			// tree with it. The pin is immutable, so same-name files have the same contents anyway.
+			fs.mkdirSync(path.dirname(buildDir), { recursive: true });
+			fs.cpSync(extracted, buildDir, { recursive: true });
+			console.log(`Build tree (include/ + lib/) -> ${buildDir}`);
+		} else {
+			console.log("No FFMPEG_DIR in crates/.cargo/config.toml — skipped the Rust build tree.");
+		}
 		console.log("LGPL verified: safe to ship with an MIT app.");
 	} finally {
 		fs.rmSync(tmp, { recursive: true, force: true });
