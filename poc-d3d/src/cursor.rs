@@ -22,6 +22,11 @@ pub struct CursorTrack {
     follow_samples: Vec<(f32, f32, f32)>,
     /// instants de clic (secondes) dans la fenêtre.
     clicks: Vec<f32>,
+    /// CHANGEMENTS d'état du curseur : (instant, `"arrow"` / `"text"` / `"pointer"` / …), triés.
+    /// Une fonction en escalier, pas une valeur par échantillon : l'état tient sur des secondes
+    /// entières alors que la position est échantillonnée à ~120 Hz, donc n'enregistrer que les
+    /// transitions garde cette liste minuscule et rend `type_at` trivial.
+    types: Vec<(f32, String)>,
 }
 
 /// Interpolation linéaire dans une liste `(t, x, y)` triée ; saturation aux bornes.
@@ -87,9 +92,16 @@ impl CursorTrack {
     /// Seul point de construction : garantit que `follow_samples` est toujours dérivé des
     /// échantillons courants. Une piste re-lissée (`smoothed`) recalcule donc aussi son suivi,
     /// pour que la caméra suive la trajectoire que l'utilisateur voit réellement.
-    fn new(samples: Vec<(f32, f32, f32)>, clicks: Vec<f32>) -> CursorTrack {
+    fn new(samples: Vec<(f32, f32, f32)>, clicks: Vec<f32>, types: Vec<(f32, String)>) -> CursorTrack {
         let follow_samples = smooth_follow_samples(&samples);
-        CursorTrack { samples, follow_samples, clicks }
+        CursorTrack { samples, follow_samples, clicks, types }
+    }
+
+    /// État du curseur au temps `t` : la dernière transition à `t` ou avant. `None` avant la
+    /// première (enregistrement sans état tagué → l'appelant retombe sur la flèche).
+    pub fn type_at(&self, t: f32) -> Option<&str> {
+        let i = self.types.partition_point(|(tc, _)| *tc <= t);
+        (i > 0).then(|| self.types[i - 1].1.as_str())
     }
 
     /// Nombre d'échantillons de la piste (utile au diag de chargement).
@@ -104,6 +116,7 @@ impl CursorTrack {
         let arr = v["samples"].as_array().context("samples[]")?;
         let mut samples = Vec::new();
         let mut clicks = Vec::new();
+        let mut types: Vec<(f32, String)> = Vec::new();
         let end = offset_ms + dur_s * 1000.0;
         for s in arr {
             let tm = s["timeMs"].as_f64().unwrap_or(-1.0);
@@ -117,10 +130,19 @@ impl CursorTrack {
             if s["interactionType"].as_str() == Some("click") {
                 clicks.push(t);
             }
+            // Seules les TRANSITIONS sont retenues — voir `types`. Les échantillons sans
+            // `cursorType` (macOS ne le tague pas toujours) n'interrompent pas l'état courant :
+            // c'est une absence d'information, pas un retour à la flèche.
+            if let Some(ct) = s["cursorType"].as_str() {
+                if types.last().map(|(_, prev)| prev.as_str()) != Some(ct) {
+                    types.push((t, ct.to_string()));
+                }
+            }
         }
         samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
         clicks.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        Ok(CursorTrack::new(samples, clicks))
+        types.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap());
+        Ok(CursorTrack::new(samples, clicks, types))
     }
 
     /// Position lissée au temps `t`, pour le suivi auto du zoom. La télémétrie brute est
@@ -172,7 +194,7 @@ impl CursorTrack {
     /// bruts (le bounce est temporel, pas positionnel — ne doit pas suivre le lissage).
     pub fn smoothed(&self, factor: f32) -> CursorTrack {
         if self.samples.len() < 2 || factor <= 0.0 {
-            return CursorTrack::new(self.samples.clone(), self.clicks.clone());
+            return CursorTrack::new(self.samples.clone(), self.clicks.clone(), self.types.clone());
         }
         const STEP_S: f32 = 1.0 / 240.0;
         let start = self.samples[0].0;
@@ -193,7 +215,9 @@ impl CursorTrack {
         let xs = spring_smooth(&raw_x, stiffness, damping, mass, STEP_S);
         let ys = spring_smooth(&raw_y, stiffness, damping, mass, STEP_S);
         let samples = times.into_iter().zip(xs).zip(ys).map(|((t, x), y)| (t, x, y)).collect();
-        CursorTrack::new(samples, self.clicks.clone())
+        // Comme les clics, les changements d'état gardent leurs instants bruts : le lissage
+        // déplace la trajectoire, pas la chronologie de ce que faisait l'utilisateur.
+        CursorTrack::new(samples, self.clicks.clone(), self.types.clone())
     }
 }
 
@@ -230,4 +254,41 @@ fn cursor_spring_config(smoothing_factor: f32) -> (f32, f32, f32) {
     }
     let n = ((clamped - LEGACY_MAX) / (2.0 - LEGACY_MAX)).clamp(0.0, 1.0);
     (340.0 - n * 180.0, 58.0 + n * 22.0, 1.0 + n * 0.35)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// L'état du curseur est une fonction en escalier : il tient jusqu'à la transition
+    /// suivante, il n'est pas interpolé, et avant la première il n'y en a pas.
+    #[test]
+    fn cursor_type_holds_until_the_next_transition() {
+        let track = CursorTrack::new(
+            vec![(0.0, 0.0, 0.0), (2.0, 1.0, 1.0)],
+            vec![],
+            vec![(0.5, "arrow".into()), (1.0, "text".into()), (1.5, "pointer".into())],
+        );
+
+        assert_eq!(track.type_at(0.0), None, "avant la première transition");
+        assert_eq!(track.type_at(0.5), Some("arrow"), "à l'instant même de la transition");
+        assert_eq!(track.type_at(0.9), Some("arrow"), "tient jusqu'à la suivante");
+        assert_eq!(track.type_at(1.2), Some("text"));
+        assert_eq!(track.type_at(99.0), Some("pointer"), "la dernière tient jusqu'à la fin");
+    }
+
+    /// Le lissage déplace la trajectoire, pas la chronologie : les états doivent survivre
+    /// intacts à `smoothed()`, comme les clics.
+    #[test]
+    fn smoothing_preserves_cursor_types() {
+        let track = CursorTrack::new(
+            vec![(0.0, 0.0, 0.0), (0.5, 0.4, 0.4), (1.0, 1.0, 1.0)],
+            vec![0.25],
+            vec![(0.0, "arrow".into()), (0.6, "text".into())],
+        );
+
+        let smoothed = track.smoothed(0.4);
+        assert_eq!(smoothed.type_at(0.1), Some("arrow"));
+        assert_eq!(smoothed.type_at(0.7), Some("text"));
+    }
 }

@@ -2,7 +2,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import { CURSOR_THEMES } from "../../../src/lib/cursor/cursorThemes";
+import { CURSOR_THEMES, DEFAULT_CURSOR_SPRITES } from "../../../src/lib/cursor/cursorThemes";
 import {
 	CompositorViewService,
 	ffmpegSharedBinCandidates,
@@ -191,10 +191,14 @@ describe("resolveSceneAssetPaths", () => {
 		resources = fs.mkdtempSync(path.join(os.tmpdir(), "openscreen-scene-assets-"));
 		fs.mkdirSync(path.join(resources, "wallpapers"), { recursive: true });
 		fs.writeFileSync(path.join(resources, "wallpapers", "wallpaper1.jpg"), "jpg");
-		if (themed?.assets.arrow) {
-			const arrow = path.join(resources, themed.assets.arrow.assetPath);
-			fs.mkdirSync(path.dirname(arrow), { recursive: true });
-			fs.writeFileSync(arrow, "png");
+		const assetPaths = [
+			...Object.values(themed?.assets ?? {}).map((a) => a.assetPath),
+			...Object.values(DEFAULT_CURSOR_SPRITES).map((s) => s.assetPath),
+		];
+		for (const assetPath of assetPaths) {
+			const file = path.join(resources, assetPath);
+			fs.mkdirSync(path.dirname(file), { recursive: true });
+			fs.writeFileSync(file, "png");
 		}
 		originalResourcesPath = Object.getOwnPropertyDescriptor(process, "resourcesPath");
 		Object.defineProperty(process, "resourcesPath", { value: resources, configurable: true });
@@ -230,10 +234,38 @@ describe("resolveSceneAssetPaths", () => {
 
 	it("resolves a cursor theme's arrow sprite to a path that exists on disk", () => {
 		if (!themed) return; // no bundled theme ships an arrow override
-		const out = resolved({ cursor: { theme: themed.id } });
+		const arrow = resolved({ cursor: { theme: themed.id } }).cursor.cursorSprites.arrow;
 
-		expect(out.cursor.cursorSpritePath).toBe(path.join(resources, themed.assets.arrow!.assetPath));
-		expect(fs.existsSync(out.cursor.cursorSpritePath)).toBe(true);
+		expect(arrow.path).toBe(path.join(resources, themed.assets.arrow!.assetPath));
+		expect(fs.existsSync(arrow.path)).toBe(true);
+	});
+
+	it("fills the states a theme doesn't ship with the built-in art", () => {
+		if (!themed) return;
+		const sprites = resolved({ cursor: { theme: themed.id } }).cursor.cursorSprites;
+
+		// The sweezy packs only carry an arrow and a pointer, but a recording walks through
+		// far more states than that — each one still has to get its own sprite.
+		expect(sprites.text.path).toBe(path.join(resources, "cursors", "default", "text.png"));
+		expect(sprites["resize-ew"].path).toContain(path.join("cursors", "default"));
+		expect(Object.keys(sprites).sort()).toEqual(Object.keys(DEFAULT_CURSOR_SPRITES).sort());
+	});
+
+	it("carries each sprite's hotspot as a fraction of its own image", () => {
+		const sprites = resolved({ cursor: { theme: "default" } }).cursor.cursorSprites;
+
+		// The whole point of the fraction: it survives the size slider. A hotspot in source
+		// pixels would have to be rescaled at draw time, and drifted when it wasn't.
+		for (const [type, sprite] of Object.entries(sprites)) {
+			expect(sprite.hotspotX, type).toBeGreaterThanOrEqual(0);
+			expect(sprite.hotspotX, type).toBeLessThanOrEqual(1);
+			expect(sprite.hotspotY, type).toBeGreaterThanOrEqual(0);
+			expect(sprite.hotspotY, type).toBeLessThanOrEqual(1);
+		}
+		// The arrow's tip is near its top-left corner, nowhere near the centre it used to
+		// be drawn from.
+		expect(sprites.arrow.hotspotX).toBeLessThan(0.25);
+		expect(sprites.arrow.hotspotY).toBeLessThan(0.25);
 	});
 
 	it("leaves a custom upload's data: URL untouched — the addon decodes it in memory", () => {
@@ -243,8 +275,13 @@ describe("resolveSceneAssetPaths", () => {
 		expect(out.background.path).toBe(dataUrl);
 	});
 
-	it("nulls the sprite for the default theme so the built-in art is used", () => {
-		expect(resolved({ cursor: { theme: "default" } }).cursor.cursorSpritePath).toBeNull();
+	it("gives the default theme the built-in arrow, not a placeholder", () => {
+		// Regression: "default" used to resolve to no sprite at all, and the compositor drew
+		// its dot-and-ring fallback — a dot in a circle where the standard arrow belongs.
+		const sprites = resolved({ cursor: { theme: "default" } }).cursor.cursorSprites;
+
+		expect(sprites.arrow.path).toBe(path.join(resources, "cursors", "default", "arrow.png"));
+		expect(fs.existsSync(sprites.arrow.path)).toBe(true);
 	});
 
 	it("leaves the scene alone when no base dir holds the asset", () => {

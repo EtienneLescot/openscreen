@@ -3,7 +3,7 @@
 
 use crate::config::Cfg;
 use crate::cursor::CursorTrack;
-use crate::scene::{Scene, SceneBackground, SceneCrop};
+use crate::scene::{Scene, SceneBackground, SceneCrop, SceneCursorSprite};
 use crate::d3d::Gpu;
 use crate::ffi::AVFrame;
 use anyhow::{bail, Result};
@@ -422,6 +422,17 @@ const WEBCAM_SHADOW_OFFSET_FRAC: f32 = 12.0 / SHADOW_TUNING_REF_PX;
 const WEBCAM_SHADOW_OPACITY: f32 = 0.35;
 /// Taille de base du curseur, même convention (34 px réglés contre un cadre 1080).
 const CURSOR_BASE_SIZE_FRAC: f32 = 34.0 / SHADOW_TUNING_REF_PX;
+
+/// Rect [x,y,w,h] normalisé d'un sprite de curseur de taille `w`×`h` dont le pivot `hotspot`
+/// (fraction 0..1 de l'image) doit tomber exactement sur `center`.
+///
+/// L'invariant est que `center` reste sur le pixel désigné QUELLE QUE SOIT la taille : le
+/// décalage grandit avec le sprite, donc il doit être une fraction de `w`/`h` et pas une
+/// constante. Un pivot centré en dur (0.5) laissait la pointe dériver de plus en plus loin de
+/// la zone visée à mesure qu'on agrandissait le curseur.
+fn cursor_sprite_dst(center: [f32; 2], w: f32, h: f32, hotspot: [f32; 2]) -> [f32; 4] {
+    [center[0] - w * hotspot[0], center[1] - h * hotspot[1], w, h]
+}
 
 fn ease_in_out_cubic(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
@@ -1273,17 +1284,18 @@ impl Compositor {
         });
     }
 
-    /// Curseur thème (sprite PNG, ex. arrow.png) centré en `center`, taille de référence
-    /// `size_px` (ancré centre — l'ajustement fin du hotspot par thème est un raffinement
-    /// futur). `Err` → l'appelant retombe sur `draw_cursor` (math dot+ring).
+    /// Curseur thème (sprite PNG, ex. arrow.png) dont le PIVOT `hotspot` (fraction 0..1 de
+    /// l'image) tombe sur `center`, à la taille de référence `size_px`. `Err` → l'appelant
+    /// retombe sur `draw_cursor` (math dot+ring).
     unsafe fn draw_cursor_sprite(
         &self,
         center: [f32; 2],
         size_px: f32,
         a: f32,
-        path: &str,
+        sprite: &SceneCursorSprite,
         clip: [f32; 4],
     ) -> Result<()> {
+        let path = sprite.path.as_str();
         let cached = self.img_cache.borrow().get(path).cloned();
         let (srv, iw, ih) = match cached {
             Some(v) => v,
@@ -1297,7 +1309,7 @@ impl Compositor {
         let (pw, ph) = if ar >= 1.0 { (size_px, size_px / ar) } else { (size_px * ar, size_px) };
         let w = pw / self.rw();
         let h = ph / self.rh();
-        let dst = [center[0] - w * 0.5, center[1] - h * 0.5, w, h];
+        let dst = cursor_sprite_dst(center, w, h, [sprite.hotspot_x, sprite.hotspot_y]);
         self.upload_cb(&LayerCB {
             dst,
             src: [0.0, 0.0, 1.0, 1.0],
@@ -1311,17 +1323,24 @@ impl Compositor {
         Ok(())
     }
 
-    /// Sprite du thème si résolu et chargeable, sinon le curseur math (dot+ring).
+    /// Sprite de l'état courant (`cursor_type`, ex. `"text"`), à défaut celui de la flèche,
+    /// à défaut le curseur math (dot+ring).
+    ///
+    /// Le repli sur la flèche compte : un thème n'apporte que sa flèche et son pointeur, les
+    /// autres états venant de l'art intégrée — mais si un état inconnu apparaît, mieux vaut
+    /// une flèche qu'un point dans un cercle.
     unsafe fn draw_cur_themed(
         &self,
-        sprite: &Option<String>,
+        sprites: &HashMap<String, SceneCursorSprite>,
+        cursor_type: Option<&str>,
         center: [f32; 2],
         size_px: f32,
         a: f32,
         clip: [f32; 4],
     ) {
-        if let Some(path) = sprite {
-            if self.draw_cursor_sprite(center, size_px, a, path, clip).is_ok() {
+        let sprite = cursor_type.and_then(|t| sprites.get(t)).or_else(|| sprites.get("arrow"));
+        if let Some(sprite) = sprite {
+            if self.draw_cursor_sprite(center, size_px, a, sprite, clip).is_ok() {
                 return;
             }
         }
@@ -1968,10 +1987,14 @@ impl Compositor {
 
         // --- curseur custom : suit le mapping src/dst (zoom+layout), click bounce,
         // et flou de mouvement par fantômes le long de sa vélocité (frame-1 -> frame) ---
-        // Thème (sprite) si résolu par l'app, sinon math dot+ring (défaut / fallback si le
-        // sprite ne charge pas).
-        let cursor_sprite: Option<String> =
-            self.scene.borrow().as_ref().and_then(|s| s.cursor.cursor_sprite_path.clone());
+        // Jeu de sprites résolu par l'app (art du thème + art intégrée pour les états qu'il ne
+        // fournit pas), sinon math dot+ring — fixture/bench sans scène uniquement.
+        let cursor_sprites: HashMap<String, SceneCursorSprite> = self
+            .scene
+            .borrow()
+            .as_ref()
+            .map(|s| s.cursor.cursor_sprites.clone())
+            .unwrap_or_default();
         // « Clip to canvas » : tronque le curseur aux bords de l'écran (utile quand le padding
         // crée une marge et que la pointe, près du bord de la vidéo, dépasserait dedans).
         // Rect englobant tout par défaut = pas d'effet (le mode 4/7 du shader clippe sur `fx`).
@@ -2034,8 +2057,20 @@ impl Compositor {
                     } else {
                         cfg.mblur_n // fixture/bench : comportement historique inchangé
                     };
+                    // L'état est celui de l'instant rendu : la traînée de flou reprend le même
+                    // sprite pour toutes ses copies, un changement d'état en plein mouvement
+                    // n'a pas à laisser une traînée hybride.
+                    let cursor_type = track.type_at(t).map(str::to_string);
+                    let cursor_type = cursor_type.as_deref();
                     if taps <= 1 {
-                        self.draw_cur_themed(&cursor_sprite, cur, sz, 1.0, cursor_clip_rect);
+                        self.draw_cur_themed(
+                            &cursor_sprites,
+                            cursor_type,
+                            cur,
+                            sz,
+                            1.0,
+                            cursor_clip_rect,
+                        );
                     } else {
                         let tp = t - trail_frames / FPS;
                         let prev = map(track.at(tp), [su0_p, sv0_p], [hu_p, hv_p], s_dst_prev)
@@ -2057,7 +2092,14 @@ impl Compositor {
                         for k in 0..taps {
                             let f = k as f32 / (taps - 1) as f32;
                             let c = [prev[0] + (cur[0] - prev[0]) * f, prev[1] + (cur[1] - prev[1]) * f];
-                            self.draw_cur_themed(&cursor_sprite, c, sz, 1.0, cursor_clip_rect);
+                            self.draw_cur_themed(
+                                &cursor_sprites,
+                                cursor_type,
+                                c,
+                                sz,
+                                1.0,
+                                cursor_clip_rect,
+                            );
                         }
                         // composite le buffer accumulé sur la scène (blend "over" normal, prémultiplié).
                         self.ctx.OMSetRenderTargets(Some(&[Some(self.rtv.clone())]), None);
@@ -2878,6 +2920,28 @@ impl Compositor {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Le pivot doit rester collé à `center` quand le sprite grandit — c'est exactement ce qui
+    /// était cassé (ancrage centré en dur : la pointe s'éloignait proportionnellement à la
+    /// taille). On dessine la même flèche à deux tailles et on vérifie que le point désigné
+    /// ne bouge pas.
+    #[test]
+    fn sprite_hotspot_stays_on_target_at_any_size() {
+        let center = [0.4, 0.6];
+        let hotspot = [0.119, 0.0874]; // flèche intégrée : la pointe, près du coin haut-gauche
+
+        for (w, h) in [(0.02, 0.04), (0.08, 0.16)] {
+            let dst = cursor_sprite_dst(center, w, h, hotspot);
+            let pivot = [dst[0] + dst[2] * hotspot[0], dst[1] + dst[3] * hotspot[1]];
+            assert!((pivot[0] - center[0]).abs() < 1e-6, "x drifted at {w}x{h}: {pivot:?}");
+            assert!((pivot[1] - center[1]).abs() < 1e-6, "y drifted at {w}x{h}: {pivot:?}");
+            assert_eq!([dst[2], dst[3]], [w, h], "taille altérée");
+        }
+
+        // Et un pivot centré reste bien l'ancien comportement, pour les sprites qui le veulent
+        // (viseur, I-beam, poignées de redimensionnement).
+        assert_eq!(cursor_sprite_dst([0.5, 0.5], 0.2, 0.2, [0.5, 0.5]), [0.4, 0.4, 0.2, 0.2]);
+    }
 
     /// Le HLSL est compilé au démarrage du compositeur : jusqu'ici une faute dedans ne se voyait
     /// qu'à l'exécution, donc après un rebuild du natif ET un relancement de l'app. `D3DCompile`

@@ -3,7 +3,7 @@ import { createRequire } from "node:module";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app } from "electron";
-import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "../../../src/lib/cursor/cursorThemes";
+import { resolveCursorSprites } from "../../../src/lib/cursor/cursorThemes";
 import type {
 	ClipInput,
 	CompositorParamValue,
@@ -86,21 +86,38 @@ export function resolveSceneAssetPath(relativePath: string): string | null {
 	return null;
 }
 
-/** Absolute path of a theme's "arrow" sprite, or null (unknown theme / default / theme ships no
- *  arrow override / asset missing — same fallback to built-in art the web renderer applies). */
-function resolveCursorThemeArrowPath(themeId: string): string | null {
-	if (!themeId || themeId === DEFAULT_CURSOR_THEME_ID) {
-		return null;
+/**
+ * The theme's sprite set with every `assetPath` turned into an absolute on-disk path.
+ *
+ * Entries whose file doesn't resolve are dropped rather than passed through: the addon
+ * would fail to decode them and fall back to its placeholder anyway, and a missing entry
+ * lets it fall back to the arrow instead, which is closer to right.
+ */
+function resolveCursorSpritePaths(
+	themeId: string,
+): Record<string, { path: string; hotspotX: number; hotspotY: number }> {
+	const resolved: Record<string, { path: string; hotspotX: number; hotspotY: number }> = {};
+	for (const [type, sprite] of Object.entries(resolveCursorSprites(themeId))) {
+		const absolute = resolveSceneAssetPath(sprite.assetPath);
+		if (absolute) {
+			resolved[type] = {
+				path: absolute,
+				hotspotX: sprite.hotspotX,
+				hotspotY: sprite.hotspotY,
+			};
+		}
 	}
-	const arrow = CURSOR_THEMES.find((t) => t.id === themeId)?.assets.arrow;
-	return arrow ? resolveSceneAssetPath(arrow.assetPath) : null;
+	return resolved;
 }
 
 export function resolveSceneAssetPaths(sceneJson: string): string {
 	try {
 		const scene = JSON.parse(sceneJson) as {
 			background?: { kind?: string; path?: string };
-			cursor?: { theme?: string; cursorSpritePath?: string | null };
+			cursor?: {
+				theme?: string;
+				cursorSprites?: Record<string, { path: string; hotspotX: number; hotspotY: number }>;
+			};
 		};
 		let changed = false;
 		const bg = scene.background;
@@ -113,7 +130,7 @@ export function resolveSceneAssetPaths(sceneJson: string): string {
 			}
 		}
 		if (scene.cursor && typeof scene.cursor.theme === "string") {
-			scene.cursor.cursorSpritePath = resolveCursorThemeArrowPath(scene.cursor.theme);
+			scene.cursor.cursorSprites = resolveCursorSpritePaths(scene.cursor.theme);
 			changed = true;
 		}
 		return changed ? JSON.stringify(scene) : sceneJson;
