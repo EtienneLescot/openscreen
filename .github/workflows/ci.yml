@@ -3,11 +3,16 @@ name: CI
 # feat/ai-edition is a long-lived integration branch that PRs land on for
 # months at a time. Without it listed here, every one of those PRs merged with
 # no lint, no typecheck, no tests and no PR-title check.
+#
+# release/** is here for the same reason and it cost more: PRs #167, #168 and
+# #169 — 30k+ lines of deletion and refactor — merged into release/1.8.0 with
+# every one of those jobs skipped, because a release branch matched neither
+# pattern. A release branch is the LAST place to run a build unguarded.
 on:
   pull_request:
-    branches: [main, feat/ai-edition]
+    branches: [main, feat/ai-edition, "release/**"]
   push:
-    branches: [main, feat/ai-edition]
+    branches: [main, feat/ai-edition, "release/**"]
 
 jobs:
   lint:
@@ -25,6 +30,21 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - run: npx tsc --noEmit
+
+  typecheck-tests:
+    name: Typecheck (tests, advisory)
+    runs-on: ubuntu-latest
+    # ADVISORY, NOT A GATE — 82 pre-existing errors as of this commit. The main
+    # Typecheck job cannot see test files at all (tsconfig.json excludes
+    # **/*.test.ts and includes only src + electron), and vitest transpiles
+    # without checking, so fixture types have drifted from the schemas they
+    # claim to build for years. This job makes the drift visible and stops it
+    # growing silently; flip `continue-on-error` off once the count is zero.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/setup
+      - run: npx tsc -p tsconfig.test.json --noEmit
 
   docs:
     name: Docs

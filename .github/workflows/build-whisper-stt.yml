@@ -182,7 +182,10 @@ jobs:
           name: whisper-stt-${{ matrix.tag }}
           path: whisper-stt-${{ matrix.tag }}.tar.gz
           if-no-files-found: error
-          retention-days: 30
+          # build.yml now stages these into the installers
+          # (scripts/stage-whisper-stt.sh), so an expired artifact fails a
+          # release build. 90 days instead of 30 to make that rarer.
+          retention-days: 90
 
       - name: Workflow summary
         if: always()

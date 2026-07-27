@@ -182,7 +182,6 @@ export default function Home() {
 									<div className={styles.miniClip} style={{ flex: 5 }}>
 										<div className={styles.miniWaveform}>
 											{MINI_WAVEFORM_A.map((h, i) => (
-												// biome-ignore lint/suspicious/noArrayIndexKey: static decorative bars
 												<span key={i} style={{ height: `${h}%` }} />
 											))}
 										</div>
@@ -190,7 +189,6 @@ export default function Home() {
 									<div className={styles.miniClip} style={{ flex: 6 }}>
 										<div className={styles.miniWaveform}>
 											{MINI_WAVEFORM_B.map((h, i) => (
-												// biome-ignore lint/suspicious/noArrayIndexKey: static decorative bars
 												<span key={i} style={{ height: `${h}%` }} />
 											))}
 										</div>
