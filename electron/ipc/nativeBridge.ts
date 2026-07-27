@@ -346,6 +346,11 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 							});
 							return createSuccessResponse(requestId, { id });
 						}
+						case "probeBackend":
+							// No view needed: the export dialog asks before any preview exists.
+							return createSuccessResponse(requestId, {
+								backend: compositorViewService.probeBackend(),
+							});
 						case "setRect":
 							compositorViewService.setRect(request.payload.id, request.payload.rect);
 							return createSuccessResponse(requestId, { ok: true });

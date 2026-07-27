@@ -389,5 +389,9 @@
 		"cancel": "Cancel",
 		"save": "Save",
 		"saveAndUse": "Save & use"
+	},
+	"cpuCompositor": {
+		"notice": "Running without a compatible GPU — rendering on CPU, so playback is slower.",
+		"exportWarning": "No compatible GPU: this export runs on CPU and will take much longer than usual."
 	}
 }

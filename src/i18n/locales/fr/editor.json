@@ -389,5 +389,9 @@
 		"cancel": "Annuler",
 		"save": "Enregistrer",
 		"saveAndUse": "Enregistrer et utiliser"
+	},
+	"cpuCompositor": {
+		"notice": "Aucun GPU compatible — rendu sur CPU, la lecture est donc plus lente.",
+		"exportWarning": "Aucun GPU compatible : cet export tourne sur CPU et sera beaucoup plus long que d'habitude."
 	}
 }

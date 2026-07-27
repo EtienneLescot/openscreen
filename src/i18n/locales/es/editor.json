@@ -389,5 +389,9 @@
 		"cancel": "Cancelar",
 		"save": "Guardar",
 		"saveAndUse": "Guardar y usar"
+	},
+	"cpuCompositor": {
+		"notice": "Sin GPU compatible: el renderizado se hace en la CPU, por lo que la reproducción es más lenta.",
+		"exportWarning": "Sin GPU compatible: esta exportación se ejecuta en la CPU y tardará mucho más de lo normal."
 	}
 }
