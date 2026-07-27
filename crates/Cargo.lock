@@ -111,7 +111,7 @@ dependencies = [
  "napi",
  "napi-build",
  "napi-derive",
- "poc-d3d",
+ "openscreen-compositor",
  "windows",
 ]
 
@@ -347,6 +347,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f7c3e4beb33f85d45ae3e3a1792185706c8e16d043238c593331cc7cd313b50"
 
 [[package]]
+name = "openscreen-compositor"
+version = "0.0.0"
+dependencies = [
+ "anyhow",
+ "bindgen",
+ "cc",
+ "image",
+ "serde",
+ "serde_json",
+ "windows",
+]
+
+[[package]]
 name = "png"
 version = "0.18.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -364,11 +377,7 @@ name = "poc-d3d"
 version = "0.0.0"
 dependencies = [
  "anyhow",
- "bindgen",
- "cc",
- "image",
- "serde",
- "serde_json",
+ "openscreen-compositor",
  "windows",
 ]
 

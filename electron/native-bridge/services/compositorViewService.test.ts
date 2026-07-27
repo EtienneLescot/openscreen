@@ -9,9 +9,9 @@ import {
 	resolveSceneAssetPaths,
 } from "./compositorViewService";
 
-/** A source checkout's `poc-d3d/.cargo/config.toml`, with `FFMPEG_DIR` written as `body`. */
+/** A source checkout's `crates/.cargo/config.toml`, with `FFMPEG_DIR` written as `body`. */
 function writeCargoConfig(root: string, body: string): void {
-	const cargoDir = path.join(root, "poc-d3d", ".cargo");
+	const cargoDir = path.join(root, "crates", ".cargo");
 	fs.mkdirSync(cargoDir, { recursive: true });
 	fs.writeFileSync(
 		path.join(cargoDir, "config.toml"),
@@ -42,7 +42,7 @@ describe("ffmpegSharedBinCandidates", () => {
 		const candidates = ffmpegSharedBinCandidates(tmpRoot).map((p) => p.replace(/\\/g, "/"));
 
 		expect(candidates[0]).toBe(
-			`${tmpRoot.replace(/\\/g, "/")}/poc-d3d/thirdparty/ffmpeg-n9.9.9-win64-lgpl-shared/bin`,
+			`${tmpRoot.replace(/\\/g, "/")}/crates/thirdparty/ffmpeg-n9.9.9-win64-lgpl-shared/bin`,
 		);
 		expect(candidates[1]).toMatch(/electron\/native\/bin\/(win32|darwin|linux)-(x64|arm64)$/);
 	});
@@ -51,9 +51,7 @@ describe("ffmpegSharedBinCandidates", () => {
 		writeCargoConfig(tmpRoot, `FFMPEG_DIR = "thirdparty/ffmpeg-plain"`);
 		const candidates = ffmpegSharedBinCandidates(tmpRoot).map((p) => p.replace(/\\/g, "/"));
 
-		expect(candidates[0]).toBe(
-			`${tmpRoot.replace(/\\/g, "/")}/poc-d3d/thirdparty/ffmpeg-plain/bin`,
-		);
+		expect(candidates[0]).toBe(`${tmpRoot.replace(/\\/g, "/")}/crates/thirdparty/ffmpeg-plain/bin`);
 	});
 
 	it("keeps an absolute pin absolute rather than nesting it under the crate dir", () => {
@@ -65,23 +63,23 @@ describe("ffmpegSharedBinCandidates", () => {
 		const candidates = ffmpegSharedBinCandidates(tmpRoot).map((p) => p.replace(/\\/g, "/"));
 
 		expect(candidates[0]).toBe(`${absolutePin}/bin`);
-		expect(candidates[0]).not.toContain("poc-d3d");
+		expect(candidates[0]).not.toContain("crates");
 	});
 
 	it("starts at the arch-tagged native bin dir when there is no cargo pin to read", () => {
-		// Packaged builds ship no `poc-d3d/` at all — the dev candidate must drop
+		// Packaged builds ship no `crates/` at all — the dev candidate must drop
 		// out silently rather than contribute a path that can never exist.
 		const candidates = ffmpegSharedBinCandidates(tmpRoot).map((p) => p.replace(/\\/g, "/"));
 
 		expect(candidates[0]).toMatch(/electron\/native\/bin\/(win32|darwin|linux)-(x64|arm64)$/);
-		expect(candidates.some((c) => c.includes("poc-d3d"))).toBe(false);
+		expect(candidates.some((c) => c.includes("crates"))).toBe(false);
 	});
 
 	it("ignores a cargo config that pins no FFMPEG_DIR", () => {
 		writeCargoConfig(tmpRoot, `SOME_OTHER_VAR = "thirdparty/nope"`);
 		const candidates = ffmpegSharedBinCandidates(tmpRoot).map((p) => p.replace(/\\/g, "/"));
 
-		expect(candidates.some((c) => c.includes("poc-d3d"))).toBe(false);
+		expect(candidates.some((c) => c.includes("crates"))).toBe(false);
 	});
 
 	it("also probes process.resourcesPath, since electron/native/bin ships only via extraResources in packaged builds", () => {
@@ -128,7 +126,7 @@ describe("CompositorViewService ffmpeg PATH prepend", () => {
 			root,
 			`FFMPEG_DIR = { value = "thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared", relative = true }`,
 		);
-		const dir = path.join(root, "poc-d3d", "thirdparty", "ffmpeg-n8.1.2-win64-lgpl-shared", "bin");
+		const dir = path.join(root, "crates", "thirdparty", "ffmpeg-n8.1.2-win64-lgpl-shared", "bin");
 		fs.mkdirSync(dir, { recursive: true });
 		return dir;
 	}

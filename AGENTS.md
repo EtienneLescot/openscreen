@@ -80,7 +80,7 @@ Unit/browser tests can't exercise real capture (native screen recording, a physi
 **Judging the rendered picture**
 
 - A preview screenshot is a **downscaled** view of the compositor's output (a 1920-wide render shown in a ~600px pane, then downscaled again by the screenshot). Fine detail — a corner radius, a 1° edge slope, a soft shadow — does not survive that, and squinting at it produces confident wrong conclusions. To decide anything about pixels, **export and measure**: `Export → MP4 1080p`, then `ffmpeg -ss <t> -i out.mp4 -frames:v 1 -c:v ppm frame.ppm` and walk the raw bytes (a P6 PPM is a 15-line parser) for the exact edges. That is what settled a "the tilt is truncated" report: measured right edge 1539 px against a computed corner at 1540 — no clipping at all, the real defect was elsewhere.
-- ffmpeg lives at `poc-d3d/thirdparty/ffmpeg-*/bin/ffmpeg.exe` (also needed on `PATH` for the compositor addon to load).
+- ffmpeg lives at `crates/thirdparty/ffmpeg-*/bin/ffmpeg.exe` (also needed on `PATH` for the compositor addon to load).
 
 ## PR & commit conventions
 

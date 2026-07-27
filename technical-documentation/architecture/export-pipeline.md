@@ -5,7 +5,7 @@ live preview ([preview.md](preview.md) /
 [native-compositor.md](native-compositor.md)), one segment at a time. The
 Electron renderer turns the project document into the same `SceneDescription`
 the live preview uses plus an ordered clip list, hands both to the napi addon
-through the `compositor` IPC domain, and the addon drives `poc-d3d`'s
+through the `compositor` IPC domain, and the addon drives `openscreen-compositor`'s
 `Player` + `Compositor::compose_frame` + AMF encoder + muxer to write one
 `.mp4`. The renderer only watches progress; the actual rendering does not
 leave the native process. Performance numbers, the bench, and the rejected
@@ -22,7 +22,7 @@ flowchart LR
     TSD["src/native/sceneDescription.ts<br/>resolveVisibleClips / buildSceneDescription"]
     RP["clips + SceneDescription JSON<br/>layout + effects + background + zoom + cursor + webcam"]
     ADDON["compositor_view.node addon<br/>exportMulti (Electron IPC)"]
-    NATIVE["poc-d3d::live::Player<br/>Compositor::compose_frame<br/>h264_amf encoder + mux"]
+    NATIVE["openscreen_compositor::live::Player<br/>Compositor::compose_frame<br/>h264_amf encoder + mux"]
     FILE["output.mp4"]
     DOC --> TSD --> RP --> ADDON --> NATIVE --> FILE
 ```
@@ -35,12 +35,12 @@ through `compositorViewService.exportMulti`
 The service resolves the same asset paths the renderer used (wallpaper
 images, cursor theme sprite) and forwards the call to the addon
 ([`compositorViewService.ts:437`](../../electron/native-bridge/services/compositorViewService.ts)).
-The addon loads `poc-d3d`'s `Player` with the clip list and the shared
+The addon loads `openscreen-compositor`'s `Player` with the clip list and the shared
 `SceneDescription` JSON, then walks the segments with **one** compositor
 and **one** encoder + muxer pair:
 
 - Per segment: load metadata, hand the asset to the `Player` (so screen
-  and webcam decode land on `poc-d3d`'s shared `ID3D11Device`), drive
+  and webcam decode land on `openscreen-compositor`'s shared `ID3D11Device`), drive
   `compose_frame` at the segment's source time, and let the AMF encoder
   consume the rendered RT. The compositor is paused on the live preview
   for the duration of the export (`set_playing(false)` on every active

@@ -1,6 +1,6 @@
 # Native compositor
 
-`poc-d3d/` is the Rust + Direct3D 11 crate behind both the live preview and the MP4
+`crates/compositor/` is the Rust + Direct3D 11 crate behind both the live preview and the MP4
 export. It exposes its compositor and pipeline to Electron through a small
 napi-rs addon (`compositor-view-napi/`) loaded by
 [`compositorViewService`](../../electron/native-bridge/services/compositorViewService.ts).
@@ -11,7 +11,7 @@ zero CPU readback between stages — and is shared, with the same scene contract
 numbers and the rejected alternatives that drove the design live in
 [engineering/rendering-performance.md](../engineering/rendering-performance.md).
 
-A single `ID3D11Device` ([`poc-d3d/src/d3d.rs`](../../poc-d3d/src/d3d.rs))
+A single `ID3D11Device` ([`crates/compositor/src/d3d.rs`](../../crates/compositor/src/d3d.rs))
 is shared by every consumer on the path: the ffmpeg `D3D11VA` decoder, the HLSL
 compositor, the `h264_amf` encoder, and the live swapchain. It is created with
 feature level **11_1**, the flags `VIDEO_SUPPORT | BGRA_SUPPORT` (`VIDEO_SUPPORT`
@@ -24,54 +24,61 @@ and without that flag the runtime corruption is silent.
 
 | source | responsibility |
 |---|---|
-| [`poc-d3d/src/lib.rs`](../../poc-d3d/src/lib.rs) | crate root: exposes `run()` (CLI / bench / GUI dispatcher), re-exports every module |
-| [`poc-d3d/src/d3d.rs`](../../poc-d3d/src/d3d.rs) | the single `ID3D11Device` (feature level 11_1, `VIDEO_SUPPORT`, multithread-protected) |
-| [`poc-d3d/src/ffi.rs`](../../poc-d3d/src/ffi.rs) | bindgen-generated `libav*` bindings (ffmpeg 8.x headers) |
-| [`poc-d3d/src/compositor.rs`](../../poc-d3d/src/compositor.rs) | HLSL compositor — every per-frame pass (`compose_frame`, background, screen, webcam, cursor, annotations, shadows, blur) |
-| [`poc-d3d/src/scene.rs`](../../poc-d3d/src/scene.rs) | the `Scene` struct parsed from the app's `SceneDescription` JSON |
-| [`poc-d3d/src/regions.rs`](../../poc-d3d/src/regions.rs) | zoom / speed / Full Camera regions — envelope shapes and per-frame state sampling |
-| [`poc-d3d/src/pipeline.rs`](../../poc-d3d/src/pipeline.rs) | demux + `D3D11VA` decode + composite + AMF encode + mux (`run_c0` for decode/encode only, `run_composited` for the full path) |
-| [`poc-d3d/src/audio.rs`](../../poc-d3d/src/audio.rs) | per-clip audio decode, swresample → f32 planar 48 kHz stereo, WSOLA speed stretch, multi-track mix, AAC encoder |
-| [`poc-d3d/src/cursor.rs`](../../poc-d3d/src/cursor.rs) | `.cursor.json` parser + interpolated cursor track (position, click bounces, adaptive follow samples) |
-| [`poc-d3d/src/text.rs`](../../poc-d3d/src/text.rs) | DirectWrite + Direct2D text rasterisation for annotation labels, cached per (content, style, box) |
-| [`poc-d3d/src/text_anim.rs`](../../poc-d3d/src/text_anim.rs) | text-annotation appearance animations (port of the TS animation curves, in fractions of the output short side) |
-| [`poc-d3d/src/config.rs`](../../poc-d3d/src/config.rs) | cumulative bench configs C0..C8 (each adds one layer: composite, rounded corners, shadow, background blur, zoom, layout animation, cursor, motion blur) |
-| [`poc-d3d/src/live.rs`](../../poc-d3d/src/live.rs) | off-screen view: `Player` + `Compositor::compose_frame` → RGBA8 staging texture, pulled by the napi addon |
-| [`poc-d3d/src/app.rs`](../../poc-d3d/src/app.rs) | standalone Win32 GUI (combo preset, Play/Pause, Export, progress bar) — wraps the measured pipeline for interactive demo |
-| [`poc-d3d/src/main.rs`](../../poc-d3d/src/main.rs) | thin `main` that calls `lib::run()` |
-| [`poc-d3d/src/shaders.hlsl`](../../poc-d3d/src/shaders.hlsl) | all GPU effects (modes 0/1/5/8/9/10/12 — see pipeline below), compiled at runtime via Fxc |
+| [`crates/compositor/src/lib.rs`](../../crates/compositor/src/lib.rs) | crate root: declares every module below. Nothing else — the CLI/bench/GUI dispatcher it used to hold lives in the POC crate now |
+| [`crates/compositor/src/d3d.rs`](../../crates/compositor/src/d3d.rs) | the single `ID3D11Device` (feature level 11_1, `VIDEO_SUPPORT`, multithread-protected) |
+| [`crates/compositor/src/ffi.rs`](../../crates/compositor/src/ffi.rs) | bindgen-generated `libav*` bindings (ffmpeg 8.x headers) |
+| [`crates/compositor/src/compositor.rs`](../../crates/compositor/src/compositor.rs) | HLSL compositor — every per-frame pass (`compose_frame`, background, screen, webcam, cursor, annotations, shadows, blur) |
+| [`crates/compositor/src/scene.rs`](../../crates/compositor/src/scene.rs) | the `Scene` struct parsed from the app's `SceneDescription` JSON |
+| [`crates/compositor/src/regions.rs`](../../crates/compositor/src/regions.rs) | zoom / speed / Full Camera regions — envelope shapes and per-frame state sampling |
+| [`crates/compositor/src/pipeline.rs`](../../crates/compositor/src/pipeline.rs) | demux + `D3D11VA` decode + composite + AMF encode + mux (`run_c0` for decode/encode only, `run_composited` for the full path) |
+| [`crates/compositor/src/audio.rs`](../../crates/compositor/src/audio.rs) | per-clip audio decode, swresample → f32 planar 48 kHz stereo, WSOLA speed stretch, multi-track mix, AAC encoder |
+| [`crates/compositor/src/cursor.rs`](../../crates/compositor/src/cursor.rs) | `.cursor.json` parser + interpolated cursor track (position, click bounces, adaptive follow samples) |
+| [`crates/compositor/src/text.rs`](../../crates/compositor/src/text.rs) | DirectWrite + Direct2D text rasterisation for annotation labels, cached per (content, style, box) |
+| [`crates/compositor/src/text_anim.rs`](../../crates/compositor/src/text_anim.rs) | text-annotation appearance animations (port of the TS animation curves, in fractions of the output short side) |
+| [`crates/compositor/src/config.rs`](../../crates/compositor/src/config.rs) | cumulative bench configs C0..C8 (each adds one layer: composite, rounded corners, shadow, background blur, zoom, layout animation, cursor, motion blur) |
+| [`crates/compositor/src/live.rs`](../../crates/compositor/src/live.rs) | off-screen view: `Player` + `Compositor::compose_frame` → RGBA8 staging texture, pulled by the napi addon |
+| [`crates/compositor/src/shaders.hlsl`](../../crates/compositor/src/shaders.hlsl) | all GPU effects (modes 0/1/5/8/9/10/12 — see pipeline below), compiled at runtime via Fxc |
+
+Two more modules sit in the POC crate ([`crates/poc-d3d/`](../../crates/poc-d3d)) rather than the
+library. Nothing packages them — they drive the library for measurement and eyeballing:
+
+| source | responsibility |
+|---|---|
+| [`crates/poc-d3d/src/app.rs`](../../crates/poc-d3d/src/app.rs) | standalone Win32 GUI (combo preset, Play/Pause, Export, progress bar) — wraps the measured pipeline for interactive demo |
+| [`crates/poc-d3d/src/bench.rs`](../../crates/poc-d3d/src/bench.rs) | mode dispatcher (`--live` / `--cfg` bench / GUI) and the C0..C8 fps harness |
+| [`crates/poc-d3d/src/main.rs`](../../crates/poc-d3d/src/main.rs) | thin `main` that calls `bench::run()` |
 
 ## The compositing pipeline
 
 Every visible frame is rasterised into one RGBA render target
 (`OUT_W × OUT_H = 1920×1080`, then optionally bilinearly resized to the real
 output aspect). `Compositor::compose_frame`
-([`poc-d3d/src/compositor.rs:1421`](../../poc-d3d/src/compositor.rs))
+([`crates/compositor/src/compositor.rs:1421`](../../crates/compositor/src/compositor.rs))
 runs one fixed draw order — derived from the per-frame math it performs, not
 from any list the caller can reorder — and `shaders.hlsl` keys each effect off
 the `mode` field of the same `LayerCB` struct, so the modes below are exactly
 what `shaders.hlsl` actually implements:
 
 1. **Background** (the wallpaper). `mode = 1` for a solid colour
-   ([`compositor.rs:1761`](../../poc-d3d/src/compositor.rs)),
+   ([`compositor.rs:1761`](../../crates/compositor/src/compositor.rs)),
    `mode = 5` for a CSS gradient
-   ([`compositor.rs:1765`](../../poc-d3d/src/compositor.rs)), or a cover-fitted
+   ([`compositor.rs:1765`](../../crates/compositor/src/compositor.rs)), or a cover-fitted
    image loaded through `draw_image_bg`
-   ([`compositor.rs:1156`](../../poc-d3d/src/compositor.rs)). When the
+   ([`compositor.rs:1156`](../../crates/compositor/src/compositor.rs)). When the
    scene's `effects.blur` is on, `blur_bg` (dual-Kawase, ~18 px) blurs whatever
    was just drawn — that is what "Blur BG" does, mirroring the web
    `frameRenderer.blurredBackgroundLayer`
-   ([`compositor.rs:1807`](../../poc-d3d/src/compositor.rs)).
+   ([`compositor.rs:1807`](../../crates/compositor/src/compositor.rs)).
 2. **Screen shadow.** Drop-shadow SDF; opacity scales with the `shadow`
    slider. The shadow tracks the rendered silhouette — a tilted plane gets a
    tilted shadow, not a rect shadow
-   ([`compositor.rs:1885`](../../poc-d3d/src/compositor.rs) /
-   [`compositor.rs:1882`](../../poc-d3d/src/compositor.rs), `mode = 12`).
+   ([`compositor.rs:1885`](../../crates/compositor/src/compositor.rs) /
+   [`compositor.rs:1882`](../../crates/compositor/src/compositor.rs), `mode = 12`).
 3. **Screen video.** Cropped from the active clip's source, with the zoom region
    applied to its UVs and rounded corners via SDF. `mode = 0` for the standard
-   quad ([`compositor.rs:1898`](../../poc-d3d/src/compositor.rs));
+   quad ([`compositor.rs:1898`](../../crates/compositor/src/compositor.rs));
    `mode = 8` for the 3D tilt path (zoom `rotation: iso | left | right`,
-   [`compositor.rs:1950`](../../poc-d3d/src/compositor.rs)). Motion blur
+   [`compositor.rs:1950`](../../crates/compositor/src/compositor.rs)). Motion blur
    uses the previous frame's UV delta as a per-pixel velocity vector and samples
    along it (the "blur by velocity" optimisation — early-outs on still frames).
 4. **Cursor.** A sprite picked from `cursor.cursorSprites` by the OS cursor state
@@ -87,26 +94,26 @@ what `shaders.hlsl` actually implements:
    Motion blur is its own accumulation buffer (additive blend into an
    isolated RT, then "over"-composited onto the scene), independent of the
    scene's `effects.motionBlur`
-   ([`compositor.rs:2038`](../../poc-d3d/src/compositor.rs) /
-   [`compositor.rs:2060`](../../poc-d3d/src/compositor.rs)). Click
+   ([`compositor.rs:2038`](../../crates/compositor/src/compositor.rs) /
+   [`compositor.rs:2060`](../../crates/compositor/src/compositor.rs)). Click
    bounce amplitude comes from the `.cursor.json` track
-   ([`poc-d3d/src/cursor.rs`](../../poc-d3d/src/cursor.rs)).
+   ([`crates/compositor/src/cursor.rs`](../../crates/compositor/src/cursor.rs)).
 5. **Webcam shadow.** Drawn only when `cfg.shadow` is on AND the layout is PiP
    (not the block layouts, which weld the camera flush to the screen — no
    floating bubble, no shadow). The strength fades to zero as the camera
    enters Full Camera mode
-   ([`compositor.rs:2118`](../../poc-d3d/src/compositor.rs), `mode = 12`).
+   ([`compositor.rs:2118`](../../crates/compositor/src/compositor.rs), `mode = 12`).
 6. **Webcam video.** UV rectangle derived from the destination aspect, with
    mirror, mask shape (rectangle / circle / square / rounded), and reactive
    scale applied
-   ([`compositor.rs:2127`](../../poc-d3d/src/compositor.rs), `mode = 0`).
+   ([`compositor.rs:2127`](../../crates/compositor/src/compositor.rs), `mode = 0`).
    Full Camera lerps the destination to `[0, 0, 1, 1]` and dissolves the mask
    shape — same rule as `computeCameraFullscreenRect` on the TS side.
 7. **Annotations.** Highest layer. One full-frame `CopySubresourceRegion` of
    the composed scene is taken at the top of `draw_annotations` so that
    multiple blur annotations on the same frame read from a consistent snapshot
    of the underlying pixels
-   ([`compositor.rs:2162`](../../poc-d3d/src/compositor.rs)).
+   ([`compositor.rs:2162`](../../crates/compositor/src/compositor.rs)).
    Per-annotation: figure (arrow, `mode = 9`), blur/mosaic (`mode = 10`),
    text (DirectWrite → D3D11 SRV, then `mode = 0`), image (cached per
    annotation id).
@@ -131,7 +138,7 @@ The app hands the native compositor a flat JSON description once per document
 or settings change. The TypeScript producer is
 [`buildSceneDescription`](../../src/native/sceneDescription.ts); the Rust
 mirror is the `Scene` struct in
-[`poc-d3d/src/scene.rs`](../../poc-d3d/src/scene.rs). Field renames are
+[`crates/compositor/src/scene.rs`](../../crates/compositor/src/scene.rs). Field renames are
 camelCase on both sides (`#[serde(rename_all = "camelCase")]`), so the wire
 format is the same names a TS caller already writes. Three fields the
 contract insists on carrying as **fractions** of their reference box, not
@@ -142,16 +149,16 @@ contain-fitted frame and the export at full output size:
 - `layout.screenRadiusFrac`, `layout.webcamRadiusFrac` — of their own box's
   short side (the only way two halves of a block layout can agree on a
   radius; see `compositor.rs` §1's comment on
-  [`compositor.rs:1702`](../../poc-d3d/src/compositor.rs)).
+  [`compositor.rs:1702`](../../crates/compositor/src/compositor.rs)).
 - `annotation.x|y|w|h` and `annotation.text.fontSizeRel` — of the screen
   rect (annotations anchor to the screen box, not the output frame, and
   intentionally bypass the zoom transform).
 
 The consumer is `Compositor::compose_frame`
-([`compositor.rs:1421`](../../poc-d3d/src/compositor.rs)). It reads
+([`compositor.rs:1421`](../../crates/compositor/src/compositor.rs)). It reads
 the scene per frame, derives per-clip and per-frame values through
 `Scene::for_clip_window`
-([`scene.rs:436`](../../poc-d3d/src/scene.rs)) — which retains only the
+([`scene.rs:436`](../../crates/compositor/src/scene.rs)) — which retains only the
 regions whose `clipIndex` matches the clip being composed and which overlap
 its source window — and only then issues GPU draws. Region visibility is
 expressed as `[startSec, endSec)` intervals matched against `t = source_time`,
@@ -164,7 +171,7 @@ mid-load.
 
 ## Audio
 
-`audio.rs` ([`poc-d3d/src/audio.rs`](../../poc-d3d/src/audio.rs)) is the
+`audio.rs` ([`crates/compositor/src/audio.rs`](../../crates/compositor/src/audio.rs)) is the
 single audio path for the export. Per clip, it opens the source container,
 enumerates **every** audio stream (not just the first `av_find_best_stream`
 returns), opens a `SwrContext` to convert each one to **planar f32, 48 kHz,
@@ -191,16 +198,16 @@ the click where two recordings meet butt-joined — without shifting timing,
 so A/V stays locked to the independently retimed video.
 
 The live preview does not use this path. `live.rs`
-([`poc-d3d/src/live.rs`](../../poc-d3d/src/live.rs)) only handles video;
+([`crates/compositor/src/live.rs`](../../crates/compositor/src/live.rs)) only handles video;
 audio is decoded and mixed by `audio.rs` for the export run and not for the
 on-screen view, so editing playback is silent against the exported file.
 
 ## Build
 
 The crate links `libav*` (ffmpeg) via bindgen
-([`build.rs`](../../poc-d3d/build.rs) /
-[`wrapper.h`](../../poc-d3d/wrapper.h)). ffmpeg is not vendored — the
-path is pinned in `poc-d3d/.cargo/config.toml`:
+([`build.rs`](../../crates/compositor/build.rs) /
+[`wrapper.h`](../../crates/compositor/wrapper.h)). ffmpeg is not vendored — the
+path is pinned in `crates/.cargo/config.toml`:
 
 ```
 [env]
@@ -208,7 +215,7 @@ FFMPEG_DIR = { value = "thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared", relative = 
 LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
 ```
 
-So the thirdparty ffmpeg is **`poc-d3d/thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared`**
+So the thirdparty ffmpeg is **`crates/thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared`**
 (the BtbN LGPL-shared build of ffmpeg-n8.1.2-22-g94138f6973, tag
 `autobuild-2026-07-15-14-01`). It must be the **same build** that
 `scripts/fetch-ffmpeg.mjs` vendorises into
@@ -224,7 +231,7 @@ in `avcodec-NN.dll` is a build-id, not a soname, and changes between
 autobuilds. A floated snapshot would compile fine and crash at runtime on
 the first `require()`.
 
-`x.bat` ([`poc-d3d/x.bat`](../../poc-d3d/x.bat)) sets up the toolchain
+`x.bat` ([`crates/x.bat`](../../crates/x.bat)) sets up the toolchain
 end-to-end: vcvars64 (MSVC + Windows SDK headers/libs for both the linker
 and libclang), the ffmpeg `bin` directory on `PATH` (so the linker can
 find `avcodec-NN.dll`'s import lib AND any DLL the crate emits resolves its
@@ -244,7 +251,7 @@ licence. D3D11VA + AMF survive the LGPL-shared build (verified:
 ## Known gaps
 
 - **No software/CPU fallback.** `d3d::Gpu::create`
-  ([`poc-d3d/src/d3d.rs`](../../poc-d3d/src/d3d.rs)) requests
+  ([`crates/compositor/src/d3d.rs`](../../crates/compositor/src/d3d.rs)) requests
   `D3D_DRIVER_TYPE_HARDWARE` (no `WARP` / no `REFERENCE`) and pins
   `D3D_FEATURE_LEVEL_11_1` — any other feature level fails with `bail!`,
   and `VIDEO_SUPPORT` is mandatory for `D3D11VA`. A machine without a
