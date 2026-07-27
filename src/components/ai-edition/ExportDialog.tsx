@@ -32,7 +32,8 @@ import {
 	type GifSizePreset,
 } from "@/lib/exporter";
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
-import { exportGifNative, exportMultiNative } from "@/native";
+import { exportGifNative, exportMultiNative, useIsCpuCompositor } from "@/native";
+import { nativeBridgeClient } from "@/native/client";
 import type { CompositorClipInput } from "@/native/contracts";
 import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
 import { ModalShell } from "./Modals";
@@ -112,6 +113,9 @@ interface ExportDialogProps {
 export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 	const t = useScopedT("editor");
 	const ts = useScopedT("settings");
+	// No usable GPU: the export still applies every effect (output is identical), it
+	// just runs on the software encoder and takes minutes instead of seconds.
+	const cpuCompositor = useIsCpuCompositor();
 	const [format, setFormat] = useState<ExportFormat>("mp4");
 	const [quality, setQuality] = useState<ExportQuality>("good");
 	const [fps, setFps] = useState<24 | 30 | 60>(60);
@@ -607,6 +611,24 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 					pct={pct}
 					savedPath={savedPath}
 				/>
+
+				{cpuCompositor && phase !== "done" && (
+					// Placed next to the export button, not in a toast: it has to land while
+					// the user is still deciding. A CPU export renders every effect correctly
+					// but takes minutes rather than seconds, and an unexplained ten-minute
+					// wait reads as a hang.
+					<p
+						data-testid="export-cpu-warning"
+						style={{
+							margin: "0 0 4px",
+							fontSize: "0.8125rem",
+							lineHeight: 1.4,
+							color: "var(--text-muted, rgb(0 0 0 / 0.65))",
+						}}
+					>
+						{t("cpuCompositor.exportWarning")}
+					</p>
+				)}
 
 				<div
 					style={{
