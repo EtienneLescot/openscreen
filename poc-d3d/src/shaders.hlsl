@@ -118,8 +118,68 @@ float3 quad_st_for_root(float t, float2 e, float2 f, float2 g, float2 h)
     return float3(s, t, ok);
 }
 
+// (s, t, ok) du point `P` dans le quad c00->c10->c11->c01 : le warp bilinéaire INVERSE, partagé
+// par le mode 8 (écran incliné) et le mode 13 (curseur posé sur ce même écran). Les deux doivent
+// résoudre exactement la même équation, sinon le curseur glisse par rapport au contenu — d'où
+// une seule implémentation plutôt que deux copies.
+float3 quad_inverse_bilinear(float2 P, float2 c00, float2 c10, float2 c11, float2 c01)
+{
+    float2 e = c10 - c00;
+    float2 f = c01 - c00;
+    float2 g = c00 - c10 - c01 + c11;
+    float2 h = P - c00;
+    float k2 = g.x * f.y - g.y * f.x;
+    float k1 = e.x * f.y - e.y * f.x + h.x * g.y - h.y * g.x;
+    float k0 = h.x * e.y - h.y * e.x;
+    // Seuil RELATIF. Les présets « left »/« right » sont une rotation Y pure : le quad
+    // projeté est un trapèze symétrique dont `f` et `g` sont tous deux verticaux, donc
+    // k2 = 0 EXACTEMENT — au bruit d'arrondi près, et ce bruit vaut quelques centièmes sur
+    // des produits en 10^6. Un seuil absolu de 0.001 le manquait : l'équation passait dans la
+    // branche quadratique avec k2 ≈ 0, où `(-k1 + sqrt(k1²)) / 2k2` ne renvoie que du bruit —
+    // soustraire deux nombres presque égaux, puis diviser par presque rien. La quasi-totalité
+    // du quad était rejetée, ce qui se voyait comme un écran incliné tranché net.
+    if (abs(k2) < 1e-5 * abs(k1))
+    {
+        float t = (abs(k1) < 1e-6) ? 0.0 : -k0 / k1;
+        return quad_st_for_root(t, e, f, g, h);
+    }
+    float disc = k1 * k1 - 4.0 * k2 * k0;
+    if (disc < 0.0) return float3(0.0, 0.0, 0.0);
+    // Forme stable : `q` n'oppose jamais deux quantités voisines, et les deux racines
+    // s'en déduisent exactement. `sign()` est évité parce qu'il vaut 0 en 0, ce qui
+    // annulerait `q` là où la formule reste parfaitement définie.
+    float q = -0.5 * (k1 + (k1 >= 0.0 ? 1.0 : -1.0) * sqrt(disc));
+    float3 r0 = quad_st_for_root(q / k2, e, f, g, h);
+    float3 r1 = quad_st_for_root(abs(q) > 0.0 ? k0 / q : q / k2, e, f, g, h);
+    return (r0.z > 0.5) ? r0 : r1;
+}
+
 float4 ps_main(VSOut i) : SV_Target
 {
+    // mode 13 : SPRITE DE CURSEUR posé sur l'écran incliné. Même warp que le mode 8, mais
+    // échantillonnant la texture du curseur en alpha DROIT (comme le mode 7) au lieu de la
+    // vidéo NV12. Le curseur remplace un pointeur qui faisait partie de l'image capturée : il
+    // doit donc subir la même inclinaison qu'elle, sinon il se lit comme un autocollant plat
+    // collé par-dessus la scène. Corriger sa seule position ne suffisait pas.
+    // fx.xy/fx.zw = coins TL/TR (px locaux) ; src_prev.xy/.zw = BR/BL ; dst_prev = rect de clip
+    // « Clip to canvas » en espace sortie.
+    if (mode > 12.5)
+    {
+        if (i.pout.x < dst_prev.x || i.pout.x > dst_prev.x + dst_prev.z ||
+            i.pout.y < dst_prev.y || i.pout.y > dst_prev.y + dst_prev.w)
+        {
+            return float4(0.0, 0.0, 0.0, 0.0);
+        }
+        float3 r = quad_inverse_bilinear(i.local, fx.xy, fx.zw, src_prev.xy, src_prev.zw);
+        if (r.z < 0.5)
+        {
+            return float4(0.0, 0.0, 0.0, 0.0); // hors du sprite projeté
+        }
+        float4 s = texImg.Sample(samp, saturate(float2(r.x, r.y)));
+        float a = s.a * color.a;
+        return float4(s.rgb * a, a);
+    }
+
     // mode 8 : écran tilté en 3D (zoom regions "rotation" : iso/left/right). `dst`/`quad_px`
     // couvrent la BOUNDING BOX des 4 coins projetés (calculée côté CPU, `regions.rs`) ; ce
     // shader retrouve où tombe chaque pixel DANS le quad tilté (warp bilinéaire inverse — pas
@@ -247,40 +307,7 @@ float4 ps_main(VSOut i) : SV_Target
 
     if (mode > 7.5)
     {
-        float2 c00 = fx.xy, c10 = fx.zw, c11 = src_prev.xy, c01 = src_prev.zw;
-        float2 P = i.local;
-        float2 e = c10 - c00;
-        float2 f = c01 - c00;
-        float2 g = c00 - c10 - c01 + c11;
-        float2 h = P - c00;
-        float k2 = g.x * f.y - g.y * f.x;
-        float k1 = e.x * f.y - e.y * f.x + h.x * g.y - h.y * g.x;
-        float k0 = h.x * e.y - h.y * e.x;
-        float3 r;
-        // Seuil RELATIF. Les présets « left »/« right » sont une rotation Y pure : le quad
-        // projeté est un trapèze symétrique dont `f` et `g` sont tous deux verticaux, donc
-        // k2 = 0 EXACTEMENT — au bruit d'arrondi près, et ce bruit vaut quelques centièmes sur
-        // des produits en 10^6. Un seuil absolu de 0.001 le manquait : l'équation passait dans la
-        // branche quadratique avec k2 ≈ 0, où `(-k1 + sqrt(k1²)) / 2k2` ne renvoie que du bruit —
-        // soustraire deux nombres presque égaux, puis diviser par presque rien. La quasi-totalité
-        // du quad était rejetée, ce qui se voyait comme un écran incliné tranché net.
-        if (abs(k2) < 1e-5 * abs(k1))
-        {
-            float t = (abs(k1) < 1e-6) ? 0.0 : -k0 / k1;
-            r = quad_st_for_root(t, e, f, g, h);
-        }
-        else
-        {
-            float disc = k1 * k1 - 4.0 * k2 * k0;
-            if (disc < 0.0) return float4(0.0, 0.0, 0.0, 0.0);
-            // Forme stable : `q` n'oppose jamais deux quantités voisines, et les deux racines
-            // s'en déduisent exactement. `sign()` est évité parce qu'il vaut 0 en 0, ce qui
-            // annulerait `q` là où la formule reste parfaitement définie.
-            float q = -0.5 * (k1 + (k1 >= 0.0 ? 1.0 : -1.0) * sqrt(disc));
-            float3 r0 = quad_st_for_root(q / k2, e, f, g, h);
-            float3 r1 = quad_st_for_root(abs(q) > 0.0 ? k0 / q : q / k2, e, f, g, h);
-            r = (r0.z > 0.5) ? r0 : r1;
-        }
+        float3 r = quad_inverse_bilinear(i.local, fx.xy, fx.zw, src_prev.xy, src_prev.zw);
         if (r.z < 0.5)
         {
             return float4(0.0, 0.0, 0.0, 0.0); // hors du quad projeté
