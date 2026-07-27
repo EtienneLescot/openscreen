@@ -256,6 +256,15 @@
 		"addSkipRange": "Thêm khoảng bỏ qua",
 		"skipButtonShort": "+ bỏ qua",
 		"emptyState": "Chưa có tin nhắn nào. Yêu cầu tác nhân cắt khoảng lặng, rút ngắn khoảng dừng hoặc thêm phụ đề.",
+		"welcome": {
+			"title": "Mang theo AI của bạn",
+			"subtitle": "Chat chỉnh sửa video của bạn bằng cách trò chuyện với một mô hình ngôn ngữ. Hãy chọn nhà cung cấp bạn tin tưởng và kết nối khóa API để bắt đầu.",
+			"feature1": "Cắt khoảng lặng, rút ngắn nhịp nghỉ, loại bỏ từ đệm",
+			"feature2": "Thêm phụ đề, zoom vào camera, tạo tiêu đề",
+			"feature3": "Viết lại một đoạn, diễn đạt khác hoặc tách clip theo yêu cầu",
+			"cta": "Thiết lập nhà cung cấp",
+			"disclaimer": "Bản chép lời video sẽ được gửi đến nhà cung cấp bạn chọn. Không có gì được chia sẻ cho đến khi bạn kết nối một nhà cung cấp."
+		},
 		"authorUser": "Bạn",
 		"authorAssistant": "OpenScreen",
 		"rewindToMessage": "Tua lại đến tin nhắn này",
@@ -265,6 +274,7 @@
 		"appliedPrefix": "đã áp dụng:",
 		"thinking": "Đang suy nghĩ…",
 		"composerPlaceholder": "Mô tả chỉnh sửa bạn muốn.",
+		"composerDisabledNoProvider": "Hãy thiết lập nhà cung cấp để bắt đầu trò chuyện.",
 		"modelLabel": "Mô hình",
 		"reasoningEffortLabel": "Mức độ suy luận",
 		"sendTitle": "Gửi (Enter)",

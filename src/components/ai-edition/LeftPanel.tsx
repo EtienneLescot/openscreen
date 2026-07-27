@@ -21,6 +21,8 @@ import {
 	PROVIDER_DEFINITIONS,
 	type ReasoningEffort,
 } from "../../../electron/ai-edition/provider-registry";
+import { ChatWelcome } from "./ChatWelcome";
+import { canSendChat } from "./chatAvailability";
 import { computeBudget } from "./chatBudget";
 import { ChatHistoryModal, SourceTranscriptModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
@@ -645,6 +647,9 @@ function ModelQuickPopover({
 function ChatStripPanel() {
 	const t = useScopedT("editor");
 	const tc = useScopedT("common");
+	// The Auto-enhance confirmation is timeline-owned copy, fired from here —
+	// see the prompt-bus effect below.
+	const tTimeline = useScopedT("timeline");
 	const projectId = useProjectStore((s) => s.projectId);
 	const [messages, setMessages] = useState<ChatDisplayMessage[]>([]);
 	const [input, setInput] = useState("");
@@ -672,7 +677,10 @@ function ChatStripPanel() {
 		bottom: number;
 	} | null>(null);
 	const [reasoningBusy, setReasoningBusy] = useState(false);
-	const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
+	// null until the first llmGetSnapshot() lands: "unknown", not "none".
+	const [connectedProviders, setConnectedProviders] = useState<string[] | null>(null);
+	// unknown ≠ none; see chatAvailability.ts.
+	const canChat = canSendChat(llmConfig, connectedProviders);
 	const [modelPopoverOpen, setModelPopoverOpen] = useState(false);
 	const modelButtonRef = useRef<HTMLButtonElement | null>(null);
 	const [modelPopoverRect, setModelPopoverRect] = useState<{
@@ -770,6 +778,14 @@ function ChatStripPanel() {
 	const send = async (overrideText?: string) => {
 		const text = (overrideText ?? input).trim();
 		if (!projectId || !text || busy) return;
+		// ponytail: nothing to talk to. Bounce to the settings modal instead of
+		// firing a doomed request. The composer is disabled in this state too,
+		// but Auto-enhance calls send() directly and Enter can slip through.
+		if (!canChat) {
+			toast.error(t("chat.composerDisabledNoProvider"));
+			setSettingsOpen(true);
+			return;
+		}
 		setInput("");
 		setBusy(true);
 		// ponytail: pre-seed the user message so the rewind ↩ button is
@@ -843,14 +859,19 @@ function ChatStripPanel() {
 	// timeline's Auto-enhance → "Smart zooms + cuts with AI"). Routes through
 	// the normal send() so sessions/checkpoints/rewind all keep working; the
 	// message shows in the composer's history exactly as if typed.
+	// The confirmation toast lives here because only this side knows the prompt
+	// was taken — send() bounces it to the settings modal with no provider.
+	// ponytail: one producer today, so the toast copy is assumed to be its own.
+	// A second producer needs the bus to carry its confirmation string.
 	const pendingPrompt = useChatPromptBus((s) => s.pending);
 	const consumePrompt = useChatPromptBus((s) => s.consume);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: send() is intentionally not a dep (recreated each render); consume() clears `pending` so this fires once per queued prompt.
 	useEffect(() => {
 		if (!pendingPrompt || !projectId || busy) return;
 		consumePrompt();
+		if (canChat) toast.success(tTimeline("toolbar.aiEnhanceRequested"));
 		void send(pendingPrompt);
-	}, [pendingPrompt, projectId, busy, consumePrompt]);
+	}, [pendingPrompt, projectId, busy, consumePrompt, canChat, tTimeline]);
 
 	// ponytail: per-user-message rewind. Pops a confirmation popover, then
 	// asks the main process to roll the session + document back to the
@@ -1405,7 +1426,9 @@ function ChatStripPanel() {
 			</div>
 
 			<div className={styles.panelBody} ref={scrollRef}>
-				{messages.length === 0 ? (
+				{!canChat && messages.length === 0 ? (
+					<ChatWelcome onOpenProviderSettings={() => setSettingsOpen(true)} />
+				) : messages.length === 0 ? (
 					<p
 						style={{
 							font: "400 12px var(--font-body)",
@@ -1568,8 +1591,11 @@ function ChatStripPanel() {
 
 			<div className={styles.chatInput}>
 				<textarea
-					placeholder={t("chat.composerPlaceholder")}
+					placeholder={
+						canChat ? t("chat.composerPlaceholder") : t("chat.composerDisabledNoProvider")
+					}
 					value={input}
+					disabled={!canChat}
 					onChange={(e) => setInput(e.target.value)}
 					onKeyDown={(e) => {
 						if (e.key === "Enter" && !e.shiftKey) {
@@ -1672,7 +1698,7 @@ function ChatStripPanel() {
 						<ModelQuickPopover
 							anchorRect={modelPopoverRect}
 							llmConfig={llmConfig}
-							connectedProviders={connectedProviders}
+							connectedProviders={connectedProviders ?? []}
 							onClose={() => setModelPopoverOpen(false)}
 							onConfigChange={() => void refreshLlm()}
 							onOpenFullSettings={() => setSettingsOpen(true)}
@@ -1681,10 +1707,10 @@ function ChatStripPanel() {
 					<button
 						type="button"
 						className={styles.sendBtn}
-						title={t("chat.sendTitle")}
+						title={canChat ? t("chat.sendTitle") : t("chat.composerDisabledNoProvider")}
 						aria-label={t("chat.send")}
 						onClick={() => void send()}
-						disabled={busy || !input.trim()}
+						disabled={busy || !input.trim() || !canChat}
 					>
 						<svg
 							width={14}
