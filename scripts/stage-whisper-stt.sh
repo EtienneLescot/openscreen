@@ -70,4 +70,34 @@ BIN="$(find "${DEST}" -maxdepth 1 -name 'whisper-stt-server*' -print -quit)"
 [ -n "${BIN}" ] || { echo "FATAL: no whisper-stt-server binary in ${DEST}" >&2; exit 1; }
 [ "${TAG#win32}" = "${TAG}" ] && chmod +x "${BIN}"
 
+# The existence check above is not enough: 1.8.0-rc.1..rc.3 staged a binary that
+# was present and unrunnable. cpp-httplib had linked OpenSSL, the two
+# libssl/libcrypto DLLs were never in the artifact, and Windows killed the
+# process in the loader (0xC0000135) before main() — so it printed nothing and
+# the app reported only "did not respond within 30000ms".
+#
+# So actually LOAD it. The PATH scrub is the whole point: the build runner has
+# OpenSSL installed, so an unscrubbed run resolves the very DLLs the installer
+# omits and the check passes on exactly the builds that are broken for users.
+# Stripping PATH leaves only the OS directories plus DEST itself (the loader
+# always searches the binary's own directory), which is what a user machine has.
+if [ "${TAG#win32}" != "${TAG}" ]; then
+  MINIMAL_PATH="/c/Windows/System32"
+else
+  MINIMAL_PATH="/usr/bin:/bin"
+fi
+# A bad --model makes it fail fast; we only care that it got far enough to speak.
+set +e
+LOAD_OUT="$(cd "${DEST}" && timeout 60 env PATH="${MINIMAL_PATH}" \
+  "./$(basename "${BIN}")" --model "__staging_load_check__" 2>&1)"
+LOAD_CODE=$?
+set -e
+if [ -z "${LOAD_OUT}" ]; then
+  echo "FATAL: $(basename "${BIN}") produced no output (exit ${LOAD_CODE}) — it did not load." >&2
+  echo "       Unresolved imports; the dependency is missing from the artifact." >&2
+  echo "       Windows exit 3221225781 = 0xC0000135 STATUS_DLL_NOT_FOUND." >&2
+  exit 1
+fi
+echo "Load check OK (exit ${LOAD_CODE}): $(printf '%s' "${LOAD_OUT}" | head -n 1)"
+
 echo "Staged $(basename "${BIN}") + $(( $(ls -1 "${DEST}" | wc -l) - 1 )) sidecar(s) -> ${DEST}"

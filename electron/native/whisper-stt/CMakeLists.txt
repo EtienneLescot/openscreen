@@ -82,6 +82,21 @@ FetchContent_Declare(json
   GIT_TAG        v3.11.3
   GIT_SHALLOW    TRUE
 )
+# cpp-httplib auto-detects OpenSSL, zlib and Brotli and links whatever it finds:
+# all three HTTPLIB_USE_*_IF_AVAILABLE options default to ON. That makes the
+# import table a function of whatever happens to be installed on the build
+# machine, which is how 1.8.0-rc.1..rc.3 shipped a whisper-stt-server.exe
+# importing libssl-3-x64.dll and libcrypto-3-x64.dll that the installer does not
+# carry. Windows then killed it in the loader with 0xC0000135 before main(), so
+# it printed nothing and the app only ever saw "did not respond within 30000ms".
+#
+# This server binds 127.0.0.1 over plain HTTP and never speaks TLS (see the
+# loopback-only guard in src/main.cpp), so OpenSSL buys nothing. Pin all three
+# OFF to make the link deterministic rather than environment-dependent.
+set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_USE_ZLIB_IF_AVAILABLE    OFF CACHE BOOL "" FORCE)
+set(HTTPLIB_USE_BROTLI_IF_AVAILABLE  OFF CACHE BOOL "" FORCE)
+
 FetchContent_MakeAvailable(whisper httplib json)
 
 add_executable(whisper-stt-server src/main.cpp)
