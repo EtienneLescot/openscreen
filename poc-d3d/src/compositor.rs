@@ -434,6 +434,69 @@ fn cursor_sprite_dst(center: [f32; 2], w: f32, h: f32, hotspot: [f32; 2]) -> [f3
     [center[0] - w * hotspot[0], center[1] - h * hotspot[1], w, h]
 }
 
+/// Où poser le curseur, et dans quel repère.
+///
+/// Le curseur remplace un pointeur qui faisait partie de l'image capturée, donc il vit SUR la
+/// surface de l'écran, pas dans un calque au-dessus. Quand cet écran est incliné en 3D, ce n'est
+/// donc pas seulement sa position qu'il faut projeter mais son sprite entier : autrement il se
+/// lit comme un autocollant plat posé sur une scène en perspective.
+#[derive(Clone, Copy)]
+enum CursorPlacement {
+    /// Écran droit : centre en coordonnées sortie 0..1.
+    Upright { center: [f32; 2] },
+    /// Écran incliné : position 0..1 DANS le plan, plus de quoi projeter les coins du sprite.
+    Tilted {
+        /// Position du pivot dans le plan (0..1 depuis son coin haut-gauche).
+        plane_pt: [f32; 2],
+        quad: crate::regions::TiltedQuad,
+        /// Centre du plan en px sortie — `quad.corners` y est relatif.
+        center_px: [f32; 2],
+        /// Taille du rect d'écran NON incliné en px : l'unité dans laquelle la taille du
+        /// curseur est exprimée, et donc ce qui la convertit en fraction du plan.
+        screen_px: [f32; 2],
+        /// Taille de la cible de rendu en px, pour repasser des px aux 0..1 de la sortie.
+        render_px: [f32; 2],
+    },
+}
+
+impl CursorPlacement {
+    /// Interpolation entre deux placements, pour les copies de la traînée de flou. Sur un plan
+    /// incliné on interpole DANS le plan : la traînée suit alors la surface au lieu de couper
+    /// droit à travers la perspective.
+    fn lerp(self, other: CursorPlacement, f: f32) -> CursorPlacement {
+        match (self, other) {
+            (
+                CursorPlacement::Tilted { plane_pt: a, quad, center_px, screen_px, render_px },
+                CursorPlacement::Tilted { plane_pt: b, .. },
+            ) => CursorPlacement::Tilted {
+                plane_pt: [a[0] + (b[0] - a[0]) * f, a[1] + (b[1] - a[1]) * f],
+                quad,
+                center_px,
+                screen_px,
+                render_px,
+            },
+            (a, b) => {
+                let (p, q) = (a.upright_center(), b.upright_center());
+                CursorPlacement::Upright {
+                    center: [p[0] + (q[0] - p[0]) * f, p[1] + (q[1] - p[1]) * f],
+                }
+            }
+        }
+    }
+
+    /// Le centre en coordonnées sortie, quel que soit le repère — ce dont ont besoin le curseur
+    /// math de secours et le calcul de vélocité.
+    fn upright_center(self) -> [f32; 2] {
+        match self {
+            CursorPlacement::Upright { center } => center,
+            CursorPlacement::Tilted { plane_pt, quad, center_px, render_px, .. } => {
+                let (px, py) = quad.point_px(plane_pt[0], plane_pt[1]);
+                [(center_px[0] + px) / render_px[0], (center_px[1] + py) / render_px[1]]
+            }
+        }
+    }
+}
+
 fn ease_in_out_cubic(x: f32) -> f32 {
     let x = x.clamp(0.0, 1.0);
     if x < 0.5 {
@@ -1289,7 +1352,7 @@ impl Compositor {
     /// retombe sur `draw_cursor` (math dot+ring).
     unsafe fn draw_cursor_sprite(
         &self,
-        center: [f32; 2],
+        placement: CursorPlacement,
         size_px: f32,
         a: f32,
         sprite: &SceneCursorSprite,
@@ -1307,17 +1370,58 @@ impl Compositor {
         };
         let ar = iw as f32 / ih as f32;
         let (pw, ph) = if ar >= 1.0 { (size_px, size_px / ar) } else { (size_px * ar, size_px) };
-        let w = pw / self.rw();
-        let h = ph / self.rh();
-        let dst = cursor_sprite_dst(center, w, h, [sprite.hotspot_x, sprite.hotspot_y]);
-        self.upload_cb(&LayerCB {
-            dst,
-            src: [0.0, 0.0, 1.0, 1.0],
-            mode: 7.0,
-            color: [1.0, 1.0, 1.0, a],
-            fx: clip,
-            ..Default::default()
-        });
+        let hotspot = [sprite.hotspot_x, sprite.hotspot_y];
+
+        let cb = match placement {
+            CursorPlacement::Upright { center } => LayerCB {
+                dst: cursor_sprite_dst(center, pw / self.rw(), ph / self.rh(), hotspot),
+                src: [0.0, 0.0, 1.0, 1.0],
+                mode: 7.0,
+                color: [1.0, 1.0, 1.0, a],
+                fx: clip,
+                ..Default::default()
+            },
+            CursorPlacement::Tilted { plane_pt, quad, center_px, screen_px, .. } => {
+                // Le sprite est posé DANS le plan : sa taille devient une fraction du plan
+                // (l'unité de `size_px` est le rect d'écran non incliné), et ses 4 coins
+                // traversent la même projection que la vidéo. La réduction due au tilt vient
+                // donc de la projection elle-même — rien à multiplier à la main.
+                let (wf, hf) = (pw / screen_px[0], ph / screen_px[1]);
+                let x0 = plane_pt[0] - hotspot[0] * wf;
+                let y0 = plane_pt[1] - hotspot[1] * hf;
+                let corners = [(x0, y0), (x0 + wf, y0), (x0 + wf, y0 + hf), (x0, y0 + hf)]
+                    .map(|(fx, fy)| {
+                        let (px, py) = quad.point_px(fx, fy);
+                        (center_px[0] + px, center_px[1] + py)
+                    });
+                let (min_x, max_x) = corners
+                    .iter()
+                    .fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| (mn.min(x), mx.max(x)));
+                let (min_y, max_y) = corners
+                    .iter()
+                    .fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| (mn.min(y), mx.max(y)));
+                // Le quad projeté d'un sprite peut être très fin de biais : une bbox d'un pixel
+                // de large ferait diverger le warp inverse, donc plancher à 1 px.
+                let (bw, bh) = ((max_x - min_x).max(1.0), (max_y - min_y).max(1.0));
+                let local = |(x, y): (f32, f32)| [x - min_x, y - min_y];
+                let [tl0, tl1] = local(corners[0]);
+                let [tr0, tr1] = local(corners[1]);
+                let [br0, br1] = local(corners[2]);
+                let [bl0, bl1] = local(corners[3]);
+                LayerCB {
+                    dst: [min_x / self.rw(), min_y / self.rh(), bw / self.rw(), bh / self.rh()],
+                    quad_px: [bw, bh],
+                    mode: 13.0,
+                    color: [1.0, 1.0, 1.0, a],
+                    fx: [tl0, tl1, tr0, tr1],
+                    src_prev: [br0, br1, bl0, bl1],
+                    dst_prev: clip,
+                    ..Default::default()
+                }
+            }
+        };
+
+        self.upload_cb(&cb);
         self.ctx.PSSetShaderResources(2, Some(&[Some(srv)]));
         self.ctx.Draw(4, 0);
         Ok(())
@@ -1333,18 +1437,21 @@ impl Compositor {
         &self,
         sprites: &HashMap<String, SceneCursorSprite>,
         cursor_type: Option<&str>,
-        center: [f32; 2],
+        placement: CursorPlacement,
         size_px: f32,
         a: f32,
         clip: [f32; 4],
     ) {
         let sprite = cursor_type.and_then(|t| sprites.get(t)).or_else(|| sprites.get("arrow"));
         if let Some(sprite) = sprite {
-            if self.draw_cursor_sprite(center, size_px, a, sprite, clip).is_ok() {
+            if self.draw_cursor_sprite(placement, size_px, a, sprite, clip).is_ok() {
                 return;
             }
         }
-        self.draw_cursor(center, size_px, a, clip);
+        // Le repli math reste droit même sur un plan incliné : il ne devrait plus apparaître
+        // maintenant que l'art par défaut existe, et lui donner sa propre passe de warp pour
+        // un cas de secours ne se justifie pas.
+        self.draw_cursor(placement.upright_center(), size_px, a, clip);
     }
 
     /// Ombre portée (§7 E4) sous un quad `dst` (normalisé) de taille `size_px`.
@@ -1998,8 +2105,24 @@ impl Compositor {
         // « Clip to canvas » : tronque le curseur aux bords de l'écran (utile quand le padding
         // crée une marge et que la pointe, près du bord de la vidéo, dépasserait dedans).
         // Rect englobant tout par défaut = pas d'effet (le mode 4/7 du shader clippe sur `fx`).
+        // Écran incliné : le rect droit d'origine rognerait le curseur sur les parties du plan
+        // qui débordent au-dessus/en dessous, donc on clippe sur la bbox du quad projeté. Un
+        // rect reste une approximation du quadrilatère — `fx` ne sait pas exprimer autre chose —
+        // mais qui ne coupe plus rien de ce qui est réellement affiché.
+        let cursor_bounds: [f32; 4] = match tilt.as_ref() {
+            None => s_dst,
+            Some(quad) => {
+                let (hx, hy) = quad.half_extents_px();
+                [
+                    (quad_center_px[0] - hx) / self.rw(),
+                    (quad_center_px[1] - hy) / self.rh(),
+                    2.0 * hx / self.rw(),
+                    2.0 * hy / self.rh(),
+                ]
+            }
+        };
         let cursor_clip_rect: [f32; 4] = match self.scene.borrow().as_ref() {
-            Some(s) if s.cursor.clip_to_bounds => s_dst,
+            Some(s) if s.cursor.clip_to_bounds => cursor_bounds,
             _ => [-1.0, -1.0, 3.0, 3.0],
         };
         // « Show cursor » : piloté par la scène (contrat de l'app) quand elle est posée ; sinon
@@ -2017,11 +2140,26 @@ impl Compositor {
                     cxy.and_then(|(cx2, cy2)| {
                         let fx = (cx2 * u_max - s0[0]) / (2.0 * h[0]);
                         let fy = (cy2 * v_max - s0[1]) / (2.0 * h[1]);
-                        if (0.0..=1.0).contains(&fx) && (0.0..=1.0).contains(&fy) {
-                            Some([dst[0] + fx * dst[2], dst[1] + fy * dst[3]])
-                        } else {
-                            None
+                        if !(0.0..=1.0).contains(&fx) || !(0.0..=1.0).contains(&fy) {
+                            return None;
                         }
+                        // Écran incliné : le curseur vit SUR le plan, pas dans un calque
+                        // au-dessus. On garde donc sa position dans le repère DU PLAN et c'est
+                        // le dessin qui projette — position ET sprite. Le poser sur `dst`, le
+                        // rect droit d'origine, le laissait flotter à côté de l'image, l'écart
+                        // se comptant en dizaines de pixels là où le plan s'éloigne le plus.
+                        Some(match tilt.as_ref() {
+                            Some(&quad) => CursorPlacement::Tilted {
+                                plane_pt: [fx, fy],
+                                quad,
+                                center_px: quad_center_px,
+                                screen_px: s_px,
+                                render_px: [self.rw(), self.rh()],
+                            },
+                            None => CursorPlacement::Upright {
+                                center: [dst[0] + fx * dst[2], dst[1] + fy * dst[3]],
+                            },
+                        })
                     })
                 };
                 let raw_xy = track.at(t);
@@ -2035,9 +2173,15 @@ impl Compositor {
                     // pareil pour rester à l'échelle du contenu (sinon sa pointe semble se
                     // décaler/dériver à mesure que le padding grandit).
                     let bounce = 1.0 + (track.bounce(t) - 1.0) * lp.cursor_bounce_scale;
-                    let sz =
-                        CURSOR_BASE_SIZE_FRAC * frame_min_px * lp.cursor_size_scale * bounce
-                            * padding_scale;
+                    // Pas de facteur de tilt ici : sur un plan incliné la taille est convertie
+                    // en fraction du plan puis projetée avec lui (voir `draw_cursor_sprite`),
+                    // donc la réduction vient de la projection. L'ajouter en plus rétrécirait
+                    // le curseur deux fois.
+                    let sz = CURSOR_BASE_SIZE_FRAC
+                        * frame_min_px
+                        * lp.cursor_size_scale
+                        * bounce
+                        * padding_scale;
                     // flou de mouvement DU CURSEUR, indépendant de cfg.mblur_n (écran/vidéo).
                     // BUG corrigé : augmenter l'intensité ne faisait auparavant que sur-échantillonner
                     // (plus de taps) un écart figé d'1 frame (1/60s) -> la traînée ne s'allongeait
@@ -2091,11 +2235,10 @@ impl Compositor {
                         self.ctx.OMSetBlendState(&self.blend_add, Some(&[w, w, w, w]), 0xffffffff);
                         for k in 0..taps {
                             let f = k as f32 / (taps - 1) as f32;
-                            let c = [prev[0] + (cur[0] - prev[0]) * f, prev[1] + (cur[1] - prev[1]) * f];
                             self.draw_cur_themed(
                                 &cursor_sprites,
                                 cursor_type,
-                                c,
+                                prev.lerp(cur, f),
                                 sz,
                                 1.0,
                                 cursor_clip_rect,
