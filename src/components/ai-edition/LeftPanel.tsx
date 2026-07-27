@@ -647,6 +647,9 @@ function ModelQuickPopover({
 function ChatStripPanel() {
 	const t = useScopedT("editor");
 	const tc = useScopedT("common");
+	// The Auto-enhance confirmation is timeline-owned copy, fired from here —
+	// see the prompt-bus effect below.
+	const tTimeline = useScopedT("timeline");
 	const projectId = useProjectStore((s) => s.projectId);
 	const [messages, setMessages] = useState<ChatDisplayMessage[]>([]);
 	const [input, setInput] = useState("");
@@ -865,14 +868,23 @@ function ChatStripPanel() {
 	// timeline's Auto-enhance → "Smart zooms + cuts with AI"). Routes through
 	// the normal send() so sessions/checkpoints/rewind all keep working; the
 	// message shows in the composer's history exactly as if typed.
+	//
+	// The confirmation toast lives here rather than at the submit site because
+	// only this side knows whether the prompt was taken: with no usable
+	// provider send() bounces it to the settings modal, and the producer would
+	// otherwise claim success on a request that never left.
+	// ponytail: one producer today (Auto-enhance), so the queued prompt and the
+	// toast copy are assumed to be that one. A second producer needs the bus to
+	// carry its own confirmation string.
 	const pendingPrompt = useChatPromptBus((s) => s.pending);
 	const consumePrompt = useChatPromptBus((s) => s.consume);
 	// biome-ignore lint/correctness/useExhaustiveDependencies: send() is intentionally not a dep (recreated each render); consume() clears `pending` so this fires once per queued prompt.
 	useEffect(() => {
 		if (!pendingPrompt || !projectId || busy) return;
 		consumePrompt();
+		if (canChat) toast.success(tTimeline("toolbar.aiEnhanceRequested"));
 		void send(pendingPrompt);
-	}, [pendingPrompt, projectId, busy, consumePrompt]);
+	}, [pendingPrompt, projectId, busy, consumePrompt, canChat, tTimeline]);
 
 	// ponytail: per-user-message rewind. Pops a confirmation popover, then
 	// asks the main process to roll the session + document back to the

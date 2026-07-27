@@ -832,12 +832,13 @@ export function V4Timeline({
 	}, [videoSources, tl, t]);
 
 	// Auto-enhance option 2 — hand a generic prompt to the AI agent (smart
-	// zooms + cuts) via the chat prompt-bus.
+	// zooms + cuts) via the chat prompt-bus. The chat panel owns the outcome
+	// toast: submitting is not the same as being accepted (no usable provider
+	// bounces the prompt), and only the consumer knows which happened.
 	const runAiEnhance = useCallback(() => {
 		setAutoEnhanceOpen(false);
 		useChatPromptBus.getState().submit(AI_ENHANCE_PROMPT);
-		toast.success(t("toolbar.aiEnhanceRequested"));
-	}, [t]);
+	}, []);
 
 	const isPillSelected = (id: string) =>
 		tl.selection?.id === id || tl.multiSelection.some((m) => m.id === id);
