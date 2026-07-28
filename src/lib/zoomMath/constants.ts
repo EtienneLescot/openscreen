@@ -1,4 +1,4 @@
-import type { ZoomFocus } from "../types";
+import type { ZoomFocus } from "@/components/video-editor/types";
 
 export const DEFAULT_FOCUS: ZoomFocus = { cx: 0.5, cy: 0.5 };
 export const TRANSITION_WINDOW_MS = 1015.05;

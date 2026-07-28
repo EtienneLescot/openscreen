@@ -24,24 +24,6 @@ import type {
 	ZoomRegion,
 } from "@/components/video-editor/types";
 import { DEFAULT_ROTATION_3D, getZoomScale, lerpRotation3D } from "@/components/video-editor/types";
-import { computeCameraFullscreenProgress } from "@/components/video-editor/videoPlayback/cameraFullscreenUtils";
-import {
-	AUTO_FOLLOW_PARAMS,
-	DEFAULT_FOCUS,
-} from "@/components/video-editor/videoPlayback/constants";
-import { advanceFollowFocus } from "@/components/video-editor/videoPlayback/cursorFollowUtils";
-import { clampFocusToScale } from "@/components/video-editor/videoPlayback/focusUtils";
-import { findDominantRegion } from "@/components/video-editor/videoPlayback/zoomRegionUtils";
-import {
-	createZoomSpringState,
-	resetZoomSpring,
-	stepZoomSpring,
-	type ZoomSpringState,
-} from "@/components/video-editor/videoPlayback/zoomSpring";
-import {
-	computeFocusFromTransform,
-	computeZoomTransform,
-} from "@/components/video-editor/videoPlayback/zoomTransform";
 import {
 	computeCameraFullscreenRect,
 	computeCompositeLayout,
@@ -52,6 +34,18 @@ import {
 	type WebcamLayoutPreset,
 	type WebcamSizePreset,
 } from "@/lib/compositeLayout";
+import { computeCameraFullscreenProgress } from "@/lib/zoomMath/cameraFullscreenUtils";
+import { AUTO_FOLLOW_PARAMS, DEFAULT_FOCUS } from "@/lib/zoomMath/constants";
+import { advanceFollowFocus } from "@/lib/zoomMath/cursorFollowUtils";
+import { clampFocusToScale } from "@/lib/zoomMath/focusUtils";
+import { findDominantRegion } from "@/lib/zoomMath/zoomRegionUtils";
+import {
+	createZoomSpringState,
+	resetZoomSpring,
+	stepZoomSpring,
+	type ZoomSpringState,
+} from "@/lib/zoomMath/zoomSpring";
+import { computeFocusFromTransform, computeZoomTransform } from "@/lib/zoomMath/zoomTransform";
 
 /** Everything about the document that does not depend on `t`. */
 export interface EvaluateScene {

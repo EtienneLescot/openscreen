@@ -6,7 +6,7 @@ import {
 	getCursorSpringConfig,
 	resetSpringState,
 	stepSpringValue,
-} from "@/components/video-editor/videoPlayback/motionSmoothing";
+} from "@/lib/zoomMath/motionSmoothing";
 import { clamp } from "@/utils/math";
 import { UPLOADED_CURSOR_SAMPLE_SIZE, uploadedCursorAssets } from "./uploadedCursorAssets";
 

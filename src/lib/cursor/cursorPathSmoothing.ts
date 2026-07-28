@@ -1,4 +1,4 @@
-import { getCursorSpringConfig } from "@/components/video-editor/videoPlayback/motionSmoothing";
+import { getCursorSpringConfig } from "@/lib/zoomMath/motionSmoothing";
 import type { CursorRecordingData, CursorRecordingSample } from "@/native/contracts";
 import { clamp } from "@/utils/math";
 
