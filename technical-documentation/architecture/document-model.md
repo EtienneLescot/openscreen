@@ -36,28 +36,35 @@ and anything unknown is rejected by the `z.literal(5)` check at line 477.
 
 Migrations are **one-way and forward-only**. There is no version downgrade path: a
 newer document that lands on an older build is rejected by the `schemaVersion`
-literal, not silently truncated. The current chain is implemented inline in the
-schema file (`src/lib/ai-edition/schema/index.ts`) so every `documentSchema.parse(...)`
-call site gets the upgrade for free.
+literal, not silently truncated. The chain runs **at load time** through
+`migrateRawDocumentToCurrent` (`src/lib/ai-edition/document/migrate.ts`) — the
+upgraders compose the chain and `documentSchema.parse` is a pure v5 validator.
+Every JSON-read site (`DocumentService`, the browser shim, the renderer's
+`handleBrowseProject` / `openLoadedProject` disk-load paths) must call the
+helper before `documentSchema.parse`. The pre-hoist implementation wrapped this
+chain in a `z.preprocess`, so it ran on every `setDocument` / `saveDocument` /
+`loadProject` parse — measurable per-parse overhead on documents that were
+already v5. Hoisting it to load time makes the in-memory parse a single
+`z.literal(5)` + shape check on already-upgraded data.
 
-### v3 → v4 (`upgradeV3DocumentToV4`, lines 522-542)
+### v3 → v4 (`upgradeV3DocumentToV4`, `schema/index.ts`)
 
 v3 documents carried a single project-level `cameraTrack`; v4 moves it onto the
-owning asset. The preprocessor pulls the legacy `cameraTrack` field off the
+owning asset. The upgrader pulls the legacy `cameraTrack` field off the
 document root and copies it onto the asset identified by `project.primaryAssetId`
 (or the first asset if that is unset), then strips the root field and rewrites
-`schemaVersion: 4`. v2 documents are not touched by this preprocessor — they are
-handled by the separate `migrateProjectDataToAxcutDocument` pure function described
-below — and unknown versions pass through unchanged into the literal check at the
-top of `documentSchemaShape`.
+`schemaVersion: 4`. v2 documents are not touched by this upgrader — they are
+handled by the separate `migrateProjectDataToAxcutDocument` pure function
+described below — and unknown versions pass through unchanged so the caller's
+`documentSchema.parse` can reject them via the `schemaVersion` literal.
 
-### v4 → v5 (`upgradeV4DocumentToV5`, lines 557-596)
+### v4 → v5 (`upgradeV4DocumentToV5`, `schema/index.ts`)
 
 v5 makes modifiers (zoom, annotation, speed, camera-fullscreen) clip-anchored:
 each region is split into one fragment per covered clip, with the source-time
 window (`clipId`, `sourceStartSec`, `sourceEndSec`) as the source of truth and
-`startMs`/`endMs` re-derived as a transition cache. The preprocessor reads the
-RAW clip layout out of `timeline.clips` and runs every region array through
+`startMs`/`endMs` re-derived as a transition cache. The upgrader reads the RAW
+clip layout out of `timeline.clips` and runs every region array through
 `anchorRegionsWithDerivedMs` (`src/lib/ai-edition/timeline/timelineMap.ts:376`):
 
 - `document.zoomRanges`
@@ -68,9 +75,9 @@ RAW clip layout out of `timeline.clips` and runs every region array through
 A region that covers no clip — zero-length, or off the end of the timeline — is
 dropped, because it could never play. A document with no clips has nothing to
 anchor to, so its regions pass through untouched (the anchor is optional during
-the transition, see the v5 schema at line 403-407). The `v4→v5` migration lives
-**only** in this preprocessor — `document/migrate.ts` deliberately emits a v4
-draft (line 209) so the same code path is reused for the legacy import.
+the transition). The v4→v5 migration lives **only** in this upgrader —
+`document/migrate.ts` deliberately emits a v4 draft (see the v2→current
+section below) so the same code path is reused for the legacy import.
 
 ### Legacy v2 → current (`migrateProjectDataToAxcutDocument`, `document/migrate.ts`)
 
@@ -93,12 +100,12 @@ field into the equivalent v5 slot:
   and the other ~20 fields without a first-class home — round-trips through
   `legacyEditor` so toggling AI-edition off then back on is lossless.
 
-The function returns the v5 result by emitting a v4-shaped draft and letting
-`documentSchema.parse` run it through the v4→v5 preprocessor described above.
-That is why the draft is labelled `schemaVersion: 4` and not `axcutSchemaVersion`
-(see the comment at `document/migrate.ts:201-207`): labelling it already-v5 would
-make the preprocessor skip the anchoring and leave the imported regions without
-clip anchors.
+The function returns the v5 result by emitting a v4-shaped draft and running it
+through `migrateRawDocumentToCurrent` (which composes `upgradeV3DocumentToV4` +
+`upgradeV4DocumentToV5`) before the v5-validating `documentSchema.parse`. That
+is why the draft is labelled `schemaVersion: 4` and not `axcutSchemaVersion`:
+labelling it already-v5 would make the v4→v5 upgrader skip the anchoring and
+leave the imported regions without clip anchors.
 
 ## Persistence
 
@@ -115,9 +122,10 @@ service stores exactly what `JSON.stringify(document, null, 2)` produces.
 | Extension | — | **`.openscreen`**. Older builds wrote the same v3/v4 documents under `.axcut`; the service renames them to `.openscreen` on first access (`migrateLegacyExtensions`, lines 119-145). The file content is unchanged — the extension migration is a pure rename keyed off the schema version in the JSON, not the file name. |
 | Atomicity | — | Temp + rename per save (`writeProjectNow`, lines 354-394), with a per-project write queue (`writeQueues`, line 106) so two concurrent saves serialise and an interrupted write cannot leave a half-written document behind. |
 
-Both layers run every read through `documentSchema.parse` so an on-disk document
-of any supported version comes out as the current `AxcutDocument` shape; the
-renderer never holds a stale `schemaVersion: 3` snapshot.
+Both layers run every read through `migrateRawDocumentToCurrent` then
+`documentSchema.parse` so an on-disk document of any supported version comes out
+as the current `AxcutDocument` shape; the renderer never holds a stale
+`schemaVersion: 3` snapshot.
 
 ## Undo / history
 
