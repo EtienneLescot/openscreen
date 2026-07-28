@@ -12,6 +12,7 @@ import {
 import { transcribeAsset } from "@/lib/ai-edition/document/transcribe";
 import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { matchesShortcut } from "@/lib/shortcuts";
@@ -111,10 +112,13 @@ export function NewEditorShell() {
 	}
 
 	// ponytail: serialise timeline-edit saves so two rapid Backspaces
-	// don't race each other's IPC save and overwrite one another in the
-	// store. Each new save chains off the previous one, so the store is
-	// always updated in the order the user issued the trims.
-	const saveQueueRef = useRef<Promise<void>>(Promise.resolve());
+	// don't race each other's save and overwrite one another in the
+	// store. The hook reads the doc inside the chain (after awaiting the
+	// previous save) — see its source for the race this fixes.
+	const { apply: applyTimelineOp } = useSequentialTimelineOps({
+		fallbackDocument: document,
+		saveDocument,
+	});
 
 	const promptUnsaved = useCallback(
 		(action: "close" | "new" | "open" | "record"): Promise<UnsavedChoice> => {
@@ -537,63 +541,24 @@ export function NewEditorShell() {
 	// trimRange (NOT a destructive word removal — the source text stays
 	// intact, the word is just hidden by the skip overlay). Mirrors
 	// axcut's `queueAddTrimRange` / `queueRemoveTrimRange` callbacks in
-	// apps/web/src/App.tsx.
+	// apps/web/src/App.tsx. The serialised save + inside-the-chain doc
+	// read is owned by `useSequentialTimelineOps` above.
 	const handleAddTrimRange = useCallback(
 		(assetId: string, startSec: number, endSec: number, reason: string) => {
-			// BUG corrigé : `doc` était lu de façon SYNCHRONE au moment de l'appel, puis seule la
-			// SAUVEGARDE était sérialisée via `saveQueueRef` — pas la LECTURE. Éditer le clip 1 puis
-			// le clip 2 avant que la chaîne async du premier save (import() + applyTimelineOperation +
-			// saveDocument, qui fait un aller-retour IPC) n'ait commit dans le store faisait lire au
-			// second appel le MÊME doc pré-edit-1 ; son propre saveDocument(next.document) écrasait
-			// alors le store avec un doc qui contient le trim du clip 2 mais PAS celui du clip 1 — les
-			// edits du clip 1 disparaissaient. La lecture doit donc elle aussi être mise dans la
-			// chaîne, après avoir attendu le tour précédent, pour toujours partir du doc déjà commit.
-			const queued = saveQueueRef.current
-				.then(() => import("@/lib/ai-edition/document/operations"))
-				.then(({ applyTimelineOperation }) => {
-					const doc = useProjectStore.getState().document ?? document;
-					if (!doc) return null;
-					return applyTimelineOperation(doc, {
-						type: "add_trim_range",
-						assetId,
-						startSec,
-						endSec,
-						reason,
-					});
-				})
-				.then((next) => next && saveDocument(next.document));
-			saveQueueRef.current = queued.then(
-				() => undefined,
-				() => undefined,
-			);
-			return queued;
+			void applyTimelineOp({ type: "add_trim_range", assetId, startSec, endSec, reason });
 		},
-		[document, saveDocument],
+		[applyTimelineOp],
 	);
 
 	const handleRemoveTrimRange = useCallback(
 		(trimId: string) => {
-			// See handleAddTrimRange above — same fix: the document read must be
-			// inside the queued chain, after awaiting the previous save.
-			const queued = saveQueueRef.current
-				.then(() => import("@/lib/ai-edition/document/operations"))
-				.then(({ applyTimelineOperation }) => {
-					const doc = useProjectStore.getState().document ?? document;
-					if (!doc) return null;
-					return applyTimelineOperation(doc, {
-						type: "remove_trim_range",
-						trimId,
-						reason: "Restored from transcript pane.",
-					});
-				})
-				.then((next) => next && saveDocument(next.document));
-			saveQueueRef.current = queued.then(
-				() => undefined,
-				() => undefined,
-			);
-			return queued;
+			void applyTimelineOp({
+				type: "remove_trim_range",
+				trimId,
+				reason: "Restored from transcript pane.",
+			});
 		},
-		[document, saveDocument],
+		[applyTimelineOp],
 	);
 
 	const handleSelectProject = useCallback(
