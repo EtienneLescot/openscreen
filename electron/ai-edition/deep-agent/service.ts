@@ -31,11 +31,17 @@ import {
 import {
 	createOpenScreenChatModel,
 	messageContentToText,
+	messageContentToThinking,
 	type OpenScreenChatModelConfig,
 } from "./chat-model";
 
 export interface OpenScreenAgentSink {
 	text: (delta: string) => void;
+	/** Streaming delta from the model's reasoning block (Anthropic/MiniMax
+	 * thinking). Provider-agnostic — for providers without thinking this is
+	 * never called. The chat panel uses it to surface the reasoning phase
+	 * that would otherwise be invisible "dead air" while the model thinks. */
+	thinking: (delta: string) => void;
 	toolStart: (name: string, args: unknown) => void;
 	toolEnd: (name: string, ok: boolean, summary?: string) => void;
 	error: (message: string) => void;
@@ -233,6 +239,10 @@ export async function invokeOpenScreenAgent(args: InvokeArgs): Promise<InvokeRes
 				const chunk = data?.chunk as Record<string, unknown> | undefined;
 				if (chunk) chatModelChunks.push(chunk);
 				const content = chunk?.content;
+				const thinkingDelta = messageContentToThinking(content);
+				if (thinkingDelta) {
+					sink.thinking(thinkingDelta);
+				}
 				const delta = messageContentToText(content);
 				if (delta) {
 					sink.text(delta);

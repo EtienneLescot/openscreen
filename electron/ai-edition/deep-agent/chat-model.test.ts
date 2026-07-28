@@ -9,6 +9,7 @@ import {
 	ANTHROPIC_API_MAX_OUTPUT_TOKENS,
 	createOpenScreenChatModel,
 	messageContentToText,
+	messageContentToThinking,
 } from "./chat-model";
 
 /** ChatOpenAI keeps the `configuration` bag it was constructed with on
@@ -102,5 +103,45 @@ describe("messageContentToText", () => {
 	it("returns an empty string for anything else", () => {
 		expect(messageContentToText(null)).toBe("");
 		expect(messageContentToText(42)).toBe("");
+	});
+});
+
+describe("messageContentToThinking", () => {
+	// Anthropic/MiniMax thinking blocks land in AIMessageChunk content arrays
+	// as `{type: "thinking", thinking: "..."}` parts (see @langchain/anthropic
+	// message_outputs.js — `thinking_delta` SSE events). The extractor has to
+	// pull them out so the chat panel can stream them separately; text parts
+	// stay on the messageContentToText path.
+	it("concatenates thinking parts in array order", () => {
+		expect(
+			messageContentToThinking([
+				{ type: "thinking", thinking: "step one. " },
+				{ type: "text", text: "should be ignored" },
+				{ type: "thinking", thinking: "step two." },
+			]),
+		).toBe("step one. step two.");
+	});
+
+	it("ignores redacted_thinking blocks (encrypted reasoning the provider hides)", () => {
+		// ChatAnthropic surfaces encrypted reasoning as parts of type
+		// "redacted_thinking" — we don't have a string to display, so skip.
+		expect(
+			messageContentToThinking([
+				{ type: "thinking", thinking: "visible. " },
+				{ type: "redacted_thinking" },
+				{ type: "thinking", thinking: "more visible." },
+			]),
+		).toBe("visible. more visible.");
+	});
+
+	it("returns an empty string for a plain string or non-array input", () => {
+		expect(messageContentToThinking("not a list")).toBe("");
+		expect(messageContentToThinking(null)).toBe("");
+		expect(messageContentToThinking(42)).toBe("");
+	});
+
+	it("returns an empty string when there are no thinking parts", () => {
+		expect(messageContentToThinking([{ type: "text", text: "answer" }])).toBe("");
+		expect(messageContentToThinking([])).toBe("");
 	});
 });

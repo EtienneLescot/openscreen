@@ -729,6 +729,7 @@ export type NativeBridgeEventName =
 // inline so the chat doesn't appear to "echo back my question".
 export type AiEditionChatEvent =
 	| { kind: "text"; sessionId: string; delta: string }
+	| { kind: "thinking"; sessionId: string; delta: string }
 	| { kind: "toolStart"; sessionId: string; name: string; args: unknown }
 	| { kind: "toolEnd"; sessionId: string; name: string; ok: boolean; summary?: string }
 	| { kind: "error"; sessionId: string; message: string };
