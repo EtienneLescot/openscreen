@@ -567,56 +567,58 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 	});
 
 	it("picks the largest clip when the timeline is mixed-shape", () => {
-		const doc = documentSchema.parse(migrateRawDocumentToCurrent({
-			schemaVersion: 5,
-			project: {
-				id: "p1",
-				title: "mixed",
-				createdAt: "2024-01-01T00:00:00.000Z",
-				updatedAt: "2024-01-01T00:00:00.000Z",
-			},
-			assets: [
-				{
-					id: "asset_f",
-					kind: "video",
-					label: "A",
-					originalPath: "/a.mp4",
-					cameraTrack: null,
-					video: { width: 1920, height: 1080 },
+		const doc = documentSchema.parse(
+			migrateRawDocumentToCurrent({
+				schemaVersion: 5,
+				project: {
+					id: "p1",
+					title: "mixed",
+					createdAt: "2024-01-01T00:00:00.000Z",
+					updatedAt: "2024-01-01T00:00:00.000Z",
 				},
-				{
-					id: "asset_g",
-					kind: "video",
-					label: "B",
-					originalPath: "/b.mp4",
-					cameraTrack: null,
-					video: { width: 2160, height: 3840 },
-				},
-			],
-			timeline: {
-				clips: [
+				assets: [
 					{
-						id: "clip_a",
-						assetId: "asset_f",
-						sourceStartSec: 0,
-						sourceEndSec: 10,
-						timelineStartSec: 0,
-						timelineEndSec: 10,
-						origin: "user",
+						id: "asset_f",
+						kind: "video",
+						label: "A",
+						originalPath: "/a.mp4",
+						cameraTrack: null,
+						video: { width: 1920, height: 1080 },
 					},
 					{
-						id: "clip_b",
-						assetId: "asset_g",
-						sourceStartSec: 0,
-						sourceEndSec: 10,
-						timelineStartSec: 10,
-						timelineEndSec: 20,
-						origin: "user",
+						id: "asset_g",
+						kind: "video",
+						label: "B",
+						originalPath: "/b.mp4",
+						cameraTrack: null,
+						video: { width: 2160, height: 3840 },
 					},
 				],
-			},
-			legacyEditor: { aspectRatio: "native" },
-		}));
+				timeline: {
+					clips: [
+						{
+							id: "clip_a",
+							assetId: "asset_f",
+							sourceStartSec: 0,
+							sourceEndSec: 10,
+							timelineStartSec: 0,
+							timelineEndSec: 10,
+							origin: "user",
+						},
+						{
+							id: "clip_b",
+							assetId: "asset_g",
+							sourceStartSec: 0,
+							sourceEndSec: 10,
+							timelineStartSec: 10,
+							timelineEndSec: 20,
+							origin: "user",
+						},
+					],
+				},
+				legacyEditor: { aspectRatio: "native" },
+			}),
+		);
 		expect(doc.schemaVersion).toBe(6);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("9:16");
 	});
@@ -625,19 +627,25 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 		// Deliberately NOT a 16:9 fallback: an empty/unprobed timeline gives no basis
 		// for a concrete token, and guessing one persists a wrong frame. See the v1.7
 		// import case below.
-		const doc = documentSchema.parse(migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { aspectRatio: "native" } })));
+		const doc = documentSchema.parse(
+			migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { aspectRatio: "native" } })),
+		);
 		expect(doc.schemaVersion).toBe(6);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("native");
 	});
 
 	it("passes through a concrete aspectRatio unchanged", () => {
-		const doc = documentSchema.parse(migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { aspectRatio: "4:5" } })));
+		const doc = documentSchema.parse(
+			migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { aspectRatio: "4:5" } })),
+		);
 		expect(doc.schemaVersion).toBe(6);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("4:5");
 	});
 
 	it("passes through a legacyEditor without aspectRatio unchanged", () => {
-		const doc = documentSchema.parse(migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { someOtherField: "preserved" } })));
+		const doc = documentSchema.parse(
+			migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { someOtherField: "preserved" } })),
+		);
 		expect(doc.schemaVersion).toBe(6);
 		const legacy = doc.legacyEditor as Record<string, unknown>;
 		expect(legacy.someOtherField).toBe("preserved");
@@ -652,7 +660,9 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 	});
 
 	it("is idempotent — re-parsing an already-v6 document changes nothing", () => {
-		const once = documentSchema.parse(migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { aspectRatio: "16:9" } })));
+		const once = documentSchema.parse(
+			migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { aspectRatio: "16:9" } })),
+		);
 		const twice = documentSchema.parse(once);
 		expect(twice).toEqual(once);
 	});
@@ -664,39 +674,41 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 		// reframing every portrait v1.7 project saved with "Native". Leave the
 		// sentinel; it resolves dynamically at runtime and converts on a later load,
 		// once useTimeline's probe has written `asset.video` back.
-		const doc = documentSchema.parse(migrateRawDocumentToCurrent({
-			schemaVersion: 5,
-			project: {
-				id: "p1",
-				title: "from v1.7",
-				createdAt: "2024-01-01T00:00:00.000Z",
-				updatedAt: "2024-01-01T00:00:00.000Z",
-			},
-			assets: [
-				{
-					id: "asset_u",
-					kind: "video",
-					label: "A",
-					originalPath: "/a.mp4",
-					cameraTrack: null,
-					// no `video` — exactly what the v2 import produces
+		const doc = documentSchema.parse(
+			migrateRawDocumentToCurrent({
+				schemaVersion: 5,
+				project: {
+					id: "p1",
+					title: "from v1.7",
+					createdAt: "2024-01-01T00:00:00.000Z",
+					updatedAt: "2024-01-01T00:00:00.000Z",
 				},
-			],
-			timeline: {
-				clips: [
+				assets: [
 					{
-						id: "clip_a",
-						assetId: "asset_u",
-						sourceStartSec: 0,
-						sourceEndSec: 10,
-						timelineStartSec: 0,
-						timelineEndSec: 10,
-						origin: "user",
+						id: "asset_u",
+						kind: "video",
+						label: "A",
+						originalPath: "/a.mp4",
+						cameraTrack: null,
+						// no `video` — exactly what the v2 import produces
 					},
 				],
-			},
-			legacyEditor: { aspectRatio: "native" },
-		}));
+				timeline: {
+					clips: [
+						{
+							id: "clip_a",
+							assetId: "asset_u",
+							sourceStartSec: 0,
+							sourceEndSec: 10,
+							timelineStartSec: 0,
+							timelineEndSec: 10,
+							origin: "user",
+						},
+					],
+				},
+				legacyEditor: { aspectRatio: "native" },
+			}),
+		);
 		expect(doc.schemaVersion).toBe(6);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("native");
 	});
@@ -704,39 +716,41 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 	it("converts 'native' once the probe has persisted dimensions", () => {
 		// Second load of the same project, after useTimeline probed a PORTRAIT source.
 		// This is the case that must not become 16:9.
-		const doc = documentSchema.parse(migrateRawDocumentToCurrent({
-			schemaVersion: 5,
-			project: {
-				id: "p1",
-				title: "from v1.7, probed",
-				createdAt: "2024-01-01T00:00:00.000Z",
-				updatedAt: "2024-01-01T00:00:00.000Z",
-			},
-			assets: [
-				{
-					id: "asset_u",
-					kind: "video",
-					label: "A",
-					originalPath: "/a.mp4",
-					cameraTrack: null,
-					video: { width: 1080, height: 1920 },
+		const doc = documentSchema.parse(
+			migrateRawDocumentToCurrent({
+				schemaVersion: 5,
+				project: {
+					id: "p1",
+					title: "from v1.7, probed",
+					createdAt: "2024-01-01T00:00:00.000Z",
+					updatedAt: "2024-01-01T00:00:00.000Z",
 				},
-			],
-			timeline: {
-				clips: [
+				assets: [
 					{
-						id: "clip_a",
-						assetId: "asset_u",
-						sourceStartSec: 0,
-						sourceEndSec: 10,
-						timelineStartSec: 0,
-						timelineEndSec: 10,
-						origin: "user",
+						id: "asset_u",
+						kind: "video",
+						label: "A",
+						originalPath: "/a.mp4",
+						cameraTrack: null,
+						video: { width: 1080, height: 1920 },
 					},
 				],
-			},
-			legacyEditor: { aspectRatio: "native" },
-		}));
+				timeline: {
+					clips: [
+						{
+							id: "clip_a",
+							assetId: "asset_u",
+							sourceStartSec: 0,
+							sourceEndSec: 10,
+							timelineStartSec: 0,
+							timelineEndSec: 10,
+							origin: "user",
+						},
+					],
+				},
+				legacyEditor: { aspectRatio: "native" },
+			}),
+		);
 		expect(doc.schemaVersion).toBe(6);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("9:16");
 	});
@@ -745,40 +759,42 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 		// "native" resolved to the cropped clip at runtime. A 3840x2160 asset cropped
 		// to its left half is effectively 1920x2160 → 8:9. Reading the raw dims would
 		// wrongly yield 16:9 and silently reframe the project.
-		const doc = documentSchema.parse(migrateRawDocumentToCurrent({
-			schemaVersion: 5,
-			project: {
-				id: "p1",
-				title: "cropped",
-				createdAt: "2024-01-01T00:00:00.000Z",
-				updatedAt: "2024-01-01T00:00:00.000Z",
-			},
-			assets: [
-				{
-					id: "asset_c",
-					kind: "video",
-					label: "A",
-					originalPath: "/a.mp4",
-					cameraTrack: null,
-					video: { width: 3840, height: 2160 },
+		const doc = documentSchema.parse(
+			migrateRawDocumentToCurrent({
+				schemaVersion: 5,
+				project: {
+					id: "p1",
+					title: "cropped",
+					createdAt: "2024-01-01T00:00:00.000Z",
+					updatedAt: "2024-01-01T00:00:00.000Z",
 				},
-			],
-			timeline: {
-				clips: [
+				assets: [
 					{
-						id: "clip_a",
-						assetId: "asset_c",
-						sourceStartSec: 0,
-						sourceEndSec: 10,
-						timelineStartSec: 0,
-						timelineEndSec: 10,
-						origin: "user",
-						cropRegion: { x: 0, y: 0, width: 0.5, height: 1 },
+						id: "asset_c",
+						kind: "video",
+						label: "A",
+						originalPath: "/a.mp4",
+						cameraTrack: null,
+						video: { width: 3840, height: 2160 },
 					},
 				],
-			},
-			legacyEditor: { aspectRatio: "native" },
-		}));
+				timeline: {
+					clips: [
+						{
+							id: "clip_a",
+							assetId: "asset_c",
+							sourceStartSec: 0,
+							sourceEndSec: 10,
+							timelineStartSec: 0,
+							timelineEndSec: 10,
+							origin: "user",
+							cropRegion: { x: 0, y: 0, width: 0.5, height: 1 },
+						},
+					],
+				},
+				legacyEditor: { aspectRatio: "native" },
+			}),
+		);
 		expect(doc.schemaVersion).toBe(6);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("8:9");
 	});
