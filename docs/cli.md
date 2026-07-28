@@ -82,7 +82,22 @@ GUI picker uses — so scripts and agents can choose `--display`, `--window`, an
 
 ```bash
 openscreen sources          # human-readable
-openscreen sources --json   # {"event":"done","sources":{displays,windows,microphones,...}}
+openscreen sources --json
+```
+
+`--json` emits the payload on the final `done` event:
+
+```json
+{
+  "event": "done",
+  "success": true,
+  "sources": {
+    "displays": [{ "index": 0, "id": "screen:1:0", "name": "Entire screen" }],
+    "windows": [{ "id": "window:210:0", "name": "My App" }],
+    "microphones": [{ "label": "MacBook Pro Microphone (Built-in)" }],
+    "microphoneLabelsUnavailable": false
+  }
+}
 ```
 
 ### `openscreen export`
@@ -205,7 +220,8 @@ node -e '
 # 3. Narrate with any TTS (macOS `say` shown; any engine producing mp3/wav/m4a works)
 say -o voice.m4a --file-format=m4af "Welcome to my product. Here's a quick tour."
 
-# 4. Render with auto-zooms and the voiceover mixed in
+# 4. Render with auto-zooms; the voiceover replaces the recording's own audio
+#    (drop --audio-mode replace to duck the original under the narration instead)
 openscreen export demo.openscreen -o demo.mp4 --auto-zoom --audio voice.m4a --audio-mode replace --json
 ```
 
