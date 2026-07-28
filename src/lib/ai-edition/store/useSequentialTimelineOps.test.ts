@@ -13,7 +13,7 @@
 
 import { act, renderHook } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { createEmptyDocument, type AxcutDocument } from "@/lib/ai-edition/schema";
+import { type AxcutDocument, createEmptyDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "./projectStore";
 import { useSequentialTimelineOps } from "./useSequentialTimelineOps";
 
@@ -29,6 +29,7 @@ function makeDocWithAsset(): AxcutDocument {
 				originalPath: "/tmp/screen.webm",
 				durationSec: 30,
 				video: { codec: "unknown", width: 1920, height: 1080, fps: 0 },
+				cameraTrack: null,
 			},
 		],
 		project: { ...base.project, primaryAssetId: "asset_1" },
