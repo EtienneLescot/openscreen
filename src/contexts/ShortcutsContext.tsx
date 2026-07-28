@@ -30,15 +30,14 @@ export function useShortcuts(): ShortcutsContextValue {
 
 export function ShortcutsProvider({ children }: { children: ReactNode }) {
 	const [shortcuts, setShortcuts] = useState<ShortcutsConfig>(DEFAULT_SHORTCUTS);
+	// `getIsMac()` is synchronous; the state still needs an effect so the value
+	// doesn't snapshot a wrong value during SSR/hydration (the module-level
+	// `process.platform` read happens once on first import).
 	const [isMac, setIsMac] = useState(false);
 	const [isConfigOpen, setIsConfigOpen] = useState(false);
 
 	useEffect(() => {
-		getIsMac()
-			.then(setIsMac)
-			.catch(() => {
-				// Keep default non-mac fallback if detection fails.
-			});
+		setIsMac(getIsMac());
 
 		window.electronAPI
 			.getShortcuts?.()

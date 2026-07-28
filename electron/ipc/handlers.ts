@@ -3283,10 +3283,6 @@ export function registerIpcHandlers(
 		return { success: true };
 	}
 
-	ipcMain.handle("get-platform", () => {
-		return process.platform;
-	});
-
 	// Keep the native Windows/Linux window-control overlay in the app's theme
 	// colours. The renderer sends the resolved CSS values so the palette stays in
 	// one place. No-op on macOS (traffic lights aren't tintable) and on any window

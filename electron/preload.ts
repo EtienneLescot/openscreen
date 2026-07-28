@@ -19,6 +19,10 @@ const ASSET_BASE_URL_ARG_PREFIX = "--asset-base-url=";
 const assetBaseUrlArg = process.argv.find((arg) => arg.startsWith(ASSET_BASE_URL_ARG_PREFIX));
 const assetBaseUrl = assetBaseUrlArg ? assetBaseUrlArg.slice(ASSET_BASE_URL_ARG_PREFIX.length) : "";
 
+// Renderer side: process.platform is the same Node global as in the main process,
+// so a synchronous read here saves the renderer's every-call IPC round-trip.
+const PLATFORM = process.platform;
+
 contextBridge.exposeInMainWorld("electronAPI", {
 	assetBaseUrl,
 
@@ -314,9 +318,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	setTitleBarOverlay: (color: string, symbolColor: string) => {
 		ipcRenderer.send("set-titlebar-overlay", color, symbolColor);
 	},
-	getPlatform: () => {
-		return ipcRenderer.invoke("get-platform");
-	},
+	getPlatform: () => PLATFORM,
 	revealInFolder: (filePath: string) => {
 		return ipcRenderer.invoke("reveal-in-folder", filePath);
 	},

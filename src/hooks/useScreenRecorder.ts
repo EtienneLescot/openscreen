@@ -799,7 +799,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		countdownRunToken?: number,
 	) => {
 		try {
-			const platform = await window.electronAPI.getPlatform();
+			const platform = window.electronAPI.getPlatform();
 			if (platform !== "win32") {
 				return false;
 			}
@@ -911,7 +911,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		countdownRunToken?: number,
 	) => {
 		try {
-			const platform = await window.electronAPI.getPlatform();
+			const platform = window.electronAPI.getPlatform();
 			if (platform !== "darwin") {
 				return false;
 			}
@@ -1086,7 +1086,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 		}
 
 		try {
-			const platform = await window.electronAPI.getPlatform();
+			const platform = window.electronAPI.getPlatform();
 			if (platform === "darwin" && cursorCaptureMode === "editable-overlay") {
 				// The main process shows a native dialog that deep-links to the
 				// Accessibility settings pane when access is missing, so we just stop
@@ -1176,7 +1176,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			// `getUserMedia` calls is the dominant source of the mic-vs-video lag at the
 			// start of the recording (issue #57).
 			const screenCapture = (async (): Promise<MediaStream> => {
-				const platform = await window.electronAPI.getPlatform();
+				const platform = window.electronAPI.getPlatform();
 
 				if (platform === "win32") {
 					// getDisplayMedia + setDisplayMediaRequestHandler (main.ts) supplies the
