@@ -1842,8 +1842,25 @@ impl Compositor {
                 fit_dst_to_aspect(scale_frame(dst, padding_scale), crop_aspect)
             }
         };
-        let s_dst = fit_screen(p.screen.dst);
-        let s_dst_prev = fit_screen(pp.screen.dst);
+        // ponytail: quand on zoome (p.zoom > 1.0), le contenu écran était
+        // contraint au rect paddé (s_dst), ce qui rendait le zoom plus faible
+        // que prévu — il s'arrêtait à la frontière paddée au lieu de déborder
+        // jusqu'aux bords du cadre (rapport issue #179). On étend s_dst au
+        // cadre complet quand un zoom est actif, pour que le contenu zoomé
+        // remplisse toute la frame, comme attendu. TODO : séparer le rendu
+        // du contenu de celui du cadre (ombre, coins arrondis) pour que le
+        // cadre reste au rect paddé pendant le zoom — actuellement le cadre
+        // suit aussi l'expansion.
+        let s_dst = if p.zoom > 1.0 {
+            [0.0, 0.0, 1.0, 1.0]
+        } else {
+            fit_screen(p.screen.dst)
+        };
+        let s_dst_prev = if pp.zoom > 1.0 {
+            [0.0, 0.0, 1.0, 1.0]
+        } else {
+            fit_screen(pp.screen.dst)
+        };
         // le padding n'affecte QUE l'écran (la quantité de fond révélée). La webcam reste ancrée
         // en bas-droite à sa marge fixe, quelle que soit la valeur de padding (pas de scale_frame)
         // — SAUF quand l'app a résolu un placement explicite (`app_webcam_rect`, drag-to-reposition
