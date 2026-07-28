@@ -367,8 +367,8 @@ const SPEED_PRESETS = [1, ...SPEED_OPTIONS.map((option) => option.speed)].sort((
  * (`settings.speed.customPlaybackSpeed` / `maxSpeedError` / `previewFrameSteppingHint`, shipped
  * in all 13 locales) but no longer any control for: the V4 shell replaced the panel that hosted
  * it with a preset-only `<select>` capped at 3×, while the underlying capability goes to
- * `MAX_PLAYBACK_SPEED` (16×, the native HTMLMediaElement ceiling). Only the control was
- * missing, so this rewires it rather than adding anything new.
+ * `MAX_PLAYBACK_SPEED` (100×). Only the control was missing, so this rewires it rather than
+ * adding anything new.
  */
 export function SpeedControl({
 	region,
