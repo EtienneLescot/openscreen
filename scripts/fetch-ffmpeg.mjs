@@ -44,15 +44,14 @@
 // dlopens. electron-builder excludes the static ffmpeg.exe from the installer
 // ("!win32-*/ffmpeg.exe") — it is a bench tool, and shipping a large binary no
 // runtime code opens is cost with no benefit. It still lands in this directory
-// so scripts/bench-export.mjs can use a local checkout.
+// because the licence check below reads it.
 //
 // NOTE: the plan this was vendored for is REFUTED. Feeding native ffmpeg from
 // the renderer measured 2.1x SLOWER than the WebCodecs path it was to replace —
 // the wall is the compositor, not the encoder. See
 // technical-documentation/engineering/rendering-performance.md. The binary stays
-// because the bench's
-// `native` arms use it, and because a future native core would still need a
-// licence-gated H.264 encoder; nothing here ships on the export path today.
+// because a future native core would still need a licence-gated H.264 encoder;
+// nothing here ships on the export path today.
 //
 // macOS: BtbN publishes no macOS target, so darwin is not handled here.
 
