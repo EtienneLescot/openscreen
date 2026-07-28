@@ -27,10 +27,12 @@ import { anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
 //      CLIP-ANCHORED fragments: `{clipId, sourceStartSec, sourceEndSec}` is the
 //      source of truth, `startMs`/`endMs` stay as a derived cache for the
 //      transition. See technical-documentation/architecture/timeline-model.md
-//   5. v6 — `"native"` AspectRatio retires. The v5→v6 upgrader rewrites every
-//      stored `"native"` to a concrete `"W:H"` token (the timeline's largest
-//      clip, falling back to "16:9"), so the value can be dropped from the
-//      `AspectRatio` union without a runtime bridge.
+//   5. v6 — `"native"` AspectRatio is retired OPPORTUNISTICALLY. The v5→v6
+//      upgrader rewrites a stored `"native"` to a concrete `"W:H"` token from
+//      the timeline's largest clip, but only when the source dimensions are
+//      actually known; otherwise it leaves the sentinel, which keeps resolving
+//      dynamically at runtime. See `upgradeV5DocumentToV6` for why guessing
+//      would corrupt v1.7 imports.
 export const axcutSchemaVersion = 6;
 
 // ponytail: every region schema shares the same monotonicity rule
@@ -457,13 +459,15 @@ const documentSchemaShape = z.object({
 // P4 — v3 documents carried a single project-level `cameraTrack` (one project
 // = one camera, inherited from the pre-multi-clip editor). v4 moves it onto
 // the owning asset (see `assetSchema.cameraTrack` above) so each asset in a
-// multi-clip project can carry its own camera link. This preprocess upgrades
-// any v3 document transparently at every `documentSchema.parse(...)` call
-// site — it does NOT touch v2 (still handled solely by the separate
-// `migrateProjectDataToAxcutDocument` pure function) or reject unknown
-// versions; anything that isn't exactly v3 passes through unchanged and is
-// rejected by the `schemaVersion` literal check below as before.
-function upgradeV3DocumentToV4(raw: unknown): unknown {
+// multi-clip project can carry its own camera link. This is invoked at LOAD
+// TIME by `migrateRawDocumentToCurrent` in `document/migrate.ts`, not at every
+// `documentSchema.parse(...)` call (the parse is now a pure v6 validation
+// step — see the comment above `documentSchema` below). It does NOT touch v2
+// (still handled solely by the separate `migrateProjectDataToAxcutDocument`
+// pure function) or reject unknown versions; anything that isn't exactly v3
+// passes through unchanged so the caller's `documentSchema.parse` can
+// reject it via the `schemaVersion` literal.
+export function upgradeV3DocumentToV4(raw: unknown): unknown {
 	if (!raw || typeof raw !== "object") return raw;
 	const doc = raw as Record<string, unknown>;
 	if (doc.schemaVersion !== 3) return raw;
@@ -497,8 +501,11 @@ function upgradeV3DocumentToV4(raw: unknown): unknown {
  * A region covering no clip (zero-length, or off the end of the timeline) is
  * dropped: it could never play. A document with no clips has nothing to anchor to,
  * so its regions pass through untouched (still valid — the anchor is optional).
+ *
+ * Invoked at LOAD TIME by `migrateRawDocumentToCurrent` in `document/migrate.ts`,
+ * not at every `documentSchema.parse(...)` call.
  */
-function upgradeV4DocumentToV5(raw: unknown): unknown {
+export function upgradeV4DocumentToV5(raw: unknown): unknown {
 	if (!raw || typeof raw !== "object") return raw;
 	const doc = raw as Record<string, unknown>;
 	if (doc.schemaVersion !== 4) return raw;
@@ -644,10 +651,28 @@ function upgradeV5DocumentToV6(raw: unknown): unknown {
 	};
 }
 
-export const documentSchema = z.preprocess(
-	(raw) => upgradeV5DocumentToV6(upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw))),
-	documentSchemaShape,
-);
+/**
+ * Runs the whole upgrade chain on a raw, untrusted value. Idempotent: each step
+ * is gated on an exact `schemaVersion`, so an already-current document passes
+ * through untouched.
+ *
+ * Lives here rather than in `document/migrate.ts` on purpose — the Electron main
+ * process imports this composer, and `migrate.ts` pulls a value import
+ * (`PROJECT_VERSION`) through the `@/` alias, which `vite-plugin-electron` does
+ * not configure for the main bundle. Keep this module alias-free.
+ */
+export function migrateRawDocumentToCurrent(raw: unknown): unknown {
+	return upgradeV5DocumentToV6(upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw)));
+}
+
+// PURE v6 validation. Callers that read a document from disk (or any other
+// source that might carry an older `schemaVersion`) MUST run
+// `migrateRawDocumentToCurrent` on the raw value first. The previous
+// implementation wrapped this schema in a `z.preprocess` that re-ran the whole
+// v3→v4→v5→v6 chain on EVERY parse, including in-memory parses of documents that
+// were already current. Hoisting it to load time makes the in-memory parse a
+// single `z.literal(6)` + shape check.
+export const documentSchema = documentSchemaShape;
 
 export const createProjectInputSchema = z.object({
 	title: z.string().trim().min(1).default("Untitled Project"),

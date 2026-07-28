@@ -1,7 +1,12 @@
 import { describe, expect, it } from "vitest";
 import type { EditorProjectData } from "@/components/video-editor/projectPersistence";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
-import { migrateAxcutDocumentToProjectData, migrateProjectDataToAxcutDocument } from "./migrate";
+import { documentSchema } from "../schema";
+import {
+	migrateAxcutDocumentToProjectData,
+	migrateProjectDataToAxcutDocument,
+	migrateRawDocumentToCurrent,
+} from "./migrate";
 
 function makeV2Project(overrides: Partial<EditorProjectData> = {}): EditorProjectData {
 	return {
@@ -336,5 +341,136 @@ describe("migrateAxcutDocumentToProjectData", () => {
 		);
 		expect(doc.zoomRanges[0].focus.cx).toBe(1);
 		expect(doc.zoomRanges[0].focus.cy).toBe(0);
+	});
+});
+
+// Load-time migration helper. Replaces the `z.preprocess` chain that used to
+// run on every `documentSchema.parse(...)` call site. The pre-hoist chain ran
+// v3→v4 and v4→v5 on every parse, including in-memory parses that were
+// already v5; the post-hoist chain runs once at the disk (or localStorage)
+// read site, and the in-memory `documentSchema.parse` is a pure v6 validator.
+
+describe("migrateRawDocumentToCurrent", () => {
+	const createdAt = "2024-01-01T00:00:00.000Z";
+
+	function makeV3Doc(overrides: Record<string, unknown> = {}) {
+		return {
+			schemaVersion: 3,
+			project: { id: "p", title: "t", createdAt, updatedAt: createdAt },
+			assets: [
+				{ id: "asset_1", kind: "video", label: "a1", originalPath: "/a1.mp4" },
+				{ id: "asset_2", kind: "video", label: "a2", originalPath: "/a2.mp4" },
+			],
+			cameraTrack: { sourcePath: "/cam.mp4", startMs: 0, offsetMs: 0, visible: true },
+			...overrides,
+		};
+	}
+
+	function makeV4Doc(overrides: Record<string, unknown> = {}) {
+		return {
+			schemaVersion: 4,
+			project: { id: "p", title: "t", createdAt, updatedAt: createdAt },
+			assets: [{ id: "a", kind: "video", label: "A", originalPath: "/a.mp4", cameraTrack: null }],
+			timeline: {
+				clips: [
+					{
+						id: "c1",
+						assetId: "a",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 0,
+						timelineEndSec: 10,
+						origin: "user",
+					},
+				],
+			},
+			...overrides,
+		};
+	}
+
+	it("upgrades a v3 document to v6 (cameraTrack relocated onto the primary asset)", () => {
+		// Models the full load path: every disk-read site runs the helper, then
+		// the schema parse fills in defaults (cameraTrack: null on non-target
+		// assets). The helper alone is just the upgrader chain; the schema is
+		// what produces the final v5 shape with defaults filled in.
+		const migrated = documentSchema.parse(
+			migrateRawDocumentToCurrent(
+				makeV3Doc({
+					project: {
+						id: "p",
+						title: "t",
+						createdAt,
+						updatedAt: createdAt,
+						primaryAssetId: "asset_2",
+					},
+				}),
+			),
+		);
+		expect(migrated.schemaVersion).toBe(6);
+		expect((migrated as Record<string, unknown>).cameraTrack).toBeUndefined();
+		expect(migrated.assets[0].cameraTrack).toBeNull();
+		expect(migrated.assets[1].cameraTrack?.sourcePath).toBe("/cam.mp4");
+	});
+
+	it("upgrades a v4 document to v6 (anchors modifiers onto clips)", () => {
+		const migrated = migrateRawDocumentToCurrent(
+			makeV4Doc({
+				zoomRanges: [
+					{ id: "z1", startMs: 2000, endMs: 5000, depth: 3, focus: { cx: 0.5, cy: 0.5 } },
+				],
+			}),
+		) as Record<string, unknown>;
+		expect(migrated.schemaVersion).toBe(6);
+		const zooms = migrated.zoomRanges as Array<Record<string, unknown>>;
+		expect(zooms).toHaveLength(1);
+		expect(zooms[0]).toMatchObject({ id: "z1", clipId: "c1", depth: 3 });
+	});
+
+	it("is a no-op for an already-current document (returns an equal value)", () => {
+		const v5 = makeV4Doc(); // makeV4Doc's body is the v5-compatible shape
+		const once = migrateRawDocumentToCurrent({ ...v5, schemaVersion: 6 });
+		// ponytail: the upgrader chain checks schemaVersion and returns the input
+		// unchanged, so the round-trip allocation is bounded to a property
+		// comparison per upgrader — the same per-parse overhead the old
+		// `z.preprocess` carried.
+		expect(once).toEqual({ ...v5, schemaVersion: 6 });
+	});
+
+	it("passes non-document input through unchanged (the schema is the gate, not this helper)", () => {
+		// null, primitives, arrays — none of these are v3/v4 documents, so the
+		// upgraders return them untouched. The downstream `documentSchema.parse`
+		// is what rejects them via the `schemaVersion` literal.
+		expect(migrateRawDocumentToCurrent(null)).toBe(null);
+		expect(migrateRawDocumentToCurrent(undefined)).toBe(undefined);
+		expect(migrateRawDocumentToCurrent(42)).toBe(42);
+		expect(migrateRawDocumentToCurrent("not-a-doc")).toBe("not-a-doc");
+		expect(migrateRawDocumentToCurrent([])).toEqual([]);
+	});
+
+	it("passes v2 input through unchanged (the legacy migrator is a separate path)", () => {
+		// The pre-hoist schema's `z.preprocess` also passed v2 through; the
+		// post-hoist helper keeps the same shape so `documentSchema.parse` is
+		// the single rejection point for unknown versions.
+		const v2ish = { schemaVersion: 2, project: { id: "p" } };
+		const out = migrateRawDocumentToCurrent(v2ish) as Record<string, unknown>;
+		expect(out.schemaVersion).toBe(2);
+	});
+
+	it("the upgraded v5 result round-trips through documentSchema.parse with no error", () => {
+		// The whole point of the hoist: after `migrateRawDocumentToCurrent`
+		// runs once at load, the in-memory parse is a pure v6 validation
+		// step. This is the contract every load site relies on.
+		const upgraded = migrateRawDocumentToCurrent(
+			makeV3Doc({
+				project: {
+					id: "p",
+					title: "t",
+					createdAt,
+					updatedAt: createdAt,
+					primaryAssetId: "asset_1",
+				},
+			}),
+		);
+		expect(() => documentSchema.parse(upgraded)).not.toThrow();
 	});
 });
