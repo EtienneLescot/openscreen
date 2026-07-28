@@ -4,7 +4,7 @@
 // rapid iteration without the Electron window overhead.
 
 import { PROVIDER_DEFINITIONS } from "../../electron/ai-edition/provider-registry";
-import { migrateRawDocumentToCurrent } from "../lib/ai-edition/document/migrate";
+import { axcutSchemaVersion, migrateRawDocumentToCurrent } from "../lib/ai-edition/schema";
 import { nativeBridgeClient as realClient } from "./client";
 
 function detectBrowserMode(): boolean {
@@ -120,7 +120,6 @@ function createShimElectronAPI() {
 		sendCloseConfirmResponse: () => undefined,
 		onRequestCloseConfirm: () => () => undefined,
 		onRequestSaveBeforeClose: () => () => undefined,
-		onAiEditionChatEvent: () => () => undefined,
 		loadProjectFileFromPath: () => Promise.resolve({ success: false, canceled: true }),
 		getPathForFile: () => "",
 		getSources: () => Promise.resolve(SHIM_SOURCES),
@@ -347,11 +346,11 @@ function createShimBridgeClient() {
 			},
 			create: (title?: string) => {
 				const doc: ShimDocument = {
-					// ponytail: write v5 directly. The shim's IIFE above migrates any
-					// stale v3 entries on init, and new projects are minted at the
-					// current schema version so the renderer's `documentSchema.parse`
-					// (a pure v6 validator) accepts the returned document.
-					schemaVersion: 5,
+					// Mint at the current schema version so the renderer's
+					// `documentSchema.parse` (a pure validator, no migration) accepts
+					// the returned document. Must never be a literal: this value has to
+					// track `axcutSchemaVersion` on every schema bump.
+					schemaVersion: axcutSchemaVersion,
 					project: {
 						id: `proj_${Math.random().toString(36).slice(2, 10)}`,
 						title: title || "Untitled Project",
@@ -489,6 +488,52 @@ function createShimBridgeClient() {
 					success: false,
 					error: "[browser-shim] No agent tool batches to undo in browser mode.",
 				}),
+			chatRunDefault: (projectId: string, message?: string) => {
+				// ponytail: legacy single-session consumers — pick the most
+				// recent session or auto-create one.
+				const sessions = getSessions(projectId);
+				let s = [...sessions.values()].sort((a, b) => b.createdAt.localeCompare(a.createdAt))[0];
+				if (!s) {
+					s = {
+						id: `sess_${Date.now()}`,
+						projectId,
+						title: "Conversation 1",
+						createdAt: new Date().toISOString(),
+						messages: [],
+					};
+					sessions.set(s.id, s);
+				}
+				if (message) {
+					s.messages.push({
+						id: `msg_${Date.now()}_u`,
+						role: "user",
+						content: message,
+						createdAt: new Date().toISOString(),
+					});
+				}
+				const assistantMessage = {
+					id: `msg_${Date.now()}_a`,
+					role: "assistant" as const,
+					content:
+						"[browser-shim] AI features need real LLM deps. Configure a provider in Settings, install the LangChain packages, then chat will work for real.",
+					createdAt: new Date().toISOString(),
+				};
+				s.messages.push(assistantMessage);
+				persistChat();
+				return Promise.resolve({ success: true, assistantMessage });
+			},
+			chatHistory: (projectId: string) => {
+				const m = sessionsByProject.get(projectId);
+				if (!m || m.size === 0) return Promise.resolve([]);
+				const arr = Array.from(m.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+				return Promise.resolve([...arr[0].messages]);
+			},
+			chatClear: (projectId: string) => {
+				const m = sessionsByProject.get(projectId);
+				if (m) for (const s of m.values()) s.messages = [];
+				persistChat();
+				return Promise.resolve({ success: true });
+			},
 			chatListSessions: (projectId: string) => {
 				const m = sessionsByProject.get(projectId);
 				if (!m) return Promise.resolve([]);

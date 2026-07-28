@@ -13,12 +13,12 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { createId } from "../../src/lib/ai-edition/document/ids";
-import { migrateRawDocumentToCurrent } from "../../src/lib/ai-edition/document/migrate";
 import {
 	type AxcutAsset,
 	type AxcutDocument,
 	createEmptyDocument,
 	documentSchema,
+	migrateRawDocumentToCurrent,
 } from "../../src/lib/ai-edition/schema";
 
 const PROJECT_FILE_EXTENSION = ".openscreen";
