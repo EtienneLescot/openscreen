@@ -67,10 +67,12 @@ Renderer snapshots expose connection summaries, never raw credential values.
 
 `createOpenScreenChatModel({provider, model, apiKey, baseUrl, reasoningEffort})` normalizes the provider id, builds the reasoning options, and returns a `BaseChatModel`:
 
-- `minimax` / `minimax-token-plan` → `ChatAnthropic` with `anthropicApiUrl` pointed at the MiniMax base.
-- `anthropic` → `ChatAnthropic`, plus `thinking` / `outputConfig` when reasoning is on.
+- `minimax` / `minimax-token-plan` → `ChatAnthropic` with `anthropicApiUrl` pointed at the MiniMax base and an explicit `maxTokens` (`ANTHROPIC_API_MAX_OUTPUT_TOKENS`, 16384). ChatAnthropic's default-output table only knows Claude slugs (16k) and falls back to 4096 for anything else — with adaptive thinking on, a cold-start MiniMax turn could spend that entire budget on reasoning and truncate before any text block (the "first call returns empty" bug, #181).
+- `anthropic` → `ChatAnthropic`, plus `thinking` / `outputConfig` when reasoning is on. Known `claude-*` slugs keep LangChain's per-model `maxTokens` default (overriding it would exceed legacy limits like claude-3-haiku's 4096); non-Claude model names — a self-hosted Anthropic-compatible endpoint behind `baseUrl` — get the same 16384 floor as MiniMax.
 - `mistral` → `ChatMistralAI`.
 - everything else (`openai`, `google`, `openrouter`, `openai-compatible`) → `ChatOpenAI`, with the base URL defaulted per provider and `disableStreaming` set for Gemini 3, whose OpenAI-compat path cannot stream and tool-call at the same time.
+
+The `maxTokens` floor is Anthropic-wire-only by design: the OpenAI-shaped transports send no `max_tokens` by default (the provider's own limit applies), so there is no 4096 fallback to fix — and adding a cap would truncate outputs that are uncapped today.
 
 An unrecognised provider reaching `createLocalProviderChatModel` throws rather than silently defaulting to OpenAI.
 
