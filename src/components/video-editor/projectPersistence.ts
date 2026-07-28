@@ -34,10 +34,8 @@ import {
 	DEFAULT_ZOOM_MOTION_BLUR,
 	MAX_BLUR_BLOCK_SIZE,
 	MAX_BLUR_INTENSITY,
-	MAX_PLAYBACK_SPEED,
 	MIN_BLUR_BLOCK_SIZE,
 	MIN_BLUR_INTENSITY,
-	MIN_PLAYBACK_SPEED,
 	type SpeedRegion,
 	type TrimRegion,
 	type WebcamLayoutPreset,
@@ -320,12 +318,13 @@ export function normalizeProjectEditor(editor: Partial<ProjectEditorState>): Pro
 					const startMs = Math.max(0, Math.min(rawStart, rawEnd));
 					const endMs = Math.max(startMs + 1, rawEnd);
 
-					const speed =
-						isFiniteNumber(region.speed) &&
-						region.speed >= MIN_PLAYBACK_SPEED &&
-						region.speed <= MAX_PLAYBACK_SPEED
-							? clampPlaybackSpeed(region.speed)
-							: DEFAULT_PLAYBACK_SPEED;
+					// Clamp an out-of-range speed rather than discarding it: a saved 25×
+					// should become the cap, not silently reset to the 1.5× default.
+					// Lowering MAX_PLAYBACK_SPEED widened the reset window, so the
+					// range test now only guards against non-numeric values.
+					const speed = isFiniteNumber(region.speed)
+						? clampPlaybackSpeed(region.speed)
+						: DEFAULT_PLAYBACK_SPEED;
 
 					return {
 						id: region.id,
