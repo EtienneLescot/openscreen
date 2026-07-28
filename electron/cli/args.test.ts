@@ -143,6 +143,46 @@ describe("parseCliArgs", () => {
 		expect(parse(["record", "--project", "demo.json"])).toMatchObject({ kind: "error" });
 	});
 
+	it("parses --auto-zoom", () => {
+		expect(parse(["export", "a.openscreen", "--auto-zoom"])).toMatchObject({
+			kind: "export",
+			autoZoom: true,
+		});
+		expect(parse(["export", "a.openscreen"])).toMatchObject({ autoZoom: false });
+	});
+
+	it("parses sources", () => {
+		expect(parse(["sources", "--json"])).toMatchObject({ kind: "sources", json: true });
+		expect(parse(["sources", "--bogus"])).toMatchObject({ kind: "error" });
+	});
+
+	it("parses pack", () => {
+		expect(parse(["pack", "demo.openscreen", "--out", "bundle"])).toMatchObject({
+			kind: "pack",
+			projectPath: inCwd("demo.openscreen"),
+			outDir: inCwd("bundle"),
+		});
+		expect(parse(["pack", "demo.openscreen"])).toMatchObject({ kind: "error" });
+	});
+
+	it("parses captions", () => {
+		expect(
+			parse(["captions", "demo.openscreen", "--min-words", "1", "--max-words", "5"]),
+		).toMatchObject({
+			kind: "captions",
+			projectPath: inCwd("demo.openscreen"),
+			minWordsPerCaption: 1,
+			maxWordsPerCaption: 5,
+		});
+		expect(parse(["captions", "demo.openscreen"])).toMatchObject({
+			minWordsPerCaption: 2,
+			maxWordsPerCaption: 7,
+		});
+		expect(
+			parse(["captions", "a.openscreen", "--min-words", "9", "--max-words", "3"]),
+		).toMatchObject({ kind: "error" });
+	});
+
 	it("parses info and help", () => {
 		expect(parse(["info", "demo.openscreen", "--json"])).toMatchObject({
 			kind: "info",
