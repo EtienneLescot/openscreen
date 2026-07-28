@@ -11,10 +11,12 @@ use napi::{Env, JsFunction, Task};
 use napi_derive::napi;
 use openscreen_compositor::compositor::{live_params_from_scene, Compositor};
 use openscreen_compositor::d3d::Gpu;
+use openscreen_compositor::gif_export::{GifExportParams, GifStats};
 use openscreen_compositor::live::{LiveView, PausedPreviews};
 use openscreen_compositor::scene::Scene;
 use openscreen_compositor::{config, pipeline};
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::{Mutex, OnceLock};
 
 /// Résolution cible du preview en pixels device (largeur/hauteur du `<canvas>`
@@ -225,6 +227,24 @@ pub struct ExportStats {
     pub fps: f64,
     /// Durée de la vidéo exportée (secondes) — distincte de `wall_s` (temps de rendu réel).
     pub video_duration_s: f64,
+}
+
+/// Bilan d'un export GIF natif. Mêmes champs que `ExportStats` (frames /
+/// wall / fps / durée) plus la taille du fichier sur disque — le format
+/// est petit (256-color indexed + LZW) et la taille est une mesure
+/// d'utilité, pas un détail technique. Sert à la fois au bench et à
+/// l'UI future (`Native GIF export` slice 1 — rendu derrière
+/// `NATIVE_GIF_EXPORT_ENABLED`).
+#[napi(object)]
+pub struct GifExportStats {
+    pub frames: u32,
+    pub wall_s: f64,
+    pub fps: f64,
+    /// Durée du GIF exporté (s) — distincte de `wall_s` (temps de rendu).
+    pub video_duration_s: f64,
+    /// Taille du fichier `.gif` final sur disque (octets), mesurée après
+    /// le drop de l'encodeur (donc après le flush du trailer GIF89a).
+    pub file_bytes: f64,
 }
 
 /// Builds a `progress: &mut dyn FnMut(u64)` closure (the shape both `run_composited` and
@@ -441,6 +461,121 @@ pub fn export_multi(
         clips,
         scene_json,
         params,
+        on_progress: make_progress_tsfn(on_progress)?,
+    }))
+}
+
+/// Sortie GIF native (slice 1) — taille, cadence, compteur de loop, dithering.
+/// Tout optionnel : absent → 854×480, 12 fps, boucle infinie, pas de
+/// dithering. Les défauts sont choisis pour un export « petit / net » :
+/// GIF est un format 256-couleurs, 12 fps est la cadence historique de
+/// `gif.js` côté renderer, et 854×480 tient confortablement dans la
+/// palette 8 bits sans banding visible sur du contenu de présentation.
+#[napi(object)]
+pub struct GifParamsInput {
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+    pub fps: Option<u32>,
+    /// Compteur de loop GIF : `None` ou `0` = infini, sinon `n` boucles.
+    pub loop_count: Option<u16>,
+    /// Floyd-Steinberg error diffusion avant quantification. Off par
+    /// défaut (qualité acceptable sans, et ça double تقريبًا le coût
+    /// CPU du quantize par frame).
+    pub dither: Option<bool>,
+}
+
+/// Tâche d'export GIF (worker libuv, comme `ExportMultiTask`). Le
+/// pipeline natif vit dans `openscreen_compositor::gif_export` ; ce
+/// binding n'est qu'un adaptateur qui :
+///   1. résout la `screen.cursor.json` sidecar selon la convention
+///      `ExportDialog` (même chemin que `run_composited_multi` côté
+///      MP4 — voir `pipeline.rs:1199`),
+///   2. construit un `GifExportParams` à partir du `GifParamsInput`,
+///   3. appelle `gif_export::export_gif` et reporte le `GifStats` au JS.
+///
+/// `cursor_path` est optionnel : un export sans curseur (utile pour
+/// tester la pipeline) est légitime. La fonction côté Rust prend
+/// `Option<&str>`, et `None` désactive le rendu du curseur côté
+/// `Compositor` (équivalent de `cfg.cursor = false` dans
+/// `run_composited_multi`).
+pub struct ExportGifTask {
+    screen_path: String,
+    webcam_path: String,
+    /// Option<String> (pas Option<PathBuf>) parce que napi-rs n'expose
+    /// pas PathBuf en type d'entrée pratique.
+    cursor_path: Option<String>,
+    out_path: PathBuf,
+    params: GifExportParams,
+    on_progress: Option<ThreadsafeFunction<u32, ErrorStrategy::Fatal>>,
+}
+
+impl Task for ExportGifTask {
+    type Output = GifStats;
+    type JsValue = GifExportStats;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        // Mêmes garanties que `ExportMultiTask` : previews paused for the
+        // whole render et restored exactement comme trouvées, y compris
+        // sur les chemins d'erreur. L'export GPU+CPU ne partage pas le
+        // RT avec la preview (sa propre `Compositor::new_sized`) mais le
+        // 3D engine de la preview pollue quand même, d'où la pause.
+        let _previews = PreviewPause::begin();
+        let mut progress = throttled_progress(self.on_progress.take());
+        openscreen_compositor::gif_export::export_gif(
+            &self.screen_path,
+            &self.webcam_path,
+            self.cursor_path.as_deref(),
+            &self.out_path,
+            &self.params,
+            &mut progress,
+        )
+        .map_err(|e| Error::from_reason(format!("{e:#}")))
+    }
+
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
+        Ok(GifExportStats {
+            frames: out.frames as u32,
+            wall_s: out.wall_s,
+            fps: out.fps,
+            video_duration_s: out.video_duration_s,
+            file_bytes: out.file_bytes as f64,
+        })
+    }
+}
+
+/// Lance un export GIF natif (slice 1, derrière `NATIVE_GIF_EXPORT_ENABLED`)
+/// et résout `Promise<GifExportStats>`. `screen_path` et `webcam_path` sont
+/// requis (la convention de l'app : deux fichiers H264 séparés, voir
+/// `ClipInput` côté MP4). `cursor_path` est optionnel — s'il est `null` ou
+/// pointe vers un fichier absent, l'export rend sans curseur (le `Player`
+/// compose quand même les frames, la scène du curseur est juste vide).
+/// `params` : taille, cadence, loop, dithering — tous optionnels, défauts
+/// dans `GifExportParams::default`. `on_progress(framesProduced)` optionnel,
+/// throttled à ~10/s comme l'export MP4 (voir `throttled_progress`).
+#[napi]
+pub fn export_gif(
+    screen_path: String,
+    webcam_path: String,
+    cursor_path: Option<String>,
+    out_path: String,
+    params: Option<GifParamsInput>,
+    on_progress: Option<JsFunction>,
+) -> Result<AsyncTask<ExportGifTask>> {
+    let gif_params = params
+        .map(|p| GifExportParams {
+            width: p.width,
+            height: p.height,
+            fps: p.fps,
+            loop_count: p.loop_count,
+            dither: p.dither.unwrap_or(false),
+        })
+        .unwrap_or_default();
+    Ok(AsyncTask::new(ExportGifTask {
+        screen_path,
+        webcam_path,
+        cursor_path,
+        out_path: PathBuf::from(out_path),
+        params: gif_params,
         on_progress: make_progress_tsfn(on_progress)?,
     }))
 }

@@ -19,6 +19,18 @@ impl Cfg {
     pub fn by_name(name: &str) -> Option<Cfg> {
         all().into_iter().find(|c| c.name == name)
     }
+
+    /// Le cfg cumulatif complet (C8 : tout composite activé, y compris le
+    /// flou de mouvement). Sert aux exports qui veulent reproduire la
+    /// preview à l'identique — l'export MP4 natif (`run_composited` /
+    /// `run_composited_multi`) le prend aussi et désactive explicitement
+    /// ce qu'il sait sans effet en mode statique (zoom / layout_anim /
+    /// mblur). Pour le GIF natif (slice 1), on garde le même point de
+    /// départ par parité avec l'export MP4 — le bench mesure la
+    /// différence.
+    pub fn c8() -> Cfg {
+        Self::by_name("C8").expect("C8 existe dans `all()`")
+    }
 }
 
 /// C0..C8, cumulatives.
