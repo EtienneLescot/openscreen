@@ -535,24 +535,6 @@ export type NativeBridgeRequest =
 	  }
 	| {
 			domain: "aiEdition";
-			action: "chat.runDefault";
-			payload: { projectId: string; message: string };
-			requestId?: string;
-	  }
-	| {
-			domain: "aiEdition";
-			action: "chat.history";
-			payload: { projectId: string };
-			requestId?: string;
-	  }
-	| {
-			domain: "aiEdition";
-			action: "chat.clear";
-			payload: { projectId: string };
-			requestId?: string;
-	  }
-	| {
-			domain: "aiEdition";
 			action: "chat.listSessions";
 			payload: { projectId: string };
 			requestId?: string;
