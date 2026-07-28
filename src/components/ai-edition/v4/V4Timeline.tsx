@@ -30,7 +30,7 @@ import { ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
 import { createId } from "@/lib/ai-edition/document/ids";
-import { collectNativeFormats, referenceClipDims } from "@/lib/ai-edition/document/outputFormat";
+import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
@@ -46,11 +46,7 @@ import {
 } from "@/lib/ai-edition/timeline/trim-mapping";
 import { buildAutoZoomSuggestions } from "@/lib/ai-edition/timeline/zoom-suggestions";
 import { nativeBridgeClient } from "@/native/client";
-import {
-	ASPECT_RATIO_PRESETS,
-	getAspectRatioLabel,
-	toAspectRatioToken,
-} from "@/utils/aspectRatioUtils";
+import { ASPECT_RATIO_PRESETS, getAspectRatioLabel } from "@/utils/aspectRatioUtils";
 import { TransportBar } from "../TransportBar";
 import type { VideoSource } from "../VirtualPreview";
 import styles from "./EditorShellV4.module.css";
@@ -271,16 +267,6 @@ export function V4Timeline({
 	// stays a pure list of fixed choices, and "which shapes are my clips" lives solely in ORIGINAL
 	// (no more per-preset badge, which split that one answer across two places).
 	const timelineIsMixed = nativeFormats.length > 1;
-	// A project saved before the shapes were enumerated still stores "native". Resolve it to the
-	// shape it currently means so the menu highlights a real row (and the button names a real
-	// ratio) instead of showing a selection that matches nothing. Picking that row rewrites the
-	// document to the concrete token — which is how those projects self-migrate off the value
-	// that silently moved with the clip list.
-	const activeToken = useMemo(() => {
-		if (settings.aspectRatio !== "native" || !document) return settings.aspectRatio;
-		const reference = referenceClipDims(document);
-		return toAspectRatioToken(reference.width, reference.height) ?? settings.aspectRatio;
-	}, [settings.aspectRatio, document]);
 
 	const [aspectMenuOpen, setAspectMenuOpen] = useState(false);
 	const [autoEnhanceOpen, setAutoEnhanceOpen] = useState(false);
@@ -1115,7 +1101,7 @@ export function V4Timeline({
 									title={t("toolbar.aspectRatio")}
 									aria-label={t("toolbar.aspectRatio")}
 								>
-									{getAspectRatioLabel(activeToken)}
+									{getAspectRatioLabel(settings.aspectRatio)}
 									<ChevronDown size={10} />
 								</button>
 							</PopoverTrigger>
@@ -1134,7 +1120,7 @@ export function V4Timeline({
 											type="button"
 											key={ratio}
 											className={`${styles.recMenuRow}${
-												ratio === activeToken ? ` ${styles.active}` : ""
+												ratio === settings.aspectRatio ? ` ${styles.active}` : ""
 											}`}
 											onClick={() => {
 												void setSettings({ aspectRatio: ratio });
@@ -1152,7 +1138,7 @@ export function V4Timeline({
 													type="button"
 													key={format.token}
 													className={`${styles.recMenuRow}${
-														format.token === activeToken ? ` ${styles.active}` : ""
+														format.token === settings.aspectRatio ? ` ${styles.active}` : ""
 													}`}
 													onClick={() => {
 														void setSettings({ aspectRatio: format.token });

@@ -11,6 +11,10 @@
 // shape — runtime ops, IPC, and exporter integration land in Phase 1+.
 
 import { z } from "zod";
+// Cycle-safe: `aspectRatioUtils` has no schema dependency, and `document/outputFormat`
+// is downstream of schema. We import the leaf tokeniser directly so the v5→v6 upgrader
+// can rewrite `"native"` without dragging in the whole output-format module.
+import { toAspectRatioToken } from "@/utils/aspectRatioUtils";
 // Cycle-safe: `document/ids` only pulls `uuid`, and `timeline/timelineMap`'s
 // transitive value-imports (region-ventilation, virtual-preview) import from this
 // module TYPE-ONLY, so requiring them here never re-enters schema at runtime.
@@ -21,7 +25,11 @@ import { anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
 //      CLIP-ANCHORED fragments: `{clipId, sourceStartSec, sourceEndSec}` is the
 //      source of truth, `startMs`/`endMs` stay as a derived cache for the
 //      transition. See technical-documentation/architecture/timeline-model.md
-export const axcutSchemaVersion = 5;
+//   5. v6 — `"native"` AspectRatio retires. The v5→v6 upgrader rewrites every
+//      stored `"native"` to a concrete `"W:H"` token (the timeline's largest
+//      clip, falling back to "16:9"), so the value can be dropped from the
+//      `AspectRatio` union without a runtime bridge.
+export const axcutSchemaVersion = 6;
 
 export const isoDateSchema = z.string().datetime({ offset: true });
 
@@ -520,8 +528,84 @@ function upgradeV4DocumentToV5(raw: unknown): unknown {
 	};
 }
 
+/**
+ * Largest raw asset footprint among the timeline's clips. A local copy of the
+ * `referenceClipDims` pick from `document/outputFormat` — duplicated here so the schema
+ * package doesn't import from a module that itself imports from this one (cycle), and so
+ * the upgrader doesn't need the runtime `probedAssetDims` map (it runs at load time, before
+ * any asset is probed). Crop is intentionally ignored: v5 docs store the crop on the
+ * clip, but a v5→v6 rewrite only needs *some* reasonable concrete token, and the runtime
+ * bridge in `resolveAspectRatioValue` already accepted this same approximation.
+ */
+function largestClipDims(doc: Record<string, unknown>): { width: number; height: number } | null {
+	const timeline = (doc.timeline ?? {}) as Record<string, unknown>;
+	const clips = Array.isArray(timeline.clips) ? timeline.clips : [];
+	const assets = Array.isArray(doc.assets) ? doc.assets : [];
+	const assetById = new Map<string, Record<string, unknown>>();
+	for (const a of assets) {
+		if (a && typeof a === "object" && typeof (a as { id?: unknown }).id === "string") {
+			assetById.set((a as { id: string }).id, a as Record<string, unknown>);
+		}
+	}
+	let best: { width: number; height: number } | null = null;
+	let bestArea = 0;
+	for (const clip of clips) {
+		if (!clip || typeof clip !== "object") continue;
+		const c = clip as Record<string, unknown>;
+		const assetId = c.assetId;
+		if (typeof assetId !== "string") continue;
+		const asset = assetById.get(assetId);
+		if (!asset) continue;
+		const video = (asset.video ?? {}) as Record<string, unknown>;
+		const w = typeof video.width === "number" ? video.width : 0;
+		const h = typeof video.height === "number" ? video.height : 0;
+		if (w <= 0 || h <= 0) continue;
+		const area = w * h;
+		if (area > bestArea) {
+			bestArea = area;
+			best = { width: w, height: h };
+		}
+	}
+	return best;
+}
+
+/**
+ * v5 → v6 — retire the `"native"` AspectRatio. `"native"` was a runtime-only sentinel
+ * that resolved to the timeline's largest clip; v6 makes that resolution permanent by
+ * baking the concrete `"W:H"` token into the document. The new value matches the OLD
+ * runtime answer (largest clip), so projects migrate losslessly — preview and export
+ * will keep framing the same shape they did yesterday.
+ *
+ * Falls back to `"16:9"` when the timeline has no clips with known dimensions (the same
+ * value the runtime bridge in `resolveAspectRatioValue` returned when no document was
+ * available). A document without a `legacyEditor` envelope is unchanged apart from the
+ * version bump.
+ */
+function upgradeV5DocumentToV6(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object") return raw;
+	const doc = raw as Record<string, unknown>;
+	if (doc.schemaVersion !== 5) return raw;
+
+	const legacy =
+		doc.legacyEditor && typeof doc.legacyEditor === "object" && !Array.isArray(doc.legacyEditor)
+			? (doc.legacyEditor as Record<string, unknown>)
+			: null;
+
+	if (!legacy || legacy.aspectRatio !== "native") {
+		return { ...doc, schemaVersion: 6 };
+	}
+
+	const dims = largestClipDims(doc);
+	const token = dims ? toAspectRatioToken(dims.width, dims.height) : null;
+	return {
+		...doc,
+		schemaVersion: 6,
+		legacyEditor: { ...legacy, aspectRatio: token ?? "16:9" },
+	};
+}
+
 export const documentSchema = z.preprocess(
-	(raw) => upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw)),
+	(raw) => upgradeV5DocumentToV6(upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw))),
 	documentSchemaShape,
 );
 

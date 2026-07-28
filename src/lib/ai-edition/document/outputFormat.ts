@@ -18,7 +18,6 @@ import { calculateEffectiveSourceDimensions } from "@/lib/exporter/mp4ExportSett
 import {
 	type AspectRatio,
 	getAspectRatioValue,
-	getNativeAspectRatioValue,
 	toAspectRatioToken,
 } from "@/utils/aspectRatioUtils";
 import type { AxcutAsset, AxcutClip, AxcutDocument } from "../schema";
@@ -225,19 +224,13 @@ export function collectNativeFormats(
 }
 
 /**
- * Numeric ratio for a stored selection, with the document available to resolve the legacy
- * `"native"` value. Every consumer that frames or sizes the output must go through this rather
- * than bare `getAspectRatioValue`, which has no document and falls back to 16/9.
+ * Numeric ratio for a stored selection. v6 documents never carry the legacy `"native"`
+ * AspectRatio (the v5→v6 upgrader rewrites it to a concrete `"W:H"` token), so resolution
+ * is a single token lookup. Kept as a function so the preview / export path still has a
+ * single funnel — if storage ever moves, this is the one place to update.
  */
-export function resolveAspectRatioValue(
-	document: AxcutDocument | null | undefined,
-	aspectRatio: AspectRatio,
-	probedAssetDims: Record<string, Dims> = {},
-): number {
-	if (aspectRatio !== "native") return getAspectRatioValue(aspectRatio);
-	if (!document) return getAspectRatioValue("native");
-	const reference = referenceClipDims(document, probedAssetDims);
-	return getNativeAspectRatioValue(reference.width, reference.height);
+export function resolveAspectRatioValue(aspectRatio: AspectRatio): number {
+	return getAspectRatioValue(aspectRatio);
 }
 
 /**
@@ -261,7 +254,7 @@ export function pickOutputDims(
 	probedAssetDims: Record<string, Dims> = {},
 ): Dims {
 	const reference = referenceClipDims(document, probedAssetDims);
-	const ratio = resolveAspectRatioValue(document, aspectRatio, probedAssetDims);
+	const ratio = resolveAspectRatioValue(aspectRatio);
 	const longSide = toEvenPx(Math.max(reference.width, reference.height));
 	if (ratio >= 1) {
 		return { width: longSide, height: toEvenPx(longSide / ratio) };
