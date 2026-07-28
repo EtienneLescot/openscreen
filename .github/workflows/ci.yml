@@ -91,7 +91,7 @@ jobs:
       - run: npm run test:browser:install
       - run: npm run test:browser
 
-build:
+  build:
     name: Build
     runs-on: ubuntu-latest
     steps:
