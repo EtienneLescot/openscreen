@@ -7,13 +7,8 @@ import { useScopedT } from "@/contexts/I18nContext";
 import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
-import { useOptimisticTimelineOps } from "@/lib/ai-edition/store/useOptimisticTimelineOps";
 import { nativeBridgeClient } from "@/native/client";
-import type {
-	AiEditionLlmConfig,
-	AiEditionToolCallSummary,
-	AxcutTimelineOperation,
-} from "@/native/contracts";
+import type { AiEditionLlmConfig, AiEditionToolCallSummary } from "@/native/contracts";
 import { formatBytes } from "@/utils/formatBytes";
 import {
 	getReasoningEffortLabel,
@@ -1139,32 +1134,6 @@ function ChatStripPanel() {
 		[editingTitle, handleRename, cancelEditTitle],
 	);
 
-	const { queue: queueTimelineOp, busy: queueBusy } = useOptimisticTimelineOps(
-		projectId,
-		activeSessionId,
-	);
-	const runAddTrim = useCallback(() => {
-		const raw = window.prompt(t("chat.addSkipRangePrompt"), "5-8");
-		if (!raw) return;
-		const m = raw.match(/^\s*(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*$/);
-		if (!m) {
-			toast.error(t("chat.addSkipRangeFormatError"));
-			return;
-		}
-		const startSec = Number(m[1]);
-		const endSec = Number(m[2]);
-		if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec) {
-			toast.error(t("chat.addSkipRangeOrderError"));
-			return;
-		}
-		const op: AxcutTimelineOperation = {
-			type: "add_trim_range",
-			startSec,
-			endSec,
-		};
-		void queueTimelineOp(op, t("chat.addSkipRangeApplied", { startSec, endSec }));
-	}, [queueTimelineOp, t]);
-
 	return (
 		<aside className={styles.panel}>
 			<div className={styles.panelHeader}>
@@ -1401,25 +1370,6 @@ function ChatStripPanel() {
 								<path d="M14 11v6" />
 								<path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
 							</svg>
-						</button>
-						<button
-							type="button"
-							title={t("chat.addSkipRange")}
-							aria-label={t("chat.addSkipRange")}
-							disabled={!activeSessionId || queueBusy}
-							onClick={runAddTrim}
-							style={{
-								background: "transparent",
-								border: "1px solid var(--border-soft)",
-								borderRadius: "var(--r-sm)",
-								color: "var(--fg-2)",
-								font: "500 10px var(--font-body)",
-								padding: "2px 6px",
-								cursor: queueBusy ? "wait" : "pointer",
-								whiteSpace: "nowrap",
-							}}
-						>
-							{t("chat.skipButtonShort")}
 						</button>
 					</div>
 				) : null}

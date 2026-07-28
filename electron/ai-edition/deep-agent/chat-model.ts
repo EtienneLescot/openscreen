@@ -28,6 +28,33 @@ export interface OpenScreenChatModelConfig {
 // that don't actually authenticate (same as axcut's OPENAI_COMPATIBLE_NO_AUTH).
 export const OPENAI_COMPATIBLE_NO_AUTH_API_KEY = "openscreen-openai-compatible-no-auth";
 
+// ponytail: explicit output budget for the Anthropic-wire providers
+// (`anthropic`, `minimax`, `minimax-token-plan`). ChatAnthropic picks its
+// default `maxTokens` from a table of known Claude models (16k for 4.x/5.x)
+// and falls back to 4096 for anything else — including every MiniMax slug and
+// any self-hosted model name. With thinking on, a cold-start turn can spend
+// the entire 4096-token budget on reasoning and truncate with
+// `stop_reason: "max_tokens"` before emitting a single text block — the
+// "first call returns an empty response" bug (#181). 16384 matches what the
+// known Claude models get.
+//
+// This only applies to the Anthropic Messages API path, where `max_tokens`
+// is mandatory: the OpenAI-shaped transports (ChatOpenAI, ChatMistralAI)
+// send no cap by default, so there is nothing to fix — and imposing one
+// would truncate outputs that are uncapped today.
+export const ANTHROPIC_API_MAX_OUTPUT_TOKENS = 16_384;
+
+// ponytail: LangChain's default-maxTokens table knows every released
+// claude-* slug with its real per-model limit (4096 for claude-3-haiku,
+// 16384 for 4.x/5.x) — trust it. Overriding with a flat 16k would exceed a
+// legacy model's hard limit and turn the request into a 400. Anything NOT
+// claude-shaped on the anthropic branch is a self-hosted Anthropic-compatible
+// endpoint behind `baseUrl`, which LangChain can't know — floor those at
+// ANTHROPIC_API_MAX_OUTPUT_TOKENS like the MiniMax path.
+function isKnownClaudeSlug(model: string): boolean {
+	return model.trim().toLowerCase().startsWith("claude-");
+}
+
 export function resolveOpenAIChatApiKey(provider: string, apiKey?: string): string | undefined {
 	if (apiKey) return apiKey;
 	return provider === "openai-compatible" ? OPENAI_COMPATIBLE_NO_AUTH_API_KEY : undefined;
@@ -85,6 +112,7 @@ export async function createOpenScreenChatModel(
 			// ponytail: ChatAnthropic accepts `anthropicApiUrl` for self-hosted
 			// Anthropic-compatible endpoints — MiniMax uses this on the wire path.
 			...(config.baseUrl ? { anthropicApiUrl: config.baseUrl } : {}),
+			...(isKnownClaudeSlug(config.model) ? {} : { maxTokens: ANTHROPIC_API_MAX_OUTPUT_TOKENS }),
 			...(reasoningOptions.thinking ? { thinking: reasoningOptions.thinking as never } : {}),
 			...(reasoningOptions.outputConfig
 				? { outputConfig: reasoningOptions.outputConfig as never }
@@ -138,6 +166,7 @@ async function createLocalProviderChatModel(
 				apiKey: config.apiKey,
 				model: config.model,
 				anthropicApiUrl: config.baseUrl ?? "https://api.minimax.io/anthropic",
+				maxTokens: ANTHROPIC_API_MAX_OUTPUT_TOKENS,
 				...(reasoningOptions.thinking ? { thinking: reasoningOptions.thinking as never } : {}),
 			});
 		default:
