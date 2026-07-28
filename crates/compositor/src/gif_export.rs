@@ -146,7 +146,25 @@ impl Default for GifExportParams {
 /// Drive a single-clip GIF export end-to-end. Mirrors the shape of
 /// `pipeline::run_composited` so the bench can compare apples to
 /// apples once the readback cost has been measured.
+/// A failed run leaves a truncated GIF under exactly the name the user thinks
+/// they exported. Remove it rather than leave it lying around — same contract
+/// as `discard_partial_output` on the MP4 path.
 pub fn export_gif(
+	screen: &str,
+	webcam: &str,
+	cursor_json: Option<&str>,
+	out_path: &Path,
+	params: &GifExportParams,
+	progress: &mut dyn FnMut(u64),
+) -> Result<GifStats> {
+	let result = export_gif_inner(screen, webcam, cursor_json, out_path, params, progress);
+	if result.is_err() {
+		let _ = std::fs::remove_file(out_path);
+	}
+	result
+}
+
+fn export_gif_inner(
 	screen: &str,
 	webcam: &str,
 	cursor_json: Option<&str>,
@@ -332,6 +350,8 @@ struct GifWriter<W: Write> {
 	w: W,
 	width: u16,
 	height: u16,
+	/// Set by `finish`, so `Drop` does not append a second trailer.
+	finished: bool,
 }
 
 impl<W: Write> GifWriter<W> {
@@ -339,7 +359,12 @@ impl<W: Write> GifWriter<W> {
 		if width == 0 || height == 0 {
 			bail!("gif: dimensions must be > 0 (got {width}x{height})");
 		}
-		Ok(GifWriter { w, width, height })
+		Ok(GifWriter {
+			w,
+			width,
+			height,
+			finished: false,
+		})
 	}
 
 	/// Write the GIF89a header + Logical Screen Descriptor. No global
@@ -434,6 +459,10 @@ impl<W: Write> GifWriter<W> {
 	/// path that wants an explicit "we're done, no more frames"
 	/// signal.
 	fn finish(&mut self) -> Result<()> {
+		if self.finished {
+			return Ok(());
+		}
+		self.finished = true;
 		self.w.write_all(&[0x3B])?;
 		self.w.flush()?;
 		Ok(())
@@ -442,12 +471,15 @@ impl<W: Write> GifWriter<W> {
 
 impl<W: Write> Drop for GifWriter<W> {
 	fn drop(&mut self) {
-		// Best-effort trailer; if the buffer failed before, this is
-		// also the path that records the failure. We intentionally
-		// don't propagate the result — `Drop` can't return errors.
-		// A failed write is logged and the process continues; the
-		// resulting file will be truncated/invalid, which the
+		// Best-effort trailer for the paths that bail out before calling
+		// `finish`. Skipped when `finish` already wrote one — two trailer
+		// bytes are tolerated by most decoders but rejected by strict ones.
+		// We intentionally don't propagate the result — `Drop` can't return
+		// errors. The resulting file will be truncated/invalid, which the
 		// caller will detect on the next read.
+		if self.finished {
+			return;
+		}
 		let _ = self.w.write_all(&[0x3B]);
 		let _ = self.w.flush();
 	}
@@ -920,6 +952,36 @@ mod tests {
 	/// The most basic round-trip: write a 2×2 frame and check the
 	/// file is well-formed GIF89a. No decode — we just walk the
 	/// output bytes and confirm the structural shape.
+	#[test]
+	fn gif_writer_writes_exactly_one_trailer() {
+		// `finish` writes 0x3B, and so does `Drop`. Without the guard the file
+		// ends `3B 3B`, which strict decoders reject.
+		let mut buf = Vec::new();
+		{
+			let mut gw = GifWriter::new(&mut buf, 2, 2).unwrap();
+			gw.write_header().unwrap();
+			gw.finish().unwrap();
+		}
+		assert_eq!(buf.last(), Some(&0x3B));
+		assert_ne!(
+			buf[buf.len() - 2],
+			0x3B,
+			"trailer written twice: {:02X?}",
+			&buf[buf.len() - 2..]
+		);
+	}
+
+	#[test]
+	fn gif_writer_drop_still_terminates_without_finish() {
+		// The bail-out paths never call `finish`; `Drop` must still close the file.
+		let mut buf = Vec::new();
+		{
+			let mut gw = GifWriter::new(&mut buf, 2, 2).unwrap();
+			gw.write_header().unwrap();
+		}
+		assert_eq!(buf.last(), Some(&0x3B));
+	}
+
 	#[test]
 	fn gif_writer_writes_minimal_header() {
 		let mut buf = Vec::new();
