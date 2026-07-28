@@ -33,6 +33,20 @@ import { anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
 //      `AspectRatio` union without a runtime bridge.
 export const axcutSchemaVersion = 6;
 
+// ponytail: every region schema shares the same monotonicity rule
+// (end >= start) with the same error shape. Factor the refine so the
+// five call sites stay declarative; the message + path stay tied to
+// the field names (e.g. `endSec >= startSec`, `endMs >= startMs`).
+const endGteStart = <T extends z.ZodObject<z.ZodRawShape>>(
+	schema: T,
+	endKey: keyof T["shape"] & string,
+	startKey: keyof T["shape"] & string,
+) =>
+	schema.refine((data) => (data[endKey] as number) >= (data[startKey] as number), {
+		message: `${endKey} must be greater than or equal to ${startKey}`,
+		path: [endKey],
+	});
+
 export const isoDateSchema = z.string().datetime({ offset: true });
 
 export const wordSchema = z
@@ -160,44 +174,41 @@ export const clipSchema = z
 		path: ["sourceEndSec"],
 	});
 
-export const gapSchema = z
-	.object({
+export const gapSchema = endGteStart(
+	z.object({
 		id: z.string().min(1),
 		timelineStartSec: z.number().nonnegative(),
 		timelineEndSec: z.number().nonnegative(),
 		reason: z.string().default(""),
-	})
-	.refine((data) => data.timelineEndSec >= data.timelineStartSec, {
-		message: "timelineEndSec must be greater than or equal to timelineStartSec",
-		path: ["timelineEndSec"],
-	});
+	}),
+	"timelineEndSec",
+	"timelineStartSec",
+);
 
-export const rangeSchema = z
-	.object({
+export const rangeSchema = endGteStart(
+	z.object({
 		startSec: z.number().nonnegative(),
 		endSec: z.number().nonnegative(),
 		reason: z.string().default(""),
-	})
-	.refine((data) => data.endSec >= data.startSec, {
-		message: "endSec must be greater than or equal to startSec",
-		path: ["endSec"],
-	});
+	}),
+	"endSec",
+	"startSec",
+);
 
 // ponytail: trimRanges reference asset source-time (not timeline). trimRegions
 // in v2 are the inverse — a skip = the region inside the source we DON'T keep.
-export const trimRangeSchema = z
-	.object({
+export const trimRangeSchema = endGteStart(
+	z.object({
 		id: z.string().min(1),
 		assetId: z.string().min(1),
 		startSec: z.number().nonnegative(),
 		endSec: z.number().nonnegative(),
 		reason: z.string().default(""),
 		origin: z.enum(["system", "agent", "user"]),
-	})
-	.refine((data) => data.endSec >= data.startSec, {
-		message: "endSec must be greater than or equal to startSec",
-		path: ["endSec"],
-	});
+	}),
+	"endSec",
+	"startSec",
+);
 
 export const timelineSchema = z.preprocess(
 	// Back-compat: the field was renamed skipRanges → trimRanges. Old persisted
@@ -353,8 +364,8 @@ const clipAnchorShape = {
 	sourceEndSec: z.number().nonnegative().optional(),
 };
 
-export const annotationRegionSchema = z
-	.object({
+export const annotationRegionSchema = endGteStart(
+	z.object({
 		id: z.string().min(1),
 		startMs: z.number().nonnegative(),
 		endMs: z.number().nonnegative(),
@@ -376,14 +387,13 @@ export const annotationRegionSchema = z
 		annotationSource: z.literal("auto-caption").optional(),
 		figureData: figureDataSchema,
 		blurData: blurDataSchema,
-	})
-	.refine((data) => data.endMs >= data.startMs, {
-		message: "endMs must be greater than or equal to startMs",
-		path: ["endMs"],
-	});
+	}),
+	"endMs",
+	"startMs",
+);
 
-export const zoomRegionSchema = z
-	.object({
+export const zoomRegionSchema = endGteStart(
+	z.object({
 		id: z.string().min(1),
 		startMs: z.number().nonnegative(),
 		endMs: z.number().nonnegative(),
@@ -404,11 +414,10 @@ export const zoomRegionSchema = z
 		rotationPreset: z.enum(["iso", "left", "right"]).optional(),
 		customScale: z.number().positive().optional(),
 		source: z.enum(["auto", "manual"]).optional(),
-	})
-	.refine((data) => data.endMs >= data.startMs, {
-		message: "endMs must be greater than or equal to startMs",
-		path: ["endMs"],
-	});
+	}),
+	"endMs",
+	"startMs",
+);
 
 // Legacy OpenScreen appearance / export settings that the v3 schema doesn't
 // normalize into the timeline / assets model. They are applied at export time

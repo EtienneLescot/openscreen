@@ -1,13 +1,13 @@
 // Covers the reasoning-effort matrix that survived the llm-call.ts deletion.
-// The deleted top-level agent-provider-capabilities.ts had the only tests for
-// this logic; these keep the per-provider wiring pinned.
+// The capability helpers now live in chat-model.ts (folded from
+// agent-provider-capabilities.ts); these keep the per-provider wiring pinned.
 
 import { describe, expect, it } from "vitest";
 import {
 	buildLangChainReasoningOptions,
 	getReasoningCapability,
 	normalizeReasoningEffortForCapability,
-} from "./agent-provider-capabilities";
+} from "./chat-model";
 
 describe("getReasoningCapability", () => {
 	it("turns reasoning off for non-reasoning OpenAI models", () => {
