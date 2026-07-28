@@ -499,11 +499,13 @@ pub struct GifParamsInput {
 /// `Compositor` (équivalent de `cfg.cursor = false` dans
 /// `run_composited_multi`).
 pub struct ExportGifTask {
-    screen_path: String,
-    webcam_path: String,
-    /// Option<String> (pas Option<PathBuf>) parce que napi-rs n'expose
-    /// pas PathBuf en type d'entrée pratique.
-    cursor_path: Option<String>,
+    /// Same clip list the MP4 export takes — GIF is now a multiclip export
+    /// driven by the same walk, not a single-file special case.
+    clips: Vec<pipeline::ClipSource>,
+    /// Scene JSON from the app, exactly as `exportMulti` receives it: it
+    /// carries background, layout, webcam and cursor. Absent/invalid → no
+    /// scene, same as a preview that was never configured.
+    scene_json: Option<String>,
     out_path: PathBuf,
     params: GifExportParams,
     on_progress: Option<ThreadsafeFunction<u32, ErrorStrategy::Fatal>>,
@@ -520,12 +522,45 @@ impl Task for ExportGifTask {
         // RT avec la preview (sa propre `Compositor::new_sized`) mais le
         // 3D engine de la preview pollue quand même, d'où la pause.
         let _previews = PreviewPause::begin();
+
+        // Same construction as ExportMultiTask — GIF and MP4 differ only in the
+        // encoder, so everything up to it is built identically.
+        let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
+        let mut cfg = config::all().pop().expect("au moins une config"); // C8
+        cfg.zoom = false;
+        cfg.layout_anim = false;
+        cfg.mblur_n = 1;
+
+        let scene = self.scene_json.as_deref().and_then(|j| Scene::from_json(j).ok());
+        if let Some(scene) = &scene {
+            cfg.bg_blur = scene.effects.blur;
+            cfg.cursor = scene.cursor.show;
+        } else {
+            cfg.cursor = false;
+        }
+
+        let width = self
+            .params
+            .width
+            .unwrap_or(openscreen_compositor::gif_export::DEFAULT_GIF_WIDTH);
+        let height = self
+            .params
+            .height
+            .unwrap_or(openscreen_compositor::gif_export::DEFAULT_GIF_HEIGHT);
+        let comp = Compositor::new_sized(&gpu, width, height)
+            .map_err(|e| Error::from_reason(format!("{e:#}")))?;
+        if let Some(scene) = &scene {
+            comp.set_live_params(live_params_from_scene(scene));
+        }
+        comp.set_scene(scene);
+
         let mut progress = throttled_progress(self.on_progress.take());
         openscreen_compositor::gif_export::export_gif(
-            &self.screen_path,
-            &self.webcam_path,
-            self.cursor_path.as_deref(),
+            &self.clips,
             &self.out_path,
+            &gpu,
+            &comp,
+            &cfg,
             &self.params,
             &mut progress,
         )
@@ -554,13 +589,26 @@ impl Task for ExportGifTask {
 /// throttled à ~10/s comme l'export MP4 (voir `throttled_progress`).
 #[napi]
 pub fn export_gif(
-    screen_path: String,
-    webcam_path: String,
-    cursor_path: Option<String>,
+    clips: Vec<ClipInput>,
     out_path: String,
+    scene_json: Option<String>,
     params: Option<GifParamsInput>,
     on_progress: Option<JsFunction>,
 ) -> Result<AsyncTask<ExportGifTask>> {
+    // Deliberately the same argument shape as `export_multi`: the caller builds
+    // one clip list and one scene, and picks the container. Cursor comes from
+    // the scene like every other effect — there is no GIF-specific input left.
+    let clips = clips
+        .into_iter()
+        .map(|c| pipeline::ClipSource {
+            screen: c.screen_path,
+            webcam: c.webcam_path,
+            source_start_sec: c.source_start_sec,
+            source_end_sec: c.source_end_sec,
+            webcam_offset_sec: c.webcam_offset_sec,
+            has_audio: c.has_audio,
+        })
+        .collect();
     let gif_params = params
         .map(|p| GifExportParams {
             width: p.width,
@@ -571,9 +619,8 @@ pub fn export_gif(
         })
         .unwrap_or_default();
     Ok(AsyncTask::new(ExportGifTask {
-        screen_path,
-        webcam_path,
-        cursor_path,
+        clips,
+        scene_json,
         out_path: PathBuf::from(out_path),
         params: gif_params,
         on_progress: make_progress_tsfn(on_progress)?,

@@ -25,13 +25,18 @@
 //!
 //! ## What's in this file
 //!
-//! - `export_gif` — the orchestrator. Opens the same `Player` the live
-//!   preview drives, constructs a `Compositor` sized to the requested
-//!   output dims, and per output frame: `Player::step` →
-//!   `Compositor::compose_frame` → `Compositor::readback_direct` →
-//!   optional Floyd-Steinberg dither → nearest-color index →
-//!   `GifWriter::write_frame`. Reports the same `GifStats` shape the
-//!   MP4 `pipeline::Stats` returns.
+//! - `export_gif` — the orchestrator. Drives `pipeline::walk_composited_timeline`,
+//!   the SAME clip walk the MP4 exporter uses, so clip iteration, speed
+//!   segments and output-time decoder advancement have exactly one
+//!   definition. Per output frame the walk composes, then this module does
+//!   `Compositor::readback_direct` → palette → optional fused
+//!   Floyd-Steinberg → `GifWriter::write_frame`. Reports the same `GifStats`
+//!   shape the MP4 `pipeline::Stats` returns.
+//!
+//!   It previously ran its own loop over the live-preview `Player`, stepping
+//!   one SOURCE frame per OUTPUT frame — which made a 30 s/60 fps recording
+//!   export as 6 s of content stretched over 30 s, and could not decode files
+//!   the MP4 path handled. `tests/export_timing.rs` pins the behaviour.
 //! - `GifWriter` — GIF89a format writer: header, optional Netscape 2.0
 //!   loop extension, per-frame Graphics Control Extension + Image
 //!   Descriptor + LZW image data, trailer. Pure std `Write`.
@@ -65,9 +70,8 @@
 
 use crate::compositor::Compositor;
 use crate::config::Cfg;
-use crate::cursor::CursorTrack;
 use crate::d3d::Gpu;
-use crate::live::Player;
+use crate::pipeline::{walk_composited_timeline, ClipSource, Decoder};
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
 use std::fs::File;
@@ -143,21 +147,28 @@ impl Default for GifExportParams {
 	}
 }
 
-/// Drive a single-clip GIF export end-to-end. Mirrors the shape of
-/// `pipeline::run_composited` so the bench can compare apples to
-/// apples once the readback cost has been measured.
+/// Drive a multiclip GIF export end-to-end.
+///
+/// Deliberately the same shape as `pipeline::run_composited_multi`, and
+/// deliberately driven by the same `walk_composited_timeline`: the clip walk,
+/// the speed segments and the output-time decoder advancement are the video
+/// exporter's, not a second implementation. Only the per-frame sink differs —
+/// MP4 hands the composed texture to a hardware NV12 encoder, GIF reads it back
+/// to the CPU and quantizes it to 256 colours.
+///
 /// A failed run leaves a truncated GIF under exactly the name the user thinks
 /// they exported. Remove it rather than leave it lying around — same contract
 /// as `discard_partial_output` on the MP4 path.
 pub fn export_gif(
-	screen: &str,
-	webcam: &str,
-	cursor_json: Option<&str>,
+	clips: &[ClipSource],
 	out_path: &Path,
+	gpu: &Gpu,
+	comp: &Compositor,
+	cfg: &Cfg,
 	params: &GifExportParams,
 	progress: &mut dyn FnMut(u64),
 ) -> Result<GifStats> {
-	let result = export_gif_inner(screen, webcam, cursor_json, out_path, params, progress);
+	let result = export_gif_inner(clips, out_path, gpu, comp, cfg, params, progress);
 	if result.is_err() {
 		let _ = std::fs::remove_file(out_path);
 	}
@@ -165,52 +176,24 @@ pub fn export_gif(
 }
 
 fn export_gif_inner(
-	screen: &str,
-	webcam: &str,
-	cursor_json: Option<&str>,
+	clips: &[ClipSource],
 	out_path: &Path,
+	gpu: &Gpu,
+	comp: &Compositor,
+	cfg: &Cfg,
 	params: &GifExportParams,
 	progress: &mut dyn FnMut(u64),
 ) -> Result<GifStats> {
+	if clips.is_empty() {
+		bail!("export_gif: aucun clip à exporter");
+	}
+	// The caller builds the compositor at the output size (same contract as
+	// `run_composited_multi` / `ExportParams`), so these must agree with what
+	// `readback_direct` hands back — asserted per frame below.
 	let width = params.width.unwrap_or(DEFAULT_GIF_WIDTH);
 	let height = params.height.unwrap_or(DEFAULT_GIF_HEIGHT);
 	let fps = params.fps.unwrap_or(DEFAULT_GIF_FPS).max(1);
 	let dither = params.dither;
-
-	// Native compositor: D3D11 device + offscreen RT sized to the
-	// output. Same idiom as `run_composited` (one Cfg, full C8
-	// effects), but zoom / layout anim / motion blur are off — GIF is
-	// a still-timeline artefact, the moving-camera cost that makes C8
-	// relevant for MP4 doesn't move the needle on a 256-colour
-	// palette.
-	let gpu = Gpu::create(false).map_err(|e| anyhow!("export_gif: gpu init: {e:#}"))?;
-	let comp = Compositor::new_sized(&gpu, width, height)
-		.map_err(|e| anyhow!("export_gif: compositor: {e:#}"))?;
-	if let Some(cursor_path) = cursor_json {
-		match CursorTrack::load(cursor_path, 0.0, 24.0 * 3600.0) {
-			Ok(track) => comp.set_cursor(track),
-			Err(e) => bail!("export_gif: cursor.json load: {e:#}"),
-		}
-	}
-	let cfg = Cfg {
-		name: "gif",
-		composite: true,
-		cursor: cursor_json.is_some(),
-		..Cfg::c8()
-	};
-
-	// Open the screen + webcam. Use the existing `Player` so cursor
-	// framing and webcam lockstep are identical to the live preview.
-	let mut player = unsafe { Player::open(screen, webcam, &gpu) }
-		.map_err(|e| anyhow!("export_gif: player open: {e:#}"))?;
-
-	// Frame plan: the source decodes at 60 fps (fixture) and the
-	// output is `fps` — so we drive the player one step per output
-	// frame and stop after `target_frames` (i.e. the source time is
-	// `target_frames / fps`). We don't know the source duration up
-	// front; we let the player EOF when it has no more frames.
-	let target_frames = estimate_target_frames(&player, fps)
-		.ok_or_else(|| anyhow!("export_gif: source has zero decodable frames"))?;
 
 	// Set up the GIF writer up front: file + global header. We use a
 	// per-frame local palette (the standard "high-quality" form: a
@@ -229,6 +212,12 @@ fn export_gif_inner(
 	// `100 / fps` cs per frame, rounded to the nearest unit the
 	// GIF spec supports. u16 caps at 65535 — 10.9 minutes per
 	// frame, plenty.
+	//
+	// ponytail: integer centiseconds can't express every fps exactly
+	// (12 → 8 cs → 12.5 fps). `video_duration_s` below is computed
+	// from the delays actually written, so the reported duration never
+	// disagrees with the file. Fractional accumulation if a viewer ever
+	// cares about the ~4% drift.
 	let delay_cs: u16 = (100_u32 / fps).max(1) as u16;
 
 	// Pre-allocate the per-frame index buffer. Reused across
@@ -245,8 +234,8 @@ fn export_gif_inner(
 	let mut palette_rgb: Vec<u8> = vec![0u8; PALETTE_COLORS * 3];
 
 	let t0 = Instant::now();
-	let mut frames: u64 = 0;
-	{
+	let scene = comp.scene_snapshot();
+	let frames = {
 		let mut gw = GifWriter::new(&mut writer, width as u16, height as u16)?;
 		gw.write_header()?;
 		// Netscape 2.0 application extension drives the loop count.
@@ -258,81 +247,83 @@ fn export_gif_inner(
 		};
 		gw.write_netscape_loop(loops)?;
 
-		for n in 0..target_frames {
-			// Drive the player one output frame. `Player::step` is
-			// the same path the live preview's render thread uses.
-			let more = unsafe { player.step(&comp, &cfg) }
-				.map_err(|e| anyhow!("export_gif: player.step @ frame {n}: {e:#}"))?;
-			if !more {
-				break;
-			}
-			// CPU readback of the staged RT (RGBA8
-			// tightly-packed, `width * height * 4` bytes). The
-			// dominant per-frame cost.
-			let (rw, rh, rgba) = unsafe { comp.readback_direct() }
-				.map_err(|e| anyhow!("export_gif: readback @ frame {n}: {e:#}"))?;
-			debug_assert_eq!(rw, width);
-			debug_assert_eq!(rh, height);
-			debug_assert_eq!(rgba.len(), (width as usize) * (height as usize) * 4);
+		let mut screen_decs: HashMap<String, Decoder> = HashMap::new();
+		let mut webcam_decs: HashMap<String, Decoder> = HashMap::new();
+		screen_decs.insert(clips[0].screen.clone(), unsafe {
+			Decoder::open(&clips[0].screen, gpu)?
+		});
 
-			// Refresh the palette on a schedule. Building the
-			// histogram and running median-cut is O(unique colors)
-			// — fast enough at 480p and our 30-frame cadence.
-			if n % PALETTE_REQUANTIZE_EVERY == 0 {
-				build_palette_median_cut(&rgba, PALETTE_COLORS, &mut palette_rgb);
-			}
+		let frames = unsafe {
+			walk_composited_timeline(
+				clips,
+				gpu,
+				comp,
+				cfg,
+				fps as i32,
+				&scene,
+				&mut screen_decs,
+				&mut webcam_decs,
+				&mut |frame_index| {
+					// CPU readback of the staged RT (RGBA8 tightly-packed,
+					// `width * height * 4` bytes). The dominant per-frame cost,
+					// and the reason GIF can't use the MP4 zero-copy sink.
+					let (rw, rh, rgba) = comp
+						.readback_direct()
+						.map_err(|e| anyhow!("export_gif: readback @ frame {frame_index}: {e:#}"))?;
+					debug_assert_eq!(rw, width);
+					debug_assert_eq!(rh, height);
 
-			// Quantize (with optional dithering). The dither pass
-			// mutates a working copy of the readback pixels
-			// (in-place error propagation); the quantize pass
-			// then walks the (possibly dithered) pixels once and
-			// writes indices.
-			let mut rgba_buf = rgba;
-			if dither {
-				floyd_steinberg(&mut rgba_buf, width, height, &mut err_cur, &mut err_next);
-			}
-			map_to_indices(&palette_rgb, &rgba_buf, &mut indices);
+					// Refresh the palette on a schedule. Building the histogram
+					// and running median-cut is O(unique colors) — fast enough at
+					// 480p on our 30-frame cadence.
+					if frame_index % PALETTE_REQUANTIZE_EVERY == 0 {
+						build_palette_median_cut(&rgba, PALETTE_COLORS, &mut palette_rgb);
+					}
 
-			// Per-frame palette (GIF local palette, written by
-			// `write_frame`).
-			gw.write_frame(&indices, &palette_rgb, delay_cs, fps)?;
+					// Quantize (with optional dithering). The dither pass diffuses
+					// the error against the CHOSEN PALETTE ENTRY, so it has to run
+					// fused with the index mapping — see `map_to_indices_dithered`.
+					if dither {
+						map_to_indices_dithered(
+							&palette_rgb,
+							&rgba,
+							width,
+							height,
+							&mut err_cur,
+							&mut err_next,
+							&mut indices,
+						);
+					} else {
+						map_to_indices(&palette_rgb, &rgba, &mut indices);
+					}
 
-			frames += 1;
-			progress(frames);
-		}
+					// Per-frame palette (GIF local palette, written by `write_frame`).
+					gw.write_frame(&indices, &palette_rgb, delay_cs, fps)?;
+					progress(frame_index + 1);
+					Ok(())
+				},
+				// GIF has no audio track, so clip boundaries need no work.
+				&mut |_, _, _, _| Ok(()),
+			)?
+		};
 
-		// Trailer is written on drop (the writer's `Drop` flushes
-		// any pending bytes and appends `0x3B`).
 		gw.finish()?;
-	}
+		frames
+	};
 	// Drop the writer before stat-ing the file so the trailer is
 	// flushed.
 	drop(writer);
 
 	let wall_s = t0.elapsed().as_secs_f64();
 	let fps_actual = if wall_s > 0.0 { frames as f64 / wall_s } else { 0.0 };
-	let video_duration_s = frames as f64 / fps as f64;
+	// From the delays actually written, not from the requested fps — see the
+	// `delay_cs` note above.
+	let video_duration_s = frames as f64 * (delay_cs as f64 / 100.0);
 	let file_bytes = std::fs::metadata(out_path).map(|m| m.len()).unwrap_or(0);
 
 	Ok(GifStats { frames, wall_s, fps: fps_actual, video_duration_s, file_bytes })
 }
 
-/// Estimate how many output frames a single-clip export will produce.
-///
-/// The Player doesn't expose its source duration up front without
-/// seeking to the EOF. We open the screen decoder, ask for the
-/// duration, and floor to the nearest output frame. Returns `None`
-/// when the source is undecodable or the duration is zero — the caller
-/// should fail the export with a clear message in that case.
-fn estimate_target_frames(player: &Player, fps: u32) -> Option<u64> {
-	// `screen_duration_sec` is `unsafe` because it touches the raw
-	// decoder. We just opened the player above and never moved it, so
-	// the contract is satisfied — but the `unsafe` keyword on the
-	// Player method has to be wrapped.
-	let dur = unsafe { player.screen_duration_sec() }?;
-	let out = (dur * fps as f64).floor() as u64;
-	if out == 0 { None } else { Some(out) }
-}
 
 // =====================================================================
 // GIF89a format writer (pure std::io::Write).
@@ -873,6 +864,82 @@ fn map_to_indices(palette_rgb: &[u8], rgba: &[u8], indices: &mut [u8]) {
 			}
 		}
 		indices[i] = best_idx as u8;
+	}
+}
+
+/// Nearest-palette mapping with Floyd-Steinberg error diffusion, fused.
+///
+/// Fused on purpose. A separate dither pass has nothing to diffuse against:
+/// quantizing to `round()` of an already-integer channel gives an error of
+/// exactly zero for every pixel, so the whole pass is a no-op that still costs
+/// a full float traversal. The error that matters is `pixel - palette[chosen]`,
+/// which only exists once the palette entry has been picked — hence one loop.
+///
+/// Kernel is the standard 7/16 right, 3/16 below-left, 5/16 below,
+/// 1/16 below-right. Two row buffers keep the working set at O(width).
+#[allow(clippy::too_many_arguments)]
+fn map_to_indices_dithered(
+	palette_rgb: &[u8],
+	rgba: &[u8],
+	width: u32,
+	height: u32,
+	err_cur: &mut [f32],
+	err_next: &mut [f32],
+	indices: &mut [u8],
+) {
+	let w = width as usize;
+	let h = height as usize;
+	debug_assert_eq!(indices.len(), w * h);
+	debug_assert_eq!(palette_rgb.len(), PALETTE_COLORS * 3);
+
+	err_cur.fill(0.0);
+	err_next.fill(0.0);
+
+	for y in 0..h {
+		for x in 0..w {
+			let base = (y * w + x) * 4;
+			let e = x * 3;
+			// Channel value carrying the error diffused into this pixel.
+			let cr = (rgba[base] as f32 + err_cur[e]).clamp(0.0, 255.0);
+			let cg = (rgba[base + 1] as f32 + err_cur[e + 1]).clamp(0.0, 255.0);
+			let cb = (rgba[base + 2] as f32 + err_cur[e + 2]).clamp(0.0, 255.0);
+
+			let mut best_idx = 0usize;
+			let mut best_dist = f32::MAX;
+			for k in 0..PALETTE_COLORS {
+				let dr = cr - palette_rgb[k * 3] as f32;
+				let dg = cg - palette_rgb[k * 3 + 1] as f32;
+				let db = cb - palette_rgb[k * 3 + 2] as f32;
+				let dist = dr * dr + dg * dg + db * db;
+				if dist < best_dist {
+					best_dist = dist;
+					best_idx = k;
+				}
+			}
+			indices[y * w + x] = best_idx as u8;
+
+			// THE error: distance to the colour actually written.
+			let er = cr - palette_rgb[best_idx * 3] as f32;
+			let eg = cg - palette_rgb[best_idx * 3 + 1] as f32;
+			let eb = cb - palette_rgb[best_idx * 3 + 2] as f32;
+
+			let mut spread = |slot: &mut [f32], idx: usize, f: f32| {
+				slot[idx] += er * f;
+				slot[idx + 1] += eg * f;
+				slot[idx + 2] += eb * f;
+			};
+			if x + 1 < w {
+				spread(err_cur, e + 3, 7.0 / 16.0);
+				spread(err_next, e + 3, 1.0 / 16.0);
+			}
+			if x > 0 {
+				spread(err_next, e - 3, 3.0 / 16.0);
+			}
+			spread(err_next, e, 5.0 / 16.0);
+		}
+		// Next row becomes current; clear the far row for reuse.
+		err_cur.copy_from_slice(err_next);
+		err_next.fill(0.0);
 	}
 }
 
