@@ -28,16 +28,22 @@ const resources = Object.fromEntries(
 	availableLocales.map((locale) => [locale, byLocale[locale] as Resource[string]]),
 ) as Resource;
 
-const stored =
-	typeof localStorage !== "undefined" ? localStorage.getItem("openscreen-locale") : null;
-const initialLng = stored && availableLocales.includes(stored) ? stored : DEFAULT_LOCALE;
-
+// `lng` is inert here: every lookup below passes an explicit `lng`, so the init
+// language never reaches the output. Reading localStorage at module scope would
+// add a failure mode for no gain — it can throw SecurityError, and at module
+// scope that takes down the whole graph rather than one component. The user's
+// stored preference is applied by I18nContext, which guards its access.
 await i18next.init({
-	lng: initialLng,
+	lng: DEFAULT_LOCALE,
 	fallbackLng: DEFAULT_LOCALE,
 	defaultNS: "common",
 	resources,
 	interpolation: { escapeValue: false },
+	// A non-leaf key would otherwise render i18next's English developer message
+	// ("key 'x' returned an object instead of string") straight into the UI.
+	// Returning undefined keeps the old loader's behaviour: fall through to the
+	// `namespace.key` marker.
+	returnedObjectHandler: () => undefined,
 });
 
 function tAt(
