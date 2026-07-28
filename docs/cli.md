@@ -74,7 +74,32 @@ Platform notes:
   which may show a system picker dialog and requires a desktop session
   (headless/SSH sessions without a portal cannot record).
 
-### Multi-window demos: `--follow-windows`
+### Multi-window demos: `--windows` (clean capture + slide transitions)
+
+The flagship mode for product demos. Every listed window is captured
+**continuously and cleanly in parallel** (ScreenCaptureKit window capture — no
+desktop background, no overlap, works even while occluded), together with a
+focus timeline. The export step then composites one video that *switches to
+whichever window you focused*, with the incoming window sliding in from the
+side it sat on:
+
+```bash
+openscreen record --windows "Terminal,Code,Chrome" --project demo.openscreen
+# ...work normally across the three windows...
+openscreen export demo.openscreen -o demo.mp4 --follow-windows
+```
+
+- Focus held ≥1.2 s switches the screen; brief flickers are ignored; focusing
+  an unlisted window keeps the current one on screen.
+- Transitions are 450 ms eased slides; the direction follows screen geometry
+  (a window to the right slides in from the right).
+- All windows must live in one capture process: concurrent helper *processes*
+  interrupt each other's streams (SCStreamErrorDomain -3805), so the Swift
+  helper gained a `multiWindows` mode running N streams in-process.
+- macOS only; no audio yet (add narration with `export --audio`). Composes
+  with wallpaper/padding/annotations and `--audio` like any export.
+
+### Display recording: `--follow-windows` zoom mode
 
 One window is rarely enough for a product demo — a real workflow moves between
 a terminal, an editor, a browser. `--follow-windows` records the whole display

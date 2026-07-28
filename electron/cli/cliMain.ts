@@ -17,6 +17,7 @@ import { getSelectedDesktopSource, registerIpcHandlers } from "../ipc/handlers";
 import { ASSET_BASE_URL_ARG } from "../windows";
 import { CLI_USAGE, type CliCommand } from "./args";
 import { FocusSampler, isFocusSamplingAvailable, resolveRecordedDisplayId } from "./focusSampler";
+import { startMultiWindowRecording } from "./multiWindowRecorder";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
@@ -314,6 +315,69 @@ async function runPackCommand(projectPath: string, outDir: string, json: boolean
 	return 0;
 }
 
+async function runMultiWindowRecord(
+	command: import("../../src/lib/cliContracts").CliRecordRequest & { json?: boolean },
+	output: CliOutput,
+): Promise<void> {
+	const titles = command.windows ?? [];
+	output.info(`Starting multi-window capture (${titles.length} windows)…`);
+
+	let handle: Awaited<ReturnType<typeof startMultiWindowRecording>>;
+	try {
+		handle = await startMultiWindowRecording(titles, command.displayIndex);
+		await handle.allStarted;
+	} catch (error) {
+		output.error(error instanceof Error ? error.message : String(error));
+		app.exit(1);
+		return;
+	}
+	for (const summary of handle.windowSummaries) {
+		output.info(`Recording window: ${summary.title}`);
+	}
+	output.info("Recording started (all windows)");
+	output.event("recording-started", { windows: handle.windowSummaries.map((w) => w.title) });
+
+	let stopping = false;
+	const finish = async (reason: string) => {
+		if (stopping) return;
+		stopping = true;
+		output.info(`Stopping recording (${reason})…`);
+		output.event("stopping", { reason });
+		try {
+			const result = await handle.stop();
+			if (command.projectOut) {
+				await writeProjectFile(command.projectOut, {
+					version: 2,
+					media: { screenVideoPath: result.primaryVideoPath, cursorCaptureMode: "system" },
+					editor: {},
+				});
+			}
+			output.info(`Recorded ${result.videoPaths.length} windows → ${result.primaryVideoPath}`);
+			output.info(`Manifest → ${result.manifestPath}`);
+			if (command.projectOut) output.info(`Project → ${command.projectOut}`);
+			output.event("done", {
+				success: true,
+				screenVideoPath: result.primaryVideoPath,
+				videoPaths: result.videoPaths,
+				multiWindowManifestPath: result.manifestPath,
+				durationMs: result.durationMs,
+				focusSamples: result.focusSampleCount,
+				...(command.projectOut ? { projectPath: command.projectOut } : {}),
+			});
+			app.exit(0);
+		} catch (error) {
+			output.error(error instanceof Error ? error.message : String(error));
+			output.event("done", { success: false });
+			app.exit(1);
+		}
+	};
+
+	setupRecordStopSignals((reason) => void finish(reason));
+	if (command.durationMs) {
+		setTimeout(() => void finish(`duration ${command.durationMs}ms`), command.durationMs);
+	}
+}
+
 async function runInfoCommand(projectPath: string, json: boolean): Promise<number> {
 	const raw = await fs.readFile(projectPath, "utf8");
 	const data = JSON.parse(raw) as {
@@ -445,6 +509,11 @@ export function runCli(command: CliCommand): void {
 			if (command.kind === "info") {
 				const code = await runInfoCommand(command.projectPath, command.json === true);
 				app.exit(code);
+				return;
+			}
+
+			if (command.kind === "record" && command.windows) {
+				await runMultiWindowRecord(command, output);
 				return;
 			}
 

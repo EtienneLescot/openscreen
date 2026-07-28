@@ -143,6 +143,7 @@ timer.setEventHandler {
 	emit([
 		"type": "sample",
 		"timestampMs": now,
+		"windowNumber": sample.windowNumber,
 		"appName": sample.appName,
 		"windowTitle": sample.windowTitle,
 		"x": Int(sample.bounds.origin.x),

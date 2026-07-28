@@ -84,6 +84,9 @@ Record options (recording is saved into the app's recordings directory):
                             Write a ready-to-export project file when done
   --follow-windows          Also record which window has focus (macOS); pair with
                             "export --follow-windows" for automatic window switching
+  --windows <t1,t2,...>     Multi-window capture (macOS): record every matched window
+                            in parallel; "export --follow-windows" switches between
+                            them with slide transitions as focus changes
   --json                    NDJSON events on stdout
 
 Stopping a recording: send SIGINT/SIGTERM, type "stop" + Enter on stdin,
@@ -297,6 +300,7 @@ function parseRecord(args: string[], cwd: string): CliCommand {
 		durationMs: null,
 		projectOut: null,
 		followWindows: false,
+		windows: null,
 	};
 
 	for (let i = 0; i < args.length; i++) {
@@ -362,6 +366,21 @@ function parseRecord(args: string[], cwd: string): CliCommand {
 			case "--follow-windows":
 				request.followWindows = true;
 				break;
+			case "--windows": {
+				const [value, next] = takeValue(args, i, arg);
+				const titles = value
+					.split(",")
+					.map((title) => title.trim())
+					.filter(Boolean);
+				if (titles.length < 2) {
+					throw new Error(
+						'--windows needs at least two comma-separated titles, e.g. "Terminal,Chrome"',
+					);
+				}
+				request.windows = titles;
+				i = next;
+				break;
+			}
 			case "--json":
 				request.json = true;
 				break;

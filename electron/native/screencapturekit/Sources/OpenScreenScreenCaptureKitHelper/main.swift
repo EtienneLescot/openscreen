@@ -62,6 +62,12 @@ struct RecordingRequest: Decodable {
 		let manifestPath: String?
 	}
 
+	struct WindowTarget: Decodable {
+		let windowId: UInt32
+		let sourceId: String
+		let screenPath: String
+	}
+
 	let schemaVersion: Int?
 	let recordingId: Int?
 	let source: Source
@@ -70,6 +76,11 @@ struct RecordingRequest: Decodable {
 	let webcam: Webcam
 	let cursor: Cursor
 	let outputs: Outputs
+	/// Multi-window mode: capture every listed window concurrently in this
+	/// process (one SCStream + writer each). A second helper *process* would
+	/// interrupt the first stream (SCStreamErrorDomain -3805), so concurrent
+	/// window capture must live in a single process.
+	let multiWindows: [WindowTarget]?
 }
 
 enum HelperError: Error, CustomStringConvertible {
@@ -647,6 +658,65 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	}
 }
 
+@available(macOS 13.0, *)
+func runMultiWindowCapture(
+	request: RecordingRequest, targets: [RecordingRequest.WindowTarget]
+) async throws {
+	let recorders = targets.map { target in
+		ScreenCaptureRecorder(
+			request: RecordingRequest(
+				schemaVersion: request.schemaVersion,
+				recordingId: request.recordingId,
+				source: RecordingRequest.Source(
+					type: "window",
+					sourceId: target.sourceId,
+					displayId: nil,
+					windowId: target.windowId,
+					bounds: nil
+				),
+				video: request.video,
+				audio: RecordingRequest.Audio(
+					system: RecordingRequest.Audio.SystemAudio(enabled: false),
+					microphone: RecordingRequest.Audio.Microphone(
+						enabled: false, deviceId: nil, deviceName: nil, gain: 1)
+				),
+				webcam: RecordingRequest.Webcam(
+					enabled: false, deviceId: nil, deviceName: nil, width: 0, height: 0, fps: 30),
+				cursor: request.cursor,
+				outputs: RecordingRequest.Outputs(screenPath: target.screenPath, manifestPath: nil),
+				multiWindows: nil
+			))
+	}
+
+	let stopTask = Task.detached {
+		while let line = readLine() {
+			let command = line.trimmingCharacters(in: .whitespacesAndNewlines)
+			switch command {
+			case "stop":
+				for recorder in recorders {
+					await recorder.stop()
+				}
+				exit(0)
+			case "pause":
+				for recorder in recorders {
+					recorder.pause()
+				}
+			case "resume":
+				for recorder in recorders {
+					recorder.resume()
+				}
+			default:
+				break
+			}
+		}
+	}
+
+	for recorder in recorders {
+		try await recorder.start()
+	}
+	await stopTask.value
+}
+
 @main
 struct OpenScreenScreenCaptureKitHelper {
 	static func main() async {
@@ -662,6 +732,12 @@ struct OpenScreenScreenCaptureKitHelper {
 			let requestData = Data(CommandLine.arguments[1].utf8)
 			let decoder = JSONDecoder()
 			let request = try decoder.decode(RecordingRequest.self, from: requestData)
+
+			if let targets = request.multiWindows, !targets.isEmpty {
+				try await runMultiWindowCapture(request: request, targets: targets)
+				return
+			}
+
 			let recorder = ScreenCaptureRecorder(request: request)
 			let stopTask = Task.detached {
 				while let line = readLine() {

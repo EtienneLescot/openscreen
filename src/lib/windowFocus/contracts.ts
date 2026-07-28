@@ -8,6 +8,8 @@ export interface FocusSample {
 	timeMs: number;
 	appName: string;
 	windowTitle: string;
+	/** CGWindowID of the focused window (0 when unknown). */
+	windowNumber: number;
 	/** Window bounds in screen points (macOS global display space). */
 	x: number;
 	y: number;

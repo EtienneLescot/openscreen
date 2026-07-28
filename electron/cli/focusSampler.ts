@@ -22,6 +22,7 @@ const SAMPLE_INTERVAL_MS = 200;
 interface RawHelperSample {
 	type?: string;
 	timestampMs?: number;
+	windowNumber?: number;
 	appName?: string;
 	windowTitle?: string;
 	x?: number;
@@ -155,6 +156,7 @@ export class FocusSampler {
 			}
 			samples.push({
 				timeMs: Math.max(0, raw.timestampMs - startedAt),
+				windowNumber: raw.windowNumber ?? 0,
 				appName: raw.appName ?? "",
 				windowTitle: raw.windowTitle ?? "",
 				x: raw.x ?? 0,

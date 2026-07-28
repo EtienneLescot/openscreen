@@ -34,9 +34,12 @@ import { mixVoiceoverIntoVideo } from "@/lib/exporter/voiceoverMix";
 import type { FocusRecordingData } from "@/lib/windowFocus/contracts";
 import { FOCUS_SIDECAR_SUFFIX } from "@/lib/windowFocus/contracts";
 import { focusTelemetryToZoomRegions } from "@/lib/windowFocus/focusToZoomRegions";
+import type { MultiWindowManifest } from "@/lib/windowSwitch/contracts";
+import { MULTIWINDOW_SIDECAR_SUFFIX } from "@/lib/windowSwitch/contracts";
 import { nativeBridgeClient } from "@/native";
 import type { CursorRecordingData, NativePlatform } from "@/native/contracts";
 import { getAspectRatioValue, getNativeAspectRatioValue } from "@/utils/aspectRatioUtils";
+import { composeMultiWindowVideo } from "./multiWindowCompositor";
 
 // Mirrors the private helper in VideoEditor.tsx.
 function isClickInteractionType(interactionType: string | null | undefined) {
@@ -163,8 +166,40 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 	const outPath =
 		request.outPath ?? replaceExtension(request.projectPath, format === "gif" ? ".gif" : ".mp4");
 
-	const videoUrl = toFileUrl(media.screenVideoPath);
+	let videoUrl = toFileUrl(media.screenVideoPath);
 	const webcamVideoUrl = media.webcamVideoPath ? toFileUrl(media.webcamVideoPath) : undefined;
+	let isMultiWindow = false;
+
+	// Multi-window captures: composite the per-window videos into one switcher
+	// video (slide transitions on focus hand-offs) before the normal pipeline.
+	if (request.followWindows) {
+		const manifestPath = `${media.screenVideoPath}${MULTIWINDOW_SIDECAR_SUFFIX}`;
+		const manifestResponse = await fetch(toFileUrl(manifestPath)).catch(() => null);
+		if (manifestResponse?.ok) {
+			isMultiWindow = true;
+			const manifest = (await manifestResponse.json()) as MultiWindowManifest;
+			window.electronAPI.cliLog(
+				"info",
+				`Multi-window capture: compositing ${manifest.windows.length} windows…`,
+			);
+			const composed = await composeMultiWindowVideo(
+				manifest,
+				manifest.windows.map((captured) => toFileUrl(captured.videoPath)),
+				(progress) =>
+					window.electronAPI.cliProgress({
+						percentage: progress.percentage,
+						currentFrame: progress.currentFrame,
+						totalFrames: progress.totalFrames,
+						phase: "compositing-windows",
+					}),
+			);
+			videoUrl = URL.createObjectURL(composed.blob);
+			window.electronAPI.cliLog(
+				"info",
+				`Window switcher composed: ${composed.timeline.segments.length} segment(s), ${composed.timeline.transitions.length} transition(s)`,
+			);
+		}
+	}
 
 	// Cursor sidecar data (native recordings). Both lookups tolerate missing files.
 	let cursorTelemetry: CursorTelemetryPoint[] = [];
@@ -207,7 +242,7 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 	const sourceWidth = probed.width || DEFAULT_SOURCE_DIMENSIONS.width;
 	const sourceHeight = probed.height || DEFAULT_SOURCE_DIMENSIONS.height;
 
-	if (request.followWindows) {
+	if (request.followWindows && !isMultiWindow) {
 		const sidecarPath = `${media.screenVideoPath}${FOCUS_SIDECAR_SUFFIX}`;
 		const response = await fetch(toFileUrl(sidecarPath)).catch(() => null);
 		if (!response?.ok) {

@@ -66,6 +66,12 @@ export interface CliRecordRequest {
 	 * windows the user focused. Requires display capture (not --window).
 	 */
 	followWindows: boolean;
+	/**
+	 * Multi-window capture (macOS): comma-separated window-title filters.
+	 * Every matched window is recorded continuously in parallel; export
+	 * switches between them following focus, with slide transitions.
+	 */
+	windows: string[] | null;
 }
 
 export interface CliSourcesRequest {
@@ -117,6 +123,9 @@ export interface CliDoneResult {
 	cursorDataPath?: string;
 	/** Record --follow-windows: written window-focus telemetry sidecar. */
 	focusDataPath?: string;
+	/** Record --windows: written multi-window manifest. */
+	multiWindowManifestPath?: string;
+	videoPaths?: string[];
 	projectPath?: string;
 	durationMs?: number;
 	/**
