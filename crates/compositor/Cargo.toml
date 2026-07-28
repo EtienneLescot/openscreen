@@ -18,3 +18,9 @@ serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
 windows.workspace = true
+# Native GIF export (slice 1 — behind a feature flag, the renderer still uses
+# `gif.js` in `src/lib/exporter/gifExporter.ts`). The GIF89a writer, the LZW
+# encoder, and the median-cut palette are all hand-rolled in `gif_export.rs` —
+# no new crate deps, no GPL pull-ins, no swscale round-trip. See
+# `gif_export.rs` for the readback path and the wall-time expectations; the
+# bench in `crates/poc-d3d/src/bench.rs` is the honest signal.

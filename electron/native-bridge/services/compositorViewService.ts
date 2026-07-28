@@ -11,6 +11,8 @@ import type {
 	CompositorViewRect,
 	ExportParamsInput,
 	ExportStats,
+	GifExportStats,
+	GifParamsInput,
 	NativeFramePacket,
 } from "../../native/compositor-view/addon";
 
@@ -490,5 +492,27 @@ export class CompositorViewService {
 			params,
 			onProgress,
 		);
+	}
+
+	/** Native single-clip GIF export (slice 1, behind `NATIVE_GIF_EXPORT_ENABLED`).
+	 *  Mirrors `exportMulti`'s shape, but the slice-1 surface is deliberately small:
+	 *  one screen + one webcam file, optional cursor sidecar (`<screen>.cursor.json`),
+	 *  no multiclip, no app `SceneDescription` (the Player drives the compositing,
+	 *  same as the live preview). Returns null when the addon is absent — the renderer
+	 *  treats that as "fall back to the legacy `gif.js` path" without raising. */
+	async exportGif(
+		screenPath: string,
+		webcamPath: string,
+		cursorPath?: string | null,
+		outPath?: string,
+		params?: GifParamsInput,
+		onProgress?: (frames: number) => void,
+	): Promise<GifExportStats | null> {
+		const addon = this.ensureAddon();
+		if (!addon) {
+			return null;
+		}
+		const target = outPath ?? path.join(app.getPath("temp"), "openscreen-native-export.gif");
+		return addon.exportGif(screenPath, webcamPath, cursorPath ?? null, target, params, onProgress);
 	}
 }
