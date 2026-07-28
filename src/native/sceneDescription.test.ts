@@ -11,13 +11,13 @@ import {
 	getZoomScale,
 	ZOOM_DEPTH_SCALES,
 } from "@/components/video-editor/types";
-import { getFocusBoundsForScale } from "@/components/video-editor/videoPlayback/focusUtils";
 import type {
 	AxcutAsset,
 	AxcutClip,
 	AxcutDocument,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
+import { getFocusBoundsForScale } from "@/lib/zoomMath/focusUtils";
 import { buildSceneDescription } from "./sceneDescription";
 
 // --- Fixture helpers --------------------------------------------------------
