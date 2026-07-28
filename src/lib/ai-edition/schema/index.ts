@@ -14,7 +14,9 @@ import { z } from "zod";
 // Cycle-safe: `aspectRatioUtils` has no schema dependency, and `document/outputFormat`
 // is downstream of schema. We import the leaf tokeniser directly so the v5→v6 upgrader
 // can rewrite `"native"` without dragging in the whole output-format module.
-import { toAspectRatioToken } from "@/utils/aspectRatioUtils";
+// Relative, not `@/`: the Electron main bundle imports this module and
+// vite-plugin-electron builds it without the root resolve.alias.
+import { toAspectRatioToken } from "../../../utils/aspectRatioUtils";
 // Cycle-safe: `document/ids` only pulls `uuid`, and `timeline/timelineMap`'s
 // transitive value-imports (region-ventilation, virtual-preview) import from this
 // module TYPE-ONLY, so requiring them here never re-enters schema at runtime.
@@ -533,10 +535,15 @@ function upgradeV4DocumentToV5(raw: unknown): unknown {
  * `referenceClipDims` pick from `document/outputFormat` — duplicated here so the schema
  * package doesn't import from a module that itself imports from this one (cycle), and so
  * the upgrader doesn't need the runtime `probedAssetDims` map (it runs at load time, before
- * any asset is probed). Crop is intentionally ignored: v5 docs store the crop on the
- * clip, but a v5→v6 rewrite only needs *some* reasonable concrete token, and the runtime
- * bridge in `resolveAspectRatioValue` already accepted this same approximation.
+ * any asset is probed). Crop IS applied: `"native"` resolved to the *cropped* clip
+ * dimensions at runtime (`clipEffectiveDims` → `calculateEffectiveSourceDimensions`),
+ * so ignoring it here would silently reframe every cropped project.
  */
+/** Mirrors `atLeastEven` in mp4ExportSettings — H.264 4:2:0 rejects odd dims. */
+function atLeastEven(value: number): number {
+	return Math.max(2, Math.floor(value / 2) * 2);
+}
+
 function largestClipDims(doc: Record<string, unknown>): { width: number; height: number } | null {
 	const timeline = (doc.timeline ?? {}) as Record<string, unknown>;
 	const clips = Array.isArray(timeline.clips) ? timeline.clips : [];
@@ -557,9 +564,19 @@ function largestClipDims(doc: Record<string, unknown>): { width: number; height:
 		const asset = assetById.get(assetId);
 		if (!asset) continue;
 		const video = (asset.video ?? {}) as Record<string, unknown>;
-		const w = typeof video.width === "number" ? video.width : 0;
-		const h = typeof video.height === "number" ? video.height : 0;
-		if (w <= 0 || h <= 0) continue;
+		const rawW = typeof video.width === "number" ? video.width : 0;
+		const rawH = typeof video.height === "number" ? video.height : 0;
+		if (rawW <= 0 || rawH <= 0) continue;
+		// Apply the clip's crop, exactly as `calculateEffectiveSourceDimensions`
+		// (mp4ExportSettings) does at runtime — including the snap to even pixels,
+		// so the reduced token matches the size the encoder is actually handed.
+		// "native" meant "the cropped source's shape"; ignoring crop here would
+		// bake the wrong ratio into every cropped project.
+		const crop = (c.cropRegion ?? {}) as Record<string, unknown>;
+		const cropW = typeof crop.width === "number" && crop.width > 0 ? crop.width : 1;
+		const cropH = typeof crop.height === "number" && crop.height > 0 ? crop.height : 1;
+		const w = atLeastEven(Math.round(rawW * cropW));
+		const h = atLeastEven(Math.round(rawH * cropH));
 		const area = w * h;
 		if (area > bestArea) {
 			bestArea = area;
