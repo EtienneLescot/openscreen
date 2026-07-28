@@ -190,61 +190,42 @@ fn screen_source_rect(
     [su0, sv0, su0 + 2.0 * hu, sv0 + 2.0 * hv]
 }
 
-/// Part du zoom absorbée par la BOÎTE de destination (le « zoom frame ») plutôt que par la
-/// coupe source — issue #179.
+/// Rect DESTINATION de l'écran quand on dessine une coupe source PLUS LARGE que celle qui
+/// remplissait la boîte — le cœur du correctif #179.
 ///
-/// Le zoom natif se joue entièrement dans le rect SOURCE (`screen_source_rect` rétrécit la
-/// coupe autour du focus) pendant que la boîte, elle, ne bouge pas : le zoom s'arrête donc
-/// à la frontière paddée au lieu d'atteindre les bords du cadre. La référence web fait
-/// l'inverse — `applyZoomTransform` (TS) met à l'échelle le CONTENEUR CAMÉRA, masque
-/// compris, donc la boîte paddée grandit avec le zoom et le padding s'efface.
+/// Le zoom natif se jouait entièrement dans la coupe source (`screen_source_rect` rétrécit
+/// la coupe autour du focus) pendant que la boîte, elle, ne bougeait pas : le zoom
+/// s'arrêtait donc à la frontière paddée au lieu d'atteindre les bords du cadre. La
+/// référence fait l'inverse — `applyZoomTransform` (TS) met à l'échelle et translate le
+/// CONTENEUR CAMÉRA, masque compris, donc la boîte paddée grandit avec le zoom, sort de
+/// l'étage, et le padding s'efface.
 ///
-/// On répartit donc le zoom entre les deux : la boîte grandit d'un facteur `g`, la coupe
-/// source ne porte plus que le reste (`zoom / g`). Le PRODUIT reste `zoom`, donc le
-/// grossissement à l'écran est exactement celui demandé par la région. C'est tout l'enjeu
-/// du partage : un `g` qui *multiplierait* le zoom au lieu de le partager rendrait une
-/// région 1.25× à 1.56× (padding 50 %) — pas ce que la timeline annonce.
+/// On rend donc le zoom à la boîte : la coupe dessinée redevient le simple crop
+/// (`cut`, zoom 1) et c'est la boîte qui porte le grossissement. `cut_ref` est la coupe
+/// d'AVANT (zoom entier, celle qui remplissait `base`) et sert de référence : on reporte
+/// `cut` à travers le mapping `cut_ref → base`.
 ///
-/// Deux bornes sur `g` :
-/// * `cover` — la taille qui couvre le cadre. Au-delà, grandir n'ajoute rien (le rasterizer
-///   coupe) ; c'est exactement le point où le padding a fini de s'effacer. Elle se déduit du
-///   rect RÉEL, pas de `padding_scale` : une coupe letterboxée (crop 16:9 dans une sortie
-///   9:16) a des bandes qu'aucun facteur de padding ne décrit.
-/// * le focus — la coupe source doit rester CENTRABLE sur le point visé, sinon
-///   `screen_source_rect` la recale contre le bord du crop et le zoom cesse de viser. Elle
-///   tient tant que `zoom / g >= 1 / (2·min(c, 1-c))`. C'est la même contrainte que
-///   `getFocusBoundsForScale` (TS) applique en amont en bornant le focus à `1/(2·zoom)` du
-///   bord : sur cette borne le budget vaut exactement 1 (le zoom part entièrement dans le
-///   pan), et il ne dépasse 1 qu'à l'intérieur. Un focus au bord garde donc son padding,
-///   un focus plus central le mange.
-fn screen_zoom_growth(zoom: f32, focus: [f32; 2], base: [f32; 4]) -> f32 {
-    if !zoom.is_finite() || zoom <= 1.0 {
-        return 1.0;
+/// C'est ce report qui fait toute la sûreté du correctif. Le mapping image→écran est
+/// conservé PAR CONSTRUCTION — même grossissement, même cadrage, même point de focus au
+/// même pixel — quel que soit le crop, le clamp de bord ou le `cover`, puisque tout cela
+/// est déjà cuit dans les deux coupes. Seule l'ÉTENDUE dessinée grandit, et c'est
+/// exactement elle qui déborde le padding. Tout ce qui roule sur ce mapping (curseur,
+/// tilt 3D, motion blur) est donc inchangé.
+///
+/// Pas de clamp dans le cadre : la boîte doit pouvoir en sortir (« No stage clamping »,
+/// `frameRenderer.cameraAwareMaskRect`) — le rasterizer coupe ce qui dépasse, comme il le
+/// fait déjà pour le fond flouté.
+fn remap_box(base: [f32; 4], cut_ref: [f32; 4], cut: [f32; 4]) -> [f32; 4] {
+    let (rw, rh) = ((cut_ref[2] - cut_ref[0]), (cut_ref[3] - cut_ref[1]));
+    if !(rw > 1e-6 && rh > 1e-6) {
+        return base;
     }
-    let cover = (1.0 / base[2].max(1e-4)).max(1.0 / base[3].max(1e-4));
-    // Marge restante de part et d'autre du focus, normalisée : 1 au centre, 0 sur un bord.
-    // Même normalisation du focus que `screen_source_rect`, pour que les deux bornes parlent
-    // du même point.
-    let room = |c: f32| {
-        let c = if c.is_finite() { c.clamp(0.0, 1.0) } else { 0.5 };
-        2.0 * c.min(1.0 - c)
-    };
-    zoom.min(cover).min(zoom * room(focus[0]).min(room(focus[1]))).max(1.0)
-}
-
-/// Grandit un rect autour de son CENTRE. C'est le seul ancrage qui laisse le point de focus
-/// tomber exactement là où il tombait sans croissance (cf. le test
-/// `growing_the_zoom_frame_leaves_the_focus_where_it_was`) : la boîte grandit de `g`, la
-/// coupe source rétrécit de `g`, et les deux décalages s'annulent au centre.
-///
-/// Volontairement PAS clampé dans le cadre : un rect décentré (presets en bloc) glisserait
-/// de côté en grandissant — ce qui casserait justement cette annulation — et ses coins
-/// arrondis resteraient collés au bord du cadre au lieu d'en sortir. La référence ne clampe
-/// pas non plus (« No stage clamping », `frameRenderer.cameraAwareMaskRect`), et le
-/// rasterizer coupe ce qui dépasse (le fond flouté sort déjà du cadre de la même façon).
-fn grow_around_center(rect: [f32; 4], g: f32) -> [f32; 4] {
-    let (nw, nh) = (rect[2] * g, rect[3] * g);
-    [rect[0] + (rect[2] - nw) * 0.5, rect[1] + (rect[3] - nh) * 0.5, nw, nh]
+    [
+        base[0] + base[2] * (cut[0] - cut_ref[0]) / rw,
+        base[1] + base[3] * (cut[1] - cut_ref[1]) / rh,
+        base[2] * (cut[2] - cut[0]) / rw,
+        base[3] * (cut[3] - cut[1]) / rh,
+    ]
 }
 
 /// Sous-rect SOURCE (en UV de texture) qui remplit une boîte de ratio `box_ar` **sans
@@ -1900,25 +1881,43 @@ impl Compositor {
             }
         };
         // Issue #179 : le zoom se jouait entièrement dans la coupe source, donc la boîte
-        // écran restait au rect paddé et le zoom s'arrêtait à cette frontière au lieu
-        // d'atteindre les bords du cadre. On en donne désormais une part à la BOÎTE
-        // (`screen_zoom_growth`) et on retire cette même part à la coupe source (plus bas,
-        // `p.zoom / s_growth`).
-        //
-        // Le point clé : (boîte, coupe) forment UN SEUL mapping affine image→écran, et le
-        // partager ne le change pas — même grossissement, même point de focus au même
-        // endroit (les deux tests plus bas le figent). Tout ce qui roule sur ce mapping —
-        // le curseur, le tilt 3D, le motion blur — est donc inchangé par construction ; la
-        // seule différence est l'ÉTENDUE dessinée, qui déborde maintenant le padding.
-        // C'est exactement ce que demande l'issue, et rien de plus.
+        // écran restait au rect paddé et le zoom butait sur cette frontière au lieu
+        // d'atteindre les bords du cadre. On rend le zoom à la BOÎTE (cf. `remap_box`) :
+        // la coupe dessinée redevient le crop nu, la boîte porte le grossissement et
+        // déborde le padding — c'est la géométrie de `applyZoomTransform` (TS).
         let s_base = fit_screen(p.screen.dst);
         let s_base_prev = fit_screen(pp.screen.dst);
-        // `p.focus` (et non `pp.focus`) pour la frame précédente : même choix que la coupe
-        // source plus bas, qui garde volontairement le focus courant.
-        let s_growth = screen_zoom_growth(p.zoom, p.focus, s_base);
-        let s_growth_prev = screen_zoom_growth(pp.zoom, p.focus, s_base_prev);
-        let s_dst = grow_around_center(s_base, s_growth);
-        let s_dst_prev = grow_around_center(s_base_prev, s_growth_prev);
+        // Layouts "bloc" (side-by-side / top-bottom) : la boîte écran est un SLOT au ratio
+        // arbitraire, et le web y fait tenir l'image en `cover` (`computeCompositeLayout`
+        // renvoie `screenCover: true`, honoré par `frameRenderer`). Le natif l'ignorait, donc
+        // il étirait la source pour remplir le slot — visible dès que le clip est recadré,
+        // puisque le crop éloigne encore le ratio de la source de celui du slot.
+        //
+        // Le cover s'applique APRÈS le crop et le zoom, sur leur rect résultant : le crop
+        // décide quoi montrer, le zoom où regarder, le cover comment habiller la boîte. Son
+        // ratio de boîte se lit sur `s_base` : `remap_box` met les deux axes à la même
+        // échelle, donc la boîte finale a le même ratio et le cover ne dépend pas d'elle
+        // (ce qui casserait la circularité coupe → boîte → coupe).
+        let cover_box_ar = scene_ref.as_ref().and_then(|s| {
+            s.layout
+                .screen_cover
+                .then_some((s_base[2] * self.rw()) / (s_base[3] * self.rh()).max(0.0001))
+        });
+        let cover = |uv: [f32; 4]| -> [f32; 4] {
+            match cover_box_ar {
+                Some(ar) => cover_uv_rect(uv, [stw as f32, sth as f32], ar),
+                None => uv,
+            }
+        };
+        // La coupe RÉFÉRENCE (zoom entier) est celle qui remplissait la boîte paddée avant
+        // ce correctif ; la coupe DESSINÉE ne porte plus que le crop. `remap_box` reporte la
+        // seconde à travers le mapping de la première, ce qui conserve le cadrage exact.
+        // Le focus courant reste volontairement utilisé pour la frame précédente, comme avant.
+        let cut_ref = cover(screen_source_rect(u_max, v_max, active_crop, p.zoom, p.focus));
+        let cut_ref_prev = cover(screen_source_rect(u_max, v_max, active_crop, pp.zoom, p.focus));
+        let cut = cover(screen_source_rect(u_max, v_max, active_crop, 1.0, p.focus));
+        let s_dst = remap_box(s_base, cut_ref, cut);
+        let s_dst_prev = remap_box(s_base_prev, cut_ref_prev, cut);
         // le padding n'affecte QUE l'écran (la quantité de fond révélée). La webcam reste ancrée
         // en bas-droite à sa marge fixe, quelle que soit la valeur de padding (pas de scale_frame)
         // — SAUF quand l'app a résolu un placement explicite (`app_webcam_rect`, drag-to-reposition
@@ -2124,37 +2123,12 @@ impl Compositor {
         // `active_crop` déjà résolu plus haut (utilisé pour dimensionner `s_dst`) — une seule
         // source de vérité pour ce lookup.
         let s_px = [s_dst[2] * self.rw(), s_dst[3] * self.rh()];
-        // Layouts "bloc" (side-by-side / top-bottom) : la boîte écran est un SLOT au ratio
-        // arbitraire, et le web y fait tenir l'image en `cover` (`computeCompositeLayout`
-        // renvoie `screenCover: true`, honoré par `frameRenderer`). Le natif l'ignorait, donc
-        // il étirait la source pour remplir le slot — visible dès que le clip est recadré,
-        // puisque le crop éloigne encore le ratio de la source de celui du slot.
-        //
-        // Le cover s'applique APRÈS le crop et le zoom, sur leur rect résultant : le crop
-        // décide quoi montrer, le zoom où regarder, le cover comment habiller la boîte.
-        let cover_box_ar = scene_ref
-            .as_ref()
-            .and_then(|s| s.layout.screen_cover.then_some(s_px[0] / s_px[1].max(0.0001)));
-        let cover = |uv: [f32; 4]| -> [f32; 4] {
-            match cover_box_ar {
-                Some(ar) => cover_uv_rect(uv, [stw as f32, sth as f32], ar),
-                None => uv,
-            }
-        };
-        // `/ s_growth` : la boîte a déjà absorbé cette part du zoom (cf. `screen_zoom_growth`).
-        // Passer `p.zoom` entier ici rezoomerait par-dessus la boîte agrandie et rendrait la
-        // région plus profonde que ce que la timeline annonce.
-        let [su0, sv0, su1, sv1] =
-            cover(screen_source_rect(u_max, v_max, active_crop, p.zoom / s_growth, p.focus));
+        // Coupes calculées plus haut (elles dimensionnent `s_dst`) : le zoom vit désormais
+        // dans la boîte, la coupe ne porte que le crop. `dst_prev` porte la vélocité du
+        // motion blur — la coupe, elle, est la même aux deux frames.
+        let [su0, sv0, su1, sv1] = cut;
         let (hu, hv) = ((su1 - su0) * 0.5, (sv1 - sv0) * 0.5);
-        // Le focus courant reste volontairement utilisé pour la frame précédente, comme avant.
-        let [su0_p, sv0_p, su1_p, sv1_p] = cover(screen_source_rect(
-            u_max,
-            v_max,
-            active_crop,
-            pp.zoom / s_growth_prev,
-            p.focus,
-        ));
+        let [su0_p, sv0_p, su1_p, sv1_p] = cut;
         let (hu_p, hv_p) = ((su1_p - su0_p) * 0.5, (sv1_p - sv0_p) * 0.5);
         // Géométrie du tilt, calculée UNE fois : l'ombre et l'écran doivent porter exactement le
         // même quadrilatère. Deux calculs séparés, c'est une ombre qui se décolle dès qu'un des
@@ -3407,97 +3381,106 @@ mod tests {
         assert_rect(screen_source_rect(0.8, 0.9, Some(crop), 2.0, [1.0, 1.0]), [0.4, 0.36, 0.6, 0.63]);
     }
 
-    // --- partage du zoom entre la boîte et la coupe (issue #179) ------------
-    // La boîte prend une part du zoom pour déborder le padding. Le mapping image→écran,
-    // lui, ne doit PAS bouger : ces deux tests le figent, parce que c'est précisément ce
-    // qu'un partage mal fait casse en silence (zoom trop profond, focus qui dérive).
+    // --- le zoom rendu à la boîte (issue #179) ------------------------------
+    // Le zoom déplace et agrandit la boîte au lieu de rétrécir la coupe. Deux choses à
+    // figer, et elles tirent en sens inverse : la boîte DOIT déborder le padding (l'issue),
+    // et le mapping image→écran ne doit PAS bouger (tout le reste du compositeur en
+    // dépend). Une version antérieure de ce correctif protégeait si bien le second qu'elle
+    // annulait le premier dès que le focus n'était pas centré — d'où le balayage sur des
+    // focus décentrés dans les deux tests.
 
     /// Boîte paddée (padding 50 % → `scale_frame` 0.8) dans une sortie carrée : le cas
     /// plein cadre de l'issue.
     const PADDED: [f32; 4] = [0.1, 0.1, 0.8, 0.8];
 
-    /// Le couple (boîte, coupe) réellement envoyé au GPU, pour une croissance donnée.
-    /// `u_max`/`v_max` à 1 et pas de crop : la coupe est donc directement en fractions.
-    fn mapping(base: [f32; 4], zoom: f32, focus: [f32; 2], g: f32) -> ([f32; 4], [f32; 4]) {
-        (grow_around_center(base, g), screen_source_rect(1.0, 1.0, None, zoom / g, focus))
+    /// Les zooms d'un preset (`ZOOM_DEPTH_SCALES`, TS) et des focus réalistes — dont des
+    /// focus très décentrés, que le suivi de curseur produit en permanence.
+    const ZOOMS: [f32; 6] = [1.0, 1.25, 1.5, 1.8, 2.2, 3.5];
+    const FOCUSES: [[f32; 2]; 6] = [
+        [0.5, 0.5],
+        [0.3, 0.5],
+        [0.5, 0.8],
+        [0.15, 0.9],
+        [0.85, 0.2],
+        [0.0, 1.0],
+    ];
+
+    /// Le couple (boîte, coupe) réellement envoyé au GPU. `u_max`/`v_max` à 1 et pas de
+    /// crop : la coupe est donc directement en fractions d'image.
+    fn drawn(base: [f32; 4], zoom: f32, focus: [f32; 2]) -> ([f32; 4], [f32; 4]) {
+        let cut_ref = screen_source_rect(1.0, 1.0, None, zoom, focus);
+        let cut = screen_source_rect(1.0, 1.0, None, 1.0, focus);
+        (remap_box(base, cut_ref, cut), cut)
     }
 
-    /// Où le point de focus atterrit à l'écran, en fraction du CADRE.
-    fn focus_on_screen(base: [f32; 4], zoom: f32, focus: [f32; 2], g: f32) -> [f32; 2] {
-        let (dst, src) = mapping(base, zoom, focus, g);
+    /// Où un point de l'image atterrit à l'écran, en fraction du CADRE.
+    fn on_screen(base: [f32; 4], zoom: f32, focus: [f32; 2], point: [f32; 2]) -> [f32; 2] {
+        let (dst, src) = drawn(base, zoom, focus);
         let at = |f: f32, s0: f32, s1: f32, d0: f32, dw: f32| d0 + dw * (f - s0) / (s1 - s0);
         [
-            at(focus[0], src[0], src[2], dst[0], dst[2]),
-            at(focus[1], src[1], src[3], dst[1], dst[3]),
+            at(point[0], src[0], src[2], dst[0], dst[2]),
+            at(point[1], src[1], src[3], dst[1], dst[3]),
         ]
     }
 
-    /// Grossissement à l'écran : pixels de cadre par unité de source.
-    fn magnification(base: [f32; 4], zoom: f32, focus: [f32; 2], g: f32) -> f32 {
-        let (dst, src) = mapping(base, zoom, focus, g);
-        dst[2] / (src[2] - src[0])
+    /// Le mapping d'avant : la coupe zoomée remplissait la boîte paddée, sans la bouger.
+    fn on_screen_before(base: [f32; 4], zoom: f32, focus: [f32; 2], point: [f32; 2]) -> [f32; 2] {
+        let src = screen_source_rect(1.0, 1.0, None, zoom, focus);
+        let at = |f: f32, s0: f32, s1: f32, d0: f32, dw: f32| d0 + dw * (f - s0) / (s1 - s0);
+        [
+            at(point[0], src[0], src[2], base[0], base[2]),
+            at(point[1], src[1], src[3], base[1], base[3]),
+        ]
     }
 
-    /// L'invariant qui compte : donner une part du zoom à la boîte ne change NI le
-    /// grossissement NI la position du focus — seulement l'étendue dessinée. Balayé sur
-    /// des zooms et des focus variés, dont les bords.
+    /// L'invariant : rendre le zoom à la boîte ne déplace AUCUN point de l'image — même
+    /// grossissement, même cadrage. Seule l'étendue dessinée change.
     #[test]
-    fn growing_the_zoom_frame_leaves_the_focus_where_it_was() {
-        for &zoom in &[1.0, 1.25, 1.5, 1.8, 2.2, 3.5, 5.0] {
-            for &focus in &[[0.5, 0.5], [0.3, 0.5], [0.5, 0.8], [0.12, 0.9], [0.0, 1.0]] {
-                let g = screen_zoom_growth(zoom, focus, PADDED);
-                assert!(g >= 1.0, "la boîte ne rétrécit jamais (zoom {zoom}, g {g})");
-                let (was, now) = (
-                    focus_on_screen(PADDED, zoom, focus, 1.0),
-                    focus_on_screen(PADDED, zoom, focus, g),
-                );
-                assert!(
-                    (was[0] - now[0]).abs() < 1e-4 && (was[1] - now[1]).abs() < 1e-4,
-                    "focus déplacé (zoom {zoom}, focus {focus:?}, g {g}) : {was:?} → {now:?}"
-                );
-                let (mw, mn) = (
-                    magnification(PADDED, zoom, focus, 1.0),
-                    magnification(PADDED, zoom, focus, g),
-                );
-                assert!(
-                    (mw - mn).abs() < 1e-3,
-                    "grossissement changé (zoom {zoom}, focus {focus:?}) : {mw} → {mn}"
-                );
+    fn handing_the_zoom_to_the_box_moves_no_pixel() {
+        for &zoom in &ZOOMS {
+            for &focus in &FOCUSES {
+                for &point in &[[0.5, 0.5], [0.0, 0.0], [1.0, 1.0], [0.25, 0.75]] {
+                    let (was, now) = (
+                        on_screen_before(PADDED, zoom, focus, point),
+                        on_screen(PADDED, zoom, focus, point),
+                    );
+                    assert!(
+                        (was[0] - now[0]).abs() < 1e-4 && (was[1] - now[1]).abs() < 1e-4,
+                        "point {point:?} déplacé (zoom {zoom}, focus {focus:?}) : {was:?} → {now:?}"
+                    );
+                }
             }
         }
     }
 
-    /// Ce que l'issue demande : passé le zoom qui couvre le cadre, la boîte l'atteint —
-    /// le padding a disparu. Et sans padding il n'y a rien à déborder : pas de croissance.
+    /// Ce que l'issue demande, et la régression que le testeur a vue : dès qu'on zoome, la
+    /// boîte doit déborder le rect paddé — y compris (surtout) avec un focus décentré.
     #[test]
-    fn the_zoom_frame_reaches_the_frame_edges_and_stops_there() {
-        let g = screen_zoom_growth(2.2, [0.5, 0.5], PADDED);
-        let dst = grow_around_center(PADDED, g);
-        assert_rect(dst, [0.0, 0.0, 1.0, 1.0]);
-        // La borne est bien la couverture du cadre, pas une valeur de padding : une coupe
-        // letterboxée (bandes hautes/basses) continue de grandir jusqu'à les manger.
-        let letterboxed = [0.1, 0.36, 0.8, 0.28];
-        let g = screen_zoom_growth(5.0, [0.5, 0.5], letterboxed);
-        let dst = grow_around_center(letterboxed, g);
-        assert!(dst[1] <= 0.0 && dst[1] + dst[3] >= 1.0, "bandes non résorbées : {dst:?}");
-
-        assert_eq!(screen_zoom_growth(2.0, [0.5, 0.5], [0.0, 0.0, 1.0, 1.0]), 1.0);
-        assert_eq!(screen_zoom_growth(1.0, [0.5, 0.5], PADDED), 1.0);
-    }
-
-    /// Un zoom posé sur sa limite de focus a déjà tout dépensé à viser : rien pour la
-    /// boîte, et c'est le bon arbitrage — viser juste prime sur manger le padding.
-    #[test]
-    fn a_zoom_pinned_on_its_focus_limit_keeps_its_pan_rather_than_the_padding() {
-        // `getFocusBoundsForScale` (TS) borne déjà le focus à `1/(2·zoom)` du bord : pile
-        // l'endroit où la coupe source touche le bord du crop. Quelle que soit la
-        // profondeur, un focus posé DESSUS ne laisse aucune marge.
-        for &zoom in &[1.5, 2.2, 3.5] {
-            let edge = 1.0 / (2.0 * zoom);
-            assert_eq!(screen_zoom_growth(zoom, [edge, 0.5], PADDED), 1.0);
+    fn any_zoom_overflows_the_padding() {
+        for &zoom in &ZOOMS {
+            for &focus in &FOCUSES {
+                let (dst, _) = drawn(PADDED, zoom, focus);
+                let grew = dst[2] / PADDED[2];
+                assert!(
+                    (grew - zoom).abs() < 1e-4,
+                    "la boîte n'a pas pris le zoom (zoom {zoom}, focus {focus:?}) : ×{grew}"
+                );
+                if zoom > 1.0 {
+                    // Elle dépasse le rect paddé d'au moins un bord, donc mange du padding.
+                    assert!(
+                        dst[0] < PADDED[0] - 1e-6 || dst[0] + dst[2] > PADDED[0] + PADDED[2] + 1e-6,
+                        "boîte encore dans le padding (zoom {zoom}, focus {focus:?}) : {dst:?}"
+                    );
+                }
+            }
         }
-        // À l'intérieur de ces bornes, en revanche, la boîte profite de la marge.
-        assert!(screen_zoom_growth(3.5, [0.35, 0.5], PADDED) > 1.0);
+        // Focus centré : le padding disparaît des QUATRE côtés dès que le zoom suffit à
+        // couvrir le cadre (ici 1/0.8 = 1.25).
+        let (dst, _) = drawn(PADDED, 1.25, [0.5, 0.5]);
+        assert_rect(dst, [0.0, 0.0, 1.0, 1.0]);
+        // Sans padding il n'y a rien à déborder, mais la boîte porte quand même le zoom.
+        let (dst, _) = drawn([0.0, 0.0, 1.0, 1.0], 2.0, [0.5, 0.5]);
+        assert_rect(dst, [-0.5, -0.5, 2.0, 2.0]);
     }
 
     // --- cover_crop_uv : la caméra n'est jamais étirée --------------------
