@@ -732,18 +732,14 @@ export type NativeBridgeRequest =
 	| {
 			domain: "compositor";
 			action: "exportGif";
-			/** Slice 1 du chemin natif GIF (derrière `NATIVE_GIF_EXPORT_ENABLED`,
-			 *  flag off pour cette PR). Surface réduite à un seul clip (screen +
-			 *  webcam + cursor sidecar optionnel) pour matcher la fonction Rust
-			 *  `gif_export::export_gif` ; le multiclip / scene JSON viendront
-			 *  dans une slice ultérieure si la bench passe. */
+			/** Même payload que `exportMulti` : GIF et MP4 sont le même rendu
+			 *  (`walk_composited_timeline` côté Rust) et ne diffèrent que par
+			 *  l'encodeur. La scène porte fond / layout / webcam / curseur, donc
+			 *  il n'y a aucune entrée spécifique au GIF. */
 			payload: {
-				screenPath: string;
-				webcamPath: string;
-				/** Sidecar `<screen>.cursor.json` selon la convention `ExportDialog`.
-				 *  Optionnel : null / absent → rend sans curseur. */
-				cursorPath?: string | null;
+				clips: CompositorClipInput[];
 				outPath?: string;
+				sceneJson?: string;
 				params?: CompositorExportGifParams;
 			};
 			requestId?: string;

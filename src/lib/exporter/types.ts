@@ -33,6 +33,12 @@ export type ExportQuality = "medium" | "good" | "source";
 // GIF Export Types
 export type ExportFormat = "mp4" | "gif";
 
+/** Video codec for the MP4 container. GIF is a single codec, so this doesn't
+ *  apply to it. (`vp9` is offered by the type but the native exporter rejects
+ *  it with a clear message — there is no hardware AMF equivalent and the
+ *  software path measured too slow to ship.) */
+export type ExportVideoCodec = "h264" | "h265" | "vp9";
+
 export type GifFrameRate = 15 | 20 | 25 | 30;
 
 export type GifSizePreset = "medium" | "large" | "original";
