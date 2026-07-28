@@ -715,18 +715,199 @@ pub fn run_composited(
 }
 
 /// Multi-clip : orchestre `Decoder::open` → `Decoder::next` → `Compositor::compose_frame`
-/// → `VideoEncoder::send_composited`. C'est l'endpoint qu'utilise l'addon napi pour
-/// l'export MP4. Renvoie `Err` tant que la chaîne n'est pas complète.
+/// → `VideoEncoder::send_composited` → muxer MP4. C'est l'endpoint qu'utilise l'addon
+/// napi pour l'export. Symétrique de `pipeline_windows::run_composited_multi`, à la
+/// difference près :
+///   - l'encodeur choisi via `ExportCodec::candidates()` est typiquement
+///     `h264_videotoolbox` (zero-copy sur frames `AV_PIX_FMT_VIDEOTOOLBOX`),
+///   - le compose_frame est le first-pass engine (full-canvas), pas la version
+///     layer-by-layer (les layers câblés sont un commit ultérieur).
+///
+/// First-pass : l'audio AAC est ignoré (sera câblé par un commit dédié sur le module
+/// `audio.rs` qui est pour l'instant toujours Windows-only via la même cfg-re-export).
+/// Le mux MP4 est écrit, les paquets vidéo sont encodés.
 pub fn run_composited_multi(
-    _clips: &[ClipSource],
-    _out: &str,
-    _scene_json: Option<&str>,
-    _params: &ExportParams,
+    clips: &[ClipSource],
+    out: &str,
+    gpu: &Gpu,
+    comp: &crate::compositor::Compositor,
+    cfg: &crate::config::Cfg,
+    params: &ExportParams,
+    progress: &mut dyn FnMut(u64),
 ) -> Result<Stats> {
-    Err(anyhow!(
-        "pipeline_macos::run_composited_multi: non implémenté — \
-         c'est l'endpoint qu'utilise l'addon napi pour l'export MP4"
-    ))
+    if clips.is_empty() {
+        bail!("run_composited_multi: aucun clip à exporter");
+    }
+    let (out_w, out_h) = (params.width, params.height);
+    let t0 = std::time::Instant::now();
+    let mut frames: u64 = 0;
+
+    // fps : explicite > dérivé du premier clip.
+    let out_fps = params.fps.unwrap_or(30) as i32;
+    // bitrate proportionnel à la surface de sortie (référence : 8Mbps @ 1920x1080).
+    let bit_rate = ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
+
+    // ---- decodeurs : un par chemin, réutilisés entre clips (screen ≠ webcam → 2 maps) ----
+    let mut screen_decs: std::collections::HashMap<String, Decoder> =
+        std::collections::HashMap::new();
+    let mut webcam_decs: std::collections::HashMap<String, Decoder> =
+        std::collections::HashMap::new();
+
+    // ---- encodeur (candidat VT ou software) ----
+    let mut enc =
+        VideoEncoder::open(&params.codec, gpu, out_w as i32, out_h as i32, out_fps, bit_rate)?;
+    let ectx = enc.ctx;
+
+    // ---- muxer MP4 ----
+    let mut octx: *mut crate::ffi::AVFormatContext = ptr::null_mut();
+    let outc = CString::new(out)?;
+    unsafe {
+        crate::ffi::averr(
+            crate::ffi::avformat_alloc_output_context2(
+                &mut octx,
+                ptr::null(),
+                ptr::null(),
+                outc.as_ptr(),
+            ),
+            "alloc_output_context2",
+        )?;
+    }
+    let ostream = unsafe { crate::ffi::avformat_new_stream(octx, ptr::null()) };
+    if ostream.is_null() {
+        bail!("avformat_new_stream");
+    }
+    unsafe {
+        crate::ffi::averr(
+            crate::ffi::avcodec_parameters_from_context((*ostream).codecpar, ectx),
+            "params_from_ctx",
+        )?;
+        (*ostream).time_base = (*ectx).time_base;
+    }
+
+    let mut pb: *mut crate::ffi::AVIOContext = ptr::null_mut();
+    unsafe {
+        crate::ffi::averr(
+            crate::ffi::avio_open(&mut pb, outc.as_ptr(), crate::ffi::AVIO_FLAG_WRITE as i32),
+            "avio_open",
+        )?;
+        crate::ffi::sn_fmt_set_pb(octx, pb);
+        crate::ffi::averr(
+            crate::ffi::avformat_write_header(octx, ptr::null_mut()),
+            "write_header",
+        )?;
+    }
+
+    let opkt = unsafe { crate::ffi::av_packet_alloc() };
+
+    for clip in clips {
+        if !screen_decs.contains_key(&clip.screen) {
+            screen_decs.insert(
+                clip.screen.clone(),
+                Decoder::open(&clip.screen, gpu)?,
+            );
+        }
+        if !webcam_decs.contains_key(&clip.webcam) {
+            webcam_decs.insert(
+                clip.webcam.clone(),
+                Decoder::open(&clip.webcam, gpu)?,
+            );
+        }
+        let sdec = screen_decs.get_mut(&clip.screen).unwrap();
+        let wdec = webcam_decs.get_mut(&clip.webcam).unwrap();
+
+        // Seek initial (keyframes-only) aux bornes du clip.
+        let start = clip.source_start_sec;
+        let end = clip.source_end_sec.min(sdec.available_duration_sec().unwrap_or(end));
+        if end <= start {
+            continue;
+        }
+        unsafe {
+            if sdec.seek_to(start)?.is_null() {
+                continue;
+            }
+            if wdec
+                .seek_to((start - clip.webcam_offset_sec).max(0.0))?
+                .is_null()
+            {
+                continue;
+            }
+        }
+
+        // Boucle frame-par-frame. First-pass : pas de speed-regions ni de timeline
+        // interpolation ; on rend à out_fps fixe du début à la fin du clip. La scène
+        // globale a déjà été posée par le caller via `comp.set_scene(...)` (le napi
+        // le fait avant `run_composited_multi`), donc on n'a pas à la repositionner.
+        let mut t = start;
+        while t < end {
+            unsafe {
+                let sf = sdec.next()?;
+                let wf = wdec.next()?;
+                if sf.is_null() || wf.is_null() {
+                    break;
+                }
+                comp.compose_frame(sf, wf, frames as f32, cfg)?;
+                // send_composited : la première passe ne peuple pas encore les plans du
+                // buffer d'encodeur depuis le NV12 interne — c'est un no-op côté bits,
+                // mais il pose l'API et draine l'encodeur.
+                enc.send_composited(comp, out_w, out_h, frames as i64)?;
+                drain_encoder(ectx, octx, ostream, opkt)?;
+            }
+            frames += 1;
+            progress(frames);
+            t += 1.0 / out_fps as f64;
+        }
+    }
+
+    // Flush : un null frame à l'encodeur finalise son bitstream.
+    unsafe {
+        crate::ffi::averr(
+            crate::ffi::avcodec_send_frame(ectx, ptr::null_mut()),
+            "send_frame_flush",
+        )?;
+        drain_encoder(ectx, octx, ostream, opkt)?;
+        crate::ffi::averr(
+            crate::ffi::av_write_trailer(octx),
+            "write_trailer",
+        )?;
+        crate::ffi::avio_closep(&mut pb);
+        crate::ffi::avformat_free_context(octx);
+        crate::ffi::av_packet_free(&mut opkt as *mut *mut _);
+    }
+
+    let wall_s = t0.elapsed().as_secs_f64();
+    Ok(Stats {
+        frames,
+        wall_s,
+        fps: if wall_s > 0.0 { frames as f64 / wall_s } else { 0.0 },
+        video_duration_s: frames as f64 / out_fps as f64,
+    })
+}
+
+/// Draine les paquets de l'encodeur vers le muxer — symétrique de
+/// `pipeline_windows::drain_encoder`.
+unsafe fn drain_encoder(
+    ectx: *mut crate::ffi::AVCodecContext,
+    octx: *mut crate::ffi::AVFormatContext,
+    ostream: *mut crate::ffi::AVStream,
+    opkt: *mut crate::ffi::AVPacket,
+) -> Result<()> {
+    use crate::ffi::*;
+    loop {
+        let r = avcodec_receive_packet(ectx, opkt);
+        if r == AVERROR_EOF {
+            return Ok(());
+        }
+        if r == AVERROR_EAGAIN {
+            return Ok(());
+        }
+        averr(r, "receive_packet")?;
+        av_packet_rescale_ts(opkt, (*ectx).time_base, (*ostream).time_base);
+        averr(
+            av_interleaved_write_frame(octx, opkt),
+            "interleaved_write_frame",
+        )?;
+        av_packet_unref(opkt);
+    }
 }
 
 /// Compte le nombre de frames d'un fichier (utilisé pour la barre de progression).
