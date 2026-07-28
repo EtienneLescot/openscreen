@@ -1,38 +1,27 @@
 /**
- * Gets the current platform from Electron. `process.platform` is a synchronous
- * Node global available in both the main and renderer processes, so we read it
- * directly here instead of bouncing through an IPC round-trip.
+ * Gets the current platform.
+ *
+ * The renderer runs with `contextIsolation: true` / `nodeIntegration: false`,
+ * so the Node `process` global does not exist here — it lives only in the
+ * preload's isolated world. `electron/preload.ts` snapshots `process.platform`
+ * once and exposes it as a plain string, which is what we read.
+ *
+ * Browser mode (`src/native/browserShim.ts`, `?browser`) has no `electronAPI`,
+ * so fall back to sniffing `navigator` rather than throwing.
  */
 export function getPlatform(): NodeJS.Platform {
-	return process.platform;
+	const fromPreload = window.electronAPI?.getPlatform?.();
+	if (fromPreload) return fromPreload as NodeJS.Platform;
+
+	if (typeof navigator !== "undefined") {
+		const ua = `${navigator.platform ?? ""} ${navigator.userAgent ?? ""}`;
+		if (/Mac|iPhone|iPad|iPod/.test(ua)) return "darwin";
+		if (/Linux|Android/.test(ua)) return "linux";
+	}
+	return "win32";
 }
 
 /**
  * Detects if the current platform is macOS.
  */
 export const isMac = (): boolean => getPlatform() === "darwin";
-
-/**
- * Gets the modifier key symbol based on the platform.
- */
-export const getModifierKey = (): "⌘" | "Ctrl" => (isMac() ? "⌘" : "Ctrl");
-
-/**
- * Gets the shift key symbol based on the platform.
- */
-export const getShiftKey = (): "⇧" | "Shift" => (isMac() ? "⇧" : "Shift");
-
-/**
- * Formats a keyboard shortcut for display based on the platform.
- * @param keys Array of key combinations (e.g., ['mod', 'D'] or ['shift', 'mod', 'Scroll'])
- */
-export function formatShortcut(keys: string[]): string {
-	const isMacPlatform = isMac();
-	return keys
-		.map((key) => {
-			if (key.toLowerCase() === "mod") return isMacPlatform ? "⌘" : "Ctrl";
-			if (key.toLowerCase() === "shift") return isMacPlatform ? "⇧" : "Shift";
-			return key;
-		})
-		.join(" + ");
-}
