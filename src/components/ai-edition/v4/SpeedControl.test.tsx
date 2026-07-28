@@ -32,11 +32,11 @@ describe("SpeedControl", () => {
 
 	it("commits a free-typed speed above the preset ceiling", () => {
 		// The regression this control exists for: the V4 shell only offered presets up to 3×,
-		// while the underlying capability reaches 100×.
+		// while the underlying capability reaches 16× (the native HTMLMediaElement ceiling).
 		const { updateSpeedValue, field } = renderControl(1);
-		fireEvent.change(field, { target: { value: "25" } });
+		fireEvent.change(field, { target: { value: "10" } });
 		fireEvent.blur(field);
-		expect(updateSpeedValue).toHaveBeenCalledWith("sp1", 25);
+		expect(updateSpeedValue).toHaveBeenCalledWith("sp1", 10);
 	});
 
 	it("commits on Enter as well as on blur, and only once", () => {
@@ -53,7 +53,7 @@ describe("SpeedControl", () => {
 		fireEvent.change(field, { target: { value: "500" } });
 		fireEvent.blur(field);
 		expect(updateSpeedValue).not.toHaveBeenCalled();
-		expect(toastError).toHaveBeenCalledWith("speed.maxSpeedError:100");
+		expect(toastError).toHaveBeenCalledWith("speed.maxSpeedError:16");
 	});
 
 	it("ignores an unparseable draft without touching the region", () => {
