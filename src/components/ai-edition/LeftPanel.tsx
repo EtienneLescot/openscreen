@@ -8,10 +8,7 @@ import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { nativeBridgeClient } from "@/native/client";
-import type {
-	AiEditionLlmConfig,
-	AiEditionToolCallSummary,
-} from "@/native/contracts";
+import type { AiEditionLlmConfig, AiEditionToolCallSummary } from "@/native/contracts";
 import { formatBytes } from "@/utils/formatBytes";
 import {
 	getReasoningEffortLabel,
