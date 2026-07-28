@@ -617,26 +617,51 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 		expect(doc.legacyEditor).toBeNull();
 	});
 
-	it("is a no-op for non-v5 documents (the upgrader gates on schemaVersion === 5)", () => {
-		// A v4 document is handled by the v4→v5 upgrader; v5→v6 must not touch it.
-		const v4 = {
-			schemaVersion: 4,
-			project: {
-				id: "p1",
-				title: "v4",
-				createdAt: "2024-01-01T00:00:00.000Z",
-				updatedAt: "2024-01-01T00:00:00.000Z",
-			},
-			assets: [],
-			timeline: { clips: [] },
-		};
-		// v4 is rejected by the documentSchema (which expects 6 after the chain),
-		// but the upgrader itself must not transform an input that isn't v5. We
-		// round-trip through a fully-valid v5 doc instead: parse it, then verify the
-		// second pass (which is a v6 doc) is unchanged.
+	it("is idempotent — re-parsing an already-v6 document changes nothing", () => {
 		const once = documentSchema.parse(makeV5Doc({ legacyEditor: { aspectRatio: "16:9" } }));
 		const twice = documentSchema.parse(once);
 		expect(twice).toEqual(once);
-		expect(v4.schemaVersion).toBe(4); // the test's input doc is untouched
+	});
+
+	it("bakes the CROPPED dimensions, not the raw ones", () => {
+		// "native" resolved to the cropped clip at runtime. A 3840x2160 asset cropped
+		// to its left half is effectively 1920x2160 → 8:9. Reading the raw dims would
+		// wrongly yield 16:9 and silently reframe the project.
+		const doc = documentSchema.parse({
+			schemaVersion: 5,
+			project: {
+				id: "p1",
+				title: "cropped",
+				createdAt: "2024-01-01T00:00:00.000Z",
+				updatedAt: "2024-01-01T00:00:00.000Z",
+			},
+			assets: [
+				{
+					id: "asset_c",
+					kind: "video",
+					label: "A",
+					originalPath: "/a.mp4",
+					cameraTrack: null,
+					video: { width: 3840, height: 2160 },
+				},
+			],
+			timeline: {
+				clips: [
+					{
+						id: "clip_a",
+						assetId: "asset_c",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 0,
+						timelineEndSec: 10,
+						origin: "user",
+						cropRegion: { x: 0, y: 0, width: 0.5, height: 1 },
+					},
+				],
+			},
+			legacyEditor: { aspectRatio: "native" },
+		});
+		expect(doc.schemaVersion).toBe(6);
+		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("8:9");
 	});
 });
