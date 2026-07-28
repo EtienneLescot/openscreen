@@ -8,7 +8,7 @@ The provider layer defines model metadata, protects credentials, discovers model
 | [`electron/ai-edition/llm-config-store.ts`](../../electron/ai-edition/llm-config-store.ts) | `LlmConfigStore` — plain JSON for selection, `safeStorage` blob for credentials. |
 | [`electron/ai-edition/llm-provider-auth.ts`](../../electron/ai-edition/llm-provider-auth.ts) | Model-list discovery per provider. Despite the filename it performs no authentication any more — see [Known gaps](#known-gaps). |
 | [`electron/ai-edition/deep-agent/chat-model.ts`](../../electron/ai-edition/deep-agent/chat-model.ts) | `createOpenScreenChatModel` — the single transport. Picks a `@langchain/*` chat model class per provider. |
-| [`electron/ai-edition/deep-agent/agent-provider-capabilities.ts`](../../electron/ai-edition/deep-agent/agent-provider-capabilities.ts) | Per-provider reasoning-effort capability and its LangChain wire options. |
+| [`electron/ai-edition/deep-agent/chat-model.ts`](../../electron/ai-edition/deep-agent/chat-model.ts) | Per-provider reasoning-effort capability and its LangChain wire options. |
 | [`electron/native-bridge/services/aiEditionService.ts`](../../electron/native-bridge/services/aiEditionService.ts) | IPC surface: connect / disconnect, snapshot, `llmListProviderModels`. |
 | [`src/components/ai-edition/ProviderSettings.tsx`](../../src/components/ai-edition/ProviderSettings.tsx) | Renders cards and forms directly from `PROVIDER_DEFINITIONS`. |
 
@@ -113,14 +113,14 @@ Everything returns `{models, error?}` rather than throwing, so the settings UI c
 
 1. Add a complete `ProviderDefinition` in `provider-registry.ts` (auth kind, env keys, default model, base URL, `wireProtocol`, reasoning support). Widen `authKind` if the provider is not API-key-based.
 2. Add a branch in `createOpenScreenChatModel` if none of the three existing adapters fits.
-3. Add a capability branch in `agent-provider-capabilities.ts` if the provider exposes reasoning, and constrain `getReasoningEffortOptions` if its scale is not the full six tiers.
+3. Add a capability branch in `chat-model.ts` if the provider exposes reasoning, and constrain `getReasoningEffortOptions` if its scale is not the full six tiers.
 4. Add a discovery branch in `aiEditionService.llmListProviderModels`, plus its fetch helper in `llm-provider-auth.ts`.
 5. Extend the native-bridge contracts if the provider needs operations the existing IPC surface doesn't cover.
 6. Confirm `ProviderSettings.tsx` renders the right fields from the registry metadata alone, then add registry, transport, and UI tests.
 
 ## Known gaps
 
-- **`normalizeReasoningEffort` in `provider-registry.ts` is dead.** It is exported but has no caller anywhere in the repo; `normalizeReasoningEffortForCapability` in `agent-provider-capabilities.ts` is the live one. The two also disagree — the dead copy's strategy union knows `custom-openai-account` but not `minimax-thinking`. Delete it rather than fixing it.
+- **`normalizeReasoningEffort` in `provider-registry.ts` is dead.** It is exported but has no caller anywhere in the repo; `normalizeReasoningEffortForCapability` in `chat-model.ts` is the live one. The two also disagree — the dead copy's strategy union knows `custom-openai-account` but not `minimax-thinking`. Delete it rather than fixing it.
 - **`custom-openai-account` is a phantom strategy.** It appears in `ReasoningCapability["strategy"]` but no branch of `getReasoningCapability` returns it, and no branch of `buildLangChainReasoningOptions` handles it. Left over from the removed ChatGPT provider.
 - **`llm-provider-auth.ts` is misnamed.** It performs no authentication since the device flows were removed — it is purely model-list discovery. `model-discovery.ts` would say what it does.
 - **MiniMax discovery spends the user's key.** Nine probe requests per discovery click, uncached, at `max_tokens: 1`. Cache per key if it ever moves to a hot path.
