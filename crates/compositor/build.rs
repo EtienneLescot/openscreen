@@ -100,12 +100,22 @@ fn main() {
     // Sur macOS le bindgen doit viser aarch64-apple-darwin pour que les layouts
     // générés (long=8, etc.) matchent la cible. Sans ce flag, bindgen utilise
     // le défaut du host (probablement x86_64), et les structs ffmpeg sont mal
-    // dimensionnés au link.
+    // dimensionnés au link. On laisse bindgen chercher le sysroot via `xcrun`
+    // pour rester robuste aux variations Xcode (CommandLineTools vs Xcode.app,
+    // versions 14.x → 15.x).
     if target_is_macos {
-        builder = builder
-            .clang_arg("--target=aarch64-apple-darwin")
-            .clang_arg("-isysroot")
-            .clang_arg("/Library/Developer/CommandLineTools/SDKs/MacOSX.sdk");
+        builder = builder.clang_arg("--target=aarch64-apple-darwin");
+        if let Ok(sysroot) = std::process::Command::new("xcrun")
+            .args(["--show-sdk-path", "--sdk", "macosx"])
+            .output()
+        {
+            if let Ok(s) = std::str::from_utf8(&sysroot.stdout) {
+                let s = s.trim();
+                if !s.is_empty() {
+                    builder = builder.clang_arg("-isysroot").clang_arg(s);
+                }
+            }
+        }
     }
 
     let bindings = builder
