@@ -395,8 +395,14 @@ export const MIN_PLAYBACK_SPEED = 0.1;
 // frame-steps by seeking and audio export uses an offline pitch-preserved stretch.
 // ponytail: the editor cap and the native preview cap are the same number —
 // everything above this is the export path's stretch, and the editor's input
-// parser shouldn't accept speeds the preview cannot render. A 50× entry now
-// clamps to 16, not 100.
+// parser shouldn't accept speeds the preview cannot render. A 50× entry is
+// REJECTED (the field reverts to its previous value), not clamped — see
+// `parseCustomPlaybackSpeedInput`, which returns `too-fast` above this bound.
+//
+// NOTE: this bound is enforced on the editor input only. The LLM agent tools
+// (electron/ai-edition/agent-tools.ts) still accept any positive speed, so an
+// agent-authored region can exceed it: preview clamps to MAX_NATIVE_PLAYBACK_RATE
+// while export renders the true speed.
 export const MAX_PLAYBACK_SPEED = 16;
 export const MAX_NATIVE_PLAYBACK_RATE = 16;
 
