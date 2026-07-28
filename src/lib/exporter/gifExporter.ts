@@ -138,7 +138,7 @@ export class GifExporter {
 		const onWarning = (message: string) => warnings.push(message);
 
 		try {
-			const platform = await getPlatform();
+			const platform = getPlatform();
 
 			this.cleanup();
 			this.cancelled = false;
