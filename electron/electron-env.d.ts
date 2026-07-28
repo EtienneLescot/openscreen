@@ -317,7 +317,7 @@ interface Window {
 		onMenuSaveProjectAs: (callback: () => void) => () => void;
 		quitApp: () => void;
 		setTitleBarOverlay: (color: string, symbolColor: string) => void;
-		getPlatform: () => Promise<string>;
+		getPlatform: () => string;
 		revealInFolder: (
 			filePath: string,
 		) => Promise<{ success: boolean; error?: string; message?: string }>;
