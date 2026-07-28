@@ -1847,10 +1847,11 @@ impl Compositor {
         // que prévu — il s'arrêtait à la frontière paddée au lieu de déborder
         // jusqu'aux bords du cadre (rapport issue #179). On étend s_dst au
         // cadre complet quand un zoom est actif, pour que le contenu zoomé
-        // remplisse toute la frame, comme attendu. TODO : séparer le rendu
-        // du contenu de celui du cadre (ombre, coins arrondis) pour que le
-        // cadre reste au rect paddé pendant le zoom — actuellement le cadre
-        // suit aussi l'expansion.
+        // remplisse toute la frame, comme attendu. Le rayon et l'ombre sont
+        // neutralisés en parallèle (cf. plus bas) : sinon ils suivent
+        // l'expansion et arrondissent / ombrent tout l'output, pas l'écran.
+        // TODO : à la place, séparer "rect contenu" de "rect cadre" pour garder
+        // le cadre (ombre, coins) au rect paddé pendant que le contenu déborde.
         let s_dst = if p.zoom > 1.0 {
             [0.0, 0.0, 1.0, 1.0]
         } else {
@@ -1931,14 +1932,26 @@ impl Compositor {
         let s_min_px = (s_dst[2] * self.rw()).min(s_dst[3] * self.rh());
         let app_screen_radius_frac = scene_ref.as_ref().and_then(|s| s.layout.screen_radius_frac);
         let scene_roundness_frac = scene_ref.as_ref().map(|s| s.effects.roundness_frac);
-        let s_radius = match (cfg.rounded, app_screen_radius_frac, scene_roundness_frac) {
-            (false, _, _) => 0.0,
-            // Preset en bloc : le rayon appartient à la boîte écran (parité exacte avec la caméra).
-            (true, Some(f), _) => f * s_min_px,
-            // Scène sans rayon imposé : slider Roundness, relatif au cadre.
-            (true, None, Some(f)) => f * frame_min_px,
-            // Fixture/bench (pas de scène) : chemin inspector historique, inchangé.
-            (true, None, None) => p.screen.radius * lp.radius_scale,
+        // Quand le contenu déborde du padding (zoom actif), il n'y a plus de cadre visible
+        // (le rect écran a été étendu aux bords du cadre de sortie, cf. issue #179) :
+        // neutraliser le rayon plutôt que de le laisser suivre l'expansion. Sur le rect
+        // plein cadre, `f * s_min_px` arrondit TOUT l'output (le `s_min_px` devient
+        // `min(rw, rh)`), pas seulement l'écran — et `f * frame_min_px` fait pareil
+        // (les deux quantités coïncident quand s_dst = [0,0,1,1]). TODO : à la place,
+        // séparer "rect contenu" de "rect cadre" pour garder les coins au rect paddé
+        // pendant que le contenu déborde (cf. le TODO sur `s_dst` plus haut).
+        let s_radius = if p.zoom > 1.0 {
+            0.0
+        } else {
+            match (cfg.rounded, app_screen_radius_frac, scene_roundness_frac) {
+                (false, _, _) => 0.0,
+                // Preset en bloc : le rayon appartient à la boîte écran (parité exacte avec la caméra).
+                (true, Some(f), _) => f * s_min_px,
+                // Scène sans rayon imposé : slider Roundness, relatif au cadre.
+                (true, None, Some(f)) => f * frame_min_px,
+                // Fixture/bench (pas de scène) : chemin inspector historique, inchangé.
+                (true, None, None) => p.screen.radius * lp.radius_scale,
+            }
         };
         let w_px = [w_dst[2] * self.rw(), w_dst[3] * self.rh()];
         // Rayon caméra. Le slider Roundness ne s'y applique jamais (il ne vaut que pour l'ÉCRAN).
@@ -2097,7 +2110,11 @@ impl Compositor {
         // L'ombre suit la silhouette réellement affichée : le rect arrondi quand l'écran est
         // droit, le quadrilatère projeté quand il est incliné. Un rect droit derrière un écran
         // penché ne se lisait pas comme son ombre mais comme une seconde surface.
-        if cfg.shadow {
+        // Pendant un zoom, le rect contenu déborde jusqu'aux bords du cadre (issue #179) —
+        // pas d'ombre : dessinée autour de [0,0,1,1] avec son `spread`, elle se lirait comme
+        // un masque noir contre les bords, pas comme une ombre. TODO : la garder au rect
+        // paddé du cadre (cf. le TODO sur `s_dst` plus haut).
+        if cfg.shadow && p.zoom <= 1.0 {
             let spread = SCREEN_SHADOW_SPREAD_FRAC * frame_min_px;
             let offset = [0.0, SCREEN_SHADOW_OFFSET_FRAC * frame_min_px];
             let opacity = 0.45 * lp.shadow_scale;
