@@ -81,6 +81,27 @@ export function messageContentToText(content: unknown): string {
 	return "";
 }
 
+// ponytail: counterpart to messageContentToText for the Anthropic/MiniMax
+// thinking blocks. ChatAnthropic with `thinking: {type: "adaptive"}` (or
+// `enabled`) emits streamed `thinking_delta` SSE events that LangChain turns
+// into content parts `{type: "thinking", thinking: "..."}`. We strip that
+// thinking text out of the final AIMessage content (where it counts against
+// max_tokens on the visible text path, but isn't user-visible text) and pipe
+// it separately to the renderer so the chat panel can show a live "Thinking…"
+// block instead of dead air. `redacted_thinking` parts (encrypted reasoning
+// the provider chose not to show us) are skipped — there's nothing to display.
+export function messageContentToThinking(content: unknown): string {
+	if (!Array.isArray(content)) return "";
+	let total = "";
+	for (const part of content) {
+		if (!part || typeof part !== "object") continue;
+		const p = part as { type?: unknown; thinking?: unknown };
+		if (p.type !== "thinking") continue;
+		if (typeof p.thinking === "string") total += p.thinking;
+	}
+	return total;
+}
+
 export async function createOpenScreenChatModel(
 	input: OpenScreenChatModelConfig,
 ): Promise<BaseChatModel> {

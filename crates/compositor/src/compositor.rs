@@ -62,7 +62,32 @@ fn decode_data_uri(uri: &str) -> Option<Vec<u8>> {
 }
 
 fn parse_hex(s: &str) -> Option<[f32; 4]> {
-    let h = s.trim().trim_start_matches('#');
+    // Le contrat accepte du CSS, pas seulement de l'hex : la bridge des captions produit du
+    // `rgba(r, g, b, a)` (l'inspector stocke couleur + opacité séparément, et `captionBackgroundCss`
+    // les recombine en rgba pour la preview) et les stops de gradient arrivent aussi sous cette
+    // forme. `transparent` est un cas particulier documenté : alpha 0, pas de plaque. Tout le
+    // reste tombe sur None → l'appelant applique son fallback (alpha 0 pour un fond, alpha 1
+    // pour un texte, etc.) — la même sémantique qu'avant l'ajout du parseur rgba.
+    let trimmed = s.trim();
+    if trimmed.eq_ignore_ascii_case("transparent") {
+        return Some([0.0, 0.0, 0.0, 0.0]);
+    }
+    // CSS Color 4 fait de `rgb()` et `rgba()` des synonymes : les deux acceptent 3 ou 4
+    // composantes. On les traite donc par le même chemin plutôt que d'imposer une arité par
+    // nom — refuser `rgba(0, 0, 0)` ne « signalerait » rien d'utile, ça retomberait sur le
+    // fallback de l'appelant, c'est-à-dire une plaque invisible : exactement le bug #178.
+    if let Some(inner) =
+        strip_color_fn(trimmed, "rgba").or_else(|| strip_color_fn(trimmed, "rgb"))
+    {
+        return parse_rgb_components(inner);
+    }
+    let h = trimmed.trim_start_matches('#');
+    // Un corps hex est ASCII par définition, et les découpes par octet ci-dessous (`h[i..=i]`,
+    // `h[0..2]`…) paniqueraient au milieu d'un caractère multi-octets qui ferait pile 3 ou 6
+    // octets (`éa`, `€€`). On refuse avant de découper.
+    if !h.is_ascii() {
+        return None;
+    }
     let (r, g, b) = match h.len() {
         3 => {
             let d = |i: usize| u8::from_str_radix(&h[i..=i], 16).ok().map(|v| v * 17);
@@ -76,6 +101,58 @@ fn parse_hex(s: &str) -> Option<[f32; 4]> {
         _ => return None,
     };
     Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0])
+}
+
+/// `rgba(0, 0, 0, 0.55)` → `"0, 0, 0, 0.55"` (le contenu entre les parenthèses), None si
+/// l'enveloppe n'est pas de la forme `fn(...)`. Tolère les espaces et les tabs, refuse les
+/// virgules finales et les arguments vides — le gradient parser a déjà démontré que la couche
+/// application produit des chaînes propres, donc rester strict ici évite d'avaler des CSS
+/// tordus qu'on ne maîtrise pas. La casse du préfixe est libre (`RGBA(...)` est valide) parce
+/// que CSS le permet.
+fn strip_color_fn<'a>(s: &'a str, name: &str) -> Option<&'a str> {
+    // `get` rend None si `name.len()` n'est pas une frontière de caractère : c'est ce qui rend
+    // le slice `s[..name.len()]` juste en dessous sûr par construction. Un `&s[..n]` direct
+    // paniquerait au milieu d'un caractère multi-octets (`#ab€cd` coupe dans le `€`), et une
+    // panique traverserait le pont N-API au lieu de retomber sur le fallback de l'appelant —
+    // le contraire de ce que ce parseur promet.
+    let after_name = s.get(name.len()..)?;
+    if !s[..name.len()].eq_ignore_ascii_case(name) {
+        return None;
+    }
+    let inner = after_name.strip_prefix('(')?.strip_suffix(')')?.trim();
+    if inner.is_empty() {
+        return None;
+    }
+    Some(inner)
+}
+
+/// `"r, g, b"` ou `"r, g, b, a"` (floats 0..255 pour r/g/b, 0..1 pour a) → `[r, g, b, a]` en
+/// 0..1, l'alpha valant 1 (opaque) quand elle est absente. Toute autre arité → None. Tolère
+/// les espaces autour des virgules, pas les pourcentages : le gradient parser n'envoie pas de
+/// `rgb(50%, …)` et les couches UI qui le font n'arrivent pas ici (les couleurs wallpaper
+/// passent par une autre route, cf. `parseWallpaper`).
+fn parse_rgb_components(s: &str) -> Option<[f32; 4]> {
+    let parts: Vec<&str> = s.split(',').map(str::trim).collect();
+    let (rgb, alpha) = match parts.as_slice() {
+        [r, g, b] => ([r, g, b], 1.0),
+        // L'alpha est déjà sur [0..1] par convention (`rgba(...,0.55)`, pas `rgba(...,55)`).
+        [r, g, b, a] => ([r, g, b], parse_color_channel(a, 1.0)?),
+        _ => return None,
+    };
+    Some([
+        parse_color_channel(rgb[0], 255.0)?,
+        parse_color_channel(rgb[1], 255.0)?,
+        parse_color_channel(rgb[2], 255.0)?,
+        alpha,
+    ])
+}
+
+fn parse_color_channel(raw: &str, max: f32) -> Option<f32> {
+    let n: f32 = raw.parse().ok()?;
+    if !n.is_finite() || n < 0.0 || n > max {
+        return None;
+    }
+    Some(n / max)
 }
 
 /// Rect source après crop puis zoom, dans les UV de la texture D3D. `u_max`/`v_max`
@@ -3182,6 +3259,89 @@ mod tests {
     fn decodes_a_base64_data_uri() {
         // "Hi!" -> SGkh
         assert_eq!(decode_data_uri("data:image/png;base64,SGkh").unwrap(), b"Hi!".to_vec());
+    }
+
+    /// L'inspector stocke les couleurs de caption comme `couleur_hex` + `opacité` puis la
+    /// bridge JS recombine en `rgba(r, g, b, a)` pour la preview. Le natif doit rendre la même
+    /// plaque (couleur et opacité) — sinon le calque disparaît silencieusement et la caption
+    /// n'apparaît qu'en texte brut dans l'export. C'était exactement le bug de l'issue #178.
+    #[test]
+    fn parse_hex_understands_rgba_caption_backgrounds() {
+        let parsed = parse_hex("rgba(0, 0, 0, 0.55)").expect("rgba doit parser");
+        assert!((parsed[3] - 0.55).abs() < 1e-6, "alpha 0.55 transmise, pas tombée à 0");
+        assert_eq!([parsed[0], parsed[1], parsed[2]], [0.0, 0.0, 0.0]);
+    }
+
+    /// `rgb(...)` sans alpha est sémantiquement `rgba(..., 1)` — il faut le supporter pour
+    /// qu'un inspector qui n'expose pas d'opacité n'écrive pas un fond invisible.
+    #[test]
+    fn parse_hex_treats_rgb_as_opaque() {
+        let parsed = parse_hex("rgb(255, 128, 0)").expect("rgb doit parser");
+        assert_eq!(parsed, [1.0, 128.0 / 255.0, 0.0, 1.0]);
+    }
+
+    /// Le cas "transparent" est documenté dans le code d'appel : on garde la sémantique
+    /// historique (alpha 0) — la plaque est sautée côté rastérisation, ce qui est exactement ce
+    /// que veut le CSS. Le nouveau parseur ne doit pas le casser.
+    #[test]
+    fn parse_hex_keeps_transparent_at_alpha_zero() {
+        assert_eq!(parse_hex("transparent"), Some([0.0, 0.0, 0.0, 0.0]));
+        // La casse ne doit pas non plus casser : CSS autorise `TRANSPARENT` en théorie, et
+        // refuse une chaîne qui ressemble à un rgba mal formé.
+        assert_eq!(parse_hex("Transparent"), Some([0.0, 0.0, 0.0, 0.0]));
+        assert_eq!(parse_hex("rgba(0, 0, 0, 0)"), Some([0.0, 0.0, 0.0, 0.0]));
+    }
+
+    /// Le contrat historique `#rrggbb` / `rrggbb` ne doit pas régresser : les annotations
+    /// normales (saisies via `ColorField`) ne passent que par ce chemin, et leurs snapshots
+    /// ne pardonneraient pas un changement d'alpha implicite.
+    #[test]
+    fn parse_hex_still_understands_hex_colours() {
+        assert_eq!(parse_hex("#fff"), Some([1.0, 1.0, 1.0, 1.0]));
+        assert_eq!(parse_hex("#000000"), Some([0.0, 0.0, 0.0, 1.0]));
+        assert_eq!(
+            parse_hex("ff8800"),
+            Some([1.0, 136.0 / 255.0, 0.0, 1.0])
+        );
+    }
+
+    /// Hors-format (channel > 255, chaîne vide, named color) → None → l'appelant retombe sur
+    /// son fallback. C'est la même politique qu'avant l'ajout du parseur rgba, on la garde
+    /// explicite pour qu'elle ne dérive pas.
+    #[test]
+    fn parse_hex_rejects_malformed_colours() {
+        assert_eq!(parse_hex(""), None);
+        assert_eq!(parse_hex("not-a-color"), None);
+        assert_eq!(parse_hex("rgba(256, 0, 0, 1)"), None); // canal >255
+        assert_eq!(parse_hex("rgba(0, 0, 0, 1.5)"), None); // alpha >1
+        assert_eq!(parse_hex("rgba(0, 0, 0, 0.5, 1)"), None); // 5 composantes
+        assert_eq!(parse_hex("rgb(0, 0)"), None); // 2 composantes
+    }
+
+    /// CSS Color 4 : `rgb()` et `rgba()` sont synonymes, les deux prennent 3 ou 4 composantes.
+    /// Une couleur bien formée ne doit pas finir sur le fallback de l'appelant — pour un fond
+    /// c'est alpha 0, donc une plaque invisible, soit très exactement le symptôme de #178.
+    #[test]
+    fn parse_hex_accepts_both_arities_on_both_names() {
+        assert_eq!(parse_hex("rgba(0, 0, 0)"), Some([0.0, 0.0, 0.0, 1.0]));
+        assert_eq!(parse_hex("rgb(0, 0, 0, 0.5)"), Some([0.0, 0.0, 0.0, 0.5]));
+    }
+
+    /// Une couleur non-ASCII doit être refusée, pas paniquer : `strip_color_fn` découpait
+    /// `s[..3]` / `s[..4]` sans vérifier la frontière de caractère, donc `#ab€cd` (le `€` occupe
+    /// les octets 3..6) tuait le process au lieu de retomber sur le fallback. `parseWallpaper`
+    /// laisse passer n'importe quelle chaîne préfixée `#` jusqu'ici, une panique côté natif
+    /// traverserait le pont N-API et emporterait l'export.
+    #[test]
+    fn parse_hex_refuses_non_ascii_without_panicking() {
+        assert_eq!(parse_hex("#ab€cd"), None);
+        assert_eq!(parse_hex("rg€(0, 0, 0)"), None);
+        assert_eq!(parse_hex("é"), None);
+        assert_eq!(parse_hex("🎨🎨"), None);
+        // Le chemin hex découpe par octet sur les longueurs 3 et 6 : `éa` fait 3 octets et
+        // `€€` en fait 6, donc les deux tombaient pile sur une découpe intra-caractère.
+        assert_eq!(parse_hex("éa"), None);
+        assert_eq!(parse_hex("€€"), None);
     }
 
     #[test]
