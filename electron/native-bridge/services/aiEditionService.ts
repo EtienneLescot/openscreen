@@ -42,11 +42,6 @@ export interface AiEditionServiceOptions {
 		document?: unknown,
 		sink?: ChatEventSink,
 	) => Promise<AiEditionChatResult>;
-	runChatDefault: (
-		projectId: string,
-		message: string,
-		sink?: ChatEventSink,
-	) => Promise<AiEditionChatResult>;
 	rewindToMessage: (
 		projectId: string,
 		sessionId: string,
@@ -67,8 +62,6 @@ export interface AiEditionServiceOptions {
 	// ponytail: legacy per-batch undo retired in favor of per-message rewind.
 	// Kept on the surface for IPC compatibility; always returns success=false.
 	undoLastToolBatch: (projectId: string, sessionId: string) => AiEditionChatResult;
-	getDefaultChatHistory: (projectId: string) => AiEditionChatMessage[];
-	clearDefaultChatHistory: (projectId: string) => void;
 	listSessions: (projectId: string) => AiEditionChatSessionSummary[];
 	createSession: (projectId: string, title?: string) => AiEditionChatSessionSummary;
 	selectSession: (projectId: string, sessionId: string) => AiEditionChatSession | null;
@@ -278,21 +271,6 @@ export class AiEditionService {
 		return this.options.compactNow(projectId, sessionId);
 	}
 
-	async chatRunDefault(
-		projectId: string,
-		message: string,
-		sink?: ChatEventSink,
-	): Promise<AiEditionChatResult> {
-		return this.options.runChatDefault(projectId, message, sink);
-	}
-
-	chatHistoryDefault(projectId: string): AiEditionChatMessage[] {
-		return this.options.getDefaultChatHistory(projectId);
-	}
-
-	chatClearDefault(projectId: string): { success: boolean } {
-		this.options.clearDefaultChatHistory(projectId);
-		return { success: true };
 	}
 
 	chatListSessions(projectId: string): AiEditionChatSessionSummary[] {

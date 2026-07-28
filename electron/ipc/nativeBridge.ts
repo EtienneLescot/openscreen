@@ -83,15 +83,6 @@ export interface NativeBridgeContext {
 		projectId: string,
 		sessionId: string,
 	) => import("../../src/native/contracts").AiEditionChatBudget | null;
-	runAiEditionChatDefault: (
-		projectId: string,
-		message: string,
-		sink?: ChatEventSink,
-	) => Promise<import("../../src/native/contracts").AiEditionChatResult>;
-	getAiEditionChatHistoryDefault: (
-		projectId: string,
-	) => import("../../src/native/contracts").AiEditionChatMessage[];
-	clearAiEditionChatHistoryDefault: (projectId: string) => void;
 	listAiEditionChatSessions: (
 		projectId: string,
 	) => import("../../src/native/contracts").AiEditionChatSessionSummary[];
@@ -232,13 +223,10 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 		documents: context.getAiEditionDocuments(),
 		llmConfig: context.getAiEditionLlmConfig(),
 		runChat: context.runAiEditionChat,
-		runChatDefault: context.runAiEditionChatDefault,
 		undoLastToolBatch: context.undoAiEditionToolBatch,
 		rewindToMessage: context.rewindToMessage,
 		compactNow: context.compactNow,
 		getContextUsage: context.getContextUsage,
-		getDefaultChatHistory: context.getAiEditionChatHistoryDefault,
-		clearDefaultChatHistory: context.clearAiEditionChatHistoryDefault,
 		listSessions: context.listAiEditionChatSessions,
 		createSession: context.createAiEditionChatSession,
 		selectSession: context.selectAiEditionChatSession,
@@ -525,27 +513,6 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 									request.payload.projectId,
 									request.payload.sessionId,
 								),
-							);
-						case "chat.runDefault": {
-							const sink = buildChatEventSink(event.sender, "default");
-							return createSuccessResponse(
-								requestId,
-								await aiEditionService.chatRunDefault(
-									request.payload.projectId,
-									request.payload.message,
-									sink,
-								),
-							);
-						}
-						case "chat.history":
-							return createSuccessResponse(
-								requestId,
-								aiEditionService.chatHistoryDefault(request.payload.projectId),
-							);
-						case "chat.clear":
-							return createSuccessResponse(
-								requestId,
-								aiEditionService.chatClearDefault(request.payload.projectId),
 							);
 						case "chat.listSessions":
 							return createSuccessResponse(
