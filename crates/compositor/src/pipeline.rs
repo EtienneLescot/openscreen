@@ -11,7 +11,8 @@ use crate::config::Cfg;
 use crate::cursor::CursorTrack;
 use crate::d3d::Gpu;
 use crate::ffi::*;
-use crate::regions::speed_segments_for_window;
+use crate::regions::{speed_segments_for_window, SpeedSegment};
+use crate::scene::Scene;
 use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 use std::ffi::{c_void, CString};
@@ -1038,82 +1039,39 @@ impl Default for ExportParams {
     }
 }
 
-unsafe fn run_multi_inner(
+
+/// The format-agnostic half of a multiclip export: clip iteration, decoder
+/// reuse, availability clamping, per-clip scene windowing, keyframe seeks,
+/// cursor binding, speed segments, and — the part that matters — advancing the
+/// decoders by OUTPUT time rather than by source frames.
+///
+/// MP4 and GIF differ only in what they do with a composed frame (hardware NV12
+/// encode vs CPU readback + palette quantize), so that is all they supply here.
+/// Sharing this walk is what keeps "which source frame belongs at output frame
+/// N" defined exactly once: a GIF driven by its own loop is how the slow-motion
+/// truncation bug happened.
+///
+/// `on_frame` runs after `compose_frame` with the running output index;
+/// `on_clip_end` runs once per clip with its clamped source window, the frames
+/// it produced, and the speed segments used (MP4 needs those for audio).
+#[allow(clippy::too_many_arguments)]
+pub(crate) unsafe fn walk_composited_timeline(
     clips: &[ClipSource],
-    out: &str,
     gpu: &Gpu,
     comp: &Compositor,
     cfg: &Cfg,
-    params: &ExportParams,
-    progress: &mut dyn FnMut(u64),
-) -> Result<Stats> {
-    if clips.is_empty() {
-        bail!("aucun clip à exporter");
-    }
-    let (out_w, out_h) = (params.width, params.height);
-    // décodeurs ouverts une fois par chemin, réutilisés entre clips (screen ≠ webcam → 2 maps
-    // pour deux &mut indépendants).
-    let mut screen_decs: HashMap<String, Decoder> = HashMap::new();
-    let mut webcam_decs: HashMap<String, Decoder> = HashMap::new();
-
-    // fps de sortie : choix explicite de l'app si fourni, sinon dérivé du 1er clip (recordings
-    // uniformes) — comportement historique.
-    screen_decs.insert(clips[0].screen.clone(), Decoder::open(&clips[0].screen, gpu)?);
-    let out_fps = params
-        .fps
-        .unwrap_or_else(|| screen_decs[&clips[0].screen].fps().round().max(1.0) as u32)
-        as i32;
-
-    // Curseur : la scène (déjà posée par l'appelant via comp.set_scene) pilote tout — même
-    // parité que le live. Piste par chemin ÉCRAN distinct (convention sidecar `<screen>.cursor.json`,
-    // temps ABSOLU non re-basé : chaque décodeur avance dans le même référentiel que la piste).
-    let scene = comp.scene_snapshot();
+    out_fps: i32,
+    scene: &Option<Scene>,
+    screen_decs: &mut HashMap<String, Decoder>,
+    webcam_decs: &mut HashMap<String, Decoder>,
+    on_frame: &mut dyn FnMut(u64) -> Result<()>,
+    on_clip_end: &mut dyn FnMut(usize, f64, u64, &[SpeedSegment]) -> Result<()>,
+) -> Result<u64> {
     let cursor_enabled = scene.as_ref().map(|s| s.cursor.show).unwrap_or(false);
     let cursor_smoothing = scene.as_ref().map(|s| s.cursor.smoothing).unwrap_or(0.0);
     let mut cursor_tracks: HashMap<String, CursorTrack> = HashMap::new();
     let mut cursor_active_path: Option<String> = None;
-
-    // ---- encodeur (choisi à l'exécution, cf. ExportCodec::candidates) + mux ----
-    let (mut enc_hwdev, mut enc_frames) = make_enc_frames(gpu, out_w as i32, out_h as i32)?;
-    // débit proportionnel à la surface de sortie (référence : 8Mbps @ 1920x1080), plancher
-    // 2Mbps pour rester regardable sur les petites tailles.
-    let bit_rate = ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
-    let mut enc = VideoEncoder::open(
-        &params.codec,
-        out_w as i32,
-        out_h as i32,
-        out_fps,
-        bit_rate,
-        enc_frames,
-    )?;
-    let ectx = enc.ctx;
-
-    let mut octx: *mut AVFormatContext = ptr::null_mut();
-    let outc = CString::new(out)?;
-    averr(
-        avformat_alloc_output_context2(&mut octx, ptr::null(), ptr::null(), outc.as_ptr()),
-        "alloc_output_context2",
-    )?;
-    let ostream = avformat_new_stream(octx, ptr::null());
-    if ostream.is_null() {
-        bail!("video avformat_new_stream");
-    }
-    averr(avcodec_parameters_from_context((*ostream).codecpar, ectx), "params_from_ctx")?;
-    (*ostream).time_base = (*ectx).time_base;
-    // Les deux streams doivent exister avant le header MP4 ; l'AAC reste ouvert pendant le
-    // rendu puis reçoit le PCM assemblé à partir des comptes de frames réellement produits.
-    let mut audio_encoder = AacEncoder::open(octx)?;
-    let mut pb: *mut AVIOContext = ptr::null_mut();
-    averr(avio_open(&mut pb, outc.as_ptr(), AVIO_FLAG_WRITE as i32), "avio_open")?;
-    sn_fmt_set_pb(octx, pb);
-    averr(avformat_write_header(octx, ptr::null_mut()), "write_header")?;
-
-    let opkt = av_packet_alloc();
     let mut frames: u64 = 0;
-    let mut clip_frame_counts = vec![0u64; clips.len()];
-    let mut clip_pcm: Vec<Option<PlanarPcm>> =
-        std::iter::repeat_with(|| None).take(clips.len()).collect();
-    let t0 = Instant::now();
 
     for (clip_index, clip) in clips.iter().enumerate() {
         if !screen_decs.contains_key(&clip.screen) {
@@ -1242,40 +1200,138 @@ unsafe fn run_multi_inner(
                 }
                 comp.compose_frame(sf, wf, frames as f32, cfg)?;
 
-                let outf = av_frame_alloc();
-                averr(av_hwframe_get_buffer(enc_frames, outf, 0), "hwframe_get_buffer")?;
-                let out_tex = (*outf).data[0] as *mut c_void;
-                let out_slice = (*outf).data[1] as u32;
-                comp.rgb_to_nv12_scaled(out_w, out_h, out_tex, out_slice)?;
-                (*outf).pts = frames as i64;
-                enc.send(outf)?;
-                drain_encoder(ectx, octx, ostream, opkt)?;
-                av_frame_free(&mut (outf as *mut _));
+                on_frame(frames)?;
                 frames += 1;
-                progress(frames);
             }
         }
-        clip_frame_counts[clip_index] = frames - frames_before_clip;
-        if clip.has_audio && clip_frame_counts[clip_index] > 0 {
-            match decode_clip_audio(&clip.screen, clip.source_start_sec, source_end_sec) {
-                Ok(Some(pcm)) => {
-                    clip_pcm[clip_index] = Some(stretch_clip_pcm_by_speed(
-                        &pcm,
-                        &speed_segments,
-                        out_fps as f64,
-                    ));
-                }
-                Ok(None) => eprintln!(
-                    "[pipeline] warning: clip #{} déclaré audio mais sans flux décodable; silence conservé",
-                    clip_index,
-                ),
-                Err(error) => eprintln!(
-                    "[pipeline] warning: décodage audio du clip #{} échoué ({error:#}); silence conservé",
-                    clip_index,
-                ),
-            }
-        }
+        on_clip_end(clip_index, source_end_sec, frames - frames_before_clip, &speed_segments)?;
     }
+
+    comp.set_cursor_time(None);
+    comp.set_timeline_time(None);
+    Ok(frames)
+}
+
+unsafe fn run_multi_inner(
+    clips: &[ClipSource],
+    out: &str,
+    gpu: &Gpu,
+    comp: &Compositor,
+    cfg: &Cfg,
+    params: &ExportParams,
+    progress: &mut dyn FnMut(u64),
+) -> Result<Stats> {
+    if clips.is_empty() {
+        bail!("aucun clip à exporter");
+    }
+    let (out_w, out_h) = (params.width, params.height);
+    // décodeurs ouverts une fois par chemin, réutilisés entre clips (screen ≠ webcam → 2 maps
+    // pour deux &mut indépendants).
+    let mut screen_decs: HashMap<String, Decoder> = HashMap::new();
+    let mut webcam_decs: HashMap<String, Decoder> = HashMap::new();
+
+    // fps de sortie : choix explicite de l'app si fourni, sinon dérivé du 1er clip (recordings
+    // uniformes) — comportement historique.
+    screen_decs.insert(clips[0].screen.clone(), Decoder::open(&clips[0].screen, gpu)?);
+    let out_fps = params
+        .fps
+        .unwrap_or_else(|| screen_decs[&clips[0].screen].fps().round().max(1.0) as u32)
+        as i32;
+
+    // La scène (déjà posée par l'appelant via comp.set_scene) pilote le curseur et le
+    // fenêtrage par clip ; `walk_composited_timeline` s'en charge.
+    let scene = comp.scene_snapshot();
+
+    // ---- encodeur (choisi à l'exécution, cf. ExportCodec::candidates) + mux ----
+    let (mut enc_hwdev, mut enc_frames) = make_enc_frames(gpu, out_w as i32, out_h as i32)?;
+    // débit proportionnel à la surface de sortie (référence : 8Mbps @ 1920x1080), plancher
+    // 2Mbps pour rester regardable sur les petites tailles.
+    let bit_rate = ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
+    let mut enc = VideoEncoder::open(
+        &params.codec,
+        out_w as i32,
+        out_h as i32,
+        out_fps,
+        bit_rate,
+        enc_frames,
+    )?;
+    let ectx = enc.ctx;
+
+    let mut octx: *mut AVFormatContext = ptr::null_mut();
+    let outc = CString::new(out)?;
+    averr(
+        avformat_alloc_output_context2(&mut octx, ptr::null(), ptr::null(), outc.as_ptr()),
+        "alloc_output_context2",
+    )?;
+    let ostream = avformat_new_stream(octx, ptr::null());
+    if ostream.is_null() {
+        bail!("video avformat_new_stream");
+    }
+    averr(avcodec_parameters_from_context((*ostream).codecpar, ectx), "params_from_ctx")?;
+    (*ostream).time_base = (*ectx).time_base;
+    // Les deux streams doivent exister avant le header MP4 ; l'AAC reste ouvert pendant le
+    // rendu puis reçoit le PCM assemblé à partir des comptes de frames réellement produits.
+    let mut audio_encoder = AacEncoder::open(octx)?;
+    let mut pb: *mut AVIOContext = ptr::null_mut();
+    averr(avio_open(&mut pb, outc.as_ptr(), AVIO_FLAG_WRITE as i32), "avio_open")?;
+    sn_fmt_set_pb(octx, pb);
+    averr(avformat_write_header(octx, ptr::null_mut()), "write_header")?;
+
+    let opkt = av_packet_alloc();
+    let mut clip_frame_counts = vec![0u64; clips.len()];
+    let mut clip_pcm: Vec<Option<PlanarPcm>> =
+        std::iter::repeat_with(|| None).take(clips.len()).collect();
+    let t0 = Instant::now();
+
+    let frames = walk_composited_timeline(
+        clips,
+        gpu,
+        comp,
+        cfg,
+        out_fps,
+        &scene,
+        &mut screen_decs,
+        &mut webcam_decs,
+        &mut |frame_index| {
+            // Hardware path: the composed texture goes straight into an NV12
+            // encoder frame, so nothing ever descends to system memory.
+            let outf = av_frame_alloc();
+            averr(av_hwframe_get_buffer(enc_frames, outf, 0), "hwframe_get_buffer")?;
+            let out_tex = (*outf).data[0] as *mut c_void;
+            let out_slice = (*outf).data[1] as u32;
+            comp.rgb_to_nv12_scaled(out_w, out_h, out_tex, out_slice)?;
+            (*outf).pts = frame_index as i64;
+            enc.send(outf)?;
+            drain_encoder(ectx, octx, ostream, opkt)?;
+            av_frame_free(&mut (outf as *mut _));
+            progress(frame_index + 1);
+            Ok(())
+        },
+        &mut |clip_index, source_end_sec, frames_in_clip, speed_segments| {
+            clip_frame_counts[clip_index] = frames_in_clip;
+            let clip = &clips[clip_index];
+            if clip.has_audio && frames_in_clip > 0 {
+                match decode_clip_audio(&clip.screen, clip.source_start_sec, source_end_sec) {
+                    Ok(Some(pcm)) => {
+                        clip_pcm[clip_index] = Some(stretch_clip_pcm_by_speed(
+                            &pcm,
+                            speed_segments,
+                            out_fps as f64,
+                        ));
+                    }
+                    Ok(None) => eprintln!(
+                        "[pipeline] warning: clip #{} déclaré audio mais sans flux décodable; silence conservé",
+                        clip_index,
+                    ),
+                    Err(error) => eprintln!(
+                        "[pipeline] warning: décodage audio du clip #{} échoué ({error:#}); silence conservé",
+                        clip_index,
+                    ),
+                }
+            }
+            Ok(())
+        },
+    )?;
 
     comp.set_cursor_time(None);
     comp.set_timeline_time(None);
