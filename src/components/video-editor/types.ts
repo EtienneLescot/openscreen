@@ -390,10 +390,14 @@ export const DEFAULT_CROP_REGION: CropRegion = {
 export type PlaybackSpeed = number;
 
 export const MIN_PLAYBACK_SPEED = 0.1;
-export const MAX_PLAYBACK_SPEED = 100;
 // Chromium hard-caps HTMLMediaElement.playbackRate at 16 (setting more throws
 // NotSupportedError). At or below this, preview plays natively; above it, preview
 // frame-steps by seeking and audio export uses an offline pitch-preserved stretch.
+// ponytail: the editor cap and the native preview cap are the same number —
+// everything above this is the export path's stretch, and the editor's input
+// parser shouldn't accept speeds the preview cannot render. A 50× entry now
+// clamps to 16, not 100.
+export const MAX_PLAYBACK_SPEED = 16;
 export const MAX_NATIVE_PLAYBACK_RATE = 16;
 
 export function clampPlaybackSpeed(speed: number): PlaybackSpeed {

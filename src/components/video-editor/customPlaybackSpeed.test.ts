@@ -42,26 +42,25 @@ describe("parseCustomPlaybackSpeedInput", () => {
 	});
 
 	it("accepts the maximum editor speed", () => {
-		expect(parseCustomPlaybackSpeedInput("100")).toEqual({
+		expect(parseCustomPlaybackSpeedInput("16")).toEqual({
 			status: "valid",
-			draft: "100",
-			speed: 100,
+			draft: "16",
+			speed: 16,
 		});
 	});
 
-	it("accepts high speeds that exceed the native preview rate", () => {
-		// 16.1× was rejected under the old 16× cap; it must now be valid.
+	it("rejects speeds that exceed the native preview rate", () => {
+		// 16.1× exceeds Chromium's playbackRate ceiling, so the editor rejects it.
 		expect(parseCustomPlaybackSpeedInput("16.1")).toEqual({
-			status: "valid",
+			status: "too-fast",
 			draft: "16.1",
-			speed: 16.1,
 		});
 	});
 
 	it("rejects speeds above the editor maximum", () => {
-		expect(parseCustomPlaybackSpeedInput("100.1")).toEqual({
+		expect(parseCustomPlaybackSpeedInput("50")).toEqual({
 			status: "too-fast",
-			draft: "100.1",
+			draft: "50",
 		});
 	});
 });
