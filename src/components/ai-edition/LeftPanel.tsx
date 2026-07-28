@@ -2,7 +2,6 @@ import { ArrowLeft, Check, Film, Loader2, MessageSquare, Plus, Search, X } from 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import { AI_FEATURES_ENABLED } from "@/components/video-editor/featureFlags";
 import { useScopedT } from "@/contexts/I18nContext";
 import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -330,7 +329,7 @@ export function LeftPanel({
 	assetStatuses?: Record<string, "pending" | "running" | "failed">;
 	onRegenerateAsset?: (assetId: string, language: string) => Promise<void>;
 }) {
-	return active === "chat" && AI_FEATURES_ENABLED ? (
+	return active === "chat" ? (
 		<ChatStripPanel />
 	) : (
 		<MediaPane assetStatuses={assetStatuses} onRegenerateAsset={onRegenerateAsset} />
@@ -1815,9 +1814,7 @@ function ChatStripPanel() {
 }
 
 const RAIL_BUTTONS: Array<{ id: LeftTab; labelKey: string; icon: React.ElementType }> = [
-	...(AI_FEATURES_ENABLED
-		? [{ id: "chat" as LeftTab, labelKey: "leftRail.chat", icon: MessageSquare }]
-		: []),
+	{ id: "chat", labelKey: "leftRail.chat", icon: MessageSquare },
 	{ id: "media", labelKey: "leftRail.media", icon: Film },
 ];
 
