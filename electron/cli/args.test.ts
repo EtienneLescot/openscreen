@@ -154,6 +154,7 @@ describe("parseCliArgs", () => {
 	it("parses sources", () => {
 		expect(parse(["sources", "--json"])).toMatchObject({ kind: "sources", json: true });
 		expect(parse(["sources", "--bogus"])).toMatchObject({ kind: "error" });
+		expect(parse(["sources", "extra-arg"])).toMatchObject({ kind: "error" });
 	});
 
 	it("parses pack", () => {
@@ -163,6 +164,13 @@ describe("parseCliArgs", () => {
 			outDir: inCwd("bundle"),
 		});
 		expect(parse(["pack", "demo.openscreen"])).toMatchObject({ kind: "error" });
+		expect(parse(["pack", "--out", "bundle"])).toMatchObject({ kind: "error" });
+		expect(parse(["pack", "demo.openscreen", "--out", "bundle", "--bogus"])).toMatchObject({
+			kind: "error",
+		});
+		expect(parse(["pack", "a.openscreen", "b.openscreen", "--out", "bundle"])).toMatchObject({
+			kind: "error",
+		});
 	});
 
 	it("parses captions", () => {
