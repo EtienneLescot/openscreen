@@ -158,6 +158,38 @@ export interface CompositorExportParams {
 	codec?: string;
 }
 
+/** Sortie GIF native (slice 1, derrière `NATIVE_GIF_EXPORT_ENABLED`).
+ *  Tout omis → 854×480, 12 fps, boucle infinie, pas de dithering —
+ *  défauts choisis pour un GIF 8-bit-indexed lisible : 12 fps est la
+ *  cadence historique de `gif.js` côté renderer, 854×480 tient
+ *  confortablement dans la palette 256-couleurs sans banding visible
+ *  sur du contenu de présentation. Le dithering Floyd-Steinberg est off
+ *  par défaut (qualité acceptable sans, et double تقريبًا le coût CPU
+ *  du quantize par frame). */
+export interface CompositorExportGifParams {
+	width?: number;
+	height?: number;
+	fps?: number;
+	/** Compteur de loop GIF : `0` ou omis = infini, sinon `n` boucles finies. */
+	loopCount?: number;
+	/** Floyd-Steinberg error diffusion avant quantification. `false` par défaut. */
+	dither?: boolean;
+}
+
+/** Bilan d'un export GIF natif. Mêmes champs que `CompositorExportResult`
+ *  plus la taille du fichier sur disque (le format est petit, la
+ *  taille est une mesure d'utilité). */
+export interface CompositorExportGifResult {
+	frames: number;
+	wallS: number;
+	fps: number;
+	/** Durée du GIF exporté (s) — distincte de `wallS` (temps de rendu réel). */
+	videoDurationS: number;
+	/** Taille du fichier `.gif` final sur disque (octets), mesurée après
+	 *  le drop de l'encodeur (donc après le flush du trailer GIF89a). */
+	fileBytes: number;
+}
+
 // ---- AI Edition domain (Phase 1+) -----------------------------------------
 // v3/v4 AxcutDocument projects live under userData/projects/<id>.openscreen
 // (older builds used <id>.axcut, migrated on access). Project ids are
@@ -734,6 +766,25 @@ export type NativeBridgeRequest =
 				clipIndex: number;
 				/** Current screen-source time within the active clip's source window. */
 				sourceTimeSec: number;
+			};
+			requestId?: string;
+	  }
+	| {
+			domain: "compositor";
+			action: "exportGif";
+			/** Slice 1 du chemin natif GIF (derrière `NATIVE_GIF_EXPORT_ENABLED`,
+			 *  flag off pour cette PR). Surface réduite à un seul clip (screen +
+			 *  webcam + cursor sidecar optionnel) pour matcher la fonction Rust
+			 *  `gif_export::export_gif` ; le multiclip / scene JSON viendront
+			 *  dans une slice ultérieure si la bench passe. */
+			payload: {
+				screenPath: string;
+				webcamPath: string;
+				/** Sidecar `<screen>.cursor.json` selon la convention `ExportDialog`.
+				 *  Optionnel : null / absent → rend sans curseur. */
+				cursorPath?: string | null;
+				outPath?: string;
+				params?: CompositorExportGifParams;
 			};
 			requestId?: string;
 	  };

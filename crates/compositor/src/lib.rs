@@ -12,6 +12,7 @@ pub mod config;
 pub mod cursor;
 pub mod d3d;
 pub mod ffi;
+pub mod gif_export;
 pub mod live;
 pub mod pipeline;
 pub mod regions;

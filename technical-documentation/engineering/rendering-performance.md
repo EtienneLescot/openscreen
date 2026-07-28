@@ -419,6 +419,79 @@ Unit tests never look at a pixel. The `native*` arms write real files: export th
 
 **What it was.** `libvpx-vp9` software encode as a fallback for the absence of a hardware VP9 encoder. **What the measurement said.** Correct output, no hardware VP9 encoder on the target reference machine (the AMD iGPU ships `h264_amf` and HEVC encode, not VP9). It is the only VP9 path available on this hardware, but it is far too slow for either preview or export — the gap to the hardware H.264 path the product actually uses is several orders of magnitude, and no in-house benchmark number survives the question of what it would buy. **One-line reason not to re-propose:** with no hardware VP9 to fall back on, software VP9 cannot reach the frame rate the product requires.
 
+### Native GIF export — initial bench (slice 1, 2026-07-28)
+
+> **The path chosen.** Hand-rolled pure-Rust GIF89a writer in
+> [`crates/compositor/src/gif_export.rs`](../../crates/compositor/src/gif_export.rs):
+> header + Graphics Control Extension + Image Descriptor + LZW
+> (GIF's `palette`-as-codes-0..255-with-256-clear-257-EOI variant,
+> LSB-first code packing) + trailer, hand-rolled. Palette via
+> median-cut on the frame's colour histogram (the standard Heckbert
+> algorithm, count-weighted split at the median of the longest-axis
+> channel). No new crate deps, no swscale round-trip, no GPL
+> pull-ins. The rejected alternatives were the ffmpeg
+> `palettegen` + `paletteuse` filter graph — the compositor's ffmpeg
+> bindings are `avformat` / `avcodec` / `avutil` / `swscale` /
+> `swresample` only, **no `libavfilter`**
+> ([`crates/compositor/Cargo.toml`](../../crates/compositor/Cargo.toml), [`crates/compositor/build.rs`](../../crates/compositor/build.rs)),
+> so `palettegen` / `paletteuse` are not buildable — and ffmpeg's
+> `gif` muxer / codec, which expects pre-quantized `PAL8` frames
+> and refuses to do the quantize step itself. The "ffmpeg GIF
+> muxer" route was a write-our-own-palette-and-LZW path either
+> way, and the CPU readback (the dominant per-frame cost) lands
+> us on CPU regardless. Writing it in pure Rust skips a swscale
+> round-trip and keeps the readback / quantize / LZW layers
+> auditable in one file. See [`crates/compositor/src/gif_export.rs`](../../crates/compositor/src/gif_export.rs) for
+> the implementation, [`crates/poc-d3d/src/bench.rs`](../../crates/poc-d3d/src/bench.rs) for the bench.
+>
+> **No prior `gif.js` baseline is documented in this file.** The browser-side
+> `npm run bench:export` that measured `gif.js` (Canvas2D compositor +
+> `gif.js` worker, the same path `gifExporter.ts` still uses today) was
+> deleted with the rest of the WebCodecs export pipeline (see
+> [The WebCodecs bench (retired)](#the-webcodecs-bench-retired)). The
+> closest historical anchor is the M2 arm of the retired harness, which
+> measured the full `native ffmpeg` path (encode `h264_amf` of pre-materialised
+> frames) at **165 fps** — but that was the encode alone, not the
+> descent, and the comparison with GIF's CPU quantize + LZW is apples
+> to oranges anyway. **The honest signal here is the wall-time of the
+> native GIF path itself**; the comparison with `gif.js` is a separate
+> cross-stack measurement to be added once the renderer-side `gif.js`
+> is exercised through the same harness, and a follow-up PR will pick
+> that up.
+
+The slice-1 bench lives at `--cfg GIF` on the existing
+`crates/poc-d3d/src/bench.rs` (the same C0..C8 harness, just a separate
+mode). It drives `compositor::export_gif` end-to-end on the fixture
+(`fixture/screen.mp4` + `fixture/webcam.mp4` + `fixture/screen.cursor.json`,
+360 frames at 60 fps = 6 s source), defaulting to 854×480 / 12 fps /
+infinite loop / no dithering, and reports wall time, frame count, FPS,
+file size, ms/frame, and spread across `--repeat` runs.
+
+```bash
+# from crates/
+x.bat run --release -- --cfg GIF --repeat 3 --out out/
+# optional overrides: --gif-width 1920 --gif-height 1080 --gif-fps 24 --gif-dither 1
+```
+
+Per the brief: "**the readback is the dominant per-frame cost**." That
+claim is the one the bench is built to verify. The wall-time recorded
+in slice 1 is the first number; a 5× regression vs. the renderer-side
+`gif.js` would block the swap (the user already chose the Rust path,
+but a 5× regression isn't a win). The follow-up slice will run the
+same harness against `gif.js` to settle that ratio.
+
+**Reading the result.** Compare two numbers:
+- the C0 row of the C0..C8 bench (encode alone, no descent) — the
+  GPU-residency ceiling on this machine for the same source;
+- the `wall_s_best` row of the GIF bench — what the native GIF path
+  actually delivers, including the readback + median-cut + LZW.
+
+The gap between them is the cost the readback + palette add on top of
+the composite. If the GIF wall is within ~2× the C0 wall, the path is
+viable; if it's >5×, the swap is rejected on the bench signal. The
+ratio is what this section claims — the absolute number will land when
+the bench runs on the reference machine.
+
 ## Known gaps
 
 - **The C0→C8 table rests on one run, on one machine.** [Recorded above](#one-admissible-run--2026-07-27) and admissible on its own gate, but a single sweep: the C5–C7 plateau is the part most likely to move under a second run, since the layers it prices are individually smaller than the machine's own noise. A repeat on a cool machine — and on the discrete-GPU box that is [owed anyway](#known-gaps) — would settle whether those three are genuinely free or merely under the floor.
