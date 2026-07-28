@@ -1765,26 +1765,46 @@ impl Compositor {
                 fit_dst_to_aspect(scale_frame(dst, padding_scale), crop_aspect)
             }
         };
-        // ponytail: quand on zoome (p.zoom > 1.0), le contenu écran était
-        // contraint au rect paddé (s_dst), ce qui rendait le zoom plus faible
-        // que prévu — il s'arrêtait à la frontière paddée au lieu de déborder
-        // jusqu'aux bords du cadre (rapport issue #179). On étend s_dst au
-        // cadre complet quand un zoom est actif, pour que le contenu zoomé
-        // remplisse toute la frame, comme attendu. Le rayon et l'ombre sont
-        // neutralisés en parallèle (cf. plus bas) : sinon ils suivent
-        // l'expansion et arrondissent / ombrent tout l'output, pas l'écran.
-        // TODO : à la place, séparer "rect contenu" de "rect cadre" pour garder
-        // le cadre (ombre, coins) au rect paddé pendant que le contenu déborde.
-        let s_dst = if p.zoom > 1.0 {
-            [0.0, 0.0, 1.0, 1.0]
-        } else {
-            fit_screen(p.screen.dst)
+        // ponytail (issue #179) : le rect destination de l'écran ("zoom frame")
+        // grandit avec le zoom, du rect paddé jusqu'au cadre complet — plus
+        // jamais le switch binaire d'avant (padded → [0,0,1,1] en une frame,
+        // qui faisait disparaître le padding instantanément et envoyait l'ombre
+        // et les coins sur tout l'output). Le source rect (computé par
+        // `screen_source_rect` plus bas) et le zoom frame sont liés : le GPU
+        // mappe le source rect sur le zoom frame, et le padding est le delta
+        // entre le zoom frame et le cadre. Le padding s'efface smoothly à
+        // mesure que le zoom monte, et disparaît pile quand le zoom atteint
+        // `1 / padding_scale` (= cadre / padded_size) — au-delà, le zoom
+        // frame reste au cadre et seul le source rect continue de rétrécir
+        // (le GPU upscale davantage). Le media reste à pleine résolution
+        // toute la durée : c'est le *mapping* qui s'ajuste, pas la texture.
+        //
+        // TODO : si on veut que l'ombre et les coins restent ancrés au rect
+        // paddé pendant que le contenu déborde (effet "fenêtre"), il faudra
+        // séparer le rect "cadre" du rect "contenu" et appliquer l'ombre et
+        // les coins au cadre seul. Pour l'instant ils suivent le zoom frame,
+        // ce qui donne un rendu cohérent (le cadre "suit" le zoom) sans
+        // l'abrupt switch.
+        let zoom_grow = |zoom: f32, base: [f32; 4]| -> [f32; 4] {
+            // growth = min(zoom, 1/padding_scale) : on sature pile quand le
+            // zoom frame atteint le cadre. padding_scale est dans (0, 1] ;
+            // `max(0.0001)` évite une division par 0 sur des fixtures
+            // pathologiques (padding = 100% clampé à 0.6 → 1.667, jamais
+            // infini en pratique).
+            let growth = zoom.min(1.0 / padding_scale.max(0.0001));
+            let cx = base[0] + base[2] * 0.5;
+            let cy = base[1] + base[3] * 0.5;
+            let nw = (base[2] * growth).min(1.0);
+            let nh = (base[3] * growth).min(1.0);
+            [
+                (cx - nw * 0.5).max(0.0).min(1.0 - nw),
+                (cy - nh * 0.5).max(0.0).min(1.0 - nh),
+                nw,
+                nh,
+            ]
         };
-        let s_dst_prev = if pp.zoom > 1.0 {
-            [0.0, 0.0, 1.0, 1.0]
-        } else {
-            fit_screen(pp.screen.dst)
-        };
+        let s_dst = zoom_grow(p.zoom, fit_screen(p.screen.dst));
+        let s_dst_prev = zoom_grow(pp.zoom, fit_screen(pp.screen.dst));
         // le padding n'affecte QUE l'écran (la quantité de fond révélée). La webcam reste ancrée
         // en bas-droite à sa marge fixe, quelle que soit la valeur de padding (pas de scale_frame)
         // — SAUF quand l'app a résolu un placement explicite (`app_webcam_rect`, drag-to-reposition
@@ -1863,18 +1883,19 @@ impl Compositor {
         // (les deux quantités coïncident quand s_dst = [0,0,1,1]). TODO : à la place,
         // séparer "rect contenu" de "rect cadre" pour garder les coins au rect paddé
         // pendant que le contenu déborde (cf. le TODO sur `s_dst` plus haut).
-        let s_radius = if p.zoom > 1.0 {
-            0.0
-        } else {
-            match (cfg.rounded, app_screen_radius_frac, scene_roundness_frac) {
-                (false, _, _) => 0.0,
-                // Preset en bloc : le rayon appartient à la boîte écran (parité exacte avec la caméra).
-                (true, Some(f), _) => f * s_min_px,
-                // Scène sans rayon imposé : slider Roundness, relatif au cadre.
-                (true, None, Some(f)) => f * frame_min_px,
-                // Fixture/bench (pas de scène) : chemin inspector historique, inchangé.
-                (true, None, None) => p.screen.radius * lp.radius_scale,
-            }
+        //
+        // (révision : la croissance de `s_dst` est *continue* via `zoom_grow` au-dessus,
+        // donc `s_min_px` suit le zoom frame et le rayon aussi — pas de switch
+        // binaire. Le `if p.zoom > 1.0 { 0.0 }` n'est plus nécessaire ; on le
+        // retire pour laisser le rayon suivre naturellement le zoom frame.)
+        let s_radius = match (cfg.rounded, app_screen_radius_frac, scene_roundness_frac) {
+            (false, _, _) => 0.0,
+            // Preset en bloc : le rayon appartient à la boîte écran (parité exacte avec la caméra).
+            (true, Some(f), _) => f * s_min_px,
+            // Scène sans rayon imposé : slider Roundness, relatif au cadre.
+            (true, None, Some(f)) => f * frame_min_px,
+            // Fixture/bench (pas de scène) : chemin inspector historique, inchangé.
+            (true, None, None) => p.screen.radius * lp.radius_scale,
         };
         let w_px = [w_dst[2] * self.rw(), w_dst[3] * self.rh()];
         // Rayon caméra. Le slider Roundness ne s'y applique jamais (il ne vaut que pour l'ÉCRAN).
@@ -2033,11 +2054,13 @@ impl Compositor {
         // L'ombre suit la silhouette réellement affichée : le rect arrondi quand l'écran est
         // droit, le quadrilatère projeté quand il est incliné. Un rect droit derrière un écran
         // penché ne se lisait pas comme son ombre mais comme une seconde surface.
-        // Pendant un zoom, le rect contenu déborde jusqu'aux bords du cadre (issue #179) —
-        // pas d'ombre : dessinée autour de [0,0,1,1] avec son `spread`, elle se lirait comme
-        // un masque noir contre les bords, pas comme une ombre. TODO : la garder au rect
-        // paddé du cadre (cf. le TODO sur `s_dst` plus haut).
-        if cfg.shadow && p.zoom <= 1.0 {
+        //
+        // (révision : `s_dst` croît continuously avec le zoom via `zoom_grow`, donc
+        // l'ombre suit naturellement le zoom frame. Le `p.zoom <= 1.0` gate d'avant
+        // n'est plus nécessaire et on le retire — sinon on aurait une ombre
+        // qui disparaît d'un coup quand le zoom démarre, aussi abrupt que le
+        // switch binaire de `s_dst`.)
+        if cfg.shadow {
             let spread = SCREEN_SHADOW_SPREAD_FRAC * frame_min_px;
             let offset = [0.0, SCREEN_SHADOW_OFFSET_FRAC * frame_min_px];
             let opacity = 0.45 * lp.shadow_scale;
