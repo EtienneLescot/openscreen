@@ -1,5 +1,10 @@
+import {
+	clampFocusToDepth,
+	ZOOM_DEPTH_SCALES,
+	type ZoomDepth,
+	type ZoomFocus,
+} from "@/components/video-editor/types";
 import { clamp } from "@/utils/math";
-import { clampFocusToDepth, ZOOM_DEPTH_SCALES, type ZoomDepth, type ZoomFocus } from "../types";
 
 interface StageSize {
 	width: number;
