@@ -15,8 +15,7 @@ describe("parseAspectRatio", () => {
 		expect(parseAspectRatio(" 64 : 27 ")).toEqual({ width: 64, height: 27 });
 	});
 
-	it('rejects the legacy "native" sentinel and malformed input', () => {
-		expect(parseAspectRatio("native")).toBeNull();
+	it("rejects malformed input", () => {
 		expect(parseAspectRatio("16/9")).toBeNull();
 		expect(parseAspectRatio("16:")).toBeNull();
 		expect(parseAspectRatio("0:9")).toBeNull();
@@ -26,10 +25,9 @@ describe("parseAspectRatio", () => {
 });
 
 describe("isAspectRatio", () => {
-	it("accepts presets, free-form shapes and the legacy sentinel", () => {
+	it("accepts presets and free-form shapes", () => {
 		expect(isAspectRatio("16:9")).toBe(true);
 		expect(isAspectRatio("64:27")).toBe(true);
-		expect(isAspectRatio("native")).toBe(true);
 	});
 
 	it("rejects anything a project file could hold that isn't a ratio", () => {
@@ -61,10 +59,6 @@ describe("getAspectRatioValue", () => {
 		expect(getAspectRatioValue("16:9")).toBeCloseTo(16 / 9, 6);
 		expect(getAspectRatioValue("9:16")).toBeCloseTo(9 / 16, 6);
 		expect(getAspectRatioValue("64:27")).toBeCloseTo(64 / 27, 6);
-	});
-
-	it("falls back to 16/9 for the legacy sentinel, which has no document context here", () => {
-		expect(getAspectRatioValue("native")).toBeCloseTo(FALLBACK_RATIO, 6);
 	});
 });
 

@@ -185,12 +185,12 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	// exactly what the frame is styled to (`width: frameSize.width` a few lines below), so it's
 	// used directly everywhere `canvasSize` used to be — one source of truth, no separate
 	// observer that can desync from it.
-	// `resolveAspectRatioValue`, not bare `getAspectRatioValue`: the latter has no document to
-	// resolve the legacy "native" selection against and answers 16/9 for it, so a project saved
-	// with "native" over portrait footage framed the preview 16:9 while `pickOutputDims` handed
-	// the compositor a portrait `output` — preview and export disagreed on the frame's shape.
+	// `resolveAspectRatioValue`, not bare `getAspectRatioValue`: keeps preview and export
+	// routing through the same funnel — the v5→v6 upgrader rewrites the legacy "native"
+	// selection to a concrete `"W:H"` token, so both paths agree on the resolved shape
+	// without an extra document argument.
 	const frameSize = useMemo(() => {
-		const ratio = resolveAspectRatioValue(document, settings.aspectRatio);
+		const ratio = resolveAspectRatioValue(settings.aspectRatio);
 		const { width: containerWidth, height: containerHeight } = containerSize;
 		if (containerWidth <= 0 || containerHeight <= 0)
 			return { width: containerWidth, height: containerHeight };
@@ -200,7 +200,7 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		}
 		const width = containerWidth;
 		return { width: Math.round(width), height: Math.round(width / ratio) };
-	}, [containerSize, settings.aspectRatio, document]);
+	}, [containerSize, settings.aspectRatio]);
 
 	// Crop is per-clip (see clipSchema.cropRegion) — resolve it from whichever
 	// clip the playhead is currently inside, the same lookup VirtualPreview
