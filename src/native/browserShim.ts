@@ -4,6 +4,7 @@
 // rapid iteration without the Electron window overhead.
 
 import { PROVIDER_DEFINITIONS } from "../../electron/ai-edition/provider-registry";
+import { migrateRawDocumentToCurrent } from "../lib/ai-edition/document/migrate";
 import { nativeBridgeClient as realClient } from "./client";
 
 function detectBrowserMode(): boolean {
@@ -184,7 +185,14 @@ function createShimBridgeClient() {
 				documents: Record<string, ShimDocument>;
 				order: string[];
 			};
-			documentsByProject = parsed.documents ?? {};
+			// ponytail: load-time migration. Older shims persisted v3 documents;
+			// the renderer's `documentSchema.parse` now requires v5, so upgrade
+			// any stale entries once on init (idempotent for v5 inputs).
+			const loaded = parsed.documents ?? {};
+			for (const [id, doc] of Object.entries(loaded)) {
+				loaded[id] = migrateRawDocumentToCurrent(doc) as ShimDocument;
+			}
+			documentsByProject = loaded;
 			projectOrder = parsed.order ?? [];
 		} catch {
 			// ponytail: corrupt/unavailable localStorage — start fresh rather
@@ -327,13 +335,23 @@ function createShimBridgeClient() {
 			listProjects: () => Promise.resolve(listProjectSummaries()),
 			get: (projectId: string) => {
 				const doc = documentsByProject[projectId];
+				// ponytail: load-time migration. Older shims persisted v3 documents
+				// in localStorage; the renderer's `documentSchema.parse` now requires
+				// v5, so upgrade on read (idempotent for v5 inputs).
+				const migrated = doc ? (migrateRawDocumentToCurrent(doc) as ShimDocument) : null;
 				return Promise.resolve(
-					doc ? { success: true, document: doc } : { success: false, error: "Project not found" },
+					migrated
+						? { success: true, document: migrated }
+						: { success: false, error: "Project not found" },
 				);
 			},
 			create: (title?: string) => {
 				const doc: ShimDocument = {
-					schemaVersion: 3,
+					// ponytail: write v5 directly. The shim's IIFE above migrates any
+					// stale v3 entries on init, and new projects are minted at the
+					// current schema version so the renderer's `documentSchema.parse`
+					// (a pure v6 validator) accepts the returned document.
+					schemaVersion: 5,
 					project: {
 						id: `proj_${Math.random().toString(36).slice(2, 10)}`,
 						title: title || "Untitled Project",

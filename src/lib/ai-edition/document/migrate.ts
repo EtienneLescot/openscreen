@@ -29,6 +29,7 @@ import {
 	type AxcutTrimRange,
 	type AxcutZoomRegion,
 	documentSchema,
+	migrateRawDocumentToCurrent,
 } from "../schema";
 import { createId } from "./ids";
 
@@ -53,6 +54,16 @@ function clampSec(sec: number): number {
 	if (!Number.isFinite(sec) || sec < 0) return 0;
 	return Math.round(sec * 1000) / 1000;
 }
+
+/**
+ * Re-exported from `../schema`, where the composer lives so the Electron main
+ * process can import it without dragging this module's `@/`-aliased value
+ * imports into a bundle that has no alias configured.
+ *
+ * v2 inputs are not handled by it — `migrateProjectDataToAxcutDocument` below
+ * still owns the legacy EditorProjectData → AxcutDocument translation.
+ */
+export { migrateRawDocumentToCurrent };
 
 function toLegacyMedia(input: ProjectMedia | undefined): ProjectMedia | null {
 	if (!input) return null;
@@ -199,12 +210,12 @@ export function migrateProjectDataToAxcutDocument(
 	const legacyEditor: AxcutLegacyEditor = input.editor ? { ...input.editor } : null;
 
 	// Emits the **v4** shape (per-asset cameraTrack + RAW-virtual-ms regions) and lets
-	// `documentSchema`'s v4→v5 preprocess perform the clip-anchoring, so the
+	// `migrateRawDocumentToCurrent` perform the v4→v5 clip-anchoring, so the
 	// modifier migration lives in exactly ONE place instead of being duplicated here.
 	// Deliberately not `axcutSchemaVersion`: that would label the draft as already-v5
-	// and the preprocess would skip anchoring, leaving v2-imported regions unanchored.
-	// Untyped on purpose — this is the INPUT to `documentSchema.parse` (which upgrades
-	// and validates it), not an already-valid v5 document.
+	// and the upgrader would skip anchoring, leaving v2-imported regions unanchored.
+	// Untyped on purpose — this is the INPUT to `documentSchema.parse` (which
+	// validates it), not an already-valid v5 document.
 	const draft = {
 		schemaVersion: 4,
 		project: {
@@ -230,7 +241,7 @@ export function migrateProjectDataToAxcutDocument(
 		legacyEditor,
 	};
 
-	return documentSchema.parse(draft);
+	return documentSchema.parse(migrateRawDocumentToCurrent(draft));
 }
 
 /**

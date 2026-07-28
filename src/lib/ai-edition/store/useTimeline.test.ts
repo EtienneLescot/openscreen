@@ -40,7 +40,11 @@ vi.mock("@/native/client", () => ({
 }));
 
 const sampleDoc = {
-	schemaVersion: 3,
+	// ponytail: the bridge contract after the migration hoist is v6 — every
+	// load site (DocumentService, browserShim) runs `migrateRawDocumentToCurrent`
+	// before returning, and the renderer's `parseDocument` is a pure v6
+	// validator. Test fixtures model the post-hoist contract.
+	schemaVersion: 6,
 	project: {
 		id: "proj_test",
 		title: "Test",
@@ -337,7 +341,7 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 			projectId: "proj_test",
 			document: {
 				...sampleDoc,
-				schemaVersion: 5,
+				schemaVersion: 6,
 				zoomRanges: [anchoredZoom("z_keep", 2, 3), anchoredZoom("z_drop", 6, 8)],
 			} as unknown as typeof sampleDoc,
 			revision: 1,
@@ -383,7 +387,7 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 		useProjectStore.setState({
 			document: {
 				...sampleDoc,
-				schemaVersion: 5,
+				schemaVersion: 6,
 				zoomRanges: [anchoredZoom("z_edge", 3, 7)],
 			} as unknown as typeof sampleDoc,
 		});

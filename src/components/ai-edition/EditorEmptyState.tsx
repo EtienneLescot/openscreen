@@ -17,7 +17,10 @@ import { AlertCircle, Film, FolderOpen, Upload, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { useScopedT } from "@/contexts/I18nContext";
-import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
+import {
+	migrateProjectDataToAxcutDocument,
+	migrateRawDocumentToCurrent,
+} from "@/lib/ai-edition/document/migrate";
 import { documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { nativeBridgeClient } from "@/native";
@@ -82,7 +85,7 @@ export function EditorEmptyState({
 			const isAxcutDocument =
 				typeof raw === "object" && raw !== null && "schemaVersion" in raw && "timeline" in raw;
 			const doc = isAxcutDocument
-				? documentSchema.parse(raw)
+				? documentSchema.parse(migrateRawDocumentToCurrent(raw)) // disk-load: upgrade v3/v4 → v5, then validate
 				: migrateProjectDataToAxcutDocument(raw as never);
 			const saved = await nativeBridgeClient.aiEdition.save(doc);
 			if (!saved.success || !saved.document) return false;
