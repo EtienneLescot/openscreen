@@ -315,6 +315,7 @@ interface Window {
 		cliGetRequest: () => Promise<import("../src/lib/cliContracts").CliRequest>;
 		cliProgress: (progress: import("../src/lib/cliContracts").CliProgressEvent) => void;
 		cliLog: (level: "info" | "error", message: string) => void;
+		cliRecordingStarted: () => void;
 		cliDone: (result: import("../src/lib/cliContracts").CliDoneResult) => Promise<void>;
 		onCliStopRecording: (callback: () => void) => () => void;
 		setLocale: (locale: string) => Promise<void>;

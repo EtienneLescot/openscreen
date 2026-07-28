@@ -31,6 +31,12 @@ export interface CliExportRequest {
 	 * zoom regions are preserved; suggestions never overlap them.
 	 */
 	autoZoom: boolean;
+	/**
+	 * Convert the recording's window-focus telemetry (`<video>.focus.json`,
+	 * from `record --follow-windows`) into pan/zoom regions that follow the
+	 * focused window.
+	 */
+	followWindows: boolean;
 	/** Absolute path to a voiceover audio file to mix into the export (MP4 only). */
 	audioPath: string | null;
 	/** "mix" layers the voiceover over the recording's audio; "replace" drops the original. */
@@ -54,6 +60,12 @@ export interface CliRecordRequest {
 	durationMs: number | null;
 	/** When set, write a ready-to-export .openscreen project here after recording. */
 	projectOut: string | null;
+	/**
+	 * Record window-focus telemetry alongside the capture (macOS). The export
+	 * step's --follow-windows turns it into automatic pan/zoom between the
+	 * windows the user focused. Requires display capture (not --window).
+	 */
+	followWindows: boolean;
 }
 
 export interface CliSourcesRequest {
@@ -103,6 +115,8 @@ export interface CliDoneResult {
 	screenVideoPath?: string;
 	webcamVideoPath?: string;
 	cursorDataPath?: string;
+	/** Record --follow-windows: written window-focus telemetry sidecar. */
+	focusDataPath?: string;
 	projectPath?: string;
 	durationMs?: number;
 	/**

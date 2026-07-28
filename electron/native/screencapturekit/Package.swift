@@ -15,6 +15,10 @@ let package = Package(
 		.executable(
 			name: "openscreen-macos-cursor-helper",
 			targets: ["OpenScreenMacOSCursorHelper"]
+		),
+		.executable(
+			name: "openscreen-macos-focus-helper",
+			targets: ["OpenScreenMacOSFocusHelper"]
 		)
 	],
 	targets: [
@@ -25,6 +29,10 @@ let package = Package(
 		.executableTarget(
 			name: "OpenScreenMacOSCursorHelper",
 			path: "Sources/OpenScreenMacOSCursorHelper"
+		),
+		.executableTarget(
+			name: "OpenScreenMacOSFocusHelper",
+			path: "Sources/OpenScreenMacOSFocusHelper"
 		)
 	]
 )

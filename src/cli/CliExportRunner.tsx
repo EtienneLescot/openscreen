@@ -31,6 +31,9 @@ import type { ExportProgress } from "@/lib/exporter/types";
 import { GIF_SIZE_PRESETS } from "@/lib/exporter/types";
 import { VideoExporter } from "@/lib/exporter/videoExporter";
 import { mixVoiceoverIntoVideo } from "@/lib/exporter/voiceoverMix";
+import type { FocusRecordingData } from "@/lib/windowFocus/contracts";
+import { FOCUS_SIDECAR_SUFFIX } from "@/lib/windowFocus/contracts";
+import { focusTelemetryToZoomRegions } from "@/lib/windowFocus/focusToZoomRegions";
 import { nativeBridgeClient } from "@/native";
 import type { CursorRecordingData, NativePlatform } from "@/native/contracts";
 import { getAspectRatioValue, getNativeAspectRatioValue } from "@/utils/aspectRatioUtils";
@@ -203,6 +206,30 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 	const probed = await probeVideoDimensions(videoUrl);
 	const sourceWidth = probed.width || DEFAULT_SOURCE_DIMENSIONS.width;
 	const sourceHeight = probed.height || DEFAULT_SOURCE_DIMENSIONS.height;
+
+	if (request.followWindows) {
+		const sidecarPath = `${media.screenVideoPath}${FOCUS_SIDECAR_SUFFIX}`;
+		const response = await fetch(toFileUrl(sidecarPath)).catch(() => null);
+		if (!response?.ok) {
+			throw new Error(
+				`--follow-windows needs the focus telemetry sidecar (${sidecarPath}); record with "record --follow-windows"`,
+			);
+		}
+		const focusData = (await response.json()) as FocusRecordingData;
+		const followRegions = focusTelemetryToZoomRegions(focusData, {
+			totalMs: probed.durationMs,
+			existingRegions: editor.zoomRegions,
+		});
+		if (followRegions.length > 0) {
+			editor.zoomRegions = [...editor.zoomRegions, ...followRegions].sort(
+				(a, b) => a.startMs - b.startMs,
+			);
+		}
+		window.electronAPI.cliLog(
+			"info",
+			`Follow-windows: added ${followRegions.length} region(s) from focus telemetry`,
+		);
+	}
 
 	if (request.autoZoom) {
 		const autoRegions = buildAutoZoomRegions(

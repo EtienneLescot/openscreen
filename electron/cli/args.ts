@@ -63,6 +63,8 @@ Export options:
                             GIF size preset (default: from project)
   --preview-size <WxH>      Reference preview box for annotation scaling (default 1280x720)
   --auto-zoom               Add automatic zooms from cursor telemetry (editor's magic wand)
+  --follow-windows          Pan/zoom to the focused window using telemetry from
+                            "record --follow-windows"
   --audio <file>            Mix a voiceover audio file into the MP4 (mp3/wav/m4a)
   --audio-mode <mix|replace>
                             Layer over the recording's audio (default) or replace it
@@ -80,6 +82,8 @@ Record options (recording is saved into the app's recordings directory):
   --duration <seconds>      Stop automatically after this long
   --project <out.openscreen>
                             Write a ready-to-export project file when done
+  --follow-windows          Also record which window has focus (macOS); pair with
+                            "export --follow-windows" for automatic window switching
   --json                    NDJSON events on stdout
 
 Stopping a recording: send SIGINT/SIGTERM, type "stop" + Enter on stdin,
@@ -153,6 +157,7 @@ function parseExport(args: string[], cwd: string): CliCommand {
 		previewWidth: null,
 		previewHeight: null,
 		autoZoom: false,
+		followWindows: false,
 		audioPath: null,
 		audioMode: "mix",
 		audioOffsetSec: 0,
@@ -222,6 +227,9 @@ function parseExport(args: string[], cwd: string): CliCommand {
 			case "--auto-zoom":
 				request.autoZoom = true;
 				break;
+			case "--follow-windows":
+				request.followWindows = true;
+				break;
 			case "--audio": {
 				const [value, next] = takeValue(args, i, arg);
 				request.audioPath = resolvePath(value, cwd);
@@ -288,6 +296,7 @@ function parseRecord(args: string[], cwd: string): CliCommand {
 		cursorMode: "editable-overlay",
 		durationMs: null,
 		projectOut: null,
+		followWindows: false,
 	};
 
 	for (let i = 0; i < args.length; i++) {
@@ -350,12 +359,20 @@ function parseRecord(args: string[], cwd: string): CliCommand {
 				i = next;
 				break;
 			}
+			case "--follow-windows":
+				request.followWindows = true;
+				break;
 			case "--json":
 				request.json = true;
 				break;
 			default:
 				throw new Error(`Unknown record option: ${arg}`);
 		}
+	}
+	if (request.followWindows && request.windowTitle) {
+		throw new Error(
+			"--follow-windows records the whole display and cannot be combined with --window",
+		);
 	}
 	return request;
 }

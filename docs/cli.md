@@ -74,6 +74,32 @@ Platform notes:
   which may show a system picker dialog and requires a desktop session
   (headless/SSH sessions without a portal cannot record).
 
+### Multi-window demos: `--follow-windows`
+
+One window is rarely enough for a product demo — a real workflow moves between
+a terminal, an editor, a browser. `--follow-windows` records the whole display
+**plus a window-focus timeline** (a `<video>.focus.json` sidecar produced by a
+native helper, macOS only for now), and the export step turns that timeline
+into zoom regions that cinematically pan/zoom to whichever window you focused:
+
+```bash
+openscreen record --display 0 --follow-windows --project demo.openscreen
+# ...switch between your terminal, editor, browser while recording...
+openscreen export demo.openscreen -o demo.mp4 --follow-windows
+```
+
+Behavior:
+
+- Each window focused for ≥1.5 s becomes a zoom region framing that window
+  (6% margin, zoom capped at 5×); the renderer's zoom spring animates the
+  camera between windows instead of hard-cutting.
+- Near-fullscreen windows produce no zoom — the camera pulls back to the full
+  frame.
+- Brief detours (<1.5 s) are ignored, and regions never overlap zooms already
+  in the project, so manual edits win.
+- Combines with `--auto-zoom` (cursor-dwell zooms fill the gaps between
+  window switches) and all other export options.
+
 ### `openscreen sources`
 
 Lists capturable displays, windows, and microphones — the same enumeration the

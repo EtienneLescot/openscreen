@@ -16,6 +16,7 @@ import type {
 import { getSelectedDesktopSource, registerIpcHandlers } from "../ipc/handlers";
 import { ASSET_BASE_URL_ARG } from "../windows";
 import { CLI_USAGE, type CliCommand } from "./args";
+import { FocusSampler, isFocusSamplingAvailable, resolveRecordedDisplayId } from "./focusSampler";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
@@ -541,6 +542,24 @@ export function runCli(command: CliCommand): void {
 					if (result.success && command.kind === "captions" && result.projectData !== undefined) {
 						await writeProjectFile(command.projectPath, result.projectData);
 					}
+					if (
+						result.success &&
+						command.kind === "record" &&
+						command.followWindows &&
+						focusSampler &&
+						result.screenVideoPath
+					) {
+						const focusData = focusSampler.stop(resolveRecordedDisplayId(command.displayIndex));
+						if (focusData && focusData.samples.length > 0) {
+							const focusDataPath = `${result.screenVideoPath}.focus.json`;
+							await fs.writeFile(focusDataPath, JSON.stringify(focusData), "utf8");
+							result.focusDataPath = focusDataPath;
+						} else {
+							output.error(
+								`Focus sampling produced no samples (helper diagnostics: ${focusSampler.diagnostics()})`,
+							);
+						}
+					}
 				} catch (error) {
 					result.success = false;
 					result.error = `Run succeeded but writing the project file failed: ${String(error)}`;
@@ -562,6 +581,7 @@ export function runCli(command: CliCommand): void {
 					} else {
 						output.info(`Recording saved → ${result.screenVideoPath}`);
 						if (result.cursorDataPath) output.info(`Cursor data → ${result.cursorDataPath}`);
+						if (result.focusDataPath) output.info(`Focus data → ${result.focusDataPath}`);
 						if (result.projectPath) output.info(`Project → ${result.projectPath}`);
 					}
 					output.event("done", { ...result });
@@ -573,6 +593,32 @@ export function runCli(command: CliCommand): void {
 				// Give the renderer a beat to resolve the invoke before exiting.
 				setTimeout(() => app.exit(result.success ? 0 : 1), 50);
 			});
+
+			let focusSampler: FocusSampler | null = null;
+			if (command.kind === "record" && command.followWindows) {
+				if (!isFocusSamplingAvailable()) {
+					output.error(
+						process.platform === "darwin"
+							? "--follow-windows needs the focus helper; build it with: npm run build:native:mac"
+							: "--follow-windows is currently macOS-only",
+					);
+					app.exit(2);
+					return;
+				}
+				focusSampler = new FocusSampler();
+				ipcMain.on("cli-recording-started", () => {
+					try {
+						focusSampler?.start();
+						output.event("focus-sampling-started");
+					} catch (error) {
+						output.error(`Focus sampling failed to start: ${String(error)}`);
+					}
+				});
+			} else {
+				ipcMain.on("cli-recording-started", () => {
+					// No focus sampling requested; nothing to do.
+				});
+			}
 
 			if (command.kind === "record") {
 				const stop = (reason: string) => {

@@ -15,11 +15,13 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const root = path.resolve(__dirname, "..");
 const helperName = "openscreen-screencapturekit-helper";
 const cursorHelperName = "openscreen-macos-cursor-helper";
+const focusHelperName = "openscreen-macos-focus-helper";
 const packageDir = path.join(root, "electron", "native", "screencapturekit");
 const buildDir = path.join(packageDir, "build");
 const swiftBuildDir = path.join(buildDir, "swiftpm");
 const localHelperPath = path.join(buildDir, helperName);
 const localCursorHelperPath = path.join(buildDir, cursorHelperName);
+const localFocusHelperPath = path.join(buildDir, focusHelperName);
 
 // Build a separate single-arch binary per requested arch and place each in its own
 // electron/native/bin/darwin-<arch> folder (the runtime resolves that folder by the running app's
@@ -125,6 +127,7 @@ for (const { swift, tag } of archs) {
 	for (const [name, localPath] of [
 		[helperName, localHelperPath],
 		[cursorHelperName, localCursorHelperPath],
+		[focusHelperName, localFocusHelperPath],
 	]) {
 		const exe = findExecutable(archBuildDir, swift, name);
 		if (!exe) {

@@ -312,6 +312,9 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	cliLog: (level: "info" | "error", message: string) => {
 		ipcRenderer.send("cli-log", level, message);
 	},
+	cliRecordingStarted: () => {
+		ipcRenderer.send("cli-recording-started");
+	},
 	cliDone: (result: import("../src/lib/cliContracts").CliDoneResult) => {
 		return ipcRenderer.invoke("cli-done", result);
 	},

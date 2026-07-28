@@ -225,6 +225,7 @@ export function CliRecordRunner() {
 			recordingStartedAtRef.current = Date.now();
 			setStatus("Recording…");
 			window.electronAPI.cliLog("info", "Recording started");
+			window.electronAPI.cliRecordingStarted();
 
 			if (stopRequestedRef.current) {
 				phaseRef.current = "stopping";
