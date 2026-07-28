@@ -27,7 +27,6 @@ use crate::regions::speed_at;
 use crate::scene::Scene;
 use crate::config::{self, Cfg};
 use crate::cursor::CursorTrack;
-use windows::core::PCWSTR;
 use crate::d3d::Gpu;
 use crate::pipeline::Decoder;
 use anyhow::Result;
@@ -213,16 +212,6 @@ impl Player {
     /// franchissement de la fin de fenêtre du clip actif pendant la lecture libre.
     pub(crate) unsafe fn screen_time_sec(&self) -> f64 {
         self.sdec.cur_time_sec()
-    }
-
-    /// Durée totale du flux écran (en secondes), telle qu'annoncée par le
-    /// conteneur. `None` quand le conteneur n'expose ni `duration` ni un
-    /// `nb_frames` fiable — l'appelant doit alors itérer jusqu'à EOF
-    /// plutôt que de calculer un `target_frames` à l'avance. Sert
-    /// principalement à l'export GIF (slice 1) pour estimer le nombre de
-    /// frames à produire avant d'entrer dans la boucle de rendu.
-    pub unsafe fn screen_duration_sec(&self) -> Option<f64> {
-        self.sdec.available_duration_sec()
     }
 
     /// Compose la frame suivante (→ `comp.rt`). Boucle sur EOF. `false` si fixture vide.
@@ -1441,7 +1430,25 @@ unsafe fn render_thread(
 }
 
 // ---------- harnais standalone (poc-d3d.exe --live) ----------
+//
+// Le harnais crée une fenêtre Win32 simple qui héberge la preview live ; c'est un
+// outil de dev, pas un chemin de production (le production est 100 % offscreen et
+// passe par `LiveView::create`, cf. plus haut). Sur macOS le harnais n'a pas
+// d'équivalent — `poc-d3d` ne tourne que sur Windows — et l'intégralité de cette
+// section est cfg-gatée pour que le crate compile sur les deux plateformes.
+//
+// `run_standalone` reste à portée du module `live` (poc-d3d l'appelle via
+// `live::run_standalone`); les helpers internes (`host_proc`, `wide`,
+// `client_size`) sont mis dans un sous-module privé pour que les types Win32 ne
+// polluent pas le scope module-level.
 
+#[cfg(windows)]
+pub mod standalone_harness {
+
+use crate::live::LiveView;
+use anyhow::Result;
+use std::time::Duration;
+use windows::core::PCWSTR;
 use windows::Win32::Foundation::{HINSTANCE, HWND, LPARAM, LRESULT, RECT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::WindowsAndMessaging::*;
@@ -1576,6 +1583,20 @@ unsafe fn client_size(hwnd: HWND) -> (u32, u32) {
     let mut rc = RECT::default();
     let _ = GetClientRect(hwnd, &mut rc);
     ((rc.right - rc.left).max(0) as u32, (rc.bottom - rc.top).max(0) as u32)
+}
+
+} // fin du mod standalone_harness — pas d'équivalent macOS, c'est un harnais dev Windows.
+
+// Ré-export pour que `live::run_standalone` reste l'API stable appelée par `poc-d3d`.
+#[cfg(windows)]
+pub use standalone_harness::run_standalone;
+
+/// Stub no-op pour que le crate compile sur macOS sans laisser de chemin mort
+/// derrière le cfg(windows) ci-dessus. À supprimer si un harnais AppKit/Carbon
+/// est ajouté dans un commit ultérieur.
+#[cfg(target_os = "macos")]
+pub fn run_standalone(_screen: &str, _webcam: &str, _cursor_json: &str) -> anyhow::Result<()> {
+    anyhow::bail!("run_standalone: pas d'équivalent macOS — `poc-d3d` est un outil dev Windows")
 }
 
 #[cfg(test)]

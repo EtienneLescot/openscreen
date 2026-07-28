@@ -11,3 +11,10 @@
 [env]
 FFMPEG_DIR = { value = "thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared", relative = true }
 LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
+
+# macOS : BtbN ne publie pas de build macOS (cf. scripts/fetch-ffmpeg.mjs), donc on
+# laisse `crates/compositor/build.rs` chercher MAC_FFMPEG_DIR (env var explicite posée
+# par la CI macOS ou par le dev local) ou un répertoire attendu sous `thirdparty/`.
+# LIBCLANG_PATH est inutile sur macOS (clang est dans CommandLineTools), on ne le
+# pose donc pas.
+[target.'cfg(target_os = "macos")'.env]
