@@ -2,7 +2,7 @@
 name = "compositor-view-napi"
 version.workspace = true
 edition.workspace = true
-description = "Addon napi-rs : expose openscreen_compositor::live::LiveView (fenêtre D3D enfant) à Electron. C'est CE crate qui produit compositor_view.node, le binaire packagé dans l'app."
+description = "Addon napi-rs : expose openscreen_compositor::live::LiveView (vue offscreen multiplateforme) à Electron. C'est CE crate qui produit compositor_view.node, le binaire packagé dans l'app."
 
 [lib]
 crate-type = ["cdylib"]
@@ -14,7 +14,11 @@ napi-derive = "2"
 openscreen-compositor.workspace = true
 anyhow.workspace = true
 
-[dependencies.windows]
+# Le crate n'utilise pas directement l'API Windows — c'est transitif via le
+# moteur de composition (qui expose la même surface publique cross-platform via
+# la ré-export cfg dans `openscreen_compositor::lib`). On garde la dépendance
+# cfg-conditionnelle pour que le crate compile sur macOS.
+[target.'cfg(windows)'.dependencies.windows]
 version = "0.58"
 features = ["Win32_Foundation"]
 

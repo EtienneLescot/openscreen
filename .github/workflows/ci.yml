@@ -89,13 +89,59 @@ jobs:
       - uses: ./.github/actions/setup
       - run: npm run test
 
-  build:
+build:
     name: Build
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - run: npx vite build
+
+  # PR #189 — port macOS du compositor (Metal + VideoToolbox).
+  #
+  # Compile check on a `macos-14` runner (Apple Silicon). Verifies that the
+  # scaffold + engine-layer code added by #189 actually compiles for
+  # `aarch64-apple-darwin` — bindgen + cc on macOS produce the ffmpeg FFI
+  # bindings + the VideoToolbox context that the Rust crate statically
+  # references, and the `metal`/`objc`/`block`/`core-foundation` crates need
+  # their macOS system frameworks (Metal/CoreVideo/CoreMedia) linked.
+  #
+  # ffmpeg via Homebrew: this job installs `ffmpeg` from homebrew-core on the
+  # runner to satisfy bindgen + the cargo:rustc-link-lib lines for avformat/
+  # avcodec/avutil/swscale/swresample. NB: homebrew's `ffmpeg` is GPL-3.0 (it
+  # bundles x264/x265/svt-av1 etc.) — that is fine for a CI compile-check, but
+  # the dev/runtime story is different: `scripts/fetch-ffmpeg.mjs` documents
+  # that BtbN publishes no macOS build, so a pinned LGPL macOS dylib has to
+  # land separately before we can ship. The vendored `electron/native/bin/
+  # darwin-*/` directory is the runtime pin and is empty today.
+  #
+  # Why this job runs at all today: every commit on #189 that touches
+  # compositor_macos.rs / pipeline_macos.rs / mac_frames.rs / shaders.metal /
+  # d3d_macos.rs / text_macos.rs is unverifiable from Windows (cross-compile
+  # requires the macOS SDK + headers, which we don't have). This job is the
+  # only signal that the macOS-side Rust still type-checks.
+  rust-macos-compositor-check:
+    name: Rust check (macOS compositor)
+    runs-on: macos-14
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Rust toolchain
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --target aarch64-apple-darwin
+          echo "$HOME/.cargo/bin" >> "$GITHUB_PATH"
+      - name: Install ffmpeg (homebrew-core) and verify headers/libs
+        run: |
+          brew update
+          brew install ffmpeg
+          ls /opt/homebrew/opt/ffmpeg/include | head -5
+          ls /opt/homebrew/opt/ffmpeg/lib | head -5
+          /opt/homebrew/opt/ffmpeg/bin/ffmpeg -hide_banner -version | head -1
+      - name: cargo check (compositor + napi addon, aarch64-apple-darwin)
+        env:
+          MAC_FFMPEG_DIR: /opt/homebrew/opt/ffmpeg
+        run: |
+          cd crates
+          cargo check --target aarch64-apple-darwin -p openscreen-compositor -p compositor-view-napi
 
   semantic-pr:
     name: Validate PR title (semantic)
