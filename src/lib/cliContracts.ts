@@ -25,6 +25,12 @@ export interface CliExportRequest {
 	 */
 	previewWidth: number | null;
 	previewHeight: number | null;
+	/**
+	 * Add automatic zoom regions derived from cursor-dwell telemetry (same
+	 * suggestion engine as the editor's magic wand) before rendering. Existing
+	 * zoom regions are preserved; suggestions never overlap them.
+	 */
+	autoZoom: boolean;
 	/** Absolute path to a voiceover audio file to mix into the export (MP4 only). */
 	audioPath: string | null;
 	/** "mix" layers the voiceover over the recording's audio; "replace" drops the original. */
@@ -50,7 +56,31 @@ export interface CliRecordRequest {
 	projectOut: string | null;
 }
 
-export type CliRequest = CliExportRequest | CliRecordRequest;
+export interface CliSourcesRequest {
+	kind: "sources";
+}
+
+export interface CliCaptionsRequest {
+	kind: "captions";
+	/** Absolute path to the .openscreen project file (updated in place). */
+	projectPath: string;
+	minWordsPerCaption: number;
+	maxWordsPerCaption: number;
+}
+
+export type CliRequest =
+	| CliExportRequest
+	| CliRecordRequest
+	| CliSourcesRequest
+	| CliCaptionsRequest;
+
+export interface CliSourcesResult {
+	displays: { index: number; id: string; name: string }[];
+	windows: { id: string; name: string }[];
+	microphones: { label: string }[];
+	/** True when microphone labels required a permission the user hasn't granted. */
+	microphoneLabelsUnavailable: boolean;
+}
 
 export interface CliProgressEvent {
 	percentage: number;
@@ -80,4 +110,8 @@ export interface CliDoneResult {
 	 * The main process writes it to the --project path (renderer has no fs).
 	 */
 	projectData?: unknown;
+	/** Sources: enumeration payload printed by the main process. */
+	sources?: CliSourcesResult;
+	/** Captions: number of caption annotations generated. */
+	captionCount?: number;
 }

@@ -321,13 +321,40 @@ async function getApprovedProjectSession(
 		trustedDirs.push(path.dirname(path.resolve(projectFilePath)));
 	}
 
-	const screenVideoPath = await approveReadableVideoPath(media.screenVideoPath, trustedDirs);
+	// Packed/portable projects: when the stored absolute path no longer exists
+	// (project moved to another machine or directory), fall back to a file with
+	// the same basename next to the project file (see `openscreen pack`).
+	const resolveWithSiblingFallback = async (mediaPath: string): Promise<string> => {
+		if (!projectFilePath) return mediaPath;
+		const exists = await fs
+			.stat(mediaPath)
+			.then((stats) => stats.isFile())
+			.catch(() => false);
+		if (exists) return mediaPath;
+		const sibling = path.join(
+			path.dirname(path.resolve(projectFilePath)),
+			path.basename(mediaPath),
+		);
+		const siblingExists = await fs
+			.stat(sibling)
+			.then((stats) => stats.isFile())
+			.catch(() => false);
+		return siblingExists ? sibling : mediaPath;
+	};
+
+	const screenVideoPath = await approveReadableVideoPath(
+		await resolveWithSiblingFallback(media.screenVideoPath),
+		trustedDirs,
+	);
 	if (!screenVideoPath) {
 		throw new Error("Project references an invalid or unsupported screen video path");
 	}
 
 	const webcamVideoPath = media.webcamVideoPath
-		? await approveReadableVideoPath(media.webcamVideoPath, trustedDirs)
+		? await approveReadableVideoPath(
+				await resolveWithSiblingFallback(media.webcamVideoPath),
+				trustedDirs,
+			)
 		: undefined;
 	if (media.webcamVideoPath && !webcamVideoPath) {
 		throw new Error("Project references an invalid or unsupported webcam video path");
