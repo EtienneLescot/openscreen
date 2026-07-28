@@ -74,6 +74,17 @@ Platform notes:
   which may show a system picker dialog and requires a desktop session
   (headless/SSH sessions without a portal cannot record).
 
+### `openscreen sources`
+
+Lists capturable displays, windows, and microphones — the same enumeration the
+GUI picker uses — so scripts and agents can choose `--display`, `--window`, and
+`--mic-device` values without guesswork.
+
+```bash
+openscreen sources          # human-readable
+openscreen sources --json   # {"event":"done","sources":{displays,windows,microphones,...}}
+```
+
 ### `openscreen export`
 
 Renders a project to MP4 or GIF using the app's real export pipeline (WebCodecs +
@@ -95,6 +106,7 @@ openscreen export demo.openscreen --json | while read line; do ...; done
 | `--quality <medium\|good\|source>` | MP4 quality |
 | `--gif-fps <15\|20\|25\|30>`, `--gif-size <medium\|large\|original>` | GIF settings |
 | `--preview-size <WxH>` | Reference preview box (default `1280x720`), see below |
+| `--auto-zoom` | Add automatic zooms from cursor telemetry before rendering — the same dwell-detection engine as the editor's magic wand. Existing zoom regions are kept; suggestions never overlap them |
 | `--audio <file>` | Mix a voiceover file into the MP4 (mp3/wav/m4a — anything Chromium can decode; AIFF is not supported) |
 | `--audio-mode <mix\|replace>` | Layer the voiceover over the recording's audio (default `mix`) or replace it |
 | `--audio-offset <seconds>` | Delay before the voiceover starts (default 0) |
@@ -116,6 +128,36 @@ preview-pixel space and scaled by `export size / preview size` — in the GUI th
 deterministic reference box instead (the composition fitted into 1280×720).
 Authoring tip for scripts: treat annotation `fontSize` as "pixels in a
 1280-wide preview".
+
+### `openscreen pack`
+
+Copies a project and everything it references (screen/webcam video, cursor
+telemetry sidecar) into one portable folder and rewrites the project's media
+paths:
+
+```bash
+openscreen pack demo.openscreen --out bundle/
+```
+
+The folder survives being moved or shipped as a CI artifact: when the stored
+absolute paths go stale, the loader falls back to files with the same basename
+next to the project file.
+
+### `openscreen captions`
+
+Transcribes the project's audio with the app's on-device Whisper model (no
+upload; language auto-detected) and writes the resulting caption annotations
+into the project. Re-running replaces earlier auto-captions; manual annotations
+are preserved.
+
+```bash
+openscreen captions demo.openscreen --min-words 2 --max-words 7
+openscreen export demo.openscreen -o demo.mp4   # subtitles are burned in
+```
+
+Requires an audio track in the project's video (e.g. `record --mic`, or a
+voiceover mixed in with a re-recorded source). Accuracy reflects the bundled
+whisper-tiny model: strong for English, rough for other languages.
 
 ### `openscreen info`
 
@@ -163,8 +205,8 @@ node -e '
 # 3. Narrate with any TTS (macOS `say` shown; any engine producing mp3/wav/m4a works)
 say -o voice.m4a --file-format=m4af "Welcome to my product. Here's a quick tour."
 
-# 4. Render with the voiceover mixed in
-openscreen export demo.openscreen -o demo.mp4 --audio voice.m4a --audio-mode replace --json
+# 4. Render with auto-zooms and the voiceover mixed in
+openscreen export demo.openscreen -o demo.mp4 --auto-zoom --audio voice.m4a --audio-mode replace --json
 ```
 
 ## Architecture

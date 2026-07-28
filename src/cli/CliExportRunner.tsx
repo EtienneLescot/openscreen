@@ -13,7 +13,13 @@ import {
 	toFileUrl,
 	validateProjectData,
 } from "@/components/video-editor/projectPersistence";
-import type { CursorTelemetryPoint } from "@/components/video-editor/types";
+import { buildAutoZoomSuggestions } from "@/components/video-editor/timeline/zoomSuggestionUtils";
+import type { CursorTelemetryPoint, ZoomRegion } from "@/components/video-editor/types";
+import {
+	clampFocusToDepth,
+	DEFAULT_ZOOM_DEPTH,
+	ZOOM_DEPTH_SCALES,
+} from "@/components/video-editor/types";
 import type { CliDoneResult, CliExportRequest } from "@/lib/cliContracts";
 import { hasNativeCursorRecordingData } from "@/lib/cursor/nativeCursor";
 import { calculateOutputDimensions, GifExporter } from "@/lib/exporter/gifExporter";
@@ -39,7 +45,9 @@ function isClickInteractionType(interactionType: string | null | undefined) {
 	);
 }
 
-function probeVideoDimensions(url: string): Promise<{ width: number; height: number }> {
+function probeVideoDimensions(
+	url: string,
+): Promise<{ width: number; height: number; durationMs: number }> {
 	return new Promise((resolve, reject) => {
 		const video = document.createElement("video");
 		video.preload = "metadata";
@@ -57,8 +65,9 @@ function probeVideoDimensions(url: string): Promise<{ width: number; height: num
 		video.onloadedmetadata = () => {
 			const width = video.videoWidth;
 			const height = video.videoHeight;
+			const durationMs = Number.isFinite(video.duration) ? Math.round(video.duration * 1000) : 0;
 			cleanup();
-			resolve({ width, height });
+			resolve({ width, height, durationMs });
 		};
 		video.onerror = () => {
 			cleanup();
@@ -80,6 +89,32 @@ function fitPreviewBox(aspectRatioValue: number, boxWidth: number, boxHeight: nu
 	return { width: Math.round(width), height: Math.round(height) };
 }
 
+/** Mirrors the editor's buildAutoZoomRegions: cursor-dwell suggestions that
+ * follow the cursor (focusMode "auto") and never overlap existing regions. */
+function buildAutoZoomRegions(
+	cursorTelemetry: CursorTelemetryPoint[],
+	totalMs: number,
+	existingRegions: ZoomRegion[],
+): ZoomRegion[] {
+	const suggestions = buildAutoZoomSuggestions({
+		cursorTelemetry,
+		totalMs,
+		existingRegions,
+		defaultDurationMs: Math.max(1000, Math.round(totalMs * 0.05)),
+	});
+	let nextId = 1;
+	return suggestions.map((suggestion) => ({
+		id: `cli-auto-zoom-${nextId++}`,
+		startMs: Math.round(suggestion.span.start),
+		endMs: Math.round(suggestion.span.end),
+		depth: DEFAULT_ZOOM_DEPTH,
+		customScale: ZOOM_DEPTH_SCALES[DEFAULT_ZOOM_DEPTH],
+		focus: clampFocusToDepth(suggestion.focus, DEFAULT_ZOOM_DEPTH),
+		focusMode: "auto" as const,
+		source: "auto" as const,
+	}));
+}
+
 function replaceExtension(filePath: string, newExtension: string): string {
 	return filePath.replace(/\.(openscreen|json)$/i, "") + newExtension;
 }
@@ -96,6 +131,20 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 	const media = resolveProjectMedia(project);
 	if (!media) {
 		throw new Error("Project file does not reference any recorded media");
+	}
+	// Prefer the main process's approved session paths: they carry the
+	// packed-project sibling fallback when the stored absolute paths are stale.
+	try {
+		const sessionResult = await window.electronAPI.getCurrentRecordingSession();
+		const session = sessionResult?.session;
+		if (session?.screenVideoPath) {
+			media.screenVideoPath = session.screenVideoPath;
+			if (media.webcamVideoPath && session.webcamVideoPath) {
+				media.webcamVideoPath = session.webcamVideoPath;
+			}
+		}
+	} catch {
+		// Fall back to the paths stored in the project file.
 	}
 	const editor = normalizeProjectEditor(project.editor ?? {});
 
@@ -154,6 +203,21 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 	const probed = await probeVideoDimensions(videoUrl);
 	const sourceWidth = probed.width || DEFAULT_SOURCE_DIMENSIONS.width;
 	const sourceHeight = probed.height || DEFAULT_SOURCE_DIMENSIONS.height;
+
+	if (request.autoZoom) {
+		const autoRegions = buildAutoZoomRegions(
+			cursorTelemetry,
+			probed.durationMs,
+			editor.zoomRegions,
+		);
+		if (autoRegions.length > 0) {
+			editor.zoomRegions = [...editor.zoomRegions, ...autoRegions];
+		}
+		window.electronAPI.cliLog(
+			"info",
+			`Auto-zoom: added ${autoRegions.length} region(s) from cursor telemetry`,
+		);
+	}
 	const effectiveSourceDimensions = calculateEffectiveSourceDimensions(
 		sourceWidth,
 		sourceHeight,

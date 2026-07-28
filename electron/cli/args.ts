@@ -18,18 +18,38 @@ export interface CliErrorCommand {
 	message: string;
 }
 
-export type CliCommand = (CliRequest | CliInfoCommand | CliHelpCommand | CliErrorCommand) & {
+export type CliCommand = (
+	| CliRequest
+	| CliInfoCommand
+	| CliPackCommand
+	| CliHelpCommand
+	| CliErrorCommand
+) & {
 	/** Machine-readable NDJSON output on stdout instead of human progress. */
 	json?: boolean;
 };
 
-const SUBCOMMANDS = new Set(["export", "record", "info", "help", "--help", "-h"]);
+const SUBCOMMANDS = new Set([
+	"export",
+	"record",
+	"sources",
+	"pack",
+	"captions",
+	"info",
+	"help",
+	"--help",
+	"-h",
+]);
 
 export const CLI_USAGE = `OpenScreen CLI
 
 Usage:
   openscreen export <project.openscreen> [options]   Render a project to MP4/GIF
   openscreen record [options]                        Record the screen headlessly
+  openscreen sources [--json]                        List displays, windows and microphones
+  openscreen pack <project.openscreen> --out <dir>   Copy project + media into one portable folder
+  openscreen captions <project.openscreen>           Add auto-captions (on-device Whisper) to a project
+                     [--min-words <n>] [--max-words <n>]
   openscreen info <project.openscreen> [--json]      Inspect a project file
   openscreen help                                    Show this help
 
@@ -42,6 +62,7 @@ Export options:
   --gif-size <medium|large|original>
                             GIF size preset (default: from project)
   --preview-size <WxH>      Reference preview box for annotation scaling (default 1280x720)
+  --auto-zoom               Add automatic zooms from cursor telemetry (editor's magic wand)
   --audio <file>            Mix a voiceover audio file into the MP4 (mp3/wav/m4a)
   --audio-mode <mix|replace>
                             Layer over the recording's audio (default) or replace it
@@ -111,6 +132,9 @@ export function parseCliArgs(
 	try {
 		if (sub === "export") return parseExport(args.slice(1), cwd);
 		if (sub === "record") return parseRecord(args.slice(1), cwd);
+		if (sub === "sources") return parseSources(args.slice(1));
+		if (sub === "pack") return parsePack(args.slice(1), cwd);
+		if (sub === "captions") return parseCaptions(args.slice(1), cwd);
 		return parseInfo(args.slice(1), cwd);
 	} catch (error) {
 		return { kind: "error", message: error instanceof Error ? error.message : String(error) };
@@ -128,6 +152,7 @@ function parseExport(args: string[], cwd: string): CliCommand {
 		gifSizePreset: null,
 		previewWidth: null,
 		previewHeight: null,
+		autoZoom: false,
 		audioPath: null,
 		audioMode: "mix",
 		audioOffsetSec: 0,
@@ -194,6 +219,9 @@ function parseExport(args: string[], cwd: string): CliCommand {
 				i = next;
 				break;
 			}
+			case "--auto-zoom":
+				request.autoZoom = true;
+				break;
 			case "--audio": {
 				const [value, next] = takeValue(args, i, arg);
 				request.audioPath = resolvePath(value, cwd);
@@ -330,6 +358,82 @@ function parseRecord(args: string[], cwd: string): CliCommand {
 		}
 	}
 	return request;
+}
+
+function parseSources(args: string[]): CliCommand {
+	let json = false;
+	for (const arg of args) {
+		if (arg === "--json") {
+			json = true;
+		} else {
+			throw new Error(`Unknown sources option: ${arg}`);
+		}
+	}
+	return { kind: "sources", json };
+}
+
+export interface CliPackCommand {
+	kind: "pack";
+	projectPath: string;
+	outDir: string;
+}
+
+function parsePack(args: string[], cwd: string): CliCommand {
+	let projectPath = "";
+	let outDir = "";
+	let json = false;
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "-o" || arg === "--out") {
+			const [value, next] = takeValue(args, i, arg);
+			outDir = resolvePath(value, cwd);
+			i = next;
+		} else if (arg === "--json") {
+			json = true;
+		} else if (arg.startsWith("-")) {
+			throw new Error(`Unknown pack option: ${arg}`);
+		} else if (projectPath) {
+			throw new Error(`Unexpected extra argument: ${arg}`);
+		} else {
+			projectPath = resolvePath(arg, cwd);
+		}
+	}
+	if (!projectPath) throw new Error("pack requires a <project.openscreen> path");
+	if (!outDir) throw new Error("pack requires --out <directory>");
+	return { kind: "pack", projectPath, outDir, json };
+}
+
+function parseCaptions(args: string[], cwd: string): CliCommand {
+	let projectPath = "";
+	let minWordsPerCaption = 2;
+	let maxWordsPerCaption = 7;
+	let json = false;
+	for (let i = 0; i < args.length; i++) {
+		const arg = args[i];
+		if (arg === "--min-words" || arg === "--max-words") {
+			const [value, next] = takeValue(args, i, arg);
+			const count = Number(value);
+			if (!Number.isInteger(count) || count < 1) {
+				throw new Error(`${arg} must be a positive integer, got "${value}"`);
+			}
+			if (arg === "--min-words") minWordsPerCaption = count;
+			else maxWordsPerCaption = count;
+			i = next;
+		} else if (arg === "--json") {
+			json = true;
+		} else if (arg.startsWith("-")) {
+			throw new Error(`Unknown captions option: ${arg}`);
+		} else if (projectPath) {
+			throw new Error(`Unexpected extra argument: ${arg}`);
+		} else {
+			projectPath = resolvePath(arg, cwd);
+		}
+	}
+	if (!projectPath) throw new Error("captions requires a <project.openscreen> path");
+	if (minWordsPerCaption > maxWordsPerCaption) {
+		throw new Error("--min-words cannot exceed --max-words");
+	}
+	return { kind: "captions", projectPath, minWordsPerCaption, maxWordsPerCaption, json };
 }
 
 function parseInfo(args: string[], cwd: string): CliCommand {

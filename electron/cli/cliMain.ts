@@ -7,7 +7,12 @@ import path from "node:path";
 import readline from "node:readline";
 import { fileURLToPath } from "node:url";
 import { app, BrowserWindow, ipcMain, session, systemPreferences } from "electron";
-import type { CliDoneResult, CliProgressEvent, CliRequest } from "../../src/lib/cliContracts";
+import type {
+	CliDoneResult,
+	CliProgressEvent,
+	CliRequest,
+	CliSourcesResult,
+} from "../../src/lib/cliContracts";
 import { getSelectedDesktopSource, registerIpcHandlers } from "../ipc/handlers";
 import { ASSET_BASE_URL_ARG } from "../windows";
 import { CLI_USAGE, type CliCommand } from "./args";
@@ -145,6 +150,35 @@ function registerAppHandlersForCli(cliWindowRef: () => BrowserWindow | null) {
 	);
 }
 
+function printSources(output: CliOutput, sources: CliSourcesResult): void {
+	if (output.json) {
+		// The "done" event already carries the payload; nothing extra to print.
+		return;
+	}
+	const lines: string[] = [];
+	lines.push("Displays:");
+	for (const display of sources.displays) {
+		lines.push(`  ${display.index}  ${display.name} (${display.id})`);
+	}
+	lines.push("Windows:");
+	if (sources.windows.length === 0) {
+		lines.push("  (none)");
+	}
+	for (const win of sources.windows) {
+		lines.push(`  - ${win.name}`);
+	}
+	lines.push("Microphones:");
+	if (sources.microphoneLabelsUnavailable) {
+		lines.push("  (labels unavailable — grant microphone permission to see device names)");
+	} else if (sources.microphones.length === 0) {
+		lines.push("  (none)");
+	}
+	for (const mic of sources.microphones) {
+		lines.push(`  - ${mic.label}`);
+	}
+	output.info(lines.join("\n"));
+}
+
 async function writeProjectFile(projectOut: string, projectData: unknown): Promise<void> {
 	await fs.mkdir(path.dirname(projectOut), { recursive: true });
 	await fs.writeFile(projectOut, JSON.stringify(projectData, null, 2), "utf8");
@@ -172,6 +206,111 @@ function setupRecordStopSignals(stop: (reason: string) => void): void {
 	} catch {
 		// stdin unavailable; signals and --duration still work.
 	}
+}
+
+interface PackedProjectData {
+	version?: number;
+	media?: { screenVideoPath?: string; webcamVideoPath?: string; cursorCaptureMode?: string };
+	videoPath?: string;
+	editor?: Record<string, unknown>;
+}
+
+/** Copies a project and everything it references into one portable folder. */
+async function runPackCommand(projectPath: string, outDir: string, json: boolean): Promise<number> {
+	const emit = (message: string) => {
+		if (!json) safeWrite(process.stdout, `${message}\n`);
+	};
+
+	const raw = await fs.readFile(projectPath, "utf8");
+	const data = JSON.parse(raw) as PackedProjectData;
+	const media = data.media ?? (data.videoPath ? { screenVideoPath: data.videoPath } : undefined);
+	const screenVideoPath = media?.screenVideoPath;
+	if (!screenVideoPath) {
+		throw new Error("Project file does not reference a screen video");
+	}
+
+	const projectDir = path.dirname(path.resolve(projectPath));
+	const resolveSource = async (mediaPath: string): Promise<string> => {
+		const exists = await fs
+			.stat(mediaPath)
+			.then((stats) => stats.isFile())
+			.catch(() => false);
+		if (exists) return mediaPath;
+		const sibling = path.join(projectDir, path.basename(mediaPath));
+		const siblingExists = await fs
+			.stat(sibling)
+			.then((stats) => stats.isFile())
+			.catch(() => false);
+		if (siblingExists) return sibling;
+		throw new Error(`Referenced media not found: ${mediaPath}`);
+	};
+
+	await fs.mkdir(outDir, { recursive: true });
+
+	const copied: string[] = [];
+	const copyIn = async (sourcePath: string): Promise<string> => {
+		const destination = path.join(outDir, path.basename(sourcePath));
+		if (path.resolve(sourcePath) !== path.resolve(destination)) {
+			await fs.copyFile(sourcePath, destination);
+		}
+		copied.push(destination);
+		return destination;
+	};
+
+	const screenSource = await resolveSource(screenVideoPath);
+	const newScreenPath = await copyIn(screenSource);
+
+	let newWebcamPath: string | undefined;
+	if (media.webcamVideoPath) {
+		newWebcamPath = await copyIn(await resolveSource(media.webcamVideoPath));
+	}
+
+	// Cursor telemetry sidecar sits at "<video path>.cursor.json".
+	const cursorSidecar = `${screenSource}.cursor.json`;
+	const hasCursorData = await fs
+		.stat(cursorSidecar)
+		.then((stats) => stats.isFile())
+		.catch(() => false);
+	if (hasCursorData) {
+		await copyIn(cursorSidecar);
+	}
+
+	const packedProject: PackedProjectData = {
+		...data,
+		media: {
+			...media,
+			screenVideoPath: newScreenPath,
+			...(newWebcamPath ? { webcamVideoPath: newWebcamPath } : {}),
+		},
+	};
+	delete packedProject.videoPath;
+	const packedProjectPath = path.join(outDir, path.basename(projectPath));
+	await fs.writeFile(packedProjectPath, JSON.stringify(packedProject, null, 2), "utf8");
+
+	if (json) {
+		safeWrite(
+			process.stdout,
+			`${JSON.stringify({
+				event: "done",
+				success: true,
+				projectPath: packedProjectPath,
+				files: [packedProjectPath, ...copied],
+				cursorData: hasCursorData,
+			})}\n`,
+		);
+	} else {
+		emit(`Packed project → ${packedProjectPath}`);
+		for (const file of copied) {
+			emit(`  + ${path.basename(file)}`);
+		}
+		if (!hasCursorData) {
+			emit("  (no cursor telemetry sidecar found)");
+		}
+		emit(
+			"The folder is self-contained: if the stored paths go stale after moving it, the loader falls back to files next to the project.",
+		);
+	}
+	return 0;
 }
 
 async function runInfoCommand(projectPath: string, json: boolean): Promise<number> {
@@ -245,6 +384,7 @@ export function runCli(command: CliCommand): void {
 	// own console chatter (e.g. "[native-sck] starting…") to stderr.
 	const stringifyArg = (value: unknown): string => {
 		if (typeof value === "string") return value;
+		if (value instanceof Error) return value.stack ?? value.message;
 		try {
 			return JSON.stringify(value) ?? String(value);
 		} catch {
@@ -303,6 +443,16 @@ export function runCli(command: CliCommand): void {
 		.then(async () => {
 			if (command.kind === "info") {
 				const code = await runInfoCommand(command.projectPath, command.json === true);
+				app.exit(code);
+				return;
+			}
+
+			if (command.kind === "pack") {
+				const code = await runPackCommand(
+					command.projectPath,
+					command.outDir,
+					command.json === true,
+				);
 				app.exit(code);
 				return;
 			}
@@ -388,9 +538,12 @@ export function runCli(command: CliCommand): void {
 							result.projectPath = command.projectOut;
 						}
 					}
+					if (result.success && command.kind === "captions" && result.projectData !== undefined) {
+						await writeProjectFile(command.projectPath, result.projectData);
+					}
 				} catch (error) {
 					result.success = false;
-					result.error = `Recording succeeded but writing the project file failed: ${String(error)}`;
+					result.error = `Run succeeded but writing the project file failed: ${String(error)}`;
 				}
 
 				if (result.success) {
@@ -398,7 +551,13 @@ export function runCli(command: CliCommand): void {
 						output.info(`Warning: ${warning}`);
 						output.event("warning", { message: warning });
 					}
-					if (command.kind === "export") {
+					if (command.kind === "sources" && result.sources) {
+						printSources(output, result.sources);
+					} else if (command.kind === "captions") {
+						output.info(
+							`Added ${result.captionCount ?? 0} caption annotation(s) → ${result.projectPath}`,
+						);
+					} else if (command.kind === "export") {
 						output.info(`Exported ${result.format ?? ""} → ${result.outputPath}`);
 					} else {
 						output.info(`Recording saved → ${result.screenVideoPath}`);
@@ -424,7 +583,12 @@ export function runCli(command: CliCommand): void {
 				setupRecordStopSignals(stop);
 			}
 
-			const windowType = command.kind === "export" ? "cli-export" : "cli-record";
+			const windowType = {
+				export: "cli-export",
+				record: "cli-record",
+				sources: "cli-sources",
+				captions: "cli-captions",
+			}[command.kind];
 			cliWindow = loadRunnerWindow(windowType);
 
 			// Surface renderer console errors/warnings on stderr — the hidden window
