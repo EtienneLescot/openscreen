@@ -86,6 +86,7 @@
 		"clsx": "^2.1.1",
 		"deepagents": "^1.10.5",
 		"gif.js": "^0.2.0",
+		"i18next": "^23.16.0",
 		"langchain": "^1.2.39",
 		"lucide-react": "^0.545.0",
 		"mediabunny": "^1.40.1",
