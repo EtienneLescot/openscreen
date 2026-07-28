@@ -1,5 +1,9 @@
-import type { CursorCapabilities, CursorRecordingData } from "../../../src/native/contracts";
-import type { CursorNativeAdapter, CursorTelemetryLoadResult } from "./adapter";
+import type {
+	CursorCapabilities,
+	CursorProviderKind,
+	CursorRecordingData,
+	CursorTelemetryPoint,
+} from "../../../src/native/contracts";
 
 interface TelemetryCursorAdapterOptions {
 	loadRecordingData: (videoPath: string) => Promise<CursorRecordingData>;
@@ -7,8 +11,15 @@ interface TelemetryCursorAdapterOptions {
 	loadTelemetry: (videoPath: string) => Promise<CursorTelemetryLoadResult>;
 }
 
-export class TelemetryCursorAdapter implements CursorNativeAdapter {
-	readonly kind = "none" as const;
+export interface CursorTelemetryLoadResult {
+	success: boolean;
+	samples: CursorTelemetryPoint[];
+	message?: string;
+	error?: string;
+}
+
+export class TelemetryCursorAdapter {
+	readonly kind: CursorProviderKind = "none";
 
 	constructor(private readonly options: TelemetryCursorAdapterOptions) {}
 

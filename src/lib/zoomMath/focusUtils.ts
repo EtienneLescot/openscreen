@@ -1,5 +1,5 @@
 import {
-	clampFocusToDepth,
+	clampFocus,
 	ZOOM_DEPTH_SCALES,
 	type ZoomDepth,
 	type ZoomFocus,
@@ -60,12 +60,8 @@ export function getFocusBoundsForScale(zoomScale: number, viewportRatio?: Viewpo
 	};
 }
 
-export function clampFocusToStage(
-	focus: ZoomFocus,
-	depth: ZoomDepth,
-	_stageSize: StageSize,
-): ZoomFocus {
-	const baseFocus = clampFocusToDepth(focus, depth);
+export function clampFocusToStage(focus: ZoomFocus, depth: ZoomDepth): ZoomFocus {
+	const baseFocus = clampFocus(focus);
 	const bounds = getFocusBounds(depth);
 
 	return {
