@@ -1,6 +1,3 @@
-export { type CropScheduleEntry, resolveCropAt } from "./cropSchedule";
-export { FrameRenderer } from "./frameRenderer";
-export { calculateOutputDimensions, GifExporter } from "./gifExporter";
 export {
 	calculateEffectiveSourceDimensions,
 	calculateMp4ExportSettings,
@@ -14,6 +11,7 @@ export type {
 	ExportQuality,
 	ExportResult,
 	ExportSettings,
+	ExportVideoCodec,
 	GifExportConfig,
 	GifFrameRate,
 	GifSizePreset,

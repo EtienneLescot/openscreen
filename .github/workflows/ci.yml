@@ -47,7 +47,7 @@ jobs:
       - name: Typecheck tests against a baseline
         shell: bash
         env:
-          BASELINE: 80
+          BASELINE: 74
         run: |
           set -uo pipefail
           COUNT=$(npx tsc -p tsconfig.test.json --noEmit 2>&1 | grep -c 'error TS' || true)
@@ -88,8 +88,6 @@ jobs:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
       - run: npm run test
-      - run: npm run test:browser:install
-      - run: npm run test:browser
 
   build:
     name: Build

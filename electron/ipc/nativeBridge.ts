@@ -413,6 +413,28 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 							}
 							return createSuccessResponse(requestId, stats);
 						}
+						case "exportGif": {
+							const sender = event.sender;
+							const stats = await compositorViewService.exportGif(
+								request.payload.clips,
+								request.payload.outPath,
+								request.payload.sceneJson,
+								request.payload.params,
+								(frames) => {
+									if (!sender.isDestroyed()) {
+										sender.send("export:native-progress", frames);
+									}
+								},
+							);
+							if (!stats) {
+								return createErrorResponse(
+									requestId,
+									"UNAVAILABLE",
+									"Native compositor addon not present.",
+								);
+							}
+							return createSuccessResponse(requestId, stats);
+						}
 						default:
 							return createErrorResponse(
 								requestId,

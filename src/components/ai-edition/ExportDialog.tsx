@@ -1,6 +1,6 @@
 // Export dialog for the new editor. Wires together:
 // 1. pickExportSavePath (native save dialog)
-// 2. exportAxcutDocument (renders frames + muxes mp4/gif)
+// 2. the native D3D exporter (exportMultiNative / exportGifNative)
 // 3. writeExportToPath (writes the resulting buffer to disk)
 //
 // Format/quality/GIF options live in the dialog's local state. The
@@ -18,11 +18,6 @@ import {
 	pickExtremeDims,
 	resolveAspectRatioValue,
 } from "@/lib/ai-edition/document/outputFormat";
-import {
-	type DocumentExportOptions,
-	type ExportVideoCodec,
-	exportAxcutDocument,
-} from "@/lib/ai-edition/exporter/documentExporter";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
@@ -30,14 +25,14 @@ import {
 	type ExportFormat,
 	type ExportProgress,
 	type ExportQuality,
+	type ExportVideoCodec,
 	GIF_FRAME_RATES,
 	GIF_SIZE_PRESETS,
 	type GifFrameRate,
 	type GifSizePreset,
 } from "@/lib/exporter";
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
-import { exportMultiNative } from "@/native";
-import { nativeBridgeClient } from "@/native/client";
+import { exportGifNative, exportMultiNative } from "@/native";
 import type { CompositorClipInput } from "@/native/contracts";
 import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
 import { ModalShell } from "./Modals";
@@ -156,13 +151,10 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 		() => (document ? collectEffectiveClipDims(document) : []),
 		[document],
 	);
-	// Largest clip's true (cropped) footprint — used only by the GIF export path below (its
-	// own, separate sizing option), which sizes to the best available footage the same way
-	// this dialog always has.
-	const referenceSource = useMemo(
-		() => pickExtremeDims(effectiveClipDims, "largest"),
-		[effectiveClipDims],
-	);
+	// (The "largest clip" pick lived here for the old renderer-side GIF path, which
+	// sized to the best available footage independently of the quality tier. GIF now
+	// goes through the same native exporter as MP4 and shares its sizing, so only the
+	// smallest-clip pick below is still needed.)
 
 	// Smallest clip's true (cropped) footprint on the timeline — a multiclip timeline can mix
 	// crops/resolutions, so this is what "Source" quality actually targets: sizing to the
@@ -193,6 +185,25 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 	// quality actually uses these as its target size; 720p/1080p target a fixed short side
 	// regardless (`calculateDimensionsForShortSide`), so this only changes what "Source"
 	// resolves to.
+	// GIF is 8-bit indexed and grows fast with area, so the size preset caps the
+	// output height rather than following the quality tier. `original` keeps the
+	// tier's dims; the native side falls back to its own defaults when undefined.
+	const gifOutputDims = (
+		preset: GifSizePreset,
+		tierDims: { width: number; height: number } | null,
+	): { width?: number; height?: number } => {
+		if (!tierDims) return {};
+		const maxHeight = GIF_SIZE_PRESETS[preset].maxHeight;
+		if (!Number.isFinite(maxHeight) || tierDims.height <= maxHeight) {
+			return { width: tierDims.width, height: tierDims.height };
+		}
+		const scale = maxHeight / tierDims.height;
+		// Even dimensions: the compositor rasterises to this size and the readback
+		// assumes a tightly-packed RGBA buffer.
+		const even = (n: number) => Math.max(2, Math.round(n * scale) & ~1);
+		return { width: even(tierDims.width), height: even(tierDims.height) };
+	};
+
 	const tierOutputDims = (value: ExportQuality) =>
 		smallestSource
 			? calculateMp4ExportSettings({
@@ -252,14 +263,19 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 			return;
 		}
 
-		// MP4: the native D3D exporter is the only path (no CPU/web fallback — that
-		// path silently regressed to an ultra-slow CPU render once, which is exactly
-		// the failure mode a flag-gated fallback invites). Background/layout/webcam/
-		// cursor/effects come from the same scene as the live preview.
-		if (format === "mp4") {
+		// Both formats go through the native D3D exporter — same clips, same scene,
+		// same frame walk in the compositor crate; only the container differs. There
+		// is no CPU/web fallback: that path silently regressed to an ultra-slow CPU
+		// render once, which is exactly the failure mode a flag-gated fallback
+		// invites. Background/layout/webcam/cursor/effects come from the same scene
+		// as the live preview, so an export can no longer disagree with what the
+		// user previewed.
+		{
 			setPhase("rendering");
 			// Render the real timeline when there are clips; else fall back to the fixture.
 			const clips = buildNativeClipList(document);
+			// GIF runs at its own frame rate, so the progress total has to use it.
+			const outFps = format === "gif" ? gifFrameRate : fps;
 			// Total frames the encoder will produce, known upfront from the timeline (sum of
 			// each clip's trimmed source duration) — the native side only reports frames
 			// AFTER encoding one (onNativeExportProgress), it doesn't know/send a total, so
@@ -268,7 +284,7 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 				(sum, c) => sum + Math.max(0, c.sourceEndSec - c.sourceStartSec),
 				0,
 			);
-			const totalFrames = Math.max(1, Math.round(totalDurationSec * fps));
+			const totalFrames = Math.max(1, Math.round(totalDurationSec * outFps));
 			const startedAt = Date.now();
 			const unsubscribeProgress = window.electronAPI?.onNativeExportProgress?.((frames) => {
 				const elapsedS = (Date.now() - startedAt) / 1000;
@@ -287,12 +303,22 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 				if (clips.length === 0) {
 					throw new Error(t("exportDialog.nothingToExport"));
 				}
-				const stats = await exportMultiNative(clips, pickedPath, sceneJson, {
-					width: outDims?.width,
-					height: outDims?.height,
-					fps,
-					codec,
-				});
+				const stats =
+					format === "gif"
+						? await exportGifNative(clips, pickedPath, sceneJson, {
+								// GIF is 256-colour and grows fast; cap the long edge at the
+								// chosen preset rather than exporting at source size.
+								...gifOutputDims(gifSize, outDims),
+								fps: gifFrameRate,
+								// 0 = infinite, the historical GIF default; 1 = play once.
+								loopCount: gifLoop ? 0 : 1,
+							})
+						: await exportMultiNative(clips, pickedPath, sceneJson, {
+								width: outDims?.width,
+								height: outDims?.height,
+								fps,
+								codec,
+							});
 				setSavedPath(pickedPath);
 				setPhase("done");
 				toast.success(t("exportDialog.exportedVideo"), {
@@ -314,57 +340,6 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 				unsubscribeProgress?.();
 			}
 			return;
-		}
-
-		// GIF: no native encoder for this format yet, so this is the only
-		// implementation — not a fallback for MP4, a distinct code path.
-		setPhase("rendering");
-		const options: DocumentExportOptions = {
-			format,
-			quality,
-			frameRate: fps,
-			codec,
-			gifFrameRate,
-			gifLoop,
-			gifSizePreset: gifSize,
-			// Size the output to the largest clip on the timeline (see referenceSource),
-			// not just the primary asset, so "Source" matches the shown size.
-			sourceWidth: referenceSource?.width ?? asset.video?.width,
-			sourceHeight: referenceSource?.height ?? asset.video?.height,
-			onProgress: (p) => setProgress(p),
-		};
-
-		try {
-			const result = await exportAxcutDocument(document, options);
-			if (!result.success || !result.blob) {
-				throw new Error(result.error ?? t("exportDialog.exportFailed"));
-			}
-			setPhase("writing");
-			const arrayBuffer = await result.blob.arrayBuffer();
-			const writeResult = await window.electronAPI?.writeExportToPath?.(arrayBuffer, pickedPath);
-			if (!writeResult?.success) {
-				throw new Error(writeResult?.error ?? t("exportDialog.failedToWriteFile"));
-			}
-			setSavedPath(pickedPath);
-			setPhase("done");
-			toast.success(t("exportDialog.exportedGif"), {
-				description: pickedPath,
-				action: {
-					label: t("exportDialog.showInFolder"),
-					onClick: () => {
-						void window.electronAPI?.revealInFolder?.(pickedPath);
-					},
-				},
-			});
-			// Touch the bridge so it stays referenced even when export
-			// is invoked from a non-Electron shim.
-			void nativeBridgeClient.aiEdition.llmGetSnapshot;
-		} catch (err) {
-			setError(err instanceof Error ? err.message : String(err));
-			setPhase("error");
-			toast.error(t("exportDialog.exportFailed"), {
-				description: err instanceof Error ? err.message : String(err),
-			});
 		}
 	};
 

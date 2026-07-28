@@ -148,20 +148,17 @@ export interface CompositorViewAddon {
 		params?: ExportParamsInput,
 		onProgress?: (frames: number) => void,
 	): Promise<ExportStats>;
-	/** Native single-clip GIF export (slice 1, behind `NATIVE_GIF_EXPORT_ENABLED`).
-	 *  Mirrors `exportMulti`'s shape, but the slice-1 PR keeps the surface small:
-	 *  one screen + one webcam file (no multiclip), no app `SceneDescription` (the
-	 *  Player drives the compositing, same as the live preview), and no
-	 *  encoder-config codec pick — GIF is one codec. `cursorPath` follows the
-	 *  sidecar convention (`<screen>.cursor.json`); `null`/missing → render
-	 *  without cursor. `params` defaults to 854×480, 12 fps, infinite loop, no
-	 *  dithering (`GifExportParams::default`). `onProgress(frames)` is throttled
-	 *  to ~10/s like the MP4 path. */
+	/** Native GIF export. Identical inputs to `exportMulti` — same clips, same
+	 *  scene — because it is the same render: both drive `walk_composited_timeline`
+	 *  in the compositor crate and differ only in the encoder. Cursor, background,
+	 *  layout and webcam all come from the scene, so there is no GIF-specific
+	 *  input. No codec pick: GIF is one codec. `params` defaults to 854×480,
+	 *  12 fps, infinite loop, no dithering (`GifExportParams::default`).
+	 *  `onProgress(frames)` is throttled to ~10/s like the MP4 path. */
 	exportGif(
-		screenPath: string,
-		webcamPath: string,
-		cursorPath: string | null,
+		clips: ClipInput[],
 		outPath: string,
+		sceneJson?: string,
 		params?: GifParamsInput,
 		onProgress?: (frames: number) => void,
 	): Promise<GifExportStats>;
