@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type { CameraFullscreenRegion } from "../types";
+import type { CameraFullscreenRegion } from "@/components/video-editor/types";
 import { computeCameraFullscreenProgress } from "./cameraFullscreenUtils";
 import { TRANSITION_WINDOW_MS } from "./constants";
 

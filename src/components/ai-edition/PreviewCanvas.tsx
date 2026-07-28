@@ -30,7 +30,6 @@ import {
 	type WebcamMaskShape,
 	type ZoomFocus,
 } from "@/components/video-editor/types";
-import { computeCameraFullscreenProgress } from "@/components/video-editor/videoPlayback/cameraFullscreenUtils";
 import { useScopedT } from "@/contexts/I18nContext";
 import { resolveAspectRatioValue } from "@/lib/ai-edition/document/outputFormat";
 import type {
@@ -52,6 +51,7 @@ import {
 } from "@/lib/compositeLayout";
 import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
+import { computeCameraFullscreenProgress } from "@/lib/zoomMath/cameraFullscreenUtils";
 import { clamp, clamp01 } from "@/utils/math";
 import { AnnotationLayer } from "./AnnotationLayer";
 import { NativeCompositorOverlay } from "./NativeCompositorOverlay";
