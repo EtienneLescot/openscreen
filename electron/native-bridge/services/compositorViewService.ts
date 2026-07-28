@@ -494,17 +494,17 @@ export class CompositorViewService {
 		);
 	}
 
-	/** Native single-clip GIF export (slice 1, behind `NATIVE_GIF_EXPORT_ENABLED`).
-	 *  Mirrors `exportMulti`'s shape, but the slice-1 surface is deliberately small:
-	 *  one screen + one webcam file, optional cursor sidecar (`<screen>.cursor.json`),
-	 *  no multiclip, no app `SceneDescription` (the Player drives the compositing,
-	 *  same as the live preview). Returns null when the addon is absent — the renderer
-	 *  treats that as "fall back to the legacy `gif.js` path" without raising. */
+	/** Native GIF export. Same inputs as `exportMulti` — one clip list, one scene —
+	 *  because it is the same render: both drive `walk_composited_timeline` in the
+	 *  compositor crate and differ only in the encoder. The scene carries background,
+	 *  layout, webcam and cursor, so there is no GIF-specific input.
+	 *
+	 *  Returns null when the addon is absent, which the renderer surfaces as a failed
+	 *  export — there is no longer a renderer-side GIF path to fall back to. */
 	async exportGif(
-		screenPath: string,
-		webcamPath: string,
-		cursorPath?: string | null,
+		clips: ClipInput[],
 		outPath?: string,
+		sceneJson?: string,
 		params?: GifParamsInput,
 		onProgress?: (frames: number) => void,
 	): Promise<GifExportStats | null> {
@@ -513,6 +513,12 @@ export class CompositorViewService {
 			return null;
 		}
 		const target = outPath ?? path.join(app.getPath("temp"), "openscreen-native-export.gif");
-		return addon.exportGif(screenPath, webcamPath, cursorPath ?? null, target, params, onProgress);
+		return addon.exportGif(
+			clips,
+			target,
+			sceneJson ? resolveSceneAssetPaths(sceneJson) : undefined,
+			params,
+			onProgress,
+		);
 	}
 }

@@ -10,6 +10,8 @@
 import { requireNativeBridgeData } from "./client";
 import type {
 	CompositorClipInput,
+	CompositorExportGifParams,
+	CompositorExportGifResult,
 	CompositorExportParams,
 	CompositorExportResult,
 	CompositorFramePacket,
@@ -122,6 +124,21 @@ export function exportMultiNative(
 	return requireNativeBridgeData<CompositorExportResult>({
 		domain: "compositor",
 		action: "exportMulti",
+		payload: { clips, outPath, sceneJson, params },
+	});
+}
+
+/** Same clips and scene as `exportMultiNative` — the render is identical, only
+ *  the container differs. */
+export function exportGifNative(
+	clips: CompositorClipInput[],
+	outPath?: string,
+	sceneJson?: string,
+	params?: CompositorExportGifParams,
+): Promise<CompositorExportGifResult> {
+	return requireNativeBridgeData<CompositorExportGifResult>({
+		domain: "compositor",
+		action: "exportGif",
 		payload: { clips, outPath, sceneJson, params },
 	});
 }
