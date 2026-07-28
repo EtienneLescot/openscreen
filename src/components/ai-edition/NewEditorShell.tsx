@@ -4,7 +4,10 @@ import type { EditorProjectData } from "@/components/video-editor/projectPersist
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { useScopedT } from "@/contexts/I18nContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
-import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
+import {
+	migrateProjectDataToAxcutDocument,
+	migrateRawDocumentToCurrent,
+} from "@/lib/ai-edition/document/migrate";
 import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
@@ -520,7 +523,7 @@ export function NewEditorShell() {
 			const isAxcutDocument =
 				typeof raw === "object" && raw !== null && "schemaVersion" in raw && "timeline" in raw;
 			const doc = isAxcutDocument
-				? documentSchema.parse(raw) // validates + upgrades v3 → v4
+				? documentSchema.parse(migrateRawDocumentToCurrent(raw)) // disk-load: upgrade v3/v4 → v5, then validate
 				: migrateProjectDataToAxcutDocument(raw as EditorProjectData);
 			const saved = await nativeBridgeClient.aiEdition.save(doc);
 			if (saved.success && saved.document) {

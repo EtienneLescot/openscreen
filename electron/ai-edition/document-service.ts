@@ -13,6 +13,7 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { createId } from "../../src/lib/ai-edition/document/ids";
+import { migrateRawDocumentToCurrent } from "../../src/lib/ai-edition/document/migrate";
 import {
 	type AxcutAsset,
 	type AxcutDocument,
@@ -76,6 +77,16 @@ function safeProjectId(raw: string): string {
 		throw new ProjectFileError(`Invalid project id: ${raw}`);
 	}
 	return raw;
+}
+
+// ponytail: load-time migration hook. The on-disk file may carry any supported
+// `schemaVersion` (v2 EditorProjectData handled separately by
+// `migrateProjectDataToAxcutDocument`; v3 / v4 AxcutDocuments handled here).
+// `documentSchema.parse` is now a pure v6 validator — every JSON-read path
+// (list, get, future bulk-export) must run the upgrader chain first via this
+// helper so the in-memory parse is a single `z.literal(6)` + shape check.
+function parseLoadedDocument(raw: string): AxcutDocument {
+	return documentSchema.parse(migrateRawDocumentToCurrent(JSON.parse(raw)));
 }
 
 /**
@@ -169,7 +180,7 @@ export class DocumentService {
 			const filePath = path.join(this.projectsRoot, name);
 			try {
 				const raw = await fs.readFile(filePath, "utf8");
-				const parsed = documentSchema.parse(JSON.parse(raw));
+				const parsed = parseLoadedDocument(raw);
 				summaries.push({
 					id: parsed.project.id,
 					title: parsed.project.title,
@@ -211,7 +222,7 @@ export class DocumentService {
 				);
 			}
 		}
-		return documentSchema.parse(JSON.parse(raw));
+		return parseLoadedDocument(raw);
 	}
 
 	async createProject(title: string): Promise<AxcutDocument> {
