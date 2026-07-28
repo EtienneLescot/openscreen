@@ -271,8 +271,6 @@ export class AiEditionService {
 		return this.options.compactNow(projectId, sessionId);
 	}
 
-	}
-
 	chatListSessions(projectId: string): AiEditionChatSessionSummary[] {
 		return this.options.listSessions(projectId);
 	}
