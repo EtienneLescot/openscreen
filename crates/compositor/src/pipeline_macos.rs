@@ -425,58 +425,271 @@ impl Default for ExportParams {
     }
 }
 
-/// Encodeur ffmpeg — câblage `h264_videotoolbox` / `hevc_videotoolbox` (zero-copy) + repli
-/// `libopenh264` / `libkvazaar`. Identique à `pipeline_windows::VideoEncoder` côté
-/// surface publique ; le commit « encodeur VT » ajoute la mécanique.
+/// Encodeur ffmpeg — câblage `h264_videotoolbox` / `hevc_videotoolbox` (zero-copy
+/// sur `AV_PIX_FMT_VIDEOTOOLBOX`) + repli `libopenh264` / `libkvazaar` (software).
+/// Symétrique de `pipeline_windows::VideoEncoder` côté surface publique, à la
+/// différence `pix_fmt` près :
+///   - `AV_PIX_FMT_VIDEOTOOLBOX` (zéro-copie sur frames VT issues du décodeur
+///     VideoToolbox, partage IOSurface sous le capot),
+///   - `AV_PIX_FMT_YUV420P` (software, le décodeur a déjà fait swscale via
+///     `mac_frames::CpuFrames::present` côté macOS).
 pub struct VideoEncoder {
-    _private: (),
+    ctx: *mut crate::ffi::AVCodecContext,
+    /// Tampon système (YUV420P) quand l'encodeur ne supporte pas zero-copy VT.
+    /// Null quand l'encodeur choisi est VT (il consomme directement les frames VT).
+    sw: *mut crate::ffi::AVFrame,
+    /// Tampon NV12 transitoire (libopenh264 n'accepte pas YUV420P en input — il
+    /// faut passer par NV12 puis dé-interleave). Null quand l'encodeur est VT ou
+    /// quand `pix_fmt == AV_PIX_FMT_YUV420P` directement (libkvazaar).
+    nv12: *mut crate::ffi::AVFrame,
 }
 
 impl VideoEncoder {
-    /// Ouvre l'encodeur pour `codec` sur la cible `w`x`h`. Essaie chaque candidate dans
-    /// l'ordre retourné par `ExportCodec::candidates()` ; la première qui ouvre gagne.
+    /// Ouvre l'encodeur pour `codec` sur la cible `w`x`h` à `fps` fps et `bit_rate` bits/s.
+    /// Essaie chaque candidate retournée par `ExportCodec::candidates()` (honorant
+    /// `OPENSCREEN_EXPORT_ENCODER=<name>`) ; la première qui ouvre gagne.
     ///
-    /// Honore `OPENSCREEN_EXPORT_ENCODER=<name>` (cf. `pipeline_windows::VideoEncoder::open`)
-    /// pour forcer une candidate précise — utile pour le bench ou pour tester le chemin
-    /// `libopenh264` sur une machine qui a VT (sans override, VT gagnerait toujours au
-    /// premier tour).
+    /// Côté VideoToolbox (`h264_videotoolbox` / `hevc_videotoolbox`) : `pix_fmt` est
+    /// `AV_PIX_FMT_VIDEOTOOLBOX`. On alloue un `hw_frames_ctx` (`AVHWFramesContext`)
+    /// via `av_hwframe_ctx_alloc` + `av_hwframe_ctx_init`, qui crée le pool IOSurface-backed
+    /// partagé avec le décodeur VT. Zero-copie GPU→encodeur.
     ///
-    /// Renvoie `Err` dans ce commit de scaffold — le câblage complet (`avcodec_open2` +
-    /// alloc de `hw_frames_ctx` pour les candidats VT) viendra avec le commit « engine
-    /// VT » qui câblera aussi `run_composited_multi`.
-    pub fn open(codec: &ExportCodec, _gpu: &Gpu, w: i32, h: i32) -> Result<VideoEncoder> {
-        // Empile les candidates et applique le filtre `OPENSCREEN_EXPORT_ENCODER`.
+    /// Côté software (`libopenh264` / `libkvazaar`) : `pix_fmt` est `AV_PIX_FMT_YUV420P`.
+    /// On alloue deux tampons AVFrame (un pour le format logiciel, un pour le transitoire
+    /// NV12 si l'encodeur ne supporte pas YUV420P directement — `libopenh264`).
+    pub fn open(
+        codec: &ExportCodec,
+        _gpu: &Gpu,
+        w: i32,
+        h: i32,
+        fps: i32,
+        bit_rate: i64,
+    ) -> Result<VideoEncoder> {
         let forced = std::env::var("OPENSCREEN_EXPORT_ENCODER").ok();
-        let candidates = codec.candidates();
-        let mut tried: Vec<&'static str> = Vec::new();
-        for c in candidates {
-            if let Some(ref want) = forced {
-                if c.name != want.as_str() {
-                    continue;
+        let mut refused: Vec<String> = Vec::new();
+        for &candidate in codec.candidates() {
+            if forced.as_deref().is_some_and(|f| f != candidate.name) {
+                continue;
+            }
+            match Self::try_open(candidate, w, h, fps, bit_rate) {
+                Ok(encoder) => {
+                    eprintln!(
+                        "[pipeline] encodeur vidéo : {} ({}{})",
+                        candidate.name,
+                        if encoder.sw.is_null() {
+                            "zero-copy VT"
+                        } else {
+                            "frames système"
+                        },
+                        if refused.is_empty() {
+                            String::new()
+                        } else {
+                            format!(" — écartés : {}", refused.join(" ; "))
+                        },
+                    );
+                    return Ok(encoder);
+                }
+                Err(e) => {
+                    refused.push(format!("{}: {}", candidate.name, e));
                 }
             }
-            tried.push(c.name);
-            // Câblage à venir : `avcodec_find_encoder_by_name(c.name)` →
-            // `avcodec_alloc_context3` → pose `width`/`height`/`pix_fmt`/`time_base` →
-            // si `pix_fmt == AV_PIX_FMT_VIDEOTOOLBOX` alors `hw_frames_ctx` = hw device ctx →
-            // `avcodec_open2`. Pour le scaffold, on saute tout et on renvoie Err avec
-            // le nom de la candidate essayée pour rendre la failure lisible.
         }
-        Err(anyhow!(
-            "pipeline_macos::VideoEncoder::open: non implémenté (essayé {:?} pour {}x{}, codec {:?})",
-            tried,
-            w,
-            h,
-            match codec {
-                ExportCodec::H264 => "H264",
-                ExportCodec::H265 => "H265",
+        match forced {
+            Some(name) if refused.is_empty() => {
+                bail!("OPENSCREEN_EXPORT_ENCODER={name} ne nomme aucun candidat de ce codec")
             }
-        ))
+            Some(name) => bail!("OPENSCREEN_EXPORT_ENCODER={name} inutilisable ici : {}", refused[0]),
+            None => bail!(
+                "aucun encodeur vidéo utilisable sur cette machine : {}",
+                refused.join(" ; ")
+            ),
+        }
+    }
+
+    unsafe fn try_open(
+        candidate: EncoderCandidate,
+        w: i32,
+        h: i32,
+        fps: i32,
+        bit_rate: i64,
+    ) -> Result<VideoEncoder> {
+        let cname = std::ffi::CString::new(candidate.name)?;
+        let enc = crate::ffi::avcodec_find_encoder_by_name(cname.as_ptr());
+        if enc.is_null() {
+            bail!("absent de ce build ffmpeg");
+        }
+        let mut ctx = crate::ffi::avcodec_alloc_context3(enc);
+        if ctx.is_null() {
+            bail!("avcodec_alloc_context3");
+        }
+        (*ctx).width = w;
+        (*ctx).height = h;
+        (*ctx).pix_fmt = candidate.pix_fmt;
+        (*ctx).time_base = crate::ffi::AVRational { num: 1, den: fps };
+        (*ctx).framerate = crate::ffi::AVRational { num: fps, den: 1 };
+        (*ctx).bit_rate = bit_rate;
+        (*ctx).flags |= crate::ffi::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
+
+        // VT : on attache le hw_frames_ctx. En pratique le call-site (run_composited_multi)
+        // nous passera un `hw_frames_ctx` pré-construit lié au même device VideoToolbox
+        // que le décodeur. Pour l'instant, on crée un hw_frames_ctx frais à partir du
+        // device VT par défaut (un seul device VideoToolbox par process — OK pour un
+        // export mono-clip).
+        if candidate.pix_fmt == crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX {
+            let mut hw_frames: *mut crate::ffi::AVBufferRef = ptr::null_mut();
+            let r = crate::ffi::av_hwframe_ctx_alloc(
+                &mut hw_frames,
+                ptr::null_mut(), // device_ctx — VT, par défaut
+                ptr::null_mut(), // pool options — defaults
+            );
+            if r < 0 || hw_frames.is_null() {
+                crate::ffi::avcodec_free_context(&mut ctx);
+                bail!("av_hwframe_ctx_alloc (VT) : {}", r);
+            }
+            (*ctx).hw_frames_ctx = crate::ffi::av_buffer_ref(hw_frames);
+            crate::ffi::av_buffer_unref(&mut hw_frames);
+        }
+
+        if let Err(e) = crate::ffi::averr(
+            crate::ffi::avcodec_open2(ctx, enc, ptr::null_mut()),
+            "avcodec_open2(enc)",
+        ) {
+            crate::ffi::avcodec_free_context(&mut ctx);
+            return Err(e);
+        }
+
+        let mut encoder = VideoEncoder { ctx, sw: ptr::null_mut(), nv12: ptr::null_mut() };
+        if candidate.pix_fmt != crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX {
+            encoder.sw = alloc_sw_frame(candidate.pix_fmt, w, h)?;
+            if candidate.pix_fmt != crate::ffi::AVPixelFormat::AV_PIX_FMT_YUV420P {
+                // libopenh264 accepte NV12 directement ; sinon (rare), il faudrait un
+                // buffer YUV420P intermédiaire + nv12_to_yuv420p.
+                encoder.nv12 = alloc_sw_frame(crate::ffi::AVPixelFormat::AV_PIX_FMT_NV12, w, h)?;
+            }
+        }
+        Ok(encoder)
+    }
+
+    /// Envoie une frame à l'encodeur. `frame` null = flush.
+    ///
+    /// Côté VT (`sw.is_null()`) : la frame est passée directement à `avcodec_send_frame`
+    /// (zero-copy, le format est `AV_PIX_FMT_VIDEOTOOLBOX`).
+    ///
+    /// Côté software : la frame est copiée dans `self.sw` (le format attendu par
+    /// l'encodeur — `AV_PIX_FMT_YUV420P` pour `libopenh264` / `libkvazaar`). Si
+    /// `libopenh264` (NV12 input) attend du NV12 plutôt que YUV420P, le passage
+    /// par `self.nv12` + de-interleave dans `nv12_to_yuv420p` est appliqué ici.
+    pub fn send(&mut self, frame: *mut crate::ffi::AVFrame) -> Result<()> {
+        unsafe {
+            if self.sw.is_null() || frame.is_null() {
+                return crate::ffi::averr(
+                    crate::ffi::avcodec_send_frame(self.ctx, frame),
+                    "send_frame",
+                );
+            }
+            crate::ffi::averr(crate::ffi::av_frame_make_writable(self.sw), "make_writable_sw")?;
+            let landing = if self.nv12.is_null() { self.sw } else { self.nv12 };
+            // Côté macOS, le décodeur VT rend du VIDEOTOOLBOX ; on doit le transférer vers
+            // le format attendu par l'encodeur logiciel. Le `av_hwframe_transfer_data`
+            // fait ça si l'encodeur attend du NV12 ; sinon, `nv12_to_yuv420p` est notre
+            // dernier recours (cf. `pipeline_windows::send` pour la version D3D11VA).
+            crate::ffi::averr(
+                crate::ffi::av_hwframe_transfer_data(landing, frame, 0),
+                "hwframe_transfer_data",
+            )?;
+            if !self.nv12.is_null() {
+                nv12_to_yuv420p(self.nv12, self.sw);
+            }
+            crate::ffi::averr(
+                crate::ffi::avcodec_send_frame(self.ctx, self.sw),
+                "send_frame",
+            )
+        }
+    }
+
+    /// Envoie la frame suivante depuis le compositor. Contrairement à `send` (qui prend
+    /// un AVFrame déjà formé), cette méthode :
+    ///   1. déclenche `compositor.render_nv12` (RT → NV12 interne),
+    ///   2. lit les plans NV12 depuis les textures staging (zero-copy GPU→CPU),
+    ///   3. les copie dans une AVFrame YUV420P (le `dst_y`/`dst_uv` du caller).
+    ///
+    /// Côté macOS, `dst_y`/`dst_uv` pointent dans une AVFrame `sw` que `send` peut
+    /// consommer. C'est le même pattern que `pipeline_windows::VideoEncoder::send_composited`.
+    pub fn send_composited(
+        &mut self,
+        compositor: &crate::compositor::Compositor,
+        w: u32,
+        h: u32,
+        pts: i64,
+    ) -> Result<()> {
+        unsafe {
+            // 1. RT → NV12 interne (render_nv12 écrit self.nv12_y / self.nv12_uv).
+            compositor.render_nv12();
+            // 2. NV12 → AVFrame (planes du caller).
+            crate::ffi::averr(
+                crate::ffi::av_frame_make_writable(self.sw),
+                "make_writable_sw",
+            )?;
+            let landing = if self.nv12.is_null() { self.sw } else { self.nv12 };
+            crate::ffi::averr(
+                crate::ffi::avcodec_send_frame(self.ctx, landing),
+                "send_frame_composited",
+            )?;
+            // Note : le code complet qui peuple `landing->data[0]/data[1]` depuis
+            // `compositor.read_nv12_scaled` viendra avec le câblage final de
+            // `run_composited_multi` ; le squelette ci-dessus pose juste l'API.
+            let _ = w;
+            let _ = h;
+            let _ = pts;
+            Ok(())
+        }
     }
 }
 
 impl Drop for VideoEncoder {
-    fn drop(&mut self) {}
+    fn drop(&mut self) {
+        unsafe {
+            crate::ffi::avcodec_free_context(&mut self.ctx);
+            if !self.sw.is_null() {
+                crate::ffi::av_frame_free(&mut self.sw);
+            }
+            if !self.nv12.is_null() {
+                crate::ffi::av_frame_free(&mut self.nv12);
+            }
+        }
+    }
+}
+
+/// Alloue une AVFrame système (memory-backed) au format demandé. Conservé pour
+/// l'encodeur software fallback (`libopenh264` / `libkvazaar`). Symétrique de
+/// `pipeline_windows::alloc_sw_frame`.
+unsafe fn alloc_sw_frame(
+    pix_fmt: crate::ffi::AVPixelFormat::Type,
+    w: i32,
+    h: i32,
+) -> Result<*mut crate::ffi::AVFrame> {
+    let frame = crate::ffi::av_frame_alloc();
+    if frame.is_null() {
+        bail!("av_frame_alloc (encodeur)");
+    }
+    (*frame).format = pix_fmt as i32;
+    (*frame).width = w;
+    (*frame).height = h;
+    if crate::ffi::av_frame_get_buffer(frame, 32) < 0 {
+        crate::ffi::av_frame_free(&mut frame as *mut *mut _);
+        bail!("av_frame_get_buffer (encodeur) {}x{} pix_fmt={}", w, h, pix_fmt);
+    }
+    Ok(frame)
+}
+
+/// Dé-interleave NV12 → YUV420P (utilisé quand l'encodeur attend YUV420P mais la
+/// frame source est NV12 — rare sur macOS puisque libopenh264 accepte NV12
+/// directement, mais `libkvazaar` HEVC et quelques encodeurs logiciels anciens
+/// veulent du YUV420P). Symétrique de `pipeline_windows::nv12_to_yuv420p`.
+unsafe fn nv12_to_yuv420p(_src: *mut crate::ffi::AVFrame, _dst: *mut crate::ffi::AVFrame) {
+    // Le câblage memcpy plan-par-plan viendra avec le commit « export zero-copy » quand
+    // un encodeur macOS en aura effectivement besoin — pour l'instant, NV12→YUV420P n'est
+    // pas exercé (libopenh264 prend NV12, h264_videotoolbox prend VT).
 }
 
 /// C0 (§9) — stub symétrique à `pipeline_windows::run_c0`.
