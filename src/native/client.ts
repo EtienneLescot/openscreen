@@ -3,7 +3,6 @@ import {
 	type AiEditionCaptionTranslateResult,
 	type AiEditionChatBudget,
 	type AiEditionChatCompactResult,
-	type AiEditionChatMessage,
 	type AiEditionChatResult,
 	type AiEditionChatRewindResult,
 	type AiEditionChatSession,
@@ -231,49 +230,20 @@ export const nativeBridgeClient = {
 			}),
 		chatRun: (
 			projectId: string,
-			sessionIdOrMessage: string,
-			message?: string,
+			sessionId: string,
+			message: string,
 			document?: unknown,
-		): Promise<AiEditionChatResult> => {
-			// ponytail: polymorphic — legacy 2-arg callers pass (projectId, message).
-			// Multi-session callers pass (projectId, sessionId, message[, document]).
-			// The document snapshot enables the agent tool loop (P1).
-			if (message === undefined) {
-				return requireNativeBridgeData<AiEditionChatResult>({
-					domain: "aiEdition",
-					action: "chat.runDefault",
-					payload: { projectId, message: sessionIdOrMessage },
-				});
-			}
-			return requireNativeBridgeData<AiEditionChatResult>({
+		): Promise<AiEditionChatResult> =>
+			requireNativeBridgeData<AiEditionChatResult>({
 				domain: "aiEdition",
 				action: "chat.run",
-				payload: { projectId, sessionId: sessionIdOrMessage, message, document },
-			});
-		},
+				payload: { projectId, sessionId, message, document },
+			}),
 		chatUndoLastBatch: (projectId: string, sessionId: string) =>
 			requireNativeBridgeData<AiEditionChatResult>({
 				domain: "aiEdition",
 				action: "chat.undoLastBatch",
 				payload: { projectId, sessionId },
-			}),
-		chatRunDefault: (projectId: string, message: string) =>
-			requireNativeBridgeData<AiEditionChatResult>({
-				domain: "aiEdition",
-				action: "chat.runDefault",
-				payload: { projectId, message },
-			}),
-		chatHistory: (projectId: string) =>
-			requireNativeBridgeData<AiEditionChatMessage[]>({
-				domain: "aiEdition",
-				action: "chat.history",
-				payload: { projectId },
-			}),
-		chatClear: (projectId: string) =>
-			requireNativeBridgeData<{ success: boolean }>({
-				domain: "aiEdition",
-				action: "chat.clear",
-				payload: { projectId },
 			}),
 		chatListSessions: (projectId: string) =>
 			requireNativeBridgeData<AiEditionChatSessionSummary[]>({
