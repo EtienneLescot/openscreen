@@ -1,60 +1,33 @@
-let cachedPlatform: string | null = null;
-
 /**
- * Gets the current platform from Electron
+ * Gets the current platform from Electron. `process.platform` is a synchronous
+ * Node global available in both the main and renderer processes, so we read it
+ * directly here instead of bouncing through an IPC round-trip.
  */
-export const getPlatform = async (): Promise<string> => {
-	if (cachedPlatform) return cachedPlatform;
-
-	try {
-		const platform = await window.electronAPI.getPlatform();
-		cachedPlatform = platform;
-		return platform;
-	} catch (error) {
-		console.warn("Failed to get platform from Electron, falling back to navigator:", error);
-		// Fallback for dev/testing
-		let fallbackPlatform = "win32";
-		if (typeof navigator !== "undefined") {
-			if (/Mac|iPhone|iPad|iPod/.test(navigator.platform)) {
-				fallbackPlatform = "darwin";
-			} else if (/Linux/.test(navigator.platform)) {
-				fallbackPlatform = "linux";
-			}
-		}
-
-		cachedPlatform = fallbackPlatform;
-		return fallbackPlatform;
-	}
-};
+export function getPlatform(): NodeJS.Platform {
+	return process.platform;
+}
 
 /**
- * Detects if the current platform is macOS
+ * Detects if the current platform is macOS.
  */
-export const isMac = async (): Promise<boolean> => {
-	const platform = await getPlatform();
-	return platform === "darwin";
-};
+export const isMac = (): boolean => getPlatform() === "darwin";
 
 /**
- * Gets the modifier key symbol based on the platform
+ * Gets the modifier key symbol based on the platform.
  */
-export const getModifierKey = async (): Promise<string> => {
-	return (await isMac()) ? "⌘" : "Ctrl";
-};
+export const getModifierKey = (): "⌘" | "Ctrl" => (isMac() ? "⌘" : "Ctrl");
 
 /**
- * Gets the shift key symbol based on the platform
+ * Gets the shift key symbol based on the platform.
  */
-export const getShiftKey = async (): Promise<string> => {
-	return (await isMac()) ? "⇧" : "Shift";
-};
+export const getShiftKey = (): "⇧" | "Shift" => (isMac() ? "⇧" : "Shift");
 
 /**
- * Formats a keyboard shortcut for display based on the platform
+ * Formats a keyboard shortcut for display based on the platform.
  * @param keys Array of key combinations (e.g., ['mod', 'D'] or ['shift', 'mod', 'Scroll'])
  */
-export const formatShortcut = async (keys: string[]): Promise<string> => {
-	const isMacPlatform = await isMac();
+export function formatShortcut(keys: string[]): string {
+	const isMacPlatform = isMac();
 	return keys
 		.map((key) => {
 			if (key.toLowerCase() === "mod") return isMacPlatform ? "⌘" : "Ctrl";
@@ -62,4 +35,4 @@ export const formatShortcut = async (keys: string[]): Promise<string> => {
 			return key;
 		})
 		.join(" + ");
-};
+}
