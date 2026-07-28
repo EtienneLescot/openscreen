@@ -172,6 +172,16 @@ impl Player {
         self.sdec.cur_time_sec()
     }
 
+    /// Durée totale du flux écran (en secondes), telle qu'annoncée par le
+    /// conteneur. `None` quand le conteneur n'expose ni `duration` ni un
+    /// `nb_frames` fiable — l'appelant doit alors itérer jusqu'à EOF
+    /// plutôt que de calculer un `target_frames` à l'avance. Sert
+    /// principalement à l'export GIF (slice 1) pour estimer le nombre de
+    /// frames à produire avant d'entrer dans la boucle de rendu.
+    pub unsafe fn screen_duration_sec(&self) -> Option<f64> {
+        self.sdec.available_duration_sec()
+    }
+
     /// Compose la frame suivante (→ `comp.rt`). Boucle sur EOF. `false` si fixture vide.
     ///
     /// L'écran pilote la cadence (1 frame/tick) ; la webcam suit son PROPRE temps source
