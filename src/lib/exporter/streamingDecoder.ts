@@ -67,8 +67,6 @@ export interface DecodedVideoInfo {
 	codec: string;
 	hasAudio: boolean;
 	audioCodec?: string;
-	/** Number of audio streams in the container (native macOS writes system + mic separately). */
-	audioStreamCount: number;
 }
 
 type EarlyDecodeEndCheck = {
@@ -285,8 +283,7 @@ export class StreamingVideoDecoder {
 			}
 		}
 
-		const audioStreams = mediaInfo.streams.filter((s) => s.codec_type_string === "audio");
-		const audioStream = audioStreams[0];
+		const audioStream = mediaInfo.streams.find((s) => s.codec_type_string === "audio");
 
 		// Scan video packets for the true content boundary; MediaRecorder (especially on
 		// Linux) writes unreliable container durations and packet timestamps are ground truth.
@@ -332,7 +329,6 @@ export class StreamingVideoDecoder {
 			codec: videoStream?.codec_string || "unknown",
 			hasAudio: !!audioStream,
 			audioCodec: audioStream?.codec_string,
-			audioStreamCount: audioStreams.length,
 		};
 
 		return this.metadata;

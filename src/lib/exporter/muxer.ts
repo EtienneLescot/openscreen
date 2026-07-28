@@ -10,6 +10,15 @@ import type { ExportConfig } from "./types";
 
 export type ExportAudioMuxerCodec = "aac" | "opus";
 
+// Map a WebCodecs codec string (e.g. "avc1.640033", "hvc1.1.6.L120.90",
+// "vp09.00.10.08") to its codec family.
+export function videoCodecFamily(codec: string | undefined): "avc" | "hevc" | "vp9" {
+	const lower = (codec ?? "").toLowerCase();
+	if (lower.startsWith("hvc1") || lower.startsWith("hev1")) return "hevc";
+	if (lower.startsWith("vp09") || lower.startsWith("vp9")) return "vp9";
+	return "avc";
+}
+
 export class VideoMuxer {
 	private output: Output | null = null;
 	private videoSource: EncodedVideoPacketSource | null = null;
@@ -35,8 +44,9 @@ export class VideoMuxer {
 			target: this.target,
 		});
 
-		// Codec is deduced from the chunk metadata.
-		this.videoSource = new EncodedVideoPacketSource("avc");
+		// Codec details are deduced from the chunk metadata; the family must
+		// match the encoder codec (F2.4 exposes h264/h265/vp9 in the dialog).
+		this.videoSource = new EncodedVideoPacketSource(videoCodecFamily(this.config.codec));
 		this.output.addVideoTrack(this.videoSource, {
 			frameRate: this.config.frameRate,
 		});

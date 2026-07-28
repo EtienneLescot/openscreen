@@ -57,9 +57,23 @@
 		"detailLoadProject": "是否在加载其他项目前保存当前项目？",
 		"saveAndLoadProject": "保存并加载项目",
 		"discardAndLoadProject": "放弃并加载项目",
+		"newProject": "新建项目",
+		"importVideo": "导入视频文件…",
 		"loadProject": "加载项目…",
 		"saveProject": "保存项目…",
-		"saveProjectAs": "项目另存为…"
+		"saveProjectAs": "项目另存为…",
+		"modal": {
+			"closeTitle": "关闭前要保存更改吗？",
+			"closeBody": "项目中有未保存的更改。立即保存、放弃，或留在编辑器中。",
+			"newTitle": "创建新项目前要保存更改吗？",
+			"openTitle": "打开其他项目前要保存更改吗？",
+			"recordTitle": "开始新录制前要保存更改吗？",
+			"sharedBody": "当前项目有未保存的更改。请先保存，放弃更改，或取消操作。",
+			"notSavedYet": "当前项目尚未保存到磁盘。",
+			"discard": "放弃",
+			"saveAndContinue": "保存并继续",
+			"saving": "正在保存…"
+		}
 	},
 	"fileDialogs": {
 		"saveGif": "保存导出的 GIF",

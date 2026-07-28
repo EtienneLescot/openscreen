@@ -18,7 +18,8 @@
 				"iso": "Iso",
 				"left": "Left",
 				"right": "Right"
-			}
+			},
+			"none": "None"
 		},
 		"position": {
 			"title": "Focus Position",
@@ -50,7 +51,14 @@
 		"webcamSize": "Webcam Size",
 		"mirrorWebcam": "Mirror Webcam",
 		"reactiveWebcam": "Shrink on Zoom",
-		"reactiveWebcamDescription": "Camera smoothly shrinks while the video is zoomed in, so it stays out of the way."
+		"reactiveWebcamDescription": "Camera smoothly shrinks while the video is zoomed in, so it stays out of the way.",
+		"help": "How the webcam is composed with the screen: picture-in-picture, vertical stack, dual frame, mask shape, size, and mirroring.",
+		"shapes": {
+			"rectangle": "Rect",
+			"circle": "Circle",
+			"square": "Square",
+			"rounded": "Rounded"
+		}
 	},
 	"effects": {
 		"title": "Video Effects",
@@ -60,7 +68,8 @@
 		"on": "on",
 		"shadow": "Shadow",
 		"roundness": "Roundness",
-		"padding": "Padding"
+		"padding": "Padding",
+		"help": "Frame styling for the recording: background blur, drop shadow, motion blur, corner radius, and padding around the video."
 	},
 	"background": {
 		"title": "Background",
@@ -72,7 +81,11 @@
 		"gradientLabel": "Gradient {{index}}",
 		"colorWheel": "Color Wheel",
 		"colorPalette": "Color Palette",
-		"presets": "Presets"
+		"presets": "Presets",
+		"help": "Choose what appears behind the recording: a bundled wallpaper image, a solid color, a gradient, or a custom image from disk.",
+		"customWallpaper": "Custom wallpaper",
+		"imageLabel": "Background {{index}}",
+		"colorLabel": "Color {{color}}"
 	},
 	"crop": {
 		"title": "Crop",
@@ -151,8 +164,8 @@
 		"strokeWidth": "Stroke Width: {{width}}px",
 		"arrowColor": "Arrow Color",
 		"blurType": "Blur Type",
-		"blurTypeBlur": "Blur",
-		"blurTypeMosaic": "Mosaic Blur",
+		"blurTypeBlur": "Gaussian",
+		"blurTypeMosaic": "Mosaic",
 		"blurColor": "Blur Color",
 		"blurColorWhite": "White",
 		"blurColorBlack": "Black",
@@ -169,7 +182,8 @@
 		"tipShiftTabCycle": "Use Shift+Tab to cycle backwards.",
 		"invalidImageType": "Invalid file type",
 		"imageFormatsOnly": "Please upload a JPG, PNG, GIF, or WebP image file.",
-		"imageUploadSuccess": "Image uploaded successfully!"
+		"imageUploadSuccess": "Image uploaded successfully!",
+		"type": "Type"
 	},
 	"fontStyles": {
 		"classic": "Classic",
@@ -212,6 +226,7 @@
 		"errorLoadFailed": "The font could not be loaded. Please verify the Google Fonts URL is correct."
 	},
 	"cursor": {
+		"title": "Cursor",
 		"theme": "Cursor Style",
 		"themeDefault": "Default",
 		"show": "Show Cursor",
@@ -220,13 +235,78 @@
 		"motionBlur": "Motion Blur",
 		"clickBounce": "Click Bounce",
 		"clipToBounds": "Clip to Canvas",
-		"clipToBoundsDescription": "Keeps the cursor inside the video frame. Turn off to let the cursor extend past the edges - useful when zoomed in or panned."
+		"clipToBoundsDescription": "Keeps the cursor inside the video frame. Turn off to let the cursor extend past the edges - useful when zoomed in or panned.",
+		"help": "Cursor rendering from the recorded telemetry: theme, size, smoothing, motion blur, and click-bounce emphasis."
 	},
 	"language": {
 		"title": "Language"
 	},
 	"timeline": {
 		"title": "Timeline",
-		"waveform": "Show Audio Waveform on Trim Track"
+		"waveform": "Show Audio Waveform on Trim Track",
+		"help": "Timeline display options, like showing the audio waveform on the trim track."
+	},
+	"facets": {
+		"captions": "Captions",
+		"transcript": "Transcript"
+	},
+	"panes": {
+		"help": "Help"
+	},
+	"transcript": {
+		"title": "Current transcription",
+		"help": "Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to mark it as skipped (red). Hover a red span to restore it.",
+		"noClips": "No clips yet",
+		"noTranscript": "No transcript yet",
+		"whisperHint": "Transcribe uses local Whisper — runs in your browser, no data leaves the device.",
+		"transcribeNow": "Transcribe now",
+		"transcribing": "Transcribing…",
+		"clipLabel": "Clip {{index}}",
+		"noClipTranscript": "No transcript for this clip — open the asset card and regenerate.",
+		"editorAria": "Transcript for {{filename}}",
+		"silence": "[silence {{duration}}s]",
+		"restoreSilence": "Restore silence ({{duration}}s)",
+		"trimSilence": "Trim silence ({{duration}}s)",
+		"restoreWord": "Restore \"{{word}}\""
+	},
+	"captions": {
+		"show": "Show captions",
+		"noTranscript": "Captions are read from the media transcript. Transcribe this video to turn them on.",
+		"transcribe": "Transcribe video",
+		"transcribing": "Transcribing…",
+		"derivedFromTranscript": "{{count}} caption lines, derived live from the transcript.",
+		"hiddenHint": "Captions come from this media's transcript. Turn them on to see them in the preview and in exports.",
+		"legacyAnnotations": "This project still contains caption annotations from the old captions feature ({{count}}). They render on top of the caption layer.",
+		"removeLegacyAnnotations": "Remove old caption annotations",
+		"language": "Language",
+		"displayLanguage": "Display",
+		"original": "Original (transcript)",
+		"translate": "Translate",
+		"translating": "Translating…",
+		"translateHint": "Translate the transcript with the configured AI provider",
+		"translateFailed": "Translation failed.",
+		"deleteTranslation": "Delete this translation",
+		"translationIsNonDestructive": "Translations are stored beside the transcript, never in it — the original text and its timings stay untouched.",
+		"text": "Text",
+		"font": "Font",
+		"fontSize": "Size",
+		"bold": "Bold",
+		"textColor": "Text color",
+		"background": "Background",
+		"showBackground": "Show background",
+		"backgroundColor": "Background color",
+		"backgroundOpacity": "Opacity",
+		"position": "Position",
+		"positionTop": "Top",
+		"positionMiddle": "Middle",
+		"positionBottom": "Bottom",
+		"alignLeft": "Left",
+		"alignCenter": "Center",
+		"alignRight": "Right",
+		"verticalOffset": "Offset",
+		"width": "Width",
+		"lineLength": "Line length",
+		"minWords": "Min words per line",
+		"maxWords": "Max words per line"
 	}
 }

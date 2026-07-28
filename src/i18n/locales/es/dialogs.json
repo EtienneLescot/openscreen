@@ -57,9 +57,23 @@
 		"detailLoadProject": "¿Deseas guardar tu proyecto antes de cargar otro?",
 		"saveAndLoadProject": "Guardar y cargar proyecto",
 		"discardAndLoadProject": "Descartar y cargar proyecto",
+		"newProject": "Nuevo proyecto",
+		"importVideo": "Importar archivo de vídeo…",
 		"loadProject": "Cargar proyecto…",
 		"saveProject": "Guardar proyecto…",
-		"saveProjectAs": "Guardar proyecto como…"
+		"saveProjectAs": "Guardar proyecto como…",
+		"modal": {
+			"closeTitle": "¿Guardar los cambios antes de cerrar?",
+			"closeBody": "Tu proyecto tiene cambios sin guardar. Guárdalos ahora, descártalos o permanece en el editor.",
+			"newTitle": "¿Guardar los cambios antes de crear un nuevo proyecto?",
+			"openTitle": "¿Guardar los cambios antes de abrir otro proyecto?",
+			"recordTitle": "¿Guardar los cambios antes de iniciar una nueva grabación?",
+			"sharedBody": "El proyecto actual tiene cambios sin guardar. Guárdalos primero, descártalos o cancela.",
+			"notSavedYet": "El proyecto actual aún no se ha guardado en disco.",
+			"discard": "Descartar",
+			"saveAndContinue": "Guardar y continuar",
+			"saving": "Guardando…"
+		}
 	},
 	"fileDialogs": {
 		"saveGif": "Guardar GIF exportado",

@@ -8,7 +8,8 @@
 			"title": "フォーカスモード",
 			"manual": "手動",
 			"auto": "自動",
-			"autoDescription": "表示範囲が録画中のカーソル位置に追従します"
+			"autoDescription": "表示範囲が録画中のカーソル位置に追従します",
+			"lockedDisclaimer": "タイムラインの全体オートフォーカス切り替えによって制御されます。オフにすると、ズームごとにフォーカスモードを設定できます。"
 		},
 		"threeD": {
 			"title": "3D回転",
@@ -16,7 +17,8 @@
 				"iso": "Iso",
 				"left": "左",
 				"right": "右"
-			}
+			},
+			"none": "なし"
 		},
 		"customScale": "カスタムズーム",
 		"position": {
@@ -49,7 +51,14 @@
 		"noWebcam": "Webカメラなし",
 		"mirrorWebcam": "Webカメラを反転",
 		"reactiveWebcam": "ズーム時に縮小",
-		"reactiveWebcamDescription": "ズーム中はカメラがスムーズに縮小し、邪魔になりません。"
+		"reactiveWebcamDescription": "ズーム中はカメラがスムーズに縮小し、邪魔になりません。",
+		"help": "ウェブカメラと画面の合成方法: ピクチャインピクチャ、縦積み、デュアルフレーム、マスク形状、サイズ、左右反転。",
+		"shapes": {
+			"rectangle": "長方形",
+			"circle": "円",
+			"square": "正方形",
+			"rounded": "角丸"
+		}
 	},
 	"effects": {
 		"title": "動画効果",
@@ -59,7 +68,8 @@
 		"shadow": "影",
 		"roundness": "丸み",
 		"padding": "余白",
-		"on": "オン"
+		"on": "オン",
+		"help": "録画フレームのスタイル設定: 背景ぼかし、ドロップシャドウ、モーションブラー、角丸、動画まわりの余白。"
 	},
 	"background": {
 		"title": "背景",
@@ -71,7 +81,11 @@
 		"gradientLabel": "グラデーション {{index}}",
 		"colorWheel": "カラーホイール",
 		"colorPalette": "カラーパレット",
-		"presets": "プリセット"
+		"presets": "プリセット",
+		"help": "録画の背景に表示するものを選びます。同梱の壁紙画像、単色、グラデーション、またはディスク上の任意の画像から選べます。",
+		"customWallpaper": "カスタム壁紙",
+		"imageLabel": "背景 {{index}}",
+		"colorLabel": "色 {{color}}"
 	},
 	"crop": {
 		"title": "クロップ",
@@ -150,8 +164,8 @@
 		"strokeWidth": "線の太さ: {{width}}px",
 		"arrowColor": "矢印の色",
 		"blurType": "ぼかしの種類",
-		"blurTypeBlur": "ぼかし",
-		"blurTypeMosaic": "モザイクぼかし",
+		"blurTypeBlur": "ガウス",
+		"blurTypeMosaic": "モザイク",
 		"blurColor": "ぼかしの色",
 		"blurColorWhite": "白",
 		"blurColorBlack": "黒",
@@ -168,7 +182,8 @@
 		"tipShiftTabCycle": "Shift+Tabキーを使用して逆順に切り替えます。",
 		"invalidImageType": "無効なファイル形式",
 		"imageFormatsOnly": "JPG、PNG、GIF、またはWebP画像ファイルを選択してください。",
-		"imageUploadSuccess": "画像を読み込みました。"
+		"imageUploadSuccess": "画像を読み込みました。",
+		"type": "種類"
 	},
 	"fontStyles": {
 		"classic": "クラシック",
@@ -211,6 +226,7 @@
 		"errorLoadFailed": "フォントを読み込めませんでした。GoogleフォントのURLが正しいことを確認してください。"
 	},
 	"cursor": {
+		"title": "カーソル",
 		"theme": "カーソルのスタイル",
 		"themeDefault": "デフォルト",
 		"show": "カーソルを表示",
@@ -218,13 +234,39 @@
 		"smoothing": "スムージング",
 		"motionBlur": "モーションブラー",
 		"clickBounce": "クリックバウンス",
-		"clipToBounds": "キャンバスにクリップ"
+		"clipToBounds": "キャンバスにクリップ",
+		"clipToBoundsDescription": "カーソルを映像フレーム内に保ちます。オフにするとカーソルが端からはみ出せるようになります。ズームやパン時に便利です。",
+		"help": "記録されたテレメトリからのカーソル描画: テーマ、サイズ、スムージング、モーションブラー、クリック時のバウンス。"
 	},
 	"language": {
 		"title": "言語"
 	},
 	"timeline": {
 		"title": "タイムライン",
-		"waveform": "トリムトラックにオーディオ波形を表示"
+		"waveform": "トリムトラックにオーディオ波形を表示",
+		"help": "タイムラインの表示オプション（トリムトラックに音声波形を表示するなど）。"
+	},
+	"facets": {
+		"captions": "字幕",
+		"transcript": "文字起こし"
+	},
+	"panes": {
+		"help": "ヘルプ"
+	},
+	"transcript": {
+		"title": "現在の文字起こし",
+		"help": "タイムライン上のすべてのクリップをまとめた文字起こしです。単語や選択範囲を Backspace / Delete でスキップ（赤色）にできます。赤い部分にカーソルを合わせると元に戻せます。",
+		"noClips": "クリップがまだありません",
+		"noTranscript": "文字起こしがまだありません",
+		"whisperHint": "文字起こしはローカルの Whisper を使用します。ブラウザ内で実行され、データが端末外に出ることはありません。",
+		"transcribeNow": "今すぐ文字起こし",
+		"transcribing": "文字起こし中…",
+		"clipLabel": "クリップ {{index}}",
+		"noClipTranscript": "このクリップには文字起こしがありません。アセットカードを開いて再生成してください。",
+		"editorAria": "{{filename}} の文字起こし",
+		"silence": "[無音 {{duration}} 秒]",
+		"restoreSilence": "無音を元に戻す（{{duration}} 秒）",
+		"trimSilence": "無音をトリム（{{duration}} 秒）",
+		"restoreWord": "「{{word}}」を元に戻す"
 	}
 }

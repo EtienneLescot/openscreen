@@ -5,7 +5,7 @@ import type { ExportFormat, ExportQuality, GifFrameRate, GifSizePreset } from "@
 import type { ProjectMedia } from "@/lib/recordingSession";
 import { normalizeProjectMedia } from "@/lib/recordingSession";
 import { DEFAULT_WALLPAPER, WALLPAPER_PATHS } from "@/lib/wallpaper";
-import { ASPECT_RATIOS, type AspectRatio, isPortraitAspectRatio } from "@/utils/aspectRatioUtils";
+import { type AspectRatio, isAspectRatio, isPortraitAspectRatio } from "@/utils/aspectRatioUtils";
 import {
 	DEFAULT_EDITOR_APPEARANCE_SETTINGS,
 	DEFAULT_EDITOR_LAYOUT_SETTINGS,
@@ -148,6 +148,12 @@ function encodePathSegments(pathname: string, keepWindowsDrive = false): string 
 }
 
 export function toFileUrl(filePath: string): string {
+	// Browser-mode assets (blob:/http(s):/data: URLs from an <input type=file>
+	// or Vite-served asset) are already valid URLs — passing them through the
+	// file:// encoder below would mangle them (e.g. "file:///blob:...").
+	if (/^(https?|blob|data):/.test(filePath)) {
+		return filePath;
+	}
 	const normalized = filePath.replace(/\\/g, "/");
 	if (normalized.match(/^[a-zA-Z]:/)) {
 		return `file:///${encodePathSegments(normalized, true)}`;
@@ -220,11 +226,11 @@ export function resolveProjectMedia(
 }
 
 export function normalizeProjectEditor(editor: Partial<ProjectEditorState>): ProjectEditorState {
-	const validAspectRatios = new Set<AspectRatio>(ASPECT_RATIOS);
-	const normalizedAspectRatio: AspectRatio = validAspectRatios.has(
-		editor.aspectRatio as AspectRatio,
-	)
-		? (editor.aspectRatio as AspectRatio)
+	// Any well-formed "W:H" is valid, not just the presets — the ratio picker also stores the
+	// clips' own native shapes ("Original"), which can be e.g. "64:27". A membership test against
+	// the preset list would silently reset those projects to 16:9 on load.
+	const normalizedAspectRatio: AspectRatio = isAspectRatio(editor.aspectRatio)
+		? editor.aspectRatio
 		: DEFAULT_EDITOR_LAYOUT_SETTINGS.aspectRatio;
 	const normalizedWebcamLayoutPreset = computeNormalizedWebcamLayoutPreset(
 		editor.webcamLayoutPreset,

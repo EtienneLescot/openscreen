@@ -1,0 +1,22 @@
+/* ============================================================
+   OpenScreen Design System — global entry point.
+   Consumers link THIS file. It is a manifest of @imports only;
+   never add rules here. Everything reachable from these imports
+   (tokens + @font-face + Google font @imports) ships to
+   consumers and is indexed by the compiler.
+   Source of truth: getopenscreen/openscreen (src/index.css).
+   ============================================================ */
+
+@import url("./tokens/base.css");
+@import url("./tokens/fonts.css");
+@import url("./tokens/colors.css");
+@import url("./tokens/typography.css");
+@import url("./tokens/spacing.css");
+@import url("./tokens/radii.css");
+@import url("./tokens/elevation.css");
+@import url("./tokens/effects.css");
+/* Last on purpose: v4 is the shipped vocabulary every card and component
+   here is written against, and it has to win the handful of names that
+   colors.css / elevation.css / typography.css also declare. It defends
+   that with `:root:root` too, so the order is belt-and-braces. */
+@import url("./tokens/v4.css");

@@ -1,29 +1,4 @@
-import type { AnnotationRegion, AnnotationTextStyle } from "@/components/video-editor/types";
-
 import type { CaptionSegment } from "./transcribe";
-
-/** Wide lower-third bar; `position.x` is top-left as % of container, so center with (100 - width) / 2. */
-const CAPTION_WIDTH = 92;
-const CAPTION_HEIGHT = 12;
-const CAPTION_BOTTOM_MARGIN = 2;
-
-const CAPTION_POSITION = {
-	x: (100 - CAPTION_WIDTH) / 2,
-	y: 100 - CAPTION_HEIGHT - CAPTION_BOTTOM_MARGIN,
-};
-
-const CAPTION_SIZE = { width: CAPTION_WIDTH, height: CAPTION_HEIGHT };
-
-const CAPTION_STYLE: AnnotationTextStyle = {
-	color: "#ffffff",
-	backgroundColor: "rgba(255, 255, 255, 0)",
-	fontSize: 24,
-	fontFamily: "Inter",
-	fontWeight: "normal",
-	fontStyle: "normal",
-	textDecoration: "none",
-	textAlign: "center",
-};
 
 /** Nudge caption starts earlier (seconds); Whisper onsets run slightly late. Do not offset ends too, that pulls lines off-screen early. */
 const AUTO_CAPTION_START_BIAS_SEC = 0;
@@ -39,9 +14,6 @@ const CAPTION_LINE_END_TAIL_SEC = 0;
 
 /** A real silence between word-level timestamps should start a new caption run. */
 const WORD_RUN_BREAK_GAP_SEC = 0.24;
-
-/** Min time between consecutive caption regions (seconds); keeps a visible gap so blocks don't read as one clip. Small so short pauses survive. */
-const MIN_CAPTION_TIMELINE_GAP_SEC = 0;
 
 /** Same text again with almost no gap or overlap; common Whisper/chunk artifact. */
 const DEDUPE_SAME_TEXT_MAX_GAP_SEC = 0.55;
@@ -91,7 +63,7 @@ export function collapseSameContentEchoes(segments: CaptionSegment[]): CaptionSe
  * Collapse adjacent duplicate lines (overlapping or tiny gap). Does not merge the same phrase
  * repeated later in the video when separated by real silence.
  */
-function dedupeAdjacentCaptionRepeats(segments: CaptionSegment[]): CaptionSegment[] {
+export function dedupeAdjacentCaptionRepeats(segments: CaptionSegment[]): CaptionSegment[] {
 	const sorted = [...segments]
 		.filter((s) => s.text.trim())
 		.sort((a, b) => a.startSec - b.startSec || a.endSec - b.endSec);
@@ -114,7 +86,7 @@ function dedupeAdjacentCaptionRepeats(segments: CaptionSegment[]): CaptionSegmen
 }
 
 /** Trim only real overlaps. Avoid synthetic lead/lag so caption timing matches model output. */
-function finalizeCaptionSegmentsForPlayback(segments: CaptionSegment[]): CaptionSegment[] {
+export function finalizeCaptionSegmentsForPlayback(segments: CaptionSegment[]): CaptionSegment[] {
 	const OVERLAP_TRIM_SEC = 0.002;
 
 	const sortedRaw = [...segments]
@@ -136,51 +108,6 @@ function finalizeCaptionSegmentsForPlayback(segments: CaptionSegment[]): Caption
 	}
 
 	return a;
-}
-
-/** Default min gap between auto-caption blocks on the timeline (ms); matches `MIN_CAPTION_TIMELINE_GAP_SEC`. */
-export const DEFAULT_AUTO_CAPTION_MIN_GAP_MS = Math.round(MIN_CAPTION_TIMELINE_GAP_SEC * 1000);
-
-/**
- * Enforce a min gap between consecutive `auto-caption` regions (by start time). Shortens the previous
- * region's end when possible, else shifts the following region later so blocks can't sit completely flush.
- */
-export function reconcileAutoCaptionTimelineGaps(
-	regions: AnnotationRegion[],
-	minGapMs: number = DEFAULT_AUTO_CAPTION_MIN_GAP_MS,
-): AnnotationRegion[] {
-	const gap = Math.max(0, Math.round(minGapMs));
-	if (regions.length === 0 || gap === 0) return regions;
-
-	const autoCandidates = regions.filter((r) => r.annotationSource === "auto-caption");
-	if (autoCandidates.length <= 1) return regions;
-
-	const sorted = [...autoCandidates].sort((a, b) => a.startMs - b.startMs || a.endMs - b.endMs);
-	const fixed: AnnotationRegion[] = [];
-	let prev = { ...sorted[0]! };
-	fixed.push(prev);
-
-	for (let i = 1; i < sorted.length; i++) {
-		let cur = { ...sorted[i]! };
-		const minStart = prev.endMs + gap;
-
-		if (cur.startMs < minStart) {
-			const newPrevEnd = cur.startMs - gap;
-			if (newPrevEnd >= prev.startMs + 1) {
-				prev = { ...prev, endMs: newPrevEnd };
-				fixed[fixed.length - 1] = prev;
-			} else {
-				const dur = Math.max(1, cur.endMs - cur.startMs);
-				cur = { ...cur, startMs: minStart, endMs: minStart + dur };
-			}
-		}
-
-		fixed.push(cur);
-		prev = cur;
-	}
-
-	const fixedById = new Map(fixed.map((r) => [r.id, r]));
-	return regions.map((r) => fixedById.get(r.id) ?? r);
 }
 
 /** Join phrases that are close in time so the editor does not create dozens of separate overlays. */
@@ -539,66 +466,4 @@ function splitOneSegmentByWordBounds(
 		}
 	}
 	return result;
-}
-
-export function captionSegmentsToAnnotationRegions(
-	segments: CaptionSegment[],
-	startNumericId: number,
-	startZIndex: number,
-	layout?: CaptionSegmentLayoutOptions,
-): { regions: AnnotationRegion[]; nextNumericId: number; nextZIndex: number } {
-	// Don't echo-collapse raw word tokens before grouping: repeated words ("I … I") share a
-	// normalized key and would merge spans while keeping only the first token's text.
-	const minW = layout?.minWordsPerCaption ?? 2;
-	const maxW = layout?.maxWordsPerCaption ?? 7;
-	const granularity = layout?.timestampGranularity ?? "word";
-
-	const grouped =
-		granularity === "phrase"
-			? groupPhraseCaptionSegmentsIntoLines(segments, minW, maxW)
-			: groupTimedCaptionWordsIntoLines(segments, minW, maxW);
-
-	const dedupedOut = dedupeAdjacentCaptionRepeats(grouped);
-	const finalized = finalizeCaptionSegmentsForPlayback(dedupedOut);
-
-	let nid = startNumericId;
-	let z = startZIndex;
-	const regions: AnnotationRegion[] = [];
-
-	for (const seg of finalized) {
-		const startMs = Math.round(seg.startSec * 1000);
-		const endMs = Math.max(Math.round(seg.endSec * 1000), startMs + 1);
-		regions.push({
-			id: `annotation-${nid++}`,
-			startMs,
-			endMs,
-			type: "text",
-			content: seg.text,
-			annotationSource: "auto-caption",
-			position: { ...CAPTION_POSITION },
-			size: { ...CAPTION_SIZE },
-			style: { ...CAPTION_STYLE },
-			zIndex: z++,
-		});
-	}
-
-	return {
-		regions: reconcileAutoCaptionTimelineGaps(regions),
-		nextNumericId: nid,
-		nextZIndex: z,
-	};
-}
-
-export function maxAnnotationNumericId(regions: AnnotationRegion[]): number {
-	let max = 0;
-	for (const r of regions) {
-		const m = /^annotation-(\d+)$/.exec(r.id);
-		if (m) max = Math.max(max, Number.parseInt(m[1], 10));
-	}
-	return max;
-}
-
-export function maxAnnotationZIndex(regions: AnnotationRegion[]): number {
-	if (regions.length === 0) return 0;
-	return Math.max(...regions.map((r) => r.zIndex));
 }

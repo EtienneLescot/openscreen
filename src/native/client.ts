@@ -1,4 +1,22 @@
 import {
+	type AiEditionAssetResult,
+	type AiEditionCaptionTranslateResult,
+	type AiEditionChatBudget,
+	type AiEditionChatCompactResult,
+	type AiEditionChatMessage,
+	type AiEditionChatResult,
+	type AiEditionChatRewindResult,
+	type AiEditionChatSession,
+	type AiEditionChatSessionSummary,
+	type AiEditionDeviceChallenge,
+	type AiEditionDeviceCompletionResult,
+	type AiEditionDocumentResult,
+	type AiEditionLlmConfig,
+	type AiEditionLlmDisconnectResult,
+	type AiEditionLlmProviderModelsResult,
+	type AiEditionLlmSnapshot,
+	type AiEditionProjectSummary,
+	type AxcutTimelineOperation,
 	type CursorCapabilities,
 	type CursorRecordingData,
 	type CursorTelemetryPoint,
@@ -135,6 +153,233 @@ export const nativeBridgeClient = {
 				domain: "cursor",
 				action: "getTelemetry",
 				payload: videoPath ? { videoPath } : {},
+			}),
+	},
+	aiEdition: {
+		listProjects: () =>
+			requireNativeBridgeData<AiEditionProjectSummary[]>({
+				domain: "aiEdition",
+				action: "document.listProjects",
+			}),
+		get: (projectId: string) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "document.get",
+				payload: { projectId },
+			}),
+		create: (title?: string) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "document.create",
+				payload: { title },
+			}),
+		save: (document: unknown) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "document.save",
+				payload: { document },
+			}),
+		delete: (projectId: string) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "document.delete",
+				payload: { projectId },
+			}),
+		addAsset: (projectId: string, path: string, label?: string) =>
+			requireNativeBridgeData<AiEditionAssetResult>({
+				domain: "aiEdition",
+				action: "document.addAsset",
+				payload: { projectId, path, label },
+			}),
+		removeAsset: (projectId: string, assetId: string) =>
+			requireNativeBridgeData<AiEditionAssetResult>({
+				domain: "aiEdition",
+				action: "document.removeAsset",
+				payload: { projectId, assetId },
+			}),
+		llmGetSnapshot: () =>
+			requireNativeBridgeData<AiEditionLlmSnapshot>({
+				domain: "aiEdition",
+				action: "llm.getSnapshot",
+			}),
+		llmSetConfig: (config: AiEditionLlmConfig) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "llm.setConfig",
+				payload: { config },
+			}),
+		llmSetApiKey: (providerId: string, apiKey: string) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "llm.setApiKey",
+				payload: { providerId, apiKey },
+			}),
+		llmRemoveApiKey: (providerId: string) =>
+			requireNativeBridgeData<AiEditionDocumentResult>({
+				domain: "aiEdition",
+				action: "llm.removeApiKey",
+				payload: { providerId },
+			}),
+		llmBeginDeviceAuth: (providerId: "openai-oauth" | "copilot-proxy", model?: string) =>
+			requireNativeBridgeData<AiEditionDeviceChallenge>({
+				domain: "aiEdition",
+				action: "llm.beginDeviceAuth",
+				payload: { providerId, model },
+			}),
+		llmCompleteDeviceAuth: (
+			providerId: "openai-oauth" | "copilot-proxy",
+			challenge: AiEditionDeviceChallenge,
+			model?: string,
+		) =>
+			requireNativeBridgeData<AiEditionDeviceCompletionResult>({
+				domain: "aiEdition",
+				action: "llm.completeDeviceAuth",
+				payload: { providerId, challenge, model },
+			}),
+		llmDisconnect: (providerId: string) =>
+			requireNativeBridgeData<AiEditionLlmDisconnectResult>({
+				domain: "aiEdition",
+				action: "llm.disconnect",
+				payload: { providerId },
+			}),
+		llmListProviderModels: (providerId: string) =>
+			requireNativeBridgeData<AiEditionLlmProviderModelsResult>({
+				domain: "aiEdition",
+				action: "llm.listProviderModels",
+				payload: { providerId },
+			}),
+		chatRun: (
+			projectId: string,
+			sessionIdOrMessage: string,
+			message?: string,
+			document?: unknown,
+		): Promise<AiEditionChatResult> => {
+			// ponytail: polymorphic — legacy 2-arg callers pass (projectId, message).
+			// Multi-session callers pass (projectId, sessionId, message[, document]).
+			// The document snapshot enables the agent tool loop (P1).
+			if (message === undefined) {
+				return requireNativeBridgeData<AiEditionChatResult>({
+					domain: "aiEdition",
+					action: "chat.runDefault",
+					payload: { projectId, message: sessionIdOrMessage },
+				});
+			}
+			return requireNativeBridgeData<AiEditionChatResult>({
+				domain: "aiEdition",
+				action: "chat.run",
+				payload: { projectId, sessionId: sessionIdOrMessage, message, document },
+			});
+		},
+		chatUndoLastBatch: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<AiEditionChatResult>({
+				domain: "aiEdition",
+				action: "chat.undoLastBatch",
+				payload: { projectId, sessionId },
+			}),
+		chatRunDefault: (projectId: string, message: string) =>
+			requireNativeBridgeData<AiEditionChatResult>({
+				domain: "aiEdition",
+				action: "chat.runDefault",
+				payload: { projectId, message },
+			}),
+		chatHistory: (projectId: string) =>
+			requireNativeBridgeData<AiEditionChatMessage[]>({
+				domain: "aiEdition",
+				action: "chat.history",
+				payload: { projectId },
+			}),
+		chatClear: (projectId: string) =>
+			requireNativeBridgeData<{ success: boolean }>({
+				domain: "aiEdition",
+				action: "chat.clear",
+				payload: { projectId },
+			}),
+		chatListSessions: (projectId: string) =>
+			requireNativeBridgeData<AiEditionChatSessionSummary[]>({
+				domain: "aiEdition",
+				action: "chat.listSessions",
+				payload: { projectId },
+			}),
+		chatCreateSession: (projectId: string, title?: string) =>
+			requireNativeBridgeData<AiEditionChatSessionSummary>({
+				domain: "aiEdition",
+				action: "chat.createSession",
+				payload: { projectId, title },
+			}),
+		chatSelectSession: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<AiEditionChatSession | null>({
+				domain: "aiEdition",
+				action: "chat.selectSession",
+				payload: { projectId, sessionId },
+			}),
+		chatRenameSession: (projectId: string, sessionId: string, title: string) =>
+			requireNativeBridgeData<AiEditionChatSessionSummary | null>({
+				domain: "aiEdition",
+				action: "chat.renameSession",
+				payload: { projectId, sessionId, title },
+			}),
+		chatDeleteSession: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<{ success: boolean }>({
+				domain: "aiEdition",
+				action: "chat.deleteSession",
+				payload: { projectId, sessionId },
+			}),
+		chatBudget: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<AiEditionChatBudget | null>({
+				domain: "aiEdition",
+				action: "chat.budget",
+				payload: { projectId, sessionId },
+			}),
+		chatCompact: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<AiEditionChatCompactResult | null>({
+				domain: "aiEdition",
+				action: "chat.compact",
+				payload: { projectId, sessionId },
+			}),
+		chatRewind: (projectId: string, sessionId: string, messageId: string) =>
+			requireNativeBridgeData<AiEditionChatRewindResult | { success: false; error: string }>({
+				domain: "aiEdition",
+				action: "chat.rewind",
+				payload: { projectId, sessionId, messageId },
+			}),
+		chatContextUsage: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<AiEditionChatBudget | null>({
+				domain: "aiEdition",
+				action: "chat.contextUsage",
+				payload: { projectId, sessionId },
+			}),
+		chatCompactNow: (projectId: string, sessionId: string) =>
+			requireNativeBridgeData<AiEditionChatCompactResult | null>({
+				domain: "aiEdition",
+				action: "chat.compactNow",
+				payload: { projectId, sessionId },
+			}),
+		/** Translate transcript segments for the caption layer through the
+		 *  configured chat provider. Returns segmentId → translated text; the
+		 *  caller stores it in the caption translation layer. */
+		translateCaptions: (input: {
+			segments: Array<{ id: string; text: string }>;
+			targetLanguage: string;
+			sourceLanguage?: string;
+		}) =>
+			requireNativeBridgeData<AiEditionCaptionTranslateResult>({
+				domain: "aiEdition",
+				action: "captions.translate",
+				payload: input,
+			}),
+		runTimelineOperation: (
+			projectId: string,
+			sessionId: string,
+			operation: AxcutTimelineOperation,
+			conversationMessage: string,
+		) =>
+			requireNativeBridgeData<
+				| { success: true; result: { document: unknown; summary: string } }
+				| { success: false; error: string }
+			>({
+				domain: "aiEdition",
+				action: "timeline.run",
+				payload: { projectId, sessionId, operation, conversationMessage },
 			}),
 	},
 };

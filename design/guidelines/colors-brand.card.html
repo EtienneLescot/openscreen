@@ -1,0 +1,21 @@
+<!-- @dsCard group="Colors" viewport="700x150" subtitle="Emerald — the single brand hue" name="Brand / accent" -->
+<!DOCTYPE html><html lang="en"><head><meta charset="utf-8">
+<link rel="stylesheet" href="../styles.css">
+<style>
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:var(--font-display);padding:20px;}
+  .row{display:flex;gap:12px;flex-wrap:wrap;}
+  .sw{display:flex;flex-direction:column;gap:7px;}
+  .chip{width:96px;height:52px;border-radius:var(--radius-lg);border:1px solid var(--border-hi);}
+  .lab{font-size:11px;color:var(--fg-2);font-weight:500;}
+  .hex{font-family:var(--font-mono);font-size:10px;color:var(--meta);}
+</style></head>
+<body>
+  <div class="row">
+    <div class="sw"><div class="chip" style="background:var(--accent);"></div><span class="lab">accent / brand</span><span class="hex">#10b981</span></div>
+    <div class="sw"><div class="chip" style="background:var(--brand-lo);"></div><span class="lab">brand-lo (hover)</span><span class="hex">#0d986a</span></div>
+    <div class="sw"><div class="chip" style="background:var(--accent-soft);"></div><span class="lab">accent-soft</span><span class="hex">14% α</span></div>
+    <div class="sw"><div class="chip" style="background:var(--accent-wash);"></div><span class="lab">accent-wash</span><span class="hex">7% α</span></div>
+    <div class="sw"><div class="chip" style="background:transparent;border:1px solid var(--accent-border);"></div><span class="lab">accent-border</span><span class="hex">26% α</span></div>
+    <div class="sw"><div class="chip" style="background:transparent;box-shadow:var(--focus-ring);"></div><span class="lab">focus / ring</span><span class="hex">32% α</span></div>
+  </div>
+</body></html>

@@ -45,17 +45,25 @@ export const DEFAULT_ROTATION_3D: Rotation3D = {
 
 export type Rotation3DPreset = "iso" | "left" | "right";
 
+// Every preset carries all three components on purpose. With a single-axis rotation the projected
+// quad keeps an edge exactly parallel to the frame — both vertical edges for a pure Y rotation,
+// which is geometry rather than a setting — and a perfectly vertical edge cutting through text is
+// indistinguishable from `overflow: hidden`. That is what got reported three times as "the
+// recording is truncated" while the plane was in fact drawn whole. `regions.rs` holds the same
+// numbers and a test asserting no edge comes within 2° of an axis.
 export const ROTATION_3D_PRESETS: Record<Rotation3DPreset, Rotation3D> = {
-	iso: { rotationX: -10, rotationY: -16, rotationZ: 0 },
-	left: { rotationX: 0, rotationY: -22, rotationZ: 0 },
-	right: { rotationX: 0, rotationY: 22, rotationZ: 0 },
+	iso: { rotationX: -12, rotationY: -18, rotationZ: -2 },
+	left: { rotationX: -8, rotationY: -16, rotationZ: -1 },
+	right: { rotationX: -8, rotationY: 16, rotationZ: 1 },
 };
 
 export const ROTATION_3D_PRESET_ORDER: Rotation3DPreset[] = ["iso", "left", "right"];
 
 /** Perspective distance in CSS px is this factor times min(viewport w, h). Same
- * factor in preview and export so the look matches at any canvas resolution. */
-export const ROTATION_3D_PERSPECTIVE_FACTOR = 2.6;
+ * factor in preview and export so the look matches at any canvas resolution.
+ * Lower = camera closer = edges converge more visibly. At 2.6 the convergence was so flat that
+ * iso's top edge came out 0.08° off horizontal and the tilt stopped reading as a tilt. */
+export const ROTATION_3D_PERSPECTIVE_FACTOR = 1.6;
 
 export function rotation3DPerspective(width: number, height: number): number {
 	return Math.min(width, height) * ROTATION_3D_PERSPECTIVE_FACTOR;
@@ -336,37 +344,6 @@ export const DEFAULT_ANNOTATION_STYLE: AnnotationTextStyle = {
 	textAlign: "center",
 	textAnimation: "none",
 };
-
-/**
- * A freshly created text annotation starts with no content: the properties panel's
- * textarea has a real `placeholder` attribute for the empty-state hint, so the
- * actual value must be empty for it to show and for typing to replace rather than
- * append to baked-in text (see #127).
- */
-export function createTextAnnotationRegion(params: {
-	id: string;
-	startMs: number;
-	endMs: number;
-	zIndex: number;
-}): AnnotationRegion {
-	return {
-		id: params.id,
-		startMs: params.startMs,
-		endMs: params.endMs,
-		type: "text",
-		content: "",
-		position: { ...DEFAULT_ANNOTATION_POSITION },
-		size: { ...DEFAULT_ANNOTATION_SIZE },
-		style: { ...DEFAULT_ANNOTATION_STYLE },
-		zIndex: params.zIndex,
-	};
-}
-
-/** Resolves the content for a region whose type is being switched to "text" -- same
- * empty-by-default rule as a freshly created one when no prior text was stored. */
-export function resolveTextAnnotationContent(existingTextContent?: string): string {
-	return existingTextContent || "";
-}
 
 export const DEFAULT_FIGURE_DATA: FigureData = {
 	arrowDirection: "right",

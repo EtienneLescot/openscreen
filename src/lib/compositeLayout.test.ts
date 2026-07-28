@@ -1,9 +1,28 @@
 import { describe, expect, it } from "vitest";
 import {
-	CAMERA_FULLSCREEN_MARGIN_FRACTION,
-	computeCameraFullscreenTargetRect,
+	computeCameraFullscreenRect,
 	computeCompositeLayout,
+	isWebcamBlockLayout,
+	resolveWebcamReactiveZoom,
+	type StyledRenderRect,
 } from "./compositeLayout";
+
+describe("resolveWebcamReactiveZoom", () => {
+	it("honours the stored setting for picture-in-picture", () => {
+		expect(resolveWebcamReactiveZoom("picture-in-picture", true)).toBe(true);
+		expect(resolveWebcamReactiveZoom("picture-in-picture", false)).toBe(false);
+	});
+
+	it("forces shrink-on-zoom off for the block layouts", () => {
+		// The camera box is welded to the screen there, so shrinking it mid-zoom
+		// would tear a hole in the block. The UI hides the toggle to match.
+		expect(resolveWebcamReactiveZoom("dual-frame", true)).toBe(false);
+		expect(resolveWebcamReactiveZoom("vertical-stack", true)).toBe(false);
+		expect(isWebcamBlockLayout("dual-frame")).toBe(true);
+		expect(isWebcamBlockLayout("vertical-stack")).toBe(true);
+		expect(isWebcamBlockLayout("picture-in-picture")).toBe(false);
+	});
+});
 
 describe("computeCompositeLayout", () => {
 	it("anchors the overlay in the lower-right corner", () => {
@@ -77,6 +96,24 @@ describe("computeCompositeLayout", () => {
 		const landscapeArea = landscape!.webcamRect!.width * landscape!.webcamRect!.height;
 		const portraitArea = portrait!.webcamRect!.width * portrait!.webcamRect!.height;
 		expect(landscapeArea).toBe(portraitArea);
+	});
+
+	it("keeps the webcam a modest fraction of a narrow (9:16) frame's own width", () => {
+		// Reported bug: dragging the webcam PiP felt stuck in a wide "dead band" near each
+		// edge on a 9:16 preview. Root cause was sizing off sqrt(canvasWidth*canvasHeight)
+		// (the geometric mean, which barely shrinks at an extreme aspect ratio even though the
+		// actual narrow axis is much smaller than that mean) instead of the narrow axis itself.
+		// These are the exact dims logged from a live repro: a 230x408 frame at a 34% size
+		// preset produced a 104px-wide box -- 45% of the frame's own width.
+		const layout = computeCompositeLayout({
+			canvasSize: { width: 230, height: 408 },
+			screenSize: { width: 230, height: 408 },
+			webcamSize: { width: 960, height: 720 },
+			webcamSizePreset: 34,
+		});
+		expect(layout.webcamRect).not.toBeNull();
+		const widthFraction = layout.webcamRect!.width / 230;
+		expect(widthFraction).toBeLessThan(0.4);
 	});
 
 	it("scales the webcam proportionally as webcamSizePreset increases", () => {
@@ -160,68 +197,208 @@ describe("computeCompositeLayout", () => {
 		});
 	});
 
-	it("centers the combined screen and webcam stack in vertical stack mode", () => {
-		const layout = computeCompositeLayout({
-			canvasSize: { width: 1920, height: 1080 },
-			maxContentSize: { width: 1536, height: 864 },
-			screenSize: { width: 1920, height: 1080 },
-			webcamSize: { width: 1280, height: 720 },
-			layoutPreset: "vertical-stack",
-		});
+	// ─── block layouts: geometry shared by both presets ────────────────────────
 
-		expect(layout).not.toBeNull();
-		// Webcam is full-width at the bottom
-		expect(layout!.webcamRect).not.toBeNull();
-		expect(layout!.webcamRect!.x).toBe(0);
-		expect(layout!.webcamRect!.width).toBe(1920);
-		expect(layout!.webcamRect!.borderRadius).toBe(0);
-		// Screen fills remaining space at the top (cover mode)
-		expect(layout!.screenRect.x).toBe(0);
-		expect(layout!.screenRect.y).toBe(0);
-		expect(layout!.screenRect.width).toBe(1920);
-		expect(layout!.screenCover).toBe(true);
+	// The three constraints, asserted directly: screen keeps its ratio, the couple
+	// is contained in the scene, and the camera tends toward square.
+	const CAPTURES = [
+		{ label: "21:9", size: { width: 2560, height: 1080 } },
+		{ label: "16:9", size: { width: 1920, height: 1080 } },
+		{ label: "4:3", size: { width: 1440, height: 1080 } },
+		{ label: "1:1", size: { width: 1080, height: 1080 } },
+		{ label: "4:5", size: { width: 1080, height: 1350 } },
+		{ label: "9:16", size: { width: 1080, height: 1920 } },
+	];
+	const SCENES = [
+		{ label: "16:9", size: { width: 1920, height: 1080 } },
+		{ label: "9:16", size: { width: 1080, height: 1920 } },
+		{ label: "1:1", size: { width: 1080, height: 1080 } },
+		{ label: "4:5", size: { width: 1080, height: 1350 } },
+		{ label: "21:9", size: { width: 2560, height: 1080 } },
+	];
+	// A 4:3 source camera, to prove the camera box is cut from the block, not the
+	// camera's own aspect ratio.
+	const CAM = { width: 960, height: 720 };
+
+	for (const preset of ["dual-frame", "vertical-stack"] as const) {
+		for (const capture of CAPTURES) {
+			for (const scene of SCENES) {
+				it(`${preset}: capture ${capture.label} in scene ${scene.label} — screen ratio kept, block contained, camera near square`, () => {
+					const layout = computeCompositeLayout({
+						canvasSize: scene.size,
+						maxContentSize: scene.size, // padding 0
+						screenSize: capture.size,
+						webcamSize: CAM,
+						layoutPreset: preset,
+					})!;
+					const screen = layout.screenRect;
+					const cam = layout.webcamRect!;
+
+					// 1. Screen keeps the capture's own aspect ratio.
+					expect(screen.width / screen.height).toBeCloseTo(
+						capture.size.width / capture.size.height,
+						1,
+					);
+
+					// 2. The whole block is contained in the scene — nothing overflows.
+					for (const r of [screen, cam]) {
+						expect(r.x).toBeGreaterThanOrEqual(-1);
+						expect(r.y).toBeGreaterThanOrEqual(-1);
+						expect(r.x + r.width).toBeLessThanOrEqual(scene.size.width + 1);
+						expect(r.y + r.height).toBeLessThanOrEqual(scene.size.height + 1);
+					}
+
+					// 3. The camera tends toward square: its aspect stays within the
+					// tolerance band (4:5 … 5:4), never an extreme slice.
+					const camAspect = cam.width / cam.height;
+					expect(camAspect).toBeGreaterThanOrEqual(1 / 1.25 - 0.02);
+					expect(camAspect).toBeLessThanOrEqual(1.25 + 0.02);
+
+					// The camera keeps the block solid: aligned with the screen on the
+					// shared edge, sitting after it with a gap, no overlap.
+					if (preset === "dual-frame") {
+						expect(cam.height).toBeCloseTo(screen.height, 0);
+						expect(cam.x).toBeGreaterThanOrEqual(screen.x + screen.width);
+					} else {
+						expect(cam.width).toBeCloseTo(screen.width, 0);
+						expect(cam.y).toBeGreaterThanOrEqual(screen.y + screen.height);
+					}
+				});
+			}
+		}
+	}
+
+	it("fills the scene exactly (block aspect == scene aspect) when a near-square camera allows it", () => {
+		// A 16:9 screen stacked top/bottom in a portrait-ish scene: the square-ish
+		// camera that fills the scene is reachable inside the band, so the block
+		// touches all four edges and the camera lands close to square.
+		const scene = { width: 1000, height: 1587 };
+		const layout = computeCompositeLayout({
+			canvasSize: scene,
+			maxContentSize: scene,
+			screenSize: { width: 1920, height: 1080 },
+			webcamSize: { width: 960, height: 720 },
+			layoutPreset: "vertical-stack",
+		})!;
+		const screen = layout.screenRect;
+		const cam = layout.webcamRect!;
+		const blockW = Math.max(screen.x + screen.width, cam.x + cam.width) - Math.min(screen.x, cam.x);
+		const blockH =
+			Math.max(screen.y + screen.height, cam.y + cam.height) - Math.min(screen.y, cam.y);
+		// Block matches the scene aspect → contains with (near) zero bars.
+		expect(blockW / blockH).toBeCloseTo(scene.width / scene.height, 1);
+		expect(cam.width / cam.height).toBeCloseTo(1, 1); // ~square
 	});
 
-	it("keeps the screen full-canvas and omits the webcam when dimensions are unavailable in stack mode", () => {
+	it("makes the camera squarer for a landscape capture top/bottom than the old fixed 50/50 did", () => {
+		// Regression guard for the reported issue: a 16:9 capture used to give a
+		// 1.78:1 camera strip in Top / bottom. It must now be markedly squarer.
+		const layout = computeCompositeLayout({
+			canvasSize: { width: 1920, height: 1080 },
+			maxContentSize: { width: 1920, height: 1080 },
+			screenSize: { width: 1920, height: 1080 },
+			webcamSize: { width: 960, height: 720 },
+			layoutPreset: "vertical-stack",
+		})!;
+		const cam = layout.webcamRect!;
+		expect(cam.width).toBeCloseTo(layout.screenRect.width, 0); // still full width
+		expect(cam.width / cam.height).toBeLessThan(1.3); // was 1.78
+	});
+
+	it("keeps both block presets' frames sharing one corner radius", () => {
+		for (const layoutPreset of ["dual-frame", "vertical-stack"] as const) {
+			const layout = computeCompositeLayout({
+				canvasSize: { width: 1920, height: 1080 },
+				maxContentSize: { width: 1920, height: 1080 },
+				screenSize: { width: 1920, height: 1080 },
+				webcamSize: { width: 960, height: 720 },
+				layoutPreset,
+			})!;
+			expect(layout.screenBorderRadius).toBe(layout.webcamRect!.borderRadius);
+			expect(layout.screenBorderRadius).toBeGreaterThan(0);
+		}
+	});
+
+	// ─── block layouts: padding & fallback ─────────────────────────────────────
+
+	it.each([
+		"vertical-stack",
+		"dual-frame",
+	] as const)("insets the whole %s block by the padding, keeping it centered", (layoutPreset) => {
+		const args = {
+			canvasSize: { width: 1920, height: 1080 },
+			screenSize: { width: 1920, height: 1080 },
+			webcamSize: { width: 960, height: 720 },
+			layoutPreset,
+		};
+		const flush = computeCompositeLayout({
+			...args,
+			maxContentSize: { width: 1920, height: 1080 },
+		})!;
+		// maxContentSize = canvasSize × paddingFit(=0.8) — i.e. padding 50%.
+		const padded = computeCompositeLayout({
+			...args,
+			maxContentSize: { width: 1536, height: 864 },
+		})!;
+
+		// Screen and camera shrink together by the same factor: the block moves
+		// as one piece, so their ratio to each other is untouched.
+		expect(padded.screenRect.width / flush.screenRect.width).toBeCloseTo(0.8, 2);
+		expect(padded.webcamRect!.width / flush.webcamRect!.width).toBeCloseTo(0.8, 2);
+		expect(padded.webcamRect!.height / flush.webcamRect!.height).toBeCloseTo(0.8, 2);
+
+		// Still centered in the canvas.
+		const blockLeft = Math.min(padded.screenRect.x, padded.webcamRect!.x);
+		const blockRight = Math.max(
+			padded.screenRect.x + padded.screenRect.width,
+			padded.webcamRect!.x + padded.webcamRect!.width,
+		);
+		const blockTop = Math.min(padded.screenRect.y, padded.webcamRect!.y);
+		const blockBottom = Math.max(
+			padded.screenRect.y + padded.screenRect.height,
+			padded.webcamRect!.y + padded.webcamRect!.height,
+		);
+		expect(blockLeft).toBeCloseTo(1920 - blockRight, 0);
+		expect(blockTop).toBeCloseTo(1080 - blockBottom, 0);
+	});
+
+	it.each([
+		"vertical-stack",
+		"dual-frame",
+	] as const)("contain-fits the %s block into a portrait scene without overflowing", (layoutPreset) => {
+		const layout = computeCompositeLayout({
+			canvasSize: { width: 1080, height: 1920 },
+			maxContentSize: { width: 1080, height: 1920 },
+			screenSize: { width: 1920, height: 1080 },
+			webcamSize: { width: 960, height: 720 },
+			layoutPreset,
+		})!;
+
+		for (const rect of [layout.screenRect, layout.webcamRect!]) {
+			expect(rect.x).toBeGreaterThanOrEqual(0);
+			expect(rect.y).toBeGreaterThanOrEqual(0);
+			expect(rect.x + rect.width).toBeLessThanOrEqual(1080);
+			expect(rect.y + rect.height).toBeLessThanOrEqual(1920);
+		}
+		// The screen still carries the capture's own ratio in a scene whose
+		// ratio is nothing like it.
+		expect(layout.screenRect.width / layout.screenRect.height).toBeCloseTo(1920 / 1080, 2);
+	});
+
+	it.each([
+		"vertical-stack",
+		"dual-frame",
+	] as const)("falls back to the screen alone in %s when the clip has no camera", (layoutPreset) => {
 		const layout = computeCompositeLayout({
 			canvasSize: { width: 1920, height: 1080 },
 			maxContentSize: { width: 1536, height: 864 },
 			screenSize: { width: 1920, height: 1080 },
-			layoutPreset: "vertical-stack",
+			layoutPreset,
 		});
 
-		expect(layout).not.toBeNull();
-		expect(layout?.screenRect).toEqual({
-			x: 0,
-			y: 0,
-			width: 1920,
-			height: 1080,
-		});
 		expect(layout?.webcamRect).toBeNull();
-		expect(layout?.screenCover).toBe(true);
-	});
-
-	it("uses a 2:1 split layout in dual frame mode", () => {
-		const layout = computeCompositeLayout({
-			canvasSize: { width: 1920, height: 1080 },
-			maxContentSize: { width: 1536, height: 864 },
-			screenSize: { width: 1920, height: 1080 },
-			webcamSize: { width: 1280, height: 720 },
-			layoutPreset: "dual-frame",
-		});
-
-		expect(layout).not.toBeNull();
-		expect(layout?.webcamRect).not.toBeNull();
-		expect(layout?.screenRect.y).toBe(108);
-		expect(layout?.screenRect.height).toBe(864);
-		expect(layout?.screenBorderRadius).toBe(layout?.webcamRect?.borderRadius);
-		expect(layout?.webcamRect?.y).toBe(108);
-		expect(layout?.webcamRect?.height).toBe(864);
-		expect(layout?.webcamRect?.x).toBeGreaterThan(layout?.screenRect.x ?? 0);
-		expect(
-			Math.abs((layout?.screenRect.width ?? 0) - 2 * (layout?.webcamRect?.width ?? 0)),
-		).toBeLessThanOrEqual(1);
-		expect(layout?.screenCover).toBe(true);
+		// Contain-fit into the padded area, like every other preset.
+		expect(layout?.screenRect).toEqual({ x: 192, y: 108, width: 1536, height: 864 });
 	});
 
 	it("forces circular and square masks to use square dimensions", () => {
@@ -269,52 +446,84 @@ describe("computeCompositeLayout", () => {
 	});
 });
 
-describe("computeCameraFullscreenTargetRect", () => {
-	it("insets the target rect by the margin fraction of the canvas' shorter dimension", () => {
-		const canvasSize = { width: 1920, height: 1080 };
-		const margin = Math.round(
-			Math.min(canvasSize.width, canvasSize.height) * CAMERA_FULLSCREEN_MARGIN_FRACTION,
+describe("computeCameraFullscreenRect", () => {
+	const CANVAS = { width: 1920, height: 1080 };
+	const pip = (over: Partial<StyledRenderRect> = {}): StyledRenderRect => ({
+		x: 1520,
+		y: 740,
+		width: 360,
+		height: 270,
+		borderRadius: 24,
+		maskShape: "rectangle",
+		...over,
+	});
+
+	it("is the whole frame at full progress — no margin, no rounding, no mask", () => {
+		const rect = computeCameraFullscreenRect(pip(), CANVAS, 1);
+
+		expect(rect).toEqual({
+			x: 0,
+			y: 0,
+			width: CANVAS.width,
+			height: CANVAS.height,
+			borderRadius: 0,
+			maskShape: "rectangle",
+		});
+	});
+
+	it("leaves the layout rect untouched at zero progress", () => {
+		const base = pip();
+		const rect = computeCameraFullscreenRect(base, CANVAS, 0);
+
+		expect(rect.x).toBe(base.x);
+		expect(rect.y).toBe(base.y);
+		expect(rect.width).toBe(base.width);
+		expect(rect.height).toBe(base.height);
+		expect(rect.borderRadius).toBe(base.borderRadius);
+	});
+
+	it("takes the frame whatever the canvas' own aspect ratio", () => {
+		const portrait = { width: 1080, height: 1920 };
+		const rect = computeCameraFullscreenRect(pip(), portrait, 1);
+
+		expect(rect.width).toBe(portrait.width);
+		expect(rect.height).toBe(portrait.height);
+	});
+
+	it("dissolves a circle mask through its radius instead of popping it to a rectangle", () => {
+		// computeCompositeLayout gives a circle a square box and a radius of half its
+		// side, so a rounded rect at that radius IS that circle — the mask can flatten
+		// to "rectangle" on frame one and the shape still eases out continuously.
+		const circle = pip({ width: 270, height: 270, borderRadius: 135, maskShape: "circle" });
+
+		const start = computeCameraFullscreenRect(circle, CANVAS, 0);
+		expect(start.borderRadius).toBe(Math.min(circle.width, circle.height) / 2);
+		expect(start.maskShape).toBe("rectangle");
+
+		const mid = computeCameraFullscreenRect(circle, CANVAS, 0.5);
+		expect(mid.borderRadius).toBeCloseTo(circle.borderRadius / 2, 5);
+		expect(computeCameraFullscreenRect(circle, CANVAS, 1).borderRadius).toBe(0);
+	});
+
+	it("moves monotonically toward the frame, so the growth never doubles back", () => {
+		const base = pip();
+		let prevArea = base.width * base.height;
+		for (const t of [0.25, 0.5, 0.75, 1]) {
+			const rect = computeCameraFullscreenRect(base, CANVAS, t);
+			const area = rect.width * rect.height;
+			expect(area).toBeGreaterThan(prevArea);
+			expect(rect.x).toBeGreaterThanOrEqual(0);
+			expect(rect.y).toBeGreaterThanOrEqual(0);
+			prevArea = area;
+		}
+	});
+
+	it("clamps progress outside 0..1 instead of overshooting the frame", () => {
+		expect(computeCameraFullscreenRect(pip(), CANVAS, 2)).toEqual(
+			computeCameraFullscreenRect(pip(), CANVAS, 1),
 		);
-		// Square aspect source so height is the constrained dimension in a landscape canvas.
-		const rect = computeCameraFullscreenTargetRect(canvasSize, { width: 1080, height: 1080 });
-
-		expect(rect.height).toBeCloseTo(canvasSize.height - margin * 2, 0);
-		expect(rect.y).toBeCloseTo(margin, 0);
-	});
-
-	it("preserves the source aspect ratio (contain-fit) instead of stretching to the canvas", () => {
-		const canvasSize = { width: 1920, height: 1080 };
-		const source = { width: 1280, height: 720 }; // 16:9, same as canvas
-		const rect = computeCameraFullscreenTargetRect(canvasSize, source);
-
-		expect(rect.width / rect.height).toBeCloseTo(source.width / source.height, 3);
-	});
-
-	it("fits a portrait source by constraining height, centering vertically and horizontally", () => {
-		const canvasSize = { width: 1920, height: 1080 };
-		const source = { width: 9, height: 16 }; // portrait webcam frame
-		const rect = computeCameraFullscreenTargetRect(canvasSize, source);
-
-		expect(rect.width / rect.height).toBeCloseTo(source.width / source.height, 3);
-		expect(rect.height).toBeLessThanOrEqual(canvasSize.height);
-		expect(rect.width).toBeLessThanOrEqual(canvasSize.width);
-		// Centered: equal leftover space on both sides horizontally.
-		expect(rect.x).toBeCloseTo(canvasSize.width - rect.x - rect.width, 0);
-	});
-
-	it("fits a landscape source by constraining width when it would overflow", () => {
-		const canvasSize = { width: 1080, height: 1920 }; // portrait canvas
-		const source = { width: 16, height: 9 }; // landscape webcam frame
-		const rect = computeCameraFullscreenTargetRect(canvasSize, source);
-
-		expect(rect.width / rect.height).toBeCloseTo(source.width / source.height, 3);
-		expect(rect.y).toBeCloseTo(canvasSize.height - rect.y - rect.height, 0);
-	});
-
-	it("falls back to a 1:1 aspect ratio for degenerate (zero-size) source rects", () => {
-		const canvasSize = { width: 1920, height: 1080 };
-		const rect = computeCameraFullscreenTargetRect(canvasSize, { width: 0, height: 0 });
-
-		expect(rect.width).toBeCloseTo(rect.height, 0);
+		expect(computeCameraFullscreenRect(pip(), CANVAS, -1)).toEqual(
+			computeCameraFullscreenRect(pip(), CANVAS, 0),
+		);
 	});
 });

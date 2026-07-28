@@ -44,6 +44,10 @@ jobs:
           path: caption-assets
           key: caption-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-caption-model.mjs') }}
 
+      # ponytail: STT is handled by the bundled whisper-stt-server (whisper.cpp
+      # with native DTW token timestamps). No separate VAD model is fetched
+      # here. See docs/engineering/stt-spec.md for the full architecture.
+
       - name: Build Windows app
         run: npm run build:win -- --publish never
 
@@ -70,6 +74,10 @@ jobs:
         with:
           path: caption-assets
           key: caption-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-caption-model.mjs') }}
+
+      # ponytail: STT is handled by the bundled whisper-stt-server (whisper.cpp
+      # with native DTW token timestamps). No separate VAD model is fetched
+      # here. See docs/engineering/stt-spec.md for the full architecture.
 
       - name: Build Windows Store package
         run: npm run build:win:store -- --publish never
@@ -112,6 +120,8 @@ jobs:
           path: caption-assets
           key: caption-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-caption-model.mjs') }}
 
+      # ponytail: STT is handled by the bundled whisper-stt-server (see the
+      # build-windows comment); no VAD model is fetched here.
       - name: Resolve macOS signing
         id: signing
         env:
@@ -275,6 +285,7 @@ jobs:
           path: caption-assets
           key: caption-assets-${{ runner.os }}-${{ hashFiles('scripts/fetch-caption-model.mjs') }}
 
+      # ponytail: no VAD fetch here either (see build-windows comment).
       - name: Build Linux app
         run: npm run build:linux -- --publish never
 

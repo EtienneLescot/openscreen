@@ -8,7 +8,8 @@
 			"title": "Mode focus",
 			"manual": "Manuel",
 			"auto": "Auto",
-			"autoDescription": "La caméra suit la position du curseur enregistré"
+			"autoDescription": "La caméra suit la position du curseur enregistré",
+			"lockedDisclaimer": "Contrôlé par le bouton global de mise au point automatique dans la timeline. Désactivez-le pour régler le mode de mise au point par zoom."
 		},
 		"threeD": {
 			"title": "Rotation 3D",
@@ -16,7 +17,8 @@
 				"iso": "Iso",
 				"left": "Gauche",
 				"right": "Droite"
-			}
+			},
+			"none": "Aucune"
 		},
 		"customScale": "Zoom personnalisé",
 		"position": {
@@ -49,7 +51,14 @@
 		"noWebcam": "Sans webcam",
 		"mirrorWebcam": "Inverser la webcam",
 		"reactiveWebcam": "Réduire au zoom",
-		"reactiveWebcamDescription": "La caméra rétrécit doucement pendant le zoom, pour ne pas gêner."
+		"reactiveWebcamDescription": "La caméra rétrécit doucement pendant le zoom, pour ne pas gêner.",
+		"help": "Composition de la webcam avec l'écran : incrustation, empilement vertical, double cadre, forme du masque, taille et effet miroir.",
+		"shapes": {
+			"rectangle": "Rect.",
+			"circle": "Cercle",
+			"square": "Carré",
+			"rounded": "Arrondi"
+		}
 	},
 	"effects": {
 		"title": "Effets vidéo",
@@ -59,7 +68,8 @@
 		"shadow": "Ombre",
 		"roundness": "Arrondi",
 		"padding": "Marge",
-		"on": "activé"
+		"on": "activé",
+		"help": "Mise en forme du cadre de l'enregistrement : flou d'arrière-plan, ombre portée, flou de mouvement, arrondi des coins et marge autour de la vidéo."
 	},
 	"background": {
 		"title": "Arrière-plan",
@@ -71,7 +81,11 @@
 		"gradientLabel": "Dégradé {{index}}",
 		"colorWheel": "Roue chromatique",
 		"colorPalette": "Palette de couleurs",
-		"presets": "Préréglages"
+		"presets": "Préréglages",
+		"help": "Choisissez ce qui apparaît derrière l'enregistrement : un fond d'écran fourni, une couleur unie, un dégradé, ou une image personnelle depuis le disque.",
+		"customWallpaper": "Fond personnalisé",
+		"imageLabel": "Fond {{index}}",
+		"colorLabel": "Couleur {{color}}"
 	},
 	"crop": {
 		"title": "Recadrage",
@@ -150,8 +164,8 @@
 		"strokeWidth": "Épaisseur du trait : {{width}}px",
 		"arrowColor": "Couleur de la flèche",
 		"blurType": "Type de flou",
-		"blurTypeBlur": "Flou",
-		"blurTypeMosaic": "Flou mosaique",
+		"blurTypeBlur": "Gaussien",
+		"blurTypeMosaic": "Mosaïque",
 		"blurColor": "Couleur du flou",
 		"blurColorWhite": "Blanc",
 		"blurColorBlack": "Noir",
@@ -168,7 +182,8 @@
 		"tipShiftTabCycle": "Utilisez Shift+Tab pour cycler en sens inverse.",
 		"invalidImageType": "Type de fichier invalide",
 		"imageFormatsOnly": "Veuillez téléverser un fichier image JPG, PNG, GIF ou WebP.",
-		"imageUploadSuccess": "Image téléversée avec succès !"
+		"imageUploadSuccess": "Image téléversée avec succès !",
+		"type": "Type"
 	},
 	"fontStyles": {
 		"classic": "Classique",
@@ -211,6 +226,7 @@
 		"errorLoadFailed": "La police n'a pas pu être chargée. Vérifiez que l'URL Google Fonts est correcte."
 	},
 	"cursor": {
+		"title": "Curseur",
 		"theme": "Style du curseur",
 		"themeDefault": "Par défaut",
 		"show": "Afficher le curseur",
@@ -218,13 +234,79 @@
 		"smoothing": "Lissage",
 		"motionBlur": "Flou de mouvement",
 		"clickBounce": "Rebond au clic",
-		"clipToBounds": "Rogner au canevas"
+		"clipToBounds": "Rogner au canevas",
+		"clipToBoundsDescription": "Garde le curseur à l'intérieur du cadre vidéo. Désactivez pour laisser le curseur dépasser les bords — utile en cas de zoom ou de panoramique.",
+		"help": "Rendu du curseur à partir de la télémétrie enregistrée : thème, taille, lissage, flou de mouvement et rebond au clic."
 	},
 	"language": {
 		"title": "Langue"
 	},
 	"timeline": {
 		"title": "Montage",
-		"waveform": "Afficher la forme d'onde sur la piste de découpe"
+		"waveform": "Afficher la forme d'onde sur la piste de découpe",
+		"help": "Options d'affichage de la timeline, comme la forme d'onde audio sur la piste de découpe."
+	},
+	"facets": {
+		"captions": "Sous-titres",
+		"transcript": "Transcription"
+	},
+	"panes": {
+		"help": "Aide"
+	},
+	"transcript": {
+		"title": "Transcription actuelle",
+		"help": "Transcription agrégée de tous les clips de la timeline. Retour arrière / Suppr sur un mot ou une sélection le marque comme ignoré (en rouge). Survolez un passage rouge pour le restaurer.",
+		"noClips": "Aucun clip pour l'instant",
+		"noTranscript": "Aucune transcription pour l'instant",
+		"whisperHint": "La transcription utilise Whisper en local — tout s'exécute dans votre navigateur, aucune donnée ne quitte l'appareil.",
+		"transcribeNow": "Transcrire maintenant",
+		"transcribing": "Transcription…",
+		"clipLabel": "Clip {{index}}",
+		"noClipTranscript": "Aucune transcription pour ce clip — ouvrez la fiche du média et relancez la génération.",
+		"editorAria": "Transcription de {{filename}}",
+		"silence": "[silence {{duration}} s]",
+		"restoreSilence": "Restaurer le silence ({{duration}} s)",
+		"trimSilence": "Couper le silence ({{duration}} s)",
+		"restoreWord": "Restaurer « {{word}} »"
+	},
+	"captions": {
+		"show": "Afficher les sous-titres",
+		"noTranscript": "Les sous-titres sont issus de la transcription du média. Transcrivez cette vidéo pour les activer.",
+		"transcribe": "Transcrire la vidéo",
+		"transcribing": "Transcription…",
+		"derivedFromTranscript": "{{count}} lignes de sous-titres, dérivées de la transcription en direct.",
+		"hiddenHint": "Les sous-titres proviennent de la transcription de ce média. Activez-les pour les voir dans l'aperçu et à l'export.",
+		"legacyAnnotations": "Ce projet contient encore des annotations de sous-titres issues de l'ancienne fonctionnalité ({{count}}). Elles s'affichent par-dessus les sous-titres.",
+		"removeLegacyAnnotations": "Supprimer les anciennes annotations",
+		"language": "Langue",
+		"displayLanguage": "Affichage",
+		"original": "Original (transcription)",
+		"translate": "Traduire",
+		"translating": "Traduction…",
+		"translateHint": "Traduire la transcription avec le fournisseur IA configuré",
+		"translateFailed": "La traduction a échoué.",
+		"deleteTranslation": "Supprimer cette traduction",
+		"translationIsNonDestructive": "Les traductions sont stockées à côté de la transcription, jamais dedans — le texte original et ses timings restent intacts.",
+		"text": "Texte",
+		"font": "Police",
+		"fontSize": "Taille",
+		"bold": "Gras",
+		"textColor": "Couleur du texte",
+		"background": "Fond",
+		"showBackground": "Afficher le fond",
+		"backgroundColor": "Couleur du fond",
+		"backgroundOpacity": "Opacité",
+		"position": "Position",
+		"positionTop": "Haut",
+		"positionMiddle": "Milieu",
+		"positionBottom": "Bas",
+		"alignLeft": "Gauche",
+		"alignCenter": "Centre",
+		"alignRight": "Droite",
+		"verticalOffset": "Décalage",
+		"width": "Largeur",
+		"lineLength": "Longueur des lignes",
+		"minWords": "Mots min. par ligne",
+		"maxWords": "Mots max. par ligne"
 	}
 }

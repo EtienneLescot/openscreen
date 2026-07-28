@@ -9,6 +9,28 @@ const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
 const RENDERER_DIST = path.join(APP_ROOT, "dist");
 const HEADLESS = process.env["HEADLESS"] === "true";
 
+// The HUD and Notes windows are excluded from every screen/window capture (WGC on Windows uses
+// the same SetWindowDisplayAffinity this sets), so the recording controls never end up baked into
+// the recorded video.
+//
+// The side effect is that they are equally invisible to an *agent's* screenshots, and the HUD is
+// what opens the editor — which makes a whole slice of the app unreachable from automation. Hence
+// this escape hatch, for testing only. It warns on every window it skips, because a recording made
+// while it is set WILL contain the HUD.
+const CONTENT_PROTECTION_DISABLED = process.env["OPENSCREEN_DISABLE_CONTENT_PROTECTION"] === "1";
+
+function applyContentProtection(win: BrowserWindow, label: string) {
+	if (CONTENT_PROTECTION_DISABLED) {
+		console.warn(
+			`[content-protection] OFF for the ${label} window ` +
+				"(OPENSCREEN_DISABLE_CONTENT_PROTECTION=1) — it will appear in screen captures, " +
+				"including recordings. Unset it for anything but automated testing.",
+		);
+		return;
+	}
+	win.setContentProtection(true);
+}
+
 // Asset base URL for renderer (wallpapers, etc.). Packaged: extraResources copies
 // public/wallpapers to resources/wallpapers. Unpackaged: <appRoot>/public/.
 const ASSET_BASE_DIR = process.defaultApp
@@ -17,6 +39,12 @@ const ASSET_BASE_DIR = process.defaultApp
 const ASSET_BASE_URL_ARG = `--asset-base-url=${pathToFileURL(`${ASSET_BASE_DIR}${path.sep}`).toString()}`;
 
 let hudOverlayWindow: BrowserWindow | null = null;
+
+// Origin the current drag gesture started from. The renderer sends the pointer's
+// *total* travel since pointerdown rather than per-frame deltas, so every move is
+// an absolute `origin + delta` — no rounding to accumulate, and a dropped message
+// self-corrects on the next one instead of leaving the window permanently offset.
+let hudDragOrigin: { x: number; y: number } | null = null;
 
 ipcMain.on("hud-overlay-hide", () => {
 	if (hudOverlayWindow && !hudOverlayWindow.isDestroyed()) {
@@ -30,23 +58,46 @@ ipcMain.on("hud-overlay-ignore-mouse-events", (_event, ignore: boolean) => {
 	}
 });
 
-ipcMain.on("hud-overlay-move-by", (_event, deltaX: number, deltaY: number) => {
+ipcMain.on("hud-overlay-drag-start", () => {
+	if (!hudOverlayWindow || hudOverlayWindow.isDestroyed()) {
+		return;
+	}
+
+	const [x, y] = hudOverlayWindow.getPosition();
+	hudDragOrigin = { x, y };
+});
+
+ipcMain.on("hud-overlay-drag-to", (_event, deltaX: number, deltaY: number) => {
 	if (
 		!hudOverlayWindow ||
 		hudOverlayWindow.isDestroyed() ||
+		!hudDragOrigin ||
 		!Number.isFinite(deltaX) ||
 		!Number.isFinite(deltaY)
 	) {
 		return;
 	}
 
-	const [x, y] = hudOverlayWindow.getPosition();
-	hudOverlayWindow.setPosition(Math.round(x + deltaX), Math.round(y + deltaY), false);
+	hudOverlayWindow.setPosition(
+		Math.round(hudDragOrigin.x + deltaX),
+		Math.round(hudDragOrigin.y + deltaY),
+		false,
+	);
+});
+
+ipcMain.on("hud-overlay-drag-end", () => {
+	hudDragOrigin = null;
 });
 
 // Resize the HUD to fit its rendered content. Anchored by its bottom-centre so it
 // stays where the user dragged it while only growing/shrinking, which lets the
 // vertical tray layout grow tall instead of scrolling inside a fixed window.
+//
+// Applied in one shot rather than tweened. The renderer now reserves space for
+// everything that can float above the bar, so a resize only ever accompanies a
+// discrete content change (orientation flip, recording controls appearing) that
+// snaps anyway — tweening the window across 10 frames just meant 10 frames of the
+// bar sitting at an offset that didn't match the content it was drawn with.
 ipcMain.on("hud-overlay-set-size", (_event, width: number, height: number) => {
 	if (
 		!hudOverlayWindow ||
@@ -54,6 +105,12 @@ ipcMain.on("hud-overlay-set-size", (_event, width: number, height: number) => {
 		!Number.isFinite(width) ||
 		!Number.isFinite(height)
 	) {
+		return;
+	}
+
+	// A resize re-anchors from the window's current bounds, which would fight the
+	// position an in-flight drag is applying. The renderer re-measures on release.
+	if (hudDragOrigin) {
 		return;
 	}
 
@@ -72,9 +129,25 @@ ipcMain.on("hud-overlay-set-size", (_event, width: number, height: number) => {
 	const centerX = bounds.x + bounds.width / 2;
 	const bottomY = bounds.y + bounds.height;
 
+	// Growing height keeps the bottom edge anchored (so the vertical tray grows
+	// upward from where the user left it), but that alone can push the top edge
+	// above the screen — e.g. switching to the tall vertical layout while sitting
+	// low/mid-screen. The drag handle lives at the tray's start (top, in vertical
+	// mode), so an off-screen top edge makes the HUD both invisible and
+	// undraggable back into view. Clamp both axes to the display's work area so
+	// the window (and its drag handle) always stays fully reachable.
+	const nextX = Math.min(
+		Math.max(workArea.x, Math.round(centerX - nextWidth / 2)),
+		workArea.x + workArea.width - nextWidth,
+	);
+	const nextY = Math.min(
+		Math.max(workArea.y, Math.round(bottomY - nextHeight)),
+		workArea.y + workArea.height - nextHeight,
+	);
+
 	hudOverlayWindow.setBounds({
-		x: Math.round(centerX - nextWidth / 2),
-		y: Math.round(bottomY - nextHeight),
+		x: nextX,
+		y: nextY,
 		width: nextWidth,
 		height: nextHeight,
 	});
@@ -88,8 +161,11 @@ export function createHudOverlayWindow(): BrowserWindow {
 	const primaryDisplay = screen.getPrimaryDisplay();
 	const { workArea } = primaryDisplay;
 
-	const windowWidth = 600;
-	const windowHeight = 160;
+	// Close to what the renderer asks for on its very first measurement (bar plus
+	// the reserved space above it), so the HUD doesn't visibly resize itself the
+	// instant it becomes visible. See src/components/launch/hudGeometry.ts.
+	const windowWidth = 820;
+	const windowHeight = 560;
 
 	const x = Math.floor(workArea.x + (workArea.width - windowWidth) / 2);
 	const y = Math.floor(workArea.y + workArea.height - windowHeight - 5);
@@ -126,6 +202,9 @@ export function createHudOverlayWindow(): BrowserWindow {
 	});
 	win.setIgnoreMouseEvents(true, { forward: true });
 
+	// Keep the recording controls out of the recording (see applyContentProtection).
+	applyContentProtection(win, "HUD");
+
 	// Follow the user across macOS Spaces, else the HUD stays pinned to the Space
 	// it was first opened on.
 	if (process.platform === "darwin") {
@@ -135,6 +214,7 @@ export function createHudOverlayWindow(): BrowserWindow {
 	// Show only once painted to avoid the black rectangle flash when a transparent
 	// window is shown before its first paint.
 	win.once("ready-to-show", () => {
+		applyContentProtection(win, "HUD");
 		if (!HEADLESS) win.show();
 	});
 
@@ -147,6 +227,7 @@ export function createHudOverlayWindow(): BrowserWindow {
 	win.on("closed", () => {
 		if (hudOverlayWindow === win) {
 			hudOverlayWindow = null;
+			hudDragOrigin = null;
 		}
 	});
 
@@ -164,8 +245,13 @@ export function createHudOverlayWindow(): BrowserWindow {
 /**
  * Main editor window. Starts maximised with a hidden title bar on macOS; not
  * always-on-top and appears in the taskbar/dock.
+ *
+ * `query` overrides the renderer's routing params. The export bench passes
+ * windowType=bench so it runs under THIS window's webPreferences — same
+ * preload, same sandbox, same backgroundThrottling:false — because a bench that
+ * configures its own window measures a different app than the one we ship.
  */
-export function createEditorWindow(): BrowserWindow {
+export function createEditorWindow(query: Record<string, string> = {}): BrowserWindow {
 	const isMac = process.platform === "darwin";
 
 	const win = new BrowserWindow({
@@ -220,12 +306,11 @@ export function createEditorWindow(): BrowserWindow {
 		win?.webContents.send("main-process-message", new Date().toLocaleString());
 	});
 
+	const routing = { windowType: "editor", ...query };
 	if (VITE_DEV_SERVER_URL) {
-		win.loadURL(VITE_DEV_SERVER_URL + "?windowType=editor");
+		win.loadURL(`${VITE_DEV_SERVER_URL}?${new URLSearchParams(routing).toString()}`);
 	} else {
-		win.loadFile(path.join(RENDERER_DIST, "index.html"), {
-			query: { windowType: "editor" },
-		});
+		win.loadFile(path.join(RENDERER_DIST, "index.html"), { query: routing });
 	}
 
 	return win;
@@ -239,12 +324,12 @@ export function createSourceSelectorWindow(): BrowserWindow {
 	const { width, height } = screen.getPrimaryDisplay().workAreaSize;
 
 	const win = new BrowserWindow({
-		width: 620,
-		height: 420,
-		minHeight: 350,
-		maxHeight: 500,
-		x: Math.round((width - 620) / 2),
-		y: Math.round((height - 420) / 2),
+		width: 680,
+		height: 580,
+		minHeight: 420,
+		maxHeight: 680,
+		x: Math.round((width - 680) / 2),
+		y: Math.round((height - 580) / 2),
 		frame: false,
 		resizable: false,
 		alwaysOnTop: true,
@@ -357,9 +442,9 @@ export function createNotesWindow(): BrowserWindow {
 		win.setAutoHideMenuBar(true);
 	}
 
-	win.setContentProtection(true);
+	applyContentProtection(win, "Notes");
 	win.once("ready-to-show", () => {
-		win.setContentProtection(true);
+		applyContentProtection(win, "Notes");
 		win.show();
 	});
 

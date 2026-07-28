@@ -4,12 +4,12 @@
   "appId": "com.etiennelescot.openscreen",
   "asar": true,
   // .node binaries can't be dlopen'd from inside an asar — must live unpacked.
+  // onnxruntime-node distributes as a `.node` shared object that whisper.cpp
+  // helpers run from process spawn, so they all unpack via the same glob.
   "asarUnpack": [
     "**/*.node"
   ],
   "productName": "Openscreen",
-  // Fetch the auto-caption model + ORT wasm into caption-assets/ before packaging (idempotent).
-  "beforePack": "scripts/before-pack.cjs",
   "npmRebuild": true,
   // sharp ships ABI-stable (napi) prebuilt binaries with bundled libvips. Building it from source
   // needs a system libvips we don't provide and breaks on CI/local ("vips-cpp.42 not found"), so we
@@ -31,6 +31,14 @@
   ],
   // Asset layout contract: "wallpapers/" and "cursors/" under resourcesPath must
   // align with assetBaseDir in electron/preload.ts (packaged branch).
+  // Native capture helpers + whisper-stt-server binaries (and their ggml
+  // backend sidecars) live under `electron/native/bin/<platform>-<arch>/`
+  // and the per-platform sections below limit them to the matching arch in
+  // each installer.
+  //
+  // ponytail: the STT model (ggml-small-q8_0.bin) is downloaded into the
+  // userData cache on first use by electron/stt/modelManager.ts, so no model
+  // files are bundled at build time.
   "extraResources": [
     {
       "from": "public/wallpapers",
@@ -39,10 +47,6 @@
     {
       "from": "public/cursors",
       "to": "cursors"
-    },
-    {
-      "from": "caption-assets",
-      "to": "caption-assets"
     }
   ],
 
@@ -83,7 +87,14 @@
     "icon": "icons/icons/png",
     "artifactName": "${productName}-Linux-${version}.${ext}",
     "maintainer": "Etienne Lescot <etiennelescot@gmail.com>",
-    "category": "AudioVideo"
+    "category": "AudioVideo",
+    "extraResources": [
+      {
+        "from": "electron/native/bin",
+        "to": "electron/native/bin",
+        "filter": ["linux-*/*"]
+      }
+    ]
   },
   "win": {
     "target": [
@@ -97,6 +108,16 @@
         "to": "electron/native/bin",
         "filter": ["win32-*/*"]
       }
+    ],
+    // Native D3D11 compositor addon (Windows-only). Built by
+    // `npm run build:native:compositor` (scripts/build-windows-compositor-addon.mjs)
+    // before packaging. Packed into asar, then auto-unpacked by the top-level
+    // `asarUnpack: ["**/*.node"]` rule to app.asar.unpacked/... — matches the
+    // `.asar` -> `.asar.unpacked` rewrite compositorViewService.ts's
+    // buildCandidatePaths() already applies for packaged builds. Appends to
+    // (doesn't replace) the top-level `files` list.
+    "files": [
+      "electron/native/compositor-view/build"
     ]
   },
   "nsis": {

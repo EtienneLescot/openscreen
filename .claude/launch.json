@@ -1,0 +1,31 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "vite-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--port", "5199", "--strictPort"],
+      "port": 5199,
+      "env": { "NO_ELECTRON": "1" }
+    },
+    {
+      "name": "desktop-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "--port", "5201", "--strictPort"],
+      "port": 5201,
+      "env": { "NO_ELECTRON": "1" }
+    },
+    {
+      "name": "v4preview",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["node_modules/vite/bin/vite.js", "--config", "vite.v4preview.config.ts"],
+      "port": 5207
+    },
+    {
+      "name": "poc",
+      "runtimeExecutable": "npx",
+      "runtimeArgs": ["vite", "--config", "poc/vite.config.js"],
+      "port": 5210
+    }
+  ]
+}

@@ -28,7 +28,12 @@
 		"disableSystemAudio": "Disable system audio",
 		"enableMicrophone": "Enable microphone",
 		"disableMicrophone": "Disable microphone",
-		"defaultMicrophone": "Default Microphone"
+		"defaultMicrophone": "Default Microphone",
+		"systemAudio": "System audio",
+		"microphone": "Microphone",
+		"on": "On",
+		"off": "Off",
+		"inputDevice": "Input device"
 	},
 	"webcam": {
 		"enableWebcam": "Enable webcam",
@@ -36,7 +41,9 @@
 		"defaultCamera": "Default Camera",
 		"searching": "Searching...",
 		"noneFound": "No camera found",
-		"unavailable": "Camera unavailable"
+		"unavailable": "Camera unavailable",
+		"camera": "Camera",
+		"cameraDevice": "Camera device"
 	},
 	"cursor": {
 		"useEditableCursor": "Use editable cursor",
@@ -67,5 +74,14 @@
 		"description": "The default GPU encoder failed to start, so OpenScreen fell back to software H.264 encoding. Recording should continue as normal, but CPU usage may be higher.",
 		"dismiss": "Got it",
 		"dontShowAgain": "Don't show again"
+	},
+	"deviceSettings": {
+		"title": "Device settings",
+		"done": "Done",
+		"micLevel": "Input level",
+		"micHint": "Speak to check your microphone",
+		"noMicrophones": "No microphone found",
+		"preview": "Preview",
+		"previewUnavailable": "Preview unavailable"
 	}
 }

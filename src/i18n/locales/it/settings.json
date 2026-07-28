@@ -9,7 +9,8 @@
 			"title": "Modalità messa a fuoco",
 			"manual": "Manuale",
 			"auto": "Automatico",
-			"autoDescription": "La fotocamera segue la posizione del cursore registrato"
+			"autoDescription": "La fotocamera segue la posizione del cursore registrato",
+			"lockedDisclaimer": "Controllato dall'interruttore globale di messa a fuoco automatica nella timeline. Disattivalo per impostare la modalità di messa a fuoco per ogni zoom."
 		},
 		"threeD": {
 			"title": "Rotazione 3D",
@@ -17,7 +18,8 @@
 				"iso": "Iso",
 				"left": "Sinistra",
 				"right": "Destra"
-			}
+			},
+			"none": "Nessuna"
 		},
 		"position": {
 			"title": "Posizione messa a fuoco",
@@ -49,7 +51,14 @@
 		"webcamSize": "Dimensione webcam",
 		"mirrorWebcam": "Specchia webcam",
 		"reactiveWebcam": "Riduci con lo zoom",
-		"reactiveWebcamDescription": "La webcam si riduce dolcemente durante lo zoom, così non intralcia."
+		"reactiveWebcamDescription": "La webcam si riduce dolcemente durante lo zoom, così non intralcia.",
+		"help": "Come la webcam viene composta con lo schermo: picture-in-picture, pila verticale, doppio riquadro, forma della maschera, dimensione e effetto specchio.",
+		"shapes": {
+			"rectangle": "Rett.",
+			"circle": "Cerchio",
+			"square": "Quadrato",
+			"rounded": "Arrotondato"
+		}
 	},
 	"effects": {
 		"title": "Effetti video",
@@ -59,7 +68,8 @@
 		"on": "acceso",
 		"shadow": "Ombra",
 		"roundness": "Arrotondamento",
-		"padding": "Spaziatura"
+		"padding": "Spaziatura",
+		"help": "Stile della cornice della registrazione: sfocatura dello sfondo, ombra, sfocatura di movimento, raggio degli angoli e margine attorno al video."
 	},
 	"background": {
 		"title": "Sfondo",
@@ -71,7 +81,11 @@
 		"gradientLabel": "Sfumatura {{index}}",
 		"colorWheel": "Ruota dei colori",
 		"colorPalette": "Tavolozza dei colori",
-		"presets": "Predefiniti"
+		"presets": "Predefiniti",
+		"help": "Scegli cosa appare dietro la registrazione: uno sfondo incluso, un colore pieno, un gradiente o un'immagine personale dal disco.",
+		"customWallpaper": "Sfondo personalizzato",
+		"imageLabel": "Sfondo {{index}}",
+		"colorLabel": "Colore {{color}}"
 	},
 	"crop": {
 		"title": "Ritaglia",
@@ -104,7 +118,8 @@
 	},
 	"project": {
 		"save": "Salva progetto",
-		"load": "Carica progetto"
+		"load": "Carica progetto",
+		"new": "Nuovo progetto"
 	},
 	"export": {
 		"videoButton": "Esporta video",
@@ -149,8 +164,8 @@
 		"strokeWidth": "Larghezza tratto: {{width}}px",
 		"arrowColor": "Colore freccia",
 		"blurType": "Tipo sfocatura",
-		"blurTypeBlur": "Sfocatura",
-		"blurTypeMosaic": "Sfocatura mosaico",
+		"blurTypeBlur": "Gaussiano",
+		"blurTypeMosaic": "Mosaico",
 		"blurColor": "Colore sfocatura",
 		"blurColorWhite": "Bianco",
 		"blurColorBlack": "Nero",
@@ -167,7 +182,8 @@
 		"tipShiftTabCycle": "Usa Maiusc+Tab per scorrere all'indietro.",
 		"invalidImageType": "Tipo di file non valido",
 		"imageFormatsOnly": "Carica un file immagine JPG, PNG, GIF o WebP.",
-		"imageUploadSuccess": "Immagine caricata con successo!"
+		"imageUploadSuccess": "Immagine caricata con successo!",
+		"type": "Tipo"
 	},
 	"fontStyles": {
 		"classic": "Classico",
@@ -210,6 +226,7 @@
 		"errorLoadFailed": "Impossibile caricare il font. Verifica che l'URL di Google Fonts sia corretto."
 	},
 	"cursor": {
+		"title": "Cursore",
 		"theme": "Stile del cursore",
 		"themeDefault": "Predefinito",
 		"show": "Mostra cursore",
@@ -217,13 +234,39 @@
 		"smoothing": "Smussatura",
 		"motionBlur": "Sfocatura movimento",
 		"clickBounce": "Rimbalzo clic",
-		"clipToBounds": "Ritaglia al canvas"
+		"clipToBounds": "Ritaglia al canvas",
+		"clipToBoundsDescription": "Mantiene il cursore all'interno del fotogramma video. Disattiva per lasciare che il cursore superi i bordi — utile quando si esegue zoom o panoramica.",
+		"help": "Resa del cursore dalla telemetria registrata: tema, dimensione, smussatura, sfocatura di movimento e rimbalzo al clic."
 	},
 	"language": {
 		"title": "Lingua"
 	},
 	"timeline": {
 		"title": "Timeline",
-		"waveform": "Mostra la forma d'onda sulla traccia di ritaglio"
+		"waveform": "Mostra la forma d'onda sulla traccia di ritaglio",
+		"help": "Opzioni di visualizzazione della timeline, come mostrare la forma d'onda audio sulla traccia di taglio."
+	},
+	"facets": {
+		"captions": "Sottotitoli",
+		"transcript": "Trascrizione"
+	},
+	"panes": {
+		"help": "Aiuto"
+	},
+	"transcript": {
+		"title": "Trascrizione corrente",
+		"help": "Trascrizione aggregata di tutti i clip sulla timeline. Backspace / Canc su una parola o selezione la segna come saltata (in rosso). Passa sopra un tratto rosso per ripristinarlo.",
+		"noClips": "Ancora nessun clip",
+		"noTranscript": "Ancora nessuna trascrizione",
+		"whisperHint": "La trascrizione usa Whisper in locale: gira nel tuo browser, nessun dato lascia il dispositivo.",
+		"transcribeNow": "Trascrivi ora",
+		"transcribing": "Trascrizione…",
+		"clipLabel": "Clip {{index}}",
+		"noClipTranscript": "Nessuna trascrizione per questo clip: apri la scheda della risorsa e rigenerala.",
+		"editorAria": "Trascrizione di {{filename}}",
+		"silence": "[silenzio {{duration}} s]",
+		"restoreSilence": "Ripristina silenzio ({{duration}} s)",
+		"trimSilence": "Taglia silenzio ({{duration}} s)",
+		"restoreWord": "Ripristina «{{word}}»"
 	}
 }

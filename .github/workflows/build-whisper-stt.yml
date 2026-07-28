@@ -1,0 +1,199 @@
+name: Build whisper-stt binaries
+
+# Builds the whisper.cpp-based `whisper-stt-server` helper for each desktop
+# platform and uploads the binary + ggml backend sidecars as GitHub artifacts
+# so `build.yml` can bundle them into installers.
+#
+# Triggered:
+#   * manually via workflow_dispatch (release-blocking binary refresh)
+#   * automatically when the helper, build script, or this workflow changes
+#
+# ponytail: one binary per platform is enough because whisper.cpp selects the
+# right backend at runtime (Metal on Apple Silicon, Vulkan on Windows/Linux,
+# CPU fallback when no GPU/driver is available). A CUDA variant is supported
+# by the build script but is not built by default; Vulkan already accelerates
+# NVIDIA cards.
+
+on:
+  workflow_dispatch:
+    inputs:
+      enable_cuda:
+        description: "Also build a CUDA variant when the host has an nvcc toolchain"
+        required: false
+        default: "false"
+        type: choice
+        options:
+          - "true"
+          - "false"
+  push:
+    paths:
+      - "scripts/build-whisper-stt.sh"
+      - "electron/native/whisper-stt/**"
+      - ".github/workflows/build-whisper-stt.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: ${{ matrix.label }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macos-latest
+            arch: arm64
+            # Matches `os_arch_tag()` in scripts/build-whisper-stt.sh — this is
+            # the directory name the build script actually stages into
+            # (electron/native/bin/<tag>/), NOT `${{ matrix.os }}-${{ matrix.arch }}`.
+            tag: darwin-arm64
+            label: macOS arm64 (Metal)
+            vulkan: false
+          - os: macos-15-intel
+            arch: x64
+            tag: darwin-x64
+            label: macOS x64 (CPU)
+            vulkan: false
+          - os: ubuntu-latest
+            arch: x64
+            tag: linux-x64
+            label: Linux x64 (Vulkan + CPU fallback)
+            vulkan: true
+          - os: windows-latest
+            arch: x64
+            tag: win32-x64
+            label: Windows x64 (Vulkan + CPU fallback)
+            vulkan: true
+    runs-on: ${{ matrix.os }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: ./.github/actions/setup
+
+      - name: Install Ninja (Linux)
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ninja-build build-essential
+
+      - name: Install Ninja (macOS)
+        if: startsWith(matrix.os, 'macos')
+        run: brew install ninja
+
+      - name: Setup MSVC (Windows)
+        if: matrix.os == 'windows-latest'
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Install Vulkan SDK
+        if: matrix.vulkan
+        # ponytail: humbletim/setup-vulkan-sdk builds Glslang from source via
+        # CMake ExternalProject, which fails ("ENABLE_OPT set but SPIR-V
+        # tools not found") because Glslang's build needs a sibling
+        # SPIRV-Tools checkout it doesn't fetch on its own — reproduced on
+        # both the Linux and Windows legs. jakoch/install-vulkan-sdk-action
+        # downloads LunarG's official prebuilt SDK (glslc included, no
+        # compilation), which is both more reliable and much faster.
+        uses: jakoch/install-vulkan-sdk-action@v1
+        with:
+          vulkan_version: 1.4.304.1
+          install_runtime: false
+          cache: true
+
+      - name: Put glslc on PATH
+        if: matrix.vulkan
+        shell: bash
+        # Belt-and-braces: the action exports VULKAN_SDK but its own PATH
+        # handling isn't documented in enough detail to rely on for a tool
+        # (glslc) the ggml Vulkan backend's CMake configure step needs to find.
+        run: |
+          set -euo pipefail
+          for cand in "${VULKAN_SDK}/Bin" "${VULKAN_SDK}/bin"; do
+            if [[ -d "${cand}" ]]; then
+              echo "${cand}" >> "$GITHUB_PATH"
+            fi
+          done
+
+      - name: Install SPIRV-Headers (Windows only)
+        if: matrix.os == 'windows-latest'
+        shell: bash
+        # ponytail: ggml-vulkan's CMakeLists does
+        # `find_package(SPIRV-Headers CONFIG REQUIRED)`. The Linux LunarG SDK
+        # tarball bundles that CMake config alongside the SDK, so the Linux
+        # leg resolves it for free; the Windows installer .exe (as fetched by
+        # jakoch/install-vulkan-sdk-action) does not ship it at all, so
+        # find_package fails with "Could not find a package configuration
+        # file". vcpkg (preinstalled on GitHub's windows-latest image) ships
+        # a spirv-headers port that provides the missing config; point
+        # CMAKE_PREFIX_PATH at its install dir so ggml's own
+        # `if (DEFINED ENV{VULKAN_SDK}) list(APPEND CMAKE_PREFIX_PATH ...)`
+        # logic has a second, working prefix to fall back to.
+        run: |
+          set -euo pipefail
+          VCPKG_ROOT_DIR="$(dirname "$(command -v vcpkg)")"
+          "${VCPKG_ROOT_DIR}/vcpkg" install spirv-headers:x64-windows
+          echo "CMAKE_PREFIX_PATH=${VCPKG_ROOT_DIR}/installed/x64-windows" >> "$GITHUB_ENV"
+
+      - name: Cache whisper.cpp build tree
+        uses: actions/cache@v4
+        with:
+          # Matches scripts/build-whisper-stt.sh's own BUILD_ROOT default for
+          # each OS (short `C:/wstbuild` on Windows to dodge the vulkan-shaders-gen
+          # MAX_PATH issue; `.cache/whisper-stt-build` elsewhere) — cache the
+          # FetchContent checkout + object files directly, no env override needed.
+          path: ${{ runner.os == 'Windows' && 'C:/wstbuild' || '.cache/whisper-stt-build' }}
+          # Keyed on the pinned WHISPER_REF/backend flags in CMakeLists.txt so a
+          # bump there invalidates the cache instead of silently reusing a stale
+          # FetchContent checkout; falls back to the newest cache for the same
+          # platform + runner image on a miss so incremental compilation still
+          # helps. The runner image version ($ImageOS/$ImageVersion) is part of
+          # the key AND the restore-keys prefix because CMake bakes absolute
+          # toolchain paths (e.g. the Xcode SDK's libz.tbd) into the cached build
+          # tree — when GitHub rolls the image's Xcode/SDK, those paths vanish and
+          # a restored tree fails with "No rule to make target …libz.tbd". Scoping
+          # the cache to the image version auto-busts it on every toolchain roll.
+          key: whisper-stt-build-${{ matrix.tag }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-${{ hashFiles('electron/native/whisper-stt/CMakeLists.txt') }}
+          restore-keys: |
+            whisper-stt-build-${{ matrix.tag }}-${{ env.ImageOS }}-${{ env.ImageVersion }}-
+
+      - name: Run whisper-stt build script
+        env:
+          ENABLE_CUDA: ${{ github.event.inputs.enable_cuda || 'false' }}
+        run: bash scripts/build-whisper-stt.sh
+
+      - name: Stage binaries for upload
+        shell: bash
+        run: |
+          set -euo pipefail
+          BAG="whisper-stt-${{ matrix.tag }}"
+          mkdir -p "$BAG"
+          # Copy the whole per-platform directory: the helper executable plus
+          # every ggml backend sidecar/library it needs at runtime.
+          cp -v "electron/native/bin/${{ matrix.tag }}"/* "$BAG/"
+          tar -czf "${BAG}.tar.gz" "$BAG"
+          echo "Staged ${BAG}.tar.gz"
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: whisper-stt-${{ matrix.tag }}
+          path: whisper-stt-${{ matrix.tag }}.tar.gz
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Workflow summary
+        if: always()
+        # Explicit shell: the bash `{ ... } >> file` grouping syntax below is
+        # not valid PowerShell, which is the default `run:` shell on Windows
+        # runners — this step silently failed on Windows without this.
+        shell: bash
+        run: |
+          {
+            echo "## whisper-stt build"
+            echo ""
+            echo "- Matrix: \`${{ matrix.label }}\`"
+            echo "- Result: ${{ job.status }}"
+          } >> "$GITHUB_STEP_SUMMARY"

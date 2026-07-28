@@ -8,7 +8,8 @@
 			"title": "對焦模式",
 			"manual": "手動",
 			"auto": "自動",
-			"autoDescription": "攝影機跟隨錄製時的游標位置"
+			"autoDescription": "攝影機跟隨錄製時的游標位置",
+			"lockedDisclaimer": "由時間軸中的全域自動對焦開關控制。關閉後可為每個縮放個別設定對焦模式。"
 		},
 		"speed": {},
 		"threeD": {
@@ -17,7 +18,8 @@
 				"iso": "Iso",
 				"left": "左",
 				"right": "右"
-			}
+			},
+			"none": "無"
 		},
 		"customScale": "自訂縮放",
 		"position": {
@@ -50,7 +52,14 @@
 		"noWebcam": "無網路攝影機",
 		"mirrorWebcam": "鏡像攝影機",
 		"reactiveWebcam": "縮放時縮小",
-		"reactiveWebcamDescription": "放大影片時鏡頭會平滑縮小，以免遮擋內容。"
+		"reactiveWebcamDescription": "放大影片時鏡頭會平滑縮小，以免遮擋內容。",
+		"help": "攝影機與螢幕的合成方式：子母畫面、垂直堆疊、雙畫面、遮罩形狀、大小與鏡像。",
+		"shapes": {
+			"rectangle": "矩形",
+			"circle": "圓形",
+			"square": "正方形",
+			"rounded": "圓角"
+		}
 	},
 	"effects": {
 		"title": "影片效果",
@@ -60,7 +69,8 @@
 		"shadow": "陰影",
 		"roundness": "圓角",
 		"padding": "內邊距",
-		"on": "開"
+		"on": "開",
+		"help": "錄製畫面的外框樣式：背景模糊、陰影、動態模糊、圓角半徑，以及影片四周的內距。"
 	},
 	"background": {
 		"title": "背景",
@@ -72,7 +82,11 @@
 		"gradientLabel": "漸層 {{index}}",
 		"colorWheel": "色輪",
 		"colorPalette": "調色盤",
-		"presets": "預設"
+		"presets": "預設",
+		"help": "選擇錄製內容背後顯示的元素：內建桌布圖片、純色、漸層，或來自磁碟的自訂圖片。",
+		"customWallpaper": "自訂桌布",
+		"imageLabel": "背景 {{index}}",
+		"colorLabel": "顏色 {{color}}"
 	},
 	"crop": {
 		"title": "裁剪",
@@ -136,8 +150,6 @@
 		"textPlaceholder": "輸入您的文字...",
 		"fontStyle": "字體樣式",
 		"selectStyle": "選擇樣式",
-		"textAnimation": "文字動畫",
-		"selectAnimation": "選擇動畫",
 		"size": "大小",
 		"customFonts": "自訂字體",
 		"textColor": "文字顏色",
@@ -169,9 +181,10 @@
 		"blurColorBlack": "黑色",
 		"blurColorWhite": "白色",
 		"blurType": "模糊類型",
-		"blurTypeBlur": "模糊",
-		"blurTypeMosaic": "馬賽克模糊",
-		"mosaicBlockSize": "馬賽克區塊大小"
+		"blurTypeBlur": "高斯",
+		"blurTypeMosaic": "馬賽克",
+		"mosaicBlockSize": "馬賽克區塊大小",
+		"type": "類型"
 	},
 	"fontStyles": {
 		"classic": "經典",
@@ -182,6 +195,17 @@
 		"simple": "簡約",
 		"modern": "現代",
 		"clean": "簡潔"
+	},
+	"textAnimation": {
+		"title": "文字動畫",
+		"selectAnimation": "選擇動畫",
+		"none": "無",
+		"fade": "淡入淡出",
+		"rise": "上升",
+		"pop": "彈出",
+		"slideLeft": "向左滑動",
+		"typewriter": "打字機",
+		"pulse": "脈動"
 	},
 	"customFont": {
 		"dialogTitle": "新增 Google 字體",
@@ -203,6 +227,7 @@
 		"errorLoadFailed": "無法載入該字體。請確認 Google Fonts URL 是否正確。"
 	},
 	"cursor": {
+		"title": "游標",
 		"theme": "游標樣式",
 		"themeDefault": "預設",
 		"show": "顯示游標",
@@ -210,13 +235,39 @@
 		"smoothing": "平滑",
 		"motionBlur": "動態模糊",
 		"clickBounce": "點擊彈跳",
-		"clipToBounds": "裁切至畫布"
+		"clipToBounds": "裁切至畫布",
+		"clipToBoundsDescription": "讓游標保持在影片畫面內。關閉後游標可超出邊緣——在縮放或平移時很有用。",
+		"help": "根據錄製的遙測資料繪製游標：主題、大小、平滑、動態模糊與點擊回彈。"
 	},
 	"language": {
 		"title": "語言"
 	},
 	"timeline": {
 		"title": "時間軸",
-		"waveform": "在剪輯軌道上顯示音訊波形"
+		"waveform": "在剪輯軌道上顯示音訊波形",
+		"help": "時間軸顯示選項，例如在修剪軌道上顯示音訊波形。"
+	},
+	"facets": {
+		"captions": "字幕",
+		"transcript": "逐字稿"
+	},
+	"panes": {
+		"help": "說明"
+	},
+	"transcript": {
+		"title": "目前的逐字稿",
+		"help": "時間軸上所有片段的合併逐字稿。對某個字或選取範圍按 Backspace / Delete 會標記為略過（紅色）。將滑鼠移到紅色片段上即可還原。",
+		"noClips": "尚無片段",
+		"noTranscript": "尚無逐字稿",
+		"whisperHint": "逐字稿使用本機 Whisper — 在您的瀏覽器中執行，資料不會離開本裝置。",
+		"transcribeNow": "立即產生逐字稿",
+		"transcribing": "轉錄中…",
+		"clipLabel": "片段 {{index}}",
+		"noClipTranscript": "此片段沒有逐字稿 — 請開啟素材卡片並重新產生。",
+		"editorAria": "{{filename}} 的逐字稿",
+		"silence": "[靜音 {{duration}} 秒]",
+		"restoreSilence": "還原靜音（{{duration}} 秒）",
+		"trimSilence": "修剪靜音（{{duration}} 秒）",
+		"restoreWord": "還原「{{word}}」"
 	}
 }

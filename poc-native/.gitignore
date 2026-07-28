@@ -1,0 +1,7 @@
+/target
+*.rgba
+*.bmp
+out-preview.png
+out.mp4
+/ffmpeg-dev
+out*.mp4

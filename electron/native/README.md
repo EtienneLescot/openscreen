@@ -64,7 +64,6 @@ Current V2 JSON shape:
   "videoWidth": 1920,
   "videoHeight": 1080,
   "fps": 60,
-  "preferSoftwareEncoder": false,
   "captureSystemAudio": false,
   "captureMic": false,
   "microphoneDeviceId": "default",
@@ -94,39 +93,12 @@ Smoke-test the helper with:
 
 ```powershell
 npm run test:wgc-helper:win
-npm run test:wgc-helper:win -- --software-encoder
-npm run test:wgc-helper:win -- --software-fallback
 npm run test:wgc-window:win
 npm run test:wgc-audio:win
 npm run test:wgc-mic:win
 npm run test:wgc-mixed-audio:win
 npm run test:wgc-webcam:win
 ```
-
-`--software-encoder` keeps testing the explicit `software-preferred` path with
-`preferSoftwareEncoder: true`. `--software-fallback` keeps
-`preferSoftwareEncoder: false` and sets
-`OPENSCREEN_WGC_TEST_INJECT_DEFAULT_SINK_WRITER_FAILURE_ONCE=1` only for the helper
-child process. At the first default/non-software `MFCreateSinkWriterFromURL` call, the
-helper returns `HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND)` (`0x80070003`) exactly once.
-The existing retry then performs the real local Microsoft software H.264 MFT registration,
-creates the real fallback sink writer, captures and encodes real frames, and must report
-`software-fallback`.
-
-For a full-application test, set the same test-only variable before launching Electron and
-remove it afterward:
-
-```powershell
-$env:OPENSCREEN_WGC_TEST_INJECT_DEFAULT_SINK_WRITER_FAILURE_ONCE = "1"
-npm run dev
-Remove-Item Env:OPENSCREEN_WGC_TEST_INJECT_DEFAULT_SINK_WRITER_FAILURE_ONCE
-```
-
-Only the exact value `1` enables this native test hook. It is not a preference or UI option,
-and it is inert when absent. This is deterministic fault injection at the original
-sink-writer failure boundary. It proves the application's automatic fallback behavior after
-that controlled failure; it does **not** claim validation on a naturally affected machine
-with a genuinely broken GPU driver or naturally missing hardware H.264 MFT.
 
 To validate a specific native webcam manually:
 
@@ -143,3 +115,9 @@ $env:OPENSCREEN_WGC_TEST_MICROPHONE_DEVICE_NAME = "Microphone (NVIDIA Broadcast)
 npm run test:wgc-mic:win
 Remove-Item Env:OPENSCREEN_WGC_TEST_MICROPHONE_DEVICE_NAME
 ```
+
+## STT helper
+
+The speech-to-text helper (`whisper-stt-server`) is built separately from the
+capture helpers. See `docs/engineering/stt-spec.md` for the architecture and
+`scripts/build-whisper-stt.sh` for the build command.

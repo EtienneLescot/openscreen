@@ -8,7 +8,8 @@
 			"title": "وضع التركيز",
 			"manual": "يدوي",
 			"auto": "تلقائي",
-			"autoDescription": "الكاميرا تتبع موضع المؤشر المسجل"
+			"autoDescription": "الكاميرا تتبع موضع المؤشر المسجل",
+			"lockedDisclaimer": "يتم التحكم به بواسطة مفتاح التركيز التلقائي العام في الخط الزمني. أوقف تشغيله لضبط وضع التركيز لكل تكبير على حدة."
 		},
 		"customScale": "تكبير مخصص",
 		"position": {
@@ -23,7 +24,8 @@
 				"iso": "متساوي القياس",
 				"left": "يسار",
 				"right": "يمين"
-			}
+			},
+			"none": "بلا"
 		}
 	},
 	"speed": {
@@ -49,7 +51,14 @@
 		"noWebcam": "بدون كاميرا",
 		"mirrorWebcam": "عكس كاميرا الويب",
 		"reactiveWebcam": "تصغير عند التكبير",
-		"reactiveWebcamDescription": "تتقلص الكاميرا بسلاسة أثناء تكبير الفيديو حتى لا تعيق الرؤية."
+		"reactiveWebcamDescription": "تتقلص الكاميرا بسلاسة أثناء تكبير الفيديو حتى لا تعيق الرؤية.",
+		"help": "طريقة دمج كاميرا الويب مع الشاشة: صورة داخل صورة، أو تكديس عمودي، أو إطار مزدوج، وشكل القناع والحجم والانعكاس.",
+		"shapes": {
+			"rectangle": "مستطيل",
+			"circle": "دائرة",
+			"square": "مربع",
+			"rounded": "زوايا مستديرة"
+		}
 	},
 	"effects": {
 		"title": "تأثيرات الفيديو",
@@ -59,7 +68,8 @@
 		"on": "تشغيل",
 		"shadow": "ظل",
 		"roundness": "الاستدارة",
-		"padding": "المسافة البادئة"
+		"padding": "المسافة البادئة",
+		"help": "تنسيق إطار التسجيل: ضبابية الخلفية، والظل، وضبابية الحركة، واستدارة الزوايا، والحشو حول الفيديو."
 	},
 	"background": {
 		"title": "الخلفية",
@@ -71,7 +81,11 @@
 		"gradientLabel": "تدرج لوني {{index}}",
 		"colorWheel": "عجلة الألوان",
 		"colorPalette": "لوحة الألوان",
-		"presets": "إعدادات مسبقة"
+		"presets": "إعدادات مسبقة",
+		"help": "اختر ما يظهر خلف التسجيل: صورة خلفية مضمّنة، أو لون خالص، أو تدرّج لوني، أو صورة خاصة بك من القرص.",
+		"customWallpaper": "خلفية مخصصة",
+		"imageLabel": "الخلفية {{index}}",
+		"colorLabel": "اللون {{color}}"
 	},
 	"crop": {
 		"title": "اقتصاص",
@@ -135,8 +149,6 @@
 		"textPlaceholder": "أدخل النص هنا...",
 		"fontStyle": "نمط الخط",
 		"selectStyle": "حدد النمط",
-		"textAnimation": "تحريك النص",
-		"selectAnimation": "حدد الحركة",
 		"size": "الحجم",
 		"customFonts": "خطوط مخصصة",
 		"textColor": "لون النص",
@@ -152,7 +164,7 @@
 		"strokeWidth": "عرض الخط: {{width}}px",
 		"arrowColor": "لون السهم",
 		"blurType": "نوع التمويه",
-		"blurTypeBlur": "تمويه",
+		"blurTypeBlur": "غاوسي",
 		"blurTypeMosaic": "فسيفساء",
 		"blurColor": "لون التمويه",
 		"blurColorWhite": "أبيض",
@@ -170,7 +182,8 @@
 		"tipShiftTabCycle": "استخدم Shift+Tab للتنقل للخلف.",
 		"invalidImageType": "نوع ملف غير صالح",
 		"imageFormatsOnly": "يرجى رفع ملف صورة JPG أو PNG أو GIF أو WebP.",
-		"imageUploadSuccess": "تم رفع الصورة بنجاح!"
+		"imageUploadSuccess": "تم رفع الصورة بنجاح!",
+		"type": "النوع"
 	},
 	"fontStyles": {
 		"classic": "كلاسيكي",
@@ -181,6 +194,17 @@
 		"simple": "بسيط",
 		"modern": "حديث",
 		"clean": "نظيف"
+	},
+	"textAnimation": {
+		"title": "تحريك النص",
+		"selectAnimation": "حدد الحركة",
+		"none": "بدون",
+		"fade": "تلاشي",
+		"rise": "ارتفاع",
+		"pop": "ظهور",
+		"slideLeft": "انزلاق لليسار",
+		"typewriter": "آلة كاتبة",
+		"pulse": "نبض"
 	},
 	"customFont": {
 		"dialogTitle": "إضافة خط Google",
@@ -202,6 +226,7 @@
 		"errorLoadFailed": "تعذر تحميل الخط. يرجى التحقق من صحة رابط خطوط Google."
 	},
 	"cursor": {
+		"title": "المؤشر",
 		"theme": "نمط المؤشر",
 		"themeDefault": "افتراضي",
 		"show": "إظهار المؤشر",
@@ -209,13 +234,39 @@
 		"smoothing": "التنعيم",
 		"motionBlur": "ضبابية الحركة",
 		"clickBounce": "ارتداد النقر",
-		"clipToBounds": "القص ضمن اللوحة"
+		"clipToBounds": "القص ضمن اللوحة",
+		"clipToBoundsDescription": "يبقي المؤشر داخل إطار الفيديو. أوقف التشغيل للسماح للمؤشر بتجاوز الحواف - مفيد عند التكبير أو التحريك.",
+		"help": "عرض المؤشر اعتمادًا على بيانات التتبع المسجّلة: السمة، والحجم، والتنعيم، وضبابية الحركة، وارتداد النقر."
 	},
 	"language": {
 		"title": "اللغة"
 	},
 	"timeline": {
 		"title": "المخطط الزمني",
-		"waveform": "عرض الموجة الصوتية على مسار القطع"
+		"waveform": "عرض الموجة الصوتية على مسار القطع",
+		"help": "خيارات عرض المخطط الزمني، مثل إظهار الموجة الصوتية على مسار القص."
+	},
+	"facets": {
+		"captions": "الترجمة",
+		"transcript": "النص"
+	},
+	"panes": {
+		"help": "مساعدة"
+	},
+	"transcript": {
+		"title": "النص الحالي",
+		"help": "نص مجمّع لكل المقاطع على المخطط الزمني. اضغط Backspace / Delete على كلمة أو تحديد لتمييزه كمتخطّى (بالأحمر). مرّر المؤشر فوق المقطع الأحمر لاستعادته.",
+		"noClips": "لا توجد مقاطع بعد",
+		"noTranscript": "لا يوجد نص بعد",
+		"whisperHint": "يستخدم التفريغ النصي Whisper محليًا — يعمل داخل متصفحك، ولا تغادر أي بيانات جهازك.",
+		"transcribeNow": "فرّغ النص الآن",
+		"transcribing": "جارٍ التفريغ…",
+		"clipLabel": "المقطع {{index}}",
+		"noClipTranscript": "لا يوجد نص لهذا المقطع — افتح بطاقة الوسيط وأعد التوليد.",
+		"editorAria": "نص {{filename}}",
+		"silence": "[صمت {{duration}} ث]",
+		"restoreSilence": "استعادة الصمت ({{duration}} ث)",
+		"trimSilence": "قص الصمت ({{duration}} ث)",
+		"restoreWord": "استعادة \"{{word}}\""
 	}
 }

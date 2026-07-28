@@ -9,7 +9,8 @@
 			"title": "포커스 모드",
 			"manual": "수동",
 			"auto": "자동",
-			"autoDescription": "녹화된 커서 위치를 따라 카메라가 이동합니다"
+			"autoDescription": "녹화된 커서 위치를 따라 카메라가 이동합니다",
+			"lockedDisclaimer": "타임라인의 전역 자동 포커스 스위치로 제어됩니다. 줌마다 포커스 모드를 설정하려면 이 옵션을 꺼주세요."
 		},
 		"threeD": {
 			"title": "3D 회전",
@@ -17,7 +18,8 @@
 				"iso": "Iso",
 				"left": "왼쪽",
 				"right": "오른쪽"
-			}
+			},
+			"none": "없음"
 		},
 		"position": {
 			"title": "포커스 위치",
@@ -49,7 +51,14 @@
 		"noWebcam": "웹캠 없음",
 		"mirrorWebcam": "웹캠 미러링",
 		"reactiveWebcam": "확대 시 축소",
-		"reactiveWebcamDescription": "확대하는 동안 카메라가 부드럽게 작아져 방해되지 않습니다."
+		"reactiveWebcamDescription": "확대하는 동안 카메라가 부드럽게 작아져 방해되지 않습니다.",
+		"help": "웹캠과 화면을 합성하는 방식: PIP, 세로 배치, 이중 프레임, 마스크 모양, 크기, 좌우 반전.",
+		"shapes": {
+			"rectangle": "직사각형",
+			"circle": "원형",
+			"square": "정사각형",
+			"rounded": "둥근 모서리"
+		}
 	},
 	"effects": {
 		"title": "비디오 효과",
@@ -59,7 +68,8 @@
 		"on": "켜기",
 		"shadow": "그림자",
 		"roundness": "모서리 둥글기",
-		"padding": "여백"
+		"padding": "여백",
+		"help": "녹화 프레임 스타일: 배경 흐림, 그림자, 모션 블러, 모서리 둥글기, 영상 주변 여백."
 	},
 	"background": {
 		"title": "배경",
@@ -71,7 +81,11 @@
 		"gradientLabel": "그라디언트 {{index}}",
 		"colorWheel": "색상 휠",
 		"colorPalette": "색상 팔레트",
-		"presets": "프리셋"
+		"presets": "프리셋",
+		"help": "녹화 뒤에 표시할 항목을 선택하세요. 기본 제공 배경 이미지, 단색, 그라데이션 또는 디스크의 사용자 이미지를 사용할 수 있습니다.",
+		"customWallpaper": "사용자 배경",
+		"imageLabel": "배경 {{index}}",
+		"colorLabel": "색상 {{color}}"
 	},
 	"crop": {
 		"title": "자르기",
@@ -150,8 +164,8 @@
 		"strokeWidth": "선 두께: {{width}}px",
 		"arrowColor": "화살표 색상",
 		"blurType": "블러 종류",
-		"blurTypeBlur": "블러",
-		"blurTypeMosaic": "모자이크 블러",
+		"blurTypeBlur": "가우시안",
+		"blurTypeMosaic": "모자이크",
 		"blurColor": "블러 색상",
 		"blurColorWhite": "흰색",
 		"blurColorBlack": "검정",
@@ -168,7 +182,8 @@
 		"tipShiftTabCycle": "Shift+Tab으로 역방향 순환할 수 있습니다.",
 		"invalidImageType": "지원하지 않는 파일 형식입니다",
 		"imageFormatsOnly": "JPG, PNG, GIF 또는 WebP 이미지 파일을 업로드해 주세요.",
-		"imageUploadSuccess": "이미지가 성공적으로 업로드되었습니다!"
+		"imageUploadSuccess": "이미지가 성공적으로 업로드되었습니다!",
+		"type": "유형"
 	},
 	"fontStyles": {
 		"classic": "클래식",
@@ -211,6 +226,7 @@
 		"errorLoadFailed": "폰트를 불러올 수 없습니다. Google Fonts URL이 올바른지 확인해 주세요."
 	},
 	"cursor": {
+		"title": "커서",
 		"theme": "커서 스타일",
 		"themeDefault": "기본",
 		"show": "커서 표시",
@@ -218,13 +234,39 @@
 		"smoothing": "부드러움",
 		"motionBlur": "모션 블러",
 		"clickBounce": "클릭 바운스",
-		"clipToBounds": "캔버스에 맞춰 자르기"
+		"clipToBounds": "캔버스에 맞춰 자르기",
+		"clipToBoundsDescription": "커서를 비디오 프레임 안에 유지합니다. 꺼두면 확대하거나 이동할 때 커서가 가장자리를 벗어날 수 있습니다.",
+		"help": "기록된 텔레메트리를 기반으로 한 커서 렌더링: 테마, 크기, 스무딩, 모션 블러, 클릭 바운스."
 	},
 	"language": {
 		"title": "언어"
 	},
 	"timeline": {
 		"title": "타임라인",
-		"waveform": "트림 트랙에 오디오 파형 표시"
+		"waveform": "트림 트랙에 오디오 파형 표시",
+		"help": "타임라인 표시 옵션(예: 트림 트랙에 오디오 파형 표시)."
+	},
+	"facets": {
+		"captions": "자막",
+		"transcript": "대본"
+	},
+	"panes": {
+		"help": "도움말"
+	},
+	"transcript": {
+		"title": "현재 전사",
+		"help": "타임라인의 모든 클립을 합친 전사입니다. 단어나 선택 영역에서 Backspace / Delete를 누르면 건너뛴 것으로 표시됩니다(빨간색). 빨간 부분에 마우스를 올리면 복원할 수 있습니다.",
+		"noClips": "아직 클립이 없습니다",
+		"noTranscript": "아직 전사가 없습니다",
+		"whisperHint": "전사는 로컬 Whisper를 사용합니다. 브라우저에서 실행되며 데이터가 기기를 벗어나지 않습니다.",
+		"transcribeNow": "지금 전사하기",
+		"transcribing": "전사 중…",
+		"clipLabel": "클립 {{index}}",
+		"noClipTranscript": "이 클립에는 전사가 없습니다. 에셋 카드를 열고 다시 생성하세요.",
+		"editorAria": "{{filename}}의 전사",
+		"silence": "[무음 {{duration}}초]",
+		"restoreSilence": "무음 복원 ({{duration}}초)",
+		"trimSilence": "무음 자르기 ({{duration}}초)",
+		"restoreWord": "\"{{word}}\" 복원"
 	}
 }

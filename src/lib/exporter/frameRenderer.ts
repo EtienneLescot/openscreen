@@ -45,11 +45,11 @@ import {
 	type MotionBlurState,
 } from "@/components/video-editor/videoPlayback/zoomTransform";
 import {
-	computeCameraFullscreenTargetRect,
+	computeCameraFullscreenRect,
 	computeCompositeLayout,
 	getWebcamLayoutPresetDefinition,
-	lerpRect,
 	reactiveWebcamScale,
+	resolveWebcamReactiveZoom,
 	type Size,
 	type StyledRenderRect,
 } from "@/lib/compositeLayout";
@@ -76,6 +76,93 @@ import {
 } from "./gradientParser";
 import { createThreeDPass, type ThreeDPass } from "./threeDPass";
 import { drawWebcamFrameImage } from "./webcamFrameDrawing";
+
+/**
+ * Ask for CPU-backed 2D canvases (`willReadFrequently`) outside Linux.
+ *
+ * The default is GPU-backed, which makes compositing cheap and reading back
+ * expensive. That is the right trade for WebCodecs, which encodes straight from
+ * the GPU texture and never descends. It is the wrong trade for the native
+ * encoder, which needs the pixels on the CPU for EVERY frame — there, the
+ * readback measured 54-87ms/frame and became ~75% of the loop.
+ *
+ * Read at runtime so one app session can measure both settings:
+ *   localStorage.setItem("openscreen.readFrequently", "1")
+ *
+ * Temporary scaffold: once the native path is the only path, this becomes a
+ * plain constant rather than a question.
+ */
+function cpuCanvasRequested(): boolean {
+	try {
+		return localStorage.getItem("openscreen.readFrequently") === "1";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Restore the pre-2026-07-17 compositor: a fresh GPU texture per frame, the mask
+ * retessellated per frame, and clearRect before every full-frame draw.
+ *
+ * Exists so the three fixes can be ATTRIBUTED. Comparing across bench sessions
+ * would not do: this machine drifts more between sessions than the fixes are
+ * worth, which is the failure mode this whole investigation keeps tripping over.
+ * With the flag, one interleaved run measures old against new on one thermal
+ * state, and the repeat proves it.
+ *
+ *   localStorage.setItem("openscreen.legacyCompositor", "1")
+ */
+function legacyCompositorRequested(): boolean {
+	try {
+		return localStorage.getItem("openscreen.legacyCompositor") === "1";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * Diagnostic: run the shadow's cache-miss path but SKIP the filter chain.
+ *
+ * A cache miss costs 16.7 ms/frame (Annex B), and that number is two different
+ * things stacked: three chained gaussians, and the full-frame Canvas2D plumbing
+ * that feeds them (a silhouette copy, a source-in fill, a filtered blit — 2 Mpx
+ * each). They do not have the same fix. A shader only helps if the gaussians are
+ * the cost; if it is the plumbing, the fix is to stop touching the whole frame.
+ *
+ * Timing the ops individually would answer nothing — Canvas2D is as lazy as the
+ * GPU, so a timer around a drawImage measures submission and bills the work to
+ * whatever syncs next (§7.4). Hence a flag and an arm PAIR instead: same path,
+ * one filter, one none, both fenced.
+ *
+ * The output is wrong on purpose (no shadow is drawn). Diagnostic only.
+ *
+ *   localStorage.setItem("openscreen.shadowNoFilter", "1")
+ */
+function shadowFilterDisabled(): boolean {
+	try {
+		return localStorage.getItem("openscreen.shadowNoFilter") === "1";
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * The recording's drop shadow, as a CSS filter chain.
+ *
+ * Three chained shadows, each blurring the alpha of the PREVIOUS stage's output
+ * (its own shadow included) — that cascade is what gives the falloff, and it is
+ * why this cannot be swapped for an SDF without changing the picture.
+ *
+ * Was duplicated verbatim on the flat and the 3D path; they must not drift.
+ */
+function shadowFilterChain(intensity: number): string {
+	const offset = 12 * intensity;
+	return (
+		`drop-shadow(0 ${offset}px ${48 * intensity}px rgba(0,0,0,${0.7 * intensity})) ` +
+		`drop-shadow(0 ${offset / 3}px ${16 * intensity}px rgba(0,0,0,${0.5 * intensity})) ` +
+		`drop-shadow(0 ${offset / 6}px ${8 * intensity}px rgba(0,0,0,${0.3 * intensity}))`
+	);
+}
 
 interface FrameRenderConfig {
 	width: number;
@@ -144,6 +231,31 @@ export class FrameRenderer {
 	private cameraContainer: Container | null = null;
 	private videoContainer: Container | null = null;
 	private videoSprite: Sprite | null = null;
+	/** Source geometry behind videoSprite's texture — see renderFrame's reuse. */
+	private videoFrameSize: { width: number; height: number } | null = null;
+	/** Shape currently tessellated into maskGraphics, so it is rebuilt only on change. */
+	private maskShape: { width: number; height: number; radius: number } | null = null;
+	/** Bench-only: undo the compositor fixes so they can be measured. */
+	private legacyCompositor = legacyCompositorRequested();
+	/** Bench-only: price the filter chain apart from the plumbing feeding it. */
+	private shadowNoFilter = shadowFilterDisabled();
+	/** Shadow filter output, keyed by the geometry it was computed for. */
+	private shadowCache: { key: string; canvas: HTMLCanvasElement } | null = null;
+	/**
+	 * How often the geometry key held, and how often it paid for the filter chain.
+	 *
+	 * The miss rate IS the Step-3 decision input (see rendering-architecture.md
+	 * §13): the cache captures the shadow's cost on still frames, and a moving
+	 * camera must miss by design. Only a count says which case a real timeline is.
+	 */
+	private shadowCacheHits = 0;
+	private shadowCacheMisses = 0;
+	/** Scratch holding videoCanvas's alpha as an opaque black shape. */
+	private shadowSilhouetteCanvas: HTMLCanvasElement | null = null;
+	/** The wallpaper, blurred once. It is a still image — see blurredBackgroundLayer. */
+	private blurredBackground: HTMLCanvasElement | null = null;
+	/** Which backgroundSprite blurredBackground was built from, so a reload invalidates it. */
+	private blurredBackgroundSource: HTMLCanvasElement | null = null;
 	private backgroundSprite: HTMLCanvasElement | null = null;
 	private maskGraphics: Graphics | null = null;
 	private blurFilter: BlurFilter | null = null;
@@ -171,10 +283,13 @@ export class FrameRenderer {
 	private zoomSpringState = createZoomSpringState();
 	private prevTargetProgress = 0;
 	private isLinux = false;
+	/** CPU-backed 2D canvases — see cpuCanvasRequested(). Fixed per instance. */
+	private cpuCanvas = false;
 
 	constructor(config: FrameRenderConfig) {
 		this.config = config;
 		this.isLinux = config.platform === "linux";
+		this.cpuCanvas = this.isLinux || cpuCanvasRequested();
 		this.animationState = {
 			scale: 1,
 			focusX: DEFAULT_FOCUS.cx,
@@ -185,6 +300,56 @@ export class FrameRenderer {
 			appliedScale: 1,
 			cameraFullscreenProgress: 0,
 		};
+	}
+
+	/**
+	 * Swaps the active crop before rendering the next frame — crop is per-clip
+	 * (see clipSchema.cropRegion), not a single value for the whole export.
+	 * `updateLayout()` (called at the top of every `renderFrame`) reads
+	 * `this.config.cropRegion` fresh each time, and the cursor overlay does
+	 * the same, so mutating it here is picked up correctly by both without
+	 * any extra cache invalidation.
+	 */
+	setCropRegion(cropRegion: CropRegion): void {
+		this.config.cropRegion = cropRegion;
+	}
+
+	/**
+	 * Reconfigure the renderer's INPUT for the next segment of a multi-asset
+	 * export (v2 segment loop). Output dimensions stay fixed for the whole
+	 * export; only the source-dependent fields change. `updateLayout()` reads
+	 * these from `this.config` fresh every frame and `renderFrame` swaps the
+	 * video texture per frame, so mutating config here is picked up with no
+	 * teardown. Virtual-time zoom/annotation state is intentionally preserved
+	 * (those effects span segments), but per-source cursor/auto-focus continuity
+	 * is reset so a new asset doesn't inherit the previous one's smoothed motion.
+	 */
+	setSource(source: {
+		videoWidth: number;
+		videoHeight: number;
+		webcamSize?: Size | null;
+		cursorRecordingData?: CursorRecordingData | null;
+		cursorScale?: number;
+		// Timeline-authored effects PROJECTED to this segment's SOURCE time — the
+		// export loop passes each frame its source timestamp, so zoom/annotation
+		// (and cursor samples) all match in one coordinate system even under speed.
+		zoomRegions?: ZoomRegion[];
+		annotationRegions?: AnnotationRegion[];
+		speedRegions?: SpeedRegion[];
+	}): void {
+		this.config.videoWidth = source.videoWidth;
+		this.config.videoHeight = source.videoHeight;
+		this.config.webcamSize = source.webcamSize ?? null;
+		this.config.cursorRecordingData = source.cursorRecordingData ?? null;
+		this.config.cursorScale = source.cursorScale ?? 0;
+		if (source.zoomRegions) this.config.zoomRegions = source.zoomRegions;
+		if (source.annotationRegions) this.config.annotationRegions = source.annotationRegions;
+		if (source.speedRegions) this.config.speedRegions = source.speedRegions;
+		this.layoutCache = null;
+		this.smoothedAutoFocus = null;
+		this.zoomSpringState = createZoomSpringState();
+		this.prevAnimationTimeMs = null;
+		resetNativeCursorMotionBlurState(this.nativeCursorMotionBlurState);
 	}
 
 	async initialize(): Promise<void> {
@@ -232,14 +397,24 @@ export class FrameRenderer {
 		this.compositeCanvas.width = this.config.width;
 		this.compositeCanvas.height = this.config.height;
 
-		// On Linux getImageData() runs frequently, so hint frequent CPU readback
+		// Hint frequent CPU readback: Linux exports via getImageData every frame,
+		// and so does the native encoder path (see cpuCanvasRequested).
 		this.compositeCtx = this.compositeCanvas.getContext("2d", {
-			willReadFrequently: this.isLinux,
+			willReadFrequently: this.cpuCanvas,
 		});
 
 		if (!this.compositeCtx) {
 			throw new Error("Failed to get 2D context for composite canvas");
 		}
+
+		// willReadFrequently is a HINT: report what Chromium actually granted, not
+		// what we asked for. An arm that silently no-ops would otherwise read as
+		// "the lever does not help" when it means "the lever was never pulled".
+		console.warn(
+			`[export perf] canvas requested willReadFrequently=${this.cpuCanvas} granted=${
+				this.compositeCtx.getContextAttributes?.()?.willReadFrequently
+			}`,
+		);
 
 		this.rasterCanvas = document.createElement("canvas");
 		this.rasterCanvas.width = this.config.width;
@@ -254,8 +429,11 @@ export class FrameRenderer {
 		this.foregroundCanvas = document.createElement("canvas");
 		this.foregroundCanvas.width = this.config.width;
 		this.foregroundCanvas.height = this.config.height;
+		// Flips WITH the composite canvas, never against it: a GPU-backed
+		// foreground drawn onto a CPU-backed composite would force its own
+		// readback on every drawImage — worse than either setting alone.
 		this.foregroundCtx = this.foregroundCanvas.getContext("2d", {
-			willReadFrequently: this.isLinux,
+			willReadFrequently: this.cpuCanvas,
 		});
 		if (!this.foregroundCtx) {
 			throw new Error("Failed to get 2D context for foreground canvas");
@@ -390,16 +568,37 @@ export class FrameRenderer {
 
 		this.currentVideoTime = timestamp / 1000000;
 
+		// Reuse the GPU texture across frames. Texture.from() allocates a new
+		// TextureSource per call (every VideoFrame is a distinct object, so nothing
+		// caches), and destroy(true) frees the GL texture behind it — an allocate +
+		// upload + free of a 1080p texture on every single frame. Swapping the
+		// resource re-uploads the pixels into the texture we already have.
+		//
+		// Only valid while the geometry is unchanged: segments can carry different
+		// source sizes, so a size change still rebuilds (and frees) the source.
+		const frameWidth = videoFrame.displayWidth;
+		const frameHeight = videoFrame.displayHeight;
+		const sizeUnchanged =
+			!this.legacyCompositor &&
+			this.videoFrameSize?.width === frameWidth &&
+			this.videoFrameSize?.height === frameHeight;
+
 		if (!this.videoSprite) {
 			const texture = Texture.from(videoFrame as unknown as TextureSourceLike);
 			this.videoSprite = new Sprite(texture);
 			this.videoContainer.addChild(this.videoSprite);
+			this.videoFrameSize = { width: frameWidth, height: frameHeight };
+		} else if (sizeUnchanged) {
+			const source = this.videoSprite.texture.source;
+			source.resource = videoFrame;
+			source.update();
 		} else {
 			// Destroy old texture before swapping to avoid a leak
 			const oldTexture = this.videoSprite.texture;
 			const newTexture = Texture.from(videoFrame as unknown as TextureSourceLike);
 			this.videoSprite.texture = newTexture;
 			oldTexture.destroy(true);
+			this.videoFrameSize = { width: frameWidth, height: frameHeight };
 		}
 
 		this.updateLayout(webcamFrame);
@@ -510,15 +709,11 @@ export class FrameRenderer {
 			const h = this.foregroundCanvas.height;
 			shadowCtx.clearRect(0, 0, w, h);
 			shadowCtx.save();
-			const intensity = this.config.shadowIntensity;
-			const baseBlur1 = 48 * intensity;
-			const baseBlur2 = 16 * intensity;
-			const baseBlur3 = 8 * intensity;
-			const baseAlpha1 = 0.7 * intensity;
-			const baseAlpha2 = 0.5 * intensity;
-			const baseAlpha3 = 0.3 * intensity;
-			const baseOffset = 12 * intensity;
-			shadowCtx.filter = `drop-shadow(0 ${baseOffset}px ${baseBlur1}px rgba(0,0,0,${baseAlpha1})) drop-shadow(0 ${baseOffset / 3}px ${baseBlur2}px rgba(0,0,0,${baseAlpha2})) drop-shadow(0 ${baseOffset / 6}px ${baseBlur3}px rgba(0,0,0,${baseAlpha3}))`;
+			// NOT cacheable, unlike the flat path: this blurs foregroundCanvas, whose
+			// alpha carries the webcam, the cursor and the annotations — it changes
+			// every frame, so there is no geometry to key on. The 3D path stays at
+			// full price until it is restructured.
+			shadowCtx.filter = shadowFilterChain(this.config.shadowIntensity);
 			shadowCtx.drawImage(this.foregroundCanvas, 0, 0, w, h);
 			shadowCtx.restore();
 			if (this.compositeCtx) {
@@ -695,10 +890,10 @@ export class FrameRenderer {
 		const croppedVideoWidth = videoWidth * (cropEndX - cropStartX);
 		const croppedVideoHeight = videoHeight * (cropEndY - cropStartY);
 
-		// Padding is a percentage (0-100), where 50% ~ 0.8 scale.
-		// Vertical stack is full-bleed, so it ignores padding.
-		const effectivePadding = this.config.webcamLayoutPreset === "vertical-stack" ? 0 : padding;
-		const paddingScale = 1.0 - (effectivePadding / 100) * 0.4;
+		// Padding is a percentage (0-100), where 50% ~ 0.8 scale. It applies to every
+		// preset — in the block layouts it insets the welded screen+camera block as
+		// one, which is the whole point of welding them (see `computeCompositeLayout`).
+		const paddingScale = 1.0 - (padding / 100) * 0.4;
 		const viewportWidth = width * paddingScale;
 		const viewportHeight = height * paddingScale;
 		const compositeLayout = computeCompositeLayout({
@@ -754,9 +949,25 @@ export class FrameRenderer {
 					? 0
 					: borderRadius * canvasScaleFactor;
 
-		this.maskGraphics.clear();
-		this.maskGraphics.roundRect(0, 0, screenRect.width, screenRect.height, scaledBorderRadius);
-		this.maskGraphics.fill({ color: 0xffffff });
+		// Retessellate only when the shape actually changes. The mask is a rounded
+		// rect: while nothing zooms or resizes it is byte-identical from frame to
+		// frame, and clear()/roundRect()/fill() rebuilds its geometry every time.
+		// A zoom easing does change it per frame — that is the case this cannot help.
+		if (
+			this.legacyCompositor ||
+			this.maskShape?.width !== screenRect.width ||
+			this.maskShape?.height !== screenRect.height ||
+			this.maskShape?.radius !== scaledBorderRadius
+		) {
+			this.maskGraphics.clear();
+			this.maskGraphics.roundRect(0, 0, screenRect.width, screenRect.height, scaledBorderRadius);
+			this.maskGraphics.fill({ color: 0xffffff });
+			this.maskShape = {
+				width: screenRect.width,
+				height: screenRect.height,
+				radius: scaledBorderRadius,
+			};
+		}
 
 		// baseOffset is the stage position of the full (uncropped) sprite's top-left, matching
 		// preview semantics, so consumers (e.g. cursor highlight) can map normalized
@@ -968,6 +1179,127 @@ export class FrameRenderer {
 
 	// applyShadowToRecording is false when the 3D pass will rotate this canvas next;
 	// the shadow is re-applied after rotation to avoid aliasing.
+	/**
+	 * The wallpaper, blurred once instead of 1418 times.
+	 *
+	 * backgroundSprite is rasterised once at load and never touched again — it is
+	 * a still image. Blurring it per frame recomputes an identical result every
+	 * time; measured at ~5 ms/frame.
+	 *
+	 * Byte-identical by construction: the original blurs while scaling to w*h, so
+	 * the blur lands in destination space. Doing that once into a w*h canvas and
+	 * blitting it 1:1 is the same operation, hoisted.
+	 *
+	 * Returns null when there is nothing to hoist (no blur), so the caller keeps
+	 * drawing the sprite directly rather than through a pointless copy.
+	 */
+	private blurredBackgroundLayer(w: number, h: number): HTMLCanvasElement | null {
+		if (!this.config.showBlur || !this.backgroundSprite || this.legacyCompositor) return null;
+		// Keyed on the sprite's identity, not just the size: loading a different
+		// wallpaper replaces the sprite, and a size-only check would keep serving
+		// the previous one's blur.
+		if (
+			this.blurredBackgroundSource === this.backgroundSprite &&
+			this.blurredBackground?.width === w &&
+			this.blurredBackground.height === h
+		) {
+			return this.blurredBackground;
+		}
+		const canvas = document.createElement("canvas");
+		canvas.width = w;
+		canvas.height = h;
+		const ctx = canvas.getContext("2d");
+		if (!ctx) return null;
+		ctx.filter = "blur(6px)"; // Canvas blur is weaker than CSS
+		ctx.drawImage(this.backgroundSprite, 0, 0, w, h);
+		ctx.filter = "none";
+		this.blurredBackground = canvas;
+		this.blurredBackgroundSource = this.backgroundSprite;
+		return canvas;
+	}
+
+	/**
+	 * Everything the shadow's shape depends on. If two frames agree here, the
+	 * filter output is identical and re-running it is pure waste.
+	 *
+	 * Taken from the world transforms rather than from the layout inputs, so a
+	 * new way to move the recording cannot silently bypass the cache and serve a
+	 * stale shadow. A zoom easing changes this every frame — by design: that case
+	 * MUST miss.
+	 */
+	private shadowGeometryKey(): string {
+		const v = this.videoContainer?.worldTransform;
+		const s = this.app?.stage?.worldTransform;
+		const m = this.maskShape;
+		return [
+			v ? `${v.a},${v.b},${v.c},${v.d},${v.tx},${v.ty}` : "-",
+			s ? `${s.a},${s.b},${s.c},${s.d},${s.tx},${s.ty}` : "-",
+			m ? `${m.width},${m.height},${m.radius}` : "-",
+			this.config.shadowIntensity,
+		].join("|");
+	}
+
+	/**
+	 * The shadow layer, rebuilt only when the geometry moves.
+	 *
+	 * drop-shadow reads SourceAlpha only, and videoCanvas's alpha is just the
+	 * masked rounded rect — so the filter blurs 2M pixels of VIDEO to compute
+	 * something that depends on nothing but the silhouette. Measured: ~30 ms per
+	 * frame, twice the cost of the entire rest of the compositor.
+	 *
+	 * So it runs against the silhouette instead, and the silhouette is taken from
+	 * videoCanvas's own alpha (source-in over black) rather than re-derived from
+	 * the layout — same pixels, same anti-aliasing, nothing to keep in sync.
+	 *
+	 * Returns the filter output, which is `silhouette OVER shadow`: the caller
+	 * draws videoCanvas on top, and it covers the silhouette exactly.
+	 */
+	private cachedShadowLayer(
+		videoCanvas: HTMLCanvasElement,
+		w: number,
+		h: number,
+	): HTMLCanvasElement | null {
+		const key = this.shadowGeometryKey();
+		if (this.shadowCache?.key === key) {
+			this.shadowCacheHits++;
+			return this.shadowCache.canvas;
+		}
+		this.shadowCacheMisses++;
+
+		if (!this.shadowSilhouetteCanvas) {
+			this.shadowSilhouetteCanvas = document.createElement("canvas");
+			this.shadowSilhouetteCanvas.width = w;
+			this.shadowSilhouetteCanvas.height = h;
+		}
+		if (!this.shadowCache) {
+			const canvas = document.createElement("canvas");
+			canvas.width = w;
+			canvas.height = h;
+			this.shadowCache = { key: "", canvas };
+		}
+		const silCtx = this.shadowSilhouetteCanvas.getContext("2d");
+		const outCtx = this.shadowCache.canvas.getContext("2d");
+		if (!silCtx || !outCtx) return null;
+
+		// Silhouette: videoCanvas's exact alpha, filled black.
+		silCtx.globalCompositeOperation = "copy";
+		silCtx.drawImage(videoCanvas, 0, 0, w, h);
+		silCtx.globalCompositeOperation = "source-in";
+		silCtx.fillStyle = "#000";
+		silCtx.fillRect(0, 0, w, h);
+		silCtx.globalCompositeOperation = "source-over";
+
+		outCtx.globalCompositeOperation = "copy";
+		// Diagnostic arm: everything but the gaussians, so the pair prices them.
+		if (!this.shadowNoFilter) outCtx.filter = shadowFilterChain(this.config.shadowIntensity);
+		outCtx.drawImage(this.shadowSilhouetteCanvas, 0, 0, w, h);
+		outCtx.filter = "none";
+		outCtx.globalCompositeOperation = "source-over";
+
+		this.shadowCache.key = key;
+		return this.shadowCache.canvas;
+	}
+
 	private compositeWithShadows(
 		webcamFrame: VideoFrame | null | undefined,
 		applyShadowToRecording: boolean,
@@ -992,24 +1324,37 @@ export class FrameRenderer {
 
 		// Background (compositeCanvas): wallpaper only. Stays flat, never touched by the
 		// 3D rotation pass, matching the preview.
-		bgCtx.clearRect(0, 0, w, h);
+		//
+		// "copy" replaces the whole destination, so the clearRect that used to
+		// precede it is redundant: the draw below covers all w*h. Two full-frame
+		// passes become one. It is only safe BECAUSE the draw covers everything —
+		// hence the else branch below still clears explicitly.
+		if (this.legacyCompositor) bgCtx.clearRect(0, 0, w, h);
 		if (this.backgroundSprite) {
-			const bgCanvas = this.backgroundSprite;
-			if (this.config.showBlur) {
-				bgCtx.save();
+			const bgCanvas = this.blurredBackgroundLayer(w, h) ?? this.backgroundSprite;
+			const stillNeedsBlur = this.config.showBlur && bgCanvas === this.backgroundSprite;
+			bgCtx.save();
+			if (!this.legacyCompositor) bgCtx.globalCompositeOperation = "copy";
+			if (stillNeedsBlur) {
 				bgCtx.filter = "blur(6px)"; // Canvas blur is weaker than CSS
-				bgCtx.drawImage(bgCanvas, 0, 0, w, h);
-				bgCtx.restore();
-			} else {
-				bgCtx.drawImage(bgCanvas, 0, 0, w, h);
 			}
+			bgCtx.drawImage(bgCanvas, 0, 0, w, h);
+			bgCtx.restore();
 		} else {
+			// Nothing is drawn, so this is the only thing dropping the previous frame.
+			bgCtx.clearRect(0, 0, w, h);
 			console.warn("[FrameRenderer] No background sprite found during compositing!");
 		}
 
 		// Foreground (transparent): recording + webcam. Shadow baked here only on the
 		// flat path; the 3D path applies it after rotation (see renderFrame).
-		fgCtx.clearRect(0, 0, w, h);
+		//
+		// Same trick as the background: both branches below draw a full w*h image,
+		// so "copy" subsumes the clear. restore() puts source-over back before the
+		// webcam is drawn on top — with "copy" still set, it would wipe the frame.
+		if (this.legacyCompositor) fgCtx.clearRect(0, 0, w, h);
+		fgCtx.save();
+		if (!this.legacyCompositor) fgCtx.globalCompositeOperation = "copy";
 		if (
 			applyShadowToRecording &&
 			this.config.showShadow &&
@@ -1017,60 +1362,52 @@ export class FrameRenderer {
 			this.shadowCanvas &&
 			this.shadowCtx
 		) {
-			const shadowCtx = this.shadowCtx;
-			shadowCtx.clearRect(0, 0, w, h);
-			shadowCtx.save();
-
-			const intensity = this.config.shadowIntensity;
-			const baseBlur1 = 48 * intensity;
-			const baseBlur2 = 16 * intensity;
-			const baseBlur3 = 8 * intensity;
-			const baseAlpha1 = 0.7 * intensity;
-			const baseAlpha2 = 0.5 * intensity;
-			const baseAlpha3 = 0.3 * intensity;
-			const baseOffset = 12 * intensity;
-
-			shadowCtx.filter = `drop-shadow(0 ${baseOffset}px ${baseBlur1}px rgba(0,0,0,${baseAlpha1})) drop-shadow(0 ${baseOffset / 3}px ${baseBlur2}px rgba(0,0,0,${baseAlpha2})) drop-shadow(0 ${baseOffset / 6}px ${baseBlur3}px rgba(0,0,0,${baseAlpha3}))`;
-			shadowCtx.drawImage(videoCanvas, 0, 0, w, h);
-			shadowCtx.restore();
-			fgCtx.drawImage(this.shadowCanvas, 0, 0, w, h);
+			const cached = this.legacyCompositor ? null : this.cachedShadowLayer(videoCanvas, w, h);
+			if (cached) {
+				// The filter ran once for this geometry; per frame this is one blit.
+				fgCtx.drawImage(cached, 0, 0, w, h);
+				fgCtx.globalCompositeOperation = "source-over";
+				fgCtx.drawImage(videoCanvas, 0, 0, w, h);
+			} else {
+				const shadowCtx = this.shadowCtx;
+				shadowCtx.clearRect(0, 0, w, h);
+				shadowCtx.save();
+				shadowCtx.filter = shadowFilterChain(this.config.shadowIntensity);
+				shadowCtx.drawImage(videoCanvas, 0, 0, w, h);
+				shadowCtx.restore();
+				fgCtx.drawImage(this.shadowCanvas, 0, 0, w, h);
+			}
 		} else {
 			fgCtx.drawImage(videoCanvas, 0, 0, w, h);
 		}
+		fgCtx.restore();
 
 		const webcamRect = this.layoutCache?.webcamRect ?? null;
 		if (webcamFrame && webcamRect) {
 			const preset = getWebcamLayoutPresetDefinition(this.config.webcamLayoutPreset);
-			const shape = webcamRect.maskShape ?? this.config.webcamMaskShape ?? "rectangle";
 			const cameraFullProgress = this.animationState.cameraFullscreenProgress;
 			let drawRect: StyledRenderRect;
 			if (cameraFullProgress > 0) {
-				// Full Camera takes over the webcam's size/position entirely, growing it to cover
-				// the whole stage (inset by a margin, aspect-preserving — see
-				// computeCameraFullscreenTargetRect). Reactive zoom is ignored for this frame (see
+				// Full Camera takes over the webcam's size/position entirely, growing it to BE
+				// the frame — no margin, no rounding, no mask left (see
+				// computeCameraFullscreenRect). Reactive zoom is ignored for this frame (see
 				// design notes 6.4): mixing "shrink for zoom" and "grow to full" in the same frame
 				// doesn't make sense.
-				const targetRect = computeCameraFullscreenTargetRect(
-					{ width: this.config.width, height: this.config.height },
+				drawRect = computeCameraFullscreenRect(
 					webcamRect,
+					{ width: this.config.width, height: this.config.height },
+					cameraFullProgress,
 				);
-				const fullRect: StyledRenderRect = {
-					x: targetRect.x,
-					y: targetRect.y,
-					width: targetRect.width,
-					height: targetRect.height,
-					borderRadius: 0,
-					maskShape: webcamRect.maskShape,
-				};
-				drawRect = lerpRect(webcamRect, fullRect, cameraFullProgress);
 			} else {
 				// Scale the PiP webcam inversely with the eased zoom, anchoring the shrink to the
 				// docked corner (bottom-right by default) like the preview, so it stays flush to the
 				// edges instead of drifting toward center.
-				const reactiveFactor =
-					this.config.webcamReactiveZoom && this.config.webcamLayoutPreset === "picture-in-picture"
-						? reactiveWebcamScale(this.animationState.appliedScale)
-						: 1;
+				const reactiveFactor = resolveWebcamReactiveZoom(
+					this.config.webcamLayoutPreset,
+					this.config.webcamReactiveZoom,
+				)
+					? reactiveWebcamScale(this.animationState.appliedScale)
+					: 1;
 				const camPos = this.config.webcamPosition;
 				const biasX = (camPos ? camPos.cx >= 0.5 : true) ? 1 : 0;
 				const biasY = (camPos ? camPos.cy >= 0.5 : true) ? 1 : 0;
@@ -1094,7 +1431,10 @@ export class FrameRenderer {
 					? webcamFrame.displayHeight
 					: webcamFrame.codedHeight) || webcamRect.height;
 			const sourceAspect = sourceWidth / sourceHeight;
-			const targetAspect = webcamRect.width / webcamRect.height;
+			// The crop follows the box actually being DRAWN, not the layout box: Full
+			// Camera walks the box from the layout's aspect ratio to the frame's, and a
+			// crop pinned to the layout's aspect would stretch the face all the way there.
+			const targetAspect = drawRect.width / drawRect.height;
 			const sourceCropWidth =
 				sourceAspect > targetAspect ? Math.round(sourceHeight * targetAspect) : sourceWidth;
 			const sourceCropHeight =
@@ -1108,14 +1448,18 @@ export class FrameRenderer {
 				drawRect.y,
 				drawRect.width,
 				drawRect.height,
-				shape,
+				drawRect.maskShape ?? this.config.webcamMaskShape ?? "rectangle",
 				drawRect.borderRadius,
 			);
-			if (preset.shadow) {
+			// The drop shadow belongs to the floating bubble, so it recedes with it: at
+			// full screen the camera is the frame and nothing may frame it. Zero blur and
+			// zero offset leave the shadow exactly under the opaque camera, invisible.
+			const shadowFade = 1 - cameraFullProgress;
+			if (preset.shadow && shadowFade > 0) {
 				fgCtx.shadowColor = preset.shadow.color;
-				fgCtx.shadowBlur = preset.shadow.blur;
-				fgCtx.shadowOffsetX = preset.shadow.offsetX;
-				fgCtx.shadowOffsetY = preset.shadow.offsetY;
+				fgCtx.shadowBlur = preset.shadow.blur * shadowFade;
+				fgCtx.shadowOffsetX = preset.shadow.offsetX * shadowFade;
+				fgCtx.shadowOffsetY = preset.shadow.offsetY * shadowFade;
 			}
 			fgCtx.fillStyle = "#000000";
 			fgCtx.fill();
@@ -1146,6 +1490,30 @@ export class FrameRenderer {
 			throw new Error("Renderer not initialized");
 		}
 		return this.compositeCanvas;
+	}
+
+	/** Shadow cache hits/misses for the frames rendered so far — see the fields. */
+	shadowCacheStats(): { hits: number; misses: number } {
+		return { hits: this.shadowCacheHits, misses: this.shadowCacheMisses };
+	}
+
+	/**
+	 * Bench-only sync point — gate G0, docs/architecture/rendering-architecture.md §7.1.
+	 *
+	 * Draw calls queue GPU work; the cost lands on whichever operation first needs
+	 * the pixels, which today is the encoder — so the compositor's execution is
+	 * billed to `encodeWait`. Forcing execution HERE moves that cost into the
+	 * caller's `fence` timer and the stage table finally says where the time goes.
+	 *
+	 * gl.finish() drains the Pixi context. Canvas2D has no finish(): the 1×1
+	 * getImageData is the equivalent — it forces the pending raster work of the
+	 * whole surface chain (pixi canvas → shadow/foreground → composite) to
+	 * complete, while transferring a single pixel.
+	 */
+	finishGpuWork(): void {
+		const gl = (this.app?.renderer as unknown as { gl?: WebGLRenderingContext } | null)?.gl;
+		gl?.finish();
+		this.compositeCtx?.getImageData(0, 0, 1, 1);
 	}
 
 	destroy(): void {

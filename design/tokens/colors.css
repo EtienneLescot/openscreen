@@ -1,0 +1,112 @@
+/* ============================================================
+   OpenScreen — Color tokens
+   Base palette (shadcn "new-york", stone base) + signature
+   OpenScreen green. Values lifted verbatim from src/index.css.
+   OpenScreen is DARK-FIRST: the recorder HUD, source selector,
+   and video-editor studio all run on near-black surfaces. The
+   light theme exists (shadcn :root) but is rarely the product.
+   ============================================================ */
+
+:root {
+	/* ---- Signature brand green -------------------------------- */
+	/* The one saturated accent in the whole product: record CTAs,
+	   active toggles, slider fills, selection rings, progress. */
+	--brand-green: #34b27b;          /* primary accent            */
+	--brand-green-hover: #2d9e6c;    /* button hover              */
+	--brand-green-active: #27885c;   /* button press              */
+	--brand-green-ring: rgba(52, 178, 123, 0.5);  /* focus ring   */
+	--brand-green-glow: rgba(74, 222, 128, 0.4);  /* active drop-shadow (green-400) */
+	--brand-green-tint: rgba(52, 178, 123, 0.13); /* selected surface wash */
+
+	/* ---- Recording state colors ------------------------------ */
+	--rec-red: #ef4444;       /* recording (red-500)              */
+	--rec-red-text: #f87171;  /* recording label (red-400)        */
+	--rec-amber: #f59e0b;     /* paused (amber-500)               */
+	--rec-amber-text: #fbbf24;/* paused label (amber-400)         */
+
+	/* ---- shadcn base scale (HSL channels, light theme) -------- */
+	--background: 0 0% 100%;
+	--foreground: 20 14.3% 4.1%;
+	--card: 0 0% 100%;
+	--card-foreground: 20 14.3% 4.1%;
+	--popover: 0 0% 100%;
+	--popover-foreground: 20 14.3% 4.1%;
+	--primary: 24 9.8% 10%;
+	--primary-foreground: 60 9.1% 97.8%;
+	--secondary: 60 4.8% 95.9%;
+	--secondary-foreground: 24 9.8% 10%;
+	--muted: 60 4.8% 95.9%;
+	--muted-foreground: 25 5.3% 44.7%;
+	--accent: 60 4.8% 95.9%;
+	--accent-foreground: 24 9.8% 10%;
+	--destructive: 0 84.2% 60.2%;
+	--destructive-foreground: 60 9.1% 97.8%;
+	--border: 20 5.9% 90%;
+	--input: 20 5.9% 90%;
+	--ring: 20 14.3% 4.1%;
+	--radius: 0.5rem;
+
+	/* ---- Editor / studio dark shell surfaces ----------------- */
+	/* The near-black canvas the whole app sits on. Not pure #000
+	   — a hair of warmth toward blue-black. */
+	--shell-0: #050606;   /* deepest workspace gradient end       */
+	--shell-1: #07080a;   /* HUD bar / floating chrome            */
+	--shell-2: #08090b;   /* workspace top                        */
+	--shell-3: #090a0c;   /* editor panels base                   */
+	--shell-4: #09090b;   /* empty-state / editor canvas          */
+	--shell-5: #0b0c10;   /* raised popovers (device selector)    */
+
+	/* Hairline strokes & fills used pervasively on the dark shell.
+	   Everything is white-at-low-alpha, never a solid gray line. */
+	--line-subtle: rgba(255, 255, 255, 0.055);
+	--line: rgba(255, 255, 255, 0.075);
+	--line-strong: rgba(255, 255, 255, 0.10);
+	--fill-subtle: rgba(255, 255, 255, 0.032);
+	--fill: rgba(255, 255, 255, 0.045);
+	--fill-hover: rgba(255, 255, 255, 0.075);
+
+	/* Text ramp on dark (zinc/slate mix used across the app). */
+	--text-hi: #ffffff;                    /* headings, active     */
+	--text-1: #e4e4e7;                     /* body (zinc-200)      */
+	--text-2: #d9e2ee;                     /* inspector body       */
+	--text-3: #a1a1aa;                     /* secondary (zinc-400) */
+	--text-4: rgba(255, 255, 255, 0.6);    /* labels               */
+	--text-5: rgba(255, 255, 255, 0.4);    /* disabled/idle icons  */
+	--text-slate-500: #64748b;             /* empty-state hints    */
+}
+
+/* ---- shadcn dark theme (the product's default look) --------- */
+.dark {
+	--background: 20 14.3% 4.1%;
+	--foreground: 60 9.1% 97.8%;
+	--card: 20 14.3% 4.1%;
+	--card-foreground: 60 9.1% 97.8%;
+	--popover: 20 14.3% 4.1%;
+	--popover-foreground: 60 9.1% 97.8%;
+	--primary: 60 9.1% 97.8%;
+	--primary-foreground: 24 9.8% 10%;
+	--secondary: 12 6.5% 15.1%;
+	--secondary-foreground: 60 9.1% 97.8%;
+	--muted: 12 6.5% 15.1%;
+	--muted-foreground: 24 5.4% 63.9%;
+	--accent: 12 6.5% 15.1%;
+	--accent-foreground: 60 9.1% 97.8%;
+	--destructive: 0 62.8% 30.6%;
+	--destructive-foreground: 60 9.1% 97.8%;
+	--border: 12 6.5% 15.1%;
+	--input: 12 6.5% 15.1%;
+	--ring: 24 5.7% 82.9%;
+}
+
+/* ---- Semantic aliases (prefer these in components) ---------- */
+:root {
+	--color-bg: hsl(var(--background));
+	--color-fg: hsl(var(--foreground));
+	--surface-card: hsl(var(--card));
+	--surface-popover: hsl(var(--popover));
+	--text-body: hsl(var(--foreground));
+	--text-muted: hsl(var(--muted-foreground));
+	--border-default: hsl(var(--border));
+	--focus-ring: var(--brand-green-ring);
+	--accent-primary: var(--brand-green);
+}

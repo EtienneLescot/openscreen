@@ -20,7 +20,11 @@ import {
 } from "./globalShortcut";
 import { mainT, setMainLocale } from "./i18n";
 import { getSelectedDesktopSource, registerIpcHandlers } from "./ipc/handlers";
+import { installMainProcessErrorGuards } from "./main-process-errors";
+import { registerFfmpegExportIpc } from "./media/ffmpegExportIpc";
+import { cancelAllExports } from "./media/ffmpegExportService";
 import { acquireStableInstanceLock } from "./singleInstanceLock";
+import { registerSttIpc } from "./stt";
 import {
 	createCountdownOverlayWindow,
 	createEditorWindow,
@@ -54,6 +58,8 @@ if (process.platform === "linux") {
 		app.commandLine.appendSwitch("disable-features", "Vulkan");
 	}
 }
+
+installMainProcessErrorGuards();
 
 export const RECORDINGS_DIR = path.join(app.getPath("userData"), "recordings");
 
@@ -501,6 +507,9 @@ app.on("activate", () => {
 app.on("will-quit", () => {
 	unregisterAllGlobalShortcuts();
 	stableInstanceLock?.release();
+	// Kill any ffmpeg still encoding, or quitting mid-export leaves it orphaned
+	// holding the output file. Fire-and-forget: will-quit cannot await.
+	void cancelAllExports();
 });
 
 const appReady = hasSingleInstanceLock ? app.whenReady() : null;
@@ -547,6 +556,14 @@ appReady?.then(async () => {
 	session.defaultSession.setDisplayMediaRequestHandler(
 		(request, callback) => {
 			const source = getSelectedDesktopSource();
+			// ponytail: diagnostic for the 0-byte screen-recording bug. Log what
+			// we're handing to the renderer so we can see if the source is stale
+			// or the handler is returning an empty payload.
+			console.info(
+				`[display-media] videoRequested=${request.videoRequested} ` +
+					`audioRequested=${request.audioRequested} ` +
+					`source=${source ? `${source.id} (${source.name})` : "(none)"}`,
+			);
 			if (!request.videoRequested || !source) {
 				callback({});
 				return;
@@ -559,6 +576,22 @@ appReady?.then(async () => {
 		},
 		{ useSystemPicker: false },
 	);
+
+	// ponytail: forward renderer console.warn/error to main-process stdout so
+	// recorder diagnostics (which fire in the renderer) show up next to the
+	// main-process logs in `npm run dev` output. Without this, the
+	// `[recorder:...]` lines from recorderHandle.ts are only visible in
+	// DevTools. One-time wire; no per-message cost beyond a single IPC hop.
+	const logChannels = ["log", "warn", "error"] as const;
+	for (const channel of logChannels) {
+		ipcMain.on(`renderer-console-${channel}`, (_event, ...args) => {
+			const text = args
+				.map((arg) => (typeof arg === "string" ? arg : JSON.stringify(arg)))
+				.join(" ");
+			const stream = channel === "error" ? process.stderr : process.stdout;
+			stream.write(`[renderer:${channel}] ${text}\n`);
+		});
+	}
 
 	// Request mic permission now. Screen Recording is requested lazily from the
 	// source-picker action so its prompt isn't hidden behind the selector window.
@@ -598,6 +631,7 @@ appReady?.then(async () => {
 		showMainWindow();
 	}
 
+	registerFfmpegExportIpc();
 	registerIpcHandlers(
 		createEditorWindowWrapper,
 		createSourceSelectorWindowWrapper,
@@ -618,7 +652,24 @@ appReady?.then(async () => {
 		switchToHudWrapper,
 	);
 
+	// Native STT (whisper.cpp + forced alignment) — single instance per app.
+	registerSttIpc(ipcMain);
+
 	await loadAndRegisterGlobalShortcut(showMainWindow);
+
+	// --bench=<query>: run the export bench instead of the app. Opens the real
+	// editor window (same webPreferences, same preload) pointed at the bench
+	// entry, and quits when it reports back. See src/bench/runBench.ts.
+	const benchArg = process.argv.find((a) => a.startsWith("--bench="));
+	if (benchArg) {
+		ipcMain.handle("bench:finished", () => {
+			// Let the reply reach the renderer before the process goes away.
+			setTimeout(() => app.exit(0), 100);
+		});
+		const query = Object.fromEntries(new URLSearchParams(benchArg.slice("--bench=".length)));
+		mainWindow = createEditorWindow({ ...query, windowType: "bench" });
+		return;
+	}
 
 	createWindow();
 });

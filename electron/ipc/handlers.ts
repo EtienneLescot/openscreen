@@ -35,9 +35,27 @@ import type {
 	ProjectFileResult,
 	ProjectPathResult,
 } from "../../src/native/contracts";
+import {
+	clearDefaultChatHistory,
+	compactSessionNow,
+	createSession,
+	deleteSession,
+	getDefaultChatHistory,
+	getSessionContextUsage,
+	listSessions,
+	renameSession,
+	rewindToMessage,
+	runChat,
+	runChatDefault,
+	runTimelineOperation,
+	selectSession,
+} from "../ai-edition/chat-service";
+import { DocumentService } from "../ai-edition/document-service";
+import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
 import { RECORDINGS_DIR } from "../main";
+import { findMediaLinksByFingerprint, registerMediaLinks } from "../media/mediaLinksRegistry";
 import { createCursorRecordingSession } from "../native-bridge/cursor/recording/factory";
 import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
@@ -350,6 +368,8 @@ type AttachNativeMacWebcamRecordingInput = {
 	recordingId?: number;
 	webcam?: RecordedVideoAssetInput;
 	cursorCaptureMode?: CursorCaptureMode;
+	/** See {@link ProjectMedia.webcamOffsetMs}. */
+	webcamOffsetMs?: number;
 };
 
 let selectedSource: SelectedSource | null = null;
@@ -357,6 +377,30 @@ let selectedDesktopSource: DesktopCapturerSource | null = null;
 let lastEnumeratedSources = new Map<string, DesktopCapturerSource>();
 let currentProjectPath: string | null = null;
 let currentRecordingSession: RecordingSession | null = null;
+
+// single source of truth for the mic/camera/system-audio/cursor
+// choices a user makes in the editor's Rec-mode stage, so the HUD window's
+// useScreenRecorder (a separate renderer, own process, own React tree) picks
+// up those choices instead of silently reverting to its own defaults when
+// startNewRecording() switches windows. Mirrors the selectedSource pattern
+// above (in-memory, broadcast on change) rather than persisting to disk —
+// this is a live session preference, not project content.
+export interface RecordingPrefs {
+	micEnabled: boolean;
+	micDeviceId: string | null;
+	camEnabled: boolean;
+	camDeviceId: string | null;
+	systemAudioEnabled: boolean;
+	cursorCaptureMode: CursorCaptureMode;
+}
+let recordingPrefs: RecordingPrefs = {
+	micEnabled: false,
+	micDeviceId: null,
+	camEnabled: false,
+	camDeviceId: null,
+	systemAudioEnabled: false,
+	cursorCaptureMode: "editable-overlay",
+};
 
 // Cached source from the user's pick. Used by setDisplayMediaRequestHandler in main.ts for cursor-free capture.
 export function getSelectedDesktopSource(): DesktopCapturerSource | null {
@@ -492,8 +536,7 @@ function normalizeCursorAsset(asset: unknown): NativeCursorAsset | null {
 	};
 }
 
-async function readCursorRecordingFile(targetVideoPath: string): Promise<CursorRecordingData> {
-	const telemetryPath = `${targetVideoPath}.cursor.json`;
+async function readCursorRecordingFileAt(telemetryPath: string): Promise<CursorRecordingData> {
 	try {
 		const content = await fs.readFile(telemetryPath, "utf-8");
 		const parsed = JSON.parse(content);
@@ -536,6 +579,40 @@ async function readCursorRecordingFile(targetVideoPath: string): Promise<CursorR
 		console.error("Failed to load cursor telemetry:", error);
 		throw error;
 	}
+}
+
+async function fileExists(filePath: string): Promise<boolean> {
+	try {
+		await fs.access(filePath, fsConstants.F_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+// P4 — the sidecar convention (`<videoPath>.cursor.json`) only holds while the
+// video stays exactly where it was recorded. If it's missing (file moved,
+// renamed, or imported from elsewhere), fall back to the fingerprint registry
+// (electron/media/mediaLinksRegistry.ts) to re-find the same telemetry file.
+async function readCursorRecordingFile(targetVideoPath: string): Promise<CursorRecordingData> {
+	const directPath = `${targetVideoPath}.cursor.json`;
+	if (await fileExists(directPath)) {
+		return readCursorRecordingFileAt(directPath);
+	}
+	try {
+		const links = await findMediaLinksByFingerprint(RECORDINGS_DIR, targetVideoPath);
+		if (links?.cursorTelemetryPath) {
+			return readCursorRecordingFileAt(links.cursorTelemetryPath);
+		}
+	} catch (error) {
+		console.warn("[media-links] fingerprint lookup failed for cursor telemetry:", error);
+	}
+	return {
+		version: CURSOR_TELEMETRY_VERSION,
+		provider: "none",
+		samples: [],
+		assets: [],
+	};
 }
 
 async function readCursorTelemetryFile(targetVideoPath: string) {
@@ -838,6 +915,37 @@ async function writePendingCursorTelemetry(videoPath: string) {
 		await fs.writeFile(telemetryPath, JSON.stringify(pendingCursorRecordingData, null, 2), "utf-8");
 	}
 	pendingCursorRecordingData = null;
+}
+
+// P4 — proactively seeds the media-links registry for a fresh recording so
+// its camera/cursor-telemetry links can still be found later even if the
+// screen video is moved, renamed, or imported into a different project.
+// Best-effort: a registry write hiccup must never fail the recording flow.
+async function registerRecordingMediaLinks(
+	screenVideoPath: string,
+	options: {
+		webcamVideoPath?: string;
+		webcamOffsetMs?: number;
+		cursorCaptureMode?: CursorCaptureMode;
+	},
+) {
+	try {
+		const cursorTelemetryPath = `${screenVideoPath}.cursor.json`;
+		const hasCursorTelemetry = await fs
+			.access(cursorTelemetryPath, fsConstants.F_OK)
+			.then(() => true)
+			.catch(() => false);
+		await registerMediaLinks(RECORDINGS_DIR, screenVideoPath, {
+			...(options.webcamVideoPath ? { webcamVideoPath: options.webcamVideoPath } : {}),
+			...(options.webcamVideoPath && Number.isFinite(options.webcamOffsetMs)
+				? { webcamOffsetMs: options.webcamOffsetMs }
+				: {}),
+			...(hasCursorTelemetry ? { cursorTelemetryPath } : {}),
+			...(options.cursorCaptureMode ? { cursorCaptureMode: options.cursorCaptureMode } : {}),
+		});
+	} catch (error) {
+		console.warn("[media-links] failed to register recording links:", error);
+	}
 }
 
 function shiftPendingCursorTelemetry(offsetMs: number) {
@@ -1295,6 +1403,69 @@ async function loadRecordedSessionForVideoPath(
 	}
 }
 
+// P4 — resolves the camera (and cursor-telemetry path, though callers that
+// only care about the camera can ignore it) for a screen-recording video,
+// trying the cheap path-adjacency sidecar first (handles "just recorded" and
+// pre-existing recordings) and falling back to the fingerprint registry
+// (handles the file having been moved/renamed/imported from elsewhere).
+// `videoPath` must already be normalized + approved by the caller.
+async function resolveMediaLinksForVideo(videoPath: string): Promise<{
+	webcamVideoPath?: string;
+	webcamOffsetMs?: number;
+	cursorTelemetryPath?: string;
+	resolvedVia: "sidecar" | "fingerprint" | "none";
+}> {
+	const session = await loadRecordedSessionForVideoPath(videoPath);
+	const cursorTelemetryPath = `${videoPath}.cursor.json`;
+	const hasCursorTelemetry = await fs
+		.access(cursorTelemetryPath, fsConstants.F_OK)
+		.then(() => true)
+		.catch(() => false);
+
+	if (session?.webcamVideoPath || hasCursorTelemetry) {
+		// Opportunistic backfill so the link survives a later move even if this
+		// recording predates the registry, or if its sidecar doesn't travel with it.
+		await registerMediaLinks(RECORDINGS_DIR, videoPath, {
+			...(session?.webcamVideoPath ? { webcamVideoPath: session.webcamVideoPath } : {}),
+			...(session?.webcamVideoPath && Number.isFinite(session.webcamOffsetMs)
+				? { webcamOffsetMs: session.webcamOffsetMs }
+				: {}),
+			...(hasCursorTelemetry ? { cursorTelemetryPath } : {}),
+		}).catch((error) => console.warn("[media-links] backfill failed:", error));
+
+		return {
+			...(session?.webcamVideoPath
+				? {
+						webcamVideoPath: session.webcamVideoPath,
+						webcamOffsetMs: session.webcamOffsetMs ?? 0,
+					}
+				: {}),
+			...(hasCursorTelemetry ? { cursorTelemetryPath } : {}),
+			resolvedVia: "sidecar",
+		};
+	}
+
+	try {
+		const links = await findMediaLinksByFingerprint(RECORDINGS_DIR, videoPath);
+		if (links?.webcamVideoPath || links?.cursorTelemetryPath) {
+			let webcamVideoPath = links.webcamVideoPath;
+			if (webcamVideoPath && !isPathAllowed(webcamVideoPath)) {
+				webcamVideoPath =
+					(await approveReadableVideoPath(webcamVideoPath, [RECORDINGS_DIR])) ?? undefined;
+			}
+			return {
+				...(webcamVideoPath ? { webcamVideoPath, webcamOffsetMs: links.webcamOffsetMs ?? 0 } : {}),
+				...(links.cursorTelemetryPath ? { cursorTelemetryPath: links.cursorTelemetryPath } : {}),
+				resolvedVia: "fingerprint",
+			};
+		}
+	} catch (error) {
+		console.warn("[media-links] fingerprint lookup failed:", error);
+	}
+
+	return { resolvedVia: "none" };
+}
+
 export function registerIpcHandlers(
 	createEditorWindow: () => void,
 	createSourceSelectorWindow: () => BrowserWindow,
@@ -1389,6 +1560,19 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("get-selected-source", () => {
 		return selectedSource;
+	});
+
+	ipcMain.handle("get-recording-prefs", () => {
+		return recordingPrefs;
+	});
+
+	ipcMain.handle("set-recording-prefs", (_, prefs: Partial<RecordingPrefs>) => {
+		recordingPrefs = { ...recordingPrefs, ...prefs };
+		const mainWin = getMainWindow();
+		if (mainWin && !mainWin.isDestroyed()) {
+			mainWin.webContents.send("recording-prefs-changed", recordingPrefs);
+		}
+		return recordingPrefs;
 	});
 
 	ipcMain.handle("request-camera-access", async () => {
@@ -1525,6 +1709,15 @@ export function registerIpcHandlers(
 
 	ipcMain.handle("start-new-recording", () => {
 		_switchToHud?.();
+		const hudWindow = getMainWindow();
+		if (hudWindow && !hudWindow.isDestroyed()) {
+			const sendAutoStart = () => hudWindow.webContents.send("hud-auto-start-recording");
+			if (hudWindow.webContents.isLoading()) {
+				hudWindow.webContents.once("did-finish-load", sendAutoStart);
+			} else {
+				sendAutoStart();
+			}
+		}
 		return { success: true };
 	});
 
@@ -2088,6 +2281,7 @@ export function registerIpcHandlers(
 				`${path.parse(screenVideoPath).name}${RECORDING_SESSION_SUFFIX}`,
 			);
 			await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
+			await registerRecordingMediaLinks(screenVideoPath, { webcamVideoPath, cursorCaptureMode });
 
 			return {
 				success: true,
@@ -2174,6 +2368,7 @@ export function registerIpcHandlers(
 				`${path.parse(screenVideoPath).name}${RECORDING_SESSION_SUFFIX}`,
 			);
 			await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
+			await registerRecordingMediaLinks(screenVideoPath, { cursorCaptureMode });
 
 			return {
 				success: true,
@@ -2233,10 +2428,14 @@ export function registerIpcHandlers(
 						? payload.recordingId
 						: Date.now();
 				const cursorCaptureMode = normalizeCursorCaptureMode(payload.cursorCaptureMode);
+				const webcamOffsetMs = Number.isFinite(payload.webcamOffsetMs)
+					? payload.webcamOffsetMs
+					: undefined;
 				const session: RecordingSession = {
 					screenVideoPath,
 					webcamVideoPath,
 					createdAt,
+					...(webcamOffsetMs !== undefined ? { webcamOffsetMs } : {}),
 					...(cursorCaptureMode ? { cursorCaptureMode } : {}),
 				};
 				setCurrentRecordingSessionState(session);
@@ -2247,6 +2446,11 @@ export function registerIpcHandlers(
 					`${path.parse(screenVideoPath).name}${RECORDING_SESSION_SUFFIX}`,
 				);
 				await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
+				await registerRecordingMediaLinks(screenVideoPath, {
+					webcamVideoPath,
+					webcamOffsetMs,
+					cursorCaptureMode,
+				});
 
 				return {
 					success: true,
@@ -2308,6 +2512,36 @@ export function registerIpcHandlers(
 			);
 		}
 
+		// MediaRecorder occasionally produces a 0-byte file on Windows
+		// when the display stream is captured but no frames are produced (the
+		// streaming WriteStream was opened but never received any chunks). Detect
+		// the bad file here so the recording fails loudly instead of opening the
+		// editor on a file the <video> element can't decode. The WebM EBML header
+		// alone is ~33 bytes; 1KB rules out a header-only file with no frames.
+		const MIN_VALID_BYTES = 1024;
+		try {
+			const screenStat = await fs.stat(screenVideoPath);
+			if (screenStat.size < MIN_VALID_BYTES) {
+				await fs.unlink(screenVideoPath).catch(() => undefined);
+				if (webcamVideoPath) {
+					await fs.unlink(webcamVideoPath).catch(() => undefined);
+				}
+				return {
+					success: false,
+					message: `Screen recording is empty (${screenStat.size} bytes). The screen capture did not produce any frames — this can happen on Windows when the display source changes during recording. Try recording again.`,
+				};
+			}
+		} catch (statError) {
+			// file missing is fatal; any other stat error is non-fatal, the
+			// editor will surface the load error on its own.
+			if ((statError as NodeJS.ErrnoException).code === "ENOENT") {
+				return {
+					success: false,
+					message: "Screen recording file is missing on disk.",
+				};
+			}
+		}
+
 		// Streamed files lack the WebM Duration header (renderer no longer holds the
 		// blob), so patch on disk for the editor's seek bar and timeline. Best-effort,
 		// independent per file, so they run together.
@@ -2322,11 +2556,16 @@ export function registerIpcHandlers(
 			await Promise.all(patches);
 		}
 
+		const webcamOffsetMs =
+			webcamVideoPath && Number.isFinite(payload.webcamOffsetMs)
+				? payload.webcamOffsetMs
+				: undefined;
 		const session: RecordingSession = webcamVideoPath
 			? {
 					screenVideoPath,
 					webcamVideoPath,
 					createdAt,
+					...(webcamOffsetMs !== undefined ? { webcamOffsetMs } : {}),
 					...(cursorCaptureMode ? { cursorCaptureMode } : {}),
 				}
 			: { screenVideoPath, createdAt, ...(cursorCaptureMode ? { cursorCaptureMode } : {}) };
@@ -2340,6 +2579,11 @@ export function registerIpcHandlers(
 			`${path.parse(payload.screen.fileName).name}${RECORDING_SESSION_SUFFIX}`,
 		);
 		await fs.writeFile(sessionManifestPath, JSON.stringify(session, null, 2), "utf-8");
+		await registerRecordingMediaLinks(screenVideoPath, {
+			webcamVideoPath,
+			webcamOffsetMs,
+			cursorCaptureMode,
+		});
 
 		return {
 			success: true,
@@ -2786,9 +3030,19 @@ export function registerIpcHandlers(
 
 	async function loadProjectFile(projectFolder?: string): Promise<ProjectFileResult> {
 		try {
-			// Prefer the user's last opened-project folder if it still exists, else
-			// RECORDINGS_DIR. Validate here because the renderer can't stat the filesystem.
+			// Default to the projects directory, where the editor actually stores
+			// openable project files (one `.openscreen` per project). Prefer the user's
+			// last opened-project folder if given and still valid; only fall back to
+			// RECORDINGS_DIR if the projects dir doesn't exist yet (fresh install).
+			// Validate here because the renderer can't stat the filesystem.
+			const projectsDir = path.join(app.getPath("userData"), "projects");
 			let defaultDir = RECORDINGS_DIR;
+			try {
+				const stats = await fs.stat(projectsDir);
+				if (stats.isDirectory()) defaultDir = projectsDir;
+			} catch {
+				// projects dir not created yet — keep RECORDINGS_DIR fallback.
+			}
 			if (projectFolder) {
 				try {
 					const stats = await fs.stat(projectFolder);
@@ -2799,7 +3053,7 @@ export function registerIpcHandlers(
 					// Stat can fail if the folder was moved/deleted (expected) or on a
 					// permission error (worth surfacing). We fall back either way, but log it.
 					console.warn(
-						`Could not access remembered project folder "${projectFolder}", falling back to RECORDINGS_DIR:`,
+						`Could not access remembered project folder "${projectFolder}", falling back to default:`,
 						err,
 					);
 				}
@@ -2811,7 +3065,9 @@ export function registerIpcHandlers(
 					filters: [
 						{
 							name: mainT("dialogs", "fileDialogs.openscreenProject"),
-							extensions: [PROJECT_FILE_EXTENSION],
+							// All projects are `.openscreen`; `.axcut` is kept only so files
+							// written by older builds (pre-migration) still show up.
+							extensions: [PROJECT_FILE_EXTENSION, "axcut"],
 						},
 						{ name: "JSON", extensions: ["json"] },
 						{ name: mainT("dialogs", "fileDialogs.allFiles"), extensions: ["*"] },
@@ -2936,6 +3192,43 @@ export function registerIpcHandlers(
 			? { success: true, session: currentRecordingSession }
 			: { success: false };
 	});
+
+	// returns the webcam path (if any) for a given screen video by
+	// reading its sibling session.json — drives the cameraTrack auto-link on
+	// `addAsset` in the new editor's project store.
+	ipcMain.handle(
+		"find-recording-camera",
+		async (
+			_event,
+			videoPath: string,
+		): Promise<{
+			success: boolean;
+			webcamVideoPath?: string;
+			offsetMs?: number;
+			error?: string;
+		}> => {
+			try {
+				const normalized = normalizeVideoSourcePath(videoPath);
+				if (!normalized || !isPathAllowed(normalized)) {
+					return { success: false, error: "Video path has not been approved" };
+				}
+				const resolution = await resolveMediaLinksForVideo(normalized);
+				if (!resolution.webcamVideoPath) {
+					return { success: false, error: "No camera attached to this recording" };
+				}
+				return {
+					success: true,
+					webcamVideoPath: resolution.webcamVideoPath,
+					offsetMs: resolution.webcamOffsetMs ?? 0,
+				};
+			} catch (err) {
+				return {
+					success: false,
+					error: err instanceof Error ? err.message : String(err),
+				};
+			}
+		},
+	);
 
 	async function setCurrentVideoPath(path: string): Promise<ProjectPathResult> {
 		const normalizedPath = normalizeVideoSourcePath(path);
@@ -3066,5 +3359,61 @@ export function registerIpcHandlers(
 			normalizeVideoSourcePath(videoPath ?? currentVideoPath),
 		loadCursorRecordingData: readCursorRecordingFile,
 		loadCursorTelemetry: readCursorTelemetryFile,
+		// compositor view's createView needs the renderer-owning
+		// BrowserWindow's native handle (HWND on Windows, NSView* on macOS).
+		// Same ownership rules as desktopCapturer: `BrowserWindow.fromWebContents`
+		// gives us the window that hosts this sender; `getNativeWindowHandle`
+		// is the platform-native parent handle the D3D11 addon parents its
+		// child window to.
+		getNativeWindowHandle: (sender) => {
+			const window = BrowserWindow.fromWebContents(sender);
+			if (!window || window.isDestroyed()) {
+				return null;
+			}
+			try {
+				return window.getNativeWindowHandle();
+			} catch {
+				return null;
+			}
+		},
+		getAiEditionDocuments: () =>
+			new DocumentService(path.join(app.getPath("userData"), "projects")),
+		getAiEditionLlmConfig: () => new LlmConfigStore(app.getPath("userData")),
+		runAiEditionChat: (projectId, sessionId, message, document, sink) =>
+			runChat(
+				projectId,
+				sessionId,
+				message,
+				new LlmConfigStore(app.getPath("userData")),
+				document,
+				sink,
+			),
+		undoAiEditionToolBatch: (_projectId, _sessionId) => ({
+			success: false,
+			error: "Per-tool-batch undo retired in favor of per-message rewind.",
+		}),
+		rewindToMessage: (projectId, sessionId, messageId) =>
+			rewindToMessage(projectId, sessionId, messageId),
+		compactNow: (projectId, sessionId) =>
+			compactSessionNow(projectId, sessionId, new LlmConfigStore(app.getPath("userData"))),
+		runTimelineOperation: (projectId, sessionId, op, conversationMessage) =>
+			runTimelineOperation(
+				projectId,
+				sessionId,
+				op,
+				conversationMessage,
+				new DocumentService(path.join(app.getPath("userData"), "projects")),
+			),
+		getContextUsage: getSessionContextUsage,
+		runAiEditionChatDefault: (projectId, message, sink) =>
+			runChatDefault(projectId, message, new LlmConfigStore(app.getPath("userData")), sink),
+		getAiEditionChatHistoryDefault: (projectId) => getDefaultChatHistory(projectId),
+		clearAiEditionChatHistoryDefault: (projectId) => clearDefaultChatHistory(projectId),
+		listAiEditionChatSessions: (projectId) => listSessions(projectId),
+		createAiEditionChatSession: (projectId, title) => createSession(projectId, title),
+		selectAiEditionChatSession: (projectId, sessionId) => selectSession(projectId, sessionId),
+		renameAiEditionChatSession: (projectId, sessionId, title) =>
+			renameSession(projectId, sessionId, title),
+		deleteAiEditionChatSession: (projectId, sessionId) => deleteSession(projectId, sessionId),
 	});
 }

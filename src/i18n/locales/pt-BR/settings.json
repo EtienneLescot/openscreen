@@ -1,5 +1,6 @@
 {
 	"zoom": {
+		"previewHold": "Mantenha pressionado para pré-visualizar o efeito de zoom",
 		"level": "Nível de Zoom",
 		"customScale": "Zoom Personalizado",
 		"selectRegion": "Selecione uma região de zoom para ajustar",
@@ -8,7 +9,8 @@
 			"title": "Modo de Foco",
 			"manual": "Manual",
 			"auto": "Automático",
-			"autoDescription": "A câmera segue a posição do cursor gravado"
+			"autoDescription": "A câmera segue a posição do cursor gravado",
+			"lockedDisclaimer": "Controlado pelo interruptor global de Foco Automático na linha do tempo. Desative-o para definir o modo de foco por zoom."
 		},
 		"threeD": {
 			"title": "Rotação 3D",
@@ -16,7 +18,8 @@
 				"iso": "Iso",
 				"left": "Esquerda",
 				"right": "Direita"
-			}
+			},
+			"none": "Nenhuma"
 		},
 		"position": {
 			"title": "Posição do Foco",
@@ -46,8 +49,16 @@
 		"noWebcam": "Sem Webcam",
 		"webcamShape": "Formato da Câmera",
 		"webcamSize": "Tamanho da Webcam",
+		"mirrorWebcam": "Espelhar Webcam",
 		"reactiveWebcam": "Encolher ao ampliar",
-		"reactiveWebcamDescription": "A câmera diminui suavemente enquanto o vídeo está ampliado, para não atrapalhar."
+		"reactiveWebcamDescription": "A câmera diminui suavemente enquanto o vídeo está ampliado, para não atrapalhar.",
+		"help": "Como a webcam é composta com a tela: picture-in-picture, pilha vertical, quadro duplo, formato da máscara, tamanho e espelhamento.",
+		"shapes": {
+			"rectangle": "Ret.",
+			"circle": "Círculo",
+			"square": "Quadrado",
+			"rounded": "Arredondado"
+		}
 	},
 	"effects": {
 		"title": "Efeitos de Vídeo",
@@ -57,7 +68,8 @@
 		"on": "ativado",
 		"shadow": "Sombra",
 		"roundness": "Arredondamento",
-		"padding": "Espaçamento"
+		"padding": "Espaçamento",
+		"help": "Estilo do quadro da gravação: desfoque de fundo, sombra, desfoque de movimento, raio dos cantos e margem em volta do vídeo."
 	},
 	"background": {
 		"title": "Fundo",
@@ -69,7 +81,11 @@
 		"gradientLabel": "Gradiente {{index}}",
 		"colorWheel": "Roda de Cores",
 		"colorPalette": "Paleta de Cores",
-		"presets": "Predefinições"
+		"presets": "Predefinições",
+		"help": "Escolha o que aparece atrás da gravação: um papel de parede incluído, uma cor sólida, um gradiente ou uma imagem sua do disco.",
+		"customWallpaper": "Papel de parede personalizado",
+		"imageLabel": "Fundo {{index}}",
+		"colorLabel": "Cor {{color}}"
 	},
 	"crop": {
 		"title": "Cortar",
@@ -102,15 +118,17 @@
 	},
 	"project": {
 		"save": "Salvar Projeto",
-		"load": "Carregar Projeto"
+		"load": "Carregar Projeto",
+		"new": "Novo Projeto"
 	},
 	"export": {
 		"videoButton": "Exportar Vídeo",
 		"gifButton": "Exportar GIF",
 		"chooseSaveLocation": "Escolher Local para Salvar"
 	},
-	"links": {
+	"support": {
 		"reportBug": "Relatar Bug",
+		"saveDiagnostics": "Salvar Diagnósticos",
 		"starOnGithub": "Dar Estrela no GitHub"
 	},
 	"imageUpload": {
@@ -146,7 +164,7 @@
 		"strokeWidth": "Largura do Traço: {{width}}px",
 		"arrowColor": "Cor da Seta",
 		"blurType": "Tipo de Desfoque",
-		"blurTypeBlur": "Desfoque",
+		"blurTypeBlur": "Gaussiano",
 		"blurTypeMosaic": "Mosaico",
 		"blurColor": "Cor do Desfoque",
 		"blurColorWhite": "Branco",
@@ -164,7 +182,8 @@
 		"tipShiftTabCycle": "Use Shift+Tab para alternar para trás.",
 		"invalidImageType": "Tipo de imagem inválido",
 		"imageFormatsOnly": "Por favor, envie um arquivo de imagem JPG, PNG, GIF ou WebP.",
-		"imageUploadSuccess": "Imagem enviada com sucesso!"
+		"imageUploadSuccess": "Imagem enviada com sucesso!",
+		"type": "Tipo"
 	},
 	"fontStyles": {
 		"classic": "Clássico",
@@ -175,6 +194,17 @@
 		"simple": "Simples",
 		"modern": "Moderno",
 		"clean": "Clean"
+	},
+	"textAnimation": {
+		"title": "Animação de Texto",
+		"selectAnimation": "Selecionar animação",
+		"none": "Nenhuma",
+		"fade": "Esmaecer",
+		"rise": "Subir",
+		"pop": "Aparecer",
+		"slideLeft": "Deslizar à Esquerda",
+		"typewriter": "Máquina de Escrever",
+		"pulse": "Pulsar"
 	},
 	"customFont": {
 		"dialogTitle": "Adicionar Google Font",
@@ -196,6 +226,7 @@
 		"errorLoadFailed": "A fonte não pôde ser carregada. Por favor, verifique se a URL do Google Fonts está correta."
 	},
 	"cursor": {
+		"title": "Cursor",
 		"theme": "Estilo do cursor",
 		"themeDefault": "Padrão",
 		"show": "Mostrar cursor",
@@ -204,9 +235,38 @@
 		"motionBlur": "Desfoque de movimento",
 		"clickBounce": "Rebote ao clicar",
 		"clipToBounds": "Recortar à tela",
-		"clipToBoundsDescription": "Mantém o cursor dentro do quadro do vídeo. Desative para permitir que o cursor ultrapasse as bordas — útil ao aplicar zoom ou ao deslocar."
+		"clipToBoundsDescription": "Mantém o cursor dentro do quadro do vídeo. Desative para permitir que o cursor ultrapasse as bordas — útil ao aplicar zoom ou ao deslocar.",
+		"help": "Renderização do cursor a partir da telemetria gravada: tema, tamanho, suavização, desfoque de movimento e salto ao clicar."
 	},
 	"language": {
 		"title": "Idioma"
+	},
+	"timeline": {
+		"title": "Linha do Tempo",
+		"waveform": "Mostrar Forma de Onda de Áudio na Faixa de Corte",
+		"help": "Opções de exibição da linha do tempo, como mostrar a forma de onda de áudio na trilha de corte."
+	},
+	"facets": {
+		"captions": "Legendas",
+		"transcript": "Transcrição"
+	},
+	"panes": {
+		"help": "Ajuda"
+	},
+	"transcript": {
+		"title": "Transcrição atual",
+		"help": "Transcrição agregada de todos os clipes da linha do tempo. Backspace / Delete em uma palavra ou seleção marca como ignorada (em vermelho). Passe o mouse sobre um trecho vermelho para restaurá-lo.",
+		"noClips": "Nenhum clipe ainda",
+		"noTranscript": "Nenhuma transcrição ainda",
+		"whisperHint": "A transcrição usa o Whisper local — roda no seu navegador, nenhum dado sai do dispositivo.",
+		"transcribeNow": "Transcrever agora",
+		"transcribing": "Transcrevendo…",
+		"clipLabel": "Clipe {{index}}",
+		"noClipTranscript": "Sem transcrição para este clipe — abra o cartão do recurso e gere novamente.",
+		"editorAria": "Transcrição de {{filename}}",
+		"silence": "[silêncio {{duration}} s]",
+		"restoreSilence": "Restaurar silêncio ({{duration}} s)",
+		"trimSilence": "Cortar silêncio ({{duration}} s)",
+		"restoreWord": "Restaurar \"{{word}}\""
 	}
 }

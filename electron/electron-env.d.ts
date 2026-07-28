@@ -27,6 +27,12 @@ interface Window {
 		invokeNativeBridge: <TData = unknown>(
 			request: import("../src/native/contracts").NativeBridgeRequest,
 		) => Promise<import("../src/native/contracts").NativeBridgeResponse<TData>>;
+		/** Export bench only (--bench=): tells main the run is over so it can quit. */
+		benchFinished?: () => Promise<void>;
+		/** Native (D3D) export progress — frames encoded so far, pushed at ~10 Hz max while
+		 *  `compositor.export`/`compositor.exportMulti` runs. Distinct from `exportOnFrameAck`,
+		 *  the OLD web/CPU pipeline's per-frame ack, not a progress signal. */
+		onNativeExportProgress?: (callback: (frames: number) => void) => () => void;
 		getSources: (opts: Electron.SourcesOptions) => Promise<ProcessedDesktopSource[]>;
 		switchToEditor: () => Promise<void>;
 		switchToHud: () => Promise<void>;
@@ -48,7 +54,18 @@ interface Window {
 		selectSource: (source: ProcessedDesktopSource) => Promise<ProcessedDesktopSource | null>;
 		getSelectedSource: () => Promise<ProcessedDesktopSource | null>;
 		onSelectedSourceChanged: (callback: (source: ProcessedDesktopSource) => void) => () => void;
+		getRecordingPrefs: () => Promise<import("./ipc/handlers").RecordingPrefs>;
+		setRecordingPrefs: (
+			prefs: Partial<import("./ipc/handlers").RecordingPrefs>,
+		) => Promise<import("./ipc/handlers").RecordingPrefs>;
+		onRecordingPrefsChanged: (
+			callback: (prefs: import("./ipc/handlers").RecordingPrefs) => void,
+		) => () => void;
 		onSourceSelectorClosed: (callback: () => void) => () => void;
+		onAutoStartRecording: (callback: () => void) => () => void;
+		onAiEditionChatEvent: (
+			callback: (event: import("../src/native/contracts").AiEditionChatEvent) => void,
+		) => () => void;
 		requestCameraAccess: () => Promise<{
 			success: boolean;
 			granted: boolean;
@@ -197,7 +214,14 @@ interface Window {
 			message?: string;
 			error?: string;
 		}>;
-		openVideoFilePicker: () => Promise<{ success: boolean; path?: string; canceled?: boolean }>;
+		openVideoFilePicker: () => Promise<{
+			success: boolean;
+			path?: string;
+			// Browser-mode shim only: a blob: URL has no meaningful basename, so
+			// the shim carries the picked File's real name here for the label.
+			name?: string;
+			canceled?: boolean;
+		}>;
 		setCurrentVideoPath: (path: string) => Promise<{ success: boolean }>;
 		setCurrentRecordingSession: (
 			session: import("../src/lib/recordingSession").RecordingSession | null,
@@ -208,7 +232,14 @@ interface Window {
 		getCurrentVideoPath: () => Promise<{ success: boolean; path?: string }>;
 		getCurrentRecordingSession: () => Promise<{
 			success: boolean;
-			session?: import("../src/lib/recordingSession").RecordingSession;
+			session?: RecordingSession | null;
+			canceled?: boolean;
+		}>;
+		findRecordingCamera: (videoPath: string) => Promise<{
+			success: boolean;
+			webcamVideoPath?: string;
+			offsetMs?: number;
+			error?: string;
 		}>;
 		readBinaryFile: (filePath: string) => Promise<{
 			success: boolean;
@@ -300,7 +331,11 @@ interface Window {
 		hudOverlayHide: () => void;
 		hudOverlayClose: () => void;
 		setHudOverlayIgnoreMouseEvents: (ignore: boolean) => void;
-		moveHudOverlayBy: (deltaX: number, deltaY: number) => void;
+		/** Pins the overlay's current position as the origin for `dragHudOverlayTo`. */
+		beginHudOverlayDrag: () => void;
+		/** Total pointer travel since `beginHudOverlayDrag`, not a per-frame delta. */
+		dragHudOverlayTo: (deltaX: number, deltaY: number) => void;
+		endHudOverlayDrag: () => void;
 		setHudOverlaySize: (width: number, height: number) => void;
 		showCountdownOverlay: (value: number, runId: number) => Promise<void>;
 		setCountdownOverlayValue: (value: number, runId: number) => Promise<void>;
@@ -311,6 +346,14 @@ interface Window {
 		onRequestSaveBeforeClose: (callback: () => Promise<boolean> | boolean) => () => void;
 		onRequestCloseConfirm: (callback: () => void) => () => void;
 		sendCloseConfirmResponse: (choice: "save" | "discard" | "cancel") => void;
+		stt: {
+			transcribe: (
+				request: import("./stt/transcriptionContract").SttTranscribeRequest,
+			) => Promise<import("./stt/transcriptionContract").SttTranscribeResponse>;
+			onStatus: (
+				callback: (event: import("./stt/transcriptionContract").SttStatusEvent) => void,
+			) => () => void;
+		};
 		setLocale: (locale: string) => Promise<void>;
 		saveDiagnostic: (payload: {
 			error: string;
