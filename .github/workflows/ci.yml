@@ -89,7 +89,7 @@ jobs:
       - uses: ./.github/actions/setup
       - run: npm run test
 
-build:
+  build:
     name: Build
     runs-on: ubuntu-latest
     steps:
