@@ -155,18 +155,95 @@ impl Decoder {
         }
     }
 
-    pub unsafe fn seek_to(&mut self, _source_time_sec: f64) -> Result<*mut crate::ffi::AVFrame> {
-        // Symétrique à `pipeline_windows::Decoder::seek_to`. Marqué non implémenté dans
-        // cette PR de scaffold ; le câblage complet du decode VideoToolbox + seek
-        // keyframe + décodage-avant viendra avec le commit « engine VT ».
-        bail!("pipeline_macos::Decoder::seek_to: non implémenté")
+    pub unsafe fn rewind(&mut self) -> Result<()> {
+        crate::ffi::averr(
+            crate::ffi::av_seek_frame(
+                self.fmt,
+                self.vidx,
+                0,
+                crate::ffi::AVSEEK_FLAG_BACKWARD,
+            ),
+            "rewind_seek",
+        )?;
+        crate::ffi::avcodec_flush_buffers(self.dctx);
+        self.sent_eof = false;
+        Ok(())
     }
 
+    /// `time_base` du flux vidéo (secondes par unité de pts).
+    unsafe fn tb_sec(&self) -> f64 {
+        let tb = (*crate::ffi::sn_fmt_stream(self.fmt, self.vidx)).time_base;
+        if tb.den != 0 {
+            tb.num as f64 / tb.den as f64
+        } else {
+            0.0
+        }
+    }
+
+    /// Seek keyframe vers `seconds` puis décode-avant jusqu'à la 1re frame dont le
+    /// temps ≥ `seconds`. Symétrique de `pipeline_windows::Decoder::seek_to`.
+    pub unsafe fn seek_to(&mut self, seconds: f64) -> Result<*mut crate::ffi::AVFrame> {
+        let tb_sec = self.tb_sec();
+        let target = if tb_sec > 0.0 { (seconds / tb_sec) as i64 } else { 0 };
+        crate::ffi::averr(
+            crate::ffi::av_seek_frame(self.fmt, self.vidx, target, crate::ffi::AVSEEK_FLAG_BACKWARD),
+            "seek_to",
+        )?;
+        crate::ffi::avcodec_flush_buffers(self.dctx);
+        self.sent_eof = false;
+        loop {
+            let f = self.next()?;
+            if f.is_null() {
+                return Ok(ptr::null_mut());
+            }
+            let pts = (*f).best_effort_timestamp;
+            if pts == i64::MIN || tb_sec <= 0.0 {
+                return Ok(f);
+            }
+            if (pts as f64) * tb_sec >= seconds - tb_sec * 0.5 {
+                return Ok(f);
+            }
+        }
+    }
+
+    /// Rend la prochaine frame (valide jusqu'au prochain appel), ou null à EOF.
+    /// Symétrique de `pipeline_windows::Decoder::next`. Boucle `avcodec_receive_frame`
+    /// / `av_read_frame` avec gestion d'EOF et AVERROR_EAGAIN — identique au chemin
+    /// Windows, juste sans le dispatch D3D11VA (le GPU hand-off est déjà fait par
+    /// `av_hwdevice_ctx_create`).
     pub unsafe fn next(&mut self) -> Result<*mut crate::ffi::AVFrame> {
-        // Symétrique à `pipeline_windows::Decoder::next`. Le câblage complet viendra avec
-        // le commit « engine VT » — c'est la boucle `avcodec_receive_frame` /
-        // `av_read_frame` avec gestion d'EOF et AVERROR_EAGAIN.
-        bail!("pipeline_macos::Decoder::next: non implémenté")
+        loop {
+            let r = crate::ffi::avcodec_receive_frame(self.dctx, self.frame);
+            if r == 0 {
+                return match &mut self.cpu {
+                    Some(cpu) => cpu.present(self.frame),
+                    None => Ok(self.frame),
+                };
+            }
+            if r == crate::ffi::AVERROR_EOF {
+                return Ok(ptr::null_mut());
+            }
+            if r != crate::ffi::AVERROR_EAGAIN {
+                crate::ffi::averr(r, "receive_frame")?;
+            }
+            if self.sent_eof {
+                return Ok(ptr::null_mut());
+            }
+            let rr = crate::ffi::av_read_frame(self.fmt, self.pkt);
+            if rr == crate::ffi::AVERROR_EOF {
+                crate::ffi::avcodec_send_packet(self.dctx, ptr::null_mut());
+                self.sent_eof = true;
+            } else {
+                crate::ffi::averr(rr, "read_frame")?;
+                if (*self.pkt).stream_index == self.vidx {
+                    crate::ffi::averr(
+                        crate::ffi::avcodec_send_packet(self.dctx, self.pkt),
+                        "send_packet",
+                    )?;
+                }
+                crate::ffi::av_packet_unref(self.pkt);
+            }
+        }
     }
 
     pub unsafe fn cur_frame(&self) -> *mut crate::ffi::AVFrame {
@@ -176,9 +253,46 @@ impl Decoder {
         }
     }
 
+    /// Temps (s) de la frame courante, via son pts. 0 si pas de pts fiable.
+    /// Symétrique de `pipeline_windows::Decoder::cur_time_sec`.
     pub unsafe fn cur_time_sec(&self) -> f64 {
-        // Symétrique à `pipeline_windows::Decoder::cur_time_sec`.
-        0.0
+        let pts = (*self.frame).best_effort_timestamp;
+        if pts == i64::MIN {
+            0.0
+        } else {
+            pts as f64 * self.tb_sec()
+        }
+    }
+
+    /// Cadence moyenne du flux (fps). 30 par défaut si indéterminée.
+    pub unsafe fn fps(&self) -> f64 {
+        let r = (*crate::ffi::sn_fmt_stream(self.fmt, self.vidx)).avg_frame_rate;
+        if r.den != 0 && r.num != 0 {
+            r.num as f64 / r.den as f64
+        } else {
+            30.0
+        }
+    }
+
+    /// Durée réellement annoncée par le flux vidéo (symétrique de
+    /// `pipeline_windows::Decoder::available_duration_sec`).
+    pub unsafe fn available_duration_sec(&self) -> Option<f64> {
+        let stream = crate::ffi::sn_fmt_stream(self.fmt, self.vidx);
+        let duration = (*stream).duration;
+        let tb_sec = self.tb_sec();
+        if duration > 0 && tb_sec > 0.0 {
+            let seconds = duration as f64 * tb_sec;
+            if seconds.is_finite() && seconds > 0.0 {
+                return Some(seconds);
+            }
+        }
+        let nb_frames = (*stream).nb_frames;
+        let fps = self.fps();
+        if nb_frames > 0 && fps.is_finite() && fps > 0.0 {
+            Some(nb_frames as f64 / fps)
+        } else {
+            None
+        }
     }
 }
 
