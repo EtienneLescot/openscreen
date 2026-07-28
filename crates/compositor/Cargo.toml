@@ -2,7 +2,7 @@
 name = "openscreen-compositor"
 version.workspace = true
 edition.workspace = true
-description = "Compositeur natif D3D11 d'OpenScreen : décodage, pipeline, effets HLSL, scène, curseur, audio et vue live. Code de production — l'addon Electron (compositor-view-napi) s'y lie, le POC (poc-d3d) le consomme aussi."
+description = "Compositeur natif multiplateforme d'OpenScreen : décodage, pipeline, effets, scène, curseur, audio, et la vue live embarquable. Code de production — l'addon Electron (compositor-view-napi) s'y lie, le POC (poc-d3d) le consomme aussi.\n\nWindows : D3D11 + D3D11VA + shaders HLSL compilés à l'exécution. macOS : Metal + VideoToolbox + shaders MSL (port de ce PR)."
 
 [lib]
 name = "openscreen_compositor"
@@ -17,4 +17,23 @@ anyhow.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 image.workspace = true
+
+# Windows : D3D11 + D3D11VA + Direct2D/DirectWrite + HLSL à l'exécution.
+[target.'cfg(windows)'.dependencies]
 windows.workspace = true
+
+# macOS : Metal + CoreVideo/VideoToolbox. Le port Metal/VideoToolbox de ce crate
+# s'appuie sur `metal` (bindings purs Rust du framework Metal, sans CC), `objc`/
+# `block` pour CVMetalTextureCache/IOSurface (CoreVideo n'expose pas cette API),
+# `core-foundation` pour le comptage de références CF. CVPixelBuffer est attaqué
+# en FFI brut plutôt que via `core-video-rs` 0.1 — l'API publique de cette crate
+# est trop mince pour le gain et la version pinnée n'expose pas tous les
+# symboles dont on a besoin (CVMetalTextureCache notamment). Bindgen reste
+# utilisé pour ffmpeg (les headers VT dans wrapper.h sont interchangeables avec
+# ceux de D3D11VA, mêmes prototypes dans les grandes lignes mais format hw
+# différent).
+[target.'cfg(target_os = "macos")'.dependencies]
+metal = "0.29"
+objc = "0.2"
+block = "0.1"
+core-foundation = "0.9"
