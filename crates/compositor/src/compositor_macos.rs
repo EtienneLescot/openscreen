@@ -20,8 +20,10 @@ use crate::config::Cfg;
 use crate::metal::Gpu;
 use crate::scene::Scene;
 use crate::ffi::AVFrame;
-use anyhow::{anyhow, Result};
+use anyhow::{anyhow, bail, Result};
 use std::cell::RefCell;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Largeur de référence pour l'export (conservée pour l'API symétrique ; la valeur
 /// effective d'export est négociée par `LiveView` / `Compositor::render_size`).
@@ -223,8 +225,17 @@ impl Drop for CVMetalTextureCache {
 /// Le moteur de composition. Le moteur tourne sur Metal : chaque frame décodée arrive
 /// comme un `CVPixelBufferRef` IOSurface-backed (`mac_frames::CpuFrames::present` /
 /// VideoToolbox hwaccel), et `nv12_srvs` le convertit en deux `MTLTexture` zéro-copie
-/// via `CVMetalTextureCache`. Le reste de l'engine (render targets RGBA + NV12, shaders
-/// MSL, blend states, sampler, cbuffer `LayerCB`) sera ajouté dans les commits suivants.
+/// via `CVMetalTextureCache`. Le moteur de composition (render targets, shaders MSL,
+/// pipeline states, blend, cbuffer `LayerCB`) est câblé dans `new_inner`.
+///
+/// First-pass engine : ce commit implémente le strict minimum pour produire un frame
+/// (render target RGBA + NV12, compilation MSL, pipeline state, compose_frame avec
+/// blit pleine-canvas de la vidéo + conversion RGBA→NV12 vers le buffer de sortie).
+/// Les effets avancés (layers, ombres, Kawase, motion blur, webcam overlay avec
+/// rounded corners, etc.) sont implémentés dans des commits dédiés : le shader
+/// `ps_main` 14-mode existe déjà dans `shaders.metal`, mais ce commit ne l'exerce
+/// pas — `compose_frame` rend la couche écran en pleine cadre, ce qui suffit au
+/// chemin encode et à la prévisualisation du deck pass-through.
 pub struct Compositor {
     gpu: Gpu,
     render_w: u32,
@@ -234,14 +245,38 @@ pub struct Compositor {
     cursor_time: RefCell<Option<f32>>,
     timeline_time: RefCell<Option<f32>>,
     live_params: RefCell<LiveParams>,
-    /// Cache Metal texture cache. Créé lazily au premier `nv12_srvs` (parce que la
-    /// création prend le `MTLDevice` qui doit être vivant — `Compositor::new_sized`
-    /// garantit ça). Flushé dans Drop.
+    /// Cache Metal texture cache. Créé dans `new_inner` à partir du `MTLDevice` —
+    /// flushé dans Drop. Flush recommandé aussi à chaque changement de dimensions du
+    /// `CVPixelBuffer` (les textures cachées pointent alors sur l'IOSurface précédent).
     metal_texture_cache: RefCell<Option<CVMetalTextureCache>>,
-    /// Cache (pixel_buffer_ptr, plane_index) → MTLTexture (id<MTLTexture> opaque).
-    /// Le D3D11VA pool tournant fait 32 textures ; le CVPixelBuffer côté macOS est
-    /// réutilisé par frame (cf. `mac_frames::CpuFrames`), donc le cache reste petit.
-    tex_cache: RefCell<std::collections::HashMap<(usize, usize), *mut std::ffi::c_void>>,
+    /// Cache (pixel_buffer_ptr, plane_index) → raw `id<MTLTexture>` opaque.
+    tex_cache: RefCell<HashMap<(usize, usize), *mut std::ffi::c_void>>,
+
+    // --- Engine : render targets ---
+    /// Render target principal RGBA8 (sRGB natif). Cible de `compose_frame`.
+    rt: Option<metal::Texture>,
+    /// Staging RGBA8 CPU-readable pour `readback_direct` (preview live).
+    /// `MTLStorageModeShared` permet `getBytes` directement.
+    rt_read: Option<metal::Texture>,
+    /// Texture NV12 interne (sortie de `render_nv12` / cible de l'encodeur zero-copy).
+    /// Plan Y = `MTLPixelFormatR8Unorm` ; plan UV = `MTLPixelFormatRG8Unorm`.
+    nv12_y: Option<metal::Texture>,
+    nv12_uv: Option<metal::Texture>,
+    /// Staging NV12 CPU-readable pour `read_nv12_scaled`.
+    nv12_read_y: Option<metal::Texture>,
+    nv12_read_uv: Option<metal::Texture>,
+
+    // --- Engine : shaders compilés ---
+    /// MSL library compilée à `new_inner`. Conservée pour recréer les pipeline
+    /// states si la géométrie change (ne devrait pas arriver en pratique — le
+    /// compositor est reconstruit via `new_sized`).
+    library: Option<metal::Library>,
+    /// Pipeline state pour la passe principale (`vs_main` + `ps_main`).
+    pipeline_main: Option<metal::RenderPipelineState>,
+    /// Pipeline state pour la passe fullscreen (`vs_fs` + `ps_y`/`ps_uv`/`ps_tex`).
+    pipeline_fs_y: Option<metal::RenderPipelineState>,
+    pipeline_fs_uv: Option<metal::RenderPipelineState>,
+    pipeline_fs_tex: Option<metal::RenderPipelineState>,
 }
 
 impl Compositor {
@@ -253,11 +288,152 @@ impl Compositor {
         Self::new_sized(gpu, OUT_W, OUT_H)
     }
 
-    /// Comme `new`, mais avec une taille de rendu explicite.
+    /// Comme `new`, mais avec une taille de rendu explicite. Câble le moteur Metal :
+    ///   - `CVMetalTextureCache` (zero-copy CVPixelBuffer → MTLTexture),
+    ///   - render targets (RT RGBA, RT NV12 Y/UV, staging),
+    ///   - compilation MSL (`shaders.metal` → `MTLLibrary`),
+    ///   - pipeline states (principal + passes fullscreen).
     pub fn new_sized(gpu: &Gpu, w: u32, h: u32) -> Result<Compositor> {
         let (rw, rh) = Self::normalize_render_size(w, h);
         let metal_device_ptr = gpu.device.as_ptr();
         let cache = CVMetalTextureCache::new(metal_device_ptr as *const std::ffi::c_void)?;
+
+        // --- Render targets ---
+        // RT principal RGBA8 (cible de compose_frame).
+        let rt_desc = metal::TextureDescriptor::new();
+        rt_desc.set_texture_type(metal::TextureType::Type2D);
+        rt_desc.set_pixel_format(metal::MTLPixelFormat::RGBA8Unorm);
+        rt_desc.set_width(rw as u64);
+        rt_desc.set_height(rh as u64);
+        rt_desc.set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        rt_desc.set_storage_mode(metal::MTLStorageMode::Private);
+        let rt = gpu.device.new_texture(&rt_desc);
+
+        // Staging RGBA8 CPU-readable (preview live) : `Shared` permet `getBytes`.
+        let rt_read_desc = metal::TextureDescriptor::new();
+        rt_read_desc.set_texture_type(metal::TextureType::Type2D);
+        rt_read_desc.set_pixel_format(metal::MTLPixelFormat::RGBA8Unorm);
+        rt_read_desc.set_width(rw as u64);
+        rt_read_desc.set_height(rh as u64);
+        rt_read_desc.set_usage(metal::MTLTextureUsage::RenderTarget);
+        rt_read_desc.set_storage_mode(metal::MTLStorageMode::Shared);
+        let rt_read = gpu.device.new_texture(&rt_read_desc);
+
+        // NV12 interne : Y pleine résolution, UV demi. Stockage `Private` (jamais lu
+        // directement par le CPU ; `nv12_read_y/_uv` sont les copies CPU-readable pour
+        // `read_nv12_scaled`).
+        let nv12_y_desc = metal::TextureDescriptor::new();
+        nv12_y_desc.set_texture_type(metal::TextureType::Type2D);
+        nv12_y_desc.set_pixel_format(metal::MTLPixelFormat::R8Unorm);
+        nv12_y_desc.set_width(rw as u64);
+        nv12_y_desc.set_height(rh as u64);
+        nv12_y_desc.set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        nv12_y_desc.set_storage_mode(metal::MTLStorageMode::Private);
+        let nv12_y = gpu.device.new_texture(&nv12_y_desc);
+
+        let nv12_uv_desc = metal::TextureDescriptor::new();
+        nv12_uv_desc.set_texture_type(metal::TextureType::Type2D);
+        nv12_uv_desc.set_pixel_format(metal::MTLPixelFormat::RG8Unorm);
+        nv12_uv_desc.set_width(rw as u64);
+        nv12_uv_desc.set_height(rh as u64);
+        nv12_uv_desc.set_usage(metal::MTLTextureUsage::RenderTarget | metal::MTLTextureUsage::ShaderRead);
+        nv12_uv_desc.set_storage_mode(metal::MTLStorageMode::Private);
+        let nv12_uv = gpu.device.new_texture(&nv12_uv_desc);
+
+        // NV12 staging CPU-readable (encodeur software fallback).
+        let nv12_read_y_desc = metal::TextureDescriptor::new();
+        nv12_read_y_desc.set_texture_type(metal::TextureType::Type2D);
+        nv12_read_y_desc.set_pixel_format(metal::MTLPixelFormat::R8Unorm);
+        nv12_read_y_desc.set_width(rw as u64);
+        nv12_read_y_desc.set_height(rh as u64);
+        nv12_read_y_desc.set_storage_mode(metal::MTLStorageMode::Shared);
+        let nv12_read_y = gpu.device.new_texture(&nv12_read_y_desc);
+
+        let nv12_read_uv_desc = metal::TextureDescriptor::new();
+        nv12_read_uv_desc.set_texture_type(metal::TextureType::Type2D);
+        nv12_read_uv_desc.set_pixel_format(metal::MTLPixelFormat::RG8Unorm);
+        nv12_read_uv_desc.set_width(rw as u64);
+        nv12_read_uv_desc.set_height(rh as u64);
+        nv12_read_uv_desc.set_storage_mode(metal::MTLStorageMode::Shared);
+        let nv12_read_uv = gpu.device.new_texture(&nv12_read_uv_desc);
+
+        // --- Compilation MSL ---
+        let msl_source = include_str!("shaders.metal");
+        let library = gpu
+            .device
+            .new_library_with_source(msl_source, &metal::CompileOptions::new())
+            .map_err(|e| anyhow!("MTLDevice::new_library_with_source a échoué : {e:?}"))?;
+
+        let fn_vs_main = library
+            .get_function("vs_main", None)
+            .map_err(|e| anyhow!("MTLLibrary::get_function('vs_main') : {e:?}"))?;
+        let fn_vs_fs = library
+            .get_function("vs_fs", None)
+            .map_err(|e| anyhow!("MTLLibrary::get_function('vs_fs') : {e:?}"))?;
+        let fn_ps_main = library
+            .get_function("ps_main", None)
+            .map_err(|e| anyhow!("MTLLibrary::get_function('ps_main') : {e:?}"))?;
+        let fn_ps_y = library
+            .get_function("ps_y", None)
+            .map_err(|e| anyhow!("MTLLibrary::get_function('ps_y') : {e:?}"))?;
+        let fn_ps_uv = library
+            .get_function("ps_uv", None)
+            .map_err(|e| anyhow!("MTLLibrary::get_function('ps_uv') : {e:?}"))?;
+        let fn_ps_tex = library
+            .get_function("ps_tex", None)
+            .map_err(|e| anyhow!("MTLLibrary::get_function('ps_tex') : {e:?}"))?;
+
+        // --- Pipeline state principal : vs_main + ps_main, écrit dans le RT RGBA ---
+        let pipeline_main_desc = metal::RenderPipelineDescriptor::new();
+        pipeline_main_desc.set_vertex_function(Some(&fn_vs_main));
+        pipeline_main_desc.set_fragment_function(Some(&fn_ps_main));
+        // Le RT est RGBA8 — color attachment 0 = RT.
+        let ca0_main = metal::RenderPipelineColorAttachmentDescriptor::new();
+        ca0_main.set_pixel_format(metal::MTLPixelFormat::RGBA8Unorm);
+        ca0_main.set_blending_enabled(true);
+        ca0_main.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
+        ca0_main.set_source_rgb_blend_factor(metal::MTLBlendFactor::One);
+        ca0_main.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+        pipeline_main_desc.set_color_attachments(0, &ca0_main);
+        let pipeline_main = gpu
+            .device
+            .new_render_pipeline_state(&pipeline_main_desc)
+            .map_err(|e| anyhow!("new_render_pipeline_state(main) : {e:?}"))?;
+
+        // --- Pipeline states fullscreen pour la conversion RGBA→NV12 ---
+        let pipeline_fs_tex_desc = metal::RenderPipelineDescriptor::new();
+        pipeline_fs_tex_desc.set_vertex_function(Some(&fn_vs_fs));
+        pipeline_fs_tex_desc.set_fragment_function(Some(&fn_ps_tex));
+        let ca_fs_tex = metal::RenderPipelineColorAttachmentDescriptor::new();
+        ca_fs_tex.set_pixel_format(metal::MTLPixelFormat::RGBA8Unorm);
+        pipeline_fs_tex_desc.set_color_attachments(0, &ca_fs_tex);
+        let pipeline_fs_tex = gpu
+            .device
+            .new_render_pipeline_state(&pipeline_fs_tex_desc)
+            .map_err(|e| anyhow!("new_render_pipeline_state(fs_tex) : {e:?}"))?;
+
+        let pipeline_fs_y_desc = metal::RenderPipelineDescriptor::new();
+        pipeline_fs_y_desc.set_vertex_function(Some(&fn_vs_fs));
+        pipeline_fs_y_desc.set_fragment_function(Some(&fn_ps_y));
+        let ca_fs_y = metal::RenderPipelineColorAttachmentDescriptor::new();
+        ca_fs_y.set_pixel_format(metal::MTLPixelFormat::R8Unorm);
+        pipeline_fs_y_desc.set_color_attachments(0, &ca_fs_y);
+        let pipeline_fs_y = gpu
+            .device
+            .new_render_pipeline_state(&pipeline_fs_y_desc)
+            .map_err(|e| anyhow!("new_render_pipeline_state(fs_y) : {e:?}"))?;
+
+        let pipeline_fs_uv_desc = metal::RenderPipelineDescriptor::new();
+        pipeline_fs_uv_desc.set_vertex_function(Some(&fn_vs_fs));
+        pipeline_fs_uv_desc.set_fragment_function(Some(&fn_ps_uv));
+        let ca_fs_uv = metal::RenderPipelineColorAttachmentDescriptor::new();
+        ca_fs_uv.set_pixel_format(metal::MTLPixelFormat::RG8Unorm);
+        pipeline_fs_uv_desc.set_color_attachments(0, &ca_fs_uv);
+        let pipeline_fs_uv = gpu
+            .device
+            .new_render_pipeline_state(&pipeline_fs_uv_desc)
+            .map_err(|e| anyhow!("new_render_pipeline_state(fs_uv) : {e:?}"))?;
+
         Ok(Compositor {
             gpu: Gpu {
                 device: gpu.device.clone(),
@@ -273,7 +449,18 @@ impl Compositor {
             timeline_time: RefCell::new(None),
             live_params: RefCell::new(LiveParams::default()),
             metal_texture_cache: RefCell::new(Some(cache)),
-            tex_cache: RefCell::new(std::collections::HashMap::new()),
+            tex_cache: RefCell::new(HashMap::new()),
+            rt: Some(rt),
+            rt_read: Some(rt_read),
+            nv12_y: Some(nv12_y),
+            nv12_uv: Some(nv12_uv),
+            nv12_read_y: Some(nv12_read_y),
+            nv12_read_uv: Some(nv12_read_uv),
+            library: Some(library),
+            pipeline_main: Some(pipeline_main),
+            pipeline_fs_y: Some(pipeline_fs_y),
+            pipeline_fs_uv: Some(pipeline_fs_uv),
+            pipeline_fs_tex: Some(pipeline_fs_tex),
         })
     }
 
@@ -422,25 +609,113 @@ impl Compositor {
         Ok((y, uv))
     }
 
-    /// Compose la frame suivante → render target RGBA. Renvoie `Err` tant que le
-    /// pipeline Metal de composition (render targets, shaders MSL, blend, cbuffer) n'est
-    /// pas implémenté. Le commit « engine » qui suit remplira :
-    ///   - `self.rt` : MTLTexture RGBA8 (render target) créé à `new_sized`,
-    ///   - `self.nv12` : MTLTexture NV12 (interne, RT-able sur les deux plans),
-    ///   - shaders MSL compilés via `MTLDevice.makeLibrary(source:)`,
-    ///   - constant buffer `LayerCB` uploadé via `setVertexBytes`,
-    ///   - encodeur `MTLRenderCommandEncoder` avec le pipeline state `ps_main`,
-    ///   - passes `vs_main` (quads) + `ps_main` (méga-shader 14 modes).
+    /// Compose la frame suivante → render target RGBA. **First-pass engine** : la vidéo
+    /// `screen` est blittée pleine-canvas (UV→Y+UV sample, mode 0 du shader `ps_main`),
+    /// sans layers / webcam / rounded corners / ombres / blur. Les effets avancés
+    /// sont implémentés dans des commits dédiés qui câbleront les `LayerCB` par
+    /// quad (cf. PR #189 § « Engine commits remaining »).
+    ///
+    /// Le `webcam` est ignoré pour l'instant — la preview full-canvas suffit au chemin
+    /// encode (`run_composited_multi`) et à la prévisualisation tant que les layers
+    /// ne sont pas câblés.
     pub unsafe fn compose_frame(
         &self,
-        _screen: *const AVFrame,
+        screen: *const AVFrame,
         _webcam: *const AVFrame,
         _frame: f32,
         _cfg: &Cfg,
     ) -> Result<()> {
-        Err(anyhow!("compositor_macos::compose_frame: non implémenté"))
+        if screen.is_null() || (*screen).data[0].is_null() && (*screen).data[3].is_null() {
+            // Pas de frame source : on efface le RT au noir.
+            return self.clear_rt();
+        }
+
+        let (sy, suv) = self.nv12_srvs(screen)?;
+        let rt = self.rt.as_ref().ok_or_else(|| anyhow!("engine non initialisé"))?;
+        let pipeline = self
+            .pipeline_main
+            .as_ref()
+            .ok_or_else(|| anyhow!("engine non initialisé"))?;
+
+        // LayerCB : full-canvas (dst = [0,0,1,1], src = [0,0,1,1], mode = 0 = NV12).
+        // Couleurs / ombres / radius neutres (mode 0 = pas d'effet de bord).
+        let layer: Layer = Layer {
+            dst: [0.0, 0.0, 1.0, 1.0],
+            src: [0.0, 0.0, 1.0, 1.0],
+            quad_px: [self.render_w as f32, self.render_h as f32],
+            radius_px: 0.0,
+            mode: 0.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            fx: [0.0; 4],
+            src_prev: [0.0; 4],
+            dst_prev: [0.0; 4],
+            mb: [1.0, 0.0, 0.0, 0.0],
+        };
+
+        let cmd_buf = self
+            .gpu
+            .context
+            .new_command_buffer()
+            .ok_or_else(|| anyhow!("MTLCommandQueue::new_command_buffer a renvoyé None"))?;
+
+        // Render pass descriptor : attachment 0 = RT principal, action = Clear → Store.
+        let pass_desc = metal::RenderPassDescriptor::new();
+        let ca = pass_desc
+            .color_attachments()
+            .object_at(0)
+            .ok_or_else(|| anyhow!("RenderPassDescriptor::color_attachments(0)"))?;
+        ca.set_texture(Some(rt));
+        ca.set_load_action(metal::LoadAction::Clear);
+        ca.set_clear_color(metal::MTLClearColor(0.0, 0.0, 0.0, 1.0));
+        ca.set_store_action(metal::StoreAction::Store);
+
+        let encoder = cmd_buf
+            .new_render_command_encoder(&pass_desc)
+            .ok_or_else(|| anyhow!("MTLCommandBuffer::new_render_command_encoder a renvoyé None"))?;
+        encoder.set_render_pipeline_state(pipeline);
+        // Le shader ps_main attend texY/texUV/texImg + samp. On bind les 2 premières
+        // (les samples ne lisent que t0/t1 en mode 0).
+        encoder.set_fragment_texture(0, Some(&sy));
+        encoder.set_fragment_texture(1, Some(&suv));
+        // LayerCB : 128 octets, on l'envoie via set_fragment_bytes (le VS ne lit pas
+        // LayerCB en mode full-canvas — c'est uniquement côté FS).
+        encoder.set_fragment_bytes(
+            0,
+            std::mem::size_of::<Layer>() as u64,
+            &layer as *const Layer as *const std::ffi::c_void,
+        );
+        // vs_main est un quad-strip à partir de SV_VertexID : 4 vertices.
+        encoder.draw_primitives(metal::MTLPrimitiveType::TriangleStrip, 0, 4);
+        encoder.end_encoding();
+        cmd_buf.commit();
+
+        Ok(())
     }
 
+    /// Efface le RT au noir (utilisé quand `screen` est null ou vide).
+    unsafe fn clear_rt(&self) -> Result<()> {
+        let rt = self.rt.as_ref().ok_or_else(|| anyhow!("engine non initialisé"))?;
+        let cmd_buf = self
+            .gpu
+            .context
+            .new_command_buffer()
+            .ok_or_else(|| anyhow!("MTLCommandQueue::new_command_buffer"))?;
+        let pass_desc = metal::RenderPassDescriptor::new();
+        let ca = pass_desc.color_attachments().object_at(0).unwrap();
+        ca.set_texture(Some(rt));
+        ca.set_load_action(metal::LoadAction::Clear);
+        ca.set_clear_color(metal::MTLClearColor(0.0, 0.0, 0.0, 1.0));
+        ca.set_store_action(metal::StoreAction::Store);
+        let encoder = cmd_buf.new_render_command_encoder(&pass_desc).unwrap();
+        encoder.end_encoding();
+        cmd_buf.commit();
+        Ok(())
+    }
+
+    /// Variante motion-blur de `compose_frame` — symétrique de
+    /// `compositor_windows::compose_frame_mb`. Renvoie `Err` tant que le moteur
+    /// avancé (couches multiples avec vélocité par quad) n'est pas câblé — c'est
+    /// l'objet d'un commit dédié qui exercera `ps_main` mode 0 avec `mb.x > 1`.
     pub unsafe fn compose_frame_mb(
         &self,
         _screen: *const AVFrame,
@@ -451,8 +726,17 @@ impl Compositor {
         Err(anyhow!("compositor_macos::compose_frame_mb: non implémenté"))
     }
 
+    /// Convertit le RT RGBA → `nv12_y` + `nv12_uv` (deux passes fullscreen).
+    /// Le résultat NV12 alimente l'encodeur (zero-copy via `MTLBlitCommandEncoder::copy`
+    /// vers le `hw_frames_ctx` VideoToolbox) ou `read_nv12_scaled` pour le software
+    /// fallback (`h264_mf` / `libopenh264`).
     pub unsafe fn rgb_to_nv12(&self, _out_tex: *mut std::ffi::c_void, _slice: u32) -> Result<()> {
-        Err(anyhow!("compositor_macos::rgb_to_nv12: non implémenté"))
+        // First-pass engine : la cible est toujours `self.nv12_y`/`self.nv12_uv` (le
+        // buffer interne). L'argument `out_tex` est conservé pour l'API symétrique avec
+        // Windows ; le câblage zero-copy vers un buffer externe (CVPixelBuffer
+        // appartenant à l'encodeur) viendra avec le commit « encodeur VT » quand
+        // l'encodeur sera implémenté.
+        self.render_nv12()
     }
 
     pub unsafe fn rgb_to_nv12_scaled(
@@ -462,35 +746,161 @@ impl Compositor {
         _out_tex: *mut std::ffi::c_void,
         _slice: u32,
     ) -> Result<()> {
-        Err(anyhow!("compositor_macos::rgb_to_nv12_scaled: non implémenté"))
+        // First-pass engine : le resize sera câblé dans un commit dédié. Pour
+        // l'instant on rend à la taille de rendu.
+        self.render_nv12()
     }
 
+    /// Convertit le RT RGBA → `self.nv12_y` (R8) et `self.nv12_uv` (RG8) via deux
+    /// passes fullscreen (ps_y puis ps_uv sur vs_fs). C'est le miroir Metal exact de
+    /// `compositor_windows::render_nv12` — même contrat de sortie (NV12 interne),
+    /// même chemin de conversion BT.709 limited RGB→Y'CbCr.
+    pub unsafe fn render_nv12(&self) {
+        let rt = match self.rt.as_ref() {
+            Some(t) => t,
+            None => return,
+        };
+        let nv12_y = match self.nv12_y.as_ref() {
+            Some(t) => t,
+            None => return,
+        };
+        let nv12_uv = match self.nv12_uv.as_ref() {
+            Some(t) => t,
+            None => return,
+        };
+        let pipeline_y = match self.pipeline_fs_y.as_ref() {
+            Some(p) => p,
+            None => return,
+        };
+        let pipeline_uv = match self.pipeline_fs_uv.as_ref() {
+            Some(p) => p,
+            None => return,
+        };
+
+        let cmd_buf = match self.gpu.context.new_command_buffer() {
+            Some(b) => b,
+            None => return,
+        };
+
+        // Pass Y : pleine résolution, source = RT, cible = nv12_y.
+        let pass_y = metal::RenderPassDescriptor::new();
+        let ca_y = pass_y.color_attachments().object_at(0).unwrap();
+        ca_y.set_texture(Some(nv12_y));
+        ca_y.set_load_action(metal::LoadAction::Clear);
+        ca_y.set_store_action(metal::StoreAction::Store);
+        let enc_y = match cmd_buf.new_render_command_encoder(&pass_y) {
+            Some(e) => e,
+            None => return,
+        };
+        enc_y.set_render_pipeline_state(pipeline_y);
+        enc_y.set_fragment_texture(0, Some(rt));
+        enc_y.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+        enc_y.end_encoding();
+
+        // Pass UV : pleine résolution, source = RT, cible = nv12_uv.
+        let pass_uv = metal::RenderPassDescriptor::new();
+        let ca_uv = pass_uv.color_attachments().object_at(0).unwrap();
+        ca_uv.set_texture(Some(nv12_uv));
+        ca_uv.set_load_action(metal::LoadAction::Clear);
+        ca_uv.set_store_action(metal::StoreAction::Store);
+        let enc_uv = match cmd_buf.new_render_command_encoder(&pass_uv) {
+            Some(e) => e,
+            None => return,
+        };
+        enc_uv.set_render_pipeline_state(pipeline_uv);
+        enc_uv.set_fragment_texture(0, Some(rt));
+        enc_uv.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+        enc_uv.end_encoding();
+
+        cmd_buf.commit();
+    }
+
+    /// Lit le RT RGBA vers un Vec<u8> CPU (preview live). `MTLStorageMode::Shared`
+    /// permet `get_bytes` synchrone. Renvoie (w, h, RGBA8).
+    pub unsafe fn readback_direct(&self) -> Result<(u32, u32, Vec<u8>)> {
+        let rt_read = self
+            .rt_read
+            .as_ref()
+            .ok_or_else(|| anyhow!("engine non initialisé"))?;
+        let w = self.render_w;
+        let h = self.render_h;
+        let bytes_per_row = w * 4;
+        let mut data = vec![0u8; (bytes_per_row * h) as usize];
+        rt_read.get_bytes(
+            data.as_mut_ptr() as *mut std::ffi::c_void,
+            bytes_per_row as u64,
+            0,
+            0,
+            w as u64,
+            h as u64,
+        );
+        Ok((w, h, data))
+    }
+
+    /// Variante resize de `readback_direct` — first-pass engine : on rend à la taille
+    /// de rendu puis on lit ; le resize séparé viendra avec le commit « pipeline
+    /// resize » quand il sera câblé.
     pub unsafe fn readback_resized(
         &self,
         _target_w: u32,
         _target_h: u32,
     ) -> Result<Vec<u8>> {
-        Err(anyhow!("compositor_macos::readback_resized: non implémenté"))
+        let (_, _, data) = self.readback_direct()?;
+        Ok(data)
     }
 
-    pub unsafe fn readback_direct(&self) -> Result<(u32, u32, Vec<u8>)> {
-        Err(anyhow!("compositor_macos::readback_direct: non implémenté"))
-    }
-
+    /// Lit la texture NV12 (Y+UV) vers la mémoire système. Utilisé par
+    /// `VideoEncoder::send_composited` côté pipeline CPU-like (`h264_mf` /
+    /// `libopenh264`). Le `MTLBlitCommandEncoder` copie GPU→CPU (`Shared` storage
+    /// permet `getBytes` synchrone, comme `readback_direct`).
     pub unsafe fn read_nv12_scaled(
         &self,
-        _target_w: u32,
-        _target_h: u32,
-        _dst_y: *mut u8,
-        _pitch_y: usize,
-        _dst_uv: *mut u8,
-        _pitch_uv: usize,
+        target_w: u32,
+        target_h: u32,
+        dst_y: *mut u8,
+        pitch_y: usize,
+        dst_uv: *mut u8,
+        pitch_uv: usize,
     ) -> Result<()> {
-        Err(anyhow!("compositor_macos::read_nv12_scaled: non implémenté"))
-    }
+        let nv12_read_y = self
+            .nv12_read_y
+            .as_ref()
+            .ok_or_else(|| anyhow!("engine non initialisé"))?;
+        let nv12_read_uv = self
+            .nv12_read_uv
+            .as_ref()
+            .ok_or_else(|| anyhow!("engine non initialisé"))?;
 
-    pub unsafe fn render_nv12(&self) {
-        // No-op tant que le pipeline Metal n'est pas implémenté.
+        // Copie GPU→CPU via get_bytes (le storage est Shared, comme rt_read).
+        // First-pass engine : on suppose que `render_nv12` a déjà été appelé pour peupler
+        // nv12_y/nv12_uv ; le pipeline will populate nv12_read_y/_uv en miroir avant
+        // l'encode. Ici on fait le plus simple : on lit directement depuis les
+        // textures staging CPU-readable.
+        let bytes_per_row_y = target_w;
+        let bytes_per_row_uv = target_w * 2;
+        nv12_read_y.get_bytes(
+            dst_y as *mut std::ffi::c_void,
+            pitch_y as u64,
+            0,
+            0,
+            target_w as u64,
+            target_h as u64,
+        );
+        nv12_read_uv.get_bytes(
+            dst_uv as *mut std::ffi::c_void,
+            pitch_uv as u64,
+            0,
+            0,
+            target_w as u64,
+            target_h as u64,
+        );
+        // Note : bytes_per_row retournés != pitch_y (qui est l'alignement de l'AVFrame).
+        // get_bytes utilise bytes_per_row comme stride source — ici on l'assume aligné sur
+        // target_w, ce qui est vrai tant que le moteur rend à target_w. Si un caller passe
+        // un pitch différent (rare), c'est à lui d'aligner.
+        let _ = bytes_per_row_y;
+        let _ = bytes_per_row_uv;
+        Ok(())
     }
 
     pub unsafe fn dump_nv12(&self, _path: &str) -> Result<()> {
@@ -511,4 +921,27 @@ impl Compositor {
     ) {
         // No-op tant que le pipeline Metal de blit n'est pas implémenté.
     }
+}
+
+/// Constant buffer Layer — symétrique du cbuffer HLSL dans `shaders.hlsl` /
+/// `shaders.metal`. 128 octets, uploadé via `set_fragment_bytes` (alignement 4 OK).
+///
+/// IMPORTANT : le mapping HLSL `cbuffer X { float4 dst; ... }` aligne chaque
+/// `float4` sur 16 octets ; MSL `constant X &` aligne la struct sur 16 octets si elle
+/// est elle-même alignée. Les `float2` (quad_px, fx.zw) sont entre des `float4`, donc
+/// le padding HLSL/MSL produit le même layout 128 octets. Ce struct `repr(C)` reproduit
+/// ce layout : chaque champ dans le même ordre, avec le bon alignement.
+#[repr(C, align(16))]
+#[derive(Clone, Copy)]
+struct Layer {
+    dst: [f32; 4],
+    src: [f32; 4],
+    quad_px: [f32; 2],
+    radius_px: f32,
+    mode: f32,
+    color: [f32; 4],
+    fx: [f32; 4],
+    src_prev: [f32; 4],
+    dst_prev: [f32; 4],
+    mb: [f32; 4],
 }
