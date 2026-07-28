@@ -36,17 +36,14 @@ import type {
 	ProjectPathResult,
 } from "../../src/native/contracts";
 import {
-	clearDefaultChatHistory,
 	compactSessionNow,
 	createSession,
 	deleteSession,
-	getDefaultChatHistory,
 	getSessionContextUsage,
 	listSessions,
 	renameSession,
 	rewindToMessage,
 	runChat,
-	runChatDefault,
 	selectSession,
 } from "../ai-edition/chat-service";
 import { DocumentService } from "../ai-edition/document-service";
@@ -3422,10 +3419,6 @@ export function registerIpcHandlers(
 		compactNow: (projectId, sessionId) =>
 			compactSessionNow(projectId, sessionId, aiEditionLlmConfig),
 		getContextUsage: getSessionContextUsage,
-		runAiEditionChatDefault: (projectId, message, sink) =>
-			runChatDefault(projectId, message, aiEditionLlmConfig, sink),
-		getAiEditionChatHistoryDefault: (projectId) => getDefaultChatHistory(projectId),
-		clearAiEditionChatHistoryDefault: (projectId) => clearDefaultChatHistory(projectId),
 		listAiEditionChatSessions: (projectId) => listSessions(projectId),
 		createAiEditionChatSession: (projectId, title) => createSession(projectId, title),
 		selectAiEditionChatSession: (projectId, sessionId) => selectSession(projectId, sessionId),
