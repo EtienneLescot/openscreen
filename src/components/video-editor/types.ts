@@ -452,7 +452,7 @@ function focusOrCentre(value: number): number {
 	return Number.isFinite(value) ? clamp01(value) : 0.5;
 }
 
-export function clampFocusToDepth(focus: ZoomFocus, _depth: ZoomDepth): ZoomFocus {
+export function clampFocus(focus: ZoomFocus): ZoomFocus {
 	return {
 		cx: focusOrCentre(focus.cx),
 		cy: focusOrCentre(focus.cy),

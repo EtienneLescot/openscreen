@@ -10,11 +10,12 @@ describe("parseCustomPlaybackSpeedInput", () => {
 		});
 	});
 
-	it("keeps a single decimal point while typing", () => {
+	it("rejects malformed multi-dot input", () => {
+		// The previous parser silently collapsed "1.2.3" into "1.23"; that
+		// round-trip is gone, so the new parser sees an unparseable string.
 		expect(parseCustomPlaybackSpeedInput("1.2.3")).toEqual({
-			status: "valid",
-			draft: "1.23",
-			speed: 1.23,
+			status: "empty",
+			draft: "1.2.3",
 		});
 	});
 
@@ -34,9 +35,11 @@ describe("parseCustomPlaybackSpeedInput", () => {
 	});
 
 	it("accepts comma decimal input by normalizing to a dot", () => {
+		// The draft round-trip is gone; the input is preserved verbatim. Only the
+		// parsed speed uses the normalized form.
 		expect(parseCustomPlaybackSpeedInput("1,1")).toEqual({
 			status: "valid",
-			draft: "1.1",
+			draft: "1,1",
 			speed: 1.1,
 		});
 	});

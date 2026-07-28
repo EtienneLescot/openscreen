@@ -12,14 +12,16 @@ import {
 } from "../../src/native/contracts";
 import type { ChatEventSink } from "../ai-edition/chat-service";
 import type { DocumentService } from "../ai-edition/document-service";
-import type { CursorTelemetryLoadResult } from "../native-bridge/cursor/adapter";
-import { TelemetryCursorAdapter } from "../native-bridge/cursor/telemetryCursorAdapter";
+import {
+	type CursorTelemetryLoadResult,
+	TelemetryCursorAdapter,
+} from "../native-bridge/cursor/telemetryCursorAdapter";
 import { AiEditionService } from "../native-bridge/services/aiEditionService";
 import { CompositorViewService } from "../native-bridge/services/compositorViewService";
 import { CursorService } from "../native-bridge/services/cursorService";
 import { ProjectService } from "../native-bridge/services/projectService";
 import { SystemService } from "../native-bridge/services/systemService";
-import { NativeBridgeStateStore } from "../native-bridge/store";
+import { createNativeBridgeState } from "../native-bridge/store";
 
 export interface NativeBridgeContext {
 	getPlatform: () => NodeJS.Platform;
@@ -191,7 +193,7 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 	ipcMain.removeHandler(NATIVE_BRIDGE_CHANNEL);
 
 	const platform = normalizePlatform(context.getPlatform());
-	const store = new NativeBridgeStateStore(platform);
+	const store = createNativeBridgeState(platform);
 	const projectService = new ProjectService({
 		store,
 		getCurrentProjectPath: context.getCurrentProjectPath,
