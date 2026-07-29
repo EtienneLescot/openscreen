@@ -14,8 +14,9 @@ pub const AUDIO_OUTPUT_CHANNELS: usize = 2;
 pub const AUDIO_BITRATE: i64 = 128_000;
 pub const AUDIO_BOUNDARY_FADE_SAMPLES: usize = 240;
 
-const AVERROR_EAGAIN: i32 = -11;
-const AVERROR_EOF: i32 = -541478725;
+// Valeurs partagées : `AVERROR(EAGAIN)` dépend de la plateforme (-11 vs -35), et ce
+// module est compilé sur les deux. Cf. `crate::ffi`.
+use crate::ffi::{AVERROR_EAGAIN, AVERROR_EOF};
 const AVSEEK_FLAG_BACKWARD: i32 = 1;
 const DEFAULT_FRAME_SEC: f64 = 0.04;
 const MIN_FRAME_SEC: f64 = 0.005;
