@@ -1283,51 +1283,6 @@ pub(crate) unsafe fn walk_composited_timeline(
     let mut cursor_tracks: HashMap<String, CursorTrack> = HashMap::new();
     let mut cursor_active_path: Option<String> = None;
 
-    // ---- encodeur (choisi à l'exécution, cf. ExportCodec::candidates) + mux ----
-    // Backend CPU : pas de pool D3D11 du tout. `av_hwdevice_ctx_init(D3D11VA)` échoue sur
-    // WARP (pas d'`ID3D11VideoDevice`), donc on n'essaie même pas — `VideoEncoder::open`
-    // écarte alors les candidats zéro-copie et le compositeur alimente l'encodeur en
-    // mémoire système via `send_composited`.
-    let software_frames = gpu.backend == Backend::Cpu;
-    let (mut enc_hwdev, mut enc_frames) = if software_frames {
-        (ptr::null_mut(), ptr::null_mut())
-    } else {
-        make_enc_frames(gpu, out_w as i32, out_h as i32)?
-    };
-    // débit proportionnel à la surface de sortie (référence : 8Mbps @ 1920x1080), plancher
-    // 2Mbps pour rester regardable sur les petites tailles.
-    let bit_rate = ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
-    let mut enc = VideoEncoder::open(
-        &params.codec,
-        out_w as i32,
-        out_h as i32,
-        out_fps,
-        bit_rate,
-        enc_frames,
-    )?;
-    let ectx = enc.ctx;
-
-    let mut octx: *mut AVFormatContext = ptr::null_mut();
-    let outc = CString::new(out)?;
-    averr(
-        avformat_alloc_output_context2(&mut octx, ptr::null(), ptr::null(), outc.as_ptr()),
-        "alloc_output_context2",
-    )?;
-    let ostream = avformat_new_stream(octx, ptr::null());
-    if ostream.is_null() {
-        bail!("video avformat_new_stream");
-    }
-    averr(avcodec_parameters_from_context((*ostream).codecpar, ectx), "params_from_ctx")?;
-    (*ostream).time_base = (*ectx).time_base;
-    // Les deux streams doivent exister avant le header MP4 ; l'AAC reste ouvert pendant le
-    // rendu puis reçoit le PCM assemblé à partir des comptes de frames réellement produits.
-    let mut audio_encoder = AacEncoder::open(octx)?;
-    let mut pb: *mut AVIOContext = ptr::null_mut();
-    averr(avio_open(&mut pb, outc.as_ptr(), AVIO_FLAG_WRITE as i32), "avio_open")?;
-    sn_fmt_set_pb(octx, pb);
-    averr(avformat_write_header(octx, ptr::null_mut()), "write_header")?;
-
-    let opkt = av_packet_alloc();
     let mut frames: u64 = 0;
 
     for (clip_index, clip) in clips.iter().enumerate() {
@@ -1457,20 +1412,6 @@ pub(crate) unsafe fn walk_composited_timeline(
                 }
                 comp.compose_frame(sf, wf, frames as f32, cfg)?;
 
-                if software_frames {
-                    enc.send_composited(comp, out_w, out_h, frames as i64)?;
-                    drain_encoder(ectx, octx, ostream, opkt)?;
-                } else {
-                    let outf = av_frame_alloc();
-                    averr(av_hwframe_get_buffer(enc_frames, outf, 0), "hwframe_get_buffer")?;
-                    let out_tex = (*outf).data[0] as *mut c_void;
-                    let out_slice = (*outf).data[1] as u32;
-                    comp.rgb_to_nv12_scaled(out_w, out_h, out_tex, out_slice)?;
-                    (*outf).pts = frames as i64;
-                    enc.send(outf)?;
-                    drain_encoder(ectx, octx, ostream, opkt)?;
-                    av_frame_free(&mut (outf as *mut _));
-                }
                 on_frame(frames)?;
                 frames += 1;
             }
@@ -1514,7 +1455,16 @@ unsafe fn run_multi_inner(
     let scene = comp.scene_snapshot();
 
     // ---- encodeur (choisi à l'exécution, cf. ExportCodec::candidates) + mux ----
-    let (mut enc_hwdev, mut enc_frames) = make_enc_frames(gpu, out_w as i32, out_h as i32)?;
+    // Backend CPU : pas de pool D3D11 du tout. `av_hwdevice_ctx_init(D3D11VA)` échoue sur
+    // WARP (pas d'`ID3D11VideoDevice`), donc on n'essaie même pas — `VideoEncoder::open`
+    // écarte alors les candidats zéro-copie et le compositeur alimente l'encodeur en
+    // mémoire système via `send_composited`.
+    let software_frames = gpu.backend == Backend::Cpu;
+    let (mut enc_hwdev, mut enc_frames) = if software_frames {
+        (ptr::null_mut(), ptr::null_mut())
+    } else {
+        make_enc_frames(gpu, out_w as i32, out_h as i32)?
+    };
     // débit proportionnel à la surface de sortie (référence : 8Mbps @ 1920x1080), plancher
     // 2Mbps pour rester regardable sur les petites tailles.
     let bit_rate = ((out_w as i64 * out_h as i64 * 8_000_000) / (1920 * 1080)).max(2_000_000);
@@ -1564,17 +1514,26 @@ unsafe fn run_multi_inner(
         &mut screen_decs,
         &mut webcam_decs,
         &mut |frame_index| {
-            // Hardware path: the composed texture goes straight into an NV12
-            // encoder frame, so nothing ever descends to system memory.
-            let outf = av_frame_alloc();
-            averr(av_hwframe_get_buffer(enc_frames, outf, 0), "hwframe_get_buffer")?;
-            let out_tex = (*outf).data[0] as *mut c_void;
-            let out_slice = (*outf).data[1] as u32;
-            comp.rgb_to_nv12_scaled(out_w, out_h, out_tex, out_slice)?;
-            (*outf).pts = frame_index as i64;
-            enc.send(outf)?;
-            drain_encoder(ectx, octx, ostream, opkt)?;
-            av_frame_free(&mut (outf as *mut _));
+            // Backend CPU (WARP) : la frame composée descend en mémoire système via
+            // `send_composited` (le compositeur relit son NV12 interne vers un AVFrame
+            // YUV420P / NV12 et l'encodeur le consomme directement). Pas de hw_frames_ctx,
+            // pas de rgb_to_nv12 — c'est exactement le repli WARP que PR #162 a câblé.
+            if software_frames {
+                enc.send_composited(comp, out_w, out_h, frame_index as i64)?;
+                drain_encoder(ectx, octx, ostream, opkt)?;
+            } else {
+                // Hardware path: the composed texture goes straight into an NV12
+                // encoder frame, so nothing ever descends to system memory.
+                let outf = av_frame_alloc();
+                averr(av_hwframe_get_buffer(enc_frames, outf, 0), "hwframe_get_buffer")?;
+                let out_tex = (*outf).data[0] as *mut c_void;
+                let out_slice = (*outf).data[1] as u32;
+                comp.rgb_to_nv12_scaled(out_w, out_h, out_tex, out_slice)?;
+                (*outf).pts = frame_index as i64;
+                enc.send(outf)?;
+                drain_encoder(ectx, octx, ostream, opkt)?;
+                av_frame_free(&mut (outf as *mut _));
+            }
             progress(frame_index + 1);
             Ok(())
         },
