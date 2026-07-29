@@ -399,6 +399,11 @@ pub(crate) struct Decoder {
     pkt: *mut AVPacket,
     frame: *mut AVFrame,
     sent_eof: bool,
+    /// PTS de la frame actuellement décodée dans `frame`, ou `None` si l'état du décodeur
+    /// vient d'être jeté (ouverture, seek). Sert au chemin rapide de `seek_to` : sans lui,
+    /// impossible de savoir si `frame` contient quoi que ce soit d'exploitable — un
+    /// `AVFrame` fraîchement alloué a un `best_effort_timestamp` indéterminé.
+    cur_pts: Option<i64>,
 }
 
 // SAFETY: `Decoder` only owns FFI pointers into FFmpeg's own heap-allocated state, which
@@ -447,6 +452,7 @@ impl Decoder {
             pkt: av_packet_alloc(),
             frame: av_frame_alloc(),
             sent_eof: false,
+            cur_pts: None,
         })
     }
 
@@ -477,9 +483,40 @@ impl Decoder {
     /// donc le débit par frame ne change pas. Renvoie la frame (ou null à EOF).
     pub(crate) unsafe fn seek_to(&mut self, seconds: f64) -> Result<*mut AVFrame> {
         let tb_sec = self.tb_sec();
+
+        // Chemin rapide. Le seek complet ci-dessous jette TOUT l'état du décodeur et repart
+        // de l'image clé précédente — jusqu'à `gop_size` frames à redécoder (60 sur nos
+        // captures), et deux fois puisque écran et webcam ont chacun leur décodeur, soit
+        // ~50 ms par pas de scrub mesurés. Or le cas dominant en édition n'est pas un saut :
+        // c'est « la frame suivante » (scrub, pas-à-pas) ou « la même frame » (un paramètre
+        // a changé, la scène est recomposée au même instant). Aucun des deux ne justifie de
+        // repartir d'une image clé.
+        //
+        // Le critère d'arrêt du déroulement est la MÊME expression que celui du seek complet
+        // (cf. `decode_forward_to`), donc les deux chemins rendent la même frame : c'est une
+        // optimisation, pas un changement de comportement.
+        if tb_sec > 0.0 {
+            if let Some(pts) = self.cur_pts {
+                let cur = pts as f64 * tb_sec;
+                let frame_dur = 1.0 / self.fps().max(1.0);
+                // 1) La frame courante EST celle demandée : rien à décoder du tout.
+                if (cur - seconds).abs() < frame_dur * 0.5 {
+                    return Ok(self.frame);
+                }
+                // 2) La cible est DEVANT et à portée : dérouler depuis ici. Au-delà du seuil,
+                //    repartir d'une image clé redevient moins cher — un seek coûte en moyenne
+                //    un demi-GOP, soit ~0,5 s sur nos captures.
+                if cur < seconds && seconds - cur <= SEEK_FORWARD_MAX_SEC {
+                    return self.decode_forward_to(seconds, tb_sec);
+                }
+            }
+        }
+
         let target = if tb_sec > 0.0 { (seconds / tb_sec) as i64 } else { 0 };
         averr(av_seek_frame(self.fmt, self.vidx, target, AVSEEK_FLAG_BACKWARD), "seek_to")?;
         avcodec_flush_buffers(self.dctx);
+        // L'état vient d'être jeté : plus aucune frame courante exploitable.
+        self.cur_pts = None;
         self.sent_eof = false;
         loop {
             let f = self.next()?;
@@ -489,6 +526,25 @@ impl Decoder {
             let pts = (*f).best_effort_timestamp;
             // pas de pts fiable ou pas de time_base → on prend la 1re frame après la keyframe.
             if pts == i64::MIN || tb_sec <= 0.0 {
+                return Ok(f);
+            }
+            if (pts as f64) * tb_sec >= seconds - tb_sec * 0.5 {
+                return Ok(f);
+            }
+        }
+    }
+
+    /// Déroule le décodeur en avant jusqu'à la première frame à `seconds` ou après, SANS
+    /// jeter son état. Critère d'arrêt identique à celui du seek complet — c'est ce qui
+    /// garantit que les deux chemins rendent exactement la même frame.
+    unsafe fn decode_forward_to(&mut self, seconds: f64, tb_sec: f64) -> Result<*mut AVFrame> {
+        loop {
+            let f = self.next()?;
+            if f.is_null() {
+                return Ok(ptr::null_mut());
+            }
+            let pts = (*f).best_effort_timestamp;
+            if pts == i64::MIN {
                 return Ok(f);
             }
             if (pts as f64) * tb_sec >= seconds - tb_sec * 0.5 {
@@ -535,6 +591,8 @@ impl Decoder {
         loop {
             let r = avcodec_receive_frame(self.dctx, self.frame);
             if r == 0 {
+                let pts = (*self.frame).best_effort_timestamp;
+                self.cur_pts = if pts == i64::MIN { None } else { Some(pts) };
                 return Ok(self.frame);
             }
             if r == AVERROR_EOF {
@@ -596,6 +654,11 @@ unsafe fn advance_decoder_to(
 
 /// Frames-context de l'encodeur : NV12 sur notre device, bind RENDER_TARGET (§5) pour
 /// que le compositeur rende directement dans les surfaces de l'encodeur.
+/// Au-delà de cette distance vers l'avant, `seek_to` repart d'une image clé plutôt que de
+/// dérouler. Calé sur le demi-GOP de nos captures (GOP=60 à 60 fps) : en deçà, dérouler
+/// coûte moins cher que de jeter l'état du décodeur et redécoder depuis la clé précédente.
+const SEEK_FORWARD_MAX_SEC: f64 = 0.5;
+
 unsafe fn make_enc_frames(gpu: &Gpu, w: i32, h: i32) -> Result<(*mut AVBufferRef, *mut AVBufferRef)> {
     let hwdev = av_hwdevice_ctx_alloc(AVHWDeviceType::AV_HWDEVICE_TYPE_D3D11VA);
     let hwdc = (*hwdev).data as *mut AVHWDeviceContext;
