@@ -11,7 +11,7 @@ zero CPU readback between stages — and is shared, with the same scene contract
 numbers and the rejected alternatives that drove the design live in
 [engineering/rendering-performance.md](../engineering/rendering-performance.md).
 
-A single `ID3D11Device` ([`crates/compositor/src/d3d.rs`](../../crates/compositor/src/d3d.rs))
+A single `ID3D11Device` ([`crates/compositor/src/d3d.rs`](../../crates/compositor/src/d3d_windows.rs))
 is shared by every consumer on the path: the ffmpeg `D3D11VA` decoder, the HLSL
 compositor, the `h264_amf` encoder, and the live swapchain. It is created with
 feature level **11_1**, the flags `VIDEO_SUPPORT | BGRA_SUPPORT` (`VIDEO_SUPPORT`
@@ -25,19 +25,35 @@ and without that flag the runtime corruption is silent.
 | source | responsibility |
 |---|---|
 | [`crates/compositor/src/lib.rs`](../../crates/compositor/src/lib.rs) | crate root: declares every module below. Nothing else — the CLI/bench/GUI dispatcher it used to hold lives in the POC crate now |
-| [`crates/compositor/src/d3d.rs`](../../crates/compositor/src/d3d.rs) | the single `ID3D11Device` (feature level 11_1, `VIDEO_SUPPORT`, multithread-protected) |
+| [`crates/compositor/src/d3d.rs`](../../crates/compositor/src/d3d_windows.rs) | the single `ID3D11Device` (feature level 11_1, `VIDEO_SUPPORT`, multithread-protected) |
 | [`crates/compositor/src/ffi.rs`](../../crates/compositor/src/ffi.rs) | bindgen-generated `libav*` bindings (ffmpeg 8.x headers) |
-| [`crates/compositor/src/compositor.rs`](../../crates/compositor/src/compositor.rs) | HLSL compositor — every per-frame pass (`compose_frame`, background, screen, webcam, cursor, annotations, shadows, blur) |
+| [`crates/compositor/src/compositor.rs`](../../crates/compositor/src/compositor_windows.rs) | HLSL compositor — every per-frame pass (`compose_frame`, background, screen, webcam, cursor, annotations, shadows, blur) |
 | [`crates/compositor/src/scene.rs`](../../crates/compositor/src/scene.rs) | the `Scene` struct parsed from the app's `SceneDescription` JSON |
 | [`crates/compositor/src/regions.rs`](../../crates/compositor/src/regions.rs) | zoom / speed / Full Camera regions — envelope shapes and per-frame state sampling |
-| [`crates/compositor/src/pipeline.rs`](../../crates/compositor/src/pipeline.rs) | demux + `D3D11VA` decode + composite + AMF encode + mux (`run_c0` for decode/encode only, `run_composited` for the full path) |
+| [`crates/compositor/src/pipeline.rs`](../../crates/compositor/src/pipeline_windows.rs) | demux + `D3D11VA` decode + composite + AMF encode + mux (`run_c0` for decode/encode only, `run_composited` for the full path) |
 | [`crates/compositor/src/audio.rs`](../../crates/compositor/src/audio.rs) | per-clip audio decode, swresample → f32 planar 48 kHz stereo, WSOLA speed stretch, multi-track mix, AAC encoder |
 | [`crates/compositor/src/cursor.rs`](../../crates/compositor/src/cursor.rs) | `.cursor.json` parser + interpolated cursor track (position, click bounces, adaptive follow samples) |
-| [`crates/compositor/src/text.rs`](../../crates/compositor/src/text.rs) | DirectWrite + Direct2D text rasterisation for annotation labels, cached per (content, style, box) |
+| [`crates/compositor/src/text.rs`](../../crates/compositor/src/text_windows.rs) | DirectWrite + Direct2D text rasterisation for annotation labels, cached per (content, style, box) |
 | [`crates/compositor/src/text_anim.rs`](../../crates/compositor/src/text_anim.rs) | text-annotation appearance animations (port of the TS animation curves, in fractions of the output short side) |
 | [`crates/compositor/src/config.rs`](../../crates/compositor/src/config.rs) | cumulative bench configs C0..C8 (each adds one layer: composite, rounded corners, shadow, background blur, zoom, layout animation, cursor, motion blur) |
 | [`crates/compositor/src/live.rs`](../../crates/compositor/src/live.rs) | off-screen view: `Player` + `Compositor::compose_frame` → RGBA8 staging texture, pulled by the napi addon |
 | [`crates/compositor/src/shaders.hlsl`](../../crates/compositor/src/shaders.hlsl) | all GPU effects (modes 0/1/5/8/9/10/12 — see pipeline below), compiled at runtime via Fxc |
+
+Six of those modules exist twice, once per platform, and `lib.rs` cfg-re-exports the pair
+under one name — so `crate::d3d`, `crate::compositor`, `crate::pipeline` and `crate::text`
+mean the Windows file above on Windows and the macOS file below on a Mac, and every
+call-site stays portable. The rows above name the `_windows` half because that is what
+their prose describes (HLSL, D3D11VA, AMF, DirectWrite); the macOS half is:
+
+| source | responsibility |
+|---|---|
+| [`crates/compositor/src/d3d_macos.rs`](../../crates/compositor/src/d3d_macos.rs) | the `MTLDevice` + `MTLCommandQueue`. Metal has no software rasteriser, so `Backend::Cpu` exists only for API symmetry and is never produced |
+| [`crates/compositor/src/compositor_macos.rs`](../../crates/compositor/src/compositor_macos.rs) | Metal compositor. `CVPixelBuffer` → `MTLTexture` via `CVMetalTextureCache` (zero-copy over IOSurface), then the MSL passes. First-pass engine: full-canvas only, the layered passes are not driven yet |
+| [`crates/compositor/src/pipeline_macos.rs`](../../crates/compositor/src/pipeline_macos.rs) | demux + VideoToolbox decode (+ software fallback) + composite + `h264_videotoolbox` encode + mux |
+| [`crates/compositor/src/mac_frames.rs`](../../crates/compositor/src/mac_frames.rs) | the software-decode axis: libavcodec → swscale → NV12 → IOSurface-backed `CVPixelBuffer`, presented under the same 4-field AVFrame contract as the hardware path |
+| [`crates/compositor/src/text_macos.rs`](../../crates/compositor/src/text_macos.rs) | CoreText + CoreGraphics text rasterisation, same `TextSpec::cache_key` as the Windows side |
+| [`crates/compositor/src/shaders.metal`](../../crates/compositor/src/shaders.metal) | the MSL port of `shaders.hlsl`, compiled at runtime via `newLibraryWithSource`. Same nine entry points; resources are entry-point parameters rather than globals, which is the one thing MSL does not let you transcribe from HLSL |
+| [`crates/compositor/src/timeline_walk.rs`](../../crates/compositor/src/timeline_walk.rs) | portable, not per-platform: the clip walk both exports (MP4, GIF) and both backends share, so "which source frame belongs at output frame N" is defined exactly once |
 
 Two more modules sit in the POC crate ([`crates/poc-d3d/`](../../crates/poc-d3d)) rather than the
 library. Nothing packages them — they drive the library for measurement and eyeballing:
@@ -53,32 +69,32 @@ library. Nothing packages them — they drive the library for measurement and ey
 Every visible frame is rasterised into one RGBA render target
 (`OUT_W × OUT_H = 1920×1080`, then optionally bilinearly resized to the real
 output aspect). `Compositor::compose_frame`
-([`crates/compositor/src/compositor.rs:1421`](../../crates/compositor/src/compositor.rs))
+([`crates/compositor/src/compositor.rs:1421`](../../crates/compositor/src/compositor_windows.rs))
 runs one fixed draw order — derived from the per-frame math it performs, not
 from any list the caller can reorder — and `shaders.hlsl` keys each effect off
 the `mode` field of the same `LayerCB` struct, so the modes below are exactly
 what `shaders.hlsl` actually implements:
 
 1. **Background** (the wallpaper). `mode = 1` for a solid colour
-   ([`compositor.rs:1761`](../../crates/compositor/src/compositor.rs)),
+   ([`compositor.rs:1761`](../../crates/compositor/src/compositor_windows.rs)),
    `mode = 5` for a CSS gradient
-   ([`compositor.rs:1765`](../../crates/compositor/src/compositor.rs)), or a cover-fitted
+   ([`compositor.rs:1765`](../../crates/compositor/src/compositor_windows.rs)), or a cover-fitted
    image loaded through `draw_image_bg`
-   ([`compositor.rs:1156`](../../crates/compositor/src/compositor.rs)). When the
+   ([`compositor.rs:1156`](../../crates/compositor/src/compositor_windows.rs)). When the
    scene's `effects.blur` is on, `blur_bg` (dual-Kawase, ~18 px) blurs whatever
    was just drawn — that is what "Blur BG" does, mirroring the web
    `frameRenderer.blurredBackgroundLayer`
-   ([`compositor.rs:1807`](../../crates/compositor/src/compositor.rs)).
+   ([`compositor.rs:1807`](../../crates/compositor/src/compositor_windows.rs)).
 2. **Screen shadow.** Drop-shadow SDF; opacity scales with the `shadow`
    slider. The shadow tracks the rendered silhouette — a tilted plane gets a
    tilted shadow, not a rect shadow
-   ([`compositor.rs:1885`](../../crates/compositor/src/compositor.rs) /
-   [`compositor.rs:1882`](../../crates/compositor/src/compositor.rs), `mode = 12`).
+   ([`compositor.rs:1885`](../../crates/compositor/src/compositor_windows.rs) /
+   [`compositor.rs:1882`](../../crates/compositor/src/compositor_windows.rs), `mode = 12`).
 3. **Screen video.** Cropped from the active clip's source, with the zoom region
    applied to its UVs and rounded corners via SDF. `mode = 0` for the standard
-   quad ([`compositor.rs:1898`](../../crates/compositor/src/compositor.rs));
+   quad ([`compositor.rs:1898`](../../crates/compositor/src/compositor_windows.rs));
    `mode = 8` for the 3D tilt path (zoom `rotation: iso | left | right`,
-   [`compositor.rs:1950`](../../crates/compositor/src/compositor.rs)). Motion blur
+   [`compositor.rs:1950`](../../crates/compositor/src/compositor_windows.rs)). Motion blur
    uses the previous frame's UV delta as a per-pixel velocity vector and samples
    along it (the "blur by velocity" optimisation — early-outs on still frames).
 4. **Cursor.** A sprite picked from `cursor.cursorSprites` by the OS cursor state
@@ -94,26 +110,26 @@ what `shaders.hlsl` actually implements:
    Motion blur is its own accumulation buffer (additive blend into an
    isolated RT, then "over"-composited onto the scene), independent of the
    scene's `effects.motionBlur`
-   ([`compositor.rs:2038`](../../crates/compositor/src/compositor.rs) /
-   [`compositor.rs:2060`](../../crates/compositor/src/compositor.rs)). Click
+   ([`compositor.rs:2038`](../../crates/compositor/src/compositor_windows.rs) /
+   [`compositor.rs:2060`](../../crates/compositor/src/compositor_windows.rs)). Click
    bounce amplitude comes from the `.cursor.json` track
    ([`crates/compositor/src/cursor.rs`](../../crates/compositor/src/cursor.rs)).
 5. **Webcam shadow.** Drawn only when `cfg.shadow` is on AND the layout is PiP
    (not the block layouts, which weld the camera flush to the screen — no
    floating bubble, no shadow). The strength fades to zero as the camera
    enters Full Camera mode
-   ([`compositor.rs:2118`](../../crates/compositor/src/compositor.rs), `mode = 12`).
+   ([`compositor.rs:2118`](../../crates/compositor/src/compositor_windows.rs), `mode = 12`).
 6. **Webcam video.** UV rectangle derived from the destination aspect, with
    mirror, mask shape (rectangle / circle / square / rounded), and reactive
    scale applied
-   ([`compositor.rs:2127`](../../crates/compositor/src/compositor.rs), `mode = 0`).
+   ([`compositor.rs:2127`](../../crates/compositor/src/compositor_windows.rs), `mode = 0`).
    Full Camera lerps the destination to `[0, 0, 1, 1]` and dissolves the mask
    shape — same rule as `computeCameraFullscreenRect` on the TS side.
 7. **Annotations.** Highest layer. One full-frame `CopySubresourceRegion` of
    the composed scene is taken at the top of `draw_annotations` so that
    multiple blur annotations on the same frame read from a consistent snapshot
    of the underlying pixels
-   ([`compositor.rs:2162`](../../crates/compositor/src/compositor.rs)).
+   ([`compositor.rs:2162`](../../crates/compositor/src/compositor_windows.rs)).
    Per-annotation: figure (arrow, `mode = 9`), blur/mosaic (`mode = 10`),
    text (DirectWrite → D3D11 SRV, then `mode = 0`), image (cached per
    annotation id).
@@ -149,13 +165,13 @@ contain-fitted frame and the export at full output size:
 - `layout.screenRadiusFrac`, `layout.webcamRadiusFrac` — of their own box's
   short side (the only way two halves of a block layout can agree on a
   radius; see `compositor.rs` §1's comment on
-  [`compositor.rs:1702`](../../crates/compositor/src/compositor.rs)).
+  [`compositor.rs:1702`](../../crates/compositor/src/compositor_windows.rs)).
 - `annotation.x|y|w|h` and `annotation.text.fontSizeRel` — of the screen
   rect (annotations anchor to the screen box, not the output frame, and
   intentionally bypass the zoom transform).
 
 The consumer is `Compositor::compose_frame`
-([`compositor.rs:1421`](../../crates/compositor/src/compositor.rs)). It reads
+([`compositor.rs:1421`](../../crates/compositor/src/compositor_windows.rs)). It reads
 the scene per frame, derives per-clip and per-frame values through
 `Scene::for_clip_window`
 ([`scene.rs:436`](../../crates/compositor/src/scene.rs)) — which retains only the
@@ -206,7 +222,7 @@ on-screen view, so editing playback is silent against the exported file.
 
 The crate links `libav*` (ffmpeg) via bindgen
 ([`build.rs`](../../crates/compositor/build.rs) /
-[`wrapper.h`](../../crates/compositor/wrapper.h)). ffmpeg is not vendored — the
+[`wrapper.h`](../../crates/compositor/wrapper_windows.h)). ffmpeg is not vendored — the
 path is pinned in `crates/.cargo/config.toml`:
 
 ```
