@@ -32,8 +32,6 @@ pub mod config;
 pub mod cursor;
 pub mod ffi;
 pub mod gif_export;
-pub mod live;
-pub mod pipeline;
 pub mod regions;
 pub mod scene;
 pub mod text_anim;
