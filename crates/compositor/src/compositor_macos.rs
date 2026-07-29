@@ -256,6 +256,14 @@ pub struct Compositor {
     /// le RT reviendrait à AJOUTER du blanc à ce qui est déjà dessous : sur un fond clair,
     /// le curseur disparaît. Même raisonnement que côté D3D11.
     accum: metal::Texture,
+    /// Pyramide dual-Kawase du flou de fond : demi, quart, huitième de la taille de rendu.
+    /// Dérivée de la taille de rendu et non d'une constante — sinon le rayon effectif du
+    /// flou changerait avec la résolution de sortie.
+    blur_half: metal::Texture,
+    blur_quarter: metal::Texture,
+    blur_eighth: metal::Texture,
+    pipeline_kdown: metal::RenderPipelineState,
+    pipeline_kup: metal::RenderPipelineState,
 }
 
 /// Descripteur de texture — les six cibles ne diffèrent que par format, taille et
@@ -462,6 +470,27 @@ impl Compositor {
             metal::MTLStorageMode::Private,
             rt_usage,
         );
+        let mut pyramid = [2u32, 4, 8].map(|d| {
+            make_texture(
+                device,
+                metal::MTLPixelFormat::RGBA8Unorm,
+                (rw / d).max(1),
+                (rh / d).max(1),
+                metal::MTLStorageMode::Private,
+                rt_usage,
+            )
+        });
+        let blur_eighth = pyramid[2].clone();
+        let blur_quarter = pyramid[1].clone();
+        let blur_half = std::mem::replace(&mut pyramid[0], blur_quarter.clone());
+        let pipeline_kdown = make_pipeline(
+            device, &library, "vs_fs", "ps_kawase_down",
+            metal::MTLPixelFormat::RGBA8Unorm, Blend::Replace,
+        )?;
+        let pipeline_kup = make_pipeline(
+            device, &library, "vs_fs", "ps_kawase_up",
+            metal::MTLPixelFormat::RGBA8Unorm, Blend::Replace,
+        )?;
 
         Ok(Compositor {
             gpu: Gpu {
@@ -492,6 +521,11 @@ impl Compositor {
             pipeline_fs_tex,
             pipeline_add,
             accum,
+            blur_half,
+            blur_quarter,
+            blur_eighth,
+            pipeline_kdown,
+            pipeline_kup,
         })
     }
 
@@ -739,6 +773,53 @@ impl Compositor {
     }
 
 
+
+    /// Une passe plein écran : `source` -> `target` avec `pipeline`, `fx` dans le LayerCB.
+    /// Le viewport découle de la taille de l'attachement, donc pas de `RSSetViewports`.
+    unsafe fn fs_pass(
+        &self,
+        cmd: &metal::CommandBufferRef,
+        target: &metal::Texture,
+        source: &metal::Texture,
+        pipeline: &metal::RenderPipelineState,
+        fx: [f32; 4],
+    ) -> Result<()> {
+        let e = self.begin_pass(
+            cmd,
+            target,
+            Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0)),
+            pipeline,
+        )?;
+        let cb = LayerCB { fx, ..Default::default() };
+        e.set_fragment_bytes(
+            0,
+            std::mem::size_of::<LayerCB>() as u64,
+            &cb as *const LayerCB as *const std::ffi::c_void,
+        );
+        e.set_fragment_texture(0, Some(source));
+        e.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+        e.end_encoding();
+        Ok(())
+    }
+
+    /// Dual-Kawase sur le contenu courant du RT : trois passes DOWN puis trois UP, la
+    /// dernière réécrivant le RT. Port des six `fs_pass` de `compositor_windows::blur_bg`,
+    /// mêmes tailles et mêmes texels.
+    unsafe fn blur_bg(&self, cmd: &metal::CommandBufferRef) -> Result<()> {
+        let off = 2.2; // spread par passe
+        let (rw, rh) = (self.render_w as f32, self.render_h as f32);
+        let (hw, hh) = (rw * 0.5, rh * 0.5);
+        // DOWN : texel = 1/(dims de la SOURCE échantillonnée)
+        self.fs_pass(cmd, &self.blur_half, &self.rt, &self.pipeline_kdown, [1.0 / rw, 1.0 / rh, off, 0.0])?;
+        self.fs_pass(cmd, &self.blur_quarter, &self.blur_half, &self.pipeline_kdown, [1.0 / hw, 1.0 / hh, off, 0.0])?;
+        self.fs_pass(cmd, &self.blur_eighth, &self.blur_quarter, &self.pipeline_kdown, [2.0 / hw, 2.0 / hh, off, 0.0])?;
+        // UP
+        self.fs_pass(cmd, &self.blur_quarter, &self.blur_eighth, &self.pipeline_kup, [4.0 / hw, 4.0 / hh, off, 0.0])?;
+        self.fs_pass(cmd, &self.blur_half, &self.blur_quarter, &self.pipeline_kup, [2.0 / hw, 2.0 / hh, off, 0.0])?;
+        self.fs_pass(cmd, &self.rt, &self.blur_half, &self.pipeline_kup, [1.0 / hw, 1.0 / hh, off, 0.0])?;
+        Ok(())
+    }
+
     /// Ouvre un encodeur sur `target`. `clear` = `None` conserve ce qui s'y trouve.
     ///
     /// Metal n'a pas d'`OMSetRenderTargets` : changer de cible veut dire terminer
@@ -959,6 +1040,17 @@ impl Compositor {
                 );
             }
         }
+
+        // « Blur BG » (parité web `blurredBackgroundLayer`) : floute CE wallpaper qu'on vient
+        // de dessiner, pas la vidéo. No-op visuel sur une couleur plate, effet réel sur un
+        // gradient ou une image. Il lui faut ses propres passes, d'où la coupure ici.
+        enc.end_encoding();
+        if scene_ref.as_ref().map(|s| s.effects.blur).unwrap_or(false) {
+            self.blur_bg(cmd_buf)?;
+        }
+        let enc = self.begin_pass(cmd_buf, &self.rt, None, &self.pipeline_main)?;
+        enc.set_fragment_texture(0, Some(&sy));
+        enc.set_fragment_texture(1, Some(&suv));
 
         // --- écran : ombre puis vidéo ---
         let s_px = [g.s_dst[2] * rw, g.s_dst[3] * rh];
