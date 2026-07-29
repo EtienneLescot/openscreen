@@ -27,85 +27,17 @@
 use crate::config::Cfg;
 use crate::d3d::Gpu;
 use crate::ffi::AVFrame;
+// Le constant buffer est le MÊME struct des deux côtés — cf. `frame_geometry`.
+// Constant buffer, params runtime et constantes de sortie : une seule définition pour
+// les deux backends — cf. `frame_geometry`, qui documente les divergences que
+// l'unification a corrigées.
+pub use crate::frame_geometry::{
+    live_params_from_scene, webcam_shape_code, FIXTURE_FRAMES, LayerCB, LiveParams, OUT_H, OUT_W,
+};
 use crate::scene::Scene;
 use anyhow::{anyhow, Result};
 use metal::foreign_types::ForeignType;
 use std::cell::RefCell;
-
-/// Largeur de référence pour l'export (conservée pour l'API symétrique ; la valeur
-/// effective d'export est négociée par `LiveView` / `Compositor::render_size`).
-pub const OUT_W: u32 = 1920;
-/// Hauteur de référence pour l'export. Voir `OUT_W`.
-pub const OUT_H: u32 = 1080;
-/// Nombre de frames dans la fixture POC (pour le bench — le test C0 l'utilise).
-pub const FIXTURE_FRAMES: u32 = 360;
-
-/// Paramètres runtime de la preview (shadow_scale, radius_scale, …). **Mêmes champs
-/// et même layout que `compositor_windows::LiveParams`** — le moteur Metal lit ces
-/// champs au début de `compose_frame` via le constant buffer `LayerCB`, et toute
-/// divergence casserait l'iso-render cross-backend (cf. PR #162 §3).
-#[derive(Clone, Copy)]
-pub struct LiveParams {
-    pub bg_color: [f32; 4],
-    pub shadow_scale: f32,
-    pub radius_scale: f32,
-    pub padding: f32,
-    pub webcam_size_scale: f32,
-    pub webcam_mirror: bool,
-    pub webcam_shape: u32,
-    pub cursor_size_scale: f32,
-    pub cursor_bounce_scale: f32,
-    pub cursor_motion_blur: f32,
-    pub has_webcam: bool,
-}
-
-impl Default for LiveParams {
-    fn default() -> Self {
-        Self {
-            bg_color: [0.0, 0.0, 0.0, 0.0],
-            shadow_scale: 1.0,
-            radius_scale: 1.0,
-            padding: 0.0,
-            webcam_size_scale: 1.0,
-            webcam_mirror: false,
-            webcam_shape: 3,
-            cursor_size_scale: 1.0,
-            cursor_bounce_scale: 1.0,
-            cursor_motion_blur: 0.0,
-            has_webcam: false,
-        }
-    }
-}
-
-/// Convertit une chaîne UI (« rectangle », « circle », « square ») en code de mode
-/// shader (ps_main mode 4 / 9). Conservé ici pour la symétrie d'API : c'est un mapping
-/// pur, identique sur les deux plateformes.
-pub fn webcam_shape_code(shape: &str) -> u32 {
-    match shape {
-        "rectangle" => 0,
-        "circle" => 1,
-        "square" => 2,
-        _ => 0,
-    }
-}
-
-/// Construit un `LiveParams` à partir d'une scène. Le moteur Metal applique ces
-/// params dans le constant buffer `LayerCB` avant `compose_frame`. **Mêmes formules
-/// que `compositor_windows::live_params_from_scene`** — un changement doit être
-/// reporté des deux côtés pour préserver l'iso-render cross-backend (cf. PR #162 §3).
-pub fn live_params_from_scene(s: &Scene) -> LiveParams {
-    LiveParams {
-        shadow_scale: s.effects.shadow,
-        padding: s.effects.padding,
-        webcam_size_scale: s.layout.webcam_size,
-        webcam_mirror: s.layout.webcam_mirror,
-        webcam_shape: webcam_shape_code(&s.layout.webcam_shape),
-        cursor_size_scale: s.cursor.size,
-        cursor_bounce_scale: s.cursor.click_bounce,
-        cursor_motion_blur: s.cursor.motion_blur,
-        ..LiveParams::default()
-    }
-}
 
 // ---------------------------------------------------------------------------
 // CVMetalTextureCache — le pont CVPixelBuffer → MTLTexture
@@ -625,7 +557,7 @@ impl Compositor {
         let (sy, suv) = self.nv12_srvs(screen)?;
 
         // LayerCB : full-canvas (dst = [0,0,1,1], src = [0,0,1,1], mode = 0 = NV12).
-        let layer = Layer {
+        let layer = LayerCB {
             dst: [0.0, 0.0, 1.0, 1.0],
             src: [0.0, 0.0, 1.0, 1.0],
             quad_px: [self.render_w as f32, self.render_h as f32],
@@ -657,8 +589,8 @@ impl Compositor {
         // `vs_main` lit `layer.dst`/`layer.src`/`layer.quad_px` : le constant buffer doit
         // être lié aux DEUX étages. La première version ne le liait qu'au fragment, donc
         // le vertex shader lisait un buffer non lié et le quad sortait indéfini.
-        let layer_bytes = std::mem::size_of::<Layer>() as u64;
-        let layer_ptr = &layer as *const Layer as *const std::ffi::c_void;
+        let layer_bytes = std::mem::size_of::<LayerCB>() as u64;
+        let layer_ptr = &layer as *const LayerCB as *const std::ffi::c_void;
         encoder.set_vertex_bytes(0, layer_bytes, layer_ptr);
         encoder.set_fragment_bytes(0, layer_bytes, layer_ptr);
         encoder.draw_primitives(metal::MTLPrimitiveType::TriangleStrip, 0, 4);
@@ -899,39 +831,10 @@ impl Compositor {
     }
 }
 
-/// Constant buffer Layer — symétrique du cbuffer HLSL dans `shaders.hlsl` et de la
-/// struct `Layer` de `shaders.metal`. 128 octets.
-///
-/// HLSL aligne chaque `float4` sur 16 octets ; MSL fait de même, et `repr(C, align(16))`
-/// reproduit ce layout champ pour champ : `quad_px` (float2) à 32, `radius_px` à 40,
-/// `mode` à 44, puis `color` (float4) à 48 des deux côtés.
-#[repr(C, align(16))]
-#[derive(Clone, Copy)]
-struct Layer {
-    dst: [f32; 4],
-    src: [f32; 4],
-    quad_px: [f32; 2],
-    radius_px: f32,
-    mode: f32,
-    color: [f32; 4],
-    fx: [f32; 4],
-    src_prev: [f32; 4],
-    dst_prev: [f32; 4],
-    mb: [f32; 4],
-}
 
 #[cfg(test)]
 mod tests {
-    use super::Layer;
-
-    /// Le contrat cross-backend : `Layer` doit occuper exactement les 128 octets que
-    /// `shaders.metal` (et `shaders.hlsl`) décrivent, sinon le shader lit des champs
-    /// décalés et le rendu part en vrille sans erreur.
-    #[test]
-    fn layer_matches_the_shader_constant_buffer() {
-        assert_eq!(std::mem::size_of::<Layer>(), 128);
-        assert_eq!(std::mem::align_of::<Layer>(), 16);
-    }
+    
 
     /// Le pendant macOS de `compositor_windows`'s `every_shader_entry_point_compiles`.
     ///
