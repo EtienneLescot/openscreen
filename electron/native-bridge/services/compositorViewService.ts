@@ -185,28 +185,61 @@ function platformArchTag(): string {
 	return process.arch === "arm64" ? `${platformPrefix}-arm64` : `${platformPrefix}-x64`;
 }
 
-function buildCandidatePaths(
+/**
+ * Bases that may hold `electron/native/…`, most specific first.
+ *
+ * `appRoot` alone is not enough, and was not enough on either side of the packaged
+ * line:
+ *
+ *  - **Unpackaged.** `app.getAppPath()` resolves to the directory holding the entry
+ *    script, i.e. `<repo>/dist-electron` — the entry every dev run uses, `npm run dev`
+ *    included. Joining `electron/native/...` onto that gives
+ *    `<repo>/dist-electron/electron/native/...`, which no build step ever writes, so
+ *    the loader fell through to "addon not present; running as no-op" and the editor
+ *    silently ran without a compositor. Walking up to the first ancestor that actually
+ *    has an `electron/native` finds the checkout root.
+ *  - **Packaged.** `electron/native/bin/<tag>/**` ships exclusively through
+ *    `extraResources` (see electron-builder.json5's mac/win/linux blocks), so it lands
+ *    at `<resources>/electron/native/bin/<tag>` and is never inside `app.asar` — the
+ *    `.asar` → `.asar.unpacked` rewrite below cannot reach it either, since the file
+ *    was never in the archive. `process.resourcesPath` is the base that holds it.
+ *
+ * Same pair of bases `ffmpegSharedBinCandidates` already walks for the ffmpeg dir; the
+ * addon needs it for exactly the same reason.
+ */
+function nativeAssetBaseDirs(appRoot: string): string[] {
+	const bases = [appRoot];
+	// Bounded walk: dist-electron → repo root is one level, but a nested layout could
+	// be deeper. Stop at the filesystem root rather than looping.
+	let dir = appRoot;
+	for (let i = 0; i < 4; i += 1) {
+		const parent = path.dirname(dir);
+		if (parent === dir) {
+			break;
+		}
+		dir = parent;
+		if (fs.existsSync(path.join(dir, "electron", "native"))) {
+			bases.push(dir);
+			break;
+		}
+	}
+	if (typeof process.resourcesPath === "string" && process.resourcesPath.length > 0) {
+		bases.push(process.resourcesPath);
+	}
+	return bases;
+}
+
+export function buildCandidatePaths(
 	appRoot: string,
 	isPackaged: boolean,
 	envOverride: string | null | undefined,
 ): string[] {
-	const builtPath = path.join(
-		appRoot,
-		"electron",
-		"native",
-		"compositor-view",
-		"build",
-		"compositor_view.node",
-	);
-	const archBinPath = path.join(
-		appRoot,
-		"electron",
-		"native",
-		"bin",
-		platformArchTag(),
-		"compositor_view.node",
-	);
-	const ordered = [envOverride, archBinPath, builtPath].filter(
+	const tag = platformArchTag();
+	const perBase = nativeAssetBaseDirs(appRoot).flatMap((base) => [
+		path.join(base, "electron", "native", "bin", tag, "compositor_view.node"),
+		path.join(base, "electron", "native", "compositor-view", "build", "compositor_view.node"),
+	]);
+	const ordered = [envOverride, ...perBase].filter(
 		(value): value is string => typeof value === "string" && value.length > 0,
 	);
 	if (!isPackaged) {
