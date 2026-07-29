@@ -265,6 +265,23 @@ export function VirtualPreview({
 			if (v.readyState >= 2) {
 				setSourceTimeSec(v.currentTime);
 			}
+			// À L'ARRÊT, le `<video>` ne pilote PLUS la position de la timeline.
+			//
+			// Ce tick publie `updateVirtualTime(...)` dérivé de `v.currentTime`. Pendant la
+			// lecture c'est la bonne source : le média avance, la tête le suit. À l'arrêt
+			// c'est l'inverse — l'utilisateur possède la tête de lecture, et le `<video>`
+			// doit la SUIVRE. Sans ce garde, un scrub était écrasé à chaque frame par la
+			// position d'un élément encore en train de chercher ; et près d'une frontière de
+			// clips, `locateSourcePosition` ne résolvait pas, si bien que le repli
+			// `seekToVirtualTimeRef(nextClip.timelineStartSec)` plus bas renvoyait la tête au
+			// DÉBUT du clip voisin — le tressaillement observé au passage d'un clip à l'autre.
+			//
+			// `clockRef` et `setSourceTimeSec` ci-dessus continuent d'être publiés : la webcam
+			// et le calque curseur ont besoin du temps source même à l'arrêt. Seule la
+			// position de la TIMELINE cesse d'être dictée par le média.
+			if (v.paused) {
+				return;
+			}
 			if (clipsRef.current.length === 0) {
 				// ponytail: no clip yet (auto-create runs from
 				// handleLoadedMetadata on the next tick). Push the raw
