@@ -105,17 +105,40 @@ if (!fs.existsSync(builtDylib)) {
 	throw new Error(`Compositor addon build completed but ${builtDylib} was not found.`);
 }
 
-fs.mkdirSync(BUILD_OUT_DIR, { recursive: true });
+/**
+ * Install by atomic rename, NEVER by copying over the existing file.
+ *
+ * macOS validates code pages lazily against the Mach-O signature. Overwriting a
+ * loaded `.node` in place leaves the kernel's page cache holding pages from the OLD
+ * binary on a vnode whose signature is now the NEW one, and the next process to fault
+ * one of those pages is killed outright:
+ *
+ *     signal: SIGKILL (Code Signature Invalid)
+ *     termination: { namespace: "CODESIGNING", indicator: "Invalid Page" }
+ *
+ * No JS error, no stack — the app just dies at `require()`. It only bites on the
+ * SECOND build onwards, which is what makes it so confusing: the addon works, you
+ * change one line of Rust, and now nothing loads.
+ *
+ * Writing to a temp name in the same directory and renaming gives the new content a
+ * fresh inode, so the stale pages belong to a vnode nothing will fault again.
+ */
+function installAtomically(from, to) {
+	fs.mkdirSync(path.dirname(to), { recursive: true });
+	const tmp = `${to}.${process.pid}.tmp`;
+	fs.copyFileSync(from, tmp);
+	fs.renameSync(tmp, to);
+}
+
 const dest = path.join(BUILD_OUT_DIR, "compositor_view.node");
-fs.copyFileSync(builtDylib, dest);
+installAtomically(builtDylib, dest);
 
 // The arch-tagged dir is the first candidate compositorViewService.ts probes, and the
 // one electron-builder ships via extraResources. Keeping both in sync means a dev build
 // and a packaged build load the same binary.
 const archBinDir = path.join(ROOT, "electron", "native", "bin", `darwin-${process.arch}`);
-fs.mkdirSync(archBinDir, { recursive: true });
 const archDest = path.join(archBinDir, "compositor_view.node");
-fs.copyFileSync(builtDylib, archDest);
+installAtomically(builtDylib, archDest);
 
 console.log(`Built  ${builtDylib}`);
 console.log(`Copied ${dest}`);
