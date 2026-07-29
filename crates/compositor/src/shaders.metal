@@ -239,12 +239,15 @@ fragment float4 ps_main(VSOut i [[stage_in]],
         return float4(s.rgb * a, a);
     }
 
-    // mode 11 : texte D2D en alpha prémultiplié — ne PAS re-multiplier.
+    // mode 11 : texte en alpha DÉJÀ prémultiplié (CoreText/Direct2D rendent ainsi) — on
+    // module juste l'opacité globale.
+    //
+    // Le commentaire du port disait « ne PAS re-multiplier » et le code faisait exactement
+    // ça : `s.rgb * (s.a * color.a)`, soit un alpha appliqué deux fois. Le texte sortait
+    // trop sombre sur ses bords adoucis et disparaissait sur les fines.
     if (layer.mode > 10.5 && layer.mode < 11.5)
     {
-        float4 s = texImg.sample(samp, i.uv);
-        float a = s.a * layer.color.a;
-        return float4(s.rgb * a, a);
+        return texImg.sample(samp, i.uv) * layer.color.a;
     }
 
     // mode 12 : ombre du quad projeté. Pénombre douce autour du quad tilté.
@@ -374,24 +377,76 @@ fragment float4 ps_main(VSOut i [[stage_in]],
         return float4(rgb * a, a);
     }
 
-    // mode 9 : flèche d'annotation (3 segments round-cap, SDF du quad = SDF triangle?).
+    // mode 9 : annotation « figure » — une flèche. Parité EXACTE avec `ArrowSvgs.tsx`, dont
+    // chaque direction est un tracé de trois segments à bouts ronds : une hampe et deux
+    // barbes. Trois `sd_segment` et un `min` reproduisent la forme telle quelle.
+    // fx = hampe, src_prev = barbe 1, dst_prev = barbe 2 ; mb.y = demi-épaisseur px.
+    //
+    // Le port avait INVENTÉ une forme : un seul segment dérivé de `quad_px`, avec
+    // `radius_px` en épaisseur. Ce n'était pas une approximation de la flèche, c'était une
+    // autre figure — et elle ignorait la géométrie que `regions::arrow_local_geometry`
+    // calcule et uploade.
     if (layer.mode > 8.5 && layer.mode < 9.5)
     {
-        float2 p = i.local - layer.quad_px * 0.5;
-        float w = clamp(layer.radius_px, 0.0, layer.quad_px.y * 0.5);
-        float2 a0 = float2(0.0, -layer.quad_px.y * 0.5 + w);
-        float2 a1 = float2(layer.quad_px.x * 0.5 - w, layer.quad_px.y * 0.5 - w);
-        float d = sd_segment(p, a0, a1) - w;
-        float a = layer.color.a * (1.0 - smoothstep(0.0, 1.5, d));
+        float d = sd_segment(i.local, layer.fx.xy, layer.fx.zw);
+        d = min(d, sd_segment(i.local, layer.src_prev.xy, layer.src_prev.zw));
+        d = min(d, sd_segment(i.local, layer.dst_prev.xy, layer.dst_prev.zw));
+        // Couverture sur ~1 px : le trait reste net sans crénelage, et une flèche fine ne
+        // disparaît pas quand la demi-épaisseur descend sous le pixel.
+        float a = clamp(layer.mb.y - d + 0.5, 0.0, 1.0) * layer.color.a;
         return float4(layer.color.rgb * a, a);
     }
 
-    // mode 10 : annotation blur / pixelate (on rend dans `ann_copy` qui porte la
-    // pyramide de mi-blur, puis on ré-échantillonne ici).
+    // mode 10 : annotation « flou » — masque la zone en réutilisant l'image DÉJÀ composée,
+    // qui arrive dans `texImg` (recopie mipmappée du render target : on ne peut pas
+    // échantillonner la cible sur laquelle on dessine). `i.pout` donne directement l'UV de
+    // sortie. fx.x = 0 mosaïque / 1 flou ; fx.y = taille de bloc px ou rayon px ;
+    // fx.z = 0 rectangle / 1 ovale ; fx.w = 1 si le masque doit être teinté.
+    //
+    // Le port se contentait de recopier `texImg` : ni forme, ni flou, ni mosaïque, ni teinte.
     if (layer.mode > 9.5 && layer.mode < 10.5)
     {
-        float4 s = texImg.sample(samp, i.uv);
-        return float4(s.rgb, 1.0) * layer.color.a;
+        float2 n = i.local / max(layer.quad_px, float2(1e-6));
+        float cov = 1.0;
+        if (layer.fx.z > 0.5)
+        {
+            // Ovale inscrit : distance au centre en unités de demi-axes, adoucie sur ~1px.
+            float2 dd = (n - 0.5) * 2.0;
+            float r = length(dd);
+            float aa = 2.0 / max(min(layer.quad_px.x, layer.quad_px.y), 1.0);
+            cov = 1.0 - smoothstep(1.0 - aa, 1.0, r);
+        }
+        if (cov <= 0.0) return float4(0.0, 0.0, 0.0, 0.0);
+
+        float3 rgb;
+        if (layer.fx.x > 0.5)
+        {
+            // Flou : un niveau de mip de l'image composée. `log2(rayon)` donne le niveau dont
+            // un texel couvre à peu près le rayon demandé. Un noyau de quelques taps espacés
+            // du rayon ne floute PAS, il superpose des copies décalées — du texte fantôme.
+            float lod = log2(max(layer.fx.y, 1.0));
+            rgb = texImg.sample(samp, i.pout, level(lod)).rgb;
+        }
+        else
+        {
+            // Mosaïque : UV quantifié sur une grille de `fx.y` px, alignée sur le quad pour
+            // que les blocs ne rampent pas quand l'annotation bouge.
+            float2 px_uv = layer.dst.zw / max(layer.quad_px, float2(1e-6));
+            float2 block = max(layer.fx.y, 1.0) * px_uv;
+            float2 origin = layer.dst.xy;
+            float2 q = origin + (floor((i.pout - origin) / block) + 0.5) * block;
+            // Niveau 0 explicite : l'UV quantifié est une marche d'escalier, ses dérivées
+            // explosent en bord de bloc et le choix automatique de mip ramollirait justement
+            // les arêtes qui font la mosaïque.
+            rgb = texImg.sample(samp, q, level(0.0)).rgb;
+        }
+
+        if (layer.fx.w > 0.5)
+        {
+            rgb = mix(rgb, layer.color.rgb, 0.5);
+        }
+        float a = cov * layer.color.a;
+        return float4(rgb * a, a);
     }
 
     // mode 2 : ombre portée (§7 E4). Pénombre douce dérivée de la SDF du quad source,
