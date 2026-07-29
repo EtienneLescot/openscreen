@@ -134,7 +134,8 @@ impl Decoder {
                 // retourne `AV_PIX_FMT_VIDEOTOOLBOX` quand le codec est supporté.
                 (*dctx).hw_device_ctx = crate::ffi::av_buffer_ref(hwdev);
                 (*dctx).get_format = Some(get_hw_format_macos);
-                hwdev
+                // Pas de repli logiciel sur ce chemin : VideoToolbox rend les frames.
+                None
             };
 
             crate::ffi::averr(
@@ -296,6 +297,12 @@ impl Decoder {
     }
 }
 
+/// Même contrat que `pipeline_windows`: le `Decoder` est déplacé vers le thread de
+/// rendu de `live.rs` (et vers le thread de préchargement du clip suivant). Tous ses
+/// pointeurs ffmpeg sont possédés exclusivement par lui, et rien n'y accède depuis
+/// deux threads à la fois — d'où `Send` mais pas `Sync`.
+unsafe impl Send for Decoder {}
+
 impl Drop for Decoder {
     fn drop(&mut self) {
         unsafe {
@@ -338,13 +345,10 @@ unsafe extern "C" fn get_hw_format_macos(
 pub struct ClipSource {
     pub screen: String,
     pub webcam: String,
-    pub cursor_json: String,
-    pub webcam_offset_sec: f64,
     pub source_start_sec: f64,
     pub source_end_sec: f64,
-    pub trim_start_sec: f64,
-    pub trim_end_sec: f64,
-    pub speed: f64,
+    pub webcam_offset_sec: f64,
+    pub has_audio: bool,
 }
 
 /// Codec cible pour l'export. Identique à `pipeline_windows::ExportCodec`.
@@ -471,7 +475,7 @@ impl VideoEncoder {
             if forced.as_deref().is_some_and(|f| f != candidate.name) {
                 continue;
             }
-            match Self::try_open(candidate, w, h, fps, bit_rate) {
+            match unsafe { Self::try_open(candidate, w, h, fps, bit_rate) } {
                 Ok(encoder) => {
                     eprintln!(
                         "[pipeline] encodeur vidéo : {} ({}{})",
@@ -536,18 +540,41 @@ impl VideoEncoder {
         // device VT par défaut (un seul device VideoToolbox par process — OK pour un
         // export mono-clip).
         if candidate.pix_fmt == crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX {
-            let mut hw_frames: *mut crate::ffi::AVBufferRef = ptr::null_mut();
-            let r = crate::ffi::av_hwframe_ctx_alloc(
-                &mut hw_frames,
-                ptr::null_mut(), // device_ctx — VT, par défaut
-                ptr::null_mut(), // pool options — defaults
+            // `av_hwframe_ctx_alloc(device_ref)` prend UN argument et REND l'AVBufferRef ;
+            // et il lui faut un device VideoToolbox, qu'il faut donc créer d'abord.
+            let mut hw_device: *mut crate::ffi::AVBufferRef = ptr::null_mut();
+            let r = crate::ffi::av_hwdevice_ctx_create(
+                &mut hw_device,
+                crate::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                ptr::null(),
+                ptr::null_mut(),
+                0,
             );
-            if r < 0 || hw_frames.is_null() {
+            if r < 0 || hw_device.is_null() {
                 crate::ffi::avcodec_free_context(&mut ctx);
-                bail!("av_hwframe_ctx_alloc (VT) : {}", r);
+                bail!("av_hwdevice_ctx_create (VT, encodeur) : {r}");
+            }
+            let hw_frames = crate::ffi::av_hwframe_ctx_alloc(hw_device);
+            if hw_frames.is_null() {
+                crate::ffi::av_buffer_unref(&mut hw_device);
+                crate::ffi::avcodec_free_context(&mut ctx);
+                bail!("av_hwframe_ctx_alloc (VT)");
+            }
+            let fc = (*hw_frames).data as *mut crate::ffi::AVHWFramesContext;
+            (*fc).format = crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX;
+            (*fc).sw_format = crate::ffi::AVPixelFormat::AV_PIX_FMT_NV12;
+            (*fc).width = w;
+            (*fc).height = h;
+            let mut hw_frames = hw_frames;
+            if crate::ffi::av_hwframe_ctx_init(hw_frames) < 0 {
+                crate::ffi::av_buffer_unref(&mut hw_frames);
+                crate::ffi::av_buffer_unref(&mut hw_device);
+                crate::ffi::avcodec_free_context(&mut ctx);
+                bail!("av_hwframe_ctx_init (VT)");
             }
             (*ctx).hw_frames_ctx = crate::ffi::av_buffer_ref(hw_frames);
             crate::ffi::av_buffer_unref(&mut hw_frames);
+            crate::ffi::av_buffer_unref(&mut hw_device);
         }
 
         if let Err(e) = crate::ffi::averr(
@@ -668,7 +695,7 @@ unsafe fn alloc_sw_frame(
     w: i32,
     h: i32,
 ) -> Result<*mut crate::ffi::AVFrame> {
-    let frame = crate::ffi::av_frame_alloc();
+    let mut frame = crate::ffi::av_frame_alloc();
     if frame.is_null() {
         bail!("av_frame_alloc (encodeur)");
     }
@@ -676,7 +703,7 @@ unsafe fn alloc_sw_frame(
     (*frame).width = w;
     (*frame).height = h;
     if crate::ffi::av_frame_get_buffer(frame, 32) < 0 {
-        crate::ffi::av_frame_free(&mut frame as *mut *mut _);
+        crate::ffi::av_frame_free(&mut frame);
         bail!("av_frame_get_buffer (encodeur) {}x{} pix_fmt={}", w, h, pix_fmt);
     }
     Ok(frame)
@@ -797,7 +824,7 @@ pub fn run_composited_multi(
         )?;
     }
 
-    let opkt = unsafe { crate::ffi::av_packet_alloc() };
+    let mut opkt = unsafe { crate::ffi::av_packet_alloc() };
 
     for clip in clips {
         if !screen_decs.contains_key(&clip.screen) {
@@ -817,7 +844,9 @@ pub fn run_composited_multi(
 
         // Seek initial (keyframes-only) aux bornes du clip.
         let start = clip.source_start_sec;
-        let end = clip.source_end_sec.min(sdec.available_duration_sec().unwrap_or(end));
+        let end = clip.source_end_sec.min(
+            unsafe { sdec.available_duration_sec() }.unwrap_or(clip.source_end_sec),
+        );
         if end <= start {
             continue;
         }
@@ -871,7 +900,7 @@ pub fn run_composited_multi(
         )?;
         crate::ffi::avio_closep(&mut pb);
         crate::ffi::avformat_free_context(octx);
-        crate::ffi::av_packet_free(&mut opkt as *mut *mut _);
+        crate::ffi::av_packet_free(&mut opkt);
     }
 
     let wall_s = t0.elapsed().as_secs_f64();
