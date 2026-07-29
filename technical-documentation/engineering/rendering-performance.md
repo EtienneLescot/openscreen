@@ -91,7 +91,7 @@ C8's 104.0 fps sits under the ~126 headline above. Different session and thermal
 
 ### Bench methodology (of the deleted harness)
 
-`npm run bench:export` (`scripts/bench-export.mjs` + `src/bench/runBench.ts`) opens the real editor window — same `webPreferences`, preload, sandbox — loads a real saved project through the same bridge the editor uses, and calls `exportAxcutDocument` (`ExportDialog`'s entry point). React is skipped, so nothing renders alongside.
+`npm run bench:export` (`scripts/bench-export.mjs` + `src/bench/runBench.ts`) opened the real editor window — same `webPreferences`, preload, sandbox — loads a real saved project through the same bridge the editor uses, and calls `exportAxcutDocument` (`ExportDialog`'s entry point). React is skipped, so nothing renders alongside.
 
 Arms interleave A/B/A/B; same-arm spread is reported; a run above **10 %** spread declares itself VOID. Two earlier runs were discarded because battery and thermal drift (up to 62 % spread) inverted the conclusion. Treat any un-gated benchmark on this hardware as noise.
 
@@ -368,7 +368,7 @@ Gate G0 measured the in-run effect: legacy 9.8 → shipping 14.6 fps (+49 %) on 
 
 ## The WebCodecs bench (retired)
 
-> Retired with the pipeline it measured. `src/bench/runBench.ts` is deleted and `npm run bench:export` is no longer a script in `package.json`; `scripts/bench-export.mjs` survives but its runner does not. The live harness is [`x.bat --cfg C0..C8`](#measuring-it-today). The design rules below — interleaved arms, spread gates, ratios-only, gated parity — are what any replacement has to keep, which is why they are recorded.
+> Retired with the pipeline it measured. `src/bench/runBench.ts` is deleted and `npm run bench:export` is no longer a script in `package.json`; `scripts/bench-export.mjs` is deleted along with its runner. The live harness is [`x.bat --cfg C0..C8`](#measuring-it-today). The design rules below — interleaved arms, spread gates, ratios-only, gated parity — are what any replacement has to keep, which is why they are recorded.
 
 ### Command
 

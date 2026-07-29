@@ -1,4 +1,4 @@
-import type { CameraFullscreenRegion } from "../types";
+import type { CameraFullscreenRegion } from "@/components/video-editor/types";
 import { TRANSITION_WINDOW_MS } from "./constants";
 import { easeOutScreenStudio } from "./mathUtils";
 

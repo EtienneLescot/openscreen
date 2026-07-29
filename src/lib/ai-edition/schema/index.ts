@@ -11,6 +11,12 @@
 // shape — runtime ops, IPC, and exporter integration land in Phase 1+.
 
 import { z } from "zod";
+// Cycle-safe: `aspectRatioUtils` has no schema dependency, and `document/outputFormat`
+// is downstream of schema. We import the leaf tokeniser directly so the v5→v6 upgrader
+// can rewrite `"native"` without dragging in the whole output-format module.
+// Relative, not `@/`: the Electron main bundle imports this module and
+// vite-plugin-electron builds it without the root resolve.alias.
+import { toAspectRatioToken } from "../../../utils/aspectRatioUtils";
 // Cycle-safe: `document/ids` only pulls `uuid`, and `timeline/timelineMap`'s
 // transitive value-imports (region-ventilation, virtual-preview) import from this
 // module TYPE-ONLY, so requiring them here never re-enters schema at runtime.
@@ -21,7 +27,27 @@ import { anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
 //      CLIP-ANCHORED fragments: `{clipId, sourceStartSec, sourceEndSec}` is the
 //      source of truth, `startMs`/`endMs` stay as a derived cache for the
 //      transition. See technical-documentation/architecture/timeline-model.md
-export const axcutSchemaVersion = 5;
+//   5. v6 — `"native"` AspectRatio is retired OPPORTUNISTICALLY. The v5→v6
+//      upgrader rewrites a stored `"native"` to a concrete `"W:H"` token from
+//      the timeline's largest clip, but only when the source dimensions are
+//      actually known; otherwise it leaves the sentinel, which keeps resolving
+//      dynamically at runtime. See `upgradeV5DocumentToV6` for why guessing
+//      would corrupt v1.7 imports.
+export const axcutSchemaVersion = 6;
+
+// ponytail: every region schema shares the same monotonicity rule
+// (end >= start) with the same error shape. Factor the refine so the
+// five call sites stay declarative; the message + path stay tied to
+// the field names (e.g. `endSec >= startSec`, `endMs >= startMs`).
+const endGteStart = <T extends z.ZodObject<z.ZodRawShape>>(
+	schema: T,
+	endKey: keyof T["shape"] & string,
+	startKey: keyof T["shape"] & string,
+) =>
+	schema.refine((data) => (data[endKey] as number) >= (data[startKey] as number), {
+		message: `${endKey} must be greater than or equal to ${startKey}`,
+		path: [endKey],
+	});
 
 export const isoDateSchema = z.string().datetime({ offset: true });
 
@@ -150,44 +176,41 @@ export const clipSchema = z
 		path: ["sourceEndSec"],
 	});
 
-export const gapSchema = z
-	.object({
+export const gapSchema = endGteStart(
+	z.object({
 		id: z.string().min(1),
 		timelineStartSec: z.number().nonnegative(),
 		timelineEndSec: z.number().nonnegative(),
 		reason: z.string().default(""),
-	})
-	.refine((data) => data.timelineEndSec >= data.timelineStartSec, {
-		message: "timelineEndSec must be greater than or equal to timelineStartSec",
-		path: ["timelineEndSec"],
-	});
+	}),
+	"timelineEndSec",
+	"timelineStartSec",
+);
 
-export const rangeSchema = z
-	.object({
+export const rangeSchema = endGteStart(
+	z.object({
 		startSec: z.number().nonnegative(),
 		endSec: z.number().nonnegative(),
 		reason: z.string().default(""),
-	})
-	.refine((data) => data.endSec >= data.startSec, {
-		message: "endSec must be greater than or equal to startSec",
-		path: ["endSec"],
-	});
+	}),
+	"endSec",
+	"startSec",
+);
 
 // ponytail: trimRanges reference asset source-time (not timeline). trimRegions
 // in v2 are the inverse — a skip = the region inside the source we DON'T keep.
-export const trimRangeSchema = z
-	.object({
+export const trimRangeSchema = endGteStart(
+	z.object({
 		id: z.string().min(1),
 		assetId: z.string().min(1),
 		startSec: z.number().nonnegative(),
 		endSec: z.number().nonnegative(),
 		reason: z.string().default(""),
 		origin: z.enum(["system", "agent", "user"]),
-	})
-	.refine((data) => data.endSec >= data.startSec, {
-		message: "endSec must be greater than or equal to startSec",
-		path: ["endSec"],
-	});
+	}),
+	"endSec",
+	"startSec",
+);
 
 export const timelineSchema = z.preprocess(
 	// Back-compat: the field was renamed skipRanges → trimRanges. Old persisted
@@ -343,8 +366,8 @@ const clipAnchorShape = {
 	sourceEndSec: z.number().nonnegative().optional(),
 };
 
-export const annotationRegionSchema = z
-	.object({
+export const annotationRegionSchema = endGteStart(
+	z.object({
 		id: z.string().min(1),
 		startMs: z.number().nonnegative(),
 		endMs: z.number().nonnegative(),
@@ -366,14 +389,13 @@ export const annotationRegionSchema = z
 		annotationSource: z.literal("auto-caption").optional(),
 		figureData: figureDataSchema,
 		blurData: blurDataSchema,
-	})
-	.refine((data) => data.endMs >= data.startMs, {
-		message: "endMs must be greater than or equal to startMs",
-		path: ["endMs"],
-	});
+	}),
+	"endMs",
+	"startMs",
+);
 
-export const zoomRegionSchema = z
-	.object({
+export const zoomRegionSchema = endGteStart(
+	z.object({
 		id: z.string().min(1),
 		startMs: z.number().nonnegative(),
 		endMs: z.number().nonnegative(),
@@ -394,11 +416,10 @@ export const zoomRegionSchema = z
 		rotationPreset: z.enum(["iso", "left", "right"]).optional(),
 		customScale: z.number().positive().optional(),
 		source: z.enum(["auto", "manual"]).optional(),
-	})
-	.refine((data) => data.endMs >= data.startMs, {
-		message: "endMs must be greater than or equal to startMs",
-		path: ["endMs"],
-	});
+	}),
+	"endMs",
+	"startMs",
+);
 
 // Legacy OpenScreen appearance / export settings that the v3 schema doesn't
 // normalize into the timeline / assets model. They are applied at export time
@@ -438,13 +459,15 @@ const documentSchemaShape = z.object({
 // P4 — v3 documents carried a single project-level `cameraTrack` (one project
 // = one camera, inherited from the pre-multi-clip editor). v4 moves it onto
 // the owning asset (see `assetSchema.cameraTrack` above) so each asset in a
-// multi-clip project can carry its own camera link. This preprocess upgrades
-// any v3 document transparently at every `documentSchema.parse(...)` call
-// site — it does NOT touch v2 (still handled solely by the separate
-// `migrateProjectDataToAxcutDocument` pure function) or reject unknown
-// versions; anything that isn't exactly v3 passes through unchanged and is
-// rejected by the `schemaVersion` literal check below as before.
-function upgradeV3DocumentToV4(raw: unknown): unknown {
+// multi-clip project can carry its own camera link. This is invoked at LOAD
+// TIME by `migrateRawDocumentToCurrent` in `document/migrate.ts`, not at every
+// `documentSchema.parse(...)` call (the parse is now a pure v6 validation
+// step — see the comment above `documentSchema` below). It does NOT touch v2
+// (still handled solely by the separate `migrateProjectDataToAxcutDocument`
+// pure function) or reject unknown versions; anything that isn't exactly v3
+// passes through unchanged so the caller's `documentSchema.parse` can
+// reject it via the `schemaVersion` literal.
+export function upgradeV3DocumentToV4(raw: unknown): unknown {
 	if (!raw || typeof raw !== "object") return raw;
 	const doc = raw as Record<string, unknown>;
 	if (doc.schemaVersion !== 3) return raw;
@@ -478,8 +501,11 @@ function upgradeV3DocumentToV4(raw: unknown): unknown {
  * A region covering no clip (zero-length, or off the end of the timeline) is
  * dropped: it could never play. A document with no clips has nothing to anchor to,
  * so its regions pass through untouched (still valid — the anchor is optional).
+ *
+ * Invoked at LOAD TIME by `migrateRawDocumentToCurrent` in `document/migrate.ts`,
+ * not at every `documentSchema.parse(...)` call.
  */
-function upgradeV4DocumentToV5(raw: unknown): unknown {
+export function upgradeV4DocumentToV5(raw: unknown): unknown {
 	if (!raw || typeof raw !== "object") return raw;
 	const doc = raw as Record<string, unknown>;
 	if (doc.schemaVersion !== 4) return raw;
@@ -520,10 +546,133 @@ function upgradeV4DocumentToV5(raw: unknown): unknown {
 	};
 }
 
-export const documentSchema = z.preprocess(
-	(raw) => upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw)),
-	documentSchemaShape,
-);
+/**
+ * Largest raw asset footprint among the timeline's clips. A local copy of the
+ * `referenceClipDims` pick from `document/outputFormat` — duplicated here so the schema
+ * package doesn't import from a module that itself imports from this one (cycle), and so
+ * the upgrader doesn't need the runtime `probedAssetDims` map (it runs at load time, before
+ * any asset is probed). Crop IS applied: `"native"` resolved to the *cropped* clip
+ * dimensions at runtime (`clipEffectiveDims` → `calculateEffectiveSourceDimensions`),
+ * so ignoring it here would silently reframe every cropped project.
+ */
+/** Mirrors `atLeastEven` in mp4ExportSettings — H.264 4:2:0 rejects odd dims. */
+function atLeastEven(value: number): number {
+	return Math.max(2, Math.floor(value / 2) * 2);
+}
+
+function largestClipDims(doc: Record<string, unknown>): { width: number; height: number } | null {
+	const timeline = (doc.timeline ?? {}) as Record<string, unknown>;
+	const clips = Array.isArray(timeline.clips) ? timeline.clips : [];
+	const assets = Array.isArray(doc.assets) ? doc.assets : [];
+	const assetById = new Map<string, Record<string, unknown>>();
+	for (const a of assets) {
+		if (a && typeof a === "object" && typeof (a as { id?: unknown }).id === "string") {
+			assetById.set((a as { id: string }).id, a as Record<string, unknown>);
+		}
+	}
+	let best: { width: number; height: number } | null = null;
+	let bestArea = 0;
+	for (const clip of clips) {
+		if (!clip || typeof clip !== "object") continue;
+		const c = clip as Record<string, unknown>;
+		const assetId = c.assetId;
+		if (typeof assetId !== "string") continue;
+		const asset = assetById.get(assetId);
+		if (!asset) continue;
+		const video = (asset.video ?? {}) as Record<string, unknown>;
+		const rawW = typeof video.width === "number" ? video.width : 0;
+		const rawH = typeof video.height === "number" ? video.height : 0;
+		if (rawW <= 0 || rawH <= 0) continue;
+		// Apply the clip's crop, exactly as `calculateEffectiveSourceDimensions`
+		// (mp4ExportSettings) does at runtime — including the snap to even pixels,
+		// so the reduced token matches the size the encoder is actually handed.
+		// "native" meant "the cropped source's shape"; ignoring crop here would
+		// bake the wrong ratio into every cropped project.
+		const crop = (c.cropRegion ?? {}) as Record<string, unknown>;
+		const cropW = typeof crop.width === "number" && crop.width > 0 ? crop.width : 1;
+		const cropH = typeof crop.height === "number" && crop.height > 0 ? crop.height : 1;
+		const w = atLeastEven(Math.round(rawW * cropW));
+		const h = atLeastEven(Math.round(rawH * cropH));
+		const area = w * h;
+		if (area > bestArea) {
+			bestArea = area;
+			best = { width: w, height: h };
+		}
+	}
+	return best;
+}
+
+/**
+ * v5 → v6 — retire the `"native"` AspectRatio. `"native"` was a runtime-only sentinel
+ * that resolved to the timeline's largest clip; v6 makes that resolution permanent by
+ * baking the concrete `"W:H"` token into the document. The new value matches the OLD
+ * runtime answer (largest clip), so projects migrate losslessly — preview and export
+ * will keep framing the same shape they did yesterday.
+ *
+ * Falls back to `"16:9"` when the timeline has no clips with known dimensions (the same
+ * value the runtime bridge in `resolveAspectRatioValue` returned when no document was
+ * available). A document without a `legacyEditor` envelope is unchanged apart from the
+ * version bump.
+ */
+function upgradeV5DocumentToV6(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object") return raw;
+	const doc = raw as Record<string, unknown>;
+	if (doc.schemaVersion !== 5) return raw;
+
+	const legacy =
+		doc.legacyEditor && typeof doc.legacyEditor === "object" && !Array.isArray(doc.legacyEditor)
+			? (doc.legacyEditor as Record<string, unknown>)
+			: null;
+
+	if (!legacy || legacy.aspectRatio !== "native") {
+		return { ...doc, schemaVersion: 6 };
+	}
+
+	// OPPORTUNISTIC, never forced. Baking requires real source dimensions, and a
+	// project imported from v1.7 has none yet: `migrateProjectDataToAxcutDocument`
+	// builds its asset from `{version:2, media, editor}`, which carries only file
+	// paths — dimensions arrive later, when `useTimeline`'s probe effect writes
+	// `asset.video` back to disk.
+	//
+	// So when dimensions are unknown we leave `"native"` in place rather than
+	// stamping a hardcoded ratio. `"native"` keeps resolving dynamically at runtime
+	// (`resolveAspectRatioValue`), which IS the v1.7 behaviour, and the next load
+	// after the probe has persisted dimensions converts it for real. Forcing
+	// `"16:9"` here would permanently reframe every portrait v1.7 project that used
+	// "Native", on its first open in v1.8, with no way back.
+	const dims = largestClipDims(doc);
+	if (!dims) {
+		return { ...doc, schemaVersion: 6 };
+	}
+	return {
+		...doc,
+		schemaVersion: 6,
+		legacyEditor: { ...legacy, aspectRatio: toAspectRatioToken(dims.width, dims.height) },
+	};
+}
+
+/**
+ * Runs the whole upgrade chain on a raw, untrusted value. Idempotent: each step
+ * is gated on an exact `schemaVersion`, so an already-current document passes
+ * through untouched.
+ *
+ * Lives here rather than in `document/migrate.ts` on purpose — the Electron main
+ * process imports this composer, and `migrate.ts` pulls a value import
+ * (`PROJECT_VERSION`) through the `@/` alias, which `vite-plugin-electron` does
+ * not configure for the main bundle. Keep this module alias-free.
+ */
+export function migrateRawDocumentToCurrent(raw: unknown): unknown {
+	return upgradeV5DocumentToV6(upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw)));
+}
+
+// PURE v6 validation. Callers that read a document from disk (or any other
+// source that might carry an older `schemaVersion`) MUST run
+// `migrateRawDocumentToCurrent` on the raw value first. The previous
+// implementation wrapped this schema in a `z.preprocess` that re-ran the whole
+// v3→v4→v5→v6 chain on EVERY parse, including in-memory parses of documents that
+// were already current. Hoisting it to load time makes the in-memory parse a
+// single `z.literal(6)` + shape check.
+export const documentSchema = documentSchemaShape;
 
 export const createProjectInputSchema = z.object({
 	title: z.string().trim().min(1).default("Untitled Project"),

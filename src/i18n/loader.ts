@@ -1,111 +1,72 @@
+import i18next, { type Resource } from "i18next";
 import { DEFAULT_LOCALE, I18N_NAMESPACES, type I18nNamespace, type Locale } from "./config";
 
-type MessageMap = Record<string, unknown>;
-type LocaleValidationError = {
-	locale: string;
-	missingNamespaces: I18nNamespace[];
-};
+const modules = import.meta.glob("./locales/**/*.json", {
+	eager: true,
+	import: "default",
+}) as Record<string, unknown>;
 
-const modules = import.meta.glob("./locales/**/*.json", { eager: true }) as Record<
-	string,
-	{ default: MessageMap }
->;
-
-const messages: Record<string, Record<string, MessageMap>> = {};
-
+const byLocale: Record<string, Record<string, unknown>> = {};
 for (const [path, mod] of Object.entries(modules)) {
-	// path looks like "./locales/en/common.json"
-	const parts = path.replace("./locales/", "").replace(".json", "").split("/");
-	const locale = parts[0];
-	const namespace = parts[1];
-	if (!messages[locale]) messages[locale] = {};
-	messages[locale][namespace] = mod.default;
+	const [locale, namespace] = path.replace("./locales/", "").replace(".json", "").split("/");
+	if (!byLocale[locale]) byLocale[locale] = {};
+	byLocale[locale][namespace] = mod;
 }
 
-const REQUIRED_NAMESPACES = new Set<string>(I18N_NAMESPACES);
+const isComplete = (locale: string) => I18N_NAMESPACES.every((ns) => byLocale[locale]?.[ns]);
 
-const localeValidationErrors: LocaleValidationError[] = Object.keys(messages)
-	.map((locale) => {
-		const localeMessages = messages[locale] ?? {};
-		const missingNamespaces = I18N_NAMESPACES.filter((namespace) => !localeMessages[namespace]);
-		return {
-			locale,
-			missingNamespaces,
-		};
-	})
-	.filter((entry) => entry.missingNamespaces.length > 0);
-
-const invalidLocales = new Set(localeValidationErrors.map((entry) => entry.locale));
-
-const availableLocales = Object.keys(messages)
-	.filter((locale) => REQUIRED_NAMESPACES.size > 0 && hasRequiredNamespaces(messages[locale]))
-	.filter((locale) => !invalidLocales.has(locale))
-	.sort((a, b) => {
-		if (a === DEFAULT_LOCALE) return -1;
-		if (b === DEFAULT_LOCALE) return 1;
-		return a.localeCompare(b);
-	});
-
-if (localeValidationErrors.length > 0) {
-	console.error("[i18n] Incomplete locale folders were excluded:");
-	for (const entry of localeValidationErrors) {
-		console.error(
-			`[i18n] ${entry.locale}: missing ${entry.missingNamespaces.map((ns) => `${ns}.json`).join(", ")}`,
-		);
-	}
+const incomplete = Object.keys(byLocale).filter((locale) => !isComplete(locale));
+if (incomplete.length > 0) {
+	console.error("[i18n] Incomplete locale folders were excluded:", incomplete.join(", "));
 }
 
-function hasRequiredNamespaces(localeMessages: Record<string, MessageMap> | undefined): boolean {
-	if (!localeMessages) return false;
-	for (const namespace of REQUIRED_NAMESPACES) {
-		if (!localeMessages[namespace]) return false;
-	}
-	return true;
-}
+const availableLocales = Object.keys(byLocale)
+	.filter(isComplete)
+	.sort((a, b) => (a === DEFAULT_LOCALE ? -1 : b === DEFAULT_LOCALE ? 1 : a.localeCompare(b)));
 
-function isAvailableLocale(locale: string): locale is Locale {
-	return availableLocales.includes(locale);
+const resources = Object.fromEntries(
+	availableLocales.map((locale) => [locale, byLocale[locale] as Resource[string]]),
+) as Resource;
+
+// `lng` is inert here: every lookup below passes an explicit `lng`, so the init
+// language never reaches the output. Reading localStorage at module scope would
+// add a failure mode for no gain — it can throw SecurityError, and at module
+// scope that takes down the whole graph rather than one component. The user's
+// stored preference is applied by I18nContext, which guards its access.
+await i18next.init({
+	lng: DEFAULT_LOCALE,
+	fallbackLng: DEFAULT_LOCALE,
+	defaultNS: "common",
+	resources,
+	interpolation: { escapeValue: false },
+	// A non-leaf key would otherwise render i18next's English developer message
+	// ("key 'x' returned an object instead of string") straight into the UI.
+	// Returning undefined keeps the old loader's behaviour: fall through to the
+	// `namespace.key` marker.
+	returnedObjectHandler: () => undefined,
+});
+
+function tAt(
+	lng: Locale,
+	ns: I18nNamespace,
+	key: string,
+	vars?: Record<string, string | number>,
+): string | undefined {
+	if (!i18next.exists(key, { lng, ns })) return undefined;
+	const result = i18next.t(key, { lng, ns, ...vars });
+	return typeof result === "string" ? result : undefined;
 }
 
 export function getAvailableLocales(): Locale[] {
-	if (availableLocales.length === 0) {
-		return [DEFAULT_LOCALE];
-	}
-	return availableLocales;
-}
-
-export function getLocaleValidationErrors(): LocaleValidationError[] {
-	return localeValidationErrors;
-}
-
-function getMessageValue(obj: unknown, dotPath: string): string | undefined {
-	const keys = dotPath.split(".");
-	let current: unknown = obj;
-	for (const key of keys) {
-		if (current == null || typeof current !== "object") return undefined;
-		current = (current as Record<string, unknown>)[key];
-	}
-	return typeof current === "string" ? current : undefined;
-}
-
-function interpolate(str: string, vars?: Record<string, string | number>): string {
-	if (!vars) return str;
-	return str.replace(/\{\{(\w+)\}\}/g, (_, key: string) => String(vars[key] ?? `{{${key}}}`));
-}
-
-export function getMessages(locale: Locale, namespace: I18nNamespace): MessageMap {
-	const resolvedLocale = isAvailableLocale(locale) ? locale : DEFAULT_LOCALE;
-	return messages[resolvedLocale]?.[namespace] ?? {};
+	return availableLocales.length > 0 ? availableLocales : [DEFAULT_LOCALE];
 }
 
 export function getLocaleName(locale: Locale): string {
-	const resolvedLocale = isAvailableLocale(locale) ? locale : DEFAULT_LOCALE;
-	return getMessageValue(messages[resolvedLocale]?.common, "locale.name") ?? locale;
+	return tAt(locale, "common", "locale.name") ?? locale;
 }
 
 export function getLocaleShort(locale: Locale): string {
-	const resolvedLocale = isAvailableLocale(locale) ? locale : DEFAULT_LOCALE;
-	return getMessageValue(messages[resolvedLocale]?.common, "locale.short") ?? locale;
+	return tAt(locale, "common", "locale.short") ?? locale;
 }
 
 export function translate(
@@ -114,12 +75,5 @@ export function translate(
 	key: string,
 	vars?: Record<string, string | number>,
 ): string {
-	const value =
-		getMessageValue(
-			messages[isAvailableLocale(locale) ? locale : DEFAULT_LOCALE]?.[namespace],
-			key,
-		) ?? getMessageValue(messages[DEFAULT_LOCALE]?.[namespace], key);
-
-	if (value == null) return `${namespace}.${key}`;
-	return interpolate(value, vars);
+	return tAt(locale, namespace, key, vars) ?? `${namespace}.${key}`;
 }

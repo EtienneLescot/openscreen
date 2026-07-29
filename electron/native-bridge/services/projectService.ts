@@ -3,10 +3,10 @@ import type {
 	ProjectFileResult,
 	ProjectPathResult,
 } from "../../../src/native/contracts";
-import type { NativeBridgeStateStore } from "../store";
+import type { NativeBridgeState } from "../store";
 
 interface ProjectServiceOptions {
-	store: NativeBridgeStateStore;
+	store: NativeBridgeState;
 	getCurrentProjectPath: () => string | null;
 	getCurrentVideoPath: () => string | null;
 	saveProjectFile: (

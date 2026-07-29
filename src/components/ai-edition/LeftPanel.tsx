@@ -2,17 +2,15 @@ import { ArrowLeft, Check, Film, Loader2, MessageSquare, Plus, Search, X } from 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
-import { AI_FEATURES_ENABLED } from "@/components/video-editor/featureFlags";
 import { useScopedT } from "@/contexts/I18nContext";
 import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
-import { useOptimisticTimelineOps } from "@/lib/ai-edition/store/useOptimisticTimelineOps";
 import { nativeBridgeClient } from "@/native/client";
 import type {
+	AiEditionChatEvent,
 	AiEditionLlmConfig,
 	AiEditionToolCallSummary,
-	AxcutTimelineOperation,
 } from "@/native/contracts";
 import { formatBytes } from "@/utils/formatBytes";
 import {
@@ -330,7 +328,7 @@ export function LeftPanel({
 	assetStatuses?: Record<string, "pending" | "running" | "failed">;
 	onRegenerateAsset?: (assetId: string, language: string) => Promise<void>;
 }) {
-	return active === "chat" && AI_FEATURES_ENABLED ? (
+	return active === "chat" ? (
 		<ChatStripPanel />
 	) : (
 		<MediaPane assetStatuses={assetStatuses} onRegenerateAsset={onRegenerateAsset} />
@@ -346,6 +344,11 @@ interface ChatDisplayMessage {
 	// ponytail: axcut parity — non-null on user messages that have a
 	// rewind-able document snapshot, so the per-message ↩ button shows.
 	checkpointId?: string | null;
+	// ponytail: when an assistant message carries the model's reasoning trace
+	// (Anthropic/MiniMax thinking), the chat renders it as a collapsible block
+	// above the answer. Ephemeral — only present for the turn that streamed it;
+	// reloading a session won't show past traces.
+	thinking?: string;
 }
 
 // Quick-access model picker anchored to the composer's model pill — mirrors
@@ -644,6 +647,108 @@ function ModelQuickPopover({
 	);
 }
 
+// ponytail: collapsible block that renders a model's reasoning trace (the
+// streaming text from Anthropic/MiniMax `thinking` blocks). Default state is
+// the last ~240 chars of the trace, clamped to two lines — the latest
+// reasoning the model produced. Clicking the header toggles into "solid" mode
+// (full text, scrollable). Used both while the reasoning is still streaming
+// (so the user sees the model is alive) and on the completed message (so the
+// trace is still there to revisit, collapsed by default).
+const THINKING_PREVIEW_TAIL_CHARS = 240;
+function ThinkingBlock({
+	text,
+	expanded,
+	onToggle,
+	label,
+}: {
+	text: string;
+	expanded: boolean;
+	onToggle: () => void;
+	label: string;
+}) {
+	const preview =
+		text.length > THINKING_PREVIEW_TAIL_CHARS
+			? `…${text.slice(-THINKING_PREVIEW_TAIL_CHARS)}`
+			: text;
+	return (
+		<button
+			type="button"
+			onClick={onToggle}
+			aria-expanded={expanded}
+			style={{
+				display: "block",
+				width: "100%",
+				textAlign: "left",
+				background: "transparent",
+				border: "1px solid var(--border-soft)",
+				borderRadius: "var(--r-sm)",
+				padding: "6px 8px",
+				marginBottom: 4,
+				color: expanded ? "var(--fg-2)" : "var(--muted)",
+				font: "400 11px/1.5 var(--font-body)",
+				cursor: "pointer",
+			}}
+		>
+			<div
+				style={{
+					display: "flex",
+					alignItems: "center",
+					gap: 4,
+					marginBottom: expanded ? 4 : 0,
+					color: "var(--muted)",
+					font: "500 10px/1 var(--font-mono)",
+				}}
+			>
+				<svg
+					width={10}
+					height={10}
+					viewBox="0 0 24 24"
+					fill="none"
+					stroke="currentColor"
+					strokeWidth="2"
+					strokeLinecap="round"
+					strokeLinejoin="round"
+					style={{
+						transform: expanded ? "rotate(90deg)" : "rotate(0deg)",
+						transition: "transform 120ms ease",
+						flex: "0 0 auto",
+					}}
+					aria-hidden="true"
+				>
+					<polyline points="9 6 15 12 9 18" />
+				</svg>
+				<span>{label}</span>
+			</div>
+			{expanded ? (
+				<div
+					style={{
+						maxHeight: 220,
+						overflow: "auto",
+						whiteSpace: "pre-wrap",
+						wordBreak: "break-word",
+						font: "400 11px/1.5 var(--font-mono)",
+					}}
+				>
+					{text}
+				</div>
+			) : (
+				<div
+					style={{
+						display: "-webkit-box",
+						WebkitLineClamp: 2,
+						WebkitBoxOrient: "vertical",
+						overflow: "hidden",
+						whiteSpace: "pre-wrap",
+						wordBreak: "break-word",
+					}}
+				>
+					{preview}
+				</div>
+			)}
+		</button>
+	);
+}
+
 function ChatStripPanel() {
 	const t = useScopedT("editor");
 	const tc = useScopedT("common");
@@ -670,6 +775,17 @@ function ChatStripPanel() {
 	const activeSessionIdRef = useRef<string | null>(activeSessionId);
 	activeSessionIdRef.current = activeSessionId;
 	const scrollRef = useRef<HTMLDivElement | null>(null);
+	// ponytail: live reasoning trace for the in-flight turn. Reset at send()
+	// start; deltas append through the chat-event subscription; once the run
+	// resolves we copy it onto the assistant message and clear it.
+	const [thinkingText, setThinkingText] = useState("");
+	const [thinkingExpanded, setThinkingExpanded] = useState(false);
+	// sessionId of the in-flight run — late events for prior runs (or for
+	// other windows) are ignored so a stale stream can't pollute the new turn.
+	const thinkingRunSessionRef = useRef<string | null>(null);
+	// Per-message expand state for completed turns. Using a Set keeps the
+	// default-collapsed preview lightweight and the click-to-expand obvious.
+	const [thinkingExpandedIds, setThinkingExpandedIds] = useState<Set<string>>(() => new Set());
 	const [reasoningOpen, setReasoningOpen] = useState(false);
 	const reasoningButtonRef = useRef<HTMLButtonElement | null>(null);
 	const [reasoningMenuRect, setReasoningMenuRect] = useState<{
@@ -719,6 +835,21 @@ function ChatStripPanel() {
 	useEffect(() => {
 		void refreshLlm();
 	}, [refreshLlm]);
+
+	// ponytail: subscribe to streamed chat events so the reasoning trace (and
+	// any future streaming text deltas) lands live instead of arriving all at
+	// once when chatRun resolves. We only act on `thinking` here — text deltas
+	// are ignored in the renderer today because the chat already renders the
+	// final assistant text on chatRun resolve, and a parallel live stream
+	// would race the final message. Add `text` handling when that flow lands.
+	useEffect(() => {
+		const unsubChatEvent = window.electronAPI.onAiEditionChatEvent((event: AiEditionChatEvent) => {
+			if (event.kind !== "thinking") return;
+			if (event.sessionId !== thinkingRunSessionRef.current) return;
+			setThinkingText((prev) => prev + event.delta);
+		});
+		return unsubChatEvent;
+	}, []);
 
 	useEffect(() => {
 		if (!projectId) {
@@ -788,6 +919,12 @@ function ChatStripPanel() {
 		}
 		setInput("");
 		setBusy(true);
+		// ponytail: prepare the live reasoning-trace accumulator. Late events
+		// from a previous run (or from another panel/window) won't match this
+		// sessionId and are dropped by the subscription above.
+		setThinkingText("");
+		setThinkingExpanded(false);
+		thinkingRunSessionRef.current = null;
 		// ponytail: pre-seed the user message so the rewind ↩ button is
 		// available before the server confirms. Mirrors axcut's
 		// `before-message` checkpoint that runChat records in chat-service.
@@ -811,8 +948,11 @@ function ChatStripPanel() {
 				const created = await nativeBridgeClient.aiEdition.chatCreateSession(projectId);
 				sessionId = created.id;
 				setSessions((prev) => [...prev, created]);
-				setActiveSessionId(created.id);
+				setActiveSessionId(sessionId);
 			}
+			// ponytail: start collecting the live reasoning trace for THIS run —
+			// the subscription only appends deltas whose sessionId matches.
+			thinkingRunSessionRef.current = sessionId;
 			// Send the current document snapshot so the agent can run edit tools
 			// against it (P1). Falls back to text-only chat when no doc is open.
 			const documentSnapshot = useProjectStore.getState().document ?? undefined;
@@ -840,6 +980,11 @@ function ChatStripPanel() {
 						content: assistant.content,
 						time: new Date().toLocaleTimeString(),
 						toolCalls: assistant.toolCalls,
+						// ponytail: snapshot the live reasoning trace onto the
+						// finished message so it can be revisited (collapsed by
+						// default, click-to-expand) instead of vanishing. The
+						// live accumulator is cleared in `finally`.
+						thinking: thinkingText || undefined,
 					},
 				]);
 				void refreshSessions(projectId);
@@ -852,6 +997,12 @@ function ChatStripPanel() {
 			});
 		} finally {
 			setBusy(false);
+			// ponytail: stop accepting thinking deltas and drop the in-flight
+			// preview — the snapshot was either attached to the assistant
+			// message above, or there's no message to attach it to (failure).
+			thinkingRunSessionRef.current = null;
+			setThinkingText("");
+			setThinkingExpanded(false);
 		}
 	};
 
@@ -1139,32 +1290,6 @@ function ChatStripPanel() {
 		[editingTitle, handleRename, cancelEditTitle],
 	);
 
-	const { queue: queueTimelineOp, busy: queueBusy } = useOptimisticTimelineOps(
-		projectId,
-		activeSessionId,
-	);
-	const runAddTrim = useCallback(() => {
-		const raw = window.prompt(t("chat.addSkipRangePrompt"), "5-8");
-		if (!raw) return;
-		const m = raw.match(/^\s*(\d+(?:\.\d+)?)\s*[-–]\s*(\d+(?:\.\d+)?)\s*$/);
-		if (!m) {
-			toast.error(t("chat.addSkipRangeFormatError"));
-			return;
-		}
-		const startSec = Number(m[1]);
-		const endSec = Number(m[2]);
-		if (!Number.isFinite(startSec) || !Number.isFinite(endSec) || endSec <= startSec) {
-			toast.error(t("chat.addSkipRangeOrderError"));
-			return;
-		}
-		const op: AxcutTimelineOperation = {
-			type: "add_trim_range",
-			startSec,
-			endSec,
-		};
-		void queueTimelineOp(op, t("chat.addSkipRangeApplied", { startSec, endSec }));
-	}, [queueTimelineOp, t]);
-
 	return (
 		<aside className={styles.panel}>
 			<div className={styles.panelHeader}>
@@ -1402,25 +1527,6 @@ function ChatStripPanel() {
 								<path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" />
 							</svg>
 						</button>
-						<button
-							type="button"
-							title={t("chat.addSkipRange")}
-							aria-label={t("chat.addSkipRange")}
-							disabled={!activeSessionId || queueBusy}
-							onClick={runAddTrim}
-							style={{
-								background: "transparent",
-								border: "1px solid var(--border-soft)",
-								borderRadius: "var(--r-sm)",
-								color: "var(--fg-2)",
-								font: "500 10px var(--font-body)",
-								padding: "2px 6px",
-								cursor: queueBusy ? "wait" : "pointer",
-								whiteSpace: "nowrap",
-							}}
-						>
-							{t("chat.skipButtonShort")}
-						</button>
 					</div>
 				) : null}
 			</div>
@@ -1457,6 +1563,25 @@ function ChatStripPanel() {
 										</span>
 									) : null}
 								</div>
+								{m.thinking && m.role !== "user" ? (
+									<ThinkingBlock
+										text={m.thinking}
+										expanded={m.id !== undefined && thinkingExpandedIds.has(m.id)}
+										onToggle={() => {
+											if (!m.id) return;
+											setThinkingExpandedIds((prev) => {
+												const next = new Set(prev);
+												if (next.has(m.id!)) {
+													next.delete(m.id!);
+												} else {
+													next.add(m.id!);
+												}
+												return next;
+											});
+										}}
+										label={t("chat.thinking")}
+									/>
+								) : null}
 								<div className={styles.msgBubble}>{m.content}</div>
 								<div
 									style={{
@@ -1572,17 +1697,45 @@ function ChatStripPanel() {
 								<div className={styles.msgHead}>
 									<span className={styles.msgAuthor}>{t("chat.authorAssistant")}</span>
 								</div>
-								<div
-									className={styles.msgBubble}
-									style={{ color: "var(--muted)", fontStyle: "italic" }}
-								>
-									<Loader2
-										size={12}
-										className="animate-spin"
-										style={{ marginRight: 6, verticalAlign: "middle" }}
-									/>
-									{t("chat.thinking")}
-								</div>
+								{thinkingText ? (
+									<div
+										style={{
+											display: "flex",
+											alignItems: "flex-start",
+											gap: 6,
+										}}
+									>
+										<Loader2
+											size={12}
+											className="animate-spin"
+											style={{
+												marginTop: 10,
+												flex: "0 0 auto",
+												color: "var(--muted)",
+											}}
+										/>
+										<div style={{ flex: 1, minWidth: 0 }}>
+											<ThinkingBlock
+												text={thinkingText}
+												expanded={thinkingExpanded}
+												onToggle={() => setThinkingExpanded((v) => !v)}
+												label={t("chat.thinking")}
+											/>
+										</div>
+									</div>
+								) : (
+									<div
+										className={styles.msgBubble}
+										style={{ color: "var(--muted)", fontStyle: "italic" }}
+									>
+										<Loader2
+											size={12}
+											className="animate-spin"
+											style={{ marginRight: 6, verticalAlign: "middle" }}
+										/>
+										{t("chat.thinking")}
+									</div>
+								)}
 							</div>
 						) : null}
 					</>
@@ -1815,9 +1968,7 @@ function ChatStripPanel() {
 }
 
 const RAIL_BUTTONS: Array<{ id: LeftTab; labelKey: string; icon: React.ElementType }> = [
-	...(AI_FEATURES_ENABLED
-		? [{ id: "chat" as LeftTab, labelKey: "leftRail.chat", icon: MessageSquare }]
-		: []),
+	{ id: "chat", labelKey: "leftRail.chat", icon: MessageSquare },
 	{ id: "media", labelKey: "leftRail.media", icon: Film },
 ];
 

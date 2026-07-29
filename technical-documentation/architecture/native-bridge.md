@@ -13,7 +13,7 @@ flowchart LR
 ```
 
 1. **Native adapters** implement platform-facing interfaces. Cursor telemetry is adapted by `electron/native-bridge/cursor/telemetryCursorAdapter.ts`; native compositor loading is isolated in the compositor service.
-2. **Main-process services** own state and domain behavior. They receive a `NativeBridgeStateStore` and application callbacks from `NativeBridgeContext` rather than exposing Electron primitives to React.
+2. **Main-process services** own state and domain behavior. They receive a `NativeBridgeState` and application callbacks from `NativeBridgeContext` rather than exposing Electron primitives to React. The state is created by `createNativeBridgeState(platform)` and exposes `getState` plus the per-domain setters as direct property assignments.
 3. **Unified IPC transport** is registered by `registerNativeBridgeHandlers` in `electron/ipc/nativeBridge.ts`. It handles one channel, validates the request shape, dispatches by domain and action, and wraps every result.
 4. **Renderer client** in `src/native/client.ts` generates request IDs, invokes the preload transport, unwraps successful data, and throws the contract error for failures. Renderer features use `nativeBridgeClient` rather than importing main-process services.
 
@@ -81,7 +81,7 @@ A new bridge operation must have a browser-shim entry when renderer code can cal
 ## Invariants
 
 - Renderer code crosses the native boundary through `src/native/client.ts` and its domain clients.
-- Main-process state stays behind services and `NativeBridgeStateStore`; it is not reconstructed independently in each renderer.
+- Main-process state stays behind services and `NativeBridgeState`; it is not reconstructed independently in each renderer.
 - Every response carries `NativeBridgeMeta`, and every failure uses a `NativeBridgeErrorCode` rather than an arbitrary transport exception.
 - Capability probing is explicit. An unavailable addon or platform feature returns a capability or `UNAVAILABLE` result instead of making renderer code guess from the platform string.
 - The preload remains the only renderer-to-main transport surface for this bridge. `electron/preload.ts:22` exposes the `electronAPI` object, including its `invokeNativeBridge` method; the legacy object is still present for compatibility, while new native operations belong on the unified bridge.

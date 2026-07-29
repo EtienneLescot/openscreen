@@ -1,4 +1,4 @@
-import type { CursorTelemetryPoint, ZoomFocus } from "../types";
+import type { CursorTelemetryPoint, ZoomFocus } from "@/components/video-editor/types";
 
 /** Binary-search the sorted telemetry and lerp the cursor position at the given playback time. */
 export function interpolateCursorAt(

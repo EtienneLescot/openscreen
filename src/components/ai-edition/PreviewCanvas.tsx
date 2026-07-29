@@ -30,7 +30,6 @@ import {
 	type WebcamMaskShape,
 	type ZoomFocus,
 } from "@/components/video-editor/types";
-import { computeCameraFullscreenProgress } from "@/components/video-editor/videoPlayback/cameraFullscreenUtils";
 import { useScopedT } from "@/contexts/I18nContext";
 import { resolveAspectRatioValue } from "@/lib/ai-edition/document/outputFormat";
 import type {
@@ -40,7 +39,6 @@ import type {
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
-import { useCaptions } from "@/lib/ai-edition/store/useCaptions";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import { resolveActiveCameraTrack } from "@/lib/ai-edition/timeline/camera";
 import { createPlaybackClockRef } from "@/lib/ai-edition/timeline/playback-clock";
@@ -53,9 +51,9 @@ import {
 } from "@/lib/compositeLayout";
 import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
 import { getCssClipPath } from "@/lib/webcamMaskShapes";
+import { computeCameraFullscreenProgress } from "@/lib/zoomMath/cameraFullscreenUtils";
 import { clamp, clamp01 } from "@/utils/math";
 import { AnnotationLayer } from "./AnnotationLayer";
-import { CaptionLayer } from "./CaptionLayer";
 import { NativeCompositorOverlay } from "./NativeCompositorOverlay";
 import styles from "./NewEditorShell.module.css";
 import { type VideoSource, VirtualPreview } from "./VirtualPreview";
@@ -110,7 +108,6 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 	const { settings, setLive, commit } = useEditorSettings();
 	// Captions are derived from the transcript, not passed down as regions — the
 	// preview reads them from the same façade the inspector writes to.
-	const { cues: captionCues, settings: captionSettings } = useCaptions();
 	const document = useProjectStore((s) => s.document);
 	const assets = document?.assets ?? [];
 	const frameRef = useRef<HTMLDivElement | null>(null);
@@ -442,13 +439,6 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 							onCommit={props.onAnnotationCommit}
 						/>
 					) : null}
-					<CaptionLayer
-						cues={captionCues}
-						settings={captionSettings}
-						currentTimeSec={props.currentTimeSec}
-						containerWidth={layout.screenRect.width}
-						containerHeight={layout.screenRect.height}
-					/>
 				</div>
 			) : null}
 			{layout?.webcamRect && showWebcamSlot ? (

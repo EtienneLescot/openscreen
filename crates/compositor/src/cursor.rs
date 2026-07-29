@@ -5,7 +5,7 @@
 use anyhow::{Context, Result};
 
 // Paramètres de suivi auto — parité stricte avec
-// `src/components/video-editor/videoPlayback/constants.ts` (AUTO_FOLLOW_PARAMS), partagés
+// `src/lib/zoomMath/constants.ts` (AUTO_FOLLOW_PARAMS), partagés
 // là-bas entre preview et export pour que la caméra suive le curseur à l'identique.
 const AUTO_FOLLOW_MIN_FACTOR: f32 = 0.1;
 const AUTO_FOLLOW_MAX_FACTOR: f32 = 0.25;
