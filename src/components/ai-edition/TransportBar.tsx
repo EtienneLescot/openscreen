@@ -2,6 +2,7 @@ import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { memo } from "react";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
+import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import styles from "./NewEditorShell.module.css";
 
 function formatTC(sec: number): string {
@@ -13,7 +14,8 @@ function formatTC(sec: number): string {
 
 interface TransportBarProps {
 	playing: boolean;
-	currentTimeSec: number;
+	/** Live scrub position while a timeline drag is in flight; null = follow the store. */
+	overrideTimeSec: number | null;
 	clips: AxcutClip[];
 	onTogglePlay: () => void;
 	onPrevClip: () => void;
@@ -25,7 +27,7 @@ interface TransportBarProps {
 // so the header row covers both timeline tools and playback in one line.
 export const TransportBar = memo(function TransportBar({
 	playing,
-	currentTimeSec,
+	overrideTimeSec,
 	clips,
 	onTogglePlay,
 	onPrevClip,
@@ -33,6 +35,12 @@ export const TransportBar = memo(function TransportBar({
 	onSeek,
 }: TransportBarProps) {
 	const te = useScopedT("editor");
+	// Same reason as PlayheadOverlay (see V4Timeline.tsx): the timecode and the
+	// scrub thumb are animated during playback, so they subscribe to the playhead
+	// directly instead of forcing V4Timeline — and the whole editor shell above it —
+	// to re-render once per frame to hand it down as a prop.
+	const storeTimeSec = useProjectStore((s) => s.currentTimeSec);
+	const currentTimeSec = overrideTimeSec ?? storeTimeSec;
 	const virtualDurationSec = clips.reduce(
 		(acc, c) => acc + (c.timelineEndSec - c.timelineStartSec),
 		0,

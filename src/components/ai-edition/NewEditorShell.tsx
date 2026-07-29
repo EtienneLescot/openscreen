@@ -47,11 +47,41 @@ interface SeekTarget {
 	requestId: number;
 }
 
+/**
+ * Renders nothing. Exists purely so the per-frame `currentTimeSec` subscription
+ * that feeds the native transport lives in a LEAF instead of in the shell.
+ *
+ * `currentTimeSec` is rewritten on every animation frame during playback
+ * (VirtualPreview's rAF tick → onTimeChange → setCurrentTime). Reading it
+ * directly in NewEditorShell re-rendered the entire editor — timeline, clips,
+ * waveforms, inspector, preview — 60×/s, which is what made the playhead and
+ * the transcript cue point stutter: the whole tree had to commit before the
+ * playhead's own DOM node moved. Everything that genuinely needs the live
+ * playhead now subscribes to it where it is actually rendered (PlayheadOverlay,
+ * TransportBar, Preview, TranscriptPane, NativeCompositorOverlay, and this
+ * component); the shell itself reads it imperatively via getState() in the
+ * handlers that need it. The store write cadence is unchanged — `currentTimeSec`
+ * is still the source of truth, still updated every frame.
+ */
+function NativePlaybackSync({
+	visibleClips,
+	clips,
+}: {
+	visibleClips: AxcutClip[];
+	clips: AxcutClip[];
+}) {
+	const playing = useProjectStore((s) => s.playing);
+	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
+	// visibleClips = trim-compressed native stream; `clips` = RAW layout currentTimeSec
+	// is measured against. resolveNativePosition needs both (see timelineMap).
+	useNativePlaybackSync(playing, currentTimeSec, visibleClips, clips);
+	return null;
+}
+
 export function NewEditorShell() {
 	const te = useScopedT("editor");
 	const document = useProjectStore((s) => s.document);
 	const projectId = useProjectStore((s) => s.projectId);
-	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
 	const dirty = useProjectStore((s) => s.dirty);
 	const createProject = useProjectStore((s) => s.createProject);
 	const addAsset = useProjectStore((s) => s.addAsset);
@@ -138,9 +168,6 @@ export function NewEditorShell() {
 	void primaryAssetPath;
 	const clips: AxcutClip[] = document?.timeline.clips ?? [];
 	const visibleClips = useMemo(() => (document ? resolveVisibleClips(document) : []), [document]);
-	// visibleClips = trim-compressed native stream; `clips` = RAW layout currentTimeSec
-	// is measured against. resolveNativePosition needs both (see timelineMap).
-	useNativePlaybackSync(playing, currentTimeSec, visibleClips, clips);
 	const hasProject = Boolean(document);
 	const hasAsset = projectId !== null && (document?.assets.length ?? 0) > 0;
 	const project = document?.project
@@ -368,13 +395,12 @@ export function NewEditorShell() {
 		[tl, clips.length],
 	);
 
-	// Refs so the 'ended' listener below always sees the latest clips/playhead without
-	// tearing down and re-registering the DOM listener on every rAF-driven currentTimeSec
-	// update (which would happen every tick during playback if they were plain deps).
+	// Ref so the 'ended' listener below always sees the latest clips without tearing
+	// down and re-registering the DOM listener on every document change. (The playhead
+	// it also needs is read straight off the store at call time — see NativePlaybackSync
+	// above for why nothing in this component subscribes to it.)
 	const clipsForEndedRef = useRef(clips);
 	clipsForEndedRef.current = clips;
-	const currentTimeSecRef = useRef(currentTimeSec);
-	currentTimeSecRef.current = currentTimeSec;
 
 	// ponytail: the transport bar (play/pause, prev/next, loop, fullscreen)
 	// lives in the timeline header now, not under the preview canvas — it
@@ -395,9 +421,8 @@ export function NewEditorShell() {
 		// suivant ?" déjà utilisé par handleNextClip juste au-dessus — seul point de
 		// vérité pour "y a-t-il encore de la timeline à jouer".
 		const onEnded = () => {
-			const hasNextClip = clipsForEndedRef.current.some(
-				(c) => c.timelineStartSec > currentTimeSecRef.current + 0.1,
-			);
+			const playhead = useProjectStore.getState().currentTimeSec;
+			const hasNextClip = clipsForEndedRef.current.some((c) => c.timelineStartSec > playhead + 0.1);
 			if (!hasNextClip) setPlaying(false);
 		};
 		el.addEventListener("play", onPlay);
@@ -425,25 +450,27 @@ export function NewEditorShell() {
 	const handlePrevClip = useCallback(() => {
 		if (clips.length === 0) return;
 		// ponytail: navigate in virtual timeline space, not source-media time.
+		const playhead = useProjectStore.getState().currentTimeSec;
 		let prevStart = 0;
 		for (let i = clips.length - 1; i >= 0; i--) {
 			const c = clips[i];
-			if (c.timelineEndSec <= currentTimeSec - 0.1) {
+			if (c.timelineEndSec <= playhead - 0.1) {
 				prevStart = c.timelineStartSec;
 				break;
 			}
 		}
 		handleSeek(prevStart);
 		handleTimeChange(prevStart);
-	}, [clips, currentTimeSec, handleSeek, handleTimeChange]);
+	}, [clips, handleSeek, handleTimeChange]);
 
 	const handleNextClip = useCallback(() => {
 		if (clips.length === 0) return;
-		const next = clips.find((c) => c.timelineStartSec > currentTimeSec + 0.1);
+		const playhead = useProjectStore.getState().currentTimeSec;
+		const next = clips.find((c) => c.timelineStartSec > playhead + 0.1);
 		if (!next) return;
 		handleSeek(next.timelineStartSec);
 		handleTimeChange(next.timelineStartSec);
-	}, [clips, currentTimeSec, handleSeek, handleTimeChange]);
+	}, [clips, handleSeek, handleTimeChange]);
 
 	const handleTranscribe = useCallback(async () => {
 		if (!document || !document.project.primaryAssetId) return;
@@ -701,7 +728,7 @@ export function NewEditorShell() {
 		const { pasteClipboard } = await import("@/lib/ai-edition/store/regionClipboard");
 		const clip = pasteClipboard();
 		if (!clip) return;
-		const timeMs = Math.round(currentTimeSec * 1000);
+		const timeMs = Math.round(useProjectStore.getState().currentTimeSec * 1000);
 		const region = { ...clip.region, id: crypto.randomUUID() };
 		if (clip.kind === "zoom") {
 			const zoom = region as unknown as (typeof doc.zoomRanges)[number];
@@ -731,7 +758,7 @@ export function NewEditorShell() {
 			});
 		}
 		toast.success("Region pasted");
-	}, [currentTimeSec, saveDocument]);
+	}, [saveDocument]);
 
 	const handleCopyRegion = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
@@ -963,7 +990,8 @@ export function NewEditorShell() {
 				e.preventDefault();
 				const frameStepSec = 1 / 60;
 				const direction = e.key === "ArrowLeft" ? -1 : 1;
-				handleSeek(Math.max(0, currentTimeSec + direction * frameStepSec));
+				const playhead = useProjectStore.getState().currentTimeSec;
+				handleSeek(Math.max(0, playhead + direction * frameStepSec));
 				return;
 			}
 		};
@@ -983,7 +1011,6 @@ export function NewEditorShell() {
 		isMac,
 		togglePlay,
 		handleSeek,
-		currentTimeSec,
 	]);
 
 	const showTimeline = mode !== "rec";
@@ -1046,7 +1073,6 @@ export function NewEditorShell() {
 		assets: document?.assets ?? [],
 		trimRanges: document?.timeline?.trimRanges ?? [],
 		busy: isTranscribing,
-		currentTimeSec,
 		onSeek: handleSeek,
 		onAddTrimRange: handleAddTrimRange,
 		onRemoveTrimRange: handleRemoveTrimRange,
@@ -1060,6 +1086,7 @@ export function NewEditorShell() {
 			className={v4.app}
 			style={{ gridTemplateRows: `58px 1fr ${showTimeline ? timelineRow : "0px"}` }}
 		>
+			<NativePlaybackSync visibleClips={visibleClips} clips={clips} />
 			<EditorTopBar
 				mode={mode}
 				onModeChange={setMode}
@@ -1161,7 +1188,6 @@ export function NewEditorShell() {
 									onSeek={handleSeek}
 									onLoadedMetadata={handleLoadedMetadata}
 									onVideoElement={setVideoElement}
-									currentTimeSec={currentTimeSec}
 									playing={playing}
 								/>
 							</div>
@@ -1214,7 +1240,6 @@ export function NewEditorShell() {
 					) : null}
 					<V4Timeline
 						tl={tl}
-						currentTimeSec={currentTimeSec}
 						setCurrentTime={handleSeek}
 						variant={mode === "media" ? "media" : "edit"}
 						onDropAsset={handleDropAsset}
