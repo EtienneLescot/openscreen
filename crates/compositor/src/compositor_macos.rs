@@ -264,6 +264,17 @@ pub struct Compositor {
     blur_eighth: metal::Texture,
     pipeline_kdown: metal::RenderPipelineState,
     pipeline_kup: metal::RenderPipelineState,
+    /// Copie MIPMAPPÉE du render target, pour les annotations « flou ». On ne peut pas
+    /// échantillonner la cible sur laquelle on dessine, et le mode 10 lit un niveau de mip
+    /// pour flouter à coût constant.
+    ann_copy: metal::Texture,
+    /// Images d'annotation, indexées par ID d'annotation (pas par data-URL : celle-ci pèse
+    /// souvent des mégaoctets et la hacher à chaque frame coûterait plus que le décodage).
+    /// La longueur sert de garde-fou quand l'utilisateur change l'image.
+    ann_img_cache: RefCell<std::collections::HashMap<String, (metal::Texture, u32, u32, usize)>>,
+    /// Textes rastérisés, indexés par ID, avec la `cache_key` du spec pour invalider.
+    text_cache: RefCell<std::collections::HashMap<String, (metal::Texture, u64)>>,
+    text_raster: Option<crate::text::TextRasterizer>,
 }
 
 /// Descripteur de texture — les six cibles ne diffèrent que par format, taille et
@@ -491,6 +502,20 @@ impl Compositor {
             device, &library, "vs_fs", "ps_kawase_up",
             metal::MTLPixelFormat::RGBA8Unorm, Blend::Replace,
         )?;
+        let ann_copy = {
+            let d = metal::TextureDescriptor::new();
+            d.set_texture_type(metal::MTLTextureType::D2);
+            d.set_pixel_format(metal::MTLPixelFormat::RGBA8Unorm);
+            d.set_width(rw as u64);
+            d.set_height(rh as u64);
+            d.set_storage_mode(metal::MTLStorageMode::Private);
+            d.set_usage(rt_usage);
+            // Assez de niveaux pour que `log2(rayon)` du mode 10 en trouve toujours un.
+            d.set_mipmap_level_count(
+                (32 - rw.max(rh).max(1).leading_zeros()).max(1) as u64,
+            );
+            device.new_texture(&d)
+        };
 
         Ok(Compositor {
             gpu: Gpu {
@@ -526,6 +551,10 @@ impl Compositor {
             blur_eighth,
             pipeline_kdown,
             pipeline_kup,
+            ann_copy,
+            ann_img_cache: RefCell::new(std::collections::HashMap::new()),
+            text_cache: RefCell::new(std::collections::HashMap::new()),
+            text_raster: crate::text::TextRasterizer::new().ok(),
         })
     }
 
@@ -919,6 +948,232 @@ impl Compositor {
             y,
             uv,
         );
+    }
+
+
+    /// Annotations : calque le plus haut, ancré sur `screen_dst` — le conteneur que reçoit
+    /// l'overlay web. Port de `compositor_windows::draw_annotations`.
+    unsafe fn draw_annotations(
+        &self,
+        cmd: &metal::CommandBufferRef,
+        scene: Option<&Scene>,
+        t: f32,
+        screen_dst: [f32; 4],
+    ) -> Result<()> {
+        let Some(scene) = scene else { return Ok(()) };
+        if scene.annotations.is_empty() {
+            return Ok(());
+        }
+        let (rw, rh) = (self.render_w as f32, self.render_h as f32);
+        let visible = |a: &crate::scene::SceneAnnotation| {
+            t >= a.start_sec as f32 && t < a.end_sec as f32
+        };
+        // UNE seule recopie pour toutes les annotations flou de la frame : leur lecture doit
+        // voir l'image composée SANS les flous eux-mêmes, sinon deux zones qui se recouvrent
+        // s'échantillonneraient l'une l'autre selon l'ordre de dessin.
+        if scene.annotations.iter().any(|a| a.kind == "blur" && visible(a)) {
+            let blit = cmd.new_blit_command_encoder();
+            blit.copy_from_texture(
+                &self.rt, 0, 0,
+                metal::MTLOrigin { x: 0, y: 0, z: 0 },
+                metal::MTLSize { width: rw as u64, height: rh as u64, depth: 1 },
+                &self.ann_copy, 0, 0,
+                metal::MTLOrigin { x: 0, y: 0, z: 0 },
+            );
+            // Seul le mip 0 est rempli ; le GPU dérive le reste.
+            blit.generate_mipmaps(&self.ann_copy);
+            blit.end_encoding();
+        }
+
+        let enc = self.begin_pass(cmd, &self.rt, None, &self.pipeline_main)?;
+        // La liste arrive déjà triée par zIndex côté app : l'ordre d'itération EST l'ordre
+        // de peinture.
+        for a in &scene.annotations {
+            if !visible(a) {
+                continue;
+            }
+            let dst = [
+                screen_dst[0] + a.x * screen_dst[2],
+                screen_dst[1] + a.y * screen_dst[3],
+                a.w * screen_dst[2],
+                a.h * screen_dst[3],
+            ];
+            let quad_px = [dst[2] * rw, dst[3] * rh];
+            if quad_px[0] <= 0.0 || quad_px[1] <= 0.0 {
+                continue;
+            }
+            match a.kind.as_str() {
+                "figure" => {
+                    let Some(figure) = a.figure.as_ref() else { continue };
+                    let (segments, half_stroke) = crate::regions::arrow_local_geometry(
+                        &figure.direction,
+                        figure.stroke_width,
+                        quad_px,
+                    );
+                    self.draw_solid(enc, &LayerCB {
+                        dst,
+                        quad_px,
+                        mode: 9.0,
+                        color: parse_hex(&figure.color).unwrap_or([1.0, 1.0, 1.0, 1.0]),
+                        fx: segments[0],
+                        src_prev: segments[1],
+                        dst_prev: segments[2],
+                        mb: [1.0, half_stroke, 0.0, 0.0],
+                        ..Default::default()
+                    });
+                }
+                "blur" => {
+                    let Some(blur) = a.blur.as_ref() else { continue };
+                    // Le masque en tracé libre demanderait une liste de points côté GPU : on
+                    // masque la BOÎTE ENGLOBANTE. Choix délibérément asymétrique — ne rien
+                    // dessiner laisserait passer en clair ce que l'utilisateur a désigné comme
+                    // à cacher, et un masque qui ne masque pas donne confiance à tort.
+                    let freehand = blur.shape == "freehand";
+                    let is_blur = if blur.style == "blur" { 1.0 } else { 0.0 };
+                    let amount = if is_blur > 0.5 { blur.intensity } else { blur.block_size };
+                    // Le repli passe par le rectangle, pas l'ovale : un ovale inscrit
+                    // retirerait les coins, donc une partie de ce qui est couvert.
+                    let is_oval = if blur.shape == "oval" && !freehand { 1.0 } else { 0.0 };
+                    // La teinte n'a de sens qu'en mosaïque : un flou teinté ne ressemble plus
+                    // à un flou.
+                    let tinted = if is_blur > 0.5 { 0.0 } else { 1.0 };
+                    let tint = if blur.color == "black" {
+                        [0.0, 0.0, 0.0, 1.0]
+                    } else {
+                        [1.0, 1.0, 1.0, 1.0]
+                    };
+                    enc.set_fragment_texture(2, Some(&self.ann_copy));
+                    self.draw_solid(enc, &LayerCB {
+                        dst,
+                        quad_px,
+                        mode: 10.0,
+                        color: tint,
+                        fx: [is_blur, amount.max(1.0), is_oval, tinted],
+                        ..Default::default()
+                    });
+                }
+                "image" => {
+                    let Some(src) = a.image_path.as_ref().filter(|s| !s.is_empty()) else {
+                        continue;
+                    };
+                    let cached = {
+                        let c = self.ann_img_cache.borrow();
+                        c.get(&a.id).filter(|(_, _, _, len)| *len == src.len()).cloned()
+                    };
+                    let Some((tex, iw, ih, _)) = cached.or_else(|| {
+                        match self.load_image_texture(src) {
+                            Ok((tex, w, h)) => {
+                                let e = (tex, w, h, src.len());
+                                self.ann_img_cache.borrow_mut().insert(a.id.clone(), e.clone());
+                                Some(e)
+                            }
+                            Err(e) => {
+                                eprintln!("[annotation image] {}: {e:#}", a.id);
+                                None
+                            }
+                        }
+                    }) else {
+                        continue;
+                    };
+                    if iw == 0 || ih == 0 {
+                        continue;
+                    }
+                    let box_aspect = quad_px[0] / quad_px[1];
+                    let img_aspect = iw as f32 / ih as f32;
+                    let (fit_w, fit_h) = if img_aspect > box_aspect {
+                        (dst[2], dst[3] * (box_aspect / img_aspect))
+                    } else {
+                        (dst[2] * (img_aspect / box_aspect), dst[3])
+                    };
+                    enc.set_fragment_texture(2, Some(&tex));
+                    self.draw_solid(enc, &LayerCB {
+                        dst: [
+                            dst[0] + (dst[2] - fit_w) * 0.5,
+                            dst[1] + (dst[3] - fit_h) * 0.5,
+                            fit_w,
+                            fit_h,
+                        ],
+                        src: [0.0, 0.0, 1.0, 1.0],
+                        quad_px: [fit_w * rw, fit_h * rh],
+                        mode: 7.0,
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        fx: [0.0, 0.0, 1.0, 1.0],
+                        ..Default::default()
+                    });
+                }
+                "text" => {
+                    let Some(text) = a.text.as_ref() else { continue };
+                    let Some(raster) = self.text_raster.as_ref() else { continue };
+                    if text.content.trim().is_empty() {
+                        continue;
+                    }
+                    let spec = crate::text::TextSpec {
+                        content: text.content.clone(),
+                        color: parse_hex(&text.color).unwrap_or([1.0, 1.0, 1.0, 1.0]),
+                        background: parse_hex(&text.background_color)
+                            .unwrap_or([0.0, 0.0, 0.0, 0.0]),
+                        font_size_px: text.font_size_rel * (screen_dst[3] * rh),
+                        font_family: text.font_family.clone(),
+                        bold: text.font_weight == "bold",
+                        italic: text.font_style == "italic",
+                        underline: text.text_decoration == "underline",
+                        align: text.text_align.clone(),
+                        box_px: [quad_px[0].round() as u32, quad_px[1].round() as u32],
+                    };
+                    let key = spec.cache_key();
+                    let cached = {
+                        let c = self.text_cache.borrow();
+                        c.get(&a.id).filter(|(_, k)| *k == key).map(|(tex, _)| tex.clone())
+                    };
+                    let Some(tex) = cached.or_else(|| match raster.rasterize(&self.gpu, &spec) {
+                        Ok(tex) => {
+                            self.text_cache.borrow_mut().insert(a.id.clone(), (tex.clone(), key));
+                            Some(tex)
+                        }
+                        Err(e) => {
+                            eprintln!("[annotation texte] {}: {e:#}", a.id);
+                            None
+                        }
+                    }) else {
+                        continue;
+                    };
+                    let anim = crate::text_anim::text_animation_state(
+                        text.animation.as_deref(),
+                        (t - a.start_sec as f32) * 1000.0,
+                    );
+                    let anim_px = rh / crate::text_anim::ANIMATION_REFERENCE_HEIGHT;
+                    let (mut ax, mut ay, mut aw, mut ah) = (
+                        dst[0] + anim.translate_x * anim_px / rw,
+                        dst[1] + anim.translate_y * anim_px / rh,
+                        dst[2],
+                        dst[3],
+                    );
+                    if (anim.scale - 1.0).abs() > 1e-4 {
+                        let (cx, cy) = (ax + aw * 0.5, ay + ah * 0.5);
+                        aw *= anim.scale;
+                        ah *= anim.scale;
+                        ax = cx - aw * 0.5;
+                        ay = cy - ah * 0.5;
+                    }
+                    let reveal = anim.reveal.clamp(0.0, 1.0);
+                    if reveal <= 0.0 {
+                        continue;
+                    }
+                    enc.set_fragment_texture(2, Some(&tex));
+                    self.draw_solid(enc, &LayerCB {
+                        dst: [ax, ay, aw * reveal, ah],
+                        src: [0.0, 0.0, reveal, 1.0],
+                        quad_px: [aw * reveal * rw, ah * rh],
+                        mode: 11.0,
+                        color: [1.0, 1.0, 1.0, anim.opacity],
+                        ..Default::default()
+                    });
+                }
+                _ => {}
+            }
+        }
+        enc.end_encoding();
+        Ok(())
     }
 
     /// Ouvre un encodeur sur `target`. `clear` = `None` conserve ce qui s'y trouve.
@@ -1347,6 +1602,10 @@ impl Compositor {
         }
 
         enc.end_encoding();
+
+        // --- annotations : calque le plus haut, ancré sur le rect ÉCRAN ---
+        self.draw_annotations(cmd_buf, scene_ref.as_ref(), g.source_t, g.s_dst)?;
+
         self.mirror_rt(cmd_buf);
         cmd_buf.commit();
         cmd_buf.wait_until_completed();
