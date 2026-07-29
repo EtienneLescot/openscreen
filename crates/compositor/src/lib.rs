@@ -31,6 +31,7 @@ pub mod audio;
 pub mod config;
 pub mod cursor;
 pub mod ffi;
+pub mod frame_geometry;
 pub mod gif_export;
 pub mod regions;
 pub mod scene;
