@@ -22,7 +22,7 @@
 // A Homebrew ffmpeg will NOT do as a drop-in: brew's formula builds with
 // --enable-gpl. It is fine to develop against, never fine to ship.
 
-import { spawn } from "node:child_process";
+import { execFileSync, spawn } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -130,6 +130,100 @@ function installAtomically(from, to) {
 	fs.renameSync(tmp, to);
 }
 
+/**
+ * Vendors the ffmpeg dylibs next to the addon and rewrites every install name to
+ * `@rpath`, so the packaged app loads its own copies instead of a build-machine path.
+ *
+ * Straight out of `cargo`, the `.node` references its dependencies by ABSOLUTE path
+ * (`otool -L` shows `/Users/…/crates/thirdparty/…/libavcodec.62.dylib`). That works on
+ * the machine that built it and nowhere else — the installed app would fail at
+ * `require()` with a dyld error naming a directory the user has never had. Windows does
+ * not hit this because `LoadLibrary` searches `PATH`, which is what
+ * `ensureFfmpegSharedDllsOnPath()` prepends; macOS has no such search, so the fix has to
+ * be baked into the binary.
+ *
+ * Three edits per artefact:
+ *   - each dylib's own id becomes `@rpath/<name>`;
+ *   - every inter-library reference (libavcodec -> libavutil, and so on) is rewritten;
+ *   - the addon gains `@loader_path` as an rpath, so `@rpath/libavutil.60.dylib`
+ *     resolves next to `compositor_view.node` — which is exactly where electron-builder
+ *     puts them via the mac `extraResources` filter `darwin-*​/*`.
+ *
+ * Re-signing is required and not optional: `install_name_tool` invalidates the existing
+ * ad-hoc signature, and macOS kills a process that faults a page of a binary whose
+ * signature no longer matches (the same `SIGKILL (Code Signature Invalid)` documented on
+ * `installAtomically` above).
+ */
+function vendorFfmpegDylibs(nodePath, ffmpegDir) {
+	const outDir = path.dirname(nodePath);
+	const libDir = path.join(ffmpegDir, "lib");
+	const linked = execFileSync("otool", ["-L", nodePath], { encoding: "utf8" })
+		.split("\n")
+		.map((line) => line.trim().split(" ")[0])
+		.filter((p) => /\/lib(av|sw)\w+\.\d+\.dylib$/.test(p));
+	if (linked.length === 0) {
+		throw new Error(`${nodePath} links no ffmpeg dylib — nothing to vendor, which is wrong.`);
+	}
+
+	const names = linked.map((p) => path.basename(p));
+	for (const name of names) {
+		const from = path.join(libDir, name);
+		if (!fs.existsSync(from)) {
+			throw new Error(`Missing ${from}; the addon links it but the SDK does not ship it.`);
+		}
+		const to = path.join(outDir, name);
+		fs.copyFileSync(from, to);
+		fs.chmodSync(to, 0o755);
+		execFileSync("install_name_tool", ["-id", `@rpath/${name}`, to]);
+	}
+	// Inter-library references, and the addon's own.
+	for (const target of [...names.map((n) => path.join(outDir, n)), nodePath]) {
+		const deps = execFileSync("otool", ["-L", target], { encoding: "utf8" })
+			.split("\n")
+			.map((line) => line.trim().split(" ")[0])
+			.filter((p) => p.startsWith("/") && /lib(av|sw)\w+\.\d+\.dylib$/.test(p));
+		for (const dep of deps) {
+			execFileSync("install_name_tool", ["-change", dep, `@rpath/${path.basename(dep)}`, target]);
+		}
+		execFileSync("install_name_tool", ["-add_rpath", "@loader_path", target]);
+		// install_name_tool invalidates the signature; re-sign ad-hoc.
+		execFileSync("codesign", ["--force", "--sign", "-", target]);
+	}
+
+	const remaining = execFileSync("otool", ["-L", nodePath], { encoding: "utf8" })
+		.split("\n")
+		.map((l) => l.trim().split(" ")[0])
+		.filter((p) => p.startsWith("/") && /lib(av|sw)/.test(p));
+	if (remaining.length > 0) {
+		throw new Error(`Still absolute after rewriting: ${remaining.join(", ")}`);
+	}
+	console.log(`Vendored ${names.length} ffmpeg dylibs next to ${path.basename(nodePath)}`);
+}
+
+/**
+ * Refuses to package a GPL ffmpeg. `--enable-gpl` pulls x264/x265 in and relicenses this
+ * MIT app; a Homebrew ffmpeg is exactly that and is an easy thing to point MAC_FFMPEG_DIR
+ * at by accident. Same check `fetch-ffmpeg.mjs` runs on the Windows build.
+ */
+function assertLgpl(ffmpegDir) {
+	const bin = path.join(ffmpegDir, "bin", "ffmpeg");
+	if (!fs.existsSync(bin)) {
+		console.warn(`No ffmpeg binary at ${bin}; skipping the licence check.`);
+		return;
+	}
+	const banner = execFileSync(bin, ["-hide_banner", "-L"], { encoding: "utf8" });
+	if (/GNU General Public License/i.test(banner) || !/Lesser General Public/i.test(banner)) {
+		throw new Error(
+			`${ffmpegDir} is not an LGPL build — its own -L banner says so.\n` +
+				"Homebrew's ffmpeg is GPL (--enable-gpl). Build the LGPL tree instead:\n\n" +
+				`${FFMPEG_RECIPE}\n`,
+		);
+	}
+	console.log("ffmpeg licence: LGPL (checked via `ffmpeg -L`)");
+}
+
+assertLgpl(macFfmpegDir);
+
 const dest = path.join(BUILD_OUT_DIR, "compositor_view.node");
 installAtomically(builtDylib, dest);
 
@@ -140,12 +234,16 @@ const archBinDir = path.join(ROOT, "electron", "native", "bin", `darwin-${proces
 const archDest = path.join(archBinDir, "compositor_view.node");
 installAtomically(builtDylib, archDest);
 
+// Only the arch-tagged copy ships (mac `extraResources`, filter `darwin-*/*`), so that
+// is the one that gets its dylibs and its @rpath.
+vendorFfmpegDylibs(archDest, macFfmpegDir);
+
 console.log(`Built  ${builtDylib}`);
 console.log(`Copied ${dest}`);
 console.log(`Copied ${archDest}`);
 console.log(
-	"\nNOTE: this .node hardcodes absolute paths to the ffmpeg dylibs it was linked\n" +
-		"against (see `otool -L`). That is fine for a dev build. Packaging still needs an\n" +
-		"install_name_tool/@rpath pass plus the dylibs in extraResources — the macOS\n" +
-		"equivalent of the PATH-prepend ensureFfmpegSharedDllsOnPath() does on Windows.",
+	`\nThe shipped copy (${archDest}) carries its own LGPL ffmpeg dylibs and resolves them\n` +
+		"through @rpath/@loader_path, so the packaged app does not depend on this machine's\n" +
+		"paths. The dev copy under electron/native/compositor-view/build/ keeps its absolute\n" +
+		"links, which is fine — it never leaves this checkout.",
 );
