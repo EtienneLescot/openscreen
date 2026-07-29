@@ -28,7 +28,7 @@
 		"docs:check": "node scripts/check-docs.mjs",
 		"preview": "vite preview",
 		"build:native:mac": "node scripts/build-macos-screencapturekit-helper.mjs",
-		"build:mac": "npm run build:native:mac && npm run build:native:compositor:mac && tsc && vite build && electron-builder --mac",
+		"build:mac": "npm run build:native:mac && npm run fetch:ffmpeg:mac && npm run build:native:compositor:mac && tsc && vite build && electron-builder --mac",
 		"build:native:win": "node scripts/build-windows-wgc-helper.mjs",
 		"build:native:compositor": "node scripts/build-windows-compositor-addon.mjs",
 		"build:native:compositor:mac": "node scripts/build-macos-compositor-addon.mjs",
@@ -54,7 +54,8 @@
 		"test:e2e": "playwright test",
 		"test:e2e:windows-native-checklist": "playwright test tests/e2e/windows-native-checklist.spec.ts",
 		"prepare": "husky",
-		"fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs"
+		"fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs",
+		"fetch:ffmpeg:mac": "node scripts/fetch-ffmpeg-macos.mjs"
 	},
 	"dependencies": {
 		"@fix-webm-duration/fix": "^1.0.1",
