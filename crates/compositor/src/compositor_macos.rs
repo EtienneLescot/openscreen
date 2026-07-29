@@ -34,7 +34,10 @@ use crate::ffi::AVFrame;
 pub use crate::frame_geometry::{
     live_params_from_scene, webcam_shape_code, FIXTURE_FRAMES, LayerCB, LiveParams, OUT_H, OUT_W,
 };
-use crate::scene::Scene;
+use crate::frame_geometry::{parse_hex, FrameGeometryInput, SCREEN_SHADOW_OFFSET_FRAC,
+    SCREEN_SHADOW_SPREAD_FRAC, WEBCAM_SHADOW_OFFSET_FRAC, WEBCAM_SHADOW_OPACITY,
+    WEBCAM_SHADOW_SPREAD_FRAC};
+use crate::scene::{Scene, SceneBackground};
 use anyhow::{anyhow, Result};
 use metal::foreign_types::ForeignType;
 use std::cell::RefCell;
@@ -216,6 +219,10 @@ pub struct Compositor {
     timeline_time: RefCell<Option<f32>>,
     live_params: RefCell<LiveParams>,
     metal_texture_cache: CVMetalTextureCache,
+    /// Wallpapers décodés, indexés par chemin (ou par data-URI pour les annotations image).
+    /// Le décode + upload coûte des millisecondes ; le faire à chaque frame ferait chuter la
+    /// preview sur un fond image.
+    img_cache: RefCell<std::collections::HashMap<String, (metal::Texture, u32, u32)>>,
 
     // --- Engine : render targets ---
     /// Render target principal RGBA8. Cible de `compose_frame`. `Private` : c'est une
@@ -431,6 +438,7 @@ impl Compositor {
             timeline_time: RefCell::new(None),
             live_params: RefCell::new(LiveParams::default()),
             metal_texture_cache: cache,
+            img_cache: RefCell::new(std::collections::HashMap::new()),
             rt,
             rt_read,
             nv12_y,
@@ -539,39 +547,211 @@ impl Compositor {
         Ok((y, uv))
     }
 
-    /// Compose la frame suivante → render target RGBA, puis miroir `Shared` pour la
-    /// lecture CPU. **First-pass engine** : la vidéo `screen` est rendue plein cadre
-    /// (mode 0 de `ps_main`), sans webcam / coins arrondis / ombres / blur.
+    /// Les verbes de dessin, côté Metal. Mêmes noms et mêmes paramètres que leurs
+    /// homologues de `compositor_windows.rs` — c'est ce qui rend les deux moitiés
+    /// « dessin » comparables ligne à ligne.
+    ///
+    /// `ps_main` lit `LayerCB` au fragment ET `vs_main` le lit au vertex (il en tire le
+    /// quad), donc les deux étages sont liés à chaque draw.
+    unsafe fn draw_layer(
+        &self,
+        enc: &metal::RenderCommandEncoderRef,
+        cb: &LayerCB,
+        tex: Option<(&metal::Texture, &metal::Texture)>,
+    ) {
+        let bytes = std::mem::size_of::<LayerCB>() as u64;
+        let ptr = cb as *const LayerCB as *const std::ffi::c_void;
+        enc.set_vertex_bytes(0, bytes, ptr);
+        enc.set_fragment_bytes(0, bytes, ptr);
+        if let Some((y, uv)) = tex {
+            enc.set_fragment_texture(0, Some(y));
+            enc.set_fragment_texture(1, Some(uv));
+        }
+        enc.draw_primitives(metal::MTLPrimitiveType::TriangleStrip, 0, 4);
+    }
+
+    /// Quad de couleur pleine / gradient / ombre — tout ce qui n'échantillonne pas la vidéo.
+    unsafe fn draw_solid(&self, enc: &metal::RenderCommandEncoderRef, cb: &LayerCB) {
+        self.draw_layer(enc, cb, None);
+    }
+
+    /// Quad vidéo NV12 (mode 0) : les deux plans de la frame décodée.
+    unsafe fn draw_video(
+        &self,
+        enc: &metal::RenderCommandEncoderRef,
+        cb: &LayerCB,
+        y: &metal::Texture,
+        uv: &metal::Texture,
+    ) {
+        self.draw_layer(enc, cb, Some((y, uv)));
+    }
+
+    /// Ombre portée (mode 2) — port mot pour mot de `compositor_windows::draw_shadow` :
+    /// le quad est élargi de `spread` de chaque côté et décalé de `offset_px`, et le
+    /// shader dérive la pénombre de la SDF du rect arrondi inscrit.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn draw_shadow(
+        &self,
+        enc: &metal::RenderCommandEncoderRef,
+        dst: [f32; 4],
+        size_px: [f32; 2],
+        radius: f32,
+        spread: f32,
+        offset_px: [f32; 2],
+        opacity: f32,
+    ) {
+        let (rw, rh) = (self.render_w as f32, self.render_h as f32);
+        let (sx, sy) = (spread / rw, spread / rh);
+        let (ox, oy) = (offset_px[0] / rw, offset_px[1] / rh);
+        let cb = LayerCB {
+            dst: [dst[0] - sx + ox, dst[1] - sy + oy, dst[2] + 2.0 * sx, dst[3] + 2.0 * sy],
+            quad_px: [size_px[0] + 2.0 * spread, size_px[1] + 2.0 * spread],
+            radius_px: radius,
+            mode: 2.0,
+            color: [0.0, 0.0, 0.0, opacity],
+            fx: [spread, 0.0, 0.0, 0.0],
+            mb: [0.0, 1.0, 1.0, 0.0],
+            ..Default::default()
+        };
+        self.draw_solid(enc, &cb);
+    }
+
+
+    /// Décode un fichier image (jpg/png) — ou une data-URI — en `MTLTexture` RGBA8.
+    ///
+    /// Miroir de `compositor_windows::load_image_srv`. Les annotations image stockent une
+    /// data URL plutôt qu'un chemin (cf. `types.ts`), d'où les deux entrées.
+    fn load_image_texture(&self, path: &str) -> Result<(metal::Texture, u32, u32)> {
+        let img = if let Some(bytes) = crate::frame_geometry::decode_data_uri(path) {
+            image::load_from_memory(&bytes)
+                .map_err(|e| anyhow!("data URI image ({} octets) : {e}", bytes.len()))?
+                .to_rgba8()
+        } else {
+            image::open(path)
+                .map_err(|e| anyhow!("wallpaper {path} : {e}"))?
+                .to_rgba8()
+        };
+        let (w, h) = (img.width(), img.height());
+        let pixels = img.into_raw();
+        let tex = make_texture(
+            &self.gpu.device,
+            metal::MTLPixelFormat::RGBA8Unorm,
+            w,
+            h,
+            metal::MTLStorageMode::Shared,
+            metal::MTLTextureUsage::ShaderRead,
+        );
+        tex.replace_region(
+            metal::MTLRegion {
+                origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
+                size: metal::MTLSize { width: w as u64, height: h as u64, depth: 1 },
+            },
+            0,
+            pixels.as_ptr() as *const std::ffi::c_void,
+            (w * 4) as u64,
+        );
+        Ok((tex, w, h))
+    }
+
+    /// Fond wallpaper image, cover-fit sur le ratio de SORTIE (mode 6).
+    ///
+    /// Le crop de recouvrement se calcule contre le vrai ratio de sortie, pas contre celui
+    /// de la texture : sinon l'image, déjà cover-fittée, se fait re-déformer.
+    unsafe fn draw_image_bg(
+        &self,
+        enc: &metal::RenderCommandEncoderRef,
+        path: &str,
+        output_aspect: f32,
+    ) -> Result<()> {
+        // Emprunt isolé dans un `let` pour qu'il soit relâché AVANT le `borrow_mut` —
+        // même piège que côté Windows (double emprunt RefCell à la première frame image).
+        let cached = self.img_cache.borrow().get(path).cloned();
+        let (tex, iw, ih) = match cached {
+            Some(v) => v,
+            None => {
+                let loaded = self.load_image_texture(path)?;
+                self.img_cache.borrow_mut().insert(path.to_string(), loaded.clone());
+                loaded
+            }
+        };
+        let ai = iw as f32 / ih.max(1) as f32;
+        let ao = output_aspect;
+        let (u0, v0, u1, v1) = if ai > ao {
+            let vis = ao / ai; // rogne horizontalement
+            ((1.0 - vis) * 0.5, 0.0, 1.0 - (1.0 - vis) * 0.5, 1.0)
+        } else {
+            let vis = ai / ao; // rogne verticalement
+            (0.0, (1.0 - vis) * 0.5, 1.0, 1.0 - (1.0 - vis) * 0.5)
+        };
+        enc.set_fragment_texture(2, Some(&tex));
+        self.draw_solid(
+            enc,
+            &LayerCB {
+                dst: [0.0, 0.0, 1.0, 1.0],
+                src: [u0, v0, u1, v1],
+                mode: 6.0,
+                ..Default::default()
+            },
+        );
+        Ok(())
+    }
+
+    /// Compose la frame : fond, ombre écran, écran, ombre caméra, caméra — puis miroir
+    /// `Shared` pour la lecture CPU.
+    ///
+    /// La géométrie vient de `frame_geometry::plan_frame`, la MÊME fonction que le moteur
+    /// D3D11 appelle. Ce qui reste ici n'est donc que l'émission des draws ; c'est aussi
+    /// pourquoi cette moitié se relit en regard de `compositor_windows.rs`, section par
+    /// section.
+    ///
+    /// Pas encore rendu : le tilt 3D (mode 8), les annotations, le curseur, le flou de
+    /// fond, et le wallpaper image — ce dernier faute de chemin de décodage/upload d'image
+    /// côté Metal, et il retombe sur la couleur de fond en le disant.
     pub unsafe fn compose_frame(
         &self,
         screen: *const AVFrame,
-        _webcam: *const AVFrame,
-        _frame: f32,
-        _cfg: &Cfg,
+        webcam: *const AVFrame,
+        frame: f32,
+        cfg: &Cfg,
     ) -> Result<()> {
         if Self::pixel_buffer_of(screen).is_none() {
-            // Pas de frame source : on efface le RT au noir.
             return self.clear_rt();
         }
-
         let (sy, suv) = self.nv12_srvs(screen)?;
-
-        // LayerCB : full-canvas (dst = [0,0,1,1], src = [0,0,1,1], mode = 0 = NV12).
-        let layer = LayerCB {
-            dst: [0.0, 0.0, 1.0, 1.0],
-            src: [0.0, 0.0, 1.0, 1.0],
-            quad_px: [self.render_w as f32, self.render_h as f32],
-            radius_px: 0.0,
-            mode: 0.0,
-            color: [1.0, 1.0, 1.0, 1.0],
-            fx: [0.0; 4],
-            src_prev: [0.0, 0.0, 1.0, 1.0],
-            dst_prev: [0.0, 0.0, 1.0, 1.0],
-            mb: [1.0, 0.0, 0.0, 0.0],
+        // La caméra peut manquer (clip sans webcam) : son absence ne doit pas emporter
+        // l'écran avec elle.
+        let webcam_tex = self.nv12_srvs(webcam).ok();
+        let (stw, sth) = self.tex_dims(screen);
+        let (wtw, wth) = self.tex_dims(webcam);
+        let (scw, sch) = ((*screen).width as f32, (*screen).height as f32);
+        let (wcw, wch) = if webcam.is_null() {
+            (1.0, 1.0)
+        } else {
+            ((*webcam).width as f32, (*webcam).height as f32)
         };
+        let u_max = scw / (stw.max(1)) as f32;
+        let v_max = sch / (sth.max(1)) as f32;
+        let (rw, rh) = (self.render_w as f32, self.render_h as f32);
+
+        let scene_ref = self.scene.borrow();
+        let cursor_ref = self.cursor.borrow();
+        let lp = *self.live_params.borrow();
+        let g = crate::frame_geometry::plan_frame(&FrameGeometryInput {
+            render_px: [rw, rh],
+            screen_tex_px: [stw as f32, sth as f32],
+            screen_visible_px: [scw, sch],
+            webcam_visible_px: [wcw, wch],
+            u_max,
+            v_max,
+            frame,
+            cfg,
+            live: lp,
+            scene: scene_ref.as_ref(),
+            cursor: cursor_ref.as_ref(),
+            timeline_t_override: *self.timeline_time.borrow(),
+        });
 
         let cmd_buf = self.gpu.context.new_command_buffer();
-
         let pass_desc = metal::RenderPassDescriptor::new();
         let ca = pass_desc
             .color_attachments()
@@ -581,21 +761,143 @@ impl Compositor {
         ca.set_load_action(metal::MTLLoadAction::Clear);
         ca.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
         ca.set_store_action(metal::MTLStoreAction::Store);
+        let enc = cmd_buf.new_render_command_encoder(&pass_desc);
+        enc.set_render_pipeline_state(&self.pipeline_main);
+        // Les deux plans écran restent liés par défaut : les quads de couleur ne les
+        // échantillonnent pas, mais Metal veut des slots renseignés pour les draws qui, eux,
+        // le font.
+        enc.set_fragment_texture(0, Some(&sy));
+        enc.set_fragment_texture(1, Some(&suv));
 
-        let encoder = cmd_buf.new_render_command_encoder(&pass_desc);
-        encoder.set_render_pipeline_state(&self.pipeline_main);
-        encoder.set_fragment_texture(0, Some(&sy));
-        encoder.set_fragment_texture(1, Some(&suv));
-        // `vs_main` lit `layer.dst`/`layer.src`/`layer.quad_px` : le constant buffer doit
-        // être lié aux DEUX étages. La première version ne le liait qu'au fragment, donc
-        // le vertex shader lisait un buffer non lié et le quad sortait indéfini.
-        let layer_bytes = std::mem::size_of::<LayerCB>() as u64;
-        let layer_ptr = &layer as *const LayerCB as *const std::ffi::c_void;
-        encoder.set_vertex_bytes(0, layer_bytes, layer_ptr);
-        encoder.set_fragment_bytes(0, layer_bytes, layer_ptr);
-        encoder.draw_primitives(metal::MTLPrimitiveType::TriangleStrip, 0, 4);
-        encoder.end_encoding();
+        // --- fond --- (parité `compositor_windows.rs`, section « fond »)
+        match scene_ref.as_ref().map(|s| s.background.clone()) {
+            Some(SceneBackground::Color { color }) => {
+                let c = parse_hex(&color).unwrap_or(lp.bg_color);
+                self.draw_solid(
+                    enc,
+                    &LayerCB { dst: [0.0, 0.0, 1.0, 1.0], mode: 1.0, color: c, ..Default::default() },
+                );
+            }
+            Some(SceneBackground::Gradient { angle_deg, stops }) => {
+                let c0 = stops.first().and_then(|s| parse_hex(s)).unwrap_or(lp.bg_color);
+                let c1 = stops.last().and_then(|s| parse_hex(s)).unwrap_or(c0);
+                let a = angle_deg.to_radians();
+                self.draw_solid(
+                    enc,
+                    &LayerCB {
+                        dst: [0.0, 0.0, 1.0, 1.0],
+                        src: [c1[0], c1[1], c1[2], c1[3]],
+                        mode: 5.0,
+                        color: c0,
+                        fx: [a.sin(), -a.cos(), 0.0, 0.0],
+                        ..Default::default()
+                    },
+                );
+            }
+            Some(SceneBackground::Image { path }) => {
+                // Repli couleur en cas d'échec, mais LOGGÉ : un fallback silencieux masquerait
+                // un chemin cassé.
+                if let Err(e) = self.draw_image_bg(enc, &path, rw / rh) {
+                    eprintln!("[compositor] wallpaper image \"{path}\" : {e:#}");
+                    self.draw_solid(
+                        enc,
+                        &LayerCB {
+                            dst: [0.0, 0.0, 1.0, 1.0],
+                            mode: 1.0,
+                            color: lp.bg_color,
+                            ..Default::default()
+                        },
+                    );
+                }
+            }
+            None => {
+                self.draw_solid(
+                    enc,
+                    &LayerCB {
+                        dst: [0.0, 0.0, 1.0, 1.0],
+                        mode: 1.0,
+                        color: lp.bg_color,
+                        ..Default::default()
+                    },
+                );
+            }
+        }
 
+        // --- écran : ombre puis vidéo ---
+        let s_px = [g.s_dst[2] * rw, g.s_dst[3] * rh];
+        if cfg.shadow {
+            self.draw_shadow(
+                enc,
+                g.s_dst,
+                s_px,
+                g.s_radius,
+                SCREEN_SHADOW_SPREAD_FRAC * g.frame_min_px,
+                [0.0, SCREEN_SHADOW_OFFSET_FRAC * g.frame_min_px],
+                0.45 * lp.shadow_scale,
+            );
+        }
+        let [su0, sv0, su1, sv1] = g.cut;
+        self.draw_video(
+            enc,
+            &LayerCB {
+                dst: g.s_dst,
+                src: [su0, sv0, su1, sv1],
+                quad_px: s_px,
+                radius_px: g.s_radius,
+                mode: 0.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+                src_prev: [su0, sv0, su1, sv1],
+                dst_prev: g.s_dst_prev,
+                mb: [g.mb_taps, 1.0, 1.0, 0.0],
+                ..Default::default()
+            },
+            &sy,
+            &suv,
+        );
+
+        // --- caméra : ombre PiP puis vidéo ---
+        if let (true, Some((wy, wuv))) = (lp.has_webcam, webcam_tex.as_ref()) {
+            let (cu0, cv0, cu1, cv1) = crate::frame_geometry::cover_crop_uv(
+                [wcw, wch],
+                [wtw as f32, wth as f32],
+                g.w_px[0] / g.w_px[1].max(0.0001),
+            );
+            let (u0, u1) = if lp.webcam_mirror { (cu1, cu0) } else { (cu0, cu1) };
+            let webcam_is_block = matches!(
+                g.scene_preset.as_deref(),
+                Some("dual-frame") | Some("vertical-stack")
+            );
+            if cfg.shadow && !webcam_is_block && g.shape_fade > 0.0 {
+                self.draw_shadow(
+                    enc,
+                    g.w_dst,
+                    g.w_px,
+                    g.w_radius,
+                    WEBCAM_SHADOW_SPREAD_FRAC * g.frame_min_px,
+                    [0.0, WEBCAM_SHADOW_OFFSET_FRAC * g.frame_min_px],
+                    WEBCAM_SHADOW_OPACITY * g.shape_fade,
+                );
+            }
+            self.draw_video(
+                enc,
+                &LayerCB {
+                    dst: g.w_dst,
+                    src: [u0, cv0, u1, cv1],
+                    quad_px: g.w_px,
+                    radius_px: g.w_radius,
+                    mode: 0.0,
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    src_prev: [u0, cv0, u1, cv1],
+                    dst_prev: g.w_dst_prev,
+                    mb: [g.mb_taps, 1.0, 1.0, 0.0],
+                    ..Default::default()
+                },
+                wy,
+                wuv,
+            );
+        }
+
+        enc.end_encoding();
         self.mirror_rt(cmd_buf);
         cmd_buf.commit();
         cmd_buf.wait_until_completed();
