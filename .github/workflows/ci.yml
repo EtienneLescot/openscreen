@@ -167,6 +167,44 @@ jobs:
           cd crates
           cargo build -p compositor-view-napi --release
 
+  # The Windows half of the compositor had NO type-check on any pull request.
+  # `ci.yml`'s only Rust job is the macOS one above; `compositor_windows.rs` — the
+  # 3654-line D3D11 engine that every Windows user actually runs — is compiled
+  # exclusively by `build.yml`'s `build-windows` step (`npm run build:win`), and
+  # build.yml triggers only on `push: tags: v*` or `workflow_dispatch`. A typo in
+  # that file therefore surfaced when someone cut a release, not when they pushed it.
+  #
+  # That gap is what makes any cross-platform refactor of the compositor a blind
+  # edit, so it gets closed before the refactor rather than after.
+  #
+  # `cargo check`, not `build`: the point is "does the Windows engine still compile",
+  # and check is roughly half the wall-time of a full build on a windows runner.
+  rust-windows-compositor-check:
+    name: Rust check (Windows compositor)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # bindgen needs libclang. `crates/.cargo/config.toml` pins LIBCLANG_PATH to
+      # C:\Program Files\LLVM\bin, which is where the windows-latest image already
+      # has LLVM — so the pin resolves with no extra install.
+      - name: Check LLVM is where the cargo config expects it
+        shell: bash
+        run: ls "/c/Program Files/LLVM/bin/libclang.dll"
+      # Vendors the pinned BtbN LGPL-shared build into
+      # crates/thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared — the exact directory
+      # FFMPEG_DIR points at (crates/.cargo/config.toml). build.rs reads the headers
+      # from there and links the import libs.
+      - name: Vendor the pinned ffmpeg
+        run: npm run fetch:ffmpeg
+      - name: cargo check (compositor + napi addon)
+        shell: bash
+        run: |
+          cd crates
+          cargo check -p openscreen-compositor -p compositor-view-napi --all-targets
+
   semantic-pr:
     name: Validate PR title (semantic)
     runs-on: ubuntu-latest
