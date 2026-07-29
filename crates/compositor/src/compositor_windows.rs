@@ -6,7 +6,8 @@ use crate::config::Cfg;
 // pour le pourquoi. `pub use` sur les constantes : `pipeline_windows.rs`, `live.rs` et
 // `crates/poc-d3d/src/app.rs` les lisent via `crate::compositor::…`, et ce chemin doit
 // rester valable.
-pub use crate::frame_geometry::{FIXTURE_FRAMES, HALF_H, HALF_W, OUT_H, OUT_W};
+pub use crate::frame_geometry::{live_params_from_scene, webcam_shape_code, LayerCB,
+    LiveParams, FIXTURE_FRAMES, HALF_H, HALF_W, OUT_H, OUT_W};
 use crate::frame_geometry::{
     cover_crop_uv, cover_uv_rect, cursor_sprite_dst, decode_data_uri, ease_in_out_cubic, lerp,
     lerp4, parse_hex, preset_placements, remap_box, screen_source_rect, timeline, CursorPlacement,
@@ -40,104 +41,10 @@ use windows::Win32::Graphics::Dxgi::Common::*;
 
 
 
-/// Constant buffer d'un calque (doit matcher `cbuffer Layer` du HLSL, 64 octets).
-#[repr(C)]
-#[derive(Clone, Copy, Default)]
-pub struct LayerCB {
-    pub dst: [f32; 4],
-    pub src: [f32; 4],
-    pub quad_px: [f32; 2],
-    pub radius_px: f32,
-    pub mode: f32,
-    pub color: [f32; 4],
-    pub fx: [f32; 4],
-    pub src_prev: [f32; 4],
-    pub dst_prev: [f32; 4],
-    pub mb: [f32; 4], // mb[0] = nombre de taps de motion blur
-}
 
-/// Valeurs continues pilotées par l'inspector (celles qui étaient codées en dur dans
-/// `compose_frame`). Le défaut reproduit le rendu actuel → bench/export inchangés.
-/// Les booléens/taps (fond flouté, ombre on/off, coins on/off, motion blur) restent
-/// portés par le `Cfg` que le thread live reconstruit depuis les switches.
-#[derive(Clone, Copy)]
-pub struct LiveParams {
-    pub bg_color: [f32; 4],       // fond plat (mode couleur) quand non flouté
-    pub shadow_scale: f32,        // multiplie l'opacité des ombres (1 = défaut, 0 = off)
-    pub radius_scale: f32,        // multiplie le rayon des coins (1 = défaut, 0 = carré)
-    pub padding: f32,             // 0..1 : inset supplémentaire du screen (0 = défaut fixture)
-    pub webcam_size_scale: f32,   // multiplie la taille de la webcam (1 = défaut)
-    pub webcam_mirror: bool,      // miroir horizontal de la webcam
-    pub webcam_shape: u32,        // 0=rect, 1=circle, 2=square, 3=rounded (défaut)
-    pub cursor_size_scale: f32,   // multiplie la taille du curseur (1 = défaut)
-    pub cursor_bounce_scale: f32, // multiplie l'amplitude du click-bounce (1 = défaut, 0 = off)
-    /// 0..1 : flou de mouvement DU CURSEUR (indépendant du motion blur écran/`cfg.mblur_n`).
-    /// Approximé par le même mécanisme de traînée fantôme (taps décalés le long de la
-    /// vélocité), pas par un flou gaussien variable comme le canvas web — plus simple à
-    /// réutiliser côté GPU, effet de streak équivalent.
-    pub cursor_motion_blur: f32,
-    /// False when the "webcam" decoder is actually just the screen video again (the TS side
-    /// falls `webcamPath` back to the screen asset's own path when a clip has no real camera,
-    /// purely so the decoder pipeline has something valid to open) — drawing the PiP box in
-    /// that case duplicates the screen video into its own corner. Live-only: derived in
-    /// `live.rs` by comparing the active clip's screen/webcam paths; defaults `true` (draw)
-    /// so fixture/bench renders and any caller that never sets it keep their old behavior.
-    pub has_webcam: bool,
-}
 
-impl Default for LiveParams {
-    fn default() -> Self {
-        Self {
-            bg_color: [0.10, 0.11, 0.14, 1.0],
-            shadow_scale: 1.0,
-            radius_scale: 1.0,
-            padding: 0.0,
-            webcam_size_scale: 1.0,
-            webcam_mirror: false,
-            webcam_shape: 3,
-            cursor_size_scale: 1.0,
-            cursor_bounce_scale: 1.0,
-            cursor_motion_blur: 0.0,
-            has_webcam: true,
-        }
-    }
-}
 
-/// "rectangle"|"circle"|"square"|"rounded" -> code webcam_shape (0/1/2/3). Partagé entre le
-/// live (`live.rs::set_param_str`) et l'export (construit `LiveParams` depuis la scène) — une
-/// seule table de vérité pour ce mapping.
-pub fn webcam_shape_code(shape: &str) -> u32 {
-    match shape {
-        "rectangle" => 0,
-        "circle" => 1,
-        "square" => 2,
-        _ => 3, // "rounded" (défaut)
-    }
-}
 
-/// Construit les `LiveParams` équivalents à ce que l'inspector pousse en live, mais depuis la
-/// scène de l'app — l'export est un rendu one-shot sans historique de sliders, donc il doit lire
-/// directement la config déjà posée dans la scène plutôt que dupliquer un mécanisme d'inspector.
-/// Unités identiques à `RightPanes.tsx` (mêmes conversions, pas de re-normalisation) : voir
-/// `sceneDescription.ts` pour la correspondance settings -> champs de scène.
-pub fn live_params_from_scene(s: &crate::scene::Scene) -> LiveParams {
-    LiveParams {
-        shadow_scale: s.effects.shadow,
-        // `radius_scale` reste le multiplicateur du chemin INSPECTOR (bench/GUI standalone) ; le
-        // rayon écran d'une scène vient désormais de `effects.roundness_frac`, lu directement
-        // dans `compose_frame`. Le faire transiter ici obligeait à le normaliser par un rayon de
-        // fixture (`p.screen.radius`, 24 px) pour ressortir la valeur de départ — un aller-retour
-        // qui ne servait qu'à faire passer des pixels pour un ratio.
-        padding: s.effects.padding,
-        webcam_size_scale: s.layout.webcam_size,
-        webcam_mirror: s.layout.webcam_mirror,
-        webcam_shape: webcam_shape_code(&s.layout.webcam_shape),
-        cursor_size_scale: s.cursor.size,
-        cursor_bounce_scale: s.cursor.click_bounce,
-        cursor_motion_blur: s.cursor.motion_blur,
-        ..LiveParams::default()
-    }
-}
 
 pub struct Compositor {
     dev: ID3D11Device,
