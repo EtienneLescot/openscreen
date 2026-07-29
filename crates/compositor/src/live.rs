@@ -31,7 +31,7 @@ use windows::core::PCWSTR;
 use crate::d3d::Gpu;
 use crate::pipeline::Decoder;
 use anyhow::Result;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::JoinHandle;
 use std::time::{Duration, Instant};
@@ -463,6 +463,11 @@ struct Shared {
     /// Option pour distinguer "pas de frame encore composée" (avant le 1er compose,
     /// `read_frame` retourne `Ok(None)`) d'un buffer vide (qui n'arrive jamais).
     latest_frame: Mutex<Option<LatestFrame>>,
+    /// Génération de la dernière frame publiée. Tenue À PART de `latest_frame` : la
+    /// livraison sans copie vide le slot en le lisant, et dériver la génération d'un slot
+    /// vide la ferait repartir à 1 — donc rejouer des générations déjà peintes. Monotone,
+    /// jamais remise à zéro.
+    frame_gen: AtomicU64,
 }
 
 /// Handle d'une vue live. `Drop` arrête le rendu.
@@ -508,6 +513,7 @@ impl LiveView {
             playing: AtomicBool::new(true),
             stop: AtomicBool::new(false),
             latest_frame: Mutex::new(None),
+            frame_gen: AtomicU64::new(0),
         });
         let sh = shared.clone();
         let (s, wc, cj) = (screen.to_string(), webcam.to_string(), cursor_json.to_string());
@@ -556,9 +562,20 @@ impl LiveView {
     /// compteur. Le consommateur passe la dernière génération qu'il a peinte (`0` au
     /// départ) ; `None` ⇒ il ne fait rien, `Some` ⇒ il peint et retient `gen`.
     pub fn latest_frame_since(&self, since_gen: u64) -> Option<(u64, u32, u32, Vec<u8>)> {
-        let guard = self.shared.latest_frame.lock().ok()?;
+        let mut guard = self.shared.latest_frame.lock().ok()?;
         match guard.as_ref() {
-            Some((gen, w, h, px)) if *gen > since_gen => Some((*gen, *w, *h, px.clone())),
+            // Le buffer est EMPORTÉ, pas copié. Le thread de rendu le remplace à chaque
+            // frame composée et le consommateur garde ses pixels peints sur le canvas :
+            // personne ne relit jamais la même génération. Le `clone()` d'avant était un
+            // memcpy `O(w·h)` — 1,5 ms à 1280×720, 3,4 ms à 1920×1080 — payé sur le THREAD
+            // PRINCIPAL de Node, celui-là même qui doit rester libre pour que React peigne
+            // la tête de lecture.
+            //
+            // Contrepartie assumée : une relecture forcée (`since_gen = 0`) après la
+            // première ne retrouve rien tant qu'une nouvelle frame n'est pas composée. Sans
+            // conséquence ici — le seul consommateur ne l'utilise qu'au montage, et un
+            // redimensionnement provoque de toute façon une recomposition.
+            Some((gen, ..)) if *gen > since_gen => guard.take(),
             _ => None,
         }
     }
@@ -1288,8 +1305,13 @@ unsafe fn render_thread(
                         // premier publish. Les dims publiées sont celles du RENDU (`rw`×`rh`) :
                         // le canvas JS s'y dimensionne (packet auto-descriptif) puis CSS met à
                         // l'échelle vers la boîte du panneau — plus de resize GPU intermédiaire.
+                        // La génération vient d'un compteur atomique et non du slot : la
+                        // livraison sans copie VIDE le slot en le lisant, et un
+                        // `unwrap_or(1)` repartirait alors de 1 — le consommateur recevrait
+                        // des générations déjà peintes et boucherait. Séquence identique à
+                        // l'ancienne dérivation tant que le slot n'est pas vidé.
+                        let next_gen = shared.frame_gen.fetch_add(1, Ordering::Relaxed) + 1;
                         if let Ok(mut slot) = shared.latest_frame.lock() {
-                            let next_gen = slot.as_ref().map(|(g, ..)| g + 1).unwrap_or(1);
                             *slot = Some((next_gen, rw, rh, rgba));
                         }
                         first = false;
