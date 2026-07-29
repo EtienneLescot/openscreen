@@ -1,5 +1,6 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import type { AxcutDocument } from "../schema";
 import { useProjectStore } from "./projectStore";
 import { useTimeline } from "./useTimeline";
 
@@ -517,6 +518,72 @@ describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
 		expect(useProjectStore.getState().document?.zoomRanges[0]).toMatchObject({
 			rotationPreset: "left",
 			focusMode: "auto",
+		});
+	});
+});
+
+// Regression guard for the playhead-stutter fix. `currentTimeSec` is rewritten on
+// every animation frame during playback, and `useTimeline()` is called by the editor
+// shell — so subscribing to the playhead here re-rendered the entire editor (timeline,
+// clips, waveforms, inspector) 60×/s, which is exactly what made the playhead itself
+// stutter. The hook must read the playhead imperatively: zero re-renders per tick, but
+// still the LIVE value at the moment an action fires.
+describe("useTimeline is not re-rendered by playhead ticks", () => {
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		bridgeMocks.save.mockImplementation(async (doc: typeof sampleDoc) => ({
+			success: true,
+			document: doc,
+		}));
+		useProjectStore.setState({
+			projectId: "proj_test",
+			// The shared `sampleDoc` fixture predates a few schema fields (see the
+			// "Typecheck (tests)" ratchet in ci.yml); cast rather than add one more
+			// error to that backlog.
+			document: sampleDoc as unknown as AxcutDocument,
+			revision: 1,
+			status: "ready",
+			error: null,
+			currentTimeSec: 0,
+		});
+	});
+
+	afterEach(() => {
+		vi.clearAllMocks();
+	});
+
+	it("does not re-render across a second of 60 Hz playhead writes", () => {
+		let renders = 0;
+		renderHook(() => {
+			renders++;
+			return useTimeline();
+		});
+		const baseline = renders;
+
+		// One act() per write: a single batched act() would collapse all 60 into one
+		// React pass and hide the very thing this asserts.
+		for (let i = 1; i <= 60; i++) {
+			act(() => {
+				useProjectStore.getState().setCurrentTime(i / 60);
+			});
+		}
+
+		expect(renders - baseline).toBe(0);
+		expect(useProjectStore.getState().currentTimeSec).toBeCloseTo(1);
+	});
+
+	it("still anchors a new region at the live playhead", async () => {
+		const { result } = renderHook(() => useTimeline());
+		act(() => {
+			useProjectStore.getState().setCurrentTime(4.2);
+		});
+		await act(async () => {
+			await result.current.addZoom();
+		});
+		expect(useProjectStore.getState().document?.zoomRanges.at(-1)).toMatchObject({
+			startMs: 4200,
+			endMs: 6200,
 		});
 	});
 });
