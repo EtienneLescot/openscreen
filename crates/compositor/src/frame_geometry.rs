@@ -1089,6 +1089,125 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
     }
 }
 
+/// Le curseur, prêt à dessiner : où, à quelle taille, avec quelle traînée.
+///
+/// Extrait de la moitié « dessin » de `compose_frame` pour la même raison que
+/// `plan_frame` : deux backends qui doivent poser le curseur au pixel près ne peuvent pas
+/// entretenir deux copies de ce mapping. Le placement dépend de la coupe source, du zoom,
+/// du padding et de l'inclinaison — autant d'endroits où deux implémentations dérivent.
+pub struct CursorPlan {
+    pub placement: CursorPlacement,
+    /// Placement à `t - trail_frames/FPS`, pour la traînée. `placement` quand il n'y en a pas.
+    pub prev_placement: CursorPlacement,
+    /// Côté du sprite en px de sortie (bounce et padding déjà appliqués).
+    pub size_px: f32,
+    /// Nombre d'échantillons de la traînée. 1 = curseur net, pas d'accumulation.
+    pub taps: u32,
+    /// Rect de clip « Clip to canvas » (mode 4/7 du shader lit `fx`).
+    pub clip: [f32; 4],
+    /// État du curseur à cet instant (`arrow`, `pointer`, …) pour choisir le sprite.
+    pub cursor_type: Option<String>,
+}
+
+/// Ce que `plan_cursor` doit savoir en plus de `FrameGeometry`.
+pub struct CursorPlanInput<'a> {
+    pub render_px: [f32; 2],
+    pub u_max: f32,
+    pub v_max: f32,
+    pub cfg: &'a Cfg,
+    pub live: LiveParams,
+    pub scene: Option<&'a Scene>,
+    pub track: &'a crate::cursor::CursorTrack,
+    /// Temps curseur, déjà résolu (`cursor_t_override` ou `frame / FPS`).
+    pub t: f32,
+}
+
+/// `None` = rien à dessiner cette frame : curseur masqué, ou pointeur hors du rect source
+/// courant (zoom serré, hors écran) — un état normal en lecture, pas une erreur.
+pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorPlan> {
+    let (rw, rh) = (input.render_px[0], input.render_px[1]);
+    let show = input.scene.map(|s| s.cursor.show).unwrap_or(input.cfg.cursor);
+    if !show {
+        return None;
+    }
+    let s_px = [g.s_dst[2] * rw, g.s_dst[3] * rh];
+    let tilt = (!crate::regions::is_identity_rotation(g.zoom_rotation))
+        .then(|| crate::regions::rotated_quad_corners_px(s_px[0], s_px[1], g.zoom_rotation));
+    let quad_center_px = [
+        (g.s_dst[0] + g.s_dst[2] * 0.5) * rw,
+        (g.s_dst[1] + g.s_dst[3] * 0.5) * rh,
+    ];
+    let cursor_bounds: [f32; 4] = match tilt.as_ref() {
+        None => g.s_dst,
+        Some(quad) => {
+            let (hx, hy) = quad.half_extents_px();
+            [
+                (quad_center_px[0] - hx) / rw,
+                (quad_center_px[1] - hy) / rh,
+                2.0 * hx / rw,
+                2.0 * hy / rh,
+            ]
+        }
+    };
+    let clip = match input.scene {
+        Some(s) if s.cursor.clip_to_bounds => cursor_bounds,
+        _ => [-1.0, -1.0, 3.0, 3.0],
+    };
+
+    let [su0, sv0, su1, sv1] = g.cut;
+    let (hu, hv) = ((su1 - su0) * 0.5, (sv1 - sv0) * 0.5);
+    let place = |cxy: Option<(f32, f32)>, dst: [f32; 4]| -> Option<CursorPlacement> {
+        cxy.and_then(|(cx2, cy2)| {
+            let fx = (cx2 * input.u_max - su0) / (2.0 * hu);
+            let fy = (cy2 * input.v_max - sv0) / (2.0 * hv);
+            if !(0.0..=1.0).contains(&fx) || !(0.0..=1.0).contains(&fy) {
+                return None;
+            }
+            Some(match tilt.as_ref() {
+                Some(&quad) => CursorPlacement::Tilted {
+                    plane_pt: [fx, fy],
+                    quad,
+                    center_px: quad_center_px,
+                    screen_px: s_px,
+                    render_px: [rw, rh],
+                },
+                None => CursorPlacement::Upright {
+                    center: [dst[0] + fx * dst[2], dst[1] + fy * dst[3]],
+                },
+            })
+        })
+    };
+    let placement = place(input.track.at(input.t), g.s_dst)?;
+
+    let lp = input.live;
+    let bounce = 1.0 + (input.track.bounce(input.t) - 1.0) * lp.cursor_bounce_scale;
+    let size_px =
+        CURSOR_BASE_SIZE_FRAC * g.frame_min_px * lp.cursor_size_scale * bounce * g.padding_scale;
+
+    let blur01 = lp.cursor_motion_blur.clamp(0.0, 1.0);
+    let has_scene = input.scene.is_some();
+    let trail_frames = if has_scene { 1.0 + blur01 * 7.0 } else { 1.0 };
+    let taps = if has_scene {
+        (1.0 + blur01 * 10.0).round() as u32
+    } else {
+        input.cfg.mblur_n
+    };
+    let prev_placement = if taps <= 1 {
+        placement
+    } else {
+        place(input.track.at(input.t - trail_frames / FPS), g.s_dst_prev).unwrap_or(placement)
+    };
+
+    Some(CursorPlan {
+        placement,
+        prev_placement,
+        size_px,
+        taps,
+        clip,
+        cursor_type: input.track.type_at(input.t).map(str::to_string),
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
