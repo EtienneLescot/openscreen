@@ -1212,6 +1212,94 @@ pub fn plan_cursor(g: &FrameGeometry, input: &CursorPlanInput) -> Option<CursorP
 mod tests {
     use super::*;
 
+    /// La scène de référence du golden : un cas qui exerce le padding, le crop, le zoom,
+    /// une caméra PiP décalée, un rayon et une inclinaison nulle.
+    fn golden_scene() -> Scene {
+        Scene::from_json(
+            r##"{
+            "clips":[{"screenPath":"/s.mp4","webcamPath":"/w.mp4","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":true}],
+            "layout":{"preset":"picture-in-picture","webcamSize":0.44,"webcamShape":"circle","webcamMirror":false,
+                      "webcamPosition":{"cx":0.8577,"cy":0.8159},"webcamReactiveZoom":false},
+            "effects":{"padding":0.51,"blur":false,"shadow":0.35,"roundnessFrac":0.0255,"motionBlur":0.35},
+            "background":{"kind":"color","color":"#1e1e2e"},
+            "zoomRegions":[],
+            "cursor":{"show":true,"size":7.76,"smoothing":0,"motionBlur":0.35,"clickBounce":1,"clipToBounds":false,"theme":"default"},
+            "cropByClip":[{"x":0,"y":0,"width":0.61,"height":0.61}],
+            "output":{"width":1170,"height":658,"fps":60}
+        }"##,
+        )
+        .expect("golden scene")
+    }
+
+    fn golden_input(scene: &Scene, cfg: &Cfg) -> FrameGeometryInput<'static> {
+        // SAFETY-free: on fuit volontairement les deux références pour obtenir un
+        // `'static` dans le test — la scène et le cfg vivent jusqu'à la fin du process.
+        let scene: &'static Scene = Box::leak(Box::new(scene.clone()));
+        let cfg: &'static Cfg = Box::leak(Box::new(cfg.clone()));
+        FrameGeometryInput {
+            render_px: [1170.0, 658.0],
+            screen_tex_px: [1920.0, 1088.0],
+            screen_visible_px: [1920.0, 1080.0],
+            webcam_visible_px: [1280.0, 720.0],
+            u_max: 1920.0 / 1920.0,
+            v_max: 1080.0 / 1088.0,
+            frame: 90.0,
+            cfg,
+            live: live_params_from_scene(scene),
+            scene: Some(scene),
+            cursor: None,
+            timeline_t_override: Some(1.5),
+        }
+    }
+
+    /// **Le golden iso-render.**
+    ///
+    /// Les deux backends ne peuvent pas tourner sur la même machine, donc « iso avec
+    /// D3D » ne peut pas être mesuré en comparant deux images rendues. Ce qui PEUT l'être,
+    /// et qui est la couche où la divergence s'est effectivement produite, c'est la
+    /// géométrie : `plan_frame` est le MÊME code des deux côtés, et ce test épingle ses 15
+    /// sorties au bit près. Il tourne dans le job macOS ET dans le job Windows, donc si un
+    /// jour les deux plateformes calculent des placements différents, l'un des deux vire au
+    /// rouge — ce qui est exactement la garantie qu'on cherche.
+    ///
+    /// Ce que ce test ne couvre PAS, et qu'il ne faut pas lui faire dire : la rastérisation.
+    /// D3D11 et Metal ne rendront jamais bit-à-bit identique (la PR #162 a mesuré 93-95 %
+    /// de canaux identiques, écart max 3/255, entre deux backends sur la MÊME machine).
+    /// La parité des shaders est tenue séparément, par le fait que `shaders.metal` et
+    /// `shaders.hlsl` ont été diffés ligne à ligne sur les 14 modes.
+    #[test]
+    fn plan_frame_is_pinned_bit_for_bit() {
+        let scene = golden_scene();
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let g = plan_frame(&golden_input(&scene, &cfg));
+        let got = [
+            g.s_dst[0], g.s_dst[1], g.s_dst[2], g.s_dst[3],
+            g.w_dst[0], g.w_dst[1], g.w_dst[2], g.w_dst[3],
+            g.cut[0], g.cut[1], g.cut[2], g.cut[3],
+            g.s_radius, g.w_radius, g.w_px[0], g.w_px[1],
+            g.frame_min_px, g.padding_scale, g.shape_fade, g.mb_taps, g.source_t,
+        ];
+        // Valeurs mesurées, pas devinées : toute dérive est une divergence à expliquer,
+        // pas un seuil à relâcher.
+        // Mesuré sur ce code, pas deviné : toute dérive est une divergence à expliquer,
+        // pas un seuil à relâcher. Ordre : s_dst[4], w_dst[4], cut[4], s_radius, w_radius,
+        // w_px[2], frame_min_px, padding_scale, shape_fade, mb_taps, source_t.
+        let want: [f32; 21] = [
+            0.10207555, 0.102, 0.7958489, 0.796,
+            0.9058473, 0.8325926, 0.0733194, 0.13037036,
+            0.0, 0.0, 0.61, 0.6055147,
+            16.779, 42.89185, 85.7837, 85.7837,
+            658.0, 0.796, 1.0, 6.25, 1.5,
+        ];
+        for (i, (a, b)) in got.iter().zip(want.iter()).enumerate() {
+            assert_eq!(
+                a.to_bits(),
+                b.to_bits(),
+                "sortie #{i} de plan_frame : {a} != {b}",
+            );
+        }
+    }
+
     /// Le contrat cross-backend, verrouillé octet par octet. Un shader qui lit un champ
     /// décalé ne lève rien : il rend faux, en silence.
     #[test]
