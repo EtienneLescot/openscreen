@@ -119,13 +119,48 @@ impl Decoder {
             // de device_context (cf. ffmpeg hwcontext_videotoolbox.h : la session est gérée
             // en interne). On passe `device = NULL`, juste un nom d'optionnel.
             let mut hwdev: *mut crate::ffi::AVBufferRef = ptr::null_mut();
-            let r = crate::ffi::av_hwdevice_ctx_create(
-                &mut hwdev,
-                crate::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
-                ptr::null(),
-                ptr::null_mut(),
-                0,
-            );
+            // VideoToolbox n'est PAS toujours le chemin rapide, et sur les enregistrements
+            // d'openscreen il est le LENT. Mesuré sur une capture 1920x1080@60 Constrained
+            // Baseline, décodage seul : VT 215 fps, libavcodec logiciel 3000 fps — 13x. Bout
+            // en bout sur l'export (décode + composite + encode), 76 fps contre 182, soit
+            // 2,4x, alors même que le chemin logiciel paie en plus swscale et un memcpy
+            // complet vers l'IOSurface.
+            //
+            // La raison est structurelle : le décodeur matériel a une latence fixe par frame
+            // et alloue un CVPixelBuffer/IOSurface à chacune, là où un profil trivial se
+            // décode en quelques centaines de microsecondes sur des cœurs qui, eux, sont
+            // multiples. Baseline est précisément ce que produit la capture d'openscreen
+            // (cf. `crates/fixture/fixture.json`, profile_idc 66) et ce que Chrome émet via
+            // MediaRecorder — donc le cas courant, pas un cas limite.
+            //
+            // Au-delà de Baseline (High, 10 bits, HEVC, 4K) l'arbitrage s'inverse : le
+            // décodeur logiciel devient le goulot et VT reprend l'avantage. D'où un choix
+            // sur le profil plutôt qu'un défaut unique.
+            let profile = (*dctx).profile;
+            // 66 = baseline, 578 = 66 | 0x200 (le flag « constrained »). Écrits en clair :
+            // bindgen ne génère pas les `FF_PROFILE_*` (des macros), et leurs valeurs sont
+            // figées par l'ABI de libavcodec.
+            const FF_PROFILE_H264_BASELINE: i32 = 66;
+            const FF_PROFILE_H264_CONSTRAINED_BASELINE: i32 = 578;
+            let is_baseline =
+                profile == FF_PROFILE_H264_BASELINE || profile == FF_PROFILE_H264_CONSTRAINED_BASELINE;
+            let forced = std::env::var("OPENSCREEN_MAC_DECODE").ok();
+            let want_hw = match forced.as_deref() {
+                Some("software") => false,
+                Some("videotoolbox") => true,
+                _ => !is_baseline,
+            };
+            let r = if want_hw {
+                crate::ffi::av_hwdevice_ctx_create(
+                    &mut hwdev,
+                    crate::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                    ptr::null(),
+                    ptr::null_mut(),
+                    0,
+                )
+            } else {
+                -1 // repli logiciel délibéré, pas un échec
+            };
             let cpu = if r != 0 {
                 // Pas de VideoToolbox sur ce codec : fallback software. `get_format` est
                 // laissé à NULL (libavcodec choisit son format de sortie, ici NV12 via
