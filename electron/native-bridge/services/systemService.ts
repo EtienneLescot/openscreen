@@ -4,10 +4,10 @@ import type {
 	SystemCapabilities,
 } from "../../../src/native/contracts";
 import { NATIVE_BRIDGE_VERSION } from "../../../src/native/contracts";
-import type { NativeBridgeStateStore } from "../store";
+import type { NativeBridgeState } from "../store";
 
 interface SystemServiceOptions {
-	store: NativeBridgeStateStore;
+	store: NativeBridgeState;
 	getPlatform: () => NativePlatform;
 	getAssetBasePath: () => string | null;
 	getCursorCapabilities: () => Promise<CursorCapabilities>;

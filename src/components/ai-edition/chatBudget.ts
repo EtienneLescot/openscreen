@@ -14,14 +14,14 @@ export interface ChatBudget {
 	ratio: number;
 }
 
-export const DEFAULT_CHAT_BUDGET_TOKENS = 80_000;
+const DEFAULT_CHAT_BUDGET_TOKENS = 80_000;
 
-export interface RenderableChatMessage {
+interface RenderableChatMessage {
 	content: string;
 	toolCalls?: Array<{ name?: string; summary?: string }>;
 }
 
-export function estimateTokens(messages: RenderableChatMessage[]): number {
+function estimateTokens(messages: RenderableChatMessage[]): number {
 	let chars = 0;
 	for (const m of messages) {
 		chars += m.content.length;

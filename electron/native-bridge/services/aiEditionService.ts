@@ -14,7 +14,6 @@ import type {
 	AiEditionLlmDisconnectResult,
 	AiEditionLlmSnapshot,
 	AiEditionProjectSummary,
-	AxcutTimelineOperation,
 } from "../../../src/native/contracts";
 import {
 	type CaptionTranslateSegment,
@@ -43,11 +42,6 @@ export interface AiEditionServiceOptions {
 		document?: unknown,
 		sink?: ChatEventSink,
 	) => Promise<AiEditionChatResult>;
-	runChatDefault: (
-		projectId: string,
-		message: string,
-		sink?: ChatEventSink,
-	) => Promise<AiEditionChatResult>;
 	rewindToMessage: (
 		projectId: string,
 		sessionId: string,
@@ -61,15 +55,6 @@ export interface AiEditionServiceOptions {
 		  }
 		| { success: false; error: string };
 	compactNow: (projectId: string, sessionId: string) => Promise<AiEditionChatCompactResult | null>;
-	runTimelineOperation: (
-		projectId: string,
-		sessionId: string,
-		operation: AxcutTimelineOperation,
-		conversationMessage: string,
-	) => Promise<
-		| { success: true; result: { document: unknown; summary: string } }
-		| { success: false; error: string }
-	>;
 	getContextUsage: (
 		projectId: string,
 		sessionId: string,
@@ -77,8 +62,6 @@ export interface AiEditionServiceOptions {
 	// ponytail: legacy per-batch undo retired in favor of per-message rewind.
 	// Kept on the surface for IPC compatibility; always returns success=false.
 	undoLastToolBatch: (projectId: string, sessionId: string) => AiEditionChatResult;
-	getDefaultChatHistory: (projectId: string) => AiEditionChatMessage[];
-	clearDefaultChatHistory: (projectId: string) => void;
 	listSessions: (projectId: string) => AiEditionChatSessionSummary[];
 	createSession: (projectId: string, title?: string) => AiEditionChatSessionSummary;
 	selectSession: (projectId: string, sessionId: string) => AiEditionChatSession | null;
@@ -286,32 +269,6 @@ export class AiEditionService {
 
 	chatCompactNow(projectId: string, sessionId: string): Promise<AiEditionChatCompactResult | null> {
 		return this.options.compactNow(projectId, sessionId);
-	}
-
-	chatRunTimelineOperation(
-		projectId: string,
-		sessionId: string,
-		operation: AxcutTimelineOperation,
-		conversationMessage: string,
-	) {
-		return this.options.runTimelineOperation(projectId, sessionId, operation, conversationMessage);
-	}
-
-	async chatRunDefault(
-		projectId: string,
-		message: string,
-		sink?: ChatEventSink,
-	): Promise<AiEditionChatResult> {
-		return this.options.runChatDefault(projectId, message, sink);
-	}
-
-	chatHistoryDefault(projectId: string): AiEditionChatMessage[] {
-		return this.options.getDefaultChatHistory(projectId);
-	}
-
-	chatClearDefault(projectId: string): { success: boolean } {
-		this.options.clearDefaultChatHistory(projectId);
-		return { success: true };
 	}
 
 	chatListSessions(projectId: string): AiEditionChatSessionSummary[] {

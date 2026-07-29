@@ -11,27 +11,20 @@ export type CustomPlaybackSpeedInputResult =
 	| { status: "too-slow"; draft: string }
 	| { status: "valid"; draft: string; speed: PlaybackSpeed };
 
-export function parseCustomPlaybackSpeedInput(rawValue: string): CustomPlaybackSpeedInputResult {
-	const decimalDraft = rawValue.replace(/,/g, ".").replace(/[^\d.]/g, "");
-	const [whole = "", ...fractionParts] = decimalDraft.split(".");
-	const draft = fractionParts.length > 0 ? `${whole}.${fractionParts.join("")}` : whole;
+export function parseCustomPlaybackSpeedInput(draft: string): CustomPlaybackSpeedInputResult {
+	const normalized = Number(draft.replace(/,/g, "."));
 
-	if (draft === "" || draft === ".") {
+	if (!Number.isFinite(normalized)) {
 		return { status: "empty", draft };
 	}
-
-	const speed = Number(draft);
-	if (!Number.isFinite(speed)) {
-		return { status: "empty", draft };
-	}
-
-	if (speed > MAX_PLAYBACK_SPEED) {
+	if (normalized > MAX_PLAYBACK_SPEED) {
 		return { status: "too-fast", draft };
 	}
-
-	if (speed < MIN_PLAYBACK_SPEED) {
+	if (normalized < MIN_PLAYBACK_SPEED) {
 		return { status: "too-slow", draft };
 	}
-
-	return { status: "valid", draft, speed: clampPlaybackSpeed(speed) };
+	// Reuse the shared clamp rather than re-inlining its rounding rule: this
+	// value feeds the native scene, and a second copy would drift the first time
+	// the bounds or the 2-decimal step change.
+	return { status: "valid", draft, speed: clampPlaybackSpeed(normalized) };
 }

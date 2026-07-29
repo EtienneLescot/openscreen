@@ -204,6 +204,11 @@ export function deleteSession(projectId: string, sessionId: string): boolean {
 export interface ChatEventSink {
 	/** Streamed text delta from the model. */
 	text?: (delta: string) => void;
+	/** Streamed delta from the model's reasoning block (Anthropic/MiniMax
+	 * thinking). Provider-agnostic — never called for providers that don't
+	 * expose thinking. The chat panel streams these into a live "Thinking…"
+	 * block so the reasoning phase doesn't feel like dead air. */
+	thinking?: (delta: string) => void;
 	/** A tool call is about to execute. */
 	toolStart?: (name: string, args: unknown) => void;
 	/** A tool call has finished. `ok=false` carries the model's error message. */
@@ -218,6 +223,7 @@ const noop = () => undefined;
 /** ponytail: zero-config sink that swallows every event. */
 const NOOP_SINK: Required<ChatEventSink> = {
 	text: noop,
+	thinking: noop,
 	toolStart: noop,
 	toolEnd: noop,
 	error: noop,
@@ -323,6 +329,7 @@ export async function runChat(
 
 	const agentSink = {
 		text: (delta: string) => emit.text(delta),
+		thinking: (delta: string) => emit.thinking(delta),
 		toolStart: (name: string, args: unknown) => {
 			emit.toolStart(name, args);
 			void editsAllowed;
@@ -570,44 +577,6 @@ export function getSessionContextUsage(
 // can run, and the model simply won't call write tools against it.
 function emptyDocumentForTextOnly(projectId: string): AxcutDocument {
 	return createEmptyDocument({ title: "Untitled project", projectId });
-}
-
-// ponytail: legacy single-session compatibility for the simpler ChatPanel
-// consumers. Picks the most recent session (or auto-creates one) so a stale
-// caller keeps working. The multi-session UI is the supported path.
-function getOrCreateDefaultSession(projectId: string): ChatSession {
-	const m = getProjectSessions(projectId);
-	if (m.size > 0) {
-		const arr = Array.from(m.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-		return arr[0];
-	}
-	const created = createSession(projectId);
-	const s = m.get(created.id);
-	if (!s) throw new Error("Chat session unavailable.");
-	return s;
-}
-
-export async function runChatDefault(
-	projectId: string,
-	message: string,
-	llmConfig: LlmConfigStore,
-	sink?: ChatEventSink,
-): Promise<AiEditionChatResult> {
-	const session = getOrCreateDefaultSession(projectId);
-	return runChat(projectId, session.id, message, llmConfig, undefined, sink);
-}
-
-export function getDefaultChatHistory(projectId: string): AiEditionChatMessage[] {
-	const m = sessionsByProject.get(projectId);
-	if (!m || m.size === 0) return [];
-	const arr = Array.from(m.values()).sort((a, b) => b.createdAt.localeCompare(a.createdAt));
-	return [...arr[0].messages];
-}
-
-export function clearDefaultChatHistory(projectId: string): void {
-	const m = sessionsByProject.get(projectId);
-	if (!m) return;
-	for (const s of m.values()) s.messages = [];
 }
 
 // --- Compaction (P3.7) ---------------------------------------------------

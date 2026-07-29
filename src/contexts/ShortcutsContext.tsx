@@ -30,15 +30,14 @@ export function useShortcuts(): ShortcutsContextValue {
 
 export function ShortcutsProvider({ children }: { children: ReactNode }) {
 	const [shortcuts, setShortcuts] = useState<ShortcutsConfig>(DEFAULT_SHORTCUTS);
+	// `getIsMac()` is synchronous, but it reads `window.electronAPI`, so keep it
+	// in an effect rather than in the initial state — that keeps the first render
+	// free of any dependency on preload having been installed.
 	const [isMac, setIsMac] = useState(false);
 	const [isConfigOpen, setIsConfigOpen] = useState(false);
 
 	useEffect(() => {
-		getIsMac()
-			.then(setIsMac)
-			.catch(() => {
-				// Keep default non-mac fallback if detection fails.
-			});
+		setIsMac(getIsMac());
 
 		window.electronAPI
 			.getShortcuts?.()

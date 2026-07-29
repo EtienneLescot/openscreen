@@ -24,9 +24,9 @@ describe("DocumentService", () => {
 	});
 
 	describe("createProject", () => {
-		it("creates a v5 doc with the given title and writes it to disk", async () => {
+		it("creates a v6 doc with the given title and writes it to disk", async () => {
 			const doc = await service.createProject("Demo Project");
-			expect(doc.schemaVersion).toBe(5);
+			expect(doc.schemaVersion).toBe(6);
 			expect(doc.project.title).toBe("Demo Project");
 			expect(doc.project.id).toMatch(/^proj_/);
 			expect(doc.assets).toEqual([]);
@@ -34,7 +34,7 @@ describe("DocumentService", () => {
 			const filePath = path.join(tempDir, `${doc.project.id}.openscreen`);
 			const raw = await fs.readFile(filePath, "utf8");
 			expect(JSON.parse(raw)).toMatchObject({
-				schemaVersion: 5,
+				schemaVersion: 6,
 				project: { title: "Demo Project" },
 			});
 		});

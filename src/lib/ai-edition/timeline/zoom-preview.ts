@@ -15,9 +15,9 @@ import type {
 	ZoomRegion as LegacyZoomRegion,
 } from "@/components/video-editor/types";
 import { getZoomScale } from "@/components/video-editor/types";
-import { findDominantRegion } from "@/components/video-editor/videoPlayback/zoomRegionUtils";
-import { computeZoomTransform } from "@/components/video-editor/videoPlayback/zoomTransform";
 import type { AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import { findDominantRegion } from "@/lib/zoomMath/zoomRegionUtils";
+import { computeZoomTransform } from "@/lib/zoomMath/zoomTransform";
 
 export interface ZoomPreviewTransform {
 	scale: number;

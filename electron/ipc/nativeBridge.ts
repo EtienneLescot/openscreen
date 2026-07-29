@@ -12,14 +12,16 @@ import {
 } from "../../src/native/contracts";
 import type { ChatEventSink } from "../ai-edition/chat-service";
 import type { DocumentService } from "../ai-edition/document-service";
-import type { CursorTelemetryLoadResult } from "../native-bridge/cursor/adapter";
-import { TelemetryCursorAdapter } from "../native-bridge/cursor/telemetryCursorAdapter";
+import {
+	type CursorTelemetryLoadResult,
+	TelemetryCursorAdapter,
+} from "../native-bridge/cursor/telemetryCursorAdapter";
 import { AiEditionService } from "../native-bridge/services/aiEditionService";
 import { CompositorViewService } from "../native-bridge/services/compositorViewService";
 import { CursorService } from "../native-bridge/services/cursorService";
 import { ProjectService } from "../native-bridge/services/projectService";
 import { SystemService } from "../native-bridge/services/systemService";
-import { NativeBridgeStateStore } from "../native-bridge/store";
+import { createNativeBridgeState } from "../native-bridge/store";
 
 export interface NativeBridgeContext {
 	getPlatform: () => NodeJS.Platform;
@@ -79,31 +81,10 @@ export interface NativeBridgeContext {
 		projectId: string,
 		sessionId: string,
 	) => Promise<import("../../src/native/contracts").AiEditionChatCompactResult | null>;
-	runTimelineOperation: (
-		projectId: string,
-		sessionId: string,
-		op: import("../../src/native/contracts").AxcutTimelineOperation,
-		conversationMessage: string,
-	) => Promise<
-		| {
-				success: true;
-				result: import("../../src/native/contracts").AppliedTimelineOperation;
-		  }
-		| { success: false; error: string }
-	>;
 	getContextUsage: (
 		projectId: string,
 		sessionId: string,
 	) => import("../../src/native/contracts").AiEditionChatBudget | null;
-	runAiEditionChatDefault: (
-		projectId: string,
-		message: string,
-		sink?: ChatEventSink,
-	) => Promise<import("../../src/native/contracts").AiEditionChatResult>;
-	getAiEditionChatHistoryDefault: (
-		projectId: string,
-	) => import("../../src/native/contracts").AiEditionChatMessage[];
-	clearAiEditionChatHistoryDefault: (projectId: string) => void;
 	listAiEditionChatSessions: (
 		projectId: string,
 	) => import("../../src/native/contracts").AiEditionChatSessionSummary[];
@@ -201,6 +182,7 @@ function buildChatEventSink(sender: Electron.WebContents, sessionId: string): Ch
 	};
 	return {
 		text: (delta) => send({ kind: "text", sessionId, delta }),
+		thinking: (delta) => send({ kind: "thinking", sessionId, delta }),
 		toolStart: (name, args) => send({ kind: "toolStart", sessionId, name, args }),
 		toolEnd: (name, ok, summary) => send({ kind: "toolEnd", sessionId, name, ok, summary }),
 		error: (message) => send({ kind: "error", sessionId, message }),
@@ -211,7 +193,7 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 	ipcMain.removeHandler(NATIVE_BRIDGE_CHANNEL);
 
 	const platform = normalizePlatform(context.getPlatform());
-	const store = new NativeBridgeStateStore(platform);
+	const store = createNativeBridgeState(platform);
 	const projectService = new ProjectService({
 		store,
 		getCurrentProjectPath: context.getCurrentProjectPath,
@@ -243,14 +225,10 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 		documents: context.getAiEditionDocuments(),
 		llmConfig: context.getAiEditionLlmConfig(),
 		runChat: context.runAiEditionChat,
-		runChatDefault: context.runAiEditionChatDefault,
 		undoLastToolBatch: context.undoAiEditionToolBatch,
 		rewindToMessage: context.rewindToMessage,
 		compactNow: context.compactNow,
-		runTimelineOperation: context.runTimelineOperation,
 		getContextUsage: context.getContextUsage,
-		getDefaultChatHistory: context.getAiEditionChatHistoryDefault,
-		clearDefaultChatHistory: context.clearAiEditionChatHistoryDefault,
 		listSessions: context.listAiEditionChatSessions,
 		createSession: context.createAiEditionChatSession,
 		selectSession: context.selectAiEditionChatSession,
@@ -538,27 +516,6 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 									request.payload.sessionId,
 								),
 							);
-						case "chat.runDefault": {
-							const sink = buildChatEventSink(event.sender, "default");
-							return createSuccessResponse(
-								requestId,
-								await aiEditionService.chatRunDefault(
-									request.payload.projectId,
-									request.payload.message,
-									sink,
-								),
-							);
-						}
-						case "chat.history":
-							return createSuccessResponse(
-								requestId,
-								aiEditionService.chatHistoryDefault(request.payload.projectId),
-							);
-						case "chat.clear":
-							return createSuccessResponse(
-								requestId,
-								aiEditionService.chatClearDefault(request.payload.projectId),
-							);
 						case "chat.listSessions":
 							return createSuccessResponse(
 								requestId,
@@ -643,16 +600,6 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 									targetLanguage: request.payload.targetLanguage,
 									sourceLanguage: request.payload.sourceLanguage,
 								}),
-							);
-						case "timeline.run":
-							return createSuccessResponse(
-								requestId,
-								await aiEditionService.chatRunTimelineOperation(
-									request.payload.projectId,
-									request.payload.sessionId,
-									request.payload.operation,
-									request.payload.conversationMessage,
-								),
 							);
 						default:
 							return createErrorResponse(

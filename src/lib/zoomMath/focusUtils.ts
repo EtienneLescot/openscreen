@@ -1,5 +1,10 @@
+import {
+	clampFocus,
+	ZOOM_DEPTH_SCALES,
+	type ZoomDepth,
+	type ZoomFocus,
+} from "@/components/video-editor/types";
 import { clamp } from "@/utils/math";
-import { clampFocusToDepth, ZOOM_DEPTH_SCALES, type ZoomDepth, type ZoomFocus } from "../types";
 
 interface StageSize {
 	width: number;
@@ -55,12 +60,8 @@ export function getFocusBoundsForScale(zoomScale: number, viewportRatio?: Viewpo
 	};
 }
 
-export function clampFocusToStage(
-	focus: ZoomFocus,
-	depth: ZoomDepth,
-	_stageSize: StageSize,
-): ZoomFocus {
-	const baseFocus = clampFocusToDepth(focus, depth);
+export function clampFocusToStage(focus: ZoomFocus, depth: ZoomDepth): ZoomFocus {
+	const baseFocus = clampFocus(focus);
 	const bounds = getFocusBounds(depth);
 
 	return {
