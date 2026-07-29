@@ -18,10 +18,21 @@
 //     on reste portable)
 //   - `[unroll]` → `[[unroll]]` (sur le `for`)
 //
+// DIFFÉRENCE STRUCTURELLE, et c'est la seule qui n'est pas cosmétique : HLSL déclare
+// `cbuffer`, `Texture2D` et `SamplerState` en portée GLOBALE, MSL ne le permet pas.
+// « 'texture' attribute only applies to parameters » et « program scope variable must
+// reside in constant address space » : les ressources doivent être des PARAMÈTRES de
+// chaque entry point, et les helpers qui les lisent doivent les recevoir en argument.
+// Un port ligne-pour-ligne des globales HLSL ne compile donc pas du tout — d'où les
+// signatures ci-dessous, qui sont la seule liberté prise avec le fichier d'origine.
+// (Les `constexpr sampler` restent légaux en portée globale : ils sont immuables et
+// résolus à la compilation.)
+//
 // IMPORTANT : ce fichier est inclus via `include_str!("shaders.metal")` côté Rust et
-// compilé à l'exécution via `MTLDevice.makeLibrary(source:options:)`. Chaque modification
-// d'un entry point est revue par le test « every_shader_entry_point_compiles » qui
-// compile sans device (cf. `crates/compositor/src/compositor_windows.rs::3177-3194`).
+// compilé à l'exécution via `MTLDevice.makeLibrary(source:options:)`. Le test
+// `compositor_macos::tests::every_shader_entry_point_compiles` le compile sur le device
+// système au `cargo test`, pour qu'une faute de syntaxe MSL ne se découvre pas à
+// l'ouverture de l'éditeur chez un utilisateur.
 
 #include <metal_stdlib>
 using namespace metal;
@@ -48,7 +59,10 @@ struct Layer
     float4 mb;        // mb.x = nombre de taps de motion blur (1 = désactivé)
 };
 
-constant Layer &layer [[buffer(0)]];
+// `layer` est passé en `constant Layer& [[buffer(0)]]` à chaque entry point qui le lit
+// (cf. la note « DIFFÉRENCE STRUCTURELLE » en tête de fichier). Côté Rust, il est lié par
+// `set_vertex_bytes(0, …)` ET `set_fragment_bytes(0, …)` : `vs_main` le lit autant que
+// `ps_main`.
 
 // =================================================================================
 // Vertex stage : quads à partir de `SV_VertexID`, fullscreen triangle pour fs pass.
@@ -62,7 +76,8 @@ struct VSOut
     float2 pout  [[user(TEXCOORD2)]]; // position 0..1 sortie (pour la vélocité par pixel)
 };
 
-vertex VSOut vs_main(uint vid [[vertex_id]])
+vertex VSOut vs_main(uint vid [[vertex_id]],
+                     constant Layer &layer [[buffer(0)]])
 {
     float2 c = float2(vid & 1, (vid >> 1) & 1); // strip: (0,0)(1,0)(0,1)(1,1)
     float2 p = layer.dst.xy + c * layer.dst.zw; // 0..1 sortie
@@ -82,10 +97,9 @@ vertex VSOut vs_main(uint vid [[vertex_id]])
 constexpr sampler samp(filter::linear, address::clamp_to_edge);
 constexpr sampler sampNV(filter::linear, address::clamp_to_edge);
 
-texture2d<float, access::sample> texY  [[texture(0)]];
-texture2d<float, access::sample> texUV [[texture(1)]];
-texture2d<float, access::sample> texImg [[texture(2)]]; // wallpaper image RGBA (fond, mode 6)
-texture2d<float, access::sample> rgbTex [[texture(0)]]; // pour ps_fs_* (réutilise le slot 0)
+// Slots de texture, tenus par les paramètres des entry points :
+//   ps_main      : 0 = texY (Y, R8), 1 = texUV (CbCr, RG8), 2 = texImg (RGBA)
+//   ps_fs_*      : 0 = rgbTex (RGBA)
 
 // =================================================================================
 // Helpers : conversions couleur, primitives SDF.
@@ -104,10 +118,15 @@ inline float3 yuv709_limited(float y, float2 cbcr)
     return clamp(rgb, 0.0, 1.0);
 }
 
-inline float3 sample_yuv(float2 uv)
+// `texture2d<float>::sample` rend TOUJOURS un `float4` en MSL, là où le HLSL
+// `Texture2D<float>` rend un scalaire : d'où les `.r` / `.rg` que le port d'origine
+// n'avait pas (et qui ne compilaient pas).
+inline float3 sample_yuv(float2 uv,
+                         texture2d<float, access::sample> texY,
+                         texture2d<float, access::sample> texUV)
 {
-    float y = texY.sample(samp, uv);
-    float2 cbcr = texUV.sample(samp, uv);
+    float y = texY.sample(samp, uv).r;
+    float2 cbcr = texUV.sample(samp, uv).rg;
     return yuv709_limited(y, cbcr);
 }
 
@@ -132,7 +151,7 @@ inline float2 line_cross(float2 n1, float d1, float2 n2, float d2)
 {
     float det = n1.x * n2.y - n1.y * n2.x;
     if (abs(det) < 1e-6) return float2(0.0, 0.0);
-    return float2(d1 * n2.y - d2 * n1.y, d2 * n1.x - d1 * n1.x) / det;
+    return float2(d1 * n2.y - d2 * n1.y, d2 * n1.x - d1 * n2.x) / det;
 }
 
 // Distance signée EXACTE à un quadrilatère convexe (<0 dedans).
@@ -195,7 +214,11 @@ inline float3 quad_inverse_bilinear(float2 P, float2 c00, float2 c10, float2 c11
 // Identique à `ps_main` côté HLSL ligne pour ligne (à la syntaxe MSL près).
 // =================================================================================
 
-fragment float4 ps_main(VSOut i [[stage_in]])
+fragment float4 ps_main(VSOut i [[stage_in]],
+                        constant Layer &layer [[buffer(0)]],
+                        texture2d<float, access::sample> texY [[texture(0)]],
+                        texture2d<float, access::sample> texUV [[texture(1)]],
+                        texture2d<float, access::sample> texImg [[texture(2)]])
 {
     // mode 13 : SPRITE DE CURSEUR posé sur l'écran incliné. Cf. commentaires HLSL.
     if (layer.mode > 12.5)
@@ -253,7 +276,7 @@ fragment float4 ps_main(VSOut i [[stage_in]])
         {
             return float4(0.0, 0.0, 0.0, 0.0);
         }
-        float3 rgb = sample_yuv(clamp(float2(r.x, r.y), 0.0, 1.0));
+        float3 rgb = sample_yuv(clamp(float2(r.x, r.y), 0.0, 1.0), texY, texUV);
         return float4(rgb * layer.color.a, layer.color.a);
     }
 
@@ -342,16 +365,16 @@ fragment float4 ps_main(VSOut i [[stage_in]])
         int taps = int(layer.mb.x);
         if (taps <= 1 || dot(duv, duv) < 1e-9)
         {
-            rgb = sample_yuv(uv_now);
+            rgb = sample_yuv(uv_now, texY, texUV);
         }
         else
         {
-            float3 acc = 0.0;
+            float3 acc = float3(0.0);
             for (int k = 0; k < 16; k++)
             {
                 if (k >= taps) break;
                 float t = float(k) / float(taps - 1);
-                acc += sample_yuv(uv_prev + duv * t);
+                acc += sample_yuv(uv_prev + duv * t, texY, texUV);
             }
             rgb = acc / float(taps);
         }
@@ -399,12 +422,14 @@ inline float2 rgb2uv(float3 c)
     return float2(128.0 + 224.0 * cb, 128.0 + 224.0 * cr) / 255.0;
 }
 
-fragment float ps_y(FSOut i [[stage_in]])
+fragment float ps_y(FSOut i [[stage_in]],
+                    texture2d<float, access::sample> rgbTex [[texture(0)]])
 {
     return rgb2y(rgbTex.sample(sampNV, i.uv).rgb);
 }
 
-fragment float2 ps_uv(FSOut i [[stage_in]])
+fragment float2 ps_uv(FSOut i [[stage_in]],
+                      texture2d<float, access::sample> rgbTex [[texture(0)]])
 {
     return rgb2uv(rgbTex.sample(sampNV, i.uv).rgb);
 }
@@ -414,13 +439,16 @@ fragment float2 ps_uv(FSOut i [[stage_in]])
 // utilise `ps_kawase_down/up` (cf. commit « Kawase » plus loin si on revient).
 // =================================================================================
 
-constexpr int BLUR_R = 24;
+// Une variable de portée programme doit vivre dans `constant` en MSL.
+constant int BLUR_R = 24;
 
-fragment float4 ps_blur(FSOut i [[stage_in]])
+fragment float4 ps_blur(FSOut i [[stage_in]],
+                        constant Layer &layer [[buffer(0)]],
+                        texture2d<float, access::sample> rgbTex [[texture(0)]])
 {
     float sigma = max(layer.fx.x, 0.001);
     float2 step = layer.fx.y * layer.fx.zw;
-    float4 acc = 0.0;
+    float4 acc = float4(0.0);
     float wsum = 0.0;
     for (int k = -BLUR_R; k <= BLUR_R; k++)
     {
@@ -431,13 +459,19 @@ fragment float4 ps_blur(FSOut i [[stage_in]])
     return acc / wsum;
 }
 
-fragment float4 ps_tex(FSOut i [[stage_in]]) { return rgbTex.sample(sampNV, i.uv); }
+fragment float4 ps_tex(FSOut i [[stage_in]],
+                       texture2d<float, access::sample> rgbTex [[texture(0)]])
+{
+    return rgbTex.sample(sampNV, i.uv);
+}
 
 // =================================================================================
 // Dual-Kawase (fond flouté rapide).
 // =================================================================================
 
-fragment float4 ps_kawase_down(FSOut i [[stage_in]])
+fragment float4 ps_kawase_down(FSOut i [[stage_in]],
+                               constant Layer &layer [[buffer(0)]],
+                               texture2d<float, access::sample> rgbTex [[texture(0)]])
 {
     float2 hp = layer.fx.xy * 0.5 * layer.fx.z;
     float2 uv = i.uv;
@@ -449,7 +483,9 @@ fragment float4 ps_kawase_down(FSOut i [[stage_in]])
     return s / 8.0;
 }
 
-fragment float4 ps_kawase_up(FSOut i [[stage_in]])
+fragment float4 ps_kawase_up(FSOut i [[stage_in]],
+                             constant Layer &layer [[buffer(0)]],
+                             texture2d<float, access::sample> rgbTex [[texture(0)]])
 {
     float2 hp = layer.fx.xy * 0.5 * layer.fx.z;
     float2 uv = i.uv;
