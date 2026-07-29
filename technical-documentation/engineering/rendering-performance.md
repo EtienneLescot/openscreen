@@ -86,7 +86,7 @@ C8's 104.0 fps sits under the ~126 headline above. Different session and thermal
 ### The CPU backend (WARP + software decode) — 2026-07-27
 
 `d3d::Backend::Cpu` runs the *same* pipeline on a WARP device with libavcodec software
-decode ([`cpu_frames.rs`](../../crates/compositor/src/cpu_frames.rs)), for hosts with no
+decode ([`cpu_frames.rs`](../../crates/compositor/src/cpu_frames_windows.rs)), for hosts with no
 usable D3D11 GPU. Rendering and decoding are two independent axes — WARP covers the
 first and *nothing* of the second, on any platform — so the fallback needed both halves.
 
