@@ -193,7 +193,7 @@ function stubElectronAPI(getSelectedSource: Window["electronAPI"]["getSelectedSo
 			granted: true,
 			status: "granted",
 		})),
-		getPlatform: vi.fn(async () => "darwin"),
+		getPlatform: vi.fn(() => "darwin"),
 		setHudOverlaySize: vi.fn(),
 		setHudOverlayIgnoreMouseEvents: vi.fn(),
 		beginHudOverlayDrag: vi.fn(),
