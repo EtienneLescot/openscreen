@@ -119,7 +119,7 @@ current editor settings to a `SceneDescription` JSON string. It resolves:
 The descriptor mirrors the Rust struct in
 [`crates/compositor/src/scene.rs`](../../crates/compositor/src/scene.rs); field rename is `camelCase`
 on both sides. The Rust consumer (`compositor.rs::compose_frame`,
-[`crates/compositor/src/compositor.rs:1421`](../../crates/compositor/src/compositor.rs:1421)) reads
+[`crates/compositor/src/compositor.rs:1421`](../../crates/compositor/src/compositor_windows.rs:1421)) reads
 the JSON per frame, derives the per-clip and per-frame values it needs (zoom
 state from `regions.rs::zoom_state_at`, camera-fullscreen progress from
 `regions.rs::camera_fullscreen_progress_at`, screen crop from
