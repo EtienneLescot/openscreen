@@ -94,7 +94,12 @@ vertex VSOut vs_main(uint vid [[vertex_id]],
 // Textures et samplers.
 // =================================================================================
 
-constexpr sampler samp(filter::linear, address::clamp_to_edge);
+// `mip_filter::linear` n'est PAS décoratif : sans lui MSL retombe sur `mip_filter::none`,
+// et `sample(..., level(lod))` rend le mip 0 quel que soit `lod`. Le masque « flou »
+// d'annotation (mode 10) échantillonne la pyramide de mips de la copie du RT — sans ce
+// filtre il ne floute rien, alors que la mosaïque, qui demande explicitement `level(0)`,
+// marche par accident. Équivalent de `D3D11_FILTER_MIN_MAG_MIP_LINEAR` côté Windows.
+constexpr sampler samp(filter::linear, mip_filter::linear, address::clamp_to_edge);
 constexpr sampler sampNV(filter::linear, address::clamp_to_edge);
 
 // Slots de texture, tenus par les paramètres des entry points :
