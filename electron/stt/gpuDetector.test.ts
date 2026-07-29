@@ -39,7 +39,13 @@ describe("gpuDetector", () => {
 			const paths = candidateBinaryPaths(here);
 			expect(paths.length).toBeGreaterThanOrEqual(2);
 			const resolved = paths.map((p) => p.replace(/\\/g, "/"));
-			expect(resolved).toContain(`${here}/electron/native/bin/win32-x64/whisper-stt-server.exe`);
+			// The tag is `${platform}-${arch}`, and only `platform` is stubbed above —
+			// `arch` stays the HOST's. Hardcoding `win32-x64` therefore asserted that the
+			// host is x64, so this passed on CI (linux-x64) and on an Intel Mac but failed
+			// on every Apple Silicon machine, where the tag is `win32-arm64`.
+			expect(resolved).toContain(
+				`${here}/electron/native/bin/win32-${process.arch}/whisper-stt-server.exe`,
+			);
 		} finally {
 			Object.defineProperty(process, "platform", { value: originalPlatform, configurable: true });
 		}
