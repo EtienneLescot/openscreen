@@ -316,10 +316,12 @@ impl TextRasterizer {
             CGContextFillRect(ctx, box_rect);
         }
 
-        // CoreGraphics a son origine en bas à gauche ; on retourne pour que la boîte se
-        // lise en coordonnées « écran », comme côté DirectWrite.
-        CGContextTranslateCTM(ctx, 0.0, h as CGFloat);
-        CGContextScaleCTM(ctx, 1.0, -1.0);
+        // PAS de flip du CTM ici, et c'est contre-intuitif. `CGBitmapContext` a bien son
+        // origine en bas à gauche, MAIS il stocke la ligne 0 du buffer EN HAUT de l'image —
+        // et `CTFrameDraw` remplit son cadre du haut vers le bas. La première ligne de texte
+        // atterrit donc déjà dans les premières lignes du buffer, c'est-à-dire en haut de la
+        // `MTLTexture`. Le `ScaleCTM(1, -1)` que ce code faisait retournait une image déjà
+        // correcte : le texte s'affichait en miroir vertical.
 
         let drawn = self.draw_text(ctx, space, spec, box_rect);
 
@@ -480,5 +482,59 @@ impl TextRasterizer {
 
         CTFrameDraw(frame.get(), ctx);
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Une ligne de texte se dessine EN HAUT de sa boîte. Le test regarde où est l'encre
+    /// plutôt que de faire confiance au sens du CTM : c'est la seule façon de distinguer
+    /// « bien orienté » de « retourné », et le retournement était précisément le bug.
+    #[test]
+    fn text_lands_in_the_upper_half_not_mirrored() {
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return;
+        };
+        let spec = TextSpec {
+            content: "Ag".into(),
+            color: [1.0, 1.0, 1.0, 1.0],
+            background: [0.0, 0.0, 0.0, 0.0],
+            font_size_px: 48.0,
+            font_family: "Helvetica".into(),
+            bold: false,
+            italic: false,
+            underline: false,
+            align: "left".into(),
+            box_px: [256, 256],
+        };
+        let raster = TextRasterizer::new().expect("TextRasterizer::new");
+        let tex = unsafe { raster.rasterize(&gpu, &spec) }.expect("rasterize");
+
+        let (w, h) = (256usize, 256usize);
+        let mut px = vec![0u8; w * h * 4];
+        tex.get_bytes(
+            px.as_mut_ptr() as *mut c_void,
+            (w * 4) as u64,
+            metal::MTLRegion {
+                origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
+                size: metal::MTLSize { width: w as u64, height: h as u64, depth: 1 },
+            },
+            0,
+        );
+        let ink = |rows: std::ops::Range<usize>| -> u64 {
+            rows.map(|y| {
+                (0..w).map(|x| px[(y * w + x) * 4 + 3] as u64).sum::<u64>()
+            })
+            .sum()
+        };
+        let (top, bottom) = (ink(0..h / 2), ink(h / 2..h));
+        assert!(top > 0, "aucune encre : le texte n'a pas été rastérisé du tout");
+        assert!(
+            top > bottom * 4,
+            "texte retourné : encre haut={top}, bas={bottom} (attendu très majoritairement en haut)"
+        );
     }
 }
