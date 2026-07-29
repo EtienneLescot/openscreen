@@ -423,6 +423,15 @@ impl ExportCodec {
                 // `hw_frames_ctx` à construire ni de pool à partager entre décodeur et
                 // encodeur — un étage de complexité que le port avait écrit et qui n'a
                 // jamais tourné.
+                // Zero-copy d'abord : la frame composée est rendue DIRECTEMENT dans le
+                // `CVPixelBuffer` de l'encodeur, elle ne redescend jamais au CPU. Si le
+                // pool VideoToolbox refuse de s'ouvrir, la marche des candidats retombe
+                // sur la variante NV12 logicielle juste en dessous — même encodeur, un
+                // aller-retour CPU en plus.
+                EncoderCandidate {
+                    name: "h264_videotoolbox",
+                    pix_fmt: crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX,
+                },
                 EncoderCandidate {
                     name: "h264_videotoolbox",
                     pix_fmt: crate::ffi::AVPixelFormat::AV_PIX_FMT_NV12,
@@ -585,6 +594,48 @@ impl VideoEncoder {
         // device VT par défaut (un seul device VideoToolbox par process — OK pour un
         // export mono-clip).
 
+        // Pool de frames VideoToolbox pour le chemin zero-copy : c'est lui qui fournit les
+        // `CVPixelBuffer` dans lesquels le compositeur rend directement. Sans lui,
+        // `avcodec_open2` réussit quand même et `av_hwframe_get_buffer` déréférence un
+        // `hw_frames_ctx` nul à la première frame.
+        if candidate.pix_fmt == crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX {
+            // `av_hwframe_ctx_alloc(device_ref)` prend UN argument et REND l'AVBufferRef ;
+            // et il lui faut un device VideoToolbox, qu'il faut donc créer d'abord.
+            let mut hw_device: *mut crate::ffi::AVBufferRef = ptr::null_mut();
+            let r = crate::ffi::av_hwdevice_ctx_create(
+                &mut hw_device,
+                crate::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
+                ptr::null(),
+                ptr::null_mut(),
+                0,
+            );
+            if r < 0 || hw_device.is_null() {
+                crate::ffi::avcodec_free_context(&mut ctx);
+                bail!("av_hwdevice_ctx_create (VT, encodeur) : {r}");
+            }
+            let hw_frames = crate::ffi::av_hwframe_ctx_alloc(hw_device);
+            if hw_frames.is_null() {
+                crate::ffi::av_buffer_unref(&mut hw_device);
+                crate::ffi::avcodec_free_context(&mut ctx);
+                bail!("av_hwframe_ctx_alloc (VT)");
+            }
+            let fc = (*hw_frames).data as *mut crate::ffi::AVHWFramesContext;
+            (*fc).format = crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX;
+            (*fc).sw_format = crate::ffi::AVPixelFormat::AV_PIX_FMT_NV12;
+            (*fc).width = w;
+            (*fc).height = h;
+            let mut hw_frames = hw_frames;
+            if crate::ffi::av_hwframe_ctx_init(hw_frames) < 0 {
+                crate::ffi::av_buffer_unref(&mut hw_frames);
+                crate::ffi::av_buffer_unref(&mut hw_device);
+                crate::ffi::avcodec_free_context(&mut ctx);
+                bail!("av_hwframe_ctx_init (VT)");
+            }
+            (*ctx).hw_frames_ctx = crate::ffi::av_buffer_ref(hw_frames);
+            crate::ffi::av_buffer_unref(&mut hw_frames);
+            crate::ffi::av_buffer_unref(&mut hw_device);
+        }
+
         if let Err(e) = crate::ffi::averr(
             crate::ffi::avcodec_open2(ctx, enc, ptr::null_mut()),
             "avcodec_open2(enc)",
@@ -659,7 +710,34 @@ impl VideoEncoder {
     ) -> Result<()> {
         unsafe {
             if self.sw.is_null() {
-                bail!("send_composited: pas de frame logicielle (encodeur zero-copy non câblé)");
+                // Chemin zero-copy : une frame du pool VideoToolbox, dont `data[3]` porte le
+                // `CVPixelBuffer` dans lequel le compositeur va rendre directement.
+                let frame = crate::ffi::av_frame_alloc();
+                if frame.is_null() {
+                    bail!("av_frame_alloc (frame VT)");
+                }
+                let mut frame = frame;
+                if crate::ffi::av_hwframe_get_buffer((*self.ctx).hw_frames_ctx, frame, 0) < 0 {
+                    crate::ffi::av_frame_free(&mut frame);
+                    bail!("av_hwframe_get_buffer (pool VT épuisé)");
+                }
+                let pb = (*frame).data[3] as *mut std::ffi::c_void;
+                if pb.is_null() {
+                    crate::ffi::av_frame_free(&mut frame);
+                    bail!("frame VT sans CVPixelBuffer dans data[3]");
+                }
+                let rendered = compositor.rgb_to_nv12(pb, 0);
+                if let Err(e) = rendered {
+                    crate::ffi::av_frame_free(&mut frame);
+                    return Err(e);
+                }
+                (*frame).pts = pts;
+                let sent = crate::ffi::averr(
+                    crate::ffi::avcodec_send_frame(self.ctx, frame),
+                    "send_frame_composited_vt",
+                );
+                crate::ffi::av_frame_free(&mut frame);
+                return sent;
             }
             // Rendre le RGBA composé en NV12 côté GPU, PUIS le relire dans les plans de la
             // frame. Le port appelait bien `render_nv12()` mais envoyait ensuite une frame

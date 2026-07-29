@@ -1692,8 +1692,40 @@ impl Compositor {
     /// First-pass engine : la cible est toujours le NV12 interne. L'argument `out_tex`
     /// est conservé pour l'API symétrique avec Windows ; le câblage zero-copy vers un
     /// `CVPixelBuffer` appartenant à l'encodeur viendra avec le commit « encodeur VT ».
-    pub unsafe fn rgb_to_nv12(&self, _out_tex: *mut std::ffi::c_void, _slice: u32) -> Result<()> {
-        self.render_nv12()
+    /// Rend le RT composé en NV12 **directement dans le `CVPixelBuffer` de l'encodeur**.
+    ///
+    /// `out_tex` est un `CVPixelBufferRef` (celui d'une frame `AV_PIX_FMT_VIDEOTOOLBOX`
+    /// tirée du pool de l'encodeur) ; nul = cible interne, chemin de lecture CPU.
+    ///
+    /// C'est le pendant macOS du zero-copy Windows : au lieu de rendre en interne, relire
+    /// 1,4 Mo vers le CPU puis laisser VideoToolbox les ré-uploader, on wrappe les deux
+    /// plans du buffer de l'encodeur en `MTLTexture` via le même `CVMetalTextureCache` que
+    /// le décodage, et on rend dedans. La frame ne quitte jamais le GPU.
+    pub unsafe fn rgb_to_nv12(&self, out_tex: *mut std::ffi::c_void, _slice: u32) -> Result<()> {
+        if out_tex.is_null() {
+            return self.render_nv12();
+        }
+        let cache = &self.metal_texture_cache;
+        let y = cache.make_texture_from_pixel_buffer(out_tex, 0, metal::MTLPixelFormat::R8Unorm)?;
+        let uv = cache.make_texture_from_pixel_buffer(out_tex, 1, metal::MTLPixelFormat::RG8Unorm)?;
+
+        let cmd_buf = self.gpu.context.new_command_buffer();
+        for (target, pipeline) in [(&y, &self.pipeline_fs_y), (&uv, &self.pipeline_fs_uv)] {
+            let enc = self.begin_pass(
+                cmd_buf,
+                target,
+                Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0)),
+                pipeline,
+            )?;
+            enc.set_fragment_texture(0, Some(&self.rt));
+            enc.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+            enc.end_encoding();
+        }
+        // Pas de miroir `Shared`, pas de `getBytes` : c'est tout l'intérêt. On attend
+        // quand même, parce que `avcodec_send_frame` va lire ce buffer juste après.
+        self.submit(cmd_buf);
+        self.sync();
+        Ok(())
     }
 
     pub unsafe fn rgb_to_nv12_scaled(
