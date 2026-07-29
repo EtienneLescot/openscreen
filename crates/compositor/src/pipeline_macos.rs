@@ -378,9 +378,15 @@ impl ExportCodec {
     pub fn candidates(&self) -> &'static [EncoderCandidate] {
         match self {
             ExportCodec::H264 => &[
+                // `h264_videotoolbox` annonce `videotoolbox_vld nv12 yuv420p` : il accepte
+                // donc des frames LOGICIELLES NV12 et fait l'upload lui-même. C'est
+                // exactement le format que le compositeur produit, donc pas de
+                // `hw_frames_ctx` à construire ni de pool à partager entre décodeur et
+                // encodeur — un étage de complexité que le port avait écrit et qui n'a
+                // jamais tourné.
                 EncoderCandidate {
                     name: "h264_videotoolbox",
-                    pix_fmt: crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX,
+                    pix_fmt: crate::ffi::AVPixelFormat::AV_PIX_FMT_NV12,
                 },
                 EncoderCandidate {
                     name: "libopenh264",
@@ -390,7 +396,7 @@ impl ExportCodec {
             ExportCodec::H265 => &[
                 EncoderCandidate {
                     name: "hevc_videotoolbox",
-                    pix_fmt: crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX,
+                    pix_fmt: crate::ffi::AVPixelFormat::AV_PIX_FMT_NV12,
                 },
                 EncoderCandidate {
                     name: "libkvazaar",
@@ -539,43 +545,6 @@ impl VideoEncoder {
         // que le décodeur. Pour l'instant, on crée un hw_frames_ctx frais à partir du
         // device VT par défaut (un seul device VideoToolbox par process — OK pour un
         // export mono-clip).
-        if candidate.pix_fmt == crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX {
-            // `av_hwframe_ctx_alloc(device_ref)` prend UN argument et REND l'AVBufferRef ;
-            // et il lui faut un device VideoToolbox, qu'il faut donc créer d'abord.
-            let mut hw_device: *mut crate::ffi::AVBufferRef = ptr::null_mut();
-            let r = crate::ffi::av_hwdevice_ctx_create(
-                &mut hw_device,
-                crate::ffi::AVHWDeviceType::AV_HWDEVICE_TYPE_VIDEOTOOLBOX,
-                ptr::null(),
-                ptr::null_mut(),
-                0,
-            );
-            if r < 0 || hw_device.is_null() {
-                crate::ffi::avcodec_free_context(&mut ctx);
-                bail!("av_hwdevice_ctx_create (VT, encodeur) : {r}");
-            }
-            let hw_frames = crate::ffi::av_hwframe_ctx_alloc(hw_device);
-            if hw_frames.is_null() {
-                crate::ffi::av_buffer_unref(&mut hw_device);
-                crate::ffi::avcodec_free_context(&mut ctx);
-                bail!("av_hwframe_ctx_alloc (VT)");
-            }
-            let fc = (*hw_frames).data as *mut crate::ffi::AVHWFramesContext;
-            (*fc).format = crate::ffi::AVPixelFormat::AV_PIX_FMT_VIDEOTOOLBOX;
-            (*fc).sw_format = crate::ffi::AVPixelFormat::AV_PIX_FMT_NV12;
-            (*fc).width = w;
-            (*fc).height = h;
-            let mut hw_frames = hw_frames;
-            if crate::ffi::av_hwframe_ctx_init(hw_frames) < 0 {
-                crate::ffi::av_buffer_unref(&mut hw_frames);
-                crate::ffi::av_buffer_unref(&mut hw_device);
-                crate::ffi::avcodec_free_context(&mut ctx);
-                bail!("av_hwframe_ctx_init (VT)");
-            }
-            (*ctx).hw_frames_ctx = crate::ffi::av_buffer_ref(hw_frames);
-            crate::ffi::av_buffer_unref(&mut hw_frames);
-            crate::ffi::av_buffer_unref(&mut hw_device);
-        }
 
         if let Err(e) = crate::ffi::averr(
             crate::ffi::avcodec_open2(ctx, enc, ptr::null_mut()),
@@ -650,25 +619,31 @@ impl VideoEncoder {
         pts: i64,
     ) -> Result<()> {
         unsafe {
-            // 1. RT → NV12 interne (render_nv12 écrit self.nv12_y / self.nv12_uv).
-            compositor.render_nv12();
-            // 2. NV12 → AVFrame (planes du caller).
+            if self.sw.is_null() {
+                bail!("send_composited: pas de frame logicielle (encodeur zero-copy non câblé)");
+            }
+            // Rendre le RGBA composé en NV12 côté GPU, PUIS le relire dans les plans de la
+            // frame. Le port appelait bien `render_nv12()` mais envoyait ensuite une frame
+            // que rien n'avait remplie, sans pts : l'encodeur recevait du contenu
+            // indéterminé et des timestamps absents.
+            compositor.render_nv12()?;
             crate::ffi::averr(
                 crate::ffi::av_frame_make_writable(self.sw),
                 "make_writable_sw",
             )?;
-            let landing = if self.nv12.is_null() { self.sw } else { self.nv12 };
-            crate::ffi::averr(
-                crate::ffi::avcodec_send_frame(self.ctx, landing),
-                "send_frame_composited",
+            compositor.read_nv12_scaled(
+                w,
+                h,
+                (*self.sw).data[0],
+                (*self.sw).linesize[0] as usize,
+                (*self.sw).data[1],
+                (*self.sw).linesize[1] as usize,
             )?;
-            // Note : le code complet qui peuple `landing->data[0]/data[1]` depuis
-            // `compositor.read_nv12_scaled` viendra avec le câblage final de
-            // `run_composited_multi` ; le squelette ci-dessus pose juste l'API.
-            let _ = w;
-            let _ = h;
-            let _ = pts;
-            Ok(())
+            (*self.sw).pts = pts;
+            crate::ffi::averr(
+                crate::ffi::avcodec_send_frame(self.ctx, self.sw),
+                "send_frame_composited",
+            )
         }
     }
 }
@@ -826,66 +801,32 @@ pub fn run_composited_multi(
 
     let mut opkt = unsafe { crate::ffi::av_packet_alloc() };
 
-    for clip in clips {
-        if !screen_decs.contains_key(&clip.screen) {
-            screen_decs.insert(
-                clip.screen.clone(),
-                Decoder::open(&clip.screen, gpu)?,
-            );
-        }
-        if !webcam_decs.contains_key(&clip.webcam) {
-            webcam_decs.insert(
-                clip.webcam.clone(),
-                Decoder::open(&clip.webcam, gpu)?,
-            );
-        }
-        let sdec = screen_decs.get_mut(&clip.screen).unwrap();
-        let wdec = webcam_decs.get_mut(&clip.webcam).unwrap();
-
-        // Seek initial (keyframes-only) aux bornes du clip.
-        let start = clip.source_start_sec;
-        let end = clip.source_end_sec.min(
-            unsafe { sdec.available_duration_sec() }.unwrap_or(clip.source_end_sec),
-        );
-        if end <= start {
-            continue;
-        }
-        unsafe {
-            if sdec.seek_to(start)?.is_null() {
-                continue;
-            }
-            if wdec
-                .seek_to((start - clip.webcam_offset_sec).max(0.0))?
-                .is_null()
-            {
-                continue;
-            }
-        }
-
-        // Boucle frame-par-frame. First-pass : pas de speed-regions ni de timeline
-        // interpolation ; on rend à out_fps fixe du début à la fin du clip. La scène
-        // globale a déjà été posée par le caller via `comp.set_scene(...)` (le napi
-        // le fait avant `run_composited_multi`), donc on n'a pas à la repositionner.
-        let mut t = start;
-        while t < end {
-            unsafe {
-                let sf = sdec.next()?;
-                let wf = wdec.next()?;
-                if sf.is_null() || wf.is_null() {
-                    break;
-                }
-                comp.compose_frame(sf, wf, frames as f32, cfg)?;
-                // send_composited : la première passe ne peuple pas encore les plans du
-                // buffer d'encodeur depuis le NV12 interne — c'est un no-op côté bits,
-                // mais il pose l'API et draine l'encodeur.
-                enc.send_composited(comp, out_w, out_h, frames as i64)?;
+    // La marche de timeline est PARTAGÉE (`timeline_walk`) : c'est elle qui décide quelle
+    // frame source appartient à quelle frame de sortie, en tenant compte des régions de
+    // vitesse, du fenêtrage de scène par clip et du curseur. La version maison qui vivait
+    // ici décodait 1:1 en avançant `t` de `1/fps`, donc elle ignorait tout cela — et c'est
+    // exactement le bug de troncature en slow-motion que la doc de `walk_composited_timeline`
+    // raconte avoir déjà coûté une fois.
+    let scene = comp.scene_snapshot();
+    frames = unsafe {
+        crate::timeline_walk::walk_composited_timeline(
+            clips,
+            gpu,
+            comp,
+            cfg,
+            out_fps,
+            &scene,
+            &mut screen_decs,
+            &mut webcam_decs,
+            &mut |n| {
+                enc.send_composited(comp, out_w, out_h, n as i64)?;
                 drain_encoder(ectx, octx, ostream, opkt)?;
-            }
-            frames += 1;
-            progress(frames);
-            t += 1.0 / out_fps as f64;
-        }
-    }
+                progress(n + 1);
+                Ok(())
+            },
+            &mut |_, _, _, _| Ok(()),
+        )?
+    };
 
     // Flush : un null frame à l'encodeur finalise son bitstream.
     unsafe {
