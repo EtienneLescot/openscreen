@@ -346,7 +346,7 @@ fragment float4 ps_main(VSOut i [[stage_in]],
         float2 a0 = float2(0.0, -layer.quad_px.y * 0.5 + w);
         float2 a1 = float2(layer.quad_px.x * 0.5 - w, layer.quad_px.y * 0.5 - w);
         float d = sd_segment(p, a0, a1) - w;
-        float a = layer.color.a * (1.0 - clamp(d * 1.5, 0.0, 1.0));
+        float a = layer.color.a * (1.0 - smoothstep(0.0, 1.5, d));
         return float4(layer.color.rgb * a, a);
     }
 
@@ -366,7 +366,7 @@ fragment float4 ps_main(VSOut i [[stage_in]],
         float2 halfsz = layer.quad_px * 0.5 - spread;
         float2 p = i.local - layer.quad_px * 0.5;
         float d = sd_round_rect(p, halfsz, layer.radius_px);
-        float a = layer.color.a * (1.0 - clamp(d / max(spread, 1.0), 0.0, 1.0));
+        float a = layer.color.a * (1.0 - smoothstep(0.0, spread, d));
         return float4(layer.color.rgb * a, a);
     }
 
@@ -406,7 +406,7 @@ fragment float4 ps_main(VSOut i [[stage_in]],
         float2 halfsz = layer.quad_px * 0.5;
         float2 p = i.local - layer.quad_px * 0.5;
         float d = sd_round_rect(p, halfsz, layer.radius_px);
-        alpha *= 1.0 - clamp(d * 1.5, 0.0, 1.0);
+        alpha *= 1.0 - smoothstep(0.0, 1.5, d);
     }
     return float4(rgb * alpha, alpha);
 }
@@ -499,6 +499,9 @@ fragment float4 ps_kawase_down(FSOut i [[stage_in]],
     return s / 8.0;
 }
 
+// Poids 1,2,1,2,1,2,1,2 — somme 12, d'où le `/ 12.0`. Le port avait doublé les deux taps
+// purement verticaux : somme 14 divisée par 12, soit +16,7 % de luminosité PAR PASSE et un
+// biais vertical. Trois passes UP → un fond flouté 1,59× trop clair et étiré.
 fragment float4 ps_kawase_up(FSOut i [[stage_in]],
                              constant Layer &layer [[buffer(0)]],
                              texture2d<float, access::sample> rgbTex [[texture(0)]])
@@ -507,11 +510,11 @@ fragment float4 ps_kawase_up(FSOut i [[stage_in]],
     float2 uv = i.uv;
     float4 s = rgbTex.sample(sampNV, uv + float2(-hp.x * 2.0, 0.0));
     s += rgbTex.sample(sampNV, uv + float2(-hp.x, hp.y)) * 2.0;
-    s += rgbTex.sample(sampNV, uv + float2(0.0, hp.y * 2.0)) * 2.0;
+    s += rgbTex.sample(sampNV, uv + float2(0.0, hp.y * 2.0));
     s += rgbTex.sample(sampNV, uv + float2(hp.x, hp.y)) * 2.0;
     s += rgbTex.sample(sampNV, uv + float2(hp.x * 2.0, 0.0));
     s += rgbTex.sample(sampNV, uv + float2(hp.x, -hp.y)) * 2.0;
-    s += rgbTex.sample(sampNV, uv + float2(0.0, -hp.y * 2.0)) * 2.0;
+    s += rgbTex.sample(sampNV, uv + float2(0.0, -hp.y * 2.0));
     s += rgbTex.sample(sampNV, uv + float2(-hp.x, -hp.y)) * 2.0;
     return s / 12.0;
 }
