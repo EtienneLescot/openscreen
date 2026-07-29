@@ -71,7 +71,8 @@
 use crate::compositor::Compositor;
 use crate::config::Cfg;
 use crate::d3d::Gpu;
-use crate::pipeline::{walk_composited_timeline, ClipSource, Decoder};
+use crate::pipeline::{ClipSource, Decoder};
+use crate::timeline_walk::walk_composited_timeline;
 use anyhow::{anyhow, bail, Context, Result};
 use std::collections::HashMap;
 use std::fs::File;
