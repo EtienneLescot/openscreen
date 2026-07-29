@@ -21,8 +21,8 @@ flowchart LR
     C -- "IPC return" --> B
     B --> F["AxcutTranscript<br/>on document.transcripts[]"]
     F --> G["deriveCaptionCues<br/>(src/lib/ai-edition/captions/cues.ts)"]
-    G -- "CaptionCue[]<br/>(virtual ms)" --> H["Preview overlay<br/>(CaptionLayer.tsx)"]
-    G -- "synthetic text regions<br/>(annotation path)" --> I["Export<br/>(native compositor)"]
+    G -- "CaptionCue[]<br/>(virtual ms)" --> H["captionCuesToTextRegions<br/>(synthetic text regions)"]
+    H -- "annotation path<br/>(scene description)" --> I["Native compositor<br/>(preview AND export)"]
 ```
 
 The renderer pieces — `transcribeMono16kToSegments`
@@ -340,23 +340,30 @@ document — see the next subsection.
 
 ### Render paths
 
-The cue list reaches two surfaces, designed to share the same code so
-preview and export cannot drift:
+There is **one** render path. The cue list becomes synthetic text regions
+that ride the annotation plumbing into the native compositor, which draws
+both the preview and the export — so preview and export cannot drift,
+because they are the same renderer rather than two implementations kept in
+sync.
 
-- **Preview** — [`src/components/ai-edition/CaptionLayer.tsx`](../../src/components/ai-edition/CaptionLayer.tsx)
-  paints the cue active at the current playhead inside a
-  pointer-events-none band. The per-line background plate uses
-  `boxDecorationBreak: clone` so each wrapped line gets its own plate —
-  the same trick the native export uses, so what the preview shows is
-  what the export draws. `zIndex: 60` keeps the caption above the
-  annotation overlay in the preview.
-- **Export** — `captionCuesToTextRegions`
+> Until 2026-07-28 the preview had a second, DOM-based painter
+> (`CaptionLayer.tsx`) that mirrored the exporter's box model. Once the
+> native compositor took over the preview it became a duplicate: both
+> painted the same cue, and because CSS `word-break` and DirectWrite break
+> lines differently, the two copies wrapped at different points and the
+> caption visibly doubled. The DOM layer was deleted; the native canvas is
+> the sole pixel source (see [preview.md](preview.md)).
+
+- **Preview and export** — `captionCuesToTextRegions`
   ([`src/lib/ai-edition/captions/cues.ts:242`](../../src/lib/ai-edition/captions/cues.ts:242))
-  converts the virtual-ms cue list into synthetic `AnnotationRegion`s,
-  using the same `captionBandRect` + `captionBackgroundCss` helpers as
-  the preview. Those regions ride the existing annotation path through
-  the scene description and onto the native compositor; the export has
-  no separate caption path of its own. `CAPTION_Z_INDEX_BASE = 100_000`
+  converts the virtual-ms cue list into synthetic `AnnotationRegion`s via
+  the `captionBandRect` + `captionBackgroundCss` helpers. Those regions
+  ride the existing annotation path through the scene description and onto
+  the native compositor; neither surface has a caption path of its own.
+  Note that `captionBackgroundCss` emits `rgba(...)` (it recombines the
+  inspector's separate colour and opacity fields), so the native colour
+  parser has to accept CSS colours and not just hex — that contract is
+  pinned by a test on each side. `CAPTION_Z_INDEX_BASE = 100_000`
   ([`src/lib/ai-edition/captions/cues.ts:39`](../../src/lib/ai-edition/captions/cues.ts:39))
   gives the export even more clearance above real annotations, and the
   synthetic regions carry no `annotationSource` marker because they are

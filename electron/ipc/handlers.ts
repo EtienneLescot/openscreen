@@ -47,7 +47,6 @@ import {
 	rewindToMessage,
 	runChat,
 	runChatDefault,
-	runTimelineOperation,
 	selectSession,
 } from "../ai-edition/chat-service";
 import { DocumentService } from "../ai-edition/document-service";
@@ -3283,10 +3282,6 @@ export function registerIpcHandlers(
 		return { success: true };
 	}
 
-	ipcMain.handle("get-platform", () => {
-		return process.platform;
-	});
-
 	// Keep the native Windows/Linux window-control overlay in the app's theme
 	// colours. The renderer sends the resolved CSS values so the palette stays in
 	// one place. No-op on macOS (traffic lights aren't tintable) and on any window
@@ -3422,8 +3417,6 @@ export function registerIpcHandlers(
 			rewindToMessage(projectId, sessionId, messageId),
 		compactNow: (projectId, sessionId) =>
 			compactSessionNow(projectId, sessionId, aiEditionLlmConfig),
-		runTimelineOperation: (projectId, sessionId, op, conversationMessage) =>
-			runTimelineOperation(projectId, sessionId, op, conversationMessage, aiEditionDocuments),
 		getContextUsage: getSessionContextUsage,
 		runAiEditionChatDefault: (projectId, message, sink) =>
 			runChatDefault(projectId, message, aiEditionLlmConfig, sink),

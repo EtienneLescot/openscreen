@@ -119,6 +119,7 @@ function createShimElectronAPI() {
 		sendCloseConfirmResponse: () => undefined,
 		onRequestCloseConfirm: () => () => undefined,
 		onRequestSaveBeforeClose: () => () => undefined,
+		onAiEditionChatEvent: () => () => undefined,
 		loadProjectFileFromPath: () => Promise.resolve({ success: false, canceled: true }),
 		getPathForFile: () => "",
 		getSources: () => Promise.resolve(SHIM_SOURCES),
