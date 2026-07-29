@@ -74,18 +74,40 @@ function fmtTick(sec: number): string {
 }
 
 interface PlayheadOverlayProps {
-	pct: number;
+	/** Full timeline length in seconds — the denominator for the playhead's percentage. */
+	totalSec: number;
+	/** Live scrub position, when a drag is in flight. Takes precedence over the store. */
+	overrideTimeSec: number | null;
 	canvasStyle: React.CSSProperties;
 	onPointerDown: (e: ReactPointerEvent) => void;
 	playheadRef?: React.MutableRefObject<HTMLDivElement | null>;
 }
 
+/**
+ * The playhead reads `currentTimeSec` from the store ITSELF instead of taking it
+ * as a prop from V4Timeline.
+ *
+ * It is the only animated element on the timeline — everything around it (clips,
+ * waveforms, ruler, lane pills) is static during playback. Threading the playhead
+ * position down as a prop meant V4Timeline (and, above it, NewEditorShell) had to
+ * re-render on every one of the ~60 store writes per second that playback
+ * produces, just to move this one line: React had to render and commit the whole
+ * editor before the playhead's DOM node moved, and any frame where that took
+ * longer than ~16 ms showed up as visible playhead stutter.
+ *
+ * Subscribing here instead keeps the per-frame re-render confined to these three
+ * nodes. `memo` then stops the surrounding timeline's own re-renders (zoom/pan,
+ * clip edits) from re-rendering it for no reason.
+ */
 const PlayheadOverlay = memo(function PlayheadOverlay({
-	pct,
+	totalSec,
+	overrideTimeSec,
 	canvasStyle,
 	onPointerDown,
 	playheadRef,
 }: PlayheadOverlayProps) {
+	const storeTimeSec = useProjectStore((s) => s.currentTimeSec);
+	const pct = ((overrideTimeSec ?? storeTimeSec) / totalSec) * 100;
 	return (
 		<div className={styles.tlPlayheadLayer} aria-hidden>
 			<div className={styles.tlCanvas} style={canvasStyle}>
@@ -200,7 +222,6 @@ interface LanePill {
 
 export function V4Timeline({
 	tl,
-	currentTimeSec,
 	setCurrentTime,
 	variant = "edit",
 	onDropAsset,
@@ -212,7 +233,6 @@ export function V4Timeline({
 	onEditClip,
 }: {
 	tl: TimelineApi;
-	currentTimeSec: number;
 	setCurrentTime: (sec: number) => void;
 	variant?: "edit" | "media";
 	onDropAsset?: (assetId: string) => void;
@@ -353,8 +373,11 @@ export function V4Timeline({
 		return out;
 	}, [total]);
 
+	// Live scrub position. The store write behind it is rAF-throttled (see
+	// seekToClientX), so this keeps the playhead and the timecode pinned to the
+	// pointer for the frame the store hasn't caught up on yet. Handed down as an
+	// override to the two components that read the playhead from the store.
 	const [scrubbingTimeSec, setScrubbingTimeSec] = useState<number | null>(null);
-	const effectiveTimeSec = scrubbingTimeSec ?? currentTimeSec;
 	const rafSeekRef = useRef<number>(0);
 	const pendingSeekTimeRef = useRef<number | null>(null);
 
@@ -1170,7 +1193,7 @@ export function V4Timeline({
 				)}
 				<TransportBar
 					playing={playing}
-					currentTimeSec={effectiveTimeSec}
+					overrideTimeSec={scrubbingTimeSec}
 					clips={clips}
 					onTogglePlay={onTogglePlay}
 					onPrevClip={onPrevClip}
@@ -1341,7 +1364,8 @@ export function V4Timeline({
 			    same zoom/pan transform + width as the canvases, so its line stays
 			    continuous from the ruler down through the clips and its head aligns. */}
 				<PlayheadOverlay
-					pct={pctOf(effectiveTimeSec)}
+					totalSec={total}
+					overrideTimeSec={scrubbingTimeSec}
 					canvasStyle={canvasStyle}
 					onPointerDown={startScrub}
 					playheadRef={playheadElRef}

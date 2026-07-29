@@ -64,10 +64,29 @@ function patchPillById<T extends { id: string; startMs: number; endMs: number }>
 	return regions.map((r) => (under.has(r.id) ? { ...r, ...patch } : r));
 }
 
+/**
+ * Playhead position at CALL time, read imperatively — deliberately not a
+ * subscription.
+ *
+ * `currentTimeSec` is rewritten on every animation frame during playback (see
+ * VirtualPreview's rAF tick). Subscribing to it here would give this hook's
+ * return value a new identity 60×/s and re-render every consumer with it — and
+ * `useTimeline()` is called by the editor shell, so that meant re-rendering the
+ * whole editor (timeline, clips, waveforms, inspector) once per frame just to
+ * move the playhead a few pixels. That render cascade was the playhead's own
+ * stutter: React had to commit the entire tree before the playhead's DOM moved.
+ *
+ * Nothing in this hook RENDERS the playhead — the add* actions below only need
+ * its value at the instant the user fires them, which is exactly what a
+ * getState() read gives (and is strictly fresher than a captured render value).
+ */
+function playheadSec(): number {
+	return useProjectStore.getState().currentTimeSec;
+}
+
 export function useTimeline() {
 	const document = useProjectStore((s) => s.document);
 	const projectId = useProjectStore((s) => s.projectId);
-	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
 	const saveDocument = useProjectStore((s) => s.saveDocument);
 	const setDocument = useProjectStore((s) => s.setDocument);
 	const [selection, setSelection] = useState<RegionHandle | null>(null);
@@ -136,7 +155,7 @@ export function useTimeline() {
 	// clip; the ruler renders them as one pill because their properties are equal.
 	const addZoom = useCallback(async () => {
 		if (!document) return;
-		const timeMs = Math.round(currentTimeSec * 1000);
+		const timeMs = Math.round(playheadSec() * 1000);
 		const anchored = anchorRegionsWithDerivedMs(
 			[
 				{
@@ -156,7 +175,7 @@ export function useTimeline() {
 			zoomRanges: [...document.zoomRanges, ...anchored] as AxcutDocument["zoomRanges"],
 		};
 		await saveDocument(next);
-	}, [document, currentTimeSec, saveDocument]);
+	}, [document, saveDocument]);
 
 	// Append several auto-generated zoom regions in one save (auto-enhance).
 	// Suggestions come from buildAutoZoomSuggestions, which already reserves
@@ -198,11 +217,8 @@ export function useTimeline() {
 		// straight into startSec (as before) only happened to be right for an
 		// identity single-clip project — for trimmed/reordered clips it landed
 		// the trim at the wrong source position.
-		const resolved = resolveTimelineSpanToTrim(
-			currentTimeSec,
-			currentTimeSec + 2,
-			document.timeline.clips,
-		);
+		const playhead = playheadSec();
+		const resolved = resolveTimelineSpanToTrim(playhead, playhead + 2, document.timeline.clips);
 		const asset =
 			document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
 		if (!resolved && !asset) return;
@@ -215,8 +231,8 @@ export function useTimeline() {
 					{
 						id: createId("trim"),
 						assetId: resolved?.assetId ?? asset!.id,
-						startSec: resolved?.sourceStartSec ?? currentTimeSec,
-						endSec: resolved?.sourceEndSec ?? currentTimeSec + 2,
+						startSec: resolved?.sourceStartSec ?? playhead,
+						endSec: resolved?.sourceEndSec ?? playhead + 2,
 						reason: "manual",
 						origin: "user" as const,
 					},
@@ -224,11 +240,11 @@ export function useTimeline() {
 			},
 		};
 		await saveDocument(next);
-	}, [document, currentTimeSec, saveDocument]);
+	}, [document, saveDocument]);
 
 	const addAnnotation = useCallback(async () => {
 		if (!document) return;
-		const timeMs = Math.round(currentTimeSec * 1000);
+		const timeMs = Math.round(playheadSec() * 1000);
 		const ann: AnnotationRegion = {
 			id: createId("ann"),
 			startMs: timeMs,
@@ -267,11 +283,11 @@ export function useTimeline() {
 		const newId = created[0]?.id ?? ann.id;
 		setMultiSelection([{ kind: "annotation", id: newId }]);
 		setSelection({ kind: "annotation", id: newId });
-	}, [document, currentTimeSec, saveDocument]);
+	}, [document, saveDocument]);
 
 	const addSpeed = useCallback(async () => {
 		if (!document) return;
-		const timeMs = Math.round(currentTimeSec * 1000);
+		const timeMs = Math.round(playheadSec() * 1000);
 		const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
 		const prev = (legacy.speedRegions as unknown[]) ?? [];
 		const next: AxcutDocument = {
@@ -289,13 +305,13 @@ export function useTimeline() {
 			},
 		};
 		await saveDocument(next);
-	}, [document, currentTimeSec, saveDocument]);
+	}, [document, saveDocument]);
 
 	// Full Camera: a plain time span (no value) during which the preview/export
 	// grows the webcam overlay to (almost) fill the canvas and eases it back.
 	const addCameraFullscreen = useCallback(async () => {
 		if (!document) return;
-		const timeMs = Math.round(currentTimeSec * 1000);
+		const timeMs = Math.round(playheadSec() * 1000);
 		const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
 		const prev = (legacy.cameraFullscreenRegions as unknown[]) ?? [];
 		const next: AxcutDocument = {
@@ -313,7 +329,7 @@ export function useTimeline() {
 			},
 		};
 		await saveDocument(next);
-	}, [document, currentTimeSec, saveDocument]);
+	}, [document, saveDocument]);
 
 	// Like updateTrimRange but also re-attaches the trim to a (possibly
 	// different) asset — needed when a trim is dragged across a clip boundary

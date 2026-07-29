@@ -148,4 +148,58 @@ test.describe("v4 editor shell", () => {
 		await zoom(40);
 		await expect.poll(widthPct).toBe(2);
 	});
+
+	// The playhead reads `currentTimeSec` off the project store itself rather than
+	// receiving it as a prop from the editor shell, so that playback (which rewrites
+	// it ~60×/s) no longer re-renders the whole editor to move one line — see
+	// PlayheadOverlay in V4Timeline.tsx. This covers both directions of that: a bare
+	// store write must move it, and a scrub drag must still drive it and the store.
+	test("the playhead follows both a store write and a scrub drag", async ({ page }) => {
+		await seedAndOpen(page);
+
+		// `left` is a percentage of the 600 s fixture timeline. Addressed by position
+		// in the overlay rather than by class: `tlPlayhead`, `tlPlayheadLayer` and
+		// `tlPlayheadDiamond` all share a `[class*=]` prefix.
+		const playhead = page.locator('[class*="tlPlayheadLayer"] > [class*="tlCanvas"] > div');
+		const leftPct = () =>
+			playhead.evaluate((el) => Number.parseFloat((el as HTMLElement).style.left));
+		const storeTimeSec = () =>
+			page.evaluate(
+				() =>
+					(
+						window as unknown as {
+							__osProjectStore: { getState: () => { currentTimeSec: number } };
+						}
+					).__osProjectStore.getState().currentTimeSec,
+			);
+
+		expect(await leftPct()).toBe(0);
+
+		// Nothing re-renders the shell here — the store write alone has to move it.
+		await page.evaluate(() =>
+			(
+				window as unknown as {
+					__osProjectStore: { getState: () => { setCurrentTime: (s: number) => void } };
+				}
+			).__osProjectStore
+				.getState()
+				.setCurrentTime(300),
+		);
+		await expect.poll(leftPct).toBeCloseTo(50, 1);
+		await expect(page.getByRole("toolbar", { name: /playback/i })).toContainText("5:00.0");
+
+		// Scrub: press at 25% of the timeline canvas, drag to 75%, release. The
+		// playhead tracks the pointer and the store lands on the release position.
+		const canvas = page.locator('[class*="tlTracks"] [class*="tlCanvas"]').first();
+		const box = await canvas.boundingBox();
+		if (!box) throw new Error("timeline canvas has no bounding box");
+		const y = box.y + box.height / 2;
+		await page.mouse.move(box.x + box.width * 0.25, y);
+		await page.mouse.down();
+		await expect.poll(leftPct).toBeCloseTo(25, 0);
+		await page.mouse.move(box.x + box.width * 0.75, y, { steps: 8 });
+		await page.mouse.up();
+		await expect.poll(leftPct).toBeCloseTo(75, 0);
+		expect(await storeTimeSec()).toBeGreaterThan(400);
+	});
 });
