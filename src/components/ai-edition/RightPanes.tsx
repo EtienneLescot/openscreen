@@ -17,6 +17,7 @@ import {
 import {
 	type ChangeEvent,
 	type FormEvent,
+	memo,
 	type ClipboardEvent as ReactClipboardEvent,
 	type KeyboardEvent as ReactKeyboardEvent,
 	type ReactNode,
@@ -505,7 +506,6 @@ export function TranscriptPane({
 	assets,
 	trimRanges,
 	busy,
-	currentTimeSec,
 	onSeek,
 	onAddTrimRange,
 	onRemoveTrimRange,
@@ -518,7 +518,6 @@ export function TranscriptPane({
 	assets: AxcutAsset[];
 	trimRanges: AxcutTrimRange[];
 	busy: boolean;
-	currentTimeSec: number;
 	onSeek: (sec: number) => void;
 	onAddTrimRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
@@ -527,6 +526,13 @@ export function TranscriptPane({
 	isTranscribing: boolean;
 }) {
 	const ts = useScopedT("settings");
+	// Subscribed here, not passed down: the playhead is rewritten every animation
+	// frame during playback, and reading it in NewEditorShell re-rendered the whole
+	// editor (timeline included) once per frame — see NativePlaybackSync there. Only
+	// the cue word derived below actually moves, and `TranscriptClipBlock` is memoised
+	// on `cueWordId`, so a frame that doesn't cross a word boundary re-renders nothing
+	// but this component's own (cheap) lookup.
+	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
 	const sections = useMemo(
 		() => buildAggregatedSections(clips, transcripts, assets, trimRanges),
 		[clips, transcripts, assets, trimRanges],
@@ -618,7 +624,14 @@ export function TranscriptPane({
 // word inside the clip's source range, color-coded by whether the word
 // is inside any trimRange. Backspace/Delete adds a new trimRange via
 // onAddTrimRange; hover-bin on a skip run removes it via onRemoveTrimRange.
-function TranscriptClipBlock({
+//
+// `memo` matters here: this renders one DOM node per transcript word, and its
+// parent now re-renders on every playhead tick (~60×/s during playback). The only
+// prop that actually moves with the playhead is `cueWordId`, which changes at word
+// boundaries — a few times per second, not sixty. Without the memo, every frame
+// would re-render the entire word stream, and React commits all pending updates in
+// one pass, so that cost would land on the playhead's own commit too.
+const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	index,
 	section,
 	busy,
@@ -942,7 +955,7 @@ function TranscriptClipBlock({
 			)}
 		</span>
 	);
-}
+});
 
 // One word inside the editable block. Kept words render plain; removed
 // words (inside a skip range) render red+strikethrough with a hover bin.

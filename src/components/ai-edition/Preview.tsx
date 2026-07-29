@@ -7,6 +7,7 @@ import type {
 	AxcutTrimRange,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
+import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import type { SpeedRegion } from "@/lib/ai-edition/timeline/speed";
 import { EditorEmptyState } from "./EditorEmptyState";
 import styles from "./NewEditorShell.module.css";
@@ -38,7 +39,6 @@ interface PreviewProps {
 	onSeek: (sec: number) => void;
 	onLoadedMetadata: (sec: number, assetId: string) => void;
 	onVideoElement: (el: HTMLVideoElement | null) => void;
-	currentTimeSec: number;
 	// ponytail: the transport bar (play/pause, prev/next, loop, scrub) moved
 	// into the timeline header (Bottombar), so playback state now lives in
 	// the parent shell — Preview only needs `playing` to report it on the
@@ -70,10 +70,16 @@ export function Preview({
 	onSeek,
 	onLoadedMetadata,
 	onVideoElement,
-	currentTimeSec,
 	playing,
 }: PreviewProps) {
 	const te = useScopedT("editor");
+	// Subscribed HERE rather than passed down from NewEditorShell: the playhead is
+	// rewritten every animation frame during playback, and reading it in the shell
+	// re-rendered the whole editor (timeline included) once per frame — see
+	// NativePlaybackSync in NewEditorShell.tsx. The preview subtree genuinely has to
+	// re-render at that rate (annotations, captions, crop, Full Camera all animate
+	// against it); the timeline does not.
+	const currentTimeSec = useProjectStore((s) => s.currentTimeSec);
 	// ponytail: when the <video> fails to load (e.g. a truncated recording
 	// from a bad MediaRecorder capture), swap to the empty state so the user
 	// can import a different file instead of staring at a broken preview.
