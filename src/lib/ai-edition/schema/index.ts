@@ -612,12 +612,26 @@ function upgradeV5DocumentToV6(raw: unknown): unknown {
 		return { ...doc, schemaVersion: 6 };
 	}
 
+	// OPPORTUNISTIC, never forced. Baking requires real source dimensions, and a
+	// project imported from v1.7 has none yet: `migrateProjectDataToAxcutDocument`
+	// builds its asset from `{version:2, media, editor}`, which carries only file
+	// paths — dimensions arrive later, when `useTimeline`'s probe effect writes
+	// `asset.video` back to disk.
+	//
+	// So when dimensions are unknown we leave `"native"` in place rather than
+	// stamping a hardcoded ratio. `"native"` keeps resolving dynamically at runtime
+	// (`resolveAspectRatioValue`), which IS the v1.7 behaviour, and the next load
+	// after the probe has persisted dimensions converts it for real. Forcing
+	// `"16:9"` here would permanently reframe every portrait v1.7 project that used
+	// "Native", on its first open in v1.8, with no way back.
 	const dims = largestClipDims(doc);
-	const token = dims ? toAspectRatioToken(dims.width, dims.height) : null;
+	if (!dims) {
+		return { ...doc, schemaVersion: 6 };
+	}
 	return {
 		...doc,
 		schemaVersion: 6,
-		legacyEditor: { ...legacy, aspectRatio: token ?? "16:9" },
+		legacyEditor: { ...legacy, aspectRatio: toAspectRatioToken(dims.width, dims.height) },
 	};
 }
 

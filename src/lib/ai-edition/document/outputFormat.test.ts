@@ -225,7 +225,13 @@ describe("pickOutputDims", () => {
 			[asset("a1", 1366, 768), asset("a2", 3840, 2160)],
 			[clip("c1", "a1"), clip("c2", "a2")],
 		);
-		const tokens: AspectRatio[] = [...ASPECT_RATIO_PRESETS, "683:384", "64:27", "1023:767"];
+		const tokens: AspectRatio[] = [
+			...ASPECT_RATIO_PRESETS,
+			"683:384",
+			"64:27",
+			"1023:767",
+			"native",
+		];
 		for (const token of tokens) {
 			const out = pickOutputDims(d, token);
 			expect(out.width % 2, `width for ${token}`).toBe(0);
@@ -250,6 +256,14 @@ describe("pickOutputDims", () => {
 		expect(pickOutputDims(after, "16:9")).toEqual({ width: 3840, height: 2160 });
 	});
 
+	it('legacy "native" still resolves to the reference clip, drift included', () => {
+		const portraitWins = doc(
+			[asset("a1", 1920, 1080), asset("a2", 2160, 3840)],
+			[clip("c1", "a1"), clip("c2", "a2")],
+		);
+		expect(pickOutputDims(portraitWins, "native")).toEqual({ width: 2160, height: 3840 });
+	});
+
 	it("sizes the output off the cropped footprint, not the raw 4K asset", () => {
 		// A single 4K clip cropped to a 16:9 half-width strip: the output must rasterise at the
 		// crop's real size (1920x1080), not the asset's 3840x2160. Before the reference went
@@ -263,13 +277,18 @@ describe("pickOutputDims", () => {
 });
 
 describe("resolveAspectRatioValue", () => {
-	// The legacy `"native"` AspectRatio is retired — the v5→v6 upgrader (see
-	// `src/lib/ai-edition/schema/index.test.ts` — "v5 -> v6 native AspectRatio
-	// migration") rewrites every stored "native" to a concrete `"W:H"` token at load
-	// time, so by the time this function runs there is no document context to thread
-	// through. What remains is a thin wrapper around `getAspectRatioValue`.
+	it('resolves legacy "native" against the document instead of the 16/9 fallback', () => {
+		const d = doc([asset("a1", 1080, 1920)], [clip("c1", "a1")]);
+		expect(resolveAspectRatioValue(d, "native")).toBeCloseTo(1080 / 1920, 6);
+	});
+
+	it('falls back to 16/9 for "native" with no document (preview before load)', () => {
+		expect(resolveAspectRatioValue(null, "native")).toBeCloseTo(16 / 9, 6);
+	});
+
 	it("passes concrete tokens straight through", () => {
-		expect(resolveAspectRatioValue("4:5")).toBeCloseTo(0.8, 6);
-		expect(resolveAspectRatioValue("64:27")).toBeCloseTo(64 / 27, 6);
+		const d = doc([asset("a1", 1080, 1920)], [clip("c1", "a1")]);
+		expect(resolveAspectRatioValue(d, "4:5")).toBeCloseTo(0.8, 6);
+		expect(resolveAspectRatioValue(d, "64:27")).toBeCloseTo(64 / 27, 6);
 	});
 });
