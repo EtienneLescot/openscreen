@@ -33,7 +33,6 @@ import {
 } from "@/lib/exporter";
 import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
 import { exportGifNative, exportMultiNative, useIsCpuCompositor } from "@/native";
-import { nativeBridgeClient } from "@/native/client";
 import type { CompositorClipInput } from "@/native/contracts";
 import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
 import { ModalShell } from "./Modals";
