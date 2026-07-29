@@ -27,6 +27,36 @@
 use crate::config::Cfg;
 use crate::scene::SceneCrop;
 
+/// Constant buffer d'un calque : **128 octets**, un par draw.
+///
+/// C'est le contrat partagé par les trois côtés — `cbuffer Layer` dans `shaders.hlsl`,
+/// `struct Layer` dans `shaders.metal`, et ce struct. Les trois doivent s'accorder champ
+/// pour champ ET octet pour octet : un décalage ne produit pas d'erreur, il produit un
+/// shader qui lit `color` là où on a écrit `fx`.
+///
+/// `align(16)` vient de la version macOS ; sous `repr(C)` seul, les offsets sont déjà
+/// 0/16/32/40/44/48/64/80/96/112 des deux côtés — l'alignement Rust ne change que
+/// l'adresse du struct, pas son contenu, et Windows le `copy_nonoverlapping` dans un
+/// constant buffer mappé où l'alignement source est sans effet. Les deux formes étaient
+/// donc compatibles ; les unifier évite qu'elles cessent de l'être.
+///
+/// (Le commentaire d'origine annonçait « 64 octets ». Il n'a jamais été juste : dix champs,
+/// trente-deux `f32`.)
+#[repr(C, align(16))]
+#[derive(Clone, Copy, Default)]
+pub struct LayerCB {
+    pub dst: [f32; 4],
+    pub src: [f32; 4],
+    pub quad_px: [f32; 2],
+    pub radius_px: f32,
+    pub mode: f32,
+    pub color: [f32; 4],
+    pub fx: [f32; 4],
+    pub src_prev: [f32; 4],
+    pub dst_prev: [f32; 4],
+    pub mb: [f32; 4], // mb[0] = nombre de taps de motion blur
+}
+
 pub const OUT_W: u32 = 1920;
 pub const OUT_H: u32 = 1080;
 /// Parse une couleur "#rgb" / "#rrggbb" (sRGB, comme les wallpapers web) → [r,g,b,a] 0..1.
@@ -535,9 +565,128 @@ pub(crate) fn preset_placements(preset: &str) -> FrameParams {
     FrameParams { zoom: 1.0, focus: [0.5, 0.5], screen, webcam }
 }
 
+// Les quatre items qui suivent existaient en DOUBLE, un exemplaire par backend, et les
+// commentaires macOS affirmaient « mêmes champs et même layout » puis « mêmes formules ».
+// Les deux affirmations étaient fausses sur trois valeurs :
+//
+//     bg_color défaut          windows [0.10, 0.11, 0.14, 1.0]   macos [0, 0, 0, 0]
+//     has_webcam défaut        windows true                       macos false
+//     webcam_shape_code(_)     windows 3 ("rounded")              macos 0 ("rectangle")
+//
+// La troisième est celle qui mord : `live_params_from_scene` l'appelle, et `webcam_shape`
+// vaut "rounded" par défaut côté app — donc la même scène décrivait une caméra arrondie
+// sur Windows et rectangulaire sur macOS. Les valeurs Windows font foi : c'est le backend
+// qui rend en production aujourd'hui.
+
+/// Valeurs continues pilotées par l'inspector (celles qui étaient codées en dur dans
+/// `compose_frame`). Le défaut reproduit le rendu actuel → bench/export inchangés.
+/// Les booléens/taps (fond flouté, ombre on/off, coins on/off, motion blur) restent
+/// portés par le `Cfg` que le thread live reconstruit depuis les switches.
+#[derive(Clone, Copy)]
+pub struct LiveParams {
+    pub bg_color: [f32; 4],       // fond plat (mode couleur) quand non flouté
+    pub shadow_scale: f32,        // multiplie l'opacité des ombres (1 = défaut, 0 = off)
+    pub radius_scale: f32,        // multiplie le rayon des coins (1 = défaut, 0 = carré)
+    pub padding: f32,             // 0..1 : inset supplémentaire du screen (0 = défaut fixture)
+    pub webcam_size_scale: f32,   // multiplie la taille de la webcam (1 = défaut)
+    pub webcam_mirror: bool,      // miroir horizontal de la webcam
+    pub webcam_shape: u32,        // 0=rect, 1=circle, 2=square, 3=rounded (défaut)
+    pub cursor_size_scale: f32,   // multiplie la taille du curseur (1 = défaut)
+    pub cursor_bounce_scale: f32, // multiplie l'amplitude du click-bounce (1 = défaut, 0 = off)
+    /// 0..1 : flou de mouvement DU CURSEUR (indépendant du motion blur écran/`cfg.mblur_n`).
+    /// Approximé par le même mécanisme de traînée fantôme (taps décalés le long de la
+    /// vélocité), pas par un flou gaussien variable comme le canvas web — plus simple à
+    /// réutiliser côté GPU, effet de streak équivalent.
+    pub cursor_motion_blur: f32,
+    /// False when the "webcam" decoder is actually just the screen video again (the TS side
+    /// falls `webcamPath` back to the screen asset's own path when a clip has no real camera,
+    /// purely so the decoder pipeline has something valid to open) — drawing the PiP box in
+    /// that case duplicates the screen video into its own corner. Live-only: derived in
+    /// `live.rs` by comparing the active clip's screen/webcam paths; defaults `true` (draw)
+    /// so fixture/bench renders and any caller that never sets it keep their old behavior.
+    pub has_webcam: bool,
+}
+
+impl Default for LiveParams {
+    fn default() -> Self {
+        Self {
+            bg_color: [0.10, 0.11, 0.14, 1.0],
+            shadow_scale: 1.0,
+            radius_scale: 1.0,
+            padding: 0.0,
+            webcam_size_scale: 1.0,
+            webcam_mirror: false,
+            webcam_shape: 3,
+            cursor_size_scale: 1.0,
+            cursor_bounce_scale: 1.0,
+            cursor_motion_blur: 0.0,
+            has_webcam: true,
+        }
+    }
+}
+
+/// "rectangle"|"circle"|"square"|"rounded" -> code webcam_shape (0/1/2/3). Partagé entre le
+/// live (`live.rs::set_param_str`) et l'export (construit `LiveParams` depuis la scène) — une
+/// seule table de vérité pour ce mapping.
+pub fn webcam_shape_code(shape: &str) -> u32 {
+    match shape {
+        "rectangle" => 0,
+        "circle" => 1,
+        "square" => 2,
+        _ => 3, // "rounded" (défaut)
+    }
+}
+
+/// Construit les `LiveParams` équivalents à ce que l'inspector pousse en live, mais depuis la
+/// scène de l'app — l'export est un rendu one-shot sans historique de sliders, donc il doit lire
+/// directement la config déjà posée dans la scène plutôt que dupliquer un mécanisme d'inspector.
+/// Unités identiques à `RightPanes.tsx` (mêmes conversions, pas de re-normalisation) : voir
+/// `sceneDescription.ts` pour la correspondance settings -> champs de scène.
+pub fn live_params_from_scene(s: &crate::scene::Scene) -> LiveParams {
+    LiveParams {
+        shadow_scale: s.effects.shadow,
+        // `radius_scale` reste le multiplicateur du chemin INSPECTOR (bench/GUI standalone) ; le
+        // rayon écran d'une scène vient désormais de `effects.roundness_frac`, lu directement
+        // dans `compose_frame`. Le faire transiter ici obligeait à le normaliser par un rayon de
+        // fixture (`p.screen.radius`, 24 px) pour ressortir la valeur de départ — un aller-retour
+        // qui ne servait qu'à faire passer des pixels pour un ratio.
+        padding: s.effects.padding,
+        webcam_size_scale: s.layout.webcam_size,
+        webcam_mirror: s.layout.webcam_mirror,
+        webcam_shape: webcam_shape_code(&s.layout.webcam_shape),
+        cursor_size_scale: s.cursor.size,
+        cursor_bounce_scale: s.cursor.click_bounce,
+        cursor_motion_blur: s.cursor.motion_blur,
+        ..LiveParams::default()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Le contrat cross-backend, verrouillé octet par octet. Un shader qui lit un champ
+    /// décalé ne lève rien : il rend faux, en silence.
+    #[test]
+    fn layer_cb_matches_the_shader_constant_buffer() {
+        use std::mem::{align_of, offset_of, size_of};
+        assert_eq!(size_of::<LayerCB>(), 128);
+        assert_eq!(align_of::<LayerCB>(), 16);
+        for (name, got, want) in [
+            ("dst", offset_of!(LayerCB, dst), 0),
+            ("src", offset_of!(LayerCB, src), 16),
+            ("quad_px", offset_of!(LayerCB, quad_px), 32),
+            ("radius_px", offset_of!(LayerCB, radius_px), 40),
+            ("mode", offset_of!(LayerCB, mode), 44),
+            ("color", offset_of!(LayerCB, color), 48),
+            ("fx", offset_of!(LayerCB, fx), 64),
+            ("src_prev", offset_of!(LayerCB, src_prev), 80),
+            ("dst_prev", offset_of!(LayerCB, dst_prev), 96),
+            ("mb", offset_of!(LayerCB, mb), 112),
+        ] {
+            assert_eq!(got, want, "offset de `{name}`");
+        }
+    }
 
     /// Le pivot doit rester collé à `center` quand le sprite grandit — c'est exactement ce qui
     /// était cassé (ancrage centré en dur : la pointe s'éloignait proportionnellement à la
