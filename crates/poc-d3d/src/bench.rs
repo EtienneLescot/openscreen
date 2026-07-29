@@ -6,6 +6,7 @@
 use anyhow::{Context as _, Result};
 use openscreen_compositor::compositor::Compositor;
 use openscreen_compositor::gif_export::{GifExportParams, GifStats};
+use openscreen_compositor::pipeline::ClipSource;
 use openscreen_compositor::{config, cursor, d3d, gif_export, live, pipeline, scene};
 use std::fmt::Write as _;
 use std::path::Path;
@@ -53,13 +54,6 @@ fn run_bench(args: &[String]) -> Result<()> {
     let out = get("--out", "out");
     let repeat: u32 = get("--repeat", "3").parse().unwrap_or(3);
     let cfg_arg = get("--cfg", "C0..C8");
-
-    // The GIF bench is a different shape (single clip, no encoder chain,
-    // reads out to a `.gif` file). Detected by name so a typical
-    // `--cfg C0..C8,GIF` invocation still works.
-    if cfg_arg.split(',').any(|n| n.trim().eq_ignore_ascii_case("gif")) {
-        return run_gif_bench(args, &fixture, &out, repeat);
-    }
 
     let screen = format!("{fixture}/screen.mp4");
     let webcam = format!("{fixture}/webcam.mp4");
@@ -116,6 +110,16 @@ fn run_bench(args: &[String]) -> Result<()> {
     let mut comp = Compositor::new(&gpu)?;
     let track = cursor::CursorTrack::load(&format!("{fixture}/screen.cursor.json"), 100_000.0, 6.0)?;
     comp.set_cursor(track);
+
+    // The GIF bench is a different shape (single clip, no encoder chain,
+    // reads out to a `.gif` file). Detected by name so a typical
+    // `--cfg C0..C8,GIF` invocation still works. Routed AFTER device setup
+    // because `export_gif` now takes the same `(gpu, comp, cfg)` triple as
+    // `run_composited_multi` (slice-2 alignment, see PR #189's macOS port).
+    if cfg_arg.split(',').any(|n| n.trim().eq_ignore_ascii_case("gif")) {
+        let cfg = config::Cfg::by_name("C1").or_else(|| config::all().into_iter().next()).unwrap();
+        return run_gif_bench(args, &fixture, &out, repeat, &gpu, &comp, &cfg);
+    }
 
     // `--scene <fichier.json>` : compose avec une VRAIE scène d'app au lieu du planning fixture.
     // Sert à deux choses : sortir une preuve visuelle pour ce que seule une scène peut décrire
@@ -236,6 +240,9 @@ fn run_gif_bench(
     fixture: &str,
     out: &str,
     repeat: u32,
+    gpu: &d3d::Gpu,
+    comp: &Compositor,
+    cfg: &config::Cfg,
 ) -> Result<()> {
     let get = |k: &str, d: &str| -> String { arg(args, k, d) };
     let screen = format!("{fixture}/screen.mp4");
@@ -271,16 +278,27 @@ fn run_gif_bench(
     let mut wall_runs = Vec::new();
     let mut file_bytes: u64 = 0;
     let mut last_stats: Option<GifStats> = None;
+    // The GIF bench is a single-clip export today; the slice-2 work expands
+    // it to a multi-clip timeline the same way `run_composited_multi` does.
+    let clips = [ClipSource {
+        screen: screen.clone(),
+        webcam: webcam.clone(),
+        source_start_sec: 0.0,
+        source_end_sec: f64::MAX,
+        webcam_offset_sec: 0.0,
+        has_audio: false,
+    }];
     for r in 0..repeat {
         // Each run writes to the same path — the last frame wins. The
         // encoder itself is `Drop`-flushed, so re-running is safe and
         // produces a fresh file (the `gif` crate writes the trailer
         // on drop, not on each frame).
         let s = gif_export::export_gif(
-            &screen,
-            &webcam,
-            Some(&cursor),
+            &clips,
             &out_path,
+            &gpu,
+            &comp,
+            cfg,
             &params,
             &mut |_| {},
         )?;
@@ -345,6 +363,9 @@ fn run_gif_bench(
         out_path = out_path.display(),
     );
     println!("\nreport-gif.json + out/gif.gif écrits dans {out}/");
+    Ok(())
+}
+
 /// Écrit un readback RGBA8 en PPM binaire (P6, RGB) — format le plus bête qui se lise
 /// partout, et qui se compare octet à octet entre deux backends sans passer par un codec.
 fn write_ppm(path: &str, w: u32, h: u32, rgba: &[u8]) -> Result<()> {
