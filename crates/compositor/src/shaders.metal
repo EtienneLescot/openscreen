@@ -258,7 +258,10 @@ fragment float4 ps_main(VSOut i [[stage_in]],
                                   layer.fx.zw,
                                   layer.src_prev.xy,
                                   layer.src_prev.zw) + spread;
-        float a = layer.color.a * (1.0 - clamp((d - spread) / max(spread, 1.0), 0.0, 1.0));
+        // `smoothstep(0, spread, d)` comme le HLSL. Le port faisait une rampe LINÉAIRE sur
+        // `(d - spread)`, ce qui décale la pénombre d'un `spread` entier et lui donne une
+        // arête là où elle doit s'éteindre en douceur.
+        float a = layer.color.a * (1.0 - smoothstep(0.0, spread, d));
         return float4(layer.color.rgb * a, a);
     }
 
@@ -288,18 +291,31 @@ fragment float4 ps_main(VSOut i [[stage_in]],
         return float4(s.rgb * a, a);
     }
 
-    // mode 6 : wallpaper image (fond non NV12).
+    // mode 6 : wallpaper image RGBA (cover-fit). src = rect uv déjà calculé (crop de
+    // recouvrement), i.uv l'interpole. OPAQUE — comme le HLSL.
+    //
+    // Le port lisait `layer.color.a` ici. `LayerCB::default()` met `color` à zéro, donc
+    // l'alpha valait 0 et le fond image était rigoureusement invisible : un fond noir,
+    // qu'on lit comme « le compositeur ne dessine pas le wallpaper » plutôt que comme
+    // « le wallpaper est dessiné avec alpha 0 ».
     if (layer.mode > 5.5 && layer.mode < 6.5)
     {
-        float4 s = texImg.sample(samp, i.uv);
-        float a = layer.color.a;
-        return float4(s.rgb * a, a);
+        return float4(texImg.sample(samp, i.uv).rgb, 1.0);
     }
 
-    // mode 5 : gradient (texImg porte le gradient en mode 6 ; en mode 5 c'est `color`).
+    // mode 5 : gradient linéaire 2 stops (parité web wallpaper dégradé). color = stop0,
+    // src.xyz = stop1, fx.xy = direction unitaire (espace sortie, y vers le bas). t est
+    // normalisé coin-à-coin (dénominateur = |dx|+|dy|) pour couvrir toute la diagonale.
+    //
+    // Le port avait remplacé tout ce calcul par une couleur plate : un dégradé s'affichait
+    // comme son premier stop, uniformément.
     if (layer.mode > 4.5 && layer.mode < 5.5)
     {
-        return float4(layer.color.rgb * layer.color.a, layer.color.a);
+        float2 dir = layer.fx.xy;
+        float denom = max(abs(dir.x) + abs(dir.y), 1e-4);
+        float t = clamp(0.5 + dot(i.pout - 0.5, dir) / denom, 0.0, 1.0);
+        float3 g = mix(layer.color.rgb, layer.src.xyz, t);
+        return float4(g, 1.0); // opaque, prémultiplié (a=1)
     }
 
     // mode 4 : curseur dessiné (dot + ring SDF).
