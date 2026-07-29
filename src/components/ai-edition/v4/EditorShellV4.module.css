@@ -119,9 +119,24 @@
 	flex-shrink: 0;
 	transition: background var(--motion-fast) var(--ease), border-color var(--motion-fast) var(--ease);
 }
-.ghostBtn:hover {
+.ghostBtn:hover:not(:disabled) {
 	background: var(--surface-1);
 	border-color: var(--border);
+}
+.ghostBtn:disabled {
+	opacity: 0.45;
+	cursor: not-allowed;
+}
+.projectNameInput {
+	height: 30px;
+	min-width: 160px;
+	padding: 0 10px;
+	border-radius: 9px;
+	border: 1px solid var(--accent);
+	background: var(--surface);
+	color: var(--fg);
+	font: 500 13px var(--font-display);
+	outline: none;
 }
 .saved {
 	display: inline-flex;

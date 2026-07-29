@@ -205,26 +205,25 @@ function ProjectNameField({
 	const t = useScopedT("editor");
 	const [editing, setEditing] = useState(false);
 	const [draft, setDraft] = useState(title ?? "");
-	const inputRef = useRef<HTMLInputElement | null>(null);
 
-	useEffect(() => {
-		if (editing) {
-			setDraft(title ?? "");
-			inputRef.current?.select();
-		}
-	}, [editing, title]);
+	const startEditing = () => {
+		setDraft(title ?? "");
+		setEditing(true);
+	};
 
 	const commit = () => {
 		setEditing(false);
 		const next = draft.trim();
-		if (next && next !== title) onRename(next);
+		if (next) onRename(next);
 	};
 
 	if (editing) {
 		return (
 			<input
-				ref={inputRef}
+				className={styles.projectNameInput}
+				autoFocus
 				value={draft}
+				onFocus={(e) => e.currentTarget.select()}
 				onChange={(e) => setDraft(e.target.value)}
 				onBlur={commit}
 				onKeyDown={(e) => {
@@ -235,39 +234,20 @@ function ProjectNameField({
 						setEditing(false);
 					}
 				}}
-				style={{
-					height: 30,
-					minWidth: 160,
-					padding: "0 10px",
-					borderRadius: 9,
-					border: "1px solid var(--accent)",
-					background: "var(--surface)",
-					color: "var(--fg)",
-					font: "500 13px var(--font-display)",
-					outline: "none",
-				}}
 			/>
 		);
 	}
 
 	return (
-		<span className={styles.ghostBtn}>
-			<button
-				type="button"
-				title={t("topbar.renameProject")}
-				aria-label={t("topbar.renameProject")}
-				disabled={!title}
-				onClick={() => setEditing(true)}
-				style={{
-					all: "unset",
-					cursor: title ? "pointer" : "default",
-					color: "inherit",
-					font: "inherit",
-				}}
-			>
-				{title ?? t("topbar.noProject")}
-			</button>
-		</span>
+		<button
+			type="button"
+			className={styles.ghostBtn}
+			aria-label={t("topbar.renameProject")}
+			disabled={!title}
+			onClick={startEditing}
+		>
+			{title ?? t("topbar.noProject")}
+		</button>
 	);
 }
 

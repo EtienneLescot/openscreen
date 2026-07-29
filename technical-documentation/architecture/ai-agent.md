@@ -4,9 +4,9 @@ The optional AI editing layer lives in `electron/ai-edition/` and `src/component
 
 ## What it is and what gates it
 
-`AI_FEATURES_ENABLED` in `src/components/video-editor/featureFlags.ts` gates the provider settings, chat panel, suggestions, and checkpoint-restore UI. Its current default is `true`, so the AI surface is enabled unless the source constant is changed.
+The AI surface is always mounted. Without an API key configured the chat panel is a "no provider connected" welcome view, so the practical effect matches the old `AI_FEATURES_ENABLED = false` path: nothing agentic runs. (The chat rail entry itself stays — opening it shows the welcome view.) Configuring a provider (or signing in via OAuth) re-enables everything.
 
-The boundary is intentionally narrow: the flag gates only the LLM and agent UI. The editing model, project panel, timeline, transcript and export surfaces ship to every user. Local Whisper transcription is privacy-preserving and is not behind this flag.
+The boundary is intentionally narrow: only the LLM and agent UI are gated. The editing model, project panel, timeline, transcript and export surfaces ship to every user. Local Whisper transcription is privacy-preserving and is not gated.
 
 ## The tool loop
 

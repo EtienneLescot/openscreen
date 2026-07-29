@@ -10,8 +10,8 @@
 import type { PointerEvent as ReactPointerEvent } from "react";
 import { useCallback, useRef } from "react";
 import { getZoomScale, type ZoomFocus } from "@/components/video-editor/types";
-import { getFocusBoundsForScale } from "@/components/video-editor/videoPlayback/focusUtils";
 import type { AxcutZoomRegion } from "@/lib/ai-edition/schema";
+import { getFocusBoundsForScale } from "@/lib/zoomMath/focusUtils";
 import { clamp01 } from "@/utils/math";
 import styles from "./ZoomFocusOverlay.module.css";
 

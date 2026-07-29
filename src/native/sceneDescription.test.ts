@@ -11,13 +11,13 @@ import {
 	getZoomScale,
 	ZOOM_DEPTH_SCALES,
 } from "@/components/video-editor/types";
-import { getFocusBoundsForScale } from "@/components/video-editor/videoPlayback/focusUtils";
 import type {
 	AxcutAsset,
 	AxcutClip,
 	AxcutDocument,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
+import { getFocusBoundsForScale } from "@/lib/zoomMath/focusUtils";
 import { buildSceneDescription } from "./sceneDescription";
 
 // --- Fixture helpers --------------------------------------------------------
@@ -1519,5 +1519,19 @@ describe("buildSceneDescription.captions", () => {
 		const scene = buildSceneDescription(docWithCaptions(true));
 		// 48px authored against a 1080-high frame.
 		expect(scene.annotations[0].text?.fontSizeRel).toBeCloseTo(48 / 1080, 6);
+	});
+
+	// Issue #178 — captions rendered as text without the background plate, because the JS
+	// bridge ships `rgba(...)` (CSS string from `captionBackgroundCss`) and the native side's
+	// colour parser only understood hex. The plate disappeared, the user saw floating white
+	// text, and reported "no captions in the export". This test pins the JS contract so a
+	// future rewrite of either side can't silently drop the alpha again.
+	it("ships the caption background as a parseable CSS colour, not a hex", () => {
+		const scene = buildSceneDescription(docWithCaptions(true));
+		const text = scene.annotations[0].text;
+		expect(text?.backgroundColor).toBe("rgba(0, 0, 0, 0.55)");
+		// The text colour is independently chosen via ColorField (hex); the background is the
+		// only piece that goes through the opacity-combining path.
+		expect(text?.color).toBe("#ffffff");
 	});
 });

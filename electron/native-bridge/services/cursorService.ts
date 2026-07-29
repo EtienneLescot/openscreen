@@ -3,12 +3,12 @@ import type {
 	CursorRecordingData,
 	CursorTelemetryPoint,
 } from "../../../src/native/contracts";
-import type { CursorNativeAdapter } from "../cursor/adapter";
-import type { NativeBridgeStateStore } from "../store";
+import type { TelemetryCursorAdapter } from "../cursor/telemetryCursorAdapter";
+import type { NativeBridgeState } from "../store";
 
 interface CursorServiceOptions {
-	store: NativeBridgeStateStore;
-	adapter: CursorNativeAdapter;
+	store: NativeBridgeState;
+	adapter: TelemetryCursorAdapter;
 }
 
 export class CursorService {

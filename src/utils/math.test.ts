@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { clampFocusToDepth } from "@/components/video-editor/types";
+import { clampFocus } from "@/components/video-editor/types";
 import { getNormalizedBlurIntensity, getNormalizedMosaicBlockSize } from "@/lib/blurEffects";
 import { clamp, clamp01 } from "./math";
 
@@ -30,7 +30,7 @@ describe("callers that depend on the guard", () => {
 	});
 
 	it("an unknown zoom focus recentres rather than jumping to the corner", () => {
-		expect(clampFocusToDepth({ cx: Number.NaN, cy: Number.NaN }, 2)).toEqual({ cx: 0.5, cy: 0.5 });
-		expect(clampFocusToDepth({ cx: 2, cy: -1 }, 2)).toEqual({ cx: 1, cy: 0 });
+		expect(clampFocus({ cx: Number.NaN, cy: Number.NaN })).toEqual({ cx: 0.5, cy: 0.5 });
+		expect(clampFocus({ cx: 2, cy: -1 })).toEqual({ cx: 1, cy: 0 });
 	});
 });

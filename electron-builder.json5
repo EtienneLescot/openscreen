@@ -126,9 +126,9 @@
         // vendors two artifacts into this directory: the shared av*.dll set,
         // which the D3D11 compositor addon dlopens at require() time and
         // therefore MUST ship, and a standalone static ffmpeg.exe that nothing
-        // in the app spawns — it exists for scripts/bench-export.mjs. Shipping
-        // it added a large binary to every Windows installer, plus an LGPL
-        // redistribution obligation, for a file no shipped code opens.
+        // in the app spawns. Shipping it added a large binary to every Windows
+        // installer, plus an LGPL redistribution obligation, for a file no
+        // shipped code opens.
         "filter": ["win32-*/*", "!win32-*/ffmpeg.exe"]
       }
     ],
