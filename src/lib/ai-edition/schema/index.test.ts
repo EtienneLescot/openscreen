@@ -590,10 +590,13 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("9:16");
 	});
 
-	it("falls back to 16:9 when the timeline has no clips with known dimensions", () => {
+	it("leaves 'native' alone when the timeline has no clips with known dimensions", () => {
+		// Deliberately NOT a 16:9 fallback: an empty/unprobed timeline gives no basis
+		// for a concrete token, and guessing one persists a wrong frame. See the v1.7
+		// import case below.
 		const doc = documentSchema.parse(makeV5Doc({ legacyEditor: { aspectRatio: "native" } }));
 		expect(doc.schemaVersion).toBe(6);
-		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("16:9");
+		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("native");
 	});
 
 	it("passes through a concrete aspectRatio unchanged", () => {
@@ -621,6 +624,90 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 		const once = documentSchema.parse(makeV5Doc({ legacyEditor: { aspectRatio: "16:9" } }));
 		const twice = documentSchema.parse(once);
 		expect(twice).toEqual(once);
+	});
+
+	it("keeps 'native' when the source dimensions are not known yet (v1.7 import)", () => {
+		// The v1.7 -> v1.8 path: `{version:2, media, editor}` carries only file paths,
+		// so `migrateProjectDataToAxcutDocument` produces assets with no `video` block.
+		// Baking here would stamp a hardcoded 16:9 and persist it — permanently
+		// reframing every portrait v1.7 project saved with "Native". Leave the
+		// sentinel; it resolves dynamically at runtime and converts on a later load,
+		// once useTimeline's probe has written `asset.video` back.
+		const doc = documentSchema.parse({
+			schemaVersion: 5,
+			project: {
+				id: "p1",
+				title: "from v1.7",
+				createdAt: "2024-01-01T00:00:00.000Z",
+				updatedAt: "2024-01-01T00:00:00.000Z",
+			},
+			assets: [
+				{
+					id: "asset_u",
+					kind: "video",
+					label: "A",
+					originalPath: "/a.mp4",
+					cameraTrack: null,
+					// no `video` — exactly what the v2 import produces
+				},
+			],
+			timeline: {
+				clips: [
+					{
+						id: "clip_a",
+						assetId: "asset_u",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 0,
+						timelineEndSec: 10,
+						origin: "user",
+					},
+				],
+			},
+			legacyEditor: { aspectRatio: "native" },
+		});
+		expect(doc.schemaVersion).toBe(6);
+		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("native");
+	});
+
+	it("converts 'native' once the probe has persisted dimensions", () => {
+		// Second load of the same project, after useTimeline probed a PORTRAIT source.
+		// This is the case that must not become 16:9.
+		const doc = documentSchema.parse({
+			schemaVersion: 5,
+			project: {
+				id: "p1",
+				title: "from v1.7, probed",
+				createdAt: "2024-01-01T00:00:00.000Z",
+				updatedAt: "2024-01-01T00:00:00.000Z",
+			},
+			assets: [
+				{
+					id: "asset_u",
+					kind: "video",
+					label: "A",
+					originalPath: "/a.mp4",
+					cameraTrack: null,
+					video: { width: 1080, height: 1920 },
+				},
+			],
+			timeline: {
+				clips: [
+					{
+						id: "clip_a",
+						assetId: "asset_u",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 0,
+						timelineEndSec: 10,
+						origin: "user",
+					},
+				],
+			},
+			legacyEditor: { aspectRatio: "native" },
+		});
+		expect(doc.schemaVersion).toBe(6);
+		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("9:16");
 	});
 
 	it("bakes the CROPPED dimensions, not the raw ones", () => {
