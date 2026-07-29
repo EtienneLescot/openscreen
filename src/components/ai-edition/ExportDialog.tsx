@@ -183,10 +183,9 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 	// so the sizes shown match what the export produces. Read through `getEditorSettings` — the
 	// same typed façade the ratio dropdown writes through and `buildSceneDescription` reads — so
 	// this dialog can't drift from the compositor if the storage ever moves. `resolveAspectRatioValue`
-	// is the single funnel preview and export agree on; the v5→v6 upgrader retires the legacy
-	// "native" AspectRatio so no document-context argument is needed here.
+	// owns the legacy "native" case (uncropped reference asset), previously hand-rolled here.
 	const EXPORT_ASPECT = useMemo(
-		() => resolveAspectRatioValue(getEditorSettings(document).aspectRatio),
+		() => resolveAspectRatioValue(document, getEditorSettings(document).aspectRatio),
 		[document],
 	);
 	// Output dimensions the export will produce for a given tier, from the (crop-aware)
