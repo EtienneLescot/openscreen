@@ -250,17 +250,29 @@ fragment float4 ps_main(VSOut i [[stage_in]],
     // mode 12 : ombre du quad projeté. Pénombre douce autour du quad tilté.
     if (layer.mode > 11.5)
     {
-        float spread = layer.fx.x;
-        float2 halfsz = layer.quad_px * 0.5 - spread;
-        float2 p = i.local - layer.quad_px * 0.5;
-        float d = sd_convex_quad(p,
-                                  layer.fx.xy,
-                                  layer.fx.zw,
-                                  layer.src_prev.xy,
-                                  layer.src_prev.zw) + spread;
-        // `smoothstep(0, spread, d)` comme le HLSL. Le port faisait une rampe LINÉAIRE sur
-        // `(d - spread)`, ce qui décale la pénombre d'un `spread` entier et lui donne une
-        // arête là où elle doit s'éteindre en douceur.
+        // Le port lisait `spread` dans `fx.x`, recentrait `i.local` sur `quad_px * 0.5`, et
+        // remplaçait l'inset de rayon par un simple `+ spread`. Trois écarts : `fx` porte les
+        // COINS (pas le spread, qui vit dans `mb.y`), `i.local` est déjà dans le repère de la
+        // bbox, et sans l'inset l'ombre n'a aucun coin arrondi. Signature du dernier :
+        // `line_cross` était défini et jamais appelé nulle part dans le fichier.
+        float2 quad[5] = { layer.fx.xy, layer.fx.zw, layer.src_prev.xy, layer.src_prev.zw, layer.fx.xy };
+        // Coins arrondis du même rayon que le plan. Une ombre à coins vifs derrière un écran
+        // arrondi dépasse en pointe à chaque coin, d'autant plus que le rayon monte.
+        float r = max(layer.radius_px, 0.0);
+        float2 v[4];
+        for (int k = 0; k < 4; k++)
+        {
+            // TL→TR→BR→BL tourne dans le sens horaire en y-bas, donc (e.y, -e.x) sort du quad.
+            // Division par la longueur plutôt que `normalize` : une arête dégénérée donnerait
+            // un NaN qui effacerait l'ombre entière.
+            float2 ep = quad[k] - quad[(k + 3) & 3];
+            float2 ec = quad[k + 1] - quad[k];
+            float2 np = float2(ep.y, -ep.x) / max(length(ep), 1e-6);
+            float2 nc = float2(ec.y, -ec.x) / max(length(ec), 1e-6);
+            v[k] = line_cross(np, dot(quad[(k + 3) & 3], np) - r, nc, dot(quad[k], nc) - r);
+        }
+        float d = sd_convex_quad(i.local, v[0], v[1], v[2], v[3]) - r;
+        float spread = max(layer.mb.y, 1e-3);
         float a = layer.color.a * (1.0 - smoothstep(0.0, spread, d));
         return float4(layer.color.rgb * a, a);
     }
@@ -268,24 +280,48 @@ fragment float4 ps_main(VSOut i [[stage_in]],
     // mode 8 : écran tilté (zoom regions "rotation"). Warp bilinéaire inverse.
     if (layer.mode > 7.5 && layer.mode < 8.5)
     {
-        if (i.pout.x < layer.dst_prev.x || i.pout.x > layer.dst_prev.x + layer.dst_prev.z ||
-            i.pout.y < layer.dst_prev.y || i.pout.y > layer.dst_prev.y + layer.dst_prev.w)
-        {
-            return float4(0.0, 0.0, 0.0, 0.0);
-        }
+        // PAS de test de clip sur `dst_prev` ici — le port en avait copié un depuis le
+        // mode 13. En mode 8 `dst_prev.xy` porte `plane_px`, la taille du plan en PIXELS
+        // (~1600), comparée à `i.pout` qui vit dans [0,1] : la condition était vraie pour
+        // tout pixel et la branche rendait du transparent partout. Le tilt ne dessinait rien.
         float3 r = quad_inverse_bilinear(i.local, layer.fx.xy, layer.fx.zw,
                                           layer.src_prev.xy, layer.src_prev.zw);
         if (r.z < 0.5)
         {
-            return float4(0.0, 0.0, 0.0, 0.0);
+            return float4(0.0, 0.0, 0.0, 0.0); // hors du quad projeté
         }
-        float3 rgb = sample_yuv(clamp(float2(r.x, r.y), 0.0, 1.0), texY, texUV);
-        return float4(rgb * layer.color.a, layer.color.a);
+        // La coupe source s'applique ICI : `r` est une position DANS le plan (0..1), pas
+        // une coordonnée de texture. Le port échantillonnait `r` directement, ignorant le
+        // crop et le zoom.
+        float2 uv = float2(mix(layer.src.x, layer.src.z, clamp(r.x, 0.0, 1.0)),
+                           mix(layer.src.y, layer.src.w, clamp(r.y, 0.0, 1.0)));
+        // Coins arrondis DANS LE REPÈRE DU PLAN : le rayon reste constant le long du bord,
+        // là où un arrondi calculé dans la bbox s'étirerait avec la perspective.
+        // Inconditionnel, rayon 0 compris — `sd_round_rect` dégénère en SDF de rectangle et
+        // le feather de 1,5 px subsiste, ce qui fait lire une arête inclinée COMME une arête
+        // plutôt que comme une troncature en marches d'escalier.
+        float2 plane_px = layer.dst_prev.xy;
+        float2 p = float2(r.x, r.y) * plane_px - plane_px * 0.5;
+        float d = sd_round_rect(p, plane_px * 0.5, max(layer.radius_px, 0.0));
+        float tilt_a = 1.0 - smoothstep(0.0, 1.5, d);
+        // L'alpha est cette couverture, pas `color.a` : les draws du mode 8 laissent `color`
+        // à zéro, donc le port rendait de toute façon un plan totalement transparent.
+        return float4(sample_yuv(uv, texY, texUV) * tilt_a, tilt_a);
     }
 
-    // mode 7 : sprite de curseur en alpha DROIT (multiplication finale).
+    // mode 7 : sprite curseur thème (PNG alpha droite). Prémultiplie ici, comme partout
+    // ailleurs. `fx` = rect de clip « Clip to canvas » en espace sortie 0..1 [x,y,w,h]
+    // (= s_dst quand actif, sinon un rect englobant tout, donc sans effet).
+    //
+    // Le port avait omis ce test : `plan_cursor` calcule bien le rect et le draw le passe
+    // dans `fx`, mais le shader l'ignorait — `cursor.clipToBounds` était inerte sur macOS.
     if (layer.mode > 6.5 && layer.mode < 7.5)
     {
+        if (i.pout.x < layer.fx.x || i.pout.x > layer.fx.x + layer.fx.z ||
+            i.pout.y < layer.fx.y || i.pout.y > layer.fx.y + layer.fx.w)
+        {
+            return float4(0.0, 0.0, 0.0, 0.0);
+        }
         float4 s = texImg.sample(samp, i.uv);
         float a = s.a * layer.color.a;
         return float4(s.rgb * a, a);
