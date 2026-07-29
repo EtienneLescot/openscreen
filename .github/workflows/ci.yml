@@ -47,7 +47,7 @@ jobs:
       - name: Typecheck tests against a baseline
         shell: bash
         env:
-          BASELINE: 74
+          BASELINE: 71
         run: |
           set -uo pipefail
           COUNT=$(npx tsc -p tsconfig.test.json --noEmit 2>&1 | grep -c 'error TS' || true)
