@@ -4,6 +4,7 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { CURSOR_THEMES, DEFAULT_CURSOR_SPRITES } from "../../../src/lib/cursor/cursorThemes";
 import {
+	buildCandidatePaths,
 	CompositorViewService,
 	ffmpegSharedBinCandidates,
 	resolveSceneAssetPaths,
@@ -97,6 +98,75 @@ describe("ffmpegSharedBinCandidates", () => {
 		} finally {
 			Object.defineProperty(process, "resourcesPath", { value: original, configurable: true });
 		}
+	});
+});
+
+describe("buildCandidatePaths", () => {
+	let tmpRoot: string;
+
+	beforeEach(() => {
+		tmpRoot = fs.mkdtempSync(path.join(os.tmpdir(), "openscreen-addon-path-test-"));
+	});
+
+	afterEach(() => {
+		fs.rmSync(tmpRoot, { recursive: true, force: true });
+	});
+
+	const norm = (p: string) => p.replace(/\\/g, "/");
+
+	it("finds the addon from dist-electron, which is what app.getAppPath() returns unpackaged", () => {
+		// The regression this exists for: `electron dist-electron/main.js` — the entry
+		// `npm run dev` uses — makes app.getAppPath() the dist-electron DIRECTORY, not
+		// the checkout root. Every candidate was built by joining "electron/native/..."
+		// onto it, so none of them existed and the editor ran with a no-op compositor
+		// on a machine that had a perfectly good addon one level up.
+		fs.mkdirSync(path.join(tmpRoot, "electron", "native", "bin"), { recursive: true });
+		const appRoot = path.join(tmpRoot, "dist-electron");
+		fs.mkdirSync(appRoot, { recursive: true });
+
+		const candidates = buildCandidatePaths(appRoot, false, null).map(norm);
+
+		expect(
+			candidates.some((c) => c.startsWith(norm(tmpRoot)) && !c.includes("dist-electron")),
+		).toBe(true);
+	});
+
+	it("stops walking up when no ancestor holds electron/native", () => {
+		const appRoot = path.join(tmpRoot, "nothing", "here");
+		fs.mkdirSync(appRoot, { recursive: true });
+
+		const candidates = buildCandidatePaths(appRoot, false, null).map(norm);
+
+		expect(candidates.every((c) => c.startsWith(norm(appRoot)) || c.includes("resources"))).toBe(
+			true,
+		);
+	});
+
+	it("also probes process.resourcesPath, where extraResources actually puts the addon", () => {
+		// electron-builder ships electron/native/bin/<tag>/** through extraResources,
+		// so in a packaged build the addon is at <resources>/electron/native/bin/<tag>
+		// and NEVER inside app.asar — the .asar → .asar.unpacked rewrite cannot reach a
+		// file that was never in the archive.
+		const original = process.resourcesPath;
+		Object.defineProperty(process, "resourcesPath", {
+			value: "/fake/resources",
+			configurable: true,
+		});
+		try {
+			const candidates = buildCandidatePaths("/fake/resources/app.asar", true, null).map(norm);
+			expect(
+				candidates.some(
+					(c) => c.startsWith("/fake/resources/electron/native/bin/") && c.endsWith(".node"),
+				),
+			).toBe(true);
+		} finally {
+			Object.defineProperty(process, "resourcesPath", { value: original, configurable: true });
+		}
+	});
+
+	it("keeps the env override first", () => {
+		const candidates = buildCandidatePaths(tmpRoot, false, "/explicit/compositor_view.node");
+		expect(norm(candidates[0]!)).toBe("/explicit/compositor_view.node");
 	});
 });
 
