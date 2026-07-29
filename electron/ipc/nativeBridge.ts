@@ -79,18 +79,6 @@ export interface NativeBridgeContext {
 		projectId: string,
 		sessionId: string,
 	) => Promise<import("../../src/native/contracts").AiEditionChatCompactResult | null>;
-	runTimelineOperation: (
-		projectId: string,
-		sessionId: string,
-		op: import("../../src/native/contracts").AxcutTimelineOperation,
-		conversationMessage: string,
-	) => Promise<
-		| {
-				success: true;
-				result: import("../../src/native/contracts").AppliedTimelineOperation;
-		  }
-		| { success: false; error: string }
-	>;
 	getContextUsage: (
 		projectId: string,
 		sessionId: string,
@@ -201,6 +189,7 @@ function buildChatEventSink(sender: Electron.WebContents, sessionId: string): Ch
 	};
 	return {
 		text: (delta) => send({ kind: "text", sessionId, delta }),
+		thinking: (delta) => send({ kind: "thinking", sessionId, delta }),
 		toolStart: (name, args) => send({ kind: "toolStart", sessionId, name, args }),
 		toolEnd: (name, ok, summary) => send({ kind: "toolEnd", sessionId, name, ok, summary }),
 		error: (message) => send({ kind: "error", sessionId, message }),
@@ -247,7 +236,6 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 		undoLastToolBatch: context.undoAiEditionToolBatch,
 		rewindToMessage: context.rewindToMessage,
 		compactNow: context.compactNow,
-		runTimelineOperation: context.runTimelineOperation,
 		getContextUsage: context.getContextUsage,
 		getDefaultChatHistory: context.getAiEditionChatHistoryDefault,
 		clearDefaultChatHistory: context.clearAiEditionChatHistoryDefault,
@@ -643,16 +631,6 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 									targetLanguage: request.payload.targetLanguage,
 									sourceLanguage: request.payload.sourceLanguage,
 								}),
-							);
-						case "timeline.run":
-							return createSuccessResponse(
-								requestId,
-								await aiEditionService.chatRunTimelineOperation(
-									request.payload.projectId,
-									request.payload.sessionId,
-									request.payload.operation,
-									request.payload.conversationMessage,
-								),
 							);
 						default:
 							return createErrorResponse(

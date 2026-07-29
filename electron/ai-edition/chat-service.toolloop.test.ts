@@ -244,7 +244,9 @@ describe("runChat tool loop", () => {
 		invokeMock.mockImplementationOnce(async (args) => {
 			events.push({ kind: "captured", payload: args.userMessage });
 			args.sink.text("Hi ");
+			args.sink.thinking("pondering. ");
 			args.sink.text("there.");
+			args.sink.thinking("concluding.");
 			args.sink.toolStart("addTrim", { startSec: 1, endSec: 2 });
 			args.sink.toolEnd("addTrim", true, "added trim 0:01.0 – 0:02.0");
 			return { text: "Done.", document: args.document, mutated: true };
@@ -252,6 +254,7 @@ describe("runChat tool loop", () => {
 
 		const sink = {
 			text: (delta: string) => fixture.events.push({ kind: "text", payload: delta }),
+			thinking: (delta: string) => fixture.events.push({ kind: "thinking", payload: delta }),
 			toolStart: (name: string, args: unknown) =>
 				fixture.events.push({ kind: "toolStart", payload: { name, args } }),
 			toolEnd: (name: string, ok: boolean, summary?: string) =>
@@ -262,12 +265,22 @@ describe("runChat tool loop", () => {
 		const s = createSession("proj_sink");
 		const result = await runChat("proj_sink", s.id, "cut", stubConfig(), fixtureDocument(), sink);
 		expect(result.success).toBe(true);
-		expect(fixture.events.map((e) => e.kind)).toEqual(["text", "text", "toolStart", "toolEnd"]);
-		expect((fixture.events[0].payload as string) + (fixture.events[1].payload as string)).toBe(
+		expect(fixture.events.map((e) => e.kind)).toEqual([
+			"text",
+			"thinking",
+			"text",
+			"thinking",
+			"toolStart",
+			"toolEnd",
+		]);
+		expect((fixture.events[0].payload as string) + (fixture.events[2].payload as string)).toBe(
 			"Hi there.",
 		);
-		expect(fixture.events[2].payload).toMatchObject({ name: "addTrim" });
-		expect(fixture.events[3].payload).toMatchObject({
+		expect((fixture.events[1].payload as string) + (fixture.events[3].payload as string)).toBe(
+			"pondering. concluding.",
+		);
+		expect(fixture.events[4].payload).toMatchObject({ name: "addTrim" });
+		expect(fixture.events[5].payload).toMatchObject({
 			name: "addTrim",
 			ok: true,
 			summary: expect.stringMatching(/added trim/),
@@ -284,6 +297,7 @@ describe("runChat tool loop", () => {
 		});
 		const sinkErr = {
 			text: (delta: string) => fixture.events.push({ kind: "text", payload: delta }),
+			thinking: (delta: string) => fixture.events.push({ kind: "thinking", payload: delta }),
 			toolStart: (name: string, args: unknown) =>
 				fixture.events.push({ kind: "toolStart", payload: { name, args } }),
 			toolEnd: (name: string, ok: boolean, summary?: string) =>

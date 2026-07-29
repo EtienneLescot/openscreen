@@ -280,17 +280,6 @@ export interface AiEditionChatBudget {
 	fillPercent: number;
 }
 
-// re-export of the timeline-operation discriminated union so the
-// IPC contract type and the renderer share one shape. Kept here (not in
-// src/lib/ai-edition/document/operations) so the IPC type bundle stays
-// self-contained.
-import type {
-	AppliedTimelineOperation,
-	AxcutTimelineOperation,
-} from "../lib/ai-edition/document/operations";
-
-export type { AppliedTimelineOperation, AxcutTimelineOperation };
-
 export interface AiEditionChatCompactResult {
 	session: AiEditionChatSession;
 	summaryMessageId: string | null;
@@ -636,17 +625,6 @@ export type NativeBridgeRequest =
 			requestId?: string;
 	  }
 	| {
-			domain: "aiEdition";
-			action: "timeline.run";
-			payload: {
-				projectId: string;
-				sessionId: string;
-				operation: AxcutTimelineOperation;
-				conversationMessage: string;
-			};
-			requestId?: string;
-	  }
-	| {
 			domain: "compositor";
 			action: "createView";
 			/** F3: optional real-recording sources (screen + webcam, two separate H264 files) +
@@ -751,6 +729,7 @@ export type NativeBridgeEventName =
 // inline so the chat doesn't appear to "echo back my question".
 export type AiEditionChatEvent =
 	| { kind: "text"; sessionId: string; delta: string }
+	| { kind: "thinking"; sessionId: string; delta: string }
 	| { kind: "toolStart"; sessionId: string; name: string; args: unknown }
 	| { kind: "toolEnd"; sessionId: string; name: string; ok: boolean; summary?: string }
 	| { kind: "error"; sessionId: string; message: string };
