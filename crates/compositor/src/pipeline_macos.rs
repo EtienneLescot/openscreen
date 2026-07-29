@@ -29,6 +29,10 @@
 //! produit du H.264/H.265 avec accélération matérielle — c'est la même chose que les
 //! décodeurs, symétrique.
 
+use crate::audio::{
+    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio,
+    stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
+};
 use crate::compositor::Compositor;
 use crate::d3d::Gpu;
 use anyhow::{anyhow, bail, Result};
@@ -793,11 +797,22 @@ pub fn run_composited_multi(
             "avio_open",
         )?;
         crate::ffi::sn_fmt_set_pb(octx, pb);
+    }
+    // L'encodeur AAC doit exister AVANT l'en-tête : le muxer y écrit la table des flux, et
+    // un flux ajouté après coup n'y figure pas. Tout ce qu'il consomme (`audio.rs` :
+    // décodage, WSOLA, mix, plan de concaténation) était déjà portable — c'est le muxing
+    // qui manquait, pas la machinerie.
+    let mut audio_encoder = unsafe { AacEncoder::open(octx)? };
+    unsafe {
         crate::ffi::averr(
             crate::ffi::avformat_write_header(octx, ptr::null_mut()),
             "write_header",
         )?;
     }
+    // Un PCM par clip, assemblé après la marche vidéo : c'est elle qui dit combien de
+    // frames chaque clip a réellement produit, donc combien d'audio lui revient.
+    let mut clip_pcm: Vec<Option<PlanarPcm>> = (0..clips.len()).map(|_| None).collect();
+    let mut clip_frame_counts: Vec<u64> = vec![0; clips.len()];
 
     let mut opkt = unsafe { crate::ffi::av_packet_alloc() };
 
@@ -824,7 +839,28 @@ pub fn run_composited_multi(
                 progress(n + 1);
                 Ok(())
             },
-            &mut |_, _, _, _| Ok(()),
+            &mut |clip_index, source_end_sec, frames_in_clip, speed_segments| {
+                clip_frame_counts[clip_index] = frames_in_clip;
+                let clip = &clips[clip_index];
+                if clip.has_audio && frames_in_clip > 0 {
+                    match decode_clip_audio(&clip.screen, clip.source_start_sec, source_end_sec) {
+                        Ok(Some(pcm)) => {
+                            clip_pcm[clip_index] = Some(stretch_clip_pcm_by_speed(
+                                &pcm,
+                                speed_segments,
+                                out_fps as f64,
+                            ));
+                        }
+                        Ok(None) => eprintln!(
+                            "[pipeline] warning: clip #{clip_index} déclaré audio mais sans flux décodable; silence conservé",
+                        ),
+                        Err(error) => eprintln!(
+                            "[pipeline] warning: décodage audio du clip #{clip_index} échoué ({error:#}); silence conservé",
+                        ),
+                    }
+                }
+                Ok(())
+            },
         )?
     };
 
@@ -835,6 +871,14 @@ pub fn run_composited_multi(
             "send_frame_flush",
         )?;
         drain_encoder(ectx, octx, ostream, opkt)?;
+
+        // Le plan part des frames RÉELLEMENT produites par clip, pas des durées demandées :
+        // un clip raccourci (source plus courte que sa borne) doit voir son audio raccourci
+        // d'autant, sinon la piste dérive pour tous les suivants.
+        let declared_audio: Vec<bool> = clips.iter().map(|clip| clip.has_audio).collect();
+        let plan = build_audio_concat_plan(&clip_frame_counts, &declared_audio, out_fps as f64);
+        audio_encoder.encode(&assemble_concatenated_pcm(&clip_pcm, &plan), octx)?;
+
         crate::ffi::averr(
             crate::ffi::av_write_trailer(octx),
             "write_trailer",
