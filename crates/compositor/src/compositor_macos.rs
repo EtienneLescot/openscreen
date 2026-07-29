@@ -820,6 +820,107 @@ impl Compositor {
         Ok(())
     }
 
+
+    /// Ombre d'un écran incliné en 3D : la pénombre suit le QUADRILATÈRE projeté (mode 12),
+    /// pas son rect englobant. Port de `compositor_windows::draw_quad_shadow`.
+    #[allow(clippy::too_many_arguments)]
+    unsafe fn draw_quad_shadow(
+        &self,
+        enc: &metal::RenderCommandEncoderRef,
+        corners: &[(f32, f32); 4],
+        center_px: [f32; 2],
+        radius: f32,
+        spread: f32,
+        offset_px: [f32; 2],
+        opacity: f32,
+    ) {
+        let (rw, rh) = (self.render_w as f32, self.render_h as f32);
+        let (min_x, max_x) =
+            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| (mn.min(x), mx.max(x)));
+        let (min_y, max_y) =
+            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| (mn.min(y), mx.max(y)));
+        // La boîte doit contenir la pénombre entière, sinon elle se coupe net.
+        let box_w = (max_x - min_x) + 2.0 * spread;
+        let box_h = (max_y - min_y) + 2.0 * spread;
+        let local = |(x, y): (f32, f32)| -> [f32; 2] { [x - min_x + spread, y - min_y + spread] };
+        let [tl0, tl1] = local(corners[0]);
+        let [tr0, tr1] = local(corners[1]);
+        let [br0, br1] = local(corners[2]);
+        let [bl0, bl1] = local(corners[3]);
+        self.draw_solid(
+            enc,
+            &LayerCB {
+                dst: [
+                    (center_px[0] + min_x - spread + offset_px[0]) / rw,
+                    (center_px[1] + min_y - spread + offset_px[1]) / rh,
+                    box_w / rw,
+                    box_h / rh,
+                ],
+                quad_px: [box_w, box_h],
+                radius_px: radius,
+                mode: 12.0,
+                color: [0.0, 0.0, 0.0, opacity],
+                fx: [tl0, tl1, tr0, tr1],
+                src_prev: [br0, br1, bl0, bl1],
+                mb: [0.0, spread, 1.0, 0.0],
+                ..Default::default()
+            },
+        );
+    }
+
+    /// Écran incliné (mode 8) : warp bilinéaire inverse dans la bbox du quad projeté.
+    /// Pas de motion blur sur ce chemin — le tilt est bref, la simplification ne se voit pas.
+    unsafe fn draw_tilted_screen(
+        &self,
+        enc: &metal::RenderCommandEncoderRef,
+        quad: &crate::regions::TiltedQuad,
+        s_px: [f32; 2],
+        center_px: [f32; 2],
+        cut: [f32; 4],
+        radius: f32,
+        y: &metal::Texture,
+        uv: &metal::Texture,
+    ) {
+        let (rw, rh) = (self.render_w as f32, self.render_h as f32);
+        let corners = quad.corners;
+        // Taille du plan dans son propre repère, avant projection : c'est là que vit le rayon,
+        // pour qu'il reste constant le long du bord au lieu de s'étirer avec la perspective.
+        let plane_px = [s_px[0] * quad.scale, s_px[1] * quad.scale];
+        let (min_x, max_x) =
+            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| (mn.min(x), mx.max(x)));
+        let (min_y, max_y) =
+            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| (mn.min(y), mx.max(y)));
+        let bbox_w = (max_x - min_x).max(1.0);
+        let bbox_h = (max_y - min_y).max(1.0);
+        // coins en px LOCAUX à la bbox, pour matcher `i.local` du shader.
+        let local = |(x, y): (f32, f32)| -> [f32; 2] { [x - min_x, y - min_y] };
+        let [tl0, tl1] = local(corners[0]);
+        let [tr0, tr1] = local(corners[1]);
+        let [br0, br1] = local(corners[2]);
+        let [bl0, bl1] = local(corners[3]);
+        self.draw_video(
+            enc,
+            &LayerCB {
+                dst: [
+                    (center_px[0] + min_x) / rw,
+                    (center_px[1] + min_y) / rh,
+                    bbox_w / rw,
+                    bbox_h / rh,
+                ],
+                src: cut,
+                quad_px: [bbox_w, bbox_h],
+                radius_px: radius * quad.scale,
+                mode: 8.0,
+                fx: [tl0, tl1, tr0, tr1],
+                src_prev: [br0, br1, bl0, bl1],
+                dst_prev: [plane_px[0], plane_px[1], 0.0, 0.0],
+                ..Default::default()
+            },
+            y,
+            uv,
+        );
+    }
+
     /// Ouvre un encodeur sur `target`. `clear` = `None` conserve ce qui s'y trouve.
     ///
     /// Metal n'a pas d'`OMSetRenderTargets` : changer de cible veut dire terminer
@@ -874,21 +975,55 @@ impl Compositor {
         let (rw, rh) = (self.render_w as f32, self.render_h as f32);
         let ar = iw as f32 / ih.max(1) as f32;
         let (pw, ph) = if ar >= 1.0 { (size_px, size_px / ar) } else { (size_px * ar, size_px) };
-        // Le plan incliné (mode 13) arrive avec le tilt ; en attendant, un curseur posé sur
-        // le centre droit du plan vaut mieux qu'aucun curseur.
-        let center = placement.upright_center();
-        let cb = LayerCB {
-            dst: crate::frame_geometry::cursor_sprite_dst(
-                center,
-                pw / rw,
-                ph / rh,
-                [sprite.hotspot_x, sprite.hotspot_y],
-            ),
-            src: [0.0, 0.0, 1.0, 1.0],
-            mode: 7.0,
-            color: [1.0, 1.0, 1.0, a],
-            fx: clip,
-            ..Default::default()
+        let hotspot = [sprite.hotspot_x, sprite.hotspot_y];
+        let cb = match placement {
+            crate::frame_geometry::CursorPlacement::Upright { center } => LayerCB {
+                dst: crate::frame_geometry::cursor_sprite_dst(center, pw / rw, ph / rh, hotspot),
+                src: [0.0, 0.0, 1.0, 1.0],
+                mode: 7.0,
+                color: [1.0, 1.0, 1.0, a],
+                fx: clip,
+                ..Default::default()
+            },
+            crate::frame_geometry::CursorPlacement::Tilted {
+                plane_pt, quad, center_px, screen_px, ..
+            } => {
+                // Le sprite est posé DANS le plan : sa taille devient une fraction du plan et
+                // ses quatre coins traversent la même projection que la vidéo. La réduction
+                // due au tilt vient donc de la projection — rien à multiplier à la main.
+                let (wf, hf) = (pw / screen_px[0], ph / screen_px[1]);
+                let x0 = plane_pt[0] - hotspot[0] * wf;
+                let y0 = plane_pt[1] - hotspot[1] * hf;
+                let corners = [(x0, y0), (x0 + wf, y0), (x0 + wf, y0 + hf), (x0, y0 + hf)]
+                    .map(|(fx, fy)| {
+                        let (px, py) = quad.point_px(fx, fy);
+                        (center_px[0] + px, center_px[1] + py)
+                    });
+                let (min_x, max_x) = corners
+                    .iter()
+                    .fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| (mn.min(x), mx.max(x)));
+                let (min_y, max_y) = corners
+                    .iter()
+                    .fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| (mn.min(y), mx.max(y)));
+                // Le quad projeté d'un sprite peut être très fin de biais : une bbox d'un pixel
+                // de large ferait diverger le warp inverse, donc plancher à 1 px.
+                let (bw, bh) = ((max_x - min_x).max(1.0), (max_y - min_y).max(1.0));
+                let local = |(x, y): (f32, f32)| [x - min_x, y - min_y];
+                let [tl0, tl1] = local(corners[0]);
+                let [tr0, tr1] = local(corners[1]);
+                let [br0, br1] = local(corners[2]);
+                let [bl0, bl1] = local(corners[3]);
+                LayerCB {
+                    dst: [min_x / rw, min_y / rh, bw / rw, bh / rh],
+                    quad_px: [bw, bh],
+                    mode: 13.0,
+                    color: [1.0, 1.0, 1.0, a],
+                    fx: [tl0, tl1, tr0, tr1],
+                    src_prev: [br0, br1, bl0, bl1],
+                    dst_prev: clip,
+                    ..Default::default()
+                }
+            }
         };
         enc.set_fragment_texture(2, Some(&tex));
         self.draw_solid(enc, &cb);
@@ -1054,35 +1189,57 @@ impl Compositor {
 
         // --- écran : ombre puis vidéo ---
         let s_px = [g.s_dst[2] * rw, g.s_dst[3] * rh];
+        // Géométrie du tilt calculée UNE fois : l'ombre et l'écran doivent porter exactement
+        // le même quadrilatère, sinon l'ombre se décolle dès que l'un des deux change.
+        let tilt = (!crate::regions::is_identity_rotation(g.zoom_rotation))
+            .then(|| crate::regions::rotated_quad_corners_px(s_px[0], s_px[1], g.zoom_rotation));
+        let quad_center_px = [
+            (g.s_dst[0] + g.s_dst[2] * 0.5) * rw,
+            (g.s_dst[1] + g.s_dst[3] * 0.5) * rh,
+        ];
         if cfg.shadow {
-            self.draw_shadow(
-                enc,
-                g.s_dst,
-                s_px,
-                g.s_radius,
-                SCREEN_SHADOW_SPREAD_FRAC * g.frame_min_px,
-                [0.0, SCREEN_SHADOW_OFFSET_FRAC * g.frame_min_px],
-                0.45 * lp.shadow_scale,
-            );
+            let spread = SCREEN_SHADOW_SPREAD_FRAC * g.frame_min_px;
+            let offset = [0.0, SCREEN_SHADOW_OFFSET_FRAC * g.frame_min_px];
+            let opacity = 0.45 * lp.shadow_scale;
+            // L'ombre suit la silhouette réellement affichée : rect arrondi quand l'écran est
+            // droit, quadrilatère projeté quand il est penché. Un rect droit derrière un écran
+            // incliné se lit comme une seconde surface, pas comme son ombre.
+            match tilt.as_ref() {
+                None => self.draw_shadow(enc, g.s_dst, s_px, g.s_radius, spread, offset, opacity),
+                Some(quad) => self.draw_quad_shadow(
+                    enc,
+                    &quad.corners,
+                    quad_center_px,
+                    g.s_radius * quad.scale,
+                    spread,
+                    offset,
+                    opacity,
+                ),
+            }
         }
         let [su0, sv0, su1, sv1] = g.cut;
-        self.draw_video(
-            enc,
-            &LayerCB {
-                dst: g.s_dst,
-                src: [su0, sv0, su1, sv1],
-                quad_px: s_px,
-                radius_px: g.s_radius,
-                mode: 0.0,
-                color: [0.0, 0.0, 0.0, 1.0],
-                src_prev: [su0, sv0, su1, sv1],
-                dst_prev: g.s_dst_prev,
-                mb: [g.mb_taps, 1.0, 1.0, 0.0],
-                ..Default::default()
-            },
-            &sy,
-            &suv,
-        );
+        match tilt.as_ref() {
+            None => self.draw_video(
+                enc,
+                &LayerCB {
+                    dst: g.s_dst,
+                    src: [su0, sv0, su1, sv1],
+                    quad_px: s_px,
+                    radius_px: g.s_radius,
+                    mode: 0.0,
+                    color: [0.0, 0.0, 0.0, 1.0],
+                    src_prev: [su0, sv0, su1, sv1],
+                    dst_prev: g.s_dst_prev,
+                    mb: [g.mb_taps, 1.0, 1.0, 0.0],
+                    ..Default::default()
+                },
+                &sy,
+                &suv,
+            ),
+            Some(quad) => self.draw_tilted_screen(
+                enc, quad, s_px, quad_center_px, g.cut, g.s_radius, &sy, &suv,
+            ),
+        }
 
         enc.end_encoding();
 
