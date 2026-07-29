@@ -590,10 +590,21 @@ appReady?.then(async () => {
 
 	// Request mic permission now. Screen Recording is requested lazily from the
 	// source-picker action so its prompt isn't hidden behind the selector window.
+	//
+	// NOT awaited, on purpose. `askForMediaAccess` resolves only once the user
+	// answers the modal TCC prompt, and `createWindow()` is 70 lines below this in
+	// the same async block — so on a Mac where the microphone is still
+	// `not-determined` (every first run, and every fresh dev machine) the app
+	// showed a permission dialog with NO window behind it and created the HUD only
+	// after it was dismissed. Nothing between here and `createWindow()` needs the
+	// answer: the recorder re-checks the status when the user actually arms the mic.
 	if (process.platform === "darwin") {
 		const micStatus = systemPreferences.getMediaAccessStatus("microphone");
 		if (micStatus !== "granted") {
-			await systemPreferences.askForMediaAccess("microphone");
+			systemPreferences
+				.askForMediaAccess("microphone")
+				.then((granted) => console.info(`[permissions] microphone granted=${granted}`))
+				.catch((error) => console.warn("[permissions] microphone request failed:", error));
 		}
 	}
 
