@@ -247,7 +247,15 @@ pub struct Compositor {
     /// Pipeline states pour les passes fullscreen (`vs_fs` + `ps_y`/`ps_uv`/`ps_tex`).
     pipeline_fs_y: metal::RenderPipelineState,
     pipeline_fs_uv: metal::RenderPipelineState,
-    _pipeline_fs_tex: metal::RenderPipelineState,
+    /// Composite plein écran d'une texture sur le RT (`vs_fs` + `ps_tex`), en « over ».
+    /// C'est la passe qui rapatrie l'accumulation de traînée sur la scène.
+    pipeline_fs_tex: metal::RenderPipelineState,
+    /// `vs_main` + `ps_main` en additif : les échantillons de traînée du curseur.
+    pipeline_add: metal::RenderPipelineState,
+    /// Buffer d'accumulation ISOLÉ (transparent) pour la traînée. Accumuler directement sur
+    /// le RT reviendrait à AJOUTER du blanc à ce qui est déjà dessous : sur un fond clair,
+    /// le curseur disparaît. Même raisonnement que côté D3D11.
+    accum: metal::Texture,
 }
 
 /// Descripteur de texture — les six cibles ne diffèrent que par format, taille et
@@ -270,15 +278,26 @@ fn make_texture(
     device.new_texture(&desc)
 }
 
-/// Un pipeline state à une seule pièce jointe couleur. `blend` n'est activé que pour
-/// la passe principale (alpha prémultiplié), pas pour les conversions fullscreen.
+/// Comment un draw se mélange à ce qui est déjà dans la cible.
+#[derive(Clone, Copy, PartialEq)]
+enum Blend {
+    /// Opaque : la conversion NV12 et le composite fullscreen écrasent.
+    Replace,
+    /// « over » alpha prémultiplié — la passe de composition normale.
+    Over,
+    /// Additif pondéré par la couleur de blend : chaque échantillon de traînée entre pour
+    /// `1/taps`. C'est `OMSetBlendState(blend_add, [w,w,w,w])` côté D3D11.
+    Add,
+}
+
+/// Un pipeline state à une seule pièce jointe couleur.
 fn make_pipeline(
     device: &metal::Device,
     library: &metal::Library,
     vs: &str,
     fs: &str,
     format: metal::MTLPixelFormat,
-    blend: bool,
+    blend: Blend,
 ) -> Result<metal::RenderPipelineState> {
     let vs_fn = library
         .get_function(vs, None)
@@ -298,14 +317,19 @@ fn make_pipeline(
         .object_at(0)
         .ok_or_else(|| anyhow!("RenderPipelineDescriptor::color_attachments(0) est nul"))?;
     ca.set_pixel_format(format);
-    if blend {
+    if blend != Blend::Replace {
         ca.set_blending_enabled(true);
         ca.set_rgb_blend_operation(metal::MTLBlendOperation::Add);
         ca.set_alpha_blend_operation(metal::MTLBlendOperation::Add);
-        ca.set_source_rgb_blend_factor(metal::MTLBlendFactor::One);
-        ca.set_destination_rgb_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
-        ca.set_source_alpha_blend_factor(metal::MTLBlendFactor::One);
-        ca.set_destination_alpha_blend_factor(metal::MTLBlendFactor::OneMinusSourceAlpha);
+        let (src, dst) = match blend {
+            Blend::Over => (metal::MTLBlendFactor::One, metal::MTLBlendFactor::OneMinusSourceAlpha),
+            Blend::Add => (metal::MTLBlendFactor::BlendColor, metal::MTLBlendFactor::One),
+            Blend::Replace => unreachable!(),
+        };
+        ca.set_source_rgb_blend_factor(src);
+        ca.set_destination_rgb_blend_factor(dst);
+        ca.set_source_alpha_blend_factor(src);
+        ca.set_destination_alpha_blend_factor(dst);
     }
     device
         .new_render_pipeline_state(&desc)
@@ -396,7 +420,7 @@ impl Compositor {
             "vs_main",
             "ps_main",
             metal::MTLPixelFormat::RGBA8Unorm,
-            true,
+            Blend::Over,
         )?;
         let pipeline_fs_y = make_pipeline(
             device,
@@ -404,7 +428,7 @@ impl Compositor {
             "vs_fs",
             "ps_y",
             metal::MTLPixelFormat::R8Unorm,
-            false,
+            Blend::Replace,
         )?;
         let pipeline_fs_uv = make_pipeline(
             device,
@@ -412,7 +436,7 @@ impl Compositor {
             "vs_fs",
             "ps_uv",
             metal::MTLPixelFormat::RG8Unorm,
-            false,
+            Blend::Replace,
         )?;
         let pipeline_fs_tex = make_pipeline(
             device,
@@ -420,8 +444,24 @@ impl Compositor {
             "vs_fs",
             "ps_tex",
             metal::MTLPixelFormat::RGBA8Unorm,
-            false,
+            Blend::Over,
         )?;
+        let pipeline_add = make_pipeline(
+            device,
+            &library,
+            "vs_main",
+            "ps_main",
+            metal::MTLPixelFormat::RGBA8Unorm,
+            Blend::Add,
+        )?;
+        let accum = make_texture(
+            device,
+            metal::MTLPixelFormat::RGBA8Unorm,
+            rw,
+            rh,
+            metal::MTLStorageMode::Private,
+            rt_usage,
+        );
 
         Ok(Compositor {
             gpu: Gpu {
@@ -449,7 +489,9 @@ impl Compositor {
             pipeline_main,
             pipeline_fs_y,
             pipeline_fs_uv,
-            _pipeline_fs_tex: pipeline_fs_tex,
+            pipeline_fs_tex,
+            pipeline_add,
+            accum,
         })
     }
 
@@ -696,6 +738,106 @@ impl Compositor {
         Ok(())
     }
 
+
+    /// Ouvre un encodeur sur `target`. `clear` = `None` conserve ce qui s'y trouve.
+    ///
+    /// Metal n'a pas d'`OMSetRenderTargets` : changer de cible veut dire terminer
+    /// l'encodeur et en ouvrir un autre. C'est ce qui remplace la choréographie
+    /// `OMSetRenderTargets` / `OMSetBlendState` du chemin D3D11.
+    fn begin_pass<'a>(
+        &self,
+        cmd: &'a metal::CommandBufferRef,
+        target: &metal::Texture,
+        clear: Option<metal::MTLClearColor>,
+        pipeline: &metal::RenderPipelineState,
+    ) -> Result<&'a metal::RenderCommandEncoderRef> {
+        let desc = metal::RenderPassDescriptor::new();
+        let ca = desc
+            .color_attachments()
+            .object_at(0)
+            .ok_or_else(|| anyhow!("RenderPassDescriptor::color_attachments(0) est nul"))?;
+        ca.set_texture(Some(target));
+        match clear {
+            Some(c) => {
+                ca.set_load_action(metal::MTLLoadAction::Clear);
+                ca.set_clear_color(c);
+            }
+            None => ca.set_load_action(metal::MTLLoadAction::Load),
+        }
+        ca.set_store_action(metal::MTLStoreAction::Store);
+        let enc = cmd.new_render_command_encoder(&desc);
+        enc.set_render_pipeline_state(pipeline);
+        Ok(enc)
+    }
+
+    /// Sprite de curseur (mode 7). Rend `Err` quand l'art n'est pas chargeable, pour que
+    /// l'appelant retombe sur le curseur dessiné.
+    unsafe fn draw_cursor_sprite(
+        &self,
+        enc: &metal::RenderCommandEncoderRef,
+        placement: crate::frame_geometry::CursorPlacement,
+        size_px: f32,
+        a: f32,
+        sprite: &crate::scene::SceneCursorSprite,
+        clip: [f32; 4],
+    ) -> Result<()> {
+        let cached = self.img_cache.borrow().get(sprite.path.as_str()).cloned();
+        let (tex, iw, ih) = match cached {
+            Some(v) => v,
+            None => {
+                let loaded = self.load_image_texture(&sprite.path)?;
+                self.img_cache.borrow_mut().insert(sprite.path.clone(), loaded.clone());
+                loaded
+            }
+        };
+        let (rw, rh) = (self.render_w as f32, self.render_h as f32);
+        let ar = iw as f32 / ih.max(1) as f32;
+        let (pw, ph) = if ar >= 1.0 { (size_px, size_px / ar) } else { (size_px * ar, size_px) };
+        // Le plan incliné (mode 13) arrive avec le tilt ; en attendant, un curseur posé sur
+        // le centre droit du plan vaut mieux qu'aucun curseur.
+        let center = placement.upright_center();
+        let cb = LayerCB {
+            dst: crate::frame_geometry::cursor_sprite_dst(
+                center,
+                pw / rw,
+                ph / rh,
+                [sprite.hotspot_x, sprite.hotspot_y],
+            ),
+            src: [0.0, 0.0, 1.0, 1.0],
+            mode: 7.0,
+            color: [1.0, 1.0, 1.0, a],
+            fx: clip,
+            ..Default::default()
+        };
+        enc.set_fragment_texture(2, Some(&tex));
+        self.draw_solid(enc, &cb);
+        Ok(())
+    }
+
+    /// Curseur thématisé : le sprite de l'état courant, sinon la flèche, sinon rien.
+    ///
+    /// Le repli « dot + ring » mathématique (mode 4) du chemin Windows n'est pas porté :
+    /// l'app résout toujours un jeu de sprites, et l'art intégré couvre les états qu'un
+    /// thème ne fournit pas. S'il n'y a vraiment aucun sprite, ne rien dessiner est plus
+    /// honnête qu'un curseur qui ne ressemble à aucun réglage.
+    unsafe fn draw_cur_themed(
+        &self,
+        enc: &metal::RenderCommandEncoderRef,
+        sprites: &std::collections::HashMap<String, crate::scene::SceneCursorSprite>,
+        cursor_type: Option<&str>,
+        placement: crate::frame_geometry::CursorPlacement,
+        size_px: f32,
+        a: f32,
+        clip: [f32; 4],
+    ) {
+        let sprite = cursor_type.and_then(|t| sprites.get(t)).or_else(|| sprites.get("arrow"));
+        if let Some(sprite) = sprite {
+            if let Err(e) = self.draw_cursor_sprite(enc, placement, size_px, a, sprite, clip) {
+                eprintln!("[compositor] sprite curseur \"{}\" : {e:#}", sprite.path);
+            }
+        }
+    }
+
     /// Compose la frame : fond, ombre écran, écran, ombre caméra, caméra — puis miroir
     /// `Shared` pour la lecture CPU.
     ///
@@ -752,17 +894,12 @@ impl Compositor {
         });
 
         let cmd_buf = self.gpu.context.new_command_buffer();
-        let pass_desc = metal::RenderPassDescriptor::new();
-        let ca = pass_desc
-            .color_attachments()
-            .object_at(0)
-            .ok_or_else(|| anyhow!("RenderPassDescriptor::color_attachments(0) est nul"))?;
-        ca.set_texture(Some(&self.rt));
-        ca.set_load_action(metal::MTLLoadAction::Clear);
-        ca.set_clear_color(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0));
-        ca.set_store_action(metal::MTLStoreAction::Store);
-        let enc = cmd_buf.new_render_command_encoder(&pass_desc);
-        enc.set_render_pipeline_state(&self.pipeline_main);
+        let enc = self.begin_pass(
+            cmd_buf,
+            &self.rt,
+            Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 1.0)),
+            &self.pipeline_main,
+        )?;
         // Les deux plans écran restent liés par défaut : les quads de couleur ne les
         // échantillonnent pas, mais Metal veut des slots renseignés pour les draws qui, eux,
         // le font.
@@ -855,7 +992,70 @@ impl Compositor {
             &suv,
         );
 
+        enc.end_encoding();
+
+        // --- curseur --- (parité `compositor_windows.rs`, section « curseur custom »)
+        if let Some(track) = cursor_ref.as_ref() {
+            let plan = crate::frame_geometry::plan_cursor(
+                &g,
+                &crate::frame_geometry::CursorPlanInput {
+                    render_px: [rw, rh],
+                    u_max,
+                    v_max,
+                    cfg,
+                    live: lp,
+                    scene: scene_ref.as_ref(),
+                    track,
+                    t: self.cursor_time.borrow().unwrap_or(frame / crate::frame_geometry::FPS),
+                },
+            );
+            if let Some(plan) = plan {
+                let sprites = scene_ref
+                    .as_ref()
+                    .map(|s| s.cursor.cursor_sprites.clone())
+                    .unwrap_or_default();
+                let kind = plan.cursor_type.as_deref();
+                if plan.taps <= 1 {
+                    let e = self.begin_pass(cmd_buf, &self.rt, None, &self.pipeline_main)?;
+                    self.draw_cur_themed(e, &sprites, kind, plan.placement, plan.size_px, 1.0, plan.clip);
+                    e.end_encoding();
+                } else {
+                    // Flou RÉEL, pas des copies discrètes : les N échantillons s'accumulent dans
+                    // un buffer ISOLÉ parti de zéro, puis sont composités « over » sur la scène.
+                    // Les additionner directement sur le RT ajouterait du blanc à ce qui est
+                    // dessous — sur un fond clair, curseur quasi invisible.
+                    let e = self.begin_pass(
+                        cmd_buf,
+                        &self.accum,
+                        Some(metal::MTLClearColor::new(0.0, 0.0, 0.0, 0.0)),
+                        &self.pipeline_add,
+                    )?;
+                    let w = 1.0 / plan.taps as f32;
+                    e.set_blend_color(w, w, w, w);
+                    for k in 0..plan.taps {
+                        let f = k as f32 / (plan.taps - 1) as f32;
+                        self.draw_cur_themed(
+                            e,
+                            &sprites,
+                            kind,
+                            plan.prev_placement.lerp(plan.placement, f),
+                            plan.size_px,
+                            1.0,
+                            plan.clip,
+                        );
+                    }
+                    e.end_encoding();
+
+                    let c = self.begin_pass(cmd_buf, &self.rt, None, &self.pipeline_fs_tex)?;
+                    c.set_fragment_texture(0, Some(&self.accum));
+                    c.draw_primitives(metal::MTLPrimitiveType::Triangle, 0, 3);
+                    c.end_encoding();
+                }
+            }
+        }
+
         // --- caméra : ombre PiP puis vidéo ---
+        let enc = self.begin_pass(cmd_buf, &self.rt, None, &self.pipeline_main)?;
         if let (true, Some((wy, wuv))) = (lp.has_webcam, webcam_tex.as_ref()) {
             let (cu0, cv0, cu1, cv1) = crate::frame_geometry::cover_crop_uv(
                 [wcw, wch],
