@@ -120,8 +120,21 @@ jobs:
   # d3d_macos.rs / text_macos.rs is unverifiable from Windows (cross-compile
   # requires the macOS SDK + headers, which we don't have). This job is the
   # only signal that the macOS-side Rust still type-checks.
+  #
+  # `cargo test`, NOT just `cargo check` — and that difference is the whole point.
+  # Three of the bugs that kept the first macOS run from rendering anything are
+  # invisible to a type-check and are each pinned by a test now:
+  #   * `shaders.metal` is compiled AT RUNTIME by `new_library_with_source`, so a
+  #     whole file of invalid MSL (HLSL's global `cbuffer`/`Texture2D` have no MSL
+  #     equivalent) type-checks perfectly — `every_shader_entry_point_compiles`
+  #     catches it. macos-14 runners have a real Metal device, so it runs for real.
+  #   * `AVERROR(EAGAIN)` is -11 on Windows/Linux and -35 on macOS. A hardcoded -11
+  #     compiles anywhere and silently decodes zero frames —
+  #     `averror_constants_match_the_ffmpeg_macros` confronts it with shim.c.
+  #   * pipeline-state creation rejects shader/attachment mismatches only at
+  #     `newRenderPipelineState` time — `the_compositor_builds_on_the_system_device`.
   rust-macos-compositor-check:
-    name: Rust check (macOS compositor)
+    name: Rust test (macOS compositor)
     runs-on: macos-14
     steps:
       - uses: actions/checkout@v4
@@ -136,12 +149,23 @@ jobs:
           ls /opt/homebrew/opt/ffmpeg/include | head -5
           ls /opt/homebrew/opt/ffmpeg/lib | head -5
           /opt/homebrew/opt/ffmpeg/bin/ffmpeg -hide_banner -version | head -1
-      - name: cargo check (compositor + napi addon, aarch64-apple-darwin)
+      # MAC_FFMPEG_DIR only reaches build.rs because it now takes precedence over
+      # FFMPEG_DIR on macOS. crates/.cargo/config.toml sets FFMPEG_DIR in a GLOBAL
+      # [env] block (cargo has no [target.<cfg>.env] — the macOS section in that file
+      # is inert and cargo warns "unused key"), so before that change this job pointed
+      # bindgen at the win64 tree and could never have gone green.
+      - name: cargo test (compositor, aarch64-apple-darwin)
         env:
           MAC_FFMPEG_DIR: /opt/homebrew/opt/ffmpeg
         run: |
           cd crates
-          cargo check --target aarch64-apple-darwin -p openscreen-compositor -p compositor-view-napi
+          cargo test -p openscreen-compositor --lib --tests
+      - name: cargo build (napi addon)
+        env:
+          MAC_FFMPEG_DIR: /opt/homebrew/opt/ffmpeg
+        run: |
+          cd crates
+          cargo build -p compositor-view-napi --release
 
   semantic-pr:
     name: Validate PR title (semantic)
