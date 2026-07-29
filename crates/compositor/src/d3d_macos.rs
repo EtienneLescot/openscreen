@@ -124,13 +124,26 @@ impl Gpu {
     /// appel `create_auto(false)` côté macOS doit renvoyer le seul backend existant,
     /// jamais basculer silencieusement sur autre chose (le silence est précisément
     /// la failure mode que PR #162 a éliminée côté Windows).
-    pub fn create_auto(_silent: bool) -> Result<Gpu> {
+    ///
+    /// `_debug` est le pendant du flag de couche de debug D3D11 ; Metal a l'équivalent
+    /// via la variable d'environnement `METAL_DEVICE_WRAPPER_TYPE`, donc rien à faire
+    /// ici. Le paramètre reste pour que les call-sites (`compositor-view-napi`) soient
+    /// littéralement les mêmes des deux côtés.
+    pub fn create_auto(_debug: bool) -> Result<Gpu> {
         create_backend(Backend::Hardware)
     }
 
     /// Création hardware-strict (utilisée par les tests et les goldens).
-    pub fn create() -> Result<Gpu> {
+    pub fn create(_debug: bool) -> Result<Gpu> {
         create_backend(Backend::Hardware)
+    }
+
+    /// Le backend de cette machine, mis en cache. `d3d_windows` l'expose comme
+    /// fonction ASSOCIÉE (`Gpu::probe()`) et `compositor-view-napi` l'appelle ainsi ;
+    /// la version macOS n'avait qu'une fonction libre `probe()`, donc l'addon ne
+    /// compilait pas.
+    pub fn probe() -> Option<Backend> {
+        probe()
     }
 }
 
