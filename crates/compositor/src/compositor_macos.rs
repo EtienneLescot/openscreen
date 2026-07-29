@@ -219,6 +219,11 @@ pub struct Compositor {
     timeline_time: RefCell<Option<f32>>,
     live_params: RefCell<LiveParams>,
     metal_texture_cache: CVMetalTextureCache,
+    /// Dernier command buffer soumis, gardé pour pouvoir l'attendre AU MOMENT où le CPU lit
+    /// vraiment. Soumettre puis attendre tout de suite vide le pipeline à chaque frame :
+    /// le GPU finit, le CPU décode et encode pendant que le GPU dort, et on paie la latence
+    /// d'un aller-retour complet par passe au lieu de laisser les deux se recouvrir.
+    last_cmd: RefCell<Option<metal::CommandBuffer>>,
     /// Wallpapers décodés, indexés par chemin (ou par data-URI pour les annotations image).
     /// Le décode + upload coûte des millisecondes ; le faire à chaque frame ferait chuter la
     /// preview sur un fond image.
@@ -532,6 +537,7 @@ impl Compositor {
             timeline_time: RefCell::new(None),
             live_params: RefCell::new(LiveParams::default()),
             metal_texture_cache: cache,
+            last_cmd: RefCell::new(None),
             img_cache: RefCell::new(std::collections::HashMap::new()),
             rt,
             rt_read,
@@ -1176,6 +1182,21 @@ impl Compositor {
         Ok(())
     }
 
+
+    /// Soumet sans attendre, et retient le buffer pour `sync`.
+    fn submit(&self, cmd: &metal::CommandBufferRef) {
+        cmd.commit();
+        *self.last_cmd.borrow_mut() = Some(cmd.to_owned());
+    }
+
+    /// Attend la fin de tout ce qui a été soumis. Metal exécute dans l'ordre sur une même
+    /// file, donc attendre le DERNIER buffer suffit à garantir les précédents.
+    fn sync(&self) {
+        if let Some(cmd) = self.last_cmd.borrow().as_ref() {
+            cmd.wait_until_completed();
+        }
+    }
+
     /// Ouvre un encodeur sur `target`. `clear` = `None` conserve ce qui s'y trouve.
     ///
     /// Metal n'a pas d'`OMSetRenderTargets` : changer de cible veut dire terminer
@@ -1606,9 +1627,10 @@ impl Compositor {
         // --- annotations : calque le plus haut, ancré sur le rect ÉCRAN ---
         self.draw_annotations(cmd_buf, scene_ref.as_ref(), g.source_t, g.s_dst)?;
 
-        self.mirror_rt(cmd_buf);
-        cmd_buf.commit();
-        cmd_buf.wait_until_completed();
+        // Ni miroir RGBA ni attente ici : le miroir ne sert qu'à `readback_direct` (la
+        // preview), et l'export ne lit jamais le RGBA — le blit pleine résolution était payé
+        // à chaque frame pour rien.
+        self.submit(cmd_buf);
         Ok(())
     }
 
@@ -1626,9 +1648,10 @@ impl Compositor {
         ca.set_store_action(metal::MTLStoreAction::Store);
         cmd_buf.new_render_command_encoder(&pass_desc).end_encoding();
 
-        self.mirror_rt(cmd_buf);
-        cmd_buf.commit();
-        cmd_buf.wait_until_completed();
+        // Ni miroir RGBA ni attente ici : le miroir ne sert qu'à `readback_direct` (la
+        // preview), et l'export ne lit jamais le RGBA — le blit pleine résolution était payé
+        // à chaque frame pour rien.
+        self.submit(cmd_buf);
         Ok(())
     }
 
@@ -1739,13 +1762,18 @@ impl Compositor {
         }
         blit.end_encoding();
 
-        cmd_buf.commit();
-        cmd_buf.wait_until_completed();
+        self.submit(cmd_buf);
         Ok(())
     }
 
     /// Lit le RT RGBA vers un `Vec<u8>` CPU (preview live). Renvoie `(w, h, RGBA8)`.
     pub unsafe fn readback_direct(&self) -> Result<(u32, u32, Vec<u8>)> {
+        // Le miroir `Shared` se fait ICI plutôt qu'à chaque composition : seul ce chemin le
+        // lit, et il n'est emprunté que par la preview.
+        let cmd_buf = self.gpu.context.new_command_buffer();
+        self.mirror_rt(cmd_buf);
+        self.submit(cmd_buf);
+        self.sync();
         let (w, h) = (self.render_w, self.render_h);
         let bytes_per_row = (w as usize) * 4;
         let mut data = vec![0u8; bytes_per_row * h as usize];
@@ -1786,6 +1814,9 @@ impl Compositor {
         pitch_uv: usize,
     ) -> Result<()> {
         // Le moteur rend à `render_w`x`render_h` ; lire au-delà serait hors-texture.
+        // `render_nv12` a soumis sans attendre ; c'est ici, avant la première lecture CPU,
+        // que la synchronisation est nécessaire.
+        self.sync();
         let w = target_w.min(self.render_w);
         let h = target_h.min(self.render_h);
         if w == 0 || h == 0 {
