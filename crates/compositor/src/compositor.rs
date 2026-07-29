@@ -62,7 +62,32 @@ fn decode_data_uri(uri: &str) -> Option<Vec<u8>> {
 }
 
 fn parse_hex(s: &str) -> Option<[f32; 4]> {
-    let h = s.trim().trim_start_matches('#');
+    // Le contrat accepte du CSS, pas seulement de l'hex : la bridge des captions produit du
+    // `rgba(r, g, b, a)` (l'inspector stocke couleur + opacité séparément, et `captionBackgroundCss`
+    // les recombine en rgba pour la preview) et les stops de gradient arrivent aussi sous cette
+    // forme. `transparent` est un cas particulier documenté : alpha 0, pas de plaque. Tout le
+    // reste tombe sur None → l'appelant applique son fallback (alpha 0 pour un fond, alpha 1
+    // pour un texte, etc.) — la même sémantique qu'avant l'ajout du parseur rgba.
+    let trimmed = s.trim();
+    if trimmed.eq_ignore_ascii_case("transparent") {
+        return Some([0.0, 0.0, 0.0, 0.0]);
+    }
+    // CSS Color 4 fait de `rgb()` et `rgba()` des synonymes : les deux acceptent 3 ou 4
+    // composantes. On les traite donc par le même chemin plutôt que d'imposer une arité par
+    // nom — refuser `rgba(0, 0, 0)` ne « signalerait » rien d'utile, ça retomberait sur le
+    // fallback de l'appelant, c'est-à-dire une plaque invisible : exactement le bug #178.
+    if let Some(inner) =
+        strip_color_fn(trimmed, "rgba").or_else(|| strip_color_fn(trimmed, "rgb"))
+    {
+        return parse_rgb_components(inner);
+    }
+    let h = trimmed.trim_start_matches('#');
+    // Un corps hex est ASCII par définition, et les découpes par octet ci-dessous (`h[i..=i]`,
+    // `h[0..2]`…) paniqueraient au milieu d'un caractère multi-octets qui ferait pile 3 ou 6
+    // octets (`éa`, `€€`). On refuse avant de découper.
+    if !h.is_ascii() {
+        return None;
+    }
     let (r, g, b) = match h.len() {
         3 => {
             let d = |i: usize| u8::from_str_radix(&h[i..=i], 16).ok().map(|v| v * 17);
@@ -76,6 +101,58 @@ fn parse_hex(s: &str) -> Option<[f32; 4]> {
         _ => return None,
     };
     Some([r as f32 / 255.0, g as f32 / 255.0, b as f32 / 255.0, 1.0])
+}
+
+/// `rgba(0, 0, 0, 0.55)` → `"0, 0, 0, 0.55"` (le contenu entre les parenthèses), None si
+/// l'enveloppe n'est pas de la forme `fn(...)`. Tolère les espaces et les tabs, refuse les
+/// virgules finales et les arguments vides — le gradient parser a déjà démontré que la couche
+/// application produit des chaînes propres, donc rester strict ici évite d'avaler des CSS
+/// tordus qu'on ne maîtrise pas. La casse du préfixe est libre (`RGBA(...)` est valide) parce
+/// que CSS le permet.
+fn strip_color_fn<'a>(s: &'a str, name: &str) -> Option<&'a str> {
+    // `get` rend None si `name.len()` n'est pas une frontière de caractère : c'est ce qui rend
+    // le slice `s[..name.len()]` juste en dessous sûr par construction. Un `&s[..n]` direct
+    // paniquerait au milieu d'un caractère multi-octets (`#ab€cd` coupe dans le `€`), et une
+    // panique traverserait le pont N-API au lieu de retomber sur le fallback de l'appelant —
+    // le contraire de ce que ce parseur promet.
+    let after_name = s.get(name.len()..)?;
+    if !s[..name.len()].eq_ignore_ascii_case(name) {
+        return None;
+    }
+    let inner = after_name.strip_prefix('(')?.strip_suffix(')')?.trim();
+    if inner.is_empty() {
+        return None;
+    }
+    Some(inner)
+}
+
+/// `"r, g, b"` ou `"r, g, b, a"` (floats 0..255 pour r/g/b, 0..1 pour a) → `[r, g, b, a]` en
+/// 0..1, l'alpha valant 1 (opaque) quand elle est absente. Toute autre arité → None. Tolère
+/// les espaces autour des virgules, pas les pourcentages : le gradient parser n'envoie pas de
+/// `rgb(50%, …)` et les couches UI qui le font n'arrivent pas ici (les couleurs wallpaper
+/// passent par une autre route, cf. `parseWallpaper`).
+fn parse_rgb_components(s: &str) -> Option<[f32; 4]> {
+    let parts: Vec<&str> = s.split(',').map(str::trim).collect();
+    let (rgb, alpha) = match parts.as_slice() {
+        [r, g, b] => ([r, g, b], 1.0),
+        // L'alpha est déjà sur [0..1] par convention (`rgba(...,0.55)`, pas `rgba(...,55)`).
+        [r, g, b, a] => ([r, g, b], parse_color_channel(a, 1.0)?),
+        _ => return None,
+    };
+    Some([
+        parse_color_channel(rgb[0], 255.0)?,
+        parse_color_channel(rgb[1], 255.0)?,
+        parse_color_channel(rgb[2], 255.0)?,
+        alpha,
+    ])
+}
+
+fn parse_color_channel(raw: &str, max: f32) -> Option<f32> {
+    let n: f32 = raw.parse().ok()?;
+    if !n.is_finite() || n < 0.0 || n > max {
+        return None;
+    }
+    Some(n / max)
 }
 
 /// Rect source après crop puis zoom, dans les UV de la texture D3D. `u_max`/`v_max`
@@ -111,6 +188,44 @@ fn screen_source_rect(
     let su0 = (cu0 + fx * cw - hu).clamp(cu0, (cu1 - 2.0 * hu).max(cu0));
     let sv0 = (cv0 + fy * ch - hv).clamp(cv0, (cv1 - 2.0 * hv).max(cv0));
     [su0, sv0, su0 + 2.0 * hu, sv0 + 2.0 * hv]
+}
+
+/// Rect DESTINATION de l'écran quand on dessine une coupe source PLUS LARGE que celle qui
+/// remplissait la boîte — le cœur du correctif #179.
+///
+/// Le zoom natif se jouait entièrement dans la coupe source (`screen_source_rect` rétrécit
+/// la coupe autour du focus) pendant que la boîte, elle, ne bougeait pas : le zoom
+/// s'arrêtait donc à la frontière paddée au lieu d'atteindre les bords du cadre. La
+/// référence fait l'inverse — `applyZoomTransform` (TS) met à l'échelle et translate le
+/// CONTENEUR CAMÉRA, masque compris, donc la boîte paddée grandit avec le zoom, sort de
+/// l'étage, et le padding s'efface.
+///
+/// On rend donc le zoom à la boîte : la coupe dessinée redevient le simple crop
+/// (`cut`, zoom 1) et c'est la boîte qui porte le grossissement. `cut_ref` est la coupe
+/// d'AVANT (zoom entier, celle qui remplissait `base`) et sert de référence : on reporte
+/// `cut` à travers le mapping `cut_ref → base`.
+///
+/// C'est ce report qui fait toute la sûreté du correctif. Le mapping image→écran est
+/// conservé PAR CONSTRUCTION — même grossissement, même cadrage, même point de focus au
+/// même pixel — quel que soit le crop, le clamp de bord ou le `cover`, puisque tout cela
+/// est déjà cuit dans les deux coupes. Seule l'ÉTENDUE dessinée grandit, et c'est
+/// exactement elle qui déborde le padding. Tout ce qui roule sur ce mapping (curseur,
+/// tilt 3D, motion blur) est donc inchangé.
+///
+/// Pas de clamp dans le cadre : la boîte doit pouvoir en sortir (« No stage clamping »,
+/// `frameRenderer.cameraAwareMaskRect`) — le rasterizer coupe ce qui dépasse, comme il le
+/// fait déjà pour le fond flouté.
+fn remap_box(base: [f32; 4], cut_ref: [f32; 4], cut: [f32; 4]) -> [f32; 4] {
+    let (rw, rh) = ((cut_ref[2] - cut_ref[0]), (cut_ref[3] - cut_ref[1]));
+    if !(rw > 1e-6 && rh > 1e-6) {
+        return base;
+    }
+    [
+        base[0] + base[2] * (cut[0] - cut_ref[0]) / rw,
+        base[1] + base[3] * (cut[1] - cut_ref[1]) / rh,
+        base[2] * (cut[2] - cut[0]) / rw,
+        base[3] * (cut[3] - cut[1]) / rh,
+    ]
 }
 
 /// Sous-rect SOURCE (en UV de texture) qui remplit une boîte de ratio `box_ar` **sans
@@ -1765,8 +1880,44 @@ impl Compositor {
                 fit_dst_to_aspect(scale_frame(dst, padding_scale), crop_aspect)
             }
         };
-        let s_dst = fit_screen(p.screen.dst);
-        let s_dst_prev = fit_screen(pp.screen.dst);
+        // Issue #179 : le zoom se jouait entièrement dans la coupe source, donc la boîte
+        // écran restait au rect paddé et le zoom butait sur cette frontière au lieu
+        // d'atteindre les bords du cadre. On rend le zoom à la BOÎTE (cf. `remap_box`) :
+        // la coupe dessinée redevient le crop nu, la boîte porte le grossissement et
+        // déborde le padding — c'est la géométrie de `applyZoomTransform` (TS).
+        let s_base = fit_screen(p.screen.dst);
+        let s_base_prev = fit_screen(pp.screen.dst);
+        // Layouts "bloc" (side-by-side / top-bottom) : la boîte écran est un SLOT au ratio
+        // arbitraire, et le web y fait tenir l'image en `cover` (`computeCompositeLayout`
+        // renvoie `screenCover: true`, honoré par `frameRenderer`). Le natif l'ignorait, donc
+        // il étirait la source pour remplir le slot — visible dès que le clip est recadré,
+        // puisque le crop éloigne encore le ratio de la source de celui du slot.
+        //
+        // Le cover s'applique APRÈS le crop et le zoom, sur leur rect résultant : le crop
+        // décide quoi montrer, le zoom où regarder, le cover comment habiller la boîte. Son
+        // ratio de boîte se lit sur `s_base` : `remap_box` met les deux axes à la même
+        // échelle, donc la boîte finale a le même ratio et le cover ne dépend pas d'elle
+        // (ce qui casserait la circularité coupe → boîte → coupe).
+        let cover_box_ar = scene_ref.as_ref().and_then(|s| {
+            s.layout
+                .screen_cover
+                .then_some((s_base[2] * self.rw()) / (s_base[3] * self.rh()).max(0.0001))
+        });
+        let cover = |uv: [f32; 4]| -> [f32; 4] {
+            match cover_box_ar {
+                Some(ar) => cover_uv_rect(uv, [stw as f32, sth as f32], ar),
+                None => uv,
+            }
+        };
+        // La coupe RÉFÉRENCE (zoom entier) est celle qui remplissait la boîte paddée avant
+        // ce correctif ; la coupe DESSINÉE ne porte plus que le crop. `remap_box` reporte la
+        // seconde à travers le mapping de la première, ce qui conserve le cadrage exact.
+        // Le focus courant reste volontairement utilisé pour la frame précédente, comme avant.
+        let cut_ref = cover(screen_source_rect(u_max, v_max, active_crop, p.zoom, p.focus));
+        let cut_ref_prev = cover(screen_source_rect(u_max, v_max, active_crop, pp.zoom, p.focus));
+        let cut = cover(screen_source_rect(u_max, v_max, active_crop, 1.0, p.focus));
+        let s_dst = remap_box(s_base, cut_ref, cut);
+        let s_dst_prev = remap_box(s_base_prev, cut_ref_prev, cut);
         // le padding n'affecte QUE l'écran (la quantité de fond révélée). La webcam reste ancrée
         // en bas-droite à sa marge fixe, quelle que soit la valeur de padding (pas de scale_frame)
         // — SAUF quand l'app a résolu un placement explicite (`app_webcam_rect`, drag-to-reposition
@@ -1837,6 +1988,9 @@ impl Compositor {
         let s_min_px = (s_dst[2] * self.rw()).min(s_dst[3] * self.rh());
         let app_screen_radius_frac = scene_ref.as_ref().and_then(|s| s.layout.screen_radius_frac);
         let scene_roundness_frac = scene_ref.as_ref().map(|s| s.effects.roundness_frac);
+        // Le rayon suit la boîte : quand le zoom l'agrandit (issue #179), les coins grandissent
+        // avec elle puis sortent du cadre — comme le masque de la référence, qui porte le même
+        // `br: maskBorderRadius * camS` et quitte l'étage au même moment.
         let s_radius = match (cfg.rounded, app_screen_radius_frac, scene_roundness_frac) {
             (false, _, _) => 0.0,
             // Preset en bloc : le rayon appartient à la boîte écran (parité exacte avec la caméra).
@@ -1969,29 +2123,12 @@ impl Compositor {
         // `active_crop` déjà résolu plus haut (utilisé pour dimensionner `s_dst`) — une seule
         // source de vérité pour ce lookup.
         let s_px = [s_dst[2] * self.rw(), s_dst[3] * self.rh()];
-        // Layouts "bloc" (side-by-side / top-bottom) : la boîte écran est un SLOT au ratio
-        // arbitraire, et le web y fait tenir l'image en `cover` (`computeCompositeLayout`
-        // renvoie `screenCover: true`, honoré par `frameRenderer`). Le natif l'ignorait, donc
-        // il étirait la source pour remplir le slot — visible dès que le clip est recadré,
-        // puisque le crop éloigne encore le ratio de la source de celui du slot.
-        //
-        // Le cover s'applique APRÈS le crop et le zoom, sur leur rect résultant : le crop
-        // décide quoi montrer, le zoom où regarder, le cover comment habiller la boîte.
-        let cover_box_ar = scene_ref
-            .as_ref()
-            .and_then(|s| s.layout.screen_cover.then_some(s_px[0] / s_px[1].max(0.0001)));
-        let cover = |uv: [f32; 4]| -> [f32; 4] {
-            match cover_box_ar {
-                Some(ar) => cover_uv_rect(uv, [stw as f32, sth as f32], ar),
-                None => uv,
-            }
-        };
-        let [su0, sv0, su1, sv1] =
-            cover(screen_source_rect(u_max, v_max, active_crop, p.zoom, p.focus));
+        // Coupes calculées plus haut (elles dimensionnent `s_dst`) : le zoom vit désormais
+        // dans la boîte, la coupe ne porte que le crop. `dst_prev` porte la vélocité du
+        // motion blur — la coupe, elle, est la même aux deux frames.
+        let [su0, sv0, su1, sv1] = cut;
         let (hu, hv) = ((su1 - su0) * 0.5, (sv1 - sv0) * 0.5);
-        // Le focus courant reste volontairement utilisé pour la frame précédente, comme avant.
-        let [su0_p, sv0_p, su1_p, sv1_p] =
-            cover(screen_source_rect(u_max, v_max, active_crop, pp.zoom, p.focus));
+        let [su0_p, sv0_p, su1_p, sv1_p] = cut;
         let (hu_p, hv_p) = ((su1_p - su0_p) * 0.5, (sv1_p - sv0_p) * 0.5);
         // Géométrie du tilt, calculée UNE fois : l'ombre et l'écran doivent porter exactement le
         // même quadrilatère. Deux calculs séparés, c'est une ombre qui se décolle dès qu'un des
@@ -2002,7 +2139,9 @@ impl Compositor {
             [(s_dst[0] + s_dst[2] * 0.5) * self.rw(), (s_dst[1] + s_dst[3] * 0.5) * self.rh()];
         // L'ombre suit la silhouette réellement affichée : le rect arrondi quand l'écran est
         // droit, le quadrilatère projeté quand il est incliné. Un rect droit derrière un écran
-        // penché ne se lisait pas comme son ombre mais comme une seconde surface.
+        // penché ne se lisait pas comme son ombre mais comme une seconde surface. Elle suit
+        // aussi la croissance de la boîte pendant un zoom (issue #179) : quand la boîte sort
+        // du cadre, l'ombre en sort avec elle, sans jamais se lire comme une bande noire.
         if cfg.shadow {
             let spread = SCREEN_SHADOW_SPREAD_FRAC * frame_min_px;
             let offset = [0.0, SCREEN_SHADOW_OFFSET_FRAC * frame_min_px];
@@ -3122,6 +3261,89 @@ mod tests {
         assert_eq!(decode_data_uri("data:image/png;base64,SGkh").unwrap(), b"Hi!".to_vec());
     }
 
+    /// L'inspector stocke les couleurs de caption comme `couleur_hex` + `opacité` puis la
+    /// bridge JS recombine en `rgba(r, g, b, a)` pour la preview. Le natif doit rendre la même
+    /// plaque (couleur et opacité) — sinon le calque disparaît silencieusement et la caption
+    /// n'apparaît qu'en texte brut dans l'export. C'était exactement le bug de l'issue #178.
+    #[test]
+    fn parse_hex_understands_rgba_caption_backgrounds() {
+        let parsed = parse_hex("rgba(0, 0, 0, 0.55)").expect("rgba doit parser");
+        assert!((parsed[3] - 0.55).abs() < 1e-6, "alpha 0.55 transmise, pas tombée à 0");
+        assert_eq!([parsed[0], parsed[1], parsed[2]], [0.0, 0.0, 0.0]);
+    }
+
+    /// `rgb(...)` sans alpha est sémantiquement `rgba(..., 1)` — il faut le supporter pour
+    /// qu'un inspector qui n'expose pas d'opacité n'écrive pas un fond invisible.
+    #[test]
+    fn parse_hex_treats_rgb_as_opaque() {
+        let parsed = parse_hex("rgb(255, 128, 0)").expect("rgb doit parser");
+        assert_eq!(parsed, [1.0, 128.0 / 255.0, 0.0, 1.0]);
+    }
+
+    /// Le cas "transparent" est documenté dans le code d'appel : on garde la sémantique
+    /// historique (alpha 0) — la plaque est sautée côté rastérisation, ce qui est exactement ce
+    /// que veut le CSS. Le nouveau parseur ne doit pas le casser.
+    #[test]
+    fn parse_hex_keeps_transparent_at_alpha_zero() {
+        assert_eq!(parse_hex("transparent"), Some([0.0, 0.0, 0.0, 0.0]));
+        // La casse ne doit pas non plus casser : CSS autorise `TRANSPARENT` en théorie, et
+        // refuse une chaîne qui ressemble à un rgba mal formé.
+        assert_eq!(parse_hex("Transparent"), Some([0.0, 0.0, 0.0, 0.0]));
+        assert_eq!(parse_hex("rgba(0, 0, 0, 0)"), Some([0.0, 0.0, 0.0, 0.0]));
+    }
+
+    /// Le contrat historique `#rrggbb` / `rrggbb` ne doit pas régresser : les annotations
+    /// normales (saisies via `ColorField`) ne passent que par ce chemin, et leurs snapshots
+    /// ne pardonneraient pas un changement d'alpha implicite.
+    #[test]
+    fn parse_hex_still_understands_hex_colours() {
+        assert_eq!(parse_hex("#fff"), Some([1.0, 1.0, 1.0, 1.0]));
+        assert_eq!(parse_hex("#000000"), Some([0.0, 0.0, 0.0, 1.0]));
+        assert_eq!(
+            parse_hex("ff8800"),
+            Some([1.0, 136.0 / 255.0, 0.0, 1.0])
+        );
+    }
+
+    /// Hors-format (channel > 255, chaîne vide, named color) → None → l'appelant retombe sur
+    /// son fallback. C'est la même politique qu'avant l'ajout du parseur rgba, on la garde
+    /// explicite pour qu'elle ne dérive pas.
+    #[test]
+    fn parse_hex_rejects_malformed_colours() {
+        assert_eq!(parse_hex(""), None);
+        assert_eq!(parse_hex("not-a-color"), None);
+        assert_eq!(parse_hex("rgba(256, 0, 0, 1)"), None); // canal >255
+        assert_eq!(parse_hex("rgba(0, 0, 0, 1.5)"), None); // alpha >1
+        assert_eq!(parse_hex("rgba(0, 0, 0, 0.5, 1)"), None); // 5 composantes
+        assert_eq!(parse_hex("rgb(0, 0)"), None); // 2 composantes
+    }
+
+    /// CSS Color 4 : `rgb()` et `rgba()` sont synonymes, les deux prennent 3 ou 4 composantes.
+    /// Une couleur bien formée ne doit pas finir sur le fallback de l'appelant — pour un fond
+    /// c'est alpha 0, donc une plaque invisible, soit très exactement le symptôme de #178.
+    #[test]
+    fn parse_hex_accepts_both_arities_on_both_names() {
+        assert_eq!(parse_hex("rgba(0, 0, 0)"), Some([0.0, 0.0, 0.0, 1.0]));
+        assert_eq!(parse_hex("rgb(0, 0, 0, 0.5)"), Some([0.0, 0.0, 0.0, 0.5]));
+    }
+
+    /// Une couleur non-ASCII doit être refusée, pas paniquer : `strip_color_fn` découpait
+    /// `s[..3]` / `s[..4]` sans vérifier la frontière de caractère, donc `#ab€cd` (le `€` occupe
+    /// les octets 3..6) tuait le process au lieu de retomber sur le fallback. `parseWallpaper`
+    /// laisse passer n'importe quelle chaîne préfixée `#` jusqu'ici, une panique côté natif
+    /// traverserait le pont N-API et emporterait l'export.
+    #[test]
+    fn parse_hex_refuses_non_ascii_without_panicking() {
+        assert_eq!(parse_hex("#ab€cd"), None);
+        assert_eq!(parse_hex("rg€(0, 0, 0)"), None);
+        assert_eq!(parse_hex("é"), None);
+        assert_eq!(parse_hex("🎨🎨"), None);
+        // Le chemin hex découpe par octet sur les longueurs 3 et 6 : `éa` fait 3 octets et
+        // `€€` en fait 6, donc les deux tombaient pile sur une découpe intra-caractère.
+        assert_eq!(parse_hex("éa"), None);
+        assert_eq!(parse_hex("€€"), None);
+    }
+
     #[test]
     fn ignores_padding_and_line_breaks_inside_the_payload() {
         // Un URI replié ou paddé doit décoder à l'identique : les caractères hors alphabet sont
@@ -3157,6 +3379,108 @@ mod tests {
         let crop = SceneCrop { x: 0.25, y: 0.1, width: 0.5, height: 0.6 };
         assert_rect(screen_source_rect(0.8, 0.9, Some(crop), 2.0, [0.5, 0.5]), [0.3, 0.225, 0.5, 0.495]);
         assert_rect(screen_source_rect(0.8, 0.9, Some(crop), 2.0, [1.0, 1.0]), [0.4, 0.36, 0.6, 0.63]);
+    }
+
+    // --- le zoom rendu à la boîte (issue #179) ------------------------------
+    // Le zoom déplace et agrandit la boîte au lieu de rétrécir la coupe. Deux choses à
+    // figer, et elles tirent en sens inverse : la boîte DOIT déborder le padding (l'issue),
+    // et le mapping image→écran ne doit PAS bouger (tout le reste du compositeur en
+    // dépend). Une version antérieure de ce correctif protégeait si bien le second qu'elle
+    // annulait le premier dès que le focus n'était pas centré — d'où le balayage sur des
+    // focus décentrés dans les deux tests.
+
+    /// Boîte paddée (padding 50 % → `scale_frame` 0.8) dans une sortie carrée : le cas
+    /// plein cadre de l'issue.
+    const PADDED: [f32; 4] = [0.1, 0.1, 0.8, 0.8];
+
+    /// Les zooms d'un preset (`ZOOM_DEPTH_SCALES`, TS) et des focus réalistes — dont des
+    /// focus très décentrés, que le suivi de curseur produit en permanence.
+    const ZOOMS: [f32; 6] = [1.0, 1.25, 1.5, 1.8, 2.2, 3.5];
+    const FOCUSES: [[f32; 2]; 6] = [
+        [0.5, 0.5],
+        [0.3, 0.5],
+        [0.5, 0.8],
+        [0.15, 0.9],
+        [0.85, 0.2],
+        [0.0, 1.0],
+    ];
+
+    /// Le couple (boîte, coupe) réellement envoyé au GPU. `u_max`/`v_max` à 1 et pas de
+    /// crop : la coupe est donc directement en fractions d'image.
+    fn drawn(base: [f32; 4], zoom: f32, focus: [f32; 2]) -> ([f32; 4], [f32; 4]) {
+        let cut_ref = screen_source_rect(1.0, 1.0, None, zoom, focus);
+        let cut = screen_source_rect(1.0, 1.0, None, 1.0, focus);
+        (remap_box(base, cut_ref, cut), cut)
+    }
+
+    /// Où un point de l'image atterrit à l'écran, en fraction du CADRE.
+    fn on_screen(base: [f32; 4], zoom: f32, focus: [f32; 2], point: [f32; 2]) -> [f32; 2] {
+        let (dst, src) = drawn(base, zoom, focus);
+        let at = |f: f32, s0: f32, s1: f32, d0: f32, dw: f32| d0 + dw * (f - s0) / (s1 - s0);
+        [
+            at(point[0], src[0], src[2], dst[0], dst[2]),
+            at(point[1], src[1], src[3], dst[1], dst[3]),
+        ]
+    }
+
+    /// Le mapping d'avant : la coupe zoomée remplissait la boîte paddée, sans la bouger.
+    fn on_screen_before(base: [f32; 4], zoom: f32, focus: [f32; 2], point: [f32; 2]) -> [f32; 2] {
+        let src = screen_source_rect(1.0, 1.0, None, zoom, focus);
+        let at = |f: f32, s0: f32, s1: f32, d0: f32, dw: f32| d0 + dw * (f - s0) / (s1 - s0);
+        [
+            at(point[0], src[0], src[2], base[0], base[2]),
+            at(point[1], src[1], src[3], base[1], base[3]),
+        ]
+    }
+
+    /// L'invariant : rendre le zoom à la boîte ne déplace AUCUN point de l'image — même
+    /// grossissement, même cadrage. Seule l'étendue dessinée change.
+    #[test]
+    fn handing_the_zoom_to_the_box_moves_no_pixel() {
+        for &zoom in &ZOOMS {
+            for &focus in &FOCUSES {
+                for &point in &[[0.5, 0.5], [0.0, 0.0], [1.0, 1.0], [0.25, 0.75]] {
+                    let (was, now) = (
+                        on_screen_before(PADDED, zoom, focus, point),
+                        on_screen(PADDED, zoom, focus, point),
+                    );
+                    assert!(
+                        (was[0] - now[0]).abs() < 1e-4 && (was[1] - now[1]).abs() < 1e-4,
+                        "point {point:?} déplacé (zoom {zoom}, focus {focus:?}) : {was:?} → {now:?}"
+                    );
+                }
+            }
+        }
+    }
+
+    /// Ce que l'issue demande, et la régression que le testeur a vue : dès qu'on zoome, la
+    /// boîte doit déborder le rect paddé — y compris (surtout) avec un focus décentré.
+    #[test]
+    fn any_zoom_overflows_the_padding() {
+        for &zoom in &ZOOMS {
+            for &focus in &FOCUSES {
+                let (dst, _) = drawn(PADDED, zoom, focus);
+                let grew = dst[2] / PADDED[2];
+                assert!(
+                    (grew - zoom).abs() < 1e-4,
+                    "la boîte n'a pas pris le zoom (zoom {zoom}, focus {focus:?}) : ×{grew}"
+                );
+                if zoom > 1.0 {
+                    // Elle dépasse le rect paddé d'au moins un bord, donc mange du padding.
+                    assert!(
+                        dst[0] < PADDED[0] - 1e-6 || dst[0] + dst[2] > PADDED[0] + PADDED[2] + 1e-6,
+                        "boîte encore dans le padding (zoom {zoom}, focus {focus:?}) : {dst:?}"
+                    );
+                }
+            }
+        }
+        // Focus centré : le padding disparaît des QUATRE côtés dès que le zoom suffit à
+        // couvrir le cadre (ici 1/0.8 = 1.25).
+        let (dst, _) = drawn(PADDED, 1.25, [0.5, 0.5]);
+        assert_rect(dst, [0.0, 0.0, 1.0, 1.0]);
+        // Sans padding il n'y a rien à déborder, mais la boîte porte quand même le zoom.
+        let (dst, _) = drawn([0.0, 0.0, 1.0, 1.0], 2.0, [0.5, 0.5]);
+        assert_rect(dst, [-0.5, -0.5, 2.0, 2.0]);
     }
 
     // --- cover_crop_uv : la caméra n'est jamais étirée --------------------

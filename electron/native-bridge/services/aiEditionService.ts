@@ -14,7 +14,6 @@ import type {
 	AiEditionLlmDisconnectResult,
 	AiEditionLlmSnapshot,
 	AiEditionProjectSummary,
-	AxcutTimelineOperation,
 } from "../../../src/native/contracts";
 import {
 	type CaptionTranslateSegment,
@@ -61,15 +60,6 @@ export interface AiEditionServiceOptions {
 		  }
 		| { success: false; error: string };
 	compactNow: (projectId: string, sessionId: string) => Promise<AiEditionChatCompactResult | null>;
-	runTimelineOperation: (
-		projectId: string,
-		sessionId: string,
-		operation: AxcutTimelineOperation,
-		conversationMessage: string,
-	) => Promise<
-		| { success: true; result: { document: unknown; summary: string } }
-		| { success: false; error: string }
-	>;
 	getContextUsage: (
 		projectId: string,
 		sessionId: string,
@@ -286,15 +276,6 @@ export class AiEditionService {
 
 	chatCompactNow(projectId: string, sessionId: string): Promise<AiEditionChatCompactResult | null> {
 		return this.options.compactNow(projectId, sessionId);
-	}
-
-	chatRunTimelineOperation(
-		projectId: string,
-		sessionId: string,
-		operation: AxcutTimelineOperation,
-		conversationMessage: string,
-	) {
-		return this.options.runTimelineOperation(projectId, sessionId, operation, conversationMessage);
 	}
 
 	async chatRunDefault(
