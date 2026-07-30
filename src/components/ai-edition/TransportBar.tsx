@@ -1,6 +1,7 @@
 import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { memo } from "react";
 import { useScopedT } from "@/contexts/I18nContext";
+import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import styles from "./NewEditorShell.module.css";
@@ -97,6 +98,12 @@ export const TransportBar = memo(function TransportBar({
 					step={0.01}
 					value={inputValue}
 					onChange={(e) => onSeek(Number(e.target.value))}
+					// Sonde de fluidité (diagnostic) : marque la fenêtre de drag comme
+					// venant de la BARRE, pour ne pas la confondre avec un drag de timeline —
+					// les deux empruntent des chemins de code différents.
+					onPointerDown={() => setUiProbeScrubbing(true, "bar")}
+					onPointerUp={() => setUiProbeScrubbing(false, "bar")}
+					onPointerCancel={() => setUiProbeScrubbing(false, "bar")}
 					className={styles.scrubInput}
 					aria-label={te("transport.seekVideo")}
 				/>
