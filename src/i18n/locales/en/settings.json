@@ -245,7 +245,7 @@
 		"help": "Aggregated transcript of every clip on the timeline. Backspace / Delete a word or selection to mark it as skipped (red). Hover a red span to restore it.",
 		"noClips": "No clips yet",
 		"noTranscript": "No transcript yet",
-		"whisperHint": "Transcribe uses local Whisper — runs in your browser, no data leaves the device.",
+		"whisperHint": "Transcribe uses local Whisper — runs on your computer, no data leaves the device.",
 		"transcribeNow": "Transcribe now",
 		"transcribing": "Transcribing…",
 		"clipLabel": "Clip {{index}}",

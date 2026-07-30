@@ -245,7 +245,7 @@
 		"help": "时间轴上所有片段的合并转录。对某个词或选区按退格 / Delete 会将其标记为跳过（红色）。将鼠标悬停在红色片段上可恢复。",
 		"noClips": "暂无片段",
 		"noTranscript": "暂无转录",
-		"whisperHint": "转录使用本地 Whisper — 在您的浏览器中运行，数据不会离开本设备。",
+		"whisperHint": "转录使用本地 Whisper — 在您的电脑上运行，数据不会离开本设备。",
 		"transcribeNow": "立即转录",
 		"transcribing": "转录中…",
 		"clipLabel": "片段 {{index}}",
