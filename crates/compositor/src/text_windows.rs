@@ -23,7 +23,7 @@ use windows::Win32::Graphics::Direct2D::Common::{
 use windows::Win32::Graphics::Direct2D::{
     D2D1CreateFactory, ID2D1Factory, D2D1_DRAW_TEXT_OPTIONS_NONE, D2D1_FACTORY_TYPE_SINGLE_THREADED,
     D2D1_FEATURE_LEVEL_DEFAULT, D2D1_RENDER_TARGET_PROPERTIES, D2D1_RENDER_TARGET_TYPE_DEFAULT,
-    D2D1_RENDER_TARGET_USAGE_NONE,
+    D2D1_RENDER_TARGET_USAGE_NONE, D2D1_ROUNDED_RECT,
 };
 use windows::Win32::Graphics::Direct3D11::{
     ID3D11Device, ID3D11ShaderResourceView, ID3D11Texture2D, D3D11_BIND_RENDER_TARGET,
@@ -109,7 +109,8 @@ impl TextRasterizer {
 
     /// Rastérise `spec` dans une texture neuve et rend sa SRV. Le fond éventuel est dessiné
     /// derrière le texte, ajusté aux métriques de la mise en page — comme le CSS, où
-    /// `backgroundColor` est porté par le `<span>` et épouse donc le texte, pas la boîte.
+    /// `backgroundColor` est porté par le `<span>` et épouse donc le texte, pas la boîte —
+    /// avec la marge et les coins arrondis de `crate::text_plate`, partagés avec CoreText.
     pub unsafe fn rasterize(
         &self,
         dev: &ID3D11Device,
@@ -176,8 +177,16 @@ impl TextRasterizer {
         format.SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER)?;
 
         let text: Vec<u16> = spec.content.encode_utf16().collect();
-        let layout =
-            self.dwrite.CreateTextLayout(&text, &format, w as f32, h as f32)?;
+        // La boîte de mise en page est rentrée de la marge de plaque (cf. `text_plate`), et
+        // le texte se dessine à `pad_x` : sans cet inset, un texte aligné à gauche ou à
+        // droite colle au bord de la boîte et sa plaque se fait rogner du côté où elle
+        // devrait respirer.
+        let font_px = spec.font_size_px.max(1.0);
+        let (pad_x, pad_y) = crate::text_plate::padding(font_px);
+        let layout_w = crate::text_plate::layout_width(w as f32, font_px);
+        let layout = self
+            .dwrite
+            .CreateTextLayout(&text, &format, layout_w, h as f32)?;
         if spec.underline {
             layout.SetUnderline(
                 true,
@@ -205,18 +214,32 @@ impl TextRasterizer {
                 a: spec.background[3],
             };
             let bg_brush = rt.CreateSolidColorBrush(&bg, None)?;
-            rt.FillRectangle(
-                &D2D_RECT_F {
-                    left: m.left,
-                    top: m.top,
-                    right: m.left + m.width,
-                    bottom: m.top + m.height,
+            // Le texte commence à `pad_x + m.left`, donc la plaque à `m.left` — l'inset de la
+            // boîte de mise en page et la marge de plaque s'annulent exactement, quel que soit
+            // l'alignement. Elle est ensuite bornée à la boîte : au-delà, elle serait coupée
+            // net par le bord de la texture et perdrait ses coins arrondis.
+            let rect = D2D_RECT_F {
+                left: m.left.max(0.0),
+                top: (m.top - pad_y).max(0.0),
+                right: (m.left + m.width + pad_x * 2.0).min(w as f32),
+                bottom: (m.top + m.height + pad_y).min(h as f32),
+            };
+            let radius = crate::text_plate::radius(
+                font_px,
+                (rect.right - rect.left).max(0.0),
+                (rect.bottom - rect.top).max(0.0),
+            );
+            rt.FillRoundedRectangle(
+                &D2D1_ROUNDED_RECT {
+                    rect,
+                    radiusX: radius,
+                    radiusY: radius,
                 },
                 &bg_brush,
             );
         }
         rt.DrawTextLayout(
-            D2D_POINT_2F { x: 0.0, y: 0.0 },
+            D2D_POINT_2F { x: pad_x, y: 0.0 },
             &layout,
             &brush,
             D2D1_DRAW_TEXT_OPTIONS_NONE,
