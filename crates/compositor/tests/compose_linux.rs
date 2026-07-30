@@ -46,6 +46,22 @@ fn compose_linux_rend_une_frame() {
     let mean_r = sum as f32 / n;
     println!("compose_linux : {w}x{h} bytes={} mean_R={:.1}", rgba.len(), mean_r);
 
+    // PPM P6 pour inspection visuelle.
+    let out = std::env::var("OPENSCREEN_VK_OUT").unwrap_or_else(|_| "target".into());
+    let _ = std::fs::create_dir_all(&out);
+    let ppm = format!("{out}/compose_linux.ppm");
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&ppm).expect("create ppm");
+        write!(f, "P6\n{w} {h}\n255\n").unwrap();
+        let mut rgb = vec![0u8; (w * h * 3) as usize];
+        for (d, s) in rgb.chunks_exact_mut(3).zip(rgba.chunks_exact(4)) {
+            d.copy_from_slice(&s[0..3]);
+        }
+        f.write_all(&rgb).unwrap();
+    }
+    println!("wrote {ppm}");
+
     assert_eq!(rgba.len(), (W * H * 4) as usize);
     assert!(
         mean_r > 5.0 && mean_r < 250.0,

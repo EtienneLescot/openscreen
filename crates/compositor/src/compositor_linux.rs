@@ -401,6 +401,28 @@ impl Compositor {
         let (_screen_uniform, screen_bind) =
             self.make_bind(&screen_layer, Some((&sy, &suv)), &dummy);
 
+        // Webcam PiP (mode 0) -- placee par plan_frame (`g.w_dst`, coins
+        // `g.w_radius`), gardee par `g.shape_fade > 0` (webcam visible).
+        // cover-crop UV + miroir + ombre + forme cercle = incremental (src plein
+        // cadre ici). `webcam_planes` garde les vues en vie pendant le pass.
+        let webcam_planes = if g.shape_fade > 0.0 && !webcam.is_null() {
+            self.nv12_srvs(webcam).ok()
+        } else {
+            None
+        };
+        let webcam_draw = webcam_planes.as_ref().map(|(wy, wuv)| {
+            let cb = LayerCB {
+                dst: g.w_dst,
+                src: [0.0, 0.0, 1.0, 1.0],
+                quad_px: g.w_px,
+                radius_px: g.w_radius,
+                mode: 0.0,
+                color: [0.0, 0.0, 0.0, 1.0],
+                ..Default::default()
+            };
+            self.make_bind(&cb, Some((wy, wuv)), &dummy)
+        });
+
         // Annotations TEXTE (mode 11) -- placees relativement au rect ecran
         // `g.s_dst` (les coords x/y/w/h de l'annotation sont des fractions de ce
         // rect, cf. `scene.rs`). Mirroir de la branche "text" de
@@ -497,6 +519,11 @@ impl Compositor {
             rpass.set_pipeline(&self.pipeline);
             rpass.set_bind_group(0, &screen_bind, &[]);
             rpass.draw(0..4, 0..1);
+            // Webcam PiP par-dessus l'ecran.
+            if let Some((_buf, bind)) = &webcam_draw {
+                rpass.set_bind_group(0, bind, &[]);
+                rpass.draw(0..4, 0..1);
+            }
             // Annotations texte par-dessus (ordre de la liste = z-index, deja
             // trie cote app).
             for a in &ann_draws {
