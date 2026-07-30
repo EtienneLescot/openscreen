@@ -697,6 +697,18 @@ pub struct FrameGeometry {
     pub cut: [f32; 4],
     pub s_dst: [f32; 4],
     pub s_dst_prev: [f32; 4],
+    /// Boîte écran **sans le zoom** : le conteneur auquel les annotations et les
+    /// sous-titres sont ancrés.
+    ///
+    /// C'est `s_dst` avant le `remap_box` du zoom, donc le rect que l'app a résolu
+    /// (`layout.screenRect`) et que l'overlay web reçoit comme conteneur. Le contrat de
+    /// `SceneAnnotation` est explicite : « deliberately NOT affected by the zoom crop — the
+    /// overlay is a sibling of the element carrying the zoom transform, so annotations hold
+    /// still while the content zooms underneath them ». Tant que le zoom vivait dans la
+    /// coupe source, `s_dst` tenait ce rôle ; depuis l'issue #179 il vit dans la BOÎTE, donc
+    /// `s_dst` grandit et se déplace avec lui — et les annotations le suivaient, sous-titres
+    /// compris, qui se mettaient à zoomer avec l'écran.
+    pub s_ann: [f32; 4],
     pub s_radius: f32,
     pub frame_min_px: f32,
     pub w_dst: [f32; 4],
@@ -1079,6 +1091,8 @@ pub fn plan_frame(input: &FrameGeometryInput) -> FrameGeometry {
         cut,
         s_dst,
         s_dst_prev,
+        // La boîte écran telle qu'elle serait sans zoom : `remap_box` n'est PAS appliqué.
+        s_ann: s_base,
         s_radius,
         frame_min_px,
         w_dst,
@@ -1250,6 +1264,54 @@ mod tests {
             cursor: None,
             timeline_t_override: Some(1.5),
         }
+    }
+
+    /// La même scène, avec une région de zoom active à `t = 1.5 s`.
+    fn zoomed_golden_scene() -> Scene {
+        Scene::from_json(
+            r##"{
+            "clips":[{"screenPath":"/s.mp4","webcamPath":"/w.mp4","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":true}],
+            "layout":{"preset":"picture-in-picture","webcamSize":0.44,"webcamShape":"circle","webcamMirror":false,
+                      "webcamPosition":{"cx":0.8577,"cy":0.8159},"webcamReactiveZoom":false},
+            "effects":{"padding":0.51,"blur":false,"shadow":0.35,"roundnessFrac":0.0255,"motionBlur":0.35},
+            "background":{"kind":"color","color":"#1e1e2e"},
+            "zoomRegions":[{"clipIndex":0,"startSec":0.0,"endSec":5.0,"scale":2.0,"focusX":0.5,"focusY":0.3,"rotation":"none"}],
+            "cursor":{"show":true,"size":7.76,"smoothing":0,"motionBlur":0.35,"clickBounce":1,"clipToBounds":false,"theme":"default"},
+            "cropByClip":[{"x":0,"y":0,"width":0.61,"height":0.61}],
+            "output":{"width":1170,"height":658,"fps":60}
+        }"##,
+        )
+        .expect("zoomed golden scene")
+    }
+
+    /// L'ancre des annotations ne bouge PAS avec le zoom, alors que la boîte écran, si.
+    ///
+    /// C'est tout le contrat de `SceneAnnotation` : l'overlay web est frère de l'élément qui
+    /// porte la transform de zoom, donc annotations et sous-titres tiennent en place pendant
+    /// que le contenu grossit dessous. Tant que le zoom vivait dans la coupe source, `s_dst`
+    /// jouait ce rôle sans effort ; depuis l'issue #179 il vit dans la BOÎTE, et le natif
+    /// zoomait les sous-titres avec l'écran. Ce test échoue si `s_ann` se remet à suivre.
+    #[test]
+    fn the_annotation_anchor_ignores_the_zoom() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let plain = golden_scene();
+        let zoomed = zoomed_golden_scene();
+        let a = plan_frame(&golden_input(&plain, &cfg));
+        let b = plan_frame(&golden_input(&zoomed, &cfg));
+
+        assert_ne!(
+            a.s_dst, b.s_dst,
+            "le zoom doit bel et bien agir sur la boîte écran (issue #179) — \
+             sinon ce test ne prouve rien"
+        );
+        assert_eq!(
+            a.s_ann, b.s_ann,
+            "l'ancre des annotations a suivi le zoom : sans zoom {:?}, avec zoom {:?}",
+            a.s_ann, b.s_ann
+        );
+        // Et sans zoom, l'ancre EST la boîte écran : `s_ann` ne doit pas devenir un rect
+        // parallèle qui dériverait de `s_dst` pour d'autres raisons (padding, cover, crop).
+        assert_eq!(a.s_ann, a.s_dst, "sans zoom, ancre et boîte écran coïncident");
     }
 
     /// **Le golden iso-render.**
