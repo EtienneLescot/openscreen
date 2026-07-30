@@ -55,16 +55,31 @@ factors — lives in
 
 ### Per-platform backend
 
-| Platform | Helper binary | Runtime device candidates |
+The binary is named `whisper-stt-server` (`.exe` on Windows) on **every**
+platform — the backend is a build-time flag, not a file name, and
+`binaryNameForBackend`
+([`electron/stt/gpuDetector.ts:60`](../../electron/stt/gpuDetector.ts:60))
+returns that single name. What varies is which backend was compiled in:
+
+| Platform | Backend compiled in | Runtime device candidates |
 |---|---|---|
-| macOS arm64 | `whisper-stt-server-metal` | Metal, CPU |
-| macOS x64 | `whisper-stt-server-cpu` | CPU |
-| Windows x64 | `whisper-stt-server-vulkan` | Vulkan, CPU |
-| Linux x64 | `whisper-stt-server-vulkan` | Vulkan, CPU |
+| macOS arm64 | Metal (`-DOSC_ENABLE_METAL=ON`) | Metal, CPU |
+| macOS x64 | CPU only | CPU |
+| Windows x64 | Vulkan (`-DOSC_ENABLE_VULKAN=ON`) | Vulkan, CPU |
+| Linux x64 | Vulkan (`-DOSC_ENABLE_VULKAN=ON`) | Vulkan, CPU |
 
 whisper.cpp chooses the device in `whisper_backend_init`; the helper reports
 what actually bound (via `ggml_backend_dev_name()`) and `SttManager` returns
 it verbatim in the response.
+
+> `ggml_backend_dev_name()` returns a *device* name carrying an index —
+> `Vulkan0`, `CUDA0`, `MTL0` — not the backend's title. Metal is the trap:
+> ggml-metal builds its device name from `GGML_METAL_NAME` (`"MTL"`), so the
+> string `"Metal"` appears nowhere in it. `detect_active_backend()` matched
+> `"Metal"` and therefore reported `whispercpp-cpu` on every Apple Silicon run
+> while the Metal backend was in fact bound. It now matches `MTL` and filters on
+> `ggml_backend_dev_type()` being GPU/IGPU, which also drops ggml-blas
+> (Accelerate on macOS, device type ACCEL) from consideration.
 
 ### Word-level alignment (DTW token timestamps)
 
@@ -169,6 +184,61 @@ curl -X POST -F "file=@test.wav" -F "language=auto" -F "response_format=verbose_
 
 The helper's stderr logs the actual backend it bound
 (`whispercpp-vulkan` / `-metal` / `-cpu`).
+
+`npm run test:whisper-stt` round-trips a real clip through a real helper and
+checks the response against the invariants below — segments and per-word
+timings present, the DTW guardrail passed, `backend` reporting GPU offload on a
+GPU-capable host, `detected_language` resolved rather than echoed, word times
+monotonic and inside the clip, and WER against a reference. On macOS it
+synthesizes its own clip with `say`, so it needs no fixture; elsewhere pass
+`--wav <file>` (and optionally `--ref "<expected text>"`). This is the check
+that the unit tests structurally cannot make: they mock `fetch`, so they assert
+against a hand-written fixture rather than the binary.
+
+#### What the staged directory has to contain
+
+`electron/native/bin/<os>-<arch>/` is not just the executable. whisper.cpp is
+built as **shared** libraries, so the helper is dynamically linked against
+`whisper` plus the ggml backends, and every one of them has to sit next to the
+binary:
+
+- **Windows** — `whisper.dll`, `ggml.dll`, `ggml-base.dll`, `ggml-cpu.dll`,
+  `ggml-vulkan.dll`.
+- **macOS** — `libwhisper.*.dylib`, `libggml{,-base,-cpu,-blas,-metal}.*.dylib`,
+  plus the version symlink farm (`libggml.dylib` → `libggml.0.dylib` →
+  `libggml.0.15.1.dylib`).
+- **Linux** — the `.so` equivalents, including the `.so.<major>` and
+  `.so.<full>` links.
+
+Two macOS/Linux-specific hazards, both of which shipped silently:
+
+1. **The sidecar glob.** CMake emits `ggml-base.dll` on Windows but
+   `libggml-base.dylib` / `libggml-base.so.0` elsewhere. A glob written as
+   `ggml*.*` matches only the Windows spelling, so the staging step copied
+   nothing but `libwhisper` on macOS and Linux and the helper died in dyld
+   before `main()`. `build_variant()` now globs the `lib`-prefixed and
+   `.so.<N>`-suffixed forms too, uses `cp -a` to keep the symlink farm intact
+   instead of dereferencing each link into a full copy, and **fails the build**
+   when it stages zero libraries.
+2. **Absolute rpaths.** CMake bakes an `LC_RPATH` pointing at its own build
+   tree, which resolves on the machine that built it and nowhere else — delete
+   `.cache/`, or download the CI artifact onto a different runner, and the
+   helper aborts (SIGABRT, exit 134) in the loader.
+   `relocate_macos_rpaths()` strips every absolute `LC_RPATH` from the
+   executable and each dylib, adds `@loader_path`, and re-signs ad-hoc
+   (editing a Mach-O header invalidates its signature, and arm64 refuses to
+   execute a modified unsigned image).
+
+`scripts/stage-whisper-stt.sh` gates the installer on actually loading the
+binary with a scrubbed `PATH`. That gate was written for Windows, where the
+loader dies mute, so it asserted only that the process *printed something* —
+and dyld and `ld.so` are chatty, so a macOS helper missing every ggml dylib
+printed a four-line loader error and passed. It now requires the
+`[whisper-stt] boot:` line that `main()` itself emits, which proves execution
+rather than noise, and it no longer depends on `timeout` (GNU coreutils, absent
+from a stock macOS runner — unqualified, `env: timeout: No such file or
+directory` was itself enough "output" to satisfy the old check without ever
+starting the binary).
 
 ## The transcription contract
 
@@ -390,16 +460,31 @@ it deletes data
   first window and slightly improve WER. Needs a UI control wired
   through `setTranscript` and a mapping from the UI string to a
   whisper.cpp language token.
+
+  Note that `"auto"` is a *request* value only. The helper used to echo the
+  request straight back into `detected_language`, so with no selector the field
+  was permanently the literal string `"auto"`: the media stage's "detected
+  language" line ([`src/components/ai-edition/Modals.tsx:1763`](../../src/components/ai-edition/Modals.tsx:1763))
+  displayed it verbatim, and `transcribe.ts` wrote it onto
+  `AxcutTranscript.language`. It now reports `whisper_full_lang_id()` — the
+  detected language under `"auto"`, the forced one otherwise.
 - **No CUDA build.** Vulkan already accelerates NVIDIA on Windows and
   Linux, but a dedicated CUDA build can be added later via
   `OSC_ENABLE_CUDA=ON`; the build script and CMake already accept the
   flag, the default matrix doesn't build it yet.
 - **No CoreML/ANE encoder.** Metal already covers Apple GPU; CoreML is
   a future perf refinement.
-- **HTTP integration test not on CI.** No automated `POST /inference`
-  round-trip against a known WAV on the macOS-ARM/Metal,
-  Ubuntu-x64/Vulkan, Windows-x64/Vulkan matrix. The native build
-  matrix is the right place to land it.
+- **HTTP integration test not on CI.** `npm run test:whisper-stt` does the
+  `POST /inference` round-trip and asserts the contract, but nothing runs it on
+  the macOS-ARM/Metal, Ubuntu-x64/Vulkan, Windows-x64/Vulkan matrix. The native
+  build matrix (`build-whisper-stt.yml`) is the right place to land it — each
+  job already has the freshly built helper on disk, so it only needs a clip and
+  the model. Off macOS the harness needs `--wav`, so a committed fixture (or a
+  runner-side TTS) is the missing piece. Until then the three GPU paths are
+  verified only by whoever runs it locally: **macOS arm64/Metal was verified
+  this way on 2026-07-30 (WER 0.0000 on an English and a French clip, rtf
+  0.18–0.25 on an M1); Vulkan on Windows and Linux has not been re-checked
+  since the backend-detection fix.**
 - **No C++ unit tests.** The WAV reader and the DTW-inactive guardrail
   in `electron/native/whisper-stt/src/main.cpp` are exercised only at
   runtime.

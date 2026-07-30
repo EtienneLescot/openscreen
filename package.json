@@ -36,6 +36,7 @@
 		"build:win:store": "npm run build:native:win && npm run fetch:ffmpeg && npm run build:native:compositor && tsc && vite build && electron-builder --win appx --config.npmRebuild=false",
 		"build:linux": "tsc && vite build && electron-builder --linux AppImage deb pacman --config.npmRebuild=false",
 		"build:whisper-binaries": "bash scripts/build-whisper-stt.sh",
+		"test:whisper-stt": "node scripts/test-whisper-stt.mjs",
 		"test": "vitest --run",
 		"test:watch": "vitest",
 		"test:cursor-native:win": "node scripts/test-windows-native-cursor.mjs",

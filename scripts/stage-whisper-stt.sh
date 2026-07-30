@@ -86,9 +86,19 @@ if [ "${TAG#win32}" != "${TAG}" ]; then
 else
   MINIMAL_PATH="/usr/bin:/bin"
 fi
+# `timeout` is GNU coreutils: absent from a stock macOS runner. Unqualified, it
+# made the whole check evaporate there — `env: timeout: No such file or
+# directory` is itself output, so the "did it print anything" test below passed
+# without ever starting the binary. Use it only when it exists.
+if command -v timeout >/dev/null 2>&1; then
+  TIMEOUT_CMD="timeout 60"
+else
+  TIMEOUT_CMD=""
+fi
 # A bad --model makes it fail fast; we only care that it got far enough to speak.
 set +e
-LOAD_OUT="$(cd "${DEST}" && timeout 60 env PATH="${MINIMAL_PATH}" \
+# shellcheck disable=SC2086 # TIMEOUT_CMD is deliberately word-split (or empty).
+LOAD_OUT="$(cd "${DEST}" && ${TIMEOUT_CMD} env PATH="${MINIMAL_PATH}" \
   "./$(basename "${BIN}")" --model "__staging_load_check__" 2>&1)"
 LOAD_CODE=$?
 set -e
@@ -98,6 +108,26 @@ if [ -z "${LOAD_OUT}" ]; then
   echo "       Windows exit 3221225781 = 0xC0000135 STATUS_DLL_NOT_FOUND." >&2
   exit 1
 fi
+
+# "It printed something" is a Windows-shaped test: the loader there dies mute.
+# dyld and ld.so are chatty, so on macOS/Linux a helper that never reached
+# main() still satisfies the check above — which is exactly how a macOS build
+# missing every libggml*.dylib passed staging. Demand the marker that main()
+# itself prints (electron/native/whisper-stt/src/main.cpp), so the gate proves
+# execution rather than mere noise.
+case "${LOAD_OUT}" in
+  *"[whisper-stt] boot:"*) ;;
+  *)
+    echo "FATAL: $(basename "${BIN}") never reached main() (exit ${LOAD_CODE})." >&2
+    echo "       Expected its '[whisper-stt] boot:' line; got:" >&2
+    printf '%s\n' "${LOAD_OUT}" | sed 's/^/         /' | head -n 12 >&2
+    echo "       A dynamic-loader error here means a sidecar is missing from the" >&2
+    echo "       artifact, or the binary carries an absolute rpath/RUNPATH into" >&2
+    echo "       the build machine's tree. Both are bugs in" >&2
+    echo "       scripts/build-whisper-stt.sh's staging step." >&2
+    exit 1
+    ;;
+esac
 echo "Load check OK (exit ${LOAD_CODE}): $(printf '%s' "${LOAD_OUT}" | head -n 1)"
 
 echo "Staged $(basename "${BIN}") + $(( $(ls -1 "${DEST}" | wc -l) - 1 )) sidecar(s) -> ${DEST}"
