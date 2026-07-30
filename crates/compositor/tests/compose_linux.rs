@@ -14,7 +14,9 @@ use openscreen_compositor::compositor::Compositor;
 use openscreen_compositor::config::Cfg;
 use openscreen_compositor::cursor::CursorTrack;
 use openscreen_compositor::d3d::Gpu;
-use openscreen_compositor::pipeline::Decoder;
+use openscreen_compositor::pipeline::{
+    run_composited_multi, ClipSource, Decoder, ExportCodec, ExportParams,
+};
 use openscreen_compositor::scene::Scene;
 
 const FIXTURE: &str = "../fixture/screen.mp4";
@@ -140,4 +142,56 @@ fn compose_linux_dessine_le_curseur() {
     println!("wrote {ppm}");
 
     assert!(green > 50, "sprite curseur vert absent (verts={green}) — mode 7 ?");
+}
+
+/// Export (WP6) : ~1s de la fixture -> MP4 H264 software. Verifie que la marche
+/// de timeline + l'encodeur + le muxer produisent un fichier non trivial. Le
+/// contenu est re-validable par ffprobe (cf. la commande dans le run manuel).
+#[test]
+fn export_linux_mp4() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("export_linux: opt-in (OPENSCREEN_LINUX_COMPOSE=1 + fixture). Skip.");
+        return;
+    }
+
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    // Petite sortie : l'export est un smoke test, pas un bench.
+    let comp = Compositor::new_sized(&gpu, 640, 360).expect("Compositor::new_sized");
+
+    let out = std::env::var("OPENSCREEN_EXPORT_OUT")
+        .unwrap_or_else(|_| std::env::temp_dir().join("os_export_linux.mp4").to_string_lossy().into());
+    let clips = vec![ClipSource {
+        screen: FIXTURE.to_string(),
+        webcam: FIXTURE.to_string(),
+        source_start_sec: 0.0,
+        source_end_sec: 1.0,
+        webcam_offset_sec: 0.0,
+        has_audio: false,
+    }];
+    let params = ExportParams {
+        width: 640,
+        height: 360,
+        fps: Some(30),
+        codec: ExportCodec::H264,
+    };
+
+    let mut last = 0u64;
+    let stats = run_composited_multi(
+        &clips,
+        &out,
+        &gpu,
+        &comp,
+        &Cfg::c8(),
+        &params,
+        &mut |n| last = n,
+    )
+    .expect("run_composited_multi");
+    println!(
+        "export_linux : {} frames, {:.1} fps encode, {:.2}s video, progress={last} -> {out}",
+        stats.frames, stats.fps, stats.video_duration_s
+    );
+
+    assert!(stats.frames > 0, "aucune frame exportee");
+    let meta = std::fs::metadata(&out).expect("mp4 metadata");
+    assert!(meta.len() > 2000, "mp4 trop petit ({} octets) — muxer ?", meta.len());
 }
