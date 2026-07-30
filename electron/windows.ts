@@ -19,12 +19,64 @@ const HEADLESS = process.env["HEADLESS"] === "true";
 // while it is set WILL contain the HUD.
 const CONTENT_PROTECTION_DISABLED = process.env["OPENSCREEN_DISABLE_CONTENT_PROTECTION"] === "1";
 
+// Forces protection back on where it is auto-disabled below, so the macOS
+// regression can be re-tested against a future Electron without editing code.
+const CONTENT_PROTECTION_FORCED = process.env["OPENSCREEN_FORCE_CONTENT_PROTECTION"] === "1";
+
+/**
+ * macOS 26 (Darwin 25) never displays a window that has had
+ * `setContentProtection(true)` applied to it.
+ *
+ * Not "excludes it from captures" — which is the documented behaviour and the
+ * whole point — but never paints it for the user either. Confirmed on Darwin
+ * 25.5 / Electron 41.2.1 with the HUD: tray icon present, renderer alive and
+ * painting (React mounted, no console errors), `ready-to-show` fired, `show()`
+ * called, window at valid on-screen coordinates on the main display — and
+ * nothing on screen. `showMainWindow()` from the tray and the global shortcut
+ * were equally inert, because the window was already "visible" as far as
+ * Electron was concerned. Unsetting protection makes it appear instantly; the
+ * ordering of protect-vs-show makes no difference, so it is the call itself.
+ *
+ * `setContentProtection` maps to `NSWindow.sharingType = NSWindowSharingNone`,
+ * a path Electron has repeatedly churned on (electron/electron#45990, and
+ * PR #46886 reverting a macOS content-protection refactor).
+ *
+ * Gated on the Darwin major version rather than `darwin` wholesale: the
+ * breakage is only *confirmed* on 25.x, and silently dropping protection on
+ * older macOS — where it may well work — would be a privacy regression made on
+ * no evidence.
+ *
+ * NOTE: this leaves the HUD capturable on macOS 26. Apple already made that
+ * partly true regardless — ScreenCaptureKit ignores `sharingType`, so any
+ * SCK-based recorder (including *ours*, see
+ * `electron/native/screencapturekit/`) captures these windows anyway. The
+ * durable fix is to exclude our own windows via `SCContentFilter`'s
+ * `excludingWindows:`, which that helper currently passes as `[]`.
+ */
+const CONTENT_PROTECTION_BREAKS_DISPLAY = (() => {
+	if (process.platform !== "darwin") return false;
+	// getSystemVersion() reports the *macOS* version on darwin, not the Darwin
+	// kernel version: measured "26.5.0" here where `os.release()` is "25.5.0".
+	// So the affected major is 26, and the check must not be fed os.release().
+	const macOSMajor = Number.parseInt(process.getSystemVersion().split(".")[0] ?? "", 10);
+	return Number.isFinite(macOSMajor) && macOSMajor >= 26;
+})();
+
 function applyContentProtection(win: BrowserWindow, label: string) {
 	if (CONTENT_PROTECTION_DISABLED) {
 		console.warn(
 			`[content-protection] OFF for the ${label} window ` +
 				"(OPENSCREEN_DISABLE_CONTENT_PROTECTION=1) — it will appear in screen captures, " +
 				"including recordings. Unset it for anything but automated testing.",
+		);
+		return;
+	}
+	if (CONTENT_PROTECTION_BREAKS_DISPLAY && !CONTENT_PROTECTION_FORCED) {
+		console.warn(
+			`[content-protection] OFF for the ${label} window — macOS ` +
+				`${process.getSystemVersion()} never displays a content-protected window, so ` +
+				"enabling it would make this window permanently invisible. It may therefore appear " +
+				"in screen captures. Set OPENSCREEN_FORCE_CONTENT_PROTECTION=1 to re-test.",
 		);
 		return;
 	}
