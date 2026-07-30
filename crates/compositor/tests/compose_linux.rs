@@ -166,7 +166,7 @@ fn export_linux_mp4() {
         source_start_sec: 0.0,
         source_end_sec: 1.0,
         webcam_offset_sec: 0.0,
-        has_audio: false,
+        has_audio: true,
     }];
     let params = ExportParams {
         width: 640,

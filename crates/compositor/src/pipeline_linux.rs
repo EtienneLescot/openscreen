@@ -19,6 +19,10 @@ use std::collections::HashMap;
 use std::ffi::CString;
 use std::ptr;
 
+use crate::audio::{
+    assemble_concatenated_pcm, build_audio_concat_plan, decode_clip_audio,
+    stretch_clip_pcm_by_speed, AacEncoder, PlanarPcm,
+};
 use crate::config::Cfg;
 use crate::d3d::Gpu;
 use crate::ffi::AVFrame;
@@ -380,12 +384,13 @@ pub fn run_composited_multi(
     let mut screen_decs: HashMap<String, Decoder> = HashMap::new();
     let mut webcam_decs: HashMap<String, Decoder> = HashMap::new();
 
-    // ---- muxer MP4 (flux video seul) ----
+    // ---- muxer MP4 (flux video + flux AAC) ----
     let outc = CString::new(out)?;
     let mut octx: *mut crate::ffi::AVFormatContext = ptr::null_mut();
     let mut pb: *mut crate::ffi::AVIOContext = ptr::null_mut();
     let ostream;
     let opkt;
+    let mut audio_encoder;
     unsafe {
         crate::ffi::averr(
             crate::ffi::avformat_alloc_output_context2(&mut octx, ptr::null(), ptr::null(), outc.as_ptr()),
@@ -405,12 +410,21 @@ pub fn run_composited_multi(
             "avio_open",
         )?;
         crate::ffi::sn_fmt_set_pb(octx, pb);
+        // Le flux AAC doit exister AVANT l'en-tete (le muxer y fige sa table de flux).
+        // Meme si aucun clip n'a d'audio, on ecrit une piste silencieuse -- parite
+        // avec Windows/macOS, qui muxent toujours l'AAC.
+        audio_encoder = AacEncoder::open(octx)?;
         crate::ffi::averr(
             crate::ffi::avformat_write_header(octx, ptr::null_mut()),
             "write_header",
         )?;
         opkt = crate::ffi::av_packet_alloc();
     }
+
+    // Un PCM par clip, assemble apres la marche video (elle seule dit combien de
+    // frames chaque clip a produit, donc combien d'audio lui revient).
+    let mut clip_pcm: Vec<Option<PlanarPcm>> = (0..clips.len()).map(|_| None).collect();
+    let mut clip_frame_counts: Vec<u64> = vec![0; clips.len()];
 
     let scene = comp.scene_snapshot();
     let frames = unsafe {
@@ -429,13 +443,36 @@ pub fn run_composited_multi(
                 progress(n + 1);
                 Ok(())
             },
-            &mut |_clip, _end, _n, _speed| Ok(()), // audio : increment suivant
+            &mut |clip_index, source_end_sec, frames_in_clip, speed_segments| {
+                clip_frame_counts[clip_index] = frames_in_clip;
+                let clip = &clips[clip_index];
+                if clip.has_audio && frames_in_clip > 0 {
+                    match decode_clip_audio(&clip.screen, clip.source_start_sec, source_end_sec) {
+                        Ok(Some(pcm)) => {
+                            clip_pcm[clip_index] =
+                                Some(stretch_clip_pcm_by_speed(&pcm, speed_segments, out_fps as f64));
+                        }
+                        Ok(None) => eprintln!(
+                            "[pipeline] warning: clip #{clip_index} declare audio mais sans flux decodable; silence",
+                        ),
+                        Err(error) => eprintln!(
+                            "[pipeline] warning: decodage audio clip #{clip_index} echoue ({error:#}); silence",
+                        ),
+                    }
+                }
+                Ok(())
+            },
         )?
     };
 
     unsafe {
         enc.flush()?;
         drain_encoder(ectx, octx, ostream, opkt)?;
+        // Audio : le plan part des frames REELLEMENT produites par clip (un clip
+        // raccourci voit son audio raccourci d'autant), puis un seul encode AAC.
+        let declared_audio: Vec<bool> = clips.iter().map(|c| c.has_audio).collect();
+        let plan = build_audio_concat_plan(&clip_frame_counts, &declared_audio, out_fps as f64);
+        audio_encoder.encode(&assemble_concatenated_pcm(&clip_pcm, &plan), octx)?;
         crate::ffi::averr(crate::ffi::av_write_trailer(octx), "write_trailer")?;
         crate::ffi::avio_closep(&mut pb);
         crate::ffi::avformat_free_context(octx);
