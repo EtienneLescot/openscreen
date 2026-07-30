@@ -105,6 +105,18 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         let cov = textureSample(texY, samp, i.uv).r;
         let a = layer.color.a * cov;
         return vec4<f32>(layer.color.rgb * a, a);
+    } else if layer.mode > 6.5 && layer.mode < 7.5 {
+        // Mode 7 -- sprite curseur (PNG RGBA, alpha droite) echantillonne sur
+        // texY (comme le mode 11 y lie son atlas). `fx` = rect de clip "Clip to
+        // canvas" [x,y,w,h] en sortie 0..1 (= s_dst si actif, sinon un rect
+        // englobant : sans effet). Sortie en alpha premultiplie.
+        if i.pout.x < layer.fx.x || i.pout.x > layer.fx.x + layer.fx.z
+            || i.pout.y < layer.fx.y || i.pout.y > layer.fx.y + layer.fx.w {
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        }
+        let s = textureSample(texY, samp, i.uv);
+        let ca = s.a * layer.color.a;
+        return vec4<f32>(s.rgb * ca, ca);
     } else {
         // Mode 2 ÔÇö ombre port├®e (SDF d'un quad arrondi ├®largi de `fx.x`).
         let spread = layer.fx.x;
