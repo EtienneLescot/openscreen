@@ -19,17 +19,14 @@
 //! 1. `CGBitmapContextCreate` sur un buffer CPU, BGRA prémultiplié
 //!    (`kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little`) — l'ordre d'octets
 //!    que `MTLPixelFormat::BGRA8Unorm` attend.
-//! 2. fond optionnel (`spec.background`, alpha 0 = transparent).
-//! 3. `CFAttributedString` avec police (`kCTFontAttributeName`), couleur
+//! 2. `CFAttributedString` avec police (`kCTFontAttributeName`), couleur
 //!    (`kCTForegroundColorAttributeName`), soulignement (`kCTUnderlineStyleAttributeName`)
 //!    et alignement (`kCTParagraphStyleAttributeName`).
-//! 4. `CTFramesetterCreateFrame` sur un `CGPath` rectangulaire couvrant la boîte, puis
-//!    `CTFrameDraw`.
+//! 3. `CTFramesetterSuggestFrameSizeWithConstraints` mesure le bloc mis en page, puis
+//!    `block_layout` en déduit le cadre (centré verticalement) et la plaque de fond
+//!    (`spec.background`, alpha 0 = transparent) qui l'habille.
+//! 4. `CTFramesetterCreateFrame` sur ce cadre, puis `CTFrameDraw`.
 //! 5. `MTLTexture` BGRA8Unorm + `replace_region` depuis le buffer CPU.
-//!
-//! CoreGraphics a son origine en BAS à gauche : le contexte est retourné
-//! (`CGContextTranslateCTM` + `CGContextScaleCTM`) pour que la boîte `box_px` se lise
-//! comme côté Windows, origine en haut à gauche.
 //!
 //! `TextSpec::cache_key()` est byte-identique à la version Windows — la policy de cache
 //! est partagée.
@@ -187,11 +184,16 @@ extern "C" {
         bitmap_info: u32,
     ) -> CFTypeRef;
     fn CGContextRelease(ctx: CFTypeRef);
-    fn CGContextTranslateCTM(ctx: CFTypeRef, tx: CGFloat, ty: CGFloat);
-    fn CGContextScaleCTM(ctx: CFTypeRef, sx: CGFloat, sy: CGFloat);
     fn CGContextSetRGBFillColor(ctx: CFTypeRef, r: CGFloat, g: CGFloat, b: CGFloat, a: CGFloat);
-    fn CGContextFillRect(ctx: CFTypeRef, rect: CGRect);
+    fn CGContextAddPath(ctx: CFTypeRef, path: CFTypeRef);
+    fn CGContextFillPath(ctx: CFTypeRef);
     fn CGPathCreateWithRect(rect: CGRect, transform: *const c_void) -> CFTypeRef;
+    fn CGPathCreateWithRoundedRect(
+        rect: CGRect,
+        corner_width: CGFloat,
+        corner_height: CGFloat,
+        transform: *const c_void,
+    ) -> CFTypeRef;
 }
 
 #[link(name = "CoreText", kind = "framework")]
@@ -206,6 +208,13 @@ extern "C" {
     ) -> CFTypeRef;
     fn CTParagraphStyleCreate(settings: *const CTParagraphStyleSetting, count: usize) -> CFTypeRef;
     fn CTFramesetterCreateWithAttributedString(attr: CFTypeRef) -> CFTypeRef;
+    fn CTFramesetterSuggestFrameSizeWithConstraints(
+        framesetter: CFTypeRef,
+        string_range: CFRange,
+        frame_attributes: CFTypeRef,
+        constraints: CGSize,
+        fit_range: *mut CFRange,
+    ) -> CGSize;
     fn CTFramesetterCreateFrame(
         framesetter: CFTypeRef,
         string_range: CFRange,
@@ -242,6 +251,113 @@ impl Drop for CFOwned {
     fn drop(&mut self) {
         unsafe { CFRelease(self.0) };
     }
+}
+
+// ---------------------------------------------------------------------------
+// Modèle de boîte du bloc de texte
+// ---------------------------------------------------------------------------
+
+/// Marge et rayon de la plaque : `crate::text_plate`, partagé avec le rendu Direct2D.
+/// Les deux plateformes DOIVENT lire les mêmes nombres — cf. l'en-tête de ce module.
+fn plate_padding(font_px: CGFloat) -> (CGFloat, CGFloat) {
+    let (x, y) = crate::text_plate::padding(font_px as f32);
+    (x as CGFloat, y as CGFloat)
+}
+
+/// `CTTextAlignment` : 0 = left, 1 = right, 2 = center (3 = justified, 4 = natural).
+fn ct_alignment(align: &str) -> u8 {
+    match align {
+        "left" => 0,
+        "right" => 1,
+        _ => 2,
+    }
+}
+
+/// Où poser le cadre de mise en page et la plaque de fond dans une boîte `box_w`×`box_h`,
+/// une fois le bloc mesuré à `text_w`×`text_h`.
+///
+/// Repère **CoreGraphics** : origine en BAS à gauche, `y` croissant vers le haut. Le
+/// bitmap, lui, range sa ligne 0 en HAUT — d'où la conversion `box_h - haut - hauteur`,
+/// faite ici une fois pour toutes plutôt que dispersée dans les appels de dessin.
+///
+/// Deux choses que la version précédente ne faisait pas :
+///
+/// * **centrage vertical.** `CTFrameDraw` remplit son cadre du haut vers le bas ; avec un
+///   cadre couvrant toute la boîte, les lignes se collaient en haut et laissaient le reste
+///   vide. Une bande de sous-titres fait 22 % de la hauteur de l'image
+///   (`CAPTION_BAND_HEIGHT_PCT`, volontairement généreuse pour absorber deux lignes), donc
+///   « le reste » représentait ~180 px sur 238 en 1080p. C'est l'énorme marge basse.
+///   Windows n'avait pas le problème : `DWRITE_PARAGRAPH_ALIGNMENT_CENTER`.
+/// * **plaque ajustée au texte.** Le fond couvrait la boîte entière, là où le `<span>` du
+///   DOM, le renderer canvas et Direct2D (qui remplit `DWRITE_TEXT_METRICS`) l'ajustent
+///   tous au bloc mis en page.
+///
+/// Le cadre garde toute la largeur utile (`box_w` moins la marge de plaque) : c'est sur
+/// elle que CoreText applique l'alignement de paragraphe, exactement comme DirectWrite.
+/// L'inset horizontal joue le rôle du `p-2` que l'overlay DOM posait sur le conteneur — il
+/// réserve la place de la marge de plaque, pour qu'un texte aligné à gauche ou à droite ne
+/// la voie pas rognée par le bord de la boîte.
+fn block_layout(
+    box_w: CGFloat,
+    box_h: CGFloat,
+    text_w: CGFloat,
+    text_h: CGFloat,
+    align: u8,
+    font_px: CGFloat,
+) -> (CGRect, CGRect) {
+    let (pad_x, pad_y) = plate_padding(font_px);
+    let avail_w = layout_width(box_w, font_px);
+
+    // Un cadre haut d'exactement `text_h` perd parfois sa dernière ligne sur un arrondi de
+    // la mesure. On l'étend d'un pixel vers le BAS — donc en abaissant l'origine `y`, pas
+    // en montant le sommet — pour que le haut du texte ne bouge pas d'un poil.
+    const GUARD: CGFloat = 1.0;
+    let top = ((box_h - text_h) * 0.5).max(0.0);
+    let frame_x = (box_w - avail_w) * 0.5;
+    let frame = CGRect {
+        origin: CGPoint {
+            x: frame_x,
+            y: box_h - top - text_h - GUARD,
+        },
+        size: CGSize {
+            width: avail_w,
+            height: text_h + GUARD,
+        },
+    };
+
+    // La plaque épouse le bloc, marge comprise, sans jamais déborder de la boîte : au-delà
+    // elle serait coupée net par le bord de la texture et perdrait ses coins arrondis.
+    let plate_w = (text_w + pad_x * 2.0).min(box_w);
+    let plate_h = (text_h + pad_y * 2.0).min(box_h);
+    let slack_x = (box_w - plate_w).max(0.0);
+    let plate_x = match align {
+        // À gauche, les lignes commencent au bord gauche du cadre ; à droite, elles
+        // finissent au bord droit. La plaque déborde de `pad_x` du côté concerné.
+        0 => frame_x - pad_x,
+        1 => frame_x + avail_w + pad_x - plate_w,
+        _ => slack_x * 0.5,
+    }
+    .clamp(0.0, slack_x);
+    let plate_y = (box_h - top - text_h - pad_y).clamp(0.0, (box_h - plate_h).max(0.0));
+
+    (
+        frame,
+        CGRect {
+            origin: CGPoint {
+                x: plate_x,
+                y: plate_y,
+            },
+            size: CGSize {
+                width: plate_w,
+                height: plate_h,
+            },
+        },
+    )
+}
+
+/// Largeur offerte aux lignes — `crate::text_plate::layout_width`, en `CGFloat`.
+fn layout_width(box_w: CGFloat, font_px: CGFloat) -> CGFloat {
+    crate::text_plate::layout_width(box_w as f32, font_px as f32) as CGFloat
 }
 
 unsafe fn cf_string(s: &str) -> Option<CFOwned> {
@@ -296,34 +412,14 @@ impl TextRasterizer {
             bail!("CGBitmapContextCreate {w}x{h} a renvoyé NULL");
         }
 
-        let box_rect = CGRect {
-            origin: CGPoint { x: 0.0, y: 0.0 },
-            size: CGSize {
-                width: w as CGFloat,
-                height: h as CGFloat,
-            },
-        };
-
-        // Fond avant le flip : un rect plein est invariant par retournement.
-        if spec.background[3] > 0.0 {
-            CGContextSetRGBFillColor(
-                ctx,
-                spec.background[0] as CGFloat,
-                spec.background[1] as CGFloat,
-                spec.background[2] as CGFloat,
-                spec.background[3] as CGFloat,
-            );
-            CGContextFillRect(ctx, box_rect);
-        }
-
-        // PAS de flip du CTM ici, et c'est contre-intuitif. `CGBitmapContext` a bien son
-        // origine en bas à gauche, MAIS il stocke la ligne 0 du buffer EN HAUT de l'image —
-        // et `CTFrameDraw` remplit son cadre du haut vers le bas. La première ligne de texte
-        // atterrit donc déjà dans les premières lignes du buffer, c'est-à-dire en haut de la
+        // PAS de flip du CTM, et c'est contre-intuitif. `CGBitmapContext` a bien son origine
+        // en bas à gauche, MAIS il stocke la ligne 0 du buffer EN HAUT de l'image — et
+        // `CTFrameDraw` remplit son cadre du haut vers le bas. Le sommet du cadre atterrit
+        // donc déjà dans les premières lignes du buffer, c'est-à-dire en haut de la
         // `MTLTexture`. Le `ScaleCTM(1, -1)` que ce code faisait retournait une image déjà
         // correcte : le texte s'affichait en miroir vertical.
 
-        let drawn = self.draw_text(ctx, space, spec, box_rect);
+        let drawn = self.draw_text(ctx, space, spec, w as CGFloat, h as CGFloat);
 
         CGContextRelease(ctx);
         CGColorSpaceRelease(space);
@@ -362,7 +458,8 @@ impl TextRasterizer {
         ctx: CFTypeRef,
         space: CFTypeRef,
         spec: &TextSpec,
-        box_rect: CGRect,
+        box_w: CGFloat,
+        box_h: CGFloat,
     ) -> Result<()> {
         let content =
             cf_string(&spec.content).ok_or_else(|| anyhow!("CFStringCreateWithBytes NULL"))?;
@@ -409,12 +506,7 @@ impl TextRasterizer {
             .ok_or_else(|| anyhow!("CGColorCreate a renvoyé NULL"))?;
 
         // --- alignement ---
-        // `CTTextAlignment` : 0 = left, 1 = right, 2 = center, 3 = justified, 4 = natural.
-        let alignment: u8 = match spec.align.as_str() {
-            "left" => 0,
-            "right" => 1,
-            _ => 2,
-        };
+        let alignment: u8 = ct_alignment(&spec.align);
         let settings = [CTParagraphStyleSetting {
             spec: K_CT_PARAGRAPH_STYLE_SPECIFIER_ALIGNMENT,
             value_size: std::mem::size_of::<u8>(),
@@ -464,17 +556,71 @@ impl TextRasterizer {
 
         let framesetter = CFOwned::new(CTFramesetterCreateWithAttributedString(attributed.get()))
             .ok_or_else(|| anyhow!("CTFramesetterCreateWithAttributedString NULL"))?;
-        let path = CFOwned::new(CGPathCreateWithRect(box_rect, std::ptr::null()))
-            .ok_or_else(|| anyhow!("CGPathCreateWithRect NULL"))?;
+
         // `length: 0` = « jusqu'à la fin de la chaîne », la convention CoreText — pas
         // besoin de compter les caractères (et surtout pas en `chars()`, qui compte des
         // scalaires Unicode là où CFAttributedString compte des unités UTF-16).
+        let whole = CFRange {
+            location: 0,
+            length: 0,
+        };
+
+        // --- mesure du bloc mis en page ---
+        // Hauteur non contrainte (`CGFLOAT_MAX`) : on veut la place que le texte PREND, pas
+        // celle qu'on lui offre. Un texte plus haut que la boîte est ensuite recadré sur
+        // elle, ce qui le rend coupé en bas plutôt que centré et coupé des deux côtés.
+        let font_px = spec.font_size_px.max(1.0) as CGFloat;
+        let avail_w = layout_width(box_w, font_px);
+        let mut fit = whole;
+        let measured = CTFramesetterSuggestFrameSizeWithConstraints(
+            framesetter.get(),
+            whole,
+            std::ptr::null(),
+            CGSize {
+                width: avail_w,
+                height: CGFloat::MAX,
+            },
+            &mut fit as *mut CFRange,
+        );
+        // Arrondi au pixel supérieur : la mesure revient parfois une fraction sous la
+        // réalité, et il en faut peu pour rogner la dernière ligne.
+        let text_w = measured.width.ceil().clamp(0.0, avail_w);
+        let text_h = measured.height.ceil().max(0.0);
+
+        let (frame_rect, plate_rect) =
+            block_layout(box_w, box_h, text_w, text_h, alignment, font_px);
+
+        // --- plaque de fond, sous le texte ---
+        if spec.background[3] > 0.0 && plate_rect.size.width > 0.0 && plate_rect.size.height > 0.0
+        {
+            let radius = crate::text_plate::radius(
+                font_px as f32,
+                plate_rect.size.width as f32,
+                plate_rect.size.height as f32,
+            ) as CGFloat;
+            let plate = CFOwned::new(CGPathCreateWithRoundedRect(
+                plate_rect,
+                radius,
+                radius,
+                std::ptr::null(),
+            ))
+            .ok_or_else(|| anyhow!("CGPathCreateWithRoundedRect NULL"))?;
+            CGContextSetRGBFillColor(
+                ctx,
+                spec.background[0] as CGFloat,
+                spec.background[1] as CGFloat,
+                spec.background[2] as CGFloat,
+                spec.background[3] as CGFloat,
+            );
+            CGContextAddPath(ctx, plate.get());
+            CGContextFillPath(ctx);
+        }
+
+        let path = CFOwned::new(CGPathCreateWithRect(frame_rect, std::ptr::null()))
+            .ok_or_else(|| anyhow!("CGPathCreateWithRect NULL"))?;
         let frame = CFOwned::new(CTFramesetterCreateFrame(
             framesetter.get(),
-            CFRange {
-                location: 0,
-                length: 0,
-            },
+            whole,
             path.get(),
             std::ptr::null(),
         ))
@@ -489,17 +635,9 @@ impl TextRasterizer {
 mod tests {
     use super::*;
 
-    /// Une ligne de texte se dessine EN HAUT de sa boîte. Le test regarde où est l'encre
-    /// plutôt que de faire confiance au sens du CTM : c'est la seule façon de distinguer
-    /// « bien orienté » de « retourné », et le retournement était précisément le bug.
-    #[test]
-    fn text_lands_in_the_upper_half_not_mirrored() {
-        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
-            eprintln!("pas de device Metal — test sauté");
-            return;
-        };
-        let spec = TextSpec {
-            content: "Ag".into(),
+    fn spec(content: &str) -> TextSpec {
+        TextSpec {
+            content: content.into(),
             color: [1.0, 1.0, 1.0, 1.0],
             background: [0.0, 0.0, 0.0, 0.0],
             font_size_px: 48.0,
@@ -507,34 +645,204 @@ mod tests {
             bold: false,
             italic: false,
             underline: false,
-            align: "left".into(),
+            align: "center".into(),
             box_px: [256, 256],
+        }
+    }
+
+    /// Rastérise et rend les octets BGRA, ou `None` si la machine n'a pas de device Metal.
+    fn raster_bgra(spec: &TextSpec) -> Option<(Vec<u8>, usize, usize)> {
+        let Ok(gpu) = crate::d3d::Gpu::create(false) else {
+            eprintln!("pas de device Metal — test sauté");
+            return None;
         };
         let raster = TextRasterizer::new().expect("TextRasterizer::new");
-        let tex = unsafe { raster.rasterize(&gpu, &spec) }.expect("rasterize");
-
-        let (w, h) = (256usize, 256usize);
+        let tex = unsafe { raster.rasterize(&gpu, spec) }.expect("rasterize");
+        let (w, h) = (spec.box_px[0] as usize, spec.box_px[1] as usize);
         let mut px = vec![0u8; w * h * 4];
         tex.get_bytes(
             px.as_mut_ptr() as *mut c_void,
             (w * 4) as u64,
             metal::MTLRegion {
                 origin: metal::MTLOrigin { x: 0, y: 0, z: 0 },
-                size: metal::MTLSize { width: w as u64, height: h as u64, depth: 1 },
+                size: metal::MTLSize {
+                    width: w as u64,
+                    height: h as u64,
+                    depth: 1,
+                },
             },
             0,
         );
-        let ink = |rows: std::ops::Range<usize>| -> u64 {
-            rows.map(|y| {
-                (0..w).map(|x| px[(y * w + x) * 4 + 3] as u64).sum::<u64>()
-            })
-            .sum()
+        Some((px, w, h))
+    }
+
+    /// Boîte englobante de l'encre (alpha > 8) : `(x0, y0, x1, y1)`, bornes incluses.
+    fn ink_bounds(px: &[u8], w: usize, h: usize) -> (usize, usize, usize, usize) {
+        let (mut x0, mut y0, mut x1, mut y1) = (w, h, 0usize, 0usize);
+        for y in 0..h {
+            for x in 0..w {
+                if px[(y * w + x) * 4 + 3] > 8 {
+                    x0 = x0.min(x);
+                    y0 = y0.min(y);
+                    x1 = x1.max(x);
+                    y1 = y1.max(y);
+                }
+            }
+        }
+        assert!(x0 <= x1 && y0 <= y1, "aucune encre : rien n'a été rastérisé");
+        (x0, y0, x1, y1)
+    }
+
+    /// Le texte n'est pas retourné. Le test regarde où est l'encre plutôt que de faire
+    /// confiance au sens du CTM : c'est la seule façon de distinguer « bien orienté » de
+    /// « retourné », et le retournement était un vrai bug de ce fichier.
+    ///
+    /// Il compare les deux moitiés de la boîte ENGLOBANTE, pas de la boîte de sortie :
+    /// depuis le centrage vertical, un texte bien orienté n'est plus majoritairement dans
+    /// la moitié haute de la texture. `H` sur la première ligne et `.` sur la seconde rend
+    /// le bloc très dissymétrique, donc le miroir se voit immédiatement.
+    #[test]
+    fn text_is_not_mirrored_vertically() {
+        let Some((px, w, h)) = raster_bgra(&spec("HHHH\n.")) else {
+            return;
         };
-        let (top, bottom) = (ink(0..h / 2), ink(h / 2..h));
-        assert!(top > 0, "aucune encre : le texte n'a pas été rastérisé du tout");
+        let (_, y0, _, y1) = ink_bounds(&px, w, h);
+        let ink = |rows: std::ops::Range<usize>| -> u64 {
+            rows.map(|y| (0..w).map(|x| px[(y * w + x) * 4 + 3] as u64).sum::<u64>())
+                .sum()
+        };
+        let mid = (y0 + y1) / 2;
+        let (upper, lower) = (ink(y0..mid), ink(mid..y1 + 1));
         assert!(
-            top > bottom * 4,
-            "texte retourné : encre haut={top}, bas={bottom} (attendu très majoritairement en haut)"
+            upper > lower * 3,
+            "texte retourné : encre haut={upper}, bas={lower} (les `HHHH` sont sur la 1re ligne)"
         );
+    }
+
+    /// Le bug rapporté : une ligne de sous-titre se collait en haut de sa bande et laissait
+    /// ~180 px de vide en dessous. La bande fait 22 % de la hauteur de l'image, donc la
+    /// boîte est toujours bien plus haute que le texte — le bloc doit y être centré.
+    ///
+    /// La mesure porte sur la PLAQUE, pas sur les glyphes : l'encre ne remplit jamais sa
+    /// hauteur de ligne (au-dessus des capitales et sous les jambages il reste du vide,
+    /// en quantités inégales), donc ses marges ne sont pas symétriques même parfaitement
+    /// centrées. La plaque, elle, est le bloc mis en page.
+    #[test]
+    fn a_single_line_is_centred_in_a_tall_box() {
+        let mut s = spec("Bonjour tout le monde");
+        s.background = [0.0, 0.0, 0.0, 1.0];
+        // Une vraie bande de sous-titres en 1080p : 80 % de large, 22 % de haut.
+        s.box_px = [1536, 238];
+        let Some((px, w, h)) = raster_bgra(&s) else {
+            return;
+        };
+        let (x0, y0, x1, y1) = ink_bounds(&px, w, h);
+        let (top, bottom) = (y0 as i64, (h - 1 - y1) as i64);
+        let (left, right) = (x0 as i64, (w - 1 - x1) as i64);
+        assert!(
+            (top - bottom).abs() <= 1,
+            "bloc non centré verticalement : {top} px au-dessus, {bottom} px en dessous"
+        );
+        assert!(
+            (left - right).abs() <= 1,
+            "bloc non centré horizontalement : {left} px à gauche, {right} px à droite"
+        );
+        // Et le vide restant est réparti, pas empilé en bas comme avant le correctif.
+        assert!(top > 20, "la boîte fait {h} px de haut : le bloc devrait flotter dedans");
+    }
+
+    /// La plaque de fond épouse le bloc de texte au lieu de remplir la boîte. Sans ça, une
+    /// bande de sous-titres est un pavé opaque de 22 % de la hauteur de l'image.
+    #[test]
+    fn the_background_plate_hugs_the_text_not_the_box() {
+        let mut s = spec("Bonjour");
+        s.background = [0.0, 0.0, 0.0, 1.0];
+        s.box_px = [1536, 238];
+        let Some((px, w, h)) = raster_bgra(&s) else {
+            return;
+        };
+        let (x0, y0, x1, y1) = ink_bounds(&px, w, h);
+        let (plate_w, plate_h) = (x1 - x0 + 1, y1 - y0 + 1);
+        assert!(
+            plate_h < h / 2,
+            "la plaque couvre {plate_h} px sur {h} : elle remplit encore la boîte"
+        );
+        assert!(
+            plate_w < w / 2,
+            "la plaque couvre {plate_w} px sur {w} : elle remplit encore la boîte"
+        );
+        // Le fond est opaque : les coins de la boîte doivent rester vides.
+        for (cx, cy) in [(0, 0), (w - 1, 0), (0, h - 1), (w - 1, h - 1)] {
+            assert_eq!(
+                px[(cy * w + cx) * 4 + 3],
+                0,
+                "coin ({cx}, {cy}) peint : la plaque déborde du bloc"
+            );
+        }
+    }
+
+    /// La plaque laisse respirer le texte : `0.1em` en haut/bas, `0.2em` à gauche/droite,
+    /// le modèle de boîte partagé avec l'overlay DOM et le renderer canvas.
+    #[test]
+    fn the_plate_keeps_a_margin_around_the_glyphs() {
+        let mut s = spec("Bonjour");
+        s.box_px = [1536, 238];
+        let Some((glyphs, w, h)) = raster_bgra(&s) else {
+            return;
+        };
+        let (gx0, _, gx1, _) = ink_bounds(&glyphs, w, h);
+
+        s.background = [0.0, 0.0, 0.0, 1.0];
+        let Some((plate, _, _)) = raster_bgra(&s) else {
+            return;
+        };
+        let (px0, _, px1, _) = ink_bounds(&plate, w, h);
+
+        assert!(
+            px0 < gx0 && px1 > gx1,
+            "la plaque ({px0}..{px1}) ne dépasse pas les glyphes ({gx0}..{gx1})"
+        );
+    }
+
+    /// Un texte plus haut que sa boîte se coupe en BAS. Le centrer puis le rogner des deux
+    /// côtés mangerait la première ligne, qui est celle qu'on veut lire.
+    #[test]
+    fn an_overflowing_text_starts_at_the_top() {
+        let mut s = spec("Un texte tres long qui deborde largement de la boite prevue pour lui");
+        s.box_px = [240, 90];
+        let Some((px, w, h)) = raster_bgra(&s) else {
+            return;
+        };
+        let (_, y0, _, _) = ink_bounds(&px, w, h);
+        assert!(
+            y0 < h / 4,
+            "le débordement ne part pas du haut : première ligne d'encre à y={y0} sur {h}"
+        );
+    }
+
+    /// Géométrie pure — pas de GPU, pas de CoreText.
+    #[test]
+    fn block_layout_centres_the_frame_and_sizes_the_plate() {
+        let (frame, plate) = block_layout(1536.0, 238.0, 500.0, 56.0, 2, 48.0);
+        // Cadre centré : autant de vide au-dessus qu'en dessous (repère CG, y vers le haut).
+        let above = 238.0 - (frame.origin.y + frame.size.height);
+        let below = frame.origin.y;
+        assert!((above - below).abs() <= 1.5, "cadre décentré : {above} / {below}");
+        // Plaque = bloc + 0.2em/0.1em, centrée elle aussi.
+        assert!((plate.size.width - (500.0 + 2.0 * 9.6)).abs() < 0.01);
+        assert!((plate.size.height - (56.0 + 2.0 * 4.8)).abs() < 0.01);
+        assert!((plate.origin.x - (1536.0 - plate.size.width) * 0.5).abs() < 0.01);
+    }
+
+    #[test]
+    fn block_layout_never_lets_the_plate_leave_the_box() {
+        for align in [0u8, 1, 2] {
+            // Bloc plus large et plus haut que la boîte : la plaque doit se contenter d'elle.
+            let (_, plate) = block_layout(200.0, 60.0, 400.0, 200.0, align, 48.0);
+            assert!(plate.origin.x >= 0.0, "align={align} : x={}", plate.origin.x);
+            assert!(plate.origin.y >= 0.0, "align={align} : y={}", plate.origin.y);
+            assert!(plate.origin.x + plate.size.width <= 200.0 + 0.01, "align={align}");
+            assert!(plate.origin.y + plate.size.height <= 60.0 + 0.01, "align={align}");
+        }
     }
 }

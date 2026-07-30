@@ -36,6 +36,7 @@ pub mod gif_export;
 pub mod regions;
 pub mod scene;
 pub mod text_anim;
+pub mod text_plate;
 pub(crate) mod timeline_walk;
 
 // GPU backend : Windows → d3d_windows, macOS → d3d_macos. Ré-exporté sous le nom `d3d`
