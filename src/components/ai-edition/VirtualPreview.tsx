@@ -619,10 +619,13 @@ export function VirtualPreview({
 							// handles clip-end advancement, so dropping the event
 							// handler here is safe.
 						/>
-						{loadState !== "ready" && (
-							<div className={styles.overlay}>
-								{loadState === "error" ? "Video preview could not be loaded." : "Loading preview…"}
-							</div>
+						{/* Plus d'overlay « Loading preview… » : il reflétait l'état du <video>
+						    CACHÉ (source horloge/audio), pas la preview RÉELLE — le canvas natif,
+						    qui montre déjà une image valide pendant que le <video> re-seek. Il
+						    recouvrait donc une bonne image à chaque scrub, pour rien. On garde
+						    seulement l'erreur, qui, elle, signale un vrai échec de chargement. */}
+						{loadState === "error" && (
+							<div className={styles.overlay}>Video preview could not be loaded.</div>
 						)}
 					</div>
 					{/* The native D3D canvas already draws the recorded-cursor sprite as part
