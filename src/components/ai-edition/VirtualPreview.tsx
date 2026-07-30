@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
 	type CropRegion,
 	DEFAULT_CROP_REGION,
@@ -21,7 +21,15 @@ import {
 	computeZoomPreviewTransform,
 	IDENTITY_ZOOM_TRANSFORM,
 } from "@/lib/ai-edition/timeline/zoom-preview";
+import { isNativeCompositorActive, subscribeNativeCompositor } from "@/native";
 import styles from "./VirtualPreview.module.css";
+
+// #1 — throttle du seek du <video> caché pendant un scrub en pause (voir l'effet `seekTarget`).
+// ~15 Hz : le <video> reste à ≤~66 ms de la position, imperceptible pour un Play qui suit
+// (togglePlay ne re-seek pas, il lit `video.currentTime`), tout en supprimant ~3/4 des
+// décodages GPU dupliqués avec le natif. ponytail: seuil fixe, à ajuster si le décodage
+// <video> reste visible au profilage pendant un scrub.
+const SCRUB_VIDEO_SEEK_THROTTLE_MS = 66;
 
 export interface VideoSource {
 	id: string;
@@ -113,6 +121,20 @@ export function VirtualPreview({
 
 	const isProgrammaticSeekRef = useRef(false);
 	const pendingSeekRef = useRef<{ sourceTimeSec: number; play: boolean } | null>(null);
+	// Vue native active = le canvas natif dessine les pixels, donc le <video> est occulté.
+	// Lu dans l'effet `seekTarget` via une ref (pas une dépendance) pour ne pas rejouer un
+	// seek sur simple bascule d'activité native. `isNativeCompositorActive` est du pur JS
+	// (une variable de module), sans effet en test/web : la valeur y est `false`, chemin
+	// immédiat inchangé.
+	const nativeActive = useSyncExternalStore(subscribeNativeCompositor, isNativeCompositorActive);
+	const nativeActiveRef = useRef(nativeActive);
+	nativeActiveRef.current = nativeActive;
+	// État du throttle du seek <video> pendant un scrub en pause (voir l'effet plus bas).
+	const scrubSeekThrottleRef = useRef<{
+		lastAppliedMs: number;
+		timer: number;
+		pendingTimeSec: number | null;
+	}>({ lastAppliedMs: 0, timer: 0, pendingTimeSec: null });
 	// Which clip the rAF tick below believes is currently playing — set
 	// whenever a seek unambiguously resolves one (via locateVirtualPosition,
 	// timeline position → clip). Passed back into locateSourcePosition so
@@ -505,10 +527,57 @@ export function VirtualPreview({
 		if (!seekTarget) return;
 		if (seekTarget.isSource) {
 			seekToSourceTimeRef.current(seekTarget.timeSec);
-		} else {
-			seekToVirtualTimeRef.current?.(seekTarget.timeSec);
+			return;
+		}
+		const apply = (t: number) => seekToVirtualTimeRef.current?.(t);
+		// #1 — Pendant un scrub EN PAUSE avec le compositeur natif actif, le <video> est
+		// occulté par le canvas natif (qui dessine les pixels, piloté par le store via
+		// `useNativePlaybackSync`) et muet. Son `currentTime = …` à chaque pas déclenche un
+		// décodage GPU qui double celui du natif, pour des pixels jamais montrés et sans son :
+		// pur gaspillage, et le vrai coût GPU d'un scrub. On le throttle (bord de fuite
+		// garanti), sans jamais laisser le <video> sur une position périmée après relâchement.
+		//
+		// Hors de ce cas on applique tout de suite, comme avant : en LECTURE le <video> est
+		// l'horloge maître + la source audio ; natif ABSENT (dev web, addon en échec) le
+		// <video> EST la preview visible. Les seeks SOURCE (rares, discrets) ne sont pas
+		// throttlés non plus.
+		if (!nativeActiveRef.current || !videoRef.current?.paused) {
+			apply(seekTarget.timeSec);
+			return;
+		}
+		const th = scrubSeekThrottleRef.current;
+		const now = performance.now();
+		const since = now - th.lastAppliedMs;
+		if (since >= SCRUB_VIDEO_SEEK_THROTTLE_MS) {
+			th.lastAppliedMs = now;
+			apply(seekTarget.timeSec);
+			return;
+		}
+		// Trop tôt depuis le dernier décodage : on mémorise la dernière cible et on programme
+		// le bord de fuite (une seule fois). Sans lui, la position finale d'un scrub arrivée
+		// dans la fenêtre ne serait jamais appliquée, et un Play juste après lirait une
+		// `video.currentTime` périmée → départ audio décalé.
+		th.pendingTimeSec = seekTarget.timeSec;
+		if (th.timer === 0) {
+			th.timer = window.setTimeout(() => {
+				th.timer = 0;
+				th.lastAppliedMs = performance.now();
+				const pending = th.pendingTimeSec;
+				th.pendingTimeSec = null;
+				if (pending !== null) apply(pending);
+			}, SCRUB_VIDEO_SEEK_THROTTLE_MS - since);
 		}
 	}, [seekTarget]);
+
+	// Annule le bord de fuite en attente au démontage (évite un seek sur un <video> parti).
+	useEffect(() => {
+		const throttle = scrubSeekThrottleRef.current;
+		return () => {
+			if (throttle.timer !== 0) {
+				clearTimeout(throttle.timer);
+			}
+		};
+	}, []);
 
 	return (
 		<div className={styles.container}>
