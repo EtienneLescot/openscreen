@@ -50,11 +50,26 @@ export const HudDivider = memo(function HudDivider({ vertical }: { vertical: boo
 
 export const HudDragHandle = memo(function HudDragHandle({
 	vertical,
+	nativeDrag,
 	onPointerDown,
 	onPointerMove,
 	onPointerEnd,
 }: {
 	vertical: boolean;
+	/**
+	 * Hand the gesture to the compositor instead of the pointer handlers below.
+	 *
+	 * Wayland forbids a client from reading or setting its own global position:
+	 * `getPosition()` answers [0, 0] and `setPosition()` only updates Electron's
+	 * own cache, so the origin+delta scheme the handlers implement cannot move
+	 * the window there. `-webkit-app-region: drag` is the one path that does —
+	 * it routes to `xdg_toplevel.move` and the compositor performs the move.
+	 *
+	 * A drag region swallows pointer events, so the two are mutually exclusive:
+	 * platforms that can position themselves keep the handler path, which gives
+	 * finer control and lets the HUD suppress resizes mid-gesture.
+	 */
+	nativeDrag: boolean;
 	onPointerDown: (event: React.PointerEvent<HTMLDivElement>) => void;
 	onPointerMove: (event: React.PointerEvent<HTMLDivElement>) => void;
 	onPointerEnd: (event: React.PointerEvent<HTMLDivElement>) => void;
@@ -62,7 +77,9 @@ export const HudDragHandle = memo(function HudDragHandle({
 	return (
 		<div
 			data-testid="hud-drag-handle"
-			className={`flex ${vertical ? "h-6 w-8" : "h-8 w-7"} shrink-0 cursor-grab items-center justify-center active:cursor-grabbing ${styles.electronNoDrag}`}
+			className={`flex ${vertical ? "h-6 w-8" : "h-8 w-7"} shrink-0 cursor-grab items-center justify-center active:cursor-grabbing ${
+				nativeDrag ? styles.electronDrag : styles.electronNoDrag
+			}`}
 			onPointerDown={onPointerDown}
 			onPointerMove={onPointerMove}
 			onPointerUp={onPointerEnd}
