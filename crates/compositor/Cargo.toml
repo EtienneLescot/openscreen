@@ -44,3 +44,10 @@ metal = "0.29"
 objc = "0.2"
 block = "0.1"
 core-foundation = "0.9"
+
+# Linux : wgpu (Vulkan) pour le rendu, pollster pour block_on les ops wgpu,
+# cosmic-text pour la rastérisation du texte (remplace DirectWrite/CoreText).
+[target.'cfg(target_os = "linux")'.dependencies]
+wgpu.workspace = true
+pollster.workspace = true
+cosmic-text.workspace = true
