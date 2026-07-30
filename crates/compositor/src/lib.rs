@@ -52,6 +52,11 @@ pub mod d3d_macos;
 #[cfg(target_os = "macos")]
 pub use d3d_macos as d3d;
 
+#[cfg(target_os = "linux")]
+pub mod d3d_linux;
+#[cfg(target_os = "linux")]
+pub use d3d_linux as d3d;
+
 // Source de frames du backend « CPU-like » : Windows → cpu_frames_windows (WARP + swscale),
 // macOS → mac_frames (logiciel → CVPixelBuffer). Ré-exporté sous le nom `cpu_frames` (privé).
 #[cfg(windows)]
@@ -63,6 +68,13 @@ use cpu_frames_windows as cpu_frames;
 mod mac_frames;
 #[cfg(target_os = "macos")]
 use mac_frames as cpu_frames;
+
+#[cfg(target_os = "linux")]
+mod linux_frames;
+#[cfg(target_os = "linux")]
+use linux_frames as cpu_frames;
+#[cfg(target_os = "linux")]
+mod linux_decode;
 
 // Moteur de composition + rastériseur de texte + pipeline : un fichier par plateforme.
 // Le pipeline est gardé séparé (pas de fusion comme live) parce que la ffmpeg-side
@@ -84,6 +96,13 @@ pub mod pipeline_macos;
 #[cfg(target_os = "macos")]
 pub mod text_macos;
 
+#[cfg(target_os = "linux")]
+pub mod text_linux;
+#[cfg(target_os = "linux")]
+pub mod compositor_linux;
+#[cfg(target_os = "linux")]
+pub mod pipeline_linux;
+
 #[cfg(windows)]
 pub use compositor_windows as compositor;
 #[cfg(windows)]
@@ -97,6 +116,13 @@ pub use compositor_macos as compositor;
 pub use pipeline_macos as pipeline;
 #[cfg(target_os = "macos")]
 pub use text_macos as text;
+
+#[cfg(target_os = "linux")]
+pub use text_linux as text;
+#[cfg(target_os = "linux")]
+pub use compositor_linux as compositor;
+#[cfg(target_os = "linux")]
+pub use pipeline_linux as pipeline;
 
 // `live.rs` est resté un fichier unique parce que sa machinerie principale (Player,
 // LiveView, render_thread) est entièrement cross-platform : elle ne touche qu'au
