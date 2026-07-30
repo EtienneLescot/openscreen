@@ -1,15 +1,15 @@
-// Tranche verticale WP4 ÔÇö Kawase blur (mode 9+10 du HLSL) port├® en WGSL.
+// Tranche verticale WP4 — Kawase blur (mode 9+10 du HLSL) porté en WGSL.
 //
 // Le Kawase blur est une approximation gaussienne en 6 passes : down 3x
-// (RTÔåÆ┬¢ÔåÆ┬╝ÔåÆÔàø) puis up 3x (ÔàøÔåÆ┬╝ÔåÆ┬¢ÔåÆRT). Chaque passe est un 5-tap lin├®aire
-// ├á offset 2.2 px (cf. HLSL `ps_kawase_down` / `ps_kawase_up`). Le r├®sultat
-// est visuellement ├®quivalent ├á un flou gaussien ~30-50 px (selon la
-// taille de la pyramide) ├á un co├╗t constant 6├ù5 = 30 taps ÔÇö vs 49 taps
-// pour une passe gaussienne ├®quivalente. Cf. HLSL `Compositor::blur_bg`.
+// (RT→½→¼→⅛) puis up 3x (⅛→¼→½→RT). Chaque passe est un 5-tap linéaire
+// à offset 2.2 px (cf. HLSL `ps_kawase_down` / `ps_kawase_up`). Le résultat
+// est visuellement équivalent à un flou gaussien ~30-50 px (selon la
+// taille de la pyramide) à un coût constant 6×5 = 30 taps — vs 49 taps
+// pour une passe gaussienne équivalente. Cf. HLSL `Compositor::blur_bg`.
 //
-// Bindings : la passe de down lit d'une texture RGBA8 et ├®crit dans
+// Bindings : la passe de down lit d'une texture RGBA8 et écrit dans
 // une texture RGBA8 plus petite ; la passe d'up fait l'inverse. Toutes
-// les passes partagent le m├¬me bind group layout, seule la constante
+// les passes partagent le même bind group layout, seule la constante
 // `texel_offset` (dans LayerCB `fx`) change entre les passes.
 
 struct Layer {
@@ -36,8 +36,8 @@ struct VsOut {
 
 @vertex
 fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
-    // Fullscreen triangle ÔÇö un seul triangle couvre tout l'├®cran, plus
-    // efficace qu'un quad en termes de pixels shaders ├®mis.
+    // Fullscreen triangle — un seul triangle couvre tout l'écran, plus
+    // efficace qu'un quad en termes de pixels shaders émis.
     let pos = array<vec2<f32>, 3>(
         vec2<f32>(-1.0, -1.0),
         vec2<f32>( 3.0, -1.0),
@@ -52,8 +52,8 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
     return o;
 }
 
-// Kawase down : 5-tap lin├®aire ├á offset `texel_offset` en coords source.
-// `texel_offset` est 2.2 typiquement (le spread mesur├® du filtre).
+// Kawase down : 5-tap linéaire à offset `texel_offset` en coords source.
+// `texel_offset` est 2.2 typiquement (le spread mesuré du filtre).
 @fragment
 fn fs_kawase_down(i: VsOut) -> @location(0) vec4<f32> {
     let o = layer.fx.x;
@@ -65,12 +65,12 @@ fn fs_kawase_down(i: VsOut) -> @location(0) vec4<f32> {
     return vec4<f32>((c + s1 + s2 + s3 + s4) * 0.2, layer.color.a);
 }
 
-// Kawase up : interpolation lin├®aire entre la texture de destination
-// (`tex`) et l'├®chantillon ├á offset `texel_offset` dans la m├¬me texture.
-// C'est l'algorithme Kawase ┬½ up ┬╗ original ÔÇö moins connu que le down
-// mais c'est ce qui donne le look "soft glow" mesur├® sur le banc.
+// Kawase up : interpolation linéaire entre la texture de destination
+// (`tex`) et l'échantillon à offset `texel_offset` dans la même texture.
+// C'est l'algorithme Kawase « up » original — moins connu que le down
+// mais c'est ce qui donne le look "soft glow" mesuré sur le banc.
 //
-// On interpole entre la valeur au centre et les 4 voisins ├á offset `o`.
+// On interpole entre la valeur au centre et les 4 voisins à offset `o`.
 @fragment
 fn fs_kawase_up(i: VsOut) -> @location(0) vec4<f32> {
     let o = layer.fx.x;
@@ -79,7 +79,7 @@ fn fs_kawase_up(i: VsOut) -> @location(0) vec4<f32> {
     let s2 = textureSample(tex, samp, i.uv + vec2<f32>(-o,  o) / vec2<f32>(layer.quad_px.x, layer.quad_px.y)).rgb;
     let s3 = textureSample(tex, samp, i.uv + vec2<f32>( o, -o) / vec2<f32>(layer.quad_px.x, layer.quad_px.y)).rgb;
     let s4 = textureSample(tex, samp, i.uv + vec2<f32>(-o, -o) / vec2<f32>(layer.quad_px.x, layer.quad_px.y)).rgb;
-    // Pond├®ration (1.0 centre, 0.5 chaque voisin) ÔÇö 1+4├ù0.5 = 3.0, /3 = 1/3 par
-    // ├®chantillon. Le rendu Kawase up est plus doux que le down.
+    // Pondération (1.0 centre, 0.5 chaque voisin) — 1+4×0.5 = 3.0, /3 = 1/3 par
+    // échantillon. Le rendu Kawase up est plus doux que le down.
     return vec4<f32>((c + (s1 + s2 + s3 + s4) * 0.5) / 3.0, layer.color.a);
 }

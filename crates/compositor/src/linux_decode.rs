@@ -1,16 +1,16 @@
-//! D├®codeur logiciel ffmpeg ÔÇö utilis├® par la tranche verticale `vk_render`
-//! pour ouvrir un MP4 fixture et en extraire la `n`-i├¿me frame en m├®moire
-//! syst├¿me, sans aucune d├®pendance ├á `D3D11VA`. C├┤t├® production, ce sera
-//! `pipeline::Decoder::open` c├┤t├® Windows (qui route par D3D11VA quand FL 11_1
-//! + vid├®o disponible, par `vk_frames::VkFrames` sinon) ; ici on isole le
-//! chemin ┬½ software decode + `vk_frames::present` ┬╗ pour le d├®montrer sans
-//! toucher `pipeline.rs` (cf. spec ┬º3.4 ÔÇö `pipeline.rs` est dans WP6).
+//! Décodeur logiciel ffmpeg — utilisé par la tranche verticale `vk_render`
+//! pour ouvrir un MP4 fixture et en extraire la `n`-ième frame en mémoire
+//! système, sans aucune dépendance à `D3D11VA`. Côté production, ce sera
+//! `pipeline::Decoder::open` côté Windows (qui route par D3D11VA quand FL 11_1
+//! + vidéo disponible, par `vk_frames::VkFrames` sinon) ; ici on isole le
+//! chemin « software decode + `vk_frames::present` » pour le démontrer sans
+//! toucher `pipeline.rs` (cf. spec §3.4 — `pipeline.rs` est dans WP6).
 //!
-//! **S├®curit├® lifetime.** L'`AVFrame` retourn├® est allou├® par `av_frame_alloc`
-//! et lib├®r├® par `av_frame_free` ÔÇö le caller doit soit appeler `free_frame()`
+//! **Sécurité lifetime.** L'`AVFrame` retourné est alloué par `av_frame_alloc`
+//! et libéré par `av_frame_free` — le caller doit soit appeler `free_frame()`
 //! soit (mieux) laisser `vk_frames::VkFrames::present` la consommer puis
-//! r├®├®crire la prochaine. Garder une frame au-del├á du prochain `decode_n`
-//! lib├¿re l'ancienne, exactement comme `cpu_frames::present` c├┤t├® #162.
+//! réécrire la prochaine. Garder une frame au-delà du prochain `decode_n`
+//! libère l'ancienne, exactement comme `cpu_frames::present` côté #162.
 
 use anyhow::{bail, Context, Result};
 use std::ffi::CString;
@@ -24,38 +24,38 @@ use crate::ffi::{
     avformat_open_input, AVCodecContext, AVFormatContext, AVFrame, AVMediaType, AVStream,
 };
 
-/// `sn_fmt_stream` est d├®fini dans `crates/compositor/shim.c` ÔÇö bindgen ne le voit pas
-/// (shim.c est compil├® s├®par├®ment par `cc::Build`). On le d├®clare ici en `extern "C"`
-/// comme `pipeline.rs` le fait. La m├¬me convention appara├«t ├á plusieurs endroits du
+/// `sn_fmt_stream` est défini dans `crates/compositor/shim.c` — bindgen ne le voit pas
+/// (shim.c est compilé séparément par `cc::Build`). On le déclare ici en `extern "C"`
+/// comme `pipeline.rs` le fait. La même convention apparaît à plusieurs endroits du
 /// crate pour tous les accesseurs du shim.
 extern "C" {
     fn sn_fmt_stream(s: *mut AVFormatContext, i: i32) -> *mut AVStream;
 }
 
-/// `SEEK_SET` constant ÔÇö la position de seek `av_seek_frame` interpr├¿te
+/// `SEEK_SET` constant — la position de seek `av_seek_frame` interprète
 /// `timestamp` comme un timestamp absolu (AV_TIME_BASE = microsecondes).
 const SEEK_SET: i32 = 0;
 
-/// Cherche la vid├®o du fichier, ouvre le d├®codeur, et rend un ├®tat pr├¬t ├á
-/// d├®coder. La struct expose `decode_at(frame_idx)` qui seek + d├®code jusqu'├á
-/// la frame `frame_idx` (0-index├®e depuis le d├®but du flux).
+/// Cherche la vidéo du fichier, ouvre le décodeur, et rend un état prêt à
+/// décoder. La struct expose `decode_at(frame_idx)` qui seek + décode jusqu'à
+/// la frame `frame_idx` (0-indexée depuis le début du flux).
 ///
 /// Pub (pas `pub(crate)`) parce que `crates/compositor/tests/vk_cross_golden.rs`
-/// est un crate externe vis-├á-vis de la lib ; le test pilote la tranche.
+/// est un crate externe vis-à-vis de la lib ; le test pilote la tranche.
 pub struct SwDecoder {
     fmt: *mut AVFormatContext,
     dec: *mut AVCodecContext,
     stream_idx: i32,
-    /// Timebase du flux vid├®o (en secondes par tick). Permet de convertir un
+    /// Timebase du flux vidéo (en secondes par tick). Permet de convertir un
     /// `frame_idx` en timestamp de seek.
     stream_timebase: f64,
     /// Cadence reelle du flux (avg_frame_rate), PAS 1/time_base.
     fps: f64,
 }
 
-/// Lib├¿re toutes les ressources ffmpeg. `Drop` ne peut pas faillir ; on
-/// panique sur une erreur double-free improbable (les handles sont nullifi├®s
-/// apr├¿s lib├®ration, un deuxi├¿me `Drop` les trouve ├á null et n'agit pas).
+/// Libère toutes les ressources ffmpeg. `Drop` ne peut pas faillir ; on
+/// panique sur une erreur double-free improbable (les handles sont nullifiés
+/// après libération, un deuxième `Drop` les trouve à null et n'agit pas).
 impl Drop for SwDecoder {
     fn drop(&mut self) {
         unsafe {
@@ -79,7 +79,7 @@ impl SwDecoder {
         let mut fmt: *mut AVFormatContext = ptr::null_mut();
         let r = avformat_open_input(&mut fmt, path_c.as_ptr(), ptr::null(), ptr::null_mut());
         if r < 0 {
-            bail!("avformat_open_input({path}) a ├®chou├®: {r}");
+            bail!("avformat_open_input({path}) a échoué: {r}");
         }
         if fmt.is_null() {
             bail!("avformat_open_input({path}) a rendu un fmt null");
@@ -87,9 +87,9 @@ impl SwDecoder {
         let r = avformat_find_stream_info(fmt, ptr::null_mut());
         if r < 0 {
             avformat_close_input(&mut fmt);
-            bail!("avformat_find_stream_info({path}) a ├®chou├®: {r}");
+            bail!("avformat_find_stream_info({path}) a échoué: {r}");
         }
-        // Trouver le premier flux vid├®o. `av_find_best_stream` fait ├ºa 1.0.
+        // Trouver le premier flux vidéo. `av_find_best_stream` fait ça 1.0.
         let stream_idx = crate::ffi::av_find_best_stream(
             fmt,
             AVMediaType::AVMEDIA_TYPE_VIDEO,
@@ -100,16 +100,16 @@ impl SwDecoder {
         );
         if stream_idx < 0 {
             avformat_close_input(&mut fmt);
-            bail!("av_find_best_stream n'a pas trouv├® de flux vid├®o dans {path}: {stream_idx}");
+            bail!("av_find_best_stream n'a pas trouvé de flux vidéo dans {path}: {stream_idx}");
         }
-        // Codec params ÔåÆ context ÔåÆ open. AVFormatContext est opaque : `sn_fmt_stream`
+        // Codec params → context → open. AVFormatContext est opaque : `sn_fmt_stream`
         // (du `shim.c`) extrait `streams[i]` ; AVStream ne l'est pas, on lit son
         // `codecpar` directement. Cf. `pipeline.rs` pour la convention.
         let stream = sn_fmt_stream(fmt, stream_idx);
         let mut dec = avcodec_alloc_context3(ptr::null());
         if dec.is_null() {
             avformat_close_input(&mut fmt);
-            bail!("avcodec_alloc_context3 a ├®chou├®");
+            bail!("avcodec_alloc_context3 a échoué");
         }
         let par = (*stream).codecpar;
         let r = avcodec_parameters_to_context(dec, par);
@@ -123,7 +123,7 @@ impl SwDecoder {
             avcodec_free_context(&mut dec);
             avformat_close_input(&mut fmt);
             bail!(
-                "avcodec_find_decoder n'a pas trouv├® de d├®codeur pour codec_id {}",
+                "avcodec_find_decoder n'a pas trouvé de décodeur pour codec_id {}",
                 (*par).codec_id
             );
         }
@@ -133,7 +133,7 @@ impl SwDecoder {
             avformat_close_input(&mut fmt);
             bail!("avcodec_open2: {r}");
         }
-        // Timebase du flux vid├®o ÔÇö `AVRational { num, den }`. ffmpeg utilise `num` ticks
+        // Timebase du flux vidéo — `AVRational { num, den }`. ffmpeg utilise `num` ticks
         // par `den` secondes. Le wrapper bindgen expose les deux champs en i32.
         let stream_timebase = {
             let num = (*stream).time_base.num as f64;
@@ -167,33 +167,33 @@ impl SwDecoder {
         })
     }
 
-    /// Seek vers la keyframe la plus proche AVANT `frame_idx`, puis d├®code
-    /// jusqu'├á atteindre la frame demand├®e. Le seek est r├®solu par
+    /// Seek vers la keyframe la plus proche AVANT `frame_idx`, puis décode
+    /// jusqu'à atteindre la frame demandée. Le seek est résolu par
     /// `av_seek_frame` avec `SEEK_SET | BACKWARD` (cherche le keyframe
-    /// pr├®c├®dent le timestamp demand├®). Renvoie une `AVFrame` allou├®e par
-    /// `av_frame_alloc` que le caller doit lib├®rer via `free_frame` ÔÇö
-    /// ou laisser `vk_frames::VkFrames::present` consommer (qui r├®├®crit
+    /// précédent le timestamp demandé). Renvoie une `AVFrame` allouée par
+    /// `av_frame_alloc` que le caller doit libérer via `free_frame` —
+    /// ou laisser `vk_frames::VkFrames::present` consommer (qui réécrit
     /// `present` avec son carrier, l'ancienne frame devient inaccessible).
     ///
     /// **Robustesse.** Pour la tranche verticale (`crates/fixture/screen.mp4`
     /// qui est un `-c copy` d'un fragment de recording), `av_seek_frame` peut
-    /// renvoyer un packet dont la premi├¿re lecture NAL est mal align├®e (le
+    /// renvoyer un packet dont la première lecture NAL est mal alignée (le
     /// moov de la source est en queue, le parser fait de son mieux mais le
-    /// premier packet apr├¿s un BACKWARD seek contient parfois un NAL
-    /// fragment├®). On skippe ces packets avec `send_packet` qui renvoie
-    /// `AVERROR_INVALIDDATA` plut├┤t que de paniquer : la prochaine it├®ration
+    /// premier packet après un BACKWARD seek contient parfois un NAL
+    /// fragmenté). On skippe ces packets avec `send_packet` qui renvoie
+    /// `AVERROR_INVALIDDATA` plutôt que de paniquer : la prochaine itération
     /// lira le packet complet suivant.
     pub unsafe fn decode_at(&mut self, frame_idx: u32) -> Result<*mut AVFrame> {
         let fps = self.fps;
-        let target_ts = (frame_idx as f64 / fps) * 1_000_000.0; // AV_TIME_BASE = ┬Ás
-                                                                // BACKWARD = 4 (chercher la keyframe pr├®c├®dente). Cf. ffmpeg `av_seek_flag`.
+        let target_ts = (frame_idx as f64 / fps) * 1_000_000.0; // AV_TIME_BASE = µs
+                                                                // BACKWARD = 4 (chercher la keyframe précédente). Cf. ffmpeg `av_seek_flag`.
         let seek_flags = SEEK_SET | 4;
         let r = av_seek_frame(self.fmt, -1, target_ts as i64, seek_flags);
         if r < 0 {
-            bail!("av_seek_frame(ts={target_ts:.0} ┬Ás) a ├®chou├®: {r}");
+            bail!("av_seek_frame(ts={target_ts:.0} µs) a échoué: {r}");
         }
-        // Flush le d├®codeur ÔÇö sans ├ºa, le seek laisse l'├®tat interne avec les
-        // frames de l'ancien GOP, et la premi├¿re `receive_frame` peut ├¬tre
+        // Flush le décodeur — sans ça, le seek laisse l'état interne avec les
+        // frames de l'ancien GOP, et la première `receive_frame` peut être
         // une frame d'avant le seek.
         avcodec_flush_buffers(self.dec);
 
@@ -210,25 +210,25 @@ impl SwDecoder {
             }
             let r = av_read_frame(self.fmt, pkt);
             if r < 0 {
-                // EOF ou erreur : on a ├®puis├® le fichier sans atteindre la cible.
+                // EOF ou erreur : on a épuisé le fichier sans atteindre la cible.
                 av_packet_free(&mut pkt);
                 break 'outer;
             }
             if (*pkt).stream_index != self.stream_idx {
-                // Pas un packet vid├®o ÔÇö on le jette et on continue.
+                // Pas un packet vidéo — on le jette et on continue.
                 av_packet_free(&mut pkt);
                 continue;
             }
             let send_r = avcodec_send_packet(self.dec, pkt);
             av_packet_free(&mut pkt);
             if send_r == -0x2A2A2A2A {
-                // AVERROR_INVALIDDATA ÔÇö packet mal align├® apr├¿s un seek. On le
+                // AVERROR_INVALIDDATA — packet mal aligné après un seek. On le
                 // saute et on continue ; le decodeur attendra un packet propre.
-                // Valeur ffmpeg = -1094995529 (0xBEEBBEEB), ici ├®crite comme
-                // un nombre n├®gatif litt├®ral pour ├®viter la d├®pendance `ffi::`.
+                // Valeur ffmpeg = -1094995529 (0xBEEBBEEB), ici écrite comme
+                // un nombre négatif littéral pour éviter la dépendance `ffi::`.
                 invalid_skips += 1;
                 if invalid_skips > 8 {
-                    bail!("plus de 8 packets invalides apr├¿s seek ÔÇö fichier ou codec cass├®");
+                    bail!("plus de 8 packets invalides après seek — fichier ou codec cassé");
                 }
                 continue;
             }
@@ -273,7 +273,7 @@ impl SwDecoder {
             av_packet_free(&mut pkt);
         }
         if found.is_null() {
-            bail!("decode_at(frame_idx={frame_idx}) : aucune frame re├ºue");
+            bail!("decode_at(frame_idx={frame_idx}) : aucune frame reçue");
         }
         Ok(found)
     }
@@ -304,7 +304,7 @@ impl SwDecoder {
         }
     }
 
-    /// Lib├¿re une frame renvoy├®e par `decode_at`.
+    /// Libère une frame renvoyée par `decode_at`.
     pub unsafe fn free_frame(mut frame: *mut AVFrame) {
         av_frame_free(&mut frame);
     }
@@ -316,8 +316,8 @@ impl SwDecoder {
 mod tests {
     use super::*;
 
-    /// Le d├®codeur ne paniquera pas si le fichier n'existe pas ÔÇö il renvoie
-    /// `Err`. C'est ce que le test d'int├®gration attend pour skipper proprement
+    /// Le décodeur ne paniquera pas si le fichier n'existe pas — il renvoie
+    /// `Err`. C'est ce que le test d'intégration attend pour skipper proprement
     /// quand `crates/fixture/screen.mp4` est absent.
     #[test]
     fn open_sur_chemin_inexistant_renvoie_err() {
