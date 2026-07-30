@@ -62,11 +62,19 @@ export function setUiProbeScrubbing(active: boolean): void {
  * mesures ne sont pas comparables — donc la sonde le fait elle-même plutôt que de compter
  * sur la discipline de celui qui teste.
  */
-export function noteUiProbeClipSwitch(): void {
-	if (running) {
-		clipSwitches++;
+export function noteUiProbeClipSwitch(fromClipId: string | null, toClipId: string): void {
+	if (!running) {
+		return;
 	}
+	clipSwitches++;
+	clipSwitchLog.push({ t: performance.now(), from: fromClipId ?? "-", to: toClipId });
 }
+
+/** Horodatage et destination de chaque bascule — pour distinguer une oscillation rapide
+ *  (aller-retour au voisinage d'une frontière) d'un étalement normal. Les deux n'appellent
+ *  pas le même remède : un anti-rebond pour la première, une correction de la logique de
+ *  résolution de clip pour la seconde. */
+const clipSwitchLog: { t: number; from: string; to: string }[] = [];
 
 function bucketFor(state: ProbeState): Bucket {
 	let b = buckets.get(state);
@@ -135,6 +143,44 @@ function summarize() {
 	console.warn(
 		`[ui-probe] intervalles rAF en ms — ${clipSwitches} bascule(s) de clip, ${videos} <video> vivants\n${rows.join("\n")}`,
 	);
+	summarizeClipSwitches();
+}
+
+/**
+ * Caractérise les bascules de clip : rafale ou étalement ?
+ *
+ * Une même manipulation a produit 2 changements voulus par l'utilisateur et 30 bascules
+ * réelles. Reste à savoir si elles arrivent groupées — un aller-retour au voisinage d'une
+ * frontière, qui appelle un anti-rebond — ou réparties, ce qui désignerait plutôt la
+ * résolution de clip elle-même. On mesure donc l'écart entre bascules consécutives.
+ */
+function summarizeClipSwitches() {
+	if (clipSwitchLog.length < 2) {
+		return;
+	}
+	const gaps: number[] = [];
+	for (let i = 1; i < clipSwitchLog.length; i++) {
+		gaps.push(clipSwitchLog[i].t - clipSwitchLog[i - 1].t);
+	}
+	const burst = gaps.filter((g) => g < 500).length;
+	const sorted = [...gaps].sort((a, b) => a - b);
+	const median = sorted[Math.floor(sorted.length / 2)];
+	// Un aller-retour = la destination d'une bascule redevient la source de la suivante.
+	let flapping = 0;
+	for (let i = 2; i < clipSwitchLog.length; i++) {
+		if (clipSwitchLog[i].to === clipSwitchLog[i - 2].to) {
+			flapping++;
+		}
+	}
+	console.warn(
+		`[ui-probe] bascules : ${clipSwitchLog.length} au total, ` +
+			`${burst} à moins de 500 ms de la précédente, écart médian ${median.toFixed(0)} ms, ` +
+			`${flapping} aller-retours (A→B→A)\n` +
+			`  dernières : ${clipSwitchLog
+				.slice(-8)
+				.map((s) => `${s.from.slice(-4)}→${s.to.slice(-4)}`)
+				.join("  ")}`,
+	);
 }
 
 /**
@@ -186,6 +232,7 @@ export function startUiProbe(reportEverySec = 10): void {
 	buckets.clear();
 	longTasks.length = 0;
 	clipSwitches = 0;
+	clipSwitchLog.length = 0;
 	lastTs = 0;
 	rafHandle = requestAnimationFrame(tick);
 	try {
