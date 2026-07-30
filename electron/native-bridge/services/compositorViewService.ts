@@ -1,6 +1,5 @@
 import fs from "node:fs";
 import { createRequire } from "node:module";
-import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { app } from "electron";
@@ -335,41 +334,6 @@ function ensureFfmpegSharedDllsOnPath(appRoot: string): void {
 	process.env.PATH = `${dir}${path.delimiter}${current}`;
 }
 
-/**
- * Load the addon, forcing it to bind against the ffmpeg shipped beside it.
- *
- * On Linux this cannot be a plain `require()`. ELF has a single flat symbol
- * namespace, and `libffmpeg.so` — Chromium's own heavily stripped ffmpeg — is a
- * DT_NEEDED dependency of the Electron binary, so it is loaded into the global
- * scope before any addon. Every `avformat_*` / `avcodec_*` / `av_*` symbol the
- * addon imports then resolves to Chromium's build instead of ours, no matter
- * what the addon's RUNPATH says: the symbols are already satisfied.
- *
- * The visible failure is `avformat_open_input` returning
- * AVERROR_PROTOCOL_NOT_FOUND on an ordinary path — Chromium's ffmpeg has no
- * `file` protocol, because Chromium feeds it buffers rather than filenames. The
- * quieter danger is that the addon is then running against a completely
- * different ffmpeg than the one it was compiled and tested against: no
- * libopenh264, no libkvazaar, and no guarantee the two agree on anything beyond
- * the shared soname.
- *
- * RTLD_DEEPBIND puts the addon's own dependency scope ahead of the global one,
- * so its RUNPATH (`$ORIGIN`, see scripts/build-linux-compositor-addon.mjs) wins.
- *
- * Windows and macOS are structurally immune: PE resolves imports by DLL name and
- * Mach-O records the defining dylib per symbol, so neither can collide this way.
- * They keep the plain require.
- */
-function loadNativeAddon(candidate: string): unknown {
-	if (process.platform !== "linux") {
-		return localRequire(candidate) as unknown;
-	}
-	const { RTLD_NOW, RTLD_DEEPBIND } = os.constants.dlopen;
-	const shim = { exports: {} };
-	process.dlopen(shim, candidate, RTLD_NOW | RTLD_DEEPBIND);
-	return shim.exports;
-}
-
 function tryLoadAddon(candidates: string[]): CompositorViewAddon | null {
 	for (const candidate of candidates) {
 		try {
@@ -379,7 +343,7 @@ function tryLoadAddon(candidates: string[]): CompositorViewAddon | null {
 			if (!fs.existsSync(candidate)) {
 				continue;
 			}
-			const loaded = loadNativeAddon(candidate);
+			const loaded = localRequire(candidate) as unknown;
 			if (loaded && typeof loaded === "object") {
 				return loaded as CompositorViewAddon;
 			}
