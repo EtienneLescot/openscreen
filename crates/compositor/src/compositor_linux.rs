@@ -618,10 +618,14 @@ impl Compositor {
         });
         let _ = (wtw, wth); // webcam PiP : calque a venir.
 
-        // Fond : Color -> clear a la couleur ; Gradient -> clear transparent +
-        // draw mode 5 ; Image -> repli couleur (calque image a venir). Le blur
-        // (si cfg.bg_blur) floute ensuite ce fond, avant l'ecran.
-        let (bg_clear, gradient_cb) = match scene_ref.as_ref().map(|s| s.background.clone()) {
+        // Fond : Color -> clear a la couleur ; Gradient -> mode 5 ; Image ->
+        // mode 6 wallpaper cover-fit (via load_image_texture). Le blur (si
+        // cfg.bg_blur) floute ensuite ce fond, avant l'ecran.
+        enum BgLayer {
+            Gradient(LayerCB),
+            Image(String),
+        }
+        let (bg_clear, bg_layer) = match scene_ref.as_ref().map(|s| s.background.clone()) {
             Some(SceneBackground::Color { color }) => {
                 (parse_hex(&color).unwrap_or(lp.bg_color), None)
             }
@@ -638,9 +642,12 @@ impl Compositor {
                     fx: [a.sin(), -a.cos(), 0.0, 0.0],
                     ..Default::default()
                 };
-                ([0.0, 0.0, 0.0, 1.0], Some(cb))
+                ([0.0, 0.0, 0.0, 1.0], Some(BgLayer::Gradient(cb)))
             }
-            _ => (lp.bg_color, None),
+            Some(SceneBackground::Image { path }) => {
+                ([0.0, 0.0, 0.0, 1.0], Some(BgLayer::Image(path)))
+            }
+            None => (lp.bg_color, None),
         };
 
         // Calque ecran (mode 0 : NV12 -> RGB), place par plan_frame (cover-fit +
@@ -660,8 +667,57 @@ impl Compositor {
         let (_screen_uniform, screen_bind) =
             self.make_bind(&screen_layer, Some((&sy, &suv)), &dummy);
 
-        // Fond gradient (mode 5), dessine dans la passe de fond si present.
-        let gradient_bind = gradient_cb.as_ref().map(|cb| self.make_bind(cb, None, &dummy));
+        // Fond (gradient mode 5 OU image mode 6), dessine dans la passe de fond.
+        // `_tex`/`_view` gardent l'image en vie pendant le pass.
+        struct BgDraw {
+            _buf: wgpu::Buffer,
+            _tex: Option<wgpu::Texture>,
+            _view: Option<wgpu::TextureView>,
+            bind: wgpu::BindGroup,
+        }
+        let bg_draw = bg_layer.and_then(|bl| match bl {
+            BgLayer::Gradient(cb) => {
+                let (buf, bind) = self.make_bind(&cb, None, &dummy);
+                Some(BgDraw { _buf: buf, _tex: None, _view: None, bind })
+            }
+            BgLayer::Image(path) => {
+                // Charge (ou recupere du cache) le wallpaper. Emprunt isole AVANT
+                // le borrow_mut (piege du double emprunt 1re frame, cf. macOS).
+                let cached = self.img_cache.borrow().get(path.as_str()).cloned();
+                let (tex, iw, ih) = match cached {
+                    Some(v) => v,
+                    None => match self.load_image_texture(&path) {
+                        Ok(v) => {
+                            self.img_cache.borrow_mut().insert(path.clone(), v.clone());
+                            v
+                        }
+                        Err(e) => {
+                            eprintln!("[fond image] \"{path}\" : {e:#}");
+                            return None;
+                        }
+                    },
+                };
+                // Cover-fit : l'image remplit tout le cadre, on rogne l'axe long.
+                let ai = iw as f32 / ih.max(1) as f32;
+                let ao = rw / rh;
+                let src = if ai > ao {
+                    let vis = ao / ai;
+                    [(1.0 - vis) * 0.5, 0.0, 1.0 - (1.0 - vis) * 0.5, 1.0]
+                } else {
+                    let vis = ai / ao;
+                    [0.0, (1.0 - vis) * 0.5, 1.0, 1.0 - (1.0 - vis) * 0.5]
+                };
+                let cb = LayerCB {
+                    dst: [0.0, 0.0, 1.0, 1.0],
+                    src,
+                    mode: 6.0,
+                    ..Default::default()
+                };
+                let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), &dummy);
+                Some(BgDraw { _buf: buf, _tex: Some(tex), _view: Some(view), bind })
+            }
+        });
 
         // Webcam PiP (mode 0) -- placee par plan_frame (`g.w_dst`, coins
         // `g.w_radius`), gardee par `g.shape_fade > 0` (webcam visible).
@@ -856,9 +912,9 @@ impl Compositor {
                 timestamp_writes: None,
                 occlusion_query_set: None,
             });
-            if let Some((_buf, bind)) = &gradient_bind {
+            if let Some(bg) = &bg_draw {
                 rpass.set_pipeline(&self.pipeline);
-                rpass.set_bind_group(0, bind, &[]);
+                rpass.set_bind_group(0, &bg.bind, &[]);
                 rpass.draw(0..4, 0..1);
             }
         }
