@@ -31,6 +31,7 @@ import { useScopedT } from "@/contexts/I18nContext";
 import { useAudioPeaks } from "@/hooks/useAudioPeaks";
 import { createId } from "@/lib/ai-edition/document/ids";
 import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
+import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
@@ -442,8 +443,12 @@ export function V4Timeline({
 			if (target.closest("[data-clip-id]") || target.closest(`.${styles.lanePill}`)) return;
 			tl.clearSelection();
 			seekToClientX(e.clientX, true);
+			// Sonde de fluidité (diagnostic) : marque la fenêtre de drag pour que les
+			// intervalles rAF mesurés pendant le scrub soient comptés à part.
+			setUiProbeScrubbing(true);
 			const move = (ev: PointerEvent) => seekToClientX(ev.clientX);
 			const up = () => {
+				setUiProbeScrubbing(false);
 				window.removeEventListener("pointermove", move);
 				window.removeEventListener("pointerup", up);
 				if (rafSeekRef.current !== 0) {

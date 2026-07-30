@@ -20,6 +20,7 @@
 
 import type { RefObject } from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
+import { noteUiProbePreviewFrame } from "@/lib/ai-edition/perf/uiFrameProbe";
 import {
 	createCompositorView,
 	destroyCompositorView,
@@ -227,6 +228,10 @@ export function useNativeCompositorView(
 					// Advance only after a successful, validated frame — so a dropped/
 					// malformed packet is retried rather than silently skipped.
 					lastGen = gen;
+					// Sonde de fluidité : signale qu'une frame a réellement été livrée, pour
+					// que les intervalles rAF soient rangés dans l'état « preview active »
+					// plutôt que moyennés avec des périodes de repos.
+					noteUiProbePreviewFrame();
 				})
 				.catch((error: unknown) => {
 					inFlight = false;
