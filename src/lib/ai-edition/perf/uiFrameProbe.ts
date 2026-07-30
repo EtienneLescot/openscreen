@@ -21,7 +21,13 @@
  * qu'on ne le demande pas — aucun coût en usage normal.
  */
 
-type BaseState = "repos" | "preview" | "scrub" | "scrub+preview";
+type BaseState =
+	| "repos"
+	| "preview"
+	| "scrub-tl"
+	| "scrub-tl+preview"
+	| "scrub-bar"
+	| "scrub-bar+preview";
 /** L'état porte le suffixe `@N` = nombre de bascules de clip déjà vues. Voir
  *  `noteUiProbeClipSwitch` : sans cette séparation, deux mesures ne sont pas comparables. */
 type ProbeState = string;
@@ -36,7 +42,19 @@ let rafHandle = 0;
 let lastTs = 0;
 /** Frames de preview peintes depuis le dernier tick — dit si la preview travaille. */
 let previewFramesSinceTick = 0;
-let scrubbing = false;
+/**
+ * D'OÙ vient le scrub en cours.
+ *
+ * Les deux chemins n'ont rien à voir : la timeline écrit la tête de lecture directement
+ * dans le DOM et coalesce son écriture au store en rAF ; la barre de progression, elle,
+ * écrit au store à chaque événement ET repose un `seekTarget` — un état de la RACINE de
+ * l'éditeur — ce qui re-render tout et déclenche un seek du `<video>` par mouvement de
+ * souris. Les mélanger sous une même étiquette `scrub` reviendrait à moyenner deux
+ * populations différentes, exactement le biais que cette sonde existe pour éviter.
+ */
+type ScrubSource = "timeline" | "bar";
+
+let scrubbing: ScrubSource | null = null;
 /** Bascules de clip vues depuis le démarrage de la sonde. Sépare les états. */
 let clipSwitches = 0;
 
@@ -48,8 +66,8 @@ export function noteUiProbePreviewFrame(): void {
 }
 
 /** Appelé par la timeline à l'entrée et à la sortie d'un drag de tête de lecture. */
-export function setUiProbeScrubbing(active: boolean): void {
-	scrubbing = active;
+export function setUiProbeScrubbing(active: boolean, source: ScrubSource = "timeline"): void {
+	scrubbing = active ? source : null;
 }
 
 /**
@@ -87,14 +105,15 @@ function bucketFor(state: ProbeState): Bucket {
 
 function currentState(): ProbeState {
 	const previewActive = previewFramesSinceTick > 0;
-	const base: BaseState =
-		scrubbing && previewActive
-			? "scrub+preview"
-			: scrubbing
-				? "scrub"
-				: previewActive
-					? "preview"
-					: "repos";
+	// La source du scrub fait partie de l'étiquette : `scrub-tl` et `scrub-bar` sont deux
+	// chemins de code distincts, les confondre masquerait précisément l'écart qu'on cherche.
+	const base: BaseState = scrubbing
+		? previewActive
+			? `scrub-${scrubbing === "timeline" ? "tl" : "bar"}+preview`
+			: `scrub-${scrubbing === "timeline" ? "tl" : "bar"}`
+		: previewActive
+			? "preview"
+			: "repos";
 	return `${base}@${clipSwitches}`;
 }
 
@@ -112,7 +131,14 @@ function summarize() {
 	// Trié par état puis par nombre de bascules, pour que « avant / après le 1er
 	// changement de clip » se lisent l'un sous l'autre.
 	const states = [...buckets.keys()].sort((a, b) => {
-		const order = ["repos", "preview", "scrub", "scrub+preview"];
+		const order = [
+			"repos",
+			"preview",
+			"scrub-tl",
+			"scrub-tl+preview",
+			"scrub-bar",
+			"scrub-bar+preview",
+		];
 		const [ba, na] = a.split("@");
 		const [bb, nb] = b.split("@");
 		return order.indexOf(ba) - order.indexOf(bb) || Number(na) - Number(nb);
