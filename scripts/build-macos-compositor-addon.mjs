@@ -190,14 +190,47 @@ function vendorFfmpegDylibs(nodePath, ffmpegDir) {
 		execFileSync("codesign", ["--force", "--sign", "-", target]);
 	}
 
-	const remaining = execFileSync("otool", ["-L", nodePath], { encoding: "utf8" })
-		.split("\n")
-		.map((l) => l.trim().split(" ")[0])
-		.filter((p) => p.startsWith("/") && /lib(av|sw)/.test(p));
-	if (remaining.length > 0) {
-		throw new Error(`Still absolute after rewriting: ${remaining.join(", ")}`);
+	// cargo stamps the cdylib's own id with the absolute path it was built at
+	// (`crates/target/release/deps/libcompositor_view.dylib`). Nothing resolves
+	// through it — `require()` dlopens the file by path and never reads
+	// LC_ID_DYLIB — so this is not a load failure. It is a build-machine path,
+	// complete with the builder's home directory and checkout name, shipped
+	// inside a release artefact: it defeats reproducible builds and leaks a
+	// filesystem layout to anyone who runs `otool -D` on the installed app.
+	execFileSync("install_name_tool", ["-id", `@rpath/${path.basename(nodePath)}`, nodePath]);
+	execFileSync("codesign", ["--force", "--sign", "-", nodePath]);
+
+	// The old check only grepped for `lib(av|sw)`, so it could not have caught
+	// the id above — nor any future non-ffmpeg dependency that arrives absolute.
+	// Assert the real invariant instead: nothing outside the OS's own prefixes
+	// may be referenced by absolute path.
+	const absolutePaths = (file) => {
+		const id = execFileSync("otool", ["-D", file], { encoding: "utf8" })
+			.split("\n")
+			.slice(1) // first line is the filename echoed back
+			.map((l) => l.trim())
+			.filter(Boolean);
+		const deps = execFileSync("otool", ["-L", file], { encoding: "utf8" })
+			.split("\n")
+			.slice(1) // ditto
+			.map((l) => l.trim().split(" ")[0])
+			.filter(Boolean);
+		return [...id, ...deps].filter(
+			(p) => p.startsWith("/") && !p.startsWith("/usr/lib/") && !p.startsWith("/System/"),
+		);
+	};
+
+	for (const file of [nodePath, ...names.map((n) => path.join(outDir, n))]) {
+		const remaining = absolutePaths(file);
+		if (remaining.length > 0) {
+			throw new Error(
+				`${path.basename(file)} still references build-machine paths after rewriting: ` +
+					remaining.join(", "),
+			);
+		}
 	}
 	console.log(`Vendored ${names.length} ffmpeg dylibs next to ${path.basename(nodePath)}`);
+	console.log(`No absolute build-machine paths remain in ${path.basename(nodePath)} or its dylibs`);
 }
 
 /**
