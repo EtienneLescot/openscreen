@@ -1,5 +1,5 @@
 import "@testing-library/jest-dom";
-import { act, cleanup, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
@@ -90,5 +90,127 @@ describe("TransportBar reads the playhead from the store", () => {
 			</I18nProvider>,
 		);
 		expect(screen.getByText("0:04.5")).toBeInTheDocument();
+	});
+});
+
+describe("le drag de la barre de progression est coalescé en rAF", () => {
+	beforeEach(() => {
+		useProjectStore.setState({ currentTimeSec: 0 });
+	});
+
+	afterEach(() => {
+		cleanup();
+		vi.clearAllMocks();
+		vi.unstubAllGlobals();
+	});
+
+	/** rAF piloté à la main : les callbacks ne partent que sur `flush()`, ce qui permet de
+	 *  compter ce qui se passe DANS une frame — impossible avec le vrai rAF en test. */
+	function stubRaf() {
+		const pending: FrameRequestCallback[] = [];
+		vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => {
+			pending.push(cb);
+			return pending.length;
+		});
+		vi.stubGlobal("cancelAnimationFrame", () => {});
+		return () => {
+			const due = pending.splice(0, pending.length);
+			for (const cb of due) cb(0);
+		};
+	}
+
+	// C'est LE défaut que ce chemin avait : `onChange` d'un `<input type="range">` se
+	// déclenche à la cadence du pointeur (jusqu'à 1000 Hz) et appelait `onSeek` à chaque
+	// fois. Or `onSeek` repose un `seekTarget` dans l'état de la racine de l'éditeur, donc
+	// re-rend tout et fait poser `<video>.currentTime`. La timeline fait les mêmes appels
+	// mais une fois par frame ; ce test verrouille cette parité.
+	it("n'émet qu'un seul seek par frame, quel que soit le nombre d'événements", () => {
+		const flush = stubRaf();
+		const onSeek = vi.fn();
+		render(
+			<I18nProvider>
+				<TransportBar
+					playing={false}
+					overrideTimeSec={null}
+					clips={clips}
+					onTogglePlay={noop}
+					onPrevClip={noop}
+					onNextClip={noop}
+					onSeek={onSeek}
+				/>
+			</I18nProvider>,
+		);
+		const input = screen.getByLabelText(/seek/i) as HTMLInputElement;
+
+		act(() => {
+			fireEvent.pointerDown(input);
+		});
+		// Dix mouvements dans la même frame : un seul seek doit en sortir, et c'est le
+		// DERNIER qui compte — sans quoi la tête accuserait un retard permanent.
+		act(() => {
+			for (const value of [1, 2, 3, 4, 5, 6, 7, 8, 9, 10]) {
+				fireEvent.change(input, { target: { value: String(value) } });
+			}
+		});
+		expect(onSeek).not.toHaveBeenCalled();
+
+		act(() => flush());
+		expect(onSeek).toHaveBeenCalledTimes(1);
+		expect(onSeek).toHaveBeenLastCalledWith(10);
+	});
+
+	// Le mouvement compris entre le dernier rAF et le relâchement serait perdu sans commit
+	// final : la tête s'arrêterait un cran avant le doigt.
+	it("pose la dernière position au relâchement", () => {
+		stubRaf();
+		const onSeek = vi.fn();
+		render(
+			<I18nProvider>
+				<TransportBar
+					playing={false}
+					overrideTimeSec={null}
+					clips={clips}
+					onTogglePlay={noop}
+					onPrevClip={noop}
+					onNextClip={noop}
+					onSeek={onSeek}
+				/>
+			</I18nProvider>,
+		);
+		const input = screen.getByLabelText(/seek/i) as HTMLInputElement;
+
+		act(() => {
+			fireEvent.pointerDown(input);
+			fireEvent.change(input, { target: { value: "7" } });
+			fireEvent.pointerUp(input);
+		});
+		expect(onSeek).toHaveBeenCalledWith(7);
+	});
+
+	// Hors drag il n'y a rien à coalescer : une flèche du clavier est un saut unique et
+	// doit prendre effet immédiatement, sans attendre une frame.
+	it("applique immédiatement un changement hors drag", () => {
+		stubRaf();
+		const onSeek = vi.fn();
+		render(
+			<I18nProvider>
+				<TransportBar
+					playing={false}
+					overrideTimeSec={null}
+					clips={clips}
+					onTogglePlay={noop}
+					onPrevClip={noop}
+					onNextClip={noop}
+					onSeek={onSeek}
+				/>
+			</I18nProvider>,
+		);
+		const input = screen.getByLabelText(/seek/i) as HTMLInputElement;
+
+		act(() => {
+			fireEvent.change(input, { target: { value: "3" } });
+		});
+		expect(onSeek).toHaveBeenCalledTimes(1);
+		expect(onSeek).toHaveBeenCalledWith(3);
 	});
 });
