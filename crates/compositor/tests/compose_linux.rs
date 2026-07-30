@@ -14,6 +14,7 @@ use openscreen_compositor::compositor::Compositor;
 use openscreen_compositor::config::Cfg;
 use openscreen_compositor::d3d::Gpu;
 use openscreen_compositor::pipeline::Decoder;
+use openscreen_compositor::scene::Scene;
 
 const FIXTURE: &str = "../fixture/screen.mp4";
 const W: u32 = 960;
@@ -30,9 +31,15 @@ fn compose_linux_rend_une_frame() {
     let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
     let mut dec = Decoder::open(FIXTURE, &gpu).expect("Decoder::open");
 
+    // Scene : fond gradient + padding (l'ecran est inset -> le fond floute se
+    // voit tout autour) pour valider visuellement le blur du background.
+    let scene_json = r##"{"clips":[],"layout":{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0.18,"blur":true,"shadow":0,"roundnessFrac":0.05,"motionBlur":0},"background":{"kind":"gradient","angleDeg":45,"stops":["#ff3b6b","#3b6bff"]},"zoomRegions":[],"annotations":[],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"cropByClip":[],"output":{"width":1920,"height":1080,"fps":30}}"##;
+    comp.set_scene(Some(Scene::from_json(scene_json).expect("scene json")));
+
     let (w, h, rgba) = unsafe {
         let sf = dec.seek_to(1.0).expect("Decoder::seek_to");
-        let cfg = Cfg::c8();
+        let mut cfg = Cfg::c8();
+        cfg.bg_blur = true;
         // webcam = screen (mon compose coeur ne dessine que l'ecran).
         comp.compose_frame(sf, sf, 0.0, &cfg).expect("compose_frame");
         comp.readback_direct().expect("readback_direct")
