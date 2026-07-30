@@ -166,7 +166,7 @@ export function NativeCompositorOverlay() {
 		const targetClipId = activeClipId;
 		// Sonde de fluidité (diagnostic) : sépare les mesures d'avant et d'après un
 		// franchissement de clip, qui se sont déjà révélées non comparables.
-		noteUiProbeClipSwitch();
+		noteUiProbeClipSwitch(previousActiveClipIdRef.current, activeClipId);
 		pendingTargetClipIdRef.current = targetClipId;
 		previousActiveClipIdRef.current = targetClipId;
 
