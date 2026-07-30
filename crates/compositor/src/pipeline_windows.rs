@@ -619,7 +619,18 @@ impl Decoder {
                 //    repartir d'une image clé redevient moins cher — un seek coûte en moyenne
                 //    un demi-GOP, soit ~0,5 s sur nos captures.
                 if cur < seconds && seconds - cur <= SEEK_FORWARD_MAX_SEC {
-                    return self.decode_forward_to(seconds, tb_sec);
+                    let f = self.decode_forward_to(seconds, tb_sec)?;
+                    if !f.is_null() {
+                        return Ok(f);
+                    }
+                    // `decode_forward_to` a atteint l'EOF avant la cible — typiquement un
+                    // décodeur réactivé depuis le pool (`live::swap_clip_pooled`), laissé en fin
+                    // de flux (`sent_eof`), qui ne peut plus avancer. On NE rend PAS `null` : ça
+                    // forçait l'appelant à tout ROUVRIR (~190 ms mesurés), le pire à-coup ressenti
+                    // au franchissement. On retombe sur le seek keyframe complet ci-dessous, qui
+                    // rembobine + réarme le décodeur et repart proprement. Si la cible est
+                    // réellement au-delà de l'EOF, ce seek complet rendra `null` lui aussi :
+                    // comportement inchangé pour ce cas.
                 }
             }
         }
