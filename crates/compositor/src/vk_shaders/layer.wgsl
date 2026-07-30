@@ -93,6 +93,11 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     } else if layer.mode < 1.5 {
         // Mode 1 ÔÇö couleur pleine.
         rgb = layer.color.rgb;
+    } else if layer.mode > 4.5 && layer.mode < 5.5 {
+        // Mode 5 -- gradient lineaire : color (c0) -> src.rgb (c1) le long de
+        // la direction fx.xy (sin, -cos de l'angle). Parite avec le HLSL/MSL.
+        let t = clamp(dot(i.pout - vec2<f32>(0.5), layer.fx.xy) + 0.5, 0.0, 1.0);
+        rgb = mix(layer.color.rgb, layer.src.rgb, t);
     } else if layer.mode > 10.5 && layer.mode < 11.5 {
         // Mode 11 : texte. texY est l'atlas R8 (couverture alpha au canal .r,
         // produit par text_cosmic::TextRasterizer), teinte par layer.color.

@@ -37,6 +37,7 @@ use crate::frame_geometry::{parse_hex, plan_frame, FrameGeometryInput};
 use crate::scene::{Scene, SceneBackground};
 
 const LAYER_WGSL: &str = include_str!("vk_shaders/layer.wgsl");
+const BLUR_WGSL: &str = include_str!("vk_shaders/blur.wgsl");
 
 /// `&LayerCB` -> `&[u8; 128]`. `LayerCB` est `#[repr(C, align(16))]`, son layout
 /// EST le buffer uniforme WGSL (16 vec4 + 1 vec2 + 2 f32 = 128 octets).
@@ -54,6 +55,16 @@ pub struct Compositor {
     pipeline: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
+
+    // Chaine de blur Kawase du fond (`blur.wgsl`) : layout dedie (uniform + 1
+    // tex + sampler), 2 pipelines (down/up), 3 textures de pyramide (1/2, 1/4,
+    // 1/8 de la sortie). Les `TextureView` gardent leurs textures en vie.
+    blur_bgl: wgpu::BindGroupLayout,
+    blur_down: wgpu::RenderPipeline,
+    blur_up: wgpu::RenderPipeline,
+    blur_half: wgpu::TextureView,
+    blur_qtr: wgpu::TextureView,
+    blur_oct: wgpu::TextureView,
 
     // Render target offscreen + buffer de readback (recree au resize).
     rt: wgpu::Texture,
@@ -171,6 +182,103 @@ impl Compositor {
             cache: None,
         });
 
+        // --- Chaine de blur Kawase du fond (`blur.wgsl`) ---
+        let blur_module = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("blur.wgsl"),
+            source: wgpu::ShaderSource::Wgsl(BLUR_WGSL.into()),
+        });
+        // Layout blur : 0 = uniform, 1 = texture, 2 = sampler (blur.wgsl).
+        let blur_bgl = gpu.device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("blur"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: wgpu::BufferSize::new(128),
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 2,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+        let blur_pl = gpu.device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("blur"),
+            bind_group_layouts: &[&blur_bgl],
+            push_constant_ranges: &[],
+        });
+        let mk_blur = |entry: &str| {
+            gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(entry),
+                layout: Some(&blur_pl),
+                vertex: wgpu::VertexState {
+                    module: &blur_module,
+                    entry_point: Some("vs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &blur_module,
+                    entry_point: Some(entry),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: None,
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleList,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let blur_down = mk_blur("fs_kawase_down");
+        let blur_up = mk_blur("fs_kawase_up");
+        let mk_pyr = |dw: u32, dh: u32, label: &str| {
+            gpu.device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: Some(label),
+                    size: wgpu::Extent3d {
+                        width: dw.max(1),
+                        height: dh.max(1),
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                        | wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&wgpu::TextureViewDescriptor::default())
+        };
+        let blur_half = mk_pyr(w / 2, h / 2, "blur-half");
+        let blur_qtr = mk_pyr(w / 4, h / 4, "blur-qtr");
+        let blur_oct = mk_pyr(w / 8, h / 8, "blur-oct");
+
         let (rt, rt_view, readback_buf, readback_bpr) = Self::make_targets(&gpu, w, h);
 
         Ok(Compositor {
@@ -180,6 +288,12 @@ impl Compositor {
             pipeline,
             bind_group_layout,
             sampler,
+            blur_bgl,
+            blur_down,
+            blur_up,
+            blur_half,
+            blur_qtr,
+            blur_oct,
             rt,
             rt_view,
             readback_buf,
@@ -210,7 +324,9 @@ impl Compositor {
             sample_count: 1,
             dimension: wgpu::TextureDimension::D2,
             format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT | wgpu::TextureUsages::COPY_SRC,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::COPY_SRC
+                | wgpu::TextureUsages::TEXTURE_BINDING,
             view_formats: &[],
         });
         let rt_view = rt.create_view(&wgpu::TextureViewDescriptor::default());
@@ -222,6 +338,80 @@ impl Compositor {
             mapped_at_creation: false,
         });
         (rt, rt_view, readback_buf, bpr)
+    }
+
+    /// Une passe Kawase : lit `src`, ecrit `dst` (fullscreen triangle, 3
+    /// vertices). `src_px` = dimensions de la source (pour le pas de texel).
+    fn blur_pass(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        pipeline: &wgpu::RenderPipeline,
+        src: &wgpu::TextureView,
+        dst: &wgpu::TextureView,
+        src_px: [f32; 2],
+    ) {
+        let cb = LayerCB {
+            quad_px: src_px,
+            mode: -1.0,
+            color: [1.0, 1.0, 1.0, 1.0],
+            fx: [2.0, 0.0, 0.0, 0.0], // texel offset Kawase
+            ..Default::default()
+        };
+        let uniform = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("blur-uniform"),
+            contents: layer_bytes(&cb),
+            usage: wgpu::BufferUsages::UNIFORM,
+        });
+        let bind = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("blur"),
+            layout: &self.blur_bgl,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: uniform.as_entire_binding(),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(src),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                },
+            ],
+        });
+        let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("blur-pass"),
+            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                view: dst,
+                resolve_target: None,
+                ops: wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                    store: wgpu::StoreOp::Store,
+                },
+            })],
+            depth_stencil_attachment: None,
+            timestamp_writes: None,
+            occlusion_query_set: None,
+        });
+        rpass.set_pipeline(pipeline);
+        rpass.set_bind_group(0, &bind, &[]);
+        rpass.draw(0..3, 0..1);
+    }
+
+    /// Floute le RT (le fond deja dessine) : dual-Kawase 3 down (RT -> 1/2 ->
+    /// 1/4 -> 1/8) + 3 up (1/8 -> 1/4 -> 1/2 -> RT). ~gaussien a cout constant.
+    fn blur_bg(&self, encoder: &mut wgpu::CommandEncoder) {
+        let (rw, rh) = (self.render_w as f32, self.render_h as f32);
+        let (hw, hh) = (rw * 0.5, rh * 0.5);
+        let (qw, qh) = (rw * 0.25, rh * 0.25);
+        let (ow, oh) = (rw * 0.125, rh * 0.125);
+        self.blur_pass(encoder, &self.blur_down, &self.rt_view, &self.blur_half, [rw, rh]);
+        self.blur_pass(encoder, &self.blur_down, &self.blur_half, &self.blur_qtr, [hw, hh]);
+        self.blur_pass(encoder, &self.blur_down, &self.blur_qtr, &self.blur_oct, [qw, qh]);
+        self.blur_pass(encoder, &self.blur_up, &self.blur_oct, &self.blur_qtr, [ow, oh]);
+        self.blur_pass(encoder, &self.blur_up, &self.blur_qtr, &self.blur_half, [qw, qh]);
+        self.blur_pass(encoder, &self.blur_up, &self.blur_half, &self.rt_view, [hw, hh]);
     }
 
     /// Dimensions paires (NV12 4:2:0), min 2x2. Symetrie avec les autres backends.
@@ -377,11 +567,29 @@ impl Compositor {
         });
         let _ = (wtw, wth); // webcam PiP : calque a venir.
 
-        // Couleur de fond : scene Color -> sa couleur, sinon live_params.bg_color.
-        // (Gradient/Image : calques a venir ; repli couleur ici.)
-        let bg = match scene_ref.as_ref().map(|s| s.background.clone()) {
-            Some(SceneBackground::Color { color }) => parse_hex(&color).unwrap_or(lp.bg_color),
-            _ => lp.bg_color,
+        // Fond : Color -> clear a la couleur ; Gradient -> clear transparent +
+        // draw mode 5 ; Image -> repli couleur (calque image a venir). Le blur
+        // (si cfg.bg_blur) floute ensuite ce fond, avant l'ecran.
+        let (bg_clear, gradient_cb) = match scene_ref.as_ref().map(|s| s.background.clone()) {
+            Some(SceneBackground::Color { color }) => {
+                (parse_hex(&color).unwrap_or(lp.bg_color), None)
+            }
+            Some(SceneBackground::Gradient { angle_deg, stops }) => {
+                let c0 = stops.first().and_then(|s| parse_hex(s)).unwrap_or(lp.bg_color);
+                let c1 = stops.last().and_then(|s| parse_hex(s)).unwrap_or(c0);
+                let a = angle_deg.to_radians();
+                let cb = LayerCB {
+                    dst: [0.0, 0.0, 1.0, 1.0],
+                    src: [c1[0], c1[1], c1[2], c1[3]],
+                    quad_px: [rw, rh],
+                    mode: 5.0,
+                    color: c0,
+                    fx: [a.sin(), -a.cos(), 0.0, 0.0],
+                    ..Default::default()
+                };
+                ([0.0, 0.0, 0.0, 1.0], Some(cb))
+            }
+            _ => (lp.bg_color, None),
         };
 
         // Calque ecran (mode 0 : NV12 -> RGB), place par plan_frame (cover-fit +
@@ -400,6 +608,9 @@ impl Compositor {
         let dummy = self.dummy_view();
         let (_screen_uniform, screen_bind) =
             self.make_bind(&screen_layer, Some((&sy, &suv)), &dummy);
+
+        // Fond gradient (mode 5), dessine dans la passe de fond si present.
+        let gradient_bind = gradient_cb.as_ref().map(|cb| self.make_bind(cb, None, &dummy));
 
         // Webcam PiP (mode 0) -- placee par plan_frame (`g.w_dst`, coins
         // `g.w_radius`), gardee par `g.shape_fade > 0` (webcam visible).
@@ -494,21 +705,47 @@ impl Compositor {
         let mut encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("compose"),
         });
+        // Passe 1 : fond (clear a `bg_clear` + gradient mode 5 eventuel).
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("compose-pass"),
+                label: Some("bg-pass"),
                 color_attachments: &[Some(wgpu::RenderPassColorAttachment {
                     view: &self.rt_view,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        // Le fond uni EST la couleur de clear (gradient/image
-                        // ajouteront un draw ici).
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: bg[0] as f64,
-                            g: bg[1] as f64,
-                            b: bg[2] as f64,
-                            a: bg[3] as f64,
+                            r: bg_clear[0] as f64,
+                            g: bg_clear[1] as f64,
+                            b: bg_clear[2] as f64,
+                            a: bg_clear[3] as f64,
                         }),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            if let Some((_buf, bind)) = &gradient_bind {
+                rpass.set_pipeline(&self.pipeline);
+                rpass.set_bind_group(0, bind, &[]);
+                rpass.draw(0..4, 0..1);
+            }
+        }
+        // Blur du fond (avant l'ecran), si active par la scene/l'inspector.
+        if cfg.bg_blur {
+            self.blur_bg(&mut encoder);
+        }
+        // Passe 2 : avant-plan (ecran + webcam + annotations), compose par-dessus
+        // le fond (eventuellement floute) avec `LoadOp::Load`.
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("fg-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.rt_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
                         store: wgpu::StoreOp::Store,
                     },
                 })],
@@ -519,13 +756,10 @@ impl Compositor {
             rpass.set_pipeline(&self.pipeline);
             rpass.set_bind_group(0, &screen_bind, &[]);
             rpass.draw(0..4, 0..1);
-            // Webcam PiP par-dessus l'ecran.
             if let Some((_buf, bind)) = &webcam_draw {
                 rpass.set_bind_group(0, bind, &[]);
                 rpass.draw(0..4, 0..1);
             }
-            // Annotations texte par-dessus (ordre de la liste = z-index, deja
-            // trie cote app).
             for a in &ann_draws {
                 rpass.set_bind_group(0, &a.bind, &[]);
                 rpass.draw(0..4, 0..1);
