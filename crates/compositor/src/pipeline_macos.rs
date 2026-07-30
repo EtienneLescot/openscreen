@@ -57,6 +57,11 @@ impl Drop for FrameGuard {
     }
 }
 
+/// Au-delà de cette distance vers l'avant, `Decoder::seek_to` repart d'une image clé
+/// plutôt que de dérouler. Identique à `pipeline_windows::SEEK_FORWARD_MAX_SEC` — le
+/// seuil dépend du GOP des captures, pas du backend de décodage.
+const SEEK_FORWARD_MAX_SEC: f64 = 0.5;
+
 /// Décodeur ffmpeg — câblage VideoToolbox (et repli logiciel pour les codecs hors-session).
 /// Cf. `pipeline_windows::Decoder` pour la version D3D11VA. Mêmes champs publics pour
 /// que `live.rs::Player` reste portable ; les détails internes (hw_device_ctx, format
@@ -70,6 +75,10 @@ pub struct Decoder {
     pkt: *mut crate::ffi::AVPacket,
     frame: *mut crate::ffi::AVFrame,
     sent_eof: bool,
+    /// PTS de la frame actuellement décodée dans `frame`, ou `None` si l'état du décodeur
+    /// vient d'être jeté (ouverture, seek). Sert au chemin rapide de `seek_to` — symétrique
+    /// de `pipeline_windows::Decoder::cur_pts`.
+    cur_pts: Option<i64>,
     /// Backend « software fallback » uniquement : convertit la frame système en NV12 +
     /// CVPixelBufferRef IOSurface-backed, et la présente sous le même contrat que
     /// VideoToolbox (`compositor_macos::nv12_srvs` reconnaît le sentinel `AV_PIX_FMT_D3D11`
@@ -190,6 +199,7 @@ impl Decoder {
                 pkt: crate::ffi::av_packet_alloc(),
                 frame: crate::ffi::av_frame_alloc(),
                 sent_eof: false,
+                cur_pts: None,
                 cpu,
             })
         }
@@ -221,15 +231,38 @@ impl Decoder {
     }
 
     /// Seek keyframe vers `seconds` puis décode-avant jusqu'à la 1re frame dont le
-    /// temps ≥ `seconds`. Symétrique de `pipeline_windows::Decoder::seek_to`.
+    /// temps ≥ `seconds`. Symétrique de `pipeline_windows::Decoder::seek_to`, chemin
+    /// rapide compris : mêmes seuils, même critère d'arrêt (`decode_forward_to`), pour
+    /// que les deux moteurs rendent la même frame au même coût relatif.
     pub unsafe fn seek_to(&mut self, seconds: f64) -> Result<*mut crate::ffi::AVFrame> {
         let tb_sec = self.tb_sec();
+
+        if tb_sec > 0.0 {
+            if let Some(pts) = self.cur_pts {
+                let cur = pts as f64 * tb_sec;
+                let frame_dur = 1.0 / self.fps().max(1.0);
+                // 1) La frame courante EST celle demandée : rien à décoder du tout.
+                //    `cur_frame()`, pas `self.frame` : en backend CPU la frame exploitable
+                //    est la texture NV12 déjà présentée, pas la frame système du décodeur.
+                if (cur - seconds).abs() < frame_dur * 0.5 {
+                    return Ok(self.cur_frame());
+                }
+                // 2) La cible est DEVANT et à portée : dérouler depuis ici plutôt que de
+                //    repartir d'une image clé (cf. `pipeline_windows::SEEK_FORWARD_MAX_SEC`).
+                if cur < seconds && seconds - cur <= SEEK_FORWARD_MAX_SEC {
+                    return self.decode_forward_to(seconds, tb_sec);
+                }
+            }
+        }
+
         let target = if tb_sec > 0.0 { (seconds / tb_sec) as i64 } else { 0 };
         crate::ffi::averr(
             crate::ffi::av_seek_frame(self.fmt, self.vidx, target, crate::ffi::AVSEEK_FLAG_BACKWARD),
             "seek_to",
         )?;
         crate::ffi::avcodec_flush_buffers(self.dctx);
+        // L'état vient d'être jeté : plus aucune frame courante exploitable.
+        self.cur_pts = None;
         self.sent_eof = false;
         loop {
             let f = self.next()?;
@@ -238,6 +271,24 @@ impl Decoder {
             }
             let pts = (*f).best_effort_timestamp;
             if pts == i64::MIN || tb_sec <= 0.0 {
+                return Ok(f);
+            }
+            if (pts as f64) * tb_sec >= seconds - tb_sec * 0.5 {
+                return Ok(f);
+            }
+        }
+    }
+
+    /// Déroule le décodeur en avant jusqu'à la première frame à `seconds` ou après, SANS
+    /// jeter son état. Symétrique de `pipeline_windows::Decoder::decode_forward_to`.
+    unsafe fn decode_forward_to(&mut self, seconds: f64, tb_sec: f64) -> Result<*mut crate::ffi::AVFrame> {
+        loop {
+            let f = self.next()?;
+            if f.is_null() {
+                return Ok(ptr::null_mut());
+            }
+            let pts = (*f).best_effort_timestamp;
+            if pts == i64::MIN {
                 return Ok(f);
             }
             if (pts as f64) * tb_sec >= seconds - tb_sec * 0.5 {
@@ -255,6 +306,8 @@ impl Decoder {
         loop {
             let r = crate::ffi::avcodec_receive_frame(self.dctx, self.frame);
             if r == 0 {
+                let pts = (*self.frame).best_effort_timestamp;
+                self.cur_pts = if pts == i64::MIN { None } else { Some(pts) };
                 return match &mut self.cpu {
                     Some(cpu) => cpu.present(self.frame),
                     None => Ok(self.frame),
