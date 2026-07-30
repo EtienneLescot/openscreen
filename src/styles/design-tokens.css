@@ -49,6 +49,15 @@
 	--accent-ring: rgba(16, 185, 129, 0.28);
 	--accent-stripe: rgba(16, 185, 129, 0.30);
 
+	/* timeline playhead — deliberately NOT the mint accent. The scrub cursor
+	   crosses every lane, including the accent-coloured zoom pills, so it needs
+	   a hue of its own to stay readable on top of them. One value for both
+	   themes (the dark block doesn't override it): this violet carries against
+	   the light and the dark timeline surfaces alike. */
+	--playhead: #6c55ff;
+	--playhead-glow: rgba(108, 85, 255, 0.68);
+	--playhead-shadow: rgba(108, 85, 255, 0.35);
+
 	/* legacy shadcn-style aliases → canonical tokens. Referenced by the
 	   TimelinePane / TranscriptEditor / VirtualPreview / NewEditorShell module
 	   CSS that was ported before the token system existed. Defined via var()
