@@ -941,6 +941,12 @@ unsafe fn advance_to_next_scene_clip(
 
     match applied {
         Ok(()) => {
+            // Jeu de décodeurs remplacé ici aussi (franchissement pendant la lecture libre) :
+            // même raison qu'au traitement d'`active_clip_request` — le cache de SRV est keyé
+            // sur l'adresse de la texture, et garder des entrées d'un décodeur fermé fait
+            // fuir de la VRAM puis, en cas de réutilisation d'adresse, rendre l'image du clip
+            // précédent.
+            comp.clear_srv_cache();
             *active_screen_path = next_clip.screen_path.clone();
             *active_webcam_path = next_clip.webcam_path.clone();
             *active_webcam_offset_sec = next_clip.webcam_offset_sec;
@@ -1080,6 +1086,17 @@ unsafe fn render_thread(
             };
             match switch_result {
                 Ok(()) => {
+                    if !same_media {
+                        // Les anciens décodeurs viennent d'être fermés : leurs textures ne
+                        // doivent plus figurer dans le cache de SRV, qui est keyé sur
+                        // l'ADRESSE de la texture. Sans ce vidage, deux défauts se cumulent —
+                        // le cache grandit sans borne et retient les textures via les SRV
+                        // clonés ; et un décodeur neuf peut allouer à une adresse déjà vue,
+                        // donner une collision de clé, et faire rendre l'image du clip
+                        // PRÉCÉDENT. `clear_srv_cache` existait pour ça et n'avait aucun
+                        // appelant.
+                        comp.clear_srv_cache();
+                    }
                     active_screen_path = request.screen_path;
                     active_webcam_path = request.webcam_path;
                     active_webcam_offset_sec = request.webcam_offset_sec;
