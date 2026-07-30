@@ -232,8 +232,8 @@ LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
 ```
 
 So the thirdparty ffmpeg is **`crates/thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared`**
-(the BtbN LGPL-shared build of ffmpeg-n8.1.2-22-g94138f6973, tag
-`autobuild-2026-07-15-14-01`). It must be the **same build** that
+(the BtbN LGPL-shared build of ffmpeg-n8.1.2-32-gcfa62de001, tag
+`autobuild-2026-07-30-13-32`). It must be the **same build** that
 `scripts/fetch-ffmpeg.mjs` vendorises into
 `electron/native/bin/<tag>/` for packaging. The addon's `require()` loads
 `avcodec-NN.dll` / `avformat-NN.dll` / etc. against the vendorised tree at
