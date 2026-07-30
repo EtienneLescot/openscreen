@@ -245,7 +245,7 @@
 		"help": "Bản chép lời gộp của mọi clip trên dòng thời gian. Nhấn Backspace / Delete trên một từ hoặc vùng chọn để đánh dấu là bỏ qua (màu đỏ). Di chuột lên đoạn màu đỏ để khôi phục.",
 		"noClips": "Chưa có clip nào",
 		"noTranscript": "Chưa có bản chép lời",
-		"whisperHint": "Việc chép lời dùng Whisper cục bộ — chạy ngay trong trình duyệt, không dữ liệu nào rời khỏi thiết bị.",
+		"whisperHint": "Việc chép lời dùng Whisper cục bộ — chạy ngay trên máy của bạn, không dữ liệu nào rời khỏi thiết bị.",
 		"transcribeNow": "Chép lời ngay",
 		"transcribing": "Đang chép lời…",
 		"clipLabel": "Clip {{index}}",
