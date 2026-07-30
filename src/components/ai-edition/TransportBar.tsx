@@ -48,6 +48,10 @@ export const TransportBar = memo(function TransportBar({
 	);
 	// ponytail: mirrors Preview's old clamp so the CSS thumb and the native
 	// range thumb stay in sync when there's no clip yet.
+	const inputMax = virtualDurationSec || 1;
+	const inputValue = Math.min(Math.max(currentTimeSec, 0), inputMax);
+	const progress = (inputValue / inputMax) * 100;
+
 	// ── Drag de la barre : même cadence que le drag de la timeline ──────────────────
 	//
 	// L'`onChange` d'un `<input type="range">` se déclenche à la cadence du POINTEUR — 125 à
@@ -68,6 +72,20 @@ export const TransportBar = memo(function TransportBar({
 	const rafRef = useRef(0);
 	const pendingRef = useRef<number | null>(null);
 	const draggingRef = useRef(false);
+	// Remplissage et curseur de la barre, écrits DIRECTEMENT pendant un drag.
+	//
+	// Même patron que `playheadElRef` dans V4Timeline, et pour la même raison : la position
+	// que l'utilisateur voit ne doit pas attendre un rendu React. Ces deux éléments étaient
+	// positionnés uniquement depuis `progress`, dérivé du store — donc en retard d'un commit
+	// à chaque mouvement, alors que la tête de lecture de la timeline, elle, colle au
+	// pointeur. C'est la dernière différence de parité entre les deux chemins que j'aie pu
+	// identifier dans le code.
+	//
+	// React continue de les positionner hors drag (et au rendu suivant pendant le drag, avec
+	// une valeur au pire vieille d'une frame puisque le rAF écrit au store à 60 Hz) : les
+	// deux écritures convergent au lieu de se contredire.
+	const progressElRef = useRef<HTMLDivElement | null>(null);
+	const thumbElRef = useRef<HTMLDivElement | null>(null);
 
 	useEffect(() => {
 		return () => {
@@ -86,6 +104,15 @@ export const TransportBar = memo(function TransportBar({
 				return;
 			}
 			pendingRef.current = value;
+			// Visuel d'abord, sans passer par React : latence nulle, comme la tête de lecture
+			// de la timeline. `inputMax` est déjà borné à 1 minimum, pas de division par zéro.
+			const pct = Math.min(100, Math.max(0, (value / inputMax) * 100));
+			if (progressElRef.current) {
+				progressElRef.current.style.width = `${pct}%`;
+			}
+			if (thumbElRef.current) {
+				thumbElRef.current.style.left = `${pct}%`;
+			}
 			if (rafRef.current !== 0) {
 				return;
 			}
@@ -97,7 +124,7 @@ export const TransportBar = memo(function TransportBar({
 				}
 			});
 		},
-		[onSeek],
+		[onSeek, inputMax],
 	);
 
 	const endDrag = useCallback(() => {
@@ -118,10 +145,6 @@ export const TransportBar = memo(function TransportBar({
 			onSeek(pending);
 		}
 	}, [onSeek]);
-
-	const inputMax = virtualDurationSec || 1;
-	const inputValue = Math.min(Math.max(currentTimeSec, 0), inputMax);
-	const progress = (inputValue / inputMax) * 100;
 
 	return (
 		<div className={styles.transport} role="toolbar" aria-label={te("transport.playbackControls")}>
@@ -160,7 +183,11 @@ export const TransportBar = memo(function TransportBar({
 			</span>
 			<div className={styles.scrubBar}>
 				<div className={styles.scrubTrack}>
-					<div className={styles.scrubProgress} style={{ width: `${progress}%` }} />
+					<div
+						ref={progressElRef}
+						className={styles.scrubProgress}
+						style={{ width: `${progress}%` }}
+					/>
 				</div>
 				<input
 					type="range"
@@ -186,6 +213,7 @@ export const TransportBar = memo(function TransportBar({
 					aria-label={te("transport.seekVideo")}
 				/>
 				<div
+					ref={thumbElRef}
 					className={styles.scrubThumb}
 					style={{
 						left: `${progress}%`,
