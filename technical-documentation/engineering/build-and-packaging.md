@@ -33,7 +33,8 @@ A usable full package depends on generated artifacts that are not committed:
 | macOS ScreenCaptureKit capture helper and cursor helper | `electron/native/bin/darwin-arm64/` or `darwin-x64/` | Full Xcode, Swift, SwiftPM; Command Line Tools alone may be insufficient |
 | Whisper STT server and ggml/whisper backend libraries | `electron/native/bin/<platform>-<arch>/` | CMake plus host compiler; Metal on Apple Silicon, Vulkan SDK on supported Windows/Linux builds, CPU fallback, optional CUDA |
 | Native D3D11 compositor addon | `electron/native/compositor-view/build/compositor_view.node` | Rust MSVC toolchain, Visual Studio/Windows SDK, LLVM/libclang, and the exact pinned shared FFmpeg SDK |
-| FFmpeg runtime files | matching `electron/native/bin/<platform>-<arch>/` directory | Downloaded by `fetch:ffmpeg` for the Windows build path |
+| Native Metal compositor addon | `electron/native/bin/darwin-<arch>/compositor_view.node` (plus a dev copy under `electron/native/compositor-view/build/`) | Rust, Xcode, and the LGPL FFmpeg tree from `fetch:ffmpeg:mac` |
+| FFmpeg runtime files | matching `electron/native/bin/<platform>-<arch>/` directory | Downloaded by `fetch:ffmpeg` on Windows; **built from source** by `fetch:ffmpeg:mac` on macOS (~5 min) — BtbN publishes no macOS target and every circulating macOS build is GPL, which would relicense this MIT app |
 
 Electron-builder copies only the matching `electron/native/bin/<platform>-<arch>/` directory into each package. The compositor `.node` file is included by the Windows `files` rule and unpacked from ASAR because native addons cannot be loaded from inside the archive.
 
@@ -50,13 +51,28 @@ Electron-builder copies only the matching `electron/native/bin/<platform>-<arch>
 
 A stale addon **fails silently rather than erroring**. Scene fields are `#[serde(default)]` on the Rust side, so an addon that predates a contract change does not reject the payload: it ignores the unknown key, takes the default, and falls back to older behaviour. Nothing appears in any log, and the symptom ("the feature does nothing") is indistinguishable from a TypeScript bug. This is not hypothetical — on 2026-07-27 a build shipped an addon three days older than the commit adding `cursorSprites`, custom cursor themes silently rendered as the built-in art, and the resulting investigation blamed the wrong layer entirely.
 
-`scripts/before-pack.cjs` runs as electron-builder's `beforePack` hook and fails the build when the addon is older than `crates/compositor/src/`, `crates/compositor-view-napi/src/`, or either `Cargo.toml`. It only checks when packaging for Windows. The fix it prints is:
+`scripts/before-pack.cjs` runs as electron-builder's `beforePack` hook and fails the build when the addon is older than `crates/compositor/src/`, `crates/compositor-view-napi/src/`, or either `Cargo.toml`. The fix it prints is:
 
 ```bash
-npm run build:native:compositor
+npm run build:native:compositor      # Windows
+npm run build:native:compositor:mac  # macOS
 ```
 
-CI is unaffected: `.github/workflows/build.yml` already uses `build:win`, which rebuilds before packaging.
+**On macOS it also asserts the payload is complete**, which is a stronger check than freshness and exists because the hook used to return early on every non-Windows platform. That gap was not theoretical: the macOS CI job built the ScreenCaptureKit helper but never ran `fetch:ffmpeg:mac` or `build:native:compositor:mac`, so the `.app` it produced had no compositor addon — preview and export dead in the installed app, with nothing in any log. Nothing caught it, because the one guard that would have was Windows-only.
+
+The hook now reads `electron/native/bin/darwin-<arch>/` — the directory `mac.extraResources` ships wholesale, so "present here" means "present in the installed app" — and refuses to package unless it holds all of:
+
+| Required | Without it |
+|---|---|
+| `compositor_view.node` | preview and every export render nothing |
+| `libavcodec/libavformat/libavutil.*.dylib` | the addon cannot load at all (dyld error at `require()`) |
+| `whisper-stt-server` | transcription and captions fail with a developer error shown to end users |
+| `libggml*.dylib` | the helper dies in dyld before `main()`; STT times out with no diagnostic |
+| `openscreen-screencapturekit-helper` | native screen capture unavailable |
+
+It then applies the same staleness comparison to the **shipped** addon (the arch-tagged copy), not the dev copy under `electron/native/compositor-view/build/`, since the arch-tagged one is what electron-builder actually packages.
+
+CI: the Windows job runs `build:win`, which rebuilds before packaging. The macOS job spells its steps out — it needs `--dir` plus a hand-rolled DMG and signing — and had drifted from the `build:mac` recipe; it now vendors the LGPL ffmpeg tree and builds the Metal addon before packing, both cached.
 
 The check compares modification times, so `git checkout` (which restamps source files) can occasionally flag an addon that is genuinely fine. That trade is deliberate — a false alarm costs one rebuild, whereas a missed stale addon ships a broken installer. Run `node scripts/before-pack.cjs` on its own to see the verdict without packaging.
 
@@ -69,6 +85,8 @@ Diagnosing a suspected stale addon: serde embeds its field-name literals in the 
 The default electron-builder target is NSIS, with an assisted installer that allows users to change the installation directory. `npm run build:win:store` explicitly selects the configured `appx` target for Microsoft Store packaging. The AppX identity, publisher, capabilities, and Store languages come from `electron-builder.json5`. Release CI builds and retains both the NSIS installer and AppX package, although the GitHub release publisher currently downloads only the `openscreen-windows` NSIS artifact.
 
 ### macOS
+
+> **The macOS job is currently disabled** (`if: false` in `build.yml`) because 1.8.0 ships Windows-only. That flag is release-branch-only and must not reach `main` when promoting, or every later release becomes Windows-only too. Until it is lifted, the macOS packaging path — including the compositor and ffmpeg steps described above — is exercised only by `npm run build:mac` locally.
 
 Electron-builder targets DMG for both `arm64` and `x64`, enables hardened runtime, and applies `macos.entitlements` to the app and inherited code. The entitlements allow Electron JIT/native library loading and audio, camera, and screen capture. The configuration itself sets `notarize: false`; release CI packages the `.app`, creates and signs the DMG manually, submits stable tags to `notarytool`, staples the ticket, and validates Gatekeeper. Pre-release tags skip DMG signing/notarization, and missing Apple credentials produce an unsigned artifact.
 

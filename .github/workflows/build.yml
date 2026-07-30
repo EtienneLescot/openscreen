@@ -169,6 +169,40 @@ jobs:
         env:
           OPENSCREEN_MAC_HELPER_ARCHS: ${{ matrix.arch }}
 
+      # The two steps below are what `npm run build:mac` does and this job did not.
+      # Windows gets them for free because its job just runs `npm run build:win`,
+      # which chains fetch:ffmpeg + build:native:compositor; macOS spells its steps
+      # out (it needs `--dir` plus a hand-rolled DMG and signing) and drifted. The
+      # result was a .app with no compositor addon — preview and export dead in the
+      # installed app, silently. `scripts/before-pack.cjs` now refuses to package
+      # that, so this is also what keeps the job from failing at the pack step.
+      - name: Cache LGPL ffmpeg tree
+        uses: actions/cache@v4
+        with:
+          # fetch-ffmpeg-macos.mjs BUILDS ffmpeg from source (~5 min): BtbN ships no
+          # macOS target and every circulating macOS build is GPL, which would
+          # relicense this MIT app. The script pins the release and checksums it, so
+          # keying on the script itself busts the cache when the pin moves.
+          path: crates/thirdparty
+          key: ffmpeg-macos-${{ matrix.arch }}-${{ hashFiles('scripts/fetch-ffmpeg-macos.mjs') }}
+
+      - name: Vendor LGPL ffmpeg
+        run: npm run fetch:ffmpeg:mac
+
+      - name: Cache cargo + compositor build tree
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            crates/target
+          key: cargo-macos-${{ matrix.arch }}-${{ hashFiles('crates/Cargo.lock') }}
+          restore-keys: |
+            cargo-macos-${{ matrix.arch }}-
+
+      - name: Build Metal compositor addon
+        run: npm run build:native:compositor:mac
+
       - name: Package .app bundle
         run: npx electron-builder --mac --${{ matrix.arch }} --dir --publish never
         env:
