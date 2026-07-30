@@ -401,6 +401,74 @@ impl Compositor {
         let (_screen_uniform, screen_bind) =
             self.make_bind(&screen_layer, Some((&sy, &suv)), &dummy);
 
+        // Annotations TEXTE (mode 11) -- placees relativement au rect ecran
+        // `g.s_dst` (les coords x/y/w/h de l'annotation sont des fractions de ce
+        // rect, cf. `scene.rs`). Mirroir de la branche "text" de
+        // `compositor_macos`, tint cote shader (atlas R8) au lieu de couleur
+        // bakee. (image/figure/blur + animation `text_anim` : incremental.)
+        struct AnnDraw {
+            _buf: wgpu::Buffer,
+            _glyphs: crate::text::RasterizedGlyphs,
+            bind: wgpu::BindGroup,
+        }
+        let mut ann_draws: Vec<AnnDraw> = Vec::new();
+        if let (Some(scene), Some(raster)) = (scene_ref.as_ref(), self.text_raster.as_ref()) {
+            for a in &scene.annotations {
+                if a.kind != "text" {
+                    continue;
+                }
+                let Some(text) = a.text.as_ref() else { continue };
+                if text.content.trim().is_empty() {
+                    continue;
+                }
+                let dst = [
+                    g.s_dst[0] + a.x * g.s_dst[2],
+                    g.s_dst[1] + a.y * g.s_dst[3],
+                    a.w * g.s_dst[2],
+                    a.h * g.s_dst[3],
+                ];
+                let quad_px = [dst[2] * rw, dst[3] * rh];
+                let color = parse_hex(&text.color).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                let spec = crate::text::TextSpec {
+                    content: text.content.clone(),
+                    color,
+                    background: parse_hex(&text.background_color).unwrap_or([0.0, 0.0, 0.0, 0.0]),
+                    font_size_px: text.font_size_rel * (g.s_dst[3] * rh),
+                    font_family: text.font_family.clone(),
+                    bold: text.font_weight == "bold",
+                    italic: text.font_style == "italic",
+                    underline: text.text_decoration == "underline",
+                    align: text.text_align.clone(),
+                    box_px: [
+                        quad_px[0].round().max(1.0) as u32,
+                        quad_px[1].round().max(1.0) as u32,
+                    ],
+                };
+                let glyphs = match raster.rasterize(&self.gpu, &spec) {
+                    Ok(gl) => gl,
+                    Err(e) => {
+                        eprintln!("[annotation texte] {}: {e:#}", a.id);
+                        continue;
+                    }
+                };
+                let cb = LayerCB {
+                    dst,
+                    src: [0.0, 0.0, 1.0, 1.0],
+                    quad_px,
+                    mode: 11.0,
+                    color,
+                    ..Default::default()
+                };
+                // Atlas R8 au binding 1 (texY) que le mode 11 echantillonne.
+                let (buf, bind) = self.make_bind(&cb, Some((&glyphs.view, &glyphs.view)), &dummy);
+                ann_draws.push(AnnDraw {
+                    _buf: buf,
+                    _glyphs: glyphs,
+                    bind,
+                });
+            }
+        }
+
         let mut encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("compose"),
         });
@@ -429,6 +497,12 @@ impl Compositor {
             rpass.set_pipeline(&self.pipeline);
             rpass.set_bind_group(0, &screen_bind, &[]);
             rpass.draw(0..4, 0..1);
+            // Annotations texte par-dessus (ordre de la liste = z-index, deja
+            // trie cote app).
+            for a in &ann_draws {
+                rpass.set_bind_group(0, &a.bind, &[]);
+                rpass.draw(0..4, 0..1);
+            }
         }
         self.gpu.context.submit(std::iter::once(encoder.finish()));
         Ok(())
