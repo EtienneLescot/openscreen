@@ -19,6 +19,7 @@
 //      the five ffmpeg sonames are copied next to it, which makes the .node
 //      self-contained wherever it is installed — no env var, no PATH surgery.
 
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -130,12 +131,156 @@ function bindgenClangArgs() {
 	return withStddef.length > 0 ? `-I${withStddef[0]}` : "";
 }
 
+/**
+ * Prefix applied to every ffmpeg dynamic symbol. Anything unique works; this one is
+ * short (the rename must fit ELF's string table, which patchelf grows for us) and
+ * greppable.
+ */
+const SYMBOL_PREFIX = "osff_";
+
+/** `nm -D --defined-only` over the vendored libraries, keeping the ffmpeg namespace. */
+function collectFfmpegSymbols(ffmpegDir) {
+	const names = new Set();
+	for (const soname of FFMPEG_SONAMES) {
+		const lib = path.join(ffmpegDir, "lib", soname);
+		const out = spawnSync("nm", ["-D", "--defined-only", lib], { encoding: "utf8" });
+		if (out.status !== 0) {
+			throw new Error(`nm -D failed on ${lib}: ${out.stderr}`);
+		}
+		for (const line of out.stdout.split("\n")) {
+			// "0000000000012345 T av_frame_alloc@@LIBAVUTIL_60"
+			const match = line.match(/^\s*[0-9a-f]+\s+\S+\s+(\S+)$/);
+			if (!match) continue;
+			const name = match[1].split("@")[0];
+			if (/^(av|sws_|swr_)/.test(name)) {
+				names.add(name);
+			}
+		}
+	}
+	if (names.size === 0) {
+		throw new Error(
+			"No ffmpeg symbols found in the vendored libraries. Either the tree is wrong or " +
+				"`nm` could not read .dynsym — the addon would silently bind to Chromium's ffmpeg.",
+		);
+	}
+	return [...names].sort();
+}
+
+/**
+ * Stage renamed copies of the ffmpeg libraries and return the directory holding them.
+ *
+ * WHY THIS EXISTS. Electron links `libffmpeg.so` — Chromium's own stripped ffmpeg — as a
+ * DT_NEEDED dependency, so it occupies the global symbol scope before any addon is
+ * dlopen'd. ELF has a single flat namespace, so the addon's `avformat_open_input` and
+ * friends bind to Chromium's build no matter what the addon's RUNPATH says: the symbols
+ * are already satisfied. The user-visible result is
+ * AVERROR_PROTOCOL_NOT_FOUND on an ordinary path, because Chromium's ffmpeg carries no
+ * `file` protocol; the quieter result is an addon running against an ffmpeg it was
+ * neither built nor tested against.
+ *
+ * Renaming removes the collision outright. The alternative — RTLD_DEEPBIND, which
+ * reorders the lookup scope instead — was measured to crash the process: Electron
+ * interposes malloc/free globally, and deep-binding desynchronises the allocator, so a
+ * buffer allocated by glibc's realpath() inside PartitionAlloc gets freed by glibc's
+ * free(). Changing NAMES is safe; changing SCOPE is not.
+ *
+ * Symbol versioning is not an option either: the references are already versioned
+ * (`avformat_open_input@LIBAVFORMAT_62`) and still bind to Chromium's definition.
+ */
+function stageRenamedFfmpeg(ffmpegDir) {
+	const patchelf = resolvePatchelf();
+	const symbols = collectFfmpegSymbols(ffmpegDir);
+	const staging = path.join(CRATES_DIR, "target", "ffmpeg-renamed");
+
+	fs.rmSync(staging, { recursive: true, force: true });
+	fs.mkdirSync(path.join(staging, "lib"), { recursive: true });
+	// bindgen still parses the ORIGINAL headers: only the binary symbol names change,
+	// never the C declarations.
+	fs.cpSync(path.join(ffmpegDir, "include"), path.join(staging, "include"), {
+		recursive: true,
+	});
+
+	const mapFile = path.join(staging, "symbols.map");
+	fs.writeFileSync(mapFile, `${symbols.map((s) => `${s} ${SYMBOL_PREFIX}${s}`).join("\n")}\n`);
+
+	for (const soname of FFMPEG_SONAMES) {
+		const staged = path.join(staging, "lib", soname);
+		fs.copyFileSync(fs.realpathSync(path.join(ffmpegDir, "lib", soname)), staged);
+		fs.chmodSync(staged, 0o755);
+		// Renames DEFINED symbols and UNDEFINED ones alike, which matters: the ffmpeg
+		// libraries call into each other, so libavformat's reference to libavutil's
+		// av_frame_alloc has to move in lockstep with the definition.
+		const renamed = spawnSync(patchelf, ["--rename-dynamic-symbols", mapFile, staged], {
+			encoding: "utf8",
+		});
+		if (renamed.status !== 0) {
+			throw new Error(`patchelf failed on ${soname}: ${renamed.stderr}`);
+		}
+		// `-lavformat` resolves through the unversioned name at link time.
+		fs.symlinkSync(soname, path.join(staging, "lib", soname.replace(/\.so\..*$/, ".so")));
+	}
+
+	console.log(`Renamed ${symbols.length} ffmpeg symbols with the "${SYMBOL_PREFIX}" prefix`);
+	return staging;
+}
+
+/** patchelf from PATH, or a user-local build — it is not installed by default anywhere. */
+function resolvePatchelf() {
+	const candidates = [
+		process.env.PATCHELF,
+		path.join(process.env.HOME ?? "", ".local", "bin", "patchelf"),
+		"/usr/bin/patchelf",
+	].filter(Boolean);
+	const found = candidates.find((candidate) => fs.existsSync(candidate));
+	if (found) {
+		return found;
+	}
+	const onPath = spawnSync("patchelf", ["--version"], { encoding: "utf8" });
+	if (onPath.status === 0) {
+		return "patchelf";
+	}
+	throw new Error(
+		"patchelf not found — it rewrites the ffmpeg symbol names so the addon cannot bind to " +
+			"Chromium's bundled ffmpeg. Install it (apt install patchelf, or nix: pkgs.patchelf), " +
+			"or set PATCHELF to a built copy.",
+	);
+}
+
+/**
+ * Fail the build if any ffmpeg symbol is still imported under its original name.
+ *
+ * Without this the failure is SILENT: the addon loads, binds to Chromium's ffmpeg, and
+ * the editor merely says "Preview unavailable on this machine" at runtime.
+ */
+function assertNoUnprefixedFfmpegImports(nodePath) {
+	const out = spawnSync("nm", ["-D", "--undefined-only", nodePath], { encoding: "utf8" });
+	if (out.status !== 0) {
+		throw new Error(`nm -D failed on ${nodePath}: ${out.stderr}`);
+	}
+	const leaked = out.stdout
+		.split("\n")
+		.map((line) => (line.match(/^\s*U\s+(\S+)$/) ?? [])[1])
+		.filter(Boolean)
+		.map((name) => name.split("@")[0])
+		.filter((name) => /^(av|sws_|swr_)/.test(name) && !name.startsWith(SYMBOL_PREFIX));
+
+	if (leaked.length > 0) {
+		throw new Error(
+			`${leaked.length} ffmpeg symbols are still imported unprefixed (${leaked.slice(0, 5).join(", ")}` +
+				`${leaked.length > 5 ? ", …" : ""}). The addon would bind to Chromium's ffmpeg at runtime.`,
+		);
+	}
+	console.log("Verified: no unprefixed ffmpeg imports remain in the addon");
+}
+
 const ffmpegDir = resolveFfmpegDir();
+const stagedFfmpegDir = stageRenamedFfmpeg(ffmpegDir);
 
 await run("cargo", ["build", "-p", "compositor-view-napi", "--release"], {
 	env: {
 		...process.env,
-		FFMPEG_DIR: ffmpegDir,
+		FFMPEG_DIR: stagedFfmpegDir,
+		OPENSCREEN_FFMPEG_SYMBOL_PREFIX: SYMBOL_PREFIX,
 		LIBCLANG_PATH: resolveLibclangDir(),
 		BINDGEN_EXTRA_CLANG_ARGS: bindgenClangArgs(),
 		// `$ORIGIN` is resolved by the dynamic linker against the directory the
@@ -156,16 +301,18 @@ fs.copyFileSync(builtSo, dest);
 console.log(`Built  ${builtSo}`);
 console.log(`Copied ${dest}`);
 
-// Dereference the symlinks: the shipped file must be the real library under its
-// soname, since nothing recreates the lib*.so -> lib*.so.N chain at install time.
+// Ship the RENAMED libraries, not the originals: the addon now imports the prefixed
+// names and a stock libavformat.so.62 would not satisfy it. The two are a matched set.
 for (const soname of FFMPEG_SONAMES) {
-	const source = path.join(ffmpegDir, "lib", soname);
+	const source = path.join(stagedFfmpegDir, "lib", soname);
 	if (!fs.existsSync(source)) {
 		throw new Error(
-			`${soname} not found in ${path.join(ffmpegDir, "lib")}. The vendored ffmpeg tree does not ` +
-				"match the sonames the addon links against — check the pinned release.",
+			`${soname} not found in ${path.join(stagedFfmpegDir, "lib")}. The vendored ffmpeg tree ` +
+				"does not match the sonames the addon links against — check the pinned release.",
 		);
 	}
 	fs.copyFileSync(fs.realpathSync(source), path.join(OUT_DIR, soname));
 }
-console.log(`Copied ${FFMPEG_SONAMES.length} ffmpeg shared libraries alongside the addon`);
+console.log(`Copied ${FFMPEG_SONAMES.length} renamed ffmpeg shared libraries alongside the addon`);
+
+assertNoUnprefixedFfmpegImports(dest);
