@@ -1,0 +1,9 @@
+# The compositor is developed across Windows, macOS and Linux. Without this, a
+# checkout on Windows can reintroduce CRLF and the shader sources drift from the
+# `end_of_line = lf` / `charset = utf-8` that .editorconfig already mandates —
+# which is how blur.wgsl, layer.wgsl and linux_decode.rs ended up with CRLF and
+# double-encoded French comments in the first place.
+*.wgsl text eol=lf
+*.rs   text eol=lf
+*.ts   text eol=lf
+*.tsx  text eol=lf
