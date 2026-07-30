@@ -87,6 +87,59 @@ backend_flag_for_host() {
   esac
 }
 
+# ---------------------------------------------------------------------------
+# macOS: make the staged tree relocatable.
+#
+# CMake links the helper and every ggml/whisper dylib against `@rpath/...` and
+# then bakes a single absolute LC_RPATH pointing at its own build tree
+# (`.cache/whisper-stt-build/build-<tag>-<variant>/bin`). That resolves on the
+# machine that ran the build and nowhere else: delete the build cache, or
+# download the CI artifact onto a different runner, and dyld cannot find
+# libwhisper at all — the process aborts (SIGABRT, exit 134) before main().
+#
+# This is the macOS twin of the Windows 0xC0000135 incident that shipped in
+# 1.8.0-rc.1..rc.3 (see the OpenSSL note in the CMakeLists). Swapping the
+# absolute rpath for `@loader_path` makes each binary look for its siblings
+# next to itself, which is exactly how the staged directory and the packaged
+# `resources/electron/native/bin/<tag>/` are laid out.
+#
+# Editing a Mach-O header invalidates its code signature, and arm64 refuses to
+# execute an unsigned-but-modified image ("killed: 9"), so each patched file is
+# re-signed ad-hoc afterwards.
+# ---------------------------------------------------------------------------
+relocate_macos_rpaths() {
+  local out_dir="$1"
+
+  local f rp
+  for f in "${out_dir}"/*; do
+    # Symlinks share the payload of their target; patching the target is
+    # enough, and codesign would follow the link and sign it twice.
+    [[ -L "${f}" ]] && continue
+    [[ -f "${f}" ]] || continue
+    # Mach-O only: skips *.metal shader sidecars and anything else non-binary.
+    file -b "${f}" | grep -q "Mach-O" || continue
+
+    # Drop every *absolute* LC_RPATH. An absolute rpath in a shipped artifact
+    # is always a build-machine path; relative ones (@loader_path,
+    # @executable_path) are already correct and must survive.
+    while read -r rp; do
+      [[ "${rp}" == /* ]] || continue
+      install_name_tool -delete_rpath "${rp}" "${f}" 2>/dev/null || true
+    done < <(otool -l "${f}" | awk '/cmd LC_RPATH/{n=1;next} n&&/^ *path /{print $2;n=0}')
+
+    # Idempotent: a second run would otherwise stack duplicate rpaths.
+    if ! otool -l "${f}" | awk '/cmd LC_RPATH/{n=1;next} n&&/^ *path /{print $2;n=0}' |
+      grep -qx "@loader_path"; then
+      install_name_tool -add_rpath "@loader_path" "${f}"
+    fi
+
+    codesign --force --sign - --timestamp=none "${f}" 2>/dev/null ||
+      echo "[whisper-stt] WARN: could not re-sign ${f##*/}" >&2
+  done
+
+  echo "[whisper-stt] rewrote macOS rpaths to @loader_path in ${out_dir}"
+}
+
 build_variant() {
   local variant_name="$1"
   shift
@@ -109,7 +162,10 @@ build_variant() {
     ${extra_cmake_flags[@]+"${extra_cmake_flags[@]}"}
 
   echo "[whisper-stt] building ${variant_name}"
-  cmake --build "${build_dir}" --config Release -j "$(nproc 2>/dev/null || echo 4)"
+  # ponytail: macOS has no `nproc` (it is GNU coreutils), so this silently built
+  # with -j4 on an 8-core Mac. `sysctl -n hw.ncpu` is the BSD equivalent.
+  cmake --build "${build_dir}" --config Release \
+    -j "$(nproc 2>/dev/null || sysctl -n hw.ncpu 2>/dev/null || echo 4)"
 
   local bin_name="whisper-stt-server"
   if [[ "${OS_ARCH}" == win32-* ]]; then
@@ -152,14 +208,36 @@ build_variant() {
   # Stage any shared libraries / backend sidecars that CMake produced.
   # Copy everything that looks like a ggml/whisper shared library, plus any
   # .metal shader files (only produced when Metal is not embedded).
+  #
+  # ponytail: the pattern list used to be `ggml*.*|whisper.*|libwhisper.*`,
+  # which only ever matched on Windows. CMake names shared libraries
+  # `ggml-base.dll` on Windows but `libggml-base.dylib` / `libggml-base.so.0`
+  # everywhere else, so on macOS and Linux every ggml sidecar was skipped and
+  # only libwhisper was staged — leaving a helper that cannot resolve
+  # @rpath/libggml.0.dylib and dies in dyld before main(). The `lib` prefix and
+  # the `.so.<N>` version suffixes are what the globs below add.
+  #
+  # -a preserves the symlink farm (libggml.dylib -> libggml.0.dylib ->
+  # libggml.0.15.1.dylib); plain `cp` dereferences each one into a full copy of
+  # the same payload, which tripled the staged size for no benefit.
   local found_libs=0
   for lib_dir in "${search_dirs[@]}"; do
     if [[ -d "${lib_dir}" ]]; then
       for f in "${lib_dir}"/*; do
-        if [[ -f "${f}" ]]; then
+        # -f follows symlinks (true for both link and target); -L catches the
+        # links themselves so the farm is staged intact.
+        if [[ -f "${f}" || -L "${f}" ]]; then
+          # Patterns, in order: Windows DLLs; macOS dylibs; Linux .so plus its
+          # versioned forms (libggml-base.so.0, libggml-base.so.0.15.1); Metal
+          # shader sidecars. A comment cannot be placed inside a `case` pattern
+          # list — a `| \` continuation would swallow it as part of the pattern.
           case "${f##*/}" in
-            ggml*.*|whisper.*|whisper.dylib|whisper.dll|libwhisper.*|*.metal)
-              cp "${f}" "${OUT_DIR}/"
+            ggml*.dll|whisper.dll|parakeet.dll|\
+libggml*.dylib|libwhisper*.dylib|libparakeet*.dylib|\
+libggml*.so|libggml*.so.*|libwhisper*.so|libwhisper*.so.*|\
+libparakeet*.so|libparakeet*.so.*|\
+*.metal)
+              cp -a "${f}" "${OUT_DIR}/"
               found_libs=1
               ;;
           esac
@@ -167,6 +245,21 @@ build_variant() {
       done
     fi
   done
+
+  # Fail here rather than in the installer. `found_libs` was computed and then
+  # never read, so a staging glob that matched nothing — which is precisely what
+  # happened on macOS and Linux — still exited 0 and produced a green build.
+  if [[ "${found_libs}" -eq 0 ]]; then
+    echo "FATAL: staged no shared libraries alongside ${out_bin_name}." >&2
+    echo "       Searched: ${search_dirs[*]}" >&2
+    echo "       The helper links ggml/whisper as shared libraries; without them" >&2
+    echo "       it cannot start. Check the sidecar glob in this script." >&2
+    exit 1
+  fi
+
+  if [[ "${OS_ARCH}" == darwin-* ]]; then
+    relocate_macos_rpaths "${OUT_DIR}"
+  fi
 
   echo "[whisper-stt] built ${variant_name} -> ${OUT_DIR}/${out_bin_name}"
   ls -la "${OUT_DIR}"
