@@ -164,24 +164,35 @@ impl Player {
     ///
     /// Mesuré : un scrub traversant deux clips a produit 31 bascules — 21 à moins de 500 ms
     /// l'une de l'autre — pour deux changements de média réels.
-    pub unsafe fn seek_active(&mut self, source_time_sec: f64) -> Result<()> {
+    /// Rend `false` quand le repositionnement n'aboutit pas — l'appelant DOIT alors
+    /// retomber sur `set_active_clip`.
+    ///
+    /// Cette sortie existe parce que ce chemin hérite de décodeurs déjà ouverts, donc d'un
+    /// état : fin de piste atteinte, position hors de la fenêtre, EOF déjà envoyé.
+    /// `open_and_seek_clip` ne peut pas rencontrer ça (ses décodeurs sont neufs). Une
+    /// première version marquait la frame comme utilisable sans vérifier les DEUX seeks ;
+    /// `compose_frame` recevait alors un `AVFrame` vide, `nv12_srvs` échouait avec « frame
+    /// sans texture D3D11 », et le thread de rendu s'arrêtait définitivement — preview noire
+    /// jusqu'à recréation de la vue.
+    pub unsafe fn seek_active(&mut self, source_time_sec: f64) -> Result<bool> {
         let source_time_sec = source_time_sec.max(0.0);
         let sf = self.sdec.seek_to(source_time_sec)?;
         if sf.is_null() {
-            // Position hors de la piste : on garde les décodeurs en l'état plutôt que de
-            // prétendre avoir une frame, sans quoi le compositeur composerait du vide.
-            self.has_current_frame = false;
-            return Ok(());
+            return Ok(false);
         }
         let mut wf = self.wdec.seek_to(webcam_seek_time(source_time_sec, self.webcam_offset_sec))?;
         if wf.is_null() {
             wf = self.wdec.seek_to(0.0)?;
         }
-        let _ = wf;
+        // Les DEUX flux doivent avoir une frame : `compose_frame` les échantillonne tous les
+        // deux sans condition, un seul manquant suffit à le faire échouer.
+        if wf.is_null() {
+            return Ok(false);
+        }
         self.idx = (source_time_sec * self.sdec.fps()).round().max(0.0) as u32;
         self.has_current_frame = true;
         self.use_current_on_next_step = true;
-        Ok(())
+        Ok(true)
     }
 
     /// Bascule instantanément sur une paire de décodeurs déjà ouverte + positionnée — aucune
@@ -1015,6 +1026,9 @@ unsafe fn render_thread(
     // Gardée à part (raw_cursor) pour pouvoir régénérer une variante lissée sans relire le
     // fichier à chaque changement du slider "smoothing" (voir la boucle plus bas).
     let mut raw_cursor = CursorTrack::load(cursor_json, 0.0, 24.0 * 3600.0).ok();
+    /// Chemin de la télémétrie curseur actuellement chargée dans `raw_cursor` — évite de
+    /// relire le même fichier à chaque changement de segment (voir plus bas).
+    let mut loaded_cursor_path = cursor_json.to_string();
     if let Some(track) = &raw_cursor {
         comp.set_cursor(track.smoothed(0.0));
     }
@@ -1074,8 +1088,12 @@ unsafe fn render_thread(
             let same_media = request.screen_path == active_screen_path
                 && request.webcam_path == active_webcam_path
                 && (request.webcam_offset_sec - active_webcam_offset_sec).abs() < 1e-9;
-            let switch_result = if same_media {
-                player.seek_active(request.source_time_sec)
+            // Le repositionnement n'est tenté que sur médias identiques, et son échec n'est
+            // JAMAIS fatal : on retombe sur l'ouverture complète, chemin connu comme sûr.
+            // L'optimisation ne s'applique donc que là où elle fonctionne démontrablement.
+            let repositioned = same_media && matches!(player.seek_active(request.source_time_sec), Ok(true));
+            let switch_result = if repositioned {
+                Ok(())
             } else {
                 player.set_active_clip(
                     &request.screen_path,
@@ -1086,7 +1104,10 @@ unsafe fn render_thread(
             };
             match switch_result {
                 Ok(()) => {
-                    if !same_media {
+                    // Condition sur `repositioned`, pas sur `same_media` : un repositionnement
+                    // qui a échoué est retombé sur l'ouverture complète, donc des décodeurs
+                    // ONT été fermés et le cache doit être vidé malgré des médias identiques.
+                    if !repositioned {
                         // Les anciens décodeurs viennent d'être fermés : leurs textures ne
                         // doivent plus figurer dans le cache de SRV, qui est keyé sur
                         // l'ADRESSE de la texture. Sans ce vidage, deux défauts se cumulent —
@@ -1120,24 +1141,35 @@ unsafe fn render_thread(
                         comp.set_scene(Some(scene_for_clip(&base_scene, active_clip_index)));
                         scene_applied = true;
                     }
+                    // Relire la télémétrie curseur seulement si le FICHIER change. Elle était
+                    // rechargée — ouverture disque + parse JSON — à chaque demande de clip, y
+                    // compris quand seul le segment changeait, où le chemin est par
+                    // construction identique. Mesuré : 66 bascules sur un scrub de deux clips,
+                    // donc 66 relectures du même fichier.
                     let cursor_path = format!("{}.cursor.json", active_screen_path);
-                    raw_cursor = CursorTrack::load(&cursor_path, 0.0, 24.0 * 3600.0).ok();
-                    match &raw_cursor {
-                        Some(track) => {
-                            eprintln!(
+                    if cursor_path != loaded_cursor_path {
+                        loaded_cursor_path = cursor_path.clone();
+                        raw_cursor = CursorTrack::load(&cursor_path, 0.0, 24.0 * 3600.0).ok();
+                        // Journalisé ICI seulement : sinon la ligne annonce « loaded=ok » à
+                        // chaque changement de segment alors que rien n'a été relu, et le log
+                        // laisse croire à un travail qui n'a plus lieu.
+                        match &raw_cursor {
+                            Some(track) => eprintln!(
                                 "[live] cursor: path={} loaded=ok samples={}",
                                 cursor_path,
                                 track.sample_count(),
-                            );
-                            comp.set_cursor(track.smoothed(0.0));
-                        }
-                        None => {
-                            eprintln!(
+                            ),
+                            None => eprintln!(
                                 "[live] cursor: path={} loaded=FAIL — clear_cursor()",
                                 cursor_path,
-                            );
-                            comp.clear_cursor();
+                            ),
                         }
+                    }
+                    // Appliqué à chaque fois, y compris sans relecture : le compositeur peut
+                    // avoir été reconstruit (changement de taille) et perdu son curseur.
+                    match &raw_cursor {
+                        Some(track) => comp.set_cursor(track.smoothed(0.0)),
+                        None => comp.clear_cursor(),
                     }
                     last_smoothing = -1.0;
                     clip_changed = true;
