@@ -658,6 +658,19 @@ impl Compositor {
         Ok((y, uv))
     }
 
+    /// Vide le `CVMetalTextureCache` — API symétrique de
+    /// `compositor_windows::Compositor::clear_srv_cache`, même contrat côté appelant
+    /// (`live.rs` l'appelle sans savoir sur quelle plateforme il tourne) : à invoquer
+    /// quand un jeu de décodeurs vient d'être fermé, pour ne pas garder de textures
+    /// pointant sur un IOSurface déjà libéré.
+    ///
+    /// Pas de `HashMap` keyée par adresse à vider ici (contrairement à Windows) — voir
+    /// la doc de `CVMetalTextureCache` : CoreVideo est déjà ce cache et le réutilise par
+    /// IOSurface, pas par pointeur Rust. `flush()` est donc la vidange elle-même.
+    pub fn clear_srv_cache(&self) {
+        self.metal_texture_cache.flush();
+    }
+
     /// Les verbes de dessin, côté Metal. Mêmes noms et mêmes paramètres que leurs
     /// homologues de `compositor_windows.rs` — c'est ce qui rend les deux moitiés
     /// « dessin » comparables ligne à ligne.
