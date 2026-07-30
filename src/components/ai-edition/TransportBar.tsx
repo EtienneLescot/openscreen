@@ -1,5 +1,5 @@
 import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
-import { memo } from "react";
+import { memo, useCallback, useEffect, useRef } from "react";
 import { useScopedT } from "@/contexts/I18nContext";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
@@ -48,6 +48,77 @@ export const TransportBar = memo(function TransportBar({
 	);
 	// ponytail: mirrors Preview's old clamp so the CSS thumb and the native
 	// range thumb stay in sync when there's no clip yet.
+	// ── Drag de la barre : même cadence que le drag de la timeline ──────────────────
+	//
+	// L'`onChange` d'un `<input type="range">` se déclenche à la cadence du POINTEUR — 125 à
+	// 1000 Hz selon la souris — et appelait `onSeek` à chacun. Or `onSeek` est `handleSeek`,
+	// qui écrit au store ET repose un `seekTarget` neuf dans l'état de `NewEditorShell`, la
+	// racine : chaque appel re-rend tout l'éditeur et fait poser `<video>.currentTime`, un
+	// vrai seek média.
+	//
+	// La timeline fait exactement les mêmes appels, mais les coalesce en rAF — donc ~60 fois
+	// par seconde au lieu de jusqu'à 1000. C'est cette seule différence de cadence qui
+	// sépare les deux chemins, et elle explique l'écart de fluidité remonté en usage.
+	//
+	// On ne fait donc rien de plus que rétablir la parité : même travail, cadence d'écran.
+	// Délibérément PAS « ne poser le seekTarget qu'au relâchement » — ce serait un
+	// comportement différent de la timeline, où le `<video>` suit pendant le drag, et
+	// divergence entre deux chemins censés faire la même chose est précisément ce qui a
+	// produit les bugs de cette zone.
+	const rafRef = useRef(0);
+	const pendingRef = useRef<number | null>(null);
+	const draggingRef = useRef(false);
+
+	useEffect(() => {
+		return () => {
+			if (rafRef.current !== 0) {
+				cancelAnimationFrame(rafRef.current);
+			}
+		};
+	}, []);
+
+	const handleInputChange = useCallback(
+		(value: number) => {
+			// Hors drag (flèches du clavier, clic simple sur la piste) : rien à coalescer,
+			// c'est un saut unique et il doit prendre effet tout de suite.
+			if (!draggingRef.current) {
+				onSeek(value);
+				return;
+			}
+			pendingRef.current = value;
+			if (rafRef.current !== 0) {
+				return;
+			}
+			rafRef.current = requestAnimationFrame(() => {
+				rafRef.current = 0;
+				const pending = pendingRef.current;
+				if (pending !== null) {
+					onSeek(pending);
+				}
+			});
+		},
+		[onSeek],
+	);
+
+	const endDrag = useCallback(() => {
+		if (!draggingRef.current) {
+			return;
+		}
+		draggingRef.current = false;
+		setUiProbeScrubbing(false, "bar");
+		if (rafRef.current !== 0) {
+			cancelAnimationFrame(rafRef.current);
+			rafRef.current = 0;
+		}
+		// Pose la dernière position : sans ce commit, le mouvement compris entre le dernier
+		// rAF et le relâchement serait perdu et la tête s'arrêterait un cran avant le doigt.
+		const pending = pendingRef.current;
+		if (pending !== null) {
+			pendingRef.current = null;
+			onSeek(pending);
+		}
+	}, [onSeek]);
+
 	const inputMax = virtualDurationSec || 1;
 	const inputValue = Math.min(Math.max(currentTimeSec, 0), inputMax);
 	const progress = (inputValue / inputMax) * 100;
@@ -97,13 +168,20 @@ export const TransportBar = memo(function TransportBar({
 					max={inputMax}
 					step={0.01}
 					value={inputValue}
-					onChange={(e) => onSeek(Number(e.target.value))}
-					// Sonde de fluidité (diagnostic) : marque la fenêtre de drag comme
-					// venant de la BARRE, pour ne pas la confondre avec un drag de timeline —
-					// les deux empruntent des chemins de code différents.
-					onPointerDown={() => setUiProbeScrubbing(true, "bar")}
-					onPointerUp={() => setUiProbeScrubbing(false, "bar")}
-					onPointerCancel={() => setUiProbeScrubbing(false, "bar")}
+					onChange={(e) => handleInputChange(Number(e.target.value))}
+					onPointerDown={() => {
+						draggingRef.current = true;
+						// Sonde de fluidité (diagnostic) : marque la fenêtre de drag comme
+						// venant de la BARRE, pour ne pas la confondre avec un drag de
+						// timeline — les deux empruntent des chemins de code différents.
+						setUiProbeScrubbing(true, "bar");
+					}}
+					onPointerUp={endDrag}
+					// `pointercancel` et `blur` ferment aussi le drag : un pointeur capturé
+					// puis interrompu (geste système, perte de focus) ne produit pas de
+					// `pointerup`, et la dernière position resterait alors non confirmée.
+					onPointerCancel={endDrag}
+					onBlur={endDrag}
 					className={styles.scrubInput}
 					aria-label={te("transport.seekVideo")}
 				/>
