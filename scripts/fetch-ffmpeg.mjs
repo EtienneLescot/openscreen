@@ -66,47 +66,47 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
 
 /** Immutable dated tag. `latest` is an alias that moves — do not use it here. */
-const RELEASE_TAG = "autobuild-2026-07-15-14-01";
+const RELEASE_TAG = "autobuild-2026-07-30-13-32";
 const BASE = `https://github.com/BtbN/FFmpeg-Builds/releases/download/${RELEASE_TAG}`;
 
 /** Tag, asset and digest move together. Re-pin all three or none. */
 const PINNED = {
 	"win32-x64": {
-		asset: "ffmpeg-n8.1.2-22-g94138f6973-win64-lgpl-8.1.zip",
-		sha256: "6bd644cb9476a72d905ba22c807eaef1c47a224c8f194c0771da9f3e9a765c35",
+		asset: "ffmpeg-n8.1.2-32-gcfa62de001-win64-lgpl-8.1.zip",
+		sha256: "c5a091e6a0e446f737f5ae78f9ed38dc02081c014156097468c196b606c4717f",
 		exe: "ffmpeg.exe",
 	},
 	"win32-arm64": {
-		asset: "ffmpeg-n8.1.2-22-g94138f6973-winarm64-lgpl-8.1.zip",
-		sha256: "8f89ba5cca2c14ef8e181cdb1bd8403d7b7ee7586151027918a2ac8e42cf7c48",
+		asset: "ffmpeg-n8.1.2-32-gcfa62de001-winarm64-lgpl-8.1.zip",
+		sha256: "c5b600e5577142fe7d9d4c9788b91d09a4eaf36900abc5b7cf82b8af54663d7a",
 		exe: "ffmpeg.exe",
 	},
 	"linux-x64": {
-		asset: "ffmpeg-n8.1.2-22-g94138f6973-linux64-lgpl-8.1.tar.xz",
-		sha256: "81c8a9fd1f4bb0a888e820d8ddc825cee5116da16efe93054c761ecbc4b54fc3",
+		asset: "ffmpeg-n8.1.2-32-gcfa62de001-linux64-lgpl-8.1.tar.xz",
+		sha256: "c54903d95c31d283441bc30ad61ed5d58ed968e18d6169b606dbf175d3719c30",
 		exe: "ffmpeg",
 	},
 	"linux-arm64": {
-		asset: "ffmpeg-n8.1.2-22-g94138f6973-linuxarm64-lgpl-8.1.tar.xz",
-		sha256: "0d4777bde13dcfb61de3541d129df8a37f0e24eb0afddb0bab698fa73ec0aed4",
+		asset: "ffmpeg-n8.1.2-32-gcfa62de001-linuxarm64-lgpl-8.1.tar.xz",
+		sha256: "f7a5ffe5e8f10957ce4675e0fab8d8a739a33abcf626721a9cfc7fcae40afb3d",
 		exe: "ffmpeg",
 	},
 };
 
 /**
  * The "-shared" sibling of PINNED, from the *same* release tag and source
- * commit (n8.1.2-22-g94138f6973) — same ffmpeg, just built with DLLs instead
+ * commit (n8.1.2-32-gcfa62de001) — same ffmpeg, just built with DLLs instead
  * of static linking. Only the compositor addon needs this, and it's
  * Windows-only (D3D11), so there's no linux/darwin entry here.
  */
 const SHARED_PINNED = {
 	"win32-x64": {
-		asset: "ffmpeg-n8.1.2-22-g94138f6973-win64-lgpl-shared-8.1.zip",
-		sha256: "8bf72607f421282b64f02c6af8683c480e2d299c6b21349ab0f9b5e27c74e223",
+		asset: "ffmpeg-n8.1.2-32-gcfa62de001-win64-lgpl-shared-8.1.zip",
+		sha256: "23429f940316ea92e376f6946c0a1f1b9043c930f3bc068228461d65ae24f8b8",
 	},
 	"win32-arm64": {
-		asset: "ffmpeg-n8.1.2-22-g94138f6973-winarm64-lgpl-shared-8.1.zip",
-		sha256: "8ee2c32da356883297bac055ccf14e0b6eb1fbb2e5f92f24c569a171207da852",
+		asset: "ffmpeg-n8.1.2-32-gcfa62de001-winarm64-lgpl-shared-8.1.zip",
+		sha256: "7e8ede09fb48087478a272c57dab1a11eaba6688ee7a3d82728fd365425a1b6e",
 	},
 };
 
