@@ -1637,8 +1637,10 @@ impl Compositor {
 
         enc.end_encoding();
 
-        // --- annotations : calque le plus haut, ancré sur le rect ÉCRAN ---
-        self.draw_annotations(cmd_buf, scene_ref.as_ref(), g.source_t, g.s_dst)?;
+        // --- annotations : calque le plus haut, ancré sur le rect ÉCRAN SANS ZOOM ---
+        // `s_ann`, pas `s_dst` : le zoom vit dans la boîte depuis l'issue #179, donc `s_dst`
+        // grandit avec lui et emmenait annotations et sous-titres dans le mouvement.
+        self.draw_annotations(cmd_buf, scene_ref.as_ref(), g.source_t, g.s_ann)?;
 
         // Ni miroir RGBA ni attente ici : le miroir ne sert qu'à `readback_direct` (la
         // preview), et l'export ne lit jamais le RGBA — le blit pleine résolution était payé
