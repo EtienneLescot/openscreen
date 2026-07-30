@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
+import { noteUiProbeClipSwitch } from "@/lib/ai-edition/perf/uiFrameProbe";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { resolveNativePosition } from "@/lib/ai-edition/timeline/timelineMap";
 import {
@@ -163,6 +164,9 @@ export function NativeCompositorOverlay() {
 		const cam = asset.cameraTrack;
 		const webcamPath = cam && cam.visible && cam.sourcePath ? cam.sourcePath : "";
 		const targetClipId = activeClipId;
+		// Sonde de fluidité (diagnostic) : sépare les mesures d'avant et d'après un
+		// franchissement de clip, qui se sont déjà révélées non comparables.
+		noteUiProbeClipSwitch();
 		pendingTargetClipIdRef.current = targetClipId;
 		previousActiveClipIdRef.current = targetClipId;
 
