@@ -24,11 +24,21 @@
 /* rows set inline per mode (topbar / body / timeline) */
 
 /* ─── TOP BAR ──────────────────────────────────────────────────────── */
+/* Every slot on the left half is width-STABLE by construction: the chat toggle
+   reserves its box even in the modes that don't have one, the project name and
+   the save state are fixed-size regardless of the string inside them. Without
+   that, hiding a button, renaming a project or simply typing (saved → unsaved)
+   re-flowed the whole bar and slid the mode switch sideways. */
 .topbar {
 	grid-row: 1;
 	display: flex;
 	align-items: center;
-	gap: 14px;
+	gap: var(--topbar-gap);
+	--topbar-gap: 14px;
+	--topbar-icon: 32px;
+	--topbar-project-w: 180px;
+	/* Widest of the short locale labels — "PT-BR", and the CJK "简中". */
+	--topbar-lang-label-w: 38px;
 	/* The topbar doubles as the window titlebar, so it keeps clear of the native
 	   window controls: the macOS traffic lights (--titlebar-inset-left, injected
 	   per-platform by the main process) on the left, and the Windows/Linux Window
@@ -54,6 +64,17 @@
 	width: 1px;
 	height: 18px;
 	background: var(--border);
+	flex-shrink: 0;
+}
+/* Reserved box for the chat toggle and its rule. The toggle only exists in Edit
+   mode (the left panel doesn't render in Media/Rec), so without a slot holding
+   the space every mode change shoved the rest of the bar sideways. Width =
+   button + gap + rule, i.e. exactly what it holds when it is there. */
+.topbarLead {
+	display: inline-flex;
+	align-items: center;
+	gap: var(--topbar-gap);
+	width: calc(var(--topbar-icon) + var(--topbar-gap) + 1px);
 	flex-shrink: 0;
 }
 .brand {
@@ -127,9 +148,24 @@
 	opacity: 0.45;
 	cursor: not-allowed;
 }
+/* The project name keeps one width whatever it is called — and the read view and
+   the edit input keep the SAME width, so clicking to rename doesn't nudge the
+   bar either. A long title truncates rather than pushing its neighbours. */
+.projectNameBtn {
+	width: var(--topbar-project-w);
+	justify-content: flex-start;
+	box-sizing: border-box;
+}
+.projectNameLabel {
+	min-width: 0;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
+}
 .projectNameInput {
 	height: 30px;
-	min-width: 160px;
+	width: var(--topbar-project-w);
+	box-sizing: border-box;
 	padding: 0 10px;
 	border-radius: 9px;
 	border: 1px solid var(--accent);
@@ -138,14 +174,32 @@
 	font: 500 13px var(--font-display);
 	outline: none;
 }
+/* Both states are rendered into the SAME grid cell, so the slot is as wide as
+   the longer of the two and never resizes when the document goes dirty — which
+   happens on every keystroke. Sizing to the longer string beats guessing a width:
+   "Saved"/"Unsaved" differ by 2 characters in English and by 4 in French, and a
+   hard-coded width would clip somewhere among the 13 locales. */
 .saved {
-	display: inline-flex;
+	display: inline-grid;
+	grid-template-areas: "state";
 	align-items: center;
-	gap: 6px;
+	justify-items: start;
 	font-family: var(--font-mono);
 	font-size: 11px;
 	color: var(--muted);
 	flex-shrink: 0;
+}
+.savedState {
+	grid-area: state;
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	white-space: nowrap;
+}
+/* visibility (not display) so the hidden state still contributes its width —
+   and stays out of the accessibility tree. */
+.savedState[data-on="false"] {
+	visibility: hidden;
 }
 .saved .dot {
 	width: 6px;
@@ -155,20 +209,44 @@
 	box-shadow: 0 0 0 3px var(--accent-soft);
 }
 
+/* One box for every short locale label — see --topbar-lang-label-w. Without it
+   the language button resized between "EN", "PT-BR" and the CJK "简中", moving
+   everything to its right. */
+.langShort {
+	width: var(--topbar-lang-label-w);
+	text-align: center;
+	font-family: var(--font-mono);
+	font-size: 11px;
+	font-weight: 600;
+	white-space: nowrap;
+}
+
 /* mode switch (Media / Edit / Rec) */
+/* Three EQUAL columns, not three content-sized buttons. `1fr` tracks in an
+   intrinsically-sized grid all take the width of the widest one, so the trio
+   stays symmetrical in every locale — English "Rec" next to "Media", French
+   "Enregistrement" next to "Médias" — and the hover/selected plate is the same
+   box on all three. */
 .modeSwitch {
 	margin: 0 auto;
-	display: inline-flex;
+	display: inline-grid;
+	grid-template-columns: repeat(3, minmax(0, 1fr));
 	align-items: center;
 	gap: 2px;
 	padding: 3px;
 	background: var(--surface-1);
 	border: 1px solid var(--border);
 	border-radius: 11px;
-	flex-shrink: 0;
+	/* The only shrinkable item in the bar (everything else is flex-shrink: 0), so
+	   a verbose locale — fr "Enregistrement" is nearly twice "Médias" — narrows
+	   this control instead of shoving Export off the edge of a 1200px window. The
+	   columns stay equal to each other while it happens; only the labels clip. */
+	flex-shrink: 1;
+	min-width: 0;
 }
 .modeSwitch button {
 	padding: 5px 14px;
+	white-space: nowrap;
 	border: 0;
 	border-radius: 7px;
 	background: transparent;
@@ -177,6 +255,32 @@
 	font-weight: 500;
 	cursor: pointer;
 	transition: background var(--motion-fast) var(--ease), color var(--motion-fast) var(--ease);
+	/* Label and a hidden BOLD copy of it share one cell. Selecting a tab switches
+	   the label to 600, which is wider than the 500 it was — enough to resize the
+	   widest column and shift the whole control. Reserving the bold width up front
+	   makes each button the same size selected, hovered or idle. */
+	display: grid;
+	grid-template-areas: "label";
+	/* minmax(0,…) so the cell can be narrower than the text: without it the inner
+	   column sizes to the label and the button just clips it mid-glyph, instead of
+	   letting the label ellipsise. */
+	grid-template-columns: minmax(0, 1fr);
+	place-items: center;
+	min-width: 0;
+	overflow: hidden;
+}
+.modeSwitch button::before {
+	content: attr(data-label);
+	grid-area: label;
+	font-weight: 600;
+	visibility: hidden;
+}
+.modeLabel {
+	grid-area: label;
+	max-width: 100%;
+	overflow: hidden;
+	text-overflow: ellipsis;
+	white-space: nowrap;
 }
 .modeSwitch button[aria-selected="true"] {
 	background: var(--surface-3);

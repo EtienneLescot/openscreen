@@ -63,21 +63,25 @@ export function EditorTopBar({
 	const showChatToggle = mode === "edit";
 	return (
 		<header className={styles.topbar}>
-			{showChatToggle ? (
-				<>
-					<button
-						type="button"
-						className={`${styles.iconBtn}${chatOpen ? ` ${styles.on}` : ""}`}
-						title={t("topbar.toggleChatPanel")}
-						aria-label={t("topbar.toggleChatPanel")}
-						aria-pressed={chatOpen}
-						onClick={actions.toggleChat}
-					>
-						<PanelLeft size={17} />
-					</button>
-					<span className={styles.sep} aria-hidden />
-				</>
-			) : null}
+			{/* Fixed-width slot: the toggle is Edit-only, and .topbarLead holds its
+			    space in the other modes so nothing to the right moves. */}
+			<span className={styles.topbarLead}>
+				{showChatToggle ? (
+					<>
+						<button
+							type="button"
+							className={`${styles.iconBtn}${chatOpen ? ` ${styles.on}` : ""}`}
+							title={t("topbar.toggleChatPanel")}
+							aria-label={t("topbar.toggleChatPanel")}
+							aria-pressed={chatOpen}
+							onClick={actions.toggleChat}
+						>
+							<PanelLeft size={17} />
+						</button>
+						<span className={styles.sep} aria-hidden />
+					</>
+				) : null}
+			</span>
 			<span className={styles.brand}>
 				{/* Decorative: the wordmark right beside it already names the app. */}
 				<img src={logoMark} alt="" draggable={false} />
@@ -130,22 +134,23 @@ export function EditorTopBar({
 			</button>
 			<span className={styles.sep} aria-hidden />
 			<LangButton />
+			{/* Both states are always rendered, stacked in one grid cell, so the slot
+			    keeps the width of the longer label and the bar doesn't twitch every
+			    time the document goes dirty. The inactive one is visibility:hidden,
+			    which also takes it out of the accessibility tree. */}
 			<span className={styles.saved}>
-				{dirty ? (
-					<>
-						<span
-							className={styles.dot}
-							aria-hidden
-							style={{ background: "var(--warn)", boxShadow: "0 0 0 3px var(--warn-soft)" }}
-						/>
-						{t("topbar.unsaved")}
-					</>
-				) : (
-					<>
-						<span className={styles.dot} aria-hidden />
-						{t("topbar.saved")}
-					</>
-				)}
+				<span className={styles.savedState} data-on={!dirty}>
+					<span className={styles.dot} aria-hidden />
+					{t("topbar.saved")}
+				</span>
+				<span className={styles.savedState} data-on={dirty}>
+					<span
+						className={styles.dot}
+						aria-hidden
+						style={{ background: "var(--warn)", boxShadow: "0 0 0 3px var(--warn-soft)" }}
+					/>
+					{t("topbar.unsaved")}
+				</span>
 			</span>
 
 			<div className={styles.modeSwitch} role="tablist" aria-label={t("topbar.editorMode")}>
@@ -155,9 +160,12 @@ export function EditorTopBar({
 						type="button"
 						role="tab"
 						aria-selected={mode === m.id}
+						// Feeds the hidden bold copy that reserves the selected width — see
+						// .modeSwitch button::before.
+						data-label={t(m.labelKey)}
 						onClick={() => onModeChange(m.id)}
 					>
-						{t(m.labelKey)}
+						<span className={styles.modeLabel}>{t(m.labelKey)}</span>
 					</button>
 				))}
 			</div>
@@ -241,12 +249,15 @@ function ProjectNameField({
 	return (
 		<button
 			type="button"
-			className={styles.ghostBtn}
+			className={`${styles.ghostBtn} ${styles.projectNameBtn}`}
 			aria-label={t("topbar.renameProject")}
+			// The label is truncated to keep the slot fixed, so the full name has to
+			// stay reachable on hover.
+			title={title ?? undefined}
 			disabled={!title}
 			onClick={startEditing}
 		>
-			{title ?? t("topbar.noProject")}
+			<span className={styles.projectNameLabel}>{title ?? t("topbar.noProject")}</span>
 		</button>
 	);
 }
@@ -275,9 +286,10 @@ function LangButton() {
 				aria-pressed={open}
 			>
 				<Languages size={15} />
-				<span style={{ fontFamily: "var(--font-mono)", fontSize: 11, fontWeight: 600 }}>
-					{getLocaleShort(locale)}
-				</span>
+				{/* Fixed-width, centred: the short labels run from "EN" to "PT-BR" to
+				    the CJK "简中", and letting the button size to them moved everything
+				    to its right on each language change. */}
+				<span className={styles.langShort}>{getLocaleShort(locale)}</span>
 				<ChevronDown size={9} style={{ color: "var(--muted)" }} />
 			</button>
 			{open ? (
