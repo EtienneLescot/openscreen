@@ -153,6 +153,37 @@ impl Player {
         Ok(())
     }
 
+    /// Repositionne les décodeurs DÉJÀ ouverts, sans en rouvrir aucun.
+    ///
+    /// Pendant de `set_active_clip` pour le cas — dominant — où les FICHIERS n'ont pas
+    /// changé. L'app raisonne en *segments* (`resolveVisibleClips` découpe les clips aux
+    /// trims), et deux segments consécutifs d'un même clip pointent sur le même fichier
+    /// source : seule la fenêtre temporelle diffère. Y répondre par un `set_active_clip`
+    /// complet, c'est refaire un `Decoder::open` + `avformat_find_stream_info` + une init
+    /// D3D11VA, deux fois, pour rien.
+    ///
+    /// Mesuré : un scrub traversant deux clips a produit 31 bascules — 21 à moins de 500 ms
+    /// l'une de l'autre — pour deux changements de média réels.
+    pub unsafe fn seek_active(&mut self, source_time_sec: f64) -> Result<()> {
+        let source_time_sec = source_time_sec.max(0.0);
+        let sf = self.sdec.seek_to(source_time_sec)?;
+        if sf.is_null() {
+            // Position hors de la piste : on garde les décodeurs en l'état plutôt que de
+            // prétendre avoir une frame, sans quoi le compositeur composerait du vide.
+            self.has_current_frame = false;
+            return Ok(());
+        }
+        let mut wf = self.wdec.seek_to(webcam_seek_time(source_time_sec, self.webcam_offset_sec))?;
+        if wf.is_null() {
+            wf = self.wdec.seek_to(0.0)?;
+        }
+        let _ = wf;
+        self.idx = (source_time_sec * self.sdec.fps()).round().max(0.0) as u32;
+        self.has_current_frame = true;
+        self.use_current_on_next_step = true;
+        Ok(())
+    }
+
     /// Bascule instantanément sur une paire de décodeurs déjà ouverte + positionnée — aucune
     /// E/S ici, juste l'échange des champs. Utilisé par `set_active_clip` (juste après son
     /// propre `open_and_seek_clip`) et directement par `render_thread` quand un préchargement
@@ -1031,12 +1062,23 @@ unsafe fn render_thread(
             // autrement) — sans ça, `advance_to_next_scene_clip` pourrait plus tard appliquer
             // des décodeurs qui ne correspondent plus au contexte réel.
             prefetch = None;
-            match player.set_active_clip(
-                &request.screen_path,
-                &request.webcam_path,
-                request.webcam_offset_sec,
-                request.source_time_sec,
-            ) {
+            // Mêmes fichiers que ceux déjà ouverts → seule la fenêtre temporelle change
+            // (segments d'un même clip séparés par un trim). On repositionne au lieu de
+            // rouvrir : voir `Player::seek_active` pour ce que ça évite.
+            let same_media = request.screen_path == active_screen_path
+                && request.webcam_path == active_webcam_path
+                && (request.webcam_offset_sec - active_webcam_offset_sec).abs() < 1e-9;
+            let switch_result = if same_media {
+                player.seek_active(request.source_time_sec)
+            } else {
+                player.set_active_clip(
+                    &request.screen_path,
+                    &request.webcam_path,
+                    request.webcam_offset_sec,
+                    request.source_time_sec,
+                )
+            };
+            match switch_result {
                 Ok(()) => {
                     active_screen_path = request.screen_path;
                     active_webcam_path = request.webcam_path;
