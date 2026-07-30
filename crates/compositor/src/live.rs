@@ -100,6 +100,115 @@ unsafe fn open_and_seek_clip(
     Ok(PrefetchedClip { sdec, wdec, webcam_offset_sec, idx, cursor_track })
 }
 
+/// Nombre de paires de décodeurs INACTIVES gardées ouvertes en plus de la paire active.
+/// Franchir un clip cross-média rouvre sinon 2 décodeurs (~39 ms) et reseek depuis une image
+/// clé (~81 ms) — mesuré ~120 ms/franchissement, le plus gros à-coup du scrub. Les garder
+/// ouverts à leur dernière position transforme un RETOUR sur un clip (motif A→B→A ultra
+/// fréquent au scrub) en simple reseek, souvent par le chemin rapide `decode_forward`.
+/// ponytail: cap fixe. Chaque paire retient son pool de surfaces D3D11VA (VRAM) ; 3 couvre
+/// les timelines 2-4 clips, à baisser si la VRAM serre.
+const DECODER_POOL_CAP: usize = 3;
+
+/// Une paire de décodeurs mise de côté, prête à être réactivée sans réouverture.
+struct PooledClip {
+    screen_path: String,
+    webcam_path: String,
+    webcam_offset_sec: f64,
+    clip: PrefetchedClip,
+}
+
+/// Repositionne une paire (écran + webcam) au temps source voulu. `false` = un des deux flux
+/// n'a pas de frame utilisable là (position hors flux, EOF non rembobinable) ; l'appelant DOIT
+/// alors repartir sur une ouverture fraîche plutôt que de composer une frame vide (« frame sans
+/// texture » → preview noire définitive). Partagé par `seek_active` (paire active) et le pool.
+unsafe fn seek_pair(
+    sdec: &mut Decoder,
+    wdec: &mut Decoder,
+    source_time_sec: f64,
+    webcam_offset_sec: f64,
+) -> Result<bool> {
+    let sf = sdec.seek_to(source_time_sec)?;
+    if sf.is_null() {
+        return Ok(false);
+    }
+    let mut wf = wdec.seek_to(webcam_seek_time(source_time_sec, webcam_offset_sec))?;
+    if wf.is_null() {
+        wf = wdec.seek_to(0.0)?;
+    }
+    if wf.is_null() {
+        return Ok(false);
+    }
+    Ok(true)
+}
+
+/// Bascule cross-média en réutilisant le pool de décodeurs. Réactive la paire cible si elle
+/// est déjà en pool (reseek au lieu de rouvrir), sinon ouvre à neuf ; dans les DEUX cas met en
+/// pool la paire qu'on QUITTE (au lieu de la fermer), dédupliquée par clé et bornée en LRU.
+/// Le vidage du cache de SRV reste à la charge de l'appelant (comme avant) — over-clear est
+/// sûr et bon marché, ce qui écarte tout risque « image du clip précédent ».
+/// `OPENSCREEN_CLIPSWITCH_TIMING=1` journalise hit/miss + durée.
+unsafe fn swap_clip_pooled(
+    player: &mut Player,
+    pool: &mut Vec<PooledClip>,
+    request: &ActiveClipRequest,
+    active_screen: &str,
+    active_webcam: &str,
+    active_webcam_offset_sec: f64,
+) -> Result<()> {
+    let timing = std::env::var("OPENSCREEN_CLIPSWITCH_TIMING").is_ok();
+    let t0 = std::time::Instant::now();
+    let t = request.source_time_sec.max(0.0);
+    let matches = |p: &PooledClip| {
+        p.screen_path == request.screen_path
+            && p.webcam_path == request.webcam_path
+            && (p.webcam_offset_sec - request.webcam_offset_sec).abs() < 1e-9
+    };
+    let mut hit = false;
+    let incoming: PrefetchedClip = match pool.iter().position(&matches) {
+        Some(i) => {
+            let mut pooled = pool.remove(i);
+            // Reseek les décodeurs poolés AVANT de les installer. Échec → on les jette et on
+            // ouvre à neuf (chemin connu sûr), jamais une frame vide.
+            if seek_pair(&mut pooled.clip.sdec, &mut pooled.clip.wdec, t, request.webcam_offset_sec)? {
+                pooled.clip.idx = (t * pooled.clip.sdec.fps()).round().max(0.0) as u32;
+                hit = true;
+                pooled.clip
+            } else {
+                drop(pooled);
+                player.open_clip(&request.screen_path, &request.webcam_path, request.webcam_offset_sec, t)?
+            }
+        }
+        None => player.open_clip(&request.screen_path, &request.webcam_path, request.webcam_offset_sec, t)?,
+    };
+    let outgoing = player.swap_active(incoming);
+    // Met la paire quittée en pool : dédup par clé (jamais deux entrées d'un même média), puis
+    // éviction LRU (le plus ancien, en tête, part en premier).
+    pool.retain(|p| {
+        !(p.screen_path == active_screen
+            && p.webcam_path == active_webcam
+            && (p.webcam_offset_sec - active_webcam_offset_sec).abs() < 1e-9)
+    });
+    pool.push(PooledClip {
+        screen_path: active_screen.to_string(),
+        webcam_path: active_webcam.to_string(),
+        webcam_offset_sec: active_webcam_offset_sec,
+        clip: outgoing,
+    });
+    while pool.len() > DECODER_POOL_CAP {
+        pool.remove(0);
+    }
+    if timing {
+        eprintln!(
+            "[clipswitch] {} {:.1}ms (t_src={:.2}s, pool={})",
+            if hit { "POOL_HIT reseek" } else { "OPEN     fresh " },
+            t0.elapsed().as_secs_f64() * 1000.0,
+            t,
+            pool.len(),
+        );
+    }
+    Ok(())
+}
+
 /// Lit deux sources en lockstep et compose la frame courante dans le RT du compositeur.
 /// Partagé avec la GUI standalone (`app.rs`).
 pub struct Player {
@@ -176,17 +285,10 @@ impl Player {
     /// jusqu'à recréation de la vue.
     pub unsafe fn seek_active(&mut self, source_time_sec: f64) -> Result<bool> {
         let source_time_sec = source_time_sec.max(0.0);
-        let sf = self.sdec.seek_to(source_time_sec)?;
-        if sf.is_null() {
-            return Ok(false);
-        }
-        let mut wf = self.wdec.seek_to(webcam_seek_time(source_time_sec, self.webcam_offset_sec))?;
-        if wf.is_null() {
-            wf = self.wdec.seek_to(0.0)?;
-        }
         // Les DEUX flux doivent avoir une frame : `compose_frame` les échantillonne tous les
-        // deux sans condition, un seul manquant suffit à le faire échouer.
-        if wf.is_null() {
+        // deux sans condition, un seul manquant suffit à le faire échouer (d'où le `false` que
+        // `seek_pair` peut rendre → l'appelant retombe sur l'ouverture complète).
+        if !seek_pair(&mut self.sdec, &mut self.wdec, source_time_sec, self.webcam_offset_sec)? {
             return Ok(false);
         }
         self.idx = (source_time_sec * self.sdec.fps()).round().max(0.0) as u32;
@@ -200,12 +302,39 @@ impl Player {
     /// propre `open_and_seek_clip`) et directement par `render_thread` quand un préchargement
     /// en tâche de fond est déjà prêt au moment de franchir la frontière du clip.
     unsafe fn apply_prefetched(&mut self, prefetched: PrefetchedClip) {
-        self.sdec = prefetched.sdec;
-        self.wdec = prefetched.wdec;
-        self.webcam_offset_sec = prefetched.webcam_offset_sec;
+        // La paire sortante est droppée ici (comportement inchangé pour la lecture libre) ; le
+        // pool du scrub, lui, récupère la sortante en appelant `swap_active` directement.
+        let _ = self.swap_active(prefetched);
+    }
+
+    /// Échange la paire active contre `incoming` (déjà ouverte + positionnée) et REND la paire
+    /// sortante — pour la mettre en pool au lieu de la fermer. Aucune E/S : juste des champs.
+    unsafe fn swap_active(&mut self, incoming: PrefetchedClip) -> PrefetchedClip {
+        let outgoing = PrefetchedClip {
+            sdec: std::mem::replace(&mut self.sdec, incoming.sdec),
+            wdec: std::mem::replace(&mut self.wdec, incoming.wdec),
+            webcam_offset_sec: self.webcam_offset_sec,
+            idx: self.idx,
+            // Le curseur est re-dérivé du chemin à la réactivation ; inutile de le trimballer.
+            cursor_track: None,
+        };
+        self.webcam_offset_sec = incoming.webcam_offset_sec;
+        self.idx = incoming.idx;
         self.has_current_frame = true;
         self.use_current_on_next_step = true;
-        self.idx = prefetched.idx;
+        outgoing
+    }
+
+    /// Ouvre une nouvelle paire de décodeurs positionnée à `source_time_sec`, SANS l'installer
+    /// (l'appelant l'échange via `swap_active`). Réutilise le device D3D11 du player.
+    unsafe fn open_clip(
+        &self,
+        screen: &str,
+        webcam: &str,
+        webcam_offset_sec: f64,
+        source_time_sec: f64,
+    ) -> Result<PrefetchedClip> {
+        open_and_seek_clip(screen, webcam, webcam_offset_sec, source_time_sec, &self.gpu)
     }
 
     /// Temps source courant du décodeur écran — utilisé par `render_thread` pour détecter le
@@ -1059,6 +1188,10 @@ unsafe fn render_thread(
     // devient obsolète (nouvelle scène, changement de clip explicite) pour ne jamais risquer
     // d'appliquer les décodeurs d'un préchargement qui ne correspond plus à la situation.
     let mut prefetch: Option<PendingPrefetch> = None;
+    // Pool de décodeurs INACTIFS gardés ouverts entre franchissements de clip (scrub). Vidé
+    // quand le thread de rendu meurt (vue détruite / document rechargé). Voir `swap_clip_pooled`
+    // et `DECODER_POOL_CAP` — c'est le remède au ~120 ms/franchissement mesuré.
+    let mut decoder_pool: Vec<PooledClip> = Vec::new();
 
     // config de base = C8 (tous effets) ; le fond flouté est piloté par le param live.
     let mut cfg = config::all().pop().expect("au moins une config");
@@ -1104,11 +1237,17 @@ unsafe fn render_thread(
             let switch_result = if repositioned {
                 Ok(())
             } else {
-                player.set_active_clip(
-                    &request.screen_path,
-                    &request.webcam_path,
-                    request.webcam_offset_sec,
-                    request.source_time_sec,
+                // Cross-média : passe par le pool de décodeurs — réutilise une paire déjà
+                // ouverte si possible (reseek au lieu de rouvrir) et met en pool celle qu'on
+                // quitte, au lieu du couple ouvrir-puis-fermer. Voir `swap_clip_pooled` et la
+                // mesure de ~120 ms/franchissement qui l'a motivé.
+                swap_clip_pooled(
+                    &mut player,
+                    &mut decoder_pool,
+                    &request,
+                    &active_screen_path,
+                    &active_webcam_path,
+                    active_webcam_offset_sec,
                 )
             };
             match switch_result {
