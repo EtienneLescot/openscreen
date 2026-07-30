@@ -115,8 +115,14 @@ ipcMain.on("hud-overlay-drag-start", () => {
 		return;
 	}
 
+	// Under Wayland this origin is a lie: Electron documents getPosition() as returning
+	// [0, 0] there, because the protocol prohibits a client from introspecting or
+	// setting its own global coordinates. The origin+delta scheme below therefore
+	// resolves against 0 rather than the window's real position, and setPosition() is
+	// itself a no-op — so dragging cannot work on Wayland by this route at all. The
+	// finiteness check only keeps a garbage origin from reaching a native setter.
 	const [x, y] = hudOverlayWindow.getPosition();
-	hudDragOrigin = { x, y };
+	hudDragOrigin = Number.isFinite(x) && Number.isFinite(y) ? { x, y } : null;
 });
 
 ipcMain.on("hud-overlay-drag-to", (_event, deltaX: number, deltaY: number) => {
@@ -130,11 +136,17 @@ ipcMain.on("hud-overlay-drag-to", (_event, deltaX: number, deltaY: number) => {
 		return;
 	}
 
-	hudOverlayWindow.setPosition(
-		Math.round(hudDragOrigin.x + deltaX),
-		Math.round(hudDragOrigin.y + deltaY),
-		false,
-	);
+	// `| 0` is load-bearing, not defensive noise. Math.round returns NEGATIVE ZERO for
+	// any delta in [-0.5, 0) — routine under fractional scaling, where screenY deltas
+	// are fractional. V8's IsInt32() rejects -0, so gin refuses to convert it and the
+	// main process dies with "Error processing argument at index 1, conversion failure
+	// from". `Number.isFinite(-0)` is true, so a finiteness check does NOT catch this;
+	// `| 0` collapses -0 to 0 and pins the value to int32. (`+ 0` would not: -0 + 0 is
+	// still -0, and Math.trunc preserves it too.)
+	const x = Math.round(hudDragOrigin.x + deltaX) | 0;
+	const y = Math.round(hudDragOrigin.y + deltaY) | 0;
+
+	hudOverlayWindow.setPosition(x, y, false);
 });
 
 ipcMain.on("hud-overlay-drag-end", () => {
