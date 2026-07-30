@@ -144,6 +144,58 @@ fn compose_linux_dessine_le_curseur() {
     assert!(green > 50, "sprite curseur vert absent (verts={green}) — mode 7 ?");
 }
 
+/// Fond image (mode 6 wallpaper) : un PNG orange en data URI remplit le fond
+/// (cover-fit) autour de l'ecran inset (padding). Distinct de l'ecran et du
+/// gris par defaut, pour l'affirmer sans ambiguite.
+#[test]
+fn compose_linux_fond_image() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux fond image: opt-in. Skip.");
+        return;
+    }
+    const BG: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAACXBIWXMAAAABAAAAAQBPJcTWAAAAKklEQVR4nO3NwQ0AAAQAMRJ721wswa83wDWn47X63QMAAAAAAAAAAIC7FhLfAfuIQEbyAAAAAElFTkSuQmCC";
+
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut dec = Decoder::open(FIXTURE, &gpu).expect("Decoder::open");
+
+    let scene_json = format!(
+        r##"{{"clips":[],"layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0.4,"blur":false,"shadow":0,"roundnessFrac":0.05,"motionBlur":0}},"background":{{"kind":"image","path":"{BG}"}},"zoomRegions":[],"annotations":[],"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":1920,"height":1080,"fps":30}}}}"##
+    );
+    let scene = Scene::from_json(&scene_json).expect("scene json");
+    // Le padding (et les autres effets) transitent par les live_params, pas la
+    // scene brute -> sans ca l'ecran remplit tout le cadre et masque le fond.
+    comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&scene));
+    comp.set_scene(Some(scene));
+
+    let (w, h, rgba) = unsafe {
+        let sf = dec.seek_to(1.0).expect("Decoder::seek_to");
+        let cfg = Cfg::c8();
+        comp.compose_frame(sf, sf, 0.0, &cfg).expect("compose_frame");
+        comp.readback_direct().expect("readback_direct")
+    };
+    // Orange (255,128,0) : R haut, G moyen, B bas.
+    let orange = rgba
+        .chunks_exact(4)
+        .filter(|p| p[0] > 200 && p[1] > 90 && p[1] < 170 && p[2] < 70)
+        .count();
+    println!("compose_linux fond image : {w}x{h} pixels orange={orange}");
+
+    let out = std::env::var("OPENSCREEN_VK_OUT").unwrap_or_else(|_| "target".into());
+    let _ = std::fs::create_dir_all(&out);
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(format!("{out}/compose_linux_bgimage.ppm")).expect("ppm");
+        write!(f, "P6\n{w} {h}\n255\n").unwrap();
+        let mut rgb = vec![0u8; (w * h * 3) as usize];
+        for (d, s) in rgb.chunks_exact_mut(3).zip(rgba.chunks_exact(4)) {
+            d.copy_from_slice(&s[0..3]);
+        }
+        f.write_all(&rgb).unwrap();
+    }
+    assert!(orange > 2000, "fond image absent (orange={orange}) — mode 6 ?");
+}
+
 /// Export (WP6) : ~1s de la fixture -> MP4 H264 software. Verifie que la marche
 /// de timeline + l'encodeur + le muxer produisent un fichier non trivial. Le
 /// contenu est re-validable par ffprobe (cf. la commande dans le run manuel).

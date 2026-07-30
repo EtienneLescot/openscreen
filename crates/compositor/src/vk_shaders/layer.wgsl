@@ -117,6 +117,11 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         let s = textureSample(texY, samp, i.uv);
         let ca = s.a * layer.color.a;
         return vec4<f32>(s.rgb * ca, ca);
+    } else if layer.mode > 5.5 && layer.mode < 6.5 {
+        // Mode 6 -- fond image (wallpaper RGBA) cover-fit, echantillonne sur
+        // texY. `src` porte le rect UV cover-fit (calcule cote Rust). Opaque :
+        // le fond couvre tout le cadre.
+        return vec4<f32>(textureSample(texY, samp, i.uv).rgb, 1.0);
     } else {
         // Mode 2 ÔÇö ombre port├®e (SDF d'un quad arrondi ├®largi de `fx.x`).
         let spread = layer.fx.x;
