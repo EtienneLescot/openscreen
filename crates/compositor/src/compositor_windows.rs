@@ -1100,7 +1100,8 @@ impl Compositor {
         // inchangé, à l'octet près.
         let crate::frame_geometry::FrameGeometry {
             scene_preset, mb_taps, source_t, zoom_rotation, padding_scale, cut, s_dst,
-            s_dst_prev, s_radius, frame_min_px, w_dst, w_dst_prev, w_px, w_radius, shape_fade,
+            s_dst_prev, s_ann, s_radius, frame_min_px, w_dst, w_dst_prev, w_px, w_radius,
+            shape_fade,
         } = crate::frame_geometry::plan_frame(&crate::frame_geometry::FrameGeometryInput {
             render_px: [self.rw(), self.rh()],
             screen_tex_px: [stw as f32, sth as f32],
@@ -1556,14 +1557,16 @@ impl Compositor {
         }
 
         // --- annotations : calque le plus haut, comme dans le DOM de la preview (le calque y est
-        // monté après la vidéo). Ancrées sur `s_dst`, le rect ÉCRAN — c'est le conteneur que reçoit
-        // l'overlay web (`layout.screenRect`) — et volontairement pas sur le rect de sortie, ni
-        // sujettes au crop de zoom : dans la preview l'overlay est frère de l'élément qui porte la
-        // transform, donc les annotations restent en place pendant que le contenu zoome dessous.
+        // monté après la vidéo). Ancrées sur `s_ann`, le rect ÉCRAN SANS ZOOM — c'est le conteneur
+        // que reçoit l'overlay web (`layout.screenRect`) — et volontairement pas sur le rect de
+        // sortie, ni sujettes au zoom : dans la preview l'overlay est frère de l'élément qui porte
+        // la transform, donc les annotations restent en place pendant que le contenu zoome dessous.
+        // Ce fut `s_dst` tant que le zoom vivait dans la coupe source ; depuis l'issue #179 il vit
+        // dans la BOÎTE, et `s_dst` emmenait annotations et sous-titres avec lui.
         // `source_t`, la même base de temps que les zoom/speed regions : le temps SOURCE du clip,
         // pas le compteur de frames. C'est ce qui garde une annotation alignée sur l'image quand
         // une speed region répète ou saute des frames.
-        self.draw_annotations(scene_ref.as_ref(), source_t, s_dst);
+        self.draw_annotations(scene_ref.as_ref(), source_t, s_ann);
         Ok(())
     }
 
