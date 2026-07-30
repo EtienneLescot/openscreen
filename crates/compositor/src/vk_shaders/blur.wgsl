@@ -44,8 +44,20 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
         vec2<f32>(-1.0,  3.0),
     );
     var o: VsOut;
-    o.pos = vec4<f32>(pos[vid], 0.0, 1.0);
-    o.uv = pos[vid] * 0.5 + vec2<f32>(0.5, 0.5);
+    // `pos[vid]` UNE SEULE FOIS, puis on réutilise `p`. Ce n'est pas du style :
+    // indexer deux fois le même tableau local avec un indice dynamique fait
+    // émettre à naga 24 du SPIR-V INVALIDE. Son `spilled_composites` est indexé
+    // par le handle de l'expression de base, donc le second accès écrase l'entrée
+    // du premier : un seul `OpVariable` est émis, et les `OpStore`/`OpAccessChain`
+    // du premier accès référencent un id sans définition. Le module viole alors
+    // VUID-VkShaderModuleCreateInfo-pCode-08737, donc le comportement du pilote
+    // est indéfini — RADV déréférence l'id fantôme et segfault à la création du
+    // pipeline, lavapipe survit par chance. Cf. gfx-rs/wgpu#7048, corrigé par
+    // #7239 (wgpu 25) ; il n'existe pas de patch 24.0.x, donc tant qu'on est sur
+    // wgpu 24 c'est au shader de ne pas déclencher le bug.
+    let p = pos[vid];
+    o.pos = vec4<f32>(p, 0.0, 1.0);
+    o.uv = p * 0.5 + vec2<f32>(0.5, 0.5);
     // Note : on inverse Y parce que wgpu NDC y-up mais l'image source est
     // y-down (cf. le Y-flip dans le VS du layer.wgsl principal).
     o.uv.y = 1.0 - o.uv.y;
