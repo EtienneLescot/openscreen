@@ -15,4 +15,7 @@ path = "src/main.rs"
 [dependencies]
 openscreen-compositor.workspace = true
 anyhow.workspace = true
+
+# GUI Win32 : Windows-only (le POC ne se compile qu'en no-op ailleurs).
+[target.'cfg(windows)'.dependencies]
 windows.workspace = true

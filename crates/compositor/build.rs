@@ -76,9 +76,13 @@ fn main() {
 
     // Le wrapper.h à binder dépend de la plateforme cible :
     //   - Windows : D3D11VA (ID3D11VA*),
-    //   - macOS   : VideoToolbox (AVVideotoolboxContext).
+    //   - macOS   : VideoToolbox (AVVideotoolboxContext),
+    //   - Linux   : software/VAAPI, aucun hwcontext propriétaire (le d3d11.h /
+    //               les headers VT n'existent pas → wrapper dédié).
     let wrapper = if target_is_macos {
         "wrapper_macos.h"
+    } else if target_os == "linux" {
+        "wrapper_linux.h"
     } else {
         "wrapper_windows.h"
     };
