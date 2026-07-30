@@ -33,7 +33,10 @@ use crate::ffi::AVFrame;
 pub use crate::frame_geometry::{
     live_params_from_scene, webcam_shape_code, FIXTURE_FRAMES, LayerCB, LiveParams, OUT_H, OUT_W,
 };
-use crate::frame_geometry::{parse_hex, plan_frame, FrameGeometryInput};
+use crate::frame_geometry::{
+    cursor_sprite_dst, parse_hex, plan_cursor, plan_frame, CursorPlacement, CursorPlanInput,
+    FrameGeometryInput,
+};
 use crate::scene::{Scene, SceneBackground};
 
 const LAYER_WGSL: &str = include_str!("vk_shaders/layer.wgsl");
@@ -84,6 +87,10 @@ pub struct Compositor {
     /// echoue -- le rendu continue sans texte plutot que de tout casser.
     #[allow(dead_code)]
     text_raster: Option<crate::text::TextRasterizer>,
+
+    /// Cache des sprites curseur (PNG RGBA -> texture wgpu), par chemin. Meme
+    /// role que `img_cache` cote macOS : un sprite chargé une fois par session.
+    img_cache: RefCell<std::collections::HashMap<String, (wgpu::Texture, u32, u32)>>,
 }
 
 impl Compositor {
@@ -304,6 +311,7 @@ impl Compositor {
             cursor_time: RefCell::new(None),
             timeline_time: RefCell::new(None),
             text_raster: crate::text::TextRasterizer::new().ok(),
+            img_cache: RefCell::new(std::collections::HashMap::new()),
         })
     }
 
@@ -522,6 +530,49 @@ impl Compositor {
         (uniform, bind)
     }
 
+    /// Charge un PNG/JPEG (chemin fichier ou data URI) en texture RGBA8. Port
+    /// wgpu du `load_image_texture` macOS, memes chemins (`decode_data_uri`
+    /// partage, crate `image`). Sert aux sprites de curseur (mode 7).
+    fn load_image_texture(&self, path: &str) -> Result<(wgpu::Texture, u32, u32)> {
+        let img = if let Some(bytes) = crate::frame_geometry::decode_data_uri(path) {
+            image::load_from_memory(&bytes)
+                .map_err(|e| anyhow::anyhow!("data URI image ({} octets) : {e}", bytes.len()))?
+                .to_rgba8()
+        } else {
+            image::open(path)
+                .map_err(|e| anyhow::anyhow!("sprite {path} : {e}"))?
+                .to_rgba8()
+        };
+        let (w, h) = (img.width(), img.height());
+        let pixels = img.into_raw();
+        let tex = self.gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("sprite"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        self.gpu.context.write_texture(
+            wgpu::TexelCopyTextureInfo {
+                texture: &tex,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+                aspect: wgpu::TextureAspect::All,
+            },
+            &pixels,
+            wgpu::TexelCopyBufferLayout {
+                offset: 0,
+                bytes_per_row: Some(w * 4),
+                rows_per_image: Some(h),
+            },
+            wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+        );
+        Ok((tex, w, h))
+    }
+
     /// Rend une frame dans le RT interne. Le screen `screen`/`webcam` sont des
     /// carriers `linux_frames` ; la geometrie vient de `plan_frame`. Coeur :
     /// fond uni + ecran cover-fit. `readback_direct` lit ensuite le RT.
@@ -702,6 +753,85 @@ impl Compositor {
             }
         }
 
+        // Curseur thematise (mode 7, sprite RGBA). Placement UPRIGHT uniquement :
+        // le tilt (mode 13, sous zoom incline) et le motion blur (taps>1) sont
+        // des increments a venir. `_tex`/`_view`/`_buf` gardent le sprite en vie
+        // pendant le pass. Miroir de la branche curseur de `compositor_macos`.
+        struct CursorDraw {
+            _buf: wgpu::Buffer,
+            _tex: wgpu::Texture,
+            _view: wgpu::TextureView,
+            bind: wgpu::BindGroup,
+        }
+        let cursor_draw: Option<CursorDraw> = (|| {
+            let track = cursor_ref.as_ref()?;
+            let plan = plan_cursor(
+                &g,
+                &CursorPlanInput {
+                    render_px: [rw, rh],
+                    u_max,
+                    v_max,
+                    cfg,
+                    live: lp,
+                    scene: scene_ref.as_ref(),
+                    track,
+                    t: self
+                        .cursor_time
+                        .borrow()
+                        .unwrap_or(frame / crate::frame_geometry::FPS),
+                },
+            )?;
+            let CursorPlacement::Upright { center } = plan.placement else {
+                // ponytail: tilt (mode 13) a porter quand un zoom incline sera teste.
+                return None;
+            };
+            let sprites = scene_ref
+                .as_ref()
+                .map(|s| s.cursor.cursor_sprites.clone())
+                .unwrap_or_default();
+            let sprite = plan
+                .cursor_type
+                .as_deref()
+                .and_then(|t| sprites.get(t))
+                .or_else(|| sprites.get("arrow"))?;
+            // Charge (ou recupere du cache) le sprite. Emprunt isole AVANT le
+            // borrow_mut, comme cote macOS (piege du double emprunt 1re frame).
+            let cached = self.img_cache.borrow().get(sprite.path.as_str()).cloned();
+            let (tex, iw, ih) = match cached {
+                Some(v) => v,
+                None => match self.load_image_texture(&sprite.path) {
+                    Ok(v) => {
+                        self.img_cache.borrow_mut().insert(sprite.path.clone(), v.clone());
+                        v
+                    }
+                    Err(e) => {
+                        eprintln!("[curseur] sprite \"{}\" : {e:#}", sprite.path);
+                        return None;
+                    }
+                },
+            };
+            // Ratio preserve : le sprite tient dans un carre de `size_px` de cote.
+            let ar = iw as f32 / ih.max(1) as f32;
+            let (pw, ph) = if ar >= 1.0 {
+                (plan.size_px, plan.size_px / ar)
+            } else {
+                (plan.size_px * ar, plan.size_px)
+            };
+            let hotspot = [sprite.hotspot_x, sprite.hotspot_y];
+            let cb = LayerCB {
+                dst: cursor_sprite_dst(center, pw / rw, ph / rh, hotspot),
+                src: [0.0, 0.0, 1.0, 1.0],
+                mode: 7.0,
+                color: [1.0, 1.0, 1.0, 1.0],
+                fx: plan.clip,
+                ..Default::default()
+            };
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            // Sprite RGBA au binding 1 (texY) que le mode 7 echantillonne.
+            let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), &dummy);
+            Some(CursorDraw { _buf: buf, _tex: tex, _view: view, bind })
+        })();
+
         let mut encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("compose"),
         });
@@ -762,6 +892,11 @@ impl Compositor {
             }
             for a in &ann_draws {
                 rpass.set_bind_group(0, &a.bind, &[]);
+                rpass.draw(0..4, 0..1);
+            }
+            // Curseur en dernier : au-dessus de l'ecran et des annotations.
+            if let Some(c) = &cursor_draw {
+                rpass.set_bind_group(0, &c.bind, &[]);
                 rpass.draw(0..4, 0..1);
             }
         }
