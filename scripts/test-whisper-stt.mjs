@@ -46,22 +46,33 @@ const BIN =
 		process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
 	);
 
-// Mirrors modelManager.ts's cache location. Electron's userData dir is
-// "Electron" in dev and the productName once packaged.
 const MODEL = process.env.OPENSCREEN_WHISPER_MODEL ?? defaultModelPath();
 const LANGUAGE = argOf("--language") ?? "auto";
 const WAV_ARG = argOf("--wav");
 const REF_ARG = argOf("--ref");
 
+/**
+ * Mirrors `SttManager`'s cache location: `app.getPath("userData")/stt-models`
+ * ([electron/stt/index.ts:69](../electron/stt/index.ts)).
+ *
+ * The leaf of that userData path is `app.getName()`, which is package.json's
+ * `name` ("openscreen") in dev and the productName once packaged — *not*
+ * "Electron", which is only what a bare `electron .` with no app name would
+ * use. Probe the plausible names and take the one that exists, so this works
+ * whether the model was cached by the app or by a bare helper run.
+ */
 function defaultModelPath() {
 	const file = path.join("stt-models", "whisper-ggml", "ggml-small-q8_0.bin");
-	if (process.platform === "darwin") {
-		return path.join(os.homedir(), "Library", "Application Support", "Electron", file);
-	}
-	if (process.platform === "win32") {
-		return path.join(process.env.APPDATA ?? "", "Electron", file);
-	}
-	return path.join(os.homedir(), ".config", "Electron", file);
+	const roots =
+		process.platform === "darwin"
+			? [path.join(os.homedir(), "Library", "Application Support")]
+			: process.platform === "win32"
+				? [process.env.APPDATA ?? ""]
+				: [process.env.XDG_CONFIG_HOME || path.join(os.homedir(), ".config")];
+	const candidates = roots.flatMap((root) =>
+		["openscreen", "Openscreen", "Electron"].map((appName) => path.join(root, appName, file)),
+	);
+	return candidates.find((p) => fs.existsSync(p)) ?? candidates[0];
 }
 
 const failures = [];
