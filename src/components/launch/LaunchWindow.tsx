@@ -732,7 +732,14 @@ export function LaunchWindow() {
 		// Avoid w-screen/h-screen: 100vw can exceed the inner layout width when scrollbars
 		// affect the viewport (Windows), causing a horizontal scrollbar (issue #305).
 		<div
-			className={`h-full w-full min-w-0 max-w-full overflow-x-hidden overflow-y-hidden bg-transparent ${styles.electronDrag}`}
+			// No `electronDrag` here. This root is the whole 820x560 window, nearly all of
+			// it invisible, and a drag region is honoured by the compositor whether or not
+			// anything is painted there. On Windows/macOS that stayed hidden because
+			// `setIgnoreMouseEvents` makes the transparent area input-transparent at the OS
+			// level; on Linux that call is a no-op, so pressing empty space next to the bar
+			// dragged the HUD from a spot the user was aiming *past*. The drag region
+			// belongs on the grab handle, which is where it now lives.
+			className="h-full w-full min-w-0 max-w-full overflow-x-hidden overflow-y-hidden bg-transparent"
 			onPointerMove={handleRootPointerMove}
 			onPointerLeave={handlePointerLeave}
 		>
@@ -752,6 +759,7 @@ export function LaunchWindow() {
 				>
 					<HudDragHandle
 						vertical={isVertical}
+						nativeDrag={isLinuxHud}
 						onPointerDown={handleHudDragPointerDown}
 						onPointerMove={handleHudDragPointerMove}
 						onPointerEnd={handleHudDragPointerEnd}
