@@ -112,7 +112,9 @@ describe("le drag de la barre de progression est coalescé en rAF", () => {
 			pending.push(cb);
 			return pending.length;
 		});
-		vi.stubGlobal("cancelAnimationFrame", () => {});
+		vi.stubGlobal("cancelAnimationFrame", () => {
+			// rien à annuler : `flush()` ne rejoue que ce qui reste en attente
+		});
 		return () => {
 			const due = pending.splice(0, pending.length);
 			for (const cb of due) cb(0);
@@ -212,5 +214,45 @@ describe("le drag de la barre de progression est coalescé en rAF", () => {
 		});
 		expect(onSeek).toHaveBeenCalledTimes(1);
 		expect(onSeek).toHaveBeenCalledWith(3);
+	});
+
+	// Le remplissage et le curseur étaient positionnés uniquement par React depuis le store,
+	// donc en retard d'un commit à chaque mouvement — alors que la tête de lecture de la
+	// timeline, elle, est écrite directement dans le DOM et colle au pointeur. Ce test
+	// verrouille la parité : le visuel bouge AVANT le rAF, donc sans attendre React.
+	it("déplace le curseur dans le DOM avant tout rendu React", () => {
+		stubRaf();
+		const onSeek = vi.fn();
+		const { container } = render(
+			<I18nProvider>
+				<TransportBar
+					playing={false}
+					overrideTimeSec={null}
+					clips={clips}
+					onTogglePlay={noop}
+					onPrevClip={noop}
+					onNextClip={noop}
+					onSeek={onSeek}
+				/>
+			</I18nProvider>,
+		);
+		const input = screen.getByLabelText(/seek/i) as HTMLInputElement;
+		// Les deux éléments décorés : le remplissage (largeur) et le curseur (position).
+		const styled = Array.from(container.querySelectorAll("div")).filter(
+			(el) => el.style.width !== "" || el.style.left !== "",
+		);
+		expect(styled.length).toBeGreaterThanOrEqual(2);
+
+		act(() => {
+			fireEvent.pointerDown(input);
+			// La moitié de la durée (clip de 30 s) → 50 %.
+			fireEvent.change(input, { target: { value: "15" } });
+		});
+
+		// Aucun rAF n'a été vidé, donc aucune écriture au store et aucun rendu React : ce qui
+		// a bougé ne peut venir que de l'écriture DOM directe.
+		expect(onSeek).not.toHaveBeenCalled();
+		const moved = styled.filter((el) => el.style.width === "50%" || el.style.left === "50%");
+		expect(moved.length).toBeGreaterThanOrEqual(2);
 	});
 });
