@@ -402,6 +402,8 @@ export function V4Timeline({
 				playheadElRef.current.style.left = `${pct * 100}%`;
 			}
 
+			// Optimistic local UI state update
+			setScrubbingTimeSec(targetTime);
 			pendingSeekTimeRef.current = targetTime;
 
 			if (isImmediate) {
@@ -409,28 +411,16 @@ export function V4Timeline({
 					cancelAnimationFrame(rafSeekRef.current);
 					rafSeekRef.current = 0;
 				}
-				setScrubbingTimeSec(targetTime);
 				setCurrentTime(targetTime);
 				return;
 			}
 
-			// Throttled store update / D3D seek via rAF to avoid IPC flooding.
-			//
-			// `setScrubbingTimeSec` est throttlé ICI AUSSI et n'est plus appelé depuis
-			// `pointermove`. Une souris émet 125 à 1000 événements par seconde ; à chacun,
-			// cet état local re-rendait `V4Timeline` en entier — clips, waveforms, régions —
-			// pour déplacer une tête de lecture que la ligne du dessus vient DÉJÀ d'écrire
-			// directement dans le DOM. Ce rendu React ne sert qu'aux consommateurs de
-			// l'override (timecode, overlay), qui n'ont aucune raison d'être rafraîchis plus
-			// vite qu'une frame. L'écriture DOM, elle, reste à chaque événement : la tête
-			// continue de coller au curseur.
+			// Throttled store update / D3D seek via rAF to avoid IPC flooding
 			if (rafSeekRef.current === 0) {
 				rafSeekRef.current = requestAnimationFrame(() => {
 					rafSeekRef.current = 0;
-					const pending = pendingSeekTimeRef.current;
-					if (pending !== null) {
-						setScrubbingTimeSec(pending);
-						setCurrentTime(pending);
+					if (pendingSeekTimeRef.current !== null) {
+						setCurrentTime(pendingSeekTimeRef.current);
 					}
 				});
 			}
