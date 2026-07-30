@@ -245,7 +245,7 @@
 		"help": "Zaman çizelgesindeki tüm kliplerin birleşik dökümü. Bir kelimede veya seçimde Backspace / Delete tuşuna basmak onu atlanmış (kırmızı) olarak işaretler. Kırmızı bölümün üzerine gelerek geri alabilirsiniz.",
 		"noClips": "Henüz klip yok",
 		"noTranscript": "Henüz döküm yok",
-		"whisperHint": "Döküm yerel Whisper kullanır — tarayıcınızda çalışır, hiçbir veri cihazdan çıkmaz.",
+		"whisperHint": "Döküm yerel Whisper kullanır — bilgisayarınızda çalışır, hiçbir veri cihazdan çıkmaz.",
 		"transcribeNow": "Şimdi dökümünü çıkar",
 		"transcribing": "Döküm çıkarılıyor…",
 		"clipLabel": "Klip {{index}}",

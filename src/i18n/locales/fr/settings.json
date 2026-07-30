@@ -245,7 +245,7 @@
 		"help": "Transcription agrégée de tous les clips de la timeline. Retour arrière / Suppr sur un mot ou une sélection le marque comme ignoré (en rouge). Survolez un passage rouge pour le restaurer.",
 		"noClips": "Aucun clip pour l'instant",
 		"noTranscript": "Aucune transcription pour l'instant",
-		"whisperHint": "La transcription utilise Whisper en local — tout s'exécute dans votre navigateur, aucune donnée ne quitte l'appareil.",
+		"whisperHint": "La transcription utilise Whisper en local — tout s'exécute sur votre ordinateur, aucune donnée ne quitte l'appareil.",
 		"transcribeNow": "Transcrire maintenant",
 		"transcribing": "Transcription…",
 		"clipLabel": "Clip {{index}}",

@@ -245,7 +245,7 @@
 		"help": "Transcrição agregada de todos os clipes da linha do tempo. Backspace / Delete em uma palavra ou seleção marca como ignorada (em vermelho). Passe o mouse sobre um trecho vermelho para restaurá-lo.",
 		"noClips": "Nenhum clipe ainda",
 		"noTranscript": "Nenhuma transcrição ainda",
-		"whisperHint": "A transcrição usa o Whisper local — roda no seu navegador, nenhum dado sai do dispositivo.",
+		"whisperHint": "A transcrição usa o Whisper local — roda no seu computador, nenhum dado sai do dispositivo.",
 		"transcribeNow": "Transcrever agora",
 		"transcribing": "Transcrevendo…",
 		"clipLabel": "Clipe {{index}}",

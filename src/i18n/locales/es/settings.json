@@ -245,7 +245,7 @@
 		"help": "Transcripción agregada de todos los clips de la línea de tiempo. Retroceso / Supr sobre una palabra o selección la marca como omitida (en rojo). Pasa el cursor sobre un fragmento rojo para restaurarlo.",
 		"noClips": "Aún no hay clips",
 		"noTranscript": "Aún no hay transcripción",
-		"whisperHint": "La transcripción usa Whisper local: se ejecuta en tu navegador y ningún dato sale del dispositivo.",
+		"whisperHint": "La transcripción usa Whisper local: se ejecuta en tu equipo y ningún dato sale del dispositivo.",
 		"transcribeNow": "Transcribir ahora",
 		"transcribing": "Transcribiendo…",
 		"clipLabel": "Clip {{index}}",
