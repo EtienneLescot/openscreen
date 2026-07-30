@@ -63,15 +63,41 @@ const ASSET_MIME = "application/x-axcut-asset";
 
 type ToolId = "cut" | "comment" | "speed";
 
-// Ruler tick labels sit on whole-second "nice" steps, so tenths are always
-// ".0" noise — show clean M:SS (H:MM:SS past an hour) instead.
-function fmtTick(sec: number): string {
+// "Nice" ruler steps, from a 20th of a second up to an hour. The one that gets
+// used depends on the zoom (see rulerTicks), so the ladder has to cover both a
+// 5-second span blown up across the panel and a two-hour recording.
+const TICK_STEPS_SEC = [
+	0.05, 0.1, 0.25, 0.5, 1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600,
+];
+/** Smallest gap two ruler labels may sit at — the step grows until they clear it. */
+const MIN_LABEL_GAP_PX = 76;
+/** Unlabelled ticks drawn between two labelled ones. */
+const MINOR_PER_MAJOR = 5;
+
+// Ruler tick label. Precision follows the step: whole seconds read as a clean
+// M:SS, but once the ruler is zoomed past one tick per second the fraction is
+// the only thing telling two labels apart.
+function fmtTick(sec: number, stepSec: number): string {
 	if (!Number.isFinite(sec) || sec < 0) sec = 0;
-	const total = Math.round(sec);
-	const h = Math.floor(total / 3600);
-	const m = Math.floor((total % 3600) / 60);
-	const ss = String(total % 60).padStart(2, "0");
-	return h > 0 ? `${h}:${String(m).padStart(2, "0")}:${ss}` : `${m}:${ss}`;
+	const digits = stepSec < 0.5 ? 2 : stepSec < 1 ? 1 : 0;
+	const h = Math.floor(sec / 3600);
+	const m = Math.floor((sec % 3600) / 60);
+	const s = sec % 60;
+	if (h > 0) {
+		const mm = String(m).padStart(2, "0");
+		const ss = String(Math.floor(s)).padStart(2, "0");
+		return `${h}:${mm}:${ss}`;
+	}
+	if (digits > 0) {
+		const [whole, frac] = s.toFixed(digits).split(".");
+		return `${m}:${whole.padStart(2, "0")}.${frac}`;
+	}
+	return `${m}:${String(Math.round(s)).padStart(2, "0")}`;
+}
+
+interface RulerTick {
+	sec: number;
+	major: boolean;
 }
 
 interface PlayheadOverlayProps {
@@ -114,7 +140,7 @@ const PlayheadOverlay = memo(function PlayheadOverlay({
 			<div className={styles.tlCanvas} style={canvasStyle}>
 				<div ref={playheadRef} className={styles.tlPlayhead} style={{ left: `${pct}%` }}>
 					<span
-						className={styles.tlPlayheadDiamond}
+						className={styles.tlPlayheadHead}
 						style={{ pointerEvents: "auto", cursor: "grab" }}
 						onPointerDown={(e) => {
 							e.stopPropagation();
@@ -260,6 +286,10 @@ export function V4Timeline({
 	// not a select). Reset at the start of each new clip pointerdown.
 	const didClipDragRef = useRef(false);
 	const [nav, setNav] = useState({ start: 0, end: 1 });
+	// On-screen width of one full (unzoomed) timeline, in px. The ruler needs it
+	// to pick a tick step that reads at THIS panel size — a step that looks right
+	// on a wide window crams into an unreadable smear on a narrow one.
+	const [viewportWidthPx, setViewportWidthPx] = useState(0);
 	const [dragOver, setDragOver] = useState(false);
 	const [snapPct, setSnapPct] = useState<number | null>(null);
 	// Live clip-reorder drag: the dragged clip follows the pointer directly
@@ -364,15 +394,30 @@ export function V4Timeline({
 		sourceIds: g.ids,
 	}));
 
-	const rulerTicks = useMemo(() => {
-		// Adaptive interval so a long recording shows ~a dozen labels instead of
-		// one every 15s (which crams the ruler unreadably past a few minutes).
-		const NICE_STEPS = [1, 2, 5, 10, 15, 30, 60, 120, 300, 600, 900, 1800, 3600];
-		const step = NICE_STEPS.find((s) => total / s <= 12) ?? NICE_STEPS[NICE_STEPS.length - 1];
-		const out: string[] = [];
-		for (let t = 0; t <= total; t += step) out.push(fmtTick(t));
-		return out;
-	}, [total]);
+	// Ruler ticks are chosen from what is actually ON SCREEN, not from the clip
+	// length: the canvas is widened by 1/navSpan, so the same recording shows one
+	// label per 30s zoomed out and one per tenth of a second zoomed in. The step
+	// is the first "nice" one whose on-screen gap clears MIN_LABEL_GAP_PX, which
+	// is why the labels never collide however narrow the panel gets.
+	const rulerTicks = useMemo((): { step: number; ticks: RulerTick[] } => {
+		const span = Math.max(0.02, nav.end - nav.start);
+		const pxPerSec = viewportWidthPx / span / total;
+		if (!Number.isFinite(pxPerSec) || pxPerSec <= 0) return { step: 1, ticks: [] };
+		const step =
+			TICK_STEPS_SEC.find((s) => s * pxPerSec >= MIN_LABEL_GAP_PX) ??
+			TICK_STEPS_SEC[TICK_STEPS_SEC.length - 1];
+		const minor = step / MINOR_PER_MAJOR;
+		// Emit the visible window only (plus a step of margin so a tick never pops
+		// in at the edge): at a 50× zoom the full timeline would otherwise be
+		// thousands of off-screen nodes re-rendered on every pan.
+		const from = Math.max(0, nav.start * total - step);
+		const to = Math.min(total, nav.end * total + step);
+		const ticks: RulerTick[] = [];
+		for (let i = Math.ceil(from / minor - 1e-6); i * minor <= to + 1e-6; i++) {
+			ticks.push({ sec: i * minor, major: i % MINOR_PER_MAJOR === 0 });
+		}
+		return { step, ticks };
+	}, [total, nav.start, nav.end, viewportWidthPx]);
 
 	// Live scrub position. The store write behind it is rAF-throttled (see
 	// seekToClientX), so this keeps the playhead and the timecode pinned to the
@@ -429,7 +474,7 @@ export function V4Timeline({
 	);
 
 	// Mousedown anywhere on the empty timeline (ruler, lanes background, or
-	// the playhead diamond itself) seeks immediately AND arms a scrub drag —
+	// the playhead head itself) seeks immediately AND arms a scrub drag —
 	// a single pointerdown→pointermove→pointerup replaces the old
 	// click-only seek, and doubles as the playhead's drag handle since
 	// dragging from its exact position is the same math as dragging from
@@ -674,11 +719,29 @@ export function V4Timeline({
 		return () => el.removeEventListener("wheel", onWheelNative);
 	}, []);
 
+	// Track the tracks' content width for the ruler. .tlTracks and .tlRulerRow
+	// carry the same horizontal padding and the tracks' scrollbar is hidden, so
+	// this content box is exactly one unzoomed canvas wide.
+	useEffect(() => {
+		const el = tracksRef.current;
+		if (!el) return;
+		setViewportWidthPx(el.clientWidth);
+		const ro = new ResizeObserver((entries) => {
+			for (const entry of entries) setViewportWidthPx(entry.contentRect.width);
+		});
+		ro.observe(el);
+		return () => ro.disconnect();
+	}, []);
+
 	// zoom/pan: the tracks canvas is widened by 1/(navEnd-navStart) and shifted.
+	// The width % resolves against the CONTAINER, the translate % against the
+	// canvas's own (already widened) box — so scrolling to nav.start is a flat
+	// -nav.start of the canvas. Scaling it by 1/navSpan as well double-counted
+	// the zoom and threw the whole timeline off-screen at any nav.start > 0.
 	const navSpan = Math.max(0.02, nav.end - nav.start);
 	const canvasStyle = {
 		width: `${(100 / navSpan).toFixed(3)}%`,
-		transform: `translateX(${(-nav.start * (100 / navSpan)).toFixed(3)}%)`,
+		transform: `translateX(${(-nav.start * 100).toFixed(3)}%)`,
 	} as const;
 
 	const laneOf = (kind: LanePill["kind"]) =>
@@ -954,7 +1017,15 @@ export function V4Timeline({
 		return (
 			<>
 				{effectivePills.length === 0 ? (
-					<span className={styles.laneEmpty}>{emptyLabel}</span>
+					// The lane is as wide as the ZOOMED canvas, so centring the hint on it
+					// would slide it off-screen as soon as the timeline is zoomed in. Span
+					// the visible window instead, and the hint stays centred in view.
+					<span
+						className={styles.laneEmpty}
+						style={{ left: `${nav.start * 100}%`, width: `${navSpan * 100}%` }}
+					>
+						{emptyLabel}
+					</span>
 				) : null}
 				{effectivePills.flatMap((p) => {
 					// Eager split preview: the instant a clip is grabbed, a pill that
@@ -1226,8 +1297,16 @@ export function V4Timeline({
 				<div className={styles.tlRulerRow} onPointerDown={startScrub}>
 					<div className={styles.tlCanvas} style={canvasStyle}>
 						<div className={styles.tlRuler}>
-							{rulerTicks.map((t, i) => (
-								<span key={`${t}-${i}`}>{t}</span>
+							{rulerTicks.ticks.map((tick) => (
+								<div
+									key={tick.sec}
+									className={`${styles.tlTick}${tick.major ? ` ${styles.tlTickMajor}` : ""}`}
+									style={{ left: `${pctOf(tick.sec)}%` }}
+								>
+									{tick.major ? (
+										<span className={styles.tlTickLabel}>{fmtTick(tick.sec, rulerTicks.step)}</span>
+									) : null}
+								</div>
 							))}
 						</div>
 					</div>
@@ -1241,15 +1320,20 @@ export function V4Timeline({
 
 						{showLanes ? (
 							<>
+								{/* An empty lane advertises the shortcut that fills it ("Press A to add
+								    annotation") rather than restating that it is empty — the same hint
+								    strings the pre-v4 timeline used, so the keys stay translated. */}
 								<div className={styles.tlLane}>
-									{renderPills(annPills, t("toolbar.noAnnotationsYet"))}
+									{renderPills(annPills, t("hints.pressAnnotation"))}
 								</div>
 								<div className={styles.tlLane}>
-									{renderPills(speedPills, t("toolbar.constantSpeed"))}
+									{renderPills(speedPills, t("hints.pressSpeed"))}
 								</div>
-								<div className={styles.tlLane}>{renderPills(trimPills, t("toolbar.noTrims"))}</div>
-								<div className={styles.tlLane}>{renderPills(zoomPills, "")}</div>
-								<div className={styles.tlLane}>{renderPills(cameraFullscreenPills, "")}</div>
+								<div className={styles.tlLane}>{renderPills(trimPills, t("hints.pressTrim"))}</div>
+								<div className={styles.tlLane}>{renderPills(zoomPills, t("hints.pressZoom"))}</div>
+								<div className={styles.tlLane}>
+									{renderPills(cameraFullscreenPills, t("hints.pressCameraFullscreen"))}
+								</div>
 							</>
 						) : null}
 

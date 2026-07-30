@@ -953,6 +953,26 @@
 	min-height: 0;
 	height: 100%;
 	overflow: hidden;
+	/* The playhead's head sits ENTIRELY above the ruler, its tip landing on the
+	   line's top edge — that's what keeps it clear of the tick labels below. It
+	   deliberately overshoots the timeline body by --playhead-head-overshoot, so
+	   it breaks past the toolbar's bottom rule and reads as floating OVER the
+	   timeline rather than as a shape cut off by it. What's left of its height is
+	   the gap the ruler needs below the body's top edge (--playhead-head-clear),
+	   which .tlRulerRow pads by; .tlPlayheadLayer pads by the full height and is
+	   pulled up by the overshoot, so both content boxes still start on the same
+	   line. Derive, don't hand-tune: only -w/-h/-overshoot should ever change. */
+	--playhead-head-w: 16px;
+	--playhead-head-h: 18px;
+	--playhead-head-overshoot: 4px;
+	--playhead-head-clear: calc(var(--playhead-head-h) - var(--playhead-head-overshoot));
+	/* The pan/zoom bar's band, kept here (not just on .tlNav) because the playhead
+	   layer stretches by exactly this much to run behind it, down to the panel's
+	   bottom edge. */
+	--tl-nav-h: 20px;
+	--tl-nav-gap-top: 8px;
+	--tl-nav-gap-bottom: 12px;
+	--tl-nav-band: calc(var(--tl-nav-h) + var(--tl-nav-gap-top) + var(--tl-nav-gap-bottom));
 }
 .tlToolbar {
 	display: flex;
@@ -1028,11 +1048,15 @@
    so they move with the header (not with the scrolling tracks) when the panel is
    resized. overflow:hidden clips the zoom-transformed canvas horizontally. Its
    canvas is exactly as wide as .tlTracks' because the tracks scrollbar is hidden
-   (takes no width), so ticks stay aligned with the clips + playhead. */
+   (takes no width), so ticks stay aligned with the clips + playhead.
+   The top padding is the playhead head's clearance, not decoration: the head
+   hangs off the top of the line, so this gap is what the ruler content needs to
+   start below it. .tlPlayheadLayer is offset to match, so both content boxes
+   begin on the same line and the tick labels land under the head. */
 .tlRulerRow {
 	position: relative;
 	flex-shrink: 0;
-	padding: 8px 20px 0;
+	padding: var(--playhead-head-clear) 20px 0;
 	overflow: hidden;
 	cursor: text;
 }
@@ -1077,11 +1101,21 @@
    cursor, so it doesn't scroll with the lanes). Same horizontal padding as the
    canvases (and the tracks scrollbar is hidden, so equal width) → its transformed
    line/head aligns exactly with ticks/clips. pointer-events pass through (except
-   the diamond) so scrubbing still works. */
+   the head) so scrubbing still works.
+   It is deliberately LARGER than .tlBody at both ends. Up top by the head's
+   overshoot, so the head isn't clipped where it breaks past the toolbar rule.
+   Down below by the whole pan/zoom band, so the line reaches the panel's bottom
+   edge instead of stopping at the tracks — it runs BEHIND the pan/zoom bar, which
+   lifts itself over the line with a higher z-index. No bottom padding, for the
+   same reason: any inset there leaves the line short of the clips as soon as the
+   lanes are scrolled up. */
 .tlPlayheadLayer {
 	position: absolute;
-	inset: 0;
-	padding: 8px 20px;
+	top: calc(-1 * var(--playhead-head-overshoot));
+	right: 0;
+	bottom: calc(-1 * var(--tl-nav-band));
+	left: 0;
+	padding: var(--playhead-head-h) 20px 0;
 	overflow: hidden;
 	pointer-events: none;
 	z-index: 6;
@@ -1089,41 +1123,75 @@
 .tlPlayheadLayer .tlCanvas {
 	height: 100%;
 }
-/* One continuous line from the ruler down through the clips, stopping just above
-   the zoom/nav bar, with the draggable diamond head at the top (in the ruler). */
+/* One continuous line from the ruler down through the clips and on behind the
+   zoom/nav bar to the panel's bottom edge, with the draggable head at the top
+   (hanging above the ruler). */
 .tlPlayhead {
 	position: absolute;
 	top: 0;
 	bottom: 0;
 	width: 2px;
-	background: var(--accent);
+	background: var(--playhead);
 	border-radius: 1px;
-	box-shadow: 0 0 10px var(--accent-soft);
+	/* Wide, soft halo: the line is only 2px, and this is what keeps it findable
+	   as it crosses dark lanes and pale clip cards alike. */
+	box-shadow: 0 0 18px var(--playhead-glow);
 	pointer-events: none;
 }
-.tlPlayheadDiamond {
+/* Map-pin head: a rounded rectangle that tapers to a point at the bottom, the
+   point landing exactly on the top of the line (translate -100%). It therefore
+   sits wholly ABOVE the ruler and can't cover the tick labels.
+   The shape is border-radius ∩ clip-path: the polygon cuts the bottom into a
+   point while the radius keeps the two TOP corners round — a polygon alone
+   would give four hard corners, a radius alone no point. */
+.tlPlayheadHead {
 	position: absolute;
-	/* Caps the very top of the playhead line (the line runs down from here). */
 	top: 0;
 	left: 50%;
-	transform: translate(-50%, -50%) rotate(45deg);
-	width: 9px;
-	height: 9px;
-	background: var(--accent);
-	border-radius: 2px;
-	box-shadow: 0 0 8px var(--accent-soft);
+	transform: translate(-50%, -100%);
+	width: var(--playhead-head-w);
+	height: var(--playhead-head-h);
+	box-sizing: border-box;
+	background: var(--playhead);
+	border-radius: 4px;
+	/* 67% keeps the point ~6px tall whatever --playhead-head-h is; the extra
+	   height all goes to the rectangular top. */
+	clip-path: polygon(0% 0%, 100% 0%, 100% 67%, 50% 100%, 0% 67%);
+	filter: drop-shadow(0 1px 3px var(--playhead-shadow));
 }
+/* Ruler ticks are positioned absolutely at their real time, not spread evenly
+   by a flex row — that's what keeps a label under the frame it names once the
+   canvas is zoomed. Tick density is picked per zoom level in
+   V4Timeline#rulerTicks. */
 .tlRuler {
-	display: flex;
-	justify-content: space-between;
-	height: 15px;
-	margin-bottom: 7px;
-	padding-inline: 2px;
+	position: relative;
+	height: 28px;
+	margin-bottom: 6px;
+	border-bottom: 1px solid var(--border-soft);
 }
-.tlRuler span {
+/* Ticks hang from the TOP of the band and the label sits under them, so the
+   numbers are below the playhead head rather than behind it. */
+.tlTick {
+	position: absolute;
+	top: 0;
+	width: 1px;
+	height: 5px;
+	background: var(--border);
+}
+.tlTickMajor {
+	height: 9px;
+	background: var(--border-hi);
+}
+.tlTickLabel {
+	position: absolute;
+	top: 12px;
+	left: 50%;
+	transform: translateX(-50%);
 	font-family: var(--font-mono);
 	font-size: 10px;
 	color: var(--meta);
+	white-space: nowrap;
+	pointer-events: none;
 }
 .tlLane {
 	position: relative;
@@ -1134,13 +1202,20 @@
 }
 .laneEmpty {
 	position: absolute;
-	inset: 0;
+	/* left/width come from V4Timeline (the visible window, not the whole zoomed
+	   canvas) — see renderPills. */
+	top: 0;
+	bottom: 0;
 	display: flex;
 	align-items: center;
 	justify-content: center;
 	font-size: 11px;
-	color: var(--muted);
+	font-weight: 500;
+	/* Deliberately quieter than lane content: it's a standing hint on every empty
+	   lane, so at --muted five of them shout over the clips. */
+	color: var(--meta);
 	pointer-events: none;
+	user-select: none;
 }
 .lanePill {
 	position: absolute;
@@ -1335,9 +1410,12 @@
 }
 .tlNav {
 	position: relative;
-	height: 20px;
-	margin: 8px 20px 12px;
+	height: var(--tl-nav-h);
+	margin: var(--tl-nav-gap-top) 20px var(--tl-nav-gap-bottom);
 	flex-shrink: 0;
+	/* Above .tlPlayheadLayer's z-index: the playhead line now runs the full height
+	   of the panel, and this bar is meant to sit ON TOP of it, not be crossed. */
+	z-index: 7;
 }
 .tlNavTrack {
 	position: absolute;
