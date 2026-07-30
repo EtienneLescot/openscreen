@@ -62,7 +62,12 @@ export default defineConfig({
 			// `git worktree remove`) fires hundreds of change events across the main
 			// dev server, forcing repeated full-reloads unrelated to any real source
 			// change — observed as the running app going unresponsive/stale mid-session.
-			ignored: ["**/.claude/worktrees/**", "**/.cc-delegate/**"],
+			//
+			// `crates/thirdparty/**` is the vendored ffmpeg tree the Rust compositor
+			// builds against (see crates/.cargo/config.toml). It is gitignored but still
+			// watched: several thousand files, including a doc/ directory full of HTML,
+			// whose extraction fires the same reload storm.
+			ignored: ["**/.claude/worktrees/**", "**/.cc-delegate/**", "**/crates/thirdparty/**"],
 		},
 	},
 	build: {
