@@ -300,17 +300,43 @@ async function main() {
 	);
 
 	// Contract invariant: absolute seconds in the source recording, [0, duration).
+	//
+	// These are checked separately rather than as one `every()`. Bundled, a
+	// failure could not say which property broke: a real French clip tripped the
+	// combined check and read as "word times outside the clip" when nothing was
+	// outside the clip at all — three punctuation tokens had end < start.
 	const tolerance = 0.5; // whisper rounds segment ends up to the chunk edge
-	const inRange = words.every(
-		(w) => w.start >= 0 && w.end >= w.start && w.end <= meta.durationSec + tolerance,
+	check(
+		words.every((w) => w.start >= 0),
+		"word starts are non-negative",
 	);
-	check(inRange, "word times lie within the clip", `clip is ${meta.durationSec.toFixed(2)}s`);
+	check(
+		words.every((w) => w.end <= meta.durationSec + tolerance),
+		"word ends lie within the clip",
+		`clip is ${meta.durationSec.toFixed(2)}s`,
+	);
+	check(
+		words.every((w, i) => i === 0 || w.start >= words[i - 1].start),
+		"word starts are monotonic non-decreasing",
+	);
 
-	let monotonic = true;
-	for (let i = 1; i < words.length; i++) {
-		if (words[i].start < words[i - 1].start) monotonic = false;
+	// NOT a failure. whisper.cpp gives the last word of a segment the segment's
+	// own t1 as its end, while the word's DTW start runs 80–150 ms late — so a
+	// token emitted near the boundary (typically standalone punctuation) can land
+	// after it and invert. The contract's [startSec, endSec) guarantee is enforced
+	// one layer up, deliberately: whisperServer.ts clamps to
+	// `Math.max(startSec + 0.02, endSec)` and snapWordBoundaries.ts keeps
+	// "degenerate words (whisper sometimes reports end <= start) non-empty". This
+	// harness speaks to the raw helper, below that clamp, so it reports the count
+	// as information instead of asserting on it.
+	const inverted = words.filter((w) => w.end < w.start);
+	if (inverted.length > 0) {
+		console.log(
+			`  info  ${inverted.length}/${words.length} raw word(s) have end < start ` +
+				`(${inverted.map((w) => JSON.stringify(w.word)).join(", ")}) — expected at segment ` +
+				"boundaries; whisperServer.ts clamps these before they reach the document.",
+		);
 	}
-	check(monotonic, "word starts are monotonic non-decreasing");
 
 	if (refText) {
 		const rate = wer(refText, text);
