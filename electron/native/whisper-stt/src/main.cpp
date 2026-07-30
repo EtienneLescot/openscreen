@@ -175,14 +175,30 @@ std::string detect_active_backend() {
 	for (size_t i = 0; i < n; ++i) {
 		ggml_backend_dev_t dev = ggml_backend_dev_get(i);
 		if (!dev) continue;
+		// Only compute devices are candidates. This drops ggml-cpu (type CPU)
+		// and ggml-blas (type ACCEL — Accelerate on macOS), neither of which is
+		// the GPU offload this field is meant to report. IGPU is accepted
+		// because that is how an integrated adapter enumerates.
+		// `auto`: ggml_backend_dev_type names both a C enum and the accessor
+		// function, so spelling the type out needs the `enum` tag to disambiguate.
+		const auto type = ggml_backend_dev_type(dev);
+		if (type != GGML_BACKEND_DEVICE_TYPE_GPU && type != GGML_BACKEND_DEVICE_TYPE_IGPU) {
+			continue;
+		}
 		const char* name = ggml_backend_dev_name(dev);
 		if (!name) continue;
 		std::string s = name;
-		// ggml-cpu shows up as "CPU" — skip it on the first pass, only return
-		// it as a last resort.
-		if (s == "CPU" || s == "cpu") continue;
+		// These are ggml *device* names, which carry a device index:
+		// "Vulkan0", "CUDA0", "MTL0". Matching the bare backend title is why
+		// Metal never matched — ggml-metal's device name is built from
+		// GGML_METAL_NAME ("MTL"), and the string "Metal" appears nowhere in
+		// it, so every Apple Silicon run reported `whispercpp-cpu` while the
+		// Metal backend was in fact bound. `backend` is documented as the
+		// source of truth for which device ran, so this was the one number a
+		// consumer could not get right on macOS.
 		if (s.find("Vulkan")  != std::string::npos) return "whispercpp-vulkan";
 		if (s.find("CUDA")    != std::string::npos) return "whispercpp-cuda";
+		if (s.find("MTL")     != std::string::npos) return "whispercpp-metal";
 		if (s.find("Metal")   != std::string::npos) return "whispercpp-metal";
 	}
 	// Last resort: the CPU device, or a hard "cpu" if ggml has nothing
@@ -464,9 +480,26 @@ int main(int argc, char** argv) {
 		}
 
 		// ---- Emit verbose_json (CT2-compatible shape + backend + timing) ----
+		//
+		// Report the language whisper actually decoded with, not the one the
+		// request asked for. `language` is the raw request parameter, and the
+		// renderer sends "auto" on every call (there is no language selector in
+		// the UI yet), so echoing it back meant `detected_language` never
+		// carried a language at all: the media stage's "detected language" line
+		// rendered the literal string "auto", and AxcutTranscript.language was
+		// set to it via transcribe.ts. whisper_full_lang_id() returns the id
+		// whisper resolved — the detected one under "auto", and the forced one
+		// otherwise, which is correct for both paths.
+		std::string resolved_language = language;
+		const int lang_id = whisper_full_lang_id(ctx);
+		if (lang_id >= 0) {
+			if (const char* lang_str = whisper_lang_str(lang_id)) {
+				resolved_language = lang_str;
+			}
+		}
 		nlohmann::json reply;
-		reply["language"]          = language;
-		reply["detected_language"] = language;
+		reply["language"]          = resolved_language;
+		reply["detected_language"] = resolved_language;
 		reply["backend"]           = active_backend;
 		reply["timing"] = {
 			{"elapsed_s", elapsed_s},
