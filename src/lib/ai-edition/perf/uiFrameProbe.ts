@@ -21,7 +21,10 @@
  * qu'on ne le demande pas — aucun coût en usage normal.
  */
 
-type ProbeState = "repos" | "preview" | "scrub" | "scrub+preview";
+type BaseState = "repos" | "preview" | "scrub" | "scrub+preview";
+/** L'état porte le suffixe `@N` = nombre de bascules de clip déjà vues. Voir
+ *  `noteUiProbeClipSwitch` : sans cette séparation, deux mesures ne sont pas comparables. */
+type ProbeState = string;
 
 interface Bucket {
 	intervals: number[];
@@ -34,6 +37,8 @@ let lastTs = 0;
 /** Frames de preview peintes depuis le dernier tick — dit si la preview travaille. */
 let previewFramesSinceTick = 0;
 let scrubbing = false;
+/** Bascules de clip vues depuis le démarrage de la sonde. Sépare les états. */
+let clipSwitches = 0;
 
 /** Appelé par le hook de preview à chaque frame effectivement livrée. */
 export function noteUiProbePreviewFrame(): void {
@@ -47,6 +52,22 @@ export function setUiProbeScrubbing(active: boolean): void {
 	scrubbing = active;
 }
 
+/**
+ * Appelé quand la preview bascule sur un autre clip.
+ *
+ * Existe parce qu'une comparaison a déjà été faussée par cette variable : un run où le
+ * scrub restait dans un seul clip donnait 8,8 % de frames en retard, un autre où il
+ * franchissait une frontière en donnait 21 %, et on a attribué l'écart à un changement de
+ * code qui n'y était pour rien. Tant que « avant » et « après » ne sont pas séparés, deux
+ * mesures ne sont pas comparables — donc la sonde le fait elle-même plutôt que de compter
+ * sur la discipline de celui qui teste.
+ */
+export function noteUiProbeClipSwitch(): void {
+	if (running) {
+		clipSwitches++;
+	}
+}
+
 function bucketFor(state: ProbeState): Bucket {
 	let b = buckets.get(state);
 	if (!b) {
@@ -58,10 +79,15 @@ function bucketFor(state: ProbeState): Bucket {
 
 function currentState(): ProbeState {
 	const previewActive = previewFramesSinceTick > 0;
-	if (scrubbing && previewActive) return "scrub+preview";
-	if (scrubbing) return "scrub";
-	if (previewActive) return "preview";
-	return "repos";
+	const base: BaseState =
+		scrubbing && previewActive
+			? "scrub+preview"
+			: scrubbing
+				? "scrub"
+				: previewActive
+					? "preview"
+					: "repos";
+	return `${base}@${clipSwitches}`;
 }
 
 function tick(ts: number) {
@@ -75,7 +101,15 @@ function tick(ts: number) {
 
 function summarize() {
 	const rows: string[] = [];
-	for (const state of ["repos", "preview", "scrub", "scrub+preview"] as ProbeState[]) {
+	// Trié par état puis par nombre de bascules, pour que « avant / après le 1er
+	// changement de clip » se lisent l'un sous l'autre.
+	const states = [...buckets.keys()].sort((a, b) => {
+		const order = ["repos", "preview", "scrub", "scrub+preview"];
+		const [ba, na] = a.split("@");
+		const [bb, nb] = b.split("@");
+		return order.indexOf(ba) - order.indexOf(bb) || Number(na) - Number(nb);
+	});
+	for (const state of states) {
 		const b = buckets.get(state);
 		if (!b || b.intervals.length < 10) {
 			continue;
@@ -87,13 +121,20 @@ function summarize() {
 		const late = s.filter((x) => x > 25).length;
 		const veryLate = s.filter((x) => x > 40).length;
 		rows.push(
-			`${state.padEnd(14)} n=${String(s.length).padStart(5)}  ` +
+			`${state.padEnd(18)} n=${String(s.length).padStart(5)}  ` +
 				`p50=${q(50).toFixed(1)}  p90=${q(90).toFixed(1)}  p99=${q(99).toFixed(1)}  ` +
 				`max=${s[s.length - 1].toFixed(1)}  ` +
 				`>25ms=${((late / s.length) * 100).toFixed(1)}%  >40ms=${((veryLate / s.length) * 100).toFixed(1)}%`,
 		);
 	}
-	console.warn(`[ui-probe] intervalles rAF en ms\n${rows.join("\n")}`);
+	// Nombre d'éléments `<video>` vivants. Le `<video>` de la preview est keyé sur l'id du
+	// clip : React le remonte à chaque bascule. Si ce compte grimpe, des éléments média
+	// orphelins survivent avec leur décodeur — ce qui expliquerait une dégradation qui
+	// PERSISTE après un franchissement au lieu d'être un coût transitoire.
+	const videos = document.querySelectorAll("video").length;
+	console.warn(
+		`[ui-probe] intervalles rAF en ms — ${clipSwitches} bascule(s) de clip, ${videos} <video> vivants\n${rows.join("\n")}`,
+	);
 }
 
 /**
@@ -144,6 +185,7 @@ export function startUiProbe(reportEverySec = 10): void {
 	running = true;
 	buckets.clear();
 	longTasks.length = 0;
+	clipSwitches = 0;
 	lastTs = 0;
 	rafHandle = requestAnimationFrame(tick);
 	try {
