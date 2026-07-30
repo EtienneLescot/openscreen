@@ -150,9 +150,64 @@ fn main() {
         .expect("bindgen a échoué sur les headers ffmpeg");
 
     let out = PathBuf::from(env::var("OUT_DIR").unwrap());
-    bindings
-        .write_to_file(out.join("ffi.rs"))
-        .expect("écriture ffi.rs");
+    let ffi_path = out.join("ffi.rs");
+    bindings.write_to_file(&ffi_path).expect("écriture ffi.rs");
+
+    // Sur Linux, les symboles ffmpeg des .so vendorisés sont renommés avec un préfixe
+    // avant l'édition de liens (cf. scripts/build-linux-compositor-addon.mjs). Il faut
+    // donc que CES déclarations importent les noms préfixés — sinon l'éditeur de liens
+    // ne trouve rien, ou pire, l'addon se rattache au ffmpeg de Chromium au runtime.
+    if let Ok(prefix) = env::var("OPENSCREEN_FFMPEG_SYMBOL_PREFIX") {
+        prefix_ffmpeg_symbols(&ffi_path, &prefix);
+    }
+}
+
+/// Ajoute `#[link_name = "<prefix><nom>"]` devant chaque `pub fn` ffmpeg de `ffi.rs`.
+///
+/// Seul le SYMBOLE importé change ; l'identifiant Rust reste `avformat_open_input`, donc
+/// aucun site d'appel du crate ne bouge. bindgen ne génère ici que des fonctions (aucun
+/// `pub static`), ce qui rend la réécriture sûre et purement textuelle.
+///
+/// Pourquoi ce détour plutôt qu'un `#[link(name = ...)]` : le problème n'est pas de
+/// désigner une bibliothèque mais d'éviter une COLLISION DE NOMS. Electron charge
+/// `libffmpeg.so` (le ffmpeg de Chromium) comme dépendance directe, donc ses symboles
+/// occupent la portée globale avant tout addon ; sous ELF, nos imports s'y rattachent
+/// quoi que dise notre RUNPATH. Renommer supprime la collision à la racine, là où jouer
+/// sur la portée de résolution (RTLD_DEEPBIND) casse l'interposition de l'allocateur de
+/// Chromium et fait planter le process.
+fn prefix_ffmpeg_symbols(ffi_path: &Path, prefix: &str) {
+    let source = std::fs::read_to_string(ffi_path).expect("relecture ffi.rs");
+    let mut out = String::with_capacity(source.len() + 64 * 1024);
+    let mut renamed = 0usize;
+
+    for line in source.lines() {
+        if let Some(name) = line
+            .strip_prefix("    pub fn ")
+            .and_then(|rest| rest.split('(').next())
+            .filter(|n| is_ffmpeg_symbol(n))
+        {
+            out.push_str(&format!("    #[link_name = \"{prefix}{name}\"]\n"));
+            renamed += 1;
+        }
+        out.push_str(line);
+        out.push('\n');
+    }
+
+    assert!(
+        renamed > 0,
+        "OPENSCREEN_FFMPEG_SYMBOL_PREFIX est posé mais aucune fonction ffmpeg n'a été \
+         trouvée dans ffi.rs — le format de sortie de bindgen a changé, et l'addon se \
+         lierait silencieusement au ffmpeg de Chromium."
+    );
+    std::fs::write(ffi_path, out).expect("réécriture ffi.rs");
+    println!("cargo:warning=ffmpeg: {renamed} symboles préfixés en `{prefix}`");
+}
+
+/// Les préfixes que ffmpeg expose : `av*` (avutil/avcodec/avformat + `avpriv_`),
+/// `sws_*` (swscale) et `swr_*` (swresample). Aligné sur le filtre du script de build,
+/// qui dérive la table de renommage des mêmes bibliothèques.
+fn is_ffmpeg_symbol(name: &str) -> bool {
+    name.starts_with("av") || name.starts_with("sws_") || name.starts_with("swr_")
 }
 
 /// Pose `LIBCLANG_PATH` sur la toolchain Xcode/CommandLineTools active, pour bindgen.
