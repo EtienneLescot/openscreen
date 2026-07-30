@@ -250,7 +250,13 @@ impl Decoder {
                 // 2) La cible est DEVANT et à portée : dérouler depuis ici plutôt que de
                 //    repartir d'une image clé (cf. `pipeline_windows::SEEK_FORWARD_MAX_SEC`).
                 if cur < seconds && seconds - cur <= SEEK_FORWARD_MAX_SEC {
-                    return self.decode_forward_to(seconds, tb_sec);
+                    let f = self.decode_forward_to(seconds, tb_sec)?;
+                    if !f.is_null() {
+                        return Ok(f);
+                    }
+                    // EOF atteint avant la cible (décodeur réactivé depuis le pool, laissé en fin
+                    // de flux) : on retombe sur le seek keyframe complet au lieu de rendre `null`
+                    // — qui forçait une réouverture complète. Voir `pipeline_windows::seek_to`.
                 }
             }
         }
