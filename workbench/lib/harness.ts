@@ -19,7 +19,20 @@ import type { CursorTrackSample } from "../../src/lib/ai-edition/timeline/cursor
 import { type ModelServerHandle, type ScriptedTurn, startScriptedModel } from "./model-server";
 import { type WireTranscript, wireFromRequests } from "./wire";
 
-export const DEFAULT_TURN_TIMEOUT_MS = 120_000;
+/**
+ * ponytail: 300s, and the number is measured rather than picked. At 120s the wizard
+ * scenario on a real 66s screencast failed 3 runs out of 5 — and the two that passed
+ * took 117.0s and 112.5s. The cutoff sat 3 to 7 seconds above a turn's normal
+ * duration, so a slow moment at the provider decided the outcome, and the failures
+ * read as "the model refused to act" in every report.
+ *
+ * The cost of a generous timeout is waiting; the cost of a tight one is a benchmark
+ * that measures its own impatience and blames the model for it. Note what actually
+ * takes the two minutes: that turn issues 19 tool calls in series, each a round trip.
+ * A turn is slow because of its SHAPE, not its payload — the whole context is ~26k
+ * characters, which is nothing.
+ */
+export const DEFAULT_TURN_TIMEOUT_MS = 300_000;
 
 export interface SinkEvent {
 	kind: "text" | "thinking" | "toolStart" | "toolEnd" | "error";

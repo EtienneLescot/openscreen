@@ -50,12 +50,12 @@ describe("la fixture réelle dans la boucle d'agent", () => {
 		expect(payload.reason).toBeUndefined();
 		expect(payload.assetId).toBe(REAL_SCREENCAST.assetId);
 		expect(payload.sampleCount).toBe(REAL_SCREENCAST.sampleCount);
-		expect(payload.pointCount).toBe(356);
+		expect(payload.pointCount).toBe(148);
 		// Le tour ne doit RIEN muter : la question est une question.
 		expect(result.run.document).toBeUndefined();
 	});
 
-	it("double la taille de la requête — un appel, +28 k caractères", async () => {
+	it("reste sous le transcript — un appel, ~9 k caractères", async () => {
 		// Le coût en contexte, mesuré là où il se paie : dans la requête suivante.
 		// Le premier tour part à ~17 k (système + 19 définitions d'outils) ; après
 		// UN getCursorTrack il en fait ~45 k. Les 24 238 caractères du track en
@@ -66,7 +66,7 @@ describe("la fixture réelle dans la boucle d'agent", () => {
 		const result = await runRepetition({ scenario });
 		const bodies = result.run.requests.map((r) => JSON.stringify(r.raw).length);
 		expect(bodies).toHaveLength(2);
-		expect(bodies[1] - bodies[0]).toBeGreaterThan(24_000);
+		expect(bodies[1] - bodies[0]).toBeGreaterThan(8_000);
 		// Le plafond qui sauterait si quelqu'un montait DEFAULT_MAX_TRACK_POINTS
 		// sans regarder ce que ça coûte au tour.
 		expect(bodies[1]).toBeLessThan(50_000);

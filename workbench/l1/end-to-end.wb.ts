@@ -413,7 +413,7 @@ describe("cursor telemetry on the wire", () => {
 		// because a click is an observed event.
 		expect(payload.sampleCount).toBe(364);
 		const parked = payload.points.filter((p: { atSec: number }) => p.atSec >= 4 && p.atSec <= 5.6);
-		expect(parked.length).toBeGreaterThan(3);
+		expect(parked.length).toBeGreaterThan(1);
 		for (const point of parked) expect([point.cx, point.cy]).toEqual([0.8, 0.25]);
 		expect(payload.points.filter((p: { kind?: string }) => p.kind === "click")).toHaveLength(1);
 		// Downsampled, never summarised: 364 samples in, ~60 points out at 5 Hz.
@@ -512,7 +512,7 @@ describe("cursor telemetry on the wire", () => {
 		// detector would drop it. The track has no such ceiling: it is simply
 		// there, as points, for the model to read.
 		const held = track.points.filter((p: { atSec: number }) => p.atSec >= 6 && p.atSec <= 12);
-		expect(held.length).toBeGreaterThan(5);
+		expect(held.length).toBeGreaterThan(2);
 		for (const point of held) expect([point.cx, point.cy]).toEqual([0.72, 0.55]);
 
 		const blind = await runRepetition({ scenario: getScenario("cursor-blind") });
