@@ -108,7 +108,13 @@
       {
         "from": "electron/native/bin",
         "to": "electron/native/bin",
-        "filter": ["linux-*/*"]
+        // `**`, not `*`: the capture helper's ffmpeg libraries live one level
+        // deeper, in `linux-x64/ffmpeg/`. They are in their own directory
+        // because `linux-x64/` also holds the compositor addon's copies of the
+        // same sonames with every symbol renamed to `osff_*`, and the helper
+        // must not find those — see scripts/build-linux-pipewire-helper.mjs.
+        // A single-level filter ships a helper that cannot start.
+        "filter": ["linux-*/**"]
       }
     ]
   },
