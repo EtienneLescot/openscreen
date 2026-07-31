@@ -839,7 +839,11 @@ fn compose_linux_ombre_webcam_ronde_et_texte() {
 
     // `shadow: 1` + camera en cercle + une annotation texte visible a t=1s.
     let scene_json = r##"{"clips":[],"layout":{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"circle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0.14,"blur":false,"shadow":1,"roundnessFrac":0.04,"motionBlur":0},"background":{"kind":"gradient","angleDeg":45,"stops":["#1f2933","#3b6bff"]},"zoomRegions":[],"annotations":[{"id":"a1","kind":"text","x":0.08,"y":0.08,"w":0.5,"h":0.14,"startSec":0,"endSec":10,"zIndex":1,"text":{"content":"Ombre + fond","color":"#ffffff","backgroundColor":"#e0245e","fontSizeRel":0.09,"fontFamily":"","fontWeight":"normal","fontStyle":"normal","textDecoration":"none","textAlign":"center"}}],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"cropByClip":[],"output":{"width":1920,"height":1080,"fps":30}}"##;
-    comp.set_scene(Some(Scene::from_json(scene_json).expect("scene json")));
+    let parsed = Scene::from_json(scene_json).expect("scene json");
+    // Cf. le commentaire dans compose_linux_forme_webcam_cercle : sans les
+    // LiveParams, la scene est parsee et ignoree.
+    comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&parsed));
+    comp.set_scene(Some(parsed));
 
     let (w, h, rgba) = unsafe {
         let sf = screen.seek_to(1.0).expect("seek screen");
@@ -881,5 +885,106 @@ fn compose_linux_ombre_webcam_ronde_et_texte() {
     assert!(
         plate_px > 200,
         "fond d'annotation introuvable ({plate_px} px roses) — la plaque n'est pas dessinee"
+    );
+}
+
+/// Forme de la webcam : `rectangle` contre `circle`.
+///
+/// Le masque n'est pas un mode de shader dedie — il sort de `radius_px`, que
+/// `plan_frame` met a la moitie du cote pour `circle`. Ce test le MESURE au
+/// lieu de le supposer.
+///
+/// La methode : rendre trois fois la meme scene — sans camera, camera
+/// rectangle, camera cercle — et diffe chacune des deux dernieres contre la
+/// premiere. Le diff EST l'empreinte de la camera, masque compris, sans avoir
+/// a deviner ou `plan_frame` l'a posee ni a distinguer la camera du fond. Un
+/// disque remplit pi/4 ~= 0,785 de sa boite englobante, un rectangle la
+/// remplit entierement : le taux de remplissage separe les deux sans ambiguite.
+#[test]
+fn compose_linux_forme_webcam_cercle() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux forme webcam: opt-in. Skip.");
+        return;
+    }
+    let webcam_fixture = "../fixture/webcam.mp4";
+    if !Path::new(webcam_fixture).is_file() {
+        eprintln!("compose_linux forme webcam: pas de fixture webcam. Skip.");
+        return;
+    }
+
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut screen = Decoder::open(FIXTURE, &gpu).expect("Decoder::open screen");
+    let mut cam = Decoder::open(webcam_fixture, &gpu).expect("Decoder::open webcam");
+
+    let scene = |preset: &str, shape: &str| {
+        format!(
+            r##"{{"clips":[],"layout":{{"preset":"{preset}","webcamSize":1.6,"webcamShape":"{shape}","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0.1,"blur":false,"shadow":0,"roundnessFrac":0.0,"motionBlur":0}},"background":{{"kind":"color","color":"#00ff00"}},"zoomRegions":[],"annotations":[],"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":1920,"height":1080,"fps":30}}}}"##
+        )
+    };
+
+    let mut render = |preset: &str, shape: &str| -> Vec<u8> {
+        let parsed = Scene::from_json(&scene(preset, shape)).expect("scene json");
+        // OBLIGATOIRE. `compose_frame` lit les LiveParams, PAS la scene brute :
+        // la forme webcam, le padding et les effets y transitent. Sans cette
+        // ligne la scene est parsee mais ignoree, et le test mesure la forme par
+        // defaut ("rounded") en croyant mesurer celle qu'il a demandee.
+        comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&parsed));
+        comp.set_scene(Some(parsed));
+        unsafe {
+            let sf = screen.seek_to(1.0).expect("seek screen");
+            let wf = cam.seek_to(1.0).expect("seek webcam");
+            let mut cfg = Cfg::c8();
+            cfg.shadow = false;
+            comp.compose_frame(sf, wf, 1.0, &cfg).expect("compose_frame");
+            comp.readback_direct().expect("readback").2
+        }
+    };
+
+    let none = render("no-webcam", "rectangle");
+    let rect = render("picture-in-picture", "rectangle");
+    let circle = render("picture-in-picture", "circle");
+    write_ppm("compose_linux_webcam_rect", W, H, &rect);
+    write_ppm("compose_linux_webcam_circle", W, H, &circle);
+
+    // Empreinte = pixels qui changent quand la camera apparait.
+    let footprint = |with: &[u8]| -> Vec<bool> {
+        with.chunks_exact(4)
+            .zip(none.chunks_exact(4))
+            .map(|(a, b)| {
+                (a[0] as i32 - b[0] as i32).abs()
+                    + (a[1] as i32 - b[1] as i32).abs()
+                    + (a[2] as i32 - b[2] as i32).abs()
+                    > 24
+            })
+            .collect()
+    };
+    // Taux de remplissage de la boite englobante de l'empreinte.
+    let fill = |mask: &[bool], label: &str| -> f32 {
+        let (mut x0, mut y0, mut x1, mut y1) = (W, H, 0u32, 0u32);
+        let mut n = 0u32;
+        for y in 0..H {
+            for x in 0..W {
+                if mask[(y * W + x) as usize] {
+                    x0 = x0.min(x); y0 = y0.min(y); x1 = x1.max(x); y1 = y1.max(y); n += 1;
+                }
+            }
+        }
+        assert!(x1 > x0 && y1 > y0, "{label} : aucune empreinte de camera");
+        let (bw, bh) = (x1 - x0 + 1, y1 - y0 + 1);
+        let ar = bw as f32 / bh as f32;
+        let f = n as f32 / (bw * bh) as f32;
+        println!("{label} : boite {bw}x{bh} (AR {ar:.3}), {n} px, remplissage {f:.3}");
+        f
+    };
+
+    let rect_fill = fill(&footprint(&rect), "rectangle");
+    let circle_fill = fill(&footprint(&circle), "cercle");
+
+    assert!(rect_fill > 0.95, "le rectangle devrait remplir sa boite ({rect_fill:.3})");
+    // pi/4 = 0,785 ; on tolere l'antialiasing du SDF sur le pourtour.
+    assert!(
+        (circle_fill - 0.785).abs() < 0.06,
+        "le masque cercle ne rogne pas comme un disque (remplissage {circle_fill:.3}, attendu ~0.785)"
     );
 }
