@@ -988,3 +988,99 @@ fn compose_linux_forme_webcam_cercle() {
         "le masque cercle ne rogne pas comme un disque (remplissage {circle_fill:.3}, attendu ~0.785)"
     );
 }
+
+/// Un enregistrement SANS camera ne doit rien dessiner dans la boite PiP.
+///
+/// Le cas est reproduit tel quel : le decodeur « webcam » recoit la frame de
+/// l'ECRAN, ce que `open_and_seek_clip` fait en production des que le chemin
+/// webcam est vide ou illisible. Seul `LiveParams::has_webcam` distingue alors
+/// une vraie camera d'une seconde copie de l'ecran, et ce backend ne le lisait
+/// pas : l'enregistrement d'ecran apparaissait dans sa propre vignette.
+///
+/// L'assertion est une egalite stricte avec le rendu « no-webcam » : pas un
+/// seuil, parce qu'il ne s'agit pas de mesurer une empreinte plus petite mais
+/// de verifier qu'il n'y en a aucune.
+#[test]
+fn compose_linux_sans_camera_ne_dessine_pas_de_vignette() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux sans camera: opt-in. Skip.");
+        return;
+    }
+
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut screen = Decoder::open(FIXTURE, &gpu).expect("Decoder::open screen");
+
+    let scene_json = r##"{"clips":[],"layout":{"preset":"picture-in-picture","webcamSize":1.6,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0.1,"blur":false,"shadow":0,"roundnessFrac":0.0,"motionBlur":0},"background":{"kind":"color","color":"#00ff00"},"zoomRegions":[],"annotations":[],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"cropByClip":[],"output":{"width":1920,"height":1080,"fps":30}}"##;
+
+    let mut render = |has_webcam: bool| -> Vec<u8> {
+        let parsed = Scene::from_json(scene_json).expect("scene json");
+        let mut lp = openscreen_compositor::compositor::live_params_from_scene(&parsed);
+        lp.has_webcam = has_webcam;
+        comp.set_live_params(lp);
+        comp.set_scene(Some(parsed));
+        unsafe {
+            let sf = screen.seek_to(1.0).expect("seek screen");
+            let mut cfg = Cfg::c8();
+            cfg.shadow = false;
+            // La frame ecran passee AUSSI comme webcam : le repli exact de
+            // `open_and_seek_clip` quand il n'y a pas de fichier camera.
+            comp.compose_frame(sf, sf, 1.0, &cfg).expect("compose_frame");
+            comp.readback_direct().expect("readback").2
+        }
+    };
+
+    let with_camera = render(true);
+    let without_camera = render(false);
+    write_ppm("compose_linux_sans_camera", W, H, &without_camera);
+
+    let differing = with_camera
+        .chunks_exact(4)
+        .zip(without_camera.chunks_exact(4))
+        .filter(|(a, b)| {
+            (a[0] as i32 - b[0] as i32).abs()
+                + (a[1] as i32 - b[1] as i32).abs()
+                + (a[2] as i32 - b[2] as i32).abs()
+                > 24
+        })
+        .count();
+    println!("vignette ecran-dans-la-camera : {differing} px");
+    assert!(
+        differing > 1000,
+        "le rendu de controle ne dessine aucune vignette — le test ne prouve rien ({differing} px)"
+    );
+
+    // Reference : le preset qui ne veut pas de camera du tout. Il pose le meme
+    // rectangle d'ecran (`plan_frame` : « no-webcam » et « picture-in-picture »
+    // partagent `full_screen`), donc seule la vignette peut les separer.
+    let no_webcam_preset = {
+        let parsed = Scene::from_json(&scene_json.replace(
+            r#""preset":"picture-in-picture""#,
+            r#""preset":"no-webcam""#,
+        ))
+        .expect("scene json");
+        comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&parsed));
+        comp.set_scene(Some(parsed));
+        unsafe {
+            let sf = screen.seek_to(1.0).expect("seek screen");
+            let mut cfg = Cfg::c8();
+            cfg.shadow = false;
+            comp.compose_frame(sf, sf, 1.0, &cfg).expect("compose_frame");
+            comp.readback_direct().expect("readback").2
+        }
+    };
+    let residual = without_camera
+        .chunks_exact(4)
+        .zip(no_webcam_preset.chunks_exact(4))
+        .filter(|(a, b)| {
+            (a[0] as i32 - b[0] as i32).abs()
+                + (a[1] as i32 - b[1] as i32).abs()
+                + (a[2] as i32 - b[2] as i32).abs()
+                > 24
+        })
+        .count();
+    assert_eq!(
+        residual, 0,
+        "sans camera, le rendu devrait etre celui du preset no-webcam ({residual} px d'ecart)"
+    );
+}

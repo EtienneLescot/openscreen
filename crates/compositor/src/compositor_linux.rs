@@ -1062,7 +1062,13 @@ impl Compositor {
         // Webcam PiP (mode 0) -- placee par plan_frame (`g.w_dst`, coins
         // `g.w_radius`), gardee par `g.shape_fade > 0` (webcam visible).
         // `webcam_planes` garde les vues en vie pendant le pass.
-        let webcam_planes = if g.shape_fade > 0.0 && !webcam.is_null() {
+        // `lp.has_webcam` is the gate Windows (`compositor_windows.rs`) and macOS
+        // (`compositor_macos.rs`) both apply and this backend did not. It is false
+        // when the clip has no camera — and in that case the "webcam" decoder holds
+        // the SCREEN video, because `open_and_seek_clip` falls back to it rather
+        // than leave the pair half-open. Without this check a recording with no
+        // camera drew its own screen picture inside the PiP box.
+        let webcam_planes = if lp.has_webcam && g.shape_fade > 0.0 && !webcam.is_null() {
             self.nv12_srvs(webcam).ok()
         } else {
             None

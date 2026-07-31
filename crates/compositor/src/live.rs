@@ -529,6 +529,26 @@ fn same_source_path(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
 }
 
+/// True when the active clip really has a camera to draw.
+///
+/// TWO ways the app says "no camera", and both must be caught here, because the
+/// webcam decoder is opened either way — `open_and_seek_clip` falls back to the
+/// SCREEN file when the webcam path won't open, so `wdec` always yields frames.
+/// Whether those frames are the camera or a second copy of the screen is decided
+/// HERE and nowhere else.
+///
+///   - the empty string, which is what `sceneDescription.ts` and
+///     `NativeCompositorOverlay` send for an asset with no `cameraTrack`;
+///   - the screen's own path, the older convention kept working for scenes that
+///     still use it.
+///
+/// Missing the empty-string case is what put the screen recording inside the PiP
+/// box: `"" != "/…/recording.mp4"`, so the box was drawn, and the decoder behind
+/// it was the screen fallback.
+fn webcam_is_real(webcam_path: &str, screen_path: &str) -> bool {
+    !webcam_path.trim().is_empty() && !same_source_path(webcam_path, screen_path)
+}
+
 fn scene_clip_matches(
     clip: &crate::scene::SceneClip,
     screen_path: &str,
@@ -1328,11 +1348,9 @@ unsafe fn render_thread(
         cfg.bg_blur = ip.bg_blur;
         cfg.mblur_n = ip.mblur_taps;
         cfg.cursor = ip.cursor_show;
-        // TS falls `webcamPath` back to the screen asset's own path when a clip has no real
-        // camera (so the decoder pipeline always has something valid to open) — if we drew the
-        // PiP box in that case it would just duplicate the screen video into its own corner.
-        // `same_source_path` already exists for exactly this comparison (scene/clip matching).
-        let has_real_webcam = !same_source_path(&active_webcam_path, &active_screen_path);
+        // A clip with no camera must not draw the PiP box — the decoder behind it is the
+        // screen video, so drawing it duplicates the recording into its own corner.
+        let has_real_webcam = webcam_is_real(&active_webcam_path, &active_screen_path);
         comp.set_live_params(LiveParams {
             bg_color: ip.bg_color,
             shadow_scale: ip.shadow_scale,
@@ -1776,6 +1794,23 @@ mod tests {
     fn webcam_seek_uses_screen_source_time_and_offset() {
         assert_eq!(webcam_seek_time(22.5, 1.25), 21.25);
         assert_eq!(webcam_seek_time(0.5, 1.25), 0.0);
+    }
+
+    #[test]
+    fn a_clip_without_a_camera_has_no_webcam_to_draw() {
+        // What the app actually sends for an asset with no `cameraTrack`. Treating
+        // this as a real camera drew the screen recording inside the PiP box, since
+        // the webcam decoder falls back to the screen file when the path won't open.
+        assert!(!webcam_is_real("", "/rec/recording-1.mp4"));
+        assert!(!webcam_is_real("   ", "/rec/recording-1.mp4"));
+        // The older sentinel: webcam path == screen path.
+        assert!(!webcam_is_real("/rec/recording-1.mp4", "/rec/recording-1.mp4"));
+        assert!(!webcam_is_real("/rec/RECORDING-1.mp4", "/rec/recording-1.mp4"));
+    }
+
+    #[test]
+    fn a_clip_with_a_camera_draws_it() {
+        assert!(webcam_is_real("/rec/recording-1-webcam.webm", "/rec/recording-1.mp4"));
     }
 
     // --- transport handed to an export and back -------------------------------
