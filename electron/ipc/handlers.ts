@@ -56,6 +56,7 @@ import { createCursorRecordingSession } from "../native-bridge/cursor/recording/
 import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { patchWebmDurationOnDisk } from "../recording/webm-duration";
+import { reindexRecordingOnDisk } from "../recording/webm-seek-index";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
 import { RecordingStreamRegistry, registerRecordingStreamHandlers } from "./recordingStream";
 
@@ -305,6 +306,37 @@ async function finalizeRecordingFile(
 		await fs.writeFile(filePath, Buffer.from(videoData));
 	}
 	return streamed;
+}
+
+/**
+ * Give a finalized recording a usable container, by whichever route works.
+ *
+ * MediaRecorder omits the `Duration` header, so without repair the editor sees
+ * `duration = Infinity` and cannot scale its timeline.
+ *
+ * Two routes, in order of quality:
+ *   1. A full container remux through libavformat's matroska muxer (Linux, where
+ *      capture goes through MediaRecorder). The muxer derives `Duration` from
+ *      the real packet timestamps rather than from the renderer's wall-clock
+ *      measurement, and writes `Cues`/`SeekHead` on the way past.
+ *   2. The EBML header patch, which splices the caller's `durationMs` into the
+ *      Info section. Used on Windows/macOS, and on Linux whenever the remux is
+ *      unavailable (no addon, or a `.node` predating it) or fails.
+ *
+ * Both rewrite the file exactly once, so route 1 is not the more expensive one —
+ * it is the same I/O for a strictly better result. Either way a failure leaves
+ * the original file intact; a recording is never lost to a failed repair.
+ */
+async function repairRecordingContainer(filePath: string, durationMs: number): Promise<void> {
+	const reindexed = await reindexRecordingOnDisk(filePath);
+	if (reindexed.reindexed) {
+		console.info(
+			`[recording] re-muxed ${path.basename(filePath)}: ${reindexed.packets} packets, ` +
+				`${reindexed.streams} streams, ${reindexed.wallS.toFixed(3)}s`,
+		);
+		return;
+	}
+	await patchWebmDurationOnDisk(filePath, durationMs);
 }
 
 async function getApprovedProjectSession(
@@ -2539,15 +2571,15 @@ export function registerIpcHandlers(
 		}
 
 		// Streamed files lack the WebM Duration header (renderer no longer holds the
-		// blob), so patch on disk for the editor's seek bar and timeline. Best-effort,
-		// independent per file, so they run together.
+		// blob), so repair the container on disk for the editor's seek bar and timeline.
+		// Best-effort, independent per file, so they run together.
 		if (isValidDurationMs(payload.durationMs)) {
 			const patches: Promise<unknown>[] = [];
 			if (screenStreamed) {
-				patches.push(patchWebmDurationOnDisk(screenVideoPath, payload.durationMs));
+				patches.push(repairRecordingContainer(screenVideoPath, payload.durationMs));
 			}
 			if (webcamStreamed && webcamVideoPath) {
-				patches.push(patchWebmDurationOnDisk(webcamVideoPath, payload.durationMs));
+				patches.push(repairRecordingContainer(webcamVideoPath, payload.durationMs));
 			}
 			await Promise.all(patches);
 		}

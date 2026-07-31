@@ -656,3 +656,56 @@ pub fn export_gif(
         on_progress: make_progress_tsfn(on_progress)?,
     }))
 }
+
+/// Bilan d'un remux, tel que le voit la glue TS.
+#[napi(object)]
+pub struct RemuxStats {
+    /// Paquets recopiés, toutes pistes confondues. `f64` car napi n'expose pas
+    /// `u64` — sans risque, un enregistrement plausible reste très loin de 2^53.
+    pub packets: f64,
+    pub streams: u32,
+    pub wall_s: f64,
+}
+
+pub struct RemuxTask {
+    input_path: String,
+    output_path: String,
+}
+
+impl Task for RemuxTask {
+    type Output = openscreen_compositor::remux::RemuxStats;
+    type JsValue = RemuxStats;
+
+    fn compute(&mut self) -> Result<Self::Output> {
+        openscreen_compositor::remux::remux_to_seekable_matroska(&self.input_path, &self.output_path)
+            .map_err(|e| Error::from_reason(format!("{e:#}")))
+    }
+
+    fn resolve(&mut self, _env: Env, out: Self::Output) -> Result<Self::JsValue> {
+        Ok(RemuxStats {
+            packets: out.packets as f64,
+            streams: out.streams,
+            wall_s: out.wall_s,
+        })
+    }
+}
+
+/// Recopie `input_path` vers `output_path` par le muxer matroska (aucun
+/// ré-encodage) pour doter le fichier des `Cues`/`SeekHead` que `MediaRecorder`
+/// n'écrit pas. Voir `openscreen_compositor::remux` pour le détail.
+///
+/// `AsyncTask` et pas une fonction synchrone : le remux lit et réécrit tout le
+/// fichier, ce qui se compte en secondes sur un long enregistrement. Le faire
+/// sur le thread principal de Node gèlerait la fenêtre pendant la sauvegarde,
+/// exactement au moment où l'UI affiche « enregistrement en cours ».
+///
+/// `output_path` doit être un chemin TEMPORAIRE : c'est au caller TS de
+/// renommer par-dessus l'original une fois la promesse résolue, pour qu'un échec
+/// laisse l'enregistrement intact.
+#[napi]
+pub fn remux_seekable(input_path: String, output_path: String) -> AsyncTask<RemuxTask> {
+    AsyncTask::new(RemuxTask {
+        input_path,
+        output_path,
+    })
+}
