@@ -563,6 +563,37 @@ impl Compositor {
     /// (uniform + deux textures + sampler). Cree AVANT la render pass pour que
     /// les ressources vivent pendant tout le pass. Un buffer PAR draw :
     /// `write_buffer` entre draws d'une meme pass ne s'entrelace pas.
+    /// `LayerCB` d'une ombre portee (mode 2), identique a `draw_shadow` cote
+    /// macOS et au bloc equivalent cote Windows.
+    ///
+    /// Le quad est ELARGI de `spread` de chaque cote et decale de `offset_px` ;
+    /// le shader y trace un SDF de rect arrondi dont l'alpha decroit sur la
+    /// largeur du spread. C'est pour ca que `fx.x` porte le spread : le
+    /// fragment en a besoin pour normaliser sa penombre.
+    fn shadow_cb(
+        &self,
+        dst: [f32; 4],
+        size_px: [f32; 2],
+        radius: f32,
+        spread: f32,
+        offset_px: [f32; 2],
+        opacity: f32,
+    ) -> LayerCB {
+        let (rw, rh) = (self.render_w as f32, self.render_h as f32);
+        let (sx, sy) = (spread / rw, spread / rh);
+        let (ox, oy) = (offset_px[0] / rw, offset_px[1] / rh);
+        LayerCB {
+            dst: [dst[0] - sx + ox, dst[1] - sy + oy, dst[2] + 2.0 * sx, dst[3] + 2.0 * sy],
+            quad_px: [size_px[0] + 2.0 * spread, size_px[1] + 2.0 * spread],
+            radius_px: radius,
+            mode: 2.0,
+            color: [0.0, 0.0, 0.0, opacity],
+            fx: [spread, 0.0, 0.0, 0.0],
+            mb: [0.0, 1.0, 1.0, 0.0],
+            ..Default::default()
+        }
+    }
+
     fn make_bind(
         &self,
         cb: &LayerCB,
@@ -738,6 +769,26 @@ impl Compositor {
         let (_screen_uniform, screen_bind) =
             self.make_bind(&screen_layer, Some((&sy, &suv)), &dummy);
 
+        // OMBRE PORTEE de l'ecran (mode 2), dessinee JUSTE AVANT le calque
+        // ecran. Le shader la connait depuis le debut ; ce qui manquait etait
+        // uniquement le draw cote Rust, si bien que le curseur « Ombre » de
+        // l'UI ne faisait rien sur Linux.
+        //
+        // Les fractions de reglage viennent de `frame_geometry`, partagees avec
+        // macOS/Windows : l'ombre a la meme taille relative sur les trois
+        // plateformes quelle que soit la resolution de sortie.
+        let screen_shadow = cfg.shadow.then(|| {
+            let cb = self.shadow_cb(
+                g.s_dst,
+                [g.s_dst[2] * rw, g.s_dst[3] * rh],
+                g.s_radius,
+                crate::frame_geometry::SCREEN_SHADOW_SPREAD_FRAC * g.frame_min_px,
+                [0.0, crate::frame_geometry::SCREEN_SHADOW_OFFSET_FRAC * g.frame_min_px],
+                0.45 * lp.shadow_scale,
+            );
+            self.make_bind(&cb, None, &dummy)
+        });
+
         // Fond (gradient mode 5 OU image mode 6), dessine dans la passe de fond.
         // `_tex`/`_view` gardent l'image en vie pendant le pass.
         struct BgDraw {
@@ -830,6 +881,29 @@ impl Compositor {
                 ..Default::default()
             };
             self.make_bind(&cb, Some((wy, wuv)), &dummy)
+        });
+
+        // OMBRE de la camera. Pas dans les presets « bloc » (dual-frame,
+        // vertical-stack) : la camera y est collee a l'ecran comme une tuile,
+        // et une ombre entre les deux dessinerait une couture. Meme condition
+        // que macOS.
+        let webcam_shadow = (cfg.shadow
+            && g.shape_fade > 0.0
+            && webcam_draw.is_some()
+            && !matches!(
+                g.scene_preset.as_deref(),
+                Some("dual-frame") | Some("vertical-stack")
+            ))
+        .then(|| {
+            let cb = self.shadow_cb(
+                g.w_dst,
+                g.w_px,
+                g.w_radius,
+                crate::frame_geometry::WEBCAM_SHADOW_SPREAD_FRAC * g.frame_min_px,
+                [0.0, crate::frame_geometry::WEBCAM_SHADOW_OFFSET_FRAC * g.frame_min_px],
+                crate::frame_geometry::WEBCAM_SHADOW_OPACITY * g.shape_fade,
+            );
+            self.make_bind(&cb, None, &dummy)
         });
 
         // Annotations TEXTE (mode 11) -- placees relativement au rect ecran
@@ -1080,8 +1154,19 @@ impl Compositor {
                 occlusion_query_set: None,
             });
             rpass.set_pipeline(&self.pipeline);
+            // Chaque ombre est dessinee JUSTE AVANT le calque qu'elle porte :
+            // elle doit passer sous lui mais au-dessus du fond (et, pour la
+            // camera, au-dessus de l'ecran).
+            if let Some((_buf, bind)) = &screen_shadow {
+                rpass.set_bind_group(0, bind, &[]);
+                rpass.draw(0..4, 0..1);
+            }
             rpass.set_bind_group(0, &screen_bind, &[]);
             rpass.draw(0..4, 0..1);
+            if let Some((_buf, bind)) = &webcam_shadow {
+                rpass.set_bind_group(0, bind, &[]);
+                rpass.draw(0..4, 0..1);
+            }
             if let Some((_buf, bind)) = &webcam_draw {
                 rpass.set_bind_group(0, bind, &[]);
                 rpass.draw(0..4, 0..1);
