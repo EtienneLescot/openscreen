@@ -152,6 +152,25 @@ impl TextRasterizer {
         }
         buffer.shape_until_scroll(&mut font_system, false);
 
+        // CENTRAGE VERTICAL. L'overlay web pose `alignItems: center` sur le
+        // conteneur de l'annotation, et Windows reproduit ca avec
+        // `DWRITE_PARAGRAPH_ALIGNMENT_CENTER` (text_windows.rs:175-176). macOS
+        // ne le fait pas, et le portage Linux avait copie macOS : le texte
+        // collait en haut de sa boite. Les deux references natives divergent
+        // reellement ici ; c'est le web qui porte l'intention produit.
+        //
+        // La hauteur du bloc est prise sur la DERNIERE ligne posee plutot que
+        // sur un compte de lignes x line_height : cosmic-text peut replier une
+        // ligne logique en plusieurs runs, donc compter les runs surestimerait
+        // des que le texte deborde en largeur.
+        let text_h = buffer
+            .layout_runs()
+            .map(|run| run.line_top + run.line_height)
+            .fold(0.0f32, f32::max);
+        // `max(0)` : un texte plus haut que sa boite reste ancre en haut plutot
+        // que de sortir par le dessus, ou il serait entierement rogne.
+        let y_offset = (((h as f32) - text_h) * 0.5).max(0.0).round() as i32;
+
         // Atlas R8 : on n'ecrit que le canal alpha (couverture). Le tint par
         // `spec.color` se fait cote shader (mode 11).
         let mut atlas: Vec<u8> = vec![0u8; (w * h) as usize];
@@ -192,7 +211,7 @@ impl TextRasterizer {
                 // `placement.top` est la hauteur de l'encre AU-DESSUS de la
                 // ligne de base, donc la premiere rangee du bitmap est a
                 // `baseline - top`. Le signe etait inverse.
-                let ink_top = glyph_y - placement.top;
+                let ink_top = glyph_y - placement.top + y_offset;
                 let ink_left = glyph_x + placement.left;
                 for row in 0..img_h as i32 {
                     let dest_y = ink_top + row;
@@ -373,6 +392,27 @@ mod tests {
         assert!(
             gap[1] - gap[0] > 2,
             "les deux lignes se chevauchent : aucune separation verticale trouvee"
+        );
+    }
+
+    #[test]
+    fn one_short_line_is_centred_vertically_in_its_box() {
+        // L'overlay web pose `alignItems: center` et Windows fait pareil
+        // (DWRITE_PARAGRAPH_ALIGNMENT_CENTER) ; macOS non, et le portage avait
+        // copie macOS. Une ligne de 40px dans une boite de 200px doit laisser a
+        // peu pres autant de vide au-dessus qu'en dessous.
+        let raster = TextRasterizer::new().expect("rasterizer");
+        let atlas = raster.build_atlas(&spec("Hx", "center")).expect("atlas");
+        let (w, h) = (400usize, 200usize);
+        let rows = ink_rows(&atlas, w, 0, w);
+        assert!(!rows.is_empty(), "aucune encre");
+
+        let (top, bottom) = (rows[0], *rows.last().unwrap());
+        let above = top as i32;
+        let below = (h - 1 - bottom) as i32;
+        assert!(
+            (above - below).abs() <= 12,
+            "texte non centre verticalement : {above}px au-dessus, {below}px en dessous"
         );
     }
 
