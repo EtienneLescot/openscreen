@@ -32,6 +32,18 @@ pub struct RawCursor {
 }
 
 #[repr(C)]
+#[derive(Debug)]
+pub struct RawFrame {
+    pub data: *const u8,
+    pub size: usize,
+    pub stride: i32,
+    pub width: i32,
+    pub height: i32,
+    pub video_format: u32,
+    pub pts_ns: i64,
+}
+
+#[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct RawFormat {
     pub width: i32,
@@ -46,6 +58,7 @@ struct RawCallbacks {
     user: *mut c_void,
     on_format: extern "C" fn(*mut c_void, *const RawFormat),
     on_cursor: extern "C" fn(*mut c_void, *const RawCursor),
+    on_frame: extern "C" fn(*mut c_void, *const RawFrame),
     on_buffer_info: extern "C" fn(*mut c_void, u32, u32, i32, u32, *const c_char),
     on_state: extern "C" fn(*mut c_void, *const c_char, *const c_char),
 }
@@ -82,6 +95,7 @@ extern "C" {
     fn osc_pw_start(
         fd: i32,
         node_id: u32,
+        want_video: i32,
         callbacks: *const RawCallbacks,
         err: *mut c_char,
         err_len: usize,
@@ -108,6 +122,11 @@ pub enum StreamEvent {
         metas: String,
     },
     Cursor(CursorEvent),
+    /// A frame is waiting in the [`FrameMailbox`]. Carries no payload on
+    /// purpose: an 8 MB frame per channel message would allocate and copy far
+    /// more than the mailbox does, and a notification that arrives after its
+    /// frame was superseded is harmless — `take()` simply returns `None`.
+    FrameReady,
     State {
         state: String,
         error: Option<String>,
@@ -131,6 +150,108 @@ pub struct CursorBitmap {
     pub height: i32,
     pub stride: i32,
     pub pixels: Vec<u8>,
+}
+
+/// One captured frame, copied out of the PipeWire buffer.
+#[derive(Debug, Default)]
+pub struct Frame {
+    pub pixels: Vec<u8>,
+    pub stride: usize,
+    pub width: i32,
+    pub height: i32,
+    pub video_format: u32,
+    /// Compositor monotonic clock in nanoseconds, or -1 when the buffer carried
+    /// no SPA_META_Header.
+    pub pts_ns: i64,
+}
+
+/// A one-slot mailbox between the PipeWire thread and the encoder.
+///
+/// NEWEST WINS. When the encoder falls behind, an unconsumed frame is
+/// overwritten rather than queued. A queue would be the wrong shape twice over:
+/// it would grow without bound at 8 MB per 1080p frame, and every frame it held
+/// would add latency to a recording that is supposed to track the screen. A
+/// dropped frame costs one duplicated frame in the output; a queued one costs
+/// memory and drift forever.
+///
+/// The buffer of an overwritten or consumed frame is recycled, so after the
+/// first few frames this allocates nothing.
+#[derive(Debug, Default)]
+pub struct FrameMailbox {
+    inner: std::sync::Mutex<Mailbox>,
+    received: std::sync::atomic::AtomicU64,
+    dropped: std::sync::atomic::AtomicU64,
+}
+
+#[derive(Debug, Default)]
+struct Mailbox {
+    pending: Option<Frame>,
+    /// Returned by the consumer, reused by the next copy.
+    spare: Option<Vec<u8>>,
+}
+
+impl FrameMailbox {
+    /// Copies `pixels` into the slot, replacing whatever was there.
+    ///
+    /// Runs on the PipeWire thread and must stay short: the buffer it reads from
+    /// is re-queued to the compositor the moment the callback returns.
+    fn put(&self, source: &[u8], meta: &RawFrame) {
+        use std::sync::atomic::Ordering;
+
+        let Ok(mut inner) = self.inner.lock() else {
+            // A poisoned lock means a previous holder panicked. Dropping the
+            // frame is the only safe option, and it is already counted below.
+            self.dropped.fetch_add(1, Ordering::Relaxed);
+            return;
+        };
+
+        // Recycle, in order of preference: the buffer of the frame we are about
+        // to discard, then the one the consumer handed back, then a new one.
+        let mut pixels = match inner.pending.take() {
+            Some(stale) => {
+                self.dropped.fetch_add(1, Ordering::Relaxed);
+                stale.pixels
+            }
+            None => inner.spare.take().unwrap_or_default(),
+        };
+        pixels.clear();
+        pixels.extend_from_slice(source);
+
+        inner.pending = Some(Frame {
+            pixels,
+            stride: meta.stride as usize,
+            width: meta.width,
+            height: meta.height,
+            video_format: meta.video_format,
+            pts_ns: meta.pts_ns,
+        });
+        self.received.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Takes the pending frame, if any. Returns `None` when the consumer was
+    /// woken by a notification whose frame has already been superseded.
+    pub fn take(&self) -> Option<Frame> {
+        self.inner.lock().ok()?.pending.take()
+    }
+
+    /// Hands a consumed frame's allocation back for reuse.
+    pub fn recycle(&self, mut pixels: Vec<u8>) {
+        let Ok(mut inner) = self.inner.lock() else {
+            return;
+        };
+        pixels.clear();
+        inner.spare = Some(pixels);
+    }
+
+    /// Frames the compositor delivered.
+    pub fn received(&self) -> u64 {
+        self.received.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Frames overwritten before the encoder could take them.
+    pub fn dropped(&self) -> u64 {
+        self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+    }
 }
 
 const ERR_LEN: usize = 256;
@@ -180,40 +301,65 @@ pub fn constants() -> Constants {
     out
 }
 
+/// What the C side carries as its opaque `user` pointer.
+struct CallbackState {
+    sink: Sink,
+    /// `None` in cursor-only mode, in which case the C side is not asked for
+    /// frames either and `on_frame` can never fire.
+    frames: Option<std::sync::Arc<FrameMailbox>>,
+}
+
 /// A running PipeWire stream. Dropping it stops and joins the PipeWire thread.
 pub struct Session {
     raw: *mut RawSession,
     // Kept alive for exactly as long as `raw`: the C side holds a pointer to it
     // and hands it back to every callback. Dropped after osc_pw_stop has joined
-    // the loop thread, so no callback can be in flight at that point. The outer
-    // Box exists to give the fat `dyn Fn` pointer a stable thin address.
-    _sink: Box<Sink>,
+    // the loop thread, so no callback can be in flight at that point.
+    _state: Box<CallbackState>,
 }
 
 impl Session {
     /// Consumes `fd` — libpipewire closes it, on the success and failure paths alike.
-    pub fn start(fd: OwnedFd, node_id: u32, sink: Sink) -> Result<Self, String> {
-        let boxed: Box<Sink> = Box::new(sink);
-        let user = &*boxed as *const Sink as *mut c_void;
+    ///
+    /// `frames` decides the mode. `Some` maps the buffers and copies each frame
+    /// into the mailbox, announcing it with [`StreamEvent::FrameReady`]; `None`
+    /// never maps a pixel, which is what keeps a cursor-only session cheap.
+    pub fn start(
+        fd: OwnedFd,
+        node_id: u32,
+        sink: Sink,
+        frames: Option<std::sync::Arc<FrameMailbox>>,
+    ) -> Result<Self, String> {
+        let want_video = i32::from(frames.is_some());
+        let state = Box::new(CallbackState { sink, frames });
+        let user = &*state as *const CallbackState as *mut c_void;
         let callbacks = RawCallbacks {
             user,
             on_format,
             on_cursor,
+            on_frame,
             on_buffer_info,
             on_state,
         };
 
         let mut err = [0 as c_char; ERR_LEN];
-        // SAFETY: `callbacks` and `err` outlive the call; `boxed` outlives the
+        // SAFETY: `callbacks` and `err` outlive the call; `state` outlives the
         // returned session, which is what keeps `user` valid for the callbacks.
         let raw = unsafe {
-            osc_pw_start(fd.into_raw_fd(), node_id, &callbacks, err.as_mut_ptr(), ERR_LEN)
+            osc_pw_start(
+                fd.into_raw_fd(),
+                node_id,
+                want_video,
+                &callbacks,
+                err.as_mut_ptr(),
+                ERR_LEN,
+            )
         };
         if raw.is_null() {
             return Err(take_error(&err));
         }
 
-        Ok(Self { raw, _sink: boxed })
+        Ok(Self { raw, _state: state })
     }
 }
 
@@ -229,18 +375,25 @@ impl Drop for Session {
 /// `catch_unwind` is not defensive programming here: unwinding across an
 /// `extern "C"` boundary is undefined behaviour, and these functions run on
 /// PipeWire's thread where a panic would otherwise abort mid-callback.
-fn with_sink<F>(user: *mut c_void, body: F)
+fn with_state<F>(user: *mut c_void, body: F)
 where
-    F: FnOnce(&Sink),
+    F: FnOnce(&CallbackState),
 {
     if user.is_null() {
         return;
     }
-    // SAFETY: `user` is the pointer we handed to osc_pw_start, pointing at a
-    // sink owned by the live Session. Callbacks cannot outlive it: osc_pw_stop
-    // joins the loop thread before the Session drops the box.
-    let sink = unsafe { &*(user as *const Sink) };
-    let _ = catch_unwind(AssertUnwindSafe(|| body(sink)));
+    // SAFETY: `user` is the pointer we handed to osc_pw_start, pointing at state
+    // owned by the live Session. Callbacks cannot outlive it: osc_pw_stop joins
+    // the loop thread before the Session drops the box.
+    let state = unsafe { &*(user as *const CallbackState) };
+    let _ = catch_unwind(AssertUnwindSafe(|| body(state)));
+}
+
+fn with_sink<F>(user: *mut c_void, body: F)
+where
+    F: FnOnce(&Sink),
+{
+    with_state(user, |state| body(&state.sink));
 }
 
 extern "C" fn on_format(user: *mut c_void, format: *const RawFormat) {
@@ -251,6 +404,37 @@ extern "C" fn on_format(user: *mut c_void, format: *const RawFormat) {
         // SAFETY: non-NULL for the duration of the callback, by contract.
         let format = unsafe { &*format };
         sink(StreamEvent::Format(*format));
+    });
+}
+
+extern "C" fn on_frame(user: *mut c_void, frame: *const RawFrame) {
+    with_state(user, |state| {
+        let Some(mailbox) = state.frames.as_ref() else {
+            return;
+        };
+        if frame.is_null() {
+            return;
+        }
+        // SAFETY: non-NULL for the duration of the callback, by contract.
+        let frame = unsafe { &*frame };
+        if frame.data.is_null() || frame.stride <= 0 || frame.height <= 0 {
+            return;
+        }
+        // Copy only the rows, not the whole mapping. `size` can include trailing
+        // slack the compositor allocated, and re-checking the product here means
+        // the slice below cannot outrun the region the C side validated.
+        let Some(rows) = (frame.stride as usize).checked_mul(frame.height as usize) else {
+            return;
+        };
+        if rows > frame.size {
+            return;
+        }
+        // SAFETY: the shim clamped `size` against the mapping's `maxsize` before
+        // the callback, `rows <= size` was just checked, and the mapping stays
+        // live until this returns.
+        let pixels = unsafe { std::slice::from_raw_parts(frame.data, rows) };
+        mailbox.put(pixels, frame);
+        (state.sink)(StreamEvent::FrameReady);
     });
 }
 
@@ -430,6 +614,9 @@ mod tests {
             Box::new(move |event| {
                 let _ = sender.send(event);
             }),
+            // Cursor-only: this test is about negotiation reaching `streaming`
+            // and about which metadata survives, neither of which needs pixels.
+            None,
         )
         .expect("stream must connect");
 
@@ -476,6 +663,11 @@ mod tests {
                 Ok(StreamEvent::Cursor(cursor)) => {
                     println!("[{:>5}ms] cursor {cursor:?}", stamp(std::time::Instant::now()));
                 }
+                // Unreachable: this session was started with no mailbox, so the
+                // C side was never asked for frames. Matched rather than
+                // wildcarded so that adding a variant is a compile error here
+                // too, which is how this test stays a full protocol trace.
+                Ok(StreamEvent::FrameReady) => unreachable!("cursor-only session yielded a frame"),
                 Err(_) => {}
             }
         }

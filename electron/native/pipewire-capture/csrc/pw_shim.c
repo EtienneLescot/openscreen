@@ -131,6 +131,7 @@ struct osc_pw_session {
     struct osc_pw_callbacks callbacks;
     struct spa_video_info_raw format;
     int buffer_info_reports;
+    int want_video;
 };
 
 static void osc_set_error(char *err, size_t err_len, const char *format, ...)
@@ -321,18 +322,26 @@ static void osc_on_param_changed(void *userdata, uint32_t id, const struct spa_p
     }
 
     /*
-     * No `size`/`stride` constraint is published: Stage 1 does not map the
-     * buffers (see the missing PW_STREAM_FLAG_MAP_BUFFERS in osc_pw_start), so
-     * the compositor's own choice is fine. Every dataType is advertised so that
-     * the value reported by on_buffer_info reflects what the compositor would
-     * prefer, not what we forced it into.
+     * No `size`/`stride` constraint is published: the compositor's own choice is
+     * fine, and osc_read_frame validates whatever comes back.
+     *
+     * The dataType set differs by mode, and the difference is load-bearing.
+     * Cursor-only advertises everything, so that on_buffer_info reports what the
+     * compositor would PREFER rather than what we forced it into. Video mode
+     * advertises shared memory only: pw_stream does not map DmaBuf even with
+     * PW_STREAM_FLAG_MAP_BUFFERS, so accepting one would leave `datas[0].data`
+     * NULL and produce a recording of nothing. Importing DmaBuf properly is its
+     * own piece of work; until then, not offering it is what makes the
+     * compositor fall back to memfd instead.
      */
     params[0] = spa_pod_builder_add_object(
         &builder, SPA_TYPE_OBJECT_ParamBuffers, SPA_PARAM_Buffers, SPA_PARAM_BUFFERS_buffers,
         SPA_POD_CHOICE_RANGE_Int(4, 2, 16), SPA_PARAM_BUFFERS_blocks, SPA_POD_Int(1),
         SPA_PARAM_BUFFERS_dataType,
-        SPA_POD_CHOICE_FLAGS_Int((1 << SPA_DATA_MemPtr) | (1 << SPA_DATA_MemFd) |
-                                 (1 << SPA_DATA_DmaBuf)));
+        SPA_POD_CHOICE_FLAGS_Int(session->want_video
+                                     ? ((1 << SPA_DATA_MemPtr) | (1 << SPA_DATA_MemFd))
+                                     : ((1 << SPA_DATA_MemPtr) | (1 << SPA_DATA_MemFd) |
+                                        (1 << SPA_DATA_DmaBuf))));
 
     params[1] = spa_pod_builder_add_object(
         &builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta, SPA_PARAM_META_type,
@@ -452,6 +461,77 @@ static int osc_read_cursor(const struct spa_buffer *buffer, struct osc_pw_cursor
     return 1;
 }
 
+/*
+ * Extracts the pixels of one buffer. Returns 1 when `out` describes a frame, 0
+ * when this buffer carries none.
+ *
+ * The offset/size clamping against `maxsize` is the standard PipeWire consumer
+ * idiom and is not paranoia: `chunk` lives in memory the PRODUCER writes, so its
+ * fields are untrusted input from another process. A compositor bug — or a
+ * malicious one — that reports a size past the end of the mapping would
+ * otherwise be a read straight off the end of the shared memory.
+ */
+static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffer *buffer,
+                          struct osc_pw_frame *out)
+{
+    struct spa_data *data;
+    struct spa_meta_header *header;
+    uint32_t offset;
+    uint32_t size;
+    int32_t stride;
+    int32_t height;
+
+    memset(out, 0, sizeof(*out));
+    out->pts_ns = -1;
+
+    if (buffer->n_datas < 1) {
+        return 0;
+    }
+    data = &buffer->datas[0];
+    /*
+     * NULL means the buffer was never mapped: either this is a cursor-only
+     * session (no PW_STREAM_FLAG_MAP_BUFFERS) or the compositor handed us a
+     * DmaBuf, which pw_stream does not map even with the flag. Neither is an
+     * error here — the format negotiation excludes DmaBuf when want_video is
+     * set, so in practice this is the cursor-only case.
+     */
+    if (data->data == NULL || data->chunk == NULL) {
+        return 0;
+    }
+    /* A zero-sized chunk is how a compositor ships a cursor update with no new
+     * frame attached. Not an error, just not a frame. */
+    if (data->chunk->size == 0) {
+        return 0;
+    }
+
+    offset = SPA_MIN(data->chunk->offset, data->maxsize);
+    size = SPA_MIN(data->chunk->size, data->maxsize - offset);
+
+    height = (int32_t)session->format.size.height;
+    stride = data->chunk->stride;
+    if (stride <= 0 || height <= 0) {
+        return 0;
+    }
+    /* One short row is one row of garbage in the recording; refuse the whole
+     * frame instead, and let the caller count it as dropped. */
+    if ((uint64_t)stride * (uint64_t)height > (uint64_t)size) {
+        return 0;
+    }
+
+    out->data = SPA_PTROFF(data->data, offset, const uint8_t);
+    out->size = size;
+    out->stride = stride;
+    out->width = (int32_t)session->format.size.width;
+    out->height = height;
+    out->video_format = session->format.format;
+
+    header = spa_buffer_find_meta_data(buffer, SPA_META_Header, sizeof(*header));
+    if (header != NULL) {
+        out->pts_ns = header->pts;
+    }
+    return 1;
+}
+
 static const char *osc_meta_type_name(uint32_t type)
 {
     switch (type) {
@@ -527,6 +607,20 @@ static void osc_inspect_buffer(struct osc_pw_session *session, const struct spa_
     if (osc_read_cursor(buffer, &cursor, &meta_size) && session->callbacks.on_cursor != NULL) {
         session->callbacks.on_cursor(session->callbacks.user, &cursor);
     }
+
+    /*
+     * Cursor first, then pixels. The order matters for the frame the cursor
+     * shape changes on: the consumer stamps its cursor track from the latest
+     * sample, and reading the cursor after the frame would attribute the new
+     * position to the NEXT frame instead of this one.
+     */
+    if (session->want_video && session->callbacks.on_frame != NULL) {
+        struct osc_pw_frame frame;
+
+        if (osc_read_frame(session, buffer, &frame)) {
+            session->callbacks.on_frame(session->callbacks.user, &frame);
+        }
+    }
 }
 
 static void osc_on_process(void *userdata)
@@ -546,8 +640,14 @@ static void osc_on_process(void *userdata)
      * the cursor never moving.
      *
      * Reading metadata is a handful of struct field loads, so doing it per
-     * buffer costs nothing, and nothing here touches the pixel data — there is
-     * no reason to skip a buffer on the grounds that its frame is old.
+     * buffer costs nothing.
+     *
+     * Since Stage 2 this loop DOES touch pixels, and the same reasoning still
+     * holds — but for a different reason. The frame callback copies into a
+     * single-slot mailbox on the Rust side where a newer frame overwrites an
+     * unconsumed older one, so a backlog is dropped there, at the point that
+     * knows whether the encoder is keeping up. Dropping here instead would also
+     * throw away the cursor metadata riding on the same buffers.
      */
     while ((b = api.stream_dequeue_buffer(session->stream)) != NULL) {
         osc_inspect_buffer(session, b->buffer);
@@ -562,7 +662,7 @@ static const struct pw_stream_events osc_stream_events = {
     .process = osc_on_process,
 };
 
-struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id,
+struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
                                     const struct osc_pw_callbacks *callbacks, char *err,
                                     size_t err_len)
 {
@@ -585,6 +685,7 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id,
         return NULL;
     }
     session->callbacks = *callbacks;
+    session->want_video = want_video;
 
     session->loop = api.thread_loop_new("openscreen-pipewire", NULL);
     if (session->loop == NULL) {
@@ -634,13 +735,13 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id,
     }
 
     /*
-     * Flags, and the two that are absent on purpose:
-     *
-     * No PW_STREAM_FLAG_MAP_BUFFERS: Stage 1 reads metadata only, and mapping a
-     * full-screen framebuffer on every buffer would be pure waste. Stage 2 adds
-     * it when it starts consuming pixels. Metadata is unaffected — pw_stream maps
-     * the buffer skeleton (and therefore every spa_meta) regardless of this flag;
+     * Flags. PW_STREAM_FLAG_MAP_BUFFERS only when the caller wants pixels:
+     * mapping a full-screen framebuffer on every buffer is pure waste for a
+     * cursor-only session. Metadata is unaffected either way — pw_stream maps the
+     * buffer skeleton (and therefore every spa_meta) regardless of this flag;
      * MAP_BUFFERS only governs whether `datas[i].data` is populated.
+     *
+     * And one flag that is absent on purpose:
      *
      * No PW_STREAM_FLAG_DONT_RECONNECT, which this code used to set. That flag
      * killed the first real GNOME run, and the chain is worth writing down
@@ -667,7 +768,10 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id,
      * which connects by numeric id and reaches `streaming`).
      */
     result = api.stream_connect(session->stream, PW_DIRECTION_INPUT, node_id,
-                                PW_STREAM_FLAG_AUTOCONNECT, params, 1);
+                                want_video ? (PW_STREAM_FLAG_AUTOCONNECT |
+                                              PW_STREAM_FLAG_MAP_BUFFERS)
+                                           : PW_STREAM_FLAG_AUTOCONNECT,
+                                params, 1);
     if (result < 0) {
         osc_set_error(err, err_len, "pw_stream_connect failed: %s", spa_strerror(result));
         goto fail;
