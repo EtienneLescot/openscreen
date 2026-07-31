@@ -1,13 +1,16 @@
 import { useEffect, useMemo, useRef, useSyncExternalStore } from "react";
 import { useScopedT } from "@/contexts/I18nContext";
 import { noteUiProbeClipSwitch } from "@/lib/ai-edition/perf/uiFrameProbe";
+import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { resolveNativePosition } from "@/lib/ai-edition/timeline/timelineMap";
 import {
+	pushAllNativeParams,
 	setActiveClip,
 	setCurrentNativeViewId,
 	setNativePlaying,
 	setNativeScene,
+	subscribeNativeCompositor,
 	useIsCpuCompositor,
 	useNativeCompositorView,
 } from "@/native";
@@ -141,6 +144,31 @@ export function NativeCompositorOverlay() {
 		// an "unnecessary" dependency, but removing it would mean a probed webcam size
 		// arriving after mount never gets pushed to native).
 	}, [viewId, document, sources, _webcamSizeRevision]);
+
+	// SYNCHRO COMPLETE DES PARAMS, en un seul endroit.
+	//
+	// Avant, chaque groupe de params n'etait pousse que par l'effet de montage du
+	// panneau qui le possede (VideoEffectsPane, LayoutPane, CursorPane). Or
+	// l'inspecteur n'affiche qu'UN panneau a la fois, donc au chargement les
+	// params curseur et layout n'avaient jamais ete pousses et l'addon restait
+	// sur ses defauts compiles : un projet en taille de curseur 3.0 s'affichait a
+	// 1.0 jusqu'a ce qu'on ouvre le panneau curseur, ou tout se remettait en
+	// place -- ce qui donnait l'illusion que le panneau « activait » le curseur.
+	//
+	// Ici, l'overlay possede deja la vue et pousse deja la scene ; c'est le seul
+	// point qui existe quel que soit le panneau affiche.
+	//
+	// Pas de garde sur `viewId` : `setNativeParam` memoise dans `lastParams` et
+	// `setCurrentNativeViewId` le rejoue a l'activation, donc l'ordre de montage
+	// n'a pas d'importance. Et ca ne peut pas lutter contre un drag de slider :
+	// `setLive` passe par `setDocument`, donc `document` a deja la NOUVELLE
+	// valeur a chaque tick -- la meme que celle que le handler vient de pousser.
+	const settings = useMemo(() => getEditorSettings(document), [document]);
+	useEffect(() => {
+		const push = () => pushAllNativeParams(settings);
+		push();
+		return subscribeNativeCompositor(push);
+	}, [settings]);
 
 	const activeClipId = activeClip?.id ?? null;
 	const activeClipIndex = activePosition?.clipIndex ?? null;

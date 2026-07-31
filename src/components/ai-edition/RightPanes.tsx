@@ -59,7 +59,7 @@ import { supportsCursorClickEffects } from "@/lib/cursor/cursorCapabilities";
 import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { buildGradientFromEditor } from "@/lib/gradientBuilder";
 import { resolveImageWallpaperUrl, WALLPAPER_PATHS, WALLPAPER_THUMB_PATHS } from "@/lib/wallpaper";
-import { isNativeCompositorActive, setNativeParam, subscribeNativeCompositor } from "@/native";
+import { isNativeCompositorActive, setNativeParam } from "@/native";
 import styles from "./NewEditorShell.module.css";
 
 interface PaneProps {
@@ -1269,31 +1269,10 @@ export function VideoEffectsPane() {
 	// valeur px de l'UI par ce même rayon de base fait que le coin natif ≈ les px affichés
 	// (au lieu de plafonner à ~24px comme avec /64).
 	const NATIVE_SCREEN_BASE_RADIUS_PX = 24;
-	useEffect(() => {
-		const syncToNative = () => {
-			// pas de garde `isNativeCompositorActive` : setNativeParam mémorise les valeurs
-			// même sans vue active, et le store les rejoue quand une vue s'active (fix du
-			// démarrage sur les défauts, indépendant de l'ordre de montage).
-			setNativeParam("backgroundBlur", settings.showBlur);
-			setNativeParam("motionBlur", settings.motionBlurAmount);
-			setNativeParam("shadow", settings.shadowIntensity);
-			setNativeParam("roundness", settings.borderRadius / NATIVE_SCREEN_BASE_RADIUS_PX);
-			setNativeParam("padding", settings.padding / 100);
-			const bg = settings.wallpaper;
-			if (bg.startsWith("#")) {
-				setNativeParam("backgroundColor", bg);
-			}
-		};
-		syncToNative();
-		return subscribeNativeCompositor(syncToNative);
-	}, [
-		settings.showBlur,
-		settings.motionBlurAmount,
-		settings.shadowIntensity,
-		settings.borderRadius,
-		settings.padding,
-		settings.wallpaper,
-	]);
+	// La synchro initiale de ces params vit desormais dans NativeCompositorOverlay
+	// (`pushAllNativeParams`) : l'inspecteur n'affiche qu'un panneau a la fois, donc
+	// un effet de montage ici ne poussait rien tant que ce panneau precis n'avait pas
+	// ete ouvert. Les handlers par controle ci-dessous poussent toujours leurs diffs.
 
 	return (
 		<Pane title={ts("effects.title")} icon={<Sliders size={14} />} helpText={ts("effects.help")}>
@@ -1419,17 +1398,7 @@ export function LayoutPane() {
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	const document = useProjectStore((s) => s.document);
 
-	// Push webcam-layout settings into the native compositor (initial values + on view
-	// activation); the per-control handlers below also push their diffs live.
-	useEffect(() => {
-		const syncToNative = () => {
-			setNativeParam("webcamSize", settings.webcamSizePreset / NATIVE_WEBCAM_BASE_PCT);
-			setNativeParam("webcamMirror", settings.webcamMirrored);
-			setNativeParam("webcamShape", settings.webcamMaskShape);
-		};
-		syncToNative();
-		return subscribeNativeCompositor(syncToNative);
-	}, [settings.webcamSizePreset, settings.webcamMirrored, settings.webcamMaskShape]);
+	// Synchro initiale : cf. NativeCompositorOverlay (`pushAllNativeParams`).
 	// the mask shape picker only makes sense for Picture-in-Picture.
 	// Dual-frame (side-by-side) and vertical-stack (top/bottom) weld the camera
 	// to the screen as one block — the mask is rectangular and sized off the
@@ -1496,7 +1465,15 @@ export function LayoutPane() {
 					<div
 						style={{
 							display: "grid",
-							gridTemplateColumns: "repeat(4, 1fr)",
+							// `minmax(0, 1fr)` et non `1fr`. `1fr` vaut `minmax(auto, 1fr)`,
+							// donc la taille MINIMALE de la piste est `auto`, ce qui resout
+							// pour chaque bouton a son minimum de contenu -- et « Rounded »
+							// est un mot insecable. Quatre boutons a 64,83 px plus trois
+							// gouttieres de 8 px reclamaient 283,3 px la ou le panneau n'en
+							// offre que 234 : les pistes refusaient de retrecir et la grille
+							// debordait, en coupant le dernier bouton. `minmax(0, ...)`
+							// autorise la piste a passer sous son contenu.
+							gridTemplateColumns: "repeat(4, minmax(0, 1fr))",
 							gap: 8,
 							padding: "0 var(--sp-4) 12px",
 						}}
@@ -1514,6 +1491,10 @@ export function LayoutPane() {
 										padding: 8,
 										display: "flex",
 										alignItems: "center",
+										// Sans `minWidth: 0` le bouton garde son minimum de
+										// contenu et rouvre le debordement que `minmax(0, 1fr)`
+										// vient de fermer sur la piste.
+										minWidth: 0,
 									}}
 									disabled={layoutControlsDisabled}
 									onClick={() => {
@@ -1588,23 +1569,7 @@ export function CursorPane() {
 
 	// Push cursor settings into the native compositor (initial + on view activation); the
 	// handlers below push diffs live. Sizes are sent as direct scales (1 = fixture default).
-	useEffect(() => {
-		const syncToNative = () => {
-			setNativeParam("cursorShow", settings.cursorShow);
-			setNativeParam("cursorSize", settings.cursor.size);
-			setNativeParam("cursorClickBounce", settings.cursor.clickBounce);
-			setNativeParam("cursorSmoothing", settings.cursor.smoothing);
-			setNativeParam("cursorMotionBlur", settings.cursor.motionBlur);
-		};
-		syncToNative();
-		return subscribeNativeCompositor(syncToNative);
-	}, [
-		settings.cursorShow,
-		settings.cursor.size,
-		settings.cursor.clickBounce,
-		settings.cursor.smoothing,
-		settings.cursor.motionBlur,
-	]);
+	// Synchro initiale : cf. NativeCompositorOverlay (`pushAllNativeParams`).
 
 	// Built-in "Default" plus each bundled theme. Thumbnails use the theme's
 	// arrow asset; the persisted value is the theme id. Same shape as the
