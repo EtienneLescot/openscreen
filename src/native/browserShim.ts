@@ -140,6 +140,11 @@ function createShimElectronAPI() {
 			return Promise.resolve(shimRecordingPrefs);
 		},
 		onRecordingPrefsChanged: () => () => undefined,
+		// ponytail: the chat panel subscribes to this on mount, unconditionally.
+		// Without a stub the whole editor tree throws before it paints, so every
+		// browser-shim test fails at boot, not just the chat ones. Nothing streams
+		// in shim mode; the unsubscribe is what the effect's cleanup returns.
+		onAiEditionChatEvent: () => () => undefined,
 		invokeNativeBridge: (req: { domain: string; action: string; payload?: unknown }) => {
 			console.info("[browser-shim] invokeNativeBridge", req.domain, req.action, req.payload);
 			return Promise.resolve({
