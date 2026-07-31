@@ -5,12 +5,12 @@
 //! `data:image/png` string, keyed by the SHA-256 of the PNG bytes so the same
 //! shape is only ever serialised once.
 //!
-//! UNVERIFIED: Wayland cursor buffers are conventionally PREMULTIPLIED alpha,
-//! and PNG expects straight alpha. No sprite has been observed on real hardware
-//! yet (Stage 1's `debug` instrumentation exists to find out whether GNOME even
-//! sends one), so the channels are copied through unchanged rather than
-//! un-premultiplied on a guess. If sprites come back with dark fringes on their
-//! antialiased edges, that is the bug, and the fix belongs here.
+//! VERIFIED PREMULTIPLIED. Wayland cursor buffers carry premultiplied alpha and
+//! PNG expects straight alpha, so the channels have to be divided back out. This
+//! was a guess in Stage 1 and is now a measurement: a captured GNOME sprite had
+//! 126 semi-transparent pixels and not one where any colour channel exceeded its
+//! own alpha, which is only true of premultiplied data. Copying the channels
+//! through unchanged darkened every antialiased edge.
 
 use base64::Engine;
 use sha2::{Digest, Sha256};
@@ -51,6 +51,23 @@ fn channel_order(constants: &Constants, format: u32) -> Option<[usize; 4]> {
         .iter()
         .find(|(id, _)| *id == format)
         .map(|(_, order)| *order)
+}
+
+/// Divides a premultiplied colour channel back out by its alpha.
+///
+/// `+ alpha / 2` rounds to nearest instead of truncating, which matters at the
+/// low alphas that make up an antialiased edge: at a=8 the truncating form loses
+/// up to 6% of the recovered channel. The `min` is not defensive noise — a
+/// producer that sends c > a (or a colour-keyed sprite) would otherwise overflow
+/// past 255 and wrap when cast back to u8.
+fn unpremultiply(channel: u8, alpha: u8) -> u8 {
+    if alpha == 0 {
+        // Fully transparent: the colour carries no information, and every value
+        // is equally "correct". Zero keeps identical sprites hashing alike.
+        return 0;
+    }
+    let alpha = u16::from(alpha);
+    (((u16::from(channel) * 255 + alpha / 2) / alpha).min(255)) as u8
 }
 
 /// True when the format has no alpha channel, so the 4th byte is padding and
@@ -103,10 +120,20 @@ pub fn encode(constants: &Constants, bitmap: &CursorBitmap) -> Result<EncodedCur
     for row in 0..height as usize {
         let line = &bitmap.pixels[row * stride..row * stride + row_bytes];
         for pixel in line.chunks_exact(4) {
-            rgba.push(pixel[order[0]]);
-            rgba.push(pixel[order[1]]);
-            rgba.push(pixel[order[2]]);
-            rgba.push(if opaque { 0xff } else { pixel[order[3]] });
+            // An opaque format's 4th byte is padding, so there is nothing to
+            // divide by and the channels are already straight.
+            if opaque {
+                rgba.push(pixel[order[0]]);
+                rgba.push(pixel[order[1]]);
+                rgba.push(pixel[order[2]]);
+                rgba.push(0xff);
+                continue;
+            }
+            let alpha = pixel[order[3]];
+            rgba.push(unpremultiply(pixel[order[0]], alpha));
+            rgba.push(unpremultiply(pixel[order[1]], alpha));
+            rgba.push(unpremultiply(pixel[order[2]], alpha));
+            rgba.push(alpha);
         }
     }
 
@@ -204,22 +231,64 @@ mod tests {
     #[test]
     fn bgra_channels_are_reordered_to_rgba() {
         let c = constants();
-        // One pixel: B=1, G=2, R=3, A=4.
-        let encoded = encode(&c, &bitmap(c.video_format_bgra, 1, 1, 4, vec![1, 2, 3, 4]))
+        // Opaque on purpose: un-premultiplying by a=255 is the identity, so this
+        // test stays about channel ORDER and nothing else.
+        let encoded = encode(&c, &bitmap(c.video_format_bgra, 1, 1, 4, vec![1, 2, 3, 0xff]))
             .expect("encode");
         let (info, pixels) = decode(&encoded.image_data_url);
         assert_eq!((info.width, info.height), (1, 1));
-        assert_eq!(&pixels[..4], &[3, 2, 1, 4]);
+        assert_eq!(&pixels[..4], &[3, 2, 1, 0xff]);
     }
 
     #[test]
     fn argb_channels_are_reordered_to_rgba() {
         let c = constants();
-        // One pixel: A=9, R=1, G=2, B=3.
-        let encoded = encode(&c, &bitmap(c.video_format_argb, 1, 1, 4, vec![9, 1, 2, 3]))
+        // One pixel: A=255, R=1, G=2, B=3.
+        let encoded = encode(&c, &bitmap(c.video_format_argb, 1, 1, 4, vec![0xff, 1, 2, 3]))
             .expect("encode");
         let (_, pixels) = decode(&encoded.image_data_url);
-        assert_eq!(&pixels[..4], &[1, 2, 3, 9]);
+        assert_eq!(&pixels[..4], &[1, 2, 3, 0xff]);
+    }
+
+    #[test]
+    fn premultiplied_channels_are_divided_back_out() {
+        let c = constants();
+        // A half-transparent white pixel arrives premultiplied as 128/128/128
+        // at a=128. Straight alpha puts the channels back at ~255.
+        let encoded = encode(&c, &bitmap(c.video_format_bgra, 1, 1, 4, vec![128, 128, 128, 128]))
+            .expect("encode");
+        let (_, pixels) = decode(&encoded.image_data_url);
+        assert_eq!(&pixels[..4], &[255, 255, 255, 128]);
+    }
+
+    #[test]
+    fn fully_transparent_pixels_keep_no_colour() {
+        let c = constants();
+        // a=0 leaves the colour undefined; zeroing it is what makes two visually
+        // identical sprites hash to the same asset id.
+        let encoded = encode(&c, &bitmap(c.video_format_bgra, 1, 1, 4, vec![9, 9, 9, 0]))
+            .expect("encode");
+        let (_, pixels) = decode(&encoded.image_data_url);
+        assert_eq!(&pixels[..4], &[0, 0, 0, 0]);
+    }
+
+    #[test]
+    fn unpremultiply_cannot_exceed_opaque() {
+        // A producer that sends c > a would wrap past 255 without the clamp.
+        assert_eq!(unpremultiply(200, 100), 255);
+        assert_eq!(unpremultiply(0, 0), 0);
+        assert_eq!(unpremultiply(37, 255), 37);
+    }
+
+    #[test]
+    fn opaque_formats_are_not_divided() {
+        let c = constants();
+        // BGRx: the 4th byte is padding, not alpha. Dividing by it — or by the
+        // 0xff we substitute — must leave the colours untouched.
+        let encoded = encode(&c, &bitmap(c.video_format_bgrx, 1, 1, 4, vec![10, 20, 30, 0]))
+            .expect("encode");
+        let (_, pixels) = decode(&encoded.image_data_url);
+        assert_eq!(&pixels[..4], &[30, 20, 10, 0xff]);
     }
 
     #[test]
@@ -234,12 +303,15 @@ mod tests {
     #[test]
     fn row_padding_is_skipped() {
         let c = constants();
-        // 1px wide, 2 rows, stride 8: bytes 4..8 and 12..16 are padding.
-        let pixels = vec![1, 2, 3, 4, 0xaa, 0xaa, 0xaa, 0xaa, 5, 6, 7, 8, 0xbb, 0xbb, 0xbb, 0xbb];
+        // 1px wide, 2 rows, stride 8: bytes 4..8 and 12..16 are padding. Both
+        // pixels are opaque so the assertion is about stride, not alpha.
+        let pixels = vec![
+            1, 2, 3, 0xff, 0xaa, 0xaa, 0xaa, 0xaa, 5, 6, 7, 0xff, 0xbb, 0xbb, 0xbb, 0xbb,
+        ];
         let encoded =
             encode(&c, &bitmap(c.video_format_bgra, 1, 2, 8, pixels)).expect("encode");
         let (_, decoded) = decode(&encoded.image_data_url);
-        assert_eq!(&decoded[..8], &[3, 2, 1, 4, 7, 6, 5, 8]);
+        assert_eq!(&decoded[..8], &[3, 2, 1, 0xff, 7, 6, 5, 0xff]);
     }
 
     #[test]
