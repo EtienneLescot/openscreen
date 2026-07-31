@@ -95,7 +95,11 @@ export function migrateProjectDataToAxcutDocument(
 				: null;
 
 	const webcamVideoPath = input.media?.webcamVideoPath;
-	const webcamOffsetMs = input.media?.webcamOffsetMs ?? 0;
+	// Rounded for the same reason as the auto-link in `projectStore.addAsset`:
+	// `cameraTrackSchema.offsetMs` is an integer, and the native capture paths
+	// measure this with `performance.now()`. A legacy project carrying the raw
+	// value would fail to parse — losing the whole document, not just its camera.
+	const webcamOffsetMs = Math.round(input.media?.webcamOffsetMs ?? 0);
 
 	const assets = screenPath
 		? [

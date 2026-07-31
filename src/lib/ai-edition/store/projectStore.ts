@@ -154,7 +154,19 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 					const linked = {
 						sourcePath: camera.webcamVideoPath,
 						startMs: 0,
-						offsetMs: camera.offsetMs ?? 0,
+						// ROUNDED, because `cameraTrackSchema` requires an integer and
+						// the native capture paths measure this offset with
+						// `performance.now()`, whose resolution is 100 µs — so roughly
+						// nine recordings in ten produced something like -192.8 here.
+						// `parseDocument` below then threw, the catch treated it as a
+						// lookup failure, and the camera was dropped from a recording
+						// that had one: the editor showed the screen video in the
+						// camera's place. Sub-millisecond precision is meaningless for
+						// a frame offset (a 60 fps frame is 16.7 ms), so rounding costs
+						// nothing. Recordings already on disk carry the fractional
+						// value in their session manifest, which is why this rounds on
+						// the way IN rather than only at the recorder.
+						offsetMs: Math.round(camera.offsetMs ?? 0),
 						visible: true,
 					};
 					const next: AxcutDocument = {
@@ -170,6 +182,10 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 				// the normal case for a plain imported video. Nothing to surface.
 			} catch (err) {
 				// An actual lookup failure (not "no camera found") — worth surfacing.
+				// Logged as well as toasted: a toast is gone in five seconds, and the
+				// symptom this produces (a recording that silently loses its camera)
+				// is reported from the editor, long after.
+				console.warn("[project] camera auto-link failed:", err);
 				const name = addedAsset.originalPath.split(/[\\/]/).pop() ?? addedAsset.originalPath;
 				void import("sonner").then(({ toast }) =>
 					toast.error(`Could not check for a camera recording near ${name}`, {
