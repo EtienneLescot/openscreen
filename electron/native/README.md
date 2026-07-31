@@ -116,6 +116,102 @@ npm run test:wgc-mic:win
 Remove-Item Env:OPENSCREEN_WGC_TEST_MICROPHONE_DEVICE_NAME
 ```
 
+## Linux
+
+Linux cursor recording is handled by `openscreen-pipewire-helper`
+(`electron/native/pipewire-capture`). Stage 1 emits **cursor samples only** — no
+video capture, no encoding.
+
+It exists because `screen.getCursorScreenPoint()` returns `{0,0}` under Wayland.
+`TelemetryRecordingSession` therefore produced well-formed recordings whose every
+cursor sample sat in the top-left corner of the screen. The ScreenCast portal's
+METADATA cursor mode is the only source of a real pointer position on Wayland:
+the compositor keeps the cursor out of the captured pixels and attaches it to
+each frame as `SPA_META_Cursor` instead.
+
+Helper locations, in resolution order:
+
+1. `OPENSCREEN_LINUX_CURSOR_HELPER_EXE`, for local development and diagnostics.
+2. `electron/native/pipewire-capture/build/openscreen-pipewire-helper`, for a locally built binary.
+3. `electron/native/bin/linux-x64/openscreen-pipewire-helper` (or `linux-arm64`), for packaged prebuilt helpers.
+
+Build it with:
+
+```bash
+npm run build:native:linux
+```
+
+The build needs `cargo` and a C compiler and **nothing else** — in particular not
+`libpipewire-0.3-dev`, which Ubuntu does not ship by default and which needs root
+to install. The C shim compiles against headers vendored in
+`electron/native/pipewire-capture/vendor/` and resolves `libpipewire-0.3.so.0`
+with `dlopen` at runtime. On non-Linux hosts the command exits successfully.
+
+The contract matches the other helpers: one JSON argument, newline-delimited JSON
+events on stdout, `stop\n` (or EOF) on stdin. Events are `ready`, `stream-started`,
+`cursor-sample`, `warning`, `error` and `debug`, each carrying `"schemaVersion": 1`.
+`ready` is emitted before the portal picker is raised, so the app's readiness
+timeout does not have to accommodate a human clicking a dialog; `stream-started`
+marks the point where samples begin.
+
+### Manual verification
+
+**This raises the GNOME/portal source picker and streams until you stop it.**
+
+```bash
+OPENSCREEN_PIPEWIRE_DEBUG=1 electron/native/bin/linux-x64/openscreen-pipewire-helper '{"sampleIntervalMs":100}'
+```
+
+Pick a monitor in the dialog, move the mouse, and `cursor-sample` lines with real
+coordinates should stream out. Type `stop` and press Enter, or Ctrl-D, to end it.
+
+`OPENSCREEN_PIPEWIRE_DEBUG=1` additionally reports stream state transitions, the
+negotiated SPA buffer data type, the full list of metadata blocks that survived
+negotiation, and whether `SPA_META_Cursor` carries a sprite bitmap. Every line
+carries `timestampMs`, so a log shows how long the stream actually lived.
+
+### Field notes from the first real GNOME run
+
+Two facts, and two bugs that run exposed. Both bugs are fixed; both are pinned by
+tests that run without a portal.
+
+- **mutter negotiates `MemFd`**, not DMA-BUF, even when the helper advertises
+  `MemPtr|MemFd|DmaBuf`. Worth knowing for the video stage: the pixels arrive as
+  a mappable fd, so a CPU path is viable and no DMA-BUF import is required.
+- **`SPA_META_Cursor` was absent from every buffer.** Producers declare
+  `SPA_PARAM_META_size` as a *fixed* value — mutter 46.2 uses
+  `CURSOR_META_SIZE(384, 384)` = 589872 bytes — and PipeWire intersects it with
+  the consumer's declaration. The helper's range was capped at 256×256 = 262192
+  bytes, so the intersection was empty, the whole `ParamMeta` object was dropped,
+  and the buffers arrived with no cursor metadata. There is no error for this: the
+  stream negotiates and runs perfectly while reporting nothing. The ceiling is now
+  1024×1024, matching OBS. A range that does not *contain* the producer's constant
+  is the failure mode to remember.
+- **The stream was also dying on its own**, reporting `target not found`. That
+  string comes from WirePlumber's `policy-node.lua`, in the branch taken when
+  `node.dont-reconnect` is set — which `PW_STREAM_FLAG_DONT_RECONNECT` sets. That
+  branch destroys the node outright, turning a transient link failure into a
+  permanent, silent end of capture. The flag is gone.
+
+To exercise everything except the picker — dlopen, D-Bus, and the portal's
+cursor-mode check — run the non-interactive probe. This is also what
+`npm run build:native:linux` runs after a successful build:
+
+```bash
+electron/native/bin/linux-x64/openscreen-pipewire-helper '{"probeOnly":true}'
+```
+
+### Known gaps
+
+- **Mouse clicks are unobtainable.** Wayland exposes no portal for input events
+  and `/dev/input/event*` is `root:input`, so every sample's `interactionType` is
+  `"move"`.
+- **The user picks a source twice.** Electron's `desktopCapturer` raises its own
+  portal dialog for the video, and this helper raises a second one for the cursor.
+  Collapsing them requires one portal session serving both, which is why the
+  capture stage has to reuse this helper's session — `SelectSources` may only be
+  called once per session.
+
 ## STT helper
 
 The speech-to-text helper (`whisper-stt-server`) is built separately from the
