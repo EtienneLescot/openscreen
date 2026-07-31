@@ -4,19 +4,35 @@ Chaque piste porte la mesure qui la justifie et, quand elle existe, la contre-me
 
 ---
 
-## 1. Le poids du track fait échouer un tour sur deux
+## 1. Le tour dure deux minutes, et ce n'est pas la faute du contexte
 
-**Mesuré.** Sur la prise réelle de 66 s, `getCursorTrack` rend 356 points pour **24 238 caractères**. La requête suivante passe à ~45 000 caractères. Sur 5 répétitions du prompt wizard, **3 ont expiré** à 120 s, toujours au même endroit : juste après l'appel à l'outil. Les 2 qui aboutissent produisent un montage correct.
+**Corrigé, et mon diagnostic initial était faux.** J'avais écrit que le track de 24 Ko faisait échouer trois tours sur cinq. C'était une corrélation — les échecs tombaient juste après l'appel à l'outil — servie comme une cause. Les durées disent autre chose :
 
-Ce n'est pas un défaut du modèle : lui donner la donnée le fait échouer.
+| répétition | durée | verdict |
+|---|---|---|
+| rep-0 | 117,0 s | réussie, 19 appels |
+| rep-2 | 112,5 s | réussie, 17 appels |
+| rep-1, 3, 4 | 120,0 s | **timeout du banc** |
 
-**Pistes, de la moins à la plus intrusive :**
+Le couperet était posé 3 à 7 secondes au-dessus de la durée normale d'un tour. Ce n'était pas le modèle qui renonçait, c'était le banc qui mesurait son impatience et l'imputait au modèle. Porté à 300 s.
 
-- **Supprimer `virtualSec` quand il est égal à `atSec`.** 28 % du payload, strictement redondant tant qu'aucune coupe n'existe. Un champ `virtualEqualsSource: true` en tête suffirait. Gain immédiat, aucune perte d'information.
-- **Relever le timeout du banc.** Ne corrige rien, mais évite de confondre lenteur et refus.
-- **Baisser la résolution à 2–3 Hz.** À tester *après* les deux précédentes, jamais avant : ça change ce que le modèle voit, donc on ne saurait plus attribuer une amélioration à la place gagnée ou à la lisibilité.
+Le contexte n'était de toute façon pas en cause : le tour entier fait ~26 000 caractères, soit ~6 500 tokens.
 
-Le plafond de `buildCursorTrack` est par ailleurs mou : `DEFAULT_MAX_TRACK_POINTS` borne la grille, mais les points gardés pour un changement de forme s'ajoutent par-dessus sans que `truncated` le signale. Ici 356 pour 400, sans conséquence — une capture riche en changements de pointeur dépasserait silencieusement.
+**Ce qui reste acquis** : le track est passé de 24 238 à 7 797 caractères, désormais **sous** le transcript (10 496) au lieu de 2,3× au-dessus. Deux gains sans perte d'information — `virtualSec` retiré des points quand il égale `atSec`, et une réduction en keyframes qui garde 148 points sur 1521.
+
+Une leçon d'implémentation à ne pas reperdre : simplifier la **trajectoire** au lieu des courbes `x(t)` et `y(t)` semble équivalent et ne l'est pas. Un curseur qui part et revient par le même chemin ne s'écarte pas de la corde, donc l'aller-retour disparaît et l'interpolation jure ensuite qu'il n'a pas bougé. Mesuré : **0,380** d'image d'erreur pour une tolérance de 0,02, contre 0,084 par axe. La version fautive était la plus compacte (4,4 Ko) et la plus séduisante.
+
+## 1 bis. Le vrai coût : 19 appels d'outils en série — RECOMMANDATION PRINCIPALE
+
+**Mesuré.** Le tour wizard émet 19 appels : deux lectures de document, un transcript, un track, puis **six `addTrim` et neuf `addZoom` un par un**. Chacun est un aller-retour complet vers le provider. C'est là que passent les deux minutes, pas dans la lecture du contexte.
+
+Six coupes décidées d'un seul raisonnement, sur des plages connues d'avance, coûtent six allers-retours. Le propre texte du modèle planifie les six avant d'émettre le premier appel — la décision est déjà prise, seule l'émission est fragmentée.
+
+**Pistes :**
+
+- **Des outils par lot.** `addTrims(ranges[])` et `addZooms(regions[])` ramèneraient un tour de 19 appels à 6. Gain linéaire, sans contrepartie côté raisonnement.
+- **Vérifier au banc que le modèle sait s'en servir avant de généraliser.** Un outil par lot est plus difficile à appeler correctement qu'un outil unitaire — il faut un tableau bien formé du premier coup, là où l'unitaire pardonne une erreur à la fois. C'est exactement ce qu'un scénario dédié doit trancher.
+- **Ne pas supprimer les outils unitaires.** Une correction ponctuelle (« déplace ce trim ») n'a pas à passer par un tableau d'un élément, et le refus d'un lot entier pour une borne fautive serait une régression.
 
 ## 2. Le modèle place ses zooms d'après le transcript, pas d'après la trajectoire
 
