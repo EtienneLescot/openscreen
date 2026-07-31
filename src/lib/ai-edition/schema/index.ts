@@ -290,7 +290,13 @@ export const timelineOperationSchema = z.discriminatedUnion("type", [
 		type: z.literal("move_clip"),
 		reason: z.string().default(""),
 		clipId: z.string().min(1),
-		timelineStartSec: z.number().nonnegative(),
+		// ponytail: `insertIndex`, matching the ONE implementation
+		// (`AxcutTimelineOperation` in document/operations.ts, applied by
+		// `applyTimelineOperation`). This schema declared `timelineStartSec`
+		// instead — a second, incompatible contract for the same op name, with no
+		// importer anywhere to notice. Whoever wired the two together next would
+		// have had a parse that accepted what the dispatcher could not run.
+		insertIndex: z.number().int().nonnegative(),
 	}),
 	z.object({
 		type: z.literal("insert_asset_clip"),

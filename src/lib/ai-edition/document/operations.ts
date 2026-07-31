@@ -254,11 +254,14 @@ export function applyTimelineOperation(
 		case "restore_full_timeline": {
 			const duration = primaryAssetDuration(document);
 			if (duration <= 0) return { document, summary: "no duration yet" };
+			// Same semantics as `restoreFullTimeline`: a genuine reset, so it opts
+			// out of the id/trim preservation every other caller wants.
 			const next = replaceTimeline(
 				document,
 				[{ startSec: 0, endSec: duration }],
 				op.reason ?? "restored full timeline",
 				"user",
+				{ preserveIds: false, preserveTrims: false },
 			);
 			return { document: next, summary: "restored full timeline" };
 		}

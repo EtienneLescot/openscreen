@@ -1,16 +1,25 @@
-// Agent tool layer (P1.1/P1.2): the JSON-schema tool definitions fed to the
-// LLM as `tools[]`, plus the executor that validates arguments (zod) and
-// applies each tool against an AxcutDocument snapshot. Pure — no IPC, no fs.
-// The chat-service tool loop owns checkpoints and persistence; this module
-// only knows how to turn (document, toolName, argsJson) into a new document.
+// Agent tool layer (P1.1/P1.2): the zod argument schemas — the single source of
+// truth, shared with the LangChain `tool()`s built in `deep-agent/service.ts` —
+// plus the executor that validates arguments and applies each tool against an
+// AxcutDocument snapshot. Pure — no IPC, no fs. The chat-service tool loop owns
+// checkpoints and persistence; this module only knows how to turn
+// (document, toolName, argsJson) into a new document.
 //
 // Read tools return JSON the model can reason over; write tools return the
 // mutated document plus a human-readable summary line for the chat panel
 // ("applied: added trim 0:02.1 – 0:02.4").
+//
+// The PROSE the model reads lives in `TOOL_DESCRIPTIONS` (deep-agent/service.ts)
+// — not here. This header used to claim the file held "the JSON-schema tool
+// definitions fed to the LLM as tools[]", which stopped being true when the
+// deep-agent landed and stayed on the page for a whole release; the specs it
+// described are gone (see `MUTATING_TOOL_NAMES`).
 
 import { z } from "zod";
 import { createId } from "../../src/lib/ai-edition/document/ids";
 import {
+	moveClip,
+	planTimelineReplacement,
 	type RegionKind,
 	removeClip,
 	removeRegion,
@@ -18,21 +27,25 @@ import {
 	setClipSourceRange,
 } from "../../src/lib/ai-edition/document/timeline";
 import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
+import { hasAnyClipWithCamera } from "../../src/lib/ai-edition/timeline/camera";
+import {
+	buildCursorTrack,
+	type CursorTrackSample,
+} from "../../src/lib/ai-edition/timeline/cursor-track";
 import {
 	anchorRegionsWithDerivedMs,
 	coalesceRegionsForRuler,
 	replacePillSpan,
 	resolvePillIds,
 } from "../../src/lib/ai-edition/timeline/timelineMap";
-
-export interface AgentToolSpec {
-	name: string;
-	description: string;
-	/** JSON schema for the tool arguments, sent verbatim to the provider. */
-	parameters: Record<string, unknown>;
-	/** True when the tool mutates the document (gates checkpoint + permission). */
-	mutating: boolean;
-}
+// ponytail: relative, and it has to stay that way — `electron/` never resolves
+// the `@/` alias (the main-process build does not declare it), which is why the
+// scale table was moved out of `components/video-editor/types.ts` to be
+// reachable from here at all.
+import {
+	effectiveZoomScale,
+	ZOOM_DEPTH_LEGEND,
+} from "../../src/lib/ai-edition/timeline/zoom-scale";
 
 export interface AgentToolExecution {
 	ok: boolean;
@@ -94,6 +107,228 @@ function anchorForAgent<T extends { id: string; startMs: number; endMs: number }
 	return anchorRegionsWithDerivedMs([region], document.timeline.clips, () => createId(prefix));
 }
 
+// ─── What the write actually LANDED ────────────────────────────────────────
+//
+// ponytail: every add*/set* used to echo back the span it was ASKED for. Three
+// ways that is a lie, all reproduced against the real fixtures:
+//   • CLAMP — `addZoom {20,40}` on a 24.70 s clip stores 20–24.704 and reported
+//     20–40. Ventilation trims the span to the clip, silently.
+//   • FRAGMENTATION — `addZoom {25,35}` across two clips stores TWO fragments,
+//     the second with a brand-new id (`anchorRawRegionsToClips:74`), and the
+//     result named one id and one span.
+//   • NOTHING PLACED — `addZoom {90,95}` on a 24.70 s timeline covers no clip.
+//     `anchorRegionsWithDerivedMs` passes it through UNANCHORED by design
+//     (timelineMap.ts:360-375, so a v2 project with a zero-extent clip does not
+//     lose data), and it was stored, reported ok, and can never play.
+// The document is the referee; the report is read back off it.
+
+interface Landing {
+	/** Every id the write produced — more than one when it straddled a clip. */
+	ids: string[];
+	startSec: number;
+	endSec: number;
+	/** False when nothing covered a clip: the region cannot ever play. */
+	anchored: boolean;
+	fragments: number;
+}
+
+function overlapsAClip(
+	region: { startMs: number; endMs: number },
+	document: AxcutDocument,
+): boolean {
+	const startSec = region.startMs / 1000;
+	const endSec = region.endMs / 1000;
+	return document.timeline.clips.some(
+		(c) => Math.min(endSec, c.timelineEndSec) - Math.max(startSec, c.timelineStartSec) > 0,
+	);
+}
+
+/**
+ * `anchored` is BOTH structural and positional on purpose. `replacePillSpan`
+ * re-anchors from `pill.member`, whose payload still carries the OLD `clipId`
+ * even when the new span covers nothing — so a `clipId` alone proves nothing
+ * about where the region ended up. The ruler overlap is what decides whether a
+ * viewer will ever see it.
+ */
+function landingOf(
+	regions: Array<{ id: string; startMs: number; endMs: number; clipId?: string }>,
+	document: AxcutDocument,
+): Landing {
+	const starts = regions.map((r) => r.startMs);
+	const ends = regions.map((r) => r.endMs);
+	return {
+		ids: regions.map((r) => r.id),
+		startSec: regions.length ? Math.min(...starts) / 1000 : 0,
+		endSec: regions.length ? Math.max(...ends) / 1000 : 0,
+		anchored:
+			regions.length > 0 &&
+			regions.every((r) => typeof r.clipId === "string" && overlapsAClip(r, document)),
+		fragments: regions.length,
+	};
+}
+
+/** The regions a pill edit produced: everything in `after` that is not an
+ * untouched original. `replacePillSpan` re-ventilates the pill, so the count and
+ * the ids can both change under a caller that only passed one id. */
+function landingAfterPillEdit<T extends { id: string; startMs: number; endMs: number }>(
+	before: T[],
+	after: T[],
+	pillIds: Set<string>,
+	document: AxcutDocument,
+): Landing {
+	const untouched = new Set(before.filter((r) => !pillIds.has(r.id)).map((r) => r.id));
+	return landingOf(
+		after.filter((r) => !untouched.has(r.id)) as Array<T & { clipId?: string }>,
+		document,
+	);
+}
+
+/**
+ * Refuse a full-camera region on footage that carries no webcam.
+ *
+ * ponytail: `addCameraFullscreen` took a span and nothing else, and answered
+ * `ok: true` whether or not any camera existed anywhere in the project — it
+ * writes into `legacyEditor.cameraFullscreenRegions`, which the schema does not
+ * validate. A pair of scenarios identical but for a linked webcam produced
+ * identical turns, because the evidence really was identical. The snapshot now
+ * carries `hasCameraTrack`, and this is the other half: a region that can only
+ * render nothing is not written, and the refusal names the reason.
+ */
+function cameraUnderSpan(
+	document: AxcutDocument,
+	startSec: number,
+	endSec: number,
+): { clips: number; withCamera: number } {
+	const covered = document.timeline.clips.filter(
+		(c) => Math.min(endSec, c.timelineEndSec) - Math.max(startSec, c.timelineStartSec) > 0,
+	);
+	return {
+		clips: covered.length,
+		withCamera: covered.filter(
+			(c) => document.assets.find((a) => a.id === c.assetId)?.cameraTrack != null,
+		).length,
+	};
+}
+
+function noCameraUnderSpan(
+	document: AxcutDocument,
+	startSec: number,
+	endSec: number,
+): AgentToolExecution | null {
+	const coverage = cameraUnderSpan(document, startSec, endSec);
+	if (coverage.clips === 0 || coverage.withCamera > 0) return null;
+	const anywhere = hasAnyClipWithCamera(document.assets, document.timeline.clips);
+	return failure(
+		`No webcam is linked to the footage under ${startSec.toFixed(1)}–${endSec.toFixed(1)} s, ` +
+			"so a full-camera region there would render nothing and none was written. " +
+			(anywhere
+				? "Other clips in this project do carry a camera — check assets[].hasCameraTrack in getCurrentDocument and pick a span over one of those."
+				: "No asset in this project carries a cameraTrack at all (assets[].hasCameraTrack is false everywhere): this recording has no webcam. Tell the user instead of placing a region."),
+	);
+}
+
+/** The span the edited timeline actually occupies, for an actionable refusal. */
+function editedExtentSec(document: AxcutDocument): { startSec: number; endSec: number } {
+	const clips = document.timeline.clips;
+	if (clips.length === 0) return { startSec: 0, endSec: 0 };
+	return {
+		startSec: Math.min(...clips.map((c) => c.timelineStartSec)),
+		endSec: Math.max(...clips.map((c) => c.timelineEndSec)),
+	};
+}
+
+/**
+ * Refuse rather than store a region that covers no clip. The message carries the
+ * real bounds so the model can retry once with a usable span instead of looping
+ * — there is no AbortSignal and no timeout on the product path.
+ */
+function coversNoClip(
+	kind: string,
+	requestedStartSec: number,
+	requestedEndSec: number,
+	document: AxcutDocument,
+): AgentToolExecution {
+	const extent = editedExtentSec(document);
+	return failure(
+		`The span ${requestedStartSec.toFixed(1)}–${requestedEndSec.toFixed(1)} s covers no clip, ` +
+			`so no ${kind} was placed (it could never play). The edited timeline runs ` +
+			`${extent.startSec.toFixed(1)}–${extent.endSec.toFixed(1)} s. ` +
+			`Pick a span inside it, or place a clip there first.`,
+	);
+}
+
+// The landing fields shared by every add / set result, so the model reads the
+// same three things everywhere: what it asked for, what it got, and whether the
+// two differ. `clamped` and `fragments` are omitted when there is nothing to
+// say — an unconditional `clamped: false` on every result trains a reader to
+// stop looking at it.
+function landingReport(
+	landing: Landing,
+	requestedStartSec: number,
+	requestedEndSec: number,
+): Record<string, unknown> {
+	const clamped =
+		Math.abs(landing.startSec - requestedStartSec) > 0.001 ||
+		Math.abs(landing.endSec - requestedEndSec) > 0.001;
+	return {
+		startSec: landing.startSec,
+		endSec: landing.endSec,
+		ids: landing.ids,
+		...(clamped ? { clamped: true, requestedStartSec, requestedEndSec } : {}),
+		...(landing.fragments > 1 ? { fragments: landing.fragments } : {}),
+	};
+}
+
+function landingSuffix(
+	landing: Landing,
+	requestedStartSec: number,
+	requestedEndSec: number,
+): string {
+	const parts: string[] = [];
+	if (
+		Math.abs(landing.startSec - requestedStartSec) > 0.001 ||
+		Math.abs(landing.endSec - requestedEndSec) > 0.001
+	) {
+		parts.push(
+			`clamped from ${formatSec(requestedStartSec)} – ${formatSec(requestedEndSec)} to fit the clips`,
+		);
+	}
+	if (landing.fragments > 1) parts.push(`split across ${landing.fragments} clips`);
+	return parts.length ? ` (${parts.join(", ")})` : "";
+}
+
+/** Ids of every modifier in the document, all four families at once — the basis
+ * for naming what a destructive edit took with it. */
+function modifierIdsOf(document: AxcutDocument): string[] {
+	const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+	const speedRegions = (legacy.speedRegions as Array<{ id: string }> | undefined) ?? [];
+	const cameraFullscreenRegions =
+		(legacy.cameraFullscreenRegions as Array<{ id: string }> | undefined) ?? [];
+	return [
+		...document.zoomRanges.map((r) => r.id),
+		...document.annotations.map((r) => r.id),
+		...speedRegions.map((r) => r.id),
+		...cameraFullscreenRegions.map((r) => r.id),
+	];
+}
+
+/** ponytail: `setClipRange` and `removeClip` both delete anchored modifiers as a
+ * side effect (`setClipSourceRange` drops the pills the new window no longer
+ * covers; `removeClip` takes everything anchored to the clip). Both used to
+ * report only what was asked — "trimmed clip to 0:00.0 – 0:03.0" while a zoom
+ * ceased to exist. Nothing in the result NAMED the casualty, which is what made
+ * "the zoom is preserved" an easy thing for a model to say. */
+function droppedByEdit(before: AxcutDocument, after: AxcutDocument) {
+	const survivingModifiers = new Set(modifierIdsOf(after));
+	const survivingTrims = new Set(after.timeline.trimRanges.map((t) => t.id));
+	return {
+		droppedModifierIds: modifierIdsOf(before).filter((id) => !survivingModifiers.has(id)),
+		droppedTrimIds: before.timeline.trimRanges
+			.map((t) => t.id)
+			.filter((id) => !survivingTrims.has(id)),
+	};
+}
+
 // Zod arg schemas — the SINGLE source of truth for every tool's arguments. The executor
 // below validates against them, and the deep-agent (LangChain) layer imports the same
 // objects to build its `tool()`s, so the two can never advertise a different shape than the
@@ -125,7 +360,35 @@ export const replaceTimelineArgs = z.object({
 	reason: z.string().default(""),
 });
 
+/**
+ * ponytail: `beforeClipId`, never an index.
+ *
+ * `moveClip` (document/timeline.ts) takes an `insertIndex` interpreted against
+ * the array AFTER the moved clip is removed — V4Timeline does the `-1` by hand
+ * at its call site, with a comment about it. That is a fine internal contract
+ * and a terrible one to hand a language model: off by one is silent here, and
+ * "put the demo first" would land it second. A neighbour's id has no such
+ * ambiguity. Null (or omitted) means last, which is the only position no
+ * existing clip can name.
+ *
+ * There is deliberately NO `reason` field: `reason` is the clip's label ("intro",
+ * "demo"), the only thing in the snapshot that lets the model tell two clips
+ * apart. A reorder must not be able to overwrite it.
+ */
+export const moveClipArgs = z.object({
+	clipId: z.string().min(1),
+	beforeClipId: z.string().min(1).nullish(),
+});
+
 export const getTranscriptArgs = z.object({
+	assetId: z.string().min(1).optional(),
+});
+
+// ponytail: an assetId, never a path. The model names a row of the document and
+// the runtime resolves it to `asset.originalPath` behind the allow-list; letting
+// it name a file instead would turn a read-only reporting tool into an arbitrary
+// JSON reader on the user's disk.
+export const getCursorTrackArgs = z.object({
 	assetId: z.string().min(1).optional(),
 });
 
@@ -201,312 +464,42 @@ export const removeClipArgs = z.object({
 	clipId: z.string().min(1),
 });
 
-export const AGENT_TOOL_SPECS: AgentToolSpec[] = [
-	{
-		name: "getCurrentDocument",
-		description:
-			"Read a compact snapshot of the current project: assets (with durations), timeline clips and trim ranges (source-time), and the zoom / speed / annotation effects (virtual, edited-timeline time). Call this before editing if the snapshot in the system prompt may be stale.",
-		parameters: { type: "object", properties: {}, additionalProperties: false },
-		mutating: false,
-	},
-	{
-		name: "getTranscript",
-		description:
-			"Read the transcript segments (speech and silence, with start/end seconds and text) for an asset. Omit assetId to read the primary asset's transcript.",
-		parameters: {
-			type: "object",
-			properties: {
-				assetId: { type: "string", description: "Asset id; defaults to the primary asset." },
-			},
-			additionalProperties: false,
-		},
-		mutating: false,
-	},
-	{
-		name: "addTrim",
-		description:
-			"Add a trim range: a cut of a span *inside* a clip that removes it from both playback and export without splitting the clip (a long clip with a big trim is cleaner than two clips). Times are seconds of the asset's source time. For shortening a clip's head/tail use setClipRange instead.",
-		parameters: {
-			type: "object",
-			properties: {
-				startSec: { type: "number", minimum: 0 },
-				endSec: { type: "number", minimum: 0 },
-				assetId: { type: "string", description: "Asset id; defaults to the primary asset." },
-				reason: { type: "string", description: "Why this range is being cut." },
-			},
-			required: ["startSec", "endSec"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "setTrim",
-		description: "Move or resize an existing trim range by id. Times are source-time seconds.",
-		parameters: {
-			type: "object",
-			properties: {
-				trimRangeId: { type: "string" },
-				startSec: { type: "number", minimum: 0 },
-				endSec: { type: "number", minimum: 0 },
-			},
-			required: ["trimRangeId", "startSec", "endSec"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "setClipRange",
-		description:
-			"Trim a clip: set its source in/out points (seconds). All clips are re-laid back-to-back afterwards, so downstream clips shift automatically.",
-		parameters: {
-			type: "object",
-			properties: {
-				clipId: { type: "string" },
-				sourceStartSec: { type: "number", minimum: 0 },
-				sourceEndSec: { type: "number", minimum: 0 },
-			},
-			required: ["clipId", "sourceStartSec", "sourceEndSec"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "replaceTimeline",
-		description:
-			"Replace the whole timeline with the given kept intervals of the primary asset's source time. Everything outside the intervals becomes a trim. Use for bulk edits like 'cut all silences'.",
-		parameters: {
-			type: "object",
-			properties: {
-				intervals: {
-					type: "array",
-					minItems: 1,
-					items: {
-						type: "object",
-						properties: {
-							startSec: { type: "number", minimum: 0 },
-							endSec: { type: "number", minimum: 0 },
-						},
-						required: ["startSec", "endSec"],
-						additionalProperties: false,
-					},
-				},
-				reason: { type: "string" },
-			},
-			required: ["intervals"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "addZoom",
-		description:
-			"Add a zoom-in effect over a span of the *edited timeline* (virtual seconds, as seen on the ruler — not source time). depth 1–6 maps to 1.0×–3.5× (default 3 ≈ 2.0×). focus is the zoom centre in 0–1 fractions of the frame (default centre). Use for 'zoom in on …' and the smart-zoom pass.",
-		parameters: {
-			type: "object",
-			properties: {
-				startSec: { type: "number", minimum: 0, description: "Virtual-timeline start (seconds)." },
-				endSec: { type: "number", minimum: 0, description: "Virtual-timeline end (seconds)." },
-				depth: {
-					type: "integer",
-					minimum: 1,
-					maximum: 6,
-					description: "Zoom level 1–6 (default 3).",
-				},
-				focus: {
-					type: "object",
-					description: "Zoom centre, fractions of the frame (default {cx:0.5,cy:0.5}).",
-					properties: {
-						cx: { type: "number", minimum: 0, maximum: 1 },
-						cy: { type: "number", minimum: 0, maximum: 1 },
-					},
-					required: ["cx", "cy"],
-					additionalProperties: false,
-				},
-			},
-			required: ["startSec", "endSec"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "setZoom",
-		description:
-			"Move, resize, or restyle an existing zoom by id. Times are virtual-timeline seconds. Only the fields you pass are changed.",
-		parameters: {
-			type: "object",
-			properties: {
-				zoomId: { type: "string" },
-				startSec: { type: "number", minimum: 0 },
-				endSec: { type: "number", minimum: 0 },
-				depth: { type: "integer", minimum: 1, maximum: 6 },
-				focus: {
-					type: "object",
-					properties: {
-						cx: { type: "number", minimum: 0, maximum: 1 },
-						cy: { type: "number", minimum: 0, maximum: 1 },
-					},
-					required: ["cx", "cy"],
-					additionalProperties: false,
-				},
-			},
-			required: ["zoomId"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "addSpeed",
-		description:
-			"Add a speed-change region over a span of the *edited timeline* (virtual seconds). speed > 1 fast-forwards, < 1 slows down (default 1.5×). Use to speed through slow stretches without cutting them.",
-		parameters: {
-			type: "object",
-			properties: {
-				startSec: { type: "number", minimum: 0, description: "Virtual-timeline start (seconds)." },
-				endSec: { type: "number", minimum: 0, description: "Virtual-timeline end (seconds)." },
-				speed: {
-					type: "number",
-					exclusiveMinimum: 0,
-					description: "Playback multiplier (default 1.5).",
-				},
-			},
-			required: ["startSec", "endSec"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "setSpeed",
-		description:
-			"Move, resize, or change the multiplier of an existing speed region by id. Times are virtual-timeline seconds. Only the fields you pass are changed.",
-		parameters: {
-			type: "object",
-			properties: {
-				speedId: { type: "string" },
-				startSec: { type: "number", minimum: 0 },
-				endSec: { type: "number", minimum: 0 },
-				speed: { type: "number", exclusiveMinimum: 0 },
-			},
-			required: ["speedId"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "addAnnotation",
-		description:
-			"Add a text annotation over a span of the *edited timeline* (virtual seconds). Position x/y are percentages of the frame (0–100, default centre). Use for callouts and labels.",
-		parameters: {
-			type: "object",
-			properties: {
-				startSec: { type: "number", minimum: 0, description: "Virtual-timeline start (seconds)." },
-				endSec: { type: "number", minimum: 0, description: "Virtual-timeline end (seconds)." },
-				text: { type: "string", description: "The annotation text." },
-				x: {
-					type: "number",
-					minimum: 0,
-					maximum: 100,
-					description: "Horizontal position % (default 50).",
-				},
-				y: {
-					type: "number",
-					minimum: 0,
-					maximum: 100,
-					description: "Vertical position % (default 50).",
-				},
-			},
-			required: ["startSec", "endSec", "text"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "setAnnotation",
-		description:
-			"Move, resize, or edit the text of an existing annotation by id. Times are virtual-timeline seconds. Only the fields you pass are changed.",
-		parameters: {
-			type: "object",
-			properties: {
-				annotationId: { type: "string" },
-				startSec: { type: "number", minimum: 0 },
-				endSec: { type: "number", minimum: 0 },
-				text: { type: "string" },
-			},
-			required: ["annotationId"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "addCameraFullscreen",
-		description:
-			"Add a camera-fullscreen region over a span of the *edited timeline* (virtual seconds): the webcam fills the frame for that span. Use for 'go fullscreen on the webcam here'.",
-		parameters: {
-			type: "object",
-			properties: {
-				startSec: { type: "number", minimum: 0, description: "Virtual-timeline start (seconds)." },
-				endSec: { type: "number", minimum: 0, description: "Virtual-timeline end (seconds)." },
-			},
-			required: ["startSec", "endSec"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "setCameraFullscreen",
-		description:
-			"Move or resize an existing camera-fullscreen region by id. Times are virtual-timeline seconds. Only the fields you pass are changed.",
-		parameters: {
-			type: "object",
-			properties: {
-				cameraFullscreenId: { type: "string" },
-				startSec: { type: "number", minimum: 0 },
-				endSec: { type: "number", minimum: 0 },
-			},
-			required: ["cameraFullscreenId"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "removeTrim",
-		description:
-			"Delete a trim range by id (the cut is un-done — that source span plays and exports again). This is the correct way to 'remove a trim' / 'un-cut' — never re-add a trim to undo one.",
-		parameters: {
-			type: "object",
-			properties: { trimRangeId: { type: "string" } },
-			required: ["trimRangeId"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "removeModifier",
-		description:
-			"Delete a modifier (zoom / speed / annotation / camera-fullscreen) by id. Resolves the kind from the id. This is the correct way to 'remove'/'delete' one of these — never neutralise it (span 0, speed 1×): that leaves it in the document. For a trim use removeTrim; for a clip use removeClip.",
-		parameters: {
-			type: "object",
-			properties: { id: { type: "string" } },
-			required: ["id"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-	{
-		name: "removeClip",
-		description:
-			"Delete a placed clip by id. The remaining clips are re-laid back-to-back to close the gap, and any zoom/speed/annotation anchored to the removed clip is dropped. Use only when the user explicitly asks to remove a clip (not to shorten one — that is setClipRange).",
-		parameters: {
-			type: "object",
-			properties: { clipId: { type: "string" } },
-			required: ["clipId"],
-			additionalProperties: false,
-		},
-		mutating: true,
-	},
-];
+/**
+ * The tools that change the document. A LIST, not an inference: it gates the
+ * checkpoint the chat-service takes before a write and the mutating/non-mutating
+ * split the workbench scores its DSL axis on, and neither should quietly change
+ * because someone edited a switch case.
+ *
+ * ponytail: this replaces `AGENT_TOOL_SPECS`, ~300 lines of JSON schema whose
+ * own comment said "sent verbatim to the provider". It has not been sent
+ * anywhere since the deep-agent landed: the model receives the zod schemas
+ * built in `deep-agent/service.ts` and the prose in `TOOL_DESCRIPTIONS`. Two
+ * descriptions of the same tools, only one of them reaching the model — and it
+ * was the other one that humans read and kept up to date. The surviving
+ * documentation duty is `TOOL_DESCRIPTIONS`; `service.test.ts` pins the three
+ * remaining surfaces (descriptions, built tools, executor cases) to each other.
+ */
+export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
+	"addTrim",
+	"setTrim",
+	"setClipRange",
+	"moveClip",
+	"replaceTimeline",
+	"addZoom",
+	"setZoom",
+	"addSpeed",
+	"setSpeed",
+	"addAnnotation",
+	"setAnnotation",
+	"addCameraFullscreen",
+	"setCameraFullscreen",
+	"removeTrim",
+	"removeModifier",
+	"removeClip",
+]);
 
 export function isMutatingTool(name: string): boolean {
-	return AGENT_TOOL_SPECS.find((t) => t.name === name)?.mutating ?? false;
+	return MUTATING_TOOL_NAMES.has(name);
 }
 
 function roundSec(ms: number): number {
@@ -522,7 +515,25 @@ function roundSec(ms: number): number {
 //   • trims   — source-time cuts inside a clip (do not split the clip).
 //   • effects — zoom / speed / annotation, in *virtual* (edited-timeline)
 //     seconds, i.e. positions on the ruler after clips + trims are applied.
-export function documentSnapshotForModel(document: AxcutDocument): Record<string, unknown> {
+//
+// ponytail: what a projection LEAVES OUT is a claim too, and two omissions here
+// were being read by the model as facts about the project.
+//   • `cameraTrack` — the assets went out as `{id, label, durationSec}`, so two
+//     projects identical except for a linked webcam were literally
+//     indistinguishable. `addCameraFullscreen` answered ok either way, and the
+//     model placed a full-camera region on a project with no camera and
+//     reported it done. `hasCameraTrack` is the exact parity of `hasTranscript`
+//     below, which had already solved the same problem for the transcript.
+//   • the zoom's real strength — `depth` went out bare. It is an ORDINAL, so a
+//     reader turns "3" into "3×" while the frame renders 1.80×; and when a
+//     migrated v1.7 project carries `customScale`, `depth` is inert and nothing
+//     said so. `renderedScale` is `effectiveZoomScale`, the renderer's own
+//     function, so the number the model reports is the number the viewer sees.
+export function documentSnapshotForModel(
+	document: AxcutDocument,
+	cursorTelemetry?: CursorTelemetryContext,
+): Record<string, unknown> {
+	const availability = cursorTelemetry?.availableByAssetId;
 	const legacy = document.legacyEditor as Record<string, unknown> | null;
 	const speedRegions =
 		(legacy?.speedRegions as
@@ -532,19 +543,56 @@ export function documentSnapshotForModel(document: AxcutDocument): Record<string
 		(legacy?.cameraFullscreenRegions as
 			| Array<{ id: string; startMs: number; endMs: number }>
 			| undefined) ?? [];
+	// The global Auto-Focus toggle OVERRIDES each region's own focusMode at
+	// render (sceneDescription.ts:703) and the inspector disables the per-region
+	// control while it is on. Reporting the stored mode would hand the model a
+	// second thing to be confidently wrong about, so the projection reports the
+	// EFFECTIVE mode and the flag that decides it.
+	const autoFocusAll = legacy?.autoFocusAll === true;
 	return {
 		timeBaseNote:
 			"clips and trims are in source-time seconds; zooms, speedRegions, annotations and cameraFullscreenRegions are in virtual (edited-timeline) seconds.",
+		zoomNote:
+			`renderedScale is what the viewer sees (depth is an ordinal, not a factor: ${ZOOM_DEPTH_LEGEND}). ` +
+			"When a zoom carries customScale it wins over depth and depthIsOverridden is true — " +
+			"a setZoom that only changes depth on such a zoom clears customScale so the depth takes effect.",
 		project: { id: document.project.id, title: document.project.title },
 		primaryAssetId: document.project.primaryAssetId ?? document.assets[0]?.id ?? null,
+		autoFocusAll,
+		hasAnyCamera: hasAnyClipWithCamera(document.assets, document.timeline.clips),
+		cursorNote:
+			"assets[].hasCursorTelemetry says whether recorded pointer telemetry exists for that " +
+			"asset. true — call getCursorTrack to read the recorded pointer track. " +
+			"false — this asset was checked and has none (imported footage, or a recording made " +
+			"without the cursor recorder). null — it was NOT checked from here; say that, and do " +
+			"not report it as the project having no cursor data.",
 		assets: document.assets.map((a) => ({
 			id: a.id,
 			label: a.label,
 			durationSec: a.durationSec ?? null,
+			hasCameraTrack: a.cameraTrack != null,
+			cameraVisible: a.cameraTrack?.visible ?? false,
+			// Three-valued on purpose (see `CursorTelemetryContext`): `null` is
+			// "not checked", and it must never render as `false`. The whole defect
+			// was a runtime that could not look being read as a project that has
+			// nothing — same field, same three states, one honest projection.
+			//
+			// `?? null`, not `?? false`: an asset MISSING from the map is one whose
+			// probe threw. Defaulting that to `false` would put our failure back in
+			// the answer as their fact, one layer lower down.
+			hasCursorTelemetry: availability?.[a.id] ?? null,
 		})),
-		clips: document.timeline.clips.map((c) => ({
+		// ponytail: `index`, `reason` and `origin` are here because without them a
+		// clip cannot be DESIGNATED. "Put the demo first" is unanswerable when the
+		// only handles are `clip_1`/`clip_2` and two indistinguishable source
+		// windows — the label the user sees lives in `reason`, and it was not being
+		// sent. A reorder tool without this is a tool the model cannot aim.
+		clips: document.timeline.clips.map((c, index) => ({
 			id: c.id,
+			index,
 			assetId: c.assetId,
+			reason: c.reason,
+			origin: c.origin,
 			sourceStartSec: c.sourceStartSec,
 			sourceEndSec: c.sourceEndSec ?? null,
 			timelineStartSec: c.timelineStartSec,
@@ -562,7 +610,15 @@ export function documentSnapshotForModel(document: AxcutDocument): Record<string
 			startSec: roundSec(z.startMs),
 			endSec: roundSec(z.endMs),
 			depth: z.depth,
+			renderedScale: effectiveZoomScale(z),
+			// Emitted only when set: an unconditional `customScale: null` on every
+			// zoom of every snapshot is noise the reader learns to skip, which is
+			// how the field would go unnoticed again.
+			...(z.customScale != null ? { customScale: z.customScale, depthIsOverridden: true } : {}),
+			...(z.rotationPreset ? { rotationPreset: z.rotationPreset } : {}),
 			focus: z.focus,
+			focusMode: autoFocusAll ? "auto" : (z.focusMode ?? "manual"),
+			source: z.source ?? "manual",
 		})),
 		speedRegions: coalesceForAgent(speedRegions).map((s) => ({
 			id: s.id,
@@ -590,10 +646,108 @@ function failure(message: string): AgentToolExecution {
 	return { ok: false, resultJson: JSON.stringify({ error: message }) };
 }
 
+/** The clips as the model would have to name them, for an error about an id it
+ *  got wrong — a bare "Unknown clip: demo" leaves it guessing twice. */
+function clipRoster(document: AxcutDocument): string {
+	const clips = document.timeline.clips;
+	if (clips.length === 0) return "The timeline has no clips.";
+	return `The timeline is: ${clips.map((c) => `${c.id}${c.reason ? ` (${c.reason})` : ""}`).join(", ")}.`;
+}
+
+/**
+ * The refusal the model gets for every write while `allowAgentEdits` is off.
+ *
+ * ponytail: it has to be ACTIONABLE, not merely negative. There is no
+ * AbortSignal and no timeout anywhere on the product path, and the agent runs
+ * at recursionLimit 1000: a bare "refused" invites a model to try the next
+ * write tool, and the next, for as long as the provider will answer. So the
+ * payload says what to do instead (state the edit, ask), that retrying is
+ * pointless (every write is refused, not just this one), that claiming the edit
+ * happened is forbidden, and where the user turns the setting back on. The
+ * arguments are echoed back so the model can quote the exact edit it wanted
+ * without a second round trip.
+ *
+ * The `{error}` envelope is the shape the workbench's wire oracle already
+ * recognises as a failed tool result — a new one would read as a success.
+ */
+function consentRequired(name: string, args: unknown): AgentToolExecution {
+	return {
+		ok: false,
+		resultJson: JSON.stringify({
+			error:
+				"Project edits are turned off for this project: the user asked to be consulted " +
+				"before the timeline changes. Nothing was modified.",
+			code: "consent_required",
+			tool: name,
+			requestedArgs: args,
+			howToProceed:
+				"Describe the exact edit you would make — the tool, the times, the ids — and ask the " +
+				"user to confirm it. Do NOT retry this call and do NOT reach for another write tool: " +
+				"every one of them is refused while the setting is off. Never say an edit was applied. " +
+				"If they want you to go ahead, they can re-enable 'Project edits' in Settings → AI.",
+		}),
+	};
+}
+
+export interface AgentToolOptions {
+	/**
+	 * `allowAgentEdits` from the LLM config, threaded down as an explicit
+	 * argument rather than read from a module global so this stays pure and
+	 * testable. Only `false` refuses; `undefined` is "allowed", which keeps the
+	 * three-argument call sites (and ~40 test assertions) working unchanged and
+	 * mirrors `config.allowAgentEdits !== false`.
+	 */
+	editsAllowed?: boolean;
+	/** Cursor telemetry resolved for THIS turn — see `CursorTelemetryContext`.
+	 *  Absent means the runtime has no telemetry reader wired at all, which the
+	 *  executor reports as "could not look", never as "there is none". */
+	cursorTelemetry?: CursorTelemetryContext;
+}
+
+/**
+ * What the runtime managed to find out about cursor telemetry this turn.
+ *
+ * ponytail: the three states are the whole point, and collapsing any two of them
+ * is the defect. "There is no telemetry for this asset" is a fact about the
+ * project. "I have no way to look" is a fact about me. The measured failure was
+ * the model reporting the second as the first — it probed an empty sandbox and
+ * concluded the recording had no pointer data — so the payloads keep them apart
+ * and the prompt tells the model to keep them apart too.
+ */
+export interface CursorTelemetryContext {
+	/** assetId → whether a sidecar exists. A MISSING key means "not checked",
+	 *  which the snapshot reports as null, never false. */
+	availableByAssetId?: Record<string, boolean>;
+	/** The samples the async tool wrapper loaded before entering the executor.
+	 *  `executeAgentTool` is synchronous — deliberately, it is the pure gate every
+	 *  mutation passes through — so the IO happens outside and the verdict comes
+	 *  in as data. */
+	load?: CursorTelemetryLoad;
+}
+
+export type CursorTelemetryLoad =
+	| { status: "ok"; assetId: string; samples: CursorTrackSample[]; durationSec?: number }
+	/** We looked; this asset has no sidecar. */
+	| { status: "no-sidecar"; assetId: string }
+	/** We could NOT look: no reader wired, path refused, file unreadable. */
+	| { status: "unavailable"; assetId: string | null; note?: string };
+
+/** Resolves the asset a cursor/transcript question is about: the argument if it
+ *  names one, otherwise the project's primary asset. Shared so the async wrapper
+ *  in `deep-agent/service.ts` loads telemetry for exactly the asset the executor
+ *  will then report on. */
+export function resolveCursorAssetId(
+	document: AxcutDocument,
+	assetId?: string | null,
+): string | null {
+	return assetId ?? document.project.primaryAssetId ?? document.assets[0]?.id ?? null;
+}
+
 export function executeAgentTool(
 	document: AxcutDocument,
 	name: string,
 	rawArgs: string,
+	options?: AgentToolOptions,
 ): AgentToolExecution {
 	let args: unknown = {};
 	if (rawArgs.trim()) {
@@ -604,9 +758,81 @@ export function executeAgentTool(
 		}
 	}
 
+	// ponytail: THE guard for `allowAgentEdits`. It sits here, in front of the
+	// switch, because this function is the single gate every document mutation
+	// passes through — the two production callers (`documentTool` for the main
+	// agent and, through it, any sub-agent) and the workbench alike. A guard in
+	// the event sink could not work: the sink is an observer, called from inside
+	// the tool body, and by the time it fires the edit has happened.
+	//
+	// Reads stay open on purpose. A model that cannot call getCurrentDocument or
+	// getTranscript cannot describe the edit it is asking permission for, and
+	// would answer "I have no tool for that" — false, and worse than silence.
+	if (options?.editsAllowed === false && isMutatingTool(name)) {
+		return consentRequired(name, args);
+	}
+
 	switch (name) {
 		case "getCurrentDocument": {
-			return { ok: true, resultJson: JSON.stringify(documentSnapshotForModel(document)) };
+			return {
+				ok: true,
+				resultJson: JSON.stringify(documentSnapshotForModel(document, options?.cursorTelemetry)),
+			};
+		}
+
+		case "getCursorTrack": {
+			const parsed = getCursorTrackArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const assetId = resolveCursorAssetId(document, parsed.data.assetId);
+			if (!assetId)
+				return failure("Project has no assets — there is nothing to read telemetry for.");
+			if (!document.assets.some((a) => a.id === assetId)) {
+				return failure(`Unknown asset: ${assetId}`);
+			}
+			const load = options?.cursorTelemetry?.load;
+			// ponytail: `ok: true` on all three branches, including the two that
+			// return nothing. None of them is a failure of the CALL — the question
+			// was answered, and the answer is "none" or "I could not look". Marking
+			// them ok:false would push the model to retry a tool whose verdict will
+			// not change, and there is no timeout anywhere on this path.
+			if (!load || load.status === "unavailable") {
+				return {
+					ok: true,
+					resultJson: JSON.stringify({
+						available: false,
+						reason: "unavailable",
+						assetId,
+						note:
+							load?.note ??
+							"Cursor telemetry cannot be read in this run — no reader is wired to this " +
+								"runtime. This says nothing about whether the recording has any: report " +
+								"the limit as yours, and do not tell the user the project has no cursor data.",
+					}),
+				};
+			}
+			if (load.status === "no-sidecar") {
+				return {
+					ok: true,
+					resultJson: JSON.stringify({
+						available: false,
+						reason: "no-sidecar",
+						assetId: load.assetId,
+						note:
+							"Checked: this asset has no cursor-telemetry sidecar. That normally means it " +
+							"was imported rather than recorded with OpenScreen's cursor recorder. This is " +
+							"a fact about the asset, not a limit of yours.",
+					}),
+				};
+			}
+			const asset = document.assets.find((a) => a.id === load.assetId);
+			const track = buildCursorTrack({
+				assetId: load.assetId,
+				samples: load.samples,
+				durationSec: load.durationSec ?? asset?.durationSec ?? 0,
+				clips: document.timeline.clips,
+				trimRanges: document.timeline.trimRanges,
+			});
+			return { ok: true, resultJson: JSON.stringify({ available: true, ...track }) };
 		}
 
 		case "getTranscript": {
@@ -709,29 +935,114 @@ export function executeAgentTool(
 			// trim removed. Hand-rolling it here is exactly what left this façade orphaning
 			// stale pills the other two didn't.
 			const next = setClipSourceRange(document, clipId, sourceStartSec, sourceEndSec);
+			const dropped = droppedByEdit(document, next);
+			const casualties = dropped.droppedModifierIds.length + dropped.droppedTrimIds.length;
 			return {
 				ok: true,
 				document: next,
-				resultJson: JSON.stringify({ clipId, sourceStartSec, sourceEndSec }),
-				summary: `trimmed clip to ${formatSec(sourceStartSec)} – ${formatSec(sourceEndSec)}`,
+				resultJson: JSON.stringify({ clipId, sourceStartSec, sourceEndSec, ...dropped }),
+				summary:
+					`trimmed clip to ${formatSec(sourceStartSec)} – ${formatSec(sourceEndSec)}` +
+					(casualties > 0
+						? ` — dropped ${[...dropped.droppedModifierIds, ...dropped.droppedTrimIds].join(", ")}`
+						: ""),
+			};
+		}
+
+		case "moveClip": {
+			const parsed = moveClipArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			const { clipId } = parsed.data;
+			const beforeClipId = parsed.data.beforeClipId ?? null;
+			const clips = document.timeline.clips;
+			const moving = clips.find((c) => c.id === clipId);
+			if (!moving) return failure(`Unknown clip: ${clipId}. ${clipRoster(document)}`);
+			if (beforeClipId === clipId) {
+				return failure(
+					`beforeClipId must name a different clip than clipId (both were ${clipId}); ` +
+						`pass null to move it last.`,
+				);
+			}
+			const remaining = clips.filter((c) => c.id !== clipId);
+			let insertIndex = remaining.length;
+			if (beforeClipId !== null) {
+				insertIndex = remaining.findIndex((c) => c.id === beforeClipId);
+				if (insertIndex < 0) {
+					return failure(`Unknown clip: ${beforeClipId}. ${clipRoster(document)}`);
+				}
+			}
+			let next: AxcutDocument;
+			try {
+				// The clip's OWN origin is passed back in: `moveClip` stamps whatever it
+				// is given onto the clip, and a reorder is not a change of provenance —
+				// a user's clip stays the user's. Empty reason keeps its label.
+				next = moveClip(document, clipId, insertIndex, moving.origin, "");
+			} catch (err) {
+				return failure(err instanceof Error ? err.message : String(err));
+			}
+			const order = next.timeline.clips.map((c) => c.id);
+			return {
+				ok: true,
+				document: next,
+				resultJson: JSON.stringify({
+					clipId,
+					beforeClipId,
+					clipOrder: order,
+					// Nothing is destroyed by a reorder — say so, since the alternative
+					// tool the model used to reach for destroyed plenty in silence.
+					trimCount: next.timeline.trimRanges.length,
+					...droppedByEdit(document, next),
+				}),
+				summary:
+					`moved ${clipId} ${beforeClipId ? `before ${beforeClipId}` : "to the end"} ` +
+					`(order: ${order.join(" → ")})`,
 			};
 		}
 
 		case "replaceTimeline": {
 			const parsed = replaceTimelineArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
-			const userPlaced = document.timeline.clips.filter((c) => c.origin === "user");
-			if (userPlaced.length > 0) {
+			// ponytail: refuse on the DAMAGE, not on the provenance. The old guard
+			// tested `origin === "user"`, which missed every clip the agent itself had
+			// placed — and disarmed itself, since a rebuild stamps its own output
+			// `origin: "agent"`. `planTimelineReplacement` answers the question that
+			// actually matters: what would this call cost?
+			const plan = planTimelineReplacement(document, parsed.data.intervals);
+			const objections: string[] = [];
+			if (plan.reorderRequested) {
+				objections.push(
+					"- the intervals are not in ascending order, so this reads as a REORDER. " +
+						"replaceTimeline sorts and merges its intervals, so the swap could not happen " +
+						"at all: use moveClip (it preserves ids, trims and anchored effects).",
+				);
+			}
+			if (plan.lostClipIds.length > 0) {
+				objections.push(
+					`- these clips would be merged away or dropped: ${plan.lostClipIds.join(", ")}. ` +
+						"To shorten one, use setClipRange; to delete one, removeClip; to change the " +
+						"order, moveClip; to cut a span inside one, addTrim.",
+				);
+			}
+			if (plan.slidRegionIds.length > 0) {
+				objections.push(
+					`- these effects are anchored to those clips and would be re-anchored onto ` +
+						`whatever footage moved under them: ${plan.slidRegionIds.join(", ")}.`,
+				);
+			}
+			if (objections.length > 0) {
 				return {
 					ok: false,
 					resultJson: JSON.stringify({
 						error:
-							`Refused: ${userPlaced.length} user-placed clip(s) would be discarded. ` +
-							`For 'remove silences' / 'cut pauses' use addTrim (one call per silent range), ` +
-							`which preserves the placed clips and adds the cuts. ` +
-							`For 'trim this clip' use setClipRange. ` +
-							`Only call replaceTimeline when the user explicitly asks to rebuild the timeline from scratch ` +
-							`(after they have already cleared their placed clips).`,
+							"Refused: replaceTimeline would destroy work you were not asked to touch. " +
+							"Nothing was modified.\n" +
+							`${objections.join("\n")}\n` +
+							"replaceTimeline rebuilds the whole timeline and is only for an explicit " +
+							"'start over with these intervals' on a timeline with nothing to lose.",
+						code: "would_destroy",
+						reorderRequested: plan.reorderRequested,
+						lostClipIds: plan.lostClipIds,
+						slidRegionIds: plan.slidRegionIds,
 					}),
 				};
 			}
@@ -748,8 +1059,20 @@ export function executeAgentTool(
 				resultJson: JSON.stringify({
 					clipCount: next.timeline.clips.length,
 					trimCount: next.timeline.trimRanges.length,
+					// What survived, by name. The old result reported two counts, and a
+					// model reading `trimCount: 0` after a rebuild had nothing telling it
+					// WHICH cut had ceased to exist — which is what made "the silence trim
+					// is preserved" so easy to write.
+					preservedClipIds: plan.slots.map((s) => s.keepClipId).filter((id): id is string => !!id),
+					...(plan.absorbedTrimIds.length ? { absorbedTrimIds: plan.absorbedTrimIds } : {}),
+					...(plan.clippedTrimIds.length ? { clippedTrimIds: plan.clippedTrimIds } : {}),
 				}),
-				summary: `rebuilt timeline from ${kept} interval${kept === 1 ? "" : "s"} (${next.timeline.clips.length} clips, ${next.timeline.trimRanges.length} trims)`,
+				summary:
+					`rebuilt timeline from ${kept} interval${kept === 1 ? "" : "s"} ` +
+					`(${next.timeline.clips.length} clips, ${next.timeline.trimRanges.length} trims)` +
+					(plan.absorbedTrimIds.length
+						? ` — ${plan.absorbedTrimIds.join(", ")} now fall outside the kept spans`
+						: ""),
 			};
 		}
 
@@ -767,23 +1090,28 @@ export function executeAgentTool(
 				focusMode: "manual" as const,
 				source: "manual" as const,
 			};
+			const placed = anchorForAgent(zoom, document, "zoom");
+			const landing = landingOf(placed, document);
+			if (!landing.anchored) return coversNoClip("zoom", startMs / 1000, endMs / 1000, document);
 			const next: AxcutDocument = {
 				...document,
-				zoomRanges: [
-					...document.zoomRanges,
-					...anchorForAgent(zoom, document, "zoom"),
-				] as AxcutDocument["zoomRanges"],
+				zoomRanges: [...document.zoomRanges, ...placed] as AxcutDocument["zoomRanges"],
 			};
 			return {
 				ok: true,
 				document: next,
 				resultJson: JSON.stringify({
-					zoomId: zoom.id,
-					startSec: startMs / 1000,
-					endSec: endMs / 1000,
+					zoomId: landing.ids[0],
 					depth: zoom.depth,
+					// The depth alone is an ordinal; reported on its own it is what the
+					// model turns into "3×" for a frame that renders 1.80×.
+					renderedScale: effectiveZoomScale(zoom),
+					...landingReport(landing, startMs / 1000, endMs / 1000),
 				}),
-				summary: `added zoom ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
+				summary:
+					`added zoom ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)} ` +
+					`at ${effectiveZoomScale(zoom).toFixed(2)}×` +
+					landingSuffix(landing, startMs / 1000, endMs / 1000),
 			};
 		}
 
@@ -795,34 +1123,61 @@ export function executeAgentTool(
 			if (!existing) return failure(`Unknown zoom: ${zoomId}`);
 			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
 			const zoomPill = new Set(resolvePillIds(document.zoomRanges, zoomId));
-			const next: AxcutDocument = {
-				...document,
-				zoomRanges: replacePillSpan(
-					// payload edits first, applied to every region under the pill…
-					document.zoomRanges.map((z) =>
-						zoomPill.has(z.id)
-							? {
-									...z,
-									...(parsed.data.depth !== undefined
-										? { depth: parsed.data.depth as 1 | 2 | 3 | 4 | 5 | 6 }
-										: {}),
-									...(parsed.data.focus ? { focus: parsed.data.focus } : {}),
-								}
-							: z,
-					),
-					// …then the span: clamped against different-property pills, then re-ventilated.
-					zoomId,
-					startMs,
-					endMs,
-					document.timeline.clips,
-					() => createId("zoom"),
-				) as AxcutDocument["zoomRanges"],
-			};
+			// ponytail: a depth write CLEARS customScale, and that is the whole
+			// point. `effectiveZoomScale` returns customScale when it is set, so on a
+			// migrated v1.7 zoom (`migrate.ts:185` keeps both fields) a `setZoom
+			// {depth: 6}` used to store the 6, answer ok, and leave the picture at
+			// 1.10× forever — a write that could not do what every layer involved
+			// believed it did. Dropping the override is destructive of a fine-tuned
+			// value, so it happens only on an explicit depth write (which IS a
+			// request to change the strength) and is named in the result and the
+			// summary rather than done quietly.
+			const clearsCustomScale =
+				parsed.data.depth !== undefined &&
+				document.zoomRanges.some((z) => zoomPill.has(z.id) && z.customScale != null);
+			const rebuiltZooms = replacePillSpan(
+				// payload edits first, applied to every region under the pill…
+				document.zoomRanges.map((z) => {
+					if (!zoomPill.has(z.id)) return z;
+					const { customScale, ...rest } = z;
+					return {
+						...(clearsCustomScale ? rest : z),
+						...(parsed.data.depth !== undefined
+							? { depth: parsed.data.depth as 1 | 2 | 3 | 4 | 5 | 6 }
+							: {}),
+						...(parsed.data.focus ? { focus: parsed.data.focus } : {}),
+					};
+				}),
+				// …then the span: clamped against different-property pills, then re-ventilated.
+				zoomId,
+				startMs,
+				endMs,
+				document.timeline.clips,
+				() => createId("zoom"),
+			) as AxcutDocument["zoomRanges"];
+			const landing = landingAfterPillEdit(document.zoomRanges, rebuiltZooms, zoomPill, document);
+			if (!landing.anchored) return coversNoClip("zoom", startMs / 1000, endMs / 1000, document);
+			const next: AxcutDocument = { ...document, zoomRanges: rebuiltZooms };
+			// Read back off the document, not off the request: the pill may have been
+			// re-ventilated, and `renderedScale` is the only number the viewer sees.
+			const landed = new Set(landing.ids);
+			const strength = rebuiltZooms.find((z) => landed.has(z.id));
 			return {
 				ok: true,
 				document: next,
-				resultJson: JSON.stringify({ zoomId, startSec: startMs / 1000, endSec: endMs / 1000 }),
-				summary: `updated zoom ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
+				resultJson: JSON.stringify({
+					zoomId: landing.ids[0] ?? zoomId,
+					...(strength
+						? { depth: strength.depth, renderedScale: effectiveZoomScale(strength) }
+						: {}),
+					...(clearsCustomScale ? { clearedCustomScale: true } : {}),
+					...landingReport(landing, startMs / 1000, endMs / 1000),
+				}),
+				summary:
+					`updated zoom ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+					(strength ? ` at ${effectiveZoomScale(strength).toFixed(2)}×` : "") +
+					(clearsCustomScale ? " (cleared its custom scale so the depth applies)" : "") +
+					landingSuffix(landing, startMs / 1000, endMs / 1000),
 			};
 		}
 
@@ -834,23 +1189,26 @@ export function executeAgentTool(
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
 			const prev = (legacy.speedRegions as unknown[] | undefined) ?? [];
 			const region = { id: createId("speed"), startMs, endMs, speed: parsed.data.speed };
+			const placed = anchorForAgent(region, document, "speed");
+			const landing = landingOf(placed, document);
+			if (!landing.anchored) {
+				return coversNoClip("speed region", startMs / 1000, endMs / 1000, document);
+			}
 			const next: AxcutDocument = {
 				...document,
-				legacyEditor: {
-					...legacy,
-					speedRegions: [...prev, ...anchorForAgent(region, document, "speed")],
-				},
+				legacyEditor: { ...legacy, speedRegions: [...prev, ...placed] },
 			};
 			return {
 				ok: true,
 				document: next,
 				resultJson: JSON.stringify({
-					speedId: region.id,
-					startSec: startMs / 1000,
-					endSec: endMs / 1000,
+					speedId: landing.ids[0],
 					speed: region.speed,
+					...landingReport(landing, startMs / 1000, endMs / 1000),
 				}),
-				summary: `added ${parsed.data.speed}× speed ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
+				summary:
+					`added ${parsed.data.speed}× speed ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+					landingSuffix(landing, startMs / 1000, endMs / 1000),
 			};
 		}
 
@@ -867,30 +1225,33 @@ export function executeAgentTool(
 			if (!existing) return failure(`Unknown speed region: ${parsed.data.speedId}`);
 			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
 			const speed = parsed.data.speed ?? existing.speed;
+			const rebuiltSpeeds = replacePillSpan(
+				prev.map((s) => (speedPill.has(s.id) ? { ...s, speed } : s)),
+				parsed.data.speedId,
+				startMs,
+				endMs,
+				document.timeline.clips,
+				() => createId("speed"),
+			);
+			const landing = landingAfterPillEdit(prev, rebuiltSpeeds, speedPill, document);
+			if (!landing.anchored) {
+				return coversNoClip("speed region", startMs / 1000, endMs / 1000, document);
+			}
 			const next: AxcutDocument = {
 				...document,
-				legacyEditor: {
-					...legacy,
-					speedRegions: replacePillSpan(
-						prev.map((s) => (speedPill.has(s.id) ? { ...s, speed } : s)),
-						parsed.data.speedId,
-						startMs,
-						endMs,
-						document.timeline.clips,
-						() => createId("speed"),
-					),
-				},
+				legacyEditor: { ...legacy, speedRegions: rebuiltSpeeds },
 			};
 			return {
 				ok: true,
 				document: next,
 				resultJson: JSON.stringify({
-					speedId: parsed.data.speedId,
-					startSec: startMs / 1000,
-					endSec: endMs / 1000,
+					speedId: landing.ids[0] ?? parsed.data.speedId,
 					speed,
+					...landingReport(landing, startMs / 1000, endMs / 1000),
 				}),
-				summary: `updated speed to ${speed}×`,
+				summary:
+					`updated speed to ${speed}× over ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+					landingSuffix(landing, startMs / 1000, endMs / 1000),
 			};
 		}
 
@@ -920,22 +1281,25 @@ export function executeAgentTool(
 				},
 				zIndex: document.annotations.length + 1,
 			};
+			const placed = anchorForAgent(ann, document, "ann");
+			const landing = landingOf(placed, document);
+			if (!landing.anchored) {
+				return coversNoClip("annotation", startMs / 1000, endMs / 1000, document);
+			}
 			const next: AxcutDocument = {
 				...document,
-				annotations: [
-					...document.annotations,
-					...anchorForAgent(ann, document, "ann"),
-				] as AxcutDocument["annotations"],
+				annotations: [...document.annotations, ...placed] as AxcutDocument["annotations"],
 			};
 			return {
 				ok: true,
 				document: next,
 				resultJson: JSON.stringify({
-					annotationId: ann.id,
-					startSec: startMs / 1000,
-					endSec: endMs / 1000,
+					annotationId: landing.ids[0],
+					...landingReport(landing, startMs / 1000, endMs / 1000),
 				}),
-				summary: `added annotation "${parsed.data.text.slice(0, 24)}"`,
+				summary:
+					`added annotation "${parsed.data.text.slice(0, 24)}" ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+					landingSuffix(landing, startMs / 1000, endMs / 1000),
 			};
 		}
 
@@ -947,35 +1311,43 @@ export function executeAgentTool(
 			const annPill = new Set(resolvePillIds(document.annotations, annotationId));
 			if (!existing) return failure(`Unknown annotation: ${annotationId}`);
 			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
-			const next: AxcutDocument = {
-				...document,
-				annotations: replacePillSpan(
-					document.annotations.map((a) =>
-						annPill.has(a.id)
-							? {
-									...a,
-									...(parsed.data.text !== undefined
-										? { content: parsed.data.text, textContent: parsed.data.text }
-										: {}),
-								}
-							: a,
-					),
-					annotationId,
-					startMs,
-					endMs,
-					document.timeline.clips,
-					() => createId("ann"),
+			const rebuiltAnnotations = replacePillSpan(
+				document.annotations.map((a) =>
+					annPill.has(a.id)
+						? {
+								...a,
+								...(parsed.data.text !== undefined
+									? { content: parsed.data.text, textContent: parsed.data.text }
+									: {}),
+							}
+						: a,
 				),
-			};
+				annotationId,
+				startMs,
+				endMs,
+				document.timeline.clips,
+				() => createId("ann"),
+			);
+			const landing = landingAfterPillEdit(
+				document.annotations,
+				rebuiltAnnotations,
+				annPill,
+				document,
+			);
+			if (!landing.anchored) {
+				return coversNoClip("annotation", startMs / 1000, endMs / 1000, document);
+			}
+			const next: AxcutDocument = { ...document, annotations: rebuiltAnnotations };
 			return {
 				ok: true,
 				document: next,
 				resultJson: JSON.stringify({
-					annotationId,
-					startSec: startMs / 1000,
-					endSec: endMs / 1000,
+					annotationId: landing.ids[0] ?? annotationId,
+					...landingReport(landing, startMs / 1000, endMs / 1000),
 				}),
-				summary: `updated annotation ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
+				summary:
+					`updated annotation ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+					landingSuffix(landing, startMs / 1000, endMs / 1000),
 			};
 		}
 
@@ -987,22 +1359,27 @@ export function executeAgentTool(
 			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
 			const prev = (legacy.cameraFullscreenRegions as unknown[] | undefined) ?? [];
 			const region = { id: createId("camfull"), startMs, endMs };
+			const placed = anchorForAgent(region, document, "camfull");
+			const landing = landingOf(placed, document);
+			if (!landing.anchored) {
+				return coversNoClip("full-camera region", startMs / 1000, endMs / 1000, document);
+			}
+			const blind = noCameraUnderSpan(document, landing.startSec, landing.endSec);
+			if (blind) return blind;
 			const next: AxcutDocument = {
 				...document,
-				legacyEditor: {
-					...legacy,
-					cameraFullscreenRegions: [...prev, ...anchorForAgent(region, document, "camfull")],
-				},
+				legacyEditor: { ...legacy, cameraFullscreenRegions: [...prev, ...placed] },
 			};
 			return {
 				ok: true,
 				document: next,
 				resultJson: JSON.stringify({
-					cameraFullscreenId: region.id,
-					startSec: startMs / 1000,
-					endSec: endMs / 1000,
+					cameraFullscreenId: landing.ids[0],
+					...landingReport(landing, startMs / 1000, endMs / 1000),
 				}),
-				summary: `full-camera ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
+				summary:
+					`full-camera ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+					landingSuffix(landing, startMs / 1000, endMs / 1000),
 			};
 		}
 
@@ -1018,29 +1395,35 @@ export function executeAgentTool(
 			if (!existing)
 				return failure(`Unknown full-camera region: ${parsed.data.cameraFullscreenId}`);
 			const { startMs, endMs } = resolveSpanMs(existing, parsed.data.startSec, parsed.data.endSec);
+			const camPill = new Set(resolvePillIds(prev, parsed.data.cameraFullscreenId));
+			const rebuiltCamera = replacePillSpan(
+				prev,
+				parsed.data.cameraFullscreenId,
+				startMs,
+				endMs,
+				document.timeline.clips,
+				() => createId("camfull"),
+			);
+			const landing = landingAfterPillEdit(prev, rebuiltCamera, camPill, document);
+			if (!landing.anchored) {
+				return coversNoClip("full-camera region", startMs / 1000, endMs / 1000, document);
+			}
+			const blindMove = noCameraUnderSpan(document, landing.startSec, landing.endSec);
+			if (blindMove) return blindMove;
 			const next: AxcutDocument = {
 				...document,
-				legacyEditor: {
-					...legacy,
-					cameraFullscreenRegions: replacePillSpan(
-						prev,
-						parsed.data.cameraFullscreenId,
-						startMs,
-						endMs,
-						document.timeline.clips,
-						() => createId("camfull"),
-					),
-				},
+				legacyEditor: { ...legacy, cameraFullscreenRegions: rebuiltCamera },
 			};
 			return {
 				ok: true,
 				document: next,
 				resultJson: JSON.stringify({
-					cameraFullscreenId: parsed.data.cameraFullscreenId,
-					startSec: startMs / 1000,
-					endSec: endMs / 1000,
+					cameraFullscreenId: landing.ids[0] ?? parsed.data.cameraFullscreenId,
+					...landingReport(landing, startMs / 1000, endMs / 1000),
 				}),
-				summary: `moved full-camera to ${formatSec(startMs / 1000)} – ${formatSec(endMs / 1000)}`,
+				summary:
+					`moved full-camera to ${formatSec(landing.startSec)} – ${formatSec(landing.endSec)}` +
+					landingSuffix(landing, startMs / 1000, endMs / 1000),
 			};
 		}
 
@@ -1096,11 +1479,21 @@ export function executeAgentTool(
 				return failure(`Unknown clip: ${clipId}`);
 			}
 			const next = removeClip(document, clipId);
+			const dropped = droppedByEdit(document, next);
+			const casualties = dropped.droppedModifierIds.length + dropped.droppedTrimIds.length;
 			return {
 				ok: true,
 				document: next,
-				resultJson: JSON.stringify({ removed: clipId, clipCount: next.timeline.clips.length }),
-				summary: `removed clip ${clipId}`,
+				resultJson: JSON.stringify({
+					removed: clipId,
+					clipCount: next.timeline.clips.length,
+					...dropped,
+				}),
+				summary:
+					`removed clip ${clipId}` +
+					(casualties > 0
+						? ` — dropped ${[...dropped.droppedModifierIds, ...dropped.droppedTrimIds].join(", ")}`
+						: ""),
 			};
 		}
 

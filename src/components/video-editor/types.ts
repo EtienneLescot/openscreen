@@ -1,7 +1,12 @@
+import {
+	effectiveZoomScale,
+	type ZoomDepth,
+	type ZoomScaleInput,
+} from "@/lib/ai-edition/timeline/zoom-scale";
 import type { WebcamLayoutPreset } from "@/lib/compositeLayout";
 import { clamp01 } from "@/utils/math";
 
-export type ZoomDepth = 1 | 2 | 3 | 4 | 5 | 6;
+export type { ZoomDepth, ZoomScaleInput };
 export type ZoomFocusMode = "manual" | "auto";
 export type { WebcamLayoutPreset };
 /** Webcam size as a percentage of the canvas reference dimension (10-50). */
@@ -422,27 +427,23 @@ export const SPEED_OPTIONS: Array<{ speed: PlaybackSpeed; label: string }> = [
 
 export const DEFAULT_PLAYBACK_SPEED: PlaybackSpeed = 1.5;
 
-export const ZOOM_DEPTH_SCALES: Record<ZoomDepth, number> = {
-	1: 1.25,
-	2: 1.5,
-	3: 1.8,
-	4: 2.2,
-	5: 3.5,
-	6: 5.0,
-};
-
-export const MIN_ZOOM_SCALE = 1.0;
-export const MAX_ZOOM_SCALE = 5.0;
-
-export const DEFAULT_ZOOM_DEPTH: ZoomDepth = 3;
+// The table and the clamp moved to `@/lib/ai-edition/timeline/zoom-scale` so
+// the Electron main process can import them without the `@/` alias, which its
+// build does not resolve. Re-exported here because every renderer importer
+// (focusUtils, zoomRegionUtils, sceneDescription, the inspector, the timeline)
+// reaches them through this module.
+export {
+	DEFAULT_ZOOM_DEPTH,
+	effectiveZoomScale,
+	MAX_ZOOM_SCALE,
+	MIN_ZOOM_SCALE,
+	ZOOM_DEPTH_LEGEND,
+	ZOOM_DEPTH_SCALES,
+} from "@/lib/ai-edition/timeline/zoom-scale";
 
 /** Returns the effective zoom scale for a region, preferring customScale over the preset. */
-export function getZoomScale(region: ZoomRegion): number {
-	if (region.customScale != null) {
-		const clamped = Math.max(MIN_ZOOM_SCALE, Math.min(MAX_ZOOM_SCALE, region.customScale));
-		if (Number.isFinite(clamped)) return clamped;
-	}
-	return ZOOM_DEPTH_SCALES[region.depth];
+export function getZoomScale(region: ZoomScaleInput): number {
+	return effectiveZoomScale(region);
 }
 
 // An unknown focus means "centre", not "top-left" — so this one can't use the

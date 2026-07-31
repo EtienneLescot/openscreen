@@ -17,8 +17,18 @@ export interface LlmConfig {
 	model: string;
 	baseUrl?: string;
 	reasoningEffort?: string;
-	/** P2.5 — when false, the agent's write tools are refused and the model is
-	 * told to ask the user for confirmation. Undefined means enabled. */
+	/**
+	 * P2.5 — when false, the agent's write tools are refused and the model is
+	 * told to ask the user for confirmation. Undefined means enabled.
+	 *
+	 * ponytail: this comment described the contract for a whole release while
+	 * `chat-service.ts` read the flag and dropped it (`void editsAllowed;`).
+	 * It is now enforced in two places — `buildSystemPrompt` for the model and
+	 * `executeAgentTool` for the runtime — plus a guard on the document
+	 * `runChat` hands back. What is still missing is a per-turn "yes, go ahead"
+	 * channel: the user re-enables the setting, which is what the refusal tells
+	 * the model to say (see technical-documentation/architecture/ai-agent.md).
+	 */
 	allowAgentEdits?: boolean;
 }
 

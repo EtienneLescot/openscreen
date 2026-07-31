@@ -6,6 +6,7 @@ import {
 	invertIntervals,
 	moveClip,
 	normalizeIntervals,
+	planTimelineReplacement,
 	primaryAssetDuration,
 	rederiveRegionMs,
 	removeClip,
@@ -173,6 +174,423 @@ describe("timeline pure functions", () => {
 				project: { id: "p", title: "t", createdAt: "", updatedAt: "", primaryAssetId: undefined },
 			});
 			expect(() => replaceTimeline(doc, [], "x")).toThrow();
+		});
+	});
+
+	// ── D-DESTRUCT ────────────────────────────────────────────────────────────
+	//
+	// `replaceTimeline` was destructive in three separate ways, each invisible
+	// from its return value: it re-minted every id, it merged adjacent intervals
+	// (so handing it the timeline's OWN intervals collapsed two clips into one),
+	// it replaced `trimRanges` wholesale, and it re-anchored every modifier from
+	// its ruler position rather than its content. The document stayed
+	// schema-valid throughout, which is why nothing caught it.
+	describe("replaceTimeline is not destructive by default", () => {
+		/** Two adjacent clips over one asset, a user cut inside the first, and a
+		 *  zoom anchored to the second — the shape the workbench measures. */
+		function twoClipDoc(): AxcutDocument {
+			return makeDoc({
+				timeline: {
+					clips: [
+						makeClip({ id: "clip_1", sourceStartSec: 0, sourceEndSec: 30, timelineEndSec: 30 }),
+						makeClip({
+							id: "clip_2",
+							sourceStartSec: 30,
+							sourceEndSec: 60,
+							timelineStartSec: 30,
+							timelineEndSec: 60,
+							reason: "demo",
+						}),
+					],
+					gaps: [],
+					trimRanges: [makeTrim({ id: "trim_1", startSec: 12, endSec: 17 })],
+					muteRanges: [],
+					speedRanges: [],
+					captionRanges: [],
+				},
+				zoomRanges: [
+					{
+						id: "zoom_demo",
+						startMs: 40_000,
+						endMs: 45_000,
+						depth: 3,
+						focus: { cx: 0.5, cy: 0.5 },
+						clipId: "clip_2",
+						sourceStartSec: 40,
+						sourceEndSec: 45,
+					},
+				] as unknown as AxcutDocument["zoomRanges"],
+			});
+		}
+
+		it("keeps both clips and the user's cut when handed the timeline's own intervals", () => {
+			// The identity call. `normalizeIntervals` merges [0,30] and [30,60] into
+			// one span, so this used to return a single `clip_1` spanning 0–60 with
+			// zero trims: nothing asked for, everything changed.
+			const updated = replaceTimeline(
+				twoClipDoc(),
+				[
+					{ startSec: 0, endSec: 30 },
+					{ startSec: 30, endSec: 60 },
+				],
+				"identity",
+				"agent",
+			);
+			expect(updated.timeline.clips.map((c) => c.id)).toEqual(["clip_1", "clip_2"]);
+			expect(updated.timeline.trimRanges.map((t) => t.id)).toEqual(["trim_1"]);
+			expect(updated.timeline.trimRanges[0]).toMatchObject({ startSec: 12, endSec: 17 });
+		});
+
+		it("keeps a preserved clip's origin and label instead of stamping its own", () => {
+			const updated = replaceTimeline(
+				twoClipDoc(),
+				[
+					{ startSec: 0, endSec: 30 },
+					{ startSec: 30, endSec: 60 },
+				],
+				"rebuilt by the agent",
+				"agent",
+			);
+			expect(updated.timeline.clips[1]).toMatchObject({ origin: "user", reason: "demo" });
+		});
+
+		it("leaves an anchored zoom on its own footage, not on whatever slid under it", () => {
+			// clip_1 shrinks to 0–25, so clip_2 (kept intact) slides from ruler 30 to
+			// ruler 25 while its CONTENT is unchanged. Re-anchoring the zoom from its
+			// RAW ms — what a rebuild used to do to EVERY modifier — reads the ruler
+			// rather than the content: ruler 40 now falls at source 45, so the zoom
+			// came back five seconds into footage the user never pointed at, with a
+			// schema-valid document and nothing said.
+			const updated = replaceTimeline(
+				twoClipDoc(),
+				[
+					{ startSec: 0, endSec: 25 },
+					{ startSec: 30, endSec: 60 },
+				],
+				"shrink the intro",
+				"agent",
+			);
+			const clip2 = updated.timeline.clips.find((c) => c.id === "clip_2");
+			expect(clip2).toMatchObject({ timelineStartSec: 25, sourceStartSec: 30 });
+			expect(updated.zoomRanges[0]).toMatchObject({
+				id: "zoom_demo",
+				clipId: "clip_2",
+				sourceStartSec: 40,
+				sourceEndSec: 45,
+			});
+			// And its derived ms followed its clip: ruler 25 + (40 − 30) = 35 s.
+			expect(updated.zoomRanges[0]).toMatchObject({ startMs: 35_000, endMs: 40_000 });
+		});
+
+		it("narrows a straddling trim instead of deleting it, and keeps its id", () => {
+			const updated = replaceTimeline(twoClipDoc(), [{ startSec: 0, endSec: 15 }], "cut", "agent");
+			const kept = updated.timeline.trimRanges.find((t) => t.id === "trim_1");
+			expect(kept).toMatchObject({ startSec: 12, endSec: 15 });
+			// And the stretch beyond the kept interval is cut by the complement.
+			expect(updated.timeline.trimRanges.some((t) => t.startSec === 15 && t.endSec === 60)).toBe(
+				true,
+			);
+		});
+
+		it("never touches another asset's cuts", () => {
+			// The same bug `operations.ts` had already had to fix for add_trim_range:
+			// `trimRanges` was replaced in full by the complement of the PRIMARY
+			// asset's intervals, with no assetId filter anywhere.
+			const doc = makeDoc({
+				timeline: {
+					clips: [],
+					gaps: [],
+					trimRanges: [makeTrim({ id: "trim_other", assetId: "asset_2", startSec: 1, endSec: 2 })],
+					muteRanges: [],
+					speedRanges: [],
+					captionRanges: [],
+				},
+			});
+			const updated = replaceTimeline(doc, [{ startSec: 0, endSec: 60 }], "rebuild", "agent");
+			expect(updated.timeline.trimRanges.map((t) => t.id)).toContain("trim_other");
+		});
+
+		it("mints unique ids for the slots that match nothing", () => {
+			// Positional `clip_${i+1}` / `trim_${i+1}` are what let an id survive a
+			// rebuild while designating something else — and they would collide
+			// outright with a preserved id sitting at the same index.
+			const updated = replaceTimeline(
+				twoClipDoc(),
+				[
+					{ startSec: 0, endSec: 30 },
+					{ startSec: 40, endSec: 50 },
+				],
+				"cut",
+				"agent",
+			);
+			const ids = updated.timeline.clips.map((c) => c.id);
+			expect(ids[0]).toBe("clip_1");
+			expect(ids[1]).not.toBe("clip_2");
+			expect(new Set(ids).size).toBe(ids.length);
+			const trimIds = updated.timeline.trimRanges.map((t) => t.id);
+			expect(new Set(trimIds).size).toBe(trimIds.length);
+		});
+
+		it("still resets everything when the caller opts out — restoreFullTimeline", () => {
+			// The one caller whose semantics ARE "throw it all away". If preservation
+			// leaked in here, the Restore button would stop restoring.
+			const restored = restoreFullTimeline(twoClipDoc());
+			expect(restored.timeline.clips.map((c) => c.id)).toEqual(["clip_1"]);
+			expect(restored.timeline.clips[0]).toMatchObject({ sourceStartSec: 0, sourceEndSec: 60 });
+			expect(restored.timeline.trimRanges).toHaveLength(0);
+		});
+	});
+
+	// The anchoring contract itself, stated once and checked after each structural
+	// edit rather than re-derived per case. `timelineMap` holds that a fragment's
+	// `{clipId, sourceStartSec, sourceEndSec}` is the truth and its `startMs`/
+	// `endMs` are a CACHE of where that lands on the ruler — so any operation that
+	// moves clips must leave the two agreeing. Both halves of D-DESTRUCT were
+	// violations of exactly this: the rebuild recomputed the anchor from the
+	// cache (backwards), and nothing checked the result.
+	describe("the anchor/derived-ms invariant survives a structural edit", () => {
+		/** Every anchored region's cached ms equals what its clip's live position
+		 *  says they should be, and no region points at a clip that is gone. */
+		function assertAnchorsAgree(document: AxcutDocument): void {
+			const clips = document.timeline.clips;
+			for (const region of document.zoomRanges as unknown as Array<{
+				id: string;
+				startMs: number;
+				endMs: number;
+				clipId?: string;
+				sourceStartSec?: number;
+				sourceEndSec?: number;
+			}>) {
+				if (!region.clipId) continue;
+				const clip = clips.find((c) => c.id === region.clipId);
+				expect(clip, `${region.id} anchored to a clip that no longer exists`).toBeDefined();
+				if (!clip || region.sourceStartSec === undefined || region.sourceEndSec === undefined) {
+					continue;
+				}
+				const offset = clip.timelineStartSec - clip.sourceStartSec;
+				expect(region.startMs, `${region.id} startMs`).toBe(
+					Math.round((region.sourceStartSec + offset) * 1000),
+				);
+				expect(region.endMs, `${region.id} endMs`).toBe(
+					Math.round((region.sourceEndSec + offset) * 1000),
+				);
+			}
+		}
+
+		/** Three clips, and a zoom straddling the boundary between the last two —
+		 *  stored as TWO fragments, which is the case where a reorder can pull the
+		 *  halves of one pill apart. */
+		function straddled(): AxcutDocument {
+			return makeDoc({
+				timeline: {
+					clips: [
+						makeClip({ id: "clip_1", sourceStartSec: 0, sourceEndSec: 20, timelineEndSec: 20 }),
+						makeClip({
+							id: "clip_2",
+							sourceStartSec: 20,
+							sourceEndSec: 40,
+							timelineStartSec: 20,
+							timelineEndSec: 40,
+						}),
+						makeClip({
+							id: "clip_3",
+							sourceStartSec: 40,
+							sourceEndSec: 60,
+							timelineStartSec: 40,
+							timelineEndSec: 60,
+						}),
+					],
+					gaps: [],
+					trimRanges: [],
+					muteRanges: [],
+					speedRanges: [],
+					captionRanges: [],
+				},
+				zoomRanges: [
+					{
+						id: "zoom_a",
+						startMs: 35_000,
+						endMs: 40_000,
+						depth: 3,
+						focus: { cx: 0.5, cy: 0.5 },
+						clipId: "clip_2",
+						sourceStartSec: 35,
+						sourceEndSec: 40,
+					},
+					{
+						id: "zoom_b",
+						startMs: 40_000,
+						endMs: 45_000,
+						depth: 3,
+						focus: { cx: 0.5, cy: 0.5 },
+						clipId: "clip_3",
+						sourceStartSec: 40,
+						sourceEndSec: 45,
+					},
+				] as unknown as AxcutDocument["zoomRanges"],
+			});
+		}
+
+		it("holds after a moveClip", () => {
+			const moved = moveClip(straddled(), "clip_3", 0, "user", "");
+			expect(moved.timeline.clips.map((c) => c.id)).toEqual(["clip_3", "clip_1", "clip_2"]);
+			assertAnchorsAgree(moved);
+			// Each half of the straddling pill went with its OWN clip, so they are
+			// no longer adjacent on the ruler — which is correct, and is why
+			// fragments carry an anchor rather than a shared group marker.
+			const byId = new Map(moved.zoomRanges.map((z) => [z.id, z]));
+			expect(byId.get("zoom_b")?.startMs).toBe(0);
+			expect(byId.get("zoom_a")?.startMs).toBe(55_000);
+		});
+
+		it("holds after a rebuild that keeps every clip", () => {
+			const rebuilt = replaceTimeline(
+				straddled(),
+				[
+					{ startSec: 0, endSec: 20 },
+					{ startSec: 20, endSec: 40 },
+					{ startSec: 40, endSec: 60 },
+				],
+				"identity",
+				"agent",
+			);
+			assertAnchorsAgree(rebuilt);
+			expect(rebuilt.zoomRanges.map((z) => z.id)).toEqual(["zoom_a", "zoom_b"]);
+		});
+
+		it("holds after a rebuild that drops the clip a fragment lived on", () => {
+			// clip_3 is gone, so `zoom_b` has no content left. It must be DROPPED,
+			// not re-pointed at whatever now occupies its old ruler position.
+			const rebuilt = replaceTimeline(
+				straddled(),
+				[
+					{ startSec: 0, endSec: 20 },
+					{ startSec: 20, endSec: 40 },
+				],
+				"drop the tail",
+				"agent",
+			);
+			assertAnchorsAgree(rebuilt);
+			expect(rebuilt.zoomRanges.map((z) => z.id)).toEqual(["zoom_a"]);
+		});
+
+		it("keeps a region that was never anchored at all", () => {
+			// The other half of the orphan rule: a v2 migration produces regions
+			// with RAW ms and no anchor, because anchoring needs a clip with a real
+			// extent. Dropping "cannot place it" wholesale would delete those.
+			const doc = straddled();
+			const unanchored: AxcutDocument = {
+				...doc,
+				zoomRanges: [
+					{
+						id: "zoom_legacy",
+						startMs: 55_000,
+						endMs: 58_000,
+						depth: 3,
+						focus: { cx: 0.5, cy: 0.5 },
+					},
+				] as unknown as AxcutDocument["zoomRanges"],
+			};
+			const rebuilt = replaceTimeline(
+				unanchored,
+				[{ startSec: 0, endSec: 20 }],
+				"drop the tail",
+				"agent",
+			);
+			expect(rebuilt.zoomRanges.map((z) => z.id)).toEqual(["zoom_legacy"]);
+		});
+
+		it("holds after a setClipRange that narrows a fragment's window", () => {
+			const narrowed = setClipSourceRange(straddled(), "clip_2", 20, 37);
+			assertAnchorsAgree(narrowed);
+			// zoom_a covered 35–40 of a window that now ends at 37: clamped, kept.
+			expect(narrowed.zoomRanges.find((z) => z.id === "zoom_a")).toMatchObject({
+				sourceStartSec: 35,
+				sourceEndSec: 37,
+			});
+		});
+	});
+
+	describe("planTimelineReplacement", () => {
+		function twoClipDoc(): AxcutDocument {
+			return makeDoc({
+				timeline: {
+					clips: [
+						makeClip({ id: "clip_1", sourceStartSec: 0, sourceEndSec: 30, timelineEndSec: 30 }),
+						makeClip({
+							id: "clip_2",
+							sourceStartSec: 30,
+							sourceEndSec: 60,
+							timelineStartSec: 30,
+							timelineEndSec: 60,
+						}),
+					],
+					gaps: [],
+					trimRanges: [makeTrim({ id: "trim_1", startSec: 12, endSec: 17 })],
+					muteRanges: [],
+					speedRanges: [],
+					captionRanges: [],
+				},
+			});
+		}
+
+		it("reads a swap as a reorder — the intent only survives before the sort", () => {
+			const plan = planTimelineReplacement(twoClipDoc(), [
+				{ startSec: 30, endSec: 60 },
+				{ startSec: 0, endSec: 30 },
+			]);
+			expect(plan.reorderRequested).toBe(true);
+		});
+
+		it("does not call an ordinary rebuild a reorder", () => {
+			const plan = planTimelineReplacement(twoClipDoc(), [
+				{ startSec: 0, endSec: 30 },
+				{ startSec: 30, endSec: 60 },
+			]);
+			expect(plan.reorderRequested).toBe(false);
+			expect(plan.lostClipIds).toEqual([]);
+			expect(plan.slots.map((s) => s.keepClipId)).toEqual(["clip_1", "clip_2"]);
+		});
+
+		it("names the clips a narrower rebuild would cost", () => {
+			const plan = planTimelineReplacement(twoClipDoc(), [{ startSec: 0, endSec: 20 }]);
+			expect(plan.lostClipIds).toEqual(["clip_1", "clip_2"]);
+		});
+
+		it("reports a trim that falls outside the kept spans as absorbed, not lost", () => {
+			// Its id goes, its CUT does not: that stretch is excluded anyway. Calling
+			// it a loss would make the guard refuse a rebuild that costs nothing.
+			const plan = planTimelineReplacement(twoClipDoc(), [{ startSec: 0, endSec: 10 }]);
+			expect(plan.absorbedTrimIds).toEqual(["trim_1"]);
+			expect(plan.clippedTrimIds).toEqual([]);
+		});
+
+		it("counts the modifiers that would be re-anchored onto other footage", () => {
+			const doc = twoClipDoc();
+			const withZoom: AxcutDocument = {
+				...doc,
+				zoomRanges: [
+					{
+						id: "zoom_demo",
+						startMs: 40_000,
+						endMs: 45_000,
+						depth: 3,
+						focus: { cx: 0.5, cy: 0.5 },
+						clipId: "clip_2",
+						sourceStartSec: 40,
+						sourceEndSec: 45,
+					},
+				] as unknown as AxcutDocument["zoomRanges"],
+			};
+			expect(
+				planTimelineReplacement(withZoom, [{ startSec: 0, endSec: 20 }]).slidRegionIds,
+			).toEqual(["zoom_demo"]);
+			expect(
+				planTimelineReplacement(withZoom, [
+					{ startSec: 0, endSec: 30 },
+					{ startSec: 30, endSec: 60 },
+				]).slidRegionIds,
+			).toEqual([]);
 		});
 	});
 

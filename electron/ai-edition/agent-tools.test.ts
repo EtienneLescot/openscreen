@@ -4,7 +4,8 @@ import {
 	createEmptyDocument,
 	documentSchema,
 } from "../../src/lib/ai-edition/schema";
-import { AGENT_TOOL_SPECS, executeAgentTool, isMutatingTool } from "./agent-tools";
+import { ZOOM_DEPTH_SCALES } from "../../src/lib/ai-edition/timeline/zoom-scale";
+import { executeAgentTool, isMutatingTool, MUTATING_TOOL_NAMES } from "./agent-tools";
 
 function fixtureDocument(): AxcutDocument {
 	const base = createEmptyDocument({ title: "Test", projectId: "proj_1" });
@@ -71,28 +72,107 @@ function fixtureDocument(): AxcutDocument {
 	});
 }
 
-describe("agent-tools specs", () => {
-	it("declares the clip/trim + effect tools with mutation flags", () => {
-		const names = AGENT_TOOL_SPECS.map((t) => t.name);
-		expect(names).toEqual([
-			"getCurrentDocument",
-			"getTranscript",
-			"addTrim",
-			"setTrim",
-			"setClipRange",
-			"replaceTimeline",
-			"addZoom",
-			"setZoom",
-			"addSpeed",
-			"setSpeed",
-			"addAnnotation",
-			"setAnnotation",
-			"addCameraFullscreen",
-			"setCameraFullscreen",
-			"removeTrim",
-			"removeModifier",
-			"removeClip",
-		]);
+/** One clip whose end is NOT a round number — the real recording length that
+ * made the clamp visible (24.703979 s of source, stored as 24 704 ms). */
+function shortSingleClip(): AxcutDocument {
+	const base = createEmptyDocument({ title: "Short", projectId: "proj_short" });
+	return documentSchema.parse({
+		...base,
+		project: { ...base.project, primaryAssetId: "asset_1" },
+		assets: [
+			{
+				id: "asset_1",
+				kind: "video",
+				label: "Recording",
+				originalPath: "C:/videos/rec.mp4",
+				durationSec: 24.703979,
+			},
+		],
+		timeline: {
+			...base.timeline,
+			clips: [
+				{
+					id: "clip_1",
+					assetId: "asset_1",
+					sourceStartSec: 0,
+					sourceEndSec: 24.703979,
+					timelineStartSec: 0,
+					timelineEndSec: 24.703979,
+					wordRefs: [],
+					origin: "user",
+					reason: "",
+				},
+			],
+		},
+	});
+}
+
+/** The same document with a webcam linked to its asset. Two projects that
+ * differ ONLY here were indistinguishable to the model before `hasCameraTrack`
+ * reached the snapshot. */
+function withCameraTrack(document: AxcutDocument): AxcutDocument {
+	return documentSchema.parse({
+		...document,
+		assets: document.assets.map((a) => ({
+			...a,
+			cameraTrack: { sourcePath: "C:/videos/cam.mp4", startMs: 0, offsetMs: 0, visible: true },
+		})),
+	});
+}
+
+/** A zoom carrying BOTH depth and customScale — the state `migrate.ts` leaves a
+ * v1.7 project in, where the depth is inert at render. */
+function zoomWithCustomScale(document: AxcutDocument, customScale: number): AxcutDocument {
+	return documentSchema.parse({
+		...document,
+		zoomRanges: [
+			{
+				id: "zoom_1",
+				startMs: 2_000,
+				endMs: 6_000,
+				clipId: "clip_1",
+				sourceStartSec: 2,
+				sourceEndSec: 6,
+				depth: 3,
+				focus: { cx: 0.5, cy: 0.5 },
+				focusMode: "manual",
+				customScale,
+				source: "manual",
+			},
+		],
+	});
+}
+
+describe("the mutating-tool table", () => {
+	it("names every write and nothing else", () => {
+		// ponytail: this used to read the `name`/`mutating` pairs off
+		// AGENT_TOOL_SPECS, ~300 lines of JSON schema whose comment claimed it was
+		// "sent verbatim to the provider" and which had not reached a provider in a
+		// release. The names are now pinned where they are actually built — see
+		// deep-agent/service.test.ts, which ties TOOL_DESCRIPTIONS, buildTools and
+		// this executor's switch to one another. What is left here is the one thing
+		// the specs carried that production still needs: which tools write.
+		expect([...MUTATING_TOOL_NAMES].sort()).toEqual(
+			[
+				"addAnnotation",
+				"addCameraFullscreen",
+				"addSpeed",
+				"addTrim",
+				"addZoom",
+				"moveClip",
+				"removeClip",
+				"removeModifier",
+				"removeTrim",
+				"replaceTimeline",
+				"setAnnotation",
+				"setCameraFullscreen",
+				"setClipRange",
+				"setSpeed",
+				"setTrim",
+				"setZoom",
+			].sort(),
+		);
+		expect(isMutatingTool("getCurrentDocument")).toBe(false);
 		expect(isMutatingTool("getTranscript")).toBe(false);
 		expect(isMutatingTool("replaceTimeline")).toBe(true);
 		expect(isMutatingTool("addZoom")).toBe(true);
@@ -277,7 +357,7 @@ describe("executeAgentTool", () => {
 		expect(result.summary).toMatch(/2 intervals/);
 	});
 
-	it("replaceTimeline refuses when the timeline has user-placed clips", () => {
+	it("replaceTimeline refuses to shorten a clip out of existence", () => {
 		const result = executeAgentTool(
 			fixtureDocument(),
 			"replaceTimeline",
@@ -287,9 +367,11 @@ describe("executeAgentTool", () => {
 			}),
 		);
 		expect(result.ok).toBe(false);
-		const payload = JSON.parse(result.resultJson) as { error: string };
-		expect(payload.error).toMatch(/user-placed clip/);
+		const payload = JSON.parse(result.resultJson) as { error: string; lostClipIds: string[] };
+		expect(payload.lostClipIds).toEqual(["clip_2"]);
+		expect(payload.error).toMatch(/clip_2/);
 		expect(payload.error).toMatch(/addTrim/);
+		expect(result.document).toBeUndefined();
 	});
 
 	it("rejects malformed JSON arguments and unknown tools", () => {
@@ -378,7 +460,7 @@ describe("executeAgentTool", () => {
 
 	it("addCameraFullscreen / setCameraFullscreen write a region the snapshot exposes", () => {
 		const added = executeAgentTool(
-			fixtureDocument(),
+			withCameraTrack(fixtureDocument()),
 			"addCameraFullscreen",
 			JSON.stringify({ startSec: 9, endSec: 5 }),
 		);
@@ -412,7 +494,7 @@ describe("executeAgentTool", () => {
 		expect(movedRegion).toMatchObject({ startMs: 1000, endMs: 2000 });
 		expect(
 			executeAgentTool(
-				fixtureDocument(),
+				withCameraTrack(fixtureDocument()),
 				"setCameraFullscreen",
 				JSON.stringify({ cameraFullscreenId: "nope" }),
 			).ok,
@@ -473,6 +555,103 @@ describe("executeAgentTool", () => {
 		expect(wrong.resultJson).toMatch(/removeTrim/);
 	});
 
+	it("addZoom reports the CLAMPED span, not the one it was asked for", () => {
+		// ponytail: the exact shape of D-HONEST. Ventilation trims the span to the
+		// clip; the tool used to echo back 20–40 while the document held 20–24.704
+		// and answer ok:true, so the model reported a zoom that does not exist as
+		// asked. The oracle `diffMatches` was written for precisely this.
+		const doc = shortSingleClip();
+		const result = executeAgentTool(doc, "addZoom", JSON.stringify({ startSec: 20, endSec: 40 }));
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.startSec).toBe(20);
+		expect(payload.endSec).toBeCloseTo(24.704, 3);
+		expect(payload.clamped).toBe(true);
+		expect(payload.requestedEndSec).toBe(40);
+		// And the document agrees with the report, which is the whole point.
+		const stored = result.document?.zoomRanges.at(-1);
+		expect(stored?.endMs).toBe(24_704);
+		expect(payload.ids).toEqual([stored?.id]);
+		expect(result.summary).toMatch(/clamped from/);
+	});
+
+	it("addZoom refuses a span that covers no clip instead of storing a dead region", () => {
+		const result = executeAgentTool(
+			shortSingleClip(),
+			"addZoom",
+			JSON.stringify({ startSec: 90, endSec: 95 }),
+		);
+		expect(result.ok).toBe(false);
+		expect(result.document).toBeUndefined();
+		const payload = JSON.parse(result.resultJson) as { error: string };
+		// The refusal has to be actionable: without the real extent the model can
+		// only retry blindly, and there is no timeout anywhere on this path.
+		expect(payload.error).toMatch(/covers no clip/);
+		expect(payload.error).toMatch(/0\.0–24\.7 s/);
+	});
+
+	it("addZoom reports BOTH ids when the span straddles two clips", () => {
+		// `anchorRawRegionsToClips` keeps the region's id for the first fragment
+		// and mints a fresh one for each extra clip. The result used to name one
+		// id and one span for a write that produced two regions.
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addZoom",
+			JSON.stringify({ startSec: 25, endSec: 35 }),
+		);
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.ids).toHaveLength(2);
+		expect(payload.fragments).toBe(2);
+		const stored = new Set((result.document?.zoomRanges ?? []).map((z) => z.id));
+		for (const id of payload.ids as string[]) expect(stored.has(id)).toBe(true);
+		expect(result.summary).toMatch(/split across 2 clips/);
+	});
+
+	it("setClipRange names the modifiers its trim destroyed", () => {
+		// Before: "trimmed clip to 0:00.0 – 0:03.0" while a zoom ceased to exist,
+		// with nothing in the result to contradict "the zoom is preserved".
+		const doc = fixtureDocument();
+		const withZoom = executeAgentTool(doc, "addZoom", JSON.stringify({ startSec: 5, endSec: 8 }))
+			.document as AxcutDocument;
+		const zoomId = withZoom.zoomRanges[0].id;
+
+		const result = executeAgentTool(
+			withZoom,
+			"setClipRange",
+			JSON.stringify({ clipId: "clip_1", sourceStartSec: 0, sourceEndSec: 3 }),
+		);
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.droppedModifierIds).toEqual([zoomId]);
+		expect(result.document?.zoomRanges.map((z) => z.id)).not.toContain(zoomId);
+		expect(result.summary).toContain(zoomId);
+	});
+
+	it("setClipRange says nothing about casualties when there are none", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"setClipRange",
+			JSON.stringify({ clipId: "clip_1", sourceStartSec: 0, sourceEndSec: 20 }),
+		);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.droppedModifierIds).toEqual([]);
+		expect(payload.droppedTrimIds).toEqual([]);
+		expect(result.summary).not.toContain("dropped");
+	});
+
+	it("removeClip names the modifiers that went with the clip", () => {
+		const doc = fixtureDocument();
+		const withZoom = executeAgentTool(doc, "addZoom", JSON.stringify({ startSec: 5, endSec: 8 }))
+			.document as AxcutDocument;
+		const zoomId = withZoom.zoomRanges[0].id;
+
+		const result = executeAgentTool(withZoom, "removeClip", JSON.stringify({ clipId: "clip_1" }));
+		expect(result.ok).toBe(true);
+		expect(JSON.parse(result.resultJson).droppedModifierIds).toEqual([zoomId]);
+		expect(result.summary).toContain(zoomId);
+	});
+
 	it("removeClip deletes a clip and reflows the survivor (rejects an unknown id)", () => {
 		const result = executeAgentTool(
 			fixtureDocument(),
@@ -490,5 +669,754 @@ describe("executeAgentTool", () => {
 		expect(
 			executeAgentTool(fixtureDocument(), "removeClip", JSON.stringify({ clipId: "nope" })).ok,
 		).toBe(false);
+	});
+});
+
+// ─── What the snapshot says the project IS ─────────────────────────────────
+//
+// A projection's omissions are claims. Two of them were being read as facts:
+// an absent `cameraTrack` made a project with a webcam and one without
+// indistinguishable, and a bare `depth` made an ordinal look like a factor.
+describe("documentSnapshotForModel", () => {
+	interface Snapshot {
+		autoFocusAll: boolean;
+		hasAnyCamera: boolean;
+		zoomNote: string;
+		assets: Array<{ hasCameraTrack: boolean; cameraVisible: boolean }>;
+		zoomRanges: Array<{
+			depth: number;
+			renderedScale: number;
+			customScale?: number;
+			depthIsOverridden?: boolean;
+			focusMode: string;
+			source: string;
+		}>;
+	}
+
+	function snapshotOf(document: AxcutDocument): Snapshot {
+		return JSON.parse(executeAgentTool(document, "getCurrentDocument", "").resultJson) as Snapshot;
+	}
+
+	it("reports a zoom's rendered scale, not just its ordinal depth", () => {
+		const snapshot = snapshotOf(
+			documentSchema.parse({
+				...fixtureDocument(),
+				zoomRanges: [
+					{
+						id: "zoom_1",
+						startMs: 2_000,
+						endMs: 6_000,
+						clipId: "clip_1",
+						sourceStartSec: 2,
+						sourceEndSec: 6,
+						depth: 3,
+						focus: { cx: 0.5, cy: 0.5 },
+					},
+				],
+			}),
+		);
+		// Both assertions on purpose: the literal is what the pill on screen reads,
+		// and the table cross-check makes this fail if someone edits the mapping
+		// without meaning to. The prompt used to promise ~2.0× for this zoom.
+		expect(snapshot.zoomRanges[0].renderedScale).toBe(1.8);
+		expect(snapshot.zoomRanges[0].renderedScale).toBe(ZOOM_DEPTH_SCALES[3]);
+		expect(snapshot.zoomRanges[0].depth).toBe(3);
+		expect(snapshot.zoomRanges[0].depthIsOverridden).toBeUndefined();
+		expect(snapshot.zoomRanges[0].focusMode).toBe("manual");
+		expect(snapshot.zoomRanges[0].source).toBe("manual");
+		expect(snapshot.zoomNote).toMatch(/3=1\.80×/);
+	});
+
+	it("flags a customScale that makes the depth inert", () => {
+		const snapshot = snapshotOf(zoomWithCustomScale(fixtureDocument(), 1.1));
+		expect(snapshot.zoomRanges[0].renderedScale).toBe(1.1);
+		expect(snapshot.zoomRanges[0].customScale).toBe(1.1);
+		expect(snapshot.zoomRanges[0].depthIsOverridden).toBe(true);
+		// depth 6 would render 5.0×; the model must not read it as the strength.
+		expect(snapshot.zoomRanges[0].depth).toBe(3);
+	});
+
+	it("clamps a customScale the schema accepts but the renderer will not", () => {
+		// `zoomRegionSchema` only asks for a positive number, so 12 is a legal
+		// document. The preview clamps to 5.0; reporting 12 would be a third scale.
+		const snapshot = snapshotOf(zoomWithCustomScale(fixtureDocument(), 12));
+		expect(snapshot.zoomRanges[0].renderedScale).toBe(5);
+	});
+
+	it("reports the EFFECTIVE focus mode when the global Auto-Focus is on", () => {
+		// `autoFocusAll` overrides every region's own mode at render
+		// (sceneDescription.ts) and greys out the per-region control. Echoing the
+		// stored "manual" would tell the model its focus point is being honoured
+		// while the camera follows the cursor.
+		const base = zoomWithCustomScale(fixtureDocument(), 1.1);
+		const snapshot = snapshotOf(
+			documentSchema.parse({ ...base, legacyEditor: { autoFocusAll: true } }),
+		);
+		expect(snapshot.autoFocusAll).toBe(true);
+		expect(snapshot.zoomRanges[0].focusMode).toBe("auto");
+		expect(snapshotOf(base).autoFocusAll).toBe(false);
+		expect(snapshotOf(base).zoomRanges[0].focusMode).toBe("manual");
+	});
+
+	it("says whether each asset carries a webcam, and whether any clip does", () => {
+		const bare = snapshotOf(fixtureDocument());
+		expect(bare.assets[0].hasCameraTrack).toBe(false);
+		expect(bare.assets[0].cameraVisible).toBe(false);
+		expect(bare.hasAnyCamera).toBe(false);
+
+		const withCam = snapshotOf(withCameraTrack(fixtureDocument()));
+		expect(withCam.assets[0].hasCameraTrack).toBe(true);
+		expect(withCam.assets[0].cameraVisible).toBe(true);
+		expect(withCam.hasAnyCamera).toBe(true);
+	});
+
+	it("hasAnyCamera follows the placed clips, not merely the assets present", () => {
+		// An imported-but-unused asset with a webcam does not put a webcam on the
+		// timeline, and answering "yes" there is the same false confidence in the
+		// other direction.
+		const document = withCameraTrack(fixtureDocument());
+		const unplaced = documentSchema.parse({
+			...document,
+			timeline: { ...document.timeline, clips: [], trimRanges: [] },
+		});
+		expect(snapshotOf(unplaced).assets[0].hasCameraTrack).toBe(true);
+		expect(snapshotOf(unplaced).hasAnyCamera).toBe(false);
+	});
+});
+
+describe("zoom strength is written, not just stored", () => {
+	it("addZoom reports the scale the viewer will see", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addZoom",
+			JSON.stringify({ startSec: 2, endSec: 6, depth: 3 }),
+		);
+		expect(result.ok).toBe(true);
+		expect(JSON.parse(result.resultJson).renderedScale).toBe(1.8);
+		expect(result.summary).toContain("1.80×");
+	});
+
+	it("setZoom{depth} on a customScale zoom clears the override instead of no-op'ing", () => {
+		// The defect this closes: the write was accepted, the depth was stored, the
+		// result echoed it, and the frame stayed at 1.10× — a change every layer
+		// believed had happened.
+		const result = executeAgentTool(
+			zoomWithCustomScale(fixtureDocument(), 1.1),
+			"setZoom",
+			JSON.stringify({ zoomId: "zoom_1", depth: 6 }),
+		);
+		expect(result.ok).toBe(true);
+		const after = result.document as AxcutDocument;
+		expect(after.zoomRanges[0].customScale).toBeUndefined();
+		expect(after.zoomRanges[0].depth).toBe(6);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.renderedScale).toBe(ZOOM_DEPTH_SCALES[6]);
+		expect(payload.clearedCustomScale).toBe(true);
+		expect(result.summary).toMatch(/custom scale/i);
+	});
+
+	it("leaves customScale alone when the write does not touch the depth", () => {
+		// Dropping a fine-tuned value is destructive; it is only justified by an
+		// explicit request to change the strength.
+		const result = executeAgentTool(
+			zoomWithCustomScale(fixtureDocument(), 1.1),
+			"setZoom",
+			JSON.stringify({ zoomId: "zoom_1", startSec: 3, endSec: 7 }),
+		);
+		expect(result.ok).toBe(true);
+		const after = result.document as AxcutDocument;
+		expect(after.zoomRanges[0].customScale).toBe(1.1);
+		expect(JSON.parse(result.resultJson).clearedCustomScale).toBeUndefined();
+		expect(JSON.parse(result.resultJson).renderedScale).toBe(1.1);
+	});
+});
+
+describe("a full-camera region needs a camera", () => {
+	it("is refused on footage with no linked webcam", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addCameraFullscreen",
+			JSON.stringify({ startSec: 0, endSec: 5 }),
+		);
+		expect(result.ok).toBe(false);
+		expect(result.document).toBeUndefined();
+		const error = JSON.parse(result.resultJson).error as string;
+		expect(error).toMatch(/no webcam/i);
+		// Actionable, and specific about WHICH kind of nothing: no camera anywhere
+		// is a fact about the recording the model should relay, not retry.
+		expect(error).toMatch(/hasCameraTrack/);
+		expect(error).toMatch(/no asset in this project/i);
+	});
+
+	it("is allowed on footage that carries one", () => {
+		const result = executeAgentTool(
+			withCameraTrack(fixtureDocument()),
+			"addCameraFullscreen",
+			JSON.stringify({ startSec: 0, endSec: 5 }),
+		);
+		expect(result.ok).toBe(true);
+		const legacy = result.document?.legacyEditor as Record<string, unknown>;
+		expect(legacy.cameraFullscreenRegions).toHaveLength(1);
+	});
+
+	it("refuses to MOVE a region onto footage with no webcam", () => {
+		// clip_2 comes from a second asset with no camera. Placing is guarded and
+		// moving was not, which would have re-opened the hole one tool over.
+		const document = withCameraTrack(fixtureDocument());
+		const mixed = documentSchema.parse({
+			...document,
+			assets: [
+				document.assets[0],
+				{
+					id: "asset_2",
+					kind: "video",
+					label: "Screen only",
+					originalPath: "C:/videos/screen.mp4",
+					durationSec: 60,
+				},
+			],
+			timeline: {
+				...document.timeline,
+				clips: document.timeline.clips.map((c) =>
+					c.id === "clip_2" ? { ...c, assetId: "asset_2" } : c,
+				),
+			},
+		});
+		const added = executeAgentTool(
+			mixed,
+			"addCameraFullscreen",
+			JSON.stringify({ startSec: 0, endSec: 5 }),
+		);
+		expect(added.ok).toBe(true);
+		const regionId = (
+			(added.document?.legacyEditor as Record<string, unknown>).cameraFullscreenRegions as Array<{
+				id: string;
+			}>
+		)[0].id;
+		const moved = executeAgentTool(
+			added.document as AxcutDocument,
+			"setCameraFullscreen",
+			JSON.stringify({ cameraFullscreenId: regionId, startSec: 40, endSec: 45 }),
+		);
+		expect(moved.ok).toBe(false);
+		// Other clips DO carry a camera here, so the advice differs from the
+		// no-camera-anywhere case above.
+		expect(JSON.parse(moved.resultJson).error).toMatch(/other clips/i);
+	});
+});
+
+// ── D-DESTRUCT ──────────────────────────────────────────────────────────────
+//
+// "Swap the two clips: put the demo first." There was no tool for it — while
+// the system prompt promised one — so the model reached for `replaceTimeline`
+// with [30-60], [0-30]. That call sorted the intervals (so the swap never
+// happened), merged them (so two clips became one), re-minted the ids, deleted
+// the user's 12–17 s cut, re-anchored the effects onto whatever had slid under
+// them, and returned `ok: true`. The model then reported that the trim was
+// preserved. Every layer of that is fixed separately below.
+describe("replaceTimeline refuses what it would destroy", () => {
+	/** The workbench's `twoClipsWithTrim`: clips placed by the AGENT, which is
+	 *  exactly what the old `origin === "user"` guard could not see. */
+	function twoAgentClipsWithTrim(): AxcutDocument {
+		const base = createEmptyDocument({ title: "Two clips", projectId: "proj_two" });
+		return documentSchema.parse({
+			...base,
+			project: { ...base.project, primaryAssetId: "asset_1" },
+			assets: [
+				{
+					id: "asset_1",
+					kind: "video",
+					label: "Recording",
+					originalPath: "C:/videos/rec.mp4",
+					durationSec: 60,
+				},
+			],
+			timeline: {
+				...base.timeline,
+				clips: [
+					{
+						id: "clip_1",
+						assetId: "asset_1",
+						sourceStartSec: 0,
+						sourceEndSec: 30,
+						timelineStartSec: 0,
+						timelineEndSec: 30,
+						wordRefs: [],
+						origin: "agent",
+						reason: "intro",
+					},
+					{
+						id: "clip_2",
+						assetId: "asset_1",
+						sourceStartSec: 30,
+						sourceEndSec: 60,
+						timelineStartSec: 30,
+						timelineEndSec: 60,
+						wordRefs: [],
+						origin: "agent",
+						reason: "demo",
+					},
+				],
+				trimRanges: [
+					{
+						id: "trim_1",
+						assetId: "asset_1",
+						startSec: 12,
+						endSec: 17,
+						reason: "silence",
+						origin: "agent",
+					},
+				],
+			},
+		});
+	}
+
+	const swapArgs = JSON.stringify({
+		intervals: [
+			{ startSec: 30, endSec: 60 },
+			{ startSec: 0, endSec: 30 },
+		],
+		reason: "swap",
+	});
+
+	it("refuses the swap the workbench measured, and says which tool does it", () => {
+		const result = executeAgentTool(twoAgentClipsWithTrim(), "replaceTimeline", swapArgs);
+		expect(result.ok).toBe(false);
+		expect(result.document).toBeUndefined();
+		const payload = JSON.parse(result.resultJson) as {
+			error: string;
+			code: string;
+			reorderRequested: boolean;
+			lostClipIds: string[];
+		};
+		expect(payload.code).toBe("would_destroy");
+		expect(payload.reorderRequested).toBe(true);
+		expect(payload.error).toMatch(/moveClip/);
+		// It is refused for the RIGHT reason: nothing would be lost any more (the
+		// pure layer preserves both clips and the cut now), but the swap the user
+		// asked for still cannot happen, so answering `ok` would be a lie of a
+		// different kind — the tool would report success on a no-op.
+		expect(payload.lostClipIds).toEqual([]);
+		expect(payload.error).toMatch(/ascending order/);
+	});
+
+	it("the guard no longer depends on origin, so it cannot disarm itself", () => {
+		// `buildTimelineFromIntervals` stamps its own origin on everything it
+		// produces, so ONE legitimate agent rebuild used to turn every clip into
+		// `origin: "agent"` and switch the old guard off for the rest of the
+		// project's life. Here both clips are already `agent` and it still refuses.
+		const first = executeAgentTool(twoAgentClipsWithTrim(), "replaceTimeline", swapArgs);
+		expect(first.ok).toBe(false);
+		const second = executeAgentTool(twoAgentClipsWithTrim(), "replaceTimeline", swapArgs);
+		expect(second.ok).toBe(false);
+	});
+
+	it("does not refuse a rebuild with nothing to lose", () => {
+		const empty = documentSchema.parse({
+			...twoAgentClipsWithTrim(),
+			timeline: { ...twoAgentClipsWithTrim().timeline, clips: [], trimRanges: [] },
+		});
+		const result = executeAgentTool(
+			empty,
+			"replaceTimeline",
+			JSON.stringify({
+				intervals: [
+					{ startSec: 0, endSec: 10 },
+					{ startSec: 20, endSec: 30 },
+				],
+				reason: "rebuild",
+			}),
+		);
+		expect(result.ok).toBe(true);
+		expect(result.document?.timeline.clips).toHaveLength(2);
+	});
+
+	it("names what survived instead of reporting two bare counts", () => {
+		const result = executeAgentTool(
+			twoAgentClipsWithTrim(),
+			"replaceTimeline",
+			JSON.stringify({
+				intervals: [
+					{ startSec: 0, endSec: 30 },
+					{ startSec: 30, endSec: 60 },
+				],
+				reason: "identity",
+			}),
+		);
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson) as { preservedClipIds: string[] };
+		expect(payload.preservedClipIds).toEqual(["clip_1", "clip_2"]);
+		expect(result.document?.timeline.trimRanges.map((t) => t.id)).toEqual(["trim_1"]);
+	});
+});
+
+describe("moveClip — the tool the prompt used to promise", () => {
+	function twoClips(): AxcutDocument {
+		const base = createEmptyDocument({ title: "Two clips", projectId: "proj_move" });
+		return documentSchema.parse({
+			...base,
+			project: { ...base.project, primaryAssetId: "asset_1" },
+			assets: [
+				{
+					id: "asset_1",
+					kind: "video",
+					label: "Recording",
+					originalPath: "C:/videos/rec.mp4",
+					durationSec: 60,
+				},
+			],
+			timeline: {
+				...base.timeline,
+				clips: [
+					{
+						id: "clip_1",
+						assetId: "asset_1",
+						sourceStartSec: 0,
+						sourceEndSec: 30,
+						timelineStartSec: 0,
+						timelineEndSec: 30,
+						wordRefs: [],
+						origin: "user",
+						reason: "intro",
+					},
+					{
+						id: "clip_2",
+						assetId: "asset_1",
+						sourceStartSec: 30,
+						sourceEndSec: 60,
+						timelineStartSec: 30,
+						timelineEndSec: 60,
+						wordRefs: [],
+						origin: "user",
+						reason: "demo",
+					},
+				],
+				trimRanges: [
+					{
+						id: "trim_1",
+						assetId: "asset_1",
+						startSec: 12,
+						endSec: 17,
+						reason: "silence",
+						origin: "user",
+					},
+				],
+			},
+			zoomRanges: [
+				{
+					id: "zoom_demo",
+					startMs: 40_000,
+					endMs: 45_000,
+					depth: 3,
+					focus: { cx: 0.5, cy: 0.5 },
+					clipId: "clip_2",
+					sourceStartSec: 40,
+					sourceEndSec: 45,
+				},
+			],
+		});
+	}
+
+	it("performs the swap, keeping ids, trims and the anchored zoom", () => {
+		const result = executeAgentTool(
+			twoClips(),
+			"moveClip",
+			JSON.stringify({ clipId: "clip_2", beforeClipId: "clip_1" }),
+		);
+		expect(result.ok).toBe(true);
+		const after = result.document as AxcutDocument;
+		expect(after.timeline.clips.map((c) => c.id)).toEqual(["clip_2", "clip_1"]);
+		// Order changed; content did not.
+		expect(after.timeline.clips[0]).toMatchObject({ sourceStartSec: 30, sourceEndSec: 60 });
+		expect(after.timeline.trimRanges.map((t) => t.id)).toEqual(["trim_1"]);
+		expect(after.zoomRanges[0]).toMatchObject({
+			id: "zoom_demo",
+			clipId: "clip_2",
+			sourceStartSec: 40,
+			sourceEndSec: 45,
+		});
+		// clip_2 now starts the timeline, so the zoom's derived ms follow it.
+		expect(after.zoomRanges[0]).toMatchObject({ startMs: 10_000, endMs: 15_000 });
+	});
+
+	it("keeps the clip's provenance and its label", () => {
+		// `moveClip` stamps whatever origin it is handed. Passing "agent" would
+		// relabel a user's clip as the agent's — and, before the guard stopped
+		// reading `origin`, would have been a way to disarm it.
+		const result = executeAgentTool(
+			twoClips(),
+			"moveClip",
+			JSON.stringify({ clipId: "clip_2", beforeClipId: "clip_1" }),
+		);
+		expect(result.document?.timeline.clips[0]).toMatchObject({
+			origin: "user",
+			reason: "demo",
+		});
+	});
+
+	it("moves a clip last when beforeClipId is null, and when it is omitted", () => {
+		for (const args of [
+			JSON.stringify({ clipId: "clip_1", beforeClipId: null }),
+			JSON.stringify({ clipId: "clip_1" }),
+		]) {
+			const result = executeAgentTool(twoClips(), "moveClip", args);
+			expect(result.ok).toBe(true);
+			expect(result.document?.timeline.clips.map((c) => c.id)).toEqual(["clip_2", "clip_1"]);
+		}
+	});
+
+	it("refuses an unknown id with the roster instead of throwing", () => {
+		// `moveClip` in the document layer THROWS on an unknown clip, and the tool
+		// loop has no try/catch of its own — an escape would kill the turn.
+		const missing = executeAgentTool(
+			twoClips(),
+			"moveClip",
+			JSON.stringify({ clipId: "clip_nope", beforeClipId: "clip_1" }),
+		);
+		expect(missing.ok).toBe(false);
+		expect(JSON.parse(missing.resultJson).error).toMatch(/clip_1 \(intro\)/);
+
+		const badTarget = executeAgentTool(
+			twoClips(),
+			"moveClip",
+			JSON.stringify({ clipId: "clip_1", beforeClipId: "clip_nope" }),
+		);
+		expect(badTarget.ok).toBe(false);
+		expect(badTarget.document).toBeUndefined();
+
+		const itself = executeAgentTool(
+			twoClips(),
+			"moveClip",
+			JSON.stringify({ clipId: "clip_1", beforeClipId: "clip_1" }),
+		);
+		expect(itself.ok).toBe(false);
+	});
+
+	it("gives the model the label and index it needs to aim", () => {
+		// Without `reason` in the snapshot, "put the demo first" is unanswerable:
+		// both clips are 30 s of the same asset and differ only by a label the
+		// projection was not sending.
+		const snapshot = JSON.parse(
+			executeAgentTool(twoClips(), "getCurrentDocument", "").resultJson,
+		) as { clips: Array<{ id: string; index: number; reason: string; origin: string }> };
+		expect(snapshot.clips[1]).toMatchObject({ id: "clip_2", index: 1, reason: "demo" });
+		expect(snapshot.clips[0].origin).toBe("user");
+	});
+});
+
+// ── D-CONSENT ───────────────────────────────────────────────────────────────
+//
+// Settings offers "Project edits — when off, the agent must ask before changing
+// the timeline". `chat-service.ts` computed `editsAllowed` and then did
+// `void editsAllowed;`. The flag reached nothing: not the tools, not the prompt.
+describe("allowAgentEdits=false refuses every write", () => {
+	it("refuses a write with a payload that tells the model what to do instead", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addTrim",
+			JSON.stringify({ startSec: 5, endSec: 8, reason: "silence" }),
+			{ editsAllowed: false },
+		);
+		expect(result.ok).toBe(false);
+		expect(result.document).toBeUndefined();
+		expect(result.summary).toBeUndefined();
+		const payload = JSON.parse(result.resultJson) as {
+			code: string;
+			tool: string;
+			requestedArgs: { startSec: number };
+			howToProceed: string;
+		};
+		expect(payload.code).toBe("consent_required");
+		expect(payload.tool).toBe("addTrim");
+		// The args come back so the model can quote the edit it is asking for.
+		expect(payload.requestedArgs.startSec).toBe(5);
+		// And it is told not to loop: there is no timeout on the product path.
+		expect(payload.howToProceed).toMatch(/do NOT retry/i);
+		expect(payload.howToProceed).toMatch(/ask the user/i);
+	});
+
+	it("refuses ALL of them — no write escapes by being added later", () => {
+		const document = fixtureDocument();
+		for (const name of MUTATING_TOOL_NAMES) {
+			const result = executeAgentTool(document, name, "{}", { editsAllowed: false });
+			expect(result.ok, `${name} was allowed through`).toBe(false);
+			expect(result.document, `${name} mutated`).toBeUndefined();
+			expect(JSON.parse(result.resultJson).code, `${name} failed for another reason`).toBe(
+				"consent_required",
+			);
+		}
+	});
+
+	it("leaves the read tools alone — the model must be able to describe the edit", () => {
+		for (const name of ["getCurrentDocument", "getTranscript"]) {
+			const result = executeAgentTool(fixtureDocument(), name, "{}", { editsAllowed: false });
+			expect(result.ok, name).toBe(true);
+		}
+	});
+
+	it("changes nothing when the flag is absent or true", () => {
+		const args = JSON.stringify({ startSec: 5, endSec: 8, reason: "silence" });
+		expect(executeAgentTool(fixtureDocument(), "addTrim", args).ok).toBe(true);
+		expect(executeAgentTool(fixtureDocument(), "addTrim", args, {}).ok).toBe(true);
+		expect(executeAgentTool(fixtureDocument(), "addTrim", args, { editsAllowed: true }).ok).toBe(
+			true,
+		);
+	});
+});
+
+// ─── D-TELEM: recorded cursor telemetry reaches the model ────────────────────
+//
+// The app records where the pointer went and the compositor loads the sidecar,
+// but nothing carried a sample to the agent: `grep -rniE "cursor|telemetry"
+// electron/ai-edition/` returned nothing at all. Asked what pointer data the
+// project held, the model answered from an empty sandbox and reported, in good
+// faith, that there was none. These tests hold the two halves of the fix: the
+// snapshot says whether there IS data, and the tool returns the digest — with
+// "we could not look" kept strictly apart from "there is none".
+
+function samplesWithDwell(atSec: number, holdSec: number, cx: number, cy: number) {
+	const step = 33;
+	const out: Array<{ timeMs: number; cx: number; cy: number; interactionType: "move" | "click" }> =
+		[];
+	const startMs = (atSec - holdSec / 2) * 1000;
+	const stopMs = startMs + holdSec * 1000;
+	let drift = 0;
+	for (let timeMs = 0; timeMs <= (atSec + holdSec) * 1000 + 2000; timeMs += step) {
+		if (timeMs >= startMs && timeMs <= stopMs) {
+			out.push({ timeMs, cx, cy, interactionType: timeMs === startMs ? "click" : "move" });
+		} else {
+			drift = (drift + 0.05) % 1;
+			out.push({ timeMs, cx: drift, cy: drift, interactionType: "move" });
+		}
+	}
+	return out;
+}
+
+describe("cursor telemetry in the snapshot", () => {
+	it("reports null — not false — when nothing checked", () => {
+		// THE distinction. `false` is a claim about the user's project; `null` is a
+		// claim about us. Collapsing them is precisely how the model came to
+		// announce that a recording with 597 samples had no pointer data.
+		const snapshot = JSON.parse(
+			executeAgentTool(fixtureDocument(), "getCurrentDocument", "{}").resultJson,
+		);
+		expect(snapshot.assets[0].hasCursorTelemetry).toBeNull();
+		expect(snapshot.cursorNote).toMatch(/null/);
+	});
+
+	it("reports true / false once the runtime has looked", () => {
+		const present = JSON.parse(
+			executeAgentTool(fixtureDocument(), "getCurrentDocument", "{}", {
+				cursorTelemetry: { availableByAssetId: { asset_1: true } },
+			}).resultJson,
+		);
+		expect(present.assets[0].hasCursorTelemetry).toBe(true);
+
+		const absent = JSON.parse(
+			executeAgentTool(fixtureDocument(), "getCurrentDocument", "{}", {
+				cursorTelemetry: { availableByAssetId: { asset_1: false } },
+			}).resultJson,
+		);
+		expect(absent.assets[0].hasCursorTelemetry).toBe(false);
+	});
+
+	it("reports null for an asset the probe could not answer for", () => {
+		// A probe that throws leaves its asset OUT of the map rather than in it as
+		// `false` — our failure must not become a statement about their project.
+		const snapshot = JSON.parse(
+			executeAgentTool(fixtureDocument(), "getCurrentDocument", "{}", {
+				cursorTelemetry: { availableByAssetId: {} },
+			}).resultJson,
+		);
+		expect(snapshot.assets[0].hasCursorTelemetry).toBeNull();
+	});
+});
+
+describe("getCursorTrack", () => {
+	it("returns real samples, downsampled — not an interpretation of them", () => {
+		const samples = samplesWithDwell(10, 1.4, 0.66, 0.33);
+		const result = executeAgentTool(fixtureDocument(), "getCursorTrack", "{}", {
+			cursorTelemetry: { load: { status: "ok", assetId: "asset_1", samples } },
+		});
+		const payload = JSON.parse(result.resultJson);
+
+		expect(result.ok).toBe(true);
+		expect(payload.available).toBe(true);
+		expect(payload.sampleCount).toBe(samples.length);
+		expect(payload.points.length).toBeGreaterThan(0);
+		// Downsampling drops rows, it never invents them: every point returned has
+		// to exist in the input at the same instant and the same place.
+		for (const point of payload.points as Array<{ atSec: number; cx: number; cy: number }>) {
+			const origin = samples.find((s) => Math.abs(s.timeMs / 1000 - point.atSec) < 0.01);
+			expect(origin).toBeTruthy();
+			expect(point.cx).toBeCloseTo(origin?.cx ?? -1, 2);
+			expect(point.cy).toBeCloseTo(origin?.cy ?? -1, 2);
+		}
+		// The stationary stretch is present as points, not as a verdict about it:
+		// nothing in the payload names a dwell, a hold or a focus.
+		const during = (payload.points as Array<{ atSec: number }>).filter(
+			(p) => p.atSec >= 10 && p.atSec <= 11.4,
+		);
+		expect(during.length).toBeGreaterThan(0);
+		expect(result.resultJson).not.toContain("holdSec");
+		expect(result.resultJson).not.toContain("moments");
+
+		// clip_1 is source 0–30 at ruler 0–30, so source and virtual coincide here;
+		// the field still has to be present, because it is the one addZoom takes.
+		const point = payload.points.find((p: { atSec: number }) => Math.abs(p.atSec - 10) < 0.3);
+		expect(point.virtualSec).toBeCloseTo(point.atSec, 1);
+	});
+
+	it("says 'no-sidecar' when the asset was checked and has none", () => {
+		const result = executeAgentTool(fixtureDocument(), "getCursorTrack", "{}", {
+			cursorTelemetry: { load: { status: "no-sidecar", assetId: "asset_1" } },
+		});
+		const payload = JSON.parse(result.resultJson);
+
+		// `ok: true`: the question was answered. Marking it a failure would push a
+		// model with no timeout above it into retrying a verdict that cannot change.
+		expect(result.ok).toBe(true);
+		expect(payload.available).toBe(false);
+		expect(payload.reason).toBe("no-sidecar");
+		expect(payload.note).toMatch(/fact about the asset/i);
+	});
+
+	it("says 'unavailable' — never 'no-sidecar' — when no reader is wired", () => {
+		// The regression that would recreate the defect quietly: a runtime with no
+		// reader reporting an absence of data instead of an absence of access.
+		const result = executeAgentTool(fixtureDocument(), "getCursorTrack", "{}");
+		const payload = JSON.parse(result.resultJson);
+
+		expect(payload.available).toBe(false);
+		expect(payload.reason).toBe("unavailable");
+		expect(payload.reason).not.toBe("no-sidecar");
+		expect(payload.note).toMatch(/report the limit as yours|limit as yours/i);
+	});
+
+	it("rejects an unknown asset instead of digesting someone else's samples", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"getCursorTrack",
+			JSON.stringify({ assetId: "asset_nope" }),
+			{ cursorTelemetry: { load: { status: "ok", assetId: "asset_nope", samples: [] } } },
+		);
+		expect(result.ok).toBe(false);
+		expect(result.resultJson).toContain("Unknown asset");
+	});
+
+	it("is a read: it survives allowAgentEdits=false and mutates nothing", () => {
+		// Consent gates writes. A model that may not edit must still be able to
+		// describe the edit it is proposing, which means reading the telemetry it
+		// would base that proposal on.
+		const result = executeAgentTool(fixtureDocument(), "getCursorTrack", "{}", {
+			editsAllowed: false,
+			cursorTelemetry: {
+				load: { status: "ok", assetId: "asset_1", samples: samplesWithDwell(5, 1, 0.5, 0.5) },
+			},
+		});
+		expect(result.ok).toBe(true);
+		expect(result.document).toBeUndefined();
+		expect(JSON.parse(result.resultJson).available).toBe(true);
+		expect(isMutatingTool("getCursorTrack")).toBe(false);
 	});
 });
