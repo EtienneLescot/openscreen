@@ -135,8 +135,10 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	private var stream: SCStream?
 	private var writer: AVAssetWriter?
 	private var videoInput: AVAssetWriterInput?
-	private var systemAudioInput: AVAssetWriterInput?
-	private var microphoneAudioInput: AVAssetWriterInput?
+	// One AAC track, never one per source: the editor preview is an HTML5 <video>, which plays
+	// audio track 0 and nothing else. See AudioTrackMixer.
+	private var audioInput: AVAssetWriterInput?
+	private var audioMixer: AudioTrackMixer?
 	private var didStartWriting = false
 	private var didEmitRecordingStarted = false
 	private var isStopping = false
@@ -280,12 +282,12 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		}
 
 		if type == .audio {
-			appendAudioSampleBuffer(sampleBuffer, to: systemAudioInput)
+			audioMixer?.ingest(sampleBuffer, from: .system)
 			return
 		}
 
 		if type.rawValue == microphoneOutputTypeRawValue {
-			appendAudioSampleBuffer(sampleBuffer, to: microphoneAudioInput)
+			audioMixer?.ingest(sampleBuffer, from: .microphone)
 			return
 		}
 
@@ -303,6 +305,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			writer.startWriting()
 			writer.startSession(atSourceTime: presentationTime)
 			didStartWriting = true
+			audioMixer?.beginTimeline(at: presentationTime)
 		}
 
 		if videoInput.isReadyForMoreMediaData {
@@ -461,11 +464,17 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		self.writer = writer
 		self.videoInput = input
 
-		if request.audio.system.enabled {
-			systemAudioInput = try addAudioInput(to: writer, bitRate: 192_000)
-		}
-		if nativeMicrophoneEnabled {
-			microphoneAudioInput = try addAudioInput(to: writer, bitRate: 128_000)
+		// A single mixed AAC track at the bitrate Windows encodes its own mixed track with
+		// (24 000 B/s), so the two platforms produce comparable files.
+		if request.audio.system.enabled || nativeMicrophoneEnabled {
+			let input = try addAudioInput(to: writer, bitRate: 192_000)
+			audioInput = input
+			audioMixer = AudioTrackMixer(
+				input: input,
+				includesSystemAudio: request.audio.system.enabled,
+				includesMicrophone: nativeMicrophoneEnabled,
+				microphoneGain: request.audio.microphone.gain
+			)
 		}
 	}
 
@@ -474,9 +483,14 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			return
 		}
 
+		// Capture has stopped, so nothing is in flight on the sample queue any more; hopping
+		// onto it once is what makes the mixer's final flush safe without a lock.
+		sampleQueue.sync {
+			audioMixer?.finish()
+		}
+
 		videoInput?.markAsFinished()
-		systemAudioInput?.markAsFinished()
-		microphoneAudioInput?.markAsFinished()
+		audioInput?.markAsFinished()
 
 		await withCheckedContinuation { continuation in
 			writer.finishWriting {
@@ -513,17 +527,6 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 
 		writer.add(input)
 		return input
-	}
-
-	private func appendAudioSampleBuffer(_ sampleBuffer: CMSampleBuffer, to input: AVAssetWriterInput?) {
-		guard didStartWriting else {
-			return
-		}
-		guard let input, input.isReadyForMoreMediaData else {
-			return
-		}
-
-		input.append(sampleBuffer)
 	}
 
 	private func currentPauseState() -> (paused: Bool, offset: CMTime) {
