@@ -17,7 +17,9 @@
 //! "move"; there is no click detection to be had here at any effort level.
 
 mod bitmap;
+mod encoder;
 mod events;
+mod ffmpeg;
 mod portal;
 mod shim;
 
