@@ -12,6 +12,10 @@
 //!     Electron session resolves `start()` on `ready` so its readiness timeout
 //!     does not have to accommodate a human.
 //!   * `cursor-sample` — one cursor observation.
+//!   * `encoder-selection` / `capture-started` / `capture-stopped` — Stage 2's
+//!     video half. `capture-started` is the Linux spelling of the "Recording
+//!     started" line the Windows helper prints, and the parent waits on it
+//!     before telling the UI that recording has begun.
 //!   * `debug` — the Stage 1 instrumentation, gated on OPENSCREEN_PIPEWIRE_DEBUG.
 
 use std::io::{self, Write};
@@ -72,6 +76,45 @@ pub enum Event {
         asset_id: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         asset: Option<CursorAsset>,
+    },
+    /// Which rung of the encoder ladder won, and why the ones above it did not.
+    /// Emitted before `capture-started` so a helper that then fails to start
+    /// still leaves the selection in the log.
+    #[serde(rename_all = "camelCase")]
+    EncoderSelection {
+        /// "vaapi" | "vulkan" | "software".
+        video: String,
+        /// One line per backend that was tried and refused, in ladder order.
+        rejected: Vec<String>,
+    },
+    /// The output file is open and the first frame has been encoded. The parent
+    /// treats this the way it treats Windows's "Recording started".
+    #[serde(rename_all = "camelCase")]
+    CaptureStarted {
+        timestamp_ms: u64,
+        path: String,
+        width: i32,
+        height: i32,
+        fps: i32,
+    },
+    /// The trailer is written and the file is closed and playable.
+    #[serde(rename_all = "camelCase")]
+    CaptureStopped {
+        timestamp_ms: u64,
+        path: String,
+        duration_ms: u64,
+        /// Frames written to the file, including any duplicated to hold the
+        /// constant frame rate.
+        frames: u64,
+        /// Frames the compositor delivered that the encoder never saw, because a
+        /// newer one replaced them in the mailbox first. A non-zero value here
+        /// means the machine could not keep up.
+        dropped: u64,
+        /// Mean milliseconds per frame in each stage, so a slow recording is
+        /// diagnosable from the log alone.
+        convert_ms: f64,
+        upload_ms: f64,
+        encode_ms: f64,
     },
     #[serde(rename_all = "camelCase")]
     Warning { code: String, message: String },
