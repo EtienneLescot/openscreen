@@ -43,6 +43,8 @@
 
 #include "pw_shim.h"
 
+#include "pw_internal.h"
+
 #define OSC_PW_SONAME "libpipewire-0.3.so.0"
 
 /*
@@ -134,6 +136,23 @@ struct osc_pw_session {
     int want_video;
 };
 
+struct osc_pw_audio_api osc_audio_api;
+
+/* The shared spelling pw_audio.c uses; `osc_set_error` below is the local
+ * alias this file has always called. */
+void osc_pw_set_error(char *err, size_t err_len, const char *format, ...)
+{
+    va_list args;
+
+    if (err == NULL || err_len == 0) {
+        return;
+    }
+    va_start(args, format);
+    vsnprintf(err, err_len, format, args);
+    va_end(args);
+    err[err_len - 1] = '\0';
+}
+
 static void osc_set_error(char *err, size_t err_len, const char *format, ...)
 {
     va_list args;
@@ -196,6 +215,43 @@ int osc_pw_load(char *err, size_t err_len)
     OSC_LOAD(stream_update_params, "pw_stream_update_params");
     OSC_LOAD(stream_state_as_string, "pw_stream_state_as_string");
 
+/* The audio half's table. Same dlopen, same failure path: a libpipewire too old
+ * to have one of these should be reported here, at load, and not halfway into a
+ * recording. */
+#define OSC_LOAD_AUDIO(field, symbol)                                                 \
+    do {                                                                              \
+        *(void **)(&osc_audio_api.field) = dlsym(api_handle, symbol);                 \
+        if (osc_audio_api.field == NULL) {                                            \
+            osc_set_error(err, err_len, "%s is missing symbol %s", OSC_PW_SONAME,     \
+                          symbol);                                                    \
+            dlclose(api_handle);                                                      \
+            api_handle = NULL;                                                        \
+            return -1;                                                                \
+        }                                                                             \
+    } while (0)
+
+    OSC_LOAD_AUDIO(thread_loop_new, "pw_thread_loop_new");
+    OSC_LOAD_AUDIO(thread_loop_destroy, "pw_thread_loop_destroy");
+    OSC_LOAD_AUDIO(thread_loop_get_loop, "pw_thread_loop_get_loop");
+    OSC_LOAD_AUDIO(thread_loop_start, "pw_thread_loop_start");
+    OSC_LOAD_AUDIO(thread_loop_stop, "pw_thread_loop_stop");
+    OSC_LOAD_AUDIO(thread_loop_lock, "pw_thread_loop_lock");
+    OSC_LOAD_AUDIO(thread_loop_unlock, "pw_thread_loop_unlock");
+    OSC_LOAD_AUDIO(context_new, "pw_context_new");
+    OSC_LOAD_AUDIO(context_destroy, "pw_context_destroy");
+    OSC_LOAD_AUDIO(context_connect, "pw_context_connect");
+    OSC_LOAD_AUDIO(core_disconnect, "pw_core_disconnect");
+    OSC_LOAD_AUDIO(properties_new, "pw_properties_new");
+    OSC_LOAD_AUDIO(properties_set, "pw_properties_set");
+    OSC_LOAD_AUDIO(stream_new, "pw_stream_new");
+    OSC_LOAD_AUDIO(stream_destroy, "pw_stream_destroy");
+    OSC_LOAD_AUDIO(stream_add_listener, "pw_stream_add_listener");
+    OSC_LOAD_AUDIO(stream_connect, "pw_stream_connect");
+    OSC_LOAD_AUDIO(stream_dequeue_buffer, "pw_stream_dequeue_buffer");
+    OSC_LOAD_AUDIO(stream_queue_buffer, "pw_stream_queue_buffer");
+    OSC_LOAD_AUDIO(stream_state_as_string, "pw_stream_state_as_string");
+
+#undef OSC_LOAD_AUDIO
 #undef OSC_LOAD
 
     api.init(NULL, NULL);

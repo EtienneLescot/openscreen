@@ -695,7 +695,225 @@ impl Drop for VideoEncoder {
     }
 }
 
-/// A single-video-stream MP4 writer.
+/// Sample rate every audio track is captured and encoded at. PipeWire's stream
+/// adapter converts whatever the device runs at, so this is a free choice, and
+/// 48 kHz is what the rest of the pipeline (and MP4) expects.
+pub const AUDIO_SAMPLE_RATE: i32 = 48_000;
+pub const AUDIO_CHANNELS: usize = 2;
+
+/// One AAC track, fed interleaved stereo f32.
+///
+/// AAC encodes in fixed blocks (1024 samples per channel), but PipeWire delivers
+/// whatever quantum the graph is running — 512, 1024, 2048, and it changes at
+/// runtime. So samples accumulate here until a full block exists rather than the
+/// caller having to buffer.
+pub struct AudioEncoder {
+    codec_ctx: *mut ff::AVCodecContext,
+    frame: *mut ff::AVFrame,
+    packet: *mut ff::AVPacket,
+    /// Interleaved samples not yet forming a whole AAC block.
+    pending: Vec<f32>,
+    /// Samples per channel in one block.
+    block: usize,
+    /// Presentation time of the next block, counted in samples — which is
+    /// exactly the codec's time base, so no rounding accumulates.
+    next_pts: i64,
+}
+
+impl AudioEncoder {
+    pub fn open(bitrate: i64) -> Result<Self, String> {
+        // SAFETY: an ffmpeg setup sequence; every allocation is stored in
+        // `encoder` as soon as it succeeds so Drop can free it.
+        unsafe {
+            let codec = ff::avcodec_find_encoder_by_name(c"aac".as_ptr());
+            if codec.is_null() {
+                return Err("the vendored ffmpeg has no AAC encoder".to_owned());
+            }
+            let codec_ctx = ff::avcodec_alloc_context3(codec);
+            if codec_ctx.is_null() {
+                return Err("avcodec_alloc_context3 returned null".to_owned());
+            }
+            let mut encoder = Self {
+                codec_ctx,
+                frame: ptr::null_mut(),
+                packet: ptr::null_mut(),
+                pending: Vec::new(),
+                block: 0,
+                next_pts: 0,
+            };
+
+            (*codec_ctx).sample_rate = AUDIO_SAMPLE_RATE;
+            // The native AAC encoder takes PLANAR float; interleaved is rejected
+            // outright by avcodec_open2, which is why `push` deinterleaves.
+            (*codec_ctx).sample_fmt = ff::AV_SAMPLE_FMT_FLTP;
+            (*codec_ctx).bit_rate = bitrate;
+            (*codec_ctx).time_base = ff::AVRational { num: 1, den: AUDIO_SAMPLE_RATE };
+            ff::av_channel_layout_default(&mut (*codec_ctx).ch_layout, AUDIO_CHANNELS as i32);
+            (*codec_ctx).flags |= ff::AV_CODEC_FLAG_GLOBAL_HEADER as i32;
+
+            let opened = ff::avcodec_open2(codec_ctx, codec, ptr::null_mut());
+            if opened < 0 {
+                return Err(format!("aac avcodec_open2: {}", ff::err_to_string(opened)));
+            }
+            // Only valid after open: the encoder decides its own block size.
+            encoder.block = match (*codec_ctx).frame_size {
+                size if size > 0 => size as usize,
+                _ => 1024,
+            };
+
+            encoder.packet = ff::av_packet_alloc();
+            encoder.frame = ff::av_frame_alloc();
+            if encoder.packet.is_null() || encoder.frame.is_null() {
+                return Err("av_packet_alloc/av_frame_alloc returned null".to_owned());
+            }
+            (*encoder.frame).format = ff::AV_SAMPLE_FMT_FLTP as i32;
+            (*encoder.frame).nb_samples = encoder.block as i32;
+            (*encoder.frame).sample_rate = AUDIO_SAMPLE_RATE;
+            ff::av_channel_layout_default(
+                &mut (*encoder.frame).ch_layout,
+                AUDIO_CHANNELS as i32,
+            );
+            let allocated = ff::av_frame_get_buffer(encoder.frame, 0);
+            if allocated < 0 {
+                return Err(format!(
+                    "audio av_frame_get_buffer: {}",
+                    ff::err_to_string(allocated)
+                ));
+            }
+
+            Ok(encoder)
+        }
+    }
+
+    pub fn codec_context(&self) -> *mut ff::AVCodecContext {
+        self.codec_ctx
+    }
+
+    /// Feeds interleaved stereo samples, encoding every whole block they complete.
+    pub fn push(
+        &mut self,
+        interleaved: &[f32],
+        mut on_packet: impl FnMut(*mut ff::AVPacket) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.pending.extend_from_slice(interleaved);
+        let per_block = self.block * AUDIO_CHANNELS;
+        while self.pending.len() >= per_block {
+            // SAFETY: the frame was allocated for exactly `block` samples per
+            // channel, and `pending` has been checked to hold a whole block.
+            unsafe { self.encode_block(per_block, &mut on_packet)? };
+        }
+        Ok(())
+    }
+
+    /// SAFETY: `self.pending` must hold at least `per_block` samples.
+    unsafe fn encode_block(
+        &mut self,
+        per_block: usize,
+        on_packet: &mut impl FnMut(*mut ff::AVPacket) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let writable = ff::av_frame_make_writable(self.frame);
+        if writable < 0 {
+            return Err(format!(
+                "audio av_frame_make_writable: {}",
+                ff::err_to_string(writable)
+            ));
+        }
+        // Interleaved LRLRLR… in, one contiguous plane per channel out.
+        for channel in 0..AUDIO_CHANNELS {
+            let plane = (*self.frame).data[channel] as *mut f32;
+            for sample in 0..self.block {
+                *plane.add(sample) = self.pending[sample * AUDIO_CHANNELS + channel];
+            }
+        }
+        (*self.frame).pts = self.next_pts;
+        self.next_pts += self.block as i64;
+        self.pending.drain(..per_block);
+
+        self.send_and_drain(self.frame, on_packet)
+    }
+
+    /// Pads any partial block with silence, encodes it, and flushes.
+    pub fn finish(
+        &mut self,
+        mut on_packet: impl FnMut(*mut ff::AVPacket) -> Result<(), String>,
+    ) -> Result<(), String> {
+        // SAFETY: padding only grows `pending` to exactly one block, which is
+        // what encode_block requires; a null frame is how ffmpeg is drained.
+        unsafe {
+            if !self.pending.is_empty() {
+                let per_block = self.block * AUDIO_CHANNELS;
+                self.pending.resize(per_block, 0.0);
+                self.encode_block(per_block, &mut on_packet)?;
+            }
+            self.send_and_drain(ptr::null_mut(), &mut on_packet)
+        }
+    }
+
+    /// SAFETY: `frame` is either null (drain) or the frame this encoder owns.
+    unsafe fn send_and_drain(
+        &mut self,
+        frame: *mut ff::AVFrame,
+        on_packet: &mut impl FnMut(*mut ff::AVPacket) -> Result<(), String>,
+    ) -> Result<(), String> {
+        let sent = ff::avcodec_send_frame(self.codec_ctx, frame);
+        if sent < 0 && sent != ff::AVERROR_EOF {
+            return Err(format!("aac avcodec_send_frame: {}", ff::err_to_string(sent)));
+        }
+        loop {
+            let received = ff::avcodec_receive_packet(self.codec_ctx, self.packet);
+            if received == ff::AVERROR_EAGAIN || received == ff::AVERROR_EOF {
+                return Ok(());
+            }
+            if received < 0 {
+                return Err(format!(
+                    "aac avcodec_receive_packet: {}",
+                    ff::err_to_string(received)
+                ));
+            }
+            let result = on_packet(self.packet);
+            ff::av_packet_unref(self.packet);
+            result?;
+        }
+    }
+}
+
+impl Drop for AudioEncoder {
+    fn drop(&mut self) {
+        // SAFETY: every pointer is either null or owned here.
+        unsafe {
+            if !self.packet.is_null() {
+                ff::av_packet_free(&mut self.packet);
+            }
+            if !self.frame.is_null() {
+                ff::av_frame_free(&mut self.frame);
+            }
+            if !self.codec_ctx.is_null() {
+                ff::avcodec_free_context(&mut self.codec_ctx);
+            }
+        }
+    }
+}
+
+/// Identifies a track added with [`Muxer::add_stream`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct TrackId(usize);
+
+struct MuxTrack {
+    /// libavformat's own stream index, which need not equal our `TrackId`.
+    index: i32,
+    /// The time base packets arrive in.
+    source_time_base: ff::AVRational,
+    /// The time base libavformat CHOSE, which is what they must be rescaled to.
+    stream_time_base: ff::AVRational,
+}
+
+/// A multi-track MP4 writer: one video stream plus however many audio tracks.
+///
+/// Audio is written as separate tracks rather than pre-mixed, matching the macOS
+/// helper — see the note in crates/compositor/src/audio.rs, which decodes and
+/// mixes every audio track it finds on export. Keeping them apart means the two
+/// captures never have to be resampled onto a common clock here: each carries
+/// its own timestamps and the container reconciles them.
 ///
 /// `+faststart` is not used: it rewrites the whole file on close, which on a
 /// long recording means copying gigabytes. The moov atom is written at the end
@@ -704,14 +922,14 @@ impl Drop for VideoEncoder {
 /// and could not be seeked even locally (see electron/recording/webm-seek-index.ts).
 pub struct Muxer {
     fmt: *mut ff::AVFormatContext,
-    stream_index: i32,
-    stream_time_base: ff::AVRational,
-    encoder_time_base: ff::AVRational,
+    tracks: Vec<MuxTrack>,
     header_written: bool,
 }
 
 impl Muxer {
-    pub fn create(path: &Path, encoder: &VideoEncoder) -> Result<Self, String> {
+    /// Allocates the output and opens the file. No stream exists yet: add them
+    /// all with [`Self::add_stream`], then call [`Self::write_header`].
+    pub fn create(path: &Path) -> Result<Self, String> {
         let path_c = CString::new(path.as_os_str().as_encoded_bytes())
             .map_err(|_| "output path contains a NUL byte".to_owned())?;
 
@@ -732,28 +950,7 @@ impl Muxer {
                 ));
             }
 
-            let mut muxer = Self {
-                fmt,
-                stream_index: -1,
-                stream_time_base: ff::AVRational { num: 0, den: 1 },
-                encoder_time_base: (*encoder.codec_context()).time_base,
-                header_written: false,
-            };
-
-            let stream = ff::avformat_new_stream(fmt, ptr::null());
-            if stream.is_null() {
-                return Err("avformat_new_stream returned null".to_owned());
-            }
-            (*stream).time_base = muxer.encoder_time_base;
-            let copied =
-                ff::avcodec_parameters_from_context((*stream).codecpar, encoder.codec_context());
-            if copied < 0 {
-                return Err(format!(
-                    "avcodec_parameters_from_context: {}",
-                    ff::err_to_string(copied)
-                ));
-            }
-            muxer.stream_index = (*stream).index;
+            let muxer = Self { fmt, tracks: Vec::new(), header_written: false };
 
             let opened = ff::avio_open(&mut (*fmt).pb, path_c.as_ptr(), ff::AVIO_FLAG_WRITE as i32);
             if opened < 0 {
@@ -764,32 +961,79 @@ impl Muxer {
                 ));
             }
 
-            let header = ff::avformat_write_header(fmt, ptr::null_mut());
+            Ok(muxer)
+        }
+    }
+
+    /// Adds a track fed by `codec_ctx`. Every track must be added before
+    /// [`Self::write_header`]: MP4 fixes its track list in the header.
+    pub fn add_stream(&mut self, codec_ctx: *mut ff::AVCodecContext) -> Result<TrackId, String> {
+        if self.header_written {
+            return Err("a stream cannot be added after the header is written".to_owned());
+        }
+        // SAFETY: `codec_ctx` is an opened context owned by the caller, and
+        // `fmt` is ours.
+        unsafe {
+            let stream = ff::avformat_new_stream(self.fmt, ptr::null());
+            if stream.is_null() {
+                return Err("avformat_new_stream returned null".to_owned());
+            }
+            let source_time_base = (*codec_ctx).time_base;
+            (*stream).time_base = source_time_base;
+            let copied = ff::avcodec_parameters_from_context((*stream).codecpar, codec_ctx);
+            if copied < 0 {
+                return Err(format!(
+                    "avcodec_parameters_from_context: {}",
+                    ff::err_to_string(copied)
+                ));
+            }
+            self.tracks.push(MuxTrack {
+                index: (*stream).index,
+                source_time_base,
+                // Filled in by write_header, which is free to change it.
+                stream_time_base: source_time_base,
+            });
+            Ok(TrackId(self.tracks.len() - 1))
+        }
+    }
+
+    pub fn write_header(&mut self) -> Result<(), String> {
+        if self.tracks.is_empty() {
+            return Err("the output has no streams".to_owned());
+        }
+        // SAFETY: `fmt` is ours and every stream was added through add_stream.
+        unsafe {
+            let header = ff::avformat_write_header(self.fmt, ptr::null_mut());
             if header < 0 {
                 return Err(format!(
                     "avformat_write_header: {}",
                     ff::err_to_string(header)
                 ));
             }
-            muxer.header_written = true;
-            // libavformat may have rewritten the stream's time base while
-            // writing the header (MP4 prefers 1/90000-style bases). Everything
-            // after this must rescale into the value it CHOSE, not the value we
-            // asked for — using ours produces a file whose duration is wrong by
-            // the ratio between them.
-            muxer.stream_time_base = (*stream).time_base;
-
-            Ok(muxer)
+            self.header_written = true;
+            // libavformat may have rewritten a stream's time base while writing
+            // the header (MP4 prefers 1/90000-style bases for video and the
+            // sample rate for audio). Everything after this must rescale into
+            // the value it CHOSE, not the value we asked for — using ours
+            // produces a file whose duration is wrong by the ratio between them.
+            for track in &mut self.tracks {
+                let stream = *(*self.fmt).streams.add(track.index as usize);
+                track.stream_time_base = (*stream).time_base;
+            }
         }
+        Ok(())
     }
 
-    /// Writes one encoded packet, rescaling it out of the encoder's time base.
-    pub fn write(&mut self, packet: *mut ff::AVPacket) -> Result<(), String> {
-        // SAFETY: `packet` comes from the encoder that this muxer was created
-        // for, and is valid until the caller unrefs it.
+    /// Writes one encoded packet, rescaling it out of its encoder's time base.
+    pub fn write(&mut self, track: TrackId, packet: *mut ff::AVPacket) -> Result<(), String> {
+        let Some(track) = self.tracks.get(track.0) else {
+            return Err("packet written to a track that was never added".to_owned());
+        };
+        // SAFETY: `packet` comes from the encoder this track was added for, and
+        // is valid until the caller unrefs it.
         unsafe {
-            (*packet).stream_index = self.stream_index;
-            ff::av_packet_rescale_ts(packet, self.encoder_time_base, self.stream_time_base);
+            (*packet).stream_index = track.index;
+            ff::av_packet_rescale_ts(packet, track.source_time_base, track.stream_time_base);
             let written = ff::av_interleaved_write_frame(self.fmt, packet);
             if written < 0 {
                 return Err(format!(
@@ -989,7 +1233,9 @@ mod tests {
         .expect("some backend must open");
         eprintln!("selected backend: {}", encoder.backend().as_str());
 
-        let mut muxer = Muxer::create(&output, &encoder).expect("muxer");
+        let mut muxer = Muxer::create(&output).expect("muxer");
+        let track = muxer.add_stream(encoder.codec_context()).expect("video track");
+        muxer.write_header().expect("header");
         let stride = width as usize * 4;
         let mut frame = vec![0u8; stride * height as usize];
         let started = std::time::Instant::now();
@@ -1002,10 +1248,10 @@ mod tests {
                 *byte = ((index as i64 + pts * 7919) % 251) as u8;
             }
             encoder
-                .submit(&frame, stride, ff::AV_PIX_FMT_BGRA, pts, |packet| muxer.write(packet))
+                .submit(&frame, stride, ff::AV_PIX_FMT_BGRA, pts, |packet| muxer.write(track, packet))
                 .expect("submit");
         }
-        encoder.finish(|packet| muxer.write(packet)).expect("finish");
+        encoder.finish(|packet| muxer.write(track, packet)).expect("finish");
         let elapsed = started.elapsed();
         muxer.finish().expect("trailer");
 

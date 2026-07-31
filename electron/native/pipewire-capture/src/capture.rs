@@ -20,11 +20,36 @@
 //! makes the difference between the two immaterial.
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
-use crate::encoder::{Backend, EncodeStats, Muxer, VideoEncoder, VideoParams};
+use crate::encoder::{
+    AudioEncoder, Backend, EncodeStats, Muxer, TrackId, VideoEncoder, VideoParams,
+    AUDIO_CHANNELS, AUDIO_SAMPLE_RATE,
+};
 use crate::ffmpeg as ff;
-use crate::shim;
+use crate::shim::{self, AudioRing};
+
+/// An audio capture to mux alongside the video.
+pub struct AudioSource {
+    /// "system" or "microphone" — the label a warning names.
+    pub label: &'static str,
+    pub ring: Arc<AudioRing>,
+    /// Linear multiplier applied before encoding. 1.0 for the system mix; the
+    /// microphone carries the UI's boost.
+    pub gain: f32,
+    pub bitrate: i64,
+}
+
+struct AudioTrack {
+    label: &'static str,
+    ring: Arc<AudioRing>,
+    gain: f32,
+    encoder: AudioEncoder,
+    track: TrackId,
+    /// Reused across drains so the steady state allocates nothing.
+    scratch: Vec<f32>,
+}
 
 /// Frames encoded in one `advance` before returning to the event loop.
 ///
@@ -49,6 +74,8 @@ pub struct Summary {
 
 pub struct Capture {
     encoder: VideoEncoder,
+    video_track: TrackId,
+    audio: Vec<AudioTrack>,
     /// `None` only between [`Self::finish`] taking it and the struct dropping.
     muxer: Option<Muxer>,
     path: PathBuf,
@@ -76,6 +103,7 @@ impl Capture {
         fps: i32,
         bitrate: i64,
         forced: Option<Backend>,
+        audio_sources: Vec<AudioSource>,
     ) -> Result<(Self, Selection), String> {
         let mut rejected = Vec::new();
         let encoder = VideoEncoder::open(
@@ -84,11 +112,31 @@ impl Capture {
             |backend, error| rejected.push(format!("{}: {error}", backend.as_str())),
         )?;
         let selection = Selection { backend: encoder.backend(), rejected };
-        let muxer = Muxer::create(path, &encoder)?;
+
+        // Every track must exist before the header: MP4 fixes its track list
+        // there, so an audio stream opened later could not be added at all.
+        let mut muxer = Muxer::create(path)?;
+        let video_track = muxer.add_stream(encoder.codec_context())?;
+        let mut audio = Vec::with_capacity(audio_sources.len());
+        for source in audio_sources {
+            let encoder = AudioEncoder::open(source.bitrate)?;
+            let track = muxer.add_stream(encoder.codec_context())?;
+            audio.push(AudioTrack {
+                label: source.label,
+                ring: source.ring,
+                gain: source.gain,
+                encoder,
+                track,
+                scratch: Vec::new(),
+            });
+        }
+        muxer.write_header()?;
 
         Ok((
             Self {
                 encoder,
+                video_track,
+                audio,
                 muxer: Some(muxer),
                 path: path.to_path_buf(),
                 fps,
@@ -109,6 +157,14 @@ impl Capture {
         self.encoder.stage(&frame.pixels, frame.stride, format)?;
         if self.epoch.is_none() {
             self.epoch = Some(Instant::now());
+            // Audio has been accumulating since the process started, while the
+            // portal picker was up and the format was being negotiated. None of
+            // it belongs to the recording: video frame 0 is now, so audio
+            // sample 0 is now too. Keeping the backlog would shift the whole
+            // track earlier by however long the user took to click.
+            for track in &self.audio {
+                track.ring.clear();
+            }
         }
         Ok(())
     }
@@ -131,11 +187,36 @@ impl Capture {
             return Ok(0);
         };
         while self.next_index <= target && written < MAX_CATCHUP_FRAMES {
+            let track = self.video_track;
             self.encoder
-                .encode_staged(self.next_index, |packet| muxer.write(packet))?;
+                .encode_staged(self.next_index, |packet| muxer.write(track, packet))?;
             self.next_index += 1;
             self.frames_written += 1;
             written += 1;
+        }
+
+        // Audio is NOT bounded the way video is. A held video frame can be
+        // recreated at any time; a missed audio sample cannot, and the ring
+        // drops the oldest once it fills. Draining every wakeup keeps it far
+        // from that cap — at 48 kHz a 16 ms tick carries about 768 samples.
+        for track in &mut self.audio {
+            track.scratch.clear();
+            track.ring.drain_into(&mut track.scratch);
+            if track.scratch.is_empty() {
+                continue;
+            }
+            if track.gain != 1.0 {
+                for sample in &mut track.scratch {
+                    // Clamped: a boosted microphone that clips should clip
+                    // flat, not wrap around to the opposite polarity, which is
+                    // what an out-of-range float does once AAC quantises it.
+                    *sample = (*sample * track.gain).clamp(-1.0, 1.0);
+                }
+            }
+            let id = track.track;
+            track
+                .encoder
+                .push(&track.scratch, |packet| muxer.write(id, packet))?;
         }
         Ok(written)
     }
@@ -149,7 +230,24 @@ impl Capture {
     pub fn resume(&mut self) {
         if let Some(since) = self.paused_at.take() {
             self.paused_total += since.elapsed();
+            // Whatever arrived while paused is thrown away rather than encoded:
+            // the video timeline did not advance across the pause, so keeping
+            // the audio would push every later sample out of sync by the length
+            // of the pause.
+            for track in &self.audio {
+                track.ring.clear();
+            }
         }
+    }
+
+    /// Samples the rings had to discard because the encoder fell behind, per
+    /// track. Audible if non-zero, unlike a dropped video frame.
+    pub fn dropped_audio(&self) -> Vec<(&'static str, u64)> {
+        self.audio
+            .iter()
+            .map(|track| (track.label, track.ring.dropped_samples()))
+            .filter(|(_, dropped)| *dropped > 0)
+            .collect()
     }
 
     pub fn is_paused(&self) -> bool {
@@ -162,7 +260,28 @@ impl Capture {
             .muxer
             .take()
             .ok_or_else(|| "capture was already finished".to_owned())?;
-        self.encoder.finish(|packet| muxer.write(packet))?;
+
+        // Audio first: whatever is still in the rings is real recorded sound,
+        // and draining it after the video flush keeps both tracks ending at
+        // roughly the same timestamp.
+        for track in &mut self.audio {
+            track.scratch.clear();
+            track.ring.drain_into(&mut track.scratch);
+            if track.gain != 1.0 {
+                for sample in &mut track.scratch {
+                    *sample = (*sample * track.gain).clamp(-1.0, 1.0);
+                }
+            }
+            let id = track.track;
+            track
+                .encoder
+                .push(&track.scratch, |packet| muxer.write(id, packet))?;
+            track.encoder.finish(|packet| muxer.write(id, packet))?;
+        }
+
+        let video_track = self.video_track;
+        self.encoder
+            .finish(|packet| muxer.write(video_track, packet))?;
         muxer.finish()?;
 
         Ok(Summary {
@@ -264,7 +383,7 @@ mod tests {
     fn the_timeline_does_not_start_until_the_first_frame_is_staged() {
         let output = std::env::temp_dir().join("openscreen-capture-epoch.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, 1_000_000, Some(Backend::Software))
+            Capture::start(&output, 320, 240, 30, 1_000_000, Some(Backend::Software), Vec::new())
                 .expect("start");
         assert!(!capture.started());
         // Nothing staged: advance must not write a frame of uninitialised memory.
@@ -283,7 +402,7 @@ mod tests {
         // further arrivals, and the file must still fill with frames.
         let output = std::env::temp_dir().join("openscreen-capture-static.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, 1_000_000, Some(Backend::Software))
+            Capture::start(&output, 320, 240, 30, 1_000_000, Some(Backend::Software), Vec::new())
                 .expect("start");
         capture
             .stage(&frame(320, 240, shim::constants().video_format_bgrx))
@@ -302,7 +421,7 @@ mod tests {
     fn paused_time_does_not_advance_the_timeline() {
         let output = std::env::temp_dir().join("openscreen-capture-pause.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, 1_000_000, Some(Backend::Software))
+            Capture::start(&output, 320, 240, 30, 1_000_000, Some(Backend::Software), Vec::new())
                 .expect("start");
         capture
             .stage(&frame(320, 240, shim::constants().video_format_bgrx))
@@ -321,10 +440,83 @@ mod tests {
     }
 
     #[test]
+    fn audio_captured_before_the_first_frame_is_discarded_without_being_called_a_drop() {
+        // Regression: the audio stream opens before the portal picker is
+        // raised, so it records for as long as the user takes to click — easily
+        // past the ring's cap. Those samples are deliberately thrown away when
+        // the video epoch is set. Counting them as overflow made every single
+        // recording report "the encoder could not keep up", which was measured
+        // on a real 29-second capture: 78336 samples, all of them pre-roll.
+        let ring = Arc::new(AudioRing::new(1, 8, AUDIO_CHANNELS));
+        let capacity = 1 * 8 * AUDIO_CHANNELS;
+        ring.push_for_test(&vec![0.5; capacity * 3]);
+        assert!(ring.dropped_samples() > 0, "the ring must have overflowed for this test to mean anything");
+
+        let output = std::env::temp_dir().join("openscreen-capture-audio-preroll.mp4");
+        let (mut capture, _) = Capture::start(
+            &output,
+            320,
+            240,
+            30,
+            1_000_000,
+            Some(Backend::Software),
+            vec![AudioSource { label: "system", ring: ring.clone(), gain: 1.0, bitrate: 128_000 }],
+        )
+        .expect("start");
+
+        capture
+            .stage(&frame(320, 240, shim::constants().video_format_bgrx))
+            .expect("stage");
+
+        assert_eq!(
+            ring.dropped_samples(),
+            0,
+            "pre-roll overflow must not be reported as the encoder falling behind"
+        );
+        assert!(capture.dropped_audio().is_empty());
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn microphone_gain_clamps_instead_of_wrapping() {
+        // A boosted microphone that clips must clip flat. An out-of-range float
+        // survives until AAC quantises it, and then wraps to the opposite
+        // polarity — which sounds like a burst of noise, not like clipping.
+        let ring = Arc::new(AudioRing::new(1, AUDIO_SAMPLE_RATE as usize, AUDIO_CHANNELS));
+        ring.push_for_test(&[0.9, -0.9, 0.4, -0.4]);
+
+        let output = std::env::temp_dir().join("openscreen-capture-gain.mp4");
+        let (mut capture, _) = Capture::start(
+            &output,
+            320,
+            240,
+            30,
+            1_000_000,
+            Some(Backend::Software),
+            vec![AudioSource { label: "microphone", ring, gain: 4.0, bitrate: 128_000 }],
+        )
+        .expect("start");
+        capture
+            .stage(&frame(320, 240, shim::constants().video_format_bgrx))
+            .expect("stage");
+
+        // stage() cleared the pre-roll, so feed the samples the run will see.
+        capture.audio[0].ring.push_for_test(&[0.9, -0.9, 0.4, -0.4]);
+        capture.advance().expect("advance");
+        for sample in &capture.audio[0].scratch {
+            assert!(
+                (-1.0..=1.0).contains(sample),
+                "gain produced {sample}, which is outside the representable range"
+            );
+        }
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
     fn catch_up_is_bounded_so_a_stall_cannot_block_stop() {
         let output = std::env::temp_dir().join("openscreen-capture-catchup.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 60, 1_000_000, Some(Backend::Software))
+            Capture::start(&output, 320, 240, 60, 1_000_000, Some(Backend::Software), Vec::new())
                 .expect("start");
         capture
             .stage(&frame(320, 240, shim::constants().video_format_bgrx))
