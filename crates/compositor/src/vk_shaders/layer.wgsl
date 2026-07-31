@@ -203,11 +203,37 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     var alpha: f32;
 
     if layer.mode < 0.5 {
-        // Mode 0 — vidéo NV12. Le motion blur (taps) et le flou de mouvement par
-        // vélocité sont délibérément omis de la tranche verticale (ils vivent en
-        // WP4, après la validation du chemin iso). Couleur échantillonnée une fois
-        // à l'UV interpolée.
-        rgb = sample_yuv(i.uv);
+        // Mode 0 — vidéo NV12 + flou de mouvement par vélocité (§8), port 1:1 du
+        // HLSL/MSL. Pour CE pixel de sortie, l'UV qu'il occupait à la frame
+        // précédente se retrouve en le remappant par (dst_prev, src_prev) : on
+        // floute le long de ce segment, ce qui capture la translation ET le zoom
+        // du calque sans avoir à transporter un champ de vitesse.
+        let taps = i32(layer.mb.x);
+        // `taps` d'abord : un draw qui a oublié `dst_prev` le laisse à zéro, et
+        // la division par `dst_prev.zw` produirait des UV infinis. Dégrader vers
+        // le chemin net est le seul échec acceptable pour un effet cosmétique.
+        if taps <= 1 || layer.dst_prev.z <= 0.0 || layer.dst_prev.w <= 0.0 {
+            rgb = sample_yuv(i.uv);
+        } else {
+            let localp = (i.pout - layer.dst_prev.xy) / layer.dst_prev.zw;
+            let uv_prev = layer.src_prev.xy + localp * (layer.src_prev.zw - layer.src_prev.xy);
+            let duv = i.uv - uv_prev;
+            if dot(duv, duv) < 1e-9 {
+                rgb = sample_yuv(i.uv);
+            } else {
+                // Borne 16 en dur, identique au HLSL et au MSL : `taps` vient d'un
+                // uniform et une boucle sans borne statique ne se déroule pas.
+                // L'échelle de l'inspector s'arrête pile à 16 (1 + 15·blur), donc
+                // c'est `taps` qui coupe, jamais la borne.
+                var acc = vec3<f32>(0.0);
+                let step = 1.0 / f32(taps - 1);
+                for (var k: i32 = 0; k < 16; k = k + 1) {
+                    if k >= taps { break; }
+                    acc = acc + sample_yuv(uv_prev + duv * (f32(k) * step));
+                }
+                rgb = acc / f32(taps);
+            }
+        }
     } else if layer.mode < 1.5 {
         // Mode 1 — couleur pleine.
         rgb = layer.color.rgb;

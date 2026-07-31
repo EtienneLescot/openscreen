@@ -109,6 +109,13 @@ pub struct Compositor {
     // Pipeline de calque (VS + FS `layer.wgsl`), sampler lineaire, bind group
     // layout (uniform + 2 textures + sampler). Immuables apres `new_sized`.
     pipeline: wgpu::RenderPipeline,
+    /// Meme shader et meme layout que `pipeline`, blend ADDITIF pondere par la
+    /// constante de blend. Sert a sommer les copies de la trainee du curseur
+    /// dans `accum` ; cf. `blend_add` cote Windows.
+    pipeline_add: wgpu::RenderPipeline,
+    /// Copie plein ecran d'`accum` vers le RT en « over » premultiplie
+    /// (`blur.wgsl` : `vs_fullscreen` + `fs_copy`). Utilise le layout du blur.
+    pipeline_copy: wgpu::RenderPipeline,
     bind_group_layout: wgpu::BindGroupLayout,
     sampler: wgpu::Sampler,
 
@@ -125,6 +132,10 @@ pub struct Compositor {
     // Render target offscreen + ring de staging de la relecture (recrees au resize).
     rt: wgpu::Texture,
     rt_view: wgpu::TextureView,
+    /// Cible ISOLEE d'accumulation, meme taille et meme format que le RT.
+    /// `_accum` garde la texture en vie ; seule la vue est utilisee.
+    _accum: wgpu::Texture,
+    accum_view: wgpu::TextureView,
     /// `bytes_per_row` padde a 256 (contrainte wgpu de copy_texture_to_buffer).
     readback_bpr: u32,
     /// Ring de buffers de staging (cf. `ReadbackRing`). `RefCell` : les methodes
@@ -215,34 +226,53 @@ impl Compositor {
             bind_group_layouts: &[&bind_group_layout],
             push_constant_ranges: &[],
         });
-        let pipeline = gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            label: Some("layer"),
-            layout: Some(&pipeline_layout),
-            vertex: wgpu::VertexState {
-                module: &module,
-                entry_point: Some("vs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                buffers: &[],
-            },
-            fragment: Some(wgpu::FragmentState {
-                module: &module,
-                entry_point: Some("fs_main"),
-                compilation_options: wgpu::PipelineCompilationOptions::default(),
-                targets: &[Some(wgpu::ColorTargetState {
-                    format: wgpu::TextureFormat::Rgba8Unorm,
-                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
-                    write_mask: wgpu::ColorWrites::ALL,
-                })],
-            }),
-            primitive: wgpu::PrimitiveState {
-                topology: wgpu::PrimitiveTopology::TriangleStrip,
-                ..Default::default()
-            },
-            depth_stencil: None,
-            multisample: wgpu::MultisampleState::default(),
-            multiview: None,
-            cache: None,
-        });
+        // Deux pipelines pour le MEME shader de calque : seul le blend change.
+        let mk_layer = |label: &str, blend: wgpu::BlendState| {
+            gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+                label: Some(label),
+                layout: Some(&pipeline_layout),
+                vertex: wgpu::VertexState {
+                    module: &module,
+                    entry_point: Some("vs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    buffers: &[],
+                },
+                fragment: Some(wgpu::FragmentState {
+                    module: &module,
+                    entry_point: Some("fs_main"),
+                    compilation_options: wgpu::PipelineCompilationOptions::default(),
+                    targets: &[Some(wgpu::ColorTargetState {
+                        format: wgpu::TextureFormat::Rgba8Unorm,
+                        blend: Some(blend),
+                        write_mask: wgpu::ColorWrites::ALL,
+                    })],
+                }),
+                primitive: wgpu::PrimitiveState {
+                    topology: wgpu::PrimitiveTopology::TriangleStrip,
+                    ..Default::default()
+                },
+                depth_stencil: None,
+                multisample: wgpu::MultisampleState::default(),
+                multiview: None,
+                cache: None,
+            })
+        };
+        let pipeline = mk_layer("layer", wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING);
+        // SOMME pondere : `src * constante + dst`. La constante (posee par pass
+        // via `set_blend_constant`) vaut 1/taps, donc N copies d'un curseur
+        // parfaitement immobile redonnent exactement ce curseur. Transcription
+        // du `blend_add` D3D11 (BLEND_FACTOR / ONE / OP_ADD sur couleur ET
+        // alpha) ; l'alpha doit suivre la couleur, sinon la somme n'est plus
+        // premultipliee et la composition finale delave la trainee.
+        let add = wgpu::BlendComponent {
+            src_factor: wgpu::BlendFactor::Constant,
+            dst_factor: wgpu::BlendFactor::One,
+            operation: wgpu::BlendOperation::Add,
+        };
+        let pipeline_add = mk_layer(
+            "layer-add",
+            wgpu::BlendState { color: add, alpha: add },
+        );
 
         // --- Chaine de blur Kawase du fond (`blur.wgsl`) ---
         let blur_module = gpu.device.create_shader_module(wgpu::ShaderModuleDescriptor {
@@ -318,6 +348,38 @@ impl Compositor {
         };
         let blur_down = mk_blur("fs_kawase_down");
         let blur_up = mk_blur("fs_kawase_up");
+        // Composition d'`accum` sur le RT : meme layout que le blur (uniform +
+        // 1 texture + sampler) et blend « over » premultiplie. Son VS est
+        // `vs_fullscreen` et non le `vs_main` du Kawase -- une passe UNIQUE ne
+        // pardonne pas une erreur d'orientation, cf. le commentaire la-bas.
+        let pipeline_copy = gpu.device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("accum-copy"),
+            layout: Some(&blur_pl),
+            vertex: wgpu::VertexState {
+                module: &blur_module,
+                entry_point: Some("vs_fullscreen"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                buffers: &[],
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &blur_module,
+                entry_point: Some("fs_copy"),
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+                targets: &[Some(wgpu::ColorTargetState {
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    blend: Some(wgpu::BlendState::PREMULTIPLIED_ALPHA_BLENDING),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleList,
+                ..Default::default()
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+            cache: None,
+        });
         let mk_pyr = |dw: u32, dh: u32, label: &str| {
             gpu.device
                 .create_texture(&wgpu::TextureDescriptor {
@@ -341,7 +403,7 @@ impl Compositor {
         let blur_qtr = mk_pyr(w / 4, h / 4, "blur-qtr");
         let blur_oct = mk_pyr(w / 8, h / 8, "blur-oct");
 
-        let (rt, rt_view, readback_bpr) = Self::make_targets(&gpu, w, h);
+        let (rt, rt_view, accum, accum_view, readback_bpr) = Self::make_targets(&gpu, w, h);
         // Profondeur 1 par defaut = chemin synchrone historique, a l'octet et a
         // la latence pres. C'est l'export qui demande explicitement 2 (cf.
         // `set_readback_depth`) ; tout autre appelant garde l'ancien contrat.
@@ -356,6 +418,8 @@ impl Compositor {
             render_w: w,
             render_h: h,
             pipeline,
+            pipeline_add,
+            pipeline_copy,
             bind_group_layout,
             sampler,
             blur_bgl,
@@ -366,6 +430,8 @@ impl Compositor {
             blur_oct,
             rt,
             rt_view,
+            _accum: accum,
+            accum_view,
             readback_bpr,
             readback,
             live_params: RefCell::new(LiveParams::default()),
@@ -378,27 +444,42 @@ impl Compositor {
         })
     }
 
-    /// RT RGBA8 + `bytes_per_row` de la relecture (padde a 256).
-    fn make_targets(gpu: &Gpu, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView, u32) {
-        let rt = gpu.device.create_texture(&wgpu::TextureDescriptor {
-            label: Some("rt"),
-            size: wgpu::Extent3d {
-                width: w,
-                height: h,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8Unorm,
-            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
-                | wgpu::TextureUsages::COPY_SRC
-                | wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        });
+    /// RT RGBA8, cible d'accumulation de meme geometrie, et `bytes_per_row` de
+    /// la relecture (padde a 256).
+    ///
+    /// `accum` est alloue ICI et pas ailleurs pour qu'il soit impossible de le
+    /// laisser a l'ancienne taille apres un changement de resolution : c'est le
+    /// meme appel qui produit les deux, et un accum plus petit que le RT ferait
+    /// une passe de composition tronquee.
+    fn make_targets(
+        gpu: &Gpu,
+        w: u32,
+        h: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView, wgpu::Texture, wgpu::TextureView, u32) {
+        let mk = |label: &str, extra: wgpu::TextureUsages| {
+            gpu.device.create_texture(&wgpu::TextureDescriptor {
+                label: Some(label),
+                size: wgpu::Extent3d {
+                    width: w,
+                    height: h,
+                    depth_or_array_layers: 1,
+                },
+                mip_level_count: 1,
+                sample_count: 1,
+                dimension: wgpu::TextureDimension::D2,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                    | wgpu::TextureUsages::TEXTURE_BINDING
+                    | extra,
+                view_formats: &[],
+            })
+        };
+        let rt = mk("rt", wgpu::TextureUsages::COPY_SRC);
+        let accum = mk("accum", wgpu::TextureUsages::empty());
         let rt_view = rt.create_view(&wgpu::TextureViewDescriptor::default());
+        let accum_view = accum.create_view(&wgpu::TextureViewDescriptor::default());
         let bpr = (w * 4).div_ceil(256) * 256;
-        (rt, rt_view, bpr)
+        (rt, rt_view, accum, accum_view, bpr)
     }
 
     /// Un buffer de staging de la ring. La taille depend de `bpr` (donc de la
@@ -861,6 +942,21 @@ impl Compositor {
         // neutre, mode 8 (warp bilineaire inverse dans la bbox du quad projete)
         // sinon. Place par plan_frame (cover-fit + coins arrondis) ;
         // `src = g.cut` (crop utilisateur + zoom en UV texture) dans les deux cas.
+        //
+        // FLOU DE VELOCITE, ET POURQUOI SEULEMENT SUR LE MODE 0. `src_prev`/
+        // `dst_prev` decrivent le MEME calque a la frame precedente ; le shader
+        // remappe chaque pixel de sortie par ce couple pour retrouver l'UV qu'il
+        // occupait alors, et floute le long du segment. `src_prev = g.cut` et non
+        // un `cut` d'avant : la coupe est identique aux deux frames (`plan_frame`
+        // ne fait varier que le rect de DESTINATION entre `s_dst` et
+        // `s_dst_prev`), ce que Windows documente aussi. Le mouvement vient donc
+        // entierement de `dst_prev`.
+        //
+        // Le mode 8 n'en recoit PAS, et ce n'est pas un oubli : ces deux champs y
+        // portent deja les coins projetes du quad (BR/BL dans `src_prev`,
+        // `plane_px` dans `dst_prev`). Les deux sens ne peuvent pas cohabiter dans
+        // un meme draw. macOS et Windows sautent egalement le flou sur le chemin
+        // incline, pour la meme raison.
         let screen_layer = match tilt.as_ref() {
             None => LayerCB {
                 dst: g.s_dst,
@@ -869,6 +965,9 @@ impl Compositor {
                 radius_px: g.s_radius,
                 mode: 0.0,
                 color: [1.0, 1.0, 1.0, 1.0],
+                src_prev: g.cut,
+                dst_prev: g.s_dst_prev,
+                mb: [g.mb_taps, 1.0, 1.0, 0.0],
                 ..Default::default()
             },
             Some(quad) => self.tilted_screen_cb(quad, s_px, quad_center_px, g.cut, g.s_radius),
@@ -990,6 +1089,11 @@ impl Compositor {
             // cover-crop les deux bornes sont strictement a l'interieur de la
             // texture, donc le sampler ClampToEdge ne bave pas sur les bords.
             let (u0, u1) = if lp.webcam_mirror { (cu1, cu0) } else { (cu0, cu1) };
+            // `src_prev` doit valoir EXACTEMENT le `src` de ce draw, miroir
+            // compris : le shader s'en sert pour reconstruire l'UV de la frame
+            // precedente, et un rect source qui ne correspond pas au calque
+            // dessine ferait diverger la trainee vers une zone de la texture qui
+            // n'a jamais ete affichee. Seul `dst_prev` porte le mouvement.
             let cb = LayerCB {
                 dst: g.w_dst,
                 src: [u0, cv0, u1, cv1],
@@ -997,6 +1101,9 @@ impl Compositor {
                 radius_px: g.w_radius,
                 mode: 0.0,
                 color: [0.0, 0.0, 0.0, 1.0],
+                src_prev: [u0, cv0, u1, cv1],
+                dst_prev: g.w_dst_prev,
+                mb: [g.mb_taps, 1.0, 1.0, 0.0],
                 ..Default::default()
             };
             self.make_bind(&cb, Some((wy, wuv)), &dummy)
@@ -1143,15 +1250,19 @@ impl Compositor {
         }
 
         // Curseur thematise : sprite RGBA droit (mode 7) ou pose sur le plan
-        // incline (mode 13) selon ce que `plan_cursor` a resolu. Le motion blur
-        // (taps>1) reste un increment a venir. `_tex`/`_view`/`_buf` gardent le
-        // sprite en vie pendant le pass. Miroir de la branche curseur de
-        // `compositor_macos`.
+        // incline (mode 13) selon ce que `plan_cursor` a resolu.
+        // `_tex`/`_view`/`_bufs` gardent le sprite et les uniformes en vie
+        // pendant le pass. Miroir de la branche curseur de `compositor_macos`.
+        //
+        // TRAINEE (`plan.taps > 1`) : `binds` porte une copie par echantillon,
+        // interpolee entre `prev_placement` et le placement courant. Elles ne
+        // sont PAS dessinees sur le RT mais dans `accum`, puis compositees en une
+        // fois -- cf. le commentaire au point de dessin.
         struct CursorDraw {
-            _buf: wgpu::Buffer,
+            _bufs: Vec<wgpu::Buffer>,
             _tex: wgpu::Texture,
             _view: wgpu::TextureView,
-            bind: wgpu::BindGroup,
+            binds: Vec<wgpu::BindGroup>,
         }
         let cursor_draw: Option<CursorDraw> = (|| {
             let track = cursor_ref.as_ref()?;
@@ -1171,6 +1282,7 @@ impl Compositor {
                         .unwrap_or(frame / crate::frame_geometry::FPS),
                 },
             )?;
+
             let sprites = scene_ref
                 .as_ref()
                 .map(|s| s.cursor.cursor_sprites.clone())
@@ -1204,15 +1316,39 @@ impl Compositor {
                 (plan.size_px * ar, plan.size_px)
             };
             let hotspot = [sprite.hotspot_x, sprite.hotspot_y];
-            let cb = match plan.placement {
-                CursorPlacement::Upright { center } => LayerCB {
-                    dst: cursor_sprite_dst(center, pw / rw, ph / rh, hotspot),
-                    src: [0.0, 0.0, 1.0, 1.0],
-                    mode: 7.0,
-                    color: [1.0, 1.0, 1.0, 1.0],
-                    fx: plan.clip,
-                    ..Default::default()
-                },
+            // `taps == 1` : un seul placement, celui de l'instant rendu -- le
+            // chemin net d'avant, inchange. Au-dela, on echelonne les copies
+            // regulierement de `prev_placement` (inclus) au placement courant
+            // (inclus) : c'est ce que font les deux autres backends, et inclure
+            // les deux bornes est ce qui fait que la trainee touche a la fois
+            // l'endroit d'ou le curseur vient et celui ou il est.
+            //
+            // On interpole des PLACEMENTS et non des centres : `lerp` sait
+            // traiter le cas incline, si bien qu'une trainee sous zoom incline
+            // reste dans le plan au lieu de repasser par un centre 2D qui
+            // l'aplatirait.
+            let placements: Vec<CursorPlacement> = if plan.taps <= 1 {
+                vec![plan.placement]
+            } else {
+                (0..plan.taps)
+                    .map(|k| {
+                        let f = k as f32 / (plan.taps - 1) as f32;
+                        plan.prev_placement.lerp(plan.placement, f)
+                    })
+                    .collect()
+            };
+            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+            let (mut bufs, mut binds) = (Vec::new(), Vec::new());
+            for placement in placements {
+                let cb = match placement {
+                    CursorPlacement::Upright { center } => LayerCB {
+                        dst: cursor_sprite_dst(center, pw / rw, ph / rh, hotspot),
+                        src: [0.0, 0.0, 1.0, 1.0],
+                        mode: 7.0,
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        fx: plan.clip,
+                        ..Default::default()
+                    },
                 CursorPlacement::Tilted { plane_pt, quad, center_px, screen_px, .. } => {
                     // Le sprite est pose DANS le plan : sa taille devient une fraction
                     // du plan et ses quatre coins traversent la meme projection que la
@@ -1253,12 +1389,48 @@ impl Compositor {
                         ..Default::default()
                     }
                 }
-            };
-            let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
-            // Sprite RGBA au binding 1 (texY) que le mode 7 echantillonne.
-            let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), &dummy);
-            Some(CursorDraw { _buf: buf, _tex: tex, _view: view, bind })
+                };
+                // Sprite RGBA au binding 1 (texY) que le mode 7 echantillonne.
+                let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), &dummy);
+                bufs.push(buf);
+                binds.push(bind);
+            }
+            Some(CursorDraw { _bufs: bufs, _tex: tex, _view: view, binds })
         })();
+        // Bind group de la passe de composition d'`accum` (layout du blur :
+        // uniform + texture + sampler). Construit hors de la pass, comme les
+        // autres. L'uniforme n'est pas lu par `fs_copy` mais le layout l'exige.
+        let accum_bind = cursor_draw
+            .as_ref()
+            .filter(|c| c.binds.len() > 1)
+            .map(|_| {
+                let cb = LayerCB::default();
+                let uniform =
+                    self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: Some("accum-copy-uniform"),
+                        contents: layer_bytes(&cb),
+                        usage: wgpu::BufferUsages::UNIFORM,
+                    });
+                let bind = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    label: Some("accum-copy"),
+                    layout: &self.blur_bgl,
+                    entries: &[
+                        wgpu::BindGroupEntry {
+                            binding: 0,
+                            resource: uniform.as_entire_binding(),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 1,
+                            resource: wgpu::BindingResource::TextureView(&self.accum_view),
+                        },
+                        wgpu::BindGroupEntry {
+                            binding: 2,
+                            resource: wgpu::BindingResource::Sampler(&self.sampler),
+                        },
+                    ],
+                });
+                (uniform, bind)
+            });
 
         let mut encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("compose"),
@@ -1334,10 +1506,70 @@ impl Compositor {
                 rpass.draw(0..4, 0..1);
             }
             // Curseur en dernier : au-dessus de l'ecran et des annotations.
-            if let Some(c) = &cursor_draw {
-                rpass.set_bind_group(0, &c.bind, &[]);
+            // Une seule copie = curseur net, il tient dans cette pass. La
+            // trainee, elle, a besoin de sa propre cible (voir plus bas).
+            if let Some(c) = cursor_draw.as_ref().filter(|c| c.binds.len() == 1) {
+                rpass.set_bind_group(0, &c.binds[0], &[]);
                 rpass.draw(0..4, 0..1);
             }
+        }
+        // TRAINEE DU CURSEUR : flou REEL, pas des copies discretes.
+        //
+        // Les N echantillons s'accumulent dans une cible ISOLEE partie de zero,
+        // puis sont compositees « over » sur la scene. Les additionner
+        // directement sur le RT reviendrait a AJOUTER la couleur du curseur
+        // (souvent du blanc) a ce qui est deja dessous : sur un fond clair, deja
+        // proche du blanc, ajouter du blanc*(1/taps) ne change presque rien --
+        // curseur quasi invisible. Dans une cible a part la somme reste
+        // correctement normalisee (alpha ~1 la ou les copies se recouvrent), et
+        // la composition finale est un « over » ordinaire, correct quel que soit
+        // le fond. Meme raisonnement, mot pour mot, cote macOS et Windows.
+        if let (Some(c), Some((_ubuf, abind))) = (
+            cursor_draw.as_ref().filter(|c| c.binds.len() > 1),
+            accum_bind.as_ref(),
+        ) {
+            {
+                let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    label: Some("cursor-accum-pass"),
+                    color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                        view: &self.accum_view,
+                        resolve_target: None,
+                        ops: wgpu::Operations {
+                            // Le clear EST la raison d'etre de cette cible : elle
+                            // doit partir vide a chaque frame, pas cumuler.
+                            load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                            store: wgpu::StoreOp::Store,
+                        },
+                    })],
+                    depth_stencil_attachment: None,
+                    timestamp_writes: None,
+                    occlusion_query_set: None,
+                });
+                rpass.set_pipeline(&self.pipeline_add);
+                let w = 1.0 / c.binds.len() as f64;
+                rpass.set_blend_constant(wgpu::Color { r: w, g: w, b: w, a: w });
+                for bind in &c.binds {
+                    rpass.set_bind_group(0, bind, &[]);
+                    rpass.draw(0..4, 0..1);
+                }
+            }
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("cursor-accum-composite"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.rt_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&self.pipeline_copy);
+            rpass.set_bind_group(0, abind, &[]);
+            rpass.draw(0..3, 0..1);
         }
         self.gpu.context.submit(std::iter::once(encoder.finish()));
         Ok(())
