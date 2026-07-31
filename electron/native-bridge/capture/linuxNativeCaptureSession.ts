@@ -293,6 +293,25 @@ export class LinuxNativeCaptureSession {
 				);
 				return;
 
+			case "audio-source":
+				// Logged unconditionally: when someone reports "that is not my
+				// microphone", this line is the answer.
+				console.info(
+					"[capture-linux] audio source",
+					JSON.stringify({
+						role: payload.role,
+						requested: payload.requested ?? null,
+						node: payload.node ?? null,
+					}),
+				);
+				if (payload.requested && !payload.node) {
+					console.warn(
+						`[capture-linux] no PipeWire node matched ${JSON.stringify(payload.requested)}; ` +
+							"the session default source was recorded instead",
+					);
+				}
+				return;
+
 			case "encoder-selection":
 				this.videoEncoder = payload.video;
 				console.info(
