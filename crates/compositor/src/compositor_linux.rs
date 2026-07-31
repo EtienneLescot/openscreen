@@ -686,7 +686,8 @@ impl Compositor {
             cursor: cursor_ref.as_ref(),
             timeline_t_override: *self.timeline_time.borrow(),
         });
-        let _ = (wtw, wth); // webcam PiP : calque a venir.
+        // (`wtw`/`wth` sont les dims de la TEXTURE webcam, consommees par le
+        // cover-crop du calque PiP plus bas.)
 
         // Fond : Color -> clear a la couleur ; Gradient -> mode 5 ; Image ->
         // mode 6 wallpaper cover-fit (via load_image_texture). Le blur (si
@@ -791,17 +792,37 @@ impl Compositor {
 
         // Webcam PiP (mode 0) -- placee par plan_frame (`g.w_dst`, coins
         // `g.w_radius`), gardee par `g.shape_fade > 0` (webcam visible).
-        // cover-crop UV + miroir + ombre + forme cercle = incremental (src plein
-        // cadre ici). `webcam_planes` garde les vues en vie pendant le pass.
+        // `webcam_planes` garde les vues en vie pendant le pass.
         let webcam_planes = if g.shape_fade > 0.0 && !webcam.is_null() {
             self.nv12_srvs(webcam).ok()
         } else {
             None
         };
         let webcam_draw = webcam_planes.as_ref().map(|(wy, wuv)| {
+            // COVER-CROP. `src` etait cable a [0,0,1,1], donc la texture entiere
+            // etait etiree sur la boite quelle que soit sa forme : le facteur de
+            // deformation valait exactement `box_ar / cam_ar`. Invisible en PiP
+            // rectangulaire (`compositeLayout.ts` y preserve deja le ratio),
+            // spectaculaire des que le masque est un cercle ou un carre, ou la
+            // boite est forcee carree et une camera 16:9 s'ecrase de 1,78x.
+            //
+            // `cover_crop_uv` est la primitive partagee que macOS et Windows
+            // utilisent ; elle rend le rect inchange quand il a deja le bon
+            // ratio, donc aucun placement correct ne bouge.
+            let (cu0, cv0, cu1, cv1) = crate::frame_geometry::cover_crop_uv(
+                [wcw, wch],
+                [wtw as f32, wth as f32],
+                g.w_px[0] / g.w_px[1].max(0.0001),
+            );
+            // MIROIR : on inverse l'intervalle u. Le VS interpole `src`
+            // lineairement et `fs_main` ne re-clampe pas `i.uv`, donc un
+            // intervalle a l'envers suffit -- aucune retouche du WGSL. Apres le
+            // cover-crop les deux bornes sont strictement a l'interieur de la
+            // texture, donc le sampler ClampToEdge ne bave pas sur les bords.
+            let (u0, u1) = if lp.webcam_mirror { (cu1, cu0) } else { (cu0, cu1) };
             let cb = LayerCB {
                 dst: g.w_dst,
-                src: [0.0, 0.0, 1.0, 1.0],
+                src: [u0, cv0, u1, cv1],
                 quad_px: g.w_px,
                 radius_px: g.w_radius,
                 mode: 0.0,
