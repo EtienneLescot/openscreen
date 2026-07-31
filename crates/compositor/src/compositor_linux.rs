@@ -818,13 +818,25 @@ impl Compositor {
         // bakee. (image/figure/blur + animation `text_anim` : incremental.)
         struct AnnDraw {
             _buf: wgpu::Buffer,
-            _glyphs: crate::text::RasterizedGlyphs,
+            /// Garde l'atlas en vie jusqu'au submit. `None` pour la plaque de
+            /// fond, qui est un aplat mode 1 et n'echantillonne aucune texture.
+            _glyphs: Option<crate::text::RasterizedGlyphs>,
             bind: wgpu::BindGroup,
         }
         let mut ann_draws: Vec<AnnDraw> = Vec::new();
         if let (Some(scene), Some(raster)) = (scene_ref.as_ref(), self.text_raster.as_ref()) {
             for a in &scene.annotations {
                 if a.kind != "text" {
+                    continue;
+                }
+                // FENETRE TEMPORELLE. Sans ce test, TOUTES les annotations du
+                // projet sont peintes sur TOUTES les frames : cinq sous-titres
+                // s'empilent les uns sur les autres du debut a la fin de
+                // l'export. C'est le defaut qui se lit comme « le texte
+                // s'affiche bizarrement » avant meme de regarder les glyphes.
+                // Mirroir de `visible()` dans compositor_macos.rs et du test
+                // equivalent dans compositor_windows.rs.
+                if !(g.source_t >= a.start_sec as f32 && g.source_t < a.end_sec as f32) {
                     continue;
                 }
                 let Some(text) = a.text.as_ref() else { continue };
@@ -838,6 +850,11 @@ impl Compositor {
                     a.h * g.s_dst[3],
                 ];
                 let quad_px = [dst[2] * rw, dst[3] * rh];
+                // Une boite degeneree ferait un atlas 0x0 et un draw invisible ;
+                // macOS l'ecarte de la meme facon.
+                if quad_px[0] <= 0.0 || quad_px[1] <= 0.0 {
+                    continue;
+                }
                 let color = parse_hex(&text.color).unwrap_or([1.0, 1.0, 1.0, 1.0]);
                 let spec = crate::text::TextSpec {
                     content: text.content.clone(),
@@ -861,6 +878,38 @@ impl Compositor {
                         continue;
                     }
                 };
+
+                // PLAQUE DE FOND, dessinee AVANT les glyphes.
+                //
+                // macOS et Windows la peignent dans la texture de texte
+                // elle-meme ; ici c'est impossible : l'atlas est en R8, il ne
+                // porte qu'une couverture alpha et aucune couleur. Plutot que
+                // de convertir tout l'atlas en RGBA pour un aplat, on emet un
+                // quad mode 1 (couleur pleine + SDF de rect arrondi, cf.
+                // layer.wgsl) sous le quad de texte. Meme rect, meme rayon que
+                // le rendu web (`annotationRenderer.ts`).
+                //
+                // Sans ca le fond n'existait tout simplement pas : `spec.background`
+                // arrivait jusqu'au rasteriseur et mourait dans `cache_key()`.
+                let background = parse_hex(&text.background_color).unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                if background[3] > 0.0 {
+                    let plate = LayerCB {
+                        dst,
+                        src: [0.0, 0.0, 1.0, 1.0],
+                        quad_px,
+                        mode: 1.0,
+                        color: background,
+                        radius_px: 4.0 * (rh / 1080.0).max(0.5),
+                        ..Default::default()
+                    };
+                    let (pbuf, pbind) = self.make_bind(&plate, None, &dummy);
+                    ann_draws.push(AnnDraw {
+                        _buf: pbuf,
+                        _glyphs: None,
+                        bind: pbind,
+                    });
+                }
+
                 let cb = LayerCB {
                     dst,
                     src: [0.0, 0.0, 1.0, 1.0],
@@ -873,7 +922,7 @@ impl Compositor {
                 let (buf, bind) = self.make_bind(&cb, Some((&glyphs.view, &glyphs.view)), &dummy);
                 ann_draws.push(AnnDraw {
                     _buf: buf,
-                    _glyphs: glyphs,
+                    _glyphs: Some(glyphs),
                     bind,
                 });
             }
