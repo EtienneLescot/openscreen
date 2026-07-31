@@ -107,3 +107,14 @@ poc/out/
 
 # cc-delegate worker worktrees/branches + scratch test artifacts.
 .cc-delegate/
+
+# Workbench LLM — secrets locaux, jamais versionnés
+.env.workbench
+
+# Workbench — sorties de run et bundle CLI, jamais versionnés
+workbench/reports/
+workbench/.build/
+workbench/runs/
+
+# Fixture d'évaluation — enregistrement réel de l'utilisateur, jamais versionné
+workbench/fixtures/

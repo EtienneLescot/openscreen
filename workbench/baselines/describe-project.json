@@ -1,0 +1,7 @@
+{
+	"scenario": "describe-project",
+	"expectedFailures": [],
+	"behaviour": 1,
+	"dsl": 1,
+	"recordedAt": "2026-07-31"
+}

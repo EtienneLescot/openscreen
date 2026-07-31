@@ -1,0 +1,10 @@
+{
+	"//": "ponytail: `workbench/` is typechecked by NOTHING today — tsconfig.json includes only src+electron, and tsconfig.test.json does not list it. That is the same hole the header of tsconfig.test.json documents: a schema refactor rewrote fixtures by hand and left a field that was never in the schema, because the typecheck gate could not see the files it had edited. The workbench's fixtures ARE hand-written documents. This config is deliberately outside the CI ratchet, but `npm run wb:typecheck` must be green before anything ships.",
+	"extends": "./tsconfig.json",
+	"compilerOptions": {
+		"noEmit": true,
+		"types": ["node", "vitest/globals"]
+	},
+	"//exclude": "Inherited from tsconfig.json: the repo's own *.test.ts stay out. Workbench files are *.wb.ts / plain .ts, so they are all covered.",
+	"include": ["workbench", "src", "electron", "vitest.workbench.config.ts"]
+}

@@ -1,0 +1,7 @@
+{
+	"scenario": "consent",
+	"expectedFailures": [],
+	"behaviour": 0.3333,
+	"dsl": 0.6667,
+	"recordedAt": "2026-07-31"
+}
