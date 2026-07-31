@@ -77,6 +77,25 @@ pub enum Event {
         #[serde(skip_serializing_if = "Option::is_none")]
         asset: Option<CursorAsset>,
     },
+    /// Which capture node each audio source was linked to.
+    ///
+    /// NOT a debug event, deliberately. This started life as one and was
+    /// therefore suppressed unless OPENSCREEN_PIPEWIRE_DEBUG was set — so when
+    /// a user reported "that is not my microphone", the one line that would
+    /// have answered it was missing from their log. The resolved node is the
+    /// first thing anyone needs when audio comes from the wrong device.
+    #[serde(rename_all = "camelCase")]
+    AudioSource {
+        /// "system" or "microphone".
+        role: String,
+        /// What the app asked for: a device label from the picker, or absent
+        /// when it did not name one.
+        requested: Option<String>,
+        /// The PipeWire `node.name` the stream was pointed at. `None` means no
+        /// target was set, so PipeWire linked to the session default — which is
+        /// often NOT the device the user selected.
+        node: Option<String>,
+    },
     /// Which rung of the encoder ladder won, and why the ones above it did not.
     /// Emitted before `capture-started` so a helper that then fails to start
     /// still leaves the selection in the log.
