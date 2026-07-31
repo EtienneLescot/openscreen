@@ -6,6 +6,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, AnnotationType } from "@/components/video-editor/types";
+import { useScopedT } from "@/contexts/I18nContext";
 import { createId } from "../document/ids";
 import {
 	duplicateClip as duplicateClipInDocument,
@@ -85,6 +86,7 @@ function playheadSec(): number {
 }
 
 export function useTimeline() {
+	const ts = useScopedT("settings");
 	const document = useProjectStore((s) => s.document);
 	const projectId = useProjectStore((s) => s.projectId);
 	const saveDocument = useProjectStore((s) => s.saveDocument);
@@ -250,9 +252,13 @@ export function useTimeline() {
 			startMs: timeMs,
 			endMs: timeMs + 2000,
 			type: "text" as AnnotationType,
-			// Start empty so the inspector's placeholder shows and typing goes into an
-			// empty field, instead of a baked-in default the user must select and clear.
-			content: "",
+			// Real, localised text rather than an empty field. An empty annotation
+			// renders nothing at all, so the user added a region and saw no change
+			// on the canvas; the inspector's placeholder is CSS ghost text that
+			// never reaches `content`, so it never reached the compositor either.
+			// `textContent` stays empty because the render path reads
+			// `content || textContent` and seeding both would just duplicate it.
+			content: ts("annotation.defaultText"),
 			textContent: "",
 			position: { x: 50, y: 50 },
 			size: { width: 30, height: 20 },
@@ -277,13 +283,14 @@ export function useTimeline() {
 			annotations: [...document.annotations, ...created] as unknown as AxcutDocument["annotations"],
 		};
 		await saveDocument(next);
-		// Select the freshly added (empty) annotation so its inspector opens and it
-		// shows a selection box on the canvas — an empty text annotation renders
-		// nothing, so without this it would be invisible and impossible to click.
+		// Select the freshly added annotation so its inspector opens and it shows a
+		// selection box on the canvas, ready to be retyped over.
 		const newId = created[0]?.id ?? ann.id;
 		setMultiSelection([{ kind: "annotation", id: newId }]);
 		setSelection({ kind: "annotation", id: newId });
-	}, [document, saveDocument]);
+		// `ts` is memoised on [locale, namespace] by useScopedT, so this does not
+		// churn the callback identity between renders.
+	}, [document, saveDocument, ts]);
 
 	const addSpeed = useCallback(async () => {
 		if (!document) return;

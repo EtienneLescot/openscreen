@@ -149,6 +149,7 @@
 		"typeBlur": "Sfocatura",
 		"textContent": "Contenuto testo",
 		"textPlaceholder": "Inserisci il tuo testo...",
+		"defaultText": "Ciao",
 		"fontStyle": "Stile carattere",
 		"selectStyle": "Seleziona stile",
 		"size": "Dimensione",

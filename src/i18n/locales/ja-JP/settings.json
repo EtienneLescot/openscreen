@@ -149,6 +149,7 @@
 		"typeBlur": "ぼかし",
 		"textContent": "テキスト内容",
 		"textPlaceholder": "テキストを入力してください...",
+		"defaultText": "こんにちは",
 		"fontStyle": "フォントスタイル",
 		"selectStyle": "スタイルを選択",
 		"size": "サイズ",

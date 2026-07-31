@@ -149,6 +149,7 @@
 		"typeBlur": "블러",
 		"textContent": "텍스트 내용",
 		"textPlaceholder": "텍스트를 입력하세요...",
+		"defaultText": "안녕하세요",
 		"fontStyle": "폰트 스타일",
 		"selectStyle": "스타일 선택",
 		"size": "크기",

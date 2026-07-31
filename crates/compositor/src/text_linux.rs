@@ -395,6 +395,40 @@ mod tests {
         );
     }
 
+    /// Chaque texte par defaut d'annotation produit-il de l'encre sur CETTE
+    /// machine ?
+    ///
+    /// L'app propose un texte localise a la creation ("Hello", "你好",
+    /// "مرحبا"...). Si la police systeme ne couvre pas le script, cosmic-text
+    /// rend du tofu ou rien du tout, et l'utilisateur voit une annotation vide
+    /// qu'il n'a pas ecrite. Le test ne PEUT pas garantir la couverture d'une
+    /// machine inconnue — il documente ce qui manque sur celle qui l'execute,
+    /// ce qui est exactement l'information utile quand quelqu'un rapporte
+    /// « mon annotation est invisible ».
+    #[test]
+    fn the_localised_default_texts_render_on_this_machine() {
+        let raster = TextRasterizer::new().expect("rasterizer");
+        let samples = [
+            ("en", "Hello"), ("fr", "Bonjour"), ("es", "Hola"), ("it", "Ciao"),
+            ("pt-BR", "Olá"), ("ru", "Привет"), ("tr", "Merhaba"), ("vi", "Xin chào"),
+            ("ar", "مرحبا"), ("ja-JP", "こんにちは"), ("ko-KR", "안녕하세요"),
+            ("zh-CN", "你好"), ("zh-TW", "你好"),
+        ];
+        let mut blank = Vec::new();
+        for (locale, text) in samples {
+            let atlas = raster.build_atlas(&spec(text, "center")).expect("atlas");
+            let ink = atlas.iter().filter(|byte| **byte > 16).count();
+            println!("  {locale:6} {text:12} -> {ink} px d'encre");
+            if ink == 0 {
+                blank.push(locale);
+            }
+        }
+        assert!(
+            blank.is_empty(),
+            "aucune police installee ne couvre: {blank:?} — l'annotation par defaut y serait invisible"
+        );
+    }
+
     #[test]
     fn one_short_line_is_centred_vertically_in_its_box() {
         // L'overlay web pose `alignItems: center` et Windows fait pareil
