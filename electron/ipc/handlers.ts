@@ -35,7 +35,6 @@ import {
 import type {
 	CursorRecordingData,
 	CursorRecordingSample,
-	NativeCursorAsset,
 	ProjectFileResult,
 	ProjectPathResult,
 } from "../../src/native/contracts";
@@ -50,11 +49,17 @@ import {
 	runChat,
 	selectSession,
 } from "../ai-edition/chat-service";
+import type { CursorTelemetryReader } from "../ai-edition/deep-agent/service";
 import { DocumentService } from "../ai-edition/document-service";
 import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
 import { RECORDINGS_DIR } from "../main";
+import {
+	readCursorRecordingFile as readCursorRecordingFileFrom,
+	readCursorSidecar,
+	readCursorTelemetryFile as readCursorTelemetryFileFrom,
+} from "../media/cursorSidecar";
 import { findMediaLinksByFingerprint, registerMediaLinks } from "../media/mediaLinksRegistry";
 import { LinuxNativeCaptureSession } from "../native-bridge/capture/linuxNativeCaptureSession";
 import { createCursorRecordingSession } from "../native-bridge/cursor/recording/factory";
@@ -474,7 +479,6 @@ function isTrustedProjectPath(filePath?: string | null) {
 	return normalizePath(filePath) === normalizePath(currentProjectPath);
 }
 
-const CURSOR_TELEMETRY_VERSION = 2;
 const CURSOR_SAMPLE_INTERVAL_MS = 33;
 const MAX_CURSOR_SAMPLES = 60 * 60 * 30; // 1 hour @ 30Hz
 
@@ -550,171 +554,58 @@ async function writeLinuxRestoreToken(restoreToken?: string) {
 	}
 }
 
-function normalizeCursorSample(sample: unknown): CursorRecordingSample | null {
-	if (!sample || typeof sample !== "object") {
-		return null;
-	}
+// ponytail: the sidecar readers used to live here, ~150 lines of parsing wedged
+// between the capture state machine and the asset-path helpers, reachable only
+// through IPC. They now live in `electron/media/cursorSidecar.ts` — Node-pure,
+// injectable, testable — because the agent needed to read the same file and
+// could not import an IPC handler. What is left here is the binding of
+// `RECORDINGS_DIR` (an `app.getPath` at main-module scope) to those readers.
+//
+// ponytail: a FUNCTION, not a captured object. `main.ts` imports this module and
+// this module imports `RECORDINGS_DIR` back from it, so at the moment this file
+// is evaluated that binding is still in its temporal dead zone — reading it here
+// threw `Cannot access 'RECORDINGS_DIR' before initialization` and the app died
+// before its first window. Every call site is already inside a handler, i.e.
+// long after both modules finished loading.
+const cursorSidecarOptions = () => ({ recordingsDir: RECORDINGS_DIR });
 
-	const point = sample as Partial<CursorRecordingSample>;
-	const interactionType =
-		point.interactionType === "click" ||
-		point.interactionType === "mouseup" ||
-		point.interactionType === "move"
-			? point.interactionType
-			: "move";
-	return {
-		timeMs:
-			typeof point.timeMs === "number" && Number.isFinite(point.timeMs)
-				? Math.max(0, point.timeMs)
-				: 0,
-		cx: typeof point.cx === "number" && Number.isFinite(point.cx) ? point.cx : 0.5,
-		cy: typeof point.cy === "number" && Number.isFinite(point.cy) ? point.cy : 0.5,
-		assetId: typeof point.assetId === "string" ? point.assetId : null,
-		visible: typeof point.visible === "boolean" ? point.visible : true,
-		cursorType: typeof point.cursorType === "string" ? point.cursorType : null,
-		interactionType,
-	};
-}
+const readCursorRecordingFile = (targetVideoPath: string) =>
+	readCursorRecordingFileFrom(targetVideoPath, cursorSidecarOptions());
 
-function normalizeCursorAsset(asset: unknown): NativeCursorAsset | null {
-	if (!asset || typeof asset !== "object") {
-		return null;
-	}
+const readCursorTelemetryFile = (targetVideoPath: string) =>
+	readCursorTelemetryFileFrom(targetVideoPath, cursorSidecarOptions());
 
-	const candidate = asset as Partial<NativeCursorAsset>;
-	if (typeof candidate.id !== "string" || typeof candidate.imageDataUrl !== "string") {
-		return null;
-	}
-
-	return {
-		id: candidate.id,
-		platform:
-			candidate.platform === "win32" ? "win32" : process.platform === "darwin" ? "darwin" : "linux",
-		imageDataUrl: candidate.imageDataUrl,
-		width:
-			typeof candidate.width === "number" && Number.isFinite(candidate.width)
-				? Math.max(1, Math.round(candidate.width))
-				: 1,
-		height:
-			typeof candidate.height === "number" && Number.isFinite(candidate.height)
-				? Math.max(1, Math.round(candidate.height))
-				: 1,
-		hotspotX:
-			typeof candidate.hotspotX === "number" && Number.isFinite(candidate.hotspotX)
-				? Math.max(0, Math.round(candidate.hotspotX))
-				: 0,
-		hotspotY:
-			typeof candidate.hotspotY === "number" && Number.isFinite(candidate.hotspotY)
-				? Math.max(0, Math.round(candidate.hotspotY))
-				: 0,
-		scaleFactor:
-			typeof candidate.scaleFactor === "number" && Number.isFinite(candidate.scaleFactor)
-				? Math.max(0.1, candidate.scaleFactor)
-				: undefined,
-		cursorType: typeof candidate.cursorType === "string" ? candidate.cursorType : null,
-	};
-}
-
-async function readCursorRecordingFileAt(telemetryPath: string): Promise<CursorRecordingData> {
-	try {
-		const content = await fs.readFile(telemetryPath, "utf-8");
-		const parsed = JSON.parse(content);
-		const rawSamples = Array.isArray(parsed)
-			? parsed
-			: Array.isArray(parsed?.samples)
-				? parsed.samples
-				: [];
-		const rawAssets = Array.isArray(parsed?.assets) ? parsed.assets : [];
-
-		const samples = rawSamples
-			.map((sample: unknown) => normalizeCursorSample(sample))
-			.filter((sample: CursorRecordingSample | null): sample is CursorRecordingSample =>
-				Boolean(sample),
-			)
-			.sort((a: CursorRecordingSample, b: CursorRecordingSample) => a.timeMs - b.timeMs);
-
-		const assets = rawAssets
-			.map((asset: unknown) => normalizeCursorAsset(asset))
-			.filter((asset: NativeCursorAsset | null): asset is NativeCursorAsset => Boolean(asset));
-
-		return {
-			version:
-				typeof parsed?.version === "number" && Number.isFinite(parsed.version) ? parsed.version : 1,
-			provider: parsed?.provider === "native" ? "native" : "none",
-			samples,
-			assets,
-		};
-	} catch (error) {
-		const nodeError = error as NodeJS.ErrnoException;
-		if (nodeError.code === "ENOENT") {
+/**
+ * The agent's door onto cursor telemetry — the last mile of D-TELEM.
+ *
+ * ponytail: `resolveApprovedVideoPath` is not ceremony. The asset path comes
+ * from the DOCUMENT rather than from the model, but the document is a file on
+ * disk that the user (or a future import path) can put anything in, and the
+ * sidecar path is DERIVED from it. Reusing the same allow-list the video loaders
+ * use means a crafted `originalPath` cannot walk this into reading an arbitrary
+ * JSON file. A refused path yields "unavailable", not "no-sidecar": we did not
+ * look, and the model must not report otherwise.
+ */
+const agentCursorTelemetryReader: CursorTelemetryReader = {
+	probe: async ({ originalPath }) => {
+		const approved = resolveApprovedVideoPath(originalPath);
+		if (!approved) return false;
+		return (await readCursorSidecar(approved, cursorSidecarOptions())).found;
+	},
+	read: async ({ assetId, originalPath }) => {
+		const approved = resolveApprovedVideoPath(originalPath);
+		if (!approved) {
 			return {
-				version: CURSOR_TELEMETRY_VERSION,
-				provider: "none",
-				samples: [],
-				assets: [],
+				status: "unavailable",
+				assetId,
+				note: "The asset's file is outside the folders this app may read, so its cursor sidecar was not opened.",
 			};
 		}
-
-		console.error("Failed to load cursor telemetry:", error);
-		throw error;
-	}
-}
-
-async function fileExists(filePath: string): Promise<boolean> {
-	try {
-		await fs.access(filePath, fsConstants.F_OK);
-		return true;
-	} catch {
-		return false;
-	}
-}
-
-// P4 — the sidecar convention (`<videoPath>.cursor.json`) only holds while the
-// video stays exactly where it was recorded. If it's missing (file moved,
-// renamed, or imported from elsewhere), fall back to the fingerprint registry
-// (electron/media/mediaLinksRegistry.ts) to re-find the same telemetry file.
-async function readCursorRecordingFile(targetVideoPath: string): Promise<CursorRecordingData> {
-	const directPath = `${targetVideoPath}.cursor.json`;
-	if (await fileExists(directPath)) {
-		return readCursorRecordingFileAt(directPath);
-	}
-	try {
-		const links = await findMediaLinksByFingerprint(RECORDINGS_DIR, targetVideoPath);
-		if (links?.cursorTelemetryPath) {
-			return readCursorRecordingFileAt(links.cursorTelemetryPath);
-		}
-	} catch (error) {
-		console.warn("[media-links] fingerprint lookup failed for cursor telemetry:", error);
-	}
-	return {
-		version: CURSOR_TELEMETRY_VERSION,
-		provider: "none",
-		samples: [],
-		assets: [],
-	};
-}
-
-async function readCursorTelemetryFile(targetVideoPath: string) {
-	try {
-		const recordingData = await readCursorRecordingFile(targetVideoPath);
-		return {
-			success: true,
-			samples: recordingData.samples.map((sample) => ({
-				timeMs: sample.timeMs,
-				cx: sample.cx,
-				cy: sample.cy,
-			})),
-		};
-	} catch (error) {
-		console.error("Failed to load cursor telemetry:", error);
-		return {
-			success: false,
-			message: "Failed to load cursor telemetry",
-			error: String(error),
-			samples: [],
-		};
-	}
-}
+		const sidecar = await readCursorSidecar(approved, cursorSidecarOptions());
+		if (!sidecar.found) return { status: "no-sidecar", assetId };
+		return { status: "ok", assetId, samples: sidecar.data.samples };
+	},
+};
 
 function resolveAssetBasePath() {
 	try {
@@ -3713,7 +3604,9 @@ export function registerIpcHandlers(
 		getAiEditionDocuments: () => aiEditionDocuments,
 		getAiEditionLlmConfig: () => aiEditionLlmConfig,
 		runAiEditionChat: (projectId, sessionId, message, document, sink) =>
-			runChat(projectId, sessionId, message, aiEditionLlmConfig, document, sink),
+			runChat(projectId, sessionId, message, aiEditionLlmConfig, document, sink, {
+				cursor: agentCursorTelemetryReader,
+			}),
 		undoAiEditionToolBatch: (_projectId, _sessionId) => ({
 			success: false,
 			error: "Per-tool-batch undo retired in favor of per-message rewind.",

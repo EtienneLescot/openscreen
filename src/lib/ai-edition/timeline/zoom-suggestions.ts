@@ -44,7 +44,21 @@ export function normalizeCursorTelemetry(
 		.map((sample) => normalizeTelemetrySample(sample, totalMs));
 }
 
-export function detectZoomDwellCandidates(samples: CursorTelemetryPoint[]): ZoomDwellCandidate[] {
+/**
+ * `maxDwellDurationMs` exists for ONE caller and defaults to the magic wand's
+ * own ceiling so that caller is untouched.
+ *
+ * ponytail: the ceiling REJECTS a run outright rather than splitting it, so a
+ * cursor parked for eight seconds while the user reads the screen produces no
+ * candidate at all. That is a defensible auto-zoom policy — a nine-second zoom
+ * is not a zoom — and an indefensible reporting policy: the moments it drops are
+ * precisely the ones a human would name first if asked "where did the pointer
+ * sit?". The digest passes `Infinity`; nothing else does.
+ */
+export function detectZoomDwellCandidates(
+	samples: CursorTelemetryPoint[],
+	maxDwellDurationMs: number = MAX_DWELL_DURATION_MS,
+): ZoomDwellCandidate[] {
 	if (samples.length < 2) {
 		return [];
 	}
@@ -60,7 +74,7 @@ export function detectZoomDwellCandidates(samples: CursorTelemetryPoint[]): Zoom
 		const start = samples[startIndex];
 		const end = samples[endIndexExclusive - 1];
 		const runDuration = end.timeMs - start.timeMs;
-		if (runDuration < MIN_DWELL_DURATION_MS || runDuration > MAX_DWELL_DURATION_MS) {
+		if (runDuration < MIN_DWELL_DURATION_MS || runDuration > maxDwellDurationMs) {
 			return;
 		}
 
