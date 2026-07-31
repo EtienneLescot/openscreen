@@ -8,7 +8,8 @@
 //! **Export (WP6).** `run_composited_multi` encode + mux un MP4 **vidéo** :
 //! encodeur SOFTWARE (`libopenh264` H264 / `libkvazaar` H265 -- les seuls du
 //! build LGPL BtbN qui marchent sans device HW, VAAPI/Vulkan-encode = suivi),
-//! la frame composée est relue en RGBA (`readback_direct`) puis convertie
+//! la frame composée est relue en RGBA (ring de staging à 2, cf.
+//! `Compositor::set_readback_depth`) puis convertie
 //! YUV420P par `sws_scale`. La marche de timeline est PARTAGÉE
 //! (`timeline_walk::walk_composited_timeline`) et le muxer passe par le shim C
 //! `sn_fmt_set_pb` (comme Windows/macOS). **L'audio AAC n'est pas encore muxé**
@@ -168,9 +169,9 @@ impl Decoder {
 }
 
 /// Encodeur video SOFTWARE (`libopenh264` / `libkvazaar`). Pas de zero-copy HW
-/// (VAAPI/Vulkan-encode = suivi) : la frame composee est relue RGBA
-/// (`readback_direct`) puis convertie YUV420P par `sws_scale`. Surface
-/// `open`/`send_composited`/`flush` alignee sur le chemin software de
+/// (VAAPI/Vulkan-encode = suivi) : la frame composee est relue RGBA par
+/// l'appelant puis convertie YUV420P par `sws_scale`. Surface
+/// `open`/`send_rgba`/`flush` alignee sur le chemin software de
 /// `pipeline_macos::VideoEncoder`.
 pub struct VideoEncoder {
     ctx: *mut crate::ffi::AVCodecContext,
@@ -255,15 +256,14 @@ impl VideoEncoder {
         }
     }
 
-    /// Relit la frame composee (RGBA) et l'envoie a l'encodeur en YUV420P.
-    pub unsafe fn send_composited(
-        &mut self,
-        comp: &crate::compositor::Compositor,
-        pts: i64,
-    ) -> Result<()> {
+    /// Envoie une frame composee DEJA RELUE (RGBA) a l'encodeur, en YUV420P.
+    ///
+    /// La relecture est sortie d'ici : avec la ring de staging, la frame rendue
+    /// par `readback_submit` n'est pas celle qui vient d'etre composee mais la
+    /// precedente, donc l'appelant doit apparier lui-meme la frame et son pts
+    /// (cf. `run_composited_multi`).
+    pub unsafe fn send_rgba(&mut self, rgba: &[u8], rw: i32, rh: i32, pts: i64) -> Result<()> {
         use crate::ffi::*;
-        let (rw, rh, rgba) = comp.readback_direct()?;
-        let (rw, rh) = (rw as i32, rh as i32);
         if self.sws.is_null() {
             self.sws = sws_getContext(
                 rw,
@@ -438,6 +438,15 @@ pub fn run_composited_multi(
     let mut clip_frame_counts: Vec<u64> = vec![0; clips.len()];
 
     let scene = comp.scene_snapshot();
+    // Ring de staging a 2 : l'export ne veut que du debit, une frame de latence
+    // ne se voit pas dans un fichier. Voir `Compositor::set_readback_depth` pour
+    // la raison pour laquelle la preview, elle, reste a 1.
+    comp.set_readback_depth(2)?;
+    // pts d'encodage : DECOUPLE de l'index de marche `n`, puisque la frame
+    // recoltee a l'iteration n est celle composee a n-1. Il reste contigu (les
+    // frames sortent de la ring dans l'ordre de composition), donc le fichier
+    // produit est identique a celui du chemin synchrone.
+    let mut encoded_pts: i64 = 0;
     let frames = unsafe {
         crate::timeline_walk::walk_composited_timeline(
             clips,
@@ -449,8 +458,18 @@ pub fn run_composited_multi(
             &mut screen_decs,
             &mut webcam_decs,
             &mut |n| {
-                enc.send_composited(comp, n as i64)?;
-                drain_encoder(ectx, octx, ostream, opkt)?;
+                // Soumet la copie de la frame n SANS l'attendre et recolte la
+                // precedente : c'est tout le pipelining. Pendant que le CPU
+                // passe ses ~12,6 ms dans sws_scale + avcodec_send_frame sur la
+                // frame n-1, le GPU finit la composition et la copie de n.
+                if let Some((rw, rh, rgba)) = comp.readback_submit()? {
+                    enc.send_rgba(&rgba, rw as i32, rh as i32, encoded_pts)?;
+                    encoded_pts += 1;
+                    drain_encoder(ectx, octx, ostream, opkt)?;
+                }
+                // Progression = frames COMPOSEES (inchangee) : la barre ne doit
+                // pas reculer d'une frame parce que l'encodage a un tour de
+                // retard.
                 progress(n + 1);
                 Ok(())
             },
@@ -477,6 +496,18 @@ pub fn run_composited_multi(
     };
 
     unsafe {
+        // Drain de la ring AVANT le flush de l'encodeur : les `depth - 1`
+        // dernieres copies sont encore en vol, et sans ce drain la derniere
+        // frame composee ne serait jamais encodee (video amputee d'une frame).
+        while let Some((rw, rh, rgba)) = comp.readback_take()? {
+            enc.send_rgba(&rgba, rw as i32, rh as i32, encoded_pts)?;
+            encoded_pts += 1;
+            drain_encoder(ectx, octx, ostream, opkt)?;
+        }
+        // Le compositeur peut survivre a l'export (l'appelant le possede) : on
+        // lui rend sa profondeur par defaut plutot que de lui laisser une ring
+        // a 2 et le buffer de 8 Mo qui va avec.
+        comp.set_readback_depth(1)?;
         enc.flush()?;
         drain_encoder(ectx, octx, ostream, opkt)?;
         // Audio : le plan part des frames REELLEMENT produites par clip (un clip
