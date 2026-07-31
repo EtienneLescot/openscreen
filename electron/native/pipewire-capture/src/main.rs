@@ -346,15 +346,12 @@ fn start_audio<W: Write>(
             .target
             .as_deref()
             .and_then(|wanted| resolve_microphone_node(wanted, &graph));
+        let _ = emitter.emit(&Event::AudioSource {
+            role: label.to_owned(),
+            requested: config.target.clone(),
+            node: resolved.clone(),
+        });
         if let Some(wanted) = config.target.as_deref() {
-            let _ = emitter.emit(&Event::Debug {
-                code: "audio-target".to_owned(),
-                data: json_map([
-                    ("label", wanted.into()),
-                    ("resolvedNode", resolved.clone().into()),
-                    ("graphSize", graph.len().into()),
-                ]),
-            });
             if resolved.is_none() {
                 let _ = emitter.emit(&Event::Warning {
                     code: "microphone-not-found".to_owned(),

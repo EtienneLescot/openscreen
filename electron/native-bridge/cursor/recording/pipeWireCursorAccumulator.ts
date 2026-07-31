@@ -47,6 +47,14 @@ export type PipeWireHelperEvent =
 			assetId?: string;
 			asset?: PipeWireCursorAssetPayload;
 	  }
+	| {
+			event: "audio-source";
+			role: string;
+			requested?: string | null;
+			/** The PipeWire node the stream was linked to. `null` means the session
+			 *  default was used, which is often NOT the device the user picked. */
+			node?: string | null;
+	  }
 	| { event: "encoder-selection"; video: string; rejected?: string[] }
 	| {
 			event: "capture-started";
