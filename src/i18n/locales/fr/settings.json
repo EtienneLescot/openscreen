@@ -149,6 +149,7 @@
 		"typeBlur": "Flou",
 		"textContent": "Contenu du texte",
 		"textPlaceholder": "Saisissez votre texte...",
+		"defaultText": "Bonjour",
 		"fontStyle": "Style de police",
 		"selectStyle": "Choisir un style",
 		"size": "Taille",

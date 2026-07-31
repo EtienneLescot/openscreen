@@ -1,8 +1,16 @@
 import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { I18nProvider } from "@/contexts/I18nContext";
 import type { AxcutDocument } from "../schema";
 import { useProjectStore } from "./projectStore";
 import { useTimeline } from "./useTimeline";
+
+/**
+ * `useTimeline` reads the locale — `addAnnotation` seeds a new region with the
+ * translated default text — so it needs the provider. One helper rather than a
+ * wrapper argument on every call site.
+ */
+const renderTimeline = () => renderHook(() => useTimeline(), { wrapper: I18nProvider });
 
 const probeVideoDurationMock = vi.hoisted(() => vi.fn());
 const probeVideoDimensionsMock = vi.hoisted(() =>
@@ -135,7 +143,7 @@ describe("useTimeline.insertClipAt background duration probe", () => {
 		// between the real and placeholder duration, corrupting their
 		// positions and producing visual overlap.
 		probeVideoDurationMock.mockResolvedValue(5);
-		const { result } = renderHook(() => useTimeline());
+		const { result } = renderTimeline();
 
 		await act(async () => {
 			await result.current.insertClipAt("asset_2", 1);
@@ -197,7 +205,7 @@ describe("useTimeline.moveClip / duplicateClip (delegates to document/timeline.t
 	});
 
 	it("moveClip reorders clips and persists the resequenced timeline", async () => {
-		const { result } = renderHook(() => useTimeline());
+		const { result } = renderTimeline();
 		await act(async () => {
 			await result.current.moveClip("clip_a", 1);
 		});
@@ -208,7 +216,7 @@ describe("useTimeline.moveClip / duplicateClip (delegates to document/timeline.t
 	});
 
 	it("moveClip no-ops for an unknown clip id", async () => {
-		const { result } = renderHook(() => useTimeline());
+		const { result } = renderTimeline();
 		await act(async () => {
 			await result.current.moveClip("clip_missing", 0);
 		});
@@ -216,7 +224,7 @@ describe("useTimeline.moveClip / duplicateClip (delegates to document/timeline.t
 	});
 
 	it("duplicateClip inserts a copy right after the original and selects it", async () => {
-		const { result } = renderHook(() => useTimeline());
+		const { result } = renderTimeline();
 		await act(async () => {
 			await result.current.duplicateClip("clip_a");
 		});
@@ -231,7 +239,7 @@ describe("useTimeline.moveClip / duplicateClip (delegates to document/timeline.t
 	});
 
 	it("duplicateClip no-ops for an unknown clip id", async () => {
-		const { result } = renderHook(() => useTimeline());
+		const { result } = renderTimeline();
 		await act(async () => {
 			await result.current.duplicateClip("clip_missing");
 		});
@@ -269,7 +277,7 @@ describe("useTimeline backfills missing source dimensions on load", () => {
 			status: "ready",
 			error: null,
 		});
-		renderHook(() => useTimeline());
+		renderTimeline();
 		await waitFor(() => expect(bridgeMocks.save).toHaveBeenCalledTimes(1));
 		expect(probeVideoDimensionsMock).toHaveBeenCalledTimes(1);
 		const saved = useProjectStore.getState().document?.assets.find((a) => a.id === "asset_1");
@@ -284,7 +292,7 @@ describe("useTimeline backfills missing source dimensions on load", () => {
 			status: "ready",
 			error: null,
 		});
-		renderHook(() => useTimeline());
+		renderTimeline();
 		// Give any stray effect a chance to fire before asserting it didn't.
 		await act(async () => {
 			await new Promise((r) => setTimeout(r, 0));
@@ -305,7 +313,7 @@ describe("useTimeline backfills missing source dimensions on load", () => {
 			status: "ready",
 			error: null,
 		});
-		const { rerender } = renderHook(() => useTimeline());
+		const { rerender } = renderTimeline();
 		await act(async () => {
 			await new Promise((r) => setTimeout(r, 0));
 		});
@@ -356,7 +364,7 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 	});
 
 	it("shrinks the clip's timeline width to match the narrowed source window", async () => {
-		const { result } = renderHook(() => useTimeline());
+		const { result } = renderTimeline();
 		// Trim the 10s clip down to its first 4s of source.
 		await act(async () => {
 			await result.current.updateClipSourceRange("clip_a", 0, 4);
@@ -369,7 +377,7 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 	});
 
 	it("drops a pill sitting over the truncated tail and keeps the one that survives", async () => {
-		const { result } = renderHook(() => useTimeline());
+		const { result } = renderTimeline();
 		await act(async () => {
 			await result.current.updateClipSourceRange("clip_a", 0, 4);
 		});
@@ -392,7 +400,7 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 				zoomRanges: [anchoredZoom("z_edge", 3, 7)],
 			} as unknown as typeof sampleDoc,
 		});
-		const { result } = renderHook(() => useTimeline());
+		const { result } = renderTimeline();
 		await act(async () => {
 			await result.current.updateClipSourceRange("clip_a", 0, 5);
 		});
@@ -430,19 +438,19 @@ describe("useTimeline.addAnnotation", () => {
 		vi.clearAllMocks();
 	});
 
-	it("creates an empty text annotation and selects it so the placeholder shows", async () => {
-		const { result } = renderHook(() => useTimeline());
+	it("creates a text annotation carrying the localised default text", async () => {
+		const { result } = renderTimeline();
 		await act(async () => {
 			await result.current.addAnnotation();
 		});
 		const annotations = useProjectStore.getState().document?.annotations ?? [];
 		expect(annotations).toHaveLength(1);
-		// Empty content is what lets the inspector's placeholder show, instead of a
-		// baked-in default the user has to select and clear before typing.
-		expect(annotations[0]).toMatchObject({ type: "text", content: "" });
-		// The new (empty) annotation is auto-selected so its inspector opens and it
-		// draws a selection box on the canvas — an empty text annotation renders
-		// nothing, so without selection it would be invisible and unclickable.
+		// Real text, not an empty field. An empty annotation renders nothing at
+		// all, so adding one used to change nothing on the canvas; the
+		// inspector's placeholder is CSS ghost text that never reaches `content`
+		// and therefore never reached the compositor. DEFAULT_LOCALE is `en`.
+		expect(annotations[0]).toMatchObject({ type: "text", content: "Hello" });
+		// Still auto-selected, so its inspector opens ready to be typed over.
 		expect(result.current.selection).toEqual({
 			kind: "annotation",
 			id: (annotations[0] as { id: string }).id,
@@ -488,7 +496,7 @@ describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
 	});
 
 	it("sets a 3D rotation preset on the region", async () => {
-		const { result } = renderHook(() => useTimeline());
+		const { result } = renderTimeline();
 		await act(async () => {
 			await result.current.updateZoomRotation("zoom_a", "iso");
 		});
@@ -501,7 +509,7 @@ describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
 	it("clears the preset back to a flat frame", async () => {
 		// "None" in the UI is the ABSENCE of a preset, not a fourth one: the schema field is
 		// optional and the native side treats anything unrecognised as zero rotation.
-		const { result } = renderHook(() => useTimeline());
+		const { result } = renderTimeline();
 		await act(async () => {
 			await result.current.updateZoomRotation("zoom_a", "iso");
 		});
@@ -512,7 +520,7 @@ describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
 	});
 
 	it("switches focus mode without disturbing the rotation preset", async () => {
-		const { result } = renderHook(() => useTimeline());
+		const { result } = renderTimeline();
 		await act(async () => {
 			await result.current.updateZoomRotation("zoom_a", "left");
 		});
@@ -559,10 +567,13 @@ describe("useTimeline is not re-rendered by playhead ticks", () => {
 
 	it("does not re-render across a second of 60 Hz playhead writes", () => {
 		let renders = 0;
-		renderHook(() => {
-			renders++;
-			return useTimeline();
-		});
+		renderHook(
+			() => {
+				renders++;
+				return useTimeline();
+			},
+			{ wrapper: I18nProvider },
+		);
 		const baseline = renders;
 
 		// One act() per write: a single batched act() would collapse all 60 into one
@@ -578,7 +589,7 @@ describe("useTimeline is not re-rendered by playhead ticks", () => {
 	});
 
 	it("still anchors a new region at the live playhead", async () => {
-		const { result } = renderHook(() => useTimeline());
+		const { result } = renderTimeline();
 		act(() => {
 			useProjectStore.getState().setCurrentTime(4.2);
 		});

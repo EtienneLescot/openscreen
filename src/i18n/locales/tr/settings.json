@@ -149,6 +149,7 @@
 		"typeBlur": "Bulanık",
 		"textContent": "Metin İçeriği",
 		"textPlaceholder": "Metninizi girin...",
+		"defaultText": "Merhaba",
 		"fontStyle": "Yazı Tipi Stili",
 		"selectStyle": "Stil seçin",
 		"size": "Boyut",

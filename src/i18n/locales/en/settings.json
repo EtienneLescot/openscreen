@@ -149,6 +149,7 @@
 		"typeBlur": "Blur",
 		"textContent": "Text Content",
 		"textPlaceholder": "Enter your text...",
+		"defaultText": "Hello",
 		"fontStyle": "Font Style",
 		"selectStyle": "Select style",
 		"size": "Size",

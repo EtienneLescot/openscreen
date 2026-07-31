@@ -150,6 +150,7 @@
 		"typeBlur": "模糊",
 		"textContent": "文字內容",
 		"textPlaceholder": "輸入您的文字...",
+		"defaultText": "你好",
 		"fontStyle": "字體樣式",
 		"selectStyle": "選擇樣式",
 		"size": "大小",
