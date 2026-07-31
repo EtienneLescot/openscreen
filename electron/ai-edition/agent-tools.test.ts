@@ -1361,10 +1361,15 @@ describe("getCursorTrack", () => {
 		expect(result.resultJson).not.toContain("holdSec");
 		expect(result.resultJson).not.toContain("moments");
 
-		// clip_1 is source 0–30 at ruler 0–30, so source and virtual coincide here;
-		// the field still has to be present, because it is the one addZoom takes.
-		const point = payload.points.find((p: { atSec: number }) => Math.abs(p.atSec - 10) < 0.3);
-		expect(point.virtualSec).toBeCloseTo(point.atSec, 1);
+		// clip_1 is source 0–30 at ruler 0–30, so source and virtual coincide on every
+		// point. The envelope says so ONCE and the per-point field is left off — 28% of
+		// the payload was the timestamp restated next to itself. The model still knows
+		// which coordinate addZoom takes, it is just not told on every row.
+		expect(payload.virtualEqualsSource).toBe(true);
+		expect(payload.points.every((p: { virtualSec?: number }) => p.virtualSec === undefined)).toBe(
+			true,
+		);
+		expect(result.resultJson).not.toContain('virtualSec":');
 	});
 
 	it("says 'no-sidecar' when the asset was checked and has none", () => {

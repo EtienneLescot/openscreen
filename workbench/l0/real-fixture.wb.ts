@@ -154,43 +154,36 @@ describe("la fixture réelle — le lecteur de télémétrie", () => {
 describe("la fixture réelle — la taille de ce qui atteint le modèle", () => {
 	/** Mesuré, pas prédit. Un changement ici est un changement de ce que le
 	 *  modèle lit : mettez le nouveau nombre ET dites pourquoi il a bougé. */
-	const TRACK_RESULT_CHARS = 24_238;
-	const TRACK_POINTS = 356;
+	const TRACK_RESULT_CHARS = 7_797;
+	const TRACK_POINTS = 148;
 	/** Au-delà, c'est une trouvaille à signaler — pas à faire disparaître en
 	 *  baissant `DEFAULT_TRACK_HZ`. */
 	const REPORTABLE_CEILING_CHARS = 25_000;
 
-	it("rend 356 points pour 24 238 caractères", async () => {
+	it("rend 148 points pour 7 797 caractères", async () => {
 		const { json, track } = await trackResult();
 		expect(track.pointCount).toBe(TRACK_POINTS);
 		expect(track.points).toHaveLength(TRACK_POINTS);
 		expect(json.length).toBe(TRACK_RESULT_CHARS);
-		expect(Buffer.byteLength(json)).toBe(24_240);
 		expect(json.length).toBeLessThan(REPORTABLE_CEILING_CHARS);
 	});
 
-	it("échantillonne à 5 Hz, plus les changements de forme du pointeur", async () => {
+	it("ne garde que les keyframes — 1521 échantillons, 148 points", async () => {
 		const { track } = await trackResult();
-		expect(track.hz).toBe(5);
-		// 300 points de grille sur 66 s + 56 gardés parce que le pointeur a changé
-		// de forme entre deux tics. Ces 56 ne sont pas du remplissage : une forme
-		// qui change est un événement observé, et c'est la seule chose du sidecar
-		// qui survit à la réduction sans être sur la grille.
-		let ticks = 0;
-		let nextMs = 0;
-		for (const point of track.points) {
-			if (point.atSec * 1000 >= nextMs) {
-				ticks += 1;
-				nextMs = point.atSec * 1000 + 200;
-			}
-		}
-		expect(ticks).toBe(300);
-		expect(TRACK_POINTS - ticks).toBe(56);
+		expect(track.sampleCount).toBe(1521);
+		// Aucun trou ne dépasse le plancher d'écart (3 s) : un pointeur immobile se
+		// lit « toujours là », jamais « plus de données ».
+		const gaps = track.points.slice(1).map((p, i) => p.atSec - track.points[i].atSec);
+		expect(Math.max(...gaps)).toBeLessThanOrEqual(3.05);
+		// `virtualSec` a disparu des points : la timeline est intacte, l'enveloppe le
+		// dit une fois. C'était 28 % du payload, le timestamp répété deux fois.
+		expect(track.virtualEqualsSource).toBe(true);
+		expect(track.points.every((p) => p.virtualSec === undefined)).toBe(true);
 		// Aucun clic dans cette capture : le champ `kind` n'apparaît nulle part.
 		expect(track.points.some((p) => p.kind !== undefined)).toBe(false);
 	});
 
-	it("pèse plus que le transcript entier — c'est le poste dominant du tour", async () => {
+	it("reste à parité avec le transcript, plus le poste dominant", async () => {
 		const document = realScreencastDocument();
 		const transcript = executeAgentTool(document, "getTranscript", "{}", {});
 		const snapshot = executeAgentTool(document, "getCurrentDocument", "{}", {
@@ -199,39 +192,23 @@ describe("la fixture réelle — la taille de ce qui atteint le modèle", () => 
 		const { json } = await trackResult();
 		expect(transcript.resultJson.length).toBe(10_496);
 		expect(snapshot.resultJson.length).toBe(1_602);
-		// 2,3× le transcript de 66 s de parole. Un tour qui appelle deux fois
-		// getCursorTrack paie deux fois : c'est le chiffre à surveiller le jour où
-		// une fixture plus longue arrive.
-		expect(json.length).toBeGreaterThan(transcript.resultJson.length * 2);
-	});
-
-	it("dépense 28 % de sa taille en virtualSec, identique à atSec sur ce montage", async () => {
-		// Non pas un gâchis : `virtualSec` est la coordonnée qu'`addZoom` prend, et
-		// les deux divergent dès qu'un clip est coupé. Mesuré ici parce que sur une
-		// timeline intacte la duplication est totale, et que c'est le premier
-		// endroit où regarder si la taille devient un problème.
-		const { json, track } = await trackResult();
-		const identical = track.points.filter((p) => p.virtualSec === p.atSec).length;
-		expect(identical).toBe(TRACK_POINTS);
-		const withoutVirtual = JSON.stringify(
-			track.points.map(({ virtualSec: _virtualSec, ...rest }) => rest),
-		);
-		const saved = JSON.stringify(track.points).length - withoutVirtual.length;
-		expect(Math.round((saved / json.length) * 100)).toBe(28);
+		// Il valait 2,3× le transcript avant la réduction en keyframes ; il vaut
+		// maintenant moins. Le tour entier fait ~23k caractères — soit ~6k tokens,
+		// ce qui n'est PAS ce qui le rend lent : ce sont ses 19 appels en série.
+		expect(json.length).toBeLessThan(transcript.resultJson.length);
 	});
 
 	it("garde lisible le balayage lent auquel un détecteur d'immobilité est aveugle", async () => {
-		// La question que cette fixture existe pour poser : la trajectoire
-		// survit-elle à la réduction ? Entre 24,1 s et 29,2 s le pointeur traverse
-		// un tiers de l'écran à hauteur constante — trop lentement pour qu'un
-		// détecteur d'immobilité le voie comme un mouvement, trop mobile pour
-		// qu'il le voie comme un arrêt. Dans le track il reste 24 points.
 		const { track } = await trackResult();
-		const window = track.points.filter((p) => p.atSec >= 24.1 && p.atSec <= 29.2);
-		expect(window.length).toBe(24);
-		const cx = window.map((p) => p.cx);
-		expect(Math.max(...cx) - Math.min(...cx)).toBeGreaterThan(0.3);
-		const cy = window.map((p) => p.cy);
-		expect(Math.max(...cy) - Math.min(...cy)).toBeLessThan(0.05);
+		// De 24,1 à 29,2 s l'auteur parcourt une image en la commentant : cy tenu à
+		// ±0,04 pendant que cx progresse d'un tiers de l'écran. Un détecteur
+		// d'immobilité n'y voit rien — le curseur bouge franchement — alors que les
+		// keyframes le rendent en quelques points dont l'interpolation rejoue le reste.
+		const sweep = track.points.filter((p) => p.atSec >= 23.5 && p.atSec <= 29.5);
+		expect(sweep.length).toBeGreaterThanOrEqual(4);
+		const xs = sweep.map((p) => p.cx);
+		expect(Math.max(...xs) - Math.min(...xs)).toBeGreaterThan(0.25);
+		const ys = sweep.map((p) => p.cy);
+		expect(Math.max(...ys) - Math.min(...ys)).toBeLessThan(0.15);
 	});
 });

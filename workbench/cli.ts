@@ -18,6 +18,7 @@ import {
 	writeBaseline,
 } from "./lib/baseline";
 import { requireLiveEnv } from "./lib/env";
+import { DEFAULT_TURN_TIMEOUT_MS } from "./lib/harness";
 import { persistRepetition, RUNS_DIR } from "./lib/persist";
 import {
 	buildReport,
@@ -81,7 +82,7 @@ function parseArgs(argv: string[]): Options {
 		reps: 3,
 		repsExplicit: false,
 		label: "run",
-		timeoutMs: 120_000,
+		timeoutMs: DEFAULT_TURN_TIMEOUT_MS,
 		updateBaseline: false,
 		record: false,
 		persist: true,
