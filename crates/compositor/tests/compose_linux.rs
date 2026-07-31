@@ -247,3 +247,74 @@ fn export_linux_mp4() {
     let meta = std::fs::metadata(&out).expect("mp4 metadata");
     assert!(meta.len() > 2000, "mp4 trop petit ({} octets) — muxer ?", meta.len());
 }
+
+/// Rend une frame qui exerce EN MEME TEMPS les trois corrections de cette
+/// serie : ombre portee (ecran + camera), cover-crop de la webcam sous un
+/// masque CERCLE (le cas ou l'etirement etait le plus violent : la boite est
+/// forcee carree, donc une camera 16:9 s'ecrasait de 1,78x), et une annotation
+/// texte avec un fond.
+///
+/// Opt-in comme les autres tests de ce fichier ; ecrit un PPM a inspecter.
+#[test]
+fn compose_linux_ombre_webcam_ronde_et_texte() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux ombre/webcam/texte: opt-in. Skip.");
+        return;
+    }
+    let webcam_fixture = "../fixture/webcam.mp4";
+    if !Path::new(webcam_fixture).is_file() {
+        eprintln!("compose_linux ombre/webcam/texte: pas de fixture webcam. Skip.");
+        return;
+    }
+
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut screen = Decoder::open(FIXTURE, &gpu).expect("Decoder::open screen");
+    let mut cam = Decoder::open(webcam_fixture, &gpu).expect("Decoder::open webcam");
+
+    // `shadow: 1` + camera en cercle + une annotation texte visible a t=1s.
+    let scene_json = r##"{"clips":[],"layout":{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"circle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false},"effects":{"padding":0.14,"blur":false,"shadow":1,"roundnessFrac":0.04,"motionBlur":0},"background":{"kind":"gradient","angleDeg":45,"stops":["#1f2933","#3b6bff"]},"zoomRegions":[],"annotations":[{"id":"a1","kind":"text","x":0.08,"y":0.08,"w":0.5,"h":0.14,"startSec":0,"endSec":10,"zIndex":1,"text":{"content":"Ombre + fond","color":"#ffffff","backgroundColor":"#e0245e","fontSizeRel":0.09,"fontFamily":"","fontWeight":"normal","fontStyle":"normal","textDecoration":"none","textAlign":"center"}}],"cursor":{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"},"cropByClip":[],"output":{"width":1920,"height":1080,"fps":30}}"##;
+    comp.set_scene(Some(Scene::from_json(scene_json).expect("scene json")));
+
+    let (w, h, rgba) = unsafe {
+        let sf = screen.seek_to(1.0).expect("seek screen");
+        let wf = cam.seek_to(1.0).expect("seek webcam");
+        let mut cfg = Cfg::c8();
+        cfg.shadow = true;
+        comp.compose_frame(sf, wf, 1.0, &cfg).expect("compose_frame");
+        comp.readback_direct().expect("readback_direct")
+    };
+
+    let out = std::env::var("OPENSCREEN_VK_OUT").unwrap_or_else(|_| "target".into());
+    let _ = std::fs::create_dir_all(&out);
+    let ppm = format!("{out}/compose_linux_shadow_webcam_text.ppm");
+    {
+        use std::io::Write;
+        let mut f = std::fs::File::create(&ppm).expect("create ppm");
+        write!(f, "P6\n{w} {h}\n255\n").unwrap();
+        let mut rgb = vec![0u8; (w * h * 3) as usize];
+        for (d, s) in rgb.chunks_exact_mut(3).zip(rgba.chunks_exact(4)) {
+            d.copy_from_slice(&s[0..3]);
+        }
+        f.write_all(&rgb).unwrap();
+    }
+    println!("wrote {ppm}");
+
+    // L'annotation a un fond ROSE (#e0245e) : il doit exister des pixels
+    // nettement rouges-magenta dans le quart haut-gauche, ce qui n'etait pas le
+    // cas quand la plaque n'etait pas dessinee du tout.
+    let mut plate_px = 0usize;
+    for y in 0..(h / 3) {
+        for x in 0..(w / 2) {
+            let i = ((y * w + x) * 4) as usize;
+            let (r, g_, b) = (rgba[i] as i32, rgba[i + 1] as i32, rgba[i + 2] as i32);
+            if r > 140 && g_ < 90 && b > 40 && b < 140 {
+                plate_px += 1;
+            }
+        }
+    }
+    assert!(
+        plate_px > 200,
+        "fond d'annotation introuvable ({plate_px} px roses) — la plaque n'est pas dessinee"
+    );
+}
