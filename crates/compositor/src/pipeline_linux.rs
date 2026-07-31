@@ -114,12 +114,19 @@ impl Decoder {
         self.decode_present(idx)
     }
 
-    /// Decode la frame SEQUENTIELLE suivante.
-    // ponytail: `decode_at` par index re-seek a chaque frame -- OK pour le
-    // scrub/preview, a optimiser en WP si le bench de lecture l'exige.
+    /// Decode la frame SEQUENTIELLE suivante — pompage `next_frame`, PAS de seek.
+    /// La frame rendue appartient au decodeur (valide jusqu'au prochain appel),
+    /// donc elle ne se libere pas ici, contrairement au chemin `decode_at`.
     pub unsafe fn next(&mut self) -> Result<*mut AVFrame> {
-        let idx = self.next_idx;
-        self.decode_present(idx)
+        let raw = self.sw.next_frame()?;
+        if raw.is_null() {
+            self.cur = ptr::null_mut();
+            return Ok(ptr::null_mut());
+        }
+        let carrier = self.frames.present(raw)?;
+        self.cur = carrier;
+        self.next_idx = self.next_idx.saturating_add(1);
+        Ok(carrier)
     }
 
     unsafe fn decode_present(&mut self, idx: u32) -> Result<*mut AVFrame> {
@@ -135,8 +142,12 @@ impl Decoder {
         self.cur
     }
 
-    /// Temps source (secondes) de la frame courante.
+    /// Temps source (secondes) de la frame courante — pts REEL du decodeur, avec
+    /// repli sur le compteur d'index si le flux ne porte pas de pts.
     pub unsafe fn cur_time_sec(&self) -> f64 {
+        if let Some(t) = self.sw.cur_time_sec() {
+            return t.max(0.0);
+        }
         if self.next_idx == 0 || self.fps <= 0.0 {
             0.0
         } else {

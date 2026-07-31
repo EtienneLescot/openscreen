@@ -18,10 +18,12 @@ use std::ptr;
 
 use crate::ffi::{
     av_frame_alloc, av_frame_free, av_frame_move_ref, av_frame_unref, av_packet_alloc,
-    av_packet_free, av_read_frame, av_seek_frame, avcodec_alloc_context3, avcodec_find_decoder,
-    avcodec_flush_buffers, avcodec_free_context, avcodec_open2, avcodec_parameters_to_context,
-    avcodec_receive_frame, avcodec_send_packet, avformat_close_input, avformat_find_stream_info,
-    avformat_open_input, AVCodecContext, AVFormatContext, AVFrame, AVMediaType, AVStream,
+    av_packet_free, av_packet_unref, av_read_frame, av_seek_frame, avcodec_alloc_context3,
+    avcodec_find_decoder, avcodec_flush_buffers, avcodec_free_context, avcodec_open2,
+    avcodec_parameters_to_context, avcodec_receive_frame, avcodec_send_packet,
+    avformat_close_input, avformat_find_stream_info, avformat_open_input, AVCodecContext,
+    AVFormatContext, AVFrame, AVMediaType, AVPacket, AVStream, AVERROR_EAGAIN, AVERROR_EOF,
+    AVERROR_INVALIDDATA,
 };
 
 /// `sn_fmt_stream` est défini dans `crates/compositor/shim.c` — bindgen ne le voit pas
@@ -51,6 +53,11 @@ pub struct SwDecoder {
     stream_timebase: f64,
     /// Cadence reelle du flux (avg_frame_rate), PAS 1/time_base.
     fps: f64,
+    /// Packet/frame persistants du pompage SEQUENTIEL (`next_frame`).
+    pkt: *mut AVPacket,
+    frame: *mut AVFrame,
+    sent_eof: bool,
+    cur_pts: Option<i64>,
 }
 
 /// Libère toutes les ressources ffmpeg. `Drop` ne peut pas faillir ; on
@@ -64,6 +71,12 @@ impl Drop for SwDecoder {
             }
             if !self.fmt.is_null() {
                 avformat_close_input(&mut self.fmt);
+            }
+            if !self.frame.is_null() {
+                av_frame_free(&mut self.frame);
+            }
+            if !self.pkt.is_null() {
+                av_packet_free(&mut self.pkt);
             }
         }
     }
@@ -127,6 +140,10 @@ impl SwDecoder {
                 (*par).codec_id
             );
         }
+        // Threads de decodage : 0 = « autant que de coeurs », exactement ce que
+        // `pipeline_windows.rs:526` et `pipeline_macos.rs:178` posent sur leur
+        // decodeur. Sans ca ffmpeg reste a 1 thread.
+        (*dec).thread_count = 0;
         let r = avcodec_open2(dec, codec, ptr::null_mut());
         if r < 0 {
             avcodec_free_context(&mut dec);
@@ -158,13 +175,75 @@ impl SwDecoder {
                 60.0
             }
         };
+        let pkt = av_packet_alloc();
+        let frame = av_frame_alloc();
+        if pkt.is_null() || frame.is_null() {
+            avcodec_free_context(&mut dec);
+            avformat_close_input(&mut fmt);
+            bail!("av_packet_alloc/av_frame_alloc (pompage sequentiel)");
+        }
         Ok(SwDecoder {
             fmt,
             dec,
             stream_idx,
             stream_timebase,
             fps,
+            pkt,
+            frame,
+            sent_eof: false,
+            cur_pts: None,
         })
+    }
+
+    /// Rend la frame SUIVANTE du flux, valide jusqu'au prochain appel, ou null a
+    /// EOF. C'est le pompage `receive_frame`/`read_frame`/`send_packet` classique,
+    /// identique a `pipeline_windows::Decoder::next` et `pipeline_macos`. Il ne
+    /// seek PAS : le decodeur garde son etat, donc une lecture sequentielle coute
+    /// UN packet par frame au lieu d'un re-parcours de demi-GOP.
+    pub unsafe fn next_frame(&mut self) -> Result<*mut AVFrame> {
+        loop {
+            let r = avcodec_receive_frame(self.dec, self.frame);
+            if r == 0 {
+                let pts = (*self.frame).best_effort_timestamp;
+                self.cur_pts = if pts == i64::MIN { None } else { Some(pts) };
+                return Ok(self.frame);
+            }
+            if r == AVERROR_EOF {
+                return Ok(ptr::null_mut());
+            }
+            if r != AVERROR_EAGAIN {
+                bail!("avcodec_receive_frame: {r}");
+            }
+            if self.sent_eof {
+                return Ok(ptr::null_mut());
+            }
+            let rr = av_read_frame(self.fmt, self.pkt);
+            if rr < 0 {
+                // EOF (ou erreur de lecture) : on draine l'encodeur interne.
+                avcodec_send_packet(self.dec, ptr::null_mut());
+                self.sent_eof = true;
+            } else {
+                if (*self.pkt).stream_index == self.stream_idx {
+                    let sr = avcodec_send_packet(self.dec, self.pkt);
+                    // AVERROR_INVALIDDATA : packet mal aligne apres un seek, on saute.
+                    // La valeur etait ecrite en dur a -0x2A2A2A2A, soit le tag `****`,
+                    // qui ne designe aucune erreur ffmpeg : le garde ne matchait donc
+                    // jamais et une vraie donnee invalide avortait tout le decodage --
+                    // exactement le cas du scrub, qui seeke en permanence.
+                    if sr < 0 && sr != AVERROR_INVALIDDATA && sr != AVERROR_EAGAIN {
+                        av_packet_unref(self.pkt);
+                        bail!("avcodec_send_packet: {sr}");
+                    }
+                }
+                av_packet_unref(self.pkt);
+            }
+        }
+    }
+
+    /// Temps source (secondes) de la derniere frame rendue par `next_frame` /
+    /// `decode_at`, tire du pts REEL et non d'un compteur d'index.
+    pub fn cur_time_sec(&self) -> Option<f64> {
+        self.cur_pts.map(|pts| pts as f64 * self.stream_timebase)
     }
 
     /// Seek vers la keyframe la plus proche AVANT `frame_idx`, puis décode
@@ -196,6 +275,8 @@ impl SwDecoder {
         // frames de l'ancien GOP, et la première `receive_frame` peut être
         // une frame d'avant le seek.
         avcodec_flush_buffers(self.dec);
+        // Le seek rouvre le flux : le drapeau EOF du pompage sequentiel retombe.
+        self.sent_eof = false;
 
         let mut pkt: *mut crate::ffi::AVPacket = ptr::null_mut();
         let mut frame: *mut AVFrame = ptr::null_mut();
@@ -275,6 +356,8 @@ impl SwDecoder {
         if found.is_null() {
             bail!("decode_at(frame_idx={frame_idx}) : aucune frame reçue");
         }
+        let pts = (*found).best_effort_timestamp;
+        self.cur_pts = if pts == i64::MIN { None } else { Some(pts) };
         Ok(found)
     }
 
