@@ -11,22 +11,23 @@ the contract.
 
 ## `schemaVersion` and top-level shape
 
-`axcutSchemaVersion` is **5** — exported as a literal at
-`src/lib/ai-edition/schema/index.ts:24`. Every document on disk carries
-`schemaVersion: 5`; anything older is upgraded on parse (see [Migrations](#migrations))
-and anything unknown is rejected by the `z.literal(5)` check at line 477.
+`axcutSchemaVersion` is **7** — exported as a literal at the top of
+`src/lib/ai-edition/schema/index.ts`. Every document on disk carries
+`schemaVersion: 7`; anything older is upgraded on parse (see [Migrations](#migrations))
+and anything unknown is rejected by the `z.literal(axcutSchemaVersion)` check in
+`documentSchemaShape`.
 
 | Field | Holds | Notes |
 |---|---|---|
-| `schemaVersion` | `5` | Bumping requires a migration; see the chain below. |
+| `schemaVersion` | `7` | Bumping requires a migration; see the chain below. |
 | `project` | `{ id, title, createdAt, updatedAt, primaryAssetId? }` | One project per file. |
 | `assets[]` | `AxcutAsset` (one per recorded/imported media file) | Carries `originalPath`, `cameraTrack`, `durationSec` (renderer probes). |
 | `transcript` | `AxcutTranscript \| null` | Legacy primary transcript; left for back-compat, no longer the source of truth. |
 | `transcripts[]` | `AxcutTranscript[]` | Per-asset transcripts; what the captions layer actually reads. |
-| `timeline` | `{ clips[], gaps[], trimRanges[], muteRanges[], speedRanges[], captionRanges[] }` | Clips carry their own in/out (`sourceStartSec`/`sourceEndSec`); see [timeline-model.md](timeline-model.md). |
+| `timeline` | `{ clips[], gaps[], trimRanges[], muteRanges[], speedRanges[], captionRanges[] }` | Clips carry their own in/out (`sourceStartSec`/`sourceEndSec`); trims are anchored to a clip (`clipId?`) since v7. See [timeline-model.md](timeline-model.md). |
 | `annotations[]` | `AxcutAnnotationRegion[]` | Text/image/figure/blur overlays, anchored to a clip (`clipId?`). |
 | `zoomRanges[]` | `AxcutZoomRegion[]` | Zoom-in effects, depth 1–6, anchored to a clip (`clipId?`). |
-| `legacyEditor` | OpenScreen v2 `ProjectEditorState` passthrough | Appearance/cursor settings not yet first-class in v5. |
+| `legacyEditor` | OpenScreen v2 `ProjectEditorState` passthrough | Appearance/cursor settings not yet first-class in the AI-edition schema. |
 | `agent` | `{ baseIntent?, pendingQuestions[], suggestions[], lastAppliedOperations[], lastReasoningSummary? }` | LLM agent state. |
 | `preview` | `{ strategy: "seek" \| "mse-proxy", revision: number }` | `revision` is the bump used to invalidate cached frames after an edit. |
 | `export` | `{ preset, lastJobId }` | The last export run. |
@@ -38,14 +39,14 @@ Migrations are **one-way and forward-only**. There is no version downgrade path:
 newer document that lands on an older build is rejected by the `schemaVersion`
 literal, not silently truncated. The chain runs **at load time** through
 `migrateRawDocumentToCurrent` (`src/lib/ai-edition/document/migrate.ts`) — the
-upgraders compose the chain and `documentSchema.parse` is a pure v5 validator.
+upgraders compose the chain and `documentSchema.parse` is a pure v7 validator.
 Every JSON-read site (`DocumentService`, the browser shim, the renderer's
 `handleBrowseProject` / `openLoadedProject` disk-load paths) must call the
 helper before `documentSchema.parse`. The pre-hoist implementation wrapped this
 chain in a `z.preprocess`, so it ran on every `setDocument` / `saveDocument` /
 `loadProject` parse — measurable per-parse overhead on documents that were
-already v5. Hoisting it to load time makes the in-memory parse a single
-`z.literal(5)` + shape check on already-upgraded data.
+already current. Hoisting it to load time makes the in-memory parse a single
+`z.literal(7)` + shape check on already-upgraded data.
 
 ### v3 → v4 (`upgradeV3DocumentToV4`, `schema/index.ts`)
 
@@ -79,6 +80,45 @@ the transition). The v4→v5 migration lives **only** in this upgrader —
 `document/migrate.ts` deliberately emits a v4 draft (see the v2→current
 section below) so the same code path is reused for the legacy import.
 
+### v5 → v6 (`upgradeV5DocumentToV6`, `schema/index.ts`)
+
+v6 retires the `"native"` AspectRatio, a runtime-only sentinel that resolved to
+the timeline's largest clip. The upgrader bakes the concrete `"W:H"` token into
+`legacyEditor.aspectRatio` so the resolution is permanent, matching the answer
+the runtime gave yesterday. It is **opportunistic**: baking needs real source
+dimensions, and a project imported from v1.7 has none until the renderer probes
+its media, so when they are unknown the sentinel is left in place (it keeps
+resolving dynamically) and converts on a later load. Guessing `"16:9"` there
+would permanently reframe every portrait v1.7 project on its first open.
+
+### v6 → v7 (`upgradeV6DocumentToV7`, `schema/index.ts`)
+
+v7 finishes what v5 started: **trims** become clip-anchored too. They were the
+last ruler region addressed by `assetId` alone. `AxcutTrimRange.startSec` /
+`endSec` already *are* a source-time window, so the only missing piece was
+`clipId` — no `sourceStartSec`/`sourceEndSec` pair is added, which would only
+create two fields that can drift.
+
+Source time is per **asset**, so a v6 trim is unambiguous exactly while one asset
+backs one clip. Duplicate a clip (or place the same recording twice) and the two
+clips share a coordinate space: a cut authored on the second was indistinguishable
+from one on the first, and each reader guessed differently — the transcript pane
+showed the cut on **both** clips, the ruler drew it on the **first**, and
+playback/export removed the span from **both**. `trimAppliesToClip`
+(`src/lib/ai-edition/timeline/trim-mapping.ts`) is now the single definition every
+reader routes through.
+
+The upgrader **ventilates** rather than picks: a stored trim is replaced by one
+anchored row per clip it covers, each clamped to that clip's source window, the
+first keeping the original id. A v6 trim genuinely did cut every clip of its
+asset, so this restates the document without moving its output — but the rows are
+now separately addressable, which is what lets a user delete the copy on the clip
+they did not mean. A trim covering no clip is kept **unchanged** rather than
+dropped (`replaceTimeline` mints exactly those: the complement of the kept
+intervals, outside every clip by construction), and an unprobed clip has no real
+window to clamp against so its trims stay un-anchored. Un-anchored trims keep the
+pre-v7 asset-wide meaning, which is what makes the fallback lossless.
+
 ### Legacy v2 → current (`migrateProjectDataToAxcutDocument`, `document/migrate.ts`)
 
 OpenScreen's pre-merge editor stored projects as `EditorProjectData` (an envelope
@@ -86,12 +126,16 @@ versioned `PROJECT_VERSION = 2`, defined at
 `src/components/video-editor/projectPersistence.ts:66`). On first open in the new
 editor, the renderer calls this function to produce a current-shape document. The
 migration is **pure** — no DOM, no fs, no network — and maps each `EditorProjectData`
-field into the equivalent v5 slot:
+field into the equivalent current slot:
 
 - The single recorded screen video becomes one asset plus one clip spanning its
   source, with the webcam path lifted into `asset.cameraTrack`.
 - `editor.trimRegions` (kept ranges) invert into `timeline.trimRanges` (kept ranges
-  in source seconds). v2 semantics matched v5 here — both are "kept", not "cut".
+  in source seconds). v2 semantics matched here — both are "kept", not "cut". The
+  trims are anchored to the single minted clip right in this function rather than
+  left to `upgradeV6DocumentToV7`: a v2 project has exactly one clip so the answer
+  is unambiguous, and the upgrader could not do it anyway — the clip it mints has
+  no source extent until the renderer probes the media.
 - `editor.speedRegions`, `editor.zoomRegions`, and `editor.annotationRegions` carry
   over into `legacyEditor.speedRegions`, `document.zoomRanges`, and
   `document.annotations` respectively (with v4→v5 anchoring applied during the
@@ -100,12 +144,12 @@ field into the equivalent v5 slot:
   and the other ~20 fields without a first-class home — round-trips through
   `legacyEditor` so toggling AI-edition off then back on is lossless.
 
-The function returns the v5 result by emitting a v4-shaped draft and running it
-through `migrateRawDocumentToCurrent` (which composes `upgradeV3DocumentToV4` +
-`upgradeV4DocumentToV5`) before the v5-validating `documentSchema.parse`. That
-is why the draft is labelled `schemaVersion: 4` and not `axcutSchemaVersion`:
-labelling it already-v5 would make the v4→v5 upgrader skip the anchoring and
-leave the imported regions without clip anchors.
+The function returns the current result by emitting a v4-shaped draft and running
+it through `migrateRawDocumentToCurrent` (the whole `upgradeV3DocumentToV4` →
+`upgradeV6DocumentToV7` chain) before `documentSchema.parse`. That is why the
+draft is labelled `schemaVersion: 4` and not `axcutSchemaVersion`: labelling it
+already-current would make the v4→v5 upgrader skip the anchoring and leave the
+imported regions without clip anchors.
 
 ## Persistence
 

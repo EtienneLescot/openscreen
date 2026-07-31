@@ -779,6 +779,59 @@ describe("resolvePlaybackSegments", () => {
 			sourceEndSec: 55,
 		});
 	});
+
+	// Two clips over the SAME media, same source window — the shape the previous test
+	// deliberately avoided by keeping the windows disjoint. Here `assetId` + source
+	// overlap cannot tell the clips apart; only `clipId` can.
+	describe("two clips sharing one asset over the same source window", () => {
+		const sharedClips = () => [
+			makeClip({
+				id: "clip_1",
+				sourceStartSec: 0,
+				sourceEndSec: 11.8,
+				timelineStartSec: 0,
+				timelineEndSec: 11.8,
+			}),
+			makeClip({
+				id: "clip_2",
+				sourceStartSec: 0,
+				sourceEndSec: 11.8,
+				timelineStartSec: 11.8,
+				timelineEndSec: 23.6,
+			}),
+		];
+
+		it("cuts only the anchored clip, leaving its twin whole", () => {
+			const trim = makeTrim({ id: "t1", clipId: "clip_2", startSec: 3, endSec: 4 });
+			const segments = resolvePlaybackSegments(sharedClips(), [trim]);
+			// clip_1 survives as one untouched segment; clip_2 splits around [3,4].
+			expect(segments).toHaveLength(3);
+			expect(segments[0]).toMatchObject({ id: "clip_1", sourceStartSec: 0, sourceEndSec: 11.8 });
+			expect(segments[1]).toMatchObject({
+				id: "clip_2_seg1",
+				sourceStartSec: 0,
+				sourceEndSec: 3,
+			});
+			expect(segments[2]).toMatchObject({
+				id: "clip_2_seg2",
+				sourceStartSec: 4,
+				sourceEndSec: 11.8,
+			});
+		});
+
+		it("still cuts both clips for a pre-v7 trim that names no clip", () => {
+			// Back-compat: an un-anchored row keeps its historical asset-wide meaning, so a
+			// document written before the anchor existed renders exactly as it used to.
+			const trim = makeTrim({ id: "t1", startSec: 3, endSec: 4 });
+			const segments = resolvePlaybackSegments(sharedClips(), [trim]);
+			expect(segments.map((s) => s.id)).toEqual([
+				"clip_1_seg1",
+				"clip_1_seg2",
+				"clip_2_seg1",
+				"clip_2_seg2",
+			]);
+		});
+	});
 });
 
 describe("duplicateClip / moveClip", () => {
@@ -807,6 +860,55 @@ describe("duplicateClip / moveClip", () => {
 		expect(next.timeline.clips.map((c) => c.id)[1]).not.toBe("clip_b");
 		expect(next.timeline.clips[0].id).toBe("clip_a");
 		expect(next.timeline.clips[2].id).toBe("clip_b");
+	});
+
+	// A trim used to reach the copy for free, by matching on `assetId`. Now that it names
+	// its clip the copy has to be given its own, or duplicating a cut clip would silently
+	// produce an uncut one.
+	it("duplicateClip copies the original's anchored trims onto the copy, independently", () => {
+		const doc = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [makeClip({ id: "clip_a", sourceStartSec: 0, sourceEndSec: 10 })],
+				trimRanges: [makeTrim({ id: "t1", clipId: "clip_a", startSec: 2, endSec: 4 })],
+			},
+		});
+		const next = duplicateClip(doc, "clip_a");
+		const copyId = next.timeline.clips[1].id;
+		expect(next.timeline.trimRanges).toHaveLength(2);
+		const copied = next.timeline.trimRanges.find((t) => t.clipId === copyId);
+		expect(copied).toMatchObject({ startSec: 2, endSec: 4 });
+		// Fresh id — a shared one would make the two cuts one row again.
+		expect(copied?.id).not.toBe("t1");
+		// Both clips are cut, exactly as before the anchor existed.
+		expect(resolvePlaybackSegments(next.timeline.clips, next.timeline.trimRanges)).toHaveLength(4);
+	});
+
+	it("removeClip drops the deleted clip's trims but keeps a twin's", () => {
+		const doc = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [
+					makeClip({ id: "clip_1", sourceStartSec: 0, sourceEndSec: 10 }),
+					makeClip({
+						id: "clip_2",
+						sourceStartSec: 0,
+						sourceEndSec: 10,
+						timelineStartSec: 10,
+						timelineEndSec: 20,
+					}),
+				],
+				trimRanges: [
+					makeTrim({ id: "t1", clipId: "clip_1", startSec: 2, endSec: 4 }),
+					makeTrim({ id: "t2", clipId: "clip_2", startSec: 6, endSec: 8 }),
+					makeTrim({ id: "legacy", startSec: 1, endSec: 2 }),
+				],
+			},
+		});
+		const next = removeClip(doc, "clip_2");
+		// `t2`'s content is gone with its clip; an asset-wide match would have moved it
+		// onto the surviving twin, which is the wrong-clip class this whole change removes.
+		expect(next.timeline.trimRanges.map((t) => t.id)).toEqual(["t1", "legacy"]);
 	});
 
 	it("moveClip reorders clips", () => {
@@ -1116,7 +1218,9 @@ describe("removeRegion — the one shared region-delete mutator", () => {
 		expect(next.zoomRanges.map((z) => z.id)).toEqual(["z3"]);
 	});
 
-	it("filters a trim by id without touching other trims", () => {
+	it("falls back to the single row when there is no clip layout to group against", () => {
+		// No clips → `coalescedTrimGroups` can map nothing, so there is no pill to expand to.
+		// The row must still be deletable rather than silently surviving.
 		const doc = makeDoc({
 			timeline: {
 				...makeDoc().timeline,
@@ -1125,6 +1229,68 @@ describe("removeRegion — the one shared region-delete mutator", () => {
 		});
 		const next = removeRegion(doc, "trim", "trim_1");
 		expect(next.timeline.trimRanges.map((t) => t.id)).toEqual(["trim_2"]);
+	});
+
+	// A trim grown across a clip boundary CANNOT be one row — source time is per clip — so
+	// `ventilateTimelineSpanToTrims` writes one per covered clip and the ruler merges them
+	// back into the single stripe the user clicks. Deleting by bare id left the other half
+	// still cutting content. Every other kind already expanded to its pill.
+	describe("a trim ventilated across a clip boundary", () => {
+		// clip_a plays source 0-10 at ruler 0-10; clip_b plays source 0-10 at ruler 10-20.
+		// One drag from ruler 8 to 12 stores rows at ruler 8-10 and 10-12: they touch, so
+		// they are one pill.
+		const doc = () =>
+			makeDoc({
+				timeline: {
+					...makeDoc().timeline,
+					clips: [
+						makeClip({
+							id: "clip_a",
+							sourceStartSec: 0,
+							sourceEndSec: 10,
+							timelineStartSec: 0,
+							timelineEndSec: 10,
+						}),
+						makeClip({
+							id: "clip_b",
+							sourceStartSec: 0,
+							sourceEndSec: 10,
+							timelineStartSec: 10,
+							timelineEndSec: 20,
+						}),
+					],
+					trimRanges: [
+						makeTrim({ id: "half_a", clipId: "clip_a", startSec: 8, endSec: 10 }),
+						makeTrim({ id: "half_b", clipId: "clip_b", startSec: 0, endSec: 2 }),
+						// A separate cut elsewhere on clip_a — its own pill, must survive.
+						makeTrim({ id: "other", clipId: "clip_a", startSec: 2, endSec: 3 }),
+					],
+				},
+			});
+
+		it("deletes both halves whichever one was clicked", () => {
+			expect(removeRegion(doc(), "trim", "half_a").timeline.trimRanges.map((t) => t.id)).toEqual([
+				"other",
+			]);
+			expect(removeRegion(doc(), "trim", "half_b").timeline.trimRanges.map((t) => t.id)).toEqual([
+				"other",
+			]);
+		});
+
+		it("leaves no content still cut once the pill is deleted", () => {
+			// The point of the bug, not just the row count: half the stripe kept removing
+			// footage after the user had deleted it.
+			const next = removeRegion(doc(), "trim", "half_a");
+			const segments = resolvePlaybackSegments(next.timeline.clips, next.timeline.trimRanges);
+			// clip_b is whole again; clip_a is split only by the unrelated `other` cut.
+			expect(segments.map((s) => s.id)).toEqual(["clip_a_seg1", "clip_a_seg2", "clip_b"]);
+			expect(segments.at(-1)).toMatchObject({ sourceStartSec: 0, sourceEndSec: 10 });
+		});
+
+		it("does not swallow a non-touching cut on the same clip", () => {
+			const next = removeRegion(doc(), "trim", "other");
+			expect(next.timeline.trimRanges.map((t) => t.id).sort()).toEqual(["half_a", "half_b"]);
+		});
 	});
 
 	it("removes speed and camera-fullscreen regions under legacyEditor", () => {

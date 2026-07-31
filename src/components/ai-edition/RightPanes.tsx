@@ -486,11 +486,20 @@ function normaliseHex(raw: string): string | null {
 	return withHash.toLowerCase();
 }
 
+/** Which clip a transcript cut lands on. The clip id is what makes the cut land on ONE
+ *  block: two clips over the same media share an asset and a source range, so an
+ *  asset-only target had the trim show up on both of them (and on the wrong one in the
+ *  ruler). See `trimAppliesToClip`. */
+export interface TrimTarget {
+	assetId: string;
+	clipId: string;
+}
+
 // ─── Transcript ────────────────────────────────────────────────────
 // Aggregated transcript view: one contentEditable region per clip on the
 // timeline, in timeline order. Each word is rendered as a `<span
 // data-word-id>` inside the editable div. Words inside any `trimRange`
-// for the clip's asset are styled red+strikethrough and show a bin icon
+// anchored to the clip are styled red+strikethrough and show a bin icon
 // on hover (removing the skip restores them). User actions:
 //
 //   - Click on a word    → seek (timeline.playhead)
@@ -499,6 +508,14 @@ function normaliseHex(raw: string): string | null {
 //                          `timeline.trimRanges[]`, NOT the transcript
 //                          text). The deleted word stays in the DOM as
 //                          red text — nothing destructive.
+//
+// `data-word-id` carries the CLIP-SCOPED `ClipWord.id`, never the bare `word.id`. A
+// transcript belongs to an asset, so two clips over the same media project the same
+// words twice, and silence tokens are numbered from 1 per clip — a bare word id names
+// a moment in the media, not a thing on screen. Everything that points at a rendered
+// word (React key, cue highlight, caret anchor, the DOM helpers at the bottom of this
+// file) goes through `ClipWord.id`. Those helpers treat it as an opaque string, so they
+// needed no change beyond the ids they are handed.
 //
 // Mirrors axcut's apps/web/src/components/CurrentTranscriptView.tsx.
 export function TranscriptPane({
@@ -520,7 +537,7 @@ export function TranscriptPane({
 	trimRanges: AxcutTrimRange[];
 	busy: boolean;
 	onSeek: (sec: number) => void;
-	onAddTrimRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
+	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
 	onTranscribe: () => void;
 	canTranscribe: boolean;
@@ -542,7 +559,9 @@ export function TranscriptPane({
 	// the cue position is the playback head's location in the current clip's source time.
 	// `currentTimeSec` is the RAW/document timeline (same referential as the ruler, see
 	// NewEditorShell) — looked up against the raw `clips`, matching that referential.
-	// `findCueWordId` only reads `assetId`/`sourceTimeSec` off the result.
+	// `clipId` is what `findCueWordId` keys on — do NOT drop it as unused: source time is
+	// per asset, so without it the resolver falls back to the first section of the asset
+	// and the cue tracks clip 1 forever on a timeline that plays one media twice.
 	const cue = useMemo(() => {
 		if (clips.length === 0) return null;
 		const position = locateVirtualPosition(clips, currentTimeSec);
@@ -646,11 +665,17 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 	busy: boolean;
 	cueWordId: string | null;
 	onSeek: (sec: number) => void;
-	onAddTrimRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
+	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
 }) {
 	const ts = useScopedT("settings");
 	const { clip, asset, words } = section;
+	// Memoised: `TranscriptWord` renders once per word, so a fresh object literal here
+	// would break referential equality for the whole stream on every parent render.
+	const trimTarget = useMemo<TrimTarget>(
+		() => ({ assetId: clip.assetId, clipId: clip.id }),
+		[clip.assetId, clip.id],
+	);
 	const filename = asset?.label ?? clip.assetId;
 	const sourceRangeLabel =
 		clip.sourceEndSec !== undefined
@@ -714,17 +739,17 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 			// Only skip words that are currently kept (don't double-skip).
 			const keptRange = rangeWords.filter((w) => w.kept);
 			if (keptRange.length === 0) return;
-			pendingCaretWordIdRef.current = keptRange[0].word.id;
+			pendingCaretWordIdRef.current = keptRange[0].id;
 			const startSec = Math.min(...keptRange.map((w) => w.word.startSec));
 			const endSec = Math.max(...keptRange.map((w) => w.word.endSec));
 			onAddTrimRange(
-				clip.assetId,
+				trimTarget,
 				startSec,
 				endSec,
 				`Skip ${formatMs(startSec * 1000)}-${formatMs(endSec * 1000)} from ${clip.assetId}.`,
 			);
 		},
-		[busy, clip.assetId, onAddTrimRange],
+		[busy, clip.assetId, trimTarget, onAddTrimRange],
 	);
 
 	const removeTrimRun = useCallback(
@@ -752,7 +777,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 					words,
 				);
 				if (!wordId) return false;
-				const cw = words.find((w) => w.word.id === wordId);
+				const cw = words.find((w) => w.id === wordId);
 				if (!cw) return false;
 				skipWordRange([cw]);
 				return true;
@@ -768,8 +793,8 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 			const anchorId = findWordId(selection.anchorNode);
 			const focusId = findWordId(selection.focusNode);
 			if (!anchorId || !focusId) return false;
-			const fromIdx = words.findIndex((w) => w.word.id === anchorId);
-			const toIdx = words.findIndex((w) => w.word.id === focusId);
+			const fromIdx = words.findIndex((w) => w.id === anchorId);
+			const toIdx = words.findIndex((w) => w.id === focusId);
 			if (fromIdx < 0 || toIdx < 0) return false;
 			const [lo, hi] = fromIdx <= toIdx ? [fromIdx, toIdx] : [toIdx, fromIdx];
 			skipWordRange(words.slice(lo, hi + 1));
@@ -837,11 +862,18 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 			if (!targetEl) return;
 			const wordEl = targetEl.closest<HTMLElement>("[data-word-id]");
 			if (!wordEl?.dataset.wordId) return;
-			const cw = words.find((w) => w.word.id === wordEl.dataset.wordId);
+			const cw = words.find((w) => w.id === wordEl.dataset.wordId);
 			if (!cw) return;
-			onSeek(cw.word.startSec);
+			// `onSeek` takes RAW TIMELINE seconds (its other callers pass `timelineStartSec`;
+			// `handleSeek` forwards `isSource: false`), but a word's times are the ASSET's
+			// source seconds. Shift by this clip's offset — a raw clip is identity between
+			// source and raw time apart from where it sits on the ruler. Passing the source
+			// value straight through sent every click in a clip that doesn't start at ruler 0
+			// backwards into whichever clip covers that raw moment; it only looked right on a
+			// single clip at the head of the timeline, where the two coordinates coincide.
+			onSeek(clip.timelineStartSec + (cw.word.startSec - clip.sourceStartSec));
 		},
-		[onSeek, words],
+		[onSeek, words, clip.timelineStartSec, clip.sourceStartSec],
 	);
 
 	return (
@@ -944,10 +976,10 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 				>
 					{words.map((cw) => (
 						<TranscriptWord
-							key={cw.word.id}
+							key={cw.id}
 							cw={cw}
-							isCue={cw.word.id === cueWordId}
-							assetId={clip.assetId}
+							isCue={cw.id === cueWordId}
+							target={trimTarget}
 							onRestore={removeTrimRun}
 							onAddTrimRange={onAddTrimRange}
 						/>
@@ -965,15 +997,15 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 function TranscriptWord({
 	cw,
 	isCue,
-	assetId,
+	target,
 	onRestore,
 	onAddTrimRange,
 }: {
 	cw: ClipWord;
 	isCue: boolean;
-	assetId: string;
+	target: TrimTarget;
 	onRestore: (run: TrimRun) => void;
-	onAddTrimRange: (assetId: string, startSec: number, endSec: number, reason: string) => void;
+	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 }) {
 	const ts = useScopedT("settings");
 	const [hover, setHover] = useState(false);
@@ -988,7 +1020,7 @@ function TranscriptWord({
 				<button
 					type="button"
 					contentEditable={false}
-					data-word-id={cw.word.id}
+					data-word-id={cw.id}
 					data-silence="true"
 					title={ts("transcript.restoreSilence", { duration })}
 					aria-label={ts("transcript.restoreSilence", { duration })}
@@ -1024,14 +1056,14 @@ function TranscriptWord({
 			<button
 				type="button"
 				contentEditable={false}
-				data-word-id={cw.word.id}
+				data-word-id={cw.id}
 				data-silence="true"
 				title={ts("transcript.trimSilence", { duration })}
 				aria-label={ts("transcript.trimSilence", { duration })}
 				onClick={(e) => {
 					e.stopPropagation();
 					onAddTrimRange(
-						assetId,
+						target,
 						cw.word.startSec,
 						cw.word.endSec,
 						`Skip silence ${formatMs(cw.word.startSec * 1000)}-${formatMs(cw.word.endSec * 1000)}.`,
@@ -1057,7 +1089,7 @@ function TranscriptWord({
 
 	return (
 		<span
-			data-word-id={cw.word.id}
+			data-word-id={cw.id}
 			data-start-sec={cw.word.startSec}
 			data-end-sec={cw.word.endSec}
 			data-skip-id={cw.trimId ?? undefined}
@@ -1124,6 +1156,11 @@ function TranscriptWord({
 // Ponytail port of axcut's findCollapsedDeletionWordId. The non-collapsed
 // path uses findWordId directly (a range selection's endpoints already
 // identify the boundary words — no boundary heuristic needed).
+//
+// Every id here is a `ClipWord.id` (clip-scoped) read straight off `data-word-id`, and
+// every lookup is confined to ONE block's `editor` element — so these stay correct
+// whatever the ids look like. They must never parse an id: the `clipId:wordId` shape is
+// `clipWordId`'s business alone.
 
 function findWordId(node: Node | null): string | null {
 	const element = node instanceof Element ? node : node?.parentElement;
@@ -1142,7 +1179,7 @@ function findCollapsedDeletionWordId(
 	// trimId is only set on the next React commit), so a DOM check would
 	// re-trim an already-trimmed word. The words array is the React state
 	// captured at the call site — always current.
-	const skippedIds = new Set(words.filter((w) => !w.kept).map((w) => w.word.id));
+	const skippedIds = new Set(words.filter((w) => !w.kept).map((w) => w.id));
 
 	const direct = closestWordElement(node);
 	if (direct) {
@@ -1176,34 +1213,37 @@ function findCollapsedDeletionWordId(
 	if (!boundaryNode) return null;
 	const childNodes = Array.from(boundaryNode.childNodes);
 
-	// when restoreCaretBeforeWord places the caret before word W
-	// (via setStartBefore), `anchorNode` becomes the parent div and
-	// `anchorOffset` is W's index. The naive "previous sibling" lookup
-	// below would always return the word that was *just* trimmed, which
-	// is a no-op (the previous word is already skipped). The user
-	// expects Backspace at the start of W to delete W. So when the
-	// previous adjacent word is already trimmed, fall forward to W.
-	if (direction === "backward" && node instanceof Element && node === editor) {
-		const idx = Math.max(0, Math.min(offset, wordNodes.length) - 1);
-		const previousWordId = wordNodes[idx]?.dataset.wordId ?? null;
-		if (previousWordId && skippedIds.has(previousWordId)) {
-			return wordNodes[idx]?.dataset.wordId ?? null;
-		}
-	}
-
+	// The caret sits BETWEEN words — which is where `restoreCaretBeforeWord` parks it after
+	// every cut (`setStartBefore` collapses to (editor, index-of-word)), so this is the
+	// state the user is in while holding Backspace. Walk outward in the direction of travel
+	// and take the first word that is STILL KEPT.
+	//
+	// Skipping the already-trimmed ones is the whole point: a struck-through word has
+	// nothing left to remove, so resolving to it made `skipWordRange` drop it as not-kept
+	// and the keystroke did nothing at all. The user had to click somewhere else to carry
+	// on cutting — right after a cut, since the caret is parked before the word that was
+	// just removed. A previous guard here tried to special-case that by returning the
+	// already-trimmed word it had just rejected, which is the no-op it meant to avoid (and
+	// was byte-for-byte what the walk below already returned, so it never changed anything).
+	const isKept = (wordId: string | null): wordId is string => !!wordId && !skippedIds.has(wordId);
 	const candidates =
 		direction === "backward" ? childNodes.slice(0, offset).reverse() : childNodes.slice(offset);
 	for (const candidate of candidates) {
 		const wordId = findWordId(candidate) ?? findDescendantWordId(candidate);
-		if (wordId) return wordId;
+		if (isKept(wordId)) return wordId;
 	}
+	// Fallback for a caret in some wrapper node whose children aren't the word spans: locate
+	// it by document order instead. Same rule — nearest kept word in the direction of travel.
 	const range = globalThis.document.createRange();
 	range.setStart(editor, 0);
 	range.setEnd(node, clampRangeOffset(node, offset));
-	const wordsBefore = wordNodes.filter((wordNode) => range.comparePoint(wordNode, 0) <= 0);
-	return direction === "backward"
-		? (wordsBefore.at(-1)?.dataset.wordId ?? null)
-		: (wordNodes.find((wordNode) => !wordsBefore.includes(wordNode))?.dataset.wordId ?? null);
+	const before: HTMLElement[] = [];
+	const after: HTMLElement[] = [];
+	for (const wordNode of wordNodes) {
+		(range.comparePoint(wordNode, 0) <= 0 ? before : after).push(wordNode);
+	}
+	const pool = direction === "backward" ? [...before].reverse() : after;
+	return pool.find((wordNode) => isKept(wordNode.dataset.wordId ?? null))?.dataset.wordId ?? null;
 }
 
 function findDescendantWordId(node: Node): string | null {

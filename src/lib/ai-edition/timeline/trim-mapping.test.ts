@@ -101,6 +101,7 @@ describe("resolveTimelineSpanToTrim", () => {
 		// Timeline 18..20 falls in c2 (asset b) → source 16 + (18-14)=20 .. 22.
 		expect(resolveTimelineSpanToTrim(18, 20, clips)).toEqual({
 			assetId: "b",
+			clipId: "c2",
 			sourceStartSec: 20,
 			sourceEndSec: 22,
 		});
@@ -152,6 +153,7 @@ describe("resolveTimelineSpanToTrim", () => {
 		// Span 10..20 starts in c1; end clamps to c1's end (timeline 14 → source 14).
 		expect(resolveTimelineSpanToTrim(10, 20, clips)).toEqual({
 			assetId: "a",
+			clipId: "c1",
 			sourceStartSec: 10,
 			sourceEndSec: 14,
 		});
@@ -219,16 +221,16 @@ describe("ventilateTimelineSpanToTrims", () => {
 
 	it("stays a single source range inside one clip (matches resolveTimelineSpanToTrim)", () => {
 		expect(ventilateTimelineSpanToTrims(2, 4, clips)).toEqual([
-			{ assetId: "a", sourceStartSec: 2, sourceEndSec: 4 },
+			{ assetId: "a", clipId: "c1", sourceStartSec: 2, sourceEndSec: 4 },
 		]);
 	});
 
 	it("splits a span across a clip boundary into one source range per clip", () => {
 		// Timeline 10..20 covers c1 (10..14) and c2 (14..20).
 		expect(ventilateTimelineSpanToTrims(10, 20, clips)).toEqual([
-			{ assetId: "a", sourceStartSec: 10, sourceEndSec: 14 },
+			{ assetId: "a", clipId: "c1", sourceStartSec: 10, sourceEndSec: 14 },
 			// c2: source 16 + (14-14)=16 .. 16 + (20-14)=22.
-			{ assetId: "b", sourceStartSec: 16, sourceEndSec: 22 },
+			{ assetId: "b", clipId: "c2", sourceStartSec: 16, sourceEndSec: 22 },
 		]);
 	});
 
@@ -337,5 +339,82 @@ describe("coalescedTrimGroups", () => {
 			trim({ id: "t1", assetId: "a", startSec: 3, endSec: 5 }),
 		];
 		expect(coalescedTrimGroups(trims, clips)).toEqual([{ ids: ["t1"], start: 3, end: 5 }]);
+	});
+});
+
+// The reported bug, at the ruler: two clips over the SAME media with the SAME source
+// window. Source time is per asset, so it cannot separate them — only `clipId` can.
+// Every earlier fixture in this file sidesteps the ambiguity by giving the two clips
+// disjoint source ranges, which is exactly why none of them caught this.
+describe("two clips sharing one asset over the same source window", () => {
+	const sharedClips = () => [
+		clip({
+			id: "c1",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 12,
+			timelineStartSec: 0,
+			timelineEndSec: 12,
+		}),
+		clip({
+			id: "c2",
+			assetId: "a",
+			sourceStartSec: 0,
+			sourceEndSec: 12,
+			timelineStartSec: 12,
+			timelineEndSec: 24,
+		}),
+	];
+
+	it("maps a trim anchored to the second clip onto the SECOND clip's ruler span", () => {
+		// Without the anchor this returned {3,5} — the first clip — because the loop
+		// stopped at the first clip whose asset and source window matched.
+		expect(
+			trimToTimelineSpan({ assetId: "a", clipId: "c2", startSec: 3, endSec: 5 }, sharedClips()),
+		).toEqual({ start: 15, end: 17 });
+	});
+
+	it("keeps mapping an un-anchored trim to the first matching clip (pre-v7 behaviour)", () => {
+		expect(trimToTimelineSpan({ assetId: "a", startSec: 3, endSec: 5 }, sharedClips())).toEqual({
+			start: 3,
+			end: 5,
+		});
+	});
+
+	it("draws one pill per clip when each clip carries its own trim", () => {
+		const trims = [
+			trim({ id: "t1", assetId: "a", clipId: "c1", startSec: 3, endSec: 5 }),
+			trim({ id: "t2", assetId: "a", clipId: "c2", startSec: 3, endSec: 5 }),
+		];
+		// Two pills, 12s apart — not one merged pill, and not two stacked on c1.
+		expect(coalescedTrimGroups(trims, sharedClips())).toEqual([
+			{ ids: ["t1"], start: 3, end: 5 },
+			{ ids: ["t2"], start: 15, end: 17 },
+		]);
+	});
+
+	it("drops an anchored trim whose clip is gone even though a twin clip remains", () => {
+		// The twin still uses the same asset over the same source range, so an asset-only
+		// match would resurrect the cut on it.
+		const trims = [trim({ id: "orphan", assetId: "a", clipId: "c2", startSec: 3, endSec: 5 })];
+		expect(coalescedTrimGroups(trims, [sharedClips()[0]])).toEqual([]);
+	});
+
+	it("still shows a pill when the anchor clip was re-cut past the trim's start", () => {
+		// c2 narrowed to source [4,12]: the trim [3,5] still cuts [4,5] of it, so the
+		// ruler has to show that remainder rather than hiding a cut the user can't undo.
+		const clips = [
+			clip({
+				id: "c2",
+				assetId: "a",
+				sourceStartSec: 4,
+				sourceEndSec: 12,
+				timelineStartSec: 0,
+				timelineEndSec: 8,
+			}),
+		];
+		expect(
+			trimToTimelineSpan({ assetId: "a", clipId: "c2", startSec: 3, endSec: 5 }, clips),
+		).toEqual({ start: 0, end: 1 });
 	});
 });

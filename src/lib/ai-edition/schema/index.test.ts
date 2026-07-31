@@ -15,9 +15,9 @@ import {
 	zoomRegionSchema,
 } from "./index";
 
-describe("axcut-schema v6", () => {
-	it("uses schema version 6", () => {
-		expect(axcutSchemaVersion).toBe(6);
+describe("axcut-schema v7", () => {
+	it("uses schema version 7", () => {
+		expect(axcutSchemaVersion).toBe(7);
 	});
 
 	it("rejects unknown schema versions", () => {
@@ -29,9 +29,9 @@ describe("axcut-schema v6", () => {
 		).toThrow();
 	});
 
-	it("createEmptyDocument returns a valid v6 doc with empty collections", () => {
+	it("createEmptyDocument returns a valid v7 doc with empty collections", () => {
 		const doc = createEmptyDocument({ projectId: "proj_1", title: "Demo" });
-		expect(doc.schemaVersion).toBe(6);
+		expect(doc.schemaVersion).toBe(7);
 		expect(doc.assets).toEqual([]);
 		expect(doc.timeline.clips).toEqual([]);
 		expect(doc.timeline.trimRanges).toEqual([]);
@@ -205,7 +205,7 @@ describe("axcut-schema v6", () => {
 	it("documentSchema defaults missing v3 envelopes on a v3 document", () => {
 		// After the migration hoist, a v3 doc must run through
 		// `migrateRawDocumentToCurrent` first; this models the new load-time
-		// contract: the schema parse is a pure v6 validation step.
+		// contract: the schema parse is a pure v7 validation step.
 		expect(() =>
 			documentSchema.parse(
 				migrateRawDocumentToCurrent({
@@ -259,13 +259,13 @@ describe("axcut-schema v6", () => {
 
 		it("relocates a legacy top-level cameraTrack onto the primaryAssetId asset", () => {
 			// After the migration hoist, v3 input runs through the load-time
-			// upgrader before the pure v6 schema parse.
+			// upgrader before the pure v7 schema parse.
 			const doc = documentSchema.parse(
 				migrateRawDocumentToCurrent(
 					v3Doc({ project: { ...v3Doc().project, primaryAssetId: "asset_2" } }),
 				),
 			);
-			expect(doc.schemaVersion).toBe(6);
+			expect(doc.schemaVersion).toBe(7);
 			expect((doc as Record<string, unknown>).cameraTrack).toBeUndefined();
 			expect(doc.assets.find((a) => a.id === "asset_1")?.cameraTrack).toBeNull();
 			expect(doc.assets.find((a) => a.id === "asset_2")?.cameraTrack?.sourcePath).toBe("/cam.mp4");
@@ -279,7 +279,7 @@ describe("axcut-schema v6", () => {
 
 		it("is a no-op when the v3 document has no legacy cameraTrack", () => {
 			const doc = documentSchema.parse(migrateRawDocumentToCurrent(v3Doc({ cameraTrack: null })));
-			expect(doc.schemaVersion).toBe(6);
+			expect(doc.schemaVersion).toBe(7);
 			for (const asset of doc.assets) {
 				expect(asset.cameraTrack).toBeNull();
 			}
@@ -287,7 +287,7 @@ describe("axcut-schema v6", () => {
 
 		it("rejects schemaVersion 2 (the load-time helper only upgrades v3/v4)", () => {
 			// The pre-hoist schema auto-upgraded v3 inside its `z.preprocess`;
-			// the post-hoist schema is a pure v6 validator, and the helper
+			// the post-hoist schema is a pure v7 validator, and the helper
 			// only handles v3/v4. v2 still requires the separate
 			// `migrateProjectDataToAxcutDocument` pure function.
 			expect(() => documentSchema.parse(v3Doc({ schemaVersion: 2 }))).toThrow();
@@ -415,7 +415,7 @@ describe("v4 -> v5 clip-anchored modifier migration", () => {
 
 	it("bumps the version and anchors a zoom wholly inside one clip", () => {
 		// After the migration hoist, v4 input runs through the load-time
-		// upgrader before the pure v6 schema parse.
+		// upgrader before the pure v7 schema parse.
 		const doc = documentSchema.parse(
 			migrateRawDocumentToCurrent(
 				makeV4Doc({
@@ -425,7 +425,7 @@ describe("v4 -> v5 clip-anchored modifier migration", () => {
 				}),
 			),
 		);
-		expect(doc.schemaVersion).toBe(6);
+		expect(doc.schemaVersion).toBe(7);
 		expect(doc.zoomRanges).toHaveLength(1);
 		const z = doc.zoomRanges[0];
 		expect(z).toMatchObject({ id: "z1", clipId: "clip_a", depth: 3 });
@@ -493,8 +493,8 @@ describe("v4 -> v5 clip-anchored modifier migration", () => {
 		expect(doc.zoomRanges[0].clipId).toBeUndefined();
 	});
 
-	it("is idempotent — re-parsing an already-v6 document changes nothing", () => {
-		// First call: v4 input → load-time upgrade → v6.
+	it("is idempotent — re-parsing an already-v7 document changes nothing", () => {
+		// First call: v4 input → load-time upgrade → v7.
 		const once = documentSchema.parse(
 			migrateRawDocumentToCurrent(
 				makeV4Doc({
@@ -505,7 +505,7 @@ describe("v4 -> v5 clip-anchored modifier migration", () => {
 			),
 		);
 		// Second call: already-current input, no upgrade needed; the parse is now a
-		// pure v6 validation step.
+		// pure v7 validation step.
 		const twice = documentSchema.parse(once);
 		expect(twice).toEqual(once);
 	});
@@ -562,7 +562,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 				}),
 			),
 		);
-		expect(doc.schemaVersion).toBe(6);
+		expect(doc.schemaVersion).toBe(7);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("16:9");
 	});
 
@@ -619,7 +619,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 				legacyEditor: { aspectRatio: "native" },
 			}),
 		);
-		expect(doc.schemaVersion).toBe(6);
+		expect(doc.schemaVersion).toBe(7);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("9:16");
 	});
 
@@ -630,7 +630,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 		const doc = documentSchema.parse(
 			migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { aspectRatio: "native" } })),
 		);
-		expect(doc.schemaVersion).toBe(6);
+		expect(doc.schemaVersion).toBe(7);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("native");
 	});
 
@@ -638,7 +638,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 		const doc = documentSchema.parse(
 			migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { aspectRatio: "4:5" } })),
 		);
-		expect(doc.schemaVersion).toBe(6);
+		expect(doc.schemaVersion).toBe(7);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("4:5");
 	});
 
@@ -646,7 +646,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 		const doc = documentSchema.parse(
 			migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { someOtherField: "preserved" } })),
 		);
-		expect(doc.schemaVersion).toBe(6);
+		expect(doc.schemaVersion).toBe(7);
 		const legacy = doc.legacyEditor as Record<string, unknown>;
 		expect(legacy.someOtherField).toBe("preserved");
 		expect(legacy.aspectRatio).toBeUndefined();
@@ -655,11 +655,11 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 	it("passes through a v5 doc with no legacyEditor at all (only the version bumps)", () => {
 		const v5 = makeV5Doc();
 		const doc = documentSchema.parse(migrateRawDocumentToCurrent(v5));
-		expect(doc.schemaVersion).toBe(6);
+		expect(doc.schemaVersion).toBe(7);
 		expect(doc.legacyEditor).toBeNull();
 	});
 
-	it("is idempotent — re-parsing an already-v6 document changes nothing", () => {
+	it("is idempotent — re-parsing an already-v7 document changes nothing", () => {
 		const once = documentSchema.parse(
 			migrateRawDocumentToCurrent(makeV5Doc({ legacyEditor: { aspectRatio: "16:9" } })),
 		);
@@ -709,7 +709,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 				legacyEditor: { aspectRatio: "native" },
 			}),
 		);
-		expect(doc.schemaVersion).toBe(6);
+		expect(doc.schemaVersion).toBe(7);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("native");
 	});
 
@@ -751,7 +751,7 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 				legacyEditor: { aspectRatio: "native" },
 			}),
 		);
-		expect(doc.schemaVersion).toBe(6);
+		expect(doc.schemaVersion).toBe(7);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("9:16");
 	});
 
@@ -795,7 +795,170 @@ describe("v5 -> v6 native AspectRatio migration", () => {
 				legacyEditor: { aspectRatio: "native" },
 			}),
 		);
-		expect(doc.schemaVersion).toBe(6);
+		expect(doc.schemaVersion).toBe(7);
 		expect((doc.legacyEditor as Record<string, unknown>).aspectRatio).toBe("8:9");
+	});
+});
+
+// --- v6 -> v7 trim clip-anchor migration -------------------------------------
+// A v6 trim names only an asset, so on two clips over the same media it is ambiguous:
+// the transcript pane showed it twice, the ruler drew it on the first clip, and playback
+// cut it from both. The upgrade ventilates each stored trim into one anchored row per
+// clip it covers — a faithful restatement of what the document already rendered, but now
+// separately addressable so the user can delete the copy they did not mean.
+describe("v6 -> v7 trim clip-anchor migration", () => {
+	const v6Doc = (
+		clips: Array<Record<string, unknown>>,
+		trimRanges: Array<Record<string, unknown>>,
+	) => ({
+		schemaVersion: 6,
+		project: {
+			id: "p",
+			title: "t",
+			createdAt: "2026-01-01T00:00:00.000Z",
+			updatedAt: "2026-01-01T00:00:00.000Z",
+			primaryAssetId: "asset_1",
+		},
+		assets: [
+			{
+				id: "asset_1",
+				kind: "video",
+				label: "rec.mp4",
+				originalPath: "/rec.mp4",
+				durationSec: 12,
+				cameraTrack: null,
+			},
+		],
+		timeline: { clips, trimRanges },
+	});
+
+	const twoSharedClips = [
+		{
+			id: "clip_1",
+			assetId: "asset_1",
+			sourceStartSec: 0,
+			sourceEndSec: 12,
+			timelineStartSec: 0,
+			timelineEndSec: 12,
+			origin: "user",
+		},
+		{
+			id: "clip_2",
+			assetId: "asset_1",
+			sourceStartSec: 0,
+			sourceEndSec: 12,
+			timelineStartSec: 12,
+			timelineEndSec: 24,
+			origin: "user",
+		},
+	];
+
+	const trimsOf = (raw: unknown) =>
+		((raw as Record<string, unknown>).timeline as Record<string, unknown>).trimRanges as Array<
+			Record<string, unknown>
+		>;
+
+	it("anchors a trim to the single clip that covers it", () => {
+		const out = migrateRawDocumentToCurrent(
+			v6Doc(
+				[twoSharedClips[0]],
+				[{ id: "t1", assetId: "asset_1", startSec: 3, endSec: 5, origin: "user", reason: "" }],
+			),
+		);
+		expect((out as Record<string, unknown>).schemaVersion).toBe(7);
+		expect(trimsOf(out)).toEqual([
+			{
+				id: "t1",
+				assetId: "asset_1",
+				clipId: "clip_1",
+				startSec: 3,
+				endSec: 5,
+				origin: "user",
+				reason: "",
+			},
+		]);
+	});
+
+	it("ventilates into one row per covering clip, preserving what the document rendered", () => {
+		const out = migrateRawDocumentToCurrent(
+			v6Doc(twoSharedClips, [
+				{ id: "t1", assetId: "asset_1", startSec: 3, endSec: 5, origin: "user", reason: "" },
+			]),
+		);
+		const trims = trimsOf(out);
+		expect(trims).toHaveLength(2);
+		// The first row keeps the original id, so anything already holding it still resolves.
+		expect(trims[0]).toMatchObject({ id: "t1", clipId: "clip_1", startSec: 3, endSec: 5 });
+		expect(trims[1]).toMatchObject({ clipId: "clip_2", startSec: 3, endSec: 5 });
+		expect(trims[1].id).not.toBe("t1");
+	});
+
+	it("clamps each row to its own clip's source window", () => {
+		const out = migrateRawDocumentToCurrent(
+			v6Doc(
+				[
+					{ ...twoSharedClips[0], sourceStartSec: 0, sourceEndSec: 6 },
+					{ ...twoSharedClips[1], sourceStartSec: 6, sourceEndSec: 12 },
+				],
+				[{ id: "t1", assetId: "asset_1", startSec: 4, endSec: 9, origin: "user", reason: "" }],
+			),
+		);
+		expect(trimsOf(out).map((t) => [t.clipId, t.startSec, t.endSec])).toEqual([
+			["clip_1", 4, 6],
+			["clip_2", 6, 9],
+		]);
+	});
+
+	it("keeps a trim that covers no clip rather than dropping user data", () => {
+		// `replaceTimeline` mints exactly these: the complement of the kept intervals, which
+		// lies outside every clip by construction.
+		const out = migrateRawDocumentToCurrent(
+			v6Doc(
+				[{ ...twoSharedClips[0], sourceStartSec: 0, sourceEndSec: 3 }],
+				[{ id: "t1", assetId: "asset_1", startSec: 8, endSec: 9, origin: "user", reason: "" }],
+			),
+		);
+		expect(trimsOf(out)).toEqual([
+			{ id: "t1", assetId: "asset_1", startSec: 8, endSec: 9, origin: "user", reason: "" },
+		]);
+	});
+
+	it("leaves an unprobed clip's trims un-anchored (no real window to clamp against)", () => {
+		const out = migrateRawDocumentToCurrent(
+			v6Doc(
+				[{ ...twoSharedClips[0], sourceStartSec: 0, sourceEndSec: undefined }],
+				[{ id: "t1", assetId: "asset_1", startSec: 3, endSec: 5, origin: "user", reason: "" }],
+			),
+		);
+		expect(trimsOf(out)[0].clipId).toBeUndefined();
+	});
+
+	it("is idempotent — an already-anchored trim is left alone", () => {
+		const once = migrateRawDocumentToCurrent(
+			v6Doc(twoSharedClips, [
+				{ id: "t1", assetId: "asset_1", startSec: 3, endSec: 5, origin: "user", reason: "" },
+			]),
+		);
+		expect(migrateRawDocumentToCurrent(once)).toEqual(once);
+	});
+
+	it("survives a malformed clip entry instead of failing the whole project load", () => {
+		const out = migrateRawDocumentToCurrent(
+			v6Doc(
+				[null as unknown as Record<string, unknown>, twoSharedClips[1]],
+				[{ id: "t1", assetId: "asset_1", startSec: 3, endSec: 5, origin: "user", reason: "" }],
+			),
+		);
+		expect(trimsOf(out)).toEqual([
+			{
+				id: "t1",
+				assetId: "asset_1",
+				clipId: "clip_2",
+				startSec: 3,
+				endSec: 5,
+				origin: "user",
+				reason: "",
+			},
+		]);
 	});
 });

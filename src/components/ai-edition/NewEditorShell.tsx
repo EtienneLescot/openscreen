@@ -34,6 +34,7 @@ import {
 	type UnsavedChoice,
 } from "./Modals";
 import { Preview } from "./Preview";
+import type { TrimTarget } from "./RightPanes";
 import v4 from "./v4/EditorShellV4.module.css";
 import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
 import { type Facet, FloatingInspector } from "./v4/FloatingInspector";
@@ -574,8 +575,17 @@ export function NewEditorShell() {
 	// apps/web/src/App.tsx. The serialised save + inside-the-chain doc
 	// read is owned by `useSequentialTimelineOps` above.
 	const handleAddTrimRange = useCallback(
-		(assetId: string, startSec: number, endSec: number, reason: string) => {
-			void applyTimelineOp({ type: "add_trim_range", assetId, startSec, endSec, reason });
+		(target: TrimTarget, startSec: number, endSec: number, reason: string) => {
+			// `clipId` is what keeps the cut on the block the user typed in: with two clips
+			// over the same media, an asset-only trim showed up on both (see `trimAppliesToClip`).
+			void applyTimelineOp({
+				type: "add_trim_range",
+				assetId: target.assetId,
+				clipId: target.clipId,
+				startSec,
+				endSec,
+				reason,
+			});
 		},
 		[applyTimelineOp],
 	);

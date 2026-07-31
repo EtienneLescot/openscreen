@@ -3,6 +3,7 @@ import type { AxcutAsset, AxcutClip, AxcutTranscript, AxcutTrimRange } from "../
 import {
 	buildAggregatedSections,
 	buildClipSection,
+	clipWordId,
 	findCueWordId,
 	isSilenceWord,
 } from "./aggregated-transcript";
@@ -39,12 +40,15 @@ function makeTranscript(words: AxcutTranscript["words"]): AxcutTranscript {
 
 function makeTrim(overrides: Partial<AxcutTrimRange>): AxcutTrimRange {
 	return {
-		id: overrides.id ?? "trim_1",
-		assetId: overrides.assetId ?? "asset_1",
-		startSec: overrides.startSec ?? 0,
-		endSec: overrides.endSec ?? 0,
-		origin: overrides.origin ?? "user",
-		reason: overrides.reason ?? "",
+		id: "trim_1",
+		assetId: "asset_1",
+		startSec: 0,
+		endSec: 0,
+		origin: "user",
+		reason: "",
+		// Spread, not a field-by-field pick: the pick silently dropped any field it did
+		// not name, so `clipId` never reached the code under test.
+		...overrides,
 	};
 }
 
@@ -117,6 +121,56 @@ describe("buildClipSection", () => {
 			trimId: "trim_b",
 			startWordIndex: 3,
 			endWordIndex: 3,
+		});
+	});
+
+	// The repro: one media, two clips, same source window. `assetId` + source overlap
+	// matches both, so before trims carried a clip anchor the cut showed up on the clip
+	// the user never touched — and the bin icon on that phantom run deleted the real one.
+	describe("two clips over the same media", () => {
+		const words = () => [
+			{ id: "w1", segmentId: "s1", startSec: 0, endSec: 1, text: "a" },
+			{ id: "w2", segmentId: "s1", startSec: 1, endSec: 2, text: "b" },
+			{ id: "w3", segmentId: "s1", startSec: 2, endSec: 3, text: "c" },
+		];
+		const clip1 = () => makeClip({ id: "clip_1", sourceStartSec: 0, sourceEndSec: 3 });
+		const clip2 = () =>
+			makeClip({
+				id: "clip_2",
+				sourceStartSec: 0,
+				sourceEndSec: 3,
+				timelineStartSec: 3,
+				timelineEndSec: 6,
+			});
+
+		it("marks the words removed only in the clip the trim is anchored to", () => {
+			const trim = makeTrim({ id: "trim_c2", clipId: "clip_2", startSec: 1, endSec: 2 });
+			const sections = buildAggregatedSections(
+				[clip1(), clip2()],
+				[makeTranscript(words())],
+				[makeAsset()],
+				[trim],
+			);
+
+			expect(sections[0].words.map((cw) => cw.kept)).toEqual([true, true, true]);
+			expect(sections[0].trimRuns).toHaveLength(0);
+			expect(sections[1].words.map((cw) => cw.kept)).toEqual([true, false, true]);
+			expect(sections[1].trimRuns).toHaveLength(1);
+			expect(sections[1].trimRuns[0]).toMatchObject({ trimId: "trim_c2", startWordIndex: 1 });
+		});
+
+		it("still marks both clips for a pre-v7 trim that names no clip", () => {
+			// Back-compat: an un-anchored row keeps the asset-wide meaning it had, so an
+			// existing document reads exactly as it did before the anchor was introduced.
+			const trim = makeTrim({ id: "trim_legacy", startSec: 1, endSec: 2 });
+			const sections = buildAggregatedSections(
+				[clip1(), clip2()],
+				[makeTranscript(words())],
+				[makeAsset()],
+				[trim],
+			);
+			expect(sections[0].trimRuns).toHaveLength(1);
+			expect(sections[1].trimRuns).toHaveLength(1);
 		});
 	});
 
@@ -278,6 +332,7 @@ describe("findCueWordId", () => {
 			asset: makeAsset({ id: assetId }),
 			transcript: null,
 			words: wordTimes.map(([id, start, end]) => ({
+				id: clipWordId(clipId, id),
 				word: { id, segmentId: "s1", startSec: start, endSec: end, text: id },
 				kept: true,
 				trimId: null,
@@ -303,7 +358,7 @@ describe("findCueWordId", () => {
 			["w2", 1, 2],
 			["w3", 2, 3],
 		]);
-		expect(findCueWordId([section], { assetId: "asset_1", sourceTimeSec: 1.5 })).toBe("w2");
+		expect(findCueWordId([section], { assetId: "asset_1", sourceTimeSec: 1.5 })).toBe("c1:w2");
 	});
 
 	it("returns the previous word when the cue is between two words", () => {
@@ -311,7 +366,7 @@ describe("findCueWordId", () => {
 			["w1", 0, 1],
 			["w2", 2, 3],
 		]);
-		expect(findCueWordId([section], { assetId: "asset_1", sourceTimeSec: 1.5 })).toBe("w1");
+		expect(findCueWordId([section], { assetId: "asset_1", sourceTimeSec: 1.5 })).toBe("c1:w1");
 	});
 
 	it("returns the previous word when the cue is before the first word", () => {
@@ -327,6 +382,94 @@ describe("findCueWordId", () => {
 			["w1", 0, 1],
 			["w2", 1, 2],
 		]);
-		expect(findCueWordId([section], { assetId: "asset_1", sourceTimeSec: 99 })).toBe("w2");
+		expect(findCueWordId([section], { assetId: "asset_1", sourceTimeSec: 99 })).toBe("c1:w2");
+	});
+
+	// Two clips over the same media project the SAME transcript words twice, so the cue
+	// has to be resolved against the clip that is actually playing. Matching on assetId
+	// alone always returned the first section — the highlight tracked clip 1 forever.
+	describe("two clips over the same media", () => {
+		const sections = () => [
+			makeSection("c1", "asset_1", [
+				["w1", 0, 1],
+				["w2", 1, 2],
+			]),
+			makeSection("c2", "asset_1", [
+				["w1", 0, 1],
+				["w2", 1, 2],
+			]),
+		];
+
+		it("resolves the cue against the clip that is playing", () => {
+			expect(
+				findCueWordId(sections(), { assetId: "asset_1", clipId: "c2", sourceTimeSec: 1.5 }),
+			).toBe("c2:w2");
+			expect(
+				findCueWordId(sections(), { assetId: "asset_1", clipId: "c1", sourceTimeSec: 1.5 }),
+			).toBe("c1:w2");
+		});
+
+		it("returns an id that cannot match the other clip's copy of the same word", () => {
+			const cue = findCueWordId(sections(), {
+				assetId: "asset_1",
+				clipId: "c2",
+				sourceTimeSec: 1.5,
+			});
+			// The whole point: `word.id` is "w2" in BOTH sections, so a bare word id lit up
+			// both blocks. Exactly one rendered word may claim the cue.
+			const claiming = sections().flatMap((s) => s.words.filter((cw) => cw.id === cue));
+			expect(claiming).toHaveLength(1);
+		});
+
+		it("falls back to the asset when the caller names no clip", () => {
+			expect(findCueWordId(sections(), { assetId: "asset_1", sourceTimeSec: 1.5 })).toBe("c1:w2");
+		});
+
+		it("returns null rather than another clip's words when the playing clip has none", () => {
+			const withEmptyC2 = [sections()[0], makeSection("c2", "asset_1", [])];
+			expect(
+				findCueWordId(withEmptyC2, { assetId: "asset_1", clipId: "c2", sourceTimeSec: 1.5 }),
+			).toBeNull();
+		});
+	});
+});
+
+describe("clipWordId", () => {
+	it("separates the same transcript word rendered in two clips", () => {
+		expect(clipWordId("clip_1", "w1")).not.toBe(clipWordId("clip_2", "w1"));
+	});
+
+	it("separates the per-clip silence tokens, which collide for ANY two clips", () => {
+		// `withSilenceGaps` numbers silences from 1 within each clip, so `silence_1` exists
+		// in every section — unrelated assets included.
+		expect(clipWordId("clip_1", "silence_1")).not.toBe(clipWordId("clip_2", "silence_1"));
+	});
+
+	it("gives buildClipSection words ids unique across the whole pane", () => {
+		const transcript = makeTranscript([
+			{ id: "w1", segmentId: "s1", startSec: 0, endSec: 1, text: "a" },
+			// 1s gap → a `silence_1` pseudo-word in each section.
+			{ id: "w2", segmentId: "s1", startSec: 2, endSec: 3, text: "b" },
+		]);
+		const sections = buildAggregatedSections(
+			[
+				makeClip({ id: "clip_1", sourceStartSec: 0, sourceEndSec: 3 }),
+				makeClip({
+					id: "clip_2",
+					sourceStartSec: 0,
+					sourceEndSec: 3,
+					timelineStartSec: 3,
+					timelineEndSec: 6,
+				}),
+			],
+			[transcript],
+			[makeAsset()],
+			[],
+		);
+		const rawIds = sections.flatMap((s) => s.words.map((cw) => cw.word.id));
+		const scopedIds = sections.flatMap((s) => s.words.map((cw) => cw.id));
+		// The raw ids collide across the two sections; the scoped ones do not.
+		expect(new Set(rawIds).size).toBeLessThan(rawIds.length);
+		expect(new Set(scopedIds).size).toBe(scopedIds.length);
 	});
 });

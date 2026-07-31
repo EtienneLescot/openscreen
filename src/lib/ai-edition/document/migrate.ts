@@ -143,6 +143,10 @@ export function migrateProjectDataToAxcutDocument(
 			}
 		: null;
 
+	// Anchored to `clip` right here rather than left to `upgradeV6DocumentToV7`: a v2
+	// project has exactly one clip, so the clip is known and unambiguous, and the upgrader
+	// could not do it anyway — the clip it mints has no source extent yet (the duration only
+	// arrives once the renderer probes the file), and anchoring needs a real window.
 	const trimRanges: AxcutTrimRange[] = primaryAssetId
 		? trimRegions
 				.filter((region) => region && typeof region.id === "string")
@@ -152,6 +156,7 @@ export function migrateProjectDataToAxcutDocument(
 					return {
 						id: createId("trim"),
 						assetId: primaryAssetId,
+						...(clip ? { clipId: clip.id } : {}),
 						startSec: clampSec(msToSec(startMs)),
 						endSec: clampSec(msToSec(endMs)),
 						origin: "user" as const,

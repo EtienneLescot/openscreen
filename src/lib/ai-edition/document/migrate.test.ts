@@ -48,7 +48,7 @@ describe("migrateProjectDataToAxcutDocument", () => {
 	it("produces a v3 document with one asset and one clip from a v2 single-recording project", () => {
 		const doc = migrateProjectDataToAxcutDocument(makeV2Project());
 
-		expect(doc.schemaVersion).toBe(6);
+		expect(doc.schemaVersion).toBe(7);
 		expect(doc.assets).toHaveLength(1);
 		const asset = doc.assets[0];
 		expect(asset.kind).toBe("video");
@@ -388,7 +388,7 @@ describe("migrateRawDocumentToCurrent", () => {
 		};
 	}
 
-	it("upgrades a v3 document to v6 (cameraTrack relocated onto the primary asset)", () => {
+	it("upgrades a v3 document to v7 (cameraTrack relocated onto the primary asset)", () => {
 		// Models the full load path: every disk-read site runs the helper, then
 		// the schema parse fills in defaults (cameraTrack: null on non-target
 		// assets). The helper alone is just the upgrader chain; the schema is
@@ -406,13 +406,13 @@ describe("migrateRawDocumentToCurrent", () => {
 				}),
 			),
 		);
-		expect(migrated.schemaVersion).toBe(6);
+		expect(migrated.schemaVersion).toBe(7);
 		expect((migrated as Record<string, unknown>).cameraTrack).toBeUndefined();
 		expect(migrated.assets[0].cameraTrack).toBeNull();
 		expect(migrated.assets[1].cameraTrack?.sourcePath).toBe("/cam.mp4");
 	});
 
-	it("upgrades a v4 document to v6 (anchors modifiers onto clips)", () => {
+	it("upgrades a v4 document to v7 (anchors modifiers onto clips)", () => {
 		const migrated = migrateRawDocumentToCurrent(
 			makeV4Doc({
 				zoomRanges: [
@@ -420,7 +420,7 @@ describe("migrateRawDocumentToCurrent", () => {
 				],
 			}),
 		) as Record<string, unknown>;
-		expect(migrated.schemaVersion).toBe(6);
+		expect(migrated.schemaVersion).toBe(7);
 		const zooms = migrated.zoomRanges as Array<Record<string, unknown>>;
 		expect(zooms).toHaveLength(1);
 		expect(zooms[0]).toMatchObject({ id: "z1", clipId: "c1", depth: 3 });
@@ -428,12 +428,12 @@ describe("migrateRawDocumentToCurrent", () => {
 
 	it("is a no-op for an already-current document (returns an equal value)", () => {
 		const v5 = makeV4Doc(); // makeV4Doc's body is the v5-compatible shape
-		const once = migrateRawDocumentToCurrent({ ...v5, schemaVersion: 6 });
+		const once = migrateRawDocumentToCurrent({ ...v5, schemaVersion: 7 });
 		// ponytail: the upgrader chain checks schemaVersion and returns the input
 		// unchanged, so the round-trip allocation is bounded to a property
 		// comparison per upgrader — the same per-parse overhead the old
 		// `z.preprocess` carried.
-		expect(once).toEqual({ ...v5, schemaVersion: 6 });
+		expect(once).toEqual({ ...v5, schemaVersion: 7 });
 	});
 
 	it("passes non-document input through unchanged (the schema is the gate, not this helper)", () => {

@@ -36,6 +36,10 @@ export type AxcutTimelineOperation =
 	| {
 			type: "add_trim_range";
 			assetId?: string;
+			/** Clip the cut was authored on — the v7 anchor. Omit only when the caller
+			 *  genuinely has no clip context; the trim then keeps the pre-v7 asset-wide
+			 *  meaning (see `trimAppliesToClip`). */
+			clipId?: string;
 			startSec: number;
 			endSec: number;
 			reason?: string;
@@ -172,15 +176,29 @@ export function applyTimelineOperation(
 			if (!assetId) return { document, summary: "no asset to trim" };
 			const lo = Math.max(0, Math.min(op.startSec, op.endSec));
 			const hi = Math.max(lo, Math.max(op.startSec, op.endSec));
-			// BUG corrigé : `merged` (calculé UNIQUEMENT à partir des trims de CET assetId)
+			// The new cut is normalized together with the trims it can actually merge with,
+			// and ONLY those — the rest of the list must survive untouched.
+			//
+			// BUG corrigé (1) : `merged` (calculé UNIQUEMENT à partir des trims de CET assetId)
 			// remplaçait ensuite `document.timeline.trimRanges` EN ENTIER — les trims de tout
 			// autre asset (donc tout autre clip, dès qu'un projet a plus d'un enregistrement)
 			// disparaissaient silencieusement dès qu'on ajoutait un trim sur un asset différent.
-			// C'est exactement le "éditer le clip 2 efface les edits du clip 1" observé : les deux
-			// clips du repro pointent vers deux fichiers distincts. Il faut conserver les trims des
-			// AUTRES assets tels quels et ne remplacer que la tranche de CET asset.
-			const otherAssetsRanges = document.timeline.trimRanges.filter((s) => s.assetId !== assetId);
-			const existing = document.timeline.trimRanges.filter((s) => s.assetId === assetId);
+			//
+			// BUG corrigé (2) : même à assetId égal, fusionner par asset était trop large dès que
+			// DEUX CLIPS PARTAGENT LE MÊME MÉDIA. Les coupes du clip 1 et du clip 2 vivent dans la
+			// même plage de source ; les fusionner produisait une seule liste d'intervalles
+			// réappliquée aux deux clips — le trim posé sur le clip 2 apparaissait en double dans
+			// le transcript et sur le mauvais clip dans la timeline. La fusion est donc désormais
+			// bornée au GROUPE D'ANCRAGE : les trims du même clip quand on en connaît un, sinon
+			// les trims non ancrés du même asset (comportement pré-v7 conservé).
+			const groupKey = op.clipId ?? `asset:${assetId}`;
+			const keyOf = (s: { assetId: string; clipId?: string }) => s.clipId ?? `asset:${s.assetId}`;
+			const untouched = document.timeline.trimRanges.filter(
+				(s) => s.assetId !== assetId || keyOf(s) !== groupKey,
+			);
+			const existing = document.timeline.trimRanges.filter(
+				(s) => s.assetId === assetId && keyOf(s) === groupKey,
+			);
 			// ponytail: bound by the trim-range asset's duration, not the
 			// primary asset's. Recording projects can have a short primary
 			// asset (snippet) while the clip uses a long video — using
@@ -197,13 +215,16 @@ export function applyTimelineOperation(
 				timeline: {
 					...document.timeline,
 					trimRanges: [
-						...otherAssetsRanges,
+						...untouched,
 						...merged.map((iv, i) => ({
 							// ponytail: id scoped by assetId — plain `trim_${i+1}` collided across
 							// assets (two different assets could each mint "trim_1"), which would
 							// have made remove/update_trim_range act on the wrong asset's range by id.
-							id: `trim_${assetId}_${i + 1}`,
+							// Scoped by clipId when there is one, for the same reason one step down:
+							// two clips over one asset would otherwise mint the same ids.
+							id: `trim_${op.clipId ?? assetId}_${i + 1}`,
 							assetId,
+							...(op.clipId ? { clipId: op.clipId } : {}),
 							startSec: iv.startSec,
 							endSec: iv.endSec,
 							origin: "user" as const,

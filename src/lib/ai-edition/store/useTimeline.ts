@@ -27,7 +27,7 @@ import {
 	replacePillSpan,
 	resolvePillIds,
 } from "../timeline/timelineMap";
-import { resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
+import { dropTrimPillsByIds, resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
 import { useProjectStore } from "./projectStore";
 
@@ -233,6 +233,10 @@ export function useTimeline() {
 					{
 						id: createId("trim"),
 						assetId: resolved?.assetId ?? asset!.id,
+						// The carrier clip, so the cut lands on THAT clip and not on every clip
+						// sharing its media (see `trimAppliesToClip`). Absent only in the
+						// no-clip fallback below, where there is no clip to name.
+						...(resolved ? { clipId: resolved.clipId } : {}),
 						startSec: resolved?.sourceStartSec ?? playhead,
 						endSec: resolved?.sourceEndSec ?? playhead + 2,
 						reason: "manual",
@@ -338,12 +342,17 @@ export function useTimeline() {
 		await saveDocument(next);
 	}, [document, saveDocument]);
 
-	// Like updateTrimRange but also re-attaches the trim to a (possibly
-	// different) asset — needed when a trim is dragged across a clip boundary
-	// onto a clip backed by another asset. Callers resolve the timeline span to
-	// { assetId, sourceStartSec, sourceEndSec } via resolveTimelineSpanToTrim.
+	// Like updateTrimRange but also re-attaches the trim to a (possibly different) CLIP —
+	// needed when a trim is dragged across a clip boundary, whether or not the landing clip
+	// is backed by another asset. Re-pointing `clipId` as well as `assetId` is what makes a
+	// drag onto the second clip of a duplicated asset actually move the cut instead of
+	// leaving it on the first (the two are indistinguishable by asset + source range alone).
+	// Callers resolve the timeline span via `resolveTimelineSpanToTrim`.
 	const updateTrim = useCallback(
-		async (trimId: string, next: { assetId: string; startSec: number; endSec: number }) => {
+		async (
+			trimId: string,
+			next: { assetId: string; clipId?: string; startSec: number; endSec: number },
+		) => {
 			if (!document) return;
 			const s = finiteSec(next.startSec);
 			const e = finiteSec(next.endSec);
@@ -353,7 +362,13 @@ export function useTimeline() {
 					...document.timeline,
 					trimRanges: document.timeline.trimRanges.map((r) =>
 						r.id === trimId
-							? { ...r, assetId: next.assetId, startSec: Math.min(s, e), endSec: Math.max(s, e) }
+							? {
+									...r,
+									assetId: next.assetId,
+									clipId: next.clipId,
+									startSec: Math.min(s, e),
+									endSec: Math.max(s, e),
+								}
 							: r,
 					),
 				},
@@ -374,6 +389,7 @@ export function useTimeline() {
 			entries: Array<{
 				id: string;
 				assetId: string;
+				clipId?: string;
 				sourceStartSec: number;
 				sourceEndSec: number;
 			}>,
@@ -390,6 +406,10 @@ export function useTimeline() {
 				return {
 					id: e.id,
 					assetId: e.assetId,
+					// Ventilation names the covered clip per entry; carrying it through is what
+					// keeps a drag over two clips of the SAME media as two distinct cuts rather
+					// than one that lands on both.
+					clipId: e.clipId,
 					startSec: Math.min(s, en),
 					endSec: Math.max(s, en),
 					reason: prev?.reason ?? "manual",
@@ -680,7 +700,14 @@ export function useTimeline() {
 				annotations: dropPillsByIds(document.annotations, annotationIds),
 				timeline: {
 					...document.timeline,
-					trimRanges: document.timeline.trimRanges.filter((s) => !trimIds.has(s.id)),
+					// Whole-pill delete, same as the zoom/annotation lines above — a trim grown
+					// across a clip boundary is 2+ rows rendering as one stripe, and a bare id
+					// filter left the halves the selection didn't name still cutting.
+					trimRanges: dropTrimPillsByIds(
+						document.timeline.trimRanges,
+						document.timeline.clips,
+						trimIds,
+					),
 				},
 				legacyEditor:
 					speedIds.size > 0 || cameraFullscreenIds.size > 0

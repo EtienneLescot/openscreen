@@ -87,7 +87,50 @@ file rather than re-derived per kind:
 
 A kind with no properties (trim, full-camera) collapses to a constant identity, so its
 regions always merge — the long-standing trim behaviour, now derived from the general
-rule.
+rule. `clipId` is in `NON_IDENTITY_FIELDS` and must stay there: it says *where* a region
+is, never what it is, and a trim ventilated across a clip boundary is necessarily 2+ rows
+that have to keep rendering and deleting as ONE pill.
+
+### Trims carry a clip anchor too (v7)
+
+A trim is `{assetId, clipId?, startSec, endSec}` — `startSec`/`endSec` *are* its source
+window, so `clipId` was the only field it needed to become a clip-anchored region like
+any other. Before v7 it had none, and source time is per **asset**: two clips over the
+same media (a duplicated clip) share a coordinate space, so "which clip is this cut on?"
+had no answer and each reader invented one. That produced three symptoms from one cause —
+the transcript pane showed the cut on both clips, the ruler drew it on the first, and
+playback/export removed the span from both.
+
+`trimAppliesToClip`
+([`trim-mapping.ts`](../../src/lib/ai-edition/timeline/trim-mapping.ts)) is the single
+definition of that question; `buildClipSection`, `trimToTimelineSpan` and
+`resolvePlaybackSegments` all route through it. A trim with no `clipId` — pre-v7, or the
+inter-clip cuts `replaceTimeline` mints, which lie outside every clip by construction —
+keeps the historical asset-wide meaning, so old documents render unchanged.
+
+One asymmetry with the other kinds, on purpose: `trimToTimelineSpan` places an **anchored**
+trim on any *overlap* with its clip, but an **un-anchored** one only when the clip
+*contains* its start. Containment is doing the disambiguation in the un-anchored case;
+for an anchored trim it would be a second, stricter test that hides the pill of a cut
+`resolvePlaybackSegments` still applies — content removed with nothing on the ruler to
+click.
+
+### The same ambiguity in the transcript pane
+
+Two clips over one media do not only share a source coordinate space — they share the
+**transcript**, which also belongs to the asset. The pane renders one block per clip, so
+the same `AxcutWord` is projected twice and `word.id` names a moment in the media, not a
+thing on screen. `ClipWord.id` = `clipWordId(clip.id, word.id)`
+([`aggregated-transcript.ts`](../../src/lib/ai-edition/timeline/aggregated-transcript.ts))
+is the on-screen identity; the React key, `data-word-id`, the cue highlight and the caret
+anchor all use it, and `findCueWordId` selects its section by `cue.clipId` before
+returning one. The synthetic `[silence]` tokens make the scoping unconditional rather
+than a shared-media special case: `withSilenceGaps` numbers them from 1 inside each clip,
+so `silence_1` exists in every block regardless of asset.
+
+The caret/selection helpers at the bottom of `RightPanes.tsx` never parse that id — they
+read it off `data-word-id` and scope every query to one block's editor element, so they
+stay correct whatever the id looks like.
 
 ## Invariants
 

@@ -340,6 +340,11 @@ export const addTrimArgs = z.object({
 	startSec: secondsSchema,
 	endSec: secondsSchema,
 	assetId: z.string().min(1).optional(),
+	// A cut belongs to ONE clip. Without this, a project where two clips draw from the same
+	// asset (a duplicated clip) cannot say which of them the model meant, and the cut lands
+	// on both. Resolved from the source range when the model omits it and only one clip
+	// matches; ambiguity is reported back rather than guessed.
+	clipId: z.string().min(1).optional(),
 	reason: z.string().default(""),
 });
 
@@ -601,6 +606,9 @@ export function documentSnapshotForModel(
 		trimRanges: document.timeline.trimRanges.map((s) => ({
 			id: s.id,
 			assetId: s.assetId,
+			// The clip the cut is on — the only thing separating two cuts over the same
+			// media. `null` is a pre-v7 cut that still applies to every clip of its asset.
+			clipId: s.clipId ?? null,
 			startSec: s.startSec,
 			endSec: s.endSec,
 			reason: s.reason,
@@ -872,9 +880,38 @@ export function executeAgentTool(
 			}
 			const startSec = Math.min(parsed.data.startSec, parsed.data.endSec);
 			const endSec = Math.max(parsed.data.startSec, parsed.data.endSec);
+
+			// Which clip the cut sits on. Named explicitly when the model says so; otherwise
+			// inferred from the source range — but only when the answer is unique. Two clips
+			// over the same asset covering that range is a real question the model has to
+			// answer (their ids are in the snapshot), not one to settle by picking the first.
+			const covering = document.timeline.clips.filter(
+				(c) =>
+					c.assetId === assetId &&
+					endSec > c.sourceStartSec &&
+					startSec < (c.sourceEndSec ?? Number.POSITIVE_INFINITY),
+			);
+			let clipId = parsed.data.clipId;
+			if (clipId) {
+				const target = document.timeline.clips.find((c) => c.id === clipId);
+				if (!target) return failure(`Unknown clip: ${clipId}`);
+				if (target.assetId !== assetId) {
+					return failure(`Clip ${clipId} does not use asset ${assetId}.`);
+				}
+			} else if (covering.length === 1) {
+				clipId = covering[0].id;
+			} else if (covering.length > 1) {
+				return failure(
+					`${covering.length} clips use asset ${assetId} over ${formatSec(startSec)} – ${formatSec(
+						endSec,
+					)} (${covering.map((c) => c.id).join(", ")}). Pass clipId to say which one to trim.`,
+				);
+			}
+
 			const trim = {
 				id: createId("trim"),
 				assetId,
+				...(clipId ? { clipId } : {}),
 				startSec,
 				endSec,
 				reason: parsed.data.reason,
@@ -904,12 +941,27 @@ export function executeAgentTool(
 			}
 			const startSec = Math.min(parsed.data.startSec, parsed.data.endSec);
 			const endSec = Math.max(parsed.data.startSec, parsed.data.endSec);
+			// Moving a cut out of the clip it is anchored to would leave it storing a range
+			// nothing plays — silently inert. Re-point it at the clip the new range actually
+			// lands in, but only when that clip is unique: with several candidates the old
+			// anchor is the better guess than an arbitrary one.
+			const reanchor = (trim: AxcutDocument["timeline"]["trimRanges"][number]) => {
+				if (!trim.clipId) return undefined;
+				const covers = (c: { sourceStartSec: number; sourceEndSec?: number }) =>
+					endSec > c.sourceStartSec && startSec < (c.sourceEndSec ?? Number.POSITIVE_INFINITY);
+				const current = document.timeline.clips.find((c) => c.id === trim.clipId);
+				if (current && covers(current)) return trim.clipId;
+				const candidates = document.timeline.clips.filter(
+					(c) => c.assetId === trim.assetId && covers(c),
+				);
+				return candidates.length === 1 ? candidates[0].id : trim.clipId;
+			};
 			const next: AxcutDocument = {
 				...document,
 				timeline: {
 					...document.timeline,
 					trimRanges: document.timeline.trimRanges.map((r) =>
-						r.id === trimRangeId ? { ...r, startSec, endSec } : r,
+						r.id === trimRangeId ? { ...r, clipId: reanchor(r), startSec, endSec } : r,
 					),
 				},
 			};

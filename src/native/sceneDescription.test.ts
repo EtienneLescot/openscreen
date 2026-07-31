@@ -64,7 +64,7 @@ function makeDoc(
 	const createdAt = "2024-01-01T00:00:00.000Z";
 	const baseProject = { id: "p1", title: "Test", createdAt, updatedAt: createdAt };
 	return {
-		schemaVersion: 6,
+		schemaVersion: 7,
 		project: {
 			...baseProject,
 			...(overrides.project ?? {}),

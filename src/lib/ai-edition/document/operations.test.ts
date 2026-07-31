@@ -116,6 +116,128 @@ describe("applyTimelineOperation.add_trim_range", () => {
 		expect(afterSecond.timeline.trimRanges.filter((s) => s.assetId === "asset_1")).toHaveLength(1);
 		expect(afterSecond.timeline.trimRanges.filter((s) => s.assetId === "asset_2")).toHaveLength(1);
 	});
+
+	// The harder version of the test above: the two clips share ONE asset, so the trims
+	// live in the same source coordinate space. Merging by asset (what the code did) folded
+	// two distinct user edits into one interval list that was then re-applied to both clips.
+	describe("two clips over the same media", () => {
+		function docWithTwins(): AxcutDocument {
+			const doc = makeDoc();
+			return {
+				...doc,
+				timeline: {
+					...doc.timeline,
+					clips: [
+						...doc.timeline.clips,
+						{
+							id: "clip_2",
+							assetId: "asset_1",
+							sourceStartSec: 0,
+							sourceEndSec: 60,
+							timelineStartSec: 60,
+							timelineEndSec: 120,
+							wordRefs: [],
+							origin: "user",
+							reason: "",
+						},
+					],
+				},
+			};
+		}
+
+		it("anchors the cut to the clip the caller names", () => {
+			const next = applyTimelineOperation(docWithTwins(), {
+				type: "add_trim_range",
+				assetId: "asset_1",
+				clipId: "clip_2",
+				startSec: 3,
+				endSec: 5,
+			}).document;
+			expect(next.timeline.trimRanges).toHaveLength(1);
+			expect(next.timeline.trimRanges[0]).toMatchObject({
+				assetId: "asset_1",
+				clipId: "clip_2",
+				startSec: 3,
+				endSec: 5,
+			});
+		});
+
+		it("keeps each clip's cuts separate instead of merging them by asset", () => {
+			const afterFirst = applyTimelineOperation(docWithTwins(), {
+				type: "add_trim_range",
+				assetId: "asset_1",
+				clipId: "clip_1",
+				startSec: 3,
+				endSec: 5,
+			}).document;
+			// Same source range on the twin. Asset-scoped merging collapsed this into the
+			// row above, so one of the two edits vanished and the survivor cut both clips.
+			const afterSecond = applyTimelineOperation(afterFirst, {
+				type: "add_trim_range",
+				assetId: "asset_1",
+				clipId: "clip_2",
+				startSec: 3,
+				endSec: 5,
+			}).document;
+			expect(afterSecond.timeline.trimRanges).toHaveLength(2);
+			expect(afterSecond.timeline.trimRanges.map((s) => s.clipId).sort()).toEqual([
+				"clip_1",
+				"clip_2",
+			]);
+			// Ids must not collide either — they used to be keyed by asset alone.
+			expect(new Set(afterSecond.timeline.trimRanges.map((s) => s.id)).size).toBe(2);
+		});
+
+		it("still merges touching cuts on the SAME clip into one row", () => {
+			const afterFirst = applyTimelineOperation(docWithTwins(), {
+				type: "add_trim_range",
+				assetId: "asset_1",
+				clipId: "clip_1",
+				startSec: 3,
+				endSec: 5,
+			}).document;
+			const afterSecond = applyTimelineOperation(afterFirst, {
+				type: "add_trim_range",
+				assetId: "asset_1",
+				clipId: "clip_1",
+				startSec: 5,
+				endSec: 7,
+			}).document;
+			expect(afterSecond.timeline.trimRanges).toHaveLength(1);
+			expect(afterSecond.timeline.trimRanges[0]).toMatchObject({ startSec: 3, endSec: 7 });
+		});
+
+		it("leaves a pre-v7 un-anchored cut alone when adding an anchored one", () => {
+			const withLegacy: AxcutDocument = (() => {
+				const doc = docWithTwins();
+				return {
+					...doc,
+					timeline: {
+						...doc.timeline,
+						trimRanges: [
+							{
+								id: "legacy",
+								assetId: "asset_1",
+								startSec: 3,
+								endSec: 5,
+								origin: "user" as const,
+								reason: "",
+							},
+						],
+					},
+				};
+			})();
+			const next = applyTimelineOperation(withLegacy, {
+				type: "add_trim_range",
+				assetId: "asset_1",
+				clipId: "clip_2",
+				startSec: 3,
+				endSec: 5,
+			}).document;
+			expect(next.timeline.trimRanges).toHaveLength(2);
+			expect(next.timeline.trimRanges.find((s) => s.id === "legacy")).toBeDefined();
+		});
+	});
 });
 
 describe("applyTimelineOperation.drop_range", () => {

@@ -15,6 +15,7 @@
 // kept word; the user or the LLM decides what to mark as skipped.
 
 import type { AxcutAsset, AxcutClip, AxcutTranscript, AxcutTrimRange, AxcutWord } from "../schema";
+import { trimAppliesToClip } from "./trim-mapping";
 
 /** Gaps between words at least this long are surfaced as a `[silence]` token. */
 export const SILENCE_THRESHOLD_SEC = 0.2;
@@ -77,8 +78,25 @@ export interface TrimRun {
 	durationSec: number;
 }
 
+/**
+ * This word AS RENDERED IN THIS CLIP. A transcript belongs to an ASSET, so two clips over
+ * the same media project the very same `AxcutWord` twice; `word.id` therefore identifies
+ * a moment in the media, never a thing on screen. Anything that points AT the rendered
+ * word — the React key, `data-word-id`, the cue highlight, the caret anchor — must use
+ * this instead, or it addresses both copies at once.
+ *
+ * Silence pseudo-words make this unconditional rather than a shared-media special case:
+ * `withSilenceGaps` numbers them from 1 per clip, so `silence_1` collides between ANY two
+ * clips, related assets or not.
+ */
+export function clipWordId(clipId: string, wordId: string): string {
+	return `${clipId}:${wordId}`;
+}
+
 /** One word in the clip's source range, tagged kept / removed. */
 export interface ClipWord {
+	/** {@link clipWordId} — the word's identity *in this clip*, unique across the pane. */
+	id: string;
 	word: AxcutWord;
 	/** Whether the word is inside a trimRange for this clip's asset. */
 	kept: boolean;
@@ -120,9 +138,12 @@ export function buildClipSection(
 	asset: AxcutAsset | null,
 	trimRanges: AxcutTrimRange[],
 ): ClipSection {
+	// `trimAppliesToClip` — not a bare `assetId` match — is what keeps a cut on the
+	// second of two clips over the same media from also greying out the first one's
+	// words. Same media, same source range: only the clip anchor tells them apart.
 	const clipTrims = trimRanges.filter(
 		(trim) =>
-			trim.assetId === clip.assetId &&
+			trimAppliesToClip(trim, clip) &&
 			trim.endSec > clip.sourceStartSec &&
 			trim.startSec < (clip.sourceEndSec ?? Infinity),
 	);
@@ -137,6 +158,7 @@ export function buildClipSection(
 	const tagged: ClipWord[] = words.map((word) => {
 		const covering = findCoveringTrim(word, clipTrims);
 		return {
+			id: clipWordId(clip.id, word.id),
 			word,
 			kept: covering === null,
 			trimId: covering?.id ?? null,
@@ -213,41 +235,47 @@ export function buildAggregatedSections(
 /** Where the playback head currently is, in source time. */
 export interface CuePosition {
 	assetId: string;
-	/** Optional clip id filter (lets the caller restrict to a single clip). */
+	/** Which clip is playing — the primary selector for the cue's section. Source time is
+	 *  per asset, so `assetId` cannot separate two clips over one media; pass this whenever
+	 *  the caller knows it (the transcript pane always does). */
 	clipId?: string;
 	sourceTimeSec: number;
 }
 
 /**
- * Find the word in `sections` that the playback head is currently inside.
- * Used to highlight the active word and auto-scroll the transcript. Mirrors
- * axcut's `findCueWordId` in CurrentTranscriptView.
+ * Find the word in `sections` that the playback head is currently inside, as a
+ * {@link clipWordId} — NOT a bare `word.id`, which would name the same moment in every
+ * clip drawing on that media and light up all of them. Used to highlight the active word
+ * and auto-scroll the transcript. Mirrors axcut's `findCueWordId` in CurrentTranscriptView.
  *
  *   - If the head is before the first word → null.
  *   - If the head is between two words        → the previous word (so the
  *     highlight "sticks" until the next word starts).
  *   - Silence tokens (id starts with `silence_`) are skipped over so a
  *     long pause doesn't surface a fake cue word.
+ *
+ * The section is chosen by `cue.clipId` when the caller knows which clip is playing.
+ * Matching on `assetId` alone always resolved to the FIRST section of that asset, so with
+ * a clip duplicated on the timeline the cue tracked clip 1 while clip 2 played. `assetId`
+ * stays as the fallback for callers that have no clip in hand.
  */
 export function findCueWordId(sections: ClipSection[], cue: CuePosition | null): string | null {
 	if (!cue) return null;
-	const assetMatch = sections
-		.filter((s) => s.words.length > 0)
-		.find((s) => s.clip.assetId === cue.assetId);
-	if (!assetMatch) return null;
-	// ponytail: clipId is part of the cue position for future use, but the
-	// word-id projection already encodes clipId in the prefix; the
-	// current iteration just walks every word in the asset. If we need
-	// clip-scoped lookup later, store the clip id on each ClipWord.
-	const pool = assetMatch.words;
+	const withWords = sections.filter((s) => s.words.length > 0);
+	// No fallback when `clipId` is given but that clip has no transcript: the playing clip
+	// simply has no cue word, and borrowing another clip's would point at the wrong text.
+	const match = cue.clipId
+		? withWords.find((s) => s.clip.id === cue.clipId)
+		: withWords.find((s) => s.clip.assetId === cue.assetId);
+	if (!match) return null;
 
 	const t = cue.sourceTimeSec;
 	let previous: string | null = null;
-	for (const cw of pool) {
-		if (cw.word.id.startsWith("silence_")) continue;
+	for (const cw of match.words) {
+		if (isSilenceWord(cw.word)) continue;
 		if (t < cw.word.startSec) return previous;
-		if (t >= cw.word.startSec && t <= cw.word.endSec) return cw.word.id;
-		previous = cw.word.id;
+		if (t >= cw.word.startSec && t <= cw.word.endSec) return cw.id;
+		previous = cw.id;
 	}
 	return previous;
 }

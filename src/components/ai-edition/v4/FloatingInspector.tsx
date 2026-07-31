@@ -978,16 +978,17 @@ function SelectionPane({ tl, onClose }: { tl: TimelineApi; onClose: () => void }
 	}
 
 	// trim — a trim ventilated across a clip boundary is 2+ DSL rows that render
-	// as one coalesced pill (see V4Timeline's trimPills); the inspector must
-	// resolve the clicked id back to its whole group so the shown duration and
-	// the delete button act on all of it, not just the one row that was clicked.
+	// as one coalesced pill (see V4Timeline's trimPills), so the DURATION shown has to be
+	// the group's, not the clicked row's. Deleting no longer needs the same expansion here:
+	// `removeRegion` drops the whole pill for every kind (`dropTrimPillsByIds`), which is
+	// what this pane used to have to arrange for itself.
 	const trimGroup = coalescedTrimGroups(tl.trimRanges, tl.clips).find((g) =>
 		g.ids.includes(selection.id),
 	);
 	if (!trimGroup) return null;
 	const durationSec = Math.max(0, trimGroup.end - trimGroup.start);
 	const deleteTrimGroup = () => {
-		void tl.removeRegions(trimGroup.ids.map((id) => ({ kind: "trim" as const, id })));
+		void tl.removeRegion("trim", selection.id);
 		onClose();
 	};
 	return (

@@ -33,7 +33,12 @@ import { anchorRegionsWithDerivedMs } from "../timeline/timelineMap";
 //      actually known; otherwise it leaves the sentinel, which keeps resolving
 //      dynamically at runtime. See `upgradeV5DocumentToV6` for why guessing
 //      would corrupt v1.7 imports.
-export const axcutSchemaVersion = 6;
+//   6. v7 — trims join the v5 clip anchor: `AxcutTrimRange` gains `clipId`.
+//      They were the last region kind still addressed by `assetId` alone, which
+//      made them AMBIGUOUS the moment two clips drew from the same asset (a
+//      duplicated clip): every reader either matched both clips or picked the
+//      first. See `upgradeV6DocumentToV7`.
+export const axcutSchemaVersion = 7;
 
 // ponytail: every region schema shares the same monotonicity rule
 // (end >= start) with the same error shape. Factor the refine so the
@@ -199,10 +204,18 @@ export const rangeSchema = endGteStart(
 
 // ponytail: trimRanges reference asset source-time (not timeline). trimRegions
 // in v2 are the inverse — a skip = the region inside the source we DON'T keep.
+//
+// `startSec`/`endSec` ARE the source range of `clipAnchorShape` under their older
+// names, so a trim needs only `clipId` to become a complete v5 clip anchor. Optional
+// for the same reason it is on the other kinds: a trim that could not be anchored
+// (`upgradeV6DocumentToV7`) is kept, not dropped, and falls back to the historical
+// asset-wide matching. Everything that asks "does this trim apply to this clip?" must
+// go through `trimAppliesToClip` (timeline/trim-mapping) so the two rules stay one rule.
 export const trimRangeSchema = endGteStart(
 	z.object({
 		id: z.string().min(1),
 		assetId: z.string().min(1),
+		clipId: z.string().min(1).optional(),
 		startSec: z.number().nonnegative(),
 		endSec: z.number().nonnegative(),
 		reason: z.string().default(""),
@@ -259,6 +272,10 @@ export const timelineOperationSchema = z.discriminatedUnion("type", [
 		type: z.literal("add_trim_range"),
 		reason: z.string().default(""),
 		assetId: z.string().min(1),
+		// Which clip the cut was authored on. Optional so callers that genuinely have no
+		// clip context still work, but every UI path knows it — without it a trim on the
+		// second clip of a duplicated asset is indistinguishable from one on the first.
+		clipId: z.string().min(1).optional(),
 		startSec: z.number().nonnegative(),
 		endSec: z.number().nonnegative(),
 	}),
@@ -658,6 +675,76 @@ function upgradeV5DocumentToV6(raw: unknown): unknown {
 }
 
 /**
+ * v6 → v7 — trims become CLIP-ANCHORED, the last region kind that wasn't.
+ *
+ * A v6 trim says only "this source span of this asset is cut". That is unambiguous while
+ * one asset backs one clip, and ambiguous the moment it doesn't: with two clips over the
+ * same media every reader had to guess, and each guessed differently — the transcript pane
+ * showed the cut on BOTH clips, the ruler drew it on the FIRST, and playback/export removed
+ * the span from BOTH. Anchoring the trim to the clip it was authored on removes the guess.
+ *
+ * The upgrade VENTILATES rather than picks: a stored trim is replaced by one anchored entry
+ * per clip it currently covers, each clamped to that clip's source window. That is a
+ * faithful restatement of what the document already renders (a v6 trim really did cut every
+ * clip of its asset), so nothing about the output moves — but the entries are now separately
+ * addressable, which is what lets a user delete the copy on the clip they didn't mean.
+ * Mirrors `upgradeV4DocumentToV5`, which ventilated the other kinds the same way.
+ *
+ * A trim covering no clip is kept UNCHANGED rather than dropped — never lose user data.
+ * `replaceTimeline` mints exactly such trims (the inverted kept-intervals lie outside every
+ * clip by construction), and a document with no clips has nothing to anchor against.
+ * Un-anchored trims keep the v6 asset-wide behaviour via `trimAppliesToClip`.
+ */
+export function upgradeV6DocumentToV7(raw: unknown): unknown {
+	if (!raw || typeof raw !== "object") return raw;
+	const doc = raw as Record<string, unknown>;
+	if (doc.schemaVersion !== 6) return raw;
+
+	const timeline =
+		doc.timeline && typeof doc.timeline === "object" && !Array.isArray(doc.timeline)
+			? (doc.timeline as Record<string, unknown>)
+			: null;
+	const trims = timeline && Array.isArray(timeline.trimRanges) ? timeline.trimRanges : null;
+	const clips = (timeline && Array.isArray(timeline.clips)
+		? timeline.clips
+		: []) as unknown as AxcutClip[];
+	if (!timeline || !trims || clips.length === 0) return { ...doc, schemaVersion: 7 };
+
+	const anchored = trims.flatMap((entry) => {
+		if (!entry || typeof entry !== "object" || Array.isArray(entry)) return [entry];
+		const trim = entry as Record<string, unknown>;
+		// Already anchored (a re-run, or a doc written by a mixed-version chain): leave it.
+		if (typeof trim.clipId === "string") return [trim];
+		if (typeof trim.assetId !== "string") return [trim];
+		if (typeof trim.startSec !== "number" || typeof trim.endSec !== "number") return [trim];
+		const lo = Math.min(trim.startSec, trim.endSec);
+		const hi = Math.max(trim.startSec, trim.endSec);
+
+		const fragments = clips.flatMap((clip) => {
+			// `clips` is raw, untrusted input at this point (the schema parse runs after the
+			// upgrade chain), so a malformed entry must not take the whole project load down.
+			if (!clip || typeof clip !== "object" || typeof clip.id !== "string") return [];
+			if (clip.assetId !== trim.assetId) return [];
+			const clipEnd = clip.sourceEndSec ?? clip.sourceStartSec;
+			// An unprobed clip has no real window yet; anchoring against it would clamp the
+			// trim to nothing. Leave those to the un-anchored fallback (same reasoning as
+			// `rederiveRegionMs`, which refuses to clamp against an unprobed window).
+			if (clipEnd <= clip.sourceStartSec) return [];
+			const startSec = Math.max(lo, clip.sourceStartSec);
+			const endSec = Math.min(hi, clipEnd);
+			if (endSec <= startSec) return [];
+			return [{ ...trim, clipId: clip.id, startSec, endSec }];
+		});
+		if (fragments.length === 0) return [trim];
+		// The first fragment keeps the original id, so ids already held elsewhere (an undo
+		// entry, an in-flight `removeTrim`) still resolve; extras get fresh ones.
+		return fragments.map((f, i) => (i === 0 ? f : { ...f, id: createId("trim") }));
+	});
+
+	return { ...doc, schemaVersion: 7, timeline: { ...timeline, trimRanges: anchored } };
+}
+
+/**
  * Runs the whole upgrade chain on a raw, untrusted value. Idempotent: each step
  * is gated on an exact `schemaVersion`, so an already-current document passes
  * through untouched.
@@ -668,16 +755,18 @@ function upgradeV5DocumentToV6(raw: unknown): unknown {
  * not configure for the main bundle. Keep this module alias-free.
  */
 export function migrateRawDocumentToCurrent(raw: unknown): unknown {
-	return upgradeV5DocumentToV6(upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw)));
+	return upgradeV6DocumentToV7(
+		upgradeV5DocumentToV6(upgradeV4DocumentToV5(upgradeV3DocumentToV4(raw))),
+	);
 }
 
-// PURE v6 validation. Callers that read a document from disk (or any other
+// PURE v7 validation. Callers that read a document from disk (or any other
 // source that might carry an older `schemaVersion`) MUST run
 // `migrateRawDocumentToCurrent` on the raw value first. The previous
 // implementation wrapped this schema in a `z.preprocess` that re-ran the whole
-// v3→v4→v5→v6 chain on EVERY parse, including in-memory parses of documents that
+// v3→…→v7 chain on EVERY parse, including in-memory parses of documents that
 // were already current. Hoisting it to load time makes the in-memory parse a
-// single `z.literal(6)` + shape check.
+// single `z.literal(7)` + shape check.
 export const documentSchema = documentSchemaShape;
 
 export const createProjectInputSchema = z.object({

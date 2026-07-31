@@ -9,6 +9,7 @@ import {
 	anchorRegionsWithDerivedMs,
 	dropPillById,
 } from "../timeline/timelineMap";
+import { dropTrimPillsByIds, trimAppliesToClip } from "../timeline/trim-mapping";
 import { createId } from "./ids";
 
 /** The region families a delete can target by id. Shared with the store so "which kinds
@@ -158,13 +159,16 @@ export function subtractInterval(intervals: Interval[], cut: Interval): Interval
  * `document.timeline.clips`. Each clip's own `[sourceStartSec, sourceEndSec]` (its media
  * in/out, edited via the clip's own modal) is untouched as a concept; this only narrows the
  * WINDOW of it handed to playback for the trimmed stretch(es), via `subtractInterval`
- * (existing, tested — no new interval math). Trims are stored per-asset in source time
- * (`AxcutTrimRange`) and may already be ventilated into multiple entries by
+ * (existing, tested — no new interval math). Trims are stored in source time, anchored to
+ * a clip (`AxcutTrimRange`), and may already be ventilated into multiple entries by
  * `ventilateTimelineSpanToTrims` when the user drags one across a clip boundary — subtracting
- * by matching `assetId` against every clip naturally narrows however many clips that produces,
- * no special-casing. Everything else about the clip (id, assetId, webcam pairing/offset via
- * the asset, origin/reason) carries through unchanged, which is what makes this apply to the
- * webcam for free: webcam sync is derived from the clip's own asset, not recomputed here.
+ * per matching clip naturally narrows however many clips that produces, no special-casing.
+ * Matching goes through `trimAppliesToClip`, so a cut authored on the second of two clips
+ * over the same media narrows only that clip; matching on `assetId` alone removed the span
+ * from BOTH, which is the same wrong-clip class the ruler and the transcript pane had.
+ * Everything else about the clip (id, assetId, webcam pairing/offset via the asset,
+ * origin/reason) carries through unchanged, which is what makes this apply to the webcam for
+ * free: webcam sync is derived from the clip's own asset, not recomputed here.
  */
 export function resolvePlaybackSegments(
 	clips: AxcutClip[],
@@ -188,7 +192,7 @@ export function resolvePlaybackSegments(
 		}
 		let kept: Interval[] = [{ startSec: clip.sourceStartSec, endSec: sourceEnd }];
 		for (const trim of trimRanges) {
-			if (trim.assetId !== clip.assetId) continue;
+			if (!trimAppliesToClip(trim, clip)) continue;
 			kept = subtractInterval(kept, { startSec: trim.startSec, endSec: trim.endSec });
 		}
 		kept.forEach((iv, i) => {
@@ -773,6 +777,15 @@ export function moveClip(
 // ponytail: duplicate a clip (preserves the original). Used for "split this
 // clip into two" or "make a copy". Mirrors axcut's
 // apps/server/src/lib/timeline.ts#duplicateClip.
+//
+// The copy takes its own COPY of the original's trims, re-anchored to the new clip id.
+// Before trims carried a `clipId` this happened by accident — a trim matched on `assetId`,
+// so the duplicate (same asset) was born already cut the same way — and that accident is
+// the behaviour a user expects from "duplicate": an identical clip. Now that a trim names
+// its clip, the copy has to be made on purpose, and the two sets are independent
+// afterwards, which is the point: editing the copy's cut no longer edits the original's.
+// Only ANCHORED trims are copied — an un-anchored one already reaches the copy through
+// the asset-wide fallback, so copying it would cut the same span twice.
 export function duplicateClip(
 	document: AxcutDocument,
 	clipId: string,
@@ -793,11 +806,15 @@ export function duplicateClip(
 	const oldClips = document.timeline.clips;
 	const next = [...oldClips.slice(0, index + 1), copy, ...oldClips.slice(index + 1)];
 	const newClips = resequenceClips(next);
+	const copiedTrims = document.timeline.trimRanges
+		.filter((t) => t.clipId === original.id)
+		.map((t) => ({ ...t, id: createId("trim"), clipId: copy.id }));
 	const updatedDoc: AxcutDocument = {
 		...document,
 		timeline: {
 			...document.timeline,
 			clips: newClips,
+			trimRanges: [...document.timeline.trimRanges, ...copiedTrims],
 		},
 	};
 	return rederiveRegionMs(updatedDoc, newClips);
@@ -841,9 +858,13 @@ export function setClipSourceRange(
 /**
  * The single mutator for "delete a region by id" — the edit the UI's delete key and the
  * LLM's `removeTrim` / `removeModifier` tools all perform. Extracted here (like
- * `setClipSourceRange`) so the recipe lives in one place: a `trim` is a plain filter on the
- * source-time cut list; every other kind is a pill (`dropPillById` removes every region that
- * renders as the same pill as `id`, per the merge rule). Speed / camera-fullscreen live under
+ * `setClipSourceRange`) so the recipe lives in one place: EVERY kind deletes the whole
+ * pill, i.e. every row that renders as one stripe with `id` under the merge rule. Modifiers
+ * go through `dropPillById`; trims need `dropTrimPillsByIds` instead, because `dropPillById`
+ * keys off `startMs`/`endMs` and a trim stores `startSec`/`endSec` plus a `clipId` anchor —
+ * different storage, same rule. Trims used to be the exception here (a bare id filter), so a
+ * cut grown across a clip boundary — necessarily 2+ rows — lost only the row that was
+ * clicked and kept cutting on the other side. Speed / camera-fullscreen live under
  * `legacyEditor`. An id that matches nothing is a no-op. Pure.
  */
 export function removeRegion(document: AxcutDocument, kind: RegionKind, id: string): AxcutDocument {
@@ -860,7 +881,9 @@ export function removeRegion(document: AxcutDocument, kind: RegionKind, id: stri
 				...document,
 				timeline: {
 					...document.timeline,
-					trimRanges: document.timeline.trimRanges.filter((s) => s.id !== id),
+					trimRanges: dropTrimPillsByIds(document.timeline.trimRanges, document.timeline.clips, [
+						id,
+					]),
 				},
 			};
 		case "speed": {
@@ -893,8 +916,11 @@ export function removeRegion(document: AxcutDocument, kind: RegionKind, id: stri
  * The single mutator for "delete a clip". Removing a clip closes the gap: the survivors are
  * re-laid back-to-back (`resequenceClips`) and every anchored pill's derived ms is refreshed
  * against the new layout (`rederiveRegionMs`) — pills anchored to the removed clip drop out,
- * exactly like `setClipSourceRange`. Shared by the store's delete-clip action and the LLM's
- * `removeClip` tool. An unknown `clipId` is a no-op. Pure.
+ * exactly like `setClipSourceRange`. Trims anchored to it go the same way: their content is
+ * gone, so keeping them would leave rows nothing can reach (they render on no clip and cut
+ * no clip) that a later duplicate of the same asset must not resurrect. Shared by the
+ * store's delete-clip action and the LLM's `removeClip` tool. An unknown `clipId` is a
+ * no-op. Pure.
  */
 export function removeClip(document: AxcutDocument, clipId: string): AxcutDocument {
 	const oldClips = document.timeline.clips;
@@ -903,7 +929,11 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 	const newClips = resequenceClips(arr);
 	const next: AxcutDocument = {
 		...document,
-		timeline: { ...document.timeline, clips: newClips },
+		timeline: {
+			...document.timeline,
+			clips: newClips,
+			trimRanges: document.timeline.trimRanges.filter((t) => t.clipId !== clipId),
+		},
 	};
 	return oldClips.length > 0 && newClips.length > 0 ? rederiveRegionMs(next, newClips) : next;
 }
