@@ -22,12 +22,12 @@ struct Layer {
     src: vec4<f32>,       // u0,v0,u1,v1 source 0..1
     quad_px: vec2<f32>,   // taille du quad en px de sortie (pour la SDF isotrope)
     radius_px: f32,
-    mode: f32,            // 0 = vidéo NV12, 1 = couleur pleine, 2 = ombre, 8 = écran tilté, 12 = ombre du quad tilté, 13 = curseur tilté
+    mode: f32,            // 0 = vidéo NV12, 1 = couleur pleine, 2 = ombre, 8 = écran tilté, 9 = flèche, 10 = flou/mosaïque, 12 = ombre du quad tilté, 13 = curseur tilté
     color: vec4<f32>,
-    fx: vec4<f32>,        // mode 2 : spread ombre en px ; modes 8/12/13 : coins TL,TR du quad projeté
-    src_prev: vec4<f32>,  // modes 8/12/13 : coins BR,BL du quad projeté
-    dst_prev: vec4<f32>,  // mode 8 : taille du plan en px AVANT projection (le rayon y vit) ; mode 13 : rect de clip
-    mb: vec4<f32>,        // mode 12 : mb.y = spread de la pénombre en px
+    fx: vec4<f32>,        // mode 2 : spread ombre en px ; modes 8/12/13 : coins TL,TR du quad projeté ; mode 9 : hampe de la flèche ; mode 10 : (flou?, rayon/bloc px, ovale?, teinté?)
+    src_prev: vec4<f32>,  // modes 8/12/13 : coins BR,BL du quad projeté ; mode 9 : barbe 1
+    dst_prev: vec4<f32>,  // mode 8 : taille du plan en px AVANT projection (le rayon y vit) ; mode 13 : rect de clip ; mode 9 : barbe 2
+    mb: vec4<f32>,        // mode 12 : mb.y = spread de la pénombre en px ; mode 9 : mb.y = demi-épaisseur du trait en px
 }
 
 @group(0) @binding(0) var<uniform> layer: Layer;
@@ -249,6 +249,80 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         let cov = textureSample(texY, samp, i.uv).r;
         let a = layer.color.a * cov;
         return vec4<f32>(layer.color.rgb * a, a);
+    } else if layer.mode > 8.5 && layer.mode < 9.5 {
+        // Mode 9 -- annotation « figure » : une fleche. Parite EXACTE avec
+        // `ArrowSvgs.tsx`, dont chaque direction est un trace de trois segments a
+        // bouts ronds dans un viewBox 0..100 : une hampe et deux barbes. Trois
+        // `sd_segment` et un `min` reproduisent la forme telle quelle, pas une
+        // approximation. Les extremites arrivent deja converties en px locaux du
+        // quad par `regions::arrow_local_geometry` (echelle uniforme centree,
+        // comme le `preserveAspectRatio` par defaut du SVG), donc ce shader n'a
+        // aucune geometrie a deviner.
+        //
+        // fx = hampe (a.xy, b.xy), src_prev = barbe 1, dst_prev = barbe 2 ;
+        // mb.y = demi-epaisseur en px.
+        var d = sd_segment(i.local, layer.fx.xy, layer.fx.zw);
+        d = min(d, sd_segment(i.local, layer.src_prev.xy, layer.src_prev.zw));
+        d = min(d, sd_segment(i.local, layer.dst_prev.xy, layer.dst_prev.zw));
+        // Couverture sur ~1 px : le trait reste net sans crenelage, et une fleche
+        // fine ne disparait pas quand la demi-epaisseur descend sous le pixel.
+        let a = clamp(layer.mb.y - d + 0.5, 0.0, 1.0) * layer.color.a;
+        return vec4<f32>(layer.color.rgb * a, a);
+    } else if layer.mode > 9.5 && layer.mode < 10.5 {
+        // Mode 10 -- annotation « flou » : masque la zone en reutilisant l'image
+        // DEJA composee, qui arrive sur texY (recopie mipmappee du render target
+        // -- on ne peut pas echantillonner la cible sur laquelle on dessine).
+        // `i.pout` donne directement l'UV de sortie, donc aucun mapping a refaire.
+        //
+        // fx.x = 0 mosaique / 1 flou ; fx.y = taille de bloc px (mosaique) ou
+        // rayon px (flou) ; fx.z = 0 rectangle / 1 ovale ; fx.w = 1 si teinte.
+        let n = i.local / max(layer.quad_px, vec2<f32>(1e-6));
+        var cov = 1.0;
+        if layer.fx.z > 0.5 {
+            // Ovale inscrit : distance au centre en unites de demi-axes, adoucie
+            // sur ~1px.
+            let dc = (n - vec2<f32>(0.5)) * 2.0;
+            let r = length(dc);
+            let aa = 2.0 / max(min(layer.quad_px.x, layer.quad_px.y), 1.0);
+            cov = 1.0 - smoothstep(1.0 - aa, 1.0, r);
+        }
+        if cov <= 0.0 {
+            return vec4<f32>(0.0, 0.0, 0.0, 0.0);
+        }
+        var masked: vec3<f32>;
+        if layer.fx.x > 0.5 {
+            // Flou : on echantillonne un niveau de mip de l'image composee.
+            // `log2(rayon)` donne le niveau dont un texel couvre a peu pres le
+            // rayon demande, et le filtrage trilineaire lisse la transition entre
+            // deux niveaux quand le rayon varie.
+            //
+            // Un noyau de quelques taps espaces du rayon ne floute PAS : il
+            // superpose autant de copies decalees, ce qui se voit comme du texte
+            // fantome. Atteindre un vrai lissage par taps demanderait un tap par
+            // pixel de rayon ; la pyramide de mips donne le meme resultat a cout
+            // constant, et c'est le GPU qui l'a construite.
+            let lod = log2(max(layer.fx.y, 1.0));
+            masked = textureSampleLevel(texY, samp, i.pout, lod).rgb;
+        } else {
+            // Mosaique : on quantifie l'UV sur une grille de `fx.y` px, alignee
+            // sur le quad pour que les blocs ne rampent pas quand l'annotation
+            // bouge.
+            let px_uv = layer.dst.zw / max(layer.quad_px, vec2<f32>(1e-6));
+            let block = max(layer.fx.y, 1.0) * px_uv;
+            let origin = layer.dst.xy;
+            let q = origin + (floor((i.pout - origin) / block) + vec2<f32>(0.5)) * block;
+            // Niveau 0 explicite : l'UV quantifie est une marche d'escalier, donc
+            // ses derivees explosent en bord de bloc et le choix automatique de
+            // mip ramollirait justement les aretes qui font la mosaique.
+            masked = textureSampleLevel(texY, samp, q, 0.0).rgb;
+        }
+        if layer.fx.w > 0.5 {
+            // Teinte blanc/noir : la couleur choisie, melee a moitie, garde la
+            // forme lisible sans effacer completement ce qu'il y a dessous.
+            masked = mix(masked, layer.color.rgb, 0.5);
+        }
+        let a = cov * layer.color.a;
+        return vec4<f32>(masked * a, a);
     } else if layer.mode > 6.5 && layer.mode < 7.5 {
         // Mode 7 -- sprite curseur (PNG RGBA, alpha droite) echantillonne sur
         // texY (comme le mode 11 y lie son atlas). `fx` = rect de clip "Clip to
