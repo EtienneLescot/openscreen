@@ -63,7 +63,7 @@
 		"autoEnhance": "Авто-улучшение",
 		"automaticZooms": "Автоматические зумы",
 		"automaticZoomsHint": "На основе записанного движения курсора",
-		"smartZoomsAndCuts": "Умные зумы и вырезки",
+		"smartZoomsAndCuts": "Умные вырезки",
 		"smartZoomsAndCutsHint": "С помощью ИИ",
 		"comment": "Комментарий",
 		"aspectRatio": "Соотношение сторон",
@@ -82,6 +82,6 @@
 		"addedAutoZoom": "Добавлен {{count}} автоматический зум",
 		"addedAutoZoomPlural": "Добавлено {{count}} автоматических зумов",
 		"autoZoomFailed": "Не удалось выполнить автозум",
-		"aiEnhanceRequested": "ИИ-агенту предложено улучшить эту запись"
+		"aiEnhanceRequested": "Агенту ИИ поручено вырезать паузы"
 	}
 }

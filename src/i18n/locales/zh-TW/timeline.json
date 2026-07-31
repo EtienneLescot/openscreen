@@ -63,7 +63,7 @@
 		"autoEnhance": "自動加強",
 		"automaticZooms": "自動縮放",
 		"automaticZoomsHint": "根據錄製的游標移動",
-		"smartZoomsAndCuts": "智慧縮放與剪輯",
+		"smartZoomsAndCuts": "智慧剪輯",
 		"smartZoomsAndCutsHint": "使用 AI",
 		"comment": "留言",
 		"aspectRatio": "長寬比",
@@ -82,6 +82,6 @@
 		"addedAutoZoom": "已新增 {{count}} 個自動縮放",
 		"addedAutoZoomPlural": "已新增 {{count}} 個自動縮放",
 		"autoZoomFailed": "自動縮放失敗",
-		"aiEnhanceRequested": "已請求 AI 代理程式加強此錄製內容"
+		"aiEnhanceRequested": "已請求 AI 代理剪除空白片段"
 	}
 }

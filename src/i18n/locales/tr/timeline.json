@@ -63,7 +63,7 @@
 		"autoEnhance": "Otomatik iyileştirme",
 		"automaticZooms": "Otomatik yakınlaştırmalar",
 		"automaticZoomsHint": "Kaydedilen imleç hareketinden",
-		"smartZoomsAndCuts": "Akıllı yakınlaştırma + kırpma",
+		"smartZoomsAndCuts": "Akıllı kırpma",
 		"smartZoomsAndCutsHint": "Yapay zeka ile",
 		"comment": "Yorum",
 		"aspectRatio": "En-boy oranı",
@@ -82,6 +82,6 @@
 		"addedAutoZoom": "{{count}} otomatik yakınlaştırma eklendi",
 		"addedAutoZoomPlural": "{{count}} otomatik yakınlaştırma eklendi",
 		"autoZoomFailed": "Otomatik yakınlaştırma başarısız oldu",
-		"aiEnhanceRequested": "Yapay zeka aracısından bu kaydı iyileştirmesi istendi"
+		"aiEnhanceRequested": "Yapay zeka aracısından ölü zamanları kırpması istendi"
 	}
 }
