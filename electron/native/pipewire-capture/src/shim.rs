@@ -254,6 +254,226 @@ impl FrameMailbox {
     }
 }
 
+/// Interleaved samples waiting to be encoded.
+///
+/// UNLIKE THE VIDEO MAILBOX, THIS IS A QUEUE. A dropped video frame costs one
+/// duplicated picture that nobody notices; a dropped audio buffer is an audible
+/// click. So samples accumulate rather than being replaced, and the cap exists
+/// only as a backstop against a consumer that has stopped consuming entirely —
+/// 48 kHz stereo f32 is 384 KB/s, so two seconds is under a megabyte.
+///
+/// Overflow drops the OLDEST samples. If the encoder is that far behind, the
+/// recent audio is the part still worth keeping, and the alternative — refusing
+/// new samples — would freeze the track at the moment of the stall and leave
+/// everything after it misaligned.
+#[derive(Debug)]
+pub struct AudioRing {
+    inner: std::sync::Mutex<std::collections::VecDeque<f32>>,
+    capacity: usize,
+    dropped: std::sync::atomic::AtomicU64,
+}
+
+impl AudioRing {
+    pub fn new(seconds: usize, sample_rate: usize, channels: usize) -> Self {
+        Self {
+            inner: std::sync::Mutex::new(std::collections::VecDeque::new()),
+            capacity: seconds * sample_rate * channels,
+            dropped: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
+
+    fn push(&self, samples: &[f32]) {
+        use std::sync::atomic::Ordering;
+
+        let Ok(mut queue) = self.inner.lock() else {
+            self.dropped.fetch_add(samples.len() as u64, Ordering::Relaxed);
+            return;
+        };
+        queue.extend(samples.iter().copied());
+        if queue.len() > self.capacity {
+            let excess = queue.len() - self.capacity;
+            queue.drain(..excess);
+            self.dropped.fetch_add(excess as u64, Ordering::Relaxed);
+        }
+    }
+
+    /// Moves everything queued into `out`, appending.
+    pub fn drain_into(&self, out: &mut Vec<f32>) {
+        let Ok(mut queue) = self.inner.lock() else {
+            return;
+        };
+        out.reserve(queue.len());
+        out.extend(queue.drain(..));
+    }
+
+    /// Discards everything queued, and forgets any overflow so far.
+    ///
+    /// Called when the video epoch is set and on resume: audio captured before
+    /// the first frame, or during a pause, belongs to no part of the recording,
+    /// and keeping it would offset the whole track.
+    ///
+    /// Resetting `dropped` is the point, not an afterthought. The stream is
+    /// opened before the portal picker is raised, so it records for however long
+    /// the user takes to click — easily past the ring's two-second cap. Counting
+    /// that overflow would report "the encoder could not keep up" on every
+    /// single recording, for audio that was always going to be thrown away.
+    pub fn clear(&self) {
+        if let Ok(mut queue) = self.inner.lock() {
+            queue.clear();
+        }
+        self.dropped.store(0, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub fn dropped_samples(&self) -> u64 {
+        self.dropped.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    /// Feeds samples as the PipeWire callback would. Test-only: in the shipped
+    /// binary the only writer is `on_audio_samples`.
+    #[cfg(test)]
+    pub fn push_for_test(&self, samples: &[f32]) {
+        self.push(samples);
+    }
+}
+
+#[repr(C)]
+struct RawAudioCallbacks {
+    user: *mut c_void,
+    on_samples: extern "C" fn(*mut c_void, *const f32, u32),
+    on_state: extern "C" fn(*mut c_void, *const c_char, *const c_char),
+}
+
+#[repr(C)]
+struct RawAudioSession {
+    _private: [u8; 0],
+}
+
+extern "C" {
+    fn osc_pw_audio_start(
+        target_object: *const c_char,
+        capture_sink: i32,
+        rate: u32,
+        channels: u32,
+        callbacks: *const RawAudioCallbacks,
+        err: *mut c_char,
+        err_len: usize,
+    ) -> *mut RawAudioSession;
+    fn osc_pw_audio_stop(session: *mut RawAudioSession);
+}
+
+/// What an audio stream reports besides samples.
+pub type AudioStateSink = Box<dyn Fn(String, Option<String>) + Send>;
+
+struct AudioCallbackState {
+    ring: std::sync::Arc<AudioRing>,
+    on_state: AudioStateSink,
+}
+
+/// One running audio capture stream. Dropping it joins its PipeWire thread.
+pub struct AudioSession {
+    raw: *mut RawAudioSession,
+    _state: Box<AudioCallbackState>,
+}
+
+impl AudioSession {
+    /// `target` names a specific PipeWire node, or `None` for the session
+    /// default. `capture_sink` selects a sink's monitor (the system mix) rather
+    /// than a source (a microphone).
+    pub fn start(
+        target: Option<&str>,
+        capture_sink: bool,
+        rate: u32,
+        channels: u32,
+        ring: std::sync::Arc<AudioRing>,
+        on_state: AudioStateSink,
+    ) -> Result<Self, String> {
+        let target_c = match target.filter(|name| !name.is_empty()) {
+            Some(name) => Some(
+                std::ffi::CString::new(name)
+                    .map_err(|_| "the audio target name contains a NUL byte".to_owned())?,
+            ),
+            None => None,
+        };
+        let state = Box::new(AudioCallbackState { ring, on_state });
+        let callbacks = RawAudioCallbacks {
+            user: &*state as *const AudioCallbackState as *mut c_void,
+            on_samples: on_audio_samples,
+            on_state: on_audio_state,
+        };
+
+        let mut err = [0 as c_char; ERR_LEN];
+        // SAFETY: `callbacks`, `target_c` and `err` all outlive the call, and
+        // `state` outlives the returned session, which keeps `user` valid for
+        // every callback.
+        let raw = unsafe {
+            osc_pw_audio_start(
+                target_c.as_ref().map_or(std::ptr::null(), |name| name.as_ptr()),
+                i32::from(capture_sink),
+                rate,
+                channels,
+                &callbacks,
+                err.as_mut_ptr(),
+                ERR_LEN,
+            )
+        };
+        if raw.is_null() {
+            return Err(take_error(&err));
+        }
+        Ok(Self { raw, _state: state })
+    }
+}
+
+impl Drop for AudioSession {
+    fn drop(&mut self) {
+        // SAFETY: `raw` came from osc_pw_audio_start and is stopped exactly once.
+        unsafe { osc_pw_audio_stop(self.raw) };
+    }
+}
+
+fn with_audio_state<F>(user: *mut c_void, body: F)
+where
+    F: FnOnce(&AudioCallbackState),
+{
+    if user.is_null() {
+        return;
+    }
+    // SAFETY: `user` points at state owned by a live AudioSession;
+    // osc_pw_audio_stop joins the loop thread before the box is dropped.
+    let state = unsafe { &*(user as *const AudioCallbackState) };
+    let _ = catch_unwind(AssertUnwindSafe(|| body(state)));
+}
+
+extern "C" fn on_audio_samples(user: *mut c_void, samples: *const f32, count: u32) {
+    with_audio_state(user, |state| {
+        if samples.is_null() || count == 0 {
+            return;
+        }
+        // SAFETY: the shim clamped `count` against the buffer's mapped size
+        // before the call, and the mapping outlives it.
+        let slice = unsafe { std::slice::from_raw_parts(samples, count as usize) };
+        state.ring.push(slice);
+    });
+}
+
+extern "C" fn on_audio_state(user: *mut c_void, state_name: *const c_char, error: *const c_char) {
+    with_audio_state(user, |state| {
+        let name = if state_name.is_null() {
+            String::new()
+        } else {
+            // SAFETY: libpipewire's pw_stream_state_as_string returns a static
+            // NUL-terminated string.
+            unsafe { CStr::from_ptr(state_name) }.to_string_lossy().into_owned()
+        };
+        let error = if error.is_null() {
+            None
+        } else {
+            // SAFETY: non-NULL implies a NUL-terminated string that outlives the call.
+            Some(unsafe { CStr::from_ptr(error) }.to_string_lossy().into_owned())
+        };
+        (state.on_state)(name, error);
+    });
+}
+
 const ERR_LEN: usize = 256;
 
 fn take_error(buffer: &[c_char; ERR_LEN]) -> String {

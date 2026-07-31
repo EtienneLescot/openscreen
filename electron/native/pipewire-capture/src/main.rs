@@ -59,6 +59,39 @@ struct VideoRequest {
     bitrate: Option<i64>,
 }
 
+/// Mirrors the `audio` block of `NativeWindowsRecordingRequest`
+/// (src/lib/nativeWindowsRecording.ts) so the three platforms take the same
+/// request shape.
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct AudioRequest {
+    system: SystemAudioRequest,
+    microphone: MicrophoneRequest,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct SystemAudioRequest {
+    enabled: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct MicrophoneRequest {
+    enabled: bool,
+    /// A PipeWire node name (`node.name`), not the browser device id the UI
+    /// carries: the two namespaces are unrelated and there is no mapping
+    /// between them. Absent means the session default source.
+    device_name: Option<String>,
+    /// Linear multiplier the UI applies to microphone level.
+    gain: Option<f32>,
+}
+
+const DEFAULT_AUDIO_BITRATE: i64 = 128_000;
+/// How much audio may queue before the oldest is discarded. Generous: the drain
+/// runs every loop tick, so reaching this means the encoder stopped entirely.
+const AUDIO_RING_SECONDS: usize = 2;
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
 struct Request {
@@ -74,6 +107,7 @@ struct Request {
     /// are the two halves of the HUD's cursor-mode toggle.
     cursor_mode: Option<String>,
     video: Option<VideoRequest>,
+    audio: Option<AudioRequest>,
     /// Emit `ready` and exit, without ever calling the portal's `Start()`.
     ///
     /// Everything up to that point is non-interactive; `Start()` is the single
@@ -110,6 +144,50 @@ impl Request {
             .filter(|bitrate| *bitrate > 0)
             .unwrap_or(DEFAULT_BITRATE)
     }
+
+    /// The audio streams to open, in the order they become MP4 tracks.
+    ///
+    /// Empty when no output file was requested: a cursor-only session has
+    /// nothing to mux audio into, and opening a capture stream would show the
+    /// user a recording indicator for a recording that is not happening.
+    fn audio_sources(&self) -> Vec<AudioSourceConfig> {
+        if self.output_path.is_none() {
+            return Vec::new();
+        }
+        let Some(audio) = self.audio.as_ref() else {
+            return Vec::new();
+        };
+        let mut sources = Vec::new();
+        if audio.system.enabled {
+            sources.push(AudioSourceConfig {
+                label: "system",
+                target: None,
+                // The default SINK's monitor: what is being played, not what a
+                // microphone hears.
+                capture_sink: true,
+                gain: 1.0,
+                bitrate: DEFAULT_AUDIO_BITRATE,
+            });
+        }
+        if audio.microphone.enabled {
+            sources.push(AudioSourceConfig {
+                label: "microphone",
+                target: audio.microphone.device_name.clone(),
+                capture_sink: false,
+                gain: audio.microphone.gain.filter(|gain| *gain > 0.0).unwrap_or(1.0),
+                bitrate: DEFAULT_AUDIO_BITRATE,
+            });
+        }
+        sources
+    }
+}
+
+struct AudioSourceConfig {
+    label: &'static str,
+    target: Option<String>,
+    capture_sink: bool,
+    gain: f32,
+    bitrate: i64,
 }
 
 enum Message {
@@ -197,6 +275,7 @@ fn main() {
         bitrate: request.bitrate(),
         forced_encoder,
         cursor_mode,
+        audio: request.audio_sources(),
     };
     let exit_code = run(&mut emitter, receiver, sender, session);
     std::process::exit(exit_code);
@@ -213,6 +292,64 @@ struct RunConfig {
     bitrate: i64,
     forced_encoder: Option<encoder::Backend>,
     cursor_mode: portal::CursorMode,
+    audio: Vec<AudioSourceConfig>,
+}
+
+/// Opens every requested audio stream, returning the live sessions (which must
+/// outlive the loop) and the sources to hand to the muxer.
+///
+/// A stream that fails to open is a warning, not a failure: a recording with
+/// picture and no system audio is worth far more to the user than no recording
+/// at all, and the most likely cause — a sandbox without the PipeWire socket —
+/// is not something the helper can fix.
+fn start_audio<W: Write>(
+    emitter: &mut Emitter<W>,
+    configs: &[AudioSourceConfig],
+) -> (Vec<shim::AudioSession>, Vec<capture::AudioSource>) {
+    let mut sessions = Vec::new();
+    let mut sources = Vec::new();
+    for config in configs {
+        let ring = Arc::new(shim::AudioRing::new(
+            AUDIO_RING_SECONDS,
+            encoder::AUDIO_SAMPLE_RATE as usize,
+            encoder::AUDIO_CHANNELS,
+        ));
+        let label = config.label;
+        let session = shim::AudioSession::start(
+            config.target.as_deref(),
+            config.capture_sink,
+            encoder::AUDIO_SAMPLE_RATE as u32,
+            encoder::AUDIO_CHANNELS as u32,
+            ring.clone(),
+            Box::new(move |state, error| {
+                if let Some(error) = error {
+                    eprintln!("[audio:{label}] stream error in state {state}: {error}");
+                }
+            }),
+        );
+        match session {
+            Ok(session) => {
+                sessions.push(session);
+                sources.push(capture::AudioSource {
+                    label: config.label,
+                    ring,
+                    gain: config.gain,
+                    bitrate: config.bitrate,
+                });
+            }
+            Err(message) => {
+                let _ = emitter.emit(&Event::Warning {
+                    code: "audio-unavailable".to_owned(),
+                    message: format!(
+                        "the {} audio stream could not be opened, so the recording will \
+                         have no {} track: {message}",
+                        config.label, config.label
+                    ),
+                });
+            }
+        }
+    }
+    (sessions, sources)
 }
 
 fn parse_request() -> Result<Request, String> {
@@ -314,6 +451,11 @@ fn run<W: Write>(
         .as_ref()
         .map(|_| Arc::new(FrameMailbox::default()));
     let mut capture: Option<Capture> = None;
+    // Started before the portal picker so the streams are warm and the graph
+    // has settled by the time the first video frame arrives. Everything they
+    // record before that first frame is discarded — see `Capture::stage`.
+    // `_audio_sessions` is bound, not dropped: dropping one stops its thread.
+    let (_audio_sessions, mut audio_sources) = start_audio(emitter, &config.audio);
     // Buffered until the format is negotiated: the encoder cannot be opened
     // before the frame size is known, and `pause` can arrive first.
     let mut paused = false;
@@ -484,6 +626,7 @@ fn run<W: Write>(
                             config.fps,
                             config.bitrate,
                             config.forced_encoder,
+                            std::mem::take(&mut audio_sources),
                         ) {
                             Ok((started, selection)) => {
                                 let _ = emitter.emit(&Event::EncoderSelection {
@@ -709,6 +852,16 @@ fn finish_capture<W: Write>(
     frames: Option<&FrameMailbox>,
     exit_code: &mut i32,
 ) {
+    for (label, samples) in capture.dropped_audio() {
+        let _ = emitter.emit(&Event::Warning {
+            code: "audio-dropped".to_owned(),
+            message: format!(
+                "{samples} {label} sample(s) were discarded because the encoder could not \
+                 keep up. Unlike a dropped video frame, this is audible."
+            ),
+        });
+    }
+
     match capture.finish() {
         Ok(summary) => {
             let dropped = frames.map(FrameMailbox::dropped).unwrap_or(0);

@@ -24,7 +24,7 @@ fn main() {
 
 fn build_pipewire_shim(root: &Path) {
     let vendor = root.join("vendor/pipewire-1.0.5/include");
-    let shim = root.join("csrc/pw_shim.c");
+    let sources = ["csrc/pw_shim.c", "csrc/pw_audio.c"];
 
     assert!(
         vendor.join("pipewire/pipewire.h").is_file(),
@@ -32,16 +32,22 @@ fn build_pipewire_shim(root: &Path) {
         vendor.display()
     );
 
-    cc::Build::new()
-        .file(&shim)
+    let mut build = cc::Build::new();
+    for source in sources {
+        build.file(root.join(source));
+    }
+    build
         .include(&vendor)
         .include(root.join("csrc"))
         .flag_if_supported("-std=gnu11")
         .warnings(true)
         .compile("openscreen_pw_shim");
 
-    println!("cargo:rerun-if-changed={}", shim.display());
+    for source in sources {
+        println!("cargo:rerun-if-changed={}", root.join(source).display());
+    }
     println!("cargo:rerun-if-changed={}", root.join("csrc/pw_shim.h").display());
+    println!("cargo:rerun-if-changed={}", root.join("csrc/pw_internal.h").display());
     println!("cargo:rerun-if-changed={}", vendor.display());
 
     // dlopen/dlsym.

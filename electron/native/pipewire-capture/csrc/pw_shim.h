@@ -166,6 +166,42 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
 /* Stops the thread loop, joins it, and frees everything. Safe with NULL. */
 void osc_pw_stop(struct osc_pw_session *session);
 
+/* ---------------------------------------------------------------------------
+ * Audio (csrc/pw_audio.c)
+ *
+ * A second, independent PipeWire connection — to the session's own daemon, not
+ * to the portal's restricted remote, which carries no audio. See the header of
+ * pw_audio.c for why that is the only option.
+ * ------------------------------------------------------------------------- */
+
+struct osc_pw_audio;
+
+struct osc_pw_audio_callbacks {
+    void *user;
+    /* `interleaved` holds `n_samples` floats — that is n_samples/channels frames
+     * — and is borrowed for the duration of the call. */
+    void (*on_samples)(void *user, const float *interleaved, uint32_t n_samples);
+    void (*on_state)(void *user, const char *state, const char *error);
+};
+
+/*
+ * Opens one capture stream.
+ *
+ * `capture_sink` non-zero links to a SINK's monitor ports (what is being played)
+ * rather than to a source; that is the difference between recording the system
+ * mix and recording the microphone. `target_object` names a specific node, or is
+ * NULL/"" for the session default.
+ *
+ * Returns NULL on failure with a message in `err`.
+ */
+struct osc_pw_audio *osc_pw_audio_start(const char *target_object, int capture_sink,
+                                        uint32_t rate, uint32_t channels,
+                                        const struct osc_pw_audio_callbacks *callbacks, char *err,
+                                        size_t err_len);
+
+/* Stops the thread loop, joins it, and frees everything. Safe with NULL. */
+void osc_pw_audio_stop(struct osc_pw_audio *audio);
+
 #ifdef __cplusplus
 }
 #endif
