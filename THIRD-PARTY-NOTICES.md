@@ -49,11 +49,28 @@ distributed by their own registries, not redistributed inside our binaries.
 - The speech model (`ggml-*.bin`) is **not** bundled — it is downloaded into the
   user's data directory on first use by `electron/stt/modelManager.ts`.
 
+## PipeWire — headers (Linux only)
+
+- **Components**: header sources under
+  `electron/native/pipewire-capture/vendor/pipewire-1.0.5/include/`, compiled
+  into `openscreen-pipewire-helper` (the Linux cursor/capture helper) under
+  `resources/electron/native/bin/linux-*/`.
+- **License**: **MIT** — <https://gitlab.freedesktop.org/pipewire/pipewire>.
+  Every vendored file keeps its upstream `SPDX-License-Identifier: MIT` header,
+  and the project's licence text is copied alongside them as `COPYING`.
+- **Upstream**: PipeWire release 1.0.5. Only the header subset the helper
+  includes was vendored; `vendor/README.md` records exactly what was copied and
+  how to reproduce the selection.
+- **No PipeWire binary is redistributed.** The helper resolves
+  `libpipewire-0.3.so.0` with `dlopen` at runtime, from the user's own system,
+  so nothing of PipeWire's ships inside our installers beyond the compiled
+  result of its headers (inline functions and struct layouts).
+
 ## OpenScreen native helpers
 
-`wgc-capture` (Windows Graphics Capture), the ScreenCaptureKit helper (macOS)
-and the D3D11 compositor addon are part of this repository and are covered by
-[LICENSE](LICENSE).
+`wgc-capture` (Windows Graphics Capture), the ScreenCaptureKit helper (macOS),
+the PipeWire helper (Linux) and the compositor addon are part of this repository
+and are covered by [LICENSE](LICENSE).
 
 ---
 

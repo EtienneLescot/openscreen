@@ -1,0 +1,142 @@
+/*
+ * Flat C ABI between the Rust helper and libpipewire.
+ *
+ * Every declaration here is mirrored by hand in `src/shim.rs`. The two files
+ * are a matched pair: changing a struct on one side without the other is an ABI
+ * break the compiler cannot catch, so keep the field order and the integer
+ * widths identical.
+ *
+ * Only plain scalars and pointers cross this boundary — no SPA or PipeWire type
+ * appears in a signature — so Rust never has to restate a PipeWire struct
+ * layout. That is deliberate: the layouts live in the vendored headers and are
+ * consumed by the C compiler that also compiled libpipewire's own users.
+ */
+
+#ifndef OPENSCREEN_PW_SHIM_H
+#define OPENSCREEN_PW_SHIM_H
+
+#include <stddef.h>
+#include <stdint.h>
+
+#ifdef __cplusplus
+extern "C" {
+#endif
+
+/* One SPA_META_Cursor observation, already bounds-checked by the shim. */
+struct osc_pw_cursor {
+    /* Cursor position in stream pixels, top-left origin of the captured region. */
+    int32_t x;
+    int32_t y;
+    /* Hotspot inside the bitmap. Meaningless when `has_bitmap` is 0. */
+    int32_t hotspot_x;
+    int32_t hotspot_y;
+    /* Compositor-assigned shape id. 0 means "no cursor data in this frame". */
+    uint32_t id;
+    uint32_t flags;
+    /* 1 when this frame carried a new shape bitmap. Compositors only send one
+     * when the shape changes, so most frames have has_bitmap == 0. */
+    int32_t has_bitmap;
+    uint32_t bitmap_format; /* enum spa_video_format */
+    int32_t bitmap_width;
+    int32_t bitmap_height;
+    int32_t bitmap_stride;
+    /* Borrowed for the duration of the callback only. Copy before returning. */
+    const uint8_t *bitmap_data;
+    size_t bitmap_len;
+};
+
+/* The negotiated video format. Reported once, from param_changed. */
+struct osc_pw_format {
+    int32_t width;
+    int32_t height;
+    uint32_t video_format; /* enum spa_video_format */
+    int32_t framerate_num;
+    int32_t framerate_denom;
+};
+
+/*
+ * Callbacks fire on the PipeWire thread, never on the caller's thread. They
+ * must not block: the Rust side only pushes onto an unbounded channel.
+ */
+struct osc_pw_callbacks {
+    void *user;
+    void (*on_format)(void *user, const struct osc_pw_format *format);
+    void (*on_cursor)(void *user, const struct osc_pw_cursor *cursor);
+    /* Emitted once per negotiated buffer set. `data_type` is the SPA_DATA_* of
+     * datas[0]; `metas` is a borrowed "Header:12,Cursor:589872" listing of every
+     * metadata block that survived negotiation, which is what distinguishes a
+     * ParamMeta that was never sent from one that lost the size intersection. */
+    void (*on_buffer_info)(void *user, uint32_t data_type, uint32_t n_datas,
+                           int32_t has_cursor_meta, uint32_t cursor_meta_size,
+                           const char *metas);
+    void (*on_state)(void *user, const char *state, const char *error);
+};
+
+/*
+ * SPA enum values, read out of the vendored headers rather than restated in
+ * Rust. Hardcoding `SPA_VIDEO_FORMAT_BGRA == 12` on the Rust side would work
+ * today and rot silently the day upstream inserts a value; this cannot.
+ */
+struct osc_pw_constants {
+    uint32_t video_format_rgbx;
+    uint32_t video_format_bgrx;
+    uint32_t video_format_xrgb;
+    uint32_t video_format_xbgr;
+    uint32_t video_format_rgba;
+    uint32_t video_format_bgra;
+    uint32_t video_format_argb;
+    uint32_t video_format_abgr;
+    uint32_t data_mem_ptr;
+    uint32_t data_mem_fd;
+    uint32_t data_dma_buf;
+};
+
+void osc_pw_constants(struct osc_pw_constants *out);
+
+/*
+ * Would our SPA_META_Cursor declaration survive negotiation against a producer
+ * that declares a FIXED size of `width` x `height` pixels? 1 yes, 0 no, -1 if
+ * the PODs could not be built.
+ *
+ * Compositors declare that size as a constant (mutter 46.2: 384x384), so our
+ * accepted range has to contain it or the metadata is silently dropped from the
+ * buffers. Exposed so a unit test can assert the bound without a portal, a
+ * compositor, or a screen.
+ */
+int osc_pw_cursor_meta_accepts_producer_size(uint32_t width, uint32_t height);
+
+struct osc_pw_session;
+
+/*
+ * dlopen("libpipewire-0.3.so.0") and resolve every symbol used below. Returns 0
+ * on success, -1 with a NUL-terminated message in `err` otherwise. Idempotent.
+ */
+int osc_pw_load(char *err, size_t err_len);
+
+/* Runtime library version string, or NULL before a successful osc_pw_load. */
+const char *osc_pw_library_version(void);
+
+/*
+ * Connect to the PipeWire remote behind `fd` (from the portal's
+ * OpenPipeWireRemote) and start consuming `node_id`.
+ *
+ * Takes ownership of `fd`: once handed to pw_context_connect_fd, libpipewire's
+ * loop owns and closes it. Failures before that point close it here. In the one
+ * narrow case where pw_context_connect_fd itself fails, upstream may or may not
+ * have taken it, so it is deliberately leaked rather than risking a double
+ * close — the caller is on its way to reporting a fatal error either way.
+ *
+ * Returns NULL on failure, with a message in `err`.
+ */
+struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id,
+                                    const struct osc_pw_callbacks *callbacks, char *err,
+                                    size_t err_len);
+
+/* Stops the thread loop, joins it, and frees everything. Safe with NULL. */
+void osc_pw_stop(struct osc_pw_session *session);
+
+#ifdef __cplusplus
+}
+#endif
+
+#endif /* OPENSCREEN_PW_SHIM_H */
