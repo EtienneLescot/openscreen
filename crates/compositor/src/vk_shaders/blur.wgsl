@@ -64,6 +64,41 @@ fn vs_main(@builtin(vertex_index) vid: u32) -> VsOut {
     return o;
 }
 
+// Triangle plein écran pour une COPIE 1:1, séparé de `vs_main` à dessein.
+//
+// Les deux mappings sont aujourd'hui identiques, et c'est précisément le piège :
+// `vs_main` appartient à la chaîne Kawase, qui enchaîne SIX passes. Une
+// inversion en Y y serait invisible (six inversions se compensent), donc rien
+// dans cette chaîne ne défend l'orientation. Une copie unique, elle, la porte
+// entière. Dupliquer les quatre lignes coûte moins qu'une traînée de curseur
+// retournée le jour où quelqu'un ajuste la convention du Kawase.
+//
+// Orientation : en NDC wgpu (calqué sur D3D/Metal) y=+1 est le HAUT de la cible
+// et v=0 la PREMIÈRE ligne de la texture, donc v doit croître quand y décroît.
+// Vérifié par `compose_linux_trainee_de_curseur`, qui échoue en trouvant la
+// traînée dans la bande miroir si on écrit `0.5 + p.y * 0.5`.
+@vertex
+fn vs_fullscreen(@builtin(vertex_index) vid: u32) -> VsOut {
+    let pos = array<vec2<f32>, 3>(
+        vec2<f32>(-1.0, -1.0),
+        vec2<f32>( 3.0, -1.0),
+        vec2<f32>(-1.0,  3.0),
+    );
+    // Un seul accès indexé, cf. la note naga 24 / RADV dans `vs_main`.
+    let p = pos[vid];
+    var o: VsOut;
+    o.pos = vec4<f32>(p, 0.0, 1.0);
+    o.uv = vec2<f32>(p.x * 0.5 + 0.5, 0.5 - p.y * 0.5);
+    return o;
+}
+
+// Copie telle quelle. La source est en alpha PRÉMULTIPLIÉ (tout le compositeur
+// l'est), donc le blend « over » de la pipeline la composite sans reconversion.
+@fragment
+fn fs_copy(i: VsOut) -> @location(0) vec4<f32> {
+    return textureSample(tex, samp, i.uv);
+}
+
 // Kawase down : 5-tap linéaire à offset `texel_offset` en coords source.
 // `texel_offset` est 2.2 typiquement (le spread mesuré du filtre).
 @fragment

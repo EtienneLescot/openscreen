@@ -23,6 +23,22 @@ const FIXTURE: &str = "../fixture/screen.mp4";
 const W: u32 = 960;
 const H: u32 = 540;
 
+/// Ecrit un PPM P6 dans `OPENSCREEN_VK_OUT` (defaut `target`) pour inspection.
+fn write_ppm(name: &str, w: u32, h: u32, rgba: &[u8]) {
+    use std::io::Write;
+    let out = std::env::var("OPENSCREEN_VK_OUT").unwrap_or_else(|_| "target".into());
+    let _ = std::fs::create_dir_all(&out);
+    let path = format!("{out}/{name}.ppm");
+    let mut f = std::fs::File::create(&path).expect("create ppm");
+    write!(f, "P6\n{w} {h}\n255\n").unwrap();
+    let mut rgb = vec![0u8; (w * h * 3) as usize];
+    for (d, s) in rgb.chunks_exact_mut(3).zip(rgba.chunks_exact(4)) {
+        d.copy_from_slice(&s[0..3]);
+    }
+    f.write_all(&rgb).unwrap();
+    println!("wrote {path}");
+}
+
 #[test]
 fn compose_linux_rend_une_frame() {
     if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
@@ -123,21 +139,6 @@ fn top_edge_swing(edge: &[Option<u32>]) -> u32 {
         (Some(&lo), Some(&hi)) => hi - lo,
         _ => 0,
     }
-}
-
-fn write_ppm(name: &str, w: u32, h: u32, rgba: &[u8]) {
-    use std::io::Write;
-    let out = std::env::var("OPENSCREEN_VK_OUT").unwrap_or_else(|_| "target".into());
-    let _ = std::fs::create_dir_all(&out);
-    let path = format!("{out}/{name}.ppm");
-    let mut f = std::fs::File::create(&path).expect("create ppm");
-    write!(f, "P6\n{w} {h}\n255\n").unwrap();
-    let mut rgb = vec![0u8; (w * h * 3) as usize];
-    for (d, s) in rgb.chunks_exact_mut(3).zip(rgba.chunks_exact(4)) {
-        d.copy_from_slice(&s[0..3]);
-    }
-    f.write_all(&rgb).unwrap();
-    println!("wrote {path}");
 }
 
 /// Ecran incline (mode 8). Rend DEUX fois la meme scene, seule la rotation
@@ -478,6 +479,286 @@ fn compose_linux_fond_image() {
         f.write_all(&rgb).unwrap();
     }
     assert!(orange > 2000, "fond image absent (orange={orange}) — mode 6 ?");
+}
+
+/// Flou de mouvement par VELOCITE du calque ecran (mode 0 du shader).
+///
+/// La velocite vient d'un zoom en pleine rampe : `plan_frame` calcule alors un
+/// `s_dst_prev` different de `s_dst`, et le shader floute chaque pixel le long
+/// du segment qui relie son UV d'avant a son UV d'aujourd'hui.
+///
+/// La MEME frame decodee est composee deux fois, seul `effects.motionBlur`
+/// change — toute difference mesuree ne peut donc venir que de l'effet. Deux
+/// assertions, parce que « les deux images different » ne dirait pas dans quel
+/// SENS : on verifie aussi que la version floutee a moins de detail haute
+/// frequence. Un cablage errone de `src_prev`/`dst_prev` ferait bien differer
+/// les images, mais pas forcement dans ce sens-la.
+#[test]
+fn compose_linux_flou_de_velocite_ecran() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux flou de velocite: opt-in. Skip.");
+        return;
+    }
+
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut dec = Decoder::open(FIXTURE, &gpu).expect("Decoder::open");
+
+    // La region de zoom demarre a 2 s ; sa rampe d'entree commence ~1 s plus tot
+    // (`ZOOM_IN_TRANSITION_WINDOW_S`). A t = 66/60 = 1,1 s on est donc en pleine
+    // montee : `plan_frame` y donne s_dst 1,629 contre s_dst_prev 1,559, soit
+    // 4,5 % d'echelle en une frame — largement de quoi etaler le calque.
+    let scene_of = |mblur: f32| {
+        format!(
+            r##"{{"clips":[],"layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":{mblur}}},"background":{{"kind":"color","color":"#101015"}},"zoomRegions":[{{"id":"z1","startSec":2,"endSec":4,"scale":2.5,"focusX":0.5,"focusY":0.5,"focusMode":"manual","rotation":null}}],"annotations":[],"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":1920,"height":1080,"fps":30}}}}"##
+        )
+    };
+
+    // UN SEUL `seek_to` : les deux rendus partagent la meme AVFrame, donc le
+    // decodeur ne peut pas introduire de difference qu'on prendrait pour l'effet.
+    let (sharp, blurred) = unsafe {
+        let sf = dec.seek_to(1.1).expect("Decoder::seek_to");
+        let cfg = Cfg::c8();
+        let render = |mblur: f32| {
+            comp.set_scene(Some(Scene::from_json(&scene_of(mblur)).expect("scene json")));
+            comp.compose_frame(sf, sf, 66.0, &cfg).expect("compose_frame");
+            comp.readback_direct().expect("readback_direct").2
+        };
+        (render(0.0), render(1.0))
+    };
+
+    write_ppm("compose_linux_mb_screen_off", W, H, &sharp);
+    write_ppm("compose_linux_mb_screen_on", W, H, &blurred);
+
+    let mut diff_sum = 0u64;
+    for (a, b) in sharp.chunks_exact(4).zip(blurred.chunks_exact(4)) {
+        for c in 0..3 {
+            diff_sum += (a[c] as i32 - b[c] as i32).unsigned_abs() as u64;
+        }
+    }
+    let mean_diff = diff_sum as f32 / (W * H * 3) as f32;
+
+    // Detail haute frequence : somme des gradients voisins sur le canal vert.
+    let sharpness = |img: &[u8]| -> f32 {
+        let g = |x: u32, y: u32| img[((y * W + x) * 4 + 1) as usize] as i32;
+        let mut acc = 0u64;
+        for y in 0..H - 1 {
+            for x in 0..W - 1 {
+                acc += (g(x + 1, y) - g(x, y)).unsigned_abs() as u64;
+                acc += (g(x, y + 1) - g(x, y)).unsigned_abs() as u64;
+            }
+        }
+        acc as f32 / ((W - 1) * (H - 1) * 2) as f32
+    };
+    let (s_sharp, s_blur) = (sharpness(&sharp), sharpness(&blurred));
+    println!(
+        "compose_linux flou de velocite : mean_diff={mean_diff:.2} gradient net={s_sharp:.2} floute={s_blur:.2}"
+    );
+
+    // Mesure observee : mean_diff 12,5 et gradient 7,9 -> 3,0. Les seuils gardent
+    // de la marge tout en restant loin du « ca a bouge d'un poil ».
+    assert!(
+        mean_diff > 4.0,
+        "motionBlur 0 vs 1 rend (quasi) la MEME image (mean_diff={mean_diff:.3}) — mb/src_prev/dst_prev non cables ?"
+    );
+    assert!(
+        s_blur < s_sharp * 0.7,
+        "le rendu floute n'est pas plus doux (gradient {s_blur:.2} vs {s_sharp:.2}) — le flou ne suit pas la velocite"
+    );
+}
+
+/// Meme flou de velocite, mais sur le calque CAMERA — un draw distinct, avec son
+/// propre `src_prev` (qui doit suivre le cover-crop et le miroir) et son propre
+/// `dst_prev`.
+///
+/// La velocite vient d'une region « Full Camera » en pleine ouverture : la boite
+/// camera passe de 0,526 a 0,579 de large en une frame pendant que `s_dst` ne
+/// bouge PAS d'un pouce. C'est ce qui rend le test concluant — une difference
+/// mesuree dans la boite camera ne peut pas venir du calque ecran, et
+/// l'assertion sur le coin haut-gauche (hors boite) le verifie explicitement.
+#[test]
+fn compose_linux_flou_de_velocite_camera() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux flou de velocite camera: opt-in. Skip.");
+        return;
+    }
+    let webcam_fixture = "../fixture/webcam.mp4";
+    if !Path::new(webcam_fixture).is_file() {
+        eprintln!("compose_linux flou de velocite camera: pas de fixture webcam. Skip.");
+        return;
+    }
+
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut screen = Decoder::open(FIXTURE, &gpu).expect("Decoder::open screen");
+    let mut cam = Decoder::open(webcam_fixture, &gpu).expect("Decoder::open webcam");
+
+    // `webcamMirror: true` : le miroir inverse les bornes u de `src`, et
+    // `src_prev` doit inverser les MEMES. S'il gardait l'ancien [0,0,1,1] la
+    // reprojection viserait une zone de texture jamais affichee.
+    let scene_of = |mblur: f32| {
+        format!(
+            r##"{{"clips":[],"layout":{{"preset":"picture-in-picture","webcamSize":1,"webcamShape":"rectangle","webcamMirror":true,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":{mblur}}},"background":{{"kind":"color","color":"#101015"}},"zoomRegions":[],"cameraFullscreenRegions":[{{"startSec":2,"endSec":4}}],"annotations":[],"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":1920,"height":1080,"fps":30}}}}"##
+        )
+    };
+
+    let (sharp, blurred) = unsafe {
+        let sf = screen.seek_to(2.1).expect("seek screen");
+        let wf = cam.seek_to(2.1).expect("seek webcam");
+        let cfg = Cfg::c8();
+        let render = |mblur: f32| {
+            let scene = Scene::from_json(&scene_of(mblur)).expect("scene json");
+            comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&scene));
+            comp.set_scene(Some(scene));
+            // frame 126 = t 2,1 s : la camera est a mi-ouverture.
+            comp.compose_frame(sf, wf, 126.0, &cfg).expect("compose_frame");
+            comp.readback_direct().expect("readback_direct").2
+        };
+        (render(0.0), render(1.0))
+    };
+
+    write_ppm("compose_linux_mb_camera_off", W, H, &sharp);
+    write_ppm("compose_linux_mb_camera_on", W, H, &blurred);
+
+    let mean_diff = |x0: u32, x1: u32, y0: u32, y1: u32| -> f32 {
+        let mut sum = 0u64;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let i = ((y * W + x) * 4) as usize;
+                for c in 0..3 {
+                    sum += (sharp[i + c] as i32 - blurred[i + c] as i32).unsigned_abs() as u64;
+                }
+            }
+        }
+        sum as f32 / ((x1 - x0) * (y1 - y0) * 3) as f32
+    };
+    // Boite camera a t = 2,1 s : [0,411 ; 0,403 ; 0,579 ; 0,579] de la sortie,
+    // soit x 394..950 et y 217..530 en pixels — retrecie ici pour rester loin des
+    // bords adoucis. Le coin haut-gauche, lui, ne montre que l'ecran.
+    let inside = mean_diff(420, 920, 245, 505);
+    let outside = mean_diff(0, 300, 0, 150);
+    println!("compose_linux flou de velocite camera : dans la boite={inside:.2} hors boite={outside:.4}");
+
+    assert!(
+        inside > 4.0,
+        "la camera n'est pas floutee (diff={inside:.3}) — src_prev/dst_prev du calque webcam non cables ?"
+    );
+    assert!(
+        outside < 0.01,
+        "l'ecran a bouge aussi (diff={outside:.3}) — le test ne prouve alors rien sur la camera"
+    );
+}
+
+/// Trainee fantome du curseur (accumulation temporelle, pas un mode de shader).
+///
+/// Le curseur traverse le cadre ; a `cursor.motionBlur = 1` `plan_cursor` rend
+/// 11 taps entre sa position d'il y a 8 frames (8/60 s) et sa position courante.
+/// On compare au meme rendu sans trainee : la seule difference possible etant le
+/// curseur, un exces de vert la ou le curseur N'EST PAS (mais est PASSE) est la
+/// signature de la trainee.
+///
+/// « Exces de vert » = G - max(R,B), pas G brut : une copie a 1/taps d'opacite
+/// sur un fond CLAIR fait a peine monter le vert (le fond y est deja) mais fait
+/// nettement chuter le rouge et le bleu. Mesurer G seul rendrait le test
+/// dependant de ce qui passe sous le curseur dans la video.
+///
+/// Le trajet est volontairement hors de l'axe median (cy = 0,28) : une passe de
+/// composition qui retournerait `accum` verticalement enverrait la trainee dans
+/// la bande miroir, ce que la seconde assertion interdit. A cy = 0,5 le defaut
+/// serait invisible.
+#[test]
+fn compose_linux_trainee_de_curseur() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux trainee curseur: opt-in. Skip.");
+        return;
+    }
+    const SPRITE: &str = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAABAAAAAQCAIAAACQkWg2AAAACXBIWXMAAAABAAAAAQBPJcTWAAAAGElEQVR4nGNk+MdAEmAhTfmohlENQ0kDAGoRATwbkCdPAAAAAElFTkSuQmCC";
+
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut dec = Decoder::open(FIXTURE, &gpu).expect("Decoder::open");
+
+    // Piste : deplacement horizontal regulier cx 0,1 -> 0,9 en 0,4 s, a cy fixe.
+    // Assez rapide pour que les 8/60 s de recul de la trainee separent nettement
+    // les deux extremites (~256 px a 960 de large) : sans quoi la trainee se
+    // superpose au curseur lui-meme et on ne pourrait plus les distinguer.
+    let mut samples = String::new();
+    for k in 0..=8 {
+        let (ms, cx) = (k * 50, 0.1 + 0.1 * k as f32);
+        if k > 0 {
+            samples.push(',');
+        }
+        samples.push_str(&format!(
+            r#"{{"timeMs":{ms},"cx":{cx},"cy":0.28,"cursorType":"arrow"}}"#
+        ));
+    }
+    let track_path = std::env::temp_dir().join("os_cursor_trail_track.json");
+    std::fs::write(&track_path, format!(r#"{{"samples":[{samples}]}}"#)).expect("write track");
+    let track = CursorTrack::load(track_path.to_str().unwrap(), 0.0, 2.0).expect("CursorTrack::load");
+    comp.set_cursor(track);
+    comp.set_cursor_time(Some(0.35));
+
+    let scene_of = |mblur: f32| {
+        format!(
+            r##"{{"clips":[],"layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0}},"background":{{"kind":"color","color":"#101015"}},"zoomRegions":[],"annotations":[],"cursor":{{"show":true,"size":3,"smoothing":0,"motionBlur":{mblur},"clickBounce":0,"clipToBounds":false,"theme":"default","cursorSprites":{{"arrow":{{"path":"{SPRITE}","hotspotX":0.5,"hotspotY":0.5}}}}}},"cropByClip":[],"output":{{"width":1920,"height":1080,"fps":30}}}}"##
+        )
+    };
+
+    let (sharp, trail) = unsafe {
+        let sf = dec.seek_to(1.0).expect("Decoder::seek_to");
+        let cfg = Cfg::c8();
+        let render = |mblur: f32| {
+            let scene = Scene::from_json(&scene_of(mblur)).expect("scene json");
+            // `cursor.motionBlur` ET `cursor.size` transitent par les LiveParams,
+            // pas par la scene brute : sans ca `plan_cursor` verrait toujours 0.
+            comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&scene));
+            comp.set_scene(Some(scene));
+            comp.compose_frame(sf, sf, 15.0, &cfg).expect("compose_frame");
+            comp.readback_direct().expect("readback_direct").2
+        };
+        (render(0.0), render(1.0))
+    };
+
+    write_ppm("compose_linux_cursor_trail_off", W, H, &sharp);
+    write_ppm("compose_linux_cursor_trail_on", W, H, &trail);
+
+    // A t = 0,35 s le curseur est en cx 0,8 (x ~ 768 px) et 8/60 s plus tot en
+    // cx ~ 0,533 (x ~ 512 px) ; le sprite fait 51 px de cote a size 3 (34/1080
+    // de frame_min_px, x3), donc le curseur COURANT occupe x = 742..794. La
+    // fenetre ci-dessous couvre le milieu du trajet, franchement a sa gauche :
+    // sans trainee il n'y a rien du tout. La bande miroir est son reflet par
+    // rapport a l'axe horizontal de l'image (cy = 0,28 est hors de cet axe
+    // exprès), donc un `accum` composite a l'envers y atterrirait.
+    let greener = |x0: u32, x1: u32, y0: u32, y1: u32| -> usize {
+        let excess = |img: &[u8], i: usize| {
+            img[i + 1] as i32 - (img[i] as i32).max(img[i + 2] as i32)
+        };
+        let mut n = 0;
+        for y in y0..y1 {
+            for x in x0..x1 {
+                let i = ((y * W + x) * 4) as usize;
+                if excess(&trail, i) - excess(&sharp, i) > 10 {
+                    n += 1;
+                }
+            }
+        }
+        n
+    };
+    let on_path = greener(530, 700, 130, 172);
+    let mirrored = greener(530, 700, 368, 410);
+    println!("compose_linux trainee curseur : sur le trajet={on_path} bande miroir={mirrored}");
+
+    // La fenetre fait 170x42 = 7140 px et la trainee la remplit entierement.
+    // Le seuil a 4000 laisse de la marge tout en refusant une trainee qui ne
+    // couvrirait qu'un bout du trajet.
+    assert!(
+        on_path > 4000,
+        "pas de trainee au milieu du trajet ({on_path} px plus verts) — le curseur n'est dessine qu'a sa position courante"
+    );
+    assert!(
+        mirrored < 50,
+        "trainee dans la bande MIROIR ({mirrored} px) — la passe de composition d'accum retourne l'image en Y"
+    );
 }
 
 /// Export (WP6) : ~1s de la fixture -> MP4 H264 software. Verifie que la marche
