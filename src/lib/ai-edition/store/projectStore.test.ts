@@ -192,6 +192,46 @@ describe("useProjectStore", () => {
 		);
 	});
 
+	it("addAsset links the camera when the recorder measured a sub-millisecond offset", async () => {
+		// The native capture paths derive this from `performance.now()` (100 µs
+		// resolution), so the offset is almost never a whole number — while
+		// `cameraTrackSchema.offsetMs` is an int. Unrounded, the document failed
+		// validation, the catch below treated it as a lookup failure, and a
+		// recording that HAD a camera silently lost it.
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+		bridgeMocks.save.mockImplementation(async (document) => ({ success: true, document }));
+		// biome-ignore lint/suspicious/noExplicitAny: test-only stub of the legacy contextBridge surface
+		(window as any).electronAPI.findRecordingCamera.mockResolvedValue({
+			success: true,
+			webcamVideoPath: "/tmp/screen-webcam.webm",
+			offsetMs: -192.80000000447035,
+		});
+		bridgeMocks.addAsset.mockResolvedValue({
+			assetId: "asset_1",
+			document: {
+				...sampleDoc,
+				assets: [
+					{ id: "asset_1", kind: "video", label: "screen.mp4", originalPath: "/tmp/screen.mp4" },
+				],
+				project: { ...sampleDoc.project, primaryAssetId: "asset_1" },
+			},
+		});
+
+		await useProjectStore.getState().addAsset("/tmp/screen.mp4");
+		await new Promise((resolve) => setTimeout(resolve, 0));
+
+		expect(toastMocks.error).not.toHaveBeenCalled();
+		const camera = useProjectStore.getState().document?.assets[0]?.cameraTrack;
+		expect(camera?.sourcePath).toBe("/tmp/screen-webcam.webm");
+		expect(camera?.offsetMs).toBe(-193);
+	});
+
 	it("addAsset stays silent (no toast) when a plain imported video has no camera", async () => {
 		useProjectStore.setState({
 			projectId: "proj_test",

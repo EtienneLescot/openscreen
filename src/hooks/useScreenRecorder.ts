@@ -114,6 +114,30 @@ type NativeLinuxRecordingHandle = {
 	webcamOffsetMs: number | null;
 };
 
+/**
+ * How far AHEAD of the native screen recording the browser-recorded webcam
+ * started, in whole milliseconds (negative, since the webcam always starts
+ * first). `null` when this session recorded no webcam.
+ *
+ * WHOLE milliseconds on purpose. Both timestamps come from `performance.now()`,
+ * whose resolution is 100 µs, so the raw subtraction is almost never an integer
+ * — and this number ends up in `cameraTrack.offsetMs`, which the document schema
+ * declares as an int. A fractional value failed validation, the camera link was
+ * dropped as if the recording had no camera, and the editor drew the screen
+ * video in the camera's place. Rounding loses nothing: one frame at 60 fps is
+ * 16.7 ms.
+ */
+export function webcamOffsetMsFrom(
+	webcamRecorder: RecorderHandle | null,
+	webcamStartedAtMs: number | null,
+	nativeStartedAtMs: number,
+): number | null {
+	if (!webcamRecorder || webcamStartedAtMs === null) {
+		return null;
+	}
+	return -Math.round(nativeStartedAtMs - webcamStartedAtMs);
+}
+
 export function useScreenRecorder(): UseScreenRecorderReturn {
 	const t = useScopedT("editor");
 	const [recording, setRecording] = useState(false);
@@ -1180,10 +1204,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				recordingId: result.recordingId,
 				finalizing: false,
 				paused: false,
-				webcamOffsetMs:
-					nativeWebcamRecorder && nativeWebcamRecorderStartedAtMs !== null
-						? -(nativeRecordingConfirmedStartedAtMs - nativeWebcamRecorderStartedAtMs)
-						: null,
+				webcamOffsetMs: webcamOffsetMsFrom(
+					nativeWebcamRecorder,
+					nativeWebcamRecorderStartedAtMs,
+					nativeRecordingConfirmedStartedAtMs,
+				),
 			};
 			webcamRecorder.current = nativeWebcamRecorder;
 			accumulatedDurationMs.current = 0;
@@ -1304,10 +1329,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				recordingId: result.recordingId,
 				finalizing: false,
 				paused: false,
-				webcamOffsetMs:
-					nativeWebcamRecorder && nativeWebcamRecorderStartedAtMs !== null
-						? -(nativeRecordingConfirmedStartedAtMs - nativeWebcamRecorderStartedAtMs)
-						: null,
+				webcamOffsetMs: webcamOffsetMsFrom(
+					nativeWebcamRecorder,
+					nativeWebcamRecorderStartedAtMs,
+					nativeRecordingConfirmedStartedAtMs,
+				),
 			};
 			webcamRecorder.current = nativeWebcamRecorder;
 			accumulatedDurationMs.current = 0;
