@@ -78,6 +78,7 @@ interface CapturedInvoke {
 		model: { provider: string; model: string };
 		history: Array<{ role: "user" | "assistant" | "system"; content: string }>;
 		userMessage: string;
+		editsAllowed?: boolean;
 	};
 }
 
@@ -320,5 +321,74 @@ describe("runChat tool loop", () => {
 		// ponytail: keep TS happy about `events` — the variable is used above.
 		void events;
 		void streamAgent;
+	});
+});
+
+// ── D-CONSENT ───────────────────────────────────────────────────────────────
+//
+// `allowAgentEdits` is offered in Settings as "Project edits — when off, the
+// agent must ask before changing the timeline". `runChat` computed
+// `const editsAllowed = config.allowAgentEdits !== false;` and then, twenty
+// lines later, `void editsAllowed;`. That was every use of it: it reached
+// neither the tools nor the prompt, and `git log -S` shows it never had.
+describe("allowAgentEdits reaches the agent", () => {
+	it("passes the flag down when the setting is off", async () => {
+		const session = createSession("proj_consent_off");
+		await runChat(
+			"proj_consent_off",
+			session.id,
+			"cut the silences",
+			stubConfig({ allowAgentEdits: false }),
+			fixtureDocument(),
+		);
+		expect(fixture.captured.at(-1)?.args.editsAllowed).toBe(false);
+	});
+
+	it("passes it as allowed when the setting is on, or absent", async () => {
+		for (const config of [stubConfig(), stubConfig({ allowAgentEdits: true })]) {
+			const session = createSession("proj_consent_on");
+			await runChat("proj_consent_on", session.id, "cut it", config, fixtureDocument());
+			expect(fixture.captured.at(-1)?.args.editsAllowed).toBe(true);
+		}
+	});
+
+	it("withholds the document even if an agent somehow reports a mutation", async () => {
+		// Belt and braces: this returned document is the only path to disk. If the
+		// executor's guard were ever bypassed — a tool built outside the factory,
+		// a future sub-agent — the setting would still hold here.
+		invokeMock.mockReset();
+		invokeMock.mockImplementation(async (args) => ({
+			text: "I went ahead and cut them.",
+			document: args.document,
+			mutated: true,
+		}));
+		const session = createSession("proj_consent_belt");
+		const result = await runChat(
+			"proj_consent_belt",
+			session.id,
+			"cut the silences",
+			stubConfig({ allowAgentEdits: false }),
+			fixtureDocument(),
+		);
+		expect(result.success).toBe(true);
+		expect(result.document).toBeUndefined();
+	});
+
+	it("returns the document normally when edits are allowed", async () => {
+		invokeMock.mockReset();
+		invokeMock.mockImplementation(async (args) => ({
+			text: "Cut them.",
+			document: args.document,
+			mutated: true,
+		}));
+		const session = createSession("proj_consent_allowed");
+		const result = await runChat(
+			"proj_consent_allowed",
+			session.id,
+			"cut the silences",
+			stubConfig(),
+			fixtureDocument(),
+		);
+		expect(result.document).toBeDefined();
 	});
 });

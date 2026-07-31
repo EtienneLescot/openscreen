@@ -16,7 +16,7 @@
  */
 
 import type { CameraFullscreenRegion, SpeedRegion } from "@/components/video-editor/types";
-import { DEFAULT_CROP_REGION, ZOOM_DEPTH_SCALES } from "@/components/video-editor/types";
+import { DEFAULT_CROP_REGION, getZoomScale } from "@/components/video-editor/types";
 import { annotationFontSizeFraction } from "@/lib/ai-edition/annotationScale";
 import {
 	captionCuesToTextRegions,
@@ -693,7 +693,13 @@ export function buildSceneDescription(
 			// bien que la fenêtre source s'arrêtait 2.78 % avant le bord — 53 px sur 1920
 			// définitivement hors d'atteinte, gimbal à fond dans le coin. Le symptôme rapporté :
 			// « le zoom coupe les bords extérieurs ».
-			scale: region.customScale ?? ZOOM_DEPTH_SCALES[region.depth],
+			//
+			// ponytail: et c'est `getZoomScale` en entier, pas la table seule. La ligne
+			// lisait `region.customScale ?? ZOOM_DEPTH_SCALES[depth]`, donc sans le clamp
+			// [1.0, 5.0] que l'UI applique. Or `zoomRegionSchema` n'exige de `customScale`
+			// que d'être positif : un document portant `customScale: 12` est valide, rendait
+			// 5× dans l'aperçu web et 12× ici. Même désaccord que ci-dessus, un cran plus bas.
+			scale: getZoomScale(region),
 			focusX: region.focus.cx,
 			focusY: region.focus.cy,
 			// The global Auto-Focus toggle OVERRIDES each region's own mode rather than merely

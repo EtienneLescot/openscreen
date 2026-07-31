@@ -29,6 +29,7 @@ import {
 	DEFAULT_BUDGET_TOKENS,
 	shouldCompact,
 } from "./chat-compaction";
+import type { CursorTelemetryReader } from "./deep-agent/service";
 import type { DocumentService } from "./document-service";
 import type { LlmConfigStore } from "./llm-config-store";
 import { PROVIDER_DEFINITIONS } from "./provider-registry";
@@ -217,6 +218,12 @@ export interface ChatEventSink {
 	error?: (message: string) => void;
 }
 
+export interface ChatRunEnv {
+	/** Reads recorded cursor telemetry for an asset. Built in `electron/ipc/
+	 *  handlers.ts`, where the path allow-list lives. */
+	cursor?: CursorTelemetryReader;
+}
+
 // ponytail: zero-config noop for sink callbacks that the caller did not provide.
 const noop = () => undefined;
 
@@ -236,6 +243,11 @@ export async function runChat(
 	llmConfig: LlmConfigStore,
 	documentInput?: unknown,
 	sink: ChatEventSink = {},
+	/** Runtime capabilities the pure chat path cannot build for itself. Optional
+	 *  and last so the three existing call sites are unchanged — but note that a
+	 *  production caller which forgets to pass `cursor` gets an agent that answers
+	 *  "I could not look" every time, which is honest and unhelpful. */
+	env: ChatRunEnv = {},
 ): Promise<AiEditionChatResult> {
 	const emit: Required<ChatEventSink> = { ...NOOP_SINK, ...sink };
 	const config = llmConfig.getConfig();
@@ -332,7 +344,6 @@ export async function runChat(
 		thinking: (delta: string) => emit.thinking(delta),
 		toolStart: (name: string, args: unknown) => {
 			emit.toolStart(name, args);
-			void editsAllowed;
 		},
 		toolEnd: (name: string, ok: boolean, summary?: string) => {
 			emit.toolEnd(name, ok, summary);
@@ -357,6 +368,8 @@ export async function runChat(
 		history,
 		userMessage: message,
 		sink: agentSink,
+		editsAllowed,
+		cursor: env.cursor,
 	});
 
 	if (!result.text) {
@@ -383,7 +396,12 @@ export async function runChat(
 	return {
 		success: true,
 		assistantMessage,
-		document: result.mutated ? result.document : undefined,
+		// ponytail: belt and braces on `editsAllowed`. This returned document is
+		// the ONLY path to disk (LeftPanel → applyAgentDocument → saveDocument),
+		// so it is where a write that somehow escaped the executor's guard would
+		// still land. Cheap, and it makes the setting's guarantee structural
+		// rather than dependent on one predicate holding everywhere.
+		document: result.mutated && editsAllowed ? result.document : undefined,
 		toolCalls: appliedToolCalls.length ? appliedToolCalls : undefined,
 		userMessageCheckpointId: userMessage.checkpointId ?? undefined,
 	};

@@ -399,6 +399,25 @@ describe("buildSceneDescription.zoomRegions", () => {
 		expect(zoomRegions[0].scale).toBe(1.25);
 	});
 
+	it("clamps a customScale the schema lets through, exactly like the UI", () => {
+		// `zoomRegionSchema` only requires `customScale` to be positive, so
+		// `customScale: 12` is a legal document. This line read the raw field and
+		// skipped the [1.0, 5.0] clamp `getZoomScale` applies — the web preview
+		// rendered 5× and the native compositor 12×, for the same document. Same
+		// class of disagreement as the formula above, one storey down.
+		const z = makeZoom({
+			id: "z",
+			startMs: 0,
+			endMs: 1000,
+			depth: 3,
+			focus: { cx: 0.5, cy: 0.5 },
+			customScale: 12,
+		});
+		const { zoomRegions } = buildSceneDescription(makeDoc({ zoomRanges: [z] }));
+		expect(zoomRegions[0].scale).toBe(5);
+		expect(zoomRegions[0].scale).toBe(getZoomScale({ depth: 3, customScale: 12 }));
+	});
+
 	it("depth 6 → the table's scale", () => {
 		const z = makeZoom({ id: "z", startMs: 0, endMs: 1000, depth: 6, focus: { cx: 0.5, cy: 0.5 } });
 		const doc = makeDoc({ zoomRanges: [z] });

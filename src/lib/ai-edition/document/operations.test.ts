@@ -135,6 +135,31 @@ describe("applyTimelineOperation.drop_range", () => {
 			.reduce((sum, c) => sum + (c.sourceEndSec - c.sourceStartSec), 0);
 		expect(totalKeep).toBe(50);
 	});
+
+	it("keeps the cuts the user had already made", () => {
+		// ponytail: `drop_range` rebuilds the timeline, and the rebuild used to
+		// replace `trimRanges` in full with the complement of the kept intervals.
+		// So every UI drag of a range deleted every trim the user had placed —
+		// silently, one storey below the operation that appeared to be about
+		// something else entirely.
+		const withTrim = applyTimelineOperation(makeDoc(), {
+			type: "add_trim_range",
+			startSec: 40,
+			endSec: 45,
+		}).document;
+		const trimId = withTrim.timeline.trimRanges[0].id;
+		const dropped = applyTimelineOperation(withTrim, {
+			type: "drop_range",
+			assetId: "asset_1",
+			startSec: 10,
+			endSec: 20,
+		}).document;
+		expect(dropped.timeline.trimRanges.map((t) => t.id)).toContain(trimId);
+		expect(dropped.timeline.trimRanges.find((t) => t.id === trimId)).toMatchObject({
+			startSec: 40,
+			endSec: 45,
+		});
+	});
 });
 
 describe("applyTimelineOperation.replace_timeline", () => {

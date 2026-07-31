@@ -300,47 +300,51 @@ export function rederiveRegionMs(document: AxcutDocument, clips: AxcutClip[]): A
 			}
 			const clip = clipById.get(region.clipId);
 			if (!clip) return [];
-			let { sourceStartSec, sourceEndSec } = region;
-			// Only clamp against a real, probed window — an unprobed clip has
-			// `sourceEndSec` at/below `sourceStartSec` and must not shave its fragments.
-			if (clip.sourceEndSec !== undefined && clip.sourceEndSec > clip.sourceStartSec) {
-				sourceStartSec = Math.max(sourceStartSec, clip.sourceStartSec);
-				sourceEndSec = Math.min(sourceEndSec, clip.sourceEndSec);
-				if (sourceEndSec - sourceStartSec <= REGION_WINDOW_EPSILON_SEC) return [];
-			}
-			const span = anchoredToRawSpanSec(
-				{ clipId: region.clipId, sourceStartSec, sourceEndSec },
-				clips,
-			);
-			if (!span) return [];
-			return [
-				{
-					...region,
-					sourceStartSec,
-					sourceEndSec,
-					startMs: Math.round(span.startSec * 1000),
-					endMs: Math.round(span.endSec * 1000),
-				},
-			];
+			return rederiveAnchoredRegion(region, clip, clips);
 		}),
 	);
 }
 
-/**
- * Re-anchor every modifier against a REBUILT clip layout. `replaceTimeline` mints
- * brand-new clip identities, so existing anchors point at clips that no longer exist;
- * we re-ventilate each region from its current RAW ms (which still describe where it
- * sits on the ruler) and rebuild the anchor. Fragments of one region need no shared
- * marker to keep reading as a single pill: equal properties + adjacency suffice.
- */
-export function reanchorRegions(document: AxcutDocument, clips: AxcutClip[]): AxcutDocument {
-	if (clips.length === 0) return document;
-	return mapAllRegionCollections(
-		document,
-		(regions, prefix) =>
-			anchorRegionsWithDerivedMs(regions, clips, () => createId(prefix)) as StoredRegion[],
-	);
+/** One region's share of {@link rederiveRegionMs}: clamp it to its clip's current
+ *  source window, drop it when nothing survives, refresh its derived ms. Extracted
+ *  so `replaceTimeline` can apply it to the regions whose clip SURVIVED while
+ *  re-anchoring only the orphans — a rebuild used to re-anchor everything, which
+ *  moved anchored regions onto whatever content had slid under their ruler
+ *  position. Same body as before, one region at a time. */
+function rederiveAnchoredRegion<
+	T extends StoredRegion & { clipId: string; sourceStartSec: number; sourceEndSec: number },
+>(region: T, clip: AxcutClip, clips: AxcutClip[]): T[] {
+	let { sourceStartSec, sourceEndSec } = region;
+	// Only clamp against a real, probed window — an unprobed clip has
+	// `sourceEndSec` at/below `sourceStartSec` and must not shave its fragments.
+	if (clip.sourceEndSec !== undefined && clip.sourceEndSec > clip.sourceStartSec) {
+		sourceStartSec = Math.max(sourceStartSec, clip.sourceStartSec);
+		sourceEndSec = Math.min(sourceEndSec, clip.sourceEndSec);
+		if (sourceEndSec - sourceStartSec <= REGION_WINDOW_EPSILON_SEC) return [];
+	}
+	const span = anchoredToRawSpanSec({ clipId: region.clipId, sourceStartSec, sourceEndSec }, clips);
+	if (!span) return [];
+	return [
+		{
+			...region,
+			sourceStartSec,
+			sourceEndSec,
+			startMs: Math.round(span.startSec * 1000),
+			endMs: Math.round(span.endSec * 1000),
+		},
+	];
 }
+
+// ponytail: `reanchorRegions` used to live here — re-ventilate EVERY modifier
+// from its RAW ruler ms after a rebuild, on the premise that `replaceTimeline`
+// minted brand-new clip identities so no anchor could survive. It no longer
+// does, and the premise was the bug: a region's ruler position is where it is
+// DRAWN, its anchor is what it is ABOUT, and re-deriving the second from the
+// first moves it onto whatever footage slid underneath (measured: a zoom on
+// source 40–45 came back on 45–50). What is left of it is the orphan branch of
+// `reconcileRegionsAfterReplace`, which is the only case where the ruler really
+// is the last thing we know. Deleted rather than left exported: a dead helper
+// that does the wrong thing is an invitation.
 
 /** A clip that does not yet describe a real stretch of media: either it carries no
  *  source extent at all (what `migrateProjectDataToAxcutDocument` produces — the
@@ -427,41 +431,308 @@ export function applyProbedDuration(
 	);
 }
 
+/** One interval of a rebuilt timeline, plus the identity it inherits. `keepClipId`
+ *  is set when the CALLER'S raw interval is (to the epsilon) an existing clip's own
+ *  source window: the same stretch of media, so the same clip. */
+export interface TimelineReplacementSlot {
+	interval: Interval;
+	keepClipId: string | null;
+}
+
+/**
+ * What a {@link replaceTimeline} would cost, computed before anything is applied.
+ *
+ * ponytail: this exists because `replaceTimeline` is the one tool an agent
+ * reaches for when it cannot find a better one, and until now it answered
+ * `ok: true` to requests it had silently mangled. Three mechanisms, all of them
+ * invisible from the outside:
+ *   • `normalizeIntervals` SORTS, so a reorder request ([30-60], [0-30]) comes
+ *     back in ascending order and the swap simply does not happen;
+ *   • it also MERGES adjacent intervals, so handing back the timeline's own
+ *     intervals collapsed two clips into one — the identity call was destructive;
+ *   • the complement replaced `trimRanges` wholesale, so a cut the user made
+ *     inside a kept interval disappeared with no mention anywhere.
+ * The plan names each of those so the caller can refuse with something the model
+ * can act on. It is computed on the RAW intervals, because that is the last point
+ * at which the caller's INTENT (the order they asked for) is still legible.
+ */
+export interface TimelineReplacementPlan {
+	assetId: string;
+	/** The intervals the rebuild would produce, in timeline order. */
+	slots: TimelineReplacementSlot[];
+	/** The raw intervals were not in ascending order: the caller meant to
+	 *  REORDER. This operation cannot — see {@link moveClip}. */
+	reorderRequested: boolean;
+	/** Clips that would cease to exist: merged with a neighbour, shortened,
+	 *  dropped, or belonging to another asset (a rebuild only lays out the
+	 *  primary one). */
+	lostClipIds: string[];
+	/** Trims whose id would disappear because the span they cut now falls
+	 *  entirely outside the kept intervals. The CUT survives — that stretch is
+	 *  excluded anyway — only the id and its reason are lost. */
+	absorbedTrimIds: string[];
+	/** Trims that would be narrowed to their surviving overlap. */
+	clippedTrimIds: string[];
+	/** Modifiers anchored to a clip in `lostClipIds`. They are re-ventilated from
+	 *  their RULER position, which is not the same as their content: they land on
+	 *  whatever footage moved under them. */
+	slidRegionIds: string[];
+}
+
+function intervalsIntersect(a: Interval, b: Interval): Interval | null {
+	const startSec = Math.max(a.startSec, b.startSec);
+	const endSec = Math.min(a.endSec, b.endSec);
+	return endSec - startSec > REGION_WINDOW_EPSILON_SEC ? { startSec, endSec } : null;
+}
+
+function sameInterval(a: Interval, b: Interval): boolean {
+	return (
+		Math.abs(a.startSec - b.startSec) <= REGION_WINDOW_EPSILON_SEC &&
+		Math.abs(a.endSec - b.endSec) <= REGION_WINDOW_EPSILON_SEC
+	);
+}
+
+/** Every anchored modifier of the document, all four families, as `{id, clipId}`. */
+function anchoredRegionsOf(document: AxcutDocument): Array<{ id: string; clipId: string }> {
+	const legacy = document.legacyEditor as Record<string, unknown> | null;
+	const collections: StoredRegion[][] = [
+		document.zoomRanges as unknown as StoredRegion[],
+		document.annotations as unknown as StoredRegion[],
+		(legacy?.speedRegions as StoredRegion[] | undefined) ?? [],
+		(legacy?.cameraFullscreenRegions as StoredRegion[] | undefined) ?? [],
+	];
+	return collections
+		.flat()
+		.filter(isAnchored)
+		.map((region) => ({ id: region.id, clipId: region.clipId }));
+}
+
+export function planTimelineReplacement(
+	document: AxcutDocument,
+	intervals: Interval[],
+): TimelineReplacementPlan {
+	const assetId = document.project.primaryAssetId ?? document.assets[0]?.id ?? "";
+	const duration = primaryAssetDuration(document);
+	const bounded = intervals
+		.map((item) => ({
+			startSec: Math.max(0, Math.min(duration, item.startSec)),
+			endSec: Math.max(0, Math.min(duration, item.endSec)),
+		}))
+		.filter((item) => item.endSec > item.startSec);
+
+	// Read the intent BEFORE sorting: after `byStart` there is nothing left to see.
+	const reorderRequested = bounded.some(
+		(item, index) => index > 0 && item.startSec < bounded[index - 1].startSec,
+	);
+
+	const clips = document.timeline.clips;
+	const claimed = new Set<string>();
+	const matchClip = (interval: Interval): string | null => {
+		const hit = clips.find(
+			(clip) =>
+				!claimed.has(clip.id) &&
+				clip.assetId === assetId &&
+				clip.sourceEndSec !== undefined &&
+				sameInterval({ startSec: clip.sourceStartSec, endSec: clip.sourceEndSec }, interval),
+		);
+		if (!hit) return null;
+		claimed.add(hit.id);
+		return hit.id;
+	};
+
+	const slots: TimelineReplacementSlot[] = [];
+	for (const interval of [...bounded].sort(byStart)) {
+		const keepClipId = matchClip(interval);
+		const last = slots.at(-1);
+		const overlaps = last
+			? interval.startSec < last.interval.endSec - REGION_WINDOW_EPSILON_SEC
+			: false;
+		const touches = last
+			? Math.abs(interval.startSec - last.interval.endSec) <= REGION_WINDOW_EPSILON_SEC
+			: false;
+		// Overlapping intervals MUST merge — clips may not overlap. Merely ADJACENT
+		// ones merge only when neither side is a clip we could keep, which is the
+		// one place this differs from `normalizeIntervals`: merging [0,30] and
+		// [30,60] when both name an existing clip is precisely how the identity
+		// rebuild destroyed a two-clip timeline.
+		if (last && (overlaps || (touches && !last.keepClipId && !keepClipId))) {
+			last.interval = {
+				startSec: last.interval.startSec,
+				endSec: Math.max(last.interval.endSec, interval.endSec),
+			};
+			if (overlaps) last.keepClipId = null;
+			continue;
+		}
+		slots.push({ interval: { ...interval }, keepClipId });
+	}
+
+	const kept = new Set(slots.map((slot) => slot.keepClipId).filter((id): id is string => !!id));
+	const lostClipIds = clips.filter((clip) => !kept.has(clip.id)).map((clip) => clip.id);
+	const slidRegionIds = anchoredRegionsOf(document)
+		.filter((region) => !kept.has(region.clipId))
+		.map((region) => region.id);
+
+	const keptIntervals = slots.map((slot) => slot.interval);
+	const absorbedTrimIds: string[] = [];
+	const clippedTrimIds: string[] = [];
+	for (const trim of document.timeline.trimRanges) {
+		if (trim.assetId !== assetId) continue;
+		const pieces = keptIntervals
+			.map((slot) => intervalsIntersect(slot, { startSec: trim.startSec, endSec: trim.endSec }))
+			.filter((piece): piece is Interval => piece !== null);
+		if (pieces.length === 0) absorbedTrimIds.push(trim.id);
+		else if (pieces.length > 1 || !sameInterval(pieces[0], trim)) clippedTrimIds.push(trim.id);
+	}
+
+	return {
+		assetId,
+		slots,
+		reorderRequested,
+		lostClipIds,
+		absorbedTrimIds,
+		clippedTrimIds,
+		slidRegionIds,
+	};
+}
+
+export interface ReplaceTimelineOptions {
+	/** Reuse the id / origin / reason / wordRefs of a clip whose source window a
+	 *  kept interval reproduces exactly. Default true — a rebuild that happens to
+	 *  keep a stretch of media keeps the clip that WAS that stretch of media. */
+	preserveIds?: boolean;
+	/** Carry the primary asset's existing cuts through the rebuild (narrowed to
+	 *  the kept intervals). Default true. `restoreFullTimeline` is the one caller
+	 *  whose whole point is to drop them. */
+	preserveTrims?: boolean;
+}
+
 export function replaceTimeline(
 	document: AxcutDocument,
 	intervals: Interval[],
 	reason: string,
 	origin: "system" | "agent" | "user" = "user",
+	options: ReplaceTimelineOptions = {},
 ): AxcutDocument {
 	const assetId = document.project.primaryAssetId ?? document.assets[0]?.id;
 	if (!assetId) {
 		throw new Error("Cannot update timeline without a primary asset.");
 	}
+	const preserveIds = options.preserveIds !== false;
+	const preserveTrims = options.preserveTrims !== false;
 	const duration = primaryAssetDuration(document);
-	const normalized = normalizeIntervals(duration, intervals);
-	const clips = buildTimelineFromIntervals(assetId, normalized, {
-		origin,
-		reason,
-		transcript: document.transcript,
+	const plan = planTimelineReplacement(document, intervals);
+	const clipById = new Map(document.timeline.clips.map((clip) => [clip.id, clip]));
+
+	let cursor = 0;
+	const clips: AxcutClip[] = plan.slots.map((slot, index) => {
+		const length = slot.interval.endSec - slot.interval.startSec;
+		const timelineStartSec = cursor;
+		cursor += length;
+		const existing = preserveIds && slot.keepClipId ? clipById.get(slot.keepClipId) : undefined;
+		return {
+			// ponytail: a slot with no ancestor gets a MINTED id, not `clip_${i+1}`.
+			// Positional ids are what let `trim_1` survive a rebuild while meaning a
+			// different cut, and mixing them with preserved ids would collide outright
+			// (a preserved `clip_1` sitting at index 1). The legacy positional naming
+			// survives only on the `preserveIds: false` path, which rebuilds from nothing.
+			id: existing?.id ?? (preserveIds ? createId("clip") : `clip_${index + 1}`),
+			assetId,
+			sourceStartSec: slot.interval.startSec,
+			sourceEndSec: slot.interval.endSec,
+			timelineStartSec,
+			timelineEndSec: timelineStartSec + length,
+			wordRefs:
+				existing?.wordRefs ??
+				collectWordRefs(document.transcript, slot.interval.startSec, slot.interval.endSec),
+			origin: existing?.origin ?? origin,
+			reason: existing?.reason ?? reason,
+		};
 	});
-	const trimRanges = invertIntervals(normalized, duration).map((cut, i) => ({
-		id: `trim_${i + 1}`,
+
+	const keptIntervals = plan.slots.map((slot) => slot.interval);
+	const complement = invertIntervals(keptIntervals, duration).map((cut, index) => ({
+		id: preserveIds ? createId("trim") : `trim_${index + 1}`,
 		assetId,
 		startSec: cut.startSec,
 		endSec: cut.endSec,
 		origin,
 		reason,
 	}));
+	// Other assets' cuts are NEVER this operation's business — the rebuild only
+	// lays out the primary asset. Replacing `trimRanges` wholesale wiped them, the
+	// same bug `operations.ts` had already had to fix for `add_trim_range`.
+	const foreignTrims = document.timeline.trimRanges.filter((trim) => trim.assetId !== assetId);
+	const survivingTrims = preserveTrims
+		? document.timeline.trimRanges.flatMap((trim) => {
+				if (trim.assetId !== assetId) return [];
+				return keptIntervals
+					.map((slot) => intervalsIntersect(slot, { startSec: trim.startSec, endSec: trim.endSec }))
+					.filter((piece): piece is Interval => piece !== null)
+					.map((piece, index) => ({
+						...trim,
+						id: index === 0 ? trim.id : createId("trim"),
+						startSec: piece.startSec,
+						endSec: piece.endSec,
+					}));
+			})
+		: [];
+
 	const next: AxcutDocument = {
 		...document,
 		timeline: {
 			...document.timeline,
 			clips,
-			trimRanges,
+			trimRanges: [...foreignTrims, ...survivingTrims, ...complement].sort(byStart),
 			gaps: [],
 		},
 	};
-	return reanchorRegions(next, clips);
+	return reconcileRegionsAfterReplace(next, clips, new Set(clips.map((clip) => clip.id)));
+}
+
+/**
+ * Regions after a rebuild, by provenance — the fix for the quietest half of
+ * D-DESTRUCT.
+ *
+ * The old code ran `reanchorRegions` over everything, which re-ventilates each
+ * region from its RAW ruler ms. That is right for a region whose clip is gone
+ * (its ruler position is all that is left of it) and wrong for one whose clip
+ * survived: with the intervals [35-60], [0-25], a zoom anchored to clip_2 at
+ * source 40-45 came back anchored at source 50-55. Ten seconds into different
+ * footage, schema-valid, unreported. Anything whose anchor still resolves is
+ * therefore rederived — the anchor IS the content — and only the orphans are
+ * re-ventilated.
+ *
+ * The orphan branch also has to decide what "re-ventilation found nothing"
+ * means, and the answer depends on where the region came from.
+ * `anchorRegionsWithDerivedMs` passes such a region through UNCHANGED, which is
+ * right for a never-anchored one (a v2 migration keeps a region it cannot place
+ * rather than losing user data) and wrong for one whose clip was just deleted:
+ * that leaves it pointing at an id nothing resolves, invisible to the timeline
+ * and revivable by any future clip that happens to take the name. Its content
+ * is gone, so it goes with it — the same call `removeClip` and
+ * `setClipSourceRange` already make through `rederiveRegionMs`.
+ */
+function reconcileRegionsAfterReplace(
+	document: AxcutDocument,
+	clips: AxcutClip[],
+	surviving: Set<string>,
+): AxcutDocument {
+	if (clips.length === 0) return document;
+	const clipById = new Map(clips.map((clip) => [clip.id, clip]));
+	return mapAllRegionCollections(document, (regions, prefix) =>
+		regions.flatMap((region) => {
+			if (isAnchored(region) && surviving.has(region.clipId)) {
+				const clip = clipById.get(region.clipId);
+				if (clip) return rederiveAnchoredRegion(region, clip, clips);
+			}
+			const reventilated = anchorRegionsWithDerivedMs([region], clips, () =>
+				createId(prefix),
+			) as StoredRegion[];
+			const placed = reventilated.some((next) => isAnchored(next) && surviving.has(next.clipId));
+			if (placed) return reventilated;
+			return isAnchored(region) ? [] : reventilated;
+		}),
+	);
 }
 
 // ponytail: reorder an existing clip by removing it from its current
@@ -640,5 +911,18 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 export function restoreFullTimeline(document: AxcutDocument): AxcutDocument {
 	const duration = primaryAssetDuration(document);
 	if (duration <= 0) return document;
-	return replaceTimeline(document, [{ startSec: 0, endSec: duration }], "Restore full timeline");
+	// ponytail: the ONE caller whose semantics are "put it all back": a single
+	// clip covering the whole asset and not a single cut left. `replaceTimeline`
+	// preserves ids and trims by default now, which would quietly turn "restore"
+	// into "keep everything you already had" — the opposite of the button.
+	return replaceTimeline(
+		document,
+		[{ startSec: 0, endSec: duration }],
+		"Restore full timeline",
+		"user",
+		{
+			preserveIds: false,
+			preserveTrims: false,
+		},
+	);
 }
