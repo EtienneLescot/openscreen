@@ -1261,8 +1261,13 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const request: NativeLinuxRecordingRequest = {
 				recordingId: activeRecordingId,
 				video: {
+					// No bitrate on purpose. TARGET_WIDTH/HEIGHT are the app's 4K
+					// ceiling, not the capture size — on Wayland nobody knows that
+					// until the portal has negotiated it, and the user may well
+					// have picked a single window. Sending computeBitrate() of the
+					// ceiling asked for 76.5 Mbit/s for a 1080p capture. The helper
+					// derives it from the size it actually got.
 					fps: TARGET_FRAME_RATE,
-					bitrate: computeBitrate(TARGET_WIDTH, TARGET_HEIGHT),
 				},
 				audio: {
 					system: { enabled: systemAudioEnabled },

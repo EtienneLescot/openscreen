@@ -65,6 +65,28 @@ pub struct Selection {
     pub rejected: Vec<String>,
 }
 
+/// Bits per pixel per frame for H.264 screen content.
+///
+/// Screen recordings are mostly static and compress far better than camera
+/// footage, so this sits well below the ~0.2 a live-action encode would want.
+/// At 1920×1080/60 it comes to about 12 Mbit/s.
+const BITS_PER_PIXEL: f64 = 0.1;
+
+/// Picks a video bitrate from the size the compositor actually negotiated.
+///
+/// THE CALLER CANNOT DO THIS. On Wayland the app does not know the capture
+/// resolution until the portal has negotiated it — the user picks the source in
+/// the compositor's own dialog, and it may be a window rather than a display.
+/// The renderer therefore sends no bitrate at all. It used to send
+/// `computeBitrate(TARGET_WIDTH, TARGET_HEIGHT)`, whose constants are 4K, so a
+/// 1080p capture asked for 76.5 Mbit/s and produced 44 MB for 18 seconds.
+fn default_bitrate(width: i32, height: i32, fps: i32) -> i64 {
+    let pixels_per_second = f64::from(width.max(1)) * f64::from(height.max(1)) * f64::from(fps.max(1));
+    // Floor so that a tiny window capture still gets enough bits to look sharp,
+    // ceiling so that a 4K/120 stream cannot ask for something no disk wants.
+    ((pixels_per_second * BITS_PER_PIXEL) as i64).clamp(2_000_000, 60_000_000)
+}
+
 pub struct Summary {
     pub path: PathBuf,
     pub duration_ms: u64,
@@ -101,10 +123,13 @@ impl Capture {
         width: i32,
         height: i32,
         fps: i32,
-        bitrate: i64,
+        // `None` derives one from the negotiated size, which is almost always
+        // what the caller wants — see `default_bitrate`.
+        bitrate: Option<i64>,
         forced: Option<Backend>,
         audio_sources: Vec<AudioSource>,
     ) -> Result<(Self, Selection), String> {
+        let bitrate = bitrate.unwrap_or_else(|| default_bitrate(width, height, fps));
         let mut rejected = Vec::new();
         let encoder = VideoEncoder::open(
             VideoParams { width, height, fps, bitrate },
@@ -383,7 +408,7 @@ mod tests {
     fn the_timeline_does_not_start_until_the_first_frame_is_staged() {
         let output = std::env::temp_dir().join("openscreen-capture-epoch.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, 1_000_000, Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
                 .expect("start");
         assert!(!capture.started());
         // Nothing staged: advance must not write a frame of uninitialised memory.
@@ -402,7 +427,7 @@ mod tests {
         // further arrivals, and the file must still fill with frames.
         let output = std::env::temp_dir().join("openscreen-capture-static.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, 1_000_000, Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
                 .expect("start");
         capture
             .stage(&frame(320, 240, shim::constants().video_format_bgrx))
@@ -421,7 +446,7 @@ mod tests {
     fn paused_time_does_not_advance_the_timeline() {
         let output = std::env::temp_dir().join("openscreen-capture-pause.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 30, 1_000_000, Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
                 .expect("start");
         capture
             .stage(&frame(320, 240, shim::constants().video_format_bgrx))
@@ -458,7 +483,7 @@ mod tests {
             320,
             240,
             30,
-            1_000_000,
+            Some(1_000_000),
             Some(Backend::Software),
             vec![AudioSource { label: "system", ring: ring.clone(), gain: 1.0, bitrate: 128_000 }],
         )
@@ -491,7 +516,7 @@ mod tests {
             320,
             240,
             30,
-            1_000_000,
+            Some(1_000_000),
             Some(Backend::Software),
             vec![AudioSource { label: "microphone", ring, gain: 4.0, bitrate: 128_000 }],
         )
@@ -516,7 +541,7 @@ mod tests {
     fn catch_up_is_bounded_so_a_stall_cannot_block_stop() {
         let output = std::env::temp_dir().join("openscreen-capture-catchup.mp4");
         let (mut capture, _) =
-            Capture::start(&output, 320, 240, 60, 1_000_000, Some(Backend::Software), Vec::new())
+            Capture::start(&output, 320, 240, 60, Some(1_000_000), Some(Backend::Software), Vec::new())
                 .expect("start");
         capture
             .stage(&frame(320, 240, shim::constants().video_format_bgrx))
