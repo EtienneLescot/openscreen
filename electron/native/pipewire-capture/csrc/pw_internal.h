@@ -48,6 +48,14 @@ struct osc_pw_audio_api {
     struct pw_buffer *(*stream_dequeue_buffer)(struct pw_stream *stream);
     int (*stream_queue_buffer)(struct pw_stream *stream, struct pw_buffer *buffer);
     const char *(*stream_state_as_string)(enum pw_stream_state state);
+    /* Enumeration only (osc_pw_list_audio_sources): a synchronous main loop
+     * rather than the thread loop the streams use. */
+    struct pw_main_loop *(*main_loop_new)(const struct spa_dict *props);
+    void (*main_loop_destroy)(struct pw_main_loop *loop);
+    struct pw_loop *(*main_loop_get_loop)(struct pw_main_loop *loop);
+    int (*main_loop_run)(struct pw_main_loop *loop);
+    int (*main_loop_quit)(struct pw_main_loop *loop);
+    void (*proxy_destroy)(struct pw_proxy *proxy);
 };
 
 extern struct osc_pw_audio_api osc_audio_api;

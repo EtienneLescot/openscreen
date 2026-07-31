@@ -311,6 +311,27 @@ fn start_audio<W: Write>(
 ) -> (Vec<shim::AudioSession>, Vec<capture::AudioSource>) {
     let mut sessions = Vec::new();
     let mut sources = Vec::new();
+    // Enumerated ONCE for the whole recording, not per stream: it opens its own
+    // PipeWire connection and runs a loop to completion, so doing it per source
+    // would pay that cost twice for no new information.
+    let graph = if configs.iter().any(|c| c.target.is_some()) {
+        match shim::list_audio_sources() {
+            Ok(list) => list,
+            Err(message) => {
+                let _ = emitter.emit(&Event::Warning {
+                    code: "audio-enumeration-failed".to_owned(),
+                    message: format!(
+                        "the PipeWire graph could not be listed, so the requested microphone \
+                         cannot be resolved and the session default will be used instead: {message}"
+                    ),
+                });
+                Vec::new()
+            }
+        }
+    } else {
+        Vec::new()
+    };
+
     for config in configs {
         let ring = Arc::new(shim::AudioRing::new(
             AUDIO_RING_SECONDS,
@@ -318,8 +339,35 @@ fn start_audio<W: Write>(
             encoder::AUDIO_CHANNELS,
         ));
         let label = config.label;
+        // A label we cannot place resolves to None, which means "no target" —
+        // PipeWire then links to the session default source. That is the old
+        // behaviour and the right fallback: a default microphone beats none.
+        let resolved = config
+            .target
+            .as_deref()
+            .and_then(|wanted| resolve_microphone_node(wanted, &graph));
+        if let Some(wanted) = config.target.as_deref() {
+            let _ = emitter.emit(&Event::Debug {
+                code: "audio-target".to_owned(),
+                data: json_map([
+                    ("label", wanted.into()),
+                    ("resolvedNode", resolved.clone().into()),
+                    ("graphSize", graph.len().into()),
+                ]),
+            });
+            if resolved.is_none() {
+                let _ = emitter.emit(&Event::Warning {
+                    code: "microphone-not-found".to_owned(),
+                    message: format!(
+                        "no PipeWire capture node matches {wanted:?}, so the session default \
+                         source will be recorded instead — which is often not the microphone \
+                         the user picked."
+                    ),
+                });
+            }
+        }
         let session = shim::AudioSession::start(
-            config.target.as_deref(),
+            resolved.as_deref(),
             config.capture_sink,
             encoder::AUDIO_SAMPLE_RATE as u32,
             encoder::AUDIO_CHANNELS as u32,
@@ -942,3 +990,112 @@ fn json_map<const N: usize>(
         .collect()
 }
 
+
+/// Resolves the microphone the user picked in the app to a PipeWire `node.name`.
+///
+/// WHY A MATCH AND NOT A LOOKUP. The picker lists Chromium `MediaDeviceInfo`,
+/// whose `deviceId` is an opaque per-origin hash and whose `label` is a human
+/// string. Neither is a PipeWire node name, and `PW_KEY_TARGET_OBJECT` takes
+/// nothing else. On a PipeWire system Chromium's label IS the node's
+/// `node.description`, so matching on that is the bridge between the two
+/// namespaces — there is no id to look up.
+///
+/// Returning `None` is a real answer, not a failure: the caller then passes no
+/// target and PipeWire links to the session default source. That is the old
+/// behaviour, and it is the right fallback for a label we cannot place.
+fn resolve_microphone_node(label: &str, sources: &[shim::AudioSourceInfo]) -> Option<String> {
+    let wanted = label.trim();
+    if wanted.is_empty() {
+        return None;
+    }
+    // A caller that already knows the node name (a config file, a future
+    // picker) should not be forced through fuzzy matching.
+    if let Some(exact) = sources.iter().find(|s| s.name == wanted) {
+        return Some(exact.name.clone());
+    }
+    let folded = wanted.to_lowercase();
+    if let Some(exact) = sources.iter().find(|s| s.description.to_lowercase() == folded) {
+        return Some(exact.name.clone());
+    }
+    // Chromium decorates labels ("Digital Microphone (Family 17h/19h ...)"),
+    // and some descriptions are longer than the label, so containment is
+    // checked BOTH ways. Longest description first, so that when several nodes
+    // match a short label the most specific one wins rather than whichever the
+    // registry happened to announce first.
+    let mut candidates: Vec<&shim::AudioSourceInfo> = sources
+        .iter()
+        .filter(|s| {
+            let d = s.description.to_lowercase();
+            !d.is_empty() && (d.contains(&folded) || folded.contains(&d))
+        })
+        .collect();
+    candidates.sort_by_key(|s| std::cmp::Reverse(s.description.len()));
+    candidates.first().map(|s| s.name.clone())
+}
+
+#[cfg(test)]
+mod microphone_resolution_tests {
+    use super::*;
+
+    fn sources() -> Vec<shim::AudioSourceInfo> {
+        // The real graph of the machine this was debugged on.
+        vec![
+            shim::AudioSourceInfo {
+                name: "alsa_input.pci-0000_03_00.6.HiFi__hw_Generic_1__source".into(),
+                description: "Family 17h/19h HD Audio Controller Headphones Stereo Microphone"
+                    .into(),
+            },
+            shim::AudioSourceInfo {
+                name: "alsa_input.pci-0000_03_00.6.HiFi__hw_acp6x__source".into(),
+                description: "Family 17h/19h HD Audio Controller Digital Microphone".into(),
+            },
+        ]
+    }
+
+    #[test]
+    fn matches_the_description_chromium_reports_as_the_label() {
+        // THE bug this exists for: the user picked the built-in microphone and
+        // the recording captured the empty headphone jack, because no target was
+        // passed and PipeWire fell back to the default source.
+        let node = resolve_microphone_node(
+            "Family 17h/19h HD Audio Controller Digital Microphone",
+            &sources(),
+        );
+        assert_eq!(node.as_deref(), Some("alsa_input.pci-0000_03_00.6.HiFi__hw_acp6x__source"));
+    }
+
+    #[test]
+    fn matches_a_decorated_or_shortened_label() {
+        // Chromium is not obliged to hand back the description verbatim.
+        assert_eq!(
+            resolve_microphone_node("Digital Microphone", &sources()).as_deref(),
+            Some("alsa_input.pci-0000_03_00.6.HiFi__hw_acp6x__source")
+        );
+    }
+
+    #[test]
+    fn a_node_name_passes_straight_through() {
+        let name = "alsa_input.pci-0000_03_00.6.HiFi__hw_Generic_1__source";
+        assert_eq!(resolve_microphone_node(name, &sources()).as_deref(), Some(name));
+    }
+
+    #[test]
+    fn an_unknown_label_falls_back_to_the_default_source() {
+        // `None` means "pass no target", which is the pre-fix behaviour. Better
+        // a default microphone than no audio at all.
+        assert_eq!(resolve_microphone_node("Blue Yeti", &sources()), None);
+        assert_eq!(resolve_microphone_node("   ", &sources()), None);
+    }
+
+    #[test]
+    fn prefers_the_most_specific_description_when_several_contain_the_label() {
+        // "Microphone" is a substring of both. Picking the first announced would
+        // make the result depend on registry ordering, which is not stable.
+        let node = resolve_microphone_node("Microphone", &sources());
+        assert_eq!(
+            node.as_deref(),
+            Some("alsa_input.pci-0000_03_00.6.HiFi__hw_Generic_1__source"),
+            "the longer description should win, deterministically"
+        );
+    }
+}
