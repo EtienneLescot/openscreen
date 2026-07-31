@@ -149,6 +149,7 @@
 		"typeBlur": "Desfoque",
 		"textContent": "Conteúdo do Texto",
 		"textPlaceholder": "Digite seu texto...",
+		"defaultText": "Olá",
 		"fontStyle": "Estilo da Fonte",
 		"selectStyle": "Selecionar estilo",
 		"size": "Tamanho",

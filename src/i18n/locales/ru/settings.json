@@ -149,6 +149,7 @@
 		"typeBlur": "Размытие",
 		"textContent": "Содержание текста",
 		"textPlaceholder": "Введите ваш текст...",
+		"defaultText": "Привет",
 		"fontStyle": "Стиль шрифта",
 		"selectStyle": "Выбрать стиль",
 		"size": "Размер",

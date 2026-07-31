@@ -149,6 +149,7 @@
 		"typeBlur": "Desenfoque",
 		"textContent": "Contenido de texto",
 		"textPlaceholder": "Escribe tu texto...",
+		"defaultText": "Hola",
 		"fontStyle": "Estilo de fuente",
 		"selectStyle": "Seleccionar estilo",
 		"size": "Tamaño",
