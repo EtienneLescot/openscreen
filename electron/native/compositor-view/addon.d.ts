@@ -56,6 +56,15 @@ export interface GifExportStats {
 	fileBytes: number;
 }
 
+/** Outcome of a container-only remux — see `remuxSeekable`. */
+export interface RemuxStats {
+	/** Packets copied verbatim, all streams combined. */
+	packets: number;
+	/** Streams kept in the output (video/audio/subtitle; anything else is dropped). */
+	streams: number;
+	wallS: number;
+}
+
 /** Sortie GIF native : taille, cadence, loop, dither. Tout optionnel —
  *  absent → 854×480, 12 fps, boucle infinie, pas de dithering. */
 export interface GifParamsInput {
@@ -172,6 +181,15 @@ export interface CompositorViewAddon {
 		params?: GifParamsInput,
 		onProgress?: (frames: number) => void,
 	): Promise<GifExportStats>;
+
+	/** Stream-copy `inputPath` to `outputPath` through the matroska muxer, rebuilding the
+	 *  container (real `Duration` computed from the packet timestamps, plus `Cues` and
+	 *  `SeekHead`) without re-encoding a single frame.
+	 *
+	 *  Optional at the type level: a `.node` built before this export exists in the wild
+	 *  (dev trees keep a stale binary until the next `build-linux-compositor-addon.mjs`),
+	 *  and the caller degrades to "leave the file alone" rather than failing the save. */
+	remuxSeekable?(inputPath: string, outputPath: string): Promise<RemuxStats>;
 }
 
 /**

@@ -15,6 +15,7 @@ import type {
 	GifExportStats,
 	GifParamsInput,
 	NativeFramePacket,
+	RemuxStats,
 } from "../../native/compositor-view/addon";
 
 /**
@@ -574,5 +575,24 @@ export class CompositorViewService {
 			params,
 			onProgress,
 		);
+	}
+
+	/** Stream-copy `inputPath` to `outputPath` through libavformat's matroska muxer.
+	 *  No re-encode: the packets are copied verbatim and only the container is rebuilt,
+	 *  which is what gives the output a real `Duration`, `Cues` and `SeekHead`.
+	 *
+	 *  `outputPath` must be a TEMPORARY path — the caller renames it over the original
+	 *  only once this resolves, so a failure leaves the recording untouched. See
+	 *  `electron/recording/webm-seek-index.ts`, the only caller.
+	 *
+	 *  Returns null when the addon is absent, or when it predates this export (a stale
+	 *  `.node` from an earlier build): the caller then keeps the file as it is rather
+	 *  than treating a missing optimisation as a failed save. */
+	async remuxSeekable(inputPath: string, outputPath: string): Promise<RemuxStats | null> {
+		const addon = this.ensureAddon();
+		if (!addon?.remuxSeekable) {
+			return null;
+		}
+		return addon.remuxSeekable(inputPath, outputPath);
 	}
 }
