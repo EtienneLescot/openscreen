@@ -19,19 +19,26 @@ PipeWire versions.
 
 ## What was copied
 
-Exactly the transitive closure of what `csrc/pw_shim.c` includes — 76 files,
-computed with `gcc -MM` — not the whole upstream tree. Adding a new `#include`
-to the shim may therefore need another header vendored.
+Exactly the transitive closure of what `csrc/pw_shim.c` and `csrc/pw_audio.c`
+include — 108 files, computed with `gcc -MM` — not the whole upstream tree.
+Adding a new `#include` to either may therefore need another header vendored.
 
-To re-vendor after changing the shim's includes, or to move to a newer PipeWire:
+The audio half accounts for 29 of those: `spa/param/audio/` arrived with
+`pw_audio.c`, and `format-utils.h` drags in every codec-specific header in that
+directory (`aac.h`, `flac.h`, `wma.h` …) even though the helper only ever builds
+a raw F32 format. That is upstream's include graph, not a mistake here — the
+closure is copied as computed rather than pruned by hand, so re-running the
+command below reproduces it exactly.
+
+To re-vendor after changing the shims' includes, or to move to a newer PipeWire:
 
 ```sh
 # 1. Unpack an upstream release next to the repo, then stage its two header roots:
 #      <src>/src/pipewire/*.h + extensions/  ->  $STAGE/pipewire/
 #      <src>/spa/include/spa/               ->  $STAGE/spa/
 # 2. Generate pipewire/version.h from version.h.in (see below).
-# 3. List what the shim actually needs and copy just those:
-gcc -std=gnu11 -MM csrc/pw_shim.c -I"$STAGE" -Icsrc \
+# 3. List what the shims actually need and copy just those:
+gcc -std=gnu11 -MM csrc/pw_shim.c csrc/pw_audio.c -I"$STAGE" -Icsrc \
   | tr ' ' '\n' | grep "^$STAGE" | sort -u
 ```
 
