@@ -1084,3 +1084,380 @@ fn compose_linux_sans_camera_ne_dessine_pas_de_vignette() {
         "sans camera, le rendu devrait etre celui du preset no-webcam ({residual} px d'ecart)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Annotations : figure (fleche), flou/mosaique, image, et animations du texte.
+//
+// Ces quatre familles existaient dans le schema et arrivaient jusqu'au
+// compositeur, mais le chemin Linux ne dessinait QUE le texte -- tout le reste
+// etait ignore en silence. Les tests ci-dessous les MESURENT sur le GPU au lieu
+// de supposer qu'un draw ajoute suffit : la methode est toujours la meme, rendre
+// deux fois la meme scene (avec et sans l'annotation) et lire l'empreinte dans
+// le diff. Elle ne demande de connaitre ni ou `plan_frame` a pose l'ecran, ni
+// quelle couleur la video porte a cet endroit.
+// ---------------------------------------------------------------------------
+
+/// Scene de base des tests d'annotation : fond uni, pas d'effets, une liste
+/// d'annotations injectee telle quelle.
+fn annotation_scene(annotations: &str) -> String {
+    format!(
+        r##"{{"clips":[],"layout":{{"preset":"no-webcam","webcamSize":1,"webcamShape":"rectangle","webcamMirror":false,"webcamPosition":null,"webcamReactiveZoom":false}},"effects":{{"padding":0.1,"blur":false,"shadow":0,"roundnessFrac":0,"motionBlur":0}},"background":{{"kind":"color","color":"#00ff00"}},"zoomRegions":[],"annotations":[{annotations}],"cursor":{{"show":false,"size":1,"smoothing":0,"motionBlur":0,"clickBounce":0,"clipToBounds":false,"theme":"default"}},"cropByClip":[],"output":{{"width":1920,"height":1080,"fps":30}}}}"##
+    )
+}
+
+/// Indices des pixels qui different entre deux rendus. C'est l'empreinte exacte
+/// de ce que l'annotation a ajoute.
+fn changed_pixels(a: &[u8], b: &[u8]) -> Vec<usize> {
+    a.chunks_exact(4)
+        .zip(b.chunks_exact(4))
+        .enumerate()
+        .filter(|(_, (p, q))| {
+            // Seuil 6/255 : au-dessus du bruit de quantification du YUV->RGB,
+            // bien en-dessous de tout trait ou masque reel.
+            (0..3).any(|c| (p[c] as i32 - q[c] as i32).abs() > 6)
+        })
+        .map(|(i, _)| i)
+        .collect()
+}
+
+/// Boite englobante (x0, y0, x1, y1) inclusive d'une liste d'indices de pixels.
+fn bbox(px: &[usize], w: u32) -> (u32, u32, u32, u32) {
+    let (mut x0, mut y0, mut x1, mut y1) = (u32::MAX, u32::MAX, 0u32, 0u32);
+    for &i in px {
+        let (x, y) = (i as u32 % w, i as u32 / w);
+        x0 = x0.min(x);
+        y0 = y0.min(y);
+        x1 = x1.max(x);
+        y1 = y1.max(y);
+    }
+    (x0, y0, x1, y1)
+}
+
+/// Une fleche est un TRACE, pas un aplat — et elle suit sa direction.
+///
+/// Deux pieges que ce test ferme. Le premier : ne rien dessiner du tout, ce que
+/// faisait le chemin Linux. Le second, plus sournois : dessiner le quad entier
+/// (un mode inconnu tombe sur la branche « ombre » du shader et remplit la
+/// boite), ce qui se voit comme un rectangle colore et non comme une fleche.
+/// L'aire couverte les separe : trois segments d'epaisseur fixe ne peuvent pas
+/// remplir la moitie de leur boite.
+#[test]
+fn compose_linux_annotation_fleche() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux annotation fleche: opt-in. Skip.");
+        return;
+    }
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut screen = Decoder::open(FIXTURE, &gpu).expect("Decoder::open");
+
+    let mut render = |annotations: &str| -> Vec<u8> {
+        let parsed = Scene::from_json(&annotation_scene(annotations)).expect("scene json");
+        // Cf. compose_linux_forme_webcam_cercle : sans les LiveParams la scene
+        // est parsee puis ignoree, et le test mesure les valeurs par defaut.
+        comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&parsed));
+        comp.set_scene(Some(parsed));
+        // Le 3e argument de `compose_frame` est un NUMERO DE FRAME (source_t =
+        // frame / 60), pas des secondes. `set_timeline_time` fixe directement
+        // l'instant que lit la fenetre temporelle des annotations -- sans lui,
+        // une annotation a `startSec: 1` ne serait tout simplement pas visible,
+        // et un test d'animation mesurerait sa propre erreur de cadrage.
+        comp.set_timeline_time(Some(1.0));
+        unsafe {
+            let sf = screen.seek_to(1.0).expect("seek");
+            comp.compose_frame(sf, std::ptr::null(), 60.0, &Cfg::c8()).expect("compose_frame");
+            comp.readback_direct().expect("readback").2
+        }
+    };
+
+    let figure = |direction: &str| {
+        format!(
+            r##"{{"id":"f1","kind":"figure","x":0.2,"y":0.2,"w":0.4,"h":0.4,"startSec":0,"endSec":10,"zIndex":1,"figure":{{"direction":"{direction}","color":"#ff0000","strokeWidth":8}}}}"##
+        )
+    };
+    let none = render("");
+    let right = render(&figure("right"));
+    let up = render(&figure("up"));
+
+    let right_px = changed_pixels(&none, &right);
+    let up_px = changed_pixels(&none, &up);
+    assert!(
+        right_px.len() > 200,
+        "aucune fleche dessinee ({} px changes) — le mode 9 n'atteint pas le shader",
+        right_px.len()
+    );
+
+    // La boite fait 0.4 x 0.4 du rect ecran ; la fleche s'y inscrit en carre
+    // (preserveAspectRatio). Un trait de 8/100 d'epaisseur sur trois segments
+    // couvre nettement moins de la moitie de ce carre.
+    let (x0, y0, x1, y1) = bbox(&right_px, W);
+    let box_area = ((x1 - x0 + 1) * (y1 - y0 + 1)) as f64;
+    let fill = right_px.len() as f64 / box_area;
+    assert!(
+        fill < 0.5,
+        "la fleche remplit {fill:.2} de sa boite — c'est un aplat, pas un trace"
+    );
+
+    // La direction est vraiment lue : « right » et « up » sont deux tracés
+    // differents, donc leurs empreintes ne peuvent pas coincider.
+    let common = right_px
+        .iter()
+        .collect::<std::collections::HashSet<_>>()
+        .intersection(&up_px.iter().collect::<std::collections::HashSet<_>>())
+        .count();
+    let overlap = common as f64 / right_px.len().min(up_px.len()) as f64;
+    assert!(
+        overlap < 0.75,
+        "« right » et « up » se recouvrent a {overlap:.2} — la direction est ignoree"
+    );
+}
+
+/// Le flou floute vraiment, et la mosaique fait des blocs.
+///
+/// Mesure sur l'ENERGIE HAUTE FREQUENCE (somme des ecarts entre voisins
+/// horizontaux) dans la zone masquee. Compter des pixels changes ne suffirait
+/// pas : un masque qui recopierait la frame telle quelle changerait aussi des
+/// pixels au bord et passerait. Ce qu'on veut prouver, c'est que le detail a
+/// DISPARU — c'est la seule propriete qui rend l'annotation utile.
+#[test]
+fn compose_linux_annotation_flou_et_mosaique() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux annotation flou: opt-in. Skip.");
+        return;
+    }
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut screen = Decoder::open(FIXTURE, &gpu).expect("Decoder::open");
+
+    let mut render = |annotations: &str| -> Vec<u8> {
+        let parsed = Scene::from_json(&annotation_scene(annotations)).expect("scene json");
+        comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&parsed));
+        comp.set_scene(Some(parsed));
+        // Le 3e argument de `compose_frame` est un NUMERO DE FRAME (source_t =
+        // frame / 60), pas des secondes. `set_timeline_time` fixe directement
+        // l'instant que lit la fenetre temporelle des annotations -- sans lui,
+        // une annotation a `startSec: 1` ne serait tout simplement pas visible,
+        // et un test d'animation mesurerait sa propre erreur de cadrage.
+        comp.set_timeline_time(Some(1.0));
+        unsafe {
+            let sf = screen.seek_to(1.0).expect("seek");
+            comp.compose_frame(sf, std::ptr::null(), 60.0, &Cfg::c8()).expect("compose_frame");
+            comp.readback_direct().expect("readback").2
+        }
+    };
+
+    // Boite bien a l'interieur du rect ecran, sur de la video (pas sur le fond).
+    let blur_ann = |style: &str, amount: f32| {
+        format!(
+            r##"{{"id":"b1","kind":"blur","x":0.25,"y":0.25,"w":0.5,"h":0.5,"startSec":0,"endSec":10,"zIndex":1,"blur":{{"style":"{style}","shape":"rectangle","color":"white","intensity":{amount},"blockSize":{amount}}}}}"##
+        )
+    };
+    let none = render("");
+    let blurred = render(&blur_ann("blur", 24.0));
+    let mosaic = render(&blur_ann("mosaic", 16.0));
+
+    let changed = changed_pixels(&none, &blurred);
+    assert!(
+        changed.len() > 2000,
+        "le flou n'a rien change ({} px) — le mode 10 n'atteint pas le shader",
+        changed.len()
+    );
+    let (x0, y0, x1, y1) = bbox(&changed, W);
+
+    // Energie haute frequence sur le canal vert, a l'interieur de la zone, en
+    // s'ecartant du bord (les 2 px de bord melangent masque et image nette).
+    let hf = |px: &[u8]| -> f64 {
+        let mut sum = 0f64;
+        let mut n = 0usize;
+        for y in (y0 + 2)..=(y1 - 2) {
+            for x in (x0 + 2)..(x1 - 2) {
+                let i = ((y * W + x) * 4) as usize;
+                let j = i + 4;
+                sum += (px[i + 1] as i32 - px[j + 1] as i32).abs() as f64;
+                n += 1;
+            }
+        }
+        sum / n.max(1) as f64
+    };
+    let sharp_hf = hf(&none);
+    let blur_hf = hf(&blurred);
+    assert!(
+        sharp_hf > 1.0,
+        "la fixture est trop plate a cet endroit ({sharp_hf:.2}) pour mesurer un flou"
+    );
+    assert!(
+        blur_hf < sharp_hf * 0.5,
+        "detail toujours present sous le flou : {blur_hf:.2} contre {sharp_hf:.2} sans masque"
+    );
+
+    // Mosaique : a l'interieur d'un bloc les pixels sont IDENTIQUES, donc la
+    // proportion de voisins strictement egaux explose par rapport a l'image
+    // nette. C'est la signature d'un aplat par blocs, qu'un simple flou n'a pas.
+    let flat_ratio = |px: &[u8]| -> f64 {
+        let (mut eq, mut n) = (0usize, 0usize);
+        for y in (y0 + 2)..=(y1 - 2) {
+            for x in (x0 + 2)..(x1 - 2) {
+                let i = ((y * W + x) * 4) as usize;
+                let j = i + 4;
+                if px[i..i + 3] == px[j..j + 3] {
+                    eq += 1;
+                }
+                n += 1;
+            }
+        }
+        eq as f64 / n.max(1) as f64
+    };
+    let sharp_flat = flat_ratio(&none);
+    let mosaic_flat = flat_ratio(&mosaic);
+    assert!(
+        mosaic_flat > sharp_flat + 0.3,
+        "pas de blocs : {mosaic_flat:.2} de voisins egaux contre {sharp_flat:.2} sans masque"
+    );
+}
+
+/// Une image d'annotation tient dans sa boite SANS etre etiree.
+///
+/// C'est le meme defaut que celui corrige pour la webcam : coller la source au
+/// rect deforme tout ce qui n'a pas exactement son rapport. On rend une image
+/// 4:1 dans une boite qui ne l'est pas, et on mesure le rapport de l'empreinte
+/// — il doit rester 4:1, quelle que soit la boite.
+#[test]
+fn compose_linux_annotation_image() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux annotation image: opt-in. Skip.");
+        return;
+    }
+    // Aplat magenta 400x100 : un rapport 4:1 franc, et une couleur que la
+    // fixture ne porte pas.
+    let img_path = std::env::temp_dir().join("openscreen-annotation-4x1.png");
+    let img = image::RgbaImage::from_pixel(400, 100, image::Rgba([255, 0, 255, 255]));
+    img.save(&img_path).expect("ecrire le png de test");
+
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut screen = Decoder::open(FIXTURE, &gpu).expect("Decoder::open");
+
+    let mut render = |annotations: &str| -> Vec<u8> {
+        let parsed = Scene::from_json(&annotation_scene(annotations)).expect("scene json");
+        comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&parsed));
+        comp.set_scene(Some(parsed));
+        // Le 3e argument de `compose_frame` est un NUMERO DE FRAME (source_t =
+        // frame / 60), pas des secondes. `set_timeline_time` fixe directement
+        // l'instant que lit la fenetre temporelle des annotations -- sans lui,
+        // une annotation a `startSec: 1` ne serait tout simplement pas visible,
+        // et un test d'animation mesurerait sa propre erreur de cadrage.
+        comp.set_timeline_time(Some(1.0));
+        unsafe {
+            let sf = screen.seek_to(1.0).expect("seek");
+            comp.compose_frame(sf, std::ptr::null(), 60.0, &Cfg::c8()).expect("compose_frame");
+            comp.readback_direct().expect("readback").2
+        }
+    };
+
+    let none = render("");
+    // Boite carree en fraction du rect ecran — donc PAS carree en pixels, et
+    // dans tous les cas pas 4:1.
+    let with_image = render(&format!(
+        r##"{{"id":"i1","kind":"image","x":0.25,"y":0.3,"w":0.4,"h":0.4,"startSec":0,"endSec":10,"zIndex":1,"imagePath":"{}"}}"##,
+        img_path.display()
+    ));
+
+    let changed = changed_pixels(&none, &with_image);
+    assert!(
+        changed.len() > 500,
+        "aucune image dessinee ({} px changes)",
+        changed.len()
+    );
+    let (x0, y0, x1, y1) = bbox(&changed, W);
+    let (bw, bh) = ((x1 - x0 + 1) as f64, (y1 - y0 + 1) as f64);
+    let aspect = bw / bh;
+    assert!(
+        (aspect - 4.0).abs() < 0.25,
+        "image etiree : empreinte {bw}x{bh} (rapport {aspect:.2}), attendu 4:1"
+    );
+
+    // Et c'est bien l'image qui est peinte, pas un aplat de la couleur du bord :
+    // le centre doit etre magenta.
+    let (cx, cy) = ((x0 + x1) / 2, (y0 + y1) / 2);
+    let i = ((cy * W + cx) * 4) as usize;
+    let (r, g_, b) = (with_image[i] as i32, with_image[i + 1] as i32, with_image[i + 2] as i32);
+    assert!(
+        r > 200 && g_ < 80 && b > 200,
+        "centre de l'empreinte non magenta : ({r}, {g_}, {b})"
+    );
+    let _ = std::fs::remove_file(&img_path);
+}
+
+/// Les animations d'apparition du texte sont JOUEES.
+///
+/// `text_anim.rs` etait porte, teste unitairement et transporte par la scene,
+/// mais aucun appelant Linux ne l'invoquait : une annotation animee s'affichait
+/// simplement d'un bloc. On rend la MEME frame video a deux instants differents
+/// de l'animation en deplaçant `startSec` — le seul ecart possible entre les
+/// deux rendus est donc l'animation elle-meme.
+#[test]
+fn compose_linux_animation_texte() {
+    if std::env::var("OPENSCREEN_LINUX_COMPOSE").is_err() || !Path::new(FIXTURE).is_file() {
+        eprintln!("compose_linux animation texte: opt-in. Skip.");
+        return;
+    }
+    let gpu = Gpu::create(false).expect("Gpu::create");
+    let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
+    let mut screen = Decoder::open(FIXTURE, &gpu).expect("Decoder::open");
+
+    let mut render = |annotations: &str| -> Vec<u8> {
+        let parsed = Scene::from_json(&annotation_scene(annotations)).expect("scene json");
+        comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&parsed));
+        comp.set_scene(Some(parsed));
+        // Le 3e argument de `compose_frame` est un NUMERO DE FRAME (source_t =
+        // frame / 60), pas des secondes. `set_timeline_time` fixe directement
+        // l'instant que lit la fenetre temporelle des annotations -- sans lui,
+        // une annotation a `startSec: 1` ne serait tout simplement pas visible,
+        // et un test d'animation mesurerait sa propre erreur de cadrage.
+        comp.set_timeline_time(Some(1.0));
+        unsafe {
+            let sf = screen.seek_to(1.0).expect("seek");
+            comp.compose_frame(sf, std::ptr::null(), 60.0, &Cfg::c8()).expect("compose_frame");
+            comp.readback_direct().expect("readback").2
+        }
+    };
+
+    // `startSec` deplace l'instant DANS l'animation sans toucher la frame video :
+    // a t=1.0s, start=1.0 donne 0 ms ecoulees, start=0.0 en donne 1000 (fini).
+    let text = |animation: &str, start: f32| {
+        format!(
+            r##"{{"id":"t1","kind":"text","x":0.1,"y":0.1,"w":0.6,"h":0.2,"startSec":{start},"endSec":10,"zIndex":1,"text":{{"content":"Hello","color":"#ffffff","backgroundColor":"transparent","fontSizeRel":0.12,"fontFamily":"","fontWeight":"bold","fontStyle":"normal","textDecoration":"none","textAlign":"center","animation":"{animation}"}}}}"##
+        )
+    };
+    let none = render("");
+    let settled = render(&text("fade", 0.0));
+    let ink_settled = changed_pixels(&none, &settled).len();
+    assert!(
+        ink_settled > 200,
+        "aucun texte rendu ({ink_settled} px) — le test ne mesure rien"
+    );
+
+    // Fondu a 0 ms : opacite 0, donc RIEN ne doit apparaitre. Sans l'animation
+    // le texte serait deja a pleine opacite et ce compte vaudrait `ink_settled`.
+    let starting = render(&text("fade", 1.0));
+    let ink_starting = changed_pixels(&none, &starting).len();
+    assert!(
+        ink_starting < ink_settled / 10,
+        "le fondu n'est pas applique : {ink_starting} px a 0 ms contre {ink_settled} px a la fin"
+    );
+
+    // Machine a ecrire a mi-course (350 ms sur 700) : la moitie gauche du bloc
+    // est revelee, donc l'empreinte est nettement plus etroite qu'a la fin.
+    let typed_full = render(&text("typewriter", 0.0));
+    let typed_half = render(&text("typewriter", 0.65));
+    let full_px = changed_pixels(&none, &typed_full);
+    let half_px = changed_pixels(&none, &typed_half);
+    assert!(!half_px.is_empty(), "la machine a ecrire n'a rien revele a mi-course");
+    let full_right = bbox(&full_px, W).2;
+    let half_right = bbox(&half_px, W).2;
+    assert!(
+        half_right < full_right,
+        "le texte n'est pas revele progressivement : bord droit {half_right} a mi-course \
+         contre {full_right} a la fin"
+    );
+}

@@ -157,6 +157,21 @@ pub struct Compositor {
     /// Cache des sprites curseur (PNG RGBA -> texture wgpu), par chemin. Meme
     /// role que `img_cache` cote macOS : un sprite chargé une fois par session.
     img_cache: RefCell<std::collections::HashMap<String, (wgpu::Texture, u32, u32)>>,
+
+    /// Copie mipmappee de la frame composee, lue par les annotations « flou »
+    /// (mode 10). `ann_copy` garde la texture en vie, `ann_copy_view` porte tous
+    /// les niveaux (echantillonnage), `ann_copy_mips` un niveau chacune (cibles
+    /// de la generation). Cf. `make_ann_copy`.
+    ann_copy: wgpu::Texture,
+    ann_copy_view: wgpu::TextureView,
+    ann_copy_mips: Vec<wgpu::TextureView>,
+
+    /// Images d'annotation, indexees par ID d'annotation -- PAS par chemin comme
+    /// `img_cache`. Une annotation image porte souvent une data-URI de plusieurs
+    /// mega-octets ; s'en servir comme cle de HashMap la ferait hacher a chaque
+    /// frame. La longueur de la source sert de temoin de changement, comme cote
+    /// macOS.
+    ann_img_cache: RefCell<std::collections::HashMap<String, (wgpu::Texture, u32, u32, usize)>>,
 }
 
 impl Compositor {
@@ -184,7 +199,11 @@ impl Compositor {
             address_mode_w: wgpu::AddressMode::ClampToEdge,
             mag_filter: wgpu::FilterMode::Linear,
             min_filter: wgpu::FilterMode::Linear,
-            mipmap_filter: wgpu::FilterMode::Nearest,
+            // Trilineaire pour le LOD fractionnaire du mode 10 : `log2(rayon)`
+            // tombe entre deux niveaux, et en `Nearest` le flou avancerait par
+            // paliers visibles quand le rayon varie. Sans effet sur tout le
+            // reste -- aucune autre texture liee ici n'a plus d'un niveau.
+            mipmap_filter: wgpu::FilterMode::Linear,
             ..Default::default()
         });
         let tex_entry = |binding: u32| wgpu::BindGroupLayoutEntry {
@@ -404,6 +423,7 @@ impl Compositor {
         let blur_oct = mk_pyr(w / 8, h / 8, "blur-oct");
 
         let (rt, rt_view, accum, accum_view, readback_bpr) = Self::make_targets(&gpu, w, h);
+        let (ann_copy, ann_copy_view, ann_copy_mips) = Self::make_ann_copy(&gpu, w, h);
         // Profondeur 1 par defaut = chemin synchrone historique, a l'octet et a
         // la latence pres. C'est l'export qui demande explicitement 2 (cf.
         // `set_readback_depth`) ; tout autre appelant garde l'ancien contrat.
@@ -441,6 +461,10 @@ impl Compositor {
             timeline_time: RefCell::new(None),
             text_raster: crate::text::TextRasterizer::new().ok(),
             img_cache: RefCell::new(std::collections::HashMap::new()),
+            ann_copy,
+            ann_copy_view,
+            ann_copy_mips,
+            ann_img_cache: RefCell::new(std::collections::HashMap::new()),
         })
     }
 
@@ -480,6 +504,122 @@ impl Compositor {
         let accum_view = accum.create_view(&wgpu::TextureViewDescriptor::default());
         let bpr = (w * 4).div_ceil(256) * 256;
         (rt, rt_view, accum, accum_view, bpr)
+    }
+
+    /// Copie du RT avec chaine de mips COMPLETE, source des annotations « flou ».
+    ///
+    /// Le mode 10 lit un niveau de mip choisi par `log2(rayon)` : c'est la
+    /// pyramide qui FAIT le flou, pas un noyau de taps (cf. le commentaire du
+    /// shader). Il lui faut donc tous les niveaux jusqu'a 1x1, sinon un grand
+    /// rayon demande un LOD qui n'existe pas et le sampler retombe sur le dernier
+    /// disponible -- le flou plafonne en silence.
+    ///
+    /// Retourne aussi une vue PAR NIVEAU : `generate_ann_mips` rend le niveau i
+    /// depuis le niveau i-1, et une vue de render target ne peut porter qu'un
+    /// seul niveau.
+    fn make_ann_copy(
+        gpu: &Gpu,
+        w: u32,
+        h: u32,
+    ) -> (wgpu::Texture, wgpu::TextureView, Vec<wgpu::TextureView>) {
+        // floor(log2(max)) + 1 : le dernier niveau mesure 1x1.
+        let levels = 32 - w.max(h).max(1).leading_zeros();
+        let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
+            label: Some("ann-copy"),
+            size: wgpu::Extent3d { width: w, height: h, depth_or_array_layers: 1 },
+            mip_level_count: levels,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8Unorm,
+            usage: wgpu::TextureUsages::RENDER_ATTACHMENT
+                | wgpu::TextureUsages::TEXTURE_BINDING
+                | wgpu::TextureUsages::COPY_DST,
+            view_formats: &[],
+        });
+        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+        let mips = (0..levels)
+            .map(|level| {
+                tex.create_view(&wgpu::TextureViewDescriptor {
+                    label: Some("ann-copy-mip"),
+                    base_mip_level: level,
+                    mip_level_count: Some(1),
+                    ..Default::default()
+                })
+            })
+            .collect();
+        (tex, view, mips)
+    }
+
+    /// Fige la frame composee dans `ann_copy` et remplit sa pyramide.
+    ///
+    /// UNE seule fois par frame, AVANT toute annotation : les flous doivent voir
+    /// l'image composee SANS les flous eux-memes, sinon deux zones qui se
+    /// recouvrent s'echantillonnent l'une l'autre selon l'ordre de dessin. Meme
+    /// contrat que le `blit` + `generate_mipmaps` de `compositor_macos`.
+    ///
+    /// wgpu n'a pas de `generate_mipmaps` : chaque niveau est une passe de rendu
+    /// plein ecran qui echantillonne le precedent. Le filtre lineaire sur une
+    /// source exactement deux fois plus grande EST la moyenne 2x2, donc cette
+    /// boucle produit la meme pyramide que le blit Metal.
+    fn generate_ann_mips(&self, encoder: &mut wgpu::CommandEncoder) {
+        encoder.copy_texture_to_texture(
+            self.rt.as_image_copy(),
+            self.ann_copy.as_image_copy(),
+            wgpu::Extent3d {
+                width: self.render_w,
+                height: self.render_h,
+                depth_or_array_layers: 1,
+            },
+        );
+        // Les bind groups doivent survivre a leur passe : on les garde tous ici.
+        let mut keep: Vec<(wgpu::Buffer, wgpu::BindGroup)> = Vec::new();
+        for level in 1..self.ann_copy_mips.len() {
+            let uniform = self.gpu.device.create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: Some("ann-mip-uniform"),
+                // `fs_copy` ne lit pas l'uniforme, mais le layout du blur l'exige.
+                contents: layer_bytes(&LayerCB::default()),
+                usage: wgpu::BufferUsages::UNIFORM,
+            });
+            let bind = self.gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("ann-mip"),
+                layout: &self.blur_bgl,
+                entries: &[
+                    wgpu::BindGroupEntry { binding: 0, resource: uniform.as_entire_binding() },
+                    wgpu::BindGroupEntry {
+                        binding: 1,
+                        resource: wgpu::BindingResource::TextureView(
+                            &self.ann_copy_mips[level - 1],
+                        ),
+                    },
+                    wgpu::BindGroupEntry {
+                        binding: 2,
+                        resource: wgpu::BindingResource::Sampler(&self.sampler),
+                    },
+                ],
+            });
+            keep.push((uniform, bind));
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ann-mip-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.ann_copy_mips[level],
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        // Clear plutot que Load : le niveau n'a jamais ete ecrit,
+                        // et `pipeline_copy` blende « over ». Sur une cible vidée
+                        // le « over » rend la source telle quelle -- l'ecrasement
+                        // qu'on veut ici.
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&self.pipeline_copy);
+            rpass.set_bind_group(0, &keep[keep.len() - 1].1, &[]);
+            rpass.draw(0..3, 0..1);
+        }
     }
 
     /// Un buffer de staging de la ring. La taille depend de `bpr` (donc de la
@@ -1138,36 +1278,44 @@ impl Compositor {
             self.make_bind(&cb, None, &dummy)
         });
 
-        // Annotations TEXTE (mode 11) -- placees relativement au rect ecran
+        // ANNOTATIONS -- calque le plus haut, place relativement au rect ecran
         // `g.s_dst` (les coords x/y/w/h de l'annotation sont des fractions de ce
-        // rect, cf. `scene.rs`). Mirroir de la branche "text" de
-        // `compositor_macos`, tint cote shader (atlas R8) au lieu de couleur
-        // bakee. (image/figure/blur + animation `text_anim` : incremental.)
+        // rect, cf. `scene.rs`). Port de `compositor_macos::draw_annotations` :
+        // memes modes, memes replis, meme ordre. Seul le texte diverge, tinte
+        // cote shader (atlas R8) au lieu d'une couleur bakee dans la texture.
         struct AnnDraw {
             _buf: wgpu::Buffer,
-            /// Garde l'atlas en vie jusqu'au submit. `None` pour la plaque de
-            /// fond, qui est un aplat mode 1 et n'echantillonne aucune texture.
+            /// Gardent l'atlas / la texture image en vie jusqu'au submit. `None`
+            /// pour les quads qui n'echantillonnent rien (plaque de fond, fleche).
             _glyphs: Option<crate::text::RasterizedGlyphs>,
+            _tex: Option<wgpu::Texture>,
             bind: wgpu::BindGroup,
         }
+        impl AnnDraw {
+            fn plain(buf: wgpu::Buffer, bind: wgpu::BindGroup) -> AnnDraw {
+                AnnDraw { _buf: buf, _glyphs: None, _tex: None, bind }
+            }
+        }
+        // FENETRE TEMPORELLE. Sans ce test, TOUTES les annotations du projet sont
+        // peintes sur TOUTES les frames : cinq sous-titres s'empilent les uns sur
+        // les autres du debut a la fin de l'export. C'est le defaut qui se lit
+        // comme « le texte s'affiche bizarrement » avant meme de regarder les
+        // glyphes. Mirroir de `visible()` dans compositor_macos.rs.
+        let visible = |a: &crate::scene::SceneAnnotation| {
+            g.source_t >= a.start_sec as f32 && g.source_t < a.end_sec as f32
+        };
+        // Un flou lit la frame composee ; il faut donc la figer AVANT de dessiner
+        // la moindre annotation. On ne le fait que si un flou est reellement
+        // visible : la pyramide coute une passe par niveau.
+        let needs_ann_copy = scene_ref
+            .as_ref()
+            .is_some_and(|s| s.annotations.iter().any(|a| a.kind == "blur" && visible(a)));
         let mut ann_draws: Vec<AnnDraw> = Vec::new();
-        if let (Some(scene), Some(raster)) = (scene_ref.as_ref(), self.text_raster.as_ref()) {
+        if let Some(scene) = scene_ref.as_ref() {
+            // La liste arrive deja triee par zIndex cote app : l'ordre d'iteration
+            // EST l'ordre de peinture.
             for a in &scene.annotations {
-                if a.kind != "text" {
-                    continue;
-                }
-                // FENETRE TEMPORELLE. Sans ce test, TOUTES les annotations du
-                // projet sont peintes sur TOUTES les frames : cinq sous-titres
-                // s'empilent les uns sur les autres du debut a la fin de
-                // l'export. C'est le defaut qui se lit comme « le texte
-                // s'affiche bizarrement » avant meme de regarder les glyphes.
-                // Mirroir de `visible()` dans compositor_macos.rs et du test
-                // equivalent dans compositor_windows.rs.
-                if !(g.source_t >= a.start_sec as f32 && g.source_t < a.end_sec as f32) {
-                    continue;
-                }
-                let Some(text) = a.text.as_ref() else { continue };
-                if text.content.trim().is_empty() {
+                if !visible(a) {
                     continue;
                 }
                 let dst = [
@@ -1182,76 +1330,252 @@ impl Compositor {
                 if quad_px[0] <= 0.0 || quad_px[1] <= 0.0 {
                     continue;
                 }
-                let color = parse_hex(&text.color).unwrap_or([1.0, 1.0, 1.0, 1.0]);
-                let spec = crate::text::TextSpec {
-                    content: text.content.clone(),
-                    color,
-                    background: parse_hex(&text.background_color).unwrap_or([0.0, 0.0, 0.0, 0.0]),
-                    font_size_px: text.font_size_rel * (g.s_dst[3] * rh),
-                    font_family: text.font_family.clone(),
-                    bold: text.font_weight == "bold",
-                    italic: text.font_style == "italic",
-                    underline: text.text_decoration == "underline",
-                    align: text.text_align.clone(),
-                    box_px: [
-                        quad_px[0].round().max(1.0) as u32,
-                        quad_px[1].round().max(1.0) as u32,
-                    ],
-                };
-                let glyphs = match raster.rasterize(&self.gpu, &spec) {
-                    Ok(gl) => gl,
-                    Err(e) => {
-                        eprintln!("[annotation texte] {}: {e:#}", a.id);
-                        continue;
+                match a.kind.as_str() {
+                    "figure" => {
+                        let Some(figure) = a.figure.as_ref() else { continue };
+                        let (segments, half_stroke) = crate::regions::arrow_local_geometry(
+                            &figure.direction,
+                            figure.stroke_width,
+                            quad_px,
+                        );
+                        let cb = LayerCB {
+                            dst,
+                            quad_px,
+                            mode: 9.0,
+                            color: parse_hex(&figure.color).unwrap_or([1.0, 1.0, 1.0, 1.0]),
+                            fx: segments[0],
+                            src_prev: segments[1],
+                            dst_prev: segments[2],
+                            mb: [1.0, half_stroke, 0.0, 0.0],
+                            ..Default::default()
+                        };
+                        let (buf, bind) = self.make_bind(&cb, None, &dummy);
+                        ann_draws.push(AnnDraw::plain(buf, bind));
                     }
-                };
+                    "blur" => {
+                        let Some(blur) = a.blur.as_ref() else { continue };
+                        // Le masque en trace libre demanderait une liste de points
+                        // cote GPU : on masque la BOITE ENGLOBANTE. Choix
+                        // deliberement asymetrique -- ne rien dessiner laisserait
+                        // passer en clair ce que l'utilisateur a designe comme a
+                        // cacher, et un masque qui ne masque pas donne confiance a
+                        // tort.
+                        let freehand = blur.shape == "freehand";
+                        let is_blur = if blur.style == "blur" { 1.0 } else { 0.0 };
+                        let amount =
+                            if is_blur > 0.5 { blur.intensity } else { blur.block_size };
+                        // Le repli passe par le rectangle, pas l'ovale : un ovale
+                        // inscrit retirerait les coins, donc une partie de ce qui
+                        // est couvert.
+                        let is_oval = if blur.shape == "oval" && !freehand { 1.0 } else { 0.0 };
+                        // La teinte n'a de sens qu'en mosaique : un flou teinte ne
+                        // ressemble plus a un flou.
+                        let tinted = if is_blur > 0.5 { 0.0 } else { 1.0 };
+                        let tint = if blur.color == "black" {
+                            [0.0, 0.0, 0.0, 1.0]
+                        } else {
+                            [1.0, 1.0, 1.0, 1.0]
+                        };
+                        let cb = LayerCB {
+                            dst,
+                            quad_px,
+                            mode: 10.0,
+                            color: tint,
+                            fx: [is_blur, amount.max(1.0), is_oval, tinted],
+                            ..Default::default()
+                        };
+                        // La copie mipmappee au binding 1 (texY), la ou le mode 10
+                        // la lit.
+                        let (buf, bind) = self.make_bind(
+                            &cb,
+                            Some((&self.ann_copy_view, &self.ann_copy_view)),
+                            &dummy,
+                        );
+                        ann_draws.push(AnnDraw::plain(buf, bind));
+                    }
+                    "image" => {
+                        let Some(src) = a.image_path.as_ref().filter(|s| !s.is_empty()) else {
+                            continue;
+                        };
+                        let cached = {
+                            let c = self.ann_img_cache.borrow();
+                            c.get(&a.id).filter(|(_, _, _, len)| *len == src.len()).cloned()
+                        };
+                        let Some((tex, iw, ih, _)) = cached.or_else(|| {
+                            match self.load_image_texture(src) {
+                                Ok((tex, w, h)) => {
+                                    let e = (tex, w, h, src.len());
+                                    self.ann_img_cache
+                                        .borrow_mut()
+                                        .insert(a.id.clone(), e.clone());
+                                    Some(e)
+                                }
+                                Err(e) => {
+                                    eprintln!("[annotation image] {}: {e:#}", a.id);
+                                    None
+                                }
+                            }
+                        }) else {
+                            continue;
+                        };
+                        if iw == 0 || ih == 0 {
+                            continue;
+                        }
+                        // CONTAIN, pas cover : l'image tient entiere dans la boite
+                        // et se centre. Etirer au rect deformerait une capture ou
+                        // un logo, ce que le rendu web ne fait pas non plus.
+                        let box_aspect = quad_px[0] / quad_px[1];
+                        let img_aspect = iw as f32 / ih as f32;
+                        let (fit_w, fit_h) = if img_aspect > box_aspect {
+                            (dst[2], dst[3] * (box_aspect / img_aspect))
+                        } else {
+                            (dst[2] * (img_aspect / box_aspect), dst[3])
+                        };
+                        let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
+                        let cb = LayerCB {
+                            dst: [
+                                dst[0] + (dst[2] - fit_w) * 0.5,
+                                dst[1] + (dst[3] - fit_h) * 0.5,
+                                fit_w,
+                                fit_h,
+                            ],
+                            src: [0.0, 0.0, 1.0, 1.0],
+                            quad_px: [fit_w * rw, fit_h * rh],
+                            mode: 7.0,
+                            color: [1.0, 1.0, 1.0, 1.0],
+                            // Mode 7 clippe sur `fx` : un rect qui couvre tout le
+                            // cadre = pas de clip.
+                            fx: [0.0, 0.0, 1.0, 1.0],
+                            ..Default::default()
+                        };
+                        let (buf, bind) = self.make_bind(&cb, Some((&view, &view)), &dummy);
+                        ann_draws.push(AnnDraw {
+                            _buf: buf,
+                            _glyphs: None,
+                            _tex: Some(tex),
+                            bind,
+                        });
+                    }
+                    "text" => {
+                        let Some(raster) = self.text_raster.as_ref() else { continue };
+                        let Some(text) = a.text.as_ref() else { continue };
+                        if text.content.trim().is_empty() {
+                            continue;
+                        }
+                        let color = parse_hex(&text.color).unwrap_or([1.0, 1.0, 1.0, 1.0]);
+                        let background =
+                            parse_hex(&text.background_color).unwrap_or([0.0, 0.0, 0.0, 0.0]);
+                        let spec = crate::text::TextSpec {
+                            content: text.content.clone(),
+                            color,
+                            background,
+                            font_size_px: text.font_size_rel * (g.s_dst[3] * rh),
+                            font_family: text.font_family.clone(),
+                            bold: text.font_weight == "bold",
+                            italic: text.font_style == "italic",
+                            underline: text.text_decoration == "underline",
+                            align: text.text_align.clone(),
+                            box_px: [
+                                quad_px[0].round().max(1.0) as u32,
+                                quad_px[1].round().max(1.0) as u32,
+                            ],
+                        };
+                        let glyphs = match raster.rasterize(&self.gpu, &spec) {
+                            Ok(gl) => gl,
+                            Err(e) => {
+                                eprintln!("[annotation texte] {}: {e:#}", a.id);
+                                continue;
+                            }
+                        };
 
-                // PLAQUE DE FOND, dessinee AVANT les glyphes.
-                //
-                // macOS et Windows la peignent dans la texture de texte
-                // elle-meme ; ici c'est impossible : l'atlas est en R8, il ne
-                // porte qu'une couverture alpha et aucune couleur. Plutot que
-                // de convertir tout l'atlas en RGBA pour un aplat, on emet un
-                // quad mode 1 (couleur pleine + SDF de rect arrondi, cf.
-                // layer.wgsl) sous le quad de texte. Meme rect, meme rayon que
-                // le rendu web (`annotationRenderer.ts`).
-                //
-                // Sans ca le fond n'existait tout simplement pas : `spec.background`
-                // arrivait jusqu'au rasteriseur et mourait dans `cache_key()`.
-                let background = parse_hex(&text.background_color).unwrap_or([0.0, 0.0, 0.0, 0.0]);
-                if background[3] > 0.0 {
-                    let plate = LayerCB {
-                        dst,
-                        src: [0.0, 0.0, 1.0, 1.0],
-                        quad_px,
-                        mode: 1.0,
-                        color: background,
-                        radius_px: 4.0 * (rh / 1080.0).max(0.5),
-                        ..Default::default()
-                    };
-                    let (pbuf, pbind) = self.make_bind(&plate, None, &dummy);
-                    ann_draws.push(AnnDraw {
-                        _buf: pbuf,
-                        _glyphs: None,
-                        bind: pbind,
-                    });
+                        // ANIMATION D'APPARITION (`text_anim`, partage avec macOS
+                        // et Windows). Les decalages sont exprimes en px A 1080p
+                        // et remis a l'echelle de la sortie, comme la taille de
+                        // police : en px absolus la meme animation sauterait deux
+                        // fois plus haut dans un rendu 4K que dans l'apercu.
+                        let anim = crate::text_anim::text_animation_state(
+                            text.animation.as_deref(),
+                            (g.source_t - a.start_sec as f32) * 1000.0,
+                        );
+                        let anim_px = rh / crate::text_anim::ANIMATION_REFERENCE_HEIGHT;
+                        let (mut ax, mut ay, mut aw, mut ah) = (
+                            dst[0] + anim.translate_x * anim_px / rw,
+                            dst[1] + anim.translate_y * anim_px / rh,
+                            dst[2],
+                            dst[3],
+                        );
+                        if (anim.scale - 1.0).abs() > 1e-4 {
+                            let (cx, cy) = (ax + aw * 0.5, ay + ah * 0.5);
+                            aw *= anim.scale;
+                            ah *= anim.scale;
+                            ax = cx - aw * 0.5;
+                            ay = cy - ah * 0.5;
+                        }
+                        // Machine a ecrire : le quad ET son UV sont coupes a la
+                        // meme fraction, donc la texture n'est pas etiree -- elle
+                        // est revelee.
+                        let reveal = anim.reveal.clamp(0.0, 1.0);
+                        if reveal <= 0.0 {
+                            continue;
+                        }
+                        let anim_dst = [ax, ay, aw * reveal, ah];
+
+                        // PLAQUE DE FOND, dessinee AVANT les glyphes.
+                        //
+                        // macOS et Windows la peignent dans la texture de texte
+                        // elle-meme ; ici c'est impossible : l'atlas est en R8, il
+                        // ne porte qu'une couverture alpha et aucune couleur.
+                        // Plutot que de convertir tout l'atlas en RGBA pour un
+                        // aplat, on emet un quad mode 1 (couleur pleine + SDF de
+                        // rect arrondi, cf. layer.wgsl) sous le quad de texte.
+                        // Meme rect, meme rayon que le rendu web
+                        // (`annotationRenderer.ts`).
+                        //
+                        // Sans ca le fond n'existait tout simplement pas :
+                        // `spec.background` arrivait jusqu'au rasteriseur et
+                        // mourait dans `cache_key()`.
+                        if background[3] > 0.0 {
+                            let plate = LayerCB {
+                                dst: anim_dst,
+                                src: [0.0, 0.0, 1.0, 1.0],
+                                quad_px: [anim_dst[2] * rw, anim_dst[3] * rh],
+                                mode: 1.0,
+                                // La plaque suit l'opacite du texte : sinon un
+                                // fondu ferait apparaitre un aplat plein d'un coup
+                                // puis le texte dessus.
+                                color: [
+                                    background[0],
+                                    background[1],
+                                    background[2],
+                                    background[3] * anim.opacity,
+                                ],
+                                radius_px: 4.0 * (rh / 1080.0).max(0.5),
+                                ..Default::default()
+                            };
+                            let (pbuf, pbind) = self.make_bind(&plate, None, &dummy);
+                            ann_draws.push(AnnDraw::plain(pbuf, pbind));
+                        }
+
+                        let cb = LayerCB {
+                            dst: anim_dst,
+                            src: [0.0, 0.0, reveal, 1.0],
+                            quad_px: [anim_dst[2] * rw, anim_dst[3] * rh],
+                            mode: 11.0,
+                            color: [color[0], color[1], color[2], color[3] * anim.opacity],
+                            ..Default::default()
+                        };
+                        // Atlas R8 au binding 1 (texY) que le mode 11 echantillonne.
+                        let (buf, bind) =
+                            self.make_bind(&cb, Some((&glyphs.view, &glyphs.view)), &dummy);
+                        ann_draws.push(AnnDraw {
+                            _buf: buf,
+                            _glyphs: Some(glyphs),
+                            _tex: None,
+                            bind,
+                        });
+                    }
+                    _ => {}
                 }
-
-                let cb = LayerCB {
-                    dst,
-                    src: [0.0, 0.0, 1.0, 1.0],
-                    quad_px,
-                    mode: 11.0,
-                    color,
-                    ..Default::default()
-                };
-                // Atlas R8 au binding 1 (texY) que le mode 11 echantillonne.
-                let (buf, bind) = self.make_bind(&cb, Some((&glyphs.view, &glyphs.view)), &dummy);
-                ann_draws.push(AnnDraw {
-                    _buf: buf,
-                    _glyphs: Some(glyphs),
-                    bind,
-                });
             }
         }
 
@@ -1472,8 +1796,9 @@ impl Compositor {
         if cfg.bg_blur {
             self.blur_bg(&mut encoder);
         }
-        // Passe 2 : avant-plan (ecran + webcam + annotations), compose par-dessus
-        // le fond (eventuellement floute) avec `LoadOp::Load`.
+        // Passe 2 : avant-plan (ecran + webcam), compose par-dessus le fond
+        // (eventuellement floute) avec `LoadOp::Load`. Les annotations sont dans
+        // une passe a part, cf. plus bas.
         {
             let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("fg-pass"),
@@ -1507,6 +1832,37 @@ impl Compositor {
                 rpass.set_bind_group(0, bind, &[]);
                 rpass.draw(0..4, 0..1);
             }
+        }
+        // Fige la frame composee pour les annotations « flou ». ICI et nulle part
+        // ailleurs : apres l'ecran et la camera (sinon un flou masquerait du vide)
+        // et avant la premiere annotation (sinon deux flous qui se recouvrent
+        // s'echantillonnent l'un l'autre). Une passe de rendu ne peut pas lire sa
+        // propre cible, d'ou la copie -- et d'ou le fait que les annotations
+        // doivent avoir leur propre passe.
+        if needs_ann_copy {
+            self.generate_ann_mips(&mut encoder);
+        }
+        // Passe 3 : annotations puis curseur net, par-dessus tout le reste. Elle
+        // existe meme sans flou : deux passes consecutives sur la MEME cible avec
+        // `LoadOp::Load` ne coutent rien de plus qu'une seule sur un GPU
+        // desktop, et un seul chemin de code vaut mieux qu'un branchement qui ne
+        // serait exerce que dans un projet sur dix.
+        {
+            let mut rpass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("ann-pass"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &self.rt_view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+            rpass.set_pipeline(&self.pipeline);
             for a in &ann_draws {
                 rpass.set_bind_group(0, &a.bind, &[]);
                 rpass.draw(0..4, 0..1);
