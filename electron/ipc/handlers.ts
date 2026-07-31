@@ -16,6 +16,10 @@ import {
 	shell,
 	systemPreferences,
 } from "electron";
+import {
+	type NativeLinuxRecordingRequest,
+	portalCursorMode,
+} from "../../src/lib/nativeLinuxRecording";
 import type { NativeMacRecordingRequest } from "../../src/lib/nativeMacRecording";
 import type { NativeWindowsRecordingRequest } from "../../src/lib/nativeWindowsRecording";
 import {
@@ -52,8 +56,10 @@ import { mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
 import { RECORDINGS_DIR } from "../main";
 import { findMediaLinksByFingerprint, registerMediaLinks } from "../media/mediaLinksRegistry";
+import { LinuxNativeCaptureSession } from "../native-bridge/capture/linuxNativeCaptureSession";
 import { createCursorRecordingSession } from "../native-bridge/cursor/recording/factory";
 import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
+import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/pipeWireCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { patchWebmDurationOnDisk } from "../recording/webm-duration";
 import { reindexRecordingOnDisk } from "../recording/webm-seek-index";
@@ -498,6 +504,51 @@ let nativeMacPauseRanges: Array<{ startMs: number; endMs: number }> = [];
 let nativeMacIsPaused = false;
 // Global frame of the region captured by the SCK helper (see getSelectedSourceBounds).
 let activeMacCaptureBounds: Rectangle | null = null;
+let linuxNativeCaptureSession: LinuxNativeCaptureSession | null = null;
+let linuxNativeCaptureRecordingId: number | null = null;
+let linuxNativeCaptureCursorMode: CursorCaptureMode = "editable-overlay";
+/**
+ * The portal's restore token, kept between recordings.
+ *
+ * Without it the compositor raises its source picker on EVERY recording, which
+ * on Wayland is the single most intrusive thing about capturing at all. The
+ * portal issues the token only after a successful session and honours it until
+ * the user revokes it in system settings, so it is safe to persist and useless
+ * to anyone else.
+ */
+const LINUX_RESTORE_TOKEN_FILE = "linux-capture-restore-token.json";
+
+async function readLinuxRestoreToken(): Promise<string | undefined> {
+	try {
+		const raw = await fs.readFile(
+			path.join(app.getPath("userData"), LINUX_RESTORE_TOKEN_FILE),
+			"utf-8",
+		);
+		const parsed = JSON.parse(raw) as { restoreToken?: unknown };
+		return typeof parsed.restoreToken === "string" && parsed.restoreToken
+			? parsed.restoreToken
+			: undefined;
+	} catch {
+		// Absent or unreadable: the picker appears, which is the old behaviour
+		// and not worth failing a recording over.
+		return undefined;
+	}
+}
+
+async function writeLinuxRestoreToken(restoreToken?: string) {
+	if (!restoreToken) {
+		return;
+	}
+	try {
+		await fs.writeFile(
+			path.join(app.getPath("userData"), LINUX_RESTORE_TOKEN_FILE),
+			JSON.stringify({ restoreToken }, null, 2),
+			"utf-8",
+		);
+	} catch (error) {
+		console.warn("Could not persist the Linux portal restore token:", error);
+	}
+}
 
 function normalizeCursorSample(sample: unknown): CursorRecordingSample | null {
 	if (!sample || typeof sample !== "object") {
@@ -898,6 +949,16 @@ async function resolveDirectShowWebcamClsid(deviceName?: string) {
 }
 
 async function startCursorRecording(recordingId?: number) {
+	// On Linux the native capture helper already produces cursor samples, from
+	// the SAME portal session that produces the pixels. Spawning the cursor-only
+	// helper alongside it would open a SECOND portal session — and since
+	// SelectSources may be called once per session, that means a second picker
+	// in front of the user, for a stream nothing consumes. The double prompt is
+	// precisely what the native path exists to remove.
+	if (linuxNativeCaptureSession) {
+		return;
+	}
+
 	if (cursorRecordingSession) {
 		pendingCursorRecordingData = await cursorRecordingSession.stop();
 		cursorRecordingSession = null;
@@ -1811,6 +1872,187 @@ export function registerIpcHandlers(
 			: { success: true, available: false, reason: "missing-helper" };
 	});
 
+	ipcMain.handle("is-native-linux-capture-available", async () => {
+		if (process.platform !== "linux") {
+			return { success: true, available: false, reason: "unsupported-platform" };
+		}
+
+		const helperPath = findPipeWireCursorHelperPath();
+		return helperPath
+			? { success: true, available: true, helperPath }
+			: { success: true, available: false, reason: "missing-helper" };
+	});
+
+	ipcMain.handle(
+		"start-native-linux-recording",
+		async (_, request: NativeLinuxRecordingRequest) => {
+			try {
+				if (process.platform !== "linux") {
+					return { success: false, error: "Native Linux capture requires Linux." };
+				}
+				if (linuxNativeCaptureSession) {
+					return { success: false, error: "Native Linux capture is already running." };
+				}
+				if (!findPipeWireCursorHelperPath()) {
+					return { success: false, error: "Native Linux capture helper is not available." };
+				}
+
+				const recordingId =
+					typeof request?.recordingId === "number" && Number.isFinite(request.recordingId)
+						? request.recordingId
+						: Date.now();
+				const outputPath = path.join(RECORDINGS_DIR, `${RECORDING_FILE_PREFIX}${recordingId}.mp4`);
+				const cursorCaptureMode =
+					normalizeCursorCaptureMode(request?.cursor?.mode) ?? "editable-overlay";
+
+				await fs.mkdir(RECORDINGS_DIR, { recursive: true });
+				const restoreToken = await readLinuxRestoreToken();
+
+				const session = new LinuxNativeCaptureSession({
+					outputPath,
+					cursorMode: portalCursorMode(cursorCaptureMode),
+					fps: request.video.fps,
+					...(request.video.bitrate ? { bitrate: request.video.bitrate } : {}),
+					audio: {
+						system: { enabled: request.audio.system.enabled },
+						microphone: {
+							enabled: request.audio.microphone.enabled,
+							...(request.audio.microphone.deviceName
+								? { deviceName: request.audio.microphone.deviceName }
+								: {}),
+							gain: request.audio.microphone.gain,
+						},
+					},
+					maxCursorSamples: MAX_CURSOR_SAMPLES,
+					...(restoreToken ? { restoreToken } : {}),
+				});
+
+				console.info("[native-linux] starting capture", {
+					outputPath,
+					cursor: { mode: cursorCaptureMode },
+					audio: request.audio,
+					video: request.video,
+				});
+
+				await session.start();
+				// Blocks until the user answers the portal picker, which has no
+				// upper bound — the countdown UI is already showing by now.
+				await session.waitUntilCapturing();
+
+				linuxNativeCaptureSession = session;
+				linuxNativeCaptureRecordingId = recordingId;
+				linuxNativeCaptureCursorMode = cursorCaptureMode;
+
+				const source = selectedSource || { name: "Screen" };
+				if (onRecordingStateChange) {
+					onRecordingStateChange(true, source.name);
+				}
+
+				return { success: true, recordingId, path: outputPath };
+			} catch (error) {
+				console.error("Failed to start native Linux recording:", error);
+				linuxNativeCaptureSession = null;
+				linuxNativeCaptureRecordingId = null;
+				linuxNativeCaptureCursorMode = "editable-overlay";
+				return { success: false, error: String(error) };
+			}
+		},
+	);
+
+	ipcMain.handle("pause-native-linux-recording", async () => {
+		if (!linuxNativeCaptureSession) {
+			return { success: false, error: "Native Linux capture is not running." };
+		}
+		linuxNativeCaptureSession.pause();
+		return { success: true };
+	});
+
+	ipcMain.handle("resume-native-linux-recording", async () => {
+		if (!linuxNativeCaptureSession) {
+			return { success: false, error: "Native Linux capture is not running." };
+		}
+		linuxNativeCaptureSession.resume();
+		return { success: true };
+	});
+
+	ipcMain.handle("stop-native-linux-recording", async (_, discard?: boolean) => {
+		const session = linuxNativeCaptureSession;
+		const recordingId = linuxNativeCaptureRecordingId ?? Date.now();
+		const cursorCaptureMode = linuxNativeCaptureCursorMode;
+
+		if (!session) {
+			return { success: false, error: "Native Linux capture is not running." };
+		}
+
+		try {
+			if (discard) {
+				session.discard();
+				const discarded = path.join(RECORDINGS_DIR, `${RECORDING_FILE_PREFIX}${recordingId}.mp4`);
+				await Promise.all([
+					fs.rm(discarded, { force: true }),
+					fs.rm(`${discarded}.cursor.json`, { force: true }),
+				]);
+				return { success: true, discarded: true };
+			}
+
+			const result = await session.stop();
+			await writeLinuxRestoreToken(result.restoreToken);
+
+			// The helper collects cursor samples itself, from the same portal
+			// session that produced the pixels, so there is no separate sampler
+			// to stop and no clock offset to correct — the two are one recording.
+			if (cursorCaptureMode === "editable-overlay" && result.cursor.samples.length > 0) {
+				await fs.writeFile(
+					`${result.path}.cursor.json`,
+					JSON.stringify(result.cursor, null, 2),
+					"utf-8",
+				);
+			}
+
+			const session_: RecordingSession = {
+				screenVideoPath: result.path,
+				createdAt: recordingId,
+				cursorCaptureMode,
+			};
+			setCurrentRecordingSessionState(session_);
+			currentProjectPath = null;
+
+			const sessionManifestPath = path.join(
+				RECORDINGS_DIR,
+				`${path.parse(result.path).name}${RECORDING_SESSION_SUFFIX}`,
+			);
+			await fs.writeFile(sessionManifestPath, JSON.stringify(session_, null, 2), "utf-8");
+			await registerRecordingMediaLinks(result.path, { cursorCaptureMode });
+
+			console.info("[native-linux] capture stored", {
+				path: result.path,
+				frames: result.frames,
+				droppedFrames: result.droppedFrames,
+				durationMs: result.durationMs,
+				videoEncoder: result.videoEncoder,
+				cursorSamples: result.cursor.samples.length,
+			});
+
+			return {
+				success: true,
+				path: result.path,
+				session: session_,
+				message: "Native Linux recording session stored successfully",
+			};
+		} catch (error) {
+			console.error("Failed to stop native Linux recording:", error);
+			return { success: false, error: String(error) };
+		} finally {
+			linuxNativeCaptureSession = null;
+			linuxNativeCaptureRecordingId = null;
+			linuxNativeCaptureCursorMode = "editable-overlay";
+			const source = selectedSource || { name: "Screen" };
+			if (onRecordingStateChange) {
+				onRecordingStateChange(false, source.name);
+			}
+		}
+	});
+
 	ipcMain.handle(
 		"start-native-windows-recording",
 		async (_, request: NativeWindowsRecordingRequest) => {
@@ -2426,26 +2668,40 @@ export function registerIpcHandlers(
 		}
 	});
 
-	ipcMain.handle(
-		"attach-native-mac-webcam-recording",
-		async (_, payload: AttachNativeMacWebcamRecordingInput) => {
-			try {
-				if (process.platform !== "darwin") {
-					return { success: false, error: "Native macOS webcam attachment requires macOS." };
-				}
-
+	/**
+	 * Writes a browser-recorded webcam clip next to a natively-recorded screen
+	 * video and rewrites the session manifest to include both.
+	 *
+	 * Shared by macOS and Linux, whose native helpers both leave the camera to
+	 * the renderer's `MediaRecorder`: opening the device a second time from the
+	 * helper would fight the preview for an exclusive claim, and buys nothing
+	 * that the screen capture needs. (Windows is the exception — its helper takes
+	 * the webcam through DirectShow so both streams share one start clock.)
+	 *
+	 * Nothing in here is platform-specific; the two `ipcMain.handle` calls below
+	 * differ only in which platform they accept.
+	 */
+	const attachNativeWebcamRecording = async (
+		platformLabel: string,
+		payload: AttachNativeMacWebcamRecordingInput,
+	) => {
+		try {
+			{
 				const screenVideoPath = normalizeVideoSourcePath(payload.screenVideoPath);
 				if (!screenVideoPath || !isPathWithinDir(screenVideoPath, RECORDINGS_DIR)) {
 					return {
 						success: false,
-						error: "Native macOS webcam attachment requires a recording output path.",
+						error: `Native ${platformLabel} webcam attachment requires a recording output path.`,
 					};
 				}
 
 				await fs.access(screenVideoPath, fsConstants.R_OK);
 
 				if (!payload.webcam?.fileName || !payload.webcam.videoData) {
-					return { success: false, error: "Native macOS webcam attachment is missing video data." };
+					return {
+						success: false,
+						error: `Native ${platformLabel} webcam attachment is missing video data.`,
+					};
 				}
 
 				const webcamVideoPath = resolveRecordingOutputPath(payload.webcam.fileName);
@@ -2484,15 +2740,35 @@ export function registerIpcHandlers(
 					success: true,
 					path: screenVideoPath,
 					session,
-					message: "Native macOS webcam recording attached successfully",
-				};
-			} catch (error) {
-				console.error("Failed to attach native macOS webcam recording:", error);
-				return {
-					success: false,
-					error: error instanceof Error ? error.message : String(error),
+					message: `Native ${platformLabel} webcam recording attached successfully`,
 				};
 			}
+		} catch (error) {
+			console.error(`Failed to attach native ${platformLabel} webcam recording:`, error);
+			return {
+				success: false,
+				error: error instanceof Error ? error.message : String(error),
+			};
+		}
+	};
+
+	ipcMain.handle(
+		"attach-native-mac-webcam-recording",
+		async (_, payload: AttachNativeMacWebcamRecordingInput) => {
+			if (process.platform !== "darwin") {
+				return { success: false, error: "Native macOS webcam attachment requires macOS." };
+			}
+			return attachNativeWebcamRecording("macOS", payload);
+		},
+	);
+
+	ipcMain.handle(
+		"attach-native-linux-webcam-recording",
+		async (_, payload: AttachNativeMacWebcamRecordingInput) => {
+			if (process.platform !== "linux") {
+				return { success: false, error: "Native Linux webcam attachment requires Linux." };
+			}
+			return attachNativeWebcamRecording("Linux", payload);
 		},
 	);
 

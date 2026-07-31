@@ -115,13 +115,22 @@ fn link_ffmpeg(root: &Path) {
     for name in ["avcodec", "avformat", "avutil", "swscale", "swresample"] {
         println!("cargo:rustc-link-lib={name}");
     }
-    // `-rpath` twice: `$ORIGIN` for the packaged layout (the .so files sit next
-    // to the binary in electron/native/bin/linux-x64), the absolute vendored
-    // path so `cargo run` works straight out of the repo. `--disable-new-dtags`
-    // is what makes these RUNPATH entries apply to the transitive ffmpeg libs
-    // too; with the default DT_RUNPATH they would not.
+    // `$ORIGIN/ffmpeg`, NOT `$ORIGIN`. The helper is staged into
+    // electron/native/bin/linux-x64/, and that directory ALREADY contains
+    // libavcodec.so.62 and friends — the copies whose every symbol was renamed
+    // to `osff_*` by scripts/build-linux-compositor-addon.mjs so the compositor
+    // addon does not collide with Chromium's ffmpeg inside Electron. Searching
+    // `$ORIGIN` finds those first and the helper dies at startup with
+    // "undefined symbol: avcodec_send_frame, version LIBAVCODEC_62". The
+    // renaming trick is what makes the ADDON work and what would break the
+    // HELPER, so the two sets of libraries must not share a directory.
+    //
+    // The absolute vendored path comes second so `cargo run` works straight out
+    // of the repo. `--disable-new-dtags` is what makes these RUNPATH entries
+    // apply to the transitive ffmpeg libs too; with the default DT_RUNPATH they
+    // would not.
     println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
-    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN");
+    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/ffmpeg");
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
 
     let mut builder = bindgen::Builder::default();

@@ -2,12 +2,12 @@ import { type ChildProcessByStdio, spawn } from "node:child_process";
 import { accessSync, constants as fsConstants } from "node:fs";
 import path from "node:path";
 import type { Readable, Writable } from "node:stream";
-import type {
-	CursorRecordingData,
-	CursorRecordingSample,
-	NativeCursorAsset,
-} from "../../../../src/native/contracts";
-import { clamp } from "../../../../src/utils/math";
+import type { CursorRecordingData } from "../../../../src/native/contracts";
+import {
+	NdjsonLineReader,
+	PipeWireCursorAccumulator,
+	type PipeWireHelperEvent,
+} from "./pipeWireCursorAccumulator";
 import type { CursorRecordingSession } from "./session";
 
 /**
@@ -38,39 +38,6 @@ import type { CursorRecordingSession } from "./session";
 const HELPER_NAME = "openscreen-pipewire-helper";
 const READY_TIMEOUT_MS = 5_000;
 const STOP_GRACE_MS = 500;
-
-interface PipeWireCursorAssetPayload {
-	id: string;
-	imageDataUrl: string;
-	width: number;
-	height: number;
-	hotspotX: number;
-	hotspotY: number;
-}
-
-type PipeWireHelperEvent =
-	| { event: "ready"; timestampMs: number; pipewireVersion?: string | null }
-	| {
-			event: "stream-started";
-			timestampMs: number;
-			nodeId: number;
-			width: number;
-			height: number;
-	  }
-	| {
-			event: "cursor-sample";
-			timestampMs: number;
-			x: number;
-			y: number;
-			width: number;
-			height: number;
-			visible: boolean;
-			assetId?: string;
-			asset?: PipeWireCursorAssetPayload;
-	  }
-	| { event: "warning"; code: string; message: string }
-	| { event: "error"; code: string; message: string }
-	| { event: "debug"; code: string; [key: string]: unknown };
 
 interface PipeWireCursorRecordingSessionOptions {
 	maxSamples: number;
@@ -113,22 +80,20 @@ export function findPipeWireCursorHelperPath() {
 }
 
 export class PipeWireCursorRecordingSession implements CursorRecordingSession {
-	private samples: CursorRecordingSample[] = [];
-	private assets = new Map<string, NativeCursorAsset>();
+	private readonly cursor: PipeWireCursorAccumulator;
+	private readonly lines = new NdjsonLineReader();
 	private process: ChildProcessByStdio<Writable, Readable, Readable> | null = null;
-	private lineBuffer = "";
-	private startTimeMs = 0;
 	private readyResolve: (() => void) | null = null;
 	private readyReject: ((error: Error) => void) | null = null;
 	private readyTimer: NodeJS.Timeout | null = null;
 
-	constructor(private readonly options: PipeWireCursorRecordingSessionOptions) {}
+	constructor(private readonly options: PipeWireCursorRecordingSessionOptions) {
+		this.cursor = new PipeWireCursorAccumulator(options.maxSamples);
+	}
 
 	async start(): Promise<void> {
-		this.samples = [];
-		this.assets.clear();
-		this.lineBuffer = "";
-		this.startTimeMs = this.options.startTimeMs ?? Date.now();
+		this.cursor.reset(this.options.startTimeMs ?? Date.now());
+		this.lines.reset();
 
 		const helperPath = findPipeWireCursorHelperPath();
 		if (!helperPath) {
@@ -190,31 +155,17 @@ export class PipeWireCursorRecordingSession implements CursorRecordingSession {
 			this.killHelperProcess(child, STOP_GRACE_MS);
 		}
 
-		return {
-			version: 2,
-			provider: this.assets.size > 0 ? "native" : "none",
-			samples: this.samples,
-			assets: [...this.assets.values()],
-		};
+		return this.cursor.toRecordingData();
 	}
 
 	private handleStdoutChunk(chunk: string) {
-		this.lineBuffer += chunk;
-		const lines = this.lineBuffer.split(/\r?\n/);
-		this.lineBuffer = lines.pop() ?? "";
-
-		for (const line of lines) {
-			const trimmedLine = line.trim();
-			if (!trimmedLine) {
-				continue;
-			}
-
+		this.lines.push(chunk, (line) => {
 			try {
-				this.handleEvent(JSON.parse(trimmedLine) as PipeWireHelperEvent);
+				this.handleEvent(JSON.parse(line) as PipeWireHelperEvent);
 			} catch (error) {
-				console.error("Failed to parse Linux cursor helper output:", error, trimmedLine);
+				console.error("Failed to parse Linux cursor helper output:", error, line);
 			}
-		}
+		});
 	}
 
 	private handleEvent(payload: PipeWireHelperEvent) {
@@ -233,7 +184,7 @@ export class PipeWireCursorRecordingSession implements CursorRecordingSession {
 				);
 				return;
 			case "cursor-sample":
-				this.captureSample(payload);
+				this.cursor.addSample(payload);
 				return;
 			case "warning":
 				console.warn(`[cursor-linux] ${payload.code}: ${payload.message}`);
@@ -246,51 +197,6 @@ export class PipeWireCursorRecordingSession implements CursorRecordingSession {
 				console.info("[cursor-linux][debug]", JSON.stringify(payload));
 				return;
 		}
-	}
-
-	private captureSample(payload: Extract<PipeWireHelperEvent, { event: "cursor-sample" }>) {
-		this.rememberAsset(payload.asset);
-
-		// Normalised against the stream's own dimensions, which the helper repeats
-		// on every sample. Electron's display bounds are deliberately NOT used:
-		// they are in DIPs, whereas the portal reports stream pixels, and the
-		// portal's source is whatever the user picked in its own dialog, which
-		// need not be the display the app thinks it is recording.
-		const width = Math.max(1, payload.width);
-		const height = Math.max(1, payload.height);
-
-		this.samples.push({
-			timeMs: Math.max(0, payload.timestampMs - this.startTimeMs),
-			cx: clamp(payload.x / width, 0, 1),
-			cy: clamp(payload.y / height, 0, 1),
-			visible: payload.visible,
-			// Wayland exposes no click events to an unprivileged process.
-			interactionType: "move",
-			...(payload.assetId ? { assetId: payload.assetId } : {}),
-		});
-
-		if (this.samples.length > this.options.maxSamples) {
-			this.samples.shift();
-		}
-	}
-
-	private rememberAsset(asset: PipeWireCursorAssetPayload | undefined) {
-		if (!asset?.id || this.assets.has(asset.id)) {
-			return;
-		}
-
-		this.assets.set(asset.id, {
-			id: asset.id,
-			platform: "linux",
-			imageDataUrl: asset.imageDataUrl,
-			width: asset.width,
-			height: asset.height,
-			hotspotX: asset.hotspotX,
-			hotspotY: asset.hotspotY,
-			// The portal reports cursor bitmaps in stream pixels, the same space
-			// the positions are in, so no extra scaling applies.
-			scaleFactor: 1,
-		});
 	}
 
 	private waitUntilReady() {
