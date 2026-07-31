@@ -250,6 +250,12 @@ int osc_pw_load(char *err, size_t err_len)
     OSC_LOAD_AUDIO(stream_dequeue_buffer, "pw_stream_dequeue_buffer");
     OSC_LOAD_AUDIO(stream_queue_buffer, "pw_stream_queue_buffer");
     OSC_LOAD_AUDIO(stream_state_as_string, "pw_stream_state_as_string");
+    OSC_LOAD_AUDIO(main_loop_new, "pw_main_loop_new");
+    OSC_LOAD_AUDIO(main_loop_destroy, "pw_main_loop_destroy");
+    OSC_LOAD_AUDIO(main_loop_get_loop, "pw_main_loop_get_loop");
+    OSC_LOAD_AUDIO(main_loop_run, "pw_main_loop_run");
+    OSC_LOAD_AUDIO(main_loop_quit, "pw_main_loop_quit");
+    OSC_LOAD_AUDIO(proxy_destroy, "pw_proxy_destroy");
 
 #undef OSC_LOAD_AUDIO
 #undef OSC_LOAD

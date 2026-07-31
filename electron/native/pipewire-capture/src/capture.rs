@@ -41,14 +41,109 @@ pub struct AudioSource {
     pub bitrate: i64,
 }
 
-struct AudioTrack {
+/// One capture feeding the mix.
+struct AudioInput {
     label: &'static str,
     ring: Arc<AudioRing>,
     gain: f32,
+    /// Samples drained but not yet mixed, because the other inputs had fewer.
+    pending: Vec<f32>,
+}
+
+/// The single AAC track, and everything mixed into it.
+///
+/// ONE TRACK, NOT ONE PER SOURCE. The first shape of this code followed macOS
+/// and wrote system audio and the microphone as two separate AAC tracks, on the
+/// grounds that the export mixes every track it finds
+/// (`crates/compositor/src/audio.rs`). What that missed is that THE PREVIEW DOES
+/// NOT: it plays an HTML5 `<video>` element, which plays only the default audio
+/// track and cannot be told to switch, because Chromium does not implement the
+/// `audioTracks` API. With system audio first and nothing playing, the preview
+/// was silent while the microphone sat in a track nothing would ever select.
+///
+/// The Windows helper has always written one mixed track
+/// (`mf_encoder.cpp` has a single `audioStreamIndex_`, fed by `AudioMixer`).
+/// This now matches it. macOS still has the two-track bug.
+struct AudioMix {
+    inputs: Vec<AudioInput>,
     encoder: AudioEncoder,
     track: TrackId,
     /// Reused across drains so the steady state allocates nothing.
     scratch: Vec<f32>,
+}
+
+/// How far one input may lag behind another before it is treated as silent
+/// rather than allowed to stall the track.
+///
+/// Mixing consumes `min(available)` across inputs so that neither runs ahead of
+/// the other. Taken literally that means one dead input — a microphone
+/// unplugged mid-recording — freezes the whole track, because its `min` stays
+/// zero forever. A quarter of a second of slack is far more than the jitter
+/// between two streams of the same 48 kHz graph, and far less than anyone can
+/// hear as a gap.
+const AUDIO_STARVE_SAMPLES: usize = AUDIO_SAMPLE_RATE as usize / 4 * AUDIO_CHANNELS;
+
+impl AudioMix {
+    /// Drains every input, mixes what they have in common, and encodes it.
+    ///
+    /// `flush` is set once at stop: it mixes whatever remains even when the
+    /// inputs are unevenly filled, because there will be no more samples to even
+    /// them out.
+    fn pump(&mut self, muxer: &mut Muxer, flush: bool) -> Result<(), String> {
+        for input in &mut self.inputs {
+            input.ring.drain_into(&mut input.pending);
+        }
+
+        let shortest = self.inputs.iter().map(|i| i.pending.len()).min().unwrap_or(0);
+        let longest = self.inputs.iter().map(|i| i.pending.len()).max().unwrap_or(0);
+        // Normally consume only what every input can supply, so none runs ahead.
+        // When one has fallen far behind — or at flush, when nothing more is
+        // coming — take the longest and let the short ones contribute silence,
+        // rather than letting a dead input freeze the track. See
+        // AUDIO_STARVE_SAMPLES.
+        let take = if flush || longest.saturating_sub(shortest) > AUDIO_STARVE_SAMPLES {
+            longest
+        } else {
+            shortest
+        };
+        if take == 0 {
+            return Ok(());
+        }
+
+        self.scratch.clear();
+        self.scratch.resize(take, 0.0);
+        for input in &mut self.inputs {
+            let n = input.pending.len().min(take);
+            for (out, sample) in self.scratch.iter_mut().zip(input.pending.drain(..n)) {
+                // Summed, then clamped ONCE at the end rather than per input:
+                // clamping each contribution would quietly attenuate the mix
+                // whenever one source alone is already near full scale.
+                *out += sample * input.gain;
+            }
+        }
+        for sample in &mut self.scratch {
+            // A boosted microphone over loud system audio must clip flat. An
+            // out-of-range float survives until AAC quantises it and then wraps
+            // to the opposite polarity, which sounds like a burst of noise.
+            *sample = sample.clamp(-1.0, 1.0);
+        }
+
+        let id = self.track;
+        let scratch = std::mem::take(&mut self.scratch);
+        let result = self.encoder.push(&scratch, |packet| muxer.write(id, packet));
+        self.scratch = scratch;
+        result
+    }
+
+    /// Samples the rings had to discard, per input. Audible, unlike a dropped
+    /// video frame.
+    fn dropped(&self) -> Vec<(&'static str, u64)> {
+        self.inputs
+            .iter()
+            .map(|input| (input.label, input.ring.dropped_samples()))
+            .filter(|(_, dropped)| *dropped > 0)
+            .collect()
+    }
 }
 
 /// Frames encoded in one `advance` before returning to the event loop.
@@ -97,7 +192,7 @@ pub struct Summary {
 pub struct Capture {
     encoder: VideoEncoder,
     video_track: TrackId,
-    audio: Vec<AudioTrack>,
+    audio: Option<AudioMix>,
     /// `None` only between [`Self::finish`] taking it and the struct dropping.
     muxer: Option<Muxer>,
     path: PathBuf,
@@ -142,19 +237,28 @@ impl Capture {
         // there, so an audio stream opened later could not be added at all.
         let mut muxer = Muxer::create(path)?;
         let video_track = muxer.add_stream(encoder.codec_context())?;
-        let mut audio = Vec::with_capacity(audio_sources.len());
-        for source in audio_sources {
-            let encoder = AudioEncoder::open(source.bitrate)?;
+        // ONE encoder and ONE track for however many captures there are.
+        let audio = if audio_sources.is_empty() {
+            None
+        } else {
+            let bitrate = audio_sources.iter().map(|s| s.bitrate).max().unwrap_or(128_000);
+            let encoder = AudioEncoder::open(bitrate)?;
             let track = muxer.add_stream(encoder.codec_context())?;
-            audio.push(AudioTrack {
-                label: source.label,
-                ring: source.ring,
-                gain: source.gain,
+            Some(AudioMix {
+                inputs: audio_sources
+                    .into_iter()
+                    .map(|source| AudioInput {
+                        label: source.label,
+                        ring: source.ring,
+                        gain: source.gain,
+                        pending: Vec::new(),
+                    })
+                    .collect(),
                 encoder,
                 track,
                 scratch: Vec::new(),
-            });
-        }
+            })
+        };
         muxer.write_header()?;
 
         Ok((
@@ -187,8 +291,11 @@ impl Capture {
             // it belongs to the recording: video frame 0 is now, so audio
             // sample 0 is now too. Keeping the backlog would shift the whole
             // track earlier by however long the user took to click.
-            for track in &self.audio {
-                track.ring.clear();
+            if let Some(mix) = &mut self.audio {
+                for input in &mut mix.inputs {
+                    input.ring.clear();
+                    input.pending.clear();
+                }
             }
         }
         Ok(())
@@ -224,24 +331,8 @@ impl Capture {
         // recreated at any time; a missed audio sample cannot, and the ring
         // drops the oldest once it fills. Draining every wakeup keeps it far
         // from that cap — at 48 kHz a 16 ms tick carries about 768 samples.
-        for track in &mut self.audio {
-            track.scratch.clear();
-            track.ring.drain_into(&mut track.scratch);
-            if track.scratch.is_empty() {
-                continue;
-            }
-            if track.gain != 1.0 {
-                for sample in &mut track.scratch {
-                    // Clamped: a boosted microphone that clips should clip
-                    // flat, not wrap around to the opposite polarity, which is
-                    // what an out-of-range float does once AAC quantises it.
-                    *sample = (*sample * track.gain).clamp(-1.0, 1.0);
-                }
-            }
-            let id = track.track;
-            track
-                .encoder
-                .push(&track.scratch, |packet| muxer.write(id, packet))?;
+        if let Some(mix) = self.audio.as_mut() {
+            mix.pump(muxer, false)?;
         }
         Ok(written)
     }
@@ -259,8 +350,11 @@ impl Capture {
             // the video timeline did not advance across the pause, so keeping
             // the audio would push every later sample out of sync by the length
             // of the pause.
-            for track in &self.audio {
-                track.ring.clear();
+            if let Some(mix) = &mut self.audio {
+                for input in &mut mix.inputs {
+                    input.ring.clear();
+                    input.pending.clear();
+                }
             }
         }
     }
@@ -268,11 +362,7 @@ impl Capture {
     /// Samples the rings had to discard because the encoder fell behind, per
     /// track. Audible if non-zero, unlike a dropped video frame.
     pub fn dropped_audio(&self) -> Vec<(&'static str, u64)> {
-        self.audio
-            .iter()
-            .map(|track| (track.label, track.ring.dropped_samples()))
-            .filter(|(_, dropped)| *dropped > 0)
-            .collect()
+        self.audio.as_ref().map(AudioMix::dropped).unwrap_or_default()
     }
 
     pub fn is_paused(&self) -> bool {
@@ -287,21 +377,13 @@ impl Capture {
             .ok_or_else(|| "capture was already finished".to_owned())?;
 
         // Audio first: whatever is still in the rings is real recorded sound,
-        // and draining it after the video flush keeps both tracks ending at
-        // roughly the same timestamp.
-        for track in &mut self.audio {
-            track.scratch.clear();
-            track.ring.drain_into(&mut track.scratch);
-            if track.gain != 1.0 {
-                for sample in &mut track.scratch {
-                    *sample = (*sample * track.gain).clamp(-1.0, 1.0);
-                }
-            }
-            let id = track.track;
-            track
-                .encoder
-                .push(&track.scratch, |packet| muxer.write(id, packet))?;
-            track.encoder.finish(|packet| muxer.write(id, packet))?;
+        // and draining it before the video flush keeps both ending at roughly
+        // the same timestamp. `flush` lets the mix take unevenly-filled inputs,
+        // since no more samples are coming to even them out.
+        if let Some(mix) = self.audio.as_mut() {
+            mix.pump(&mut muxer, true)?;
+            let id = mix.track;
+            mix.encoder.finish(|packet| muxer.write(id, packet))?;
         }
 
         let video_track = self.video_track;
@@ -526,14 +608,103 @@ mod tests {
             .expect("stage");
 
         // stage() cleared the pre-roll, so feed the samples the run will see.
-        capture.audio[0].ring.push_for_test(&[0.9, -0.9, 0.4, -0.4]);
+        let mix = capture.audio.as_ref().expect("a mix exists");
+        mix.inputs[0].ring.push_for_test(&[0.9, -0.9, 0.4, -0.4]);
         capture.advance().expect("advance");
-        for sample in &capture.audio[0].scratch {
+        for sample in &capture.audio.as_ref().unwrap().scratch {
             assert!(
                 (-1.0..=1.0).contains(sample),
                 "gain produced {sample}, which is outside the representable range"
             );
         }
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn two_captures_become_one_muxed_track() {
+        // THE regression this guards. Two separate AAC tracks meant the preview
+        // — an HTML5 <video>, which plays only the default track and cannot
+        // switch — heard whichever came first. With system audio silent, that
+        // was silence, while the microphone sat in a track nothing selects.
+        let system = Arc::new(AudioRing::new(1, AUDIO_SAMPLE_RATE as usize, AUDIO_CHANNELS));
+        let mic = Arc::new(AudioRing::new(1, AUDIO_SAMPLE_RATE as usize, AUDIO_CHANNELS));
+        let output = std::env::temp_dir().join("openscreen-capture-one-track.mp4");
+        let (mut capture, _) = Capture::start(
+            &output,
+            320,
+            240,
+            30,
+            Some(1_000_000),
+            Some(Backend::Software),
+            vec![
+                AudioSource { label: "system", ring: system.clone(), gain: 1.0, bitrate: 128_000 },
+                AudioSource { label: "microphone", ring: mic.clone(), gain: 1.0, bitrate: 128_000 },
+            ],
+        )
+        .expect("start");
+
+        let mix = capture.audio.as_ref().expect("a mix exists");
+        assert_eq!(mix.inputs.len(), 2, "both captures feed the mix");
+        let track = mix.track;
+
+        capture
+            .stage(&frame(320, 240, shim::constants().video_format_bgrx))
+            .expect("stage");
+        // stage() cleared the pre-roll, so feed after it.
+        system.push_for_test(&vec![0.25; 4096]);
+        mic.push_for_test(&vec![0.5; 4096]);
+        capture.advance().expect("advance");
+
+        let mix = capture.audio.as_ref().unwrap();
+        assert_eq!(mix.track, track, "there is exactly one audio track, and it never changes");
+        // The mixed scratch must carry BOTH contributions summed, not one of them.
+        assert!(
+            mix.scratch.iter().any(|s| (*s - 0.75).abs() < 1e-4),
+            "system 0.25 + mic 0.5 should sum to 0.75; got {:?}",
+            &mix.scratch[..mix.scratch.len().min(4)]
+        );
+
+        let summary = capture.finish().expect("finish");
+        assert!(summary.frames > 0);
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn a_silent_input_cannot_freeze_the_track() {
+        // A microphone unplugged mid-recording stops filling its ring. Mixing
+        // strictly on min(available) would then wait for it forever and the
+        // whole audio track would stop — including the system audio that is
+        // still arriving. AUDIO_STARVE_SAMPLES is what breaks that deadlock.
+        let system = Arc::new(AudioRing::new(2, AUDIO_SAMPLE_RATE as usize, AUDIO_CHANNELS));
+        let dead = Arc::new(AudioRing::new(2, AUDIO_SAMPLE_RATE as usize, AUDIO_CHANNELS));
+        let output = std::env::temp_dir().join("openscreen-capture-starve.mp4");
+        let (mut capture, _) = Capture::start(
+            &output,
+            320,
+            240,
+            30,
+            Some(1_000_000),
+            Some(Backend::Software),
+            vec![
+                AudioSource { label: "system", ring: system.clone(), gain: 1.0, bitrate: 128_000 },
+                AudioSource { label: "microphone", ring: dead, gain: 1.0, bitrate: 128_000 },
+            ],
+        )
+        .expect("start");
+        capture
+            .stage(&frame(320, 240, shim::constants().video_format_bgrx))
+            .expect("stage");
+
+        // Well past the quarter-second slack, with the other input silent.
+        system.push_for_test(&vec![0.4; AUDIO_STARVE_SAMPLES + 8192]);
+        capture.advance().expect("advance");
+
+        let mix = capture.audio.as_ref().unwrap();
+        assert!(
+            mix.inputs[0].pending.len() < AUDIO_STARVE_SAMPLES,
+            "the live input should have been consumed, not held hostage: {} left",
+            mix.inputs[0].pending.len()
+        );
         let _ = std::fs::remove_file(&output);
     }
 

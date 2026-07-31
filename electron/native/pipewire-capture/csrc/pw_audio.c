@@ -261,3 +261,157 @@ void osc_pw_audio_stop(struct osc_pw_audio *audio)
     osc_audio_api.thread_loop_destroy(audio->loop);
     free(audio);
 }
+
+/* ---------------------------------------------------------------------------
+ * Enumeration of audio sources
+ *
+ * WHY THIS IS NEEDED AT ALL. The app's microphone picker lists Chromium's
+ * `MediaDeviceInfo`, whose `deviceId` is an opaque hash and whose `label` is a
+ * human string. Neither is a PipeWire `node.name`, and `PW_KEY_TARGET_OBJECT`
+ * accepts only a node name (or a serial). With no target, pw_stream connects to
+ * the session DEFAULT source — which is why a user who picked their built-in
+ * microphone in the HUD got the empty headphone jack recorded instead.
+ *
+ * So the helper enumerates the graph itself and resolves the label against
+ * `node.description`, which is exactly the string Chromium surfaces as the
+ * device label on a PipeWire system.
+ * ------------------------------------------------------------------------- */
+
+struct osc_pw_enum {
+    struct pw_main_loop *loop;
+    struct pw_context *context;
+    struct pw_core *core;
+    struct pw_registry *registry;
+    struct spa_hook registry_listener;
+    struct spa_hook core_listener;
+    int sync_seq;
+    /* Caller's buffer, filled as "name\037description\036" records. */
+    char *out;
+    size_t out_len;
+    size_t out_used;
+};
+
+static void osc_enum_append(struct osc_pw_enum *e, const char *name, const char *desc)
+{
+    size_t need;
+
+    if (name == NULL || name[0] == '\0') {
+        return;
+    }
+    if (desc == NULL) {
+        desc = "";
+    }
+    /* +2 for the two separators, +1 for the trailing NUL the Rust side reads. */
+    need = strlen(name) + strlen(desc) + 3;
+    if (e->out_used + need > e->out_len) {
+        return; /* Buffer full: report what fits rather than truncating a record. */
+    }
+    e->out_used += (size_t)snprintf(e->out + e->out_used, e->out_len - e->out_used,
+                                    "%s\037%s\036", name, desc);
+}
+
+static void osc_enum_on_global(void *data, uint32_t id, uint32_t permissions, const char *type,
+                               uint32_t version, const struct spa_dict *props)
+{
+    struct osc_pw_enum *e = data;
+    const char *media_class;
+
+    (void)id;
+    (void)permissions;
+    (void)version;
+    if (props == NULL || type == NULL || strcmp(type, PW_TYPE_INTERFACE_Node) != 0) {
+        return;
+    }
+    media_class = spa_dict_lookup(props, PW_KEY_MEDIA_CLASS);
+    /* Only real capture devices. "Audio/Source" covers microphones and line-in;
+     * a sink's monitor is "Audio/Sink" and is reached via capture_sink instead,
+     * so listing it here would offer the user a duplicate of system audio. */
+    if (media_class == NULL || strcmp(media_class, "Audio/Source") != 0) {
+        return;
+    }
+    osc_enum_append(e, spa_dict_lookup(props, PW_KEY_NODE_NAME),
+                    spa_dict_lookup(props, PW_KEY_NODE_DESCRIPTION));
+}
+
+static const struct pw_registry_events osc_enum_registry_events = {
+    PW_VERSION_REGISTRY_EVENTS,
+    .global = osc_enum_on_global,
+};
+
+static void osc_enum_on_core_done(void *data, uint32_t id, int seq)
+{
+    struct osc_pw_enum *e = data;
+
+    /* The registry replays every existing global BEFORE answering our sync, so
+     * a matching `done` means the initial dump is complete. Without this we
+     * would have to guess at a timeout and would race a busy graph. */
+    if (id == PW_ID_CORE && seq == e->sync_seq) {
+        osc_audio_api.main_loop_quit(e->loop);
+    }
+}
+
+static const struct pw_core_events osc_enum_core_events = {
+    PW_VERSION_CORE_EVENTS,
+    .done = osc_enum_on_core_done,
+};
+
+int osc_pw_list_audio_sources(char *out, size_t out_len, char *err, size_t err_len)
+{
+    struct osc_pw_enum e;
+    int result = -1;
+
+    if (osc_audio_api.main_loop_new == NULL) {
+        osc_pw_set_error(err, err_len, "osc_pw_list_audio_sources called before osc_pw_load");
+        return -1;
+    }
+    memset(&e, 0, sizeof(e));
+    e.out = out;
+    e.out_len = out_len;
+    if (out_len > 0) {
+        out[0] = '\0';
+    }
+
+    /* A plain main loop, not the thread loop the streams use: this call is
+     * synchronous by design — it runs the loop until the registry dump is done
+     * and then returns, so there is no thread to hand off to. */
+    e.loop = osc_audio_api.main_loop_new(NULL);
+    if (e.loop == NULL) {
+        osc_pw_set_error(err, err_len, "pw_main_loop_new failed");
+        return -1;
+    }
+    e.context = osc_audio_api.context_new(osc_audio_api.main_loop_get_loop(e.loop), NULL, 0);
+    if (e.context == NULL) {
+        osc_pw_set_error(err, err_len, "pw_context_new failed");
+        goto out;
+    }
+    e.core = osc_audio_api.context_connect(e.context, NULL, 0);
+    if (e.core == NULL) {
+        osc_pw_set_error(err, err_len, "pw_context_connect failed: no PipeWire session reachable");
+        goto out;
+    }
+    e.registry = pw_core_get_registry(e.core, PW_VERSION_REGISTRY, 0);
+    if (e.registry == NULL) {
+        osc_pw_set_error(err, err_len, "pw_core_get_registry failed");
+        goto out;
+    }
+
+    pw_registry_add_listener(e.registry, &e.registry_listener, &osc_enum_registry_events, &e);
+    pw_core_add_listener(e.core, &e.core_listener, &osc_enum_core_events, &e);
+    e.sync_seq = pw_core_sync(e.core, PW_ID_CORE, 0);
+
+    osc_audio_api.main_loop_run(e.loop);
+    result = 0;
+
+out:
+    if (e.registry != NULL) {
+        osc_audio_api.proxy_destroy((struct pw_proxy *)e.registry);
+    }
+    if (e.core != NULL) {
+        osc_audio_api.core_disconnect(e.core);
+    }
+    if (e.context != NULL) {
+        osc_audio_api.context_destroy(e.context);
+    }
+    osc_audio_api.main_loop_destroy(e.loop);
+    return result;
+}

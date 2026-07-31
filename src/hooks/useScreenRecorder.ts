@@ -1273,6 +1273,15 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 					system: { enabled: systemAudioEnabled },
 					microphone: {
 						enabled: microphoneEnabled,
+						// The device LABEL, not the id. Chromium's deviceId is an
+						// opaque per-origin hash that means nothing to PipeWire,
+						// whereas on a PipeWire system the label IS the node's
+						// `node.description` — which is what the helper matches
+						// against the graph it enumerates. Sending nothing here is
+						// what made a user who picked their built-in microphone
+						// get the empty headphone jack recorded, because the
+						// helper then fell back to the session default source.
+						...(microphoneDeviceName ? { deviceName: microphoneDeviceName } : {}),
 						gain: MIC_GAIN_BOOST,
 					},
 				},
