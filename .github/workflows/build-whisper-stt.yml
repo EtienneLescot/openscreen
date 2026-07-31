@@ -172,7 +172,25 @@ jobs:
           mkdir -p "$BAG"
           # Copy the whole per-platform directory: the helper executable plus
           # every ggml backend sidecar/library it needs at runtime.
-          cp -v "electron/native/bin/${{ matrix.tag }}"/* "$BAG/"
+          #
+          # -a, because build-whisper-stt.sh stages a symlink farm on Linux and
+          # macOS (libggml-vulkan.so -> .so.0 -> .so.0.15.1) and plain cp follows
+          # every link named on the command line, expanding each into a full copy
+          # of the payload. libggml-vulkan.so.0.15.1 alone is 60 MB, so the bag
+          # carried it three times: measured 188 MB instead of 63 MB, and the
+          # uploaded tarball 59 MB instead of 20 MB (gzip's 32 KiB window cannot
+          # dedupe copies that far apart). `dir/.` rather than `dir/*` so the copy
+          # does not depend on the shell's glob skipping dotfiles.
+          #
+          # tar preserves the links from here on (no -h below), so this shrinks
+          # the artifact and the CI download. It does NOT change the installers:
+          # scripts/stage-whisper-stt.sh:65 is a second plain `cp` that re-expands
+          # the farm before electron-builder ever sees it. Making that one -a too
+          # would cut ~131 MB from every package (electron-builder recreates
+          # symlinks, and squashfs/AppImage stores them natively — both verified),
+          # but deb/pacman go through fpm, whose behaviour here is unverified, so
+          # that step needs a real package inspection rather than a guess.
+          cp -av "electron/native/bin/${{ matrix.tag }}/." "$BAG/"
           tar -czf "${BAG}.tar.gz" "$BAG"
           echo "Staged ${BAG}.tar.gz"
 
