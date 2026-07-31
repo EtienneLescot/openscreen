@@ -63,7 +63,7 @@
 		"autoEnhance": "Tự động nâng cao",
 		"automaticZooms": "Thu phóng tự động",
 		"automaticZoomsHint": "Từ chuyển động con trỏ đã ghi",
-		"smartZoomsAndCuts": "Thu phóng + cắt thông minh",
+		"smartZoomsAndCuts": "Cắt thông minh",
 		"smartZoomsAndCutsHint": "Với AI",
 		"comment": "Bình luận",
 		"aspectRatio": "Tỷ lệ khung hình",
@@ -82,6 +82,6 @@
 		"addedAutoZoom": "Đã thêm {{count}} thu phóng tự động",
 		"addedAutoZoomPlural": "Đã thêm {{count}} thu phóng tự động",
 		"autoZoomFailed": "Thu phóng tự động thất bại",
-		"aiEnhanceRequested": "Đã yêu cầu AI cải thiện bản ghi này"
+		"aiEnhanceRequested": "Đã yêu cầu tác nhân AI cắt thời gian chết"
 	}
 }

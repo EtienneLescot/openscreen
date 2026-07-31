@@ -63,7 +63,7 @@
 		"autoEnhance": "Miglioramento automatico",
 		"automaticZooms": "Zoom automatici",
 		"automaticZoomsHint": "Dal movimento del cursore registrato",
-		"smartZoomsAndCuts": "Zoom e tagli intelligenti",
+		"smartZoomsAndCuts": "Tagli intelligenti",
 		"smartZoomsAndCutsHint": "Con l'IA",
 		"comment": "Commento",
 		"aspectRatio": "Proporzioni",
@@ -82,6 +82,6 @@
 		"addedAutoZoom": "Aggiunto {{count}} zoom automatico",
 		"addedAutoZoomPlural": "Aggiunti {{count}} zoom automatici",
 		"autoZoomFailed": "Zoom automatico non riuscito",
-		"aiEnhanceRequested": "È stato chiesto all'agente IA di migliorare questa registrazione"
+		"aiEnhanceRequested": "Chiesto all'agente IA di tagliare i tempi morti"
 	}
 }

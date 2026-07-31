@@ -63,7 +63,7 @@
 		"autoEnhance": "Auto-enhance",
 		"automaticZooms": "Automatic zooms",
 		"automaticZoomsHint": "From recorded cursor movement",
-		"smartZoomsAndCuts": "Smart zooms + cuts",
+		"smartZoomsAndCuts": "Smart cuts",
 		"smartZoomsAndCutsHint": "With AI",
 		"comment": "Comment",
 		"aspectRatio": "Aspect ratio",
@@ -82,6 +82,6 @@
 		"addedAutoZoom": "Added {{count}} automatic zoom",
 		"addedAutoZoomPlural": "Added {{count}} automatic zooms",
 		"autoZoomFailed": "Auto-zoom failed",
-		"aiEnhanceRequested": "Asked the AI agent to enhance this recording"
+		"aiEnhanceRequested": "Asked the AI agent to cut the dead time"
 	}
 }

@@ -63,7 +63,7 @@
 		"autoEnhance": "자동 향상",
 		"automaticZooms": "자동 줌",
 		"automaticZoomsHint": "녹화된 커서 움직임 기반",
-		"smartZoomsAndCuts": "스마트 줌 + 컷",
+		"smartZoomsAndCuts": "스마트 컷",
 		"smartZoomsAndCutsHint": "AI 사용",
 		"comment": "코멘트",
 		"aspectRatio": "화면 비율",
@@ -82,6 +82,6 @@
 		"addedAutoZoom": "자동 줌 {{count}}개가 추가되었습니다",
 		"addedAutoZoomPlural": "자동 줌 {{count}}개가 추가되었습니다",
 		"autoZoomFailed": "자동 줌 실패",
-		"aiEnhanceRequested": "AI 에이전트에게 이 녹화 개선을 요청했습니다"
+		"aiEnhanceRequested": "AI 에이전트에 빈 구간 컷을 요청했습니다"
 	}
 }

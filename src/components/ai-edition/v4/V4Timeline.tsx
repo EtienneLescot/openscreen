@@ -52,10 +52,22 @@ import { TransportBar } from "../TransportBar";
 import type { VideoSource } from "../VirtualPreview";
 import styles from "./EditorShellV4.module.css";
 
-// Well-crafted generic prompt for the AI "smart zooms + cuts" option — sent
-// straight to the chat agent via the prompt-bus.
+// The AI option's prompt — sent straight to the chat agent via the prompt-bus.
+//
+// ponytail: cuts ONLY, deliberately. It used to ask for zooms too ("smart
+// zoom-ins on the moments where the cursor dwells… focused on the cursor's
+// location"), and the model has no way to do that well: measured on a real 66s
+// screencast, every trim it emitted landed strictly inside a true silence with a
+// 0.06–0.33s margin and destroyed zero speech, while 7 of its 9 zoom focus points
+// missed the actual cursor position in their own window — three of them by more
+// than a third of the frame. It places zooms from what the transcript SAYS, not
+// from where the pointer WAS. Asking for both in one breath bought misaimed zooms
+// at the price of the cuts' credibility, and the cursor-driven wand next to it
+// already does the zoom pass from the same telemetry, deterministically.
+// Re-widen this when the model can be shown to read the track; the workbench
+// scenario `real-wizard-enhance` is what would show it.
 const AI_ENHANCE_PROMPT =
-	"Automatically enhance this recording: (1) add smart zoom-ins on the moments where the cursor dwells or interacts with the UI, each focused on the cursor's location; and (2) cut the dead time — long pauses, silences, and idle stretches where nothing happens — to keep the pacing tight and natural. Apply the edits directly to the timeline.";
+	"Cut the dead time in this recording: long pauses, silences, and idle stretches where nothing is being said or done. Keep the pacing tight and natural, and do not cut anything a viewer needs. Apply the edits directly to the timeline.";
 
 type TimelineApi = ReturnType<typeof useTimeline>;
 
@@ -772,7 +784,9 @@ export function V4Timeline({
 	// a *new* asset in from the media panel. A short move threshold keeps a
 	// plain click as "select" and a stationary press as "double-click to edit".
 	// On drop we hand the target index to tl.moveClip, which delegates to the
-	// same document/timeline.ts#moveClip the agent's "move_clip" tool uses.
+	// same document/timeline.ts#moveClip the agent's "moveClip" tool uses.
+	// (That tool takes a neighbour's id rather than this index — the index is
+	// relative to the array with the moved clip already removed, see below.)
 	const startClipDrag = useCallback(
 		(e: ReactPointerEvent, clip: AxcutClip) => {
 			if (e.button !== 0) return;

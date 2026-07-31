@@ -63,7 +63,7 @@
 		"autoEnhance": "تحسين تلقائي",
 		"automaticZooms": "تكبيرات تلقائية",
 		"automaticZoomsHint": "من حركة المؤشر المسجلة",
-		"smartZoomsAndCuts": "تكبيرات وقصات ذكية",
+		"smartZoomsAndCuts": "قصات ذكية",
 		"smartZoomsAndCutsHint": "باستخدام الذكاء الاصطناعي",
 		"comment": "تعليق",
 		"aspectRatio": "نسبة العرض إلى الارتفاع",
@@ -82,6 +82,6 @@
 		"addedAutoZoom": "تمت إضافة {{count}} تكبير تلقائي",
 		"addedAutoZoomPlural": "تمت إضافة {{count}} تكبيرات تلقائية",
 		"autoZoomFailed": "فشل التكبير التلقائي",
-		"aiEnhanceRequested": "تم طلب تحسين هذا التسجيل من وكيل الذكاء الاصطناعي"
+		"aiEnhanceRequested": "طُلب من وكيل الذكاء الاصطناعي قص الأوقات الميتة"
 	}
 }

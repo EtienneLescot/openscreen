@@ -63,7 +63,7 @@
 		"autoEnhance": "自動強化",
 		"automaticZooms": "自動ズーム",
 		"automaticZoomsHint": "記録されたカーソルの動きから",
-		"smartZoomsAndCuts": "スマートズーム＋カット",
+		"smartZoomsAndCuts": "スマートカット",
 		"smartZoomsAndCutsHint": "AIを使用",
 		"comment": "コメント",
 		"aspectRatio": "アスペクト比",
@@ -82,6 +82,6 @@
 		"addedAutoZoom": "自動ズームを {{count}} 件追加しました",
 		"addedAutoZoomPlural": "自動ズームを {{count}} 件追加しました",
 		"autoZoomFailed": "自動ズームに失敗しました",
-		"aiEnhanceRequested": "AIエージェントにこの録画の強化を依頼しました"
+		"aiEnhanceRequested": "AIエージェントに無音部分のカットを依頼しました"
 	}
 }
