@@ -59,7 +59,10 @@ interface VirtualPreviewProps {
 	) => void;
 	onVideoElement?: (element: HTMLVideoElement | null) => void;
 	videoStyle?: React.CSSProperties;
-	onVideoError?: () => void;
+	/** Called with the id of the asset that failed, not as a bare "the preview is
+	 *  broken" signal: only ONE source is mounted at a time (`activeSource`), so
+	 *  the caller has no other way to tell which of its sources is dead. */
+	onVideoError?: (assetId: string) => void;
 	/** Crop of the active clip, as fractions (0-1) of the source frame. Absent/
 	 * identity ({x:0,y:0,width:1,height:1}) renders the full frame, unchanged
 	 * from before crop support existed. */
@@ -581,7 +584,7 @@ export function VirtualPreview({
 								// transport state (single source of truth, see NewEditorShell's
 								// own play/pause/ended listener) actually learns playback stopped.
 								e.currentTarget.pause();
-								onVideoError?.();
+								onVideoError?.(activeSource.id);
 							}}
 							onEnded={() => {
 								// BUG corrigé : ce handler stoppait TOUJOURS la lecture dès que le

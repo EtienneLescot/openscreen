@@ -85,7 +85,9 @@ interface PreviewCanvasProps {
 	onLoadedMetadata: (sec: number, assetId: string) => void;
 	onVideoElement: (el: HTMLVideoElement | null) => void;
 	currentTimeSec: number;
-	onVideoError?: () => void;
+	/** Receives the id of the asset whose <video> failed — the caller decides per
+	 *  source whether anything is left to render (see Preview.tsx). */
+	onVideoError?: (assetId: string) => void;
 }
 
 // ponytail: fallback only — used until the active source's <video> reports
