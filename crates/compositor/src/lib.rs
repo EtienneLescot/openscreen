@@ -34,6 +34,11 @@ pub mod ffi;
 pub mod frame_geometry;
 pub mod gif_export;
 pub mod regions;
+// Multiplateforme à dessein : n'utilise que libavformat (liée sur les trois
+// cibles) et le shim C. Seul Linux l'appelle aujourd'hui, parce que c'est la
+// seule plateforme dont la capture passe par `MediaRecorder`, mais rien dedans
+// n'est spécifique à Linux.
+pub mod remux;
 pub mod scene;
 pub mod text_anim;
 pub mod text_plate;
