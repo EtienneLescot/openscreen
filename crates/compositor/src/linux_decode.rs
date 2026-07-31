@@ -269,7 +269,27 @@ impl SwDecoder {
         let seek_flags = SEEK_SET | 4;
         let r = av_seek_frame(self.fmt, -1, target_ts as i64, seek_flags);
         if r < 0 {
-            bail!("av_seek_frame(ts={target_ts:.0} µs) a échoué: {r}");
+            // Repli : rembobiner au début et balayer en avant.
+            //
+            // Un WebM de `MediaRecorder` n'a NI Cues NI SeekHead — il est écrit en flux
+            // et personne ne revient poser l'index —, donc tout seek vers un timestamp
+            // arbitraire échoue. C'est le cas de tout enregistrement Linux tant qu'il
+            // n'existe pas de helper de capture natif : la capture y passe par
+            // getDisplayMedia/MediaRecorder, là où Windows et macOS ont des helpers qui
+            // écrivent des fichiers indexés.
+            //
+            // Rembobiner à 0 reste possible sans index (c'est le début du fichier), et
+            // la boucle ci-dessous sait déjà avancer jusqu'à `target_ts`. Le coût est
+            // linéaire, ce qui n'est acceptable que depuis le pompage séquentiel : le
+            // décodage mesure ~0,07 ms/frame, donc rejoindre la seconde 14 d'un
+            // enregistrement coûte quelques dizaines de ms au lieu d'échouer.
+            let rewound = av_seek_frame(self.fmt, -1, 0, seek_flags);
+            if rewound < 0 {
+                bail!(
+                    "av_seek_frame(ts={target_ts:.0} µs) a échoué: {r}, et le rembobinage \
+                     aussi: {rewound}"
+                );
+            }
         }
         // Flush le décodeur — sans ça, le seek laisse l'état interne avec les
         // frames de l'ancien GOP, et la première `receive_frame` peut être

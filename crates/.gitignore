@@ -1,5 +1,8 @@
 # build
 /target
+# `cargo test` lancé DEPUIS crates/compositor/ y crée son propre target/, et les tests
+# compose_linux y écrivent leurs PPM de preuve. Même nature que /target ci-dessus.
+/compositor/target
 
 # dépendance téléchargée : build ffmpeg LGPL-shared BtbN (~160 Mo, voir README)
 /thirdparty
