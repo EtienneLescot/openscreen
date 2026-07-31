@@ -46,13 +46,43 @@ set(FETCHCONTENT_QUIET OFF)
 # at the cost of a larger single binary. Mirrors the working POC build.
 set(GGML_BACKEND_DL         OFF CACHE BOOL "" FORCE)
 set(GGML_CPU_ALL_VARIANTS   OFF CACHE BOOL "" FORCE)
-# GGML_NATIVE compiles for this dev machine's CPU arch (Zen 2 on AMD Ryzen
-# 5 7520U). This is what llama.cpp ships by default and it produces one
-# `ggml-cpu` library statically linked into `ggml.dll`. The `+avx2 +fma
-# +f16c` baseline is broad enough to cover every x86 CPU OpenScreen
-# supports (the OpenScreen installer currently does not run on
-# pre-Haswell/AMD-Bulldozer hardware).
-set(GGML_NATIVE             ON  CACHE BOOL "" FORCE)
+# ponytail: this was ON, under a comment claiming it produced a "+avx2 +fma
+# +f16c" baseline. It does not. GGML_NATIVE=ON makes ggml compile the CPU
+# backend with `-march=native` (ggml/src/ggml-cpu/CMakeLists.txt), i.e. for
+# whichever CPU happened to run the build. `.github/workflows/build-whisper-stt.yml`
+# builds the shipped binaries on GitHub-hosted runners, and the x64 images are
+# Xeons that carry AVX-512, so a published artifact could contain AVX-512 and
+# die with SIGILL on every AMD before Zen 4 and every Intel consumer part since
+# Alder Lake — while the baseline silently shifted with whatever hardware
+# picked up the job. Same class of bug as the OpenSSL note below: an artifact
+# whose contents are a function of the build machine.
+#
+# OFF is what actually yields the intended baseline. ggml then sets INS_ENB=ON,
+# which defaults GGML_SSE42/AVX/AVX2/BMI2/FMA/F16C to ON and leaves every
+# GGML_AVX512* OFF — Haswell/Zen 1 and newer, which is what the installer
+# already requires. This backend is only the fallback for hosts with no usable
+# GPU backend, so the cost is marginal and the artifact becomes reproducible.
+#
+# OSC_NATIVE_CPU is the escape hatch for local benchmarking. It must never be
+# set for anything that gets shipped.
+option(OSC_NATIVE_CPU "Tune the CPU backend for this machine (-march=native); local builds only" OFF)
+if(OSC_NATIVE_CPU)
+  set(GGML_NATIVE           ON  CACHE BOOL "" FORCE)
+else()
+  set(GGML_NATIVE           OFF CACHE BOOL "" FORCE)
+  # Pin the baseline rather than inheriting ggml's INS_ENB defaults. `option()`
+  # only seeds a value the first time a build tree is configured, so a cache
+  # that was written while GGML_NATIVE was ON keeps GGML_AVX2=OFF forever and
+  # quietly downgrades the result to plain x86-64 — no AVX2 at all, which is
+  # slower than what this project shipped before. Being explicit also states
+  # the contract in one place instead of leaving it to an upstream default.
+  # AVX-512 stays off: that is the part that does not run everywhere.
+  if(CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|AMD64|amd64)$")
+    foreach(osc_isa SSE42 AVX AVX2 BMI2 FMA F16C)
+      set(GGML_${osc_isa}   ON  CACHE BOOL "" FORCE)
+    endforeach()
+  endif()
+endif()
 set(WHISPER_BUILD_EXAMPLES  OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_TESTS     OFF CACHE BOOL "" FORCE)
 set(WHISPER_BUILD_SERVER    OFF CACHE BOOL "" FORCE)
