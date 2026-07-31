@@ -21,6 +21,8 @@ dist-ssr
 /electron/native/screencapturekit/.build/
 /electron/native/screencapturekit/.swiftpm/
 /electron/native/bin/
+/electron/native/pipewire-capture/build/
+/electron/native/pipewire-capture/target/
 
 # Native macOS generated files
 DerivedData/
