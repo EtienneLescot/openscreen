@@ -173,7 +173,7 @@ export interface CompositorExportParams {
 	codec?: string;
 }
 
-/** Sortie GIF native (slice 1, derrière `NATIVE_GIF_EXPORT_ENABLED`).
+/** Sortie GIF native (le seul chemin GIF de l'app).
  *  Tout omis → 854×480, 12 fps, boucle infinie, pas de dithering —
  *  défauts choisis pour un GIF 8-bit-indexed lisible : 12 fps est la
  *  cadence historique de `gif.js` côté renderer, 854×480 tient

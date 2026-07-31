@@ -1,10 +1,11 @@
-//! Native GIF export pipeline (slice 1 of the D3D ↔ Pixi cleanup roadmap).
+//! Native GIF export pipeline.
 //!
-//! While the renderer-side `src/lib/exporter/gifExporter.ts` (gif.js) stays
-//! as the default, this module lands a fully native alternative behind the
-//! `NATIVE_GIF_EXPORT_ENABLED` flag: same D3D11 compositor as the MP4 path,
-//! but the per-frame output is a 256-color GIF89a file written from
-//! scratch in pure Rust.
+//! This is now the ONLY GIF path: the renderer-side `gif.js` exporter it
+//! originally sat beside — and the `NATIVE_GIF_EXPORT_ENABLED` flag that
+//! chose between them — were deleted when GIF moved over for good. Same
+//! compositor as the MP4 path (D3D11 on Windows, Metal on macOS), but the
+//! per-frame output is a 256-color GIF89a file written from scratch in
+//! pure Rust.
 //!
 //! ## Why pure Rust, not ffmpeg
 //!
@@ -54,9 +55,11 @@
 //!   is 4 reads + 3 muls + 2 adds + 1 compare per pixel, small enough
 //!   for the compiler to autovectorize; a NeuQuant network lookup
 //!   would be slower at 256 colors and isn't worth its complexity.
-//! - `floyd_steinberg` — error diffusion over RGB channels (alpha
-//!   left as the readback emitted it), two row-buffers so the working
-//!   set is O(width) per row.
+//! - `map_to_indices_dithered` — the same search with Floyd-Steinberg
+//!   error diffusion fused into it (alpha left as the readback emitted
+//!   it), two row-buffers so the working set is O(width) per row. Fused
+//!   because the error worth diffusing is `pixel - palette[chosen]`,
+//!   which doesn't exist until the entry has been picked.
 //!
 //! ## Honest signal
 //!
@@ -507,7 +510,9 @@ fn write_sub_blocks<W: Write>(w: &mut W, data: &[u8]) -> Result<()> {
 //   - Code size bumps from 9 to 12 as the table fills; at 12 bits
 //     the table holds 4096 codes (0..4095). Adding the 4096th
 //     "missing pair" triggers a clear code, table reset, and the
-//     encoder starts over.
+//     encoder starts over. The bump lands one code LATER than the
+//     table boundary suggests, because the decoder's table lags
+//     ours by one entry — see the note at the `code_size += 1`.
 //   - Codes are packed LSB-first into the byte stream; the
 //     bit-buffer drains into output bytes as soon as 8 bits have
 //     accumulated.
@@ -568,14 +573,24 @@ fn lzw_compress(indices: &[u8], min_code_size: u8, out: &mut Vec<u8>) {
 		if next_code <= 4095 {
 			table.insert(key, next_code);
 			next_code += 1;
-			// Bump code_size if next_code has just crossed a
-			// power-of-two boundary. The check is
-			// `next_code == 1 << code_size` because the new
-			// entry we just added has code `next_code - 1`
-			// (which fits in `code_size` bits), and the
-			// NEXT entry would have code `next_code`, which
-			// needs `code_size + 1` bits.
-			if code_size < 12 && next_code == 1u16 << code_size {
+			// Bump code_size one entry AFTER the table outgrows
+			// it, not on the boundary itself. The missing `+ 1`
+			// is what black-framed every exported GIF.
+			//
+			// The decoder builds its table one entry behind the
+			// encoder: it can only add `(prev, first_byte(cur))`
+			// once it has read the code that FOLLOWS. So when we
+			// have just inserted code 511 (`next_code == 512`),
+			// the decoder still holds 511 entries and still reads
+			// at 9 bits. Bumping here sends the next code out at
+			// 10 bits while the decoder reads 9 — the stream
+			// desyncs a few hundred codes in and every pixel
+			// after that is garbage. Deferring by one
+			// (`next_code == 513`) puts both bumps on the same
+			// code, which is what the reference encoder does too
+			// (it tests the PRE-insert `free_ent > maxcode`
+			// after emitting, not before).
+			if code_size < 12 && next_code == (1u16 << code_size) + 1 {
 				code_size += 1;
 			}
 		} else {
@@ -945,64 +960,6 @@ fn map_to_indices_dithered(
 }
 
 // =====================================================================
-// Floyd-Steinberg dither.
-// =====================================================================
-//
-// Error diffusion over RGB channels (alpha is left as the readback
-// emitted it). Two row-buffers so the working set is O(width) per
-// row, not O(width × height). The standard 7/16 right, 3/16
-// below-left, 5/16 below, 1/16 below-right kernel.
-
-fn floyd_steinberg(
-	rgba: &mut [u8],
-	width: u32,
-	height: u32,
-	err_cur: &mut [f32],
-	err_next: &mut [f32],
-) {
-	let w = width as usize;
-	let h = height as usize;
-	// Clear the next-row accumulator.
-	for v in err_next.iter_mut() {
-		*v = 0.0;
-	}
-	for y in 0..h {
-		// Promote "next" to "current" by copy. Slices aren't
-		// `Sized` for `mem::swap`; the copy is `w * 3 * 4`
-		// bytes — a few hundred bytes per row, noise next to
-		// the per-pixel work.
-		err_cur.copy_from_slice(err_next);
-		for v in err_next.iter_mut() {
-			*v = 0.0;
-		}
-		for x in 0..w {
-			let base = (y * w + x) * 4;
-			for c in 0..3 {
-				let old = rgba[base + c] as f32 + err_cur[x * 3 + c];
-				let new = old.round().clamp(0.0, 255.0);
-				let err = old - new;
-				rgba[base + c] = new as u8;
-				// 7/16 to the right (same row), 3/16 to the
-				// next-row left, 5/16 to the next-row
-				// centre, 1/16 to the next-row right.
-				if x + 1 < w {
-					err_cur[x * 3 + c + 3] += err * (7.0 / 16.0);
-				}
-				if y + 1 < h {
-					if x > 0 {
-						err_next[(x - 1) * 3 + c] += err * (3.0 / 16.0);
-					}
-					err_next[x * 3 + c] += err * (5.0 / 16.0);
-					if x + 1 < w {
-						err_next[(x + 1) * 3 + c] += err * (1.0 / 16.0);
-					}
-				}
-			}
-		}
-	}
-}
-
-// =====================================================================
 // Tests.
 // =====================================================================
 //
@@ -1080,24 +1037,174 @@ mod tests {
 		assert_eq!(*buf.last().unwrap(), 0x3B);
 	}
 
+	/// Reference GIF89a LZW decoder (spec Appendix F), for the
+	/// round-trip tests below.
+	///
+	/// It exists because "the output is a non-empty byte stream" —
+	/// all the assertion these tests used to make — passes happily on
+	/// a stream no decoder can read. The encoder bumped its code size
+	/// one code too early, every GIF the app exported decoded to black,
+	/// and the whole suite stayed green: `export_timing.rs` reads the
+	/// frame PALETTES, which are written outside the LZW data and were
+	/// perfectly fine. Nothing in the repo ever decoded a pixel.
+	///
+	/// So this is deliberately an INDEPENDENT implementation, written
+	/// from the spec rather than by mirroring `lzw_compress`: a decoder
+	/// derived from the encoder would have reproduced the same
+	/// off-by-one and agreed with it. Its output was cross-checked
+	/// against macOS ImageIO (`sips -s format png`) on real frames.
+	///
+	/// Table lags the encoder's by one entry by construction: an entry
+	/// can only be completed once the FOLLOWING code is known.
+	fn lzw_decompress(data: &[u8], min_code_size: u8) -> Vec<u8> {
+		let clear_code: u16 = 1u16 << min_code_size;
+		let eoi_code: u16 = clear_code + 1;
+		let mut code_size: u8 = min_code_size + 1;
+
+		// Literals, then two placeholders so indices line up with the
+		// clear / EOI codes: `dict.len()` is then exactly the encoder's
+		// `next_code`.
+		let fresh = || -> Vec<Vec<u8>> {
+			let mut d: Vec<Vec<u8>> = (0..clear_code).map(|i| vec![i as u8]).collect();
+			d.push(Vec::new());
+			d.push(Vec::new());
+			d
+		};
+		let mut dict = fresh();
+
+		let mut out: Vec<u8> = Vec::new();
+		let mut prev: Option<u16> = None;
+		let mut bitpos: usize = 0;
+		let total_bits = data.len() * 8;
+
+		loop {
+			assert!(
+				bitpos + code_size as usize <= total_bits,
+				"truncated LZW stream at bit {bitpos} of {total_bits}"
+			);
+			// LSB-first: bit i of the code is bit i of the stream.
+			let mut code: u16 = 0;
+			for i in 0..code_size as usize {
+				let bit = (data[(bitpos + i) / 8] >> ((bitpos + i) % 8)) & 1;
+				code |= (bit as u16) << i;
+			}
+			bitpos += code_size as usize;
+
+			if code == clear_code {
+				dict = fresh();
+				code_size = min_code_size + 1;
+				prev = None;
+				continue;
+			}
+			if code == eoi_code {
+				break;
+			}
+
+			// Either a known entry, or the KwKwK case: the code the
+			// encoder just added, which we can only reconstruct from
+			// the previous entry plus its own first byte.
+			let entry: Vec<u8> = if (code as usize) < dict.len() {
+				dict[code as usize].clone()
+			} else {
+				let p = prev.unwrap_or_else(|| {
+					panic!("first code after a clear must be a literal, got {code}")
+				});
+				let mut e = dict[p as usize].clone();
+				e.push(dict[p as usize][0]);
+				e
+			};
+			assert!(!entry.is_empty(), "code {code} resolved to an empty entry");
+			out.extend_from_slice(&entry);
+
+			if let Some(p) = prev {
+				if dict.len() < 4096 {
+					let mut new_entry = dict[p as usize].clone();
+					new_entry.push(entry[0]);
+					dict.push(new_entry);
+					if code_size < 12 && dict.len() == (1usize << code_size) {
+						code_size += 1;
+					}
+				}
+			}
+			prev = Some(code);
+		}
+		out
+	}
+
+	fn assert_lzw_round_trips(name: &str, pixels: &[u8]) {
+		let mut compressed = Vec::new();
+		lzw_compress(pixels, 8, &mut compressed);
+		let decoded = lzw_decompress(&compressed, 8);
+		assert_eq!(
+			decoded.len(),
+			pixels.len(),
+			"{name}: decoded {} pixels, expected {}",
+			decoded.len(),
+			pixels.len()
+		);
+		if let Some(i) = (0..pixels.len()).find(|&i| decoded[i] != pixels[i]) {
+			panic!(
+				"{name}: first mismatch at pixel {i} (expected {}, got {})",
+				pixels[i], decoded[i]
+			);
+		}
+	}
+
+	/// A stream long enough to cross the 9→10 bit boundary must survive a
+	/// decode. This is THE regression test: the encoder used to bump its
+	/// code size one code before the decoder does, so everything past
+	/// roughly the 255th code came back as garbage — which is what made
+	/// exported GIFs render black.
+	#[test]
+	fn lzw_round_trips_across_the_code_size_boundary() {
+		// Long runs plus slow variation — the shape of a real
+		// screen-recording frame, and enough misses to walk 9 → 10 → 11.
+		let pixels: Vec<u8> = (0..200_000u32).map(|i| ((i / 97) % 251) as u8).collect();
+		assert_lzw_round_trips("gradient-ish", &pixels);
+	}
+
+	/// Table-full path: 4096 entries, a clear code, and a reset mid-stream.
+	/// Pseudo-random data fills the table fast and forces several clears.
+	#[test]
+	fn lzw_round_trips_through_table_full_clears() {
+		let mut seed = 0x1234_5678u32;
+		let pixels: Vec<u8> = (0..DEFAULT_GIF_WIDTH * DEFAULT_GIF_HEIGHT)
+			.map(|_| {
+				seed = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
+				(seed >> 24) as u8
+			})
+			.collect();
+		assert_lzw_round_trips("noise (forces clears)", &pixels);
+	}
+
+	/// The degenerate shapes: uniform frame (one long run), two-colour
+	/// alternation (table grows without ever repeating), single pixel.
+	#[test]
+	fn lzw_round_trips_degenerate_frames() {
+		assert_lzw_round_trips("uniform", &vec![42u8; 100_000]);
+		assert_lzw_round_trips(
+			"alternating",
+			&(0..50_000).map(|i| (i % 2) as u8).collect::<Vec<_>>(),
+		);
+		assert_lzw_round_trips("single pixel", &[7]);
+	}
+
 	/// The LZW encoder must produce a clear code at the start and
-	/// an EOI at the end. We check structural properties (the
-	/// output is a non-empty byte stream that ends with a clean
-	/// boundary) without decoding — a full decoder would be its
-	/// own crate.
+	/// an EOI at the end — checked by decoding, since a stream that
+	/// merely "isn't empty" proves nothing.
 	#[test]
 	fn lzw_compress_emits_clear_and_eoi() {
 		let pixels: Vec<u8> = (0..200).map(|i| (i % 4) as u8).collect();
 		let mut out = Vec::new();
 		lzw_compress(&pixels, 8, &mut out);
-		// The output must be a multiple of 8 bits at the end (a
-		// padding-zero byte may be present, but no partial
-		// trailing bits).
 		assert!(!out.is_empty());
-		// Smoke: a round-trip via a hand-rolled decoder isn't
-		// worth maintaining in this file. The bench's wall-time
-		// and the visual `out/gif.gif` are the integration
-		// signal.
+		// The leading clear code (256, 9 bits, LSB-first) occupies the
+		// first byte and the low bit of the second.
+		assert_eq!(out[0], 0x00);
+		assert_eq!(out[1] & 0x01, 0x01);
+		// And the whole thing decodes back to what went in — which is
+		// only possible if the EOI is there and the bits line up.
+		assert_lzw_round_trips("short run", &pixels);
 	}
 
 	/// LZW on an empty input still emits clear + EOI. This is the
@@ -1107,6 +1214,45 @@ mod tests {
 		let mut out = Vec::new();
 		lzw_compress(&[], 8, &mut out);
 		assert!(!out.is_empty());
+		assert!(lzw_decompress(&out, 8).is_empty());
+	}
+
+	/// End-to-end through the container: write a frame with `GifWriter`,
+	/// then pull the LZW payload back out of the file bytes and decode it.
+	/// Covers the sub-block chunking and the image-descriptor layout as
+	/// well as the codec — the encoder and the container have to agree for
+	/// the pixels to survive.
+	#[test]
+	fn written_frame_decodes_back_to_the_same_indices() {
+		// 64×64 with a diagonal pattern: enough distinct index runs that a
+		// desynced code size would show up, and >255 compressed bytes so
+		// the sub-block chunking is exercised.
+		let (w, h) = (64usize, 64usize);
+		let indices: Vec<u8> = (0..w * h).map(|i| ((i / 7 + i % 13) % 251) as u8).collect();
+		let palette = vec![0u8; PALETTE_COLORS * 3];
+
+		let mut buf = Vec::new();
+		{
+			let mut gw = GifWriter::new(&mut buf, w as u16, h as u16).unwrap();
+			gw.write_header().unwrap();
+			gw.write_netscape_loop(0).unwrap();
+			gw.write_frame(&indices, &palette, 8, 12).unwrap();
+			gw.finish().unwrap();
+		}
+
+		// Walk to the image descriptor (0x2C), skip its 9-byte body and the
+		// 256-entry local table, then reassemble the sub-block chain.
+		let img = buf.iter().position(|&b| b == 0x2C).expect("image descriptor");
+		let mut p = img + 10 + PALETTE_COLORS * 3;
+		assert_eq!(buf[p], 8, "LZW minimum code size");
+		p += 1;
+		let mut payload = Vec::new();
+		while buf[p] != 0 {
+			let len = buf[p] as usize;
+			payload.extend_from_slice(&buf[p + 1..p + 1 + len]);
+			p += 1 + len;
+		}
+		assert_eq!(lzw_decompress(&payload, 8), indices);
 	}
 
 	/// Median-cut on a 2-color image should produce 2 distinct
@@ -1170,22 +1316,26 @@ mod tests {
 		}
 	}
 
-	/// Floyd-Steinberg dither doesn't crash on a 1×1 image (the
-	/// boundary cases — `x + 1 < w`, `y + 1 < h` — are where
-	/// off-by-one errors show up).
+	/// The dither path doesn't crash on a 1×1 image (the boundary
+	/// cases — `x + 1 < w`, `x > 0` — are where off-by-one errors
+	/// show up) and maps the single pixel into the palette.
 	#[test]
-	fn floyd_steinberg_handles_one_by_one() {
-		let mut rgba = vec![100u8, 150, 200, 255];
+	fn dithered_mapping_handles_one_by_one() {
+		let rgba = vec![100u8, 150, 200, 255];
+		let palette = vec![0u8; PALETTE_COLORS * 3];
 		let mut err_cur = vec![0.0f32; 3];
 		let mut err_next = vec![0.0f32; 3];
-		floyd_steinberg(&mut rgba, 1, 1, &mut err_cur, &mut err_next);
-		// The dithered pixel stays near the input (quantization to
-		// the palette happens AFTER dither, so the dither pass
-		// only adjusts toward the nearest representable value).
-		// We don't assert on the exact byte (depends on the
-		// palette), only that the call didn't panic and the
-		// alpha stayed put.
-		assert_eq!(rgba[3], 255);
+		let mut indices = vec![0u8; 1];
+		map_to_indices_dithered(
+			&palette,
+			&rgba,
+			1,
+			1,
+			&mut err_cur,
+			&mut err_next,
+			&mut indices,
+		);
+		assert!((indices[0] as usize) < PALETTE_COLORS);
 	}
 
 	/// `GifWriter::new` rejects zero dimensions.

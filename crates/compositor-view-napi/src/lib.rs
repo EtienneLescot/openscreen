@@ -262,8 +262,7 @@ pub struct ExportStats {
 /// wall / fps / durée) plus la taille du fichier sur disque — le format
 /// est petit (256-color indexed + LZW) et la taille est une mesure
 /// d'utilité, pas un détail technique. Sert à la fois au bench et à
-/// l'UI future (`Native GIF export` slice 1 — rendu derrière
-/// `NATIVE_GIF_EXPORT_ENABLED`).
+/// l'UI d'export, seul chemin GIF de l'app.
 #[napi(object)]
 pub struct GifExportStats {
     pub frames: u32,
@@ -609,8 +608,8 @@ impl Task for ExportGifTask {
     }
 }
 
-/// Lance un export GIF natif (slice 1, derrière `NATIVE_GIF_EXPORT_ENABLED`)
-/// et résout `Promise<GifExportStats>`. `screen_path` et `webcam_path` sont
+/// Lance un export GIF natif — le seul chemin GIF depuis la suppression de
+/// l'exporteur `gif.js` — et résout `Promise<GifExportStats>`. `screen_path` et `webcam_path` sont
 /// requis (la convention de l'app : deux fichiers H264 séparés, voir
 /// `ClipInput` côté MP4). `cursor_path` est optionnel — s'il est `null` ou
 /// pointe vers un fichier absent, l'export rend sans curseur (le `Player`
