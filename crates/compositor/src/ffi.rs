@@ -31,6 +31,9 @@ pub const AVERROR_EAGAIN: i32 = -35;
 pub const AVERROR_EAGAIN: i32 = -11;
 /// `AVERROR_EOF` = `-MKTAG('E','O','F',' ')`.
 pub const AVERROR_EOF: i32 = -541478725;
+/// `AVERROR_INVALIDDATA` = `-MKTAG('I','N','D','A')`. Contrairement à `AVERROR_EAGAIN`,
+/// c'est un FFERRTAG et pas un errno, donc la valeur est la même sur toutes les cibles.
+pub const AVERROR_INVALIDDATA: i32 = -1094995529;
 /// `AVSEEK_FLAG_BACKWARD` — chercher la keyframe <= ts.
 pub const AVSEEK_FLAG_BACKWARD: i32 = 1;
 
