@@ -6,7 +6,9 @@
 //! set_timeline_time, clear_cursor, scene_snapshot, clear_srv_cache,
 //! compose_frame, readback_direct}`) pour que `live.rs` et `compositor-view-napi`
 //! (cfg-re-exportes via `crate::compositor`) l'utilisent sans connaitre la
-//! plateforme.
+//! plateforme. S'y ajoutent, specifiques a ce backend, les trois entrees de la
+//! ring de staging (`set_readback_depth`, `readback_submit`, `readback_take`) :
+//! seul l'export Linux les utilise, cf. `ReadbackRing`.
 //!
 //! **Iso-render.** La GEOMETRIE (placement de chaque calque) vient de
 //! `frame_geometry::plan_frame` -- la MEME fonction que Windows/macOS, au pixel
@@ -48,6 +50,57 @@ fn layer_bytes(cb: &LayerCB) -> &[u8] {
     unsafe { std::slice::from_raw_parts(cb as *const LayerCB as *const u8, 128) }
 }
 
+/// Une copie RT -> staging DEJA SOUMISE, dont le mapping est arme mais pas
+/// encore recolte. On garde `idx` (l'index de soumission rendu par
+/// `Queue::submit`) pour n'attendre QUE cette soumission-la, et les dimensions
+/// telles qu'elles etaient au moment de la copie -- ce sont elles qui decrivent
+/// le contenu du buffer, pas celles du compositeur au moment de la recolte.
+struct PendingCopy {
+    buf: wgpu::Buffer,
+    idx: wgpu::SubmissionIndex,
+    rx: std::sync::mpsc::Receiver<Result<(), wgpu::BufferAsyncError>>,
+    w: u32,
+    h: u32,
+    bpr: u32,
+}
+
+/// Ring de staging de la relecture.
+///
+/// AVANT : `readback_direct` enregistrait la copie, la soumettait, puis bloquait
+/// dans `device.poll(Maintain::Wait)`. Cette attente n'absorbait pas la copie
+/// (8,3 Mo = ~0,33 ms de DMA) mais TOUTE la file GPU en cours -- la chaine
+/// Kawase et chaque draw de calque, que `compose_frame` avait soumis sans
+/// attendre juste avant. Mesure 1080p : 3,8 ms (scene simple) a 6,2 ms (scene
+/// chargee) par frame, pendant que `sws_scale` + `avcodec_send_frame` (12,6 ms
+/// de CPU pur) attendaient leur tour. Le GPU et le CPU ne se recouvraient
+/// jamais.
+///
+/// MAINTENANT : `readback_submit` soumet la copie de la frame N vers un buffer
+/// libre, arme son `map_async` et rend la main ; il ne recolte que la frame la
+/// plus ANCIENNE encore en vol. Avec `depth = 2`, c'est la frame N-1, dont la
+/// copie a ete soumise avant l'encodage de N-1 et le decodage/composition de N :
+/// le GPU a eu ~19 ms de CPU pour finir 6 ms de travail, l'attente tombe a zero.
+///
+/// PROFONDEUR. 2 est le minimum utile et suffit ici : le seul travail a
+/// recouvrir est ce que le CPU fait entre deux relectures (sws + encode,
+/// 12,6 ms mesures) et il depasse deja largement la chaine GPU (3,8 a 6,2 ms).
+/// Une 3e frame n'ajouterait que 8 Mo de memoire mappable et une frame de
+/// latence de plus. La profondeur reste parametrable parce que la POLITIQUE
+/// differe par chemin (cf. `set_readback_depth`), pas pour empiler les buffers.
+///
+/// UN SEUL RT. Le RT n'est pas double-bufferise : la copie de la frame N est
+/// soumise AVANT les commandes de composition de la frame N+1, sur la meme
+/// queue, et wgpu insere la barriere qui va bien. Le GPU lit donc le RT avant
+/// de le reecrire, sans que le CPU ait a l'attendre.
+struct ReadbackRing {
+    depth: usize,
+    /// Buffers disponibles (aucune copie en vol, aucun mapping arme).
+    free: Vec<wgpu::Buffer>,
+    /// Copies soumises, dans l'ordre de soumission (FIFO strict : les frames
+    /// sortent dans l'ordre ou elles ont ete composees).
+    pending: std::collections::VecDeque<PendingCopy>,
+}
+
 pub struct Compositor {
     gpu: Gpu,
     render_w: u32,
@@ -69,12 +122,14 @@ pub struct Compositor {
     blur_qtr: wgpu::TextureView,
     blur_oct: wgpu::TextureView,
 
-    // Render target offscreen + buffer de readback (recree au resize).
+    // Render target offscreen + ring de staging de la relecture (recrees au resize).
     rt: wgpu::Texture,
     rt_view: wgpu::TextureView,
-    readback_buf: wgpu::Buffer,
     /// `bytes_per_row` padde a 256 (contrainte wgpu de copy_texture_to_buffer).
     readback_bpr: u32,
+    /// Ring de buffers de staging (cf. `ReadbackRing`). `RefCell` : les methodes
+    /// publiques du compositeur sont `&self`, comme tout le reste de l'etat.
+    readback: RefCell<ReadbackRing>,
 
     // Etat pilote par live.rs (interior mutability : les methodes sont `&self`).
     live_params: RefCell<LiveParams>,
@@ -286,7 +341,15 @@ impl Compositor {
         let blur_qtr = mk_pyr(w / 4, h / 4, "blur-qtr");
         let blur_oct = mk_pyr(w / 8, h / 8, "blur-oct");
 
-        let (rt, rt_view, readback_buf, readback_bpr) = Self::make_targets(&gpu, w, h);
+        let (rt, rt_view, readback_bpr) = Self::make_targets(&gpu, w, h);
+        // Profondeur 1 par defaut = chemin synchrone historique, a l'octet et a
+        // la latence pres. C'est l'export qui demande explicitement 2 (cf.
+        // `set_readback_depth`) ; tout autre appelant garde l'ancien contrat.
+        let readback = RefCell::new(ReadbackRing {
+            depth: 1,
+            free: vec![Self::make_staging(&gpu, readback_bpr, h)],
+            pending: std::collections::VecDeque::new(),
+        });
 
         Ok(Compositor {
             gpu,
@@ -303,8 +366,8 @@ impl Compositor {
             blur_oct,
             rt,
             rt_view,
-            readback_buf,
             readback_bpr,
+            readback,
             live_params: RefCell::new(LiveParams::default()),
             scene: RefCell::new(None),
             cursor: RefCell::new(None),
@@ -315,12 +378,8 @@ impl Compositor {
         })
     }
 
-    /// RT RGBA8 + buffer de readback (bytes_per_row padde a 256).
-    fn make_targets(
-        gpu: &Gpu,
-        w: u32,
-        h: u32,
-    ) -> (wgpu::Texture, wgpu::TextureView, wgpu::Buffer, u32) {
+    /// RT RGBA8 + `bytes_per_row` de la relecture (padde a 256).
+    fn make_targets(gpu: &Gpu, w: u32, h: u32) -> (wgpu::Texture, wgpu::TextureView, u32) {
         let rt = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("rt"),
             size: wgpu::Extent3d {
@@ -339,13 +398,24 @@ impl Compositor {
         });
         let rt_view = rt.create_view(&wgpu::TextureViewDescriptor::default());
         let bpr = (w * 4).div_ceil(256) * 256;
-        let readback_buf = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        (rt, rt_view, bpr)
+    }
+
+    /// Un buffer de staging de la ring. La taille depend de `bpr` (donc de la
+    /// largeur de rendu) et de la hauteur : changer la geometrie de rendu impose
+    /// de les reallouer -- ce que fait `new_sized`, puisque la preview
+    /// RECONSTRUIT le compositeur au resize (`live.rs`) au lieu de le
+    /// redimensionner a chaud. Aucune copie ne peut donc etre en vol au moment
+    /// ou la taille change : l'ancien compositeur (et sa ring) est detruit
+    /// entier, wgpu gardant ses buffers vivants jusqu'a la fin des soumissions
+    /// qui les referencent.
+    fn make_staging(gpu: &Gpu, bpr: u32, h: u32) -> wgpu::Buffer {
+        gpu.device.create_buffer(&wgpu::BufferDescriptor {
             label: Some("readback"),
             size: u64::from(bpr) * u64::from(h),
             usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
             mapped_at_creation: false,
-        });
-        (rt, rt_view, readback_buf, bpr)
+        })
     }
 
     /// Une passe Kawase : lit `src`, ecrit `dst` (fullscreen triangle, 3
@@ -1007,10 +1077,67 @@ impl Compositor {
         t.create_view(&wgpu::TextureViewDescriptor::default())
     }
 
-    /// Lit le RT en RGBA8 tightly-packed `(render_w * render_h * 4)`. Depadde le
-    /// `bytes_per_row` aligne a 256 exige par wgpu.
-    pub unsafe fn readback_direct(&self) -> Result<(u32, u32, Vec<u8>)> {
+    /// Regle la profondeur de la ring de staging. A appeler AVANT la premiere
+    /// relecture (elle vide la ring, donc toute frame encore en vol serait
+    /// perdue -- d'ou le drain explicite plutot qu'un silence).
+    ///
+    /// POLITIQUE PAR CHEMIN, et c'est volontaire :
+    ///
+    /// - **Export** (`pipeline_linux::run_composited_multi`) : profondeur 2. Il
+    ///   ne veut que du DEBIT, la latence d'une frame ne se voit nulle part
+    ///   puisque la sortie est un fichier. Il draine la ring a la fin, donc
+    ///   aucune frame ne manque au montage.
+    /// - **Preview live** (`live.rs`) : profondeur 1, inchangee. Une frame de
+    ///   retard y est perceptible -- le canvas afficherait l'avant-derniere
+    ///   frame composee, et surtout la boucle ne relit QUE quand elle a avance
+    ///   (`stepped`) : au repos (fin d'un scrub, pause) la derniere frame
+    ///   resterait coincee dans la ring et le canvas figerait sur la
+    ///   precedente jusqu'au prochain evenement. Le pipeline demanderait donc
+    ///   un drain sur inactivite pour n'etre que neutre visuellement, pour un
+    ///   gain qui n'est pas le goulot mesure ici. On ne l'impose pas.
+    ///
+    /// A profondeur 1 le chemin est exactement l'ancien : soumettre, attendre,
+    /// mapper, depadder.
+    pub fn set_readback_depth(&self, depth: usize) -> Result<()> {
+        let depth = depth.max(1);
+        // Draine d'abord : les frames en vol appartiennent a l'appelant
+        // precedent, les jeter en silence serait une perte de donnees muette.
+        while unsafe { self.readback_take()? }.is_some() {}
+        let mut ring = self.readback.borrow_mut();
+        ring.depth = depth;
+        while ring.free.len() > depth {
+            ring.free.pop();
+        }
+        while ring.free.len() < depth {
+            let buf = Self::make_staging(&self.gpu, self.readback_bpr, self.render_h);
+            ring.free.push(buf);
+        }
+        Ok(())
+    }
+
+    /// Soumet la copie RT -> staging de la frame COURANTE sans l'attendre, puis
+    /// rend la frame la plus ancienne encore en vol des que la ring est pleine.
+    ///
+    /// PREMIERES FRAMES. Tant que moins de `depth` copies sont en vol, il n'y a
+    /// rien a rendre et la reponse est `Ok(None)` : c'est l'amorcage du
+    /// pipeline, et il coute exactement `depth - 1` frames de decalage (0 a
+    /// profondeur 1). L'appelant ne doit donc PAS supposer une frame par appel,
+    /// mais drainer a la fin (`readback_take`) -- sinon les `depth - 1`
+    /// dernieres frames composees ne sortiraient jamais.
+    pub unsafe fn readback_submit(&self) -> Result<Option<(u32, u32, Vec<u8>)>> {
         let (w, h) = (self.render_w, self.render_h);
+        let bpr = self.readback_bpr;
+        // Invariant : cette fonction recolte toujours des que `pending` atteint
+        // `depth`, donc un buffer est libre a chaque entree. Un echec ici
+        // signalerait une ring desynchronisee -- on le dit plutot que d'allouer
+        // 8 Mo de plus en silence a chaque frame.
+        let buf = self
+            .readback
+            .borrow_mut()
+            .free
+            .pop()
+            .ok_or_else(|| anyhow::anyhow!("staging ring saturee (aucun buffer libre)"))?;
+
         let mut encoder = self.gpu.device.create_command_encoder(&wgpu::CommandEncoderDescriptor {
             label: Some("readback"),
         });
@@ -1022,10 +1149,10 @@ impl Compositor {
                 aspect: wgpu::TextureAspect::All,
             },
             wgpu::TexelCopyBufferInfo {
-                buffer: &self.readback_buf,
+                buffer: &buf,
                 layout: wgpu::TexelCopyBufferLayout {
                     offset: 0,
-                    bytes_per_row: Some(self.readback_bpr),
+                    bytes_per_row: Some(bpr),
                     rows_per_image: Some(h),
                 },
             },
@@ -1035,21 +1162,48 @@ impl Compositor {
                 depth_or_array_layers: 1,
             },
         );
-        self.gpu.context.submit(std::iter::once(encoder.finish()));
-
-        let slice = self.readback_buf.slice(..);
+        // `submit` rend l'index de soumission : c'est LUI qui permet plus tard
+        // de n'attendre que cette copie-ci, au lieu de `Maintain::Wait` qui
+        // draine toute la file (donc la composition qui suit).
+        let idx = self.gpu.context.submit(std::iter::once(encoder.finish()));
+        // `map_async` juste apres la soumission : wgpu differe le mapping
+        // jusqu'a la fin de la soumission qui ecrit le buffer, le callback
+        // n'est tire que par un `poll`.
         let (tx, rx) = std::sync::mpsc::channel();
-        slice.map_async(wgpu::MapMode::Read, move |r| {
+        buf.slice(..).map_async(wgpu::MapMode::Read, move |r| {
             let _ = tx.send(r);
         });
-        self.gpu.device.poll(wgpu::Maintain::Wait);
-        rx.recv()
+        {
+            let mut ring = self.readback.borrow_mut();
+            ring.pending.push_back(PendingCopy { buf, idx, rx, w, h, bpr });
+            if ring.pending.len() < ring.depth {
+                return Ok(None); // amorcage
+            }
+        }
+        self.readback_take()
+    }
+
+    /// Recolte la frame la plus ancienne en vol (`None` si la ring est vide).
+    /// C'est le drain de fin de session : l'appeler en boucle apres la derniere
+    /// `readback_submit` rend les `depth - 1` frames encore en vol.
+    pub unsafe fn readback_take(&self) -> Result<Option<(u32, u32, Vec<u8>)>> {
+        let Some(p) = self.readback.borrow_mut().pending.pop_front() else {
+            return Ok(None);
+        };
+        // N'attend QUE la soumission de cette copie. A profondeur >= 2 elle est
+        // terminee depuis longtemps (l'encodage de la frame precedente lui a
+        // laisse ~19 ms de CPU) et l'appel rend la main immediatement.
+        self.gpu.device.poll(wgpu::Maintain::WaitForSubmissionIndex(p.idx));
+        p.rx
+            .recv()
             .map_err(|_| anyhow::anyhow!("map_async channel"))?
             .map_err(|e| anyhow::anyhow!("map_async: {e:?}"))?;
+        let slice = p.buf.slice(..);
         let mapped = slice.get_mapped_range();
 
+        let (w, h) = (p.w, p.h);
         let row = (w * 4) as usize;
-        let bpr = self.readback_bpr as usize;
+        let bpr = p.bpr as usize;
         let total = row * h as usize;
 
         // `Vec::with_capacity` + `extend_from_slice`, PAS `vec![0u8; total]` : ce dernier
@@ -1069,7 +1223,25 @@ impl Compositor {
             }
         }
         drop(mapped);
-        self.readback_buf.unmap();
-        Ok((w, h, out))
+        p.buf.unmap();
+        // Buffer demappe -> reutilisable au prochain `readback_submit`.
+        self.readback.borrow_mut().free.push(p.buf);
+        Ok(Some((w, h, out)))
+    }
+
+    /// Lit le RT en RGBA8 tightly-packed `(render_w * render_h * 4)`. Depadde le
+    /// `bytes_per_row` aligne a 256 exige par wgpu.
+    ///
+    /// Contrat SYNCHRONE : rend la frame que le RT contient MAINTENANT. A la
+    /// profondeur par defaut (1) c'est litteralement soumettre-attendre-mapper,
+    /// donc le chemin d'avant la ring. A profondeur > 1 elle vide le pipeline
+    /// pour honorer ce contrat -- a n'utiliser que la ou la frame courante est
+    /// exigee (preview, GIF, tests), pas dans une boucle d'export.
+    pub unsafe fn readback_direct(&self) -> Result<(u32, u32, Vec<u8>)> {
+        let mut last = self.readback_submit()?;
+        while let Some(next) = self.readback_take()? {
+            last = Some(next);
+        }
+        last.ok_or_else(|| anyhow::anyhow!("readback_direct: aucune frame recoltee"))
     }
 }
