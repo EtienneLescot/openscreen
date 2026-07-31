@@ -1050,9 +1050,23 @@ impl Compositor {
 
         let row = (w * 4) as usize;
         let bpr = self.readback_bpr as usize;
-        let mut out = vec![0u8; row * h as usize];
-        for y in 0..h as usize {
-            out[y * row..(y + 1) * row].copy_from_slice(&mapped[y * bpr..y * bpr + row]);
+        let total = row * h as usize;
+
+        // `Vec::with_capacity` + `extend_from_slice`, PAS `vec![0u8; total]` : ce dernier
+        // memset 8 Mo (en 1080p) qu'on écrase intégralement ligne suivante. Mesuré : la
+        // relecture pèse 82 % de la frame de preview, et ce zero-fill en est une part
+        // gratuite à rendre.
+        let mut out = Vec::with_capacity(total);
+        if bpr == row {
+            // Cas courant, et il n'a rien d'exotique : wgpu aligne `bytes_per_row` sur 256
+            // et une largeur RGBA multiple de 64 px l'est déjà (1280 et 1920 le sont).
+            // Il n'y a alors AUCUN padding à retirer, et la boucle ligne à ligne recopiait
+            // un tampon identique à l'octet près en `h` memcpy au lieu d'un seul.
+            out.extend_from_slice(&mapped[..total]);
+        } else {
+            for y in 0..h as usize {
+                out.extend_from_slice(&mapped[y * bpr..y * bpr + row]);
+            }
         }
         drop(mapped);
         self.readback_buf.unmap();
