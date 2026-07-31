@@ -17,7 +17,7 @@
 //!
 //! **Portee actuelle.** `compose_frame` rend le coeur : fond uni + calque ecran
 //! cover-fit (coins arrondis). Les calques riches (webcam PiP, curseur,
-//! annotations texte mode 11, blur de fond, tilt 3D, motion blur) sont dessines
+//! annotations texte mode 11, blur de fond, motion blur) sont dessines
 //! par les memes primitives (`draw_layer`) et arrivent par iterations, comme le
 //! port Metal les a ajoutes -- chacun reutilise `layer.wgsl` (modes deja portes)
 //! ou une passe dediee (`blur.wgsl`).
@@ -594,6 +594,98 @@ impl Compositor {
         }
     }
 
+    /// `LayerCB` de l'ombre d'un ecran INCLINE (mode 12) : la penombre suit le
+    /// quadrilatere projete, pas son rect englobant. Port de
+    /// `compositor_macos::draw_quad_shadow`.
+    fn quad_shadow_cb(
+        &self,
+        corners: &[(f32, f32); 4],
+        center_px: [f32; 2],
+        radius: f32,
+        spread: f32,
+        offset_px: [f32; 2],
+        opacity: f32,
+    ) -> LayerCB {
+        let (rw, rh) = (self.render_w as f32, self.render_h as f32);
+        let (min_x, max_x) =
+            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| (mn.min(x), mx.max(x)));
+        let (min_y, max_y) =
+            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| (mn.min(y), mx.max(y)));
+        // La boite doit contenir la penombre entiere, sinon elle se coupe net.
+        let box_w = (max_x - min_x) + 2.0 * spread;
+        let box_h = (max_y - min_y) + 2.0 * spread;
+        let local = |(x, y): (f32, f32)| -> [f32; 2] { [x - min_x + spread, y - min_y + spread] };
+        let [tl0, tl1] = local(corners[0]);
+        let [tr0, tr1] = local(corners[1]);
+        let [br0, br1] = local(corners[2]);
+        let [bl0, bl1] = local(corners[3]);
+        LayerCB {
+            dst: [
+                (center_px[0] + min_x - spread + offset_px[0]) / rw,
+                (center_px[1] + min_y - spread + offset_px[1]) / rh,
+                box_w / rw,
+                box_h / rh,
+            ],
+            quad_px: [box_w, box_h],
+            radius_px: radius,
+            mode: 12.0,
+            color: [0.0, 0.0, 0.0, opacity],
+            fx: [tl0, tl1, tr0, tr1],
+            src_prev: [br0, br1, bl0, bl1],
+            // Le spread vit ici et NON dans `fx.x` : `fx` porte deja les coins.
+            mb: [0.0, spread, 1.0, 0.0],
+            ..Default::default()
+        }
+    }
+
+    /// `LayerCB` de l'ecran incline (mode 8) : le quad projete est dessine dans sa
+    /// BBOX et le fragment remonte au (s,t) du plan par warp bilineaire inverse.
+    /// Port de `compositor_macos::draw_tilted_screen`. Pas de motion blur sur ce
+    /// chemin -- le tilt est bref, la simplification ne se voit pas.
+    fn tilted_screen_cb(
+        &self,
+        quad: &crate::regions::TiltedQuad,
+        s_px: [f32; 2],
+        center_px: [f32; 2],
+        cut: [f32; 4],
+        radius: f32,
+    ) -> LayerCB {
+        let (rw, rh) = (self.render_w as f32, self.render_h as f32);
+        let corners = quad.corners;
+        // Taille du plan dans son propre repere, AVANT projection : c'est la que vit
+        // le rayon, pour qu'il reste constant le long du bord au lieu de s'etirer
+        // avec la perspective.
+        let plane_px = [s_px[0] * quad.scale, s_px[1] * quad.scale];
+        let (min_x, max_x) =
+            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| (mn.min(x), mx.max(x)));
+        let (min_y, max_y) =
+            corners.iter().fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| (mn.min(y), mx.max(y)));
+        let bbox_w = (max_x - min_x).max(1.0);
+        let bbox_h = (max_y - min_y).max(1.0);
+        // Coins en px LOCAUX a la bbox, pour matcher `i.local` du shader.
+        let local = |(x, y): (f32, f32)| -> [f32; 2] { [x - min_x, y - min_y] };
+        let [tl0, tl1] = local(corners[0]);
+        let [tr0, tr1] = local(corners[1]);
+        let [br0, br1] = local(corners[2]);
+        let [bl0, bl1] = local(corners[3]);
+        LayerCB {
+            dst: [
+                (center_px[0] + min_x) / rw,
+                (center_px[1] + min_y) / rh,
+                bbox_w / rw,
+                bbox_h / rh,
+            ],
+            src: cut,
+            quad_px: [bbox_w, bbox_h],
+            radius_px: radius * quad.scale,
+            mode: 8.0,
+            fx: [tl0, tl1, tr0, tr1],
+            src_prev: [br0, br1, bl0, bl1],
+            dst_prev: [plane_px[0], plane_px[1], 0.0, 0.0],
+            ..Default::default()
+        }
+    }
+
     fn make_bind(
         &self,
         cb: &LayerCB,
@@ -752,16 +844,34 @@ impl Compositor {
             None => (lp.bg_color, None),
         };
 
-        // Calque ecran (mode 0 : NV12 -> RGB), place par plan_frame (cover-fit +
-        // coins arrondis). `src = g.cut` (crop utilisateur + zoom en UV texture).
-        let screen_layer = LayerCB {
-            dst: g.s_dst,
-            src: g.cut,
-            quad_px: [g.s_dst[2] * rw, g.s_dst[3] * rh],
-            radius_px: g.s_radius,
-            mode: 0.0,
-            color: [1.0, 1.0, 1.0, 1.0],
-            ..Default::default()
+        // ROTATION 3D (presets iso/left/right d'une zoom region). La geometrie du
+        // tilt est calculee UNE fois : l'ombre et l'ecran doivent porter exactement
+        // le meme quadrilatere, sinon l'ombre se decolle des que l'un des deux
+        // change. `regions` fait toute la trigo (partagee avec macOS/Windows) ; ici
+        // on ne fait que l'empaqueter.
+        let s_px = [g.s_dst[2] * rw, g.s_dst[3] * rh];
+        let tilt = (!crate::regions::is_identity_rotation(g.zoom_rotation))
+            .then(|| crate::regions::rotated_quad_corners_px(s_px[0], s_px[1], g.zoom_rotation));
+        let quad_center_px = [
+            (g.s_dst[0] + g.s_dst[2] * 0.5) * rw,
+            (g.s_dst[1] + g.s_dst[3] * 0.5) * rh,
+        ];
+
+        // Calque ecran : mode 0 (rect droit, NV12 -> RGB) quand la rotation est
+        // neutre, mode 8 (warp bilineaire inverse dans la bbox du quad projete)
+        // sinon. Place par plan_frame (cover-fit + coins arrondis) ;
+        // `src = g.cut` (crop utilisateur + zoom en UV texture) dans les deux cas.
+        let screen_layer = match tilt.as_ref() {
+            None => LayerCB {
+                dst: g.s_dst,
+                src: g.cut,
+                quad_px: s_px,
+                radius_px: g.s_radius,
+                mode: 0.0,
+                color: [1.0, 1.0, 1.0, 1.0],
+                ..Default::default()
+            },
+            Some(quad) => self.tilted_screen_cb(quad, s_px, quad_center_px, g.cut, g.s_radius),
         };
         // Bind group construit AVANT le pass (doit vivre pendant tout le pass) ;
         // `_screen_uniform` garde le buffer uniforme en vie (reference par le bind).
@@ -769,23 +879,32 @@ impl Compositor {
         let (_screen_uniform, screen_bind) =
             self.make_bind(&screen_layer, Some((&sy, &suv)), &dummy);
 
-        // OMBRE PORTEE de l'ecran (mode 2), dessinee JUSTE AVANT le calque
-        // ecran. Le shader la connait depuis le debut ; ce qui manquait etait
-        // uniquement le draw cote Rust, si bien que le curseur « Ombre » de
-        // l'UI ne faisait rien sur Linux.
+        // OMBRE PORTEE de l'ecran, dessinee JUSTE AVANT le calque ecran. Le shader
+        // la connait depuis le debut ; ce qui manquait etait uniquement le draw
+        // cote Rust, si bien que le curseur « Ombre » de l'UI ne faisait rien sur
+        // Linux.
         //
         // Les fractions de reglage viennent de `frame_geometry`, partagees avec
         // macOS/Windows : l'ombre a la meme taille relative sur les trois
         // plateformes quelle que soit la resolution de sortie.
+        //
+        // L'ombre suit la silhouette REELLEMENT affichee : rect arrondi (mode 2)
+        // quand l'ecran est droit, quadrilatere projete (mode 12) quand il penche.
         let screen_shadow = cfg.shadow.then(|| {
-            let cb = self.shadow_cb(
-                g.s_dst,
-                [g.s_dst[2] * rw, g.s_dst[3] * rh],
-                g.s_radius,
-                crate::frame_geometry::SCREEN_SHADOW_SPREAD_FRAC * g.frame_min_px,
-                [0.0, crate::frame_geometry::SCREEN_SHADOW_OFFSET_FRAC * g.frame_min_px],
-                0.45 * lp.shadow_scale,
-            );
+            let spread = crate::frame_geometry::SCREEN_SHADOW_SPREAD_FRAC * g.frame_min_px;
+            let offset = [0.0, crate::frame_geometry::SCREEN_SHADOW_OFFSET_FRAC * g.frame_min_px];
+            let opacity = 0.45 * lp.shadow_scale;
+            let cb = match tilt.as_ref() {
+                None => self.shadow_cb(g.s_dst, s_px, g.s_radius, spread, offset, opacity),
+                Some(quad) => self.quad_shadow_cb(
+                    &quad.corners,
+                    quad_center_px,
+                    g.s_radius * quad.scale,
+                    spread,
+                    offset,
+                    opacity,
+                ),
+            };
             self.make_bind(&cb, None, &dummy)
         });
 
@@ -1023,10 +1142,11 @@ impl Compositor {
             }
         }
 
-        // Curseur thematise (mode 7, sprite RGBA). Placement UPRIGHT uniquement :
-        // le tilt (mode 13, sous zoom incline) et le motion blur (taps>1) sont
-        // des increments a venir. `_tex`/`_view`/`_buf` gardent le sprite en vie
-        // pendant le pass. Miroir de la branche curseur de `compositor_macos`.
+        // Curseur thematise : sprite RGBA droit (mode 7) ou pose sur le plan
+        // incline (mode 13) selon ce que `plan_cursor` a resolu. Le motion blur
+        // (taps>1) reste un increment a venir. `_tex`/`_view`/`_buf` gardent le
+        // sprite en vie pendant le pass. Miroir de la branche curseur de
+        // `compositor_macos`.
         struct CursorDraw {
             _buf: wgpu::Buffer,
             _tex: wgpu::Texture,
@@ -1051,10 +1171,6 @@ impl Compositor {
                         .unwrap_or(frame / crate::frame_geometry::FPS),
                 },
             )?;
-            let CursorPlacement::Upright { center } = plan.placement else {
-                // ponytail: tilt (mode 13) a porter quand un zoom incline sera teste.
-                return None;
-            };
             let sprites = scene_ref
                 .as_ref()
                 .map(|s| s.cursor.cursor_sprites.clone())
@@ -1088,13 +1204,55 @@ impl Compositor {
                 (plan.size_px * ar, plan.size_px)
             };
             let hotspot = [sprite.hotspot_x, sprite.hotspot_y];
-            let cb = LayerCB {
-                dst: cursor_sprite_dst(center, pw / rw, ph / rh, hotspot),
-                src: [0.0, 0.0, 1.0, 1.0],
-                mode: 7.0,
-                color: [1.0, 1.0, 1.0, 1.0],
-                fx: plan.clip,
-                ..Default::default()
+            let cb = match plan.placement {
+                CursorPlacement::Upright { center } => LayerCB {
+                    dst: cursor_sprite_dst(center, pw / rw, ph / rh, hotspot),
+                    src: [0.0, 0.0, 1.0, 1.0],
+                    mode: 7.0,
+                    color: [1.0, 1.0, 1.0, 1.0],
+                    fx: plan.clip,
+                    ..Default::default()
+                },
+                CursorPlacement::Tilted { plane_pt, quad, center_px, screen_px, .. } => {
+                    // Le sprite est pose DANS le plan : sa taille devient une fraction
+                    // du plan et ses quatre coins traversent la meme projection que la
+                    // video. La reduction due au tilt vient donc de la projection --
+                    // rien a multiplier a la main.
+                    let (wf, hf) = (pw / screen_px[0], ph / screen_px[1]);
+                    let x0 = plane_pt[0] - hotspot[0] * wf;
+                    let y0 = plane_pt[1] - hotspot[1] * hf;
+                    let corners = [(x0, y0), (x0 + wf, y0), (x0 + wf, y0 + hf), (x0, y0 + hf)]
+                        .map(|(fx, fy)| {
+                            let (px, py) = quad.point_px(fx, fy);
+                            (center_px[0] + px, center_px[1] + py)
+                        });
+                    let (min_x, max_x) = corners
+                        .iter()
+                        .fold((f32::MAX, f32::MIN), |(mn, mx), &(x, _)| (mn.min(x), mx.max(x)));
+                    let (min_y, max_y) = corners
+                        .iter()
+                        .fold((f32::MAX, f32::MIN), |(mn, mx), &(_, y)| (mn.min(y), mx.max(y)));
+                    // Le quad projete d'un sprite peut etre tres fin de biais : une bbox
+                    // d'un pixel de large ferait diverger le warp inverse, d'ou le
+                    // plancher a 1 px.
+                    let (bw, bh) = ((max_x - min_x).max(1.0), (max_y - min_y).max(1.0));
+                    let local = |(x, y): (f32, f32)| [x - min_x, y - min_y];
+                    let [tl0, tl1] = local(corners[0]);
+                    let [tr0, tr1] = local(corners[1]);
+                    let [br0, br1] = local(corners[2]);
+                    let [bl0, bl1] = local(corners[3]);
+                    LayerCB {
+                        dst: [min_x / rw, min_y / rh, bw / rw, bh / rh],
+                        quad_px: [bw, bh],
+                        mode: 13.0,
+                        color: [1.0, 1.0, 1.0, 1.0],
+                        fx: [tl0, tl1, tr0, tr1],
+                        src_prev: [br0, br1, bl0, bl1],
+                        // Le clip vit ici et NON dans `fx` (mode 7) : `fx` porte les coins.
+                        dst_prev: plan.clip,
+                        ..Default::default()
+                    }
+                }
             };
             let view = tex.create_view(&wgpu::TextureViewDescriptor::default());
             // Sprite RGBA au binding 1 (texY) que le mode 7 echantillonne.
