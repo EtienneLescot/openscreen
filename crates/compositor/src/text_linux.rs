@@ -96,6 +96,21 @@ impl TextRasterizer {
     /// macOS). Le cache par `cache_key()` est gere par le caller (compositor).
     pub fn rasterize(&self, gpu: &Gpu, spec: &TextSpec) -> Result<RasterizedGlyphs> {
         let (w, h) = (spec.box_px[0].max(1), spec.box_px[1].max(1));
+        let atlas = self.build_atlas(spec)?;
+
+        Self::upload(gpu, &atlas, w, h)
+    }
+
+    /// La moitie CPU de [`Self::rasterize`] : shaping + placement des glyphes
+    /// dans un atlas R8 de `spec.box_px`.
+    ///
+    /// Separee du GPU EXPRES. Le placement des glyphes est de l'arithmetique
+    /// pure, et c'est exactement la ou le portage s'etait trompe (origine au
+    /// coin au lieu de la ligne de base, `line_top` ajoute au X, signe de
+    /// `placement.top` inverse). Tant que ce code vivait derriere un `&Gpu`, il
+    /// etait intestable sans peripherique. Il ne l'est plus.
+    pub fn build_atlas(&self, spec: &TextSpec) -> Result<Vec<u8>> {
+        let (w, h) = (spec.box_px[0].max(1), spec.box_px[1].max(1));
         if spec.content.is_empty() {
             bail!("text_linux::rasterize: texte vide");
         }
@@ -121,6 +136,20 @@ impl TextRasterizer {
             attrs = attrs.underline(cosmic_text::UnderlineStyle::Single);
         }
         buffer.set_text(&spec.content, &attrs, Shaping::Advanced, None);
+        // L'alignement se pose PAR LIGNE, apres set_text (qui reconstruit les
+        // lignes) et avant le shaping. Sans ca tout le texte sort ferre a
+        // gauche alors que le defaut de l'editeur est « center ».
+        let align = match spec.align.as_str() {
+            "center" => Some(cosmic_text::Align::Center),
+            "right" | "end" => Some(cosmic_text::Align::Right),
+            "justify" => Some(cosmic_text::Align::Justified),
+            // `None` laisse cosmic-text suivre la direction du script, ce qui
+            // est le bon defaut pour "left"/"start" et pour une valeur inconnue.
+            _ => None,
+        };
+        for line in &mut buffer.lines {
+            line.set_align(align);
+        }
         buffer.shape_until_scroll(&mut font_system, false);
 
         // Atlas R8 : on n'ecrit que le canal alpha (couverture). Le tint par
@@ -128,9 +157,20 @@ impl TextRasterizer {
         let mut atlas: Vec<u8> = vec![0u8; (w * h) as usize];
         for run in buffer.layout_runs() {
             for glyph in run.glyphs.iter() {
-                let physical = glyph.physical((0.0, 0.0), 1.0);
+                // L'ORIGINE EST LA LIGNE DE BASE, PAS LE COIN. C'est la
+                // convention de cosmic-text : `Buffer::draw` appelle
+                // `glyph.physical((0., run.line_y), 1.0)` et son rasteriseur
+                // pose ensuite le haut du bitmap a `y - placement.top`.
+                //
+                // Le portage passait `(0.0, 0.0)` — donc sans ligne de base —
+                // et ajoutait `run.line_top`, une quantite VERTICALE, au X.
+                // Resultat mesure sur « Agjo Hxy » en 40px : aucune ligne de
+                // base commune, le 'A' 14 px SOUS le 'o', et sur du multi-ligne
+                // la 2e ligne redessinee sur les memes rangees que la 1re mais
+                // decalee de `line_top` px vers la droite.
+                let physical = glyph.physical((0.0, run.line_y), 1.0);
                 let img = swash_cache.get_image(&mut font_system, physical.cache_key);
-                let glyph_x = physical.x + run.line_top as i32;
+                let glyph_x = physical.x;
                 let glyph_y = physical.y;
                 let Some(img) = img else { continue };
                 let placement = img.placement;
@@ -149,16 +189,33 @@ impl TextRasterizer {
                     0
                 };
                 let bpp = if alpha_offset == 0 { 1 } else { 4 };
+                // `placement.top` est la hauteur de l'encre AU-DESSUS de la
+                // ligne de base, donc la premiere rangee du bitmap est a
+                // `baseline - top`. Le signe etait inverse.
+                let ink_top = glyph_y - placement.top;
+                let ink_left = glyph_x + placement.left;
                 for row in 0..img_h as i32 {
-                    let dest_y = glyph_y + placement.top + row;
+                    let dest_y = ink_top + row;
                     if dest_y < 0 || dest_y >= h as i32 {
                         continue;
                     }
-                    let dest_x = glyph_x + placement.left;
-                    if dest_x >= w as i32 {
+                    // `placement.left` est negatif sur les glyphes qui debordent
+                    // a gauche de leur avance ('j' en DejaVu Sans : -3). Sans ce
+                    // rattrapage, `dest_x as usize` enroule en release et l'encre
+                    // se retrouve collee au bord droit de la rangee PRECEDENTE ;
+                    // en debug c'est une panique d'overflow. On saute plutot les
+                    // colonnes SOURCE hors cadre.
+                    let (dest_x, skip_cols) = if ink_left < 0 {
+                        (0i32, (-ink_left) as usize)
+                    } else {
+                        (ink_left, 0usize)
+                    };
+                    if dest_x >= w as i32 || skip_cols >= img_w as usize {
                         continue;
                     }
-                    let copy_len = (img_w as i32).min(w as i32 - dest_x).max(0) as usize;
+                    let copy_len = ((img_w as usize - skip_cols) as i32)
+                        .min(w as i32 - dest_x)
+                        .max(0) as usize;
                     if copy_len == 0 {
                         continue;
                     }
@@ -166,15 +223,23 @@ impl TextRasterizer {
                     let atlas_row_start = (dest_y as usize) * w as usize;
                     for col in 0..copy_len {
                         let atlas_idx = atlas_row_start + (dest_x as usize + col);
-                        let src_idx = col * bpp + alpha_offset;
+                        let src_idx = (col + skip_cols) * bpp + alpha_offset;
                         if src_idx < src_row.len() {
-                            atlas[atlas_idx] = src_row[src_idx];
+                            // `max` et non affectation : deux glyphes peuvent se
+                            // chevaucher (accents, ligatures, italiques) et
+                            // ecraser ferait disparaitre l'encre du premier.
+                            atlas[atlas_idx] = atlas[atlas_idx].max(src_row[src_idx]);
                         }
                     }
                 }
             }
         }
 
+        Ok(atlas)
+    }
+
+    /// Televerse un atlas R8 deja construit et rend sa view.
+    fn upload(gpu: &Gpu, atlas: &[u8], w: u32, h: u32) -> Result<RasterizedGlyphs> {
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("text-atlas"),
             size: wgpu::Extent3d {
@@ -214,5 +279,133 @@ impl TextRasterizer {
             width: w,
             height: h,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn spec(content: &str, align: &str) -> TextSpec {
+        TextSpec {
+            content: content.to_owned(),
+            color: [1.0, 1.0, 1.0, 1.0],
+            background: [0.0, 0.0, 0.0, 0.0],
+            font_size_px: 40.0,
+            // Vide = cosmic-text prend la police par defaut du systeme. Nommer
+            // une famille precise rendrait le test dependant des polices
+            // installees sur la machine qui l'execute.
+            font_family: String::new(),
+            bold: false,
+            italic: false,
+            underline: false,
+            align: align.to_owned(),
+            box_px: [400, 200],
+        }
+    }
+
+    /// Rangees d'atlas contenant de l'encre, pour la tranche `x0..x1`.
+    fn ink_rows(atlas: &[u8], w: usize, x0: usize, x1: usize) -> Vec<usize> {
+        let h = atlas.len() / w;
+        (0..h)
+            .filter(|y| (x0..x1.min(w)).any(|x| atlas[y * w + x] > 16))
+            .collect()
+    }
+
+    fn ink_cols(atlas: &[u8], w: usize) -> Vec<usize> {
+        let h = atlas.len() / w;
+        (0..w)
+            .filter(|x| (0..h).any(|y| atlas[y * w + x] > 16))
+            .collect()
+    }
+
+    #[test]
+    fn glyphs_of_different_heights_share_one_baseline() {
+        // LE test de ce fichier. Le portage posait chaque glyphe contre le HAUT
+        // de sa propre boite d'encre au lieu de la ligne de base commune, avec
+        // en prime le signe de `placement.top` inverse. Mesure d'alors sur
+        // « Agjo Hxy » en 40px : le 'A' finissait 14 px SOUS le 'o'.
+        //
+        // On compare le bas de l'encre d'un 'H' (qui descend jusqu'a la ligne
+        // de base) et celui d'un 'x' (idem). S'ils partagent une ligne de base,
+        // leurs dernieres rangees d'encre coincident a l'antialiasing pres.
+        let raster = TextRasterizer::new().expect("rasterizer");
+        let atlas = raster.build_atlas(&spec("Hx", "left")).expect("atlas");
+        let w = 400usize;
+
+        let cols = ink_cols(&atlas, w);
+        assert!(!cols.is_empty(), "aucune encre : le texte n'a pas ete rasterise");
+        // Coupe entre les deux glyphes : le plus grand trou horizontal.
+        let split = cols
+            .windows(2)
+            .max_by_key(|p| p[1] - p[0])
+            .map(|p| (p[0] + p[1]) / 2)
+            .expect("deux glyphes attendus");
+
+        let left = ink_rows(&atlas, w, cols[0], split);
+        let right = ink_rows(&atlas, w, split, *cols.last().unwrap() + 1);
+        assert!(!left.is_empty() && !right.is_empty(), "un des deux glyphes est vide");
+
+        let (h_bottom, x_bottom) = (*left.last().unwrap(), *right.last().unwrap());
+        assert!(
+            h_bottom.abs_diff(x_bottom) <= 2,
+            "pas de ligne de base commune : bas du 'H' = {h_bottom}, bas du 'x' = {x_bottom}"
+        );
+    }
+
+    #[test]
+    fn a_second_line_sits_below_the_first() {
+        // L'autre moitie du meme bug : `run.line_top` etait ajoute au X, donc la
+        // 2e ligne se dessinait sur les MEMES rangees que la 1re, decalee vers
+        // la droite. Ici elle doit etre strictement plus bas, et commencer a peu
+        // pres a la meme abscisse.
+        let raster = TextRasterizer::new().expect("rasterizer");
+        let atlas = raster.build_atlas(&spec("ab\ncd", "left")).expect("atlas");
+        let w = 400usize;
+
+        let rows = ink_rows(&atlas, w, 0, w);
+        assert!(rows.len() > 4, "trop peu d'encre pour deux lignes");
+        // Un trou vertical separe les deux lignes.
+        let gap = rows
+            .windows(2)
+            .max_by_key(|p| p[1] - p[0])
+            .expect("deux lignes attendues");
+        assert!(
+            gap[1] - gap[0] > 2,
+            "les deux lignes se chevauchent : aucune separation verticale trouvee"
+        );
+    }
+
+    #[test]
+    fn centering_moves_the_ink_off_the_left_edge() {
+        // `spec.align` n'etait jamais applique : tout sortait ferre a gauche
+        // alors que le defaut de l'editeur est « center ».
+        let raster = TextRasterizer::new().expect("rasterizer");
+        let w = 400usize;
+        let left = ink_cols(&raster.build_atlas(&spec("hi", "left")).expect("atlas"), w);
+        let centered = ink_cols(&raster.build_atlas(&spec("hi", "center")).expect("atlas"), w);
+
+        assert!(!left.is_empty() && !centered.is_empty());
+        assert!(
+            centered[0] > left[0] + 20,
+            "le centrage n'a pas bouge le texte : gauche debute a {}, centre a {}",
+            left[0],
+            centered[0]
+        );
+    }
+
+    #[test]
+    fn a_glyph_overhanging_to_the_left_does_not_wrap_around() {
+        // 'j' a un `placement.left` negatif en DejaVu Sans. Avant, `dest_x as
+        // usize` enroulait : l'encre atterrissait au bord DROIT de la rangee
+        // precedente en release, et paniquait en debug. Ce test tourne en debug
+        // sous `cargo test`, donc il attrape la panique directement.
+        let raster = TextRasterizer::new().expect("rasterizer");
+        let atlas = raster.build_atlas(&spec("jazz", "left")).expect("pas de panique");
+        let w = 400usize;
+        // Rien ne doit avoir atterri contre le bord droit d'une rangee.
+        let h = atlas.len() / w;
+        let right_edge_ink = (0..h).filter(|y| atlas[y * w + (w - 1)] > 16).count();
+        assert_eq!(right_edge_ink, 0, "de l'encre a enroule jusqu'au bord droit");
     }
 }
