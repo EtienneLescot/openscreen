@@ -1,4 +1,5 @@
 import { contextBridge, ipcRenderer, webUtils } from "electron";
+import type { NativeLinuxRecordingRequest } from "../src/lib/nativeLinuxRecording";
 import type { NativeMacRecordingRequest } from "../src/lib/nativeMacRecording";
 import type { NativeWindowsRecordingRequest } from "../src/lib/nativeWindowsRecording";
 import type { RecordingSession, StoreRecordedSessionInput } from "../src/lib/recordingSession";
@@ -181,6 +182,30 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	},
 	isNativeMacCaptureAvailable: () => {
 		return ipcRenderer.invoke("is-native-mac-capture-available");
+	},
+	isNativeLinuxCaptureAvailable: () => {
+		return ipcRenderer.invoke("is-native-linux-capture-available");
+	},
+	startNativeLinuxRecording: (request: NativeLinuxRecordingRequest) => {
+		return ipcRenderer.invoke("start-native-linux-recording", request);
+	},
+	pauseNativeLinuxRecording: () => {
+		return ipcRenderer.invoke("pause-native-linux-recording");
+	},
+	resumeNativeLinuxRecording: () => {
+		return ipcRenderer.invoke("resume-native-linux-recording");
+	},
+	stopNativeLinuxRecording: (discard?: boolean) => {
+		return ipcRenderer.invoke("stop-native-linux-recording", discard);
+	},
+	attachNativeLinuxWebcamRecording: (payload: {
+		screenVideoPath: string;
+		recordingId: number;
+		webcam: { fileName: string; videoData: ArrayBuffer };
+		cursorCaptureMode?: import("../src/lib/recordingSession").CursorCaptureMode;
+		webcamOffsetMs?: number;
+	}) => {
+		return ipcRenderer.invoke("attach-native-linux-webcam-recording", payload);
 	},
 	startNativeWindowsRecording: (request: NativeWindowsRecordingRequest) => {
 		return ipcRenderer.invoke("start-native-windows-recording", request);

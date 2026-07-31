@@ -3,18 +3,20 @@
 // pipeWireCursorRecordingSession.ts resolves at runtime.
 //
 // The Linux counterpart of build-macos-screencapturekit-helper.mjs and
-// build-windows-wgc-helper.mjs. Two things are deliberately absent compared to
-// the compositor addon's Linux build script:
+// build-windows-wgc-helper.mjs.
 //
-//   1. No pkg-config, no FFMPEG_DIR, no libclang. The helper's C shim compiles
-//      against headers vendored in the repo and resolves libpipewire with
-//      dlopen at runtime, so `cargo` and a C compiler are the entire toolchain.
-//      That is the point: libpipewire-0.3-dev is not installable on every
-//      contributor's box, and requiring it would gate the Linux build on a
-//      package Ubuntu does not ship by default.
+// PIPEWIRE needs no pkg-config and no dev package: the C shim compiles against
+// headers vendored in the repo and resolves libpipewire with dlopen at runtime.
+// That is the point — libpipewire-0.3-dev is not installed on a stock Ubuntu,
+// and requiring it would gate the whole Linux build on a package the base
+// system does not ship.
 //
-//   2. No RUNPATH surgery. Nothing is dynamically linked beyond libc, so the
-//      binary is relocatable as-is.
+// FFMPEG is different, and has been since the helper started encoding H.264.
+// It is linked normally, its libraries are staged next to the binary by
+// stageFfmpeg() below, and the RUNPATH points at them. Unlike the compositor
+// addon there is no symbol renaming: the helper is a separate PROCESS, so
+// Chromium's libffmpeg.so is never in its address space and cannot collide.
+// See its Cargo.toml.
 //
 // The crate is NOT part of the crates/ workspace (see its Cargo.toml for why),
 // so it is built by pointing cargo at its own manifest.
@@ -91,6 +93,63 @@ for (const dir of [outDir, devDir]) {
 	fs.copyFileSync(builtBinary, dest);
 	fs.chmodSync(dest, 0o755);
 	console.log(`Copied ${dest}`);
+	stageFfmpeg(dir);
+}
+
+/**
+ * Copies the vendored ffmpeg shared libraries into `<dir>/ffmpeg/`.
+ *
+ * THE SUBDIRECTORY IS THE WHOLE POINT. `electron/native/bin/linux-x64/` already
+ * holds libavcodec.so.62 and friends — but those are the copies whose every
+ * symbol was renamed to `osff_*` by scripts/build-linux-compositor-addon.mjs,
+ * so that the compositor addon does not bind to Chromium's own ffmpeg once
+ * Electron dlopens it. Two different builds of the same soname, needed by two
+ * different consumers, and only one of them can win a directory.
+ *
+ * The addon needs the renamed set next to itself; the helper needs the ordinary
+ * set. So the helper's RUNPATH is `$ORIGIN/ffmpeg` (see build.rs) and its
+ * libraries live here. Putting them side by side produced exactly one symptom,
+ * which the probe below catches:
+ *
+ *   undefined symbol: avcodec_send_frame, version LIBAVCODEC_62
+ */
+function stageFfmpeg(dir) {
+	const source = path.join(
+		root,
+		"crates",
+		"thirdparty",
+		"ffmpeg-linux64-lgpl-shared",
+		"lib",
+	);
+	if (!fs.existsSync(source)) {
+		console.warn(
+			`Vendored ffmpeg not found at ${source}; the helper will fall back to its ` +
+				"build-time RUNPATH and will not work once packaged.",
+		);
+		return;
+	}
+
+	const target = path.join(dir, "ffmpeg");
+	fs.mkdirSync(target, { recursive: true });
+	// Only the sonames the helper actually links, and only the real files —
+	// the tree also holds unversioned `.so` symlinks that the loader never
+	// consults at runtime.
+	const wanted = /^lib(avcodec|avformat|avutil|swscale|swresample)\.so\.\d+$/;
+	let copied = 0;
+	for (const entry of fs.readdirSync(source)) {
+		if (!wanted.test(entry)) {
+			continue;
+		}
+		const from = fs.realpathSync(path.join(source, entry));
+		const to = path.join(target, entry);
+		fs.rmSync(to, { force: true });
+		fs.copyFileSync(from, to);
+		copied++;
+	}
+	if (copied === 0) {
+		throw new Error(`No ffmpeg libraries matched in ${source}; the helper cannot run.`);
+	}
+	console.log(`Staged ${copied} ffmpeg libraries into ${target}`);
 }
 
 // A helper that cannot dlopen libpipewire is useless, and the failure is
