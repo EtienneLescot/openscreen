@@ -8,6 +8,13 @@
 //! `crates/fixture/screen.mp4`. Sinon skip (le teardown Vulkan/Mesa segfault a
 //! l'exit apres le rendu -- verifier via la sortie, pas l'exit code).
 
+// Linux UNIQUEMENT, comme `warp_device_cannot_decode.rs` l'est a Windows. Les
+// fichiers de `tests/` sont compiles quelle que soit la plateforme : sans cette
+// porte, `cargo check` sous Windows resout `pipeline::Decoder` vers
+// `pipeline_windows::Decoder`, qui est `pub(crate)` -- et le check Windows casse
+// sur un test qui ne s'y executera jamais.
+#![cfg(target_os = "linux")]
+
 use std::path::Path;
 
 use openscreen_compositor::compositor::Compositor;
