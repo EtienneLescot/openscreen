@@ -197,6 +197,8 @@ pub struct VideoEncoder {
     packet: *mut ff::AVPacket,
     params: VideoParams,
     stats: EncodeStats,
+    /// Whether `sw_frame` holds a real picture yet.
+    staged: bool,
     /// What libswscale reported back after `sws_init_context`, not what we asked
     /// for. Requesting threads and silently getting one is indistinguishable
     /// from threading not helping.
@@ -284,6 +286,7 @@ impl VideoEncoder {
                     bitrate: params.bitrate,
                 },
                 stats: EncodeStats::default(),
+                staged: false,
                 sws_threads: 0,
             };
 
@@ -413,17 +416,21 @@ impl VideoEncoder {
         self.codec_ctx
     }
 
-    /// Converts one captured RGB frame and submits it at `pts` (a frame index).
+    /// Converts one captured RGB frame into the staging buffer, without encoding
+    /// it.
+    ///
+    /// Split from [`Self::encode_staged`] so that a screen which stops changing
+    /// still produces frames: the capture writes at a constant rate, and holding
+    /// the last picture costs an upload and an encode but no conversion, which
+    /// is where three quarters of the per-frame time goes.
     ///
     /// `src_format` is whatever PipeWire negotiated; the swscale context is
     /// rebuilt if it ever changes, which it should not mid-stream.
-    pub fn submit(
+    pub fn stage(
         &mut self,
         pixels: &[u8],
         stride: usize,
         src_format: ff::AVPixelFormat,
-        pts: i64,
-        mut on_packet: impl FnMut(*mut ff::AVPacket) -> Result<(), String>,
     ) -> Result<(), String> {
         let needed = stride
             .checked_mul(self.params.height as usize)
@@ -468,7 +475,33 @@ impl VideoEncoder {
             if scaled < 0 {
                 return Err(format!("sws_scale: {}", ff::err_to_string(scaled)));
             }
+            self.staged = true;
+        }
+        Ok(())
+    }
 
+    /// True once [`Self::stage`] has put a picture in the staging buffer. Before
+    /// that there is nothing to encode and [`Self::encode_staged`] would emit a
+    /// frame of uninitialised memory.
+    pub fn has_staged_frame(&self) -> bool {
+        self.staged
+    }
+
+    /// Encodes whatever is currently staged at `pts` (a frame index).
+    ///
+    /// Called once per staged frame and then once more per frame of a static
+    /// screen, which is what holds the constant frame rate.
+    pub fn encode_staged(
+        &mut self,
+        pts: i64,
+        mut on_packet: impl FnMut(*mut ff::AVPacket) -> Result<(), String>,
+    ) -> Result<(), String> {
+        if !self.staged {
+            return Err("encode_staged called before any frame was staged".to_owned());
+        }
+        // SAFETY: `staged` is only set after a successful sws_scale into
+        // `sw_frame`, and every pointer below is owned by `self`.
+        unsafe {
             let upload_started = std::time::Instant::now();
             let frame = if self.hw_frames.is_null() {
                 (*self.sw_frame).pts = pts;
@@ -507,6 +540,20 @@ impl VideoEncoder {
             }
         }
         Ok(())
+    }
+
+    /// [`Self::stage`] then [`Self::encode_staged`], for callers with nothing to
+    /// gain from the split.
+    pub fn submit(
+        &mut self,
+        pixels: &[u8],
+        stride: usize,
+        src_format: ff::AVPixelFormat,
+        pts: i64,
+        on_packet: impl FnMut(*mut ff::AVPacket) -> Result<(), String>,
+    ) -> Result<(), String> {
+        self.stage(pixels, stride, src_format)?;
+        self.encode_staged(pts, on_packet)
     }
 
     /// Flushes the encoder. Call once, at stop.

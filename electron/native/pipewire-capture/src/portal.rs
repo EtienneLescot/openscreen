@@ -21,10 +21,41 @@
 
 use std::os::fd::OwnedFd;
 
-use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
+use ashpd::desktop::screencast::{CursorMode as PortalCursorMode, Screencast, SourceType};
 use ashpd::desktop::PersistMode;
 use ashpd::enumflags2::BitFlags;
 use ashpd::WindowIdentifier;
+
+/// Which of the portal's three cursor modes to ask for.
+///
+/// This is the HUD's cursor-mode toggle, one layer down. `Metadata` is what
+/// makes the editable cursor possible at all — the compositor keeps the pointer
+/// out of the pixels and describes it separately — and `Embedded` is the
+/// "system cursor" setting, where the compositor paints it in and the editor
+/// leaves it alone.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CursorMode {
+    Metadata,
+    Embedded,
+    Hidden,
+}
+
+impl CursorMode {
+    fn to_portal(self) -> PortalCursorMode {
+        match self {
+            Self::Metadata => PortalCursorMode::Metadata,
+            Self::Embedded => PortalCursorMode::Embedded,
+            Self::Hidden => PortalCursorMode::Hidden,
+        }
+    }
+
+    /// Only METADATA yields cursor samples; in the other modes the pointer is
+    /// either painted into the frames or absent, and there is no metadata to
+    /// read either way.
+    pub fn reports_cursor(self) -> bool {
+        matches!(self, Self::Metadata)
+    }
+}
 
 /// Everything the PipeWire half needs, plus what the helper reports upward.
 pub struct PortalStream {
@@ -85,7 +116,7 @@ pub async fn cursor_metadata_supported() -> Result<bool, PortalError> {
         .available_cursor_modes()
         .await
         .map_err(|error| failed("AvailableCursorModes", error))?;
-    Ok(cursor_modes.contains(CursorMode::Metadata))
+    Ok(cursor_modes.contains(PortalCursorMode::Metadata))
 }
 
 /// Runs the negotiation to completion. Blocks on the user for as long as the
@@ -95,7 +126,10 @@ pub async fn cursor_metadata_supported() -> Result<bool, PortalError> {
 /// ashpd has no `Drop` impl for sessions and holds its D-Bus connection in a
 /// process-global `OnceLock`, so the portal session stays open until this
 /// process exits — which is exactly the lifetime we want.
-pub async fn negotiate(restore_token: Option<&str>) -> Result<PortalStream, PortalError> {
+pub async fn negotiate(
+    restore_token: Option<&str>,
+    cursor_mode: CursorMode,
+) -> Result<PortalStream, PortalError> {
     let proxy = Screencast::new()
         .await
         .map_err(|error| failed("cannot reach org.freedesktop.portal.ScreenCast", error))?;
@@ -104,8 +138,17 @@ pub async fn negotiate(restore_token: Option<&str>) -> Result<PortalStream, Port
         .available_cursor_modes()
         .await
         .map_err(|error| failed("AvailableCursorModes", error))?;
-    if !cursor_modes.contains(CursorMode::Metadata) {
-        return Err(PortalError::CursorMetadataUnsupported);
+    // Only METADATA is treated as mandatory, and only when it was asked for.
+    // EMBEDDED is in the portal spec's baseline and every compositor implements
+    // it; refusing to start because a mode we are not using is missing would be
+    // the Stage 1 check applied where it no longer belongs.
+    if !cursor_modes.contains(cursor_mode.to_portal()) {
+        return Err(match cursor_mode {
+            CursorMode::Metadata => PortalError::CursorMetadataUnsupported,
+            other => PortalError::Failed(format!(
+                "the ScreenCast portal does not offer the {other:?} cursor mode"
+            )),
+        });
     }
 
     let session = proxy
@@ -119,7 +162,7 @@ pub async fn negotiate(restore_token: Option<&str>) -> Result<PortalStream, Port
     proxy
         .select_sources(
             &session,
-            CursorMode::Metadata,
+            cursor_mode.to_portal(),
             types,
             false,
             restore_token,

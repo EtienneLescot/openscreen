@@ -1,22 +1,31 @@
-//! OpenScreen Linux capture helper — Stage 1: cursor samples only.
+//! OpenScreen Linux capture helper.
 //!
-//! WHY THIS EXISTS. `screen.getCursorScreenPoint()` returns {0,0} under Wayland,
-//! so `TelemetryRecordingSession` produced recordings whose every cursor sample
-//! sat in the screen's top-left corner while looking perfectly well-formed. The
-//! only source of truth for the pointer on Wayland is the ScreenCast portal's
-//! METADATA cursor mode, where the compositor keeps the cursor out of the pixels
-//! and attaches a SPA_META_Cursor to each frame instead.
+//! WHY THIS EXISTS. Two reasons, and they turned out to be the same reason.
+//!
+//! `screen.getCursorScreenPoint()` returns {0,0} under Wayland, so
+//! `TelemetryRecordingSession` produced recordings whose every cursor sample sat
+//! in the screen's top-left corner while looking perfectly well-formed. The only
+//! source of truth for the pointer on Wayland is the ScreenCast portal's
+//! METADATA cursor mode.
+//!
+//! And in that same mode the compositor keeps the cursor OUT of the captured
+//! pixels — which is what the editor needs in order to draw its own. Chromium's
+//! `getDisplayMedia` gives the opposite: a frame with the pointer already
+//! painted in, and no way to know where it was. One portal session answers both,
+//! and it has to be one session because SelectSources may only be called once.
 //!
 //! SHAPE. A stdio sidecar, like the macOS and Windows helpers: JSON request in
-//! argv[1], NDJSON events on stdout, `stop` (or EOF) on stdin. It captures no
-//! video and writes no file — that is Stage 2's job, and it will reuse this same
-//! portal session because SelectSources may only be called once per session.
+//! argv[1], NDJSON events on stdout, `stop`/`pause`/`resume` (or EOF) on stdin.
+//! With `outputPath` it also encodes H.264 and writes an MP4; without it, it is
+//! the cursor-only session Stage 1 shipped, which is what
+//! `PipeWireCursorRecordingSession` still uses.
 //!
 //! WHAT IT CANNOT DO. Mouse buttons. Wayland exposes no portal for input
 //! events, and /dev/input/event* is root:input. Every sample is therefore a
 //! "move"; there is no click detection to be had here at any effort level.
 
 mod bitmap;
+mod capture;
 mod encoder;
 mod events;
 mod ffmpeg;
@@ -25,17 +34,30 @@ mod shim;
 
 use std::collections::HashSet;
 use std::io::{BufRead, Write};
+use std::path::PathBuf;
 use std::sync::mpsc::{self, RecvTimeoutError, Sender};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use serde::Deserialize;
 
+use capture::Capture;
 use events::{timestamp_ms, CursorAsset, Emitter, Event};
-use shim::StreamEvent;
+use shim::{FrameMailbox, StreamEvent};
 
 /// Matches the macOS helper's default and the Electron side's sampleIntervalMs.
 const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 33;
 const MIN_SAMPLE_INTERVAL_MS: u64 = 8;
+
+const DEFAULT_FPS: i32 = 30;
+const DEFAULT_BITRATE: i64 = 8_000_000;
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", default)]
+struct VideoRequest {
+    fps: Option<i32>,
+    bitrate: Option<i64>,
+}
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -44,6 +66,14 @@ struct Request {
     /// Token from a previous run's `stream-started`. Lets the portal skip the
     /// picker for a source the user already approved.
     restore_token: Option<String>,
+    /// Where to write the MP4. Absent means cursor-only: no pixels are mapped,
+    /// no encoder is opened, and the helper behaves exactly as Stage 1 did.
+    output_path: Option<String>,
+    /// `"metadata"` (default) keeps the pointer out of the pixels so the editor
+    /// can draw its own; `"embedded"` asks the compositor to paint it in. These
+    /// are the two halves of the HUD's cursor-mode toggle.
+    cursor_mode: Option<String>,
+    video: Option<VideoRequest>,
     /// Emit `ready` and exit, without ever calling the portal's `Start()`.
     ///
     /// Everything up to that point is non-interactive; `Start()` is the single
@@ -53,9 +83,40 @@ struct Request {
     probe_only: bool,
 }
 
+impl Request {
+    fn cursor_mode(&self) -> Result<portal::CursorMode, String> {
+        match self.cursor_mode.as_deref() {
+            None | Some("") | Some("metadata") => Ok(portal::CursorMode::Metadata),
+            Some("embedded") => Ok(portal::CursorMode::Embedded),
+            Some("hidden") => Ok(portal::CursorMode::Hidden),
+            Some(other) => Err(format!(
+                "cursorMode must be one of metadata, embedded, hidden — got {other:?}"
+            )),
+        }
+    }
+
+    fn fps(&self) -> i32 {
+        self.video
+            .as_ref()
+            .and_then(|video| video.fps)
+            .filter(|fps| *fps > 0 && *fps <= 240)
+            .unwrap_or(DEFAULT_FPS)
+    }
+
+    fn bitrate(&self) -> i64 {
+        self.video
+            .as_ref()
+            .and_then(|video| video.bitrate)
+            .filter(|bitrate| *bitrate > 0)
+            .unwrap_or(DEFAULT_BITRATE)
+    }
+}
+
 enum Message {
     Portal(Box<Result<portal::PortalStream, portal::PortalError>>),
     Stream(StreamEvent),
+    Pause,
+    Resume,
     Stop,
 }
 
@@ -71,32 +132,53 @@ fn main() {
             fail(&mut emitter, "invalid-arguments", &message);
         }
     };
-    let interval = Duration::from_millis(
+    let cursor_mode = match request.cursor_mode() {
+        Ok(mode) => mode,
+        Err(message) => fail(&mut emitter, "invalid-arguments", &message),
+    };
+    let output_path = request.output_path.as_deref().map(PathBuf::from);
+    let forced_encoder = match encoder::forced_backend_from_env() {
+        Ok(backend) => backend,
+        Err(message) => fail(&mut emitter, "invalid-arguments", &message),
+    };
+
+    // The loop has to serve two clocks: cursor samples at the requested interval
+    // and video frames at the video frame rate. It ticks at whichever is
+    // shorter, so neither is ever late by more than the other's period.
+    let sample_interval = Duration::from_millis(
         request
             .sample_interval_ms
             .unwrap_or(DEFAULT_SAMPLE_INTERVAL_MS)
             .max(MIN_SAMPLE_INTERVAL_MS),
     );
+    let tick = match output_path {
+        Some(_) => sample_interval.min(Duration::from_nanos(
+            1_000_000_000 / request.fps().max(1) as u64,
+        )),
+        None => sample_interval,
+    };
 
     if let Err(message) = shim::load() {
         fail(&mut emitter, "pipewire-unavailable", &message);
     }
 
     // Probed before `ready` so the event can report it, and so an unsupported
-    // compositor fails immediately instead of after a pointless picker.
-    match pollster::block_on(portal::cursor_metadata_supported()) {
-        Ok(true) => {}
-        Ok(false) => {
-            let error = portal::PortalError::CursorMetadataUnsupported;
-            fail(&mut emitter, error.code(), &error.message());
-        }
+    // compositor fails immediately instead of after a pointless picker. Only
+    // fatal when METADATA is the mode actually requested — a recording that
+    // wants the system cursor painted in has no use for it.
+    let cursor_metadata_supported = match pollster::block_on(portal::cursor_metadata_supported()) {
+        Ok(supported) => supported,
         Err(error) => fail(&mut emitter, error.code(), &error.message()),
+    };
+    if !cursor_metadata_supported && cursor_mode.reports_cursor() {
+        let error = portal::PortalError::CursorMetadataUnsupported;
+        fail(&mut emitter, error.code(), &error.message());
     }
 
     let _ = emitter.emit(&Event::Ready {
         timestamp_ms: timestamp_ms(),
         pipewire_version: shim::library_version(),
-        cursor_metadata_supported: true,
+        cursor_metadata_supported,
     });
 
     if request.probe_only {
@@ -105,10 +187,32 @@ fn main() {
 
     let (sender, receiver) = mpsc::channel::<Message>();
     spawn_stdin_reader(sender.clone());
-    spawn_portal(sender.clone(), request.restore_token.clone());
+    spawn_portal(sender.clone(), request.restore_token.clone(), cursor_mode);
 
-    let exit_code = run(&mut emitter, receiver, sender, interval);
+    let session = RunConfig {
+        tick,
+        sample_interval,
+        output_path,
+        fps: request.fps(),
+        bitrate: request.bitrate(),
+        forced_encoder,
+        cursor_mode,
+    };
+    let exit_code = run(&mut emitter, receiver, sender, session);
     std::process::exit(exit_code);
+}
+
+struct RunConfig {
+    /// How often the loop wakes when nothing arrives.
+    tick: Duration,
+    /// Minimum spacing between cursor samples on stdout.
+    sample_interval: Duration,
+    /// `None` for a cursor-only session.
+    output_path: Option<PathBuf>,
+    fps: i32,
+    bitrate: i64,
+    forced_encoder: Option<encoder::Backend>,
+    cursor_mode: portal::CursorMode,
 }
 
 fn parse_request() -> Result<Request, String> {
@@ -128,14 +232,29 @@ fn fail<W: Write>(emitter: &mut Emitter<W>, code: &str, message: &str) -> ! {
 }
 
 /// EOF counts as `stop`: if the parent dies, so do we.
+///
+/// The command vocabulary is the Windows and macOS helpers': `stop`, `pause`,
+/// `resume`, one per line on stdin (see the `proc.stdin.write("pause\n")` calls
+/// in electron/ipc/handlers.ts). Unknown lines are ignored rather than fatal —
+/// a newer parent talking to an older helper should degrade, not crash.
 fn spawn_stdin_reader(sender: Sender<Message>) {
     std::thread::spawn(move || {
         let stdin = std::io::stdin();
         for line in stdin.lock().lines() {
-            match line {
-                Ok(line) if line.trim() == "stop" => break,
-                Ok(_) => continue,
-                Err(_) => break,
+            let Ok(line) = line else { break };
+            match line.trim() {
+                "stop" => break,
+                "pause" => {
+                    if sender.send(Message::Pause).is_err() {
+                        return;
+                    }
+                }
+                "resume" => {
+                    if sender.send(Message::Resume).is_err() {
+                        return;
+                    }
+                }
+                _ => continue,
             }
         }
         let _ = sender.send(Message::Stop);
@@ -145,9 +264,13 @@ fn spawn_stdin_reader(sender: Sender<Message>) {
 /// The portal runs on its own thread because `Start()` blocks on the user for
 /// an unbounded time, and a `stop` arriving during the picker must still be
 /// honoured.
-fn spawn_portal(sender: Sender<Message>, restore_token: Option<String>) {
+fn spawn_portal(
+    sender: Sender<Message>,
+    restore_token: Option<String>,
+    cursor_mode: portal::CursorMode,
+) {
     std::thread::spawn(move || {
-        let result = pollster::block_on(portal::negotiate(restore_token.as_deref()));
+        let result = pollster::block_on(portal::negotiate(restore_token.as_deref(), cursor_mode));
         let _ = sender.send(Message::Portal(Box::new(result)));
     });
 }
@@ -172,7 +295,7 @@ fn run<W: Write>(
     emitter: &mut Emitter<W>,
     receiver: mpsc::Receiver<Message>,
     sender: Sender<Message>,
-    interval: Duration,
+    config: RunConfig,
 ) -> i32 {
     let constants = shim::constants();
     // Held for the whole loop: dropping it stops and joins the PipeWire thread.
@@ -183,15 +306,84 @@ fn run<W: Write>(
     let mut known_assets: HashSet<String> = HashSet::new();
     let mut pending_asset: Option<CursorAsset> = None;
     let mut reported_cursor_meta = false;
+    // Allocated up front so the PipeWire callback has somewhere to put frames
+    // from the very first buffer; `None` in cursor-only mode, which is also what
+    // tells `Session::start` not to map the buffers at all.
+    let frames: Option<Arc<FrameMailbox>> = config
+        .output_path
+        .as_ref()
+        .map(|_| Arc::new(FrameMailbox::default()));
+    let mut capture: Option<Capture> = None;
+    // Buffered until the format is negotiated: the encoder cannot be opened
+    // before the frame size is known, and `pause` can arrive first.
+    let mut paused = false;
     // Backdated so the very first sample is not held back by the throttle.
     // `checked_sub` because a bare `Instant - Duration` panics on underflow, and
     // this runs milliseconds after process start.
-    let mut last_emit = Instant::now().checked_sub(interval).unwrap_or_else(Instant::now);
+    let mut last_emit = Instant::now()
+        .checked_sub(config.sample_interval)
+        .unwrap_or_else(Instant::now);
     let mut exit_code = 0;
 
     loop {
-        match receiver.recv_timeout(interval) {
+        match receiver.recv_timeout(config.tick) {
             Ok(Message::Stop) => break,
+
+            Ok(Message::Pause) => {
+                paused = true;
+                if let Some(capture) = capture.as_mut() {
+                    capture.pause();
+                }
+            }
+
+            Ok(Message::Resume) => {
+                paused = false;
+                if let Some(capture) = capture.as_mut() {
+                    capture.resume();
+                }
+            }
+
+            Ok(Message::Stream(StreamEvent::FrameReady)) => {
+                let (Some(mailbox), Some(capture)) = (frames.as_ref(), capture.as_mut()) else {
+                    continue;
+                };
+                // `take` can legitimately return None: several FrameReady
+                // notifications can arrive for frames that superseded each other
+                // in the mailbox before the loop got here.
+                if let Some(frame) = mailbox.take() {
+                    let first = !capture.started();
+                    if let Err(message) = capture.stage(&frame) {
+                        let _ = emitter.emit(&Event::Error {
+                            code: "encode-failed".to_owned(),
+                            message,
+                        });
+                        exit_code = 1;
+                        break;
+                    }
+                    if first {
+                        let _ = emitter.emit(&Event::CaptureStarted {
+                            timestamp_ms: timestamp_ms(),
+                            path: config
+                                .output_path
+                                .as_ref()
+                                .map(|path| path.display().to_string())
+                                .unwrap_or_default(),
+                            width: frame.width,
+                            height: frame.height,
+                            fps: config.fps,
+                        });
+                    }
+                    mailbox.recycle(frame.pixels);
+                }
+                if let Err(message) = capture.advance() {
+                    let _ = emitter.emit(&Event::Error {
+                        code: "encode-failed".to_owned(),
+                        message,
+                    });
+                    exit_code = 1;
+                    break;
+                }
+            }
 
             Ok(Message::Portal(result)) => match *result {
                 Ok(stream) => {
@@ -225,6 +417,7 @@ fn run<W: Write>(
                         Box::new(move |event| {
                             let _ = forward.send(Message::Stream(event));
                         }),
+                        frames.clone(),
                     ) {
                         Ok(started) => {
                             session = Some(started);
@@ -274,6 +467,59 @@ fn run<W: Write>(
                         position_y: stream.position.map(|(_, y)| y),
                         restore_token: stream.restore_token,
                     });
+                }
+
+                // The encoder cannot be opened until now: its dimensions are the
+                // negotiated ones, which the compositor picks. Renegotiation
+                // mid-stream would deliver a second Format; the encoder is left
+                // alone in that case, because an MP4 cannot change resolution
+                // mid-file and the alternative — silently starting a new one —
+                // would lose the recording.
+                if let Some(path) = config.output_path.as_ref() {
+                    if capture.is_none() {
+                        match Capture::start(
+                            path,
+                            format.width,
+                            format.height,
+                            config.fps,
+                            config.bitrate,
+                            config.forced_encoder,
+                        ) {
+                            Ok((started, selection)) => {
+                                let _ = emitter.emit(&Event::EncoderSelection {
+                                    video: selection.backend.as_str().to_owned(),
+                                    rejected: selection.rejected,
+                                });
+                                capture = Some(started);
+                                if paused {
+                                    // A `pause` that arrived while the portal
+                                    // picker was still up applies to the capture
+                                    // that picker was for.
+                                    if let Some(capture) = capture.as_mut() {
+                                        capture.pause();
+                                    }
+                                }
+                            }
+                            Err(message) => {
+                                let _ = emitter.emit(&Event::Error {
+                                    code: "encoder-unavailable".to_owned(),
+                                    message,
+                                });
+                                exit_code = 1;
+                                break;
+                            }
+                        }
+                    } else {
+                        let _ = emitter.emit(&Event::Warning {
+                            code: "format-renegotiated".to_owned(),
+                            message: format!(
+                                "the compositor renegotiated to {}x{} mid-recording; the \
+                                 encoder keeps its original size and the file may be letterboxed \
+                                 or cropped from here on",
+                                format.width, format.height
+                            ),
+                        });
+                    }
                 }
             }
 
@@ -411,16 +657,29 @@ fn run<W: Write>(
 
                 // A new sprite ships immediately; positions respect the sample
                 // interval so a 120fps compositor cannot flood stdout.
-                if asset_is_new || last_emit.elapsed() >= interval {
+                if asset_is_new || last_emit.elapsed() >= config.sample_interval {
                     emit_sample(emitter, &cursor, size, &mut pending_asset);
                     last_emit = Instant::now();
                 }
             }
 
             Err(RecvTimeoutError::Timeout) => {
-                if cursor.is_some() {
+                if cursor.is_some() && last_emit.elapsed() >= config.sample_interval {
                     emit_sample(emitter, &cursor, size, &mut pending_asset);
                     last_emit = Instant::now();
+                }
+                // The heartbeat that keeps the output at a constant frame rate
+                // while the screen is static: no frame arrived, but the clock
+                // moved, so the last picture is held forward.
+                if let Some(capture) = capture.as_mut() {
+                    if let Err(message) = capture.advance() {
+                        let _ = emitter.emit(&Event::Error {
+                            code: "encode-failed".to_owned(),
+                            message,
+                        });
+                        exit_code = 1;
+                        break;
+                    }
                 }
             }
 
@@ -428,10 +687,60 @@ fn run<W: Write>(
         }
     }
 
-    // Explicit: this joins the PipeWire thread before the process exits, so no
-    // callback can fire against a freed Sender.
+    // Before the file is closed: this joins the PipeWire thread, so no callback
+    // can fire against a freed Sender or write into a mailbox that is about to
+    // be dropped.
     drop(session);
+
+    if let Some(capture) = capture {
+        finish_capture(emitter, capture, frames.as_deref(), &mut exit_code);
+    }
     exit_code
+}
+
+/// Writes the trailer and reports what the recording cost.
+///
+/// Runs even when the loop broke on an error: a file whose moov atom was never
+/// written is unplayable, and a partial recording is worth more to the user than
+/// none.
+fn finish_capture<W: Write>(
+    emitter: &mut Emitter<W>,
+    capture: Capture,
+    frames: Option<&FrameMailbox>,
+    exit_code: &mut i32,
+) {
+    match capture.finish() {
+        Ok(summary) => {
+            let dropped = frames.map(FrameMailbox::dropped).unwrap_or(0);
+            if dropped > 0 {
+                let _ = emitter.emit(&Event::Warning {
+                    code: "frames-dropped".to_owned(),
+                    message: format!(
+                        "{dropped} captured frame(s) were replaced before the encoder could \
+                         take them, so the recording holds an older picture across those \
+                         moments. The machine could not keep up with the capture rate."
+                    ),
+                });
+            }
+            let _ = emitter.emit(&Event::CaptureStopped {
+                timestamp_ms: timestamp_ms(),
+                path: summary.path.display().to_string(),
+                duration_ms: summary.duration_ms,
+                frames: summary.frames,
+                dropped,
+                convert_ms: summary.stats.convert_ms(),
+                upload_ms: summary.stats.upload_ms(),
+                encode_ms: summary.stats.encode_ms(),
+            });
+        }
+        Err(message) => {
+            let _ = emitter.emit(&Event::Error {
+                code: "capture-finish-failed".to_owned(),
+                message,
+            });
+            *exit_code = 1;
+        }
+    }
 }
 
 fn emit_sample<W: Write>(

@@ -45,6 +45,30 @@ struct osc_pw_cursor {
     size_t bitmap_len;
 };
 
+/*
+ * One video frame, already bounds-checked and mapped.
+ *
+ * Only produced when `osc_pw_start` was asked for video; a cursor-only session
+ * never maps a pixel. Buffers that carry no frame (chunk size 0 — how some
+ * compositors ship a cursor update on its own) are skipped rather than reported
+ * as a zero-sized frame.
+ */
+struct osc_pw_frame {
+    /* Borrowed for the duration of the callback only. Copy before returning:
+     * the buffer is re-queued to the compositor as soon as it returns. */
+    const uint8_t *data;
+    size_t size;
+    int32_t stride;
+    int32_t width;
+    int32_t height;
+    uint32_t video_format; /* enum spa_video_format */
+    /* SPA_META_Header pts in nanoseconds on the compositor's monotonic clock,
+     * or -1 when the buffer carried no header. Far better than the callback's
+     * arrival time: it is stamped when the frame was composited, not when this
+     * process got round to looking at it. */
+    int64_t pts_ns;
+};
+
 /* The negotiated video format. Reported once, from param_changed. */
 struct osc_pw_format {
     int32_t width;
@@ -62,6 +86,8 @@ struct osc_pw_callbacks {
     void *user;
     void (*on_format)(void *user, const struct osc_pw_format *format);
     void (*on_cursor)(void *user, const struct osc_pw_cursor *cursor);
+    /* Only ever called when osc_pw_start was given want_video != 0. */
+    void (*on_frame)(void *user, const struct osc_pw_frame *frame);
     /* Emitted once per negotiated buffer set. `data_type` is the SPA_DATA_* of
      * datas[0]; `metas` is a borrowed "Header:12,Cursor:589872" listing of every
      * metadata block that survived negotiation, which is what distinguishes a
@@ -126,9 +152,14 @@ const char *osc_pw_library_version(void);
  * have taken it, so it is deliberately leaked rather than risking a double
  * close — the caller is on its way to reporting a fatal error either way.
  *
+ * `want_video` decides whether pixels are mapped at all. With it set the stream
+ * asks for PW_STREAM_FLAG_MAP_BUFFERS and restricts itself to shared-memory
+ * buffer types; without it neither happens, and a cursor-only session never pays
+ * to map a full-screen framebuffer per frame.
+ *
  * Returns NULL on failure, with a message in `err`.
  */
-struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id,
+struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
                                     const struct osc_pw_callbacks *callbacks, char *err,
                                     size_t err_len);
 
