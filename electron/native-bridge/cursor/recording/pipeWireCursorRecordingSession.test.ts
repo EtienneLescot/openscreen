@@ -2,10 +2,23 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+/**
+ * The cast on `actual` is written out in each factory rather than shared in a
+ * helper: `vi.mock` calls are HOISTED above every top-level statement, so a
+ * module-scope helper is still in its temporal dead zone when the factory runs
+ * and the mock dies with "Cannot access 'x' before initialization".
+ *
+ * The cast itself is needed because these modules DO carry a default export at
+ * runtime — the CJS namespace, which the code under test may import — while
+ * `@types/node` declares only the named ones. Spreading it keeps that shape
+ * intact instead of dropping it.
+ */
+type WithDefault = { default?: Record<string, unknown> };
+
 vi.mock("node:child_process", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("node:child_process")>();
 	const spawn = vi.fn();
-	return { ...actual, spawn, default: { ...(actual.default ?? {}), spawn } };
+	return { ...actual, spawn, default: { ...((actual as WithDefault).default ?? {}), spawn } };
 });
 
 vi.mock("node:fs", async (importOriginal) => {
@@ -15,7 +28,7 @@ vi.mock("node:fs", async (importOriginal) => {
 	return {
 		...actual,
 		accessSync: vi.fn(),
-		default: { ...(actual.default ?? {}), accessSync: vi.fn() },
+		default: { ...((actual as WithDefault).default ?? {}), accessSync: vi.fn() },
 	};
 });
 

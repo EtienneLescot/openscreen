@@ -114,13 +114,7 @@ for (const dir of [outDir, devDir]) {
  *   undefined symbol: avcodec_send_frame, version LIBAVCODEC_62
  */
 function stageFfmpeg(dir) {
-	const source = path.join(
-		root,
-		"crates",
-		"thirdparty",
-		"ffmpeg-linux64-lgpl-shared",
-		"lib",
-	);
+	const source = path.join(root, "crates", "thirdparty", "ffmpeg-linux64-lgpl-shared", "lib");
 	if (!fs.existsSync(source)) {
 		console.warn(
 			`Vendored ffmpeg not found at ${source}; the helper will fall back to its ` +

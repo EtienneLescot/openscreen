@@ -36,7 +36,11 @@ const sampleDoc = {
 	// load site (DocumentService, browserShim) runs `migrateRawDocumentToCurrent`
 	// before returning, and the renderer's `parseDocument` is a pure v6
 	// validator. Test fixtures model the post-hoist contract.
-	schemaVersion: 6,
+	// `as const` and not a bare 6: the document type pins this field to the
+	// LITERAL 6, and an unannotated object literal widens it to `number` — so
+	// every `document: sampleDoc` below fails to type-check for a fixture that
+	// is, in fact, exactly right.
+	schemaVersion: 6 as const,
 	project: {
 		id: "proj_test",
 		title: "Test",

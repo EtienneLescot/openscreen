@@ -2,7 +2,13 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import { DEFAULT_EDITOR_SETTINGS } from "@/lib/ai-edition/store/editorSettings";
 import type { CompositorParamValue } from "./contracts";
 
-const setCompositorParam = vi.fn(() => Promise.resolve());
+// The parameter list is spelled out even though the body ignores it: `vi.fn`
+// infers the mock's call signature from the implementation, so a zero-argument
+// one types `mock.calls` as an empty tuple and every `calls[i][1]` below becomes
+// a type error rather than a string.
+const setCompositorParam = vi.fn((_id: number, _key: string, _value: CompositorParamValue) =>
+	Promise.resolve(),
+);
 
 vi.mock("./compositorViewClient", () => ({
 	setCompositorParam: (id: number, key: string, value: CompositorParamValue) =>
