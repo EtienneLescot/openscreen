@@ -210,7 +210,7 @@ test.describe("Windows native checklist smoke tests", () => {
 			await expect(
 				editorWindow.getByText("Background").or(editorWindow.getByText("Arrière-plan")),
 			).toBeVisible();
-			await expect(editorWindow.getByTestId("testId-export-button")).toBeVisible();
+			await expect(editorWindow.getByRole("button", { name: "Export", exact: true })).toBeVisible();
 		} finally {
 			await closeApp(app);
 			if (testVideoInRecordings && fs.existsSync(testVideoInRecordings)) {
@@ -308,7 +308,7 @@ test.describe("Windows native checklist smoke tests", () => {
 			});
 			await editorWindow.waitForLoadState("domcontentloaded");
 			await expect(editorWindow.getByText("Loading video...")).not.toBeVisible({ timeout: 20_000 });
-			await expect(editorWindow.getByTestId("testId-export-button")).toBeVisible();
+			await expect(editorWindow.getByRole("button", { name: "Export", exact: true })).toBeVisible();
 		} finally {
 			await closeApp(app);
 			if (testVideoInRecordings && fs.existsSync(testVideoInRecordings)) {
