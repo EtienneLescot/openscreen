@@ -301,7 +301,16 @@ impl VideoEncoder {
             (*codec_ctx).framerate = ff::AVRational { num: params.fps, den: 1 };
             (*codec_ctx).pix_fmt = backend.codec_pixel_format();
             (*codec_ctx).bit_rate = params.bitrate;
-            (*codec_ctx).gop_size = params.fps * 2;
+            // Half a second, not the two seconds a streaming preset would use.
+            //
+            // This file is an EDITING SOURCE, and the editor scrubs it. Seeking
+            // to an arbitrary point means decoding forward from the previous
+            // keyframe, so the GOP length is exactly the worst-case scrub cost:
+            // at 60 fps a two-second GOP makes the editor decode up to 120
+            // frames to show one. Halving it to 30 quarters that, and the extra
+            // keyframes cost a few percent of bitrate on screen content, which
+            // is mostly static and compresses well anyway.
+            (*codec_ctx).gop_size = (params.fps / 2).max(1);
             // No B-frames. A screen recording has no use for them, they add
             // reorder delay, and they force DTS bookkeeping the muxer would
             // otherwise not need.

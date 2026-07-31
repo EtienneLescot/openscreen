@@ -50,7 +50,6 @@ const DEFAULT_SAMPLE_INTERVAL_MS: u64 = 33;
 const MIN_SAMPLE_INTERVAL_MS: u64 = 8;
 
 const DEFAULT_FPS: i32 = 30;
-const DEFAULT_BITRATE: i64 = 8_000_000;
 
 #[derive(Debug, Default, Deserialize)]
 #[serde(rename_all = "camelCase", default)]
@@ -137,12 +136,15 @@ impl Request {
             .unwrap_or(DEFAULT_FPS)
     }
 
-    fn bitrate(&self) -> i64 {
+    /// An explicit override, or `None` to let the encoder derive one from the
+    /// size the compositor negotiates. `None` is the normal case: on Wayland the
+    /// app cannot know the capture resolution in advance, so a bitrate chosen
+    /// caller-side is a guess about a picture nobody has seen yet.
+    fn bitrate(&self) -> Option<i64> {
         self.video
             .as_ref()
             .and_then(|video| video.bitrate)
             .filter(|bitrate| *bitrate > 0)
-            .unwrap_or(DEFAULT_BITRATE)
     }
 
     /// The audio streams to open, in the order they become MP4 tracks.
@@ -289,7 +291,8 @@ struct RunConfig {
     /// `None` for a cursor-only session.
     output_path: Option<PathBuf>,
     fps: i32,
-    bitrate: i64,
+    /// `None` lets the encoder derive one from the negotiated size.
+    bitrate: Option<i64>,
     forced_encoder: Option<encoder::Backend>,
     cursor_mode: portal::CursorMode,
     audio: Vec<AudioSourceConfig>,

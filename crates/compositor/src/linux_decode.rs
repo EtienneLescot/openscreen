@@ -363,6 +363,21 @@ impl SwDecoder {
                             bail!("av_frame_alloc pour resultat");
                         }
                     }
+                    // FUITE MÉMOIRE si on l'oublie. `av_frame_move_ref` écrase
+                    // `found` SANS déréférencer ce qu'il contenait — c'est écrit
+                    // noir sur blanc dans libavutil/frame.h : « dst is not
+                    // unreferenced, but directly overwritten without reading or
+                    // deallocating its contents. Call av_frame_unref(dst)
+                    // manually before calling this function to ensure that no
+                    // memory is leaked. »
+                    //
+                    // Cette boucle décode en avant depuis la keyframe jusqu'à la
+                    // cible, donc elle passe ici une fois par frame du GOP. Sans
+                    // ce unref, chaque frame intermédiaire abandonnait ses
+                    // buffers : ~3,1 Mo en 1080p YUV420P, plusieurs dizaines de
+                    // fois par scrub. Symptôme observé : le scrubbing ralentit
+                    // progressivement, puis l'app gèle et meurt.
+                    av_frame_unref(found);
                     av_frame_move_ref(found, frame);
                     av_frame_unref(frame);
                     if (*found).best_effort_timestamp as f64 * self.stream_timebase >= target_ts_seconds {
