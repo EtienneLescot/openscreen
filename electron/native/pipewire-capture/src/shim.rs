@@ -359,6 +359,55 @@ extern "C" {
         err_len: usize,
     ) -> *mut RawAudioSession;
     fn osc_pw_audio_stop(session: *mut RawAudioSession);
+    fn osc_pw_list_audio_sources(
+        out: *mut c_char,
+        out_len: usize,
+        err: *mut c_char,
+        err_len: usize,
+    ) -> i32;
+}
+
+/// One capture node in the PipeWire graph.
+#[derive(Debug, Clone, PartialEq)]
+pub struct AudioSourceInfo {
+    /// `node.name` — the only thing PW_KEY_TARGET_OBJECT accepts.
+    pub name: String,
+    /// `node.description` — the human string, and the one Chromium surfaces as
+    /// a device label on a PipeWire system. This is what makes matching the
+    /// app's microphone picker to a graph node possible at all.
+    pub description: String,
+}
+
+/// Lists the graph's audio capture nodes.
+///
+/// Synchronous and self-contained: it opens its own connection, runs a main loop
+/// until the registry has replayed every global, and tears down. Called once per
+/// recording, before the streams start.
+pub fn list_audio_sources() -> Result<Vec<AudioSourceInfo>, String> {
+    // 16 KiB holds ~200 nodes; a graph that large is already pathological, and
+    // the C side stops at a record boundary rather than truncating one.
+    let mut buffer = vec![0 as c_char; 16 * 1024];
+    let mut err = [0 as c_char; ERR_LEN];
+    // SAFETY: both buffers are live and correctly sized for the duration.
+    let result = unsafe {
+        osc_pw_list_audio_sources(buffer.as_mut_ptr(), buffer.len(), err.as_mut_ptr(), ERR_LEN)
+    };
+    if result != 0 {
+        return Err(take_error(&err));
+    }
+    // SAFETY: the C side always NUL-terminates within the buffer it was given.
+    let text = unsafe { CStr::from_ptr(buffer.as_ptr()) }.to_string_lossy().into_owned();
+    Ok(text
+        .split('\u{1e}')
+        .filter(|record| !record.is_empty())
+        .filter_map(|record| {
+            let (name, description) = record.split_once('\u{1f}')?;
+            Some(AudioSourceInfo {
+                name: name.to_owned(),
+                description: description.to_owned(),
+            })
+        })
+        .collect())
 }
 
 /// What an audio stream reports besides samples.
@@ -910,5 +959,25 @@ mod tests {
             buffer_reports > 1,
             "the stream delivered only {buffer_reports} buffer report(s); it is not staying alive"
         );
+    }
+}
+
+#[cfg(test)]
+mod source_tests {
+    /// Prints the graph's capture nodes. Opt-in — it needs a live PipeWire
+    /// session, so CI skips it; run it by hand when the microphone a user picked
+    /// does not match what got recorded.
+    #[test]
+    fn lists_the_audio_sources_of_a_live_session() {
+        if std::env::var("OPENSCREEN_PIPEWIRE_LIST").is_err() {
+            eprintln!("skipped: set OPENSCREEN_PIPEWIRE_LIST=1 with a running PipeWire");
+            return;
+        }
+        super::load().expect("libpipewire must load");
+        let sources = super::list_audio_sources().expect("enumeration");
+        for source in &sources {
+            println!("  {}  <-  {}", source.name, source.description);
+        }
+        assert!(!sources.is_empty(), "a desktop session always has at least one capture node");
     }
 }

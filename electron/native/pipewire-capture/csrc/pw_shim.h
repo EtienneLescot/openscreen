@@ -202,6 +202,20 @@ struct osc_pw_audio *osc_pw_audio_start(const char *target_object, int capture_s
 /* Stops the thread loop, joins it, and frees everything. Safe with NULL. */
 void osc_pw_audio_stop(struct osc_pw_audio *audio);
 
+/*
+ * Lists the graph's audio CAPTURE nodes into `out` as records
+ * "node.name\037node.description\036", NUL-terminated.
+ *
+ * Synchronous: it runs a main loop until the registry has replayed every
+ * existing global, then returns. Needed because the app's microphone picker
+ * carries Chromium device labels, and PW_KEY_TARGET_OBJECT only accepts a
+ * PipeWire node name — without this the stream falls back to the session
+ * default source, which is rarely the microphone the user picked.
+ *
+ * Returns 0 on success, -1 with a message in `err`.
+ */
+int osc_pw_list_audio_sources(char *out, size_t out_len, char *err, size_t err_len);
+
 #ifdef __cplusplus
 }
 #endif
