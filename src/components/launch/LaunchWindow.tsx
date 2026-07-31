@@ -169,6 +169,34 @@ export function LaunchWindow() {
 			.getPlatform()
 			.then((platform) => {
 				if (!cancelled) {
+					// Windows and macOS only, and NOT an oversight — this list is exactly the
+					// set of platforms with a native capture helper that can honour the choice.
+					// Windows passes `captureCursor` to wgc-capture, macOS passes
+					// `hideSystemCursor` to the ScreenCaptureKit helper; both genuinely omit
+					// the system cursor from the pixels.
+					//
+					// Linux has no native video helper, so capture goes through Chromium, and
+					// Chromium offers no way to suppress the cursor:
+					//   - `cursor: "never"` is not a constraint Chromium implements. It is
+					//     absent from `getSupportedConstraints()` (verified on Electron 42 /
+					//     Chromium 148: the only screen-capture constraints are
+					//     `displaySurface` and `suppressLocalAudioPlayback`), so WebIDL drops
+					//     it silently. The `cursor` key on the win32 getDisplayMedia branch in
+					//     useScreenRecorder is a no-op for the same reason — Windows gets its
+					//     cursor control from the helper, not from that constraint.
+					//   - Below the web API it is just as fixed: `DesktopCaptureDevice::Create`
+					//     wraps every screen and window capturer in a `DesktopAndCursorComposer`
+					//     unconditionally, with no branch on any cursor option. On Linux
+					//     `prefer_cursor_embedded` is false (only Windows sets it), so WebRTC
+					//     asks the portal for METADATA mode — the compositor leaves the cursor
+					//     out of the pixels and WebRTC paints it back in itself.
+					// Confirmed against a real recording: the system cursor is present in the
+					// captured pixels at the position the telemetry sidecar reports.
+					//
+					// Showing the toggle here would therefore ship a control that changes
+					// nothing about the pixels while switching the editor's overlay on, which
+					// is what produces TWO cursors. Lift this only together with a native
+					// PipeWire capture helper that owns the video.
 					setSupportsCursorModeToggle(platform === "win32" || platform === "darwin");
 					setIsLinuxHud(platform === "linux");
 				}
