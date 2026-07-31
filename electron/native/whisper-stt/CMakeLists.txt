@@ -97,21 +97,6 @@ set(HTTPLIB_USE_OPENSSL_IF_AVAILABLE OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_ZLIB_IF_AVAILABLE    OFF CACHE BOOL "" FORCE)
 set(HTTPLIB_USE_BROTLI_IF_AVAILABLE  OFF CACHE BOOL "" FORCE)
 
-# ponytail: on Linux, ggml/whisper build as separate shared objects and CMake
-# bakes the absolute build-tree `bin/` path into each RUNPATH. The build script
-# then copies the binary and its libs side by side into
-# `electron/native/bin/linux-x64/`, where that absolute path is meaningless the
-# moment the build cache is wiped or the app is packaged on another machine.
-# Resolve relative to the executable instead. `$ORIGIN/bin` keeps the binary in
-# the build tree runnable too (it lands at the build root while the libs go to
-# `bin/`). Set before MakeAvailable so the whisper/ggml targets inherit it.
-# macOS is left alone: it needs @loader_path rather than $ORIGIN and is not
-# testable from here.
-if(UNIX AND NOT APPLE)
-  set(CMAKE_BUILD_WITH_INSTALL_RPATH ON)
-  set(CMAKE_INSTALL_RPATH "$ORIGIN:$ORIGIN/bin")
-endif()
-
 FetchContent_MakeAvailable(whisper httplib json)
 
 add_executable(whisper-stt-server src/main.cpp)
