@@ -36,7 +36,7 @@
 		"build:native:linux": "node scripts/build-linux-pipewire-helper.mjs",
 		"build:win": "npm run build:native:win && npm run fetch:ffmpeg && npm run build:native:compositor && tsc && vite build && electron-builder --win --config.npmRebuild=false",
 		"build:win:store": "npm run build:native:win && npm run fetch:ffmpeg && npm run build:native:compositor && tsc && vite build && electron-builder --win appx --config.npmRebuild=false",
-		"build:linux": "npm run fetch:ffmpeg && npm run build:native:linux && npm run build:native:compositor:linux && tsc && vite build && electron-builder --linux AppImage deb pacman --config.npmRebuild=false",
+		"build:linux": "npm run fetch:ffmpeg:sdk && npm run build:native:linux && npm run build:native:compositor:linux && tsc && vite build && electron-builder --linux AppImage deb pacman --config.npmRebuild=false",
 		"build:whisper-binaries": "bash scripts/build-whisper-stt.sh",
 		"test:whisper-stt": "node scripts/test-whisper-stt.mjs",
 		"test": "vitest --run",
@@ -66,7 +66,8 @@
 		"test:e2e:windows-native-checklist": "playwright test tests/e2e/windows-native-checklist.spec.ts",
 		"prepare": "husky",
 		"fetch:ffmpeg": "node scripts/fetch-ffmpeg.mjs",
-		"fetch:ffmpeg:mac": "node scripts/fetch-ffmpeg-macos.mjs"
+		"fetch:ffmpeg:mac": "node scripts/fetch-ffmpeg-macos.mjs",
+		"fetch:ffmpeg:sdk": "node scripts/fetch-ffmpeg.mjs --sdk-only"
 	},
 	"dependencies": {
 		"@fix-webm-duration/fix": "^1.0.1",
