@@ -27,6 +27,8 @@ import {
 export type NotesToolbarProps = {
 	editor: Editor | null;
 	isPlaying: boolean;
+	/** True while the note body rejects edits (playback or mirroring); disables formatting only. */
+	formattingDisabled: boolean;
 	speed: number;
 	fontSize: number;
 	mirrored: boolean;
@@ -109,6 +111,7 @@ function useEditorRevision(editor: Editor | null): void {
 export function NotesToolbar({
 	editor,
 	isPlaying,
+	formattingDisabled,
 	speed,
 	fontSize,
 	mirrored,
@@ -137,7 +140,7 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.bold")}
 							tooltipContent={t("tooltips.notesToolbar.bold")}
 							active={editor?.isActive("bold") ?? false}
-							disabled={isPlaying || !editor?.can().chain().focus().toggleBold().run()}
+							disabled={formattingDisabled || !editor?.can().chain().focus().toggleBold().run()}
 							onClick={() => editor?.chain().focus().toggleBold().run()}
 						>
 							<Bold size={16} />
@@ -146,7 +149,7 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.italic")}
 							tooltipContent={t("tooltips.notesToolbar.italic")}
 							active={editor?.isActive("italic") ?? false}
-							disabled={isPlaying || !editor?.can().chain().focus().toggleItalic().run()}
+							disabled={formattingDisabled || !editor?.can().chain().focus().toggleItalic().run()}
 							onClick={() => editor?.chain().focus().toggleItalic().run()}
 						>
 							<Italic size={16} />
@@ -155,7 +158,7 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.strikethrough")}
 							tooltipContent={t("tooltips.notesToolbar.strikethrough")}
 							active={editor?.isActive("strike") ?? false}
-							disabled={isPlaying || !editor?.can().chain().focus().toggleStrike().run()}
+							disabled={formattingDisabled || !editor?.can().chain().focus().toggleStrike().run()}
 							onClick={() => editor?.chain().focus().toggleStrike().run()}
 						>
 							<Strikethrough size={16} />
@@ -169,7 +172,9 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.bulletList")}
 							tooltipContent={t("tooltips.notesToolbar.bulletList")}
 							active={editor?.isActive("bulletList") ?? false}
-							disabled={isPlaying || !editor?.can().chain().focus().toggleBulletList().run()}
+							disabled={
+								formattingDisabled || !editor?.can().chain().focus().toggleBulletList().run()
+							}
 							onClick={() => editor?.chain().focus().toggleBulletList().run()}
 						>
 							<List size={16} />
@@ -178,7 +183,9 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.numberedList")}
 							tooltipContent={t("tooltips.notesToolbar.numberedList")}
 							active={editor?.isActive("orderedList") ?? false}
-							disabled={isPlaying || !editor?.can().chain().focus().toggleOrderedList().run()}
+							disabled={
+								formattingDisabled || !editor?.can().chain().focus().toggleOrderedList().run()
+							}
 							onClick={() => editor?.chain().focus().toggleOrderedList().run()}
 						>
 							<ListOrdered size={16} />
@@ -192,7 +199,9 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.blockquote")}
 							tooltipContent={t("tooltips.notesToolbar.blockquote")}
 							active={editor?.isActive("blockquote") ?? false}
-							disabled={isPlaying || !editor?.can().chain().focus().toggleBlockquote().run()}
+							disabled={
+								formattingDisabled || !editor?.can().chain().focus().toggleBlockquote().run()
+							}
 							onClick={() => editor?.chain().focus().toggleBlockquote().run()}
 						>
 							<Quote size={16} />
@@ -201,7 +210,9 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.codeBlock")}
 							tooltipContent={t("tooltips.notesToolbar.codeBlock")}
 							active={editor?.isActive("codeBlock") ?? false}
-							disabled={isPlaying || !editor?.can().chain().focus().toggleCodeBlock().run()}
+							disabled={
+								formattingDisabled || !editor?.can().chain().focus().toggleCodeBlock().run()
+							}
 							onClick={() => editor?.chain().focus().toggleCodeBlock().run()}
 						>
 							<Code size={16} />

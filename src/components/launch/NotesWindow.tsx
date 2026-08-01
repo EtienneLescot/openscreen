@@ -49,13 +49,17 @@ export function NotesWindow() {
 		saveNotesTeleprompterSettings(settings);
 	}, [settings]);
 
-	// Typing during playback makes ProseMirror scroll the caret back into view, which fights
-	// the teleprompter. Reading is the only sensible mode while it scrolls, so the note goes
-	// read-only and the toolbar disables formatting for as long as playback runs.
+	// Whether the note body currently rejects edits. Playback locks it because typing makes
+	// ProseMirror scroll the caret back into view, which fights the teleprompter. Mirroring
+	// locks it because caret placement and selection are horizontally reversed on screen, so
+	// the mirrored note is presentation-only. The teleprompter controls themselves stay live
+	// in both states; turning the lock's last reason off restores editing.
+	const editingLocked = isPlaying || settings.mirrored;
+
 	// `emitUpdate: false` — the content did not change, so there is nothing to persist.
 	useEffect(() => {
-		editor?.setEditable(!isPlaying, false);
-	}, [editor, isPlaying]);
+		editor?.setEditable(!editingLocked, false);
+	}, [editor, editingLocked]);
 
 	useEffect(() => {
 		if (!isPlaying || !editor) {
@@ -127,6 +131,7 @@ export function NotesWindow() {
 				<NotesToolbar
 					editor={editor}
 					isPlaying={isPlaying}
+					formattingDisabled={editingLocked}
 					speed={settings.speed}
 					fontSize={settings.fontSize}
 					mirrored={settings.mirrored}

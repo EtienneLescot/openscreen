@@ -266,6 +266,74 @@ describe("NotesWindow teleprompter mode", () => {
 		expect(screen.getByRole("button", { name: "Bold" })).toBeEnabled();
 	});
 
+	it("locks the note in every mirrored or playing state and unlocks only when both end", async () => {
+		const user = userEvent.setup();
+		render(<NotesWindow />);
+		const bold = () => screen.getByRole("button", { name: "Bold" });
+
+		// Not playing, not mirrored: editable.
+		expect(setEditable).toHaveBeenLastCalledWith(true, false);
+		expect(bold()).toBeEnabled();
+
+		// Not playing, mirrored: locked.
+		await user.click(screen.getByRole("button", { name: "Mirror" }));
+		expect(setEditable).toHaveBeenLastCalledWith(false, false);
+		expect(bold()).toBeDisabled();
+
+		// Playing, mirrored: locked.
+		await user.click(screen.getByRole("button", { name: "Play" }));
+		expect(setEditable).toHaveBeenLastCalledWith(false, false);
+		expect(bold()).toBeDisabled();
+
+		// Paused again but still mirrored: stays locked.
+		await user.click(screen.getByRole("button", { name: "Pause" }));
+		expect(setEditable).toHaveBeenLastCalledWith(false, false);
+		expect(bold()).toBeDisabled();
+
+		// The teleprompter controls stay usable while the note is locked.
+		const content = screen.getByTestId("notes-teleprompter-content");
+		await user.click(screen.getByRole("button", { name: "Increase font size" }));
+		expect(content).toHaveStyle({ fontSize: "18px" });
+
+		// Unmirrored while paused: editable again.
+		await user.click(screen.getByRole("button", { name: "Mirror" }));
+		expect(setEditable).toHaveBeenLastCalledWith(true, false);
+		expect(bold()).toBeEnabled();
+
+		// None of the state flips wrote note content.
+		expect(localStorage.getItem("notes")).toBeNull();
+	});
+
+	it("locks the note from the first render when a mirrored setting is restored", () => {
+		localStorage.setItem(
+			NOTES_TELEPROMPTER_STORAGE_KEY,
+			JSON.stringify({ speed: 40, fontSize: 16, mirrored: true }),
+		);
+		render(<NotesWindow />);
+
+		expect(setEditable).toHaveBeenLastCalledWith(false, false);
+		expect(setEditable).not.toHaveBeenCalledWith(true, false);
+		expect(screen.getByRole("button", { name: "Bold" })).toBeDisabled();
+		// A restored mirror must not auto-start playback.
+		expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+	});
+
+	it("keeps mirroring and playback independent", async () => {
+		const user = userEvent.setup();
+		render(<NotesWindow />);
+		const content = screen.getByTestId("notes-teleprompter-content");
+
+		// Mirroring must not start playback.
+		await user.click(screen.getByRole("button", { name: "Mirror" }));
+		expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+		expect(content).toHaveAttribute("data-mirrored", "true");
+
+		// Pausing must not unmirror.
+		await user.click(screen.getByRole("button", { name: "Play" }));
+		await user.click(screen.getByRole("button", { name: "Pause" }));
+		expect(content).toHaveAttribute("data-mirrored", "true");
+	});
+
 	it("applies and persists font and mirror settings without persisting playback", async () => {
 		const user = userEvent.setup();
 		render(<NotesWindow />);

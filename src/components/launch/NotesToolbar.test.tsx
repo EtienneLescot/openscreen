@@ -47,6 +47,7 @@ function createProps(overrides: Partial<NotesToolbarProps> = {}): NotesToolbarPr
 	return {
 		editor: createEditor(),
 		isPlaying: false,
+		formattingDisabled: false,
 		speed: 40,
 		fontSize: 16,
 		mirrored: false,
@@ -154,8 +155,9 @@ describe("NotesToolbar teleprompter controls", () => {
 		);
 	});
 
-	it("locks formatting while the teleprompter scrolls", () => {
-		renderToolbar(createProps({ isPlaying: true }));
+	it("locks formatting when the note is locked, keeping teleprompter controls live", () => {
+		// formattingDisabled without isPlaying is the mirrored-while-paused case.
+		renderToolbar(createProps({ formattingDisabled: true }));
 
 		// Sweep the whole row rather than a hand-written list, so a formatting button added
 		// later cannot quietly escape the lock.
@@ -167,9 +169,12 @@ describe("NotesToolbar teleprompter controls", () => {
 			expect(button).toBeDisabled();
 		}
 
-		// Teleprompter controls stay live so playback can always be stopped.
-		expect(screen.getByRole("button", { name: "Pause auto-scroll" })).toBeEnabled();
+		// Teleprompter controls stay live so the lock can always be lifted, and the play
+		// button's label keeps tracking isPlaying alone rather than the lock.
+		expect(screen.getByRole("button", { name: "Start auto-scroll" })).toBeEnabled();
 		expect(screen.getByRole("button", { name: "Mirror horizontally" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Decrease scroll speed" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Increase font size" })).toBeEnabled();
 	});
 
 	it("formats readout values for the active locale", () => {
@@ -193,6 +198,7 @@ function ToolbarHarness() {
 			{...createProps({
 				isPlaying,
 				mirrored,
+				formattingDisabled: isPlaying || mirrored,
 				onTogglePlaying: () => setIsPlaying((current) => !current),
 				onToggleMirror: () => setMirrored((current) => !current),
 			})}
