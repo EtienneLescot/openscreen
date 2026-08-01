@@ -255,7 +255,8 @@
 		"silence": "[무음 {{duration}}초]",
 		"restoreSilence": "무음 복원 ({{duration}}초)",
 		"trimSilence": "무음 자르기 ({{duration}}초)",
-		"restoreWord": "\"{{word}}\" 복원"
+		"restoreWord": "\"{{word}}\" 복원",
+		"noAudio": "이 미디어에는 오디오 트랙이 없습니다"
 	},
 	"captions": {
 		"show": "자막 표시",

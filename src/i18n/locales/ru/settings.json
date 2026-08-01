@@ -255,7 +255,8 @@
 		"silence": "[тишина {{duration}} с]",
 		"restoreSilence": "Вернуть тишину ({{duration}} с)",
 		"trimSilence": "Вырезать тишину ({{duration}} с)",
-		"restoreWord": "Вернуть «{{word}}»"
+		"restoreWord": "Вернуть «{{word}}»",
+		"noAudio": "В этом медиафайле нет аудиодорожки"
 	},
 	"captions": {
 		"show": "Показывать субтитры",

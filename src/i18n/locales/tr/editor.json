@@ -150,7 +150,10 @@
 		"generationFailedHint": "Oluşturma başarısız oldu — bir dil seçip yeniden oluşturun.",
 		"noPreviewAvailable": "Önizleme kullanılamıyor",
 		"restart": "Yeniden başlat",
-		"detectedLanguage": "Algılanan dil: {{language}}"
+		"detectedLanguage": "Algılanan dil: {{language}}",
+		"noAudioTrack": "Ses parçası yok",
+		"noAudioTrackHint": "Bu medyada ses parçası yok — metne dökülecek bir şey bulunmuyor.",
+		"noSpeechDetected": "Konuşma algılanmadı"
 	},
 	"exportDialog": {
 		"title": "Dışa Aktar",

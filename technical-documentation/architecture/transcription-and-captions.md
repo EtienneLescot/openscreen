@@ -13,7 +13,9 @@ the transcript).
 
 ```mermaid
 flowchart LR
-    A["Recorded audio"] -- "extract mono 16 kHz" --> B["transcribeAsset<br/>(src/lib/ai-edition/document/transcribe.ts)"]
+    Z["Asset added<br/>(import or recording)"] -- "sync()" --> Y["transcriptionStore queue<br/>(src/lib/ai-edition/store/transcriptionStore.ts)"]
+    Y -- "one job at a time" --> A["Recorded audio"]
+    A -- "extract mono 16 kHz" --> B["transcribeAsset<br/>(src/lib/ai-edition/document/transcribe.ts)"]
     B -- "IPC: Float32Array + language" --> C["SttManager<br/>(electron/stt/index.ts)"]
     C -- "POST /inference (WAV)" --> D["whisper-stt-server<br/>(electron/native/whisper-stt/)"]
     D -- "whisper_full() + DTW" --> E["SttTranscribeResponse<br/>(segments + wordSegments)"]
@@ -32,6 +34,67 @@ audio crosses to the main process, the helper does the recognition, and the
 result is mapped back onto the `AxcutTranscript` shape the rest of the editor
 reads. From the moment that transcript is persisted, captions and the words
 they show cannot drift — captions are a derived view, not a parallel store.
+
+## Auto-transcription
+
+Recognition is local and free, so the editor does not wait to be asked: every
+asset in the document gets a transcript on its own. The queue lives in
+[`src/lib/ai-edition/store/transcriptionStore.ts`](../../src/lib/ai-edition/store/transcriptionStore.ts),
+mounted once by the shell through `useAutoTranscription()`, and it is the only
+thing that calls `transcribeAsset`.
+
+Why it exists at all: "Smart cuts with AI" (and captions, and the transcript
+pane) need a transcript, but nothing produced one until the user found the
+Media tab or the transcript pane and pressed a button. The obvious first click
+was therefore also the one that could not work. Now the button is either ready,
+or it says what it is waiting for.
+
+What the store owns and what it does not:
+
+- **The document owns the transcript.** `document.transcripts[]` is still the
+  source of truth for "is there one"; the store only owns the JOB (queued /
+  running / failed + the phase for the spinner). `deriveAssetStatus`
+  ([`transcription/status.ts`](../../src/lib/ai-edition/transcription/status.ts))
+  folds the two into the single status the UI renders, and
+  `resolveTranscriptGate` folds a set of those into the ready / pending /
+  blocked verdict that enables or disables a transcript-dependent action.
+  A stored transcript **outranks a failed job**: a regenerate that dies on a
+  whisper restart leaves the previous transcript in place and usable, and
+  reading that asset as "failed" would have disabled Smart cuts for the rest of
+  the session over a transcript sitting right there.
+- **Gates are resolved over the assets the TIMELINE plays**
+  (`transcriptRelevantAssetIds`), never over `project.primaryAssetId`. In a
+  recording project the primary asset is the screen capture — frequently the
+  silent one — so a primary-scoped answer had the transcript and captions panes
+  announce "this media has no audio track" for a project whose actual footage
+  was mid-transcription. `requestTimelineTranscripts` is the matching action for
+  the panes' one button: every timeline asset that still lacks a transcript,
+  skipping the ones already known to be silent and waiting on (rather than
+  duplicating) a run the background pass already has in flight.
+- **One run at a time.** whisper-server is a single process and the audio
+  extraction path holds decoded frames in renderer memory, so the pump is a
+  sequential loop, not a fan-out.
+- **The auto pass never loops.** `sync` enqueues an asset only when it has no
+  transcript, no job entry (queued / running / failed alike) and no persisted
+  failure, and a job is deleted only after the save that carries its transcript
+  has resolved. Since `sync` runs on every document change — including the one
+  the run itself produces — that guard is what keeps it from re-triggering.
+- **Silence is remembered, glitches are not.** A media with no audio track (a
+  screen recording captured with no mic and no system audio) fails the same way
+  every time, so the verdict is written to `asset.transcriptionFailure` and the
+  auto pass skips it on the next load instead of re-extracting its audio to
+  rediscover it. Everything else stays in memory for the session and is retried
+  on the next load. A successful manual retry clears the stored verdict in the
+  same save that writes the transcript.
+- **No local engine, no background pass.** Without `window.electronAPI.stt`
+  (browser preview, e2e shim) nothing is queued; a manual request still runs.
+
+What each state means in the UI: a spinner and "Transcribing…" while queued or
+running, the media-card dot green (ready) / amber (silent or no speech) / red
+(failed) via
+[`TranscriptionStatus.tsx`](../../src/components/ai-edition/TranscriptionStatus.tsx),
+and — the point of the whole thing — a disabled "Smart cuts" entry whose
+subtitle is the reason rather than "With AI".
 
 ## The STT engine
 

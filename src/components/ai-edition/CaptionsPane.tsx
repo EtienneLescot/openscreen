@@ -15,6 +15,10 @@ import { useScopedT } from "@/contexts/I18nContext";
 import type { CaptionTextAlign, CaptionVerticalPosition } from "@/lib/ai-edition/captions";
 import { untranslatedUnits } from "@/lib/ai-edition/captions";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import {
+	useTimelineTranscriptGate,
+	useTranscriptionStore,
+} from "@/lib/ai-edition/store/transcriptionStore";
 import { useCaptions } from "@/lib/ai-edition/store/useCaptions";
 import { nativeBridgeClient } from "@/native";
 import { ColorField } from "./ColorField";
@@ -62,15 +66,9 @@ const TRANSLATION_LANGUAGES: ReadonlyArray<{ code: string; label: string }> = [
 	{ code: "zh", label: "中文" },
 ];
 
-interface CaptionsPaneProps {
-	/** Runs the local Whisper pipeline for the primary asset — owned by the
-	 *  shell, which already has the toast + per-asset status plumbing. */
-	onTranscribe: () => void;
-	isTranscribing: boolean;
-}
-
-export function CaptionsPane({ onTranscribe, isTranscribing }: CaptionsPaneProps) {
+export function CaptionsPane() {
 	const t = useScopedT("settings");
+	const te = useScopedT("editor");
 	const {
 		settings,
 		translations,
@@ -85,6 +83,20 @@ export function CaptionsPane({ onTranscribe, isTranscribing }: CaptionsPaneProps
 	} = useCaptions();
 	const document = useProjectStore((s) => s.document);
 	const saveDocument = useProjectStore((s) => s.saveDocument);
+	// Captions are a view of the transcript, and the transcript arrives on its
+	// own (transcriptionStore's background pass). The pane reads that state
+	// straight from the store rather than being handed a busy flag: it is the
+	// same answer everywhere, and "Transcribe" here is only ever a retry.
+	//
+	// Resolved over the timeline's assets, not the primary one: `hasTranscript`
+	// below is already timeline-scoped (useCaptions), and mixing the two scopes
+	// is what let a silent primary asset dead-end this button for a project whose
+	// actual footage had speech.
+	const gate = useTimelineTranscriptGate();
+	const requestTimelineTranscripts = useTranscriptionStore((s) => s.requestTimelineTranscripts);
+	const isTranscribing = gate.state === "pending";
+	const silentMedia = gate.state === "blocked" && gate.reason === "no-audio";
+	const engineError = gate.state === "blocked" && gate.reason === "failed" ? gate.message : null;
 
 	const [target, setTarget] = useState<string>(TRANSLATION_LANGUAGES[1].code);
 	const [translating, setTranslating] = useState(false);
@@ -191,13 +203,26 @@ export function CaptionsPane({ onTranscribe, isTranscribing }: CaptionsPaneProps
 						}}
 					>
 						<p style={{ margin: 0, font: "400 12px/1.5 var(--font-body)", color: "var(--muted)" }}>
-							{t("captions.noTranscript")}
+							{silentMedia ? te("mediaStage.noAudioTrackHint") : t("captions.noTranscript")}
 						</p>
+						{engineError ? (
+							<p
+								style={{
+									margin: 0,
+									font: "400 11.5px/1.5 var(--font-body)",
+									color: "var(--danger)",
+								}}
+							>
+								{engineError}
+							</p>
+						) : null}
 						<button
 							type="button"
 							className={`${styles.btn} ${styles.btnPrimary}`}
-							disabled={disabled || isTranscribing}
-							onClick={onTranscribe}
+							// A media with no audio track has nothing to transcribe — the
+							// button would fail the same way every time it is pressed.
+							disabled={disabled || isTranscribing || silentMedia}
+							onClick={() => void requestTimelineTranscripts()}
 						>
 							{isTranscribing ? <Loader2 size={14} className="animate-spin" /> : null}
 							{isTranscribing ? t("captions.transcribing") : t("captions.transcribe")}

@@ -255,7 +255,8 @@
 		"silence": "[sessizlik {{duration}} sn]",
 		"restoreSilence": "Sessizliği geri al ({{duration}} sn)",
 		"trimSilence": "Sessizliği kırp ({{duration}} sn)",
-		"restoreWord": "\"{{word}}\" kelimesini geri al"
+		"restoreWord": "\"{{word}}\" kelimesini geri al",
+		"noAudio": "Bu medyada ses parçası yok"
 	},
 	"captions": {
 		"show": "Altyazıları göster",

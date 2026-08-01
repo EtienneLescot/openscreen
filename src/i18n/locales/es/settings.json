@@ -255,7 +255,8 @@
 		"silence": "[silencio {{duration}} s]",
 		"restoreSilence": "Restaurar silencio ({{duration}} s)",
 		"trimSilence": "Recortar silencio ({{duration}} s)",
-		"restoreWord": "Restaurar «{{word}}»"
+		"restoreWord": "Restaurar «{{word}}»",
+		"noAudio": "Este medio no tiene pista de audio"
 	},
 	"captions": {
 		"show": "Mostrar subtítulos",
