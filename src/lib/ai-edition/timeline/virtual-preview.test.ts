@@ -289,7 +289,15 @@ describe("virtual-preview pure functions", () => {
 			},
 		];
 		const playbackClips = resolvePlaybackSegments(rawClips, [
-			{ id: "trim_1", assetId: "a1", clipId: "clip_1", startSec: 4, endSec: 6 },
+			{
+				id: "trim_1",
+				assetId: "a1",
+				clipId: "clip_1",
+				startSec: 4,
+				endSec: 6,
+				origin: "user",
+				reason: "",
+			},
 		]);
 
 		it("reports source time inside the playing clip's own cut as NOT kept", () => {
@@ -449,7 +457,15 @@ describe("virtual-preview pure functions", () => {
 			},
 		];
 		const playbackClips = resolvePlaybackSegments(rawClips, [
-			{ id: "trim_1", assetId: "a1", clipId: "clip_2", startSec: 5, endSec: 10 },
+			{
+				id: "trim_1",
+				assetId: "a1",
+				clipId: "clip_2",
+				startSec: 5,
+				endSec: 10,
+				origin: "user",
+				reason: "",
+			},
 		]);
 
 		it("resumes after the cut instead of jumping to the top of the timeline", () => {

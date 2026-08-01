@@ -183,7 +183,15 @@ describe("VirtualPreview playback across a clip boundary", () => {
 		// while clip_1 plays — the twin keeping the stretch used to answer for it.
 		const clips = [clip("clip_1", "a1", 0, 10, 0), clip("clip_2", "a1", 0, 10, 10)];
 		const trims: AxcutTrimRange[] = [
-			{ id: "trim_1", assetId: "a1", clipId: "clip_1", startSec: 4, endSec: 6 },
+			{
+				id: "trim_1",
+				assetId: "a1",
+				clipId: "clip_1",
+				startSec: 4,
+				endSec: 6,
+				origin: "user",
+				reason: "",
+			},
 		];
 		const { video } = mount(clips, trims);
 
