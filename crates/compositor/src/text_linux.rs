@@ -67,11 +67,29 @@ impl TextSpec {
     }
 }
 
-/// Le resultat d'une rasterisation : la texture R8 de couverture + ses dims.
+/// Le resultat d'une rasterisation : la texture R8 de couverture + ses dims,
+/// plus la plaque de fond que le compositeur doit poser dessous.
 pub struct RasterizedGlyphs {
     pub view: wgpu::TextureView,
     pub width: u32,
     pub height: u32,
+    /// `[x, y, w, h]` en px DANS la boite (origine coin haut-gauche) : la
+    /// plaque de fond epousant le bloc de texte, marge `text_plate` comprise.
+    ///
+    /// Elle voyage avec l'atlas parce qu'elle sort de la MEME mise en page :
+    /// seul le rasteriseur sait ou cosmic-text a effectivement pose les lignes.
+    /// Windows et macOS bakent la plaque dans la texture ; l'atlas R8 d'ici ne
+    /// porte qu'une couverture alpha, donc le compositeur la dessine en quad
+    /// separe (mode 1) et a besoin du rect.
+    pub plate: [f32; 4],
+}
+
+/// Un atlas de couverture + la plaque mesuree sur la meme mise en page.
+pub struct TextAtlas {
+    /// Couverture R8 tightly-packed, `box_px[0] * box_px[1]` octets.
+    pub pixels: Vec<u8>,
+    /// Cf. [`RasterizedGlyphs::plate`].
+    pub plate: [f32; 4],
 }
 
 /// Le rasterizer Linux. `fontdb` lit `/usr/share/fonts` a la construction du
@@ -98,7 +116,7 @@ impl TextRasterizer {
         let (w, h) = (spec.box_px[0].max(1), spec.box_px[1].max(1));
         let atlas = self.build_atlas(spec)?;
 
-        Self::upload(gpu, &atlas, w, h)
+        Self::upload(gpu, &atlas.pixels, w, h, atlas.plate)
     }
 
     /// La moitie CPU de [`Self::rasterize`] : shaping + placement des glyphes
@@ -109,7 +127,7 @@ impl TextRasterizer {
     /// coin au lieu de la ligne de base, `line_top` ajoute au X, signe de
     /// `placement.top` inverse). Tant que ce code vivait derriere un `&Gpu`, il
     /// etait intestable sans peripherique. Il ne l'est plus.
-    pub fn build_atlas(&self, spec: &TextSpec) -> Result<Vec<u8>> {
+    pub fn build_atlas(&self, spec: &TextSpec) -> Result<TextAtlas> {
         let (w, h) = (spec.box_px[0].max(1), spec.box_px[1].max(1));
         if spec.content.is_empty() {
             bail!("text_linux::rasterize: texte vide");
@@ -122,7 +140,14 @@ impl TextRasterizer {
         let line_height = font_size * 1.4; // heuristique standard.
         let metrics = Metrics::new(font_size, line_height);
         let mut buffer = Buffer::new(&mut font_system, metrics);
-        buffer.set_size(Some(w as f32), Some(h as f32));
+        // LARGEUR DE MISE EN PAGE : la boite RENTREE de la marge de plaque, comme
+        // sur les deux autres backends (`text_plate::layout_width`). Composer sur
+        // la largeur pleine coupait les lignes ailleurs que la ou la plaque est
+        // dimensionnee, et collait un texte ferre a gauche/droite contre le bord,
+        // ou sa plaque se fait rogner du cote ou elle devrait respirer.
+        let (pad_x, pad_y) = crate::text_plate::padding(font_size);
+        let avail_w = crate::text_plate::layout_width(w as f32, font_size);
+        buffer.set_size(Some(avail_w), Some(h as f32));
 
         let mut attrs = Attrs::new();
         attrs = attrs.family(cosmic_text::Family::Name(&spec.font_family));
@@ -171,6 +196,37 @@ impl TextRasterizer {
         // que de sortir par le dessus, ou il serait entierement rogne.
         let y_offset = (((h as f32) - text_h) * 0.5).max(0.0).round() as i32;
 
+        // LA PLAQUE EPOUSE LE BLOC, PAS LA BOITE. Miroir de
+        // `text_macos::block_layout` (en coordonnees descendantes ici, CoreText
+        // est ascendant). Le portage dessinait la plaque sur la boite entiere :
+        // sur un sous-titre, cette boite est la bande de sous-titres — 22 % de la
+        // hauteur de frame — donc l'aplat montait et descendait tres au-dela du
+        // texte alors que Windows et macOS le serrent a `0.1em` pres.
+        let text_w = buffer
+            .layout_runs()
+            .map(|run| run.line_w)
+            .fold(0.0f32, f32::max)
+            .min(avail_w);
+        // Le bloc est centre dans la boite : cosmic-text aligne DANS `avail_w`,
+        // et `frame_x` reporte ce cadre au centre de la boite.
+        let frame_x = ((w as f32) - avail_w) * 0.5;
+        let x_offset = frame_x.round() as i32;
+        // « sans jamais deborder de la boite » : au-dela, la plaque serait coupee
+        // net par le bord de la texture et perdrait ses coins arrondis.
+        let plate_w = (text_w + pad_x * 2.0).min(w as f32);
+        let plate_h = (text_h + pad_y * 2.0).min(h as f32);
+        let slack_x = ((w as f32) - plate_w).max(0.0);
+        let plate_x = match spec.align.as_str() {
+            // A gauche les lignes commencent au bord gauche du cadre, a droite
+            // elles y finissent : la plaque deborde de `pad_x` du cote concerne.
+            "left" | "start" => frame_x - pad_x,
+            "right" | "end" => frame_x + avail_w + pad_x - plate_w,
+            _ => slack_x * 0.5,
+        }
+        .clamp(0.0, slack_x);
+        let plate_y = ((y_offset as f32) - pad_y).clamp(0.0, ((h as f32) - plate_h).max(0.0));
+        let plate = [plate_x, plate_y, plate_w, plate_h];
+
         // Atlas R8 : on n'ecrit que le canal alpha (couverture). Le tint par
         // `spec.color` se fait cote shader (mode 11).
         let mut atlas: Vec<u8> = vec![0u8; (w * h) as usize];
@@ -212,7 +268,7 @@ impl TextRasterizer {
                 // ligne de base, donc la premiere rangee du bitmap est a
                 // `baseline - top`. Le signe etait inverse.
                 let ink_top = glyph_y - placement.top + y_offset;
-                let ink_left = glyph_x + placement.left;
+                let ink_left = glyph_x + placement.left + x_offset;
                 for row in 0..img_h as i32 {
                     let dest_y = ink_top + row;
                     if dest_y < 0 || dest_y >= h as i32 {
@@ -254,11 +310,20 @@ impl TextRasterizer {
             }
         }
 
-        Ok(atlas)
+        Ok(TextAtlas {
+            pixels: atlas,
+            plate,
+        })
     }
 
     /// Televerse un atlas R8 deja construit et rend sa view.
-    fn upload(gpu: &Gpu, atlas: &[u8], w: u32, h: u32) -> Result<RasterizedGlyphs> {
+    fn upload(
+        gpu: &Gpu,
+        atlas: &[u8],
+        w: u32,
+        h: u32,
+        plate: [f32; 4],
+    ) -> Result<RasterizedGlyphs> {
         let texture = gpu.device.create_texture(&wgpu::TextureDescriptor {
             label: Some("text-atlas"),
             size: wgpu::Extent3d {
@@ -297,6 +362,7 @@ impl TextRasterizer {
             view,
             width: w,
             height: h,
+            plate,
         })
     }
 }
@@ -339,6 +405,56 @@ mod tests {
     }
 
     #[test]
+    fn the_plate_hugs_the_text_instead_of_filling_the_box() {
+        // LE bug des sous-titres sous Linux. La plaque etait le quad de la boite
+        // entiere ; la boite d'un sous-titre est la bande de sous-titres (22 % de
+        // la hauteur de frame), donc l'aplat montait et descendait tres au-dela du
+        // texte. Windows et macOS le serrent a `0.1em` (`text_plate`) — ici on
+        // verifie la meme chose sur une boite volontairement trop haute.
+        let raster = TextRasterizer::new().expect("rasterizer");
+        let atlas = raster.build_atlas(&spec("Hx", "center")).expect("atlas");
+        let (_, pad_y) = crate::text_plate::padding(40.0);
+        let [_, py, _, ph] = atlas.plate;
+
+        // Une ligne de 40px : bloc haut de 1.4em = 56px, plaque = 56 + 2*4 = 64px.
+        // Tres loin des 200px de la boite.
+        assert!(
+            ph < 80.0,
+            "la plaque fait {ph}px de haut dans une boite de 200 : elle remplit encore la boite"
+        );
+        // Et elle couvre bien l'encre, marge comprise.
+        let rows = ink_rows(&atlas.pixels, 400, 0, 400);
+        let (top, bottom) = (rows[0] as f32, *rows.last().unwrap() as f32);
+        assert!(
+            py <= top + pad_y && py + ph >= bottom - pad_y,
+            "l'encre ({top}..{bottom}) sort de la plaque ({py}..{})",
+            py + ph
+        );
+    }
+
+    #[test]
+    fn the_plate_follows_the_alignment_and_stays_in_the_box() {
+        // Trois alignements, une plaque qui epouse le texte : elle doit se poser du
+        // bon cote et ne jamais deborder — au-dela elle serait coupee net par le
+        // bord de la texture et perdrait ses coins arrondis.
+        let raster = TextRasterizer::new().expect("rasterizer");
+        let (pad_x, _) = crate::text_plate::padding(40.0);
+        let left = raster.build_atlas(&spec("hi", "left")).expect("atlas").plate;
+        let centre = raster.build_atlas(&spec("hi", "center")).expect("atlas").plate;
+        let right = raster.build_atlas(&spec("hi", "right")).expect("atlas").plate;
+
+        for p in [left, centre, right] {
+            assert!(p[0] >= 0.0 && p[0] + p[2] <= 400.0 + 0.01, "plaque hors boite : {p:?}");
+            assert!(p[2] < 400.0, "plaque large comme la boite : {p:?}");
+        }
+        assert!(left[0] < pad_x + 0.01, "la plaque ferree a gauche devrait toucher le bord");
+        assert!(
+            centre[0] > left[0] + 20.0 && right[0] > centre[0] + 20.0,
+            "les trois alignements posent la plaque au meme endroit : {left:?} {centre:?} {right:?}"
+        );
+    }
+
+    #[test]
     fn glyphs_of_different_heights_share_one_baseline() {
         // LE test de ce fichier. Le portage posait chaque glyphe contre le HAUT
         // de sa propre boite d'encre au lieu de la ligne de base commune, avec
@@ -349,7 +465,7 @@ mod tests {
         // de base) et celui d'un 'x' (idem). S'ils partagent une ligne de base,
         // leurs dernieres rangees d'encre coincident a l'antialiasing pres.
         let raster = TextRasterizer::new().expect("rasterizer");
-        let atlas = raster.build_atlas(&spec("Hx", "left")).expect("atlas");
+        let atlas = raster.build_atlas(&spec("Hx", "left")).expect("atlas").pixels;
         let w = 400usize;
 
         let cols = ink_cols(&atlas, w);
@@ -379,7 +495,7 @@ mod tests {
         // la droite. Ici elle doit etre strictement plus bas, et commencer a peu
         // pres a la meme abscisse.
         let raster = TextRasterizer::new().expect("rasterizer");
-        let atlas = raster.build_atlas(&spec("ab\ncd", "left")).expect("atlas");
+        let atlas = raster.build_atlas(&spec("ab\ncd", "left")).expect("atlas").pixels;
         let w = 400usize;
 
         let rows = ink_rows(&atlas, w, 0, w);
@@ -416,7 +532,7 @@ mod tests {
         ];
         let mut blank = Vec::new();
         for (locale, text) in samples {
-            let atlas = raster.build_atlas(&spec(text, "center")).expect("atlas");
+            let atlas = raster.build_atlas(&spec(text, "center")).expect("atlas").pixels;
             let ink = atlas.iter().filter(|byte| **byte > 16).count();
             println!("  {locale:6} {text:12} -> {ink} px d'encre");
             if ink == 0 {
@@ -436,7 +552,7 @@ mod tests {
         // copie macOS. Une ligne de 40px dans une boite de 200px doit laisser a
         // peu pres autant de vide au-dessus qu'en dessous.
         let raster = TextRasterizer::new().expect("rasterizer");
-        let atlas = raster.build_atlas(&spec("Hx", "center")).expect("atlas");
+        let atlas = raster.build_atlas(&spec("Hx", "center")).expect("atlas").pixels;
         let (w, h) = (400usize, 200usize);
         let rows = ink_rows(&atlas, w, 0, w);
         assert!(!rows.is_empty(), "aucune encre");
@@ -456,8 +572,8 @@ mod tests {
         // alors que le defaut de l'editeur est « center ».
         let raster = TextRasterizer::new().expect("rasterizer");
         let w = 400usize;
-        let left = ink_cols(&raster.build_atlas(&spec("hi", "left")).expect("atlas"), w);
-        let centered = ink_cols(&raster.build_atlas(&spec("hi", "center")).expect("atlas"), w);
+        let left = ink_cols(&raster.build_atlas(&spec("hi", "left")).expect("atlas").pixels, w);
+        let centered = ink_cols(&raster.build_atlas(&spec("hi", "center")).expect("atlas").pixels, w);
 
         assert!(!left.is_empty() && !centered.is_empty());
         assert!(
@@ -475,7 +591,7 @@ mod tests {
         // precedente en release, et paniquait en debug. Ce test tourne en debug
         // sous `cargo test`, donc il attrape la panique directement.
         let raster = TextRasterizer::new().expect("rasterizer");
-        let atlas = raster.build_atlas(&spec("jazz", "left")).expect("pas de panique");
+        let atlas = raster.build_atlas(&spec("jazz", "left")).expect("pas de panique").pixels;
         let w = 400usize;
         // Rien ne doit avoir atterri contre le bord droit d'une rangee.
         let h = atlas.len() / w;
