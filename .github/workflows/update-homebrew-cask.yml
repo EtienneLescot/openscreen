@@ -48,15 +48,22 @@ jobs:
           TIMEOUT_MINUTES=12
           POLL_INTERVAL=30
           MAX_ATTEMPTS=$(( (TIMEOUT_MINUTES * 60) / POLL_INTERVAL ))
-          VERSION="${TAG#v}"
-          ARM_DMG="Openscreen-Mac-arm64-${VERSION}.dmg"
-          X64_DMG="Openscreen-Mac-x64-${VERSION}.dmg"
 
+          # Match on the arch marker, not on an exact filename. build.yml names
+          # the DMGs `Openscreen-macOS-Apple-Silicon-<ver>.dmg` and
+          # `-Intel-`; older releases used `-Mac-arm64-` / `-Mac-x64-`. An
+          # exact-name wait would poll for the full 12 minutes and warn, on a
+          # release whose assets were there the whole time. These are the same
+          # patterns the "Find macOS DMG assets" step below already matches on,
+          # so the two steps cannot disagree about what counts as present.
           for i in $(seq 1 $MAX_ATTEMPTS); do
-            if gh release view "$TAG" --repo "$REPO" --json assets --jq \
-              --arg arm "$ARM_DMG" --arg x64 "$X64_DMG" \
-              '[.assets[] | select(.name == $arm or .name == $x64)] | length' 2>/dev/null | grep -q '^2$'; then
-              echo "Both DMG assets present: $ARM_DMG and $X64_DMG"
+            NAMES=$(gh release view "$TAG" --repo "$REPO" --json assets --jq '.assets[].name' 2>/dev/null || true)
+            DMGS=$(echo "$NAMES" | grep -iE '\.dmg$' || true)
+            ARM_FOUND=$(echo "$DMGS" | grep -icE '(arm64|apple[-_. ]?silicon)' || true)
+            X64_FOUND=$(echo "$DMGS" | grep -icE '(x64|x86[-_]?64|intel)' || true)
+            if [[ "$ARM_FOUND" -ge 1 && "$X64_FOUND" -ge 1 ]]; then
+              echo "Both DMG assets present:"
+              echo "$DMGS"
               exit 0
             fi
             echo "Waiting for DMG assets... (attempt $i/$MAX_ATTEMPTS)"

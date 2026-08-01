@@ -255,7 +255,8 @@
 		"silence": "[silence {{duration}}s]",
 		"restoreSilence": "Restore silence ({{duration}}s)",
 		"trimSilence": "Trim silence ({{duration}}s)",
-		"restoreWord": "Restore \"{{word}}\""
+		"restoreWord": "Restore \"{{word}}\"",
+		"noAudio": "This media has no audio track"
 	},
 	"captions": {
 		"show": "Show captions",

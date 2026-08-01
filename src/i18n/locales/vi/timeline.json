@@ -82,6 +82,11 @@
 		"addedAutoZoom": "Đã thêm {{count}} thu phóng tự động",
 		"addedAutoZoomPlural": "Đã thêm {{count}} thu phóng tự động",
 		"autoZoomFailed": "Thu phóng tự động thất bại",
-		"aiEnhanceRequested": "Đã yêu cầu tác nhân AI cắt thời gian chết"
+		"aiEnhanceRequested": "Đã yêu cầu tác nhân AI cắt thời gian chết",
+		"smartCutsWaiting": "Đang phiên âm… sẵn sàng trong giây lát",
+		"smartCutsNeedsTranscript": "Cần có bản phiên âm",
+		"smartCutsNoAudio": "Media này không có âm thanh",
+		"smartCutsNoSpeech": "Không phát hiện giọng nói",
+		"smartCutsFailed": "Phiên âm thất bại — thử lại trong Media"
 	}
 }

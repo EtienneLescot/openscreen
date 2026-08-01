@@ -150,7 +150,10 @@
 		"generationFailedHint": "Error de generación — elige un idioma y vuelve a generar.",
 		"noPreviewAvailable": "Vista previa no disponible",
 		"restart": "Reiniciar",
-		"detectedLanguage": "Idioma detectado: {{language}}"
+		"detectedLanguage": "Idioma detectado: {{language}}",
+		"noAudioTrack": "Sin pista de audio",
+		"noAudioTrackHint": "Este medio no tiene pista de audio: no hay nada que transcribir.",
+		"noSpeechDetected": "No se detectó voz"
 	},
 	"exportDialog": {
 		"title": "Exportar",

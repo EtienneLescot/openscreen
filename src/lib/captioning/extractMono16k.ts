@@ -57,13 +57,23 @@ async function loadSourceVideoFile(videoUrl: string, signal?: AbortSignal): Prom
 
 function mixToMono(audioBuffer: AudioBuffer): Float32Array {
 	const { length, numberOfChannels } = audioBuffer;
+	if (numberOfChannels === 0) return new Float32Array(length);
+	// `getChannelData` is a WebIDL call, so calling it INSIDE the sample loop cost
+	// one call per sample per channel — ~57 M of them for a ten-minute stereo
+	// recording, seconds of blocked main thread. That was survivable while
+	// transcription only ran when the user asked for it; it now runs by itself when
+	// a project opens, and a frozen window (spinners included) is exactly what the
+	// automatic pass must not look like. Hoisting the channel arrays out of the loop
+	// leaves plain typed-array indexing.
+	const channels: Float32Array[] = [];
+	for (let c = 0; c < numberOfChannels; c++) channels.push(audioBuffer.getChannelData(c));
+	// Mono source: the mixdown is a copy. `slice` keeps the caller's contract of
+	// owning its buffer (the AudioBuffer's own array is reused by the context).
+	if (numberOfChannels === 1) return channels[0].slice();
 	const out = new Float32Array(length);
-	if (numberOfChannels === 0) return out;
 	for (let i = 0; i < length; i++) {
 		let sum = 0;
-		for (let c = 0; c < numberOfChannels; c++) {
-			sum += audioBuffer.getChannelData(c)[i];
-		}
+		for (let c = 0; c < numberOfChannels; c++) sum += channels[c][i];
 		out[i] = sum / numberOfChannels;
 	}
 	return out;

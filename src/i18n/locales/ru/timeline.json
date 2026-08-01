@@ -82,6 +82,11 @@
 		"addedAutoZoom": "Добавлен {{count}} автоматический зум",
 		"addedAutoZoomPlural": "Добавлено {{count}} автоматических зумов",
 		"autoZoomFailed": "Не удалось выполнить автозум",
-		"aiEnhanceRequested": "Агенту ИИ поручено вырезать паузы"
+		"aiEnhanceRequested": "Агенту ИИ поручено вырезать паузы",
+		"smartCutsWaiting": "Идёт расшифровка… скоро будет готово",
+		"smartCutsNeedsTranscript": "Нужна расшифровка",
+		"smartCutsNoAudio": "В этом медиафайле нет звука",
+		"smartCutsNoSpeech": "Речь не обнаружена",
+		"smartCutsFailed": "Не удалось расшифровать — повторите из раздела «Медиа»"
 	}
 }

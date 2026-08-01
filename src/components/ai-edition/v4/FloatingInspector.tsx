@@ -78,10 +78,6 @@ interface FloatingInspectorProps {
 	 * through a facet body. */
 	clips: AxcutClip[];
 	onEditClip: (clip: AxcutClip) => void;
-	/** Runs the transcription the caption layer reads from. Captions are derived
-	 *  from the transcript, so this is the only caption action the shell owns. */
-	onTranscribe: () => void;
-	isTranscribing: boolean;
 	transcriptProps: TranscriptProps;
 	/** Drives the selected-element settings pane (zoom/speed/annotation/trim) —
 	 * takes over the inspector, forcing it open, whenever a timeline region is
@@ -97,8 +93,6 @@ export function FloatingInspector({
 	onToggleOpen,
 	clips,
 	onEditClip,
-	onTranscribe,
-	isTranscribing,
 	transcriptProps,
 	tl,
 }: FloatingInspectorProps) {
@@ -114,13 +108,7 @@ export function FloatingInspector({
 					{selection ? (
 						<SelectionPane tl={tl} onClose={() => tl.clearSelection()} />
 					) : (
-						<FacetBody
-							facet={facet}
-							onTranscribe={onTranscribe}
-							isTranscribing={isTranscribing}
-							onCollapse={onToggleOpen}
-							transcriptProps={transcriptProps}
-						/>
+						<FacetBody facet={facet} onCollapse={onToggleOpen} transcriptProps={transcriptProps} />
 					)}
 				</div>
 			) : null}
@@ -1029,14 +1017,10 @@ const secondaryBtnStyle: React.CSSProperties = {
 
 function FacetBody({
 	facet,
-	onTranscribe,
-	isTranscribing,
 	onCollapse,
 	transcriptProps,
 }: {
 	facet: Facet;
-	onTranscribe: () => void;
-	isTranscribing: boolean;
 	onCollapse: () => void;
 	transcriptProps: TranscriptProps;
 }) {
@@ -1073,10 +1057,7 @@ function FacetBody({
 	if (facet === "layout") return wrap(collapse, <LayoutPane />);
 	if (facet === "cursor") return wrap(collapse, <CursorPane />);
 	if (facet === "transcript") return wrap(collapse, <TranscriptPane {...transcriptProps} />);
-	return wrap(
-		collapse,
-		<CaptionsPane onTranscribe={onTranscribe} isTranscribing={isTranscribing} />,
-	);
+	return wrap(collapse, <CaptionsPane />);
 }
 
 function wrap(collapse: React.ReactNode, body: React.ReactNode) {

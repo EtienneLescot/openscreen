@@ -82,6 +82,11 @@
 		"addedAutoZoom": "Se añadió {{count}} zoom automático",
 		"addedAutoZoomPlural": "Se añadieron {{count}} zooms automáticos",
 		"autoZoomFailed": "Error en el zoom automático",
-		"aiEnhanceRequested": "Se pidió al agente de IA que corte los tiempos muertos"
+		"aiEnhanceRequested": "Se pidió al agente de IA que corte los tiempos muertos",
+		"smartCutsWaiting": "Transcribiendo… disponible en un momento",
+		"smartCutsNeedsTranscript": "Requiere una transcripción",
+		"smartCutsNoAudio": "Este medio no tiene audio",
+		"smartCutsNoSpeech": "No se detectó voz",
+		"smartCutsFailed": "La transcripción falló: reinténtala desde Medios"
 	}
 }

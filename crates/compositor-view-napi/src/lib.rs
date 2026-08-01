@@ -554,8 +554,12 @@ impl Task for ExportGifTask {
         let _previews = PreviewPause::begin();
 
         // Same construction as ExportMultiTask — GIF and MP4 differ only in the
-        // encoder, so everything up to it is built identically.
-        let gpu = Gpu::create(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
+        // encoder, so everything up to it is built identically. That includes the
+        // device: `create_auto`, not `create`. `create` is hardware-strict (goldens
+        // and benches want to fail rather than measure a software rasteriser), so a
+        // host without a usable GPU could export an MP4 but not a GIF — the one path
+        // where the CPU backend exists specifically so the export still completes.
+        let gpu = Gpu::create_auto(false).map_err(|e| Error::from_reason(format!("{e:#}")))?;
         let mut cfg = config::all().pop().expect("au moins une config"); // C8
         cfg.zoom = false;
         cfg.layout_anim = false;

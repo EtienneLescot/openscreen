@@ -34,6 +34,7 @@ import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
@@ -45,7 +46,10 @@ import {
 	resolveTimelineSpanToTrim,
 	ventilateTimelineSpanToTrims,
 } from "@/lib/ai-edition/timeline/trim-mapping";
-import { buildAutoZoomSuggestions } from "@/lib/ai-edition/timeline/zoom-suggestions";
+import {
+	type AutoZoomSuggestion,
+	buildAutoZoomSuggestionsForClips,
+} from "@/lib/ai-edition/timeline/zoom-suggestions";
 import { nativeBridgeClient } from "@/native/client";
 import { ASPECT_RATIO_PRESETS, getAspectRatioLabel } from "@/utils/aspectRatioUtils";
 import { TransportBar } from "../TransportBar";
@@ -334,6 +338,24 @@ export function V4Timeline({
 	const [aspectMenuOpen, setAspectMenuOpen] = useState(false);
 	const [autoEnhanceOpen, setAutoEnhanceOpen] = useState(false);
 	const [autoBusy, setAutoBusy] = useState(false);
+	// The AI cut pass reads the transcript, and the transcript is produced in the
+	// background (see transcriptionStore). Until it is there, the entry says why
+	// rather than handing the agent a prompt it cannot honour — the failure mode
+	// that made this button the wrong first click for a new user.
+	const transcriptGate = useTimelineTranscriptGate();
+	const smartCutsBlocked = transcriptGate.state !== "ready";
+	const smartCutsHint =
+		transcriptGate.state === "pending"
+			? t("toolbar.smartCutsWaiting")
+			: transcriptGate.state === "ready"
+				? t("toolbar.smartZoomsAndCutsHint")
+				: transcriptGate.reason === "no-audio"
+					? t("toolbar.smartCutsNoAudio")
+					: transcriptGate.reason === "no-speech"
+						? t("toolbar.smartCutsNoSpeech")
+						: transcriptGate.reason === "failed"
+							? t("toolbar.smartCutsFailed")
+							: t("toolbar.smartCutsNeedsTranscript");
 
 	const clips = tl.clips;
 	const total = useMemo(
@@ -883,26 +905,46 @@ export function V4Timeline({
 	];
 
 	// Auto-enhance option 1 — the deterministic cursor-telemetry auto-zoom
-	// (ported from main; NOT AI). Reads the recorded cursor movement for the
-	// primary asset and drops zoom-ins on the dwell moments.
+	// (ported from main; NOT AI). Reads the recorded cursor movement and drops
+	// zoom-ins on the dwell moments.
+	//
+	// Telemetry belongs to a RECORDING, not to a clip: it is fetched per asset and read in
+	// that asset's source time. Projecting it onto the ruler is `buildAutoZoomSuggestionsForClips`'
+	// job — every clip drawing on the asset gets its own zooms, including the second clip over
+	// a recording already used once. Feeding the raw source-time spans to `addZoomsBulk` (which
+	// reads RAW TIMELINE ms) is what confined every suggestion to the first clip's stretch of
+	// ruler. Each asset with clips is asked, not just the first: a second recording on the
+	// timeline was previously never consulted at all.
 	const runAutoZooms = useCallback(async () => {
 		setAutoEnhanceOpen(false);
-		const source = videoSources[0];
-		const asset = tl.assets.find((a) => a.id === source?.id) ?? tl.assets[0];
-		if (!source || !asset) {
+		const sources = videoSources.filter((source) => clips.some((c) => c.assetId === source.id));
+		if (sources.length === 0) {
 			toast.error(t("toolbar.importRecordingFirst"));
 			return;
 		}
 		setAutoBusy(true);
 		try {
-			const telemetry =
-				(await nativeBridgeClient.cursor.getTelemetry(fromFileUrl(source.src))) ?? [];
-			const suggestions = buildAutoZoomSuggestions({
-				cursorTelemetry: telemetry,
-				totalMs: (asset.durationSec ?? 0) * 1000,
-				existingRegions: tl.zoomRegions.map((z) => ({ startMs: z.startMs, endMs: z.endMs })),
-				defaultDurationMs: 2000,
-			});
+			// Read once, up front: every clip reserves against the zooms the document
+			// ALREADY holds, and two clips can never contest the same stretch of ruler, so
+			// nothing here depends on the order the assets are visited — which is what lets
+			// their telemetry be fetched concurrently rather than one IPC round trip after
+			// another. `Promise.all` preserves input order, so the suggestions come out in
+			// the same sequence a loop would have produced.
+			const existingRegions = tl.zoomRegions.map((z) => ({ startMs: z.startMs, endMs: z.endMs }));
+			const perSource = await Promise.all(
+				sources.map(async (source) => {
+					const telemetry =
+						(await nativeBridgeClient.cursor.getTelemetry(fromFileUrl(source.src))) ?? [];
+					return buildAutoZoomSuggestionsForClips({
+						cursorTelemetry: telemetry,
+						assetId: source.id,
+						clips,
+						existingRegions,
+						defaultDurationMs: 2000,
+					});
+				}),
+			);
+			const suggestions: AutoZoomSuggestion[] = perSource.flat();
 			if (suggestions.length === 0) {
 				toast.info(t("toolbar.noAutoZoomMoments"), {
 					description: t("toolbar.noAutoZoomMomentsDescription"),
@@ -920,7 +962,7 @@ export function V4Timeline({
 		} finally {
 			setAutoBusy(false);
 		}
-	}, [videoSources, tl, t]);
+	}, [videoSources, clips, tl, t]);
 
 	// Auto-enhance option 2 — hand a generic prompt to the AI agent (smart
 	// zooms + cuts) via the chat prompt-bus. The chat panel owns the outcome
@@ -1144,13 +1186,22 @@ export function V4Timeline({
 											</span>
 										</span>
 									</button>
-									<button type="button" className={styles.recMenuRow} onClick={runAiEnhance}>
-										<Sparkles size={15} style={{ flexShrink: 0 }} />
+									<button
+										type="button"
+										className={styles.recMenuRow}
+										onClick={runAiEnhance}
+										disabled={smartCutsBlocked}
+										title={transcriptGate.reason === "failed" ? transcriptGate.message : undefined}
+										style={smartCutsBlocked ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
+									>
+										{transcriptGate.state === "pending" ? (
+											<Loader2 size={15} className="animate-spin" style={{ flexShrink: 0 }} />
+										) : (
+											<Sparkles size={15} style={{ flexShrink: 0 }} />
+										)}
 										<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
 											<span style={{ fontWeight: 600 }}>{t("toolbar.smartZoomsAndCuts")}</span>
-											<span style={{ fontSize: 11, color: "var(--muted)" }}>
-												{t("toolbar.smartZoomsAndCutsHint")}
-											</span>
+											<span style={{ fontSize: 11, color: "var(--muted)" }}>{smartCutsHint}</span>
 										</span>
 									</button>
 								</div>

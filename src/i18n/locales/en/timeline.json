@@ -82,6 +82,11 @@
 		"addedAutoZoom": "Added {{count}} automatic zoom",
 		"addedAutoZoomPlural": "Added {{count}} automatic zooms",
 		"autoZoomFailed": "Auto-zoom failed",
-		"aiEnhanceRequested": "Asked the AI agent to cut the dead time"
+		"aiEnhanceRequested": "Asked the AI agent to cut the dead time",
+		"smartCutsWaiting": "Transcribing… ready in a moment",
+		"smartCutsNeedsTranscript": "Needs a transcript",
+		"smartCutsNoAudio": "This media has no audio",
+		"smartCutsNoSpeech": "No speech detected",
+		"smartCutsFailed": "Transcription failed — retry it from Media"
 	}
 }

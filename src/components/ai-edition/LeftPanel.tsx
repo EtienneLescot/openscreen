@@ -5,7 +5,12 @@ import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
 import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import {
+	useAssetTranscriptions,
+	useTranscriptionStore,
+} from "@/lib/ai-edition/store/transcriptionStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
+import type { AssetTranscriptionView } from "@/lib/ai-edition/transcription/status";
 import { nativeBridgeClient } from "@/native/client";
 import type {
 	AiEditionChatEvent,
@@ -25,6 +30,7 @@ import { computeBudget } from "./chatBudget";
 import { ChatHistoryModal, SourceTranscriptModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 import { ProviderSettings } from "./ProviderSettings";
+import { TranscriptionStatusDot } from "./TranscriptionStatus";
 
 export type LeftTab = "chat" | "media";
 
@@ -45,13 +51,12 @@ function basename(path: string): string {
 function MediaList({
 	assets,
 	onOpenTranscript,
-	transcriptReadyIds,
-	assetStatuses,
+	transcriptions,
 }: {
 	assets: AxcutAsset[];
 	onOpenTranscript?: (asset: AxcutAsset) => void;
-	transcriptReadyIds?: Set<string>;
-	assetStatuses?: Record<string, "pending" | "running" | "failed">;
+	/** Per-asset transcription state, keyed by asset id (see transcriptionStore). */
+	transcriptions: Record<string, AssetTranscriptionView>;
 }) {
 	const t = useScopedT("editor");
 	if (assets.length === 0) {
@@ -76,8 +81,10 @@ function MediaList({
 				const tc = formatTimecode(asset.durationSec);
 				const size = formatBytes(asset.sizeBytes);
 				const palette = THUMB_PALETTE[i % THUMB_PALETTE.length];
-				const isReady = transcriptReadyIds?.has(asset.id);
-				const status = isReady ? "complete" : (assetStatuses?.[asset.id] ?? "idle");
+				const transcription = transcriptions[asset.id] ?? {
+					assetId: asset.id,
+					status: "idle" as const,
+				};
 
 				return (
 					<li
@@ -111,45 +118,7 @@ function MediaList({
 							<div className={styles.mediaMeta}>
 								<div className={styles.name}>{label}</div>
 								<div className={styles.row}>
-									<span
-										style={{
-											width: 8,
-											height: 8,
-											borderRadius: "50%",
-											background:
-												status === "complete"
-													? "var(--success)"
-													: status === "running"
-														? "var(--accent)"
-														: status === "pending"
-															? "#f59e0b"
-															: status === "failed"
-																? "var(--danger)"
-																: "var(--dim)",
-											boxShadow:
-												status === "complete"
-													? "0 0 0 3px var(--success-soft)"
-													: status === "running"
-														? "0 0 0 3px rgba(16, 185, 129, 0.2)"
-														: status === "pending"
-															? "0 0 0 3px rgba(245, 158, 11, 0.2)"
-															: status === "failed"
-																? "0 0 0 3px rgba(239, 68, 68, 0.2)"
-																: "none",
-											flexShrink: 0,
-										}}
-										aria-label={
-											status === "complete"
-												? t("mediaStage.transcriptReady")
-												: status === "running"
-													? t("mediaStage.transcribing")
-													: status === "pending"
-														? t("mediaStage.pendingTranscription")
-														: status === "failed"
-															? t("mediaStage.transcriptionFailed")
-															: t("mediaStage.noTranscript")
-										}
-									/>
+									<TranscriptionStatusDot view={transcription} />
 									<span className={styles.timecode}>{tc}</span>
 									<span className={styles.size}>{size}</span>
 								</div>
@@ -162,20 +131,21 @@ function MediaList({
 	);
 }
 
-export function MediaPane({
-	assetStatuses,
-	onRegenerateAsset,
-}: {
-	assetStatuses?: Record<string, "pending" | "running" | "failed">;
-	onRegenerateAsset?: (assetId: string, language: string) => Promise<void>;
-}) {
+export function MediaPane() {
 	const t = useScopedT("editor");
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
 	const addAsset = useProjectStore((s) => s.addAsset);
+	// Transcripts land on their own (transcriptionStore's background pass); the
+	// pane reports where each one is at and offers a per-asset re-run.
+	const transcriptions = useAssetTranscriptions();
+	const requestTranscription = useTranscriptionStore((s) => s.request);
 	const [query, setQuery] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [srcTranscriptAsset, setSrcTranscriptAsset] = useState<AxcutAsset | null>(null);
+	const selectedTranscription = srcTranscriptAsset
+		? transcriptions[srcTranscriptAsset.id]
+		: undefined;
 
 	const handleImport = async () => {
 		if (!projectId) {
@@ -258,8 +228,7 @@ export function MediaPane({
 				<MediaList
 					assets={filtered}
 					onOpenTranscript={setSrcTranscriptAsset}
-					transcriptReadyIds={new Set(document?.transcripts?.map((t) => t.assetId) ?? [])}
-					assetStatuses={assetStatuses}
+					transcriptions={transcriptions}
 				/>
 			</div>
 			<button
@@ -308,31 +277,28 @@ export function MediaPane({
 						? (document.transcripts.find((t) => t.assetId === srcTranscriptAsset.id) ?? null)
 						: null
 				}
-				isTranscribing={assetStatuses?.[srcTranscriptAsset?.id ?? ""] === "running"}
-				isFailed={assetStatuses?.[srcTranscriptAsset?.id ?? ""] === "failed"}
+				isTranscribing={
+					selectedTranscription?.status === "running" || selectedTranscription?.status === "queued"
+				}
+				isFailed={selectedTranscription?.status === "failed"}
+				failureMessage={
+					selectedTranscription?.failure
+						? selectedTranscription.failure.kind === "error"
+							? selectedTranscription.failure.message
+							: t("mediaStage.noAudioTrackHint")
+						: undefined
+				}
 				onRegenerate={(language) => {
-					if (!srcTranscriptAsset || !onRegenerateAsset) return Promise.resolve();
-					return onRegenerateAsset(srcTranscriptAsset.id, language);
+					if (!srcTranscriptAsset) return Promise.resolve();
+					return requestTranscription(srcTranscriptAsset.id, language);
 				}}
 			/>
 		</aside>
 	);
 }
 
-export function LeftPanel({
-	active,
-	assetStatuses,
-	onRegenerateAsset,
-}: {
-	active: LeftTab;
-	assetStatuses?: Record<string, "pending" | "running" | "failed">;
-	onRegenerateAsset?: (assetId: string, language: string) => Promise<void>;
-}) {
-	return active === "chat" ? (
-		<ChatStripPanel />
-	) : (
-		<MediaPane assetStatuses={assetStatuses} onRegenerateAsset={onRegenerateAsset} />
-	);
+export function LeftPanel({ active }: { active: LeftTab }) {
+	return active === "chat" ? <ChatStripPanel /> : <MediaPane />;
 }
 
 interface ChatDisplayMessage {

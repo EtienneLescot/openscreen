@@ -150,7 +150,10 @@
 		"generationFailedHint": "Ошибка создания — выберите язык и создайте заново.",
 		"noPreviewAvailable": "Предпросмотр недоступен",
 		"restart": "Перезапустить",
-		"detectedLanguage": "Обнаруженный язык: {{language}}"
+		"detectedLanguage": "Обнаруженный язык: {{language}}",
+		"noAudioTrack": "Нет аудиодорожки",
+		"noAudioTrackHint": "В этом медиафайле нет аудиодорожки — расшифровывать нечего.",
+		"noSpeechDetected": "Речь не обнаружена"
 	},
 	"exportDialog": {
 		"title": "Экспорт",

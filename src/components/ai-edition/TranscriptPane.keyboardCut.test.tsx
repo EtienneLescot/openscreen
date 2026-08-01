@@ -67,7 +67,11 @@ const W2_TRIMMED: AxcutTrimRange = {
 	reason: "",
 };
 
-function renderPane(trimRanges: AxcutTrimRange[], onAddTrimRange = vi.fn()) {
+function renderPane(
+	trimRanges: AxcutTrimRange[],
+	onAddTrimRange = vi.fn(),
+	busyAssetIds: string[] = [],
+) {
 	const view = render(
 		<I18nProvider>
 			<TranscriptPane
@@ -75,7 +79,7 @@ function renderPane(trimRanges: AxcutTrimRange[], onAddTrimRange = vi.fn()) {
 				transcripts={[TRANSCRIPT]}
 				assets={[ASSET]}
 				trimRanges={trimRanges}
-				busy={false}
+				busyAssetIds={busyAssetIds}
 				onSeek={vi.fn()}
 				onAddTrimRange={onAddTrimRange}
 				onRemoveTrimRange={vi.fn()}
@@ -126,6 +130,27 @@ describe("keyboard cut with the caret between words", () => {
 		caretBeforeWordAt(editor, 3); // before "quatre"
 		fireEvent.keyDown(editor, { key: "Backspace" });
 		expect(cutRange(onAddTrimRange)).toEqual([2, 3]); // "trois"
+	});
+
+	it("keeps cutting while ANOTHER asset is being transcribed", () => {
+		// The background pass runs on its own now, so a run on some other media must
+		// not quietly turn this block into an editor that ignores Backspace — the
+		// read-only state is scoped to the asset whose transcript is being rewritten.
+		const { editor, onAddTrimRange } = renderPane([], vi.fn(), ["asset_other"]);
+		caretBeforeWordAt(editor, 3);
+		fireEvent.keyDown(editor, { key: "Backspace" });
+		expect(cutRange(onAddTrimRange)).toEqual([2, 3]);
+	});
+
+	it("stops cutting, visibly, while THIS asset is being transcribed", () => {
+		// Its transcript is about to be replaced, so the block is read-only — and it
+		// says so, instead of swallowing the keystroke in silence.
+		const { editor, onAddTrimRange, getByText } = renderPane([], vi.fn(), ["asset_1"]);
+		caretBeforeWordAt(editor, 3);
+		fireEvent.keyDown(editor, { key: "Backspace" });
+		expect(cutRange(onAddTrimRange)).toBeNull();
+		expect(editor).toHaveAttribute("aria-busy", "true");
+		expect(getByText("Transcribing…")).toBeInTheDocument();
 	});
 
 	it("Backspace skips over an already-trimmed word instead of doing nothing", () => {
@@ -184,7 +209,7 @@ describe("keyboard cut with the caret between words", () => {
 						transcripts={[TRANSCRIPT]}
 						assets={[ASSET]}
 						trimRanges={trims}
-						busy={false}
+						busyAssetIds={[]}
 						onSeek={vi.fn()}
 						onAddTrimRange={(_target, startSec, endSec) =>
 							setTrims((prev) => [
