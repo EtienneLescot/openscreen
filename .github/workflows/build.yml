@@ -89,7 +89,19 @@ jobs:
 
   build-macos:
     name: macOS ${{ matrix.arch }} DMG
-    runs-on: macos-latest
+    # Build each arch NATIVELY. `macos-latest` is Apple Silicon, and everything the
+    # 1.8.0 macOS path added keys off the HOST arch: fetch-ffmpeg-macos.mjs configures
+    # with `--arch=${process.arch}`, and build-macos-compositor-addon.mjs installs into
+    # `darwin-${process.arch}` and runs cargo without `--target`. So the x64 job on an
+    # arm64 runner produced arm64 output in darwin-arm64/, and packaging then failed
+    # with "Refusing to package an incomplete macOS payload — looked in darwin-x64".
+    # v1.7.0 shipped an x64 DMG because it had neither the compositor addon nor a
+    # vendored ffmpeg to build; both arrived with 1.8.0 and nobody could see the
+    # breakage while this job sat behind `if: false`.
+    # Running x64 on an Intel runner fixes it without threading a target arch through
+    # ffmpeg's configure, cargo and the output paths — four blind changes on a release
+    # branch, none of them testable without a Mac.
+    runs-on: ${{ matrix.arch == 'x64' && 'macos-15-intel' || 'macos-latest' }}
     strategy:
       fail-fast: false
       matrix:
