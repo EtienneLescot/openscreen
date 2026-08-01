@@ -190,6 +190,74 @@ jobs:
           cd crates
           cargo check -p openscreen-compositor -p compositor-view-napi --all-targets
 
+  # Le troisieme cote, et le dernier angle mort : le Rust Linux n'etait compile
+  # NULLE PART en CI. Les deux jobs ci-dessus couvrent macOS (test) et Windows
+  # (check) ; `compositor_linux.rs`, `pipeline_linux.rs`, `d3d_linux.rs` et les
+  # 2154 lignes du moteur wgpu ne passaient que par le poste des contributeurs.
+  #
+  # Ce que le trou cachait, trouve en ouvrant ce job : `export_timing.rs` et
+  # `output_geometry_golden.rs` ne compilaient pas sous Linux — ils appellent
+  # `probe_frame_count` / `readback_resized`, qui n'existent que cote Windows et
+  # macOS. Les fichiers de `tests/` etant compiles quelle que soit la plateforme,
+  # le crate entier etait incompilable en `--tests` sur Linux, en silence.
+  #
+  # `cargo test` et pas `check` : `mesa-vulkan-drivers` donne au runner un ICD
+  # Vulkan logiciel (lavapipe), donc `cpu_backend_linux.rs` exerce POUR DE VRAI le
+  # backend CPU, qui est la propriete que cette PR ajoute. Un runner GitHub n'ayant
+  # pas de GPU, c'est meme le seul endroit ou ce chemin est teste sans forcage.
+  rust-linux-compositor-check:
+    name: Rust test (Linux compositor)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # Pas de ./.github/actions/setup : `fetch-ffmpeg.mjs` n'importe que des
+      # builtins node, donc `npm ci` serait une minute d'installation pour rien.
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+      # libclang-dev, pas libclang1 : bindgen a besoin de libclang pour lire les
+      #   headers ffmpeg, et c'est le paquet -dev qui apporte AUSSI les headers
+      #   built-in de clang. Sans eux bindgen echoue sur `stddef.h file not found`.
+      # mesa-vulkan-drivers : l'ICD lavapipe. Sans lui le runner n'a aucun
+      #   adaptateur Vulkan et le backend CPU serait intestable. C'est le meme
+      #   paquet que le .deb declare desormais en dependance (electron-builder.json5).
+      - name: Install libclang and the Mesa Vulkan drivers
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libclang-dev mesa-vulkan-drivers
+      - name: Vendor the pinned ffmpeg SDK
+        run: npm run fetch:ffmpeg:sdk
+      # `crates/.cargo/config.toml` pose FFMPEG_DIR (arbre win64) et LIBCLANG_PATH
+      # (chemin Windows) dans un `[env]` GLOBAL — cargo n'a pas de
+      # `[target.<cfg>.env]`. Les deux valeurs sont donc TOUJOURS renseignees et
+      # fausses ici ; il faut les surcharger par de vraies variables
+      # d'environnement, qui gagnent (`force = false` par defaut).
+      - name: Resolve the toolchain paths
+        run: |
+          echo "FFMPEG_DIR=$GITHUB_WORKSPACE/crates/thirdparty/ffmpeg-linux64-lgpl-shared" >> "$GITHUB_ENV"
+          libclang=$(find /usr/lib/llvm-* -name 'libclang.so' | head -1)
+          # Echouer ici plutot que de laisser bindgen partir sur le chemin Windows
+          # et rendre une erreur qui ne designe pas la cause.
+          test -n "$libclang" || { echo "libclang introuvable apres l'installation"; exit 1; }
+          echo "LIBCLANG_PATH=$(dirname "$libclang")" >> "$GITHUB_ENV"
+      - name: cargo test (compositor)
+        env:
+          # Les .so ffmpeg vendorises ne sont dans aucun chemin systeme : sans ca
+          # le binaire de test se lance puis meurt sur `libavformat.so.62`.
+          LD_LIBRARY_PATH: ${{ github.workspace }}/crates/thirdparty/ffmpeg-linux64-lgpl-shared/lib
+          # Fait ECHOUER `cpu_backend_linux.rs` s'il n'obtient pas le backend CPU,
+          # au lieu de le sauter en silence comme sur un poste sans lavapipe.
+          OPENSCREEN_REQUIRE_CPU_BACKEND: "1"
+        run: |
+          cd crates
+          cargo test -p openscreen-compositor --lib --tests
+      - name: cargo build (napi addon)
+        env:
+          LD_LIBRARY_PATH: ${{ github.workspace }}/crates/thirdparty/ffmpeg-linux64-lgpl-shared/lib
+        run: |
+          cd crates
+          cargo build -p compositor-view-napi --release
+
   semantic-pr:
     name: Validate PR title (semantic)
     runs-on: ubuntu-latest
