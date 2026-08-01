@@ -115,6 +115,59 @@ for an anchored trim it would be a second, stricter test that hides the pill of 
 `resolvePlaybackSegments` still applies — content removed with nothing on the ruler to
 click.
 
+### The same ambiguity at playback time
+
+Storing the anchor settles which clip a cut is *on*; the preview still has to answer,
+sixty times a second, which clip is *playing*. It reads the `<video>`'s own source clock,
+and a source time is per asset, so the question is the same one — one layer up, against a
+moving target. `VirtualPreview` tracks the answer in `activeClipIdRef` and passes it into
+`locateSourcePosition` / `locateKeptSegment` / `findNextKeptSegment`
+([`virtual-preview.ts`](../../src/lib/ai-edition/timeline/virtual-preview.ts)); the rule
+those three now share is that **a named clip is believed over anything inferred from
+(assetId, sourceTime)**. Three readers had each weakened it in their own way:
+
+- `locateSourcePosition` gave a clip an *exclusive* closing edge unless it was the last
+  element of the clips **array**, and the named clip shared that edge. In the last ~50 ms
+  of a clip — exactly when the rAF is deciding what to play next — the clip disowned its
+  own final frames and the ambiguous scan handed them to a twin over the same recording,
+  reporting the playhead near the END of that twin. Playback then saw "clip end reached"
+  on a clip nothing follows and stopped, parking the playhead at the end of the timeline.
+  Because the exception keyed off array position, whether it happened depended on clip
+  ORDER: with a foreign clip laid down last there was no taker, the scan returned null and
+  the rAF's timeline-order fallback quietly did the right thing. The closing edge is now
+  inclusive for a named clip, and the scan resolves by strict containment first, falling
+  back to the closing edge only if nobody claims the time — the same answer for a plain
+  single-asset timeline, reached without consulting the order.
+- "Am I inside a cut?" scanned every kept segment by asset, so a twin that KEEPS the
+  stretch answered for the clip that cuts it and the cut was never skipped during
+  playback. `locateKeptSegment` restricts the question to the segments of the clip being
+  played: a source time none of them covers is inside *that* clip's trim, however many
+  other clips keep it.
+- `findNextKeptSegment`'s source-clock fallback (for when the raw ruler lags behind the
+  video) compared source positions across a whole asset. "Later in source time" only means
+  anything within one clip: with a slice from late in a recording laid down BEFORE a
+  trimmed slice from early in it, playing into that cut answered the first clip — raw start
+  0 — so playback jumped to the top of the timeline, replayed into the same cut, and
+  looped. It is now scoped to the clip being played, and simply does not apply when no clip
+  is named (the RAW-ruler test above is already the general answer).
+
+### Cursor telemetry is source time, and belongs to every clip that replays it
+
+Auto-zoom reads recorded cursor movement, which is captured against the ORIGINAL media
+file: `timeMs` is the asset's SOURCE time, the same axis `cursor-track.ts` maps through
+`locateSourcePosition`. Zoom regions are authored in RAW TIMELINE ms — that is what
+`anchorRegionsWithDerivedMs` ventilates across clips. The two axes coincide for exactly
+one layout: a single clip, starting at 0, covering the whole recording. Feeding the
+detector's source-time output straight to the store therefore dropped every suggestion
+wherever `[0, assetDuration]` happens to fall on the ruler, i.e. on the first clip —
+"automatic zooms only decorate the first clip". `buildAutoZoomSuggestionsForClips`
+([`zoom-suggestions.ts`](../../src/lib/ai-edition/timeline/zoom-suggestions.ts)) does the
+projection: per clip of the asset, a plain shift (a raw clip is identity between source and
+raw-virtual time), so a dwell replayed by two clips over one recording yields one zoom on
+each. Each clip sees only the samples inside its own source window, so a dwell a cut split
+across two clips is no longer one dwell — the cursor did not sit still across the cut on
+the timeline the user is watching.
+
 ### The same ambiguity in the transcript pane
 
 Two clips over one media do not only share a source coordinate space — they share the
@@ -153,6 +206,15 @@ the contract a reviewer can grade against. Each is asserted in
   assets whose source windows overlap numerically: a zoom fully trimmed away on its
   own clip must not re-appear on the later clip. (`projectRegionsToSource` "drops a
   region a trim removes entirely rather than leaking it onto a later clip".)
+- **A named clip beats anything inferred from (assetId, sourceTime), and clip ORDER is
+  never an input.** Asserted in
+  [`virtual-preview.test.ts`](../../src/lib/ai-edition/timeline/virtual-preview.test.ts)
+  rather than `timelineMap.test.ts`: two clips over one recording, at the closing edge of
+  the one being played, must resolve to *that* clip — and must do so identically however
+  the clips are laid out, including with a foreign clip between or around them. The same
+  rule governs "am I inside a cut?" (`locateKeptSegment`) and "what plays next?"
+  (`findNextKeptSegment`), whose source-clock fallback may only speak about the clip it was
+  given.
 - **Same-identity, same-clip stays one pill; different-identity does not merge.** Two
   regions of equal properties that touch → one pill; touch with one property
   changed → two pills, with no memory of ever having been one. (`coalesceByIdentity`
