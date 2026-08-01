@@ -34,6 +34,7 @@ import { collectNativeFormats } from "@/lib/ai-edition/document/outputFormat";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { useTimelineTranscriptGate } from "@/lib/ai-edition/store/transcriptionStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
@@ -334,6 +335,24 @@ export function V4Timeline({
 	const [aspectMenuOpen, setAspectMenuOpen] = useState(false);
 	const [autoEnhanceOpen, setAutoEnhanceOpen] = useState(false);
 	const [autoBusy, setAutoBusy] = useState(false);
+	// The AI cut pass reads the transcript, and the transcript is produced in the
+	// background (see transcriptionStore). Until it is there, the entry says why
+	// rather than handing the agent a prompt it cannot honour — the failure mode
+	// that made this button the wrong first click for a new user.
+	const transcriptGate = useTimelineTranscriptGate();
+	const smartCutsBlocked = transcriptGate.state !== "ready";
+	const smartCutsHint =
+		transcriptGate.state === "pending"
+			? t("toolbar.smartCutsWaiting")
+			: transcriptGate.state === "ready"
+				? t("toolbar.smartZoomsAndCutsHint")
+				: transcriptGate.reason === "no-audio"
+					? t("toolbar.smartCutsNoAudio")
+					: transcriptGate.reason === "no-speech"
+						? t("toolbar.smartCutsNoSpeech")
+						: transcriptGate.reason === "failed"
+							? t("toolbar.smartCutsFailed")
+							: t("toolbar.smartCutsNeedsTranscript");
 
 	const clips = tl.clips;
 	const total = useMemo(
@@ -1144,13 +1163,22 @@ export function V4Timeline({
 											</span>
 										</span>
 									</button>
-									<button type="button" className={styles.recMenuRow} onClick={runAiEnhance}>
-										<Sparkles size={15} style={{ flexShrink: 0 }} />
+									<button
+										type="button"
+										className={styles.recMenuRow}
+										onClick={runAiEnhance}
+										disabled={smartCutsBlocked}
+										title={transcriptGate.reason === "failed" ? transcriptGate.message : undefined}
+										style={smartCutsBlocked ? { opacity: 0.55, cursor: "not-allowed" } : undefined}
+									>
+										{transcriptGate.state === "pending" ? (
+											<Loader2 size={15} className="animate-spin" style={{ flexShrink: 0 }} />
+										) : (
+											<Sparkles size={15} style={{ flexShrink: 0 }} />
+										)}
 										<span style={{ display: "flex", flexDirection: "column", gap: 1 }}>
 											<span style={{ fontWeight: 600 }}>{t("toolbar.smartZoomsAndCuts")}</span>
-											<span style={{ fontSize: 11, color: "var(--muted)" }}>
-												{t("toolbar.smartZoomsAndCutsHint")}
-											</span>
+											<span style={{ fontSize: 11, color: "var(--muted)" }}>{smartCutsHint}</span>
 										</span>
 									</button>
 								</div>

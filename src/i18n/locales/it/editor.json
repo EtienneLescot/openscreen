@@ -150,7 +150,10 @@
 		"generationFailedHint": "Generazione non riuscita — scegli una lingua e rigenera.",
 		"noPreviewAvailable": "Anteprima non disponibile",
 		"restart": "Riavvia",
-		"detectedLanguage": "Lingua rilevata: {{language}}"
+		"detectedLanguage": "Lingua rilevata: {{language}}",
+		"noAudioTrack": "Nessuna traccia audio",
+		"noAudioTrackHint": "Questo contenuto non ha una traccia audio: non c'è nulla da trascrivere.",
+		"noSpeechDetected": "Nessun parlato rilevato"
 	},
 	"exportDialog": {
 		"title": "Esporta",

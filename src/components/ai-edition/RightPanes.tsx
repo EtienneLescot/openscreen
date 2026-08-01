@@ -53,6 +53,7 @@ import {
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatMs } from "@/lib/ai-edition/timeline/format";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
+import type { TranscriptGateReason } from "@/lib/ai-edition/transcription/status";
 import { getAssetPath } from "@/lib/assetPath";
 import { supportsWebcamReactiveZoom } from "@/lib/compositeLayout";
 import { supportsCursorClickEffects } from "@/lib/cursor/cursorCapabilities";
@@ -530,6 +531,7 @@ export function TranscriptPane({
 	onTranscribe,
 	canTranscribe,
 	isTranscribing,
+	blocked,
 }: {
 	clips: AxcutClip[];
 	transcripts: AxcutTranscript[];
@@ -542,6 +544,10 @@ export function TranscriptPane({
 	onTranscribe: () => void;
 	canTranscribe: boolean;
 	isTranscribing: boolean;
+	/** Why no transcript can be had right now, resolved over the timeline's assets
+	 *  (`resolveTranscriptGate`). Silent media disable the button; anything else
+	 *  leaves it clickable. */
+	blocked?: { reason: TranscriptGateReason; message?: string };
 }) {
 	const ts = useScopedT("settings");
 	// Subscribed here, not passed down: the playhead is rewritten every animation
@@ -576,6 +582,9 @@ export function TranscriptPane({
 	const cueWordId = useMemo(() => findCueWordId(sections, cue), [sections, cue]);
 
 	const hasAnyTranscript = transcripts.length > 0;
+	// Only silence is a dead end: every other reason (a retryable failure, no
+	// engine, nothing attempted) leaves the button worth pressing.
+	const silentMedia = blocked?.reason === "no-audio";
 
 	if (clips.length === 0 || !hasAnyTranscript) {
 		return (
@@ -598,16 +607,26 @@ export function TranscriptPane({
 				>
 					<FileText size={28} style={{ color: "var(--dim)" }} />
 					<p style={{ font: "500 13px var(--font-body)", color: "var(--fg-2)" }}>
-						{clips.length === 0 ? ts("transcript.noClips") : ts("transcript.noTranscript")}
+						{clips.length === 0
+							? ts("transcript.noClips")
+							: isTranscribing
+								? ts("transcript.transcribing")
+								: silentMedia
+									? ts("transcript.noAudio")
+									: ts("transcript.noTranscript")}
 					</p>
 					<p style={{ font: "400 12px var(--font-body)", color: "var(--muted)", maxWidth: 260 }}>
-						{ts("transcript.whisperHint")}
+						{blocked?.reason === "failed" && blocked.message
+							? blocked.message
+							: ts("transcript.whisperHint")}
 					</p>
 					<button
 						type="button"
 						className={`${styles.btn} ${styles.btnPrimary}`}
 						onClick={onTranscribe}
-						disabled={!canTranscribe || isTranscribing}
+						// Nothing to retry on a media with no audio track: the run would
+						// fail on the same missing track every time.
+						disabled={!canTranscribe || isTranscribing || silentMedia}
 					>
 						{isTranscribing ? ts("transcript.transcribing") : ts("transcript.transcribeNow")}
 					</button>

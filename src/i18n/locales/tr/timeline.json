@@ -82,6 +82,11 @@
 		"addedAutoZoom": "{{count}} otomatik yakınlaştırma eklendi",
 		"addedAutoZoomPlural": "{{count}} otomatik yakınlaştırma eklendi",
 		"autoZoomFailed": "Otomatik yakınlaştırma başarısız oldu",
-		"aiEnhanceRequested": "Yapay zeka aracısından ölü zamanları kırpması istendi"
+		"aiEnhanceRequested": "Yapay zeka aracısından ölü zamanları kırpması istendi",
+		"smartCutsWaiting": "Metne dökülüyor… birazdan hazır",
+		"smartCutsNeedsTranscript": "Bir döküm gerekiyor",
+		"smartCutsNoAudio": "Bu medyada ses yok",
+		"smartCutsNoSpeech": "Konuşma algılanmadı",
+		"smartCutsFailed": "Metne dökme başarısız — Medya bölümünden yeniden deneyin"
 	}
 }

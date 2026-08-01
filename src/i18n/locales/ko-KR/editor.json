@@ -150,7 +150,10 @@
 		"generationFailedHint": "생성 실패 — 언어를 선택하고 다시 생성하세요.",
 		"noPreviewAvailable": "미리보기를 사용할 수 없습니다",
 		"restart": "다시 시작",
-		"detectedLanguage": "감지된 언어: {{language}}"
+		"detectedLanguage": "감지된 언어: {{language}}",
+		"noAudioTrack": "오디오 트랙 없음",
+		"noAudioTrackHint": "이 미디어에는 오디오 트랙이 없어 받아쓸 내용이 없습니다.",
+		"noSpeechDetected": "음성이 감지되지 않음"
 	},
 	"exportDialog": {
 		"title": "내보내기",

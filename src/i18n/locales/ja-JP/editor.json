@@ -150,7 +150,10 @@
 		"generationFailedHint": "生成に失敗しました — 言語を選んで再生成してください。",
 		"noPreviewAvailable": "プレビューがありません",
 		"restart": "再生位置を先頭に戻す",
-		"detectedLanguage": "検出された言語: {{language}}"
+		"detectedLanguage": "検出された言語: {{language}}",
+		"noAudioTrack": "音声トラックがありません",
+		"noAudioTrackHint": "このメディアには音声トラックがないため、文字起こしできません。",
+		"noSpeechDetected": "音声が検出されませんでした"
 	},
 	"exportDialog": {
 		"title": "エクスポート",

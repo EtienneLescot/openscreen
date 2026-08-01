@@ -5,12 +5,7 @@ import {
 	replaceTimeline as replaceTimelineOp,
 	restoreFullTimeline as restoreFullTimelineOp,
 } from "../document/timeline";
-import {
-	type AxcutAsset,
-	type AxcutDocument,
-	type AxcutTranscript,
-	documentSchema,
-} from "../schema";
+import { type AxcutAsset, type AxcutDocument, documentSchema } from "../schema";
 
 // ponytail: thin Zustand wrapper over the native-bridge client. Keeps the
 // current project + revision counter in renderer memory; mutations round-trip
@@ -45,7 +40,6 @@ export interface ProjectState {
 	setDocument: (document: AxcutDocument) => void;
 	replaceTimeline: (intervals: Interval[], reason: string) => Promise<void>;
 	restoreFullTimeline: () => Promise<void>;
-	setTranscript: (transcript: AxcutTranscript) => Promise<void>;
 	setSourceDuration: (sec: number) => void;
 	setCurrentTime: (sec: number) => void;
 	setPlaying: (playing: boolean) => void;
@@ -258,21 +252,6 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 		const doc = get().document;
 		if (!doc) throw new Error("No project loaded");
 		const next = restoreFullTimelineOp(doc);
-		await get().saveDocument(next);
-	},
-
-	async setTranscript(transcript) {
-		const doc = get().document;
-		if (!doc) throw new Error("No project loaded");
-		const transcripts = [
-			...doc.transcripts.filter((t) => t.assetId !== transcript.assetId),
-			transcript,
-		];
-		const next: AxcutDocument = {
-			...doc,
-			transcript: doc.project.primaryAssetId === transcript.assetId ? transcript : doc.transcript,
-			transcripts,
-		};
 		await get().saveDocument(next);
 	},
 

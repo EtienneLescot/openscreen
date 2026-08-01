@@ -12,9 +12,13 @@ import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
 } from "@/lib/ai-edition/document/timeline";
-import { transcribeAsset } from "@/lib/ai-edition/document/transcribe";
 import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import {
+	useAutoTranscription,
+	useTimelineTranscriptGate,
+	useTranscriptionStore,
+} from "@/lib/ai-edition/store/transcriptionStore";
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
@@ -86,7 +90,6 @@ export function NewEditorShell() {
 	const dirty = useProjectStore((s) => s.dirty);
 	const createProject = useProjectStore((s) => s.createProject);
 	const addAsset = useProjectStore((s) => s.addAsset);
-	const setTranscript = useProjectStore((s) => s.setTranscript);
 	const setCurrentTime = useProjectStore((s) => s.setCurrentTime);
 	const setSourceDuration = useProjectStore((s) => s.setSourceDuration);
 	const loadProject = useProjectStore((s) => s.loadProject);
@@ -99,10 +102,6 @@ export function NewEditorShell() {
 	const setPlaying = useProjectStore((s) => s.setPlaying);
 
 	const [seekTarget, setSeekTarget] = useState<SeekTarget | null>(null);
-	const [isTranscribing, setIsTranscribing] = useState(false);
-	const [assetStatuses, setAssetStatuses] = useState<
-		Record<string, "pending" | "running" | "failed">
-	>({});
 	const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
 	// v4 shell: three modes (Media / Edit / Rec), a collapsible agent (chat)
 	// column, and a floating facet inspector over the stage.
@@ -129,6 +128,17 @@ export function NewEditorShell() {
 		resolve: (choice: UnsavedChoice) => void;
 	} | null>(null);
 	const { shortcuts, isMac, openConfig: openShortcutsConfig } = useShortcuts();
+	// Transcription is local and every transcript-driven feature (Smart cuts,
+	// captions, the transcript pane) needs one, so the editor produces them by
+	// itself instead of waiting for the user to find the button. This hook is
+	// the ONLY place the background pass is driven from — see transcriptionStore.
+	useAutoTranscription();
+	const requestTimelineTranscripts = useTranscriptionStore((s) => s.requestTimelineTranscripts);
+	// Resolved over the assets the TIMELINE plays, not over the primary asset: in
+	// a recording project the primary asset is the screen capture, which is
+	// routinely silent, and keying the transcript pane off it made the pane claim
+	// "no audio track" for a project whose actual footage was mid-transcription.
+	const transcriptGate = useTimelineTranscriptGate();
 	const tl = useTimeline();
 	useUndoRedoShortcuts(() => {
 		// ponytail: placeholder, wire when undo stack merges with history
@@ -473,70 +483,19 @@ export function NewEditorShell() {
 		handleTimeChange(next.timelineStartSec);
 	}, [clips, handleSeek, handleTimeChange]);
 
+	// "Transcribe now" from the transcript pane. The run itself belongs to the
+	// transcription store (it owns the queue, the toasts and the failure
+	// bookkeeping) — all the shell adds is bringing the transcript into view
+	// once it lands.
 	const handleTranscribe = useCallback(async () => {
-		if (!document || !document.project.primaryAssetId) return;
-		const assetId = document.project.primaryAssetId;
-		setIsTranscribing(true);
-		setAssetStatuses((prev) => ({ ...prev, [assetId]: "running" }));
-		try {
-			const transcript = await transcribeAsset(document, assetId, {
-				onStatus: (s) => toast.loading(`Transcribing: ${s}`, { id: "transcribe" }),
-			});
-			toast.dismiss("transcribe");
-			await setTranscript(transcript);
+		const before = useProjectStore.getState().document?.transcripts.length ?? 0;
+		await requestTimelineTranscripts();
+		if ((useProjectStore.getState().document?.transcripts.length ?? 0) > before) {
 			setMode("edit");
 			setFacet("transcript");
 			setInspectorOpen(true);
-			toast.success("Transcript ready");
-			setAssetStatuses((prev) => {
-				const next = { ...prev };
-				delete next[assetId];
-				return next;
-			});
-		} catch (err) {
-			toast.dismiss("transcribe");
-			toast.error("Transcription failed", {
-				description: err instanceof Error ? err.message : String(err),
-			});
-			setAssetStatuses((prev) => ({ ...prev, [assetId]: "failed" }));
-		} finally {
-			setIsTranscribing(false);
 		}
-	}, [document, setTranscript]);
-
-	// Per-asset regenerate fired from the Source Transcript modal. Same
-	// pipeline as `handleTranscribe` but takes any assetId + a target
-	// language — `transcribeAsset` already accepts `language` and `setTranscript`
-	// replaces the matching entry in `doc.transcripts`.
-	const handleRegenerateAsset = useCallback(
-		async (assetId: string, language: string) => {
-			const doc = useProjectStore.getState().document;
-			if (!doc) return;
-			setAssetStatuses((prev) => ({ ...prev, [assetId]: "running" }));
-			toast.loading(`Regenerating: ${language}`, { id: `regen-${assetId}` });
-			try {
-				const transcript = await transcribeAsset(doc, assetId, {
-					language,
-					onStatus: (s) => toast.loading(`Regenerating: ${s}`, { id: `regen-${assetId}` }),
-				});
-				await setTranscript(transcript);
-				setAssetStatuses((prev) => {
-					const next = { ...prev };
-					delete next[assetId];
-					return next;
-				});
-				toast.dismiss(`regen-${assetId}`);
-				toast.success("Transcript regenerated");
-			} catch (err) {
-				toast.dismiss(`regen-${assetId}`);
-				toast.error("Transcription failed", {
-					description: err instanceof Error ? err.message : String(err),
-				});
-				setAssetStatuses((prev) => ({ ...prev, [assetId]: "failed" }));
-			}
-		},
-		[setTranscript],
-	);
+	}, [requestTimelineTranscripts]);
 
 	const handleBrowseProject = useCallback(async () => {
 		try {
@@ -793,45 +752,6 @@ export function NewEditorShell() {
 		}
 	}, [tl]);
 
-	// Captions are derived from the transcript, so the only caption "action" the
-	// shell still owns is producing that transcript — everything else (styling,
-	// placement, language) is a setting the Captions pane writes directly.
-	const handleTranscribeForCaptions = useCallback(async () => {
-		const doc = useProjectStore.getState().document;
-		if (!doc) return;
-		const assetId = doc.project.primaryAssetId;
-		if (!assetId) {
-			toast.info("Add a video to the project before transcribing.");
-			return;
-		}
-		if (doc.transcripts.some((t) => t.assetId === assetId)) return;
-
-		setIsTranscribing(true);
-		setAssetStatuses((prev) => ({ ...prev, [assetId]: "running" }));
-		try {
-			toast.loading("Transcribing…", { id: "captions-transcribe" });
-			const transcript = await transcribeAsset(doc, assetId, {
-				onStatus: (s) => toast.loading(`Transcribing: ${s}`, { id: "captions-transcribe" }),
-			});
-			await setTranscript(transcript);
-			setAssetStatuses((prev) => {
-				const next = { ...prev };
-				delete next[assetId];
-				return next;
-			});
-			toast.dismiss("captions-transcribe");
-			toast.success("Transcript ready — captions are live.");
-		} catch (err) {
-			setAssetStatuses((prev) => ({ ...prev, [assetId]: "failed" }));
-			toast.dismiss("captions-transcribe");
-			toast.error("Transcription failed", {
-				description: err instanceof Error ? err.message : String(err),
-			});
-		} finally {
-			setIsTranscribing(false);
-		}
-	}, [setTranscript]);
-
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (e.target instanceof HTMLTextAreaElement || e.target instanceof HTMLInputElement) return;
@@ -1082,13 +1002,17 @@ export function NewEditorShell() {
 		transcripts: document?.transcripts ?? [],
 		assets: document?.assets ?? [],
 		trimRanges: document?.timeline?.trimRanges ?? [],
-		busy: isTranscribing,
+		busy: transcriptGate.state === "pending",
 		onSeek: handleSeek,
 		onAddTrimRange: handleAddTrimRange,
 		onRemoveTrimRange: handleRemoveTrimRange,
 		onTranscribe: handleTranscribe,
 		canTranscribe: hasAsset,
-		isTranscribing,
+		isTranscribing: transcriptGate.state === "pending",
+		blocked:
+			transcriptGate.state === "blocked" && transcriptGate.reason
+				? { reason: transcriptGate.reason, message: transcriptGate.message }
+				: undefined,
 	};
 
 	return (
@@ -1119,11 +1043,7 @@ export function NewEditorShell() {
 				{mode === "edit" && chatOpen ? (
 					<>
 						<aside className={v4.agent} aria-label={te("shell.aiEditor")}>
-							<LeftPanel
-								active="chat"
-								assetStatuses={assetStatuses}
-								onRegenerateAsset={handleRegenerateAsset}
-							/>
+							<LeftPanel active="chat" />
 						</aside>
 						<div
 							className={v4.chatResizeHandle}
@@ -1212,13 +1132,11 @@ export function NewEditorShell() {
 								onToggleOpen={() => setInspectorOpen((v) => !v)}
 								clips={tl.clips}
 								onEditClip={setEditClipTarget}
-								onTranscribe={() => void handleTranscribeForCaptions()}
-								isTranscribing={isTranscribing}
 								transcriptProps={transcriptProps}
 							/>
 						</>
 					) : mode === "media" ? (
-						<MediaStage assetStatuses={assetStatuses} onRegenerateAsset={handleRegenerateAsset} />
+						<MediaStage />
 					) : (
 						<RecStage
 							onStartRecording={() => void handleNewRecording()}

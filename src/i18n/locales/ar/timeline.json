@@ -82,6 +82,11 @@
 		"addedAutoZoom": "تمت إضافة {{count}} تكبير تلقائي",
 		"addedAutoZoomPlural": "تمت إضافة {{count}} تكبيرات تلقائية",
 		"autoZoomFailed": "فشل التكبير التلقائي",
-		"aiEnhanceRequested": "طُلب من وكيل الذكاء الاصطناعي قص الأوقات الميتة"
+		"aiEnhanceRequested": "طُلب من وكيل الذكاء الاصطناعي قص الأوقات الميتة",
+		"smartCutsWaiting": "جارٍ النسخ… سيكون جاهزًا بعد قليل",
+		"smartCutsNeedsTranscript": "يتطلب نصًا منسوخًا",
+		"smartCutsNoAudio": "لا يحتوي هذا الملف على صوت",
+		"smartCutsNoSpeech": "لم يتم اكتشاف كلام",
+		"smartCutsFailed": "فشل النسخ — أعد المحاولة من قسم الوسائط"
 	}
 }
