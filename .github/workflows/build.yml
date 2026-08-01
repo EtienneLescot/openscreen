@@ -415,14 +415,12 @@ jobs:
           path: artifacts/windows
 
       - name: Download macOS arm64 DMG
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: openscreen-mac-arm64
           path: artifacts/mac-arm64
 
       - name: Download macOS x64 DMG
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: openscreen-mac-x64

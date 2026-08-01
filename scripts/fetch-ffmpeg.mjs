@@ -190,7 +190,11 @@ function assertLgpl(exePath, extraEnv) {
 
 	// Belt and braces: whatever the flags claim, the binary must not actually
 	// expose a GPL encoder.
-	const encoders = run(exePath, ["-hide_banner", "-encoders"]).stdout ?? "";
+	// `opts` here too: without it a SHARED build cannot resolve its own libav*.so,
+	// prints nothing, and this check passes on an empty string — silently vouching
+	// for exactly the binaries it exists to reject. Measured: 0 bytes without the
+	// env, 229 encoders with it.
+	const encoders = run(exePath, ["-hide_banner", "-encoders"], opts).stdout ?? "";
 	for (const lib of ["libx264", "libx265"]) {
 		if (new RegExp(`\\s${lib}\\s`).test(encoders)) problems.push(`exposes the ${lib} encoder`);
 	}
@@ -202,7 +206,7 @@ function assertLgpl(exePath, extraEnv) {
 				"Bundling it would relicense OpenScreen under the GPL.",
 		);
 	}
-	const ver = run(exePath, ["-hide_banner", "-version"]).stdout ?? "";
+	const ver = run(exePath, ["-hide_banner", "-version"], opts).stdout ?? "";
 	return ver.split("\n")[0]?.trim() ?? "";
 }
 
