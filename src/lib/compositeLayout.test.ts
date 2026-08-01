@@ -111,8 +111,9 @@ describe("computeCompositeLayout", () => {
 			webcamSize: { width: 960, height: 720 },
 			webcamSizePreset: 34,
 		});
-		expect(layout.webcamRect).not.toBeNull();
-		const widthFraction = layout.webcamRect!.width / 230;
+		expect(layout).not.toBeNull();
+		expect(layout!.webcamRect).not.toBeNull();
+		const widthFraction = layout!.webcamRect!.width / 230;
 		expect(widthFraction).toBeLessThan(0.4);
 	});
 

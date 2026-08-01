@@ -34,39 +34,24 @@ jobs:
   typecheck-tests:
     name: Typecheck (tests)
     runs-on: ubuntu-latest
-    # A RATCHET, not a gate. tsconfig.json includes only src + electron and
-    # excludes **/*.test.ts, so no test file has ever been typechecked, and
-    # vitest transpiles without checking — fixture types have drifted from the
-    # schemas they claim to build for years. Failing on the whole backlog would
-    # put a red X on every PR that nobody can fix, and a check everyone ignores
-    # is worse than no check. So: fail only if the count GROWS. Lower BASELINE
-    # whenever you fix some; delete this job's baseline logic at zero.
+    # A GATE now, and the baseline logic is gone — as its own comment instructed
+    # ("delete this job's baseline logic at zero"). The history: tsconfig.json
+    # includes only src + electron and excludes **/*.test.ts, and vitest
+    # transpiles without checking, so no test file had ever been typechecked and
+    # fixture types had drifted from the schemas they claim to build for years.
+    # Failing on that whole backlog at once would have put a red X on every PR
+    # that nobody could fix, so the job shipped as a ratchet (fail only if the
+    # count GROWS), walked down 80 -> 74 -> 71 -> 66. The backlog is now cleared:
+    # every fixture carries the fields its schema actually requires, which is
+    # the point — a fixture missing `cameraTrack` or `reason` was not testing
+    # the shape it claimed to. Keep it at zero. If a genuine error is not worth
+    # fixing on the spot, fix the fixture anyway: re-introducing a baseline
+    # re-opens the drift this closed.
     steps:
       - uses: actions/checkout@v4
       - uses: ./.github/actions/setup
-      - name: Typecheck tests against a baseline
-        shell: bash
-        env:
-          BASELINE: 66
-        run: |
-          set -uo pipefail
-          COUNT=$(npx tsc -p tsconfig.test.json --noEmit 2>&1 | grep -c 'error TS' || true)
-          {
-            echo "## Test-file typecheck"
-            echo ""
-            echo "| | |"
-            echo "|---|---|"
-            echo "| Errors now | ${COUNT} |"
-            echo "| Baseline | ${BASELINE} |"
-          } >> "$GITHUB_STEP_SUMMARY"
-          if [ "${COUNT}" -gt "${BASELINE}" ]; then
-            echo "::error::Test-file type errors went ${BASELINE} -> ${COUNT}. Fix the new ones, or raise BASELINE in ci.yml with a reason."
-            npx tsc -p tsconfig.test.json --noEmit 2>&1 | grep 'error TS' || true
-            exit 1
-          fi
-          if [ "${COUNT}" -lt "${BASELINE}" ]; then
-            echo "::notice::Test-file type errors down to ${COUNT} (baseline ${BASELINE}). Lower BASELINE in ci.yml to lock the win in."
-          fi
+      - name: Typecheck tests
+        run: npx tsc -p tsconfig.test.json --noEmit
 
   docs:
     name: Docs

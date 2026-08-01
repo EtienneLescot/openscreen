@@ -21,6 +21,7 @@ function makeV2Project(overrides: Partial<EditorProjectData> = {}): EditorProjec
 			padding: 50,
 			cropRegion: { x: 0, y: 0, width: 1, height: 1 },
 			zoomRegions: [],
+			cameraFullscreenRegions: [],
 			autoZoomEnabled: false,
 			autoFocusAll: false,
 			trimRegions: [],
@@ -45,7 +46,7 @@ function makeV2Project(overrides: Partial<EditorProjectData> = {}): EditorProjec
 }
 
 describe("migrateProjectDataToAxcutDocument", () => {
-	it("produces a v3 document with one asset and one clip from a v2 single-recording project", () => {
+	it("produces a current-schema document with one asset and one clip from a v2 single-recording project", () => {
 		const doc = migrateProjectDataToAxcutDocument(makeV2Project());
 
 		expect(doc.schemaVersion).toBe(7);

@@ -20,9 +20,9 @@ import {
 } from "./timelineMap";
 
 function clip(overrides: Partial<AxcutClip> & Pick<AxcutClip, "id" | "assetId">): AxcutClip {
+	// `id`/`assetId` come from the spread below — `Pick` makes them required there,
+	// so restating them above would just be overwritten.
 	return {
-		id: overrides.id,
-		assetId: overrides.assetId,
 		sourceStartSec: 0,
 		sourceEndSec: 4,
 		timelineStartSec: 0,

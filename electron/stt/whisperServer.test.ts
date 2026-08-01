@@ -6,7 +6,14 @@ import { writeSamplesAsWav } from "./wav";
 import { WhisperServerManager } from "./whisperServer";
 
 vi.mock("node:child_process", async (importOriginal) => {
-	const actual = await importOriginal<typeof import("node:child_process")>();
+	// `node:child_process` is CJS, so the ESM namespace also carries a `default`
+	// holding the same exports — undeclared in @types/node. The mock has to keep it
+	// so `import cp from "node:child_process"` consumers still see the stub.
+	const actual = await importOriginal<
+		typeof import("node:child_process") & {
+			default?: Partial<typeof import("node:child_process")>;
+		}
+	>();
 	const spawn = vi.fn();
 	return { ...actual, spawn, default: { ...(actual.default ?? {}), spawn } };
 });

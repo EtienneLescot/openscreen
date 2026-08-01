@@ -16,8 +16,12 @@ describe("probeVideoDuration", () => {
 		vi.useFakeTimers();
 		created = [];
 		originalCreate = document.createElement;
+		// `document.createElement` is overloaded, and Electron's typings append a
+		// `"webview"`-only overload — the one `.call` resolves to, which then rejects a
+		// generic string tag. Pin the plain `(tagName: string) => HTMLElement` overload.
+		const createReal: (this: Document, tag: string) => HTMLElement = originalCreate;
 		document.createElement = ((tag: string) => {
-			const node = originalCreate.call(document, tag);
+			const node = createReal.call(document, tag);
 			if (tag === "video") {
 				const fake: FakeVideo = {
 					duration: Number.NaN,

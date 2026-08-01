@@ -6,18 +6,31 @@ import {
 	DEFAULT_WEBCAM_MASK_SHAPE,
 } from "@/components/video-editor/types";
 import type { AxcutDocument } from "../schema";
+import { axcutSchemaVersion } from "../schema";
 import { DEFAULT_EDITOR_SETTINGS, getEditorSettings, patchEditorSettings } from "./editorSettings";
 
 const baseDoc: AxcutDocument = {
-	schemaVersion: 3,
-	project: { id: "p1", title: "Test", primaryAssetId: "a1" },
-	assets: [{ id: "a1", kind: "video", label: "clip", originalPath: "/x.mp4" }],
-	timeline: { clips: [], trimRanges: [] },
+	schemaVersion: axcutSchemaVersion,
+	project: {
+		id: "p1",
+		title: "Test",
+		createdAt: "2026-06-25T10:00:00.000Z",
+		updatedAt: "2026-06-25T10:00:00.000Z",
+		primaryAssetId: "a1",
+	},
+	assets: [{ id: "a1", kind: "video", label: "clip", originalPath: "/x.mp4", cameraTrack: null }],
+	timeline: {
+		clips: [],
+		gaps: [],
+		trimRanges: [],
+		muteRanges: [],
+		speedRanges: [],
+		captionRanges: [],
+	},
 	annotations: [],
 	zoomRanges: [],
 	transcripts: [],
 	transcript: null,
-	preview: { revision: 0 },
 	legacyEditor: null,
 };
 

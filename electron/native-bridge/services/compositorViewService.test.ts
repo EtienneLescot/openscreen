@@ -281,7 +281,10 @@ describe("resolveSceneAssetPaths", () => {
 			Object.defineProperty(process, "resourcesPath", originalResourcesPath);
 		}
 		if (originalVitePublic === undefined) {
-			delete process.env.VITE_PUBLIC;
+			// `NodeJS.ProcessEnv.VITE_PUBLIC` is declared non-optional (electron-env.d.ts),
+			// so `delete` is rejected outright even though main.ts only assigns it at
+			// startup and it really is absent under vitest. Reflect deletes the same key.
+			Reflect.deleteProperty(process.env, "VITE_PUBLIC");
 		} else {
 			process.env.VITE_PUBLIC = originalVitePublic;
 		}
@@ -291,6 +294,10 @@ describe("resolveSceneAssetPaths", () => {
 	function resolved(scene: Record<string, unknown>) {
 		return JSON.parse(resolveSceneAssetPaths(JSON.stringify(scene)));
 	}
+
+	/** What `resolveSceneAssetPaths` writes into `cursor.cursorSprites` — same shape the
+	 *  service declares for the sprite map it builds. */
+	type ResolvedSprite = { path: string; hotspotX: number; hotspotY: number };
 
 	it("resolves a bundled wallpaper to the extraResources copy, not the unreadable asar path", () => {
 		const out = resolved({ background: { kind: "image", path: "/wallpapers/wallpaper1.jpg" } });
@@ -324,7 +331,7 @@ describe("resolveSceneAssetPaths", () => {
 
 		// The whole point of the fraction: it survives the size slider. A hotspot in source
 		// pixels would have to be rescaled at draw time, and drifted when it wasn't.
-		for (const [type, sprite] of Object.entries(sprites)) {
+		for (const [type, sprite] of Object.entries<ResolvedSprite>(sprites)) {
 			expect(sprite.hotspotX, type).toBeGreaterThanOrEqual(0);
 			expect(sprite.hotspotX, type).toBeLessThanOrEqual(1);
 			expect(sprite.hotspotY, type).toBeGreaterThanOrEqual(0);

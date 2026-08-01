@@ -2,11 +2,17 @@ import { fireEvent, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startGlobalPointerDrag } from "./pointer-drag";
 
-interface ElementWithCapture extends Element {
+// `Element` declares the three pointer-capture methods as always present, but jsdom
+// may ship without them — hence Omit + optional redeclaration rather than `extends`,
+// which cannot make an inherited required member optional.
+type ElementWithCapture = Omit<
+	Element,
+	"hasPointerCapture" | "setPointerCapture" | "releasePointerCapture"
+> & {
 	hasPointerCapture?: (id: number) => boolean;
 	setPointerCapture?: (id: number) => void;
 	releasePointerCapture?: (id: number) => void;
-}
+};
 
 describe("startGlobalPointerDrag", () => {
 	beforeEach(() => {
@@ -97,7 +103,12 @@ describe("startGlobalPointerDrag", () => {
 
 	it("cancel-returned function ends with pointercancel", () => {
 		const onEnd = vi.fn();
-		let cancel: (() => void) | null = null;
+		// Seeded with a no-op instead of null: the assignment happens inside the
+		// pointerdown handler, which control-flow analysis cannot see, so a nullable
+		// `cancel` narrows to `null` and stops being callable at the call site below.
+		// If the handler never ran, calling the no-op leaves `onEnd` unfired and the
+		// expectation still fails.
+		let cancel: () => void = () => undefined;
 		const { getByRole } = render(
 			<button
 				type="button"
@@ -112,7 +123,7 @@ describe("startGlobalPointerDrag", () => {
 			</button>,
 		);
 		fireEvent.pointerDown(getByRole("button"), { pointerId: 5, buttons: 1 });
-		cancel?.();
+		cancel();
 		expect(onEnd).toHaveBeenCalledWith("pointercancel", undefined);
 	});
 });

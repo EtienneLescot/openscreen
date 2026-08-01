@@ -5,8 +5,18 @@
 // `electron/ai-edition/chat-service.test.ts`.
 
 import { describe, expect, it } from "vitest";
-import { type AxcutDocument, createEmptyDocument } from "../schema";
+import { type AxcutClip, type AxcutDocument, createEmptyDocument } from "../schema";
 import { applyTimelineOperation } from "./operations";
+
+// `sourceEndSec` is optional in the schema (a clip migrated before its asset was
+// probed has no known end). Every clip these operations build does have one, so
+// assert that rather than folding a missing end into a zero-length clip.
+function sourceLength(clip: AxcutClip): number {
+	if (clip.sourceEndSec === undefined) {
+		throw new Error(`clip ${clip.id} has no sourceEndSec`);
+	}
+	return clip.sourceEndSec - clip.sourceStartSec;
+}
 
 function makeDoc(): AxcutDocument {
 	const base = createEmptyDocument({ title: "Test", projectId: "proj_ops" });
@@ -16,6 +26,7 @@ function makeDoc(): AxcutDocument {
 		label: "Recording",
 		originalPath: "C:/videos/rec.mp4",
 		durationSec: 60,
+		cameraTrack: null,
 	};
 	return {
 		...base,
@@ -77,6 +88,7 @@ describe("applyTimelineOperation.add_trim_range", () => {
 			label: "Recording 2",
 			originalPath: "C:/videos/rec2.mp4",
 			durationSec: 30,
+			cameraTrack: null,
 		};
 		const docWithTwoAssets: AxcutDocument = {
 			...doc,
@@ -254,7 +266,7 @@ describe("applyTimelineOperation.drop_range", () => {
 		expect(asset).toBeDefined();
 		const totalKeep = next.timeline.clips
 			.filter((c) => c.assetId === "asset_1")
-			.reduce((sum, c) => sum + (c.sourceEndSec - c.sourceStartSec), 0);
+			.reduce((sum, c) => sum + sourceLength(c), 0);
 		expect(totalKeep).toBe(50);
 	});
 
@@ -297,7 +309,7 @@ describe("applyTimelineOperation.replace_timeline", () => {
 		expect(result.summary).toMatch(/rebuilt timeline .2 interval/);
 		const clips = result.document.timeline.clips.filter((c) => c.assetId === "asset_1");
 		expect(clips).toHaveLength(2);
-		const totalClip = clips.reduce((s, c) => s + (c.sourceEndSec - c.sourceStartSec), 0);
+		const totalClip = clips.reduce((s, c) => s + sourceLength(c), 0);
 		expect(totalClip).toBe(25);
 	});
 });
@@ -315,7 +327,7 @@ describe("applyTimelineOperation.restore_full_timeline", () => {
 		expect(asset).toBeDefined();
 		const totalClip = restored.document.timeline.clips
 			.filter((c) => c.assetId === "asset_1")
-			.reduce((s, c) => s + (c.sourceEndSec - c.sourceStartSec), 0);
+			.reduce((s, c) => s + sourceLength(c), 0);
 		expect(totalClip).toBe(60);
 		expect(restored.document.timeline.trimRanges).toHaveLength(0);
 	});

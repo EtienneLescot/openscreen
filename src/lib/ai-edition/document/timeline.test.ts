@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { AxcutClip, AxcutDocument, AxcutTrimRange } from "../schema";
+import {
+	type AxcutClip,
+	type AxcutDocument,
+	type AxcutTrimRange,
+	axcutSchemaVersion,
+} from "../schema";
 import {
 	buildTimelineFromIntervals,
 	duplicateClip,
@@ -22,7 +27,7 @@ import {
 
 function makeDoc(overrides: Partial<AxcutDocument> = {}): AxcutDocument {
 	return {
-		schemaVersion: 3,
+		schemaVersion: axcutSchemaVersion,
 		project: {
 			id: "proj_1",
 			title: "Test",
@@ -37,6 +42,7 @@ function makeDoc(overrides: Partial<AxcutDocument> = {}): AxcutDocument {
 				label: "screen.mp4",
 				originalPath: "/tmp/screen.mp4",
 				durationSec: 60,
+				cameraTrack: null,
 			},
 		],
 		transcript: null,
@@ -951,7 +957,6 @@ describe("duplicateClip / moveClip", () => {
 			zoomRanges: [
 				{
 					id: "z1",
-					groupId: "z1",
 					clipId: "clip_b",
 					sourceStartSec: 22,
 					sourceEndSec: 24,

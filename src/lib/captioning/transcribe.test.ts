@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from "vitest";
 
 import { transcribeMono16kToSegments } from "./transcribe";
 
@@ -40,12 +40,17 @@ type RendererSttApi = {
 	onStatus?: (cb: Listener) => () => void;
 };
 
-let mockApi: RendererSttApi;
+/** Same shape as the real API, but with the mock control surface on `transcribe`. */
+type MockedSttApi = RendererSttApi & {
+	transcribe: Mock<RendererSttApi["transcribe"]>;
+};
+
+let mockApi: MockedSttApi;
 let lastStatusCb: Listener | null = null;
 
 const installMockApi = () => {
 	mockApi = {
-		transcribe: vi.fn(),
+		transcribe: vi.fn<RendererSttApi["transcribe"]>(),
 		onStatus: vi.fn((cb: Listener) => {
 			lastStatusCb = cb;
 			return () => {

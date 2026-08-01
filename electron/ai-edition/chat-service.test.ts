@@ -1,3 +1,5 @@
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { beforeEach, describe, expect, it } from "vitest";
 import { type AxcutDocument, createEmptyDocument } from "../../src/lib/ai-edition/schema";
 import {
@@ -8,6 +10,7 @@ import {
 	runTimelineOperation,
 	selectSession,
 } from "./chat-service";
+import { DocumentService } from "./document-service";
 import type { LlmConfigStore } from "./llm-config-store";
 
 describe("chat-service sessions", () => {
@@ -126,6 +129,8 @@ describe("runTimelineOperation", () => {
 					label: "Rec",
 					originalPath: "/tmp/r.mp4",
 					durationSec: 60,
+					// Screen-only recording: no webcam track attached.
+					cameraTrack: null,
 				},
 			],
 			timeline: {
@@ -147,20 +152,42 @@ describe("runTimelineOperation", () => {
 		};
 	}
 
+	// runTimelineOperation takes the concrete DocumentService, which owns private
+	// state (projectsRoot, the per-project write queue), so no object literal can
+	// stand in for it. Subclassing keeps the stub a real DocumentService while
+	// replacing the only two methods runTimelineOperation calls with in-memory
+	// versions — nothing here touches the filesystem, so projectsRoot is never
+	// read and no directory is created.
+	class StubDocumentService extends DocumentService {
+		constructor(readonly file: { stored: AxcutDocument | undefined }) {
+			super(path.join(tmpdir(), "openscreen-chat-service-test-unused"));
+		}
+
+		override async getProject(): Promise<AxcutDocument> {
+			if (!this.file.stored) throw new Error("no document");
+			return this.file.stored;
+		}
+
+		override async saveProject(doc: AxcutDocument): Promise<AxcutDocument> {
+			this.file.stored = doc;
+			return doc;
+		}
+	}
+
+	// Same stub, but both disk-facing methods fail — the "disk is dead" path.
+	class BrokenDocumentService extends StubDocumentService {
+		override async getProject(): Promise<AxcutDocument> {
+			throw new Error("disk is dead");
+		}
+
+		override async saveProject(): Promise<AxcutDocument> {
+			throw new Error("disk is dead");
+		}
+	}
+
 	function makeDocumentsStub() {
-		const initial = makeDocument();
-		const file: { stored: AxcutDocument | undefined } = { stored: initial };
-		const documents = {
-			async getProject(_id: string): Promise<AxcutDocument> {
-				if (!file.stored) throw new Error("no document");
-				return file.stored;
-			},
-			async saveProject(doc: AxcutDocument): Promise<AxcutDocument> {
-				file.stored = doc;
-				return doc;
-			},
-		};
-		return { documents, file };
+		const file: { stored: AxcutDocument | undefined } = { stored: makeDocument() };
+		return { documents: new StubDocumentService(file), file };
 	}
 
 	it("applies the op, persists, and records an assistant summary", async () => {
@@ -185,14 +212,7 @@ describe("runTimelineOperation", () => {
 	});
 
 	it("returns success:false on getProject failure", async () => {
-		const documents = {
-			async getProject() {
-				throw new Error("disk is dead");
-			},
-			async saveProject() {
-				throw new Error("disk is dead");
-			},
-		};
+		const documents = new BrokenDocumentService({ stored: makeDocument() });
 		const s = createSession("proj_run_err");
 		const result = await runTimelineOperation(
 			"proj_run_err",

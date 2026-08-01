@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import {
 	createProjectData,
 	createProjectSnapshot,
@@ -38,6 +39,9 @@ describe("projectPersistence media compatibility", () => {
 				padding: 50,
 				cropRegion: { x: 0, y: 0, width: 1, height: 1 },
 				zoomRegions: [],
+				cameraFullscreenRegions: [],
+				autoZoomEnabled: true,
+				autoFocusAll: false,
 				trimRegions: [],
 				speedRegions: [],
 				annotationRegions: [],
@@ -45,6 +49,7 @@ describe("projectPersistence media compatibility", () => {
 				webcamLayoutPreset: "picture-in-picture",
 				webcamMaskShape: "circle",
 				webcamMirrored: true,
+				webcamReactiveZoom: false,
 				webcamSizePreset: 25,
 				webcamPosition: null,
 				exportQuality: "good",
@@ -52,6 +57,7 @@ describe("projectPersistence media compatibility", () => {
 				gifFrameRate: 15,
 				gifLoop: true,
 				gifSizePreset: "medium",
+				cursorTheme: DEFAULT_CURSOR_THEME_ID,
 			},
 		);
 

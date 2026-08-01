@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import type { AxcutDocument, AxcutTranscript } from "../schema";
+import { type AxcutDocument, type AxcutTranscript, axcutSchemaVersion } from "../schema";
 import { toAxcutTranscriptDsl, transcribeAsset } from "./transcribe";
 
 vi.mock("@/components/video-editor/projectPersistence", () => ({
@@ -19,7 +19,7 @@ const transcribeMock = vi.mocked(transcribeMono16kToSegments);
 
 function makeDoc(): AxcutDocument {
 	return {
-		schemaVersion: 3,
+		schemaVersion: axcutSchemaVersion,
 		project: {
 			id: "proj_1",
 			title: "Test",
@@ -34,15 +34,18 @@ function makeDoc(): AxcutDocument {
 				label: "demo.mp4",
 				originalPath: "/tmp/demo.mp4",
 				durationSec: 60,
+				cameraTrack: null,
 			},
 		],
 		transcript: null,
 		transcripts: [],
 		timeline: {
-			id: "tl_1",
 			clips: [],
 			gaps: [],
-			operations: [],
+			trimRanges: [],
+			muteRanges: [],
+			speedRanges: [],
+			captionRanges: [],
 		},
 		annotations: [],
 		zoomRanges: [],

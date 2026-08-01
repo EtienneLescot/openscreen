@@ -17,6 +17,7 @@ import type {
 	AxcutDocument,
 	AxcutZoomRegion,
 } from "@/lib/ai-edition/schema";
+import { axcutSchemaVersion } from "@/lib/ai-edition/schema";
 import { getFocusBoundsForScale } from "@/lib/zoomMath/focusUtils";
 import { buildSceneDescription } from "./sceneDescription";
 
@@ -57,14 +58,20 @@ function makeZoom(
 }
 
 function makeDoc(
-	overrides: Partial<AxcutDocument> & { assets?: AxcutAsset[]; clips?: AxcutClip[] } = {},
+	overrides: Omit<Partial<AxcutDocument>, "timeline"> & {
+		assets?: AxcutAsset[];
+		clips?: AxcutClip[];
+		// spread over the full default timeline below, so a fixture names only the
+		// tracks it actually exercises instead of restating five empty arrays.
+		timeline?: Partial<AxcutDocument["timeline"]>;
+	} = {},
 ): AxcutDocument {
 	const assets = overrides.assets ?? [];
 	const clips = overrides.clips ?? [];
 	const createdAt = "2024-01-01T00:00:00.000Z";
 	const baseProject = { id: "p1", title: "Test", createdAt, updatedAt: createdAt };
 	return {
-		schemaVersion: 7,
+		schemaVersion: axcutSchemaVersion,
 		project: {
 			...baseProject,
 			...(overrides.project ?? {}),
@@ -290,8 +297,10 @@ describe("buildSceneDescription.clips", () => {
 	});
 
 	it("emits empty webcamPath and 0 offset when no cameraTrack", () => {
-		const asset = makeAsset({ originalPath: "/screen.mp4", cameraTrack: null });
+		const asset = makeAsset({ id: "a", originalPath: "/screen.mp4", cameraTrack: null });
 		const clip = makeClip({
+			id: "c1",
+			assetId: "a",
 			sourceStartSec: 0,
 			sourceEndSec: 4,
 			timelineStartSec: 0,
@@ -1159,7 +1168,7 @@ describe("buildSceneDescription.layout.screenRect", () => {
 		const asset = makeAsset({
 			id: "a",
 			originalPath: "/screen.mp4",
-			video: { width: 1920, height: 1080 },
+			video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
 		});
 		const clip = makeClip({
 			id: "c1",
@@ -1214,7 +1223,7 @@ describe("buildSceneDescription.layout.layoutByClip", () => {
 		const asset = makeAsset({
 			id: "a",
 			originalPath: "/screen.mp4",
-			video: { width: 1920, height: 1080 },
+			video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
 		});
 		const plain = makeClip({
 			id: "c1",

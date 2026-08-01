@@ -15,6 +15,7 @@
 // and read tools were announced only by the lying emission.
 
 import { ChatAnthropic } from "@langchain/anthropic";
+import type { StructuredToolInterface } from "@langchain/core/tools";
 import { ChatOpenAI } from "@langchain/openai";
 import { describe, expect, it } from "vitest";
 import {
@@ -169,10 +170,20 @@ function recordingSink(): { sink: OpenScreenAgentSink; events: SinkEvent[] } {
 	};
 }
 
+/** `buildTools` returns a tuple with a DISTINCT type per tool, one per zod
+ * schema, so `tools.find(...)` is a 19-way union — and `.invoke` is generic, a
+ * shape TypeScript will not call through a union (TS2349). Widening to the
+ * interface every one of them implements is what the model is handed anyway:
+ * `createAgent` takes them as `ClientTool`, i.e. exactly this. Nothing the
+ * tests read is lost — `name`, `description`, `schema` and `invoke` all live on
+ * the interface. */
+type BuiltTool = StructuredToolInterface;
+
 function toolsFor(document: AxcutDocument) {
 	const { sink, events } = recordingSink();
 	const holder = { current: document };
-	return { tools: buildTools(holder, sink), events, holder };
+	const tools: BuiltTool[] = buildTools(holder, sink);
+	return { tools, events, holder };
 }
 
 describe("the tool surface handed to the model", () => {
@@ -242,7 +253,7 @@ describe("the sink announces each call exactly once, with the real verdict", () 
 			const { tools, events } = toolsFor(document);
 			const tool = tools.find((t) => t.name === name);
 			if (!tool) throw new Error(`${name} is not built`);
-			await tool.invoke(args as never);
+			await tool.invoke(args);
 
 			expect(events.map((e) => e.kind)).toEqual(["toolStart", "toolEnd"]);
 			expect(events[0].name).toBe(name);
@@ -270,7 +281,7 @@ describe("the sink announces each call exactly once, with the real verdict", () 
 		const { tools, events } = toolsFor(document);
 		const tool = tools.find((t) => t.name === "getTranscript");
 		if (!tool) throw new Error("getTranscript is not built");
-		const result = await tool.invoke({} as never);
+		const result = await tool.invoke({});
 
 		expect(String(result)).toContain("No transcript");
 		expect(events).toHaveLength(2);
@@ -283,12 +294,12 @@ describe("the sink announces each call exactly once, with the real verdict", () 
 
 		const refused = tools.find((t) => t.name === "setZoom");
 		if (!refused) throw new Error("setZoom is not built");
-		await refused.invoke({ zoomId: "zoom_nope" } as never);
+		await refused.invoke({ zoomId: "zoom_nope" });
 		expect(holder.current).toBe(before);
 
 		const write = tools.find((t) => t.name === "addTrim");
 		if (!write) throw new Error("addTrim is not built");
-		await write.invoke({ startSec: 1, endSec: 2 } as never);
+		await write.invoke({ startSec: 1, endSec: 2 });
 		expect(holder.current).not.toBe(before);
 		expect(holder.current.timeline.trimRanges).toHaveLength(2);
 	});
@@ -389,20 +400,20 @@ describe("the prompt when the user has turned project edits off", () => {
 describe("the tools when the user has turned project edits off", () => {
 	it("still builds all 18 — the model has to be able to NAME the edit", () => {
 		const { sink } = recordingSink();
-		const tools = buildTools({ current: fixtureDocument() }, sink, false);
+		const tools: BuiltTool[] = buildTools({ current: fixtureDocument() }, sink, false);
 		expect(tools.map((t) => t.name)).toEqual(OPENSCREEN_TOOLS);
 	});
 
 	it("refuses every write through the tool, and the sink says so", async () => {
 		const holder = { current: fixtureDocument() };
 		const { sink, events } = recordingSink();
-		const tools = buildTools(holder, sink, false);
+		const tools: BuiltTool[] = buildTools(holder, sink, false);
 		const before = holder.current;
 
 		for (const name of OPENSCREEN_TOOLS.filter((n) => isMutatingTool(n))) {
 			const tool = tools.find((t) => t.name === name);
 			if (!tool) throw new Error(`${name} is not built`);
-			const result = await tool.invoke((ARGS[name] ?? {}) as never);
+			const result = await tool.invoke(ARGS[name] ?? {});
 			expect(JSON.parse(String(result)).code, name).toBe("consent_required");
 		}
 		// Not one of them advanced the document.
@@ -413,10 +424,14 @@ describe("the tools when the user has turned project edits off", () => {
 	});
 
 	it("leaves the reads working", async () => {
-		const tools = buildTools({ current: fixtureDocument() }, recordingSink().sink, false);
+		const tools: BuiltTool[] = buildTools(
+			{ current: fixtureDocument() },
+			recordingSink().sink,
+			false,
+		);
 		const read = tools.find((t) => t.name === "getCurrentDocument");
 		if (!read) throw new Error("getCurrentDocument is not built");
-		expect(JSON.parse(String(await read.invoke({} as never))).primaryAssetId).toBe("asset_1");
+		expect(JSON.parse(String(await read.invoke({}))).primaryAssetId).toBe("asset_1");
 	});
 });
 
@@ -451,10 +466,10 @@ const SAMPLES = (() => {
 
 async function invokeCursorTool(runtime: Parameters<typeof buildTools>[3]) {
 	const { sink, events } = recordingSink();
-	const tools = buildTools({ current: fixtureDocument() }, sink, true, runtime);
+	const tools: BuiltTool[] = buildTools({ current: fixtureDocument() }, sink, true, runtime);
 	const tool = tools.find((t) => t.name === "getCursorTrack");
 	if (!tool) throw new Error("getCursorTrack is not built");
-	const result = await tool.invoke({} as never);
+	const result = await tool.invoke({});
 	return { payload: JSON.parse(String(result)), events };
 }
 
@@ -518,12 +533,12 @@ describe("cursor telemetry reaches the model", () => {
 			},
 		};
 		const { sink } = recordingSink();
-		const tools = buildTools({ current: fixtureDocument() }, sink, true, runtime);
+		const tools: BuiltTool[] = buildTools({ current: fixtureDocument() }, sink, true, runtime);
 		const tool = tools.find((t) => t.name === "getCursorTrack");
 		if (!tool) throw new Error("getCursorTrack is not built");
 
-		await tool.invoke({} as never);
-		await tool.invoke({ assetId: "asset_1" } as never);
+		await tool.invoke({});
+		await tool.invoke({ assetId: "asset_1" });
 
 		// Both resolve to the primary asset — the wrapper and the executor must
 		// agree on which asset is being reported, or the answer describes one and
@@ -544,11 +559,13 @@ describe("cursor telemetry reaches the model", () => {
 			},
 		};
 		const { sink } = recordingSink();
-		const tools = buildTools({ current: fixtureDocument() }, sink, true, runtime);
+		const tools: BuiltTool[] = buildTools({ current: fixtureDocument() }, sink, true, runtime);
 		const tool = tools.find((t) => t.name === "getCursorTrack");
 		if (!tool) throw new Error("getCursorTrack is not built");
 
-		await tool.invoke({ assetId: "asset_1", path: "/etc/passwd" } as never);
+		// The extra `path` is the point of the test: the model is allowed to ask
+		// for anything, and the tool must ignore what it did not declare.
+		await tool.invoke({ assetId: "asset_1", path: "/etc/passwd" });
 
 		expect(seen).toEqual([{ originalPath: fixtureDocument().assets[0].originalPath }]);
 	});

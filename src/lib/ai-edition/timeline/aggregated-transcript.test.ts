@@ -30,6 +30,7 @@ function makeAsset(overrides: Partial<AxcutAsset> = {}): AxcutAsset {
 		label: "demo.mp4",
 		originalPath: "/tmp/demo.mp4",
 		durationSec: 30,
+		cameraTrack: null,
 		...overrides,
 	};
 }

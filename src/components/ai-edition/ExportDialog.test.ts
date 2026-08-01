@@ -4,7 +4,12 @@ import {
 	collectUsedAssetDims,
 	pickExtremeDims,
 } from "@/lib/ai-edition/document/outputFormat";
-import type { AxcutAsset, AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
+import {
+	type AxcutAsset,
+	type AxcutClip,
+	type AxcutDocument,
+	axcutSchemaVersion,
+} from "@/lib/ai-edition/schema";
 
 function asset(p: Partial<AxcutAsset> & Pick<AxcutAsset, "id">): AxcutAsset {
 	return {
@@ -31,7 +36,7 @@ function clip(p: Partial<AxcutClip> & Pick<AxcutClip, "id" | "assetId">): AxcutC
 
 function doc(assets: AxcutAsset[], clips: AxcutClip[]): AxcutDocument {
 	return {
-		schemaVersion: 3,
+		schemaVersion: axcutSchemaVersion,
 		project: {
 			id: "proj_1",
 			title: "Test",

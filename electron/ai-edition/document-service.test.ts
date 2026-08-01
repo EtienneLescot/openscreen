@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
+import { axcutSchemaVersion } from "../../src/lib/ai-edition/schema";
 import { DocumentNotFoundError, DocumentService, ProjectFileError } from "./document-service";
 
 async function makeTempDir(): Promise<string> {
@@ -34,7 +35,7 @@ describe("DocumentService", () => {
 			const filePath = path.join(tempDir, `${doc.project.id}.openscreen`);
 			const raw = await fs.readFile(filePath, "utf8");
 			expect(JSON.parse(raw)).toMatchObject({
-				schemaVersion: 7,
+				schemaVersion: axcutSchemaVersion,
 				project: { title: "Demo Project" },
 			});
 		});
@@ -142,7 +143,7 @@ describe("DocumentService", () => {
 		it("removes the asset and cascades clips + trimRanges", async () => {
 			const doc = await service.createProject("P");
 			const withAsset = await service.addAsset(doc.project.id, { path: "/tmp/a.mp4" });
-			const assetId = withAsset.assets[0]?.id;
+			const assetId = withAsset.assets[0]?.id ?? "";
 			expect(assetId).toBeTruthy();
 
 			// Manually add a clip + trimRange so we can verify cascade
@@ -159,6 +160,7 @@ describe("DocumentService", () => {
 							timelineEndSec: 1,
 							wordRefs: [],
 							origin: "system",
+							reason: "",
 						},
 					],
 					trimRanges: [
@@ -168,12 +170,13 @@ describe("DocumentService", () => {
 							startSec: 0,
 							endSec: 1,
 							origin: "user",
+							reason: "",
 						},
 					],
 				},
 			});
 
-			const after = await service.removeAsset(docWithTimeline.project.id, assetId ?? "");
+			const after = await service.removeAsset(docWithTimeline.project.id, assetId);
 			expect(after.assets).toHaveLength(0);
 			expect(after.timeline.clips).toHaveLength(0);
 			expect(after.timeline.trimRanges).toHaveLength(0);

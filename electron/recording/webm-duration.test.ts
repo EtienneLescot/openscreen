@@ -1,13 +1,24 @@
 import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
-import { WebmBase, WebmContainer, WebmFile, WebmString, WebmUint } from "@fix-webm-duration/parser";
+import { WebmContainer, WebmFile, WebmString, WebmUint } from "@fix-webm-duration/parser";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { patchWebmDurationOnDisk } from "./webm-duration";
 
 interface WebmElementMock {
 	getSectionById: (id: number) => WebmElementMock;
 	getValue: () => number;
+}
+
+// EBML element length encoded as a 4-byte VINT: 0x10 marker in the leading byte
+// plus 28 bits of length, which covers both fixture sizes below.
+function ebmlLength4(length: number): Buffer {
+	return Buffer.from([
+		0x10 | ((length >>> 24) & 0x0f),
+		(length >>> 16) & 0xff,
+		(length >>> 8) & 0xff,
+		length & 0xff,
+	]);
 }
 
 describe("webm-duration patching", () => {
@@ -42,19 +53,27 @@ describe("webm-duration patching", () => {
 		info.updateByData();
 		segment.data.push({ id: 0x549a966, idHex: "549a966", data: info });
 
-		if (includeCluster) {
-			const cluster = new WebmBase("Cluster");
-			// A valid EBML element for Cluster: ID 0x1f43b675 (stripped as 0xf43b675)
-			// Followed by a VINT for length (e.g. clusterSize bytes)
-			const header = Buffer.from([0x1f, 0x43, 0xb6, 0x75, 0x01, 0x00]); // 6 bytes header (id + length)
-			const body = Buffer.alloc(clusterSize, 0x42); // cluster data filled with 0x42
-			const clusterBytes = Buffer.concat([header, body]);
-
-			cluster.setSource(new Uint8Array(clusterBytes));
-			segment.data.push({ id: 0xf43b675, idHex: "f43b675", data: cluster });
-		}
-
 		segment.updateByData();
+
+		if (includeCluster) {
+			// The Cluster is appended as raw bytes rather than as a `WebmContainerItem`:
+			// the parser's `sections` map has no entry for Cluster (0x1f43b675), so its
+			// id is not a `SectionKey`, and `WebmBase`'s constructor is protected.
+			// Bytes are all that matters here anyway — patchWebmDurationOnDisk re-parses
+			// the fixture from disk, so appending the element to the Segment payload is
+			// equivalent to registering it as a child.
+			// A valid EBML element for Cluster: ID 0x1f43b675, a VINT length, then the
+			// cluster data filled with 0x42.
+			const body = Buffer.alloc(clusterSize, 0x42);
+			const clusterBytes = Buffer.concat([
+				Buffer.from([0x1f, 0x43, 0xb6, 0x75]),
+				ebmlLength4(body.length),
+				body,
+			]);
+			const segmentPayload = segment.source;
+			if (!segmentPayload) throw new Error("fixture: Segment has no source after updateByData");
+			segment.source = Buffer.concat([Buffer.from(segmentPayload), clusterBytes]);
+		}
 
 		const file = new WebmContainer("File");
 		file.data = [];
@@ -62,6 +81,7 @@ describe("webm-duration patching", () => {
 		file.data.push({ id: 0x8538067, idHex: "8538067", data: segment });
 
 		file.updateByData();
+		if (!file.source) throw new Error("fixture: File has no source after updateByData");
 		return file.source;
 	}
 

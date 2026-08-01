@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { AxcutAsset, AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
+import {
+	type AxcutAsset,
+	type AxcutClip,
+	type AxcutDocument,
+	axcutSchemaVersion,
+} from "@/lib/ai-edition/schema";
 import {
 	ASPECT_RATIO_PRESETS,
 	type AspectRatio,
@@ -41,7 +46,7 @@ function clip(id: string, assetId: string, cropRegion?: AxcutClip["cropRegion"])
 
 function doc(assets: AxcutAsset[], clips: AxcutClip[]): AxcutDocument {
 	return {
-		schemaVersion: 3,
+		schemaVersion: axcutSchemaVersion,
 		project: {
 			id: "proj_1",
 			title: "Test",
@@ -63,7 +68,7 @@ function doc(assets: AxcutAsset[], clips: AxcutClip[]): AxcutDocument {
 		annotations: [],
 		zoomRanges: [],
 		legacyEditor: null,
-	} as AxcutDocument;
+	};
 }
 
 describe("collectNativeFormats", () => {

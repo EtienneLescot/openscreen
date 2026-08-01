@@ -2,6 +2,7 @@ import { act, renderHook, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
 import type { AxcutDocument } from "../schema";
+import { axcutSchemaVersion } from "../schema";
 import { useProjectStore } from "./projectStore";
 import { useTimeline } from "./useTimeline";
 
@@ -48,12 +49,18 @@ vi.mock("@/native/client", () => ({
 	},
 }));
 
-const sampleDoc = {
-	// ponytail: the bridge contract after the migration hoist is v6 — every
-	// load site (DocumentService, browserShim) runs `migrateRawDocumentToCurrent`
-	// before returning, and the renderer's `parseDocument` is a pure v6
-	// validator. Test fixtures model the post-hoist contract.
-	schemaVersion: 7,
+const sampleDoc: AxcutDocument = {
+	// ponytail: the bridge contract after the migration hoist is the CURRENT version —
+	// every load site (DocumentService, browserShim) runs `migrateRawDocumentToCurrent`
+	// before returning, and the renderer's `parseDocument` is a pure current-version
+	// validator. Test fixtures model the post-hoist contract, so they read the version
+	// off `axcutSchemaVersion` instead of restating it.
+	// Annotated `AxcutDocument` rather than left to inference: the document type
+	// pins `schemaVersion` to the LITERAL 7 and `kind` to `"video"`, both of which
+	// an unannotated object literal widens — and the annotation makes every
+	// required field (`cameraTrack`) a compile error when it is missing instead of
+	// a fixture that silently drifts from the schema.
+	schemaVersion: axcutSchemaVersion,
 	project: {
 		id: "proj_test",
 		title: "Test",
@@ -69,6 +76,8 @@ const sampleDoc = {
 			originalPath: "/tmp/screen.webm",
 			durationSec: 30,
 			video: { codec: "unknown", width: 1920, height: 1080, fps: 0 },
+			// No webcam was recorded alongside this screen capture.
+			cameraTrack: null,
 		},
 	],
 	transcript: null,
@@ -120,6 +129,7 @@ describe("useTimeline.insertClipAt background duration probe", () => {
 						originalPath: "/tmp/long.webm",
 						durationSec: undefined,
 						video: { codec: "unknown", width: 1920, height: 1080, fps: 0 },
+						cameraTrack: null,
 					},
 				],
 			},
@@ -163,7 +173,7 @@ describe("useTimeline.insertClipAt background duration probe", () => {
 });
 
 describe("useTimeline.moveClip / duplicateClip (delegates to document/timeline.ts)", () => {
-	const twoClipDoc = {
+	const twoClipDoc: AxcutDocument = {
 		...sampleDoc,
 		timeline: {
 			...sampleDoc.timeline,
@@ -350,9 +360,8 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 			projectId: "proj_test",
 			document: {
 				...sampleDoc,
-				schemaVersion: 7,
 				zoomRanges: [anchoredZoom("z_keep", 2, 3), anchoredZoom("z_drop", 6, 8)],
-			} as unknown as typeof sampleDoc,
+			},
 			revision: 1,
 			status: "ready",
 			error: null,
@@ -396,9 +405,8 @@ describe("useTimeline.updateClipSourceRange (Edit-clip modal)", () => {
 		useProjectStore.setState({
 			document: {
 				...sampleDoc,
-				schemaVersion: 7,
 				zoomRanges: [anchoredZoom("z_edge", 3, 7)],
-			} as unknown as typeof sampleDoc,
+			},
 		});
 		const { result } = renderTimeline();
 		await act(async () => {
@@ -459,7 +467,7 @@ describe("useTimeline.addAnnotation", () => {
 });
 
 describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
-	const docWithZoom = {
+	const docWithZoom: AxcutDocument = {
 		...sampleDoc,
 		zoomRanges: [
 			{
@@ -468,9 +476,14 @@ describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
 				endMs: 3000,
 				depth: 3,
 				focus: { cx: 0.5, cy: 0.5 },
-				focusMode: "manual" as const,
+				focusMode: "manual",
+				// v5 clip anchor: clip_a draws source 0..10 at timeline 0..10, so the
+				// 1000..3000ms ruler span is source 1..3 of that clip. `startMs`/`endMs`
+				// stay as the derived cache. (The fixture used to carry a
+				// `clipStartOffsetMs` that exists in no schema and no reader.)
 				clipId: "clip_a",
-				clipStartOffsetMs: 1000,
+				sourceStartSec: 1,
+				sourceEndSec: 3,
 			},
 		],
 	};
@@ -550,10 +563,7 @@ describe("useTimeline is not re-rendered by playhead ticks", () => {
 		}));
 		useProjectStore.setState({
 			projectId: "proj_test",
-			// The shared `sampleDoc` fixture predates a few schema fields (see the
-			// "Typecheck (tests)" ratchet in ci.yml); cast rather than add one more
-			// error to that backlog.
-			document: sampleDoc as unknown as AxcutDocument,
+			document: sampleDoc,
 			revision: 1,
 			status: "ready",
 			error: null,

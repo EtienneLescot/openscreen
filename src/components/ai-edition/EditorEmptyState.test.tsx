@@ -3,6 +3,7 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from "@testing-libra
 import type { ReactElement } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
+import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { EditorEmptyState } from "./EditorEmptyState";
 
@@ -20,33 +21,40 @@ const bridgeMocks = vi.hoisted(() => ({
 	openVideoFilePicker: vi.fn(),
 }));
 
-const sampleDoc = vi.hoisted(() => ({
-	// ponytail: the bridge contract after the migration hoist is v6 — every
-	// load site (DocumentService, browserShim) runs `migrateRawDocumentToCurrent`
-	// before returning, and the renderer's `parseDocument` is a pure v6
-	// validator. Test fixtures model the post-hoist contract.
-	schemaVersion: 7,
-	project: {
-		id: "proj_test",
-		title: "Test",
-		createdAt: "2026-06-25T10:00:00.000Z",
-		updatedAt: "2026-06-25T10:00:00.000Z",
-	},
-	assets: [],
-	transcript: null,
-	transcripts: [],
-	timeline: {
-		clips: [],
-		gaps: [],
-		trimRanges: [],
-		muteRanges: [],
-		speedRegions: [],
-		captionRanges: [],
-	},
-	annotations: [],
-	zoomRanges: [],
-	legacyEditor: null,
-}));
+const sampleDoc = vi.hoisted(
+	(): AxcutDocument => ({
+		// ponytail: the bridge contract after the migration hoist is the CURRENT version —
+		// every load site (DocumentService, browserShim) runs `migrateRawDocumentToCurrent`
+		// before returning, and the renderer's `parseDocument` is a pure current-version
+		// validator. Test fixtures model the post-hoist contract, so they read the version
+		// off `axcutSchemaVersion` instead of restating it.
+		// A literal, not `axcutSchemaVersion`: `vi.hoisted` runs before the module's
+		// imports are initialised, so reading the constant here throws
+		// "Cannot access ... before initialization". The typecheck gate catches it
+		// if it ever falls behind the schema.
+		schemaVersion: 7,
+		project: {
+			id: "proj_test",
+			title: "Test",
+			createdAt: "2026-06-25T10:00:00.000Z",
+			updatedAt: "2026-06-25T10:00:00.000Z",
+		},
+		assets: [],
+		transcript: null,
+		transcripts: [],
+		timeline: {
+			clips: [],
+			gaps: [],
+			trimRanges: [],
+			muteRanges: [],
+			speedRanges: [],
+			captionRanges: [],
+		},
+		annotations: [],
+		zoomRanges: [],
+		legacyEditor: null,
+	}),
+);
 
 function setupElectronApi() {
 	Object.assign(window, {

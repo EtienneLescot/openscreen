@@ -72,8 +72,11 @@ describe("modelManager", () => {
 		}> = [];
 		let fetches = 0;
 
-		const fetcher: typeof fetch = async (url: string) => {
+		const fetcher: typeof fetch = async (input) => {
 			fetches++;
+			// ensureModels passes a plain string URL, but a `typeof fetch` stub has to
+			// honour the whole signature (string | URL | Request).
+			const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
 			const content = Buffer.from(`content-for-${url.split("/").pop()}`);
 			return new Response(content, { status: 200 });
 		};

@@ -83,7 +83,9 @@ describe("materializeLocalSourceFile (small file path)", () => {
 
 class FakeWritable {
 	private parts: Uint8Array[] = [];
-	constructor(private readonly onClose: (bytes: Uint8Array) => void) {}
+	// The merged buffer is freshly allocated, so it is ArrayBuffer-backed (not
+	// SharedArrayBuffer) — say so, or it can't be handed to `new File([...])`.
+	constructor(private readonly onClose: (bytes: Uint8Array<ArrayBuffer>) => void) {}
 	async write(data: ArrayBuffer | Uint8Array) {
 		this.parts.push(data instanceof Uint8Array ? new Uint8Array(data) : new Uint8Array(data));
 	}
@@ -152,6 +154,22 @@ function cacheDir(root: FakeDir): FakeDir | undefined {
 	return root.subdirs.get("openscreen-source-cache");
 }
 
+/**
+ * The real `electronAPI.readFileChunk` contract (electron/electron-env.d.ts):
+ * a read can fail, and then carries a message instead of data. Spelled out so
+ * tests can substitute a failing implementation.
+ */
+type ReadFileChunk = (
+	filePath: string,
+	offset: number,
+	length: number,
+) => Promise<{
+	success: boolean;
+	data?: ArrayBuffer;
+	bytesRead?: number;
+	message?: string;
+}>;
+
 /** electronAPI whose readFileChunk serves slices of `source`. */
 function largeSourceApi(url: string, source: Uint8Array, mtimeMs = 1) {
 	return {
@@ -159,7 +177,7 @@ function largeSourceApi(url: string, source: Uint8Array, mtimeMs = 1) {
 			.fn()
 			.mockResolvedValue({ success: true, size: source.byteLength, mtimeMs, path: url }),
 		readBinaryFile: vi.fn(),
-		readFileChunk: vi.fn(async (_url: string, offset: number, length: number) => ({
+		readFileChunk: vi.fn<ReadFileChunk>(async (_url: string, offset: number, length: number) => ({
 			success: true,
 			data: source.slice(offset, offset + length).buffer,
 			bytesRead: Math.min(length, source.byteLength - offset),
