@@ -211,6 +211,23 @@ describe("useTranscriptionStore", () => {
 		expect(toastMocks.error).toHaveBeenCalledTimes(1);
 	});
 
+	it("stops the queue on an engine failure instead of failing each asset in turn", async () => {
+		// The model download died / whisper-server didn't come up: that verdict is
+		// about the engine, so the remaining assets inherit it rather than each
+		// spending a full retry budget and stacking an identical toast.
+		transcribeMocks.transcribeAsset.mockRejectedValue(new Error("whisper-server exited"));
+		loadDocument(makeDoc(["asset_1", "asset_2", "asset_3"]));
+
+		useTranscriptionStore.getState().sync(useProjectStore.getState().document);
+		await whenTranscriptionIdle();
+
+		expect(transcribeMocks.transcribeAsset).toHaveBeenCalledTimes(1);
+		const jobs = useTranscriptionStore.getState().jobs;
+		expect(Object.values(jobs).map((j) => j.status)).toEqual(["failed", "failed", "failed"]);
+		expect(jobs.asset_3?.failure?.message).toBe("whisper-server exited");
+		expect(toastMocks.error).toHaveBeenCalledTimes(1);
+	});
+
 	it("request() re-runs a failed asset and clears the remembered verdict", async () => {
 		transcribeMocks.transcribeAsset.mockRejectedValueOnce(
 			new Error("No audio track found in this video."),

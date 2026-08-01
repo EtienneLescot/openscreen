@@ -51,7 +51,7 @@ function renderPane(
 				transcripts={[]}
 				assets={[ASSET]}
 				trimRanges={[]}
-				busy={false}
+				busyAssetIds={[]}
 				onSeek={vi.fn()}
 				onAddTrimRange={vi.fn()}
 				onRemoveTrimRange={vi.fn()}

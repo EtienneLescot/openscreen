@@ -9,6 +9,7 @@ import {
 	FileText,
 	HelpCircle,
 	Layout as LayoutIcon,
+	Loader2,
 	MousePointerClick,
 	Palette,
 	Sliders,
@@ -524,7 +525,7 @@ export function TranscriptPane({
 	transcripts,
 	assets,
 	trimRanges,
-	busy,
+	busyAssetIds,
 	onSeek,
 	onAddTrimRange,
 	onRemoveTrimRange,
@@ -537,7 +538,12 @@ export function TranscriptPane({
 	transcripts: AxcutTranscript[];
 	assets: AxcutAsset[];
 	trimRanges: AxcutTrimRange[];
-	busy: boolean;
+	/** Assets whose transcript is being (re)generated right now — their block is
+	 *  read-only while the run is in flight, since it is about to be replaced.
+	 *  PER ASSET on purpose: a timeline-wide flag made every other clip's word
+	 *  stream silently swallow Backspace and hover-bin clicks for the whole
+	 *  background pass, with nothing on screen to say why. */
+	busyAssetIds: readonly string[];
 	onSeek: (sec: number) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
@@ -646,7 +652,7 @@ export function TranscriptPane({
 						key={section.clip.id}
 						index={idx}
 						section={section}
-						busy={busy}
+						busy={busyAssetIds.includes(section.clip.assetId)}
 						cueWordId={cueWordId}
 						onSeek={onSeek}
 						onAddTrimRange={onAddTrimRange}
@@ -952,6 +958,23 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 						{ts("transcript.clipLabel", { index: index + 1 })} · {sourceRangeLabel}
 					</span>
 				</span>
+				{/* A block whose transcript is being regenerated is read-only — say it,
+				    rather than letting the word stream look live and drop the edits. */}
+				{busy ? (
+					<span
+						style={{
+							display: "inline-flex",
+							alignItems: "center",
+							gap: 5,
+							flexShrink: 0,
+							font: "500 11px/1 var(--font-body)",
+							color: "var(--accent)",
+						}}
+					>
+						<Loader2 size={12} className="animate-spin" />
+						{ts("transcript.transcribing")}
+					</span>
+				) : null}
 			</span>
 			{words.length === 0 ? (
 				<p
@@ -963,7 +986,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 						fontStyle: "italic",
 					}}
 				>
-					{ts("transcript.noClipTranscript")}
+					{busy ? ts("transcript.transcribing") : ts("transcript.noClipTranscript")}
 				</p>
 			) : (
 				<div
@@ -971,6 +994,8 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 					role="textbox"
 					tabIndex={0}
 					contentEditable={!busy}
+					aria-busy={busy}
+					aria-readonly={busy}
 					suppressContentEditableWarning
 					spellCheck={false}
 					aria-label={ts("transcript.editorAria", { filename })}
@@ -984,7 +1009,11 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 						font: "400 13px/1.65 var(--font-body)",
 						color: "var(--fg)",
 						textWrap: "pretty",
-						cursor: "text",
+						// Read-only while its transcript is being regenerated: the cursor
+						// and the wash are what stop it from reading as an editor that
+						// ignores you (see the `busy` note on TranscriptPane).
+						cursor: busy ? "progress" : "text",
+						opacity: busy ? 0.6 : 1,
 						outline: "none",
 						// no overflow on the per-clip editor — the
 						// parent paneBody (already overflow-y: auto) is the

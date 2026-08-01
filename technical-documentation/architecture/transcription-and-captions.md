@@ -96,6 +96,42 @@ running, the media-card dot green (ready) / amber (silent or no speech) / red
 and — the point of the whole thing — a disabled "Smart cuts" entry whose
 subtitle is the reason rather than "With AI".
 
+### One phase, including the first-run model download
+
+On a fresh install the GGML model (~253 MB) is not on disk. It is fetched by
+`SttManager.prepare()` **inside** the `stt:transcribe` IPC call — i.e. inside a
+run this store has already marked `running` — so the user sees one single busy
+phase that simply takes longer the first time. That is deliberate: no separate
+"downloading" step, no progress bar to stare at, and nothing that looks
+clickable in the meantime (`phase: "model"` is emitted by the main process but
+deliberately not forwarded to the renderer by `transcribeAsset`). Nothing in the
+renderer imposes a timeout that a slow download could trip: the preload does a
+bare `ipcRenderer.invoke`, `fetchWithRetry` has no per-request deadline, and
+whisper-server's 30 s readiness budget only starts once the download resolved.
+
+Three edges make that promise hold, and each is load-bearing:
+
+- **A failed setup is not cached.** `SttManager.init` used to memoise the
+  rejected `prepare()` promise, so one dropped connection during the first
+  download failed every later transcription in the session — including the retry
+  the editor offers — until the app was restarted. It now clears the slot on
+  failure ([`electron/stt/index.ts`](../../electron/stt/index.ts)).
+- **A transient failure stops the queue** instead of walking the remaining
+  assets into the same wall: they inherit the verdict (one toast, one retry
+  affordance) rather than each spending a full retry budget.
+- **Read-only is scoped per asset.** The transcript pane's blocks go read-only
+  only for the asset whose transcript is being rewritten, and say so (spinner +
+  "Transcribing…" + dimmed stream). A timeline-wide flag made every other
+  clip's word stream swallow Backspace and hover-bin clicks in silence for the
+  whole background pass.
+
+Still synchronous, and still on the main thread: `mixToMono`
+([`src/lib/captioning/extractMono16k.ts`](../../src/lib/captioning/extractMono16k.ts))
+now hoists its channel arrays out of the sample loop (it was making one WebIDL
+call per sample per channel), but a long recording will still block the renderer
+for a moment during "extracting-audio". Moving the mixdown to a worker is the
+next step if it shows up in practice.
+
 ## The STT engine
 
 The recogniser is **whisper.cpp**, embedded as a static library inside one

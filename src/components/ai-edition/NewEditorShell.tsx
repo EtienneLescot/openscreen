@@ -15,6 +15,7 @@ import {
 import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
+	useAssetTranscriptions,
 	useAutoTranscription,
 	useTimelineTranscriptGate,
 	useTranscriptionStore,
@@ -139,6 +140,17 @@ export function NewEditorShell() {
 	// routinely silent, and keying the transcript pane off it made the pane claim
 	// "no audio track" for a project whose actual footage was mid-transcription.
 	const transcriptGate = useTimelineTranscriptGate();
+	// Per asset, for the transcript pane: only the block whose transcript is
+	// actually being rewritten goes read-only. The gate answers "may a
+	// transcript-dependent ACTION run?", which is a different question.
+	const transcriptions = useAssetTranscriptions();
+	const busyAssetIds = useMemo(
+		() =>
+			Object.values(transcriptions)
+				.filter((v) => v.status === "running" || v.status === "queued")
+				.map((v) => v.assetId),
+		[transcriptions],
+	);
 	const tl = useTimeline();
 	useUndoRedoShortcuts(() => {
 		// ponytail: placeholder, wire when undo stack merges with history
@@ -1002,7 +1014,7 @@ export function NewEditorShell() {
 		transcripts: document?.transcripts ?? [],
 		assets: document?.assets ?? [],
 		trimRanges: document?.timeline?.trimRanges ?? [],
-		busy: transcriptGate.state === "pending",
+		busyAssetIds,
 		onSeek: handleSeek,
 		onAddTrimRange: handleAddTrimRange,
 		onRemoveTrimRange: handleRemoveTrimRange,

@@ -257,6 +257,29 @@ function patchJob(assetId: string, runId: number, patch: Partial<TranscriptionJo
 	});
 }
 
+/**
+ * Give every still-queued job the verdict that just came back from the engine.
+ * Waiters are flushed so a `requestTimelineTranscripts()` awaiting the batch
+ * settles instead of hanging on runs that will never happen.
+ */
+function failRemainingQueue(projectId: string, failure: TranscriptionFailure): void {
+	const queued = Object.entries(useTranscriptionStore.getState().jobs)
+		.filter(([, job]) => job.status === "queued")
+		.map(([assetId]) => assetId);
+	if (queued.length === 0) return;
+	useTranscriptionStore.setState((state) => {
+		if (state.projectId !== projectId) return state;
+		const jobs = { ...state.jobs };
+		for (const assetId of queued) {
+			const job = jobs[assetId];
+			if (job?.status !== "queued") continue;
+			jobs[assetId] = { ...job, status: "failed", phase: undefined, failure };
+		}
+		return { jobs };
+	});
+	for (const assetId of queued) flushSettleWaiters(assetId);
+}
+
 /** True while `runId` is still the attempt the store is tracking for this asset. */
 function isCurrentRun(assetId: string, runId: number): boolean {
 	return useTranscriptionStore.getState().jobs[assetId]?.runId === runId;
@@ -380,6 +403,13 @@ async function runJob(assetId: string, job: TranscriptionJob): Promise<void> {
 		patchJob(assetId, runId, { status: "failed", phase: undefined, failure });
 		flushSettleWaiters(assetId);
 		await persistPermanentFailure(projectId, assetId, failure);
+		// A transient failure is about the ENGINE, not about this media: the model
+		// download died, whisper-server didn't come up. Marching the rest of the
+		// queue into the same wall would spend a full retry budget per asset and
+		// stack one identical toast per asset. Fail them with the same verdict
+		// instead — the gate then reads "failed" (not "queued forever"), and one
+		// manual retry re-runs them all once the engine is back.
+		if (failure.kind === "error") failRemainingQueue(projectId, failure);
 		// A silent recording is an expected outcome, not an incident: the media
 		// card and every gated button already say so. Only surface the noisy
 		// (retryable) failures, plus anything the user asked for by hand.
