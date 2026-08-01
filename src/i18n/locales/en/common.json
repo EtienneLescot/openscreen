@@ -43,6 +43,10 @@
 		"fullscreen": "Fullscreen",
 		"exitFullscreen": "Exit Fullscreen"
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} px/s",
+		"pixels": "{{value}} px"
+	},
 	"locale": {
 		"name": "English",
 		"short": "EN"

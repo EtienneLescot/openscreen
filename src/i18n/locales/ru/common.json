@@ -43,6 +43,10 @@
 		"fullscreen": "Полный экран",
 		"exitFullscreen": "Выход из полного экрана"
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} пикс/с",
+		"pixels": "{{value}} пикс"
+	},
 	"locale": {
 		"name": "Русский",
 		"short": "RU"

@@ -10,6 +10,12 @@ export const NOTES_FONT_SIZE_STEP = 2;
 
 export const MAX_TELEPROMPTER_FRAME_MS = 100;
 
+/**
+ * How far the DOM scroll position may drift from the tracked one before the DOM wins.
+ * Also the slack used to decide the teleprompter has reached the bottom.
+ */
+export const TELEPROMPTER_SCROLL_TOLERANCE_PX = 1;
+
 export type NotesTeleprompterSettings = {
 	speed: number;
 	fontSize: number;
@@ -164,4 +170,46 @@ export function getNextTeleprompterScrollTop(
 	const distance = (clampTeleprompterSpeed(speed) * safeElapsed) / 1_000;
 
 	return Math.min(safeMaximum, safeCurrent + distance);
+}
+
+/**
+ * Playback tracks its own fractional position instead of reading `scrollTop` back every
+ * frame: at the slowest speed a frame advances ~0.17px, and an engine that snaps scroll
+ * offsets to whole pixels would round that away, stalling the teleprompter outright.
+ * The DOM still wins once it drifts beyond the tolerance, so scrolling by hand mid-playback
+ * moves the teleprompter rather than fighting it.
+ */
+export function resolveTeleprompterPosition(
+	trackedPosition: number,
+	actualScrollTop: number,
+): number {
+	if (!Number.isFinite(actualScrollTop)) {
+		return Number.isFinite(trackedPosition) ? Math.max(0, trackedPosition) : 0;
+	}
+
+	if (!Number.isFinite(trackedPosition)) {
+		return Math.max(0, actualScrollTop);
+	}
+
+	const drift = Math.abs(actualScrollTop - trackedPosition);
+	return Math.max(0, drift > TELEPROMPTER_SCROLL_TOLERANCE_PX ? actualScrollTop : trackedPosition);
+}
+
+/**
+ * Content that fits the window is never "at the end" — it has nowhere to scroll, so
+ * playback stays armed and starts moving as soon as the note grows past the viewport.
+ */
+export function isAtTeleprompterEnd(scrollTop: number, maxScrollTop: number): boolean {
+	if (!Number.isFinite(maxScrollTop) || maxScrollTop <= 0) {
+		return false;
+	}
+
+	const safeScrollTop = Number.isFinite(scrollTop) ? scrollTop : 0;
+	return safeScrollTop >= maxScrollTop - TELEPROMPTER_SCROLL_TOLERANCE_PX;
+}
+
+export function getMaxScrollTop(
+	element: Pick<HTMLElement, "scrollHeight" | "clientHeight">,
+): number {
+	return Math.max(0, element.scrollHeight - element.clientHeight);
 }

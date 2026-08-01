@@ -8,10 +8,6 @@
 	caret-color: #111827;
 }
 
-:global(.notes-teleprompter-content) {
-	transform-origin: center;
-}
-
 :global(.notes-teleprompter-content[data-mirrored="true"]) {
 	transform: scaleX(-1);
 }
@@ -20,11 +16,16 @@
 	margin-top: 0;
 }
 
+/*
+ * Spacing is in `em` so it tracks the teleprompter font size the Notes window sets on the
+ * container. Every element below inherits that size, so `em` here equals the container size
+ * and the default 16px rendering is unchanged. Headings are the exception — see below.
+ */
 :global(.tiptap) p {
-	min-height: 1.5rem;
+	min-height: 1.5em;
 	line-height: 1.5;
-	margin-top: 0.75rem;
-	margin-bottom: 0.75rem;
+	margin-top: 0.75em;
+	margin-bottom: 0.75em;
 }
 
 :global(.tiptap) p:first-child {
@@ -34,8 +35,8 @@
 /* Tailwind preflight strips list markers — restore them for markdown-style input rules. */
 :global(.tiptap) ul,
 :global(.tiptap) ol {
-	padding-left: 1.5rem;
-	margin: 1rem 0;
+	padding-left: 1.5em;
+	margin: 1em 0;
 }
 
 :global(.tiptap) ul {
@@ -56,6 +57,11 @@
 	margin-bottom: 0.25em;
 }
 
+/*
+ * Heading margins stay in `rem`: `em` on a heading resolves against the heading's own
+ * enlarged font size, not the container's, so switching them would change the default
+ * rendering rather than just scale it.
+ */
 :global(.tiptap) h1,
 :global(.tiptap) h2,
 :global(.tiptap) h3,
@@ -104,8 +110,8 @@
 	border-radius: 0.5rem;
 	color: #ffffff;
 	font-family: "JetBrainsMono", monospace;
-	margin: 1.5rem 0;
-	padding: 0.75rem 1rem;
+	margin: 1.5em 0;
+	padding: 0.75em 1em;
 }
 
 :global(.tiptap) pre code {
@@ -117,12 +123,12 @@
 
 :global(.tiptap) blockquote {
 	border-left: 3px solid #d1d5db;
-	margin: 1.5rem 0;
-	padding-left: 1rem;
+	margin: 1.5em 0;
+	padding-left: 1em;
 }
 
 :global(.tiptap) hr {
 	border: none;
 	border-top: 1px solid #e5e7eb;
-	margin: 2rem 0;
+	margin: 2em 0;
 }

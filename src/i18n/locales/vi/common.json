@@ -43,6 +43,10 @@
 		"fullscreen": "Toàn màn hình",
 		"exitFullscreen": "Thoát toàn màn hình"
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} px/giây",
+		"pixels": "{{value}} px"
+	},
 	"locale": {
 		"name": "Tiếng Việt",
 		"short": "VI"

@@ -2,14 +2,21 @@ import "@testing-library/jest-dom";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Editor } from "@tiptap/react";
-import { type ReactNode, useLayoutEffect } from "react";
-import { describe, expect, it, vi } from "vitest";
+import { type ReactNode, useLayoutEffect, useState } from "react";
+import { beforeEach, describe, expect, it, vi } from "vitest";
 import { I18nProvider, useI18n } from "@/contexts/I18nContext";
+import { LOCALE_STORAGE_KEY } from "@/i18n/config";
 import { NotesToolbar, type NotesToolbarProps } from "./NotesToolbar";
 
 vi.mock("@/components/ui/tooltip", () => ({
 	Tooltip: ({ children }: { children: React.ReactNode }) => children,
 }));
+
+beforeEach(() => {
+	// `setLocale` persists its choice, and `I18nProvider` reads it back on mount — without
+	// this, the one test that switches language would leak into every test after it.
+	localStorage.removeItem(LOCALE_STORAGE_KEY);
+});
 
 function createEditor(): Editor {
 	const chain: Record<string, ReturnType<typeof vi.fn>> = {};
@@ -131,6 +138,40 @@ describe("NotesToolbar teleprompter controls", () => {
 		expect(screen.queryByRole("button", { name: "Pause auto-scroll" })).not.toBeInTheDocument();
 	});
 
+	it("announces playback through its label rather than a second pressed state", () => {
+		const { rerender } = renderToolbar(createProps());
+		expect(screen.getByRole("button", { name: "Start auto-scroll" })).not.toHaveAttribute(
+			"aria-pressed",
+		);
+
+		rerender(
+			<I18nProvider>
+				<NotesToolbar {...createProps({ isPlaying: true })} />
+			</I18nProvider>,
+		);
+		expect(screen.getByRole("button", { name: "Pause auto-scroll" })).not.toHaveAttribute(
+			"aria-pressed",
+		);
+	});
+
+	it("locks formatting while the teleprompter scrolls", () => {
+		renderToolbar(createProps({ isPlaying: true }));
+
+		// Sweep the whole row rather than a hand-written list, so a formatting button added
+		// later cannot quietly escape the lock.
+		const formatting = within(screen.getByTestId("notes-formatting-controls")).getAllByRole(
+			"button",
+		);
+		expect(formatting).toHaveLength(7);
+		for (const button of formatting) {
+			expect(button).toBeDisabled();
+		}
+
+		// Teleprompter controls stay live so playback can always be stopped.
+		expect(screen.getByRole("button", { name: "Pause auto-scroll" })).toBeEnabled();
+		expect(screen.getByRole("button", { name: "Mirror horizontally" })).toBeEnabled();
+	});
+
 	it("formats readout values for the active locale", () => {
 		renderToolbar(createProps(), "ar");
 		const speed = within(screen.getByRole("group", { name: "سرعة التمرير" })).getByRole("status");
@@ -140,5 +181,54 @@ describe("NotesToolbar teleprompter controls", () => {
 		expect(speed).toHaveTextContent(`${new Intl.NumberFormat("ar").format(40)} بكسل/ثانية`);
 		expect(fontSize).not.toHaveAccessibleName();
 		expect(fontSize).toHaveTextContent(`${new Intl.NumberFormat("ar").format(16)} بكسل`);
+	});
+});
+
+function ToolbarHarness() {
+	const [isPlaying, setIsPlaying] = useState(false);
+	const [mirrored, setMirrored] = useState(false);
+
+	return (
+		<NotesToolbar
+			{...createProps({
+				isPlaying,
+				mirrored,
+				onTogglePlaying: () => setIsPlaying((current) => !current),
+				onToggleMirror: () => setMirrored((current) => !current),
+			})}
+		/>
+	);
+}
+
+describe("NotesToolbar keyboard reachability", () => {
+	it("walks every teleprompter control in order and toggles them from the keyboard", async () => {
+		const user = userEvent.setup();
+		const { container } = render(
+			<I18nProvider>
+				<ToolbarHarness />
+			</I18nProvider>,
+		);
+
+		const row = container.querySelector<HTMLElement>('[data-testid="notes-teleprompter-controls"]');
+		const controls = Array.from(
+			container.querySelectorAll<HTMLButtonElement>("[data-teleprompter-control]"),
+		);
+		expect(row).not.toBeNull();
+		expect(controls).toHaveLength(6);
+
+		controls[0]?.focus();
+		expect(document.activeElement).toBe(controls[0]);
+		for (let index = 1; index < controls.length; index++) {
+			await user.tab();
+			expect(document.activeElement).toBe(controls[index]);
+		}
+
+		controls[0]?.focus();
+		await user.keyboard("{Enter}");
+		expect(controls[0]).toHaveAttribute("aria-label", "Pause auto-scroll");
+
+		const mirror = controls.at(-1);
+		await user.click(mirror as HTMLButtonElement);
+		expect(mirror).toHaveAttribute("aria-pressed", "true");
 	});
 });

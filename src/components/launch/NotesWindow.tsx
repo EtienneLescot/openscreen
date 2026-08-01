@@ -1,15 +1,18 @@
 import { EditorContent, useEditor } from "@tiptap/react";
 import StarterKit from "@tiptap/starter-kit";
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { NotesToolbar } from "./NotesToolbar";
 import {
 	clampNotesFontSize,
 	clampTeleprompterSpeed,
+	getMaxScrollTop,
 	getNextTeleprompterScrollTop,
 	getTeleprompterFrame,
+	isAtTeleprompterEnd,
 	loadInitialNotesContent,
 	loadNotesTeleprompterSettings,
 	NOTES_FONT_SIZE_STEP,
+	resolveTeleprompterPosition,
 	saveNotesContent,
 	saveNotesTeleprompterSettings,
 	TELEPROMPTER_SPEED_STEP,
@@ -19,9 +22,10 @@ import "./NotesWindow.module.css";
 export function NotesWindow() {
 	const [settings, setSettings] = useState(loadNotesTeleprompterSettings);
 	const [isPlaying, setIsPlaying] = useState(false);
+	const [initialContent] = useState(loadInitialNotesContent);
 	const editor = useEditor({
 		extensions: [StarterKit],
-		content: loadInitialNotesContent(),
+		content: initialContent,
 		autofocus: "end",
 		editorProps: {
 			attributes: {
@@ -33,9 +37,25 @@ export function NotesWindow() {
 		},
 	});
 
+	// Writing back the settings that were just loaded would create the storage key before the
+	// user has touched a single control. Keying off the identity of the initial state rather
+	// than a "has run once" flag keeps that true under StrictMode's double-invoked effects.
+	const loadedSettingsRef = useRef(settings);
 	useEffect(() => {
+		if (settings === loadedSettingsRef.current) {
+			return;
+		}
+
 		saveNotesTeleprompterSettings(settings);
 	}, [settings]);
+
+	// Typing during playback makes ProseMirror scroll the caret back into view, which fights
+	// the teleprompter. Reading is the only sensible mode while it scrolls, so the note goes
+	// read-only and the toolbar disables formatting for as long as playback runs.
+	// `emitUpdate: false` — the content did not change, so there is nothing to persist.
+	useEffect(() => {
+		editor?.setEditable(!isPlaying, false);
+	}, [editor, isPlaying]);
 
 	useEffect(() => {
 		if (!isPlaying || !editor) {
@@ -43,30 +63,37 @@ export function NotesWindow() {
 		}
 
 		const scrollElement = editor.view.dom;
+
+		// Starting from the bottom — the end of a previous run, or a manual scroll —
+		// replays from the top instead of leaving the play button looking inert.
+		if (isAtTeleprompterEnd(scrollElement.scrollTop, getMaxScrollTop(scrollElement))) {
+			scrollElement.scrollTop = 0;
+		}
+
 		let frameId: number | null = null;
 		let previousTimestamp: number | null = null;
+		let position = scrollElement.scrollTop;
 
 		const tick = (timestamp: number) => {
 			const frame = getTeleprompterFrame(previousTimestamp, timestamp);
 			previousTimestamp = frame.nextTimestamp;
 
 			if (frame.elapsedMs > 0) {
-				const maximumScrollTop = Math.max(
-					0,
-					scrollElement.scrollHeight - scrollElement.clientHeight,
-				);
-				const nextScrollTop = getNextTeleprompterScrollTop(
-					scrollElement.scrollTop,
+				const maximumScrollTop = getMaxScrollTop(scrollElement);
+				position = getNextTeleprompterScrollTop(
+					resolveTeleprompterPosition(position, scrollElement.scrollTop),
 					settings.speed,
 					frame.elapsedMs,
 					maximumScrollTop,
 				);
-				scrollElement.scrollTop = nextScrollTop;
 
-				if (nextScrollTop >= maximumScrollTop) {
+				if (isAtTeleprompterEnd(position, maximumScrollTop)) {
+					scrollElement.scrollTop = maximumScrollTop;
 					setIsPlaying(false);
 					return;
 				}
+
+				scrollElement.scrollTop = position;
 			}
 
 			frameId = requestAnimationFrame(tick);

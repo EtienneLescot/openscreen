@@ -43,6 +43,10 @@
 		"fullscreen": "전체화면",
 		"exitFullscreen": "전체화면 종료"
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} px/초",
+		"pixels": "{{value}} px"
+	},
 	"locale": {
 		"name": "한국어",
 		"short": "KO"
