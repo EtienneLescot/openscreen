@@ -407,7 +407,6 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	sendCloseConfirmResponse: (choice: "save" | "discard" | "cancel") => {
 		ipcRenderer.send("close-confirm-response", choice);
 	},
-<<<<<<< HEAD
 	// ponytail: forward renderer console output to main-process stdout so
 	// recorder diagnostics land next to the main-process logs in dev output.
 	// One-way fire-and-forget; we deliberately don't await the IPC.
