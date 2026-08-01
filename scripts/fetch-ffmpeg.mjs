@@ -303,7 +303,14 @@ function vendorFfmpegSdk(tmp, dest) {
 	// target, and we only get here on --force or when it is genuinely absent.
 	fs.rmSync(dest, { recursive: true, force: true });
 	fs.mkdirSync(path.dirname(dest), { recursive: true });
-	fs.cpSync(root, dest, { recursive: true });
+	// `verbatimSymlinks` matters on Linux, where BtbN ships lib/libavcodec.so ->
+	// libavcodec.so.62.28.102. WITHOUT it, cpSync RESOLVES each link and writes an
+	// absolute one pointing back into the extraction temp dir — which this function's
+	// caller deletes immediately after, leaving every dev symlink dangling. The
+	// headers then satisfy build.rs's assert while `-lavcodec` fails at link time,
+	// which is exactly how this presented. Windows has no symlinks here, so the flag
+	// is a no-op there.
+	fs.cpSync(root, dest, { recursive: true, verbatimSymlinks: true });
 	console.log(`Vendored ffmpeg SDK (include/ + lib/) -> ${dest}`);
 }
 
