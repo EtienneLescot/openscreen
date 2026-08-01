@@ -1,3 +1,4 @@
+import Head from "@docusaurus/Head";
 import Link from "@docusaurus/Link";
 import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 import Heading from "@theme/Heading";
@@ -12,11 +13,19 @@ import {
 } from "lucide-react";
 
 import { type AssetKind, findAsset, formatSize, type LatestRelease } from "../lib/release";
+import { jsonLd, SOFTWARE_ID, softwareApplicationLd, WEBSITE_ID } from "../lib/structured-data";
 import styles from "./download.module.css";
 
 const REPO_URL = "https://github.com/getopenscreen/openscreen";
 const RELEASES_URL = `${REPO_URL}/releases`;
 const LATEST_URL = `${RELEASES_URL}/latest`;
+const PAGE_URL = "https://getopenscreen.com/download/";
+
+// Shared by <Layout> and the WebPage node below so the two cannot drift: a
+// structured-data description that contradicts the meta one is worse than none.
+const PAGE_TITLE = "Download for Windows, macOS & Linux";
+const PAGE_DESCRIPTION =
+	"Download OpenScreen free for Windows, macOS, and Linux — .dmg, .exe, .deb, .pacman, AppImage, and a Nix flake. Open source, no account, no watermark.";
 
 type PlatformSpec = {
 	id: string;
@@ -58,15 +67,40 @@ const PLATFORMS: PlatformSpec[] = [
 	},
 ];
 
+/**
+ * Hooks this URL onto the site's entity graph: a WebPage node that is part of
+ * the site-wide WebSite and whose subject is the product entity, plus that
+ * entity itself under its canonical @id. Emitting the SoftwareApplication here
+ * as well as on the landing page is not duplication — the shared @id makes both
+ * copies one entity — and it is what lets this page, the one we want ranking for
+ * "openscreen download", carry the app's category, platforms, price, and version.
+ */
+function downloadPageLd(release: LatestRelease): string {
+	return jsonLd(
+		{
+			"@type": "WebPage",
+			"@id": `${PAGE_URL}#webpage`,
+			url: PAGE_URL,
+			name: PAGE_TITLE,
+			description: PAGE_DESCRIPTION,
+			inLanguage: "en",
+			isPartOf: { "@id": WEBSITE_ID },
+			about: { "@id": SOFTWARE_ID },
+			mainEntity: { "@id": SOFTWARE_ID },
+		},
+		softwareApplicationLd(release),
+	);
+}
+
 export default function DownloadPage() {
 	const { siteConfig } = useDocusaurusContext();
 	const release = (siteConfig.customFields?.latestRelease ?? null) as LatestRelease;
 
 	return (
-		<Layout
-			title="Download for Windows, macOS & Linux"
-			description="Download OpenScreen free for Windows, macOS, and Linux — .dmg, .exe, .deb, .pacman, AppImage, and a Nix flake. Open source, no account, no watermark."
-		>
+		<Layout title={PAGE_TITLE} description={PAGE_DESCRIPTION}>
+			<Head>
+				<script type="application/ld+json">{downloadPageLd(release)}</script>
+			</Head>
 			<header className={styles.hero}>
 				<div className={styles.heroInner}>
 					<span className={styles.badge}>
