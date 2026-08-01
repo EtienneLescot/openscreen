@@ -41,8 +41,11 @@ export default async function createConfig(): Promise<Config> {
 		tagline: "A free, open-source screen recorder and editor.",
 		favicon: "img/logo-icon.png",
 
-		url: "https://getopenscreen.github.io",
-		baseUrl: "/openscreen/",
+		// Pages serves this from the custom domain's root, not from
+		// getopenscreen.github.io/openscreen/, so baseUrl has to be "/" — a project
+		// baseUrl would prefix every asset URL with a path the server has nothing at.
+		url: "https://getopenscreen.com",
+		baseUrl: "/",
 
 		organizationName: "getopenscreen",
 		projectName: "openscreen",
