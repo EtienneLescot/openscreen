@@ -2,6 +2,14 @@
 id: captions
 title: Captions & transcript
 sidebar_position: 7
+description: "Transcribe on-device with Whisper, burn in styled captions, translate them into 15 languages, and edit a recording by deleting words from the text."
+keywords:
+  - automatic captions
+  - subtitles
+  - Whisper transcription
+  - offline transcription
+  - caption translation
+  - transcript editing
 ---
 
 # Captions & transcript

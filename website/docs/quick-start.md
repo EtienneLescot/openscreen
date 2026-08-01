@@ -2,6 +2,13 @@
 id: quick-start
 title: Quick start
 sidebar_position: 3
+description: "Record, trim, and export your first video with OpenScreen in six steps — from opening the recording HUD to exporting a finished MP4."
+keywords:
+  - screen recording tutorial
+  - quick start
+  - record screen
+  - trim video
+  - export MP4
 ---
 
 # Quick start

@@ -75,6 +75,25 @@
 .bottomBar {
 	border-top: 1px solid var(--os-border-soft);
 	padding-top: 20px;
+	display: flex;
+	flex-direction: column;
+	gap: 6px;
 	font-size: 11.5px;
 	color: var(--os-meta);
+}
+
+.bottomBar p {
+	margin: 0;
+}
+
+.lineageLink {
+	color: var(--os-muted);
+	text-decoration: underline;
+	text-underline-offset: 2px;
+	text-decoration-color: var(--os-border-hi);
+}
+
+.lineageLink:hover {
+	color: var(--os-accent);
+	text-decoration-color: var(--os-accent-border);
 }

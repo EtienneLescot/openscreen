@@ -1,7 +1,16 @@
 ---
 id: export
-title: Export
+title: Exporting video
 sidebar_position: 9
+sidebar_label: Export
+description: "Export from OpenScreen to MP4 (720p, 1080p, or source resolution, H.264 or H.265) or animated GIF, and how the MP4 render path actually works."
+keywords:
+  - export MP4
+  - H.264
+  - H.265
+  - animated GIF
+  - video export
+  - 1080p
 ---
 
 # Export

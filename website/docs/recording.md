@@ -1,7 +1,16 @@
 ---
 id: recording
-title: Recording
+title: Screen recording
 sidebar_position: 4
+sidebar_label: Recording
+description: "Record a window, screen, or region with OpenScreen's HUD — system audio, microphone, webcam, cursor modes, countdown, and native vs. browser capture."
+keywords:
+  - record screen
+  - window capture
+  - system audio recording
+  - webcam recording
+  - ScreenCaptureKit
+  - Windows Graphics Capture
 ---
 
 # Recording

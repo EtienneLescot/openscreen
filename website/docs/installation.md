@@ -2,6 +2,15 @@
 id: installation
 title: Installation
 sidebar_position: 2
+description: "Install OpenScreen on macOS, Windows, or Linux — .dmg, .exe, .deb, .pacman, AppImage, and a Nix flake, including the macOS Gatekeeper step."
+keywords:
+  - install screen recorder
+  - download OpenScreen
+  - macOS dmg
+  - Windows installer
+  - Linux deb
+  - AppImage
+  - Nix flake
 ---
 
 # Installation

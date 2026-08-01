@@ -1,0 +1,8 @@
+# https://getopenscreen.com
+# Docusaurus does not emit a robots.txt, so without this file the sitemap is
+# only discoverable by submitting it in Search Console by hand.
+
+User-agent: *
+Allow: /
+
+Sitemap: https://getopenscreen.com/sitemap.xml

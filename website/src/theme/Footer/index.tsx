@@ -4,6 +4,8 @@ import type { ReactNode } from "react";
 
 import styles from "./styles.module.css";
 
+const UPSTREAM_REPO_URL = "https://github.com/siddharthvaddem/openscreen";
+
 /**
  * Custom footer matching "OpenScreen Docs Site.dc.html" 1:1 — a 1.4fr/1fr/1fr
  * three-column grid (brand + description, Project, Community) that the
@@ -19,7 +21,7 @@ export default function Footer(): ReactNode {
 				<div className={styles.columns}>
 					<div>
 						<div className={styles.brand}>
-							<img src={logoSrc} alt="" className={styles.brandLogo} />
+							<img src={logoSrc} alt="" width={20} height={20} className={styles.brandLogo} />
 							<span className={styles.brandName}>OpenScreen</span>
 						</div>
 						<p className={styles.brandDescription}>
@@ -51,7 +53,19 @@ export default function Footer(): ReactNode {
 				</div>
 
 				<div className={styles.bottomBar}>
-					OpenScreen is released under the MIT license. Built by the community — free, forever.
+					<p>
+						OpenScreen is released under the MIT license. Built by the community — free, forever.
+					</p>
+					{/* Lineage, stated once and in prose: this fork inherits the name, so
+					    the relationship to the archived original belongs somewhere on
+					    every page. Also mirrored as schema.org sameAs in the site config. */}
+					<p>
+						The official spin-off of the{" "}
+						<Link className={styles.lineageLink} href={UPSTREAM_REPO_URL}>
+							original OpenScreen project
+						</Link>{" "}
+						— 39k stars, now archived.
+					</p>
 				</div>
 			</div>
 		</footer>
