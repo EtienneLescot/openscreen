@@ -219,6 +219,204 @@ impl CursorTrack {
         // déplace la trajectoire, pas la chronologie de ce que faisait l'utilisateur.
         CursorTrack::new(samples, self.clicks.clone(), self.types.clone())
     }
+
+    /// Piste dont les portions couvertes par une région éditée suivent la géométrie du preset
+    /// au lieu de la télémétrie.
+    ///
+    /// Appliqué UNE fois aux échantillons, comme `smoothed` et pour la même raison : la piste
+    /// reste une pure fonction de `t`, donc la preview et l'export rendent le même tracé, et un
+    /// seek retombe sur l'image de la lecture linéaire.
+    ///
+    /// La courbe est ré-échantillonnée à 240 Hz à l'intérieur des régions, indépendamment de la
+    /// densité de la télémétrie : le tracé est analytique, alors qu'une capture peut n'avoir que
+    /// quelques points sur la durée d'une région — les reprendre tels quels rendrait un arc en
+    /// ligne brisée. Hors régions, les échantillons bruts passent intacts.
+    ///
+    /// Les clics et les états gardent leurs instants (même principe que `smoothed`) : rien ici
+    /// ne retime ce que faisait l'utilisateur, seule la position change.
+    pub fn with_motion(&self, regions: &[CursorMotionRegion]) -> CursorTrack {
+        // `Recorded` est inerte : une région qui ne change rien ne doit pas déclencher le
+        // ré-échantillonnage, sinon elle remplacerait la télémétrie par sa propre relecture.
+        let active: Vec<&CursorMotionRegion> = regions
+            .iter()
+            .filter(|r| r.preset != CursorMotionPreset::Recorded && r.end_s > r.start_s)
+            .collect();
+        if active.is_empty() {
+            return CursorTrack::new(self.samples.clone(), self.clicks.clone(), self.types.clone());
+        }
+
+        // Recouvrement : la DERNIÈRE région gagne, parité `findCursorMotionRegionAtTime` (TS)
+        // qui parcourt la liste à l'envers.
+        let covering = |t: f32| -> Option<&CursorMotionRegion> {
+            active.iter().rev().find(|r| t >= r.start_s && t <= r.end_s).copied()
+        };
+
+        const STEP_S: f32 = 1.0 / 240.0;
+        let mut samples: Vec<(f32, f32, f32)> =
+            self.samples.iter().filter(|(t, _, _)| covering(*t).is_none()).copied().collect();
+
+        for region in &active {
+            let span = region.end_s - region.start_s;
+            let steps = ((span / STEP_S).round() as usize).max(1);
+            for i in 0..=steps {
+                // Le dernier point est posé sur `end_s` exact plutôt que sur la grille : la
+                // couture avec l'échantillon brut suivant doit être franche, sinon
+                // l'interpolation de `sample_at` traverse un trou et coupe le raccord.
+                let t = if i == steps { region.end_s } else { region.start_s + i as f32 * STEP_S };
+                let (x, y) = sample_region(region, t);
+                samples.push((t, x, y));
+            }
+        }
+
+        samples.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        CursorTrack::new(samples, self.clicks.clone(), self.types.clone())
+    }
+}
+
+/// Forme dessinée entre les deux ancres d'une région. `Recorded` est inerte : la région
+/// existe pour porter une sélection dans l'éditeur sans toucher au tracé.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CursorMotionPreset {
+    Recorded,
+    Straight,
+    Arc,
+    Wave,
+    Loop,
+    Overshoot,
+}
+
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum CursorMotionEasing {
+    Linear,
+    EaseInOut,
+    EaseIn,
+    EaseOut,
+}
+
+/// Une portion de trajectoire éditée, qui remplace la télémétrie entre `start_s` et `end_s`.
+///
+/// Les ancres arrivent RÉSOLUES (l'éditeur possède la détection des rests, clics et coupes
+/// manuelles) : ce module ne fait que de la géométrie, donc la même liste redonne toujours
+/// le même tracé. `control` est un point absolu, pas un décalage — le sampler en prend
+/// l'écart au milieu de [start, end], si bien qu'un point de contrôle laissé au milieu est
+/// neutre pour tous les presets.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CursorMotionRegion {
+    pub start_s: f32,
+    pub end_s: f32,
+    pub start: (f32, f32),
+    pub end: (f32, f32),
+    pub control: (f32, f32),
+    pub preset: CursorMotionPreset,
+    pub cycles: u32,
+    pub speed: f32,
+    pub easing: CursorMotionEasing,
+}
+
+fn lerp(a: f32, b: f32, p: f32) -> f32 {
+    a + (b - a) * p
+}
+
+/// Parité `clampCursorMotionCycles` (TS) : entier, borné 1..6.
+fn clamp_cycles(cycles: u32) -> f32 {
+    cycles.clamp(1, 6) as f32
+}
+
+/// Parité `clampCursorMotionSpeed` (TS) : borné 1..4 PUIS arrondi au dixième. L'arrondi
+/// n'est pas cosmétique — il entre dans l'exposant ci-dessous, donc l'omettre ferait
+/// diverger le tracé de ce que l'éditeur a affiché.
+fn clamp_speed(speed: f32) -> f32 {
+    let v = if speed.is_finite() { speed } else { 1.0 };
+    (v.clamp(1.0, 4.0) * 10.0).round() / 10.0
+}
+
+/// Parité `applyCursorMotionSpeed` (TS) : `1 - (1-t)^vitesse`. Reprofile la progression,
+/// ne retime pas la région — et démarre au premier instant, sans palier gelé en tête (un
+/// palier avait rendu invisibles la plupart des courts déplacements à 2x).
+fn apply_speed(progress: f32, speed: f32) -> f32 {
+    let t = progress.clamp(0.0, 1.0);
+    (1.0 - (1.0 - t).powf(clamp_speed(speed))).clamp(0.0, 1.0)
+}
+
+/// Parité `easeProgress` (TS).
+fn ease_progress(progress: f32, easing: CursorMotionEasing) -> f32 {
+    let t = progress.clamp(0.0, 1.0);
+    match easing {
+        CursorMotionEasing::EaseIn => t * t * t,
+        CursorMotionEasing::EaseOut => 1.0 - (1.0 - t).powi(3),
+        CursorMotionEasing::EaseInOut => {
+            if t < 0.5 {
+                4.0 * t * t * t
+            } else {
+                1.0 - (-2.0 * t + 2.0).powi(3) / 2.0
+            }
+        }
+        CursorMotionEasing::Linear => t,
+    }
+}
+
+/// Parité `easeOutBack` (TS) : dépasse la cible puis revient.
+fn ease_out_back(progress: f32) -> f32 {
+    const C1: f32 = 1.70158;
+    const C3: f32 = C1 + 1.0;
+    let t = progress.clamp(0.0, 1.0) - 1.0;
+    1.0 + C3 * t.powi(3) + C1 * t.powi(2)
+}
+
+/// Position dans une région à l'instant `t` — port direct de `sampleCursorMotionRegion`
+/// (TS). Fonction pure de `t` : c'est ce qui autorise à l'appliquer une fois aux
+/// échantillons plutôt que par frame, donc à faire coïncider preview et export.
+fn sample_region(region: &CursorMotionRegion, t: f32) -> (f32, f32) {
+    let duration = (region.end_s - region.start_s).max(0.001);
+    let raw = ((t - region.start_s) / duration).clamp(0.0, 1.0);
+    if raw <= 0.0 {
+        return region.start;
+    }
+    if raw >= 1.0 {
+        return region.end;
+    }
+    let motion = apply_speed(raw, region.speed);
+    if motion == 0.0 {
+        return region.start;
+    }
+    let progress = ease_progress(motion, region.easing);
+
+    let mid = ((region.start.0 + region.end.0) / 2.0, (region.start.1 + region.end.1) / 2.0);
+    let offset = (region.control.0 - mid.0, region.control.1 - mid.1);
+    let envelope = (std::f32::consts::PI * motion).sin();
+
+    if region.preset == CursorMotionPreset::Overshoot {
+        let p = ease_out_back(progress);
+        return (
+            lerp(region.start.0, region.end.0, p) + offset.0 * envelope * 0.35,
+            lerp(region.start.1, region.end.1, p) + offset.1 * envelope * 0.35,
+        );
+    }
+
+    let base = (
+        lerp(region.start.0, region.end.0, progress),
+        lerp(region.start.1, region.end.1, progress),
+    );
+    let cycles = clamp_cycles(region.cycles);
+
+    match region.preset {
+        CursorMotionPreset::Arc => (base.0 + offset.0 * envelope, base.1 + offset.1 * envelope),
+        CursorMotionPreset::Wave => {
+            let wave = (std::f32::consts::PI * 2.0 * cycles * motion).sin() * envelope;
+            (base.0 + offset.0 * wave, base.1 + offset.1 * wave)
+        }
+        CursorMotionPreset::Loop => {
+            let phase = std::f32::consts::PI * 2.0 * cycles * motion;
+            let tangent = phase.sin() * envelope;
+            let normal = (1.0 - phase.cos()) * 0.5 * envelope;
+            (
+                base.0 + offset.0 * tangent - offset.1 * normal,
+                base.1 + offset.1 * tangent + offset.0 * normal,
+            )
+        }
+        // `Straight` suit la droite ; `Recorded` n'arrive jamais ici (filtré en amont).
+        _ => base,
+    }
 }
 
 /// Ressort-amortisseur, intégration semi-implicite (symplectique) d'Euler — stable pour ces
@@ -275,6 +473,105 @@ mod tests {
         assert_eq!(track.type_at(0.9), Some("arrow"), "tient jusqu'à la suivante");
         assert_eq!(track.type_at(1.2), Some("text"));
         assert_eq!(track.type_at(99.0), Some("pointer"), "la dernière tient jusqu'à la fin");
+    }
+
+    fn region(preset: CursorMotionPreset) -> CursorMotionRegion {
+        CursorMotionRegion {
+            start_s: 1.0,
+            end_s: 2.0,
+            start: (0.0, 0.0),
+            end: (1.0, 0.0),
+            // Écarté du milieu (0.5, 0.0) : de quoi rendre les presets courbes visibles.
+            control: (0.5, 0.4),
+            preset,
+            cycles: 1,
+            speed: 1.0,
+            easing: CursorMotionEasing::Linear,
+        }
+    }
+
+    /// Une piste qui fait un détour par le haut entre t=1 et t=2.
+    fn detour_track() -> CursorTrack {
+        CursorTrack::new(
+            vec![
+                (0.0, 0.0, 0.0),
+                (1.0, 0.0, 0.0),
+                (1.5, 0.5, -0.9), // le détour que l'édition doit effacer
+                (2.0, 1.0, 0.0),
+                (3.0, 1.0, 0.0),
+            ],
+            vec![1.5],
+            vec![(0.0, "arrow".into())],
+        )
+    }
+
+    /// `Straight` remplace la trajectoire enregistrée par la droite entre les deux ancres :
+    /// au milieu de la région on doit être sur la corde, pas sur le détour capturé.
+    #[test]
+    fn straight_region_replaces_the_recorded_detour() {
+        let edited = detour_track().with_motion(&[region(CursorMotionPreset::Straight)]);
+        let (x, y) = edited.at(1.5).expect("position au milieu de la région");
+        assert!((x - 0.5).abs() < 0.01, "x devrait être à mi-corde, obtenu {x}");
+        assert!(y.abs() < 0.01, "le détour vertical devrait avoir disparu, obtenu {y}");
+    }
+
+    /// `Recorded` est inerte — c'est le préréglage par défaut, et il ne doit surtout pas
+    /// ré-échantillonner la piste : le tracé capturé passe intact.
+    #[test]
+    fn recorded_region_leaves_the_track_untouched() {
+        let raw = detour_track();
+        let edited = raw.with_motion(&[region(CursorMotionPreset::Recorded)]);
+        assert_eq!(edited.sample_count(), raw.sample_count());
+        assert_eq!(edited.at(1.5), raw.at(1.5), "le détour doit survivre");
+    }
+
+    /// Les bornes sont exactes : une région ne doit pas décaler la position aux instants où
+    /// elle se raccorde au reste de la piste, sinon la couture saute à l'image près.
+    #[test]
+    fn region_endpoints_land_exactly_on_their_anchors() {
+        let edited = detour_track().with_motion(&[region(CursorMotionPreset::Arc)]);
+        let (sx, sy) = edited.at(1.0).unwrap();
+        let (ex, ey) = edited.at(2.0).unwrap();
+        assert!(sx.abs() < 1e-4 && sy.abs() < 1e-4, "début ({sx}, {sy})");
+        assert!((ex - 1.0).abs() < 1e-4 && ey.abs() < 1e-4, "fin ({ex}, {ey})");
+    }
+
+    /// Hors région, la télémétrie brute n'est pas touchée.
+    #[test]
+    fn samples_outside_the_region_survive() {
+        let edited = detour_track().with_motion(&[region(CursorMotionPreset::Straight)]);
+        assert_eq!(edited.at(0.0), Some((0.0, 0.0)));
+        assert_eq!(edited.at(3.0), Some((1.0, 0.0)));
+    }
+
+    /// `Arc` s'écarte de la corde du côté du point de contrôle, au maximum en milieu de course.
+    #[test]
+    fn arc_bends_toward_its_control_point() {
+        let edited = detour_track().with_motion(&[region(CursorMotionPreset::Arc)]);
+        let (_, y) = edited.at(1.5).unwrap();
+        assert!(y > 0.3, "l'arc devrait culminer vers le point de contrôle, obtenu {y}");
+    }
+
+    /// Recouvrement : la dernière région gagne, comme `findCursorMotionRegionAtTime` en TS.
+    #[test]
+    fn overlapping_regions_resolve_to_the_last_one() {
+        let mut second = region(CursorMotionPreset::Straight);
+        second.end = (1.0, 0.8); // destination distincte, pour trancher sans ambiguïté
+        let edited =
+            detour_track().with_motion(&[region(CursorMotionPreset::Arc), second]);
+        let (_, y) = edited.at(2.0).unwrap();
+        assert!((y - 0.8).abs() < 1e-3, "la seconde région devrait l'emporter, obtenu {y}");
+    }
+
+    /// L'édition déplace la trajectoire, pas la chronologie : clics et états gardent leurs
+    /// instants, exactement comme sous `smoothed`.
+    #[test]
+    fn motion_preserves_clicks_and_types() {
+        let edited = detour_track().with_motion(&[region(CursorMotionPreset::Loop)]);
+        assert_eq!(edited.type_at(1.5), Some("arrow"));
+        // Échantillonné DANS la fenêtre d'animation, pas sur son bord : à l'instant même du
+        // clic la pression commence tout juste et vaut encore 1.0.
+        assert!(edited.bounce(1.55) < 1.0, "le clic à 1.5 s doit toujours produire son bounce");
     }
 
     /// Le lissage déplace la trajectoire, pas la chronologie : les états doivent survivre
