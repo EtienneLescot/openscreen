@@ -94,6 +94,26 @@ describe("SttManager", () => {
 		expect(fakeWhisperServer.stop).toHaveBeenCalledOnce();
 	});
 
+	it("retries setup after a failed one instead of caching the rejection", async () => {
+		// First run downloads a 253 MB model. Caching a rejected `prepare()` meant
+		// one dropped connection failed every later transcription in the session —
+		// including the retry the editor offers — until the app was restarted.
+		const { ensureModels } = await import("./modelManager");
+		const mocked = vi.mocked(ensureModels);
+		mocked.mockClear();
+		mocked.mockRejectedValueOnce(new Error("Failed to download: network unreachable"));
+		const mgr = new SttManager();
+
+		await expect(mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" })).rejects.toThrow(
+			"network unreachable",
+		);
+		// The network came back: the next attempt must actually attempt.
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+
+		expect(mocked).toHaveBeenCalledTimes(2);
+		expect(fakeWhisperServer.start).toHaveBeenCalledOnce();
+	});
+
 	it("setStatusSink replaces the previous sink (last call wins)", () => {
 		const mgr = new SttManager();
 		const a = vi.fn();
