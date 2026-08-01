@@ -10,7 +10,16 @@ record → edit the project JSON programmatically → export → MP4/GIF
 
 ## Running
 
-Development (after `npm run build-vite` and, for recording, the native helper build):
+Development — build once per checkout:
+
+```bash
+npm run build-vite                                            # renderer + main
+npm run build:native:mac                                      # capture helpers (recording)
+npm run fetch:ffmpeg:mac && npm run build:native:compositor:mac  # Rust compositor (export)
+bash scripts/build-whisper-stt.sh                             # STT server (captions; model downloads on first run)
+```
+
+Then:
 
 ```bash
 npm run cli -- <command> [options]
@@ -127,8 +136,10 @@ openscreen export demo.openscreen --json | while read line; do ...; done
 | `--audio-offset <seconds>` | Delay before the voiceover starts (default 0) |
 | `--json` | NDJSON progress + result on stdout |
 
-`--audio` re-muxes after the render: video packets are copied untouched, and the
-audio is mixed offline (OfflineAudioContext) and re-encoded to AAC. MP4 only.
+`--audio` mixes after the native render: the exported file is read back, video
+packets are copied untouched, and the audio is mixed offline
+(OfflineAudioContext) and re-encoded to AAC before overwriting the output.
+MP4 only.
 In `mix` mode the original audio is ducked to 40% under the voiceover so the
 sum cannot clip; use `replace` to drop the original entirely.
 
@@ -137,12 +148,12 @@ when it lives in the app's recordings directory or **next to the project file**.
 Keep `.openscreen` files beside their media (or record via the CLI, which uses
 the recordings directory).
 
-**`--preview-size`**: annotation font sizes and border radii are stored in
-preview-pixel space and scaled by `export size / preview size` — in the GUI the
-"preview" is the editor window, so results depend on window size. The CLI uses a
-deterministic reference box instead (the composition fitted into 1280×720).
-Authoring tip for scripts: treat annotation `fontSize` as "pixels in a
-1280-wide preview".
+**`--preview-size`** is accepted for compatibility but is a no-op on the
+native pipeline: annotation geometry is percentage-based in the scene
+description, so exports no longer depend on any preview box.
+
+**No cancel**: the native compositor has no abort mechanism — killing the CLI
+mid-export stops output but the render worker runs until process exit.
 
 ### `openscreen pack`
 
@@ -171,8 +182,9 @@ openscreen export demo.openscreen -o demo.mp4   # subtitles are burned in
 ```
 
 Requires an audio track in the project's video (e.g. `record --mic`, or a
-voiceover mixed in with a re-recorded source). Accuracy reflects the bundled
-whisper-tiny model: strong for English, rough for other languages.
+voiceover mixed in with a re-recorded source). Transcription runs on the
+native whisper.cpp engine (ggml-small); the model downloads automatically on
+first use.
 
 ### `openscreen info`
 
