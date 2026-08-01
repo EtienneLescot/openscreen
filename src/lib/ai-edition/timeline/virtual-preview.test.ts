@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { resolvePlaybackSegments } from "../document/timeline";
 import type { AxcutClip } from "../schema";
 import { formatSeconds } from "./format";
 import {
@@ -6,6 +7,7 @@ import {
 	findNextKeptSegment,
 	getRawVirtualStartTime,
 	keptWordIdSet,
+	locateKeptSegment,
 	locateSourcePosition,
 	locateVirtualPosition,
 	totalVirtualDuration,
@@ -162,6 +164,157 @@ describe("virtual-preview pure functions", () => {
 		expect(outOfRange?.clip.id).toBe("clip_1");
 	});
 
+	// The last ~50 ms of a clip: `reachedClipEnd` (VirtualPreview's rAF) fires at
+	// `sourceEndSec - 0.04`, so this is the moment the tick has to still know which clip
+	// it is on in order to advance to the RIGHT next one.
+	describe("the closing edge of a clip, with a twin over the same recording", () => {
+		const twins = (order: Array<{ id: string; assetId: string }>): AxcutClip[] => {
+			let timelineStartSec = 0;
+			return order.map((spec) => {
+				const clip: AxcutClip = {
+					...spec,
+					sourceStartSec: 0,
+					sourceEndSec: 10,
+					timelineStartSec,
+					timelineEndSec: timelineStartSec + 10,
+					wordRefs: [],
+					origin: "user",
+					reason: "",
+				};
+				timelineStartSec += 10;
+				return clip;
+			});
+		};
+		const a1 = { id: "clip_a1", assetId: "a1" };
+		const a2 = { id: "clip_a2", assetId: "a1" };
+		const c3 = { id: "clip_c3", assetId: "c1" };
+
+		// Before this, the preferred clip shared the ambiguous scan's EXCLUSIVE closing
+		// edge, so at 9.96 it disowned its own last frames and the scan handed them to its
+		// twin — reporting the playhead near the END of that twin (19.96 / 29.96). The rAF
+		// then saw "clip end reached" on a clip nothing follows and stopped playback with
+		// the playhead parked at the end of the timeline.
+		it.each([
+			["two clips over one recording", [a1, a2], "clip_a1", 9.96],
+			["the same pair, laid down the other way round", [a2, a1], "clip_a2", 9.96],
+			["a foreign clip between the twins", [a1, c3, a2], "clip_a1", 9.96],
+			["a foreign clip before the twins", [c3, a1, a2], "clip_a1", 9.96],
+			// This layout never showed the bug: the LAST array element was the foreign
+			// clip, which the asset filter excluded, so the scan returned null and the rAF
+			// fell back to timeline order. Same answer now, for a reason instead of by luck.
+			["the foreign clip last", [a1, a2, c3], "clip_a1", 9.96],
+		])("stays on the clip it is playing — %s", (_label, order, playing, sourceTimeSec) => {
+			const clips = twins(order);
+			const playingClip = clips.find((c) => c.id === playing);
+			if (!playingClip) throw new Error("bad fixture");
+			const pos = locateSourcePosition(
+				clips,
+				sourceTimeSec,
+				playingClip.assetId,
+				0.05,
+				playingClip.id,
+			);
+			expect(pos?.clip.id).toBe(playing);
+			expect(pos?.virtualTimeSec).toBeCloseTo(playingClip.timelineStartSec + sourceTimeSec, 6);
+		});
+
+		it("resolves the same clip whatever the clips' order, with no clip named", () => {
+			// The scan cannot know which twin is playing — but its answer must at least not
+			// depend on which twin happens to sit last in the array, which is what
+			// `index === clips.length - 1` made it do.
+			const forward = locateSourcePosition(twins([a1, a2]), 9.96, "a1");
+			const reversed = locateSourcePosition(twins([a2, a1]), 9.96, "a1");
+			expect(forward?.clip.id).toBe("clip_a1");
+			expect(reversed?.clip.id).toBe("clip_a2");
+			// i.e. both resolve to the FIRST clip of the asset — the documented behaviour of
+			// the ambiguous scan (see the duplicate-clip case above), not to whichever one
+			// was laid down last.
+			expect(forward?.virtualTimeSec).toBeCloseTo(9.96, 6);
+			expect(reversed?.virtualTimeSec).toBeCloseTo(9.96, 6);
+		});
+
+		it("still hands a shared boundary to the clip that starts there", () => {
+			// A plain split: clip_1 ends where clip_2 begins. The exclusive edge exists for
+			// exactly this, and the two-pass scan must not have loosened it.
+			const split: AxcutClip[] = [
+				{ ...twins([a1])[0], sourceStartSec: 0, sourceEndSec: 10 },
+				{
+					...twins([a2])[0],
+					sourceStartSec: 10,
+					sourceEndSec: 20,
+					timelineStartSec: 10,
+					timelineEndSec: 20,
+				},
+			];
+			expect(locateSourcePosition(split, 10, "a1")?.clip.id).toBe("clip_a2");
+			expect(locateSourcePosition(split, 9.9, "a1")?.clip.id).toBe("clip_a1");
+			// …and the very end of the timeline still resolves rather than falling off it.
+			expect(locateSourcePosition(split, 20, "a1")?.clip.id).toBe("clip_a2");
+		});
+
+		it("ignores a named clip whose asset is not the one playing", () => {
+			// A stale id during an asset swap must fall through to the scan rather than
+			// mapping the time through media that is not on screen.
+			const clips = twins([a1, c3]);
+			const pos = locateSourcePosition(clips, 5, "a1", 0.05, "clip_c3");
+			expect(pos?.clip.id).toBe("clip_a1");
+		});
+	});
+
+	describe("locateKeptSegment", () => {
+		// clip_1 and clip_2 are the same recording twice. clip_1 carries a cut at source
+		// 4–6; clip_2 carries none, so it KEEPS that stretch.
+		const rawClips: AxcutClip[] = [
+			{
+				id: "clip_1",
+				assetId: "a1",
+				sourceStartSec: 0,
+				sourceEndSec: 10,
+				timelineStartSec: 0,
+				timelineEndSec: 10,
+				wordRefs: [],
+				origin: "user",
+				reason: "",
+			},
+			{
+				id: "clip_2",
+				assetId: "a1",
+				sourceStartSec: 0,
+				sourceEndSec: 10,
+				timelineStartSec: 10,
+				timelineEndSec: 20,
+				wordRefs: [],
+				origin: "user",
+				reason: "",
+			},
+		];
+		const playbackClips = resolvePlaybackSegments(rawClips, [
+			{ id: "trim_1", assetId: "a1", clipId: "clip_1", startSec: 4, endSec: 6 },
+		]);
+
+		it("reports source time inside the playing clip's own cut as NOT kept", () => {
+			// The twin keeps source 4–6, and the asset-wide scan used to accept its segment
+			// as the answer — so the cut was never skipped while clip_1 played.
+			expect(locateKeptSegment(playbackClips, rawClips, 5, "a1", "clip_1")).toBeNull();
+		});
+
+		it("reports the same source time as kept while the twin plays", () => {
+			const pos = locateKeptSegment(playbackClips, rawClips, 5, "a1", "clip_2");
+			expect(pos).not.toBeNull();
+			expect(pos?.clip.id).toBe("clip_2");
+		});
+
+		it("keeps answering for content the playing clip does keep", () => {
+			expect(locateKeptSegment(playbackClips, rawClips, 2, "a1", "clip_1")).not.toBeNull();
+			expect(locateKeptSegment(playbackClips, rawClips, 8, "a1", "clip_1")).not.toBeNull();
+		});
+
+		it("falls back to the asset-wide scan when no clip is named yet", () => {
+			// Before the first seek resolves a clip, there is nothing to be faithful to.
+			expect(locateKeptSegment(playbackClips, rawClips, 5, "a1")).not.toBeNull();
+		});
+	});
+
 	it("getRawVirtualStartTime maps a kept segment back to exact raw virtual start time", () => {
 		const rawClips: AxcutClip[] = [
 			{
@@ -265,5 +418,57 @@ describe("virtual-preview pure functions", () => {
 		expect(nextSeg?.id).toBe("clip_2");
 		expect(nextSeg?.assetId).toBe("a2");
 		expect(getRawVirtualStartTime(nextSeg!, rawClips)).toBe(10.7);
+	});
+
+	describe("findNextKeptSegment never goes backwards", () => {
+		// A slice from LATE in the recording laid down first, then a slice from early in
+		// it, cut at source 5–10. Both draw on the same asset, so "later in source time"
+		// spans two unrelated stretches of ruler.
+		const rawClips: AxcutClip[] = [
+			{
+				id: "clip_1",
+				assetId: "a1",
+				sourceStartSec: 30,
+				sourceEndSec: 40,
+				timelineStartSec: 0,
+				timelineEndSec: 10,
+				wordRefs: [],
+				origin: "user",
+				reason: "",
+			},
+			{
+				id: "clip_2",
+				assetId: "a1",
+				sourceStartSec: 0,
+				sourceEndSec: 20,
+				timelineStartSec: 10,
+				timelineEndSec: 30,
+				wordRefs: [],
+				origin: "user",
+				reason: "",
+			},
+		];
+		const playbackClips = resolvePlaybackSegments(rawClips, [
+			{ id: "trim_1", assetId: "a1", clipId: "clip_2", startSec: 5, endSec: 10 },
+		]);
+
+		it("resumes after the cut instead of jumping to the top of the timeline", () => {
+			// Playing clip_2 at source 7 — inside its own cut — at raw position 10 + 7 = 17.
+			// clip_1 starts at source 30, which IS "later in source time", and its raw start
+			// is 0: answering it sent playback back to the beginning, straight into the same
+			// cut again, forever.
+			const next = findNextKeptSegment(playbackClips, rawClips, 17, "a1", 7, "clip_2");
+			expect(next).toBeDefined();
+			expect(getRawVirtualStartTime(next!, rawClips)).toBe(20);
+			expect(next?.sourceStartSec).toBe(10);
+		});
+
+		it("uses the source clock to resume within the clip when the ruler lags", () => {
+			// Same moment, but the raw position has not caught up (still reads 10, the start
+			// of clip_2). The ruler test alone would answer clip_2's FIRST kept segment —
+			// the stretch already played. The clip-scoped source test carries it past the cut.
+			const next = findNextKeptSegment(playbackClips, rawClips, 10, "a1", 7, "clip_2");
+			expect(next?.sourceStartSec).toBe(10);
+		});
 	});
 });
