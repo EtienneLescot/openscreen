@@ -1,64 +1,67 @@
 import Link from "@docusaurus/Link";
+import useDocusaurusContext from "@docusaurus/useDocusaurusContext";
 import Heading from "@theme/Heading";
 import Layout from "@theme/Layout";
-import { Apple, AppWindow, Download, Package, ShieldCheck, TerminalSquare } from "lucide-react";
+import {
+	Apple,
+	AppWindow,
+	Download,
+	FlaskConical,
+	ShieldCheck,
+	TerminalSquare,
+} from "lucide-react";
 
+import { type AssetKind, findAsset, formatSize, type LatestRelease } from "../lib/release";
 import styles from "./download.module.css";
 
 const REPO_URL = "https://github.com/getopenscreen/openscreen";
+const RELEASES_URL = `${REPO_URL}/releases`;
+const LATEST_URL = `${RELEASES_URL}/latest`;
 
-// Every published asset carries the version in its filename
-// (Openscreen-Mac-arm64-1.7.0.dmg), so there is no stable per-asset URL to deep
-// link to. A build-time lookup of the current release would go stale silently:
-// the docs workflow only fires on website/** changes, so a new app release
-// would not rebuild this page and it would keep advertising the previous
-// version. /releases/latest is resolved by GitHub on every click instead, which
-// is always correct at the cost of one extra hop.
-const LATEST = `${REPO_URL}/releases/latest`;
+type PlatformSpec = {
+	id: string;
+	name: string;
+	icon: typeof Apple;
+	/** One row per artifact the platform actually ships. */
+	options: { kind: AssetKind; label: string; sublabel: string }[];
+	footnote?: string;
+};
 
-const PLATFORMS = [
+const PLATFORMS: PlatformSpec[] = [
 	{
 		id: "macos",
 		name: "macOS",
 		icon: Apple,
-		artifact: ".dmg",
-		blurb:
-			"Separate builds for Apple Silicon and Intel. Native ScreenCaptureKit capture, real cursor and click effects, native webcam.",
-		notes: [
-			"Apple Silicon: Openscreen-Mac-arm64",
-			"Intel: Openscreen-Mac-x64",
-			"Grant Screen Recording and Accessibility in System Settings on first launch",
+		options: [
+			{ kind: "macArm", label: "Apple Silicon", sublabel: "M1 and newer · .dmg" },
+			{ kind: "macIntel", label: "Intel", sublabel: "x86_64 · .dmg" },
 		],
+		footnote: "Grant Screen Recording and Accessibility on first launch.",
 	},
 	{
 		id: "windows",
 		name: "Windows",
 		icon: AppWindow,
-		artifact: ".exe",
-		blurb:
-			"One installer, nothing to configure. Windows Graphics Capture, system audio out of the box, native webcam.",
-		notes: [
-			"Run the installer and launch — no terminal step",
-			"System audio captured without extra drivers",
-		],
+		options: [{ kind: "windows", label: "Windows 10 & 11", sublabel: "Installer · .exe" }],
+		footnote: "System audio is captured without extra drivers.",
 	},
 	{
 		id: "linux",
 		name: "Linux",
 		icon: TerminalSquare,
-		artifact: ".deb · .pacman · AppImage",
-		blurb:
-			"Four ways to install, including a Nix flake. Browser-pipeline capture; PipeWire is needed for system audio.",
-		notes: [
-			"Debian, Ubuntu, Pop!_OS: .deb",
-			"Arch, Manjaro: .pacman",
-			"Any distro: AppImage",
-			"NixOS: flake",
+		options: [
+			{ kind: "deb", label: "Debian, Ubuntu, Pop!_OS", sublabel: "Package · .deb" },
+			{ kind: "pacman", label: "Arch, Manjaro", sublabel: "Package · .pacman" },
+			{ kind: "appImage", label: "Any distribution", sublabel: "Portable · .AppImage" },
 		],
+		footnote: "PipeWire is required for system audio.",
 	},
-] as const;
+];
 
 export default function DownloadPage() {
+	const { siteConfig } = useDocusaurusContext();
+	const release = (siteConfig.customFields?.latestRelease ?? null) as LatestRelease;
+
 	return (
 		<Layout
 			title="Download for Windows, macOS & Linux"
@@ -66,52 +69,53 @@ export default function DownloadPage() {
 		>
 			<header className={styles.hero}>
 				<div className={styles.heroInner}>
-					<span className={styles.badge}>MIT licensed · free forever</span>
+					<span className={styles.badge}>
+						{release ? `${release.tag} · MIT licensed` : "MIT licensed · free forever"}
+					</span>
 					<Heading as="h1" className={styles.title}>
 						Download OpenScreen
 					</Heading>
 					<p className={styles.tagline}>
-						A free, open-source screen recorder and video editor for Windows, macOS, and Linux. No
-						account, no watermark, no subscription.
+						A free, open-source screen recorder and video editor. No account, no watermark, no
+						subscription.
 					</p>
-					<div className={styles.actions}>
-						<a className={styles.primaryCta} href={LATEST}>
-							<Download size={16} />
-							Get the latest release
-						</a>
-						<Link className={styles.secondaryCta} to="/docs/installation">
-							Installation guide
-						</Link>
-					</div>
-					<p className={styles.note}>
-						OpenScreen is <strong>not production-grade</strong>. Expect rough edges while we build
-						in the open.
-					</p>
+					{release?.published ? (
+						<p className={styles.releaseMeta}>
+							Latest stable release, published {release.published}
+						</p>
+					) : null}
 				</div>
 			</header>
 
 			<section className={styles.platforms}>
 				<div className={styles.platformsInner}>
 					<div className={styles.grid}>
-						{PLATFORMS.map(({ id, name, icon: Icon, artifact, blurb, notes }) => (
+						{PLATFORMS.map(({ id, name, icon: Icon, options, footnote }) => (
 							<article key={id} className={styles.card}>
 								<div className={styles.cardHeader}>
 									<Icon size={15} />
 									<span>{name}</span>
-									<span className={styles.artifactChip}>{artifact}</span>
 								</div>
 								<div className={styles.cardBody}>
-									<p className={styles.cardBlurb}>{blurb}</p>
-									<ul className={styles.noteList}>
-										{notes.map((n) => (
-											<li key={n}>{n}</li>
-										))}
-									</ul>
+									{options.map(({ kind, label, sublabel }) => {
+										const asset = findAsset(release, kind);
+										// No build-time asset data (rate-limited runner, or a
+										// release that dropped this artifact) degrades to the
+										// releases list rather than rendering a dead link.
+										const size = asset ? formatSize(asset.size) : "";
+										return (
+											<a key={kind} className={styles.option} href={asset?.url ?? LATEST_URL}>
+												<span className={styles.optionText}>
+													<span className={styles.optionLabel}>{label}</span>
+													<span className={styles.optionSub}>{sublabel}</span>
+												</span>
+												{size ? <span className={styles.optionSize}>{size}</span> : null}
+												<Download size={14} className={styles.optionIcon} />
+											</a>
+										);
+									})}
 								</div>
-								<a className={styles.cardCta} href={LATEST}>
-									<Download size={14} />
-									Download for {name}
-								</a>
+								{footnote ? <p className={styles.cardFoot}>{footnote}</p> : null}
 							</article>
 						))}
 					</div>
@@ -133,26 +137,36 @@ export default function DownloadPage() {
 
 						<div className={styles.panel}>
 							<div className={styles.panelHeader}>
-								<Package size={14} />
-								<span>Linux: install without downloading</span>
+								<TerminalSquare size={14} />
+								<span>Nix: run it without installing</span>
 							</div>
 							<pre className={styles.code}>
-								<span className={styles.meta}># run it straight from the flake</span>
-								{"\n"}
 								<span className={styles.accentText}>nix</span> run github:getopenscreen/openscreen
 							</pre>
 							<p className={styles.panelFoot}>
-								Package manager commands for .deb, .pacman, and AppImage are in the{" "}
+								Per-distribution steps are in the{" "}
 								<Link to="/docs/installation">installation guide</Link>.
 							</p>
 						</div>
 					</div>
 
-					<p className={styles.footNote}>
-						Every artifact for every release — including checksums and release notes — is on the{" "}
-						<a href={`${REPO_URL}/releases`}>Releases page</a>. Source is on{" "}
-						<a href={REPO_URL}>GitHub</a> under the MIT license.
-					</p>
+					{/* Release candidates ship between stable versions and are genuinely
+					    ahead of what the cards above serve, so this is a real path and not
+					    a footer link — kept visually quiet so it cannot be mistaken for
+					    the recommended download. */}
+					<aside className={styles.preRelease}>
+						<FlaskConical size={16} className={styles.preReleaseIcon} />
+						<div className={styles.preReleaseText}>
+							<p className={styles.preReleaseTitle}>Want to test what is coming next?</p>
+							<p className={styles.preReleaseBody}>
+								Release candidates ship between stable versions, alongside older releases,
+								checksums, and full release notes.
+							</p>
+						</div>
+						<a className={styles.preReleaseCta} href={RELEASES_URL}>
+							Browse all releases
+						</a>
+					</aside>
 				</div>
 			</section>
 		</Layout>

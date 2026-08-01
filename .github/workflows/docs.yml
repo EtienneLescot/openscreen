@@ -11,6 +11,14 @@ on:
     paths:
       - "website/**"
       - ".github/workflows/docs.yml"
+  # The /download page resolves the current release's assets at build time so it
+  # can link each platform to its actual file. Without this trigger that data
+  # would freeze at whatever the last website/** change saw, and the page would
+  # keep serving the previous version's binaries after every release.
+  # Pre-releases are skipped: /releases/latest ignores them, so the built output
+  # would be byte-identical.
+  release:
+    types: [published]
   workflow_dispatch:
 
 # Cancel in-flight runs on the same ref so fast follow-up pushes
@@ -26,6 +34,9 @@ jobs:
   build:
     name: Build site
     runs-on: ubuntu-latest
+    # A pre-release does not change what /releases/latest resolves to, so
+    # rebuilding for one would burn a run to produce identical output.
+    if: github.event_name != 'release' || github.event.release.prerelease == false
     steps:
       - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
         with:
@@ -53,7 +64,9 @@ jobs:
     name: Deploy to GitHub Pages
     runs-on: ubuntu-latest
     needs: build
-    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main')
+      || github.event_name == 'release'
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
