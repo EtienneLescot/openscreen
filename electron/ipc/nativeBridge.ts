@@ -223,7 +223,9 @@ export function registerNativeBridgeHandlers(context: NativeBridgeContext) {
 	const compositorViewService = new CompositorViewService();
 	const aiEditionService = new AiEditionService({
 		documents: context.getAiEditionDocuments(),
-		llmConfig: context.getAiEditionLlmConfig(),
+		// Passed uncalled on purpose — invoking it here would build the store (and
+		// hit the macOS Keychain) while wiring the bridge at startup.
+		llmConfig: context.getAiEditionLlmConfig,
 		runChat: context.runAiEditionChat,
 		undoLastToolBatch: context.undoAiEditionToolBatch,
 		rewindToMessage: context.rewindToMessage,
