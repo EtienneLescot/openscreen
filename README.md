@@ -37,8 +37,8 @@ The goal of this continuation is to keep OpenScreen alive as a fully open-source
 > Software should be accessible. OpenScreen has no paid tiers, premium features, upsells, or functionality locked behind a paywall.
 
 <p align="center">
-	<img src="public/demo.png" alt="" style="height: 320px; margin-right: 12px;" />
-  <img src="public/sample.png" alt="" style="height: 320px; margin-right: 12px;" />
+  <img src="public/demo.png" alt="" width="48%" />
+  <img src="public/sample.png" alt="" width="48%" />
 </p>
 
 ## Core Features
