@@ -244,6 +244,12 @@ body {
 	font-size: 11px;
 }
 
+/* Lucide "download", inlined as a data URI so it costs no extra request and
+   stays theme-independent (the mask below recolors it from currentColor). */
+:root {
+	--os-icon-download: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%23000' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='M12 15V3'/%3E%3Cpath d='M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4'/%3E%3Cpath d='m7 10 5 5 5-5'/%3E%3C/svg%3E");
+}
+
 .navbar-download-cta {
 	display: inline-flex;
 	align-items: center;
@@ -254,6 +260,19 @@ body {
 	color: #fff !important;
 	font-size: 12.5px;
 	font-weight: 600;
+}
+
+/* The CTA is a router link, whose label is a plain string, so the download
+   glyph is painted here instead of inlined as markup. A mask rather than a
+   background image keeps it on currentColor like the other navbar icons. */
+.navbar-download-cta::before {
+	content: "";
+	width: 14px;
+	height: 14px;
+	flex: none;
+	background-color: currentColor;
+	-webkit-mask: var(--os-icon-download) center / contain no-repeat;
+	mask: var(--os-icon-download) center / contain no-repeat;
 }
 
 .navbar-download-cta:hover {

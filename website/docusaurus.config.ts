@@ -222,12 +222,15 @@ export default async function createConfig(): Promise<Config> {
 							`GitHub${starBadge}</a>`,
 					},
 					{
-						type: "html",
+						// Points at our own page now, not straight out to Releases, which
+						// means it can be a real router link: SPA navigation plus route
+						// prefetch, neither of which a raw <a> in an html item gets. A
+						// link item only takes a string label, so the download glyph moves
+						// to a CSS mask on .navbar-download-cta.
+						to: "/download",
+						label: "Download",
+						className: "navbar-download-cta",
 						position: "right",
-						value:
-							`<a class="navbar-download-cta" href="${REPO_URL}/releases" target="_blank" rel="noopener noreferrer">` +
-							'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>' +
-							"Download</a>",
 					},
 				],
 			},

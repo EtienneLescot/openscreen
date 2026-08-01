@@ -39,7 +39,10 @@ const SOFTWARE_APPLICATION_LD = {
 	description:
 		"Free, open-source screen recorder and video editor. Native capture on macOS and Windows, multi-track timeline editing, on-device Whisper captions, and MP4/GIF export — no watermarks, no subscription, no account.",
 	url: "https://getopenscreen.com",
-	downloadUrl: "https://github.com/getopenscreen/openscreen/releases",
+	// Our own page rather than the Releases list: it is the URL we want ranking
+	// for "openscreen download", and it routes to GitHub from there anyway.
+	downloadUrl: "https://getopenscreen.com/download/",
+	installUrl: "https://github.com/getopenscreen/openscreen/releases",
 	softwareHelp: "https://getopenscreen.com/docs/intro/",
 	license: "https://github.com/getopenscreen/openscreen/blob/main/LICENSE",
 	isAccessibleForFree: true,
@@ -70,22 +73,22 @@ export default function Home() {
 			<header className={styles.hero}>
 				<div className={styles.heroInner}>
 					<span className={styles.badge}>Pre-release · work in progress</span>
+					{/* The descriptor sits inside the h1 rather than in the paragraph
+					    below it: the brand name alone gave the page's only h1 no
+					    subject. Rendered as a block at the old tagline's size, so the
+					    visual hierarchy is unchanged — big wordmark, descriptor under it. */}
 					<Heading as="h1" className={styles.title}>
 						OpenScreen
+						<span className={styles.titleTagline}>
+							A free, open-source screen recorder and video editor
+						</span>
 					</Heading>
-					<p className={styles.tagline}>
-						A free, open-source screen recorder and editor.
-						<br />
-						Native capture, local AI, no paywall.
-					</p>
+					<p className={styles.tagline}>Native capture, local AI, no paywall.</p>
 					<div className={styles.actions}>
-						<a
-							className={styles.primaryCta}
-							href="https://github.com/getopenscreen/openscreen/releases"
-						>
+						<Link className={styles.primaryCta} to="/download">
 							<Download size={16} />
 							Download
-						</a>
+						</Link>
 						<Link className={styles.secondaryCta} to="/docs/intro">
 							Read the docs
 						</Link>
@@ -352,8 +355,7 @@ export default function Home() {
 							<pre className={styles.terminalBody}>
 								<span className={styles.meta}># download the .deb from Releases, then</span>
 								{"\n"}
-								<span className={styles.accentText}>sudo</span> apt install
-								./Openscreen-Linux-latest.deb
+								<span className={styles.accentText}>sudo</span> apt install ./Openscreen-Linux-*.deb
 							</pre>
 							<p className={styles.paneFoot}>
 								Browser-pipeline capture; needs PipeWire for system audio.
