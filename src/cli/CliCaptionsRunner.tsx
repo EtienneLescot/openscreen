@@ -10,15 +10,15 @@ import {
 	validateProjectData,
 } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, TrimRegion } from "@/components/video-editor/types";
-import { captionSegmentsToAnnotationRegions } from "./vendor/captionRegions";
 import { extractMono16kFromVideoUrl } from "@/lib/captioning/extractMono16k";
+import { transcribeMono16kToSegments } from "@/lib/captioning/transcribe";
+import type { CliCaptionsRequest, CliDoneResult } from "@/lib/cliContracts";
+import { nativeBridgeClient } from "@/native";
+import { captionSegmentsToAnnotationRegions } from "./vendor/captionRegions";
 import {
 	shiftTrimRegionsMsForCaptionBuffer,
 	trimLeadingSilenceMono16k,
 } from "./vendor/leadingSilence";
-import { transcribeMono16kToSegments } from "@/lib/captioning/transcribe";
-import type { CliCaptionsRequest, CliDoneResult } from "@/lib/cliContracts";
-import { nativeBridgeClient } from "@/native";
 
 /** Highest trailing number across existing region ids, so new ids never collide. */
 function nextNumericIdFrom(regions: { id: string }[]): number {

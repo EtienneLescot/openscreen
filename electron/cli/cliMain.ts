@@ -14,6 +14,7 @@ import type {
 	CliSourcesResult,
 } from "../../src/lib/cliContracts";
 import { getSelectedDesktopSource, registerIpcHandlers } from "../ipc/handlers";
+import { registerSttIpc } from "../stt";
 import { ASSET_BASE_URL_ARG } from "../windows";
 import { CLI_USAGE, type CliCommand } from "./args";
 
@@ -505,6 +506,10 @@ export function runCli(command: CliCommand): void {
 
 			let cliWindow: BrowserWindow | null = null;
 			registerAppHandlersForCli(() => cliWindow);
+
+			// Speech-to-text backs the captions command; registered by the GUI boot
+			// path (main.ts) rather than registerIpcHandlers.
+			registerSttIpc(ipcMain);
 
 			// Registered by the GUI boot path (main.ts) rather than registerIpcHandlers;
 			// the renderer's i18n init invokes it unconditionally.
