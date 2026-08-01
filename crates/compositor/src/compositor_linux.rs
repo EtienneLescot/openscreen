@@ -1528,32 +1528,60 @@ impl Compositor {
                         // Plutot que de convertir tout l'atlas en RGBA pour un
                         // aplat, on emet un quad mode 1 (couleur pleine + SDF de
                         // rect arrondi, cf. layer.wgsl) sous le quad de texte.
-                        // Meme rect, meme rayon que le rendu web
-                        // (`annotationRenderer.ts`).
                         //
                         // Sans ca le fond n'existait tout simplement pas :
                         // `spec.background` arrivait jusqu'au rasteriseur et
                         // mourait dans `cache_key()`.
-                        if background[3] > 0.0 {
-                            let plate = LayerCB {
-                                dst: anim_dst,
-                                src: [0.0, 0.0, 1.0, 1.0],
-                                quad_px: [anim_dst[2] * rw, anim_dst[3] * rh],
-                                mode: 1.0,
-                                // La plaque suit l'opacite du texte : sinon un
-                                // fondu ferait apparaitre un aplat plein d'un coup
-                                // puis le texte dessus.
-                                color: [
-                                    background[0],
-                                    background[1],
-                                    background[2],
-                                    background[3] * anim.opacity,
-                                ],
-                                radius_px: 4.0 * (rh / 1080.0).max(0.5),
-                                ..Default::default()
-                            };
-                            let (pbuf, pbind) = self.make_bind(&plate, None, &dummy);
-                            ann_draws.push(AnnDraw::plain(pbuf, pbind));
+                        //
+                        // LE RECT VIENT DU RASTERISEUR (`glyphs.plate`), pas de la
+                        // boite : lui seul sait ou les lignes ont ete posees. Ici
+                        // la plaque prenait toute la boite, ce qui sur un
+                        // sous-titre — dont la boite est la bande de 22 % de
+                        // hauteur — donnait un aplat bien plus haut que le texte,
+                        // la ou Windows et macOS le serrent a `0.1em` pres.
+                        if background[3] > 0.0 && glyphs.plate[2] > 0.0 && glyphs.plate[3] > 0.0 {
+                            // Le rect est en px DANS la boite ; on le ramene en
+                            // fractions pour le reporter sur le quad anime (que
+                            // `anim.scale` a pu agrandir).
+                            let (box_w, box_h) =
+                                (spec.box_px[0].max(1) as f32, spec.box_px[1].max(1) as f32);
+                            let px = ax + (glyphs.plate[0] / box_w) * aw;
+                            let py = ay + (glyphs.plate[1] / box_h) * ah;
+                            let ph = (glyphs.plate[3] / box_h) * ah;
+                            // Machine a ecrire : la plaque se decouvre avec le
+                            // texte, comme sur les backends qui la bakent dans la
+                            // texture — sinon l'aplat entier precede les glyphes.
+                            let pw = (((glyphs.plate[2] / box_w) * aw) + px)
+                                .min(ax + aw * reveal)
+                                - px;
+                            if pw > 0.0 && ph > 0.0 {
+                                let (pw_px, ph_px) = (pw * rw, ph * rh);
+                                let plate = LayerCB {
+                                    dst: [px, py, pw, ph],
+                                    src: [0.0, 0.0, 1.0, 1.0],
+                                    quad_px: [pw_px, ph_px],
+                                    mode: 1.0,
+                                    // La plaque suit l'opacite du texte : sinon un
+                                    // fondu ferait apparaitre un aplat plein d'un
+                                    // coup puis le texte dessus.
+                                    color: [
+                                        background[0],
+                                        background[1],
+                                        background[2],
+                                        background[3] * anim.opacity,
+                                    ],
+                                    // Meme rayon que les deux autres backends —
+                                    // en em de la police, borne par la plaque.
+                                    radius_px: crate::text_plate::radius(
+                                        spec.font_size_px,
+                                        pw_px,
+                                        ph_px,
+                                    ),
+                                    ..Default::default()
+                                };
+                                let (pbuf, pbind) = self.make_bind(&plate, None, &dummy);
+                                ann_draws.push(AnnDraw::plain(pbuf, pbind));
+                            }
                         }
 
                         let cb = LayerCB {
