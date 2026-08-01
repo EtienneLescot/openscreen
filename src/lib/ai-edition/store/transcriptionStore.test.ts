@@ -78,7 +78,9 @@ function transcriptFor(assetId: string): AxcutTranscript {
 
 /** A promise plus a 0-arg release, so a mocked run can be held open mid-flight. */
 function deferred(): { promise: Promise<void>; release: () => void } {
-	let release: () => void = () => {};
+	let release: () => void = () => {
+		// Replaced synchronously by the executor below, before this can be called.
+	};
 	const promise = new Promise<void>((resolve) => {
 		release = () => resolve();
 	});
