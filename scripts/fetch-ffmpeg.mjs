@@ -95,11 +95,22 @@ const PINNED = {
 
 /**
  * The "-shared" sibling of PINNED, from the *same* release tag and source
- * commit (n8.1.2-32-gcfa62de001) — same ffmpeg, just built with DLLs instead
- * of static linking. Only the compositor addon needs this, and it's
- * Windows-only (D3D11), so there's no linux/darwin entry here.
+ * commit (n8.1.2-32-gcfa62de001) — same ffmpeg, just built with shared libraries
+ * instead of static linking.
+ *
+ * Two consumers now: the Windows D3D11 compositor addon, and the Linux
+ * pipewire-capture helper, whose build.rs links against
+ * `crates/thirdparty/ffmpeg-linux64-lgpl-shared`. Nothing provisioned that tree,
+ * so `npm run build:linux` failed in cargo with "vendored ffmpeg headers are
+ * missing" — invisible for months because the Linux release job was disabled.
+ * darwin has no entry because BtbN publishes no macOS build; that path compiles
+ * ffmpeg from source (scripts/fetch-ffmpeg-macos.mjs).
  */
 const SHARED_PINNED = {
+	"linux-x64": {
+		asset: "ffmpeg-n8.1.2-32-gcfa62de001-linux64-lgpl-shared-8.1.tar.xz",
+		sha256: "74ef679aa7e4f8cdbd5193da3d99bf220a679f64d35daf078397081b789f150e",
+	},
 	"win32-x64": {
 		asset: "ffmpeg-n8.1.2-32-gcfa62de001-win64-lgpl-shared-8.1.zip",
 		sha256: "23429f940316ea92e376f6946c0a1f1b9043c930f3bc068228461d65ae24f8b8",
@@ -145,14 +156,19 @@ function run(cmd, args, opts = {}) {
  * (electron/media/ffmpegCapabilities.ts) went with the web export pipeline, and
  * nothing in the app spawns ffmpeg any more.
  */
-function assertLgpl(exePath) {
+function assertLgpl(exePath, extraEnv) {
 	const problems = [];
+	// A *shared* build's ffmpeg cannot resolve its own libav*.so without being told
+	// where they are, and a binary that fails to start prints nothing — which this
+	// function would read as "unrecognised licence" and refuse to vendor. The caller
+	// passes LD_LIBRARY_PATH for those; static builds pass nothing.
+	const opts = extraEnv ? { env: { ...process.env, ...extraEnv } } : {};
 
 	// `ffmpeg -L` prints the licence TEXT. This is the authoritative statement:
 	// an LGPL build says "GNU Lesser General Public License", a GPL one says
 	// "GNU General Public License". Note there is NO "License:" line in
 	// `-version` — only `configuration:`.
-	const license = run(exePath, ["-hide_banner", "-L"]).stdout ?? "";
+	const license = run(exePath, ["-hide_banner", "-L"], opts).stdout ?? "";
 	if (!/Lesser General Public License/i.test(license)) {
 		const what = /General Public License/i.test(license) ? "GPL" : "unrecognised licence";
 		problems.push(`-L reports ${what}, not LGPL`);
@@ -162,8 +178,8 @@ function assertLgpl(exePath) {
 	// one `configuration:` line. Read both so a build that answers only one still
 	// gets checked.
 	const conf =
-		(run(exePath, ["-hide_banner", "-buildconf"]).stdout ?? "") +
-		(run(exePath, ["-hide_banner", "-version"]).stdout ?? "");
+		(run(exePath, ["-hide_banner", "-buildconf"], opts).stdout ?? "") +
+		(run(exePath, ["-hide_banner", "-version"], opts).stdout ?? "");
 	for (const flag of ["--enable-gpl", "--enable-nonfree"]) {
 		if (new RegExp(`(^|\\s)${flag}(\\s|$)`, "m").test(conf))
 			problems.push(`configured with ${flag}`);
@@ -248,6 +264,13 @@ function findExe(dir, name) {
  */
 function ffmpegSdkDest() {
 	const cratesDir = path.join(ROOT, "crates");
+	// Linux is not in crates/.cargo/config.toml: its consumer is
+	// electron/native/pipewire-capture, whose build.rs defaults to this exact path
+	// (and honours FFMPEG_DIR when set). Mirror that default rather than adding a
+	// second place the two could disagree.
+	if (process.platform === "linux") {
+		return path.join(cratesDir, "thirdparty", "ffmpeg-linux64-lgpl-shared");
+	}
 	const configPath = path.join(cratesDir, ".cargo", "config.toml");
 	if (!fs.existsSync(configPath)) return null;
 	// FFMPEG_DIR is declared `relative = true`, i.e. relative to crates/.
@@ -295,14 +318,22 @@ function findDirContaining(dir, name) {
 	return null;
 }
 
-/** All `*.dll` files anywhere under `dir` (BtbN's shared builds nest a `bin/` under a versioned dir). */
-function findDlls(dir) {
+/** What a shared ffmpeg library is called on this platform: `avcodec-62.dll` vs
+ *  `libavcodec.so.62`. Both are what the app loads at runtime. */
+function isSharedLib(name) {
+	const n = name.toLowerCase();
+	return process.platform === "win32" ? n.endsWith(".dll") : /\.so(\.\d+)*$/.test(n);
+}
+
+/** Every shared ffmpeg library anywhere under `dir` (BtbN nests a `bin/` — Windows —
+ *  or a `lib/` — Linux — under one versioned dir). */
+function findSharedLibs(dir) {
 	const out = [];
 	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
 		const p = path.join(dir, entry.name);
 		if (entry.isDirectory()) {
-			out.push(...findDlls(p));
-		} else if (entry.name.toLowerCase().endsWith(".dll")) {
+			out.push(...findSharedLibs(p));
+		} else if (isSharedLib(entry.name)) {
 			out.push(p);
 		}
 	}
@@ -351,44 +382,58 @@ async function fetchSharedDlls(tag, binDir) {
 	// --force same as the static exe, checked once we know what we'd extract.
 	const alreadyVendored = fs
 		.readdirSync(binDir, { withFileTypes: true })
-		.some(
-			(e) =>
-				e.isFile() &&
-				e.name.toLowerCase().endsWith(".dll") &&
-				e.name.toLowerCase().startsWith("av"),
-		);
+		.some((e) => e.isFile() && isSharedLib(e.name) && /^(lib)?av/i.test(e.name));
 	// The build-time SDK comes out of this same archive, so a tree that has the
 	// DLLs but not the SDK must still re-download — otherwise we skip here and
 	// the compositor build fails afterwards on the missing FFMPEG_DIR.
 	const sdkDest = ffmpegSdkDest();
 	const sdkPresent = sdkDest == null || fs.existsSync(sdkDest);
 	if (alreadyVendored && sdkPresent && !process.argv.includes("--force")) {
-		console.log(`\nShared ffmpeg DLLs already present in ${binDir}. Use --force to re-vendor.`);
+		console.log(
+			`\nShared ffmpeg libraries already present in ${binDir}. Use --force to re-vendor.`,
+		);
 		return;
 	}
 
-	console.log(`\nFetching shared ffmpeg DLLs for the compositor addon (${tag})...`);
+	console.log(`\nFetching shared ffmpeg libraries (${tag})...`);
 	const tmp = await downloadAndExtract(spec);
 	try {
-		const exe = findExe(tmp, "ffmpeg.exe");
+		const exeName = process.platform === "win32" ? "ffmpeg.exe" : "ffmpeg";
+		const exe = findExe(tmp, exeName);
 		if (!exe)
-			throw new Error(`ffmpeg.exe not found inside ${spec.asset} (needed to verify licence)`);
+			throw new Error(`${exeName} not found inside ${spec.asset} (needed to verify licence)`);
+		if (process.platform !== "win32") fs.chmodSync(exe, 0o755);
 
 		// Same source commit as the static build, but configure flags are a
 		// separate BtbN job — verify this artifact's licence independently
 		// rather than assuming it matches.
 		console.log("Verifying licence (shared build)...");
-		const banner = assertLgpl(exe);
+		// BtbN lays the tree out as <versioned>/bin/ffmpeg + <versioned>/lib/*.so.
+		const sharedEnv =
+			process.platform === "win32"
+				? undefined
+				: { LD_LIBRARY_PATH: path.join(path.dirname(exe), "..", "lib") };
+		const banner = assertLgpl(exe, sharedEnv);
 		console.log(banner);
 
-		const dlls = findDlls(tmp);
-		if (dlls.length === 0) throw new Error(`No .dll files found inside ${spec.asset}`);
+		const libs = findSharedLibs(tmp);
+		if (libs.length === 0) throw new Error(`No shared ffmpeg libraries found inside ${spec.asset}`);
 
 		fs.mkdirSync(binDir, { recursive: true });
-		for (const dll of dlls) {
-			fs.copyFileSync(dll, path.join(binDir, path.basename(dll)));
+		for (const lib of libs) {
+			// Linux ships symlink chains (libavcodec.so -> .so.62 -> .so.62.x). Follow
+			// them: copyFileSync would dereference into three identical large files, and
+			// a dangling link would break the loader outright.
+			const dest = path.join(binDir, path.basename(lib));
+			const st = fs.lstatSync(lib);
+			if (st.isSymbolicLink()) {
+				fs.rmSync(dest, { force: true });
+				fs.symlinkSync(fs.readlinkSync(lib), dest);
+			} else {
+				fs.copyFileSync(lib, dest);
+			}
 		}
-		console.log(`Vendored ${dlls.length} DLL(s) -> ${binDir}`);
+		console.log(`Vendored ${libs.length} shared librar(ies) -> ${binDir}`);
 		if (sdkDest) vendorFfmpegSdk(tmp, sdkDest);
 		console.log("LGPL verified: safe to ship with an MIT app.");
 	} finally {
@@ -446,9 +491,10 @@ async function main() {
 		}
 	}
 
-	if (process.platform === "win32") {
-		await fetchSharedDlls(tag, binDir);
-	}
+	// No platform guard: `fetchSharedDlls` returns early when SHARED_PINNED has no
+	// entry for this tag, so it self-gates. The guard that used to be here predated
+	// the Linux pin and silently skipped the pipewire helper's build-time SDK.
+	await fetchSharedDlls(tag, binDir);
 }
 
 main().catch((err) => {
