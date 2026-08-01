@@ -905,24 +905,27 @@ export function V4Timeline({
 		}
 		setAutoBusy(true);
 		try {
-			// Read once, outside the loop: every clip reserves against the zooms the
-			// document ALREADY holds, and two clips can never contest the same stretch
-			// of ruler, so no accumulation across assets is needed.
+			// Read once, up front: every clip reserves against the zooms the document
+			// ALREADY holds, and two clips can never contest the same stretch of ruler, so
+			// nothing here depends on the order the assets are visited — which is what lets
+			// their telemetry be fetched concurrently rather than one IPC round trip after
+			// another. `Promise.all` preserves input order, so the suggestions come out in
+			// the same sequence a loop would have produced.
 			const existingRegions = tl.zoomRegions.map((z) => ({ startMs: z.startMs, endMs: z.endMs }));
-			const suggestions: AutoZoomSuggestion[] = [];
-			for (const source of sources) {
-				const telemetry =
-					(await nativeBridgeClient.cursor.getTelemetry(fromFileUrl(source.src))) ?? [];
-				suggestions.push(
-					...buildAutoZoomSuggestionsForClips({
+			const perSource = await Promise.all(
+				sources.map(async (source) => {
+					const telemetry =
+						(await nativeBridgeClient.cursor.getTelemetry(fromFileUrl(source.src))) ?? [];
+					return buildAutoZoomSuggestionsForClips({
 						cursorTelemetry: telemetry,
 						assetId: source.id,
 						clips,
 						existingRegions,
 						defaultDurationMs: 2000,
-					}),
-				);
-			}
+					});
+				}),
+			);
+			const suggestions: AutoZoomSuggestion[] = perSource.flat();
 			if (suggestions.length === 0) {
 				toast.info(t("toolbar.noAutoZoomMoments"), {
 					description: t("toolbar.noAutoZoomMomentsDescription"),

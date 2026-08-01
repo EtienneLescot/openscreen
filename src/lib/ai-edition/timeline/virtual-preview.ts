@@ -154,7 +154,15 @@ function isWithinClipBounds(
 	epsilon: number,
 	closingEdge: ClosingEdge,
 ): boolean {
-	const sourceEnd = clip.sourceEndSec ?? 0;
+	// An un-probed clip has no end yet, and `resolvePlaybackSegments` reads that as a
+	// zero-width window at the in-point — the same default is used here because
+	// `locateKeptSegment` now feeds this function that very output, so the two sit in
+	// series and must not read one missing field two ways. (`?? 0` put the window
+	// BELOW `sourceStartSec` for a clip starting anywhere but 0, which no source time
+	// could ever satisfy. Unreachable in practice — a clip only awaits probing with
+	// `sourceStartSec === 0`, where the two defaults coincide — so this changes no
+	// behaviour; it removes a divergence, not a bug.)
+	const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
 	const upperBound = closingEdge === "inclusive" ? sourceEnd + epsilon : sourceEnd - epsilon;
 	return sourceTimeSec >= clip.sourceStartSec - epsilon && sourceTimeSec <= upperBound;
 }
