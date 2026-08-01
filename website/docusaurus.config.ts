@@ -16,8 +16,9 @@ const SITE_DESCRIPTION =
 
 // Site-wide structured data. Organization + WebSite are true of every page, so
 // they belong here; the SoftwareApplication entity describes the product rather
-// than the site and is emitted on the landing page only (src/pages/index.tsx),
-// because duplicating it under every docs URL is what earns a manual action.
+// than the site and lives in src/lib/structured-data.ts, emitted only by the two
+// pages that are about the product (the landing page and /download), because
+// repeating it under every docs URL is what earns a manual action.
 const ORGANIZATION_LD = {
 	"@context": "https://schema.org",
 	"@type": "Organization",
@@ -121,12 +122,18 @@ async function fetchLatestRelease(): Promise<LatestRelease> {
 		// resolve against the visitor's locale and time zone on hydration and
 		// mismatch the server-rendered string.
 		let published = "";
+		let publishedIso = "";
 		if (typeof data.published_at === "string") {
 			const [y, m, d] = data.published_at.slice(0, 10).split("-");
-			if (y && m && d) published = `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}`;
+			if (y && m && d) {
+				published = `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}`;
+				// Kept alongside the display string for /download's structured
+				// data, which needs schema.org's Date form rather than prose.
+				publishedIso = `${y}-${m}-${d}`;
+			}
 		}
 
-		return { tag: data.tag_name, published, assets };
+		return { tag: data.tag_name, published, publishedIso, assets };
 	} catch {
 		return null;
 	}
