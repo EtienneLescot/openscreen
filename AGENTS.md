@@ -7,7 +7,7 @@ OpenScreen is a free, open-source screen recorder and video editor (Electron + R
 - Install deps: `npm install` (Node 22.22.1, npm 10.9.4 — see `package.json#engines`)
 - Start dev:    `npm run dev` (Vite dev server; Electron window opens via `vite-plugin-electron`)
 - Build:        `npm run build` (TypeScript check + Vite build + electron-builder)
-- Typecheck:    `npx tsc --noEmit` (CI runs this; no standalone script)
+- Typecheck:    `npx tsc --noEmit` — app code only. CI also runs `npx tsc -p tsconfig.test.json --noEmit` in a separate job ("Typecheck (tests)"), so **run both**: test files are invisible to the root config, and a type error in a `*.test.ts` fails CI while the root check stays green.
 - Test (unit):  `npm run test` (Vitest, jsdom env)
 - Test (browser): `npm run test:browser` (Vitest + Playwright, requires `npm run test:browser:install` first)
 - Test (e2e):   `npm run test:e2e` (Playwright)

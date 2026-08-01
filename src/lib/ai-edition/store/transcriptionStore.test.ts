@@ -76,6 +76,15 @@ function transcriptFor(assetId: string): AxcutTranscript {
 	};
 }
 
+/** A promise plus a 0-arg release, so a mocked run can be held open mid-flight. */
+function deferred(): { promise: Promise<void>; release: () => void } {
+	let release: () => void = () => {};
+	const promise = new Promise<void>((resolve) => {
+		release = () => resolve();
+	});
+	return { promise, release: () => release() };
+}
+
 /** Loads a document into the project store the way `loadProject` would. */
 function loadDocument(document: AxcutDocument) {
 	useProjectStore.setState({
@@ -308,7 +317,7 @@ describe("useTranscriptionStore", () => {
 		// asks for French from the media card. The outgoing run must neither win
 		// the race nor delete the request that replaced it.
 		const languages: string[] = [];
-		let releaseFirst: (() => void) | null = null;
+		const firstRun = deferred();
 		transcribeMocks.transcribeAsset.mockImplementation(
 			async (
 				_doc: AxcutDocument,
@@ -317,9 +326,7 @@ describe("useTranscriptionStore", () => {
 			) => {
 				languages.push(options.language ?? "auto");
 				if (languages.length === 1) {
-					await new Promise<void>((resolve) => {
-						releaseFirst = resolve;
-					});
+					await firstRun.promise;
 					throw new DOMException("Aborted", "AbortError");
 				}
 				return { ...transcriptFor(assetId), language: options.language ?? "auto" };
@@ -332,7 +339,7 @@ describe("useTranscriptionStore", () => {
 
 		const requested = useTranscriptionStore.getState().request("asset_1", "fr");
 		expect(useTranscriptionStore.getState().jobs.asset_1?.status).toBe("queued");
-		releaseFirst?.();
+		firstRun.release();
 		await requested;
 		await whenTranscriptionIdle();
 
@@ -386,14 +393,10 @@ describe("useTranscriptionStore", () => {
 	});
 
 	it("waits for the background run instead of transcribing the same asset twice", async () => {
-		let releaseFirst: (() => void) | null = null;
+		const firstRun = deferred();
 		transcribeMocks.transcribeAsset.mockImplementation(
 			async (_doc: AxcutDocument, assetId: string) => {
-				if (!releaseFirst) {
-					await new Promise<void>((resolve) => {
-						releaseFirst = resolve;
-					});
-				}
+				await firstRun.promise;
 				return transcriptFor(assetId);
 			},
 		);
@@ -403,7 +406,7 @@ describe("useTranscriptionStore", () => {
 		expect(useTranscriptionStore.getState().jobs.asset_1?.status).toBe("running");
 
 		const requested = useTranscriptionStore.getState().requestTimelineTranscripts();
-		releaseFirst?.();
+		firstRun.release();
 		await requested;
 
 		expect(transcribeMocks.transcribeAsset).toHaveBeenCalledTimes(1);
