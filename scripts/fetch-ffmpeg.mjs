@@ -387,9 +387,11 @@ async function fetchSharedDlls(tag, binDir) {
 
 	// probe for any previously vendored DLL by name; re-download is driven by
 	// --force same as the static exe, checked once we know what we'd extract.
-	const alreadyVendored = fs
-		.readdirSync(binDir, { withFileTypes: true })
-		.some((e) => e.isFile() && isSharedLib(e.name) && /^(lib)?av/i.test(e.name));
+	const alreadyVendored =
+		process.platform === "win32" &&
+		fs
+			.readdirSync(binDir, { withFileTypes: true })
+			.some((e) => e.isFile() && isSharedLib(e.name) && /^(lib)?av/i.test(e.name));
 	// The build-time SDK comes out of this same archive, so a tree that has the
 	// DLLs but not the SDK must still re-download — otherwise we skip here and
 	// the compositor build fails afterwards on the missing FFMPEG_DIR.
@@ -426,21 +428,33 @@ async function fetchSharedDlls(tag, binDir) {
 		const libs = findSharedLibs(tmp);
 		if (libs.length === 0) throw new Error(`No shared ffmpeg libraries found inside ${spec.asset}`);
 
-		fs.mkdirSync(binDir, { recursive: true });
-		for (const lib of libs) {
-			// Linux ships symlink chains (libavcodec.so -> .so.62 -> .so.62.x). Follow
-			// them: copyFileSync would dereference into three identical large files, and
-			// a dangling link would break the loader outright.
-			const dest = path.join(binDir, path.basename(lib));
-			const st = fs.lstatSync(lib);
-			if (st.isSymbolicLink()) {
-				fs.rmSync(dest, { force: true });
-				fs.symlinkSync(fs.readlinkSync(lib), dest);
-			} else {
-				fs.copyFileSync(lib, dest);
+		// Windows only. There, the loader finds a DLL next to the .exe, so the runtime
+		// copies belong in binDir. On Linux that same directory is owned by the two
+		// native build scripts: build-linux-compositor-addon.mjs puts SYMBOL-RENAMED
+		// (osff_*) copies there so the addon cannot bind to Chromium's ffmpeg, and
+		// build-linux-pipewire-helper.mjs stages unrenamed ones in `binDir/ffmpeg/`
+		// for the helper's `$ORIGIN/ffmpeg` RUNPATH. Dropping a third, unrenamed set
+		// in binDir would overwrite the renamed ones under identical filenames and
+		// break the addon at load time. Linux takes the SDK below and nothing else.
+		if (process.platform !== "win32") {
+			console.log(`Skipping runtime copies into ${binDir} (owned by the native build scripts).`);
+		} else {
+			fs.mkdirSync(binDir, { recursive: true });
+			for (const lib of libs) {
+				// Linux ships symlink chains (libavcodec.so -> .so.62 -> .so.62.x). Follow
+				// them: copyFileSync would dereference into three identical large files, and
+				// a dangling link would break the loader outright.
+				const dest = path.join(binDir, path.basename(lib));
+				const st = fs.lstatSync(lib);
+				if (st.isSymbolicLink()) {
+					fs.rmSync(dest, { force: true });
+					fs.symlinkSync(fs.readlinkSync(lib), dest);
+				} else {
+					fs.copyFileSync(lib, dest);
+				}
 			}
+			console.log(`Vendored ${libs.length} shared librar(ies) -> ${binDir}`);
 		}
-		console.log(`Vendored ${libs.length} shared librar(ies) -> ${binDir}`);
 		if (sdkDest) vendorFfmpegSdk(tmp, sdkDest);
 		console.log("LGPL verified: safe to ship with an MIT app.");
 	} finally {
@@ -468,6 +482,19 @@ async function main() {
 
 	const binDir = path.join(ROOT, "electron", "native", "bin", tag);
 	const dest = path.join(binDir, spec.exe);
+
+	// `--sdk-only` skips the standalone ffmpeg CLI and vendors just the build-time
+	// SDK. Linux needs it: the CLI lands at `<binDir>/ffmpeg` as a FILE, while
+	// build-linux-pipewire-helper.mjs stages the helper's libraries into
+	// `<binDir>/ffmpeg/` as a DIRECTORY — the name its `$ORIGIN/ffmpeg` RUNPATH is
+	// compiled against. One clobbers the other (`EEXIST: mkdir .../linux-x64/ffmpeg`).
+	// Nothing in the app spawns the CLI any more (see assertLgpl's note), and v1.7.0
+	// shipped Linux packages without it, so on Linux it is dead weight AND a conflict.
+	if (process.argv.includes("--sdk-only")) {
+		console.log(`Skipping the standalone ffmpeg CLI (--sdk-only).`);
+		await fetchSharedDlls(tag, binDir);
+		return;
+	}
 
 	if (fs.existsSync(dest) && !process.argv.includes("--force")) {
 		console.log(`Already present: ${dest}`);
