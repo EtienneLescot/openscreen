@@ -93,6 +93,19 @@ run(
 		"--disable-static",
 		"--disable-doc",
 		"--disable-debug",
+		// ffmpeg's configure AUTO-DETECTS these from whatever the build machine happens
+		// to have installed, and a GitHub macOS runner has a large Homebrew prefix. That
+		// is how libavformat came to link /opt/homebrew/opt/libx11/lib/libX11.6.dylib and
+		// trip build-macos-compositor-addon.mjs's "no absolute build-machine paths" check,
+		// which is the check doing its job: such a dylib is unresolvable on a user's Mac.
+		// Disabled explicitly rather than left to chance, so the vendored tree depends on
+		// the source tarball and the SDK, never on the runner's incidental packages.
+		// None is used here: xlib/libxcb are X11 capture, sdl2 is only ffplay, and lzma
+		// only reaches decoders we do not ship (we decode mp4/webm).
+		"--disable-xlib",
+		"--disable-libxcb",
+		"--disable-sdl2",
+		"--disable-lzma",
 		"--enable-videotoolbox",
 		"--enable-audiotoolbox",
 		"--disable-x86asm",
