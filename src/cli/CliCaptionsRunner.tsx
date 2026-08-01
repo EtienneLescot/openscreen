@@ -10,12 +10,12 @@ import {
 	validateProjectData,
 } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, TrimRegion } from "@/components/video-editor/types";
-import { captionSegmentsToAnnotationRegions } from "@/lib/captioning/annotationsFromCaptions";
+import { captionSegmentsToAnnotationRegions } from "./vendor/captionRegions";
 import { extractMono16kFromVideoUrl } from "@/lib/captioning/extractMono16k";
 import {
 	shiftTrimRegionsMsForCaptionBuffer,
 	trimLeadingSilenceMono16k,
-} from "@/lib/captioning/leadingSilence";
+} from "./vendor/leadingSilence";
 import { transcribeMono16kToSegments } from "@/lib/captioning/transcribe";
 import type { CliCaptionsRequest, CliDoneResult } from "@/lib/cliContracts";
 import { nativeBridgeClient } from "@/native";

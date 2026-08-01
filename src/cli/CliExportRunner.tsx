@@ -1,49 +1,41 @@
 // Hidden-window runner for `openscreen export`. Loads an .openscreen project,
-// rebuilds the same exporter configuration the editor's export dialog would,
-// and streams progress back to the CLI controller in the main process.
+// migrates it to the AxcutDocument the native Rust compositor consumes, and
+// drives exportMultiNative/exportGifNative — mirroring the v4 ExportDialog so
+// CLI exports and GUI exports stay pixel-identical. The hidden window does no
+// compositing itself: the render runs in the main process; this runner only
+// builds the clip list + scene JSON and relays progress.
 
 import { useEffect, useRef, useState } from "react";
-import {
-	DEFAULT_CURSOR_SETTINGS,
-	DEFAULT_SOURCE_DIMENSIONS,
-} from "@/components/video-editor/editorDefaults";
 import {
 	normalizeProjectEditor,
 	resolveProjectMedia,
 	toFileUrl,
 	validateProjectData,
 } from "@/components/video-editor/projectPersistence";
-import { buildAutoZoomSuggestions } from "@/components/video-editor/timeline/zoomSuggestionUtils";
-import type { CursorTelemetryPoint, ZoomRegion } from "@/components/video-editor/types";
+import type { CursorTelemetryPoint } from "@/components/video-editor/types";
+import { migrateProjectDataToAxcutDocument } from "@/lib/ai-edition/document/migrate";
 import {
-	clampFocusToDepth,
-	DEFAULT_ZOOM_DEPTH,
-	ZOOM_DEPTH_SCALES,
-} from "@/components/video-editor/types";
+	collectEffectiveClipDims,
+	type Dims,
+	pickExtremeDims,
+	resolveAspectRatioValue,
+} from "@/lib/ai-edition/document/outputFormat";
+import { applyProbedDuration } from "@/lib/ai-edition/document/timeline";
+import type { AxcutDocument } from "@/lib/ai-edition/schema";
+import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
+import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
+import { DEFAULT_ZOOM_DEPTH, ZOOM_DEPTH_SCALES } from "@/lib/ai-edition/timeline/zoom-scale";
+import { buildAutoZoomSuggestions } from "@/lib/ai-edition/timeline/zoom-suggestions";
 import type { CliDoneResult, CliExportRequest } from "@/lib/cliContracts";
-import { hasNativeCursorRecordingData } from "@/lib/cursor/nativeCursor";
-import { calculateOutputDimensions, GifExporter } from "@/lib/exporter/gifExporter";
-import {
-	calculateEffectiveSourceDimensions,
-	calculateMp4ExportSettings,
-} from "@/lib/exporter/mp4ExportSettings";
-import type { ExportProgress } from "@/lib/exporter/types";
-import { GIF_SIZE_PRESETS } from "@/lib/exporter/types";
-import { VideoExporter } from "@/lib/exporter/videoExporter";
+import { GIF_SIZE_PRESETS, type GifSizePreset } from "@/lib/exporter";
+import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
 import { mixVoiceoverIntoVideo } from "@/lib/exporter/voiceoverMix";
-import { nativeBridgeClient } from "@/native";
-import type { CursorRecordingData, NativePlatform } from "@/native/contracts";
-import { getAspectRatioValue, getNativeAspectRatioValue } from "@/utils/aspectRatioUtils";
+import { exportGifNative, exportMultiNative, nativeBridgeClient } from "@/native";
+import type { CompositorClipInput } from "@/native/contracts";
+import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
+import { clampZoomFocus } from "./vendor/zoomHelpers";
 
-// Mirrors the private helper in VideoEditor.tsx.
-function isClickInteractionType(interactionType: string | null | undefined) {
-	return (
-		interactionType === "click" ||
-		interactionType === "double-click" ||
-		interactionType === "right-click" ||
-		interactionType === "middle-click"
-	);
-}
+const MP4_EXPORT_FPS = 60;
 
 function probeVideoDimensions(
 	url: string,
@@ -77,46 +69,75 @@ function probeVideoDimensions(
 	});
 }
 
-/** Fit the composition aspect ratio into the reference preview box, mirroring
- * how the editor sizes its on-screen preview container. */
-function fitPreviewBox(aspectRatioValue: number, boxWidth: number, boxHeight: number) {
-	let width = boxWidth;
-	let height = boxWidth / aspectRatioValue;
-	if (height > boxHeight) {
-		height = boxHeight;
-		width = boxHeight * aspectRatioValue;
-	}
-	return { width: Math.round(width), height: Math.round(height) };
+function replaceExtension(filePath: string, newExtension: string): string {
+	return filePath.replace(/\.(openscreen|json)$/i, "") + newExtension;
 }
 
-/** Mirrors the editor's buildAutoZoomRegions: cursor-dwell suggestions that
- * follow the cursor (focusMode "auto") and never overlap existing regions. */
-function buildAutoZoomRegions(
+/** Mirrors ExportDialog.buildNativeClipList: trim-narrowed visible clips mapped
+ * onto the native multiclip contract. Kept in lock-step with
+ * buildSceneDescription so export and scene agree on the clip stream. */
+function buildNativeClipList(axcutDocument: AxcutDocument): CompositorClipInput[] {
+	const assetById = new Map(axcutDocument.assets.map((asset) => [asset.id, asset]));
+	return resolveVisibleClips(axcutDocument).flatMap((clip) => {
+		const asset = assetById.get(clip.assetId);
+		if (!asset?.originalPath) {
+			return [];
+		}
+		const cam = asset.cameraTrack;
+		const sourceEndSec = resolveClipSourceEndSec(clip, asset);
+		return [
+			{
+				screenPath: asset.originalPath,
+				webcamPath: cam?.sourcePath ?? asset.originalPath,
+				sourceStartSec: clip.sourceStartSec,
+				sourceEndSec,
+				webcamOffsetSec: cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
+				hasAudio: true,
+			},
+		];
+	});
+}
+
+/** Mirrors ExportDialog.gifOutputDims: cap height at the preset, keep even. */
+function gifOutputDims(
+	preset: GifSizePreset,
+	tierDims: { width: number; height: number } | null,
+): { width?: number; height?: number } {
+	if (!tierDims) return {};
+	const maxHeight = GIF_SIZE_PRESETS[preset].maxHeight;
+	if (!Number.isFinite(maxHeight) || tierDims.height <= maxHeight) {
+		return { width: tierDims.width, height: tierDims.height };
+	}
+	const scale = maxHeight / tierDims.height;
+	const even = (n: number) => Math.max(2, Math.round(n * scale) & ~1);
+	return { width: even(tierDims.width), height: even(tierDims.height) };
+}
+
+function appendAutoZoomRanges(
+	axcutDocument: AxcutDocument,
 	cursorTelemetry: CursorTelemetryPoint[],
 	totalMs: number,
-	existingRegions: ZoomRegion[],
-): ZoomRegion[] {
+): number {
 	const suggestions = buildAutoZoomSuggestions({
 		cursorTelemetry,
 		totalMs,
-		existingRegions,
+		existingRegions: axcutDocument.zoomRanges,
 		defaultDurationMs: Math.max(1000, Math.round(totalMs * 0.05)),
 	});
 	let nextId = 1;
-	return suggestions.map((suggestion) => ({
-		id: `cli-auto-zoom-${nextId++}`,
-		startMs: Math.round(suggestion.span.start),
-		endMs: Math.round(suggestion.span.end),
-		depth: DEFAULT_ZOOM_DEPTH,
-		customScale: ZOOM_DEPTH_SCALES[DEFAULT_ZOOM_DEPTH],
-		focus: clampFocusToDepth(suggestion.focus, DEFAULT_ZOOM_DEPTH),
-		focusMode: "auto" as const,
-		source: "auto" as const,
-	}));
-}
-
-function replaceExtension(filePath: string, newExtension: string): string {
-	return filePath.replace(/\.(openscreen|json)$/i, "") + newExtension;
+	for (const suggestion of suggestions) {
+		axcutDocument.zoomRanges.push({
+			id: `cli-auto-zoom-${nextId++}`,
+			startMs: Math.round(suggestion.span.start),
+			endMs: Math.round(suggestion.span.end),
+			depth: DEFAULT_ZOOM_DEPTH,
+			customScale: ZOOM_DEPTH_SCALES[DEFAULT_ZOOM_DEPTH],
+			focus: clampZoomFocus(suggestion.focus),
+			focusMode: "auto",
+			source: "auto",
+		});
+	}
+	return suggestions.length;
 }
 
 async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
@@ -159,210 +180,158 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 	const gifSizePreset = request.gifSizePreset ?? editor.gifSizePreset;
 	const outPath =
 		request.outPath ?? replaceExtension(request.projectPath, format === "gif" ? ".gif" : ".mp4");
-
-	const videoUrl = toFileUrl(media.screenVideoPath);
-	const webcamVideoUrl = media.webcamVideoPath ? toFileUrl(media.webcamVideoPath) : undefined;
-
-	// Cursor sidecar data (native recordings). Both lookups tolerate missing files.
-	let cursorTelemetry: CursorTelemetryPoint[] = [];
-	let cursorRecordingData: CursorRecordingData | null = null;
-	try {
-		cursorTelemetry = await nativeBridgeClient.cursor.getTelemetry(media.screenVideoPath);
-	} catch {
-		cursorTelemetry = [];
-	}
-	try {
-		cursorRecordingData = await nativeBridgeClient.cursor.getRecordingData(media.screenVideoPath);
-	} catch {
-		cursorRecordingData = null;
-	}
-
-	const recordingClicks =
-		cursorRecordingData?.samples
-			.filter((sample) => isClickInteractionType(sample.interactionType))
-			.map((sample) => sample.timeMs) ?? [];
-	const cursorClickTimestamps =
-		recordingClicks.length > 0
-			? recordingClicks
-			: cursorTelemetry
-					.filter((sample) => isClickInteractionType(sample.interactionType))
-					.map((sample) => sample.timeMs);
-
-	let platform: NativePlatform | null = null;
-	try {
-		platform = await nativeBridgeClient.system.getPlatform();
-	} catch {
-		platform = null;
-	}
-	const hasEditableCursorRecording =
-		(media.cursorCaptureMode ?? "editable-overlay") === "editable-overlay" &&
-		(platform === "win32" || platform === "darwin") &&
-		hasNativeCursorRecordingData(cursorRecordingData);
-	const effectiveShowCursor = DEFAULT_CURSOR_SETTINGS.show && hasEditableCursorRecording;
-
-	const probed = await probeVideoDimensions(videoUrl);
-	const sourceWidth = probed.width || DEFAULT_SOURCE_DIMENSIONS.width;
-	const sourceHeight = probed.height || DEFAULT_SOURCE_DIMENSIONS.height;
-
-	if (request.autoZoom) {
-		const autoRegions = buildAutoZoomRegions(
-			cursorTelemetry,
-			probed.durationMs,
-			editor.zoomRegions,
-		);
-		if (autoRegions.length > 0) {
-			editor.zoomRegions = [...editor.zoomRegions, ...autoRegions];
-		}
+	if (request.previewWidth !== null || request.previewHeight !== null) {
 		window.electronAPI.cliLog(
 			"info",
-			`Auto-zoom: added ${autoRegions.length} region(s) from cursor telemetry`,
+			"--preview-size is a no-op on the native pipeline (annotation geometry is percentage-based) and kept only for CLI compatibility",
 		);
 	}
-	const effectiveSourceDimensions = calculateEffectiveSourceDimensions(
-		sourceWidth,
-		sourceHeight,
-		editor.cropRegion,
-	);
-	const aspectRatioValue =
-		editor.aspectRatio === "native"
-			? getNativeAspectRatioValue(sourceWidth, sourceHeight, editor.cropRegion)
-			: getAspectRatioValue(editor.aspectRatio);
 
-	const preview = fitPreviewBox(
+	// Cursor telemetry: only needed to compute --auto-zoom suggestions. The
+	// native compositor discovers the `<video>.cursor.json` sidecar itself.
+	let cursorTelemetry: CursorTelemetryPoint[] = [];
+	if (request.autoZoom) {
+		try {
+			cursorTelemetry = await nativeBridgeClient.cursor.getTelemetry(media.screenVideoPath);
+		} catch {
+			cursorTelemetry = [];
+		}
+	}
+
+	const probed = await probeVideoDimensions(toFileUrl(media.screenVideoPath));
+
+	// Migrate the .openscreen project onto the AxcutDocument the native
+	// compositor consumes. The migration is pure and carries zooms, annotations,
+	// trims and the legacy editor settings; the clip's duration is unknown until
+	// probed, so applyProbedDuration must run or the export is a single frame.
+	let axcutDocument = migrateProjectDataToAxcutDocument({
+		...project,
+		media,
+		editor,
+	});
+	const primaryAssetId = axcutDocument.project.primaryAssetId ?? axcutDocument.assets[0]?.id;
+	if (!primaryAssetId) {
+		throw new Error("Project migration produced no media asset");
+	}
+	if (probed.durationMs > 0) {
+		axcutDocument = applyProbedDuration(axcutDocument, primaryAssetId, probed.durationMs / 1000);
+	}
+
+	if (request.autoZoom) {
+		const added = appendAutoZoomRanges(axcutDocument, cursorTelemetry, probed.durationMs);
+		window.electronAPI.cliLog("info", `Auto-zoom: added ${added} region(s) from cursor telemetry`);
+	}
+
+	// Output sizing mirrors the ExportDialog: crop-aware smallest clip on the
+	// timeline, normalized to the document's aspect ratio.
+	const probedAssetDims: Record<string, Dims> = {
+		[primaryAssetId]: { width: probed.width, height: probed.height },
+	};
+	const smallestSource =
+		pickExtremeDims(collectEffectiveClipDims(axcutDocument, probedAssetDims), "smallest") ??
+		({ width: probed.width, height: probed.height } as Dims);
+	const aspectRatioValue = resolveAspectRatioValue(
+		axcutDocument,
+		getEditorSettings(axcutDocument).aspectRatio,
+	);
+	const outDims = calculateMp4ExportSettings({
+		quality,
+		sourceWidth: smallestSource.width,
+		sourceHeight: smallestSource.height,
 		aspectRatioValue,
-		request.previewWidth ?? 1280,
-		request.previewHeight ?? 720,
+	});
+
+	const clips = buildNativeClipList(axcutDocument);
+	if (clips.length === 0) {
+		throw new Error("The project's timeline has no visible clips to export");
+	}
+	const sceneJson = JSON.stringify(buildSceneDescription(axcutDocument));
+
+	// Progress: native pushes raw encoded-frame counts; totals and pacing are
+	// computed here, mirroring the ExportDialog.
+	const outFps = format === "gif" ? gifFrameRate : MP4_EXPORT_FPS;
+	const totalFrames = Math.max(
+		1,
+		Math.round(
+			clips.reduce((sum, clip) => sum + Math.max(0, clip.sourceEndSec - clip.sourceStartSec), 0) *
+				outFps,
+		),
 	);
-
-	const onProgress = (progress: ExportProgress) => {
+	const exportStartedAt = Date.now();
+	const unsubscribeProgress = window.electronAPI.onNativeExportProgress?.((frames: number) => {
+		const elapsedSec = (Date.now() - exportStartedAt) / 1000;
+		const rate = frames > 0 ? frames / Math.max(elapsedSec, 0.001) : 0;
 		window.electronAPI.cliProgress({
-			percentage: progress.percentage,
-			currentFrame: progress.currentFrame,
-			totalFrames: progress.totalFrames,
-			estimatedTimeRemaining: progress.estimatedTimeRemaining,
-			phase: progress.phase,
+			percentage: Math.min(100, (frames / totalFrames) * 100),
+			currentFrame: frames,
+			totalFrames,
+			estimatedTimeRemaining: rate > 0 ? Math.max(0, (totalFrames - frames) / rate) : 0,
 		});
-	};
+	});
 
-	const sharedConfig = {
-		videoUrl,
-		webcamVideoUrl,
-		wallpaper: editor.wallpaper,
-		zoomRegions: editor.zoomRegions,
-		cameraFullscreenRegions: editor.cameraFullscreenRegions,
-		trimRegions: editor.trimRegions,
-		speedRegions: editor.speedRegions,
-		showShadow: editor.shadowIntensity > 0,
-		shadowIntensity: editor.shadowIntensity,
-		showBlur: editor.showBlur,
-		motionBlurAmount: editor.motionBlurAmount,
-		borderRadius: editor.borderRadius,
-		padding: editor.padding,
-		cropRegion: editor.cropRegion,
-		cursorRecordingData,
-		cursorScale: effectiveShowCursor ? DEFAULT_CURSOR_SETTINGS.size : 0,
-		cursorSmoothing: DEFAULT_CURSOR_SETTINGS.smoothing,
-		cursorMotionBlur: DEFAULT_CURSOR_SETTINGS.motionBlur,
-		cursorClickBounce: DEFAULT_CURSOR_SETTINGS.clickBounce,
-		cursorClipToBounds: DEFAULT_CURSOR_SETTINGS.clipToBounds,
-		cursorTheme: editor.cursorTheme,
-		annotationRegions: editor.annotationRegions,
-		webcamLayoutPreset: editor.webcamLayoutPreset,
-		webcamMaskShape: editor.webcamMaskShape,
-		webcamMirrored: editor.webcamMirrored,
-		webcamReactiveZoom: editor.webcamReactiveZoom,
-		webcamSizePreset: editor.webcamSizePreset,
-		webcamPosition: editor.webcamPosition,
-		previewWidth: preview.width,
-		previewHeight: preview.height,
-		cursorTelemetry,
-		cursorClickTimestamps,
-		onProgress,
-	};
-
-	let blob: Blob;
-	let warnings: string[] | undefined;
-	let outWidth: number;
-	let outHeight: number;
-
-	if (format === "gif") {
-		const gifDimensions = calculateOutputDimensions(
-			effectiveSourceDimensions.width,
-			effectiveSourceDimensions.height,
-			gifSizePreset,
-			GIF_SIZE_PRESETS,
-			aspectRatioValue,
-		);
-		outWidth = gifDimensions.width;
-		outHeight = gifDimensions.height;
-		const gifExporter = new GifExporter({
-			...sharedConfig,
-			width: gifDimensions.width,
-			height: gifDimensions.height,
-			frameRate: gifFrameRate,
-			loop: editor.gifLoop,
-			sizePreset: gifSizePreset,
-			videoPadding: editor.padding,
-		});
-		const result = await gifExporter.export();
-		if (!result.success || !result.blob) {
-			throw new Error(result.error ?? "GIF export failed");
+	try {
+		if (format === "gif") {
+			const dims = gifOutputDims(gifSizePreset, outDims);
+			await exportGifNative(clips, outPath, sceneJson, {
+				...dims,
+				fps: gifFrameRate,
+				loopCount: editor.gifLoop ? 0 : 1,
+			});
+			return {
+				success: true,
+				outputPath: outPath,
+				format,
+				width: dims.width,
+				height: dims.height,
+			};
 		}
-		blob = result.blob;
-		warnings = result.warnings;
-	} else {
-		const mp4Settings = calculateMp4ExportSettings({
-			quality,
-			sourceWidth: effectiveSourceDimensions.width,
-			sourceHeight: effectiveSourceDimensions.height,
-			aspectRatioValue,
+
+		// MP4: native writes outPath directly. When a voiceover is requested, mix
+		// it afterwards (the native pipeline has no extra-audio-track concept) and
+		// overwrite the same file.
+		await exportMultiNative(clips, outPath, sceneJson, {
+			width: outDims.width,
+			height: outDims.height,
+			fps: MP4_EXPORT_FPS,
+			codec: "h264",
 		});
-		outWidth = mp4Settings.width;
-		outHeight = mp4Settings.height;
-		const exporter = new VideoExporter({
-			...sharedConfig,
-			width: mp4Settings.width,
-			height: mp4Settings.height,
-			frameRate: 60,
-			bitrate: mp4Settings.bitrate,
-			codec: "avc1.640033",
-		});
-		const result = await exporter.export();
-		if (!result.success || !result.blob) {
-			throw new Error(result.error ?? "MP4 export failed");
+
+		if (request.audioPath) {
+			window.electronAPI.cliProgress({ percentage: 100, phase: "mixing-voiceover" });
+			const [videoResponse, audioResponse] = await Promise.all([
+				fetch(toFileUrl(outPath)),
+				fetch(toFileUrl(request.audioPath)),
+			]);
+			if (!videoResponse.ok) {
+				throw new Error(`Failed to read the exported video back for mixing: ${outPath}`);
+			}
+			if (!audioResponse.ok) {
+				throw new Error(`Failed to read voiceover file: ${request.audioPath}`);
+			}
+			const mixed = await mixVoiceoverIntoVideo(await videoResponse.blob(), {
+				voiceoverData: await audioResponse.arrayBuffer(),
+				mode: request.audioMode,
+				offsetSec: request.audioOffsetSec,
+			});
+			const saveResult = await window.electronAPI.writeExportToPath(
+				await mixed.arrayBuffer(),
+				outPath,
+			);
+			if (!saveResult.success) {
+				throw new Error(saveResult.message ?? `Failed to write mixed output to ${outPath}`);
+			}
 		}
-		blob = result.blob;
-		warnings = result.warnings;
-	}
 
-	if (request.audioPath && format === "mp4") {
-		window.electronAPI.cliProgress({ percentage: 100, phase: "mixing-voiceover" });
-		const audioResponse = await fetch(toFileUrl(request.audioPath));
-		if (!audioResponse.ok) {
-			throw new Error(`Failed to read voiceover file: ${request.audioPath}`);
-		}
-		const voiceoverData = await audioResponse.arrayBuffer();
-		blob = await mixVoiceoverIntoVideo(blob, {
-			voiceoverData,
-			mode: request.audioMode,
-			offsetSec: request.audioOffsetSec,
-		});
+		return {
+			success: true,
+			outputPath: outPath,
+			format,
+			width: outDims.width,
+			height: outDims.height,
+		};
+	} finally {
+		unsubscribeProgress?.();
 	}
-
-	const arrayBuffer = await blob.arrayBuffer();
-	const saveResult = await window.electronAPI.writeExportToPath(arrayBuffer, outPath);
-	if (!saveResult.success || !saveResult.path) {
-		throw new Error(saveResult.message ?? `Failed to write output to ${outPath}`);
-	}
-
-	return {
-		success: true,
-		outputPath: saveResult.path,
-		format,
-		width: outWidth,
-		height: outHeight,
-		warnings,
-	};
 }
 
 export function CliExportRunner() {
