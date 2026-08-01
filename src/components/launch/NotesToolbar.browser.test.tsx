@@ -1,10 +1,10 @@
 import "@/index.css";
 import type { Editor } from "@tiptap/react";
+import { userEvent } from "@vitest/browser/context";
 import { useState } from "react";
 import { flushSync } from "react-dom";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { userEvent } from "vitest/browser";
 import { NotesToolbar } from "./NotesToolbar";
 
 vi.mock("@/components/ui/tooltip", () => ({
