@@ -1,0 +1,301 @@
+/**
+ * /download — same tokens and rhythm as the landing page hero and install grid
+ * (src/pages/index.module.css), so the two pages read as one site rather than a
+ * marketing page plus a bolted-on download page.
+ */
+
+.hero,
+.platforms {
+	background: var(--os-bg);
+	color: var(--os-fg);
+}
+
+.hero {
+	padding: 88px 28px 0;
+	text-align: center;
+	background: radial-gradient(ellipse 60% 40% at 50% 0%, var(--os-accent-wash), transparent 60%), var(--os-bg);
+}
+
+.heroInner {
+	max-width: 720px;
+	margin: 0 auto;
+}
+
+.badge {
+	display: inline-flex;
+	align-items: center;
+	padding: 0.3rem 0.85rem;
+	border-radius: 999px;
+	background: var(--os-accent-soft);
+	border: 1px solid var(--os-accent-border);
+	color: var(--os-accent);
+	font-size: 0.8rem;
+	font-weight: 600;
+	margin-bottom: 22px;
+}
+
+.title {
+	margin: 20px 0 0 !important;
+	font-size: clamp(38px, 5.2vw, 58px);
+	font-weight: 700 !important;
+	letter-spacing: -0.03em;
+	line-height: 1.05;
+	color: var(--os-fg-emphasis) !important;
+}
+
+.tagline {
+	font-size: 19px;
+	line-height: 1.55;
+	color: var(--os-fg-2);
+	margin: 20px auto 0;
+	max-width: 560px;
+}
+
+.releaseMeta {
+	margin: 18px 0 0;
+	font-size: 12.5px;
+	color: var(--os-meta);
+}
+
+/* ---- platform cards ---- */
+
+.platforms {
+	padding: 44px 28px 100px;
+	display: flex;
+	justify-content: center;
+}
+
+.platformsInner {
+	width: 100%;
+	max-width: 1040px;
+}
+
+.grid {
+	display: grid;
+	grid-template-columns: repeat(3, 1fr);
+	gap: 0.875rem;
+	align-items: start;
+}
+
+@media (max-width: 860px) {
+	.grid {
+		grid-template-columns: 1fr;
+	}
+}
+
+.card {
+	display: flex;
+	flex-direction: column;
+	border-radius: 14px;
+	border: 1px solid var(--os-border);
+	background: var(--os-surface-1);
+	box-shadow: var(--os-elev-card);
+	overflow: hidden;
+}
+
+.cardHeader {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 16px;
+	border-bottom: 1px solid var(--os-border-soft);
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--os-fg-2);
+}
+
+.cardBody {
+	display: flex;
+	flex-direction: column;
+	gap: 8px;
+	padding: 14px;
+}
+
+/* One row per real artifact. The whole row is the link: a platform can ship
+   three of these, and three stacked buttons would read as three CTAs. */
+.option {
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	padding: 10px 12px;
+	border-radius: 10px;
+	border: 1px solid var(--os-border-soft);
+	background: var(--os-surface-2);
+	color: var(--os-fg-2);
+	text-decoration: none;
+	transition: border-color 0.15s ease, background 0.15s ease;
+}
+
+.option:hover {
+	border-color: var(--os-accent-border);
+	background: var(--os-accent-wash);
+	color: var(--os-fg-2);
+	text-decoration: none;
+}
+
+.optionText {
+	display: flex;
+	flex-direction: column;
+	min-width: 0;
+	flex: 1;
+}
+
+.optionLabel {
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--os-fg-emphasis);
+}
+
+.optionSub {
+	font-size: 11.5px;
+	color: var(--os-meta);
+}
+
+.optionSize {
+	flex: none;
+	font-family: var(--ifm-font-family-monospace);
+	font-size: 11px;
+	color: var(--os-muted);
+}
+
+.optionIcon {
+	flex: none;
+	color: var(--os-accent);
+}
+
+.cardFoot {
+	margin: 0;
+	padding: 0 16px 14px;
+	font-size: 11.5px;
+	line-height: 1.55;
+	color: var(--os-meta);
+}
+
+/* ---- side panels ---- */
+
+.panels {
+	margin-top: 0.875rem;
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 0.875rem;
+}
+
+@media (max-width: 860px) {
+	.panels {
+		grid-template-columns: 1fr;
+	}
+}
+
+.panel {
+	border-radius: 14px;
+	border: 1px solid var(--os-border);
+	background: var(--os-surface-1);
+	overflow: hidden;
+}
+
+.panelHeader {
+	display: flex;
+	align-items: center;
+	gap: 8px;
+	padding: 10px 16px;
+	border-bottom: 1px solid var(--os-border-soft);
+	font-size: 12px;
+	font-weight: 500;
+	color: var(--os-fg-2);
+}
+
+.code {
+	margin: 0;
+	padding: 1rem;
+	font-size: 12.5px;
+	line-height: 1.7;
+	color: var(--os-fg-2);
+	background: transparent;
+	overflow-x: auto;
+}
+
+.accentText {
+	color: var(--os-accent);
+}
+
+.meta {
+	color: var(--os-meta);
+}
+
+.panelFoot {
+	margin: 0;
+	padding: 0 16px 14px;
+	font-size: 12px;
+	line-height: 1.55;
+	color: var(--os-meta);
+}
+
+/* ---- pre-release / all releases ---- */
+
+/* Deliberately quieter than the cards: bordered but unfilled, no accent
+   background, and a ghost CTA rather than a solid one, so it reads as the
+   secondary path it is. */
+.preRelease {
+	margin-top: 0.875rem;
+	display: flex;
+	align-items: center;
+	gap: 14px;
+	padding: 16px 18px;
+	border-radius: 14px;
+	border: 1px dashed var(--os-border-hi);
+	background: transparent;
+}
+
+.preReleaseIcon {
+	flex: none;
+	color: var(--os-muted);
+}
+
+.preReleaseText {
+	flex: 1;
+	min-width: 0;
+}
+
+.preReleaseTitle {
+	margin: 0;
+	font-size: 13px;
+	font-weight: 600;
+	color: var(--os-fg-2);
+}
+
+.preReleaseBody {
+	margin: 2px 0 0;
+	font-size: 12.5px;
+	line-height: 1.55;
+	color: var(--os-meta);
+}
+
+.preReleaseCta {
+	flex: none;
+	padding: 8px 14px;
+	border-radius: 9px;
+	border: 1px solid var(--os-border);
+	font-size: 12.5px;
+	font-weight: 600;
+	color: var(--os-fg-2);
+	text-decoration: none;
+	white-space: nowrap;
+}
+
+.preReleaseCta:hover {
+	border-color: var(--os-fg-2);
+	color: var(--os-fg-2);
+	text-decoration: none;
+}
+
+@media (max-width: 700px) {
+	.preRelease {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+
+	.preReleaseCta {
+		align-self: stretch;
+		text-align: center;
+	}
+}

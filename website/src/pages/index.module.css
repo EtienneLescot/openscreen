@@ -41,11 +41,26 @@
 	color: var(--os-fg-emphasis);
 }
 
+/* Second line of the h1. Block-level at the tagline's own size so the heading
+   reads as wordmark-over-descriptor and not as one oversized sentence. */
+.titleTagline {
+	display: block;
+	margin: 20px auto 0;
+	max-width: 560px;
+	font-size: 19px;
+	font-weight: 400;
+	letter-spacing: normal;
+	line-height: 1.55;
+	color: var(--os-fg-2);
+}
+
+/* Zero top margin: this paragraph now continues the line the h1's descriptor
+   started, so it has to sit at line-box distance, not block distance. */
 .tagline {
 	font-size: 19px;
 	line-height: 1.55;
 	color: var(--os-fg-2);
-	margin: 20px auto 0;
+	margin: 0 auto;
 	max-width: 560px;
 }
 

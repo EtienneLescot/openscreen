@@ -2,8 +2,11 @@ import type * as Preset from "@docusaurus/preset-classic";
 import type { Config } from "@docusaurus/types";
 import { themes as prismThemes } from "prism-react-renderer";
 
+import type { LatestRelease } from "./src/lib/release";
+
 const SITE_URL = "https://getopenscreen.com";
-const REPO_URL = "https://github.com/getopenscreen/openscreen";
+const REPO_SLUG = "getopenscreen/openscreen";
+const REPO_URL = `https://github.com/${REPO_SLUG}`;
 const UPSTREAM_REPO_URL = "https://github.com/siddharthvaddem/openscreen";
 const DISCORD_URL = "https://discord.gg/VvT6Vtnyh";
 
@@ -64,8 +67,73 @@ async function fetchStarCount(): Promise<number | null> {
 	}
 }
 
+const MONTHS = [
+	"January",
+	"February",
+	"March",
+	"April",
+	"May",
+	"June",
+	"July",
+	"August",
+	"September",
+	"October",
+	"November",
+	"December",
+];
+
+/**
+ * The published assets for the current stable release, resolved at build time
+ * so /download can link each platform to its actual file instead of bouncing
+ * everyone through the releases list.
+ *
+ * This is only safe because .github/workflows/docs.yml also rebuilds on
+ * `release: published`. Without that trigger the data would go stale silently —
+ * the workflow otherwise only fires on website/** changes, so shipping a new
+ * version would leave this page advertising the previous one indefinitely.
+ *
+ * Returns null on any failure (the API is called unauthenticated, so a
+ * rate-limited runner is a real possibility); the page falls back to
+ * /releases/latest links, which are always correct.
+ */
+async function fetchLatestRelease(): Promise<LatestRelease> {
+	try {
+		const res = await fetch(`https://api.github.com/repos/${REPO_SLUG}/releases/latest`, {
+			headers: { Accept: "application/vnd.github+json" },
+			signal: AbortSignal.timeout(5000),
+		});
+		if (!res.ok) return null;
+		const data = (await res.json()) as {
+			tag_name?: unknown;
+			published_at?: unknown;
+			assets?: unknown;
+		};
+		if (typeof data.tag_name !== "string" || !Array.isArray(data.assets)) return null;
+
+		const assets = data.assets.flatMap((raw) => {
+			const a = raw as { name?: unknown; browser_download_url?: unknown; size?: unknown };
+			if (typeof a.name !== "string" || typeof a.browser_download_url !== "string") return [];
+			return [{ name: a.name, url: a.browser_download_url, size: Number(a.size) || 0 }];
+		});
+		if (assets.length === 0) return null;
+
+		// Formatted here rather than in the component: toLocaleDateString would
+		// resolve against the visitor's locale and time zone on hydration and
+		// mismatch the server-rendered string.
+		let published = "";
+		if (typeof data.published_at === "string") {
+			const [y, m, d] = data.published_at.slice(0, 10).split("-");
+			if (y && m && d) published = `${Number(d)} ${MONTHS[Number(m) - 1]} ${y}`;
+		}
+
+		return { tag: data.tag_name, published, assets };
+	} catch {
+		return null;
+	}
+}
+
 export default async function createConfig(): Promise<Config> {
-	const starCount = await fetchStarCount();
+	const [starCount, latestRelease] = await Promise.all([fetchStarCount(), fetchLatestRelease()]);
 	const starBadge =
 		starCount !== null
 			? `<span class="navbar-github-stars">${STAR_SVG}${formatStarCount(starCount)}</span>`
@@ -92,6 +160,10 @@ export default async function createConfig(): Promise<Config> {
 
 		organizationName: "getopenscreen",
 		projectName: "openscreen",
+
+		// Read back by src/pages/download.tsx. Serialized into the client bundle,
+		// so it stays plain JSON.
+		customFields: { latestRelease },
 
 		onBrokenLinks: "throw",
 		onBrokenAnchors: "throw",
@@ -222,12 +294,15 @@ export default async function createConfig(): Promise<Config> {
 							`GitHub${starBadge}</a>`,
 					},
 					{
-						type: "html",
+						// Points at our own page now, not straight out to Releases, which
+						// means it can be a real router link: SPA navigation plus route
+						// prefetch, neither of which a raw <a> in an html item gets. A
+						// link item only takes a string label, so the download glyph moves
+						// to a CSS mask on .navbar-download-cta.
+						to: "/download",
+						label: "Download",
+						className: "navbar-download-cta",
 						position: "right",
-						value:
-							`<a class="navbar-download-cta" href="${REPO_URL}/releases" target="_blank" rel="noopener noreferrer">` +
-							'<svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 15V3"/><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="m7 10 5 5 5-5"/></svg>' +
-							"Download</a>",
 					},
 				],
 			},

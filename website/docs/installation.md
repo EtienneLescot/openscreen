@@ -15,7 +15,7 @@ keywords:
 
 # Installation
 
-Download the latest installer for your platform from [GitHub Releases](https://github.com/getopenscreen/openscreen/releases).
+Download the latest installer for your platform from the [download page](/download), or straight from [GitHub Releases](https://github.com/getopenscreen/openscreen/releases).
 
 ## macOS
 
@@ -45,12 +45,12 @@ Three packages are published per release — pick the one matching your distro.
 
 **Debian / Ubuntu / Pop!_OS**
 ```bash
-sudo apt install ./Openscreen-Linux-latest.deb
+sudo apt install ./Openscreen-Linux-*.deb
 ```
 
 **Arch / Manjaro**
 ```bash
-sudo pacman -U Openscreen-Linux-latest.pacman
+sudo pacman -U Openscreen-Linux-*.pacman
 ```
 
 **Any distro (AppImage)**

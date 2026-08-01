@@ -89,10 +89,19 @@ jobs:
 
   build-macos:
     name: macOS ${{ matrix.arch }} DMG
-    # RELEASE-BRANCH-ONLY: 1.8.0 ships Windows-only. Do NOT let this `if: false`
-    # reach main when promoting, or every later release becomes Windows-only too.
-    if: false
-    runs-on: macos-latest
+    # Build each arch NATIVELY. `macos-latest` is Apple Silicon, and everything the
+    # 1.8.0 macOS path added keys off the HOST arch: fetch-ffmpeg-macos.mjs configures
+    # with `--arch=${process.arch}`, and build-macos-compositor-addon.mjs installs into
+    # `darwin-${process.arch}` and runs cargo without `--target`. So the x64 job on an
+    # arm64 runner produced arm64 output in darwin-arm64/, and packaging then failed
+    # with "Refusing to package an incomplete macOS payload — looked in darwin-x64".
+    # v1.7.0 shipped an x64 DMG because it had neither the compositor addon nor a
+    # vendored ffmpeg to build; both arrived with 1.8.0 and nobody could see the
+    # breakage while this job sat behind `if: false`.
+    # Running x64 on an Intel runner fixes it without threading a target arch through
+    # ffmpeg's configure, cargo and the output paths — four blind changes on a release
+    # branch, none of them testable without a Mac.
+    runs-on: ${{ matrix.arch == 'x64' && 'macos-15-intel' || 'macos-latest' }}
     strategy:
       fail-fast: false
       matrix:
@@ -300,8 +309,6 @@ jobs:
 
   build-linux:
     name: Linux packages
-    # RELEASE-BRANCH-ONLY: see the note on build-macos above.
-    if: false
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -337,11 +344,10 @@ jobs:
   publish-release:
     name: Publish GitHub release
     runs-on: ubuntu-latest
-    # RELEASE-BRANCH-ONLY: build-macos / build-linux are disabled for this
-    # Windows-only release. A skipped job in `needs` skips this one too, so they
-    # must come out of the list, not just be gated. Restore all three on main.
     needs:
       - build-windows
+      - build-macos
+      - build-linux
     if: ${{ (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
     steps:
       - name: Checkout code
@@ -409,23 +415,18 @@ jobs:
           path: artifacts/windows
 
       - name: Download macOS arm64 DMG
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: openscreen-mac-arm64
           path: artifacts/mac-arm64
 
       - name: Download macOS x64 DMG
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: openscreen-mac-x64
           path: artifacts/mac-x64
 
       - name: Download Linux packages
-        # RELEASE-BRANCH-ONLY: tolerate the missing artifact from the disabled
-        # Linux job (the macOS downloads below already do). Drop with the rest.
-        continue-on-error: true
         uses: actions/download-artifact@v4
         with:
           name: openscreen-linux
