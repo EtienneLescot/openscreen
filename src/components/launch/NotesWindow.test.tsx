@@ -2,6 +2,7 @@ import "@testing-library/jest-dom";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Editor } from "@tiptap/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { NotesWindow } from "./NotesWindow";
 import { NOTES_TELEPROMPTER_STORAGE_KEY } from "./notesTeleprompter";
@@ -35,6 +36,7 @@ vi.mock("@/contexts/I18nContext", () => ({
 	useI18n: () => ({ locale: "en" }),
 	useScopedT: () => (key: string, vars?: Record<string, string | number>) => {
 		const labels: Record<string, string> = {
+			"tooltips.notesToolbar.bold": "Bold",
 			"tooltips.notesToolbar.play": "Play",
 			"tooltips.notesToolbar.pause": "Pause",
 			"tooltips.notesToolbar.speed": "Scroll speed",
@@ -67,6 +69,8 @@ function createStorage(): Storage {
 	};
 }
 
+const setEditable = vi.fn();
+
 function createEditor(scrollElement: HTMLElement): Editor {
 	const chain: Record<string, ReturnType<typeof vi.fn>> = {};
 	for (const command of [
@@ -89,8 +93,21 @@ function createEditor(scrollElement: HTMLElement): Editor {
 		isActive: () => false,
 		on: vi.fn(),
 		off: vi.fn(),
+		setEditable,
 		view: { dom: scrollElement },
 	} as unknown as Editor;
+}
+
+/** Mimics an engine that stores scroll offsets as whole pixels. */
+function makeScrollTopRounding(element: HTMLElement): void {
+	let value = 0;
+	Object.defineProperty(element, "scrollTop", {
+		configurable: true,
+		get: () => value,
+		set: (next: number) => {
+			value = Math.floor(next);
+		},
+	});
 }
 
 describe("NotesWindow teleprompter mode", () => {
@@ -114,6 +131,7 @@ describe("NotesWindow teleprompter mode", () => {
 			value: createStorage(),
 			configurable: true,
 		});
+		setEditable.mockClear();
 
 		scrollElement = document.createElement("div");
 		Object.defineProperties(scrollElement, {
@@ -171,7 +189,7 @@ describe("NotesWindow teleprompter mode", () => {
 
 	it("stops automatically at the bottom", async () => {
 		const user = userEvent.setup();
-		scrollElement.scrollTop = 99;
+		scrollElement.scrollTop = 96;
 		render(<NotesWindow />);
 
 		await user.click(screen.getByRole("button", { name: "Play" }));
@@ -183,6 +201,71 @@ describe("NotesWindow teleprompter mode", () => {
 		expect(frameCallbacks.size).toBe(0);
 	});
 
+	it("replays from the top when playback starts at the bottom", async () => {
+		const user = userEvent.setup();
+		scrollElement.scrollTop = 100;
+		render(<NotesWindow />);
+
+		await user.click(screen.getByRole("button", { name: "Play" }));
+		expect(scrollElement.scrollTop).toBe(0);
+
+		flushNextFrame(0);
+		flushNextFrame(100);
+
+		expect(scrollElement.scrollTop).toBe(4);
+		expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+	});
+
+	it("stays armed when the note is shorter than the window", async () => {
+		const user = userEvent.setup();
+		Object.defineProperties(scrollElement, {
+			scrollHeight: { value: 100, configurable: true },
+			clientHeight: { value: 100, configurable: true },
+		});
+		render(<NotesWindow />);
+
+		await user.click(screen.getByRole("button", { name: "Play" }));
+		flushNextFrame(0);
+		flushNextFrame(100);
+
+		// Nothing to scroll, but the control must not snap back and look broken.
+		expect(scrollElement.scrollTop).toBe(0);
+		expect(screen.getByRole("button", { name: "Pause" })).toBeInTheDocument();
+		expect(frameCallbacks.size).toBe(1);
+	});
+
+	it("keeps advancing when the engine rounds scrollTop to whole pixels", async () => {
+		const user = userEvent.setup();
+		makeScrollTopRounding(scrollElement);
+		render(<NotesWindow />);
+
+		await user.click(screen.getByRole("button", { name: "Play" }));
+
+		// 40 px/s over 16 ms frames is 0.64 px each — every one of them rounds away on its
+		// own, so reading the position back from the DOM would stall the teleprompter.
+		let timestamp = 0;
+		for (let frame = 0; frame <= 5; frame++) {
+			flushNextFrame(timestamp);
+			timestamp += 16;
+		}
+
+		expect(scrollElement.scrollTop).toBe(3);
+	});
+
+	it("makes the note read-only while playing", async () => {
+		const user = userEvent.setup();
+		render(<NotesWindow />);
+		expect(setEditable).toHaveBeenLastCalledWith(true, false);
+
+		await user.click(screen.getByRole("button", { name: "Play" }));
+		expect(setEditable).toHaveBeenLastCalledWith(false, false);
+		expect(screen.getByRole("button", { name: "Bold" })).toBeDisabled();
+
+		await user.click(screen.getByRole("button", { name: "Pause" }));
+		expect(setEditable).toHaveBeenLastCalledWith(true, false);
+		expect(screen.getByRole("button", { name: "Bold" })).toBeEnabled();
+	});
+
 	it("applies and persists font and mirror settings without persisting playback", async () => {
 		const user = userEvent.setup();
 		render(<NotesWindow />);
@@ -190,6 +273,8 @@ describe("NotesWindow teleprompter mode", () => {
 
 		expect(content).toHaveStyle({ fontSize: "16px" });
 		expect(content).toHaveAttribute("data-mirrored", "false");
+		// Loading defaults is not a preference — nothing is stored until a control is used.
+		expect(localStorage.getItem(NOTES_TELEPROMPTER_STORAGE_KEY)).toBeNull();
 
 		await user.click(screen.getByRole("button", { name: "Increase font size" }));
 		await user.click(screen.getByRole("button", { name: "Mirror" }));
@@ -204,6 +289,18 @@ describe("NotesWindow teleprompter mode", () => {
 				mirrored: true,
 			});
 		});
+	});
+
+	it("still writes nothing on mount when StrictMode double-invokes effects", () => {
+		// The renderer really does mount under StrictMode (see src/main.tsx), so a
+		// "skip the first run" guard would persist defaults on the second invocation.
+		render(
+			<StrictMode>
+				<NotesWindow />
+			</StrictMode>,
+		);
+
+		expect(localStorage.getItem(NOTES_TELEPROMPTER_STORAGE_KEY)).toBeNull();
 	});
 
 	it("loads legacy note content and saves editor updates", () => {

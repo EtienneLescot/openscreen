@@ -3,8 +3,10 @@ import {
 	clampNotesFontSize,
 	clampTeleprompterSpeed,
 	DEFAULT_NOTES_TELEPROMPTER_SETTINGS,
+	getMaxScrollTop,
 	getNextTeleprompterScrollTop,
 	getTeleprompterFrame,
+	isAtTeleprompterEnd,
 	loadInitialNotesContent,
 	loadNotesTeleprompterSettings,
 	MAX_NOTES_FONT_SIZE,
@@ -13,8 +15,10 @@ import {
 	MIN_NOTES_FONT_SIZE,
 	MIN_TELEPROMPTER_SPEED,
 	NOTES_TELEPROMPTER_STORAGE_KEY,
+	resolveTeleprompterPosition,
 	saveNotesContent,
 	saveNotesTeleprompterSettings,
+	TELEPROMPTER_SCROLL_TOLERANCE_PX,
 } from "./notesTeleprompter";
 
 describe("Notes teleprompter settings", () => {
@@ -130,5 +134,44 @@ describe("Notes teleprompter frame math", () => {
 		expect(getNextTeleprompterScrollTop(10, 40, 100, 100)).toBe(14);
 		expect(getNextTeleprompterScrollTop(98, 40, 100, 100)).toBe(100);
 		expect(getNextTeleprompterScrollTop(Number.NaN, 40, -1, 100)).toBe(0);
+	});
+});
+
+describe("Notes teleprompter scroll position tracking", () => {
+	it("keeps the tracked sub-pixel position when the DOM only rounds it", () => {
+		const tracked = 12.4;
+		expect(resolveTeleprompterPosition(tracked, Math.floor(tracked))).toBe(tracked);
+		expect(resolveTeleprompterPosition(tracked, tracked + TELEPROMPTER_SCROLL_TOLERANCE_PX)).toBe(
+			tracked,
+		);
+	});
+
+	it("hands control back to the DOM once the reader scrolls by hand", () => {
+		expect(resolveTeleprompterPosition(12.4, 300)).toBe(300);
+		expect(resolveTeleprompterPosition(300, 12.4)).toBe(12.4);
+	});
+
+	it("falls back safely for unusable inputs", () => {
+		expect(resolveTeleprompterPosition(12.4, Number.NaN)).toBe(12.4);
+		expect(resolveTeleprompterPosition(Number.NaN, 12.4)).toBe(12.4);
+		expect(resolveTeleprompterPosition(Number.NaN, Number.NaN)).toBe(0);
+		expect(resolveTeleprompterPosition(-5, -5)).toBe(0);
+	});
+
+	it("reports the end only when there is something to scroll", () => {
+		expect(isAtTeleprompterEnd(100, 100)).toBe(true);
+		expect(isAtTeleprompterEnd(100 - TELEPROMPTER_SCROLL_TOLERANCE_PX, 100)).toBe(true);
+		expect(isAtTeleprompterEnd(50, 100)).toBe(false);
+
+		// A note that fits the window has nowhere to go — playback stays armed instead of
+		// snapping straight back to paused.
+		expect(isAtTeleprompterEnd(0, 0)).toBe(false);
+		expect(isAtTeleprompterEnd(0, Number.NaN)).toBe(false);
+	});
+
+	it("derives the scrollable distance without going negative", () => {
+		expect(getMaxScrollTop({ scrollHeight: 200, clientHeight: 100 })).toBe(100);
+		expect(getMaxScrollTop({ scrollHeight: 100, clientHeight: 100 })).toBe(0);
+		expect(getMaxScrollTop({ scrollHeight: 50, clientHeight: 100 })).toBe(0);
 	});
 });

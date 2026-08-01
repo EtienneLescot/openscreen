@@ -43,6 +43,10 @@
 		"fullscreen": "全画面表示",
 		"exitFullscreen": "全画面表示を終了"
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} px/秒",
+		"pixels": "{{value}} px"
+	},
 	"locale": {
 		"name": "日本語",
 		"short": "JA"

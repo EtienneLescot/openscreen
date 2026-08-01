@@ -32,10 +32,6 @@
 			"mirror": "Отразить по горизонтали"
 		}
 	},
-	"units": {
-		"pixelsPerSecond": "{{value}} пикс/с",
-		"pixels": "{{value}} пикс"
-	},
 	"audio": {
 		"enableSystemAudio": "Включить системное аудио",
 		"disableSystemAudio": "Отключить системное аудио",

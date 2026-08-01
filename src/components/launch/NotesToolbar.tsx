@@ -41,7 +41,13 @@ export type NotesToolbarProps = {
 type ToolbarButtonProps = {
 	"aria-label": string;
 	tooltipContent: string;
+	/** Toggle state: drives both `aria-pressed` and the pressed styling. */
 	active?: boolean;
+	/**
+	 * Pressed styling without `aria-pressed`, for buttons that already announce their state
+	 * through a label that changes with it. Announcing both would say it twice.
+	 */
+	highlighted?: boolean;
 	disabled?: boolean;
 	teleprompterControl?: boolean;
 	onClick: () => void;
@@ -52,6 +58,7 @@ function ToolbarButton({
 	"aria-label": ariaLabel,
 	tooltipContent,
 	active,
+	highlighted = false,
 	disabled = false,
 	teleprompterControl = false,
 	onClick,
@@ -68,7 +75,7 @@ function ToolbarButton({
 				onClick={onClick}
 				className={cn(
 					"shrink-0 inline-flex h-8 w-8 items-center justify-center rounded-md border-0 bg-transparent text-gray-700 transition-colors hover:bg-gray-200 hover:text-gray-900 focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-violet-600 disabled:cursor-not-allowed disabled:opacity-35",
-					active && "bg-gray-900 text-white hover:bg-gray-800 hover:text-white",
+					(active || highlighted) && "bg-gray-900 text-white hover:bg-gray-800 hover:text-white",
 				)}
 			>
 				{children}
@@ -115,13 +122,14 @@ export function NotesToolbar({
 	useEditorRevision(editor);
 	const { locale } = useI18n();
 	const t = useScopedT("launch");
+	const tCommon = useScopedT("common");
 	const numberFormatter = useMemo(() => new Intl.NumberFormat(locale), [locale]);
 
 	return (
 		<div className="flex w-full min-w-0 max-w-full flex-col gap-1.5 rounded-[0.625rem] border border-gray-200 bg-gray-50 p-1.5">
 			<div
 				data-testid="notes-formatting-controls"
-				className="flex w-full min-w-0 items-center overflow-x-auto"
+				className="flex w-full min-w-0 items-center overflow-x-auto no-scrollbar"
 			>
 				<div className="flex min-w-max items-center gap-1">
 					<div className="flex shrink-0 items-center gap-1">
@@ -129,7 +137,7 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.bold")}
 							tooltipContent={t("tooltips.notesToolbar.bold")}
 							active={editor?.isActive("bold") ?? false}
-							disabled={!editor?.can().chain().focus().toggleBold().run()}
+							disabled={isPlaying || !editor?.can().chain().focus().toggleBold().run()}
 							onClick={() => editor?.chain().focus().toggleBold().run()}
 						>
 							<Bold size={16} />
@@ -138,7 +146,7 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.italic")}
 							tooltipContent={t("tooltips.notesToolbar.italic")}
 							active={editor?.isActive("italic") ?? false}
-							disabled={!editor?.can().chain().focus().toggleItalic().run()}
+							disabled={isPlaying || !editor?.can().chain().focus().toggleItalic().run()}
 							onClick={() => editor?.chain().focus().toggleItalic().run()}
 						>
 							<Italic size={16} />
@@ -147,7 +155,7 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.strikethrough")}
 							tooltipContent={t("tooltips.notesToolbar.strikethrough")}
 							active={editor?.isActive("strike") ?? false}
-							disabled={!editor?.can().chain().focus().toggleStrike().run()}
+							disabled={isPlaying || !editor?.can().chain().focus().toggleStrike().run()}
 							onClick={() => editor?.chain().focus().toggleStrike().run()}
 						>
 							<Strikethrough size={16} />
@@ -161,7 +169,7 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.bulletList")}
 							tooltipContent={t("tooltips.notesToolbar.bulletList")}
 							active={editor?.isActive("bulletList") ?? false}
-							disabled={!editor?.can().chain().focus().toggleBulletList().run()}
+							disabled={isPlaying || !editor?.can().chain().focus().toggleBulletList().run()}
 							onClick={() => editor?.chain().focus().toggleBulletList().run()}
 						>
 							<List size={16} />
@@ -170,7 +178,7 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.numberedList")}
 							tooltipContent={t("tooltips.notesToolbar.numberedList")}
 							active={editor?.isActive("orderedList") ?? false}
-							disabled={!editor?.can().chain().focus().toggleOrderedList().run()}
+							disabled={isPlaying || !editor?.can().chain().focus().toggleOrderedList().run()}
 							onClick={() => editor?.chain().focus().toggleOrderedList().run()}
 						>
 							<ListOrdered size={16} />
@@ -184,7 +192,7 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.blockquote")}
 							tooltipContent={t("tooltips.notesToolbar.blockquote")}
 							active={editor?.isActive("blockquote") ?? false}
-							disabled={!editor?.can().chain().focus().toggleBlockquote().run()}
+							disabled={isPlaying || !editor?.can().chain().focus().toggleBlockquote().run()}
 							onClick={() => editor?.chain().focus().toggleBlockquote().run()}
 						>
 							<Quote size={16} />
@@ -193,7 +201,7 @@ export function NotesToolbar({
 							aria-label={t("tooltips.notesToolbar.codeBlock")}
 							tooltipContent={t("tooltips.notesToolbar.codeBlock")}
 							active={editor?.isActive("codeBlock") ?? false}
-							disabled={!editor?.can().chain().focus().toggleCodeBlock().run()}
+							disabled={isPlaying || !editor?.can().chain().focus().toggleCodeBlock().run()}
 							onClick={() => editor?.chain().focus().toggleCodeBlock().run()}
 						>
 							<Code size={16} />
@@ -204,7 +212,7 @@ export function NotesToolbar({
 
 			<div
 				data-testid="notes-teleprompter-controls"
-				className="flex w-full min-w-0 items-center overflow-x-auto"
+				className="flex w-full min-w-0 items-center overflow-x-auto no-scrollbar"
 			>
 				<div className="flex min-w-max items-center gap-1">
 					<ToolbarButton
@@ -212,7 +220,7 @@ export function NotesToolbar({
 						tooltipContent={t(
 							isPlaying ? "tooltips.notesToolbar.pause" : "tooltips.notesToolbar.play",
 						)}
-						active={isPlaying}
+						highlighted={isPlaying}
 						disabled={!editor}
 						teleprompterControl
 						onClick={onTogglePlaying}
@@ -235,7 +243,7 @@ export function NotesToolbar({
 							<Minus size={16} />
 						</ToolbarButton>
 						<output className="min-w-14 text-center text-xs tabular-nums text-gray-700">
-							{t("units.pixelsPerSecond", { value: numberFormatter.format(speed) })}
+							{tCommon("units.pixelsPerSecond", { value: numberFormatter.format(speed) })}
 						</output>
 						<ToolbarButton
 							aria-label={t("tooltips.notesToolbar.increaseSpeed")}
@@ -263,7 +271,7 @@ export function NotesToolbar({
 							<Minus size={16} />
 						</ToolbarButton>
 						<output className="min-w-10 text-center text-xs tabular-nums text-gray-700">
-							{t("units.pixels", { value: numberFormatter.format(fontSize) })}
+							{tCommon("units.pixels", { value: numberFormatter.format(fontSize) })}
 						</output>
 						<ToolbarButton
 							aria-label={t("tooltips.notesToolbar.increaseFontSize")}

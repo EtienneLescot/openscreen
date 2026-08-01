@@ -32,10 +32,6 @@
 			"mirror": "Lật ngang"
 		}
 	},
-	"units": {
-		"pixelsPerSecond": "{{value}} px/giây",
-		"pixels": "{{value}} px"
-	},
 	"audio": {
 		"enableSystemAudio": "Bật âm thanh hệ thống",
 		"disableSystemAudio": "Tắt âm thanh hệ thống",

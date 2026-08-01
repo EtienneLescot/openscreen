@@ -32,10 +32,6 @@
 			"mirror": "Mirror horizontally"
 		}
 	},
-	"units": {
-		"pixelsPerSecond": "{{value}} px/s",
-		"pixels": "{{value}} px"
-	},
 	"audio": {
 		"enableSystemAudio": "Enable system audio",
 		"disableSystemAudio": "Disable system audio",
