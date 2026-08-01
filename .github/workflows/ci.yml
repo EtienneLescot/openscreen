@@ -235,9 +235,15 @@ jobs:
       - name: Resolve the toolchain paths
         run: |
           echo "FFMPEG_DIR=$GITHUB_WORKSPACE/crates/thirdparty/ffmpeg-linux64-lgpl-shared" >> "$GITHUB_ENV"
-          libclang=$(find /usr/lib/llvm-* -name 'libclang.so' | head -1)
+          # `sort -V | tail -1` et pas `find | head -1` : l'image du runner embarque
+          # plusieurs LLVM, et l'ordre de parcours du systeme de fichiers n'est pas
+          # trie -- on pouvait donc tomber sur une version differente de celle
+          # qu'apt vient d'installer. Les headers built-in de clang etant lies a la
+          # version de libclang, le symptome aurait ete `stddef.h file not found`,
+          # qui ne designe pas sa cause. On prend la plus recente, deterministe.
+          libclang=$(ls -1 /usr/lib/llvm-*/lib/libclang.so 2>/dev/null | sort -V | tail -1)
           # Echouer ici plutot que de laisser bindgen partir sur le chemin Windows
-          # et rendre une erreur qui ne designe pas la cause.
+          # et rendre une erreur qui ne designe pas la cause non plus.
           test -n "$libclang" || { echo "libclang introuvable apres l'installation"; exit 1; }
           echo "LIBCLANG_PATH=$(dirname "$libclang")" >> "$GITHUB_ENV"
       - name: cargo test (compositor)
