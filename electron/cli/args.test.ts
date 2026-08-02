@@ -96,6 +96,10 @@ describe("parseCliArgs", () => {
 		expect(parse(["export", "a.openscreen", "--audio", "v.mp3", "--format", "gif"])).toMatchObject({
 			kind: "error",
 		});
+		// gif inferred from --out, with no explicit --format
+		expect(parse(["export", "a.openscreen", "--audio", "v.mp3", "-o", "out.gif"])).toMatchObject({
+			kind: "error",
+		});
 		expect(parse(["export", "a.openscreen", "--audio-offset", "-1"])).toMatchObject({
 			kind: "error",
 		});

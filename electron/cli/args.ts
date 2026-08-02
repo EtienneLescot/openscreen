@@ -260,9 +260,6 @@ function parseExport(args: string[], cwd: string): CliCommand {
 	}
 
 	if (!request.projectPath) throw new Error("export requires a <project.openscreen> path");
-	if (request.audioPath && request.format === "gif") {
-		throw new Error("--audio is only supported for MP4 exports");
-	}
 	if (request.outPath) {
 		const ext = path.extname(request.outPath).toLowerCase();
 		if (ext !== ".mp4" && ext !== ".gif") {
@@ -273,6 +270,10 @@ function parseExport(args: string[], cwd: string): CliCommand {
 			throw new Error(`--format ${request.format} conflicts with --out extension ${ext}`);
 		}
 		request.format = extFormat;
+	}
+	// After --out resolves the format, so `--audio … -o out.gif` is caught too.
+	if (request.audioPath && request.format === "gif") {
+		throw new Error("--audio is only supported for MP4 exports");
 	}
 	return request;
 }

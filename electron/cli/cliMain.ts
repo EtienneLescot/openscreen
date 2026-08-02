@@ -250,7 +250,13 @@ async function runPackCommand(projectPath: string, outDir: string, json: boolean
 
 	const copied: string[] = [];
 	const copyIn = async (sourcePath: string): Promise<string> => {
-		const destination = path.join(outDir, path.basename(sourcePath));
+		const ext = path.extname(sourcePath);
+		const stem = path.basename(sourcePath, ext);
+		let destination = path.join(outDir, stem + ext);
+		// Screen and webcam can share a basename across directories; don't overwrite.
+		for (let n = 1; copied.includes(destination); n++) {
+			destination = path.join(outDir, `${stem}-${n}${ext}`);
+		}
 		if (path.resolve(sourcePath) !== path.resolve(destination)) {
 			await fs.copyFile(sourcePath, destination);
 		}
@@ -369,12 +375,12 @@ async function runInfoCommand(projectPath: string, json: boolean): Promise<numbe
 
 export function runCli(command: CliCommand): void {
 	if (command.kind === "help") {
-		process.stdout.write(CLI_USAGE);
+		safeWrite(process.stdout, CLI_USAGE);
 		app.exit(0);
 		return;
 	}
 	if (command.kind === "error") {
-		process.stderr.write(`Error: ${command.message}\n\n${CLI_USAGE}`);
+		safeWrite(process.stderr, `Error: ${command.message}\n\n${CLI_USAGE}`);
 		app.exit(2);
 		return;
 	}
