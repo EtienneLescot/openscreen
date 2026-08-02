@@ -23,24 +23,40 @@ use crate::scene::Scene;
 use anyhow::Result;
 use std::collections::HashMap;
 
-/// Avance un décodeur jusqu'au premier pts dans le référentiel écran qui atteint la cible.
-/// `timeline_offset_sec` remet les pts webcam dans ce référentiel (`webcam + offset = screen`) :
-/// chaque source garde ainsi sa cadence propre au lieu d'être consommée 1:1 avec l'autre.
+/// Avance un décodeur vers `target_source_time`, sémantique de "hold" : à l'instant t on
+/// affiche la DERNIÈRE frame dont le pts est ≤ t, jamais une frame dont le pts est encore à
+/// venir. `timeline_offset_sec` remet les pts webcam dans le référentiel écran
+/// (`webcam + offset = screen`) : chaque source garde ainsi sa cadence propre au lieu
+/// d'être consommée 1:1 avec l'autre.
+///
+/// BUG corrigé : l'ancienne version avançait tant que `cur_time_sec() < target`, un pas de
+/// `next()` à la fois, et s'arrêtait dès que la frame COURANTE dépassait la cible — mais
+/// `next()` saute à la prochaine frame RÉELLEMENT capturée, qui peut être très en avance
+/// sur `target` quand la source a un trou (ex. ScreenCaptureKit qui ne livre rien tant que
+/// l'écran ne change pas). Un seul `next()` pouvait alors faire passer le décodeur d'un pts
+/// proche de la cible à un pts bien après elle, et la condition d'arrêt considérait ça comme
+/// "atteint" — la frame FUTURE se retrouvait affichée bien avant son heure. Ici, `next()`
+/// n'est plus appelé à l'aveugle : on regarde d'abord le pts de la frame suivante
+/// (`peek_next_time_sec`, décodée dans un buffer séparé) et on ne l'adopte
+/// (`commit_peek`) que si elle est réellement due ; sinon on continue de tenir la frame
+/// courante, aussi longtemps qu'il le faut.
 pub(crate) unsafe fn advance_decoder_to(
     decoder: &mut Decoder,
     target_source_time: f64,
     timeline_offset_sec: f64,
 ) -> Result<bool> {
+    if decoder.cur_frame().is_null() {
+        return Ok(false);
+    }
     loop {
-        if decoder.cur_frame().is_null() {
-            return Ok(false);
+        let next_time = match decoder.peek_next_time_sec()? {
+            Some(t) => t,
+            None => return Ok(true), // EOF : plus rien à décoder, on tient la dernière frame connue.
+        };
+        if next_time + timeline_offset_sec > target_source_time {
+            return Ok(true); // la frame suivante n'est pas encore due : hold sur la courante.
         }
-        if decoder.cur_time_sec() + timeline_offset_sec >= target_source_time {
-            return Ok(true);
-        }
-        if decoder.next()?.is_null() {
-            return Ok(false);
-        }
+        decoder.commit_peek()?;
     }
 }
 
