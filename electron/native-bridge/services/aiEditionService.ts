@@ -34,7 +34,16 @@ import { PROVIDER_DEFINITIONS } from "../../ai-edition/provider-registry";
 
 export interface AiEditionServiceOptions {
 	documents: DocumentService;
-	llmConfig: LlmConfigStore;
+	/**
+	 * A factory, not an instance: building `LlmConfigStore` does two sync
+	 * readFileSync plus a `safeStorage` decrypt, and on macOS that decrypt is
+	 * backed by a Keychain item — so resolving it while wiring the bridge made
+	 * every app launch prompt for Keychain access, including for users who never
+	 * open the AI layer. The caller memoises, so this still yields one instance.
+	 * Nothing here may call it at construction time; every use sits behind a
+	 * method the renderer has to invoke first.
+	 */
+	llmConfig: () => LlmConfigStore;
 	runChat: (
 		projectId: string,
 		sessionId: string,
@@ -75,6 +84,19 @@ export interface AiEditionServiceOptions {
 
 export class AiEditionService {
 	constructor(private readonly options: AiEditionServiceOptions) {}
+
+	private llmConfigInstance: LlmConfigStore | null = null;
+
+	/**
+	 * Resolves the store on first use, then holds it — `llmGetSnapshot` alone
+	 * reads it once per provider definition. See `AiEditionServiceOptions.llmConfig`.
+	 */
+	private get llmConfig(): LlmConfigStore {
+		if (!this.llmConfigInstance) {
+			this.llmConfigInstance = this.options.llmConfig();
+		}
+		return this.llmConfigInstance;
+	}
 
 	async listProjects(): Promise<AiEditionProjectSummary[]> {
 		return this.options.documents.listProjects();
@@ -141,11 +163,11 @@ export class AiEditionService {
 	}
 
 	async llmGetSnapshot(): Promise<AiEditionLlmSnapshot> {
-		const config = this.options.llmConfig.getConfig();
+		const config = this.llmConfig.getConfig();
 		const credentialSummary: AiEditionLlmSnapshot["credentialSummary"] = [];
 		const connectedProviders: string[] = [];
 		for (const def of PROVIDER_DEFINITIONS) {
-			const resolved = this.options.llmConfig.getCredential(def.id, def.envKeys);
+			const resolved = this.llmConfig.getCredential(def.id, def.envKeys);
 			const connected = Boolean(resolved);
 			if (connected) connectedProviders.push(def.id);
 			credentialSummary.push({
@@ -169,7 +191,7 @@ export class AiEditionService {
 
 	async llmSetConfig(config: AiEditionLlmConfig): Promise<AiEditionDocumentResult> {
 		try {
-			await this.options.llmConfig.setConfig(config);
+			await this.llmConfig.setConfig(config);
 			return { success: true };
 		} catch (error) {
 			return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -179,7 +201,7 @@ export class AiEditionService {
 	async llmSetApiKey(providerId: string, apiKey: string): Promise<AiEditionDocumentResult> {
 		try {
 			const entry: LlmCredential = { kind: "api-key", apiKey };
-			await this.options.llmConfig.setCredential(providerId, entry);
+			await this.llmConfig.setCredential(providerId, entry);
 			return { success: true };
 		} catch (error) {
 			return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -188,7 +210,7 @@ export class AiEditionService {
 
 	async llmRemoveApiKey(providerId: string): Promise<AiEditionDocumentResult> {
 		try {
-			await this.options.llmConfig.removeCredential(providerId);
+			await this.llmConfig.removeCredential(providerId);
 			return { success: true };
 		} catch (error) {
 			return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -196,10 +218,10 @@ export class AiEditionService {
 	}
 
 	async llmDisconnect(providerId: string): Promise<AiEditionLlmDisconnectResult> {
-		await this.options.llmConfig.removeCredential(providerId);
-		const active = this.options.llmConfig.getConfig();
+		await this.llmConfig.removeCredential(providerId);
+		const active = this.llmConfig.getConfig();
 		if (active?.provider === providerId) {
-			await this.options.llmConfig.setConfig({
+			await this.llmConfig.setConfig({
 				provider: "",
 				model: "",
 			});
@@ -211,9 +233,9 @@ export class AiEditionService {
 		try {
 			const def = PROVIDER_DEFINITIONS.find((d) => d.id === providerId);
 			if (!def) return { models: [], error: `Unknown provider ${providerId}` };
-			const cred = this.options.llmConfig.getCredential(providerId, def.envKeys);
+			const cred = this.llmConfig.getCredential(providerId, def.envKeys);
 			if (!cred) return { models: [], error: "Not connected" };
-			const config = this.options.llmConfig.getConfig();
+			const config = this.llmConfig.getConfig();
 			const baseUrl = (config?.provider === providerId ? config.baseUrl : undefined) ?? def.baseUrl;
 
 			if (providerId === "anthropic") {
@@ -331,7 +353,7 @@ export class AiEditionService {
 		targetLanguage: string;
 		sourceLanguage?: string;
 	}): Promise<AiEditionCaptionTranslateResult> {
-		const config = this.options.llmConfig.getConfig();
+		const config = this.llmConfig.getConfig();
 		if (!config) {
 			return {
 				success: false,
@@ -340,7 +362,7 @@ export class AiEditionService {
 			};
 		}
 		const def = PROVIDER_DEFINITIONS.find((d) => d.id === config.provider);
-		const credential = def ? this.options.llmConfig.getCredential(def.id, def.envKeys) : null;
+		const credential = def ? this.llmConfig.getCredential(def.id, def.envKeys) : null;
 		const result = await translateCaptionSegments({
 			segments: input.segments,
 			targetLanguage: input.targetLanguage,

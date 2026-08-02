@@ -255,7 +255,8 @@
 		"silence": "[khoảng lặng {{duration}} giây]",
 		"restoreSilence": "Khôi phục khoảng lặng ({{duration}} giây)",
 		"trimSilence": "Cắt khoảng lặng ({{duration}} giây)",
-		"restoreWord": "Khôi phục \"{{word}}\""
+		"restoreWord": "Khôi phục \"{{word}}\"",
+		"noAudio": "Media này không có bản âm thanh"
 	},
 	"captions": {
 		"show": "Hiện phụ đề",

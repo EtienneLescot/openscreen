@@ -24,6 +24,12 @@
 //!     portrait : c'est la mesure du détail regagné, aujourd'hui perdu parce
 //!     que le canvas plafonne à 1080 lignes et que `blit_resized` agrandit.
 
+// Pas sur Linux : `Compositor::readback_resized` n'existe que dans
+// `compositor_windows` et `compositor_macos`. Meme raison que dans
+// `export_timing.rs` — les fichiers de `tests/` sont compiles sur toute
+// plateforme, et sans cette porte le crate ne compile pas sous Linux.
+#![cfg(not(target_os = "linux"))]
+
 use openscreen_compositor::compositor::Compositor;
 use openscreen_compositor::d3d::Gpu;
 use openscreen_compositor::live::Player;

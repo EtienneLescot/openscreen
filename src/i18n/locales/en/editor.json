@@ -150,7 +150,10 @@
 		"generationFailedHint": "Generation failed — pick a language and regenerate.",
 		"noPreviewAvailable": "No preview available",
 		"restart": "Restart",
-		"detectedLanguage": "Detected language: {{language}}"
+		"detectedLanguage": "Detected language: {{language}}",
+		"noAudioTrack": "No audio track",
+		"noAudioTrackHint": "This media has no audio track — there is nothing to transcribe.",
+		"noSpeechDetected": "No speech detected"
 	},
 	"exportDialog": {
 		"title": "Export",

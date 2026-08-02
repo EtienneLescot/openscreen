@@ -15,6 +15,8 @@ export type LatestRelease = {
 	tag: string;
 	/** Pre-formatted at build time, e.g. "19 July 2026". Empty if unknown. */
 	published: string;
+	/** The same date as YYYY-MM-DD, for structured data. Empty if unknown. */
+	publishedIso: string;
 	assets: ReleaseAsset[];
 } | null;
 

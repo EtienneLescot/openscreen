@@ -11,8 +11,7 @@
 //!
 //! Needs a D3D11 GPU and the generated media, so it is opt-in: set
 //! OPENSCREEN_TEST_MEDIA to a directory holding `screen_colors.mp4` and
-//! `webcam_gray.mp4`. Without it every test here skips (no CI builds this
-//! crate today — see the Rust-CI gap noted in the PR).
+//! `webcam_gray.mp4`. Without it every test here skips.
 //!
 //! Regenerate the media with the vendored ffmpeg:
 //!   for c in red green blue white; do ffmpeg -f lavfi \
@@ -21,6 +20,16 @@
 //!   ffmpeg -f concat -safe 0 -i concat.txt -c copy screen_colors.mp4
 //!   ffmpeg -f lavfi -i "color=c=gray:size=320x240:duration=4:rate=60" \
 //!     -c:v libopenh264 -g 60 -pix_fmt yuv420p webcam_gray.mp4
+
+// Pas sur Linux : `pipeline::probe_frame_count` n'existe que dans
+// `pipeline_windows` et `pipeline_macos`. Les fichiers de `tests/` sont compiles
+// sur TOUTE plateforme, donc sans cette porte ce fichier casse la compilation du
+// crate sous Linux — ce que personne ne voyait faute de job Rust Linux en CI (il
+// en existe un depuis, d'ou la decouverte). Meme motif que `compose_linux.rs` et
+// `warp_device_cannot_decode.rs`, en negatif : ici c'est Linux qu'on exclut, pas
+// les autres qu'on cible, pour ne pas retirer ce fichier du job macOS qui le
+// compile aujourd'hui.
+#![cfg(not(target_os = "linux"))]
 
 use openscreen_compositor::compositor::Compositor;
 use openscreen_compositor::config::Cfg;

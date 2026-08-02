@@ -3589,11 +3589,25 @@ export function registerIpcHandlers(
 	// project through a per-INSTANCE queue (see its writeProject comment — this
 	// race destroyed two real project files), so a second instance means a second
 	// queue racing for the same path: temp+rename still keeps the file valid, but
-	// a save can land under a concurrent one and be silently lost. LlmConfigStore
-	// is hoisted for a duller reason: its constructor does two sync readFileSync
-	// plus a safeStorage decrypt, and it was running on every chat message.
+	// a save can land under a concurrent one and be silently lost.
 	const aiEditionDocuments = new DocumentService(path.join(app.getPath("userData"), "projects"));
-	const aiEditionLlmConfig = new LlmConfigStore(app.getPath("userData"));
+
+	// LlmConfigStore is single-instance for a duller reason — its constructor does
+	// two sync readFileSync plus a safeStorage decrypt, and it was running on every
+	// chat message. But it must also stay UNBUILT until something actually needs it:
+	// on macOS that decrypt is backed by a Keychain item, so constructing it at
+	// startup made every launch prompt for Keychain access, including for users who
+	// never open the AI layer at all. (The prompt repeats because an unsigned or
+	// ad-hoc-signed build has no stable code identity for the item's ACL to trust —
+	// signing is the other half of that fix, and is not this function's business.)
+	// Memoised, so the "one instance" guarantee above still holds.
+	let aiEditionLlmConfigInstance: LlmConfigStore | null = null;
+	const getAiEditionLlmConfig = (): LlmConfigStore => {
+		if (!aiEditionLlmConfigInstance) {
+			aiEditionLlmConfigInstance = new LlmConfigStore(app.getPath("userData"));
+		}
+		return aiEditionLlmConfigInstance;
+	};
 
 	registerNativeBridgeHandlers({
 		getPlatform: () => process.platform,
@@ -3629,9 +3643,9 @@ export function registerIpcHandlers(
 			}
 		},
 		getAiEditionDocuments: () => aiEditionDocuments,
-		getAiEditionLlmConfig: () => aiEditionLlmConfig,
+		getAiEditionLlmConfig,
 		runAiEditionChat: (projectId, sessionId, message, document, sink) =>
-			runChat(projectId, sessionId, message, aiEditionLlmConfig, document, sink, {
+			runChat(projectId, sessionId, message, getAiEditionLlmConfig(), document, sink, {
 				cursor: agentCursorTelemetryReader,
 			}),
 		undoAiEditionToolBatch: (_projectId, _sessionId) => ({
@@ -3641,7 +3655,7 @@ export function registerIpcHandlers(
 		rewindToMessage: (projectId, sessionId, messageId) =>
 			rewindToMessage(projectId, sessionId, messageId),
 		compactNow: (projectId, sessionId) =>
-			compactSessionNow(projectId, sessionId, aiEditionLlmConfig),
+			compactSessionNow(projectId, sessionId, getAiEditionLlmConfig()),
 		getContextUsage: getSessionContextUsage,
 		listAiEditionChatSessions: (projectId) => listSessions(projectId),
 		createAiEditionChatSession: (projectId, title) => createSession(projectId, title),

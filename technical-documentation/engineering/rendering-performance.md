@@ -18,10 +18,12 @@ On the reference machine, same fixture, sustained regime:
 | path | fps @ 1080p60, full effects | status |
 |---|---:|---|
 | **D3D11 (`crates/compositor/`)** | **~126** (median 125.9, spread 11.8 %) | **shipped** |
-| WebCodecs in Chromium | 79 | removed — was the previous export path |
+| WebCodecs in Chromium | 79 | removed — the web pipeline *after* the [Canvas2D rebuild](#the-fix-and-what-it-bought); never released |
 | Rust + wgpu / Vulkan | 48–68 | [rejected](#rust--wgpu-native-poc-poc-native), driver-blocked |
 
 That fps envelopes **the whole run** — demux, decode, composite, encode and mux — because the measured window is one `Instant::now()` before and one after everything. Nothing inside can falsify the clock.
+
+> **This table is not the user-facing delta, and reading it as one understates the change by about an order of magnitude.** The 79 fps row is the web pipeline *after* the [Canvas2D compositor rebuild](#the-fix-and-what-it-bought) — an intermediate state of the 1.8.0 cycle that no release ever shipped. The last **released** web pipeline is v1.7.0's, which is the `webcodecs-legacy` arm: [~8 fps at M1](#m1--the-starting-pipeline), 9.8 fps under [Gate G0](#gate-g0--passed-2026-07-17). The tell is in the tree, not in the tags: `src/lib/exporter/frameRenderer.ts` carries no `shadowCache` at all in `v1.7.0` (1184 lines), and carries it throughout by `v1.8.0-rc.4` (1552 lines). So 1.8.0 compounds two changes against what a user actually had: the rebuild (~2×, byte-identical output) and then the native engine that replaced it. Quote the magnitude, never a precise multiple across these runs — [this machine does not support that arithmetic](#bench-methodology-of-the-deleted-harness).
 
 The effect set is not a reduced one: animated layout, zooms, NV12→RGB BT.709, rounded corners and masks (SDF), drop shadows (SDF penumbra), background blur (dual-Kawase), per-velocity motion blur, custom cursor with click bounce.
 

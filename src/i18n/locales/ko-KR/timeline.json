@@ -82,6 +82,11 @@
 		"addedAutoZoom": "자동 줌 {{count}}개가 추가되었습니다",
 		"addedAutoZoomPlural": "자동 줌 {{count}}개가 추가되었습니다",
 		"autoZoomFailed": "자동 줌 실패",
-		"aiEnhanceRequested": "AI 에이전트에 빈 구간 컷을 요청했습니다"
+		"aiEnhanceRequested": "AI 에이전트에 빈 구간 컷을 요청했습니다",
+		"smartCutsWaiting": "받아쓰는 중… 곧 사용할 수 있습니다",
+		"smartCutsNeedsTranscript": "받아쓰기가 필요합니다",
+		"smartCutsNoAudio": "이 미디어에는 오디오가 없습니다",
+		"smartCutsNoSpeech": "음성이 감지되지 않음",
+		"smartCutsFailed": "받아쓰기에 실패했습니다 — 미디어에서 다시 시도하세요"
 	}
 }

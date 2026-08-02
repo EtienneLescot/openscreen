@@ -255,7 +255,8 @@
 		"silence": "[صمت {{duration}} ث]",
 		"restoreSilence": "استعادة الصمت ({{duration}} ث)",
 		"trimSilence": "قص الصمت ({{duration}} ث)",
-		"restoreWord": "استعادة \"{{word}}\""
+		"restoreWord": "استعادة \"{{word}}\"",
+		"noAudio": "لا يحتوي هذا الملف على مسار صوتي"
 	},
 	"captions": {
 		"show": "إظهار الترجمة",

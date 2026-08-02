@@ -73,7 +73,7 @@ function renderPane(onSeek: (sec: number) => void = vi.fn()) {
 				transcripts={[TRANSCRIPT]}
 				assets={[ASSET]}
 				trimRanges={[]}
-				busy={false}
+				busyAssetIds={[]}
 				onSeek={onSeek}
 				onAddTrimRange={vi.fn()}
 				onRemoveTrimRange={vi.fn()}

@@ -118,6 +118,53 @@
       }
     ]
   },
+  // Le compositeur natif rend via wgpu/Vulkan (crates/compositor/src/d3d_linux.rs).
+  // Sans AUCUN ICD Vulkan installé, `request_adapter` ne rend rien : pas de pilote
+  // GPU, et pas non plus le repli logiciel lavapipe — donc `probe()` répond `"none"`
+  // et l'aperçu s'ouvre sur « Aperçu indisponible sur cette machine ». Le paquet
+  // Mesa est ce qui garantit qu'au minimum le rastériseur logiciel existe.
+  //
+  // `depends` REMPLACE la liste par défaut d'electron-builder au lieu de s'y ajouter
+  // (app-builder-lib, FpmTarget.getDefaultDepends) : les entrées reprises ci-dessous
+  // sont donc ce défaut, verbatim, plus la nôtre en dernier. En retirer une casse le
+  // paquet silencieusement.
+  //
+  // L'AppImage n'a pas de mécanisme de dépendances et reste donc exposée : c'est
+  // pour elle que `d3d_linux::diagnose` nomme le paquet à installer.
+  "deb": {
+    "depends": [
+      "libgtk-3-0",
+      "libnotify4",
+      "libnss3",
+      "libxss1",
+      "libxtst6",
+      "xdg-utils",
+      "libatspi2.0-0",
+      "libuuid1",
+      "libsecret-1-0",
+      "mesa-vulkan-drivers"
+    ]
+  },
+  "pacman": {
+    // `vulkan-swrast` est le lavapipe d'Arch ; il tire `vulkan-icd-loader` avec lui.
+    "depends": [
+      "c-ares",
+      "ffmpeg",
+      "gtk3",
+      "http-parser",
+      "libevent",
+      "libvpx",
+      "libxslt",
+      "libxss",
+      "minizip",
+      "nss",
+      "re2",
+      "snappy",
+      "libnotify",
+      "libappindicator-gtk3",
+      "vulkan-swrast"
+    ]
+  },
   "win": {
     "target": [
       "nsis"

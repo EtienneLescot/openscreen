@@ -873,8 +873,13 @@
 	cursor: pointer;
 	text-align: left;
 }
-.recMenuRow:hover {
+.recMenuRow:hover:not(:disabled) {
 	background: var(--surface-2);
+}
+/* A gated row (e.g. Smart cuts before its transcript exists) still shows its
+   reason line, so it must not also light up as if it were clickable. */
+.recMenuRow:disabled {
+	cursor: not-allowed;
 }
 .recMenuRow.active {
 	background: var(--accent-soft);

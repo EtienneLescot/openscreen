@@ -255,7 +255,8 @@
 		"silence": "[無音 {{duration}} 秒]",
 		"restoreSilence": "無音を元に戻す（{{duration}} 秒）",
 		"trimSilence": "無音をトリム（{{duration}} 秒）",
-		"restoreWord": "「{{word}}」を元に戻す"
+		"restoreWord": "「{{word}}」を元に戻す",
+		"noAudio": "このメディアには音声トラックがありません"
 	},
 	"captions": {
 		"show": "字幕を表示",

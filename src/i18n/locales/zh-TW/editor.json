@@ -150,7 +150,10 @@
 		"generationFailedHint": "產生失敗 — 選擇語言並重新產生。",
 		"noPreviewAvailable": "無法預覽",
 		"restart": "重新開始",
-		"detectedLanguage": "偵測到的語言：{{language}}"
+		"detectedLanguage": "偵測到的語言：{{language}}",
+		"noAudioTrack": "無音訊軌道",
+		"noAudioTrackHint": "此媒體沒有音訊軌道，沒有可轉錄的內容。",
+		"noSpeechDetected": "未偵測到語音"
 	},
 	"exportDialog": {
 		"title": "匯出",

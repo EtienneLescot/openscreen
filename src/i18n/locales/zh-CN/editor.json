@@ -150,7 +150,10 @@
 		"generationFailedHint": "生成失败 — 选择语言并重新生成。",
 		"noPreviewAvailable": "无法预览",
 		"restart": "重新开始",
-		"detectedLanguage": "检测到的语言：{{language}}"
+		"detectedLanguage": "检测到的语言：{{language}}",
+		"noAudioTrack": "无音频轨道",
+		"noAudioTrackHint": "此媒体没有音频轨道，没有可转录的内容。",
+		"noSpeechDetected": "未检测到语音"
 	},
 	"exportDialog": {
 		"title": "导出",

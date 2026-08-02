@@ -59,7 +59,18 @@ export class SttManager {
 		if (options.statusSink) this.statusSink = options.statusSink;
 		if (options.modelsBaseDir) this.modelsBaseDir = options.modelsBaseDir;
 		if (!this.initPromise) {
-			this.initPromise = this.prepare();
+			// A REJECTED init must not be cached. `prepare()` downloads a 253 MB
+			// model on first run, and caching its rejection meant one dropped
+			// connection poisoned the whole app session: every later transcription
+			// — including the retry the UI offers, and every remaining asset in the
+			// auto-transcription queue — awaited the same stale rejection and failed
+			// in milliseconds, with no way back short of quitting the app.
+			// Reconnecting the network changed nothing. Clearing the slot on failure
+			// makes the next attempt a real attempt.
+			this.initPromise = this.prepare().catch((error) => {
+				this.initPromise = null;
+				throw error;
+			});
 		}
 		return this.initPromise;
 	}
