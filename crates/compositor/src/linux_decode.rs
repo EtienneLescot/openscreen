@@ -58,6 +58,11 @@ pub struct SwDecoder {
     frame: *mut AVFrame,
     sent_eof: bool,
     cur_pts: Option<i64>,
+    /// Buffer de lookahead pour `peek_next_time_sec` : symétrique de
+    /// `pipeline_macos::Decoder::peek_frame` — cf. là-bas pour la justification.
+    peek_frame: *mut AVFrame,
+    /// `true` si `peek_frame` porte une frame décodée en attente de `commit_peek`.
+    has_peek: bool,
 }
 
 /// Libère toutes les ressources ffmpeg. `Drop` ne peut pas faillir ; on
@@ -77,6 +82,9 @@ impl Drop for SwDecoder {
             }
             if !self.pkt.is_null() {
                 av_packet_free(&mut self.pkt);
+            }
+            if !self.peek_frame.is_null() {
+                av_frame_free(&mut self.peek_frame);
             }
         }
     }
@@ -177,7 +185,8 @@ impl SwDecoder {
         };
         let pkt = av_packet_alloc();
         let frame = av_frame_alloc();
-        if pkt.is_null() || frame.is_null() {
+        let peek_frame = av_frame_alloc();
+        if pkt.is_null() || frame.is_null() || peek_frame.is_null() {
             avcodec_free_context(&mut dec);
             avformat_close_input(&mut fmt);
             bail!("av_packet_alloc/av_frame_alloc (pompage sequentiel)");
@@ -192,6 +201,8 @@ impl SwDecoder {
             frame,
             sent_eof: false,
             cur_pts: None,
+            peek_frame,
+            has_peek: false,
         })
     }
 
@@ -201,21 +212,33 @@ impl SwDecoder {
     /// seek PAS : le decodeur garde son etat, donc une lecture sequentielle coute
     /// UN packet par frame au lieu d'un re-parcours de demi-GOP.
     pub unsafe fn next_frame(&mut self) -> Result<*mut AVFrame> {
+        if self.has_peek {
+            return self.commit_peek();
+        }
+        if !self.receive_into(self.frame)? {
+            return Ok(ptr::null_mut());
+        }
+        let pts = (*self.frame).best_effort_timestamp;
+        self.cur_pts = if pts == i64::MIN { None } else { Some(pts) };
+        Ok(self.frame)
+    }
+
+    /// Décode dans `into` (buffer courant ou de lookahead) jusqu'à obtenir une frame ou
+    /// l'EOF — cf. `pipeline_macos::Decoder::receive_into` pour la justification.
+    unsafe fn receive_into(&mut self, into: *mut AVFrame) -> Result<bool> {
         loop {
-            let r = avcodec_receive_frame(self.dec, self.frame);
+            let r = avcodec_receive_frame(self.dec, into);
             if r == 0 {
-                let pts = (*self.frame).best_effort_timestamp;
-                self.cur_pts = if pts == i64::MIN { None } else { Some(pts) };
-                return Ok(self.frame);
+                return Ok(true);
             }
             if r == AVERROR_EOF {
-                return Ok(ptr::null_mut());
+                return Ok(false);
             }
             if r != AVERROR_EAGAIN {
                 bail!("avcodec_receive_frame: {r}");
             }
             if self.sent_eof {
-                return Ok(ptr::null_mut());
+                return Ok(false);
             }
             let rr = av_read_frame(self.fmt, self.pkt);
             if rr < 0 {
@@ -238,6 +261,34 @@ impl SwDecoder {
                 av_packet_unref(self.pkt);
             }
         }
+    }
+
+    /// Décode la prochaine frame dans le buffer de lookahead et renvoie son temps (s) —
+    /// `None` à EOF. Cf. `pipeline_macos::Decoder::peek_next_time_sec`.
+    pub unsafe fn peek_next_time_sec(&mut self) -> Result<Option<f64>> {
+        if !self.has_peek {
+            if !self.receive_into(self.peek_frame)? {
+                return Ok(None);
+            }
+            self.has_peek = true;
+        }
+        let pts = (*self.peek_frame).best_effort_timestamp;
+        Ok(Some(if pts == i64::MIN {
+            0.0
+        } else {
+            pts as f64 * self.stream_timebase
+        }))
+    }
+
+    /// Promeut la frame de lookahead au rang de frame courante. Cf.
+    /// `pipeline_macos::Decoder::commit_peek`.
+    pub unsafe fn commit_peek(&mut self) -> Result<*mut AVFrame> {
+        debug_assert!(self.has_peek, "commit_peek sans peek_next_time_sec préalable");
+        std::mem::swap(&mut self.frame, &mut self.peek_frame);
+        self.has_peek = false;
+        let pts = (*self.frame).best_effort_timestamp;
+        self.cur_pts = if pts == i64::MIN { None } else { Some(pts) };
+        Ok(self.frame)
     }
 
     /// Temps source (secondes) de la derniere frame rendue par `next_frame` /
@@ -263,6 +314,8 @@ impl SwDecoder {
     /// `AVERROR_INVALIDDATA` plutôt que de paniquer : la prochaine itération
     /// lira le packet complet suivant.
     pub unsafe fn decode_at(&mut self, frame_idx: u32) -> Result<*mut AVFrame> {
+        // Tout seek invalide un éventuel peek en attente — cf. pipeline_macos::Decoder::seek_to.
+        self.has_peek = false;
         let fps = self.fps;
         let target_ts = (frame_idx as f64 / fps) * 1_000_000.0; // AV_TIME_BASE = µs
         // `AVSEEK_FLAG_BACKWARD` vaut 1, pas 4 — 4 est `AVSEEK_FLAG_ANY`. La constante

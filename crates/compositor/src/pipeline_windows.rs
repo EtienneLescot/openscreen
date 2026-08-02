@@ -486,6 +486,11 @@ pub(crate) struct Decoder {
     /// sous le même contrat que D3D11VA (voir `cpu_frames`). `None` en matériel — le
     /// décodeur rend alors directement la texture du pool D3D11VA, sans copie.
     cpu: Option<CpuFrames>,
+    /// Buffer de lookahead pour `peek_next_time_sec` : symétrique de
+    /// `pipeline_macos::Decoder::peek_frame`. Cf. là-bas pour la justification.
+    peek_frame: *mut AVFrame,
+    /// `true` si `peek_frame` porte une frame décodée en attente de `commit_peek`.
+    has_peek: bool,
 }
 
 // SAFETY: `Decoder` only owns FFI pointers into FFmpeg's own heap-allocated state, which
@@ -555,6 +560,8 @@ impl Decoder {
             sent_eof: false,
             cur_pts: None,
             cpu,
+            peek_frame: av_frame_alloc(),
+            has_peek: false,
         })
     }
 
@@ -592,6 +599,8 @@ impl Decoder {
     /// perf multiclip — un seul seek par frontière de clip, décodage séquentiel ensuite,
     /// donc le débit par frame ne change pas. Renvoie la frame (ou null à EOF).
     pub(crate) unsafe fn seek_to(&mut self, seconds: f64) -> Result<*mut AVFrame> {
+        // Tout seek invalide un éventuel peek en attente — cf. pipeline_macos::Decoder::seek_to.
+        self.has_peek = false;
         let tb_sec = self.tb_sec();
 
         // Chemin rapide. Le seek complet ci-dessous jette TOUT l'état du décodeur et repart
@@ -711,24 +720,36 @@ impl Decoder {
 
     /// Rend la prochaine frame (valide jusqu'au prochain appel), ou null à EOF.
     pub(crate) unsafe fn next(&mut self) -> Result<*mut AVFrame> {
+        if self.has_peek {
+            return self.commit_peek();
+        }
+        if !self.receive_into(self.frame)? {
+            return Ok(ptr::null_mut());
+        }
+        let pts = (*self.frame).best_effort_timestamp;
+        self.cur_pts = if pts == i64::MIN { None } else { Some(pts) };
+        match &mut self.cpu {
+            Some(cpu) => cpu.present(self.frame),
+            None => Ok(self.frame),
+        }
+    }
+
+    /// Décode dans `into` (buffer courant ou de lookahead) jusqu'à obtenir une frame ou
+    /// l'EOF — cf. `pipeline_macos::Decoder::receive_into` pour la justification.
+    unsafe fn receive_into(&mut self, into: *mut AVFrame) -> Result<bool> {
         loop {
-            let r = avcodec_receive_frame(self.dctx, self.frame);
+            let r = avcodec_receive_frame(self.dctx, into);
             if r == 0 {
-                let pts = (*self.frame).best_effort_timestamp;
-                self.cur_pts = if pts == i64::MIN { None } else { Some(pts) };
-                return match &mut self.cpu {
-                    Some(cpu) => cpu.present(self.frame),
-                    None => Ok(self.frame),
-                };
+                return Ok(true);
             }
             if r == AVERROR_EOF {
-                return Ok(ptr::null_mut());
+                return Ok(false);
             }
             if r != AVERROR_EAGAIN {
                 averr(r, "receive_frame")?;
             }
             if self.sent_eof {
-                return Ok(ptr::null_mut());
+                return Ok(false);
             }
             let rr = av_read_frame(self.fmt, self.pkt);
             if rr == AVERROR_EOF {
@@ -743,12 +764,45 @@ impl Decoder {
             }
         }
     }
+
+    /// Décode la prochaine frame dans le buffer de lookahead et renvoie son temps (s) —
+    /// `None` à EOF. Cf. `pipeline_macos::Decoder::peek_next_time_sec`.
+    pub(crate) unsafe fn peek_next_time_sec(&mut self) -> Result<Option<f64>> {
+        if !self.has_peek {
+            if !self.receive_into(self.peek_frame)? {
+                return Ok(None);
+            }
+            self.has_peek = true;
+        }
+        let pts = (*self.peek_frame).best_effort_timestamp;
+        let tb_sec = self.tb_sec();
+        Ok(Some(if pts == i64::MIN || tb_sec <= 0.0 {
+            0.0
+        } else {
+            pts as f64 * tb_sec
+        }))
+    }
+
+    /// Promeut la frame de lookahead au rang de frame courante. Cf.
+    /// `pipeline_macos::Decoder::commit_peek`.
+    pub(crate) unsafe fn commit_peek(&mut self) -> Result<*mut AVFrame> {
+        debug_assert!(self.has_peek, "commit_peek sans peek_next_time_sec préalable");
+        std::mem::swap(&mut self.frame, &mut self.peek_frame);
+        self.has_peek = false;
+        let pts = (*self.frame).best_effort_timestamp;
+        self.cur_pts = if pts == i64::MIN { None } else { Some(pts) };
+        match &mut self.cpu {
+            Some(cpu) => cpu.present(self.frame),
+            None => Ok(self.frame),
+        }
+    }
 }
 
 impl Drop for Decoder {
     fn drop(&mut self) {
         unsafe {
             av_frame_free(&mut self.frame);
+            av_frame_free(&mut self.peek_frame);
             av_packet_free(&mut self.pkt);
             avcodec_free_context(&mut self.dctx);
             av_buffer_unref(&mut self.hwdev);
