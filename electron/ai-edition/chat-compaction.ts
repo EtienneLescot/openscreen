@@ -93,6 +93,14 @@ export function applyCompaction(
 	return [summaryMessage, ...tail];
 }
 
+/** True only when a proposed compaction strictly reduces estimated context use. */
+export function compactionReducesHistory(
+	original: AiEditionChatMessage[],
+	compacted: AiEditionChatMessage[],
+): boolean {
+	return estimateHistoryTokens(compacted) < estimateHistoryTokens(original);
+}
+
 /** System-prompt addendum to ask the LLM to compact its own history. */
 export const COMPACTION_SYSTEM_PROMPT = [
 	"Summarize the conversation so far in 8 short bullet points and 2 short paragraphs.",

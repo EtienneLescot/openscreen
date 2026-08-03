@@ -4,6 +4,7 @@ import {
 	applyCompaction,
 	budgetSnapshot,
 	buildCompactionPrompt,
+	compactionReducesHistory,
 	estimateHistoryTokens,
 	shouldCompact,
 } from "./chat-compaction";
@@ -88,9 +89,23 @@ describe("applyCompaction", () => {
 		const out = applyCompaction(msgs, 2, "summary text", "2026-02-01T00:00:00.000Z");
 		expect(out).toHaveLength(3);
 		expect(out[0]?.content).toBe("summary text");
+		expect(out[0]?.id).toMatch(/^summary_\d+$/);
 		expect(out[1]?.id).toBe("u2");
 		expect(out.at(-1)?.id).toBe("a2");
 		expect(estimateHistoryTokens(out)).toBeLessThan(estimateHistoryTokens(msgs));
+		expect(compactionReducesHistory(msgs, out)).toBe(true);
+	});
+
+	it("rejects a summary that does not reduce estimated context use", () => {
+		const msgs = [
+			msg("user", "small", "u1"),
+			msg("assistant", "reply", "a1"),
+			msg("user", "recent", "u2"),
+			msg("assistant", "tail", "a2"),
+		];
+		const oversized = applyCompaction(msgs, 2, "x".repeat(1_000), "2026-02-01T00:00:00.000Z");
+
+		expect(compactionReducesHistory(msgs, oversized)).toBe(false);
 	});
 });
 
