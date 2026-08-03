@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	calculateEffectiveSourceDimensions,
 	calculateMp4ExportSettings,
+	wouldUpscale,
 } from "./mp4ExportSettings";
 
 describe("calculateMp4ExportSettings", () => {
@@ -106,6 +107,40 @@ describe("calculateMp4ExportSettings", () => {
 			height: 1920,
 			bitrate: 20_000_000,
 		});
+	});
+
+	it("does not call letterbox rows an upscale (1920x1032 window capture, 16:9 project)", () => {
+		const source = { width: 1920, height: 1032 };
+		const tier = (quality: "medium" | "good" | "source") =>
+			calculateMp4ExportSettings({
+				quality,
+				sourceWidth: source.width,
+				sourceHeight: source.height,
+				aspectRatioValue: 16 / 9,
+			});
+
+		// The reported bug: both tiers resolve to the exact same 1920x1080 frame, so they must
+		// carry the same badge. The old short-side test flagged only one of them.
+		expect(tier("good")).toMatchObject({ width: 1920, height: 1080 });
+		expect(tier("source")).toMatchObject({ width: 1920, height: 1080 });
+		expect(wouldUpscale(tier("good"), source)).toBe(false);
+		expect(wouldUpscale(tier("source"), source)).toBe(false);
+		expect(wouldUpscale(tier("medium"), source)).toBe(false);
+	});
+
+	it("still flags a tier that genuinely stretches the source", () => {
+		const source = { width: 1280, height: 720 };
+		expect(
+			wouldUpscale(
+				calculateMp4ExportSettings({
+					quality: "good",
+					sourceWidth: source.width,
+					sourceHeight: source.height,
+					aspectRatioValue: 16 / 9,
+				}),
+				source,
+			),
+		).toBe(true);
 	});
 
 	it("uses the cropped area as the effective source size", () => {
