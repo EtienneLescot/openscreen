@@ -140,6 +140,7 @@
 		"transcriptEmpty": "النص فارغ.",
 		"notGeneratedHint": "لم يُنشأ بعد — اختر لغة وانقر على إعادة الإنشاء.",
 		"transcribing": "جارٍ النسخ",
+		"downloadingModel": "جارٍ تنزيل نموذج الكلام",
 		"transcribingEllipsis": "جارٍ النسخ…",
 		"pendingTranscription": "بانتظار النسخ",
 		"transcriptionFailed": "فشل النسخ",
