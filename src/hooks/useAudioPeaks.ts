@@ -91,6 +91,22 @@ async function computePeaksForUrl(
 	durationSec?: number,
 ): Promise<Float32Array> {
 	const isRemoteUrl = /^(https?:|blob:|data:)/i.test(videoUrl);
+
+	// Native first. Both browser pipelines below decode the whole track in
+	// Chromium — 12s on a 32-minute recording, whichever one runs — where ffmpeg
+	// in the main process takes ~2s and caches the result on disk, so the second
+	// time it is free. Anything that stops this from working (no ffmpeg staged,
+	// an unapproved path, a clip with no audio) falls through rather than
+	// dropping the waveform.
+	if (!isRemoteUrl && durationSec && window.electronAPI?.getAudioPeaks) {
+		try {
+			const native = await window.electronAPI.getAudioPeaks(videoUrl, durationSec);
+			if (native.success && native.peaks && native.peaks.length > 0) return native.peaks;
+		} catch {
+			// Fall through to the browser pipelines.
+		}
+	}
+
 	if (!isRemoteUrl && window.electronAPI?.getReadableFileInfo) {
 		const info = await window.electronAPI.getReadableFileInfo(videoUrl);
 		const decodedBytes = (durationSec ?? 0) * DECODED_BYTES_PER_SEC;
