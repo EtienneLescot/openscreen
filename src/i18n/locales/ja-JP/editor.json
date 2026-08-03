@@ -140,6 +140,7 @@
 		"transcriptEmpty": "文字起こしは空です。",
 		"notGeneratedHint": "まだ生成されていません — 言語を選んで再生成をクリックしてください。",
 		"transcribing": "文字起こし中",
+		"downloadingModel": "音声モデルをダウンロード中",
 		"transcribingEllipsis": "文字起こし中…",
 		"pendingTranscription": "文字起こし待機中",
 		"transcriptionFailed": "文字起こしに失敗しました",
