@@ -16,6 +16,10 @@ describe("formatSec", () => {
 		expect(formatSec(Number.NaN)).toBe("0:00.0");
 		expect(formatSec(Number.POSITIVE_INFINITY)).toBe("0:00.0");
 	});
+
+	it("carries rounded seconds into the next minute", () => {
+		expect(formatSec(59.96)).toBe("1:00.0");
+	});
 });
 
 describe("formatSeconds", () => {
@@ -29,6 +33,10 @@ describe("formatSeconds", () => {
 		expect(formatSeconds(-1)).toBe("0:00.0");
 		expect(formatSeconds(Number.NaN)).toBe("0:00.0");
 	});
+
+	it("carries rounded seconds into the next hour", () => {
+		expect(formatSeconds(3599.96)).toBe("1:00:00.0");
+	});
 });
 
 describe("formatMs", () => {
@@ -36,5 +44,9 @@ describe("formatMs", () => {
 		expect(formatMs(65_400)).toBe("1:05.4");
 		expect(formatMs(-1)).toBe("0:00.0");
 		expect(formatMs(Number.NaN)).toBe("0:00.0");
+	});
+
+	it("inherits minute carry from formatSec", () => {
+		expect(formatMs(59_960)).toBe("1:00.0");
 	});
 });
