@@ -29,7 +29,7 @@ use crate::config::{self, Cfg};
 use crate::cursor::CursorTrack;
 use crate::d3d::Gpu;
 use crate::pipeline::Decoder;
-use crate::timeline_walk::NextFrameTime;
+use crate::timeline_walk::{frame_step, FrameStep, NextFrameTime};
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -370,9 +370,10 @@ impl Player {
     ///
     /// La webcam suit le MÊME principe indépendamment (son propre temps source =
     /// `screen_time - webcam_offset_sec`, pas un pas 1:1 avec l'écran) : deux pipelines de
-    /// capture indépendants n'ont pas la même cadence ni les mêmes trous. Elle boucle aussi
-    /// de façon indépendante à son propre EOF (un clip webcam plus court que l'écran ne doit
-    /// pas réinitialiser le décodeur écran).
+    /// capture indépendants n'ont pas la même cadence ni les mêmes trous. Arrivée à son
+    /// propre EOF — un clip webcam plus court que l'écran, cas normal quand la caméra
+    /// s'arrête avant la capture — elle TIENT sa dernière image et laisse l'écran
+    /// continuer seul, plutôt que de reboucler au début.
     pub unsafe fn step(&mut self, comp: &Compositor, cfg: &Cfg, target_source_time: f64) -> Result<bool> {
         let use_current = self.use_current_on_next_step;
         self.use_current_on_next_step = false;
@@ -416,27 +417,26 @@ impl Player {
                 // même sémantique de hold que l'écran ci-dessus (et que `advance_decoder_to`) :
                 // adopter une frame webcam dont le pts dépasse `target_webcam_t` l'afficherait
                 // en avance sur son heure. Le garde-fou ne joue que contre un cas pathologique.
+                //
+                // BUG corrigé : à son EOF la webcam était reseekée à 0 alors que
+                // `target_webcam_t` continue de croître avec le temps écran. Au tick
+                // suivant, le rattrapage repartait donc de 0 et réavalait le fichier
+                // entier vers une cible toujours aussi lointaine — 1000 frames par tick
+                // (le plafond du garde-fou), en boucle, pour l'éternité. Un décodage
+                // permanent à fond, pour afficher une webcam qui n'a plus rien à montrer.
+                // Une fois l'EOF traité comme un hold, la décision webcam est EXACTEMENT
+                // celle de l'écran à l'export : `frame_step` couvre les quatre cas sans
+                // rien de spécifique, et ses tests couvrent donc aussi ce chemin.
                 let mut wf = cur;
                 let mut guard = 0u32;
                 loop {
-                    match self.wdec.peek_next_time_sec()? {
-                        NextFrameTime::At(t) if t <= target_webcam_t => {
-                            wf = self.wdec.commit_peek()?
-                        }
-                        NextFrameTime::At(_) => break, // pas encore due : hold sur la courante.
-                        NextFrameTime::Unknown => {
-                            // pts webcam inexploitable : on avance d'UNE frame et on sort,
-                            // au lieu de vider la piste jusqu'à son EOF (ce que `0.0`
-                            // faisait, puisqu'il est toujours ≤ à la cible).
+                    match frame_step(self.wdec.peek_next_time_sec()?, 0.0, target_webcam_t) {
+                        FrameStep::Commit => wf = self.wdec.commit_peek()?,
+                        FrameStep::CommitAndStop => {
                             wf = self.wdec.commit_peek()?;
                             break;
                         }
-                        NextFrameTime::Eof => {
-                            // Fin de la webcam avant l'écran : elle boucle SEULE — l'écran
-                            // garde sa propre position, inchangée.
-                            wf = self.wdec.seek_to(0.0)?;
-                            break;
-                        }
+                        FrameStep::Hold => break,
                     }
                     guard += 1;
                     if guard > 1000 {
