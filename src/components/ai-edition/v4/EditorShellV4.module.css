@@ -1330,6 +1330,11 @@
 	position: absolute;
 	top: 1px;
 	height: 22px;
+	/* The ONLY floor on a pill's width, and it is in px so it is the same hairline
+	   at every zoom: the box's width is the effect's duration, full stop. A `%`
+	   minimum is a duration in disguise (the old 1.5% drew everything shorter than
+	   27 s as 27 s on a 30-minute timeline). */
+	min-width: 1px;
 	display: inline-flex;
 	align-items: center;
 	gap: 5px;
@@ -1351,6 +1356,27 @@
 }
 .lanePillSel {
 	box-shadow: 0 0 0 3px var(--accent-ring);
+}
+/* Narrower than its own chrome (PILL_HANDLES_MIN_PX): the handles mount OUTSIDE
+   the box instead of inside it, so overflow must not clip them away — there is
+   no content to clip at this width anyway (see pillAffordance/roomForLabel).
+   ::after widens the move target to reach the handles (PILL_MOVE_GAP_PX on each
+   side), which is what keeps a 1px pill grabbable without inflating the bar the
+   user is reading a duration off. */
+.lanePillCompact {
+	overflow: visible;
+	padding: 0;
+}
+.lanePillCompact::after {
+	content: "";
+	position: absolute;
+	inset: 0 -4px;
+}
+/* An outside handle sits on bare lane background, where a transparent grab strip
+   is undiscoverable — on hover it shows itself as a bar flanking the pill. */
+.lanePillCompact:hover .lanePillHandle {
+	background: color-mix(in oklch, currentColor 35%, transparent);
+	border-radius: 2px;
 }
 .lanePillLabel {
 	overflow: hidden;
@@ -1378,8 +1404,14 @@
 }
 .tlClips {
 	position: relative;
-	display: flex;
-	gap: 6px;
+	/* NOT a flex row. Clips are absolutely positioned by percentage of the
+	   timeline, like the pills, the ruler and the playhead above them.
+	   A flex row's `gap` is a fixed pixel amount inserted into a proportional
+	   layout: each junction pushed what followed 6px right while every clip
+	   shrank proportionally to pay for the gaps, so a clip's left edge landed off
+	   its true start time — measured at +2px and +6px for clips 2 and 3 of a
+	   three-clip timeline, which is 5 s and 15 s of a 30-minute recording when
+	   zoomed out, and a fraction of a second when zoomed in. See .tlClip. */
 	height: 66px;
 	width: 100%;
 	padding: 0;
@@ -1398,9 +1430,19 @@
 	pointer-events: none;
 }
 .tlClip {
-	position: relative;
-	flex: 1 0 0;
-	min-width: 0;
+	/* left/width come from V4Timeline, in percent of the timeline. The 6px gutter
+	   that used to be a flex `gap` is now taken off each clip's own width, so it
+	   separates the cards without ever moving the next one: a clip's LEFT edge is
+	   its true start time at every zoom and every clip count.
+	   ponytail: the right edge therefore reads 6px short. Constant, non-cumulative
+	   and below the width of the border it sits next to; draw the separator inside
+	   the box (inset shadow, square-butted cards) if that ever needs to be exact. */
+	position: absolute;
+	top: 0;
+	bottom: 0;
+	/* px, like .lanePill's: the gutter is subtracted from the clip's width, so a
+	   clip narrower than 6px would otherwise compute to nothing. */
+	min-width: 1px;
 	border-radius: 11px;
 	border: 1.5px solid var(--border);
 	background: var(--surface-1);
