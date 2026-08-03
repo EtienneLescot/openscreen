@@ -9,9 +9,20 @@ import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { extractMono16kFromVideoUrl, transcribeMono16kToSegments } from "@/lib/captioning";
 import type { AxcutDocument, AxcutTranscript, AxcutTranscriptSegment, AxcutWord } from "../schema";
 
+/**
+ * What the caller can show while a transcription runs. `completedSec` /
+ * `totalSec` arrive only during `"transcribing"`, once the main process starts
+ * landing chunks — until then the phase alone is all there is to show.
+ */
+export interface TranscribeStatus {
+	phase: "extracting-audio" | "loading-model" | "transcribing";
+	completedSec?: number;
+	totalSec?: number;
+}
+
 export interface TranscribeAssetOptions {
 	language?: string;
-	onStatus?: (status: string) => void;
+	onStatus?: (status: TranscribeStatus) => void;
 	signal?: AbortSignal;
 }
 
@@ -27,12 +38,12 @@ export async function transcribeAsset(
 
 	const videoUrl = toFileUrl(asset.originalPath);
 
-	options.onStatus?.("extracting-audio");
+	options.onStatus?.({ phase: "extracting-audio" });
 	const audioResult = await extractMono16kFromVideoUrl(videoUrl, {
 		signal: options.signal,
 	});
 
-	options.onStatus?.("transcribing");
+	options.onStatus?.({ phase: "transcribing" });
 	// Only pass `language` to the worker when the caller forced a specific
 	// code. `"auto"` (or any falsy value) leaves Whisper to detect from
 	// the audio. The pipeline tags every chunk with the language it used
@@ -44,6 +55,15 @@ export async function transcribeAsset(
 		trimRegions: [],
 		signal: options.signal,
 		language: forcedLanguage,
+		// Forward the main process's per-chunk progress. Without this the status
+		// callback only ever fired the two coarse phases above, so a 30-minute
+		// recording showed one static "transcribing" for ten minutes.
+		onStatus: (status) =>
+			options.onStatus?.({
+				phase: status.phase === "model" ? "loading-model" : "transcribing",
+				completedSec: status.completedSec,
+				totalSec: status.totalSec,
+			}),
 	});
 
 	const segments: AxcutTranscriptSegment[] = [];
