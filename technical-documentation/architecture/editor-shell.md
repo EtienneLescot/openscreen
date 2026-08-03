@@ -129,9 +129,9 @@ switches on it is checked below. Each path has been verified on this branch.
    (`document/timeline.ts:591`) for batch / single deletes.
 4. **Lane in `V4Timeline`** — `src/components/ai-edition/v4/V4Timeline.tsx`.
    Compute the pills at the same call site as the four existing lanes
-   (`coalesceRegionsForRuler(tl.xxxRegions).map(...)` near `:321-347`), render
+   (`coalesceRegionsForRuler(tl.xxxRegions).map(...)` near `:461-509`), render
    them through `renderPills` inside a `<div className={styles.tlLane}>`
-   block (`:1244-1252`), and extend the `kind` union at `:203` so drag,
+   block (`:1478-1488`), and extend the `kind` union at `:332` so drag,
    resize, and delete handler switches route correctly.
 
    **Coordinates on the timeline canvas obey one rule**: position and size are

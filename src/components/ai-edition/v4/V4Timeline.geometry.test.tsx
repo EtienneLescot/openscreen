@@ -13,6 +13,7 @@ vi.mock("@/contexts/I18nContext", () => ({
 }));
 vi.mock("sonner", () => ({ toast: { error: vi.fn(), info: vi.fn(), success: vi.fn() } }));
 
+import type { useTimeline } from "@/lib/ai-edition/store/useTimeline";
 import { V4Timeline } from "./V4Timeline";
 
 beforeAll(() => {
@@ -86,8 +87,9 @@ function renderTimeline(
 	};
 	render(
 		<V4Timeline
-			// biome-ignore lint/suspicious/noExplicitAny: a partial timeline API is enough to draw pills
-			tl={tl as any}
+			// Only the members the lanes and the clip row read are mocked; the prop
+			// stays typed as the real API rather than widened to `any` (AGENTS.md).
+			tl={tl as unknown as ReturnType<typeof useTimeline>}
 			setCurrentTime={vi.fn()}
 			playing={false}
 			onTogglePlay={vi.fn()}
