@@ -40,6 +40,7 @@ import {
 	type TranscriptGate,
 	type TranscriptionFailure,
 	type TranscriptionPhase,
+	type TranscriptionProgress,
 	transcriptRelevantAssetIds,
 } from "../transcription/status";
 import { useProjectStore } from "./projectStore";
@@ -50,6 +51,8 @@ export interface TranscriptionJob {
 	 *  finishes after the user asked for another one cannot clear its successor. */
 	runId?: number;
 	phase?: TranscriptionPhase;
+	/** Chunk progress while transcribing; absent until the first chunk lands. */
+	progress?: TranscriptionProgress;
 	/** `"auto"` unless the user forced a language from the media card. */
 	language: string;
 	failure?: TranscriptionFailure;
@@ -273,7 +276,7 @@ function failRemainingQueue(projectId: string, failure: TranscriptionFailure): v
 		for (const assetId of queued) {
 			const job = jobs[assetId];
 			if (job?.status !== "queued") continue;
-			jobs[assetId] = { ...job, status: "failed", phase: undefined, failure };
+			jobs[assetId] = { ...job, status: "failed", phase: undefined, progress: undefined, failure };
 		}
 		return { jobs };
 	});
@@ -365,7 +368,19 @@ async function runJob(assetId: string, job: TranscriptionJob): Promise<void> {
 		const transcript = await transcribeAsset(doc, assetId, {
 			language: job.language,
 			signal: controller.signal,
-			onStatus: (phase) => patchJob(assetId, runId, { phase: phase as TranscriptionPhase }),
+			// `TranscribeStatus` and `TranscriptionPhase` are the same vocabulary on
+			// purpose (see status.ts), so this no longer needs a cast. `progress`
+			// only arrives during "transcribing"; carrying it through undefined the
+			// rest of the time is what lets the UI fall back to a spinner instead
+			// of a bar frozen at 0%.
+			onStatus: (status) =>
+				patchJob(assetId, runId, {
+					phase: status.phase,
+					progress:
+						status.completedSec !== undefined && status.totalSec !== undefined
+							? { completedSec: status.completedSec, totalSec: status.totalSec }
+							: undefined,
+				}),
 		});
 		if (controller.signal.aborted) {
 			dropJob(assetId, runId);
@@ -400,7 +415,7 @@ async function runJob(assetId: string, job: TranscriptionJob): Promise<void> {
 		}
 		if (!isCurrentRun(assetId, runId)) return; // superseded by a newer request
 		const failure = classifyTranscriptionError(error);
-		patchJob(assetId, runId, { status: "failed", phase: undefined, failure });
+		patchJob(assetId, runId, { status: "failed", phase: undefined, progress: undefined, failure });
 		flushSettleWaiters(assetId);
 		await persistPermanentFailure(projectId, assetId, failure);
 		// A transient failure is about the ENGINE, not about this media: the model
