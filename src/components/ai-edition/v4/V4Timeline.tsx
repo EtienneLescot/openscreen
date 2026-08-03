@@ -125,6 +125,25 @@ const PILL_HANDLE_OUT_PX = PILL_HANDLE_PX + PILL_MOVE_GAP_PX;
 const PILL_CONTENT_MIN_PX = 34;
 /** Edge-snap radius while dragging a pill, in screen px. */
 const PILL_SNAP_PX = 8;
+/**
+ * Width a pill created from the toolbar aims for on screen. Its DURATION is
+ * whatever that width is worth at the current zoom: dezoomed you get a long
+ * region, zoomed in a short one, and either way a pill you can see, read and
+ * grab the moment it appears.
+ *
+ * A fixed 2 s did the opposite — on a 65-minute timeline zoomed out it is half a
+ * pixel. It only ever looked usable because the old 1.5%-of-the-timeline minimum
+ * width inflated it in the RENDERING, which is the lie this branch removed. Same
+ * intent, honest implementation: the width now comes from the duration actually
+ * stored, so what you see is what the effect covers.
+ *
+ * Sized to clear PILL_CONTENT_MIN_PX, so a new pill shows its icon and label
+ * immediately with room left to grab either handle.
+ */
+const PILL_CREATE_PX = 40;
+/** Floor on that duration. Only bites past ~30x zoom, where 40px is worth a few
+ *  hundredths of a second and the region would be born unusable. */
+const PILL_CREATE_MIN_SEC = 0.25;
 /** Visual separation between two clip cards. Taken off each clip's own width
  *  (see .tlClip) rather than inserted between them, so it cannot displace the
  *  clips that follow — which is what a flex `gap` did, once per junction. */
@@ -451,6 +470,13 @@ export function V4Timeline({
 	// `total`, which is a duration in disguise and so scales with the recording.
 	const navSpan = Math.max(0.02, nav.end - nav.start);
 	const pxPerSec = viewportWidthPx / navSpan / total;
+	// Duration handed to the toolbar's create buttons, so the pill they produce is
+	// PILL_CREATE_PX wide whatever the zoom. Only THIS path scales: the keyboard
+	// shortcuts and the agent keep useTimeline's flat default, since neither knows
+	// the zoom (`nav` is local state here). Before the panel is measured there is
+	// no zoom to read, so the default stands.
+	const createDurationSec =
+		pxPerSec > 0 ? Math.max(PILL_CREATE_MIN_SEC, PILL_CREATE_PX / pxPerSec) : undefined;
 
 	// ── region lanes ────────────────────────────────────────────────
 	// zoom/speed/annotation: one pill per row, never coalesced — each carries
@@ -1313,9 +1339,9 @@ export function V4Timeline({
 								title={tool.label}
 								aria-label={tool.label}
 								onClick={() => {
-									if (tool.id === "speed") void tl.addSpeed();
-									if (tool.id === "comment") void tl.addAnnotation();
-									if (tool.id === "cut") void tl.addTrim();
+									if (tool.id === "speed") void tl.addSpeed(createDurationSec);
+									if (tool.id === "comment") void tl.addAnnotation(createDurationSec);
+									if (tool.id === "cut") void tl.addTrim(createDurationSec);
 								}}
 							>
 								{tool.icon}
@@ -1326,7 +1352,7 @@ export function V4Timeline({
 							className={styles.tlToolBtn}
 							title={t("buttons.addZoom")}
 							aria-label={t("buttons.addZoom")}
-							onClick={() => void tl.addZoom()}
+							onClick={() => void tl.addZoom(createDurationSec)}
 						>
 							<ZoomIn size={15} />
 						</button>
@@ -1349,7 +1375,7 @@ export function V4Timeline({
 							className={styles.tlToolBtn}
 							title={t("buttons.addCameraFullscreen")}
 							aria-label={t("buttons.addCameraFullscreen")}
-							onClick={() => void tl.addCameraFullscreen()}
+							onClick={() => void tl.addCameraFullscreen(createDurationSec)}
 						>
 							<Maximize2 size={15} />
 						</button>
