@@ -26,6 +26,7 @@ import {
 	budgetSnapshot,
 	buildCompactionPrompt,
 	COMPACTION_SYSTEM_PROMPT,
+	compactionReducesHistory,
 	DEFAULT_BUDGET_TOKENS,
 	shouldCompact,
 } from "./chat-compaction";
@@ -654,6 +655,7 @@ export async function compactSession(
 	return ok;
 }
 
+/** Summarize and replace a session prefix when doing so strictly reduces context use. */
 async function tryCompactSession(opts: {
 	session: ChatSession;
 	splitIndex: number;
@@ -700,6 +702,7 @@ async function tryCompactSession(opts: {
 		summary,
 		new Date().toISOString(),
 	);
+	if (!compactionReducesHistory(session.messages, compacted)) return null;
 	const inserted = compacted[0];
 	session.messages = compacted;
 	return {
