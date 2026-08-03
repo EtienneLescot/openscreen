@@ -700,7 +700,7 @@ async function tryCompactSession(opts: {
 		summary,
 		new Date().toISOString(),
 	);
-	const inserted = compacted[splitIndex];
+	const inserted = compacted[0];
 	session.messages = compacted;
 	return {
 		summaryMessageId: inserted?.id ?? null,

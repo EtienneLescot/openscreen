@@ -78,18 +78,19 @@ describe("shouldCompact", () => {
 });
 
 describe("applyCompaction", () => {
-	it("inserts the summary message at the split point", () => {
+	it("replaces the summarized prefix with the summary message", () => {
 		const msgs = [
-			msg("user", "1", "u1"),
-			msg("assistant", "2", "a1"),
+			msg("user", "x".repeat(4_000), "u1"),
+			msg("assistant", "y".repeat(4_000), "a1"),
 			msg("user", "3", "u2"),
 			msg("assistant", "4", "a2"),
 		];
 		const out = applyCompaction(msgs, 2, "summary text", "2026-02-01T00:00:00.000Z");
-		expect(out.length).toBe(5);
-		expect(out[2]?.content).toBe("summary text");
-		expect(out[0]?.id).toBe("u1");
+		expect(out).toHaveLength(3);
+		expect(out[0]?.content).toBe("summary text");
+		expect(out[1]?.id).toBe("u2");
 		expect(out.at(-1)?.id).toBe("a2");
+		expect(estimateHistoryTokens(out)).toBeLessThan(estimateHistoryTokens(msgs));
 	});
 });
 
