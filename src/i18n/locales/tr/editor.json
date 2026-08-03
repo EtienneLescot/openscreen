@@ -140,6 +140,7 @@
 		"transcriptEmpty": "Metin dökümü boş.",
 		"notGeneratedHint": "Henüz oluşturulmadı — bir dil seçin ve yeniden oluştur'a tıklayın.",
 		"transcribing": "Metne dökülüyor",
+		"downloadingModel": "Konuşma modeli indiriliyor",
 		"transcribingEllipsis": "Metne dökülüyor…",
 		"pendingTranscription": "Metne dökme bekliyor",
 		"transcriptionFailed": "Metne dökme başarısız oldu",
