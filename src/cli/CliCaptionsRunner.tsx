@@ -14,7 +14,7 @@ import { extractMono16kFromVideoUrl } from "@/lib/captioning/extractMono16k";
 import { transcribeMono16kToSegments } from "@/lib/captioning/transcribe";
 import type { CliCaptionsRequest, CliDoneResult } from "@/lib/cliContracts";
 import { nativeBridgeClient } from "@/native";
-import { captionSegmentsToAnnotationRegions } from "./vendor/captionRegions";
+import { captionSegmentsToAnnotationRegions } from "./captionAnnotations";
 import {
 	shiftTrimRegionsMsForCaptionBuffer,
 	trimLeadingSilenceMono16k,
@@ -103,17 +103,17 @@ async function runCaptions(request: CliCaptionsRequest): Promise<CliDoneResult> 
 	const startNumericId = nextNumericIdFrom([...editor.annotationRegions, ...editor.zoomRegions]);
 	const startZIndex = manualAnnotations.reduce((max, a) => Math.max(max, a.zIndex + 1), 1);
 
-	let { regions } = captionSegmentsToAnnotationRegions(segments, startNumericId, startZIndex, {
+	let regions = captionSegmentsToAnnotationRegions(segments, startNumericId, startZIndex, {
 		minWordsPerCaption: request.minWordsPerCaption,
 		maxWordsPerCaption: request.maxWordsPerCaption,
 		timestampGranularity: granularity,
 	});
 	if (regions.length === 0 && segments.length > 0) {
-		({ regions } = captionSegmentsToAnnotationRegions(segments, startNumericId, startZIndex, {
+		regions = captionSegmentsToAnnotationRegions(segments, startNumericId, startZIndex, {
 			minWordsPerCaption: 1,
 			maxWordsPerCaption: Number.MAX_SAFE_INTEGER,
 			timestampGranularity: granularity,
-		}));
+		});
 	}
 	if (regions.length === 0) {
 		throw new Error("Transcription produced no caption segments");
