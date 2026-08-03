@@ -10,9 +10,10 @@ on:
         required: true
         type: string
 
+# GITHUB_TOKEN only pushes the branch here — the PR itself is opened with the
+# PAT below, so no `pull-requests: write` is needed (and it never worked).
 permissions:
   contents: write
-  pull-requests: write
 
 jobs:
   bump:

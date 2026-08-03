@@ -29,6 +29,13 @@ on:
     paths:
       - package-lock.json
       - nix/**
+      - .github/workflows/nix-check.yml
+
+# Read-only, and stated rather than inherited: the repo default happens to be
+# `read` today, which is exactly the kind of repo-level setting that silently
+# changed this workflow's sibling out from under it.
+permissions:
+  contents: read
 
 jobs:
   npm-deps-hash:
