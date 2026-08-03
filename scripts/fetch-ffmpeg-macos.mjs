@@ -59,7 +59,10 @@ function run(cmd, args, opts = {}) {
  *
  * When the pin moves, a mirror may not carry the new version yet. That is not
  * a failure mode to design around — the list is tried in order and a source
- * that 404s is simply skipped, with every attempt reported if none works.
+ * that 404s falls through to the next, with every attempt reported if none
+ * works. (`--retry-all-errors` does not except a 404, so a missing mirror costs
+ * its retries — a few seconds, once per pin bump. Narrowing that would mean
+ * giving up the retry on connection resets, which is the whole point.)
  */
 const TARBALL_URLS = [
 	`https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz`,
@@ -80,17 +83,28 @@ function downloadTarball(dest) {
 	const failures = [];
 	for (const url of TARBALL_URLS) {
 		console.log(`Downloading ffmpeg ${VERSION} from ${new URL(url).host}…`);
-		// --connect-timeout bounds the fallback, and is not decoration: a throttled
-		// origin does not refuse, it hangs. Measured against ffmpeg.org after a few
-		// rapid fetches, a single connect sat for 75s before failing — times four
-		// attempts, that is five minutes of a build spent before the second source
+		// Two ceilings, because a stuck download stalls in two different ways.
+		// --connect-timeout covers the handshake: a throttled origin does not
+		// refuse, it hangs — measured against ffmpeg.org after a few rapid
+		// fetches, a single connect sat for 75s before failing, and times four
+		// attempts that is five minutes of a build spent before the second source
 		// is even tried. 20s is far above any healthy handshake.
+		// --speed-limit/--speed-time covers everything AFTER the handshake, which
+		// --connect-timeout does not reach at all: an origin that accepts the
+		// connection and then trickles (or simply stops sending) never errors, so
+		// nothing here would retry or fall through — the job would sit until the
+		// runner's own six-hour limit. Aborting below 1 KiB/s sustained for 30s
+		// cannot fire on a link that is merely slow: the tarball is ~10 MB.
 		const r = spawnSync(
 			"curl",
 			[
 				"-fsSL",
 				"--connect-timeout",
 				"20",
+				"--speed-limit",
+				"1024",
+				"--speed-time",
+				"30",
 				"--retry",
 				"3",
 				"--retry-delay",
@@ -103,7 +117,10 @@ function downloadTarball(dest) {
 			{ stdio: "inherit" },
 		);
 		if (r.status !== 0) {
-			failures.push(`  ${url}\n    curl exited with ${r.status}`);
+			// `r.error` is the case `status` cannot express: no curl on PATH gives
+			// `{ status: null, error: ENOENT }`, and reporting only "exited with
+			// null" twice sends the reader hunting a network problem.
+			failures.push(`  ${url}\n    ${r.error ? r.error.message : `curl exited with ${r.status}`}`);
 			continue;
 		}
 		const actual = crypto.createHash("sha256").update(fs.readFileSync(dest)).digest("hex");
