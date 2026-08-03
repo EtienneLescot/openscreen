@@ -270,6 +270,31 @@ export function MediaStage() {
 									<TranscriptionStatusDot view={selectedTranscription} size={5} />
 									{transcriptionLabel(selectedTranscription)}
 								</span>
+								{/* The language whisper resolved on the first chunk, which every later
+								    chunk was then pinned to. It had a pill in SourceTranscriptModal,
+								    but that lives under LeftPanel's `MediaPane` — and the only mount
+								    site is `<LeftPanel active="chat" />`, a literal, so it renders
+								    `ChatStripPanel` and nothing else. The value was reaching the
+								    document and being displayed nowhere. It belongs next to
+								    "Regenerate as" below in any case: that selector is the control
+								    you set BECAUSE of what was detected. */}
+								{transcript?.language && transcript.language !== "auto" ? (
+									<span
+										style={{
+											display: "inline-flex",
+											alignItems: "center",
+											marginLeft: 8,
+											padding: "5px 10px",
+											borderRadius: 9999,
+											background: "var(--success-soft)",
+											color: "var(--success)",
+											fontSize: 11.5,
+											fontWeight: 600,
+										}}
+									>
+										{t("mediaStage.detectedLanguage", { language: transcript.language })}
+									</span>
+								) : null}
 							</div>
 
 							{/* Renders itself away — spacing included — unless the run reports progress. */}
