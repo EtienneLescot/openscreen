@@ -272,10 +272,8 @@ export function MediaStage() {
 								</span>
 							</div>
 
-							{/* Renders itself away unless the run reports measurable progress. */}
-							<div style={{ margin: "-8px 0 16px" }}>
-								<TranscriptionProgressBar view={selectedTranscription} />
-							</div>
+							{/* Renders itself away — spacing included — unless the run reports progress. */}
+							<TranscriptionProgressBar view={selectedTranscription} />
 
 							{selectedTranscription.failure ? (
 								<p
