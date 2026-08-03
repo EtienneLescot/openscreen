@@ -707,61 +707,80 @@ export function NewEditorShell() {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
 		const { pasteClipboard } = await import("@/lib/ai-edition/store/regionClipboard");
-		const clip = pasteClipboard();
-		if (!clip) return;
+		const snapshot = pasteClipboard();
+		if (!snapshot) return;
+		const { anchorRegionsWithDerivedMs } = await import("@/lib/ai-edition/timeline/timelineMap");
+		const { createId } = await import("@/lib/ai-edition/document/ids");
+
+		// Land it at the playhead, keeping the copied length.
 		const timeMs = Math.round(useProjectStore.getState().currentTimeSec * 1000);
-		const region = { ...clip.region, id: crypto.randomUUID() };
-		if (clip.kind === "zoom") {
-			const zoom = region as unknown as (typeof doc.zoomRanges)[number];
-			const duration = zoom.endMs - zoom.startMs;
-			zoom.startMs = timeMs;
-			zoom.endMs = timeMs + duration;
-			await saveDocument({ ...doc, zoomRanges: [...doc.zoomRanges, zoom] });
-		} else if (clip.kind === "annotation") {
-			const annotation = region as unknown as (typeof doc.annotations)[number];
-			const duration = annotation.endMs - annotation.startMs;
-			annotation.startMs = timeMs;
-			annotation.endMs = timeMs + duration;
-			await saveDocument({ ...doc, annotations: [...doc.annotations, annotation] });
-		} else if (clip.kind === "speed") {
-			const speedRegions =
-				(doc.legacyEditor as { speedRegions?: Array<Record<string, unknown>> })?.speedRegions ?? [];
-			const speed = region as unknown as (typeof speedRegions)[number];
-			const duration = Number(speed.endMs) - Number(speed.startMs);
-			speed.startMs = timeMs;
-			speed.endMs = timeMs + duration;
+		const src = snapshot.region as { startMs: number; endMs: number };
+		const prefix = snapshot.kind === "annotation" ? "ann" : snapshot.kind;
+		const pasted = {
+			...snapshot.region,
+			id: createId(prefix),
+			startMs: timeMs,
+			endMs: timeMs + (Number(src.endMs) - Number(src.startMs)),
+		};
+		// Anchor to the clip(s) it covers, exactly like every add* does. Pasting
+		// used to store a bare startMs/endMs, so the region survived until the
+		// first clip reorder or trim and then drifted off its content — see
+		// technical-documentation/architecture/timeline-model.md.
+		const anchored = anchorRegionsWithDerivedMs(
+			[pasted as unknown as { id: string; startMs: number; endMs: number }],
+			doc.timeline.clips,
+			() => createId(prefix),
+		);
+
+		if (snapshot.kind === "zoom") {
 			await saveDocument({
 				...doc,
-				legacyEditor: {
-					...doc.legacyEditor,
-					speedRegions: [...speedRegions, speed],
-				},
+				zoomRanges: [...doc.zoomRanges, ...anchored] as typeof doc.zoomRanges,
+			});
+		} else if (snapshot.kind === "annotation") {
+			await saveDocument({
+				...doc,
+				annotations: [...doc.annotations, ...anchored] as typeof doc.annotations,
+			});
+		} else {
+			// speed and cameraFullscreen are both plain spans on legacyEditor.
+			const key = snapshot.kind === "speed" ? "speedRegions" : "cameraFullscreenRegions";
+			const legacy = (doc.legacyEditor as Record<string, unknown>) ?? {};
+			const prev = (legacy[key] as unknown[]) ?? [];
+			await saveDocument({
+				...doc,
+				legacyEditor: { ...legacy, [key]: [...prev, ...anchored] },
 			});
 		}
 		toast.success("Region pasted");
 	}, [saveDocument]);
 
+	// Copy the SELECTED pill. Reads the same arrays the lanes render, so what gets
+	// copied is what the user is looking at — the old version dug into the raw
+	// document with a ternary chain that mapped a trim to "zoom" and sent
+	// cameraFullscreen down the speed branch, where neither could ever be found.
+	//
+	// Trims stay out: they are stored in SOURCE time against a clip anchor, so
+	// pasting one at the playhead is a ventilation problem, not a copy. Cut
+	// already excludes them for the same reason.
 	const handleCopyRegion = useCallback(async () => {
-		const doc = useProjectStore.getState().document;
-		if (!doc || !tl.selection) return;
+		const sel = tl.selection;
+		if (!sel || sel.kind === "trim") return;
+		const source =
+			sel.kind === "zoom"
+				? tl.zoomRegions
+				: sel.kind === "annotation"
+					? tl.annotationRegions
+					: sel.kind === "speed"
+						? tl.speedRegions
+						: tl.cameraFullscreenRegions;
+		const region = (source as Array<{ id: string }>).find((r) => r.id === sel.id);
+		if (!region) return;
 		const { copyRegion } = await import("@/lib/ai-edition/store/regionClipboard");
-		const region =
-			tl.selection.kind === "zoom"
-				? doc.zoomRanges.find((z) => z.id === tl.selection?.id)
-				: tl.selection.kind === "annotation"
-					? (doc.annotations as unknown[]).find(
-							(a) => (a as { id: string }).id === tl.selection?.id,
-						)
-					: ((doc.legacyEditor as { speedRegions?: unknown[] } | null)?.speedRegions ?? []).find(
-							(s) => (s as { id: string }).id === tl.selection?.id,
-						);
-		if (region) {
-			copyRegion({
-				kind: tl.selection.kind === "trim" ? "zoom" : tl.selection.kind,
-				region: region as Record<string, unknown>,
-			});
-			toast.success("Region copied");
-		}
+		copyRegion({ kind: sel.kind, region: region as unknown as Record<string, unknown> });
+		// One clipboard wins at a time: a copied pill retires the copied clip.
+		setCopiedClipId(null);
+		toast.success("Region copied");
 	}, [tl]);
 
 	useEffect(() => {
@@ -836,14 +855,21 @@ export function NewEditorShell() {
 			// of hardcoded keys, so rebinding in the shortcuts dialog actually
 			// changes runtime behavior.
 			if (matchesShortcut(e, shortcuts.copySelected, isMac)) {
-				if (tl.clipSelection) {
-					e.preventDefault();
-					setCopiedClipId(tl.clipSelection);
-					return;
-				}
+				// A pill and a clip can no longer both be selected (see selectRegion /
+				// selectClip), so this reads the one the user actually picked instead
+				// of preferring clips whatever was clicked last.
 				if (tl.selection) {
 					e.preventDefault();
 					void handleCopyRegion();
+					return;
+				}
+				if (tl.clipSelection) {
+					e.preventDefault();
+					setCopiedClipId(tl.clipSelection);
+					// A copied clip retires the copied pill — see clearRegionClipboard.
+					void import("@/lib/ai-edition/store/regionClipboard").then((m) =>
+						m.clearRegionClipboard(),
+					);
 					return;
 				}
 			}
@@ -858,12 +884,13 @@ export function NewEditorShell() {
 			}
 			if (matchesShortcut(e, shortcuts.paste, isMac)) {
 				e.preventDefault();
-				// A selected/copied clip takes priority — pasting with a clip in
-				// hand is unambiguously "duplicate this clip", even if a region
-				// was copied earlier in the session.
-				const clipToDuplicate = copiedClipId ?? tl.clipSelection;
-				if (clipToDuplicate) {
-					void tl.duplicateClip(clipToDuplicate);
+				// Paste what was COPIED. It used to fall back to `tl.clipSelection`,
+				// so a clip merely being selected hijacked the paste — and since
+				// `copiedClipId` was never cleared, one Ctrl+C on a clip turned every
+				// later Ctrl+V into a clip duplication for the rest of the session,
+				// whatever the user copied afterwards.
+				if (copiedClipId) {
+					void tl.duplicateClip(copiedClipId);
 					return;
 				}
 				void pasteRegion();
