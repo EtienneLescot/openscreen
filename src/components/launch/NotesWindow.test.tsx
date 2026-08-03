@@ -10,6 +10,7 @@ import { NOTES_TELEPROMPTER_STORAGE_KEY } from "./notesTeleprompter";
 const tiptapState = vi.hoisted(() => ({
 	options: null as null | {
 		content: string;
+		editable: boolean;
 		onUpdate: (payload: { editor: { getHTML: () => string } }) => void;
 	},
 	editor: null as Editor | null,
@@ -311,11 +312,19 @@ describe("NotesWindow teleprompter mode", () => {
 		);
 		render(<NotesWindow />);
 
+		// The editor must be CREATED read-only — an effect-only lock would leave the first
+		// painted frame editable.
+		expect(tiptapState.options?.editable).toBe(false);
 		expect(setEditable).toHaveBeenLastCalledWith(false, false);
 		expect(setEditable).not.toHaveBeenCalledWith(true, false);
 		expect(screen.getByRole("button", { name: "Bold" })).toBeDisabled();
 		// A restored mirror must not auto-start playback.
 		expect(screen.getByRole("button", { name: "Play" })).toBeInTheDocument();
+	});
+
+	it("creates the editor editable when nothing locks it at mount", () => {
+		render(<NotesWindow />);
+		expect(tiptapState.options?.editable).toBe(true);
 	});
 
 	it("keeps mirroring and playback independent", async () => {
