@@ -180,13 +180,6 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 	const gifSizePreset = request.gifSizePreset ?? editor.gifSizePreset;
 	const outPath =
 		request.outPath ?? replaceExtension(request.projectPath, format === "gif" ? ".gif" : ".mp4");
-	if (request.previewWidth !== null || request.previewHeight !== null) {
-		window.electronAPI.cliLog(
-			"info",
-			"--preview-size is a no-op on the native pipeline (annotation geometry is percentage-based) and kept only for CLI compatibility",
-		);
-	}
-
 	// Cursor telemetry: only needed to compute --auto-zoom suggestions. The
 	// native compositor discovers the `<video>.cursor.json` sidecar itself.
 	let cursorTelemetry: CursorTelemetryPoint[] = [];

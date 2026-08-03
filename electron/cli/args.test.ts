@@ -45,8 +45,6 @@ describe("parseCliArgs", () => {
 			"out.gif",
 			"--gif-fps",
 			"20",
-			"--preview-size",
-			"1600x900",
 			"--json",
 		]);
 		expect(cmd).toMatchObject({
@@ -54,8 +52,6 @@ describe("parseCliArgs", () => {
 			outPath: inCwd("out.gif"),
 			format: "gif",
 			gifFrameRate: 20,
-			previewWidth: 1600,
-			previewHeight: 900,
 			json: true,
 		});
 	});

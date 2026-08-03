@@ -17,6 +17,7 @@ import { getSelectedDesktopSource, registerIpcHandlers } from "../ipc/handlers";
 import { registerSttIpc } from "../stt";
 import { ASSET_BASE_URL_ARG } from "../windows";
 import { CLI_USAGE, type CliCommand } from "./args";
+import { runInfoCommand, runPackCommand } from "./projectCommands";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const VITE_DEV_SERVER_URL = process.env["VITE_DEV_SERVER_URL"];
@@ -209,169 +210,8 @@ function setupRecordStopSignals(stop: (reason: string) => void): void {
 	}
 }
 
-interface PackedProjectData {
-	version?: number;
-	media?: { screenVideoPath?: string; webcamVideoPath?: string; cursorCaptureMode?: string };
-	videoPath?: string;
-	editor?: Record<string, unknown>;
-}
-
-/** Copies a project and everything it references into one portable folder. */
-async function runPackCommand(projectPath: string, outDir: string, json: boolean): Promise<number> {
-	const emit = (message: string) => {
-		if (!json) safeWrite(process.stdout, `${message}\n`);
-	};
-
-	const raw = await fs.readFile(projectPath, "utf8");
-	const data = JSON.parse(raw) as PackedProjectData;
-	const media = data.media ?? (data.videoPath ? { screenVideoPath: data.videoPath } : undefined);
-	const screenVideoPath = media?.screenVideoPath;
-	if (!screenVideoPath) {
-		throw new Error("Project file does not reference a screen video");
-	}
-
-	const projectDir = path.dirname(path.resolve(projectPath));
-	const resolveSource = async (mediaPath: string): Promise<string> => {
-		const exists = await fs
-			.stat(mediaPath)
-			.then((stats) => stats.isFile())
-			.catch(() => false);
-		if (exists) return mediaPath;
-		const sibling = path.join(projectDir, path.basename(mediaPath));
-		const siblingExists = await fs
-			.stat(sibling)
-			.then((stats) => stats.isFile())
-			.catch(() => false);
-		if (siblingExists) return sibling;
-		throw new Error(`Referenced media not found: ${mediaPath}`);
-	};
-
-	await fs.mkdir(outDir, { recursive: true });
-
-	const copied: string[] = [];
-	const copyIn = async (sourcePath: string): Promise<string> => {
-		const ext = path.extname(sourcePath);
-		const stem = path.basename(sourcePath, ext);
-		let destination = path.join(outDir, stem + ext);
-		// Screen and webcam can share a basename across directories; don't overwrite.
-		for (let n = 1; copied.includes(destination); n++) {
-			destination = path.join(outDir, `${stem}-${n}${ext}`);
-		}
-		if (path.resolve(sourcePath) !== path.resolve(destination)) {
-			await fs.copyFile(sourcePath, destination);
-		}
-		copied.push(destination);
-		return destination;
-	};
-
-	const screenSource = await resolveSource(screenVideoPath);
-	const newScreenPath = await copyIn(screenSource);
-
-	let newWebcamPath: string | undefined;
-	if (media.webcamVideoPath) {
-		newWebcamPath = await copyIn(await resolveSource(media.webcamVideoPath));
-	}
-
-	// Cursor telemetry sidecar sits at "<video path>.cursor.json".
-	const cursorSidecar = `${screenSource}.cursor.json`;
-	const hasCursorData = await fs
-		.stat(cursorSidecar)
-		.then((stats) => stats.isFile())
-		.catch(() => false);
-	if (hasCursorData) {
-		await copyIn(cursorSidecar);
-	}
-
-	const packedProject: PackedProjectData = {
-		...data,
-		media: {
-			...media,
-			screenVideoPath: newScreenPath,
-			...(newWebcamPath ? { webcamVideoPath: newWebcamPath } : {}),
-		},
-	};
-	delete packedProject.videoPath;
-	const packedProjectPath = path.join(outDir, path.basename(projectPath));
-	await fs.writeFile(packedProjectPath, JSON.stringify(packedProject, null, 2), "utf8");
-
-	if (json) {
-		safeWrite(
-			process.stdout,
-			`${JSON.stringify({
-				event: "done",
-				success: true,
-				projectPath: packedProjectPath,
-				files: [packedProjectPath, ...copied],
-				cursorData: hasCursorData,
-			})}\n`,
-		);
-	} else {
-		emit(`Packed project → ${packedProjectPath}`);
-		for (const file of copied) {
-			emit(`  + ${path.basename(file)}`);
-		}
-		if (!hasCursorData) {
-			emit("  (no cursor telemetry sidecar found)");
-		}
-		emit(
-			"The folder is self-contained: if the stored paths go stale after moving it, the loader falls back to files next to the project.",
-		);
-	}
-	return 0;
-}
-
-async function runInfoCommand(projectPath: string, json: boolean): Promise<number> {
-	const raw = await fs.readFile(projectPath, "utf8");
-	const data = JSON.parse(raw) as {
-		version?: number;
-		media?: { screenVideoPath?: string; webcamVideoPath?: string; cursorCaptureMode?: string };
-		videoPath?: string;
-		editor?: Record<string, unknown>;
-	};
-	const editor = data.editor ?? {};
-	const count = (key: string) =>
-		Array.isArray(editor[key]) ? (editor[key] as unknown[]).length : 0;
-	const screenVideoPath = data.media?.screenVideoPath ?? data.videoPath ?? null;
-	const mediaExists = screenVideoPath
-		? await fs
-				.access(screenVideoPath)
-				.then(() => true)
-				.catch(() => false)
-		: false;
-
-	const summary = {
-		projectPath,
-		version: data.version ?? null,
-		screenVideoPath,
-		screenVideoExists: mediaExists,
-		webcamVideoPath: data.media?.webcamVideoPath ?? null,
-		cursorCaptureMode: data.media?.cursorCaptureMode ?? null,
-		exportFormat: (editor.exportFormat as string) ?? null,
-		exportQuality: (editor.exportQuality as string) ?? null,
-		aspectRatio: (editor.aspectRatio as string) ?? null,
-		zoomRegions: count("zoomRegions"),
-		trimRegions: count("trimRegions"),
-		speedRegions: count("speedRegions"),
-		annotationRegions: count("annotationRegions"),
-	};
-
-	if (json) {
-		safeWrite(process.stdout, `${JSON.stringify(summary)}\n`);
-	} else {
-		safeWrite(
-			process.stdout,
-			[
-				`Project:  ${summary.projectPath} (version ${summary.version ?? "?"})`,
-				`Video:    ${summary.screenVideoPath ?? "(none)"}${mediaExists ? "" : "  [MISSING]"}`,
-				`Webcam:   ${summary.webcamVideoPath ?? "(none)"}`,
-				`Cursor:   ${summary.cursorCaptureMode ?? "(unknown)"}`,
-				`Export:   ${summary.exportFormat ?? "?"} / ${summary.exportQuality ?? "?"} / ${summary.aspectRatio ?? "?"}`,
-				`Timeline: ${summary.zoomRegions} zooms, ${summary.trimRegions} trims, ${summary.speedRegions} speed regions, ${summary.annotationRegions} annotations`,
-			].join("\n") + "\n",
-		);
-	}
-	return summary.screenVideoPath && !mediaExists ? 1 : 0;
-}
+/** Both file-only commands write through the same EPIPE-safe stdout writer. */
+const writeStdout = (text: string) => safeWrite(process.stdout, text);
 
 export function runCli(command: CliCommand): void {
 	if (command.kind === "help") {
@@ -449,7 +289,7 @@ export function runCli(command: CliCommand): void {
 		.whenReady()
 		.then(async () => {
 			if (command.kind === "info") {
-				const code = await runInfoCommand(command.projectPath, command.json === true);
+				const code = await runInfoCommand(command.projectPath, command.json === true, writeStdout);
 				app.exit(code);
 				return;
 			}
@@ -459,6 +299,7 @@ export function runCli(command: CliCommand): void {
 					command.projectPath,
 					command.outDir,
 					command.json === true,
+					writeStdout,
 				);
 				app.exit(code);
 				return;
