@@ -28,6 +28,18 @@ export interface TranscribeMono16kResult {
 
 export type SttRendererStatusPhase = "model" | "transcribe";
 
+/**
+ * Progress the main process reports while a transcription runs. `completedSec` /
+ * `totalSec` are present only during `"transcribe"`, and only once chunking has
+ * started — they let the UI show a real bar instead of an indeterminate spinner
+ * for what can be several minutes of work.
+ */
+export interface SttRendererStatus {
+	phase: SttRendererStatusPhase;
+	completedSec?: number;
+	totalSec?: number;
+}
+
 interface RendererSttApi {
 	transcribe: (request: { samples: Float32Array; language?: string }) => Promise<{
 		segments: CaptionSegment[];
@@ -35,7 +47,7 @@ interface RendererSttApi {
 		detectedLanguage: string;
 		backend: string;
 	}>;
-	onStatus?: (callback: (event: { phase: SttRendererStatusPhase }) => void) => () => void;
+	onStatus?: (callback: (event: SttRendererStatus) => void) => () => void;
 }
 
 /**
@@ -52,7 +64,7 @@ export function transcribeMono16kToSegments(
 	samples: Float32Array,
 	options?: {
 		trimRegions?: TrimRegion[];
-		onStatus?: (phase: SttRendererStatusPhase) => void;
+		onStatus?: (status: SttRendererStatus) => void;
 		signal?: AbortSignal;
 		language?: string;
 	},
@@ -67,8 +79,7 @@ export function transcribeMono16kToSegments(
 		return Promise.resolve({ segments: [], granularity: "word" });
 	}
 
-	const unsubscribe =
-		options?.onStatus && api.onStatus?.((event) => options.onStatus?.(event.phase));
+	const unsubscribe = options?.onStatus && api.onStatus?.((event) => options.onStatus?.(event));
 	const forcedLanguage =
 		options?.language && options.language !== "auto" ? options.language : undefined;
 	// ponytail: word timestamps come back already absolute from whisper.cpp

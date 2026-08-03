@@ -50,6 +50,14 @@ export interface SttStatusEvent {
 	totalBytes?: number;
 	/** Which model is downloading. */
 	model?: "whisper";
+	/**
+	 * Seconds of audio transcribed so far, and the total for this request. Only
+	 * when `phase === "transcribe"`. Progress is reported per CHUNK (see
+	 * `chunking.ts`), so it steps rather than sweeps — whisper gives no
+	 * sub-request progress signal to interpolate from.
+	 */
+	completedSec?: number;
+	totalSec?: number;
 }
 
 /** IPC request: renderer → main. */
