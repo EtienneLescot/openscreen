@@ -9,7 +9,10 @@
 
 import { Loader2 } from "lucide-react";
 import { useScopedT } from "@/contexts/I18nContext";
-import type { AssetTranscriptionView } from "@/lib/ai-edition/transcription/status";
+import {
+	type AssetTranscriptionView,
+	progressFraction,
+} from "@/lib/ai-edition/transcription/status";
 
 /** Human-readable state of one asset's transcript, in the user's language. */
 export function useTranscriptionLabel(): (view: AssetTranscriptionView) => string {
@@ -20,8 +23,16 @@ export function useTranscriptionLabel(): (view: AssetTranscriptionView) => strin
 				return t("mediaStage.transcriptReady");
 			case "queued":
 				return t("mediaStage.pendingTranscription");
-			case "running":
-				return t("mediaStage.transcribing");
+			case "running": {
+				// Transcribing a long recording runs for minutes. A bare
+				// "Transcribing…" for that whole time is indistinguishable from a
+				// hang, so append the percentage as soon as the main process reports
+				// chunk progress — and only then (see `TranscriptionProgress`).
+				const fraction = progressFraction(view.progress);
+				return fraction === null
+					? t("mediaStage.transcribing")
+					: `${t("mediaStage.transcribing")} ${Math.round(fraction * 100)}%`;
+			}
 			case "empty":
 				return t("mediaStage.noSpeechDetected");
 			case "failed":
@@ -77,5 +88,41 @@ export function TranscriptionStatusDot({
 			aria-label={label}
 			title={view.failure?.message ? `${label} — ${view.failure.message}` : label}
 		/>
+	);
+}
+
+/**
+ * Determinate progress bar for a running transcription. Renders nothing unless
+ * the job actually reports measurable progress — a job that is queued,
+ * extracting audio or downloading the model has no meaningful fraction, and a
+ * bar pinned at 0% reads as "stuck" where the spinner reads as "working".
+ */
+export function TranscriptionProgressBar({ view }: { view: AssetTranscriptionView }) {
+	const label = useTranscriptionLabel()(view);
+	const fraction = view.status === "running" ? progressFraction(view.progress) : null;
+	if (fraction === null) return null;
+	return (
+		<div
+			role="progressbar"
+			aria-label={label}
+			aria-valuemin={0}
+			aria-valuemax={100}
+			aria-valuenow={Math.round(fraction * 100)}
+			style={{
+				height: 4,
+				borderRadius: 999,
+				background: "var(--surface-3)",
+				overflow: "hidden",
+			}}
+		>
+			<div
+				style={{
+					height: "100%",
+					width: `${fraction * 100}%`,
+					background: "var(--accent)",
+					transition: "width 200ms linear",
+				}}
+			/>
+		</div>
 	);
 }
