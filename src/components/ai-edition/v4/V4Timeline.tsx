@@ -597,6 +597,11 @@ export function V4Timeline({
 	const startScrub = useCallback(
 		(e: ReactPointerEvent) => {
 			if (e.button !== 0) return;
+			// Media has no playhead rendered, so there is nothing to scrub. Guarded
+			// here rather than at the three call sites: seeking an invisible cursor
+			// would still move `currentTimeSec`, i.e. silently reposition the Edit
+			// tab's preview from a screen that shows no time at all.
+			if (!showLanes) return;
 			const target = e.target as HTMLElement;
 			if (target.closest("[data-clip-id]") || target.closest(`.${styles.lanePill}`)) return;
 			tl.clearSelection();
@@ -622,7 +627,7 @@ export function V4Timeline({
 			window.addEventListener("pointermove", move);
 			window.addEventListener("pointerup", up);
 		},
-		[seekToClientX, tl, setCurrentTime],
+		[seekToClientX, tl, setCurrentTime, showLanes],
 	);
 
 	const [activePillDrag, setActivePillDrag] = useState<{
@@ -803,6 +808,9 @@ export function V4Timeline({
 	useEffect(() => {
 		const el = tracksRef.current;
 		if (!el) return;
+		// Media shows no zoom window, so leave the wheel alone there: a zoom with
+		// no control to undo it and no ruler reading to explain it is a trap.
+		if (!showLanes) return;
 		const onWheelNative = (e: WheelEvent) => {
 			const r = el.getBoundingClientRect();
 			const viewportPct = Math.min(1, Math.max(0, (e.clientX - r.left) / r.width));
@@ -836,7 +844,7 @@ export function V4Timeline({
 		};
 		el.addEventListener("wheel", onWheelNative, { passive: false });
 		return () => el.removeEventListener("wheel", onWheelNative);
-	}, []);
+	}, [showLanes]);
 
 	// Track the tracks' content width for the ruler. .tlTracks and .tlRulerRow
 	// carry the same horizontal padding and the tracks' scrollbar is hidden, so
@@ -1410,7 +1418,19 @@ export function V4Timeline({
 						</Popover>
 					</div>
 				) : (
-					<div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+					// Media is an ARRANGING surface: add, remove, reorder. Nothing here
+					// plays or edits, so the transport, the scroll hints, the zoom nav and
+					// the playhead are absent rather than inert — this caption is the whole
+					// header, and it centres because it is alone in the row.
+					<div
+						style={{
+							display: "flex",
+							flexDirection: "column",
+							gap: 2,
+							margin: "0 auto",
+							textAlign: "center",
+						}}
+					>
 						<span style={{ fontSize: 12.5, fontWeight: 600, color: "var(--fg-2)" }}>
 							{t("toolbar.arrangeClips")}
 						</span>
@@ -1419,23 +1439,27 @@ export function V4Timeline({
 						</span>
 					</div>
 				)}
-				<TransportBar
-					playing={playing}
-					overrideTimeSec={scrubbingTimeSec}
-					clips={clips}
-					onTogglePlay={onTogglePlay}
-					onPrevClip={onPrevClip}
-					onNextClip={onNextClip}
-					onSeek={setCurrentTime}
-				/>
-				<div className={styles.tlHints}>
-					<span className={styles.tlHint}>
-						<span className={styles.tlKbd}>Shift+Scroll</span> {t("labels.pan")}
-					</span>
-					<span className={styles.tlHint}>
-						<span className={styles.tlKbd}>Ctrl+Scroll</span> {t("labels.zoom")}
-					</span>
-				</div>
+				{showLanes ? (
+					<>
+						<TransportBar
+							playing={playing}
+							overrideTimeSec={scrubbingTimeSec}
+							clips={clips}
+							onTogglePlay={onTogglePlay}
+							onPrevClip={onPrevClip}
+							onNextClip={onNextClip}
+							onSeek={setCurrentTime}
+						/>
+						<div className={styles.tlHints}>
+							<span className={styles.tlHint}>
+								<span className={styles.tlKbd}>Shift+Scroll</span> {t("labels.pan")}
+							</span>
+							<span className={styles.tlHint}>
+								<span className={styles.tlKbd}>Ctrl+Scroll</span> {t("labels.zoom")}
+							</span>
+						</div>
+					</>
+				) : null}
 			</div>
 
 			{/* Ruler + tracks share one relative wrapper so a single playhead overlay
@@ -1611,41 +1635,48 @@ export function V4Timeline({
 				{/* Single playhead overlay spanning the ruler + tracks: fixed vertically
 			    (a cursor, so it doesn't scroll with the lanes) and sharing the exact
 			    same zoom/pan transform + width as the canvases, so its line stays
-			    continuous from the ruler down through the clips and its head aligns. */}
-				<PlayheadOverlay
-					totalSec={total}
-					overrideTimeSec={scrubbingTimeSec}
-					canvasStyle={canvasStyle}
-					onPointerDown={startScrub}
-					playheadRef={playheadElRef}
-				/>
+			    continuous from the ruler down through the clips and its head aligns.
+			    Edit only: there is no playback to follow on the Media surface. */}
+				{showLanes ? (
+					<PlayheadOverlay
+						totalSec={total}
+						overrideTimeSec={scrubbingTimeSec}
+						canvasStyle={canvasStyle}
+						onPointerDown={startScrub}
+						playheadRef={playheadElRef}
+					/>
+				) : null}
 			</div>
 
-			<div ref={navRef} className={styles.tlNav}>
-				<div className={styles.tlNavTrack} />
-				<div
-					className={styles.tlNavWindow}
-					style={{
-						left: `${(nav.start * 100).toFixed(2)}%`,
-						width: `${((nav.end - nav.start) * 100).toFixed(2)}%`,
-					}}
-					onPointerDown={(e) => startNavDrag("pan", e)}
-				/>
-				<div
-					className={styles.tlNavHandle}
-					style={{ left: `calc(${(nav.start * 100).toFixed(2)}% - 6px)` }}
-					onPointerDown={(e) => startNavDrag("left", e)}
-				>
-					<span />
+			{/* Zoom/pan window. Edit only: arranging clips needs the whole timeline
+			    on screen at once, and there is nothing to zoom INTO without lanes. */}
+			{showLanes ? (
+				<div ref={navRef} className={styles.tlNav}>
+					<div className={styles.tlNavTrack} />
+					<div
+						className={styles.tlNavWindow}
+						style={{
+							left: `${(nav.start * 100).toFixed(2)}%`,
+							width: `${((nav.end - nav.start) * 100).toFixed(2)}%`,
+						}}
+						onPointerDown={(e) => startNavDrag("pan", e)}
+					/>
+					<div
+						className={styles.tlNavHandle}
+						style={{ left: `calc(${(nav.start * 100).toFixed(2)}% - 6px)` }}
+						onPointerDown={(e) => startNavDrag("left", e)}
+					>
+						<span />
+					</div>
+					<div
+						className={styles.tlNavHandle}
+						style={{ left: `calc(${(nav.end * 100).toFixed(2)}% - 6px)` }}
+						onPointerDown={(e) => startNavDrag("right", e)}
+					>
+						<span />
+					</div>
 				</div>
-				<div
-					className={styles.tlNavHandle}
-					style={{ left: `calc(${(nav.end * 100).toFixed(2)}% - 6px)` }}
-					onPointerDown={(e) => startNavDrag("right", e)}
-				>
-					<span />
-				</div>
-			</div>
+			) : null}
 		</div>
 	);
 }
