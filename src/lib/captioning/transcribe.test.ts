@@ -23,7 +23,13 @@ import { transcribeMono16kToSegments } from "./transcribe";
  * worker that the previous Web-Worker pipeline owned, so they run in any env.
  */
 
-type Listener = (event: { phase: "model" | "transcribe" }) => void;
+// Mirrors `SttRendererStatus` — the mock must accept the progress fields, since
+// carrying them across the IPC hop is exactly what this file asserts.
+type Listener = (event: {
+	phase: "model" | "transcribe";
+	completedSec?: number;
+	totalSec?: number;
+}) => void;
 
 type RendererSttApi = {
 	transcribe: (request: { samples: Float32Array; language?: string }) => Promise<{
