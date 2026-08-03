@@ -295,6 +295,10 @@ interface Window {
 			message?: string;
 			error?: string;
 		}>;
+		getAudioPeaks: (
+			filePath: string,
+			durationSec: number,
+		) => Promise<import("./media/audioPeaks").AudioPeaksResult>;
 		readFileChunk: (
 			filePath: string,
 			offset: number,
