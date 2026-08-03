@@ -24,6 +24,13 @@ export function copyRegion(snap: RegionSnapshot) {
 export function pasteClipboard(): RegionSnapshot | null {
 	return clipboard;
 }
+/** Empty it. What the user copied LAST is what Ctrl+V must paste, so copying a
+ *  clip has to retire whatever region sat here — otherwise both clipboards stay
+ *  loaded at once and paste is left guessing between them. */
+export function clearRegionClipboard() {
+	clipboard = null;
+	notify();
+}
 export function useRegionClipboard() {
 	const [, force] = useState(0);
 	useEffect(() => {
