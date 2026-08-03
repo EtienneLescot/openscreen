@@ -23,10 +23,21 @@ export function NotesWindow() {
 	const [settings, setSettings] = useState(loadNotesTeleprompterSettings);
 	const [isPlaying, setIsPlaying] = useState(false);
 	const [initialContent] = useState(loadInitialNotesContent);
+
+	// Whether the note body currently rejects edits. Playback locks it because typing makes
+	// ProseMirror scroll the caret back into view, which fights the teleprompter. Mirroring
+	// locks it because caret placement and selection are horizontally reversed on screen, so
+	// the mirrored note is presentation-only. The teleprompter controls themselves stay live
+	// in both states; turning the lock's last reason off restores editing.
+	const editingLocked = isPlaying || settings.mirrored;
+
 	const editor = useEditor({
 		extensions: [StarterKit],
 		content: initialContent,
 		autofocus: "end",
+		// A restored mirror must lock the note from the very first paint — an effect runs
+		// only after the first commit, which would leave one editable frame.
+		editable: !editingLocked,
 		editorProps: {
 			attributes: {
 				class: "tiptap",
@@ -48,13 +59,6 @@ export function NotesWindow() {
 
 		saveNotesTeleprompterSettings(settings);
 	}, [settings]);
-
-	// Whether the note body currently rejects edits. Playback locks it because typing makes
-	// ProseMirror scroll the caret back into view, which fights the teleprompter. Mirroring
-	// locks it because caret placement and selection are horizontally reversed on screen, so
-	// the mirrored note is presentation-only. The teleprompter controls themselves stay live
-	// in both states; turning the lock's last reason off restores editing.
-	const editingLocked = isPlaying || settings.mirrored;
 
 	// `emitUpdate: false` — the content did not change, so there is nothing to persist.
 	useEffect(() => {
