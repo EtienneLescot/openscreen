@@ -10,20 +10,26 @@
 // padded hours, no tenths) and timeUtils' `formatTimePadded` (mm:ss) are
 // different formats, not copies of these.
 
+function splitRoundedTime(value: number): { totalMinutes: number; seconds: number } {
+	const safe = Number.isFinite(value) && value > 0 ? value : 0;
+	const totalTenths = Math.round(safe * 10);
+	return {
+		totalMinutes: Math.floor(totalTenths / 600),
+		seconds: (totalTenths % 600) / 10,
+	};
+}
+
 /** `m:ss.t` — no hour field, ever. */
 export function formatSec(sec: number): string {
-	const safe = Number.isFinite(sec) && sec > 0 ? sec : 0;
-	const m = Math.floor(safe / 60);
-	const s = (safe % 60).toFixed(1);
-	return `${m}:${s.padStart(4, "0")}`;
+	const { totalMinutes, seconds } = splitRoundedTime(sec);
+	return `${totalMinutes}:${seconds.toFixed(1).padStart(4, "0")}`;
 }
 
 /** `m:ss.t`, or `h:mm:ss.t` once past an hour. */
 export function formatSeconds(value: number): string {
-	const safe = Number.isFinite(value) && value > 0 ? value : 0;
-	const hours = Math.floor(safe / 3600);
-	const minutes = Math.floor((safe % 3600) / 60);
-	const seconds = safe % 60;
+	const { totalMinutes, seconds } = splitRoundedTime(value);
+	const hours = Math.floor(totalMinutes / 60);
+	const minutes = totalMinutes % 60;
 	if (hours > 0) {
 		return `${hours}:${String(minutes).padStart(2, "0")}:${seconds.toFixed(1).padStart(4, "0")}`;
 	}
