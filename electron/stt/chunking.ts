@@ -50,14 +50,23 @@ export interface PlanChunksOptions {
 const DEFAULT_TARGET_SEC = 90;
 
 /**
- * Index of the quietest frame start in `[from, to)`. Both bounds are clamped by
- * the caller; returns `from` when the range holds less than one full frame.
+ * Index of the quietest frame start in `[from, to)`, breaking ties toward the
+ * frame nearest `preferred`. Both bounds are clamped by the caller; returns
+ * `from` when the range holds less than one full frame.
+ *
+ * The tie-break is not decoration. Digital silence — a muted track, a gap
+ * between takes — makes every frame in the window score exactly 0, and keeping
+ * the first one would pull every boundary back to `from`, i.e. shorten every
+ * chunk by the whole search window (90s → 87s by default, and 10s → 5s in the
+ * silent test case). That is extra requests and extra seams bought for nothing,
+ * against the very context loss `DEFAULT_TARGET_SEC` is sized to limit.
  */
 function quietestFrameStart(
 	samples: Float32Array,
 	from: number,
 	to: number,
 	frameSamples: number,
+	preferred: number,
 ): number {
 	let bestStart = from;
 	let bestEnergy = Number.POSITIVE_INFINITY;
@@ -66,7 +75,10 @@ function quietestFrameStart(
 		for (let i = start; i < start + frameSamples; i++) {
 			energy += samples[i] * samples[i];
 		}
-		if (energy < bestEnergy) {
+		if (
+			energy < bestEnergy ||
+			(energy === bestEnergy && Math.abs(start - preferred) < Math.abs(bestStart - preferred))
+		) {
 			bestEnergy = energy;
 			bestStart = start;
 		}
@@ -85,12 +97,15 @@ export function planChunks(
 	options: PlanChunksOptions = {},
 ): SttChunkPlan[] {
 	if (samples.length === 0 || sampleRate <= 0) return [];
+	const frameSamples = Math.max(1, Math.round((FRAME_MS / 1000) * sampleRate));
+	// One frame is the floor: a target shorter than the unit the scan works in
+	// would put the ideal boundary BEFORE the earliest legal cut, which is the
+	// only way the loop below could fail to make progress.
 	const targetSamples = Math.max(
-		1,
+		frameSamples,
 		Math.round((options.targetSec ?? DEFAULT_TARGET_SEC) * sampleRate),
 	);
 	const searchSamples = Math.max(0, Math.round((options.searchSec ?? 3) * sampleRate));
-	const frameSamples = Math.max(1, Math.round((FRAME_MS / 1000) * sampleRate));
 
 	const chunks: SttChunkPlan[] = [];
 	let start = 0;
@@ -105,8 +120,11 @@ export function planChunks(
 		// loop forever) and never past the end of the buffer.
 		const from = Math.max(start + frameSamples, ideal - searchSamples);
 		const to = Math.min(samples.length, ideal + searchSamples);
-		const cut = to > from ? quietestFrameStart(samples, from, to, frameSamples) : ideal;
-		const endSample = Math.min(samples.length, Math.max(from, cut));
+		// No clamping needed on either side: `ideal >= from` because `targetSamples`
+		// is at least one frame, and every value the scan can return lies in
+		// `[from, to)` — so the cut is always past `start` and inside the buffer.
+		const endSample =
+			to > from ? quietestFrameStart(samples, from, to, frameSamples, ideal) : ideal;
 		chunks.push({ startSample: start, endSample });
 		start = endSample;
 	}

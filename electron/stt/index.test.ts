@@ -128,10 +128,16 @@ describe("SttManager", () => {
 		}
 	});
 
-	it("pins later chunks to the language detected on the first one", async () => {
+	// Both spellings of "detect it for me". `"auto"` is the one the request
+	// contract documents, and it is truthy — which is exactly how it used to slip
+	// past the pin and let every chunk detect its own language.
+	it.each([
+		["omitted", undefined] as const,
+		["auto", "auto"] as const,
+	])("pins later chunks to the language detected on the first one (%s)", async (_label, language) => {
 		const mgr = new SttManager();
 		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
-		await mgr.transcribe({ samples: new Float32Array(200 * 16000) });
+		await mgr.transcribe({ samples: new Float32Array(200 * 16000), language });
 		const languages = fakeWhisperServer.transcribe.mock.calls.map(([req]) => req.language);
 		expect(languages[0]).toBeUndefined();
 		expect(languages.slice(1).every((l) => l === "en")).toBe(true);
@@ -152,13 +158,40 @@ describe("SttManager", () => {
 		expect(fakeWhisperServer.start.mock.calls.length).toBeGreaterThan(1);
 	});
 
-	it("fails the request when a chunk never succeeds", async () => {
+	it("fails the request when a chunk never succeeds, saying how far it got", async () => {
 		fakeWhisperServer.transcribe.mockRejectedValue(new Error("helper wedged"));
 		const mgr = new SttManager();
 		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
-		await expect(
-			mgr.transcribe({ samples: new Float32Array(16000), language: "en" }),
-		).rejects.toThrow("helper wedged");
+		// 200s in, the failure is on chunk 2 of 3 — "Transcription failed" alone
+		// tells the user nothing about a recording this long.
+		await expect(mgr.transcribe({ samples: new Float32Array(200 * 16000) })).rejects.toThrow(
+			/transcription failed \d+s into a 200s recording \(chunk 1\/3\).*helper wedged/,
+		);
+	});
+
+	it("stops at the next chunk boundary when cancelled", async () => {
+		const mgr = new SttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		// Cancel lands while the first chunk is in flight — the loop must not go on
+		// to the remaining ones, which is what left "regenerate" waiting on a run
+		// nobody wanted any more.
+		fakeWhisperServer.transcribe.mockImplementation(async () => {
+			mgr.cancel();
+			return {
+				segments: [],
+				wordSegments: [],
+				detectedLanguage: "en",
+				backend: "whispercpp-cpu" as const,
+			};
+		});
+		const samples = new Float32Array(300 * 16000);
+		expect(planChunks(samples, 16000).length).toBeGreaterThan(1);
+
+		const error = await mgr.transcribe({ samples }).catch((e: unknown) => e);
+		// `AbortError` by name, so the renderer treats it as "the user asked" and
+		// drops the job silently instead of toasting an engine failure.
+		expect((error as Error).name).toBe("AbortError");
+		expect(fakeWhisperServer.transcribe).toHaveBeenCalledOnce();
 	});
 
 	it("shutdown() stops whisper-stt-server", async () => {
@@ -188,12 +221,25 @@ describe("SttManager", () => {
 		expect(fakeWhisperServer.start).toHaveBeenCalledOnce();
 	});
 
-	it("setStatusSink replaces the previous sink (last call wins)", () => {
+	it("fans status out to every sink, and detaching one leaves the others", async () => {
 		const mgr = new SttManager();
-		const a = vi.fn();
-		const b = vi.fn();
-		mgr.setStatusSink(a);
-		mgr.setStatusSink(b);
-		expect(mgr.getStatusSink()).toBe(b);
+		const a = vi.fn<(e: SttStatusEvent) => void>();
+		const b = vi.fn<(e: SttStatusEvent) => void>();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		const detachA = mgr.addStatusSink(a);
+		mgr.addStatusSink(b);
+		await mgr.transcribe({ samples: new Float32Array(16000), language: "en" });
+		expect(a).toHaveBeenCalled();
+		expect(b).toHaveBeenCalled();
+
+		// The whole point of the Set. Two overlapping IPC requests each attach a
+		// sink; when the first finishes and detaches, the second must keep getting
+		// its own progress instead of falling silent for the rest of its run.
+		detachA();
+		a.mockClear();
+		b.mockClear();
+		await mgr.transcribe({ samples: new Float32Array(16000), language: "en" });
+		expect(a).not.toHaveBeenCalled();
+		expect(b).toHaveBeenCalled();
 	});
 });
