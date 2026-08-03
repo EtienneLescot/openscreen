@@ -321,19 +321,43 @@ export class WhisperServerManager {
 			// error and its own header timeout as a bare "fetch failed", which is
 			// how a too-long request used to reach the user as an unactionable
 			// "Transcription failed" toast.
-			const reason =
-				error instanceof Error && error.name === "TimeoutError" ? "timed out" : "failed";
-			throw new Error(
-				`whisper-stt-server /inference ${reason} after ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s ` +
-					`(audio chunk too long for this machine, or the helper is wedged); ` +
-					`stderr=${this.stderrTail.slice(-256)}`,
+			//
+			// The timeout wording is reserved for an ACTUAL timeout: a helper that
+			// died a moment ago rejects in a millisecond, and telling the reader it
+			// spent 280s on an over-long chunk sends them to the wrong problem
+			// entirely. Everything else carries its own message, plus `cause` so the
+			// errno survives.
+			// `Object.assign` rather than the `{ cause }` constructor option: the
+			// project targets ES2020, where that overload does not exist.
+			throw Object.assign(
+				new Error(
+					error instanceof Error && error.name === "TimeoutError"
+						? `whisper-stt-server /inference timed out after ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s ` +
+								`(audio chunk too long for this machine, or the helper is wedged); ` +
+								`stderr=${this.stderrTail.slice(-256)}`
+						: `whisper-stt-server /inference failed: ` +
+								`${error instanceof Error ? error.message : String(error)}; ` +
+								`stderr=${this.stderrTail.slice(-256)}`,
+				),
+				{ cause: error },
 			);
 		}
 		if (!res.ok) {
 			const text = await res.text().catch(() => "");
 			throw new Error(`whisper-stt-server /inference HTTP ${res.status}: ${text.slice(0, 512)}`);
 		}
-		return (await res.json()) as WhisperJsonResponse;
+		// The same timeout still covers the body: it can fire between the headers
+		// and the last byte, and an unnamed `AbortError` here would read exactly
+		// like the "fetch failed" this whole block exists to replace.
+		return (await res.json().catch((error: unknown) => {
+			throw Object.assign(
+				new Error(
+					`whisper-stt-server /inference response was unreadable: ` +
+						`${error instanceof Error ? error.message : String(error)}`,
+				),
+				{ cause: error },
+			);
+		})) as WhisperJsonResponse;
 	}
 
 	/** Defensive number parse for `verbose_json` values that may arrive as strings. */

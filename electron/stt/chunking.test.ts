@@ -45,18 +45,28 @@ describe("planChunks", () => {
 		]);
 	});
 
-	it("always makes progress, even on a fully silent buffer", () => {
-		// Every frame ties on energy, so the cut is whatever the scan settles on —
-		// what matters is that it never returns a zero-length chunk (infinite loop).
+	it("keeps the target when every frame ties, on a fully silent buffer", () => {
+		// Every frame scores exactly 0, so the tie-break is what decides. Keeping
+		// the earliest one pulled every cut back to `ideal - searchSec` — 5s chunks
+		// here instead of 10s, i.e. twice the requests and twice the seams, on the
+		// audio most likely to tie (a muted track, a gap between takes).
 		const samples = new Float32Array(60 * RATE);
 		const chunks = planChunks(samples, RATE, { targetSec: 10, searchSec: 5 });
+		expect(chunks.map((c) => c.endSample / RATE)).toEqual([10, 20, 30, 40, 50, 60]);
 		for (const chunk of chunks) {
 			expect(chunk.endSample).toBeGreaterThan(chunk.startSample);
 		}
-		expect(chunks[chunks.length - 1].endSample).toBe(samples.length);
 	});
 
 	it("handles an empty buffer", () => {
 		expect(planChunks(new Float32Array(0), RATE)).toEqual([]);
+	});
+
+	it("makes progress even when the target is shorter than one energy frame", () => {
+		// Degenerate but reachable through the options: below one frame the scan has
+		// nothing to measure, and the boundary must still move or the loop spins.
+		const chunks = planChunks(new Float32Array(RATE), RATE, { targetSec: 0.001 });
+		for (const chunk of chunks) expect(chunk.endSample).toBeGreaterThan(chunk.startSample);
+		expect(chunks[chunks.length - 1].endSample).toBe(RATE);
 	});
 });
