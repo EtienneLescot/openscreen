@@ -43,6 +43,10 @@
 		"fullscreen": "ملء الشاشة",
 		"exitFullscreen": "خروج من ملء الشاشة"
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} بكسل/ثانية",
+		"pixels": "{{value}} بكسل"
+	},
 	"locale": {
 		"name": "عربي",
 		"short": "AR"

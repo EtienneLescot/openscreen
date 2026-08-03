@@ -43,6 +43,10 @@
 		"fullscreen": "Schermo intero",
 		"exitFullscreen": "Esci dallo schermo intero"
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} pixel/s",
+		"pixels": "{{value}} pixel"
+	},
 	"locale": {
 		"name": "Italiano",
 		"short": "IT"

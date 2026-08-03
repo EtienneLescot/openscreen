@@ -20,7 +20,16 @@
 			"bulletList": "Danh sách dấu đầu dòng",
 			"numberedList": "Danh sách đánh số",
 			"blockquote": "Trích dẫn",
-			"codeBlock": "Khối mã"
+			"codeBlock": "Khối mã",
+			"play": "Bắt đầu tự động cuộn",
+			"pause": "Tạm dừng tự động cuộn",
+			"speed": "Tốc độ cuộn",
+			"decreaseSpeed": "Giảm tốc độ cuộn",
+			"increaseSpeed": "Tăng tốc độ cuộn",
+			"fontSize": "Cỡ chữ",
+			"decreaseFontSize": "Giảm cỡ chữ",
+			"increaseFontSize": "Tăng cỡ chữ",
+			"mirror": "Lật ngang"
 		}
 	},
 	"audio": {

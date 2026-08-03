@@ -43,6 +43,10 @@
 		"fullscreen": "Tela Cheia",
 		"exitFullscreen": "Sair da Tela Cheia"
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} pixels/s",
+		"pixels": "{{value}} pixels"
+	},
 	"locale": {
 		"name": "Português Brasileiro",
 		"short": "PT-BR"
