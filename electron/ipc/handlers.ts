@@ -3547,7 +3547,16 @@ export function registerIpcHandlers(
 			const content = await fs.readFile(filePath, "utf-8");
 			const project = await relinkProjectMedia(JSON.parse(content), RECORDINGS_DIR);
 			currentProjectPath = filePath;
-			setCurrentRecordingSessionState(await getApprovedProjectSession(project, filePath));
+			let session: RecordingSession | null = null;
+			try {
+				session = await getApprovedProjectSession(project, filePath);
+			} catch (sessionError) {
+				console.warn(
+					"[loadProjectFile] Could not approve session paths, proceeding without session:",
+					sessionError,
+				);
+			}
+			setCurrentRecordingSessionState(session);
 
 			return {
 				success: true,
@@ -3620,7 +3629,16 @@ export function registerIpcHandlers(
 
 			const content = await fs.readFile(currentProjectPath, "utf-8");
 			const project = await relinkProjectMedia(JSON.parse(content), RECORDINGS_DIR);
-			setCurrentRecordingSessionState(await getApprovedProjectSession(project, currentProjectPath));
+			let session: RecordingSession | null = null;
+			try {
+				session = await getApprovedProjectSession(project, currentProjectPath);
+			} catch (sessionError) {
+				console.warn(
+					"[loadCurrentProjectFile] Could not approve session paths, proceeding without session:",
+					sessionError,
+				);
+			}
+			setCurrentRecordingSessionState(session);
 			return {
 				success: true,
 				path: currentProjectPath,
