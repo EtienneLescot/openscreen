@@ -31,6 +31,13 @@ import { dropTrimPillsByIds, resolveTimelineSpanToTrim } from "../timeline/trim-
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
 import { useProjectStore } from "./projectStore";
 
+// How long a region lasts when the caller doesn't say. The timeline's toolbar
+// passes its own duration instead, derived from the current zoom so the new pill
+// always comes out the same WIDTH on screen (see PILL_CREATE_PX in V4Timeline).
+// Every other entry point — keyboard shortcuts, the agent, auto-zooms — gets
+// these 2 s, which is what all five add* used to hardcode.
+const DEFAULT_NEW_REGION_SEC = 2;
+
 // NaN-guarded floors. Timeline inputs arrive from drag deltas and persisted
 // documents, both of which can carry NaN; every action needs the same guard.
 const finiteSec = (n: number) => (Number.isFinite(n) ? Math.max(0, n) : 0);
@@ -155,29 +162,33 @@ export function useTimeline() {
 	// technical-documentation/architecture/timeline-model.md) — writing only startMs/endMs
 	// would strand it. A region created across a clip boundary becomes one fragment per
 	// clip; the ruler renders them as one pill because their properties are equal.
-	const addZoom = useCallback(async () => {
-		if (!document) return;
-		const timeMs = Math.round(playheadSec() * 1000);
-		const anchored = anchorRegionsWithDerivedMs(
-			[
-				{
-					id: createId("zoom"),
-					startMs: timeMs,
-					endMs: timeMs + 2000,
-					depth: 3,
-					focus: { cx: 0.5, cy: 0.5 },
-					focusMode: "manual" as const,
-				},
-			],
-			document.timeline.clips,
-			() => createId("zoom"),
-		);
-		const next: AxcutDocument = {
-			...document,
-			zoomRanges: [...document.zoomRanges, ...anchored] as AxcutDocument["zoomRanges"],
-		};
-		await saveDocument(next);
-	}, [document, saveDocument]);
+	const addZoom = useCallback(
+		async (durationSec = DEFAULT_NEW_REGION_SEC) => {
+			if (!document) return;
+			const timeMs = Math.round(playheadSec() * 1000);
+			const endMs = timeMs + Math.round(durationSec * 1000);
+			const anchored = anchorRegionsWithDerivedMs(
+				[
+					{
+						id: createId("zoom"),
+						startMs: timeMs,
+						endMs,
+						depth: 3,
+						focus: { cx: 0.5, cy: 0.5 },
+						focusMode: "manual" as const,
+					},
+				],
+				document.timeline.clips,
+				() => createId("zoom"),
+			);
+			const next: AxcutDocument = {
+				...document,
+				zoomRanges: [...document.zoomRanges, ...anchored] as AxcutDocument["zoomRanges"],
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
 
 	// Append several auto-generated zoom regions in one save (auto-enhance).
 	// Suggestions come from buildAutoZoomSuggestions, which already reserves
@@ -212,135 +223,153 @@ export function useTimeline() {
 		[document, saveDocument],
 	);
 
-	const addTrim = useCallback(async () => {
-		if (!document) return;
-		// Insert a 2s trim at the playhead in *timeline* time, then resolve it
-		// down to the correct clip's asset + source-time. Writing currentTimeSec
-		// straight into startSec (as before) only happened to be right for an
-		// identity single-clip project — for trimmed/reordered clips it landed
-		// the trim at the wrong source position.
-		const playhead = playheadSec();
-		const resolved = resolveTimelineSpanToTrim(playhead, playhead + 2, document.timeline.clips);
-		const asset =
-			document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
-		if (!resolved && !asset) return;
-		const next: AxcutDocument = {
-			...document,
-			timeline: {
-				...document.timeline,
-				trimRanges: [
-					...document.timeline.trimRanges,
-					{
-						id: createId("trim"),
-						assetId: resolved?.assetId ?? asset!.id,
-						// The carrier clip, so the cut lands on THAT clip and not on every clip
-						// sharing its media (see `trimAppliesToClip`). Absent only in the
-						// no-clip fallback below, where there is no clip to name.
-						...(resolved ? { clipId: resolved.clipId } : {}),
-						startSec: resolved?.sourceStartSec ?? playhead,
-						endSec: resolved?.sourceEndSec ?? playhead + 2,
-						reason: "manual",
-						origin: "user" as const,
-					},
-				],
-			},
-		};
-		await saveDocument(next);
-	}, [document, saveDocument]);
+	const addTrim = useCallback(
+		async (durationSec = DEFAULT_NEW_REGION_SEC) => {
+			if (!document) return;
+			// Insert a 2s trim at the playhead in *timeline* time, then resolve it
+			// down to the correct clip's asset + source-time. Writing currentTimeSec
+			// straight into startSec (as before) only happened to be right for an
+			// identity single-clip project — for trimmed/reordered clips it landed
+			// the trim at the wrong source position.
+			const playhead = playheadSec();
+			const end = playhead + durationSec;
+			const resolved = resolveTimelineSpanToTrim(playhead, end, document.timeline.clips);
+			const asset =
+				document.assets.find((a) => a.id === document.project.primaryAssetId) ?? document.assets[0];
+			if (!resolved && !asset) return;
+			const next: AxcutDocument = {
+				...document,
+				timeline: {
+					...document.timeline,
+					trimRanges: [
+						...document.timeline.trimRanges,
+						{
+							id: createId("trim"),
+							assetId: resolved?.assetId ?? asset!.id,
+							// The carrier clip, so the cut lands on THAT clip and not on every clip
+							// sharing its media (see `trimAppliesToClip`). Absent only in the
+							// no-clip fallback below, where there is no clip to name.
+							...(resolved ? { clipId: resolved.clipId } : {}),
+							startSec: resolved?.sourceStartSec ?? playhead,
+							endSec: resolved?.sourceEndSec ?? end,
+							reason: "manual",
+							origin: "user" as const,
+						},
+					],
+				},
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
 
-	const addAnnotation = useCallback(async () => {
-		if (!document) return;
-		const timeMs = Math.round(playheadSec() * 1000);
-		const ann: AnnotationRegion = {
-			id: createId("ann"),
-			startMs: timeMs,
-			endMs: timeMs + 2000,
-			type: "text" as AnnotationType,
-			// Real, localised text rather than an empty field. An empty annotation
-			// renders nothing at all, so the user added a region and saw no change
-			// on the canvas; the inspector's placeholder is CSS ghost text that
-			// never reaches `content`, so it never reached the compositor either.
-			// `textContent` stays empty because the render path reads
-			// `content || textContent` and seeding both would just duplicate it.
-			content: ts("annotation.defaultText"),
-			textContent: "",
-			position: { x: 50, y: 50 },
-			size: { width: 30, height: 20 },
-			style: {
-				color: "#ffffff",
-				backgroundColor: "transparent",
-				fontSize: 32,
-				fontFamily: "Inter",
-				fontWeight: "bold",
-				fontStyle: "normal",
-				textDecoration: "none",
-				textAlign: "center",
-				textAnimation: "none",
-			},
-			zIndex: document.annotations.length + 1,
-		};
-		const created = anchorRegionsWithDerivedMs([ann], document.timeline.clips, () =>
-			createId("ann"),
-		);
-		const next: AxcutDocument = {
-			...document,
-			annotations: [...document.annotations, ...created] as unknown as AxcutDocument["annotations"],
-		};
-		await saveDocument(next);
-		// Select the freshly added annotation so its inspector opens and it shows a
-		// selection box on the canvas, ready to be retyped over.
-		const newId = created[0]?.id ?? ann.id;
-		setMultiSelection([{ kind: "annotation", id: newId }]);
-		setSelection({ kind: "annotation", id: newId });
-		// `ts` is memoised on [locale, namespace] by useScopedT, so this does not
-		// churn the callback identity between renders.
-	}, [document, saveDocument, ts]);
+	const addAnnotation = useCallback(
+		async (durationSec = DEFAULT_NEW_REGION_SEC) => {
+			if (!document) return;
+			const timeMs = Math.round(playheadSec() * 1000);
+			const ann: AnnotationRegion = {
+				id: createId("ann"),
+				startMs: timeMs,
+				endMs: timeMs + Math.round(durationSec * 1000),
+				type: "text" as AnnotationType,
+				// Real, localised text rather than an empty field. An empty annotation
+				// renders nothing at all, so the user added a region and saw no change
+				// on the canvas; the inspector's placeholder is CSS ghost text that
+				// never reaches `content`, so it never reached the compositor either.
+				// `textContent` stays empty because the render path reads
+				// `content || textContent` and seeding both would just duplicate it.
+				content: ts("annotation.defaultText"),
+				textContent: "",
+				position: { x: 50, y: 50 },
+				size: { width: 30, height: 20 },
+				style: {
+					color: "#ffffff",
+					backgroundColor: "transparent",
+					fontSize: 32,
+					fontFamily: "Inter",
+					fontWeight: "bold",
+					fontStyle: "normal",
+					textDecoration: "none",
+					textAlign: "center",
+					textAnimation: "none",
+				},
+				zIndex: document.annotations.length + 1,
+			};
+			const created = anchorRegionsWithDerivedMs([ann], document.timeline.clips, () =>
+				createId("ann"),
+			);
+			const next: AxcutDocument = {
+				...document,
+				annotations: [
+					...document.annotations,
+					...created,
+				] as unknown as AxcutDocument["annotations"],
+			};
+			await saveDocument(next);
+			// Select the freshly added annotation so its inspector opens and it shows a
+			// selection box on the canvas, ready to be retyped over.
+			const newId = created[0]?.id ?? ann.id;
+			setMultiSelection([{ kind: "annotation", id: newId }]);
+			setSelection({ kind: "annotation", id: newId });
+			// `ts` is memoised on [locale, namespace] by useScopedT, so this does not
+			// churn the callback identity between renders.
+		},
+		[document, saveDocument, ts],
+	);
 
-	const addSpeed = useCallback(async () => {
-		if (!document) return;
-		const timeMs = Math.round(playheadSec() * 1000);
-		const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
-		const prev = (legacy.speedRegions as unknown[]) ?? [];
-		const next: AxcutDocument = {
-			...document,
-			legacyEditor: {
-				...legacy,
-				speedRegions: [
-					...prev,
-					...anchorRegionsWithDerivedMs(
-						[{ id: createId("speed"), startMs: timeMs, endMs: timeMs + 2000, speed: 1.5 as const }],
-						document.timeline.clips,
-						() => createId("speed"),
-					),
-				],
-			},
-		};
-		await saveDocument(next);
-	}, [document, saveDocument]);
+	const addSpeed = useCallback(
+		async (durationSec = DEFAULT_NEW_REGION_SEC) => {
+			if (!document) return;
+			const timeMs = Math.round(playheadSec() * 1000);
+			const endMs = timeMs + Math.round(durationSec * 1000);
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prev = (legacy.speedRegions as unknown[]) ?? [];
+			const next: AxcutDocument = {
+				...document,
+				legacyEditor: {
+					...legacy,
+					speedRegions: [
+						...prev,
+						...anchorRegionsWithDerivedMs(
+							[{ id: createId("speed"), startMs: timeMs, endMs, speed: 1.5 as const }],
+							document.timeline.clips,
+							() => createId("speed"),
+						),
+					],
+				},
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
 
 	// Full Camera: a plain time span (no value) during which the preview/export
 	// grows the webcam overlay to (almost) fill the canvas and eases it back.
-	const addCameraFullscreen = useCallback(async () => {
-		if (!document) return;
-		const timeMs = Math.round(playheadSec() * 1000);
-		const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
-		const prev = (legacy.cameraFullscreenRegions as unknown[]) ?? [];
-		const next: AxcutDocument = {
-			...document,
-			legacyEditor: {
-				...legacy,
-				cameraFullscreenRegions: [
-					...prev,
-					...anchorRegionsWithDerivedMs(
-						[{ id: createId("camfull"), startMs: timeMs, endMs: timeMs + 2000 }],
-						document.timeline.clips,
-						() => createId("camfull"),
-					),
-				],
-			},
-		};
-		await saveDocument(next);
-	}, [document, saveDocument]);
+	const addCameraFullscreen = useCallback(
+		async (durationSec = DEFAULT_NEW_REGION_SEC) => {
+			if (!document) return;
+			const timeMs = Math.round(playheadSec() * 1000);
+			const endMs = timeMs + Math.round(durationSec * 1000);
+			const legacy = (document.legacyEditor as Record<string, unknown>) ?? {};
+			const prev = (legacy.cameraFullscreenRegions as unknown[]) ?? [];
+			const next: AxcutDocument = {
+				...document,
+				legacyEditor: {
+					...legacy,
+					cameraFullscreenRegions: [
+						...prev,
+						...anchorRegionsWithDerivedMs(
+							[{ id: createId("camfull"), startMs: timeMs, endMs }],
+							document.timeline.clips,
+							() => createId("camfull"),
+						),
+					],
+				},
+			};
+			await saveDocument(next);
+		},
+		[document, saveDocument],
+	);
 
 	// Like updateTrimRange but also re-attaches the trim to a (possibly different) CLIP —
 	// needed when a trim is dragged across a clip boundary, whether or not the landing clip
@@ -721,9 +750,16 @@ export function useTimeline() {
 		[document, saveDocument],
 	);
 
+	// Selecting a pill and selecting a clip are the SAME act — "this is the thing
+	// I mean" — so they cancel each other. They used to be two states that could
+	// both be set: the user saw one highlighted element while the app still held
+	// the other, and everything keyed off "is a clip selected?" (copy, paste,
+	// delete) silently acted on the invisible one. Copy/paste is where it showed:
+	// it always operated on the clip, whatever the user had just clicked.
 	const selectRegion = useCallback(
 		(kind: RegionKind, id: string, opts?: { additive?: boolean }) => {
 			const handle = { kind, id };
+			setClipSelection(null);
 			if (opts?.additive) {
 				// Shift-click toggles membership; the focused region follows the click.
 				setMultiSelection((prev) => {
@@ -742,6 +778,7 @@ export function useTimeline() {
 	const clearSelection = useCallback(() => {
 		setSelection(null);
 		setMultiSelection([]);
+		setClipSelection(null);
 	}, []);
 
 	// Axcut-consistent clip trim: only the source range is user-editable (the
@@ -943,7 +980,12 @@ export function useTimeline() {
 		[document, clipSelection, saveDocument],
 	);
 
-	const selectClip = useCallback((id: string) => setClipSelection(id), []);
+	// Mirror of selectRegion: picking a clip retires the pill selection.
+	const selectClip = useCallback((id: string) => {
+		setClipSelection(id);
+		setSelection(null);
+		setMultiSelection([]);
+	}, []);
 
 	const speedRegions = hasDoc
 		? (((document.legacyEditor as Record<string, unknown> | null)?.speedRegions as Array<{
