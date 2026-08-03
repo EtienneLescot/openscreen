@@ -80,8 +80,11 @@ export function splitBySpeed(
 		for (const sr of overlapping) {
 			const srStart = Math.max(sr.startMs / 1000, segment.startSec);
 			const srEnd = Math.min(sr.endMs / 1000, segment.endSec);
-			if (cursor < srStart) result.push({ startSec: cursor, endSec: srStart, speed: 1 });
-			result.push({ startSec: srStart, endSec: srEnd, speed: sr.speed });
+			if (srEnd <= cursor) continue;
+			const effectiveStart = Math.max(srStart, cursor);
+			if (cursor < effectiveStart)
+				result.push({ startSec: cursor, endSec: effectiveStart, speed: 1 });
+			result.push({ startSec: effectiveStart, endSec: srEnd, speed: sr.speed });
 			cursor = srEnd;
 		}
 		if (cursor < segment.endSec)
