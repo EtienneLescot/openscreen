@@ -257,7 +257,9 @@ const ClipWaveform = memo(function ClipWaveform({
 	sourceStartSec: number;
 	sourceEndSec: number;
 }) {
-	const peaks = useAudioPeaks(videoUrl);
+	// The duration is what tells `useAudioPeaks` whether this recording is small
+	// enough to decode whole — the file's byte size does not, on compressed video.
+	const peaks = useAudioPeaks(videoUrl, assetDurationSec);
 	const bars = useMemo(() => {
 		if (!peaks || peaks.length === 0 || !assetDurationSec) return null;
 		const totalBlocks = Math.floor(peaks.length / 2);
