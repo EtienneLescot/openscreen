@@ -422,6 +422,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		transcribe: (request: SttTranscribeRequest): Promise<SttTranscribeResponse> => {
 			return ipcRenderer.invoke("stt:transcribe", request) as Promise<SttTranscribeResponse>;
 		},
+		/** Stop the running transcription at its next chunk boundary. */
+		cancel: (): Promise<void> => ipcRenderer.invoke("stt:cancel") as Promise<void>,
 		onStatus: (callback: (event: SttStatusEvent) => void) => {
 			const listener = (_event: unknown, payload: SttStatusEvent) => callback(payload);
 			ipcRenderer.on("stt:status", listener);
