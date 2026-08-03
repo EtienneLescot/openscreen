@@ -29,6 +29,7 @@ use crate::config::{self, Cfg};
 use crate::cursor::CursorTrack;
 use crate::d3d::Gpu;
 use crate::pipeline::Decoder;
+use crate::timeline_walk::NextFrameTime;
 use anyhow::Result;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -379,10 +380,18 @@ impl Player {
         let sf = if use_current {
             self.sdec.cur_frame()
         } else {
+            // Match direct sur `NextFrameTime` plutôt que via `frame_step` : la lecture
+            // live a une politique d'EOF PROPRE (reboucler au début), là où l'export tient
+            // la dernière frame. Le reste — « due » vs « pas encore due » — est la même
+            // règle, `>`/`<=` compris.
             match self.sdec.peek_next_time_sec()? {
-                Some(t) if t <= target_source_time => self.sdec.commit_peek()?,
-                Some(_) => return Ok(false), // pas encore due : on tient la frame courante.
-                None => {
+                NextFrameTime::At(t) if t <= target_source_time => self.sdec.commit_peek()?,
+                NextFrameTime::At(_) => return Ok(false), // pas encore due : on tient la courante.
+                // pts inexploitable : impossible de dire si elle est due. `step()` n'adopte
+                // qu'une frame écran par appel, donc l'adopter revient exactement à
+                // l'ancien « une frame par tick » — le repli correct pour un flux cassé.
+                NextFrameTime::Unknown => self.sdec.commit_peek()?,
+                NextFrameTime::Eof => {
                     // EOF réel (plus aucune frame à décoder) : reboucle sur le début.
                     self.idx = 0;
                     self.sdec.seek_to(0.0)?
@@ -411,9 +420,18 @@ impl Player {
                 let mut guard = 0u32;
                 loop {
                     match self.wdec.peek_next_time_sec()? {
-                        Some(t) if t <= target_webcam_t => wf = self.wdec.commit_peek()?,
-                        Some(_) => break, // pas encore due : hold sur la frame webcam courante.
-                        None => {
+                        NextFrameTime::At(t) if t <= target_webcam_t => {
+                            wf = self.wdec.commit_peek()?
+                        }
+                        NextFrameTime::At(_) => break, // pas encore due : hold sur la courante.
+                        NextFrameTime::Unknown => {
+                            // pts webcam inexploitable : on avance d'UNE frame et on sort,
+                            // au lieu de vider la piste jusqu'à son EOF (ce que `0.0`
+                            // faisait, puisqu'il est toujours ≤ à la cible).
+                            wf = self.wdec.commit_peek()?;
+                            break;
+                        }
+                        NextFrameTime::Eof => {
                             // Fin de la webcam avant l'écran : elle boucle SEULE — l'écran
                             // garde sa propre position, inchangée.
                             wf = self.wdec.seek_to(0.0)?;
@@ -491,6 +509,24 @@ impl Player {
         self.idx = (target_sec * self.sdec.fps()).round().max(0.0) as u32;
         comp.compose_frame(sf, wf, self.idx as f32, cfg)?;
         Ok(true)
+    }
+}
+
+/// Retranche de l'accumulateur le temps source RÉELLEMENT consommé par la frame qui vient
+/// d'être adoptée. C'est ce qui fait jouer une source à sa propre cadence : une frame de
+/// 1/24 s consomme 1/24 s d'accumulateur, donc 24 frames par seconde réelle — là où
+/// l'ancien pas fixe de 1/60 s en décodait 60, soit 2,5× trop vite sur du 24 fps.
+///
+/// `after < before` : `step()` a rebouclé sur l'EOF (le temps recule) — le delta n'a plus
+/// de sens, on repart d'un accumulateur propre.
+///
+/// Fonction à part pour être testable : c'est l'arithmétique dont dépend la vitesse de
+/// lecture, et elle vivait au milieu de la boucle de rendu.
+pub(crate) fn consume_acc(acc: f64, before: f64, after: f64) -> f64 {
+    if after >= before {
+        (acc - (after - before)).max(0.0)
+    } else {
+        0.0
     }
 }
 
@@ -1572,9 +1608,7 @@ unsafe fn render_thread(
                 }
                 stepped = true;
                 let after = player.screen_time_sec();
-                // `after < before` : `step()` a rebouclé sur l'EOF (temps qui recule) — le calcul
-                // de delta n'a alors aucun sens, on repart d'un accumulateur propre.
-                acc = if after >= before { (acc - (after - before)).max(0.0) } else { 0.0 };
+                acc = consume_acc(acc, before, after);
                 n += 1;
                 if n >= max_steps {
                     // Rattrapage plafonné : le contenu dû est plus dense que ce qu'on peut décoder
@@ -1821,6 +1855,29 @@ mod tests {
             "cropByClip":[null,null,null],
             "output":{"width":1920,"height":1080,"fps":30}
         }"##).expect("multiclip scene")
+    }
+
+    #[test]
+    fn acc_is_reduced_by_the_source_time_the_frame_actually_consumed() {
+        // 1/24 s d'accumulateur par frame de 24 fps : c'est ce qui fait jouer une source à
+        // SA cadence. L'ancien pas fixe retranchait 1/60 s quelle que soit la source, d'où
+        // 60 frames décodées par seconde réelle — 2,5× trop vite sur du 24 fps.
+        let acc = consume_acc(0.05, 10.0, 10.0 + 1.0 / 24.0);
+        assert!((acc - (0.05 - 1.0 / 24.0)).abs() < 1e-12);
+    }
+
+    #[test]
+    fn acc_never_goes_negative() {
+        // Une frame plus longue que le retard accumulé ne doit pas creuser une dette
+        // négative qui ferait sauter la frame suivante.
+        assert_eq!(consume_acc(0.01, 10.0, 10.5), 0.0);
+    }
+
+    #[test]
+    fn acc_resets_when_playback_loops_back_to_the_start() {
+        // `after < before` : `step()` a rebouclé sur l'EOF. Le delta serait négatif et
+        // gonflerait l'accumulateur — lecture emballée juste après la boucle.
+        assert_eq!(consume_acc(0.02, 1950.0, 0.0), 0.0);
     }
 
     #[test]

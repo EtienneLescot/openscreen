@@ -17,7 +17,7 @@ use crate::scene::Scene;
 // `walk_composited_timeline` / `advance_decoder_to` vivaient ici ; ils sont
 // portables et servent aussi au pipeline macOS et à `gif_export` — voir
 // `timeline_walk.rs` pour le pourquoi du déplacement.
-use crate::timeline_walk::walk_composited_timeline;
+use crate::timeline_walk::{walk_composited_timeline, NextFrameTime};
 use anyhow::{anyhow, bail, Result};
 use std::collections::HashMap;
 use std::ffi::{c_void, CString};
@@ -582,6 +582,11 @@ impl Decoder {
     /// Repositionne le flux à la première keyframe (t=0) et vide le codec — pour boucler
     /// la playback sans réallouer les décodeurs. La fixture démarre sur un IDR (§11).
     pub(crate) unsafe fn rewind(&mut self) -> Result<()> {
+        // Même règle que `seek_to` : tout repositionnement invalide le peek en attente.
+        // Il portait sur « la frame d'après l'ancienne position », qui n'a plus de sens
+        // ici — sans ça le `next()` suivant promouvait une frame décodée avant le rewind,
+        // avec son ancien `cur_pts`.
+        self.has_peek = false;
         averr(av_seek_frame(self.fmt, self.vidx, 0, AVSEEK_FLAG_BACKWARD), "seek")?;
         avcodec_flush_buffers(self.dctx);
         self.sent_eof = false;
@@ -765,28 +770,35 @@ impl Decoder {
         }
     }
 
-    /// Décode la prochaine frame dans le buffer de lookahead et renvoie son temps (s) —
-    /// `None` à EOF. Cf. `pipeline_macos::Decoder::peek_next_time_sec`.
-    pub(crate) unsafe fn peek_next_time_sec(&mut self) -> Result<Option<f64>> {
+    /// Décode la prochaine frame dans le buffer de lookahead et renvoie son temps.
+    /// Cf. `pipeline_macos::Decoder::peek_next_time_sec`.
+    pub(crate) unsafe fn peek_next_time_sec(&mut self) -> Result<NextFrameTime> {
         if !self.has_peek {
             if !self.receive_into(self.peek_frame)? {
-                return Ok(None);
+                return Ok(NextFrameTime::Eof);
             }
             self.has_peek = true;
         }
         let pts = (*self.peek_frame).best_effort_timestamp;
         let tb_sec = self.tb_sec();
-        Ok(Some(if pts == i64::MIN || tb_sec <= 0.0 {
-            0.0
+        // Sans pts ni time_base exploitables on ne PEUT pas dire si la frame est due :
+        // `Unknown`, et non `0.0` — qui passait pour « due » à tous les coups.
+        Ok(if pts == i64::MIN || tb_sec <= 0.0 {
+            NextFrameTime::Unknown
         } else {
-            pts as f64 * tb_sec
-        }))
+            NextFrameTime::At(pts as f64 * tb_sec)
+        })
     }
 
     /// Promeut la frame de lookahead au rang de frame courante. Cf.
     /// `pipeline_macos::Decoder::commit_peek`.
     pub(crate) unsafe fn commit_peek(&mut self) -> Result<*mut AVFrame> {
-        debug_assert!(self.has_peek, "commit_peek sans peek_next_time_sec préalable");
+        // `bail!` et non `debug_assert!` : compilée en release, l'assertion disparaissait
+        // et l'échange promouvait un `AVFrame` jamais rempli, avec un
+        // `best_effort_timestamp` indéterminé, jusque dans le chemin de présentation.
+        if !self.has_peek {
+            anyhow::bail!("commit_peek sans peek_next_time_sec préalable");
+        }
         std::mem::swap(&mut self.frame, &mut self.peek_frame);
         self.has_peek = false;
         let pts = (*self.frame).best_effort_timestamp;

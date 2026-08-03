@@ -16,6 +16,8 @@ use anyhow::{bail, Context, Result};
 use std::ffi::CString;
 use std::ptr;
 
+use crate::timeline_walk::NextFrameTime;
+
 use crate::ffi::{
     av_frame_alloc, av_frame_free, av_frame_move_ref, av_frame_unref, av_packet_alloc,
     av_packet_free, av_packet_unref, av_read_frame, av_seek_frame, avcodec_alloc_context3,
@@ -263,27 +265,34 @@ impl SwDecoder {
         }
     }
 
-    /// Décode la prochaine frame dans le buffer de lookahead et renvoie son temps (s) —
-    /// `None` à EOF. Cf. `pipeline_macos::Decoder::peek_next_time_sec`.
-    pub unsafe fn peek_next_time_sec(&mut self) -> Result<Option<f64>> {
+    /// Décode la prochaine frame dans le buffer de lookahead et renvoie son temps.
+    /// Cf. `pipeline_macos::Decoder::peek_next_time_sec`.
+    pub(crate) unsafe fn peek_next_time_sec(&mut self) -> Result<NextFrameTime> {
         if !self.has_peek {
             if !self.receive_into(self.peek_frame)? {
-                return Ok(None);
+                return Ok(NextFrameTime::Eof);
             }
             self.has_peek = true;
         }
         let pts = (*self.peek_frame).best_effort_timestamp;
-        Ok(Some(if pts == i64::MIN {
-            0.0
+        // Sans pts ni time_base exploitables on ne PEUT pas dire si la frame est due :
+        // `Unknown`, et non `0.0` — qui passait pour « due » à tous les coups.
+        Ok(if pts == i64::MIN || self.stream_timebase <= 0.0 {
+            NextFrameTime::Unknown
         } else {
-            pts as f64 * self.stream_timebase
-        }))
+            NextFrameTime::At(pts as f64 * self.stream_timebase)
+        })
     }
 
     /// Promeut la frame de lookahead au rang de frame courante. Cf.
     /// `pipeline_macos::Decoder::commit_peek`.
-    pub unsafe fn commit_peek(&mut self) -> Result<*mut AVFrame> {
-        debug_assert!(self.has_peek, "commit_peek sans peek_next_time_sec préalable");
+    pub(crate) unsafe fn commit_peek(&mut self) -> Result<*mut AVFrame> {
+        // `bail!` et non `debug_assert!` : compilée en release, l'assertion disparaissait
+        // et l'échange promouvait un `AVFrame` jamais rempli, avec un
+        // `best_effort_timestamp` indéterminé, jusque dans le chemin de présentation.
+        if !self.has_peek {
+            bail!("commit_peek sans peek_next_time_sec préalable");
+        }
         std::mem::swap(&mut self.frame, &mut self.peek_frame);
         self.has_peek = false;
         let pts = (*self.frame).best_effort_timestamp;
