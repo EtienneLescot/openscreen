@@ -155,7 +155,13 @@ export function pillAffordance(
 	pxPerSec: number,
 ): { compact: boolean; roomForLabel: boolean } {
 	const widthPx = pxPerSec > 0 ? durSec * pxPerSec : Number.POSITIVE_INFINITY;
-	return { compact: widthPx < PILL_HANDLES_MIN_PX, roomForLabel: widthPx >= PILL_CONTENT_MIN_PX };
+	const compact = widthPx < PILL_HANDLES_MIN_PX;
+	// `!compact &&` is load-bearing, not belt-and-braces: .lanePillCompact turns
+	// overflow visible (it has to, its handles hang outside the box), so a compact
+	// pill that rendered a label would spill it across the lane with nothing to
+	// clip it. Today PILL_CONTENT_MIN_PX > PILL_HANDLES_MIN_PX makes that
+	// impossible; this makes it impossible whatever those two numbers become.
+	return { compact, roomForLabel: !compact && widthPx >= PILL_CONTENT_MIN_PX };
 }
 
 // Ruler tick label. Precision follows the step: whole seconds read as a clean
@@ -673,6 +679,9 @@ export function V4Timeline({
 				...clips.map((c) => c.timelineStartSec),
 				...clips.map((c) => c.timelineEndSec),
 			];
+			// 0 = no snapping at all while the panel is unmeasured (first paint):
+			// better to drop the edge exactly where it was released than to move it
+			// by a radius computed from a width we do not have.
 			const snapThresh = pxPerSec > 0 ? PILL_SNAP_PX / pxPerSec : 0;
 			const snap = (v: number): number => {
 				let best = v;
