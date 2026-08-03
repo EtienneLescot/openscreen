@@ -62,6 +62,7 @@ import {
 	readCursorTelemetryFile as readCursorTelemetryFileFrom,
 } from "../media/cursorSidecar";
 import { findMediaLinksByFingerprint, registerMediaLinks } from "../media/mediaLinksRegistry";
+import { relinkProjectMedia } from "../media/projectMediaRelinker";
 import {
 	type LinuxCaptureSourceKind,
 	LinuxNativeCaptureSession,
@@ -3544,7 +3545,7 @@ export function registerIpcHandlers(
 
 			const filePath = result.filePaths[0];
 			const content = await fs.readFile(filePath, "utf-8");
-			const project = JSON.parse(content);
+			const project = await relinkProjectMedia(JSON.parse(content), RECORDINGS_DIR);
 			currentProjectPath = filePath;
 			setCurrentRecordingSessionState(await getApprovedProjectSession(project, filePath));
 
@@ -3581,7 +3582,7 @@ export function registerIpcHandlers(
 				return { success: false, message: "File not found" };
 			}
 			const content = await fs.readFile(filePath, "utf-8");
-			const project = JSON.parse(content);
+			const project = await relinkProjectMedia(JSON.parse(content), RECORDINGS_DIR);
 			currentProjectPath = filePath;
 
 			// Approve session paths but tolerate failures (e.g. video moved outside trusted
@@ -3618,7 +3619,7 @@ export function registerIpcHandlers(
 			}
 
 			const content = await fs.readFile(currentProjectPath, "utf-8");
-			const project = JSON.parse(content);
+			const project = await relinkProjectMedia(JSON.parse(content), RECORDINGS_DIR);
 			setCurrentRecordingSessionState(await getApprovedProjectSession(project, currentProjectPath));
 			return {
 				success: true,
