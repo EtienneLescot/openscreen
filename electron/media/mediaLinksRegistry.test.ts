@@ -5,6 +5,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
 	computeFingerprint,
 	findMediaLinksByFingerprint,
+	findRelocatedMediaByStoredPath,
 	registerMediaLinks,
 } from "./mediaLinksRegistry";
 
@@ -84,6 +85,45 @@ describe("mediaLinksRegistry", () => {
 	});
 
 	describe("resolution via fingerprint (moved/imported-elsewhere)", () => {
+		it("finds a registry-known recording from a stale cross-platform path", async () => {
+			const currentDir = path.join(tempDir, "current-machine");
+			await fs.mkdir(currentDir, { recursive: true });
+			const currentScreenPath = path.join(currentDir, "recording-42.mp4");
+			const webcamPath = path.join(currentDir, "recording-42-webcam.mp4");
+			await writeFileOfSize(currentScreenPath, 5_000, "s");
+			await writeFileOfSize(webcamPath, 3_000, "w");
+			await registerMediaLinks(tempDir, currentScreenPath, { webcamVideoPath: webcamPath });
+
+			const resolved = await findRelocatedMediaByStoredPath(
+				tempDir,
+				"C:\\Users\\demo\\recording-42.mp4",
+				5_000,
+			);
+			expect(resolved).toMatchObject({
+				screenVideoPath: currentScreenPath,
+				webcamVideoPath: webcamPath,
+			});
+		});
+
+		it("refuses to guess when multiple existing recordings match the stored name and size", async () => {
+			for (const [folder, fill] of [
+				["first", "a"],
+				["second", "b"],
+			] as const) {
+				const currentDir = path.join(tempDir, folder);
+				await fs.mkdir(currentDir, { recursive: true });
+				const screenPath = path.join(currentDir, "recording.mp4");
+				await writeFileOfSize(screenPath, 5_000, fill);
+				await registerMediaLinks(tempDir, screenPath, {
+					webcamVideoPath: `${screenPath}.webcam`,
+				});
+			}
+
+			await expect(
+				findRelocatedMediaByStoredPath(tempDir, "C:\\Users\\demo\\recording.mp4", 5_000),
+			).resolves.toBeNull();
+		});
+
 		it("re-links a copy of the screen video at a brand new path with no sidecars", async () => {
 			const originalDir = await makeTempDir();
 			try {

@@ -227,6 +227,58 @@ export interface MediaLinksLookup {
 	cursorCaptureMode?: CursorCaptureMode;
 }
 
+export interface RelocatedMediaLookup extends MediaLinksLookup {
+	screenVideoPath: string;
+}
+
+function portableBasename(filePath: string): string {
+	return filePath.split(/[\\/]/).filter(Boolean).pop() ?? "";
+}
+
+/**
+ * Resolves a stored media path that no longer exists on this machine through
+ * the registry's last-known path. This is intentionally stricter than a plain
+ * basename lookup: when the project recorded a file size it must match the
+ * fingerprint, the candidate on disk must still match that fingerprint size,
+ * and ambiguous matches are rejected rather than guessing at the user's media.
+ */
+export async function findRelocatedMediaByStoredPath(
+	baseDir: string,
+	stalePath: string,
+	sizeBytes?: number,
+): Promise<RelocatedMediaLookup | null> {
+	const basename = portableBasename(stalePath).toLocaleLowerCase();
+	if (!basename) return null;
+
+	const expectedSize =
+		typeof sizeBytes === "number" && Number.isFinite(sizeBytes) && sizeBytes >= 0
+			? sizeBytes
+			: undefined;
+	const registry = await readRegistry(baseDir);
+	const matches: MediaLinkEntry[] = [];
+
+	for (const entry of registry.entries) {
+		if (portableBasename(entry.lastKnownPath).toLocaleLowerCase() !== basename) continue;
+		if (expectedSize !== undefined && entry.fingerprint.sizeBytes !== expectedSize) continue;
+		try {
+			const current = await fs.stat(entry.lastKnownPath);
+			if (current.isFile() && current.size === entry.fingerprint.sizeBytes) matches.push(entry);
+		} catch {
+			// A stale registry entry is not a usable relocation candidate.
+		}
+	}
+
+	if (matches.length !== 1) return null;
+	const match = matches[0];
+	return {
+		screenVideoPath: match.lastKnownPath,
+		...(match.webcamVideoPath ? { webcamVideoPath: match.webcamVideoPath } : {}),
+		...(typeof match.webcamOffsetMs === "number" ? { webcamOffsetMs: match.webcamOffsetMs } : {}),
+		...(match.cursorTelemetryPath ? { cursorTelemetryPath: match.cursorTelemetryPath } : {}),
+		...(match.cursorCaptureMode ? { cursorCaptureMode: match.cursorCaptureMode } : {}),
+	};
+}
+
 /**
  * Looks up `videoPath` in the registry by content fingerprint — used as the
  * fallback when the file has no (or a stale) sidecar sitting next to it,
