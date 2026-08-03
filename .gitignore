@@ -105,6 +105,12 @@ bench-frame-*.png
 poc/media/
 poc/out/
 
+# poc-d3d — cargo build output and the vendored ffmpeg it links against.
+# ~1.3 GB of generated artifacts (1765 + 223 files), never source. Scoped to
+# these two subtrees so the POC's own sources stay committable.
+/poc-d3d/target/
+/poc-d3d/thirdparty/
+
 # cc-delegate worker worktrees/branches + scratch test artifacts.
 .cc-delegate/
 
