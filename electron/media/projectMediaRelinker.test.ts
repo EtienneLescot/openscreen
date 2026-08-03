@@ -50,4 +50,29 @@ describe("relinkProjectMedia", () => {
 			"C:\\Users\\demo\\recording-42-webcam.mp4",
 		);
 	});
+
+	it("preserves unresolved screen and webcam paths without mutating the project", async () => {
+		const project = {
+			assets: [
+				{
+					id: "asset-missing",
+					originalPath: "C:\\Users\\demo\\missing.mp4",
+					sizeBytes: 42,
+					cameraTrack: {
+						sourcePath: "C:\\Users\\demo\\missing-webcam.mp4",
+						visible: true,
+					},
+				},
+			],
+		};
+		const before = structuredClone(project);
+
+		const relinked = (await relinkProjectMedia(project, tempDir)) as typeof project;
+
+		expect(relinked).toEqual(project);
+		expect(relinked).not.toBe(project);
+		expect(relinked.assets[0].originalPath).toBe("C:\\Users\\demo\\missing.mp4");
+		expect(relinked.assets[0].cameraTrack.sourcePath).toBe("C:\\Users\\demo\\missing-webcam.mp4");
+		expect(project).toEqual(before);
+	});
 });

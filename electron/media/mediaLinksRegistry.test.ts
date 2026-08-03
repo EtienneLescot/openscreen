@@ -124,6 +124,19 @@ describe("mediaLinksRegistry", () => {
 			).resolves.toBeNull();
 		});
 
+		it("rejects a registry candidate whose contents changed after registration", async () => {
+			const screenPath = path.join(tempDir, "recording-changed.mp4");
+			await writeFileOfSize(screenPath, 5_000, "a");
+			await registerMediaLinks(tempDir, screenPath, {
+				webcamVideoPath: `${screenPath}.webcam`,
+			});
+			await writeFileOfSize(screenPath, 5_001, "b");
+
+			await expect(
+				findRelocatedMediaByStoredPath(tempDir, "C:\\Users\\demo\\recording-changed.mp4", 5_000),
+			).resolves.toBeNull();
+		});
+
 		it("re-links a copy of the screen video at a brand new path with no sidecars", async () => {
 			const originalDir = await makeTempDir();
 			try {

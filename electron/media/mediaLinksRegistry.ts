@@ -247,7 +247,7 @@ export async function findRelocatedMediaByStoredPath(
 	stalePath: string,
 	sizeBytes?: number,
 ): Promise<RelocatedMediaLookup | null> {
-	const basename = portableBasename(stalePath).toLocaleLowerCase();
+	const basename = portableBasename(stalePath).toLowerCase();
 	if (!basename) return null;
 
 	const expectedSize =
@@ -258,7 +258,7 @@ export async function findRelocatedMediaByStoredPath(
 	const matches: MediaLinkEntry[] = [];
 
 	for (const entry of registry.entries) {
-		if (portableBasename(entry.lastKnownPath).toLocaleLowerCase() !== basename) continue;
+		if (portableBasename(entry.lastKnownPath).toLowerCase() !== basename) continue;
 		if (expectedSize !== undefined && entry.fingerprint.sizeBytes !== expectedSize) continue;
 		try {
 			const current = await fs.stat(entry.lastKnownPath);
