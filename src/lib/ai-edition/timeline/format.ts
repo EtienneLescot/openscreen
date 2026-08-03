@@ -12,11 +12,13 @@
 
 function splitRoundedTime(value: number): { totalMinutes: number; seconds: number } {
 	const safe = Number.isFinite(value) && value > 0 ? value : 0;
-	const totalTenths = Math.round(safe * 10);
-	return {
-		totalMinutes: Math.floor(totalTenths / 600),
-		seconds: (totalTenths % 600) / 10,
-	};
+	let totalMinutes = Math.floor(safe / 60);
+	let seconds = Math.round((safe % 60) * 10) / 10;
+	if (seconds >= 60) {
+		totalMinutes += 1;
+		seconds = 0;
+	}
+	return { totalMinutes, seconds };
 }
 
 /** `m:ss.t` — no hour field, ever. */
