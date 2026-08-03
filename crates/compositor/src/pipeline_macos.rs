@@ -35,6 +35,7 @@ use crate::audio::{
 };
 use crate::compositor::Compositor;
 use crate::d3d::Gpu;
+use crate::timeline_walk::NextFrameTime;
 use anyhow::{anyhow, bail, Result};
 use std::ffi::{c_void, CString};
 use std::ptr;
@@ -216,6 +217,11 @@ impl Decoder {
     }
 
     pub unsafe fn rewind(&mut self) -> Result<()> {
+        // Même règle que `seek_to` : tout repositionnement invalide le peek en attente.
+        // Il portait sur « la frame d'après l'ancienne position », qui n'a plus de sens
+        // ici — sans ça le `next()` suivant promouvait une frame décodée avant le rewind,
+        // avec son ancien `cur_pts`.
+        self.has_peek = false;
         crate::ffi::averr(
             crate::ffi::av_seek_frame(
                 self.fmt,
@@ -377,30 +383,38 @@ impl Decoder {
     }
 
     /// Décode la PROCHAINE frame dans le buffer de lookahead (si aucun peek n'est déjà en
-    /// attente) et renvoie son temps (s) — `None` à EOF. Ne touche pas au buffer courant :
-    /// l'appelant peut ainsi comparer ce pts à une cible avant de décider d'adopter la
-    /// frame (`commit_peek`) ou de continuer à tenir la frame courante (hold).
-    pub unsafe fn peek_next_time_sec(&mut self) -> Result<Option<f64>> {
+    /// attente) et renvoie son temps. Ne touche pas au buffer courant : l'appelant peut
+    /// ainsi comparer ce pts à une cible avant de décider d'adopter la frame
+    /// (`commit_peek`) ou de continuer à tenir la frame courante (hold).
+    ///
+    /// `NextFrameTime::Unknown` — et non `0.0` — quand le pts est inexploitable : `0.0`
+    /// satisfait toujours la condition d'adoption, ce qui vidait le flux jusqu'à l'EOF.
+    pub(crate) unsafe fn peek_next_time_sec(&mut self) -> Result<NextFrameTime> {
         if !self.has_peek {
             if !self.receive_into(self.peek_frame)? {
-                return Ok(None);
+                return Ok(NextFrameTime::Eof);
             }
             self.has_peek = true;
         }
         let pts = (*self.peek_frame).best_effort_timestamp;
         let tb_sec = self.tb_sec();
-        Ok(Some(if pts == i64::MIN || tb_sec <= 0.0 {
-            0.0
+        Ok(if pts == i64::MIN || tb_sec <= 0.0 {
+            NextFrameTime::Unknown
         } else {
-            pts as f64 * tb_sec
-        }))
+            NextFrameTime::At(pts as f64 * tb_sec)
+        })
     }
 
     /// Promeut la frame de lookahead (décodée par un `peek_next_time_sec` précédent) au
     /// rang de frame courante — échange de pointeurs, aucune E/S. Ne doit être appelé
-    /// qu'après un `peek_next_time_sec` ayant renvoyé `Some`.
-    pub unsafe fn commit_peek(&mut self) -> Result<*mut crate::ffi::AVFrame> {
-        debug_assert!(self.has_peek, "commit_peek sans peek_next_time_sec préalable");
+    /// qu'après un `peek_next_time_sec` ayant renvoyé une frame.
+    pub(crate) unsafe fn commit_peek(&mut self) -> Result<*mut crate::ffi::AVFrame> {
+        // `bail!` et non `debug_assert!` : compilée en release, l'assertion disparaissait
+        // et l'échange promouvait un `AVFrame` jamais rempli, avec un
+        // `best_effort_timestamp` indéterminé, jusque dans le chemin de présentation.
+        if !self.has_peek {
+            anyhow::bail!("commit_peek sans peek_next_time_sec préalable");
+        }
         std::mem::swap(&mut self.frame, &mut self.peek_frame);
         self.has_peek = false;
         let pts = (*self.frame).best_effort_timestamp;
