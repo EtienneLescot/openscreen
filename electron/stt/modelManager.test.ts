@@ -1,4 +1,5 @@
-import { mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -45,19 +46,51 @@ describe("modelManager", () => {
 	it("ensureModels succeeds when the file is already present (cache hit)", async () => {
 		const paths = modelPaths(dir);
 		await mkdir(path.dirname(paths.whisper), { recursive: true });
-		await writeFile(paths.whisper, "dummy-ggml");
+		const cached = Buffer.from("dummy-ggml");
+		await writeFile(paths.whisper, cached);
+		const originalSha = STT_MODELS.whisper.files[0].expectedSha256;
+		STT_MODELS.whisper.files[0].expectedSha256 = createHash("sha256").update(cached).digest("hex");
 		let fetches = 0;
 		const fetcher: typeof fetch = async () => {
 			fetches++;
 			return new Response("should not be reached", { status: 200 });
 		};
-		await ensureModels({
-			baseDir: dir,
-			only: ["whisper"],
-			fetcher,
-			onProgress: () => undefined,
-		});
-		expect(fetches).toBe(0);
+		try {
+			await ensureModels({
+				baseDir: dir,
+				only: ["whisper"],
+				fetcher,
+				onProgress: () => undefined,
+			});
+			expect(fetches).toBe(0);
+		} finally {
+			STT_MODELS.whisper.files[0].expectedSha256 = originalSha;
+		}
+	});
+
+	it("re-downloads a non-empty cached model when its checksum is wrong", async () => {
+		const paths = modelPaths(dir);
+		await mkdir(path.dirname(paths.whisper), { recursive: true });
+		await writeFile(paths.whisper, "corrupt-cache");
+		const replacement = Buffer.from("verified-ggml-weights");
+		const originalSha = STT_MODELS.whisper.files[0].expectedSha256;
+		STT_MODELS.whisper.files[0].expectedSha256 = createHash("sha256")
+			.update(replacement)
+			.digest("hex");
+		let fetches = 0;
+		const fetcher: typeof fetch = async () => {
+			fetches++;
+			return new Response(replacement, { status: 200 });
+		};
+
+		try {
+			await ensureModels({ baseDir: dir, only: ["whisper"], fetcher });
+			expect(fetches).toBe(1);
+			expect(await readFile(paths.whisper)).toEqual(replacement);
+			expect(await readFile(`${paths.whisper}.bad`, "utf8")).toBe("corrupt-cache");
+		} finally {
+			STT_MODELS.whisper.files[0].expectedSha256 = originalSha;
+		}
 	});
 
 	it("ensureModels downloads the missing GGML file with progress", async () => {

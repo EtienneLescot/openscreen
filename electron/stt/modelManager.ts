@@ -1,6 +1,6 @@
 import { createHash } from "node:crypto";
 import { createReadStream, existsSync } from "node:fs";
-import { mkdir, rename, stat } from "node:fs/promises";
+import { mkdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { pipeline } from "node:stream/promises";
@@ -153,7 +153,8 @@ export interface DownloadOptions {
  * Stream a model file to disk atomically (<filename>.partial → rename on
  * success), optionally verify the SHA-256.
  *
- * If the file already exists and is non-empty, skips the download.
+ * If the file already exists, is non-empty, and matches the expected hash,
+ * skips the download. Invalid cache entries are quarantined as `.bad`.
  */
 async function ensureFile(
 	filePath: string,
@@ -164,7 +165,12 @@ async function ensureFile(
 	if (existsSync(filePath)) {
 		const s = await stat(filePath);
 		if (s.isFile() && s.size > 0) {
-			return;
+			if (!expectedSha256) return;
+			const actual = await sha256OfFile(filePath);
+			if (actual.toLowerCase() === expectedSha256.toLowerCase()) return;
+			const badPath = `${filePath}.bad`;
+			await rm(badPath, { force: true });
+			await rename(filePath, badPath);
 		}
 	}
 
@@ -182,17 +188,19 @@ async function ensureFile(
 	});
 	const { createWriteStream } = await import("node:fs");
 	await pipeline(source, createWriteStream(tmp));
-	await rename(tmp, filePath);
 
 	if (expectedSha256) {
-		const actual = await sha256OfFile(filePath);
+		const actual = await sha256OfFile(tmp);
 		if (actual.toLowerCase() !== expectedSha256.toLowerCase()) {
-			await rename(filePath, `${filePath}.bad`).catch(() => undefined);
+			const badPath = `${filePath}.bad`;
+			await rm(badPath, { force: true });
+			await rename(tmp, badPath);
 			throw new Error(
 				`SHA-256 mismatch for ${path.basename(filePath)}: expected ${expectedSha256}, got ${actual}`,
 			);
 		}
 	}
+	await rename(tmp, filePath);
 }
 
 export interface EnsureModelsOptions {
@@ -217,8 +225,6 @@ export async function ensureModels(opts: EnsureModelsOptions): Promise<void> {
 	}));
 
 	for (const { id, descriptor, filePath } of targets) {
-		if (await areModelsPresent(opts.baseDir)) continue;
-
 		await mkdir(path.dirname(filePath), { recursive: true });
 
 		const file = descriptor.files[0];
