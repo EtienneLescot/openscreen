@@ -1,0 +1,60 @@
+name: Nix
+
+# nix/package.nix records `npmDepsHash`, a hash of the npm dependency set that
+# package-lock.json resolves to. The two have to agree or `nix build` fails
+# outright, and nothing here ever checked that they did.
+#
+# The only thing that refreshed the hash was bump-nix-package.yml, which fires
+# on stable releases. `src` is this repo's own tree, not a fetched tarball, so
+# every lockfile change landing between two releases left main's hash pointing
+# at dependencies that no longer existed. It last matched on 2026-07-05 (v1.6.0)
+# while package-lock.json moved ten more times, so `nix run github:…` was broken
+# for four weeks with nothing reporting it.
+#
+# Release-time bumps can't fix that — the drift starts the moment a lockfile PR
+# merges. This runs on the PR that causes it and prints the hash to paste.
+on:
+  pull_request:
+    paths:
+      - package-lock.json
+      - nix/**
+      - .github/workflows/nix-check.yml
+  push:
+    branches: [main]
+    paths:
+      - package-lock.json
+      - nix/**
+
+jobs:
+  npm-deps-hash:
+    name: npmDepsHash matches package-lock.json
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Compare recorded hash against the lockfile
+        run: |
+          set -euo pipefail
+          EXPECTED=$(nix run nixpkgs#prefetch-npm-deps -- package-lock.json)
+          RECORDED=$(sed -nE 's|^[[:space:]]*npmDepsHash[[:space:]]*=[[:space:]]*"([^"]*)";|\1|p' nix/package.nix)
+
+          echo "recorded in nix/package.nix: ${RECORDED:-<none>}"
+          echo "expected from package-lock.json: $EXPECTED"
+
+          if [[ -z "$EXPECTED" ]]; then
+            echo "::error::prefetch-npm-deps returned an empty hash"
+            exit 1
+          fi
+
+          if [[ "$EXPECTED" != "$RECORDED" ]]; then
+            echo "::error file=nix/package.nix::npmDepsHash is stale — set it to $EXPECTED"
+            exit 1
+          fi
+
+          echo "In sync."

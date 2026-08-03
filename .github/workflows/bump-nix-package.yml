@@ -78,7 +78,13 @@ jobs:
 
       - name: Create PR
         env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # NOT GITHUB_TOKEN: the repo has "Allow GitHub Actions to create and
+          # approve pull requests" turned off, so `gh pr create` dies with
+          # "GitHub Actions is not permitted to create or approve pull requests"
+          # — it did exactly that on v1.7.0, after pushing the branch, and #136
+          # had to be opened by hand. The PAT every other release workflow
+          # already uses has no such restriction, and its PRs trigger CI.
+          GH_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
           VERSION: ${{ steps.meta.outputs.version }}
           HASH: ${{ steps.hash.outputs.hash }}
           BRANCH: ${{ steps.meta.outputs.branch }}
@@ -112,7 +118,5 @@ jobs:
           - \`npmDepsHash\` → \`${HASH}\` (computed via \`prefetch-npm-deps package-lock.json\`)
 
           Merge this so Nix users (NixOS, Home Manager, \`nix run github:${{ github.repository }}\`) pick up the new release.
-
-          > Note: PRs opened by \`GITHUB_TOKEN\` don't auto-trigger CI. The diff is two lines — review the change here, then merge. If you want CI to run, push an empty commit to this branch or close-and-reopen the PR.
           EOF
           )"
