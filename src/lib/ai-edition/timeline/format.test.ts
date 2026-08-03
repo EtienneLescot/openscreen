@@ -20,6 +20,10 @@ describe("formatSec", () => {
 	it("carries rounded seconds into the next minute", () => {
 		expect(formatSec(59.96)).toBe("1:00.0");
 	});
+
+	it("keeps finite durations finite while rounding", () => {
+		expect(formatSec(Number.MAX_VALUE)).not.toMatch(/Infinity|NaN/);
+	});
 });
 
 describe("formatSeconds", () => {
@@ -36,6 +40,10 @@ describe("formatSeconds", () => {
 
 	it("carries rounded seconds into the next hour", () => {
 		expect(formatSeconds(3599.96)).toBe("1:00:00.0");
+	});
+
+	it("keeps finite durations finite while rounding", () => {
+		expect(formatSeconds(Number.MAX_VALUE)).not.toMatch(/Infinity|NaN/);
 	});
 });
 
