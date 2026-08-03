@@ -19,8 +19,13 @@ on:
       - package-lock.json
       - nix/**
       - .github/workflows/nix-check.yml
+  # Same branch list as ci.yml, and for the reason its own comment gives: a
+  # release branch is the last place to skip a check. PRs need no filter here —
+  # the trigger above has none, so they are covered wherever they land — but a
+  # direct push or a rebase force-push onto a long-lived branch is not a PR and
+  # would otherwise go unchecked.
   push:
-    branches: [main]
+    branches: [main, feat/ai-edition, "release/**"]
     paths:
       - package-lock.json
       - nix/**
