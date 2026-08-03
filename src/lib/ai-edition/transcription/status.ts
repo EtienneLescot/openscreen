@@ -17,8 +17,28 @@ export interface TranscriptionFailure {
 	message: string;
 }
 
-/** Which half of the pipeline a running job is in (mirrors `TranscribeAssetOptions.onStatus`). */
-export type TranscriptionPhase = "extracting-audio" | "transcribing";
+/** Which part of the pipeline a running job is in (mirrors `TranscribeAssetOptions.onStatus`). */
+export type TranscriptionPhase = "extracting-audio" | "loading-model" | "transcribing";
+
+/**
+ * How far a running transcription has got, in seconds of audio.
+ *
+ * Only the `"transcribing"` phase reports this, and only once the main process
+ * starts landing chunks — audio extraction and the first-run model download
+ * have nothing to measure. Absent means "running, no measurable progress", not
+ * "zero": the UI must fall back to an indeterminate spinner rather than render
+ * a bar stuck at 0%.
+ */
+export interface TranscriptionProgress {
+	completedSec: number;
+	totalSec: number;
+}
+
+/** `0..1`, or null when the job reports no measurable progress. */
+export function progressFraction(progress: TranscriptionProgress | undefined): number | null {
+	if (!progress || !(progress.totalSec > 0)) return null;
+	return Math.min(1, Math.max(0, progress.completedSec / progress.totalSec));
+}
 
 /**
  * A media that has no audio track (or one Whisper cannot read) will fail the
@@ -72,6 +92,7 @@ export interface AssetTranscriptionView {
 	assetId: string;
 	status: AssetTranscriptionStatus;
 	phase?: TranscriptionPhase;
+	progress?: TranscriptionProgress;
 	failure?: TranscriptionFailure;
 }
 
@@ -79,6 +100,7 @@ export interface AssetTranscriptionView {
 export interface TranscriptionJobLike {
 	status: "queued" | "running" | "failed";
 	phase?: TranscriptionPhase;
+	progress?: TranscriptionProgress;
 	failure?: TranscriptionFailure;
 }
 
@@ -122,7 +144,7 @@ export function deriveAssetStatus(input: {
 }): AssetTranscriptionView {
 	const { assetId, job, transcript, persistedFailure } = input;
 	if (job && job.status !== "failed") {
-		return { assetId, status: job.status, phase: job.phase };
+		return { assetId, status: job.status, phase: job.phase, progress: job.progress };
 	}
 	if (transcript) {
 		return {

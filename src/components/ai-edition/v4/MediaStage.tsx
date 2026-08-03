@@ -14,7 +14,11 @@ import type {
 	AssetTranscriptionView,
 } from "@/lib/ai-edition/transcription/status";
 import { formatBytes } from "@/utils/formatBytes";
-import { TranscriptionStatusDot, useTranscriptionLabel } from "../TranscriptionStatus";
+import {
+	TranscriptionProgressBar,
+	TranscriptionStatusDot,
+	useTranscriptionLabel,
+} from "../TranscriptionStatus";
 import styles from "./EditorShellV4.module.css";
 
 const ASSET_MIME = "application/x-axcut-asset";
@@ -266,6 +270,11 @@ export function MediaStage() {
 									<TranscriptionStatusDot view={selectedTranscription} size={5} />
 									{transcriptionLabel(selectedTranscription)}
 								</span>
+							</div>
+
+							{/* Renders itself away unless the run reports measurable progress. */}
+							<div style={{ margin: "-8px 0 16px" }}>
+								<TranscriptionProgressBar view={selectedTranscription} />
 							</div>
 
 							{selectedTranscription.failure ? (
