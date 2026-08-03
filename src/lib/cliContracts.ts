@@ -23,8 +23,6 @@ export interface CliExportRequest {
 	 * same way the editor's on-screen preview does. The composition is fitted
 	 * into this box, mirroring the editor layout. Defaults to 1280x720.
 	 */
-	previewWidth: number | null;
-	previewHeight: number | null;
 	/**
 	 * Add automatic zoom regions derived from cursor-dwell telemetry (same
 	 * suggestion engine as the editor's magic wand) before rendering. Existing

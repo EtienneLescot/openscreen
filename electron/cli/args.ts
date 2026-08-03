@@ -61,7 +61,6 @@ Export options:
   --gif-fps <15|20|25|30>   GIF frame rate (default: from project)
   --gif-size <medium|large|original>
                             GIF size preset (default: from project)
-  --preview-size <WxH>      Reference preview box for annotation scaling (default 1280x720)
   --auto-zoom               Add automatic zooms from cursor telemetry (editor's magic wand)
   --audio <file>            Mix a voiceover audio file into the MP4 (mp3/wav/m4a)
   --audio-mode <mix|replace>
@@ -150,8 +149,6 @@ function parseExport(args: string[], cwd: string): CliCommand {
 		quality: null,
 		gifFrameRate: null,
 		gifSizePreset: null,
-		previewWidth: null,
-		previewHeight: null,
 		autoZoom: false,
 		audioPath: null,
 		audioMode: "mix",
@@ -202,20 +199,6 @@ function parseExport(args: string[], cwd: string): CliCommand {
 					throw new Error(`--gif-size must be medium, large or original, got "${value}"`);
 				}
 				request.gifSizePreset = value;
-				i = next;
-				break;
-			}
-			case "--preview-size": {
-				const [value, next] = takeValue(args, i, arg);
-				const match = /^(\d+)x(\d+)$/.exec(value);
-				if (!match) throw new Error(`--preview-size must look like 1280x720, got "${value}"`);
-				const previewWidth = Number(match[1]);
-				const previewHeight = Number(match[2]);
-				if (previewWidth <= 0 || previewHeight <= 0) {
-					throw new Error(`--preview-size dimensions must be positive, got "${value}"`);
-				}
-				request.previewWidth = previewWidth;
-				request.previewHeight = previewHeight;
 				i = next;
 				break;
 			}

@@ -129,7 +129,6 @@ openscreen export demo.openscreen --json | while read line; do ...; done
 | `--format <mp4\|gif>` | Override the project's stored format |
 | `--quality <medium\|good\|source>` | MP4 quality |
 | `--gif-fps <15\|20\|25\|30>`, `--gif-size <medium\|large\|original>` | GIF settings |
-| `--preview-size <WxH>` | Reference preview box (default `1280x720`), see below |
 | `--auto-zoom` | Add automatic zooms from cursor telemetry before rendering — the same dwell-detection engine as the editor's magic wand. Existing zoom regions are kept; suggestions never overlap them |
 | `--audio <file>` | Mix a voiceover file into the MP4 (mp3/wav/m4a — anything Chromium can decode; AIFF is not supported) |
 | `--audio-mode <mix\|replace>` | Layer the voiceover over the recording's audio (default `mix`) or replace it |
@@ -147,10 +146,6 @@ sum cannot clip; use `replace` to drop the original entirely.
 when it lives in the app's recordings directory or **next to the project file**.
 Keep `.openscreen` files beside their media (or record via the CLI, which uses
 the recordings directory).
-
-**`--preview-size`** is accepted for compatibility but is a no-op on the
-native pipeline: annotation geometry is percentage-based in the scene
-description, so exports no longer depend on any preview box.
 
 **No cancel**: the native compositor has no abort mechanism — killing the CLI
 mid-export stops output but the render worker runs until process exit.
