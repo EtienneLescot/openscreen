@@ -28,6 +28,7 @@ use crate::config::Cfg;
 use crate::d3d::Gpu;
 use crate::ffi::AVFrame;
 use crate::linux_decode::SwDecoder;
+use crate::timeline_walk::NextFrameTime;
 use crate::linux_frames::CpuFrames;
 
 /// `SWS_POINT` (plus proche voisin). Bindgen ne genere pas les `SWS_*` (macros),
@@ -140,16 +141,16 @@ impl Decoder {
     }
 
     /// Décode la prochaine frame dans le buffer de lookahead du décodeur sous-jacent et
-    /// renvoie son temps (s), sans la présenter (donc sans toucher `self.cur`) — `None` à
-    /// EOF. Cf. `pipeline_macos::Decoder::peek_next_time_sec` pour la sémantique "hold".
-    pub unsafe fn peek_next_time_sec(&mut self) -> Result<Option<f64>> {
+    /// renvoie son temps, sans la présenter (donc sans toucher `self.cur`).
+    /// Cf. `pipeline_macos::Decoder::peek_next_time_sec` pour la sémantique "hold".
+    pub(crate) unsafe fn peek_next_time_sec(&mut self) -> Result<NextFrameTime> {
         self.sw.peek_next_time_sec()
     }
 
     /// Promeut la frame de lookahead au rang de frame courante ET la présente (upload NV12
     /// vers la texture carrier), contrairement au chemin macOS/Windows où la promotion est
     /// un pur échange de pointeurs — ici la présentation est le pas qui manque.
-    pub unsafe fn commit_peek(&mut self) -> Result<*mut AVFrame> {
+    pub(crate) unsafe fn commit_peek(&mut self) -> Result<*mut AVFrame> {
         let raw = self.sw.commit_peek()?;
         let carrier = self.frames.present(raw)?;
         self.cur = carrier;
