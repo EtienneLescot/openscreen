@@ -90,6 +90,74 @@ const MIN_LABEL_GAP_PX = 76;
 /** Unlabelled ticks drawn between two labelled ones. */
 const MINOR_PER_MAJOR = 5;
 
+// ── lane-pill screen geometry ───────────────────────────────────────
+// A pill's width IS its duration — there is no minimum beyond the 1px the CSS
+// keeps so a very short region doesn't vanish entirely. The floor used to be
+// `max(1.5%, …)` of the whole timeline, a percentage and therefore a DURATION:
+// on a 30-minute recording every region shorter than 27 s was drawn as if it
+// lasted 27 s, at every zoom level, so agent-placed zooms and trims lied about
+// what they covered and touching ones merged into one visual block.
+//
+// What a pill needs room FOR (two resize handles, a label) is a question about
+// its width in PIXELS at the current zoom, which is what pillAffordance answers.
+/** Grab-strip width of one resize handle — mirrors .lanePillHandle in the CSS. */
+const PILL_HANDLE_PX = 6;
+/** Clear body left between two inside-mounted handles. Under this the handles
+ *  would meet (or overlap) and a "move" drag would silently become a resize —
+ *  the point at which the pill flips to the compact geometry below. */
+const PILL_MOVE_PX = 6;
+/** Two handles + a grabbable body: the narrowest pill that can host its own
+ *  chrome inside its box. */
+const PILL_HANDLES_MIN_PX = PILL_HANDLE_PX * 2 + PILL_MOVE_PX;
+/**
+ * Compact pills keep BOTH affordances by moving the chrome outside the box:
+ * handle | gap | «the pill» | gap | handle. The gaps belong to the move target
+ * (the pill's ::after strip widens by exactly this much), so even a 1px pill
+ * offers ~8px to grab for a move and 6px on each side to resize — at every zoom,
+ * at every duration. Mirrors .lanePillCompact in the CSS.
+ */
+const PILL_MOVE_GAP_PX = 4;
+/** Offset of an outside-mounted handle from the pill's edge. */
+const PILL_HANDLE_OUT_PX = PILL_HANDLE_PX + PILL_MOVE_GAP_PX;
+/** Icon (11px) + the pill's own padding (15px): below this, content is pure
+ *  overflow — the lane's colour already says which kind it is, and the title
+ *  attribute still gives the value on hover. */
+const PILL_CONTENT_MIN_PX = 34;
+/** Edge-snap radius while dragging a pill, in screen px. */
+const PILL_SNAP_PX = 8;
+/** Visual separation between two clip cards. Taken off each clip's own width
+ *  (see .tlClip) rather than inserted between them, so it cannot displace the
+ *  clips that follow — which is what a flex `gap` did, once per junction. */
+const CLIP_GUTTER_PX = 6;
+/**
+ * Shortest region a resize may leave behind — the storage grid itself (regions
+ * are `Math.round`ed to whole ms, and coalesceRegionsForRuler's epsilon is 1 ms),
+ * so nothing rounds away to a zero-length row. It replaced a flat 0.2 s floor,
+ * which quietly refused the last 200 ms of every trim however far you zoomed in.
+ * How SHORT a region can be is a data question; how PRECISELY you can aim at one
+ * is the zoom's business, and the two were conflated.
+ */
+const MIN_REGION_SEC = 0.001;
+
+/**
+ * How a pill's chrome is laid out at its current on-screen size.
+ *
+ * `compact` — the box is too narrow to hold handles AND a draggable body, so the
+ * handles mount outside it (see PILL_MOVE_GAP_PX). Nothing is lost: move and
+ * resize both stay reachable at any width and any zoom, the pill just stops
+ * containing its own controls.
+ *
+ * `pxPerSec <= 0` means the panel hasn't been measured yet (first paint, jsdom).
+ * Assume roomy rather than reflowing every pill's chrome for one frame.
+ */
+export function pillAffordance(
+	durSec: number,
+	pxPerSec: number,
+): { compact: boolean; roomForLabel: boolean } {
+	const widthPx = pxPerSec > 0 ? durSec * pxPerSec : Number.POSITIVE_INFINITY;
+	return { compact: widthPx < PILL_HANDLES_MIN_PX, roomForLabel: widthPx >= PILL_CONTENT_MIN_PX };
+}
+
 // Ruler tick label. Precision follows the step: whole seconds read as a clean
 // M:SS, but once the ruler is zoomed past one tick per second the fraction is
 // the only thing telling two labels apart.
@@ -371,6 +439,13 @@ export function V4Timeline({
 	const pctOf = useCallback((sec: number) => (sec / total) * 100, [total]);
 	const showLanes = variant === "edit";
 
+	// The visible fraction of the timeline, and what one second is worth on screen
+	// at that zoom. Every screen-space rule below — ruler step, pill affordances,
+	// snap radius — goes through this instead of being written as a fraction of
+	// `total`, which is a duration in disguise and so scales with the recording.
+	const navSpan = Math.max(0.02, nav.end - nav.start);
+	const pxPerSec = viewportWidthPx / navSpan / total;
+
 	// ── region lanes ────────────────────────────────────────────────
 	// zoom/speed/annotation: one pill per row, never coalesced — each carries
 	// distinct per-instance content (depth/focus, speed value, text) that two
@@ -436,8 +511,6 @@ export function V4Timeline({
 	// is the first "nice" one whose on-screen gap clears MIN_LABEL_GAP_PX, which
 	// is why the labels never collide however narrow the panel gets.
 	const rulerTicks = useMemo((): { step: number; ticks: RulerTick[] } => {
-		const span = Math.max(0.02, nav.end - nav.start);
-		const pxPerSec = viewportWidthPx / span / total;
 		if (!Number.isFinite(pxPerSec) || pxPerSec <= 0) return { step: 1, ticks: [] };
 		const step =
 			TICK_STEPS_SEC.find((s) => s * pxPerSec >= MIN_LABEL_GAP_PX) ??
@@ -453,7 +526,7 @@ export function V4Timeline({
 			ticks.push({ sec: i * minor, major: i % MINOR_PER_MAJOR === 0 });
 		}
 		return { step, ticks };
-	}, [total, nav.start, nav.end, viewportWidthPx]);
+	}, [total, nav.start, nav.end, pxPerSec]);
 
 	// Live scrub position. The store write behind it is rAF-throttled (see
 	// seekToClientX), so this keeps the playhead and the timecode pinned to the
@@ -589,15 +662,18 @@ export function V4Timeline({
 			// to `setTrimEntries` as `dropIds` so a shrinking span deletes the entries
 			// it no longer needs.
 			const trimOwned: string[] = [...pill.sourceIds];
-			// Snap targets: clip boundaries + timeline ends. Within ~1% of total,
-			// an edge snaps and a vertical guide is shown (Bottombar parity).
+			// Snap targets: clip boundaries + timeline ends. Within PILL_SNAP_PX of
+			// one on screen, an edge snaps and a vertical guide is shown.
+			// The radius is in PIXELS: as a fraction of total (it was 1.2%) it was a
+			// 21-second magnet on a 30-minute project, so a pill dragged anywhere near
+			// a junction jumped to it however far you zoomed in to place it precisely.
 			const snapTargets = [
 				0,
 				total,
 				...clips.map((c) => c.timelineStartSec),
 				...clips.map((c) => c.timelineEndSec),
 			];
-			const snapThresh = total * 0.012;
+			const snapThresh = pxPerSec > 0 ? PILL_SNAP_PX / pxPerSec : 0;
 			const snap = (v: number): number => {
 				let best = v;
 				let bestD = snapThresh;
@@ -612,8 +688,8 @@ export function V4Timeline({
 				return best;
 			};
 			const apply = async (start: number, end: number): Promise<void> => {
-				const s = Math.max(0, Math.min(end - 0.2, start));
-				const en = Math.min(total, Math.max(s + 0.2, end));
+				const s = Math.max(0, Math.min(end - MIN_REGION_SEC, start));
+				const en = Math.min(total, Math.max(s + MIN_REGION_SEC, end));
 				if (pill.kind === "zoom") await tl.updateZoomSpan(pill.id, s * 1000, en * 1000);
 				else if (pill.kind === "speed") await tl.updateSpeedSpan(pill.id, s * 1000, en * 1000);
 				else if (pill.kind === "annotation")
@@ -649,11 +725,11 @@ export function V4Timeline({
 					ns = Math.max(0, Math.min(total - dur, snap(pill.start + dxSec)));
 					ne = ns + dur;
 				} else if (dragMode === "l") {
-					ns = Math.max(0, Math.min(pill.end - 0.2, snap(pill.start + dxSec)));
+					ns = Math.max(0, Math.min(pill.end - MIN_REGION_SEC, snap(pill.start + dxSec)));
 					ne = pill.end;
 				} else {
 					ns = pill.start;
-					ne = Math.min(total, Math.max(pill.start + 0.2, snap(pill.end + dxSec)));
+					ne = Math.min(total, Math.max(pill.start + MIN_REGION_SEC, snap(pill.end + dxSec)));
 				}
 				const nextState = { id: pill.id, kind: pill.kind, start: ns, end: ne };
 				activePillDragRef.current = nextState;
@@ -679,7 +755,7 @@ export function V4Timeline({
 			window.addEventListener("pointermove", move);
 			window.addEventListener("pointerup", up);
 		},
-		[tl, total, clips],
+		[tl, total, clips, pxPerSec],
 	);
 
 	const startNavDrag = useCallback(
@@ -782,7 +858,6 @@ export function V4Timeline({
 	// canvas's own (already widened) box — so scrolling to nav.start is a flat
 	// -nav.start of the canvas. Scaling it by 1/navSpan as well double-counted
 	// the zoom and threw the whole timeline off-screen at any nav.start > 0.
-	const navSpan = Math.max(0.02, nav.end - nav.start);
 	const canvasStyle = {
 		width: `${(100 / navSpan).toFixed(3)}%`,
 		transform: `translateX(${(-nav.start * 100).toFixed(3)}%)`,
@@ -837,13 +912,12 @@ export function V4Timeline({
 			// Width + gap the dragged clip displaces its neighbours by — measured
 			// once at drag start (only its position changes during the drag, not
 			// its size).
-			const gapPx = 6;
-			const shiftAmount = clipEl.getBoundingClientRect().width + gapPx;
+			const shiftAmount = clipEl.getBoundingClientRect().width + CLIP_GUTTER_PX;
 
 			// Boundaries are captured once, before any transform is applied —
 			// re-querying live rects mid-drag would pick up the dragged clip's own
 			// translated (pointer-following) position and corrupt the math, since
-			// its rect no longer reflects its untouched flex slot.
+			// its rect no longer reflects its untouched slot.
 			const originalRects = Array.from(
 				container.querySelectorAll<HTMLElement>("[data-clip-id]"),
 			).map((el) => el.getBoundingClientRect());
@@ -1022,17 +1096,21 @@ export function V4Timeline({
 		suppressRightSeam: boolean;
 	}) => {
 		const { pill: p } = seg;
+		const durSec = seg.segEnd - seg.segStart;
+		// The box is exactly as long as the effect is; only what fits INSIDE it
+		// varies with the zoom.
+		const { compact, roomForLabel } = pillAffordance(durSec, pxPerSec);
 		return (
 			<div
 				key={seg.key}
 				role={seg.interactive ? "button" : undefined}
 				tabIndex={seg.interactive ? 0 : undefined}
 				className={`${styles.lanePill} ${laneOf(p.kind)}${
-					seg.interactive && isPillSelected(p.id) ? ` ${styles.lanePillSel}` : ""
-				}`}
+					compact ? ` ${styles.lanePillCompact}` : ""
+				}${seg.interactive && isPillSelected(p.id) ? ` ${styles.lanePillSel}` : ""}`}
 				style={{
 					left: `${pctOf(seg.segStart)}%`,
-					width: `${Math.max(1.5, pctOf(seg.segEnd - seg.segStart))}%`,
+					width: `${pctOf(durSec)}%`,
 					transform: seg.shiftPx ? `translateX(${seg.shiftPx}px)` : undefined,
 					transition: !clipDrag
 						? undefined
@@ -1052,11 +1130,11 @@ export function V4Timeline({
 				{seg.interactive ? (
 					<span
 						className={styles.lanePillHandle}
-						style={{ left: 0 }}
+						style={{ left: compact ? -PILL_HANDLE_OUT_PX : 0 }}
 						onPointerDown={(e) => startPillDrag(e, p, "l")}
 					/>
 				) : null}
-				{seg.showContent ? (
+				{seg.showContent && roomForLabel ? (
 					<>
 						{pillIcon(p.kind)}
 						<span className={styles.lanePillLabel}>{p.label}</span>
@@ -1065,7 +1143,7 @@ export function V4Timeline({
 				{seg.interactive ? (
 					<span
 						className={styles.lanePillHandle}
-						style={{ right: 0 }}
+						style={{ right: compact ? -PILL_HANDLE_OUT_PX : 0 }}
 						onPointerDown={(e) => startPillDrag(e, p, "r")}
 					/>
 				) : null}
@@ -1472,7 +1550,15 @@ export function V4Timeline({
 										className={`${styles.tlClip}${selected ? ` ${styles.tlClipSel}` : ""}${
 											dragging ? ` ${styles.tlClipDragging}` : ""
 										}`}
-										style={{ flex: `${dur} 0 0`, transform: clipTransform }}
+										style={{
+											left: `${pctOf(c.timelineStartSec)}%`,
+											// Minus the gutter that separates two cards (it used to be the
+											// flex row's `gap`). A clip shorter than the gutter lands on
+											// .tlClip's 1px min-width instead of collapsing — same rule as
+											// the lane pills above.
+											width: `calc(${pctOf(dur)}% - ${CLIP_GUTTER_PX}px)`,
+											transform: clipTransform,
+										}}
 										onPointerDown={(e) => startClipDrag(e, c)}
 										onClick={(e) => {
 											e.stopPropagation();
