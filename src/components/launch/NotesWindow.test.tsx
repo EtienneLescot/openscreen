@@ -312,8 +312,10 @@ describe("NotesWindow teleprompter mode", () => {
 		);
 		render(<NotesWindow />);
 
-		// The editor must be CREATED read-only — an effect-only lock would leave the first
-		// painted frame editable.
+		// `useEditor` is stubbed here, so this pins the option we hand Tiptap rather than what
+		// Tiptap does with it: the editor must be CREATED read-only, because an effect-only lock
+		// would leave the first painted frame editable. That the real editor honours it — and
+		// keeps honouring the effect afterwards — is covered in NotesWindow.editable.test.tsx.
 		expect(tiptapState.options?.editable).toBe(false);
 		expect(setEditable).toHaveBeenLastCalledWith(false, false);
 		expect(setEditable).not.toHaveBeenCalledWith(true, false);

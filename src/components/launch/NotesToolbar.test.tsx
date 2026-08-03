@@ -147,7 +147,7 @@ describe("NotesToolbar teleprompter controls", () => {
 
 		rerender(
 			<I18nProvider>
-				<NotesToolbar {...createProps({ isPlaying: true })} />
+				<NotesToolbar {...createProps({ isPlaying: true, formattingDisabled: true })} />
 			</I18nProvider>,
 		);
 		expect(screen.getByRole("button", { name: "Pause auto-scroll" })).not.toHaveAttribute(
