@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
+import { planChunks } from "./chunking";
 import { _resetSttManagerForTests, SttManager } from "./index";
 import type { SttStatusEvent, SttTranscribeResponse } from "./transcriptionContract";
 
@@ -85,6 +86,79 @@ describe("SttManager", () => {
 		expect(result.backend).toBe("whispercpp-cpu");
 		expect(result.wordSegments).toHaveLength(1);
 		expect(fakeWhisperServer.transcribe).toHaveBeenCalledOnce();
+	});
+
+	it("splits a long recording and shifts each chunk's timestamps to absolute time", async () => {
+		// Every chunk reports the same relative segment at 1.0s; correct merging
+		// turns those into one absolute timestamp per chunk start.
+		fakeWhisperServer.transcribe.mockResolvedValue({
+			segments: [{ text: "hello", startSec: 1, endSec: 1.5 }],
+			wordSegments: [{ word: "hello", startSec: 1, endSec: 1.5 }],
+			detectedLanguage: "en",
+			backend: "whispercpp-cpu",
+		});
+		const samples = new Float32Array(200 * 16000);
+		const mgr = new SttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		const result = await mgr.transcribe({ samples, language: "en" });
+
+		const expectedOffsets = planChunks(samples, 16000).map((c) => c.startSample / 16000);
+		expect(expectedOffsets.length).toBeGreaterThan(1);
+		expect(fakeWhisperServer.transcribe).toHaveBeenCalledTimes(expectedOffsets.length);
+		expect(result.segments.map((s) => s.startSec)).toEqual(expectedOffsets.map((o) => o + 1));
+		expect(result.wordSegments.map((w) => w.startSec)).toEqual(expectedOffsets.map((o) => o + 1));
+	});
+
+	it("reports monotonic progress that ends on the full duration", async () => {
+		const sink = vi.fn<(e: SttStatusEvent) => void>();
+		const samples = new Float32Array(200 * 16000);
+		const mgr = new SttManager();
+		await mgr.init({ statusSink: sink, modelsBaseDir: "/tmp/fake-stt-models" });
+		sink.mockClear();
+		await mgr.transcribe({ samples, language: "en" });
+
+		const progress = sink.mock.calls
+			.map(([event]) => event)
+			.filter((event) => event.completedSec !== undefined);
+		expect(progress[0].completedSec).toBe(0);
+		expect(progress[progress.length - 1].completedSec).toBe(200);
+		for (const event of progress) expect(event.totalSec).toBe(200);
+		for (let i = 1; i < progress.length; i++) {
+			expect(progress[i].completedSec).toBeGreaterThan(progress[i - 1].completedSec ?? -1);
+		}
+	});
+
+	it("pins later chunks to the language detected on the first one", async () => {
+		const mgr = new SttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		await mgr.transcribe({ samples: new Float32Array(200 * 16000) });
+		const languages = fakeWhisperServer.transcribe.mock.calls.map(([req]) => req.language);
+		expect(languages[0]).toBeUndefined();
+		expect(languages.slice(1).every((l) => l === "en")).toBe(true);
+	});
+
+	it("retries a failed chunk instead of losing the whole transcription", async () => {
+		fakeWhisperServer.transcribe.mockRejectedValueOnce(new Error("helper died")).mockResolvedValue({
+			segments: [{ text: "hello", startSec: 0, endSec: 0.5 }],
+			wordSegments: [{ word: "hello", startSec: 0, endSec: 0.5 }],
+			detectedLanguage: "en",
+			backend: "whispercpp-cpu",
+		});
+		const mgr = new SttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		const result = await mgr.transcribe({ samples: new Float32Array(16000), language: "en" });
+		expect(result.segments).toHaveLength(1);
+		// start() again on the retry — the usual cause is a dead helper.
+		expect(fakeWhisperServer.start.mock.calls.length).toBeGreaterThan(1);
+	});
+
+	it("fails the request when a chunk never succeeds", async () => {
+		fakeWhisperServer.transcribe.mockRejectedValue(new Error("helper wedged"));
+		const mgr = new SttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		await expect(
+			mgr.transcribe({ samples: new Float32Array(16000), language: "en" }),
+		).rejects.toThrow("helper wedged");
 	});
 
 	it("shutdown() stops whisper-stt-server", async () => {
