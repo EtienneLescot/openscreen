@@ -47,6 +47,7 @@ interface RendererSttApi {
 		detectedLanguage: string;
 		backend: string;
 	}>;
+	cancel?: () => Promise<void>;
 	onStatus?: (callback: (event: SttRendererStatus) => void) => () => void;
 }
 
@@ -80,6 +81,12 @@ export function transcribeMono16kToSegments(
 	}
 
 	const unsubscribe = options?.onStatus && api.onStatus?.((event) => options.onStatus?.(event));
+	// Aborting has to reach the MAIN process: the work is a chunk loop over there,
+	// and a renderer that merely stops awaiting still leaves the helper busy for
+	// minutes — with the replacement request queued behind it, which is what made
+	// "regenerate in another language" look dead.
+	const onAbort = () => void api.cancel?.();
+	options?.signal?.addEventListener("abort", onAbort, { once: true });
 	const forcedLanguage =
 		options?.language && options.language !== "auto" ? options.language : undefined;
 	// ponytail: word timestamps come back already absolute from whisper.cpp
@@ -115,7 +122,15 @@ export function transcribeMono16kToSegments(
 			}
 			return { segments, granularity, detectedLanguage: result.detectedLanguage };
 		})
+		.catch((error: unknown) => {
+			// A run the caller cancelled surfaces as an abort, not as an engine
+			// failure: the store drops it silently instead of toasting the user
+			// about something they asked for.
+			if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+			throw error;
+		})
 		.finally(() => {
+			options?.signal?.removeEventListener("abort", onAbort);
 			unsubscribe?.();
 		});
 }

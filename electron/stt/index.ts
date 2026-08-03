@@ -25,14 +25,15 @@ import { WhisperServerManager } from "./whisperServer";
  *      technical-documentation/architecture/transcription-and-captions.md § Decision rationale.
  *   3. `shutdown()` tears down on app quit.
  *
- * Status events fan out via `statusSink` so the renderer can drive its
+ * Status events fan out to every attached sink so the renderer can drive its
  * "loading model" / "transcribing" indicator.
  *
  * Why chunked rather than one request: a 30-minute recording took ~10 minutes
  * in a single `/inference` call — no progress to show, no way to recover from a
  * transient failure without redoing everything, and long enough that the HTTP
  * client's own header timeout killed it before whisper ever answered. Chunks
- * turn that into a progress signal and a retry unit.
+ * turn that into a progress signal, a retry unit, and — via `cancel()` — the
+ * only point where a run in flight can be stopped at all.
  *
  * Chunks run SEQUENTIALLY, and that is a measured choice, not an omission:
  * whisper-stt-server holds a single model context, so concurrent `/inference`
@@ -50,6 +51,16 @@ const SAMPLE_RATE = 16_000;
 /** Attempts per chunk before the whole transcription fails. */
 const CHUNK_ATTEMPTS = 3;
 
+/**
+ * `AbortError` by name so the renderer's `isAbortError` recognizes it as "the
+ * user asked for this" rather than an engine failure worth a toast.
+ */
+function cancelledError(): Error {
+	const error = new Error("Transcription cancelled");
+	error.name = "AbortError";
+	return error;
+}
+
 export interface SttManagerInitOptions {
 	statusSink?: (event: SttStatusEvent) => void;
 	/** Override the models cache directory; defaults to `app.getPath("userData") + "/stt-models"`. */
@@ -59,23 +70,48 @@ export interface SttManagerInitOptions {
 export class SttManager {
 	private readonly server = new WhisperServerManager();
 	private modelsBaseDir: string | null = null;
-	private statusSink: ((event: SttStatusEvent) => void) | null = null;
+	private readonly statusSinks = new Set<(event: SttStatusEvent) => void>();
 	private initPromise: Promise<void> | null = null;
 	/** Kept from `prepare()` so a chunk retry can respawn a helper that died mid-run. */
 	private modelPath: string | null = null;
+	/**
+	 * Bumped by `cancel()`. The chunk loop compares it against the value it
+	 * captured on entry, so a cancel that lands after a new run started cannot
+	 * kill that new run.
+	 */
+	private cancelEpoch = 0;
 
-	/** Wire a sink for the renderer status channel. */
-	setStatusSink(sink: ((event: SttStatusEvent) => void) | null): void {
-		this.statusSink = sink;
-	}
-
-	/** Read the currently-installed status sink (mostly for tests). */
-	getStatusSink(): ((event: SttStatusEvent) => void) | null {
-		return this.statusSink;
+	/**
+	 * Attach a sink for the renderer status channel; returns its detach function.
+	 *
+	 * A SET rather than one slot: this used to be a single field that each IPC
+	 * invocation saved and restored, so with two overlapping transcriptions the
+	 * first to finish restored the sink captured at ITS start and left the other
+	 * one emitting into nothing — no progress for the rest of its run, which
+	 * reads as a hang.
+	 */
+	addStatusSink(sink: (event: SttStatusEvent) => void): () => void {
+		this.statusSinks.add(sink);
+		return () => {
+			this.statusSinks.delete(sink);
+		};
 	}
 
 	private emit(event: SttStatusEvent): void {
-		this.statusSink?.(event);
+		for (const sink of this.statusSinks) sink(event);
+	}
+
+	/**
+	 * Stop the in-flight transcription at the next chunk boundary.
+	 *
+	 * ponytail: one epoch for the whole manager, not a handle per request. The
+	 * pipeline runs one transcription at a time by construction (the renderer's
+	 * queue serializes, and `WhisperServerManager` single-flights on top), so
+	 * "cancel what is running" is the only question anyone can ask. Per-request
+	 * tokens the day two recordings can transcribe at once.
+	 */
+	cancel(): void {
+		this.cancelEpoch++;
 	}
 
 	/**
@@ -83,7 +119,7 @@ export class SttManager {
 	 * means the second caller just awaits the same completion.
 	 */
 	init(options: SttManagerInitOptions = {}): Promise<void> {
-		if (options.statusSink) this.statusSink = options.statusSink;
+		if (options.statusSink) this.addStatusSink(options.statusSink);
 		if (options.modelsBaseDir) this.modelsBaseDir = options.modelsBaseDir;
 		if (!this.initPromise) {
 			// A REJECTED init must not be cached. `prepare()` downloads a 253 MB
@@ -135,8 +171,14 @@ export class SttManager {
 	 * A failure here is usually the helper process dying (OOM, driver reset)
 	 * rather than a bad chunk, so each retry first re-runs `server.start()` —
 	 * idempotent when the helper is alive, a respawn when it isn't. That is what
-	 * makes a 30-minute transcription survive one bad minute instead of losing
-	 * the twenty that already succeeded.
+	 * makes a 30-minute transcription survive a helper that dies once mid-run.
+	 *
+	 * What it does NOT do is salvage a chunk that fails all three attempts: the
+	 * request fails whole and the chunks that already succeeded go with it. A
+	 * transcript silently missing 90 seconds in the middle is worse than no
+	 * transcript, since nothing downstream (captions, trims, the transcript
+	 * editor) could tell the gap from a silence. The caller is told how far it
+	 * got instead — see the wrapper in `transcribe()`.
 	 */
 	private async transcribeChunk(
 		samples: Float32Array,
@@ -162,6 +204,7 @@ export class SttManager {
 	async transcribe(req: SttTranscribeRequest): Promise<SttTranscribeResponse> {
 		await this.init();
 
+		const epoch = this.cancelEpoch;
 		const totalSec = req.samples.length / SAMPLE_RATE;
 		const chunks = planChunks(req.samples, SAMPLE_RATE);
 		this.emit({ phase: "transcribe", completedSec: 0, totalSec });
@@ -170,18 +213,52 @@ export class SttManager {
 		const wordSegments: SttWordSegment[] = [];
 		let detectedLanguage: string | null = null;
 		let backend = this.server.status.backend ?? "whispercpp-cpu";
-		// Only the first chunk auto-detects. Every later chunk is forced onto that
-		// language: whisper can otherwise flip mid-recording on a chunk that opens
-		// with a proper noun or a silence, and "transcribe" the rest as another
-		// language entirely.
-		let language = req.language;
+		// Only the first chunk auto-detects; every later chunk is forced onto the
+		// language it resolved, so whisper cannot flip mid-recording on a chunk
+		// that opens with a proper noun or a silence and "transcribe" the rest as
+		// another language.
+		//
+		// `"auto"` must collapse to `undefined` here rather than merely falsy
+		// values: `SttTranscribeRequest` documents it as the explicit way to ask
+		// for detection, and it is TRUTHY — left in place it makes the pin below
+		// unreachable for every caller that spells its intent out.
+		//
+		// This depends on the helper reporting what it RESOLVED rather than
+		// echoing the request, which it only does since cc781806 (30/07/2026,
+		// `whisper_full_lang_id()` in electron/native/whisper-stt/src/main.cpp).
+		// A stale `electron/native/bin/<tag>/whisper-stt-server` — the directory
+		// is gitignored, so a dev tree keeps whatever was last staged there —
+		// silently reverts this to "every chunk detects on its own": the echo
+		// comes back as the literal "auto", the guard below rejects it, and
+		// nothing anywhere says why. `scripts/stage-whisper-stt.sh` refuses to
+		// overwrite a local binary by design, so it will not rescue you either.
+		// Verified end-to-end on 352s of real speech: `[undefined,"en","en","en"]`.
+		let language = req.language && req.language !== "auto" ? req.language : undefined;
 
-		for (const chunk of chunks) {
+		for (const [index, chunk] of chunks.entries()) {
+			// Between chunks is the only place this loop can be interrupted, and it
+			// is enough: a chunk is bounded by `whisperServer`'s own request ceiling.
+			if (this.cancelEpoch !== epoch) throw cancelledError();
 			const offsetSec = chunk.startSample / SAMPLE_RATE;
 			const result = await this.transcribeChunk(
 				req.samples.subarray(chunk.startSample, chunk.endSample),
 				language,
-			);
+			).catch((error) => {
+				// Say where it died. Without this the user gets "Transcription
+				// failed" for a 30-minute recording with no hint that 18 of those
+				// minutes were fine and the helper fell over at one specific spot.
+				// `Object.assign` rather than the `{ cause }` constructor option: the
+				// project targets ES2020, where that overload does not exist (see
+				// `BackgroundLoadError` in src/lib/wallpaper.ts for the same dance).
+				throw Object.assign(
+					new Error(
+						`transcription failed ${Math.round(offsetSec)}s into a ${Math.round(totalSec)}s ` +
+							`recording (chunk ${index + 1}/${chunks.length}): ` +
+							`${error instanceof Error ? error.message : String(error)}`,
+					),
+					{ cause: error },
+				);
+			});
 			// Chunk-relative timestamps → absolute, the only thing every consumer
 			// (captions, transcript editor, trims) reads.
 			for (const segment of result.segments) {
@@ -214,7 +291,7 @@ export class SttManager {
 		return {
 			segments,
 			wordSegments,
-			detectedLanguage: detectedLanguage ?? req.language ?? "auto",
+			detectedLanguage: detectedLanguage ?? language ?? "auto",
 			backend,
 		};
 	}
@@ -239,10 +316,11 @@ export function _resetSttManagerForTests(): void {
 }
 
 /**
- * Wire the IPC channel. Call this from `registerIpcHandlers` so the renderer
- * can `invoke("stt:transcribe", request)` and receive `SttTranscribeResponse`.
- * Status events fan out on `"stt:status"` (main → renderer push), scoped to
- * the calling `webContents` so two windows don't cross-talk.
+ * Wire the IPC channels. Call this from `registerIpcHandlers` so the renderer
+ * can `invoke("stt:transcribe", request)` and receive `SttTranscribeResponse`,
+ * and `invoke("stt:cancel")` to stop a run it no longer wants. Status events
+ * fan out on `"stt:status"` (main → renderer push), scoped to the calling
+ * `webContents` so two windows don't cross-talk.
  */
 export function registerSttIpc(ipcMain: IpcMain): void {
 	const manager = getSttManager();
@@ -250,8 +328,9 @@ export function registerSttIpc(ipcMain: IpcMain): void {
 		"stt:transcribe",
 		async (event, req: SttTranscribeRequest): Promise<SttTranscribeResponse> => {
 			const senderId = event.sender.id;
-			const previous = manager.getStatusSink();
-			manager.setStatusSink((statusEvent) => {
+			// Attach for the life of THIS request only. Overlapping requests each
+			// own their own sink, so neither can silence the other on the way out.
+			const detach = manager.addStatusSink((statusEvent) => {
 				if (event.sender.id === senderId && !event.sender.isDestroyed()) {
 					event.sender.send("stt:status", statusEvent);
 				}
@@ -259,8 +338,11 @@ export function registerSttIpc(ipcMain: IpcMain): void {
 			try {
 				return await manager.transcribe(req);
 			} finally {
-				manager.setStatusSink(previous);
+				detach();
 			}
 		},
 	);
+	ipcMain.handle("stt:cancel", () => {
+		manager.cancel();
+	});
 }
