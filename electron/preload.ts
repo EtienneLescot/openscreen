@@ -284,6 +284,10 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	getReadableFileInfo: (filePath: string) => {
 		return ipcRenderer.invoke("get-readable-file-info", filePath);
 	},
+	/** Native waveform peaks, disk-cached. See electron/media/audioPeaks.ts. */
+	getAudioPeaks: (filePath: string, durationSec: number) => {
+		return ipcRenderer.invoke("get-audio-peaks", filePath, durationSec);
+	},
 	readFileChunk: (filePath: string, offset: number, length: number) => {
 		return ipcRenderer.invoke("read-file-chunk", filePath, offset, length);
 	},
@@ -422,6 +426,8 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		transcribe: (request: SttTranscribeRequest): Promise<SttTranscribeResponse> => {
 			return ipcRenderer.invoke("stt:transcribe", request) as Promise<SttTranscribeResponse>;
 		},
+		/** Stop the running transcription at its next chunk boundary. */
+		cancel: (): Promise<void> => ipcRenderer.invoke("stt:cancel") as Promise<void>,
 		onStatus: (callback: (event: SttStatusEvent) => void) => {
 			const listener = (_event: unknown, payload: SttStatusEvent) => callback(payload);
 			ipcRenderer.on("stt:status", listener);

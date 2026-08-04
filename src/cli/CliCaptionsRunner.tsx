@@ -11,7 +11,7 @@ import {
 } from "@/components/video-editor/projectPersistence";
 import type { AnnotationRegion, TrimRegion } from "@/components/video-editor/types";
 import { extractMono16kFromVideoUrl } from "@/lib/captioning/extractMono16k";
-import { transcribeMono16kToSegments } from "@/lib/captioning/transcribe";
+import { type SttRendererStatus, transcribeMono16kToSegments } from "@/lib/captioning/transcribe";
 import type { CliCaptionsRequest, CliDoneResult } from "@/lib/cliContracts";
 import { nativeBridgeClient } from "@/native";
 import { captionSegmentsToAnnotationRegions } from "./captionAnnotations";
@@ -61,8 +61,14 @@ async function runCaptions(request: CliCaptionsRequest): Promise<CliDoneResult> 
 	const trimMs = Math.round(trimSec * 1000);
 	const trimRegionsForTranscribe = shiftTrimRegionsMsForCaptionBuffer(trimRegions, trimMs);
 
+	// `onStatus` now fires once per transcribed chunk, not once per phase, so log
+	// only on a phase change — otherwise a long transcription spams the CLI with
+	// one identical line per chunk.
+	let loggedPhase: SttRendererStatus["phase"] | null = null;
 	const transcribeOptions = {
-		onStatus: (phase: "model" | "transcribe") => {
+		onStatus: ({ phase }: SttRendererStatus) => {
+			if (phase === loggedPhase) return;
+			loggedPhase = phase;
 			window.electronAPI.cliLog(
 				"info",
 				phase === "model" ? "Loading caption model…" : "Transcribing…",

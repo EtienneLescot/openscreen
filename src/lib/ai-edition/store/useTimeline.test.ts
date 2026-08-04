@@ -611,4 +611,60 @@ describe("useTimeline is not re-rendered by playhead ticks", () => {
 			endMs: 6200,
 		});
 	});
+
+	// Pasting a copied trim is exactly this call: a trim carries no properties, so
+	// all a copy holds is its length, and paste recreates one that long at the
+	// playhead. Same primitive the toolbar's cut button uses.
+	it("creates a trim of the requested length", async () => {
+		const { result } = renderTimeline();
+		act(() => {
+			useProjectStore.getState().setCurrentTime(3);
+		});
+		await act(async () => {
+			await result.current.addTrim(1.25);
+		});
+		const trim = useProjectStore.getState().document?.timeline.trimRanges.at(-1);
+		expect((trim?.endSec ?? 0) - (trim?.startSec ?? 0)).toBeCloseTo(1.25, 6);
+	});
+
+	// The timeline's toolbar passes a duration worth a fixed number of pixels at
+	// the current zoom; every other entry point keeps the 2 s above.
+	it("honours a caller-supplied duration", async () => {
+		const { result } = renderTimeline();
+		act(() => {
+			useProjectStore.getState().setCurrentTime(4.2);
+		});
+		await act(async () => {
+			await result.current.addZoom(0.4);
+		});
+		expect(useProjectStore.getState().document?.zoomRanges.at(-1)).toMatchObject({
+			startMs: 4200,
+			endMs: 4600,
+		});
+	});
+});
+
+describe("useTimeline selection", () => {
+	// A pill and a clip are one selection, not two. While both could be set at
+	// once, copy/paste keyed off "is a clip selected?" and so acted on the clip
+	// whatever the user had actually clicked.
+	it("lets a clip and a pill cancel each other", () => {
+		const { result } = renderTimeline();
+
+		act(() => result.current.selectClip("clip_1"));
+		expect(result.current.clipSelection).toBe("clip_1");
+
+		act(() => result.current.selectRegion("zoom", "z1"));
+		expect(result.current.selection).toMatchObject({ kind: "zoom", id: "z1" });
+		expect(result.current.clipSelection).toBeNull();
+
+		act(() => result.current.selectClip("clip_2"));
+		expect(result.current.clipSelection).toBe("clip_2");
+		expect(result.current.selection).toBeNull();
+		expect(result.current.multiSelection).toEqual([]);
+
+		act(() => result.current.clearSelection());
+		expect(result.current.selection).toBeNull();
+		expect(result.current.clipSelection).toBeNull();
+	});
 });

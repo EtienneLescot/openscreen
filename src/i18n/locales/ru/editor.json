@@ -140,6 +140,7 @@
 		"transcriptEmpty": "Транскрипт пуст.",
 		"notGeneratedHint": "Ещё не создан — выберите язык и нажмите «Пересоздать».",
 		"transcribing": "Расшифровка",
+		"downloadingModel": "Загрузка речевой модели",
 		"transcribingEllipsis": "Расшифровка…",
 		"pendingTranscription": "Ожидает расшифровки",
 		"transcriptionFailed": "Ошибка расшифровки",
