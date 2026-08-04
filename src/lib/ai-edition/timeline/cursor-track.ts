@@ -67,11 +67,12 @@ export interface CursorTrack {
 	/** True when maxPoints forced a coarser rate than `hz` would give. */
 	truncated: boolean;
 	/** Present ONLY when the ceiling did not hold. `maxPoints` budgets the rate and
-	 *  the gap floor; the points nothing can put back — a shape change, a non-move
-	 *  event, the ends of a parked run — are exempt and stack on top, so a capture
-	 *  rich in them lands above the ceiling. Absent means the budget held. It is a
-	 *  separate field from `truncated` on purpose: that one says "you are seeing
-	 *  less than you asked for", this one says the opposite. */
+	 *  the gap floor; the MANDATORY points are exempt and stack on top — the first
+	 *  and last sample, a pointer-shape change, a non-move event, the ends of a run
+	 *  longer than the max gap — so a capture rich in them lands above the ceiling.
+	 *  Absent means the budget held. It is a separate field from `truncated` on
+	 *  purpose: that one says "you are seeing less than you asked for", this one
+	 *  says the opposite. */
 	overBudget?: string;
 	/** When true, every point's virtual-timeline position equals its `atSec`, and
 	 *  `virtualSec` is omitted from the points. Goes false as soon as a clip is
@@ -328,9 +329,10 @@ export function buildCursorTrack(options: CursorTrackOptions): CursorTrack {
 	// field is absent when the budget held, so the common payload is unchanged.
 	const overBudget =
 		points.length > maxPoints
-			? `${points.length} points for a ceiling of ${maxPoints}: pointer-shape changes, ` +
-				`non-move events and the ends of a parked run are never dropped, and this ` +
-				`recording has enough of them to land above the budget.`
+			? `${points.length} points for a ceiling of ${maxPoints}: the mandatory points are ` +
+				`never dropped — the first and last sample, pointer-shape changes, non-move ` +
+				`events and the ends of a parked run — and this recording has enough of them ` +
+				`to land above the budget.`
 			: undefined;
 
 	return {

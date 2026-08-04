@@ -16,12 +16,13 @@ export default defineConfig({
 		globals: true,
 		environment: "node",
 		include: ["workbench/**/*.wb.ts"],
-		// ponytail: imported, not recopied. A `.wb.ts` that drives a live turn is
-		// cut by whichever cutoff fires first, and this one used to sit at 120 s
-		// while the harness moved to 300 s — so vitest would have killed the turn
-		// before the harness could say it had timed out, which is the failure the
-		// harness comment exists to prevent. One constant, two enforcers.
-		testTimeout: DEFAULT_TURN_TIMEOUT_MS,
+		// ponytail: derived from the harness cutoff, and deliberately ABOVE it. A
+		// `.wb.ts` driving a live turn is cut by whichever deadline fires first;
+		// this one used to sit at 120 s while the harness moved to 300 s, so vitest
+		// killed the turn before the harness could classify it. Equal values would
+		// only make that race unbiased — the margin is what guarantees the harness
+		// wins and the run gets a TIMEOUT verdict instead of a dead worker.
+		testTimeout: DEFAULT_TURN_TIMEOUT_MS + 30_000,
 		reporters: ["default"],
 		// ponytail: the fixed cost of the suite is the dynamic
 		// `await import("deepagents")` in chat-service.ts:346 — hundreds of

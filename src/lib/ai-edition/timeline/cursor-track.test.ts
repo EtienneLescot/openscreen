@@ -222,9 +222,10 @@ describe("buildCursorTrack — compression", () => {
 
 	it("says so when the mandatory points push it over maxPoints", () => {
 		// The ceiling is soft: `maxPoints` budgets the rate and the gap floor, and the
-		// points nothing can put back are exempt. A recording that flips the pointer
-		// every 100ms is all exempt points, so the budget cannot hold — and the track
-		// has to say that rather than let the model read 100 rows as "within budget".
+		// mandatory points are exempt. `sweep` samples every 50 ms and the shape here
+		// alternates on every index, so every sample is mandatory and the budget cannot
+		// hold — and the track has to say so rather than let the model read 100 rows as
+		// "within budget".
 		const flipping = sweep(200, { shape: (i) => (i % 2 === 0 ? "arrow" : "text") });
 		const track = buildCursorTrack({
 			assetId: "asset_1",
