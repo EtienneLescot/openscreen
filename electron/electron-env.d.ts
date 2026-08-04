@@ -178,6 +178,8 @@ interface Window {
 			recordingId: number;
 			webcam: import("../src/lib/recordingSession").RecordedVideoAssetInput;
 			cursorCaptureMode?: import("../src/lib/recordingSession").CursorCaptureMode;
+			durationMs?: number;
+			webcamOffsetMs?: number;
 		}) => Promise<{
 			success: boolean;
 			path?: string;
@@ -233,6 +235,7 @@ interface Window {
 			recordingId: number;
 			webcam: import("../src/lib/recordingSession").RecordedVideoAssetInput;
 			cursorCaptureMode?: import("../src/lib/recordingSession").CursorCaptureMode;
+			durationMs?: number;
 			webcamOffsetMs?: number;
 		}) => Promise<{
 			success: boolean;
