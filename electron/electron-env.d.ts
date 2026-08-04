@@ -192,6 +192,23 @@ interface Window {
 			reason?: "unsupported-platform" | "missing-helper" | string;
 			error?: string;
 		}>;
+		/**
+		 * Raises the compositor's picker and holds the grant until the recording
+		 * actually starts, so a countdown can run AFTER the user has chosen.
+		 *
+		 * Best-effort: a `success: false` means "start normally", never "fail".
+		 */
+		prepareNativeLinuxRecording: (
+			request: import("../src/lib/nativeLinuxRecording").NativeLinuxRecordingRequest,
+		) => Promise<{
+			success: boolean;
+			recordingId?: number;
+			sourceKind?: "monitor" | "window" | "virtual" | null;
+			reason?: string;
+			error?: string;
+		}>;
+		/** Drops a prepared session when the countdown was abandoned. */
+		cancelNativeLinuxPrepare: () => Promise<{ success: boolean }>;
 		startNativeLinuxRecording: (
 			request: import("../src/lib/nativeLinuxRecording").NativeLinuxRecordingRequest,
 		) => Promise<import("../src/lib/nativeLinuxRecording").NativeLinuxRecordingStartResult>;
@@ -295,6 +312,10 @@ interface Window {
 			message?: string;
 			error?: string;
 		}>;
+		getAudioPeaks: (
+			filePath: string,
+			durationSec: number,
+		) => Promise<import("./media/audioPeaks").AudioPeaksResult>;
 		readFileChunk: (
 			filePath: string,
 			offset: number,
@@ -390,10 +411,17 @@ interface Window {
 			transcribe: (
 				request: import("./stt/transcriptionContract").SttTranscribeRequest,
 			) => Promise<import("./stt/transcriptionContract").SttTranscribeResponse>;
+			cancel: () => Promise<void>;
 			onStatus: (
 				callback: (event: import("./stt/transcriptionContract").SttStatusEvent) => void,
 			) => () => void;
 		};
+		// CLI mode (hidden runner windows; see electron/cli/)
+		cliGetRequest: () => Promise<import("../src/lib/cliContracts").CliRequest>;
+		cliProgress: (progress: import("../src/lib/cliContracts").CliProgressEvent) => void;
+		cliLog: (level: "info" | "error", message: string) => void;
+		cliDone: (result: import("../src/lib/cliContracts").CliDoneResult) => Promise<void>;
+		onCliStopRecording: (callback: () => void) => () => void;
 		setLocale: (locale: string) => Promise<void>;
 		saveDiagnostic: (payload: {
 			error: string;

@@ -35,7 +35,8 @@
 		"cameraDisconnected": "Cámara web desconectada.",
 		"cameraNotFound": "Cámara no encontrada.",
 		"permissionDenied": "Permiso de grabación denegado. Por favor permite la grabación de pantalla.",
-		"accessibilityAllowAndRetry": "Permite el acceso de accesibilidad para OpenScreen y luego pulsa grabar de nuevo para iniciar la cuenta atrás."
+		"accessibilityAllowAndRetry": "Permite el acceso de accesibilidad para OpenScreen y luego pulsa grabar de nuevo para iniciar la cuenta atrás.",
+		"selectSource": "Por favor selecciona una fuente para grabar"
 	},
 	"loadingVideo": "Cargando video...",
 	"loadingEditor": "Cargando editor...",
@@ -98,6 +99,7 @@
 	},
 	"rec": {
 		"source": "Fuente",
+		"systemPicker": "El sistema te preguntará qué compartir",
 		"systemAudio": "Audio del sistema",
 		"microphone": "Micrófono",
 		"camera": "Cámara",
@@ -140,6 +142,7 @@
 		"transcriptEmpty": "La transcripción está vacía.",
 		"notGeneratedHint": "Aún no generada — elige un idioma y haz clic en regenerar.",
 		"transcribing": "Transcribiendo",
+		"downloadingModel": "Descargando modelo de voz",
 		"transcribingEllipsis": "Transcribiendo…",
 		"pendingTranscription": "Transcripción pendiente",
 		"transcriptionFailed": "Error de transcripción",

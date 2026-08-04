@@ -153,8 +153,23 @@ body {
 	height: 60px;
 	min-height: 60px;
 	padding: 0 28px;
-	backdrop-filter: blur(16px) saturate(140%);
+	background: transparent;
 	border-bottom: 1px solid var(--os-border-soft);
+}
+
+/* The frosted background is painted by a pseudo-element rather than on .navbar
+   itself: backdrop-filter turns an element into the containing block for its
+   fixed-position descendants, and Docusaurus renders the mobile menu
+   (.navbar-sidebar, position: fixed) *inside* the navbar. Filtering the bar
+   collapsed the whole drawer into the 60px strip — header visible, every link
+   clipped away. */
+.navbar::before {
+	content: "";
+	position: absolute;
+	inset: 0;
+	z-index: -1;
+	background: var(--os-nav-bg);
+	backdrop-filter: blur(16px) saturate(140%);
 }
 
 .navbar__inner {
@@ -213,8 +228,10 @@ body {
 }
 
 /* Docusaurus auto-appends an "opens in new tab" glyph to every external
-   navbar link; the design has none, so it's suppressed here. */
-.navbar__link [class*="iconExternalLink"] {
+   navbar link; the design has none, so it's suppressed here — in the mobile
+   drawer too, where the same items are rendered as .menu__link. */
+.navbar__link [class*="iconExternalLink"],
+.navbar-sidebar .menu__link [class*="iconExternalLink"] {
 	display: none;
 }
 
@@ -302,6 +319,65 @@ body {
 
 [class*="navbarSearchContainer"]:empty {
 	display: none;
+}
+
+/* ---- mobile menu ----
+   Below 996px Docusaurus hides the navbar links and moves them into the
+   .navbar-sidebar drawer, where a navbar pill (GitHub, Download) is rendered
+   as a row of a menu list instead. */
+
+.navbar-sidebar {
+	background: var(--os-surface);
+	border-right: 1px solid var(--os-border);
+	box-shadow: var(--os-elev-pop);
+}
+
+.navbar-sidebar__brand {
+	border-bottom: 1px solid var(--os-border-soft);
+	box-shadow: none;
+}
+
+/* Groups the theme switch with the close button on the right of the drawer
+   header instead of leaving it stuck to the wordmark. */
+.navbar-sidebar__brand > [class*="toggle_"] {
+	margin-left: auto;
+}
+
+/* The drawer covers 83vw, so the bar's right-hand CTA would otherwise sit on
+   top of the drawer's own close button. */
+.navbar-sidebar--show .navbar__items--right {
+	display: none;
+}
+
+.navbar-sidebar .navbar-github-link,
+.navbar-sidebar .navbar-download-cta {
+	display: flex;
+	justify-content: center;
+	width: 100%;
+	margin-top: 4px;
+	padding: 10px 14px !important;
+	font-size: 13.5px;
+}
+
+@media (max-width: 996px) {
+	.navbar {
+		padding: 0 16px;
+	}
+
+	/* The rule separates the wordmark from the nav links; at this width the
+	   links are in the drawer, so it divides the brand from nothing. */
+	.navbar__brand {
+		margin-right: 0;
+		padding-right: 0;
+	}
+
+	.navbar__brand::after {
+		display: none;
+	}
+
+	.navbar__items--right .navbar-download-cta {
+		padding: 6px 12px !important;
+	}
 }
 
 /* ---- footer ---- */
@@ -393,8 +469,24 @@ body {
 	box-shadow: none;
 }
 
+/* The docs' two-column "fact card" tables carry an empty header row, which is
+   what this hides. A table with real headers — the platform matrix in
+   Installation — keeps them, or its ✅/❌ columns say nothing. */
 .theme-doc-markdown table thead {
 	display: none;
+}
+
+.theme-doc-markdown table:has(thead th:not(:empty)) thead {
+	display: table-header-group;
+}
+
+.theme-doc-markdown table th {
+	border: none;
+	padding: 0.75rem 1rem;
+	font-size: 0.85em;
+	font-weight: 600;
+	color: var(--os-muted);
+	text-align: left;
 }
 
 .theme-doc-markdown table tr {
@@ -411,10 +503,32 @@ body {
 	padding: 0.75rem 1rem;
 }
 
+/* A bare repo URL is one unbreakable word, which sets the table's minimum
+   width and drags the whole page past the viewport on a phone. Scoped to
+   links: prose has to keep breaking on word boundaries, or a narrow column
+   shreds it one letter per line. */
+.theme-doc-markdown table td a {
+	overflow-wrap: anywhere;
+}
+
 .theme-doc-markdown table td:first-child {
 	width: 160px;
 	color: var(--os-muted);
 	font-weight: 400;
+}
+
+@media (max-width: 768px) {
+	/* display: table above dropped Infima's scroll container, so a table wider
+	   than the screen (the platform matrix) widened the document instead of
+	   scrolling inside its own card. */
+	.theme-doc-markdown table {
+		display: block;
+		overflow-x: auto;
+	}
+
+	.theme-doc-markdown table td:first-child {
+		width: auto;
+	}
 }
 
 .theme-doc-markdown pre {

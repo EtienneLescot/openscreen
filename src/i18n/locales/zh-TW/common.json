@@ -43,8 +43,18 @@
 		"fullscreen": "全螢幕",
 		"exitFullscreen": "退出全螢幕"
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} 像素/秒",
+		"pixels": "{{value}} 像素"
+	},
 	"locale": {
 		"name": "繁體中文",
 		"short": "繁中"
+	},
+	"recordingSource": {
+		"window": "視窗",
+		"screen": "螢幕",
+		"virtual": "虛擬顯示器",
+		"unknown": "螢幕錄製"
 	}
 }

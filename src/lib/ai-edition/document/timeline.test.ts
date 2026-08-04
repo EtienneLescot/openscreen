@@ -1370,6 +1370,88 @@ describe("removeClip — delete a clip, close the gap, drop its pills", () => {
 		expect(next.zoomRanges[0]).toMatchObject({ startMs: 2000, endMs: 4000 });
 	});
 
+	it("drops every modifier anchored to the last remaining clip", () => {
+		const before = makeDoc({
+			timeline: {
+				...makeDoc().timeline,
+				clips: [
+					makeClip({ id: "clip_a", sourceStartSec: 0, sourceEndSec: 10, timelineEndSec: 10 }),
+				],
+			},
+			zoomRanges: [
+				makeZoom({ id: "anchored_zoom", clipId: "clip_a", sourceEndSec: 1, endMs: 1000 }),
+				makeZoom({
+					id: "legacy_zoom",
+					clipId: undefined,
+					sourceStartSec: undefined,
+					sourceEndSec: undefined,
+				}),
+			],
+			annotations: [
+				{
+					id: "anchored_annotation",
+					clipId: "clip_a",
+					sourceStartSec: 0,
+					sourceEndSec: 1,
+					startMs: 0,
+					endMs: 1000,
+					type: "text",
+					content: "remove me",
+					position: { x: 50, y: 50 },
+					size: { width: 30, height: 20 },
+					style: {
+						color: "#fff",
+						backgroundColor: "transparent",
+						fontSize: 32,
+						fontFamily: "Inter",
+						fontWeight: "bold",
+						fontStyle: "normal",
+						textDecoration: "none",
+						textAlign: "center",
+						textAnimation: "none",
+					},
+					zIndex: 1,
+				},
+			] as unknown as AxcutDocument["annotations"],
+			legacyEditor: {
+				speedRegions: [
+					{
+						id: "anchored_speed",
+						clipId: "clip_a",
+						sourceStartSec: 0,
+						sourceEndSec: 1,
+						startMs: 0,
+						endMs: 1000,
+						speed: 2,
+					},
+					{ id: "legacy_speed", startMs: 0, endMs: 1000, speed: 1.5 },
+				],
+				cameraFullscreenRegions: [
+					{
+						id: "anchored_camera",
+						clipId: "clip_a",
+						sourceStartSec: 0,
+						sourceEndSec: 1,
+						startMs: 0,
+						endMs: 1000,
+					},
+				],
+			},
+		});
+
+		const next = removeClip(before, "clip_a");
+
+		expect(next.timeline.clips).toEqual([]);
+		expect(next.zoomRanges.map((region) => region.id)).toEqual(["legacy_zoom"]);
+		expect(next.annotations).toEqual([]);
+		expect((next.legacyEditor as { speedRegions: Array<{ id: string }> }).speedRegions).toEqual([
+			expect.objectContaining({ id: "legacy_speed" }),
+		]);
+		expect(
+			(next.legacyEditor as { cameraFullscreenRegions: unknown[] }).cameraFullscreenRegions,
+		).toEqual([]);
+	});
+
 	it("is a no-op for an unknown clip", () => {
 		const before = doc();
 		const next = removeClip(before, "clip_missing");

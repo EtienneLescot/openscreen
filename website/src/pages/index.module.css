@@ -210,9 +210,24 @@
 	min-height: 340px;
 }
 
+/* Stacked, the mock has to read top-down: the editor is the product and the
+   agent panel is the sub-plot, so the stage goes first and the panel's right
+   border becomes the rule between them. Ordered in CSS rather than in the
+   markup so the desktop grid keeps its natural sidebar-then-stage source order. */
 @media (max-width: 780px) {
 	.visualBody {
 		grid-template-columns: 1fr;
+		min-height: 0;
+	}
+
+	.stage {
+		order: 1;
+	}
+
+	.agentPanel {
+		order: 2;
+		border-right: none;
+		border-top: 1px solid var(--os-border);
 	}
 }
 
@@ -349,11 +364,14 @@
 	color: #fff;
 }
 
+/* nowrap: the transport floats over the preview, and a wrapped timecode
+   doubles its height into a slab covering half the frame on a phone. */
 .transportTime {
 	font-family: var(--ifm-font-family-monospace);
 	font-size: 11px;
 	color: var(--os-fg);
 	margin-left: 4px;
+	white-space: nowrap;
 }
 
 .meta {
@@ -786,5 +804,54 @@
 	background: var(--os-surface-1);
 	font-size: 11.5px;
 	color: var(--os-fg-2);
+}
+
+/* ---- phone ----
+   The 28px section gutter is a third of the width of a small phone; every
+   inner padding here is scaled to give the mock and the cards room to breathe
+   rather than to change their design. */
+
+@media (max-width: 600px) {
+	.hero {
+		padding: 64px 20px 0;
+	}
+
+	.visualSection {
+		padding: 32px 16px 72px;
+	}
+
+	.features {
+		padding: 0 20px 72px;
+	}
+
+	.quickStart {
+		padding: 0 20px 76px;
+	}
+
+	.agentPanel {
+		padding: 14px;
+		gap: 12px;
+	}
+
+	.stageFrame {
+		padding: 16px;
+		min-height: 0;
+	}
+
+	.transport {
+		gap: 6px;
+		bottom: 10px;
+		padding: 6px 8px;
+	}
+
+	.timeline {
+		padding: 10px 12px 12px;
+	}
+
+	/* The icon is centred against a three-line paragraph on desktop; on a phone
+	   the same text runs to seven lines and leaves the badge stranded mid-card. */
+	.bentoCaptions {
+		align-items: flex-start;
+	}
 }
 

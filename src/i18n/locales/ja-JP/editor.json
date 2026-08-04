@@ -43,7 +43,8 @@
 		"permissionDenied": "録画の権限が拒否されました。画面録画を許可してください。",
 		"cameraDisconnected": "ウェブカメラが切断されました。",
 		"cameraNotFound": "カメラが見つかりません。",
-		"accessibilityAllowAndRetry": "OpenScreenにアクセシビリティアクセスを許可してから、もう一度録画を押してカウントダウンを開始してください。"
+		"accessibilityAllowAndRetry": "OpenScreenにアクセシビリティアクセスを許可してから、もう一度録画を押してカウントダウンを開始してください。",
+		"selectSource": "録画するソースを選択してください"
 	},
 	"emptyState": {
 		"title": "プロジェクトが開かれていません",
@@ -98,6 +99,7 @@
 	},
 	"rec": {
 		"source": "ソース",
+		"systemPicker": "共有する対象はシステムが確認します",
 		"systemAudio": "システム音声",
 		"microphone": "マイク",
 		"camera": "カメラ",
@@ -140,6 +142,7 @@
 		"transcriptEmpty": "文字起こしは空です。",
 		"notGeneratedHint": "まだ生成されていません — 言語を選んで再生成をクリックしてください。",
 		"transcribing": "文字起こし中",
+		"downloadingModel": "音声モデルをダウンロード中",
 		"transcribingEllipsis": "文字起こし中…",
 		"pendingTranscription": "文字起こし待機中",
 		"transcriptionFailed": "文字起こしに失敗しました",

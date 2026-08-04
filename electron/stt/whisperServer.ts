@@ -15,6 +15,24 @@ import { cleanupWav, writeSamplesAsWav } from "./wav";
 type WhisperChild = ChildProcessByStdio<null, Readable, Readable>;
 
 /**
+ * Per-request ceiling. whisper answers `/inference` only once the WHOLE upload
+ * is transcribed, so this bounds one chunk, not one recording.
+ *
+ * ponytail: 280s because Node's global fetch (undici) applies its own
+ * undocumented 300s `headersTimeout` that we cannot configure without taking a
+ * direct dependency on `undici` — going over it produces an opaque
+ * "TypeError: fetch failed" instead of anything actionable (this is exactly how
+ * a single 30-minute request died: killed at 300s while whisper needed 574s).
+ * Aborting at 280s keeps the failure OURS: named, logged with the helper's
+ * stderr, and retried by SttManager. The real ceiling this leaves is a machine
+ * so slow that one 90s chunk needs more than 280s (~0.3x realtime); the upgrade
+ * path is a direct `undici` dependency and
+ * `new Agent({ headersTimeout: 0, bodyTimeout: 0 })` as the fetch dispatcher,
+ * which removes the cliff entirely.
+ */
+const REQUEST_TIMEOUT_MS = 280_000;
+
+/**
  * Owns the long-lived `whisper-stt-server` process used to recognize speech.
  *
  * Replaces the previous native STT helper with the same shape: spawn → poll
@@ -291,12 +309,55 @@ export class WhisperServerManager {
 		form.set("file", blob, path.basename(opts.wavPath));
 		form.set("response_format", "verbose_json");
 		form.set("language", opts.language && opts.language !== "auto" ? opts.language : "auto");
-		const res = await fetch(url, { method: "POST", body: form });
+		let res: Response;
+		try {
+			res = await fetch(url, {
+				method: "POST",
+				body: form,
+				signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+			});
+		} catch (error) {
+			// Name the failure. Node's global fetch reports BOTH a real transport
+			// error and its own header timeout as a bare "fetch failed", which is
+			// how a too-long request used to reach the user as an unactionable
+			// "Transcription failed" toast.
+			//
+			// The timeout wording is reserved for an ACTUAL timeout: a helper that
+			// died a moment ago rejects in a millisecond, and telling the reader it
+			// spent 280s on an over-long chunk sends them to the wrong problem
+			// entirely. Everything else carries its own message, plus `cause` so the
+			// errno survives.
+			// `Object.assign` rather than the `{ cause }` constructor option: the
+			// project targets ES2020, where that overload does not exist.
+			throw Object.assign(
+				new Error(
+					error instanceof Error && error.name === "TimeoutError"
+						? `whisper-stt-server /inference timed out after ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s ` +
+								`(audio chunk too long for this machine, or the helper is wedged); ` +
+								`stderr=${this.stderrTail.slice(-256)}`
+						: `whisper-stt-server /inference failed: ` +
+								`${error instanceof Error ? error.message : String(error)}; ` +
+								`stderr=${this.stderrTail.slice(-256)}`,
+				),
+				{ cause: error },
+			);
+		}
 		if (!res.ok) {
 			const text = await res.text().catch(() => "");
 			throw new Error(`whisper-stt-server /inference HTTP ${res.status}: ${text.slice(0, 512)}`);
 		}
-		return (await res.json()) as WhisperJsonResponse;
+		// The same timeout still covers the body: it can fire between the headers
+		// and the last byte, and an unnamed `AbortError` here would read exactly
+		// like the "fetch failed" this whole block exists to replace.
+		return (await res.json().catch((error: unknown) => {
+			throw Object.assign(
+				new Error(
+					`whisper-stt-server /inference response was unreadable: ` +
+						`${error instanceof Error ? error.message : String(error)}`,
+				),
+				{ cause: error },
+			);
+		})) as WhisperJsonResponse;
 	}
 
 	/** Defensive number parse for `verbose_json` values that may arrive as strings. */

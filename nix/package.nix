@@ -11,7 +11,11 @@
 buildNpmPackage {
   nodejs = nodejs_22;
   pname = "openscreen";
-  version = "1.6.0";
+  # Read, not restated. A hand-copied version is one more thing to remember at
+  # release time and it had already drifted two minors behind the app it names.
+  # (`npmDepsHash` below still has to be updated by hand — that is Nix, not a
+  # choice — but it fails loudly, where a stale version number never does.)
+  version = (lib.importJSON ../package.json).version;
 
   src =
     let
@@ -33,7 +37,7 @@ buildNpmPackage {
       );
     };
 
-  npmDepsHash = "sha256-IZypOLWlDShIjCKWxlJcrdtIkMu0P/DuXaq4c0HW3FY=";
+  npmDepsHash = "sha256-appTO8HilRS3R5ngGTzIp/txHyjui6z0Q+l1Vf36dHs=";
 
   env.ELECTRON_SKIP_BINARY_DOWNLOAD = "1";
 

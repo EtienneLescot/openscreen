@@ -50,7 +50,7 @@ Unit/browser tests can't exercise real capture (native screen recording, a physi
 **Launch the app**
 
 - Normal: `npm run dev` — Vite serves the renderer and `vite-plugin-electron` opens the Electron window. The main process logs `Global shortcut registered: CommandOrControl+Shift+O` when ready (Ctrl/Cmd+Shift+O toggles the HUD).
-- The app is single-instance: a lock dir at `%TEMP%/openscreen-single-instance-<user>.lock` (macOS: `$TMPDIR`). If a stale Electron process holds it, a new launch quits silently (exit 0, no window). Kill leftover `electron` processes and delete that lock dir before relaunching.
+- The app is single-instance through `app.requestSingleInstanceLock()`, which keys on the `userData` path. If a leftover Electron process still holds it, a new launch quits silently (exit 0, no window) — kill leftover `electron` processes before relaunching. The lock is held by the OS and dies with the process, so there is nothing to clean up on disk. A dev build and the installed `Openscreen` resolve different `userData` paths and can run side by side.
 - **From a git worktree** (no `node_modules`/native binaries): junction/symlink `node_modules` from the main checkout (deps are usually identical — check `package-lock.json`), and copy the prebuilt native capture binaries from `electron/native/bin/<platform>/` (gitignored — rebuilding needs the full VS/Xcode toolchain). Then `npm run dev` works normally.
 
 **Granting access**

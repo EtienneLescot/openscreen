@@ -224,17 +224,41 @@ jobs:
           VERSION="$(node -e "console.log(require('./package.json').version)")"
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
 
+      # `--${{ matrix.arch }}` above does NOT restrict the architecture: the
+      # `arch` list in electron-builder.json5's `mac.target` names both x64 and
+      # arm64 and the config wins, so BOTH bundles are produced in every job —
+      # x64 in release/<ver>/mac/, arm64 in release/<ver>/mac-arm64/. The old
+      # `find release/<ver> ... | head -n1` took whichever came first in
+      # directory order (x64, in practice), so the arm64 job could package the
+      # x64 bundle into a DMG named `-arm64-`. Nothing downstream compared the
+      # name against the contents, so that would have published silently.
       - name: Find .app bundle
         id: find_app
         run: |
           VERSION="${{ steps.version.outputs.version }}"
-          APP_BUNDLE="$(find "release/${VERSION}" -maxdepth 4 -name "*.app" -type d | head -n1)"
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then ARCH_DIR="mac-arm64"; else ARCH_DIR="mac"; fi
+          APP_BUNDLE="$(find "release/${VERSION}/${ARCH_DIR}" -maxdepth 2 -name "*.app" -type d | head -n1)"
           if [[ -z "$APP_BUNDLE" ]]; then
-            echo "::error::No .app bundle found in release/${VERSION}/"
+            echo "::error::No .app bundle found in release/${VERSION}/${ARCH_DIR}/"
             find "release/${VERSION}" -maxdepth 4 -print || true
             exit 1
           fi
           echo "app_bundle=$APP_BUNDLE" >> "$GITHUB_OUTPUT"
+
+      # The guard for the above: refuse to build a DMG whose name would not
+      # match its contents. An Intel bundle on an Apple Silicon Mac runs under
+      # Rosetta 2 — compositor, encoder and whisper all translated — which is
+      # slow enough to be unusable, so a mislabelled DMG is a real user harm.
+      - name: Verify .app architecture matches the job
+        run: |
+          BIN="${{ steps.find_app.outputs.app_bundle }}/Contents/MacOS/Openscreen"
+          if [[ "${{ matrix.arch }}" == "arm64" ]]; then EXPECTED="arm64"; else EXPECTED="x86_64"; fi
+          ACTUAL="$(lipo -archs "$BIN")"
+          echo "job arch=${{ matrix.arch }}  expected=${EXPECTED}  actual=${ACTUAL}"
+          if [[ " ${ACTUAL} " != *" ${EXPECTED} "* ]]; then
+            echo "::error::The ${{ matrix.arch }} job produced a '${ACTUAL}' bundle — refusing to publish a mislabelled DMG"
+            exit 1
+          fi
 
       - name: Verify .app code signature
         if: steps.signing.outputs.enabled == 'true'
@@ -245,7 +269,17 @@ jobs:
         run: |
           VERSION="${{ steps.version.outputs.version }}"
           ARCH="${{ matrix.arch }}"
-          DMG_NAME="Openscreen-Mac-${ARCH}-${VERSION}.dmg"
+          # Name the DMG after the machine, not the instruction set. "x64" reads
+          # to most people as "the normal 64-bit one" and "arm64" as the exotic
+          # variant, which is exactly backwards on any Mac sold since 2020 — and
+          # picking the wrong one silently costs Rosetta 2. `Intel` and
+          # `Apple-Silicon` are what About This Mac shows the user.
+          case "$ARCH" in
+            arm64) ARCH_LABEL="Apple-Silicon" ;;
+            x64)   ARCH_LABEL="Intel" ;;
+            *)     ARCH_LABEL="$ARCH" ;;
+          esac
+          DMG_NAME="Openscreen-macOS-${ARCH_LABEL}-${VERSION}.dmg"
           RELEASE_DIR="release/${VERSION}"
           DMG_OUTPUT="${RELEASE_DIR}/${DMG_NAME}"
           STAGING="${RELEASE_DIR}/dmg-staging"
@@ -473,3 +507,64 @@ jobs:
               --latest \
               --title "$TAG"
           fi
+
+      - name: Refresh the docs /download page
+        # Only a stable release changes what /releases/latest resolves to, so a
+        # pre-release would rebuild the site to byte-identical output.
+        #
+        # Dispatched against main on purpose: the github-pages environment only
+        # permits `main` to deploy, so docs.yml's old `on: release` trigger ran
+        # with a tag ref and failed its deploy every time. See docs.yml.
+        if: ${{ steps.release.outputs.is_prerelease == 'false' }}
+        timeout-minutes: 20
+        env:
+          GH_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
+        run: |
+          latest_dispatch() {
+            gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow docs.yml \
+              --event workflow_dispatch \
+              --branch main \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty'
+          }
+
+          # `gh workflow run` prints nothing we can key off, so remember which
+          # dispatch was newest beforehand and wait for a different one to appear.
+          PREVIOUS_RUN_ID="$(latest_dispatch)"
+          gh workflow run docs.yml --ref main --repo "$GITHUB_REPOSITORY"
+
+          RUN_ID=""
+          for _ in $(seq 1 30); do
+            sleep 5
+            CANDIDATE="$(latest_dispatch)"
+            if [[ -n "$CANDIDATE" && "$CANDIDATE" != "$PREVIOUS_RUN_ID" ]]; then
+              RUN_ID="$CANDIDATE"
+              break
+            fi
+          done
+
+          if [[ -z "$RUN_ID" ]]; then
+            echo "::error::Dispatched docs.yml but no new run appeared within 150s"
+            exit 1
+          fi
+
+          gh run watch "$RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 || true
+
+          CONCLUSION="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion --jq '.conclusion')"
+          case "$CONCLUSION" in
+            success)
+              echo "Docs rebuilt and deployed by run $RUN_ID"
+              ;;
+            cancelled)
+              # docs.yml cancels in-flight runs sharing a ref, so a push to main
+              # landing right now replaces this rebuild with a newer one.
+              echo "::warning::Docs run $RUN_ID was cancelled, most likely superseded by a newer main run"
+              ;;
+            *)
+              echo "::error::Docs run $RUN_ID concluded '$CONCLUSION' - /download may still list the previous release"
+              exit 1
+              ;;
+          esac

@@ -71,7 +71,7 @@
 		"timelineTools": "時間軸工具",
 		"arrangeClips": "排列片段",
 		"arrangeClipsHint": "拖曳下方片段以重新排序，或拖曳新片段至此",
-		"newAnnotation": "新增註解",
+		"newAnnotation": "註解",
 		"dragToReorderHint": "拖曳以重新排序 · 按兩下以編輯入點/出點",
 		"editInOutPoints": "編輯入點/出點",
 		"deleteClip": "刪除片段",

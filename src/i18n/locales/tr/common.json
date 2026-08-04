@@ -43,8 +43,18 @@
 		"fullscreen": "Tam Ekran",
 		"exitFullscreen": "Tam Ekrandan Çık"
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} piks/sn",
+		"pixels": "{{value}} piks"
+	},
 	"locale": {
 		"name": "Türkçe",
 		"short": "TR"
+	},
+	"recordingSource": {
+		"window": "Pencere",
+		"screen": "Ekran",
+		"virtual": "Sanal ekran",
+		"unknown": "Ekran kaydı"
 	}
 }

@@ -43,7 +43,8 @@
 		"cameraDisconnected": "Webcam disconnected.",
 		"cameraNotFound": "Camera not found.",
 		"permissionDenied": "Recording permission denied. Please allow screen recording.",
-		"accessibilityAllowAndRetry": "Allow Accessibility access for OpenScreen, then press record again to start the countdown."
+		"accessibilityAllowAndRetry": "Allow Accessibility access for OpenScreen, then press record again to start the countdown.",
+		"selectSource": "Please select a source to record"
 	},
 	"emptyState": {
 		"title": "No project open",
@@ -98,6 +99,7 @@
 	},
 	"rec": {
 		"source": "Source",
+		"systemPicker": "Your system will ask what to share",
 		"systemAudio": "System audio",
 		"microphone": "Microphone",
 		"camera": "Camera",
@@ -134,6 +136,7 @@
 		"close": "Close",
 		"transcriptReady": "Transcript ready",
 		"transcribing": "Transcribing",
+		"downloadingModel": "Downloading speech model",
 		"transcribingEllipsis": "Transcribing…",
 		"pendingTranscription": "Pending transcription",
 		"transcriptionFailed": "Transcription failed",

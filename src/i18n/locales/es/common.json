@@ -43,8 +43,18 @@
 		"fullscreen": "Pantalla completa",
 		"exitFullscreen": "Salir de pantalla completa"
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} píxeles/s",
+		"pixels": "{{value}} píxeles"
+	},
 	"locale": {
 		"name": "Español",
 		"short": "ES"
+	},
+	"recordingSource": {
+		"window": "Ventana",
+		"screen": "Pantalla",
+		"virtual": "Pantalla virtual",
+		"unknown": "Grabación de pantalla"
 	}
 }

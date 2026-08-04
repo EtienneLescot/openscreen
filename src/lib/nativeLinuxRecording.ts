@@ -11,10 +11,11 @@
  *   * There is no `webcam`. Like macOS, the camera stays with the renderer's
  *     MediaRecorder — V4L2 in the helper would buy nothing and cost a second
  *     exclusive claim on the device.
- *
- * `restoreToken` is the one field with no equivalent elsewhere: the portal hands
- * one back after a successful session, and passing it next time is what stops
- * the picker from appearing on every single recording.
+ *   * There is no `restoreToken`. One used to be replayed here so the portal
+ *     would stop raising its picker, and that is exactly how picking a window
+ *     produced a recording of the whole screen: a token is bound to the source
+ *     it was minted for, so an approved monitor came back forever and the picker
+ *     — the only source chooser Wayland offers — never reappeared.
  */
 export type NativeLinuxRecordingRequest = {
 	recordingId?: number;
@@ -41,9 +42,43 @@ export type NativeLinuxRecordingRequest = {
 	cursor: {
 		mode: import("./recordingSession").CursorCaptureMode;
 	};
-	/** From a previous run's `stream-started`. Lets the portal skip its picker. */
-	restoreToken?: string;
 };
+
+/** The slice of `window.electronAPI` the check below needs. */
+type SourceSelectionProbe = {
+	getPlatform: () => string;
+	isNativeLinuxCaptureAvailable: () => Promise<{ success: boolean; available: boolean }>;
+};
+
+/**
+ * Whether the ScreenCast portal — not the app — chooses what gets recorded.
+ *
+ * True only on Linux WITH the PipeWire helper. `SelectSources` has no parameter
+ * naming a source, so there is nothing for the app to have selected and every
+ * `selectedSource` gate must stand down. Everywhere else those gates are
+ * load-bearing: both other native paths, and Linux's own browser fallback,
+ * genuinely consume a source id.
+ *
+ * Lives here rather than inline in `useScreenRecorder` because the recorder asks
+ * this question in TWO places — once before the countdown and once before
+ * capture — and fixing only the second left the countdown refusing to start at
+ * all, with an alert about a source the HUD no longer offers any way to pick.
+ */
+export async function portalOwnsSourceSelection(api: SourceSelectionProbe): Promise<boolean> {
+	if (api.getPlatform() !== "linux") {
+		return false;
+	}
+	try {
+		const availability = await api.isNativeLinuxCaptureAvailable();
+		return Boolean(availability?.success && availability.available);
+	} catch (error) {
+		// Keep the gate rather than drop it: without the helper a source id is
+		// still needed, and a missing source is a better failure than a capture
+		// that cannot start.
+		console.warn("Failed to check native Linux capture availability:", error);
+		return false;
+	}
+}
 
 export type NativeLinuxRecordingStartResult = {
 	success: boolean;

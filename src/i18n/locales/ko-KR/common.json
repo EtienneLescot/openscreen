@@ -43,8 +43,18 @@
 		"fullscreen": "전체화면",
 		"exitFullscreen": "전체화면 종료"
 	},
+	"units": {
+		"pixelsPerSecond": "{{value}} px/초",
+		"pixels": "{{value}} px"
+	},
 	"locale": {
 		"name": "한국어",
 		"short": "KO"
+	},
+	"recordingSource": {
+		"window": "창",
+		"screen": "화면",
+		"virtual": "가상 디스플레이",
+		"unknown": "화면 녹화"
 	}
 }

@@ -55,13 +55,18 @@ import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
 import { RECORDINGS_DIR } from "../main";
+import { type AudioPeaksResult, getAudioPeaks } from "../media/audioPeaks";
 import {
 	readCursorRecordingFile as readCursorRecordingFileFrom,
 	readCursorSidecar,
 	readCursorTelemetryFile as readCursorTelemetryFileFrom,
 } from "../media/cursorSidecar";
 import { findMediaLinksByFingerprint, registerMediaLinks } from "../media/mediaLinksRegistry";
-import { LinuxNativeCaptureSession } from "../native-bridge/capture/linuxNativeCaptureSession";
+import { relinkProjectMedia } from "../media/projectMediaRelinker";
+import {
+	type LinuxCaptureSourceKind,
+	LinuxNativeCaptureSession,
+} from "../native-bridge/capture/linuxNativeCaptureSession";
 import { createCursorRecordingSession } from "../native-bridge/cursor/recording/factory";
 import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
 import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/pipeWireCursorRecordingSession";
@@ -378,13 +383,40 @@ async function getApprovedProjectSession(
 		trustedDirs.push(path.dirname(path.resolve(projectFilePath)));
 	}
 
-	const screenVideoPath = await approveReadableVideoPath(media.screenVideoPath, trustedDirs);
+	// Packed/portable projects: when the stored absolute path no longer exists
+	// (project moved to another machine or directory), fall back to a file with
+	// the same basename next to the project file (see `openscreen pack`).
+	const resolveWithSiblingFallback = async (mediaPath: string): Promise<string> => {
+		if (!projectFilePath) return mediaPath;
+		const exists = await fs
+			.stat(mediaPath)
+			.then((stats) => stats.isFile())
+			.catch(() => false);
+		if (exists) return mediaPath;
+		const sibling = path.join(
+			path.dirname(path.resolve(projectFilePath)),
+			path.basename(mediaPath),
+		);
+		const siblingExists = await fs
+			.stat(sibling)
+			.then((stats) => stats.isFile())
+			.catch(() => false);
+		return siblingExists ? sibling : mediaPath;
+	};
+
+	const screenVideoPath = await approveReadableVideoPath(
+		await resolveWithSiblingFallback(media.screenVideoPath),
+		trustedDirs,
+	);
 	if (!screenVideoPath) {
 		throw new Error("Project references an invalid or unsupported screen video path");
 	}
 
 	const webcamVideoPath = media.webcamVideoPath
-		? await approveReadableVideoPath(media.webcamVideoPath, trustedDirs)
+		? await approveReadableVideoPath(
+				await resolveWithSiblingFallback(media.webcamVideoPath),
+				trustedDirs,
+			)
 		: undefined;
 	if (media.webcamVideoPath && !webcamVideoPath) {
 		throw new Error("Project references an invalid or unsupported webcam video path");
@@ -511,48 +543,129 @@ let activeMacCaptureBounds: Rectangle | null = null;
 let linuxNativeCaptureSession: LinuxNativeCaptureSession | null = null;
 let linuxNativeCaptureRecordingId: number | null = null;
 let linuxNativeCaptureCursorMode: CursorCaptureMode = "editable-overlay";
+/** What the portal granted for the running capture, for the tray's label. */
+let linuxNativeCaptureSourceLabel: string | null = null;
 /**
- * The portal's restore token, kept between recordings.
+ * A portal session negotiated ahead of the countdown, waiting to be armed.
  *
- * Without it the compositor raises its source picker on EVERY recording, which
- * on Wayland is the single most intrusive thing about capturing at all. The
- * portal issues the token only after a successful session and honours it until
- * the user revokes it in system settings, so it is safe to persist and useless
- * to anyone else.
+ * Held here rather than in the renderer because the helper is a child process of
+ * THIS process: a renderer that reloads, or a countdown abandoned without a
+ * cancel, would otherwise leak a live ScreenCast session — the compositor's
+ * "screen is being shared" indicator with nothing recording behind it.
  */
-const LINUX_RESTORE_TOKEN_FILE = "linux-capture-restore-token.json";
+let preparedLinuxCapture: {
+	session: LinuxNativeCaptureSession;
+	outputPath: string;
+	/** What the helper was actually spawned with. See [`captureSettingsOf`]. */
+	request: NativeLinuxRecordingRequest;
+} | null = null;
+/**
+ * Identifies the prepare that is still waiting on the picker.
+ *
+ * The slot above is only filled AFTER an await with no upper bound — a human is
+ * reading a dialog. For that whole window it is null, so without this token a
+ * cancel would find nothing to cancel and a second prepare would find nothing to
+ * supersede: the first session would then assign itself afterwards and stay
+ * alive, holding a ScreenCast grant and the compositor's sharing indicator with
+ * nothing recording behind it.
+ */
+let preparingLinuxCaptureToken: symbol | null = null;
 
-async function readLinuxRestoreToken(): Promise<string | undefined> {
-	try {
-		const raw = await fs.readFile(
-			path.join(app.getPath("userData"), LINUX_RESTORE_TOKEN_FILE),
-			"utf-8",
-		);
-		const parsed = JSON.parse(raw) as { restoreToken?: unknown };
-		return typeof parsed.restoreToken === "string" && parsed.restoreToken
-			? parsed.restoreToken
-			: undefined;
-	} catch {
-		// Absent or unreadable: the picker appears, which is the old behaviour
-		// and not worth failing a recording over.
-		return undefined;
+/**
+ * Claims the prepared session when it matches the recording about to start.
+ *
+ * A mismatch means the prepare was for a recording that never happened, so it is
+ * discarded rather than reused: arming it would record against the wrong output
+ * path, and leaving it would strand a portal session.
+ */
+function takePreparedLinuxSession(
+	outputPath: string,
+	request: NativeLinuxRecordingRequest,
+): LinuxNativeCaptureSession | null {
+	const prepared = preparedLinuxCapture;
+	if (!prepared) {
+		return null;
 	}
+	preparedLinuxCapture = null;
+	if (prepared.outputPath !== outputPath) {
+		console.warn("[native-linux] discarding a prepared session for a different recording");
+		prepared.session.discard();
+		return null;
+	}
+	// EVERY CAPTURE SETTING IS FIXED AT SPAWN. `arm()` only writes `record`, so a
+	// prepared helper is already running with the audio and cursor settings it
+	// was created with — and the HUD does not lock its controls during the
+	// countdown, so the user really can change them in between. Reusing the
+	// session would record one thing while the app believed another, including
+	// the cursor mode that decides whether the editor draws its own pointer.
+	if (captureSettingsOf(prepared.request) !== captureSettingsOf(request)) {
+		console.info("[native-linux] settings changed during the countdown; renegotiating");
+		prepared.session.discard();
+		return null;
+	}
+	return prepared.session;
 }
 
-async function writeLinuxRestoreToken(restoreToken?: string) {
-	if (!restoreToken) {
+/** The request fields baked into the helper's spawn arguments, canonicalised. */
+function captureSettingsOf(request: NativeLinuxRecordingRequest): string {
+	return JSON.stringify({
+		fps: request.video?.fps ?? null,
+		bitrate: request.video?.bitrate ?? null,
+		system: request.audio?.system?.enabled ?? false,
+		microphone: request.audio?.microphone?.enabled ?? false,
+		deviceName: request.audio?.microphone?.deviceName ?? null,
+		gain: request.audio?.microphone?.gain ?? null,
+		cursor: normalizeCursorCaptureMode(request?.cursor?.mode) ?? "editable-overlay",
+	});
+}
+
+/** Tears down a prepared-but-unarmed session, e.g. an abandoned countdown. */
+function discardPreparedLinuxCapture(reason: string) {
+	// Invalidate any negotiation still in flight, so the session it is about to
+	// produce is discarded on arrival instead of stranded.
+	preparingLinuxCaptureToken = null;
+	if (!preparedLinuxCapture) {
 		return;
 	}
-	try {
-		await fs.writeFile(
-			path.join(app.getPath("userData"), LINUX_RESTORE_TOKEN_FILE),
-			JSON.stringify({ restoreToken }, null, 2),
-			"utf-8",
-		);
-	} catch (error) {
-		console.warn("Could not persist the Linux portal restore token:", error);
+	console.info(`[native-linux] discarding the prepared capture: ${reason}`);
+	preparedLinuxCapture.session.discard();
+	preparedLinuxCapture = null;
+}
+
+/**
+ * Names what the portal handed over, for the tray tooltip.
+ *
+ * There is no window title to show: the ScreenCast portal reports a kind and a
+ * PipeWire node id, never a name. Reporting the kind is the most that can be
+ * said honestly, and an unknown kind stays unknown — calling it "Screen" would
+ * be the same guess that put a window's name on a full-screen recording.
+ */
+function linuxSourceLabel(kind?: LinuxCaptureSourceKind): string {
+	switch (kind) {
+		case "window":
+			return mainT("common", "recordingSource.window");
+		case "monitor":
+			return mainT("common", "recordingSource.screen");
+		case "virtual":
+			return mainT("common", "recordingSource.virtual");
+		default:
+			return mainT("common", "recordingSource.unknown");
 	}
 }
+/**
+ * NO PORTAL RESTORE TOKEN IS KEPT, AND THAT IS DELIBERATE.
+ *
+ * A token used to be persisted here so the compositor's picker would not appear
+ * on every recording. It is gone because it made "record this window" record the
+ * whole screen instead. A restore token is bound to the source it was minted
+ * for, so once any monitor had been approved the portal restored that monitor on
+ * every later run and stopped raising the picker at all — and `SelectSources`
+ * has no parameter naming a source, so the app could not ask for anything else.
+ * On Wayland the picker IS the source chooser; suppressing it left the user with
+ * no way to change what they were recording.
+ *
+ * Answering the picker each time is the cost of being able to choose at all.
+ */
 
 // ponytail: the sidecar readers used to live here, ~150 lines of parsing wedged
 // between the capture state machine and the asset-path helpers, reachable only
@@ -1625,6 +1738,19 @@ export function registerIpcHandlers(
 	});
 
 	ipcMain.handle("open-source-selector", async () => {
+		// Nothing to open on Linux WHEN THE NATIVE HELPER IS THERE. The selector's
+		// own `desktopCapturer.getSources()` raises a portal dialog — a SECOND
+		// one, for a session that is thrown away — and whatever it returns cannot
+		// reach the helper, because `SelectSources` has no parameter naming a
+		// source. Refusing keeps that dialog from appearing at all.
+		//
+		// Without the helper the recorder falls back to Chromium's capture, which
+		// DOES consume a source id, so the picker has to stay reachable there or
+		// that path could never start.
+		if (process.platform === "linux" && findPipeWireCursorHelperPath()) {
+			return { opened: false, reason: "portal-owns-selection" };
+		}
+
 		const access = await requestScreenAccess();
 		if (!access.granted) {
 			if (process.platform === "darwin" && access.status !== "not-determined") {
@@ -1774,6 +1900,93 @@ export function registerIpcHandlers(
 			: { success: true, available: false, reason: "missing-helper" };
 	});
 
+	/**
+	 * Raises the compositor's picker and stops there, holding the grant.
+	 *
+	 * Best-effort by contract: every failure returns `success: false` rather than
+	 * throwing, because the caller's fallback is simply to start normally and get
+	 * the picker after its countdown — the behaviour that shipped before this
+	 * existed. Nothing downstream may depend on a prepare having succeeded.
+	 */
+	ipcMain.handle(
+		"prepare-native-linux-recording",
+		async (_, request: NativeLinuxRecordingRequest) => {
+			if (process.platform !== "linux") {
+				return { success: false, reason: "unsupported-platform" };
+			}
+			if (linuxNativeCaptureSession) {
+				return { success: false, reason: "already-recording" };
+			}
+			discardPreparedLinuxCapture("superseded by a new prepare");
+			const token = Symbol("prepare-native-linux-recording");
+			preparingLinuxCaptureToken = token;
+
+			try {
+				if (!findPipeWireCursorHelperPath()) {
+					return { success: false, reason: "missing-helper" };
+				}
+				const recordingId =
+					typeof request?.recordingId === "number" && Number.isFinite(request.recordingId)
+						? request.recordingId
+						: Date.now();
+				const outputPath = path.join(RECORDINGS_DIR, `${RECORDING_FILE_PREFIX}${recordingId}.mp4`);
+				const cursorCaptureMode =
+					normalizeCursorCaptureMode(request?.cursor?.mode) ?? "editable-overlay";
+
+				await fs.mkdir(RECORDINGS_DIR, { recursive: true });
+
+				const session = new LinuxNativeCaptureSession({
+					outputPath,
+					cursorMode: portalCursorMode(cursorCaptureMode),
+					fps: request.video.fps,
+					...(request.video.bitrate ? { bitrate: request.video.bitrate } : {}),
+					audio: {
+						system: { enabled: request.audio.system.enabled },
+						microphone: {
+							enabled: request.audio.microphone.enabled,
+							...(request.audio.microphone.deviceName
+								? { deviceName: request.audio.microphone.deviceName }
+								: {}),
+							gain: request.audio.microphone.gain,
+						},
+					},
+					maxCursorSamples: MAX_CURSOR_SAMPLES,
+					deferStart: true,
+				});
+
+				await session.start();
+				// The picker is up now. No timeout: a human is reading a dialog.
+				await session.waitUntilSourceSelected();
+
+				// Cancelled or superseded while the picker was up. Discard rather
+				// than assign: this grant is for a recording nobody is waiting for
+				// any more, and keeping it would leave the sharing indicator on.
+				if (preparingLinuxCaptureToken !== token) {
+					session.discard();
+					return { success: false, reason: "cancelled" };
+				}
+				preparingLinuxCaptureToken = null;
+
+				preparedLinuxCapture = { session, outputPath, request };
+				return {
+					success: true,
+					recordingId,
+					sourceKind: session.grantedSourceKind ?? null,
+				};
+			} catch (error) {
+				console.warn("Could not prepare the native Linux capture:", error);
+				discardPreparedLinuxCapture("prepare failed");
+				return { success: false, error: String(error) };
+			}
+		},
+	);
+
+	/** Drops a prepared session, e.g. when the countdown was cancelled. */
+	ipcMain.handle("cancel-native-linux-prepare", async () => {
+		discardPreparedLinuxCapture("cancelled by the renderer");
+		return { success: true };
+	});
+
 	ipcMain.handle(
 		"start-native-linux-recording",
 		async (_, request: NativeLinuxRecordingRequest) => {
@@ -1797,46 +2010,62 @@ export function registerIpcHandlers(
 					normalizeCursorCaptureMode(request?.cursor?.mode) ?? "editable-overlay";
 
 				await fs.mkdir(RECORDINGS_DIR, { recursive: true });
-				const restoreToken = await readLinuxRestoreToken();
 
-				const session = new LinuxNativeCaptureSession({
-					outputPath,
-					cursorMode: portalCursorMode(cursorCaptureMode),
-					fps: request.video.fps,
-					...(request.video.bitrate ? { bitrate: request.video.bitrate } : {}),
-					audio: {
-						system: { enabled: request.audio.system.enabled },
-						microphone: {
-							enabled: request.audio.microphone.enabled,
-							...(request.audio.microphone.deviceName
-								? { deviceName: request.audio.microphone.deviceName }
-								: {}),
-							gain: request.audio.microphone.gain,
+				// A session prepared before the countdown, if there was one. Taking
+				// it here rather than requiring it is what keeps every caller
+				// working: a path that never prepared still gets a full start
+				// below, just with the picker after its countdown instead of
+				// before. Nothing has to know which path it is on.
+				const prepared = takePreparedLinuxSession(outputPath, request);
+				const session =
+					prepared ??
+					new LinuxNativeCaptureSession({
+						outputPath,
+						cursorMode: portalCursorMode(cursorCaptureMode),
+						fps: request.video.fps,
+						...(request.video.bitrate ? { bitrate: request.video.bitrate } : {}),
+						audio: {
+							system: { enabled: request.audio.system.enabled },
+							microphone: {
+								enabled: request.audio.microphone.enabled,
+								...(request.audio.microphone.deviceName
+									? { deviceName: request.audio.microphone.deviceName }
+									: {}),
+								gain: request.audio.microphone.gain,
+							},
 						},
-					},
-					maxCursorSamples: MAX_CURSOR_SAMPLES,
-					...(restoreToken ? { restoreToken } : {}),
-				});
+						maxCursorSamples: MAX_CURSOR_SAMPLES,
+					});
 
 				console.info("[native-linux] starting capture", {
 					outputPath,
+					prepared: Boolean(prepared),
 					cursor: { mode: cursorCaptureMode },
 					audio: request.audio,
 					video: request.video,
 				});
 
-				await session.start();
-				// Blocks until the user answers the portal picker, which has no
-				// upper bound — the countdown UI is already showing by now.
+				if (!prepared) {
+					await session.start();
+					// Blocks until the user answers the portal picker, which has no
+					// upper bound. On this path the countdown has already run.
+					await session.waitUntilSourceSelected();
+				}
+				// Idempotent, and a no-op for a session that was not deferred.
+				session.arm();
 				await session.waitUntilCapturing();
 
 				linuxNativeCaptureSession = session;
 				linuxNativeCaptureRecordingId = recordingId;
 				linuxNativeCaptureCursorMode = cursorCaptureMode;
 
-				const source = selectedSource || { name: "Screen" };
+				// The portal's answer, not an in-app selection — on Wayland there
+				// is none to have. This used to read `selectedSource || { name:
+				// "Screen" }`, so the tray confidently displayed the name of a
+				// window the capture had never been told about.
+				linuxNativeCaptureSourceLabel = linuxSourceLabel(session.grantedSourceKind);
 				if (onRecordingStateChange) {
-					onRecordingStateChange(true, source.name);
+					onRecordingStateChange(true, linuxNativeCaptureSourceLabel);
 				}
 
 				return { success: true, recordingId, path: outputPath };
@@ -1887,7 +2116,6 @@ export function registerIpcHandlers(
 			}
 
 			const result = await session.stop();
-			await writeLinuxRestoreToken(result.restoreToken);
 
 			// The helper collects cursor samples itself, from the same portal
 			// session that produced the pixels, so there is no separate sampler
@@ -1937,9 +2165,10 @@ export function registerIpcHandlers(
 			linuxNativeCaptureSession = null;
 			linuxNativeCaptureRecordingId = null;
 			linuxNativeCaptureCursorMode = "editable-overlay";
-			const source = selectedSource || { name: "Screen" };
+			const stoppedLabel = linuxNativeCaptureSourceLabel ?? linuxSourceLabel();
+			linuxNativeCaptureSourceLabel = null;
 			if (onRecordingStateChange) {
-				onRecordingStateChange(false, source.name);
+				onRecordingStateChange(false, stoppedLabel);
 			}
 		}
 	});
@@ -3093,6 +3322,31 @@ export function registerIpcHandlers(
 		}
 	});
 
+	// Waveform peaks for a timeline clip, decoded natively (see media/audioPeaks).
+	// The renderer's own pipelines take ~12s on a 32-minute recording because they
+	// decode the whole track in Chromium; ffmpeg does the same work in ~2s off the
+	// UI process, and the result is cached on disk so it is paid once per file.
+	// `peaks: null` means "no native path available" — the caller falls back to
+	// its own decoding rather than losing the waveform.
+	ipcMain.handle(
+		"get-audio-peaks",
+		async (_, filePath: string, durationSec: number): Promise<AudioPeaksResult> => {
+			try {
+				// Same approval gate as every other read of a renderer-supplied path.
+				const normalizedPath = await approveReadableVideoPath(filePath);
+				if (!normalizedPath) {
+					return { success: false, message: "File path is not approved" };
+				}
+				const peaks = await getAudioPeaks(normalizedPath, durationSec);
+				return { success: true, peaks };
+			} catch (error) {
+				// A clip with no audio track lands here. Degrade quietly: the renderer
+				// draws no waveform, which is correct, and logs its own warning.
+				return { success: false, message: String(error) };
+			}
+		},
+	);
+
 	// Cap renderer-requested chunk sizes so a buggy or compromised renderer
 	// cannot make the main process allocate an arbitrarily large buffer.
 	const MAX_IPC_CHUNK_BYTES = 64 * 1024 * 1024;
@@ -3291,9 +3545,18 @@ export function registerIpcHandlers(
 
 			const filePath = result.filePaths[0];
 			const content = await fs.readFile(filePath, "utf-8");
-			const project = JSON.parse(content);
+			const project = await relinkProjectMedia(JSON.parse(content), RECORDINGS_DIR);
 			currentProjectPath = filePath;
-			setCurrentRecordingSessionState(await getApprovedProjectSession(project, filePath));
+			let session: RecordingSession | null = null;
+			try {
+				session = await getApprovedProjectSession(project, filePath);
+			} catch (sessionError) {
+				console.warn(
+					"[loadProjectFile] Could not approve session paths, proceeding without session:",
+					sessionError,
+				);
+			}
+			setCurrentRecordingSessionState(session);
 
 			return {
 				success: true,
@@ -3328,7 +3591,7 @@ export function registerIpcHandlers(
 				return { success: false, message: "File not found" };
 			}
 			const content = await fs.readFile(filePath, "utf-8");
-			const project = JSON.parse(content);
+			const project = await relinkProjectMedia(JSON.parse(content), RECORDINGS_DIR);
 			currentProjectPath = filePath;
 
 			// Approve session paths but tolerate failures (e.g. video moved outside trusted
@@ -3562,11 +3825,28 @@ export function registerIpcHandlers(
 	// project through a per-INSTANCE queue (see its writeProject comment — this
 	// race destroyed two real project files), so a second instance means a second
 	// queue racing for the same path: temp+rename still keeps the file valid, but
-	// a save can land under a concurrent one and be silently lost. LlmConfigStore
-	// is hoisted for a duller reason: its constructor does two sync readFileSync
-	// plus a safeStorage decrypt, and it was running on every chat message.
-	const aiEditionDocuments = new DocumentService(path.join(app.getPath("userData"), "projects"));
-	const aiEditionLlmConfig = new LlmConfigStore(app.getPath("userData"));
+	// a save can land under a concurrent one and be silently lost.
+	const aiEditionDocuments = new DocumentService(
+		path.join(app.getPath("userData"), "projects"),
+		RECORDINGS_DIR,
+	);
+
+	// LlmConfigStore is single-instance for a duller reason — its constructor does
+	// two sync readFileSync plus a safeStorage decrypt, and it was running on every
+	// chat message. But it must also stay UNBUILT until something actually needs it:
+	// on macOS that decrypt is backed by a Keychain item, so constructing it at
+	// startup made every launch prompt for Keychain access, including for users who
+	// never open the AI layer at all. (The prompt repeats because an unsigned or
+	// ad-hoc-signed build has no stable code identity for the item's ACL to trust —
+	// signing is the other half of that fix, and is not this function's business.)
+	// Memoised, so the "one instance" guarantee above still holds.
+	let aiEditionLlmConfigInstance: LlmConfigStore | null = null;
+	const getAiEditionLlmConfig = (): LlmConfigStore => {
+		if (!aiEditionLlmConfigInstance) {
+			aiEditionLlmConfigInstance = new LlmConfigStore(app.getPath("userData"));
+		}
+		return aiEditionLlmConfigInstance;
+	};
 
 	registerNativeBridgeHandlers({
 		getPlatform: () => process.platform,
@@ -3602,9 +3882,9 @@ export function registerIpcHandlers(
 			}
 		},
 		getAiEditionDocuments: () => aiEditionDocuments,
-		getAiEditionLlmConfig: () => aiEditionLlmConfig,
+		getAiEditionLlmConfig,
 		runAiEditionChat: (projectId, sessionId, message, document, sink) =>
-			runChat(projectId, sessionId, message, aiEditionLlmConfig, document, sink, {
+			runChat(projectId, sessionId, message, getAiEditionLlmConfig(), document, sink, {
 				cursor: agentCursorTelemetryReader,
 			}),
 		undoAiEditionToolBatch: (_projectId, _sessionId) => ({
@@ -3614,7 +3894,7 @@ export function registerIpcHandlers(
 		rewindToMessage: (projectId, sessionId, messageId) =>
 			rewindToMessage(projectId, sessionId, messageId),
 		compactNow: (projectId, sessionId) =>
-			compactSessionNow(projectId, sessionId, aiEditionLlmConfig),
+			compactSessionNow(projectId, sessionId, getAiEditionLlmConfig()),
 		getContextUsage: getSessionContextUsage,
 		listAiEditionChatSessions: (projectId) => listSessions(projectId),
 		createAiEditionChatSession: (projectId, title) => createSession(projectId, title),

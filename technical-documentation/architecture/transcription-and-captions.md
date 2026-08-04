@@ -234,9 +234,20 @@ The single shipped artifact is `ggml-small-q8_0.bin` from
 `ggerganov/whisper.cpp` on HuggingFace: Whisper `small`, multilingual (~99
 languages), q8_0 quantised, ~264 MB. Precision is baked into the GGML file —
 there is no runtime `--int8` flag. `electron/stt/modelManager.ts` downloads
-the file once into the user-data cache, verifies its SHA-256, and writes it
-through an atomic `.partial` rename, so a half-downloaded file can never be
-picked up as a usable model.
+the file once into the user-data cache and writes it through an atomic
+`.partial` rename, so a half-downloaded file can never be picked up as a
+usable model. The SHA-256 is checked on the cached copy too, not only on a
+fresh download, so a model corrupted after the fact is re-fetched rather than
+handed to whisper.cpp. A cached copy that fails the check is left alone until
+a verified replacement has landed — the atomic rename displaces it — so a
+failed re-download never leaves a user with no model at all.
+
+The download URL resolves through an immutable commit revision rather than
+`resolve/main`. Because the cache is now verified on every start, a re-upload
+under the mutable branch pointer would invalidate every installed cache at
+once instead of merely breaking new installs; pinning makes the recorded
+digest an invariant. Bumping the model therefore means bumping the revision
+and the digest together.
 
 > The HuggingFace identifier is intentionally `ggerganov/whisper.cpp`,
 > **not** `ggml-org/whisper.cpp`. The latter matches the GitHub org the

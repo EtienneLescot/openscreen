@@ -43,7 +43,8 @@
 		"cameraDisconnected": "Веб-камера отключена.",
 		"cameraNotFound": "Камера не найдена.",
 		"permissionDenied": "Разрешение на запись запрещено. Пожалуйста, разрешите запись экрана.",
-		"accessibilityAllowAndRetry": "Разрешите OpenScreen доступ к Универсальному доступу, затем снова нажмите запись, чтобы начать обратный отсчет."
+		"accessibilityAllowAndRetry": "Разрешите OpenScreen доступ к Универсальному доступу, затем снова нажмите запись, чтобы начать обратный отсчет.",
+		"selectSource": "Пожалуйста, выберите источник для записи"
 	},
 	"emptyState": {
 		"title": "Нет открытых проектов",
@@ -98,6 +99,7 @@
 	},
 	"rec": {
 		"source": "Источник",
+		"systemPicker": "Система спросит, чем поделиться",
 		"systemAudio": "Системный звук",
 		"microphone": "Микрофон",
 		"camera": "Камера",
@@ -140,6 +142,7 @@
 		"transcriptEmpty": "Транскрипт пуст.",
 		"notGeneratedHint": "Ещё не создан — выберите язык и нажмите «Пересоздать».",
 		"transcribing": "Расшифровка",
+		"downloadingModel": "Загрузка речевой модели",
 		"transcribingEllipsis": "Расшифровка…",
 		"pendingTranscription": "Ожидает расшифровки",
 		"transcriptionFailed": "Ошибка расшифровки",
