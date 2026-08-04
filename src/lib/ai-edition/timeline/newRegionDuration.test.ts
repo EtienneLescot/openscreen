@@ -12,14 +12,14 @@ describe("newRegionDurationSec", () => {
 	it("trades duration for a constant width", () => {
 		// The reported case: 30 minutes across a ~760px panel is 0.42 px/s, where a
 		// flat 2 s region is under a pixel — invisible behind the playhead it was
-		// created at. At that scale 40px is worth a minute and a half.
+		// created at. At that scale a readable pill is worth nearly four minutes.
 		setTimelineScale(760 / 1800);
-		expect(newRegionDurationSec()).toBeCloseTo(94.7, 1);
+		expect(newRegionDurationSec()).toBeCloseTo(227.4, 1);
 
 		// Zoom in 50x and the same gesture creates a region 50x shorter — the pill
 		// on screen is the same size either way, which is the whole point.
 		setTimelineScale((760 / 1800) * 50);
-		expect(newRegionDurationSec()).toBeCloseTo(1.89, 2);
+		expect(newRegionDurationSec()).toBeCloseTo(4.55, 2);
 	});
 
 	it("stays at the floor when the pixels are worth almost nothing", () => {
