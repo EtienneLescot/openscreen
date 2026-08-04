@@ -186,6 +186,40 @@ describe("buildCursorTrack — compression", () => {
 		expect(worst).toBeLessThanOrEqual(0.02);
 	});
 
+	it("keeps the apex of an out-and-back — the case path-space simplification loses", () => {
+		// The regression test for the choice `simplifyAxis` makes: Douglas–Peucker per
+		// axis AGAINST TIME, not over the (x,y) path. Both give the same answer on a
+		// monotonic sweep — the traverse above cannot tell them apart — so this is the
+		// trajectory that separates them. The pointer runs out to 0.9 and comes back
+		// along the same line, which in path space deviates from its chord by nothing:
+		// the whole excursion collapses and interpolation then swears it never happened.
+		const outAndBack: CursorTrackSample[] = Array.from({ length: 200 }, (_, i) => ({
+			timeMs: i * 50,
+			cx: i <= 100 ? 0.1 + i * 0.008 : 0.9 - (i - 100) * 0.008,
+			cy: 0.5, // constant, so the path IS its own chord
+			assetId: "arrow",
+			interactionType: "move" as const,
+		}));
+		const track = build(outAndBack, 5);
+
+		// The turning point survives. Path-space simplification drops it and the best
+		// remaining point sits near 0.74, so this alone fails on the wrong implementation.
+		expect(Math.max(...track.points.map((p) => p.cx))).toBeGreaterThan(0.85);
+
+		// And the same bound the straight traverse claims still holds here.
+		let worst = 0;
+		for (const sample of outAndBack) {
+			const t = sample.timeMs / 1000;
+			const after = track.points.findIndex((p) => p.atSec >= t);
+			if (after <= 0) continue;
+			const a = track.points[after - 1];
+			const b = track.points[after];
+			const k = (t - a.atSec) / (b.atSec - a.atSec || 1);
+			worst = Math.max(worst, Math.abs(a.cx + k * (b.cx - a.cx) - sample.cx));
+		}
+		expect(worst).toBeLessThanOrEqual(0.02);
+	});
+
 	it("restores per-point virtualSec once the two axes diverge", () => {
 		const shiftedClips: AxcutClip[] = [
 			{
