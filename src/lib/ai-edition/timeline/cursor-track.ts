@@ -66,6 +66,13 @@ export interface CursorTrack {
 	shapeCount: number;
 	/** True when maxPoints forced a coarser rate than `hz` would give. */
 	truncated: boolean;
+	/** Present ONLY when the ceiling did not hold. `maxPoints` budgets the rate and
+	 *  the gap floor; the points nothing can put back — a shape change, a non-move
+	 *  event, the ends of a parked run — are exempt and stack on top, so a capture
+	 *  rich in them lands above the ceiling. Absent means the budget held. It is a
+	 *  separate field from `truncated` on purpose: that one says "you are seeing
+	 *  less than you asked for", this one says the opposite. */
+	overBudget?: string;
 	/** When true, every point's virtual-timeline position equals its `atSec`, and
 	 *  `virtualSec` is omitted from the points. Goes false as soon as a clip is
 	 *  moved, cut or reordered and the two axes diverge. */
@@ -313,6 +320,19 @@ export function buildCursorTrack(options: CursorTrackOptions): CursorTrack {
 		return point;
 	});
 
+	// ponytail: the ceiling is soft, and saying so is the whole point. `maxPoints`
+	// is spent on the gap floor and the rate above; the mandatory points are added
+	// afterwards and answer to neither. Charging them to the budget instead would
+	// mean dropping a shape change to stay under it, which is the one thing this
+	// track must never do — so the overflow is reported rather than prevented. The
+	// field is absent when the budget held, so the common payload is unchanged.
+	const overBudget =
+		points.length > maxPoints
+			? `${points.length} points for a ceiling of ${maxPoints}: pointer-shape changes, ` +
+				`non-move events and the ends of a parked run are never dropped, and this ` +
+				`recording has enough of them to land above the budget.`
+			: undefined;
+
 	return {
 		assetId,
 		sampleCount: samples.length,
@@ -321,6 +341,7 @@ export function buildCursorTrack(options: CursorTrackOptions): CursorTrack {
 		coveredSec,
 		shapeCount: shapeIndex.size,
 		truncated,
+		...(overBudget ? { overBudget } : {}),
 		virtualEqualsSource: !shifted,
 		timeBase:
 			"atSec is SOURCE time of the asset (the recording's own clock). virtualSec is the same " +

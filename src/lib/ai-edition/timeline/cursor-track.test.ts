@@ -220,6 +220,31 @@ describe("buildCursorTrack — compression", () => {
 		expect(worst).toBeLessThanOrEqual(0.02);
 	});
 
+	it("says so when the mandatory points push it over maxPoints", () => {
+		// The ceiling is soft: `maxPoints` budgets the rate and the gap floor, and the
+		// points nothing can put back are exempt. A recording that flips the pointer
+		// every 100ms is all exempt points, so the budget cannot hold — and the track
+		// has to say that rather than let the model read 100 rows as "within budget".
+		const flipping = sweep(200, { shape: (i) => (i % 2 === 0 ? "arrow" : "text") });
+		const track = buildCursorTrack({
+			assetId: "asset_1",
+			samples: flipping,
+			durationSec: 60,
+			clips: CLIPS,
+			hz: 5,
+			maxPoints: 20,
+		});
+
+		expect(track.pointCount).toBeGreaterThan(20);
+		expect(track.overBudget).toMatch(/ceiling of 20/);
+		// `truncated` is the other direction — the rate WAS cut — and stays its own signal.
+		expect(track.truncated).toBe(true);
+	});
+
+	it("leaves overBudget off when the ceiling holds", () => {
+		expect(build(sweep(400), 5).overBudget).toBeUndefined();
+	});
+
 	it("restores per-point virtualSec once the two axes diverge", () => {
 		const shiftedClips: AxcutClip[] = [
 			{
