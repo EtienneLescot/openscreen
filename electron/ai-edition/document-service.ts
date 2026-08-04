@@ -13,6 +13,7 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { createId } from "../../src/lib/ai-edition/document/ids";
+import { removeClip } from "../../src/lib/ai-edition/document/timeline";
 import {
 	type AxcutAsset,
 	type AxcutDocument,
@@ -309,16 +310,18 @@ export class DocumentService {
 			doc.project.primaryAssetId === assetId
 				? (assets[0]?.id ?? undefined)
 				: doc.project.primaryAssetId;
+		const withoutAssetClips = doc.timeline.clips
+			.filter((clip) => clip.assetId === assetId)
+			.reduce((current, clip) => removeClip(current, clip.id), doc);
 		const next: AxcutDocument = {
-			...doc,
+			...withoutAssetClips,
 			assets,
 			timeline: {
-				...doc.timeline,
-				clips: doc.timeline.clips.filter((c) => c.assetId !== assetId),
-				trimRanges: doc.timeline.trimRanges.filter((r) => r.assetId !== assetId),
+				...withoutAssetClips.timeline,
+				trimRanges: withoutAssetClips.timeline.trimRanges.filter((r) => r.assetId !== assetId),
 			},
 			project: {
-				...doc.project,
+				...withoutAssetClips.project,
 				primaryAssetId,
 				updatedAt: new Date().toISOString(),
 			},
