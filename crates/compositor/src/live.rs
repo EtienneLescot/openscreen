@@ -28,6 +28,7 @@ use crate::scene::Scene;
 use crate::config::{self, Cfg};
 use crate::cursor::CursorTrack;
 use crate::d3d::Gpu;
+use crate::frame_geometry::webcam_is_real;
 use crate::pipeline::Decoder;
 use crate::timeline_walk::{frame_step, FrameStep, NextFrameTime};
 use anyhow::Result;
@@ -588,26 +589,6 @@ struct ActiveClipRequest {
 
 fn same_source_path(a: &str, b: &str) -> bool {
     a.eq_ignore_ascii_case(b)
-}
-
-/// True when the active clip really has a camera to draw.
-///
-/// TWO ways the app says "no camera", and both must be caught here, because the
-/// webcam decoder is opened either way — `open_and_seek_clip` falls back to the
-/// SCREEN file when the webcam path won't open, so `wdec` always yields frames.
-/// Whether those frames are the camera or a second copy of the screen is decided
-/// HERE and nowhere else.
-///
-///   - the empty string, which is what `sceneDescription.ts` and
-///     `NativeCompositorOverlay` send for an asset with no `cameraTrack`;
-///   - the screen's own path, the older convention kept working for scenes that
-///     still use it.
-///
-/// Missing the empty-string case is what put the screen recording inside the PiP
-/// box: `"" != "/…/recording.mp4"`, so the box was drawn, and the decoder behind
-/// it was the screen fallback.
-fn webcam_is_real(webcam_path: &str, screen_path: &str) -> bool {
-    !webcam_path.trim().is_empty() && !same_source_path(webcam_path, screen_path)
 }
 
 fn scene_clip_matches(

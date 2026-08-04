@@ -48,6 +48,7 @@ pub fn run() -> Result<()> {
 
 // poc-d3d.exe --cfg C0..C8 --fixture <dir> --repeat 3 --out out/
 //              --cfg GIF          → bench natif GIF (slice 1)
+//              --webcam <path>    → force le chemin caméra (défaut `<fixture>/webcam.mp4`)
 fn run_bench(args: &[String]) -> Result<()> {
     let get = |k: &str, d: &str| -> String { arg(args, k, d) };
     let fixture = get("--fixture", "fixture");
@@ -56,7 +57,11 @@ fn run_bench(args: &[String]) -> Result<()> {
     let cfg_arg = get("--cfg", "C0..C8");
 
     let screen = format!("{fixture}/screen.mp4");
-    let webcam = format!("{fixture}/webcam.mp4");
+    // Override explicite parce que le cas « pas de caméra » n'est PAS un fichier
+    // différent : l'app renvoie le chemin de l'écran lui-même (`ExportDialog`) ou la
+    // chaîne vide (`sceneDescription`). Le reproduire demande donc de piloter le chemin,
+    // pas le contenu — `--webcam <screen.mp4>` rejoue exactement l'issue #248.
+    let webcam = get("--webcam", &format!("{fixture}/webcam.mp4"));
     std::fs::create_dir_all(&out).ok();
 
     // sélection des cfg

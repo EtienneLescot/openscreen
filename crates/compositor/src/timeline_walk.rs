@@ -17,6 +17,7 @@ use crate::compositor::Compositor;
 use crate::config::Cfg;
 use crate::cursor::CursorTrack;
 use crate::d3d::Gpu;
+use crate::frame_geometry::webcam_is_real;
 use crate::pipeline::{ClipSource, Decoder};
 use crate::regions::{speed_segments_for_window, SpeedSegment};
 use crate::scene::Scene;
@@ -164,6 +165,13 @@ pub(crate) unsafe fn walk_composited_timeline(
     let mut frames: u64 = 0;
 
     for (clip_index, clip) in clips.iter().enumerate() {
+        // Le preset de layout est GLOBAL (un seul panneau pour toute la timeline) mais la
+        // caméra est PAR CLIP : un projet mélange sans problème un enregistrement avec webcam
+        // et un import qui n'en a pas. Le preset ne doit donc s'appliquer qu'aux clips qui ont
+        // vraiment une caméra — sinon la boîte PiP est dessinée avec, derrière, le décodeur de
+        // repli, c'est-à-dire l'écran lui-même recopié dans son propre coin (issue #248).
+        // La preview vive fait exactement ça dans `live.rs` ; c'est ici l'équivalent export.
+        comp.set_has_webcam(webcam_is_real(&clip.webcam, &clip.screen));
         if !screen_decs.contains_key(&clip.screen) {
             screen_decs.insert(clip.screen.clone(), Decoder::open(&clip.screen, gpu)?);
         }
