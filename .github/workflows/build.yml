@@ -516,6 +516,55 @@ jobs:
         # permits `main` to deploy, so docs.yml's old `on: release` trigger ran
         # with a tag ref and failed its deploy every time. See docs.yml.
         if: ${{ steps.release.outputs.is_prerelease == 'false' }}
+        timeout-minutes: 20
         env:
           GH_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
-        run: gh workflow run docs.yml --ref main --repo "$GITHUB_REPOSITORY"
+        run: |
+          latest_dispatch() {
+            gh run list \
+              --repo "$GITHUB_REPOSITORY" \
+              --workflow docs.yml \
+              --event workflow_dispatch \
+              --branch main \
+              --limit 1 \
+              --json databaseId \
+              --jq '.[0].databaseId // empty'
+          }
+
+          # `gh workflow run` prints nothing we can key off, so remember which
+          # dispatch was newest beforehand and wait for a different one to appear.
+          PREVIOUS_RUN_ID="$(latest_dispatch)"
+          gh workflow run docs.yml --ref main --repo "$GITHUB_REPOSITORY"
+
+          RUN_ID=""
+          for _ in $(seq 1 30); do
+            sleep 5
+            CANDIDATE="$(latest_dispatch)"
+            if [[ -n "$CANDIDATE" && "$CANDIDATE" != "$PREVIOUS_RUN_ID" ]]; then
+              RUN_ID="$CANDIDATE"
+              break
+            fi
+          done
+
+          if [[ -z "$RUN_ID" ]]; then
+            echo "::error::Dispatched docs.yml but no new run appeared within 150s"
+            exit 1
+          fi
+
+          gh run watch "$RUN_ID" --repo "$GITHUB_REPOSITORY" --interval 15 || true
+
+          CONCLUSION="$(gh run view "$RUN_ID" --repo "$GITHUB_REPOSITORY" --json conclusion --jq '.conclusion')"
+          case "$CONCLUSION" in
+            success)
+              echo "Docs rebuilt and deployed by run $RUN_ID"
+              ;;
+            cancelled)
+              # docs.yml cancels in-flight runs sharing a ref, so a push to main
+              # landing right now replaces this rebuild with a newer one.
+              echo "::warning::Docs run $RUN_ID was cancelled, most likely superseded by a newer main run"
+              ;;
+            *)
+              echo "::error::Docs run $RUN_ID concluded '$CONCLUSION' - /download may still list the previous release"
+              exit 1
+              ;;
+          esac
