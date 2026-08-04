@@ -134,4 +134,36 @@ describe("auto-compaction", () => {
 		await runChat("proj_compact_blocked", session.id, "and then?", stubConfig());
 		expect(histories.at(-1)?.[0]?.content).toBe("EARLIER CONTEXT");
 	});
+
+	// The regression this guards is `planCompaction` measuring the wrong list.
+	// `splitIndex` comes back from `shouldCompact` as an index INTO WHAT IT WAS
+	// GIVEN, and it is then applied to the payload. Measure the transcript
+	// instead — which never shrinks, so it keeps tripping — and the index runs
+	// off the end of the much shorter payload, so `payload.slice(0, splitIndex)`
+	// swallows the whole thing, current user turn included. The model is then
+	// asked to answer a question it was never shown.
+	//
+	// Three turns is not enough to see it: the collapse needs a payload that has
+	// already been compacted at least once, so the two lists have diverged.
+	it("never summarizes away the turn the user just sent", async () => {
+		stubSummarizer("EARLIER CONTEXT");
+		const session = createSession("proj_compact_current_turn");
+		for (let i = 0; i < 10; i += 1) {
+			await runChat("proj_compact_current_turn", session.id, `${LONG}#${i}`, stubConfig());
+		}
+
+		// Every turn, not just the last: the collapse is intermittent, so a
+		// spot-check on `histories.at(-1)` walks straight past it. When it bites,
+		// the payload is `[summary]` alone, so the last entry is the summary
+		// rather than the message the user just typed — which is exactly what
+		// this asserts. (Turn 0 is legitimately a one-message payload, so length
+		// is the wrong thing to check.)
+		expect(histories).toHaveLength(10);
+		histories.forEach((history, turn) => {
+			expect(
+				history.at(-1)?.content,
+				`turn ${turn} was handed a payload that did not end with the user's message`,
+			).toBe(`${LONG}#${turn}`);
+		});
+	});
 });
