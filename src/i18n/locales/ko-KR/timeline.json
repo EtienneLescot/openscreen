@@ -71,7 +71,7 @@
 		"timelineTools": "타임라인 도구",
 		"arrangeClips": "클립 정리",
 		"arrangeClipsHint": "아래 클립을 드래그하여 순서를 바꾸거나 새 클립을 놓으세요",
-		"newAnnotation": "새 주석",
+		"newAnnotation": "주석",
 		"dragToReorderHint": "드래그하여 순서 변경 · 더블클릭하여 시작/종료 지점 편집",
 		"editInOutPoints": "시작/종료 지점 편집",
 		"deleteClip": "클립 삭제",
