@@ -45,8 +45,18 @@ const WITH_STALLED_READBACK =
 	process.env.OPENSCREEN_WGC_TEST_STALL_READBACK === "true" ||
 	process.argv.includes("--stall-readback");
 const STALL_READBACK_MS = Number(process.env[STALL_READBACK_ENV] ?? 60_000);
-/** The helper's own shutdown budget is 10s; anything past this is a hang. */
-const STOP_HANG_LIMIT_MS = 30_000;
+const STOP_BUDGET_ENV = "OPENSCREEN_WGC_STOP_BUDGET_MS";
+/**
+ * The helper's global shutdown ceiling, pinned into its environment below so
+ * the harness and the helper cannot drift apart. It matters because the
+ * encoder-finalize step is the one allowed to spend the whole ceiling — issue
+ * #34 exists because a long software-encoder finalize legitimately takes
+ * seconds — so a limit below it would kill a helper that was still working and
+ * report it as the #252 hang.
+ */
+const STOP_BUDGET_MS = Number(process.env[STOP_BUDGET_ENV] ?? 50_000);
+/** Past the helper's own ceiling it never ended itself, which IS issue #252. */
+const STOP_HANG_LIMIT_MS = STOP_BUDGET_MS + 15_000;
 /** A healthy stop is well under a second. */
 const STOP_LATENCY_BUDGET_MS = 15_000;
 
@@ -59,6 +69,7 @@ function runHelper(config, { injectDefaultSinkWriterFailure = false, stallReadba
 		const env = { ...process.env };
 		delete env[INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV];
 		delete env[STALL_READBACK_ENV];
+		env[STOP_BUDGET_ENV] = String(STOP_BUDGET_MS);
 		if (injectDefaultSinkWriterFailure) {
 			env[INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV] = "1";
 		}
@@ -124,9 +135,16 @@ function runHelper(config, { injectDefaultSinkWriterFailure = false, stallReadba
 	});
 }
 
-/** Every `[stop-timing] step=<name>` the helper emitted, in order. */
+/**
+ * Every `[stop-timing]` step the helper *finished*, in order.
+ *
+ * `phase=begin` is the same step announced on entry, so counting both listed
+ * every step twice. `phase=abandoned` is kept: that step did end, just badly.
+ */
 function readStopTimingSteps(stderr) {
-	return [...stderr.matchAll(/\[stop-timing\]\s+step=(\S+)/g)].map((match) => match[1]);
+	return [...stderr.matchAll(/\[stop-timing\]\s+step=(\S+)\s+elapsed_ms=\d+(?:\s+phase=(\S+))?/g)]
+		.filter((match) => match[2] !== "begin")
+		.map((match) => match[1]);
 }
 
 function assertStopWasClean(result) {

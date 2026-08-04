@@ -1101,8 +1101,12 @@ int main(int argc, char* argv[]) {
     // arriving and keep taking the frame lock, racing the writer's last pass on
     // the shared D3D context at exactly the moment we can least afford a stall.
     beginStopStep("wgc-quiesce", stepBudgetMs);
-    session.quiesceCapture();
-    logStopStep("wgc-quiesce");
+    // The drain outcome decides the shape of the whole rest of the shutdown:
+    // a callback that never came back makes wgc-session-close skip the device
+    // release, so a report that does not say which happened cannot be read.
+    const bool wgcDrained = session.quiesceCapture();
+    std::cerr << "[stop-timing] step=wgc-quiesce elapsed_ms=" << stopElapsedMs()
+              << " drained=" << (wgcDrained ? "true" : "false") << std::endl;
     beginStopStep("microphone", stepBudgetMs);
     microphoneCapture.stop();
     logStopStep("microphone");
@@ -1129,26 +1133,27 @@ int main(int argc, char* argv[]) {
     beginStopStep("encoder-finalize", shutdownBudgetMs);
     const bool screenFinalized = encoder.finalize();
     logStopStep("encoder-finalize");
-    bool webcamFinalized = true;
-    if (writeSeparateWebcam) {
-        beginStopStep("webcam-encoder-finalize", shutdownBudgetMs);
-        webcamFinalized = webcamEncoder.finalize();
-        logStopStep("webcam-encoder-finalize");
-    }
-
-    // Report success the moment the files are durable, not at the end of the
-    // process's life. Finalize is what writes the MP4 index; everything after it
-    // is housekeeping that cannot improve the recording but can still wedge on a
-    // bad driver. Announcing here means a watchdog kill during teardown costs
-    // the user nothing -- the app reads this line and keeps the recording.
-    //
-    // Which is exactly why the finalize results are checked. The app treats this
-    // line as proof the file is playable, so announcing it after a failed
-    // Finalize would hand the editor an MP4 with no index and call it a success.
-    if (!screenFinalized || !webcamFinalized) {
+    if (!screenFinalized) {
         std::cerr << "ERROR: Failed to finalize the recording" << std::endl;
     }
-    if (!encodeFailed && screenFinalized && webcamFinalized) {
+
+    // Report success the moment the screen file is durable, not at the end of
+    // the process's life. Finalize is what writes the MP4 index; everything
+    // after it is housekeeping that cannot improve that file but can still
+    // wedge on a bad driver. Announcing here means a watchdog kill during
+    // teardown costs the user nothing -- the app reads this line and keeps the
+    // recording.
+    //
+    // Gated on the SCREEN finalize alone, and printed before the webcam's.
+    // The app treats this line as proof the screen file is playable, so a
+    // failed screen Finalize must not reach it. The webcam is a second,
+    // optional file and must not be able to veto the first: letting it decide
+    // meant one bad camera clip discarded a complete capture, and because both
+    // finalizes share the same ceiling, a slow screen finalize could leave the
+    // webcam step no budget at all and get the process killed before this line
+    // ever ran. A webcam that fails below is an error on stderr and a non-zero
+    // exit -- not a lost recording.
+    if (!encodeFailed && screenFinalized) {
         std::cout << "{\"event\":\"recording-stopped\",\"schemaVersion\":2,\"screenPath\":\""
                   << jsonEscape(config.outputPath) << "\"";
         if (writeSeparateWebcam) {
@@ -1156,6 +1161,16 @@ int main(int argc, char* argv[]) {
         }
         std::cout << "}" << std::endl;
         std::cout << "Recording stopped. Output path: " << config.outputPath << std::endl;
+    }
+
+    bool webcamFinalized = true;
+    if (writeSeparateWebcam) {
+        beginStopStep("webcam-encoder-finalize", shutdownBudgetMs);
+        webcamFinalized = webcamEncoder.finalize();
+        logStopStep("webcam-encoder-finalize");
+        if (!webcamFinalized) {
+            std::cerr << "ERROR: Failed to finalize the webcam recording" << std::endl;
+        }
     }
 
     // Releasing the device goes last: by now no thread can still be holding the

@@ -146,6 +146,27 @@ describe("waitForNativeWindowsCaptureStop", () => {
 		await expect(pending).resolves.toEqual({ ok: true, screenVideoPath: "C:\\rec\\a.mp4" });
 	});
 
+	/**
+	 * The webcam is a second, optional file, and the helper announces the screen
+	 * recording before finalizing it precisely so a bad camera clip cannot veto a
+	 * complete capture. The exit code is non-zero and the reason is on stderr;
+	 * the screen MP4 is still finished and must still be kept.
+	 */
+	it("keeps the screen recording when only the webcam failed to finalize", async () => {
+		const pending = waitForNativeWindowsCaptureStop({
+			proc: asProc(helper),
+			targetPath: "C:\\rec\\a.mp4",
+			readOutput: () =>
+				"Recording stopped. Output path: C:\\rec\\a.mp4\n" +
+				"[stop-timing] step=webcam-encoder-finalize elapsed_ms=900\n" +
+				"ERROR: Failed to finalize the webcam recording\n",
+		});
+
+		helper.exit(1);
+
+		await expect(pending).resolves.toEqual({ ok: true, screenVideoPath: "C:\\rec\\a.mp4" });
+	});
+
 	it("classifies the helper's own shutdown watchdog as a stop timeout", async () => {
 		const pending = waitForNativeWindowsCaptureStop({
 			proc: asProc(helper),
