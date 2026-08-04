@@ -854,9 +854,21 @@ export function executeAgentTool(
 			if (!transcript) {
 				return failure(`No transcript for asset ${assetId ?? "(none)"}.`);
 			}
-			// ponytail: segments only — words would blow the context for long
-			// recordings and the segment text already carries the content.
-			const segments = transcript.segments.slice(0, 800).map((s) => ({
+			// ponytail: no cap. There used to be a `.slice(0, 800)` here, guarded by
+			// "words would blow the context" — written believing a segment was a
+			// phrase. On the production path a segment IS one word
+			// (src/lib/captioning/transcribe.ts: whisper's word timings are mapped
+			// one-to-one), so the cap cut the transcript at the 800th WORD — around
+			// five minutes of speech — and said nothing about it. The model read a
+			// fifth of a half-hour recording, cut the silences it could see, and
+			// reported the job done, because nothing in the payload told it otherwise.
+			//
+			// A whole 30-minute transcript is ~285k characters, ~70k tokens: large,
+			// and well inside every model this app talks to. If a recording ever does
+			// get near a window, the honest fix is to know the window — the app has no
+			// per-model context budget today — not to guess a number here and drop the
+			// rest in silence.
+			const segments = transcript.segments.map((s) => ({
 				id: s.id,
 				kind: s.kind,
 				startSec: s.startSec,
