@@ -5,6 +5,7 @@ import { formatSeconds } from "./format";
 import {
 	clampVirtualTime,
 	findNextKeptSegment,
+	findRawClipForSegment,
 	getRawVirtualStartTime,
 	keptWordIdSet,
 	locateKeptSegment,
@@ -369,6 +370,23 @@ describe("virtual-preview pure functions", () => {
 
 		expect(getRawVirtualStartTime(segClip1Part2, rawClips)).toBe(6);
 		expect(getRawVirtualStartTime(segClip2Part1, rawClips)).toBe(13.2);
+	});
+
+	it("findRawClipForSegment prefers an exact raw id over an earlier prefix match", () => {
+		const rawClips: AxcutClip[] = [
+			{ ...clips[0], id: "clip" },
+			{
+				...clips[1],
+				id: "clip_seg1",
+			},
+		];
+		const segment = { ...rawClips[1] };
+
+		expect(findRawClipForSegment(segment, rawClips)?.id).toBe("clip_seg1");
+		expect(getRawVirtualStartTime(segment, rawClips)).toBe(10);
+		expect(findRawClipForSegment({ ...segment, id: "clip_seg1_seg2" }, rawClips)?.id).toBe(
+			"clip_seg1",
+		);
 	});
 
 	it("findNextKeptSegment finds next kept segment across multi-clip trim boundary", () => {

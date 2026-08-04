@@ -58,7 +58,10 @@ export function findRawClipForSegment(
 	rawClips: AxcutClip[],
 ): AxcutClip | undefined {
 	return (
-		rawClips.find((c) => c.id === segment.id || segment.id.startsWith(`${c.id}_seg`)) ??
+		rawClips.find((clip) => clip.id === segment.id) ??
+		[...rawClips]
+			.sort((a, b) => b.id.length - a.id.length)
+			.find((clip) => segment.id.startsWith(`${clip.id}_seg`)) ??
 		rawClips.find(
 			(c) =>
 				c.assetId === segment.assetId &&
