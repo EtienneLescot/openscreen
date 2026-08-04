@@ -571,24 +571,40 @@ export function buildSceneDescription(
 			height: Math.max(1, Math.round((video?.height || 1080) * (crop?.height ?? 1))),
 		};
 	};
-	const layoutForScreenSize = (screenSize: { width: number; height: number }) =>
-		computeCompositeLayout({
+	/** Does THIS clip have a camera to lay out? Same expression as the `webcamPath` sent
+	 *  with the clip above, so the layout and the decoder can never disagree about it.
+	 *  Note this is NOT `hasAnyClipWithCamera` (which gates the Layout panel): that one
+	 *  ignores `visible` on purpose, so the panel stays reachable to un-hide a camera. */
+	const clipHasCamera = (clip: AxcutClip) => {
+		const cam = assetById.get(clip.assetId)?.cameraTrack;
+		return Boolean(cam?.visible && cam.sourcePath);
+	};
+	/**
+	 * The layout preset is GLOBAL — one panel for the whole timeline — but the camera is
+	 * per clip: a project mixes a screen+webcam recording with a plain import that has
+	 * none. A clip with no camera must lay out as if the preset were "no-webcam".
+	 *
+	 * Skipping this is not merely a stray thumbnail: the block presets (`dual-frame`,
+	 * `vertical-stack`) size the SCREEN off the block, so a camera-less clip kept the
+	 * screen squeezed into its half with nothing beside it. `has_webcam` (native) only
+	 * gates the camera's own draw — it cannot give the screen its frame back.
+	 */
+	const layoutForClip = (screenSize: { width: number; height: number }, hasCamera: boolean) => {
+		const preset = hasCamera ? settings.webcamLayoutPreset : "no-webcam";
+		return computeCompositeLayout({
 			canvasSize: outputDims,
 			maxContentSize: {
 				width: Math.round(outputDims.width * paddingFit),
 				height: Math.round(outputDims.height * paddingFit),
 			},
 			screenSize,
-			webcamSize:
-				settings.webcamLayoutPreset === "no-webcam"
-					? null
-					: (webcamSourceSize ?? { width: 960, height: 720 }),
-			layoutPreset: settings.webcamLayoutPreset,
+			webcamSize: preset === "no-webcam" ? null : (webcamSourceSize ?? { width: 960, height: 720 }),
+			layoutPreset: preset,
 			webcamSizePreset: settings.webcamSizePreset,
-			webcamPosition:
-				settings.webcamLayoutPreset === "picture-in-picture" ? settings.webcamPosition : null,
+			webcamPosition: preset === "picture-in-picture" ? settings.webcamPosition : null,
 			webcamMaskShape: settings.webcamMaskShape,
 		});
+	};
 	const toFrameFractions = (r: RenderRect) => ({
 		x: r.x / outputDims.width,
 		y: r.y / outputDims.height,
@@ -603,7 +619,7 @@ export function buildSceneDescription(
 		const shortSide = box ? Math.min(box.width, box.height) : 0;
 		return box && shortSide > 0 && radius != null ? radius / shortSide : null;
 	};
-	const resolvedLayoutOf = (layout: ReturnType<typeof layoutForScreenSize>) =>
+	const resolvedLayoutOf = (layout: ReturnType<typeof layoutForClip>) =>
 		layout
 			? {
 					screenRect: toFrameFractions(layout.screenRect),
@@ -618,12 +634,12 @@ export function buildSceneDescription(
 	// `for_clip_window` (Rust) selects the entry for the clip being composed, so the
 	// draw path keeps reading a single `layout` and needs no per-clip branch of its own.
 	const layoutByClip = visibleClips.map((clip, index) =>
-		resolvedLayoutOf(layoutForScreenSize(screenSourceSizeOf(clip, index))),
+		resolvedLayoutOf(layoutForClip(screenSourceSizeOf(clip, index), clipHasCamera(clip))),
 	);
 	// Scalar fields stay the FIRST clip's layout: they are the fallback for a payload
 	// without `layoutByClip`, and the value native starts from before any clip is active.
 	const computedLayout = visibleClips[0]
-		? layoutForScreenSize(screenSourceSizeOf(visibleClips[0], 0))
+		? layoutForClip(screenSourceSizeOf(visibleClips[0], 0), clipHasCamera(visibleClips[0]))
 		: null;
 	const webcamRect = computedLayout?.webcamRect
 		? toFrameFractions(computedLayout.webcamRect)
