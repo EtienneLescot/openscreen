@@ -612,6 +612,21 @@ describe("useTimeline is not re-rendered by playhead ticks", () => {
 		});
 	});
 
+	// Pasting a copied trim is exactly this call: a trim carries no properties, so
+	// all a copy holds is its length, and paste recreates one that long at the
+	// playhead. Same primitive the toolbar's cut button uses.
+	it("creates a trim of the requested length", async () => {
+		const { result } = renderTimeline();
+		act(() => {
+			useProjectStore.getState().setCurrentTime(3);
+		});
+		await act(async () => {
+			await result.current.addTrim(1.25);
+		});
+		const trim = useProjectStore.getState().document?.timeline.trimRanges.at(-1);
+		expect((trim?.endSec ?? 0) - (trim?.startSec ?? 0)).toBeCloseTo(1.25, 6);
+	});
+
 	// The timeline's toolbar passes a duration worth a fixed number of pixels at
 	// the current zoom; every other entry point keeps the 2 s above.
 	it("honours a caller-supplied duration", async () => {
