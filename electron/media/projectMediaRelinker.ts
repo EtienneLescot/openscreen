@@ -1,3 +1,15 @@
+// Relinks the media a project points at when those files are no longer where
+// the document says they are — the project was authored on another machine, or
+// the recordings were moved after it was last saved. Runs on every project open
+// (DocumentService.getProject), not just on import, because a document already
+// broken by a move stays broken otherwise.
+//
+// ponytail: this rewrites paths that the renderer then saves back, so it is
+// deliberately conservative — it only ever accepts a candidate the media-links
+// registry can vouch for by recorded size, and it logs every rewrite. Guessing
+// wrong here means the user opens a project and silently gets someone else's
+// footage, which is worse than opening it with a missing-media placeholder.
+
 import fs from "node:fs/promises";
 import {
 	findMediaLinksByFingerprint,
@@ -24,35 +36,55 @@ async function resolveAssetMedia(
 	const originalPath = asset.originalPath;
 	if (typeof originalPath !== "string" || !originalPath) return asset;
 
+	const cameraTrack = asset.cameraTrack;
+	const cameraPath =
+		isRecord(cameraTrack) && typeof cameraTrack.sourcePath === "string" && cameraTrack.sourcePath
+			? cameraTrack.sourcePath
+			: null;
+	const screenExists = await fileExists(originalPath);
+	const cameraMissing = cameraPath !== null && !(await fileExists(cameraPath));
+	// Nothing to repair, and this runs on every project open — don't fingerprint
+	// (i.e. open and read) every asset just to confirm what the stats already say.
+	if (screenExists && !cameraMissing) return asset;
+
 	let links: RelocatedMediaLookup | null = null;
-	if (await fileExists(originalPath)) {
+	if (screenExists) {
 		try {
 			const existing = await findMediaLinksByFingerprint(baseDir, originalPath);
 			links = existing ? { screenVideoPath: originalPath, ...existing } : null;
 		} catch {
 			links = null;
 		}
+	} else if (typeof asset.sizeBytes === "number") {
+		links = await findRelocatedMediaByStoredPath(baseDir, originalPath, asset.sizeBytes);
+		if (links) {
+			console.log(`[media-relink] screen video ${originalPath} -> ${links.screenVideoPath}`);
+		}
 	} else {
-		links = await findRelocatedMediaByStoredPath(
-			baseDir,
-			originalPath,
-			typeof asset.sizeBytes === "number" ? asset.sizeBytes : undefined,
+		// Documents migrated from v1.7 carry no size (only DocumentService.addAsset
+		// records one), so this is the common case for old projects. Without it
+		// there is nothing to tell one `recording.mp4` from another.
+		console.warn(
+			`[media-relink] ${originalPath} is missing and the project recorded no file size for it — refusing to guess a replacement`,
 		);
 	}
 	if (!links) return asset;
 
-	let cameraTrack = asset.cameraTrack;
-	if (isRecord(cameraTrack) && typeof cameraTrack.sourcePath === "string") {
-		const cameraIsMissing = !(await fileExists(cameraTrack.sourcePath));
-		if (cameraIsMissing && links.webcamVideoPath && (await fileExists(links.webcamVideoPath))) {
-			cameraTrack = { ...cameraTrack, sourcePath: links.webcamVideoPath };
-		}
+	let nextCameraTrack = cameraTrack;
+	if (
+		isRecord(cameraTrack) &&
+		cameraMissing &&
+		links.webcamVideoPath &&
+		(await fileExists(links.webcamVideoPath))
+	) {
+		console.log(`[media-relink] webcam video ${cameraPath} -> ${links.webcamVideoPath}`);
+		nextCameraTrack = { ...cameraTrack, sourcePath: links.webcamVideoPath };
 	}
 
 	return {
 		...asset,
 		originalPath: links.screenVideoPath,
-		...(cameraTrack === asset.cameraTrack ? {} : { cameraTrack }),
+		...(nextCameraTrack === cameraTrack ? {} : { cameraTrack: nextCameraTrack }),
 	};
 }
 
