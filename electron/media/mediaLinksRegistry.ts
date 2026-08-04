@@ -162,13 +162,21 @@ const writeQueues = new Map<string, Promise<unknown>>();
 function withWriteLock<T>(baseDir: string, fn: () => Promise<T>): Promise<T> {
 	const queue = writeQueues.get(baseDir) ?? Promise.resolve();
 	const result = queue.then(fn, fn);
-	writeQueues.set(
-		baseDir,
-		result.then(
-			() => undefined,
-			() => undefined,
-		),
+	// The tail swallows the outcome so the NEXT writer runs either way; `result`
+	// keeps the real one for the caller.
+	const tail = result.then(
+		() => undefined,
+		() => undefined,
 	);
+	writeQueues.set(baseDir, tail);
+	// Drop the key once the chain has drained — but only if nothing queued behind
+	// us in the meantime, or we would strand a tail a later caller is already
+	// chained on. The map is keyed by an arbitrary directory path, so without
+	// this it grows for the life of the process; production has one key, a test
+	// run has one per temp dir. `tail` never rejects, so this cannot leak either.
+	void tail.then(() => {
+		if (writeQueues.get(baseDir) === tail) writeQueues.delete(baseDir);
+	});
 	return result;
 }
 
@@ -300,13 +308,24 @@ export async function findMediaLinksByFingerprint(
 
 	// Path drifted from what's on record — refresh it so the next lookup can
 	// take a cheaper path if one becomes available again.
+	//
+	// ponytail: deliberately not awaited — a lookup must not pay for a write it
+	// does not need — but `void` alone is not fire-and-forget, it is
+	// fire-and-crash. Nothing was watching this promise, so any failure became an
+	// unhandled rejection: in the main process that is a process-level event, and
+	// under vitest it fails the whole run from outside every test (the CI symptom
+	// was `mkdir ENOENT` when a suite's temp dir was removed while this write was
+	// still queued, reported after 1628 passing tests). A refresh that cannot
+	// happen is not worth interrupting anyone over — but it is worth a line.
 	if (match.lastKnownPath !== videoPath) {
 		void updateRegistry(baseDir, (file) => ({
 			version: 1,
 			entries: file.entries.map((e) =>
 				fingerprintsMatch(e.fingerprint, fingerprint) ? { ...e, lastKnownPath: videoPath } : e,
 			),
-		}));
+		})).catch((error) => {
+			console.warn("[media-links] could not refresh the recorded path:", error);
+		});
 	}
 
 	return {
