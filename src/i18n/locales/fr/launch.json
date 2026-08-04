@@ -20,7 +20,16 @@
 			"bulletList": "Liste à puces",
 			"numberedList": "Liste numérotée",
 			"blockquote": "Citation",
-			"codeBlock": "Bloc de code"
+			"codeBlock": "Bloc de code",
+			"play": "Démarrer le défilement automatique",
+			"pause": "Mettre le défilement en pause",
+			"speed": "Vitesse de défilement",
+			"decreaseSpeed": "Réduire la vitesse de défilement",
+			"increaseSpeed": "Augmenter la vitesse de défilement",
+			"fontSize": "Taille de police",
+			"decreaseFontSize": "Réduire la taille de police",
+			"increaseFontSize": "Augmenter la taille de police",
+			"mirror": "Miroir horizontal"
 		}
 	},
 	"audio": {
@@ -60,6 +69,8 @@
 	},
 	"recording": {
 		"selectSource": "Veuillez sélectionner une source à enregistrer",
+		"systemPicker": "Le système vous demandera quoi partager",
+		"inProgress": "Enregistrement en cours",
 		"saving": "Sauvegarde..."
 	},
 	"language": "Langue",

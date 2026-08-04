@@ -41,9 +41,20 @@ export interface LinuxCaptureConfig {
 		microphone: { enabled: boolean; deviceName?: string; gain: number };
 	};
 	maxCursorSamples: number;
-	/** From a previous recording. Lets the portal skip its picker. */
-	restoreToken?: string;
+	/**
+	 * Negotiate the portal and stop there, until [`arm`] is called.
+	 *
+	 * Splits "the user has chosen what to share" from "pixels are flowing" so a
+	 * countdown can sit between them. Without it the countdown runs first and the
+	 * picker appears afterwards, which is backwards: the picker's wait has no
+	 * upper bound, so the countdown finishes while the user is still reading a
+	 * dialog they have not been shown yet.
+	 */
+	deferStart?: boolean;
 }
+
+/** What the portal handed over. `undefined` means the backend did not say. */
+export type LinuxCaptureSourceKind = "monitor" | "window" | "virtual";
 
 export interface LinuxCaptureResult {
 	path: string;
@@ -51,8 +62,8 @@ export interface LinuxCaptureResult {
 	frames: number;
 	droppedFrames: number;
 	cursor: CursorRecordingData;
-	/** Present when the portal issued one; persist it for the next recording. */
-	restoreToken?: string;
+	/** What the portal actually granted, when it said. */
+	sourceKind?: LinuxCaptureSourceKind;
 	videoEncoder?: string;
 }
 
@@ -68,11 +79,16 @@ export class LinuxNativeCaptureSession {
 	private startedResolve: (() => void) | null = null;
 	private startedReject: ((error: Error) => void) | null = null;
 
+	private sourceSelected = false;
+	private sourceSelectedResolve: (() => void) | null = null;
+	private sourceSelectedReject: ((error: Error) => void) | null = null;
+	private armed = false;
+
 	private stopped: LinuxCaptureResult | null = null;
 	private stoppedResolve: (() => void) | null = null;
 	private stoppedReject: ((error: Error) => void) | null = null;
 
-	private restoreToken: string | undefined;
+	private sourceKind: LinuxCaptureSourceKind | undefined;
 	private videoEncoder: string | undefined;
 	private lastError: string | null = null;
 	private paused = false;
@@ -105,7 +121,7 @@ export class LinuxNativeCaptureSession {
 				...(this.config.bitrate ? { bitrate: this.config.bitrate } : {}),
 			},
 			audio: this.config.audio,
-			...(this.config.restoreToken ? { restoreToken: this.config.restoreToken } : {}),
+			...(this.config.deferStart ? { deferStart: true } : {}),
 		};
 
 		const child = spawn(helperPath, [JSON.stringify(request)], {
@@ -131,6 +147,13 @@ export class LinuxNativeCaptureSession {
 			this.startedReject?.(new Error(reason));
 			this.startedReject = null;
 			this.startedResolve = null;
+			// A session held open across a countdown can die before it is armed —
+			// the user revoking the share from the compositor's indicator, or
+			// closing the window they picked. Whoever is waiting on the picker
+			// has to learn that rather than wait forever.
+			this.sourceSelectedReject?.(new Error(reason));
+			this.sourceSelectedReject = null;
+			this.sourceSelectedResolve = null;
 			// A clean exit after `capture-stopped` is the normal path; anything
 			// else means the file may not have its trailer.
 			if (this.stopped) {
@@ -158,6 +181,44 @@ export class LinuxNativeCaptureSession {
 			this.kill();
 			throw error;
 		}
+	}
+
+	/**
+	 * Resolves once the user has answered the compositor's picker.
+	 *
+	 * No timeout, for the same reason as [`waitUntilCapturing`]: a human is
+	 * reading a dialog and there is no upper bound on that. Resolves immediately
+	 * if the answer already arrived, so callers need not race the event.
+	 *
+	 * A session started WITHOUT `deferStart` still reports this — it simply
+	 * arrives moments before capture rather than being waited on.
+	 */
+	waitUntilSourceSelected(): Promise<void> {
+		if (this.sourceSelected) {
+			return Promise.resolve();
+		}
+		if (!this.process) {
+			return Promise.reject(new Error("The Linux capture helper is not running."));
+		}
+		return new Promise<void>((resolve, reject) => {
+			this.sourceSelectedResolve = resolve;
+			this.sourceSelectedReject = reject;
+		});
+	}
+
+	/**
+	 * Releases a deferred session: connect to PipeWire and start encoding.
+	 *
+	 * Safe to call on a session that was not deferred (the helper ignores the
+	 * verb) and safe to call twice, so a caller never has to track whether a
+	 * prepare happened.
+	 */
+	arm() {
+		if (this.armed) {
+			return;
+		}
+		this.armed = true;
+		this.write("record");
 	}
 
 	/**
@@ -192,6 +253,18 @@ export class LinuxNativeCaptureSession {
 
 	get isPaused() {
 		return this.paused;
+	}
+
+	/**
+	 * What the portal granted. Known from `stream-started`, so it is populated by
+	 * the time [`waitUntilCapturing`] resolves.
+	 *
+	 * `undefined` means the backend did not report a kind — which is NOT the same
+	 * as "a screen", and callers must not collapse the two. Guessing is what this
+	 * whole field exists to stop.
+	 */
+	get grantedSourceKind(): LinuxCaptureSourceKind | undefined {
+		return this.sourceKind;
 	}
 
 	/**
@@ -283,13 +356,36 @@ export class LinuxNativeCaptureSession {
 				this.resolveReady();
 				return;
 
-			case "stream-started":
-				if (payload.restoreToken) {
-					this.restoreToken = payload.restoreToken;
+			case "source-selected":
+				if (payload.sourceKind) {
+					this.sourceKind = payload.sourceKind;
 				}
+				this.sourceSelected = true;
+				console.info(
+					"[capture-linux] source selected",
+					JSON.stringify({ sourceKind: payload.sourceKind ?? null }),
+				);
+				this.sourceSelectedResolve?.();
+				this.sourceSelectedResolve = null;
+				this.sourceSelectedReject = null;
+				return;
+
+			case "stream-started":
+				if (payload.sourceKind) {
+					this.sourceKind = payload.sourceKind;
+				}
+				// The source kind is logged unconditionally for the same reason
+				// as the audio node: when someone reports "I picked a window and
+				// got my whole screen", this line is the answer, and it is the
+				// only place the truth appears — the app cannot name a source
+				// when asking the portal, so nothing upstream knows it.
 				console.info(
 					"[capture-linux] portal stream started",
-					JSON.stringify({ width: payload.width, height: payload.height }),
+					JSON.stringify({
+						width: payload.width,
+						height: payload.height,
+						sourceKind: payload.sourceKind ?? null,
+					}),
 				);
 				return;
 
@@ -346,7 +442,7 @@ export class LinuxNativeCaptureSession {
 					frames: payload.frames,
 					droppedFrames: payload.dropped,
 					cursor: this.cursor.toRecordingData(),
-					...(this.restoreToken ? { restoreToken: this.restoreToken } : {}),
+					...(this.sourceKind ? { sourceKind: this.sourceKind } : {}),
 					...(this.videoEncoder ? { videoEncoder: this.videoEncoder } : {}),
 				};
 				console.info(
@@ -372,6 +468,9 @@ export class LinuxNativeCaptureSession {
 				// than just the exit code, which on its own says nothing useful.
 				this.lastError = payload.message;
 				this.rejectReady(new Error(payload.message));
+				this.sourceSelectedReject?.(new Error(payload.message));
+				this.sourceSelectedReject = null;
+				this.sourceSelectedResolve = null;
 				return;
 
 			case "debug":

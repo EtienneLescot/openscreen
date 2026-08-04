@@ -17,6 +17,7 @@ import {
 	TerminalSquare,
 } from "lucide-react";
 
+import { jsonLd, softwareApplicationLd } from "../lib/structured-data";
 import styles from "./index.module.css";
 
 // Static decorative waveform bars for the "multi-track editor" bento card —
@@ -25,42 +26,6 @@ import styles from "./index.module.css";
 const MINI_WAVEFORM_A = [30, 55, 80, 45, 65, 90, 50, 35, 70, 60, 40, 75, 55, 30];
 const MINI_WAVEFORM_B = [45, 65, 35, 85, 55, 40, 70, 90, 50, 30, 60, 75, 45, 65, 35, 55];
 
-// The product entity, distinct from the Organization/WebSite pair in
-// docusaurus.config.ts. `offers` at price 0 is what lets a result carry a
-// "Free" annotation; omitting it on a free app just forfeits the label.
-const SOFTWARE_APPLICATION_LD = {
-	"@context": "https://schema.org",
-	"@type": "SoftwareApplication",
-	"@id": "https://getopenscreen.com/#software",
-	name: "OpenScreen",
-	applicationCategory: "MultimediaApplication",
-	applicationSubCategory: "Screen Recorder",
-	operatingSystem: "Windows, macOS, Linux",
-	description:
-		"Free, open-source screen recorder and video editor. Native capture on macOS and Windows, multi-track timeline editing, on-device Whisper captions, and MP4/GIF export — no watermarks, no subscription, no account.",
-	url: "https://getopenscreen.com",
-	// Our own page rather than the Releases list: it is the URL we want ranking
-	// for "openscreen download", and it routes to GitHub from there anyway.
-	downloadUrl: "https://getopenscreen.com/download/",
-	installUrl: "https://github.com/getopenscreen/openscreen/releases",
-	softwareHelp: "https://getopenscreen.com/docs/intro/",
-	license: "https://github.com/getopenscreen/openscreen/blob/main/LICENSE",
-	isAccessibleForFree: true,
-	offers: {
-		"@type": "Offer",
-		price: "0",
-		priceCurrency: "USD",
-	},
-	featureList: [
-		"Native screen capture (ScreenCaptureKit, Windows Graphics Capture)",
-		"Multi-track timeline editing with zoom, trim, and speed regions",
-		"On-device Whisper transcription and burned-in captions",
-		"Webcam picture-in-picture and cursor smoothing",
-		"MP4 (H.264/H.265) and animated GIF export",
-	],
-	publisher: { "@id": "https://getopenscreen.com/#organization" },
-};
-
 export default function Home() {
 	return (
 		<Layout
@@ -68,7 +33,9 @@ export default function Home() {
 			description="OpenScreen is a free, open-source screen recorder and video editor for Windows, macOS, and Linux — native capture, on-device captions, no watermarks."
 		>
 			<Head>
-				<script type="application/ld+json">{JSON.stringify(SOFTWARE_APPLICATION_LD)}</script>
+				{/* The product entity, distinct from the Organization/WebSite pair
+				    emitted site-wide from docusaurus.config.ts. */}
+				<script type="application/ld+json">{jsonLd(softwareApplicationLd())}</script>
 			</Head>
 			<header className={styles.hero}>
 				<div className={styles.heroInner}>

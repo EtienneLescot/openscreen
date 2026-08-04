@@ -43,7 +43,8 @@
 		"permissionDenied": "錄影權限被拒絕。請允許螢幕錄製。",
 		"cameraDisconnected": "網路攝影機已中斷連線。",
 		"cameraNotFound": "找不到攝影機。",
-		"accessibilityAllowAndRetry": "允許 OpenScreen 使用輔助使用權限，然後再次按下錄製以開始倒數。"
+		"accessibilityAllowAndRetry": "允許 OpenScreen 使用輔助使用權限，然後再次按下錄製以開始倒數。",
+		"selectSource": "請選擇要錄製的來源"
 	},
 	"emptyState": {
 		"title": "未開啟任何專案",
@@ -98,6 +99,7 @@
 	},
 	"rec": {
 		"source": "來源",
+		"systemPicker": "系統將詢問要分享的內容",
 		"systemAudio": "系統音訊",
 		"microphone": "麥克風",
 		"camera": "攝影機",
@@ -140,6 +142,7 @@
 		"transcriptEmpty": "逐字稿為空。",
 		"notGeneratedHint": "尚未產生 — 選擇語言並點擊重新產生。",
 		"transcribing": "轉錄中",
+		"downloadingModel": "正在下載語音模型",
 		"transcribingEllipsis": "轉錄中…",
 		"pendingTranscription": "等待轉錄",
 		"transcriptionFailed": "轉錄失敗",
@@ -150,7 +153,10 @@
 		"generationFailedHint": "產生失敗 — 選擇語言並重新產生。",
 		"noPreviewAvailable": "無法預覽",
 		"restart": "重新開始",
-		"detectedLanguage": "偵測到的語言：{{language}}"
+		"detectedLanguage": "偵測到的語言：{{language}}",
+		"noAudioTrack": "無音訊軌道",
+		"noAudioTrackHint": "此媒體沒有音訊軌道，沒有可轉錄的內容。",
+		"noSpeechDetected": "未偵測到語音"
 	},
 	"exportDialog": {
 		"title": "匯出",

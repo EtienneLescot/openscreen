@@ -71,7 +71,7 @@
 		"timelineTools": "Công cụ dòng thời gian",
 		"arrangeClips": "Sắp xếp clip",
 		"arrangeClipsHint": "Kéo các clip bên dưới để sắp xếp lại hoặc thả clip mới vào",
-		"newAnnotation": "Chú thích mới",
+		"newAnnotation": "Chú thích",
 		"dragToReorderHint": "Kéo để sắp xếp lại · nhấp đúp để chỉnh sửa điểm vào/ra",
 		"editInOutPoints": "Chỉnh sửa điểm vào/ra",
 		"deleteClip": "Xóa clip",
@@ -82,6 +82,11 @@
 		"addedAutoZoom": "Đã thêm {{count}} thu phóng tự động",
 		"addedAutoZoomPlural": "Đã thêm {{count}} thu phóng tự động",
 		"autoZoomFailed": "Thu phóng tự động thất bại",
-		"aiEnhanceRequested": "Đã yêu cầu tác nhân AI cắt thời gian chết"
+		"aiEnhanceRequested": "Đã yêu cầu tác nhân AI cắt thời gian chết",
+		"smartCutsWaiting": "Đang phiên âm… sẵn sàng trong giây lát",
+		"smartCutsNeedsTranscript": "Cần có bản phiên âm",
+		"smartCutsNoAudio": "Media này không có âm thanh",
+		"smartCutsNoSpeech": "Không phát hiện giọng nói",
+		"smartCutsFailed": "Phiên âm thất bại — thử lại trong Media"
 	}
 }

@@ -83,7 +83,6 @@ export function applyCompaction(
 	summary: string,
 	summaryAt: string,
 ): AiEditionChatMessage[] {
-	const head = messages.slice(0, splitIndex);
 	const tail = messages.slice(splitIndex);
 	const summaryMessage: AiEditionChatMessage = {
 		id: `summary_${Date.now()}`,
@@ -91,7 +90,15 @@ export function applyCompaction(
 		content: summary,
 		createdAt: summaryAt,
 	};
-	return [...head, summaryMessage, ...tail];
+	return [summaryMessage, ...tail];
+}
+
+/** True only when a proposed compaction strictly reduces estimated context use. */
+export function compactionReducesHistory(
+	original: AiEditionChatMessage[],
+	compacted: AiEditionChatMessage[],
+): boolean {
+	return estimateHistoryTokens(compacted) < estimateHistoryTokens(original);
 }
 
 /** System-prompt addendum to ask the LLM to compact its own history. */

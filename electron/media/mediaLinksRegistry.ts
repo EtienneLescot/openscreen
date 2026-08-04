@@ -227,6 +227,63 @@ export interface MediaLinksLookup {
 	cursorCaptureMode?: CursorCaptureMode;
 }
 
+export interface RelocatedMediaLookup extends MediaLinksLookup {
+	screenVideoPath: string;
+}
+
+function portableBasename(filePath: string): string {
+	return filePath.split(/[\\/]/).filter(Boolean).pop() ?? "";
+}
+
+/**
+ * Resolves a stored media path that no longer exists on this machine through
+ * the registry's last-known path. This is intentionally stricter than a plain
+ * basename lookup: `sizeBytes` — the size the project recorded for that file —
+ * must match the registered fingerprint, the candidate on disk must still match
+ * that fingerprint size, and ambiguous matches are rejected rather than guessing
+ * at the user's media.
+ *
+ * `sizeBytes` is not optional on purpose. A name-only match is worthless as a
+ * safety check — `recording.mp4` is the least distinctive name a screen recorder
+ * can produce — and repointing a project at unrelated footage (plus whatever
+ * webcam that footage was recorded with) is worse than leaving it visibly
+ * broken. A caller that has no recorded size has nothing to match on and must
+ * not relink at all.
+ */
+export async function findRelocatedMediaByStoredPath(
+	baseDir: string,
+	stalePath: string,
+	sizeBytes: number,
+): Promise<RelocatedMediaLookup | null> {
+	const basename = portableBasename(stalePath).toLowerCase();
+	if (!basename) return null;
+	if (!Number.isFinite(sizeBytes) || sizeBytes < 0) return null;
+
+	const registry = await readRegistry(baseDir);
+	const matches: MediaLinkEntry[] = [];
+
+	for (const entry of registry.entries) {
+		if (portableBasename(entry.lastKnownPath).toLowerCase() !== basename) continue;
+		if (entry.fingerprint.sizeBytes !== sizeBytes) continue;
+		try {
+			const current = await fs.stat(entry.lastKnownPath);
+			if (current.isFile() && current.size === entry.fingerprint.sizeBytes) matches.push(entry);
+		} catch {
+			// A stale registry entry is not a usable relocation candidate.
+		}
+	}
+
+	if (matches.length !== 1) return null;
+	const match = matches[0];
+	return {
+		screenVideoPath: match.lastKnownPath,
+		...(match.webcamVideoPath ? { webcamVideoPath: match.webcamVideoPath } : {}),
+		...(typeof match.webcamOffsetMs === "number" ? { webcamOffsetMs: match.webcamOffsetMs } : {}),
+		...(match.cursorTelemetryPath ? { cursorTelemetryPath: match.cursorTelemetryPath } : {}),
+		...(match.cursorCaptureMode ? { cursorCaptureMode: match.cursorCaptureMode } : {}),
+	};
+}
+
 /**
  * Looks up `videoPath` in the registry by content fingerprint — used as the
  * fallback when the file has no (or a stale) sidecar sitting next to it,

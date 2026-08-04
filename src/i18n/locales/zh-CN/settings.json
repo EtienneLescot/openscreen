@@ -255,7 +255,8 @@
 		"silence": "[静音 {{duration}} 秒]",
 		"restoreSilence": "恢复静音（{{duration}} 秒）",
 		"trimSilence": "修剪静音（{{duration}} 秒）",
-		"restoreWord": "恢复“{{word}}”"
+		"restoreWord": "恢复“{{word}}”",
+		"noAudio": "此媒体没有音频轨道"
 	},
 	"captions": {
 		"show": "显示字幕",

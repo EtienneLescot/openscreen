@@ -71,7 +71,7 @@
 		"timelineTools": "タイムラインツール",
 		"arrangeClips": "クリップを配置",
 		"arrangeClipsHint": "下のクリップをドラッグして並べ替えるか、新しいクリップをドロップします",
-		"newAnnotation": "新しい注釈",
+		"newAnnotation": "注釈",
 		"dragToReorderHint": "ドラッグして並べ替え・ダブルクリックでイン/アウトポイントを編集",
 		"editInOutPoints": "イン/アウトポイントを編集",
 		"deleteClip": "クリップを削除",
@@ -82,6 +82,11 @@
 		"addedAutoZoom": "自動ズームを {{count}} 件追加しました",
 		"addedAutoZoomPlural": "自動ズームを {{count}} 件追加しました",
 		"autoZoomFailed": "自動ズームに失敗しました",
-		"aiEnhanceRequested": "AIエージェントに無音部分のカットを依頼しました"
+		"aiEnhanceRequested": "AIエージェントに無音部分のカットを依頼しました",
+		"smartCutsWaiting": "文字起こし中… まもなく使えます",
+		"smartCutsNeedsTranscript": "文字起こしが必要です",
+		"smartCutsNoAudio": "このメディアには音声がありません",
+		"smartCutsNoSpeech": "音声が検出されませんでした",
+		"smartCutsFailed": "文字起こしに失敗しました — メディアから再試行してください"
 	}
 }

@@ -43,7 +43,8 @@
 		"cameraDisconnected": "تم فصل كاميرا الويب.",
 		"cameraNotFound": "لم يتم العثور على كاميرا.",
 		"permissionDenied": "تم رفض إذن التسجيل. يرجى السماح بتسجيل الشاشة.",
-		"accessibilityAllowAndRetry": "اسمح بوصول تسهيلات الاستخدام لـ OpenScreen، ثم اضغط على التسجيل مرة أخرى لبدء العد التنازلي."
+		"accessibilityAllowAndRetry": "اسمح بوصول تسهيلات الاستخدام لـ OpenScreen، ثم اضغط على التسجيل مرة أخرى لبدء العد التنازلي.",
+		"selectSource": "يرجى تحديد مصدر للتسجيل"
 	},
 	"emptyState": {
 		"title": "لا يوجد مشروع مفتوح",
@@ -98,6 +99,7 @@
 	},
 	"rec": {
 		"source": "المصدر",
+		"systemPicker": "سيسألك النظام عمّا تريد مشاركته",
 		"systemAudio": "صوت النظام",
 		"microphone": "الميكروفون",
 		"camera": "الكاميرا",
@@ -140,6 +142,7 @@
 		"transcriptEmpty": "النص فارغ.",
 		"notGeneratedHint": "لم يُنشأ بعد — اختر لغة وانقر على إعادة الإنشاء.",
 		"transcribing": "جارٍ النسخ",
+		"downloadingModel": "جارٍ تنزيل نموذج الكلام",
 		"transcribingEllipsis": "جارٍ النسخ…",
 		"pendingTranscription": "بانتظار النسخ",
 		"transcriptionFailed": "فشل النسخ",
@@ -150,7 +153,10 @@
 		"generationFailedHint": "فشل الإنشاء — اختر لغة وأعد الإنشاء.",
 		"noPreviewAvailable": "لا تتوفر معاينة",
 		"restart": "إعادة التشغيل",
-		"detectedLanguage": "اللغة المكتشفة: {{language}}"
+		"detectedLanguage": "اللغة المكتشفة: {{language}}",
+		"noAudioTrack": "لا يوجد مسار صوتي",
+		"noAudioTrackHint": "لا يحتوي هذا الملف على مسار صوتي — لا يوجد ما يمكن نسخه.",
+		"noSpeechDetected": "لم يتم اكتشاف كلام"
 	},
 	"exportDialog": {
 		"title": "تصدير",

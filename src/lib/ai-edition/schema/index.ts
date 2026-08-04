@@ -124,6 +124,19 @@ export const cameraTrackSchema = z
 	.nullable()
 	.default(null);
 
+// Why a media can never be transcribed. Only the DETERMINISTIC verdicts live
+// here: a container with no audio track (a screen recording captured with no
+// mic and no system audio — the common case) fails identically on every
+// attempt, and re-deciding that costs a full audio extraction on each project
+// open. Transient failures (engine down, decode hiccup) are deliberately NOT
+// persistable and stay in the transcription store for the session, so the next
+// load retries them. See `src/lib/ai-edition/transcription/status.ts`.
+export const assetTranscriptionFailureSchema = z.object({
+	kind: z.enum(["no-audio", "unsupported-audio"]),
+	message: z.string().default(""),
+	at: isoDateSchema.optional(),
+});
+
 export const assetSchema = z.object({
 	id: z.string().min(1),
 	kind: z.literal("video"),
@@ -136,6 +149,9 @@ export const assetSchema = z.object({
 	sizeBytes: z.number().int().nonnegative().optional(),
 	video: assetVideoSchema.optional(),
 	audio: assetAudioSchema.optional(),
+	// Absent on every document written before auto-transcription; additive, so
+	// no schema-version bump (an older build simply drops the key on save).
+	transcriptionFailure: assetTranscriptionFailureSchema.nullish(),
 	cameraTrack: cameraTrackSchema,
 });
 
@@ -802,6 +818,7 @@ export type AxcutWord = z.infer<typeof wordSchema>;
 export type AxcutTranscriptSegment = z.infer<typeof transcriptSegmentSchema>;
 export type AxcutTranscript = z.infer<typeof transcriptSchema>;
 export type AxcutAsset = z.infer<typeof assetSchema>;
+export type AxcutAssetTranscriptionFailure = z.infer<typeof assetTranscriptionFailureSchema>;
 export type AxcutClip = z.infer<typeof clipSchema>;
 export type AxcutClipCropRegion = z.infer<typeof clipCropRegionSchema>;
 export type AxcutGap = z.infer<typeof gapSchema>;

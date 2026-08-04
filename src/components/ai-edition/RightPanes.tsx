@@ -9,6 +9,7 @@ import {
 	FileText,
 	HelpCircle,
 	Layout as LayoutIcon,
+	Loader2,
 	MousePointerClick,
 	Palette,
 	Sliders,
@@ -53,6 +54,7 @@ import {
 import { hasAnyClipWithCamera } from "@/lib/ai-edition/timeline/camera";
 import { formatMs } from "@/lib/ai-edition/timeline/format";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
+import type { TranscriptGateReason } from "@/lib/ai-edition/transcription/status";
 import { getAssetPath } from "@/lib/assetPath";
 import { supportsWebcamReactiveZoom } from "@/lib/compositeLayout";
 import { supportsCursorClickEffects } from "@/lib/cursor/cursorCapabilities";
@@ -523,25 +525,35 @@ export function TranscriptPane({
 	transcripts,
 	assets,
 	trimRanges,
-	busy,
+	busyAssetIds,
 	onSeek,
 	onAddTrimRange,
 	onRemoveTrimRange,
 	onTranscribe,
 	canTranscribe,
 	isTranscribing,
+	blocked,
 }: {
 	clips: AxcutClip[];
 	transcripts: AxcutTranscript[];
 	assets: AxcutAsset[];
 	trimRanges: AxcutTrimRange[];
-	busy: boolean;
+	/** Assets whose transcript is being (re)generated right now — their block is
+	 *  read-only while the run is in flight, since it is about to be replaced.
+	 *  PER ASSET on purpose: a timeline-wide flag made every other clip's word
+	 *  stream silently swallow Backspace and hover-bin clicks for the whole
+	 *  background pass, with nothing on screen to say why. */
+	busyAssetIds: readonly string[];
 	onSeek: (sec: number) => void;
 	onAddTrimRange: (target: TrimTarget, startSec: number, endSec: number, reason: string) => void;
 	onRemoveTrimRange: (trimId: string) => void;
 	onTranscribe: () => void;
 	canTranscribe: boolean;
 	isTranscribing: boolean;
+	/** Why no transcript can be had right now, resolved over the timeline's assets
+	 *  (`resolveTranscriptGate`). Silent media disable the button; anything else
+	 *  leaves it clickable. */
+	blocked?: { reason: TranscriptGateReason; message?: string };
 }) {
 	const ts = useScopedT("settings");
 	// Subscribed here, not passed down: the playhead is rewritten every animation
@@ -576,6 +588,9 @@ export function TranscriptPane({
 	const cueWordId = useMemo(() => findCueWordId(sections, cue), [sections, cue]);
 
 	const hasAnyTranscript = transcripts.length > 0;
+	// Only silence is a dead end: every other reason (a retryable failure, no
+	// engine, nothing attempted) leaves the button worth pressing.
+	const silentMedia = blocked?.reason === "no-audio";
 
 	if (clips.length === 0 || !hasAnyTranscript) {
 		return (
@@ -598,16 +613,26 @@ export function TranscriptPane({
 				>
 					<FileText size={28} style={{ color: "var(--dim)" }} />
 					<p style={{ font: "500 13px var(--font-body)", color: "var(--fg-2)" }}>
-						{clips.length === 0 ? ts("transcript.noClips") : ts("transcript.noTranscript")}
+						{clips.length === 0
+							? ts("transcript.noClips")
+							: isTranscribing
+								? ts("transcript.transcribing")
+								: silentMedia
+									? ts("transcript.noAudio")
+									: ts("transcript.noTranscript")}
 					</p>
 					<p style={{ font: "400 12px var(--font-body)", color: "var(--muted)", maxWidth: 260 }}>
-						{ts("transcript.whisperHint")}
+						{blocked?.reason === "failed" && blocked.message
+							? blocked.message
+							: ts("transcript.whisperHint")}
 					</p>
 					<button
 						type="button"
 						className={`${styles.btn} ${styles.btnPrimary}`}
 						onClick={onTranscribe}
-						disabled={!canTranscribe || isTranscribing}
+						// Nothing to retry on a media with no audio track: the run would
+						// fail on the same missing track every time.
+						disabled={!canTranscribe || isTranscribing || silentMedia}
 					>
 						{isTranscribing ? ts("transcript.transcribing") : ts("transcript.transcribeNow")}
 					</button>
@@ -627,7 +652,7 @@ export function TranscriptPane({
 						key={section.clip.id}
 						index={idx}
 						section={section}
-						busy={busy}
+						busy={busyAssetIds.includes(section.clip.assetId)}
 						cueWordId={cueWordId}
 						onSeek={onSeek}
 						onAddTrimRange={onAddTrimRange}
@@ -933,6 +958,23 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 						{ts("transcript.clipLabel", { index: index + 1 })} · {sourceRangeLabel}
 					</span>
 				</span>
+				{/* A block whose transcript is being regenerated is read-only — say it,
+				    rather than letting the word stream look live and drop the edits. */}
+				{busy ? (
+					<span
+						style={{
+							display: "inline-flex",
+							alignItems: "center",
+							gap: 5,
+							flexShrink: 0,
+							font: "500 11px/1 var(--font-body)",
+							color: "var(--accent)",
+						}}
+					>
+						<Loader2 size={12} className="animate-spin" />
+						{ts("transcript.transcribing")}
+					</span>
+				) : null}
 			</span>
 			{words.length === 0 ? (
 				<p
@@ -944,7 +986,7 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 						fontStyle: "italic",
 					}}
 				>
-					{ts("transcript.noClipTranscript")}
+					{busy ? ts("transcript.transcribing") : ts("transcript.noClipTranscript")}
 				</p>
 			) : (
 				<div
@@ -952,6 +994,8 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 					role="textbox"
 					tabIndex={0}
 					contentEditable={!busy}
+					aria-busy={busy}
+					aria-readonly={busy}
 					suppressContentEditableWarning
 					spellCheck={false}
 					aria-label={ts("transcript.editorAria", { filename })}
@@ -965,7 +1009,11 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 						font: "400 13px/1.65 var(--font-body)",
 						color: "var(--fg)",
 						textWrap: "pretty",
-						cursor: "text",
+						// Read-only while its transcript is being regenerated: the cursor
+						// and the wash are what stop it from reading as an editor that
+						// ignores you (see the `busy` note on TranscriptPane).
+						cursor: busy ? "progress" : "text",
+						opacity: busy ? 0.6 : 1,
 						outline: "none",
 						// no overflow on the per-clip editor — the
 						// parent paneBody (already overflow-y: auto) is the
@@ -994,7 +1042,22 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 // words (inside a skip range) render red+strikethrough with a hover bin.
 // `isCue` highlights the word the playback head is currently inside with
 // an accent underline (matches axcut's `word.transcript-word.cue` rule).
-function TranscriptWord({
+//
+// `memo` for the same reason as `TranscriptClipBlock`, one level down — and it
+// is the level that actually decides the cost. The block's memo assumes
+// `cueWordId` moves "a few times per second, not sixty", which holds for
+// playback at 1x and NOT for a scrub: dragging the playhead crosses many words
+// per frame, so `cueWordId` changes on essentially every frame and the block
+// re-renders. Without a memo here that meant re-rendering one component per
+// transcript word, every frame. Measured over a 40-frame scrub in jsdom:
+// 19.6 ms/frame at 100 words, 132.6 ms at 4501 (a real 30-minute recording) —
+// the cost was simply proportional to transcript length. With the memo only
+// the two words whose `isCue` actually flipped re-render.
+//
+// This holds because every other prop is referentially stable across a
+// playhead tick: `cw` comes from the memoised `sections`, `target` from a
+// `useMemo`, and both callbacks from `useCallback`s that do not depend on time.
+const TranscriptWord = memo(function TranscriptWord({
 	cw,
 	isCue,
 	target,
@@ -1150,7 +1213,7 @@ function TranscriptWord({
 			) : null}
 		</span>
 	);
-}
+});
 
 // ─── Caret / selection helpers ────────────────────────────────────
 // Ponytail port of axcut's findCollapsedDeletionWordId. The non-collapsed

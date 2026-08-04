@@ -4,8 +4,21 @@ import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
 import type { AxcutAsset } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import {
+	useAssetTranscriptions,
+	useTranscriptionStore,
+} from "@/lib/ai-edition/store/transcriptionStore";
 import { formatSeconds } from "@/lib/ai-edition/timeline/format";
+import type {
+	AssetTranscriptionStatus,
+	AssetTranscriptionView,
+} from "@/lib/ai-edition/transcription/status";
 import { formatBytes } from "@/utils/formatBytes";
+import {
+	TranscriptionProgressBar,
+	TranscriptionStatusDot,
+	useTranscriptionLabel,
+} from "../TranscriptionStatus";
 import styles from "./EditorShellV4.module.css";
 
 const ASSET_MIME = "application/x-axcut-asset";
@@ -20,17 +33,17 @@ function basename(path: string): string {
 	return path.split(/[\\/]/).pop() ?? path;
 }
 
-export function MediaStage({
-	assetStatuses,
-	onRegenerateAsset,
-}: {
-	assetStatuses?: Record<string, "pending" | "running" | "failed">;
-	onRegenerateAsset?: (assetId: string, language: string) => Promise<void>;
-}) {
+export function MediaStage() {
 	const t = useScopedT("editor");
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
 	const addAsset = useProjectStore((s) => s.addAsset);
+	// Transcripts are produced in the background as soon as a media lands here
+	// (see transcriptionStore) — this stage only reports where each one is at,
+	// and lets the user force a re-run in another language.
+	const transcriptions = useAssetTranscriptions();
+	const requestTranscription = useTranscriptionStore((s) => s.request);
+	const transcriptionLabel = useTranscriptionLabel();
 	const [query, setQuery] = useState("");
 	const [busy, setBusy] = useState(false);
 	const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -50,6 +63,11 @@ export function MediaStage({
 	const transcript = selected
 		? (document?.transcripts?.find((t) => t.assetId === selected.id) ?? null)
 		: null;
+	const selectedTranscription: AssetTranscriptionView = selected
+		? (transcriptions[selected.id] ?? { assetId: selected.id, status: "idle" })
+		: { assetId: "", status: "idle" };
+	const selectedBusy =
+		selectedTranscription.status === "running" || selectedTranscription.status === "queued";
 
 	const handleImport = async () => {
 		if (!projectId) {
@@ -95,7 +113,10 @@ export function MediaStage({
 							style={{ gridTemplateColumns: detailOpen ? "repeat(2,1fr)" : "repeat(3,1fr)" }}
 						>
 							{filtered.map((asset, i) => {
-								const status = assetStatuses?.[asset.id] ?? "idle";
+								const transcription = transcriptions[asset.id] ?? {
+									assetId: asset.id,
+									status: "idle" as AssetTranscriptionStatus,
+								};
 								return (
 									<button
 										type="button"
@@ -141,13 +162,7 @@ export function MediaStage({
 													<span className={styles.size}>{formatBytes(asset.sizeBytes)}</span>
 												</div>
 											</div>
-											{status === "running" ? (
-												<RotateCw
-													size={13}
-													className="animate-spin"
-													style={{ color: "var(--accent)", flexShrink: 0 }}
-												/>
-											) : null}
+											<TranscriptionStatusDot view={transcription} />
 										</div>
 									</button>
 								);
@@ -236,23 +251,69 @@ export function MediaStage({
 										gap: 6,
 										padding: "5px 10px 5px 8px",
 										borderRadius: 9999,
-										background: transcript ? "var(--success-soft)" : "var(--accent-soft)",
-										color: transcript ? "var(--success)" : "var(--accent)",
+										background:
+											selectedTranscription.status === "failed"
+												? "var(--danger-soft)"
+												: selectedTranscription.status === "ready"
+													? "var(--success-soft)"
+													: "var(--accent-soft)",
+										color:
+											selectedTranscription.status === "failed"
+												? "var(--danger)"
+												: selectedTranscription.status === "ready"
+													? "var(--success)"
+													: "var(--accent)",
 										fontSize: 11.5,
 										fontWeight: 600,
 									}}
 								>
+									<TranscriptionStatusDot view={selectedTranscription} size={5} />
+									{transcriptionLabel(selectedTranscription)}
+								</span>
+								{/* The language whisper resolved on the first chunk, which every later
+								    chunk was then pinned to. It had a pill in SourceTranscriptModal,
+								    but that lives under LeftPanel's `MediaPane` — and the only mount
+								    site is `<LeftPanel active="chat" />`, a literal, so it renders
+								    `ChatStripPanel` and nothing else. The value was reaching the
+								    document and being displayed nowhere. It belongs next to
+								    "Regenerate as" below in any case: that selector is the control
+								    you set BECAUSE of what was detected. */}
+								{transcript?.language && transcript.language !== "auto" ? (
 									<span
 										style={{
-											width: 5,
-											height: 5,
-											borderRadius: "50%",
-											background: transcript ? "var(--success)" : "var(--accent)",
+											display: "inline-flex",
+											alignItems: "center",
+											marginLeft: 8,
+											padding: "5px 10px",
+											borderRadius: 9999,
+											background: "var(--success-soft)",
+											color: "var(--success)",
+											fontSize: 11.5,
+											fontWeight: 600,
 										}}
-									/>
-									{transcript ? t("mediaStage.transcriptReady") : t("mediaStage.notGeneratedYet")}
-								</span>
+									>
+										{t("mediaStage.detectedLanguage", { language: transcript.language })}
+									</span>
+								) : null}
 							</div>
+
+							{/* Renders itself away — spacing included — unless the run reports progress. */}
+							<TranscriptionProgressBar view={selectedTranscription} />
+
+							{selectedTranscription.failure ? (
+								<p
+									style={{
+										margin: "-8px 0 16px",
+										fontSize: 11.5,
+										lineHeight: 1.5,
+										color: "var(--muted)",
+									}}
+								>
+									{selectedTranscription.failure.kind === "error"
+										? selectedTranscription.failure.message
+										: t("mediaStage.noAudioTrackHint")}
+								</p>
+							) : null}
 
 							<div style={{ marginBottom: 12 }}>
 								<div
@@ -292,10 +353,8 @@ export function MediaStage({
 										type="button"
 										title={t("mediaStage.regenerate")}
 										aria-label={t("mediaStage.regenerate")}
-										disabled={!onRegenerateAsset || assetStatuses?.[selected.id] === "running"}
-										onClick={() => {
-											if (onRegenerateAsset) void onRegenerateAsset(selected.id, lang);
-										}}
+										disabled={selectedBusy}
+										onClick={() => void requestTranscription(selected.id, lang)}
 										style={{
 											width: 36,
 											height: 36,
@@ -306,10 +365,11 @@ export function MediaStage({
 											color: "var(--fg-2)",
 											background: "var(--surface-2)",
 											border: "1px solid var(--border)",
-											cursor: "pointer",
+											cursor: selectedBusy ? "not-allowed" : "pointer",
+											opacity: selectedBusy ? 0.6 : 1,
 										}}
 									>
-										<RotateCw size={14} />
+										<RotateCw size={14} className={selectedBusy ? "animate-spin" : undefined} />
 									</button>
 								</div>
 							</div>
@@ -332,7 +392,13 @@ export function MediaStage({
 										.map((seg) => (seg as { text?: string }).text ?? "")
 										.join(" ") || t("mediaStage.transcriptEmpty")
 								) : (
-									<span style={{ color: "var(--muted)" }}>{t("mediaStage.notGeneratedHint")}</span>
+									<span style={{ color: "var(--muted)" }}>
+										{selectedBusy
+											? t("mediaStage.transcribingEllipsis")
+											: selectedTranscription.status === "failed"
+												? t("mediaStage.generationFailedHint")
+												: t("mediaStage.notGeneratedHint")}
+									</span>
 								)}
 							</div>
 						</div>

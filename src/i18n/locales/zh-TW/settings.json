@@ -256,7 +256,8 @@
 		"silence": "[靜音 {{duration}} 秒]",
 		"restoreSilence": "還原靜音（{{duration}} 秒）",
 		"trimSilence": "修剪靜音（{{duration}} 秒）",
-		"restoreWord": "還原「{{word}}」"
+		"restoreWord": "還原「{{word}}」",
+		"noAudio": "此媒體沒有音訊軌道"
 	},
 	"captions": {
 		"show": "顯示字幕",

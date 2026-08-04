@@ -935,7 +935,12 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 			trimRanges: document.timeline.trimRanges.filter((t) => t.clipId !== clipId),
 		},
 	};
-	return oldClips.length > 0 && newClips.length > 0 ? rederiveRegionMs(next, newClips) : next;
+	const withoutRemovedRegions = mapAllRegionCollections(next, (regions) =>
+		regions.filter((region) => region.clipId !== clipId),
+	);
+	return newClips.length > 0
+		? rederiveRegionMs(withoutRemovedRegions, newClips)
+		: withoutRemovedRegions;
 }
 
 export function restoreFullTimeline(document: AxcutDocument): AxcutDocument {

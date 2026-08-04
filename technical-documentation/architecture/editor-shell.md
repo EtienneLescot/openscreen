@@ -129,10 +129,23 @@ switches on it is checked below. Each path has been verified on this branch.
    (`document/timeline.ts:591`) for batch / single deletes.
 4. **Lane in `V4Timeline`** — `src/components/ai-edition/v4/V4Timeline.tsx`.
    Compute the pills at the same call site as the four existing lanes
-   (`coalesceRegionsForRuler(tl.xxxRegions).map(...)` near `:321-347`), render
+   (`coalesceRegionsForRuler(tl.xxxRegions).map(...)` near `:463-511`), render
    them through `renderPills` inside a `<div className={styles.tlLane}>`
-   block (`:1244-1252`), and extend the `kind` union at `:203` so drag,
+   block (`:1504-1512`), and extend the `kind` union at `:334` so drag,
    resize, and delete handler switches route correctly.
+
+   **Coordinates on the timeline canvas obey one rule**: position and size are
+   `pctOf(sec)` percentages of the whole timeline — pills, ruler ticks, playhead,
+   snap guide and clips all use it, which is what keeps them aligned when the
+   canvas is scaled by `1/navSpan` for zoom. Anything that must be a fixed
+   *screen* size (a minimum width, a grab handle, a snap radius, the gutter
+   between two clip cards) is expressed in **px**, converted through `pxPerSec`
+   where it needs to reach time. A percentage used as a screen constant is a
+   duration in disguise: it scales with the recording, so a `1.5%` minimum pill
+   width was a 27-second pill on a 30-minute project, and a flex `gap` used as a
+   clip separator displaced every clip after it. See `pillAffordance`,
+   `PILL_SNAP_PX` and `CLIP_GUTTER_PX`, and the invariants in
+   `V4Timeline.geometry.test.tsx`.
 5. **Inspector selection pane** — `src/components/ai-edition/v4/FloatingInspector.tsx`.
    The `SelectionPane` (`:444`) is the kind-switch site, not the facets; add
    an `if (selection.kind === "xxx") { ... }` branch alongside `:513, :612,

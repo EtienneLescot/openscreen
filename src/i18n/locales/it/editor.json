@@ -43,7 +43,8 @@
 		"cameraDisconnected": "Webcam disconnessa.",
 		"cameraNotFound": "Fotocamera non trovata.",
 		"permissionDenied": "Autorizzazione di registrazione negata. Consenti la registrazione dello schermo.",
-		"accessibilityAllowAndRetry": "Consenti l'accesso all'accessibilità per OpenScreen, poi premi di nuovo registra per avviare il conto alla rovescia."
+		"accessibilityAllowAndRetry": "Consenti l'accesso all'accessibilità per OpenScreen, poi premi di nuovo registra per avviare il conto alla rovescia.",
+		"selectSource": "Seleziona una sorgente da registrare"
 	},
 	"emptyState": {
 		"title": "Nessun progetto aperto",
@@ -98,6 +99,7 @@
 	},
 	"rec": {
 		"source": "Sorgente",
+		"systemPicker": "Il sistema ti chiederà cosa condividere",
 		"systemAudio": "Audio di sistema",
 		"microphone": "Microfono",
 		"camera": "Fotocamera",
@@ -140,6 +142,7 @@
 		"transcriptEmpty": "La trascrizione è vuota.",
 		"notGeneratedHint": "Non ancora generata — scegli una lingua e clicca su rigenera.",
 		"transcribing": "Trascrizione in corso",
+		"downloadingModel": "Download del modello vocale",
 		"transcribingEllipsis": "Trascrizione in corso…",
 		"pendingTranscription": "Trascrizione in attesa",
 		"transcriptionFailed": "Trascrizione non riuscita",
@@ -150,7 +153,10 @@
 		"generationFailedHint": "Generazione non riuscita — scegli una lingua e rigenera.",
 		"noPreviewAvailable": "Anteprima non disponibile",
 		"restart": "Riavvia",
-		"detectedLanguage": "Lingua rilevata: {{language}}"
+		"detectedLanguage": "Lingua rilevata: {{language}}",
+		"noAudioTrack": "Nessuna traccia audio",
+		"noAudioTrackHint": "Questo contenuto non ha una traccia audio: non c'è nulla da trascrivere.",
+		"noSpeechDetected": "Nessun parlato rilevato"
 	},
 	"exportDialog": {
 		"title": "Esporta",

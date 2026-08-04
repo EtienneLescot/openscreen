@@ -20,7 +20,16 @@
 			"bulletList": "Bullet list",
 			"numberedList": "Numbered list",
 			"blockquote": "Blockquote",
-			"codeBlock": "Code block"
+			"codeBlock": "Code block",
+			"play": "Start auto-scroll",
+			"pause": "Pause auto-scroll",
+			"speed": "Scroll speed",
+			"decreaseSpeed": "Decrease scroll speed",
+			"increaseSpeed": "Increase scroll speed",
+			"fontSize": "Font size",
+			"decreaseFontSize": "Decrease font size",
+			"increaseFontSize": "Increase font size",
+			"mirror": "Mirror horizontally"
 		}
 	},
 	"audio": {
@@ -60,6 +69,8 @@
 	},
 	"recording": {
 		"selectSource": "Please select a source to record",
+		"systemPicker": "Your system will ask what to share",
+		"inProgress": "Recording",
 		"saving": "Saving..."
 	},
 	"language": "Language",

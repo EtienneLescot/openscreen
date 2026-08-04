@@ -1444,6 +1444,8 @@ export interface SourceTranscriptModalProps extends BaseModalProps {
 	transcript: AxcutTranscript | null;
 	isTranscribing: boolean;
 	isFailed: boolean;
+	/** Why the last run produced nothing — "no audio track", or the engine's own message. */
+	failureMessage?: string;
 	onRegenerate: (language: TranscriptLanguage) => void;
 }
 
@@ -1456,6 +1458,7 @@ export function SourceTranscriptModal({
 	transcript,
 	isTranscribing,
 	isFailed,
+	failureMessage,
 	onRegenerate,
 }: SourceTranscriptModalProps) {
 	const t = useScopedT("editor");
@@ -1861,7 +1864,7 @@ export function SourceTranscriptModal({
 					}}
 				>
 					{isFailed
-						? t("mediaStage.generationFailedHint")
+						? (failureMessage ?? t("mediaStage.generationFailedHint"))
 						: isTranscribing
 							? t("mediaStage.transcribingEllipsis")
 							: t("mediaStage.notGeneratedHint")}

@@ -71,7 +71,7 @@
 		"timelineTools": "أدوات المخطط الزمني",
 		"arrangeClips": "ترتيب المقاطع",
 		"arrangeClipsHint": "اسحب المقاطع أدناه لإعادة ترتيبها أو إسقاط مقاطع جديدة",
-		"newAnnotation": "شرح جديد",
+		"newAnnotation": "شرح",
 		"dragToReorderHint": "اسحب لإعادة الترتيب · انقر نقرًا مزدوجًا لتعديل نقطتي البداية والنهاية",
 		"editInOutPoints": "تعديل نقطتي البداية والنهاية",
 		"deleteClip": "حذف المقطع",
@@ -82,6 +82,11 @@
 		"addedAutoZoom": "تمت إضافة {{count}} تكبير تلقائي",
 		"addedAutoZoomPlural": "تمت إضافة {{count}} تكبيرات تلقائية",
 		"autoZoomFailed": "فشل التكبير التلقائي",
-		"aiEnhanceRequested": "طُلب من وكيل الذكاء الاصطناعي قص الأوقات الميتة"
+		"aiEnhanceRequested": "طُلب من وكيل الذكاء الاصطناعي قص الأوقات الميتة",
+		"smartCutsWaiting": "جارٍ النسخ… سيكون جاهزًا بعد قليل",
+		"smartCutsNeedsTranscript": "يتطلب نصًا منسوخًا",
+		"smartCutsNoAudio": "لا يحتوي هذا الملف على صوت",
+		"smartCutsNoSpeech": "لم يتم اكتشاف كلام",
+		"smartCutsFailed": "فشل النسخ — أعد المحاولة من قسم الوسائط"
 	}
 }

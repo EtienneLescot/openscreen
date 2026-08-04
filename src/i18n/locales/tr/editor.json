@@ -35,7 +35,8 @@
 		"permissionDenied": "Kayıt izni reddedildi. Lütfen ekran kaydına izin verin.",
 		"cameraDisconnected": "Webcam bağlantısı kesildi.",
 		"cameraNotFound": "Kamera bulunamadı.",
-		"accessibilityAllowAndRetry": "OpenScreen için Erişilebilirlik erişimine izin verin, ardından geri sayımı başlatmak için tekrar kayda basın."
+		"accessibilityAllowAndRetry": "OpenScreen için Erişilebilirlik erişimine izin verin, ardından geri sayımı başlatmak için tekrar kayda basın.",
+		"selectSource": "Lütfen kayıt için bir kaynak seçin"
 	},
 	"loadingVideo": "Video yükleniyor...",
 	"loadingEditor": "Editör yükleniyor...",
@@ -98,6 +99,7 @@
 	},
 	"rec": {
 		"source": "Kaynak",
+		"systemPicker": "Sisteminiz neyi paylaşacağınızı soracak",
 		"systemAudio": "Sistem sesi",
 		"microphone": "Mikrofon",
 		"camera": "Kamera",
@@ -140,6 +142,7 @@
 		"transcriptEmpty": "Metin dökümü boş.",
 		"notGeneratedHint": "Henüz oluşturulmadı — bir dil seçin ve yeniden oluştur'a tıklayın.",
 		"transcribing": "Metne dökülüyor",
+		"downloadingModel": "Konuşma modeli indiriliyor",
 		"transcribingEllipsis": "Metne dökülüyor…",
 		"pendingTranscription": "Metne dökme bekliyor",
 		"transcriptionFailed": "Metne dökme başarısız oldu",
@@ -150,7 +153,10 @@
 		"generationFailedHint": "Oluşturma başarısız oldu — bir dil seçip yeniden oluşturun.",
 		"noPreviewAvailable": "Önizleme kullanılamıyor",
 		"restart": "Yeniden başlat",
-		"detectedLanguage": "Algılanan dil: {{language}}"
+		"detectedLanguage": "Algılanan dil: {{language}}",
+		"noAudioTrack": "Ses parçası yok",
+		"noAudioTrackHint": "Bu medyada ses parçası yok — metne dökülecek bir şey bulunmuyor.",
+		"noSpeechDetected": "Konuşma algılanmadı"
 	},
 	"exportDialog": {
 		"title": "Dışa Aktar",

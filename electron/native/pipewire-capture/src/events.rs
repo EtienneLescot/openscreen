@@ -49,6 +49,22 @@ pub enum Event {
         /// Whether the portal advertises METADATA cursor mode at all.
         cursor_metadata_supported: bool,
     },
+    /// The user has answered the compositor's picker and a source was granted.
+    ///
+    /// A DIFFERENT MOMENT from [`Self::StreamStarted`], and the distinction is
+    /// the point: this fires when the choice is made, before any pixel has moved.
+    /// It is what lets a caller run a countdown after the user has been asked
+    /// what to share rather than before — the picker's wait has no upper bound,
+    /// so a countdown started ahead of it just freezes on screen.
+    #[serde(rename_all = "camelCase")]
+    SourceSelected {
+        timestamp_ms: u64,
+        node_id: u32,
+        /// `"monitor"`, `"window"` or `"virtual"`, when the portal says.
+        source_kind: Option<String>,
+        position_x: Option<i32>,
+        position_y: Option<i32>,
+    },
     #[serde(rename_all = "camelCase")]
     StreamStarted {
         timestamp_ms: u64,
@@ -59,7 +75,12 @@ pub enum Event {
         /// space, when the portal reports one (monitor streams only).
         position_x: Option<i32>,
         position_y: Option<i32>,
-        restore_token: Option<String>,
+        /// `"monitor"`, `"window"` or `"virtual"` — what the compositor
+        /// actually handed over, straight from the portal's reply. Absent when
+        /// the backend omits it. This is the only honest answer to "what am I
+        /// recording?": the app cannot name a source when asking, so it can
+        /// only be told after the fact.
+        source_kind: Option<String>,
     },
     /// Cursor position in stream pixels. `width`/`height` repeat on every
     /// sample so a consumer never has to correlate with an earlier event to
@@ -263,11 +284,12 @@ mod tests {
             height: 1440,
             position_x: Some(0),
             position_y: Some(-1080),
-            restore_token: None,
+            source_kind: Some("window".to_owned()),
         });
         assert_eq!(value["event"], "stream-started");
         assert_eq!(value["nodeId"], 55);
         assert_eq!(value["positionY"], -1080);
+        assert_eq!(value["sourceKind"], "window");
     }
 
     #[test]

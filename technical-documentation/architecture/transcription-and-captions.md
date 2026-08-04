@@ -13,7 +13,9 @@ the transcript).
 
 ```mermaid
 flowchart LR
-    A["Recorded audio"] -- "extract mono 16 kHz" --> B["transcribeAsset<br/>(src/lib/ai-edition/document/transcribe.ts)"]
+    Z["Asset added<br/>(import or recording)"] -- "sync()" --> Y["transcriptionStore queue<br/>(src/lib/ai-edition/store/transcriptionStore.ts)"]
+    Y -- "one job at a time" --> A["Recorded audio"]
+    A -- "extract mono 16 kHz" --> B["transcribeAsset<br/>(src/lib/ai-edition/document/transcribe.ts)"]
     B -- "IPC: Float32Array + language" --> C["SttManager<br/>(electron/stt/index.ts)"]
     C -- "POST /inference (WAV)" --> D["whisper-stt-server<br/>(electron/native/whisper-stt/)"]
     D -- "whisper_full() + DTW" --> E["SttTranscribeResponse<br/>(segments + wordSegments)"]
@@ -32,6 +34,103 @@ audio crosses to the main process, the helper does the recognition, and the
 result is mapped back onto the `AxcutTranscript` shape the rest of the editor
 reads. From the moment that transcript is persisted, captions and the words
 they show cannot drift — captions are a derived view, not a parallel store.
+
+## Auto-transcription
+
+Recognition is local and free, so the editor does not wait to be asked: every
+asset in the document gets a transcript on its own. The queue lives in
+[`src/lib/ai-edition/store/transcriptionStore.ts`](../../src/lib/ai-edition/store/transcriptionStore.ts),
+mounted once by the shell through `useAutoTranscription()`, and it is the only
+thing that calls `transcribeAsset`.
+
+Why it exists at all: "Smart cuts with AI" (and captions, and the transcript
+pane) need a transcript, but nothing produced one until the user found the
+Media tab or the transcript pane and pressed a button. The obvious first click
+was therefore also the one that could not work. Now the button is either ready,
+or it says what it is waiting for.
+
+What the store owns and what it does not:
+
+- **The document owns the transcript.** `document.transcripts[]` is still the
+  source of truth for "is there one"; the store only owns the JOB (queued /
+  running / failed + the phase for the spinner). `deriveAssetStatus`
+  ([`transcription/status.ts`](../../src/lib/ai-edition/transcription/status.ts))
+  folds the two into the single status the UI renders, and
+  `resolveTranscriptGate` folds a set of those into the ready / pending /
+  blocked verdict that enables or disables a transcript-dependent action.
+  A stored transcript **outranks a failed job**: a regenerate that dies on a
+  whisper restart leaves the previous transcript in place and usable, and
+  reading that asset as "failed" would have disabled Smart cuts for the rest of
+  the session over a transcript sitting right there.
+- **Gates are resolved over the assets the TIMELINE plays**
+  (`transcriptRelevantAssetIds`), never over `project.primaryAssetId`. In a
+  recording project the primary asset is the screen capture — frequently the
+  silent one — so a primary-scoped answer had the transcript and captions panes
+  announce "this media has no audio track" for a project whose actual footage
+  was mid-transcription. `requestTimelineTranscripts` is the matching action for
+  the panes' one button: every timeline asset that still lacks a transcript,
+  skipping the ones already known to be silent and waiting on (rather than
+  duplicating) a run the background pass already has in flight.
+- **One run at a time.** whisper-server is a single process and the audio
+  extraction path holds decoded frames in renderer memory, so the pump is a
+  sequential loop, not a fan-out.
+- **The auto pass never loops.** `sync` enqueues an asset only when it has no
+  transcript, no job entry (queued / running / failed alike) and no persisted
+  failure, and a job is deleted only after the save that carries its transcript
+  has resolved. Since `sync` runs on every document change — including the one
+  the run itself produces — that guard is what keeps it from re-triggering.
+- **Silence is remembered, glitches are not.** A media with no audio track (a
+  screen recording captured with no mic and no system audio) fails the same way
+  every time, so the verdict is written to `asset.transcriptionFailure` and the
+  auto pass skips it on the next load instead of re-extracting its audio to
+  rediscover it. Everything else stays in memory for the session and is retried
+  on the next load. A successful manual retry clears the stored verdict in the
+  same save that writes the transcript.
+- **No local engine, no background pass.** Without `window.electronAPI.stt`
+  (browser preview, e2e shim) nothing is queued; a manual request still runs.
+
+What each state means in the UI: a spinner and "Transcribing…" while queued or
+running, the media-card dot green (ready) / amber (silent or no speech) / red
+(failed) via
+[`TranscriptionStatus.tsx`](../../src/components/ai-edition/TranscriptionStatus.tsx),
+and — the point of the whole thing — a disabled "Smart cuts" entry whose
+subtitle is the reason rather than "With AI".
+
+### One phase, including the first-run model download
+
+On a fresh install the GGML model (~253 MB) is not on disk. It is fetched by
+`SttManager.prepare()` **inside** the `stt:transcribe` IPC call — i.e. inside a
+run this store has already marked `running` — so the user sees one single busy
+phase that simply takes longer the first time. That is deliberate: no separate
+"downloading" step, no progress bar to stare at, and nothing that looks
+clickable in the meantime (`phase: "model"` is emitted by the main process but
+deliberately not forwarded to the renderer by `transcribeAsset`). Nothing in the
+renderer imposes a timeout that a slow download could trip: the preload does a
+bare `ipcRenderer.invoke`, `fetchWithRetry` has no per-request deadline, and
+whisper-server's 30 s readiness budget only starts once the download resolved.
+
+Three edges make that promise hold, and each is load-bearing:
+
+- **A failed setup is not cached.** `SttManager.init` used to memoise the
+  rejected `prepare()` promise, so one dropped connection during the first
+  download failed every later transcription in the session — including the retry
+  the editor offers — until the app was restarted. It now clears the slot on
+  failure ([`electron/stt/index.ts`](../../electron/stt/index.ts)).
+- **A transient failure stops the queue** instead of walking the remaining
+  assets into the same wall: they inherit the verdict (one toast, one retry
+  affordance) rather than each spending a full retry budget.
+- **Read-only is scoped per asset.** The transcript pane's blocks go read-only
+  only for the asset whose transcript is being rewritten, and say so (spinner +
+  "Transcribing…" + dimmed stream). A timeline-wide flag made every other
+  clip's word stream swallow Backspace and hover-bin clicks in silence for the
+  whole background pass.
+
+Still synchronous, and still on the main thread: `mixToMono`
+([`src/lib/captioning/extractMono16k.ts`](../../src/lib/captioning/extractMono16k.ts))
+now hoists its channel arrays out of the sample loop (it was making one WebIDL
+call per sample per channel), but a long recording will still block the renderer
+for a moment during "extracting-audio". Moving the mixdown to a worker is the
+next step if it shows up in practice.
 
 ## The STT engine
 
@@ -135,9 +234,20 @@ The single shipped artifact is `ggml-small-q8_0.bin` from
 `ggerganov/whisper.cpp` on HuggingFace: Whisper `small`, multilingual (~99
 languages), q8_0 quantised, ~264 MB. Precision is baked into the GGML file —
 there is no runtime `--int8` flag. `electron/stt/modelManager.ts` downloads
-the file once into the user-data cache, verifies its SHA-256, and writes it
-through an atomic `.partial` rename, so a half-downloaded file can never be
-picked up as a usable model.
+the file once into the user-data cache and writes it through an atomic
+`.partial` rename, so a half-downloaded file can never be picked up as a
+usable model. The SHA-256 is checked on the cached copy too, not only on a
+fresh download, so a model corrupted after the fact is re-fetched rather than
+handed to whisper.cpp. A cached copy that fails the check is left alone until
+a verified replacement has landed — the atomic rename displaces it — so a
+failed re-download never leaves a user with no model at all.
+
+The download URL resolves through an immutable commit revision rather than
+`resolve/main`. Because the cache is now verified on every start, a re-upload
+under the mutable branch pointer would invalidate every installed cache at
+once instead of merely breaking new installs; pinning makes the recorded
+digest an invariant. Bumping the model therefore means bumping the revision
+and the digest together.
 
 > The HuggingFace identifier is intentionally `ggerganov/whisper.cpp`,
 > **not** `ggml-org/whisper.cpp`. The latter matches the GitHub org the

@@ -71,7 +71,7 @@
 		"timelineTools": "时间轴工具",
 		"arrangeClips": "排列片段",
 		"arrangeClipsHint": "拖动下方片段以重新排序，或拖入新片段",
-		"newAnnotation": "新建标注",
+		"newAnnotation": "标注",
 		"dragToReorderHint": "拖动以重新排序 · 双击以编辑入点/出点",
 		"editInOutPoints": "编辑入点/出点",
 		"deleteClip": "删除片段",
@@ -82,6 +82,11 @@
 		"addedAutoZoom": "已添加 {{count}} 个自动缩放",
 		"addedAutoZoomPlural": "已添加 {{count}} 个自动缩放",
 		"autoZoomFailed": "自动缩放失败",
-		"aiEnhanceRequested": "已请求 AI 代理剪除空白片段"
+		"aiEnhanceRequested": "已请求 AI 代理剪除空白片段",
+		"smartCutsWaiting": "正在转录…稍后可用",
+		"smartCutsNeedsTranscript": "需要转录文本",
+		"smartCutsNoAudio": "此媒体没有音频",
+		"smartCutsNoSpeech": "未检测到语音",
+		"smartCutsFailed": "转录失败 — 请在“媒体”中重试"
 	}
 }

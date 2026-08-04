@@ -71,7 +71,7 @@
 		"timelineTools": "Ferramentas da linha do tempo",
 		"arrangeClips": "Organizar clipes",
 		"arrangeClipsHint": "Arraste os clipes abaixo para reordená-los ou solte novos",
-		"newAnnotation": "Nova anotação",
+		"newAnnotation": "Anotação",
 		"dragToReorderHint": "Arraste para reordenar · clique duas vezes para editar os pontos de entrada/saída",
 		"editInOutPoints": "Editar pontos de entrada/saída",
 		"deleteClip": "Excluir clipe",
@@ -82,6 +82,11 @@
 		"addedAutoZoom": "{{count}} zoom automático adicionado",
 		"addedAutoZoomPlural": "{{count}} zooms automáticos adicionados",
 		"autoZoomFailed": "Falha no zoom automático",
-		"aiEnhanceRequested": "Pedido ao agente de IA para cortar os tempos mortos"
+		"aiEnhanceRequested": "Pedido ao agente de IA para cortar os tempos mortos",
+		"smartCutsWaiting": "Transcrevendo… disponível em instantes",
+		"smartCutsNeedsTranscript": "Requer uma transcrição",
+		"smartCutsNoAudio": "Esta mídia não tem áudio",
+		"smartCutsNoSpeech": "Nenhuma fala detectada",
+		"smartCutsFailed": "Falha na transcrição — tente de novo em Mídia"
 	}
 }

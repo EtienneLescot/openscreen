@@ -12,12 +12,18 @@ import {
 	applyProbedDuration,
 	replaceTimeline as replaceTimelineOp,
 } from "@/lib/ai-edition/document/timeline";
-import { transcribeAsset } from "@/lib/ai-edition/document/transcribe";
 import { type AxcutClip, documentSchema } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import {
+	useAssetTranscriptions,
+	useAutoTranscription,
+	useTimelineTranscriptGate,
+	useTranscriptionStore,
+} from "@/lib/ai-edition/store/transcriptionStore";
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { newRegionDurationSec } from "@/lib/ai-edition/timeline/newRegionDuration";
 import { matchesShortcut } from "@/lib/shortcuts";
 import { nativeBridgeClient } from "@/native";
 import type { AiEditionProjectSummary } from "@/native/contracts";
@@ -86,7 +92,6 @@ export function NewEditorShell() {
 	const dirty = useProjectStore((s) => s.dirty);
 	const createProject = useProjectStore((s) => s.createProject);
 	const addAsset = useProjectStore((s) => s.addAsset);
-	const setTranscript = useProjectStore((s) => s.setTranscript);
 	const setCurrentTime = useProjectStore((s) => s.setCurrentTime);
 	const setSourceDuration = useProjectStore((s) => s.setSourceDuration);
 	const loadProject = useProjectStore((s) => s.loadProject);
@@ -99,10 +104,6 @@ export function NewEditorShell() {
 	const setPlaying = useProjectStore((s) => s.setPlaying);
 
 	const [seekTarget, setSeekTarget] = useState<SeekTarget | null>(null);
-	const [isTranscribing, setIsTranscribing] = useState(false);
-	const [assetStatuses, setAssetStatuses] = useState<
-		Record<string, "pending" | "running" | "failed">
-	>({});
 	const [videoElement, setVideoElement] = useState<HTMLVideoElement | null>(null);
 	// v4 shell: three modes (Media / Edit / Rec), a collapsible agent (chat)
 	// column, and a floating facet inspector over the stage.
@@ -129,6 +130,28 @@ export function NewEditorShell() {
 		resolve: (choice: UnsavedChoice) => void;
 	} | null>(null);
 	const { shortcuts, isMac, openConfig: openShortcutsConfig } = useShortcuts();
+	// Transcription is local and every transcript-driven feature (Smart cuts,
+	// captions, the transcript pane) needs one, so the editor produces them by
+	// itself instead of waiting for the user to find the button. This hook is
+	// the ONLY place the background pass is driven from — see transcriptionStore.
+	useAutoTranscription();
+	const requestTimelineTranscripts = useTranscriptionStore((s) => s.requestTimelineTranscripts);
+	// Resolved over the assets the TIMELINE plays, not over the primary asset: in
+	// a recording project the primary asset is the screen capture, which is
+	// routinely silent, and keying the transcript pane off it made the pane claim
+	// "no audio track" for a project whose actual footage was mid-transcription.
+	const transcriptGate = useTimelineTranscriptGate();
+	// Per asset, for the transcript pane: only the block whose transcript is
+	// actually being rewritten goes read-only. The gate answers "may a
+	// transcript-dependent ACTION run?", which is a different question.
+	const transcriptions = useAssetTranscriptions();
+	const busyAssetIds = useMemo(
+		() =>
+			Object.values(transcriptions)
+				.filter((v) => v.status === "running" || v.status === "queued")
+				.map((v) => v.assetId),
+		[transcriptions],
+	);
 	const tl = useTimeline();
 	useUndoRedoShortcuts(() => {
 		// ponytail: placeholder, wire when undo stack merges with history
@@ -473,70 +496,19 @@ export function NewEditorShell() {
 		handleTimeChange(next.timelineStartSec);
 	}, [clips, handleSeek, handleTimeChange]);
 
+	// "Transcribe now" from the transcript pane. The run itself belongs to the
+	// transcription store (it owns the queue, the toasts and the failure
+	// bookkeeping) — all the shell adds is bringing the transcript into view
+	// once it lands.
 	const handleTranscribe = useCallback(async () => {
-		if (!document || !document.project.primaryAssetId) return;
-		const assetId = document.project.primaryAssetId;
-		setIsTranscribing(true);
-		setAssetStatuses((prev) => ({ ...prev, [assetId]: "running" }));
-		try {
-			const transcript = await transcribeAsset(document, assetId, {
-				onStatus: (s) => toast.loading(`Transcribing: ${s}`, { id: "transcribe" }),
-			});
-			toast.dismiss("transcribe");
-			await setTranscript(transcript);
+		const before = useProjectStore.getState().document?.transcripts.length ?? 0;
+		await requestTimelineTranscripts();
+		if ((useProjectStore.getState().document?.transcripts.length ?? 0) > before) {
 			setMode("edit");
 			setFacet("transcript");
 			setInspectorOpen(true);
-			toast.success("Transcript ready");
-			setAssetStatuses((prev) => {
-				const next = { ...prev };
-				delete next[assetId];
-				return next;
-			});
-		} catch (err) {
-			toast.dismiss("transcribe");
-			toast.error("Transcription failed", {
-				description: err instanceof Error ? err.message : String(err),
-			});
-			setAssetStatuses((prev) => ({ ...prev, [assetId]: "failed" }));
-		} finally {
-			setIsTranscribing(false);
 		}
-	}, [document, setTranscript]);
-
-	// Per-asset regenerate fired from the Source Transcript modal. Same
-	// pipeline as `handleTranscribe` but takes any assetId + a target
-	// language — `transcribeAsset` already accepts `language` and `setTranscript`
-	// replaces the matching entry in `doc.transcripts`.
-	const handleRegenerateAsset = useCallback(
-		async (assetId: string, language: string) => {
-			const doc = useProjectStore.getState().document;
-			if (!doc) return;
-			setAssetStatuses((prev) => ({ ...prev, [assetId]: "running" }));
-			toast.loading(`Regenerating: ${language}`, { id: `regen-${assetId}` });
-			try {
-				const transcript = await transcribeAsset(doc, assetId, {
-					language,
-					onStatus: (s) => toast.loading(`Regenerating: ${s}`, { id: `regen-${assetId}` }),
-				});
-				await setTranscript(transcript);
-				setAssetStatuses((prev) => {
-					const next = { ...prev };
-					delete next[assetId];
-					return next;
-				});
-				toast.dismiss(`regen-${assetId}`);
-				toast.success("Transcript regenerated");
-			} catch (err) {
-				toast.dismiss(`regen-${assetId}`);
-				toast.error("Transcription failed", {
-					description: err instanceof Error ? err.message : String(err),
-				});
-				setAssetStatuses((prev) => ({ ...prev, [assetId]: "failed" }));
-			}
-		},
-		[setTranscript],
-	);
+	}, [requestTimelineTranscripts]);
 
 	const handleBrowseProject = useCallback(async () => {
 		try {
@@ -736,101 +708,108 @@ export function NewEditorShell() {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
 		const { pasteClipboard } = await import("@/lib/ai-edition/store/regionClipboard");
-		const clip = pasteClipboard();
-		if (!clip) return;
+		const snapshot = pasteClipboard();
+		if (!snapshot) return;
+
+		// A copied trim is just a length: recreate one of that length at the
+		// playhead, through the same call the toolbar's cut button uses (which
+		// resolves the timeline span down to the carrying clip's source time).
+		if (snapshot.kind === "trim") {
+			await tl.addTrim(snapshot.region.durationSec);
+			toast.success("Region pasted");
+			return;
+		}
+
+		const { anchorRegionsWithDerivedMs } = await import("@/lib/ai-edition/timeline/timelineMap");
+		const { createId } = await import("@/lib/ai-edition/document/ids");
+
+		// Land it at the playhead, keeping the copied length.
 		const timeMs = Math.round(useProjectStore.getState().currentTimeSec * 1000);
-		const region = { ...clip.region, id: crypto.randomUUID() };
-		if (clip.kind === "zoom") {
-			const zoom = region as unknown as (typeof doc.zoomRanges)[number];
-			const duration = zoom.endMs - zoom.startMs;
-			zoom.startMs = timeMs;
-			zoom.endMs = timeMs + duration;
-			await saveDocument({ ...doc, zoomRanges: [...doc.zoomRanges, zoom] });
-		} else if (clip.kind === "annotation") {
-			const annotation = region as unknown as (typeof doc.annotations)[number];
-			const duration = annotation.endMs - annotation.startMs;
-			annotation.startMs = timeMs;
-			annotation.endMs = timeMs + duration;
-			await saveDocument({ ...doc, annotations: [...doc.annotations, annotation] });
-		} else if (clip.kind === "speed") {
-			const speedRegions =
-				(doc.legacyEditor as { speedRegions?: Array<Record<string, unknown>> })?.speedRegions ?? [];
-			const speed = region as unknown as (typeof speedRegions)[number];
-			const duration = Number(speed.endMs) - Number(speed.startMs);
-			speed.startMs = timeMs;
-			speed.endMs = timeMs + duration;
+		const src = snapshot.region as { startMs: number; endMs: number };
+		const prefix = snapshot.kind === "annotation" ? "ann" : snapshot.kind;
+		const pasted = {
+			...snapshot.region,
+			id: createId(prefix),
+			startMs: timeMs,
+			endMs: timeMs + (Number(src.endMs) - Number(src.startMs)),
+		};
+		// Anchor to the clip(s) it covers, exactly like every add* does. Pasting
+		// used to store a bare startMs/endMs, so the region survived until the
+		// first clip reorder or trim and then drifted off its content — see
+		// technical-documentation/architecture/timeline-model.md.
+		const anchored = anchorRegionsWithDerivedMs(
+			[pasted as unknown as { id: string; startMs: number; endMs: number }],
+			doc.timeline.clips,
+			() => createId(prefix),
+		);
+
+		if (snapshot.kind === "zoom") {
 			await saveDocument({
 				...doc,
-				legacyEditor: {
-					...doc.legacyEditor,
-					speedRegions: [...speedRegions, speed],
-				},
+				zoomRanges: [...doc.zoomRanges, ...anchored] as typeof doc.zoomRanges,
+			});
+		} else if (snapshot.kind === "annotation") {
+			await saveDocument({
+				...doc,
+				annotations: [...doc.annotations, ...anchored] as typeof doc.annotations,
+			});
+		} else {
+			// speed and cameraFullscreen are both plain spans on legacyEditor.
+			const key = snapshot.kind === "speed" ? "speedRegions" : "cameraFullscreenRegions";
+			const legacy = (doc.legacyEditor as Record<string, unknown>) ?? {};
+			const prev = (legacy[key] as unknown[]) ?? [];
+			await saveDocument({
+				...doc,
+				legacyEditor: { ...legacy, [key]: [...prev, ...anchored] },
 			});
 		}
 		toast.success("Region pasted");
-	}, [saveDocument]);
+		// `tl` belongs here now that the trim branch calls tl.addTrim: useTimeline
+		// returns a fresh object each render, so memoizing on saveDocument alone
+		// would paste through a callback holding a stale document.
+	}, [saveDocument, tl]);
 
+	// Copy the SELECTED pill. Reads the same arrays the lanes render, so what gets
+	// copied is what the user is looking at — the old version dug into the raw
+	// document with a ternary chain that mapped a trim to "zoom" and sent
+	// cameraFullscreen down the speed branch, where neither could ever be found.
 	const handleCopyRegion = useCallback(async () => {
-		const doc = useProjectStore.getState().document;
-		if (!doc || !tl.selection) return;
+		const sel = tl.selection;
+		if (!sel) return;
 		const { copyRegion } = await import("@/lib/ai-edition/store/regionClipboard");
-		const region =
-			tl.selection.kind === "zoom"
-				? doc.zoomRanges.find((z) => z.id === tl.selection?.id)
-				: tl.selection.kind === "annotation"
-					? (doc.annotations as unknown[]).find(
-							(a) => (a as { id: string }).id === tl.selection?.id,
-						)
-					: ((doc.legacyEditor as { speedRegions?: unknown[] } | null)?.speedRegions ?? []).find(
-							(s) => (s as { id: string }).id === tl.selection?.id,
-						);
-		if (region) {
-			copyRegion({
-				kind: tl.selection.kind === "trim" ? "zoom" : tl.selection.kind,
-				region: region as Record<string, unknown>,
-			});
-			toast.success("Region copied");
-		}
-	}, [tl]);
 
-	// Captions are derived from the transcript, so the only caption "action" the
-	// shell still owns is producing that transcript — everything else (styling,
-	// placement, language) is a setting the Captions pane writes directly.
-	const handleTranscribeForCaptions = useCallback(async () => {
-		const doc = useProjectStore.getState().document;
-		if (!doc) return;
-		const assetId = doc.project.primaryAssetId;
-		if (!assetId) {
-			toast.info("Add a video to the project before transcribing.");
+		// A trim is stored in SOURCE time against a clip anchor, so there is no
+		// row to clone — but there is nothing to clone either: what the user means
+		// by copying a cut is its LENGTH. Paste then makes a fresh trim of that
+		// length at the playhead, which is the same deal every other kind gets
+		// (properties kept, position taken from the playhead).
+		if (sel.kind === "trim") {
+			const { coalescedTrimGroups } = await import("@/lib/ai-edition/timeline/trim-mapping");
+			const group = coalescedTrimGroups(tl.trimRanges, tl.clips).find((g) =>
+				g.ids.includes(sel.id),
+			);
+			if (!group) return;
+			copyRegion({ kind: "trim", region: { durationSec: group.end - group.start } });
+			setCopiedClipId(null);
+			toast.success("Region copied");
 			return;
 		}
-		if (doc.transcripts.some((t) => t.assetId === assetId)) return;
 
-		setIsTranscribing(true);
-		setAssetStatuses((prev) => ({ ...prev, [assetId]: "running" }));
-		try {
-			toast.loading("Transcribing…", { id: "captions-transcribe" });
-			const transcript = await transcribeAsset(doc, assetId, {
-				onStatus: (s) => toast.loading(`Transcribing: ${s}`, { id: "captions-transcribe" }),
-			});
-			await setTranscript(transcript);
-			setAssetStatuses((prev) => {
-				const next = { ...prev };
-				delete next[assetId];
-				return next;
-			});
-			toast.dismiss("captions-transcribe");
-			toast.success("Transcript ready — captions are live.");
-		} catch (err) {
-			setAssetStatuses((prev) => ({ ...prev, [assetId]: "failed" }));
-			toast.dismiss("captions-transcribe");
-			toast.error("Transcription failed", {
-				description: err instanceof Error ? err.message : String(err),
-			});
-		} finally {
-			setIsTranscribing(false);
-		}
-	}, [setTranscript]);
+		const source =
+			sel.kind === "zoom"
+				? tl.zoomRegions
+				: sel.kind === "annotation"
+					? tl.annotationRegions
+					: sel.kind === "speed"
+						? tl.speedRegions
+						: tl.cameraFullscreenRegions;
+		const region = (source as Array<{ id: string }>).find((r) => r.id === sel.id);
+		if (!region) return;
+		copyRegion({ kind: sel.kind, region: region as unknown as Record<string, unknown> });
+		// One clipboard wins at a time: a copied pill retires the copied clip.
+		setCopiedClipId(null);
+		toast.success("Region copied");
+	}, [tl]);
 
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
@@ -904,20 +883,28 @@ export function NewEditorShell() {
 			// of hardcoded keys, so rebinding in the shortcuts dialog actually
 			// changes runtime behavior.
 			if (matchesShortcut(e, shortcuts.copySelected, isMac)) {
-				if (tl.clipSelection) {
-					e.preventDefault();
-					setCopiedClipId(tl.clipSelection);
-					return;
-				}
+				// A pill and a clip can no longer both be selected (see selectRegion /
+				// selectClip), so this reads the one the user actually picked instead
+				// of preferring clips whatever was clicked last.
 				if (tl.selection) {
 					e.preventDefault();
 					void handleCopyRegion();
 					return;
 				}
+				if (tl.clipSelection) {
+					e.preventDefault();
+					setCopiedClipId(tl.clipSelection);
+					// A copied clip retires the copied pill — see clearRegionClipboard.
+					void import("@/lib/ai-edition/store/regionClipboard").then((m) =>
+						m.clearRegionClipboard(),
+					);
+					return;
+				}
 			}
 			if (ctrl && e.key.toLowerCase() === "x") {
 				// F2.8 — cut: remember the region in the clipboard, then remove it.
-				if (tl.selection && tl.selection.kind !== "trim") {
+				// Trims included now that copying one means copying its length.
+				if (tl.selection) {
 					e.preventDefault();
 					const cut = tl.selection;
 					void handleCopyRegion().then(() => tl.removeRegion(cut.kind, cut.id));
@@ -926,12 +913,13 @@ export function NewEditorShell() {
 			}
 			if (matchesShortcut(e, shortcuts.paste, isMac)) {
 				e.preventDefault();
-				// A selected/copied clip takes priority — pasting with a clip in
-				// hand is unambiguously "duplicate this clip", even if a region
-				// was copied earlier in the session.
-				const clipToDuplicate = copiedClipId ?? tl.clipSelection;
-				if (clipToDuplicate) {
-					void tl.duplicateClip(clipToDuplicate);
+				// Paste what was COPIED. It used to fall back to `tl.clipSelection`,
+				// so a clip merely being selected hijacked the paste — and since
+				// `copiedClipId` was never cleared, one Ctrl+C on a clip turned every
+				// later Ctrl+V into a clip duplication for the rest of the session,
+				// whatever the user copied afterwards.
+				if (copiedClipId) {
+					void tl.duplicateClip(copiedClipId);
 					return;
 				}
 				void pasteRegion();
@@ -952,29 +940,34 @@ export function NewEditorShell() {
 				deleteSelection();
 				return;
 			}
+			// Same size on screen as the toolbar buttons produce — these shortcuts are
+			// what the empty lanes advertise ("Press Z to add zoom"), so they are the
+			// way most regions get created. Left on the flat default they came out
+			// under two pixels on a 30-minute recording, hidden behind the playhead
+			// they were created at. See timeline/newRegionDuration.
 			if (matchesShortcut(e, shortcuts.addZoom, isMac)) {
 				e.preventDefault();
-				void tl.addZoom();
+				void tl.addZoom(newRegionDurationSec());
 				return;
 			}
 			if (matchesShortcut(e, shortcuts.addTrim, isMac)) {
 				e.preventDefault();
-				void tl.addTrim();
+				void tl.addTrim(newRegionDurationSec());
 				return;
 			}
 			if (matchesShortcut(e, shortcuts.addAnnotation, isMac)) {
 				e.preventDefault();
-				void tl.addAnnotation();
+				void tl.addAnnotation(newRegionDurationSec());
 				return;
 			}
 			if (matchesShortcut(e, shortcuts.addSpeed, isMac)) {
 				e.preventDefault();
-				void tl.addSpeed();
+				void tl.addSpeed(newRegionDurationSec());
 				return;
 			}
 			if (matchesShortcut(e, shortcuts.addCameraFullscreen, isMac)) {
 				e.preventDefault();
-				void tl.addCameraFullscreen();
+				void tl.addCameraFullscreen(newRegionDurationSec());
 				return;
 			}
 
@@ -1082,13 +1075,17 @@ export function NewEditorShell() {
 		transcripts: document?.transcripts ?? [],
 		assets: document?.assets ?? [],
 		trimRanges: document?.timeline?.trimRanges ?? [],
-		busy: isTranscribing,
+		busyAssetIds,
 		onSeek: handleSeek,
 		onAddTrimRange: handleAddTrimRange,
 		onRemoveTrimRange: handleRemoveTrimRange,
 		onTranscribe: handleTranscribe,
 		canTranscribe: hasAsset,
-		isTranscribing,
+		isTranscribing: transcriptGate.state === "pending",
+		blocked:
+			transcriptGate.state === "blocked" && transcriptGate.reason
+				? { reason: transcriptGate.reason, message: transcriptGate.message }
+				: undefined,
 	};
 
 	return (
@@ -1119,11 +1116,7 @@ export function NewEditorShell() {
 				{mode === "edit" && chatOpen ? (
 					<>
 						<aside className={v4.agent} aria-label={te("shell.aiEditor")}>
-							<LeftPanel
-								active="chat"
-								assetStatuses={assetStatuses}
-								onRegenerateAsset={handleRegenerateAsset}
-							/>
+							<LeftPanel active="chat" />
 						</aside>
 						<div
 							className={v4.chatResizeHandle}
@@ -1212,13 +1205,11 @@ export function NewEditorShell() {
 								onToggleOpen={() => setInspectorOpen((v) => !v)}
 								clips={tl.clips}
 								onEditClip={setEditClipTarget}
-								onTranscribe={() => void handleTranscribeForCaptions()}
-								isTranscribing={isTranscribing}
 								transcriptProps={transcriptProps}
 							/>
 						</>
 					) : mode === "media" ? (
-						<MediaStage assetStatuses={assetStatuses} onRegenerateAsset={handleRegenerateAsset} />
+						<MediaStage />
 					) : (
 						<RecStage
 							onStartRecording={() => void handleNewRecording()}

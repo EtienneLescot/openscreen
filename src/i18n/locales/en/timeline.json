@@ -71,7 +71,7 @@
 		"timelineTools": "Timeline tools",
 		"arrangeClips": "Arrange clips",
 		"arrangeClipsHint": "Drag clips below to reorder or drop new ones in",
-		"newAnnotation": "New annotation",
+		"newAnnotation": "Annotation",
 		"dragToReorderHint": "Drag to reorder · double-click to edit in/out points",
 		"editInOutPoints": "Edit in/out points",
 		"deleteClip": "Delete clip",
@@ -82,6 +82,11 @@
 		"addedAutoZoom": "Added {{count}} automatic zoom",
 		"addedAutoZoomPlural": "Added {{count}} automatic zooms",
 		"autoZoomFailed": "Auto-zoom failed",
-		"aiEnhanceRequested": "Asked the AI agent to cut the dead time"
+		"aiEnhanceRequested": "Asked the AI agent to cut the dead time",
+		"smartCutsWaiting": "Transcribing… ready in a moment",
+		"smartCutsNeedsTranscript": "Needs a transcript",
+		"smartCutsNoAudio": "This media has no audio",
+		"smartCutsNoSpeech": "No speech detected",
+		"smartCutsFailed": "Transcription failed — retry it from Media"
 	}
 }

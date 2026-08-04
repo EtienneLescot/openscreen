@@ -12,7 +12,9 @@ import { findActiveSpeedRegion, type SpeedRegion } from "@/lib/ai-edition/timeli
 import {
 	clampVirtualTime,
 	findNextKeptSegment,
+	findRawClipForSegment,
 	getRawVirtualStartTime,
+	locateKeptSegment,
 	locateSourcePosition,
 	locateVirtualPosition,
 	totalVirtualDuration,
@@ -225,10 +227,17 @@ export function VirtualPreview({
 			// jumps by the trim's exact width the instant `v.currentTime` does, so the ruler's
 			// playhead visually skips the trim marker instead of drifting through it.
 			if (!v.paused) {
-				const inKeptSegment = locateSourcePosition(
+				// Resolved against the segments of the clip we are ACTUALLY playing (see
+				// `locateKeptSegment`). Asking the whole segment list — all this could do
+				// before a trim named its clip — let a twin clip over the same recording
+				// answer "yes, that stretch is kept" for a cut authored on this one, so the
+				// cut was simply not skipped during playback.
+				const inKeptSegment = locateKeptSegment(
 					playbackClipsRef.current,
+					clipsRef.current,
 					v.currentTime,
 					activeSourceId,
+					activeClipIdRef.current ?? undefined,
 				);
 				if (!inKeptSegment) {
 					const nextKeptSegment = findNextKeptSegment(
@@ -237,19 +246,14 @@ export function VirtualPreview({
 						virtualTimeSecRef.current,
 						activeSourceId,
 						v.currentTime,
+						activeClipIdRef.current ?? undefined,
 					);
 					if (nextKeptSegment) {
-						const rawClip =
-							clipsRef.current.find(
-								(c) => c.id === nextKeptSegment.id || nextKeptSegment.id.startsWith(`${c.id}_seg`),
-							) ??
-							clipsRef.current.find(
-								(c) =>
-									c.assetId === nextKeptSegment.assetId &&
-									nextKeptSegment.sourceStartSec >= c.sourceStartSec - 0.001 &&
-									(c.sourceEndSec == null ||
-										nextKeptSegment.sourceStartSec <= c.sourceEndSec + 0.001),
-							);
+						// `findRawClipForSegment` is the ONE definition of the segment-id
+						// convention `resolvePlaybackSegments` emits; this used to re-implement
+						// it verbatim, which is precisely the second reader that definition
+						// exists to prevent.
+						const rawClip = findRawClipForSegment(nextKeptSegment, clipsRef.current);
 						if (rawClip) {
 							activeClipIdRef.current = rawClip.id;
 						}

@@ -43,7 +43,8 @@
 		"cameraDisconnected": "摄像头已断开连接。",
 		"cameraNotFound": "未找到摄像头。",
 		"permissionDenied": "录屏权限被拒绝。请允许屏幕录制。",
-		"accessibilityAllowAndRetry": "允许 OpenScreen 使用辅助功能权限，然后再次按录制以开始倒计时。"
+		"accessibilityAllowAndRetry": "允许 OpenScreen 使用辅助功能权限，然后再次按录制以开始倒计时。",
+		"selectSource": "请选择要录制的源"
 	},
 	"emptyState": {
 		"title": "未打开任何项目",
@@ -98,6 +99,7 @@
 	},
 	"rec": {
 		"source": "来源",
+		"systemPicker": "系统将询问要共享的内容",
 		"systemAudio": "系统音频",
 		"microphone": "麦克风",
 		"camera": "摄像头",
@@ -140,6 +142,7 @@
 		"transcriptEmpty": "转录内容为空。",
 		"notGeneratedHint": "尚未生成 — 选择语言并点击重新生成。",
 		"transcribing": "正在转录",
+		"downloadingModel": "正在下载语音模型",
 		"transcribingEllipsis": "正在转录…",
 		"pendingTranscription": "等待转录",
 		"transcriptionFailed": "转录失败",
@@ -150,7 +153,10 @@
 		"generationFailedHint": "生成失败 — 选择语言并重新生成。",
 		"noPreviewAvailable": "无法预览",
 		"restart": "重新开始",
-		"detectedLanguage": "检测到的语言：{{language}}"
+		"detectedLanguage": "检测到的语言：{{language}}",
+		"noAudioTrack": "无音频轨道",
+		"noAudioTrackHint": "此媒体没有音频轨道，没有可转录的内容。",
+		"noSpeechDetected": "未检测到语音"
 	},
 	"exportDialog": {
 		"title": "导出",

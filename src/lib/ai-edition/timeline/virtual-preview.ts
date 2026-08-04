@@ -81,6 +81,19 @@ export function getRawVirtualStartTime(segment: AxcutClip, rawClips: AxcutClip[]
 /**
  * Resolves the next kept segment on the virtual timeline at or after the given position.
  * `playbackClips` (from `resolvePlaybackSegments`) is the SSOT for kept timeline content.
+ *
+ * Two ways to be "next", and the second one has to name a clip. The RAW ruler answers the
+ * general case: the first segment starting after where we are. The source clock answers
+ * the case the ruler cannot, when the video has run into a cut and the raw position has
+ * not caught up — but "later in source time" is only meaningful WITHIN one clip. Asked of
+ * a whole asset it compares source positions belonging to different stretches of ruler,
+ * and returns whichever clip happens to start deeper into the recording: with a slice from
+ * late in the recording laid down BEFORE a trimmed slice from early in it, playing into
+ * that trim answered "clip_1" — raw start 0 — so playback jumped back to the top of the
+ * timeline, replayed into the same cut, and looped there. Scoped to the clip being played,
+ * it means "the next kept stretch of THIS clip", which is the only thing the source clock
+ * can honestly say. With no clip named there is nothing to scope it to, and the ruler test
+ * above is already the general answer, so the fallback simply does not apply.
  */
 export function findNextKeptSegment(
 	playbackClips: AxcutClip[],
@@ -88,6 +101,7 @@ export function findNextKeptSegment(
 	currentRawTime: number,
 	activeSourceId?: string,
 	currentSourceTime?: number,
+	activeClipId?: string,
 ): AxcutClip | undefined {
 	for (const seg of playbackClips) {
 		const segRawStart = getRawVirtualStartTime(seg, rawClips);
@@ -96,8 +110,10 @@ export function findNextKeptSegment(
 		}
 		if (
 			activeSourceId &&
+			activeClipId &&
 			currentSourceTime !== undefined &&
 			seg.assetId === activeSourceId &&
+			findRawClipForSegment(seg, rawClips)?.id === activeClipId &&
 			seg.sourceStartSec > currentSourceTime + 0.001
 		) {
 			return seg;
@@ -124,17 +140,31 @@ function toPositionAt(
 	};
 }
 
+/** How a clip's CLOSING edge is treated when asking "is this source time on it?".
+ *
+ *  `exclusive` leaves the closing edge to whichever clip starts there — that is the
+ *  whole job of the epsilon: at a shared boundary (clip A ends where clip B begins)
+ *  the time belongs to B, not to the clip that just finished. `inclusive` accepts it,
+ *  which is what lets a clip's own last frames still resolve to that clip. */
+type ClosingEdge = "exclusive" | "inclusive";
+
 function isWithinClipBounds(
 	clip: AxcutClip,
-	index: number,
-	total: number,
 	sourceTimeSec: number,
 	epsilon: number,
+	closingEdge: ClosingEdge,
 ): boolean {
-	const lowerBound = clip.sourceStartSec - epsilon;
-	const upperBound =
-		index === total - 1 ? (clip.sourceEndSec ?? 0) + epsilon : (clip.sourceEndSec ?? 0) - epsilon;
-	return sourceTimeSec >= lowerBound && sourceTimeSec <= upperBound;
+	// An un-probed clip has no end yet, and `resolvePlaybackSegments` reads that as a
+	// zero-width window at the in-point — the same default is used here because
+	// `locateKeptSegment` now feeds this function that very output, so the two sit in
+	// series and must not read one missing field two ways. (`?? 0` put the window
+	// BELOW `sourceStartSec` for a clip starting anywhere but 0, which no source time
+	// could ever satisfy. Unreachable in practice — a clip only awaits probing with
+	// `sourceStartSec === 0`, where the two defaults coincide — so this changes no
+	// behaviour; it removes a divergence, not a bug.)
+	const sourceEnd = clip.sourceEndSec ?? clip.sourceStartSec;
+	const upperBound = closingEdge === "inclusive" ? sourceEnd + epsilon : sourceEnd - epsilon;
+	return sourceTimeSec >= clip.sourceStartSec - epsilon && sourceTimeSec <= upperBound;
 }
 
 export function locateSourcePosition(
@@ -154,25 +184,71 @@ export function locateSourcePosition(
 ): VirtualPosition | null {
 	if (preferredClipId) {
 		const preferredIndex = clips.findIndex((clip) => clip.id === preferredClipId);
+		// IDENTITY BEATS PROXIMITY. A caller that names the clip it is tracking is not
+		// asking us to guess, so its closing edge is INCLUSIVE: the exclusive bound only
+		// exists to break ties in the ambiguous scan below, and a named clip has no tie to
+		// break. Sharing that bound is what made the last ~50 ms of a clip resolve to a
+		// DIFFERENT clip over the same media — the preferred clip disowned its own final
+		// frames and the scan handed them to whichever twin would take them, reporting the
+		// playhead near the end of that twin. An asset mismatch means the id is stale (an
+		// asset swap in flight), so it falls through to the scan rather than mapping the
+		// time through a clip whose media is not the one playing.
 		if (
 			preferredIndex >= 0 &&
-			isWithinClipBounds(
-				clips[preferredIndex],
-				preferredIndex,
-				clips.length,
-				sourceTimeSec,
-				epsilon,
-			)
+			(!assetId || clips[preferredIndex].assetId === assetId) &&
+			isWithinClipBounds(clips[preferredIndex], sourceTimeSec, epsilon, "inclusive")
 		) {
 			return toPositionAt(clips, preferredIndex, sourceTimeSec);
 		}
 	}
-	const clipIndex = clips.findIndex((clip, index) => {
-		if (assetId && clip.assetId !== assetId) return false;
-		return isWithinClipBounds(clip, index, clips.length, sourceTimeSec, epsilon);
-	});
+	const scan = (closingEdge: ClosingEdge) =>
+		clips.findIndex(
+			(clip) =>
+				(!assetId || clip.assetId === assetId) &&
+				isWithinClipBounds(clip, sourceTimeSec, epsilon, closingEdge),
+		);
+	// Two passes, because "may this clip claim its closing edge?" is a question about the
+	// OTHER clips — is anyone else about to start here? — and never about where the clip
+	// sits in an array. This used to be approximated by `index === clips.length - 1`, which
+	// made the answer depend on CLIP ORDER: with two clips over one recording, the last
+	// array element accepted a closing edge its twin had just refused, so the same playback
+	// moment resolved to a different clip depending on whether that twin happened to be laid
+	// down last. Preferring a strict containment and only then falling back to the closing
+	// edge gives the same result for a plain single-asset timeline (where the last clip is
+	// the only one nobody follows) without consulting the order at all.
+	const strict = scan("exclusive");
+	const clipIndex = strict >= 0 ? strict : scan("inclusive");
 	if (clipIndex < 0) return null;
 	return toPositionAt(clips, clipIndex, sourceTimeSec);
+}
+
+/**
+ * "Where am I in the KEPT content of the clip that is playing?" — the trim-aware
+ * counterpart of {@link locateSourcePosition}, resolved against the playback segments
+ * (`resolvePlaybackSegments`) instead of the raw clips.
+ *
+ * The segments of the ACTIVE clip are the whole answer once we know which clip is
+ * playing: a source time none of them covers is inside THAT clip's trim, however many
+ * other clips of the same media keep the stretch. Scanning every segment by
+ * (assetId, sourceTime) — which is all this could do before trims carried a `clipId` —
+ * let a twin clip's kept segment answer for the one actually playing, so a cut authored
+ * on one clip was silently not skipped during playback while its twin kept that stretch.
+ * That is the same wrong-clip class `trimAppliesToClip` closed on the storage side, one
+ * layer up. Falls back to the asset-wide scan when the clip is unknown (no active clip
+ * yet) or has no segments at all.
+ */
+export function locateKeptSegment(
+	playbackClips: AxcutClip[],
+	rawClips: AxcutClip[],
+	sourceTimeSec: number,
+	assetId?: string,
+	activeClipId?: string,
+): VirtualPosition | null {
+	const ownSegments = activeClipId
+		? playbackClips.filter((seg) => findRawClipForSegment(seg, rawClips)?.id === activeClipId)
+		: [];
+	if (ownSegments.length > 0) return locateSourcePosition(ownSegments, sourceTimeSec, assetId);
+	return locateSourcePosition(playbackClips, sourceTimeSec, assetId);
 }
 
 export function keptWordIdSet(clips: AxcutClip[]): Set<string> {

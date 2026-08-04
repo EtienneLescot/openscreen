@@ -13,6 +13,7 @@
 import fs, { type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import { createId } from "../../src/lib/ai-edition/document/ids";
+import { removeClip } from "../../src/lib/ai-edition/document/timeline";
 import {
 	type AxcutAsset,
 	type AxcutDocument,
@@ -20,6 +21,7 @@ import {
 	documentSchema,
 	migrateRawDocumentToCurrent,
 } from "../../src/lib/ai-edition/schema";
+import { relinkProjectMedia } from "../media/projectMediaRelinker";
 
 const PROJECT_FILE_EXTENSION = ".openscreen";
 // Older builds stored these same v3/v4 AxcutDocuments under `.axcut`. We read
@@ -85,6 +87,8 @@ function safeProjectId(raw: string): string {
 // `documentSchema.parse` is now a pure v6 validator — every JSON-read path
 // (list, get, future bulk-export) must run the upgrader chain first via this
 // helper so the in-memory parse is a single `z.literal(6)` + shape check.
+// `getProject` spells the same two steps out inline because it relinks moved
+// media between them; keep the order (upgrade, then validate) in step.
 function parseLoadedDocument(raw: string): AxcutDocument {
 	return documentSchema.parse(migrateRawDocumentToCurrent(JSON.parse(raw)));
 }
@@ -112,12 +116,17 @@ async function renameWithRetry(from: string, to: string): Promise<void> {
 
 export class DocumentService {
 	private readonly projectsRoot: string;
+	private readonly mediaRegistryDir: string;
 	private legacyMigrationDone = false;
 	/** Tail of the in-flight save chain per project id — see writeProject. */
 	private readonly writeQueues = new Map<string, Promise<void>>();
 
-	constructor(projectsRoot: string) {
+	// `mediaRegistryDir` is where the media-links registry file lives
+	// (RECORDINGS_DIR in production) — see getProject. Injected for the same
+	// reason as `projectsRoot`: this module stays free of any `electron` import.
+	constructor(projectsRoot: string, mediaRegistryDir: string) {
 		this.projectsRoot = projectsRoot;
+		this.mediaRegistryDir = mediaRegistryDir;
 	}
 
 	async ensureProjectsDir(): Promise<void> {
@@ -222,7 +231,17 @@ export class DocumentService {
 				);
 			}
 		}
-		return parseLoadedDocument(raw);
+		// Relink here rather than in the .openscreen import handlers, because this
+		// is the one place every open funnels through — the project picker, the
+		// agent, and the auto-load-last-project effect on launch. A document whose
+		// media moved (or that was authored on another machine, issue #212) is
+		// otherwise re-read as broken on every subsequent open, and media that
+		// moves after the import is never noticed at all. The relink is applied to
+		// the upgraded JSON so `documentSchema.parse` still validates what we hand
+		// back, and it is not persisted from here: the renderer saves the document
+		// it was given, as it does for any other load-time repair.
+		const migrated = migrateRawDocumentToCurrent(JSON.parse(raw));
+		return documentSchema.parse(await relinkProjectMedia(migrated, this.mediaRegistryDir));
 	}
 
 	async createProject(title: string): Promise<AxcutDocument> {
@@ -309,16 +328,18 @@ export class DocumentService {
 			doc.project.primaryAssetId === assetId
 				? (assets[0]?.id ?? undefined)
 				: doc.project.primaryAssetId;
+		const withoutAssetClips = doc.timeline.clips
+			.filter((clip) => clip.assetId === assetId)
+			.reduce((current, clip) => removeClip(current, clip.id), doc);
 		const next: AxcutDocument = {
-			...doc,
+			...withoutAssetClips,
 			assets,
 			timeline: {
-				...doc.timeline,
-				clips: doc.timeline.clips.filter((c) => c.assetId !== assetId),
-				trimRanges: doc.timeline.trimRanges.filter((r) => r.assetId !== assetId),
+				...withoutAssetClips.timeline,
+				trimRanges: withoutAssetClips.timeline.trimRanges.filter((r) => r.assetId !== assetId),
 			},
 			project: {
-				...doc.project,
+				...withoutAssetClips.project,
 				primaryAssetId,
 				updatedAt: new Date().toISOString(),
 			},
