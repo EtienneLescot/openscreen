@@ -109,17 +109,21 @@ let cachedFfmpeg: string | null | undefined;
  * later as `spawn … EACCES` — a message that blames permissions rather than
  * saying the wrong candidate was chosen.
  *
- * Every failure mode is swallowed on purpose. A candidate that is missing,
- * unreadable, or not executable is simply not this one; throwing out of
+ * Every failure mode is swallowed on purpose. A candidate that is absent, not a
+ * regular file, or not executable is simply not this one; throwing out of
  * resolution would let a single bad path deny a later, working one.
+ *
+ * `X_OK` and not `X_OK | R_OK`: executing a binary needs the execute bit, not
+ * the read bit, so an install shipped `--x` is legitimate and must not be
+ * refused. On Windows `X_OK` is not enforced at all — there the `isFile` check
+ * is the whole guard, which is enough for the failure this exists to stop,
+ * since `ffmpegCandidates` only ever proposes `.exe` names of its own.
  */
 function isExecutableFile(candidate: string): boolean {
 	try {
 		if (!statSync(candidate).isFile()) {
 			return false;
 		}
-		// A no-op for the caller on Windows, where X_OK is not enforced — but the
-		// `isFile` check above is what matters there anyway.
 		accessSync(candidate, fsConstants.X_OK);
 		return true;
 	} catch {
