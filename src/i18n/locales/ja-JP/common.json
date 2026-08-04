@@ -50,5 +50,11 @@
 	"locale": {
 		"name": "日本語",
 		"short": "JA"
+	},
+	"recordingSource": {
+		"window": "ウィンドウ",
+		"screen": "画面",
+		"virtual": "仮想ディスプレイ",
+		"unknown": "画面録画"
 	}
 }

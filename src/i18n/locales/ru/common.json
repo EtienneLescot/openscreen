@@ -50,5 +50,11 @@
 	"locale": {
 		"name": "Русский",
 		"short": "RU"
+	},
+	"recordingSource": {
+		"window": "Окно",
+		"screen": "Экран",
+		"virtual": "Виртуальный экран",
+		"unknown": "Запись экрана"
 	}
 }

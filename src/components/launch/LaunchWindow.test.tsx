@@ -474,6 +474,31 @@ describe("LaunchWindow record button", () => {
 		);
 	});
 
+	/**
+	 * `portalOwnsSource` is resolved over IPC, so for a moment after mount it
+	 * still reads false on Linux. A Record click landing in that window opened a
+	 * selector the main process refuses — and the click used to be swallowed,
+	 * doing nothing at all. The refusal is authoritative and answers immediately,
+	 * so it starts the recording instead.
+	 */
+	it("records when the picker refuses because the portal owns the choice", async () => {
+		platformState.value = "linux";
+		// Forces the click down the open-the-selector path, as an unresolved
+		// portal check does.
+		linuxHelperAvailable.value = false;
+		window.electronAPI.openSourceSelector = vi.fn(async () => ({
+			opened: false,
+			reason: "portal-owns-selection",
+		})) as unknown as Window["electronAPI"]["openSourceSelector"];
+
+		renderLaunchWindow();
+		fireEvent.click(await screen.findByTestId("launch-record-button"));
+
+		await waitFor(() => {
+			expect(recorderState.value.toggleRecording).toHaveBeenCalledTimes(1);
+		});
+	});
+
 	it("does not name a source while recording on Linux", async () => {
 		platformState.value = "linux";
 		recorderState.value.recording = true;

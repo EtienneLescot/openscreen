@@ -50,5 +50,11 @@
 	"locale": {
 		"name": "Tiếng Việt",
 		"short": "VI"
+	},
+	"recordingSource": {
+		"window": "Cửa sổ",
+		"screen": "Màn hình",
+		"virtual": "Màn hình ảo",
+		"unknown": "Ghi màn hình"
 	}
 }

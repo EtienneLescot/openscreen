@@ -514,8 +514,19 @@ export function LaunchWindow() {
 				recordAfterSourceSelectionRef.current = true;
 				void openSourceSelector()
 					.then((result) => {
-						if (!result.opened) {
-							recordAfterSourceSelectionRef.current = false;
+						if (result.opened) {
+							return;
+						}
+						recordAfterSourceSelectionRef.current = false;
+						// The main process is the authority on who owns the choice,
+						// and it answers synchronously. `portalOwnsSource` is resolved
+						// over IPC, so for a moment after mount it still reads false —
+						// and a Record click landing in that window used to open a
+						// selector that refused, leaving the click doing nothing at
+						// all. Honouring the refusal starts the recording instead,
+						// whatever the local state has caught up to.
+						if (result.reason === "portal-owns-selection" && !recording) {
+							toggleRecording();
 						}
 					})
 					.catch(() => {

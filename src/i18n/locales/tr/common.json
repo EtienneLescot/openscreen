@@ -50,5 +50,11 @@
 	"locale": {
 		"name": "Türkçe",
 		"short": "TR"
+	},
+	"recordingSource": {
+		"window": "Pencere",
+		"screen": "Ekran",
+		"virtual": "Sanal ekran",
+		"unknown": "Ekran kaydı"
 	}
 }

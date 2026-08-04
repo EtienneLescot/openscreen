@@ -50,5 +50,11 @@
 	"locale": {
 		"name": "Español",
 		"short": "ES"
+	},
+	"recordingSource": {
+		"window": "Ventana",
+		"screen": "Pantalla",
+		"virtual": "Pantalla virtual",
+		"unknown": "Grabación de pantalla"
 	}
 }

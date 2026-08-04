@@ -50,5 +50,11 @@
 	"locale": {
 		"name": "English",
 		"short": "EN"
+	},
+	"recordingSource": {
+		"window": "Window",
+		"screen": "Screen",
+		"virtual": "Virtual display",
+		"unknown": "Screen recording"
 	}
 }
