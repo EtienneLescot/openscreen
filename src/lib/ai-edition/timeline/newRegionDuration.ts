@@ -20,9 +20,20 @@
  * agent, auto-zooms) don't call this and keep useTimeline's flat default.
  */
 
-/** On-screen width a freshly created pill aims for. Clears PILL_CONTENT_MIN_PX,
- *  so it shows its icon and label at once with room to grab either handle. */
-export const PILL_CREATE_PX = 40;
+/**
+ * On-screen width a freshly created pill aims for: wide enough to READ, not just
+ * to see. Measured in a browser, the width each label needs before the ellipsis
+ * bites — icon + gap + text + padding — is "Full Camera" 93px, "Annotation"
+ * 90px, "1.80×" 61px, "1.5×" 55px. 96 covers the longest with a couple of px to
+ * spare; longer translations of those two still ellipsize, which is what the
+ * ellipsis is for.
+ *
+ * The cost of a wide default is a long region: at full zoom-out on a 30-minute
+ * recording (~0.42 px/s) one click creates about 3 min 45 s. That is the trade
+ * the constant width implies — the duration is the variable, and the pill is
+ * immediately draggable by either edge.
+ */
+export const PILL_CREATE_PX = 96;
 /** Floor on the duration. Only bites past ~30x zoom, where 40px is worth a few
  *  hundredths of a second and the region would be born unusable. */
 export const PILL_CREATE_MIN_SEC = 0.25;
