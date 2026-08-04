@@ -344,8 +344,30 @@ jobs:
           rm -rf "$STAGING"
           echo "dmg_path=$DMG_OUTPUT" >> "$GITHUB_OUTPUT"
 
+      # The four steps below used to carry `&& !contains(github.ref_name, '-')`,
+      # which skipped them for every pre-release, `-rc.N` tags included. Two
+      # costs, and the second is the one that mattered.
+      #
+      # Testers paid the first: a DMG signed with Developer ID but not notarized
+      # is still refused by Gatekeeper — `spctl` answers `rejected, source=
+      # Unnotarized Developer ID` — so every RC tester had to know about
+      # `xattr -rd com.apple.quarantine` before they could open the thing they
+      # were being asked to test.
+      #
+      # The release paid the second. With the skip in place, notarization never
+      # ran until the stable tag, so the first exercise of the credentials, the
+      # certificate chain and Apple's acceptance of every nested Mach-O landed on
+      # the highest-stakes build there is. That is not theoretical: the run that
+      # first enabled signing here died in `Package .app bundle` on a malformed
+      # `MAC_CSC_NAME`, and it was only visible because a full build was run
+      # deliberately. Notarizing each RC turns every candidate into a rehearsal.
+      #
+      # The trade is a few minutes per macOS job and a dependency on Apple's
+      # notary service being reachable — `--wait` is capped at 15 minutes below.
+      # If that ever becomes flaky enough to block RCs, the fix is
+      # `continue-on-error` on pre-releases, not going back to skipping them.
       - name: Sign DMG
-        if: steps.signing.outputs.enabled == 'true' && !contains(github.ref_name, '-')
+        if: steps.signing.outputs.enabled == 'true'
         run: |
           codesign --force \
             --sign "${{ secrets.MAC_CSC_NAME }}" \
@@ -353,7 +375,7 @@ jobs:
             "${{ steps.dmg.outputs.dmg_path }}"
 
       - name: Notarize DMG
-        if: steps.signing.outputs.enabled == 'true' && !contains(github.ref_name, '-')
+        if: steps.signing.outputs.enabled == 'true'
         run: |
           xcrun notarytool submit "${{ steps.dmg.outputs.dmg_path }}" \
             --apple-id "${{ secrets.APPLE_ID }}" \
@@ -363,11 +385,11 @@ jobs:
         timeout-minutes: 15
 
       - name: Staple notarization ticket
-        if: steps.signing.outputs.enabled == 'true' && !contains(github.ref_name, '-')
+        if: steps.signing.outputs.enabled == 'true'
         run: xcrun stapler staple "${{ steps.dmg.outputs.dmg_path }}"
 
       - name: Validate stapled DMG
-        if: steps.signing.outputs.enabled == 'true' && !contains(github.ref_name, '-')
+        if: steps.signing.outputs.enabled == 'true'
         run: |
           xcrun stapler validate "${{ steps.dmg.outputs.dmg_path }}"
           spctl -a -vv -t install "${{ steps.dmg.outputs.dmg_path }}"
