@@ -1,6 +1,6 @@
 import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { existsSync } from "node:fs";
+import { accessSync, constants as fsConstants, statSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
@@ -98,10 +98,42 @@ export function ffmpegCandidates(here: string = process.cwd()): string[] {
 
 let cachedFfmpeg: string | null | undefined;
 
-/** First candidate that exists, or null when none does (callers fall back). */
+/**
+ * Whether a candidate is something that can actually be run.
+ *
+ * EXISTENCE IS NOT ENOUGH, and the difference is not academic. `existsSync` was
+ * the test here, and it answers true for a DIRECTORY: on a Linux dev machine
+ * `electron/native/bin/<tag>/ffmpeg` is a folder holding the shared libraries
+ * (`libavcodec.so.62` and friends) rather than the binary, so resolution picked
+ * the folder, every later candidate was skipped, and the failure surfaced much
+ * later as `spawn … EACCES` — a message that blames permissions rather than
+ * saying the wrong candidate was chosen.
+ *
+ * Every failure mode is swallowed on purpose. A candidate that is missing,
+ * unreadable, or not executable is simply not this one; throwing out of
+ * resolution would let a single bad path deny a later, working one.
+ */
+function isExecutableFile(candidate: string): boolean {
+	try {
+		if (!statSync(candidate).isFile()) {
+			return false;
+		}
+		// A no-op for the caller on Windows, where X_OK is not enforced — but the
+		// `isFile` check above is what matters there anyway.
+		accessSync(candidate, fsConstants.X_OK);
+		return true;
+	} catch {
+		return false;
+	}
+}
+
+/**
+ * First candidate that is an executable file, or null when none is (callers
+ * fall back).
+ */
 export function resolveFfmpeg(here?: string): string | null {
 	if (cachedFfmpeg !== undefined && here === undefined) return cachedFfmpeg;
-	const found = ffmpegCandidates(here).find((p) => existsSync(p)) ?? null;
+	const found = ffmpegCandidates(here).find(isExecutableFile) ?? null;
 	if (here === undefined) cachedFfmpeg = found;
 	return found;
 }

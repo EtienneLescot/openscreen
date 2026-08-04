@@ -1,5 +1,6 @@
 // @vitest-environment node
-import { existsSync } from "node:fs";
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import { ffmpegCandidates, peakBlockCount, resolveFfmpeg } from "./audioPeaks";
@@ -52,6 +53,68 @@ describe("ffmpeg resolution", () => {
 	it("returns null rather than throwing when nothing is staged", () => {
 		expect(resolveFfmpeg(path.join(ROOT, "does", "not", "exist"))).toBeNull();
 	});
+
+	/**
+	 * The shape that slipped through. A Linux dev checkout can have
+	 * `electron/native/bin/<tag>/ffmpeg` as a DIRECTORY of shared libraries
+	 * rather than the binary; `existsSync` accepted it, resolution stopped
+	 * there, and the failure only surfaced later as `spawn … EACCES`.
+	 */
+	it("skips a candidate that is a directory rather than the binary", () => {
+		const here = mkdtempSync(path.join(tmpdir(), "openscreen-ffmpeg-"));
+		const tag = `${process.platform}-${process.arch}`;
+		const name = process.platform === "win32" ? "ffmpeg-shared.exe" : "ffmpeg";
+		const staged = path.join(here, "electron", "native", "bin", tag, name);
+		try {
+			// A directory sitting exactly where the executable is looked for.
+			mkdirSync(staged, { recursive: true });
+			writeFileSync(path.join(staged, "libavcodec.so.62"), "");
+
+			expect(resolveFfmpeg(here)).toBeNull();
+		} finally {
+			rmSync(here, { recursive: true, force: true });
+		}
+	});
+
+	it("accepts a candidate that is an executable file", () => {
+		const here = mkdtempSync(path.join(tmpdir(), "openscreen-ffmpeg-"));
+		const tag = `${process.platform}-${process.arch}`;
+		const name = process.platform === "win32" ? "ffmpeg-shared.exe" : "ffmpeg";
+		const staged = path.join(here, "electron", "native", "bin", tag, name);
+		try {
+			mkdirSync(path.dirname(staged), { recursive: true });
+			writeFileSync(staged, "", { mode: 0o755 });
+
+			expect(resolveFfmpeg(here)).toBe(staged);
+		} finally {
+			rmSync(here, { recursive: true, force: true });
+		}
+	});
+
+	// Non-executable files are the other half of the predicate, and the check is
+	// only meaningful where the OS enforces the bit.
+	it.runIf(process.platform !== "win32")(
+		"skips a candidate that is a file but not executable",
+		() => {
+			const here = mkdtempSync(path.join(tmpdir(), "openscreen-ffmpeg-"));
+			const staged = path.join(
+				here,
+				"electron",
+				"native",
+				"bin",
+				`${process.platform}-${process.arch}`,
+				"ffmpeg",
+			);
+			try {
+				mkdirSync(path.dirname(staged), { recursive: true });
+				writeFileSync(staged, "", { mode: 0o644 });
+
+				expect(resolveFfmpeg(here)).toBeNull();
+			} finally {
+				rmSync(here, { recursive: true, force: true });
+			}
+		},
+	);
 });
 
 // Only runs where the binary is actually staged; skipped elsewhere rather than
