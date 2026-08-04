@@ -507,3 +507,15 @@ jobs:
               --latest \
               --title "$TAG"
           fi
+
+      - name: Refresh the docs /download page
+        # Only a stable release changes what /releases/latest resolves to, so a
+        # pre-release would rebuild the site to byte-identical output.
+        #
+        # Dispatched against main on purpose: the github-pages environment only
+        # permits `main` to deploy, so docs.yml's old `on: release` trigger ran
+        # with a tag ref and failed its deploy every time. See docs.yml.
+        if: ${{ steps.release.outputs.is_prerelease == 'false' }}
+        env:
+          GH_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
+        run: gh workflow run docs.yml --ref main --repo "$GITHUB_REPOSITORY"
