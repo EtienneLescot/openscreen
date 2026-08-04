@@ -113,12 +113,55 @@ function dropCheckpointsFrom(
 	);
 }
 
+// ponytail: what compaction leaves behind. `coveredCount` counts the leading
+// transcript messages the summary stands in for — the transcript itself is
+// never rewritten, so the user keeps every message they wrote while the model
+// gets the shortened list. Sessions are in-memory only; deleting the messages
+// the renderer shows would be unrecoverable, and nothing in the UI would say
+// it happened.
+interface SessionCompaction {
+	summary: AiEditionChatMessage;
+	coveredCount: number;
+}
+
 export interface ChatSession {
 	id: string;
 	projectId: string;
 	title: string;
 	createdAt: string;
 	messages: AiEditionChatMessage[];
+	/** Main-process bookkeeping: the compaction boundary, not part of the
+	 *  transcript. See `modelMessages`. */
+	compaction?: SessionCompaction;
+	/** Set when a summarize call came back no smaller than what it replaced.
+	 *  Auto-compaction then stops trying — otherwise every following turn pays
+	 *  for the same useless summarizer call. */
+	compactionBlocked?: boolean;
+}
+
+/** The message list compaction hands the model: summary first, then everything
+ *  after the boundary. Identical to the transcript until a compaction lands. */
+function modelMessages(session: ChatSession): AiEditionChatMessage[] {
+	const state = session.compaction;
+	if (!state) return session.messages;
+	return [state.summary, ...session.messages.slice(state.coveredCount)];
+}
+
+// The model sees a sliding window of recent turns, not the whole session.
+const MODEL_HISTORY_WINDOW = 20;
+
+/**
+ * Window `modelMessages` down to what we send. The summary is pinned to the
+ * front rather than left to the window: the tail after a compaction is roughly
+ * half the session, so at the token counts that trip compaction in the first
+ * place a plain `slice(-N)` drops the very summary we just paid to produce.
+ */
+function modelHistory(session: ChatSession): AiEditionChatMessage[] {
+	const messages = modelMessages(session);
+	if (messages.length <= MODEL_HISTORY_WINDOW) return messages;
+	const summary = session.compaction?.summary;
+	if (!summary) return messages.slice(-MODEL_HISTORY_WINDOW);
+	return [summary, ...messages.slice(1).slice(-(MODEL_HISTORY_WINDOW - 1))];
 }
 
 export interface ChatSessionSummary {
@@ -180,7 +223,15 @@ export function selectSession(projectId: string, sessionId: string): ChatSession
 	const s = m?.get(sessionId);
 	if (!s) return null;
 	// ponytail: shallow-copy messages so the caller can't mutate the live array.
-	return { ...s, messages: [...s.messages] };
+	// The compaction boundary stays behind: it is main-process bookkeeping, and
+	// every caller of this wants the transcript as the user sees it.
+	return {
+		id: s.id,
+		projectId: s.projectId,
+		title: s.title,
+		createdAt: s.createdAt,
+		messages: [...s.messages],
+	};
 }
 
 export function renameSession(
@@ -317,15 +368,15 @@ export async function runChat(
 
 	const editsAllowed = config.allowAgentEdits !== false;
 
-	// P3.7 — context compaction: when the session grows past the heuristic
-	// budget, summarize the older half into a single "Earlier context"
-	// assistant message. The current user turn stays uncompacted, so the
-	// model still sees the request verbatim.
-	const decision = shouldCompact(session.messages);
-	if (decision && decision.compact) {
+	// P3.7 — context compaction: when what we send the model grows past the
+	// heuristic budget, summarize the older half into a single "Earlier
+	// context" assistant message. The current user turn stays uncompacted, so
+	// the model still sees the request verbatim.
+	const plan = session.compactionBlocked ? null : planCompaction(session);
+	if (plan) {
 		await tryCompactSession({
 			session,
-			splitIndex: decision.splitIndex,
+			plan,
 			apiKey: apiKey ?? "",
 			provider: config.provider,
 			model: config.model,
@@ -334,9 +385,10 @@ export async function runChat(
 		});
 	}
 
-	const history = session.messages
-		.slice(-20)
-		.map((m) => ({ role: m.role as "user" | "assistant" | "system", content: m.content }));
+	const history = modelHistory(session).map((m) => ({
+		role: m.role as "user" | "assistant" | "system",
+		content: m.content,
+	}));
 
 	const appliedToolCalls: AiEditionToolCallSummary[] = [];
 
@@ -454,6 +506,12 @@ export function rewindToMessage(
 		toolCalls: m.toolCalls ? [...m.toolCalls] : undefined,
 	}));
 	session.messages = survived;
+	// ponytail: a rewind that cuts back past the compaction boundary leaves a
+	// summary standing for messages this lineage no longer has. Drop it and let
+	// the next turn re-derive one, same reasoning as the checkpoints below.
+	if (session.compaction && session.compaction.coveredCount > survived.length) {
+		session.compaction = undefined;
+	}
 	dropCheckpointsFrom(projectId, sessionId, target.checkpointId);
 
 	return {
@@ -550,12 +608,15 @@ export async function compactSessionNow(
 	const credential = llmConfig.getCredential(def.id, def.envKeys);
 	const apiKey = credential?.value ?? "";
 
-	const decision = shouldCompact(session.messages);
-	if (!decision || !decision.compact) return null;
+	// The button is an explicit request, so it ignores `compactionBlocked` —
+	// the user knows they are spending a summarizer call, and a success clears
+	// the flag for the automatic path too.
+	const plan = planCompaction(session);
+	if (!plan) return null;
 
 	const ok = await tryCompactSession({
 		session,
-		splitIndex: decision.splitIndex,
+		plan,
 		apiKey,
 		provider: config.provider,
 		model: config.model,
@@ -581,7 +642,10 @@ export function getSessionContextUsage(
 ): { usedTokens: number; budgetTokens: number; ratio: number; fillPercent: number } | null {
 	const session = sessionsByProject.get(projectId)?.get(sessionId);
 	if (!session) return null;
-	const snap = budgetSnapshot(session.messages, budgetTokens);
+	// Measured on what the model is given, not on the transcript — after a
+	// compaction those differ, and the number that matters is the one that
+	// fills the context window.
+	const snap = budgetSnapshot(modelMessages(session), budgetTokens);
 	const fillPercent = Math.min(100, Math.round(snap.ratio * 100));
 	return {
 		usedTokens: snap.usedTokens,
@@ -614,7 +678,7 @@ export function getSessionBudget(
 ): SessionBudgetSnapshot | null {
 	const s = sessionsByProject.get(projectId)?.get(sessionId);
 	if (!s) return null;
-	const snap = budgetSnapshot(s.messages, budgetTokens);
+	const snap = budgetSnapshot(modelMessages(s), budgetTokens);
 	return {
 		usedTokens: snap.usedTokens,
 		budgetTokens: snap.budgetTokens,
@@ -640,12 +704,12 @@ export async function compactSession(
 	const credential = def ? llmConfig.getCredential(def.id, def.envKeys) : null;
 	const apiKey = credential?.value ?? "";
 
-	const decision = shouldCompact(session.messages);
-	if (!decision) return { summaryMessageId: null, summary: "" };
+	const plan = planCompaction(session);
+	if (!plan) return { summaryMessageId: null, summary: "" };
 
 	const ok = await tryCompactSession({
 		session,
-		splitIndex: decision.splitIndex,
+		plan,
 		apiKey,
 		provider: config.provider,
 		model: config.model,
@@ -655,18 +719,53 @@ export async function compactSession(
 	return ok;
 }
 
-/** Summarize and replace a session prefix when doing so strictly reduces context use. */
+interface CompactionPlan {
+	/** What the model currently gets — the input compaction shortens. */
+	payload: AiEditionChatMessage[];
+	/** Boundary inside `payload`. */
+	splitIndex: number;
+	/** The same boundary expressed as a count of transcript messages. */
+	coveredCount: number;
+}
+
+/**
+ * Decide whether the next turn should compact, measuring the payload rather
+ * than the transcript. Measuring the transcript would re-trip on every turn
+ * for the rest of the session, since compaction no longer shrinks it.
+ *
+ * A second compaction folds the previous summary into the new one: it sits at
+ * `payload[0]`, so it is part of the prefix being summarized.
+ */
+function planCompaction(session: ChatSession): CompactionPlan | null {
+	const payload = modelMessages(session);
+	const decision = shouldCompact(payload);
+	if (!decision?.compact || decision.splitIndex <= 0) return null;
+	// Payload index → transcript index. With a summary in front, payload[i]
+	// is transcript message `coveredCount + i - 1`.
+	const offset = session.compaction ? session.compaction.coveredCount - 1 : 0;
+	return {
+		payload,
+		splitIndex: decision.splitIndex,
+		coveredCount: decision.splitIndex + offset,
+	};
+}
+
+/**
+ * Summarize the older half of the model payload and record the boundary on the
+ * session. The transcript is left alone — `session.messages` is what the
+ * renderer shows, and compaction is a fact about the model's input.
+ */
 async function tryCompactSession(opts: {
 	session: ChatSession;
-	splitIndex: number;
+	plan: CompactionPlan;
 	apiKey: string;
 	provider: string;
 	model: string;
 	baseUrl?: string;
 	reasoningEffort?: string;
 }): Promise<{ summaryMessageId: string | null; summary: string } | null> {
-	const { session, splitIndex, apiKey, provider, model, baseUrl, reasoningEffort } = opts;
-	const oldMessages = session.messages.slice(0, splitIndex);
+	const { session, plan, apiKey, provider, model, baseUrl, reasoningEffort } = opts;
+	const oldMessages = plan.payload.slice(0, plan.splitIndex);
 	if (oldMessages.length === 0) return null;
 
 	const prompt = buildCompactionPrompt(oldMessages);
@@ -697,16 +796,25 @@ async function tryCompactSession(opts: {
 	}
 
 	const compacted = applyCompaction(
-		session.messages,
-		splitIndex,
+		plan.payload,
+		plan.splitIndex,
 		summary,
 		new Date().toISOString(),
 	);
-	if (!compactionReducesHistory(session.messages, compacted)) return null;
-	const inserted = compacted[0];
-	session.messages = compacted;
+	const summaryMessage = compacted[0];
+	if (!summaryMessage) return null;
+	if (!compactionReducesHistory(plan.payload, compacted)) {
+		// ponytail: the model handed back a summary at least as long as the
+		// messages it replaced. Adopting it would grow the payload, and
+		// retrying next turn just buys the same answer again — so stop asking
+		// until the user compacts by hand.
+		session.compactionBlocked = true;
+		return null;
+	}
+	session.compaction = { summary: summaryMessage, coveredCount: plan.coveredCount };
+	session.compactionBlocked = false;
 	return {
-		summaryMessageId: inserted?.id ?? null,
+		summaryMessageId: summaryMessage.id,
 		summary,
 	};
 }
