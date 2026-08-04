@@ -348,6 +348,23 @@ export const addTrimArgs = z.object({
 	reason: z.string().default(""),
 });
 
+/**
+ * ponytail: the element schema is `addTrimArgs` itself, not a copy of it.
+ *
+ * A batch is N unitary calls and nothing else — same validation, same clip
+ * resolution, same refusal wording — so the two can never drift into meaning
+ * different things. A separate element schema would be one more place to forget
+ * `clipId` the next time the unitary one grows a field.
+ *
+ * No cap on the array. A half-hour recording has hundreds of silences, and the
+ * point of this tool is precisely that it should not have to guess how many are
+ * too many. Picking a number here would repeat the mistake `getTranscript` made
+ * with its 800.
+ */
+export const addTrimsArgs = z.object({
+	ranges: z.array(addTrimArgs).min(1),
+});
+
 export const setTrimArgs = z.object({
 	trimRangeId: z.string().min(1),
 	startSec: secondsSchema,
@@ -408,6 +425,11 @@ export const addZoomArgs = z.object({
 	endSec: secondsSchema,
 	depth: depthSchema.default(3),
 	focus: focusSchema.default({ cx: 0.5, cy: 0.5 }),
+});
+
+/** Same contract as `addTrimsArgs`: the element schema IS the unitary one. */
+export const addZoomsArgs = z.object({
+	regions: z.array(addZoomArgs).min(1),
 });
 
 export const setZoomArgs = z.object({
@@ -486,6 +508,8 @@ export const removeClipArgs = z.object({
  */
 export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addTrim",
+	"addTrims",
+	"addZooms",
 	"setTrim",
 	"setClipRange",
 	"moveClip",
@@ -652,6 +676,79 @@ export function documentSnapshotForModel(
 
 function failure(message: string): AgentToolExecution {
 	return { ok: false, resultJson: JSON.stringify({ error: message }) };
+}
+
+/**
+ * Runs `unitName` once per item, folding the document forward.
+ *
+ * ponytail: the batch tools exist to save ROUND TRIPS, not to mean something new.
+ * Replaying the unitary executor is what guarantees that — anchoring, clip
+ * resolution, clamping, the wording of every refusal, all identical by
+ * construction rather than by a second implementation staying in step. A batch
+ * of N is exactly N unitary calls minus N-1 round trips, and `agent-tools.test`
+ * asserts that against a document built the long way.
+ *
+ * ponytail: PARTIAL application, deliberately. `replaceTimeline` is the repo's
+ * other array-taking tool and it refuses in one block — "Refused … Nothing was
+ * modified" — which is right for a tool that rebuilds the whole timeline and
+ * ruinous for one that adds ten independent cuts: a single bad bound would throw
+ * away nine good ones and the model would have to guess which. So each item
+ * stands or falls alone, and the result says which did what. `ok:false` is kept
+ * for the case where NOTHING landed, because that is the only one where the
+ * document did not move.
+ */
+function applyBatch(
+	document: AxcutDocument,
+	unitName: "addTrim" | "addZoom",
+	items: unknown[],
+	options: AgentToolOptions | undefined,
+	noun: string,
+): AgentToolExecution {
+	let current = document;
+	const applied: Array<Record<string, unknown>> = [];
+	const refused: Array<{ index: number; error: string }> = [];
+
+	items.forEach((item, index) => {
+		const execution = executeAgentTool(current, unitName, JSON.stringify(item), options);
+		let payload: Record<string, unknown> = {};
+		try {
+			payload = JSON.parse(execution.resultJson) as Record<string, unknown>;
+		} catch {
+			payload = { error: execution.resultJson };
+		}
+		if (execution.ok && execution.document) {
+			current = execution.document;
+			applied.push({ index, ...payload });
+		} else {
+			refused.push({ index, error: String(payload.error ?? "refused") });
+		}
+	});
+
+	// Nothing landed: the document is untouched, so say so the way every other
+	// refusal does rather than reporting a success with an empty list.
+	if (applied.length === 0) {
+		return failure(
+			`No ${noun} was added. ` +
+				refused.map((r) => `[${r.index}] ${r.error}`).join(" | ") +
+				" Nothing was modified.",
+		);
+	}
+
+	const refusedSuffix = refused.length ? `, ${refused.length} refused` : "";
+	return {
+		ok: true,
+		document: current,
+		// The counts come first on purpose: the model must be able to see that one
+		// of ten was refused WITHOUT re-reading the document, and know which one.
+		resultJson: JSON.stringify({
+			requested: items.length,
+			appliedCount: applied.length,
+			refusedCount: refused.length,
+			applied,
+			...(refused.length ? { refused } : {}),
+		}),
+		summary: `added ${applied.length} ${noun}${applied.length === 1 ? "" : "s"}${refusedSuffix}`,
+	};
 }
 
 /** The clips as the model would have to name them, for an error about an id it
@@ -944,6 +1041,12 @@ export function executeAgentTool(
 			};
 		}
 
+		case "addTrims": {
+			const parsed = addTrimsArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			return applyBatch(document, "addTrim", parsed.data.ranges, options, "trim");
+		}
+
 		case "setTrim": {
 			const parsed = setTrimArgs.safeParse(args);
 			if (!parsed.success) return failure(parsed.error.message);
@@ -1177,6 +1280,12 @@ export function executeAgentTool(
 					`at ${effectiveZoomScale(zoom).toFixed(2)}×` +
 					landingSuffix(landing, startMs / 1000, endMs / 1000),
 			};
+		}
+
+		case "addZooms": {
+			const parsed = addZoomsArgs.safeParse(args);
+			if (!parsed.success) return failure(parsed.error.message);
+			return applyBatch(document, "addZoom", parsed.data.regions, options, "zoom");
 		}
 
 		case "setZoom": {
