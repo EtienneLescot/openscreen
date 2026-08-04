@@ -9,7 +9,10 @@
 
 import { Loader2 } from "lucide-react";
 import { useScopedT } from "@/contexts/I18nContext";
-import type { AssetTranscriptionView } from "@/lib/ai-edition/transcription/status";
+import {
+	type AssetTranscriptionView,
+	progressFraction,
+} from "@/lib/ai-edition/transcription/status";
 
 /** Human-readable state of one asset's transcript, in the user's language. */
 export function useTranscriptionLabel(): (view: AssetTranscriptionView) => string {
@@ -20,8 +23,21 @@ export function useTranscriptionLabel(): (view: AssetTranscriptionView) => strin
 				return t("mediaStage.transcriptReady");
 			case "queued":
 				return t("mediaStage.pendingTranscription");
-			case "running":
-				return t("mediaStage.transcribing");
+			case "running": {
+				// The first-run model download is a 253 MB wait with nothing else on
+				// screen to explain it, so it gets its own words rather than being
+				// labelled "Transcribing" — this is the phase most often mistaken for
+				// a hang, and the one `phase` was carried through the store for.
+				if (view.phase === "loading-model") return t("mediaStage.downloadingModel");
+				// Transcribing a long recording runs for minutes. A bare
+				// "Transcribing…" for that whole time is indistinguishable from a
+				// hang, so append the percentage as soon as the main process reports
+				// chunk progress — and only then (see `TranscriptionProgressBar`).
+				const fraction = progressFraction(view.progress);
+				return fraction === null
+					? t("mediaStage.transcribing")
+					: `${t("mediaStage.transcribing")} ${Math.round(fraction * 100)}%`;
+			}
 			case "empty":
 				return t("mediaStage.noSpeechDetected");
 			case "failed":
@@ -77,5 +93,47 @@ export function TranscriptionStatusDot({
 			aria-label={label}
 			title={view.failure?.message ? `${label} — ${view.failure.message}` : label}
 		/>
+	);
+}
+
+/**
+ * Determinate progress bar for a running transcription. Renders nothing unless
+ * the job actually reports measurable progress — a job that is queued,
+ * extracting audio or downloading the model has no meaningful fraction, and a
+ * bar pinned at 0% reads as "stuck" where the spinner reads as "working".
+ *
+ * It owns its own spacing on purpose. A wrapper in the caller cannot render
+ * itself away with the bar, and in a flex column (where margins don't collapse)
+ * an empty one still takes its margins — 8px of dead gap under every media card
+ * that isn't transcribing.
+ */
+export function TranscriptionProgressBar({ view }: { view: AssetTranscriptionView }) {
+	const label = useTranscriptionLabel();
+	const fraction = view.status === "running" ? progressFraction(view.progress) : null;
+	if (fraction === null) return null;
+	return (
+		<div
+			role="progressbar"
+			aria-label={label(view)}
+			aria-valuemin={0}
+			aria-valuemax={100}
+			aria-valuenow={Math.round(fraction * 100)}
+			style={{
+				height: 4,
+				margin: "-8px 0 16px",
+				borderRadius: 999,
+				background: "var(--surface-3)",
+				overflow: "hidden",
+			}}
+		>
+			<div
+				style={{
+					height: "100%",
+					width: `${fraction * 100}%`,
+					background: "var(--accent)",
+					transition: "width 200ms linear",
+				}}
+			/>
+		</div>
 	);
 }

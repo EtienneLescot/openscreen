@@ -5,6 +5,7 @@ import {
 	classifyTranscriptionError,
 	deriveAssetStatus,
 	isPermanentFailure,
+	progressFraction,
 	resolveTranscriptGate,
 	transcriptHasSpeech,
 	transcriptRelevantAssetIds,
@@ -91,6 +92,30 @@ describe("deriveAssetStatus", () => {
 			transcript: transcript("asset_1", ["hello"]),
 		});
 		expect(derived).toEqual({ assetId: "asset_1", status: "running", phase: "transcribing" });
+	});
+
+	it("carries chunk progress through to the view", () => {
+		const derived = deriveAssetStatus({
+			assetId: "asset_1",
+			job: {
+				status: "running",
+				phase: "transcribing",
+				progress: { completedSec: 90, totalSec: 300 },
+			},
+		});
+		expect(derived.progress).toEqual({ completedSec: 90, totalSec: 300 });
+		expect(progressFraction(derived.progress)).toBeCloseTo(0.3);
+	});
+
+	it("leaves progress absent while nothing measurable is running", () => {
+		// Audio extraction and the model download have no fraction to report; the
+		// UI must get `undefined` so it keeps the spinner instead of a 0% bar.
+		const derived = deriveAssetStatus({
+			assetId: "asset_1",
+			job: { status: "running", phase: "extracting-audio" },
+		});
+		expect(derived.progress).toBeUndefined();
+		expect(progressFraction(derived.progress)).toBeNull();
 	});
 
 	it("reports ready from the document, with no job at all", () => {

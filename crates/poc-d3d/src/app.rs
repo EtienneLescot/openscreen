@@ -100,16 +100,24 @@ struct App {
 }
 
 impl App {
-    /// Compose + affiche la 1re frame, avant l'ouverture de la fenêtre.
+    /// Compose + affiche la 1re frame, avant l'ouverture de la fenêtre. Cible `INFINITY` :
+    /// on veut cette toute première frame quel que soit son pts, la notion de "due" n'a pas
+    /// encore de sens avant le premier tick réel (cf. `Player::step`, sémantique de hold).
     unsafe fn init_first_frame(&mut self) {
         let cfg = self.cfgs[self.cur].clone();
-        let _ = self.player.step(&self.comp, &cfg);
+        let _ = self.player.step(&self.comp, &cfg, f64::INFINITY);
         let _ = self.render();
         self.update_ready_status();
         self.last = Instant::now();
     }
 
     /// Cadence 60 fps par horloge murale (accumulateur), avec garde anti-spirale.
+    ///
+    /// `self.acc` est une CIBLE de temps source (mis à l'échelle par le temps réel écoulé),
+    /// pas un compte de frames à décoder — `Player::step` n'adopte une frame que si son pts
+    /// est réellement dû, sinon il tient la frame courante (hold). Sans ça, ce harnais
+    /// consommerait une frame réelle par 1/60s de temps réel même quand la source n'en livre
+    /// pas autant (cf. la doc de `Player::step` côté lib, même bug que la preview Electron).
     unsafe fn on_tick(&mut self) -> Result<()> {
         if self.exporting || !self.playing {
             return Ok(());
@@ -118,19 +126,27 @@ impl App {
         let dt = (now - self.last).as_secs_f64().min(0.1);
         self.last = now;
         self.acc += dt;
-        let step = 1.0 / 60.0;
         let cfg = self.cfgs[self.cur].clone();
         let mut stepped = false;
         let mut n = 0;
-        while self.acc >= step && n < 3 {
-            if self.player.step(&self.comp, &cfg)? {
-                stepped = true;
+        loop {
+            let before = self.player.screen_time_sec();
+            let target = before + self.acc;
+            if !self.player.step(&self.comp, &cfg, target)? {
+                break; // rien de dû pour l'instant : `self.acc` reste tel quel.
             }
-            self.acc -= step;
+            stepped = true;
+            let after = self.player.screen_time_sec();
+            self.acc = if after >= before {
+                (self.acc - (after - before)).max(0.0)
+            } else {
+                0.0 // reboucle sur l'EOF (temps qui recule) : accumulateur remis à zéro.
+            };
             n += 1;
-        }
-        if self.acc > step {
-            self.acc = 0.0; // largue le retard accumulé (fenêtre masquée, etc.)
+            if n >= 3 {
+                self.acc = 0.0; // largue le retard accumulé (fenêtre masquée, etc.)
+                break;
+            }
         }
         if stepped {
             self.render()?;

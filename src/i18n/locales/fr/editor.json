@@ -140,6 +140,7 @@
 		"transcriptEmpty": "La transcription est vide.",
 		"notGeneratedHint": "Pas encore générée — choisissez une langue et cliquez sur régénérer.",
 		"transcribing": "Transcription en cours",
+		"downloadingModel": "Téléchargement du modèle vocal",
 		"transcribingEllipsis": "Transcription en cours…",
 		"pendingTranscription": "Transcription en attente",
 		"transcriptionFailed": "Échec de la transcription",
