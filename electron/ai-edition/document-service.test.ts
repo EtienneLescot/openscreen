@@ -2,8 +2,9 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { AxcutDocument } from "../../src/lib/ai-edition/schema";
+import type { AxcutAsset, AxcutDocument } from "../../src/lib/ai-edition/schema";
 import { axcutSchemaVersion } from "../../src/lib/ai-edition/schema";
+import { registerMediaLinks } from "../media/mediaLinksRegistry";
 import { DocumentNotFoundError, DocumentService, ProjectFileError } from "./document-service";
 
 async function makeTempDir(): Promise<string> {
@@ -13,15 +14,18 @@ async function makeTempDir(): Promise<string> {
 
 describe("DocumentService", () => {
 	let tempDir: string;
+	let mediaDir: string;
 	let service: DocumentService;
 
 	beforeEach(async () => {
 		tempDir = await makeTempDir();
-		service = new DocumentService(tempDir);
+		mediaDir = await makeTempDir();
+		service = new DocumentService(tempDir, mediaDir);
 	});
 
 	afterEach(async () => {
 		await fs.rm(tempDir, { recursive: true, force: true });
+		await fs.rm(mediaDir, { recursive: true, force: true });
 	});
 
 	describe("createProject", () => {
@@ -63,6 +67,74 @@ describe("DocumentService", () => {
 			await expect(service.getProject("../etc/passwd")).rejects.toBeInstanceOf(ProjectFileError);
 			await expect(service.getProject("proj/with/slash")).rejects.toBeInstanceOf(ProjectFileError);
 		});
+
+		// Issue #212 — a project authored on another machine opens with every asset
+		// pointing at a path that does not exist here. The relink runs on this read,
+		// not on import, so a document already saved broken still recovers.
+		describe("relinking moved media", () => {
+			const stalePath = "C:\\Users\\demo\\recording-42.mp4";
+			const staleWebcamPath = "C:\\Users\\demo\\recording-42-webcam.mp4";
+			const screenBytes = "screen bytes";
+			let screenPath: string;
+			let webcamPath: string;
+			let logged: string[];
+
+			beforeEach(async () => {
+				screenPath = path.join(mediaDir, "recording-42.mp4");
+				webcamPath = path.join(mediaDir, "recording-42-webcam.mp4");
+				await fs.writeFile(screenPath, screenBytes, "utf8");
+				await fs.writeFile(webcamPath, "webcam bytes", "utf8");
+				await registerMediaLinks(mediaDir, screenPath, { webcamVideoPath: webcamPath });
+				logged = [];
+				const record = (...args: unknown[]) => {
+					logged.push(args.join(" "));
+				};
+				vi.spyOn(console, "log").mockImplementation(record);
+				vi.spyOn(console, "warn").mockImplementation(record);
+			});
+
+			afterEach(() => {
+				vi.restoreAllMocks();
+			});
+
+			async function writeStaleProject(sizeBytes: number | undefined): Promise<string> {
+				const doc = await service.createProject("Moved media");
+				const asset: AxcutAsset = {
+					id: "asset_moved",
+					kind: "video",
+					label: "recording-42.mp4",
+					originalPath: stalePath,
+					sizeBytes,
+					cameraTrack: { sourcePath: staleWebcamPath, startMs: 0, offsetMs: 0, visible: true },
+				};
+				await service.saveProject({
+					...doc,
+					assets: [asset],
+					project: { ...doc.project, primaryAssetId: asset.id },
+				});
+				return doc.project.id;
+			}
+
+			it("repoints screen and webcam paths at the registry's copies", async () => {
+				const projectId = await writeStaleProject(Buffer.byteLength(screenBytes));
+				const loaded = await service.getProject(projectId);
+				expect(loaded.assets[0]?.originalPath).toBe(screenPath);
+				expect(loaded.assets[0]?.cameraTrack?.sourcePath).toBe(webcamPath);
+				// The renderer saves what it is handed, so a rewrite must be traceable.
+				expect(logged.join("\n")).toContain(screenPath);
+			});
+
+			it("leaves the paths alone when the document recorded no file size", async () => {
+				// Every v1.7-migrated document is in this state: only addAsset records a
+				// size. Matching on the basename alone would hand this project a
+				// different recording — and that recording's webcam — without a word.
+				const projectId = await writeStaleProject(undefined);
+				const loaded = await service.getProject(projectId);
+				expect(loaded.assets[0]?.originalPath).toBe(stalePath);
+				expect(loaded.assets[0]?.cameraTrack?.sourcePath).toBe(staleWebcamPath);
+				expect(logged.join("\n")).toContain(stalePath);
+			});
+		});
 	});
 
 	describe("listProjects", () => {
@@ -91,7 +163,7 @@ describe("DocumentService", () => {
 
 			// A fresh service (new process) must still surface and load it, renaming
 			// the file across in the process.
-			const fresh = new DocumentService(tempDir);
+			const fresh = new DocumentService(tempDir, mediaDir);
 			const summaries = await fresh.listProjects();
 			expect(summaries.map((s) => s.id)).toEqual([created.project.id]);
 			await expect(fresh.getProject(created.project.id)).resolves.toMatchObject({

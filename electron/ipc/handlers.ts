@@ -3628,17 +3628,8 @@ export function registerIpcHandlers(
 			}
 
 			const content = await fs.readFile(currentProjectPath, "utf-8");
-			const project = await relinkProjectMedia(JSON.parse(content), RECORDINGS_DIR);
-			let session: RecordingSession | null = null;
-			try {
-				session = await getApprovedProjectSession(project, currentProjectPath);
-			} catch (sessionError) {
-				console.warn(
-					"[loadCurrentProjectFile] Could not approve session paths, proceeding without session:",
-					sessionError,
-				);
-			}
-			setCurrentRecordingSessionState(session);
+			const project = JSON.parse(content);
+			setCurrentRecordingSessionState(await getApprovedProjectSession(project, currentProjectPath));
 			return {
 				success: true,
 				path: currentProjectPath,
@@ -3835,7 +3826,10 @@ export function registerIpcHandlers(
 	// race destroyed two real project files), so a second instance means a second
 	// queue racing for the same path: temp+rename still keeps the file valid, but
 	// a save can land under a concurrent one and be silently lost.
-	const aiEditionDocuments = new DocumentService(path.join(app.getPath("userData"), "projects"));
+	const aiEditionDocuments = new DocumentService(
+		path.join(app.getPath("userData"), "projects"),
+		RECORDINGS_DIR,
+	);
 
 	// LlmConfigStore is single-instance for a duller reason — its constructor does
 	// two sync readFileSync plus a safeStorage decrypt, and it was running on every

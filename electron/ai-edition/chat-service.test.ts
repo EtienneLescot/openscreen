@@ -156,11 +156,12 @@ describe("runTimelineOperation", () => {
 	// state (projectsRoot, the per-project write queue), so no object literal can
 	// stand in for it. Subclassing keeps the stub a real DocumentService while
 	// replacing the only two methods runTimelineOperation calls with in-memory
-	// versions — nothing here touches the filesystem, so projectsRoot is never
-	// read and no directory is created.
+	// versions — nothing here touches the filesystem, so neither projectsRoot nor
+	// the media-links directory is ever read and no directory is created.
 	class StubDocumentService extends DocumentService {
 		constructor(readonly file: { stored: AxcutDocument | undefined }) {
-			super(path.join(tmpdir(), "openscreen-chat-service-test-unused"));
+			const unused = path.join(tmpdir(), "openscreen-chat-service-test-unused");
+			super(unused, unused);
 		}
 
 		override async getProject(): Promise<AxcutDocument> {
