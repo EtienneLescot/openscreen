@@ -726,6 +726,12 @@ impl Compositor {
         *self.live_params.borrow_mut() = p;
     }
 
+    /// Cf. `compositor_windows::set_has_webcam` — le seul champ de `LiveParams` qui dépend du
+    /// clip courant, rebranché par `walk_composited_timeline` sans écraser le reste.
+    pub fn set_has_webcam(&self, v: bool) {
+        self.live_params.borrow_mut().has_webcam = v;
+    }
+
     pub fn set_scene(&self, s: Option<Scene>) {
         *self.scene.borrow_mut() = s;
     }

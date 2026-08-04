@@ -601,10 +601,35 @@ pub struct LiveParams {
     /// False when the "webcam" decoder is actually just the screen video again (the TS side
     /// falls `webcamPath` back to the screen asset's own path when a clip has no real camera,
     /// purely so the decoder pipeline has something valid to open) — drawing the PiP box in
-    /// that case duplicates the screen video into its own corner. Live-only: derived in
-    /// `live.rs` by comparing the active clip's screen/webcam paths; defaults `true` (draw)
-    /// so fixture/bench renders and any caller that never sets it keep their old behavior.
+    /// that case duplicates the screen video into its own corner. Derived per clip from the
+    /// screen/webcam paths via `webcam_is_real`: in `live.rs` for the preview, in
+    /// `timeline_walk.rs` for every export. Defaults `true` (draw) so fixture/bench renders
+    /// and any caller that never sets it keep their old behavior.
     pub has_webcam: bool,
+}
+
+fn same_source_path(a: &str, b: &str) -> bool {
+    a.eq_ignore_ascii_case(b)
+}
+
+/// True when this clip really has a camera to draw.
+///
+/// TWO ways the app says "no camera", and both must be caught here, because the
+/// webcam decoder is opened either way — the live path falls back to the SCREEN
+/// file when the webcam path won't open, and `ExportDialog` sends the screen path
+/// outright, so the decoder always yields frames. Whether those frames are the
+/// camera or a second copy of the screen is decided HERE and nowhere else.
+///
+///   - the empty string, which is what `sceneDescription.ts` and
+///     `NativeCompositorOverlay` send for an asset with no `cameraTrack`;
+///   - the screen's own path, which `ExportDialog.tsx` sends and which older
+///     scenes still use.
+///
+/// Missing the empty-string case is what put the screen recording inside the PiP
+/// box: `"" != "/…/recording.mp4"`, so the box was drawn, and the decoder behind
+/// it was the screen fallback.
+pub fn webcam_is_real(webcam_path: &str, screen_path: &str) -> bool {
+    !webcam_path.trim().is_empty() && !same_source_path(webcam_path, screen_path)
 }
 
 impl Default for LiveParams {
