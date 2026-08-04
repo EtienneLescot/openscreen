@@ -140,6 +140,29 @@ jobs:
           APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
         run: |
           if [[ -n "$MAC_CERTIFICATE_P12" && -n "$MAC_CERTIFICATE_PASSWORD" && -n "$MAC_CSC_NAME" && -n "$APPLE_ID" && -n "$APPLE_TEAM_ID" && -n "$APPLE_APP_SPECIFIC_PASSWORD" ]]; then
+            # `CSC_NAME` must name the identity WITHOUT its certificate type.
+            # electron-builder picks the type itself and rejects a qualified name
+            # outright:
+            #
+            #   ⨯ Please remove prefix "Developer ID Application:" from the
+            #     specified name — appropriate certificate will be chosen
+            #     automatically
+            #
+            # It does that at `Package .app bundle`, which sits after the ffmpeg
+            # build and the compositor addon — about twelve minutes in, and only
+            # on macOS. Since the same secret also feeds `codesign --sign` at
+            # `Sign DMG`, the mistake is easy to make: codesign accepts the full
+            # common name, so the qualified form looks right until electron-builder
+            # sees it. The short form satisfies both, because codesign matches on a
+            # substring of the common name.
+            case "$MAC_CSC_NAME" in
+              # Every pattern ends at the colon on purpose, so a company whose
+              # name merely starts with one of these words is not rejected.
+              "Developer ID Application:"*|"Developer ID Installer:"*|"Apple Development:"*|"Apple Distribution:"*|"3rd Party Mac Developer Application:"*|"3rd Party Mac Developer Installer:"*)
+                echo "::error::MAC_CSC_NAME carries a certificate-type prefix. Set it to the identity name alone, e.g. 'Jane Doe (AB12CD34EF)' rather than 'Developer ID Application: Jane Doe (AB12CD34EF)'. Read it from: security find-identity -v -p codesigning"
+                exit 1
+                ;;
+            esac
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           else
             echo "enabled=false" >> "$GITHUB_OUTPUT"
