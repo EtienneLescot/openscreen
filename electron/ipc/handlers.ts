@@ -2755,6 +2755,11 @@ export function registerIpcHandlers(
 					detachNativeWindowsCaptureOutputDrain();
 				}
 				await stopCursorRecording();
+				// Same as the discard path. `startCursorRecording` clears this on
+				// the next recording anyway, so this is not what keeps the samples
+				// from being written next to someone else's video -- it just stops
+				// a lost take's telemetry from sitting in memory until then.
+				pendingCursorRecordingData = null;
 				// The helper never announced a finalized file, so what is on disk
 				// is almost certainly an unindexed stub, and leaving those behind
 				// just accumulates unplayable recordings the user cannot explain.
