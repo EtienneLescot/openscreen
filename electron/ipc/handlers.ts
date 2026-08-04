@@ -439,6 +439,12 @@ type AttachNativeMacWebcamRecordingInput = {
 	recordingId?: number;
 	webcam?: RecordedVideoAssetInput;
 	cursorCaptureMode?: CursorCaptureMode;
+	/**
+	 * Webcam clip duration (ms), head start included. A streamed webcam file carries
+	 * no Duration header and the renderer no longer holds the blob to patch, so the
+	 * main process repairs the container on disk with this value.
+	 */
+	durationMs?: number;
 	/** See {@link ProjectMedia.webcamOffsetMs}. */
 	webcamOffsetMs?: number;
 };
@@ -2788,6 +2794,13 @@ export function registerIpcHandlers(
 		}
 	});
 
+	// On-disk write streams for in-progress recordings, keyed by output file name.
+	// Chunks append as they arrive so the renderer never buffers the full video (#616).
+	// Declared here because both the webcam attach below and store-recorded-session
+	// finalize through the same registry.
+	const recordingStreams = new RecordingStreamRegistry();
+	registerRecordingStreamHandlers(ipcMain, recordingStreams, resolveRecordingOutputPath);
+
 	/**
 	 * Writes a browser-recorded webcam clip next to a natively-recorded screen
 	 * video and rewrites the session manifest to include both.
@@ -2817,7 +2830,7 @@ export function registerIpcHandlers(
 
 				await fs.access(screenVideoPath, fsConstants.R_OK);
 
-				if (!payload.webcam?.fileName || !payload.webcam.videoData) {
+				if (!payload.webcam?.fileName) {
 					return {
 						success: false,
 						error: `Native ${platformLabel} webcam attachment is missing video data.`,
@@ -2825,7 +2838,31 @@ export function registerIpcHandlers(
 				}
 
 				const webcamVideoPath = resolveRecordingOutputPath(payload.webcam.fileName);
-				await fs.writeFile(webcamVideoPath, Buffer.from(payload.webcam.videoData));
+				// A streamed webcam arrives with an empty buffer: its bytes are already on
+				// disk, so close the stream and keep the file rather than writing it here.
+				// Nothing multi-gigabyte crosses IPC or gets flattened into one Buffer (#253).
+				const webcamStreamed = await finalizeRecordingFile(
+					recordingStreams,
+					payload.webcam.fileName,
+					webcamVideoPath,
+					payload.webcam.videoData,
+				);
+				// Mirrors finalizeRecordingFile's own condition, so this fires exactly when
+				// it wrote nothing and the session would point at a file that isn't there.
+				if (
+					!webcamStreamed &&
+					!(payload.webcam.videoData && payload.webcam.videoData.byteLength > 0)
+				) {
+					return {
+						success: false,
+						error: `Native ${platformLabel} webcam attachment is missing video data.`,
+					};
+				}
+				// Streamed files lack the WebM Duration header, which the editor needs to
+				// scale its timeline. Best-effort: a failed repair leaves the clip intact.
+				if (webcamStreamed && isValidDurationMs(payload.durationMs)) {
+					await repairRecordingContainer(webcamVideoPath, payload.durationMs);
+				}
 
 				const createdAt =
 					typeof payload.recordingId === "number" && Number.isFinite(payload.recordingId)
@@ -2891,11 +2928,6 @@ export function registerIpcHandlers(
 			return attachNativeWebcamRecording("Linux", payload);
 		},
 	);
-
-	// On-disk write streams for in-progress recordings, keyed by output file name.
-	// Chunks append as they arrive so the renderer never buffers the full video (#616).
-	const recordingStreams = new RecordingStreamRegistry();
-	registerRecordingStreamHandlers(ipcMain, recordingStreams, resolveRecordingOutputPath);
 
 	ipcMain.handle("store-recorded-session", async (_, payload: StoreRecordedSessionInput) => {
 		try {
