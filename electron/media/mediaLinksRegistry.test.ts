@@ -205,4 +205,90 @@ describe("mediaLinksRegistry", () => {
 			}
 		});
 	});
+
+	// `findMediaLinksByFingerprint` is a READ that writes: when the path has
+	// drifted it refreshes `lastKnownPath` in the background. Not awaiting that
+	// write is the right call — a lookup should not pay for it — but it means
+	// nothing is watching the promise, and a rejected promise nobody watches is a
+	// process-level `unhandledRejection`. Under vitest that fails the run from
+	// OUTSIDE every test, which is how this was found: 1628 passing tests, a red
+	// job, and a stack pointing at a temp dir a finished suite had removed.
+	//
+	// Both cases below assert the same thing in two ways a real machine produces
+	// it. Neither asserts that the refresh succeeds — that is precisely what is
+	// allowed to fail.
+	describe("the background path refresh", () => {
+		/** Same bytes at a second path, so a lookup matches by fingerprint and
+		 *  then tries to write the new path back. */
+		async function registerThenMove(): Promise<{ original: string; moved: string }> {
+			const original = path.join(tempDir, "moved.webm");
+			await writeFileOfSize(original, 900, "m");
+			await registerMediaLinks(tempDir, original, { webcamVideoPath: `${original}-cam.webm` });
+			const moved = path.join(tempDir, "moved-elsewhere.webm");
+			await fs.copyFile(original, moved);
+			return { original, moved };
+		}
+
+		async function withoutUnhandledRejections(fn: () => Promise<void>): Promise<unknown[]> {
+			const rejections: unknown[] = [];
+			const onRejection = (reason: unknown) => rejections.push(reason);
+			process.on("unhandledRejection", onRejection);
+			try {
+				await fn();
+				// Node decides a rejection is unhandled a tick after the microtask
+				// queue drains, so the assertion needs a real timer, not a flush.
+				await new Promise((resolve) => setTimeout(resolve, 50));
+			} finally {
+				process.off("unhandledRejection", onRejection);
+			}
+			return rejections;
+		}
+
+		// Running as root defeats the permission bit this case relies on. Skipped
+		// out loud rather than passing vacuously.
+		it.skipIf(process.getuid?.() === 0)(
+			"logs a refresh it cannot write, and still answers the lookup",
+			async () => {
+				const { original, moved } = await registerThenMove();
+				// Registry readable, directory unwritable: only the write can fail.
+				await fs.chmod(tempDir, 0o555);
+				const warned = vi.spyOn(console, "warn").mockImplementation(() => {
+					// swallowed: the test asserts on it, the suite output does not need it
+				});
+				try {
+					const rejections = await withoutUnhandledRejections(async () => {
+						const resolved = await findMediaLinksByFingerprint(tempDir, moved);
+						// A refresh that failed is not a lookup that failed.
+						expect(resolved?.webcamVideoPath).toBe(`${original}-cam.webm`);
+					});
+					expect(rejections).toEqual([]);
+					expect(warned).toHaveBeenCalled();
+				} finally {
+					warned.mockRestore();
+					await fs.chmod(tempDir, 0o755);
+				}
+			},
+		);
+
+		it("survives the directory disappearing while the refresh is queued", async () => {
+			// The CI shape: a suite's `afterEach` removes its temp dir while a write
+			// is still in the queue. Whoever wins the race is fine — what must not
+			// happen is a rejection escaping into the process.
+			const { moved } = await registerThenMove();
+			const warned = vi.spyOn(console, "warn").mockImplementation(() => {
+				// may or may not fire: the write is allowed to win the race
+			});
+			try {
+				const rejections = await withoutUnhandledRejections(async () => {
+					const lookup = findMediaLinksByFingerprint(tempDir, moved);
+					await fs.rm(tempDir, { recursive: true, force: true });
+					await lookup;
+				});
+				expect(rejections).toEqual([]);
+			} finally {
+				warned.mockRestore();
+				await fs.mkdir(tempDir, { recursive: true });
+			}
+		});
+	});
 });
