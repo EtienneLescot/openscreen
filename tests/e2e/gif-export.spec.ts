@@ -27,10 +27,9 @@ async function launchApp(userDataDir: string, tmpDir: string) {
 		env: {
 			...process.env,
 			ELECTRON_USER_DATA_DIR: userDataDir,
-			// `acquireStableInstanceLock` keys its lock directory off `os.tmpdir()` and
-			// the *user id* — not off userData — so a dev instance running from any
-			// worktree would otherwise make this launch quit instantly (exit code 0, no
-			// window, no stderr). Giving the app its own temp dir gives it its own lock.
+			// Keep this run's scratch files out of the shared temp dir so a dev instance
+			// cannot collide with them. The single-instance lock keys on userData, which
+			// `--user-data-dir` above already makes private to this launch.
 			TMPDIR: tmpDir,
 			TMP: tmpDir,
 			TEMP: tmpDir,

@@ -144,9 +144,11 @@ Each cost hours and each produced a confident, wrong conclusion.
    against the new renderer. It read as "export IPC not registered" once
    and as "the bench flag does nothing" once. The bench now refuses to
    run against one.
-9. **The installed app (`openscreen.exe`) holds the same single-instance
-   lock as the dev build.** A launch exits 0 and reports nothing —
-   silently.
+9. **A second instance of the same build quits silently.** The lock keys
+   on the `userData` path, so another dev build already running makes a
+   launch exit 0 and report nothing. The installed app
+   (`openscreen.exe`) resolves a different `userData` path and does not
+   conflict.
 
 ## A truncated project file is unopenable, not partially readable
 

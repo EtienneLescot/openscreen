@@ -7,7 +7,7 @@ Sections marked **v1.8.0** cover what this release changed: chat-driven editing 
 ## How to run this
 
 1. Drive the real Electron app with computer-use, not a browser shim. Start a dev build with `npm run dev`, or launch the packaged build under test.
-2. The app is single-instance. If a stale process holds the lock, stop the leftover Electron/OpenScreen process and remove the per-user lock directory before relaunching; a second launch can exit successfully without opening a window.
+2. The app is single-instance per `userData` path. If a leftover Electron/OpenScreen process still holds the lock, stop that process before relaunching; a second launch can exit successfully without opening a window. The lock is held by the OS and is released when the process dies, so there is nothing to delete on disk.
 3. From a worktree, link or junction `node_modules` to the main checkout and provide the prebuilt native capture binaries for the platform before starting the dev build.
 4. Grant computer-use access to the process name that actually owns the window: `electron.exe` or `Electron.app` for a dev build, and `Openscreen.exe` or `Openscreen.app` for a packaged build. Do not grant access only to the installed app name when testing a dev build.
 5. Read [AGENTS.md](../../AGENTS.md) for the computer-use mechanics, screenshot permissions, tray interaction, and cleanup procedure. Read one check, perform it, observe the result, then continue; close each modal or popover with `Esc` before the next check.
