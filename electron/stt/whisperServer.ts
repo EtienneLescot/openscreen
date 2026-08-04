@@ -143,6 +143,13 @@ export class WhisperServerManager {
 
 	private recordError(message: string): void {
 		this.lastError = message;
+		// ponytail: also to the log, not only to the field. `lastError` is read by
+		// the `status` getter, which nothing on the transcribe path calls — so a
+		// missing or non-executable helper used to leave no trace anywhere in the
+		// main process, and the only way to find out was to instrument the code.
+		// The renderer does toast the failure now; a packaged build still needs a
+		// line someone can point at in a bug report.
+		console.error(`[stt] ${message}`);
 	}
 
 	/** True when a process is alive and a model is loaded. */

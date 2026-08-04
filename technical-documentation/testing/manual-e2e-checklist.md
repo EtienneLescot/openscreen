@@ -181,7 +181,7 @@ Zoom, speed, annotation, and full-camera regions are stored against a clip in th
 ### Local transcription and captions — v1.8.0
 
 - [ ] Confirm the transcript pane states that transcription runs locally and that no upload occurs when it is started.
-- [ ] With the Whisper helper binary absent, activate the transcribe action and confirm the UI reports why nothing happened. Observed 2026-07-31: the button produces no message, no error state, and not one line in the main-process log — a build shipped without the helper gives the user a dead button and no way to find out. Verify against a build whose helper was deliberately not packaged, not only against a working one.
+- [ ] With the Whisper helper binary absent, activate the transcribe action and confirm the UI reports why nothing happened, and that the main-process log carries a matching `[stt]` line. The failure now reaches a toast (`transcriptionStore.ts`) and the log (`whisperServer.ts`), but the text it shows is the helper's own — a sentence about a build script, which is not an answer for someone running a packaged build. Verify against a build whose helper was deliberately not packaged, not only against a working one.
 - [ ] Run transcription in the packaged build and confirm the model is fetched or reused without an error about a missing cache directory.
 - [ ] Confirm a second transcription reuses the cached model instead of downloading it again.
 - [ ] Confirm the completed transcript reports the detected language on the media asset card.
