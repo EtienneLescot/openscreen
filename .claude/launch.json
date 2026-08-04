@@ -26,6 +26,12 @@
       "runtimeExecutable": "npm",
       "runtimeArgs": ["--prefix", "website", "run", "serve", "--", "--port", "3111"],
       "port": 3111
+    },
+    {
+      "name": "docs-dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["--prefix", "website", "run", "dev", "--", "--port", "3112"],
+      "port": 3112
     }
   ]
 }
