@@ -196,14 +196,14 @@ describe("V4Timeline create-from-toolbar", () => {
 	it("scales the new region's duration with the zoom", () => {
 		const { tl } = renderTimeline();
 		fireEvent.click(screen.getByTitle("buttons.addZoom"));
-		// 900px viewport / 1800 s = 0.5 px per second, so 40px of pill is 80 s.
-		expect(durationOf(tl)).toBeCloseTo(80, 3);
+		// 900px viewport / 1800 s = 0.5 px per second, so a 96px pill is 192 s.
+		expect(durationOf(tl)).toBeCloseTo(192, 3);
 
-		// Zoomed to the 50x ceiling the same 40px is worth 1.6 s: same pill on
+		// Zoomed to the 50x ceiling the same 96px is worth 3.84 s: same pill on
 		// screen, a region 50x shorter.
 		zoomIn(40);
 		fireEvent.click(screen.getByTitle("buttons.addZoom"));
-		expect(durationOf(tl)).toBeCloseTo(1.6, 3);
+		expect(durationOf(tl)).toBeCloseTo(3.84, 3);
 	});
 
 	it("never asks for a slice too short to be worth creating", () => {
