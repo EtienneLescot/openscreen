@@ -1,5 +1,6 @@
 import path from "node:path";
 import { defineConfig } from "vitest/config";
+import { DEFAULT_TURN_TIMEOUT_MS } from "./workbench/lib/harness";
 
 // ponytail: separate from vitest.config.ts on purpose — `workbench/` is outside
 // that config's include glob AND outside tsconfig.test.json's include, so the
@@ -15,7 +16,12 @@ export default defineConfig({
 		globals: true,
 		environment: "node",
 		include: ["workbench/**/*.wb.ts"],
-		testTimeout: 120_000,
+		// ponytail: imported, not recopied. A `.wb.ts` that drives a live turn is
+		// cut by whichever cutoff fires first, and this one used to sit at 120 s
+		// while the harness moved to 300 s — so vitest would have killed the turn
+		// before the harness could say it had timed out, which is the failure the
+		// harness comment exists to prevent. One constant, two enforcers.
+		testTimeout: DEFAULT_TURN_TIMEOUT_MS,
 		reporters: ["default"],
 		// ponytail: the fixed cost of the suite is the dynamic
 		// `await import("deepagents")` in chat-service.ts:346 — hundreds of
