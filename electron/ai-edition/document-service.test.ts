@@ -140,7 +140,7 @@ describe("DocumentService", () => {
 	});
 
 	describe("removeAsset", () => {
-		it("removes the asset and cascades clips + trimRanges", async () => {
+		it("removes the asset and cascades clips, trims, and clip modifiers", async () => {
 			const doc = await service.createProject("P");
 			const withAsset = await service.addAsset(doc.project.id, { path: "/tmp/a.mp4" });
 			const assetId = withAsset.assets[0]?.id ?? "";
@@ -174,12 +174,39 @@ describe("DocumentService", () => {
 						},
 					],
 				},
+				zoomRanges: [
+					{
+						id: "zoom_1",
+						clipId: "clip_1",
+						sourceStartSec: 0,
+						sourceEndSec: 1,
+						startMs: 0,
+						endMs: 1000,
+						depth: 3,
+						focus: { cx: 0.5, cy: 0.5 },
+					},
+				],
+				legacyEditor: {
+					speedRegions: [
+						{
+							id: "speed_1",
+							clipId: "clip_1",
+							sourceStartSec: 0,
+							sourceEndSec: 1,
+							startMs: 0,
+							endMs: 1000,
+							speed: 2,
+						},
+					],
+				},
 			});
 
 			const after = await service.removeAsset(docWithTimeline.project.id, assetId);
 			expect(after.assets).toHaveLength(0);
 			expect(after.timeline.clips).toHaveLength(0);
 			expect(after.timeline.trimRanges).toHaveLength(0);
+			expect(after.zoomRanges).toHaveLength(0);
+			expect((after.legacyEditor as { speedRegions: unknown[] }).speedRegions).toHaveLength(0);
 			expect(after.project.primaryAssetId).toBeUndefined();
 		});
 
