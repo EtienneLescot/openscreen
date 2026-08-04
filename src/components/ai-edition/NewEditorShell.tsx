@@ -23,6 +23,7 @@ import {
 import { useUndoRedoShortcuts } from "@/lib/ai-edition/store/undo";
 import { useSequentialTimelineOps } from "@/lib/ai-edition/store/useSequentialTimelineOps";
 import { useTimeline } from "@/lib/ai-edition/store/useTimeline";
+import { newRegionDurationSec } from "@/lib/ai-edition/timeline/newRegionDuration";
 import { matchesShortcut } from "@/lib/shortcuts";
 import { nativeBridgeClient } from "@/native";
 import type { AiEditionProjectSummary } from "@/native/contracts";
@@ -911,29 +912,34 @@ export function NewEditorShell() {
 				deleteSelection();
 				return;
 			}
+			// Same size on screen as the toolbar buttons produce — these shortcuts are
+			// what the empty lanes advertise ("Press Z to add zoom"), so they are the
+			// way most regions get created. Left on the flat default they came out
+			// under two pixels on a 30-minute recording, hidden behind the playhead
+			// they were created at. See timeline/newRegionDuration.
 			if (matchesShortcut(e, shortcuts.addZoom, isMac)) {
 				e.preventDefault();
-				void tl.addZoom();
+				void tl.addZoom(newRegionDurationSec());
 				return;
 			}
 			if (matchesShortcut(e, shortcuts.addTrim, isMac)) {
 				e.preventDefault();
-				void tl.addTrim();
+				void tl.addTrim(newRegionDurationSec());
 				return;
 			}
 			if (matchesShortcut(e, shortcuts.addAnnotation, isMac)) {
 				e.preventDefault();
-				void tl.addAnnotation();
+				void tl.addAnnotation(newRegionDurationSec());
 				return;
 			}
 			if (matchesShortcut(e, shortcuts.addSpeed, isMac)) {
 				e.preventDefault();
-				void tl.addSpeed();
+				void tl.addSpeed(newRegionDurationSec());
 				return;
 			}
 			if (matchesShortcut(e, shortcuts.addCameraFullscreen, isMac)) {
 				e.preventDefault();
-				void tl.addCameraFullscreen();
+				void tl.addCameraFullscreen(newRegionDurationSec());
 				return;
 			}
 
