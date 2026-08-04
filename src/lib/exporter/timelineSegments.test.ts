@@ -100,6 +100,29 @@ describe("splitBySpeed", () => {
 		]);
 	});
 
+	it("keeps output disjoint when speed regions overlap", () => {
+		expect(splitBySpeed(full, [speed(1000, 5000, 2), speed(4000, 7000, 3)])).toEqual([
+			{ startSec: 0, endSec: 1, speed: 1 },
+			{ startSec: 1, endSec: 5, speed: 2 },
+			{ startSec: 5, endSec: 7, speed: 3 },
+			{ startSec: 7, endSec: 10, speed: 1 },
+		]);
+	});
+
+	// Not a variant of the test above: there the two regions merely overlap, here the
+	// second is fully swallowed by the first. main emitted
+	// `[0-1 x1, 1-8 x2, 3-5 x3, 5-10 x1]` — the third entry starts BEFORE the second
+	// ends, so the list stops being ascending and 5-8 ships twice. `decodeAll` walks
+	// these with a forward-only frame cursor, so that is a backwards seek, not just a
+	// duplicated stretch. Keep both cases.
+	it("ignores a later speed region fully covered by the earliest region", () => {
+		expect(splitBySpeed(full, [speed(1000, 8000, 2), speed(3000, 5000, 3)])).toEqual([
+			{ startSec: 0, endSec: 1, speed: 1 },
+			{ startSec: 1, endSec: 8, speed: 2 },
+			{ startSec: 8, endSec: 10, speed: 1 },
+		]);
+	});
+
 	it("drops sub-segments narrower than the minimum width", () => {
 		// A speed region ending a sliver before the segment end must not emit a 1x crumb.
 		const result = splitBySpeed(full, [speed(0, 9_999.95, 2)]);

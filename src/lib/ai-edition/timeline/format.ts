@@ -8,22 +8,42 @@
 //
 // Not covered here, deliberately: ExportDialog's `formatHms` (hh:mm:ss, always
 // padded hours, no tenths) and timeUtils' `formatTimePadded` (mm:ss) are
-// different formats, not copies of these.
+// different formats, not copies of these. LeftPanel's `formatTimecode`
+// (h:mm:ss.t, hours always shown) is a third format for the same reason — it
+// stays local, but it shares `splitRoundedTime` so the carry lives in one place.
+
+/**
+ * Rounds to a tenth and carries the result, so the minute and second fields can
+ * never disagree. Doing the floor and the rounding independently is what made
+ * `0:60.0` renderable: at 59.96 the minutes field still saw 59.96 while the
+ * seconds field had already rounded to 60.0.
+ *
+ * Exported for the one formatter that lives outside this file (LeftPanel's
+ * `formatTimecode`) — its always-padded `h:mm:ss.t` matches neither shape here,
+ * so it formats itself, but it must not re-derive the carry.
+ */
+export function splitRoundedTime(value: number): { totalMinutes: number; seconds: number } {
+	const safe = Number.isFinite(value) && value > 0 ? value : 0;
+	let totalMinutes = Math.floor(safe / 60);
+	let seconds = Math.round((safe % 60) * 10) / 10;
+	if (seconds >= 60) {
+		totalMinutes += 1;
+		seconds = 0;
+	}
+	return { totalMinutes, seconds };
+}
 
 /** `m:ss.t` — no hour field, ever. */
 export function formatSec(sec: number): string {
-	const safe = Number.isFinite(sec) && sec > 0 ? sec : 0;
-	const m = Math.floor(safe / 60);
-	const s = (safe % 60).toFixed(1);
-	return `${m}:${s.padStart(4, "0")}`;
+	const { totalMinutes, seconds } = splitRoundedTime(sec);
+	return `${totalMinutes}:${seconds.toFixed(1).padStart(4, "0")}`;
 }
 
 /** `m:ss.t`, or `h:mm:ss.t` once past an hour. */
 export function formatSeconds(value: number): string {
-	const safe = Number.isFinite(value) && value > 0 ? value : 0;
-	const hours = Math.floor(safe / 3600);
-	const minutes = Math.floor((safe % 3600) / 60);
-	const seconds = safe % 60;
+	const { totalMinutes, seconds } = splitRoundedTime(value);
+	const hours = Math.floor(totalMinutes / 60);
+	const minutes = totalMinutes % 60;
 	if (hours > 0) {
 		return `${hours}:${String(minutes).padStart(2, "0")}:${seconds.toFixed(1).padStart(4, "0")}`;
 	}
