@@ -31,7 +31,7 @@ import {
 	type GifFrameRate,
 	type GifSizePreset,
 } from "@/lib/exporter";
-import { calculateMp4ExportSettings } from "@/lib/exporter/mp4ExportSettings";
+import { calculateMp4ExportSettings, wouldUpscale } from "@/lib/exporter/mp4ExportSettings";
 import { exportGifNative, exportMultiNative, useIsCpuCompositor } from "@/native";
 import type { CompositorClipInput } from "@/native/contracts";
 import { buildSceneDescription, resolveVisibleClips } from "@/native/sceneDescription";
@@ -86,20 +86,12 @@ function buildNativeClipList(document: AxcutDocument): CompositorClipInput[] {
 	});
 }
 
-// Target short side (px) for the two fixed quality tiers -- mirrors the legacy
-// editor's SettingsPanel (MP4_EXPORT_SHORT_SIDES), used only to decide whether
-// picking that tier would upscale past the source's actual resolution.
-const MEDIUM_SHORT_SIDE = 720;
-const HIGH_SHORT_SIDE = 1080;
-
 const QUALITY_OPTIONS: Array<{
 	value: ExportQuality;
 	labelKey: string;
-	/** Target short side for the upscale check; undefined for "source" (no fixed target). */
-	targetShortSide?: number;
 }> = [
-	{ value: "medium", labelKey: "exportQuality.low", targetShortSide: MEDIUM_SHORT_SIDE },
-	{ value: "good", labelKey: "exportQuality.medium", targetShortSide: HIGH_SHORT_SIDE },
+	{ value: "medium", labelKey: "exportQuality.low" },
+	{ value: "good", labelKey: "exportQuality.medium" },
 	{ value: "source", labelKey: "exportQuality.high" },
 ];
 
@@ -162,17 +154,12 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 	// Smallest clip's true (cropped) footprint on the timeline — a multiclip timeline can mix
 	// crops/resolutions, so this is what "Source" quality actually targets: sizing to the
 	// SMALLEST clip's own resolution means no clip on the timeline is ever upscaled past its
-	// true footprint by picking Source, which is why Source shows no upscale/downscale badge
-	// at all any more (see the tier badges below) — it's upscale-proof by construction. The
-	// fixed 720p/1080p tiers don't have that property (they can still upscale a small clip),
-	// so `smallestShortSide` below still feeds their upscale badge.
+	// true footprint by picking Source. It also feeds the upscale badge on the fixed
+	// 720p/1080p tiers, which can still genuinely upscale a small clip.
 	const smallestSource = useMemo(
 		() => pickExtremeDims(effectiveClipDims, "smallest"),
 		[effectiveClipDims],
 	);
-	const smallestShortSide = smallestSource
-		? Math.min(smallestSource.width, smallestSource.height)
-		: null;
 
 	// Aspect the export normalizes to: the timeline's selected ratio (mirrors documentExporter),
 	// so the sizes shown match what the export produces. Read through `getEditorSettings` — the
@@ -419,16 +406,15 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 										const dims = tierOutputDims(q.value);
 										if (!dims) return null;
 										// Downscale badge removed everywhere — restated what picking a lower
-										// tier already means, not actionable. Upscale badge removed only for
-										// "Source": it's upscale-proof by construction now (targets the
-										// smallest clip), so the warning never meant anything there. The fixed
-										// 720p/1080p tiers can still genuinely upscale a small clip, so that
-										// badge stays relevant for them.
-										const outShortSide = Math.min(dims.width, dims.height);
-										const isUpscale =
-											q.value !== "source" &&
-											smallestShortSide !== null &&
-											outShortSide > smallestShortSide;
+										// tier already means, not actionable. The upscale badge asks whether
+										// the clip has to be STRETCHED to fill this frame (`wouldUpscale`),
+										// which is a contain-fit question: a short-side compare read the
+										// letterbox rows a non-16:9 source gets in a 16:9 project as if they
+										// were stretched pixels, and flagged "1080p" on the very frame
+										// "Source" produced unflagged. No "Source" special case any more —
+										// its frame is the source's long side at the project ratio, so its
+										// contain scale is never above 1 and the general test covers it.
+										const isUpscale = smallestSource !== null && wouldUpscale(dims, smallestSource);
 										return (
 											<span
 												style={{

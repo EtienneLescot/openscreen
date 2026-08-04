@@ -23,7 +23,13 @@ import { transcribeMono16kToSegments } from "./transcribe";
  * worker that the previous Web-Worker pipeline owned, so they run in any env.
  */
 
-type Listener = (event: { phase: "model" | "transcribe" }) => void;
+// Mirrors `SttRendererStatus` — the mock must accept the progress fields, since
+// carrying them across the IPC hop is exactly what this file asserts.
+type Listener = (event: {
+	phase: "model" | "transcribe";
+	completedSec?: number;
+	totalSec?: number;
+}) => void;
 
 type RendererSttApi = {
 	transcribe: (request: { samples: Float32Array; language?: string }) => Promise<{
@@ -115,12 +121,12 @@ describe("transcribeMono16kToSegments", () => {
 		expect(result.segments).toEqual([{ text: "hello world", startSec: 0, endSec: 0.65 }]);
 	});
 
-	it("forwards 'model' / 'transcribe' phases to onStatus and tears the listener down", async () => {
+	it("forwards the whole status event to onStatus and tears the listener down", async () => {
 		const onStatus = vi.fn();
 		mockApi.transcribe.mockImplementationOnce(async () => {
 			// Simulate the IPC handler emitting a status event mid-flight.
 			lastStatusCb?.({ phase: "model" });
-			lastStatusCb?.({ phase: "transcribe" });
+			lastStatusCb?.({ phase: "transcribe", completedSec: 90, totalSec: 300 });
 			return {
 				segments: [],
 				wordSegments: [{ word: "ok", startSec: 0, endSec: 0.1 }],
@@ -130,8 +136,14 @@ describe("transcribeMono16kToSegments", () => {
 		});
 
 		await transcribeMono16kToSegments(new Float32Array(1600), { onStatus });
-		expect(onStatus).toHaveBeenCalledWith("model");
-		expect(onStatus).toHaveBeenCalledWith("transcribe");
+		expect(onStatus).toHaveBeenCalledWith({ phase: "model" });
+		// The chunk progress must survive the hop, not just the phase — it is what
+		// drives the progress bar.
+		expect(onStatus).toHaveBeenCalledWith({
+			phase: "transcribe",
+			completedSec: 90,
+			totalSec: 300,
+		});
 		// onStatus listener is detached once the promise settles.
 		expect(lastStatusCb).toBeNull();
 	});

@@ -84,6 +84,9 @@ function renderTimeline(
 		updateAnnotationSpan: vi.fn(async () => {
 			/* the drag only awaits it */
 		}),
+		addZoom: vi.fn(async () => {
+			/* the toolbar only awaits it */
+		}),
 	};
 	render(
 		<V4Timeline
@@ -178,6 +181,38 @@ describe("V4Timeline lane pills", () => {
 		// was nowhere near, the more so the longer the recording.
 		dragHandle(right, 885.5);
 		expect(tl.updateAnnotationSpan).toHaveBeenLastCalledWith("ann1", 10_000, 1_782_000);
+	});
+});
+
+describe("V4Timeline create-from-toolbar", () => {
+	// The button asks for a DURATION worth a fixed number of pixels at the current
+	// zoom, so the pill you get is always the same size on screen — which is what
+	// the flat 2 s could not do: on this 30-minute fixture zoomed out it is one
+	// pixel. (It used to look fine only because the removed 1.5% minimum width
+	// inflated it in the rendering.)
+	const durationOf = (tl: { addZoom: ReturnType<typeof vi.fn> }) =>
+		tl.addZoom.mock.calls.at(-1)?.[0] as number;
+
+	it("scales the new region's duration with the zoom", () => {
+		const { tl } = renderTimeline();
+		fireEvent.click(screen.getByTitle("buttons.addZoom"));
+		// 900px viewport / 1800 s = 0.5 px per second, so a 96px pill is 192 s.
+		expect(durationOf(tl)).toBeCloseTo(192, 3);
+
+		// Zoomed to the 50x ceiling the same 96px is worth 3.84 s: same pill on
+		// screen, a region 50x shorter.
+		zoomIn(40);
+		fireEvent.click(screen.getByTitle("buttons.addZoom"));
+		expect(durationOf(tl)).toBeCloseTo(3.84, 3);
+	});
+
+	it("never asks for a slice too short to be worth creating", () => {
+		// Past ~30x on a short timeline the pixels are worth hundredths of a
+		// second; the region would be born unusable, so the duration floors.
+		const { tl } = renderTimeline([clip(0, 3)]);
+		zoomIn(40);
+		fireEvent.click(screen.getByTitle("buttons.addZoom"));
+		expect(durationOf(tl)).toBeCloseTo(0.25, 3);
 	});
 });
 

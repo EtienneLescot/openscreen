@@ -1,7 +1,7 @@
 {
 	"name": "openscreen",
 	"private": true,
-	"version": "1.8.0-rc.5",
+	"version": "1.8.0",
 	"type": "module",
 	"packageManager": "npm@10.9.4",
 	"engines": {
@@ -9,9 +9,15 @@
 		"npm": "10.9.4"
 	},
 	"author": {
-		"name": "Siddharth Vaddem",
-		"url": "https://github.com/siddharthvaddem"
+		"name": "Etienne Lescot",
+		"url": "https://github.com/EtienneLescot"
 	},
+	"contributors": [
+		{
+			"name": "Siddharth Vaddem",
+			"url": "https://github.com/siddharthvaddem"
+		}
+	],
 	"maintainers": [
 		{
 			"name": "Etienne Lescot",

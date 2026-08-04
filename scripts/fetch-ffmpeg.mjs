@@ -457,7 +457,15 @@ async function fetchSharedDlls(tag, binDir) {
 					fs.copyFileSync(lib, dest);
 				}
 			}
-			console.log(`Vendored ${libs.length} shared librar(ies) -> ${binDir}`);
+			// The shared CLI too, beside the DLLs it links against. 1 MB, against
+			// the 109 MB of the static exe the installer excludes — and unlike that
+			// one, this is spawned at runtime: electron/media/audioPeaks.ts decodes
+			// waveform peaks with it, ~6x faster than either browser pipeline and
+			// off the UI process. Named apart from `ffmpeg.exe` on purpose, so the
+			// packager's `!win32-*/ffmpeg.exe` rule keeps dropping the static build
+			// while this one ships under the plain `win32-*/*` include.
+			fs.copyFileSync(exe, path.join(binDir, "ffmpeg-shared.exe"));
+			console.log(`Vendored ${libs.length} shared librar(ies) + ffmpeg-shared.exe -> ${binDir}`);
 		}
 		if (sdkDest) vendorFfmpegSdk(tmp, sdkDest);
 		console.log("LGPL verified: safe to ship with an MIT app.");
