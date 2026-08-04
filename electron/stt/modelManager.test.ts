@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { existsSync } from "node:fs";
 import { mkdir, mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -23,6 +24,9 @@ describe("modelManager", () => {
 		for (const f of STT_MODELS.whisper.files) {
 			expect(f.approximateBytes).toBeGreaterThan(0);
 			expect(f.url).toContain("huggingface.co");
+			// Pinned to an immutable commit: resolving through `main` would let a
+			// re-upload invalidate every cached model in the field at once.
+			expect(f.url).toMatch(/\/resolve\/[0-9a-f]{40}\//);
 		}
 	});
 
@@ -87,7 +91,51 @@ describe("modelManager", () => {
 			await ensureModels({ baseDir: dir, only: ["whisper"], fetcher });
 			expect(fetches).toBe(1);
 			expect(await readFile(paths.whisper)).toEqual(replacement);
-			expect(await readFile(`${paths.whisper}.bad`, "utf8")).toBe("corrupt-cache");
+			// The stale copy is displaced by the atomic rename, not quarantined
+			// beside it: a `.bad` sibling would strand 264 MB nothing ever reaps.
+			expect(existsSync(`${paths.whisper}.bad`)).toBe(false);
+			expect(existsSync(`${paths.whisper}.partial`)).toBe(false);
+		} finally {
+			STT_MODELS.whisper.files[0].expectedSha256 = originalSha;
+		}
+	});
+
+	it("never lets a mismatching download occupy the live model path", async () => {
+		const paths = modelPaths(dir);
+		const originalSha = STT_MODELS.whisper.files[0].expectedSha256;
+		STT_MODELS.whisper.files[0].expectedSha256 = createHash("sha256")
+			.update("the-weights-we-asked-for")
+			.digest("hex");
+		const served = Buffer.from("truncated-or-tampered-weights");
+		const fetcher: typeof fetch = async () => new Response(served, { status: 200 });
+
+		try {
+			await expect(ensureModels({ baseDir: dir, only: ["whisper"], fetcher })).rejects.toThrow(
+				/SHA-256 mismatch/,
+			);
+			expect(existsSync(paths.whisper)).toBe(false);
+			expect(existsSync(`${paths.whisper}.partial`)).toBe(false);
+		} finally {
+			STT_MODELS.whisper.files[0].expectedSha256 = originalSha;
+		}
+	});
+
+	it("keeps the cached model when the replacement download also mismatches", async () => {
+		const paths = modelPaths(dir);
+		await mkdir(path.dirname(paths.whisper), { recursive: true });
+		await writeFile(paths.whisper, "the-only-copy-the-user-has");
+		const originalSha = STT_MODELS.whisper.files[0].expectedSha256;
+		STT_MODELS.whisper.files[0].expectedSha256 = createHash("sha256")
+			.update("the-weights-we-asked-for")
+			.digest("hex");
+		const fetcher: typeof fetch = async () =>
+			new Response(Buffer.from("also-wrong"), { status: 200 });
+
+		try {
+			await expect(ensureModels({ baseDir: dir, only: ["whisper"], fetcher })).rejects.toThrow(
+				/SHA-256 mismatch/,
+			);
+			expect(await readFile(paths.whisper, "utf8")).toBe("the-only-copy-the-user-has");
 		} finally {
 			STT_MODELS.whisper.files[0].expectedSha256 = originalSha;
 		}
