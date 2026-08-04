@@ -10,7 +10,13 @@ export type RegionSnapshot =
 	| { kind: "zoom"; region: Record<string, unknown> }
 	| { kind: "annotation"; region: Record<string, unknown> }
 	| { kind: "speed"; region: Record<string, unknown> }
-	| { kind: "cameraFullscreen"; region: Record<string, unknown> };
+	| { kind: "cameraFullscreen"; region: Record<string, unknown> }
+	// A trim carries no user-visible properties, so all there is to copy is how
+	// LONG it was — `{ durationSec }`. That is not a special case so much as the
+	// general one made obvious: every paste keeps the copied properties and takes
+	// its start from the playhead, so a zoom's start/end already change too. A
+	// trim just has nothing left once you remove position.
+	| { kind: "trim"; region: { durationSec: number } };
 
 let clipboard: RegionSnapshot | null = null;
 const listeners = new Set<() => void>();

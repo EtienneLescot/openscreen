@@ -710,6 +710,16 @@ export function NewEditorShell() {
 		const { pasteClipboard } = await import("@/lib/ai-edition/store/regionClipboard");
 		const snapshot = pasteClipboard();
 		if (!snapshot) return;
+
+		// A copied trim is just a length: recreate one of that length at the
+		// playhead, through the same call the toolbar's cut button uses (which
+		// resolves the timeline span down to the carrying clip's source time).
+		if (snapshot.kind === "trim") {
+			await tl.addTrim(snapshot.region.durationSec);
+			toast.success("Region pasted");
+			return;
+		}
+
 		const { anchorRegionsWithDerivedMs } = await import("@/lib/ai-edition/timeline/timelineMap");
 		const { createId } = await import("@/lib/ai-edition/document/ids");
 
@@ -754,19 +764,37 @@ export function NewEditorShell() {
 			});
 		}
 		toast.success("Region pasted");
-	}, [saveDocument]);
+		// `tl` belongs here now that the trim branch calls tl.addTrim: useTimeline
+		// returns a fresh object each render, so memoizing on saveDocument alone
+		// would paste through a callback holding a stale document.
+	}, [saveDocument, tl]);
 
 	// Copy the SELECTED pill. Reads the same arrays the lanes render, so what gets
 	// copied is what the user is looking at — the old version dug into the raw
 	// document with a ternary chain that mapped a trim to "zoom" and sent
 	// cameraFullscreen down the speed branch, where neither could ever be found.
-	//
-	// Trims stay out: they are stored in SOURCE time against a clip anchor, so
-	// pasting one at the playhead is a ventilation problem, not a copy. Cut
-	// already excludes them for the same reason.
 	const handleCopyRegion = useCallback(async () => {
 		const sel = tl.selection;
-		if (!sel || sel.kind === "trim") return;
+		if (!sel) return;
+		const { copyRegion } = await import("@/lib/ai-edition/store/regionClipboard");
+
+		// A trim is stored in SOURCE time against a clip anchor, so there is no
+		// row to clone — but there is nothing to clone either: what the user means
+		// by copying a cut is its LENGTH. Paste then makes a fresh trim of that
+		// length at the playhead, which is the same deal every other kind gets
+		// (properties kept, position taken from the playhead).
+		if (sel.kind === "trim") {
+			const { coalescedTrimGroups } = await import("@/lib/ai-edition/timeline/trim-mapping");
+			const group = coalescedTrimGroups(tl.trimRanges, tl.clips).find((g) =>
+				g.ids.includes(sel.id),
+			);
+			if (!group) return;
+			copyRegion({ kind: "trim", region: { durationSec: group.end - group.start } });
+			setCopiedClipId(null);
+			toast.success("Region copied");
+			return;
+		}
+
 		const source =
 			sel.kind === "zoom"
 				? tl.zoomRegions
@@ -777,7 +805,6 @@ export function NewEditorShell() {
 						: tl.cameraFullscreenRegions;
 		const region = (source as Array<{ id: string }>).find((r) => r.id === sel.id);
 		if (!region) return;
-		const { copyRegion } = await import("@/lib/ai-edition/store/regionClipboard");
 		copyRegion({ kind: sel.kind, region: region as unknown as Record<string, unknown> });
 		// One clipboard wins at a time: a copied pill retires the copied clip.
 		setCopiedClipId(null);
@@ -876,7 +903,8 @@ export function NewEditorShell() {
 			}
 			if (ctrl && e.key.toLowerCase() === "x") {
 				// F2.8 — cut: remember the region in the clipboard, then remove it.
-				if (tl.selection && tl.selection.kind !== "trim") {
+				// Trims included now that copying one means copying its length.
+				if (tl.selection) {
 					e.preventDefault();
 					const cut = tl.selection;
 					void handleCopyRegion().then(() => tl.removeRegion(cut.kind, cut.id));
