@@ -3,6 +3,9 @@
 Fait tourner l'agent LLM d'OpenScreen **sans interface graphique**, pour itérer vite sur les
 prompts et sur le contexte fourni au modèle.
 
+Ce fichier décrit le banc tel qu'il est. Ce qu'il a révélé et qui reste à traiter vit à côté, dans
+[agent-improvement-leads.md](agent-improvement-leads.md).
+
 Deux axes sont notés séparément, jamais moyennés ensemble :
 
 | axe | question | source de vérité |
@@ -390,6 +393,20 @@ trajectoire » sont **deux checks séparés**.
 8. Documentez chaque `expectedFailures` avec `defect`, `since` et une note disant **sur quoi elle
    repose** : observation live, ou mécanisme lu dans le code. Une prédiction n'y a pas sa place.
 9. `npm run wb && npm run wb:typecheck && npx biome check --write workbench`.
+
+### Répondre à un échec sans surajuster au banc
+
+Un échec mesuré donne envie d'ajouter la ligne de prompt qui règle ce cas précis. Fait huit fois,
+le prompt système devient la liste des réponses au jeu de tests, et le banc mesure sa propre
+mémoire. Le garde-fou est une question, à se poser avant de committer :
+
+> **Ce correctif se justifie-t-il sans mentionner le scénario qui l'a révélé ?**
+
+Si la seule façon de le défendre est « sinon `describe-zooms` est rouge », ce n'est pas un
+correctif, c'est une réponse apprise. Un correctif légitime se formule comme une propriété du
+produit — « le modèle n'a aucun moyen de savoir qu'un `customScale` rend le `depth` inerte » — et
+le scénario n'en est que le témoin. Cela vaut pour le prompt système comme pour les descriptions
+d'outils, qui sont du prompt sous un autre nom.
 
 ### Où vit quoi
 
