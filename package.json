@@ -9,9 +9,15 @@
 		"npm": "10.9.4"
 	},
 	"author": {
-		"name": "Siddharth Vaddem",
-		"url": "https://github.com/siddharthvaddem"
+		"name": "Etienne Lescot",
+		"url": "https://github.com/EtienneLescot"
 	},
+	"contributors": [
+		{
+			"name": "Siddharth Vaddem",
+			"url": "https://github.com/siddharthvaddem"
+		}
+	],
 	"maintainers": [
 		{
 			"name": "Etienne Lescot",
