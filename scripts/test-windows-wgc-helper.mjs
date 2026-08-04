@@ -35,17 +35,35 @@ const WITH_SOFTWARE_FALLBACK =
 const INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV =
 	"OPENSCREEN_WGC_TEST_INJECT_DEFAULT_SINK_WRITER_FAILURE_ONCE";
 const INJECTION_MARKER = "TEST-ONLY: Injected default MFCreateSinkWriterFromURL failure";
+const STALL_READBACK_ENV = "OPENSCREEN_WGC_TEST_STALL_READBACK_MS";
+/**
+ * Reproduces issue #252 on ordinary hardware: holds the frame lock across a
+ * stall the way a wedged GPU readback does. Before the fix the helper hung
+ * forever with no `[stop-timing]` output at all; it must now always exit.
+ */
+const WITH_STALLED_READBACK =
+	process.env.OPENSCREEN_WGC_TEST_STALL_READBACK === "true" ||
+	process.argv.includes("--stall-readback");
+const STALL_READBACK_MS = Number(process.env[STALL_READBACK_ENV] ?? 60_000);
+/** The helper's own shutdown budget is 10s; anything past this is a hang. */
+const STOP_HANG_LIMIT_MS = 30_000;
+/** A healthy stop is well under a second. */
+const STOP_LATENCY_BUDGET_MS = 15_000;
 
 if (WITH_SOFTWARE_ENCODER && WITH_SOFTWARE_FALLBACK) {
 	throw new Error("--software-encoder and --software-fallback are mutually exclusive");
 }
 
-function runHelper(config, { injectDefaultSinkWriterFailure = false } = {}) {
+function runHelper(config, { injectDefaultSinkWriterFailure = false, stallReadbackMs = 0 } = {}) {
 	return new Promise((resolve, reject) => {
 		const env = { ...process.env };
 		delete env[INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV];
+		delete env[STALL_READBACK_ENV];
 		if (injectDefaultSinkWriterFailure) {
 			env[INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV] = "1";
+		}
+		if (stallReadbackMs > 0) {
+			env[STALL_READBACK_ENV] = String(stallReadbackMs);
 		}
 		const child = spawn(HELPER_PATH, [JSON.stringify(config)], {
 			env,
@@ -56,12 +74,23 @@ function runHelper(config, { injectDefaultSinkWriterFailure = false } = {}) {
 		let stdout = "";
 		let stderr = "";
 		let stopTimer = null;
+		let stopSentAt = null;
+		let stopHung = false;
+		let hangTimer = null;
 		const scheduleStop = () => {
 			if (stopTimer) {
 				return;
 			}
 			stopTimer = setTimeout(() => {
+				stopSentAt = Date.now();
 				child.stdin.write("stop\n");
+				// The whole point of issues #115 and #252 was a helper that never
+				// came back from `stop`. Without a bound here the harness inherits
+				// the hang instead of reporting it.
+				hangTimer = setTimeout(() => {
+					stopHung = true;
+					child.kill();
+				}, STOP_HANG_LIMIT_MS);
 			}, DURATION_MS);
 		};
 		const fallbackTimer = setTimeout(scheduleStop, 15_000);
@@ -81,9 +110,48 @@ function runHelper(config, { injectDefaultSinkWriterFailure = false } = {}) {
 			if (stopTimer) {
 				clearTimeout(stopTimer);
 			}
-			resolve({ code, stdout, stderr });
+			if (hangTimer) {
+				clearTimeout(hangTimer);
+			}
+			resolve({
+				code,
+				stdout,
+				stderr,
+				stopHung,
+				stopLatencyMs: stopSentAt === null ? null : Date.now() - stopSentAt,
+			});
 		});
 	});
+}
+
+/** Every `[stop-timing] step=<name>` the helper emitted, in order. */
+function readStopTimingSteps(stderr) {
+	return [...stderr.matchAll(/\[stop-timing\]\s+step=(\S+)/g)].map((match) => match[1]);
+}
+
+function assertStopWasClean(result) {
+	if (result.stopHung) {
+		throw new Error(
+			`Helper did not exit within ${STOP_HANG_LIMIT_MS}ms of "stop" (issue #252). ` +
+				`stop-timing steps seen: ${readStopTimingSteps(result.stderr).join(", ") || "none"}`,
+		);
+	}
+	const steps = readStopTimingSteps(result.stderr);
+	if (!steps.includes("command-received")) {
+		throw new Error(
+			'Helper never acknowledged the stop command ("[stop-timing] step=command-received").',
+		);
+	}
+	if (steps.includes("wgc-session-close") === false) {
+		throw new Error(
+			`Helper stopped without completing its shutdown sequence. Steps: ${steps.join(", ")}`,
+		);
+	}
+	if (result.stopLatencyMs !== null && result.stopLatencyMs > STOP_LATENCY_BUDGET_MS) {
+		throw new Error(
+			`Stop took ${result.stopLatencyMs}ms, over the ${STOP_LATENCY_BUDGET_MS}ms budget.`,
+		);
+	}
 }
 
 function startFixtureWindow() {
@@ -294,12 +362,44 @@ let result;
 try {
 	result = await runHelper(config, {
 		injectDefaultSinkWriterFailure: WITH_SOFTWARE_FALLBACK,
+		stallReadbackMs: WITH_STALLED_READBACK ? STALL_READBACK_MS : 0,
 	});
 } finally {
 	if (fixtureWindow) {
 		fixtureWindow.child.kill();
 	}
 }
+
+// The regression check for issue #252. With the frame lock deliberately wedged
+// there is no usable recording to assert on -- what matters is only that the
+// helper still noticed the stop and still died, naming the step it died in.
+if (WITH_STALLED_READBACK) {
+	if (result.stopHung) {
+		throw new Error(
+			`Helper survived ${STOP_HANG_LIMIT_MS}ms past "stop" with a stalled readback. ` +
+				"Its shutdown watchdog did not fire (issue #252).",
+		);
+	}
+	const steps = readStopTimingSteps(result.stderr);
+	if (!steps.includes("command-received")) {
+		throw new Error(`Helper never acknowledged "stop". Steps seen: ${steps.join(", ") || "none"}`);
+	}
+	if (!/phase=abandoned/.test(result.stderr)) {
+		throw new Error(
+			`Helper exited without reporting an abandoned shutdown step. stderr:\n${result.stderr}`,
+		);
+	}
+	console.log("WGC helper stalled-readback stop check passed", {
+		stopLatencyMs: result.stopLatencyMs,
+		steps,
+		abandoned: result.stderr.match(/step=(\S+)\s+elapsed_ms=\d+\s+phase=abandoned/)?.[1] ?? null,
+	});
+	fs.rmSync(outputPath, { force: true });
+	process.exit(0);
+}
+
+assertStopWasClean(result);
+
 if (result.code !== 0) {
 	if (
 		WITH_WEBCAM &&
@@ -451,6 +551,8 @@ console.log(
 	JSON.stringify(
 		{
 			success: true,
+			stopLatencyMs: result.stopLatencyMs,
+			stopTimingSteps: readStopTimingSteps(result.stderr),
 			outputPath,
 			webcamOutputPath,
 			bytes: fs.statSync(outputPath).size,

@@ -9,6 +9,7 @@
 #include <winrt/Windows.Graphics.DirectX.Direct3D11.h>
 #include <wrl/client.h>
 
+#include <atomic>
 #include <functional>
 #include <mutex>
 
@@ -26,6 +27,14 @@ public:
     bool initialize(HWND window, int fps, bool captureCursor);
     void setFrameCallback(FrameCallback callback);
     bool start();
+    // Stops frame delivery and waits out any callback already running, without
+    // touching the D3D device. Split out of stop() so a caller can quiesce the
+    // producer early in a shutdown and only release the device once nothing can
+    // still be using it. Idempotent; stop() calls it.
+    //
+    // Returns false if a callback was still running when `drainTimeoutMs`
+    // expired -- releasing the device after that is unsafe, so stop() skips it.
+    bool quiesceCapture(int drainTimeoutMs = 5000);
     void stop();
 
     int captureWidth() const;
@@ -51,6 +60,8 @@ private:
     winrt::event_token frameArrivedToken_{};
     FrameCallback frameCallback_;
     std::mutex callbackMutex_;
+    std::atomic<int> callbacksInFlight_ = 0;
+    bool quiesced_ = false;
     int width_ = 0;
     int height_ = 0;
     int fps_ = 60;
