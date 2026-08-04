@@ -82,7 +82,7 @@ The repository's main-branch ruleset must also permit the configured maintainer/
 | `APPLE_TEAM_ID` | Apple Developer team identifier. |
 | `APPLE_APP_SPECIFIC_PASSWORD` | App-specific password used by `notarytool`. |
 
-The certificate account needs Developer ID signing capability, and the Apple account/app-specific password must be able to submit notarization requests for the team. Stable tags sign the DMG, notarize, staple, and validate it. Pre-release tags skip DMG signing/notarization. If any value is missing, the macOS job disables signing and still creates an unsigned DMG.
+The certificate account needs Developer ID signing capability, and the Apple account/app-specific password must be able to submit notarization requests for the team. Every tag signs the DMG, notarizes, staples, and validates it, pre-releases included — that keeps RC testers out of `xattr -rd com.apple.quarantine`, and exercises the whole credential path on each candidate instead of first proving it on the promotion build. If any value is missing, the macOS job falls back to an ad-hoc signature and still creates a DMG.
 
 Rotate the certificate by exporting a replacement P12, base64-encoding it without line-wrap changes, updating the P12/password/name secrets together, testing a stable-format manual build, then revoking the old certificate if required. Rotate the app-specific password in Apple ID settings, replace `APPLE_APP_SPECIFIC_PASSWORD`, verify notarization, and revoke the old password. `APPLE_ID` and `APPLE_TEAM_ID` normally change only when the owning account or team changes.
 

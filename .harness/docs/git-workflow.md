@@ -56,7 +56,7 @@ The workflow:
 1. Computes the next SemVer from `package.json` + `bump`, builds `vX.Y.Z-rc.N`.
 2. Migrates every issue/PR in the rolling `Next Release` milestone into a fresh `vX.Y.Z` milestone. Each migrated item gets a hidden marker comment so re-running is idempotent.
 3. Commits `package.json` → `X.Y.Z-rc.N` on a fresh branch `release/vX.Y.Z-rc.N`. **The branch is NOT merged into `main`** — it stays frozen so the RC build only contains what was on `main` at the moment of cut.
-4. Pushes the tag `vX.Y.Z-rc.N` at the release branch tip. This triggers `build.yml`, which publishes a **GitHub pre-release** (badged as such, does not become "Latest"). macOS notarization is skipped on RC tags.
+4. Pushes the tag `vX.Y.Z-rc.N` at the release branch tip. This triggers `build.yml`, which publishes a **GitHub pre-release** (badged as such, does not become "Latest"). RC tags are signed and notarized like stable ones, so testers do not have to clear the quarantine attribute by hand.
 5. Posts in `#rc-testing` on Discord with the download link.
 
 Tier 3 (homebrew/winget/nix/aur) does **not** run on pre-releases — they're already gated on `!prerelease`.
