@@ -113,7 +113,12 @@ export function findNextKeptSegment(
 	const nextByRawTime = playbackClips
 		.map((segment) => ({ segment, rawStart: getRawVirtualStartTime(segment, rawClips) }))
 		.filter(({ rawStart }) => rawStart > currentRawTime + 0.001)
-		.sort((a, b) => a.rawStart - b.rawStart)[0]?.segment;
+		.sort(
+			(a, b) =>
+				a.rawStart - b.rawStart ||
+				a.segment.timelineStartSec - b.segment.timelineStartSec ||
+				a.segment.id.localeCompare(b.segment.id),
+		)[0]?.segment;
 	if (nextByRawTime) return nextByRawTime;
 
 	if (!activeSourceId || !activeClipId || currentSourceTime === undefined) return undefined;

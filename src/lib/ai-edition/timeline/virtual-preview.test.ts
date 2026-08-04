@@ -458,6 +458,28 @@ describe("virtual-preview pure functions", () => {
 		expect(getRawVirtualStartTime(next!, rawClips)).toBe(10);
 	});
 
+	it("findNextKeptSegment breaks tied raw starts by playback order, not input order", () => {
+		const earlier: AxcutClip = {
+			...clips[1],
+			id: "clip_2_seg1",
+			timelineStartSec: 10,
+			timelineEndSec: 12,
+		};
+		const later: AxcutClip = {
+			...clips[1],
+			id: "clip_2_seg2",
+			timelineStartSec: 12,
+			timelineEndSec: 14,
+		};
+
+		for (const playbackClips of [
+			[earlier, later],
+			[later, earlier],
+		]) {
+			expect(findNextKeptSegment(playbackClips, clips, 5)?.id).toBe("clip_2_seg1");
+		}
+	});
+
 	describe("findNextKeptSegment never goes backwards", () => {
 		// A slice from LATE in the recording laid down first, then a slice from early in
 		// it, cut at source 5–10. Both draw on the same asset, so "later in source time"
