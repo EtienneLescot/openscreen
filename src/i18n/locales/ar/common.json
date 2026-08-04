@@ -50,5 +50,11 @@
 	"locale": {
 		"name": "عربي",
 		"short": "AR"
+	},
+	"recordingSource": {
+		"window": "نافذة",
+		"screen": "شاشة",
+		"virtual": "شاشة افتراضية",
+		"unknown": "تسجيل الشاشة"
 	}
 }

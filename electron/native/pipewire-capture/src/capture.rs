@@ -296,7 +296,12 @@ impl Capture {
     /// its original dimensions — see [`Self::committed_width`] — so the caller
     /// reports it once rather than silently reframing.
     pub fn crop_diverged(&self, frame: &shim::Frame) -> bool {
-        frame.crop.width != self.committed_width || frame.crop.height != self.committed_height
+        // Compared at ENCODED parity, not raw. The committed size was rounded
+        // down to even for H.264 chroma, so a window sitting stably at 321x241
+        // commits 320x240 and would otherwise be reported as resized on every
+        // single frame — a warning about a window that never moved.
+        (frame.crop.width & !1) != self.committed_width
+            || (frame.crop.height & !1) != self.committed_height
     }
 
     /// Where to start reading this frame, in source pixels.
@@ -677,6 +682,29 @@ mod tests {
 
         let staged = capture.stage(&frame);
         assert!(staged.is_ok(), "the read must be clamped back inside the frame: {staged:?}");
+        let _ = capture.finish();
+        let _ = std::fs::remove_file(&output);
+    }
+
+    /// A window whose size is odd is rounded down once, at encoder open. Judging
+    /// later frames against the raw rect would then report a resize on every
+    /// frame of a window that never moved.
+    #[test]
+    fn a_stable_odd_sized_window_is_not_reported_as_resized() {
+        let output = std::env::temp_dir().join("openscreen-capture-odd.mp4");
+        // 321x241 rounds to the 320x240 the encoder is opened at.
+        let (mut capture, _) =
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+                .expect("start");
+
+        let frame = cropped_frame(
+            1920,
+            1080,
+            shim::CropRect { x: 0, y: 0, width: 321, height: 241 },
+            shim::constants().video_format_bgrx,
+        );
+
+        assert!(!capture.crop_diverged(&frame), "an unchanged odd crop is not a resize");
         let _ = capture.finish();
         let _ = std::fs::remove_file(&output);
     }

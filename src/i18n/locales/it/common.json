@@ -50,5 +50,11 @@
 	"locale": {
 		"name": "Italiano",
 		"short": "IT"
+	},
+	"recordingSource": {
+		"window": "Finestra",
+		"screen": "Schermo",
+		"virtual": "Schermo virtuale",
+		"unknown": "Registrazione schermo"
 	}
 }

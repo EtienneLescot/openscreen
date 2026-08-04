@@ -552,7 +552,23 @@ let linuxNativeCaptureSourceLabel: string | null = null;
  * cancel, would otherwise leak a live ScreenCast session — the compositor's
  * "screen is being shared" indicator with nothing recording behind it.
  */
-let preparedLinuxCapture: { session: LinuxNativeCaptureSession; outputPath: string } | null = null;
+let preparedLinuxCapture: {
+	session: LinuxNativeCaptureSession;
+	outputPath: string;
+	/** What the helper was actually spawned with. See [`captureSettingsOf`]. */
+	request: NativeLinuxRecordingRequest;
+} | null = null;
+/**
+ * Identifies the prepare that is still waiting on the picker.
+ *
+ * The slot above is only filled AFTER an await with no upper bound — a human is
+ * reading a dialog. For that whole window it is null, so without this token a
+ * cancel would find nothing to cancel and a second prepare would find nothing to
+ * supersede: the first session would then assign itself afterwards and stay
+ * alive, holding a ScreenCast grant and the compositor's sharing indicator with
+ * nothing recording behind it.
+ */
+let preparingLinuxCaptureToken: symbol | null = null;
 
 /**
  * Claims the prepared session when it matches the recording about to start.
@@ -561,22 +577,52 @@ let preparedLinuxCapture: { session: LinuxNativeCaptureSession; outputPath: stri
  * discarded rather than reused: arming it would record against the wrong output
  * path, and leaving it would strand a portal session.
  */
-function takePreparedLinuxSession(outputPath: string): LinuxNativeCaptureSession | null {
+function takePreparedLinuxSession(
+	outputPath: string,
+	request: NativeLinuxRecordingRequest,
+): LinuxNativeCaptureSession | null {
 	const prepared = preparedLinuxCapture;
 	if (!prepared) {
 		return null;
 	}
 	preparedLinuxCapture = null;
-	if (prepared.outputPath === outputPath) {
-		return prepared.session;
+	if (prepared.outputPath !== outputPath) {
+		console.warn("[native-linux] discarding a prepared session for a different recording");
+		prepared.session.discard();
+		return null;
 	}
-	console.warn("[native-linux] discarding a prepared session for a different recording");
-	prepared.session.discard();
-	return null;
+	// EVERY CAPTURE SETTING IS FIXED AT SPAWN. `arm()` only writes `record`, so a
+	// prepared helper is already running with the audio and cursor settings it
+	// was created with — and the HUD does not lock its controls during the
+	// countdown, so the user really can change them in between. Reusing the
+	// session would record one thing while the app believed another, including
+	// the cursor mode that decides whether the editor draws its own pointer.
+	if (captureSettingsOf(prepared.request) !== captureSettingsOf(request)) {
+		console.info("[native-linux] settings changed during the countdown; renegotiating");
+		prepared.session.discard();
+		return null;
+	}
+	return prepared.session;
+}
+
+/** The request fields baked into the helper's spawn arguments, canonicalised. */
+function captureSettingsOf(request: NativeLinuxRecordingRequest): string {
+	return JSON.stringify({
+		fps: request.video?.fps ?? null,
+		bitrate: request.video?.bitrate ?? null,
+		system: request.audio?.system?.enabled ?? false,
+		microphone: request.audio?.microphone?.enabled ?? false,
+		deviceName: request.audio?.microphone?.deviceName ?? null,
+		gain: request.audio?.microphone?.gain ?? null,
+		cursor: normalizeCursorCaptureMode(request?.cursor?.mode) ?? "editable-overlay",
+	});
 }
 
 /** Tears down a prepared-but-unarmed session, e.g. an abandoned countdown. */
 function discardPreparedLinuxCapture(reason: string) {
+	// Invalidate any negotiation still in flight, so the session it is about to
+	// produce is discarded on arrival instead of stranded.
+	preparingLinuxCaptureToken = null;
 	if (!preparedLinuxCapture) {
 		return;
 	}
@@ -596,13 +642,13 @@ function discardPreparedLinuxCapture(reason: string) {
 function linuxSourceLabel(kind?: LinuxCaptureSourceKind): string {
 	switch (kind) {
 		case "window":
-			return "Window";
+			return mainT("common", "recordingSource.window");
 		case "monitor":
-			return "Screen";
+			return mainT("common", "recordingSource.screen");
 		case "virtual":
-			return "Virtual display";
+			return mainT("common", "recordingSource.virtual");
 		default:
-			return "Screen recording";
+			return mainT("common", "recordingSource.unknown");
 	}
 }
 /**
@@ -1871,6 +1917,8 @@ export function registerIpcHandlers(
 				return { success: false, reason: "already-recording" };
 			}
 			discardPreparedLinuxCapture("superseded by a new prepare");
+			const token = Symbol("prepare-native-linux-recording");
+			preparingLinuxCaptureToken = token;
 
 			try {
 				if (!findPipeWireCursorHelperPath()) {
@@ -1909,7 +1957,16 @@ export function registerIpcHandlers(
 				// The picker is up now. No timeout: a human is reading a dialog.
 				await session.waitUntilSourceSelected();
 
-				preparedLinuxCapture = { session, outputPath };
+				// Cancelled or superseded while the picker was up. Discard rather
+				// than assign: this grant is for a recording nobody is waiting for
+				// any more, and keeping it would leave the sharing indicator on.
+				if (preparingLinuxCaptureToken !== token) {
+					session.discard();
+					return { success: false, reason: "cancelled" };
+				}
+				preparingLinuxCaptureToken = null;
+
+				preparedLinuxCapture = { session, outputPath, request };
 				return {
 					success: true,
 					recordingId,
@@ -1958,7 +2015,7 @@ export function registerIpcHandlers(
 				// working: a path that never prepared still gets a full start
 				// below, just with the picker after its countdown instead of
 				// before. Nothing has to know which path it is on.
-				const prepared = takePreparedLinuxSession(outputPath);
+				const prepared = takePreparedLinuxSession(outputPath, request);
 				const session =
 					prepared ??
 					new LinuxNativeCaptureSession({

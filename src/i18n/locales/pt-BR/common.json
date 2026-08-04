@@ -50,5 +50,11 @@
 	"locale": {
 		"name": "Português Brasileiro",
 		"short": "PT-BR"
+	},
+	"recordingSource": {
+		"window": "Janela",
+		"screen": "Tela",
+		"virtual": "Tela virtual",
+		"unknown": "Gravação de tela"
 	}
 }
