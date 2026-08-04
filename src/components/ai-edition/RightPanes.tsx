@@ -1042,7 +1042,22 @@ const TranscriptClipBlock = memo(function TranscriptClipBlock({
 // words (inside a skip range) render red+strikethrough with a hover bin.
 // `isCue` highlights the word the playback head is currently inside with
 // an accent underline (matches axcut's `word.transcript-word.cue` rule).
-function TranscriptWord({
+//
+// `memo` for the same reason as `TranscriptClipBlock`, one level down — and it
+// is the level that actually decides the cost. The block's memo assumes
+// `cueWordId` moves "a few times per second, not sixty", which holds for
+// playback at 1x and NOT for a scrub: dragging the playhead crosses many words
+// per frame, so `cueWordId` changes on essentially every frame and the block
+// re-renders. Without a memo here that meant re-rendering one component per
+// transcript word, every frame. Measured over a 40-frame scrub in jsdom:
+// 19.6 ms/frame at 100 words, 132.6 ms at 4501 (a real 30-minute recording) —
+// the cost was simply proportional to transcript length. With the memo only
+// the two words whose `isCue` actually flipped re-render.
+//
+// This holds because every other prop is referentially stable across a
+// playhead tick: `cw` comes from the memoised `sections`, `target` from a
+// `useMemo`, and both callbacks from `useCallback`s that do not depend on time.
+const TranscriptWord = memo(function TranscriptWord({
 	cw,
 	isCue,
 	target,
@@ -1198,7 +1213,7 @@ function TranscriptWord({
 			) : null}
 		</span>
 	);
-}
+});
 
 // ─── Caret / selection helpers ────────────────────────────────────
 // Ponytail port of axcut's findCollapsedDeletionWordId. The non-collapsed

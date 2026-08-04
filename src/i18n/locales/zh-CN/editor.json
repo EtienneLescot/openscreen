@@ -140,6 +140,7 @@
 		"transcriptEmpty": "转录内容为空。",
 		"notGeneratedHint": "尚未生成 — 选择语言并点击重新生成。",
 		"transcribing": "正在转录",
+		"downloadingModel": "正在下载语音模型",
 		"transcribingEllipsis": "正在转录…",
 		"pendingTranscription": "等待转录",
 		"transcriptionFailed": "转录失败",

@@ -55,6 +55,7 @@ import { LlmConfigStore } from "../ai-edition/llm-config-store";
 import { mainLogBuffer } from "../diagnostics/main-log-buffer";
 import { mainT } from "../i18n";
 import { RECORDINGS_DIR } from "../main";
+import { type AudioPeaksResult, getAudioPeaks } from "../media/audioPeaks";
 import {
 	readCursorRecordingFile as readCursorRecordingFileFrom,
 	readCursorSidecar,
@@ -3119,6 +3120,31 @@ export function registerIpcHandlers(
 			};
 		}
 	});
+
+	// Waveform peaks for a timeline clip, decoded natively (see media/audioPeaks).
+	// The renderer's own pipelines take ~12s on a 32-minute recording because they
+	// decode the whole track in Chromium; ffmpeg does the same work in ~2s off the
+	// UI process, and the result is cached on disk so it is paid once per file.
+	// `peaks: null` means "no native path available" — the caller falls back to
+	// its own decoding rather than losing the waveform.
+	ipcMain.handle(
+		"get-audio-peaks",
+		async (_, filePath: string, durationSec: number): Promise<AudioPeaksResult> => {
+			try {
+				// Same approval gate as every other read of a renderer-supplied path.
+				const normalizedPath = await approveReadableVideoPath(filePath);
+				if (!normalizedPath) {
+					return { success: false, message: "File path is not approved" };
+				}
+				const peaks = await getAudioPeaks(normalizedPath, durationSec);
+				return { success: true, peaks };
+			} catch (error) {
+				// A clip with no audio track lands here. Degrade quietly: the renderer
+				// draws no waveform, which is correct, and logs its own warning.
+				return { success: false, message: String(error) };
+			}
+		},
+	);
 
 	// Cap renderer-requested chunk sizes so a buggy or compromised renderer
 	// cannot make the main process allocate an arbitrarily large buffer.

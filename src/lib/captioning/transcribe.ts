@@ -28,6 +28,18 @@ export interface TranscribeMono16kResult {
 
 export type SttRendererStatusPhase = "model" | "transcribe";
 
+/**
+ * Progress the main process reports while a transcription runs. `completedSec` /
+ * `totalSec` are present only during `"transcribe"`, and only once chunking has
+ * started — they let the UI show a real bar instead of an indeterminate spinner
+ * for what can be several minutes of work.
+ */
+export interface SttRendererStatus {
+	phase: SttRendererStatusPhase;
+	completedSec?: number;
+	totalSec?: number;
+}
+
 interface RendererSttApi {
 	transcribe: (request: { samples: Float32Array; language?: string }) => Promise<{
 		segments: CaptionSegment[];
@@ -35,7 +47,8 @@ interface RendererSttApi {
 		detectedLanguage: string;
 		backend: string;
 	}>;
-	onStatus?: (callback: (event: { phase: SttRendererStatusPhase }) => void) => () => void;
+	cancel?: () => Promise<void>;
+	onStatus?: (callback: (event: SttRendererStatus) => void) => () => void;
 }
 
 /**
@@ -52,7 +65,7 @@ export function transcribeMono16kToSegments(
 	samples: Float32Array,
 	options?: {
 		trimRegions?: TrimRegion[];
-		onStatus?: (phase: SttRendererStatusPhase) => void;
+		onStatus?: (status: SttRendererStatus) => void;
 		signal?: AbortSignal;
 		language?: string;
 	},
@@ -67,8 +80,13 @@ export function transcribeMono16kToSegments(
 		return Promise.resolve({ segments: [], granularity: "word" });
 	}
 
-	const unsubscribe =
-		options?.onStatus && api.onStatus?.((event) => options.onStatus?.(event.phase));
+	const unsubscribe = options?.onStatus && api.onStatus?.((event) => options.onStatus?.(event));
+	// Aborting has to reach the MAIN process: the work is a chunk loop over there,
+	// and a renderer that merely stops awaiting still leaves the helper busy for
+	// minutes — with the replacement request queued behind it, which is what made
+	// "regenerate in another language" look dead.
+	const onAbort = () => void api.cancel?.();
+	options?.signal?.addEventListener("abort", onAbort, { once: true });
 	const forcedLanguage =
 		options?.language && options.language !== "auto" ? options.language : undefined;
 	// ponytail: word timestamps come back already absolute from whisper.cpp
@@ -104,7 +122,15 @@ export function transcribeMono16kToSegments(
 			}
 			return { segments, granularity, detectedLanguage: result.detectedLanguage };
 		})
+		.catch((error: unknown) => {
+			// A run the caller cancelled surfaces as an abort, not as an engine
+			// failure: the store drops it silently instead of toasting the user
+			// about something they asked for.
+			if (options?.signal?.aborted) throw new DOMException("Aborted", "AbortError");
+			throw error;
+		})
 		.finally(() => {
+			options?.signal?.removeEventListener("abort", onAbort);
 			unsubscribe?.();
 		});
 }
