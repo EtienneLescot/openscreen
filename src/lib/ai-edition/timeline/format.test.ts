@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { formatMs, formatSec, formatSeconds } from "./format";
+import { formatMs, formatSec, formatSeconds, splitRoundedTime } from "./format";
 
 // These three replaced six private copies; the cases that differed between
 // those copies (negatives, NaN, the hour boundary) are what this pins down.
@@ -22,7 +22,9 @@ describe("formatSec", () => {
 	});
 
 	it("keeps finite durations finite while rounding", () => {
-		expect(formatSec(Number.MAX_VALUE)).not.toMatch(/Infinity|NaN/);
+		// Asserted exactly, not as `not.toMatch(/Infinity|NaN/)`: that weaker form
+		// passes against the pre-carry implementation too, so it pinned nothing.
+		expect(formatSec(Number.MAX_VALUE)).toBe("2.9961552247705265e+306:08.0");
 	});
 });
 
@@ -43,7 +45,8 @@ describe("formatSeconds", () => {
 	});
 
 	it("keeps finite durations finite while rounding", () => {
-		expect(formatSeconds(Number.MAX_VALUE)).not.toMatch(/Infinity|NaN/);
+		// Exact, for the same reason as the formatSec case above.
+		expect(formatSeconds(Number.MAX_VALUE)).toBe("4.993592041284211e+304:56:08.0");
 	});
 });
 
@@ -56,5 +59,27 @@ describe("formatMs", () => {
 
 	it("inherits minute carry from formatSec", () => {
 		expect(formatMs(59_960)).toBe("1:00.0");
+	});
+});
+
+// Exported so LeftPanel's `formatTimecode` (h:mm:ss.t, a third shape that formats
+// itself) shares the carry instead of re-deriving it. Pinned here because that
+// caller has no test of its own.
+describe("splitRoundedTime", () => {
+	it("carries a second that rounds up to 60 into the minute field", () => {
+		expect(splitRoundedTime(59.96)).toEqual({ totalMinutes: 1, seconds: 0 });
+	});
+
+	it("does not carry when the second stays under 60", () => {
+		expect(splitRoundedTime(59.94)).toEqual({ totalMinutes: 0, seconds: 59.9 });
+	});
+
+	it("carries across the hour boundary as plain minutes", () => {
+		expect(splitRoundedTime(3599.96)).toEqual({ totalMinutes: 60, seconds: 0 });
+	});
+
+	it("floors junk to zero", () => {
+		expect(splitRoundedTime(Number.NaN)).toEqual({ totalMinutes: 0, seconds: 0 });
+		expect(splitRoundedTime(-1)).toEqual({ totalMinutes: 0, seconds: 0 });
 	});
 });
