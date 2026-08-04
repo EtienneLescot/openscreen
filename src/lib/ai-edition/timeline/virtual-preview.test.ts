@@ -39,8 +39,9 @@ const clips: AxcutClip[] = [
 ];
 
 describe("virtual-preview pure functions", () => {
-	it("totalVirtualDuration returns the last clip's timelineEndSec", () => {
+	it("totalVirtualDuration returns the greatest timelineEndSec", () => {
 		expect(totalVirtualDuration(clips)).toBe(20);
+		expect(totalVirtualDuration([...clips].reverse())).toBe(20);
 		expect(totalVirtualDuration([])).toBe(0);
 	});
 
@@ -54,6 +55,14 @@ describe("virtual-preview pure functions", () => {
 		const pos = locateVirtualPosition(clips, 12);
 		expect(pos).not.toBeNull();
 		expect(pos?.clipIndex).toBe(1);
+		expect(pos?.sourceTimeSec).toBe(22);
+	});
+
+	it("locateVirtualPosition does not depend on clip array order", () => {
+		const reversed = [...clips].reverse();
+		const pos = locateVirtualPosition(reversed, 12);
+		expect(pos?.clip.id).toBe("clip_2");
+		expect(pos?.clipIndex).toBe(0);
 		expect(pos?.sourceTimeSec).toBe(22);
 	});
 
@@ -426,6 +435,27 @@ describe("virtual-preview pure functions", () => {
 		expect(nextSeg?.id).toBe("clip_2");
 		expect(nextSeg?.assetId).toBe("a2");
 		expect(getRawVirtualStartTime(nextSeg!, rawClips)).toBe(10.7);
+	});
+
+	it("findNextKeptSegment chooses the earliest next segment when playback clips are unordered", () => {
+		const rawClips: AxcutClip[] = [
+			{ ...clips[0] },
+			{ ...clips[1] },
+			{
+				...clips[1],
+				id: "clip_3",
+				sourceStartSec: 40,
+				sourceEndSec: 50,
+				timelineStartSec: 20,
+				timelineEndSec: 30,
+			},
+		];
+		const playbackClips = [rawClips[2], rawClips[1], rawClips[0]];
+
+		const next = findNextKeptSegment(playbackClips, rawClips, 5);
+
+		expect(next?.id).toBe("clip_2");
+		expect(getRawVirtualStartTime(next!, rawClips)).toBe(10);
 	});
 
 	describe("findNextKeptSegment never goes backwards", () => {

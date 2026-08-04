@@ -11,7 +11,7 @@ export type VirtualPosition = {
 };
 
 export function totalVirtualDuration(clips: AxcutClip[]): number {
-	return clips.at(-1)?.timelineEndSec ?? 0;
+	return clips.reduce((duration, clip) => Math.max(duration, clip.timelineEndSec), 0);
 }
 
 export function clampVirtualTime(clips: AxcutClip[], value: number): number {
@@ -25,11 +25,18 @@ export function locateVirtualPosition(
 ): VirtualPosition | null {
 	if (clips.length === 0) return null;
 	const clamped = clampVirtualTime(clips, virtualTimeSec);
-	const clipIndex = clips.findIndex((clip, index) => {
-		const isLast = index === clips.length - 1;
-		return clamped >= clip.timelineStartSec && (clamped < clip.timelineEndSec || isLast);
-	});
-	const resolvedIndex = clipIndex >= 0 ? clipIndex : clips.length - 1;
+	const ordered = clips
+		.map((clip, clipIndex) => ({ clip, clipIndex }))
+		.sort(
+			(a, b) =>
+				a.clip.timelineStartSec - b.clip.timelineStartSec ||
+				a.clip.timelineEndSec - b.clip.timelineEndSec ||
+				a.clip.id.localeCompare(b.clip.id),
+		);
+	const resolved =
+		ordered.find(({ clip }) => clamped >= clip.timelineStartSec && clamped < clip.timelineEndSec) ??
+		ordered.at(-1)!;
+	const resolvedIndex = resolved.clipIndex;
 	const clip = clips[resolvedIndex];
 	const clipDuration = (clip.sourceEndSec ?? 0) - clip.sourceStartSec;
 	const clipOffset = Math.max(0, Math.min(clipDuration, clamped - clip.timelineStartSec));
@@ -103,23 +110,21 @@ export function findNextKeptSegment(
 	currentSourceTime?: number,
 	activeClipId?: string,
 ): AxcutClip | undefined {
-	for (const seg of playbackClips) {
-		const segRawStart = getRawVirtualStartTime(seg, rawClips);
-		if (segRawStart > currentRawTime + 0.001) {
-			return seg;
-		}
-		if (
-			activeSourceId &&
-			activeClipId &&
-			currentSourceTime !== undefined &&
-			seg.assetId === activeSourceId &&
-			findRawClipForSegment(seg, rawClips)?.id === activeClipId &&
-			seg.sourceStartSec > currentSourceTime + 0.001
-		) {
-			return seg;
-		}
-	}
-	return undefined;
+	const nextByRawTime = playbackClips
+		.map((segment) => ({ segment, rawStart: getRawVirtualStartTime(segment, rawClips) }))
+		.filter(({ rawStart }) => rawStart > currentRawTime + 0.001)
+		.sort((a, b) => a.rawStart - b.rawStart)[0]?.segment;
+	if (nextByRawTime) return nextByRawTime;
+
+	if (!activeSourceId || !activeClipId || currentSourceTime === undefined) return undefined;
+	return playbackClips
+		.filter(
+			(segment) =>
+				segment.assetId === activeSourceId &&
+				findRawClipForSegment(segment, rawClips)?.id === activeClipId &&
+				segment.sourceStartSec > currentSourceTime + 0.001,
+		)
+		.sort((a, b) => a.sourceStartSec - b.sourceStartSec)[0];
 }
 
 function toPositionAt(
