@@ -23,7 +23,6 @@ import {
 import { mainT, setMainLocale } from "./i18n";
 import { getSelectedDesktopSource, registerIpcHandlers } from "./ipc/handlers";
 import { installMainProcessErrorGuards } from "./main-process-errors";
-import { acquireStableInstanceLock } from "./singleInstanceLock";
 import { registerSttIpc } from "./stt";
 import {
 	createCountdownOverlayWindow,
@@ -134,9 +133,7 @@ function showMainWindow() {
 
 // CLI runs skip the single-instance lock so `openscreen export/record` works
 // while the GUI app is open (they share nothing but the recordings directory).
-const stableInstanceLock = cliCommand ? null : acquireStableInstanceLock();
-const hasElectronSingleInstanceLock = cliCommand ? false : app.requestSingleInstanceLock();
-const hasSingleInstanceLock = Boolean(stableInstanceLock && hasElectronSingleInstanceLock);
+const hasSingleInstanceLock = cliCommand ? false : app.requestSingleInstanceLock();
 
 if (cliCommand) {
 	runCli(cliCommand);
@@ -145,7 +142,6 @@ if (cliCommand) {
 		showMainWindow();
 	});
 } else {
-	stableInstanceLock?.release();
 	app.quit();
 }
 
@@ -518,7 +514,6 @@ app.on("activate", () => {
 
 app.on("will-quit", () => {
 	unregisterAllGlobalShortcuts();
-	stableInstanceLock?.release();
 });
 
 const appReady = !cliCommand && hasSingleInstanceLock ? app.whenReady() : null;
