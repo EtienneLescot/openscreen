@@ -69,6 +69,8 @@
 	},
 	"recording": {
 		"selectSource": "녹화할 소스를 선택해 주세요",
+		"systemPicker": "공유할 대상을 시스템이 묻습니다",
+		"inProgress": "녹화 중",
 		"saving": "저장 중..."
 	},
 	"language": "언어",

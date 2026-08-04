@@ -29,12 +29,23 @@ export interface PipeWireCursorAssetPayload {
 export type PipeWireHelperEvent =
 	| { event: "ready"; timestampMs: number; pipewireVersion?: string | null }
 	| {
+			/** The picker has been answered. Fires before any pixel moves. */
+			event: "source-selected";
+			timestampMs: number;
+			nodeId: number;
+			sourceKind?: "monitor" | "window" | "virtual" | null;
+			positionX?: number | null;
+			positionY?: number | null;
+	  }
+	| {
 			event: "stream-started";
 			timestampMs: number;
 			nodeId: number;
 			width: number;
 			height: number;
-			restoreToken?: string | null;
+			/** What the compositor actually handed over. Absent on backends that
+			 *  omit it — treat that as unknown, never as a screen. */
+			sourceKind?: "monitor" | "window" | "virtual" | null;
 	  }
 	| {
 			event: "cursor-sample";

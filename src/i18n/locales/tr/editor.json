@@ -35,7 +35,8 @@
 		"permissionDenied": "Kayıt izni reddedildi. Lütfen ekran kaydına izin verin.",
 		"cameraDisconnected": "Webcam bağlantısı kesildi.",
 		"cameraNotFound": "Kamera bulunamadı.",
-		"accessibilityAllowAndRetry": "OpenScreen için Erişilebilirlik erişimine izin verin, ardından geri sayımı başlatmak için tekrar kayda basın."
+		"accessibilityAllowAndRetry": "OpenScreen için Erişilebilirlik erişimine izin verin, ardından geri sayımı başlatmak için tekrar kayda basın.",
+		"selectSource": "Lütfen kayıt için bir kaynak seçin"
 	},
 	"loadingVideo": "Video yükleniyor...",
 	"loadingEditor": "Editör yükleniyor...",
@@ -98,6 +99,7 @@
 	},
 	"rec": {
 		"source": "Kaynak",
+		"systemPicker": "Sisteminiz neyi paylaşacağınızı soracak",
 		"systemAudio": "Sistem sesi",
 		"microphone": "Mikrofon",
 		"camera": "Kamera",

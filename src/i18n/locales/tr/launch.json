@@ -69,6 +69,8 @@
 	},
 	"recording": {
 		"selectSource": "Lütfen kayıt için bir kaynak seçin",
+		"systemPicker": "Sisteminiz neyi paylaşacağınızı soracak",
+		"inProgress": "Kaydediliyor",
 		"saving": "Kaydediliyor..."
 	},
 	"language": "Dil",

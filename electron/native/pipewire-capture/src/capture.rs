@@ -210,6 +210,15 @@ pub struct Capture {
     /// The next output frame index to write.
     next_index: i64,
     frames_written: u64,
+    /// The size the encoder was opened at, latched for the whole file.
+    ///
+    /// An MP4 track cannot change resolution mid-file, but a window's crop rect
+    /// can change on ANY buffer — mutter never renegotiates the format for a
+    /// window stream, so a resize travels down the crop and nothing else. The
+    /// committed size is therefore the contract, and a later crop is read
+    /// through it rather than replacing it.
+    committed_width: i32,
+    committed_height: i32,
 }
 
 impl Capture {
@@ -274,16 +283,58 @@ impl Capture {
                 paused_at: None,
                 next_index: 0,
                 frames_written: 0,
+                committed_width: width,
+                committed_height: height,
             },
             selection,
         ))
+    }
+
+    /// Whether this frame's crop still matches what the encoder was opened at.
+    ///
+    /// A divergence means the recorded window was resized. The recording keeps
+    /// its original dimensions — see [`Self::committed_width`] — so the caller
+    /// reports it once rather than silently reframing.
+    pub fn crop_diverged(&self, frame: &shim::Frame) -> bool {
+        frame.crop.width != self.committed_width || frame.crop.height != self.committed_height
+    }
+
+    /// Where to start reading this frame, in source pixels.
+    ///
+    /// Follows the LIVE crop origin, so moving the recorded window tracks it,
+    /// but clamps so a committed-size read always stays inside the buffer. That
+    /// clamp is the only thing standing between a shrunken window and an
+    /// out-of-bounds read inside swscale.
+    fn read_origin(&self, frame: &shim::Frame) -> (i32, i32) {
+        let max_x = (frame.width - self.committed_width).max(0);
+        let max_y = (frame.height - self.committed_height).max(0);
+        (
+            frame.crop.x.clamp(0, max_x),
+            frame.crop.y.clamp(0, max_y),
+        )
     }
 
     /// Converts a captured frame into the encoder's staging buffer. Nothing is
     /// written until [`Self::advance`] runs.
     pub fn stage(&mut self, frame: &shim::Frame) -> Result<(), String> {
         let format = pixel_format(frame.video_format)?;
-        self.encoder.stage(&frame.pixels, frame.stride, format)?;
+
+        // Address the crop by moving the START of the slice, and hand swscale the
+        // frame's OWN stride unchanged. The stride is the distance between rows
+        // in the source buffer, which cropping does not alter — WebRTC's memfd
+        // path subtracts the x offset from it, which is wrong for any non-zero x
+        // and is latent there only because no shipping compositor sets one.
+        let (x, y) = self.read_origin(frame);
+        let offset = (y as usize)
+            .checked_mul(frame.stride)
+            .and_then(|rows| rows.checked_add((x as usize) * BYTES_PER_SOURCE_PIXEL))
+            .ok_or_else(|| "crop offset overflows".to_owned())?;
+        let pixels = frame
+            .pixels
+            .get(offset..)
+            .ok_or_else(|| format!("crop offset {offset} is past the end of the frame"))?;
+
+        self.encoder.stage(pixels, frame.stride, format)?;
         if self.epoch.is_none() {
             self.epoch = Some(Instant::now());
             // Audio has been accumulating since the process started, while the
@@ -424,6 +475,14 @@ impl Capture {
 /// `osc_build_enum_format` advertises can appear here; anything else means the
 /// two lists drifted apart, which is worth an error rather than a guess at the
 /// channel order.
+/// Bytes per pixel in every format [`pixel_format`] accepts.
+///
+/// All four that `osc_build_enum_format` advertises are 32-bit, so this is a
+/// constant rather than a lookup. It lives HERE, next to the table it describes,
+/// because the two must change together: adding a 24-bit format below without
+/// revisiting this would silently mis-address every cropped row.
+pub const BYTES_PER_SOURCE_PIXEL: usize = 4;
+
 fn pixel_format(spa_format: u32) -> Result<ff::AVPixelFormat, String> {
     let constants = shim::constants();
     // `*0` rather than `*A`: the padding byte carries no alpha, and telling
@@ -460,7 +519,23 @@ mod tests {
             height,
             video_format: format,
             pts_ns: -1,
+            crop: shim::CropRect { x: 0, y: 0, width, height },
+            has_crop: false,
         }
+    }
+
+    /// A window's frame: a monitor-sized buffer whose content is the rectangle
+    /// at (x, y). This is what mutter actually delivers for a window stream.
+    fn cropped_frame(
+        width: i32,
+        height: i32,
+        crop: shim::CropRect,
+        format: u32,
+    ) -> shim::Frame {
+        let mut frame = frame(width, height, format);
+        frame.crop = crop;
+        frame.has_crop = true;
+        frame
     }
 
     #[test]
@@ -521,6 +596,100 @@ mod tests {
 
         let summary = capture.finish().expect("finish");
         assert_eq!(summary.frames, written as u64);
+        let _ = std::fs::remove_file(&output);
+    }
+
+    /// The window-capture bug, at the layer where it produced wrong pixels.
+    ///
+    /// mutter hands a window stream MONITOR-sized buffers and reports the
+    /// window's rectangle as SPA_META_VideoCrop. Encoding the buffer without
+    /// applying that rectangle is what padded window recordings out to screen
+    /// size with black.
+    #[test]
+    fn a_window_is_staged_from_its_crop_inside_a_larger_frame() {
+        let output = std::env::temp_dir().join("openscreen-capture-crop.mp4");
+        let (mut capture, _) =
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+                .expect("start");
+
+        // A 1920x1080 stream carrying a 320x240 window at (100, 50).
+        let staged = capture.stage(&cropped_frame(
+            1920,
+            1080,
+            shim::CropRect { x: 100, y: 50, width: 320, height: 240 },
+            shim::constants().video_format_bgrx,
+        ));
+
+        assert!(staged.is_ok(), "a crop inside the frame must stage: {staged:?}");
+
+        // Frames are clock-driven, so let the timeline advance far enough for the
+        // staged picture to actually reach the encoder at the cropped geometry.
+        std::thread::sleep(Duration::from_millis(120));
+        let written = capture.advance().expect("advance");
+        assert!(written >= 1, "the cropped picture should have been encoded, wrote {written}");
+
+        let summary = capture.finish().expect("finish");
+        assert_eq!(summary.frames, written as u64);
+        let _ = std::fs::remove_file(&output);
+    }
+
+    /// A crop flush against the right edge leaves the last row short of a full
+    /// stride. The old `stride * height` bounds check rejected exactly those —
+    /// i.e. every window not touching the left edge.
+    #[test]
+    fn a_crop_against_the_right_edge_is_not_rejected_as_truncated() {
+        let output = std::env::temp_dir().join("openscreen-capture-edge.mp4");
+        let (mut capture, _) =
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+                .expect("start");
+
+        let staged = capture.stage(&cropped_frame(
+            1920,
+            1080,
+            shim::CropRect { x: 1600, y: 840, width: 320, height: 240 },
+            shim::constants().video_format_bgrx,
+        ));
+
+        assert!(staged.is_ok(), "a crop at the far corner must stage: {staged:?}");
+        let _ = capture.finish();
+        let _ = std::fs::remove_file(&output);
+    }
+
+    /// The safety property. A window that SHRANK after the encoder was opened
+    /// still reports its own smaller rect, and reading a committed-sized picture
+    /// from its origin must stay inside the buffer rather than running off the
+    /// end into whatever follows it in the mapping.
+    #[test]
+    fn a_shrunken_window_is_read_from_inside_the_frame() {
+        let output = std::env::temp_dir().join("openscreen-capture-shrunk.mp4");
+        let (mut capture, _) =
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+                .expect("start");
+
+        // Origin so close to the edge that a 320x240 read from it would overrun.
+        let frame = cropped_frame(
+            400,
+            300,
+            shim::CropRect { x: 380, y: 290, width: 20, height: 10 },
+            shim::constants().video_format_bgrx,
+        );
+        assert!(capture.crop_diverged(&frame), "20x10 must not look like the committed 320x240");
+
+        let staged = capture.stage(&frame);
+        assert!(staged.is_ok(), "the read must be clamped back inside the frame: {staged:?}");
+        let _ = capture.finish();
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn an_uncropped_frame_reports_no_divergence() {
+        let output = std::env::temp_dir().join("openscreen-capture-nocrop.mp4");
+        let (mut capture, _) =
+            Capture::start(&output, 320, 240, 30, Some(1_000_000), Some(Backend::Software), Vec::new())
+                .expect("start");
+
+        assert!(!capture.crop_diverged(&frame(320, 240, shim::constants().video_format_bgrx)));
+        let _ = capture.finish();
         let _ = std::fs::remove_file(&output);
     }
 

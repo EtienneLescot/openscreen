@@ -69,6 +69,8 @@
 	},
 	"recording": {
 		"selectSource": "Seleziona una sorgente da registrare",
+		"systemPicker": "Il sistema ti chiederà cosa condividere",
+		"inProgress": "Registrazione in corso",
 		"saving": "Salvataggio..."
 	},
 	"language": "Lingua",

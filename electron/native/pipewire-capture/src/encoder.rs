@@ -23,6 +23,7 @@ use std::ffi::{CStr, CString};
 use std::path::Path;
 use std::ptr;
 
+use crate::capture::BYTES_PER_SOURCE_PIXEL;
 use crate::ffmpeg as ff;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -441,14 +442,22 @@ impl VideoEncoder {
         stride: usize,
         src_format: ff::AVPixelFormat,
     ) -> Result<(), String> {
+        // The LAST row needs only its own pixels, not a further stride's worth of
+        // padding. Demanding `stride * height` rejected exactly the frames a
+        // window crop produces: `pixels` there starts partway into the buffer, so
+        // the tail is short by the offset even though every row is complete.
         let needed = stride
-            .checked_mul(self.params.height as usize)
+            .checked_mul(self.params.height.saturating_sub(1) as usize)
+            .and_then(|rows| {
+                rows.checked_add(self.params.width as usize * BYTES_PER_SOURCE_PIXEL)
+            })
             .ok_or_else(|| "frame size overflows".to_owned())?;
         if pixels.len() < needed {
             return Err(format!(
-                "captured frame is truncated: {} bytes for {} rows at stride {stride}",
+                "captured frame is truncated: {} bytes for {} rows of {} px at stride {stride}",
                 pixels.len(),
-                self.params.height
+                self.params.height,
+                self.params.width
             ));
         }
 

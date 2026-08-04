@@ -5,6 +5,7 @@ import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences"
 import { nativeBridgeClient } from "@/native";
 import { type CameraDevice, useCameraDevices } from "../../hooks/useCameraDevices";
 import { type MicrophoneDevice, useMicrophoneDevices } from "../../hooks/useMicrophoneDevices";
+import { usePortalOwnsSource } from "../../hooks/usePortalOwnsSource";
 import { useScreenRecorder } from "../../hooks/useScreenRecorder";
 import { requestCameraAccess } from "../../lib/requestCameraAccess";
 import {
@@ -117,6 +118,12 @@ export function LaunchWindow() {
 	);
 	const [supportsCursorModeToggle, setSupportsCursorModeToggle] = useState(false);
 	const [isLinuxHud, setIsLinuxHud] = useState(false);
+	/**
+	 * Narrower than [`isLinuxHud`] on purpose: without the helper the recorder
+	 * falls back to Chromium's capture, which DOES take a source id, so the
+	 * in-app picker has to stay for that case.
+	 */
+	const portalOwnsSource = usePortalOwnsSource();
 
 	const isVertical = trayLayout === "vertical";
 	const isPopoverOpen = isLanguageMenuOpen || isDeviceSettingsOpen;
@@ -499,7 +506,10 @@ export function LaunchWindow() {
 			if (saving) {
 				return;
 			}
-			const sourceSelected = sourceSelectedOverride ?? hasSelectedSource;
+			// Linux never detours through the in-app picker: there is nothing for
+			// it to select, and waiting for a selection that can never arrive left
+			// the record button opening a modal instead of recording.
+			const sourceSelected = portalOwnsSource || (sourceSelectedOverride ?? hasSelectedSource);
 			if (!sourceSelected && !recording) {
 				recordAfterSourceSelectionRef.current = true;
 				void openSourceSelector()
@@ -516,7 +526,7 @@ export function LaunchWindow() {
 
 			toggleRecording();
 		},
-		[hasSelectedSource, openSourceSelector, recording, saving, toggleRecording],
+		[hasSelectedSource, portalOwnsSource, openSourceSelector, recording, saving, toggleRecording],
 	);
 	const handleRecordClick = useCallback(() => handleRecordButtonClick(), [handleRecordButtonClick]);
 
@@ -721,11 +731,20 @@ export function LaunchWindow() {
 		dismissSoftwareEncoderFallbackNotice();
 	}, [dismissSoftwareEncoderFallbackNotice]);
 
+	// On Linux the ScreenCast portal owns the choice, so there is no in-app
+	// selection to name and none to demand: the idle label says what pressing
+	// record will do, and the recording label stays neutral because the portal
+	// reports a KIND, never a window title. Naming a source we were never told
+	// is what put a window's name on a full-screen recording.
 	const recordLabel = saving
 		? t("recording.saving")
-		: hasSelectedSource || recording
-			? selectedSource
-			: t("recording.selectSource");
+		: portalOwnsSource
+			? recording
+				? t("recording.inProgress")
+				: t("recording.systemPicker")
+			: hasSelectedSource || recording
+				? selectedSource
+				: t("recording.selectSource");
 
 	// Stable identity, or the panel's memo boundary would break on every parent
 	// render — including the once-a-second one during a recording.
@@ -794,12 +813,21 @@ export function LaunchWindow() {
 						onClick={toggleTrayLayout}
 					/>
 
-					<HudSourceButton
-						vertical={isVertical}
-						label={selectedSource}
-						disabled={controlsLocked}
-						onClick={openSourceSelector}
-					/>
+					{/* No source button on Linux: `SelectSources` has no parameter
+					    naming a source, so nothing this picker returned could reach
+					    the capture. It raised a second portal dialog of its own —
+					    via `desktopCapturer.getSources()` — whose grant was then
+					    discarded, which is why picking a window here changed
+					    nothing. The compositor's picker is the only one that
+					    decides, and it appears when recording starts. */}
+					{!portalOwnsSource && (
+						<HudSourceButton
+							vertical={isVertical}
+							label={selectedSource}
+							disabled={controlsLocked}
+							onClick={openSourceSelector}
+						/>
+					)}
 
 					<HudDivider vertical={isVertical} />
 

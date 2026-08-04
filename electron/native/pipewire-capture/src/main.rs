@@ -87,6 +87,14 @@ struct MicrophoneRequest {
 }
 
 const DEFAULT_AUDIO_BITRATE: i64 = 128_000;
+/// How many frames a window stream may deliver without a crop rectangle before
+/// the helper gives up waiting and records the whole stream.
+///
+/// mutter records one frame synchronously when the stream is enabled, which can
+/// land before the picked window is mapped and therefore carry an empty rect. A
+/// handful of frames is ~100 ms at 60 fps — long enough to skip that, short
+/// enough that a compositor which never sends a crop still starts recording.
+const MAX_FRAMES_AWAITING_CROP: u32 = 8;
 /// How much audio may queue before the oldest is discarded. Generous: the drain
 /// runs every loop tick, so reaching this means the encoder stopped entirely.
 const AUDIO_RING_SECONDS: usize = 2;
@@ -95,9 +103,6 @@ const AUDIO_RING_SECONDS: usize = 2;
 #[serde(rename_all = "camelCase", default)]
 struct Request {
     sample_interval_ms: Option<u64>,
-    /// Token from a previous run's `stream-started`. Lets the portal skip the
-    /// picker for a source the user already approved.
-    restore_token: Option<String>,
     /// Where to write the MP4. Absent means cursor-only: no pixels are mapped,
     /// no encoder is opened, and the helper behaves exactly as Stage 1 did.
     output_path: Option<String>,
@@ -107,6 +112,14 @@ struct Request {
     cursor_mode: Option<String>,
     video: Option<VideoRequest>,
     audio: Option<AudioRequest>,
+    /// Negotiate the portal, report `source-selected`, then WAIT for `record` on
+    /// stdin before connecting to PipeWire.
+    ///
+    /// Splits "the user has chosen what to share" from "pixels are flowing", so a
+    /// caller can put a countdown between them instead of counting down before
+    /// the picker has even appeared. Defaults to false, which keeps the
+    /// single-shot behaviour every existing caller relies on.
+    defer_start: bool,
     /// Emit `ready` and exit, without ever calling the portal's `Start()`.
     ///
     /// Everything up to that point is non-interactive; `Start()` is the single
@@ -195,6 +208,8 @@ struct AudioSourceConfig {
 enum Message {
     Portal(Box<Result<portal::PortalStream, portal::PortalError>>),
     Stream(StreamEvent),
+    /// Arm a deferred session: connect to PipeWire and start encoding.
+    Record,
     Pause,
     Resume,
     Stop,
@@ -267,7 +282,7 @@ fn main() {
 
     let (sender, receiver) = mpsc::channel::<Message>();
     spawn_stdin_reader(sender.clone());
-    spawn_portal(sender.clone(), request.restore_token.clone(), cursor_mode);
+    spawn_portal(sender.clone(), cursor_mode);
 
     let session = RunConfig {
         tick,
@@ -278,6 +293,7 @@ fn main() {
         forced_encoder,
         cursor_mode,
         audio: request.audio_sources(),
+        defer_start: request.defer_start,
     };
     let exit_code = run(&mut emitter, receiver, sender, session);
     std::process::exit(exit_code);
@@ -296,6 +312,9 @@ struct RunConfig {
     forced_encoder: Option<encoder::Backend>,
     cursor_mode: portal::CursorMode,
     audio: Vec<AudioSourceConfig>,
+    /// Wait for `record` on stdin before connecting to PipeWire. See
+    /// [`Request::defer_start`].
+    defer_start: bool,
 }
 
 /// Opens every requested audio stream, returning the live sessions (which must
@@ -429,6 +448,14 @@ fn spawn_stdin_reader(sender: Sender<Message>) {
             let Ok(line) = line else { break };
             match line.trim() {
                 "stop" => break,
+                // Arms a `deferStart` session. Ignored by a session that was not
+                // deferred, and unknown verbs already fall through to `continue`,
+                // so an older helper receiving this degrades instead of dying.
+                "record" => {
+                    if sender.send(Message::Record).is_err() {
+                        return;
+                    }
+                }
                 "pause" => {
                     if sender.send(Message::Pause).is_err() {
                         return;
@@ -449,13 +476,9 @@ fn spawn_stdin_reader(sender: Sender<Message>) {
 /// The portal runs on its own thread because `Start()` blocks on the user for
 /// an unbounded time, and a `stop` arriving during the picker must still be
 /// honoured.
-fn spawn_portal(
-    sender: Sender<Message>,
-    restore_token: Option<String>,
-    cursor_mode: portal::CursorMode,
-) {
+fn spawn_portal(sender: Sender<Message>, cursor_mode: portal::CursorMode) {
     std::thread::spawn(move || {
-        let result = pollster::block_on(portal::negotiate(restore_token.as_deref(), cursor_mode));
+        let result = pollster::block_on(portal::negotiate(cursor_mode));
         let _ = sender.send(Message::Portal(Box::new(result)));
     });
 }
@@ -468,12 +491,55 @@ struct CursorState {
     asset_id: Option<String>,
 }
 
+/// Connects the PipeWire consumer to a grant the portal already made.
+///
+/// Split out because it runs from two places: straight off the portal reply in
+/// the single-shot path, and from `record` in the deferred path where the grant
+/// has been sitting in `pending_portal` while the caller ran its countdown.
+#[allow(clippy::too_many_arguments)]
+fn begin_stream<W: Write>(
+    emitter: &mut Emitter<W>,
+    sender: &Sender<Message>,
+    frames: &Option<Arc<shim::FrameMailbox>>,
+    session: &mut Option<shim::Session>,
+    portal_stream: &mut Option<StreamInfo>,
+    granted_kind: &mut Option<portal::SourceKind>,
+    stream: portal::PortalStream,
+) -> Result<(), ()> {
+    // The fd is consumed by libpipewire; the rest is kept for the
+    // `stream-started` event, emitted once the format is negotiated.
+    let portal::PortalStream { fd, node_id, position, source_kind, .. } = stream;
+    let forward = sender.clone();
+    match shim::Session::start(
+        fd,
+        node_id,
+        Box::new(move |event| {
+            let _ = forward.send(Message::Stream(event));
+        }),
+        frames.clone(),
+    ) {
+        Ok(started) => {
+            *session = Some(started);
+            *granted_kind = source_kind;
+            *portal_stream = Some(StreamInfo { node_id, position, source_kind });
+            Ok(())
+        }
+        Err(message) => {
+            let _ = emitter.emit(&Event::Error {
+                code: "pipewire-connect-failed".to_owned(),
+                message,
+            });
+            Err(())
+        }
+    }
+}
+
 /// What survives from the portal reply after its fd has been handed to
 /// libpipewire — everything `stream-started` needs to report.
 struct StreamInfo {
     node_id: u32,
     position: Option<(i32, i32)>,
-    restore_token: Option<String>,
+    source_kind: Option<portal::SourceKind>,
 }
 
 fn run<W: Write>(
@@ -487,6 +553,18 @@ fn run<W: Write>(
     let mut session: Option<shim::Session> = None;
     let mut portal_stream: Option<StreamInfo> = None;
     let mut size: Option<(i32, i32)> = None;
+    // What the portal granted, kept past the `StreamInfo` that is consumed at
+    // Format: only a window stream is expected to carry a crop.
+    let mut granted_kind: Option<portal::SourceKind> = None;
+    // Frames skipped while waiting for a window's first usable crop rectangle.
+    let mut frames_awaiting_crop: u32 = 0;
+    // A crop change is reported once, not once per frame.
+    let mut crop_change_reported = false;
+    // A `deferStart` grant held while the caller runs its countdown.
+    let mut pending_portal: Option<portal::PortalStream> = None;
+    // `record` has been received. Latched, because it can arrive before the
+    // picker has been answered.
+    let mut armed = false;
     let mut cursor: Option<CursorState> = None;
     let mut known_assets: HashSet<String> = HashSet::new();
     let mut pending_asset: Option<CursorAsset> = None;
@@ -534,15 +612,142 @@ fn run<W: Write>(
             }
 
             Ok(Message::Stream(StreamEvent::FrameReady)) => {
-                let (Some(mailbox), Some(capture)) = (frames.as_ref(), capture.as_mut()) else {
+                let Some(mailbox) = frames.as_ref() else {
                     continue;
                 };
                 // `take` can legitimately return None: several FrameReady
                 // notifications can arrive for frames that superseded each other
                 // in the mailbox before the loop got here.
                 if let Some(frame) = mailbox.take() {
+                    // Opening the encoder is deferred to here because only a
+                    // frame carries the crop, and the crop — not the negotiated
+                    // format — is the size of a window.
+                    if capture.is_none() {
+                        if let Some(path) = config.output_path.as_ref() {
+                            // A WINDOW WITHOUT A CROP IS NOT YET TRUSTWORTHY.
+                            // mutter's rectangle intersection reports success
+                            // even when it produced an empty rect, and it records
+                            // one frame synchronously from `enable()` — before
+                            // the picked window is necessarily mapped. Committing
+                            // the encoder to that frame would pin a window
+                            // recording at monitor size for its whole duration,
+                            // which is the very bug being fixed, only intermittent.
+                            let expecting_crop =
+                                granted_kind == Some(portal::SourceKind::Window) && !frame.has_crop;
+                            if expecting_crop && frames_awaiting_crop < MAX_FRAMES_AWAITING_CROP {
+                                frames_awaiting_crop += 1;
+                                mailbox.recycle(frame.pixels);
+                                continue;
+                            }
+                            if expecting_crop {
+                                let _ = emitter.emit(&Event::Warning {
+                                    code: "window-crop-missing".to_owned(),
+                                    message: format!(
+                                        "a window was granted but no crop rectangle arrived in \
+                                         {frames_awaiting_crop} frames; recording the full \
+                                         {}x{} stream instead",
+                                        frame.width, frame.height
+                                    ),
+                                });
+                            }
+
+                            // H.264 chroma is subsampled 2x2, so odd dimensions
+                            // are a per-encoder lottery. A window's rect is its
+                            // own pixel size and is routinely odd.
+                            let width = frame.crop.width & !1;
+                            let height = frame.crop.height & !1;
+                            if width <= 0 || height <= 0 {
+                                let _ = emitter.emit(&Event::Error {
+                                    code: "encoder-unavailable".to_owned(),
+                                    message: format!(
+                                        "the compositor reported a {}x{} content rectangle, which \
+                                         cannot be encoded",
+                                        frame.crop.width, frame.crop.height
+                                    ),
+                                });
+                                exit_code = 1;
+                                break;
+                            }
+                            let _ = emitter.emit(&Event::Debug {
+                                code: "crop".to_owned(),
+                                data: json_map([
+                                    ("streamWidth", frame.width.into()),
+                                    ("streamHeight", frame.height.into()),
+                                    ("cropX", frame.crop.x.into()),
+                                    ("cropY", frame.crop.y.into()),
+                                    ("cropWidth", frame.crop.width.into()),
+                                    ("cropHeight", frame.crop.height.into()),
+                                    ("encodedWidth", width.into()),
+                                    ("encodedHeight", height.into()),
+                                    ("hasCrop", frame.has_crop.into()),
+                                    ("framesAwaited", frames_awaiting_crop.into()),
+                                ]),
+                            });
+
+                            match Capture::start(
+                                path,
+                                width,
+                                height,
+                                config.fps,
+                                config.bitrate,
+                                config.forced_encoder,
+                                std::mem::take(&mut audio_sources),
+                            ) {
+                                Ok((started, selection)) => {
+                                    let _ = emitter.emit(&Event::EncoderSelection {
+                                        video: selection.backend.as_str().to_owned(),
+                                        rejected: selection.rejected,
+                                    });
+                                    capture = Some(started);
+                                    if paused {
+                                        // A `pause` that arrived while the portal
+                                        // picker was still up applies to the
+                                        // capture that picker was for.
+                                        if let Some(capture) = capture.as_mut() {
+                                            capture.pause();
+                                        }
+                                    }
+                                }
+                                Err(message) => {
+                                    let _ = emitter.emit(&Event::Error {
+                                        code: "encoder-unavailable".to_owned(),
+                                        message,
+                                    });
+                                    exit_code = 1;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+
+                    let Some(capture) = capture.as_mut() else {
+                        // Cursor-only session: no encoder, nothing to stage. The
+                        // recycle below still has to run.
+                        mailbox.recycle(frame.pixels);
+                        continue;
+                    };
+
+                    // A window that was resized mid-recording. The file keeps its
+                    // original dimensions — an MP4 track cannot change resolution
+                    // — so this is reported rather than silently reframed.
+                    if !crop_change_reported && capture.crop_diverged(&frame) {
+                        crop_change_reported = true;
+                        let _ = emitter.emit(&Event::Warning {
+                            code: "crop-changed".to_owned(),
+                            message: format!(
+                                "the recorded window changed size to {}x{} mid-recording; the \
+                                 file keeps the size it started at, so the framing may be cut \
+                                 off or padded from here on",
+                                frame.crop.width, frame.crop.height
+                            ),
+                        });
+                    }
+
                     let first = !capture.started();
-                    if let Err(message) = capture.stage(&frame) {
+                    let staged = capture.stage(&frame);
+                    let (width, height) = (frame.crop.width, frame.crop.height);
+                    mailbox.recycle(frame.pixels);
+                    if let Err(message) = staged {
                         let _ = emitter.emit(&Event::Error {
                             code: "encode-failed".to_owned(),
                             message,
@@ -558,34 +763,48 @@ fn run<W: Write>(
                                 .as_ref()
                                 .map(|path| path.display().to_string())
                                 .unwrap_or_default(),
-                            width: frame.width,
-                            height: frame.height,
+                            width,
+                            height,
                             fps: config.fps,
                         });
                     }
-                    mailbox.recycle(frame.pixels);
                 }
-                if let Err(message) = capture.advance() {
-                    let _ = emitter.emit(&Event::Error {
-                        code: "encode-failed".to_owned(),
-                        message,
-                    });
-                    exit_code = 1;
-                    break;
+                if let Some(capture) = capture.as_mut() {
+                    if let Err(message) = capture.advance() {
+                        let _ = emitter.emit(&Event::Error {
+                            code: "encode-failed".to_owned(),
+                            message,
+                        });
+                        exit_code = 1;
+                        break;
+                    }
+                }
+            }
+
+            Ok(Message::Record) => {
+                // Arming is idempotent and may arrive before OR after the picker
+                // is answered — the user can be slower than the countdown, or
+                // faster. Both orderings have to converge on the same state, or a
+                // slow picker produces a recording that never starts.
+                armed = true;
+                if let Some(stream) = pending_portal.take() {
+                    if let Err(()) = begin_stream(
+                        emitter,
+                        &sender,
+                        &frames,
+                        &mut session,
+                        &mut portal_stream,
+                        &mut granted_kind,
+                        stream,
+                    ) {
+                        exit_code = 1;
+                        break;
+                    }
                 }
             }
 
             Ok(Message::Portal(result)) => match *result {
                 Ok(stream) => {
-                    // The fd is consumed by libpipewire; the rest is kept for the
-                    // `stream-started` event, emitted once the format is negotiated.
-                    let portal::PortalStream {
-                        fd,
-                        node_id,
-                        position,
-                        size: logical_size,
-                        restore_token,
-                    } = stream;
                     // The portal's size is in the compositor's coordinate space
                     // and can differ from the negotiated pixel size on a scaled
                     // display. Logged rather than used: cursor positions arrive
@@ -593,38 +812,51 @@ fn run<W: Write>(
                     let _ = emitter.emit(&Event::Debug {
                         code: "portal-stream".to_owned(),
                         data: json_map([
-                            ("nodeId", node_id.into()),
-                            ("logicalWidth", logical_size.map(|(w, _)| w).into()),
-                            ("logicalHeight", logical_size.map(|(_, h)| h).into()),
-                            ("positionX", position.map(|(x, _)| x).into()),
-                            ("positionY", position.map(|(_, y)| y).into()),
+                            ("nodeId", stream.node_id.into()),
+                            ("logicalWidth", stream.size.map(|(w, _)| w).into()),
+                            ("logicalHeight", stream.size.map(|(_, h)| h).into()),
+                            ("positionX", stream.position.map(|(x, _)| x).into()),
+                            ("positionY", stream.position.map(|(_, y)| y).into()),
+                            (
+                                "sourceKind",
+                                stream.source_kind.map(|kind| kind.as_str()).into(),
+                            ),
                         ]),
                     });
-                    let forward = sender.clone();
-                    match shim::Session::start(
-                        fd,
-                        node_id,
-                        Box::new(move |event| {
-                            let _ = forward.send(Message::Stream(event));
-                        }),
-                        frames.clone(),
+                    // PROTOCOL, NOT DIAGNOSTICS. The picker has been answered —
+                    // which is a different moment from "pixels are flowing", and
+                    // the only one at which an app can start a countdown without
+                    // it running before the user has been asked anything.
+                    let _ = emitter.emit(&Event::SourceSelected {
+                        timestamp_ms: timestamp_ms(),
+                        node_id: stream.node_id,
+                        source_kind: stream.source_kind.map(|kind| kind.as_str().to_owned()),
+                        position_x: stream.position.map(|(x, _)| x),
+                        position_y: stream.position.map(|(_, y)| y),
+                    });
+                    granted_kind = stream.source_kind;
+
+                    if config.defer_start && !armed {
+                        // Hold the grant WITHOUT connecting a pw_stream. mutter
+                        // only enables its capture source on STREAMING, so an
+                        // unconnected session costs the compositor nothing and
+                        // produces no frames to throw away. Connecting it
+                        // inactive instead — OBS's pattern — would expose it to
+                        // WirePlumber's idle-node suspend, which tears down the
+                        // negotiated format after a few seconds and would lose it
+                        // during a countdown.
+                        pending_portal = Some(stream);
+                    } else if let Err(()) = begin_stream(
+                        emitter,
+                        &sender,
+                        &frames,
+                        &mut session,
+                        &mut portal_stream,
+                        &mut granted_kind,
+                        stream,
                     ) {
-                        Ok(started) => {
-                            session = Some(started);
-                            portal_stream = Some(StreamInfo {
-                                node_id,
-                                position,
-                                restore_token,
-                            });
-                        }
-                        Err(message) => {
-                            let _ = emitter.emit(&Event::Error {
-                                code: "pipewire-connect-failed".to_owned(),
-                                message,
-                            });
-                            exit_code = 1;
-                            break;
-                        }
+                        exit_code = 1;
+                        break;
                     }
                 }
                 Err(error) => {
@@ -655,52 +887,23 @@ fn run<W: Write>(
                         height: format.height,
                         position_x: stream.position.map(|(x, _)| x),
                         position_y: stream.position.map(|(_, y)| y),
-                        restore_token: stream.restore_token,
+                        source_kind: stream
+                            .source_kind
+                            .map(|kind| kind.as_str().to_owned()),
                     });
                 }
 
-                // The encoder cannot be opened until now: its dimensions are the
-                // negotiated ones, which the compositor picks. Renegotiation
-                // mid-stream would deliver a second Format; the encoder is left
-                // alone in that case, because an MP4 cannot change resolution
-                // mid-file and the alternative — silently starting a new one —
-                // would lose the recording.
-                if let Some(path) = config.output_path.as_ref() {
-                    if capture.is_none() {
-                        match Capture::start(
-                            path,
-                            format.width,
-                            format.height,
-                            config.fps,
-                            config.bitrate,
-                            config.forced_encoder,
-                            std::mem::take(&mut audio_sources),
-                        ) {
-                            Ok((started, selection)) => {
-                                let _ = emitter.emit(&Event::EncoderSelection {
-                                    video: selection.backend.as_str().to_owned(),
-                                    rejected: selection.rejected,
-                                });
-                                capture = Some(started);
-                                if paused {
-                                    // A `pause` that arrived while the portal
-                                    // picker was still up applies to the capture
-                                    // that picker was for.
-                                    if let Some(capture) = capture.as_mut() {
-                                        capture.pause();
-                                    }
-                                }
-                            }
-                            Err(message) => {
-                                let _ = emitter.emit(&Event::Error {
-                                    code: "encoder-unavailable".to_owned(),
-                                    message,
-                                });
-                                exit_code = 1;
-                                break;
-                            }
-                        }
-                    } else {
+                // THE ENCODER IS NOT OPENED HERE ANY MORE, and that is the whole
+                // window-capture fix. `format` is the size of the STREAM, which
+                // for a window is the size of its monitor: a PipeWire stream
+                // cannot be resized once negotiated but a window can, so mutter
+                // pins the stream to the monitor and reports the window's live
+                // rectangle as SPA_META_VideoCrop instead. Sizing the encoder
+                // from `format` is what produced window recordings padded out to
+                // screen size with black. The size now comes from the first frame
+                // carrying a usable crop — see the FrameReady arm.
+                if config.output_path.is_some() {
+                    if capture.is_some() {
                         let _ = emitter.emit(&Event::Warning {
                             code: "format-renegotiated".to_owned(),
                             message: format!(

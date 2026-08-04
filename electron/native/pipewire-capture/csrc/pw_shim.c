@@ -324,6 +324,26 @@ static const struct spa_pod *osc_build_cursor_meta(struct spa_pod_builder *build
                                  (int32_t)OSC_CURSOR_META_SIZE(1024, 1024)));
 }
 
+/*
+ * The consumer side of the SPA_META_VideoCrop negotiation.
+ *
+ * THIS DECLARATION IS THE WHOLE POINT. `pw_buffers_negotiate` intersects the two
+ * sides' ParamMeta lists, and mutter writes the rectangle only inside
+ * `if (spa_meta_video_crop)` — so a consumer that never asks is simply never
+ * given one, with no error and nothing in any log. Omitting this object is what
+ * made a window arrive as a monitor-sized buffer with the window in one corner.
+ *
+ * A FIXED Int, never a CHOICE_RANGE: that is what OBS, WebRTC and mutter's own
+ * producer declaration all emit, so a range here could only fail to intersect.
+ */
+static const struct spa_pod *osc_build_video_crop_meta(struct spa_pod_builder *builder)
+{
+    return spa_pod_builder_add_object(builder, SPA_TYPE_OBJECT_ParamMeta, SPA_PARAM_Meta,
+                                      SPA_PARAM_META_type, SPA_POD_Id(SPA_META_VideoCrop),
+                                      SPA_PARAM_META_size,
+                                      SPA_POD_Int(sizeof(struct spa_meta_region)));
+}
+
 int osc_pw_cursor_meta_accepts_producer_size(uint32_t width, uint32_t height)
 {
     uint8_t ours_storage[512];
@@ -357,7 +377,7 @@ static void osc_on_param_changed(void *userdata, uint32_t id, const struct spa_p
     struct osc_pw_session *session = userdata;
     uint8_t buffer[1024];
     struct spa_pod_builder builder = SPA_POD_BUILDER_INIT(buffer, sizeof(buffer));
-    const struct spa_pod *params[3];
+    const struct spa_pod *params[4];
     struct osc_pw_format reported;
     uint32_t media_type;
     uint32_t media_subtype;
@@ -411,11 +431,12 @@ static void osc_on_param_changed(void *userdata, uint32_t id, const struct spa_p
         SPA_POD_Int(sizeof(struct spa_meta_header)));
 
     params[2] = osc_build_cursor_meta(&builder);
+    params[3] = osc_build_video_crop_meta(&builder);
 
     /* The builder returns NULL if its fixed buffer overflowed. 1 KiB is far more
-     * than these three objects need, but handing NULLs to update_params would be
+     * than these four objects need, but handing NULLs to update_params would be
      * a null deref inside libpipewire, so it is checked rather than assumed. */
-    if (params[0] == NULL || params[1] == NULL || params[2] == NULL) {
+    if (params[0] == NULL || params[1] == NULL || params[2] == NULL || params[3] == NULL) {
         return;
     }
 
@@ -424,7 +445,7 @@ static void osc_on_param_changed(void *userdata, uint32_t id, const struct spa_p
      * set actually in use rather than a set that no longer exists. */
     session->buffer_info_reports = 0;
 
-    api.stream_update_params(session->stream, params, 3);
+    api.stream_update_params(session->stream, params, SPA_N_ELEMENTS(params));
 }
 
 static void osc_on_state_changed(void *userdata, enum pw_stream_state old,
@@ -538,6 +559,7 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
 {
     struct spa_data *data;
     struct spa_meta_header *header;
+    struct spa_meta_region *region;
     uint32_t offset;
     uint32_t size;
     int32_t stride;
@@ -590,6 +612,41 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
     header = spa_buffer_find_meta_data(buffer, SPA_META_Header, sizeof(*header));
     if (header != NULL) {
         out->pts_ns = header->pts;
+    }
+
+    /* Default to the whole frame, so every consumer of `out` can read the crop
+     * fields unconditionally and a missing meta degrades to today's behaviour. */
+    out->crop_x = 0;
+    out->crop_y = 0;
+    out->crop_width = out->width;
+    out->crop_height = out->height;
+    out->has_crop = 0;
+
+    region = spa_buffer_find_meta_data(buffer, SPA_META_VideoCrop, sizeof(*region));
+    if (region != NULL && spa_meta_region_is_valid(region)) {
+        /* Widened before comparing: `position` is signed int32 and `size` is
+         * uint32, so a hostile or buggy rect can overflow int32 arithmetic. The
+         * region is written by another process into shared memory and a bad one
+         * becomes an out-of-bounds read inside swscale, so it is rejected rather
+         * than trusted — WebRTC's posture, and the right one here because this
+         * pointer is handed straight to the encoder. */
+        int64_t x = region->region.position.x;
+        int64_t y = region->region.position.y;
+        int64_t w = region->region.size.width;
+        int64_t h = region->region.size.height;
+
+        if (x >= 0 && y >= 0 && w > 0 && h > 0 && x + w <= (int64_t)out->width &&
+            y + h <= (int64_t)out->height) {
+            out->crop_x = (int32_t)x;
+            out->crop_y = (int32_t)y;
+            out->crop_width = (int32_t)w;
+            out->crop_height = (int32_t)h;
+            /* A crop covering the whole frame is not a crop. Distinguishing it
+             * from a genuine one is what lets the caller tell a monitor stream
+             * apart from a window stream whose rectangle never arrived. */
+            out->has_crop = (x != 0 || y != 0 || w < (int64_t)out->width ||
+                             h < (int64_t)out->height);
+        }
     }
     return 1;
 }

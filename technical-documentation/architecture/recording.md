@@ -1,6 +1,6 @@
 # Recording architecture
 
-Recording is a cross-platform session coordinated by Electron and rendered by a platform capture path. The recorder and HUD live in `src/components/launch/` and `src/hooks/useScreenRecorder.ts`; native capture helpers live in `electron/native/`, while Linux uses Chromium's display-media APIs.
+Recording is a cross-platform session coordinated by Electron and rendered by a platform capture path. The recorder and HUD live in `src/components/launch/` and `src/hooks/useScreenRecorder.ts`; native capture helpers for all three platforms live in `electron/native/`. Linux falls back to Chromium's display-media APIs only when its helper binary is missing.
 
 ## Lifecycle
 
@@ -14,7 +14,7 @@ flowchart LR
     F --> E[Editor opens]
 ```
 
-The HUD starts and controls a recording. The source selector chooses a display or window and the countdown gives the user time to prepare. Electron resolves the source and output paths, starts the selected capture backend, and records cursor telemetry alongside media. Stop finalizes the media and session files; the resulting paths are passed to the editor as recording assets.
+The HUD starts and controls a recording. The source selector chooses a display or window and the countdown gives the user time to prepare. On Linux there is no in-app source selector: the compositor's portal picker takes its place. It is raised before the countdown, not during it — the helper negotiates the portal, reports `source-selected`, and then waits for `record` on stdin while the app counts down. Electron resolves the source and output paths, starts the selected capture backend, and records cursor telemetry alongside media. Stop finalizes the media and session files; the resulting paths are passed to the editor as recording assets.
 
 ## The HUD
 
@@ -28,23 +28,32 @@ Electron applies `setContentProtection(true)` to the HUD window (`electron/windo
 | --- | --- | --- | --- |
 | Windows | Windows Graphics Capture (WGC) helper (C++/Win32), with WASAPI and Media Foundation support | `electron/native/wgc-capture/` and `electron/windows.ts` | H.264 MP4 screen/window video; system/microphone AAC when enabled; webcam is muxed into the primary MP4 unless a separate webcam path is requested |
 | macOS | ScreenCaptureKit helper (Swift), with AVFoundation/VideoToolbox encoding | `electron/native/screencapturekit/` and `electron/native/README.md` | H.264 MP4 screen/window video and ScreenCaptureKit system audio; microphone may be native where supported; webcam currently remains a separate Electron sidecar |
-| Linux | Electron `getDisplayMedia` path | `src/hooks/useScreenRecorder.ts` and Electron recording IPC | Browser-recorded display/window media, with the session's separate media and telemetry files |
+| Linux | PipeWire capture helper (Rust + C shim) driving the xdg-desktop-portal ScreenCast interface | `electron/native/pipewire-capture/` and `electron/native-bridge/capture/linuxNativeCaptureSession.ts` | H.264 MP4 screen/window video, PipeWire system/microphone audio, and cursor telemetry from one portal session; webcam stays an Electron sidecar |
 
-The division is an invariant: the native helper owns capture, timing, and encoding; Electron owns session orchestration, output-path selection, persistence, and editor handoff. Linux keeps those media responsibilities in Electron because it has no native helper path here.
+The division is an invariant: the native helper owns capture, timing, and encoding; Electron owns session orchestration, output-path selection, persistence, and editor handoff. When the Linux helper binary is absent, the recorder falls back to the Electron `getDisplayMedia` path, which is the one case where Electron still owns the media.
 
 ## Helper contract
 
 A native session is a child process boundary. Electron starts the platform helper with one structured JSON request and sends runtime commands on stdin; `stop` finalizes the output. The helper emits newline-delimited JSON events on stdout. The shared shape contains `schemaVersion`, `recordingId`, a `source` (display or window and its bounds), `video`, `audio`, optional `webcam`, optional cursor mode, and `outputs` paths. The helper reports `ready`, `recording-started`, warnings, errors, and `recording-stopped` events. Windows accepts legacy textual start/stop messages during compatibility handling; the structured events are the reference contract.
 
-| Contract field or behavior | Windows | macOS |
-| --- | --- | --- |
-| Schema | `schemaVersion: 2` | `schemaVersion: 1` |
-| Source identity | `sourceId`, `displayId`, optional `windowHandle` | `sourceId`, `displayId`, optional `windowId` |
-| Video | FPS, dimensions, bitrate | FPS, dimensions, bitrate, and `hideSystemCursor` |
-| Audio | System loopback and selected microphone flags/device metadata | System audio and microphone flags/device metadata; microphone support is runtime-gated |
-| Webcam | Native Media Foundation first, exact Electron-resolved DirectShow fallback; muxed into primary MP4 by default | Electron sidecar attached to the session |
-| Output | `screenPath`, session manifest, and optional `webcamPath` | `screenPath` and session manifest |
-| Runtime control | stdin pause/resume/stop/cancel; JSON events plus legacy text compatibility | Process events and the same lifecycle commands as the process boundary evolves |
+| Contract field or behavior | Windows | macOS | Linux |
+| --- | --- | --- | --- |
+| Schema | `schemaVersion: 2` | `schemaVersion: 1` | `schemaVersion: 1` |
+| Source identity | `sourceId`, `displayId`, optional `windowHandle` | `sourceId`, `displayId`, optional `windowId` | **None, and none is possible.** See below |
+| Video | FPS, dimensions, bitrate | FPS, dimensions, bitrate, and `hideSystemCursor` | FPS and optional bitrate; dimensions come from what the compositor negotiates |
+| Audio | System loopback and selected microphone flags/device metadata | System audio and microphone flags/device metadata; microphone support is runtime-gated | System and microphone flags; the microphone is matched by PipeWire `node.description`, not by Chromium device id |
+| Webcam | Native Media Foundation first, exact Electron-resolved DirectShow fallback; muxed into primary MP4 by default | Electron sidecar attached to the session | Electron sidecar attached to the session |
+| Output | `screenPath`, session manifest, and optional `webcamPath` | `screenPath` and session manifest | `screenPath`, session manifest, and a `.cursor.json` sidecar |
+| Runtime control | stdin pause/resume/stop/cancel; JSON events plus legacy text compatibility | Process events and the same lifecycle commands as the process boundary evolves | stdin pause/resume/stop; NDJSON events on stdout |
+
+### Why Linux sends no source identity
+
+`org.freedesktop.portal.ScreenCast.SelectSources` takes exactly `(session, cursor_mode, types, multiple, restore_token, persist_mode)`. There is no window id, monitor id, or node id a caller may supply, so the compositor's own picker is the only thing that can choose a source — the app cannot ask for one and cannot override the answer. The helper reports what it was given back on `stream-started` as `sourceKind` (`"monitor"`, `"window"` or `"virtual"`); that reply is the only knowledge the app ever has about what is being recorded, and an absent `sourceKind` means unknown, not "monitor".
+
+Two consequences follow, and both were once bugs:
+
+- **The HUD shows no source button on Linux.** An in-app picker cannot steer the portal, and the one that existed raised a *second* portal dialog of its own through `desktopCapturer.getSources()` whose grant was then discarded — which is why choosing a window there changed nothing.
+- **No portal restore token is persisted.** Replaying one used to suppress the picker on later runs. Because a token is bound to the source it was minted for, an approved monitor came back on every subsequent recording and the picker — the only source chooser Wayland offers — never reappeared, so "record this window" recorded the whole screen. Answering the picker each time is the cost of being able to choose at all.
 
 Electron resolves selected sources, devices, and paths before launching the helper. The helper does not guess a DirectShow camera: Windows receives the resolved selection. A helper error is reported explicitly rather than silently switching a Windows native feature to browser capture.
 
@@ -58,5 +67,7 @@ Cursor samples are persisted as cursor telemetry rather than baked into editable
 
 - A window with odd client dimensions can produce black video: H.264 encoding requires even dimensions (`electron/native/wgc-capture/src/wgc_session.cpp:38`).
 - Stopping a recording can hang on the software encoder path (`electron/native/wgc-capture/src/main.cpp:755`).
-- Linux/Wayland can produce no usable frames because Chromium initializes Vulkan against the Ozone Wayland backend.
+- Linux/Wayland can produce no usable frames on the `getDisplayMedia` fallback because Chromium initializes Vulkan against the Ozone Wayland backend. The PipeWire helper path is unaffected.
+- On Linux the compositor's source picker appears on every recording. That is deliberate — see "Why Linux sends no source identity" — but it is an interruption, and there is currently no way to reuse a previous choice without also making it impossible to change.
+- Holding a portal session across the countdown means the compositor's "screen is being shared" indicator is up before recording begins. That is honest — access really has been granted — but the user can click it to revoke, or close the window they picked. The helper's exit surfaces as a rejected `waitUntilSourceSelected`; the session is not yet subscribed to the portal's `Session::Closed` signal, so a revocation is reported as a failed start rather than a specific message.
 - `preferSoftwareEncoder` is read when recording starts. The recorder has no UI for setting it; Windows also accepts `OPENSCREEN_WGC_PREFER_SOFTWARE_ENCODER=true` in the helper request path.
