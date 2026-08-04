@@ -40,6 +40,106 @@ function run(cmd, args, opts = {}) {
 	}
 }
 
+/**
+ * Where the pinned tarball can be fetched, in order of preference.
+ *
+ * ffmpeg.org is canonical and stays first, but it cannot be the only one:
+ * GitHub's `macos-15-intel` runner pool cannot reach it. On the v1.8.0-rc.6
+ * build the x64 leg died twice, twenty minutes apart, on
+ * `curl: (35) Recv failure: Connection reset by peer` about a second after
+ * starting — while the arm64 leg on `macos-latest` fetched the same tarball
+ * from the same host in the same runs and succeeded both times. An immediate
+ * reset that reproduces on one runner pool and never on the other is an
+ * egress-level block, not congestion, so retrying alone does not clear it.
+ *
+ * Debian's `.orig.tar.xz` is the upstream tarball unmodified — verified
+ * byte-identical to TARBALL_SHA256 below — and deb.debian.org is CDN-backed.
+ * It is a fallback, not a replacement: the checksum is what makes trusting a
+ * second origin safe, and it gates every source equally.
+ *
+ * When the pin moves, a mirror may not carry the new version yet. That is not
+ * a failure mode to design around — the list is tried in order and a source
+ * that 404s falls through to the next, with every attempt reported if none
+ * works. (`--retry-all-errors` does not except a 404, so a missing mirror costs
+ * its retries — a few seconds, once per pin bump. Narrowing that would mean
+ * giving up the retry on connection resets, which is the whole point.)
+ */
+const TARBALL_URLS = [
+	`https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz`,
+	`https://deb.debian.org/debian/pool/main/f/ffmpeg/ffmpeg_${VERSION}.orig.tar.xz`,
+];
+
+/**
+ * Fetches the pinned tarball to `dest`, trying each source until one both
+ * downloads and matches the checksum.
+ *
+ * `--retry-all-errors` rather than a plain `--retry`: curl only auto-retries
+ * what it classes as transient (timeouts, 429, 5xx), which does not include a
+ * connection reset or a TLS handshake failure — precisely the errors seen here.
+ * `-f` keeps an HTTP error page from being written to the tarball and
+ * resurfacing as a checksum mismatch, which reads like a moved pin.
+ */
+function downloadTarball(dest) {
+	const failures = [];
+	for (const url of TARBALL_URLS) {
+		console.log(`Downloading ffmpeg ${VERSION} from ${new URL(url).host}…`);
+		// Two ceilings, because a stuck download stalls in two different ways.
+		// --connect-timeout covers the handshake: a throttled origin does not
+		// refuse, it hangs — measured against ffmpeg.org after a few rapid
+		// fetches, a single connect sat for 75s before failing, and times four
+		// attempts that is five minutes of a build spent before the second source
+		// is even tried. 20s is far above any healthy handshake.
+		// --speed-limit/--speed-time covers everything AFTER the handshake, which
+		// --connect-timeout does not reach at all: an origin that accepts the
+		// connection and then trickles (or simply stops sending) never errors, so
+		// nothing here would retry or fall through — the job would sit until the
+		// runner's own six-hour limit. Aborting below 1 KiB/s sustained for 30s
+		// cannot fire on a link that is merely slow: the tarball is ~10 MB.
+		const r = spawnSync(
+			"curl",
+			[
+				"-fsSL",
+				"--connect-timeout",
+				"20",
+				"--speed-limit",
+				"1024",
+				"--speed-time",
+				"30",
+				"--retry",
+				"3",
+				"--retry-delay",
+				"2",
+				"--retry-all-errors",
+				"-o",
+				dest,
+				url,
+			],
+			{ stdio: "inherit" },
+		);
+		if (r.status !== 0) {
+			// `r.error` is the case `status` cannot express: no curl on PATH gives
+			// `{ status: null, error: ENOENT }`, and reporting only "exited with
+			// null" twice sends the reader hunting a network problem.
+			failures.push(`  ${url}\n    ${r.error ? r.error.message : `curl exited with ${r.status}`}`);
+			continue;
+		}
+		const actual = crypto.createHash("sha256").update(fs.readFileSync(dest)).digest("hex");
+		if (actual !== TARBALL_SHA256) {
+			// Not fatal on its own — a mirror may carry a repacked tarball. It is
+			// reported in full, so a genuinely moved pin is still legible as
+			// "every source disagreed the same way" rather than "network down".
+			failures.push(`  ${url}\n    checksum ${actual}`);
+			continue;
+		}
+		console.log("Checksum OK.");
+		return;
+	}
+	throw new Error(
+		`Could not obtain ffmpeg ${VERSION} from any source.\n` +
+			`Expected sha256 ${TARBALL_SHA256}\n${failures.join("\n")}`,
+	);
+}
+
 /** The binary's own licence banner — the only claim worth trusting. */
 function isLgpl(dir) {
 	const bin = path.join(dir, "bin", "ffmpeg");
@@ -68,16 +168,7 @@ if (fs.existsSync(path.join(DEST, "include"))) {
 const work = fs.mkdtempSync(path.join(os.tmpdir(), "openscreen-ffmpeg-"));
 const tarball = path.join(work, `ffmpeg-${VERSION}.tar.xz`);
 
-console.log(`Downloading ffmpeg ${VERSION}…`);
-run("curl", ["-sSL", "-o", tarball, `https://ffmpeg.org/releases/ffmpeg-${VERSION}.tar.xz`]);
-
-const actual = crypto.createHash("sha256").update(fs.readFileSync(tarball)).digest("hex");
-if (actual !== TARBALL_SHA256) {
-	throw new Error(
-		`Checksum mismatch for the ffmpeg tarball.\n  expected ${TARBALL_SHA256}\n  got      ${actual}`,
-	);
-}
-console.log("Checksum OK.");
+downloadTarball(tarball);
 
 run("tar", ["-xJf", tarball, "-C", work]);
 const src = path.join(work, `ffmpeg-${VERSION}`);

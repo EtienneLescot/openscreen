@@ -11,6 +11,25 @@ interface SourceCropRegion {
 	height: number;
 }
 
+interface Dims {
+	width: number;
+	height: number;
+}
+
+/**
+ * Would rendering a `source`-sized clip into an `output`-sized frame stretch it past its own
+ * resolution?
+ *
+ * The clip is CONTAIN-fitted into the output frame, so the answer is that fit scale — not a
+ * comparison of short sides, which counts letterbox rows as if they were stretched pixels. A
+ * 1920x1032 window capture in a 16:9 project gives a 1920x1080 frame whose 48 extra rows are
+ * wallpaper, at scale 1.0: nothing is upscaled. The short-side test called that frame an
+ * upscale under the "1080p" tier while "Source" produced the exact same frame unflagged.
+ */
+export function wouldUpscale(output: Dims, source: Dims): boolean {
+	return Math.min(output.width / source.width, output.height / source.height) > 1;
+}
+
 const MEDIUM_SHORT_SIDE = 720;
 const HIGH_SHORT_SIDE = 1080;
 

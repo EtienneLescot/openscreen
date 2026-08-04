@@ -23,23 +23,108 @@ use crate::scene::Scene;
 use anyhow::Result;
 use std::collections::HashMap;
 
-/// Avance un décodeur jusqu'au premier pts dans le référentiel écran qui atteint la cible.
-/// `timeline_offset_sec` remet les pts webcam dans ce référentiel (`webcam + offset = screen`) :
-/// chaque source garde ainsi sa cadence propre au lieu d'être consommée 1:1 avec l'autre.
+/// Ce que le décodeur sait de la PROCHAINE frame, sans l'adopter.
+///
+/// Un simple `Option<f64>` ne suffisait pas : il confondait « pts inexploitable » et
+/// « pts = 0 ». `peek_next_time_sec` renvoyait `0.0` quand `best_effort_timestamp` vaut
+/// `i64::MIN` (ou que la time_base est nulle), et `0.0` satisfait TOUJOURS la condition
+/// d'adoption — un flux sans pts fiable se faisait donc vider frame après frame jusqu'à
+/// l'EOF, exactement le défaut que la sémantique de hold est censée corriger, en pire.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum NextFrameTime {
+    /// pts exploitable de la frame en attente, en secondes.
+    At(f64),
+    /// Une frame attend, mais son pts est inexploitable : impossible de dire si elle est
+    /// due. Le seul repli honnête est d'avancer d'UNE frame puis de rendre la main —
+    /// c'est le comportement d'avant la sémantique de hold, restreint au flux cassé qui
+    /// le mérite au lieu d'être la règle générale.
+    Unknown,
+    /// Plus aucune frame à décoder.
+    Eof,
+}
+
+/// Ce que la boucle d'avance doit faire de la frame en attente.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(crate) enum FrameStep {
+    /// Adopter la frame, puis continuer à chercher.
+    Commit,
+    /// Adopter la frame puis s'arrêter (cas `Unknown`, cf. ci-dessus).
+    CommitAndStop,
+    /// Ne rien adopter : on tient la frame courante.
+    Hold,
+}
+
+/// Décision pure de la sémantique de hold — extraite pour être testable sans ffmpeg ni
+/// fichier, parce que c'est ici que vivent les cas limites (EOF, pts inconnu, et la
+/// frontière exacte « due » vs « pas encore due »).
+///
+/// `offset_sec` remet le pts dans le référentiel de la cible (`webcam + offset = écran`).
+pub(crate) fn frame_step(next: NextFrameTime, offset_sec: f64, target_sec: f64) -> FrameStep {
+    match next {
+        // Plus rien à décoder : on tient la dernière frame connue. C'est ce qui permet à
+        // un clip dont la dernière frame RÉELLE précède la fin déclarée d'occuper quand
+        // même toute sa fenêtre — cf. `walk_composited_timeline`.
+        NextFrameTime::Eof => FrameStep::Hold,
+        NextFrameTime::Unknown => FrameStep::CommitAndStop,
+        // `>` et non `>=` : une frame dont le pts vaut EXACTEMENT la cible est due
+        // (« la dernière frame dont le pts est ≤ t »).
+        NextFrameTime::At(t) if t + offset_sec > target_sec => FrameStep::Hold,
+        NextFrameTime::At(_) => FrameStep::Commit,
+    }
+}
+
+/// Avance un décodeur vers `target_source_time`, sémantique de "hold" : à l'instant t on
+/// affiche la DERNIÈRE frame dont le pts est ≤ t, jamais une frame dont le pts est encore à
+/// venir. `timeline_offset_sec` remet les pts webcam dans le référentiel écran
+/// (`webcam + offset = screen`) : chaque source garde ainsi sa cadence propre au lieu
+/// d'être consommée 1:1 avec l'autre.
+///
+/// BUG corrigé : l'ancienne version avançait tant que `cur_time_sec() < target`, un pas de
+/// `next()` à la fois, et s'arrêtait dès que la frame COURANTE dépassait la cible — mais
+/// `next()` saute à la prochaine frame RÉELLEMENT capturée, qui peut être très en avance
+/// sur `target` quand la source a un trou (ex. ScreenCaptureKit qui ne livre rien tant que
+/// l'écran ne change pas). Un seul `next()` pouvait alors faire passer le décodeur d'un pts
+/// proche de la cible à un pts bien après elle, et la condition d'arrêt considérait ça comme
+/// "atteint" — la frame FUTURE se retrouvait affichée bien avant son heure. Ici, `next()`
+/// n'est plus appelé à l'aveugle : on regarde d'abord le pts de la frame suivante
+/// (`peek_next_time_sec`, décodée dans un buffer séparé) et on ne l'adopte
+/// (`commit_peek`) que si elle est réellement due ; sinon on continue de tenir la frame
+/// courante, aussi longtemps qu'il le faut.
+///
+/// CHANGEMENT DE COMPORTEMENT À L'EXPORT, délibéré : à l'EOF cette fonction renvoie
+/// désormais `true` (on tient la dernière frame) là où elle renvoyait `false`, ce qui
+/// coupait la boucle du clip (`break 'clip_frames`). Un clip dont la fenêtre déclarée
+/// dépasse le dernier pts réel — dernière frame légèrement avant `source_end_sec`, ou
+/// piste webcam plus courte que l'écran — ne se termine donc plus en avance : il occupe
+/// toute sa fenêtre en tenant sa dernière image. C'est ce que l'audio suppose déjà :
+/// `on_clip_end` reçoit le nombre de frames du clip et l'audio est étiré sur la durée
+/// DÉCLARÉE (`stretch_clip_pcm_by_speed`), donc une vidéo qui s'arrêtait tôt décalait la
+/// jonction audio/vidéo du clip suivant. La contrepartie assumée : une source réellement
+/// tronquée produit maintenant une image figée jusqu'au bout de sa fenêtre au lieu de
+/// s'arrêter net.
 pub(crate) unsafe fn advance_decoder_to(
     decoder: &mut Decoder,
     target_source_time: f64,
     timeline_offset_sec: f64,
 ) -> Result<bool> {
+    if decoder.cur_frame().is_null() {
+        return Ok(false);
+    }
     loop {
-        if decoder.cur_frame().is_null() {
-            return Ok(false);
-        }
-        if decoder.cur_time_sec() + timeline_offset_sec >= target_source_time {
-            return Ok(true);
-        }
-        if decoder.next()?.is_null() {
-            return Ok(false);
+        let next = decoder.peek_next_time_sec()?;
+        match frame_step(next, timeline_offset_sec, target_source_time) {
+            FrameStep::Hold => return Ok(true),
+            // La frame adoptée devient la frame courante : si la présentation n'a rien
+            // produit, la boucle n'a plus d'invariant (elle tournerait sur une frame
+            // nulle jusqu'à l'EOF) — on rend la main comme le faisait le garde d'entrée.
+            FrameStep::Commit => {
+                if decoder.commit_peek()?.is_null() {
+                    return Ok(false);
+                }
+            }
+            FrameStep::CommitAndStop => {
+                return Ok(!decoder.commit_peek()?.is_null());
+            }
         }
     }
 }
@@ -216,4 +301,98 @@ pub(crate) unsafe fn walk_composited_timeline(
     comp.set_cursor_time(None);
     comp.set_timeline_time(None);
     Ok(frames)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{frame_step, FrameStep, NextFrameTime};
+
+    /// La cadence de lecture, en une phrase : à 24 fps, une seconde réelle doit adopter 24
+    /// frames et pas une de plus. Le bug d'origine (un pas fixe de 1/60 s, une frame par
+    /// pas) en consommait 60, soit 2,5× trop vite — c'est ce que ce test verrouille.
+    fn frames_committed_over(fps: f64, window_sec: f64) -> usize {
+        let mut committed = 0usize;
+        // La frame 0 est déjà la frame courante : on compte ce qui est ADOPTÉ ensuite.
+        // Le pts est recalculé depuis un index entier plutôt qu'accumulé, sinon la dérive
+        // flottante fausse le compte au bout de quelques dizaines de frames.
+        let mut index = 1u64;
+        // Une cible qui avance au temps réel, échantillonnée à 60 Hz comme le thread de rendu.
+        let ticks = (window_sec * 60.0).round() as usize;
+        for tick in 1..=ticks {
+            let target = tick as f64 / 60.0;
+            loop {
+                let pts = index as f64 / fps;
+                match frame_step(NextFrameTime::At(pts), 0.0, target) {
+                    FrameStep::Commit => {
+                        committed += 1;
+                        index += 1;
+                    }
+                    _ => break,
+                }
+            }
+        }
+        committed
+    }
+
+    #[test]
+    fn plays_a_24fps_source_at_24_frames_per_second() {
+        assert_eq!(frames_committed_over(24.0, 1.0), 24);
+        assert_eq!(frames_committed_over(24.0, 2.0), 48);
+    }
+
+    #[test]
+    fn plays_a_60fps_source_at_60_frames_per_second() {
+        // Le cas qui tombait juste par hasard avant le correctif.
+        assert_eq!(frames_committed_over(60.0, 1.0), 60);
+    }
+
+    #[test]
+    fn plays_a_30fps_source_at_30_frames_per_second() {
+        assert_eq!(frames_committed_over(30.0, 1.0), 30);
+    }
+
+    #[test]
+    fn holds_a_frame_that_is_not_due_yet() {
+        assert_eq!(frame_step(NextFrameTime::At(0.5), 0.0, 0.4), FrameStep::Hold);
+    }
+
+    #[test]
+    fn adopts_a_frame_whose_pts_is_exactly_the_target() {
+        // « la DERNIÈRE frame dont le pts est ≤ t » : l'égalité est due.
+        assert_eq!(frame_step(NextFrameTime::At(0.4), 0.0, 0.4), FrameStep::Commit);
+    }
+
+    #[test]
+    fn a_sparse_source_holds_across_its_gap() {
+        // ScreenCaptureKit ne livre rien tant que l'écran ne bouge pas : la frame suivante
+        // peut être 10 s plus loin. Elle ne doit surtout pas être adoptée à la seconde 1.
+        assert_eq!(frame_step(NextFrameTime::At(10.0), 0.0, 1.0), FrameStep::Hold);
+        assert_eq!(frame_step(NextFrameTime::At(10.0), 0.0, 10.0), FrameStep::Commit);
+    }
+
+    #[test]
+    fn offset_moves_the_webcam_into_the_screen_clock() {
+        // webcam + offset = écran : à offset 2 s, une frame webcam à 0.5 s vaut 2.5 s écran.
+        assert_eq!(frame_step(NextFrameTime::At(0.5), 2.0, 2.4), FrameStep::Hold);
+        assert_eq!(frame_step(NextFrameTime::At(0.5), 2.0, 2.5), FrameStep::Commit);
+    }
+
+    #[test]
+    fn eof_holds_the_last_frame_instead_of_ending_the_clip() {
+        // Le changement de comportement à l'export, verrouillé : un clip dont la fenêtre
+        // déclarée dépasse le dernier pts réel occupe toute sa fenêtre en tenant sa
+        // dernière image, au lieu de s'arrêter net et de décaler l'audio du clip suivant.
+        assert_eq!(frame_step(NextFrameTime::Eof, 0.0, 1_000.0), FrameStep::Hold);
+    }
+
+    #[test]
+    fn an_unusable_pts_advances_exactly_one_frame() {
+        // Régression : `peek_next_time_sec` renvoyait `0.0` pour un pts inexploitable, et
+        // `0.0` est toujours ≤ à la cible — le flux se vidait jusqu'à l'EOF d'un seul coup.
+        assert_eq!(frame_step(NextFrameTime::Unknown, 0.0, 0.0), FrameStep::CommitAndStop);
+        assert_eq!(
+            frame_step(NextFrameTime::Unknown, 0.0, 1_000.0),
+            FrameStep::CommitAndStop
+        );
+    }
 }
