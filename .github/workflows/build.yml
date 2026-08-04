@@ -260,9 +260,52 @@ jobs:
             exit 1
           fi
 
+      # electron-builder used to do this itself. Its macPackager carried a
+      # `noIdentity && fallBackToAdhoc` branch that handed back `Identity("-")`
+      # whenever no certificate was found — mandatory on arm64, where an unsigned
+      # binary will not launch at all. 26.15.3 replaced that path with
+      # `findSigningIdentity`, which returns null instead, and `sign()` leaves on
+      # `return false`. Nothing signs the bundle, and what ships is the bare
+      # linker signature on the Electron binary: `Identifier=Electron`,
+      # `Sealed Resources=none`.
+      #
+      # That is not cosmetic. macOS keys TCC grants to an app's code signature,
+      # so a bundle signed as "Electron" cannot hold one. v1.9.0-rc.1 asked for
+      # Accessibility, the user granted it, `AXIsProcessTrusted()` still returned
+      # false, and the editable-cursor preflight in useScreenRecorder re-opened
+      # the same dialog on every press of record — recording was impossible.
+      #
+      # Signed with the same runtime and entitlements electron-builder applies,
+      # so a locally signed build and a certificate-signed one differ only in the
+      # identity. Both arches on purpose: 26.8.1 only fell back on arm64, which
+      # left Intel DMGs unsigned for their whole existence.
+      - name: Ad-hoc sign the .app
+        if: steps.signing.outputs.enabled != 'true'
+        run: |
+          codesign --force --deep --sign - \
+            --options runtime \
+            --entitlements macos.entitlements \
+            "${{ steps.find_app.outputs.app_bundle }}"
+
+      # UNCONDITIONAL. Gated on `enabled == 'true'`, this step never ran for the
+      # RC builds — the only ones that could be unsigned — so the regression
+      # above shipped with every macOS check in this job green.
       - name: Verify .app code signature
-        if: steps.signing.outputs.enabled == 'true'
-        run: codesign --verify --deep --strict "${{ steps.find_app.outputs.app_bundle }}"
+        run: |
+          APP="${{ steps.find_app.outputs.app_bundle }}"
+          codesign --verify --deep --strict "$APP"
+
+          # The identifier, not just the structure: `--verify` passes on the bare
+          # linker signature too, so it alone would not have caught this. What
+          # distinguishes a bundle macOS can attach permissions to is that its
+          # signing identifier matches the bundle id.
+          EXPECTED="$(/usr/libexec/PlistBuddy -c 'Print :CFBundleIdentifier' "$APP/Contents/Info.plist")"
+          ACTUAL="$(codesign -dv --verbose=2 "$APP" 2>&1 | sed -n 's/^Identifier=//p')"
+          echo "signature identifier=${ACTUAL}  expected=${EXPECTED}"
+          if [[ "$ACTUAL" != "$EXPECTED" ]]; then
+            echo "::error::The .app is signed as '${ACTUAL}', not '${EXPECTED}' — macOS cannot attach Accessibility or Screen Recording permissions to a bundle whose signature does not carry its own identifier"
+            exit 1
+          fi
 
       - name: Create DMG
         id: dmg
