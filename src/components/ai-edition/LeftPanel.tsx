@@ -10,6 +10,7 @@ import {
 	useTranscriptionStore,
 } from "@/lib/ai-edition/store/transcriptionStore";
 import { useChatPromptBus } from "@/lib/ai-edition/store/useChatPromptBus";
+import { splitRoundedTime } from "@/lib/ai-edition/timeline/format";
 import type { AssetTranscriptionView } from "@/lib/ai-edition/transcription/status";
 import { nativeBridgeClient } from "@/native/client";
 import type {
@@ -36,12 +37,18 @@ export type LeftTab = "chat" | "media";
 
 const THUMB_PALETTE = ["thumbRed", "thumbGreen", "thumbAmber", "thumbCyan"] as const;
 
+// `h:mm:ss.t`, hours always shown — a third shape, so it formats itself rather
+// than calling into format.ts. It shares `splitRoundedTime` because the carry is
+// the part that must not be re-derived: deriving the minute field from the raw
+// value while the second field rounded is what rendered `0:00:60.0`.
 function formatTimecode(sec: number | undefined): string {
 	if (!sec || !Number.isFinite(sec)) return "0:00:00.0";
-	const h = Math.floor(sec / 3600);
-	const m = Math.floor((sec % 3600) / 60);
-	const s = (sec % 60).toFixed(1);
-	return `${h}:${m.toString().padStart(2, "0")}:${s.padStart(3, "0")}`;
+	const { totalMinutes, seconds } = splitRoundedTime(sec);
+	const h = Math.floor(totalMinutes / 60);
+	const m = totalMinutes % 60;
+	// padStart(4), not (3): "5.0" is already 3 chars, so a single-digit second
+	// rendered as `0:00:5.0` instead of `0:00:05.0`.
+	return `${h}:${m.toString().padStart(2, "0")}:${seconds.toFixed(1).padStart(4, "0")}`;
 }
 
 function basename(path: string): string {

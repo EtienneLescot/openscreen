@@ -4,14 +4,8 @@ import { useScopedT } from "@/contexts/I18nContext";
 import { setUiProbeScrubbing } from "@/lib/ai-edition/perf/uiFrameProbe";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
+import { formatSec } from "@/lib/ai-edition/timeline/format";
 import styles from "./NewEditorShell.module.css";
-
-function formatTC(sec: number): string {
-	if (!sec || !Number.isFinite(sec) || sec < 0) sec = 0;
-	const m = Math.floor(sec / 60);
-	const s = (sec % 60).toFixed(1);
-	return `${m}:${s.padStart(4, "0")}`;
-}
 
 interface TransportBarProps {
 	playing: boolean;
@@ -177,9 +171,9 @@ export const TransportBar = memo(function TransportBar({
 				<SkipForward size={13} />
 			</button>
 			<span className={styles.time}>
-				<span>{formatTC(currentTimeSec)}</span>
+				<span>{formatSec(currentTimeSec)}</span>
 				<span className={styles.sep}>/</span>
-				<span className={styles.total}>{formatTC(virtualDurationSec)}</span>
+				<span className={styles.total}>{formatSec(virtualDurationSec)}</span>
 			</span>
 			<div className={styles.scrubBar}>
 				<div className={styles.scrubTrack}>

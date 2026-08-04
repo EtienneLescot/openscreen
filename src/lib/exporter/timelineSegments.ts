@@ -54,8 +54,14 @@ export function computeKeepSegments(
 
 /**
  * Splits keep-segments by overlapping speed regions, annotating each sub-segment
- * with its playback speed multiplier (defaults to 1×). Regions are assumed
- * non-overlapping; when they do overlap the earliest-starting one wins.
+ * with its playback speed multiplier (defaults to 1×).
+ *
+ * Overlapping regions are handled rather than assumed away: the earliest-starting
+ * one keeps the stretch it already covers, and a later region contributes only the
+ * part past the cursor (nothing at all when it is fully covered). Output is always
+ * disjoint and ascending — `decodeAll` walks it with a forward-only frame cursor,
+ * so an overlap would otherwise duplicate source and seek backwards. Same rule as
+ * the native path's `speed_segments_for_window` in `crates/compositor/src/regions.rs`.
  */
 export function splitBySpeed(
 	segments: TimelineSegment[],
@@ -80,8 +86,11 @@ export function splitBySpeed(
 		for (const sr of overlapping) {
 			const srStart = Math.max(sr.startMs / 1000, segment.startSec);
 			const srEnd = Math.min(sr.endMs / 1000, segment.endSec);
-			if (cursor < srStart) result.push({ startSec: cursor, endSec: srStart, speed: 1 });
-			result.push({ startSec: srStart, endSec: srEnd, speed: sr.speed });
+			if (srEnd <= cursor) continue;
+			const effectiveStart = Math.max(srStart, cursor);
+			if (cursor < effectiveStart)
+				result.push({ startSec: cursor, endSec: effectiveStart, speed: 1 });
+			result.push({ startSec: effectiveStart, endSec: srEnd, speed: sr.speed });
 			cursor = srEnd;
 		}
 		if (cursor < segment.endSec)
