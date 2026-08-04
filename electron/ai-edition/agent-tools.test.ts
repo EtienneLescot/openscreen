@@ -205,6 +205,36 @@ describe("executeAgentTool", () => {
 		expect(payload.segments[1].kind).toBe("silence");
 	});
 
+	it("getTranscript returns a long transcript whole, word for word", () => {
+		// The regression test for a `.slice(0, 800)` that used to sit here. On the
+		// production path a segment is one WORD, so the cap cut a half-hour
+		// recording at roughly its fifth minute and reported nothing — the model
+		// trimmed the silences it could see and called the job done. 4000 words is
+		// about half an hour of speech.
+		const base = fixtureDocument();
+		const segments = Array.from({ length: 4000 }, (_, i) => ({
+			id: `seg_${i}`,
+			kind: "speech" as const,
+			startSec: i * 0.45,
+			endSec: i * 0.45 + 0.4,
+			text: `mot${i}`,
+			wordIds: [],
+		}));
+		const doc = {
+			...base,
+			transcript: null,
+			transcripts: [{ ...base.transcripts[0], segments }],
+		};
+
+		const result = executeAgentTool(doc, "getTranscript", "{}");
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.segments).toHaveLength(4000);
+		// The last word matters more than the count: a cap keeps the head and
+		// drops the tail, so the tail is what proves it is gone.
+		expect(payload.segments.at(-1).text).toBe("mot3999");
+	});
+
 	it("getTranscript fails cleanly when no transcript exists", () => {
 		const doc = { ...fixtureDocument(), transcripts: [], transcript: null };
 		const result = executeAgentTool(doc, "getTranscript", "{}");
