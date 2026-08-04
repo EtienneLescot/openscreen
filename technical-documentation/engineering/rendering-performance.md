@@ -379,7 +379,7 @@ The first frames of a 4-second export cost 358/113/28/350 ms — 10.3 ms/frame o
 - Electron cannot transfer an ArrayBuffer renderer→main. The transfer list takes `MessagePort[]`; transferring a buffer silently drops the whole message ([electron#34905](https://github.com/electron/electron/issues/34905)) — it works renderer→renderer.
 - `Buffer.from(typedArray)` copies. Wrapping (`Buffer.from(buf.buffer, byteOffset, byteLength)`) measured +31 %.
 - A stale `dist-electron` bundle runs the *previous* main process against the new renderer. It read as "export IPC not registered" once and as "the bench flag does nothing" once. The bench now refuses to run against one.
-- The installed app (`openscreen.exe`) holds the same single-instance lock as the dev build. A launch exits 0 and reports nothing — silently.
+- A second instance of the same build quits silently: the lock keys on the `userData` path, so another dev build already running makes a launch exit 0 and report nothing. The installed app (`openscreen.exe`) resolves a different `userData` path and does not conflict.
 
 ## What the numbers mean
 
