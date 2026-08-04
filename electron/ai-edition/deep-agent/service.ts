@@ -30,7 +30,9 @@ import {
 	addCameraFullscreenArgs,
 	addSpeedArgs,
 	addTrimArgs,
+	addTrimsArgs,
 	addZoomArgs,
+	addZoomsArgs,
 	type CursorTelemetryLoad,
 	executeAgentTool,
 	getCursorTrackArgs,
@@ -110,7 +112,7 @@ const BASE_SYSTEM_PROMPT = [
 	// happened to list and silently misses every paraphrase — and every language
 	// other than English. Say what the tool does; let the model do the matching.
 	"How the tools map to intent — pick the most specific one, and prefer the smallest edit that satisfies the request:",
-	"- Silences, pauses and dead stretches are removed as trims INSIDE the placed clip: one addTrim per range. The placed clip stays the canonical cut; it is not rebuilt to drop them.",
+	"- Silences, pauses and dead stretches are removed as trims INSIDE the placed clip. Send them together with addTrims once you know the ranges; addTrim is for a single cut or a correction. The placed clip stays the canonical cut; it is not rebuilt to drop them.",
 	"- Changing where a clip starts or ends within its source is setClipRange — the clip's in/out, distinct from a trim.",
 	`- addZoom takes a virtual-timeline span (depth is an ordinal 1–6 selecting from a fixed table — ${ZOOM_DEPTH_LEGEND} — never a multiplier; focus in 0–1 frame fractions). addSpeed changes pacing over a span. addAnnotation puts text on screen. addCameraFullscreen enlarges the webcam, and only does something where assets[].hasCameraTrack is true.`,
 	"- moveClip changes the order of placed clips, one call per clip that moves, preserving ids, source ranges, trims and anchored effects. replaceTimeline rebuilds the timeline from kept intervals and sorts them, so it cannot reorder anything.",
@@ -142,7 +144,9 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	getCursorTrack:
 		"Read the recorded pointer track for an asset: where the cursor was over time, downsampled to a readable rate. Each point carries atSec (the asset's own source clock), virtualSec (the same instant on the edited timeline — the coordinate addZoom takes, null when no clip carries it), cx/cy as 0–1 fractions of the frame, and `shape`, an index into the pointer bitmaps the recording used (equal values are the same pointer; a change means the pointer changed, e.g. arrow to text caret). Points that are not plain moves carry `kind`; points a trim cuts out of playback carry `trimmed`. These are real samples, not a summary — reading what the pointer was doing is yours. Omit assetId for the primary asset. It answers `available:false` in two DIFFERENT ways you must not confuse: reason 'no-sidecar' means this asset was checked and genuinely has no telemetry, while reason 'unavailable' means it could not be read from here.",
 	addTrim:
-		"Add a trim range: a cut of a span inside a clip (this source-time span will not be played or exported) that does NOT split the clip. Times are in seconds of the asset's source time. This is the preferred (and for 'remove silences' requests, the only) way to handle silences; it preserves the user's placed clips and only adds a cut. Call this once per silent range. A cut belongs to ONE clip: `clipId` is inferred when a single clip covers the range, but when several clips draw on the same asset over it the call FAILS and lists them — pass the `clipId` you mean (ids come from getCurrentDocument).",
+		"Add ONE trim range: a cut of a span inside a clip (this source-time span will not be played or exported) that does NOT split the clip. Times are in seconds of the asset's source time. This is the preferred (and for 'remove silences' requests, the only) way to handle silences; it preserves the user's placed clips and only adds a cut. When you have several cuts to make, use addTrims and send them together — this one is for a single cut or a later correction. A cut belongs to ONE clip: `clipId` is inferred when a single clip covers the range, but when several clips draw on the same asset over it the call FAILS and lists them — pass the `clipId` you mean (ids come from getCurrentDocument).",
+	addTrims:
+		"Add MANY trim ranges in one call: `ranges` is a list, each entry taking exactly the fields addTrim takes. Use this whenever you have more than one cut to make — 'remove the silences' on a half-hour recording is hundreds of cuts, and sending them one at a time costs one round trip each. Each range stands or falls ALONE: one that cannot be placed is refused by itself and listed in `refused` with its index and the reason, while every other range is still applied. Nothing is rolled back, so a single bad bound never costs you the rest. The result leads with requested / appliedCount / refusedCount so you can see a partial outcome without re-reading the document — report what was refused rather than claiming the whole list landed.",
 	setTrim:
 		"Move or resize an existing trim range by id. Times are source-time seconds. The cut follows to whichever clip the new range lands in, when that clip is unambiguous.",
 	setClipRange:
@@ -152,6 +156,7 @@ export const TOOL_DESCRIPTIONS: Record<string, string> = {
 	replaceTimeline:
 		"Replace the whole timeline with the given kept intervals of the primary asset's source time. Everything outside the intervals becomes a trim. The intervals are SORTED, so this can never reorder clips — use moveClip for that. DO NOT use this for 'cut silences' or 'remove pauses' — the user has likely placed clips on the timeline that you'd be discarding. Use this ONLY when the user explicitly asks you to rebuild the timeline from scratch (e.g. 'start over with the kept intervals from the transcript'). It is refused when it would merge away, shorten or drop an existing clip; the refusal names them and the tool to use instead.",
 	addZoom: `Add a zoom-in over a span of the edited timeline (virtual seconds). depth is an ORDINAL 1–6, not a factor: it selects a magnification from a fixed table (${ZOOM_DEPTH_LEGEND}), so the default depth 3 renders at 1.80×. The result reports renderedScale — quote that, never the depth, when telling the user how strong the zoom is. focus is the zoom centre in 0–1 fractions of the frame (default centre). Use for 'zoom in on …' and the smart-zoom pass.`,
+	addZooms: `Add MANY zooms in one call: \`regions\` is a list, each entry taking exactly the fields addZoom takes (same depth table, ${ZOOM_DEPTH_LEGEND}). Use this for the smart-zoom pass, where you have decided every zoom before emitting the first one — sending them one at a time costs one round trip each. Each region stands or falls ALONE: one that covers no clip is refused by itself and listed in \`refused\` with its index and the reason, while the others are still applied. The result leads with requested / appliedCount / refusedCount, and each applied entry carries its renderedScale — quote that, never the depth.`,
 	setZoom: `Move, resize, or restyle an existing zoom by id (virtual-timeline seconds). Only the fields you pass are changed. depth selects from the same table (${ZOOM_DEPTH_LEGEND}); if the zoom carries a customScale (getCurrentDocument shows it as depthIsOverridden), that custom value is what renders, and passing depth clears it so the depth takes effect — the result says so. The result reports the resulting renderedScale.`,
 	addSpeed:
 		"Add a speed-change region over a span of the edited timeline (virtual seconds). speed > 1 fast-forwards, < 1 slows down (default 1.5×). Use to speed through slow stretches without cutting them.",
@@ -298,11 +303,13 @@ export function buildTools(
 		build("getTranscript", getTranscriptArgs),
 		build("getCursorTrack", getCursorTrackArgs),
 		build("addTrim", addTrimArgs),
+		build("addTrims", addTrimsArgs),
 		build("setTrim", setTrimArgs),
 		build("setClipRange", setClipRangeArgs),
 		build("moveClip", moveClipArgs),
 		build("replaceTimeline", replaceTimelineArgs),
 		build("addZoom", addZoomArgs),
+		build("addZooms", addZoomsArgs),
 		build("setZoom", setZoomArgs),
 		build("addSpeed", addSpeedArgs),
 		build("setSpeed", setSpeedArgs),
