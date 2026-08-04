@@ -42,11 +42,13 @@ const OPENSCREEN_TOOLS = [
 	"getTranscript",
 	"getCursorTrack",
 	"addTrim",
+	"addTrims",
 	"setTrim",
 	"setClipRange",
 	"moveClip",
 	"replaceTimeline",
 	"addZoom",
+	"addZooms",
 	"setZoom",
 	"addSpeed",
 	"setSpeed",
@@ -84,11 +86,13 @@ const ARGS: Record<string, unknown> = {
 	getTranscript: {},
 	getCursorTrack: {},
 	addTrim: { startSec: 1, endSec: 2 },
+	addTrims: { ranges: [{ startSec: 1, endSec: 2 }] },
 	setTrim: { trimRangeId: "trim_1", startSec: 1, endSec: 2 },
 	setClipRange: { clipId: "clip_1", sourceStartSec: 0, sourceEndSec: 10 },
 	moveClip: { clipId: "clip_1", beforeClipId: null },
 	replaceTimeline: { intervals: [{ startSec: 0, endSec: 10 }] },
 	addZoom: { startSec: 1, endSec: 2 },
+	addZooms: { regions: [{ startSec: 1, endSec: 2 }] },
 	setZoom: { zoomId: "zoom_nope" },
 	addSpeed: { startSec: 1, endSec: 2 },
 	setSpeed: { speedId: "speed_nope" },
@@ -187,7 +191,7 @@ function toolsFor(document: AxcutDocument) {
 }
 
 describe("the tool surface handed to the model", () => {
-	it("is exactly OpenScreen's 19 tools", () => {
+	it("is exactly OpenScreen's 21 tools", () => {
 		const { tools } = toolsFor(fixtureDocument());
 		expect(tools.map((t) => t.name)).toEqual(OPENSCREEN_TOOLS);
 	});
@@ -398,7 +402,7 @@ describe("the prompt when the user has turned project edits off", () => {
 });
 
 describe("the tools when the user has turned project edits off", () => {
-	it("still builds all 18 — the model has to be able to NAME the edit", () => {
+	it("still builds all 20 — the model has to be able to NAME the edit", () => {
 		const { sink } = recordingSink();
 		const tools: BuiltTool[] = buildTools({ current: fixtureDocument() }, sink, false);
 		expect(tools.map((t) => t.name)).toEqual(OPENSCREEN_TOOLS);
