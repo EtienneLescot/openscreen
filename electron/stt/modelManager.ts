@@ -55,6 +55,12 @@ const MODEL_BASE = "https://huggingface.co";
 // GitHub org was renamed.
 const MODEL_REPO = "ggerganov/whisper.cpp";
 const MODEL_FILE = "ggml-small-q8_0.bin";
+// Pinned to a commit rather than `main` so `expectedSha256` is an invariant and
+// not a bet: `main` is a mutable branch pointer, and a re-upload under it would
+// now invalidate every cache in the field at once instead of merely breaking new
+// installs. This revision was checked against HuggingFace's paths-info API — its
+// LFS oid for MODEL_FILE is exactly the digest below.
+const MODEL_REVISION = "5359861c739e955e79d9a303bcbc70fb988958b1";
 
 export const STT_MODELS: Record<SttModelId, SttModelDescriptor> = {
 	whisper: {
@@ -63,7 +69,7 @@ export const STT_MODELS: Record<SttModelId, SttModelDescriptor> = {
 		files: [
 			{
 				name: MODEL_FILE,
-				url: `${MODEL_BASE}/${MODEL_REPO}/resolve/main/${MODEL_FILE}`,
+				url: `${MODEL_BASE}/${MODEL_REPO}/resolve/${MODEL_REVISION}/${MODEL_FILE}`,
 				expectedSha256: "49C8FB02B65E6049D5FA6C04F81F53B867B5EC9540406812C643F177317F779F",
 				approximateBytes: 264_000_000,
 			},
@@ -154,7 +160,8 @@ export interface DownloadOptions {
  * success), optionally verify the SHA-256.
  *
  * If the file already exists, is non-empty, and matches the expected hash,
- * skips the download. Invalid cache entries are quarantined as `.bad`.
+ * skips the download; otherwise a replacement is fetched and the stale copy is
+ * only displaced once that replacement has itself been verified.
  */
 async function ensureFile(
 	filePath: string,
@@ -168,9 +175,11 @@ async function ensureFile(
 			if (!expectedSha256) return;
 			const actual = await sha256OfFile(filePath);
 			if (actual.toLowerCase() === expectedSha256.toLowerCase()) return;
-			const badPath = `${filePath}.bad`;
-			await rm(badPath, { force: true });
-			await rename(filePath, badPath);
+			// Deliberately leave the stale file where it is. Moving it aside now
+			// would buy nothing — the rename at the end of this function is already
+			// atomic, so there is no window to close — while costing the user their
+			// only model if the replacement never lands (offline, HF 5xx, ENOSPC)
+			// and stranding 264 MB that nothing ever cleans up.
 		}
 	}
 
@@ -192,9 +201,12 @@ async function ensureFile(
 	if (expectedSha256) {
 		const actual = await sha256OfFile(tmp);
 		if (actual.toLowerCase() !== expectedSha256.toLowerCase()) {
-			const badPath = `${filePath}.bad`;
-			await rm(badPath, { force: true });
-			await rename(tmp, badPath);
+			// Drop the bad download and keep whatever was already on disk: when both
+			// copies mismatch, the bytes the user has been running are exactly the
+			// ones worth diagnosing. The cleanup is guarded because a Windows AV
+			// scanner still holding the handle raises EPERM/EBUSY, and that bare
+			// errno would escape in place of the mismatch message below.
+			await rm(tmp, { force: true }).catch(() => undefined);
 			throw new Error(
 				`SHA-256 mismatch for ${path.basename(filePath)}: expected ${expectedSha256}, got ${actual}`,
 			);
