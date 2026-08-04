@@ -578,7 +578,14 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			if (!result.success) {
 				console.error("Failed to stop native Windows recording:", result.error);
 				toast.error(result.error ?? "Failed to stop native Windows recording");
-				activeNativeRecording.finalizing = false;
+				// Clear anyway. The main process releases its helper handle
+				// unconditionally, so holding on here left the two sides
+				// disagreeing about whether anything was recording: the HUD kept
+				// showing a stop button, and pressing it sent a second stop that
+				// came back "Native Windows capture is not running." (issue #252).
+				// The recording is already lost either way -- what the user needs
+				// is to be able to start a new one.
+				clearNativeRecordingState();
 				return true;
 			}
 
@@ -596,7 +603,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			toast.error(
 				error instanceof Error ? error.message : "Failed to save native Windows recording",
 			);
-			activeNativeRecording.finalizing = false;
+			clearNativeRecordingState();
 			return true;
 		} finally {
 			if (discardRecordingId.current === activeNativeRecording.recordingId) {
@@ -660,7 +667,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				if (!result.success) {
 					console.error("Failed to stop native macOS recording:", result.error);
 					toast.error(result.error ?? "Failed to stop native macOS recording");
-					activeNativeRecording.finalizing = false;
+					// See the Windows finalizer: the main process has already
+					// released its helper handle, so keeping ours leaves the HUD
+					// stuck in a recording state the app can never be stopped out
+					// of (issue #252).
+					clearNativeRecordingState();
 					return true;
 				}
 
@@ -702,7 +713,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				toast.error(
 					error instanceof Error ? error.message : "Failed to save native macOS recording",
 				);
-				activeNativeRecording.finalizing = false;
+				clearNativeRecordingState();
 				return true;
 			} finally {
 				// A webcam stream that wasn't folded into a saved session has to be closed
@@ -774,7 +785,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				if (!result.success) {
 					console.error("Failed to stop native Linux recording:", result.error);
 					toast.error(result.error ?? "Failed to stop native Linux recording");
-					activeNativeRecording.finalizing = false;
+					// See the Windows finalizer: the main process has already
+					// released its helper handle, so keeping ours leaves the HUD
+					// stuck in a recording state the app can never be stopped out
+					// of (issue #252).
+					clearNativeRecordingState();
 					return true;
 				}
 
@@ -816,7 +831,7 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				toast.error(
 					error instanceof Error ? error.message : "Failed to save native Linux recording",
 				);
-				activeNativeRecording.finalizing = false;
+				clearNativeRecordingState();
 				return true;
 			} finally {
 				// A webcam stream that wasn't folded into a saved session has to be closed
