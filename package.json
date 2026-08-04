@@ -136,19 +136,19 @@
 		"autoprefixer": "^10.5.0",
 		"electron": "^41.2.1",
 		"electron-builder": "^26.8.1",
-		"esbuild": "^0.27.0",
+		"esbuild": "^0.28.1",
 		"fast-check": "^4.7.0",
 		"husky": "^9.1.7",
 		"jsdom": "^29.0.2",
 		"lint-staged": "^16.4.0",
-		"postcss": "^8.5.10",
+		"postcss": "^8.5.25",
 		"tailwindcss": "^3.4.19",
 		"terser": "^5.46.1",
 		"typescript": "^5.9.3",
-		"vite": "^7.3.2",
+		"vite": "^7.3.6",
 		"vite-plugin-electron": "^0.29.1",
 		"vite-plugin-electron-renderer": "^0.14.6",
-		"vitest": "^4.1.4"
+		"vitest": "^4.1.10"
 	},
 	"main": "dist-electron/main.js",
 	"lint-staged": {
