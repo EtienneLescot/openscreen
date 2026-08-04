@@ -67,6 +67,33 @@ struct osc_pw_frame {
      * arrival time: it is stamped when the frame was composited, not when this
      * process got round to looking at it. */
     int64_t pts_ns;
+    /*
+     * The sub-rectangle of `data` that actually holds content, from
+     * SPA_META_VideoCrop. Always populated: it defaults to the whole frame.
+     *
+     * WHY A WINDOW STREAM NEEDS THIS. A PipeWire stream cannot change size once
+     * negotiated, but a window can be resized at any moment, so mutter sizes a
+     * window stream to the whole MONITOR and reports the window's live rectangle
+     * here instead — "We cannot set the stream size to the exact size of the
+     * window, because windows can be resized, whereas streams cannot"
+     * (meta-screen-cast-window-stream.c). Encoding the buffer without applying
+     * this crop is what produced window recordings padded out to screen size
+     * with black. Both OBS and WebRTC's PipeWire capturers apply it.
+     */
+    int32_t crop_x;
+    int32_t crop_y;
+    int32_t crop_width;
+    int32_t crop_height;
+    /*
+     * The crop is real AND narrower than the frame in at least one dimension.
+     *
+     * Zero means "there is nothing to crop to", covering three distinct cases
+     * that must not be told apart by guessing: the compositor sent no meta, it
+     * sent an invalid or out-of-bounds one, or it sent one covering the whole
+     * frame. OBS (`has_effective_crop`) and WebRTC (`videocrop_metadata_use`)
+     * both draw the line in exactly this place.
+     */
+    int has_crop;
 };
 
 /* The negotiated video format. Reported once, from param_changed. */

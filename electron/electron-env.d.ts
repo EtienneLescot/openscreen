@@ -192,6 +192,23 @@ interface Window {
 			reason?: "unsupported-platform" | "missing-helper" | string;
 			error?: string;
 		}>;
+		/**
+		 * Raises the compositor's picker and holds the grant until the recording
+		 * actually starts, so a countdown can run AFTER the user has chosen.
+		 *
+		 * Best-effort: a `success: false` means "start normally", never "fail".
+		 */
+		prepareNativeLinuxRecording: (
+			request: import("../src/lib/nativeLinuxRecording").NativeLinuxRecordingRequest,
+		) => Promise<{
+			success: boolean;
+			recordingId?: number;
+			sourceKind?: "monitor" | "window" | "virtual" | null;
+			reason?: string;
+			error?: string;
+		}>;
+		/** Drops a prepared session when the countdown was abandoned. */
+		cancelNativeLinuxPrepare: () => Promise<{ success: boolean }>;
 		startNativeLinuxRecording: (
 			request: import("../src/lib/nativeLinuxRecording").NativeLinuxRecordingRequest,
 		) => Promise<import("../src/lib/nativeLinuxRecording").NativeLinuxRecordingStartResult>;

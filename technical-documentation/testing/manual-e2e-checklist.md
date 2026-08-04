@@ -387,7 +387,13 @@ The agent may only call the fixed tool set in [ai-agent.md](../architecture/ai-a
 
 - [ ] Run the complete editor-to-export flow on real Linux with the supported packaged or development build.
 - [ ] Confirm the HUD remains interactive on the supported Linux window manager.
-- [ ] Select a screen source and confirm the resulting recording is not black.
+- [ ] Select a screen source in the compositor's portal picker and confirm the resulting recording is not black.
+- [ ] **Select a single WINDOW in the portal picker and confirm the recording contains only that window, at the window's dimensions — not the whole screen.** Check the pixel size, not just the look of it: `ffprobe -v error -select_streams v:0 -show_entries stream=width,height -of csv=p=0 <file>` should report the window's size, never the monitor's. This is the case that shipped broken in 1.8.0.
+- [ ] Record twice in a row and confirm the portal picker appears BOTH times, and that choosing a different source the second time actually changes what is recorded.
+- [ ] Confirm the HUD shows no in-app source button on Linux, and that the record button starts a recording directly instead of opening a picker.
+- [ ] Confirm the portal picker appears BEFORE the 3-2-1 countdown, not during or after it.
+- [ ] Start the same flow from the editor's Rec stage ("Start recording") and confirm it behaves identically to the HUD — no source row, picker first, then countdown.
+- [ ] Cancel the countdown after answering the picker and confirm the compositor's "screen is being shared" indicator goes away rather than lingering.
 - [ ] Confirm the system tray or supported desktop indicator can refocus the HUD when it is hidden.
 - [ ] Confirm microphone capture works with a physical device and the chosen device is audible in playback.
 - [ ] Confirm the webcam toggle reflects the available physical camera or clearly reports that no camera is available.

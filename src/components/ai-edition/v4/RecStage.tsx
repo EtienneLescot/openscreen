@@ -17,6 +17,7 @@ import { useAudioLevelMeter } from "@/hooks/useAudioLevelMeter";
 import { useCameraDevices } from "@/hooks/useCameraDevices";
 import { useCameraPreviewStream } from "@/hooks/useCameraPreviewStream";
 import { useMicrophoneDevices } from "@/hooks/useMicrophoneDevices";
+import { usePortalOwnsSource } from "@/hooks/usePortalOwnsSource";
 import styles from "./EditorShellV4.module.css";
 
 interface RecordingPrefsState {
@@ -141,7 +142,13 @@ export function RecStage({
 	const visibleSources = sourceTab === "screen" ? screenSources : windowSources;
 
 	const cursorHighlight = prefs.cursorCaptureMode === "editable-overlay";
-	const sourceLabel = source?.name ?? t("rec.entireScreen");
+	// Same answer as the HUD, from the same place. This stage used to decide for
+	// itself and always showed a picker, so the same build hid the choice on the
+	// HUD and demanded it here.
+	const portalOwnsSource = usePortalOwnsSource();
+	const sourceLabel = portalOwnsSource
+		? t("rec.systemPicker")
+		: (source?.name ?? t("rec.entireScreen"));
 
 	return (
 		<div className={styles.recStage}>
@@ -183,20 +190,40 @@ export function RecStage({
 				</div>
 
 				<div className={styles.recPanel}>
-					<div className={styles.recRow}>
-						<div className={styles.recRowLabel}>
-							<MonitorSmartphone size={15} />
-							{t("rec.source")}
+					{/* No source row on Linux: `SelectSources` has no parameter naming
+					    a source, so this picker could not steer the capture — it only
+					    raised a second portal dialog, via `desktopCapturer.getSources()`,
+					    whose grant was discarded. The compositor's own picker decides,
+					    and it appears when recording starts. */}
+					{portalOwnsSource ? (
+						<div className={styles.recRow}>
+							<div className={styles.recRowLabel}>
+								<MonitorSmartphone size={15} />
+								{t("rec.source")}
+							</div>
+							{/* Muted TEXT, not a styled-down button. Keeping the button's
+							    class on a span left it looking pressable — border, pill,
+							    hover state — which promises an interaction that cannot
+							    exist here. This row states what will happen; it is not a
+							    control. */}
+							<span className={styles.recRowMuted}>{sourceLabel}</span>
 						</div>
-						<button
-							type="button"
-							className={styles.recRowSourceBtn}
-							onClick={() => void openSourceModal()}
-						>
-							{sourceLabel}
-							<ChevronDown size={13} style={{ opacity: 0.6 }} />
-						</button>
-					</div>
+					) : (
+						<div className={styles.recRow}>
+							<div className={styles.recRowLabel}>
+								<MonitorSmartphone size={15} />
+								{t("rec.source")}
+							</div>
+							<button
+								type="button"
+								className={styles.recRowSourceBtn}
+								onClick={() => void openSourceModal()}
+							>
+								{sourceLabel}
+								<ChevronDown size={13} style={{ opacity: 0.6 }} />
+							</button>
+						</div>
+					)}
 
 					<div className={styles.recRow}>
 						<div className={styles.recRowLabel}>

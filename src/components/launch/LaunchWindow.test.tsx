@@ -10,6 +10,7 @@ type SelectedSourceChangedListener = Parameters<
 >[0];
 
 const platformState = vi.hoisted(() => ({ value: "darwin" }));
+const linuxHelperAvailable = vi.hoisted(() => ({ value: true }));
 const resizeCallbacks = vi.hoisted(() => [] as Array<ResizeObserverCallback>);
 
 class StubResizeObserver {
@@ -132,6 +133,8 @@ vi.mock("@/contexts/I18nContext", () => ({
 		const translations: Record<string, string> = {
 			"sourceSelector.defaultSourceName": "Screen",
 			"recording.selectSource": "Please select a source to record",
+			"recording.systemPicker": "Your system will ask what to share",
+			"recording.inProgress": "Recording",
 			"tooltips.useVerticalTray": "Use vertical tray",
 			"tooltips.useHorizontalTray": "Use horizontal tray",
 			"audio.enableSystemAudio": "Enable system audio",
@@ -193,7 +196,16 @@ function stubElectronAPI(getSelectedSource: Window["electronAPI"]["getSelectedSo
 			granted: true,
 			status: "granted",
 		})),
-		getPlatform: vi.fn(() => "darwin"),
+		// Follows the platform under test. Pinned to "darwin" before, which was
+		// invisible while only `nativeBridgeClient` was consulted for it — and
+		// silently wrong the moment anything read the platform through here.
+		getPlatform: vi.fn(() => platformState.value),
+		// Only the Linux tests read this; the helper being present is what hands
+		// source selection to the portal.
+		isNativeLinuxCaptureAvailable: vi.fn(async () => ({
+			success: true,
+			available: linuxHelperAvailable.value,
+		})),
 		setHudOverlaySize: vi.fn(),
 		setHudOverlayIgnoreMouseEvents: vi.fn(),
 		beginHudOverlayDrag: vi.fn(),
@@ -266,6 +278,7 @@ function resetLaunchMocks() {
 	i18nState.value.acceptSystemLocaleSuggestion.mockClear();
 	i18nState.value.dismissSystemLocaleSuggestion.mockClear();
 	i18nState.value.resolveSystemLocaleSuggestion.mockClear();
+	linuxHelperAvailable.value = true;
 	stubElectronAPI(vi.fn(async () => null));
 }
 
@@ -402,6 +415,74 @@ describe("LaunchWindow record button", () => {
 
 		await waitFor(() => {
 			expect(window.electronAPI.setHudOverlayIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
+		});
+	});
+
+	// The ScreenCast portal has no parameter naming a source, so nothing this
+	// picker returned could ever reach the capture — it only raised a second
+	// portal dialog whose grant was discarded. On Linux the compositor's own
+	// picker, shown when recording starts, is the only thing that decides.
+	it("hides the in-app source button on Linux", async () => {
+		platformState.value = "linux";
+
+		renderLaunchWindow();
+
+		// The helper-availability answer arrives asynchronously, so the button is
+		// still there on the first frame — wait for it to go rather than race it.
+		await waitFor(() => {
+			expect(screen.queryByTestId("launch-source-selector-button")).toBeNull();
+		});
+	});
+
+	it("records straight away on Linux instead of demanding a source that cannot be selected", async () => {
+		platformState.value = "linux";
+
+		renderLaunchWindow();
+
+		const recordButton = await screen.findByTestId("launch-record-button");
+		expect(recordButton).toBeEnabled();
+		await waitFor(() => {
+			expect(recordButton).toHaveAttribute("title", "Your system will ask what to share");
+		});
+
+		fireEvent.click(recordButton);
+
+		await waitFor(() => {
+			expect(recorderState.value.toggleRecording).toHaveBeenCalledTimes(1);
+		});
+		expect(window.electronAPI.openSourceSelector).not.toHaveBeenCalled();
+	});
+
+	// The portal reports a KIND, never a window title, so naming the source here
+	// could only ever be a guess — and guessing is what put a window's name on a
+	// recording of the whole screen.
+	/**
+	 * Without the helper the recorder falls back to Chromium's capture, which
+	 * DOES consume a source id. Hiding the picker there would leave no way to
+	 * start a recording at all.
+	 */
+	it("keeps the in-app source button on Linux when the native helper is missing", async () => {
+		platformState.value = "linux";
+		linuxHelperAvailable.value = false;
+
+		renderLaunchWindow();
+
+		expect(await screen.findByTestId("launch-source-selector-button")).toBeInTheDocument();
+		expect(screen.getByTestId("launch-record-button")).toHaveAttribute(
+			"title",
+			"Please select a source to record",
+		);
+	});
+
+	it("does not name a source while recording on Linux", async () => {
+		platformState.value = "linux";
+		recorderState.value.recording = true;
+
+		renderLaunchWindow();
+
+		const recordButton = await screen.findByTestId("launch-record-button");
+		await waitFor(() => {
+			expect(recordButton).toHaveAttribute("title", "Recording");
 		});
 	});
 });

@@ -69,6 +69,8 @@
 	},
 	"recording": {
 		"selectSource": "録画するソースを選択してください",
+		"systemPicker": "共有する対象はシステムが確認します",
+		"inProgress": "録画中",
 		"saving": "保存中..."
 	},
 	"language": "言語",

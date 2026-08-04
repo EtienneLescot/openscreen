@@ -186,6 +186,12 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	isNativeLinuxCaptureAvailable: () => {
 		return ipcRenderer.invoke("is-native-linux-capture-available");
 	},
+	prepareNativeLinuxRecording: (request: NativeLinuxRecordingRequest) => {
+		return ipcRenderer.invoke("prepare-native-linux-recording", request);
+	},
+	cancelNativeLinuxPrepare: () => {
+		return ipcRenderer.invoke("cancel-native-linux-prepare");
+	},
 	startNativeLinuxRecording: (request: NativeLinuxRecordingRequest) => {
 		return ipcRenderer.invoke("start-native-linux-recording", request);
 	},

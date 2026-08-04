@@ -65,6 +65,8 @@
 	},
 	"recording": {
 		"selectSource": "يرجى تحديد مصدر للتسجيل",
+		"systemPicker": "سيسألك النظام عمّا تريد مشاركته",
+		"inProgress": "جارٍ التسجيل",
 		"saving": "جاري الحفظ..."
 	},
 	"language": "اللغة",

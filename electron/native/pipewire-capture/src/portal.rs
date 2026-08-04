@@ -57,13 +57,47 @@ impl CursorMode {
     }
 }
 
+/// Which kind of source the compositor actually handed over.
+///
+/// This is the ONLY way the app can learn whether it got a window or a whole
+/// monitor. `SelectSources` has no parameter naming a source, so a request can
+/// never be compared against its grant — the reply is the first and last word.
+/// Reported upward so the HUD can name what is really being recorded instead of
+/// echoing a choice made in a modal that never reached this process.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SourceKind {
+    Monitor,
+    Window,
+    Virtual,
+}
+
+impl SourceKind {
+    fn from_portal(source_type: SourceType) -> Self {
+        match source_type {
+            SourceType::Monitor => Self::Monitor,
+            SourceType::Window => Self::Window,
+            SourceType::Virtual => Self::Virtual,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Monitor => "monitor",
+            Self::Window => "window",
+            Self::Virtual => "virtual",
+        }
+    }
+}
+
 /// Everything the PipeWire half needs, plus what the helper reports upward.
 pub struct PortalStream {
     pub fd: OwnedFd,
     pub node_id: u32,
     pub position: Option<(i32, i32)>,
     pub size: Option<(i32, i32)>,
-    pub restore_token: Option<String>,
+    /// `None` when the portal omits it — older backends do, and the spec makes
+    /// it optional. Absent means "unknown", never "monitor".
+    pub source_kind: Option<SourceKind>,
 }
 
 #[derive(Debug)]
@@ -126,10 +160,7 @@ pub async fn cursor_metadata_supported() -> Result<bool, PortalError> {
 /// ashpd has no `Drop` impl for sessions and holds its D-Bus connection in a
 /// process-global `OnceLock`, so the portal session stays open until this
 /// process exits — which is exactly the lifetime we want.
-pub async fn negotiate(
-    restore_token: Option<&str>,
-    cursor_mode: CursorMode,
-) -> Result<PortalStream, PortalError> {
+pub async fn negotiate(cursor_mode: CursorMode) -> Result<PortalStream, PortalError> {
     let proxy = Screencast::new()
         .await
         .map_err(|error| failed("cannot reach org.freedesktop.portal.ScreenCast", error))?;
@@ -165,11 +196,19 @@ pub async fn negotiate(
             cursor_mode.to_portal(),
             types,
             false,
-            restore_token,
-            // The picker is a per-recording interruption otherwise. Persisting
-            // until the user revokes it means the restore token from a previous
-            // run can skip it entirely.
-            PersistMode::ExplicitlyRevoked,
+            // NO RESTORE TOKEN, AND NOTHING TO PERSIST. This used to replay a
+            // token from the previous run so the picker would not reappear —
+            // and that is precisely how "record this window" produced a
+            // recording of the whole screen. A token is bound to the source it
+            // was minted for, so once any monitor had been approved the portal
+            // restored that monitor on every later run and never raised the
+            // picker again; the app had no way to ask for anything else,
+            // because `SelectSources` cannot name a source. The picker IS the
+            // source chooser on Wayland, so suppressing it removed the only
+            // control the user had. Asking every time is the cost of letting
+            // them choose at all.
+            None,
+            PersistMode::DoNot,
         )
         .await
         .map_err(|error| failed("SelectSources", error))?
@@ -203,6 +242,6 @@ pub async fn negotiate(
         node_id: stream.pipe_wire_node_id(),
         position: stream.position(),
         size: stream.size(),
-        restore_token: streams.restore_token().map(str::to_owned),
+        source_kind: stream.source_type().map(SourceKind::from_portal),
     })
 }

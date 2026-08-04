@@ -3,7 +3,10 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
 import { MIC_GAIN_BOOST, mixAudioTracks } from "@/lib/audioMix";
-import type { NativeLinuxRecordingRequest } from "@/lib/nativeLinuxRecording";
+import {
+	type NativeLinuxRecordingRequest,
+	portalOwnsSourceSelection,
+} from "@/lib/nativeLinuxRecording";
 import {
 	type NativeMacRecordingRequest,
 	parseMacDisplayIdFromSourceId,
@@ -1239,7 +1242,45 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	 *     which has no upper bound. That is also what makes the returned instant
 	 *     a trustworthy t=0 for the webcam offset below.
 	 */
-	const startNativeLinuxRecordingIfAvailable = async (countdownRunToken?: number) => {
+	/**
+	 * The helper request, built in ONE place because it is now sent TWICE: once
+	 * to negotiate the portal before the countdown, once to start recording after
+	 * it. The two must describe the same capture — the session armed at the end
+	 * is the one negotiated at the start, so a divergence in audio or cursor
+	 * settings would record something the second call never asked for.
+	 */
+	const buildNativeLinuxRequest = (recordingId?: number): NativeLinuxRecordingRequest => ({
+		...(recordingId === undefined ? {} : { recordingId }),
+		video: {
+			// No bitrate on purpose. TARGET_WIDTH/HEIGHT are the app's 4K ceiling,
+			// not the capture size — on Wayland nobody knows that until the portal
+			// has negotiated it, and the user may well have picked a single window.
+			// Sending computeBitrate() of the ceiling asked for 76.5 Mbit/s for a
+			// 1080p capture. The helper derives it from the size it actually got.
+			fps: TARGET_FRAME_RATE,
+		},
+		audio: {
+			system: { enabled: systemAudioEnabled },
+			microphone: {
+				enabled: microphoneEnabled,
+				// The device LABEL, not the id. Chromium's deviceId is an opaque
+				// per-origin hash that means nothing to PipeWire, whereas on a
+				// PipeWire system the label IS the node's `node.description` — which
+				// is what the helper matches against the graph it enumerates.
+				// Sending nothing here is what made a user who picked their built-in
+				// microphone get the empty headphone jack recorded, because the
+				// helper then fell back to the session default source.
+				...(microphoneDeviceName ? { deviceName: microphoneDeviceName } : {}),
+				gain: MIC_GAIN_BOOST,
+			},
+		},
+		cursor: { mode: cursorCaptureMode },
+	});
+
+	const startNativeLinuxRecordingIfAvailable = async (
+		countdownRunToken?: number,
+		preparedRecordingId?: number | null,
+	) => {
 		try {
 			const platform = window.electronAPI.getPlatform();
 			if (platform !== "linux") {
@@ -1265,7 +1306,11 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				return true;
 			}
 
-			const activeRecordingId = Date.now();
+			// Reuse the prepared recording's id, or the main process cannot match
+			// the session it is holding to the recording being started and would
+			// discard it — negotiating a second portal session, and raising a
+			// second picker, for a grant it already had.
+			const activeRecordingId = preparedRecordingId ?? Date.now();
 			let nativeWebcamRecorder: RecorderHandle | null = null;
 			let nativeWebcamRecorderStartedAtMs: number | null = null;
 			if (webcamEnabled) {
@@ -1285,36 +1330,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				}
 			}
 
-			const request: NativeLinuxRecordingRequest = {
-				recordingId: activeRecordingId,
-				video: {
-					// No bitrate on purpose. TARGET_WIDTH/HEIGHT are the app's 4K
-					// ceiling, not the capture size — on Wayland nobody knows that
-					// until the portal has negotiated it, and the user may well
-					// have picked a single window. Sending computeBitrate() of the
-					// ceiling asked for 76.5 Mbit/s for a 1080p capture. The helper
-					// derives it from the size it actually got.
-					fps: TARGET_FRAME_RATE,
-				},
-				audio: {
-					system: { enabled: systemAudioEnabled },
-					microphone: {
-						enabled: microphoneEnabled,
-						// The device LABEL, not the id. Chromium's deviceId is an
-						// opaque per-origin hash that means nothing to PipeWire,
-						// whereas on a PipeWire system the label IS the node's
-						// `node.description` — which is what the helper matches
-						// against the graph it enumerates. Sending nothing here is
-						// what made a user who picked their built-in microphone
-						// get the empty headphone jack recorded, because the
-						// helper then fell back to the session default source.
-						...(microphoneDeviceName ? { deviceName: microphoneDeviceName } : {}),
-						gain: MIC_GAIN_BOOST,
-					},
-				},
-				cursor: { mode: cursorCaptureMode },
-			};
-			const result = await window.electronAPI.startNativeLinuxRecording(request);
+			const result = await window.electronAPI.startNativeLinuxRecording(
+				buildNativeLinuxRequest(activeRecordingId),
+			);
 			if (!result.success || !result.recordingId) {
 				throw new Error(result.error ?? "Native Linux capture failed.");
 			}
@@ -1366,11 +1384,19 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			console.warn("Failed to read selected source before countdown:", error);
 		}
 
+		// Resolved before the liveness check below so every await stays ahead of it.
+		const portalOwnsSource = await portalOwnsSourceSelection(window.electronAPI);
+
 		if (!isCountdownRunActive(runId)) {
 			return;
 		}
 
-		if (!selectedSource) {
+		// The countdown's OWN source gate, distinct from the one in
+		// `startRecording`. On Linux the portal has not been asked anything yet —
+		// its picker is raised when capture starts, several steps after this — so
+		// there is nothing to have selected, and refusing here blocked recording
+		// outright once the in-app picker was removed.
+		if (!selectedSource && !portalOwnsSource) {
 			if (countdownRunId.current === runId) {
 				setCountdownActive(false);
 			}
@@ -1391,6 +1417,38 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 		} catch (error) {
 			console.warn("Failed to preflight macOS cursor accessibility before countdown:", error);
+		}
+
+		// THE PICKER GOES BEFORE THE COUNTDOWN. On Wayland the compositor's dialog
+		// is the source chooser, and it only appears once the portal session is
+		// started — so counting down first meant counting down before the user had
+		// been asked anything, then freezing the overlay while they read a dialog
+		// that has no time limit. Kooha does the same in the same order: session,
+		// then timer, then play.
+		//
+		// Best-effort on purpose. A failure here is not a failure to record: the
+		// start below still negotiates the portal itself, which is exactly the
+		// behaviour that shipped before this existed.
+		let preparedRecordingId: number | null = null;
+		if (portalOwnsSource) {
+			try {
+				const prepared = await window.electronAPI.prepareNativeLinuxRecording(
+					buildNativeLinuxRequest(),
+				);
+				if (prepared.success && typeof prepared.recordingId === "number") {
+					preparedRecordingId = prepared.recordingId;
+				} else if (prepared.reason) {
+					console.info(`Native Linux capture was not prepared: ${prepared.reason}`);
+				}
+			} catch (error) {
+				console.warn("Failed to prepare the native Linux capture:", error);
+			}
+			// The user can dismiss the picker, or answer it slower than they change
+			// their mind about recording at all.
+			if (!isCountdownRunActive(runId)) {
+				void window.electronAPI.cancelNativeLinuxPrepare?.();
+				return;
+			}
 		}
 
 		if (!isCountdownRunActive(runId)) {
@@ -1436,25 +1494,47 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				return;
 			}
 
-			await startRecording(runId);
+			await startRecording(runId, preparedRecordingId);
 		} finally {
 			if (!overlayHiddenBeforeStart && countdownRunId.current === runId) {
 				setCountdownActive(false);
 				await safeHideCountdownOverlay(runId);
 			}
+			// Unconditional, and safe: a start that used the prepared session
+			// already claimed it, so this is a no-op there. Every OTHER way out of
+			// this block — cancelled countdown, an overlay that threw, a source
+			// that vanished — would otherwise leave a live ScreenCast session and
+			// the compositor's sharing indicator up with nothing recording.
+			if (portalOwnsSource) {
+				void window.electronAPI.cancelNativeLinuxPrepare?.();
+			}
 		}
 	};
 
-	const startRecording = async (countdownRunToken?: number) => {
+	const startRecording = async (
+		countdownRunToken?: number,
+		preparedRecordingId?: number | null,
+	) => {
 		try {
-			const selectedSource = await window.electronAPI.getSelectedSource();
-			if (!selectedSource) {
-				alert(t("recording.selectSource"));
+			if (!isCountdownRunActive(countdownRunToken)) {
+				teardownMedia();
 				return;
 			}
 
-			if (!isCountdownRunActive(countdownRunToken)) {
-				teardownMedia();
+			// BEFORE THE SOURCE GATE, on purpose. On Wayland the portal raises its
+			// own picker and is the only thing that can choose a source, so there
+			// is nothing for the app to have selected — and the helper needs no
+			// `selectedSource` to run. Gating here demanded an answer to a
+			// question this platform never asks the app. It returns false when the
+			// native helper is missing, and the browser fallback below does need a
+			// source, so the gate still guards the path that uses one.
+			if (await startNativeLinuxRecordingIfAvailable(countdownRunToken, preparedRecordingId)) {
+				return;
+			}
+
+			const selectedSource = await window.electronAPI.getSelectedSource();
+			if (!selectedSource) {
+				alert(t("recording.selectSource"));
 				return;
 			}
 
@@ -1462,11 +1542,6 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				return;
 			}
 			if (await startNativeMacRecordingIfAvailable(selectedSource, countdownRunToken)) {
-				return;
-			}
-			// No `selectedSource`: on Wayland the portal picker is the source of
-			// truth and Electron's entry is a placeholder.
-			if (await startNativeLinuxRecordingIfAvailable(countdownRunToken)) {
 				return;
 			}
 

@@ -41,6 +41,11 @@ pub struct RawFrame {
     pub height: i32,
     pub video_format: u32,
     pub pts_ns: i64,
+    pub crop_x: i32,
+    pub crop_y: i32,
+    pub crop_width: i32,
+    pub crop_height: i32,
+    pub has_crop: i32,
 }
 
 #[repr(C)]
@@ -163,6 +168,22 @@ pub struct Frame {
     /// Compositor monotonic clock in nanoseconds, or -1 when the buffer carried
     /// no SPA_META_Header.
     pub pts_ns: i64,
+    /// The sub-rectangle of `pixels` holding content, from SPA_META_VideoCrop.
+    /// Defaults to the whole frame, so it is always safe to read.
+    pub crop: CropRect,
+    /// The crop is real and narrower than the frame. False covers "no meta",
+    /// "invalid meta" and "meta covering everything" alike — none of which is a
+    /// reason to crop, and none of which may be guessed apart.
+    pub has_crop: bool,
+}
+
+/// A rectangle inside a captured frame, in stream pixels.
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct CropRect {
+    pub x: i32,
+    pub y: i32,
+    pub width: i32,
+    pub height: i32,
 }
 
 /// A one-slot mailbox between the PipeWire thread and the encoder.
@@ -224,6 +245,13 @@ impl FrameMailbox {
             height: meta.height,
             video_format: meta.video_format,
             pts_ns: meta.pts_ns,
+            crop: CropRect {
+                x: meta.crop_x,
+                y: meta.crop_y,
+                width: meta.crop_width,
+                height: meta.crop_height,
+            },
+            has_crop: meta.has_crop != 0,
         });
         self.received.fetch_add(1, Ordering::Relaxed);
     }
