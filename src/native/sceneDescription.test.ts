@@ -864,6 +864,10 @@ describe("buildSceneDescription.settings mapping", () => {
 			id: "a",
 			originalPath: "/a.mp4",
 			video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
+			// The camera the preset presupposes. A clip WITHOUT one lays out as
+			// "no-webcam" whatever the panel says (see the camera-less cases below),
+			// so there would be no rect here to convert.
+			cameraTrack: { sourcePath: "/a-webcam.mp4", startMs: 0, offsetMs: 0, visible: true },
 		});
 		const doc = makeDoc({
 			assets: [asset],
@@ -1274,6 +1278,76 @@ describe("buildSceneDescription.layout.layoutByClip", () => {
 	it("keeps the scalar layout fields as the first clip's entry", () => {
 		const scene = buildSceneDescription(twoClipDoc());
 		expect(scene.layout.screenRect).toEqual(scene.layout.layoutByClip?.[0]?.screenRect);
+	});
+
+	// issue #248 — le preset est GLOBAL (un seul panneau) mais la camera est PAR CLIP.
+	// Un projet melange sans probleme un enregistrement avec webcam et un import qui n'en
+	// a pas ; le reglage ne doit s'appliquer qu'aux clips qui ont vraiment une camera.
+	const mixedDoc = (preset: string) => {
+		const withCam = makeAsset({
+			id: "cam",
+			originalPath: "/rec.mp4",
+			video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
+			cameraTrack: { sourcePath: "/rec-webcam.webm", startMs: 0, offsetMs: 0, visible: true },
+		});
+		const noCam = makeAsset({
+			id: "nocam",
+			originalPath: "/import.mp4",
+			video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
+		});
+		return makeDoc({
+			assets: [withCam, noCam],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "cam",
+					sourceStartSec: 0,
+					sourceEndSec: 4,
+					timelineStartSec: 0,
+					timelineEndSec: 4,
+				}),
+				makeClip({
+					id: "c2",
+					assetId: "nocam",
+					sourceStartSec: 0,
+					sourceEndSec: 4,
+					timelineStartSec: 4,
+					timelineEndSec: 8,
+				}),
+			],
+			legacyEditor: { webcamLayoutPreset: preset },
+		});
+	};
+
+	it.each([
+		"picture-in-picture",
+		"dual-frame",
+		"vertical-stack",
+	])("under %s, only the clip that HAS a camera gets a webcam rect", (preset) => {
+		const byClip = buildSceneDescription(mixedDoc(preset)).layout.layoutByClip;
+		if (!byClip) throw new Error("layoutByClip absent");
+		expect(byClip[0]?.webcamRect).not.toBeNull();
+		expect(byClip[1]?.webcamRect).toBeNull();
+	});
+
+	// Le coeur du bug rapporte : les presets en bloc dimensionnent l'ECRAN sur le bloc.
+	// Masquer la seule vignette ne suffit pas — sans ca le clip sans camera gardait un
+	// ecran comprime dans sa moitie, avec du vide a cote.
+	it.each([
+		"dual-frame",
+		"vertical-stack",
+	])("under %s, the camera-less clip gets its full frame back", (preset) => {
+		const scene = buildSceneDescription(mixedDoc(preset));
+		const byClip = scene.layout.layoutByClip;
+		if (!byClip) throw new Error("layoutByClip absent");
+		const blocked = byClip[0]?.screenRect;
+		const alone = byClip[1]?.screenRect;
+		if (!blocked || !alone) throw new Error("entree manquante");
+		// Meme source (1920x1080) des deux cotes : la seule difference est la camera.
+		const area = (r: { width: number; height: number }) => r.width * r.height;
+		expect(area(alone)).toBeGreaterThan(area(blocked) * 1.2);
+		// Et il retrouve le ratio de sa source, au lieu du slot du bloc.
+		expect(aspectOf(alone, scene.output)).toBeCloseTo(1920 / 1080, 1);
 	});
 });
 
