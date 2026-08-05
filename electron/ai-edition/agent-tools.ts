@@ -356,13 +356,22 @@ export const addTrimArgs = z.object({
  * different things. A separate element schema would be one more place to forget
  * `clipId` the next time the unitary one grows a field.
  *
+ * The `union(…, unknown)` is what makes "each item stands or falls alone" true for
+ * MALFORMED items too, not just unplaceable ones. A bare `z.array(addTrimArgs)`
+ * rejects the whole call the moment one entry is bad — and it rejects it in
+ * LangChain, before `applyBatch` runs — so nine good cuts would be thrown away
+ * with the tenth and `refused[index]` could never name it. Advertising the
+ * union keeps the element shape in the JSON schema the model reads (it shows up
+ * as `anyOf: [addTrim, {}]`) while letting a bad entry through to the unitary
+ * executor, which refuses it by itself with the wording it always uses.
+ *
  * No cap on the array. A half-hour recording has hundreds of silences, and the
  * point of this tool is precisely that it should not have to guess how many are
  * too many. Picking a number here would repeat the mistake `getTranscript` made
  * with its 800.
  */
 export const addTrimsArgs = z.object({
-	ranges: z.array(addTrimArgs).min(1),
+	ranges: z.array(z.union([addTrimArgs, z.unknown()])).min(1),
 });
 
 export const setTrimArgs = z.object({
@@ -427,9 +436,10 @@ export const addZoomArgs = z.object({
 	focus: focusSchema.default({ cx: 0.5, cy: 0.5 }),
 });
 
-/** Same contract as `addTrimsArgs`: the element schema IS the unitary one. */
+/** Same contract as `addTrimsArgs`: the element schema IS the unitary one, and
+ *  it is advertised rather than enforced so a bad region is refused by itself. */
 export const addZoomsArgs = z.object({
-	regions: z.array(addZoomArgs).min(1),
+	regions: z.array(z.union([addZoomArgs, z.unknown()])).min(1),
 });
 
 export const setZoomArgs = z.object({
