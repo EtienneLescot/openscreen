@@ -88,23 +88,26 @@ Rotate the certificate by exporting a replacement P12, base64-encoding it withou
 
 ## Windows signing
 
-`build.yml` signs the NSIS installer only when all of these secrets are present. With none of them set the job still succeeds and uploads an unsigned installer; with some but not all of them set it fails, because a half-configured signer is a typo rather than a decision and the alternative is silently publishing unsigned.
+`build.yml` signs the NSIS installer through [SignPath Foundation](https://signpath.org/), which issues OV certificates free of charge to open-source projects. Signing runs only when all of these secrets are present. With none of them set the job still succeeds and uploads an unsigned installer; with some but not all of them set it fails, because a half-configured signer is a typo rather than a decision and the alternative is silently publishing unsigned.
 
 | Secret | Purpose |
 |---|---|
-| `AZURE_TENANT_ID` | Entra ID tenant of the service principal. Name fixed by the Azure SDK, not chosen here. |
-| `AZURE_CLIENT_ID` | Service principal application ID. |
-| `AZURE_CLIENT_SECRET` | Service principal secret. |
-| `WIN_SIGN_ENDPOINT` | Trusted Signing account endpoint, region-specific (e.g. `https://weu.codesigning.azure.net`). |
-| `WIN_SIGN_ACCOUNT_NAME` | Trusted Signing account name. |
-| `WIN_SIGN_CERT_PROFILE` | Certificate profile name inside that account. |
-| `WIN_SIGN_PUBLISHER_NAME` | Certificate subject, character for character. Mismatches here do not fail the signing call, they fail signature *verification* later. |
+| `SIGNPATH_API_TOKEN` | SignPath REST API token used to submit the signing request. |
+| `SIGNPATH_ORGANIZATION_ID` | SignPath organization ID. |
+| `SIGNPATH_PROJECT_SLUG` | SignPath project slug. |
+| `SIGNPATH_SIGNING_POLICY_SLUG` | Signing policy to apply — typically `release-signing`, which requires manual approval. |
 
-The signing key lives in Microsoft's HSM and never reaches the runner, so unlike the Apple path there is no certificate material in any secret and nothing to import. The service principal needs the **Trusted Signing Certificate Profile Signer** role on the account; tenant/client IDs alone are not sufficient and the failure is a 403 at signing time.
+No certificate material lives in any secret: the private key stays on SignPath's HSM and is never issued to us, so unlike the Apple path there is nothing to import on the runner.
 
-Why this exists at all: SmartScreen keys reputation to the signing identity for a signed installer and to the file hash for an unsigned one. Unsigned, every release starts from zero reputation and users meet the "Windows protected your PC" interstitial again on each new version. Signed, reputation accumulates across versions. The Store package is unaffected either way — Microsoft re-signs it during certification.
+**Signing is not part of the build.** electron-builder produces an unsigned installer; the job then uploads it as a short-lived workflow artifact, SignPath fetches it by artifact id, signs it, and returns the signed file, which is swapped back over the build output so the published `openscreen-windows` artifact keeps its name and shape either way. This is why the workflow grants `actions: read` — SignPath reads the run's artifacts with the job's own `GITHUB_TOKEN`.
 
-Rotate by issuing a new client secret on the service principal, updating `AZURE_CLIENT_SECRET`, running a manual build to confirm `Verify installer signature` passes, then deleting the old secret. The endpoint, account, profile and publisher name change only when the Trusted Signing resources do.
+**A release build can block on a human.** Foundation release policies require every signing request to be approved in the SignPath dashboard. The action waits up to an hour (`wait-for-completion-timeout-in-seconds: 3600`, well above its 600 s default) — past that the job fails and the release has to be re-run. Whoever cuts a release should expect to approve the request while it is running.
+
+Why this exists at all: SmartScreen keys reputation to the signing identity for a signed installer and to the file hash for an unsigned one. Unsigned, every release starts from zero reputation and users meet the "Windows protected your PC" interstitial again on each new version. Signed, reputation accumulates across versions. Being an OV rather than EV certificate, that reputation still has to build up — signing removes "Unknown publisher" immediately, the interstitial fades with downloads. The Store package is unaffected either way: Microsoft re-signs it during certification.
+
+Onboarding prerequisites, from the [Foundation's conditions](https://signpath.org/terms.html): an OSI-approved licence with no commercial dual-licensing, no proprietary components, an actively maintained public repository, MFA on every team member's SignPath and repository access, and a published code signing policy crediting SignPath — ours is [`CODE_SIGNING_POLICY.md`](../../CODE_SIGNING_POLICY.md) and must stay linked from the project homepage.
+
+Rotate by issuing a new API token in SignPath, updating `SIGNPATH_API_TOKEN`, running a manual build to confirm `Verify installer signature` passes, then revoking the old token. The organization ID and slugs change only when the SignPath project does.
 
 ## Discord secrets and variables
 
