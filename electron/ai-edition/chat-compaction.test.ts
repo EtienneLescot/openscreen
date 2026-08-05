@@ -1,12 +1,12 @@
-import { beforeEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import type { AiEditionChatMessage } from "../../src/native/contracts";
 import {
 	applyCompaction,
 	budgetSnapshot,
 	buildCompactionPrompt,
 	compactionReducesHistory,
+	compactionSplitIndex,
 	estimateHistoryTokens,
-	shouldCompact,
 } from "./chat-compaction";
 
 function msg(
@@ -51,18 +51,9 @@ describe("budgetSnapshot", () => {
 	});
 });
 
-describe("shouldCompact", () => {
-	beforeEach(() => undefined);
-
+describe("compactionSplitIndex", () => {
 	it("returns null for very short histories", () => {
-		expect(shouldCompact([msg("user", "hi")])).toBeNull();
-	});
-
-	it("returns null when under the threshold", () => {
-		const small = Array.from({ length: 6 }, (_, i) =>
-			msg(i % 2 ? "assistant" : "user", `short-${i}`),
-		);
-		expect(shouldCompact(small, 1_000_000)).toBeNull();
+		expect(compactionSplitIndex([msg("user", "hi")])).toBeNull();
 	});
 
 	it("compacts on a user-message boundary near the midpoint", () => {
@@ -70,11 +61,21 @@ describe("shouldCompact", () => {
 		for (let i = 0; i < 10; i += 1) {
 			msgs.push(msg(i % 2 ? "assistant" : "user", `turn-${i}-${"x".repeat(800)}`));
 		}
-		const out = shouldCompact(msgs, 50);
+		const out = compactionSplitIndex(msgs);
 		expect(out).not.toBeNull();
-		expect(out?.compact).toBe(true);
 		// boundary must be a user message
-		expect(msgs[out!.splitIndex]?.role).toBe("user");
+		expect(msgs[out as number]?.role).toBe("user");
+	});
+
+	it("does not consult any token budget — a tiny history still splits", () => {
+		// The regression this pins: compaction used to refuse below 70% of a
+		// guessed 80k-token budget, which gated the manual button too, so
+		// pressing Compact on a short conversation did nothing at all and said
+		// nothing about why. The app cannot know a model's context window, so
+		// there is no threshold left to be wrong about.
+		const tiny = Array.from({ length: 6 }, (_, i) => msg(i % 2 ? "assistant" : "user", "hi"));
+		expect(estimateHistoryTokens(tiny)).toBeLessThan(100);
+		expect(compactionSplitIndex(tiny)).not.toBeNull();
 	});
 });
 
