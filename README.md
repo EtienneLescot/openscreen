@@ -37,8 +37,7 @@ The goal of this continuation is to keep OpenScreen alive as a fully open-source
 > Software should be accessible. OpenScreen has no paid tiers, premium features, upsells, or functionality locked behind a paywall.
 
 <p align="center">
-  <img src="public/demo.png" alt="" width="48%" />
-  <img src="public/sample.png" alt="" width="48%" />
+  <img src="public/demo.gif" alt="Editing a recording in OpenScreen: wallpaper and video effects, an AI-assisted cut driven from the chat, then export" width="100%" />
 </p>
 
 ## Core Features
