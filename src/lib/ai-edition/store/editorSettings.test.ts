@@ -39,7 +39,7 @@ describe("getEditorSettings", () => {
 		const snap = getEditorSettings(baseDoc);
 		expect(snap.wallpaper).toBe(DEFAULT_EDITOR_SETTINGS.wallpaper);
 		expect(snap.aspectRatio).toBe("16:9");
-		expect(snap.shadowIntensity).toBe(0);
+		expect(snap.shadowIntensity).toBe(DEFAULT_EDITOR_SETTINGS.shadowIntensity);
 		expect(snap.showBlur).toBe(false);
 		expect(snap.webcamLayoutPreset).toBe(DEFAULT_WEBCAM_LAYOUT_PRESET);
 		expect(snap.webcamMaskShape).toBe(DEFAULT_WEBCAM_MASK_SHAPE);
@@ -91,7 +91,7 @@ describe("patchEditorSettings", () => {
 		const next = patchEditorSettings(baseDoc, { showBlur: true });
 		const snap = getEditorSettings(next);
 		expect(snap.showBlur).toBe(true);
-		expect(snap.shadowIntensity).toBe(0);
+		expect(snap.shadowIntensity).toBe(DEFAULT_EDITOR_SETTINGS.shadowIntensity);
 		expect(snap.cropRegion).toEqual(DEFAULT_CROP_REGION);
 	});
 
