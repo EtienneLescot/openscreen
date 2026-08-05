@@ -933,7 +933,14 @@ export function useTimeline() {
 			// Don't await — the drop is already responsive; the probe will
 			// correct the clip when it lands.
 			if (asset.durationSec == null) {
-				void probeAndCorrectClip(assetId, newClip.id, asset.originalPath);
+				// Detached on purpose (see above), so it needs its own handler: the probe
+				// itself only ever resolves, but it finishes with a `saveDocument`, and
+				// that THROWS on a failed write. Losing a background duration correction
+				// is survivable — the clip keeps its placeholder length; an unhandled
+				// rejection is not.
+				void probeAndCorrectClip(assetId, newClip.id, asset.originalPath).catch((err) => {
+					console.warn("[timeline] background duration probe failed to save:", err);
+				});
 			}
 		},
 		[saveDocument, probeAndCorrectClip],
