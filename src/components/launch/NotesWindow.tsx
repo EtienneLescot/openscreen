@@ -17,7 +17,7 @@ import {
 	saveNotesTeleprompterSettings,
 	TELEPROMPTER_SPEED_STEP,
 } from "./notesTeleprompter";
-import "./NotesWindow.module.css";
+import "./NotesWindow.css";
 
 export function NotesWindow() {
 	const [settings, setSettings] = useState(loadNotesTeleprompterSettings);
