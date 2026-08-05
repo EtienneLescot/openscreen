@@ -1,0 +1,60 @@
+# Announcing a release lived only inside prerelease.yml and promote.yml, as the
+# last step of each. Both promotions so far failed before reaching it — v1.8.0 on
+# a merge conflict, v1.9.0 on a non-rebasable sync branch — and each time the
+# announcement was silently skipped along with everything downstream of the
+# failure, with no way to send it afterwards short of re-running the whole
+# promotion over an already-tagged release.
+#
+# This exposes the same script on its own, so a missed announcement is a dispatch
+# rather than a recovery operation. It reads nothing but the tag and the matching
+# milestone, so it produces the identical message whenever it runs.
+name: Announce a release on Discord
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to announce (e.g. v1.9.0)"
+        required: true
+        type: string
+      kind:
+        description: "stable posts to the release channel, rc to the testing channel"
+        required: true
+        type: choice
+        options: [stable, rc]
+        default: stable
+      release_notes_extra:
+        description: "Optional message prepended to the announcement"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  announce:
+    name: Announce ${{ inputs.tag }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: ./.github/actions/setup
+
+      - name: Announce on Discord
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          # The script prefers the RC channel whenever that variable is non-empty,
+          # so exactly one of these may be set — blanking the other is what selects
+          # the destination, not the KIND value.
+          DISCORD_RELEASE_CHANNEL_ID: ${{ inputs.kind == 'stable' && vars.DISCORD_RELEASE_CHANNEL_ID || '' }}
+          DISCORD_RC_TESTING_CHANNEL_ID: ${{ inputs.kind == 'rc' && vars.DISCORD_RC_TESTING_CHANNEL_ID || '' }}
+          # Only used to list the closed issues of the matching milestone; the
+          # announcement still posts without it, just without that section.
+          GITHUB_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
+          STABLE_TAG: ${{ inputs.tag }}
+          EXTRA: ${{ inputs.release_notes_extra }}
+          KIND: ${{ inputs.kind }}
+        run: node .github/scripts/discord-release-announce.mjs
