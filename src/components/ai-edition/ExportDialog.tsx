@@ -316,7 +316,12 @@ export function ExportDialog({ open, onClose, document }: ExportDialogProps) {
 					action: {
 						label: t("exportDialog.showInFolder"),
 						onClick: () => {
-							void window.electronAPI?.revealInFolder?.(pickedPath);
+							// `revealInFolder` is a bare ipcRenderer.invoke, so it rejects when
+							// the main handler throws. The export already succeeded — failing to
+							// open the folder is not worth a second toast, but it is worth a line.
+							void window.electronAPI?.revealInFolder?.(pickedPath).catch((err) => {
+								console.warn("[export] failed to reveal the file in its folder:", err);
+							});
 						},
 					},
 				});

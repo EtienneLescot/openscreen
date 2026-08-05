@@ -1512,7 +1512,13 @@ export function SourceTranscriptModal({
 		const v = videoRef.current;
 		if (!v) return;
 		if (v.paused) {
-			void v.play();
+			// Same catch as VirtualPreview's: `play()` rejects on the autoplay policy
+			// or when a new load interrupts it, and `isPlaying` is driven by the
+			// element's own play/pause events — so a rejection leaves nothing to
+			// reconcile, it just must not escape as an unhandled rejection.
+			void v.play().catch(() => {
+				// swallow: rejection just means playback never started
+			});
 		} else {
 			v.pause();
 		}
@@ -1528,7 +1534,11 @@ export function SourceTranscriptModal({
 	const requestFullscreen = () => {
 		const v = videoRef.current;
 		if (!v) return;
-		void v.requestFullscreen?.();
+		// Rejects when the gesture isn't accepted or the element can't go fullscreen.
+		// Nothing to reconcile — the document stays as it was.
+		void v.requestFullscreen?.().catch(() => {
+			// swallow: rejection just means we stayed windowed
+		});
 	};
 
 	return (

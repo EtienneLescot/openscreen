@@ -465,7 +465,13 @@ export function NewEditorShell() {
 	const togglePlay = useCallback(() => {
 		if (!videoElement) return;
 		if (videoElement.paused) {
-			void videoElement.play();
+			// Same catch as VirtualPreview's: `play()` rejects on the autoplay policy
+			// or when a new load interrupts it, and the store's `playing` flag is
+			// driven by the element's own play/pause listeners above — so a rejection
+			// leaves nothing to reconcile, it just must not escape unhandled.
+			void videoElement.play().catch(() => {
+				// swallow: rejection just means playback never started
+			});
 		} else {
 			videoElement.pause();
 		}
@@ -677,7 +683,9 @@ export function NewEditorShell() {
 					}
 				}
 				if (action === "record") {
-					void window.electronAPI?.startNewRecording?.();
+					void window.electronAPI?.startNewRecording?.().catch((err) => {
+						console.warn("[editor] failed to start a new recording:", err);
+					});
 				}
 				resolve(choice);
 			})();
@@ -688,7 +696,9 @@ export function NewEditorShell() {
 	const handleNewRecording = useCallback(async () => {
 		const choice = await promptUnsaved("record");
 		if (choice !== "cancel") {
-			void window.electronAPI?.startNewRecording?.();
+			void window.electronAPI?.startNewRecording?.().catch((err) => {
+				console.warn("[editor] failed to start a new recording:", err);
+			});
 		}
 	}, [promptUnsaved]);
 
