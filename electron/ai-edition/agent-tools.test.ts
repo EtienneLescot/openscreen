@@ -322,6 +322,53 @@ describe("executeAgentTool", () => {
 		expect(result.summary).toMatch(/added 2 trims, 1 refused/);
 	});
 
+	it("addTrims refuses a MALFORMED range by itself, not the whole call", () => {
+		// The batch schema advertises the element shape without enforcing it, so a
+		// bad entry reaches the unitary executor and is refused at its index. If it
+		// were enforced at the container, one typo would cost every other cut —
+		// which is precisely what `applyBatch` says it exists to prevent.
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addTrims",
+			JSON.stringify({
+				ranges: [{ startSec: 1, endSec: 2 }, { startSec: "oops" }, { startSec: 40, endSec: 41 }],
+			}),
+		);
+
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.appliedCount).toBe(2);
+		expect(payload.refused).toEqual([{ index: 1, error: expect.stringMatching(/endSec/) }]);
+		expect(result.document?.timeline.trimRanges).toHaveLength(3);
+	});
+
+	it("addZooms refuses a MALFORMED region by itself, not the whole call", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addZooms",
+			JSON.stringify({
+				regions: [
+					{ startSec: 1, endSec: 3, depth: 9 }, // depth is an ordinal 1–6
+					{ startSec: 10, endSec: 12 },
+				],
+			}),
+		);
+
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.appliedCount).toBe(1);
+		expect(payload.refused[0].index).toBe(0);
+		expect(result.document?.zoomRanges).toHaveLength(1);
+	});
+
+	it("addTrims still refuses a batch that is not a non-empty list", () => {
+		for (const args of ['{"ranges":[]}', '{"ranges":"1-2"}', "{}"]) {
+			const result = executeAgentTool(fixtureDocument(), "addTrims", args);
+			expect(result.ok).toBe(false);
+			expect(result.document).toBeUndefined();
+		}
+	});
+
 	it("addTrims reports a whole-batch refusal as a failure, not an empty success", () => {
 		const result = executeAgentTool(
 			fixtureDocument(),
