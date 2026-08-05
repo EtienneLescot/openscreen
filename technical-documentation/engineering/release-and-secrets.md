@@ -147,6 +147,10 @@ The bot token comes from a Discord application authorized with the `bot` scope. 
 
 `bump-nix-package.yml` uses the workflow-scoped `GITHUB_TOKEN`; it requires repository contents and pull-request write permissions as declared in the workflow and has no additional long-lived secret.
 
+**WinGet publishing is built but switched off.** `publish-winget.yml` gates on `vars.WINGET_IDENTIFIER != ''`, and neither that variable nor `WINGET_ACC_TOKEN` is set, so the job has reported `skipped` on every release so far — including stable ones. Nothing is broken; it has simply never run. Setting both turns it on for the next stable tag with no code change.
+
+Note what it would publish before turning it on: `winget-releaser` submits the **NSIS `.exe`** attached to the release to the community repository, and that installer is unsigned. Users who install through the Microsoft Store, or through `winget --source msstore`, get the Store package that Microsoft signs during certification instead. Publishing to the community source therefore adds a second, unsigned route alongside the signed one — worth doing deliberately rather than by flipping a variable.
+
 ## Automatic `GITHUB_TOKEN`
 
 GitHub supplies `GITHUB_TOKEN` per run. Workflows use it for semantic PR validation, release-asset reads, issue bookkeeping, and the Nix bump PR. Its scopes come from each workflow's `permissions` block and it is not manually created or rotated. Do not replace it with a PAT unless cross-workflow triggering or external-repository access is actually required.

@@ -207,6 +207,21 @@ The default electron-builder target is NSIS, with an assisted installer that all
 `build/appx/` is therefore committed, and `npm run assets:appx` (`scripts/generate-appx-assets.mjs`) regenerates it from `icons/icons/png/1024x1024.png` — **run it whenever the app icon changes**. No build step calls it, because generated-at-build assets would go missing exactly when someone packages from a checkout that skipped the step. The script decodes and writes PNGs directly on `node:zlib` rather than pulling an image library into the dependency tree for seven static logos.
 
 Four of the file names are load-bearing: `StoreLogo`, `Square150x150Logo`, `Square44x44Logo` and `Wide310x150Logo` are the ones electron-builder replaces with placeholders when absent. `SmallTile`, `LargeTile` and `SplashScreen` are opt-in — their `<uap:>` manifest attributes are emitted only when a matching file is present. Each logo also ships `.scale-125/150/200` variants (plus `.scale-400` on the small assets) and, for the 44x44 app-list icon, `.targetsize-*` and `.targetsize-*_altform-unplated` variants for the taskbar and Start list. Any `.scale-`/`.targetsize-` file switches electron-builder into its `makepri.exe` path, which generates `resources.pri` and packages it alongside; the unqualified 100% file of every asset is kept as the neutral fallback candidate so an unresolved qualifier still finds art. Because `appx.backgroundColor` is `transparent`, Windows paints the tile in the user's accent colour, so the tiles are drawn as a padded logo on a transparent canvas rather than full-bleed art — and the two tiles carrying `showNameOnTiles` shift their logo up to clear the name band.
+#### Neither Windows artifact is signed
+
+Unlike macOS, no Windows signing is configured anywhere in the repo. Both CI artifacts come out unsigned — confirmed by `Get-AuthenticodeSignature` on the 1.8.0 build:
+
+| Artifact | Signature |
+|---|---|
+| `Openscreen.Setup.1.8.0.exe` | `NotSigned` |
+| `Openscreen.Setup.1.8.0.appx` | `NotSigned` |
+
+That the AppX is unsigned is not a defect: Microsoft signs Store submissions during certification, and the signed copy exists only in the Store. It is never handed back, so it cannot be redistributed. Two consequences worth knowing before anyone tries to "just ship the appx instead":
+
+- **The AppX is not a drop-in replacement for the NSIS installer.** Windows runs an unsigned `.exe` after a SmartScreen prompt, but refuses outright to install an unsigned MSIX/AppX — sideloading requires a signature the machine already trusts. Swapping one for the other makes distribution strictly worse.
+- **SmartScreen reputation is per file hash while the installer is unsigned**, so every release starts from zero and users meet the interstitial again on each new version. Signing would attach reputation to the publisher identity instead, and it would accumulate across releases.
+
+Buying a certificate is the fix for the `.exe`, and it stays a live option (roughly €120/year for a cloud-HSM certificate an individual can buy, since the 2023 baseline requirements forbid keeping the key in a file). It was deliberately deferred: the Store route is already signed and already paid for through the developer account, so the README recommends it first and treats the `.exe` as the documented fallback.
 
 ### macOS
 
