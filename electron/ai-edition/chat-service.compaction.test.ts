@@ -49,8 +49,9 @@ function stubSummarizer(reply: string) {
 	return invoke;
 }
 
-// Long enough that four of them clear the 70%-of-80k-tokens trip point, short
-// enough that three of them do not.
+// Deliberately huge: these used to be sized against the 70%-of-80k trip point,
+// and they stay huge for the opposite reason — a history this big is the case
+// that USED to compact itself, so it is the one that proves nothing does now.
 const LONG = "x".repeat(60_000);
 
 beforeEach(() => {
@@ -63,13 +64,36 @@ beforeEach(() => {
 	});
 });
 
-describe("auto-compaction", () => {
-	it("leaves the transcript whole and compacts only what the model is given", async () => {
+describe("compaction", () => {
+	it("NEVER runs on its own, however big the history gets", async () => {
+		// The headline rule. A turn used to measure the history against a
+		// guessed 80k-token budget and, past 70% of it, block on a whole extra
+		// summarizer call before the user's request was even sent. The app has
+		// no way to ask a provider how big its context window is, so that number
+		// could not be right for anything — it threw away context at 5% fill on
+		// a 1M-token Gemini. Six turns here estimate at ~90k tokens, comfortably
+		// past the old trip point.
+		const summarizer = stubSummarizer("EARLIER CONTEXT");
+		const session = createSession("proj_no_auto");
+		for (let i = 0; i < 6; i += 1) {
+			await runChat("proj_no_auto", session.id, `${LONG}#${i}`, stubConfig());
+		}
+
+		expect(getSessionContextUsage("proj_no_auto", session.id)?.usedTokens).toBeGreaterThan(56_000);
+		expect(summarizer).not.toHaveBeenCalled();
+		// And nothing was folded away behind the user's back.
+		const history = histories.at(-1) ?? [];
+		expect(history.some((m) => m.content === `${LONG}#0`)).toBe(true);
+		expect(history.at(-1)?.content).toBe(`${LONG}#5`);
+	});
+
+	it("compacts on the button, and leaves the transcript whole", async () => {
 		stubSummarizer("EARLIER CONTEXT");
 		const session = createSession("proj_compact_transcript");
 		for (let i = 0; i < 4; i += 1) {
 			await runChat("proj_compact_transcript", session.id, `${LONG}#${i}`, stubConfig());
 		}
+		await compactSessionNow("proj_compact_transcript", session.id, stubConfig());
 
 		// Four user turns, four replies, nothing deleted: this array is what the
 		// renderer shows, and the user never asked for half of it to go away.
@@ -78,18 +102,37 @@ describe("auto-compaction", () => {
 		expect(transcript[0]?.content).toBe(`${LONG}#0`);
 		expect(transcript.filter((m) => m.role === "user")).toHaveLength(4);
 
-		// The fourth turn is the one that tripped the budget: the model got the
-		// summary in place of the older half, not the whole conversation.
+		// The next turn gets the summary in place of the older half.
+		await runChat("proj_compact_transcript", session.id, "and then?", stubConfig());
 		const history = histories.at(-1) ?? [];
 		expect(history[0]?.content).toBe("EARLIER CONTEXT");
-		expect(history).toHaveLength(4);
 		expect(history.some((m) => m.content === `${LONG}#0`)).toBe(false);
-		expect(history.at(-1)?.content).toBe(`${LONG}#3`);
+		expect(history.at(-1)?.content).toBe("and then?");
 
-		// The context pill measures the payload, so compaction actually shows up:
-		// the whole transcript estimates at ~60k tokens, the payload at half.
+		// The context pill measures the payload, so compaction shows up there.
 		const usage = getSessionContextUsage("proj_compact_transcript", session.id);
 		expect(usage?.usedTokens).toBeLessThan(40_000);
+	});
+
+	it("compacts an ORDINARY conversation — the button is not gated by a budget", async () => {
+		// The same guessed budget gated the manual path: `compactSessionNow`
+		// went through the same heuristic, so below 70% of 80k the button did
+		// nothing at all, silently. This session is ~3k tokens — a perfectly
+		// normal chat, roughly 5% of the old trip point, and exactly the size at
+		// which the button used to be a no-op. Pressing it is the decision now;
+		// there is no number left to overrule it.
+		const summarizer = stubSummarizer("EARLIER CONTEXT");
+		const session = createSession("proj_compact_short");
+		const paragraph = "a".repeat(2_000);
+		for (let i = 0; i < 3; i += 1) {
+			await runChat("proj_compact_short", session.id, `${paragraph}#${i}`, stubConfig());
+		}
+		const used = getSessionContextUsage("proj_compact_short", session.id)?.usedTokens ?? 0;
+		expect(used).toBeLessThan(56_000 / 10);
+
+		const manual = await compactSessionNow("proj_compact_short", session.id, stubConfig());
+		expect(summarizer).toHaveBeenCalledTimes(1);
+		expect(manual?.summary).toBe("EARLIER CONTEXT");
 	});
 
 	it("keeps the summary in the payload when the tail is longer than the window", async () => {
@@ -98,6 +141,7 @@ describe("auto-compaction", () => {
 		for (let i = 0; i < 30; i += 1) {
 			await runChat("proj_compact_window", session.id, `turn ${i}`, stubConfig());
 		}
+		await compactSessionNow("proj_compact_window", session.id, stubConfig());
 		const huge = LONG.repeat(4);
 		await runChat("proj_compact_window", session.id, huge, stubConfig());
 
@@ -109,47 +153,48 @@ describe("auto-compaction", () => {
 		expect(history.at(-1)?.content).toBe(huge);
 	});
 
-	it("stops retrying after a summary that does not shrink the payload", async () => {
+	it("refuses a summary that does not shrink the payload, and keeps the session", async () => {
 		const oversized = stubSummarizer("z".repeat(400_000));
 		const session = createSession("proj_compact_blocked");
 		for (let i = 0; i < 5; i += 1) {
 			await runChat("proj_compact_blocked", session.id, `${LONG}#${i}`, stubConfig());
 		}
 
-		// Two more turns tripped the heuristic after the failure; neither paid
-		// for another summarizer call.
+		// Adopting a summary longer than what it replaces would grow the payload.
+		// The session is left exactly as it was. (There is no "stop retrying"
+		// flag any more: nothing retries on its own, so the only next attempt is
+		// another press, which is the user asking again knowingly.)
+		expect(await compactSessionNow("proj_compact_blocked", session.id, stubConfig())).toBeNull();
 		expect(oversized).toHaveBeenCalledTimes(1);
-		const history = histories.at(-1) ?? [];
-		expect(history.some((m) => m.content === "EARLIER CONTEXT")).toBe(false);
 		expect(selectSession("proj_compact_blocked", session.id)?.messages).toHaveLength(10);
 
-		// The Compact button is an explicit request, so it tries again — and a
-		// success unblocks the automatic path.
+		await runChat("proj_compact_blocked", session.id, "and then?", stubConfig());
+		expect(histories.at(-1)?.some((m) => m.content === "EARLIER CONTEXT")).toBe(false);
+
+		// A second press with a usable summary lands.
 		const usable = stubSummarizer("EARLIER CONTEXT");
 		const manual = await compactSessionNow("proj_compact_blocked", session.id, stubConfig());
 		expect(usable).toHaveBeenCalledTimes(1);
 		expect(manual?.summary).toBe("EARLIER CONTEXT");
-		expect(manual?.session.messages).toHaveLength(10);
+		expect(manual?.session.messages).toHaveLength(12);
 
-		await runChat("proj_compact_blocked", session.id, "and then?", stubConfig());
+		await runChat("proj_compact_blocked", session.id, "and after that?", stubConfig());
 		expect(histories.at(-1)?.[0]?.content).toBe("EARLIER CONTEXT");
 	});
 
-	// The regression this guards is `planCompaction` measuring the wrong list.
-	// `splitIndex` comes back from `shouldCompact` as an index INTO WHAT IT WAS
-	// GIVEN, and it is then applied to the payload. Measure the transcript
-	// instead — which never shrinks, so it keeps tripping — and the index runs
-	// off the end of the much shorter payload, so `payload.slice(0, splitIndex)`
-	// swallows the whole thing, current user turn included. The model is then
-	// asked to answer a question it was never shown.
-	//
-	// Three turns is not enough to see it: the collapse needs a payload that has
-	// already been compacted at least once, so the two lists have diverged.
+	// `splitIndex` comes back as an index INTO WHAT WAS MEASURED, and it is then
+	// applied to the payload. Measure the transcript instead — which compaction
+	// never shrinks — and the index runs off the end of the much shorter
+	// payload, so `payload.slice(0, splitIndex)` swallows the whole thing, the
+	// current user turn included, and the model is asked to answer a question it
+	// was never shown. Repeated compactions are what make the two lists diverge,
+	// so the button is pressed between every turn here.
 	it("never summarizes away the turn the user just sent", async () => {
 		stubSummarizer("EARLIER CONTEXT");
 		const session = createSession("proj_compact_current_turn");
 		for (let i = 0; i < 10; i += 1) {
 			await runChat("proj_compact_current_turn", session.id, `${LONG}#${i}`, stubConfig());
+			await compactSessionNow("proj_compact_current_turn", session.id, stubConfig());
 		}
 
 		// Every turn, not just the last: the collapse is intermittent, so a
