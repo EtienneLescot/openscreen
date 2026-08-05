@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The fatal-error channel (PR #162).
  *
