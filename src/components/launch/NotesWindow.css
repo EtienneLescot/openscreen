@@ -1,5 +1,7 @@
-/* Tiptap sets class="tiptap" on the ProseMirror root — must be :global to escape CSS modules. */
-:global(.tiptap) {
+/* Tiptap sets class="tiptap" on the ProseMirror root, so every selector here is global.
+ * Plain .css, NOT .module.css: this sheet is imported for its side effect only, and a
+ * binding-less CSS-module import is tree-shaken out of the production bundle. */
+.tiptap {
 	height: 100%;
 	width: 100%;
 	outline: none;
@@ -8,11 +10,11 @@
 	caret-color: #111827;
 }
 
-:global(.notes-teleprompter-content[data-mirrored="true"]) {
+.notes-teleprompter-content[data-mirrored="true"] {
 	transform: scaleX(-1);
 }
 
-:global(.tiptap) :first-child {
+.tiptap :first-child {
 	margin-top: 0;
 }
 
@@ -21,38 +23,38 @@
  * container. Every element below inherits that size, so `em` here equals the container size
  * and the default 16px rendering is unchanged. Headings are the exception — see below.
  */
-:global(.tiptap) p {
+.tiptap p {
 	min-height: 1.5em;
 	line-height: 1.5;
 	margin-top: 0.75em;
 	margin-bottom: 0.75em;
 }
 
-:global(.tiptap) p:first-child {
+.tiptap p:first-child {
 	margin-top: 0;
 }
 
 /* Tailwind preflight strips list markers — restore them for markdown-style input rules. */
-:global(.tiptap) ul,
-:global(.tiptap) ol {
+.tiptap ul,
+.tiptap ol {
 	padding-left: 1.5em;
 	margin: 1em 0;
 }
 
-:global(.tiptap) ul {
+.tiptap ul {
 	list-style-type: disc;
 }
 
-:global(.tiptap) ol {
+.tiptap ol {
 	list-style-type: decimal;
 }
 
-:global(.tiptap) li {
+.tiptap li {
 	display: list-item;
 }
 
-:global(.tiptap) ul li p,
-:global(.tiptap) ol li p {
+.tiptap ul li p,
+.tiptap ol li p {
 	margin-top: 0.25em;
 	margin-bottom: 0.25em;
 }
@@ -62,42 +64,42 @@
  * enlarged font size, not the container's, so switching them would change the default
  * rendering rather than just scale it.
  */
-:global(.tiptap) h1,
-:global(.tiptap) h2,
-:global(.tiptap) h3,
-:global(.tiptap) h4,
-:global(.tiptap) h5,
-:global(.tiptap) h6 {
+.tiptap h1,
+.tiptap h2,
+.tiptap h3,
+.tiptap h4,
+.tiptap h5,
+.tiptap h6 {
 	line-height: 1.1;
 	margin-top: 2.5rem;
 	text-wrap: pretty;
 }
 
-:global(.tiptap) h1,
-:global(.tiptap) h2 {
+.tiptap h1,
+.tiptap h2 {
 	margin-top: 3.5rem;
 	margin-bottom: 1.5rem;
 }
 
-:global(.tiptap) h1 {
+.tiptap h1 {
 	font-size: 1.4em;
 }
 
-:global(.tiptap) h2 {
+.tiptap h2 {
 	font-size: 1.2em;
 }
 
-:global(.tiptap) h3 {
+.tiptap h3 {
 	font-size: 1.1em;
 }
 
-:global(.tiptap) h4,
-:global(.tiptap) h5,
-:global(.tiptap) h6 {
+.tiptap h4,
+.tiptap h5,
+.tiptap h6 {
 	font-size: 1em;
 }
 
-:global(.tiptap) code {
+.tiptap code {
 	background-color: #ede9fe;
 	border-radius: 0.4rem;
 	color: #111827;
@@ -105,7 +107,7 @@
 	padding: 0.25em 0.3em;
 }
 
-:global(.tiptap) pre {
+.tiptap pre {
 	background: #111827;
 	border-radius: 0.5rem;
 	color: #ffffff;
@@ -114,20 +116,20 @@
 	padding: 0.75em 1em;
 }
 
-:global(.tiptap) pre code {
+.tiptap pre code {
 	background: none;
 	color: inherit;
 	font-size: 0.8em;
 	padding: 0;
 }
 
-:global(.tiptap) blockquote {
+.tiptap blockquote {
 	border-left: 3px solid #d1d5db;
 	margin: 1.5em 0;
 	padding-left: 1em;
 }
 
-:global(.tiptap) hr {
+.tiptap hr {
 	border: none;
 	border-top: 1px solid #e5e7eb;
 	margin: 2em 0;
