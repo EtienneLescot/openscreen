@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 import { fireEvent, render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { startGlobalPointerDrag } from "./pointer-drag";

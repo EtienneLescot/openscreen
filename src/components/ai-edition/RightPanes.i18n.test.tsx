@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // Guards the right-rail settings panes against untranslated strings creeping
 // back in: every pane used to hardcode its English labels (title, tabs, slider
 // labels, help popover), so switching the app locale left the whole inspector

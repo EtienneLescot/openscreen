@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // Backspace/Delete in the transcript pane, with the caret sitting BETWEEN words at editor
 // level. That is where `restoreCaretBeforeWord` parks it after every cut, so it is the
 // state the user is in when they hold Backspace to keep trimming — and the state where

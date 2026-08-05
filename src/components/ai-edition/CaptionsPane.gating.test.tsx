@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // Captions are a view of the transcript, so the pane's "Transcribe video"
 // button is a retry, not a first step — the background pass has already tried.
 // On a media with no audio track that retry can only fail again, so the button

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // ChatWelcome guards the "no provider connected" empty state: the copy reaches
 // the DOM, the CTA fires, and a non-English locale is really translated rather
 // than falling back to English. localeParity.test.ts covers key presence for

@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // Two properties that decide whether a long recording's waveform appears
 // quickly or not at all: which pipeline a file is routed to, and how many times
 // it is decoded.
