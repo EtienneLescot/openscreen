@@ -175,7 +175,7 @@ function recordingSink(): { sink: OpenScreenAgentSink; events: SinkEvent[] } {
 }
 
 /** `buildTools` returns a tuple with a DISTINCT type per tool, one per zod
- * schema, so `tools.find(...)` is a 19-way union — and `.invoke` is generic, a
+ * schema, so `tools.find(...)` is a 21-way union — and `.invoke` is generic, a
  * shape TypeScript will not call through a union (TS2349). Widening to the
  * interface every one of them implements is what the model is handed anyway:
  * `createAgent` takes them as `ClientTool`, i.e. exactly this. Nothing the
@@ -292,6 +292,23 @@ describe("the sink announces each call exactly once, with the real verdict", () 
 		expect(events[1]).toMatchObject({ kind: "toolEnd", name: "getTranscript", ok: false });
 	});
 
+	it("lets a malformed batch entry reach the executor instead of throwing at the schema", async () => {
+		// LangChain parses the tool's schema BEFORE calling us, so a batch schema
+		// that enforced its element shape would reject the whole call here — the
+		// per-item `refused[index]` that `addTrims` promises the model could never
+		// happen on the product path, only in a direct-executor test.
+		const { tools, holder } = toolsFor(fixtureDocument());
+		const tool = tools.find((t) => t.name === "addTrims");
+		if (!tool) throw new Error("addTrims is not built");
+
+		const result = JSON.parse(
+			String(await tool.invoke({ ranges: [{ startSec: 1, endSec: 2 }, { startSec: "oops" }] })),
+		);
+		expect(result.appliedCount).toBe(1);
+		expect(result.refused[0].index).toBe(1);
+		expect(holder.current.timeline.trimRanges).toHaveLength(2);
+	});
+
 	it("advances the holder on a write, and leaves it alone on a refusal", async () => {
 		const { tools, holder } = toolsFor(fixtureDocument());
 		const before = holder.current;
@@ -402,7 +419,7 @@ describe("the prompt when the user has turned project edits off", () => {
 });
 
 describe("the tools when the user has turned project edits off", () => {
-	it("still builds all 20 — the model has to be able to NAME the edit", () => {
+	it("still builds all 21 — the model has to be able to NAME the edit", () => {
 		const { sink } = recordingSink();
 		const tools: BuiltTool[] = buildTools({ current: fixtureDocument() }, sink, false);
 		expect(tools.map((t) => t.name)).toEqual(OPENSCREEN_TOOLS);
