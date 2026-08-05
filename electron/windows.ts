@@ -264,7 +264,22 @@ export function createHudOverlayWindow(): BrowserWindow {
 			backgroundThrottling: false,
 		},
 	});
-	win.setIgnoreMouseEvents(true, { forward: true });
+
+	// Deliberately NOT born click-through: the renderer asks for it on mount, over
+	// "hud-overlay-ignore-mouse-events" (`show: false` holds this window back until
+	// ready-to-show, so the two are ~85 ms apart — measured, not assumed). What that
+	// leaves open is an invisible rectangle that can swallow one desktop click in
+	// those 85 ms, right after the user launched the app — against what doing it here
+	// cost them: the whole app (issue #266). On Windows the `forward` option is a global
+	// WH_MOUSE_LL hook, and that hook is the only way out of the state, because
+	// Chromium sends no pointermove to a window it has made input-transparent — so
+	// the renderer can never ask to leave it on its own. Electron latches
+	// the install behind `forwarding_mouse_messages_` and retries only after a
+	// setIgnoreMouseEvents(false) — the very call a dead hook prevents. One refused
+	// or revoked hook (Windows drops any whose callback overruns the 300 ms
+	// LowLevelHooksTimeout — on this thread, still busy booting the app) and the HUD
+	// is painted, inert, forever. Asking later moves the install onto an IPC message,
+	// i.e. onto a main thread that is provably pumping.
 
 	// Keep the recording controls out of the recording (see applyContentProtection).
 	applyContentProtection(win, "HUD");

@@ -209,6 +209,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		recordingId: number;
 		webcam: { fileName: string; videoData: ArrayBuffer };
 		cursorCaptureMode?: import("../src/lib/recordingSession").CursorCaptureMode;
+		durationMs?: number;
 		webcamOffsetMs?: number;
 	}) => {
 		return ipcRenderer.invoke("attach-native-linux-webcam-recording", payload);
@@ -242,6 +243,7 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		recordingId: number;
 		webcam: { fileName: string; videoData: ArrayBuffer };
 		cursorCaptureMode?: import("../src/lib/recordingSession").CursorCaptureMode;
+		durationMs?: number;
 		webcamOffsetMs?: number;
 	}) => {
 		return ipcRenderer.invoke("attach-native-mac-webcam-recording", payload);

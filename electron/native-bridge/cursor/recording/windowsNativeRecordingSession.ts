@@ -186,7 +186,10 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		}
 
 		if (payload.asset?.id && !this.assets.has(payload.asset.id)) {
-			const assetDisplay = screen.getDisplayNearestPoint({ x: payload.x, y: payload.y });
+			// payload.x/y are physical screen pixels; `screen` works in DIPs.
+			const assetDisplay = screen.getDisplayNearestPoint(
+				screen.screenToDipPoint({ x: payload.x, y: payload.y }),
+			);
 			this.assets.set(payload.asset.id, {
 				id: payload.asset.id,
 				platform: "win32",

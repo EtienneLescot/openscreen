@@ -158,7 +158,9 @@ describe("the mutating-tool table", () => {
 				"addCameraFullscreen",
 				"addSpeed",
 				"addTrim",
+				"addTrims",
 				"addZoom",
+				"addZooms",
 				"moveClip",
 				"removeClip",
 				"removeModifier",
@@ -205,6 +207,36 @@ describe("executeAgentTool", () => {
 		expect(payload.segments[1].kind).toBe("silence");
 	});
 
+	it("getTranscript returns a long transcript whole, word for word", () => {
+		// The regression test for a `.slice(0, 800)` that used to sit here. On the
+		// production path a segment is one WORD, so the cap cut a half-hour
+		// recording at roughly its fifth minute and reported nothing — the model
+		// trimmed the silences it could see and called the job done. 4000 words is
+		// about half an hour of speech.
+		const base = fixtureDocument();
+		const segments = Array.from({ length: 4000 }, (_, i) => ({
+			id: `seg_${i}`,
+			kind: "speech" as const,
+			startSec: i * 0.45,
+			endSec: i * 0.45 + 0.4,
+			text: `mot${i}`,
+			wordIds: [],
+		}));
+		const doc = {
+			...base,
+			transcript: null,
+			transcripts: [{ ...base.transcripts[0], segments }],
+		};
+
+		const result = executeAgentTool(doc, "getTranscript", "{}");
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.segments).toHaveLength(4000);
+		// The last word matters more than the count: a cap keeps the head and
+		// drops the tail, so the tail is what proves it is gone.
+		expect(payload.segments.at(-1).text).toBe("mot3999");
+	});
+
 	it("getTranscript fails cleanly when no transcript exists", () => {
 		const doc = { ...fixtureDocument(), transcripts: [], transcript: null };
 		const result = executeAgentTool(doc, "getTranscript", "{}");
@@ -225,6 +257,189 @@ describe("executeAgentTool", () => {
 		expect(added?.endSec).toBe(22);
 		expect(added?.origin).toBe("agent");
 		expect(result.summary).toMatch(/added trim 0:20\.0 – 0:22\.0/);
+	});
+
+	it("addTrims lands exactly what the same calls one at a time would", () => {
+		// The property the batch tools exist to have: they save round trips and
+		// change nothing else. If this ever diverges, the batch has grown a second
+		// implementation of the rules and the two will drift.
+		const ranges = [
+			{ startSec: 1, endSec: 2, reason: "silence" },
+			{ startSec: 40, endSec: 41, reason: "silence" },
+			{ startSec: 5, endSec: 4, reason: "silence" }, // reversed on purpose
+		];
+
+		let oneAtATime = fixtureDocument();
+		for (const range of ranges) {
+			const step = executeAgentTool(oneAtATime, "addTrim", JSON.stringify(range));
+			expect(step.ok).toBe(true);
+			oneAtATime = step.document as AxcutDocument;
+		}
+
+		const batch = executeAgentTool(fixtureDocument(), "addTrims", JSON.stringify({ ranges }));
+		expect(batch.ok).toBe(true);
+
+		const shape = (doc: AxcutDocument) =>
+			doc.timeline.trimRanges.map((t) => ({
+				startSec: t.startSec,
+				endSec: t.endSec,
+				reason: t.reason,
+				origin: t.origin,
+				clipId: t.clipId,
+			}));
+		expect(shape(batch.document as AxcutDocument)).toEqual(shape(oneAtATime));
+	});
+
+	it("addTrims applies the good ranges and refuses the bad one by itself", () => {
+		// `replaceTimeline`, the repo's other array-taking tool, refuses in one
+		// block. That is right for rebuilding a timeline and ruinous here: one bad
+		// bound must not cost the other nine, and the model must be able to see
+		// WHICH one without re-reading the document.
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addTrims",
+			JSON.stringify({
+				ranges: [
+					{ startSec: 1, endSec: 2 },
+					{ startSec: 25, endSec: 35 }, // spans both clips of asset_1 — ambiguous
+					{ startSec: 40, endSec: 41 },
+				],
+			}),
+		);
+
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.requested).toBe(3);
+		expect(payload.appliedCount).toBe(2);
+		expect(payload.refusedCount).toBe(1);
+		expect(payload.refused).toHaveLength(1);
+		expect(payload.refused[0].index).toBe(1);
+		// The refusal keeps the unitary wording, which names the clips and the fix.
+		expect(payload.refused[0].error).toMatch(/clipId/);
+		expect(payload.applied.map((a: { index: number }) => a.index)).toEqual([0, 2]);
+		// The fixture starts with one trim; two more landed.
+		expect(result.document?.timeline.trimRanges).toHaveLength(3);
+		expect(result.summary).toMatch(/added 2 trims, 1 refused/);
+	});
+
+	it("addTrims refuses a MALFORMED range by itself, not the whole call", () => {
+		// The batch schema advertises the element shape without enforcing it, so a
+		// bad entry reaches the unitary executor and is refused at its index. If it
+		// were enforced at the container, one typo would cost every other cut —
+		// which is precisely what `applyBatch` says it exists to prevent.
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addTrims",
+			JSON.stringify({
+				ranges: [{ startSec: 1, endSec: 2 }, { startSec: "oops" }, { startSec: 40, endSec: 41 }],
+			}),
+		);
+
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.appliedCount).toBe(2);
+		expect(payload.refused).toEqual([{ index: 1, error: expect.stringMatching(/endSec/) }]);
+		expect(result.document?.timeline.trimRanges).toHaveLength(3);
+	});
+
+	it("addZooms refuses a MALFORMED region by itself, not the whole call", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addZooms",
+			JSON.stringify({
+				regions: [
+					{ startSec: 1, endSec: 3, depth: 9 }, // depth is an ordinal 1–6
+					{ startSec: 10, endSec: 12 },
+				],
+			}),
+		);
+
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.appliedCount).toBe(1);
+		expect(payload.refused[0].index).toBe(0);
+		expect(result.document?.zoomRanges).toHaveLength(1);
+	});
+
+	it("addTrims still refuses a batch that is not a non-empty list", () => {
+		for (const args of ['{"ranges":[]}', '{"ranges":"1-2"}', "{}"]) {
+			const result = executeAgentTool(fixtureDocument(), "addTrims", args);
+			expect(result.ok).toBe(false);
+			expect(result.document).toBeUndefined();
+		}
+	});
+
+	it("addTrims reports a whole-batch refusal as a failure, not an empty success", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addTrims",
+			JSON.stringify({
+				ranges: [
+					{ startSec: 1, endSec: 2, assetId: "asset_missing" },
+					{ startSec: 3, endSec: 4, assetId: "asset_missing" },
+				],
+			}),
+		);
+		expect(result.ok).toBe(false);
+		expect(result.document).toBeUndefined();
+		const error = JSON.parse(result.resultJson).error;
+		expect(error).toMatch(/\[0\]/);
+		expect(error).toMatch(/\[1\]/);
+		expect(error).toMatch(/Nothing was modified/);
+	});
+
+	it("addZooms lands the reachable regions and names the one covering no clip", () => {
+		const result = executeAgentTool(
+			fixtureDocument(),
+			"addZooms",
+			JSON.stringify({
+				regions: [
+					{ startSec: 1, endSec: 3, depth: 2 },
+					{ startSec: 400, endSec: 402 }, // past the end of the timeline
+					{ startSec: 10, endSec: 12, depth: 4 },
+				],
+			}),
+		);
+
+		expect(result.ok).toBe(true);
+		const payload = JSON.parse(result.resultJson);
+		expect(payload.appliedCount).toBe(2);
+		expect(payload.refused[0].index).toBe(1);
+		// Each applied entry still carries what the unitary tool reports, so the
+		// model can quote the rendered scale instead of the depth ordinal.
+		expect(payload.applied[0].renderedScale).toBe(ZOOM_DEPTH_SCALES[2]);
+		expect(payload.applied[1].renderedScale).toBe(ZOOM_DEPTH_SCALES[4]);
+		expect(result.document?.zoomRanges).toHaveLength(2);
+	});
+
+	it("addZooms leaves overlapping regions overlapping, exactly as one-at-a-time does", () => {
+		// A deliberate non-decision, pinned so it stays deliberate.
+		//
+		// `timelineMap.ts` forbids two zooms of different identities from
+		// overlapping, but only the `set*` path clamps (via `replacePillSpan`) —
+		// no `add*` does, in the agent OR in the UI. So two overlapping addZoom
+		// calls already produce an overlapping document today. Deconflicting
+		// inside the batch would make `addZooms` mean something its unitary
+		// sibling does not, and the model would get different results depending on
+		// how it chose to group its calls. The batch saves round trips; it does
+		// not quietly hold different rules. The bench still flags the overlap
+		// (`editorial.ts` zoomIssues), which is where that argument belongs.
+		const regions = [
+			{ startSec: 1, endSec: 6 },
+			{ startSec: 4, endSec: 9 },
+		];
+
+		let oneAtATime = fixtureDocument();
+		for (const region of regions) {
+			oneAtATime = executeAgentTool(oneAtATime, "addZoom", JSON.stringify(region))
+				.document as AxcutDocument;
+		}
+		const batch = executeAgentTool(fixtureDocument(), "addZooms", JSON.stringify({ regions }));
+
+		const spans = (doc: AxcutDocument) =>
+			doc.zoomRanges.map((z) => ({ startMs: z.startMs, endMs: z.endMs, depth: z.depth }));
+		expect(spans(batch.document as AxcutDocument)).toEqual(spans(oneAtATime));
+		expect(batch.document?.zoomRanges).toHaveLength(2);
 	});
 
 	it("addTrim rejects unknown assets", () => {

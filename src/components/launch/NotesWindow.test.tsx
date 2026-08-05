@@ -1,4 +1,6 @@
 import "@testing-library/jest-dom";
+import { readFileSync } from "node:fs";
+import { resolve } from "node:path";
 import { act, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import type { Editor } from "@tiptap/react";
@@ -393,5 +395,30 @@ describe("NotesWindow teleprompter mode", () => {
 			});
 		});
 		expect(localStorage.getItem("notes")).toBe("<p>Updated</p>");
+	});
+});
+
+describe("NotesWindow stylesheet", () => {
+	// The note body only scrolls because `.tiptap` carries `height: 100%` + `overflow-y: auto`.
+	// Those rules reach the app through a side-effect import, and a side-effect import of a
+	// *CSS module* is tree-shaken out of the production bundle — dev looked fine while the
+	// packaged app let a long note grow past its slot, scroll the whole shell out of view and
+	// take the toolbar with it. A plain `.css` import is always emitted.
+	const read = (file: string) =>
+		readFileSync(resolve(process.cwd(), "src/components/launch", file), "utf8");
+
+	it("is imported as plain CSS, never as a CSS module", () => {
+		const source = read("NotesWindow.tsx");
+
+		expect(source).toContain('import "./NotesWindow.css"');
+		expect(source).not.toContain(".module.css");
+	});
+
+	it("keeps the note body a scroll container", () => {
+		const css = read("NotesWindow.css");
+		const body = css.match(/\.tiptap\s*\{[^}]*\}/)?.[0] ?? "";
+
+		expect(body).toMatch(/height:\s*100%/);
+		expect(body).toMatch(/overflow-y:\s*auto/);
 	});
 });

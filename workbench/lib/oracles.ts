@@ -289,6 +289,24 @@ export function diffMatches(after: AxcutDocument, call: WireCall): boolean {
 	} catch {
 		return true;
 	}
+	// ponytail: a batch tool (`addTrims`, `addZooms`) reports one entry per
+	// element under `applied`, and nothing at the top level this check can
+	// falsify. Reading only the envelope would return "vacuously true" for
+	// exactly the calls that write the most — the check would go dark without a
+	// single test turning red. Every entry has to hold.
+	const applied = result.applied;
+	if (Array.isArray(applied)) {
+		return applied.every((entry) =>
+			entry && typeof entry === "object"
+				? claimSurvives(after, entry as Record<string, unknown>)
+				: true,
+		);
+	}
+	return claimSurvives(after, result);
+}
+
+/** One reported write against the document it claims to have produced. */
+function claimSurvives(after: AxcutDocument, result: Record<string, unknown>): boolean {
 	const idKey = ID_KEYS.find((key) => typeof result[key] === "string");
 	if (!idKey) return true;
 	const id = result[idKey] as string;

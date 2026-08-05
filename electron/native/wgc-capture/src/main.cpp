@@ -58,6 +58,23 @@ struct CaptureControl {
     std::atomic<bool> paused = false;
     std::mutex mutex;
     std::condition_variable cv;
+    // Stop is signalled on its own mutex/CV pair, deliberately not on `mutex`
+    // (the frame-state lock in main) and not on this struct's `mutex` either.
+    //
+    // The frame lock is held across GPU work that cannot be interrupted: the
+    // WGC frame callback's CopyResource, and the video writer's staging-texture
+    // Map/readback. Waiting for a stop behind it made shutdown depend on the
+    // capture pipeline still being healthy -- and a `condition_variable` has to
+    // re-acquire its mutex before `wait` can return, so one wedged driver call
+    // left the main thread parked forever without emitting a single
+    // [stop-timing] line (issue #252). Nothing on this pair touches either
+    // frame lock, so a stop is always observed no matter what the GPU is doing.
+    //
+    // Threads that already hold the frame lock do call requestStop(), so the
+    // lock order is frame mutex -> stopMutex. Nothing ever takes them the other
+    // way round.
+    std::mutex stopMutex;
+    std::condition_variable stopCv;
     std::chrono::steady_clock::time_point pauseStartedAt;
     std::chrono::steady_clock::duration totalPausedDuration{};
     // Shared T0 for every stream's timeline (screen video, audio, webcam).
@@ -86,7 +103,47 @@ struct CaptureControl {
         }
         paused = nextPaused;
     }
+
+    // The single way to ask for a stop. Every caller goes through here so that
+    // a future one cannot forget half of the handshake.
+    void requestStop() {
+        {
+            std::scoped_lock lock(stopMutex);
+            stopRequested = true;
+        }
+        // Publishing the flag under `stopMutex` before notifying is what makes
+        // waitForStop() immune to a wakeup landing between its predicate check
+        // and its enqueue on the CV.
+        stopCv.notify_all();
+        // The frame pipeline parks on `cv`; wake it too so the video writer
+        // notices on this pass instead of after its next 100 ms timeout.
+        cv.notify_all();
+    }
+
+    void waitForStop() {
+        std::unique_lock lock(stopMutex);
+        // Bounded even though requestStop() publishes under `stopMutex`. This
+        // is the one wait in the helper that must never be able to hang, and
+        // re-reading an atomic every 200 ms costs nothing to guarantee it.
+        while (!stopRequested.load()) {
+            stopCv.wait_for(lock, std::chrono::milliseconds(200));
+        }
+    }
 };
+
+int readEnvInt(const char* name, int fallback) {
+    char raw[32]{};
+    const DWORD length = GetEnvironmentVariableA(name, raw, static_cast<DWORD>(sizeof(raw)));
+    if (length == 0 || length >= sizeof(raw)) {
+        return fallback;
+    }
+
+    try {
+        return std::stoi(raw);
+    } catch (...) {
+        return fallback;
+    }
+}
 
 std::wstring utf8ToWide(const std::string& value) {
     if (value.empty()) {
@@ -361,9 +418,19 @@ bool parseConfig(const std::string& json, CaptureConfig& config) {
 void readCaptureCommands(CaptureControl& control, const std::function<void(bool)>& onPauseChanged) {
     std::string line;
     while (std::getline(std::cin, line)) {
+        // The comparisons below are exact, so a stray carriage return would
+        // drop the command in total silence -- the one command this helper
+        // must never fail to act on.
+        while (!line.empty() && (line.back() == '\r' || line.back() == '\n')) {
+            line.pop_back();
+        }
         if (line == "stop" || line == "q" || line == "quit") {
-            control.stopRequested = true;
-            control.cv.notify_all();
+            // Acknowledged before anything else runs. Issue #252 was reported
+            // with no way to tell "the helper never saw the stop" apart from
+            // "the helper saw it and then wedged"; this line settles that in
+            // every future report.
+            std::cerr << "[stop-timing] step=command-received elapsed_ms=0" << std::endl;
+            control.requestStop();
             return;
         }
         if (line == "pause") {
@@ -381,8 +448,10 @@ void readCaptureCommands(CaptureControl& control, const std::function<void(bool)
             continue;
         }
     }
-    control.stopRequested = true;
-    control.cv.notify_all();
+    // stdin closed: the parent is gone or ended the channel, which is also a
+    // stop. Electron relies on this as a backstop for a dropped `stop` write.
+    std::cerr << "[stop-timing] step=stdin-eof elapsed_ms=0" << std::endl;
+    control.requestStop();
 }
 
 } // namespace
@@ -409,6 +478,13 @@ int main(int argc, char* argv[]) {
     const bool injectDefaultSinkWriterFailureOnce =
         injectDefaultSinkWriterFailureLength == 1 &&
         injectDefaultSinkWriterFailure[0] == '1';
+
+    // Test-only: stall the video writer inside the frame lock the way a wedged
+    // GPU readback does. Issue #252 only reproduced on one multi-adapter machine
+    // with virtual display drivers; this makes the same failure reachable on
+    // ordinary hardware, so the stop path can be regression-tested at all.
+    const int testStallReadbackMs =
+        std::max(0, readEnvInt("OPENSCREEN_WGC_TEST_STALL_READBACK_MS", 0));
 
     std::cout << "{\"event\":\"ready\",\"schemaVersion\":2}" << std::endl;
 
@@ -599,8 +675,7 @@ int main(int argc, char* argv[]) {
             desc.MiscFlags = 0;
             if (FAILED(session.device()->CreateTexture2D(&desc, nullptr, &latestFrameTexture))) {
                 encodeFailed = true;
-                control.stopRequested = true;
-                control.cv.notify_all();
+                control.requestStop();
                 return;
             }
         }
@@ -711,8 +786,7 @@ int main(int argc, char* argv[]) {
                         hasWebcamSample = webcamEncoder.captureBgraSample(webcamFrame, webcamTimestampHns, webcamSample);
                         if (!hasWebcamSample) {
                             encodeFailed = true;
-                            control.stopRequested = true;
-                            control.cv.notify_all();
+                            control.requestStop();
                             break;
                         }
                         lastWebcamTimestampHns = webcamTimestampHns;
@@ -723,6 +797,9 @@ int main(int argc, char* argv[]) {
                             nextWebcamWriteDueHns = targetElapsedHns + nominalWebcamIntervalHns;
                         }
                     }
+                }
+                if (testStallReadbackMs > 0) {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(testStallReadbackMs));
                 }
                 if (latestFrameTexture) {
                     // captureVideoSample performs the GPU readback
@@ -737,8 +814,7 @@ int main(int argc, char* argv[]) {
                         videoSample);
                     if (!hasVideoSample) {
                         encodeFailed = true;
-                        control.stopRequested = true;
-                        control.cv.notify_all();
+                        control.requestStop();
                         break;
                     }
                     lastEncodedVideoTimestampHns = frameTimestampHns;
@@ -748,22 +824,22 @@ int main(int argc, char* argv[]) {
             // Submit the captured samples to their sink writers OUTSIDE
             // `mutex`. IMFSinkWriter::WriteSample runs the H.264 encode
             // synchronously and can be slow (especially the software encoder
-            // fallback used when preferSoftwareEncoder is set). Holding
-            // `mutex` across it would block the main thread's stop-wait
-            // (which locks the same mutex to check control.stopRequested)
-            // for as long as this thread keeps re-acquiring the lock faster
-            // than the main thread can, hanging the helper indefinitely
-            // after a stop request (issue #115).
+            // fallback used when preferSoftwareEncoder is set), and every
+            // millisecond it holds `mutex` is a millisecond the WGC frame
+            // callback spends queued behind it dropping frames (issue #115).
+            //
+            // This no longer has anything to do with noticing a stop -- that
+            // moved off `mutex` entirely (see CaptureControl::stopMutex) after
+            // issue #252 showed the readback below can wedge inside the lock
+            // regardless of how briefly WriteSample is held.
             if (hasWebcamSample && !webcamEncoder.submitVideoSample(webcamSample.Get())) {
                 encodeFailed = true;
-                control.stopRequested = true;
-                control.cv.notify_all();
+                control.requestStop();
                 break;
             }
             if (hasVideoSample && !encoder.submitVideoSample(videoSample.Get())) {
                 encodeFailed = true;
-                control.stopRequested = true;
-                control.cv.notify_all();
+                control.requestStop();
                 break;
             }
 
@@ -800,8 +876,7 @@ int main(int argc, char* argv[]) {
             [&](const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns) {
                 if (!encoder.writeAudio(data, byteCount, timestampHns, durationHns)) {
                     encodeFailed = true;
-                    control.stopRequested = true;
-                    control.cv.notify_all();
+                    control.requestStop();
                     return false;
                 }
                 return true;
@@ -899,27 +974,33 @@ int main(int argc, char* argv[]) {
         }
     });
 
+    // The lock covers the wait and the decision, and nothing else. Every
+    // teardown call below runs outside it, because session.stop() waits for any
+    // in-flight WGC callback to finish -- and those callbacks block on this very
+    // mutex. Tearing down while holding it deadlocks the two against each other,
+    // on the one path the shutdown watchdog does not cover.
+    bool firstFrameArrived = false;
     {
         std::unique_lock lock(mutex);
         const bool started = control.cv.wait_for(lock, std::chrono::seconds(10), [&] {
             return firstFrameWritten.load() || control.stopRequested.load();
         });
-        if (!started || !firstFrameWritten) {
-            control.stopRequested = true;
-            control.cv.notify_all();
-            if (stdinThread.joinable()) {
-                stdinThread.detach();
-            }
-            microphoneCapture.stop();
-            loopbackCapture.stop();
-            webcamCapture.stop();
-            if (audioMixer) {
-                audioMixer->stop();
-            }
-            session.stop();
-            std::cerr << "ERROR: Timed out waiting for first WGC frame" << std::endl;
-            return 1;
+        firstFrameArrived = started && firstFrameWritten.load();
+    }
+    if (!firstFrameArrived) {
+        control.requestStop();
+        if (stdinThread.joinable()) {
+            stdinThread.detach();
         }
+        microphoneCapture.stop();
+        loopbackCapture.stop();
+        webcamCapture.stop();
+        if (audioMixer) {
+            audioMixer->stop();
+        }
+        session.stop();
+        std::cerr << "ERROR: Timed out waiting for first WGC frame" << std::endl;
+        return 1;
     }
 
     if (audioMixer) {
@@ -931,43 +1012,175 @@ int main(int argc, char* argv[]) {
     std::cout << "{\"event\":\"recording-started\",\"schemaVersion\":2}" << std::endl;
     std::cout << "Recording started" << std::endl;
 
-    {
-        std::unique_lock lock(mutex);
-        control.cv.wait(lock, [&] {
-            return control.stopRequested.load();
-        });
-    }
+    control.waitForStop();
 
     const auto stopStart = std::chrono::steady_clock::now();
-    auto logStopStep = [&](const char* step) {
-        const auto ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+    auto stopElapsedMs = [&] {
+        return std::chrono::duration_cast<std::chrono::milliseconds>(
             std::chrono::steady_clock::now() - stopStart).count();
-        std::cerr << "[stop-timing] step=" << step << " elapsed_ms=" << ms << std::endl;
+    };
+    // Which step we are inside right now, as opposed to which ones finished.
+    // Issue #252 was reported with an empty [stop-timing] log precisely because
+    // the old instrumentation only spoke after a step returned, which is the
+    // one thing a hung step never does.
+    std::atomic<const char*> currentStopStep{"stop-wait"};
+    std::atomic<bool> shutdownComplete = false;
+
+    // A ceiling on the whole shutdown, and a tighter one per step.
+    //
+    // The ceiling exists because the app is waiting on the other end of the
+    // pipe: NATIVE_WINDOWS_CAPTURE_STOP_TIMEOUT_MS in
+    // electron/recording/nativeWindowsCaptureStop.ts must stay comfortably
+    // above this, so the helper always ends itself rather than being killed
+    // mid-finalize by a parent that ran out of patience. Change one and change
+    // the other.
+    //
+    // The per-step budget is tighter because most steps fail differently:
+    // stopping threads and closing WGC either completes in milliseconds or is
+    // wedged inside a driver, and there is no slow-but-working case worth
+    // waiting for -- waiting is exactly what cost issue #252 a minute of the
+    // user's time. Finalizing is the opposite. IMFSinkWriter::Finalize drains
+    // the encoder and writes the MP4 index, which on a long recording through
+    // the software encoder legitimately takes seconds (issue #34 raised the
+    // app-side timeout for precisely this), so it gets whatever is left of the
+    // ceiling rather than a step budget of its own.
+    const int shutdownBudgetMs = std::max(2000, readEnvInt("OPENSCREEN_WGC_STOP_BUDGET_MS", 50000));
+    const int stepBudgetMs =
+        std::min(shutdownBudgetMs, std::max(1000, readEnvInt("OPENSCREEN_WGC_STEP_BUDGET_MS", 8000)));
+    std::atomic<int64_t> currentStepDeadlineMs{stepBudgetMs};
+
+    auto beginStopStep = [&](const char* step, int budgetMs) {
+        currentStopStep = step;
+        // Clamped to the ceiling: no sequence of individually-patient steps can
+        // add up to a shutdown the app has already given up on.
+        currentStepDeadlineMs =
+            std::min<int64_t>(stopElapsedMs() + budgetMs, shutdownBudgetMs);
+        std::cerr << "[stop-timing] step=" << step << " elapsed_ms=" << stopElapsedMs()
+                  << " phase=begin" << std::endl;
+    };
+    // `step=<name> elapsed_ms=<n>` has to stay the leading shape of every line:
+    // scripts/diagnostic-tool/diagnostic.mjs matches on it, so a trailing
+    // `phase=` is additive but a leading one would hide the line from the tool.
+    auto logStopStep = [&](const char* step) {
+        std::cerr << "[stop-timing] step=" << step << " elapsed_ms=" << stopElapsedMs() << std::endl;
     };
 
+    // None of the steps below can be interrupted: a wedged GPU readback, a
+    // camera that stops delivering samples, or a WinRT Close() that never
+    // returns would each leave the helper alive forever, which the app sees as a
+    // freeze ending in a lost recording (issue #252). Give each step a deadline
+    // and end the process if one blows through it, naming the step so the next
+    // bug report starts where this one had to guess. Joinable rather than
+    // detached: it references main's locals, and its poll interval makes the
+    // join at the end cost at most one tick.
+    std::thread shutdownWatchdog([&] {
+        while (!shutdownComplete.load()) {
+            // Re-read the flag as part of the same decision as the deadline.
+            // Checking them separately let a shutdown that completed during the
+            // sleep still be killed.
+            if (stopElapsedMs() >= currentStepDeadlineMs.load() && !shutdownComplete.load()) {
+                const char* step = currentStopStep.load();
+                std::cerr << "[stop-timing] step=" << step << " elapsed_ms=" << stopElapsedMs()
+                          << " phase=abandoned" << std::endl;
+                std::cout << "{\"event\":\"stop-timeout\",\"schemaVersion\":2,\"step\":\"" << step
+                          << "\"}" << std::endl;
+                std::cout.flush();
+                std::cerr.flush();
+                // TerminateProcess rather than exit(): exit() runs static
+                // destructors on this thread, and ~MFEncoder finalizes the sink
+                // writer behind the very lock a wedged encoder would be holding.
+                // This thread exists to end the process, not to queue behind the
+                // hang it is reporting.
+                TerminateProcess(GetCurrentProcess(), 3);
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
+    });
+
+    // Quiesce the frame producer first. Until WGC is closed, callbacks keep
+    // arriving and keep taking the frame lock, racing the writer's last pass on
+    // the shared D3D context at exactly the moment we can least afford a stall.
+    beginStopStep("wgc-quiesce", stepBudgetMs);
+    // The drain outcome decides the shape of the whole rest of the shutdown:
+    // a callback that never came back makes wgc-session-close skip the device
+    // release, so a report that does not say which happened cannot be read.
+    const bool wgcDrained = session.quiesceCapture();
+    std::cerr << "[stop-timing] step=wgc-quiesce elapsed_ms=" << stopElapsedMs()
+              << " drained=" << (wgcDrained ? "true" : "false") << std::endl;
+    beginStopStep("microphone", stepBudgetMs);
     microphoneCapture.stop();
     logStopStep("microphone");
+    beginStopStep("loopback", stepBudgetMs);
     loopbackCapture.stop();
     logStopStep("loopback");
+    beginStopStep("webcam", stepBudgetMs);
     webcamCapture.stop();
     logStopStep("webcam");
+    beginStopStep("audio-mixer", stepBudgetMs);
     if (audioMixer) {
         audioMixer->stop();
     }
     logStopStep("audio-mixer");
+    beginStopStep("video-writer-join", stepBudgetMs);
     stopVideoWriter();
     logStopStep("video-writer-join");
-    session.stop();
-    logStopStep("wgc-session-close");
-    {
-        std::scoped_lock lock(mutex);
-        encoder.finalize();
-        logStopStep("encoder-finalize");
+    // No frame lock here, and the ordering above is what makes that safe rather
+    // than incidental: stopVideoWriter() joined the only thread that calls into
+    // the encoder's GPU readback, and audioMixer->stop() joined the only other
+    // thread that writes to it. MFEncoder's own writerMutex_ deliberately does
+    // NOT cover copyFrameToBuffer, so finalizing before those joins would race
+    // the staging texture -- do not reorder these.
+    beginStopStep("encoder-finalize", shutdownBudgetMs);
+    const bool screenFinalized = encoder.finalize();
+    logStopStep("encoder-finalize");
+    if (!screenFinalized) {
+        std::cerr << "ERROR: Failed to finalize the recording" << std::endl;
+    }
+
+    // Report success the moment the screen file is durable, not at the end of
+    // the process's life. Finalize is what writes the MP4 index; everything
+    // after it is housekeeping that cannot improve that file but can still
+    // wedge on a bad driver. Announcing here means a watchdog kill during
+    // teardown costs the user nothing -- the app reads this line and keeps the
+    // recording.
+    //
+    // Gated on the SCREEN finalize alone, and printed before the webcam's.
+    // The app treats this line as proof the screen file is playable, so a
+    // failed screen Finalize must not reach it. The webcam is a second,
+    // optional file and must not be able to veto the first: letting it decide
+    // meant one bad camera clip discarded a complete capture, and because both
+    // finalizes share the same ceiling, a slow screen finalize could leave the
+    // webcam step no budget at all and get the process killed before this line
+    // ever ran. A webcam that fails below is an error on stderr and a non-zero
+    // exit -- not a lost recording.
+    if (!encodeFailed && screenFinalized) {
+        std::cout << "{\"event\":\"recording-stopped\",\"schemaVersion\":2,\"screenPath\":\""
+                  << jsonEscape(config.outputPath) << "\"";
         if (writeSeparateWebcam) {
-            webcamEncoder.finalize();
-            logStopStep("webcam-encoder-finalize");
+            std::cout << ",\"webcamPath\":\"" << jsonEscape(config.webcamOutputPath) << "\"";
+        }
+        std::cout << "}" << std::endl;
+        std::cout << "Recording stopped. Output path: " << config.outputPath << std::endl;
+    }
+
+    bool webcamFinalized = true;
+    if (writeSeparateWebcam) {
+        beginStopStep("webcam-encoder-finalize", shutdownBudgetMs);
+        webcamFinalized = webcamEncoder.finalize();
+        logStopStep("webcam-encoder-finalize");
+        if (!webcamFinalized) {
+            std::cerr << "ERROR: Failed to finalize the webcam recording" << std::endl;
         }
     }
+
+    // Releasing the device goes last: by now no thread can still be holding the
+    // D3D context.
+    beginStopStep("wgc-session-close", stepBudgetMs);
+    session.stop();
+    logStopStep("wgc-session-close");
+
+    shutdownComplete = true;
+    shutdownWatchdog.join();
 
     if (stdinThread.joinable()) {
         stdinThread.detach();
@@ -977,13 +1190,9 @@ int main(int argc, char* argv[]) {
         std::cerr << "ERROR: Failed to encode WGC frame" << std::endl;
         return 1;
     }
-
-    std::cout << "{\"event\":\"recording-stopped\",\"schemaVersion\":2,\"screenPath\":\""
-              << jsonEscape(config.outputPath) << "\"";
-    if (writeSeparateWebcam) {
-        std::cout << ",\"webcamPath\":\"" << jsonEscape(config.webcamOutputPath) << "\"";
+    if (!screenFinalized || !webcamFinalized) {
+        return 1;
     }
-    std::cout << "}" << std::endl;
-    std::cout << "Recording stopped. Output path: " << config.outputPath << std::endl;
+
     return 0;
 }

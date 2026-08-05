@@ -149,8 +149,12 @@ function buildConfig(opts) {
 function parseStopTiming(stderrText) {
 	const lines = [];
 	for (const line of stderrText.split(/\r?\n/)) {
-		const m = line.match(/\[stop-timing\]\s+step=(\S+)\s+elapsed_ms=(\d+)/);
-		if (m) lines.push({ step: m[1], elapsedMs: Number(m[2]) });
+		// `phase` is the point of the whole log: `begin` is the step being
+		// entered, `abandoned` names the step the shutdown watchdog gave up on.
+		// Dropping it left the report unable to say which step hung -- the one
+		// question a #252 bug report has to answer.
+		const m = line.match(/\[stop-timing\]\s+step=(\S+)\s+elapsed_ms=(\d+)(?:\s+phase=(\S+))?/);
+		if (m) lines.push({ step: m[1], elapsedMs: Number(m[2]), phase: m[3] ?? "end" });
 	}
 	return lines;
 }
@@ -303,7 +307,14 @@ async function main() {
 	console.log(`[diag] stop elapsed:     ${report.stopElapsedMs}ms`);
 	console.log(`[diag] stop timing steps:`);
 	for (const entry of report.stopTiming) {
-		console.log(`[diag]   ${entry.step.padEnd(28)} ${entry.elapsedMs}ms`);
+		// Only the outcome of each step, so the summary reads as one line per
+		// step rather than an entry-and-exit pair, and an abandoned step is
+		// impossible to miss.
+		if (entry.phase === "begin") {
+			continue;
+		}
+		const suffix = entry.phase === "end" ? "" : `  <-- ${entry.phase.toUpperCase()}`;
+		console.log(`[diag]   ${entry.step.padEnd(28)} ${entry.elapsedMs}ms${suffix}`);
 	}
 	console.log(`[diag] report:           ${outputPath}`);
 }

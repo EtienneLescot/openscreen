@@ -71,6 +71,10 @@ import { createCursorRecordingSession } from "../native-bridge/cursor/recording/
 import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
 import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/pipeWireCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
+import {
+	terminateNativeWindowsCapture,
+	waitForNativeWindowsCaptureStop,
+} from "../recording/nativeWindowsCaptureStop";
 import { patchWebmDurationOnDisk } from "../recording/webm-duration";
 import { reindexRecordingOnDisk } from "../recording/webm-seek-index";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
@@ -439,6 +443,12 @@ type AttachNativeMacWebcamRecordingInput = {
 	recordingId?: number;
 	webcam?: RecordedVideoAssetInput;
 	cursorCaptureMode?: CursorCaptureMode;
+	/**
+	 * Webcam clip duration (ms), head start included. A streamed webcam file carries
+	 * no Duration header and the renderer no longer holds the blob to patch, so the
+	 * main process repairs the container on disk with this value.
+	 */
+	durationMs?: number;
 	/** See {@link ProjectMedia.webcamOffsetMs}. */
 	webcamOffsetMs?: number;
 };
@@ -527,7 +537,74 @@ let nativeWindowsCursorRecordingStartMs = 0;
 let nativeWindowsPauseStartedAtMs: number | null = null;
 let nativeWindowsPauseRanges: Array<{ startMs: number; endMs: number }> = [];
 let nativeWindowsIsPaused = false;
-const NATIVE_WINDOWS_CAPTURE_STOP_TIMEOUT_MS = 60_000;
+/** Cuts a surviving helper's output loose so it cannot pollute the next recording. */
+let nativeWindowsCaptureDrainCleanup: (() => void) | null = null;
+
+function detachNativeWindowsCaptureOutputDrain() {
+	nativeWindowsCaptureDrainCleanup?.();
+	nativeWindowsCaptureDrainCleanup = null;
+}
+
+function resetNativeWindowsCaptureState() {
+	nativeWindowsCaptureDrainCleanup = null;
+	nativeWindowsCaptureProcess = null;
+	nativeWindowsCaptureTargetPath = null;
+	nativeWindowsCaptureWebcamTargetPath = null;
+	nativeWindowsCaptureRecordingId = null;
+	nativeWindowsCursorOffsetMs = 0;
+	nativeWindowsCursorCaptureMode = "editable-overlay";
+	nativeWindowsCursorRecordingStartMs = 0;
+	nativeWindowsPauseStartedAtMs = null;
+	nativeWindowsPauseRanges = [];
+	nativeWindowsIsPaused = false;
+}
+
+/**
+ * An MP4 the helper never indexed is a few bytes of header at most. Anything
+ * larger might be a real recording, and deleting one of those to tidy up after
+ * a failed stop is a far worse outcome than leaving a stray file behind.
+ */
+const NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES = 64 * 1024;
+
+/**
+ * Best-effort removal of the files a failed or discarded native Windows capture
+ * left behind. Each removal is isolated: a helper that outlived its kill still
+ * holds the MP4 open on Windows, and an EBUSY there must not mask why we were
+ * cleaning up in the first place.
+ */
+async function removeNativeWindowsCaptureOutputs(
+	screenVideoPath: string | null,
+	webcamVideoPath: string | null,
+	options: { onlyIfUnusable?: boolean } = {},
+) {
+	const targets = [
+		screenVideoPath,
+		webcamVideoPath,
+		screenVideoPath ? `${screenVideoPath}.cursor.json` : null,
+	];
+
+	for (const target of targets) {
+		if (!target || !isPathWithinDir(target, RECORDINGS_DIR)) {
+			continue;
+		}
+		try {
+			if (options.onlyIfUnusable && target !== `${screenVideoPath}.cursor.json`) {
+				const stats = await fs.stat(target).catch(() => null);
+				if (stats && stats.size >= NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES) {
+					console.warn(
+						"[native-wgc] keeping a capture output that may still be playable:",
+						target,
+						stats.size,
+					);
+					continue;
+				}
+			}
+			await fs.rm(target, { force: true });
+		} catch (error) {
+			console.warn("[native-wgc] could not remove leftover capture output:", target, error);
+		}
+	}
+}
 let nativeMacCaptureProcess: ChildProcessWithoutNullStreams | null = null;
 let nativeMacCaptureOutput = "";
 let nativeMacCaptureTargetPath: string | null = null;
@@ -1132,8 +1209,10 @@ function waitForNativeWindowsCaptureStart(proc: ChildProcessWithoutNullStreams) 
 			reject(new Error("Timed out waiting for native Windows capture to start"));
 		}, 12000);
 
-		const onOutput = (chunk: Buffer) => {
-			nativeWindowsCaptureOutput += chunk.toString();
+		// Observes only. `attachNativeWindowsCaptureOutputDrain` is the single
+		// writer of `nativeWindowsCaptureOutput` and is registered first, so the
+		// chunk that triggers this call is already in the buffer.
+		const onOutput = () => {
 			if (nativeWindowsCaptureOutput.includes("Recording started")) {
 				cleanup();
 				resolve();
@@ -1167,59 +1246,70 @@ function waitForNativeWindowsCaptureStart(proc: ChildProcessWithoutNullStreams) 
 	});
 }
 
-function waitForNativeWindowsCaptureStop(proc: ChildProcessWithoutNullStreams) {
-	return new Promise<string>((resolve, reject) => {
-		const timer = setTimeout(() => {
-			cleanup();
-			if (!proc.killed) {
-				proc.kill();
-			}
-			reject(
-				new Error(
-					`Timed out waiting for native Windows capture to stop. Output path: ${
-						nativeWindowsCaptureTargetPath ?? "unknown"
-					}. Output: ${nativeWindowsCaptureOutput.trim()}`,
-				),
-			);
-		}, NATIVE_WINDOWS_CAPTURE_STOP_TIMEOUT_MS);
-		const onOutput = (chunk: Buffer) => {
-			nativeWindowsCaptureOutput += chunk.toString();
-		};
-		const onClose = (code: number | null) => {
-			cleanup();
-			const match = nativeWindowsCaptureOutput.match(/Recording stopped\. Output path: (.+)/);
-			if (match?.[1]) {
-				resolve(match[1].trim());
-				return;
-			}
-			if (code === 0 && nativeWindowsCaptureTargetPath) {
-				resolve(nativeWindowsCaptureTargetPath);
-				return;
-			}
-			reject(
-				new Error(
-					nativeWindowsCaptureOutput.trim() ||
-						`Native Windows capture exited with code=${code ?? "unknown"}`,
-				),
-			);
-		};
-		const onError = (error: Error) => {
-			cleanup();
-			reject(error);
-		};
-		const cleanup = () => {
-			clearTimeout(timer);
-			proc.stdout.off("data", onOutput);
-			proc.stderr.off("data", onOutput);
-			proc.off("close", onClose);
-			proc.off("error", onError);
-		};
+/**
+ * Keeps reading the helper for as long as it lives.
+ *
+ * `waitForNativeWindowsCaptureStart` drops every listener the moment it sees
+ * "Recording started", so until this existed the whole recording ran unobserved:
+ * helper warnings and `[stop-timing]` diagnostics were discarded, which is why
+ * issue #252 had no helper-side evidence from a real app run and had to be
+ * reproduced by driving the .exe by hand. macOS has had this since it shipped
+ * (`attachNativeMacCaptureOutputDrain`); Windows never did.
+ */
+function attachNativeWindowsCaptureOutputDrain(proc: ChildProcessWithoutNullStreams) {
+	const drain = (chunk: Buffer) => {
+		nativeWindowsCaptureOutput += chunk.toString();
+	};
+	const cleanup = () => {
+		proc.stdout.off("data", drain);
+		proc.stderr.off("data", drain);
+	};
 
-		proc.stdout.on("data", onOutput);
-		proc.stderr.on("data", onOutput);
-		proc.once("close", onClose);
-		proc.once("error", onError);
+	proc.stdout.on("data", drain);
+	proc.stderr.on("data", drain);
+	proc.once("close", cleanup);
+	// An 'error' event with no listener throws, and in the main process that is
+	// an uncaught exception rather than a rejected promise. Both streams need a
+	// sink for the whole life of the helper: stdin raises EPIPE when the helper
+	// died before we wrote to it, and `kill()` on a wedged process re-emits its
+	// failure on the ChildProcess itself.
+	// All four emitters, not just stdin: `cleanup` only drops 'data', so an
+	// abandoned-but-still-alive helper leaves these pipes open with no consumer,
+	// and an ECONNRESET when the OS finally reaps it would take down the main
+	// process.
+	proc.stdin.on("error", (error) => {
+		console.warn("[native-wgc] helper stdin error:", error);
 	});
+	proc.stdout.on("error", (error) => {
+		console.warn("[native-wgc] helper stdout error:", error);
+	});
+	proc.stderr.on("error", (error) => {
+		console.warn("[native-wgc] helper stderr error:", error);
+	});
+	proc.on("error", (error) => {
+		console.warn("[native-wgc] helper process error:", error);
+	});
+
+	// Returned so an abandoned helper can be cut loose. A process that survived
+	// both kill attempts keeps writing, and `nativeWindowsCaptureOutput` is
+	// shared with whatever recording starts next.
+	return cleanup;
+}
+
+/**
+ * Sends `stop` and closes the command channel behind it.
+ *
+ * The helper treats stdin EOF as a stop too, so ending the stream is a free
+ * second signal if the write itself is lost.
+ */
+function sendNativeWindowsStopCommand(proc: ChildProcessWithoutNullStreams) {
+	if (!proc.stdin.writable) {
+		return false;
+	}
+
+	proc.stdin.write("stop\n");
+	proc.stdin.end();
+	return true;
 }
 
 function readNativeWindowsWebcamFormat(output: string) {
@@ -2323,6 +2413,8 @@ export function registerIpcHandlers(
 					windowsHide: true,
 				});
 				nativeWindowsCaptureProcess = proc;
+				nativeWindowsCaptureDrainCleanup = attachNativeWindowsCaptureOutputDrain(proc);
+				console.info("[native-wgc] helper spawned", { pid: proc.pid });
 
 				await waitForNativeWindowsCaptureStart(proc);
 				const captureStartedAtMs = Date.now();
@@ -2354,16 +2446,8 @@ export function registerIpcHandlers(
 			} catch (error) {
 				console.error("Failed to start native Windows recording:", error);
 				nativeWindowsCaptureProcess?.kill();
-				nativeWindowsCaptureProcess = null;
-				nativeWindowsCaptureTargetPath = null;
-				nativeWindowsCaptureWebcamTargetPath = null;
-				nativeWindowsCaptureRecordingId = null;
-				nativeWindowsCursorOffsetMs = 0;
-				nativeWindowsCursorCaptureMode = "editable-overlay";
-				nativeWindowsCursorRecordingStartMs = 0;
-				nativeWindowsPauseStartedAtMs = null;
-				nativeWindowsPauseRanges = [];
-				nativeWindowsIsPaused = false;
+				detachNativeWindowsCaptureOutputDrain();
+				resetNativeWindowsCaptureState();
 				await stopCursorRecording();
 				return { success: false, error: String(error) };
 			}
@@ -2621,12 +2705,84 @@ export function registerIpcHandlers(
 			return { success: false, error: "Native Windows capture is not running." };
 		}
 
+		// Discarding does not need a finalized file, so it must not wait for one.
+		// Cancel and Restart both route here, and making them sit through the
+		// full stop handshake meant a wedged helper could not be escaped from at
+		// all -- the user waited out the timeout only to be told the recording
+		// failed, then waited it out again to cancel. Linux has always done this;
+		// Windows never did.
+		if (discard) {
+			try {
+				completeNativeWindowsCursorPauseRange();
+				await stopCursorRecording();
+				pendingCursorRecordingData = null;
+				const exited = await terminateNativeWindowsCapture(proc);
+				if (!exited) {
+					detachNativeWindowsCaptureOutputDrain();
+				}
+				await removeNativeWindowsCaptureOutputs(preferredPath, preferredWebcamPath);
+				return { success: true, discarded: true };
+			} finally {
+				// Unconditional. Killing a wedged helper can itself throw, and
+				// leaving the handle set would make every later recording fail
+				// with "already running" against a process nobody can stop.
+				resetNativeWindowsCaptureState();
+				if (onRecordingStateChange) {
+					onRecordingStateChange(false, (selectedSource || { name: "Screen" }).name);
+				}
+			}
+		}
+
 		try {
 			completeNativeWindowsCursorPauseRange();
-			const stoppedPathPromise = waitForNativeWindowsCaptureStop(proc);
-			proc.stdin.write("stop\n");
-			const stoppedPath = await stoppedPathPromise;
-			const screenVideoPath = stoppedPath || preferredPath;
+			const stopPromise = waitForNativeWindowsCaptureStop({
+				proc,
+				targetPath: preferredPath,
+				readOutput: () => nativeWindowsCaptureOutput,
+			});
+			if (!sendNativeWindowsStopCommand(proc)) {
+				console.warn("[native-wgc] stop command channel was already closed");
+			}
+			const stopResult = await stopPromise;
+			if (!stopResult.ok) {
+				console.error("[native-wgc] stop failed", {
+					reason: stopResult.reason,
+					exited: stopResult.exited,
+					pid: proc.pid,
+					output: stopResult.message,
+				});
+				if (!stopResult.exited) {
+					detachNativeWindowsCaptureOutputDrain();
+				}
+				await stopCursorRecording();
+				// Same as the discard path. `startCursorRecording` clears this on
+				// the next recording anyway, so this is not what keeps the samples
+				// from being written next to someone else's video -- it just stops
+				// a lost take's telemetry from sitting in memory until then.
+				pendingCursorRecordingData = null;
+				// The helper never announced a finalized file, so what is on disk
+				// is almost certainly an unindexed stub, and leaving those behind
+				// just accumulates unplayable recordings the user cannot explain.
+				// Almost: size-gate it, because throwing away a recording to tidy
+				// up after a failed stop is the worse mistake of the two.
+				await removeNativeWindowsCaptureOutputs(preferredPath, preferredWebcamPath, {
+					onlyIfUnusable: true,
+				});
+				// The helper log goes to console/diagnostics above, not into this
+				// string: it ends up in a toast, and pasting an entire capture log
+				// into the HUD tells the user nothing they can act on.
+				return {
+					success: false,
+					reason: stopResult.reason,
+					error:
+						stopResult.reason === "stop-timeout"
+							? "Timed out waiting for native Windows capture to stop. The recording could not be saved."
+							: stopResult.message.split(/\r?\n/).filter(Boolean).at(-1) ||
+								"Native Windows capture failed.",
+				};
+			}
+
+			const screenVideoPath = stopResult.screenVideoPath || preferredPath;
 			if (!screenVideoPath) {
 				throw new Error("Native Windows capture did not return an output path.");
 			}
@@ -2635,15 +2791,6 @@ export function registerIpcHandlers(
 				await stopCursorRecording();
 			} else {
 				pendingCursorRecordingData = null;
-			}
-			if (discard) {
-				pendingCursorRecordingData = null;
-				await Promise.all([
-					fs.rm(screenVideoPath, { force: true }),
-					preferredWebcamPath ? fs.rm(preferredWebcamPath, { force: true }) : Promise.resolve(),
-					fs.rm(`${screenVideoPath}.cursor.json`, { force: true }),
-				]);
-				return { success: true, discarded: true };
 			}
 
 			if (cursorCaptureMode === "editable-overlay") {
@@ -2684,16 +2831,7 @@ export function registerIpcHandlers(
 			await stopCursorRecording();
 			return { success: false, error: String(error) };
 		} finally {
-			nativeWindowsCaptureProcess = null;
-			nativeWindowsCaptureTargetPath = null;
-			nativeWindowsCaptureWebcamTargetPath = null;
-			nativeWindowsCaptureRecordingId = null;
-			nativeWindowsCursorOffsetMs = 0;
-			nativeWindowsCursorCaptureMode = "editable-overlay";
-			nativeWindowsCursorRecordingStartMs = 0;
-			nativeWindowsPauseStartedAtMs = null;
-			nativeWindowsPauseRanges = [];
-			nativeWindowsIsPaused = false;
+			resetNativeWindowsCaptureState();
 			const source = selectedSource || { name: "Screen" };
 			if (onRecordingStateChange) {
 				onRecordingStateChange(false, source.name);
@@ -2788,6 +2926,13 @@ export function registerIpcHandlers(
 		}
 	});
 
+	// On-disk write streams for in-progress recordings, keyed by output file name.
+	// Chunks append as they arrive so the renderer never buffers the full video (#616).
+	// Declared here because both the webcam attach below and store-recorded-session
+	// finalize through the same registry.
+	const recordingStreams = new RecordingStreamRegistry();
+	registerRecordingStreamHandlers(ipcMain, recordingStreams, resolveRecordingOutputPath);
+
 	/**
 	 * Writes a browser-recorded webcam clip next to a natively-recorded screen
 	 * video and rewrites the session manifest to include both.
@@ -2817,7 +2962,7 @@ export function registerIpcHandlers(
 
 				await fs.access(screenVideoPath, fsConstants.R_OK);
 
-				if (!payload.webcam?.fileName || !payload.webcam.videoData) {
+				if (!payload.webcam?.fileName) {
 					return {
 						success: false,
 						error: `Native ${platformLabel} webcam attachment is missing video data.`,
@@ -2825,7 +2970,31 @@ export function registerIpcHandlers(
 				}
 
 				const webcamVideoPath = resolveRecordingOutputPath(payload.webcam.fileName);
-				await fs.writeFile(webcamVideoPath, Buffer.from(payload.webcam.videoData));
+				// A streamed webcam arrives with an empty buffer: its bytes are already on
+				// disk, so close the stream and keep the file rather than writing it here.
+				// Nothing multi-gigabyte crosses IPC or gets flattened into one Buffer (#253).
+				const webcamStreamed = await finalizeRecordingFile(
+					recordingStreams,
+					payload.webcam.fileName,
+					webcamVideoPath,
+					payload.webcam.videoData,
+				);
+				// Mirrors finalizeRecordingFile's own condition, so this fires exactly when
+				// it wrote nothing and the session would point at a file that isn't there.
+				if (
+					!webcamStreamed &&
+					!(payload.webcam.videoData && payload.webcam.videoData.byteLength > 0)
+				) {
+					return {
+						success: false,
+						error: `Native ${platformLabel} webcam attachment is missing video data.`,
+					};
+				}
+				// Streamed files lack the WebM Duration header, which the editor needs to
+				// scale its timeline. Best-effort: a failed repair leaves the clip intact.
+				if (webcamStreamed && isValidDurationMs(payload.durationMs)) {
+					await repairRecordingContainer(webcamVideoPath, payload.durationMs);
+				}
 
 				const createdAt =
 					typeof payload.recordingId === "number" && Number.isFinite(payload.recordingId)
@@ -2891,11 +3060,6 @@ export function registerIpcHandlers(
 			return attachNativeWebcamRecording("Linux", payload);
 		},
 	);
-
-	// On-disk write streams for in-progress recordings, keyed by output file name.
-	// Chunks append as they arrive so the renderer never buffers the full video (#616).
-	const recordingStreams = new RecordingStreamRegistry();
-	registerRecordingStreamHandlers(ipcMain, recordingStreams, resolveRecordingOutputPath);
 
 	ipcMain.handle("store-recorded-session", async (_, payload: StoreRecordedSessionInput) => {
 		try {

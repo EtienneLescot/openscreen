@@ -4,6 +4,9 @@ import path from "node:path";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { reindexRecordingOnDisk } from "./webm-seek-index";
 
+/** The platforms whose native helpers already write an indexed file. */
+const NON_LINUX = ["darwin", "win32"] as const;
+
 /**
  * The property under test is not "does libavformat work" — the Rust side owns
  * that, and `crates/compositor/tests/remux_seek_index.rs` proves it. It is the
@@ -14,13 +17,26 @@ import { reindexRecordingOnDisk } from "./webm-seek-index";
 describe("recording re-index", () => {
 	let dir: string;
 	const ORIGINAL = "original recording bytes";
+	const REAL_PLATFORM = process.platform;
 
+	const setPlatform = (value: NodeJS.Platform) =>
+		Object.defineProperty(process, "platform", { value, configurable: true });
+
+	/**
+	 * Pin the platform, because the wrapper is Linux-gated and returns
+	 * `unsupported-platform` before it touches anything else. Left to the real
+	 * platform, every case below stops at that guard and asserts nothing on a
+	 * macOS or Windows checkout — where this suite read as six red tests that
+	 * were neither the contributor's fault nor a real regression.
+	 */
 	beforeEach(async () => {
+		setPlatform("linux");
 		dir = await mkdtemp(path.join(tmpdir(), "openscreen-reindex-"));
 		vi.spyOn(console, "warn").mockImplementation(() => undefined);
 	});
 
 	afterEach(async () => {
+		setPlatform(REAL_PLATFORM);
 		await rm(dir, { recursive: true, force: true });
 		vi.restoreAllMocks();
 	});
@@ -116,18 +132,17 @@ describe("recording re-index", () => {
 		expect(await readFile(filePath, "utf8")).toBe("remuxed bytes");
 	});
 
-	it("does nothing on platforms whose capture already writes indexed files", async () => {
+	// Both platforms the guard is there for, so the Linux pin above can never
+	// quietly become the only thing this suite ever exercises.
+	it.each(NON_LINUX)("does nothing on %s, which captures an index already", async (platform) => {
 		const filePath = await makeRecording();
 		const service = fakeRemux("remuxed bytes");
-		const platform = process.platform;
-		Object.defineProperty(process, "platform", { value: "win32", configurable: true });
-		try {
-			const result = await reindexRecordingOnDisk(filePath, service);
-			expect(result).toEqual({ reindexed: false, reason: "unsupported-platform" });
-			expect(service.remuxSeekable).not.toHaveBeenCalled();
-			expect(await readFile(filePath, "utf8")).toBe(ORIGINAL);
-		} finally {
-			Object.defineProperty(process, "platform", { value: platform, configurable: true });
-		}
+		setPlatform(platform);
+
+		const result = await reindexRecordingOnDisk(filePath, service);
+
+		expect(result).toEqual({ reindexed: false, reason: "unsupported-platform" });
+		expect(service.remuxSeekable).not.toHaveBeenCalled();
+		expect(await readFile(filePath, "utf8")).toBe(ORIGINAL);
 	});
 });

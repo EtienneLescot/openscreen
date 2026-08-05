@@ -410,6 +410,14 @@ static void runSamplingLoop(int intervalMs, HWND targetWindow, const CLSID& pngC
 // main
 // ─────────────────────────────────────────────────────────────────────────────
 int main(int argc, char* argv[]) {
+    // Without this the process is DPI-unaware and Win32 virtualises every
+    // coordinate it hands back — GetCursorInfo().ptScreenPos and GetWindowRect
+    // come out divided by the primary display's scale factor — while the WGC
+    // capture and the consumer both work in physical pixels.  On any scaled
+    // display the cursor then lands short of its real position, by more the
+    // further it is from the origin (getopenscreen/openscreen#272).
+    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+
     if (argc < 2) {
         std::cerr << "Usage: cursor-sampler <intervalMs> [windowHandle]" << std::endl;
         return 1;

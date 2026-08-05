@@ -596,6 +596,14 @@ impl Compositor {
         *self.live_params.borrow_mut() = p;
     }
 
+    /// Rebranche le seul champ qui dépend du CLIP et non des réglages (cf. `LiveParams::has_webcam`).
+    /// L'export pose ses `LiveParams` une fois pour toute la timeline, mais chaque clip a sa propre
+    /// réponse à « y a-t-il une caméra ? » : d'où un setter ciblé plutôt qu'un `set_live_params`
+    /// par clip, qui écraserait les réglages posés par l'appelant.
+    pub fn set_has_webcam(&self, v: bool) {
+        self.live_params.borrow_mut().has_webcam = v;
+    }
+
     /// Installe (ou retire) la scène de l'app. Présente → `compose_frame` prend ses placements
     /// depuis le layout preset au lieu du planning fixture.
     pub fn set_scene(&self, s: Option<Scene>) {
