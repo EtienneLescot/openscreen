@@ -49,8 +49,102 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: bash scripts/stage-whisper-stt.sh win32-x64
 
+      # SmartScreen keys an installer's reputation to the signing identity when it
+      # is signed, and to the file hash when it is not. An unsigned installer
+      # therefore restarts from zero at every release: users who had stopped
+      # seeing "Windows protected your PC" on 1.8.0 get the full interstitial
+      # again on 1.9.0, forever. Signed, the reputation carries across versions.
+      #
+      # The certificate lives in Azure Trusted Signing, so its private key stays
+      # in Microsoft's HSM and nothing has to be installed on the runner —
+      # electron-builder authenticates with the standard Entra ID environment
+      # variables that the Azure SDK reads (AZURE_TENANT_ID / AZURE_CLIENT_ID /
+      # AZURE_CLIENT_SECRET; those exact names are the SDK's, not ours).
+      #
+      # Signing is opt-in on the secrets existing, like the macOS job: with none
+      # configured the build still succeeds and produces an unsigned installer,
+      # which is what forks and pre-account builds get.
+      - name: Resolve Windows signing
+        id: signing
+        shell: bash
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          WIN_SIGN_ENDPOINT: ${{ secrets.WIN_SIGN_ENDPOINT }}
+          WIN_SIGN_ACCOUNT_NAME: ${{ secrets.WIN_SIGN_ACCOUNT_NAME }}
+          WIN_SIGN_CERT_PROFILE: ${{ secrets.WIN_SIGN_CERT_PROFILE }}
+          WIN_SIGN_PUBLISHER_NAME: ${{ secrets.WIN_SIGN_PUBLISHER_NAME }}
+        run: |
+          required=(AZURE_TENANT_ID AZURE_CLIENT_ID AZURE_CLIENT_SECRET
+                    WIN_SIGN_ENDPOINT WIN_SIGN_ACCOUNT_NAME WIN_SIGN_CERT_PROFILE
+                    WIN_SIGN_PUBLISHER_NAME)
+          missing=()
+          for name in "${required[@]}"; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+
+          if [[ ${#missing[@]} -eq 0 ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Signing enabled — installer will be signed via Azure Trusted Signing."
+          elif [[ ${#missing[@]} -eq ${#required[@]} ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No Windows signing secrets configured; shipping an unsigned installer."
+          else
+            # Half a configuration is a mistake, never a choice. Failing here beats
+            # silently publishing unsigned because one secret was misnamed.
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Windows signing is partially configured; missing: ${missing[*]}"
+            exit 1
+          fi
+
+      # bash, and an array rather than a flat string, because publisherName must
+      # match the certificate subject exactly and legal names contain spaces.
       - name: Build Windows app
-        run: npm run build:win -- --publish never
+        shell: bash
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+          WIN_SIGN_ENDPOINT: ${{ secrets.WIN_SIGN_ENDPOINT }}
+          WIN_SIGN_ACCOUNT_NAME: ${{ secrets.WIN_SIGN_ACCOUNT_NAME }}
+          WIN_SIGN_CERT_PROFILE: ${{ secrets.WIN_SIGN_CERT_PROFILE }}
+          WIN_SIGN_PUBLISHER_NAME: ${{ secrets.WIN_SIGN_PUBLISHER_NAME }}
+        run: |
+          args=(--publish never)
+          if [[ "${{ steps.signing.outputs.enabled }}" == "true" ]]; then
+            args+=(
+              "--config.win.azureSignOptions.endpoint=$WIN_SIGN_ENDPOINT"
+              "--config.win.azureSignOptions.codeSigningAccountName=$WIN_SIGN_ACCOUNT_NAME"
+              "--config.win.azureSignOptions.certificateProfileName=$WIN_SIGN_CERT_PROFILE"
+              "--config.win.azureSignOptions.publisherName=$WIN_SIGN_PUBLISHER_NAME"
+            )
+          fi
+          npm run build:win -- "${args[@]}"
+
+      # electron-builder does not fail the build when signing no-ops, so the only
+      # way to know the artifact is actually signed is to look at the artifact.
+      # The macOS job carries the same check for the same reason: a bundle that
+      # nothing had signed shipped once, and nothing caught it.
+      - name: Verify installer signature
+        if: steps.signing.outputs.enabled == 'true'
+        shell: pwsh
+        run: |
+          $exe = Get-ChildItem release -Recurse -Filter 'Openscreen.Setup.*.exe' | Select-Object -First 1
+          if (-not $exe) { throw 'No installer was produced.' }
+          $sig = Get-AuthenticodeSignature $exe.FullName
+          Write-Host "status=$($sig.Status)"
+          Write-Host "signer=$($sig.SignerCertificate.Subject)"
+          Write-Host "timestamp=$($sig.TimeStamperCertificate.Subject)"
+          if ($sig.Status -ne 'Valid') {
+            throw "Installer signature is '$($sig.Status)', expected 'Valid'."
+          }
+          # An untimestamped signature stops validating the day the certificate
+          # expires. Trusted Signing certificates are short-lived by design, so
+          # this is not a hypothetical.
+          if (-not $sig.TimeStamperCertificate) {
+            throw 'Installer is signed but not timestamped.'
+          }
 
       - name: Upload Windows installer
         uses: actions/upload-artifact@v4

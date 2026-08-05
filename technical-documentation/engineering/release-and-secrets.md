@@ -86,6 +86,26 @@ The certificate account needs Developer ID signing capability, and the Apple acc
 
 Rotate the certificate by exporting a replacement P12, base64-encoding it without line-wrap changes, updating the P12/password/name secrets together, testing a stable-format manual build, then revoking the old certificate if required. Rotate the app-specific password in Apple ID settings, replace `APPLE_APP_SPECIFIC_PASSWORD`, verify notarization, and revoke the old password. `APPLE_ID` and `APPLE_TEAM_ID` normally change only when the owning account or team changes.
 
+## Windows signing
+
+`build.yml` signs the NSIS installer only when all of these secrets are present. With none of them set the job still succeeds and uploads an unsigned installer; with some but not all of them set it fails, because a half-configured signer is a typo rather than a decision and the alternative is silently publishing unsigned.
+
+| Secret | Purpose |
+|---|---|
+| `AZURE_TENANT_ID` | Entra ID tenant of the service principal. Name fixed by the Azure SDK, not chosen here. |
+| `AZURE_CLIENT_ID` | Service principal application ID. |
+| `AZURE_CLIENT_SECRET` | Service principal secret. |
+| `WIN_SIGN_ENDPOINT` | Trusted Signing account endpoint, region-specific (e.g. `https://weu.codesigning.azure.net`). |
+| `WIN_SIGN_ACCOUNT_NAME` | Trusted Signing account name. |
+| `WIN_SIGN_CERT_PROFILE` | Certificate profile name inside that account. |
+| `WIN_SIGN_PUBLISHER_NAME` | Certificate subject, character for character. Mismatches here do not fail the signing call, they fail signature *verification* later. |
+
+The signing key lives in Microsoft's HSM and never reaches the runner, so unlike the Apple path there is no certificate material in any secret and nothing to import. The service principal needs the **Trusted Signing Certificate Profile Signer** role on the account; tenant/client IDs alone are not sufficient and the failure is a 403 at signing time.
+
+Why this exists at all: SmartScreen keys reputation to the signing identity for a signed installer and to the file hash for an unsigned one. Unsigned, every release starts from zero reputation and users meet the "Windows protected your PC" interstitial again on each new version. Signed, reputation accumulates across versions. The Store package is unaffected either way — Microsoft re-signs it during certification.
+
+Rotate by issuing a new client secret on the service principal, updating `AZURE_CLIENT_SECRET`, running a manual build to confirm `Verify installer signature` passes, then deleting the old secret. The endpoint, account, profile and publisher name change only when the Trusted Signing resources do.
+
 ## Discord secrets and variables
 
 | Name | Kind | Used for |
