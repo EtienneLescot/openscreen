@@ -60,7 +60,7 @@ See [docs/cli.md](./docs/cli.md).
 
 ## Installation
 
-Download the latest installer for your platform from the [GitHub Releases](https://github.com/getopenscreen/openscreen/releases) page.
+Every platform has a recommended route below. On Windows that is the Microsoft Store; everywhere else it is the installer from the [GitHub Releases](https://github.com/getopenscreen/openscreen/releases) page.
 
 ### macOS
 
@@ -79,7 +79,24 @@ After running this command, proceed to **System Settings > Privacy & Security** 
 
 ### Windows
 
-Download the `.exe` installer directly from the [Releases page](https://github.com/getopenscreen/openscreen/releases).
+**Recommended — Microsoft Store**
+
+[Get OpenScreen from the Microsoft Store](https://apps.microsoft.com/detail/9MXQ1HQJL5G5), or from a terminal:
+
+```powershell
+winget install --source msstore OpenScreen
+```
+
+Microsoft signs the Store package during certification, so it installs with no security warning and updates itself.
+
+**Alternative — standalone installer**
+
+Download the `.exe` from the [Releases page](https://github.com/getopenscreen/openscreen/releases). Use this if you can't reach the Store — Windows LTSC, a locked-down work machine, an offline install, or if you want a specific older version.
+
+> [!NOTE]
+> The `.exe` is not code-signed, so Windows SmartScreen shows **"Windows protected your PC"** and reports an unknown publisher. Choose **More info** → **Run anyway** to continue.
+>
+> This is not a sign that something is wrong with the download: an unsigned installer earns SmartScreen's trust per file, so a brand-new build always starts out untrusted no matter how many people installed the previous one. Verifying the signature isn't an option here — there is nothing to verify. If you want the checked path, use the Store build above. If you use the `.exe`, download it only from the Releases page linked here.
 
 ### Linux
 
