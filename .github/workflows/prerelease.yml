@@ -106,10 +106,10 @@ jobs:
             echo "Creating release branch ${BRANCH} from ${GITHUB_REF_NAME}"
             git checkout -b "$BRANCH"
           fi
-          sed -i -E "s|(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*(\")|\1${PRERELEASE}\2|" package.json
-          echo "package.json version:"
-          grep '"version"' package.json
-          git add package.json
+          # Writes package-lock.json too. A sed over package.json alone left the
+          # lockfile behind on every release up to 1.9.0; see the script header.
+          node .github/scripts/set-release-version.mjs "${PRERELEASE}"
+          git add package.json package-lock.json
           git commit -m "chore(release): bump to ${PRERELEASE} [skip ci]" || echo "(version already at ${PRERELEASE})"
           git push "$REMOTE" "$BRANCH"
 
