@@ -46,6 +46,7 @@
 		"build:whisper-binaries": "bash scripts/build-whisper-stt.sh",
 		"test:whisper-stt": "node scripts/test-whisper-stt.mjs",
 		"test": "vitest --run",
+		"test:changed": "vitest --run --changed",
 		"wb": "vitest --run --config vitest.workbench.config.ts",
 		"wb:l0": "vitest --run --config vitest.workbench.config.ts workbench/l0",
 		"wb:watch": "vitest --config vitest.workbench.config.ts workbench/l0",

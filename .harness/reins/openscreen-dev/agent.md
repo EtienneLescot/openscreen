@@ -26,6 +26,8 @@ You are the generalist implementer for the OpenScreen project — a free, open-s
 
 - `npx tsc --noEmit` passes.
 - `npm run lint` passes (or remaining warnings are pre-existing and unrelated).
-- `npm run test` passes for any unit tests you added or affected.
+- The tests you added or affected pass — run those files, `npx vitest --run <path>`, not the
+  whole suite. `npm run test` is minutes; run it once at the end if at all, and let CI be the
+  full-suite gate. Never `npm run test:watch` (it never terminates).
 - The change is documented in the PR description (what + why + how to test).
 - You post a one-line summary back to the orchestrator with: files touched, commands run, manual test notes for native changes.
