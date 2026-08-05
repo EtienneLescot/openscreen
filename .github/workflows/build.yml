@@ -474,6 +474,10 @@ jobs:
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
+        with:
+          # Full history + tags: the RC notes below are built from `git log` over the
+          # range since the previous RC tag, and resolving that tag needs the tags.
+          fetch-depth: 0
 
       - name: Resolve release tag
         id: release
@@ -520,6 +524,21 @@ jobs:
             NOTES_START_TAG="v${PX}.$((PY - 1)).0"
           else
             NOTES_START_TAG="v$((PX - 1)).0.0"
+          fi
+          # For an RC, compare against the PREVIOUS RC of the same line, not the previous
+          # stable. Deriving the start tag from STABLE_VERSION alone made every RC of a
+          # line span the same range, so each re-cut just repeated the last RC's notes
+          # plus its own handful, and testers could not see what the re-cut changed.
+          # Walk down from the current rc number so a skipped or failed RC doesn't break it.
+          if [[ "$IS_PRERELEASE" == "true" ]]; then
+            RC_NUMBER="${VERSION##*.}"
+            for (( n = RC_NUMBER - 1; n >= 1; n-- )); do
+              CANDIDATE="v${STABLE_VERSION}-rc.${n}"
+              if git rev-parse -q --verify "refs/tags/${CANDIDATE}" >/dev/null; then
+                NOTES_START_TAG="$CANDIDATE"
+                break
+              fi
+            done
           fi
           echo "Computed notes_start_tag=${NOTES_START_TAG} for tag=${TAG}"
 
@@ -570,17 +589,38 @@ jobs:
           if gh release view "$TAG" >/dev/null 2>&1; then
             gh release upload "$TAG" "${FILES[@]}" --clobber
           else
-            # --notes-start-tag controls which previous tag GitHub compares against
-            # when auto-generating the release notes. Default behaviour (most recent
-            # prior release by date) doesn't work for this fork because the v1.4.0
-            # release in the fork was re-published after v1.5.0, which makes GitHub
-            # pick v1.4.0 as the "previous" for any v1.5.x release.
+            if [[ -n "$PRERELEASE_FLAG" ]]; then
+              # RC notes come from `git log`, not --generate-notes. GitHub's generator
+              # lists only the PRs it manages to associate, and on this repo it silently
+              # drops real ones — #254 and #261 were merged into the release branch and
+              # never appeared in v1.9.0-rc.2's body — so an RC could omit the very fix
+              # the re-cut was for. The commit range is the actual diff and can't lie.
+              # Stable releases keep --generate-notes below: they're the public-facing
+              # ones and want the PR links and the New Contributors section.
+              {
+                echo "## Changes since ${NOTES_START_TAG}"
+                echo
+                git log --no-merges --reverse --pretty='- %s' \
+                  --invert-grep --grep='^chore(release): bump to' \
+                  "${NOTES_START_TAG}..${TAG}"
+                echo
+                echo "**Full Changelog**: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${NOTES_START_TAG}...${TAG}"
+              } > "${RUNNER_TEMP}/rc-notes.md"
+              cat "${RUNNER_TEMP}/rc-notes.md"
+              NOTES_ARGS=(--notes-file "${RUNNER_TEMP}/rc-notes.md")
+            else
+              # --notes-start-tag controls which previous tag GitHub compares against
+              # when auto-generating the release notes. Default behaviour (most recent
+              # prior release by date) doesn't work for this fork because the v1.4.0
+              # release in the fork was re-published after v1.5.0, which makes GitHub
+              # pick v1.4.0 as the "previous" for any v1.5.x release.
+              NOTES_ARGS=(--generate-notes --notes-start-tag "$NOTES_START_TAG")
+            fi
             # shellcheck disable=SC2086
             gh release create "$TAG" "${FILES[@]}" \
               --target "$GITHUB_SHA" \
               --title "$TAG" \
-              --generate-notes \
-              --notes-start-tag "$NOTES_START_TAG" \
+              "${NOTES_ARGS[@]}" \
               $PRERELEASE_FLAG
           fi
 
