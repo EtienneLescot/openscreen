@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 /**
  * The CPU-backend notice must fire on a degraded GPU and stay silent everywhere else.
  *

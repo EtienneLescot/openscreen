@@ -387,7 +387,10 @@ describe("DocumentService", () => {
 			expect(onDisk.annotations).toHaveLength(120);
 		});
 
-		it("survives many interleaved saves of one project", async () => {
+		// 20 real temp-file+rename round trips, serialized through the save queue.
+		// That is genuinely more than 5s of disk when the rest of the suite is
+		// running in parallel, so it gets its own timeout rather than flaking.
+		it("survives many interleaved saves of one project", { timeout: 20_000 }, async () => {
 			const doc = await service.createProject("Storm");
 			// Sizes deliberately alternate long/short: equal-length writes overwrite
 			// each other cleanly and would prove nothing.

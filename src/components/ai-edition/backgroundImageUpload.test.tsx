@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // Cases recovered from the deleted `video-editor/backgroundImageUpload.test.ts`, whose
 // module was dropped as dead code in the 2026-07-26 reorg — correctly, since only its own
 // test imported it, but the empty-MIME fallback it encoded had never been wired into the

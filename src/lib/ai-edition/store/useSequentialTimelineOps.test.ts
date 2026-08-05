@@ -1,3 +1,4 @@
+// @vitest-environment jsdom
 // ponytail: tests for the queued timeline-op hook. The hook used to live
 // inline in NewEditorShell.tsx (saveQueueRef + handleAddTrimRange /
 // handleRemoveTrimRange) and was untested; the bug it fixed (synchronous
