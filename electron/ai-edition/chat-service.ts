@@ -27,8 +27,8 @@ import {
 	buildCompactionPrompt,
 	COMPACTION_SYSTEM_PROMPT,
 	compactionReducesHistory,
+	compactionSplitIndex,
 	DEFAULT_BUDGET_TOKENS,
-	shouldCompact,
 } from "./chat-compaction";
 import type { CursorTelemetryReader } from "./deep-agent/service";
 import type { DocumentService } from "./document-service";
@@ -133,10 +133,6 @@ export interface ChatSession {
 	/** Main-process bookkeeping: the compaction boundary, not part of the
 	 *  transcript. See `modelMessages`. */
 	compaction?: SessionCompaction;
-	/** Set when a summarize call came back no smaller than what it replaced.
-	 *  Auto-compaction then stops trying — otherwise every following turn pays
-	 *  for the same useless summarizer call. */
-	compactionBlocked?: boolean;
 }
 
 /** The message list compaction hands the model: summary first, then everything
@@ -368,22 +364,14 @@ export async function runChat(
 
 	const editsAllowed = config.allowAgentEdits !== false;
 
-	// P3.7 — context compaction: when what we send the model grows past the
-	// heuristic budget, summarize the older half into a single "Earlier
-	// context" assistant message. The current user turn stays uncompacted, so
-	// the model still sees the request verbatim.
-	const plan = session.compactionBlocked ? null : planCompaction(session);
-	if (plan) {
-		await tryCompactSession({
-			session,
-			plan,
-			apiKey: apiKey ?? "",
-			provider: config.provider,
-			model: config.model,
-			baseUrl: config.baseUrl,
-			reasoningEffort: config.reasoningEffort,
-		});
-	}
+	// ponytail: NO automatic compaction here. A turn used to first check the
+	// history against a guessed 80k-token budget and, past 70% of it, block on
+	// a whole extra summarizer call before the user's request was even sent.
+	// The app cannot ask a provider how big its context window is, so that
+	// budget was a number someone picked — wrong by an order of magnitude for a
+	// 1M-token Gemini, and silently discarding context the model could have
+	// held. Compaction is now only ever what the user asked for by pressing the
+	// button. See chat-compaction.ts.
 
 	const history = modelHistory(session).map((m) => ({
 		role: m.role as "user" | "assistant" | "system",
@@ -608,9 +596,9 @@ export async function compactSessionNow(
 	const credential = llmConfig.getCredential(def.id, def.envKeys);
 	const apiKey = credential?.value ?? "";
 
-	// The button is an explicit request, so it ignores `compactionBlocked` —
-	// the user knows they are spending a summarizer call, and a success clears
-	// the flag for the automatic path too.
+	// Pressing the button IS the decision — nothing here second-guesses it
+	// against a budget. It only declines when there is genuinely nothing to
+	// fold (fewer than 4 messages), which is the one refusal left.
 	const plan = planCompaction(session);
 	if (!plan) return null;
 
@@ -729,25 +717,21 @@ interface CompactionPlan {
 }
 
 /**
- * Decide whether the next turn should compact, measuring the payload rather
- * than the transcript. Measuring the transcript would re-trip on every turn
- * for the rest of the session, since compaction no longer shrinks it.
+ * Where a compaction would cut, measured against the payload rather than the
+ * transcript — compaction never rewrites the transcript, so the split index
+ * has to be an index into the list it will actually be applied to.
  *
  * A second compaction folds the previous summary into the new one: it sits at
  * `payload[0]`, so it is part of the prefix being summarized.
  */
 function planCompaction(session: ChatSession): CompactionPlan | null {
 	const payload = modelMessages(session);
-	const decision = shouldCompact(payload);
-	if (!decision?.compact || decision.splitIndex <= 0) return null;
+	const splitIndex = compactionSplitIndex(payload);
+	if (splitIndex === null || splitIndex <= 0) return null;
 	// Payload index → transcript index. With a summary in front, payload[i]
 	// is transcript message `coveredCount + i - 1`.
 	const offset = session.compaction ? session.compaction.coveredCount - 1 : 0;
-	return {
-		payload,
-		splitIndex: decision.splitIndex,
-		coveredCount: decision.splitIndex + offset,
-	};
+	return { payload, splitIndex, coveredCount: splitIndex + offset };
 }
 
 /**
@@ -804,15 +788,14 @@ async function tryCompactSession(opts: {
 	const summaryMessage = compacted[0];
 	if (!summaryMessage) return null;
 	if (!compactionReducesHistory(plan.payload, compacted)) {
-		// ponytail: the model handed back a summary at least as long as the
-		// messages it replaced. Adopting it would grow the payload, and
-		// retrying next turn just buys the same answer again — so stop asking
-		// until the user compacts by hand.
-		session.compactionBlocked = true;
+		// The model handed back a summary at least as long as the messages it
+		// replaced: adopting it would grow the payload. Refuse it and leave the
+		// session alone. (There is no "stop trying" flag any more — nothing
+		// retries on its own, so the only next attempt is another button press,
+		// which is the user asking again knowingly.)
 		return null;
 	}
 	session.compaction = { summary: summaryMessage, coveredCount: plan.coveredCount };
-	session.compactionBlocked = false;
 	return {
 		summaryMessageId: summaryMessage.id,
 		summary,

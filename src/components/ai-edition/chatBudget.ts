@@ -1,10 +1,12 @@
 // Renderer-side budget helper. Mirrors `electron/ai-edition/chat-compaction.ts`
 // but inline so we don't drag electron/ into the renderer bundle.
 //
-// ponytail: 4 chars per token is plenty accurate for a "should we compact yet"
-// gate. The estimation lives in the main process too (chat-service
-// `getSessionBudget`); this duplicate is a small price for keeping the
-// renderer free of electron/ imports.
+// This feeds the context pill and NOTHING else — no code decides anything from
+// it. `DEFAULT_CHAT_BUDGET_TOKENS` is a made-up denominator (the app has no way
+// to ask a provider how big its context window is), which is exactly why the
+// automatic compaction that used to branch on the main-process twin is gone.
+// Read the pill as "the conversation is about this big", never as "you are this
+// close to a limit", and do not let this number regain a decision.
 
 const CHARS_PER_TOKEN = 4;
 
