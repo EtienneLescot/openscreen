@@ -108,4 +108,22 @@ describe("validateThreadChannel", () => {
 		const result = await validateThreadChannel("500", number, { botToken });
 		expect(result).toBe(false);
 	});
+
+	it("leaves no timer armed once it has returned, on either path", async () => {
+		vi.useFakeTimers();
+		try {
+			vi.mocked(fetch).mockRejectedValue(new Error("network error"));
+			await validateThreadChannel("500", number, { botToken });
+			// The failing path is the one that used to leak: `clearTimeout` sat after
+			// the `await`, so a rejected fetch skipped it and left the 5s abort timer
+			// running past the end of the test.
+			expect(vi.getTimerCount()).toBe(0);
+
+			vi.mocked(fetch).mockResolvedValue({ ok: false, status: 404 });
+			await validateThreadChannel("404", number, { botToken });
+			expect(vi.getTimerCount()).toBe(0);
+		} finally {
+			vi.useRealTimers();
+		}
+	});
 });
