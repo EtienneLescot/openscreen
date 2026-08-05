@@ -8,14 +8,13 @@ export async function validateThreadChannel(threadId, prNumber, { botToken, foru
 		return false;
 	}
 	const VALIDATION_TIMEOUT_MS = 5_000;
+	const controller = new AbortController();
+	const timeout = setTimeout(() => controller.abort(), VALIDATION_TIMEOUT_MS);
 	try {
-		const controller = new AbortController();
-		const timeout = setTimeout(() => controller.abort(), VALIDATION_TIMEOUT_MS);
 		const res = await fetch(`https://discord.com/api/v10/channels/${threadId}`, {
 			headers: { Authorization: `Bot ${botToken}` },
 			signal: controller.signal,
 		});
-		clearTimeout(timeout);
 		if (!res.ok) {
 			warning(`Thread validation failed: channel ${threadId} returned ${res.status}`);
 			return false;
@@ -38,5 +37,12 @@ export async function validateThreadChannel(threadId, prNumber, { botToken, foru
 	} catch (err) {
 		warning(`Thread validation threw: ${err && err.message ? err.message : err}`);
 		return false;
+	} finally {
+		// `finally`, not a line after the await: when `fetch` rejects — a real network
+		// error — the timer would otherwise stay armed and fire `controller.abort()`
+		// five seconds later, long after this returned. Under Vitest that lands after
+		// the worker has torn down, which is an intermittent post-run error rather
+		// than a failing test. Same shape as `callDiscord` in discord-bot-api.mjs.
+		clearTimeout(timeout);
 	}
 }
