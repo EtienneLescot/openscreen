@@ -36,10 +36,12 @@ export const DEFAULT_EDITOR_APPEARANCE_SETTINGS: {
 	motionBlurAmount: number;
 	borderRadius: number;
 } = {
-	shadowIntensity: 0,
+	// Keep in sync with `DEFAULT_EDITOR_SETTINGS` (lib/ai-edition/store/editorSettings.ts),
+	// which is what the mounted v4 shell reads — see the rationale there.
+	shadowIntensity: 0.2,
 	showBlur: false,
-	motionBlurAmount: 0,
-	borderRadius: 0,
+	motionBlurAmount: 0.2,
+	borderRadius: 40,
 };
 
 export const DEFAULT_EDITOR_LAYOUT_SETTINGS: {
