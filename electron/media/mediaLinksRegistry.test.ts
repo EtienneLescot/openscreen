@@ -244,31 +244,38 @@ describe("mediaLinksRegistry", () => {
 			return rejections;
 		}
 
-		// Running as root defeats the permission bit this case relies on. Skipped
-		// out loud rather than passing vacuously.
-		it.skipIf(process.getuid?.() === 0)(
-			"logs a refresh it cannot write, and still answers the lookup",
-			async () => {
-				const { original, moved } = await registerThenMove();
-				// Registry readable, directory unwritable: only the write can fail.
-				await fs.chmod(tempDir, 0o555);
-				const warned = vi.spyOn(console, "warn").mockImplementation(() => {
-					// swallowed: the test asserts on it, the suite output does not need it
+		// The failure is INJECTED, not arranged with `chmod 0o555`. A read-only
+		// directory does not stop a file being created inside it on Windows, so the
+		// refresh wrote fine there and this case failed on every Windows dev machine
+		// while staying green in Linux CI. `skipIf(getuid() === 0)` could not see it
+		// either: `process.getuid` is undefined on Windows, so the guard read as
+		// "not root" and ran the test anyway. Failing the write itself asserts the
+		// same thing on every platform, root or not.
+		it("logs a refresh it cannot write, and still answers the lookup", async () => {
+			const { original, moved } = await registerThenMove();
+			const warned = vi.spyOn(console, "warn").mockImplementation(() => {
+				// swallowed: the test asserts on it, the suite output does not need it
+			});
+			// Registry readable, the tmp-file write refused: only the write can fail.
+			const write = vi
+				.spyOn(fs, "writeFile")
+				.mockRejectedValue(Object.assign(new Error("permission denied"), { code: "EACCES" }));
+			try {
+				const rejections = await withoutUnhandledRejections(async () => {
+					const resolved = await findMediaLinksByFingerprint(tempDir, moved);
+					// A refresh that failed is not a lookup that failed.
+					expect(resolved?.webcamVideoPath).toBe(`${original}-cam.webm`);
 				});
-				try {
-					const rejections = await withoutUnhandledRejections(async () => {
-						const resolved = await findMediaLinksByFingerprint(tempDir, moved);
-						// A refresh that failed is not a lookup that failed.
-						expect(resolved?.webcamVideoPath).toBe(`${original}-cam.webm`);
-					});
-					expect(rejections).toEqual([]);
-					expect(warned).toHaveBeenCalled();
-				} finally {
-					warned.mockRestore();
-					await fs.chmod(tempDir, 0o755);
-				}
-			},
-		);
+				expect(rejections).toEqual([]);
+				expect(warned).toHaveBeenCalled();
+				// The refresh was really attempted: without this the case would pass
+				// just as well with the whole write path deleted.
+				expect(write).toHaveBeenCalled();
+			} finally {
+				write.mockRestore();
+				warned.mockRestore();
+			}
+		});
 
 		it("survives the directory disappearing while the refresh is queued", async () => {
 			// The CI shape: a suite's `afterEach` removes its temp dir while a write
