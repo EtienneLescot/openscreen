@@ -21,20 +21,22 @@ Conventions for the Mavis reins when working in this repo.
 
 ## CI (`.github/workflows/ci.yml`)
 
-CI runs on every PR to `main` and every push to `main`:
+CI runs on every PR to `main`, `feat/ai-edition` and `release/**`, and on every push to those:
 - `npm run lint` (Biome)
-- `npx tsc --noEmit` (TypeScript)
+- `npx tsc --noEmit` (TypeScript, app code)
+- `npx tsc -p tsconfig.test.json --noEmit` (TypeScript, test files — a separate gate at zero)
 - `npm run test` (Vitest unit)
-- `npm run test:browser` (Vitest + Playwright headless)
+- `npm run docs:check`
 - `npx vite build` (renderer build smoke)
+- `cargo test` / `cargo check` for the compositor on macOS, Windows and Linux
 
-All five must be green before merge. Native helper code is NOT covered by CI — manual smoke test is required for `electron/*-helper/` changes; note it in the PR description.
+All must be green before merge. Native helper code is NOT covered by CI — manual smoke test is required for `electron/*-helper/` changes; note it in the PR description.
 
 ## Pull request flow
 
 1. Branch from `main`.
 2. Implement + add tests in the same package.
-3. Run locally: `npm run lint && npx tsc --noEmit && npm run test`. For browser/e2e-touching changes, also run the relevant suite.
+3. While implementing, run only the affected tests (`npx vitest --run <path>` or `--changed`); `npx tsc --noEmit` and `npm run lint` are the cheap inner-loop checks. Run the full `npm run test` **once**, here, before pushing.
 4. Push and open the PR via `gh pr create`. Use `.github/pull_request_template.md`.
 5. Wait for the Mavis reviewer (`openscreen-reviewer`) PASS or address the requested changes.
 6. Merge once CI is green and review is PASS. PR titles must follow Conventional Commits (enforced by the `semantic-pr` job in `ci.yml`) — this keeps the auto-generated release notes clean.
