@@ -208,15 +208,23 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	// defaults every time startNewRecording() switches to the HUD window.
 	useEffect(() => {
 		let cancelled = false;
-		void window.electronAPI?.getRecordingPrefs?.().then((prefs) => {
-			if (cancelled || !prefs) return;
-			setMicrophoneEnabled(prefs.micEnabled);
-			if (prefs.micDeviceId) setMicrophoneDeviceId(prefs.micDeviceId);
-			setWebcamEnabledState(prefs.camEnabled);
-			if (prefs.camDeviceId) setWebcamDeviceId(prefs.camDeviceId);
-			setSystemAudioEnabled(prefs.systemAudioEnabled);
-			setCursorCaptureMode(prefs.cursorCaptureMode);
-		});
+		void window.electronAPI
+			?.getRecordingPrefs?.()
+			.then((prefs) => {
+				if (cancelled || !prefs) return;
+				setMicrophoneEnabled(prefs.micEnabled);
+				if (prefs.micDeviceId) setMicrophoneDeviceId(prefs.micDeviceId);
+				setWebcamEnabledState(prefs.camEnabled);
+				if (prefs.camDeviceId) setWebcamDeviceId(prefs.camDeviceId);
+				setSystemAudioEnabled(prefs.systemAudioEnabled);
+				setCursorCaptureMode(prefs.cursorCaptureMode);
+			})
+			.catch((err) => {
+				// Bare ipcRenderer.invoke — rejects if the main handler throws. Falling
+				// back to this hook's own defaults is acceptable; an unhandled rejection
+				// on every HUD mount is not.
+				console.warn("Failed to seed the recording prefs:", err);
+			});
 		return () => {
 			cancelled = true;
 		};
