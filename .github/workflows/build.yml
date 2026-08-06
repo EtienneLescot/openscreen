@@ -79,6 +79,45 @@ jobs:
       - name: Build Windows Store package
         run: npm run build:win:store -- --publish never
 
+      # Store certification rejected 1.9.0 under 10.1.1.11 "On Device Tiles" because
+      # the package carried electron-builder's vendored placeholder tiles: it reads
+      # them from build/appx/ and, when a name is missing there, silently substitutes
+      # a blank SampleAppx.*.png instead of failing. Nothing in the build output says
+      # so — the only way to know is to look inside the package. This step does that,
+      # comparing every committed asset against the one actually packaged, so a
+      # renamed, dropped or substituted tile fails the build instead of failing
+      # certification days later.
+      - name: Verify Store tiles are in the package
+        shell: pwsh
+        run: |
+          $appx = Get-ChildItem release -Recurse -Filter *.appx | Select-Object -First 1
+          if (-not $appx) { throw "no .appx found under release/" }
+          Add-Type -AssemblyName System.IO.Compression.FileSystem
+          $archive = [System.IO.Compression.ZipFile]::OpenRead($appx.FullName)
+          try {
+            # OPC parts are "/" separated, but normalise anyway rather than trust it.
+            $entries = @{}
+            foreach ($e in $archive.Entries) { $entries[$e.FullName.Replace("\", "/")] = $e }
+            $sha = [System.Security.Cryptography.SHA256]::Create()
+            $problems = @()
+            $expected = Get-ChildItem build/appx -Filter *.png
+            foreach ($asset in $expected) {
+              $entry = $entries["assets/$($asset.Name)"]
+              if (-not $entry) { $problems += "missing from package: $($asset.Name)"; continue }
+              $stream = $entry.Open()
+              try { $packaged = [BitConverter]::ToString($sha.ComputeHash($stream)) }
+              finally { $stream.Dispose() }
+              $source = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($asset.FullName)))
+              if ($packaged -ne $source) { $problems += "packaged copy differs from build/appx: $($asset.Name)" }
+            }
+            if ($problems) {
+              $problems | ForEach-Object { Write-Output "::error::$_" }
+              throw "$($problems.Count) tile asset problem(s) in $($appx.Name)"
+            }
+            Write-Output "$($expected.Count) tile assets present in $($appx.Name), byte-identical to build/appx/"
+          }
+          finally { $archive.Dispose() }
+
       - name: Upload Windows Store package
         uses: actions/upload-artifact@v4
         with:
