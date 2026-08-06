@@ -80,6 +80,13 @@ function resolveFfmpegDir() {
 }
 
 /**
+ * Debian/Ubuntu multiarch triplet for the host. Hardcoding the x86_64 one made
+ * both libclang and gcc's stddef.h invisible on arm64, where the same libraries
+ * live under /usr/lib/aarch64-linux-gnu.
+ */
+const MULTIARCH = process.arch === "arm64" ? "aarch64-linux-gnu" : "x86_64-linux-gnu";
+
+/**
  * bindgen loads libclang at runtime. crates/.cargo/config.toml hardcodes a
  * Windows LLVM path, so on Linux we locate it ourselves rather than making
  * every contributor export LIBCLANG_PATH by hand.
@@ -88,7 +95,7 @@ function resolveLibclangDir() {
 	if (process.env.LIBCLANG_PATH) {
 		return process.env.LIBCLANG_PATH;
 	}
-	const roots = ["/usr/lib/x86_64-linux-gnu", "/usr/lib64", "/usr/lib"];
+	const roots = [`/usr/lib/${MULTIARCH}`, "/usr/lib64", "/usr/lib"];
 	for (const llvmRoot of ["/usr/lib"]) {
 		if (!fs.existsSync(llvmRoot)) continue;
 		for (const entry of fs.readdirSync(llvmRoot)) {
@@ -120,7 +127,7 @@ function bindgenClangArgs() {
 	if (process.env.BINDGEN_EXTRA_CLANG_ARGS) {
 		return process.env.BINDGEN_EXTRA_CLANG_ARGS;
 	}
-	const gccIncludeRoot = "/usr/lib/gcc/x86_64-linux-gnu";
+	const gccIncludeRoot = `/usr/lib/gcc/${MULTIARCH}`;
 	if (!fs.existsSync(gccIncludeRoot)) {
 		return "";
 	}

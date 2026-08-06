@@ -35,7 +35,9 @@ extern "C" {
 
 fn averr(ret: i32, ctx: &str) -> Result<()> {
     if ret < 0 {
-        let mut buf = [0i8; 256];
+        // NOT `[0i8; 256]`: `c_char` is signed on x86_64 but UNSIGNED on aarch64, so a
+        // hardcoded i8 makes av_strerror's `*mut c_char` a type error on arm64.
+        let mut buf = [0 as ::std::os::raw::c_char; 256];
         unsafe { av_strerror(ret, buf.as_mut_ptr(), buf.len()) };
         let msg = unsafe { std::ffi::CStr::from_ptr(buf.as_ptr()) }.to_string_lossy();
         bail!("{ctx}: {ret} ({msg})");
