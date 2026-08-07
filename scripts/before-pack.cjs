@@ -112,11 +112,11 @@ const MAC_REQUIRED = [
  * `linux.extraResources` ships this directory wholesale (`filter: ["linux-*​/**"]`),
  * so "present here" is the same thing as "present in the installed app".
  *
- * Note the two ffmpeg sets, which is why `ffmpeg/` is required separately below:
+ * Note the two ffmpeg sets, which is why `helper-ffmpeg/` is required separately below:
  * the `.so` files sitting directly in this directory are the compositor's copies,
  * with every symbol renamed to `osff_*` so the addon cannot bind to Chromium's
  * bundled ffmpeg. The helper needs the *unrenamed* originals, which is what the
- * `ffmpeg/` subdirectory holds.
+ * `helper-ffmpeg/` subdirectory holds.
  */
 const LINUX_REQUIRED = [
 	{
@@ -226,20 +226,13 @@ function checkLinuxNativePayload(context) {
 	// property that matters — it has to be a directory holding the *unrenamed* libraries.
 	// An empty one, or the wrong kind of entry, passes a name match and still ships a
 	// helper that cannot start.
-	const helperFfmpeg = path.join(dir, "ffmpeg");
+	const helperFfmpeg = path.join(dir, "helper-ffmpeg");
 	const isDir = fs.existsSync(helperFfmpeg) && fs.statSync(helperFfmpeg).isDirectory();
 	if (fs.existsSync(helperFfmpeg) && !isDir) {
-		// `fetch:ffmpeg` vendors the *static* ffmpeg binary to exactly this path, while
-		// `build:native:linux` wants a directory here. They collide, and the loser is
-		// whichever ran first. CI never sees it — `build:linux` only runs
-		// `fetch:ffmpeg:sdk`, which does not write the executable — so this fires on
-		// local packaging after someone has run the full fetch by hand.
 		throw new Error(
 			`Refusing to package: ${path.relative(ROOT, helperFfmpeg)} is a file, not a directory.\n\n` +
-				"That path is where the PipeWire helper's ffmpeg libraries live, but the static\n" +
-				"ffmpeg binary that `npm run fetch:ffmpeg` vendors lands on the same name and\n" +
-				"overwrote it. Delete it and re-run:\n\n    npm run build:native:linux\n\n" +
-				"(`npm run build:linux` uses fetch:ffmpeg:sdk, which does not write that file.)",
+				"It should hold the PipeWire helper's unrenamed ffmpeg shared objects.\n" +
+				"Delete it and re-run:\n\n    npm run build:native:linux",
 		);
 	}
 	const libs = isDir

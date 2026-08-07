@@ -109,11 +109,15 @@
         "from": "electron/native/bin",
         "to": "electron/native/bin",
         // `**`, not `*`: the capture helper's ffmpeg libraries live one level
-        // deeper, in `linux-x64/ffmpeg/`. They are in their own directory
+        // deeper, in `linux-x64/helper-ffmpeg/`. They are in their own directory
         // because `linux-x64/` also holds the compositor addon's copies of the
         // same sonames with every symbol renamed to `osff_*`, and the helper
         // must not find those — see scripts/build-linux-pipewire-helper.mjs.
         // A single-level filter ships a helper that cannot start.
+        //
+        // The name is `helper-ffmpeg` rather than `ffmpeg` because that shorter
+        // name is taken: fetch-ffmpeg.mjs vendors the static ffmpeg executable
+        // there, and audioPeaks.ts resolves it by that path.
         "filter": ["linux-*/**"]
       }
     ]

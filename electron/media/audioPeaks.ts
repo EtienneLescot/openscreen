@@ -103,11 +103,16 @@ let cachedFfmpeg: string | null | undefined;
  *
  * EXISTENCE IS NOT ENOUGH, and the difference is not academic. `existsSync` was
  * the test here, and it answers true for a DIRECTORY: on a Linux dev machine
- * `electron/native/bin/<tag>/ffmpeg` is a folder holding the shared libraries
- * (`libavcodec.so.62` and friends) rather than the binary, so resolution picked
- * the folder, every later candidate was skipped, and the failure surfaced much
- * later as `spawn … EACCES` — a message that blames permissions rather than
- * saying the wrong candidate was chosen.
+ * `electron/native/bin/<tag>/ffmpeg` used to be a folder holding the capture
+ * helper's shared libraries (`libavcodec.so.62` and friends) rather than the
+ * binary, so resolution picked the folder, every later candidate was skipped,
+ * and the failure surfaced much later as `spawn … EACCES` — a message that
+ * blames permissions rather than saying the wrong candidate was chosen.
+ *
+ * Those libraries have since moved to `<tag>/helper-ffmpeg/`, so this path is
+ * the executable's alone again. The check stays regardless: it costs one stat,
+ * and it is the difference between a clear null and an EACCES half a subsystem
+ * away.
  *
  * Every failure mode is swallowed on purpose. A candidate that is absent, not a
  * regular file, or not executable is simply not this one; throwing out of
