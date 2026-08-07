@@ -132,6 +132,7 @@ jobs:
           done <<'PATTERNS'
           \$\(
           `
+          [<>]\(
           (^|[;&|[:space:]])(eval|source|curl|wget|bash|sh|python3?)[[:space:]]
           PATTERNS
 
@@ -204,6 +205,23 @@ jobs:
             exit 1
           fi
 
+          # sha256sums doit rester aligné sur source=(), élément par élément. Une
+          # entrée locale et légitime (un .install, un .desktop) ne produit aucune
+          # URL : on écrirait alors un tableau plus court, que makepkg accepte de
+          # générer et que le contrôle de diff laisse passer — pour finir en échec
+          # de vérification chez chaque utilisateur. On compte les entrées, et on
+          # refuse tout formatage qu'on ne sait pas compter plutôt que de deviner.
+          ENTRIES=$(grep -oE '"[^"]*"' <<<"$SRC_BLOCK" | wc -l)
+          RESIDUE=$(sed -e 's/"[^"]*"//g' <<<"$SRC_BLOCK" | tr -d '[:space:]')
+          if [[ "$RESIDUE" != "source=()" ]]; then
+            echo "::error::source=() holds unquoted entries; refusing to guess its shape"
+            exit 1
+          fi
+          if [[ "${#URLS[@]}" -ne "$ENTRIES" ]]; then
+            echo "::error::source=() holds ${ENTRIES} entries but ${#URLS[@]} are URLs; sha256sums would not align"
+            exit 1
+          fi
+
           SUMS=()
           for url in "${URLS[@]}"; do
             # Allowlist : une source pointant ailleurs que sur notre dépôt signifie
@@ -213,8 +231,27 @@ jobs:
               echo "::error::Expected everything under ${ALLOWED_SOURCE_PREFIX}"
               exit 1
             fi
+            # Le test de préfixe seul ne suffit pas : curl normalise les segments
+            # `..` AVANT d'émettre la requête, donc
+            # .../getopenscreen/openscreen/../../attacker/repo/x passe le préfixe
+            # et va chercher le dépôt d'un tiers. Vérifié : l'URL effective
+            # devient bien https://github.com/attacker/repo/x. Le pourcent est
+            # refusé au passage, %2e%2e n'étant normalisé que côté serveur.
+            if [[ "$url" == *".."* || "$url" == *"%"* || "$url" == *"@"* || "$url" == *'\'* ]]; then
+              echo "::error::Source URL contains path traversal, encoding or userinfo: $url"
+              exit 1
+            fi
             echo "Fetching $url"
-            curl -fsSL --retry 3 -o /tmp/src.bin "$url"
+            # -L reste nécessaire (les assets de release redirigent vers le CDN),
+            # donc on contrôle l'hôte d'arrivée plutôt que d'interdire le saut.
+            EFFECTIVE=$(curl -fsSL --retry 3 --proto '=https' \
+              -w '%{url_effective}' -o /tmp/src.bin "$url")
+            EFF_HOST=${EFFECTIVE#https://}
+            EFF_HOST=${EFF_HOST%%/*}
+            if [[ "$EFF_HOST" != "github.com" && "$EFF_HOST" != *".githubusercontent.com" ]]; then
+              echo "::error::Download redirected off GitHub: $EFFECTIVE"
+              exit 1
+            fi
             SUMS+=("$(sha256sum /tmp/src.bin | awk '{print $1}')")
           done
 
