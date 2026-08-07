@@ -115,7 +115,7 @@ fn link_ffmpeg(root: &Path) {
     for name in ["avcodec", "avformat", "avutil", "swscale", "swresample"] {
         println!("cargo:rustc-link-lib={name}");
     }
-    // `$ORIGIN/ffmpeg`, NOT `$ORIGIN`. The helper is staged into
+    // A SUBDIRECTORY, NOT `$ORIGIN`. The helper is staged into
     // electron/native/bin/linux-x64/, and that directory ALREADY contains
     // libavcodec.so.62 and friends — the copies whose every symbol was renamed
     // to `osff_*` by scripts/build-linux-compositor-addon.mjs so the compositor
@@ -125,12 +125,19 @@ fn link_ffmpeg(root: &Path) {
     // renaming trick is what makes the ADDON work and what would break the
     // HELPER, so the two sets of libraries must not share a directory.
     //
+    // `helper-ffmpeg` and not `ffmpeg`, which is what this used to be: that name
+    // is also where fetch-ffmpeg.mjs vendors the static ffmpeg EXECUTABLE, and
+    // where audioPeaks.ts looks for it. Three artifacts, one path — whichever
+    // ran last won, and the loser failed with EEXIST from mkdir or EACCES from
+    // spawn, neither of which names the real problem. A directory called
+    // `ffmpeg` full of shared objects is also simply a lie about its contents.
+    //
     // The absolute vendored path comes second so `cargo run` works straight out
     // of the repo. `--disable-new-dtags` is what makes these RUNPATH entries
     // apply to the transitive ffmpeg libs too; with the default DT_RUNPATH they
     // would not.
     println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
-    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/ffmpeg");
+    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/helper-ffmpeg");
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
 
     let mut builder = bindgen::Builder::default();
