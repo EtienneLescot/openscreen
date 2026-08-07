@@ -101,7 +101,50 @@ jobs:
           git tag "$STABLE_TAG"
           git push origin "$STABLE_TAG"
 
+      # ORDER MATTERS. Everything that actually publishes the release runs before the
+      # main-sync below. The stable tag is already pushed at this point, so the build
+      # and the announcement depend on nothing the sync produces — while the sync is a
+      # PR round-trip against a remote that fails for reasons of its own. It used to
+      # run first, and every one of its failures silently skipped both steps under it:
+      # v1.7.0, v1.8.0 and v1.9.0 all shipped without an automated build (dispatched by
+      # hand minutes later) and without a #releases announcement.
+      - name: Trigger build workflow
+        env:
+          GH_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
+          STABLE_TAG: ${{ steps.version.outputs.stable_tag }}
+        run: |
+          set -euo pipefail
+          # GITHUB_TOKEN tag pushes don't fire build.yml in this setup, dispatch it.
+          #
+          # --ref pins the build to the stable tag (the frozen release-branch tip), which
+          # is also what makes running this before the main-sync correct: the tag already
+          # points at the released snapshot, so checkout gets the matching package.json +
+          # code whatever main looks like, and signing/notarization is enabled (tag has
+          # no '-').
+          gh workflow run build.yml \
+            --ref "${STABLE_TAG}" \
+            -f release_tag="${STABLE_TAG}" \
+            -f arch=both \
+            --repo "$GITHUB_REPOSITORY"
+
+      - name: Announce stable on Discord
+        if: success()
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          DISCORD_RELEASE_CHANNEL_ID: ${{ vars.DISCORD_RELEASE_CHANNEL_ID }}
+          GITHUB_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
+          STABLE_TAG: ${{ steps.version.outputs.stable_tag }}
+          RC_TAG: ${{ steps.version.outputs.rc_tag }}
+          EXTRA: ${{ inputs.release_notes_extra }}
+          KIND: stable
+        run: node .github/scripts/discord-release-announce.mjs
+
+      # Bookkeeping, not publishing: the release is already out by now. Allowed to fail
+      # so a stuck PR never masks a successful release — the summary reports it and it
+      # is trivially redone by hand.
       - name: Merge release branch into main
+        id: sync_main
+        continue-on-error: true
         env:
           GH_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
           STABLE_VERSION: ${{ steps.version.outputs.stable_version }}
@@ -127,43 +170,40 @@ jobs:
             --body "Sync main with the released snapshot (RC + cherry-picked bugfixes + version bump). Rebase-merged via PAT; bypass applies because EtienneLescot is a ruleset bypass actor." \
             --repo "$GITHUB_REPOSITORY" || echo "(PR already exists — skipping)"
           PR_NUMBER=$(gh pr list --head "${BRANCH}-sync" --state open --json number -q '.[0].number' --repo "$GITHUB_REPOSITORY")
-          if [[ -n "$PR_NUMBER" ]]; then
-            gh pr merge "$PR_NUMBER" --rebase --delete-branch --admin \
-              --repo "$GITHUB_REPOSITORY"
+          if [[ -z "$PR_NUMBER" ]]; then
+            echo "No open sync PR found — nothing to merge."
+            exit 0
+          fi
+          # GitHub computes mergeability asynchronously. Merging ~3s after creating the
+          # PR raced that computation every time: v1.9.0 got "This branch can't be
+          # rebased" 2.9s after create, v1.8.0 "has merge conflicts" after 1.7s — and
+          # both merged by hand, unchanged, minutes later. Wait for a real verdict.
+          for _ in $(seq 1 30); do
+            STATE=$(gh pr view "$PR_NUMBER" --json mergeStateStatus -q .mergeStateStatus \
+              --repo "$GITHUB_REPOSITORY" 2>/dev/null || echo UNKNOWN)
+            echo "mergeStateStatus=${STATE}"
+            if [[ "$STATE" != "UNKNOWN" ]]; then break; fi
+            sleep 5
+          done
+          # Retry anyway: leaving UNKNOWN is necessary, not sufficient. MERGED must be
+          # set by a successful merge — a bare `&& break` loop exits 0 after five
+          # failures and reports a merge that never happened.
+          MERGED=0
+          for _ in $(seq 1 5); do
+            if gh pr merge "$PR_NUMBER" --rebase --delete-branch --admin \
+              --repo "$GITHUB_REPOSITORY"; then
+              MERGED=1
+              break
+            fi
+            sleep 15
+          done
+          if [[ "$MERGED" -ne 1 ]]; then
+            echo "::error::Could not rebase-merge sync PR #${PR_NUMBER} into main after 5 attempts. The release itself is published; merge it by hand."
+            exit 1
           fi
           # The release branch itself was already used to publish and contains frozen
           # history — leave it in place for forensics. A v1.6.0 release branch should
           # never be deleted until the next major cuts over.
-
-      - name: Trigger build workflow
-        env:
-          GH_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
-          STABLE_TAG: ${{ steps.version.outputs.stable_tag }}
-        run: |
-          set -euo pipefail
-          # GITHUB_TOKEN tag pushes don't fire build.yml in this setup, dispatch it.
-          #
-          # --ref pins the build to the stable tag (the frozen release-branch tip). The
-          # prior main-merge step usually leaves main at the stable version already, but
-          # relying on that is fragile; building the tag guarantees checkout has the
-          # matching package.json + code and enables signing/notarization (tag has no '-').
-          gh workflow run build.yml \
-            --ref "${STABLE_TAG}" \
-            -f release_tag="${STABLE_TAG}" \
-            -f arch=both \
-            --repo "$GITHUB_REPOSITORY"
-
-      - name: Announce stable on Discord
-        if: success()
-        env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_RELEASE_CHANNEL_ID: ${{ vars.DISCORD_RELEASE_CHANNEL_ID }}
-          GITHUB_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
-          STABLE_TAG: ${{ steps.version.outputs.stable_tag }}
-          RC_TAG: ${{ steps.version.outputs.rc_tag }}
-          EXTRA: ${{ inputs.release_notes_extra }}
-          KIND: stable
-        run: node .github/scripts/discord-release-announce.mjs
 
       - name: Workflow summary
         run: |
@@ -173,4 +213,11 @@ jobs:
             echo "- Stable tag: \`${{ steps.version.outputs.stable_tag }}\`"
             echo "- Promoted from: \`${{ steps.version.outputs.rc_tag }}\`"
             echo "- Tier 3 (homebrew/winget/nix/aur) will fire on the published release via OPENSCREEN_RELEASE_TOKEN."
+            if [[ "${{ steps.sync_main.outcome }}" != "success" ]]; then
+              echo ""
+              echo "> [!WARNING]"
+              echo "> **main was not synced.** The release is published and the build was"
+              echo "> dispatched; only the \`release/v${{ steps.version.outputs.stable_version }}-sync\` → main PR is"
+              echo "> outstanding. Merge it by hand, then main is back in line."
+            fi
           } >> "$GITHUB_STEP_SUMMARY"
