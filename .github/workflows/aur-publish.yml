@@ -9,6 +9,11 @@ on:
         description: "Release tag to publish (e.g. v1.5.0)"
         required: true
         type: string
+      dry_run:
+        description: "Exécuter tout le pipeline mais s'arrêter avant le push AUR"
+        required: false
+        default: false
+        type: boolean
 
 permissions:
   contents: read
@@ -289,9 +294,23 @@ jobs:
           fi
           echo "Diff limited to the expected bump."
 
+      - name: Dry run — stop before touching the AUR
+        if: steps.aur_secret.outputs.configured == 'true' && inputs.dry_run
+        working-directory: aur-repo
+        run: |
+          set -euo pipefail
+          echo "Mode dry_run : tout a été validé, rien ne sera poussé."
+          echo "Ce qui aurait été committé :"
+          git --no-pager diff --stat -- PKGBUILD .SRCINFO
+          {
+            echo "### Dry run — aucun push"
+            echo "Le pipeline est allé jusqu'au bout des validations."
+            echo "La clé de déploiement n'a pas été écrite sur le disque."
+          } >> "$GITHUB_STEP_SUMMARY"
+
       # La clé n'apparaît sur le disque qu'ici, une fois tout le contenu validé.
       - name: Setup SSH for AUR
-        if: steps.aur_secret.outputs.configured == 'true'
+        if: steps.aur_secret.outputs.configured == 'true' && !inputs.dry_run
         env:
           AUR_SSH_PRIVATE_KEY: ${{ secrets.AUR_SSH_PRIVATE_KEY }}
           AUR_KNOWN_HOSTS: ${{ vars.AUR_KNOWN_HOSTS }}
@@ -315,7 +334,7 @@ jobs:
           SSHCONF
 
       - name: Commit and push
-        if: steps.aur_secret.outputs.configured == 'true'
+        if: steps.aur_secret.outputs.configured == 'true' && !inputs.dry_run
         working-directory: aur-repo
         env:
           VERSION: ${{ steps.meta.outputs.version }}
