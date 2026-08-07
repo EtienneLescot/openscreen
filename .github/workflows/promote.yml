@@ -171,8 +171,20 @@ jobs:
             --repo "$GITHUB_REPOSITORY" || echo "(PR already exists — skipping)"
           PR_NUMBER=$(gh pr list --head "${BRANCH}-sync" --state open --json number -q '.[0].number' --repo "$GITHUB_REPOSITORY")
           if [[ -z "$PR_NUMBER" ]]; then
-            echo "No open sync PR found — nothing to merge."
-            exit 0
+            # L'échec de `gh pr create` ci-dessus est converti en echo, donc on
+            # arrive ici aussi bien quand la PR existait déjà que quand sa création
+            # a échoué pour une autre raison. Sortir en 0 dans le second cas
+            # reportait sync_main en succès alors que le test d'ascendance du haut
+            # avait justement établi que main ne contient pas la branche, et
+            # l'avertissement de fin sautait. On re-teste plutôt que de supposer :
+            # quelqu'un a pu merger la synchro à la main entre-temps.
+            git fetch origin main "$BRANCH"
+            if git merge-base --is-ancestor "origin/${BRANCH}" origin/main; then
+              echo "origin/${BRANCH} is already an ancestor of origin/main — nothing to merge."
+              exit 0
+            fi
+            echo "::error::No open sync PR exists and main does not contain ${BRANCH}."
+            exit 1
           fi
           # GitHub computes mergeability asynchronously. Merging ~3s after creating the
           # PR raced that computation every time: v1.9.0 got "This branch can't be
