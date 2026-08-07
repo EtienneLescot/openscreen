@@ -125,13 +125,18 @@ const LINUX_REQUIRED = [
 		breaks: "the preview renders nothing and every export falls back to the no-op compositor",
 		fix: FIX_LINUX,
 	},
-	{
-		match: (name) => /^lib(avcodec|avformat|avutil|swresample|swscale)\.so\.\d+$/.test(name),
-		what: "the symbol-renamed LGPL ffmpeg shared objects the compositor links",
+	// Une exigence par famille, plutôt qu'`atLeast: 5` sur une regex combinée. Le
+	// compte total était satisfait par cinq copies versionnées d'une même
+	// bibliothèque — libavcodec.so.58 à .62 laissées par un build précédent —
+	// pendant qu'une autre manquait. Le paquet passait alors la garde et le
+	// compositeur ne chargeait pas : exactement le mode de panne que cette garde
+	// existe pour attraper.
+	...["avcodec", "avformat", "avutil", "swresample", "swscale"].map((library) => ({
+		match: (name) => new RegExp(`^lib${library}\\.so\\.\\d+$`).test(name),
+		what: `the symbol-renamed lib${library} shared object the compositor links`,
 		breaks: "the compositor addon cannot be loaded at all (ld.so error at require())",
 		fix: FIX_LINUX,
-		atLeast: 5,
-	},
+	})),
 	{
 		match: (name) => name === "openscreen-pipewire-helper",
 		what: "the PipeWire screen-capture helper",
