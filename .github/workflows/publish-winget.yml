@@ -15,7 +15,11 @@ jobs:
     runs-on: windows-latest
     if: (github.event_name == 'workflow_dispatch' || !github.event.release.prerelease) && vars.WINGET_IDENTIFIER != ''
     steps:
-      - uses: vedantmgoyal9/winget-releaser@v2
+      # Épinglé sur le SHA de v2 : un tag git est mutable, et cette action tierce
+      # reçoit WINGET_ACC_TOKEN. Un tag repointé suffirait à exfiltrer le token
+      # sans qu'aucun changement n'apparaisse ici. Pour bouger de version,
+      # re-résoudre le tag et remplacer le SHA explicitement.
+      - uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
         with:
           identifier: ${{ vars.WINGET_IDENTIFIER }}
           # Matches the Windows installer asset attached to each release,
