@@ -101,7 +101,7 @@ A `v*` tag or manual dispatch starts platform builds. Dispatch accepts `arch` (`
 - `build-windows` runs `npm run build:win` and uploads `openscreen-windows` for 30 days.
 - `build-windows-store` runs `npm run build:win:store` and uploads `openscreen-windows-store` for 30 days.
 - `build-macos` is an `arm64`/`x64` matrix. It builds Vite/Electron and native helpers, packages and optionally signs the app, creates DMGs, notarizes every signed build including pre-releases, and uploads one artifact per architecture for 30 days.
-- `build-linux` produces AppImage, zsync, deb, and pacman files and uploads `openscreen-linux` for 30 days.
+- `build-linux` produces AppImage, deb, and pacman files and uploads `openscreen-linux` for 30 days. No zsync: that is electron-updater's delta format, this repo ships no updater, and app-builder-lib 26.x embeds a block map in the AppImage instead.
 - `publish-release` waits for Windows NSIS, macOS, and Linux jobs; the Store job is not a dependency. It checks the tag against `package.json`, downloads the NSIS/macOS/Linux artifacts, and creates or updates a GitHub release with `OPENSCREEN_RELEASE_TOKEN`.
 
 The build comments and package behavior refer to the local Whisper architecture documented in [transcription and captions](../architecture/transcription-and-captions.md). The STT model downloads to user data at runtime and is not a release-build asset.

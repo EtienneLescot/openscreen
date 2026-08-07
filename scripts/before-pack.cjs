@@ -41,6 +41,20 @@ const FIX =
 const FIX_MAC =
 	"Rebuild it with:\n\n    npm run build:native:compositor:mac\n\nor use `npm run build:mac`, which does that for you.";
 
+const FIX_LINUX =
+	"Rebuild it with:\n\n    npm run build:native:compositor:linux\n\nor use `npm run build:linux`, which does that for you.";
+
+const FIX_LINUX_HELPER =
+	"Rebuild it with:\n\n    npm run build:native:linux\n\nor use `npm run build:linux`, which does that for you.";
+
+/** Everything the PipeWire capture helper is compiled from. */
+const HELPER_SOURCE_PATHS = [
+	"electron/native/pipewire-capture/src",
+	"electron/native/pipewire-capture/csrc",
+	"electron/native/pipewire-capture/build.rs",
+	"electron/native/pipewire-capture/Cargo.toml",
+].map((p) => path.join(ROOT, p));
+
 /**
  * Everything that has to be inside `electron/native/bin/darwin-<arch>/` for the .app to
  * work, keyed by what breaks when it is absent.
@@ -89,6 +103,56 @@ const MAC_REQUIRED = [
 	},
 ];
 
+/**
+ * The Linux counterpart of MAC_REQUIRED. It exists for the same reason: until this
+ * hook grew a Linux branch, `beforePack` asserted nothing at all on Linux — the
+ * comment said "Linux ships no native addon of its own", which stopped being true
+ * when the wgpu compositor addon and the PipeWire capture helper landed.
+ *
+ * `linux.extraResources` ships this directory wholesale (`filter: ["linux-*​/**"]`),
+ * so "present here" is the same thing as "present in the installed app".
+ *
+ * Note the two ffmpeg sets, which is why `ffmpeg/` is required separately below:
+ * the `.so` files sitting directly in this directory are the compositor's copies,
+ * with every symbol renamed to `osff_*` so the addon cannot bind to Chromium's
+ * bundled ffmpeg. The helper needs the *unrenamed* originals, which is what the
+ * `ffmpeg/` subdirectory holds.
+ */
+const LINUX_REQUIRED = [
+	{
+		match: (name) => name === "compositor_view.node",
+		what: "the wgpu/Vulkan compositor addon",
+		breaks: "the preview renders nothing and every export falls back to the no-op compositor",
+		fix: FIX_LINUX,
+	},
+	{
+		match: (name) => /^lib(avcodec|avformat|avutil|swresample|swscale)\.so\.\d+$/.test(name),
+		what: "the symbol-renamed LGPL ffmpeg shared objects the compositor links",
+		breaks: "the compositor addon cannot be loaded at all (ld.so error at require())",
+		fix: FIX_LINUX,
+		atLeast: 5,
+	},
+	{
+		match: (name) => name === "openscreen-pipewire-helper",
+		what: "the PipeWire screen-capture helper",
+		breaks: "Wayland capture is unavailable and cursor recording throws",
+		fix: FIX_LINUX_HELPER,
+	},
+	{
+		match: (name) => name === "whisper-stt-server",
+		what: "the whisper.cpp STT helper",
+		breaks: "transcription and captions fail with a developer error shown to end users",
+		fix: "Build it with:\n\n    npm run build:whisper-binaries\n\nor stage CI's with `bash scripts/stage-whisper-stt.sh linux-x64`.",
+	},
+	{
+		match: (name) => /^libggml.*\.so(\.\d+)*$/.test(name),
+		what: "the ggml backend shared objects the STT helper links",
+		breaks: "whisper-stt-server dies in ld.so before main(), so STT times out with no diagnostic",
+		fix: "Build it with:\n\n    npm run build:whisper-binaries",
+		atLeast: 1,
+	},
+];
+
 /** electron-builder passes `context.arch` as a numeric enum; map it to our directory tag. */
 function archTagFor(context) {
 	const BY_INDEX = { 0: "ia32", 1: "x64", 2: "armv7l", 3: "arm64", 4: "universal" };
@@ -96,20 +160,22 @@ function archTagFor(context) {
 	return name && name !== "universal" ? name : process.arch;
 }
 
-function checkMacNativePayload(context) {
-	const tag = `darwin-${archTagFor(context)}`;
-	const dir = path.join(ROOT, "electron", "native", "bin", tag);
+/**
+ * Shared by the macOS and Linux payload checks — same contract on both: the arch-tagged
+ * directory under electron/native/bin/ is what extraResources ships, so a missing entry
+ * here is a missing entry in the installed app.
+ */
+function checkNativePayload({ dir, required, osLabel, bundleNoun, emptyDirFix }) {
 	if (!fs.existsSync(dir)) {
 		throw new Error(
-			`Refusing to package: ${path.relative(ROOT, dir)} does not exist, so the .app would ` +
+			`Refusing to package: ${path.relative(ROOT, dir)} does not exist, so ${bundleNoun} would ` +
 				"ship with no native modules at all.\n\n" +
-				`${FIX_MAC}\n\nThe STT helper and the capture helper are separate builds — see\n` +
-				"technical-documentation/engineering/build-and-packaging.md.",
+				emptyDirFix,
 		);
 	}
 
 	const present = fs.readdirSync(dir);
-	const missing = MAC_REQUIRED.filter(
+	const missing = required.filter(
 		(req) => present.filter((name) => req.match(name)).length < (req.atLeast ?? 1),
 	);
 	if (missing.length === 0) {
@@ -123,12 +189,68 @@ function checkMacNativePayload(context) {
 		)
 		.join("\n");
 	throw new Error(
-		`Refusing to package an incomplete macOS payload.\n\n` +
+		`Refusing to package an incomplete ${osLabel} payload.\n\n` +
 			`  looked in: ${path.relative(ROOT, dir)}\n\n` +
 			`Missing:\n${detail}\n\n` +
 			"Every one of these fails silently or as an unactionable timeout in the installed\n" +
 			"app, which is why this is a hard error at pack time rather than a warning.",
 	);
+}
+
+function checkMacNativePayload(context) {
+	checkNativePayload({
+		dir: path.join(ROOT, "electron", "native", "bin", `darwin-${archTagFor(context)}`),
+		required: MAC_REQUIRED,
+		osLabel: "macOS",
+		bundleNoun: "the .app",
+		emptyDirFix: `${FIX_MAC}\n\nThe STT helper and the capture helper are separate builds — see\ntechnical-documentation/engineering/build-and-packaging.md.`,
+	});
+}
+
+function checkLinuxNativePayload(context) {
+	const dir = path.join(ROOT, "electron", "native", "bin", `linux-${archTagFor(context)}`);
+	checkNativePayload({
+		dir,
+		required: LINUX_REQUIRED,
+		osLabel: "Linux",
+		bundleNoun: "the package",
+		emptyDirFix: `${FIX_LINUX}\n\nThe capture helper and the STT helper are separate builds — see\ntechnical-documentation/engineering/build-and-packaging.md.`,
+	});
+
+	// Checked apart from LINUX_REQUIRED because "something named ffmpeg exists" is not the
+	// property that matters — it has to be a directory holding the *unrenamed* libraries.
+	// An empty one, or the wrong kind of entry, passes a name match and still ships a
+	// helper that cannot start.
+	const helperFfmpeg = path.join(dir, "ffmpeg");
+	const isDir = fs.existsSync(helperFfmpeg) && fs.statSync(helperFfmpeg).isDirectory();
+	if (fs.existsSync(helperFfmpeg) && !isDir) {
+		// `fetch:ffmpeg` vendors the *static* ffmpeg binary to exactly this path, while
+		// `build:native:linux` wants a directory here. They collide, and the loser is
+		// whichever ran first. CI never sees it — `build:linux` only runs
+		// `fetch:ffmpeg:sdk`, which does not write the executable — so this fires on
+		// local packaging after someone has run the full fetch by hand.
+		throw new Error(
+			`Refusing to package: ${path.relative(ROOT, helperFfmpeg)} is a file, not a directory.\n\n` +
+				"That path is where the PipeWire helper's ffmpeg libraries live, but the static\n" +
+				"ffmpeg binary that `npm run fetch:ffmpeg` vendors lands on the same name and\n" +
+				"overwrote it. Delete it and re-run:\n\n    npm run build:native:linux\n\n" +
+				"(`npm run build:linux` uses fetch:ffmpeg:sdk, which does not write that file.)",
+		);
+	}
+	const libs = isDir
+		? fs.readdirSync(helperFfmpeg).filter((name) => /^lib(av|sw)\w+\.so\.\d+$/.test(name))
+		: [];
+	if (libs.length === 0) {
+		throw new Error(
+			"Refusing to package an incomplete Linux payload.\n\n" +
+				`  looked in: ${path.relative(ROOT, helperFfmpeg)}\n\n` +
+				"Missing:\n  - the PipeWire helper's own ffmpeg shared objects\n" +
+				"      without it: openscreen-pipewire-helper dies in ld.so, so capture never starts\n" +
+				`      ${FIX_LINUX_HELPER.replace(/\n+/g, " ")}\n\n` +
+				"These are deliberately not the copies one level up: those have every symbol\n" +
+				"renamed to `osff_*` for the compositor addon, and the helper needs the originals.",
+		);
+	}
 }
 
 /** Newest mtime under `target` (file or directory), or 0 if it does not exist. */
@@ -149,24 +271,31 @@ function newestMtimeMs(target) {
 	return newest;
 }
 
-function checkCompositorAddonFreshness(addon = ADDON, fix = FIX, label = "D3D11") {
+// `label` is a full noun ("D3D11 compositor addon", "PipeWire capture helper"): this now
+// guards artifacts that are not all compositor addons.
+function checkCompositorAddonFreshness(
+	addon = ADDON,
+	fix = FIX,
+	label = "D3D11 compositor addon",
+	sources,
+) {
 	if (!fs.existsSync(addon)) {
 		throw new Error(
-			`Refusing to package: the ${label} compositor addon is missing.\n\n  expected: ${addon}\n\n${fix}`,
+			`Refusing to package: the ${label} is missing.\n\n  expected: ${addon}\n\n${fix}`,
 		);
 	}
 
 	const addonMs = fs.statSync(addon).mtimeMs;
-	const stale = SOURCE_PATHS.map((source) => ({ source, ms: newestMtimeMs(source) })).filter(
-		(entry) => entry.ms > addonMs,
-	);
+	const stale = (sources ?? SOURCE_PATHS)
+		.map((source) => ({ source, ms: newestMtimeMs(source) }))
+		.filter((entry) => entry.ms > addonMs);
 	if (stale.length === 0) {
 		return;
 	}
 
 	const newest = stale.reduce((a, b) => (a.ms > b.ms ? a : b));
 	throw new Error(
-		`Refusing to package a stale ${label} compositor addon.\n\n` +
+		`Refusing to package a stale ${label}.\n\n` +
 			`  addon: ${path.relative(ROOT, addon)}\n` +
 			`  addon built: ${new Date(addonMs).toISOString()}\n` +
 			`  newer source: ${path.relative(ROOT, newest.source)} (${new Date(newest.ms).toISOString()})\n\n` +
@@ -189,10 +318,26 @@ exports.default = async function beforePack(context) {
 		const tag = `darwin-${archTagFor(context)}`;
 		const shipped = path.join(ROOT, "electron", "native", "bin", tag, "compositor_view.node");
 		checkMacNativePayload(context);
-		checkCompositorAddonFreshness(shipped, FIX_MAC, "Metal");
+		checkCompositorAddonFreshness(shipped, FIX_MAC, "Metal compositor addon");
 		return;
 	}
-	// Linux ships no native addon of its own; nothing to assert.
+	if (platform === "linux") {
+		const tag = `linux-${archTagFor(context)}`;
+		const dir = path.join(ROOT, "electron", "native", "bin", tag);
+		checkLinuxNativePayload(context);
+		checkCompositorAddonFreshness(
+			path.join(dir, "compositor_view.node"),
+			FIX_LINUX,
+			"wgpu/Vulkan compositor addon",
+		);
+		checkCompositorAddonFreshness(
+			path.join(dir, "openscreen-pipewire-helper"),
+			FIX_LINUX_HELPER,
+			"PipeWire capture helper",
+			HELPER_SOURCE_PATHS,
+		);
+		return;
+	}
 };
 
 // Runnable on its own for debugging: `node scripts/before-pack.cjs`
@@ -204,9 +349,28 @@ if (require.main === module) {
 			checkCompositorAddonFreshness(
 				path.join(ROOT, "electron", "native", "bin", tag, "compositor_view.node"),
 				FIX_MAC,
-				"Metal",
+				"Metal compositor addon",
 			);
 			console.log(`macOS native payload complete in electron/native/bin/${tag}, addon up to date.`);
+		} else if (process.platform === "linux") {
+			// Was falling through to the Windows branch below, so running this on Linux
+			// reported a missing D3D11 addon at a win32 path — noise, on the one platform
+			// where the hook now has something to say.
+			const tag = `linux-${process.arch}`;
+			const dir = path.join(ROOT, "electron", "native", "bin", tag);
+			checkLinuxNativePayload({ arch: undefined });
+			checkCompositorAddonFreshness(
+				path.join(dir, "compositor_view.node"),
+				FIX_LINUX,
+				"wgpu/Vulkan compositor addon",
+			);
+			checkCompositorAddonFreshness(
+				path.join(dir, "openscreen-pipewire-helper"),
+				FIX_LINUX_HELPER,
+				"PipeWire capture helper",
+				HELPER_SOURCE_PATHS,
+			);
+			console.log(`Linux native payload complete in electron/native/bin/${tag}, addon up to date.`);
 		} else {
 			checkCompositorAddonFreshness();
 			console.log("compositor addon is up to date with its Rust sources.");

@@ -439,8 +439,14 @@ jobs:
       - name: Setup Node.js
         uses: ./.github/actions/setup
 
-      - name: Install pacman build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libarchive-tools
+      # bsdtar (libarchive-tools) is fpm's mtree generator for the pacman target.
+      # patchelf is what build-linux-compositor-addon.mjs renames the ffmpeg symbols
+      # with, so the addon cannot bind to Chromium's bundled ffmpeg — an unconditional
+      # dependency that resolvePatchelf() throws on. It happens to be preinstalled on
+      # the ubuntu-24.04 image, which is why this has worked; declaring it means the
+      # build stops depending on the runner image's contents.
+      - name: Install Linux packaging and native build dependencies
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools patchelf
 
       - name: Stage whisper-stt binaries
         shell: bash
@@ -457,9 +463,14 @@ jobs:
           name: openscreen-linux
           path: |
             release/**/*.AppImage
-            release/**/*.zsync
             release/**/*.deb
             release/**/*.pacman
+          # No *.zsync: nothing produces one. zsync is electron-updater's delta format,
+          # this repo has no updater (no electron-updater, no autoUpdater, no
+          # latest-linux.yml), and app-builder-lib 26.x dropped zsync entirely in favour
+          # of the block map it embeds in the AppImage. The glob had matched nothing
+          # since the dependency bump, silently — `if-no-files-found: error` evaluates
+          # the union of these patterns, so one dead glob among live ones never fails.
           if-no-files-found: error
           retention-days: 30
 
