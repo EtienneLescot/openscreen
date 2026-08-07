@@ -2,8 +2,8 @@
 # ffmpeg LGPL-shared (voir README). LIBCLANG_PATH = install LLVM locale (bindgen).
 # Ces valeurs cèdent à une vraie variable d'environnement (force=false par défaut).
 #
-# Pinné sur le MÊME build release-branch (n8.1.2-32-gcfa62de001, tag BtbN
-# autobuild-2026-07-30-13-32) que scripts/fetch-ffmpeg.mjs vendorise dans
+# Pinné sur le MÊME build release-branch (n8.1.2-34-g9b6c8969e0, tag BtbN
+# autobuild-2026-07-31-14-10) que scripts/fetch-ffmpeg.mjs vendorise dans
 # electron/native/bin/<tag>/ pour le packaging — pas un snapshot "master-latest"
 # flottant. L'addon (compositor-view-napi) doit être lié à la même version de
 # ffmpeg que celle shippée, sinon les DLLs vendorisées ne matchent pas les

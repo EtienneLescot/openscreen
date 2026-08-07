@@ -26,11 +26,11 @@ distributed by their own registries, not redistributed inside our binaries.
   verifies this before vendoring — it reads `ffmpeg -L`, `-buildconf` and
   `-encoders` and refuses any binary that reports otherwise.
 - **Upstream binaries**: BtbN/FFmpeg-Builds, release
-  `autobuild-2026-07-30-13-32`, the `*-lgpl-shared-8.1` assets. Pinned by
+  `autobuild-2026-07-31-14-10`, the `*-lgpl-shared-8.1` assets. Pinned by
   SHA-256 in `scripts/fetch-ffmpeg.mjs`; the digests there identify the exact
   artifacts we ship.
-  <https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-07-30-13-32>
-- **Corresponding source**: FFmpeg n8.1.2, commit `cfa62de001`, from
+  <https://github.com/BtbN/FFmpeg-Builds/releases/tag/autobuild-2026-07-31-14-10>
+- **Corresponding source**: FFmpeg n8.1.2, commit `9b6c8969e0`, from
   <https://github.com/FFmpeg/FFmpeg>. The build configuration and scripts that
   produced these exact binaries are published at
   <https://github.com/BtbN/FFmpeg-Builds>.
