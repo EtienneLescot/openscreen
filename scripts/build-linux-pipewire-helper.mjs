@@ -63,33 +63,15 @@ if (cargoVersion.status !== 0) {
 	process.exit(1);
 }
 
-/**
- * build.rs runs bindgen over the ffmpeg headers, and bindgen needs clang's own
- * builtin includes (limits.h, stddef.h). Ubuntu ships libclang.so.1 without the
- * matching resource dir, so clang finds neither and the build dies with
- * "'limits.h' file not found". Point it at gcc's copies instead — the same
- * fallback scripts/build-linux-compositor-addon.mjs already applies.
- */
-function bindgenClangArgs() {
-	if (process.env.BINDGEN_EXTRA_CLANG_ARGS) {
-		return process.env.BINDGEN_EXTRA_CLANG_ARGS;
-	}
-	const multiarch = process.arch === "arm64" ? "aarch64-linux-gnu" : "x86_64-linux-gnu";
-	const gccIncludeRoot = `/usr/lib/gcc/${multiarch}`;
-	if (!fs.existsSync(gccIncludeRoot)) {
-		return "";
-	}
-	const withStddef = fs
-		.readdirSync(gccIncludeRoot)
-		.map((version) => path.join(gccIncludeRoot, version, "include"))
-		.filter((dir) => fs.existsSync(path.join(dir, "stddef.h")));
-	return withStddef.length > 0 ? `-I${withStddef[0]}` : "";
-}
-
+// No BINDGEN_EXTRA_CLANG_ARGS wrangling here on purpose. bindgen needs clang's
+// freestanding headers (limits.h, stddef.h) and Ubuntu ships libclang.so.1 with
+// no resource dir, but the crate's own build.rs already falls back to gcc's
+// copies — see freestanding_header_args() there. Doing it here too would only
+// cover the build that goes through this script and leave a bare `cargo build`
+// broken, which is exactly the split build.rs exists to avoid.
 const build = spawnSync("cargo", ["build", "--release", "--manifest-path", manifest], {
 	cwd: crateDir,
 	stdio: "inherit",
-	env: { ...process.env, BINDGEN_EXTRA_CLANG_ARGS: bindgenClangArgs() },
 });
 if (build.error) {
 	console.error(`Failed to start cargo: ${build.error.message}`);

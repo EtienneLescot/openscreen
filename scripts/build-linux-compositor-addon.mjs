@@ -122,6 +122,14 @@ function resolveLibclangDir() {
  * On distributions that ship only `libclang.so.1` (no -dev package) clang also
  * cannot find its own `stddef.h`. Point it at gcc's copy in that case rather
  * than making the caller discover it.
+ *
+ * Kept behaviourally identical to `freestanding_header_args()` in
+ * electron/native/pipewire-capture/build.rs, which is the authority — that one
+ * runs for a bare `cargo build` too. Two properties matter and both were once
+ * wrong here: `limits.h` must be required alongside `stddef.h` (the failure
+ * being fixed is `'limits.h' file not found` — glibc's copy `#include_next`s
+ * the compiler's), and the newest gcc must be picked deterministically rather
+ * than whatever `readdirSync` happened to return first.
  */
 function bindgenClangArgs() {
 	if (process.env.BINDGEN_EXTRA_CLANG_ARGS) {
@@ -131,11 +139,16 @@ function bindgenClangArgs() {
 	if (!fs.existsSync(gccIncludeRoot)) {
 		return "";
 	}
-	const withStddef = fs
+	const usable = fs
 		.readdirSync(gccIncludeRoot)
 		.map((version) => path.join(gccIncludeRoot, version, "include"))
-		.filter((dir) => fs.existsSync(path.join(dir, "stddef.h")));
-	return withStddef.length > 0 ? `-I${withStddef[0]}` : "";
+		.filter(
+			(dir) =>
+				fs.existsSync(path.join(dir, "limits.h")) && fs.existsSync(path.join(dir, "stddef.h")),
+		)
+		.sort()
+		.reverse();
+	return usable.length > 0 ? `-I${usable[0]}` : "";
 }
 
 /**

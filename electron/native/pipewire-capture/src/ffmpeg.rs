@@ -51,7 +51,7 @@ pub const AVIO_FLAG_WRITE: i32 = 2;
 pub fn err_to_string(code: i32) -> String {
     // NOT `[0i8; 256]`: `c_char` is signed on x86_64 but UNSIGNED on aarch64, so a
     // hardcoded i8 makes av_strerror's `*mut c_char` a type error on arm64.
-    let mut buffer = [0 as ::std::os::raw::c_char; 256];
+    let mut buffer = [0 as std::ffi::c_char; 256];
     // SAFETY: the buffer is the size we tell av_strerror it is, and ffmpeg
     // always NUL-terminates within it.
     let ok = unsafe { av_strerror(code, buffer.as_mut_ptr(), buffer.len()) } == 0;
