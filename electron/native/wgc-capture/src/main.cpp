@@ -607,6 +607,10 @@ int main(int argc, char* argv[]) {
     MFEncoderOptions encoderOptions{};
     encoderOptions.preferSoftwareEncoder = config.preferSoftwareEncoder;
     encoderOptions.injectDefaultSinkWriterFailureOnce = injectDefaultSinkWriterFailureOnce;
+    // Keep the CPU path for software encoding and inline webcam PiP. The DXGI
+    // path is safe when the screen has no CPU-composited webcam frame.
+    encoderOptions.useDxgiInput =
+        !config.preferSoftwareEncoder && (!webcamActive || writeSeparateWebcam);
 
     MFEncoder encoder;
     if (!encoder.initialize(
@@ -631,6 +635,7 @@ int main(int argc, char* argv[]) {
     if (writeSeparateWebcam) {
         MFEncoderOptions webcamEncoderOptions = encoderOptions;
         webcamEncoderOptions.injectDefaultSinkWriterFailureOnce = false;
+        webcamEncoderOptions.useDxgiInput = false;
         const int webcamPixels = std::max(1, webcamCapture.width()) * std::max(1, webcamCapture.height());
         const int webcamBitrate = webcamPixels >= 1280 * 720 ? 8'000'000 : 4'000'000;
         if (!webcamEncoder.initialize(
@@ -802,16 +807,18 @@ int main(int argc, char* argv[]) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(testStallReadbackMs));
                 }
                 if (latestFrameTexture) {
-                    // captureVideoSample performs the GPU readback
-                    // (CopyResource/Map) from latestFrameTexture, which must
-                    // stay serialized (via `mutex`) against the WGC
-                    // frame-arrival callback above, which writes new data
-                    // into the same texture on another thread.
-                    hasVideoSample = encoder.captureVideoSample(
-                        latestFrameTexture.Get(),
-                        frameTimestampHns,
-                        !writeSeparateWebcam && webcamFrame.data ? &webcamFrame : nullptr,
-                        videoSample);
+                    if (encoderOptions.useDxgiInput) {
+                        hasVideoSample = encoder.captureDxgiSample(
+                            latestFrameTexture.Get(),
+                            frameTimestampHns,
+                            videoSample);
+                    } else {
+                        hasVideoSample = encoder.captureVideoSample(
+                            latestFrameTexture.Get(),
+                            frameTimestampHns,
+                            !writeSeparateWebcam && webcamFrame.data ? &webcamFrame : nullptr,
+                            videoSample);
+                    }
                     if (!hasVideoSample) {
                         encodeFailed = true;
                         control.requestStop();

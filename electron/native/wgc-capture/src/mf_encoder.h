@@ -29,6 +29,7 @@ struct AudioInputFormat {
 struct MFEncoderOptions {
     bool preferSoftwareEncoder = false;
     bool injectDefaultSinkWriterFailureOnce = false;
+    bool useDxgiInput = false;
 };
 
 constexpr const char* kVideoEncoderSelectionDefault = "default";
@@ -67,6 +68,10 @@ public:
         int64_t timestampHns,
         const BgraFrameView* webcamFrame,
         Microsoft::WRL::ComPtr<IMFSample>& outSample);
+    bool captureDxgiSample(
+        ID3D11Texture2D* texture,
+        int64_t timestampHns,
+        Microsoft::WRL::ComPtr<IMFSample>& outSample);
     bool captureBgraSample(
         const BgraFrameView& frame,
         int64_t timestampHns,
@@ -77,6 +82,11 @@ public:
     const char* videoEncoderSelection() const;
 
 private:
+    bool initializeDxgiEncodingDevice();
+    bool initializeVideoProcessor();
+    bool convertBgraTextureToNv12(
+        ID3D11Texture2D* texture,
+        ID3D11Texture2D* outputTexture);
     bool ensureStagingTexture(ID3D11Texture2D* texture);
     bool copyFrameToBuffer(
         ID3D11Texture2D* texture,
@@ -89,7 +99,20 @@ private:
     Microsoft::WRL::ComPtr<IMFSinkWriter> sinkWriter_;
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
+    Microsoft::WRL::ComPtr<ID3D11Device> captureDevice_;
+    Microsoft::WRL::ComPtr<ID3D11DeviceContext> captureContext_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> captureBridgeTexture_;
+    Microsoft::WRL::ComPtr<IDXGIKeyedMutex> captureBridgeMutex_;
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> encoderBridgeTexture_;
+    Microsoft::WRL::ComPtr<IDXGIKeyedMutex> encoderBridgeMutex_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> stagingTexture_;
+    Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> dxgiDeviceManager_;
+    Microsoft::WRL::ComPtr<IMFVideoSampleAllocatorEx> videoSampleAllocator_;
+    Microsoft::WRL::ComPtr<ID3D11VideoDevice> videoDevice_;
+    Microsoft::WRL::ComPtr<ID3D11VideoContext> videoContext_;
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessorEnumerator> videoProcessorEnumerator_;
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessor> videoProcessor_;
+    UINT dxgiResetToken_ = 0;
     std::mutex writerMutex_;
     DWORD videoStreamIndex_ = 0;
     DWORD audioStreamIndex_ = 0;
@@ -100,5 +123,6 @@ private:
     int64_t firstTimestampHns_ = -1;
     int64_t lastTimestampHns_ = -1;
     bool finalized_ = false;
+    bool useDxgiInput_ = false;
     const char* videoEncoderSelection_ = kVideoEncoderSelectionDefault;
 };
