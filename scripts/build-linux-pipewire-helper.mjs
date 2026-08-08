@@ -63,6 +63,12 @@ if (cargoVersion.status !== 0) {
 	process.exit(1);
 }
 
+// No BINDGEN_EXTRA_CLANG_ARGS wrangling here on purpose. bindgen needs clang's
+// freestanding headers (limits.h, stddef.h) and Ubuntu ships libclang.so.1 with
+// no resource dir, but the crate's own build.rs already falls back to gcc's
+// copies — see freestanding_header_args() there. Doing it here too would only
+// cover the build that goes through this script and leave a bare `cargo build`
+// broken, which is exactly the split build.rs exists to avoid.
 const build = spawnSync("cargo", ["build", "--release", "--manifest-path", manifest], {
 	cwd: crateDir,
 	stdio: "inherit",

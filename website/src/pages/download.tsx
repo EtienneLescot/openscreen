@@ -25,7 +25,7 @@ const PAGE_URL = "https://getopenscreen.com/download/";
 // structured-data description that contradicts the meta one is worse than none.
 const PAGE_TITLE = "Download for Windows, macOS & Linux";
 const PAGE_DESCRIPTION =
-	"Download OpenScreen free for Windows, macOS, and Linux — .dmg, .exe, .deb, .pacman, AppImage, and a Nix flake. Open source, no account, no watermark.";
+	"Download OpenScreen free for Windows, macOS, and Linux — .dmg, .exe, .deb, .rpm, .pacman, AppImage, and a Nix flake. Open source, no account, no watermark.";
 
 type PlatformSpec = {
 	id: string;
@@ -60,6 +60,7 @@ const PLATFORMS: PlatformSpec[] = [
 		icon: TerminalSquare,
 		options: [
 			{ kind: "deb", label: "Debian, Ubuntu, Pop!_OS", sublabel: "Package · .deb" },
+			{ kind: "rpm", label: "Fedora, RHEL, CentOS", sublabel: "Package · .rpm" },
 			{ kind: "pacman", label: "Arch, Manjaro", sublabel: "Package · .pacman" },
 			{ kind: "appImage", label: "Any distribution", sublabel: "Portable · .AppImage" },
 		],

@@ -33,7 +33,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
@@ -53,7 +53,7 @@ jobs:
         run: npm run build:win -- --publish never
 
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-windows
           path: release/**/Openscreen.Setup.*.exe
@@ -65,7 +65,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
@@ -139,7 +139,7 @@ jobs:
           Write-Output "$($expected.Count) tile assets present in $($appx.Name), byte-identical to build/appx/"
 
       - name: Upload Windows Store package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-windows-store
           path: release/**/Openscreen.Setup.*.appx
@@ -167,13 +167,13 @@ jobs:
         arch: ${{ fromJSON((github.event_name == 'workflow_dispatch' && github.event.inputs.arch != 'both') && format('["{0}"]', github.event.inputs.arch) || '["arm64", "x64"]') }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -268,7 +268,7 @@ jobs:
       # installed app, silently. `scripts/before-pack.cjs` now refuses to package
       # that, so this is also what keeps the job from failing at the pack step.
       - name: Cache LGPL ffmpeg tree
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # fetch-ffmpeg-macos.mjs BUILDS ffmpeg from source (~5 min): BtbN ships no
           # macOS target and every circulating macOS build is GPL, which would
@@ -281,7 +281,7 @@ jobs:
         run: npm run fetch:ffmpeg:mac
 
       - name: Cache cargo + compositor build tree
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -477,7 +477,7 @@ jobs:
           spctl -a -vv -t install "${{ steps.dmg.outputs.dmg_path }}"
 
       - name: Upload macOS DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-mac-${{ matrix.arch }}
           path: ${{ steps.dmg.outputs.dmg_path }}
@@ -493,19 +493,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
 
       # bsdtar (libarchive-tools) is fpm's mtree generator for the pacman target.
+      # rpmbuild (rpm) is what fpm shells out to for the rpm target; without it the
+      # build fails at packaging, not at config parse.
       # patchelf is what build-linux-compositor-addon.mjs renames the ffmpeg symbols
       # with, so the addon cannot bind to Chromium's bundled ffmpeg — an unconditional
       # dependency that resolvePatchelf() throws on. It happens to be preinstalled on
       # the ubuntu-24.04 image, which is why this has worked; declaring it means the
       # build stops depending on the runner image's contents.
       - name: Install Linux packaging and native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libarchive-tools patchelf
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools rpm patchelf
 
       - name: Stage whisper-stt binaries
         shell: bash
@@ -516,14 +518,39 @@ jobs:
       - name: Build Linux app
         run: npm run build:linux -- --publish never
 
+      # The guard for the trap documented on the upload step below: `if-no-files-found`
+      # evaluates the union of the globs, so a format that stops being produced is
+      # invisible there. It is a real failure mode and not a hypothetical one — the rpm
+      # target was added to electron-builder.json5's `linux.target` alone, where the CLI
+      # list in `build:linux` overrides it, and the upload glob for it would have matched
+      # nothing on every release with the job still green. One assertion per format.
+      - name: Verify every Linux format was produced
+        run: |
+          if [[ ! -d release ]]; then
+            echo "::error::electron-builder produced no release/ directory"
+            exit 1
+          fi
+          MISSING=()
+          for ext in AppImage deb pacman rpm; do
+            COUNT="$(find release -type f -name "*.${ext}" -printf . | wc -c)"
+            echo "${ext}: ${COUNT}"
+            if [[ "$COUNT" -eq 0 ]]; then MISSING+=("$ext"); fi
+          done
+          if [[ "${#MISSING[@]}" -gt 0 ]]; then
+            echo "::error::No artifact produced for: ${MISSING[*]} — check the target list in package.json's build:linux, which overrides linux.target in electron-builder.json5"
+            find release -maxdepth 2 -type f -print
+            exit 1
+          fi
+
       - name: Upload Linux packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-linux
           path: |
             release/**/*.AppImage
             release/**/*.deb
             release/**/*.pacman
+            release/**/*.rpm
           # No *.zsync: nothing produces one. zsync is electron-updater's delta format,
           # this repo has no updater (no electron-updater, no autoUpdater, no
           # latest-linux.yml), and app-builder-lib 26.x dropped zsync entirely in favour
@@ -543,7 +570,7 @@ jobs:
     if: ${{ (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Full history + tags: the RC notes below are built from `git log` over the
           # range since the previous RC tag, and resolving that tag needs the tags.
@@ -620,25 +647,25 @@ jobs:
           echo "notes_start_tag=$NOTES_START_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Download Windows installer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openscreen-windows
           path: artifacts/windows
 
       - name: Download macOS arm64 DMG
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openscreen-mac-arm64
           path: artifacts/mac-arm64
 
       - name: Download macOS x64 DMG
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openscreen-mac-x64
           path: artifacts/mac-x64
 
       - name: Download Linux packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openscreen-linux
           path: artifacts/linux

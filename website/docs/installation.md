@@ -2,13 +2,14 @@
 id: installation
 title: Installation
 sidebar_position: 2
-description: "Install OpenScreen on macOS, Windows, or Linux — .dmg, .exe, .deb, .pacman, AppImage, and a Nix flake, including the macOS Gatekeeper step."
+description: "Install OpenScreen on macOS, Windows, or Linux — .dmg, .exe, .deb, .rpm, .pacman, AppImage, and a Nix flake, including the macOS Gatekeeper step."
 keywords:
   - install screen recorder
   - download OpenScreen
   - macOS dmg
   - Windows installer
   - Linux deb
+  - Fedora rpm
   - AppImage
   - Nix flake
 ---
@@ -41,11 +42,16 @@ Download and run the `.exe` installer from [Releases](https://github.com/getopen
 
 ## Linux
 
-Three packages are published per release — pick the one matching your distro.
+Four packages are published per release — pick the one matching your distro.
 
 **Debian / Ubuntu / Pop!_OS**
 ```bash
 sudo apt install ./Openscreen-Linux-*.deb
+```
+
+**Fedora / RHEL / CentOS**
+```bash
+sudo dnf install ./Openscreen-Linux-*.rpm
 ```
 
 **Arch / Manjaro**

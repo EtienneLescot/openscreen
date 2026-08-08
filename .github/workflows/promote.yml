@@ -28,7 +28,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
@@ -59,25 +59,25 @@ jobs:
           STABLE_VERSION: ${{ steps.version.outputs.stable_version }}
         run: node .github/scripts/release-milestone-close.mjs
 
-      - name: Bump package.json to stable version on the release branch
+      - name: Bump the version to stable on the release branch
         env:
           TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
           STABLE_VERSION: ${{ steps.version.outputs.stable_version }}
         run: |
           set -euo pipefail
           # Promote checks out the FROZEN release branch (created by prerelease.yml) and
-          # rewrites package.json there. This guarantees the stable tag points at the
+          # rewrites the version there. This guarantees the stable tag points at the
           # same code that was tested as the RC plus any cherry-picked bugfixes.
           BRANCH="release/v${STABLE_VERSION}"
           git fetch origin "$BRANCH"
           git checkout "$BRANCH"
           git reset --hard "origin/${BRANCH}"
-          sed -i -E "s|(\"version\"[[:space:]]*:[[:space:]]*\")[^\"]*(\")|\1${STABLE_VERSION}\2|" package.json
-          echo "package.json version:"
-          grep '"version"' package.json
+          # Writes package-lock.json too. A sed over package.json alone left the
+          # lockfile behind on every release up to 1.9.0; see the script header.
+          node .github/scripts/set-release-version.mjs "${STABLE_VERSION}"
           git config user.name  "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add package.json
+          git add package.json package-lock.json
           git commit --allow-empty -m "chore(release): bump to ${STABLE_VERSION} [skip ci]" || true
           git push "https://x-access-token:${TOKEN}@github.com/${GITHUB_REPOSITORY}.git" "$BRANCH"
 
