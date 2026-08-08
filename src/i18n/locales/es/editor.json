@@ -237,6 +237,7 @@
 		"selectModelFailed": "No se pudo seleccionar el modelo",
 		"providerSettings": "Configuración del proveedor…",
 		"applyEditsFailed": "No se pudieron aplicar las ediciones del agente",
+		"agentEditConflict": "Las ediciones del agente no se aplicaron porque el proyecto cambió mientras trabajaba.",
 		"chatFailed": "Error en el chat",
 		"rewindFailed": "Error al rebobinar",
 		"rewoundSuccess": "Rebobinado al inicio de ese mensaje",

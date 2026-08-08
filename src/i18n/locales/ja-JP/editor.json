@@ -237,6 +237,7 @@
 		"selectModelFailed": "モデルを選択できませんでした",
 		"providerSettings": "プロバイダー設定…",
 		"applyEditsFailed": "エージェントの編集を適用できませんでした",
+		"agentEditConflict": "エージェントの処理中にプロジェクトが変更されたため、編集は適用されませんでした。",
 		"chatFailed": "チャットに失敗しました",
 		"rewindFailed": "巻き戻しに失敗しました",
 		"rewoundSuccess": "そのメッセージの先頭まで巻き戻しました",

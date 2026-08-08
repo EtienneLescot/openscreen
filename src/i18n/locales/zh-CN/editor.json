@@ -237,6 +237,7 @@
 		"selectModelFailed": "无法选择模型",
 		"providerSettings": "提供方设置…",
 		"applyEditsFailed": "无法应用代理的编辑",
+		"agentEditConflict": "代理工作期间项目已更改，因此未应用代理的编辑。",
 		"chatFailed": "聊天失败",
 		"rewindFailed": "回退失败",
 		"rewoundSuccess": "已回退到该消息的开头",
