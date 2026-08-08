@@ -7,6 +7,8 @@
 		"share": "مشاركة",
 		"done": "تم",
 		"open": "فتح",
+		"checkForUpdates": "التحقق من وجود تحديثات",
+		"viewRelease": "عرض الإصدار",
 		"upload": "رفع",
 		"export": "تصدير",
 		"showInFolder": "عرض في المجلد",
@@ -36,6 +38,11 @@
 		"hide": "إخفاء OpenScreen",
 		"hideOthers": "إخفاء الآخرين",
 		"unhide": "إظهار الكل"
+	},
+	"updates": {
+		"available": "يتوفر OpenScreen {{latestVersion}}. الإصدار المثبت هو {{currentVersion}}.",
+		"current": "OpenScreen محدّث ({{currentVersion}}).",
+		"failed": "تعذّر التحقق من وجود تحديثات."
 	},
 	"playback": {
 		"play": "تشغيل",

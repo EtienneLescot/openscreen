@@ -7,6 +7,8 @@
 		"share": "Compartilhar",
 		"done": "Concluir",
 		"open": "Abrir",
+		"checkForUpdates": "Verificar atualizações",
+		"viewRelease": "Ver versão",
 		"upload": "Upload",
 		"export": "Exportar",
 		"showInFolder": "Mostrar na Pasta",
@@ -36,6 +38,11 @@
 		"hide": "Ocultar OpenScreen",
 		"hideOthers": "Ocultar Outros",
 		"unhide": "Mostrar Todos"
+	},
+	"updates": {
+		"available": "O OpenScreen {{latestVersion}} está disponível. Você está usando a versão {{currentVersion}}.",
+		"current": "O OpenScreen está atualizado ({{currentVersion}}).",
+		"failed": "Não foi possível verificar atualizações."
 	},
 	"playback": {
 		"play": "Play",

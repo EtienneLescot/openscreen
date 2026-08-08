@@ -7,6 +7,8 @@
 		"share": "分享",
 		"done": "完成",
 		"open": "打开",
+		"checkForUpdates": "检查更新",
+		"viewRelease": "查看版本",
 		"upload": "上传",
 		"export": "导出",
 		"showInFolder": "在文件夹中显示",
@@ -36,6 +38,11 @@
 		"hide": "隐藏 OpenScreen",
 		"hideOthers": "隐藏其他",
 		"unhide": "显示全部"
+	},
+	"updates": {
+		"available": "OpenScreen {{latestVersion}} 已发布。当前版本为 {{currentVersion}}。",
+		"current": "OpenScreen 已是最新版本（{{currentVersion}}）。",
+		"failed": "无法检查更新。"
 	},
 	"playback": {
 		"play": "播放",

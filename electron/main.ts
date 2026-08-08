@@ -4,10 +4,13 @@ import { fileURLToPath } from "node:url";
 import {
 	app,
 	BrowserWindow,
+	dialog,
 	ipcMain,
 	Menu,
 	nativeImage,
+	net,
 	session,
+	shell,
 	systemPreferences,
 	Tray,
 } from "electron";
@@ -24,6 +27,7 @@ import { mainT, setMainLocale } from "./i18n";
 import { getSelectedDesktopSource, registerIpcHandlers } from "./ipc/handlers";
 import { installMainProcessErrorGuards } from "./main-process-errors";
 import { registerSttIpc } from "./stt";
+import { checkLatestRelease } from "./update-checker";
 import {
 	createCountdownOverlayWindow,
 	createEditorWindow,
@@ -340,6 +344,55 @@ function getTrayIcon(filename: string, size: number) {
 		});
 }
 
+let updateCheckInFlight = false;
+
+async function checkForUpdates() {
+	if (updateCheckInFlight) return;
+	updateCheckInFlight = true;
+	try {
+		const result = await checkLatestRelease({
+			currentVersion: app.getVersion(),
+			fetchLatest: (url, init) => net.fetch(url, init),
+			signal: AbortSignal.timeout(10_000),
+		});
+		if (result.kind === "current") {
+			await dialog.showMessageBox({
+				type: "info",
+				title: app.name,
+				message: mainT("common", "updates.current", {
+					currentVersion: result.currentVersion,
+				}),
+			});
+			return;
+		}
+
+		const choice = await dialog.showMessageBox({
+			type: "info",
+			title: app.name,
+			message: mainT("common", "updates.available", {
+				currentVersion: result.currentVersion,
+				latestVersion: result.latestVersion,
+			}),
+			buttons: [
+				mainT("common", "actions.viewRelease") || "View Release",
+				mainT("common", "actions.cancel") || "Cancel",
+			],
+			defaultId: 0,
+			cancelId: 1,
+		});
+		if (choice.response === 0) await shell.openExternal(result.releaseUrl);
+	} catch (error) {
+		await dialog.showMessageBox({
+			type: "error",
+			title: app.name,
+			message: mainT("common", "updates.failed"),
+			detail: error instanceof Error ? error.message : String(error),
+		});
+	} finally {
+		updateCheckInFlight = false;
+	}
+}
+
 function updateTrayMenu(recording: boolean = false) {
 	if (!tray) return;
 	const trayIcon = recording ? recordingTrayIcon : defaultTrayIcon;
@@ -366,6 +419,13 @@ function updateTrayMenu(recording: boolean = false) {
 						showMainWindow();
 					},
 				},
+				{
+					label: mainT("common", "actions.checkForUpdates") || "Check for Updates",
+					click: () => {
+						void checkForUpdates();
+					},
+				},
+				{ type: "separator" as const },
 				{
 					label: mainT("common", "actions.quit") || "Quit",
 					click: () => {
