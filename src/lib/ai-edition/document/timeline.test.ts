@@ -1370,6 +1370,29 @@ describe("removeClip — delete a clip, close the gap, drop its pills", () => {
 		expect(next.zoomRanges[0]).toMatchObject({ startMs: 2000, endMs: 4000 });
 	});
 
+	it("preserves a bare clipId that is not a complete source anchor", () => {
+		const before = doc();
+		before.zoomRanges.push(
+			makeZoom({
+				id: "partial_anchor",
+				clipId: "clip_a",
+				sourceStartSec: undefined,
+				sourceEndSec: undefined,
+				startMs: 500,
+				endMs: 1500,
+			}),
+		);
+
+		const next = removeClip(before, "clip_a");
+
+		expect(next.zoomRanges.map((region) => region.id)).toEqual(["z_b", "partial_anchor"]);
+		expect(next.zoomRanges[1]).toMatchObject({
+			clipId: "clip_a",
+			startMs: 500,
+			endMs: 1500,
+		});
+	});
+
 	it("drops every modifier anchored to the last remaining clip", () => {
 		const before = makeDoc({
 			timeline: {

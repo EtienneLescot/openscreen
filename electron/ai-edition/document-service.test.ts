@@ -363,6 +363,91 @@ describe("DocumentService", () => {
 			expect(after.project.primaryAssetId).toBe(b.assets[1]?.id);
 		});
 
+		it("resequences other assets and rederives their anchored regions", async () => {
+			const created = await service.createProject("P");
+			const withA = await service.addAsset(created.project.id, { path: "/tmp/a.mp4" });
+			const withB = await service.addAsset(created.project.id, { path: "/tmp/b.mp4" });
+			const assetA = withA.assets[0]?.id ?? "";
+			const assetB = withB.assets[1]?.id ?? "";
+			expect(assetA).toBeTruthy();
+			expect(assetB).toBeTruthy();
+
+			await service.saveProject({
+				...withB,
+				timeline: {
+					...withB.timeline,
+					clips: [
+						{
+							id: "a_1",
+							assetId: assetA,
+							sourceStartSec: 0,
+							sourceEndSec: 2,
+							timelineStartSec: 0,
+							timelineEndSec: 2,
+							wordRefs: [],
+							origin: "user",
+							reason: "test",
+						},
+						{
+							id: "b_1",
+							assetId: assetB,
+							sourceStartSec: 10,
+							sourceEndSec: 14,
+							timelineStartSec: 2,
+							timelineEndSec: 6,
+							wordRefs: [],
+							origin: "user",
+							reason: "test",
+						},
+						{
+							id: "a_2",
+							assetId: assetA,
+							sourceStartSec: 2,
+							sourceEndSec: 3,
+							timelineStartSec: 6,
+							timelineEndSec: 7,
+							wordRefs: [],
+							origin: "user",
+							reason: "test",
+						},
+						{
+							id: "b_2",
+							assetId: assetB,
+							sourceStartSec: 20,
+							sourceEndSec: 22,
+							timelineStartSec: 7,
+							timelineEndSec: 9,
+							wordRefs: [],
+							origin: "user",
+							reason: "test",
+						},
+					],
+				},
+				zoomRanges: [
+					{
+						id: "zoom_b_2",
+						clipId: "b_2",
+						sourceStartSec: 20.5,
+						sourceEndSec: 21.5,
+						startMs: 7500,
+						endMs: 8500,
+						depth: 3,
+						focus: { cx: 0.5, cy: 0.5 },
+					},
+				],
+			});
+
+			const after = await service.removeAsset(created.project.id, assetA);
+
+			expect(after.timeline.clips).toMatchObject([
+				{ id: "b_1", timelineStartSec: 0, timelineEndSec: 4 },
+				{ id: "b_2", timelineStartSec: 4, timelineEndSec: 6 },
+			]);
+			expect(after.zoomRanges).toEqual([
+				expect.objectContaining({ id: "zoom_b_2", startMs: 4500, endMs: 5500 }),
+			]);
+		});
+
 		it("throws when removing a missing asset", async () => {
 			const doc = await service.createProject("P");
 			await expect(service.removeAsset(doc.project.id, "asset_x")).rejects.toBeInstanceOf(
