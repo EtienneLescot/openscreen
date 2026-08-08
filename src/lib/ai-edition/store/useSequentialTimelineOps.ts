@@ -7,15 +7,15 @@
 // read the doc INSIDE the chain, after awaiting the previous save, so
 // every call sees the doc state the previous call committed.
 //
-// Errors are swallowed when advancing the queue ref so a failed save
-// doesn't poison the queue (the next call still has a resolved promise
-// to chain off). The original promise returned to the caller is NOT
-// swallowed — the caller can await it and observe the rejection.
+// Save failures are surfaced once by the shared mutation boundary and resolve
+// to null. This keeps detached UI calls from emitting unhandled rejections and
+// also leaves the queue healthy for the next edit.
 
 import { useCallback, useRef } from "react";
 import type { AxcutTimelineOperation } from "@/lib/ai-edition/document/operations";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { useProjectStore } from "./projectStore";
+import { saveTimelineMutation } from "./timelineSave";
 
 export interface SequentialTimelineOps {
 	/**
@@ -25,7 +25,7 @@ export interface SequentialTimelineOps {
 	 * saved. Calls are serialised — op N+1 reads the doc op N wrote.
 	 *
 	 * Returns the saved document, or `null` if no project document is
-	 * loaded (store empty AND no fallback supplied).
+	 * loaded (store empty AND no fallback supplied) or the save fails.
 	 */
 	apply: (op: AxcutTimelineOperation) => Promise<AxcutDocument | null>;
 }
@@ -43,7 +43,7 @@ export function useSequentialTimelineOps(options: {
 		(op: AxcutTimelineOperation): Promise<AxcutDocument | null> => {
 			const queued = saveQueueRef.current
 				.then(() => import("@/lib/ai-edition/document/operations"))
-				.then(({ applyTimelineOperation }) => {
+				.then(async ({ applyTimelineOperation }) => {
 					// Read the doc inside the chain. The store holds the
 					// latest committed state because the previous call's
 					// save has already resolved by the time this .then
@@ -51,13 +51,11 @@ export function useSequentialTimelineOps(options: {
 					const doc = useProjectStore.getState().document ?? fallbackDocument;
 					if (!doc) return null;
 					const applied = applyTimelineOperation(doc, op);
-					return saveDocument(applied.document).then(() => applied.document);
+					const saved = await saveTimelineMutation(saveDocument, applied.document);
+					return saved ? applied.document : null;
 				});
-			// Swallow rejection when advancing the queue so a failed save
-			// doesn't poison the queue — the next call still has a
-			// resolved promise to chain off. The original `queued` is
-			// returned to the caller, who can await it and observe the
-			// rejection.
+			// Keep operation/import errors from poisoning the queue. Save
+			// failures already resolve to null after showing user feedback.
 			saveQueueRef.current = queued.then(
 				() => undefined,
 				() => undefined,
