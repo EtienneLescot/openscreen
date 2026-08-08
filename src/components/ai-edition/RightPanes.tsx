@@ -1500,25 +1500,26 @@ export function LayoutPane() {
 	const ts = useScopedT("settings");
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	const document = useProjectStore((s) => s.document);
+	// A project can hold clips with no camera attached at all (plain imports or
+	// a recording made without a webcam). Keep the saved camera preference for
+	// later, but make the disabled control describe what the preview/export
+	// actually render right now.
+	const hasAnyCamera = document
+		? hasAnyClipWithCamera(document.assets, document.timeline.clips)
+		: false;
+	const effectiveLayoutPreset = hasAnyCamera ? settings.webcamLayoutPreset : "no-webcam";
 
 	// Synchro initiale : cf. NativeCompositorOverlay (`pushAllNativeParams`).
 	// the mask shape picker only makes sense for Picture-in-Picture.
 	// Dual-frame (side-by-side) and vertical-stack (top/bottom) weld the camera
 	// to the screen as one block — the mask is rectangular and sized off the
 	// screen capture — so we hide those controls when the preset isn't PiP.
-	const isPip = settings.webcamLayoutPreset === "picture-in-picture";
+	const isPip = effectiveLayoutPreset === "picture-in-picture";
 	// Same reason for "Shrink on zoom": shrinking the camera mid-zoom would tear a
 	// hole in the block, so the block layouts force it off (see
 	// `supportsWebcamReactiveZoom`) and the toggle is dropped rather than shown
 	// as a control that does nothing.
-	const supportsReactiveZoom = supportsWebcamReactiveZoom(settings.webcamLayoutPreset);
-	// P4 — a project can hold clips with no camera attached at all (plain
-	// imported videos, or a recording made without a webcam). The layout
-	// controls have nothing to act on in that case, so they're disabled
-	// rather than left live for a preset that will never show anything.
-	const hasAnyCamera = document
-		? hasAnyClipWithCamera(document.assets, document.timeline.clips)
-		: false;
+	const supportsReactiveZoom = supportsWebcamReactiveZoom(effectiveLayoutPreset);
 	const layoutControlsDisabled = !hasDocument || !hasAnyCamera;
 	return (
 		<Pane title={ts("layout.title")} icon={<LayoutIcon size={14} />} helpText={ts("layout.help")}>
@@ -1526,7 +1527,7 @@ export function LayoutPane() {
 			<div className={styles.field}>
 				<label>{ts("layout.title")}</label>
 				<select
-					value={settings.webcamLayoutPreset}
+					value={effectiveLayoutPreset}
 					disabled={layoutControlsDisabled}
 					onChange={(e) =>
 						void set({ webcamLayoutPreset: e.target.value as typeof settings.webcamLayoutPreset })
