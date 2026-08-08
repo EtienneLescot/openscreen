@@ -60,11 +60,15 @@ jobs:
         uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: website/build
-          # v4 stopped bundling dotfiles, and Docusaurus writes a `.nojekyll`
-          # into website/build. The artifact-based Pages deploy never runs
-          # Jekyll, so losing it would probably be harmless — but "probably" is
-          # not worth finding out on the live site, and this restores exactly
-          # what v3 uploaded. `.git`/`.github` stay excluded either way.
+          # v4 stopped bundling dotfiles by default. Nothing in website/build
+          # is hidden today — the deployed artifact from 7c4827b9 was checked
+          # and contains no dot-entries at all, so this changes nothing now
+          # (Docusaurus only writes a `.nojekyll` on its own `deploy` command,
+          # not in a plain `build`). It is set so that stays true by accident
+          # rather than by omission: a `.well-known/` for domain verification
+          # or security.txt is the realistic case, and under the v4+ default it
+          # would vanish from the deploy silently. `.git` and `.github` are
+          # excluded regardless of this flag.
           include-hidden-files: true
 
   deploy:
