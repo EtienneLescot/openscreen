@@ -280,58 +280,76 @@ function compose(icon, canvasWidth, canvasHeight, size, shiftY) {
 
 // --- Generation -------------------------------------------------------------------
 
-async function main() {
-	const icon = decodePng(await readFile(SOURCE_ICON));
-
-	// Wipe first: a renamed or dropped asset left behind in build/appx/ would still be
-	// mapped into the package by electron-builder, which copies the directory wholesale.
-	await rm(OUT_DIR, { recursive: true, force: true });
-	await mkdir(OUT_DIR, { recursive: true });
-
-	const written = [];
-	const write = async (name, width, height, pixels) => {
-		const file = path.join(OUT_DIR, name);
-		await writeFile(file, encodePng(width, height, pixels));
-		written.push(name);
-	};
-
+/**
+ * Every asset this generator owns, as {name, width, height, size, shiftY}, derived from
+ * ASSETS/TARGET_SIZES alone — no filesystem involved.
+ *
+ * This table, not the contents of build/appx/, is the authority on what the package must
+ * contain. `--list` exposes it so CI can tell "this asset is missing" apart from "this
+ * asset was never expected": a check that reads build/appx/ to decide what to look for
+ * passes happily once a file is deleted there, which is precisely when electron-builder
+ * swaps a blank placeholder in.
+ *
+ * The targetsize variants come out of compose() too rather than a bare resample: at
+ * size == width == height with no shift, the canvas is fully covered, so the two are the
+ * same pixels — and there is then a single code path to keep honest.
+ */
+function plannedAssets() {
+	const planned = [];
 	for (const asset of ASSETS) {
 		const shiftY = asset.shiftY ?? 0;
 		for (const scale of [100, ...(asset.scales ?? [])]) {
 			const width = Math.round((asset.width * scale) / 100);
 			const height = Math.round((asset.height * scale) / 100);
 			const size = Math.round(Math.min(width, height) * asset.fill);
-			if (size > icon.width) {
-				throw new Error(
-					`${asset.name} at ${scale}% needs a ${size}px icon; master is ${icon.width}px`,
-				);
-			}
 			// The 100% variant stays unqualified so it is also the neutral MRT candidate:
 			// if resources.pri ever fails to resolve a scale, Windows still finds art.
 			const suffix = scale === 100 ? "" : `.scale-${scale}`;
-			await write(
-				`${asset.name}${suffix}.png`,
-				width,
-				height,
-				compose(icon, width, height, size, shiftY),
-			);
+			planned.push({ name: `${asset.name}${suffix}.png`, width, height, size, shiftY });
+		}
+	}
+	for (const target of TARGET_SIZES) {
+		for (const suffix of ["", "_altform-unplated"]) {
+			planned.push({
+				name: `Square44x44Logo.targetsize-${target}${suffix}.png`,
+				width: target,
+				height: target,
+				size: target,
+				shiftY: 0,
+			});
+		}
+	}
+	return planned;
+}
+
+async function main() {
+	const planned = plannedAssets();
+
+	if (process.argv.includes("--list")) {
+		console.log(planned.map((it) => it.name).join("\n"));
+		return;
+	}
+
+	const icon = decodePng(await readFile(SOURCE_ICON));
+	for (const { name, size } of planned) {
+		if (size > icon.width) {
+			throw new Error(`${name} needs a ${size}px icon; master is ${icon.width}px`);
 		}
 	}
 
-	for (const target of TARGET_SIZES) {
-		const pixels = resample(icon.pixels, icon.width, icon.height, target, target);
-		await write(`Square44x44Logo.targetsize-${target}.png`, target, target, pixels);
-		await write(
-			`Square44x44Logo.targetsize-${target}_altform-unplated.png`,
-			target,
-			target,
-			pixels,
-		);
+	// Wipe first: a renamed or dropped asset left behind in build/appx/ would still be
+	// mapped into the package by electron-builder, which copies the directory wholesale.
+	await rm(OUT_DIR, { recursive: true, force: true });
+	await mkdir(OUT_DIR, { recursive: true });
+
+	for (const { name, width, height, size, shiftY } of planned) {
+		const pixels = compose(icon, width, height, size, shiftY);
+		await writeFile(path.join(OUT_DIR, name), encodePng(width, height, pixels));
 	}
 
 	const total = (await readdir(OUT_DIR)).length;
 	console.log(
-		`${written.length} assets written to ${path.relative(ROOT, OUT_DIR)} (${total} files)`,
+		`${planned.length} assets written to ${path.relative(ROOT, OUT_DIR)} (${total} files)`,
 	);
 }
 
