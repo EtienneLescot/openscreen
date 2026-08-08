@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import "@testing-library/jest-dom";
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, within } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
 import { type AxcutDocument, createEmptyDocument } from "@/lib/ai-edition/schema";
@@ -76,6 +76,11 @@ describe("LayoutPane camera availability", () => {
 			webcamLayoutPreset: "picture-in-picture",
 		});
 		expect(screen.queryByText("Camera Shape")).not.toBeInTheDocument();
+		expect(screen.queryByText("Shrink on Zoom")).not.toBeInTheDocument();
+		expect(screen.queryByText("Webcam Size")).not.toBeInTheDocument();
+		const mirrorRow = screen.getByText("Mirror Webcam").closest("div");
+		expect(mirrorRow).not.toBeNull();
+		expect(within(mirrorRow as HTMLElement).getByRole("button")).toBeDisabled();
 	});
 
 	it("keeps the saved preset active when a timeline clip has a camera", () => {
@@ -85,5 +90,9 @@ describe("LayoutPane camera availability", () => {
 		expect(preset).toBeEnabled();
 		expect(preset).toHaveValue("picture-in-picture");
 		expect(screen.getByText("Camera Shape")).toBeInTheDocument();
+		expect(screen.getByText("Shrink on Zoom")).toBeInTheDocument();
+		expect(screen.getByText("Webcam Size")).toBeInTheDocument();
+		expect(screen.getByRole("button", { name: "Rounded" })).toBeEnabled();
+		expect(screen.getByRole("slider")).toBeEnabled();
 	});
 });
