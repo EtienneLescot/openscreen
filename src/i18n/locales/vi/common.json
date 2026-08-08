@@ -7,6 +7,8 @@
 		"share": "Chia sẻ",
 		"done": "Hoàn tất",
 		"open": "Mở",
+		"checkForUpdates": "Kiểm tra bản cập nhật",
+		"viewRelease": "Xem bản phát hành",
 		"upload": "Tải lên",
 		"export": "Xuất",
 		"showInFolder": "Hiển thị trong thư mục",
@@ -36,6 +38,11 @@
 		"hide": "Ẩn OpenScreen",
 		"hideOthers": "Ẩn ứng dụng khác",
 		"unhide": "Hiển thị tất cả"
+	},
+	"updates": {
+		"available": "Đã có OpenScreen {{latestVersion}}. Bạn đang dùng phiên bản {{currentVersion}}.",
+		"current": "OpenScreen đã được cập nhật ({{currentVersion}}).",
+		"failed": "Không thể kiểm tra bản cập nhật."
 	},
 	"playback": {
 		"play": "Phát",

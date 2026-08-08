@@ -7,6 +7,8 @@
 		"share": "Partager",
 		"done": "Terminer",
 		"open": "Ouvrir",
+		"checkForUpdates": "Rechercher des mises à jour",
+		"viewRelease": "Voir la version",
 		"upload": "Téléverser",
 		"export": "Exporter",
 		"showInFolder": "Afficher dans le dossier",
@@ -36,6 +38,11 @@
 		"hide": "Masquer OpenScreen",
 		"hideOthers": "Masquer les autres",
 		"unhide": "Tout afficher"
+	},
+	"updates": {
+		"available": "OpenScreen {{latestVersion}} est disponible. Vous utilisez la version {{currentVersion}}.",
+		"current": "OpenScreen est à jour ({{currentVersion}}).",
+		"failed": "Impossible de rechercher les mises à jour."
 	},
 	"playback": {
 		"play": "Lecture",

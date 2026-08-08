@@ -7,6 +7,8 @@
 		"share": "共有",
 		"done": "完了",
 		"open": "開く",
+		"checkForUpdates": "アップデートを確認",
+		"viewRelease": "リリースを表示",
 		"upload": "読み込む",
 		"export": "エクスポート",
 		"showInFolder": "フォルダに表示",
@@ -36,6 +38,11 @@
 		"hide": "OpenScreenを隠す",
 		"hideOthers": "ほかを隠す",
 		"unhide": "すべて表示"
+	},
+	"updates": {
+		"available": "OpenScreen {{latestVersion}} を利用できます。現在のバージョンは {{currentVersion}} です。",
+		"current": "OpenScreen は最新です（{{currentVersion}}）。",
+		"failed": "アップデートを確認できませんでした。"
 	},
 	"playback": {
 		"play": "再生",

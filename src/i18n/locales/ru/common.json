@@ -7,6 +7,8 @@
 		"share": "Поделиться",
 		"done": "Готово",
 		"open": "Открыть",
+		"checkForUpdates": "Проверить обновления",
+		"viewRelease": "Открыть выпуск",
 		"upload": "Загрузить",
 		"export": "Экспорт",
 		"showInFolder": "Показать в папке",
@@ -36,6 +38,11 @@
 		"hide": "Скрыть OpenScreen",
 		"hideOthers": "Скрыть остальные",
 		"unhide": "Показать все"
+	},
+	"updates": {
+		"available": "Доступен OpenScreen {{latestVersion}}. Установлена версия {{currentVersion}}.",
+		"current": "Установлена последняя версия OpenScreen ({{currentVersion}}).",
+		"failed": "Не удалось проверить наличие обновлений."
 	},
 	"playback": {
 		"play": "Воспроизвести",

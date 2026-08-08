@@ -7,6 +7,8 @@
 		"share": "Paylaş",
 		"done": "Tamam",
 		"open": "Aç",
+		"checkForUpdates": "Güncellemeleri denetle",
+		"viewRelease": "Sürümü görüntüle",
 		"upload": "Yükle",
 		"export": "Dışa Aktar",
 		"showInFolder": "Klasörde Göster",
@@ -36,6 +38,11 @@
 		"hide": "OpenScreen’i Gizle",
 		"hideOthers": "Diğerlerini Gizle",
 		"unhide": "Tümünü Göster"
+	},
+	"updates": {
+		"available": "OpenScreen {{latestVersion}} kullanılabilir. Mevcut sürümünüz {{currentVersion}}.",
+		"current": "OpenScreen güncel ({{currentVersion}}).",
+		"failed": "Güncellemeler denetlenemedi."
 	},
 	"playback": {
 		"play": "Oynat",
