@@ -63,9 +63,12 @@ fn build_pipewire_shim(root: &Path) {
 /// `/usr/include/limits.h: 'limits.h' file not found`, because glibc's copy
 /// `#include_next`s the compiler's and there is none. gcc's copies are
 /// interchangeable for this purpose, so point clang at those instead of making
-/// every contributor install a second toolchain. Mirrors `bindgenClangArgs()` in
-/// scripts/build-linux-compositor-addon.mjs, but lives here so that a bare
-/// `cargo build` in this directory works too.
+/// every contributor install a second toolchain.
+///
+/// Twin of `freestanding_header_args()` in crates/compositor/build.rs. Both live in
+/// build.rs rather than in the npm build scripts so that a bare `cargo build` works
+/// too — scripts/build-linux-compositor-addon.mjs used to carry a copy of this, and
+/// `cargo check -p openscreen-compositor` stayed broken for as long as it did.
 fn freestanding_header_args() -> Vec<String> {
     if let Ok(extra) = std::env::var("BINDGEN_EXTRA_CLANG_ARGS") {
         // Already configured by the caller; bindgen picks that up on its own.

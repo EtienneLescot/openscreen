@@ -118,38 +118,15 @@ function resolveLibclangDir() {
 	return found;
 }
 
-/**
- * On distributions that ship only `libclang.so.1` (no -dev package) clang also
- * cannot find its own `stddef.h`. Point it at gcc's copy in that case rather
- * than making the caller discover it.
- *
- * Kept behaviourally identical to `freestanding_header_args()` in
- * electron/native/pipewire-capture/build.rs, which is the authority — that one
- * runs for a bare `cargo build` too. Two properties matter and both were once
- * wrong here: `limits.h` must be required alongside `stddef.h` (the failure
- * being fixed is `'limits.h' file not found` — glibc's copy `#include_next`s
- * the compiler's), and the newest gcc must be picked deterministically rather
- * than whatever `readdirSync` happened to return first.
- */
-function bindgenClangArgs() {
-	if (process.env.BINDGEN_EXTRA_CLANG_ARGS) {
-		return process.env.BINDGEN_EXTRA_CLANG_ARGS;
-	}
-	const gccIncludeRoot = `/usr/lib/gcc/${MULTIARCH}`;
-	if (!fs.existsSync(gccIncludeRoot)) {
-		return "";
-	}
-	const usable = fs
-		.readdirSync(gccIncludeRoot)
-		.map((version) => path.join(gccIncludeRoot, version, "include"))
-		.filter(
-			(dir) =>
-				fs.existsSync(path.join(dir, "limits.h")) && fs.existsSync(path.join(dir, "stddef.h")),
-		)
-		.sort()
-		.reverse();
-	return usable.length > 0 ? `-I${usable[0]}` : "";
-}
+// No BINDGEN_EXTRA_CLANG_ARGS is set below, on purpose. On distributions shipping only
+// `libclang.so.1` (no -dev package) clang cannot find its own `stddef.h`, and this
+// script used to paper over that by pointing bindgen at gcc's copies. That only ever
+// covered the build that goes through here: `cargo check -p openscreen-compositor` on a
+// stock Ubuntu still died on `'stddef.h' file not found`, x86_64 included. The fallback
+// now lives in crates/compositor/build.rs (`freestanding_header_args()`), which covers
+// both entry points — and, being the only claimant, cannot lose to a worse guess made
+// here. Setting the variable again would suppress it, since build.rs defers to a
+// caller-supplied value.
 
 /**
  * Prefix applied to every ffmpeg dynamic symbol. Anything unique works; this one is
@@ -302,7 +279,6 @@ await run("cargo", ["build", "-p", "compositor-view-napi", "--release"], {
 		FFMPEG_DIR: stagedFfmpegDir,
 		OPENSCREEN_FFMPEG_SYMBOL_PREFIX: SYMBOL_PREFIX,
 		LIBCLANG_PATH: resolveLibclangDir(),
-		BINDGEN_EXTRA_CLANG_ARGS: bindgenClangArgs(),
 		// `$ORIGIN` is resolved by the dynamic linker against the directory the
 		// .node itself lives in, so the ffmpeg copies below are found wherever the
 		// app is installed. Single-quoted on purpose: the shell must not expand it.
