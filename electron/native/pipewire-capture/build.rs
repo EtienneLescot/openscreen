@@ -73,11 +73,23 @@ fn freestanding_header_args() -> Vec<String> {
             return Vec::new();
         }
     }
-    let gcc_root = Path::new("/usr/lib/gcc/x86_64-linux-gnu");
-    let Ok(entries) = std::fs::read_dir(gcc_root) else {
+    // The vendor triplet is NOT hardcoded. It is `x86_64-linux-gnu` on Debian/Ubuntu
+    // amd64 but `aarch64-linux-gnu` on arm64 — hardcoding the former is why bindgen
+    // died with "'limits.h' file not found" there — and neither on Arch
+    // (`x86_64-pc-linux-gnu`). Matching on the target arch prefix covers all of them,
+    // and on a box with a cross-gcc installed it still refuses the OTHER
+    // architecture's headers, whose type widths would be wrong.
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH")
+        .unwrap_or_else(|_| std::env::consts::ARCH.to_string());
+    let prefix = format!("{arch}-");
+    let Ok(vendors) = std::fs::read_dir("/usr/lib/gcc") else {
         return Vec::new();
     };
-    let mut dirs: Vec<PathBuf> = entries
+    let mut dirs: Vec<PathBuf> = vendors
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        .filter_map(|vendor| std::fs::read_dir(vendor.path()).ok())
+        .flatten()
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path().join("include"))
         .filter(|dir| dir.join("limits.h").is_file() && dir.join("stddef.h").is_file())
