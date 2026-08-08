@@ -1172,16 +1172,22 @@ int main(int argc, char* argv[]) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(testStallReadbackMs));
                 }
                 if (latestFrameTexture) {
-                    // Both entry points do their GPU work on
-                    // latestFrameTexture. On the default pull path this thread
-                    // is the only writer of that texture too (the CopyResource
-                    // above), so there is no concurrent access to serialize
-                    // against; on the legacy path frameMutex -- held across
-                    // this whole block -- is what keeps WGC's callback thread
-                    // out of it. Which entry point is live is the encoder's
-                    // answer, not this struct's request: it falls back to the
-                    // CPU path on its own when the GPU path does not fit the
-                    // machine.
+                    // captureVideoSample/captureDxgiSample perform the GPU
+                    // readback from latestFrameTexture. On the pull-based
+                    // (default) path no lock is needed around it: this thread
+                    // is the only writer of latestFrameTexture too (the
+                    // CopyResource above), so there is no concurrent access
+                    // to serialize against. On the legacy path the WGC
+                    // callback thread also writes latestFrameTexture, under
+                    // frameMutex -- legacyLock is still held here (see its
+                    // declaration above) and is what keeps this readback safe
+                    // in that case. Do not remove the legacy locking on the
+                    // strength of this comment; it describes the default path
+                    // only.
+                    //
+                    // Which entry point is live is the encoder's answer, not
+                    // this struct's request: it falls back to the CPU path on
+                    // its own when the GPU path does not fit the machine.
                     bool captured = false;
                     if (usesDxgiInput) {
                         captured = encoder.captureDxgiSample(
@@ -1210,6 +1216,15 @@ int main(int argc, char* argv[]) {
                         contendedFrames += 1;
                     }
                 }
+            }
+            // Explicitly released here, not left to the end of the loop
+            // iteration: on the legacy path, legacyLock still owns frameMutex
+            // at this point (unique_lock's scope is its own lifetime, not the
+            // braces above), and the submission calls below are synchronous
+            // H.264 encodes that must not run while the WGC callback thread
+            // is blocked waiting for this same mutex (issue #115).
+            if (legacyLock.owns_lock()) {
+                legacyLock.unlock();
             }
 
             // Submit the captured samples to their sink writers after the
@@ -1600,8 +1615,18 @@ int main(int argc, char* argv[]) {
     if (usesDxgiInput) {
         std::cerr << "[frame-drops] gpu_bridge_contended=" << contendedFrames.load() << std::endl;
     }
-    // No frame lock here, and the ordering above is what makes that safe rather
-    // than incidental: stopVideoWriter() joined the only thread that calls into
+    // Finalizing before closing the WGC session, not after: MFEncoder holds
+    // its own ComPtr<ID3D11Device>/ComPtr<ID3D11DeviceContext> (see
+    // mf_encoder.h), separate from WgcSession's, so session.stop() resetting
+    // WgcSession's pointers would not by itself invalidate what finalize()
+    // uses -- COM reference counting keeps the underlying device alive until
+    // MFEncoder releases its own. This ordering does not rely on that: it
+    // removes the dependency instead of documenting it, so a future change to
+    // MFEncoder (taking a raw, non-owning pointer, say) cannot silently
+    // reintroduce a use-after-free.
+    //
+    // No frame lock here either, and the ordering above is what makes that
+    // safe rather than incidental: stopVideoWriter() joined the only thread that calls into
     // the encoder's GPU readback, and audioMixer->stop() joined the only other
     // thread that writes to it. MFEncoder's own writerMutex_ deliberately does
     // NOT cover copyFrameToBuffer, so finalizing before those joins would race
@@ -1651,14 +1676,13 @@ int main(int argc, char* argv[]) {
         }
     }
 
-    // Releasing the device goes last: by now no thread can still be holding the
-    // D3D context. On the default pull path that is stopVideoWriter() above --
-    // the writer thread is the only caller of tryGetNextFrame(), so its join is
-    // what makes this safe; on the legacy path it is wgc-quiesce's drain. Both
-    // happen before this line, which is why it stays here rather than moving up
-    // next to the join: encoder.finalize() still issues GPU work on this
-    // device, and there is nothing to gain from releasing our reference to it
-    // any earlier.
+    // Releasing the device goes last, after every encoder that might still
+    // hold a reference to WgcSession's device has released it via finalize()
+    // above. By now no thread can still be holding the D3D context: on the
+    // default pull path writeVideoFrames -- already joined by
+    // stopVideoWriter() -- was the only caller of tryGetNextFrame()/
+    // CopyResource, so its own exit from the while loop is the producer
+    // stopping; on the legacy path it is wgc-quiesce's drain.
     beginStopStep("wgc-session-close", stepBudgetMs);
     session.stop();
     logStopStep("wgc-session-close");

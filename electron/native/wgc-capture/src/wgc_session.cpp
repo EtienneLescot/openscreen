@@ -338,34 +338,35 @@ void WgcSession::onFrameArrived(
         return;
     }
 
+    // Scoped rather than a bare decrement at the end, for two reasons: a
+    // callback that left by exception would otherwise strand
+    // quiesceLegacyCallback()'s drain forever, and the guard has to outlive
+    // frame.Close() -- dropping the count first would let quiesce return and
+    // close the frame pool while this handler is still closing a frame that
+    // pool owns. Counted unconditionally (not only when callback is
+    // non-null): the no-callback path still calls frame.Close() below, and
+    // that call needs to be covered by the drain too, or quiesceLegacyCallback()
+    // could return while this handler is still inside it.
+    struct InFlightGuard {
+        std::atomic<int>& counter;
+        ~InFlightGuard() {
+            counter -= 1;
+        }
+    };
+
     FrameCallback callback;
     {
         std::scoped_lock lock(callbackMutex_);
         callback = frameCallback_;
-        if (callback) {
-            // Counted under the same lock quiesceLegacyCallback() clears the
-            // callback under, so once it has cleared it no new callback can
-            // start and the counter it then drains cannot go back up.
-            callbacksInFlight_ += 1;
-        }
+        // Counted under the same lock quiesceLegacyCallback() clears the
+        // callback under, so once it has cleared it no new handler can start
+        // and the counter it then drains cannot go back up.
+        callbacksInFlight_ += 1;
     }
+    InFlightGuard guard{callbacksInFlight_};
 
     if (callback) {
-        // Scoped rather than a bare decrement after the call, for two reasons:
-        // a callback that left by exception would otherwise strand
-        // quiesceLegacyCallback()'s drain forever, and the guard has to
-        // outlive frame.Close() -- dropping the count first would let
-        // quiesce return and close the frame pool while this handler is
-        // still closing a frame that pool owns.
-        struct InFlightGuard {
-            std::atomic<int>& counter;
-            ~InFlightGuard() {
-                counter -= 1;
-            }
-        } guard{callbacksInFlight_};
         callback(texture.Get(), timeSpanToHns(frame.SystemRelativeTime()));
-        frame.Close();
-        return;
     }
     frame.Close();
 }
