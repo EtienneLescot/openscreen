@@ -57,4 +57,11 @@ jobs:
           STABLE_TAG: ${{ inputs.tag }}
           EXTRA: ${{ inputs.release_notes_extra }}
           KIND: ${{ inputs.kind }}
+          # Every path that ends without posting exits 0 by default, which is what
+          # prerelease.yml and promote.yml need — the release is already out and a
+          # failed announcement must not report it as broken. Here the contract is
+          # inverted: this workflow is dispatched *because* an announcement was
+          # missed, so a green run that posted nothing would recreate exactly the
+          # failure it was invoked to repair. That is how v1.9.0 shipped silent.
+          STRICT: "1"
         run: node .github/scripts/discord-release-announce.mjs
