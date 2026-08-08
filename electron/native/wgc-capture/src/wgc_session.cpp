@@ -346,16 +346,23 @@ void WgcSession::onFrameArrived(
     // and return while this handler was still mid-frame -- registering the
     // guard first, before anything pool-related, closes that window instead
     // of narrowing it.
+    //
+    // Returns here, before incrementing the counter or touching the pool, if
+    // frameCallback_ is already null: there is nothing to do with a frame in
+    // that case, so the handler should not acquire one. This also means a
+    // handler that starts after quiesceLegacyCallback() has cleared
+    // frameCallback_ is never counted at all -- which is fine, since it never
+    // reaches the pool either.
     FrameCallback callback;
     {
         std::scoped_lock lock(callbackMutex_);
         callback = frameCallback_;
+        if (!callback) {
+            return;
+        }
         // Counted under the same lock quiesceLegacyCallback() clears the
         // callback under, so once it has cleared it no new handler can start
-        // and the counter it then drains cannot go back up. Counted
-        // unconditionally (not only when callback is non-null): a handler
-        // that observes a cleared callback still touches the frame pool
-        // below and needs to be covered by the drain too.
+        // and the counter it then drains cannot go back up.
         callbacksInFlight_ += 1;
     }
     InFlightGuard guard{callbacksInFlight_};
@@ -374,9 +381,9 @@ void WgcSession::onFrameArrived(
         return;
     }
 
-    if (callback) {
-        callback(texture.Get(), timeSpanToHns(frame.SystemRelativeTime()));
-    }
+    // callback is never null here: the only path that reaches this point
+    // returned earlier if frameCallback_ was null when captured.
+    callback(texture.Get(), timeSpanToHns(frame.SystemRelativeTime()));
     frame.Close();
 }
 
