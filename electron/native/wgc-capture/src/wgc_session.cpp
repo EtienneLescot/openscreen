@@ -325,6 +325,41 @@ void WgcSession::setFrameCallback(FrameCallback callback) {
 void WgcSession::onFrameArrived(
     wgcap::Direct3D11CaptureFramePool const& sender,
     wf::IInspectable const&) {
+    // Scoped rather than a bare decrement at the end, for two reasons: a
+    // callback that left by exception would otherwise strand
+    // quiesceLegacyCallback()'s drain forever, and the guard has to outlive
+    // every pool-owned object this handler touches -- dropping the count
+    // first would let quiesce return and close the frame pool while this
+    // handler still holds a reference into it.
+    struct InFlightGuard {
+        std::atomic<int>& counter;
+        ~InFlightGuard() {
+            counter -= 1;
+        }
+    };
+
+    // Captured and counted before TryGetNextFrame(), not after: this handler
+    // starts touching the pool (TryGetNextFrame, Surface(), GetInterface())
+    // immediately below, and none of that is safe to run concurrently with
+    // framePool_.Close(). Counting only after those calls succeeded left a
+    // window where quiesceLegacyCallback() could see callbacksInFlight_ == 0
+    // and return while this handler was still mid-frame -- registering the
+    // guard first, before anything pool-related, closes that window instead
+    // of narrowing it.
+    FrameCallback callback;
+    {
+        std::scoped_lock lock(callbackMutex_);
+        callback = frameCallback_;
+        // Counted under the same lock quiesceLegacyCallback() clears the
+        // callback under, so once it has cleared it no new handler can start
+        // and the counter it then drains cannot go back up. Counted
+        // unconditionally (not only when callback is non-null): a handler
+        // that observes a cleared callback still touches the frame pool
+        // below and needs to be covered by the drain too.
+        callbacksInFlight_ += 1;
+    }
+    InFlightGuard guard{callbacksInFlight_};
+
     auto frame = sender.TryGetNextFrame();
     if (!frame) {
         return;
@@ -335,35 +370,9 @@ void WgcSession::onFrameArrived(
     Microsoft::WRL::ComPtr<ID3D11Texture2D> texture;
     HRESULT hr = access->GetInterface(__uuidof(ID3D11Texture2D), reinterpret_cast<void**>(texture.GetAddressOf()));
     if (FAILED(hr) || !texture) {
+        frame.Close();
         return;
     }
-
-    // Scoped rather than a bare decrement at the end, for two reasons: a
-    // callback that left by exception would otherwise strand
-    // quiesceLegacyCallback()'s drain forever, and the guard has to outlive
-    // frame.Close() -- dropping the count first would let quiesce return and
-    // close the frame pool while this handler is still closing a frame that
-    // pool owns. Counted unconditionally (not only when callback is
-    // non-null): the no-callback path still calls frame.Close() below, and
-    // that call needs to be covered by the drain too, or quiesceLegacyCallback()
-    // could return while this handler is still inside it.
-    struct InFlightGuard {
-        std::atomic<int>& counter;
-        ~InFlightGuard() {
-            counter -= 1;
-        }
-    };
-
-    FrameCallback callback;
-    {
-        std::scoped_lock lock(callbackMutex_);
-        callback = frameCallback_;
-        // Counted under the same lock quiesceLegacyCallback() clears the
-        // callback under, so once it has cleared it no new handler can start
-        // and the counter it then drains cannot go back up.
-        callbacksInFlight_ += 1;
-    }
-    InFlightGuard guard{callbacksInFlight_};
 
     if (callback) {
         callback(texture.Get(), timeSpanToHns(frame.SystemRelativeTime()));
