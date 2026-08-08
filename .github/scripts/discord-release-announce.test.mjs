@@ -199,6 +199,15 @@ describe("strict mode", () => {
 	const STRICT_ENV = { ...BASE_ENV, STRICT: "1", DISCORD_RELEASE_CHANNEL_ID: "123" };
 	const exits1 = /process\.exit unexpectedly called with "1"/;
 
+	it("fails when the release tag is missing", async () => {
+		await expect(
+			loadScript({ ...BASE_ENV, STABLE_TAG: "", STRICT: "1", DISCORD_RELEASE_CHANNEL_ID: "123" }),
+		).rejects.toThrow(exits1);
+		expect(vi.mocked(setFailed)).toHaveBeenCalledWith(
+			expect.stringContaining("STABLE_TAG missing"),
+		);
+	});
+
 	it("fails when the Discord configuration is missing", async () => {
 		await expect(loadScript({ STABLE_TAG: "v1.5.0", STRICT: "1" })).rejects.toThrow(exits1);
 		expect(vi.mocked(setFailed)).toHaveBeenCalledWith(expect.stringContaining("DISCORD_BOT_TOKEN"));
