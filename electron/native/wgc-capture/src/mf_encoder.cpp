@@ -362,6 +362,39 @@ bool MFEncoder::usesDxgiInput() const {
     return useDxgiInput_;
 }
 
+const char* MFEncoder::encodeStage() const {
+    return encodeStage_.load();
+}
+
+int64_t MFEncoder::nextSampleTime(int64_t timestampHns, int64_t sampleDuration) {
+    // On `timestampMutex_` and not `writerMutex_`, deliberately. Every caller
+    // of this runs under main.cpp's frame lock, and `writerMutex_` is held
+    // across IMFSinkWriter::WriteSample by both submitVideoSample and
+    // writeAudio. Taking it here put a synchronous encode inside the frame
+    // lock: an audio WriteSample would stall the video writer, the video
+    // writer would stall every WGC callback waiting on that lock, and stop
+    // would find wgc-quiesce undrained and the writer unjoinable. That is the
+    // system-audio reproduction in the issue #252 follow-up. Nothing else
+    // touches these two fields, so they get a lock of their own that no
+    // blocking call is ever held across.
+    //
+    // No sinkWriter_/finalized_ check any more either: that check was the only
+    // other reason to be on writerMutex_, and submitVideoSample already makes
+    // it before writing. A sample built for a writer that has since gone away
+    // is discarded there, which costs one wasted buffer on a path that is
+    // shutting down anyway.
+    std::scoped_lock lock(timestampMutex_);
+    if (firstTimestampHns_ < 0) {
+        firstTimestampHns_ = timestampHns;
+    }
+    int64_t sampleTime = timestampHns - firstTimestampHns_;
+    if (sampleTime <= lastTimestampHns_) {
+        sampleTime = lastTimestampHns_ + sampleDuration;
+    }
+    lastTimestampHns_ = sampleTime;
+    return sampleTime;
+}
+
 bool MFEncoder::initialize(
     const std::wstring& outputPath,
     int width,
@@ -996,13 +1029,18 @@ MFEncoder::Nv12ConvertResult MFEncoder::convertBgraTextureToNv12(
     // Key 0 is the capture side's, key 1 the encoder's. Timing out here leaves
     // key 0 exactly where it was, so the next frame simply tries again; that
     // is the whole reason this one is recoverable and the one below is not.
+    encodeStage_ = "bridge-acquire-capture";
     if (FAILED(captureBridgeMutex_->AcquireSync(0, acquireTimeoutMs))) {
+        encodeStage_ = "idle";
         return Nv12ConvertResult::Contended;
     }
+    encodeStage_ = "bridge-copy";
     captureContext_->CopyResource(captureBridgeTexture_.Get(), texture);
+    encodeStage_ = "bridge-release-capture";
     if (!succeeded(captureBridgeMutex_->ReleaseSync(1), "Release capture bridge")) {
         return Nv12ConvertResult::Failed;
     }
+    encodeStage_ = "bridge-acquire-encoder";
     // Key 1 was just handed over by this same thread and nothing else in the
     // process can hold it, so a failure here means the bridge is broken rather
     // than busy, and no later frame could recover it.
@@ -1021,6 +1059,7 @@ MFEncoder::Nv12ConvertResult MFEncoder::convertBgraTextureToNv12(
     outputViewDesc.Texture2D.MipSlice = 0;
 
     Microsoft::WRL::ComPtr<ID3D11VideoProcessorOutputView> outputView;
+    encodeStage_ = "output-view";
     if (!succeeded(
             videoDevice_->CreateVideoProcessorOutputView(
                 outputTexture,
@@ -1040,6 +1079,7 @@ MFEncoder::Nv12ConvertResult MFEncoder::convertBgraTextureToNv12(
     stream.FutureFrames = 0;
     stream.pInputSurface = bridgeInputView_.Get();
 
+    encodeStage_ = "video-processor-blt";
     const bool converted = succeeded(
         videoContext_->VideoProcessorBlt(
             videoProcessor_.Get(),
@@ -1048,7 +1088,9 @@ MFEncoder::Nv12ConvertResult MFEncoder::convertBgraTextureToNv12(
             1,
             &stream),
         "VideoProcessorBlt");
+    encodeStage_ = "bridge-release-encoder";
     const bool released = releaseEncoderBridge();
+    encodeStage_ = "idle";
     return converted && released ? Nv12ConvertResult::Ok : Nv12ConvertResult::Failed;
 }
 
@@ -1071,7 +1113,9 @@ bool MFEncoder::captureDxgiSample(
     }
 
     Microsoft::WRL::ComPtr<IMFSample> sample;
+    encodeStage_ = "allocate-sample";
     if (!succeeded(videoSampleAllocator_->AllocateSample(&sample), "Allocate DXGI video sample")) {
+        encodeStage_ = "idle";
         return false;
     }
 
@@ -1107,21 +1151,7 @@ bool MFEncoder::captureDxgiSample(
     // does, would let every dropped frame still advance lastTimestampHns_ and
     // stretch the timeline by the frames that were never written.
     const int64_t sampleDuration = 10'000'000LL / fps_;
-    int64_t sampleTime = 0;
-    {
-        std::scoped_lock writerLock(writerMutex_);
-        if (!sinkWriter_ || finalized_) {
-            return false;
-        }
-        if (firstTimestampHns_ < 0) {
-            firstTimestampHns_ = timestampHns;
-        }
-        sampleTime = timestampHns - firstTimestampHns_;
-        if (sampleTime <= lastTimestampHns_) {
-            sampleTime = lastTimestampHns_ + sampleDuration;
-        }
-        lastTimestampHns_ = sampleTime;
-    }
+    const int64_t sampleTime = nextSampleTime(timestampHns, sampleDuration);
 
     DWORD maximumLength = 0;
     if (!succeeded(buffer->GetMaxLength(&maximumLength), "IMFMediaBuffer::GetMaxLength(DXGI)")) {
@@ -1147,23 +1177,7 @@ bool MFEncoder::captureVideoSample(
     outSample.Reset();
 
     const int64_t sampleDuration = 10'000'000LL / fps_;
-    int64_t sampleTime = 0;
-    {
-        std::scoped_lock writerLock(writerMutex_);
-        if (!sinkWriter_ || finalized_) {
-            return false;
-        }
-
-        if (firstTimestampHns_ < 0) {
-            firstTimestampHns_ = timestampHns;
-        }
-
-        sampleTime = timestampHns - firstTimestampHns_;
-        if (sampleTime <= lastTimestampHns_) {
-            sampleTime = lastTimestampHns_ + sampleDuration;
-        }
-        lastTimestampHns_ = sampleTime;
-    }
+    const int64_t sampleTime = nextSampleTime(timestampHns, sampleDuration);
 
     // The GPU readback below (copyFrameToBuffer -> CopyResource/Map on
     // `texture`) is not internally synchronized here. Callers must hold their
@@ -1210,23 +1224,7 @@ bool MFEncoder::captureBgraSample(
     outSample.Reset();
 
     const int64_t sampleDuration = 10'000'000LL / fps_;
-    int64_t sampleTime = 0;
-    {
-        std::scoped_lock writerLock(writerMutex_);
-        if (!sinkWriter_ || finalized_) {
-            return false;
-        }
-
-        if (firstTimestampHns_ < 0) {
-            firstTimestampHns_ = timestampHns;
-        }
-
-        sampleTime = timestampHns - firstTimestampHns_;
-        if (sampleTime <= lastTimestampHns_) {
-            sampleTime = lastTimestampHns_ + sampleDuration;
-        }
-        lastTimestampHns_ = sampleTime;
-    }
+    const int64_t sampleTime = nextSampleTime(timestampHns, sampleDuration);
 
     Microsoft::WRL::ComPtr<IMFMediaBuffer> buffer;
     const DWORD frameBytes = static_cast<DWORD>(width_ * height_ * 4);
@@ -1270,11 +1268,15 @@ bool MFEncoder::submitVideoSample(IMFSample* sample) {
     // encode synchronously on the calling thread. Callers must NOT hold any
     // lock shared with a thread that needs to make timely progress (e.g. a
     // stop-request check) across this call.
+    encodeStage_ = "write-sample";
     std::scoped_lock writerLock(writerMutex_);
     if (!sinkWriter_ || finalized_) {
+        encodeStage_ = "idle";
         return false;
     }
-    return succeeded(sinkWriter_->WriteSample(videoStreamIndex_, sample), "WriteSample");
+    const bool written = succeeded(sinkWriter_->WriteSample(videoStreamIndex_, sample), "WriteSample");
+    encodeStage_ = "idle";
+    return written;
 }
 
 bool MFEncoder::writeAudio(const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns) {

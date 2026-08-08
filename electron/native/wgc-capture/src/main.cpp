@@ -1118,8 +1118,12 @@ int main(int argc, char* argv[]) {
             // sleep still be killed.
             if (stopElapsedMs() >= currentStepDeadlineMs.load() && !shutdownComplete.load()) {
                 const char* step = currentStopStep.load();
+                // The encoder stage is what turns "video-writer-join was
+                // abandoned" into something actionable: it names the call the
+                // writer thread is sitting in, instead of leaving the next
+                // report to guess the way issue #252 had to.
                 std::cerr << "[stop-timing] step=" << step << " elapsed_ms=" << stopElapsedMs()
-                          << " phase=abandoned" << std::endl;
+                          << " phase=abandoned encode_stage=" << encoder.encodeStage() << std::endl;
                 std::cout << "{\"event\":\"stop-timeout\",\"schemaVersion\":2,\"step\":\"" << step
                           << "\"}" << std::endl;
                 std::cout.flush();

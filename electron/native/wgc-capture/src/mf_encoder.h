@@ -7,6 +7,7 @@
 #include <mfreadwrite.h>
 #include <wrl/client.h>
 
+#include <atomic>
 #include <cstdint>
 #include <mutex>
 #include <string>
@@ -91,6 +92,8 @@ public:
     // call, or a machine that fell back would be fed DXGI samples the sink
     // writer was never configured for.
     bool usesDxgiInput() const;
+    // A breadcrumb, not state: safe to read from another thread at any time.
+    const char* encodeStage() const;
 
 private:
     // Contended is not Failed: the bridge is a two-key handshake and a missed
@@ -108,6 +111,7 @@ private:
     bool initializeVideoProcessor();
     bool initializeSampleAllocator(IMFMediaType* inputType);
     void applyHardwareRateControl(int bitrate);
+    int64_t nextSampleTime(int64_t timestampHns, int64_t sampleDuration);
     Nv12ConvertResult convertBgraTextureToNv12(
         ID3D11Texture2D* texture,
         ID3D11Texture2D* outputTexture);
@@ -138,7 +142,19 @@ private:
     Microsoft::WRL::ComPtr<ID3D11VideoProcessorEnumerator> videoProcessorEnumerator_;
     Microsoft::WRL::ComPtr<ID3D11VideoProcessor> videoProcessor_;
     UINT dxgiResetToken_ = 0;
+    // Guards the sink writer, and is held across IMFSinkWriter::WriteSample --
+    // a synchronous encode. Only threads that can afford to wait out an encode
+    // may take it, which rules out anything holding a caller's frame lock.
     std::mutex writerMutex_;
+    // Guards the sample clock alone, so the capture* entry points (which do run
+    // under a caller's frame lock) never queue behind an encode. Splitting this
+    // out is what stops an audio WriteSample from wedging the video writer, and
+    // through it the WGC callbacks, at stop (issue #252 follow-up).
+    std::mutex timestampMutex_;
+    // Where the encoder is right now, for the shutdown watchdog to name when a
+    // step overruns. `video-writer-join phase=abandoned` says which thread is
+    // stuck; this says which call it is stuck in.
+    std::atomic<const char*> encodeStage_{"idle"};
     DWORD videoStreamIndex_ = 0;
     DWORD audioStreamIndex_ = 0;
     bool hasAudioStream_ = false;
