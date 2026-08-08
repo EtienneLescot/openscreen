@@ -46,6 +46,9 @@
 
 #include "pw_shim.h"
 
+/* Defined next to osc_map_dmabuf; used earlier, at format negotiation. */
+static int osc_debug_enabled(void);
+
 #include "pw_internal.h"
 
 #define OSC_PW_SONAME "libpipewire-0.3.so.0"
@@ -588,6 +591,12 @@ static void osc_on_param_changed(void *userdata, uint32_t id, const struct spa_p
      */
     session->uses_dmabuf = (session->format.flags & SPA_VIDEO_FLAG_MODIFIER) != 0;
 
+    if (osc_debug_enabled()) {
+        fprintf(stderr, "[osc-dmabuf] negotiated %ux%u uses_dmabuf=%d modifier=0x%llx\n",
+                session->format.size.width, session->format.size.height, session->uses_dmabuf,
+                (unsigned long long)session->format.modifier);
+    }
+
     /*
      * No `size`/`stride` constraint is published: the compositor's own choice is
      * fine, and osc_read_frame validates whatever comes back.
@@ -599,10 +608,15 @@ static void osc_on_param_changed(void *userdata, uint32_t id, const struct spa_p
      * Video mode follows the format that was just negotiated. It used to
      * advertise shared memory unconditionally, on the reasoning that "not
      * offering DmaBuf is what makes the compositor fall back to memfd" — true of
-     * mutter and KWin, false of niri and every other Smithay/wlroots compositor
-     * that has no memfd path at all. Against those, this is the second wall
-     * behind the EnumFormat modifier: fixing only the format would move the
-     * failure from "no more input formats" to an empty buffer intersection.
+     * mutter and KWin, false of a compositor with no memfd path at all, which is
+     * the case of issue #287. Against those, this is the second wall behind the
+     * EnumFormat modifier: fixing only the format would move the failure from
+     * "no more input formats" to an empty buffer intersection.
+     *
+     * Not "every Smithay/wlroots compositor", as this comment used to claim:
+     * sway 1.9 through xdg-desktop-portal-wlr negotiates WL_SHM here and takes
+     * the memfd path like GNOME does (measured 2026-08-09). Reproducing the
+     * DMA-BUF path locally needs OPENSCREEN_PIPEWIRE_FORCE_DMABUF below.
      *
      * pw_stream still does not map dmabuf itself even with
      * PW_STREAM_FLAG_MAP_BUFFERS, so `datas[0].data` stays NULL and the mapping
@@ -657,14 +671,72 @@ static void osc_on_param_changed(void *userdata, uint32_t id, const struct spa_p
  * dma_buf_ops), so this can legitimately fail on some drivers. It returns NULL
  * and the caller turns that into a visible error rather than a black recording.
  */
-static void *osc_map_dmabuf(int fd, size_t len)
+/*
+ * Opt-in tracing for the DMA-BUF path, off unless OPENSCREEN_PIPEWIRE_DEBUG is
+ * set. This path never runs under mutter, which hands out memfd, so on a GNOME
+ * machine there is otherwise no way to tell whether a capture exercised it at
+ * all — the helper reports the same success either way.
+ */
+static int osc_debug_enabled(void)
+{
+    static int cached = -1;
+
+    if (cached < 0) {
+        const char *value = getenv("OPENSCREEN_PIPEWIRE_DEBUG");
+        cached = (value != NULL && value[0] != '\0') ? 1 : 0;
+    }
+    return cached;
+}
+
+/*
+ * `why` receives a caller-reportable reason on failure. The three ways this can
+ * fail are not interchangeable, and conflating them sent the one real
+ * investigation of this path looking at the GPU driver for an hour.
+ */
+static void *osc_map_dmabuf(int fd, size_t *len, const char **why)
 {
     void *ptr;
 
-    if (fd < 0 || len == 0) {
+    if (fd < 0) {
+        *why = "the compositor handed us a DMA-BUF plane with no file descriptor";
         return NULL;
     }
-    ptr = mmap(NULL, len, PROT_READ, MAP_SHARED, fd, 0);
+    /*
+     * A DmaBuf plane legitimately carries maxsize = 0: the size of a dmabuf is a
+     * property of the exporting buffer, not of the SPA descriptor, and wlroots
+     * leaves it unset. Every dmabuf fd is seekable to its own length, which is
+     * the documented way to recover it. Without this the mmap was never even
+     * attempted and the failure was reported as "this driver does not allow CPU
+     * mapping" — blaming the GPU for a size the producer simply had not filled in.
+     */
+    if (*len == 0) {
+        off_t probed = lseek(fd, 0, SEEK_END);
+        if (probed > 0) {
+            *len = (size_t)probed;
+            if (osc_debug_enabled()) {
+                fprintf(stderr, "[osc-dmabuf] maxsize=0, recovered %zu bytes via lseek\n", *len);
+            }
+        }
+    }
+    if (*len == 0) {
+        if (osc_debug_enabled()) {
+            fprintf(stderr, "[osc-dmabuf] refused before mmap: fd=%d, size unknown\n", fd);
+        }
+        *why = "the DMA-BUF plane reports no size and its fd is not seekable";
+        return NULL;
+    }
+    ptr = mmap(NULL, *len, PROT_READ, MAP_SHARED, fd, 0);
+    if (osc_debug_enabled()) {
+        if (ptr == MAP_FAILED) {
+            fprintf(stderr, "[osc-dmabuf] mmap fd=%d len=%zu FAILED errno=%d (%s)\n", fd, *len,
+                    errno, strerror(errno));
+        } else {
+            fprintf(stderr, "[osc-dmabuf] mmap fd=%d len=%zu ok\n", fd, *len);
+        }
+    }
+    if (ptr == MAP_FAILED) {
+        *why = "this driver does not allow CPU mapping of the capture buffer";
+    }
     return ptr == MAP_FAILED ? NULL : ptr;
 }
 
@@ -706,7 +778,9 @@ static void osc_dmabuf_sync(int fd, int start)
 static void osc_on_add_buffer(void *userdata, struct pw_buffer *pw_buf)
 {
     struct osc_pw_session *session = userdata;
+    const char *why = "unknown reason";
     struct spa_data *data;
+    size_t maplen;
     size_t i;
 
     if (pw_buf == NULL || pw_buf->buffer == NULL || pw_buf->buffer->n_datas < 1) {
@@ -721,26 +795,38 @@ static void osc_on_add_buffer(void *userdata, struct pw_buffer *pw_buf)
         if (session->dmabuf_maps[i].ptr != NULL) {
             continue;
         }
-        /* `maxsize` is the producer's own statement of how much of the fd
-         * belongs to this buffer, and mapping exactly that keeps the bounds
-         * checks in osc_read_frame meaningful. */
-        session->dmabuf_maps[i].ptr = osc_map_dmabuf((int)data->fd, data->maxsize);
+        /* `maxsize` is the producer's statement of how much of the fd belongs to
+         * this buffer, and mapping exactly that keeps the bounds checks in
+         * osc_read_frame meaningful. It is legitimately 0 for a DMA-BUF plane —
+         * wlroots leaves it unset — in which case osc_map_dmabuf recovers the
+         * real length from the fd and reports it back here. Storing the
+         * producer's 0 instead would leave every later bounds check comparing
+         * against an empty mapping. */
+        maplen = data->maxsize;
+        session->dmabuf_maps[i].ptr = osc_map_dmabuf((int)data->fd, &maplen, &why);
         if (session->dmabuf_maps[i].ptr == NULL) {
             /* Reported once, through the buffer-info channel that already exists
              * for describing what the compositor handed us — a mapping failure
-             * here means no frames at all, and silence would read as a hang. */
+             * here means no frames at all, and silence would read as a hang.
+             *
+             * The reason is carried up rather than assumed: this used to say the
+             * driver refused CPU mapping no matter what actually went wrong, and
+             * that message sent the one real investigation of this path looking
+             * at the GPU for a size the compositor had simply left at 0. */
             if (session->callbacks.on_buffer_info != NULL &&
                 session->buffer_info_reports < OSC_BUFFER_INFO_REPORTS) {
+                char detail[256];
+
+                snprintf(detail, sizeof(detail), "dmabuf import failed: %s; capture cannot proceed",
+                         why);
                 session->buffer_info_reports++;
-                session->callbacks.on_buffer_info(
-                    session->callbacks.user, data->type, pw_buf->buffer->n_datas, 0, 0,
-                    "dmabuf mmap failed: this driver does not allow CPU mapping of the "
-                    "capture buffer; capture cannot proceed");
+                session->callbacks.on_buffer_info(session->callbacks.user, data->type,
+                                                  pw_buf->buffer->n_datas, 0, 0, detail);
             }
             return;
         }
         session->dmabuf_maps[i].fd = (int)data->fd;
-        session->dmabuf_maps[i].len = data->maxsize;
+        session->dmabuf_maps[i].len = maplen;
         return;
     }
 }
@@ -1234,6 +1320,22 @@ struct osc_pw_session *osc_pw_start(int fd, uint32_t node_id, int want_video,
      */
     params[0] = osc_build_enum_format(&builder);
     params[1] = osc_build_enum_format_dmabuf(&builder);
+
+    /*
+     * Test affordance. Every compositor available for local testing — mutter,
+     * sway via xdg-desktop-portal-wlr — offers shm, so params[0] always wins and
+     * the DMA-BUF branch below (osc_map_dmabuf, the DMA_BUF_IOCTL_SYNC bracket,
+     * the dmabuf arm of osc_read_frame) never executes outside niri. Dropping
+     * the shm object leaves the producer no choice, which is the only way to
+     * exercise that code without the compositor from issue #287.
+     *
+     * Never set in production: it would break exactly the compatibility the
+     * ordering above exists to preserve.
+     */
+    if (getenv("OPENSCREEN_PIPEWIRE_FORCE_DMABUF") != NULL) {
+        params[0] = params[1];
+    }
+
     if (params[0] == NULL || params[1] == NULL) {
         osc_set_error(err, err_len, "the EnumFormat PODs did not fit their builder");
         goto fail;
