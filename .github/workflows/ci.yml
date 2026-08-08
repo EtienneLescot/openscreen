@@ -19,7 +19,7 @@ jobs:
     name: Lint
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npm run lint
 
@@ -27,7 +27,7 @@ jobs:
     name: Type Check
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npx tsc --noEmit
 
@@ -48,7 +48,7 @@ jobs:
     # fixing on the spot, fix the fixture anyway: re-introducing a baseline
     # re-opens the drift this closed.
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - name: Typecheck tests
         run: npx tsc -p tsconfig.test.json --noEmit
@@ -57,11 +57,11 @@ jobs:
     name: Docs
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # No ./.github/actions/setup: check-docs.mjs imports only node builtins,
       # so npm ci would be a minute of install for nothing. Node 22 is here for
       # import.meta.dirname (needs >= 20.11).
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version: 22
       - run: npm run docs:check
@@ -70,7 +70,7 @@ jobs:
     name: Test
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npm run test
 
@@ -78,7 +78,7 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: ./.github/actions/setup
       - run: npx vite build
 
@@ -122,7 +122,7 @@ jobs:
     name: Rust test (macOS compositor)
     runs-on: macos-14
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Install Rust toolchain
         run: |
           curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain stable --target aarch64-apple-darwin
@@ -168,8 +168,8 @@ jobs:
     name: Rust check (Windows compositor)
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       # bindgen needs libclang. `crates/.cargo/config.toml` pins LIBCLANG_PATH to
@@ -209,10 +209,10 @@ jobs:
     name: Rust test (Linux compositor)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Pas de ./.github/actions/setup : `fetch-ffmpeg.mjs` n'importe que des
       # builtins node, donc `npm ci` serait une minute d'installation pour rien.
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v7
         with:
           node-version-file: .nvmrc
       # libclang-dev, pas libclang1 : bindgen a besoin de libclang pour lire les
@@ -269,7 +269,7 @@ jobs:
     runs-on: ubuntu-latest
     if: github.event_name == 'pull_request'
     steps:
-      - uses: amannn/action-semantic-pull-request@v5
+      - uses: amannn/action-semantic-pull-request@v6
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:

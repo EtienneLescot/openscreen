@@ -18,7 +18,7 @@ jobs:
     name: Windows x64 diagnostic bundle
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup
 
@@ -61,7 +61,7 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw "diagnostic.bat --help exited $LASTEXITCODE" }
 
       - name: Upload Windows diagnostic bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-diagnostic-windows-x64
           path: openscreen-diagnostic-windows-x64.zip
@@ -76,7 +76,7 @@ jobs:
       matrix:
         arch: [arm64, x64]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
 
       - uses: ./.github/actions/setup
 
@@ -101,7 +101,7 @@ jobs:
           tar -czf "$bundle.tar.gz" "$bundle"
 
       - name: Upload macOS diagnostic bundle
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-diagnostic-macos-${{ matrix.arch }}
           path: openscreen-diagnostic-macos-${{ matrix.arch }}.tar.gz
