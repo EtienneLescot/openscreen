@@ -202,6 +202,56 @@ function checkNativePayload({ dir, required, osLabel, bundleNoun, emptyDirFix })
 	);
 }
 
+/**
+ * The Windows addon must sit in the SAME directory as the ffmpeg DLLs it links
+ * against, because that is the only arrangement that loads under MSIX.
+ *
+ * The addon dlopens avcodec/avformat/avutil at require() time. While it shipped from
+ * app.asar.unpacked — one directory away from the DLLs — loading it depended on
+ * `ensureFfmpegSharedDllsOnPath` prepending their directory to PATH. That works for
+ * the NSIS installer and does not work under MSIX, which resolves dependent DLLs
+ * through the package graph and ignores PATH. Measured inside a registered package,
+ * with the directory correctly on PATH: `require` failed both before and after the
+ * PATH was set; with the addon beside its DLLs it loaded with no PATH at all.
+ *
+ * That shipped as 1.9.0 on the Store: no compositor loaded, so the editor showed no
+ * preview at all while audio kept playing — and it looked like an app bug, not a
+ * packaging one, because every file was present and the NSIS build of the same commit
+ * was fine.
+ *
+ * `win.extraResources` ships this directory wholesale (filter `win32-*​/*`), so
+ * "together here" is the same thing as "together in the installed app".
+ */
+const WIN_REQUIRED = [
+	{
+		match: (name) => name === "compositor_view.node",
+		what: "the D3D11 compositor addon",
+		breaks: "the preview renders nothing and every export falls back to the no-op compositor",
+		fix: FIX,
+	},
+	// One requirement per library, not `atLeast: 3` over a combined regex — the same
+	// trap LINUX_REQUIRED documents above. Several versioned copies of one library
+	// (avcodec-60/61/62.dll left by an earlier fetch) would satisfy a combined count
+	// while another library was missing entirely, and the addon would still fail to
+	// load.
+	...["avcodec", "avformat", "avutil"].map((library) => ({
+		match: (name) => new RegExp(`^${library}-\\d+\\.dll$`).test(name),
+		what: `the ${library} DLL the compositor links`,
+		breaks: "the addon cannot be loaded at all under MSIX, which ignores PATH",
+		fix: "Fetch them with:\n\n    npm run fetch:ffmpeg",
+	})),
+];
+
+function checkWinNativePayload() {
+	checkNativePayload({
+		dir: path.join(ROOT, "electron", "native", "bin", "win32-x64"),
+		required: WIN_REQUIRED,
+		osLabel: "Windows",
+		bundleNoun: "the installer",
+		emptyDirFix: `${FIX}\n\nThe STT helper and the capture helper are separate builds — see\ntechnical-documentation/engineering/build-and-packaging.md.`,
+	});
+}
+
 function checkMacNativePayload(context) {
 	checkNativePayload({
 		dir: path.join(ROOT, "electron", "native", "bin", `darwin-${archTagFor(context)}`),
@@ -313,7 +363,19 @@ function checkCompositorAddonFreshness(
 exports.default = async function beforePack(context) {
 	const platform = context?.electronPlatformName ?? process.platform;
 	if (platform === "win32") {
-		checkCompositorAddonFreshness();
+		// The copy that ships is the arch-tagged one under electron/native/bin/
+		// (win.extraResources), beside its ffmpeg DLLs — not the dev copy this hook
+		// used to be the sole guardian of. Same reasoning as the darwin branch below.
+		const shipped = path.join(
+			ROOT,
+			"electron",
+			"native",
+			"bin",
+			"win32-x64",
+			"compositor_view.node",
+		);
+		checkWinNativePayload();
+		checkCompositorAddonFreshness(shipped, FIX, "D3D11");
 		return;
 	}
 	if (platform === "darwin") {
@@ -376,6 +438,20 @@ if (require.main === module) {
 				HELPER_SOURCE_PATHS,
 			);
 			console.log(`Linux native payload complete in electron/native/bin/${tag}, addon up to date.`);
+		} else if (process.platform === "win32") {
+			const shipped = path.join(
+				ROOT,
+				"electron",
+				"native",
+				"bin",
+				"win32-x64",
+				"compositor_view.node",
+			);
+			checkWinNativePayload();
+			checkCompositorAddonFreshness(shipped, FIX, "D3D11");
+			console.log(
+				"Windows native payload complete in electron/native/bin/win32-x64 (addon beside its ffmpeg DLLs), addon up to date.",
+			);
 		} else {
 			checkCompositorAddonFreshness();
 			console.log("compositor addon is up to date with its Rust sources.");

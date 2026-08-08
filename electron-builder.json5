@@ -192,16 +192,21 @@
         "filter": ["win32-*/*", "!win32-*/ffmpeg.exe"]
       }
     ],
-    // Native D3D11 compositor addon (Windows-only). Built by
-    // `npm run build:native:compositor` (scripts/build-windows-compositor-addon.mjs)
-    // before packaging. Packed into asar, then auto-unpacked by the top-level
-    // `asarUnpack: ["**/*.node"]` rule to app.asar.unpacked/... — matches the
-    // `.asar` -> `.asar.unpacked` rewrite compositorViewService.ts's
-    // buildCandidatePaths() already applies for packaged builds. Appends to
-    // (doesn't replace) the top-level `files` list.
-    "files": [
-      "electron/native/compositor-view/build"
-    ]
+    // The D3D11 compositor addon deliberately does NOT travel through `files` into
+    // app.asar. It ships with the ffmpeg DLLs it links against, via the
+    // `extraResources` entry above, because it has to sit in the SAME directory as
+    // them — exactly like the Metal addon on macOS.
+    //
+    // It used to be listed here and unpacked to app.asar.unpacked/…, one directory
+    // away from `electron/native/bin/win32-x64/*.dll`. That only ever worked because
+    // `ensureFfmpegSharedDllsOnPath` prepends the DLL directory to PATH before the
+    // require. MSIX ignores PATH when resolving dependent DLLs — it resolves through
+    // the package graph — so the Store build of 1.9.0 loaded no compositor at all and
+    // the editor ran with no preview while audio kept playing.
+    //
+    // Node loads .node files with LOAD_WITH_ALTERED_SEARCH_PATH, so the addon's own
+    // directory is searched for its dependencies; colocation makes the load work with
+    // no PATH at all, on every Windows packaging format.
   },
   "nsis": {
     "oneClick": false,

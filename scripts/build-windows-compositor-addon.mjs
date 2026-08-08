@@ -95,5 +95,34 @@ fs.mkdirSync(BUILD_OUT_DIR, { recursive: true });
 const dest = path.join(BUILD_OUT_DIR, "compositor_view.node");
 fs.copyFileSync(builtDll, dest);
 
+// Also install next to the ffmpeg DLLs the addon links against, which is the copy
+// that actually ships (win `extraResources`, filter `win32-*/*`). macOS has always
+// done this — see build-macos-compositor-addon.mjs's archBinDir — and Windows not
+// doing it is what broke the Store build of 1.9.0:
+//
+// The addon dlopens avcodec/avformat/avutil at require() time. Shipped from inside
+// app.asar.unpacked it sat in a different directory from those DLLs, so loading it
+// depended on `ensureFfmpegSharedDllsOnPath` prepending their directory to PATH.
+// That works for the NSIS installer and does NOT work under MSIX: a packaged app
+// resolves dependent DLLs through its package graph and ignores PATH. Measured
+// inside a registered package, with the directory correctly on PATH:
+//
+//   require BEFORE PATH: FAILED: The specified module could not be found.
+//   require AFTER  PATH: FAILED: The specified module could not be found.
+//
+// and with the addon sitting beside its DLLs, no PATH involved:
+//
+//   require BEFORE PATH: LOADED OK
+//
+// Node loads .node files with LOAD_WITH_ALTERED_SEARCH_PATH, so the addon's own
+// directory is searched for its dependencies. Colocating removes the PATH mechanism
+// rather than repairing it. `buildCandidatePaths` already probes this location
+// first, so no loader change is needed.
+const archBinDir = path.join(ROOT, "electron", "native", "bin", "win32-x64");
+fs.mkdirSync(archBinDir, { recursive: true });
+const archDest = path.join(archBinDir, "compositor_view.node");
+fs.copyFileSync(builtDll, archDest);
+
 console.log(`Built ${builtDll}`);
 console.log(`Copied ${dest}`);
+console.log(`Copied ${archDest}`);

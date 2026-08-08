@@ -36,7 +36,31 @@ A usable full package depends on generated artifacts that are not committed:
 | Native Metal compositor addon | `electron/native/bin/darwin-<arch>/compositor_view.node` (plus a dev copy under `electron/native/compositor-view/build/`) | Rust, Xcode, and the LGPL FFmpeg tree from `fetch:ffmpeg:mac` |
 | FFmpeg runtime files | matching `electron/native/bin/<platform>-<arch>/` directory | Downloaded by `fetch:ffmpeg` on Windows; **built from source** by `fetch:ffmpeg:mac` on macOS (~5 min) — BtbN publishes no macOS target and every circulating macOS build is GPL, which would relicense this MIT app |
 
-Electron-builder copies only the matching `electron/native/bin/<platform>-<arch>/` directory into each package. The compositor `.node` file is included by the Windows `files` rule and unpacked from ASAR because native addons cannot be loaded from inside the archive.
+Electron-builder copies only the matching `electron/native/bin/<platform>-<arch>/` directory into each package. On both Windows and macOS the compositor `.node` ships from inside that directory, beside the ffmpeg libraries it links against, and never travels through ASAR.
+
+### The compositor addon must sit beside its ffmpeg libraries
+
+This is a hard requirement on Windows, not a tidiness preference.
+
+The addon dlopens `avcodec`/`avformat`/`avutil` at `require()` time. Until 1.9.0 the Windows build shipped it inside `app.asar.unpacked/electron/native/compositor-view/build/`, one directory away from `electron/native/bin/win32-x64/*.dll`, and the gap was bridged at runtime by `ensureFfmpegSharedDllsOnPath` prepending the DLL directory to `PATH` before the require.
+
+That works for the NSIS installer. **It does not work under MSIX**, which resolves an addon's dependent DLLs through the package graph and ignores `PATH`. Measured inside a registered package, with the directory verifiably present and correctly prepended to `PATH`:
+
+```
+dllDir existsSync   : true
+require BEFORE PATH : FAILED: The specified module could not be found.
+require AFTER  PATH : FAILED: The specified module could not be found.
+```
+
+and with the addon sitting beside those same DLLs, no `PATH` involved:
+
+```
+require BEFORE PATH : LOADED OK
+```
+
+Node loads `.node` files with `LOAD_WITH_ALTERED_SEARCH_PATH`, so the addon's own directory is searched for its dependencies. Colocating removes the `PATH` mechanism rather than repairing it, and works on every Windows packaging format.
+
+This shipped: the 1.9.0 Store build loaded no compositor at all, so the editor opened with a permanently blank preview while audio kept playing — audio comes from the renderer, every frame comes from the addon. It read as an application bug rather than a packaging one, because every file was present in the package and the NSIS build of the same commit was fine. `scripts/before-pack.cjs` now refuses to package unless the addon and at least `avcodec`/`avformat`/`avutil` are in the same directory, on Windows as it already did on macOS.
 
 `electron/native/bin/`, local native build directories, the compositor build output, models, and caches are gitignored. Rebuilding from a source checkout therefore requires the complete platform toolchain and third-party SDKs; running the generic `npm run build` alone does not manufacture missing native artifacts. The Windows compositor's D3D11/FFmpeg prerequisites are described by the source POC in `crates/README.md`, while capture helper lookup and output conventions are documented in `electron/native/README.md`.
 
