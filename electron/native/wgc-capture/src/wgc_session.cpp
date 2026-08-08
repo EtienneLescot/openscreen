@@ -1,6 +1,7 @@
 #include "wgc_session.h"
 
 #include <Windows.Graphics.Capture.Interop.h>
+#include <d3d10.h>
 #include <dxgi1_2.h>
 #include <inspectable.h>
 #include <winrt/base.h>
@@ -63,7 +64,7 @@ WgcSession::~WgcSession() {
 }
 
 bool WgcSession::createD3DDevice() {
-    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT;
+    UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
 #if defined(_DEBUG)
     flags |= D3D11_CREATE_DEVICE_DEBUG;
 #endif
@@ -108,6 +109,12 @@ bool WgcSession::createD3DDevice() {
     if (!succeeded(hr, "D3D11CreateDevice")) {
         return false;
     }
+
+    Microsoft::WRL::ComPtr<ID3D10Multithread> multithread;
+    if (!succeeded(d3dContext_.As(&multithread), "Query ID3D10Multithread")) {
+        return false;
+    }
+    multithread->SetMultithreadProtected(TRUE);
 
     Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
     if (!succeeded(d3dDevice_.As(&dxgiDevice), "Query IDXGIDevice")) {

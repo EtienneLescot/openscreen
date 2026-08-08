@@ -2,6 +2,8 @@
 
 #include "audio_sample_utils.h"
 
+#include <d3d10.h>
+#include <dxgi1_2.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <propvarutil.h>
@@ -134,6 +136,7 @@ enum class SinkWriterCreateStage {
     SoftwareEncoderRegistration,
     CreateAttributes,
     DisableHardwareTransforms,
+    ConfigureDxgiManager,
     CreateSinkWriter,
 };
 
@@ -179,6 +182,7 @@ HRESULT ensureSoftwareH264EncoderRegisteredForProcess() {
 HRESULT createSinkWriterFromUrl(
     const std::wstring& outputPath,
     bool forceSoftwareEncoder,
+    IMFDXGIDeviceManager* dxgiDeviceManager,
     bool injectDefaultSinkWriterFailureOnce,
     bool& injectedDefaultSinkWriterFailure,
     Microsoft::WRL::ComPtr<IMFSinkWriter>& sinkWriter,
@@ -218,6 +222,27 @@ HRESULT createSinkWriterFromUrl(
             failedStage = SinkWriterCreateStage::DisableHardwareTransforms;
             return hr;
         }
+    } else if (dxgiDeviceManager != nullptr) {
+        HRESULT hr = MFCreateAttributes(&attributes, 3);
+        if (FAILED(hr)) {
+            std::cerr << "ERROR: MFCreateAttributes(DXGI sink writer) failed (hr=0x"
+                      << std::hex << hr << std::dec << ")" << std::endl;
+            failedStage = SinkWriterCreateStage::CreateAttributes;
+            return hr;
+        }
+        hr = attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
+        if (FAILED(hr)) {
+            failedStage = SinkWriterCreateStage::ConfigureDxgiManager;
+            return hr;
+        }
+        hr = attributes->SetUnknown(MF_SINK_WRITER_D3D_MANAGER, dxgiDeviceManager);
+        if (FAILED(hr)) {
+            std::cerr << "ERROR: Set MF_SINK_WRITER_D3D_MANAGER failed (hr=0x"
+                      << std::hex << hr << std::dec << ")" << std::endl;
+            failedStage = SinkWriterCreateStage::ConfigureDxgiManager;
+            return hr;
+        }
+        attributes->SetUINT32(MF_LOW_LATENCY, TRUE);
     }
 
     failedStage = SinkWriterCreateStage::CreateSinkWriter;
@@ -347,10 +372,32 @@ bool MFEncoder::initialize(
     fps_ = std::max(1, fps);
     device_ = device;
     context_ = context;
+    captureDevice_ = device;
+    captureContext_ = context;
+    useDxgiInput_ = options.useDxgiInput;
     videoEncoderSelection_ = kVideoEncoderSelectionDefault;
 
     if (!succeeded(MFStartup(MF_VERSION), "MFStartup")) {
         return false;
+    }
+
+    if (useDxgiInput_) {
+        if (!initializeDxgiEncodingDevice()) {
+            return false;
+        }
+        if (!succeeded(
+                MFCreateDXGIDeviceManager(&dxgiResetToken_, &dxgiDeviceManager_),
+                "MFCreateDXGIDeviceManager")) {
+            return false;
+        }
+        if (!succeeded(
+                dxgiDeviceManager_->ResetDevice(device_.Get(), dxgiResetToken_),
+                "IMFDXGIDeviceManager::ResetDevice")) {
+            return false;
+        }
+        if (!initializeVideoProcessor()) {
+            return false;
+        }
     }
 
     Microsoft::WRL::ComPtr<IMFMediaType> outputType;
@@ -370,12 +417,48 @@ bool MFEncoder::initialize(
         return false;
     }
     inputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-    inputType->SetGUID(MF_MT_SUBTYPE, MFVideoFormat_RGB32);
+    inputType->SetGUID(
+        MF_MT_SUBTYPE,
+        useDxgiInput_ ? MFVideoFormat_NV12 : MFVideoFormat_RGB32);
     inputType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-    inputType->SetUINT32(MF_MT_DEFAULT_STRIDE, static_cast<UINT32>(width_ * 4));
+    if (!useDxgiInput_) {
+        inputType->SetUINT32(MF_MT_DEFAULT_STRIDE, static_cast<UINT32>(width_ * 4));
+    }
     setFrameSize(inputType.Get(), static_cast<UINT32>(width_), static_cast<UINT32>(height_));
     setFrameRate(inputType.Get(), static_cast<UINT32>(fps_));
     setPixelAspectRatio(inputType.Get());
+
+    if (useDxgiInput_) {
+        if (!succeeded(
+                MFCreateVideoSampleAllocatorEx(
+                    __uuidof(IMFVideoSampleAllocatorEx),
+                    reinterpret_cast<void**>(videoSampleAllocator_.GetAddressOf())),
+                "MFCreateVideoSampleAllocatorEx")) {
+            return false;
+        }
+        if (!succeeded(
+                videoSampleAllocator_->SetDirectXManager(dxgiDeviceManager_.Get()),
+                "IMFVideoSampleAllocator::SetDirectXManager")) {
+            return false;
+        }
+        Microsoft::WRL::ComPtr<IMFAttributes> allocatorAttributes;
+        if (!succeeded(MFCreateAttributes(&allocatorAttributes, 2), "MFCreateAttributes(allocator)")) {
+            return false;
+        }
+        allocatorAttributes->SetUINT32(MF_SA_D3D11_USAGE, D3D11_USAGE_DEFAULT);
+        allocatorAttributes->SetUINT32(
+            MF_SA_D3D11_BINDFLAGS,
+            D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+        if (!succeeded(
+                videoSampleAllocator_->InitializeSampleAllocatorEx(
+                    4,
+                    30,
+                    allocatorAttributes.Get(),
+                    inputType.Get()),
+                "IMFVideoSampleAllocatorEx::InitializeSampleAllocatorEx")) {
+            return false;
+        }
+    }
 
     bool injectedDefaultSinkWriterFailure = false;
 
@@ -397,6 +480,7 @@ bool MFEncoder::initialize(
         const HRESULT sinkWriterHr = createSinkWriterFromUrl(
             outputPath,
             forceSoftwareEncoder,
+            forceSoftwareEncoder ? nullptr : dxgiDeviceManager_.Get(),
             options.injectDefaultSinkWriterFailureOnce,
             injectedDefaultSinkWriterFailure,
             sinkWriter_,
@@ -439,6 +523,11 @@ bool MFEncoder::initialize(
     };
 
     if (options.preferSoftwareEncoder) {
+        if (useDxgiInput_) {
+            std::cerr << "ERROR: DXGI input requires a hardware Media Foundation encoder"
+                      << std::endl;
+            return false;
+        }
         return configureSinkWriterAttempt(
             true,
             kVideoEncoderSelectionSoftwarePreferred,
@@ -447,6 +536,11 @@ bool MFEncoder::initialize(
 
     if (configureSinkWriterAttempt(false, kVideoEncoderSelectionDefault, false)) {
         return true;
+    }
+
+    if (useDxgiInput_) {
+        std::cerr << "ERROR: Hardware DXGI H.264 encoder setup failed" << std::endl;
+        return false;
     }
 
     std::cerr
@@ -600,6 +694,302 @@ bool MFEncoder::copyBgraFrameToBuffer(const BgraFrameView& frame, BYTE* destinat
         }
     }
 
+    return true;
+}
+
+bool MFEncoder::initializeDxgiEncodingDevice() {
+    Microsoft::WRL::ComPtr<IDXGIDevice> captureDxgiDevice;
+    if (!succeeded(captureDevice_.As(&captureDxgiDevice), "Query capture IDXGIDevice")) {
+        return false;
+    }
+    Microsoft::WRL::ComPtr<IDXGIAdapter> adapter;
+    if (!succeeded(captureDxgiDevice->GetAdapter(&adapter), "Get capture DXGI adapter")) {
+        return false;
+    }
+
+    const UINT flags = D3D11_CREATE_DEVICE_BGRA_SUPPORT | D3D11_CREATE_DEVICE_VIDEO_SUPPORT;
+    D3D_FEATURE_LEVEL featureLevels[] = {
+        D3D_FEATURE_LEVEL_11_1,
+        D3D_FEATURE_LEVEL_11_0,
+        D3D_FEATURE_LEVEL_10_1,
+        D3D_FEATURE_LEVEL_10_0,
+    };
+    D3D_FEATURE_LEVEL featureLevel{};
+    if (!succeeded(
+            D3D11CreateDevice(
+                adapter.Get(),
+                D3D_DRIVER_TYPE_UNKNOWN,
+                nullptr,
+                flags,
+                featureLevels,
+                ARRAYSIZE(featureLevels),
+                D3D11_SDK_VERSION,
+                &device_,
+                &featureLevel,
+                &context_),
+            "D3D11CreateDevice(encoder)")) {
+        return false;
+    }
+
+    Microsoft::WRL::ComPtr<ID3D10Multithread> multithread;
+    if (!succeeded(context_.As(&multithread), "Query encoder ID3D10Multithread")) {
+        return false;
+    }
+    multithread->SetMultithreadProtected(TRUE);
+    return true;
+}
+
+bool MFEncoder::initializeVideoProcessor() {
+    if (!succeeded(device_.As(&videoDevice_), "Query ID3D11VideoDevice")) {
+        return false;
+    }
+    if (!succeeded(context_.As(&videoContext_), "Query ID3D11VideoContext")) {
+        return false;
+    }
+
+    D3D11_VIDEO_PROCESSOR_CONTENT_DESC contentDesc{};
+    contentDesc.InputFrameFormat = D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE;
+    contentDesc.InputFrameRate = {static_cast<UINT>(fps_), 1};
+    contentDesc.InputWidth = static_cast<UINT>(width_);
+    contentDesc.InputHeight = static_cast<UINT>(height_);
+    contentDesc.OutputFrameRate = {static_cast<UINT>(fps_), 1};
+    contentDesc.OutputWidth = static_cast<UINT>(width_);
+    contentDesc.OutputHeight = static_cast<UINT>(height_);
+    contentDesc.Usage = D3D11_VIDEO_USAGE_PLAYBACK_NORMAL;
+
+    if (!succeeded(
+            videoDevice_->CreateVideoProcessorEnumerator(
+                &contentDesc,
+                &videoProcessorEnumerator_),
+            "CreateVideoProcessorEnumerator")) {
+        return false;
+    }
+
+    UINT nv12Support = 0;
+    if (!succeeded(
+            videoProcessorEnumerator_->CheckVideoProcessorFormat(
+                DXGI_FORMAT_NV12,
+                &nv12Support),
+            "CheckVideoProcessorFormat(NV12)")) {
+        return false;
+    }
+    if ((nv12Support & D3D11_VIDEO_PROCESSOR_FORMAT_SUPPORT_OUTPUT) == 0) {
+        std::cerr << "ERROR: D3D11 video processor does not support NV12 output" << std::endl;
+        return false;
+    }
+
+    return succeeded(
+        videoDevice_->CreateVideoProcessor(
+            videoProcessorEnumerator_.Get(),
+            0,
+            &videoProcessor_),
+        "CreateVideoProcessor");
+}
+
+bool MFEncoder::convertBgraTextureToNv12(
+    ID3D11Texture2D* texture,
+    ID3D11Texture2D* outputTexture) {
+
+    if (!captureBridgeTexture_) {
+        D3D11_TEXTURE2D_DESC bridgeDesc{};
+        texture->GetDesc(&bridgeDesc);
+        bridgeDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+        bridgeDesc.CPUAccessFlags = 0;
+        bridgeDesc.Usage = D3D11_USAGE_DEFAULT;
+        bridgeDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+        if (!succeeded(
+                captureDevice_->CreateTexture2D(&bridgeDesc, nullptr, &captureBridgeTexture_),
+                "CreateTexture2D(capture bridge)")) {
+            return false;
+        }
+        if (!succeeded(captureBridgeTexture_.As(&captureBridgeMutex_), "Query capture bridge mutex")) {
+            return false;
+        }
+
+        Microsoft::WRL::ComPtr<IDXGIResource> bridgeResource;
+        if (!succeeded(captureBridgeTexture_.As(&bridgeResource), "Query capture bridge resource")) {
+            return false;
+        }
+        HANDLE sharedHandle = nullptr;
+        if (!succeeded(bridgeResource->GetSharedHandle(&sharedHandle), "Get capture bridge handle")) {
+            return false;
+        }
+        if (!succeeded(
+                device_->OpenSharedResource(
+                    sharedHandle,
+                    __uuidof(ID3D11Texture2D),
+                    reinterpret_cast<void**>(encoderBridgeTexture_.GetAddressOf())),
+                "Open encoder bridge texture")) {
+            return false;
+        }
+        if (!succeeded(encoderBridgeTexture_.As(&encoderBridgeMutex_), "Query encoder bridge mutex")) {
+            return false;
+        }
+    }
+
+    if (!succeeded(captureBridgeMutex_->AcquireSync(0, 5000), "Acquire capture bridge")) {
+        return false;
+    }
+    captureContext_->CopyResource(captureBridgeTexture_.Get(), texture);
+    if (!succeeded(captureBridgeMutex_->ReleaseSync(1), "Release capture bridge")) {
+        return false;
+    }
+    if (!succeeded(encoderBridgeMutex_->AcquireSync(1, 5000), "Acquire encoder bridge")) {
+        return false;
+    }
+    const auto releaseEncoderBridge = [&]() {
+        return succeeded(encoderBridgeMutex_->ReleaseSync(0), "Release encoder bridge");
+    };
+
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC inputViewDesc{};
+    inputViewDesc.FourCC = 0;
+    inputViewDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+    inputViewDesc.Texture2D.MipSlice = 0;
+    inputViewDesc.Texture2D.ArraySlice = 0;
+
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessorInputView> inputView;
+    if (!succeeded(
+            videoDevice_->CreateVideoProcessorInputView(
+                encoderBridgeTexture_.Get(),
+                videoProcessorEnumerator_.Get(),
+                &inputViewDesc,
+                &inputView),
+            "CreateVideoProcessorInputView")) {
+        releaseEncoderBridge();
+        return false;
+    }
+
+    D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC outputViewDesc{};
+    outputViewDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
+    outputViewDesc.Texture2D.MipSlice = 0;
+
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessorOutputView> outputView;
+    if (!succeeded(
+            videoDevice_->CreateVideoProcessorOutputView(
+                outputTexture,
+                videoProcessorEnumerator_.Get(),
+                &outputViewDesc,
+                &outputView),
+            "CreateVideoProcessorOutputView")) {
+        releaseEncoderBridge();
+        return false;
+    }
+
+    const RECT sourceRect{0, 0, width_, height_};
+    const RECT destinationRect{0, 0, width_, height_};
+    videoContext_->VideoProcessorSetOutputTargetRect(
+        videoProcessor_.Get(),
+        TRUE,
+        &destinationRect);
+    videoContext_->VideoProcessorSetStreamFrameFormat(
+        videoProcessor_.Get(),
+        0,
+        D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
+    videoContext_->VideoProcessorSetStreamSourceRect(
+        videoProcessor_.Get(),
+        0,
+        TRUE,
+        &sourceRect);
+    videoContext_->VideoProcessorSetStreamDestRect(
+        videoProcessor_.Get(),
+        0,
+        TRUE,
+        &destinationRect);
+
+    D3D11_VIDEO_PROCESSOR_STREAM stream{};
+    stream.Enable = TRUE;
+    stream.OutputIndex = 0;
+    stream.InputFrameOrField = 0;
+    stream.PastFrames = 0;
+    stream.FutureFrames = 0;
+    stream.pInputSurface = inputView.Get();
+
+    const bool converted = succeeded(
+        videoContext_->VideoProcessorBlt(
+            videoProcessor_.Get(),
+            outputView.Get(),
+            0,
+            1,
+            &stream),
+        "VideoProcessorBlt");
+    const bool released = releaseEncoderBridge();
+    return converted && released;
+}
+
+bool MFEncoder::captureDxgiSample(
+    ID3D11Texture2D* texture,
+    int64_t timestampHns,
+    Microsoft::WRL::ComPtr<IMFSample>& outSample) {
+    outSample.Reset();
+    if (!texture) {
+        return false;
+    }
+
+    D3D11_TEXTURE2D_DESC desc{};
+    texture->GetDesc(&desc);
+    if (desc.Width != static_cast<UINT>(width_) ||
+        desc.Height != static_cast<UINT>(height_) ||
+        desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM) {
+        std::cerr << "ERROR: Unexpected WGC DXGI texture format or dimensions" << std::endl;
+        return false;
+    }
+
+    const int64_t sampleDuration = 10'000'000LL / fps_;
+    int64_t sampleTime = 0;
+    {
+        std::scoped_lock writerLock(writerMutex_);
+        if (!sinkWriter_ || finalized_) {
+            return false;
+        }
+        if (firstTimestampHns_ < 0) {
+            firstTimestampHns_ = timestampHns;
+        }
+        sampleTime = timestampHns - firstTimestampHns_;
+        if (sampleTime <= lastTimestampHns_) {
+            sampleTime = lastTimestampHns_ + sampleDuration;
+        }
+        lastTimestampHns_ = sampleTime;
+    }
+
+    Microsoft::WRL::ComPtr<IMFSample> sample;
+    if (!succeeded(videoSampleAllocator_->AllocateSample(&sample), "Allocate DXGI video sample")) {
+        return false;
+    }
+
+    Microsoft::WRL::ComPtr<IMFMediaBuffer> buffer;
+    if (!succeeded(sample->GetBufferByIndex(0, &buffer), "Get DXGI video buffer")) {
+        return false;
+    }
+
+    Microsoft::WRL::ComPtr<IMFDXGIBuffer> dxgiBuffer;
+    if (!succeeded(buffer.As(&dxgiBuffer), "Query IMFDXGIBuffer")) {
+        return false;
+    }
+    Microsoft::WRL::ComPtr<ID3D11Texture2D> nv12Texture;
+    if (!succeeded(
+            dxgiBuffer->GetResource(
+                __uuidof(ID3D11Texture2D),
+                reinterpret_cast<void**>(nv12Texture.GetAddressOf())),
+            "IMFDXGIBuffer::GetResource")) {
+        return false;
+    }
+    if (!convertBgraTextureToNv12(texture, nv12Texture.Get())) {
+        return false;
+    }
+
+    DWORD maximumLength = 0;
+    if (!succeeded(buffer->GetMaxLength(&maximumLength), "IMFMediaBuffer::GetMaxLength(DXGI)")) {
+        return false;
+    }
+    if (!succeeded(
+            buffer->SetCurrentLength(maximumLength),
+            "IMFMediaBuffer::SetCurrentLength(DXGI)")) {
+        return false;
+    }
+
+    sample->SetSampleTime(sampleTime);
+    sample->SetSampleDuration(sampleDuration);
+    outSample = sample;
     return true;
 }
 
