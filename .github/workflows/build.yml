@@ -33,7 +33,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
@@ -53,7 +53,7 @@ jobs:
         run: npm run build:win -- --publish never
 
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-windows
           path: release/**/Openscreen.Setup.*.exe
@@ -65,7 +65,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
@@ -139,7 +139,7 @@ jobs:
           Write-Output "$($expected.Count) tile assets present in $($appx.Name), byte-identical to build/appx/"
 
       - name: Upload Windows Store package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-windows-store
           path: release/**/Openscreen.Setup.*.appx
@@ -167,13 +167,13 @@ jobs:
         arch: ${{ fromJSON((github.event_name == 'workflow_dispatch' && github.event.inputs.arch != 'both') && format('["{0}"]', github.event.inputs.arch) || '["arm64", "x64"]') }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -268,7 +268,7 @@ jobs:
       # installed app, silently. `scripts/before-pack.cjs` now refuses to package
       # that, so this is also what keeps the job from failing at the pack step.
       - name: Cache LGPL ffmpeg tree
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # fetch-ffmpeg-macos.mjs BUILDS ffmpeg from source (~5 min): BtbN ships no
           # macOS target and every circulating macOS build is GPL, which would
@@ -281,7 +281,7 @@ jobs:
         run: npm run fetch:ffmpeg:mac
 
       - name: Cache cargo + compositor build tree
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -477,7 +477,7 @@ jobs:
           spctl -a -vv -t install "${{ steps.dmg.outputs.dmg_path }}"
 
       - name: Upload macOS DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-mac-${{ matrix.arch }}
           path: ${{ steps.dmg.outputs.dmg_path }}
@@ -493,7 +493,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
@@ -517,7 +517,7 @@ jobs:
         run: npm run build:linux -- --publish never
 
       - name: Upload Linux packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-linux
           path: |
@@ -543,7 +543,7 @@ jobs:
     if: ${{ (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Full history + tags: the RC notes below are built from `git log` over the
           # range since the previous RC tag, and resolving that tag needs the tags.
@@ -620,25 +620,25 @@ jobs:
           echo "notes_start_tag=$NOTES_START_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Download Windows installer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openscreen-windows
           path: artifacts/windows
 
       - name: Download macOS arm64 DMG
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openscreen-mac-arm64
           path: artifacts/mac-arm64
 
       - name: Download macOS x64 DMG
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openscreen-mac-x64
           path: artifacts/mac-x64
 
       - name: Download Linux packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openscreen-linux
           path: artifacts/linux

@@ -67,7 +67,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
@@ -138,7 +138,7 @@ jobs:
           echo "CMAKE_PREFIX_PATH=${VCPKG_ROOT_DIR}/installed/x64-windows" >> "$GITHUB_ENV"
 
       - name: Cache whisper.cpp build tree
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # Matches scripts/build-whisper-stt.sh's own BUILD_ROOT default for
           # each OS (short `C:/wstbuild` on Windows to dodge the vulkan-shaders-gen
@@ -195,7 +195,7 @@ jobs:
           echo "Staged ${BAG}.tar.gz"
 
       - name: Upload binaries
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: whisper-stt-${{ matrix.tag }}
           path: whisper-stt-${{ matrix.tag }}.tar.gz
