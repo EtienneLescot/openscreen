@@ -1,4 +1,5 @@
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { execFileSync } from "node:child_process";
+import { copyFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -107,9 +108,34 @@ describe("setReleaseVersion", () => {
 		);
 
 		expect(() => setReleaseVersion("1.9.0", dir)).toThrow(/packages/);
+
+		// The throw alone was never the property this test claims. package.json
+		// used to be written before the lockfile was validated, so this case left
+		// exactly the half-bump the name promises it prevents.
+		expect(JSON.parse(read("package.json")).version).toBe("1.8.0");
+		expect(read("package-lock.json")).not.toContain("1.9.0");
 	});
 
 	it("requires a version", () => {
 		expect(() => setReleaseVersion("", dir)).toThrow(/version is required/);
+	});
+
+	// The workflows invoke this with a repository-relative path, and the
+	// direct-invocation guard compares against `import.meta.filename`, which is
+	// absolute. Node resolves argv[1] before exposing it, so the two match — but
+	// nothing pinned that, and the whole script is dead code if it ever stops
+	// being true. Invoked here the way promote.yml and prerelease.yml do.
+	it("runs when invoked directly through a relative path", () => {
+		const scripts = join(dir, "scripts");
+		mkdirSync(scripts);
+		copyFileSync(
+			join(import.meta.dirname, "set-release-version.mjs"),
+			join(scripts, "set-release-version.mjs"),
+		);
+
+		execFileSync("node", ["scripts/set-release-version.mjs", "1.9.0"], { cwd: dir });
+
+		expect(JSON.parse(read("package.json")).version).toBe("1.9.0");
+		expect(JSON.parse(read("package-lock.json")).packages[""].version).toBe("1.9.0");
 	});
 });

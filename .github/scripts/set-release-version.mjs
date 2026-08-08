@@ -29,29 +29,35 @@ import { argv } from "node:process";
 export function setReleaseVersion(version, dir) {
 	if (!version) throw new Error("a version is required");
 
-	const edit = (name, mutate) => {
+	// Both manifests are read and validated before a single byte is written. The
+	// obvious order — write package.json, then validate the lockfile — left
+	// package.json bumped and the lockfile untouched whenever validation failed,
+	// which is precisely the half-bump this script exists to end. Its own error
+	// path must not reproduce the bug it fixes.
+	const load = (name) => {
 		const file = join(dir, name);
-		const json = JSON.parse(readFileSync(file, "utf8"));
-		mutate(json);
-		writeFileSync(file, `${JSON.stringify(json, null, "\t")}\n`);
+		return { file, json: JSON.parse(readFileSync(file, "utf8")) };
 	};
 
-	edit("package.json", (pkg) => {
-		pkg.version = version;
-	});
+	const pkg = load("package.json");
+	const lock = load("package-lock.json");
 
-	edit("package-lock.json", (lock) => {
-		lock.version = version;
-		// lockfileVersion 3 repeats the root version inside packages[""]. Optional
-		// chaining would quietly skip it if the shape ever changed — the same
-		// silent half-bump this script exists to end — so demand it instead.
-		if (!lock.packages?.[""]) {
-			throw new Error(
-				'package-lock.json has no packages[""] entry; the lockfile format changed and this script needs updating',
-			);
-		}
-		lock.packages[""].version = version;
-	});
+	// lockfileVersion 3 repeats the root version inside packages[""]. Optional
+	// chaining would quietly skip it if the shape ever changed — the same
+	// silent half-bump this script exists to end — so demand it instead.
+	if (!lock.json.packages?.[""]) {
+		throw new Error(
+			'package-lock.json has no packages[""] entry; the lockfile format changed and this script needs updating',
+		);
+	}
+
+	pkg.json.version = version;
+	lock.json.version = version;
+	lock.json.packages[""].version = version;
+
+	for (const { file, json } of [pkg, lock]) {
+		writeFileSync(file, `${JSON.stringify(json, null, "\t")}\n`);
+	}
 }
 
 // Only run when invoked directly, so the test can import the function.
