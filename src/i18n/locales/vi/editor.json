@@ -237,6 +237,7 @@
 		"selectModelFailed": "Không thể chọn mô hình",
 		"providerSettings": "Cài đặt nhà cung cấp…",
 		"applyEditsFailed": "Không thể áp dụng chỉnh sửa của tác nhân",
+		"agentEditConflict": "Các chỉnh sửa của tác nhân không được áp dụng vì dự án đã thay đổi trong lúc xử lý.",
 		"chatFailed": "Trò chuyện thất bại",
 		"rewindFailed": "Tua lại thất bại",
 		"rewoundSuccess": "Đã tua lại đến đầu tin nhắn đó",

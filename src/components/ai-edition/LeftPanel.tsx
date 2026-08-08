@@ -3,7 +3,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { toast } from "sonner";
 import { useScopedT } from "@/contexts/I18nContext";
-import { type AxcutAsset, ensureDocument } from "@/lib/ai-edition/schema";
+import type { AxcutAsset } from "@/lib/ai-edition/schema";
+import { applyAgentDocumentIfCurrent } from "@/lib/ai-edition/store/agentDocumentApply";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import {
 	useAssetTranscriptions,
@@ -869,15 +870,13 @@ function ChatStripPanel() {
 		scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: "smooth" });
 	});
 
-	// Apply a document returned by the agent (tool batch or undo). setDocument
-	// pushes the previous doc to the local undo stack (Cmd+Z also works), then
-	// saveDocument persists it to disk.
-	const applyAgentDocument = useCallback(async (doc: unknown) => {
-		const parsed = ensureDocument(doc);
-		const store = useProjectStore.getState();
-		store.setDocument(parsed);
-		await store.saveDocument(parsed);
-	}, []);
+	// Apply a document returned by the agent (tool batch or rewind). Agent turns
+	// supply their starting revision so a concurrent manual edit wins; an explicit
+	// rewind omits it because replacing the live document is the confirmed action.
+	const applyAgentDocument = useCallback(
+		(doc: unknown, expectedRevision?: number) => applyAgentDocumentIfCurrent(doc, expectedRevision),
+		[],
+	);
 
 	const send = async (overrideText?: string) => {
 		const text = (overrideText ?? input).trim();
@@ -928,7 +927,9 @@ function ChatStripPanel() {
 			thinkingRunSessionRef.current = sessionId;
 			// Send the current document snapshot so the agent can run edit tools
 			// against it (P1). Falls back to text-only chat when no doc is open.
-			const documentSnapshot = useProjectStore.getState().document ?? undefined;
+			const snapshot = useProjectStore.getState();
+			const documentSnapshot = snapshot.document ?? undefined;
+			const documentRevision = snapshot.revision;
 			const result = await nativeBridgeClient.aiEdition.chatRun(
 				projectId,
 				sessionId,
@@ -939,7 +940,10 @@ function ChatStripPanel() {
 			if (result.success && assistant) {
 				if (result.document) {
 					try {
-						await applyAgentDocument(result.document);
+						const applyResult = await applyAgentDocument(result.document, documentRevision);
+						if (applyResult === "conflict") {
+							toast.warning(t("chat.agentEditConflict"));
+						}
 					} catch (err) {
 						toast.error(t("chat.applyEditsFailed"), {
 							description: err instanceof Error ? err.message : String(err),

@@ -237,6 +237,7 @@
 		"selectModelFailed": "Could not select model",
 		"providerSettings": "Provider settings…",
 		"applyEditsFailed": "Could not apply the agent's edits",
+		"agentEditConflict": "Agent edits were not applied because the project changed while it was working.",
 		"chatFailed": "Chat failed",
 		"rewindFailed": "Rewind failed",
 		"rewoundSuccess": "Rewound to the start of that message",

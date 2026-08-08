@@ -237,6 +237,7 @@
 		"selectModelFailed": "Impossibile selezionare il modello",
 		"providerSettings": "Impostazioni provider…",
 		"applyEditsFailed": "Impossibile applicare le modifiche dell'agente",
+		"agentEditConflict": "Le modifiche dell'agente non sono state applicate perché il progetto è cambiato durante l'elaborazione.",
 		"chatFailed": "Chat non riuscita",
 		"rewindFailed": "Riavvolgimento non riuscito",
 		"rewoundSuccess": "Riavvolto all'inizio di quel messaggio",

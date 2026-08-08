@@ -237,6 +237,7 @@
 		"selectModelFailed": "모델을 선택할 수 없습니다",
 		"providerSettings": "제공업체 설정…",
 		"applyEditsFailed": "에이전트의 편집을 적용할 수 없습니다",
+		"agentEditConflict": "에이전트가 작업하는 동안 프로젝트가 변경되어 편집 내용이 적용되지 않았습니다.",
 		"chatFailed": "채팅 실패",
 		"rewindFailed": "되감기 실패",
 		"rewoundSuccess": "해당 메시지 시작 지점으로 되감았습니다",

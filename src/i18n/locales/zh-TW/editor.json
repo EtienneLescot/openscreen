@@ -237,6 +237,7 @@
 		"selectModelFailed": "無法選擇模型",
 		"providerSettings": "提供者設定…",
 		"applyEditsFailed": "無法套用代理的編輯",
+		"agentEditConflict": "代理執行期間專案已變更，因此未套用代理的編輯。",
 		"chatFailed": "聊天失敗",
 		"rewindFailed": "倒轉失敗",
 		"rewoundSuccess": "已倒轉至該訊息的開頭",
