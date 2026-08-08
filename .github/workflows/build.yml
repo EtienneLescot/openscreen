@@ -83,13 +83,32 @@ jobs:
       # the package carried electron-builder's vendored placeholder tiles: it reads
       # them from build/appx/ and, when a name is missing there, silently substitutes
       # a blank SampleAppx.*.png instead of failing. Nothing in the build output says
-      # so — the only way to know is to look inside the package. This step does that,
-      # comparing every committed asset against the one actually packaged, so a
-      # renamed, dropped or substituted tile fails the build instead of failing
-      # certification days later.
+      # so — the only way to know is to look inside the package.
+      #
+      # The expected filenames come from the generator (`--list`), NOT from build/appx/.
+      # Deriving them from the directory would defeat the check at the exact moment it
+      # matters: delete an asset there and it drops out of the expected set too, so the
+      # loop passes while electron-builder quietly packages a placeholder under that
+      # name. The generator is the authority; build/appx/ is the artifact being checked.
       - name: Verify Store tiles are in the package
         shell: pwsh
         run: |
+          $expected = @(node scripts/generate-appx-assets.mjs --list)
+          if ($LASTEXITCODE -ne 0 -or $expected.Count -eq 0) { throw "generator produced no asset list" }
+
+          $problems = @()
+
+          # First: the committed directory must match the generator exactly. A deleted or
+          # hand-added PNG is caught here, before it can reach the package.
+          $committed = @(Get-ChildItem build/appx -Filter *.png | ForEach-Object { $_.Name })
+          foreach ($name in $expected) {
+            if ($committed -notcontains $name) { $problems += "missing from build/appx: $name" }
+          }
+          foreach ($name in $committed) {
+            if ($expected -notcontains $name) { $problems += "unexpected file in build/appx (run npm run assets:appx): $name" }
+          }
+
+          # Then: every expected asset must be in the package, byte-identical.
           $appx = Get-ChildItem release -Recurse -Filter *.appx | Select-Object -First 1
           if (-not $appx) { throw "no .appx found under release/" }
           Add-Type -AssemblyName System.IO.Compression.FileSystem
@@ -99,24 +118,25 @@ jobs:
             $entries = @{}
             foreach ($e in $archive.Entries) { $entries[$e.FullName.Replace("\", "/")] = $e }
             $sha = [System.Security.Cryptography.SHA256]::Create()
-            $problems = @()
-            $expected = Get-ChildItem build/appx -Filter *.png
-            foreach ($asset in $expected) {
-              $entry = $entries["assets/$($asset.Name)"]
-              if (-not $entry) { $problems += "missing from package: $($asset.Name)"; continue }
+            foreach ($name in $expected) {
+              $entry = $entries["assets/$name"]
+              if (-not $entry) { $problems += "missing from package: $name"; continue }
               $stream = $entry.Open()
               try { $packaged = [BitConverter]::ToString($sha.ComputeHash($stream)) }
               finally { $stream.Dispose() }
-              $source = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes($asset.FullName)))
-              if ($packaged -ne $source) { $problems += "packaged copy differs from build/appx: $($asset.Name)" }
+              $sourceFile = "build/appx/$name"
+              if (-not (Test-Path $sourceFile)) { continue }
+              $source = [BitConverter]::ToString($sha.ComputeHash([IO.File]::ReadAllBytes((Resolve-Path $sourceFile))))
+              if ($packaged -ne $source) { $problems += "packaged copy differs from build/appx: $name" }
             }
-            if ($problems) {
-              $problems | ForEach-Object { Write-Output "::error::$_" }
-              throw "$($problems.Count) tile asset problem(s) in $($appx.Name)"
-            }
-            Write-Output "$($expected.Count) tile assets present in $($appx.Name), byte-identical to build/appx/"
           }
           finally { $archive.Dispose() }
+
+          if ($problems) {
+            $problems | ForEach-Object { Write-Output "::error::$_" }
+            throw "$($problems.Count) tile asset problem(s) in $($appx.Name)"
+          }
+          Write-Output "$($expected.Count) tile assets present in $($appx.Name), byte-identical to build/appx/"
 
       - name: Upload Windows Store package
         uses: actions/upload-artifact@v4
