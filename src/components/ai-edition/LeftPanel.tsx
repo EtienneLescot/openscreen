@@ -27,11 +27,11 @@ import {
 } from "../../../electron/ai-edition/provider-registry";
 import { ChatWelcome } from "./ChatWelcome";
 import { canSendChat } from "./chatAvailability";
-import { computeBudget } from "./chatBudget";
 import { ChatHistoryModal, SourceTranscriptModal } from "./Modals";
 import styles from "./NewEditorShell.module.css";
 import { ProviderSettings } from "./ProviderSettings";
 import { TranscriptionStatusDot } from "./TranscriptionStatus";
+import { useChatBudget } from "./useChatBudget";
 
 export type LeftTab = "chat" | "media";
 
@@ -1141,10 +1141,10 @@ function ChatStripPanel() {
 		});
 	}, [llmConfig]);
 
-	// Real context usage — feeds the badge in the chat strip and gates the
-	// auto-compact heuristic on the main side. Recomputed on every messages
-	// change so the % tracks the live history.
-	const budget = computeBudget(messages);
+	// Prefer the main process's model-message budget so manual compaction can
+	// shrink this meter while the complete transcript remains visible. The hook
+	// falls back to a renderer estimate in browser/shim or bridge-failure cases.
+	const budget = useChatBudget({ projectId, sessionId: activeSessionId, messages });
 
 	const [compactNowPending, setCompactNowPending] = useState(false);
 	const compactNow = useCallback(async () => {
