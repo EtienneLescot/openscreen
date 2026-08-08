@@ -30,6 +30,7 @@ import {
 import { dropTrimPillsByIds, resolveTimelineSpanToTrim } from "../timeline/trim-mapping";
 import type { AutoZoomSuggestion } from "../timeline/zoom-suggestions";
 import { useProjectStore } from "./projectStore";
+import { saveTimelineMutation } from "./timelineSave";
 
 // How long a region lasts when the caller doesn't say. The timeline's toolbar
 // passes its own duration instead, derived from the current zoom so the new pill
@@ -96,7 +97,11 @@ export function useTimeline() {
 	const ts = useScopedT("settings");
 	const document = useProjectStore((s) => s.document);
 	const projectId = useProjectStore((s) => s.projectId);
-	const saveDocument = useProjectStore((s) => s.saveDocument);
+	const saveProjectDocument = useProjectStore((s) => s.saveDocument);
+	const saveDocument = useCallback(
+		(document: AxcutDocument) => saveTimelineMutation(saveProjectDocument, document),
+		[saveProjectDocument],
+	);
 	const setDocument = useProjectStore((s) => s.setDocument);
 	const [selection, setSelection] = useState<RegionHandle | null>(null);
 	// F2.7 — shift-click multi-selection. `selection` stays the inspector's
@@ -104,6 +109,10 @@ export function useTimeline() {
 	// the Delete key operates on.
 	const [multiSelection, setMultiSelection] = useState<RegionHandle[]>([]);
 	const [clipSelection, setClipSelection] = useState<string | null>(null);
+	const zoomFocusRollbackRef = useRef<AxcutDocument | null>(null);
+	const zoomFocusLiveRef = useRef<AxcutDocument | null>(null);
+	const annotationRollbackRef = useRef<AxcutDocument | null>(null);
+	const annotationLiveRef = useRef<AxcutDocument | null>(null);
 
 	const hasDoc = document !== null && projectId !== null;
 
@@ -217,7 +226,7 @@ export function useTimeline() {
 				...document,
 				zoomRanges: [...document.zoomRanges, ...anchored] as AxcutDocument["zoomRanges"],
 			};
-			await saveDocument(next);
+			if (!(await saveDocument(next))) return 0;
 			return suggestions.length;
 		},
 		[document, saveDocument],
@@ -305,7 +314,7 @@ export function useTimeline() {
 					...created,
 				] as unknown as AxcutDocument["annotations"],
 			};
-			await saveDocument(next);
+			if (!(await saveDocument(next))) return;
 			// Select the freshly added annotation so its inspector opens and it shows a
 			// selection box on the canvas, ready to be retyped over.
 			const newId = created[0]?.id ?? ann.id;
@@ -487,6 +496,7 @@ export function useTimeline() {
 		(id: string, focus: { cx: number; cy: number }) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
+			if (zoomFocusLiveRef.current !== doc) zoomFocusRollbackRef.current = doc;
 			const next: AxcutDocument = {
 				...doc,
 				zoomRanges: patchPillById(doc.zoomRanges, id, {
@@ -494,6 +504,7 @@ export function useTimeline() {
 				}) as AxcutDocument["zoomRanges"],
 			};
 			setDocument(next);
+			zoomFocusLiveRef.current = next;
 		},
 		[setDocument],
 	);
@@ -501,7 +512,16 @@ export function useTimeline() {
 	const commitZoomFocus = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		await saveDocument(doc);
+		const rollback = zoomFocusRollbackRef.current;
+		zoomFocusRollbackRef.current = null;
+		zoomFocusLiveRef.current = null;
+		if (!(await saveDocument(doc)) && rollback) {
+			useProjectStore.setState((state) =>
+				state.document === doc
+					? { document: rollback, revision: state.revision + 1, dirty: false }
+					: {},
+			);
+		}
 	}, [saveDocument]);
 
 	// Zoom-level control for the region-settings panel (1-6, matches
@@ -590,11 +610,13 @@ export function useTimeline() {
 		(id: string, patch: Partial<AxcutDocument["annotations"][number]>) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
+			if (annotationLiveRef.current !== doc) annotationRollbackRef.current = doc;
 			const next: AxcutDocument = {
 				...doc,
 				annotations: patchPillById(doc.annotations, id, patch),
 			};
 			setDocument(next);
+			annotationLiveRef.current = next;
 		},
 		[setDocument],
 	);
@@ -602,7 +624,16 @@ export function useTimeline() {
 	const commitAnnotationChange = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		await saveDocument(doc);
+		const rollback = annotationRollbackRef.current;
+		annotationRollbackRef.current = null;
+		annotationLiveRef.current = null;
+		if (!(await saveDocument(doc)) && rollback) {
+			useProjectStore.setState((state) =>
+				state.document === doc
+					? { document: rollback, revision: state.revision + 1, dirty: false }
+					: {},
+			);
+		}
 	}, [saveDocument]);
 
 	const updateSpeedSpan = useCallback(
@@ -692,7 +723,7 @@ export function useTimeline() {
 		async (kind: RegionKind, id: string) => {
 			if (!document) return;
 			// One shared mutator with the agent's removeTrim / removeModifier tools.
-			await saveDocument(removeRegionInDocument(document, kind, id));
+			if (!(await saveDocument(removeRegionInDocument(document, kind, id)))) return;
 			if (selection?.id === id) setSelection(null);
 			setMultiSelection((prev) => prev.filter((h) => h.id !== id));
 		},
@@ -743,7 +774,7 @@ export function useTimeline() {
 						? { ...legacy, speedRegions: prevSpeed, cameraFullscreenRegions: prevCameraFullscreen }
 						: document.legacyEditor,
 			};
-			await saveDocument(next);
+			if (!(await saveDocument(next))) return;
 			setSelection(null);
 			setMultiSelection([]);
 		},
@@ -926,7 +957,7 @@ export function useTimeline() {
 				timeline: { ...currentDoc.timeline, clips: newClips },
 			};
 			const finalDoc = rederiveRegionMs(next, newClips);
-			await saveDocument(finalDoc);
+			if (!(await saveDocument(finalDoc))) return;
 			setClipSelection(newClip.id);
 
 			// If we used the placeholder, kick off the probe in the background.
@@ -971,7 +1002,7 @@ export function useTimeline() {
 			// original, so its index in the result is the original's index + 1.
 			const insertedIndex = document.timeline.clips.findIndex((c) => c.id === clipId) + 1;
 			const next = duplicateClipInDocument(document, clipId, "user", "Duplicated clip");
-			await saveDocument(next);
+			if (!(await saveDocument(next))) return;
 			setClipSelection(next.timeline.clips[insertedIndex]?.id ?? null);
 		},
 		[document, saveDocument],
@@ -981,7 +1012,7 @@ export function useTimeline() {
 		async (clipId: string) => {
 			if (!document) return;
 			// One shared mutator with the agent's removeClip tool: reflow survivors + rederive pills.
-			await saveDocument(removeClipInDocument(document, clipId));
+			if (!(await saveDocument(removeClipInDocument(document, clipId)))) return;
 			if (clipSelection === clipId) setClipSelection(null);
 		},
 		[document, clipSelection, saveDocument],

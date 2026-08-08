@@ -1059,6 +1059,7 @@ export function V4Timeline({
 				return;
 			}
 			const added = await tl.addZoomsBulk(suggestions);
+			if (added === 0) return;
 			toast.success(
 				t(added === 1 ? "toolbar.addedAutoZoom" : "toolbar.addedAutoZoomPlural", { count: added }),
 			);

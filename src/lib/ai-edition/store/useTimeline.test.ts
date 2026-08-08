@@ -18,6 +18,9 @@ const probeVideoDurationMock = vi.hoisted(() => vi.fn());
 const probeVideoDimensionsMock = vi.hoisted(() =>
 	vi.fn().mockResolvedValue({ width: 1920, height: 1080 }),
 );
+const toastErrorMock = vi.hoisted(() => vi.fn());
+
+vi.mock("sonner", () => ({ toast: { error: toastErrorMock } }));
 
 vi.mock("../timeline/duration", async (importOriginal) => {
 	const actual = await importOriginal<typeof import("../timeline/duration")>();
@@ -546,6 +549,30 @@ describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
 			focusMode: "auto",
 		});
 	});
+
+	it("rolls a live focus edit back when its commit cannot be saved", async () => {
+		bridgeMocks.save.mockResolvedValueOnce({ success: false, error: "project file locked" });
+		const { result } = renderTimeline();
+
+		act(() => result.current.updateZoomFocusLive("zoom_a", { cx: 0.8, cy: 0.2 }));
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.focus).toEqual({
+			cx: 0.8,
+			cy: 0.2,
+		});
+
+		await act(async () => {
+			await result.current.commitZoomFocus();
+		});
+
+		expect(useProjectStore.getState().document?.zoomRanges[0]?.focus).toEqual({
+			cx: 0.5,
+			cy: 0.5,
+		});
+		expect(useProjectStore.getState().dirty).toBe(false);
+		expect(toastErrorMock).toHaveBeenCalledWith("Save failed", {
+			description: "project file locked",
+		});
+	});
 });
 
 // Regression guard for the playhead-stutter fix. `currentTimeSec` is rewritten on
@@ -667,5 +694,35 @@ describe("useTimeline selection", () => {
 		act(() => result.current.clearSelection());
 		expect(result.current.selection).toBeNull();
 		expect(result.current.clipSelection).toBeNull();
+	});
+});
+
+describe("useTimeline save failures", () => {
+	beforeEach(() => {
+		useProjectStore.getState().clear();
+		for (const mock of Object.values(bridgeMocks)) mock.mockReset();
+		toastErrorMock.mockReset();
+		bridgeMocks.save.mockResolvedValue({ success: false, error: "disk full" });
+		useProjectStore.setState({
+			projectId: "proj_test",
+			document: sampleDoc,
+			revision: 1,
+			status: "ready",
+			error: null,
+		});
+	});
+
+	it("surfaces a rejected mutation without applying it or leaking the rejection", async () => {
+		const { result } = renderTimeline();
+
+		await act(async () => {
+			await expect(result.current.removeClip("clip_a")).resolves.toBeUndefined();
+		});
+
+		expect(toastErrorMock).toHaveBeenCalledWith("Save failed", {
+			description: "disk full",
+		});
+		expect(useProjectStore.getState().document?.timeline.clips).toHaveLength(1);
+		expect(useProjectStore.getState().document?.timeline.clips[0]?.id).toBe("clip_a");
 	});
 });
