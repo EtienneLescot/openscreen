@@ -936,7 +936,7 @@ export function removeClip(document: AxcutDocument, clipId: string): AxcutDocume
 		},
 	};
 	const withoutRemovedRegions = mapAllRegionCollections(next, (regions) =>
-		regions.filter((region) => region.clipId !== clipId),
+		regions.filter((region) => !(isAnchored(region) && region.clipId === clipId)),
 	);
 	return newClips.length > 0
 		? rederiveRegionMs(withoutRemovedRegions, newClips)
