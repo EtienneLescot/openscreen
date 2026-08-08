@@ -146,23 +146,22 @@ describe("useSequentialTimelineOps", () => {
 		};
 
 		let firstResult: AxcutDocument | null | undefined;
-		let secondSettled = false;
+		let secondResult: AxcutDocument | null | undefined;
 		await act(async () => {
 			const p1 = result.current.apply(op1);
 			const p2 = result.current.apply(op2);
 			firstResult = await p1;
-			await p2.then(() => {
-				secondSettled = true;
-			});
+			secondResult = await p2;
 		});
 
 		expect(firstResult).toBeNull();
-		expect(secondSettled).toBe(true);
+		expect(secondResult).not.toBeNull();
 		expect(toastErrorMock).toHaveBeenCalledWith("Save failed", {
 			description: "save failed",
 		});
 		// The queue survived the first failure — both saves were attempted.
 		expect(saveDocument).toHaveBeenCalledTimes(2);
+		expect(saveDocument).toHaveBeenNthCalledWith(2, secondResult);
 	});
 
 	it("returns null when the store has no document and no fallback is supplied", async () => {

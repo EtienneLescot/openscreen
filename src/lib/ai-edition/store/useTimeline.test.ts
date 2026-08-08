@@ -569,6 +569,10 @@ describe("useTimeline zoom modifiers (rotation + focus mode)", () => {
 			cy: 0.5,
 		});
 		expect(useProjectStore.getState().dirty).toBe(false);
+		// The live edit advanced revision once; restoring a different document
+		// advances it again so async work cannot mistake the rollback for the
+		// optimistic document it replaced.
+		expect(useProjectStore.getState().revision).toBe(3);
 		expect(toastErrorMock).toHaveBeenCalledWith("Save failed", {
 			description: "project file locked",
 		});
