@@ -12,7 +12,7 @@ OpenScreen builds its renderer, Electron main process, preload bridge, native he
 | `npm run build:mac` | Builds the ScreenCaptureKit and cursor helpers, checks TypeScript, runs Vite, and packages the macOS target. |
 | `npm run build:win` | Builds WGC/cursor helpers and the D3D11 compositor addon, fetches FFmpeg, checks TypeScript, runs Vite, and packages the Windows NSIS target without npm rebuild. |
 | `npm run build:win:store` | Performs the Windows native and renderer build, then asks electron-builder for the configured AppX Store package. |
-| `npm run build:linux` | Checks TypeScript, runs Vite, then packages AppImage, Debian, and pacman artifacts without npm rebuild. |
+| `npm run build:linux` | Checks TypeScript, runs Vite, then packages AppImage, Debian, pacman, and RPM artifacts without npm rebuild. Its explicit `--linux` target list overrides `linux.target` in `electron-builder.json5`, so a target added to the config alone is never built. |
 | `npm run build:native:mac` | Uses SwiftPM to build requested single-architecture ScreenCaptureKit and macOS cursor helpers and stages them under `electron/native/bin/darwin-*`. |
 | `npm run build:native:win` | Uses CMake/Ninja in an MSVC environment to build WGC capture and cursor-sampler executables and stage x64 binaries. |
 | `npm run build:native:compositor` | Uses Cargo/MSVC and the pinned shared FFmpeg SDK to build `compositor_view.node`. |
@@ -124,7 +124,7 @@ Electron-builder targets DMG for both `arm64` and `x64`, enables hardened runtim
 
 ### Linux and Nix
 
-Electron-builder produces AppImage, `.deb`, and `.pacman` targets. The flake separately supports `x86_64-linux` and `aarch64-linux`, offers NixOS and Home Manager modules, and builds a wrapper around nixpkgs' system Electron. `nix/package.nix` runs Vite directly, installs `dist/`, `dist-electron/`, production npm dependencies, wallpapers, icons, and a desktop entry; it does not invoke electron-builder. The release workflow later opens a PR to update the Nix package version and npm dependency hash after stable releases.
+Electron-builder produces AppImage, `.deb`, `.pacman`, and `.rpm` targets. Each fpm target carries its own `depends` list, which *replaces* electron-builder's default rather than extending it; all three package formats therefore repeat that default verbatim before adding the Vulkan ICD (`mesa-vulkan-drivers`, `vulkan-swrast` on Arch) the native compositor needs. The RPM list also restores `libsecret`, which electron-builder includes in its `deb` default but omits from its `rpm` one, and which `safeStorage` needs to encrypt LLM credentials. The flake separately supports `x86_64-linux` and `aarch64-linux`, offers NixOS and Home Manager modules, and builds a wrapper around nixpkgs' system Electron. `nix/package.nix` runs Vite directly, installs `dist/`, `dist-electron/`, production npm dependencies, wallpapers, icons, and a desktop entry; it does not invoke electron-builder. The release workflow later opens a PR to update the Nix package version and npm dependency hash after stable releases.
 
 ## Node and toolchain versions
 
