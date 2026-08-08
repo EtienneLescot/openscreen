@@ -26,8 +26,23 @@ import { argv } from "node:process";
  * @param {string} version Version to write, e.g. "1.9.0" or "1.9.0-rc.2".
  * @param {string} dir Directory holding package.json and package-lock.json.
  */
+// MAJOR.MINOR.PATCH with the optional prerelease suffix promote.yml and
+// prerelease.yml actually produce ("1.9.0", "2.0.0-rc.3"). Deliberately not full
+// semver: this is a gate on what may be written into a published manifest, and
+// build metadata or a leading "v" would be a caller bug, not a version to honour.
+const RELEASE_VERSION = /^\d+\.\d+\.\d+(-[0-9A-Za-z.-]+)?$/;
+
 export function setReleaseVersion(version, dir) {
 	if (!version) throw new Error("a version is required");
+	// Truthiness alone let 123, "   " and "not-a-version" through into both
+	// manifests. The callers compute this from a validated tag, so it is a
+	// defence-in-depth check — but a script whose whole purpose is to stop bad
+	// version metadata should not be the thing that writes it.
+	if (typeof version !== "string" || !RELEASE_VERSION.test(version)) {
+		throw new Error(
+			`invalid version ${JSON.stringify(version)}; expected MAJOR.MINOR.PATCH with an optional prerelease suffix`,
+		);
+	}
 
 	// Both manifests are read and validated before a single byte is written. The
 	// obvious order — write package.json, then validate the lockfile — left

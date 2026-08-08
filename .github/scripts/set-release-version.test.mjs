@@ -120,6 +120,19 @@ describe("setReleaseVersion", () => {
 		expect(() => setReleaseVersion("", dir)).toThrow(/version is required/);
 	});
 
+	// Truthiness alone let all of these reach both manifests. A number in
+	// particular writes `"version": 123`, which is not even a legal package.json.
+	it.each([
+		[123, "a number"],
+		["   ", "whitespace"],
+		["not-a-version", "a malformed version"],
+		["v1.9.0", "a leading v"],
+	])("rejects %o (%s)", (bad) => {
+		expect(() => setReleaseVersion(bad, dir)).toThrow(/invalid version/);
+		expect(JSON.parse(read("package.json")).version).toBe("1.8.0");
+		expect(read("package-lock.json")).not.toContain("1.9.0");
+	});
+
 	// The workflows invoke this with a repository-relative path, and the
 	// direct-invocation guard compares against `import.meta.filename`, which is
 	// absolute. Node resolves argv[1] before exposing it, so the two match — but
