@@ -30,6 +30,7 @@ export const ASSET_PATTERNS = {
 	macIntel: /Mac.*x64.*\.dmg$/i,
 	windows: /\.exe$/i,
 	deb: /\.deb$/i,
+	rpm: /\.rpm$/i,
 	pacman: /\.pacman$/i,
 	appImage: /\.AppImage$/i,
 } as const;

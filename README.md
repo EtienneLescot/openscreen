@@ -83,16 +83,21 @@ Download the `.exe` installer directly from the [Releases page](https://github.c
 
 ### Linux
 
-Three packages are published to the [Releases page](https://github.com/getopenscreen/openscreen/releases) for each version. Pick the one that matches your distro:
+Four packages are published to the [Releases page](https://github.com/getopenscreen/openscreen/releases) for each version. Pick the one that matches your distro:
 
 **Debian / Ubuntu / Pop!_OS (`.deb`)**
 ```bash
-sudo apt install ./Openscreen-Linux-latest.deb
+sudo apt install ./Openscreen-Linux-*.deb
+```
+
+**Fedora / RHEL / CentOS (`.rpm`)**
+```bash
+sudo dnf install ./Openscreen-Linux-*.rpm
 ```
 
 **Arch / Manjaro (`.pacman`)**
 ```bash
-sudo pacman -U Openscreen-Linux-latest.pacman
+sudo pacman -U Openscreen-Linux-*.pacman
 ```
 
 **Any distro (`.AppImage`)**

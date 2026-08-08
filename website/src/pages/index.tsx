@@ -331,8 +331,9 @@ export default function Home() {
 					</div>
 
 					<p className={styles.quickStartNote}>
-						The macOS line is only needed if Gatekeeper blocks the app. Linux also ships
-						<code>.pacman</code>, an AppImage, and a Nix flake — every artifact is on the{" "}
+						The macOS line is only needed if Gatekeeper blocks the app. Linux also ships{" "}
+						<code>.rpm</code>, <code>.pacman</code>, an AppImage, and a Nix flake — every artifact
+						is on the{" "}
 						<a href="https://github.com/getopenscreen/openscreen/releases">Releases page</a>, and{" "}
 						<Link to="/docs/installation">Installation</Link> has the full steps.
 					</p>
