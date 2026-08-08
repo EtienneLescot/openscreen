@@ -88,7 +88,7 @@ Rotate the certificate by exporting a replacement P12, base64-encoding it withou
 
 ## Microsoft Store publishing
 
-`build.yml`'s `publish-msstore` job submits the appx to the Store through the [Microsoft Store Developer CLI](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/github-actions). It runs on **stable tags only** — an RC reaching the Store would go through certification and land on every user's machine as an automatic update.
+`build.yml`'s `publish-msstore` job submits the appx to the Store through the [Microsoft Store Developer CLI](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/github-actions). It runs for **stable versions only**, whether that comes from a pushed `vX.Y.Z` tag or from a manual `workflow_dispatch` whose `release_tag` is a stable one. An RC is excluded either way: it would go through certification and land on every user's machine as an automatic update.
 
 | Name | Kind | Purpose |
 |---|---|---|

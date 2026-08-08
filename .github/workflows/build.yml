@@ -968,6 +968,7 @@ jobs:
         uses: microsoft/microsoft-store-apppublisher@v1.1
 
       - name: Submit the package to the Store
+        id: submit
         if: steps.store.outputs.enabled == 'true'
         shell: pwsh
         env:
@@ -989,12 +990,35 @@ jobs:
           Write-Output "Submitting $($appx.Name) to product $env:PRODUCT_ID"
           msstore publish $appx.FullName -id $env:PRODUCT_ID
 
+      # Report what happened, not what was configured. Keyed off `enabled` alone
+      # under always(), this claimed "Submitted to the Store" when `msstore
+      # publish` had failed, and "skipped, no credentials" when the resolver had
+      # rejected a half-configured one — a release summary asserting success over
+      # a package that never left the runner, which is the failure mode this whole
+      # job exists to remove.
+      #
+      # Values go through env rather than being interpolated into the script: the
+      # outcome of a step is not attacker-controlled here, but `${{ }}` expanding
+      # straight into shell source is the habit worth not having.
       - name: Summary
         if: always()
         shell: bash
+        env:
+          RESOLVE: ${{ steps.store.outcome }}
+          ENABLED: ${{ steps.store.outputs.enabled }}
+          SUBMIT: ${{ steps.submit.outcome }}
         run: |
-          if [[ "${{ steps.store.outputs.enabled }}" == "true" ]]; then
-            echo "Submitted to the Store. Certification still has to pass before it goes live." >> "$GITHUB_STEP_SUMMARY"
-          else
-            echo "Store publishing skipped (no credentials). Upload the appx from this run's artifacts by hand." >> "$GITHUB_STEP_SUMMARY"
-          fi
+          case "${RESOLVE}:${ENABLED}:${SUBMIT}" in
+            success:true:success)
+              echo "Submitted to the Store. Certification still has to pass before it goes live."
+              ;;
+            success:false:*)
+              echo "Store publishing skipped: no credentials configured. Upload the appx from this run's artifacts by hand."
+              ;;
+            failure:*)
+              echo "Store credentials are half-configured, so nothing was submitted. The job log names the missing secrets."
+              ;;
+            *)
+              echo "Store submission did not complete (submit step: ${SUBMIT:-not reached}). The package is still attached to this run as an artifact."
+              ;;
+          esac >> "$GITHUB_STEP_SUMMARY"
