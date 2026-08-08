@@ -79,6 +79,7 @@ import { patchWebmDurationOnDisk } from "../recording/webm-duration";
 import { reindexRecordingOnDisk } from "../recording/webm-seek-index";
 import { registerNativeBridgeHandlers } from "./nativeBridge";
 import { RecordingStreamRegistry, registerRecordingStreamHandlers } from "./recordingStream";
+import { shouldPromptForScreenAccess } from "./screenAccessPrompt";
 
 const PROJECT_FILE_EXTENSION = "openscreen";
 export const SHORTCUTS_FILE = path.join(app.getPath("userData"), "shortcuts.json");
@@ -455,6 +456,8 @@ type AttachNativeMacWebcamRecordingInput = {
 
 let selectedSource: SelectedSource | null = null;
 let selectedDesktopSource: DesktopCapturerSource | null = null;
+/** macOS raises its Screen Recording prompt once per launch. */
+let hasPromptedForScreenAccess = false;
 let lastEnumeratedSources = new Map<string, DesktopCapturerSource>();
 let currentProjectPath: string | null = null;
 let currentRecordingSession: RecordingSession | null = null;
@@ -1674,7 +1677,14 @@ export function registerIpcHandlers(
 
 			// Screen recording has no askForMediaAccess equivalent, so trigger the
 			// TCC prompt without opening OpenScreen's source selector above it.
-			if (status === "not-determined") {
+			// macOS reports a never-asked machine as "denied", so the decision has to
+			// come from shouldPromptForScreenAccess rather than the status alone.
+			//
+			// Report "not-determined" while that prompt is up: it is the status the
+			// renderer's retry loop polls on, and macOS keeps answering "denied"
+			// until the user actually accepts.
+			if (shouldPromptForScreenAccess(status, hasPromptedForScreenAccess)) {
+				hasPromptedForScreenAccess = true;
 				const mainWin = getMainWindow();
 				if (mainWin && !mainWin.isDestroyed()) {
 					if (!mainWin.isVisible()) {
