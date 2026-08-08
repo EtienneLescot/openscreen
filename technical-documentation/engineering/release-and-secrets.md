@@ -86,6 +86,35 @@ The certificate account needs Developer ID signing capability, and the Apple acc
 
 Rotate the certificate by exporting a replacement P12, base64-encoding it without line-wrap changes, updating the P12/password/name secrets together, testing a stable-format manual build, then revoking the old certificate if required. Rotate the app-specific password in Apple ID settings, replace `APPLE_APP_SPECIFIC_PASSWORD`, verify notarization, and revoke the old password. `APPLE_ID` and `APPLE_TEAM_ID` normally change only when the owning account or team changes.
 
+## Microsoft Store publishing
+
+`build.yml`'s `publish-msstore` job submits the appx to the Store through the [Microsoft Store Developer CLI](https://learn.microsoft.com/en-us/windows/apps/publish/msstore-dev-cli/github-actions). It runs on **stable tags only** — an RC reaching the Store would go through certification and land on every user's machine as an automatic update.
+
+| Name | Kind | Purpose |
+|---|---|---|
+| `MSSTORE_PRODUCT_ID` | Variable | Store product ID (`9MXQ1HQJL5G5`). Gates the whole job, so a fork never publishes to our listing. |
+| `AZURE_AD_TENANT_ID` | Secret | Entra tenant associated with the Partner Center account. |
+| `AZURE_AD_APPLICATION_CLIENT_ID` | Secret | Application (client) ID of the Entra app registration. |
+| `AZURE_AD_APPLICATION_SECRET` | Secret | Client secret of that registration. The only real credential here. |
+| `SELLER_ID` | Secret | Publisher/Seller ID from Partner Center account settings. |
+
+With none of them set the job warns and skips, leaving the appx to be uploaded by hand from the run's artifacts; with some but not all it fails, on the same reasoning as the Apple path.
+
+One-time setup, in order — each step depends on the previous one:
+
+1. Associate an Entra tenant with the Partner Center account.
+2. Register an application in Entra ID and create a client secret for it.
+3. In Partner Center, under **Account settings → User management → Microsoft Entra applications**, add that application and give it the **Manager** role. Tenant and client IDs alone are not enough; the failure is an authorization error at submit time.
+4. Set the four secrets and the variable.
+
+Note what this does and does not remove. It removes the manual upload — which is worth having in itself: 1.8.0 ended up with two different packages under one version because the artifact was downloaded twice and both copies uploaded, and Partner Center rejects that outright. It does **not** remove certification: every submission still waits for Microsoft to validate it, and the update only goes live afterwards.
+
+Two constraints from Microsoft's documentation: automated updates through GitHub Actions are supported **for free products only**, and the app must already be published and live in the Store — the API cannot create a listing, only submit to an existing one.
+
+`msstore submission updateMetadata` can also drive the Store listing text from a versioned `metadata.json`, which would replace the CSV export/import round-trip. Not wired up here.
+
+Rotate by issuing a new client secret on the Entra registration, updating `AZURE_AD_APPLICATION_SECRET`, publishing one release to confirm, then deleting the old secret. The tenant, client and seller IDs change only when the registration or account does.
+
 ## Discord secrets and variables
 
 | Name | Kind | Used for |

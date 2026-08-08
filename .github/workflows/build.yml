@@ -766,3 +766,100 @@ jobs:
               exit 1
               ;;
           esac
+
+  # Publishing the Store package is the last manual step in the release: the appx
+  # had to be downloaded from this run's artifacts and uploaded by hand in Partner
+  # Center. That is also how 1.8.0 ended up with two different packages under one
+  # version — the artifact was downloaded twice and both copies were uploaded.
+  #
+  # This job lives in build.yml rather than beside publish-winget.yml because the
+  # appx never becomes a release asset: the GitHub release carries only the NSIS
+  # installer, so `release: published` has nothing to hand a downstream workflow.
+  # The package exists solely as this run's artifact.
+  publish-msstore:
+    name: Publish to Microsoft Store
+    runs-on: windows-latest
+    needs:
+      - build-windows-store
+      - publish-release
+    # Stable tags only, and never a fork: an RC reaching the Store would go through
+    # certification and land on every user's machine as an automatic update.
+    # `!contains(…, '-')` is what separates v1.9.1 from v1.9.1-rc.2.
+    if: >-
+      ${{ vars.MSSTORE_PRODUCT_ID != ''
+       && ((github.event_name == 'push' && github.ref_type == 'tag' && !contains(github.ref_name, '-'))
+        || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '' && !contains(github.event.inputs.release_tag, '-'))) }}
+    steps:
+      # Same all-or-nothing gate as the macOS signing job: a half-configured
+      # publisher is a misnamed secret, and the quiet failure mode — shipping
+      # nothing while the release looks complete — is the one worth making loud.
+      - name: Resolve Store credentials
+        id: store
+        shell: bash
+        env:
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+        run: |
+          required=(AZURE_AD_TENANT_ID AZURE_AD_APPLICATION_CLIENT_ID
+                    AZURE_AD_APPLICATION_SECRET SELLER_ID)
+          missing=()
+          for name in "${required[@]}"; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+
+          if [[ ${#missing[@]} -eq 0 ]]; then
+            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "Store credentials present — the package will be submitted."
+          elif [[ ${#missing[@]} -eq ${#required[@]} ]]; then
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::warning::No Store credentials configured; upload the appx by hand in Partner Center."
+          else
+            echo "enabled=false" >> "$GITHUB_OUTPUT"
+            echo "::error::Store publishing is partially configured; missing: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Download Store package
+        if: steps.store.outputs.enabled == 'true'
+        uses: actions/download-artifact@v4
+        with:
+          name: openscreen-windows-store
+          path: artifacts/store
+
+      - name: Configure Microsoft Store CLI
+        if: steps.store.outputs.enabled == 'true'
+        uses: microsoft/microsoft-store-apppublisher@v1.1
+
+      - name: Submit the package to the Store
+        if: steps.store.outputs.enabled == 'true'
+        shell: pwsh
+        env:
+          PRODUCT_ID: ${{ vars.MSSTORE_PRODUCT_ID }}
+        run: |
+          msstore reconfigure `
+            --tenantId ${{ secrets.AZURE_AD_TENANT_ID }} `
+            --sellerId ${{ secrets.SELLER_ID }} `
+            --clientId ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }} `
+            --clientSecret ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+
+          # Resolve the appx rather than hardcode its name: artifactName carries the
+          # version, and download-artifact keeps the release/<version>/ prefix.
+          $appx = Get-ChildItem artifacts/store -Recurse -Filter '*.appx' | Select-Object -First 1
+          if (-not $appx) { throw 'no .appx in the downloaded artifact' }
+          if (@(Get-ChildItem artifacts/store -Recurse -Filter '*.appx').Count -ne 1) {
+            throw 'more than one .appx in the artifact — refusing to guess which one to submit'
+          }
+          Write-Output "Submitting $($appx.Name) to product $env:PRODUCT_ID"
+          msstore publish $appx.FullName -id $env:PRODUCT_ID
+
+      - name: Summary
+        if: always()
+        shell: bash
+        run: |
+          if [[ "${{ steps.store.outputs.enabled }}" == "true" ]]; then
+            echo "Submitted to the Store. Certification still has to pass before it goes live." >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Store publishing skipped (no credentials). Upload the appx from this run's artifacts by hand." >> "$GITHUB_STEP_SUMMARY"
+          fi
