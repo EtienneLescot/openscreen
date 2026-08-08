@@ -2,8 +2,10 @@
 
 #include "audio_sample_utils.h"
 
+#include <codecapi.h>
 #include <d3d10.h>
 #include <dxgi1_2.h>
+#include <icodecapi.h>
 #include <mfapi.h>
 #include <mferror.h>
 #include <propvarutil.h>
@@ -242,7 +244,6 @@ HRESULT createSinkWriterFromUrl(
             failedStage = SinkWriterCreateStage::ConfigureDxgiManager;
             return hr;
         }
-        attributes->SetUINT32(MF_LOW_LATENCY, TRUE);
     }
 
     failedStage = SinkWriterCreateStage::CreateSinkWriter;
@@ -357,6 +358,10 @@ const char* MFEncoder::videoEncoderSelection() const {
     return videoEncoderSelection_;
 }
 
+bool MFEncoder::usesDxgiInput() const {
+    return useDxgiInput_;
+}
+
 bool MFEncoder::initialize(
     const std::wstring& outputPath,
     int width,
@@ -374,30 +379,22 @@ bool MFEncoder::initialize(
     context_ = context;
     captureDevice_ = device;
     captureContext_ = context;
-    useDxgiInput_ = options.useDxgiInput;
+    // The injected failure exists to prove the software fallback still works.
+    // Leaving the GPU path on would make it prove something else: the DXGI
+    // attempt would eat the injection and the run would land on the plain CPU
+    // encoder, never reaching the software encoder the knob is aimed at.
+    useDxgiInput_ = options.useDxgiInput && !options.injectDefaultSinkWriterFailureOnce;
     videoEncoderSelection_ = kVideoEncoderSelectionDefault;
 
     if (!succeeded(MFStartup(MF_VERSION), "MFStartup")) {
         return false;
     }
 
-    if (useDxgiInput_) {
-        if (!initializeDxgiEncodingDevice()) {
-            return false;
-        }
-        if (!succeeded(
-                MFCreateDXGIDeviceManager(&dxgiResetToken_, &dxgiDeviceManager_),
-                "MFCreateDXGIDeviceManager")) {
-            return false;
-        }
-        if (!succeeded(
-                dxgiDeviceManager_->ResetDevice(device_.Get(), dxgiResetToken_),
-                "IMFDXGIDeviceManager::ResetDevice")) {
-            return false;
-        }
-        if (!initializeVideoProcessor()) {
-            return false;
-        }
+    if (useDxgiInput_ && !initializeDxgiPipeline()) {
+        std::cerr << "WARNING: The GPU DXGI encode path is unavailable on this machine; "
+                  << "using the CPU readback path." << std::endl;
+        releaseDxgiPipeline();
+        useDxgiInput_ = false;
     }
 
     Microsoft::WRL::ComPtr<IMFMediaType> outputType;
@@ -416,48 +413,57 @@ bool MFEncoder::initialize(
     if (!succeeded(MFCreateMediaType(&inputType), "MFCreateMediaType(input)")) {
         return false;
     }
-    inputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
-    inputType->SetGUID(
-        MF_MT_SUBTYPE,
-        useDxgiInput_ ? MFVideoFormat_NV12 : MFVideoFormat_RGB32);
-    inputType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
-    if (!useDxgiInput_) {
-        inputType->SetUINT32(MF_MT_DEFAULT_STRIDE, static_cast<UINT32>(width_ * 4));
-    }
-    setFrameSize(inputType.Get(), static_cast<UINT32>(width_), static_cast<UINT32>(height_));
-    setFrameRate(inputType.Get(), static_cast<UINT32>(fps_));
-    setPixelAspectRatio(inputType.Get());
+    // Rebuilt rather than built once, because falling back to the CPU path
+    // after the sink writer has already refused the NV12 type has to leave a
+    // type the RGB32 path would have produced from scratch. Every attribute
+    // one mode sets is deleted by the other; nothing carries over.
+    auto configureVideoInputType = [&](bool dxgi) {
+        inputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Video);
+        inputType->SetGUID(MF_MT_SUBTYPE, dxgi ? MFVideoFormat_NV12 : MFVideoFormat_RGB32);
+        inputType->SetUINT32(MF_MT_INTERLACE_MODE, MFVideoInterlace_Progressive);
+        if (dxgi) {
+            inputType->DeleteItem(MF_MT_DEFAULT_STRIDE);
+            // The video processor below converts full-range BGRA into
+            // studio-range BT.709, so say so. Left untagged, the encoder and
+            // the player each pick their own default (BT.601 is the common
+            // one) and the recording comes back with shifted colours the CPU
+            // path does not have.
+            inputType->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235);
+            inputType->SetUINT32(MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709);
+        } else {
+            inputType->SetUINT32(MF_MT_DEFAULT_STRIDE, static_cast<UINT32>(width_ * 4));
+            inputType->DeleteItem(MF_MT_VIDEO_NOMINAL_RANGE);
+            inputType->DeleteItem(MF_MT_YUV_MATRIX);
+        }
+        setFrameSize(inputType.Get(), static_cast<UINT32>(width_), static_cast<UINT32>(height_));
+        setFrameRate(inputType.Get(), static_cast<UINT32>(fps_));
+        setPixelAspectRatio(inputType.Get());
+    };
 
-    if (useDxgiInput_) {
-        if (!succeeded(
-                MFCreateVideoSampleAllocatorEx(
-                    __uuidof(IMFVideoSampleAllocatorEx),
-                    reinterpret_cast<void**>(videoSampleAllocator_.GetAddressOf())),
-                "MFCreateVideoSampleAllocatorEx")) {
-            return false;
+    // Carried on the H.264 type as well so the MP4 sink writes the matching
+    // colour tags instead of leaving players to guess from the frame size.
+    auto configureOutputColorTags = [&](bool dxgi) {
+        if (dxgi) {
+            outputType->SetUINT32(MF_MT_VIDEO_NOMINAL_RANGE, MFNominalRange_16_235);
+            outputType->SetUINT32(MF_MT_YUV_MATRIX, MFVideoTransferMatrix_BT709);
+        } else {
+            outputType->DeleteItem(MF_MT_VIDEO_NOMINAL_RANGE);
+            outputType->DeleteItem(MF_MT_YUV_MATRIX);
         }
-        if (!succeeded(
-                videoSampleAllocator_->SetDirectXManager(dxgiDeviceManager_.Get()),
-                "IMFVideoSampleAllocator::SetDirectXManager")) {
-            return false;
-        }
-        Microsoft::WRL::ComPtr<IMFAttributes> allocatorAttributes;
-        if (!succeeded(MFCreateAttributes(&allocatorAttributes, 2), "MFCreateAttributes(allocator)")) {
-            return false;
-        }
-        allocatorAttributes->SetUINT32(MF_SA_D3D11_USAGE, D3D11_USAGE_DEFAULT);
-        allocatorAttributes->SetUINT32(
-            MF_SA_D3D11_BINDFLAGS,
-            D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
-        if (!succeeded(
-                videoSampleAllocator_->InitializeSampleAllocatorEx(
-                    4,
-                    30,
-                    allocatorAttributes.Get(),
-                    inputType.Get()),
-                "IMFVideoSampleAllocatorEx::InitializeSampleAllocatorEx")) {
-            return false;
-        }
+    };
+
+    // The allocator is the last thing that can refuse the GPU path, and it can
+    // only be built once the NV12 type exists. Falling back here costs nothing
+    // but the type rewrite, because no sink writer has been created yet.
+    configureVideoInputType(useDxgiInput_);
+    configureOutputColorTags(useDxgiInput_);
+    if (useDxgiInput_ && !initializeSampleAllocator(inputType.Get())) {
+        std::cerr << "WARNING: The DXGI sample allocator is unavailable on this machine; "
+                  << "using the CPU readback path." << std::endl;
+        releaseDxgiPipeline();
+        useDxgiInput_ = false;
+        configureVideoInputType(false);
+        configureOutputColorTags(false);
     }
 
     bool injectedDefaultSinkWriterFailure = false;
@@ -514,6 +520,9 @@ bool MFEncoder::initialize(
                        "SetInputMediaType")) {
             return false;
         }
+        if (useDxgiInput_) {
+            applyHardwareRateControl(std::max(1, bitrate));
+        }
         if (!succeeded(sinkWriter_->BeginWriting(), "BeginWriting")) {
             return false;
         }
@@ -523,11 +532,6 @@ bool MFEncoder::initialize(
     };
 
     if (options.preferSoftwareEncoder) {
-        if (useDxgiInput_) {
-            std::cerr << "ERROR: DXGI input requires a hardware Media Foundation encoder"
-                      << std::endl;
-            return false;
-        }
         return configureSinkWriterAttempt(
             true,
             kVideoEncoderSelectionSoftwarePreferred,
@@ -539,8 +543,22 @@ bool MFEncoder::initialize(
     }
 
     if (useDxgiInput_) {
-        std::cerr << "ERROR: Hardware DXGI H.264 encoder setup failed" << std::endl;
-        return false;
+        // The GPU path exists to dodge a CPU readback, not to be a requirement.
+        // Drop it and retry the exact chain a machine without it would have
+        // taken -- the software encoder cannot accept DXGI samples, so without
+        // this the fallback below would be unreachable for every recording that
+        // asked for the GPU path, which is all of them by default.
+        std::cerr
+            << "WARNING: Hardware DXGI H.264 encoder setup failed; "
+            << "retrying on the CPU readback path."
+            << std::endl;
+        releaseDxgiPipeline();
+        useDxgiInput_ = false;
+        configureVideoInputType(false);
+        configureOutputColorTags(false);
+        if (configureSinkWriterAttempt(false, kVideoEncoderSelectionDefault, false)) {
+            return true;
+        }
     }
 
     std::cerr
@@ -697,6 +715,38 @@ bool MFEncoder::copyBgraFrameToBuffer(const BgraFrameView& frame, BYTE* destinat
     return true;
 }
 
+bool MFEncoder::initializeDxgiPipeline() {
+    return initializeDxgiEncodingDevice() &&
+        succeeded(
+            MFCreateDXGIDeviceManager(&dxgiResetToken_, &dxgiDeviceManager_),
+            "MFCreateDXGIDeviceManager") &&
+        succeeded(
+            dxgiDeviceManager_->ResetDevice(device_.Get(), dxgiResetToken_),
+            "IMFDXGIDeviceManager::ResetDevice") &&
+        initializeVideoProcessor();
+}
+
+void MFEncoder::releaseDxgiPipeline() {
+    bridgeInputView_.Reset();
+    encoderBridgeMutex_.Reset();
+    encoderBridgeTexture_.Reset();
+    captureBridgeMutex_.Reset();
+    captureBridgeTexture_.Reset();
+    videoProcessor_.Reset();
+    videoProcessorEnumerator_.Reset();
+    videoContext_.Reset();
+    videoDevice_.Reset();
+    videoSampleAllocator_.Reset();
+    dxgiDeviceManager_.Reset();
+    dxgiResetToken_ = 0;
+    // Put the encoder back on the capture device. initializeDxgiEncodingDevice
+    // overwrites device_/context_ with the second device it creates, and the
+    // CPU path's staging texture has to live on the same device the WGC frames
+    // do or its CopyResource silently does nothing.
+    device_ = captureDevice_;
+    context_ = captureContext_;
+}
+
 bool MFEncoder::initializeDxgiEncodingDevice() {
     Microsoft::WRL::ComPtr<IDXGIDevice> captureDxgiDevice;
     if (!succeeded(captureDevice_.As(&captureDxgiDevice), "Query capture IDXGIDevice")) {
@@ -778,17 +828,115 @@ bool MFEncoder::initializeVideoProcessor() {
         return false;
     }
 
-    return succeeded(
-        videoDevice_->CreateVideoProcessor(
-            videoProcessorEnumerator_.Get(),
-            0,
-            &videoProcessor_),
-        "CreateVideoProcessor");
+    if (!succeeded(
+            videoDevice_->CreateVideoProcessor(
+                videoProcessorEnumerator_.Get(),
+                0,
+                &videoProcessor_),
+            "CreateVideoProcessor")) {
+        return false;
+    }
+
+    // Processor state, not per-blt arguments. Nothing below changes for the
+    // life of the recording -- the capture size is fixed at initialize() --
+    // so setting it once keeps four driver round trips out of every frame.
+    const RECT frameRect{0, 0, width_, height_};
+    videoContext_->VideoProcessorSetOutputTargetRect(videoProcessor_.Get(), TRUE, &frameRect);
+    videoContext_->VideoProcessorSetStreamFrameFormat(
+        videoProcessor_.Get(),
+        0,
+        D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
+    videoContext_->VideoProcessorSetStreamSourceRect(videoProcessor_.Get(), 0, TRUE, &frameRect);
+    videoContext_->VideoProcessorSetStreamDestRect(videoProcessor_.Get(), 0, TRUE, &frameRect);
+
+    // Screen pixels are full-range sRGB and H.264 in an MP4 is conventionally
+    // studio-range BT.709. Say both out loud: the driver's default is BT.601
+    // limited, which a player then decodes as BT.709 at 1080p and above, and
+    // the recording comes back with visibly shifted colours. The matching tags
+    // go on the media types in initialize().
+    D3D11_VIDEO_PROCESSOR_COLOR_SPACE inputColorSpace{};
+    inputColorSpace.RGB_Range = 0;  // full range, 0-255
+    inputColorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_0_255;
+    videoContext_->VideoProcessorSetStreamColorSpace(videoProcessor_.Get(), 0, &inputColorSpace);
+
+    D3D11_VIDEO_PROCESSOR_COLOR_SPACE outputColorSpace{};
+    outputColorSpace.YCbCr_Matrix = 1;  // BT.709
+    outputColorSpace.Nominal_Range = D3D11_VIDEO_PROCESSOR_NOMINAL_RANGE_16_235;
+    videoContext_->VideoProcessorSetOutputColorSpace(videoProcessor_.Get(), &outputColorSpace);
+    return true;
 }
 
-bool MFEncoder::convertBgraTextureToNv12(
+void MFEncoder::applyHardwareRateControl(int bitrate) {
+    // The D3D manager switches the sink writer onto a hardware MFT, and those
+    // default to constant bitrate: a static desktop then spends the full
+    // configured budget doing nothing, 16.9 Mbps measured against the 1.95 the
+    // software encoder the CPU path lands on produced for the same screen. Same
+    // budget, opposite reading of it. Ask for VBR so the GPU path spends what
+    // the picture costs, which is what users have been getting all along.
+    //
+    // Best effort on purpose. An encoder that exposes neither knob still
+    // produces a valid recording, and a bitrate we could not pin down is not
+    // worth failing a capture over.
+    Microsoft::WRL::ComPtr<ICodecAPI> codecApi;
+    if (FAILED(sinkWriter_->GetServiceForStream(
+            videoStreamIndex_,
+            GUID_NULL,
+            IID_PPV_ARGS(&codecApi)))) {
+        std::cerr << "WARNING: The hardware H.264 encoder exposes no ICodecAPI; "
+                  << "its default bitrate applies." << std::endl;
+        return;
+    }
+
+    VARIANT value{};
+    value.vt = VT_UI4;
+    value.ulVal = eAVEncCommonRateControlMode_UnconstrainedVBR;
+    if (FAILED(codecApi->SetValue(&CODECAPI_AVEncCommonRateControlMode, &value))) {
+        std::cerr << "WARNING: Could not select VBR on the hardware H.264 encoder" << std::endl;
+    }
+    // Kept as the mean rather than lowered: the configured value is the budget
+    // for a busy screen, and under VBR a quiet one no longer has to spend it.
+    value.ulVal = static_cast<ULONG>(bitrate);
+    if (FAILED(codecApi->SetValue(&CODECAPI_AVEncCommonMeanBitRate, &value))) {
+        std::cerr << "WARNING: Could not set the hardware H.264 encoder bitrate" << std::endl;
+    }
+}
+
+bool MFEncoder::initializeSampleAllocator(IMFMediaType* inputType) {
+    if (!succeeded(
+            MFCreateVideoSampleAllocatorEx(
+                __uuidof(IMFVideoSampleAllocatorEx),
+                reinterpret_cast<void**>(videoSampleAllocator_.GetAddressOf())),
+            "MFCreateVideoSampleAllocatorEx")) {
+        return false;
+    }
+    if (!succeeded(
+            videoSampleAllocator_->SetDirectXManager(dxgiDeviceManager_.Get()),
+            "IMFVideoSampleAllocator::SetDirectXManager")) {
+        return false;
+    }
+    Microsoft::WRL::ComPtr<IMFAttributes> allocatorAttributes;
+    if (!succeeded(MFCreateAttributes(&allocatorAttributes, 2), "MFCreateAttributes(allocator)")) {
+        return false;
+    }
+    allocatorAttributes->SetUINT32(MF_SA_D3D11_USAGE, D3D11_USAGE_DEFAULT);
+    allocatorAttributes->SetUINT32(
+        MF_SA_D3D11_BINDFLAGS,
+        D3D11_BIND_RENDER_TARGET | D3D11_BIND_SHADER_RESOURCE);
+    return succeeded(
+        videoSampleAllocator_->InitializeSampleAllocatorEx(4, 30, allocatorAttributes.Get(), inputType),
+        "IMFVideoSampleAllocatorEx::InitializeSampleAllocatorEx");
+}
+
+MFEncoder::Nv12ConvertResult MFEncoder::convertBgraTextureToNv12(
     ID3D11Texture2D* texture,
     ID3D11Texture2D* outputTexture) {
+    // Short on purpose. This runs on the video-writer thread while it holds
+    // main.cpp's frame lock, and that lock is what issue #252 was about: any
+    // multi-second wait taken under it is a multi-second wait the shutdown
+    // watchdog counts against its 8s step budget. A few frame intervals is
+    // long enough for a busy GPU and short enough that a stuck bridge costs a
+    // dropped frame instead of the recording.
+    const DWORD acquireTimeoutMs = static_cast<DWORD>(std::max(50, 4000 / fps_));
 
     if (!captureBridgeTexture_) {
         D3D11_TEXTURE2D_DESC bridgeDesc{};
@@ -800,19 +948,19 @@ bool MFEncoder::convertBgraTextureToNv12(
         if (!succeeded(
                 captureDevice_->CreateTexture2D(&bridgeDesc, nullptr, &captureBridgeTexture_),
                 "CreateTexture2D(capture bridge)")) {
-            return false;
+            return Nv12ConvertResult::Failed;
         }
         if (!succeeded(captureBridgeTexture_.As(&captureBridgeMutex_), "Query capture bridge mutex")) {
-            return false;
+            return Nv12ConvertResult::Failed;
         }
 
         Microsoft::WRL::ComPtr<IDXGIResource> bridgeResource;
         if (!succeeded(captureBridgeTexture_.As(&bridgeResource), "Query capture bridge resource")) {
-            return false;
+            return Nv12ConvertResult::Failed;
         }
         HANDLE sharedHandle = nullptr;
         if (!succeeded(bridgeResource->GetSharedHandle(&sharedHandle), "Get capture bridge handle")) {
-            return false;
+            return Nv12ConvertResult::Failed;
         }
         if (!succeeded(
                 device_->OpenSharedResource(
@@ -820,45 +968,54 @@ bool MFEncoder::convertBgraTextureToNv12(
                     __uuidof(ID3D11Texture2D),
                     reinterpret_cast<void**>(encoderBridgeTexture_.GetAddressOf())),
                 "Open encoder bridge texture")) {
-            return false;
+            return Nv12ConvertResult::Failed;
         }
         if (!succeeded(encoderBridgeTexture_.As(&encoderBridgeMutex_), "Query encoder bridge mutex")) {
-            return false;
+            return Nv12ConvertResult::Failed;
+        }
+
+        // The bridge is the only input this processor ever reads, so its view
+        // is built once here rather than per frame. Views describe a resource,
+        // they do not read it, so this needs no keyed-mutex ownership.
+        D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC inputViewDesc{};
+        inputViewDesc.FourCC = 0;
+        inputViewDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+        inputViewDesc.Texture2D.MipSlice = 0;
+        inputViewDesc.Texture2D.ArraySlice = 0;
+        if (!succeeded(
+                videoDevice_->CreateVideoProcessorInputView(
+                    encoderBridgeTexture_.Get(),
+                    videoProcessorEnumerator_.Get(),
+                    &inputViewDesc,
+                    &bridgeInputView_),
+                "CreateVideoProcessorInputView")) {
+            return Nv12ConvertResult::Failed;
         }
     }
 
-    if (!succeeded(captureBridgeMutex_->AcquireSync(0, 5000), "Acquire capture bridge")) {
-        return false;
+    // Key 0 is the capture side's, key 1 the encoder's. Timing out here leaves
+    // key 0 exactly where it was, so the next frame simply tries again; that
+    // is the whole reason this one is recoverable and the one below is not.
+    if (FAILED(captureBridgeMutex_->AcquireSync(0, acquireTimeoutMs))) {
+        return Nv12ConvertResult::Contended;
     }
     captureContext_->CopyResource(captureBridgeTexture_.Get(), texture);
     if (!succeeded(captureBridgeMutex_->ReleaseSync(1), "Release capture bridge")) {
-        return false;
+        return Nv12ConvertResult::Failed;
     }
-    if (!succeeded(encoderBridgeMutex_->AcquireSync(1, 5000), "Acquire encoder bridge")) {
-        return false;
+    // Key 1 was just handed over by this same thread and nothing else in the
+    // process can hold it, so a failure here means the bridge is broken rather
+    // than busy, and no later frame could recover it.
+    if (!succeeded(encoderBridgeMutex_->AcquireSync(1, acquireTimeoutMs), "Acquire encoder bridge")) {
+        return Nv12ConvertResult::Failed;
     }
     const auto releaseEncoderBridge = [&]() {
         return succeeded(encoderBridgeMutex_->ReleaseSync(0), "Release encoder bridge");
     };
 
-    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC inputViewDesc{};
-    inputViewDesc.FourCC = 0;
-    inputViewDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-    inputViewDesc.Texture2D.MipSlice = 0;
-    inputViewDesc.Texture2D.ArraySlice = 0;
-
-    Microsoft::WRL::ComPtr<ID3D11VideoProcessorInputView> inputView;
-    if (!succeeded(
-            videoDevice_->CreateVideoProcessorInputView(
-                encoderBridgeTexture_.Get(),
-                videoProcessorEnumerator_.Get(),
-                &inputViewDesc,
-                &inputView),
-            "CreateVideoProcessorInputView")) {
-        releaseEncoderBridge();
-        return false;
-    }
-
+    // Recreated per frame because the allocator hands out a different texture
+    // from its pool each time. The input view and every processor setting are
+    // hoisted out; this one call is what is genuinely per-frame.
     D3D11_VIDEO_PROCESSOR_OUTPUT_VIEW_DESC outputViewDesc{};
     outputViewDesc.ViewDimension = D3D11_VPOV_DIMENSION_TEXTURE2D;
     outputViewDesc.Texture2D.MipSlice = 0;
@@ -872,29 +1029,8 @@ bool MFEncoder::convertBgraTextureToNv12(
                 &outputView),
             "CreateVideoProcessorOutputView")) {
         releaseEncoderBridge();
-        return false;
+        return Nv12ConvertResult::Failed;
     }
-
-    const RECT sourceRect{0, 0, width_, height_};
-    const RECT destinationRect{0, 0, width_, height_};
-    videoContext_->VideoProcessorSetOutputTargetRect(
-        videoProcessor_.Get(),
-        TRUE,
-        &destinationRect);
-    videoContext_->VideoProcessorSetStreamFrameFormat(
-        videoProcessor_.Get(),
-        0,
-        D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE);
-    videoContext_->VideoProcessorSetStreamSourceRect(
-        videoProcessor_.Get(),
-        0,
-        TRUE,
-        &sourceRect);
-    videoContext_->VideoProcessorSetStreamDestRect(
-        videoProcessor_.Get(),
-        0,
-        TRUE,
-        &destinationRect);
 
     D3D11_VIDEO_PROCESSOR_STREAM stream{};
     stream.Enable = TRUE;
@@ -902,7 +1038,7 @@ bool MFEncoder::convertBgraTextureToNv12(
     stream.InputFrameOrField = 0;
     stream.PastFrames = 0;
     stream.FutureFrames = 0;
-    stream.pInputSurface = inputView.Get();
+    stream.pInputSurface = bridgeInputView_.Get();
 
     const bool converted = succeeded(
         videoContext_->VideoProcessorBlt(
@@ -913,7 +1049,7 @@ bool MFEncoder::convertBgraTextureToNv12(
             &stream),
         "VideoProcessorBlt");
     const bool released = releaseEncoderBridge();
-    return converted && released;
+    return converted && released ? Nv12ConvertResult::Ok : Nv12ConvertResult::Failed;
 }
 
 bool MFEncoder::captureDxgiSample(
@@ -932,23 +1068,6 @@ bool MFEncoder::captureDxgiSample(
         desc.Format != DXGI_FORMAT_B8G8R8A8_UNORM) {
         std::cerr << "ERROR: Unexpected WGC DXGI texture format or dimensions" << std::endl;
         return false;
-    }
-
-    const int64_t sampleDuration = 10'000'000LL / fps_;
-    int64_t sampleTime = 0;
-    {
-        std::scoped_lock writerLock(writerMutex_);
-        if (!sinkWriter_ || finalized_) {
-            return false;
-        }
-        if (firstTimestampHns_ < 0) {
-            firstTimestampHns_ = timestampHns;
-        }
-        sampleTime = timestampHns - firstTimestampHns_;
-        if (sampleTime <= lastTimestampHns_) {
-            sampleTime = lastTimestampHns_ + sampleDuration;
-        }
-        lastTimestampHns_ = sampleTime;
     }
 
     Microsoft::WRL::ComPtr<IMFSample> sample;
@@ -973,8 +1092,35 @@ bool MFEncoder::captureDxgiSample(
             "IMFDXGIBuffer::GetResource")) {
         return false;
     }
-    if (!convertBgraTextureToNv12(texture, nv12Texture.Get())) {
-        return false;
+    switch (convertBgraTextureToNv12(texture, nv12Texture.Get())) {
+        case Nv12ConvertResult::Ok:
+            break;
+        case Nv12ConvertResult::Contended:
+            // No sample, no failure. Leaving outSample empty tells the caller
+            // to skip this pass.
+            return true;
+        case Nv12ConvertResult::Failed:
+            return false;
+    }
+
+    // Stamped only once the frame exists. Doing this first, as the CPU path
+    // does, would let every dropped frame still advance lastTimestampHns_ and
+    // stretch the timeline by the frames that were never written.
+    const int64_t sampleDuration = 10'000'000LL / fps_;
+    int64_t sampleTime = 0;
+    {
+        std::scoped_lock writerLock(writerMutex_);
+        if (!sinkWriter_ || finalized_) {
+            return false;
+        }
+        if (firstTimestampHns_ < 0) {
+            firstTimestampHns_ = timestampHns;
+        }
+        sampleTime = timestampHns - firstTimestampHns_;
+        if (sampleTime <= lastTimestampHns_) {
+            sampleTime = lastTimestampHns_ + sampleDuration;
+        }
+        lastTimestampHns_ = sampleTime;
     }
 
     DWORD maximumLength = 0;

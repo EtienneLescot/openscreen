@@ -29,6 +29,11 @@ struct AudioInputFormat {
 struct MFEncoderOptions {
     bool preferSoftwareEncoder = false;
     bool injectDefaultSinkWriterFailureOnce = false;
+    // A request, never a requirement. Every step of the GPU path degrades to
+    // the CPU readback rather than failing the recording, so a machine without
+    // a hardware H.264 encoder, without NV12 video-processor output, or with a
+    // driver that refuses shared keyed-mutex textures records exactly as it did
+    // before the path existed. Ask usesDxgiInput() for what actually happened.
     bool useDxgiInput = false;
 };
 
@@ -80,11 +85,30 @@ public:
     bool writeAudio(const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns);
     bool finalize();
     const char* videoEncoderSelection() const;
+    // Which video input path initialize() actually settled on, which is not
+    // necessarily the one that was asked for. Callers must read this rather
+    // than their own MFEncoderOptions to decide which capture entry point to
+    // call, or a machine that fell back would be fed DXGI samples the sink
+    // writer was never configured for.
+    bool usesDxgiInput() const;
 
 private:
+    // Contended is not Failed: the bridge is a two-key handshake and a missed
+    // acquire costs one frame, which is a better outcome than ending a
+    // recording that is otherwise healthy.
+    enum class Nv12ConvertResult {
+        Ok,
+        Contended,
+        Failed,
+    };
+
+    bool initializeDxgiPipeline();
+    void releaseDxgiPipeline();
     bool initializeDxgiEncodingDevice();
     bool initializeVideoProcessor();
-    bool convertBgraTextureToNv12(
+    bool initializeSampleAllocator(IMFMediaType* inputType);
+    void applyHardwareRateControl(int bitrate);
+    Nv12ConvertResult convertBgraTextureToNv12(
         ID3D11Texture2D* texture,
         ID3D11Texture2D* outputTexture);
     bool ensureStagingTexture(ID3D11Texture2D* texture);
@@ -105,6 +129,7 @@ private:
     Microsoft::WRL::ComPtr<IDXGIKeyedMutex> captureBridgeMutex_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> encoderBridgeTexture_;
     Microsoft::WRL::ComPtr<IDXGIKeyedMutex> encoderBridgeMutex_;
+    Microsoft::WRL::ComPtr<ID3D11VideoProcessorInputView> bridgeInputView_;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> stagingTexture_;
     Microsoft::WRL::ComPtr<IMFDXGIDeviceManager> dxgiDeviceManager_;
     Microsoft::WRL::ComPtr<IMFVideoSampleAllocatorEx> videoSampleAllocator_;

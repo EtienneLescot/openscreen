@@ -607,10 +607,15 @@ int main(int argc, char* argv[]) {
     MFEncoderOptions encoderOptions{};
     encoderOptions.preferSoftwareEncoder = config.preferSoftwareEncoder;
     encoderOptions.injectDefaultSinkWriterFailureOnce = injectDefaultSinkWriterFailureOnce;
-    // Keep the CPU path for software encoding and inline webcam PiP. The DXGI
-    // path is safe when the screen has no CPU-composited webcam frame.
+    // Keep the CPU path for software encoding and inline webcam PiP: both need
+    // the frame in system memory, which is the one thing the DXGI path does not
+    // produce. The env var is the escape hatch for a machine where the GPU path
+    // misbehaves in a way the encoder's own probes do not catch -- a support
+    // answer instead of a hotfix.
     encoderOptions.useDxgiInput =
-        !config.preferSoftwareEncoder && (!webcamActive || writeSeparateWebcam);
+        !config.preferSoftwareEncoder &&
+        (!webcamActive || writeSeparateWebcam) &&
+        readEnvInt("OPENSCREEN_WGC_DISABLE_DXGI_INPUT", 0) == 0;
 
     MFEncoder encoder;
     if (!encoder.initialize(
@@ -626,8 +631,14 @@ int main(int argc, char* argv[]) {
         std::cerr << "ERROR: Failed to initialize Media Foundation encoder" << std::endl;
         return 1;
     }
+    // `videoInput` reports what the encoder settled on, not what was asked for:
+    // it silently degrades to the CPU readback on any machine the GPU path does
+    // not fit, and a bug report that cannot tell the two apart is a bug report
+    // about the wrong path.
+    const bool usesDxgiInput = encoder.usesDxgiInput();
     std::cout << "{\"event\":\"encoder-selection\",\"schemaVersion\":2,\"video\":\""
               << encoder.videoEncoderSelection()
+              << "\",\"videoInput\":\"" << (usesDxgiInput ? "dxgi-nv12" : "cpu-rgb32")
               << "\",\"preferSoftwareEncoder\":"
               << (config.preferSoftwareEncoder ? "true" : "false")
               << "}" << std::endl;
@@ -657,6 +668,10 @@ int main(int argc, char* argv[]) {
     CaptureControl control;
     std::atomic<bool> firstFrameWritten = false;
     std::atomic<bool> encodeFailed = false;
+    // Frames the GPU bridge was too busy to take. Reported at stop rather than
+    // per frame: a handful over a recording is normal contention, a stream of
+    // them is the next bug report, and neither is worth a log line each.
+    std::atomic<uint64_t> contendedFrames = 0;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> latestFrameTexture;
     int64_t latestFrameTimestampHns = 0;
     int64_t firstFrameTimestampHns = -1;
@@ -807,24 +822,40 @@ int main(int argc, char* argv[]) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(testStallReadbackMs));
                 }
                 if (latestFrameTexture) {
-                    if (encoderOptions.useDxgiInput) {
-                        hasVideoSample = encoder.captureDxgiSample(
+                    // Both entry points do their GPU work on latestFrameTexture,
+                    // which must stay serialized (via `mutex`) against the WGC
+                    // frame-arrival callback above, which writes new data into
+                    // the same texture on another thread. Which one is live is
+                    // the encoder's answer, not this struct's request: it falls
+                    // back to the CPU path on its own when the GPU path does
+                    // not fit the machine.
+                    bool captured = false;
+                    if (usesDxgiInput) {
+                        captured = encoder.captureDxgiSample(
                             latestFrameTexture.Get(),
                             frameTimestampHns,
                             videoSample);
                     } else {
-                        hasVideoSample = encoder.captureVideoSample(
+                        captured = encoder.captureVideoSample(
                             latestFrameTexture.Get(),
                             frameTimestampHns,
                             !writeSeparateWebcam && webcamFrame.data ? &webcamFrame : nullptr,
                             videoSample);
                     }
-                    if (!hasVideoSample) {
+                    if (!captured) {
                         encodeFailed = true;
                         control.requestStop();
                         break;
                     }
-                    lastEncodedVideoTimestampHns = frameTimestampHns;
+                    // The DXGI path returns success with no sample when the
+                    // GPU bridge was momentarily busy. That costs one frame,
+                    // which beats ending a recording that is otherwise fine.
+                    hasVideoSample = videoSample != nullptr;
+                    if (hasVideoSample) {
+                        lastEncodedVideoTimestampHns = frameTimestampHns;
+                    } else {
+                        contendedFrames += 1;
+                    }
                 }
             }
 
@@ -1131,6 +1162,9 @@ int main(int argc, char* argv[]) {
     beginStopStep("video-writer-join", stepBudgetMs);
     stopVideoWriter();
     logStopStep("video-writer-join");
+    if (usesDxgiInput) {
+        std::cerr << "[frame-drops] gpu_bridge_contended=" << contendedFrames.load() << std::endl;
+    }
     // No frame lock here, and the ordering above is what makes that safe rather
     // than incidental: stopVideoWriter() joined the only thread that calls into
     // the encoder's GPU readback, and audioMixer->stop() joined the only other
