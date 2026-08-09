@@ -54,7 +54,16 @@ jobs:
             tag: darwin-x64
             label: macOS x64 (CPU)
             vulkan: false
-          - os: ubuntu-latest
+          # PINNED, and not `ubuntu-latest` — see the long comment on build.yml's
+          # build-linux job. This leg produces the WORST offender of the two: built on
+          # 24.04, whisper-stt-server and the libggml backends needed GLIBC_2.38 and
+          # GLIBCXX_3.4.32, so they died in ld.so on Ubuntu 22.04, Debian 12 and RHEL 9
+          # and transcription failed there with an unactionable developer error. The
+          # symbols were never asked for: `__isoc23_strtol` is glibc 2.38's C23 redirect
+          # and `_ZSt21ios_base_library_initv` is emitted into every TU that includes
+          # <iostream> by GCC 13.2+. 22.04 has the CMake (3.22 >= the 3.20 required) and
+          # a C++20 compiler; nothing here uses a GCC 13-only library feature.
+          - os: ubuntu-22.04
             arch: x64
             tag: linux-x64
             label: Linux x64 (Vulkan + CPU fallback)
@@ -73,7 +82,10 @@ jobs:
         uses: ./.github/actions/setup
 
       - name: Install Ninja (Linux)
-        if: matrix.os == 'ubuntu-latest'
+        # `startsWith`, matching the macOS step below, rather than an exact image name:
+        # this was `== 'ubuntu-latest'`, so pinning the image would have skipped Ninja
+        # silently instead of failing.
+        if: startsWith(matrix.os, 'ubuntu')
         run: |
           sudo apt-get update
           sudo apt-get install -y ninja-build build-essential
