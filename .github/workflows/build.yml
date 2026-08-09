@@ -138,6 +138,48 @@ jobs:
           }
           Write-Output "$($expected.Count) tile assets present in $($appx.Name), byte-identical to build/appx/"
 
+      # Twice running, a release shipped a dependency that could not be resolved on
+      # the target machine, and both times someone outside the project found it:
+      # 1.9.0's compositor addon was reached through PATH, which MSIX ignores, and
+      # 1.9.1's capture helper needed the Visual C++ Redistributable, which is not
+      # part of Windows. Each fix arrived with a guard aimed at the failure already
+      # understood, and neither guard would have caught the other.
+      #
+      # This step is the one that generalises: it registers the package and asks the
+      # Windows loader to resolve every shipped binary for real. It deliberately does
+      # not record anything — a runner has no useful GPU or desktop session, and a
+      # flaky gate gets switched off. The loader is what broke both times.
+      #
+      # `powershell`, not `pwsh`: the Appx module is not loaded natively in
+      # PowerShell 7 and needs -UseWindowsPowerShell to work at all.
+      - name: Verify native binaries load under package identity
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Loose registration of an unsigned package needs Developer Mode. The runner
+          # is discarded after the job, so enabling it here costs nothing; the script
+          # itself refuses to touch this, because on a real machine it is the owner's
+          # setting to make.
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock"
+          New-Item -Path $key -Force | Out-Null
+          Set-ItemProperty -Path $key -Name AllowDevelopmentWithoutDevLicense -Value 1 -Type DWord
+
+          $appx = Get-ChildItem release -Recurse -Filter *.appx | Select-Object -First 1
+          if (-not $appx) { throw "no .appx found under release/" }
+
+          # Explicit exit rather than letting the error surface on its own: a
+          # terminating error does not set $LASTEXITCODE, and the runner's epilogue
+          # only inspects that. Trusting it would let a failed verification report a
+          # green step, which is the exact shape of bug this job exists to stop.
+          try {
+            & "$env:GITHUB_WORKSPACE\scripts\verify-appx-native.ps1" -Appx $appx.FullName
+          }
+          catch {
+            Write-Output "::error::$($_.Exception.Message)"
+            exit 1
+          }
+
       - name: Upload Windows Store package
         uses: actions/upload-artifact@v7
         with:
