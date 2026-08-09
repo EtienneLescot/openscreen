@@ -242,14 +242,126 @@ const WIN_REQUIRED = [
 	})),
 ];
 
+/**
+ * DLLs that come from the Visual C++ Redistributable rather than from Windows itself.
+ *
+ * The `api-ms-win-crt-*` api-sets are deliberately absent: that is the UCRT, which IS
+ * part of Windows 10 and later. These are not, and no machine is obliged to have them.
+ */
+const VC_REDIST_DLL = /^(msvcp|vcruntime|concrt)\d+/i;
+
+/**
+ * The DLL names a PE binary imports — just enough of the format to walk the import
+ * directory, so this needs no dumpbin and therefore no Visual Studio on the runner.
+ */
+function importedDlls(file) {
+	const b = fs.readFileSync(file);
+	const pe = b.readUInt32LE(0x3c);
+	if (b.readUInt32LE(pe) !== 0x00004550) throw new Error(`${file} is not a PE binary`);
+	const opt = pe + 24;
+	// The optional header's fixed part is 96 bytes for PE32 and 112 for PE32+ (five
+	// fields widen to 8 bytes); the data directories follow it.
+	const dirs = opt + (b.readUInt16LE(opt) === 0x20b ? 112 : 96);
+	const importRva = b.readUInt32LE(dirs + 8); // directory 1 = imports
+	if (!importRva) return [];
+
+	const sections = [];
+	for (let i = 0; i < b.readUInt16LE(pe + 6); i++) {
+		const s = opt + b.readUInt16LE(pe + 20) + i * 40;
+		sections.push({
+			va: b.readUInt32LE(s + 12),
+			size: b.readUInt32LE(s + 16),
+			ptr: b.readUInt32LE(s + 20),
+		});
+	}
+	const fileOffset = (rva) => {
+		const s = sections.find((s) => rva >= s.va && rva < s.va + s.size);
+		if (!s) throw new Error(`${file}: RVA 0x${rva.toString(16)} is in no section`);
+		return s.ptr + (rva - s.va);
+	};
+
+	const names = [];
+	// Array of 20-byte descriptors, terminated by an all-zero one.
+	for (let entry = fileOffset(importRva); ; entry += 20) {
+		const nameRva = b.readUInt32LE(entry + 12);
+		if (!nameRva) return names;
+		const at = fileOffset(nameRva);
+		names.push(b.subarray(at, b.indexOf(0, at)).toString("latin1"));
+	}
+}
+
+/**
+ * Nothing we ship may depend on the Visual C++ Redistributable.
+ *
+ * This is the one failure this whole hook could not see. Every machine that builds this
+ * repo, and most machines that have ever installed a desktop app, carry those DLLs in
+ * System32 — so a binary that needs them works in local testing, in CI, and in every
+ * package format, while being unloadable on a clean Windows image. There is no way to
+ * reproduce it here; only the import table tells the truth.
+ *
+ * Store certification rejected 1.9.1 for exactly this: the WGC helper was built against
+ * the dynamic CRT and died in the loader before main(), so the app reported
+ * `Native Windows capture exited before recording started (code=3221225781)`
+ * — 0xC0000135, STATUS_DLL_NOT_FOUND — and recording was impossible on the test device.
+ * `compositor_view.node` had the same defect and would have failed certification a
+ * second time, on the preview, right after the helper was fixed.
+ *
+ * The fix is per-toolchain, hence the two-part message: /MT for the CMake helpers
+ * (electron/native/wgc-capture/CMakeLists.txt), `+crt-static` for the Rust addon
+ * (crates/.cargo/config.toml).
+ */
+function checkWinNoRedistDependency(dir) {
+	const scanned = fs
+		.readdirSync(dir)
+		.filter((name) => /\.(exe|dll|node)$/i.test(name))
+		.map((name) => ({ name, imports: importedDlls(path.join(dir, name)) }));
+
+	// A guard that silently stops looking is worse than no guard: it reports "clean" for
+	// the rest of the project's life. Every native binary imports something — kernel32 at
+	// the very least — so an empty result means the parser broke, not that the file is
+	// self-contained. Asserted here against the real payload rather than a synthetic PE
+	// fixture, which would only ever prove this parser agrees with itself.
+	const unread = scanned.filter((entry) => entry.imports.length === 0);
+	if (unread.length > 0) {
+		throw new Error(
+			`Refusing to package: read no imports at all from ${unread.map((e) => e.name).join(", ")}.\n\n` +
+				"Every native binary imports at least kernel32, so this is a bug in importedDlls()\n" +
+				"(scripts/before-pack.cjs), not a self-contained binary. Fix the parser — leaving it\n" +
+				"is how the Visual C++ Redistributable dependency gets back into a shipped build.",
+		);
+	}
+
+	const offenders = scanned
+		.map((entry) => ({ name: entry.name, bad: entry.imports.filter((d) => VC_REDIST_DLL.test(d)) }))
+		.filter((entry) => entry.bad.length > 0);
+	if (offenders.length === 0) {
+		return;
+	}
+
+	throw new Error(
+		"Refusing to package binaries that need the Visual C++ Redistributable.\n\n" +
+			`  looked in: ${path.relative(ROOT, dir)}\n\n` +
+			`${offenders.map((o) => `  - ${o.name} imports ${o.bad.join(", ")}`).join("\n")}\n\n` +
+			"Those DLLs are not part of Windows. On a clean image the loader kills the process\n" +
+			"before main() (0xC0000135) or fails require(), and the app can only report an exit\n" +
+			"code. It works on every developer machine, which is why this is checked here.\n\n" +
+			"Build against the static CRT instead:\n" +
+			"  - CMake helpers: CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded (electron/native/wgc-capture)\n" +
+			"  - Rust addon:    -C target-feature=+crt-static (crates/.cargo/config.toml)\n\n" +
+			"For a third-party binary that cannot be rebuilt, ship the DLLs it needs beside it.",
+	);
+}
+
 function checkWinNativePayload() {
+	const dir = path.join(ROOT, "electron", "native", "bin", "win32-x64");
 	checkNativePayload({
-		dir: path.join(ROOT, "electron", "native", "bin", "win32-x64"),
+		dir,
 		required: WIN_REQUIRED,
 		osLabel: "Windows",
 		bundleNoun: "the installer",
 		emptyDirFix: `${FIX}\n\nThe STT helper and the capture helper are separate builds — see\ntechnical-documentation/engineering/build-and-packaging.md.`,
 	});
+	checkWinNoRedistDependency(dir);
 }
 
 function checkMacNativePayload(context) {

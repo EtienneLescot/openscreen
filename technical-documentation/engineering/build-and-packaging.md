@@ -64,6 +64,37 @@ This shipped: the 1.9.0 Store build loaded no compositor at all, so the editor o
 
 `electron/native/bin/`, local native build directories, the compositor build output, models, and caches are gitignored. Rebuilding from a source checkout therefore requires the complete platform toolchain and third-party SDKs; running the generic `npm run build` alone does not manufacture missing native artifacts. The Windows compositor's D3D11/FFmpeg prerequisites are described by the source POC in `crates/README.md`, while capture helper lookup and output conventions are documented in `electron/native/README.md`.
 
+### Nothing Windows ships may need the Visual C++ Redistributable
+
+`VCRUNTIME140.dll`, `VCRUNTIME140_1.dll` and `MSVCP140.dll` are **not part of Windows**. They come from the Visual C++ Redistributable, which arrives with Visual Studio, with the Rust MSVC toolchain, and with most desktop applications — so every machine that can build this repo already has them in `System32`, and so does almost every machine anyone would test on. A binary that depends on them therefore works locally, works in CI, and works in every packaging format, while being unloadable on a clean Windows image.
+
+That is not a theoretical image. Store certification runs on one, and it rejected 1.9.1:
+
+```
+Error: Native Windows capture exited before recording started (code=3221225781)
+```
+
+`3221225781` is `0xC0000135`, `STATUS_DLL_NOT_FOUND`. The loader killed `wgc-capture.exe` before `main()`, so the parent only ever saw an exit code, and **screen recording was impossible on the test device** while the app itself started normally — Electron already links the CRT statically, which is why the window opened at all.
+
+The import tables of the shipped 1.9.1 payload:
+
+| Binary | Needed from the redistributable | Symptom on a clean machine |
+|---|---|---|
+| `wgc-capture.exe` | `VCRUNTIME140`, `VCRUNTIME140_1`, `MSVCP140` | recording fails instantly with an exit code |
+| `cursor-sampler.exe` | `VCRUNTIME140`, `VCRUNTIME140_1`, `MSVCP140` | cursor capture unavailable |
+| `compositor_view.node` | `VCRUNTIME140` | `require()` fails — blank preview, audio keeps playing |
+
+The third row matters as much as the first. It is the *same visible symptom* as the MSIX/`PATH` bug documented above, from an unrelated cause, and colocation does nothing for it. Fixing only the helper would have failed certification a second time, on the preview, and looked like a regression of a fix that was actually correct.
+
+The fix is to link the CRT statically, which removes the dependency instead of obliging us to redistribute Microsoft's DLLs beside our own:
+
+- CMake helpers — `set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")` in `electron/native/wgc-capture/CMakeLists.txt`. These are standalone processes that share no CRT state with anything, so `/MT` costs about 100 KB each and nothing else.
+- Rust addon — `-C target-feature=+crt-static` in `crates/.cargo/config.toml`. Safe for the napi cdylib: only opaque `napi_value`s cross the boundary, and Buffers handed to Node carry a finalizer that frees, in the addon, what the addon allocated.
+
+`scripts/before-pack.cjs` now reads the import table of every `.exe`/`.dll`/`.node` in `electron/native/bin/win32-x64/` and refuses to package if any of them imports `msvcp*`/`vcruntime*`/`concrt*`. The `api-ms-win-crt-*` api-sets are deliberately not flagged: that is the UCRT, which does ship with Windows 10 and later.
+
+**Local testing cannot confirm this class of fix.** This machine has the redistributable and always will, so a successful run here proves the build is not broken — it says nothing about the clean-machine behaviour. The import table is the only evidence for that half, which is why the guard reads it rather than running anything.
+
 ### Stale native artifacts
 
 **On Windows, always package with `npm run build:win`, not `npm run build`.**
