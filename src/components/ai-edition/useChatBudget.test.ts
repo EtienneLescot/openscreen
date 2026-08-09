@@ -69,17 +69,24 @@ describe("useChatBudget", () => {
 		expect(result.current.usedTokens).toBe(100);
 	});
 
-	it("keeps the transcript estimate when native usage rejects", async () => {
-		const native = deferred<never>();
-		chatBudgetMock.mockReturnValue(native.promise);
-		const visibleMessages = message("x".repeat(400));
-		const { result } = renderHook(() =>
-			useChatBudget({ projectId: "project_1", sessionId: "session_1", messages: visibleMessages }),
+	it("falls back to the transcript estimate when native usage rejects", async () => {
+		chatBudgetMock
+			.mockResolvedValueOnce({
+				usedTokens: 12,
+				budgetTokens: 80_000,
+				ratio: 0.00015,
+				fillPercent: 0.015,
+			})
+			.mockRejectedValueOnce(new Error("native budget unavailable"));
+		const { result, rerender } = renderHook(
+			({ messages }) => useChatBudget({ projectId: "project_1", sessionId: "session_1", messages }),
+			{ initialProps: { messages: message("x".repeat(400)) } },
 		);
+		await waitFor(() => expect(result.current.usedTokens).toBe(12));
 
-		await waitFor(() => expect(chatBudgetMock).toHaveBeenCalledTimes(1));
-		await act(async () => native.reject(new Error("native budget unavailable")));
-		expect(result.current.usedTokens).toBe(100);
+		rerender({ messages: message("x".repeat(800)) });
+		await waitFor(() => expect(result.current.usedTokens).toBe(200));
+		expect(chatBudgetMock).toHaveBeenCalledTimes(2);
 	});
 
 	it("ignores a late response from the previously selected session", async () => {
