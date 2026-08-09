@@ -256,23 +256,36 @@ const VC_REDIST_DLL = /^(msvcp|vcruntime|concrt)\d+/i;
  */
 function importedDlls(file) {
 	const b = fs.readFileSync(file);
-	const pe = b.readUInt32LE(0x3c);
-	if (b.readUInt32LE(pe) !== 0x00004550) throw new Error(`${file} is not a PE binary`);
+	// Every read below is bounds-checked through this, so a truncated or non-PE file
+	// arrives at the message this function means to give rather than at a RangeError
+	// from readUInt32LE. The diagnostic is the whole product here: the caller's job is
+	// to explain an absence, and "offset is out of bounds" explains nothing.
+	const notPe = () => new Error(`${file} is not a PE binary, or is truncated`);
+	const u32 = (at) => {
+		if (at < 0 || at + 4 > b.length) throw notPe();
+		return b.readUInt32LE(at);
+	};
+	const u16 = (at) => {
+		if (at < 0 || at + 2 > b.length) throw notPe();
+		return b.readUInt16LE(at);
+	};
+
+	if (u16(0) !== 0x5a4d) throw notPe(); // "MZ"
+	const pe = u32(0x3c);
+	if (u32(pe) !== 0x00004550) throw notPe(); // "PE\0\0"
 	const opt = pe + 24;
 	// The optional header's fixed part is 96 bytes for PE32 and 112 for PE32+ (five
 	// fields widen to 8 bytes); the data directories follow it.
-	const dirs = opt + (b.readUInt16LE(opt) === 0x20b ? 112 : 96);
-	const importRva = b.readUInt32LE(dirs + 8); // directory 1 = imports
-	if (!importRva) return [];
+	const dirs = opt + (u16(opt) === 0x20b ? 112 : 96);
+	// NumberOfRvaAndSizes is the last field before the directories, so it sits four
+	// bytes back whichever the format. Without it, a binary declaring fewer entries
+	// than we index would have unrelated header bytes read as an RVA.
+	const dirCount = u32(dirs - 4);
 
 	const sections = [];
-	for (let i = 0; i < b.readUInt16LE(pe + 6); i++) {
-		const s = opt + b.readUInt16LE(pe + 20) + i * 40;
-		sections.push({
-			va: b.readUInt32LE(s + 12),
-			size: b.readUInt32LE(s + 16),
-			ptr: b.readUInt32LE(s + 20),
-		});
+	for (let i = 0; i < u16(pe + 6); i++) {
+		const s = opt + u16(pe + 20) + i * 40;
+		sections.push({ va: u32(s + 12), size: u32(s + 16), ptr: u32(s + 20) });
 	}
 	const fileOffset = (rva) => {
 		const s = sections.find((s) => rva >= s.va && rva < s.va + s.size);
@@ -281,13 +294,25 @@ function importedDlls(file) {
 	};
 
 	const names = [];
-	// Array of 20-byte descriptors, terminated by an all-zero one.
-	for (let entry = fileOffset(importRva); ; entry += 20) {
-		const nameRva = b.readUInt32LE(entry + 12);
-		if (!nameRva) return names;
-		const at = fileOffset(nameRva);
-		names.push(b.subarray(at, b.indexOf(0, at)).toString("latin1"));
-	}
+	// Both directories are arrays of fixed-size descriptors ending in an all-zero one,
+	// and both hold the DLL name as an RVA at a fixed offset. Reading only the first
+	// would miss a delay-loaded dependency entirely — the loader resolves those on
+	// first call rather than at load time, so the failure would arrive later and
+	// nowhere near the cause, which is worse than the one this guard was written for.
+	const walk = (index, stride, nameOffset) => {
+		if (dirCount <= index) return;
+		const rva = u32(dirs + index * 8);
+		if (!rva) return;
+		for (let entry = fileOffset(rva); ; entry += stride) {
+			const nameRva = u32(entry + nameOffset);
+			if (!nameRva) return;
+			const at = fileOffset(nameRva);
+			names.push(b.subarray(at, b.indexOf(0, at)).toString("latin1"));
+		}
+	};
+	walk(1, 20, 12); // IMAGE_IMPORT_DESCRIPTOR.Name
+	walk(13, 32, 4); // ImgDelayDescr.rvaDLLName
+	return names;
 }
 
 /**

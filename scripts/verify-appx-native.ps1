@@ -94,6 +94,22 @@ public static extern System.IntPtr LoadLibraryExW(string path, System.IntPtr fil
 	$results = @()
 	$dir = Get-NativeDir -Root $PackageRoot
 
+	# This path is hard-coded, so a change to the AppX resource layout silently moves
+	# the payload out from under it. Without this check Get-ChildItem throws under
+	# $ErrorActionPreference = "Stop", the child dies before writing its report, and
+	# the parent spends its full timeout to conclude only that no report arrived --
+	# true, useless, and three minutes late. Report the real cause as a finding
+	# instead, so it travels back through the same channel as every other failure.
+	if (-not (Test-Path $dir)) {
+		@([pscustomobject]@{
+			name   = $dir
+			kind   = "layout"
+			ok     = $false
+			detail = "the package has no native payload at this path; the AppX resource layout changed"
+		}) | ConvertTo-Json -Depth 4 | Set-Content -Path $ReportPath -Encoding utf8
+		return
+	}
+
 	foreach ($file in Get-ChildItem -Path $dir -File | Where-Object { $_.Extension -match '^\.(dll|node)$' }) {
 		$handle = [OpenScreen.Loader]::LoadLibraryExW($file.FullName, [IntPtr]::Zero, 0x00000008)
 		$lastError = [System.Runtime.InteropServices.Marshal]::GetLastWin32Error()
@@ -210,23 +226,30 @@ try {
 	foreach ($item in (Get-Content $report -Raw | ConvertFrom-Json)) { $results += $item }
 	if ($results.Count -eq 0) { throw "the in-package probe found no native binaries to check" }
 
-	# The package ships fourteen libraries and three helpers. An exact count is too
-	# brittle to assert, but a probe that suddenly checks two things has stopped
-	# looking at the payload, and silence is the one outcome this must never have.
-	if ($results.Count -lt 10) {
-		throw "the in-package probe only checked $($results.Count) binaries, which is too few to be the real payload"
-	}
-
+	# Printed before anything is asserted, so whatever the probe actually found is on
+	# screen even when the run ends in a throw.
 	foreach ($r in $results) {
 		$mark = "ok  "
 		if (-not $r.ok) { $mark = "FAIL" }
 		Write-Host "  $mark $($r.kind)`t$($r.name)`t$($r.detail)"
 	}
 
+	# An explicit failure is reported ahead of the count check below, which would
+	# otherwise swallow it: the probe reports a missing payload directory as a single
+	# finding, and "only checked 1 binaries" would replace an accurate diagnosis with
+	# a vague one.
 	$failed = @($results | Where-Object { -not $_.ok })
 	if ($failed.Count -gt 0) {
 		foreach ($r in $failed) { Write-Output "::error::$($r.name): $($r.detail)" }
-		throw "$($failed.Count) of $($results.Count) native binaries do not load under package identity"
+		throw "$($failed.Count) of $($results.Count) checks failed under package identity"
+	}
+
+	# Reached only when everything passed, which is exactly when a probe that quietly
+	# stopped looking is indistinguishable from a healthy package. The payload is
+	# fourteen libraries and three helpers; an exact count would be brittle, but a
+	# clean report covering two files is not a pass, it is a broken probe.
+	if ($results.Count -lt 10) {
+		throw "the in-package probe only checked $($results.Count) binaries, which is too few to be the real payload"
 	}
 
 	Write-Host "All $($results.Count) native binaries load under package identity."
