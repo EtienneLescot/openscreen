@@ -7,3 +7,6 @@
 *.rs   text eol=lf
 *.ts   text eol=lf
 *.tsx  text eol=lf
+# Same drift, caught on the native helper's build file: an edit from Windows
+# rewrote all 67 lines as CRLF and buried a 22-line change in a 156-line diff.
+CMakeLists.txt text eol=lf

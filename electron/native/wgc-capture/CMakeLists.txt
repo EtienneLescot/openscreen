@@ -9,6 +9,28 @@ set(CMAKE_CXX_STANDARD_LIBRARIES
 
 project(openscreen-wgc-capture LANGUAGES CXX)
 
+# Static CRT (/MT), not CMake's default /MD. With /MD both helpers import
+# VCRUNTIME140.dll, VCRUNTIME140_1.dll and MSVCP140.dll, which are NOT part of
+# Windows — they come from the Visual C++ Redistributable. Every machine that has
+# ever built this repo, or installed almost any other desktop app, already has
+# them in System32, so the dependency is invisible in local testing and in CI.
+#
+# On a clean Windows image it is fatal: the loader kills the process before main()
+# and the parent only sees an exit code. Store certification runs on exactly such
+# an image and rejected 1.9.1 for it, reporting
+#
+#   Error: Native Windows capture exited before recording started (code=3221225781)
+#
+# 3221225781 is 0xC0000135, STATUS_DLL_NOT_FOUND. Recording was impossible on the
+# test device while the app itself started fine, because Electron already links
+# the CRT statically.
+#
+# These are standalone processes that share no CRT state with anything, so /MT is
+# free: it costs ~100 KB each and removes the dependency instead of obliging us to
+# redistribute Microsoft's DLLs beside them. scripts/before-pack.cjs fails the
+# build if it ever comes back.
+set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
+
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
