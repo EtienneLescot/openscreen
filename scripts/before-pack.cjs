@@ -411,6 +411,188 @@ function checkLinuxNativePayload(context) {
 				"renamed to `osff_*` for the compositor addon, and the helper needs the originals.",
 		);
 	}
+
+	checkLinuxSymbolVersionFloor(dir);
+}
+
+/**
+ * The highest versioned symbol a shipped ELF may require, per version prefix.
+ *
+ * The Linux counterpart of the Windows import-table guard (checkWinNoRedistDependency
+ * and importedDlls(), from #321 — this may land first, in which case they arrive with
+ * it), and the same failure that hook could not see: the linker binds each symbol to
+ * the newest version the BUILD machine
+ * offers, so the runner image silently decides the oldest distro the packages run on.
+ * It works on every developer machine and in CI by construction, and only the target
+ * distro tells the truth.
+ *
+ * Nothing in the source asks for any of it. Built on ubuntu-latest (24.04) the payload
+ * needed GLIBC_2.38 for four `__isoc23_strto*` — glibc 2.38's C23 redirect of `strtol`
+ * — GLIBCXX_3.4.32 for `_ZSt21ios_base_library_initv`, which GCC 13.2+ emits into every
+ * translation unit that includes <iostream>, and GLIBC_2.35 for one `hypotf`, a symbol
+ * that has existed since 2.2.5 and whose newest version Rust's f32::hypot simply took.
+ *
+ * That shipped: on Ubuntu 22.04, Debian 12 and RHEL 9, whisper-stt-server and the ggml
+ * backends died in ld.so before main() (transcription and captions fail with a developer
+ * error), and on RHEL 9 compositor_view.node failed require() as well (no preview, and
+ * every export falls back to the no-op compositor). The app still LAUNCHES on all of
+ * them — Electron itself only needs 2.25 — so it reads as a broken app rather than a
+ * broken package, and nothing in any log says otherwise. No package format catches it
+ * either: the deb/rpm/pacman `depends` lists are hand-written in electron-builder.json5,
+ * and electron-builder passes fpm none of --rpm-autoreq*, so not even dnf generates the
+ * `libc.so.6(GLIBC_2.38)` requirement that would have refused the install.
+ *
+ * The ceiling is what the OLDEST distro the README claims actually provides. Ubuntu
+ * 22.04 is the binding one — glibc 2.35, libstdc++6 from GCC 12 — against Debian 12's
+ * 2.36 with the same libstdc++. Raising any of these is a decision to drop a distro
+ * from the README, not a build detail; the runners are pinned to match (build.yml's
+ * build-linux and build-whisper-stt.yml).
+ */
+const MAX_SYMBOL_VERSION = { GLIBC: "2.35", GLIBCXX: "3.4.30", CXXABI: "1.3.13" };
+
+/** Dotted numeric compare, so 3.4.9 < 3.4.30 and 2.4 < 2.38 rather than by string. */
+function compareVersions(a, b) {
+	const left = a.split(".").map(Number);
+	const right = b.split(".").map(Number);
+	for (let i = 0; i < Math.max(left.length, right.length); i++) {
+		if ((left[i] ?? 0) !== (right[i] ?? 0)) return (left[i] ?? 0) - (right[i] ?? 0);
+	}
+	return 0;
+}
+
+/**
+ * The highest version an ELF needs per prefix, as `{ GLIBC: "2.38", GLIBCXX: "3.4.32" }`.
+ *
+ * Reads `.gnu.version_r` (the version NEEDS) and deliberately not `.gnu.version_d` (the
+ * version DEFINITIONS): libc and libstdc++ define every version they ever shipped, so
+ * reading definitions would report a bundled library as needing itself. Parsed here
+ * rather than shelled out to readelf for the same reason importedDlls() does not use
+ * dumpbin — binutils is not installed on every machine that packages this.
+ *
+ * 64-bit little-endian only, which is every arch this ships (x86_64, aarch64).
+ */
+function neededSymbolVersions(file) {
+	const b = fs.readFileSync(file);
+	if (b.readUInt32BE(0) !== 0x7f454c46) throw new Error(`${file} is not an ELF binary`);
+	if (b[4] !== 2 || b[5] !== 1) throw new Error(`${file} is not 64-bit little-endian ELF`);
+
+	const shoff = Number(b.readBigUInt64LE(0x28));
+	const shentsize = b.readUInt16LE(0x3a);
+	const SHT_GNU_VERNEED = 0x6ffffffe;
+
+	let section;
+	for (let i = 0; i < b.readUInt16LE(0x3c); i++) {
+		const sh = shoff + i * shentsize;
+		if (b.readUInt32LE(sh + 4) !== SHT_GNU_VERNEED) continue;
+		// sh_info is the Verneed count; sh_link is the string table these names live in.
+		const strtabHeader = shoff + b.readUInt32LE(sh + 0x28) * shentsize;
+		section = {
+			offset: Number(b.readBigUInt64LE(sh + 0x18)),
+			count: b.readUInt32LE(sh + 0x2c),
+			strtab: Number(b.readBigUInt64LE(strtabHeader + 0x18)),
+		};
+		break;
+	}
+	// No such section means the binary needs no versioned symbols at all — legitimate
+	// for a fully static one, and nothing to check either way.
+	if (!section) return {};
+
+	const nameAt = (at) =>
+		b.subarray(section.strtab + at, b.indexOf(0, section.strtab + at)).toString("latin1");
+
+	const highest = {};
+	let verneed = section.offset;
+	for (let i = 0; i < section.count; i++) {
+		let vernaux = verneed + b.readUInt32LE(verneed + 8);
+		for (let j = 0; j < b.readUInt16LE(verneed + 2); j++) {
+			// "GLIBC_2.38" -> prefix GLIBC, version 2.38. Anything not shaped like that
+			// (there is none in practice) is skipped rather than guessed at.
+			const [, prefix, version] =
+				/^(.+)_(\d+(?:\.\d+)*)$/.exec(nameAt(b.readUInt32LE(vernaux + 8))) ?? [];
+			if (prefix && (!highest[prefix] || compareVersions(version, highest[prefix]) > 0)) {
+				highest[prefix] = version;
+			}
+			vernaux += b.readUInt32LE(vernaux + 12);
+		}
+		verneed += b.readUInt32LE(verneed + 12);
+	}
+	return highest;
+}
+
+/** Every ELF under `dir`, recursively — the helper's ffmpeg sits in a subdirectory. */
+function elfFilesUnder(dir) {
+	const found = [];
+	for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+		const full = path.join(dir, entry.name);
+		if (entry.isDirectory()) {
+			found.push(...elfFilesUnder(full));
+			continue;
+		}
+		if (!entry.isFile()) continue;
+		// By magic, not by extension: the helpers, whisper-stt-server and ffmpeg have none.
+		const magic = Buffer.alloc(4);
+		const fd = fs.openSync(full, "r");
+		try {
+			fs.readSync(fd, magic, 0, 4, 0);
+		} finally {
+			fs.closeSync(fd);
+		}
+		if (magic.readUInt32BE(0) === 0x7f454c46) found.push(full);
+	}
+	return found;
+}
+
+/** Nothing we ship may need a newer glibc or libstdc++ than MAX_SYMBOL_VERSION allows. */
+function checkLinuxSymbolVersionFloor(dir) {
+	const scanned = elfFilesUnder(dir).map((file) => ({
+		name: path.relative(dir, file),
+		needs: neededSymbolVersions(file),
+	}));
+
+	// The same assertion checkWinNoRedistDependency makes, for the same reason: a guard
+	// that silently stops looking reports "clean" for the rest of the project's life.
+	// Every dynamically linked binary in this payload needs versioned glibc symbols, so
+	// finding none anywhere means the parser broke. Asserted across the scan rather than
+	// per file, because a genuinely static binary legitimately has no .gnu.version_r.
+	if (!scanned.some((entry) => entry.needs.GLIBC)) {
+		throw new Error(
+			`Refusing to package: read no glibc symbol versions from any of the ${scanned.length} ` +
+				`ELF files in ${path.relative(ROOT, dir)}.\n\n` +
+				"Every one of them links glibc, so this is a bug in neededSymbolVersions()\n" +
+				"(scripts/before-pack.cjs), not a self-contained payload. Fix the parser — leaving\n" +
+				"it is how packages that cannot start on the supported distros get shipped again.",
+		);
+	}
+
+	const offenders = scanned
+		.map((entry) => ({
+			name: entry.name,
+			bad: Object.entries(MAX_SYMBOL_VERSION)
+				.filter(
+					([prefix, max]) => entry.needs[prefix] && compareVersions(entry.needs[prefix], max) > 0,
+				)
+				.map(([prefix, max]) => `${prefix}_${entry.needs[prefix]} (max ${prefix}_${max})`),
+		}))
+		.filter((entry) => entry.bad.length > 0);
+	if (offenders.length === 0) {
+		return;
+	}
+
+	throw new Error(
+		"Refusing to package binaries that need a newer glibc or libstdc++ than the oldest\n" +
+			"supported distro provides.\n\n" +
+			`  looked in: ${path.relative(ROOT, dir)}\n\n` +
+			`${offenders.map((o) => `  - ${o.name} needs ${o.bad.join(", ")}`).join("\n")}\n\n` +
+			"Almost certainly nothing asked for this: the linker binds each symbol to the newest\n" +
+			"version the build machine offers, so this means something was built on a newer image\n" +
+			"than the floor. On the target it dies in ld.so before main() or fails require(), while\n" +
+			"the app still launches — so it reads as a broken app, and no package format catches it.\n\n" +
+			"Build on the pinned runners: ubuntu-22.04 in .github/workflows/build.yml (build-linux)\n" +
+			"and build-whisper-stt.yml. To see which symbols pulled a version in:\n\n" +
+			"    readelf -V <file>\n" +
+			"    readelf -W --dyn-syms <file> | grep @GLIBC_2.38\n\n" +
+			"Raising MAX_SYMBOL_VERSION drops a distro the README claims to support.",
+	);
 }
 
 /** Newest mtime under `target` (file or directory), or 0 if it does not exist. */

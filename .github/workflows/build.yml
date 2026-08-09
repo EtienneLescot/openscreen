@@ -532,7 +532,25 @@ jobs:
 
   build-linux:
     name: Linux packages
-    runs-on: ubuntu-latest
+    # PINNED, and not to `ubuntu-latest`. The linker binds every symbol to the newest
+    # version its BUILD machine offers, so the runner image silently decides the oldest
+    # distro these packages can run on — nothing in the source asks for any of it.
+    # On ubuntu-latest (24.04) that floor was glibc 2.38 / GLIBCXX_3.4.32, which put
+    # Ubuntu 22.04, Debian 12 and RHEL 9 out of range: whisper-stt-server and the ggml
+    # backends died in ld.so before main(), and compositor_view.node (2.35, from a single
+    # `hypotf`) died on RHEL 9 as well. Both fail SILENTLY — the app still launches,
+    # captions just report a developer error and the preview renders nothing — and no
+    # package format catches it, because the deb/rpm/pacman `depends` lists are
+    # hand-written in electron-builder.json5 and electron-builder passes fpm none of
+    # --rpm-autoreq*, so not even dnf generates the libc.so.6(GLIBC_2.38) requirement
+    # that would have refused the install.
+    #
+    # 22.04 is the oldest distro the README claims (it names it as the PipeWire
+    # baseline), and it is the binding one: glibc 2.35 and libstdc++6 from GCC 12
+    # (GLIBCXX_3.4.30, CXXABI_1.3.13), against Debian 12's 2.36/3.4.30/1.3.13.
+    # scripts/before-pack.cjs enforces that ceiling on the built payload, so bumping
+    # this image alone cannot quietly raise the floor again.
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
         uses: actions/checkout@v7
@@ -543,13 +561,28 @@ jobs:
       # bsdtar (libarchive-tools) is fpm's mtree generator for the pacman target.
       # rpmbuild (rpm) is what fpm shells out to for the rpm target; without it the
       # build fails at packaging, not at config parse.
+      - name: Install Linux packaging dependencies
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools rpm
+
       # patchelf is what build-linux-compositor-addon.mjs renames the ffmpeg symbols
       # with, so the addon cannot bind to Chromium's bundled ffmpeg — an unconditional
-      # dependency that resolvePatchelf() throws on. It happens to be preinstalled on
-      # the ubuntu-24.04 image, which is why this has worked; declaring it means the
-      # build stops depending on the runner image's contents.
-      - name: Install Linux packaging and native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libarchive-tools rpm patchelf
+      # dependency that resolvePatchelf() throws on.
+      #
+      # NOT from apt, which is the whole reason this is its own step: 22.04 carries
+      # patchelf 0.14.3 and `--rename-dynamic-symbols` first shipped in 0.18.0, so the
+      # apt copy fails the rename outright. 0.18.0 is also exactly what the 24.04 image
+      # provided, so the renaming behaviour is unchanged from what already ships.
+      # resolvePatchelf() checks ~/.local/bin before /usr/bin, so this wins over
+      # whatever the image happens to carry.
+      - name: Install patchelf
+        run: |
+          curl -fsSLo /tmp/patchelf.tar.gz \
+            https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-x86_64.tar.gz
+          echo "ce84f2447fb7a8679e58bc54a20dc2b01b37b5802e12c57eece772a6f14bf3f0  /tmp/patchelf.tar.gz" | sha256sum -c -
+          mkdir -p ~/.local/bin
+          tar -xzf /tmp/patchelf.tar.gz -C /tmp ./bin/patchelf
+          mv /tmp/bin/patchelf ~/.local/bin/patchelf
+          ~/.local/bin/patchelf --version
 
       - name: Stage whisper-stt binaries
         shell: bash
