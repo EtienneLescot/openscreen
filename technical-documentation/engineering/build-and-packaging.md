@@ -70,7 +70,7 @@ This shipped: the 1.9.0 Store build loaded no compositor at all, so the editor o
 
 That is not a theoretical image. Store certification runs on one, and it rejected 1.9.1:
 
-```
+```text
 Error: Native Windows capture exited before recording started (code=3221225781)
 ```
 
