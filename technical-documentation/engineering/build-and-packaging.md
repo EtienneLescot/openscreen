@@ -95,6 +95,41 @@ The fix is to link the CRT statically, which removes the dependency instead of o
 
 **Local testing cannot confirm this class of fix.** This machine has the redistributable and always will, so a successful run here proves the build is not broken — it says nothing about the clean-machine behaviour. The import table is the only evidence for that half, which is why the guard reads it rather than running anything.
 
+### Verifying a package actually loads
+
+The two failures above were found by the Store, not by us, and each was fixed with a guard aimed at the failure already understood — the colocation check would never have caught the redistributable, and the import-table check would never have caught the `PATH` bug. Both are worth keeping, and neither generalises.
+
+`scripts/verify-appx-native.ps1` is the check that does. It registers a built `.appx` and asks the Windows loader to resolve every shipped binary from inside the package: `LoadLibraryEx` with `LOAD_WITH_ALTERED_SEARCH_PATH` for each `.dll`/`.node` — the same call Node makes for an addon — and, for each helper executable, a start with no arguments. Whatever the next unresolvable dependency turns out to be, this fails on it.
+
+```bash
+powershell -File scripts/verify-appx-native.ps1 -Appx release/1.9.1/Openscreen.Setup.1.9.1.appx
+```
+
+Add `-KeepRegistered` to leave the package installed and click through the app afterwards. Loose registration needs Developer Mode; the script will not enable it for you, because that is a machine-wide setting. The `Windows Store package` job runs the same script on every build, enabling Developer Mode on the runner it is about to discard.
+
+Two things it deliberately does not do. It never records: a real capture needs a GPU and a desktop session that a CI runner does not usefully have, and a flaky gate gets switched off — the loader is the part that broke both times, and it can be tested without either. And it proves nothing about a machine that lacks a runtime, because every runner and every developer machine has the Visual C++ Redistributable; that half is held by the import-table check in `before-pack.cjs`.
+
+### Testing without the build machine's advantages
+
+Every failure in this section shares one shape: **the machines we test on have more installed than the machines we ship to.** A developer box carries the Visual C++ Redistributable because Visual Studio put it there; a CI runner carries a newer glibc than the distros the README claims. Nothing run on either can reveal an absence, so "it works here" is not evidence about anything, however many times it is repeated.
+
+Three layers address it, and the order matters:
+
+1. **Remove the dependency at the source.** A statically linked CRT cannot be missing; a runner pinned to the oldest supported distro cannot bind symbols the user does not have. This is the only layer that needs no testing at all, so prefer it whenever there is a choice.
+2. **Prove it automatically.** Static analysis for absences that are known and enumerable (`before-pack.cjs` reads import tables and ELF symbol-version needs), and a real load for everything else (`verify-appx-native.ps1` under package identity).
+3. **A pristine machine before a Store submission.** The only layer that catches a failure nobody has thought of yet.
+
+For layer 3, keep a virtual machine whose entire value is what is *not* installed in it. VirtualBox and VMware Workstation both run on Windows 11 Home, which has neither Windows Sandbox nor Hyper-V; Microsoft publishes Windows 11 ISOs at no cost, and an unactivated install is fine for this.
+
+**Snapshot it the moment Windows finishes installing, before anything else touches it.** That snapshot is the asset — the VM itself is disposable. Restore it after every test, and never install Visual Studio, the Rust toolchain, or anything that carries a redistributable, or it quietly becomes another machine that cannot tell you anything.
+
+What to run inside it, cheapest first:
+
+- **The `.exe` installer.** No Developer Mode, no ceremony, and it carries the same native binaries as the appx. Record something and open the editor: if recording starts and the preview renders, the missing-runtime class is clear for both Windows channels at once.
+- **The appx**, for what is specific to MSIX — package-graph DLL resolution, which the `.exe` cannot exercise. Enable Developer Mode and run `verify-appx-native.ps1`, then launch the app by hand. Developer Mode installs no runtime, so it does not compromise what the VM is for.
+
+Expect the compositor to report a software backend: a VM has no real GPU, and `probeBackend()` returning `"software"` there is correct, not a regression. Enable the hypervisor's 3D acceleration so the preview renders at all.
+
 ### Stale native artifacts
 
 **On Windows, always package with `npm run build:win`, not `npm run build`.**
