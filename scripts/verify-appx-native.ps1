@@ -140,12 +140,20 @@ public static extern System.IntPtr LoadLibraryExW(string path, System.IntPtr fil
 		$psi.RedirectStandardError = $true
 		$psi.CreateNoWindow = $true
 		$proc = [System.Diagnostics.Process]::Start($psi)
-		$stdout = $proc.StandardOutput.ReadToEnd()
-		$stderr = $proc.StandardError.ReadToEnd()
-		$proc.WaitForExit(20000) | Out-Null
+		# Both pipes are started draining before anything blocks. Reading one to the
+		# end while the other fills its buffer deadlocks the pair: the child blocks
+		# writing to stderr, the parent blocks reading stdout, and the WaitForExit
+		# below never runs to break it. Today these print three words each, so the
+		# buffer never fills -- the hang would arrive the day a helper turns chatty,
+		# which is exactly when this check is earning its place.
+		$stdoutTask = $proc.StandardOutput.ReadToEndAsync()
+		$stderrTask = $proc.StandardError.ReadToEndAsync()
+		if (-not $proc.WaitForExit(20000)) { $proc.Kill() }
+		$stdout = $stdoutTask.GetAwaiter().GetResult()
+		$stderr = $stderrTask.GetAwaiter().GetResult()
 
 		$exitCode = "still running"
-		if ($proc.HasExited) { $exitCode = $proc.ExitCode } else { $proc.Kill() }
+		if ($proc.HasExited) { $exitCode = $proc.ExitCode }
 
 		$said = ($stdout + $stderr).Trim()
 		$firstLine = ""
