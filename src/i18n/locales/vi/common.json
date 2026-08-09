@@ -41,7 +41,7 @@
 	},
 	"updates": {
 		"available": "Đã có OpenScreen {{latestVersion}}. Bạn đang dùng phiên bản {{currentVersion}}.",
-		"current": "OpenScreen đã được cập nhật ({{currentVersion}}).",
+		"current": "OpenScreen đang ở phiên bản mới nhất ({{currentVersion}}).",
 		"failed": "Không thể kiểm tra bản cập nhật."
 	},
 	"playback": {
