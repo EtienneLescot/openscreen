@@ -16,9 +16,9 @@ type FetchLatestRelease = (
 ) => Promise<ReleaseResponse>;
 
 interface ParsedVersion {
-	major: number;
-	minor: number;
-	patch: number;
+	major: bigint;
+	minor: bigint;
+	patch: bigint;
 	prerelease: string[];
 	normalized: string;
 }
@@ -29,11 +29,22 @@ function parseVersion(value: string): ParsedVersion {
 	);
 	if (!match) throw new Error(`invalid semantic version: ${value}`);
 	const prerelease = match[4]?.split(".") ?? [];
-	const core = `${Number(match[1])}.${Number(match[2])}.${Number(match[3])}`;
+	const coreIdentifiers = [match[1], match[2], match[3]];
+	if (
+		[...coreIdentifiers, ...prerelease].some(
+			(identifier) => /^\d+$/.test(identifier) && identifier.length > 1 && identifier[0] === "0",
+		)
+	) {
+		throw new Error(`invalid semantic version: ${value}`);
+	}
+	const major = BigInt(match[1]);
+	const minor = BigInt(match[2]);
+	const patch = BigInt(match[3]);
+	const core = `${major}.${minor}.${patch}`;
 	return {
-		major: Number(match[1]),
-		minor: Number(match[2]),
-		patch: Number(match[3]),
+		major,
+		minor,
+		patch,
 		prerelease,
 		normalized: prerelease.length > 0 ? `${core}-${prerelease.join(".")}` : core,
 	};
