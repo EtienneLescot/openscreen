@@ -13,10 +13,12 @@ vi.mock("@/native/client", () => ({
 
 function deferred<T>() {
 	let resolve!: (value: T) => void;
-	const promise = new Promise<T>((done) => {
+	let reject!: (reason?: unknown) => void;
+	const promise = new Promise<T>((done, fail) => {
 		resolve = done;
+		reject = fail;
 	});
-	return { promise, resolve };
+	return { promise, resolve, reject };
 }
 
 const message = (content: string) => [{ content }];
@@ -68,14 +70,15 @@ describe("useChatBudget", () => {
 	});
 
 	it("keeps the transcript estimate when native usage rejects", async () => {
-		chatBudgetMock.mockRejectedValue(new Error("native budget unavailable"));
+		const native = deferred<never>();
+		chatBudgetMock.mockReturnValue(native.promise);
 		const visibleMessages = message("x".repeat(400));
 		const { result } = renderHook(() =>
 			useChatBudget({ projectId: "project_1", sessionId: "session_1", messages: visibleMessages }),
 		);
 
 		await waitFor(() => expect(chatBudgetMock).toHaveBeenCalledTimes(1));
-		await act(async () => Promise.resolve());
+		await act(async () => native.reject(new Error("native budget unavailable")));
 		expect(result.current.usedTokens).toBe(100);
 	});
 
