@@ -142,12 +142,32 @@
   // Mesa est ce qui garantit qu'au minimum le rastériseur logiciel existe.
   //
   // `depends` REMPLACE la liste par défaut d'electron-builder au lieu de s'y ajouter
-  // (app-builder-lib, FpmTarget.getDefaultDepends) : les entrées reprises ci-dessous
-  // sont donc ce défaut, verbatim, plus la nôtre en dernier. En retirer une casse le
-  // paquet silencieusement.
+  // (app-builder-lib, FpmTarget.getDefaultDepends) : les NEUF premières entrées sont
+  // donc ce défaut, verbatim, suivies des quatre qui nous sont propres. En retirer une
+  // casse le paquet silencieusement.
   //
   // L'AppImage n'a pas de mécanisme de dépendances et reste donc exposée : c'est
   // pour elle que `d3d_linux::diagnose` nomme le paquet à installer.
+  //
+  // Les trois dernières comblent des sonames que rien ne déclarait ni n'embarquait,
+  // mesurés sur la 1.9.1 installée dans une Ubuntu 22.04 nue :
+  //
+  //   libgbm1     — réclamé par le binaire Electron LUI-MÊME. Sans lui l'app sort en
+  //                 127 sur `libgbm.so.1: cannot open shared object file`, avant toute
+  //                 fenêtre. Absent du défaut d'electron-builder, qui n'a jamais suivi
+  //                 le passage de Chromium à GBM.
+  //   libasound2  — même binaire, même conséquence. Sur 24.04+ le paquet réel est
+  //                 `libasound2t64`, qui `Provides: libasound2` : le nom court résout
+  //                 sur les deux, comme `libgtk-3-0` plus haut.
+  //   libgomp1    — l'OpenMP de GCC, réclamé par les 32 ELF de la pile STT
+  //                 (whisper-stt-server, les libggml*, libwhisper, libparakeet). Sans
+  //                 lui l'app démarre et seule la transcription meurt dans ld.so.
+  //
+  // Aucun n'a été vu avant parce que les métapaquets de bureau les tirent tous les
+  // trois — libgomp1 seulement via libfftw3-single3, libimagequant0 et libsoxr0, trois
+  // libs média périphériques. Une install minimale ou un WM monté à la main n'a
+  // aucune de ces garanties. C'est ce que le job `verify-linux-package` prouve
+  // désormais à chaque build, en interrogeant le loader plutôt que cette liste.
   "deb": {
     "depends": [
       "libgtk-3-0",
@@ -159,11 +179,18 @@
       "libatspi2.0-0",
       "libuuid1",
       "libsecret-1-0",
-      "mesa-vulkan-drivers"
+      "mesa-vulkan-drivers",
+      "libgbm1",
+      "libasound2",
+      "libgomp1"
     ]
   },
   "pacman": {
     // `vulkan-swrast` est le lavapipe d'Arch ; il tire `vulkan-icd-loader` avec lui.
+    //
+    // Les trois derniers sont les équivalents Arch des sonames décrits sur `deb`.
+    // Noms relevés dans un conteneur archlinux, pas devinés : `libgomp.so.1`
+    // appartient à `libgomp` (core), PAS à `gcc-libs` — il en a été sorti.
     "depends": [
       "c-ares",
       "ffmpeg",
@@ -179,7 +206,10 @@
       "snappy",
       "libnotify",
       "libappindicator-gtk3",
-      "vulkan-swrast"
+      "vulkan-swrast",
+      "mesa",
+      "alsa-lib",
+      "libgomp"
     ]
   },
   "rpm": {
@@ -195,6 +225,12 @@
     // (electron/ai-edition/llm-config-store.ts) et passe par le Secret Service :
     // sans lui, `isEncryptionAvailable()` répond faux et l'enregistrement d'une clé
     // lève. Une omission d'electron-builder, pas un choix.
+    //
+    // Les trois derniers sont les équivalents Fedora des sonames décrits sur `deb`,
+    // relevés par `dnf provides` : `libgbm.so.1` vient de `mesa-libgbm` et non du
+    // `mesa` d'Arch. `libgomp` fait partie de l'install de base sur Fedora, donc le
+    // rpm y était moins exposé que le deb — le déclarer reste ce qui rend la
+    // contrainte vraie plutôt que chanceuse.
     "depends": [
       "gtk3",
       "libnotify",
@@ -205,7 +241,10 @@
       "at-spi2-core",
       "(libuuid or libuuid1)",
       "libsecret",
-      "mesa-vulkan-drivers"
+      "mesa-vulkan-drivers",
+      "mesa-libgbm",
+      "alsa-lib",
+      "libgomp"
     ]
   },
   "win": {
