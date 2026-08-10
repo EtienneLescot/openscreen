@@ -93,7 +93,14 @@ public:
     // writer was never configured for.
     bool usesDxgiInput() const;
     // A breadcrumb, not state: safe to read from another thread at any time.
+    // One slot per writing thread, deliberately. encodeStage() names what the
+    // video-writer thread is inside; audioStage() names what the audio-mixer
+    // thread is inside. A single shared slot cannot do both: most of the video
+    // stages are set outside writerMutex_, so an audio write landing every few
+    // milliseconds would overwrite a wedged video stage with "idle" and the
+    // watchdog would report the absence of the very call it is trying to name.
     const char* encodeStage() const;
+    const char* audioStage() const;
 
 private:
     // Contended is not Failed: the bridge is a two-key handshake and a missed
@@ -156,6 +163,7 @@ private:
     // step overruns. `video-writer-join phase=abandoned` says which thread is
     // stuck; this says which call it is stuck in.
     std::atomic<const char*> encodeStage_{"idle"};
+    std::atomic<const char*> audioStage_{"idle"};
     DWORD videoStreamIndex_ = 0;
     DWORD audioStreamIndex_ = 0;
     bool hasAudioStream_ = false;
