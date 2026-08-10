@@ -91,9 +91,22 @@ The fix is to link the CRT statically, which removes the dependency instead of o
 - CMake helpers — `set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")` in `electron/native/wgc-capture/CMakeLists.txt`. These are standalone processes that share no CRT state with anything, so `/MT` costs about 100 KB each and nothing else.
 - Rust addon — `-C target-feature=+crt-static` in `crates/.cargo/config.toml`. Safe for the napi cdylib: only opaque `napi_value`s cross the boundary, and Buffers handed to Node carry a finalizer that frees, in the addon, what the addon allocated.
 
-`scripts/before-pack.cjs` now reads the import table of every `.exe`/`.dll`/`.node` in `electron/native/bin/win32-x64/` and refuses to package if any of them imports `msvcp*`/`vcruntime*`/`concrt*`. The `api-ms-win-crt-*` api-sets are deliberately not flagged: that is the UCRT, which does ship with Windows 10 and later.
+`scripts/before-pack.cjs` reads the import table of every `.exe`/`.dll`/`.node` in `electron/native/bin/win32-x64/` and refuses to package a binary that needs a redistributable DLL **the package does not ship**. The `api-ms-win-crt-*` api-sets are deliberately not flagged: that is the UCRT, which does ship with Windows 10 and later.
+
+#### `vcomp140.dll`: the member that got away
+
+The first version of that guard matched `msvcp*`/`vcruntime*`/`concrt*` and reported the payload clean. It was not. `ggml-base.dll` and `ggml-cpu.dll` are compiled with OpenMP and import **`vcomp140.dll`** — the same redistributable, under a name starting with none of those three prefixes. So after 1.9.1 was supposed to have ended this whole class of bug, transcription and captions still failed on a clean machine, in exactly the way this section describes, and the check said nothing.
+
+Two lessons, and the second is the useful one:
+
+- Enumerate the **family**, not the members that happened to bite: `msvcp`, `vcruntime`, `concrt`, `vcomp`, `vcamp`, `mfc`.
+- A guard is only as good as the property it actually tests. This one tested "imports a redistributable DLL" when the property that matters is "imports a redistributable DLL that will not be there". Those differ precisely when the DLL is shipped alongside — which is the remedy, so the old wording forbade its own fix.
+
+The remedy here is to ship it: `scripts/stage-vcomp-runtime.mjs` copies `vcomp140.dll` out of the Visual Studio redistributable directory into the payload, and `win.extraResources` carries it like everything else in that folder. Shipping rather than rebuilding whisper with `-DGGML_OPENMP=OFF` is deliberate — the DLL leaves the computation identical, where dropping OpenMP swaps its scheduler for ggml's own and changes transcription throughput by an amount nobody has measured. 200 KB against that unknown is a cheap trade; measure before revisiting it.
 
 **Local testing cannot confirm this class of fix.** This machine has the redistributable and always will, so a successful run here proves the build is not broken — it says nothing about the clean-machine behaviour. The import table is the only evidence for that half, which is why the guard reads it rather than running anything.
+
+Everything the payload needs from outside itself is now either shipped beside it or present on every Windows edition — with one exception worth knowing: `wgc-capture.exe` imports `mf.dll`, `mfplat.dll` and `mfreadwrite.dll`, and **Media Foundation is absent from Windows N editions** unless the user installs the Media Feature Pack. Recording would fail there with the same `0xC0000135` as above. Untested and unhandled; N editions are sold in Europe.
 
 ### Verifying a package actually loads
 
