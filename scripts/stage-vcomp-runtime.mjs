@@ -22,6 +22,7 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { findVcVarsAll } from "./msvcEnv.mjs";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(__dirname, "..");
@@ -41,13 +42,30 @@ if (process.platform !== "win32") {
  * hard-coding it, and takes the newest it finds. The redistributable copy is used
  * in preference to the one in System32 because that is the copy Microsoft licenses
  * for redistribution with an application.
+ *
+ * Discovery reuses `findVcVarsAll`, the same lookup the two native build scripts
+ * already run, so a Visual Studio installed anywhere is found here as well: it
+ * consults VCVARSALL, then vswhere, then VSINSTALLDIR, then sweeps for the
+ * pre-release channels vswhere does not enumerate. vcvarsall.bat sits at
+ * `<root>\VC\Auxiliary\Build\`, hence the three levels up.
+ *
+ * That root is searched alone when it yields anything, which both prefers the
+ * toolchain that actually compiled the helpers and avoids re-walking the same
+ * subtree — the installation usually lives under the fixed paths below, and those
+ * trees are large enough that scanning one twice is worth avoiding.
  */
-function findRedistCopies() {
-	const roots = [
+function searchRoots() {
+	const vcvarsall = findVcVarsAll();
+	if (vcvarsall) {
+		return [path.resolve(path.dirname(vcvarsall), "..", "..", "..")];
+	}
+	return [
 		"C:\\Program Files\\Microsoft Visual Studio",
 		"C:\\Program Files (x86)\\Microsoft Visual Studio",
-	].filter((dir) => fs.existsSync(dir));
+	];
+}
 
+function findRedistCopies() {
 	const found = [];
 	const walk = (dir, depth) => {
 		if (depth > 8) return;
@@ -72,7 +90,7 @@ function findRedistCopies() {
 			}
 		}
 	};
-	for (const root of roots) walk(root, 0);
+	for (const root of searchRoots()) walk(root, 0);
 	return found;
 }
 

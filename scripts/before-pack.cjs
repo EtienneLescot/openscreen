@@ -343,8 +343,18 @@ function importedDlls(file) {
  * (crates/.cargo/config.toml).
  */
 function checkWinNoRedistDependency(dir) {
-	const scanned = fs
-		.readdirSync(dir)
+	// Regular files only, and the same list serves both questions below. A directory
+	// answers `readdirSync` by name exactly as a file does, and this directory really
+	// does hold subdirectories (the vendored ffmpeg SDK), so the distinction is not
+	// hypothetical. Without it one named `something.dll` is opened as a binary and the
+	// hook dies on a raw `EISDIR` — the build stops, which is right, on a message that
+	// names nothing, which is not.
+	const files = fs
+		.readdirSync(dir, { withFileTypes: true })
+		.filter((entry) => entry.isFile())
+		.map((entry) => entry.name);
+
+	const scanned = files
 		.filter((name) => /\.(exe|dll|node)$/i.test(name))
 		.map((name) => ({ name, imports: importedDlls(path.join(dir, name)) }));
 
@@ -369,7 +379,7 @@ function checkWinNoRedistDependency(dir) {
 	// a .node, the module's — the same colocation that carries the ffmpeg DLLs. Shipping
 	// vcomp140.dll beside the ggml libraries is therefore a fix, not an exception, and
 	// the check has to be able to say so or it would forbid the remedy it asks for.
-	const shipped = new Set(fs.readdirSync(dir).map((name) => name.toLowerCase()));
+	const shipped = new Set(files.map((name) => name.toLowerCase()));
 	const offenders = scanned
 		.map((entry) => ({
 			name: entry.name,
