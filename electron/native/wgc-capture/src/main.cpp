@@ -239,14 +239,22 @@ void reportCaptureAdapters(ID3D11Device* device, HMONITOR targetMonitor) {
     std::wstring monitorAdapterName;
     bool monitorAdapterFound = false;
     bool sameAdapter = false;
+    // Both loops end on FAILED(), not on DXGI_ERROR_NOT_FOUND specifically.
+    // NOT_FOUND is itself a failure code, so one test covers the normal end of
+    // the enumeration and every other way it can stop -- and the other ways are
+    // what matter here. EnumOutputs returns DXGI_ERROR_NOT_CURRENTLY_AVAILABLE
+    // to a process in session 0, and neither call fills its out-pointer when it
+    // fails. Testing only for NOT_FOUND left a null ComPtr to be dereferenced on
+    // the next line, which would take down a recording from inside the one
+    // function in this file that promises never to.
     for (UINT adapterIndex = 0;; ++adapterIndex) {
         Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
-        if (factory->EnumAdapters1(adapterIndex, &adapter) == DXGI_ERROR_NOT_FOUND) {
+        if (FAILED(factory->EnumAdapters1(adapterIndex, &adapter)) || !adapter) {
             break;
         }
         for (UINT outputIndex = 0;; ++outputIndex) {
             Microsoft::WRL::ComPtr<IDXGIOutput> output;
-            if (adapter->EnumOutputs(outputIndex, &output) == DXGI_ERROR_NOT_FOUND) {
+            if (FAILED(adapter->EnumOutputs(outputIndex, &output)) || !output) {
                 break;
             }
             DXGI_OUTPUT_DESC outputDesc{};

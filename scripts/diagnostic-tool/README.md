@@ -35,7 +35,8 @@ Flags:
 The audio flags matter for reproducing a stop hang. Audio and video writes take
 the same sink-writer lock, so a run without audio has nothing to contend with
 and can pass on a machine where the app hangs every time. If you are reporting a
-hang that happens in the app but not here, re-run with `--system-audio`.
+hang that happens in the app but not here, re-run with whichever sources the
+failing recording used: `--system-audio`, `--mic`, or both together.
 
 Or use the bundled launcher:
 - Windows: `diagnostic.bat`

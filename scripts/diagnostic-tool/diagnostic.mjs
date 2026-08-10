@@ -101,7 +101,8 @@ Flags:
 The audio flags are off by default, which is why a plain run cannot reproduce a
 hang that only happens with audio: an audio write and a video write contend for
 the same sink-writer lock, and with no audio there is nothing to contend with.
-If a recording hangs in the app but not here, re-run with --system-audio.
+If a recording hangs in the app but not here, re-run with whichever sources the
+failing recording used -- --system-audio, --mic, or both.
 `);
 }
 
