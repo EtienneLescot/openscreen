@@ -120,12 +120,12 @@ At a high level, the RC workflow creates or reuses `release/vX.Y.Z`, tags its ti
 
 These workflows run for stable published releases and support manual replay with a tag:
 
-- `update-homebrew-cask.yml` waits for both macOS DMGs, hashes them, writes a cask, and pushes to the configured tap.
+- `update-homebrew-cask.yml` waits for both macOS DMGs, hashes them, writes a cask, and pushes to the configured tap. Manual replay refuses any tag that is not a stable `vMAJOR.MINOR.PATCH`, because `workflow_dispatch` takes free text and the `prerelease` filter only covers the `release` event.
 - `publish-winget.yml` passes the matching NSIS release asset to `winget-releaser`.
 - `bump-nix-package.yml` computes `npmDepsHash`, updates `nix/package.nix`, and opens a PR.
 - `aur-publish.yml` hashes the pacman release asset, updates `PKGBUILD` and `.SRCINFO`, and pushes over SSH.
 
-Each workflow gates itself on its required variables or credentials. `bump-nix-package.yml` uses the repository `GITHUB_TOKEN`; the others require external registry credentials described in [release and secrets](release-and-secrets.md).
+Each workflow needs variables or credentials, and where it checks for them decides whether a missing one is visible. `update-homebrew-cask.yml` and `publish-winget.yml` check inside a step that emits a warning, so an unconfigured channel says so in the run summary; a job-level `if:` would instead report `skipped`, which reads as green and hid #148 for eight releases and the Homebrew cask for its entire existence (#335). `bump-nix-package.yml` uses the repository `GITHUB_TOKEN`; the others require the external registry credentials described in [release and secrets](release-and-secrets.md).
 
 ## Tier 4: automation and diagnostics
 
