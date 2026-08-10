@@ -109,6 +109,7 @@ private:
     void releaseDxgiPipeline();
     bool initializeDxgiEncodingDevice();
     bool initializeVideoProcessor();
+    bool initializeBridgeTexture();
     bool initializeSampleAllocator(IMFMediaType* inputType);
     void applyHardwareRateControl(int bitrate);
     int64_t nextSampleTime(int64_t timestampHns, int64_t sampleDuration);
