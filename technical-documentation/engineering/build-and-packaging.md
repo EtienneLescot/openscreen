@@ -109,6 +109,26 @@ Add `-KeepRegistered` to leave the package installed and click through the app a
 
 Two things it deliberately does not do. It never records: a real capture needs a GPU and a desktop session that a CI runner does not usefully have, and a flaky gate gets switched off — the loader is the part that broke both times, and it can be tested without either. And it proves nothing about a machine that lacks a runtime, because every runner and every developer machine has the Visual C++ Redistributable; that half is held by the import-table check in `before-pack.cjs`.
 
+### Verifying a Linux package resolves on a clean machine
+
+Linux repeated the Windows lesson one release later. 1.9.1 fixed the symbol-version floor and shipped three sonames that nothing declared and nothing bundled: `libgbm.so.1` and `libasound.so.2`, needed by the Electron binary itself, so a clean Ubuntu 22.04 exited `127` before any window appeared; and `libgomp.so.1`, needed by all 32 ELFs of the STT stack, so the app started and only transcription died in `ld.so`.
+
+The symbol-version guard could not have seen it. It checks how *new* the required symbols are, not whether the libraries carrying them are ever installed — the same shape as the colocation check being blind to the redistributable. And nothing else was watching: the `deb`/`rpm`/`pacman` `depends` lists are hand-written, and electron-builder passes fpm none of `--rpm-autoreq*`, so no package format derives its own requirements.
+
+All three hid behind the same accident. Desktop metapackages pull every one of them, `libgomp1` only via `libfftw3-single3`, `libimagequant0` and `libsoxr0` — three peripheral media libraries no desktop actually needs. Every machine anyone tested on therefore had them.
+
+`scripts/verify-linux-package.sh` installs a built package into a **bare container** of the target distro and runs `ldd` over every ELF that ships, reporting any soname the package neither declares nor bundles. It then starts `openscreen`, `whisper-stt-server` and `openscreen-pipewire-helper`, because reaching `main()` is the part `ldd` cannot show: a binary the loader rejects exits `127` with `error while loading shared libraries`, while one that starts prints its own usage or its own structured error.
+
+```bash
+bash scripts/verify-linux-package.sh deb release/1.9.2/Openscreen-Linux-1.9.2.deb
+```
+
+The container is the point, not an implementation detail — the runner has more installed than the machines we ship to, so a check that runs on it is not a check. For the same reason the script installs no convenience tooling inside the container: `binutils` would arrive with a transitive closure that could mask what is being measured, and `ldd` is glibc, already there.
+
+`rpm` and `pacman` are verified too, and they are the ones with no other safety net: nobody installs them often enough to report a gap quickly, and the package names genuinely differ. `libgomp.so.1` is `libgomp1` on Debian and `libgomp` on both Fedora and Arch, where it was split out of `gcc-libs` — a guess would have been wrong.
+
+The AppImage is deliberately not covered. It has no dependency mechanism, so there is no declaration to verify against and every system soname is missing by construction. It stays exposed, which is what `d3d_linux::diagnose` naming the Mesa package is for.
+
 ### Testing without the build machine's advantages
 
 Every failure in this section shares one shape: **the machines we test on have more installed than the machines we ship to.** A developer box carries the Visual C++ Redistributable because Visual Studio put it there; a CI runner carries a newer glibc than the distros the README claims. Nothing run on either can reveal an absence, so "it works here" is not evidence about anything, however many times it is repeated.
@@ -116,7 +136,7 @@ Every failure in this section shares one shape: **the machines we test on have m
 Three layers address it, and the order matters:
 
 1. **Remove the dependency at the source.** A statically linked CRT cannot be missing; a runner pinned to the oldest supported distro cannot bind symbols the user does not have. This is the only layer that needs no testing at all, so prefer it whenever there is a choice.
-2. **Prove it automatically.** Static analysis for absences that are known and enumerable (`before-pack.cjs` reads import tables and ELF symbol-version needs), and a real load for everything else (`verify-appx-native.ps1` under package identity).
+2. **Prove it automatically.** Static analysis for absences that are known and enumerable (`before-pack.cjs` reads import tables and ELF symbol-version needs), and a real load for everything else — `verify-appx-native.ps1` under package identity on Windows, `verify-linux-package.sh` in a bare container on Linux. Both exist because static analysis only ever knows about the mistakes already made.
 3. **A pristine machine before a Store submission.** The only layer that catches a failure nobody has thought of yet.
 
 For layer 3, keep a virtual machine whose entire value is what is *not* installed in it. VirtualBox and VMware Workstation both run on Windows 11 Home, which has neither Windows Sandbox nor Hyper-V; Microsoft publishes Windows 11 ISOs at no cost, and an unactivated install is fine for this.

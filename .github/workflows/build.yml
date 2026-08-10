@@ -617,6 +617,39 @@ jobs:
             exit 1
           fi
 
+      # The Linux counterpart of the Windows job's "Verify native binaries load under
+      # package identity", added for the same reason and after the same kind of miss:
+      # 1.9.1 shipped three sonames that nothing declared and nothing bundled — libgbm.so.1
+      # and libasound.so.2, needed by the Electron binary itself, so a clean Ubuntu 22.04
+      # exited 127 before any window, and libgomp.so.1, needed by the whole STT stack, so
+      # transcription died in ld.so. The symbol-version guard in before-pack.cjs could not
+      # have seen any of it: it checks how NEW the required symbols are, not whether the
+      # libraries carrying them are ever installed.
+      #
+      # Both misses hid behind the same thing. Desktop metapackages pull all three, so
+      # every machine anyone tested on had them — libgomp1 only via libfftw3-single3,
+      # libimagequant0 and libsoxr0, three peripheral media libraries. The check has to run
+      # somewhere empty or it is not a check, which is why this uses containers rather than
+      # the runner it is already standing on.
+      #
+      # rpm and pacman are verified too, and they are the ones with no other safety net:
+      # their depends lists are hand-written, no user installs them often enough to report
+      # a gap quickly, and package names genuinely differ (libgomp.so.1 is `libgomp1` on
+      # Debian, `libgomp` on Fedora AND on Arch, where it was split out of `gcc-libs`).
+      #
+      # The AppImage is deliberately NOT covered. It has no dependency mechanism at all, so
+      # there is no declaration to verify against — every system soname is "missing" by
+      # construction and the check would have nothing to say. It stays exposed, which is
+      # what d3d_linux::diagnose naming the Mesa package is for.
+      - name: Verify packages resolve on a clean machine
+        run: |
+          for fmt in deb rpm pacman; do
+            PKG="$(find release -type f -name "*.${fmt}" | head -1)"
+            echo "::group::${fmt}"
+            bash scripts/verify-linux-package.sh "$fmt" "$PKG"
+            echo "::endgroup::"
+          done
+
       - name: Upload Linux packages
         uses: actions/upload-artifact@v7
         with:
