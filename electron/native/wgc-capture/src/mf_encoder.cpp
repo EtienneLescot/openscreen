@@ -756,7 +756,80 @@ bool MFEncoder::initializeDxgiPipeline() {
         succeeded(
             dxgiDeviceManager_->ResetDevice(device_.Get(), dxgiResetToken_),
             "IMFDXGIDeviceManager::ResetDevice") &&
-        initializeVideoProcessor();
+        initializeVideoProcessor() &&
+        initializeBridgeTexture();
+}
+
+// Built here rather than on the first frame, which is the whole point: this
+// runs inside initialize(), where returning false drops the GPU pipeline and
+// retries the exact chain a machine without one would have taken. A driver
+// that refuses D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX -- and they exist, which
+// is the entire premise of this path being optional -- therefore records on
+// the CPU path instead of failing the recording on frame one, long after the
+// sink writer has been configured for NV12 and no fallback is possible.
+//
+// The descriptor comes from width_/height_ rather than from a captured frame,
+// which is exactly equivalent: captureDxgiSample rejects any texture whose
+// dimensions or format do not match those same values before it ever reaches
+// convertBgraTextureToNv12, so no frame that could disagree with this
+// descriptor can reach the bridge.
+bool MFEncoder::initializeBridgeTexture() {
+    D3D11_TEXTURE2D_DESC bridgeDesc{};
+    bridgeDesc.Width = static_cast<UINT>(width_);
+    bridgeDesc.Height = static_cast<UINT>(height_);
+    bridgeDesc.MipLevels = 1;
+    bridgeDesc.ArraySize = 1;
+    bridgeDesc.Format = DXGI_FORMAT_B8G8R8A8_UNORM;
+    bridgeDesc.SampleDesc.Count = 1;
+    bridgeDesc.SampleDesc.Quality = 0;
+    bridgeDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
+    bridgeDesc.CPUAccessFlags = 0;
+    bridgeDesc.Usage = D3D11_USAGE_DEFAULT;
+    bridgeDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
+    if (!succeeded(
+            captureDevice_->CreateTexture2D(&bridgeDesc, nullptr, &captureBridgeTexture_),
+            "CreateTexture2D(capture bridge)")) {
+        return false;
+    }
+    if (!succeeded(captureBridgeTexture_.As(&captureBridgeMutex_), "Query capture bridge mutex")) {
+        return false;
+    }
+
+    Microsoft::WRL::ComPtr<IDXGIResource> bridgeResource;
+    if (!succeeded(captureBridgeTexture_.As(&bridgeResource), "Query capture bridge resource")) {
+        return false;
+    }
+    HANDLE sharedHandle = nullptr;
+    if (!succeeded(bridgeResource->GetSharedHandle(&sharedHandle), "Get capture bridge handle")) {
+        return false;
+    }
+    if (!succeeded(
+            device_->OpenSharedResource(
+                sharedHandle,
+                __uuidof(ID3D11Texture2D),
+                reinterpret_cast<void**>(encoderBridgeTexture_.GetAddressOf())),
+            "Open encoder bridge texture")) {
+        return false;
+    }
+    if (!succeeded(encoderBridgeTexture_.As(&encoderBridgeMutex_), "Query encoder bridge mutex")) {
+        return false;
+    }
+
+    // The bridge is the only input this processor ever reads, so its view is
+    // built once here rather than per frame. Views describe a resource, they do
+    // not read it, so this needs no keyed-mutex ownership.
+    D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC inputViewDesc{};
+    inputViewDesc.FourCC = 0;
+    inputViewDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
+    inputViewDesc.Texture2D.MipSlice = 0;
+    inputViewDesc.Texture2D.ArraySlice = 0;
+    return succeeded(
+        videoDevice_->CreateVideoProcessorInputView(
+            encoderBridgeTexture_.Get(),
+            videoProcessorEnumerator_.Get(),
+            &inputViewDesc,
+            &bridgeInputView_),
+        "CreateVideoProcessorInputView");
 }
 
 void MFEncoder::releaseDxgiPipeline() {
@@ -970,61 +1043,6 @@ MFEncoder::Nv12ConvertResult MFEncoder::convertBgraTextureToNv12(
     // long enough for a busy GPU and short enough that a stuck bridge costs a
     // dropped frame instead of the recording.
     const DWORD acquireTimeoutMs = static_cast<DWORD>(std::max(50, 4000 / fps_));
-
-    if (!captureBridgeTexture_) {
-        D3D11_TEXTURE2D_DESC bridgeDesc{};
-        texture->GetDesc(&bridgeDesc);
-        bridgeDesc.BindFlags = D3D11_BIND_SHADER_RESOURCE | D3D11_BIND_RENDER_TARGET;
-        bridgeDesc.CPUAccessFlags = 0;
-        bridgeDesc.Usage = D3D11_USAGE_DEFAULT;
-        bridgeDesc.MiscFlags = D3D11_RESOURCE_MISC_SHARED_KEYEDMUTEX;
-        if (!succeeded(
-                captureDevice_->CreateTexture2D(&bridgeDesc, nullptr, &captureBridgeTexture_),
-                "CreateTexture2D(capture bridge)")) {
-            return Nv12ConvertResult::Failed;
-        }
-        if (!succeeded(captureBridgeTexture_.As(&captureBridgeMutex_), "Query capture bridge mutex")) {
-            return Nv12ConvertResult::Failed;
-        }
-
-        Microsoft::WRL::ComPtr<IDXGIResource> bridgeResource;
-        if (!succeeded(captureBridgeTexture_.As(&bridgeResource), "Query capture bridge resource")) {
-            return Nv12ConvertResult::Failed;
-        }
-        HANDLE sharedHandle = nullptr;
-        if (!succeeded(bridgeResource->GetSharedHandle(&sharedHandle), "Get capture bridge handle")) {
-            return Nv12ConvertResult::Failed;
-        }
-        if (!succeeded(
-                device_->OpenSharedResource(
-                    sharedHandle,
-                    __uuidof(ID3D11Texture2D),
-                    reinterpret_cast<void**>(encoderBridgeTexture_.GetAddressOf())),
-                "Open encoder bridge texture")) {
-            return Nv12ConvertResult::Failed;
-        }
-        if (!succeeded(encoderBridgeTexture_.As(&encoderBridgeMutex_), "Query encoder bridge mutex")) {
-            return Nv12ConvertResult::Failed;
-        }
-
-        // The bridge is the only input this processor ever reads, so its view
-        // is built once here rather than per frame. Views describe a resource,
-        // they do not read it, so this needs no keyed-mutex ownership.
-        D3D11_VIDEO_PROCESSOR_INPUT_VIEW_DESC inputViewDesc{};
-        inputViewDesc.FourCC = 0;
-        inputViewDesc.ViewDimension = D3D11_VPIV_DIMENSION_TEXTURE2D;
-        inputViewDesc.Texture2D.MipSlice = 0;
-        inputViewDesc.Texture2D.ArraySlice = 0;
-        if (!succeeded(
-                videoDevice_->CreateVideoProcessorInputView(
-                    encoderBridgeTexture_.Get(),
-                    videoProcessorEnumerator_.Get(),
-                    &inputViewDesc,
-                    &bridgeInputView_),
-                "CreateVideoProcessorInputView")) {
-            return Nv12ConvertResult::Failed;
-        }
-    }
 
     // Key 0 is the capture side's, key 1 the encoder's. Timing out here leaves
     // key 0 exactly where it was, so the next frame simply tries again; that
