@@ -168,6 +168,27 @@
   // libs média périphériques. Une install minimale ou un WM monté à la main n'a
   // aucune de ces garanties. C'est ce que le job `verify-linux-package` prouve
   // désormais à chaque build, en interrogeant le loader plutôt que cette liste.
+  //
+  // `xdg-desktop-portal` est la MÊME classe de bug, et le job ci-dessus ne la verra
+  // jamais : il interroge ld.so, or un portail est un service D-Bus et n'apparaît dans
+  // aucun DT_NEEDED. Toute la capture Linux passe par lui — X11 compris, le helper
+  // n'a pas d'autre chemin — et sans lui l'app affiche l'erreur zbus brute (#324).
+  //
+  // Le déclarer ne suffit PAS à lui seul, et il faut le dire clairement plutôt que
+  // laisser croire que la ligne referme le sujet : le frontend ne fait que router, et
+  // l'implémentation de ScreenCast vient d'un backend qui dépend du bureau
+  // (-gnome, -kde, -hyprland, -wlr, -gtk). On ne peut pas en choisir un ici sans se
+  // tromper sur la moitié des machines. Ce que la déclaration achète, c'est que la
+  // contrainte devient explicite au lieu d'être héritée par accident du métapaquet de
+  // bureau, exactement comme les trois sonames au-dessus. Le reste est fait à
+  // l'exécution par `portal.rs::portal_unavailable`, qui nomme le backend à installer —
+  // et c'est la seule moitié qui couvre l'AppImage, qui ne déclare rien.
+  //
+  // Nom identique sur les trois distributions, mais NON vérifié en conteneur au moment
+  // d'écrire ceci (pas de moteur disponible sur la machine). Ce qui le prouve, c'est
+  // `verify-linux-package.sh` : il installe réellement le paquet dans une image nue, et
+  // un nom qui n'existe pas y fait échouer la transaction — c'est précisément comme ça
+  // que `http-parser` a été pris sur pacman, à la première exécution du job.
   "deb": {
     "depends": [
       "libgtk-3-0",
@@ -182,7 +203,8 @@
       "mesa-vulkan-drivers",
       "libgbm1",
       "libasound2",
-      "libgomp1"
+      "libgomp1",
+      "xdg-desktop-portal"
     ]
   },
   "pacman": {
@@ -218,7 +240,8 @@
       "vulkan-swrast",
       "mesa",
       "alsa-lib",
-      "libgomp"
+      "libgomp",
+      "xdg-desktop-portal"
     ]
   },
   "rpm": {
@@ -253,7 +276,8 @@
       "mesa-vulkan-drivers",
       "mesa-libgbm",
       "alsa-lib",
-      "libgomp"
+      "libgomp",
+      "xdg-desktop-portal"
     ]
   },
   "win": {
