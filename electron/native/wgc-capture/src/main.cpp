@@ -706,6 +706,7 @@ int main(int argc, char* argv[]) {
         int64_t nextWebcamWriteDueHns = 0;
         const int64_t nominalWebcamIntervalHns =
             static_cast<int64_t>(10'000'000ULL / std::max(1, webcamCapture.fps()));
+        auto nextFrameDue = std::chrono::steady_clock::now();
 
         while (!control.stopRequested && !encodeFailed) {
             Microsoft::WRL::ComPtr<IMFSample> videoSample;
@@ -844,8 +845,25 @@ int main(int argc, char* argv[]) {
             }
 
             frameIndex += 1;
-            std::this_thread::sleep_for(frameDuration);
+            // Pace to a deadline, not `sleep_for(frameDuration)` after the work:
+            // capturing, converting and encoding a 1080p frame costs ~11 ms, so
+            // sleeping a whole period on top of it made the real period
+            // `work + 1/fps` -- 30 fps requested delivered 22.5 measured.
+            nextFrameDue += frameDuration;
+            const auto now = std::chrono::steady_clock::now();
+            if (nextFrameDue < now) {
+                // Fell behind (slow frame, or waiting on the first one). Resync
+                // to now rather than firing a burst of catch-up frames, same as
+                // the webcam cadence above.
+                nextFrameDue = now;
+            }
+            std::this_thread::sleep_until(nextFrameDue);
         }
+        std::cerr << "[pacing] frames=" << frameIndex << " elapsed_ms="
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - control.recordingStartedAt)
+                         .count()
+                  << std::endl;
     };
 
     std::thread videoWriterThread;
