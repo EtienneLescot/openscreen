@@ -159,15 +159,12 @@ jobs:
             -f arch=both \
             --repo "$GITHUB_REPOSITORY"
 
-      - name: Announce RC on Discord (#rc-testing)
-        if: success()
-        env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_RC_TESTING_CHANNEL_ID: ${{ vars.DISCORD_RC_TESTING_CHANNEL_ID }}
-          GITHUB_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
-          STABLE_TAG: ${{ steps.version.outputs.rc_tag }}
-          KIND: rc
-        run: node .github/scripts/discord-release-announce.mjs
+      # No announcement step here any more — see the note in promote.yml. This one
+      # was the worse of the two: it ran immediately after DISPATCHING build.yml,
+      # not after it finished, so #rc-testing was told to go test a build whose
+      # artifacts would not exist for another twenty minutes. announce-release.yml
+      # now fires on `release: published`, which by definition means the assets are
+      # attached, and reads `github.event.release.prerelease` to pick this channel.
 
       - name: Workflow summary
         run: |
@@ -177,5 +174,6 @@ jobs:
             echo "- RC tag: \`${{ steps.version.outputs.rc_tag }}\`"
             echo "- Stable target: \`v${{ steps.version.outputs.next }}\`"
             echo "- Build workflow triggered by the tag push will publish the GitHub pre-release."
-            echo "- Announce in #rc-testing on Discord, then run \`Promote RC to stable\` when QA is green."
+            echo "- #rc-testing is announced automatically once the build publishes the pre-release."
+            echo "- Run \`Promote RC to stable\` when QA is green."
           } >> "$GITHUB_STEP_SUMMARY"

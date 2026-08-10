@@ -127,17 +127,15 @@ jobs:
             -f arch=both \
             --repo "$GITHUB_REPOSITORY"
 
-      - name: Announce stable on Discord
-        if: success()
-        env:
-          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
-          DISCORD_RELEASE_CHANNEL_ID: ${{ vars.DISCORD_RELEASE_CHANNEL_ID }}
-          GITHUB_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
-          STABLE_TAG: ${{ steps.version.outputs.stable_tag }}
-          RC_TAG: ${{ steps.version.outputs.rc_tag }}
-          EXTRA: ${{ inputs.release_notes_extra }}
-          KIND: stable
-        run: node .github/scripts/discord-release-announce.mjs
+      # No announcement step here any more. It moved to announce-release.yml, which
+      # runs on `release: published` — the one event every release path shares,
+      # including a tag pushed straight to build.yml with no promotion at all. This
+      # step could only ever announce what THIS workflow did, and it announced it
+      # from here, before build.yml had produced a single asset.
+      #
+      # `release_notes_extra` consequently no longer reaches Discord from this
+      # workflow. Pass it to the announce dispatch instead when there is something
+      # to prepend; the automatic run posts the standard message.
 
       # Bookkeeping, not publishing: the release is already out by now. Allowed to fail
       # so a stuck PR never masks a successful release — the summary reports it and it
