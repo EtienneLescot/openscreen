@@ -1130,8 +1130,15 @@ int main(int argc, char* argv[]) {
                 // abandoned" into something actionable: it names the call the
                 // writer thread is sitting in, instead of leaving the next
                 // report to guess the way issue #252 had to.
+                // Both threads are named, because either can be the one that is
+                // stuck and each has its own slot: encode_stage is the video
+                // writer, audio_stage the mixer. A report showing audio_stage
+                // parked on write-audio while encode_stage sits at a bridge
+                // call says the two are fighting over writerMutex_, which no
+                // single-slot breadcrumb could ever have shown.
                 std::cerr << "[stop-timing] step=" << step << " elapsed_ms=" << stopElapsedMs()
-                          << " phase=abandoned encode_stage=" << encoder.encodeStage() << std::endl;
+                          << " phase=abandoned encode_stage=" << encoder.encodeStage()
+                          << " audio_stage=" << encoder.audioStage() << std::endl;
                 std::cout << "{\"event\":\"stop-timeout\",\"schemaVersion\":2,\"step\":\"" << step
                           << "\"}" << std::endl;
                 std::cout.flush();

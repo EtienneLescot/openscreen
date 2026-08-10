@@ -366,6 +366,10 @@ const char* MFEncoder::encodeStage() const {
     return encodeStage_.load();
 }
 
+const char* MFEncoder::audioStage() const {
+    return audioStage_.load();
+}
+
 int64_t MFEncoder::nextSampleTime(int64_t timestampHns, int64_t sampleDuration) {
     // On `timestampMutex_` and not `writerMutex_`, deliberately. Every caller
     // of this runs under main.cpp's frame lock, and `writerMutex_` is held
@@ -1365,10 +1369,19 @@ bool MFEncoder::writeAudio(const BYTE* data, DWORD byteCount, int64_t timestampH
     // Named too, for the same reason the video write is: this is a synchronous
     // encode holding writerMutex_, so it is a place the process can be stuck,
     // and a watchdog report that only ever names video writes cannot say so.
-    encodeStage_ = "write-audio";
+    //
+    // Its own slot, not encodeStage_. This runs on the audio-mixer thread,
+    // which emits roughly every 10 ms, while most of the video thread's stages
+    // (the whole DXGI bridge sequence) are set outside writerMutex_. Sharing
+    // one slot meant a video thread wedged in bridge-copy had its breadcrumb
+    // overwritten with "idle" within milliseconds, so the watchdog reported the
+    // absence of a stage instead of the call that hung -- the exact opposite of
+    // what the breadcrumb is for, on the exact configuration (#252 with system
+    // audio) it was added to diagnose.
+    audioStage_ = "write-audio";
     const bool written =
         succeeded(sinkWriter_->WriteSample(audioStreamIndex_, sample.Get()), "WriteSample(audio)");
-    encodeStage_ = "idle";
+    audioStage_ = "idle";
     return written;
 }
 
