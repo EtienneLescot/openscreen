@@ -756,12 +756,15 @@ jobs:
           # handled a skipped stable, and it does not run at all for an rc.1.
           if ! git rev-parse -q --verify "refs/tags/${NOTES_START_TAG}" >/dev/null; then
             # The nearest tag reachable from the release commit's parent, which
-            # is what "since the last release" meant in the first place. Empty
-            # only when no tag is reachable at all (a first release), so fall
-            # back to the root commit to keep the range valid either way.
-            FALLBACK="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
-            NOTES_START_TAG="${FALLBACK:-$(git rev-list --max-parents=0 HEAD | tail -1)}"
-            echo "Previous-release tag did not exist; starting notes from ${NOTES_START_TAG}"
+            # is what "since the last release" meant in the first place. Left
+            # EMPTY when no tag is reachable at all, rather than filled with the
+            # root commit: the stable path hands this to `gh release create
+            # --notes-start-tag`, which is the API's previous_tag_name and takes
+            # a tag NAME -- a commit SHA there is not a lenient fallback, it is
+            # an invalid argument. Each consumer below decides what "no previous
+            # release" means for it.
+            NOTES_START_TAG="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+            echo "Previous-release tag did not exist; using ${NOTES_START_TAG:-<none>}"
           fi
           echo "Computed notes_start_tag=${NOTES_START_TAG} for tag=${TAG}"
 
@@ -820,14 +823,26 @@ jobs:
               # the re-cut was for. The commit range is the actual diff and can't lie.
               # Stable releases keep --generate-notes below: they're the public-facing
               # ones and want the PR links and the New Contributors section.
+              # With no previous tag at all, the range is the whole history and
+              # there is nothing to compare against, so say so rather than
+              # emitting "since " with a blank where a tag should be.
+              if [[ -n "$NOTES_START_TAG" ]]; then
+                RC_RANGE="${NOTES_START_TAG}..${TAG}"
+                RC_HEADING="## Changes since ${NOTES_START_TAG}"
+                RC_LINK="**Full Changelog**: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${NOTES_START_TAG}...${TAG}"
+              else
+                RC_RANGE="$TAG"
+                RC_HEADING="## Changes"
+                RC_LINK="**Full Changelog**: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/commits/${TAG}"
+              fi
               {
-                echo "## Changes since ${NOTES_START_TAG}"
+                echo "$RC_HEADING"
                 echo
                 git log --no-merges --reverse --pretty='- %s' \
                   --invert-grep --grep='^chore(release): bump to' \
-                  "${NOTES_START_TAG}..${TAG}"
+                  "$RC_RANGE"
                 echo
-                echo "**Full Changelog**: ${GITHUB_SERVER_URL}/${GITHUB_REPOSITORY}/compare/${NOTES_START_TAG}...${TAG}"
+                echo "$RC_LINK"
               } > "${RUNNER_TEMP}/rc-notes.md"
               cat "${RUNNER_TEMP}/rc-notes.md"
               NOTES_ARGS=(--notes-file "${RUNNER_TEMP}/rc-notes.md")
@@ -837,7 +852,17 @@ jobs:
               # prior release by date) doesn't work for this fork because the v1.4.0
               # release in the fork was re-published after v1.5.0, which makes GitHub
               # pick v1.4.0 as the "previous" for any v1.5.x release.
-              NOTES_ARGS=(--generate-notes --notes-start-tag "$NOTES_START_TAG")
+              #
+              # Omitted entirely when there is no previous tag: this maps to the
+              # API's previous_tag_name, which takes a tag NAME. Passing an empty
+              # string or a commit SHA is an invalid argument, not a graceful
+              # degradation. Without it GitHub falls back to its own choice of
+              # previous release, which is exactly right when there isn't one.
+              if [[ -n "$NOTES_START_TAG" ]]; then
+                NOTES_ARGS=(--generate-notes --notes-start-tag "$NOTES_START_TAG")
+              else
+                NOTES_ARGS=(--generate-notes)
+              fi
             fi
             # shellcheck disable=SC2086
             gh release create "$TAG" "${FILES[@]}" \
