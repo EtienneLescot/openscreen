@@ -127,7 +127,13 @@ The container is the point, not an implementation detail — the runner has more
 
 `rpm` and `pacman` are verified too, and they are the ones with no other safety net: nobody installs them often enough to report a gap quickly, and the package names genuinely differ. `libgomp.so.1` is `libgomp1` on Debian and `libgomp` on both Fedora and Arch, where it was split out of `gcc-libs` — a guess would have been wrong.
 
-The AppImage is deliberately not covered. It has no dependency mechanism, so there is no declaration to verify against and every system soname is missing by construction. It stays exposed, which is what `d3d_linux::diagnose` naming the Mesa package is for.
+The AppImage is deliberately not covered by this check. It has no dependency mechanism, so there is no declaration to verify against and every system soname is missing by construction.
+
+It is instead handled at the source, which is the layer to prefer anyway. Of the three sonames 1.9.2 chased, exactly one may be bundled, and `build-whisper-stt.sh` now does: `libgomp.so.1` is a self-contained runtime, it is absent from [the AppImage project's excludelist](https://github.com/AppImage/pkg2appimage/blob/master/excludelist), and the STT binaries already carry `RUNPATH=$ORIGIN:$ORIGIN/bin`, so a copy beside them is found before the system one — no `patchelf`, no `AppRun` wrapper. The other two are on that excludelist and say why: `libgbm.so.1` is "part of mesa" and speaks to the host's DRM stack, `libasound.so.2` loads the host's ALSA plugins and configuration. A bundled copy of either is worse than none.
+
+**Which script does the copying is the interesting part.** It belongs to the build, not to packaging, because provenance is what makes the bundled copy correct: `build-whisper-stt.yml` pins its Linux leg to `ubuntu-22.04`, the same floor `before-pack.cjs` enforces, so the library that ships comes from the same machine and the same glibc as the binaries that load it, and it travels inside the whisper artifact to every consumer. Copying it at packaging time instead would take it from whoever ran the build — and a 24.04 desktop's `libgomp` needs `GLIBC_2.38`, which the symbol-version guard then rejects, leaving a developer on a current distro unable to package at all. `stage-whisper-stt.sh` only asserts it arrived, and says to re-run the whisper workflow if it did not.
+
+What remains host-supplied for the AppImage is the GTK/GLib/NSS stack, which no AppImage bundles — theme engines, GIO modules and pixbuf loaders all resolve against the host. `libvulkan.so.1` is already bundled at the AppImage root by electron-builder itself. For the Vulkan *driver*, which cannot be bundled, `d3d_linux::diagnose` names the Mesa package instead.
 
 ### Testing without the build machine's advantages
 
