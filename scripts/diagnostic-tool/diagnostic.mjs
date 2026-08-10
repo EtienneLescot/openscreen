@@ -176,8 +176,11 @@ function run(opts) {
 	const helper = findHelper();
 	console.log(`[diag] helper: ${helper.path}`);
 	console.log(`[diag] platform: ${process.platform}-${process.arch}`);
-	const audioSummary = [opts.systemAudio && "system", opts.mic && "mic"].filter(Boolean).join("+") || "none";
-	console.log(`[diag] duration: ${opts.duration}ms, source: ${opts.source}, audio: ${audioSummary}`);
+	const audioSummary =
+		[opts.systemAudio && "system", opts.mic && "mic"].filter(Boolean).join("+") || "none";
+	console.log(
+		`[diag] duration: ${opts.duration}ms, source: ${opts.source}, audio: ${audioSummary}`,
+	);
 
 	const config = buildConfig(opts);
 	config.outputs.screenPath = config.outputPath;
