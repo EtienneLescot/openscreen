@@ -49,6 +49,20 @@ distributed by their own registries, not redistributed inside our binaries.
 - The speech model (`ggml-*.bin`) is **not** bundled — it is downloaded into the
   user's data directory on first use by `electron/stt/modelManager.ts`.
 
+## Microsoft OpenMP runtime — `vcomp140.dll` (Windows only)
+
+- **Component**: `resources/electron/native/bin/win32-x64/vcomp140.dll`.
+- **License**: redistributable under the Microsoft Visual C++ Redistributable
+  terms accompanying Visual Studio; the copy shipped is taken from the
+  `VC\Redist\MSVC\<version>\x64\Microsoft.VC<nnn>.OpenMP\` directory of the
+  Visual Studio installation that builds the release, never from `System32`.
+- **Why it ships**: the ggml backends above are compiled with OpenMP and import
+  it. It is **not** part of Windows, so without it `whisper-stt-server` dies in
+  the loader before `main()` on any machine that has no Visual C++
+  Redistributable, and transcription and captions fail with no usable error.
+  Staged by `scripts/stage-vcomp-runtime.mjs`; `scripts/before-pack.cjs` refuses
+  to package if it is missing while anything still imports it.
+
 ## PipeWire — headers (Linux only)
 
 - **Components**: header sources under

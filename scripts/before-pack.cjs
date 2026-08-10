@@ -247,8 +247,15 @@ const WIN_REQUIRED = [
  *
  * The `api-ms-win-crt-*` api-sets are deliberately absent: that is the UCRT, which IS
  * part of Windows 10 and later. These are not, and no machine is obliged to have them.
+ *
+ * `vcomp` and `vcamp` were missing from the first version of this list, and the gap was
+ * not academic: ggml-base.dll and ggml-cpu.dll are built with OpenMP and import
+ * vcomp140.dll, so the shipped whisper payload still needed the redistributable after
+ * 1.9.1 was supposed to have ended that. The guard reported the payload clean because
+ * `vcomp` starts with none of msvcp/vcruntime/concrt. Enumerate the family, not the
+ * members that happened to bite.
  */
-const VC_REDIST_DLL = /^(msvcp|vcruntime|concrt)\d+/i;
+const VC_REDIST_DLL = /^(msvcp|vcruntime|concrt|vcomp|vcamp|mfc)\d+/i;
 
 /**
  * The DLL names a PE binary imports — just enough of the format to walk the import
@@ -336,8 +343,18 @@ function importedDlls(file) {
  * (crates/.cargo/config.toml).
  */
 function checkWinNoRedistDependency(dir) {
-	const scanned = fs
-		.readdirSync(dir)
+	// Regular files only, and the same list serves both questions below. A directory
+	// answers `readdirSync` by name exactly as a file does, and this directory really
+	// does hold subdirectories (the vendored ffmpeg SDK), so the distinction is not
+	// hypothetical. Without it one named `something.dll` is opened as a binary and the
+	// hook dies on a raw `EISDIR` — the build stops, which is right, on a message that
+	// names nothing, which is not.
+	const files = fs
+		.readdirSync(dir, { withFileTypes: true })
+		.filter((entry) => entry.isFile())
+		.map((entry) => entry.name);
+
+	const scanned = files
 		.filter((name) => /\.(exe|dll|node)$/i.test(name))
 		.map((name) => ({ name, imports: importedDlls(path.join(dir, name)) }));
 
@@ -356,8 +373,18 @@ function checkWinNoRedistDependency(dir) {
 		);
 	}
 
+	// The property that matters is not "imports a redistributable DLL", it is "imports a
+	// redistributable DLL that will not be there". A copy sitting in this directory WILL
+	// be there: it ships, and the loader searches an executable's own directory and, for
+	// a .node, the module's — the same colocation that carries the ffmpeg DLLs. Shipping
+	// vcomp140.dll beside the ggml libraries is therefore a fix, not an exception, and
+	// the check has to be able to say so or it would forbid the remedy it asks for.
+	const shipped = new Set(files.map((name) => name.toLowerCase()));
 	const offenders = scanned
-		.map((entry) => ({ name: entry.name, bad: entry.imports.filter((d) => VC_REDIST_DLL.test(d)) }))
+		.map((entry) => ({
+			name: entry.name,
+			bad: entry.imports.filter((d) => VC_REDIST_DLL.test(d) && !shipped.has(d.toLowerCase())),
+		}))
 		.filter((entry) => entry.bad.length > 0);
 	if (offenders.length === 0) {
 		return;
@@ -373,7 +400,9 @@ function checkWinNoRedistDependency(dir) {
 			"Build against the static CRT instead:\n" +
 			"  - CMake helpers: CMAKE_MSVC_RUNTIME_LIBRARY MultiThreaded (electron/native/wgc-capture)\n" +
 			"  - Rust addon:    -C target-feature=+crt-static (crates/.cargo/config.toml)\n\n" +
-			"For a third-party binary that cannot be rebuilt, ship the DLLs it needs beside it.",
+			"For a prebuilt binary that is not ours to recompile, ship the DLL it needs into this\n" +
+			"same directory and the check passes — that is what scripts/stage-vcomp-runtime.mjs\n" +
+			"does for the OpenMP runtime the whisper/ggml libraries import.",
 	);
 }
 
