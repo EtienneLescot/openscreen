@@ -191,11 +191,20 @@
     // Les trois derniers sont les équivalents Arch des sonames décrits sur `deb`.
     // Noms relevés dans un conteneur archlinux, pas devinés : `libgomp.so.1`
     // appartient à `libgomp` (core), PAS à `gcc-libs` — il en a été sorti.
+    //
+    // `http-parser` A ÉTÉ RETIRÉ, et c'est la seule entrée de ce fichier qui s'écarte
+    // volontairement du défaut d'electron-builder. Arch l'a supprimé de ses dépôts
+    // (Node est passé à llhttp il y a des années) et RIEN ne le fournit plus, donc
+    // pacman refusait la transaction entière : « unable to satisfy dependency
+    // 'http-parser' ». Le paquet Arch de la 1.9.1 est intégralement non installable,
+    // pour cette seule ligne. Aucun des 49 sonames du payload ne le réclame.
+    //
+    // `libappindicator-gtk3` est dans le même état de péremption mais reste correct :
+    // `libappindicator` le déclare en `Provides` ET en `Replaces`, donc il résout.
     "depends": [
       "c-ares",
       "ffmpeg",
       "gtk3",
-      "http-parser",
       "libevent",
       "libvpx",
       "libxslt",
