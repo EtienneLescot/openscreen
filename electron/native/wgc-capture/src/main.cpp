@@ -195,6 +195,94 @@ std::string jsonEscape(const std::string& value) {
     return result;
 }
 
+// Reports which GPU the capture device landed on, and which one actually drives
+// the monitor being captured.
+//
+// WgcSession creates its device with D3D11CreateDevice(nullptr, ...) -- the
+// default adapter -- and nothing anywhere asks whether that is the adapter that
+// owns the target display. On a single-GPU machine the question does not arise.
+// On a hybrid laptop, a machine with a discrete card, or one with virtual
+// display adapters, the two can differ, and then every frame WGC delivers has
+// crossed an adapter boundary before the caller ever touches it. That crossing
+// is driver work on both GPUs, and it is the most plausible remaining candidate
+// for the stop hangs in #252 / #327, which nobody has reproduced on hardware we
+// control.
+//
+// This does not change behaviour, and deliberately so: it turns the next bug
+// report into evidence instead of another round of guessing. Failures here are
+// silent -- a diagnostic that can abort a recording is worse than no diagnostic.
+void reportCaptureAdapters(ID3D11Device* device, HMONITOR targetMonitor) {
+    if (!device) {
+        return;
+    }
+
+    Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&dxgiDevice)))) {
+        return;
+    }
+    Microsoft::WRL::ComPtr<IDXGIAdapter> deviceAdapter;
+    if (FAILED(dxgiDevice->GetAdapter(&deviceAdapter))) {
+        return;
+    }
+    DXGI_ADAPTER_DESC deviceDesc{};
+    if (FAILED(deviceAdapter->GetDesc(&deviceDesc))) {
+        return;
+    }
+
+    // The device's own adapter knows its factory, so there is no need to create
+    // one (and no second code path to keep alive if that ever needs a flag).
+    Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+    if (FAILED(deviceAdapter->GetParent(IID_PPV_ARGS(&factory)))) {
+        return;
+    }
+
+    std::wstring monitorAdapterName;
+    bool monitorAdapterFound = false;
+    bool sameAdapter = false;
+    for (UINT adapterIndex = 0;; ++adapterIndex) {
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+        if (factory->EnumAdapters1(adapterIndex, &adapter) == DXGI_ERROR_NOT_FOUND) {
+            break;
+        }
+        for (UINT outputIndex = 0;; ++outputIndex) {
+            Microsoft::WRL::ComPtr<IDXGIOutput> output;
+            if (adapter->EnumOutputs(outputIndex, &output) == DXGI_ERROR_NOT_FOUND) {
+                break;
+            }
+            DXGI_OUTPUT_DESC outputDesc{};
+            if (FAILED(output->GetDesc(&outputDesc)) || outputDesc.Monitor != targetMonitor) {
+                continue;
+            }
+            DXGI_ADAPTER_DESC1 adapterDesc{};
+            if (FAILED(adapter->GetDesc1(&adapterDesc))) {
+                continue;
+            }
+            monitorAdapterName = adapterDesc.Description;
+            monitorAdapterFound = true;
+            // Compared by LUID rather than by description, because two adapters
+            // of the same model report the same string.
+            sameAdapter = adapterDesc.AdapterLuid.LowPart == deviceDesc.AdapterLuid.LowPart &&
+                adapterDesc.AdapterLuid.HighPart == deviceDesc.AdapterLuid.HighPart;
+        }
+        if (monitorAdapterFound) {
+            break;
+        }
+    }
+
+    std::cout << "{\"event\":\"capture-adapter\",\"schemaVersion\":2,\"deviceAdapter\":\""
+              << jsonEscape(wideToUtf8(deviceDesc.Description)) << "\",\"monitorAdapter\":";
+    if (monitorAdapterFound) {
+        std::cout << "\"" << jsonEscape(wideToUtf8(monitorAdapterName)) << "\",\"sameAdapter\":"
+                  << (sameAdapter ? "true" : "false");
+    } else {
+        // No output claims this monitor: it is driven by something DXGI does not
+        // enumerate, which on the machines in #252 means a virtual display
+        // adapter. Worth seeing in a report in its own right.
+        std::cout << "null,\"sameAdapter\":null";
+    }
+    std::cout << "}" << std::endl;
+}
+
 bool hasVisibleBgraContent(const std::vector<BYTE>& frame) {
     if (frame.size() < 4) {
         return false;
@@ -489,6 +577,7 @@ int main(int argc, char* argv[]) {
     std::cout << "{\"event\":\"ready\",\"schemaVersion\":2}" << std::endl;
 
     WgcSession session;
+    HMONITOR capturedMonitor = nullptr;
     if (config.sourceType == "display") {
         HMONITOR monitor = findMonitorForCapture(
             config.displayId,
@@ -497,6 +586,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "ERROR: Could not resolve monitor" << std::endl;
             return 1;
         }
+        capturedMonitor = monitor;
         if (!session.initialize(monitor, config.fps, config.captureCursor)) {
             std::cerr << "ERROR: Failed to initialize WGC display session" << std::endl;
             return 1;
@@ -507,6 +597,9 @@ int main(int argc, char* argv[]) {
             std::cerr << "ERROR: Native window capture requires a valid HWND" << std::endl;
             return 1;
         }
+        // A window is captured by whichever display it currently sits on, which
+        // is the adapter that matters for the same reason a monitor's does.
+        capturedMonitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
         if (!session.initialize(window, config.fps, config.captureCursor)) {
             std::cerr << "ERROR: Failed to initialize WGC window session" << std::endl;
             return 1;
@@ -515,6 +608,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "ERROR: Unsupported native capture source type: " << config.sourceType << std::endl;
         return 1;
     }
+
+    reportCaptureAdapters(session.device(), capturedMonitor);
 
     // WGC owns the captured texture size. Encoding must use that exact size
     // until a dedicated GPU scaling pass is introduced; CopyResource requires

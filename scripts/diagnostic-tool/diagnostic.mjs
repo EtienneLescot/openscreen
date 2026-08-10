@@ -43,6 +43,8 @@ function parseArgs(argv) {
 		duration: 10_000,
 		output: null,
 		source: "display",
+		systemAudio: false,
+		mic: false,
 		help: false,
 	};
 	const requireNumber = (raw, flag) => {
@@ -68,6 +70,10 @@ function parseArgs(argv) {
 			opts.source = value;
 		} else if (arg === "--window") {
 			opts.source = "window";
+		} else if (arg === "--system-audio") {
+			opts.systemAudio = true;
+		} else if (arg === "--mic") {
+			opts.mic = true;
 		} else if (arg === "--help" || arg === "-h") {
 			opts.help = true;
 		} else if (arg.startsWith("--")) {
@@ -88,7 +94,14 @@ Flags:
   -o, --output  <path>       Output JSON path (default: ./openscreen-diagnostic-<timestamp>.json)
   --source <display|window>  Capture source type (default: display)
   --window                   Shortcut for --source window
+  --system-audio             Also capture system (loopback) audio
+  --mic                      Also capture the default microphone
   -h, --help                 Show this help
+
+The audio flags are off by default, which is why a plain run cannot reproduce a
+hang that only happens with audio: an audio write and a video write contend for
+the same sink-writer lock, and with no audio there is nothing to contend with.
+If a recording hangs in the app but not here, re-run with --system-audio.
 `);
 }
 
@@ -135,8 +148,8 @@ function buildConfig(opts) {
 		displayW: 1920,
 		displayH: 1080,
 		hasDisplayBounds: true,
-		captureSystemAudio: false,
-		captureMic: false,
+		captureSystemAudio: opts.systemAudio,
+		captureMic: opts.mic,
 		captureCursor: false,
 		microphoneDeviceId: "default",
 		microphoneDeviceName: "",
@@ -163,7 +176,8 @@ function run(opts) {
 	const helper = findHelper();
 	console.log(`[diag] helper: ${helper.path}`);
 	console.log(`[diag] platform: ${process.platform}-${process.arch}`);
-	console.log(`[diag] duration: ${opts.duration}ms, source: ${opts.source}`);
+	const audioSummary = [opts.systemAudio && "system", opts.mic && "mic"].filter(Boolean).join("+") || "none";
+	console.log(`[diag] duration: ${opts.duration}ms, source: ${opts.source}, audio: ${audioSummary}`);
 
 	const config = buildConfig(opts);
 	config.outputs.screenPath = config.outputPath;

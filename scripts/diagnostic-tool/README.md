@@ -28,7 +28,14 @@ Flags:
 - `-d, --duration <seconds>` recording length before sending stop (default 10)
 - `-o, --output <path>` output JSON path (default `./openscreen-diagnostic-<timestamp>.json`)
 - `--window` capture a window instead of the full display (default: display)
+- `--system-audio` also capture system (loopback) audio
+- `--mic` also capture the default microphone
 - `-h, --help` show help
+
+The audio flags matter for reproducing a stop hang. Audio and video writes take
+the same sink-writer lock, so a run without audio has nothing to contend with
+and can pass on a machine where the app hangs every time. If you are reporting a
+hang that happens in the app but not here, re-run with `--system-audio`.
 
 Or use the bundled launcher:
 - Windows: `diagnostic.bat`
