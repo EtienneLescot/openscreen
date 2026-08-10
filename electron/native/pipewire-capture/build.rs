@@ -63,9 +63,12 @@ fn build_pipewire_shim(root: &Path) {
 /// `/usr/include/limits.h: 'limits.h' file not found`, because glibc's copy
 /// `#include_next`s the compiler's and there is none. gcc's copies are
 /// interchangeable for this purpose, so point clang at those instead of making
-/// every contributor install a second toolchain. Mirrors `bindgenClangArgs()` in
-/// scripts/build-linux-compositor-addon.mjs, but lives here so that a bare
-/// `cargo build` in this directory works too.
+/// every contributor install a second toolchain.
+///
+/// Twin of `freestanding_header_args()` in crates/compositor/build.rs. Both live in
+/// build.rs rather than in the npm build scripts so that a bare `cargo build` works
+/// too — scripts/build-linux-compositor-addon.mjs used to carry a copy of this, and
+/// `cargo check -p openscreen-compositor` stayed broken for as long as it did.
 fn freestanding_header_args() -> Vec<String> {
     if let Ok(extra) = std::env::var("BINDGEN_EXTRA_CLANG_ARGS") {
         // Already configured by the caller; bindgen picks that up on its own.
@@ -73,11 +76,23 @@ fn freestanding_header_args() -> Vec<String> {
             return Vec::new();
         }
     }
-    let gcc_root = Path::new("/usr/lib/gcc/x86_64-linux-gnu");
-    let Ok(entries) = std::fs::read_dir(gcc_root) else {
+    // The vendor triplet is NOT hardcoded. It is `x86_64-linux-gnu` on Debian/Ubuntu
+    // amd64 but `aarch64-linux-gnu` on arm64 — hardcoding the former is why bindgen
+    // died with "'limits.h' file not found" there — and neither on Arch
+    // (`x86_64-pc-linux-gnu`). Matching on the target arch prefix covers all of them,
+    // and on a box with a cross-gcc installed it still refuses the OTHER
+    // architecture's headers, whose type widths would be wrong.
+    let arch = std::env::var("CARGO_CFG_TARGET_ARCH")
+        .unwrap_or_else(|_| std::env::consts::ARCH.to_string());
+    let prefix = format!("{arch}-");
+    let Ok(vendors) = std::fs::read_dir("/usr/lib/gcc") else {
         return Vec::new();
     };
-    let mut dirs: Vec<PathBuf> = entries
+    let mut dirs: Vec<PathBuf> = vendors
+        .filter_map(|entry| entry.ok())
+        .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+        .filter_map(|vendor| std::fs::read_dir(vendor.path()).ok())
+        .flatten()
         .filter_map(|entry| entry.ok())
         .map(|entry| entry.path().join("include"))
         .filter(|dir| dir.join("limits.h").is_file() && dir.join("stddef.h").is_file())
@@ -115,7 +130,7 @@ fn link_ffmpeg(root: &Path) {
     for name in ["avcodec", "avformat", "avutil", "swscale", "swresample"] {
         println!("cargo:rustc-link-lib={name}");
     }
-    // `$ORIGIN/ffmpeg`, NOT `$ORIGIN`. The helper is staged into
+    // A SUBDIRECTORY, NOT `$ORIGIN`. The helper is staged into
     // electron/native/bin/linux-x64/, and that directory ALREADY contains
     // libavcodec.so.62 and friends — the copies whose every symbol was renamed
     // to `osff_*` by scripts/build-linux-compositor-addon.mjs so the compositor
@@ -125,12 +140,19 @@ fn link_ffmpeg(root: &Path) {
     // renaming trick is what makes the ADDON work and what would break the
     // HELPER, so the two sets of libraries must not share a directory.
     //
+    // `helper-ffmpeg` and not `ffmpeg`, which is what this used to be: that name
+    // is also where fetch-ffmpeg.mjs vendors the static ffmpeg EXECUTABLE, and
+    // where audioPeaks.ts looks for it. Three artifacts, one path — whichever
+    // ran last won, and the loser failed with EEXIST from mkdir or EACCES from
+    // spawn, neither of which names the real problem. A directory called
+    // `ffmpeg` full of shared objects is also simply a lie about its contents.
+    //
     // The absolute vendored path comes second so `cargo run` works straight out
     // of the repo. `--disable-new-dtags` is what makes these RUNPATH entries
     // apply to the transitive ffmpeg libs too; with the default DT_RUNPATH they
     // would not.
     println!("cargo:rustc-link-arg=-Wl,--disable-new-dtags");
-    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/ffmpeg");
+    println!("cargo:rustc-link-arg=-Wl,-rpath,$ORIGIN/helper-ffmpeg");
     println!("cargo:rustc-link-arg=-Wl,-rpath,{}", lib.display());
 
     let mut builder = bindgen::Builder::default();

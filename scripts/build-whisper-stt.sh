@@ -261,6 +261,47 @@ libparakeet*.so|libparakeet*.so.*|\
     relocate_macos_rpaths "${OUT_DIR}"
   fi
 
+  # Linux: stage GCC's OpenMP runtime beside what links it.
+  #
+  # Every binary staged above links libgomp.so.1, and nothing shipped it. The
+  # deb/rpm/pacman declare it since 1.9.2, but the AppImage has no dependency
+  # mechanism at all, so on a machine without it the whole STT stack dies in
+  # ld.so before main() and transcription shows an end user a developer error.
+  #
+  # It belongs HERE rather than in stage-whisper-stt.sh, and that distinction is
+  # the whole point: this script runs on the machine that COMPILES these
+  # binaries, and build-whisper-stt.yml pins that to ubuntu-22.04, matching the
+  # floor before-pack.cjs enforces. Copying it at packaging time instead took it
+  # from whoever happened to run the build — and a 24.04 desktop's libgomp needs
+  # GLIBC_2.38, so a developer there could no longer package at all. Staged here
+  # it travels inside the whisper artifact, so every consumer gets the 22.04 copy
+  # whatever their own distro is.
+  #
+  # libgomp is the only system library this stack may bundle. The AppImage
+  # project's excludelist names the two it must not — libgbm.so.1 is "part of
+  # mesa" and speaks to the host's DRM stack, libasound.so.2 loads the host's
+  # ALSA plugins — and libgomp, a self-contained runtime, is absent from it.
+  #
+  # Resolved through the binary rather than a hardcoded /usr/lib path so arm64
+  # needs no second case, and copied under its soname because that is the
+  # DT_NEEDED the loader looks for; the file on disk is libgomp.so.1.0.0. No
+  # patchelf is needed: these binaries already carry RUNPATH=$ORIGIN.
+  if [[ "${OS_ARCH}" == linux-* ]]; then
+    local gomp
+    gomp="$(ldd "${OUT_DIR}/${out_bin_name}" 2>/dev/null | awk '/libgomp\.so\.1/ {print $3; exit}')"
+    if [[ -z "${gomp}" || ! -f "${gomp}" ]]; then
+      echo "FATAL: libgomp.so.1 is not resolvable for ${out_bin_name}." >&2
+      echo "       Install it (libgomp1 on Debian/Ubuntu, libgomp on Fedora/Arch)." >&2
+      echo "       Without it the AppImage ships an STT stack that cannot load," >&2
+      echo "       which is silent until a user tries to transcribe." >&2
+      exit 1
+    fi
+    # Already ours: ldd resolved it through $ORIGIN on a re-run of this script.
+    if [[ "$(cd "$(dirname "${gomp}")" && pwd)" != "$(cd "${OUT_DIR}" && pwd)" ]]; then
+      cp -v "${gomp}" "${OUT_DIR}/libgomp.so.1"
+    fi
+  fi
+
   echo "[whisper-stt] built ${variant_name} -> ${OUT_DIR}/${out_bin_name}"
   ls -la "${OUT_DIR}"
 }

@@ -63,6 +63,12 @@ if (cargoVersion.status !== 0) {
 	process.exit(1);
 }
 
+// No BINDGEN_EXTRA_CLANG_ARGS wrangling here on purpose. bindgen needs clang's
+// freestanding headers (limits.h, stddef.h) and Ubuntu ships libclang.so.1 with
+// no resource dir, but the crate's own build.rs already falls back to gcc's
+// copies — see freestanding_header_args() there. Doing it here too would only
+// cover the build that goes through this script and leave a bare `cargo build`
+// broken, which is exactly the split build.rs exists to avoid.
 const build = spawnSync("cargo", ["build", "--release", "--manifest-path", manifest], {
 	cwd: crateDir,
 	stdio: "inherit",
@@ -97,7 +103,7 @@ for (const dir of [outDir, devDir]) {
 }
 
 /**
- * Copies the vendored ffmpeg shared libraries into `<dir>/ffmpeg/`.
+ * Copies the vendored ffmpeg shared libraries into `<dir>/helper-ffmpeg/`.
  *
  * THE SUBDIRECTORY IS THE WHOLE POINT. `electron/native/bin/linux-x64/` already
  * holds libavcodec.so.62 and friends — but those are the copies whose every
@@ -107,11 +113,20 @@ for (const dir of [outDir, devDir]) {
  * different consumers, and only one of them can win a directory.
  *
  * The addon needs the renamed set next to itself; the helper needs the ordinary
- * set. So the helper's RUNPATH is `$ORIGIN/ffmpeg` (see build.rs) and its
+ * set. So the helper's RUNPATH is `$ORIGIN/helper-ffmpeg` (see build.rs) and its
  * libraries live here. Putting them side by side produced exactly one symptom,
  * which the probe below catches:
  *
  *   undefined symbol: avcodec_send_frame, version LIBAVCODEC_62
+ *
+ * AND THE NAME IS PART OF IT. This was `<dir>/ffmpeg/` until a third claimant
+ * turned up on the same path: fetch-ffmpeg.mjs vendors the static ffmpeg
+ * EXECUTABLE to `<dir>/ffmpeg` (PINNED["linux-x64"].exe), and audioPeaks.ts
+ * resolves that same path expecting a binary. Whoever ran last won, and the
+ * loser failed obliquely — `EEXIST: mkdir .../ffmpeg` here, or `spawn …
+ * EACCES` from audioPeaks when it found a directory where a binary belonged.
+ * Two artifacts of different shapes cannot share a name; this one moved because
+ * a bare `ffmpeg` means the executable to every other reader of this tree.
  */
 function stageFfmpeg(dir) {
 	const source = path.join(root, "crates", "thirdparty", "ffmpeg-linux64-lgpl-shared", "lib");
@@ -123,7 +138,7 @@ function stageFfmpeg(dir) {
 		return;
 	}
 
-	const target = path.join(dir, "ffmpeg");
+	const target = path.join(dir, "helper-ffmpeg");
 	fs.mkdirSync(target, { recursive: true });
 	// Only the sonames the helper actually links, and only the real files —
 	// the tree also holds unversioned `.so` symlinks that the loader never

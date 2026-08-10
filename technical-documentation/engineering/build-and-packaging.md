@@ -12,7 +12,7 @@ OpenScreen builds its renderer, Electron main process, preload bridge, native he
 | `npm run build:mac` | Builds the ScreenCaptureKit and cursor helpers, checks TypeScript, runs Vite, and packages the macOS target. |
 | `npm run build:win` | Builds WGC/cursor helpers and the D3D11 compositor addon, fetches FFmpeg, checks TypeScript, runs Vite, and packages the Windows NSIS target without npm rebuild. |
 | `npm run build:win:store` | Performs the Windows native and renderer build, then asks electron-builder for the configured AppX Store package. |
-| `npm run build:linux` | Checks TypeScript, runs Vite, then packages AppImage, Debian, and pacman artifacts without npm rebuild. |
+| `npm run build:linux` | Checks TypeScript, runs Vite, then packages AppImage, Debian, pacman, and RPM artifacts without npm rebuild. Its explicit `--linux` target list overrides `linux.target` in `electron-builder.json5`, so a target added to the config alone is never built. |
 | `npm run build:native:mac` | Uses SwiftPM to build requested single-architecture ScreenCaptureKit and macOS cursor helpers and stages them under `electron/native/bin/darwin-*`. |
 | `npm run build:native:win` | Uses CMake/Ninja in an MSVC environment to build WGC capture and cursor-sampler executables and stage x64 binaries. |
 | `npm run build:native:compositor` | Uses Cargo/MSVC and the pinned shared FFmpeg SDK to build `compositor_view.node`. |
@@ -63,6 +63,98 @@ Node loads `.node` files with `LOAD_WITH_ALTERED_SEARCH_PATH`, so the addon's ow
 This shipped: the 1.9.0 Store build loaded no compositor at all, so the editor opened with a permanently blank preview while audio kept playing — audio comes from the renderer, every frame comes from the addon. It read as an application bug rather than a packaging one, because every file was present in the package and the NSIS build of the same commit was fine. `scripts/before-pack.cjs` now refuses to package unless the addon and at least `avcodec`/`avformat`/`avutil` are in the same directory, on Windows as it already did on macOS.
 
 `electron/native/bin/`, local native build directories, the compositor build output, models, and caches are gitignored. Rebuilding from a source checkout therefore requires the complete platform toolchain and third-party SDKs; running the generic `npm run build` alone does not manufacture missing native artifacts. The Windows compositor's D3D11/FFmpeg prerequisites are described by the source POC in `crates/README.md`, while capture helper lookup and output conventions are documented in `electron/native/README.md`.
+
+### Nothing Windows ships may need the Visual C++ Redistributable
+
+`VCRUNTIME140.dll`, `VCRUNTIME140_1.dll` and `MSVCP140.dll` are **not part of Windows**. They come from the Visual C++ Redistributable, which arrives with Visual Studio, with the Rust MSVC toolchain, and with most desktop applications — so every machine that can build this repo already has them in `System32`, and so does almost every machine anyone would test on. A binary that depends on them therefore works locally, works in CI, and works in every packaging format, while being unloadable on a clean Windows image.
+
+That is not a theoretical image. Store certification runs on one, and it rejected 1.9.1:
+
+```text
+Error: Native Windows capture exited before recording started (code=3221225781)
+```
+
+`3221225781` is `0xC0000135`, `STATUS_DLL_NOT_FOUND`. The loader killed `wgc-capture.exe` before `main()`, so the parent only ever saw an exit code, and **screen recording was impossible on the test device** while the app itself started normally — Electron already links the CRT statically, which is why the window opened at all.
+
+The import tables of the shipped 1.9.1 payload:
+
+| Binary | Needed from the redistributable | Symptom on a clean machine |
+|---|---|---|
+| `wgc-capture.exe` | `VCRUNTIME140`, `VCRUNTIME140_1`, `MSVCP140` | recording fails instantly with an exit code |
+| `cursor-sampler.exe` | `VCRUNTIME140`, `VCRUNTIME140_1`, `MSVCP140` | cursor capture unavailable |
+| `compositor_view.node` | `VCRUNTIME140` | `require()` fails — blank preview, audio keeps playing |
+
+The third row matters as much as the first. It is the *same visible symptom* as the MSIX/`PATH` bug documented above, from an unrelated cause, and colocation does nothing for it. Fixing only the helper would have failed certification a second time, on the preview, and looked like a regression of a fix that was actually correct.
+
+The fix is to link the CRT statically, which removes the dependency instead of obliging us to redistribute Microsoft's DLLs beside our own:
+
+- CMake helpers — `set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")` in `electron/native/wgc-capture/CMakeLists.txt`. These are standalone processes that share no CRT state with anything, so `/MT` costs about 100 KB each and nothing else.
+- Rust addon — `-C target-feature=+crt-static` in `crates/.cargo/config.toml`. Safe for the napi cdylib: only opaque `napi_value`s cross the boundary, and Buffers handed to Node carry a finalizer that frees, in the addon, what the addon allocated.
+
+`scripts/before-pack.cjs` now reads the import table of every `.exe`/`.dll`/`.node` in `electron/native/bin/win32-x64/` and refuses to package if any of them imports `msvcp*`/`vcruntime*`/`concrt*`. The `api-ms-win-crt-*` api-sets are deliberately not flagged: that is the UCRT, which does ship with Windows 10 and later.
+
+**Local testing cannot confirm this class of fix.** This machine has the redistributable and always will, so a successful run here proves the build is not broken — it says nothing about the clean-machine behaviour. The import table is the only evidence for that half, which is why the guard reads it rather than running anything.
+
+### Verifying a package actually loads
+
+The two failures above were found by the Store, not by us, and each was fixed with a guard aimed at the failure already understood — the colocation check would never have caught the redistributable, and the import-table check would never have caught the `PATH` bug. Both are worth keeping, and neither generalises.
+
+`scripts/verify-appx-native.ps1` is the check that does. It registers a built `.appx` and asks the Windows loader to resolve every shipped binary from inside the package: `LoadLibraryEx` with `LOAD_WITH_ALTERED_SEARCH_PATH` for each `.dll`/`.node` — the same call Node makes for an addon — and, for each helper executable, a start with no arguments. Whatever the next unresolvable dependency turns out to be, this fails on it.
+
+```bash
+powershell -File scripts/verify-appx-native.ps1 -Appx release/1.9.1/Openscreen.Setup.1.9.1.appx
+```
+
+Add `-KeepRegistered` to leave the package installed and click through the app afterwards. Loose registration needs Developer Mode; the script will not enable it for you, because that is a machine-wide setting. The `Windows Store package` job runs the same script on every build, enabling Developer Mode on the runner it is about to discard.
+
+Two things it deliberately does not do. It never records: a real capture needs a GPU and a desktop session that a CI runner does not usefully have, and a flaky gate gets switched off — the loader is the part that broke both times, and it can be tested without either. And it proves nothing about a machine that lacks a runtime, because every runner and every developer machine has the Visual C++ Redistributable; that half is held by the import-table check in `before-pack.cjs`.
+
+### Verifying a Linux package resolves on a clean machine
+
+Linux repeated the Windows lesson one release later. 1.9.1 fixed the symbol-version floor and shipped three sonames that nothing declared and nothing bundled: `libgbm.so.1` and `libasound.so.2`, needed by the Electron binary itself, so a clean Ubuntu 22.04 exited `127` before any window appeared; and `libgomp.so.1`, needed by all 32 ELFs of the STT stack, so the app started and only transcription died in `ld.so`.
+
+The symbol-version guard could not have seen it. It checks how *new* the required symbols are, not whether the libraries carrying them are ever installed — the same shape as the colocation check being blind to the redistributable. And nothing else was watching: the `deb`/`rpm`/`pacman` `depends` lists are hand-written, and electron-builder passes fpm none of `--rpm-autoreq*`, so no package format derives its own requirements.
+
+All three hid behind the same accident. Desktop metapackages pull every one of them, `libgomp1` only via `libfftw3-single3`, `libimagequant0` and `libsoxr0` — three peripheral media libraries no desktop actually needs. Every machine anyone tested on therefore had them.
+
+`scripts/verify-linux-package.sh` installs a built package into a **bare container** of the target distro and runs `ldd` over every ELF that ships, reporting any soname the package neither declares nor bundles. It then starts `openscreen`, `whisper-stt-server` and `openscreen-pipewire-helper`, because reaching `main()` is the part `ldd` cannot show: a binary the loader rejects exits `127` with `error while loading shared libraries`, while one that starts prints its own usage or its own structured error.
+
+```bash
+bash scripts/verify-linux-package.sh deb release/1.9.2/Openscreen-Linux-1.9.2.deb
+```
+
+The container is the point, not an implementation detail — the runner has more installed than the machines we ship to, so a check that runs on it is not a check. For the same reason the script installs no convenience tooling inside the container: `binutils` would arrive with a transitive closure that could mask what is being measured, and `ldd` is glibc, already there.
+
+`rpm` and `pacman` are verified too, and they are the ones with no other safety net: nobody installs them often enough to report a gap quickly, and the package names genuinely differ. `libgomp.so.1` is `libgomp1` on Debian and `libgomp` on both Fedora and Arch, where it was split out of `gcc-libs` — a guess would have been wrong.
+
+The AppImage is deliberately not covered by this check. What the check verifies is that everything a package needs is either declared or shipped, and the AppImage declares nothing — there is no manifest to verify against, so it would report every library the format legitimately expects from the host. That is the AppImage model working as intended, not a defect, and a check that cannot distinguish the two says nothing.
+
+The exposure is instead handled at the source, which is the layer to prefer anyway. Of the three sonames 1.9.2 chased, exactly one may be bundled, and `scripts/build-whisper-stt.sh` now does: `libgomp.so.1` is a self-contained runtime, it is absent from [the AppImage project's excludelist](https://github.com/AppImage/pkg2appimage/blob/master/excludelist), and the STT binaries already carry `RUNPATH=$ORIGIN:$ORIGIN/bin`, so a copy beside them is found before the system one — no `patchelf`, no `AppRun` wrapper. The other two are on that excludelist and say why: `libgbm.so.1` is "part of mesa" and speaks to the host's DRM stack, `libasound.so.2` loads the host's ALSA plugins and configuration. A bundled copy of either is worse than none.
+
+**Which script does the copying is the interesting part.** It belongs to the build, not to packaging, because provenance is what makes the bundled copy correct: `build-whisper-stt.yml` pins its Linux leg to `ubuntu-22.04`, the same floor `before-pack.cjs` enforces, so the library that ships comes from the same machine and the same glibc as the binaries that load it, and it travels inside the whisper artifact to every consumer. Copying it at packaging time instead would take it from whoever ran the build — and a 24.04 desktop's `libgomp` needs `GLIBC_2.38`, which the symbol-version guard then rejects, leaving a developer on a current distro unable to package at all. `scripts/stage-whisper-stt.sh` only asserts it arrived, and says to re-run the whisper workflow if it did not.
+
+What remains host-supplied for the AppImage is the GTK/GLib/NSS stack, which no AppImage bundles — theme engines, GIO modules and pixbuf loaders all resolve against the host. `libvulkan.so.1` is already bundled at the AppImage root by electron-builder itself. For the Vulkan *driver*, which cannot be bundled, `d3d_linux::diagnose` names the Mesa package instead.
+
+### Testing without the build machine's advantages
+
+Every failure in this section shares one shape: **the machines we test on have more installed than the machines we ship to.** A developer box carries the Visual C++ Redistributable because Visual Studio put it there; a CI runner carries a newer glibc than the distros the README claims. Nothing run on either can reveal an absence, so "it works here" is not evidence about anything, however many times it is repeated.
+
+Three layers address it, and the order matters:
+
+1. **Remove the dependency at the source.** A statically linked CRT cannot be missing; a runner pinned to the oldest supported distro cannot bind symbols the user does not have. This is the only layer that needs no testing at all, so prefer it whenever there is a choice.
+2. **Prove it automatically.** Static analysis for absences that are known and enumerable (`before-pack.cjs` reads import tables and ELF symbol-version needs), and a real load for everything else — `verify-appx-native.ps1` under package identity on Windows, `verify-linux-package.sh` in a bare container on Linux. Both exist because static analysis only ever knows about the mistakes already made.
+3. **A pristine machine before a Store submission.** The only layer that catches a failure nobody has thought of yet.
+
+For layer 3, keep a virtual machine whose entire value is what is *not* installed in it. VirtualBox and VMware Workstation both run on Windows 11 Home, which has neither Windows Sandbox nor Hyper-V; Microsoft publishes Windows 11 ISOs at no cost, and an unactivated install is fine for this.
+
+**Snapshot it the moment Windows finishes installing, before anything else touches it.** That snapshot is the asset — the VM itself is disposable. Restore it after every test, and never install Visual Studio, the Rust toolchain, or anything that carries a redistributable, or it quietly becomes another machine that cannot tell you anything.
+
+What to run inside it, cheapest first:
+
+- **The `.exe` installer.** No Developer Mode, no ceremony, and it carries the same native binaries as the appx. Record something and open the editor: if recording starts and the preview renders, the missing-runtime class is clear for both Windows channels at once.
+- **The appx**, for what is specific to MSIX — package-graph DLL resolution, which the `.exe` cannot exercise. Enable Developer Mode and run `verify-appx-native.ps1`, then launch the app by hand. Developer Mode installs no runtime, so it does not compromise what the VM is for.
+
+Expect the compositor to report a software backend: a VM has no real GPU, and `probeBackend()` returning `"software"` there is correct, not a regression. Enable the hypervisor's 3D acceleration so the preview renders at all.
 
 ### Stale native artifacts
 
@@ -124,7 +216,7 @@ Electron-builder targets DMG for both `arm64` and `x64`, enables hardened runtim
 
 ### Linux and Nix
 
-Electron-builder produces AppImage, `.deb`, and `.pacman` targets. The flake separately supports `x86_64-linux` and `aarch64-linux`, offers NixOS and Home Manager modules, and builds a wrapper around nixpkgs' system Electron. `nix/package.nix` runs Vite directly, installs `dist/`, `dist-electron/`, production npm dependencies, wallpapers, icons, and a desktop entry; it does not invoke electron-builder. The release workflow later opens a PR to update the Nix package version and npm dependency hash after stable releases.
+Electron-builder produces AppImage, `.deb`, `.pacman`, and `.rpm` targets. Each fpm target carries its own `depends` list, which *replaces* electron-builder's default rather than extending it; all three package formats therefore repeat that default verbatim before adding the Vulkan ICD (`mesa-vulkan-drivers`, `vulkan-swrast` on Arch) the native compositor needs. The RPM list also restores `libsecret`, which electron-builder includes in its `deb` default but omits from its `rpm` one, and which `safeStorage` needs to encrypt LLM credentials. The flake separately supports `x86_64-linux` and `aarch64-linux`, offers NixOS and Home Manager modules, and builds a wrapper around nixpkgs' system Electron. `nix/package.nix` runs Vite directly, installs `dist/`, `dist-electron/`, production npm dependencies, wallpapers, icons, and a desktop entry; it does not invoke electron-builder. The release workflow later opens a PR to update the Nix package version and npm dependency hash after stable releases.
 
 ## Node and toolchain versions
 

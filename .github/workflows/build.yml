@@ -33,7 +33,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
@@ -53,7 +53,7 @@ jobs:
         run: npm run build:win -- --publish never
 
       - name: Upload Windows installer
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-windows
           path: release/**/Openscreen.Setup.*.exe
@@ -65,7 +65,7 @@ jobs:
     runs-on: windows-latest
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
@@ -138,8 +138,50 @@ jobs:
           }
           Write-Output "$($expected.Count) tile assets present in $($appx.Name), byte-identical to build/appx/"
 
+      # Twice running, a release shipped a dependency that could not be resolved on
+      # the target machine, and both times someone outside the project found it:
+      # 1.9.0's compositor addon was reached through PATH, which MSIX ignores, and
+      # 1.9.1's capture helper needed the Visual C++ Redistributable, which is not
+      # part of Windows. Each fix arrived with a guard aimed at the failure already
+      # understood, and neither guard would have caught the other.
+      #
+      # This step is the one that generalises: it registers the package and asks the
+      # Windows loader to resolve every shipped binary for real. It deliberately does
+      # not record anything — a runner has no useful GPU or desktop session, and a
+      # flaky gate gets switched off. The loader is what broke both times.
+      #
+      # `powershell`, not `pwsh`: the Appx module is not loaded natively in
+      # PowerShell 7 and needs -UseWindowsPowerShell to work at all.
+      - name: Verify native binaries load under package identity
+        shell: powershell
+        run: |
+          $ErrorActionPreference = "Stop"
+
+          # Loose registration of an unsigned package needs Developer Mode. The runner
+          # is discarded after the job, so enabling it here costs nothing; the script
+          # itself refuses to touch this, because on a real machine it is the owner's
+          # setting to make.
+          $key = "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\AppModelUnlock"
+          New-Item -Path $key -Force | Out-Null
+          Set-ItemProperty -Path $key -Name AllowDevelopmentWithoutDevLicense -Value 1 -Type DWord
+
+          $appx = Get-ChildItem release -Recurse -Filter *.appx | Select-Object -First 1
+          if (-not $appx) { throw "no .appx found under release/" }
+
+          # Explicit exit rather than letting the error surface on its own: a
+          # terminating error does not set $LASTEXITCODE, and the runner's epilogue
+          # only inspects that. Trusting it would let a failed verification report a
+          # green step, which is the exact shape of bug this job exists to stop.
+          try {
+            & "$env:GITHUB_WORKSPACE\scripts\verify-appx-native.ps1" -Appx $appx.FullName
+          }
+          catch {
+            Write-Output "::error::$($_.Exception.Message)"
+            exit 1
+          }
+
       - name: Upload Windows Store package
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-windows-store
           path: release/**/Openscreen.Setup.*.appx
@@ -167,13 +209,13 @@ jobs:
         arch: ${{ fromJSON((github.event_name == 'workflow_dispatch' && github.event.inputs.arch != 'both') && format('["{0}"]', github.event.inputs.arch) || '["arm64", "x64"]') }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
 
       - name: Setup Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
           python-version: "3.11"
 
@@ -268,7 +310,7 @@ jobs:
       # installed app, silently. `scripts/before-pack.cjs` now refuses to package
       # that, so this is also what keeps the job from failing at the pack step.
       - name: Cache LGPL ffmpeg tree
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           # fetch-ffmpeg-macos.mjs BUILDS ffmpeg from source (~5 min): BtbN ships no
           # macOS target and every circulating macOS build is GPL, which would
@@ -281,7 +323,7 @@ jobs:
         run: npm run fetch:ffmpeg:mac
 
       - name: Cache cargo + compositor build tree
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: |
             ~/.cargo/registry
@@ -477,7 +519,7 @@ jobs:
           spctl -a -vv -t install "${{ steps.dmg.outputs.dmg_path }}"
 
       - name: Upload macOS DMG
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-mac-${{ matrix.arch }}
           path: ${{ steps.dmg.outputs.dmg_path }}
@@ -490,22 +532,57 @@ jobs:
 
   build-linux:
     name: Linux packages
-    runs-on: ubuntu-latest
+    # PINNED, and not to `ubuntu-latest`. The linker binds every symbol to the newest
+    # version its BUILD machine offers, so the runner image silently decides the oldest
+    # distro these packages can run on — nothing in the source asks for any of it.
+    # On ubuntu-latest (24.04) that floor was glibc 2.38 / GLIBCXX_3.4.32, which put
+    # Ubuntu 22.04, Debian 12 and RHEL 9 out of range: whisper-stt-server and the ggml
+    # backends died in ld.so before main(), and compositor_view.node (2.35, from a single
+    # `hypotf`) died on RHEL 9 as well. Both fail SILENTLY — the app still launches,
+    # captions just report a developer error and the preview renders nothing — and no
+    # package format catches it, because the deb/rpm/pacman `depends` lists are
+    # hand-written in electron-builder.json5 and electron-builder passes fpm none of
+    # --rpm-autoreq*, so not even dnf generates the libc.so.6(GLIBC_2.38) requirement
+    # that would have refused the install.
+    #
+    # 22.04 is the oldest distro the README claims (it names it as the PipeWire
+    # baseline), and it is the binding one: glibc 2.35 and libstdc++6 from GCC 12
+    # (GLIBCXX_3.4.30, CXXABI_1.3.13), against Debian 12's 2.36/3.4.30/1.3.13.
+    # scripts/before-pack.cjs enforces that ceiling on the built payload, so bumping
+    # this image alone cannot quietly raise the floor again.
+    runs-on: ubuntu-22.04
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Setup Node.js
         uses: ./.github/actions/setup
 
       # bsdtar (libarchive-tools) is fpm's mtree generator for the pacman target.
+      # rpmbuild (rpm) is what fpm shells out to for the rpm target; without it the
+      # build fails at packaging, not at config parse.
+      - name: Install Linux packaging dependencies
+        run: sudo apt-get update && sudo apt-get install -y libarchive-tools rpm
+
       # patchelf is what build-linux-compositor-addon.mjs renames the ffmpeg symbols
       # with, so the addon cannot bind to Chromium's bundled ffmpeg — an unconditional
-      # dependency that resolvePatchelf() throws on. It happens to be preinstalled on
-      # the ubuntu-24.04 image, which is why this has worked; declaring it means the
-      # build stops depending on the runner image's contents.
-      - name: Install Linux packaging and native build dependencies
-        run: sudo apt-get update && sudo apt-get install -y libarchive-tools patchelf
+      # dependency that resolvePatchelf() throws on.
+      #
+      # NOT from apt, which is the whole reason this is its own step: 22.04 carries
+      # patchelf 0.14.3 and `--rename-dynamic-symbols` first shipped in 0.18.0, so the
+      # apt copy fails the rename outright. 0.18.0 is also exactly what the 24.04 image
+      # provided, so the renaming behaviour is unchanged from what already ships.
+      # resolvePatchelf() checks ~/.local/bin before /usr/bin, so this wins over
+      # whatever the image happens to carry.
+      - name: Install patchelf
+        run: |
+          curl -fsSLo /tmp/patchelf.tar.gz \
+            https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0-x86_64.tar.gz
+          echo "ce84f2447fb7a8679e58bc54a20dc2b01b37b5802e12c57eece772a6f14bf3f0  /tmp/patchelf.tar.gz" | sha256sum -c -
+          mkdir -p ~/.local/bin
+          tar -xzf /tmp/patchelf.tar.gz -C /tmp ./bin/patchelf
+          mv /tmp/bin/patchelf ~/.local/bin/patchelf
+          ~/.local/bin/patchelf --version
 
       - name: Stage whisper-stt binaries
         shell: bash
@@ -516,14 +593,72 @@ jobs:
       - name: Build Linux app
         run: npm run build:linux -- --publish never
 
+      # The guard for the trap documented on the upload step below: `if-no-files-found`
+      # evaluates the union of the globs, so a format that stops being produced is
+      # invisible there. It is a real failure mode and not a hypothetical one — the rpm
+      # target was added to electron-builder.json5's `linux.target` alone, where the CLI
+      # list in `build:linux` overrides it, and the upload glob for it would have matched
+      # nothing on every release with the job still green. One assertion per format.
+      - name: Verify every Linux format was produced
+        run: |
+          if [[ ! -d release ]]; then
+            echo "::error::electron-builder produced no release/ directory"
+            exit 1
+          fi
+          MISSING=()
+          for ext in AppImage deb pacman rpm; do
+            COUNT="$(find release -type f -name "*.${ext}" -printf . | wc -c)"
+            echo "${ext}: ${COUNT}"
+            if [[ "$COUNT" -eq 0 ]]; then MISSING+=("$ext"); fi
+          done
+          if [[ "${#MISSING[@]}" -gt 0 ]]; then
+            echo "::error::No artifact produced for: ${MISSING[*]} — check the target list in package.json's build:linux, which overrides linux.target in electron-builder.json5"
+            find release -maxdepth 2 -type f -print
+            exit 1
+          fi
+
+      # The Linux counterpart of the Windows job's "Verify native binaries load under
+      # package identity", added for the same reason and after the same kind of miss:
+      # 1.9.1 shipped three sonames that nothing declared and nothing bundled — libgbm.so.1
+      # and libasound.so.2, needed by the Electron binary itself, so a clean Ubuntu 22.04
+      # exited 127 before any window, and libgomp.so.1, needed by the whole STT stack, so
+      # transcription died in ld.so. The symbol-version guard in before-pack.cjs could not
+      # have seen any of it: it checks how NEW the required symbols are, not whether the
+      # libraries carrying them are ever installed.
+      #
+      # Both misses hid behind the same thing. Desktop metapackages pull all three, so
+      # every machine anyone tested on had them — libgomp1 only via libfftw3-single3,
+      # libimagequant0 and libsoxr0, three peripheral media libraries. The check has to run
+      # somewhere empty or it is not a check, which is why this uses containers rather than
+      # the runner it is already standing on.
+      #
+      # rpm and pacman are verified too, and they are the ones with no other safety net:
+      # their depends lists are hand-written, no user installs them often enough to report
+      # a gap quickly, and package names genuinely differ (libgomp.so.1 is `libgomp1` on
+      # Debian, `libgomp` on Fedora AND on Arch, where it was split out of `gcc-libs`).
+      #
+      # The AppImage is deliberately NOT covered. It has no dependency mechanism at all, so
+      # there is no declaration to verify against — every system soname is "missing" by
+      # construction and the check would have nothing to say. It stays exposed, which is
+      # what d3d_linux::diagnose naming the Mesa package is for.
+      - name: Verify packages resolve on a clean machine
+        run: |
+          for fmt in deb rpm pacman; do
+            PKG="$(find release -type f -name "*.${fmt}" | head -1)"
+            echo "::group::${fmt}"
+            bash scripts/verify-linux-package.sh "$fmt" "$PKG"
+            echo "::endgroup::"
+          done
+
       - name: Upload Linux packages
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: openscreen-linux
           path: |
             release/**/*.AppImage
             release/**/*.deb
             release/**/*.pacman
+            release/**/*.rpm
           # No *.zsync: nothing produces one. zsync is electron-updater's delta format,
           # this repo has no updater (no electron-updater, no autoUpdater, no
           # latest-linux.yml), and app-builder-lib 26.x dropped zsync entirely in favour
@@ -543,7 +678,7 @@ jobs:
     if: ${{ (github.event_name == 'push' && github.ref_type == 'tag') || (github.event_name == 'workflow_dispatch' && github.event.inputs.release_tag != '') }}
     steps:
       - name: Checkout code
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
         with:
           # Full history + tags: the RC notes below are built from `git log` over the
           # range since the previous RC tag, and resolving that tag needs the tags.
@@ -620,25 +755,25 @@ jobs:
           echo "notes_start_tag=$NOTES_START_TAG" >> "$GITHUB_OUTPUT"
 
       - name: Download Windows installer
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openscreen-windows
           path: artifacts/windows
 
       - name: Download macOS arm64 DMG
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openscreen-mac-arm64
           path: artifacts/mac-arm64
 
       - name: Download macOS x64 DMG
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openscreen-mac-x64
           path: artifacts/mac-x64
 
       - name: Download Linux packages
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: openscreen-linux
           path: artifacts/linux

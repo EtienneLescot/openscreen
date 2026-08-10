@@ -97,6 +97,11 @@ extern "C" {
     /// producer, but the unit tests do. The C side is always compiled.
     #[cfg(test)]
     fn osc_pw_cursor_meta_accepts_producer_size(width: u32, height: u32) -> i32;
+    #[cfg(test)]
+    fn osc_pw_enum_format_accepts_dmabuf_producer(
+        with_modifier: i32,
+        producer_modifier: i64,
+    ) -> i32;
     fn osc_pw_start(
         fd: i32,
         node_id: u32,
@@ -590,6 +595,22 @@ pub fn cursor_meta_accepts_producer_size(width: u32, height: u32) -> i32 {
     unsafe { osc_pw_cursor_meta_accepts_producer_size(width, height) }
 }
 
+/// DRM format modifiers, as spelled in `pw_shim.c`.
+#[cfg(test)]
+pub const DRM_FORMAT_MOD_LINEAR: i64 = 0;
+#[cfg(test)]
+pub const DRM_FORMAT_MOD_INVALID: i64 = 0x00ff_ffff_ffff_ffff;
+
+/// Would our EnumFormat survive negotiation against a DMA-BUF-only producer
+/// declaring `producer_modifier` as MANDATORY? `with_modifier` selects which of
+/// our two objects to test: `false` for the shared-memory one, `true` for the
+/// DMA-BUF fallback.
+#[cfg(test)]
+pub fn enum_format_accepts_dmabuf_producer(with_modifier: bool, producer_modifier: i64) -> i32 {
+    // SAFETY: no arguments to validate; the shim builds and frees its own PODs.
+    unsafe { osc_pw_enum_format_accepts_dmabuf_producer(i32::from(with_modifier), producer_modifier) }
+}
+
 /// SPA enum values as compiled from the vendored headers.
 pub fn constants() -> Constants {
     let mut out = Constants::default();
@@ -862,6 +883,49 @@ mod tests {
             cursor_meta_accepts_producer_size(2048, 2048),
             0,
             "beyond the declared ceiling the intersection must genuinely be empty"
+        );
+    }
+
+    /// Issue #287, reproduced without niri, a portal or a screen.
+    ///
+    /// A DMA-BUF-only compositor publishes its EnumFormat with
+    /// `SPA_FORMAT_VIDEO_modifier` carrying `SPA_POD_PROP_FLAG_MANDATORY`.
+    /// `spa_pod_filter` (spa/pod/filter.h:352) turns a mandatory producer
+    /// property the consumer never mentions into `-EINVAL` for the WHOLE object,
+    /// so every format is filtered out and the link dies reporting "no more
+    /// input formats" — the exact string from the report, on Arch + niri, on
+    /// both 1.8.0 and 1.9.0-rc.3.
+    ///
+    /// The fix is a second EnumFormat object that does declare a modifier, sent
+    /// after the shared-memory one so compositors that can do shm are unaffected.
+    /// Both halves are asserted here, because "the new object is accepted" alone
+    /// would still hold if the old one had been silently made to match too —
+    /// and that would mean GNOME had quietly moved to the DMA-BUF path.
+    #[test]
+    fn enum_format_survives_a_dmabuf_only_producer() {
+        for modifier in [DRM_FORMAT_MOD_LINEAR, DRM_FORMAT_MOD_INVALID] {
+            assert_eq!(
+                enum_format_accepts_dmabuf_producer(false, modifier),
+                0,
+                "the shm object must still be rejected by a mandatory-modifier producer \
+                 (modifier {modifier:#x}) — that rejection is why the second object exists"
+            );
+            assert_eq!(
+                enum_format_accepts_dmabuf_producer(true, modifier),
+                1,
+                "the dmabuf object must intersect a producer declaring modifier {modifier:#x}"
+            );
+        }
+
+        // The advertised modifier set is a real set, not a wildcard: a tiled or
+        // compressed buffer cannot be read through a plain mmap, so it must fail
+        // negotiation rather than be accepted and decoded into garbage.
+        // 0x0300000000000001 = a vendor (AMD) modifier, neither LINEAR nor INVALID.
+        assert_eq!(
+            enum_format_accepts_dmabuf_producer(true, 0x0300_0000_0000_0001),
+            0,
+            "a modifier we cannot mmap must not intersect — accepting it would ship \
+             a scrambled recording instead of an error"
         );
     }
 

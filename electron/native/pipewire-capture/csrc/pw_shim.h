@@ -158,6 +158,19 @@ void osc_pw_constants(struct osc_pw_constants *out);
  */
 int osc_pw_cursor_meta_accepts_producer_size(uint32_t width, uint32_t height);
 
+/*
+ * Would our EnumFormat survive negotiation against a DMA-BUF-only producer that
+ * declares `producer_modifier` as MANDATORY? 1 yes, 0 no, -1 if the PODs could
+ * not be built.
+ *
+ * `with_modifier` picks which of our two EnumFormat objects to test: 0 for the
+ * shared-memory one sent first, 1 for the DMA-BUF one sent as a fallback. Such a
+ * producer must reject the former and accept the latter — that asymmetry is the
+ * whole fix for issue #287, and this is how it is asserted without niri, a
+ * portal or a screen.
+ */
+int osc_pw_enum_format_accepts_dmabuf_producer(int with_modifier, int64_t producer_modifier);
+
 struct osc_pw_session;
 
 /*

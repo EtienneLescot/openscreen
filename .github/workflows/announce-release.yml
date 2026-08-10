@@ -1,0 +1,96 @@
+# Announcing a release lived only inside prerelease.yml and promote.yml, as the
+# last step of each. Both promotions so far failed before reaching it — v1.8.0 on
+# a merge conflict, v1.9.0 on a non-rebasable sync branch — and each time the
+# announcement was silently skipped along with everything downstream of the
+# failure, with no way to send it afterwards short of re-running the whole
+# promotion over an already-tagged release.
+#
+# It now runs off the release itself, which is the only event every path shares.
+# Being a step of the two ceremony workflows meant it announced what those two
+# workflows happened to do, not what actually shipped: a release cut by pushing a
+# tag straight to build.yml — which is how 1.9.2 shipped — went out silent,
+# because neither ceremony ran. Worse, prerelease.yml announced immediately after
+# DISPATCHING build.yml rather than after it finished, so the RC message could
+# precede the artifacts it pointed at by the length of a full matrix build.
+#
+# `release: published` fires for both, and `github.event.release.prerelease`
+# already carries the stable/rc distinction that was previously hand-passed. This
+# works only because build.yml creates the release with OPENSCREEN_RELEASE_TOKEN:
+# releases created with the default GITHUB_TOKEN trigger no workflows at all.
+#
+# The dispatch inputs stay, for the case this was extracted for — a missed
+# announcement is still a dispatch rather than a recovery operation. The script
+# reads nothing but the tag and the matching milestone, so it produces the
+# identical message whichever way it is entered.
+name: Announce a release on Discord
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to announce (e.g. v1.9.0)"
+        required: true
+        type: string
+      kind:
+        description: "stable posts to the release channel, rc to the testing channel"
+        required: true
+        type: choice
+        options: [stable, rc]
+        default: stable
+      release_notes_extra:
+        description: "Optional message prepended to the announcement"
+        required: false
+        type: string
+        default: ""
+
+permissions:
+  contents: read
+
+jobs:
+  announce:
+    name: Announce ${{ inputs.tag || github.event.release.tag_name }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      # Resolved once, in one place, because the channel selection below needs to
+      # branch on `kind` and a step cannot read an `env:` entry declared beside it.
+      # On a release event `inputs.*` are empty strings, which GitHub expressions
+      # treat as falsy, so `||` picks the event side without any explicit test.
+      - name: Resolve what is being announced
+        id: ctx
+        run: |
+          {
+            echo "tag=${{ inputs.tag || github.event.release.tag_name }}"
+            echo "kind=${{ inputs.kind || (github.event.release.prerelease && 'rc' || 'stable') }}"
+          } >> "$GITHUB_OUTPUT"
+
+      - name: Setup Node.js
+        uses: ./.github/actions/setup
+
+      - name: Announce on Discord
+        env:
+          DISCORD_BOT_TOKEN: ${{ secrets.DISCORD_BOT_TOKEN }}
+          # The script prefers the RC channel whenever that variable is non-empty,
+          # so exactly one of these may be set — blanking the other is what selects
+          # the destination, not the KIND value.
+          DISCORD_RELEASE_CHANNEL_ID: ${{ steps.ctx.outputs.kind == 'stable' && vars.DISCORD_RELEASE_CHANNEL_ID || '' }}
+          DISCORD_RC_TESTING_CHANNEL_ID: ${{ steps.ctx.outputs.kind == 'rc' && vars.DISCORD_RC_TESTING_CHANNEL_ID || '' }}
+          # Only used to list the closed issues of the matching milestone; the
+          # announcement still posts without it, just without that section.
+          GITHUB_TOKEN: ${{ secrets.OPENSCREEN_RELEASE_TOKEN }}
+          STABLE_TAG: ${{ steps.ctx.outputs.tag }}
+          EXTRA: ${{ inputs.release_notes_extra }}
+          KIND: ${{ steps.ctx.outputs.kind }}
+          # Every path that ends without posting exits 0 by default, which is what
+          # this was when it lived inside prerelease.yml and promote.yml — the
+          # release was already out, and a failed announcement had to not report it
+          # as broken. Standing on its own inverts that: nothing downstream depends
+          # on this job, so a red run costs a notification and a green run that
+          # posted nothing recreates exactly the failure it exists to prevent. That
+          # is how v1.9.0 shipped silent.
+          STRICT: "1"
+        run: node .github/scripts/discord-release-announce.mjs

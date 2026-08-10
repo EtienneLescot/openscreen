@@ -55,10 +55,16 @@ describe("ffmpeg resolution", () => {
 	});
 
 	/**
-	 * The shape that slipped through. A Linux dev checkout can have
+	 * The shape that slipped through. A Linux dev checkout used to have
 	 * `electron/native/bin/<tag>/ffmpeg` as a DIRECTORY of shared libraries
 	 * rather than the binary; `existsSync` accepted it, resolution stopped
 	 * there, and the failure only surfaced later as `spawn … EACCES`.
+	 *
+	 * That particular collision is gone — the helper's libraries moved to
+	 * `helper-ffmpeg/` — but the assertion stays, because it is really about
+	 * `resolveFfmpeg` not confusing existence with executability, and the next
+	 * thing to land a directory on a candidate path will not announce itself
+	 * either.
 	 */
 	it("skips a candidate that is a directory rather than the binary", () => {
 		const here = mkdtempSync(path.join(tmpdir(), "openscreen-ffmpeg-"));

@@ -13,6 +13,33 @@ async function makeTempDir(): Promise<string> {
 	return fs.mkdtemp(path.join(os.tmpdir(), "openscreen-media-links-"));
 }
 
+/**
+ * `fs.rm` that is allowed to lose a race against a write landing in the directory.
+ *
+ * `force: true` covers ENOENT — the write lost and the path is already gone — but
+ * NOT ENOTEMPTY, which is what the write WINNING looks like: it recreates an entry
+ * between rm's recursive walk and its final rmdir. `fs.rm` does not retry unless
+ * asked (`maxRetries` defaults to 0), so that rejection escapes and fails whichever
+ * test or hook was running.
+ *
+ * This suite races a write against removal on purpose (see "survives the directory
+ * disappearing while the refresh is queued"), and every `afterEach` inherits the
+ * same exposure because a queued refresh can outlive the test that started it.
+ * Losing is explicitly fine — the contract under test is that no rejection escapes
+ * into the process, not that the removal succeeds. The retries are so the temp dir
+ * still usually gets cleaned up; the catch is so a loss is never a red test.
+ *
+ * Seen twice on CI, once on a `main` push (run 31279698618), and reproduced 14
+ * times in 40 locally by racing a write against `fs.rm` over a large tree.
+ */
+async function rmBestEffort(dir: string): Promise<void> {
+	try {
+		await fs.rm(dir, { recursive: true, force: true, maxRetries: 3 });
+	} catch (err) {
+		if ((err as NodeJS.ErrnoException).code !== "ENOTEMPTY") throw err;
+	}
+}
+
 async function writeFileOfSize(filePath: string, sizeBytes: number, fill = "a"): Promise<void> {
 	// Not all-identical bytes at the seams so head/tail samples aren't trivially
 	// equal to each other for small files — irrelevant for correctness, just
@@ -28,7 +55,7 @@ describe("mediaLinksRegistry", () => {
 	});
 
 	afterEach(async () => {
-		await fs.rm(tempDir, { recursive: true, force: true });
+		await rmBestEffort(tempDir);
 	});
 
 	describe("computeFingerprint", () => {
@@ -288,7 +315,7 @@ describe("mediaLinksRegistry", () => {
 			try {
 				const rejections = await withoutUnhandledRejections(async () => {
 					const lookup = findMediaLinksByFingerprint(tempDir, moved);
-					await fs.rm(tempDir, { recursive: true, force: true });
+					await rmBestEffort(tempDir);
 					await lookup;
 				});
 				expect(rejections).toEqual([]);

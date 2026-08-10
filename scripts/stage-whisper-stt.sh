@@ -25,10 +25,54 @@ ARTIFACT="whisper-stt-${TAG}"
 DEST="electron/native/bin/${TAG}"
 REPO="${GITHUB_REPOSITORY:-getopenscreen/openscreen}"
 
+# Asserts that GCC's OpenMP runtime travelled with the binaries, on Linux only.
+#
+# Every ELF of this stack links libgomp.so.1, and 1.9.1 shipped none of them a
+# way to find it: the deb/rpm/pacman did not declare it (1.9.2 does) and the
+# AppImage has no dependency mechanism at all, so on a machine without it
+# whisper-stt-server dies in ld.so before main() and transcription reports a
+# developer error to end users. Declaring it fixes three formats out of four;
+# bundling the library fixes the fourth, which cannot be fixed any other way.
+#
+# This only CHECKS. build-whisper-stt.sh does the copying, on the machine that
+# compiles these binaries, and build-whisper-stt.yml pins that to ubuntu-22.04.
+# Copying it here instead would take it from whoever runs the packaging, and a
+# 24.04 desktop's libgomp needs GLIBC_2.38 — which before-pack.cjs then refuses,
+# so a developer on a current distro could not package at all. Provenance is the
+# whole point: the copy that ships must come from the same machine, and the same
+# glibc floor, as the binaries that load it.
+#
+# Nothing else is needed to make it resolve: these binaries already carry
+# `RUNPATH=$ORIGIN:$ORIGIN/bin`, so a copy beside them wins over the system one.
+assert_openmp_runtime_staged() {
+  case "${TAG}" in linux-*) ;; *) return 0 ;; esac
+  [ -f "${DEST}/libgomp.so.1" ] && return 0
+
+  cat >&2 <<EOF
+
+FATAL: libgomp.so.1 is missing from ${DEST}.
+
+Every binary of this stack links it, and the AppImage has no way to declare a
+dependency, so shipping without it means transcription dies in ld.so on any
+machine that lacks it — silently, until a user tries to transcribe.
+
+It is staged by scripts/build-whisper-stt.sh and travels inside the
+whisper-stt artifact. An artifact built before that existed does not carry it.
+Re-run the workflow against this branch, then re-run this build:
+
+  gh workflow run build-whisper-stt.yml --repo ${REPO}
+EOF
+  exit 1
+}
+
 # A locally built binary wins: `npm run build:whisper-binaries` puts one here,
 # and a developer testing a change should not have it silently replaced by CI's.
 if compgen -G "${DEST}/whisper-stt-server*" > /dev/null; then
   echo "whisper-stt-server already present in ${DEST} — leaving it alone."
+  # Checked on this path too: it is the one a developer takes, and a local
+  # whisper build predating the staging change would otherwise package an
+  # AppImage whose STT stack cannot load.
+  assert_openmp_runtime_staged
   exit 0
 fi
 
@@ -69,6 +113,11 @@ cp -v "${TMP}/${ARTIFACT}"/* "${DEST}/"
 BIN="$(find "${DEST}" -maxdepth 1 -name 'whisper-stt-server*' -print -quit)"
 [ -n "${BIN}" ] || { echo "FATAL: no whisper-stt-server binary in ${DEST}" >&2; exit 1; }
 [ "${TAG#win32}" = "${TAG}" ] && chmod +x "${BIN}"
+
+# Before the load check below, not after: if libgomp did not travel with the
+# artifact, the check would otherwise pass by resolving the build machine's copy
+# and prove nothing about what ships.
+assert_openmp_runtime_staged
 
 # The existence check above is not enough: 1.8.0-rc.1..rc.3 staged a binary that
 # was present and unrunnable. cpp-httplib had linked OpenSSL, the two

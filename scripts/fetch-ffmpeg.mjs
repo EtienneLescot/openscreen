@@ -125,6 +125,10 @@ const SHARED_PINNED = {
 		asset: "ffmpeg-n8.1.2-34-g9b6c8969e0-linux64-lgpl-shared-8.1.tar.xz",
 		sha256: "c882a80f06617149198a98a07a0880a7e881953ae9f9cb931f5be09a4f93caae",
 	},
+	"linux-arm64": {
+		asset: "ffmpeg-n8.1.2-34-g9b6c8969e0-linuxarm64-lgpl-shared-8.1.tar.xz",
+		sha256: "eec386482ac6799bb547b5f507dedd19ef6354eee0ca4ddb04bdd053d03c3cfb",
+	},
 	"win32-x64": {
 		asset: "ffmpeg-n8.1.2-34-g9b6c8969e0-win64-lgpl-shared-8.1.zip",
 		sha256: "c222a490dde4e7059f45495deef6bfb98dbcacc2b43df5b607546252037aa95c",
@@ -450,8 +454,10 @@ async function fetchSharedDlls(tag, binDir) {
 		// copies belong in binDir. On Linux that same directory is owned by the two
 		// native build scripts: build-linux-compositor-addon.mjs puts SYMBOL-RENAMED
 		// (osff_*) copies there so the addon cannot bind to Chromium's ffmpeg, and
-		// build-linux-pipewire-helper.mjs stages unrenamed ones in `binDir/ffmpeg/`
-		// for the helper's `$ORIGIN/ffmpeg` RUNPATH. Dropping a third, unrenamed set
+		// build-linux-pipewire-helper.mjs stages unrenamed ones in
+		// `binDir/helper-ffmpeg/` for the helper's `$ORIGIN/helper-ffmpeg` RUNPATH
+		// (named to stay clear of `binDir/ffmpeg`, which is the static executable
+		// this script vendors). Dropping a third, unrenamed set
 		// in binDir would overwrite the renamed ones under identical filenames and
 		// break the addon at load time. Linux takes the SDK below and nothing else.
 		if (process.platform !== "win32") {
@@ -510,12 +516,22 @@ async function main() {
 	const dest = path.join(binDir, spec.exe);
 
 	// `--sdk-only` skips the standalone ffmpeg CLI and vendors just the build-time
-	// SDK. Linux needs it: the CLI lands at `<binDir>/ffmpeg` as a FILE, while
-	// build-linux-pipewire-helper.mjs stages the helper's libraries into
-	// `<binDir>/ffmpeg/` as a DIRECTORY — the name its `$ORIGIN/ffmpeg` RUNPATH is
-	// compiled against. One clobbers the other (`EEXIST: mkdir .../linux-x64/ffmpeg`).
-	// Nothing in the app spawns the CLI any more (see assertLgpl's note), and v1.7.0
-	// shipped Linux packages without it, so on Linux it is dead weight AND a conflict.
+	// SDK, which is what `build:linux` uses.
+	//
+	// It was introduced because the CLI landed at `<binDir>/ffmpeg` as a FILE while
+	// build-linux-pipewire-helper.mjs wanted `<binDir>/ffmpeg/` as a DIRECTORY, and
+	// one clobbered the other (`EEXIST: mkdir .../linux-x64/ffmpeg`). That conflict
+	// is gone — the helper's libraries live in `helper-ffmpeg/` now — so this flag
+	// no longer avoids a collision. What is left is a size argument: the static CLI
+	// is ~110 MB, `linux.extraResources` has no exclusion for it (unlike Windows'
+	// "!win32-*/ffmpeg.exe"), and Linux packages have shipped without it since
+	// v1.7.0.
+	//
+	// One caveat if that is ever revisited: the app is NOT entirely done with the
+	// CLI, contrary to assertLgpl's note below. electron/media/audioPeaks.ts spawns
+	// it to decode waveform peaks ~6x faster than the renderer can, and falls back
+	// to the browser pipelines when it is absent — so on Linux that fallback is
+	// always the one taken. Degraded, cached after the first decode, not broken.
 	if (process.argv.includes("--sdk-only")) {
 		console.log(`Skipping the standalone ffmpeg CLI (--sdk-only).`);
 		await fetchSharedDlls(tag, binDir);
