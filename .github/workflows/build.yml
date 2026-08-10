@@ -745,6 +745,24 @@ jobs:
               fi
             done
           fi
+          # Everything above computes what the previous release was *called* and
+          # never checks that it exists. A version line that stopped at its RC
+          # makes that a name for nothing: 1.9.3 shipped only as rc.1, so
+          # v1.9.4-rc.1 asked git for v1.9.3..v1.9.4-rc.1 and the publish step
+          # died on `unknown revision` -- after all four platforms had already
+          # built, and with publish-msstore sitting behind publish-release, so
+          # the same gap would silently block a stable release's Store
+          # deployment too. The rc walk-down above handles a skipped RC; nothing
+          # handled a skipped stable, and it does not run at all for an rc.1.
+          if ! git rev-parse -q --verify "refs/tags/${NOTES_START_TAG}" >/dev/null; then
+            # The nearest tag reachable from the release commit's parent, which
+            # is what "since the last release" meant in the first place. Empty
+            # only when no tag is reachable at all (a first release), so fall
+            # back to the root commit to keep the range valid either way.
+            FALLBACK="$(git describe --tags --abbrev=0 "${TAG}^" 2>/dev/null || true)"
+            NOTES_START_TAG="${FALLBACK:-$(git rev-list --max-parents=0 HEAD | tail -1)}"
+            echo "Previous-release tag did not exist; starting notes from ${NOTES_START_TAG}"
+          fi
           echo "Computed notes_start_tag=${NOTES_START_TAG} for tag=${TAG}"
 
           echo "tag=$TAG" >> "$GITHUB_OUTPUT"
