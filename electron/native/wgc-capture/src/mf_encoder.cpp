@@ -234,6 +234,8 @@ HRESULT createSinkWriterFromUrl(
         }
         hr = attributes->SetUINT32(MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS, TRUE);
         if (FAILED(hr)) {
+            std::cerr << "ERROR: Set MF_READWRITE_ENABLE_HARDWARE_TRANSFORMS(TRUE) failed (hr=0x"
+                      << std::hex << hr << std::dec << ")" << std::endl;
             failedStage = SinkWriterCreateStage::ConfigureDxgiManager;
             return hr;
         }
@@ -347,6 +349,18 @@ void compositeWebcam(BYTE* destination, int width, int height, const BgraFrameVi
         }
     }
 }
+
+// Clears a breadcrumb on every exit from the scope it guards, which the manual
+// resets could not: each of these functions has a dozen failure returns, and
+// every one that forgot to clear left the watchdog naming a call the writer had
+// already left. Naming the wrong call is worse than naming none -- the whole
+// point of the breadcrumb is that the next #252 report does not have to guess.
+struct StageGuard {
+    std::atomic<const char*>& stage;
+    ~StageGuard() {
+        stage = "idle";
+    }
+};
 
 } // namespace
 
@@ -1047,6 +1061,7 @@ MFEncoder::Nv12ConvertResult MFEncoder::convertBgraTextureToNv12(
     // long enough for a busy GPU and short enough that a stuck bridge costs a
     // dropped frame instead of the recording.
     const DWORD acquireTimeoutMs = static_cast<DWORD>(std::max(50, 4000 / fps_));
+    const StageGuard stageGuard{encodeStage_};
 
     // Key 0 is the capture side's, key 1 the encoder's. Timing out here leaves
     // key 0 exactly where it was, so the next frame simply tries again; that
@@ -1063,11 +1078,9 @@ MFEncoder::Nv12ConvertResult MFEncoder::convertBgraTextureToNv12(
     encodeStage_ = "bridge-acquire-capture";
     const HRESULT captureAcquireHr = captureBridgeMutex_->AcquireSync(0, acquireTimeoutMs);
     if (captureAcquireHr == static_cast<HRESULT>(WAIT_TIMEOUT)) {
-        encodeStage_ = "idle";
         return Nv12ConvertResult::Contended;
     }
     if (!succeeded(captureAcquireHr, "Acquire capture bridge")) {
-        encodeStage_ = "idle";
         return Nv12ConvertResult::Failed;
     }
     encodeStage_ = "bridge-copy";
@@ -1085,11 +1098,9 @@ MFEncoder::Nv12ConvertResult MFEncoder::convertBgraTextureToNv12(
     const HRESULT encoderAcquireHr = encoderBridgeMutex_->AcquireSync(1, acquireTimeoutMs);
     if (encoderAcquireHr == static_cast<HRESULT>(WAIT_TIMEOUT)) {
         std::cerr << "ERROR: Acquire encoder bridge timed out" << std::endl;
-        encodeStage_ = "idle";
         return Nv12ConvertResult::Failed;
     }
     if (!succeeded(encoderAcquireHr, "Acquire encoder bridge")) {
-        encodeStage_ = "idle";
         return Nv12ConvertResult::Failed;
     }
     const auto releaseEncoderBridge = [&]() {
@@ -1135,7 +1146,6 @@ MFEncoder::Nv12ConvertResult MFEncoder::convertBgraTextureToNv12(
         "VideoProcessorBlt");
     encodeStage_ = "bridge-release-encoder";
     const bool released = releaseEncoderBridge();
-    encodeStage_ = "idle";
     return converted && released ? Nv12ConvertResult::Ok : Nv12ConvertResult::Failed;
 }
 
@@ -1156,11 +1166,13 @@ bool MFEncoder::captureDxgiSample(
         std::cerr << "ERROR: Unexpected WGC DXGI texture format or dimensions" << std::endl;
         return false;
     }
+    // Declared after the two early returns above, which run before any stage is
+    // set and so have nothing to clear.
+    const StageGuard stageGuard{encodeStage_};
 
     Microsoft::WRL::ComPtr<IMFSample> sample;
     encodeStage_ = "allocate-sample";
     if (!succeeded(videoSampleAllocator_->AllocateSample(&sample), "Allocate DXGI video sample")) {
-        encodeStage_ = "idle";
         return false;
     }
 
