@@ -612,9 +612,17 @@ int main(int argc, char* argv[]) {
     // produce. The env var is the escape hatch for a machine where the GPU path
     // misbehaves in a way the encoder's own probes do not catch -- a support
     // answer instead of a hotfix.
+    //
+    // config.webcamEnabled, not webcamActive: the latter is only set once the
+    // webcam capture has started, which happens well after this. Reading it
+    // here made the PiP condition dead code -- always false, so always
+    // permitting the GPU path -- and an inline-PiP recording would have run on
+    // DXGI and silently dropped the overlay, reporting success either way.
+    // config.webcamEnabled is already cleared above when webcam init fails,
+    // and writeSeparateWebcam is assigned there too, so both are final here.
     encoderOptions.useDxgiInput =
         !config.preferSoftwareEncoder &&
-        (!webcamActive || writeSeparateWebcam) &&
+        (!config.webcamEnabled || writeSeparateWebcam) &&
         readEnvInt("OPENSCREEN_WGC_DISABLE_DXGI_INPUT", 0) == 0;
 
     MFEncoder encoder;

@@ -1029,10 +1029,24 @@ MFEncoder::Nv12ConvertResult MFEncoder::convertBgraTextureToNv12(
     // Key 0 is the capture side's, key 1 the encoder's. Timing out here leaves
     // key 0 exactly where it was, so the next frame simply tries again; that
     // is the whole reason this one is recoverable and the one below is not.
+    //
+    // Tested by value, not with FAILED(): AcquireSync reports a timeout as
+    // WAIT_TIMEOUT (0x102), which is a *positive* HRESULT and therefore passes
+    // both SUCCEEDED() and !FAILED(). Testing FAILED() alone got this backwards
+    // in both directions -- a timeout fell through to the CopyResource below
+    // without ever holding the key, and a hard error (DXGI_ERROR_DEVICE_REMOVED,
+    // E_FAIL, WAIT_ABANDONED) was reported as ordinary contention, which skips
+    // the frame and retries forever on a bridge that can never work again. The
+    // recording then ends successfully with almost no frames in it.
     encodeStage_ = "bridge-acquire-capture";
-    if (FAILED(captureBridgeMutex_->AcquireSync(0, acquireTimeoutMs))) {
+    const HRESULT captureAcquireHr = captureBridgeMutex_->AcquireSync(0, acquireTimeoutMs);
+    if (captureAcquireHr == static_cast<HRESULT>(WAIT_TIMEOUT)) {
         encodeStage_ = "idle";
         return Nv12ConvertResult::Contended;
+    }
+    if (!succeeded(captureAcquireHr, "Acquire capture bridge")) {
+        encodeStage_ = "idle";
+        return Nv12ConvertResult::Failed;
     }
     encodeStage_ = "bridge-copy";
     captureContext_->CopyResource(captureBridgeTexture_.Get(), texture);
@@ -1043,8 +1057,17 @@ MFEncoder::Nv12ConvertResult MFEncoder::convertBgraTextureToNv12(
     encodeStage_ = "bridge-acquire-encoder";
     // Key 1 was just handed over by this same thread and nothing else in the
     // process can hold it, so a failure here means the bridge is broken rather
-    // than busy, and no later frame could recover it.
-    if (!succeeded(encoderBridgeMutex_->AcquireSync(1, acquireTimeoutMs), "Acquire encoder bridge")) {
+    // than busy, and no later frame could recover it. A timeout counts as broken
+    // for that same reason, and needs the same by-value test as above, since
+    // WAIT_TIMEOUT passes SUCCEEDED() and would otherwise be read as acquired.
+    const HRESULT encoderAcquireHr = encoderBridgeMutex_->AcquireSync(1, acquireTimeoutMs);
+    if (encoderAcquireHr == static_cast<HRESULT>(WAIT_TIMEOUT)) {
+        std::cerr << "ERROR: Acquire encoder bridge timed out" << std::endl;
+        encodeStage_ = "idle";
+        return Nv12ConvertResult::Failed;
+    }
+    if (!succeeded(encoderAcquireHr, "Acquire encoder bridge")) {
+        encodeStage_ = "idle";
         return Nv12ConvertResult::Failed;
     }
     const auto releaseEncoderBridge = [&]() {
@@ -1268,12 +1291,16 @@ bool MFEncoder::submitVideoSample(IMFSample* sample) {
     // encode synchronously on the calling thread. Callers must NOT hold any
     // lock shared with a thread that needs to make timely progress (e.g. a
     // stop-request check) across this call.
-    encodeStage_ = "write-sample";
+    // Stamped after the lock, not before it. The breadcrumb is meant to name the
+    // call the writer is *inside*; setting it first made "write-sample" also mean
+    // "queued behind writeAudio, which is inside WriteSample" -- the one case the
+    // watchdog most needs to tell apart, since an audio write is the only other
+    // thing that takes this mutex.
     std::scoped_lock writerLock(writerMutex_);
     if (!sinkWriter_ || finalized_) {
-        encodeStage_ = "idle";
         return false;
     }
+    encodeStage_ = "write-sample";
     const bool written = succeeded(sinkWriter_->WriteSample(videoStreamIndex_, sample), "WriteSample");
     encodeStage_ = "idle";
     return written;
@@ -1317,7 +1344,14 @@ bool MFEncoder::writeAudio(const BYTE* data, DWORD byteCount, int64_t timestampH
     sample->SetSampleTime(std::max<int64_t>(0, timestampHns));
     sample->SetSampleDuration(durationHns);
 
-    return succeeded(sinkWriter_->WriteSample(audioStreamIndex_, sample.Get()), "WriteSample(audio)");
+    // Named too, for the same reason the video write is: this is a synchronous
+    // encode holding writerMutex_, so it is a place the process can be stuck,
+    // and a watchdog report that only ever names video writes cannot say so.
+    encodeStage_ = "write-audio";
+    const bool written =
+        succeeded(sinkWriter_->WriteSample(audioStreamIndex_, sample.Get()), "WriteSample(audio)");
+    encodeStage_ = "idle";
+    return written;
 }
 
 bool MFEncoder::finalize() {
@@ -1333,6 +1367,17 @@ bool MFEncoder::finalize() {
         sinkWriter_.Reset();
     }
     stagingTexture_.Reset();
+    // Before MFShutdown(), not left to the destructor. Two of the objects
+    // releaseDxgiPipeline() drops -- videoSampleAllocator_ and
+    // dxgiDeviceManager_ -- are Media Foundation objects, and releasing those
+    // after MFShutdown() has run is not something the platform promises
+    // anything about. The rest matters to the caller rather than to MF:
+    // captureDevice_/captureContext_ hold the WGC D3D11 device, so leaving them
+    // set means session.stop() in main.cpp is no longer dropping the last
+    // reference to the device it thinks it owns.
+    releaseDxgiPipeline();
+    captureContext_.Reset();
+    captureDevice_.Reset();
     context_.Reset();
     device_.Reset();
     MFShutdown();
