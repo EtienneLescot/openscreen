@@ -41,12 +41,20 @@ const LEGACY = [
 	"provider-parity-plan",
 	"github-actions-workflows",
 	"ux-ui-spec",
-	// Pre-#90 release-branch naming. One branch per *stable* version now
-	// (`release/vX.Y.Z`), created at rc.1 and reused, because prerelease.yml and
-	// promote.yml have to resolve the same ref. Docs that reintroduce the
-	// suffixed name send a maintainer to a branch that was never created.
-	"release/vX.Y.Z-rc.N",
 ];
+
+// Pre-#90 release-branch naming. One branch per *stable* version now
+// (`release/vX.Y.Z`), created at rc.1 and reused, because prerelease.yml and
+// promote.yml have to resolve the same ref; a doc that reintroduces the
+// suffixed name sends a maintainer to a branch nothing ever creates.
+//
+// A LEGACY substring entry is not enough here: the rot used BOTH spellings, and
+// the one that mattered was the concrete `release/v1.5.0-rc.1` sitting in a
+// copy-pasteable shell block, not the `release/vX.Y.Z-rc.N` placeholder in the
+// prose. Someone restoring that block from git history would have passed the
+// lint. Matches the branch form only — the RC *tags* (`v1.6.0-rc.1`, no
+// `release/` prefix) are current and appear in the v1.6.0 postmortem.
+const RETIRED_BRANCH = /release\/v(?:X\.Y\.Z|\d+\.\d+\.\d+)-(?:rc|beta|alpha)\.(?:N|\d+)/g;
 const LEGACY_ALLOWED = new Set(["technical-documentation/architecture/decisions.md"]);
 
 const REQUIRED = [
@@ -138,6 +146,10 @@ for (const file of files) {
 	if (LEGACY_ALLOWED.has(rel)) continue;
 	for (const name of LEGACY) {
 		if (text.includes(name)) errors.push(`${rel}: mentions removed "${name}"`);
+	}
+
+	for (const [match] of text.matchAll(RETIRED_BRANCH)) {
+		errors.push(`${rel}: retired release-branch naming "${match}" (it is release/vX.Y.Z)`);
 	}
 }
 
