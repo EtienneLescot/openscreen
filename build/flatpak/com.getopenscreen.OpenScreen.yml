@@ -1,0 +1,125 @@
+# Flatpak manifest — SPIKE, not a submission.
+#
+# The point of this file is to be built by .github/workflows/flatpak-spike.yml and
+# FAIL INFORMATIVELY. Flathub forbids the shortcut every other channel in this repo
+# takes: "All source available submissions must be built entirely from source code.
+# This requirement applies to the main application component defined in the manifest,
+# as well as any runtime dependencies included in the manifest." OpenScreen is MIT,
+# so it is source-available, so no repackaged .deb and no extra-data escape hatch.
+#
+# Every value marked SPIKE below is a guess the CI run is supposed to confirm or
+# refute. Do not treat this as a reviewed manifest.
+app-id: com.getopenscreen.OpenScreen
+runtime: org.freedesktop.Platform
+# SPIKE: 24.08 is the runtime the Electron2 BaseApp is known to publish against.
+# If the spike reports the base is missing for this version, bump both together —
+# they must match or flatpak-builder refuses the base outright.
+runtime-version: '24.08'
+sdk: org.freedesktop.Sdk
+base: org.electronjs.Electron2.BaseApp
+base-version: '24.08'
+sdk-extensions:
+  # SPIKE: package.json pins node 22.22.1. The freedesktop SDK ships node as a
+  # versioned extension and node22 may simply not exist for 24.08 — the spike
+  # enumerates what is actually available before this build is attempted.
+  - org.freedesktop.Sdk.Extension.node22
+  # The two Rust crates (crates/, electron/native/pipewire-capture/) need cargo.
+  - org.freedesktop.Sdk.Extension.rust-stable
+command: openscreen
+
+finish-args:
+  - --share=ipc
+  - --socket=wayland
+  - --socket=fallback-x11
+  - --socket=pulseaudio
+  # Screen capture goes through the portal, not through a raw socket. The helper in
+  # electron/native/pipewire-capture already speaks org.freedesktop.portal.ScreenCast,
+  # which is the sandboxed path, so this part of the port is unusually well placed.
+  - --talk-name=org.freedesktop.portal.ScreenCast
+  - --talk-name=org.freedesktop.portal.Desktop
+  # Webcam.
+  - --device=all
+  # Vulkan: the compositor addon is a Vulkan renderer.
+  - --device=dri
+  - --share=network
+  - --filesystem=xdg-videos
+  - --filesystem=xdg-documents
+
+build-options:
+  append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/rust-stable/bin
+  env:
+    # Keep npm and cargo inside the build dir; the sandbox has no HOME to speak of.
+    npm_config_cache: /run/build/openscreen/npm-cache
+    CARGO_HOME: /run/build/openscreen/cargo
+
+modules:
+  # ---------------------------------------------------------------------------
+  # 1. ffmpeg FROM SOURCE.
+  #
+  # This is the module that decides whether the port is a week or a quarter, and it
+  # is the reason the spike exists. scripts/fetch-ffmpeg.mjs pins a BtbN *prebuilt*
+  # tree (ffmpeg-n8.1.2-…-linux64-lgpl-shared-8.1.tar.xz, sha256 c882a80f…) and
+  # Flathub will reject it: prebuilt is prebuilt whether or not it is sha-pinned.
+  #
+  # Worse, the prebuilt tree is not merely convenient. crates/compositor-view-napi
+  # RENAMES every ffmpeg dynamic symbol in the libraries it ships, because Electron
+  # links Chromium's own stripped libffmpeg.so into the same address space and the
+  # addon would otherwise bind to that. See scripts/build-linux-compositor-addon.mjs
+  # — it runs `nm -D --defined-only` over the vendored .so files and stages renamed
+  # copies. That mechanism needs headers AND libraries it owns, which rules out the
+  # org.freedesktop.Platform.ffmpeg-full extension (libraries, no dev headers).
+  #
+  # So: build ffmpeg from the upstream release tarball into /app, with the same LGPL
+  # shape as the pinned build, and let the existing script rename copies of it.
+  # SPIKE: the configure flags below are a first cut at matching what the addon and
+  # the pipewire helper actually link against. Expect this list to be wrong.
+  - name: ffmpeg
+    config-opts:
+      - --disable-static
+      - --enable-shared
+      - --disable-programs
+      - --disable-doc
+      - --enable-gpl
+      - --enable-version3
+      - --enable-libvpx
+      - --enable-libopus
+    sources:
+      - type: archive
+        url: https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
+        # SPIKE: placeholder. The workflow resolves and prints the real digest; do
+        # not commit a guessed sha256, the build must fail loudly instead.
+        sha256: 0000000000000000000000000000000000000000000000000000000000000000
+
+  # ---------------------------------------------------------------------------
+  # 2. The application.
+  #
+  # generated-sources.json is NOT committed: flatpak-node-generator produces it from
+  # package-lock.json and it is large and entirely derived. The spike workflow writes
+  # it next to this file before building. If it is absent, that is the first thing to
+  # check — not a manifest bug.
+  - name: openscreen
+    buildsystem: simple
+    build-options:
+      env:
+        # Point the native build at the ffmpeg this manifest just built rather than
+        # at crates/thirdparty/, which nothing provisions inside the sandbox.
+        FFMPEG_DIR: /app
+    build-commands:
+      # SPIKE: build:linux is `fetch:ffmpeg:sdk && build:native:linux &&
+      # build:native:compositor:linux && tsc && vite build && electron-builder …`.
+      # The fetch step is a network download and cannot run here, which is why the
+      # steps are spelled out instead of calling the npm script.
+      - npm ci --offline
+      - npm run build:native:linux
+      - npm run build:native:compositor:linux
+      - npm run build-vite
+      # SPIKE: electron-builder's own linux targets are wrong here — Flathub packages
+      # the app tree directly. `--dir` is the closest thing; whether it cooperates
+      # with the BaseApp's electron is unknown and is a question for the run.
+      - npx electron-builder --linux dir --config.npmRebuild=false
+      - cp -r dist/linux-unpacked /app/openscreen
+    sources:
+      - type: git
+        url: https://github.com/getopenscreen/openscreen.git
+        tag: v1.9.2
+      - generated-sources.json
