@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { planChunks } from "./chunking";
-import { _resetSttManagerForTests, SttManager } from "./index";
+import { _resetSttManagerForTests, getSttManager, SttManager, shutdownStt } from "./index";
 import type { SttStatusEvent, SttTranscribeResponse } from "./transcriptionContract";
 
 // We swap the long-lived modules for fakes so the manager's `init()` and
@@ -198,6 +198,16 @@ describe("SttManager", () => {
 		const mgr = new SttManager();
 		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
 		await mgr.shutdown();
+		expect(fakeWhisperServer.stop).toHaveBeenCalledOnce();
+	});
+
+	it("shutdownStt() stops and releases the singleton exactly once", async () => {
+		const mgr = getSttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+
+		await shutdownStt();
+		await shutdownStt();
+
 		expect(fakeWhisperServer.stop).toHaveBeenCalledOnce();
 	});
 

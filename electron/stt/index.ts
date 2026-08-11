@@ -20,7 +20,7 @@ import { WhisperServerManager } from "./whisperServer";
  *      (`chunking.ts`) and runs each through whisper-stt-server's HTTP
  *      `/inference`, which returns both phrase- and word-level segments in one
  *      pass (see whisperServer.ts). Word timestamps come from whisper.cpp's
- *      native DTW token timestamps (`t_dtw`, SMALL aheads preset,
+ *      native DTW token timestamps (`t_dtw`, LARGE_V3_TURBO aheads preset,
  *      `flash_attn = false`), see
  *      technical-documentation/architecture/transcription-and-captions.md § Decision rationale.
  *   3. `shutdown()` tears down on app quit.
@@ -308,6 +308,18 @@ let singleton: SttManager | null = null;
 export function getSttManager(): SttManager {
 	if (!singleton) singleton = new SttManager();
 	return singleton;
+}
+
+/**
+ * Stop and release the lazy singleton without creating one just to quit.
+ *
+ * Electron's GUI lifecycle awaits this from a guarded `before-quit` handler;
+ * clearing the slot first also makes repeated quit events idempotent.
+ */
+export async function shutdownStt(): Promise<void> {
+	const manager = singleton;
+	singleton = null;
+	await manager?.shutdown();
 }
 
 /** Reset the singleton — for tests. */
