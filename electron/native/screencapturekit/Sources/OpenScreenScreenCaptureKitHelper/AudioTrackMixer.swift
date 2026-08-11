@@ -122,8 +122,7 @@ final class AudioTrackMixer {
 		self.includesMicrophone = includesMicrophone
 		// The request carries MIC_GAIN_BOOST (1.4); Windows applies it unconditionally and so
 		// does this. A non-finite or negative value would poison every mixed sample.
-		let sanitized = microphoneGain.isFinite ? max(0, microphoneGain) : 1
-		self.microphoneGain = Float(sanitized)
+		self.microphoneGain = Self.sanitizeMicrophoneGain(microphoneGain)
 		self.outputFormatDescription = Self.makeOutputFormatDescription()
 	}
 
@@ -142,9 +141,15 @@ final class AudioTrackMixer {
 		self.includesMicrophone = includesMicrophone
 		// The request carries MIC_GAIN_BOOST (1.4); Windows applies it unconditionally and so
 		// does this. A non-finite or negative value would poison every mixed sample.
-		let sanitized = microphoneGain.isFinite ? max(0, microphoneGain) : 1
-		self.microphoneGain = Float(sanitized)
+		self.microphoneGain = Self.sanitizeMicrophoneGain(microphoneGain)
 		self.outputFormatDescription = Self.makeOutputFormatDescription()
+	}
+
+	private static func sanitizeMicrophoneGain(_ gain: Double) -> Float {
+		guard gain.isFinite else {
+			return 1
+		}
+		return Float(min(max(0, gain), Double(Float.greatestFiniteMagnitude)))
 	}
 
 	/// Anchors the mixer to the writer session. Audio delivered before this is dropped — the

@@ -53,6 +53,32 @@ final class AudioStartAlignmentTests: XCTestCase {
 		XCTAssertEqual(try firstInt16Sample(in: XCTUnwrap(output.first)), 3_277, accuracy: 2)
 	}
 
+	func testMixerClampsFiniteGainBeforeFloatConversion() throws {
+		var output = [CMSampleBuffer]()
+		let mixer = AudioTrackMixer(
+			includesSystemAudio: false,
+			includesMicrophone: true,
+			microphoneGain: Double.greatestFiniteMagnitude,
+			isOutputReady: { true },
+			appendOutput: { output.append($0) }
+		)
+		let sessionStart = CMTime(seconds: 100, preferredTimescale: 48_000)
+		mixer.beginTimeline(at: sessionStart)
+
+		mixer.ingest(
+			try makeFloatStereoBuffer(value: 0, frames: 480, at: 100),
+			from: .microphone
+		)
+		mixer.ingest(
+			try makeFloatStereoBuffer(value: 0.5, frames: 480, at: 100.01),
+			from: .microphone
+		)
+
+		XCTAssertEqual(output.count, 2)
+		XCTAssertEqual(try firstInt16Sample(in: output[0]), 0)
+		XCTAssertEqual(try firstInt16Sample(in: output[1]), 32_767)
+	}
+
 	func testRemovesOneTimeCaptureStartupDelay() throws {
 		var alignment = AudioStartAlignment(sourceCount: 2)
 		let sessionStart = CMTime(seconds: 100, preferredTimescale: 48_000)
