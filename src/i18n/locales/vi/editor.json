@@ -134,6 +134,8 @@
 		"emptyHint": "Chưa có media nào — nhập một bản ghi để bắt đầu.",
 		"importMedia": "Nhập media",
 		"added": "Đã thêm {{label}}",
+		"addToTimeline": "Thêm vào dòng thời gian",
+		"addedToTimeline": "Đã thêm {{label}} vào dòng thời gian",
 		"sourceTranscript": "Bản ghi lời thoại nguồn",
 		"close": "Đóng",
 		"transcriptReady": "Bản ghi lời thoại đã sẵn sàng",

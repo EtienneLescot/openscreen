@@ -134,6 +134,8 @@
 		"emptyHint": "لا توجد وسائط بعد — استورد تسجيلاً للبدء.",
 		"importMedia": "استيراد وسائط",
 		"added": "تمت إضافة {{label}}",
+		"addToTimeline": "إضافة إلى الخط الزمني",
+		"addedToTimeline": "تمت إضافة {{label}} إلى الخط الزمني",
 		"sourceTranscript": "نص المصدر",
 		"close": "إغلاق",
 		"transcriptReady": "النص جاهز",

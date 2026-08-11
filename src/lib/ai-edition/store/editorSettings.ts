@@ -53,6 +53,11 @@ export interface EditorSettingsSnapshot {
 	webcamReactiveZoom: boolean;
 	webcamSizePreset: WebcamSizePreset;
 	webcamPosition: WebcamPosition | null;
+	webcamCropRegion: CropRegion;
+	/** Positive values move audio later; negative values advance it. */
+	audioOffsetMs: number;
+	audioGainDb: number;
+	audioAutoMaster: boolean;
 	cursor: CursorVisualSettings;
 	cursorShow: boolean;
 	cursorTheme: string;
@@ -79,6 +84,10 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	webcamReactiveZoom: DEFAULT_WEBCAM_REACTIVE_ZOOM,
 	webcamSizePreset: DEFAULT_WEBCAM_SIZE_PRESET,
 	webcamPosition: DEFAULT_WEBCAM_POSITION,
+	webcamCropRegion: DEFAULT_CROP_REGION,
+	audioOffsetMs: 0,
+	audioGainDb: 0,
+	audioAutoMaster: true,
 	cursor: {
 		size: DEFAULT_CURSOR_SIZE,
 		smoothing: DEFAULT_CURSOR_SMOOTHING,
@@ -106,6 +115,10 @@ interface LegacyShape {
 	webcamReactiveZoom?: boolean;
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: WebcamPosition | null;
+	webcamCropRegion?: CropRegion;
+	audioOffsetMs?: number;
+	audioGainDb?: number;
+	audioAutoMaster?: boolean;
 	cursorSize?: number;
 	cursorSmoothing?: number;
 	cursorMotionBlur?: number;
@@ -160,6 +173,10 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 		),
 		webcamSizePreset: num(legacy?.webcamSizePreset, DEFAULT_EDITOR_SETTINGS.webcamSizePreset),
 		webcamPosition: normaliseWebcamPosition(legacy?.webcamPosition),
+		webcamCropRegion: normaliseCropRegion(legacy?.webcamCropRegion),
+		audioOffsetMs: Math.min(2_000, Math.max(-2_000, num(legacy?.audioOffsetMs, 0))),
+		audioGainDb: Math.min(18, Math.max(-24, num(legacy?.audioGainDb, 0))),
+		audioAutoMaster: bool(legacy?.audioAutoMaster, true),
 		cursor,
 		cursorShow: bool(legacy?.cursorShow, DEFAULT_EDITOR_SETTINGS.cursorShow),
 		cursorTheme: str(legacy?.cursorTheme, DEFAULT_EDITOR_SETTINGS.cursorTheme),
@@ -181,6 +198,10 @@ export interface EditorSettingsPatch {
 	webcamReactiveZoom?: boolean;
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: WebcamPosition | null;
+	webcamCropRegion?: CropRegion;
+	audioOffsetMs?: number;
+	audioGainDb?: number;
+	audioAutoMaster?: boolean;
 	cursor?: Partial<CursorVisualSettings> & { theme?: string; show?: boolean };
 	autoFocusAll?: boolean;
 }
@@ -232,4 +253,18 @@ function normaliseWebcamPosition(value: unknown): WebcamPosition | null {
 		cx: Math.min(1, Math.max(0, cxRaw)),
 		cy: Math.min(1, Math.max(0, cyRaw)),
 	};
+}
+
+function normaliseCropRegion(value: unknown): CropRegion {
+	if (!value || typeof value !== "object") return DEFAULT_CROP_REGION;
+	const candidate = value as Record<string, unknown>;
+	const x = isNumber(candidate.x) ? Math.min(1, Math.max(0, candidate.x)) : 0;
+	const y = isNumber(candidate.y) ? Math.min(1, Math.max(0, candidate.y)) : 0;
+	const width = isNumber(candidate.width)
+		? Math.min(1 - x, Math.max(0.01, candidate.width))
+		: 1 - x;
+	const height = isNumber(candidate.height)
+		? Math.min(1 - y, Math.max(0.01, candidate.height))
+		: 1 - y;
+	return { x, y, width, height };
 }

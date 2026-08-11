@@ -213,6 +213,8 @@ export interface SceneLayout {
 	webcamPosition: { cx: number; cy: number } | null;
 	/** Webcam shrinks while a zoom region is active. */
 	webcamReactiveZoom: boolean;
+	/** User-authored webcam framing, as fractions of the camera source. */
+	webcamCrop: { x: number; y: number; width: number; height: number };
 	/**
 	 * Webcam rect resolved by the app (= `computeCompositeLayout(...).webcamRect`, pixels
 	 * → fractions of the output frame, parity EXACTE entre preview et natif). When set, the
@@ -368,6 +370,13 @@ export interface SceneDescription {
 	 */
 	speedRegions: SceneSpeedRegion[];
 	cursor: SceneCursor;
+	/** Voice-oriented finishing applied to preview/export audio. Offset is signed:
+	 * positive delays audio, negative advances it. */
+	audio: {
+		offsetMs: number;
+		gainDb: number;
+		autoMaster: boolean;
+	};
 	/**
 	 * Per-clip screen crop (fractions of the frame), or null for the identity
 	 * (full-frame) crop. One entry per clip in the same order as `clips`, so a
@@ -602,6 +611,12 @@ export function buildSceneDescription(
 	 * screen squeezed into its half with nothing beside it. `has_webcam` (native) only
 	 * gates the camera's own draw — it cannot give the screen its frame back.
 	 */
+	const croppedWebcamSize = webcamSourceSize
+		? {
+				width: Math.max(1, webcamSourceSize.width * settings.webcamCropRegion.width),
+				height: Math.max(1, webcamSourceSize.height * settings.webcamCropRegion.height),
+			}
+		: null;
 	const layoutForClip = (screenSize: { width: number; height: number }, hasCamera: boolean) => {
 		const preset = resolveWebcamLayoutPreset(settings.webcamLayoutPreset, hasCamera);
 		return computeCompositeLayout({
@@ -611,7 +626,8 @@ export function buildSceneDescription(
 				height: Math.round(outputDims.height * paddingFit),
 			},
 			screenSize,
-			webcamSize: preset === "no-webcam" ? null : (webcamSourceSize ?? { width: 960, height: 720 }),
+			webcamSize:
+				preset === "no-webcam" ? null : (croppedWebcamSize ?? { width: 960, height: 720 }),
 			layoutPreset: preset,
 			webcamSizePreset: settings.webcamSizePreset,
 			webcamPosition: preset === "picture-in-picture" ? settings.webcamPosition : null,
@@ -677,6 +693,7 @@ export function buildSceneDescription(
 				settings.webcamLayoutPreset,
 				settings.webcamReactiveZoom,
 			),
+			webcamCrop: settings.webcamCropRegion,
 			webcamRect,
 			screenRect,
 			screenRadiusFrac: radiusFractionOf(
@@ -708,6 +725,11 @@ export function buildSceneDescription(
 			clickBounce: settings.cursor.clickBounce,
 			clipToBounds: settings.cursor.clipToBounds,
 			theme: settings.cursorTheme,
+		},
+		audio: {
+			offsetMs: settings.audioOffsetMs,
+			gainDb: settings.audioGainDb,
+			autoMaster: settings.audioAutoMaster,
 		},
 		background: parseWallpaper(settings.wallpaper),
 		zoomRegions: projectedZoomRegions.map((region) => ({

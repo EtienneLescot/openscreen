@@ -1517,9 +1517,12 @@ impl Compositor {
         //
         // Le center-crop carré de square/circle en est un cas particulier (boîte 1:1) — il n'a
         // plus besoin d'être traité à part.
-        let (su0, sv0, su1, sv1) = cover_crop_uv(
+        let [su0, sv0, su1, sv1] = crate::frame_geometry::webcam_source_rect(
             [wcw, wch],
             [wtw as f32, wth as f32],
+            scene_ref
+                .as_ref()
+                .and_then(|scene| scene.layout.webcam_crop),
             w_px[0] / w_px[1].max(0.0001),
         );
         // miroir = échanger les bornes u du rect source (flip horizontal).

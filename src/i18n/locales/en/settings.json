@@ -49,6 +49,10 @@
 		"noWebcam": "No Webcam",
 		"webcamShape": "Camera Shape",
 		"webcamSize": "Webcam Size",
+		"webcamFraming": "Webcam crop",
+		"webcamCropZoom": "Zoom",
+		"webcamCropX": "Pan horizontally",
+		"webcamCropY": "Pan vertically",
 		"mirrorWebcam": "Mirror Webcam",
 		"reactiveWebcam": "Shrink on Zoom",
 		"reactiveWebcamDescription": "Camera smoothly shrinks while the video is zoomed in, so it stays out of the way.",
@@ -60,6 +64,14 @@
 			"square": "Square",
 			"rounded": "Rounded"
 		}
+	},
+	"audio": {
+		"title": "Audio",
+		"help": "Nudge audio into sync, adjust output trim, and apply automatic speech-focused EQ, compression, and loudness finishing.",
+		"autoMaster": "Auto master voice",
+		"syncOffset": "Sync offset",
+		"outputGain": "Output trim",
+		"reset": "Reset audio"
 	},
 	"effects": {
 		"title": "Video Effects",

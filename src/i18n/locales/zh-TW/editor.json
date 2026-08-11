@@ -134,6 +134,8 @@
 		"emptyHint": "尚無媒體 — 匯入錄製內容以開始。",
 		"importMedia": "匯入媒體",
 		"added": "已新增 {{label}}",
+		"addToTimeline": "新增至時間軸",
+		"addedToTimeline": "已將 {{label}} 新增至時間軸",
 		"sourceTranscript": "來源逐字稿",
 		"close": "關閉",
 		"transcriptReady": "逐字稿已就緒",

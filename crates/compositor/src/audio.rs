@@ -4,6 +4,7 @@
 
 use crate::ffi::*;
 use crate::regions::SpeedSegment;
+use crate::scene::SceneAudio;
 use anyhow::{bail, Result};
 use std::f32::consts::PI;
 use std::ffi::CString;
@@ -25,6 +26,114 @@ const TARGET_GRAINS: usize = 8;
 const PASSTHROUGH_EPSILON: f64 = 1e-3;
 
 pub type PlanarPcm = Vec<Vec<f32>>;
+
+/// Apply the editor's signed sync offset and fast voice-oriented mastering.
+///
+/// The automatic path is deliberately deterministic and dependency-free: an 80 Hz high-pass
+/// removes desk/room rumble, a linked-stereo 3:1 compressor controls speech peaks, and a final
+/// RMS/peak pass raises intelligibility without clipping. Linking the envelope preserves the
+/// stereo image. The result stays the same length so video and following clips cannot drift.
+pub fn finish_audio(mut pcm: PlanarPcm, settings: SceneAudio) -> PlanarPcm {
+    let samples = pcm.first().map(Vec::len).unwrap_or(0);
+    if samples == 0 {
+        return pcm;
+    }
+    for channel in pcm.iter_mut() {
+        channel.resize(samples, 0.0);
+    }
+
+    if settings.auto_master {
+        let cutoff_hz = 80.0f32;
+        let dt = 1.0 / AUDIO_OUTPUT_SAMPLE_RATE as f32;
+        let rc = 1.0 / (2.0 * PI * cutoff_hz);
+        let alpha = rc / (rc + dt);
+        for channel in pcm.iter_mut() {
+            let mut previous_input = 0.0f32;
+            let mut previous_output = 0.0f32;
+            for sample in channel.iter_mut() {
+                let input = *sample;
+                let output = alpha * (previous_output + input - previous_input);
+                *sample = output;
+                previous_input = input;
+                previous_output = output;
+            }
+        }
+
+        let threshold_db = -18.0f32;
+        let ratio = 3.0f32;
+        let attack = (-1.0 / (0.010 * AUDIO_OUTPUT_SAMPLE_RATE as f32)).exp();
+        let release = (-1.0 / (0.120 * AUDIO_OUTPUT_SAMPLE_RATE as f32)).exp();
+        let mut envelope = 0.0f32;
+        for index in 0..samples {
+            let peak = pcm
+                .iter()
+                .map(|channel| channel[index].abs())
+                .fold(0.0f32, f32::max);
+            let coefficient = if peak > envelope { attack } else { release };
+            envelope = coefficient * envelope + (1.0 - coefficient) * peak;
+            let level_db = 20.0 * envelope.max(1e-9).log10();
+            let reduction_db = if level_db > threshold_db {
+                (level_db - threshold_db) * (1.0 - 1.0 / ratio)
+            } else {
+                0.0
+            };
+            let reduction = 10.0f32.powf(-reduction_db / 20.0);
+            for channel in pcm.iter_mut() {
+                channel[index] *= reduction;
+            }
+        }
+
+        let mut sum_squares = 0.0f64;
+        let mut count = 0usize;
+        let mut peak = 0.0f32;
+        for &sample in pcm.iter().flatten() {
+            peak = peak.max(sample.abs());
+            if sample.abs() > 1e-5 {
+                sum_squares += (sample as f64) * (sample as f64);
+                count += 1;
+            }
+        }
+        if count > 0 && peak > 0.0 {
+            let rms = (sum_squares / count as f64).sqrt() as f32;
+            let target_rms = 10.0f32.powf(-16.0 / 20.0);
+            let peak_ceiling = 10.0f32.powf(-1.0 / 20.0);
+            let makeup = (target_rms / rms.max(1e-9))
+                .min(peak_ceiling / peak)
+                .clamp(0.1, 4.0);
+            for sample in pcm.iter_mut().flatten() {
+                *sample *= makeup;
+            }
+        }
+    }
+
+    let trim = 10.0f32.powf(settings.gain_db.clamp(-24.0, 18.0) / 20.0);
+    for sample in pcm.iter_mut().flatten() {
+        *sample = (*sample * trim).clamp(-1.0, 1.0);
+    }
+
+    let shift = ((settings.offset_ms.clamp(-2_000.0, 2_000.0) / 1_000.0)
+        * AUDIO_OUTPUT_SAMPLE_RATE as f64)
+        .round() as i64;
+    if shift == 0 {
+        return pcm;
+    }
+    let mut shifted = vec![vec![0.0f32; samples]; pcm.len()];
+    if shift > 0 {
+        let destination = (shift as usize).min(samples);
+        let count = samples - destination;
+        for channel in 0..pcm.len() {
+            shifted[channel][destination..destination + count]
+                .copy_from_slice(&pcm[channel][..count]);
+        }
+    } else {
+        let source = ((-shift) as usize).min(samples);
+        let count = samples - source;
+        for channel in 0..pcm.len() {
+            shifted[channel][..count].copy_from_slice(&pcm[channel][source..source + count]);
+        }
+    }
+    shifted
+}
 
 extern "C" {
     fn sn_fmt_stream(s: *mut AVFormatContext, i: i32) -> *mut AVStream;
@@ -1062,5 +1171,66 @@ mod tests {
         let early = planar(&samples);
         let mixed = mix_aligned_tracks(&[(-0.001, &early)], 0.0, 8);
         assert_eq!(mixed[0], vec![0.5; 8]);
+    }
+
+    #[test]
+    fn signed_audio_offset_is_length_preserving() {
+        let settings = SceneAudio {
+            offset_ms: 1000.0 / AUDIO_OUTPUT_SAMPLE_RATE as f64,
+            gain_db: 0.0,
+            auto_master: false,
+        };
+        let delayed = finish_audio(planar(&[1.0, 2.0, 3.0]), settings);
+        assert_eq!(delayed[0], vec![0.0, 1.0, 1.0]);
+
+        let advanced = finish_audio(
+            planar(&[1.0, 0.5, 0.25]),
+            SceneAudio {
+                offset_ms: -1000.0 / AUDIO_OUTPUT_SAMPLE_RATE as f64,
+                ..settings
+            },
+        );
+        assert_eq!(advanced[0], vec![0.5, 0.25, 0.0]);
+    }
+
+    #[test]
+    fn manual_gain_is_applied_when_auto_master_is_off() {
+        let result = finish_audio(
+            planar(&[0.25, -0.25]),
+            SceneAudio {
+                offset_ms: 0.0,
+                gain_db: 6.0206,
+                auto_master: false,
+            },
+        );
+        assert!((result[0][0] - 0.5).abs() < 1e-4);
+        assert!((result[0][1] + 0.5).abs() < 1e-4);
+    }
+
+    #[test]
+    fn auto_master_removes_dc_and_respects_peak_ceiling() {
+        let mut input = vec![0.2f32; AUDIO_OUTPUT_SAMPLE_RATE as usize / 2];
+        for index in (0..input.len()).step_by(400) {
+            input[index] = 1.0;
+        }
+        let result = finish_audio(
+            planar(&input),
+            SceneAudio {
+                offset_ms: 0.0,
+                gain_db: 0.0,
+                auto_master: true,
+            },
+        );
+        let peak = result
+            .iter()
+            .flatten()
+            .fold(0.0f32, |value, sample| value.max(sample.abs()));
+        let tail_mean = result[0][result[0].len() / 2..]
+            .iter()
+            .copied()
+            .sum::<f32>()
+            / (result[0].len() / 2) as f32;
+        assert!(peak <= 10.0f32.powf(-1.0 / 20.0) + 1e-5);
+        assert!(tail_mean.abs() < 0.01);
     }
 }

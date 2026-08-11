@@ -1230,9 +1230,12 @@ impl Compositor {
             // `cover_crop_uv` est la primitive partagee que macOS et Windows
             // utilisent ; elle rend le rect inchange quand il a deja le bon
             // ratio, donc aucun placement correct ne bouge.
-            let (cu0, cv0, cu1, cv1) = crate::frame_geometry::cover_crop_uv(
+            let [cu0, cv0, cu1, cv1] = crate::frame_geometry::webcam_source_rect(
                 [wcw, wch],
                 [wtw as f32, wth as f32],
+                scene_ref
+                    .as_ref()
+                    .and_then(|scene| scene.layout.webcam_crop),
                 g.w_px[0] / g.w_px[1].max(0.0001),
             );
             // MIROIR : on inverse l'intervalle u. Le VS interpole `src`

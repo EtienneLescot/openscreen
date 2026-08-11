@@ -134,6 +134,8 @@
 		"emptyHint": "Aún no hay contenido — importa una grabación para empezar.",
 		"importMedia": "Importar contenido",
 		"added": "{{label}} añadido",
+		"addToTimeline": "Añadir a la línea de tiempo",
+		"addedToTimeline": "{{label}} añadido a la línea de tiempo",
 		"sourceTranscript": "Transcripción de la fuente",
 		"close": "Cerrar",
 		"transcriptReady": "Transcripción lista",

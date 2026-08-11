@@ -134,6 +134,8 @@
 		"emptyHint": "Henüz medya yok — başlamak için bir kayıt içe aktarın.",
 		"importMedia": "Medya içe aktar",
 		"added": "{{label}} eklendi",
+		"addToTimeline": "Zaman çizelgesine ekle",
+		"addedToTimeline": "{{label}} zaman çizelgesine eklendi",
 		"sourceTranscript": "Kaynak Metin Dökümü",
 		"close": "Kapat",
 		"transcriptReady": "Metin dökümü hazır",

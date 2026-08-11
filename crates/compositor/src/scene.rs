@@ -45,6 +45,9 @@ pub struct SceneLayout {
     pub webcam_position: Option<WebcamPosition>,
     /// la webcam rétrécit pendant un zoom actif.
     pub webcam_reactive_zoom: bool,
+    /// User-authored source crop for the camera. Absent keeps the full frame.
+    #[serde(default)]
+    pub webcam_crop: Option<SceneCrop>,
     /// Rect webcam résolu côté app (0..1 fractions du cadre de sortie), en PARITÉ EXACTE avec
     /// `computeCompositeLayout` (TS). Permet à TS et Rust de partager la même source de vérité :
     /// le natif ne dérive PLUS ses propres placements pour PiP/dual-frame/vertical-stack — il
@@ -394,6 +397,24 @@ pub struct SceneCrop {
 
 #[derive(Debug, Clone, Copy, Deserialize)]
 #[serde(rename_all = "camelCase")]
+pub struct SceneAudio {
+    pub offset_ms: f64,
+    pub gain_db: f32,
+    pub auto_master: bool,
+}
+
+impl Default for SceneAudio {
+    fn default() -> Self {
+        Self {
+            offset_ms: 0.0,
+            gain_db: 0.0,
+            auto_master: false,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct SceneOutput {
     pub width: u32,
     pub height: u32,
@@ -420,6 +441,9 @@ pub struct Scene {
     #[serde(default)]
     pub camera_fullscreen_regions: Vec<SceneCameraFullscreenRegion>,
     pub cursor: SceneCursor,
+    /// Global audio finishing. Default keeps old scene payloads bit-for-bit compatible.
+    #[serde(default)]
+    pub audio: SceneAudio,
     /// Crop écran par clip, dans le même ordre que `clips` (`cropByClip` côté TS).
     #[serde(default)]
     pub crop_by_clip: Vec<Option<SceneCrop>>,
