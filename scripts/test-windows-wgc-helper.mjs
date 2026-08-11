@@ -34,7 +34,7 @@ const WITH_SOFTWARE_FALLBACK =
 	process.argv.includes("--software-fallback");
 const INJECT_DEFAULT_SINK_WRITER_FAILURE_ENV =
 	"OPENSCREEN_WGC_TEST_INJECT_DEFAULT_SINK_WRITER_FAILURE_ONCE";
-const INJECTION_MARKER = "TEST-ONLY: Injected default MFCreateSinkWriterFromURL failure";
+const INJECTION_MARKER = "TEST-ONLY: Injected default sink-writer creation failure";
 const STALL_READBACK_ENV = "OPENSCREEN_WGC_TEST_STALL_READBACK_MS";
 /**
  * Reproduces issue #252 on ordinary hardware: holds the frame lock across a
@@ -286,6 +286,43 @@ function probeStreams(outputPath) {
 	return JSON.parse(ffprobe.stdout).streams ?? [];
 }
 
+/**
+ * The property the fragmented container exists for, checked without having to
+ * kill anything: a fragmented MP4 carries its index up front and its samples in
+ * self-describing `moof`+`mdat` pairs, so a prefix of the file still decodes. A
+ * plain MP4 only becomes readable when `Finalize()` writes `moov` at the end,
+ * which is exactly the call the shutdown watchdog's `TerminateProcess`
+ * pre-empts in issues #252 / #292 / #327.
+ *
+ * Truncating a copy is a proxy for that kill, not a replacement: it proves the
+ * container survives losing its tail. It does not prove the helper flushed
+ * anything before dying, which only the real kill test can.
+ */
+function assertPrefixIsReadable(outputPath) {
+	const truncatedPath = `${outputPath}.truncated.mp4`;
+	const source = fs.readFileSync(outputPath);
+	fs.writeFileSync(truncatedPath, source.subarray(0, Math.floor(source.length * 0.6)));
+	try {
+		// A plain MP4 does not merely lose its tail here, it fails to open at
+		// all ("moov atom not found"), so the throw and the empty result are the
+		// same finding and get the same message.
+		let truncatedStreams = [];
+		try {
+			truncatedStreams = probeStreams(truncatedPath);
+		} catch {
+			truncatedStreams = [];
+		}
+		if (!truncatedStreams.some((stream) => stream.codec_name === "h264")) {
+			throw new Error(
+				`A 60% prefix of ${outputPath} has no readable H.264 stream, so the recording is ` +
+					"still all-or-nothing: the container is not fragmented.",
+			);
+		}
+	} finally {
+		fs.rmSync(truncatedPath, { force: true });
+	}
+}
+
 function measureFirstFrameLuma(outputPath) {
 	const ffmpeg = spawnSync(
 		"ffmpeg",
@@ -517,13 +554,26 @@ if (
 		`WGC helper encoder selection was ${JSON.stringify(encoderSelection)}, expected ${expectedEncoderSelection} with preferSoftwareEncoder=${WITH_SOFTWARE_ENCODER}: ${result.stdout}`,
 	);
 }
+// Every fallback path has to stay fragmented, not just the nominal one. The
+// helper degrades to the plain container rather than failing a recording, so
+// without this the fix could quietly stop applying and every other assertion
+// here would still pass.
+if (encoderSelection.container !== "fragmented-mp4") {
+	throw new Error(
+		`WGC helper wrote a ${encoderSelection.container} container, expected fragmented-mp4: ${result.stdout}`,
+	);
+}
+assertPrefixIsReadable(outputPath);
+if (webcamOutputPath && fs.existsSync(webcamOutputPath)) {
+	assertPrefixIsReadable(webcamOutputPath);
+}
 
 const combinedHelperOutput = `${result.stdout}\n${result.stderr}`;
 const helperDiagnosticLines = combinedHelperOutput.split(/\r?\n/).filter(Boolean);
 const injectionLines = helperDiagnosticLines.filter((line) => line.includes(INJECTION_MARKER));
 const fallbackDiagnosticPatterns = [
 	INJECTION_MARKER,
-	"WARNING: Default MFCreateSinkWriterFromURL failed (hr=0x80070003)",
+	"WARNING: Sink-writer creation failed (hr=0x80070003)",
 	"retrying with the Microsoft software H.264 encoder.",
 	"INFO: Registered the Microsoft software H.264 MFT locally for this helper process.",
 	"INFO: Created the real software H.264 sink writer successfully.",
