@@ -92,7 +92,8 @@ final class AudioTrackMixer {
 		static let finalFlushTimeout = 5.0
 	}
 
-	private let input: AVAssetWriterInput
+	private let isOutputReady: () -> Bool
+	private let appendOutput: (CMSampleBuffer) -> Void
 	private let includesSystemAudio: Bool
 	private let includesMicrophone: Bool
 	private let microphoneGain: Float
@@ -115,7 +116,28 @@ final class AudioTrackMixer {
 		includesMicrophone: Bool,
 		microphoneGain: Double
 	) {
-		self.input = input
+		self.isOutputReady = { input.isReadyForMoreMediaData }
+		self.appendOutput = { input.append($0) }
+		self.includesSystemAudio = includesSystemAudio
+		self.includesMicrophone = includesMicrophone
+		// The request carries MIC_GAIN_BOOST (1.4); Windows applies it unconditionally and so
+		// does this. A non-finite or negative value would poison every mixed sample.
+		let sanitized = microphoneGain.isFinite ? max(0, microphoneGain) : 1
+		self.microphoneGain = Float(sanitized)
+		self.outputFormatDescription = Self.makeOutputFormatDescription()
+	}
+
+	/// Test seam for observing mixed PCM without putting an AVAssetWriter into a writing
+	/// session. Production always uses the AVAssetWriterInput initializer above.
+	init(
+		includesSystemAudio: Bool,
+		includesMicrophone: Bool,
+		microphoneGain: Double,
+		isOutputReady: @escaping () -> Bool,
+		appendOutput: @escaping (CMSampleBuffer) -> Void
+	) {
+		self.isOutputReady = isOutputReady
+		self.appendOutput = appendOutput
 		self.includesSystemAudio = includesSystemAudio
 		self.includesMicrophone = includesMicrophone
 		// The request carries MIC_GAIN_BOOST (1.4); Windows applies it unconditionally and so
@@ -227,12 +249,30 @@ final class AudioTrackMixer {
 	/// system-audio device that stops delivering — from blocking the whole track.
 	private func drain(flushing: Bool) {
 		while true {
-			let delivered = sources.indices.filter { sources[$0].hasDelivered }
+			let enabled = Source.allCases.filter(includes).map(\.rawValue)
+			let delivered = enabled.filter { sources[$0].hasDelivered }
 			guard let furthest = delivered.map({ sources[$0].endFrame }).max(), furthest > cursor else {
 				break
 			}
 
 			let chunkEnd = cursor + Int64(MixFormat.chunkFrames)
+			// Alignment rebases each enabled source's ordinary startup warm-up onto frame zero.
+			// Do not advance past that frame until every source has had a chance to contribute:
+			// otherwise a source that arrives second has its newly aligned opening samples
+			// discarded by SourceTimeline.dropFrames. If a device never delivers, reuse the
+			// existing bounded stall tolerance and continue with silence for that source.
+			let awaitingFirstBuffer = enabled.filter {
+				!sources[$0].hasDelivered && !sources[$0].isStalled
+			}
+			if !awaitingFirstBuffer.isEmpty && !flushing {
+				if furthest < chunkEnd + Int64(MixFormat.stallToleranceFrames) {
+					break
+				}
+				for index in awaitingFirstBuffer {
+					sources[index].isStalled = true
+				}
+			}
+
 			let live = delivered.filter { !sources[$0].isStalled }
 			let complete = live.allSatisfy { sources[$0].endFrame >= chunkEnd }
 			if !complete && !flushing {
@@ -280,16 +320,16 @@ final class AudioTrackMixer {
 	/// `append` is not advisory backpressure — it raises an NSException when the input is not
 	/// ready — so every path here waits for readiness rather than pushing through it.
 	private func flushPending(force: Bool) {
-		while !pending.isEmpty && input.isReadyForMoreMediaData {
-			input.append(pending.removeFirst())
+		while !pending.isEmpty && isOutputReady() {
+			appendOutput(pending.removeFirst())
 		}
 		if force {
 			// Teardown: this is the tail's last chance, and the writer is still draining, so
 			// give it a bounded moment instead of dropping audio the recording just captured.
 			let deadline = Date().addingTimeInterval(MixFormat.finalFlushTimeout)
 			while !pending.isEmpty {
-				if input.isReadyForMoreMediaData {
-					input.append(pending.removeFirst())
+				if isOutputReady() {
+					appendOutput(pending.removeFirst())
 					continue
 				}
 				if Date() >= deadline {
