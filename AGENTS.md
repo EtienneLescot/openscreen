@@ -14,11 +14,11 @@ OpenScreen is a free, open-source screen recorder and video editor (Electron + R
 - Format:       `npm run format` (Biome, tabs, double quotes, 100-col)
 - i18n check:   `npm run i18n:check` (validates the 13 locale files)
 
-**Use npm, not bun/pnpm/yarn/Deno.** Not a style preference: the native Swift (macOS) and C++ (Windows) capture helpers are rebuilt against Electron's ABI by electron-builder + `@electron/rebuild` resolving `package-lock.json`, and other package managers break that path. `packageManager` + `engines` in `package.json` pin the versions; CI installs with `npm ci`.
+**Use npm, not bun/pnpm/yarn/Deno.** Not a style preference. The native Swift (macOS) and C++ (Windows) capture helpers are rebuilt against Electron's ABI by electron-builder + `@electron/rebuild`, which resolve the tree through `package-lock.json`. Another package manager writes a different lockfile, so that rebuild breaks. `packageManager` + `engines` in `package.json` pin the versions; CI installs with `npm ci`.
 
 ## Development principles
 
-- Prefer the simplest solution that stays readable. No abstraction for hypothetical needs (YAGNI).
+- Prefer the simplest solution that stays readable — no abstraction for hypothetical needs (YAGNI).
 - **No mandated app-stack choice yet.** Contributors pick their own state/data library. Don't impose one across the codebase and don't refactor existing code onto a different one — keep each addition self-contained and consistent within its own module. A single choice may be enforced later.
 - Don't optimize for line count. A dense one-liner that hides control flow is worse than the explicit version.
 - Match the surrounding code's idiom rather than introducing a new pattern next to it.
@@ -147,4 +147,4 @@ Both workflows need the `OPENSCREEN_RELEASE_TOKEN` secret (see `technical-docume
 - **Pixi.js v8** is the rendering engine. Filters come from `pixi-filters` and `@pixi/filter-drop-shadow`. GSAP + `motion` for animation.
 - **i18n**: 13 locales in `src/i18n/locales/<locale>/` (e.g. `src/i18n/locales/en/settings.json`). The `i18n:check` script validates them — run it after touching translation files.
 - **Build pipeline**: `npm run build` is full electron-builder. For iterating on renderer only, use `npm run build-vite` (Vite + tsc, no packaging).
-- **Product constraints**: the project is free forever and explicitly "not production-grade". Don't add paywalls, premium tiers, or feature-gating logic, and don't add upsell language to the README or UI copy. This is a hard constraint, not a judgement call.
+- **Product constraints**: the project is free forever and explicitly "not production-grade". Don't add paywalls, premium tiers, or logic that gates a feature on who the user is, and don't add upsell language to the README or UI copy. This is a hard constraint, not a judgement call. (A flag that hides an unfinished capture backend is fine — it gates on readiness, not on the user.)
