@@ -46,10 +46,17 @@ private:
     bool createD3DDevice();
     bool createCaptureItem(HMONITOR monitor);
     bool createCaptureItem(HWND window);
+    bool createFramePoolAndSession();
+    bool registerFrameArrived();
     bool applySessionOptions(bool captureCursor);
     void onFrameArrived(
         winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool const& sender,
         winrt::Windows::Foundation::IInspectable const&);
+    // The body of onFrameArrived, split out so the handler itself is nothing but
+    // the try/catch that keeps a throwing projection from reaching the WinRT
+    // delegate and taking the process down with it.
+    void deliverFrame(
+        winrt::Windows::Graphics::Capture::Direct3D11CaptureFramePool const& sender);
 
     Microsoft::WRL::ComPtr<ID3D11Device> d3dDevice_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> d3dContext_;
@@ -61,6 +68,8 @@ private:
     FrameCallback frameCallback_;
     std::mutex callbackMutex_;
     std::atomic<int> callbacksInFlight_ = 0;
+    // One line per recording, not one per bad frame.
+    std::atomic<bool> frameErrorLogged_ = false;
     bool quiesced_ = false;
     int width_ = 0;
     int height_ = 0;

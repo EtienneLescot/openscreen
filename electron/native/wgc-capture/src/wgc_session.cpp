@@ -7,6 +7,7 @@
 #include <winrt/base.h>
 
 #include <chrono>
+#include <exception>
 #include <iostream>
 #include <thread>
 
@@ -30,6 +31,57 @@ bool succeeded(HRESULT hr, const char* label) {
               << std::endl;
     return false;
 }
+
+// Turns a C++/WinRT throw into a logged `false`.
+//
+// The projected calls on the setup path -- get_activation_factory, .as<>,
+// item_.Size(), CreateFreeThreaded, CreateCaptureSession, FrameArrived,
+// StartCapture -- report failure by throwing, and none of them was caught.
+// initialize() therefore could not return false: an exception from any of them
+// unwound past it into std::terminate and the process ended with no message at
+// all, leaving Electron to report "the helper exited before recording started"
+// and nothing else. The HRESULT was in the exception the whole time.
+//
+// No such failure has actually been observed. This is written from reading the
+// calls, not from a reproduction -- see the PR for the crash that prompted it
+// and turned out to be an unrelated stack-buffer overrun, which is a fastfail
+// rather than an exception and is not catchable here or anywhere.
+//
+// The label is the diagnostic, so a region never spans two calls a reader would
+// want told apart: the frame pool and the capture session get one each. Where a
+// region does cover several calls it is because they are one step under one
+// name -- "GraphicsCaptureItem for a monitor" is the activation factory, the
+// interop cast and Size(), and knowing which of those three threw would not
+// change what you do next. `succeeded()` above stays as it is for the calls
+// that return an HRESULT rather than throwing; this is its counterpart, not its
+// replacement.
+template <typename Body>
+bool guardWinrt(const char* what, Body&& body) {
+    try {
+        return body();
+    } catch (winrt::hresult_error const& error) {
+        std::cerr << "ERROR: " << what << " threw (hr=0x" << std::hex
+                  << static_cast<uint32_t>(error.code()) << std::dec << "): "
+                  << winrt::to_string(error.message()) << std::endl;
+        return false;
+    } catch (std::exception const& error) {
+        std::cerr << "ERROR: " << what << " threw (" << error.what() << ")" << std::endl;
+        return false;
+    } catch (...) {
+        std::cerr << "ERROR: " << what << " threw a non-standard exception" << std::endl;
+        return false;
+    }
+}
+
+// Deliberately no GraphicsCaptureSession::IsSupported() pre-flight here, though
+// it would give a nicer message than an HRESULT on some later call. It is the
+// one thing that could *refuse* a recording that works today: a machine where
+// IsSupported() answers false but capture would have succeeded records fine now
+// and would stop doing so, and there is no evidence either way about whether
+// such a machine exists. That is the exact shape of the #336 regression -- a new
+// gate in front of a path that was working -- and a better error message is not
+// worth carrying it. Everything below only adds a branch that did not exist, so
+// at worst it never runs.
 
 int64_t timeSpanToHns(wf::TimeSpan const& value) {
     return value.count();
@@ -132,43 +184,77 @@ bool WgcSession::createD3DDevice() {
 }
 
 bool WgcSession::createCaptureItem(HMONITOR monitor) {
-    auto factory = winrt::get_activation_factory<wgcap::GraphicsCaptureItem>();
-    auto interop = factory.as<IGraphicsCaptureItemInterop>();
+    return guardWinrt("GraphicsCaptureItem for a monitor", [&] {
+        auto factory = winrt::get_activation_factory<wgcap::GraphicsCaptureItem>();
+        auto interop = factory.as<IGraphicsCaptureItemInterop>();
 
-    wgcap::GraphicsCaptureItem item{nullptr};
-    HRESULT hr = interop->CreateForMonitor(
-        monitor,
-        winrt::guid_of<wgcap::GraphicsCaptureItem>(),
-        reinterpret_cast<void**>(winrt::put_abi(item)));
-    if (!succeeded(hr, "CreateForMonitor")) {
-        return false;
-    }
+        wgcap::GraphicsCaptureItem item{nullptr};
+        HRESULT hr = interop->CreateForMonitor(
+            monitor,
+            winrt::guid_of<wgcap::GraphicsCaptureItem>(),
+            reinterpret_cast<void**>(winrt::put_abi(item)));
+        if (!succeeded(hr, "CreateForMonitor")) {
+            return false;
+        }
 
-    item_ = item;
-    const auto size = item_.Size();
-    width_ = static_cast<int>(size.Width);
-    height_ = static_cast<int>(size.Height);
-    return width_ > 0 && height_ > 0;
+        item_ = item;
+        const auto size = item_.Size();
+        width_ = static_cast<int>(size.Width);
+        height_ = static_cast<int>(size.Height);
+        return width_ > 0 && height_ > 0;
+    });
 }
 
 bool WgcSession::createCaptureItem(HWND window) {
-    auto factory = winrt::get_activation_factory<wgcap::GraphicsCaptureItem>();
-    auto interop = factory.as<IGraphicsCaptureItemInterop>();
+    return guardWinrt("GraphicsCaptureItem for a window", [&] {
+        auto factory = winrt::get_activation_factory<wgcap::GraphicsCaptureItem>();
+        auto interop = factory.as<IGraphicsCaptureItemInterop>();
 
-    wgcap::GraphicsCaptureItem item{nullptr};
-    HRESULT hr = interop->CreateForWindow(
-        window,
-        winrt::guid_of<wgcap::GraphicsCaptureItem>(),
-        reinterpret_cast<void**>(winrt::put_abi(item)));
-    if (!succeeded(hr, "CreateForWindow")) {
+        wgcap::GraphicsCaptureItem item{nullptr};
+        HRESULT hr = interop->CreateForWindow(
+            window,
+            winrt::guid_of<wgcap::GraphicsCaptureItem>(),
+            reinterpret_cast<void**>(winrt::put_abi(item)));
+        if (!succeeded(hr, "CreateForWindow")) {
+            return false;
+        }
+
+        item_ = item;
+        const auto size = item_.Size();
+        width_ = roundUpToEven(static_cast<int>(size.Width));
+        height_ = roundUpToEven(static_cast<int>(size.Height));
+        return width_ > 0 && height_ > 0;
+    });
+}
+
+// Two guards, not one around both: they are separate projected calls, and a
+// single region would have reported a CreateCaptureSession throw under the
+// CreateFreeThreaded label -- naming the wrong call, which is worse than naming
+// none.
+bool WgcSession::createFramePoolAndSession() {
+    const bool pooled = guardWinrt("Direct3D11CaptureFramePool::CreateFreeThreaded", [&] {
+        framePool_ = wgcap::Direct3D11CaptureFramePool::CreateFreeThreaded(
+            winrtDevice_,
+            wgdx::DirectXPixelFormat::B8G8R8A8UIntNormalized,
+            2,
+            winrt::Windows::Graphics::SizeInt32{width_, height_});
+        return true;
+    });
+    if (!pooled) {
         return false;
     }
 
-    item_ = item;
-    const auto size = item_.Size();
-    width_ = roundUpToEven(static_cast<int>(size.Width));
-    height_ = roundUpToEven(static_cast<int>(size.Height));
-    return width_ > 0 && height_ > 0;
+    return guardWinrt("Direct3D11CaptureFramePool::CreateCaptureSession", [&] {
+        session_ = framePool_.CreateCaptureSession(item_);
+        return true;
+    });
+}
+
+bool WgcSession::registerFrameArrived() {
+    return guardWinrt("Direct3D11CaptureFramePool::FrameArrived", [&] {
+        frameArrivedToken_ = framePool_.FrameArrived({this, &WgcSession::onFrameArrived});
+        return true;
+    });
 }
 
 bool WgcSession::applySessionOptions(bool captureCursor) {
@@ -217,52 +303,26 @@ bool WgcSession::applySessionOptions(bool captureCursor) {
     return true;
 }
 
+// Every step reports its own failure, so the two overloads are the step list and
+// nothing else. Each returns false rather than throwing past its caller, which
+// is what main.cpp's "Failed to initialize WGC display session" has always
+// assumed and, until now, was not true of any of them.
 bool WgcSession::initialize(HMONITOR monitor, int fps, bool captureCursor) {
     fps_ = fps > 0 ? fps : 60;
-    if (!createD3DDevice()) {
-        return false;
-    }
-    if (!createCaptureItem(monitor)) {
-        return false;
-    }
-
-    framePool_ = wgcap::Direct3D11CaptureFramePool::CreateFreeThreaded(
-        winrtDevice_,
-        wgdx::DirectXPixelFormat::B8G8R8A8UIntNormalized,
-        2,
-        winrt::Windows::Graphics::SizeInt32{width_, height_});
-    session_ = framePool_.CreateCaptureSession(item_);
-
-    if (!applySessionOptions(captureCursor)) {
-        return false;
-    }
-
-    frameArrivedToken_ = framePool_.FrameArrived({this, &WgcSession::onFrameArrived});
-    return true;
+    return createD3DDevice() &&
+        createCaptureItem(monitor) &&
+        createFramePoolAndSession() &&
+        applySessionOptions(captureCursor) &&
+        registerFrameArrived();
 }
 
 bool WgcSession::initialize(HWND window, int fps, bool captureCursor) {
     fps_ = fps > 0 ? fps : 60;
-    if (!createD3DDevice()) {
-        return false;
-    }
-    if (!createCaptureItem(window)) {
-        return false;
-    }
-
-    framePool_ = wgcap::Direct3D11CaptureFramePool::CreateFreeThreaded(
-        winrtDevice_,
-        wgdx::DirectXPixelFormat::B8G8R8A8UIntNormalized,
-        2,
-        winrt::Windows::Graphics::SizeInt32{width_, height_});
-    session_ = framePool_.CreateCaptureSession(item_);
-
-    if (!applySessionOptions(captureCursor)) {
-        return false;
-    }
-
-    frameArrivedToken_ = framePool_.FrameArrived({this, &WgcSession::onFrameArrived});
-    return true;
+    return createD3DDevice() &&
+        createCaptureItem(window) &&
+        createFramePoolAndSession() &&
+        applySessionOptions(captureCursor) &&
+        registerFrameArrived();
 }
 
 void WgcSession::setFrameCallback(FrameCallback callback) {
@@ -277,7 +337,12 @@ bool WgcSession::start() {
     if (!applySessionOptions(captureCursor_)) {
         return false;
     }
-    session_.StartCapture();
+    if (!guardWinrt("GraphicsCaptureSession::StartCapture", [&] {
+            session_.StartCapture();
+            return true;
+        })) {
+        return false;
+    }
     started_ = true;
     return true;
 }
@@ -359,9 +424,36 @@ void WgcSession::stop() {
     d3dDevice_.Reset();
 }
 
+// The same defect as the setup path, on the hot path. TryGetNextFrame,
+// Surface(), the interop cast and SystemRelativeTime() are all projections that
+// throw, and a throw leaving a WinRT delegate goes straight to std::terminate --
+// a recording that ends with the process disappearing mid-capture, no stderr,
+// and the partial file as the only evidence.
+//
+// Dropping the frame is the only useful response: one bad frame is not a reason
+// to end a recording, and a surface that has gone bad usually stays bad. So it
+// is logged once and not at frame rate, which at 60 fps is the difference
+// between a diagnostic and a denial of service on the log.
 void WgcSession::onFrameArrived(
     wgcap::Direct3D11CaptureFramePool const& sender,
     wf::IInspectable const&) {
+    try {
+        deliverFrame(sender);
+    } catch (winrt::hresult_error const& error) {
+        if (!frameErrorLogged_.exchange(true)) {
+            std::cerr << "WARNING: Dropped a WGC frame (hr=0x" << std::hex
+                      << static_cast<uint32_t>(error.code()) << std::dec
+                      << "). Further frame errors are not repeated." << std::endl;
+        }
+    } catch (...) {
+        if (!frameErrorLogged_.exchange(true)) {
+            std::cerr << "WARNING: Dropped a WGC frame. "
+                      << "Further frame errors are not repeated." << std::endl;
+        }
+    }
+}
+
+void WgcSession::deliverFrame(wgcap::Direct3D11CaptureFramePool const& sender) {
     auto frame = sender.TryGetNextFrame();
     if (!frame) {
         return;
