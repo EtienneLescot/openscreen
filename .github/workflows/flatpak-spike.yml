@@ -38,7 +38,7 @@ jobs:
         run: |
           set -euo pipefail
           sudo apt-get update -qq
-          sudo apt-get install -y -qq flatpak flatpak-builder python3-aiohttp python3-toml
+          sudo apt-get install -y -qq flatpak flatpak-builder python3-venv
           flatpak remote-add --if-not-exists --user \
             flathub https://dl.flathub.org/repo/flathub.flatpakrepo
           flatpak --version
@@ -55,6 +55,22 @@ jobs:
         run: |
           set -euo pipefail
           echo "## Stage A — availability" >> "$GITHUB_STEP_SUMMARY"
+          # Query ONCE and keep the exit status. Per-id queries behind `|| true`
+          # turn a broken remote into six "NOT PUBLISHED" lines, which is the one
+          # wrong answer this stage must never give: it would read as "Flathub does
+          # not ship the runtime" when it means "the question never got asked".
+          if ! CATALOG=$(flatpak remote-ls flathub --user --columns=application,branch 2>&1); then
+            {
+              echo
+              echo "**QUERY FAILED** — \`flatpak remote-ls\` errored, so nothing below is a"
+              echo "statement about what Flathub publishes. Stage A draws no conclusion."
+              echo
+              echo '```'
+              echo "$CATALOG" | tail -5
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
           for id in \
             org.freedesktop.Platform \
             org.freedesktop.Sdk \
@@ -63,8 +79,7 @@ jobs:
             org.freedesktop.Sdk.Extension.node20 \
             org.freedesktop.Sdk.Extension.rust-stable
           do
-            FOUND=$(flatpak remote-ls flathub --user --columns=application,branch 2>/dev/null \
-              | awk -v id="$id" '$1 == id { printf "%s ", $2 }' || true)
+            FOUND=$(printf '%s\n' "$CATALOG" | awk -v id="$id" '$1 == id { printf "%s ", $2 }')
             if [[ -n "$FOUND" ]]; then
               echo "- \`$id\` → branches: $FOUND" >> "$GITHUB_STEP_SUMMARY"
             else
@@ -94,8 +109,15 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
-          git clone --depth 1 https://github.com/flathub-infra/flatpak-builder-tools.git /tmp/fbt
-          python3 /tmp/fbt/node/flatpak-node-generator.py npm package-lock.json \
+          # `node/` is a poetry project exposing the `flatpak-node-generator` console
+          # script — not a loose .py to invoke by path. Pinned: this tool decides
+          # whether the whole port is viable, so it should not change under us
+          # between two runs of the same spike.
+          git clone --filter=blob:none https://github.com/flatpak/flatpak-builder-tools.git /tmp/fbt
+          git -C /tmp/fbt checkout 737c0085912f9f7dabf9341d4608e2a77a51a73a
+          python3 -m venv /tmp/fbt-venv
+          /tmp/fbt-venv/bin/pip install --quiet /tmp/fbt/node
+          /tmp/fbt-venv/bin/flatpak-node-generator npm package-lock.json \
             -o build/flatpak/generated-sources.json
           BYTES=$(stat -c%s build/flatpak/generated-sources.json)
           COUNT=$(python3 -c "import json;print(len(json.load(open('build/flatpak/generated-sources.json'))))")
