@@ -86,7 +86,10 @@ The STT workflow uploads standalone archives for binary refresh and does not cur
 | `typecheck` | Ubuntu | `npx tsc --noEmit` |
 | `test` | Ubuntu | Vitest unit tests, Chromium installation, then browser-mode Vitest |
 | `build` | Ubuntu | `npx vite build`; this is not electron-builder packaging |
+| `appstream` | Ubuntu | `appstreamcli validate` on `build/com.getopenscreen.OpenScreen.metainfo.xml` |
 | `semantic-pr` | Ubuntu | Validates Conventional Commit-style PR titles |
+
+`build/com.getopenscreen.OpenScreen.metainfo.xml` is upstream AppStream metadata: the name, summary, description, licence, screenshots and release history a software centre shows instead of a bare icon. Nothing in this repository consumes it yet — the shipped deb installs a `.desktop` file and nine icon sizes and no `/usr/share/metainfo/` at all — so the `appstream` job is the only thing that can catch a broken edit before a Flathub reviewer does. Its component ID is `com.getopenscreen.OpenScreen`, deliberately not the Electron `appId` `com.etiennelescot.openscreen`: Flathub requires the ID to map to a domain the project controls, and `getopenscreen.com` is that domain.
 
 Jobs that need the root dependencies use `.github/actions/setup`, which requests Node 22 and runs `npm ci`; callers perform checkout themselves.
 

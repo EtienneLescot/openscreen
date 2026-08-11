@@ -66,6 +66,26 @@ jobs:
           node-version: 22
       - run: npm run docs:check
 
+  appstream:
+    name: AppStream metadata
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # `appstream` is not on the runner image, and it is the only thing this job
+      # needs — no Node, no npm ci. Same reasoning as the Docs job above.
+      - run: sudo apt-get update -qq && sudo apt-get install -y -qq appstream
+      # This gate exists because nothing else reads the file. It is upstream
+      # metadata with no consumer in this repository yet, so without validation
+      # here the first thing to discover a broken edit would be a Flathub
+      # reviewer, weeks later, on a submission that then has to be redone.
+      #
+      # --no-net deliberately: with network validation on, this job also fetches
+      # every screenshot, and an unreachable raw.githubusercontent.com would turn
+      # a metadata check into a flaky one on unrelated PRs. Dead screenshot URLs
+      # are caught by Flathub at submission time, which is the only place the
+      # answer actually matters.
+      - run: appstreamcli validate --no-net --explain build/com.getopenscreen.OpenScreen.metainfo.xml
+
   test:
     name: Test
     runs-on: ubuntu-latest
