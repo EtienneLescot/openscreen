@@ -710,23 +710,30 @@ int main(int argc, char* argv[]) {
     MFEncoderOptions encoderOptions{};
     encoderOptions.preferSoftwareEncoder = config.preferSoftwareEncoder;
     encoderOptions.injectDefaultSinkWriterFailureOnce = injectDefaultSinkWriterFailureOnce;
-    // Keep the CPU path for software encoding and inline webcam PiP: both need
-    // the frame in system memory, which is the one thing the DXGI path does not
-    // produce. The env var is the escape hatch for a machine where the GPU path
-    // misbehaves in a way the encoder's own probes do not catch -- a support
-    // answer instead of a hotfix.
+    // OFF by default. The GPU path exists to dodge a Map() that wedges inside
+    // the display driver on the machine in #252, and it demonstrably fixed
+    // display and window capture there. It also broke recording outright for
+    // the reporter in #336, who had working video before it. Its fallbacks
+    // cover every check made during initialize(); nothing covers a failure that
+    // only appears once frames are flowing, which is what #336 is.
     //
-    // config.webcamEnabled, not webcamActive: the latter is only set once the
-    // webcam capture has started, which happens well after this. Reading it
-    // here made the PiP condition dead code -- always false, so always
-    // permitting the GPU path -- and an inline-PiP recording would have run on
-    // DXGI and silently dropped the overlay, reporting success either way.
-    // config.webcamEnabled is already cleared above when webcam init fails,
-    // and writeSeparateWebcam is assigned there too, so both are final here.
+    // So it is opt-in until a failure mid-encode degrades to the CPU path
+    // instead of ending the recording, or until someone confirms it closes
+    // #252. Neither has happened, and defaulting it on means every user carries
+    // the risk so that the few who reproduce #252 might not have to.
+    //
+    // Set OPENSCREEN_WGC_ENABLE_DXGI_INPUT=1 to turn it on -- that is what the
+    // people in #252 and #327 should be given to test with.
+    //
+    // The other two conditions are unchanged and still required: software
+    // encoding and inline webcam PiP both need the frame in system memory,
+    // which the DXGI path does not produce. config.webcamEnabled, not
+    // webcamActive -- the latter is only set once webcam capture has started,
+    // well after this.
     encoderOptions.useDxgiInput =
+        readEnvInt("OPENSCREEN_WGC_ENABLE_DXGI_INPUT", 0) == 1 &&
         !config.preferSoftwareEncoder &&
-        (!config.webcamEnabled || writeSeparateWebcam) &&
-        readEnvInt("OPENSCREEN_WGC_DISABLE_DXGI_INPUT", 0) == 0;
+        (!config.webcamEnabled || writeSeparateWebcam);
 
     MFEncoder encoder;
     if (!encoder.initialize(
