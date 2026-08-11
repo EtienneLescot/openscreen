@@ -38,7 +38,7 @@ import {
 } from "./install-channel";
 import { getSelectedDesktopSource, registerIpcHandlers } from "./ipc/handlers";
 import { installMainProcessErrorGuards } from "./main-process-errors";
-import { registerSttIpc } from "./stt";
+import { registerSttIpc, shutdownStt } from "./stt";
 import { checkLatestRelease } from "./update-checker";
 import {
 	createCountdownOverlayWindow,
@@ -684,10 +684,31 @@ app.on("activate", () => {
 	}
 });
 
-app.on("before-quit", () => {
+let sttShutdownPromise: Promise<void> | null = null;
+let sttShutdownFinished = false;
+
+// Electron does not wait for an async event listener. Hold the first quit long
+// enough to terminate the long-lived Whisper helper, then re-enter app.quit()
+// with a guard so the second before-quit event can proceed normally. Without
+// this, a normal Cmd+Q orphaned the helper under launchd with the model and GPU
+// resources still resident after every OpenScreen window had gone away.
+app.on("before-quit", (event) => {
 	// A check started seconds ago must not settle after the app is gone and try to open a
-	// dialog on a quitting app.
+	// dialog on a quitting app. Aborting on the FIRST quit is deliberate even though that
+	// quit is deferred below: the user asked to leave, and a check they can re-run from the
+	// tray is not worth holding the helper's teardown behind.
 	updateCheckAbort?.abort();
+	if (sttShutdownFinished) return;
+	event.preventDefault();
+	if (sttShutdownPromise) return;
+	sttShutdownPromise = shutdownStt()
+		.catch((error) => {
+			console.error("[stt] Failed to stop whisper helper during app quit:", error);
+		})
+		.finally(() => {
+			sttShutdownFinished = true;
+			app.quit();
+		});
 });
 
 app.on("will-quit", () => {
