@@ -217,7 +217,7 @@ build_variant() {
   # @rpath/libggml.0.dylib and dies in dyld before main(). The `lib` prefix and
   # the `.so.<N>` version suffixes are what the globs below add.
   #
-  # -a preserves the symlink farm (libggml.dylib -> libggml.0.dylib ->
+  # -P preserves the symlink farm (libggml.dylib -> libggml.0.dylib ->
   # libggml.0.15.1.dylib); plain `cp` dereferences each one into a full copy of
   # the same payload, which tripled the staged size for no benefit.
   local found_libs=0

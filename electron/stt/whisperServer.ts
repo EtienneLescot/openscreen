@@ -103,6 +103,7 @@ export class WhisperServerManager {
 	private lastError: string | null = null;
 	private startedAtMs: number | null = null;
 	private inFlight: Promise<unknown> = Promise.resolve();
+	private starting: Promise<{ port: number; backend: SttBackend }> | null = null;
 
 	/** Buffered stderr from the helper; surfaced on shutdown + poll failures. */
 	private stderrTail = "";
@@ -136,11 +137,18 @@ export class WhisperServerManager {
 		const deadline = Date.now() + timeoutMs;
 		while (Date.now() < deadline) {
 			if (!shouldContinue()) throw new Error("whisper-stt-server exited before readiness");
+			const controller = new AbortController();
+			const probeTimeout = setTimeout(
+				() => controller.abort(),
+				Math.min(2_000, Math.max(1, deadline - Date.now())),
+			);
 			try {
-				const res = await fetch(baseUrl, { method: "GET" });
+				const res = await fetch(baseUrl, { method: "GET", signal: controller.signal });
 				if (res.ok) return;
 			} catch {
 				// not up yet
+			} finally {
+				clearTimeout(probeTimeout);
 			}
 			if (!shouldContinue()) throw new Error("whisper-stt-server exited before readiness");
 			await new Promise((resolve) => setTimeout(resolve, 250));
@@ -170,6 +178,16 @@ export class WhisperServerManager {
 	 * the cold-start cost twice.
 	 */
 	async start(options: WhisperServerStartOptions): Promise<{ port: number; backend: SttBackend }> {
+		if (this.starting) return this.starting;
+		this.starting = this.startImpl(options).finally(() => {
+			this.starting = null;
+		});
+		return this.starting;
+	}
+
+	private async startImpl(
+		options: WhisperServerStartOptions,
+	): Promise<{ port: number; backend: SttBackend }> {
 		if (this.shuttingDown) {
 			throw new Error("whisper-stt-server manager is shutting down");
 		}
@@ -286,9 +304,15 @@ export class WhisperServerManager {
 			return await launch(false);
 		} catch (err) {
 			const startupLog = `${err instanceof Error ? err.message : String(err)} ${this.stderrTail}`;
+			const startupLines = startupLog.split(/\r?\n/);
+			const mentionsGpuBackend = startupLines.some((line) =>
+				/(?:ggml_(?:metal|vulkan|cuda)|gpu)/i.test(line),
+			);
+			const mentionsStartupFailure = startupLines.some((line) =>
+				/(?:fail|error|allocat)/i.test(line),
+			);
 			const gpuStartupFailed =
-				resolved.backend !== "whispercpp-cpu" &&
-				/(?:ggml_(?:metal|vulkan|cuda)|gpu).*(?:fail|error|allocat)/i.test(startupLog);
+				resolved.backend !== "whispercpp-cpu" && mentionsGpuBackend && mentionsStartupFailure;
 			if (!gpuStartupFailed) throw err;
 			process.stderr.write(
 				"[whisper-stt-server] GPU startup failed; retrying with CPU inference\n",

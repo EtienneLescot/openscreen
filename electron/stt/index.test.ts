@@ -232,6 +232,42 @@ describe("SttManager", () => {
 		expect(fakeWhisperServer.shutdown).toHaveBeenCalledOnce();
 	});
 
+	it("cancels when shutdown starts as setup rejects", async () => {
+		const mgr = new SttManager();
+		fakeWhisperServer.start.mockImplementationOnce(async () => {
+			await mgr.shutdown();
+			throw new Error("connection closed during startup");
+		});
+
+		const error = await mgr
+			.init({ modelsBaseDir: "/tmp/fake-stt-models" })
+			.catch((value: unknown) => value);
+
+		expect((error as Error).name).toBe("AbortError");
+		expect(fakeWhisperServer.shutdown).toHaveBeenCalledOnce();
+	});
+
+	it("cancels when shutdown starts as the final chunk resolves", async () => {
+		const mgr = getSttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		fakeWhisperServer.transcribe.mockImplementationOnce(async () => {
+			await shutdownStt();
+			return {
+				segments: [{ text: "late", startSec: 0, endSec: 0.5 }],
+				wordSegments: [{ word: "late", startSec: 0, endSec: 0.5 }],
+				detectedLanguage: "en",
+				backend: "whispercpp-cpu" as const,
+			};
+		});
+
+		const error = await mgr
+			.transcribe({ samples: new Float32Array(16_000), language: "en" })
+			.catch((value: unknown) => value);
+
+		expect((error as Error).name).toBe("AbortError");
+		expect(fakeWhisperServer.transcribe).toHaveBeenCalledOnce();
+	});
+
 	it("retries setup after a failed one instead of caching the rejection", async () => {
 		// First run downloads a 253 MB model. Caching a rejected `prepare()` meant
 		// one dropped connection failed every later transcription in the session —

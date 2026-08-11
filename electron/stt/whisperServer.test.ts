@@ -98,6 +98,34 @@ describe("WhisperServerManager", () => {
 		expect(spawn).not.toHaveBeenCalled();
 	});
 
+	it("bounds a readiness probe that accepts a connection but never responds", async () => {
+		vi.useFakeTimers();
+		vi.stubGlobal(
+			"fetch",
+			vi.fn((_url: string, init?: RequestInit) => {
+				return new Promise<Response>((_resolve, reject) => {
+					init?.signal?.addEventListener("abort", () => reject(new Error("aborted")), {
+						once: true,
+					});
+				});
+			}),
+		);
+		try {
+			const pollUntilReady = (
+				WhisperServerManager as unknown as {
+					pollUntilReady: (baseUrl: string, timeoutMs: number) => Promise<void>;
+				}
+			).pollUntilReady;
+			const readiness = pollUntilReady("http://127.0.0.1:9999", 2_500);
+			const assertion = expect(readiness).rejects.toThrow(/did not respond within 2500ms/);
+			await vi.advanceTimersByTimeAsync(3_000);
+			await assertion;
+		} finally {
+			vi.unstubAllGlobals();
+			vi.useRealTimers();
+		}
+	});
+
 	it("extracts phrase and word segments from a verbose_json response", async () => {
 		const fakeJson = {
 			task: "transcribe",
@@ -288,20 +316,22 @@ describe("WhisperServerManager", () => {
 		const fs = await import("node:fs/promises");
 		const { spawn } = await import("node:child_process");
 		const dir = await mkdtemp(path.join(tmpdir(), "whisper-cpu-fallback-"));
+		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 		try {
+			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 			const modelPath = path.join(dir, "ggml-large-v3-turbo-q5_0.bin");
 			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
 			await fs.writeFile(modelPath, "dummy-ggml");
 			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
 
 			const child = () => {
-				const process = Object.assign(new EventEmitter(), {
+				const proc = Object.assign(new EventEmitter(), {
 					stdout: new EventEmitter(),
 					stderr: new EventEmitter(),
 					pid: 1234,
 					kill: vi.fn(),
 				});
-				return process;
+				return proc;
 			};
 			const gpuChild = child();
 			const cpuChild = child();
@@ -310,7 +340,7 @@ describe("WhisperServerManager", () => {
 					queueMicrotask(() => {
 						gpuChild.stderr.emit(
 							"data",
-							Buffer.from("ggml_metal_buffer_init: error: failed to allocate buffer"),
+							Buffer.from("ggml_metal_buffer_init: initialized\nfailed to allocate GPU buffer"),
 						);
 						gpuChild.emit("exit", 1);
 					});
@@ -335,6 +365,47 @@ describe("WhisperServerManager", () => {
 			expect(spawn).toHaveBeenCalledTimes(2);
 			expect(vi.mocked(spawn).mock.calls[0]?.[1]).not.toContain("--cpu");
 			expect(vi.mocked(spawn).mock.calls[1]?.[1]).toContain("--cpu");
+		} finally {
+			if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
+			vi.unstubAllGlobals();
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("serializes overlapping start calls onto one helper process", async () => {
+		const fs = await import("node:fs/promises");
+		const { spawn } = await import("node:child_process");
+		const dir = await mkdtemp(path.join(tmpdir(), "whisper-single-start-"));
+		try {
+			const modelPath = path.join(dir, "ggml-large-v3-turbo-q5_0.bin");
+			const fakeBinaryPath = path.join(
+				dir,
+				process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
+			);
+			await fs.writeFile(modelPath, "dummy-ggml");
+			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
+			const child = Object.assign(new EventEmitter(), {
+				stdout: new EventEmitter(),
+				stderr: new EventEmitter(),
+				pid: 1234,
+				kill: vi.fn(),
+			});
+			vi.mocked(spawn).mockReturnValue(child as never);
+			vi.stubGlobal(
+				"fetch",
+				vi.fn(async () => new Response("ok", { status: 200 })),
+			);
+			const mgr = new WhisperServerManager();
+			const options = {
+				modelPath,
+				binaryPath: fakeBinaryPath,
+				backend: "whispercpp-cpu" as const,
+			};
+
+			const [first, second] = await Promise.all([mgr.start(options), mgr.start(options)]);
+
+			expect(first).toEqual(second);
+			expect(spawn).toHaveBeenCalledOnce();
 		} finally {
 			vi.unstubAllGlobals();
 			await rm(dir, { recursive: true, force: true });
