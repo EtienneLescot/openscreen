@@ -124,6 +124,55 @@ final class AudioStartAlignmentTests: XCTestCase {
 		XCTAssertEqual(CMTimeCompare(alignedSecond, secondAudio), 0)
 	}
 
+	func testPreservesZeroStartupDelayAndLaterDeltas() throws {
+		var alignment = AudioStartAlignment(sourceCount: 1)
+		let sessionStart = CMTime(seconds: 10, preferredTimescale: 48_000)
+		let laterAudio = CMTime(seconds: 10.1, preferredTimescale: 48_000)
+
+		let alignedFirst = try XCTUnwrap(
+			alignment.align(sessionStart, forSourceAt: 0, to: sessionStart)
+		)
+		let alignedLater = try XCTUnwrap(
+			alignment.align(laterAudio, forSourceAt: 0, to: sessionStart)
+		)
+
+		XCTAssertEqual(CMTimeCompare(alignedFirst, sessionStart), 0)
+		XCTAssertEqual(CMTimeCompare(alignedLater, laterAudio), 0)
+	}
+
+	func testPreservesNegativeStartupDelay() throws {
+		var alignment = AudioStartAlignment(sourceCount: 1)
+		let sessionStart = CMTime(seconds: 10, preferredTimescale: 48_000)
+		let firstAudio = CMTime(seconds: 9.9, preferredTimescale: 48_000)
+
+		let alignedFirst = try XCTUnwrap(
+			alignment.align(firstAudio, forSourceAt: 0, to: sessionStart)
+		)
+
+		XCTAssertEqual(CMTimeCompare(alignedFirst, firstAudio), 0)
+	}
+
+	func testCompensatesStartupDelayAtWarmupBoundary() throws {
+		var alignment = AudioStartAlignment(sourceCount: 1)
+		let sessionStart = CMTime(seconds: 10, preferredTimescale: 48_000)
+		let firstAudio = CMTime(seconds: 10.25, preferredTimescale: 48_000)
+		let laterAudio = CMTime(seconds: 10.35, preferredTimescale: 48_000)
+
+		let alignedFirst = try XCTUnwrap(
+			alignment.align(firstAudio, forSourceAt: 0, to: sessionStart)
+		)
+		let alignedLater = try XCTUnwrap(
+			alignment.align(laterAudio, forSourceAt: 0, to: sessionStart)
+		)
+
+		XCTAssertEqual(CMTimeCompare(alignedFirst, sessionStart), 0)
+		XCTAssertEqual(
+			CMTimeGetSeconds(CMTimeSubtract(alignedLater, alignedFirst)),
+			0.1,
+			accuracy: 0.000_001
+		)
+	}
+
 	private func makeFloatStereoBuffer(
 		value: Float,
 		frames: Int,
