@@ -444,6 +444,11 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		)
 
 		let writer = try AVAssetWriter(outputURL: outputUrl, fileType: .mp4)
+		// Costs nothing on a clean stop -- finishWriting() still writes a normal
+		// moov -- and is the difference between a readable file and a total loss
+		// when the helper dies before reaching it. The Windows helper gets the
+		// same property from MFCreateFMPEG4MediaSink; see issues #252/#292/#327.
+		writer.movieFragmentInterval = CMTime(seconds: 1, preferredTimescale: 600)
 		let settings: [String: Any] = [
 			AVVideoCodecKey: AVVideoCodecType.h264,
 			AVVideoWidthKey: outputWidth,

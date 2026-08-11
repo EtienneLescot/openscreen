@@ -757,6 +757,11 @@ int main(int argc, char* argv[]) {
     std::cout << "{\"event\":\"encoder-selection\",\"schemaVersion\":2,\"video\":\""
               << encoder.videoEncoderSelection()
               << "\",\"videoInput\":\"" << (usesDxgiInput ? "dxgi-nv12" : "cpu-rgb32")
+              // Reported for the same reason `videoInput` is: the encoder falls
+              // back to the plain container rather than failing a recording, and
+              // "was this file supposed to survive a kill?" is unanswerable from
+              // a bug report that cannot tell the two apart.
+              << "\",\"container\":\"" << encoder.containerFormat()
               << "\",\"preferSoftwareEncoder\":"
               << (config.preferSoftwareEncoder ? "true" : "false")
               << "}" << std::endl;

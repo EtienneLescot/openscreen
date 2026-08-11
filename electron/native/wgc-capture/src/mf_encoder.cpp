@@ -127,20 +127,31 @@ void logMissingH264EncoderError() {
         << std::endl;
 }
 
-// Which step of createSinkWriterFromUrl produced a failing HRESULT. Only a
-// CreateSinkWriter failure means MFCreateSinkWriterFromURL itself failed and
+// Which step of createSinkWriter produced a failing HRESULT. Only a
+// CreateSinkWriter failure means the sink-writer creation itself failed and
 // warrants the encoder-enumeration diagnostics in logSinkWriterCreateFailure.
-// The earlier software-path setup steps each log their own specific error, so
-// routing them through the sink-writer diagnostics would misattribute the
-// failure (e.g. reporting a local MFT registration failure as a sink-writer
-// failure on the VM / headless / broken-driver systems this path targets).
+// The earlier setup steps each log their own specific error, so routing them
+// through the sink-writer diagnostics would misattribute the failure (e.g.
+// reporting a local MFT registration failure as a sink-writer failure on the
+// VM / headless / broken-driver systems this path targets). CreateFile and
+// CreateFragmentedMediaSink are container problems rather than encoder ones and
+// are excluded for the same reason.
 enum class SinkWriterCreateStage {
     SoftwareEncoderRegistration,
     CreateAttributes,
     DisableHardwareTransforms,
     ConfigureDxgiManager,
+    CreateFile,
+    CreateFragmentedMediaSink,
     CreateSinkWriter,
 };
+
+// How often the fragmented MP4 sink is allowed to close a moof+mdat pair. It is
+// a floor, not a period: the sink still waits for the encoder's next key frame.
+// One second is the trade the whole change rests on -- a killed helper loses at
+// most the fragment in flight, while the per-fragment box overhead stays
+// negligible against a multi-megabit H.264 payload.
+constexpr UINT64 kFragmentDurationHns = 10'000'000ULL;
 
 HRESULT ensureSoftwareH264EncoderRegisteredForProcess() {
     static std::mutex registrationMutex;
@@ -181,12 +192,25 @@ HRESULT ensureSoftwareH264EncoderRegisteredForProcess() {
     return result;
 }
 
-HRESULT createSinkWriterFromUrl(
+// `fragmented` picks between the two ways to reach a sink writer, and it is the
+// only reason this function grew output types. MFCreateSinkWriterFromURL builds
+// the MP4 sink itself and lets AddStream describe the streams afterwards;
+// MFCreateFMPEG4MediaSink demands both output types up front because the
+// fragmented sink writes its stream table before the first sample. Everything
+// before that last step -- the local software MFT registration, the
+// hardware-transform flag, the D3D manager -- is identical either way and stays
+// on one path rather than being duplicated per container.
+HRESULT createSinkWriter(
     const std::wstring& outputPath,
+    bool fragmented,
+    IMFMediaType* videoOutputType,
+    IMFMediaType* audioOutputType,
     bool forceSoftwareEncoder,
     IMFDXGIDeviceManager* dxgiDeviceManager,
     bool injectDefaultSinkWriterFailureOnce,
     bool& injectedDefaultSinkWriterFailure,
+    Microsoft::WRL::ComPtr<IMFByteStream>& byteStream,
+    Microsoft::WRL::ComPtr<IMFMediaSink>& mediaSink,
     Microsoft::WRL::ComPtr<IMFSinkWriter>& sinkWriter,
     SinkWriterCreateStage& failedStage) {
     // Default to the sink-writer creation step; the software-path steps below
@@ -249,20 +273,68 @@ HRESULT createSinkWriterFromUrl(
     }
 
     failedStage = SinkWriterCreateStage::CreateSinkWriter;
+    // Ahead of the byte stream on purpose: an injection that fired after
+    // MFCreateFile would leave the output file open on the very path whose job
+    // is to prove the next attempt can still create it.
     if (
         !forceSoftwareEncoder &&
         injectDefaultSinkWriterFailureOnce &&
         !injectedDefaultSinkWriterFailure) {
         injectedDefaultSinkWriterFailure = true;
         std::cerr
-            << "TEST-ONLY: Injected default MFCreateSinkWriterFromURL failure "
+            << "TEST-ONLY: Injected default sink-writer creation failure "
             << "(hr=0x80070003); injection consumed exactly once."
             << std::endl;
         return HRESULT_FROM_WIN32(ERROR_PATH_NOT_FOUND);
     }
 
-    const HRESULT sinkWriterHr = MFCreateSinkWriterFromURL(
-        outputPath.c_str(), nullptr, attributes.Get(), &sinkWriter);
+    if (!fragmented) {
+        const HRESULT sinkWriterHr = MFCreateSinkWriterFromURL(
+            outputPath.c_str(), nullptr, attributes.Get(), &sinkWriter);
+        if (SUCCEEDED(sinkWriterHr) && forceSoftwareEncoder) {
+            std::cerr << "INFO: Created the real software H.264 sink writer successfully."
+                      << std::endl;
+        }
+        return sinkWriterHr;
+    }
+
+    failedStage = SinkWriterCreateStage::CreateFile;
+    HRESULT hr = MFCreateFile(
+        MF_ACCESSMODE_WRITE,
+        MF_OPENMODE_DELETE_IF_EXIST,
+        MF_FILEFLAGS_NONE,
+        outputPath.c_str(),
+        &byteStream);
+    if (FAILED(hr)) {
+        std::cerr << "ERROR: MFCreateFile(recording output) failed (hr=0x"
+                  << std::hex << hr << std::dec << ")" << std::endl;
+        return hr;
+    }
+
+    failedStage = SinkWriterCreateStage::CreateFragmentedMediaSink;
+    hr = MFCreateFMPEG4MediaSink(byteStream.Get(), videoOutputType, audioOutputType, &mediaSink);
+    if (FAILED(hr)) {
+        std::cerr << "ERROR: MFCreateFMPEG4MediaSink failed (hr=0x"
+                  << std::hex << hr << std::dec << "); the recording falls back to a "
+                  << "plain MP4, which is unreadable if the helper is killed." << std::endl;
+        return hr;
+    }
+
+    // Best effort. A sink that will not take the attribute still fragments, on
+    // whatever interval it picked for itself, and that is already the whole
+    // benefit; refusing the recording over the interval would trade the bug for
+    // a worse one.
+    Microsoft::WRL::ComPtr<IMFAttributes> sinkAttributes;
+    if (
+        FAILED(mediaSink.As(&sinkAttributes)) ||
+        FAILED(sinkAttributes->SetUINT64(MF_MPEG4SINK_MIN_FRAGMENT_DURATION, kFragmentDurationHns))) {
+        std::cerr << "WARNING: Could not set the fragmented MP4 fragment duration; "
+                  << "the sink's own interval applies." << std::endl;
+    }
+
+    failedStage = SinkWriterCreateStage::CreateSinkWriter;
+    const HRESULT sinkWriterHr = MFCreateSinkWriterFromMediaSink(
+        mediaSink.Get(), attributes.Get(), &sinkWriter);
     if (SUCCEEDED(sinkWriterHr) && forceSoftwareEncoder) {
         std::cerr << "INFO: Created the real software H.264 sink writer successfully."
                   << std::endl;
@@ -270,12 +342,55 @@ HRESULT createSinkWriterFromUrl(
     return sinkWriterHr;
 }
 
-void logSinkWriterCreateFailure(HRESULT sinkWriterHr, const AudioInputFormat* audioFormat) {
+// The sink writer addresses a media sink's streams by their position in the
+// sink. Nothing promises video is position 0 -- MFCreateFMPEG4MediaSink is
+// handed two media types and decides for itself -- and getting it wrong would
+// aim the audio writes at the video track. So the position is read back from
+// the sink by major type instead of assumed, and logged with the stream
+// identifier beside it, which is a different number and the one an MP4 dump
+// shows.
+bool resolveStreamSinkIndex(IMFMediaSink* mediaSink, const GUID& majorType, DWORD& streamIndex) {
+    const char* const label = (majorType == MFMediaType_Video) ? "video" : "audio";
+    DWORD streamSinkCount = 0;
+    if (!succeeded(mediaSink->GetStreamSinkCount(&streamSinkCount), "GetStreamSinkCount")) {
+        return false;
+    }
+
+    for (DWORD index = 0; index < streamSinkCount; index += 1) {
+        Microsoft::WRL::ComPtr<IMFStreamSink> streamSink;
+        if (FAILED(mediaSink->GetStreamSinkByIndex(index, &streamSink))) {
+            continue;
+        }
+        Microsoft::WRL::ComPtr<IMFMediaTypeHandler> typeHandler;
+        if (FAILED(streamSink->GetMediaTypeHandler(&typeHandler))) {
+            continue;
+        }
+        GUID streamMajorType{};
+        if (FAILED(typeHandler->GetMajorType(&streamMajorType)) || streamMajorType != majorType) {
+            continue;
+        }
+        DWORD identifier = 0;
+        streamSink->GetIdentifier(&identifier);
+        std::cerr << "INFO: Fragmented MP4 sink carries " << label << " on stream index "
+                  << index << " (identifier " << identifier << ")." << std::endl;
+        streamIndex = index;
+        return true;
+    }
+
+    std::cerr << "ERROR: The fragmented MP4 sink exposes no " << label << " stream sink ("
+              << streamSinkCount << " stream sinks)." << std::endl;
+    return false;
+}
+
+void logSinkWriterCreateFailure(
+    HRESULT sinkWriterHr,
+    const char* createCall,
+    const AudioInputFormat* audioFormat) {
     const UINT32 h264EncoderCount = countRegisteredH264VideoEncoders();
     const UINT32 aacEncoderCount = (audioFormat != nullptr)
         ? countRegisteredAacAudioEncoders()
         : 0;
-    std::cerr << "ERROR: MFCreateSinkWriterFromURL failed (hr=0x"
+    std::cerr << "ERROR: " << createCall << " failed (hr=0x"
               << std::hex << sinkWriterHr << std::dec << ")" << std::endl;
     std::cerr << "  Registered H.264 video encoder MFTs: " << h264EncoderCount
               << std::endl;
@@ -311,6 +426,32 @@ void setAudioFormat(IMFMediaType* type, UINT32 channels, UINT32 sampleRate, UINT
     type->SetUINT32(MF_MT_AUDIO_NUM_CHANNELS, channels);
     type->SetUINT32(MF_MT_AUDIO_SAMPLES_PER_SECOND, sampleRate);
     type->SetUINT32(MF_MT_AUDIO_BITS_PER_SAMPLE, bitsPerSample);
+}
+
+// Lifted out of configureAudioStream unchanged, including the format guard,
+// because the fragmented sink needs this type before a sink writer exists at
+// all. The guard has to come with it: an invalid format must be refused before
+// anything is built from it, not after.
+bool buildAacOutputType(
+    const AudioInputFormat& audioFormat,
+    Microsoft::WRL::ComPtr<IMFMediaType>& outputType) {
+    if (audioFormat.sampleRate == 0 || audioFormat.channels == 0 || audioFormat.blockAlign == 0) {
+        std::cerr << "ERROR: Invalid audio input format" << std::endl;
+        return false;
+    }
+
+    const AudioInputFormat encoderFormat = makeAacCompatibleAudioFormat(audioFormat);
+    const UINT32 aacBytesPerSecond = 24'000;
+
+    if (!succeeded(MFCreateMediaType(&outputType), "MFCreateMediaType(audio output)")) {
+        return false;
+    }
+    outputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
+    outputType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC);
+    setAudioFormat(outputType.Get(), encoderFormat.channels, encoderFormat.sampleRate, 16);
+    outputType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, aacBytesPerSecond);
+    outputType->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0);
+    return true;
 }
 
 void compositeWebcam(BYTE* destination, int width, int height, const BgraFrameView& webcamFrame) {
@@ -370,6 +511,29 @@ MFEncoder::~MFEncoder() {
 
 const char* MFEncoder::videoEncoderSelection() const {
     return videoEncoderSelection_;
+}
+
+const char* MFEncoder::containerFormat() const {
+    return containerFormat_;
+}
+
+// Releasing the sink writer is enough only when the sink writer built the sink
+// itself. MFCreateSinkWriterFromMediaSink does not take ownership: dropping the
+// writer leaves the fragmented sink live and the output file open underneath
+// it. Between two attempts that meant the next MFCreateFile(DELETE_IF_EXIST)
+// racing the previous attempt's own handle -- a broken fallback chain, which is
+// the one thing this change is not allowed to produce. At finalize() it also
+// closes the byte stream, so nothing is left sitting in a buffer.
+void MFEncoder::releaseSinkWriter() {
+    sinkWriter_.Reset();
+    if (mediaSink_) {
+        mediaSink_->Shutdown();
+        mediaSink_.Reset();
+    }
+    if (byteStream_) {
+        byteStream_->Close();
+        byteStream_.Reset();
+    }
 }
 
 bool MFEncoder::usesDxgiInput() const {
@@ -520,53 +684,98 @@ bool MFEncoder::initialize(
     bool injectedDefaultSinkWriterFailure = false;
 
     auto resetSinkWriterAttempt = [&]() {
-        sinkWriter_.Reset();
+        releaseSinkWriter();
         videoStreamIndex_ = 0;
         audioStreamIndex_ = 0;
         hasAudioStream_ = false;
         videoEncoderSelection_ = kVideoEncoderSelectionDefault;
+        containerFormat_ = kContainerFormatMp4;
     };
 
     auto configureSinkWriterAttempt = [&, audioFormat](
         bool forceSoftwareEncoder,
         const char* selection,
-        bool logCreateFailure) {
+        bool logCreateFailure,
+        bool fragmented) {
         resetSinkWriterAttempt();
 
+        // Before the sink writer, not inside configureAudioStream where this
+        // used to live: MFCreateFMPEG4MediaSink takes the audio output type as
+        // a construction argument. Null when the recording has no audio, which
+        // is both the common case and a documented one for that call.
+        Microsoft::WRL::ComPtr<IMFMediaType> audioOutputType;
+        if (audioFormat && !buildAacOutputType(*audioFormat, audioOutputType)) {
+            return false;
+        }
+
         SinkWriterCreateStage failedStage = SinkWriterCreateStage::CreateSinkWriter;
-        const HRESULT sinkWriterHr = createSinkWriterFromUrl(
+        const HRESULT sinkWriterHr = createSinkWriter(
             outputPath,
+            fragmented,
+            outputType.Get(),
+            audioOutputType.Get(),
             forceSoftwareEncoder,
             forceSoftwareEncoder ? nullptr : dxgiDeviceManager_.Get(),
             options.injectDefaultSinkWriterFailureOnce,
             injectedDefaultSinkWriterFailure,
+            byteStream_,
+            mediaSink_,
             sinkWriter_,
             failedStage);
         if (FAILED(sinkWriterHr)) {
-            // Only a genuine MFCreateSinkWriterFromURL failure gets the
-            // sink-writer / encoder-enumeration diagnostics. The earlier
-            // software-path steps (local MFT registration, attribute creation,
-            // hardware-transform flag) already logged their own specific error
-            // inside createSinkWriterFromUrl, so logging here as well would
-            // misattribute those failures to MFCreateSinkWriterFromURL.
+            // Only a genuine sink-writer creation failure gets the sink-writer /
+            // encoder-enumeration diagnostics. The earlier steps (local MFT
+            // registration, attribute creation, hardware-transform flag, and on
+            // the fragmented path the byte stream and the media sink) already
+            // logged their own specific error inside createSinkWriter, so
+            // logging here as well would misattribute those failures to the
+            // sink writer.
             if (failedStage == SinkWriterCreateStage::CreateSinkWriter) {
                 if (logCreateFailure) {
-                    logSinkWriterCreateFailure(sinkWriterHr, audioFormat);
+                    logSinkWriterCreateFailure(
+                        sinkWriterHr,
+                        fragmented ? "MFCreateSinkWriterFromMediaSink" : "MFCreateSinkWriterFromURL",
+                        audioFormat);
                 } else {
-                    std::cerr << "WARNING: Default MFCreateSinkWriterFromURL failed (hr=0x"
+                    std::cerr << "WARNING: Sink-writer creation failed (hr=0x"
                               << std::hex << sinkWriterHr << std::dec << ")" << std::endl;
                 }
             }
             return false;
         }
-        if (!succeeded(sinkWriter_->AddStream(outputType.Get(), &videoStreamIndex_), "AddStream")) {
-            return false;
+
+        if (fragmented) {
+            // The streams already exist -- the sink was built from the output
+            // types -- so there is nothing to add, only positions to find.
+            if (!resolveStreamSinkIndex(mediaSink_.Get(), MFMediaType_Video, videoStreamIndex_)) {
+                return false;
+            }
+            if (audioOutputType &&
+                !resolveStreamSinkIndex(mediaSink_.Get(), MFMediaType_Audio, audioStreamIndex_)) {
+                return false;
+            }
+        } else {
+            if (!succeeded(
+                    sinkWriter_->AddStream(outputType.Get(), &videoStreamIndex_),
+                    "AddStream")) {
+                return false;
+            }
+            if (audioOutputType &&
+                !succeeded(
+                    sinkWriter_->AddStream(audioOutputType.Get(), &audioStreamIndex_),
+                    "AddStream(audio)")) {
+                return false;
+            }
         }
 
         if (audioFormat && !configureAudioStream(*audioFormat)) {
             return false;
         }
 
+        // Also the check that catches a stream index resolved onto the wrong
+        // track: an H.264 input type against an AAC stream sink has no encoder
+        // that can bridge it, so a bad mapping fails loudly here instead of
+        // quietly writing video samples into the audio track.
         if (!succeeded(sinkWriter_->SetInputMediaType(videoStreamIndex_, inputType.Get(), nullptr),
                        "SetInputMediaType")) {
             return false;
@@ -579,17 +788,36 @@ bool MFEncoder::initialize(
         }
 
         videoEncoderSelection_ = selection;
+        containerFormat_ = fragmented ? kContainerFormatFragmentedMp4 : kContainerFormatMp4;
         return true;
     };
 
+    // The last resort, tried only once every fragmented attempt has failed. A
+    // machine where anything about MFCreateFMPEG4MediaSink does not work --
+    // an output type the fragmented sink refuses, a stream layout that does not
+    // resolve, a platform build without it -- records exactly as it did before
+    // this change instead of not recording at all. The container is the point
+    // of the change, and it is still not worth a recording.
+    auto configureUnfragmentedFallback = [&](bool forceSoftwareEncoder, const char* selection) {
+        std::cerr
+            << "WARNING: Fragmented MP4 setup failed; retrying with the plain MP4 container. "
+            << "The recording will be unreadable if the helper has to be killed."
+            << std::endl;
+        return configureSinkWriterAttempt(forceSoftwareEncoder, selection, true, false);
+    };
+
     if (options.preferSoftwareEncoder) {
-        return configureSinkWriterAttempt(
-            true,
-            kVideoEncoderSelectionSoftwarePreferred,
-            true);
+        if (configureSinkWriterAttempt(
+                true,
+                kVideoEncoderSelectionSoftwarePreferred,
+                false,
+                true)) {
+            return true;
+        }
+        return configureUnfragmentedFallback(true, kVideoEncoderSelectionSoftwarePreferred);
     }
 
-    if (configureSinkWriterAttempt(false, kVideoEncoderSelectionDefault, false)) {
+    if (configureSinkWriterAttempt(false, kVideoEncoderSelectionDefault, false, true)) {
         return true;
     }
 
@@ -607,7 +835,7 @@ bool MFEncoder::initialize(
         useDxgiInput_ = false;
         configureVideoInputType(false);
         configureOutputColorTags(false);
-        if (configureSinkWriterAttempt(false, kVideoEncoderSelectionDefault, false)) {
+        if (configureSinkWriterAttempt(false, kVideoEncoderSelectionDefault, false, true)) {
             return true;
         }
     }
@@ -616,37 +844,22 @@ bool MFEncoder::initialize(
         << "WARNING: Default Media Foundation H.264 encoder setup failed; "
         << "retrying with the Microsoft software H.264 encoder."
         << std::endl;
-    return configureSinkWriterAttempt(
-        true,
-        kVideoEncoderSelectionSoftwareFallback,
-        true);
+    if (configureSinkWriterAttempt(true, kVideoEncoderSelectionSoftwareFallback, false, true)) {
+        return true;
+    }
+    return configureUnfragmentedFallback(true, kVideoEncoderSelectionSoftwareFallback);
 }
 
+// The output half -- the AAC type and, on the plain container, the AddStream
+// that used to sit between the two -- now happens before the sink writer
+// exists. What is left is the input type, which is the same on both containers
+// and is set on a stream index the caller has already resolved.
 bool MFEncoder::configureAudioStream(const AudioInputFormat& audioFormat) {
     if (!sinkWriter_) {
         return false;
     }
-    if (audioFormat.sampleRate == 0 || audioFormat.channels == 0 || audioFormat.blockAlign == 0) {
-        std::cerr << "ERROR: Invalid audio input format" << std::endl;
-        return false;
-    }
 
     const AudioInputFormat encoderFormat = makeAacCompatibleAudioFormat(audioFormat);
-    const UINT32 aacBytesPerSecond = 24'000;
-
-    Microsoft::WRL::ComPtr<IMFMediaType> outputType;
-    if (!succeeded(MFCreateMediaType(&outputType), "MFCreateMediaType(audio output)")) {
-        return false;
-    }
-    outputType->SetGUID(MF_MT_MAJOR_TYPE, MFMediaType_Audio);
-    outputType->SetGUID(MF_MT_SUBTYPE, MFAudioFormat_AAC);
-    setAudioFormat(outputType.Get(), encoderFormat.channels, encoderFormat.sampleRate, 16);
-    outputType->SetUINT32(MF_MT_AUDIO_AVG_BYTES_PER_SECOND, aacBytesPerSecond);
-    outputType->SetUINT32(MF_MT_AAC_PAYLOAD_TYPE, 0);
-
-    if (!succeeded(sinkWriter_->AddStream(outputType.Get(), &audioStreamIndex_), "AddStream(audio)")) {
-        return false;
-    }
 
     Microsoft::WRL::ComPtr<IMFMediaType> inputType;
     if (!succeeded(MFCreateMediaType(&inputType), "MFCreateMediaType(audio input)")) {
@@ -1407,8 +1620,8 @@ bool MFEncoder::finalize() {
     bool ok = true;
     if (sinkWriter_) {
         ok = succeeded(sinkWriter_->Finalize(), "SinkWriter::Finalize");
-        sinkWriter_.Reset();
     }
+    releaseSinkWriter();
     stagingTexture_.Reset();
     // Before MFShutdown(), not left to the destructor. Two of the objects
     // releaseDxgiPipeline() drops -- videoSampleAllocator_ and

@@ -42,6 +42,17 @@ constexpr const char* kVideoEncoderSelectionDefault = "default";
 constexpr const char* kVideoEncoderSelectionSoftwarePreferred = "software-preferred";
 constexpr const char* kVideoEncoderSelectionSoftwareFallback = "software-fallback";
 
+// Which MP4 flavour the recording was actually written in. The fragmented sink
+// writes a self-describing moof+mdat pair roughly every second, so a helper the
+// shutdown watchdog force-exits leaves a file that plays up to the last
+// complete fragment. The plain sink writes its only index in Finalize(), which
+// is the very call a TerminateProcess pre-empts -- that is how issues #252 /
+// #292 / #327 turned a frozen recording into a total loss. Recording falls back
+// to the plain container if anything about the fragmented one is unavailable,
+// so this is reported rather than assumed.
+constexpr const char* kContainerFormatFragmentedMp4 = "fragmented-mp4";
+constexpr const char* kContainerFormatMp4 = "mp4";
+
 class MFEncoder {
 public:
     MFEncoder() = default;
@@ -86,6 +97,11 @@ public:
     bool writeAudio(const BYTE* data, DWORD byteCount, int64_t timestampHns, int64_t durationHns);
     bool finalize();
     const char* videoEncoderSelection() const;
+    // Which container initialize() settled on, which is not necessarily the one
+    // it asked for: the fragmented sink degrades to the plain one rather than
+    // failing a recording. A bug report that cannot tell the two apart cannot
+    // say whether a truncated file was supposed to survive its kill.
+    const char* containerFormat() const;
     // Which video input path initialize() actually settled on, which is not
     // necessarily the one that was asked for. Callers must read this rather
     // than their own MFEncoderOptions to decide which capture entry point to
@@ -130,9 +146,20 @@ private:
         DWORD destinationSize,
         const BgraFrameView* webcamFrame);
     bool copyBgraFrameToBuffer(const BgraFrameView& frame, BYTE* destination, DWORD destinationSize);
+    // Only the audio *input* type and SetInputMediaType. The AAC output type is
+    // built before the sink writer exists (buildAacOutputType in the .cpp),
+    // because MFCreateFMPEG4MediaSink takes both output types at construction:
+    // a fragmented sink has all its streams before anything can be added to it.
     bool configureAudioStream(const AudioInputFormat& audioFormat);
+    void releaseSinkWriter();
 
     Microsoft::WRL::ComPtr<IMFSinkWriter> sinkWriter_;
+    // Held only on the fragmented path, and held because a sink writer built on
+    // a media sink does not own either of them: releasing the writer leaves the
+    // sink live and the output file open. releaseSinkWriter() is what closes
+    // them, both between failed attempts and at finalize().
+    Microsoft::WRL::ComPtr<IMFMediaSink> mediaSink_;
+    Microsoft::WRL::ComPtr<IMFByteStream> byteStream_;
     Microsoft::WRL::ComPtr<ID3D11Device> device_;
     Microsoft::WRL::ComPtr<ID3D11DeviceContext> context_;
     Microsoft::WRL::ComPtr<ID3D11Device> captureDevice_;
@@ -175,4 +202,5 @@ private:
     bool finalized_ = false;
     bool useDxgiInput_ = false;
     const char* videoEncoderSelection_ = kVideoEncoderSelectionDefault;
+    const char* containerFormat_ = kContainerFormatMp4;
 };
