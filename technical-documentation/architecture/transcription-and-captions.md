@@ -98,7 +98,7 @@ subtitle is the reason rather than "With AI".
 
 ### One phase, including the first-run model download
 
-On a fresh install the GGML model (~253 MB) is not on disk. It is fetched by
+On a fresh install the GGML model (~574 MB) is not on disk. It is fetched by
 `SttManager.prepare()` **inside** the `stt:transcribe` IPC call — i.e. inside a
 run this store has already marked `running` — so the user sees one single busy
 phase that simply takes longer the first time. That is deliberate: no separate
@@ -224,15 +224,16 @@ so no second pass is needed.
 
 ### Long-form recordings
 
-`whisper_full()` handles recordings longer than 30 s internally; OpenScreen
-implements no chunking of its own. The validation set exercises 130 s at WER
-0.076 with full per-word coverage (see the validation report linked above).
+OpenScreen splits long recordings at nearby low-energy boundaries, transcribes
+the bounded chunks sequentially, then restores their absolute timestamps. This
+keeps progress observable and makes a failed chunk retryable without running a
+whole long recording again.
 
 ### Model
 
-The single shipped artifact is `ggml-small-q8_0.bin` from
-`ggerganov/whisper.cpp` on HuggingFace: Whisper `small`, multilingual (~99
-languages), q8_0 quantised, ~264 MB. Precision is baked into the GGML file —
+The single shipped artifact is `ggml-large-v3-turbo-q5_0.bin` from
+`ggerganov/whisper.cpp` on HuggingFace: Whisper `large-v3-turbo`, multilingual
+(~99 languages), q5_0 quantised, ~574 MB. Precision is baked into the GGML file —
 there is no runtime `--int8` flag. `electron/stt/modelManager.ts` downloads
 the file once into the user-data cache and writes it through an atomic
 `.partial` rename, so a half-downloaded file can never be picked up as a
@@ -284,7 +285,7 @@ bash scripts/build-whisper-stt.sh
 # issues inside whisper.cpp's vulkan-shaders-gen sub-project.
 
 # Run the helper directly for manual testing
-set OPENSCREEN_WHISPER_MODEL=%APPDATA%\Electron\stt-models\whisper-ggml\ggml-small-q8_0.bin
+set OPENSCREEN_WHISPER_MODEL=%APPDATA%\Electron\stt-models\whisper-ggml\ggml-large-v3-turbo-q5_0.bin
 electron\native\bin\win32-x64\whisper-stt-server.exe --port 20199 --threads 8
 
 # Test

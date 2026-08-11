@@ -1,3 +1,4 @@
+import { EventEmitter } from "node:events";
 import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -270,6 +271,63 @@ describe("WhisperServerManager", () => {
 				vi.unstubAllGlobals();
 			}
 		} finally {
+			await rm(dir, { recursive: true, force: true });
+		}
+	});
+
+	it("retries with CPU when the GPU helper exits during model startup", async () => {
+		const fs = await import("node:fs/promises");
+		const { spawn } = await import("node:child_process");
+		const dir = await mkdtemp(path.join(tmpdir(), "whisper-cpu-fallback-"));
+		try {
+			const modelPath = path.join(dir, "ggml-large-v3-turbo-q5_0.bin");
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
+			await fs.writeFile(modelPath, "dummy-ggml");
+			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
+
+			const child = () => {
+				const process = Object.assign(new EventEmitter(), {
+					stdout: new EventEmitter(),
+					stderr: new EventEmitter(),
+					pid: 1234,
+					kill: vi.fn(),
+				});
+				return process;
+			};
+			const gpuChild = child();
+			const cpuChild = child();
+			vi.mocked(spawn)
+				.mockImplementationOnce(() => {
+					queueMicrotask(() => {
+						gpuChild.stderr.emit(
+							"data",
+							Buffer.from("ggml_metal_buffer_init: error: failed to allocate buffer"),
+						);
+						gpuChild.emit("exit", 1);
+					});
+					return gpuChild as never;
+				})
+				.mockReturnValueOnce(cpuChild as never);
+			vi.stubGlobal(
+				"fetch",
+				vi
+					.fn()
+					.mockImplementationOnce(() => new Promise<Response>(() => undefined))
+					.mockResolvedValueOnce(new Response("ok", { status: 200 })),
+			);
+
+			const mgr = new WhisperServerManager();
+			const result = await mgr.start({
+				modelPath,
+				binaryPath: fakeBinaryPath,
+				backend: "whispercpp-metal",
+			});
+			expect(result.backend).toBe("whispercpp-cpu");
+			expect(spawn).toHaveBeenCalledTimes(2);
+			expect(vi.mocked(spawn).mock.calls[0]?.[1]).not.toContain("--cpu");
+			expect(vi.mocked(spawn).mock.calls[1]?.[1]).toContain("--cpu");
+		} finally {
+			vi.unstubAllGlobals();
 			await rm(dir, { recursive: true, force: true });
 		}
 	});

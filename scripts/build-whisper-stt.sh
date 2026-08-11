@@ -237,7 +237,13 @@ libggml*.dylib|libwhisper*.dylib|libparakeet*.dylib|\
 libggml*.so|libggml*.so.*|libwhisper*.so|libwhisper*.so.*|\
 libparakeet*.so|libparakeet*.so.*|\
 *.metal)
-              cp -a "${f}" "${OUT_DIR}/"
+              # The output directory may contain dereferenced regular files from a
+              # downloaded release artifact. Remove the exact destination first so
+              # cp can recreate this build's symlink farm without following an old
+              # regular-file/symlink mix. -P preserves links without -a's macOS
+              # chflags pass, which can itself report ELOOP while replacing a link.
+              rm -f "${OUT_DIR}/${f##*/}"
+              cp -P "${f}" "${OUT_DIR}/"
               found_libs=1
               ;;
           esac
