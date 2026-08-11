@@ -41,7 +41,14 @@ jobs:
         id: config
         run: |
           set -euo pipefail
-          if [[ -n "$TAP_OWNER" && -n "$TAP_REPO" && "$HAS_TOKEN" == "true" ]]; then
+          # `homebrew-?*`, not `-n`: the fourth requirement in the warning below is a
+          # rule about the name itself, and a name test is the one of the four this step
+          # can actually apply. `getopenscreen/openscreen-tap` would clone, commit and
+          # push exactly like a real tap and still be untappable — a green run publishing
+          # to somewhere `brew tap` cannot resolve, which is the failure this whole
+          # workflow change exists to stop. `?*` also rejects a repository named the bare
+          # `homebrew-`, which the prefix alone would accept.
+          if [[ -n "$TAP_OWNER" && "$TAP_REPO" == homebrew-?* && "$HAS_TOKEN" == "true" ]]; then
             echo "configured=true" >> "$GITHUB_OUTPUT"
             echo "Tap: ${TAP_OWNER}/${TAP_REPO}, cask ${CASK_NAME}."
             exit 0
