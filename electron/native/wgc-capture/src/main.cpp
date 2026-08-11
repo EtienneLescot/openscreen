@@ -246,14 +246,17 @@ void reportCaptureAdapters(ID3D11Device* device, HMONITOR targetMonitor) {
     std::string monitorAdapterLuid;
     bool monitorAdapterFound = false;
     bool sameAdapter = false;
-    // Both loops end on FAILED(), not on DXGI_ERROR_NOT_FOUND specifically.
+    // Set when EnumOutputs says the outputs could not be looked at, rather than
+    // that there are none. The two are different answers and the event reports
+    // them differently -- see the comment on the inner loop.
+    bool enumerationUnavailable = false;
+    // The loops end on FAILED(), not on DXGI_ERROR_NOT_FOUND specifically.
     // NOT_FOUND is itself a failure code, so one test covers the normal end of
     // the enumeration and every other way it can stop -- and the other ways are
-    // what matter here. EnumOutputs returns DXGI_ERROR_NOT_CURRENTLY_AVAILABLE
-    // to a process in session 0, and neither call fills its out-pointer when it
-    // fails. Testing only for NOT_FOUND left a null ComPtr to be dereferenced on
-    // the next line, which would take down a recording from inside the one
-    // function in this file that promises never to.
+    // what matter here: neither call fills its out-pointer when it fails, so
+    // testing only for NOT_FOUND left a null ComPtr to be dereferenced on the
+    // next line, taking down a recording from inside the one function in this
+    // file that promises never to.
     for (UINT adapterIndex = 0;; ++adapterIndex) {
         Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
         if (FAILED(factory->EnumAdapters1(adapterIndex, &adapter)) || !adapter) {
@@ -261,7 +264,20 @@ void reportCaptureAdapters(ID3D11Device* device, HMONITOR targetMonitor) {
         }
         for (UINT outputIndex = 0;; ++outputIndex) {
             Microsoft::WRL::ComPtr<IDXGIOutput> output;
-            if (FAILED(adapter->EnumOutputs(outputIndex, &output)) || !output) {
+            // NOT_CURRENTLY_AVAILABLE is the exception to the rule above, and it
+            // has to be told apart: it is what EnumOutputs answers a process in
+            // session 0, and it means the outputs could not be inspected rather
+            // than that the adapter has none. Collapsing the two would report
+            // "no adapter claims this monitor" for a machine we never got to
+            // look at -- and that is a value this diagnostic tells its readers
+            // to interpret as an active virtual display. Same class of lie as
+            // the identical descriptions this event was just fixed for.
+            const HRESULT outputHr = adapter->EnumOutputs(outputIndex, &output);
+            if (outputHr == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE) {
+                enumerationUnavailable = true;
+                break;
+            }
+            if (FAILED(outputHr) || !output) {
                 break;
             }
             DXGI_OUTPUT_DESC outputDesc{};
@@ -303,12 +319,19 @@ void reportCaptureAdapters(ID3D11Device* device, HMONITOR targetMonitor) {
               << formatLuid(deviceDesc.AdapterLuid) << "\",\"monitorAdapter\":";
     if (monitorAdapterFound) {
         std::cout << "\"" << jsonEscape(wideToUtf8(monitorAdapterName)) << "\",\"monitorLuid\":\""
-                  << monitorAdapterLuid << "\",\"sameAdapter\":" << (sameAdapter ? "true" : "false");
+                  << monitorAdapterLuid << "\",\"monitorLookup\":\"ok\",\"sameAdapter\":"
+                  << (sameAdapter ? "true" : "false");
+    } else if (enumerationUnavailable) {
+        // Session 0: the outputs were never inspected. Reported as its own
+        // state so nobody reads it as a finding about the hardware.
+        std::cout << "null,\"monitorLuid\":null,\"monitorLookup\":\"unavailable\",\"sameAdapter\":null";
     } else {
-        // No output claims this monitor: it is driven by something DXGI does not
-        // enumerate, which on the machines in #252 means a virtual display
-        // adapter. Worth seeing in a report in its own right.
-        std::cout << "null,\"monitorLuid\":null,\"sameAdapter\":null";
+        // The enumeration completed and no output claims this monitor: it is
+        // driven by something DXGI does not enumerate, which on the machines in
+        // #252 would mean a virtual display adapter. Worth seeing in its own
+        // right -- but only distinguishable from the case above because that
+        // one is now labelled.
+        std::cout << "null,\"monitorLuid\":null,\"monitorLookup\":\"no-output-claims-it\",\"sameAdapter\":null";
     }
     std::cout << "}" << std::endl;
 
@@ -328,9 +351,15 @@ void reportCaptureAdapters(ID3D11Device* device, HMONITOR targetMonitor) {
         std::cerr << "[adapters] " << adapterIndex << " luid=" << formatLuid(desc.AdapterLuid)
                   << " \"" << wideToUtf8(desc.Description) << "\"";
         UINT outputCount = 0;
+        bool outputsUnavailable = false;
         for (UINT outputIndex = 0;; ++outputIndex) {
             Microsoft::WRL::ComPtr<IDXGIOutput> output;
-            if (FAILED(adapter->EnumOutputs(outputIndex, &output)) || !output) {
+            const HRESULT outputHr = adapter->EnumOutputs(outputIndex, &output);
+            if (outputHr == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE) {
+                outputsUnavailable = true;
+                break;
+            }
+            if (FAILED(outputHr) || !output) {
                 break;
             }
             DXGI_OUTPUT_DESC outputDesc{};
@@ -340,7 +369,10 @@ void reportCaptureAdapters(ID3D11Device* device, HMONITOR targetMonitor) {
             }
             ++outputCount;
         }
-        if (outputCount == 0) {
+        if (outputsUnavailable) {
+            // Not the same as none: session 0 refuses the question entirely.
+            std::cerr << " outputs=unavailable";
+        } else if (outputCount == 0) {
             std::cerr << " outputs=none";
         }
         std::cerr << std::endl;
