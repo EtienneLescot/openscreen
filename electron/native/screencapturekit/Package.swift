@@ -25,6 +25,10 @@ let package = Package(
 		.executableTarget(
 			name: "OpenScreenMacOSCursorHelper",
 			path: "Sources/OpenScreenMacOSCursorHelper"
+		),
+		.testTarget(
+			name: "OpenScreenScreenCaptureKitHelperTests",
+			dependencies: ["OpenScreenScreenCaptureKitHelper"]
 		)
 	]
 )

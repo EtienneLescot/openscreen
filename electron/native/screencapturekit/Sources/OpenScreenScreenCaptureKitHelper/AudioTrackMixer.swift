@@ -2,6 +2,46 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
+/// Rebases each ScreenCaptureKit audio output onto the writer's session start.
+///
+/// Screen, system-audio and microphone outputs become live asynchronously. Their PTS values
+/// share a clock, but the first buffer from an audio output can arrive well after the first
+/// screen frame because that capture branch is still warming up. Carrying that one-time
+/// startup offset into the file makes the entire track sound late. Once a source is live its
+/// own PTS deltas are authoritative, so remove only a bounded first-buffer offset and preserve
+/// every later gap, pause and drift correction. A source that takes longer than the normal
+/// warm-up window keeps its original offset so a device failure cannot masquerade as sync.
+@available(macOS 13.0, *)
+struct AudioStartAlignment {
+	private static let maximumCompensatedStartupDelay = CMTime(value: 1, timescale: 4)
+	private var firstPresentationTimes: [CMTime?]
+
+	init(sourceCount: Int) {
+		firstPresentationTimes = Array(repeating: nil, count: sourceCount)
+	}
+
+	mutating func align(
+		_ presentationTime: CMTime,
+		forSourceAt index: Int,
+		to sessionStart: CMTime
+	) -> CMTime? {
+		guard presentationTime.isValid,
+			sessionStart.isValid,
+			firstPresentationTimes.indices.contains(index)
+		else {
+			return nil
+		}
+
+		let firstPresentationTime = firstPresentationTimes[index] ?? presentationTime
+		firstPresentationTimes[index] = firstPresentationTime
+		let startupDelay = CMTimeSubtract(firstPresentationTime, sessionStart)
+		let isExpectedWarmup = CMTimeCompare(startupDelay, .zero) >= 0
+			&& CMTimeCompare(startupDelay, Self.maximumCompensatedStartupDelay) <= 0
+		let sourceOrigin = isExpectedWarmup ? firstPresentationTime : sessionStart
+		return CMTimeAdd(sessionStart, CMTimeSubtract(presentationTime, sourceOrigin))
+	}
+}
+
 /// Sums system audio and the microphone into the single AAC track the helper muxes.
 ///
 /// The helper used to give AVAssetWriter one input per source, so a recording with both
@@ -60,6 +100,7 @@ final class AudioTrackMixer {
 
 	private var sources = [SourceTimeline](repeating: SourceTimeline(), count: Source.allCases.count)
 	private var sessionStart: CMTime?
+	private var startAlignment = AudioStartAlignment(sourceCount: Source.allCases.count)
 	/// Timeline origin: frame 0 of the mixed track, in the writer's time domain.
 	private var anchor: CMTime?
 	/// Absolute frame index of the next chunk to emit.
@@ -92,6 +133,11 @@ final class AudioTrackMixer {
 		}
 
 		self.sessionStart = sessionStart
+		anchor = CMTimeConvertScale(
+			sessionStart,
+			timescale: CMTimeScale(MixFormat.sampleRate),
+			method: .roundHalfAwayFromZero
+		)
 	}
 
 	func ingest(_ sampleBuffer: CMSampleBuffer, from source: Source) {
@@ -99,9 +145,6 @@ final class AudioTrackMixer {
 			return
 		}
 		let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-		guard presentationTime.isValid else {
-			return
-		}
 		guard let frames = decodeInterleavedStereo(sampleBuffer, gain: gain(for: source)),
 			!frames.isEmpty
 		else {
@@ -110,20 +153,20 @@ final class AudioTrackMixer {
 			warnAboutDecodeFailure(source, sampleBuffer)
 			return
 		}
-
-		if anchor == nil {
-			anchor = CMTimeConvertScale(
-				CMTimeMaximum(presentationTime, sessionStart),
-				timescale: CMTimeScale(MixFormat.sampleRate),
-				method: .roundHalfAwayFromZero
-			)
+		guard let alignedPresentationTime = startAlignment.align(
+			presentationTime,
+			forSourceAt: source.rawValue,
+			to: sessionStart
+		) else {
+			return
 		}
+
 		guard let anchor else {
 			return
 		}
 
 		let offset = CMTimeConvertScale(
-			CMTimeSubtract(presentationTime, anchor),
+			CMTimeSubtract(alignedPresentationTime, anchor),
 			timescale: CMTimeScale(MixFormat.sampleRate),
 			method: .roundHalfAwayFromZero
 		)
