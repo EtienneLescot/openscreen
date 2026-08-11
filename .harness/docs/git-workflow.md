@@ -67,7 +67,7 @@ Tier 3 (homebrew/winget/nix/aur) does **not** run on pre-releases — they're al
 
 Pin the pre-release link in `#rc-testing`. Get the maintainer team + a few early adopters to install and smoke-test.
 
-**Between RC cut and promote**, the only thing that may happen on `release/vX.Y.Z` is **cherry-picks of bugfixes** that address problems discovered in the RC. Features, refactors, and CI/docs changes are **not** applied to the release branch — they live on `main` and ship in the next release cycle.
+**Between RC cut and promote**, the only thing that may happen on `release/vX.Y.Z` is **cherry-picks of bugfixes** that address problems discovered in the RC. Features, refactors, and CI/docs changes are **not** applied to the release branch — they live on `main` and ship in the next release cycle. `git log release/vX.Y.Z..main --oneline` lists exactly what is *not* in the RC.
 
 If the RC has a regression, fix forward on `main`, then **cherry-pick the fix commit onto the release branch** with `git cherry-pick <sha>`, then re-cut as `vX.Y.Z-rc.(N+1)` (the rerun of `prerelease.yml` reuses the frozen branch and re-tags its tip; no rebase required). The previous RC is auto-superseded by GitHub.
 
@@ -103,7 +103,7 @@ The name carries **no `-rc.N` suffix**. `prerelease.yml` and `promote.yml` must 
 Key rules:
 
 1. **`prerelease.yml` creates the branch at rc.1 and reuses it for later RCs.** It must never delete or recreate it: that would drop the cherry-picks and silently re-cut from `main`, which defeats the freeze this contract exists to guarantee.
-2. **`promote.yml` is the only writer** that turns `-rc.N` into the stable version on the branch.
+2. **`promote.yml` is the only automated writer** that turns `-rc.N` into the stable version on the branch. A maintainer doing that by hand means the dispatch failed — see § Manual fallback.
 3. **`main` is never frozen.** Develop as usual. The release branch is the freeze.
 4. **Cherry-picks during the RC window** are committed manually by a maintainer (`git checkout release/vX.Y.Z && git cherry-pick <sha>`), then rerun `prerelease.yml` with the next `rc_number` to re-tag the branch tip.
 
@@ -113,17 +113,21 @@ This exists because of the v1.6.0 incident (2026-07-05): the original `promote.y
 
 If the dispatch UI is unavailable, the workflow still works from a shell:
 
+Use `set-release-version.mjs`, not a hand-rolled `sed`: it writes the version to **`package-lock.json` too**, and a release commit that bumps only `package.json` ships a lockfile disagreeing with the package it locks (`npm ci` never catches it).
+
 ```bash
+RC=1.5.0-rc.1                          # bump the rc.N for every later candidate
+
 # Cut RC (skips milestone migration and Discord announce)
 git checkout -b release/v1.5.0 main    # rc.2+: git checkout release/v1.5.0 instead
-sed -i -E 's|("version"[[:space:]]*:[[:space:]]*")[^"]*(")|\11.5.0-rc.1\2|' package.json
-git add package.json && git commit -m "chore(release): bump to 1.5.0-rc.1 [skip ci]"
+node .github/scripts/set-release-version.mjs "$RC"
+git commit -am "chore(release): bump to $RC [skip ci]"
 git push origin release/v1.5.0
-git tag v1.5.0-rc.1 && git push origin v1.5.0-rc.1
+git tag "v$RC" && git push origin "v$RC"
 
 # Promote (skips milestone close and Discord announce)
 git checkout release/v1.5.0
-sed -i -E 's|("version"[[:space:]]*:[[:space:]]*")[^"]*(")|\11.5.0\2|' package.json
+node .github/scripts/set-release-version.mjs 1.5.0
 git commit -am "chore(release): bump to 1.5.0 [skip ci]"
 git push origin release/v1.5.0
 git tag v1.5.0 && git push origin v1.5.0
