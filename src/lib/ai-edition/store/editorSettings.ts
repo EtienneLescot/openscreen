@@ -255,16 +255,18 @@ function normaliseWebcamPosition(value: unknown): WebcamPosition | null {
 	};
 }
 
+const MIN_CROP_SIZE = 0.01;
+
 function normaliseCropRegion(value: unknown): CropRegion {
 	if (!value || typeof value !== "object") return DEFAULT_CROP_REGION;
 	const candidate = value as Record<string, unknown>;
-	const x = isNumber(candidate.x) ? Math.min(1, Math.max(0, candidate.x)) : 0;
-	const y = isNumber(candidate.y) ? Math.min(1, Math.max(0, candidate.y)) : 0;
+	const x = isNumber(candidate.x) ? Math.min(1 - MIN_CROP_SIZE, Math.max(0, candidate.x)) : 0;
+	const y = isNumber(candidate.y) ? Math.min(1 - MIN_CROP_SIZE, Math.max(0, candidate.y)) : 0;
 	const width = isNumber(candidate.width)
-		? Math.min(1 - x, Math.max(0.01, candidate.width))
+		? Math.min(1 - x, Math.max(MIN_CROP_SIZE, candidate.width))
 		: 1 - x;
 	const height = isNumber(candidate.height)
-		? Math.min(1 - y, Math.max(0.01, candidate.height))
+		? Math.min(1 - y, Math.max(MIN_CROP_SIZE, candidate.height))
 		: 1 - y;
 	return { x, y, width, height };
 }

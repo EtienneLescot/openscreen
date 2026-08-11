@@ -54,10 +54,10 @@
 		"reactiveWebcamDescription": "ズーム中はカメラがスムーズに縮小し、邪魔になりません。",
 		"help": "ウェブカメラと画面の合成方法: ピクチャインピクチャ、縦積み、デュアルフレーム、マスク形状、サイズ、左右反転。",
 		"helpNoWebcam": "このプロジェクトにはカメラがないため、レイアウトの設定は無効で、プリセットは「Webカメラなし」と表示されます。保存されたレイアウトは、カメラを追加したときのために保持されます。",
-		"webcamFraming": "Webcam framing",
-		"webcamCropZoom": "Crop zoom",
-		"webcamCropX": "Horizontal pan",
-		"webcamCropY": "Vertical pan",
+		"webcamFraming": "ウェブカメラの構図",
+		"webcamCropZoom": "クロップのズーム",
+		"webcamCropX": "水平方向に移動",
+		"webcamCropY": "垂直方向に移動",
 		"shapes": {
 			"rectangle": "長方形",
 			"circle": "円",
@@ -304,11 +304,11 @@
 		"maxWords": "1 行の最大単語数"
 	},
 	"audio": {
-		"title": "Audio",
-		"autoMaster": "Auto master",
-		"syncOffset": "Sync offset",
-		"outputGain": "Output trim",
-		"reset": "Reset audio",
-		"help": "Automatically clean and balance voice audio, then fine-tune timing and level."
+		"title": "オーディオ",
+		"autoMaster": "音声を自動マスタリング",
+		"syncOffset": "同期オフセット",
+		"outputGain": "出力レベル",
+		"reset": "オーディオをリセット",
+		"help": "音声を自動的に整えてバランスを調整し、タイミングと音量を細かく仕上げます。"
 	}
 }

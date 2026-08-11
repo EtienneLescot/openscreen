@@ -143,4 +143,17 @@ describe("patchEditorSettings", () => {
 		const snap = getEditorSettings(doc);
 		expect(snap.webcamPosition).toEqual({ cx: 1, cy: 0 });
 	});
+
+	it("preserves a non-zero crop at the bottom-right edge", () => {
+		const doc: AxcutDocument = {
+			...baseDoc,
+			legacyEditor: { webcamCropRegion: { x: 1, y: 1, width: 0.5, height: 0.5 } },
+		};
+
+		const crop = getEditorSettings(doc).webcamCropRegion;
+		expect(crop.x).toBeCloseTo(0.99);
+		expect(crop.y).toBeCloseTo(0.99);
+		expect(crop.width).toBeCloseTo(0.01);
+		expect(crop.height).toBeCloseTo(0.01);
+	});
 });

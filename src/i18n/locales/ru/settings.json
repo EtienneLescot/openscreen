@@ -54,10 +54,10 @@
 		"reactiveWebcamDescription": "Камера плавно уменьшается во время приближения, чтобы не мешать.",
 		"help": "Как камера совмещается с экраном: «картинка в картинке», вертикальная стопка, двойной кадр, форма маски, размер и зеркальное отражение.",
 		"helpNoWebcam": "В этом проекте нет камеры, поэтому настройки компоновки отключены, а пресет показывает «Без веб-камеры». Сохранённая компоновка останется на случай, если вы добавите камеру.",
-		"webcamFraming": "Webcam framing",
-		"webcamCropZoom": "Crop zoom",
-		"webcamCropX": "Horizontal pan",
-		"webcamCropY": "Vertical pan",
+		"webcamFraming": "Кадрирование веб-камеры",
+		"webcamCropZoom": "Масштаб обрезки",
+		"webcamCropX": "Смещение по горизонтали",
+		"webcamCropY": "Смещение по вертикали",
 		"shapes": {
 			"rectangle": "Прямоуг.",
 			"circle": "Круг",
@@ -304,11 +304,11 @@
 		"maxWords": "Макс. слов в строке"
 	},
 	"audio": {
-		"title": "Audio",
-		"autoMaster": "Auto master",
-		"syncOffset": "Sync offset",
-		"outputGain": "Output trim",
-		"reset": "Reset audio",
-		"help": "Automatically clean and balance voice audio, then fine-tune timing and level."
+		"title": "Аудио",
+		"autoMaster": "Автоматический мастеринг голоса",
+		"syncOffset": "Смещение синхронизации",
+		"outputGain": "Уровень выхода",
+		"reset": "Сбросить аудио",
+		"help": "Автоматически очистите и сбалансируйте голос, затем точно настройте синхронизацию и уровень."
 	}
 }

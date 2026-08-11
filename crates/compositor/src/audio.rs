@@ -117,22 +117,22 @@ pub fn finish_audio(mut pcm: PlanarPcm, settings: SceneAudio) -> PlanarPcm {
     if shift == 0 {
         return pcm;
     }
-    let mut shifted = vec![vec![0.0f32; samples]; pcm.len()];
     if shift > 0 {
         let destination = (shift as usize).min(samples);
         let count = samples - destination;
-        for channel in 0..pcm.len() {
-            shifted[channel][destination..destination + count]
-                .copy_from_slice(&pcm[channel][..count]);
+        for channel in pcm.iter_mut() {
+            channel.copy_within(..count, destination);
+            channel[..destination].fill(0.0);
         }
     } else {
         let source = ((-shift) as usize).min(samples);
         let count = samples - source;
-        for channel in 0..pcm.len() {
-            shifted[channel][..count].copy_from_slice(&pcm[channel][source..source + count]);
+        for channel in pcm.iter_mut() {
+            channel.copy_within(source.., 0);
+            channel[count..].fill(0.0);
         }
     }
-    shifted
+    pcm
 }
 
 extern "C" {

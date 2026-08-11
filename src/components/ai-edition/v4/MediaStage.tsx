@@ -33,6 +33,16 @@ function basename(path: string): string {
 	return path.split(/[\\/]/).pop() ?? path;
 }
 
+export function addSelectedAssetToTimeline(
+	selected: Pick<AxcutAsset, "id" | "label" | "originalPath"> | null,
+	onAddToTimeline: (assetId: string) => void,
+	onSuccess: (label: string) => void,
+): void {
+	if (!selected) return;
+	onAddToTimeline(selected.id);
+	onSuccess(selected.label || basename(selected.originalPath));
+}
+
 export function MediaStage({ onAddToTimeline }: { onAddToTimeline: (assetId: string) => void }) {
 	const t = useScopedT("editor");
 	const projectId = useProjectStore((s) => s.projectId);
@@ -96,9 +106,9 @@ export function MediaStage({ onAddToTimeline }: { onAddToTimeline: (assetId: str
 	};
 
 	const addSelectedToTimeline = () => {
-		if (!selected) return;
-		onAddToTimeline(selected.id);
-		toast.success(t("mediaStage.addedToTimeline", { label: selected.label }));
+		addSelectedAssetToTimeline(selected, onAddToTimeline, (label) => {
+			toast.success(t("mediaStage.addedToTimeline", { label }));
+		});
 	};
 
 	return (

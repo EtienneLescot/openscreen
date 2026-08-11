@@ -53,6 +53,38 @@ export function resolveAudioPreviewTime(
 	};
 }
 
+interface PreviewAudioGraph {
+	context: AudioContext;
+	highpasses: BiquadFilterNode[];
+	compressor: DynamicsCompressorNode;
+	gain: GainNode;
+}
+
+function applyPreviewAudioSettings(
+	graph: PreviewAudioGraph | null,
+	elements: Array<HTMLAudioElement | null>,
+	autoMaster: boolean,
+	gainDb: number,
+): void {
+	const outputGain = 10 ** (gainDb / 20);
+	if (!graph) {
+		for (const element of elements) {
+			if (element) element.volume = Math.min(1, outputGain);
+		}
+		return;
+	}
+	for (const filter of graph.highpasses) {
+		filter.frequency.value = autoMaster ? 80 : 20;
+		filter.Q.value = 0.707;
+	}
+	graph.compressor.threshold.value = autoMaster ? -18 : 0;
+	graph.compressor.knee.value = autoMaster ? 12 : 0;
+	graph.compressor.ratio.value = autoMaster ? 3 : 1;
+	graph.compressor.attack.value = 0.01;
+	graph.compressor.release.value = 0.12;
+	graph.gain.gain.value = outputGain;
+}
+
 /** First clip (by timeline order) starting strictly after `afterTimelineStartSec` —
  *  independent of the `clips` array's own order, which is never guaranteed to match
  *  timeline order (a clip can be inserted/reordered at any array index; only
@@ -158,12 +190,18 @@ export function VirtualPreview({
 	const [supplementalAudioEl, setSupplementalAudioEl] = useState<HTMLAudioElement | null>(null);
 	const [supplementalAudioSrc, setSupplementalAudioSrc] = useState<string | null>(null);
 	const [audioProbeComplete, setAudioProbeComplete] = useState(false);
-	const audioGraphRef = useRef<{
-		context: AudioContext;
-		highpasses: BiquadFilterNode[];
-		compressor: DynamicsCompressorNode;
-		gain: GainNode;
-	} | null>(null);
+	const audioSettingsRef = useRef({
+		autoMaster: settings.audioAutoMaster,
+		gainDb: settings.audioGainDb,
+	});
+	audioSettingsRef.current = {
+		autoMaster: settings.audioAutoMaster,
+		gainDb: settings.audioGainDb,
+	};
+	const audioContextRef = useRef<AudioContext | null>(null);
+	const audioContextCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+	const audioSourceNodesRef = useRef(new WeakMap<HTMLAudioElement, MediaElementAudioSourceNode>());
+	const audioGraphRef = useRef<PreviewAudioGraph | null>(null);
 	const videoFrameRef = useRef<HTMLDivElement | null>(null);
 
 	const isProgrammaticSeekRef = useRef(false);
@@ -212,11 +250,18 @@ export function VirtualPreview({
 				cancelled = true;
 			};
 		}
-		void window.electronAPI.preparePreviewAudioTrack(activeSource.filePath).then((result) => {
-			if (cancelled) return;
-			setSupplementalAudioSrc(result.success ? (result.path ?? null) : null);
-			setAudioProbeComplete(true);
-		});
+		void window.electronAPI.preparePreviewAudioTrack(activeSource.filePath).then(
+			(result) => {
+				if (cancelled) return;
+				setSupplementalAudioSrc(result.success ? (result.path ?? null) : null);
+				setAudioProbeComplete(true);
+			},
+			() => {
+				if (cancelled) return;
+				setSupplementalAudioSrc(null);
+				setAudioProbeComplete(true);
+			},
+		);
 		return () => {
 			cancelled = true;
 		};
@@ -228,53 +273,103 @@ export function VirtualPreview({
 	useEffect(() => {
 		if (!primaryAudioEl || !audioProbeComplete) return;
 		if (supplementalAudioSrc && !supplementalAudioEl) return;
-		let context: AudioContext | null = null;
+		const connectedSources: MediaElementAudioSourceNode[] = [];
+		const highpasses: BiquadFilterNode[] = [];
+		let compressor: DynamicsCompressorNode | null = null;
+		let gain: GainNode | null = null;
 		try {
-			context = new AudioContext();
-			const compressor = context.createDynamicsCompressor();
-			const gain = context.createGain();
+			let context = audioContextRef.current;
+			if (!context || context.state === "closed") {
+				context = new AudioContext();
+				audioContextRef.current = context;
+				audioSourceNodesRef.current = new WeakMap();
+			}
+			compressor = context.createDynamicsCompressor();
+			gain = context.createGain();
 			compressor.connect(gain).connect(context.destination);
-			const highpasses: BiquadFilterNode[] = [];
 			for (const element of [primaryAudioEl, supplementalAudioEl].filter(
 				(value): value is HTMLAudioElement => Boolean(value),
 			)) {
-				const source = context.createMediaElementSource(element);
+				let source = audioSourceNodesRef.current.get(element);
+				if (!source) {
+					source = context.createMediaElementSource(element);
+					audioSourceNodesRef.current.set(element, source);
+				}
+				source.disconnect();
 				const highpass = context.createBiquadFilter();
 				highpass.type = "highpass";
 				source.connect(highpass).connect(compressor);
+				connectedSources.push(source);
 				highpasses.push(highpass);
 			}
-			audioGraphRef.current = { context, highpasses, compressor, gain };
+			const graph = { context, highpasses, compressor, gain };
+			audioGraphRef.current = graph;
+			applyPreviewAudioSettings(
+				graph,
+				[primaryAudioEl, supplementalAudioEl],
+				audioSettingsRef.current.autoMaster,
+				audioSettingsRef.current.gainDb,
+			);
 		} catch {
 			// WebAudio can be unavailable in unit tests or under a denied audio policy. The media
 			// elements remain usable; the sync loop below still applies offset and playback state.
+			for (const source of connectedSources) source.disconnect();
+			for (const highpass of highpasses) highpass.disconnect();
+			compressor?.disconnect();
+			gain?.disconnect();
+			applyPreviewAudioSettings(
+				null,
+				[primaryAudioEl, supplementalAudioEl],
+				audioSettingsRef.current.autoMaster,
+				audioSettingsRef.current.gainDb,
+			);
 		}
 		return () => {
 			audioGraphRef.current = null;
-			if (context) void context.close();
+			for (const source of connectedSources) source.disconnect();
+			for (const highpass of highpasses) highpass.disconnect();
+			compressor?.disconnect();
+			gain?.disconnect();
 		};
 	}, [primaryAudioEl, supplementalAudioEl, supplementalAudioSrc, audioProbeComplete]);
 
+	// Keep one AudioContext for the component. Closing and recreating it on an effect rerun
+	// permanently silences an HTMLAudioElement because createMediaElementSource may only be
+	// called once for that element. Delay final cleanup by one task so React StrictMode's
+	// intentional setup → cleanup → setup cycle can cancel the close and reuse the context.
 	useEffect(() => {
-		const graph = audioGraphRef.current;
-		const outputGain = 10 ** (settings.audioGainDb / 20);
-		if (!graph) {
-			for (const element of [primaryAudioRef.current, supplementalAudioRef.current]) {
-				if (element) element.volume = Math.min(1, outputGain);
-			}
-			return;
+		if (audioContextCloseTimerRef.current) {
+			clearTimeout(audioContextCloseTimerRef.current);
+			audioContextCloseTimerRef.current = null;
 		}
-		for (const filter of graph.highpasses) {
-			filter.frequency.value = settings.audioAutoMaster ? 80 : 20;
-			filter.Q.value = 0.707;
-		}
-		graph.compressor.threshold.value = settings.audioAutoMaster ? -18 : 0;
-		graph.compressor.knee.value = settings.audioAutoMaster ? 12 : 0;
-		graph.compressor.ratio.value = settings.audioAutoMaster ? 3 : 1;
-		graph.compressor.attack.value = 0.01;
-		graph.compressor.release.value = 0.12;
-		graph.gain.gain.value = outputGain;
+		return () => {
+			audioContextCloseTimerRef.current = setTimeout(() => {
+				audioContextCloseTimerRef.current = null;
+				const context = audioContextRef.current;
+				audioContextRef.current = null;
+				audioSourceNodesRef.current = new WeakMap();
+				if (context) void context.close();
+			}, 0);
+		};
+	}, []);
+
+	useEffect(() => {
+		applyPreviewAudioSettings(
+			audioGraphRef.current,
+			[primaryAudioRef.current, supplementalAudioRef.current],
+			settings.audioAutoMaster,
+			settings.audioGainDb,
+		);
 	}, [settings.audioAutoMaster, settings.audioGainDb]);
+
+	const setPrimaryAudioElement = useCallback((element: HTMLAudioElement | null) => {
+		primaryAudioRef.current = element;
+		setPrimaryAudioEl(element);
+	}, []);
+	const setSupplementalAudioElement = useCallback((element: HTMLAudioElement | null) => {
+		supplementalAudioRef.current = element;
+		setSupplementalAudioEl(element);
+	}, []);
 
 	// ponytail: the cursor overlay wants source-media time (the recorded
 	// cursor samples live on the original mp4 timeline, not the edited
@@ -371,7 +466,8 @@ export function VirtualPreview({
 					if (audioGraphRef.current?.context.state === "suspended") {
 						void audioGraphRef.current.context.resume();
 					}
-					void audio.play().catch(() => undefined);
+					const playback = audio.play();
+					if (playback) void playback.catch(() => undefined);
 				} else if ((v.paused || !target.shouldPlay) && !audio.paused) {
 					audio.pause();
 				}
@@ -1035,10 +1131,7 @@ export function VirtualPreview({
 						/>
 						<audio
 							key={`${activeSource.id}:primary-audio`}
-							ref={(element) => {
-								primaryAudioRef.current = element;
-								setPrimaryAudioEl(element);
-							}}
+							ref={setPrimaryAudioElement}
 							src={activeSource.src}
 							preload="metadata"
 							aria-hidden="true"
@@ -1047,10 +1140,7 @@ export function VirtualPreview({
 						{supplementalAudioSrc ? (
 							<audio
 								key={`${activeSource.id}:supplemental-audio`}
-								ref={(element) => {
-									supplementalAudioRef.current = element;
-									setSupplementalAudioEl(element);
-								}}
+								ref={setSupplementalAudioElement}
 								src={supplementalAudioSrc}
 								preload="metadata"
 								aria-hidden="true"
