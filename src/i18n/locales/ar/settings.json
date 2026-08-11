@@ -54,10 +54,10 @@
 		"reactiveWebcamDescription": "تتقلص الكاميرا بسلاسة أثناء تكبير الفيديو حتى لا تعيق الرؤية.",
 		"help": "طريقة دمج كاميرا الويب مع الشاشة: صورة داخل صورة، أو تكديس عمودي، أو إطار مزدوج، وشكل القناع والحجم والانعكاس.",
 		"helpNoWebcam": "لا يحتوي هذا المشروع على كاميرا، لذلك فإن عناصر التحكم في التخطيط معطّلة ويعرض الإعداد المسبق «بدون كاميرا». يُحتفظ بالتخطيط المحفوظ لحين إضافة كاميرا.",
-		"webcamFraming": "Webcam framing",
-		"webcamCropZoom": "Crop zoom",
-		"webcamCropX": "Horizontal pan",
-		"webcamCropY": "Vertical pan",
+		"webcamFraming": "تأطير كاميرا الويب",
+		"webcamCropZoom": "تكبير الاقتصاص",
+		"webcamCropX": "تحريك أفقي",
+		"webcamCropY": "تحريك عمودي",
 		"shapes": {
 			"rectangle": "مستطيل",
 			"circle": "دائرة",
@@ -305,11 +305,11 @@
 		"maxWords": "أكثر عدد كلمات في السطر"
 	},
 	"audio": {
-		"title": "Audio",
-		"autoMaster": "Auto master",
-		"syncOffset": "Sync offset",
-		"outputGain": "Output trim",
-		"reset": "Reset audio",
-		"help": "Automatically clean and balance voice audio, then fine-tune timing and level."
+		"title": "الصوت",
+		"autoMaster": "تحسين الصوت تلقائيًا",
+		"syncOffset": "إزاحة المزامنة",
+		"outputGain": "ضبط مستوى الإخراج",
+		"reset": "إعادة ضبط الصوت",
+		"help": "نظّف ووازن صوت الكلام تلقائيًا، ثم اضبط التوقيت والمستوى بدقة."
 	}
 }

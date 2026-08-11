@@ -54,10 +54,10 @@
 		"reactiveWebcamDescription": "La cámara se reduce suavemente mientras el vídeo está ampliado, para no estorbar.",
 		"help": "Cómo se compone la webcam con la pantalla: imagen en imagen, pila vertical, marco doble, forma de máscara, tamaño y efecto espejo.",
 		"helpNoWebcam": "Este proyecto no tiene cámara, así que los controles de diseño están desactivados y el preajuste muestra «Sin cámara». Tu diseño guardado se conserva para cuando añadas una cámara.",
-		"webcamFraming": "Webcam framing",
-		"webcamCropZoom": "Crop zoom",
-		"webcamCropX": "Horizontal pan",
-		"webcamCropY": "Vertical pan",
+		"webcamFraming": "Encuadre de cámara",
+		"webcamCropZoom": "Zoom de recorte",
+		"webcamCropX": "Desplazamiento horizontal",
+		"webcamCropY": "Desplazamiento vertical",
 		"shapes": {
 			"rectangle": "Rect.",
 			"circle": "Círculo",
@@ -306,10 +306,10 @@
 	},
 	"audio": {
 		"title": "Audio",
-		"autoMaster": "Auto master",
-		"syncOffset": "Sync offset",
-		"outputGain": "Output trim",
-		"reset": "Reset audio",
-		"help": "Automatically clean and balance voice audio, then fine-tune timing and level."
+		"autoMaster": "Mejora automática de voz",
+		"syncOffset": "Desfase de sincronización",
+		"outputGain": "Ajuste de salida",
+		"reset": "Restablecer audio",
+		"help": "Limpia y equilibra la voz automáticamente y luego ajusta con precisión el tiempo y el nivel."
 	}
 }

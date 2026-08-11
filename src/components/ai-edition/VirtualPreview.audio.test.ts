@@ -17,4 +17,11 @@ describe("resolveAudioPreviewTime", () => {
 			shouldPlay: false,
 		});
 	});
+
+	it("plays while the duration is still unknown", () => {
+		expect(resolveAudioPreviewTime(1, 0, Number.NaN)).toEqual({
+			targetTimeSec: 1,
+			shouldPlay: true,
+		});
+	});
 });

@@ -54,10 +54,10 @@
 		"reactiveWebcamDescription": "확대하는 동안 카메라가 부드럽게 작아져 방해되지 않습니다.",
 		"help": "웹캠과 화면을 합성하는 방식: PIP, 세로 배치, 이중 프레임, 마스크 모양, 크기, 좌우 반전.",
 		"helpNoWebcam": "이 프로젝트에는 카메라가 없어 레이아웃 설정이 비활성화되고 프리셋이 “웹캠 없음”으로 표시됩니다. 저장된 레이아웃은 카메라를 추가할 때를 위해 유지됩니다.",
-		"webcamFraming": "Webcam framing",
-		"webcamCropZoom": "Crop zoom",
-		"webcamCropX": "Horizontal pan",
-		"webcamCropY": "Vertical pan",
+		"webcamFraming": "웹캠 구도",
+		"webcamCropZoom": "자르기 확대",
+		"webcamCropX": "가로 이동",
+		"webcamCropY": "세로 이동",
 		"shapes": {
 			"rectangle": "직사각형",
 			"circle": "원형",
@@ -305,11 +305,11 @@
 		"maxWords": "줄당 최대 단어 수"
 	},
 	"audio": {
-		"title": "Audio",
-		"autoMaster": "Auto master",
-		"syncOffset": "Sync offset",
-		"outputGain": "Output trim",
-		"reset": "Reset audio",
-		"help": "Automatically clean and balance voice audio, then fine-tune timing and level."
+		"title": "오디오",
+		"autoMaster": "음성 자동 마스터링",
+		"syncOffset": "동기화 오프셋",
+		"outputGain": "출력 레벨",
+		"reset": "오디오 재설정",
+		"help": "음성을 자동으로 정리하고 균형을 맞춘 뒤 타이밍과 레벨을 세밀하게 조정합니다."
 	}
 }

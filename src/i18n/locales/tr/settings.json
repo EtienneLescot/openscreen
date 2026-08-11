@@ -54,10 +54,10 @@
 		"reactiveWebcamDescription": "Video yakınlaştırıldığında kamera yumuşakça küçülür, böylece yoldan çekilir.",
 		"help": "Web kamerasının ekranla birleştirilme biçimi: resim içinde resim, dikey yığın, çift çerçeve, maske şekli, boyut ve aynalama.",
 		"helpNoWebcam": "Bu projede kamera yok; bu yüzden yerleşim denetimleri kapalı ve ön ayar “Web kamerası yok” gösteriyor. Kaydettiğiniz yerleşim, bir kamera eklediğinizde kullanılmak üzere korunur.",
-		"webcamFraming": "Webcam framing",
-		"webcamCropZoom": "Crop zoom",
-		"webcamCropX": "Horizontal pan",
-		"webcamCropY": "Vertical pan",
+		"webcamFraming": "Webcam kadrajı",
+		"webcamCropZoom": "Kırpma yakınlaştırması",
+		"webcamCropX": "Yatay kaydırma",
+		"webcamCropY": "Dikey kaydırma",
 		"shapes": {
 			"rectangle": "Dikdörtgen",
 			"circle": "Daire",
@@ -305,11 +305,11 @@
 		"maxWords": "Satır başına en çok kelime"
 	},
 	"audio": {
-		"title": "Audio",
-		"autoMaster": "Auto master",
-		"syncOffset": "Sync offset",
-		"outputGain": "Output trim",
-		"reset": "Reset audio",
-		"help": "Automatically clean and balance voice audio, then fine-tune timing and level."
+		"title": "Ses",
+		"autoMaster": "Otomatik ses mastering",
+		"syncOffset": "Senkronizasyon kaydırması",
+		"outputGain": "Çıkış seviyesi",
+		"reset": "Sesi sıfırla",
+		"help": "Konuşma sesini otomatik olarak temizleyip dengeleyin, ardından zamanlama ve seviyeyi hassas biçimde ayarlayın."
 	}
 }
