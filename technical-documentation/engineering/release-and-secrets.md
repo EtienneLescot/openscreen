@@ -14,6 +14,15 @@ Run the `Cut a release candidate` workflow (`prerelease.yml`) with:
 
 The workflow computes `X.Y.Z-rc.N`, migrates items from `Next Release` to the `vX.Y.Z` milestone, creates or reuses `release/vX.Y.Z`, commits the prerelease version there, tags the frozen branch tip, explicitly dispatches `build.yml` at the RC tag, and announces the pre-release in the configured RC Discord channel.
 
+`build.yml` does have a `push:` trigger on `v*` tags, but the release workflows do not rely on it. The dispatch is explicit *and* pinned to the tag, for two separate reasons:
+
+- **Explicit**, because a tag pushed with `GITHUB_TOKEN` does not fire `build.yml`'s `push:` trigger in this org's setup — GitHub withholds that to stop workflows triggering each other in a loop. `promote.yml` does push the stable tag that way, so without the dispatch nothing would build.
+- **Pinned with `--ref`**, because the build must check out the **tag**, not the default branch. The version bump lives only on the release branch; `main` still carries the previous stable version, and `build.yml`'s publish step would fail its guard (`package.json version X does not match <tag>`).
+
+The two workflows push their tags with different credentials, which is deliberate: `promote.yml` uses `GITHUB_TOKEN` (a tag is a ref, not a file change), while `prerelease.yml` pushes the RC tag with `OPENSCREEN_RELEASE_TOKEN`. A `GITHUB_TOKEN` tag push is answered with `remote: Internal Server Error` — a 500, not a 403 — by a tag ruleset that rejects the Actions token, and that failure took down the whole `v1.8.0-rc.1` cut, skipping the build trigger and the Discord announce with it.
+
+RC tags are signed and notarized exactly like stable ones. That keeps testers out of `xattr -rd com.apple.quarantine`, and exercises the whole credential path on every candidate instead of first proving it on the promotion build.
+
 ### Promote to stable
 
 Run `Promote RC to stable release` (`promote.yml`) with:
@@ -23,26 +32,73 @@ Run `Promote RC to stable release` (`promote.yml`) with:
 
 The workflow validates the tag, closes the version milestone, checks out `release/vX.Y.Z`, changes `package.json` to the stable version, tags that branch tip, opens and rebase-merges a release-sync PR into `main`, explicitly dispatches `build.yml` at the stable tag, and announces the stable release. The build publishes signed/notarized artifacts when Apple credentials are complete; publication with `OPENSCREEN_RELEASE_TOKEN` emits the event that starts stable Homebrew, WinGet, Nix, and AUR workflows.
 
-### Release-branch freeze rule
+### Release branches (the contract)
 
-An RC cut creates `release/vX.Y.Z`. That branch is not merged into `main` until the stable tag is published, and only cherry-picked RC bug fixes land on it during the RC window. Subsequent RCs reuse the same branch. This rule exists because a promote workflow once tagged `main` instead of the tested RC snapshot and shipped unreleased commits.
+Every released version has **exactly one frozen branch**, named for the stable version, living from the first RC cut onward:
 
-Development continues on `main`; the freeze applies to the release branch. Day-to-day branching, PR, review, and cherry-pick procedure is maintained in [the operational git workflow](../../.harness/docs/git-workflow.md).
-
-### Manual tag fallback
-
-When the dispatch UI is unavailable, prepare the correct prerelease or stable `package.json` commit on the frozen release branch, then push the tag at that exact commit:
-
-```bash
-git tag v1.8.0-rc.1 <release-branch-sha>
-git push origin v1.8.0-rc.1
-
-# After QA and the stable version commit on the same release branch:
-git tag v1.8.0 <stable-release-branch-sha>
-git push origin v1.8.0
+```text
+release/vX.Y.Z         created at rc.1, frozen through promote, kept for backports
+release/vX.Y.Z-sync    ephemeral, created by promote to merge into main
 ```
 
-Any `v*` tag triggers `build.yml`. The fallback skips milestone migration/closure, release-branch automation, explicit build dispatch, main synchronization, and Discord announcements, so the operator must preserve the freeze and version/tag match manually.
+The name carries **no `-rc.N` suffix**. `prerelease.yml` and `promote.yml` must resolve the same ref, and every RC of a version re-cuts from this one branch.
+
+1. **`prerelease.yml` creates the branch at rc.1 and reuses it for later RCs.** It must never delete or recreate it: that would drop the cherry-picks and silently re-cut from `main`, defeating the freeze this contract exists to guarantee.
+2. **`promote.yml` is the only automated writer** that turns `-rc.N` into the stable version on the branch. A maintainer doing that by hand means the dispatch failed — see [Manual fallback](#manual-fallback).
+3. **`main` is never frozen.** Development continues as usual; the release branch is the freeze.
+4. **Cherry-picks during the RC window** are committed manually by a maintainer (`git checkout release/vX.Y.Z && git cherry-pick <sha>`), then rerun `prerelease.yml` with the next `rc_number` to re-tag the branch tip.
+
+Only cherry-picked bug fixes land on the branch between cut and promote. Features, refactors, and CI/docs changes are **not** applied — they live on `main` and ship in the next cycle. `git log release/vX.Y.Z..main --oneline` lists exactly what is *not* in the RC.
+
+The branch **stays around** indefinitely: it is the frozen history of the release, useful for backports and forensics. Retiring one is a manual decision, taken only once a future major supersedes the line it froze.
+
+This contract exists because of the **v1.6.0 incident (2026-07-05)**: the original `promote.yml` checked out `main`, so the stable tag captured the post-RC tip of `main` rather than the RC snapshot. Twenty-three commits (Tiptap, NotesWindow, an in-recorder lint button, AI handoff) shipped in v1.6.0 without ever having been in v1.6.0-rc.1. The re-release the same day used `release/v1.6.0` and cherry-picked only the commits that were genuinely safe.
+
+Day-to-day branching, PR, and review procedure is maintained in [the operational git workflow](../../.harness/docs/git-workflow.md).
+
+### Manual fallback
+
+When the dispatch UI is unavailable, the release can be cut from a shell. Set the version with `.github/scripts/set-release-version.mjs` — the same script both workflows call — and **never with a hand-rolled `sed` on `package.json`**: the script also writes `package-lock.json`, and a release commit that bumps only `package.json` ships a lockfile whose root version disagrees with the package it locks. `npm ci` does not reject that (the root `version` field is not a dependency, so the sync check ignores it), which is how three releases shipped with the mismatch before anyone noticed.
+
+```bash
+RC=1.5.0-rc.1                          # bump the rc.N for every later candidate
+
+# Cut RC (skips milestone migration and Discord announce)
+git checkout -b release/v1.5.0 main    # rc.2+: git checkout release/v1.5.0 instead
+node .github/scripts/set-release-version.mjs "$RC"
+git commit -am "chore(release): bump to $RC [skip ci]"
+git push origin release/v1.5.0
+git tag "v$RC" && git push origin "v$RC"
+
+# Promote (skips milestone close and Discord announce)
+git checkout release/v1.5.0
+node .github/scripts/set-release-version.mjs 1.5.0
+git commit -am "chore(release): bump to 1.5.0 [skip ci]"
+git push origin release/v1.5.0
+git tag v1.5.0 && git push origin v1.5.0
+```
+
+A tag pushed with your own credentials **does** fire `build.yml`'s `push:` trigger, so the release publishes on its own and no explicit dispatch is needed — that restriction only applies to `GITHUB_TOKEN`. Either way the same `build.yml` builds and publishes.
+
+The fallback skips milestone migration/closure, release-branch automation, main synchronization, and Discord announcements, so the operator must preserve the freeze and the version/tag match by hand.
+
+### Backports / patch on a previous line
+
+For a `v1.4.2` while `v1.5.0` is in flight:
+
+1. Branch `release/1.4.x` from the `v1.4.0` (or `v1.4.1`) tag.
+2. Cherry-pick the fix commits.
+3. Push the branch, then `git tag v1.4.2-rc.1` on the branch tip.
+4. `git push origin release/1.4.x v1.4.2-rc.1` — `build.yml` works from any branch.
+
+No new workflow code is needed; the tag-pushed trigger is branch-agnostic.
+
+### Issue tracking during a release cycle
+
+- **Daily state**: issues/PRs accumulate in the rolling `Next Release` milestone. `merged-pr-bookkeeping.yml` adds them automatically on PR merge; maintainers can also drag issues in by hand.
+- **At RC cut**: `prerelease.yml` snapshots `Next Release` into a versioned `vX.Y.Z` milestone. The rolling milestone is left open and empty for new work.
+- **Between RC cut and promote**: any PR that merges during the RC window lands back in the empty `Next Release`. It is **not** retroactively added to `vX.Y.Z`. If a critical fix lands, cut `vX.Y.Z-rc.(N+1)` instead of promoting.
+- **At promote**: `promote.yml` closes the `vX.Y.Z` milestone and uses its closed issues to populate the Discord release announcement.
 
 ## Required release credential
 

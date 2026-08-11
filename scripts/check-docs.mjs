@@ -1,15 +1,25 @@
 #!/usr/bin/env node
-// Docs lint for technical-documentation/: relative links resolve, no legacy
-// identifiers are presented as current, and every expected file is real.
-// ponytail: three regex passes over ~30 files, no deps. Run: node scripts/check-docs.mjs
+// Docs lint: relative links resolve, no legacy identifiers are presented as
+// current, and every expected file is real.
+// ponytail: three regex passes over ~40 files, no deps. Run: node scripts/check-docs.mjs
 import { readdirSync, readFileSync, statSync } from "node:fs";
 import { dirname, join, relative, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
 const DOCS = join(ROOT, "technical-documentation");
 
-// Names of components / docs that no longer exist on this branch. A doc may only
-// mention them inside a "removed / superseded" note, which lives in decisions.md.
+// `.harness/` is prose too, and it rots the same way — it just had no checker.
+// `.harness/docs/git-workflow.md` described the release-branch naming that #90
+// had already replaced, and `.harness/memory/MEMORY.md` repeated it, for a
+// month, while the same fact stayed correct under technical-documentation/
+// because this script was watching that tree and not this one. Every file here
+// is loaded into agent runs, so a stale one is worse than a stale page nobody
+// opens. Only REQUIRED (the "expected file is real" pass) stays docs-only.
+const TREES = [DOCS, join(ROOT, ".harness")];
+
+// Names of components, docs, or conventions that no longer exist on this branch.
+// A doc may only mention them inside a "removed / superseded" note, which lives
+// in decisions.md.
 const LEGACY = [
 	"TimelinePane",
 	"RightPanelStack",
@@ -31,8 +41,13 @@ const LEGACY = [
 	"provider-parity-plan",
 	"github-actions-workflows",
 	"ux-ui-spec",
+	// Pre-#90 release-branch naming. One branch per *stable* version now
+	// (`release/vX.Y.Z`), created at rc.1 and reused, because prerelease.yml and
+	// promote.yml have to resolve the same ref. Docs that reintroduce the
+	// suffixed name send a maintainer to a branch that was never created.
+	"release/vX.Y.Z-rc.N",
 ];
-const LEGACY_ALLOWED = new Set(["architecture/decisions.md"]);
+const LEGACY_ALLOWED = new Set(["technical-documentation/architecture/decisions.md"]);
 
 const REQUIRED = [
 	"README.md",
@@ -59,7 +74,7 @@ const REQUIRED = [
 	"testing/native-cursor-diagnostics.md",
 ];
 
-// `--only a.md,b/c.md` limits both checks to those docs-relative paths, so a
+// `--only a.md,b/c.md` limits both checks to those repo-relative paths, so a
 // task that owns a slice of the tree can gate on its slice alone.
 const onlyArg = process.argv.find((a) => a.startsWith("--only="));
 const only = onlyArg ? new Set(onlyArg.slice("--only=".length).split(",")) : null;
@@ -77,23 +92,24 @@ function walk(dir) {
 }
 
 const errors = [];
-const files = walk(DOCS);
+const files = TREES.flatMap(walk);
 
 for (const abs of REQUIRED) {
-	if (!owned(abs)) continue;
+	const rel = `technical-documentation/${abs}`;
+	if (!owned(rel)) continue;
 	const full = join(DOCS, abs);
 	let lines = -1;
 	try {
 		lines = readFileSync(full, "utf8").split("\n").length;
 	} catch {
-		errors.push(`missing: technical-documentation/${abs}`);
+		errors.push(`missing: ${rel}`);
 		continue;
 	}
-	if (lines < 30) errors.push(`stub (${lines} lines): technical-documentation/${abs}`);
+	if (lines < 30) errors.push(`stub (${lines} lines): ${rel}`);
 }
 
 for (const file of files) {
-	const rel = relative(DOCS, file).replaceAll("\\", "/");
+	const rel = relative(ROOT, file).replaceAll("\\", "/");
 	if (!owned(rel)) continue;
 	const text = readFileSync(file, "utf8");
 
