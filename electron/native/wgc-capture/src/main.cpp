@@ -195,6 +195,12 @@ std::string jsonEscape(const std::string& value) {
     return result;
 }
 
+// HighPart:LowPart, matching how Windows tooling and QueryDisplayConfig traces
+// spell a LUID, so a value from a bug report can be grepped against them.
+std::string formatLuid(const LUID& luid) {
+    return std::to_string(luid.HighPart) + ":" + std::to_string(luid.LowPart);
+}
+
 // Reports which GPU the capture device landed on, and which one actually drives
 // the monitor being captured.
 //
@@ -237,6 +243,7 @@ void reportCaptureAdapters(ID3D11Device* device, HMONITOR targetMonitor) {
     }
 
     std::wstring monitorAdapterName;
+    std::string monitorAdapterLuid;
     bool monitorAdapterFound = false;
     bool sameAdapter = false;
     // Both loops end on FAILED(), not on DXGI_ERROR_NOT_FOUND specifically.
@@ -266,6 +273,7 @@ void reportCaptureAdapters(ID3D11Device* device, HMONITOR targetMonitor) {
                 continue;
             }
             monitorAdapterName = adapterDesc.Description;
+            monitorAdapterLuid = formatLuid(adapterDesc.AdapterLuid);
             monitorAdapterFound = true;
             // Compared by LUID rather than by description, because two adapters
             // of the same model report the same string.
@@ -277,18 +285,66 @@ void reportCaptureAdapters(ID3D11Device* device, HMONITOR targetMonitor) {
         }
     }
 
+    // The LUIDs are reported, not just the descriptions, because on the exact
+    // configuration this diagnostic exists to catch the two descriptions are
+    // IDENTICAL. An IddCx virtual display driver renders through the physical
+    // GPU and inherits its description string while being a separate DXGI
+    // adapter with its own LUID -- measured on a rented multi-adapter box:
+    //
+    //   adapter[0]  NVIDIA Quadro RTX 4000   LUID 0:24084       -> \\.\DISPLAY1
+    //   adapter[1]  NVIDIA Quadro RTX 4000   LUID 0:12889146    -> the IDD
+    //
+    // So a machine with the divergence would have printed two identical names
+    // next to sameAdapter:false, which reads as a bug in this reporting rather
+    // than as the finding it is. The comparison was always by LUID; only the
+    // output was ambiguous.
     std::cout << "{\"event\":\"capture-adapter\",\"schemaVersion\":2,\"deviceAdapter\":\""
-              << jsonEscape(wideToUtf8(deviceDesc.Description)) << "\",\"monitorAdapter\":";
+              << jsonEscape(wideToUtf8(deviceDesc.Description)) << "\",\"deviceLuid\":\""
+              << formatLuid(deviceDesc.AdapterLuid) << "\",\"monitorAdapter\":";
     if (monitorAdapterFound) {
-        std::cout << "\"" << jsonEscape(wideToUtf8(monitorAdapterName)) << "\",\"sameAdapter\":"
-                  << (sameAdapter ? "true" : "false");
+        std::cout << "\"" << jsonEscape(wideToUtf8(monitorAdapterName)) << "\",\"monitorLuid\":\""
+                  << monitorAdapterLuid << "\",\"sameAdapter\":" << (sameAdapter ? "true" : "false");
     } else {
         // No output claims this monitor: it is driven by something DXGI does not
         // enumerate, which on the machines in #252 means a virtual display
         // adapter. Worth seeing in a report in its own right.
-        std::cout << "null,\"sameAdapter\":null";
+        std::cout << "null,\"monitorLuid\":null,\"sameAdapter\":null";
     }
     std::cout << "}" << std::endl;
+
+    // The full enumeration, to stderr, once at startup. Two adapters sharing a
+    // description is the thing a reader needs to see with their own eyes before
+    // they will believe sameAdapter over the names, and an adapter with no
+    // output at all is how an inactive virtual display presents.
+    for (UINT adapterIndex = 0;; ++adapterIndex) {
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+        if (FAILED(factory->EnumAdapters1(adapterIndex, &adapter)) || !adapter) {
+            break;
+        }
+        DXGI_ADAPTER_DESC1 desc{};
+        if (FAILED(adapter->GetDesc1(&desc))) {
+            continue;
+        }
+        std::cerr << "[adapters] " << adapterIndex << " luid=" << formatLuid(desc.AdapterLuid)
+                  << " \"" << wideToUtf8(desc.Description) << "\"";
+        UINT outputCount = 0;
+        for (UINT outputIndex = 0;; ++outputIndex) {
+            Microsoft::WRL::ComPtr<IDXGIOutput> output;
+            if (FAILED(adapter->EnumOutputs(outputIndex, &output)) || !output) {
+                break;
+            }
+            DXGI_OUTPUT_DESC outputDesc{};
+            if (SUCCEEDED(output->GetDesc(&outputDesc))) {
+                std::cerr << (outputCount == 0 ? " outputs=" : ",") << wideToUtf8(outputDesc.DeviceName)
+                          << (outputDesc.Monitor == targetMonitor ? "(captured)" : "");
+            }
+            ++outputCount;
+        }
+        if (outputCount == 0) {
+            std::cerr << " outputs=none";
+        }
+        std::cerr << std::endl;
+    }
 }
 
 bool hasVisibleBgraContent(const std::vector<BYTE>& frame) {
