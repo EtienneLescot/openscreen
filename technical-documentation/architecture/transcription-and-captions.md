@@ -107,7 +107,7 @@ clickable in the meantime (`phase: "model"` is emitted by the main process but
 deliberately not forwarded to the renderer by `transcribeAsset`). Nothing in the
 renderer imposes a timeout that a slow download could trip: the preload does a
 bare `ipcRenderer.invoke`, `fetchWithRetry` has no per-request deadline, and
-whisper-server's 30 s readiness budget only starts once the download resolved.
+whisper-server's 60 s readiness budget only starts once the download resolved.
 
 Three edges make that promise hold, and each is load-bearing:
 
@@ -145,11 +145,11 @@ per-platform binary name only, and the real backend is corrected from the
 helper's `/inference` JSON.
 
 Why whisper.cpp, in one paragraph: a single C++ dependency with native DTW
-token timestamps for word-level timing, a portable runtime device selection
-that covers Metal, Vulkan and CPU in one binary, and self-contained long-form
-chunking (`whisper_full()` over recordings longer than 30 s) without manual
-windowing on our side. Validation data — backend-by-backend WER and real-time
-factors — lives in
+token timestamps for word-level timing and portable runtime device selection
+that covers Metal, Vulkan and CPU in one binary. OpenScreen supplies bounded,
+sequential chunks to `whisper_full()` and restores their absolute timestamps,
+so long recordings retain progress and retry boundaries. Validation data —
+backend-by-backend WER and real-time factors — lives in
 [`tools/stt-eval/whispercpp-dtw-poc/REPORT.md`](../../tools/stt-eval/whispercpp-dtw-poc/REPORT.md).
 
 ### Per-platform backend
@@ -187,7 +187,7 @@ it verbatim in the response.
    array.
 2. **DTW timestamp** — every non-special token carries `t_dtw` in
    centiseconds from whisper.cpp's native DTW
-   (`dtw_token_timestamps=true`, `dtw_aheads_preset=WHISPER_AHEADS_SMALL`,
+   (`dtw_token_timestamps=true`, `dtw_aheads_preset=WHISPER_AHEADS_LARGE_V3_TURBO`,
    `flash_attn=false`, which together are the prerequisites for DTW to
    actually run). `t_dtw == -1` is the DTW-inactive guardrail: the helper
    fails the request rather than emit zero-quality timestamps.

@@ -164,7 +164,12 @@ export class SttManager {
 
 		const paths = modelPaths(modelsDir);
 		this.modelPath = paths.whisper;
-		await this.server.start({ modelPath: paths.whisper });
+		try {
+			await this.server.start({ modelPath: paths.whisper });
+		} catch (error) {
+			if (this.shuttingDown) throw cancelledError();
+			throw error;
+		}
 		if (this.shuttingDown) {
 			await this.server.shutdown();
 			throw cancelledError();
@@ -270,6 +275,7 @@ export class SttManager {
 					{ cause: error },
 				);
 			});
+			if (this.shuttingDown || this.cancelEpoch !== epoch) throw cancelledError();
 			// Chunk-relative timestamps → absolute, the only thing every consumer
 			// (captions, transcript editor, trims) reads.
 			for (const segment of result.segments) {
