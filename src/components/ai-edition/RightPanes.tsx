@@ -6,6 +6,7 @@
 // self-sufficient).
 
 import {
+	AudioLines,
 	FileText,
 	HelpCircle,
 	Layout as LayoutIcon,
@@ -1538,6 +1539,23 @@ export function LayoutPane() {
 	// still on disk. Say so, otherwise the only signal the user gets is their setting
 	// apparently having been thrown away.
 	const helpText = hasDocument && !hasAnyCamera ? ts("layout.helpNoWebcam") : ts("layout.help");
+	const webcamCrop = settings.webcamCropRegion;
+	const cropZoomPct = Math.round(100 / webcamCrop.width);
+	const cropPanX = webcamCrop.width >= 0.999 ? 50 : (webcamCrop.x / (1 - webcamCrop.width)) * 100;
+	const cropPanY = webcamCrop.height >= 0.999 ? 50 : (webcamCrop.y / (1 - webcamCrop.height)) * 100;
+	const setCropZoom = (zoomPct: number) => {
+		const size = 100 / Math.max(100, zoomPct);
+		const centerX = webcamCrop.x + webcamCrop.width / 2;
+		const centerY = webcamCrop.y + webcamCrop.height / 2;
+		setLive({
+			webcamCropRegion: {
+				x: Math.min(1 - size, Math.max(0, centerX - size / 2)),
+				y: Math.min(1 - size, Math.max(0, centerY - size / 2)),
+				width: size,
+				height: size,
+			},
+		});
+	};
 	return (
 		<Pane title={ts("layout.title")} icon={<LayoutIcon size={14} />} helpText={helpText}>
 			<div className={styles.sectionLabel}>{ts("layout.preset")}</div>
@@ -1671,6 +1689,99 @@ export function LayoutPane() {
 					</div>
 				</div>
 			) : null}
+			<div className={styles.sectionLabel}>{ts("layout.webcamFraming")}</div>
+			<div className={styles.sliderGrid}>
+				<SliderCell
+					label={ts("layout.webcamCropZoom")}
+					value={cropZoomPct}
+					min={100}
+					max={300}
+					suffix="%"
+					disabled={layoutControlsDisabled}
+					onChange={setCropZoom}
+					onCommit={() => void commit()}
+				/>
+				<SliderCell
+					label={ts("layout.webcamCropX")}
+					value={cropPanX}
+					min={0}
+					max={100}
+					suffix="%"
+					disabled={layoutControlsDisabled || webcamCrop.width >= 0.999}
+					onChange={(value) =>
+						setLive({
+							webcamCropRegion: { ...webcamCrop, x: (value / 100) * (1 - webcamCrop.width) },
+						})
+					}
+					onCommit={() => void commit()}
+				/>
+				<SliderCell
+					label={ts("layout.webcamCropY")}
+					value={cropPanY}
+					min={0}
+					max={100}
+					suffix="%"
+					disabled={layoutControlsDisabled || webcamCrop.height >= 0.999}
+					onChange={(value) =>
+						setLive({
+							webcamCropRegion: { ...webcamCrop, y: (value / 100) * (1 - webcamCrop.height) },
+						})
+					}
+					onCommit={() => void commit()}
+				/>
+			</div>
+		</Pane>
+	);
+}
+
+// ─── Audio ────────────────────────────────────────────────────────
+
+export function AudioPane() {
+	const ts = useScopedT("settings");
+	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+	return (
+		<Pane title={ts("audio.title")} icon={<AudioLines size={14} />} helpText={ts("audio.help")}>
+			<div className={styles.paneRow}>
+				<span className="label">{ts("audio.autoMaster")}</span>
+				<Toggle
+					checked={settings.audioAutoMaster}
+					disabled={!hasDocument}
+					onChange={(value) => void set({ audioAutoMaster: value })}
+				/>
+			</div>
+			<div className={styles.sliderGrid}>
+				<SliderCell
+					label={ts("audio.syncOffset")}
+					value={settings.audioOffsetMs}
+					min={-500}
+					max={500}
+					step={1}
+					suffix=" ms"
+					disabled={!hasDocument}
+					onChange={(value) => setLive({ audioOffsetMs: value })}
+					onCommit={() => void commit()}
+				/>
+				<SliderCell
+					label={ts("audio.outputGain")}
+					value={settings.audioGainDb}
+					min={-12}
+					max={12}
+					step={0.5}
+					decimals={1}
+					suffix=" dB"
+					disabled={!hasDocument}
+					onChange={(value) => setLive({ audioGainDb: value })}
+					onCommit={() => void commit()}
+				/>
+			</div>
+			<button
+				type="button"
+				className={styles.secondaryBtn}
+				disabled={!hasDocument}
+				onClick={() => void set({ audioOffsetMs: 0, audioGainDb: 0, audioAutoMaster: true })}
+			>
+				{ts("audio.reset")}
+			</button>
 		</Pane>
 	);
 }

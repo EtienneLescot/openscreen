@@ -134,6 +134,8 @@
 		"emptyHint": "まだメディアがありません — 録画をインポートして開始してください。",
 		"importMedia": "メディアをインポート",
 		"added": "{{label}} を追加しました",
+		"addToTimeline": "タイムラインに追加",
+		"addedToTimeline": "{{label}} をタイムラインに追加しました",
 		"sourceTranscript": "ソースの文字起こし",
 		"close": "閉じる",
 		"transcriptReady": "文字起こし完了",

@@ -284,6 +284,23 @@ pub(crate) fn cover_crop_uv(visible: [f32; 2], tex: [f32; 2], box_ar: f32) -> (f
     let [u0, v0, u1, v1] = cover_uv_rect(full, tex, box_ar);
     (u0, v0, u1, v1)
 }
+
+/// Camera equivalent of the screen crop pipeline: apply the user crop first, then a centred
+/// cover-crop inside that authored window so arbitrary layout slots never stretch the image.
+pub(crate) fn webcam_source_rect(
+    visible: [f32; 2],
+    tex: [f32; 2],
+    crop: Option<SceneCrop>,
+    box_ar: f32,
+) -> [f32; 4] {
+    let u_max = visible[0].max(1.0) / tex[0].max(1.0);
+    let v_max = visible[1].max(1.0) / tex[1].max(1.0);
+    cover_uv_rect(
+        screen_source_rect(u_max, v_max, crop, 1.0, [0.5, 0.5]),
+        tex,
+        box_ar,
+    )
+}
 /// Rétrécit un rect SOURCE déjà exprimé en UV (`[u0, v0, u1, v1]`) autour de son
 /// centre pour qu'il porte le ratio `box_ar` une fois rapporté aux pixels de la
 /// texture. C'est la forme générale de `object-fit: cover`, et LA primitive qui
@@ -1872,5 +1889,23 @@ mod tests {
         let (su0, _, su1, _) = cover_crop_uv([960.0, 720.0], tex, 1.0);
         assert!((su0 - (960.0 - 720.0) * 0.5 / tex[0]).abs() < 1e-6);
         assert!((su1 - (960.0 + 720.0) * 0.5 / tex[0]).abs() < 1e-6);
+    }
+
+    #[test]
+    fn webcam_crop_identity_keeps_the_full_visible_frame() {
+        let uv = webcam_source_rect([1280.0, 720.0], [2048.0, 1024.0], None, 16.0 / 9.0);
+        assert_rect(uv, [0.0, 0.0, 1280.0 / 2048.0, 720.0 / 1024.0]);
+    }
+
+    #[test]
+    fn webcam_crop_applies_authored_zoom_and_pan_before_layout_cover() {
+        let crop = SceneCrop {
+            x: 0.25,
+            y: 0.20,
+            width: 0.50,
+            height: 0.60,
+        };
+        let uv = webcam_source_rect([100.0, 100.0], [100.0, 100.0], Some(crop), 0.50 / 0.60);
+        assert_rect(uv, [0.25, 0.20, 0.75, 0.80]);
     }
 }

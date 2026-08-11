@@ -134,6 +134,8 @@
 		"emptyHint": "No media yet — import a recording to get started.",
 		"importMedia": "Import media",
 		"added": "Added {{label}}",
+		"addToTimeline": "Add to timeline",
+		"addedToTimeline": "Added {{label}} to the timeline",
 		"sourceTranscript": "Source Transcript",
 		"close": "Close",
 		"transcriptReady": "Transcript ready",

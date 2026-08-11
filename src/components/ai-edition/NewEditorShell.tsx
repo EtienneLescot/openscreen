@@ -318,6 +318,7 @@ export function NewEditorShell() {
 		if (!document) return [];
 		return document.assets.map((asset) => ({
 			id: asset.id,
+			filePath: /^(https?|blob|data):/.test(asset.originalPath) ? undefined : asset.originalPath,
 			// Real Electron assets are filesystem paths and go through toFileUrl.
 			// In the browser preview an asset can already point at an http(s)/
 			// blob/data URL served by Vite; toFileUrl would mangle those into a
@@ -1196,7 +1197,7 @@ export function NewEditorShell() {
 							/>
 						</>
 					) : mode === "media" ? (
-						<MediaStage />
+						<MediaStage onAddToTimeline={handleDropAsset} />
 					) : (
 						<RecStage
 							onStartRecording={() => void handleNewRecording()}

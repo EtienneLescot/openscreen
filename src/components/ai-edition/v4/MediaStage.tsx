@@ -33,7 +33,7 @@ function basename(path: string): string {
 	return path.split(/[\\/]/).pop() ?? path;
 }
 
-export function MediaStage() {
+export function MediaStage({ onAddToTimeline }: { onAddToTimeline: (assetId: string) => void }) {
 	const t = useScopedT("editor");
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
@@ -93,6 +93,12 @@ export function MediaStage() {
 	const openDetail = (asset: AxcutAsset) => {
 		setSelectedId(asset.id);
 		setDetailOpen(true);
+	};
+
+	const addSelectedToTimeline = () => {
+		if (!selected) return;
+		onAddToTimeline(selected.id);
+		toast.success(t("mediaStage.addedToTimeline", { label: selected.label }));
 	};
 
 	return (
@@ -234,7 +240,7 @@ export function MediaStage() {
 								style={{
 									fontSize: 12,
 									color: "var(--muted)",
-									marginBottom: 16,
+									marginBottom: 10,
 									whiteSpace: "nowrap",
 									overflow: "hidden",
 									textOverflow: "ellipsis",
@@ -242,6 +248,29 @@ export function MediaStage() {
 							>
 								{selected.label || basename(selected.originalPath)}
 							</div>
+							<button
+								type="button"
+								onClick={addSelectedToTimeline}
+								style={{
+									width: "100%",
+									height: 36,
+									display: "inline-flex",
+									alignItems: "center",
+									justifyContent: "center",
+									gap: 7,
+									marginBottom: 16,
+									borderRadius: 9,
+									border: "1px solid var(--accent)",
+									background: "var(--accent)",
+									color: "var(--on-accent, #fff)",
+									fontSize: 12.5,
+									fontWeight: 650,
+									cursor: "pointer",
+								}}
+							>
+								<Plus size={14} />
+								{t("mediaStage.addToTimeline")}
+							</button>
 
 							<div style={{ marginBottom: 16 }}>
 								<span

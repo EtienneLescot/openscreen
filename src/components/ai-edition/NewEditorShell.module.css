@@ -2094,6 +2094,26 @@
   color: var(--danger);
 }
 
+.secondaryBtn {
+  margin: 4px var(--sp-4) 12px;
+  min-height: 32px;
+  padding: 0 12px;
+  border: 1px solid var(--border);
+  border-radius: var(--r-sm);
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font: 500 12px/1 var(--font-body);
+  cursor: pointer;
+}
+.secondaryBtn:hover {
+  background: var(--surface-3);
+  color: var(--fg);
+}
+.secondaryBtn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .authPanel {
   padding: 14px 16px;
   border: 1px solid var(--brand);

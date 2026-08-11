@@ -54,6 +54,10 @@
 		"reactiveWebcamDescription": "Camera thu nhỏ mượt mà khi video được phóng to, để không che khuất.",
 		"help": "Cách ghép webcam với màn hình: hình trong hình, xếp dọc, khung đôi, hình dạng mặt nạ, kích thước và lật gương.",
 		"helpNoWebcam": "Dự án này không có camera nên các tùy chọn bố cục bị tắt và thiết lập sẵn hiển thị “Không có webcam”. Bố cục đã lưu của bạn vẫn được giữ lại cho khi bạn thêm camera.",
+		"webcamFraming": "Webcam framing",
+		"webcamCropZoom": "Crop zoom",
+		"webcamCropX": "Horizontal pan",
+		"webcamCropY": "Vertical pan",
 		"shapes": {
 			"rectangle": "Chữ nhật",
 			"circle": "Tròn",
@@ -298,5 +302,13 @@
 		"lineLength": "Độ dài dòng",
 		"minWords": "Số từ tối thiểu mỗi dòng",
 		"maxWords": "Số từ tối đa mỗi dòng"
+	},
+	"audio": {
+		"title": "Audio",
+		"autoMaster": "Auto master",
+		"syncOffset": "Sync offset",
+		"outputGain": "Output trim",
+		"reset": "Reset audio",
+		"help": "Automatically clean and balance voice audio, then fine-tune timing and level."
 	}
 }

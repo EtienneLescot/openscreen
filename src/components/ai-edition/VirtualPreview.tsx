@@ -35,7 +35,22 @@ import styles from "./VirtualPreview.module.css";
 export interface VideoSource {
 	id: string;
 	src: string;
+	/** Original filesystem path, used by the main process to expose the second audio track. */
+	filePath?: string;
 	label: string;
+}
+
+export function resolveAudioPreviewTime(
+	videoTimeSec: number,
+	offsetMs: number,
+	durationSec = Number.POSITIVE_INFINITY,
+) {
+	const raw = videoTimeSec - offsetMs / 1000;
+	const finiteDuration = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : Infinity;
+	return {
+		targetTimeSec: Math.min(Math.max(0, raw), finiteDuration),
+		shouldPlay: raw >= 0 && raw < finiteDuration,
+	};
 }
 
 /** First clip (by timeline order) starting strictly after `afterTimelineStartSec` —
@@ -114,6 +129,8 @@ export function VirtualPreview({
 	clockRef,
 }: VirtualPreviewProps) {
 	const { settings } = useEditorSettings();
+	const audioOffsetMsRef = useRef(settings.audioOffsetMs);
+	audioOffsetMsRef.current = settings.audioOffsetMs;
 	// ponytail: an oversized, offset video inside .videoFrame's overflow:hidden
 	// box — the same "scale + negative-position the full frame, let the
 	// container clip the rest" technique the export renderer uses via a Pixi
@@ -135,6 +152,18 @@ export function VirtualPreview({
 				top: `${(-region.y * 100) / region.height}%`,
 			};
 	const videoRef = useRef<HTMLVideoElement | null>(null);
+	const primaryAudioRef = useRef<HTMLAudioElement | null>(null);
+	const supplementalAudioRef = useRef<HTMLAudioElement | null>(null);
+	const [primaryAudioEl, setPrimaryAudioEl] = useState<HTMLAudioElement | null>(null);
+	const [supplementalAudioEl, setSupplementalAudioEl] = useState<HTMLAudioElement | null>(null);
+	const [supplementalAudioSrc, setSupplementalAudioSrc] = useState<string | null>(null);
+	const [audioProbeComplete, setAudioProbeComplete] = useState(false);
+	const audioGraphRef = useRef<{
+		context: AudioContext;
+		highpasses: BiquadFilterNode[];
+		compressor: DynamicsCompressorNode;
+		gain: GainNode;
+	} | null>(null);
 	const videoFrameRef = useRef<HTMLDivElement | null>(null);
 
 	const isProgrammaticSeekRef = useRef(false);
@@ -172,6 +201,80 @@ export function VirtualPreview({
 
 	const virtualDurationSec = useMemo(() => totalVirtualDuration(clips), [clips]);
 	const activeSource = videoSources[sourceIndex] ?? null;
+
+	useEffect(() => {
+		let cancelled = false;
+		setSupplementalAudioSrc(null);
+		setAudioProbeComplete(false);
+		if (!activeSource?.filePath || !window.electronAPI?.preparePreviewAudioTrack) {
+			setAudioProbeComplete(true);
+			return () => {
+				cancelled = true;
+			};
+		}
+		void window.electronAPI.preparePreviewAudioTrack(activeSource.filePath).then((result) => {
+			if (cancelled) return;
+			setSupplementalAudioSrc(result.success ? (result.path ?? null) : null);
+			setAudioProbeComplete(true);
+		});
+		return () => {
+			cancelled = true;
+		};
+	}, [activeSource?.filePath]);
+
+	// Route preview audio through the same fast voice-oriented controls the native export uses.
+	// The primary media element carries track 1; on macOS the existing IPC helper extracts track 2
+	// (normally the microphone) so both are audible instead of Chromium silently choosing one.
+	useEffect(() => {
+		if (!primaryAudioEl || !audioProbeComplete) return;
+		if (supplementalAudioSrc && !supplementalAudioEl) return;
+		let context: AudioContext | null = null;
+		try {
+			context = new AudioContext();
+			const compressor = context.createDynamicsCompressor();
+			const gain = context.createGain();
+			compressor.connect(gain).connect(context.destination);
+			const highpasses: BiquadFilterNode[] = [];
+			for (const element of [primaryAudioEl, supplementalAudioEl].filter(
+				(value): value is HTMLAudioElement => Boolean(value),
+			)) {
+				const source = context.createMediaElementSource(element);
+				const highpass = context.createBiquadFilter();
+				highpass.type = "highpass";
+				source.connect(highpass).connect(compressor);
+				highpasses.push(highpass);
+			}
+			audioGraphRef.current = { context, highpasses, compressor, gain };
+		} catch {
+			// WebAudio can be unavailable in unit tests or under a denied audio policy. The media
+			// elements remain usable; the sync loop below still applies offset and playback state.
+		}
+		return () => {
+			audioGraphRef.current = null;
+			if (context) void context.close();
+		};
+	}, [primaryAudioEl, supplementalAudioEl, supplementalAudioSrc, audioProbeComplete]);
+
+	useEffect(() => {
+		const graph = audioGraphRef.current;
+		const outputGain = 10 ** (settings.audioGainDb / 20);
+		if (!graph) {
+			for (const element of [primaryAudioRef.current, supplementalAudioRef.current]) {
+				if (element) element.volume = Math.min(1, outputGain);
+			}
+			return;
+		}
+		for (const filter of graph.highpasses) {
+			filter.frequency.value = settings.audioAutoMaster ? 80 : 20;
+			filter.Q.value = 0.707;
+		}
+		graph.compressor.threshold.value = settings.audioAutoMaster ? -18 : 0;
+		graph.compressor.knee.value = settings.audioAutoMaster ? 12 : 0;
+		graph.compressor.ratio.value = settings.audioAutoMaster ? 3 : 1;
+		graph.compressor.attack.value = 0.01;
+		graph.compressor.release.value = 0.12;
+		graph.gain.gain.value = outputGain;
+	}, [settings.audioAutoMaster, settings.audioGainDb]);
 
 	// ponytail: the cursor overlay wants source-media time (the recorded
 	// cursor samples live on the original mp4 timeline, not the edited
@@ -248,6 +351,30 @@ export function VirtualPreview({
 			const v = videoRef.current;
 			if (!v || !Number.isFinite(v.currentTime)) {
 				return;
+			}
+			for (const audio of [primaryAudioRef.current, supplementalAudioRef.current]) {
+				if (!audio) continue;
+				const target = resolveAudioPreviewTime(
+					v.currentTime,
+					audioOffsetMsRef.current,
+					audio.duration,
+				);
+				if (audio.playbackRate !== v.playbackRate) audio.playbackRate = v.playbackRate;
+				if (Math.abs(audio.currentTime - target.targetTimeSec) > 0.025) {
+					try {
+						audio.currentTime = target.targetTimeSec;
+					} catch {
+						// media metadata not ready yet
+					}
+				}
+				if (!v.paused && target.shouldPlay && audio.paused) {
+					if (audioGraphRef.current?.context.state === "suspended") {
+						void audioGraphRef.current.context.resume();
+					}
+					void audio.play().catch(() => undefined);
+				} else if ((v.paused || !target.shouldPlay) && !audio.paused) {
+					audio.pause();
+				}
 			}
 			// Publish this frame's live position/rate for other media elements
 			// (webcam) to read directly — see playback-clock.ts for why this
@@ -752,6 +879,7 @@ export function VirtualPreview({
 								cursor: settings.cursorShow ? "none" : undefined,
 							}}
 							preload="metadata"
+							muted
 							playsInline
 							onLoadedMetadata={(e) => {
 								setLoadState("ready");
@@ -905,6 +1033,30 @@ export function VirtualPreview({
 							// handles clip-end advancement, so dropping the event
 							// handler here is safe.
 						/>
+						<audio
+							key={`${activeSource.id}:primary-audio`}
+							ref={(element) => {
+								primaryAudioRef.current = element;
+								setPrimaryAudioEl(element);
+							}}
+							src={activeSource.src}
+							preload="metadata"
+							aria-hidden="true"
+							data-testid="preview-audio-primary"
+						/>
+						{supplementalAudioSrc ? (
+							<audio
+								key={`${activeSource.id}:supplemental-audio`}
+								ref={(element) => {
+									supplementalAudioRef.current = element;
+									setSupplementalAudioEl(element);
+								}}
+								src={supplementalAudioSrc}
+								preload="metadata"
+								aria-hidden="true"
+								data-testid="preview-audio-supplemental"
+							/>
+						) : null}
 						{/* Plus d'overlay ici du tout. « Loading preview… » reflétait l'état du
 						    <video> CACHÉ (source horloge/audio), pas la preview RÉELLE — le canvas
 						    natif, qui montre déjà une image valide pendant que le <video> re-seek.
