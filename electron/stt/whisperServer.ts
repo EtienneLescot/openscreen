@@ -97,6 +97,7 @@ interface WhisperJsonResponse {
 
 export class WhisperServerManager {
 	private process: WhisperChild | null = null;
+	private shuttingDown = false;
 	private port: number | null = null;
 	private backend: SttBackend | null = null;
 	private lastError: string | null = null;
@@ -169,6 +170,9 @@ export class WhisperServerManager {
 	 * the cold-start cost twice.
 	 */
 	async start(options: WhisperServerStartOptions): Promise<{ port: number; backend: SttBackend }> {
+		if (this.shuttingDown) {
+			throw new Error("whisper-stt-server manager is shutting down");
+		}
 		if (this.process && this.port) {
 			return { port: this.port, backend: this.backend ?? options.backend ?? "whispercpp-cpu" };
 		}
@@ -200,6 +204,9 @@ export class WhisperServerManager {
 
 		const launch = async (forceCpu: boolean): Promise<{ port: number; backend: SttBackend }> => {
 			const port = await WhisperServerManager.pickFreePort();
+			if (this.shuttingDown) {
+				throw new Error("whisper-stt-server manager is shutting down");
+			}
 			const args = [
 				"--model",
 				options.modelPath,
@@ -313,6 +320,12 @@ export class WhisperServerManager {
 		} catch {
 			child.kill("SIGKILL");
 		}
+	}
+
+	/** Permanently prevent respawn, then stop the currently owned helper. */
+	async shutdown(): Promise<void> {
+		this.shuttingDown = true;
+		await this.stop();
 	}
 
 	private baseUrl(): string {

@@ -89,6 +89,15 @@ describe("WhisperServerManager", () => {
 		expect(mgr.status.running).toBe(false);
 	});
 
+	it("does not allow a helper to spawn after permanent shutdown", async () => {
+		const mgr = new WhisperServerManager();
+		await mgr.shutdown();
+
+		await expect(mgr.start({ modelPath: "/missing/model.bin" })).rejects.toThrow(/shutting down/);
+		const { spawn } = await import("node:child_process");
+		expect(spawn).not.toHaveBeenCalled();
+	});
+
 	it("extracts phrase and word segments from a verbose_json response", async () => {
 		const fakeJson = {
 			task: "transcribe",
