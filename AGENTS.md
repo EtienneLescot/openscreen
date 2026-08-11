@@ -127,13 +127,9 @@ Unit/browser tests can't exercise real capture (native screen recording, a physi
 
 ## Release flow
 
-Two `workflow_dispatch` workflows: cut an RC, then promote it to stable. **Full operational guide, branch contract, cherry-pick rules, and manual fallback: `.harness/docs/git-workflow.md` § Release flow.** Read it before touching a release.
+Two `workflow_dispatch` workflows: cut an RC, then promote it to stable. **Full operational guide, branch contract, cherry-pick rules, and manual fallback: `technical-documentation/engineering/release-and-secrets.md`.** Read it before touching a release.
 
-- **Cut RC**: Actions → "Cut a release candidate". Inputs: `bump` (patch|minor|major), `rc_number`, optional `target_version`. Migrates the rolling `Next Release` milestone into a versioned one, creates or reuses `release/vX.Y.Z`, bumps `package.json`, pushes `vX.Y.Z-rc.N`, then dispatches `build.yml` **pinned to that tag** to publish a GitHub pre-release. RCs are notarized like stable releases, which rehearses the credentials before the promotion build depends on them. Announces in `#rc-testing`.
-- **Promote**: Actions → "Promote RC to stable release". Input: `rc_tag`. Closes the milestone, strips `-rc.N` on the same branch, tags `vX.Y.Z`, publishes a stable release (notarized; Tier 3 homebrew/winget/nix/aur fires), and opens a `release/vX.Y.Z-sync → main` PR. Announces in `#announcements`.
-- **One release branch per stable version** (`release/vX.Y.Z`), created at rc.1 and **frozen** until promote: only cherry-picked bugfixes land on it, so anything merged to `main` after the cut ships in the next cycle. Later RCs re-cut from that same branch.
-
-Both workflows need the `OPENSCREEN_RELEASE_TOKEN` secret (see `technical-documentation/engineering/release-and-secrets.md`); `GITHUB_TOKEN`-created releases don't fire the downstream `release: published` workflows.
+The one rule to know before you merge anything: **there is one release branch per stable version** (`release/vX.Y.Z`), created at rc.1 and **frozen** until promote. Only cherry-picked bugfixes land on it, so anything merged to `main` after the cut ships in the *next* cycle, not the one in flight.
 
 ## Security
 
