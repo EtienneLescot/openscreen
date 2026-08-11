@@ -18,6 +18,7 @@ const fakeWhisperServer = {
 	},
 	transcribe: vi.fn(),
 	stop: vi.fn(),
+	shutdown: vi.fn(),
 };
 
 vi.mock("./whisperServer", () => {
@@ -26,6 +27,7 @@ vi.mock("./whisperServer", () => {
 		status = fakeWhisperServer.status;
 		transcribe = fakeWhisperServer.transcribe;
 		stop = fakeWhisperServer.stop;
+		shutdown = fakeWhisperServer.shutdown;
 	}
 	return { WhisperServerManager: FakeWhisperServerManager };
 });
@@ -52,6 +54,7 @@ describe("SttManager", () => {
 		fakeWhisperServer.start.mockClear();
 		fakeWhisperServer.transcribe.mockClear();
 		fakeWhisperServer.stop.mockClear();
+		fakeWhisperServer.shutdown.mockClear();
 		fakeWhisperServer.start.mockResolvedValue({ port: 9000, backend: "whispercpp-cpu" });
 		fakeWhisperServer.transcribe.mockResolvedValue({
 			segments: [{ text: "hello", startSec: 0, endSec: 0.5 }],
@@ -198,7 +201,7 @@ describe("SttManager", () => {
 		const mgr = new SttManager();
 		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
 		await mgr.shutdown();
-		expect(fakeWhisperServer.stop).toHaveBeenCalledOnce();
+		expect(fakeWhisperServer.shutdown).toHaveBeenCalledOnce();
 	});
 
 	it("shutdownStt() stops and releases the singleton exactly once", async () => {
@@ -208,7 +211,25 @@ describe("SttManager", () => {
 		await shutdownStt();
 		await shutdownStt();
 
-		expect(fakeWhisperServer.stop).toHaveBeenCalledOnce();
+		expect(fakeWhisperServer.shutdown).toHaveBeenCalledOnce();
+		expect(() => getSttManager()).toThrowError(/cancel/i);
+	});
+
+	it("does not respawn the helper when shutdown interrupts a failed chunk", async () => {
+		const mgr = getSttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		fakeWhisperServer.transcribe.mockImplementationOnce(async () => {
+			await shutdownStt();
+			throw new Error("connection closed during quit");
+		});
+
+		const error = await mgr
+			.transcribe({ samples: new Float32Array(16000), language: "en" })
+			.catch((value: unknown) => value);
+
+		expect((error as Error).name).toBe("AbortError");
+		expect(fakeWhisperServer.start).toHaveBeenCalledOnce();
+		expect(fakeWhisperServer.shutdown).toHaveBeenCalledOnce();
 	});
 
 	it("retries setup after a failed one instead of caching the rejection", async () => {

@@ -69,6 +69,7 @@ export interface SttManagerInitOptions {
 
 export class SttManager {
 	private readonly server = new WhisperServerManager();
+	private shuttingDown = false;
 	private modelsBaseDir: string | null = null;
 	private readonly statusSinks = new Set<(event: SttStatusEvent) => void>();
 	private initPromise: Promise<void> | null = null;
@@ -119,6 +120,7 @@ export class SttManager {
 	 * means the second caller just awaits the same completion.
 	 */
 	init(options: SttManagerInitOptions = {}): Promise<void> {
+		if (this.shuttingDown) return Promise.reject(cancelledError());
 		if (options.statusSink) this.addStatusSink(options.statusSink);
 		if (options.modelsBaseDir) this.modelsBaseDir = options.modelsBaseDir;
 		if (!this.initPromise) {
@@ -158,10 +160,15 @@ export class SttManager {
 				});
 			},
 		});
+		if (this.shuttingDown) throw cancelledError();
 
 		const paths = modelPaths(modelsDir);
 		this.modelPath = paths.whisper;
 		await this.server.start({ modelPath: paths.whisper });
+		if (this.shuttingDown) {
+			await this.server.shutdown();
+			throw cancelledError();
+		}
 		this.emit({ phase: "transcribe" });
 	}
 
@@ -186,14 +193,17 @@ export class SttManager {
 	): Promise<Awaited<ReturnType<WhisperServerManager["transcribe"]>>> {
 		let lastError: unknown;
 		for (let attempt = 1; attempt <= CHUNK_ATTEMPTS; attempt++) {
+			if (this.shuttingDown) throw cancelledError();
 			try {
 				return await this.server.transcribe({ samples, language });
 			} catch (error) {
 				lastError = error;
+				if (this.shuttingDown) throw cancelledError();
 				if (attempt === CHUNK_ATTEMPTS) break;
 				if (this.modelPath) {
 					await this.server.start({ modelPath: this.modelPath }).catch(() => undefined);
 				}
+				if (this.shuttingDown) throw cancelledError();
 				await new Promise((resolve) => setTimeout(resolve, 500 * attempt));
 			}
 		}
@@ -244,6 +254,7 @@ export class SttManager {
 				req.samples.subarray(chunk.startSample, chunk.endSample),
 				language,
 			).catch((error) => {
+				if (error instanceof Error && error.name === "AbortError") throw error;
 				// Say where it died. Without this the user gets "Transcription
 				// failed" for a 30-minute recording with no hint that 18 of those
 				// minutes were fine and the helper fell over at one specific spot.
@@ -298,14 +309,19 @@ export class SttManager {
 
 	/** Best-effort shutdown; safe to call from `before-quit` hooks. */
 	async shutdown(): Promise<void> {
-		await this.server.stop();
+		if (this.shuttingDown) return;
+		this.shuttingDown = true;
+		this.cancelEpoch++;
+		await this.server.shutdown();
 	}
 }
 
 let singleton: SttManager | null = null;
+let sttShuttingDown = false;
 
 /** Lazy singleton for the IPC layer; processes one transcription at a time. */
 export function getSttManager(): SttManager {
+	if (sttShuttingDown) throw cancelledError();
 	if (!singleton) singleton = new SttManager();
 	return singleton;
 }
@@ -317,14 +333,16 @@ export function getSttManager(): SttManager {
  * clearing the slot first also makes repeated quit events idempotent.
  */
 export async function shutdownStt(): Promise<void> {
+	sttShuttingDown = true;
 	const manager = singleton;
-	singleton = null;
 	await manager?.shutdown();
+	singleton = null;
 }
 
 /** Reset the singleton — for tests. */
 export function _resetSttManagerForTests(): void {
 	singleton = null;
+	sttShuttingDown = false;
 }
 
 /**
