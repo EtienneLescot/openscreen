@@ -29,6 +29,7 @@ import { pickOutputDims } from "@/lib/ai-edition/document/outputFormat";
 import { resolvePlaybackSegments } from "@/lib/ai-edition/document/timeline";
 import type { AxcutClip, AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
+import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
 import {
@@ -417,24 +418,21 @@ export function buildSceneDescription(
 	const clips: CompositorClipInput[] = visibleClips.flatMap((clip) => {
 		const asset = assetById.get(clip.assetId);
 		if (!asset?.originalPath) return [];
-		const cam = asset.cameraTrack;
-		// ponytail: screen recordings from this app always carry a decodable audio
-		// track (confirmed via ffprobe on real recordings); webcam files never do
-		// and clips only ever reference their SCREEN path for the main video. The
-		// `asset.audio` schema slot exists but is never populated by the probe
-		// pipeline today, so we can't rely on it as an "is there a track?" signal —
-		// matching the legacy web exporter (which just tries-and-catches in
-		// `decodeSegmentAudioPcm`), we default `hasAudio: true` for every clip whose
-		// asset has an `originalPath`. The visibleClips filter above already
-		// guarantees that precondition by the time we reach this branch. If a
-		// per-asset audio-probe flag is added later, swap to `Boolean(asset.audio)`.
+		const camera = assetCameraSource(asset);
+		// ponytail: `asset.audio` exists in the schema but the probe pipeline never
+		// populates it, so there is no per-asset "is there a track?" signal to read
+		// yet. Every consumer downstream degrades on a stream-less file (audio.rs
+		// returns Ok(None)), so this stays optimistic. NOT "recordings always carry
+		// audio" — a capture made with no mic and no system audio has no audio
+		// stream at all (issue #348). Swap to `Boolean(asset.audio)` the day the
+		// probe fills it in.
 		return [
 			{
 				screenPath: asset.originalPath,
-				webcamPath: cam && cam.visible && cam.sourcePath ? cam.sourcePath : "",
+				webcamPath: camera.path,
 				sourceStartSec: clip.sourceStartSec,
 				sourceEndSec: resolveClipSourceEndSec(clip, asset),
-				webcamOffsetSec: cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
+				webcamOffsetSec: camera.offsetSec,
 				hasAudio: true,
 			},
 		];
@@ -575,10 +573,8 @@ export function buildSceneDescription(
 	 *  with the clip above, so the layout and the decoder can never disagree about it.
 	 *  Note this is NOT `hasAnyClipWithCamera` (which gates the Layout panel): that one
 	 *  ignores `visible` on purpose, so the panel stays reachable to un-hide a camera. */
-	const clipHasCamera = (clip: AxcutClip) => {
-		const cam = assetById.get(clip.assetId)?.cameraTrack;
-		return Boolean(cam?.visible && cam.sourcePath);
-	};
+	const clipHasCamera = (clip: AxcutClip) =>
+		assetCameraSource(assetById.get(clip.assetId)).path !== "";
 	/**
 	 * The layout preset is GLOBAL — one panel for the whole timeline — but the camera is
 	 * per clip: a project mixes a screen+webcam recording with a plain import that has

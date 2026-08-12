@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { AxcutAsset, AxcutClip } from "../schema";
-import { hasAnyClipWithCamera, resolveActiveCameraTrack } from "./camera";
+import { assetCameraSource, hasAnyClipWithCamera, resolveActiveCameraTrack } from "./camera";
 
 const assetWithCamera: AxcutAsset = {
 	id: "asset_with_camera",
@@ -109,5 +109,37 @@ describe("hasAnyClipWithCamera", () => {
 
 	it("is false for an empty project", () => {
 		expect(hasAnyClipWithCamera([], [])).toBe(false);
+	});
+});
+
+// The single spelling of "no camera". Five producers used to answer this
+// question five different ways (empty string, undefined, and — in both export
+// paths — the SCREEN recording's own path, which is issue #265's defect shape).
+// They all route through assetCameraSource now; this is what pins it.
+describe("assetCameraSource", () => {
+	it("returns the camera path and its start offset in seconds", () => {
+		const asset: AxcutAsset = {
+			...assetWithCamera,
+			cameraTrack: { sourcePath: "/cam-1.mp4", startMs: 500, offsetMs: -200, visible: true },
+		};
+		expect(assetCameraSource(asset)).toEqual({ path: "/cam-1.mp4", offsetSec: 0.3 });
+	});
+
+	it('says "no camera" with an empty path — NEVER the screen recording', () => {
+		expect(assetCameraSource(assetWithoutCamera)).toEqual({ path: "", offsetSec: 0 });
+		// The banned fallback: substituting originalPath makes "no camera"
+		// indistinguishable from "the camera IS this file", and the native side
+		// then has to tell them apart by string comparison.
+		expect(assetCameraSource(assetWithoutCamera).path).not.toBe(assetWithoutCamera.originalPath);
+	});
+
+	it("treats a hidden camera as no camera", () => {
+		// The export producers used to ignore `visible` while the preview and the
+		// scene honoured it — the same project rendered two different ways.
+		expect(assetCameraSource(assetWithHiddenCamera)).toEqual({ path: "", offsetSec: 0 });
+	});
+
+	it("tolerates a missing asset", () => {
+		expect(assetCameraSource(undefined)).toEqual({ path: "", offsetSec: 0 });
 	});
 });
