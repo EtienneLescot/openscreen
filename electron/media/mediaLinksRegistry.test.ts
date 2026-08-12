@@ -7,6 +7,7 @@ import {
 	findMediaLinksByFingerprint,
 	findRelocatedMediaByStoredPath,
 	registerMediaLinks,
+	whenRegistryIdle,
 } from "./mediaLinksRegistry";
 
 async function makeTempDir(): Promise<string> {
@@ -262,6 +263,12 @@ describe("mediaLinksRegistry", () => {
 			process.on("unhandledRejection", onRejection);
 			try {
 				await fn();
+				// The refresh these cases are about is deliberately not awaited by the
+				// lookup, so `fn` returns while it is still queued. Waiting for the
+				// queue to drain is what makes "did the refresh warn / write?"
+				// answerable at all — the 50 ms below used to be doing that job by
+				// accident, and lost the race whenever the suite ran under load.
+				await whenRegistryIdle();
 				// Node decides a rejection is unhandled a tick after the microtask
 				// queue drains, so the assertion needs a real timer, not a flush.
 				await new Promise((resolve) => setTimeout(resolve, 50));
@@ -302,6 +309,26 @@ describe("mediaLinksRegistry", () => {
 				write.mockRestore();
 				warned.mockRestore();
 			}
+		});
+
+		// The drain the two cases above rely on. Without it there is no way to know
+		// the refresh has landed: the lookup returns while the write is still
+		// queued, so a caller that removes the directory races it and a test that
+		// asserts on its outcome is asserting on a coin flip. Both were real
+		// intermittent failures in the full suite (this file, and cursorSidecar's
+		// `afterEach` failing with ENOTEMPTY), green in isolation every time.
+		it("whenRegistryIdle waits for a refresh the lookup did not await", async () => {
+			const { original, moved } = await registerThenMove();
+			const recorded = async () =>
+				JSON.parse(await fs.readFile(path.join(tempDir, "media-links.registry.json"), "utf-8"))
+					.entries[0].lastKnownPath;
+
+			expect(await recorded()).toBe(original);
+			await findMediaLinksByFingerprint(tempDir, moved);
+			await whenRegistryIdle(tempDir);
+
+			// Durably on disk, not "probably by now".
+			expect(await recorded()).toBe(moved);
 		});
 
 		it("survives the directory disappearing while the refresh is queued", async () => {

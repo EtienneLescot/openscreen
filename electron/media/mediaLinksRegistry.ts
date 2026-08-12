@@ -180,6 +180,33 @@ function withWriteLock<T>(baseDir: string, fn: () => Promise<T>): Promise<T> {
 	return result;
 }
 
+/**
+ * Resolves once every write queued for `baseDir` — or for every directory, with
+ * no argument — has drained.
+ *
+ * `findMediaLinksByFingerprint` refreshes a drifted path WITHOUT awaiting it, on
+ * purpose (a lookup must not pay for a write it does not need). That leaves work
+ * running after the call that started it returned, and nothing could wait for it:
+ * a caller that then removed the directory raced the write, and a test that
+ * asserted on the write's outcome was asserting on a coin flip. Both showed up as
+ * intermittent failures in the full suite and passed in isolation, which is the
+ * signature of exactly this.
+ *
+ * The queue tails never reject (see `withWriteLock`), so this never throws — it is
+ * "the writes are done", not "the writes succeeded".
+ */
+export async function whenRegistryIdle(baseDir?: string): Promise<void> {
+	for (;;) {
+		const tails = baseDir ? [writeQueues.get(baseDir)] : [...writeQueues.values()];
+		const pending = tails.filter((t): t is Promise<unknown> => t !== undefined);
+		if (pending.length === 0) return;
+		// A drained write can have queued another behind it, so loop rather than
+		// await once. `withWriteLock` drops its own key when the chain goes idle,
+		// which is what eventually empties the map and ends this.
+		await Promise.all(pending);
+	}
+}
+
 async function updateRegistry(
 	baseDir: string,
 	mutator: (file: MediaLinksRegistryFile) => MediaLinksRegistryFile,
