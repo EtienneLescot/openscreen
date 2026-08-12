@@ -184,10 +184,46 @@ jobs:
         continue-on-error: true
         run: |
           set -euo pipefail
+          # --repo exports an OSTree repo alongside the build tree, which is what
+          # stage G needs: the repo lint catches things the manifest lint cannot see,
+          # like an icon or metainfo that did not actually get exported.
           flatpak-builder --user --install-deps-from=flathub --force-clean \
             --disable-rofiles-fuse \
+            --repo=/tmp/flatpak-repo \
             /tmp/flatpak-build build/flatpak/com.getopenscreen.OpenScreen.yml \
             2>&1 | tee /tmp/flatpak-build.log
+
+      # ---------------------------------------------------------------------
+      # Stage G: the gate Flathub actually applies at submission time. Running it
+      # here is the difference between "it builds" and "they would accept it", and
+      # it costs one flatpak install rather than a review round-trip.
+      #
+      # org.flatpak.Builder only for the lint — the build above keeps apt's
+      # flatpak-builder, which is the one proven to work, so this stays additive.
+      - name: "Stage G — flatpak-builder-lint"
+        id: lint
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          flatpak install -y --user --noninteractive flathub org.flatpak.Builder
+          lint() {
+            local mode="$1" target="$2"
+            echo "### flatpak-builder-lint $mode" >> "$GITHUB_STEP_SUMMARY"
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+            if flatpak run --command=flatpak-builder-lint org.flatpak.Builder \
+                 "$mode" "$target" 2>&1 | tee "/tmp/lint-$mode.json"; then
+              echo "clean" >> "$GITHUB_STEP_SUMMARY"
+            else
+              cat "/tmp/lint-$mode.json" >> "$GITHUB_STEP_SUMMARY"
+            fi
+            echo '```' >> "$GITHUB_STEP_SUMMARY"
+          }
+          # Both, and neither is allowed to abort the other: they report different
+          # classes of problem and a submission has to satisfy the two.
+          rc=0
+          lint manifest build/flatpak/com.getopenscreen.OpenScreen.yml || rc=1
+          lint repo /tmp/flatpak-repo || rc=1
+          exit $rc
 
       - name: Collect artifacts
         if: always()
@@ -210,6 +246,7 @@ jobs:
           C: ${{ steps.nodegen.outcome }}
           D: ${{ steps.vendor.outcome }}
           F: ${{ steps.build.outcome }}
+          G: ${{ steps.lint.outcome }}
           NPM_COUNT: ${{ steps.nodegen.outputs.count }}
         run: |
           {
@@ -222,10 +259,10 @@ jobs:
             echo "| C — offline npm sources (${NPM_COUNT:-n/a} entries) | $C |"
             echo "| D — cargo sources, both lockfiles | $D |"
             echo "| F — flatpak-builder | $F |"
+            echo "| G — flatpak-builder-lint | $G |"
             echo
-            echo "A–D green means the offline inputs are all wired. F is now the whole"
-            echo "question: ffmpeg is known to compile, so a failure past it is about the"
-            echo "app module — the npm cache paths, the shared cargo vendor directory, or"
-            echo "the Electron packaging. Read the tail of the build log in the"
-            echo "\`flatpak-spike\` artifact; a green F still does not mean the app RUNS."
+            echo "F green means it builds offline from source. G green means Flathub would"
+            echo "not reject it on sight. **Neither means the app runs** — nothing here has"
+            echo "launched it, and a CI runner has no desktop session or ScreenCast portal to"
+            echo "launch it into. That verification needs a Linux desktop and a human."
           } >> "$GITHUB_STEP_SUMMARY"
