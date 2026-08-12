@@ -171,38 +171,36 @@ pub(crate) unsafe fn walk_composited_timeline(
         // vraiment une caméra — sinon la boîte PiP est dessinée avec, derrière, le décodeur de
         // repli, c'est-à-dire l'écran lui-même recopié dans son propre coin (issue #248).
         // La preview vive fait exactement ça dans `live.rs` ; c'est ici l'équivalent export.
-        comp.set_has_webcam(webcam_is_real(&clip.webcam, &clip.screen));
+        // Source webcam, clé de cache et dessin de la PiP sont décidés ENSEMBLE, sinon
+        // ils divergent :
+        //
+        //  - Un clip SANS caméra arrive avec un chemin webcam vide, que `Decoder::open`
+        //    refuse. Le décodeur n'existe que parce que `compose_frame` échantillonne
+        //    deux flux inconditionnellement, donc on lui redonne l'écran (même repli que
+        //    `live.rs::open_and_seek_clip`) et la PiP n'est pas dessinée. Sans ça,
+        //    exporter un projet sans caméra échouerait net — le cas le plus courant
+        //    (issue #348).
+        //  - La clé DOIT être le fichier réellement ouvert. Tous les clips sans caméra
+        //    portent le même chemin vide : indexer dessus faisait que le deuxième
+        //    récupérait le décodeur du premier, donc l'écran d'un AUTRE clip. Pas
+        //    anodin même sans PiP, `webcam_available_duration` plus bas borne
+        //    `source_end_sec` — un clip de 60s derrière un clip de 41s finissait à 41s.
+        //  - Un chemin NON vide qui refuse de s'ouvrir n'est pas un repli : c'est une
+        //    caméra que le document réclame et qu'on ne peut pas fournir. L'erreur
+        //    remonte, comme avant l'ajout du repli. La rattraper par l'écran donnerait
+        //    exactement #265 — `webcam_is_real` reste vrai pour ce chemin, donc l'écran
+        //    serait recopié dans sa propre vignette.
+        let has_camera = webcam_is_real(&clip.webcam, &clip.screen);
+        comp.set_has_webcam(has_camera);
+        let webcam_key = if has_camera { &clip.webcam } else { &clip.screen };
         if !screen_decs.contains_key(&clip.screen) {
             screen_decs.insert(clip.screen.clone(), Decoder::open(&clip.screen, gpu)?);
         }
-        // Le cache est indexé par le FICHIER réellement ouvert, pas par le chemin
-        // demandé. Tous les clips sans caméra portent le MÊME chemin webcam (vide) :
-        // indexer dessus ferait que le deuxième clip sans caméra récupère le décodeur
-        // de repli du premier, donc l'écran d'un AUTRE clip. Ce n'est pas anodin même
-        // si la PiP n'est pas dessinée — `webcam_available_duration` plus bas borne
-        // `source_end_sec`, si bien qu'un clip de 60s suivant un clip de 10s se
-        // retrouvait tronqué à 10s.
-        let webcam_key = if clip.webcam.trim().is_empty() {
-            clip.screen.clone()
-        } else {
-            clip.webcam.clone()
-        };
-        if !webcam_decs.contains_key(&webcam_key) {
-            // Même repli que `live.rs::open_and_seek_clip` : un clip sans caméra arrive
-            // avec un chemin webcam VIDE, que `Decoder::open` refuse. `set_has_webcam`
-            // ci-dessus a déjà décidé qu'on ne dessine pas la PiP ; le décodeur n'est
-            // ouvert que parce que `compose_frame` échantillonne deux flux
-            // inconditionnellement, donc on lui redonne l'écran et ses images sont
-            // ignorées. Sans ce repli, exporter un projet sans caméra échouerait net —
-            // et c'est précisément le cas le plus courant (issue #348).
-            let dec = match Decoder::open(&clip.webcam, gpu) {
-                Ok(d) => d,
-                Err(_) => Decoder::open(&clip.screen, gpu)?,
-            };
-            webcam_decs.insert(webcam_key.clone(), dec);
+        if !webcam_decs.contains_key(webcam_key) {
+            webcam_decs.insert(webcam_key.clone(), Decoder::open(webcam_key, gpu)?);
         }
         let sdec = screen_decs.get_mut(&clip.screen).unwrap();
-        let wdec = webcam_decs.get_mut(&webcam_key).unwrap();
+        let wdec = webcam_decs.get_mut(webcam_key).unwrap();
 
         let screen_available_duration = sdec.available_duration_sec();
         let webcam_available_duration = wdec.available_duration_sec();
