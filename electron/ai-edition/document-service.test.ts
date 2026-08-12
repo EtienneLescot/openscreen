@@ -68,6 +68,77 @@ describe("DocumentService", () => {
 			await expect(service.getProject("proj/with/slash")).rejects.toBeInstanceOf(ProjectFileError);
 		});
 
+		// Issue #348 — recording with no camera AND no microphone is the default for
+		// anyone capturing a screen demo, and the failure lands at REOPEN, where the
+		// recording exists on disk but the user cannot get to it. The recorder writes
+		// no audio stream at all in that configuration (confirmed with ffprobe on real
+		// captures) and `cameraTrack: null`, so this is the exact on-disk shape.
+		describe("camera-less, microphone-less recordings", () => {
+			// Windows path separators on purpose: the reporter is on Windows 11 and
+			// `path.join` gives us the host's, so this stays honest on all three.
+			async function writeCamlessProject(originalPath: string, sizeBytes?: number) {
+				const doc = await service.createProject("Screen demo, no cam no mic");
+				const asset: AxcutAsset = {
+					id: "asset_camless",
+					kind: "video",
+					label: path.basename(originalPath),
+					originalPath,
+					sizeBytes,
+					// No `audio` (the probe never populates it) and no camera link.
+					cameraTrack: null,
+					transcriptionFailure: {
+						kind: "no-audio",
+						message: "No audio track found in this video.",
+					},
+				};
+				await service.saveProject({
+					...doc,
+					assets: [asset],
+					project: { ...doc.project, primaryAssetId: asset.id },
+				});
+				return doc.project.id;
+			}
+
+			it("reopens, and stays listed", async () => {
+				const screenPath = path.join(mediaDir, "screen-demo.mp4");
+				await fs.writeFile(screenPath, "screen bytes", "utf8");
+				const projectId = await writeCamlessProject(screenPath);
+
+				const reopened = await service.getProject(projectId);
+				expect(reopened.assets[0]?.cameraTrack).toBeNull();
+				expect(reopened.assets[0]?.originalPath).toBe(screenPath);
+				// A document that throws here is dropped by listProjects' skip-on-error
+				// catch, which presents to the user as "my project vanished" rather than
+				// as an error — so the absence of a throw is not enough to assert.
+				const summaries = await service.listProjects();
+				expect(summaries.map((s) => s.id)).toContain(projectId);
+				// Re-decided on every open, so it must survive the round trip or the
+				// whole recording is re-extracted for transcription each time.
+				expect(reopened.assets[0]?.transcriptionFailure?.kind).toBe("no-audio");
+			});
+
+			it("does not hand the relinker's webcam to an asset that never had one", async () => {
+				// The relink only runs when something is actually broken, so move the
+				// screen file — and register a link that DOES carry a webcam, which is
+				// the shape that produced #265 (screen recording used as the webcam).
+				const screenBytes = "screen bytes";
+				const screenPath = path.join(mediaDir, "moved-screen-demo.mp4");
+				const webcamPath = path.join(mediaDir, "moved-screen-demo-webcam.mp4");
+				await fs.writeFile(screenPath, screenBytes, "utf8");
+				await fs.writeFile(webcamPath, "webcam bytes", "utf8");
+				await registerMediaLinks(mediaDir, screenPath, { webcamVideoPath: webcamPath });
+
+				const projectId = await writeCamlessProject(
+					path.join(mediaDir, "gone", "moved-screen-demo.mp4"),
+					Buffer.byteLength(screenBytes),
+				);
+
+				const reopened = await service.getProject(projectId);
+				expect(reopened.assets[0]?.originalPath).toBe(screenPath);
+				expect(reopened.assets[0]?.cameraTrack).toBeNull();
+			});
+		});
+
 		// Issue #212 — a project authored on another machine opens with every asset
 		// pointing at a path that does not exist here. The relink runs on this read,
 		// not on import, so a document already saved broken still recovers.
