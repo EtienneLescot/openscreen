@@ -387,11 +387,11 @@ const config = {
 	fps: 30,
 	videoWidth: 1280,
 	videoHeight: 720,
-	displayX: 0,
-	displayY: 0,
-	displayW: 1920,
-	displayH: 1080,
-	hasDisplayBounds: true,
+	// Same reasoning as scripts/diagnostic-tool/diagnostic.mjs: without Electron
+	// there is no honest display rect to send, and the helper reads these as
+	// physical pixels. Omitting them lands on the primary monitor
+	// deterministically instead of by accident (#346).
+	hasDisplayBounds: false,
 	captureSystemAudio: WITH_SYSTEM_AUDIO,
 	captureMic: WITH_MICROPHONE,
 	captureCursor: CAPTURE_CURSOR,

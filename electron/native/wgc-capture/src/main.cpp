@@ -1,4 +1,5 @@
 #include "audio_sample_utils.h"
+#include "dpi_awareness.h"
 #include "mf_encoder.h"
 #include "monitor_utils.h"
 #include "wasapi_loopback_capture.h"
@@ -641,6 +642,18 @@ void readCaptureCommands(CaptureControl& control, const std::function<void(bool)
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Before anything reads a coordinate. `findMonitorForCapture` matches the
+    // config's display bounds against the rects `EnumDisplayMonitors` reports,
+    // and the caller sends those bounds in physical pixels; a DPI-unaware
+    // process would compare them against virtualized ones and silently record
+    // the wrong screen (getopenscreen/openscreen#346). Refusing to start is the
+    // honest outcome -- a recording of the wrong monitor is discovered far too
+    // late to be worth salvaging.
+    if (!enablePerMonitorV2DpiAwareness()) {
+        std::cerr << "ERROR: Could not enable per-monitor-v2 DPI awareness" << std::endl;
+        return 1;
+    }
+
     if (argc < 2) {
         std::cerr << "ERROR: Missing JSON config argument" << std::endl;
         return 1;

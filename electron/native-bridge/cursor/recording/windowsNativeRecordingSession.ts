@@ -9,6 +9,7 @@ import type {
 	CursorRecordingSample,
 	NativeCursorAsset,
 } from "../../../../src/native/contracts";
+import { toHelperRect } from "../../helperCoordinates";
 import type { CursorRecordingSession } from "./session";
 import type {
 	WindowsCursorEvent,
@@ -232,12 +233,9 @@ export class WindowsNativeRecordingSession implements CursorRecordingSession {
 		// The cursor-sampler reports raw x/y in physical screen pixels (Win32
 		// GetCursorInfo). `payload.bounds` from the sampler's GetWindowRect is also
 		// physical, so use it as-is. Bounds from Electron's `screen` API (or the
-		// fallback for display captures) are in DIPs — convert to physical screen
-		// coordinates via `dipToScreenRect`, which correctly handles the virtual-screen
-		// origin across multi-monitor and mixed-DPI setups (a naive
-		// `bounds.x * scaleFactor` would misplace the origin on non-primary
-		// displays).
-		const physicalBounds = payload.bounds != null ? bounds : screen.dipToScreenRect(null, bounds);
+		// fallback for display captures) are in DIPs, so they go through the shared
+		// conversion the capture helper's bounds also use.
+		const physicalBounds = payload.bounds != null ? bounds : toHelperRect(bounds);
 		const physicalX = physicalBounds.x;
 		const physicalY = physicalBounds.y;
 		const width = Math.max(1, physicalBounds.width);
