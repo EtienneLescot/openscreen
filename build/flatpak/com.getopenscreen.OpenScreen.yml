@@ -202,8 +202,33 @@ modules:
       # `dir`, because Flathub packages the app tree and has no use for a .deb or an
       # AppImage. executableName is pinned so the wrapper below can name the binary
       # instead of discovering it.
-      - npx electron-builder --linux dir --config.npmRebuild=false --config.executableName=openscreen
-      - cp -r dist/linux-unpacked /app/openscreen
+      # electronDist rather than letting electron-builder resolve the runtime: run
+      # 31640186488 reached `packaging platform=linux arch=x64 electron=41.2.1` and then
+      # died on `getaddrinfo EAI_AGAIN github.com`. The generated sources DO cache
+      # electron-v41.2.1-linux-x64.zip under flatpak-node/cache/electron, but matching
+      # whatever cache layout this electron-builder expects is a guess, and npm ci has
+      # already extracted the runtime into node_modules. Point at that and no download
+      # can be attempted at all.
+      - |
+        test -d node_modules/electron/dist || {
+          echo "node_modules/electron/dist is missing — electron's postinstall did not extract the offline zip" >&2
+          exit 1
+        }
+        npx electron-builder --linux dir \
+          --config.npmRebuild=false \
+          --config.executableName=openscreen \
+          --config.electronDist=node_modules/electron/dist
+      # NOT dist/: electron-builder.json5 sets `directories.output` to
+      # `release/${version}`, so the tree is release/1.9.2/linux-unpacked. Globbed
+      # rather than hardcoded so a version bump does not break this, and asserted so a
+      # miss fails here instead of installing an empty /app/openscreen.
+      - |
+        unpacked=$(echo release/*/linux-unpacked)
+        test -d "$unpacked" || {
+          echo "no linux-unpacked under release/ — looked for release/*/linux-unpacked" >&2
+          exit 1
+        }
+        cp -r "$unpacked" /app/openscreen
       - install -Dm755 openscreen.sh /app/bin/openscreen
       - install -Dm644 build/flatpak/com.getopenscreen.OpenScreen.desktop /app/share/applications/${FLATPAK_ID}.desktop
       # The metainfo's launchable is `openscreen.desktop`, which is what the deb
