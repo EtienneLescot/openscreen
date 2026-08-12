@@ -23,6 +23,13 @@ separate-locales: false
 sdk-extensions:
   - org.freedesktop.Sdk.Extension.node22
   - org.freedesktop.Sdk.Extension.rust-stable
+  # bindgen, reached through crates/compositor-view-napi and the pipewire helper,
+  # loads libclang at build time and the SDK does not ship it — run 31602275749 died
+  # exactly there. LLVM 18 is the freedesktop 24.08 base toolchain, so llvm18 is the
+  # extension that should match; stage A of the same workflow now enumerates every
+  # published Sdk.Extension for this runtime, so if this name is wrong the run says
+  # which one to use instead of costing another guess.
+  - org.freedesktop.Sdk.Extension.llvm18
 command: openscreen
 
 finish-args:
@@ -79,8 +86,12 @@ modules:
   - name: openscreen
     buildsystem: simple
     build-options:
-      append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/rust-stable/bin
+      append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/rust-stable/bin:/usr/lib/sdk/llvm18/bin
       env:
+        # bindgen resolves libclang through this, and build-linux-compositor-addon.mjs
+        # reads it too rather than searching. Pointing at the extension's lib dir is
+        # what makes the ffmpeg headers parseable at all.
+        LIBCLANG_PATH: /usr/lib/sdk/llvm18/lib
         # THE PATHS MATTER, and getting them wrong is why the first two spike runs
         # died in `npm ci`. flatpak-node-generator lays its output out relative to
         # the module build dir as `flatpak-node/`, so both of these are

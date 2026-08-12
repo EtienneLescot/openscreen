@@ -86,6 +86,20 @@ jobs:
               echo "- \`$id\` → **NOT PUBLISHED**" >> "$GITHUB_STEP_SUMMARY"
             fi
           done
+          # Enumerate rather than guess. Run 31602275749 died in bindgen with
+          # "Unable to find libclang", so an LLVM extension is required and its exact
+          # name is not something to discover one 8-minute run at a time. This prints
+          # every SDK extension published for this runtime version.
+          {
+            echo
+            echo "<details><summary>All <code>org.freedesktop.Sdk.Extension.*</code> on 24.08</summary>"
+            echo
+            printf '%s\n' "$CATALOG" \
+              | awk '$1 ~ /^org\.freedesktop\.Sdk\.Extension\./ && $2 == "24.08" { print "- `" $1 "`" }' \
+              | sort
+            echo
+            echo "</details>"
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: "Stage B — install runtime, SDK, base and extensions"
         id: install
@@ -97,7 +111,8 @@ jobs:
             org.freedesktop.Sdk/x86_64/24.08 \
             org.electronjs.Electron2.BaseApp/x86_64/24.08 \
             org.freedesktop.Sdk.Extension.node22/x86_64/24.08 \
-            org.freedesktop.Sdk.Extension.rust-stable/x86_64/24.08
+            org.freedesktop.Sdk.Extension.rust-stable/x86_64/24.08 \
+            org.freedesktop.Sdk.Extension.llvm18/x86_64/24.08
 
       # ---------------------------------------------------------------------
       # Stage C is the single biggest unknown for any Electron app on Flathub:
