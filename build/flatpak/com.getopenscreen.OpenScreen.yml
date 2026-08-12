@@ -169,6 +169,23 @@ modules:
       # `fetch:ffmpeg:sdk`, which is a network download, and module 1 already
       # provides what it would have fetched. The remaining steps are spelled out.
       - npm ci --offline
+      # Present module 1's ffmpeg at the path the native scripts already look for.
+      #
+      # FFMPEG_DIR covers the compositor addon, but build-linux-pipewire-helper.mjs
+      # reads `crates/thirdparty/ffmpeg-linux64-lgpl-shared/lib` directly to populate
+      # the helper's own `helper-ffmpeg/` directory — and when that path is absent it
+      # WARNS rather than fails, so run 31636202957 sailed past it and was caught much
+      # later by the before-pack guard instead. The two copies are deliberately
+      # different: the helper needs the original sonames, while the addon gets every
+      # symbol renamed to `osff_*` so it cannot bind to Chromium's libffmpeg.so.
+      #
+      # Symlinks rather than a copy, so there is exactly one ffmpeg in the build.
+      - |
+        vendored=crates/thirdparty/ffmpeg-linux64-lgpl-shared
+        mkdir -p "$vendored"
+        ln -sfn /app/include "$vendored/include"
+        ln -sfn /app/lib "$vendored/lib"
+        ls "$vendored/lib"/libav*.so* >/dev/null
       - npm run build:native:linux
       - npm run build:native:compositor:linux
       # Not optional, and the before-pack guard is right to refuse without it: run
