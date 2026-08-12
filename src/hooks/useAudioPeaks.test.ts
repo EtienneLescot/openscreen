@@ -97,8 +97,15 @@ describe("useAudioPeaks", () => {
 	// asymmetry is the bug.
 	it("gives up on a file with no audio track once, not once per mount", async () => {
 		const url = "/tmp/silent-no-mic.mp4";
+		const warned = vi.spyOn(console, "warn").mockImplementation(() => {
+			// swallowed: it is the signal this test waits on, not suite output
+		});
 		const first = renderHook(() => useAudioPeaks(url, THIRTY_TWO_MINUTES));
-		await waitFor(() => expect(streamingCalls).toHaveBeenCalledOnce());
+		// The hook logs from its `.catch`, so this is the first observable AFTER the
+		// rejection settles. Waiting on `streamingCalls` instead would only prove the
+		// decode STARTED: the remounts below would then join the still-pending
+		// in-flight promise, and the test would pass even if the failure cache broke.
+		await waitFor(() => expect(warned).toHaveBeenCalled());
 		expect(first.result.current).toBeNull();
 
 		act(() => first.unmount());
@@ -108,8 +115,11 @@ describe("useAudioPeaks", () => {
 		renderHook(() => useAudioPeaks(url, THIRTY_TWO_MINUTES));
 
 		// The decode is never retried: "this file has no waveform" is a permanent
-		// answer and is remembered as one.
+		// answer and is remembered as one. The first mount's rejection has settled
+		// by now, so these mounts hit the cache — not a shared in-flight promise.
 		expect(streamingCalls).toHaveBeenCalledOnce();
+		expect(warned).toHaveBeenCalledTimes(1);
+		warned.mockRestore();
 	});
 
 	// The other half of #348, and the expensive half: ffmpeg answers "no audio
