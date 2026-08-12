@@ -2,6 +2,8 @@
 #include <gdiplus.h>
 #include <objbase.h>
 
+#include "dpi_awareness.h"
+
 #include <atomic>
 #include <algorithm>
 #include <chrono>
@@ -416,7 +418,15 @@ int main(int argc, char* argv[]) {
     // capture and the consumer both work in physical pixels.  On any scaled
     // display the cursor then lands short of its real position, by more the
     // further it is from the origin (getopenscreen/openscreen#272).
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    //
+    // Unlike wgc-capture, a failure here is not worth aborting for: a cursor
+    // overlay drawn at the wrong offset still leaves a usable recording, and the
+    // caller can drop the overlay. Say so and carry on.
+    if (!enablePerMonitorV2DpiAwareness()) {
+        std::cerr << "WARNING: Could not enable per-monitor-v2 DPI awareness; "
+                     "cursor positions will be wrong on scaled displays"
+                  << std::endl;
+    }
 
     if (argc < 2) {
         std::cerr << "Usage: cursor-sampler <intervalMs> [windowHandle]" << std::endl;

@@ -144,11 +144,12 @@ function buildConfig(opts) {
 		fps: 30,
 		videoWidth: 1280,
 		videoHeight: 720,
-		displayX: 0,
-		displayY: 0,
-		displayW: 1920,
-		displayH: 1080,
-		hasDisplayBounds: true,
+		// No Electron here, so no real display rect to send. The helper reads these
+		// as physical pixels, and a hardcoded 1920x1080 only happens to hit on an
+		// unscaled 1080p primary. Omitting them skips the bounds match entirely and
+		// lands on the primary monitor deterministically, which is what this tool
+		// wanted all along (#346).
+		hasDisplayBounds: false,
 		captureSystemAudio: opts.systemAudio,
 		captureMic: opts.mic,
 		captureCursor: false,

@@ -71,6 +71,7 @@ import { createCursorRecordingSession } from "../native-bridge/cursor/recording/
 import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
 import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/pipeWireCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
+import { toHelperRect } from "../native-bridge/helperCoordinates";
 import {
 	terminateNativeWindowsCapture,
 	waitForNativeWindowsCaptureStop,
@@ -2304,6 +2305,11 @@ export function registerIpcHandlers(
 							null)
 						: getSelectedDisplay();
 				const bounds = sourceDisplay?.bounds ?? getSelectedSourceBounds();
+				// `bounds` is DIPs; the helper matches it against physical monitor rects
+				// (getopenscreen/openscreen#346). Converted here, at the wire, and not in
+				// `getSelectedSourceBounds` — the cursor session shares that getter and
+				// converts on its own side.
+				const helperBounds = toHelperRect(bounds);
 				const displayId =
 					typeof request.source.displayId === "number" && Number.isFinite(request.source.displayId)
 						? request.source.displayId
@@ -2332,10 +2338,10 @@ export function registerIpcHandlers(
 					fps: request.video.fps,
 					videoWidth: request.video.width,
 					videoHeight: request.video.height,
-					displayX: bounds.x,
-					displayY: bounds.y,
-					displayW: bounds.width,
-					displayH: bounds.height,
+					displayX: helperBounds.x,
+					displayY: helperBounds.y,
+					displayW: helperBounds.width,
+					displayH: helperBounds.height,
 					hasDisplayBounds: true,
 					captureSystemAudio: request.audio.system.enabled,
 					captureMic: request.audio.microphone.enabled,
@@ -2360,7 +2366,7 @@ export function registerIpcHandlers(
 						sourceId: request.source.sourceId,
 						displayId: Number.isFinite(displayId) ? displayId : null,
 						windowHandle: request.source.windowHandle ?? null,
-						bounds,
+						bounds: helperBounds,
 					},
 					video: request.video,
 					audio: request.audio,
@@ -2377,7 +2383,10 @@ export function registerIpcHandlers(
 					webcam: request.webcam,
 					encoder: { preferSoftwareEncoder },
 					cursor: { mode: cursorCaptureMode },
-					bounds,
+					// Both spaces, deliberately: the helper's own errors quote the physical
+					// rect, and a report that only carried the DIP one would be read against
+					// numbers it never saw (getopenscreen/openscreen#346).
+					bounds: { dip: bounds, helper: helperBounds },
 					sourceId: selectedSource?.id ?? null,
 					usedDisplayMatch: Boolean(sourceDisplay),
 					outputPath,

@@ -38,6 +38,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 add_executable(wgc-capture
   src/audio_sample_utils.cpp
   src/audio_sample_utils.h
+  src/dpi_awareness.h
   src/dshow_webcam_capture.cpp
   src/dshow_webcam_capture.h
   src/main.cpp
@@ -74,6 +75,7 @@ target_link_libraries(wgc-capture PRIVATE
 
 add_executable(cursor-sampler
   src/cursor-sampler.cpp
+  src/dpi_awareness.h
 )
 
 target_compile_definitions(cursor-sampler PRIVATE
