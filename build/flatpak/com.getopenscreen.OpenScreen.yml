@@ -160,6 +160,12 @@ modules:
         # $CARGO_HOME, so CARGO_HOME has to be this exact path.
         CARGO_HOME: /run/build/openscreen/cargo
         CARGO_NET_OFFLINE: 'true'
+        # scripts/before-pack.cjs refuses payloads needing a newer glibc than Ubuntu
+        # 22.04 provides, which is right for the deb/rpm/pacman/AppImage and a category
+        # error here: a Flatpak resolves against org.freedesktop.Platform's glibc, not
+        # the host's. Raising MAX_SYMBOL_VERSION instead would drop a distro from the
+        # packages that genuinely need the floor. Waives the ceiling comparison only.
+        OPENSCREEN_SYMBOL_FLOOR: runtime-provided
         # crates/thirdparty/ffmpeg-linux64-lgpl-shared is what the native build
         # scripts look for and nothing provisions it here. Module 1 installed its
         # headers and libraries into /app, which is the shape they expect.
