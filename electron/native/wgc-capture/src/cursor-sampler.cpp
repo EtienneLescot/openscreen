@@ -419,13 +419,15 @@ int main(int argc, char* argv[]) {
     // display the cursor then lands short of its real position, by more the
     // further it is from the origin (getopenscreen/openscreen#272).
     //
-    // Unlike wgc-capture, a failure here is not worth aborting for: a cursor
-    // overlay drawn at the wrong offset still leaves a usable recording, and the
-    // caller can drop the overlay. Say so and carry on.
+    // Bail out rather than sample, and bail out before `ready`: for a display
+    // capture the caller normalizes these coordinates against a *physical* rect,
+    // so an unaware sampler puts every point at 1/scale of its real offset. The
+    // caller turns an exit-before-ready into "record without cursor data"
+    // (handlers.ts catches the failed start and drops the session), which is the
+    // outcome we want -- no overlay beats an overlay in the wrong place.
     if (!enablePerMonitorV2DpiAwareness()) {
-        std::cerr << "WARNING: Could not enable per-monitor-v2 DPI awareness; "
-                     "cursor positions will be wrong on scaled displays"
-                  << std::endl;
+        std::cerr << "ERROR: Could not enable per-monitor-v2 DPI awareness" << std::endl;
+        return 1;
     }
 
     if (argc < 2) {
