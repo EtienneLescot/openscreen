@@ -139,6 +139,17 @@ describe("assetCameraSource", () => {
 		expect(assetCameraSource(assetWithHiddenCamera)).toEqual({ path: "", offsetSec: 0 });
 	});
 
+	it("treats a camera track with no source path as no camera", () => {
+		// `cameraTrackSchema` requires a non-empty sourcePath, so a parsed document
+		// cannot carry this — but the accessor takes an asset, not a parse result,
+		// and the branch exists. Covered so it cannot quietly start returning "".
+		const asset: AxcutAsset = {
+			...assetWithCamera,
+			cameraTrack: { sourcePath: "", startMs: 0, offsetMs: 0, visible: true },
+		};
+		expect(assetCameraSource(asset)).toEqual({ path: "", offsetSec: 0 });
+	});
+
 	it("tolerates a missing asset", () => {
 		expect(assetCameraSource(undefined)).toEqual({ path: "", offsetSec: 0 });
 	});

@@ -175,7 +175,19 @@ pub(crate) unsafe fn walk_composited_timeline(
         if !screen_decs.contains_key(&clip.screen) {
             screen_decs.insert(clip.screen.clone(), Decoder::open(&clip.screen, gpu)?);
         }
-        if !webcam_decs.contains_key(&clip.webcam) {
+        // Le cache est indexé par le FICHIER réellement ouvert, pas par le chemin
+        // demandé. Tous les clips sans caméra portent le MÊME chemin webcam (vide) :
+        // indexer dessus ferait que le deuxième clip sans caméra récupère le décodeur
+        // de repli du premier, donc l'écran d'un AUTRE clip. Ce n'est pas anodin même
+        // si la PiP n'est pas dessinée — `webcam_available_duration` plus bas borne
+        // `source_end_sec`, si bien qu'un clip de 60s suivant un clip de 10s se
+        // retrouvait tronqué à 10s.
+        let webcam_key = if clip.webcam.trim().is_empty() {
+            clip.screen.clone()
+        } else {
+            clip.webcam.clone()
+        };
+        if !webcam_decs.contains_key(&webcam_key) {
             // Même repli que `live.rs::open_and_seek_clip` : un clip sans caméra arrive
             // avec un chemin webcam VIDE, que `Decoder::open` refuse. `set_has_webcam`
             // ci-dessus a déjà décidé qu'on ne dessine pas la PiP ; le décodeur n'est
@@ -187,10 +199,10 @@ pub(crate) unsafe fn walk_composited_timeline(
                 Ok(d) => d,
                 Err(_) => Decoder::open(&clip.screen, gpu)?,
             };
-            webcam_decs.insert(clip.webcam.clone(), dec);
+            webcam_decs.insert(webcam_key.clone(), dec);
         }
         let sdec = screen_decs.get_mut(&clip.screen).unwrap();
-        let wdec = webcam_decs.get_mut(&clip.webcam).unwrap();
+        let wdec = webcam_decs.get_mut(&webcam_key).unwrap();
 
         let screen_available_duration = sdec.available_duration_sec();
         let webcam_available_duration = wdec.available_duration_sec();
