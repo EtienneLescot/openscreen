@@ -69,6 +69,31 @@ modules:
         sha256: "64de10e4c6b8b8379db7e87f58030f336ea747c0515f381132e810dbf84a86e7"
 
   # ---------------------------------------------------------------------------
+  # 0b. SPIRV-Headers — also build-only.
+  #
+  # ggml's Vulkan backend wants exactly two things (ggml/src/ggml-vulkan/
+  # CMakeLists.txt): `find_package(Vulkan COMPONENTS glslc REQUIRED)`, which the
+  # runtime satisfies at 1.3.290 with glslc present, and
+  # `find_package(SPIRV-Headers CONFIG REQUIRED)`, which nothing provides. Only the
+  # second was missing in run 31634845684.
+  #
+  # Version matched to the runtime's Vulkan rather than "latest": the whole point of
+  # this package is agreeing with the loader and glslc that are already there.
+  #
+  # The alternative was building STT CPU-only by forcing OSC_ENABLE_VULKAN=OFF, which
+  # would have made Flatpak transcription slower than the deb's for no reason beyond
+  # one missing headers package.
+  - name: spirv-headers
+    buildsystem: cmake-ninja
+    cleanup:
+      - '*'
+    sources:
+      - type: git
+        url: https://github.com/KhronosGroup/SPIRV-Headers.git
+        tag: vulkan-sdk-1.3.290.0
+        commit: 2acb319af38d43be3ea76bfabf3998e5281d8d12
+
+  # ---------------------------------------------------------------------------
   # 1. ffmpeg, from source.
   #
   # Proven to build in run 31575509206 (~7 minutes). It cannot be the BtbN prebuilt
