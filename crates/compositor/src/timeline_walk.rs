@@ -176,7 +176,18 @@ pub(crate) unsafe fn walk_composited_timeline(
             screen_decs.insert(clip.screen.clone(), Decoder::open(&clip.screen, gpu)?);
         }
         if !webcam_decs.contains_key(&clip.webcam) {
-            webcam_decs.insert(clip.webcam.clone(), Decoder::open(&clip.webcam, gpu)?);
+            // Même repli que `live.rs::open_and_seek_clip` : un clip sans caméra arrive
+            // avec un chemin webcam VIDE, que `Decoder::open` refuse. `set_has_webcam`
+            // ci-dessus a déjà décidé qu'on ne dessine pas la PiP ; le décodeur n'est
+            // ouvert que parce que `compose_frame` échantillonne deux flux
+            // inconditionnellement, donc on lui redonne l'écran et ses images sont
+            // ignorées. Sans ce repli, exporter un projet sans caméra échouerait net —
+            // et c'est précisément le cas le plus courant (issue #348).
+            let dec = match Decoder::open(&clip.webcam, gpu) {
+                Ok(d) => d,
+                Err(_) => Decoder::open(&clip.screen, gpu)?,
+            };
+            webcam_decs.insert(clip.webcam.clone(), dec);
         }
         let sdec = screen_decs.get_mut(&clip.screen).unwrap();
         let wdec = webcam_decs.get_mut(&clip.webcam).unwrap();
