@@ -112,6 +112,14 @@ modules:
         # Named rather than left to PATH: the script checks this variable first and
         # module 0 installs to a known location, so there is nothing to discover.
         PATCHELF: /app/bin/patchelf
+        # electron/native/whisper-stt/CMakeLists.txt pulls three repositories with
+        # FetchContent, which wants git and a network. They are pinned as sources
+        # below and CMake is redirected at the checkouts. The names are FetchContent's
+        # own, uppercased: `whisper`, `httplib`, `json`.
+        WHISPER_EXTRA_CMAKE_FLAGS: >-
+          -DFETCHCONTENT_SOURCE_DIR_WHISPER=/run/build/openscreen/thirdparty/whisper.cpp
+          -DFETCHCONTENT_SOURCE_DIR_HTTPLIB=/run/build/openscreen/thirdparty/cpp-httplib
+          -DFETCHCONTENT_SOURCE_DIR_JSON=/run/build/openscreen/thirdparty/json
         # THE PATHS MATTER, and getting them wrong is why the first two spike runs
         # died in `npm ci`. flatpak-node-generator lays its output out relative to
         # the module build dir as `flatpak-node/`, so both of these are
@@ -138,6 +146,10 @@ modules:
       - npm ci --offline
       - npm run build:native:linux
       - npm run build:native:compositor:linux
+      # Not optional, and the before-pack guard is right to refuse without it: run
+      # 31608092415 stopped here because a payload missing the STT helper ships an app
+      # where transcription fails in front of the user.
+      - npm run build:whisper-binaries
       - npm run build-vite
       # `dir`, because Flathub packages the app tree and has no use for a .deb or an
       # AppImage. executableName is pinned so the wrapper below can name the binary
@@ -185,6 +197,24 @@ modules:
       # merge the lockfiles.
       - cargo-sources-crates.json
       - cargo-sources-pipewire.json
+      # The three FetchContent dependencies of the STT helper, pinned to tag AND
+      # commit because a tag alone is not reproducible. whisper.cpp v1.9.1 carries
+      # ggml in-tree, so there is no fourth pin to keep in step.
+      - type: git
+        url: https://github.com/ggml-org/whisper.cpp.git
+        tag: v1.9.1
+        commit: f049fff95a089aa9969deb009cdd4892b3e74916
+        dest: thirdparty/whisper.cpp
+      - type: git
+        url: https://github.com/yhirose/cpp-httplib.git
+        tag: v0.18.1
+        commit: 5c1a34e766817cf0865ca8bc5af5edeb0f9b2df4
+        dest: thirdparty/cpp-httplib
+      - type: git
+        url: https://github.com/nlohmann/json.git
+        tag: v3.11.3
+        commit: 9cca280a4d0ccf0c08f47a99aa71d1b0e52f8d03
+        dest: thirdparty/json
       # Zypak is mandatory, not a nicety: without it Electron's sandbox fails with
       # "SUID sandbox helper binary" and the app does not start.
       - type: script

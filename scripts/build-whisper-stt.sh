@@ -314,6 +314,23 @@ BUILD_FLAGS=()
 if [[ -n "${DEFAULT_FLAG}" ]]; then
   BUILD_FLAGS+=("${DEFAULT_FLAG}")
 fi
+# An escape hatch for builds that cannot reach the network. The CMakeLists pulls
+# whisper.cpp, cpp-httplib and nlohmann/json with FetchContent, which needs git
+# and a network; a Flatpak sandbox has neither, so the Flathub manifest pre-fetches
+# all three as pinned sources and redirects CMake at them with
+# -DFETCHCONTENT_SOURCE_DIR_<NAME>. Those flags cannot arrive as CLI arguments —
+# the parser above rejects anything it does not recognise, deliberately — and CMake
+# reads cache variables from the command line rather than the environment, so this
+# is the seam.
+#
+# Word-split on purpose: the value is a list of cmake flags, not one argument.
+if [[ -n "${WHISPER_EXTRA_CMAKE_FLAGS:-}" ]]; then
+  # `read -a` rather than bare expansion so `set -u` and shellcheck both stay
+  # happy, and bash 3.2 on macOS handles it identically.
+  read -r -a EXTRA_CMAKE_FLAGS <<< "${WHISPER_EXTRA_CMAKE_FLAGS}"
+  BUILD_FLAGS+=("${EXTRA_CMAKE_FLAGS[@]}")
+  echo "[whisper-stt] extra cmake flags from WHISPER_EXTRA_CMAKE_FLAGS: ${WHISPER_EXTRA_CMAKE_FLAGS}"
+fi
 # See the comment in build_variant() re: bash 3.2 + `set -u` + empty arrays
 # (macOS x64/CPU has no DEFAULT_FLAG, so BUILD_FLAGS is genuinely empty here).
 build_variant "default" ${BUILD_FLAGS[@]+"${BUILD_FLAGS[@]}"}
