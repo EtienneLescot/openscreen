@@ -126,41 +126,44 @@ jobs:
           echo "generated $COUNT sources, $BYTES bytes"
 
       # ---------------------------------------------------------------------
-      # Stage D: the same problem for Rust. Two lockfiles, and the compositor tree
-      # pulls bindgen, which wants libclang at build time as well as crates.
-      - name: "Stage D — vendor both Cargo lockfiles"
+      # Stage D: the same problem for Rust, for both lockfiles. `cargo vendor` was
+      # enough to answer "do these resolve"; the manifest needs the generator's
+      # output, which is a source list flatpak-builder can fetch offline.
+      - name: "Stage D — cargo sources for both lockfiles"
         id: vendor
         continue-on-error: true
         run: |
           set -euo pipefail
-          for dir in crates electron/native/pipewire-capture; do
-            echo "--- $dir ---"
-            ( cd "$dir" && cargo vendor --versioned-dirs /tmp/vendor-$(basename "$dir") \
-              > /tmp/vendor-$(basename "$dir").toml )
-            echo "$dir: $(find /tmp/vendor-$(basename "$dir") -maxdepth 1 -type d | wc -l) crates"
-          done
+          /tmp/fbt-venv/bin/pip install --quiet tomlkit aiohttp
+          gen() {
+            /tmp/fbt-venv/bin/python /tmp/fbt/cargo/flatpak-cargo-generator.py "$1" -o "$2"
+            echo "$2: $(python3 -c "import json,sys;print(len(json.load(open('$2'))))") sources"
+          }
+          gen crates/Cargo.lock build/flatpak/cargo-sources-crates.json
+          gen electron/native/pipewire-capture/Cargo.lock build/flatpak/cargo-sources-pipewire.json
+          # The generator hardcodes $CARGO_HOME/vendor, so these two lists overlap on
+          # every crate both trees share. Report the collision count rather than
+          # discovering it inside flatpak-builder.
+          python3 - <<'PY'
+          import json
+          a = {s.get('dest') for s in json.load(open('build/flatpak/cargo-sources-crates.json'))}
+          b = {s.get('dest') for s in json.load(open('build/flatpak/cargo-sources-pipewire.json'))}
+          shared = {d for d in a & b if d}
+          print(f"shared destinations: {len(shared)}")
+          for d in sorted(shared)[:10]:
+              print(f"  {d}")
+          PY
+
+      # Stage E is gone. It resolved the ffmpeg digest, which now lives pinned in the
+      # manifest, so all it could do was re-download 8.1.2 to confirm a constant.
+      # It also demonstrated the failure mode this workflow was already corrected
+      # for once: it reported "does not exist" for `curl: (35) Connection reset by
+      # peer`, turning a network flake into a false claim about upstream. A stage
+      # that can only be redundant or wrong is worth deleting rather than fixing.
 
       # ---------------------------------------------------------------------
-      # Stage E: the manifest ships a deliberately wrong ffmpeg sha256 so that a
-      # guessed digest can never reach a submission. Resolve the real one here.
-      - name: "Stage E — resolve the ffmpeg source digest"
-        id: ffmpeg
-        continue-on-error: true
-        run: |
-          set -euo pipefail
-          URL=https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
-          if curl -fsSL --retry 3 -o /tmp/ffmpeg.tar.xz "$URL"; then
-            SHA=$(sha256sum /tmp/ffmpeg.tar.xz | awk '{print $1}')
-            echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-            echo "$URL → $SHA"
-          else
-            echo "::warning::$URL does not exist — the pinned build is BtbN's n8.1.2-34-g9b6c8969e0, which is a *snapshot*, not an upstream release. The manifest needs a real upstream version, and whichever one is chosen is not the tree the addon was tested against."
-            exit 1
-          fi
-
-      # ---------------------------------------------------------------------
-      # Stage F: the actual build. Expected to fail — the interesting output is
-      # WHERE. Run it even when earlier stages failed, so the log exists.
+      # Stage F: the actual build. Run it even when earlier stages failed, so the
+      # log exists.
       - name: "Stage F — flatpak-builder"
         id: build
         continue-on-error: true
@@ -179,6 +182,8 @@ jobs:
           path: |
             /tmp/flatpak-build.log
             build/flatpak/generated-sources.json
+            build/flatpak/cargo-sources-crates.json
+            build/flatpak/cargo-sources-pipewire.json
           if-no-files-found: warn
           retention-days: 7
 
@@ -189,10 +194,8 @@ jobs:
           B: ${{ steps.install.outcome }}
           C: ${{ steps.nodegen.outcome }}
           D: ${{ steps.vendor.outcome }}
-          E: ${{ steps.ffmpeg.outcome }}
           F: ${{ steps.build.outcome }}
           NPM_COUNT: ${{ steps.nodegen.outputs.count }}
-          FFMPEG_SHA: ${{ steps.ffmpeg.outputs.sha }}
         run: |
           {
             echo "## Verdict"
@@ -202,12 +205,12 @@ jobs:
             echo "| A — versions exist | $A |"
             echo "| B — runtime/SDK/base install | $B |"
             echo "| C — offline npm sources (${NPM_COUNT:-n/a} entries) | $C |"
-            echo "| D — cargo vendor, both lockfiles | $D |"
-            echo "| E — ffmpeg source digest (${FFMPEG_SHA:-unresolved}) | $E |"
+            echo "| D — cargo sources, both lockfiles | $D |"
             echo "| F — flatpak-builder | $F |"
             echo
-            echo "Stage F failing is the expected result, not the finding. The finding is"
-            echo "which of A–E failed, because those are the ones that decide whether this"
-            echo "port is a week or a quarter. Read the tail of the build log in the"
-            echo "\`flatpak-spike\` artifact before drawing any conclusion from F."
+            echo "A–D green means the offline inputs are all wired. F is now the whole"
+            echo "question: ffmpeg is known to compile, so a failure past it is about the"
+            echo "app module — the npm cache paths, the shared cargo vendor directory, or"
+            echo "the Electron packaging. Read the tail of the build log in the"
+            echo "\`flatpak-spike\` artifact; a green F still does not mean the app RUNS."
           } >> "$GITHUB_STEP_SUMMARY"

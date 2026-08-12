@@ -1,0 +1,15 @@
+[Desktop Entry]
+Type=Application
+Name=OpenScreen
+GenericName=Screen Recorder
+Comment=Screen recorder and video editor
+Exec=openscreen %U
+Icon=com.getopenscreen.OpenScreen
+Terminal=false
+Categories=AudioVideo;AudioVideoEditing;Recorder;
+Keywords=screen;record;recorder;capture;screencast;video;editor;
+# Electron derives the WM class from productName, which is "Openscreen" in
+# electron-builder.json5 — not the app id. Without this the window does not
+# associate with the launcher icon under Wayland or GNOME.
+StartupWMClass=Openscreen
+StartupNotify=true

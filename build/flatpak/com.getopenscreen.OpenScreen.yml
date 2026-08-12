@@ -1,29 +1,27 @@
-# Flatpak manifest — SPIKE, not a submission.
+# Flatpak manifest for Flathub.
 #
-# The point of this file is to be built by .github/workflows/flatpak-spike.yml and
-# FAIL INFORMATIVELY. Flathub forbids the shortcut every other channel in this repo
-# takes: "All source available submissions must be built entirely from source code.
-# This requirement applies to the main application component defined in the manifest,
-# as well as any runtime dependencies included in the manifest." OpenScreen is MIT,
-# so it is source-available, so no repackaged .deb and no extra-data escape hatch.
+# Still driven by .github/workflows/flatpak-spike.yml rather than submitted: the
+# offline npm cache, the vendored crates and ffmpeg-from-source are all wired now,
+# but nobody has launched the resulting app. Do not open a flathub/flathub PR on
+# this until someone has.
 #
-# Every value marked SPIKE below is a guess the CI run is supposed to confirm or
-# refute. Do not treat this as a reviewed manifest.
+# Why it is built from source at all, rather than repackaging the .deb like every
+# other channel in this repo: "All source available submissions must be built
+# entirely from source code. This requirement applies to the main application
+# component defined in the manifest, as well as any runtime dependencies included
+# in the manifest." OpenScreen is MIT, so that rule applies, and extra-data is not
+# an escape hatch — it exists for non-redistributable sources.
 app-id: com.getopenscreen.OpenScreen
 runtime: org.freedesktop.Platform
-# SPIKE: 24.08 is the runtime the Electron2 BaseApp is known to publish against.
-# If the spike reports the base is missing for this version, bump both together —
-# they must match or flatpak-builder refuses the base outright.
 runtime-version: '24.08'
 sdk: org.freedesktop.Sdk
 base: org.electronjs.Electron2.BaseApp
 base-version: '24.08'
+# Same as the upstream Electron quick-start manifest: the locale splitting confuses
+# an Electron tree that ships its own locales under resources/.
+separate-locales: false
 sdk-extensions:
-  # SPIKE: package.json pins node 22.22.1. The freedesktop SDK ships node as a
-  # versioned extension and node22 may simply not exist for 24.08 — the spike
-  # enumerates what is actually available before this build is attempted.
   - org.freedesktop.Sdk.Extension.node22
-  # The two Rust crates (crates/, electron/native/pipewire-capture/) need cargo.
   - org.freedesktop.Sdk.Extension.rust-stable
 command: openscreen
 
@@ -32,47 +30,32 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --socket=pulseaudio
-  # Screen capture goes through the portal, not through a raw socket. The helper in
-  # electron/native/pipewire-capture already speaks org.freedesktop.portal.ScreenCast,
-  # which is the sandboxed path, so this part of the port is unusually well placed.
+  # Screen capture goes through the portal rather than a raw socket, which is the
+  # one part of this port that was already sandbox-shaped: the helper in
+  # electron/native/pipewire-capture speaks org.freedesktop.portal.ScreenCast.
   - --talk-name=org.freedesktop.portal.ScreenCast
   - --talk-name=org.freedesktop.portal.Desktop
   # Webcam.
   - --device=all
-  # Vulkan: the compositor addon is a Vulkan renderer.
+  # The compositor addon is a Vulkan renderer.
   - --device=dri
   - --share=network
   - --filesystem=xdg-videos
   - --filesystem=xdg-documents
 
-build-options:
-  append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/rust-stable/bin
-  env:
-    # Keep npm and cargo inside the build dir; the sandbox has no HOME to speak of.
-    npm_config_cache: /run/build/openscreen/npm-cache
-    CARGO_HOME: /run/build/openscreen/cargo
-
 modules:
   # ---------------------------------------------------------------------------
-  # 1. ffmpeg FROM SOURCE.
+  # 1. ffmpeg, from source.
   #
-  # This is the module that decides whether the port is a week or a quarter, and it
-  # is the reason the spike exists. scripts/fetch-ffmpeg.mjs pins a BtbN *prebuilt*
-  # tree (ffmpeg-n8.1.2-…-linux64-lgpl-shared-8.1.tar.xz, sha256 c882a80f…) and
-  # Flathub will reject it: prebuilt is prebuilt whether or not it is sha-pinned.
+  # Proven to build in run 31575509206 (~7 minutes). It cannot be the BtbN prebuilt
+  # tree that scripts/fetch-ffmpeg.mjs pins — Flathub rejects prebuilt dependencies
+  # — and it cannot be org.freedesktop.Platform.ffmpeg-full either: that extension
+  # ships libraries without dev headers, and crates/compositor-view-napi needs
+  # headers AND libraries it owns, because it renames every ffmpeg dynamic symbol so
+  # the addon cannot bind to Chromium's own stripped libffmpeg.so.
   #
-  # Worse, the prebuilt tree is not merely convenient. crates/compositor-view-napi
-  # RENAMES every ffmpeg dynamic symbol in the libraries it ships, because Electron
-  # links Chromium's own stripped libffmpeg.so into the same address space and the
-  # addon would otherwise bind to that. See scripts/build-linux-compositor-addon.mjs
-  # — it runs `nm -D --defined-only` over the vendored .so files and stages renamed
-  # copies. That mechanism needs headers AND libraries it owns, which rules out the
-  # org.freedesktop.Platform.ffmpeg-full extension (libraries, no dev headers).
-  #
-  # So: build ffmpeg from the upstream release tarball into /app, with the same LGPL
-  # shape as the pinned build, and let the existing script rename copies of it.
-  # SPIKE: the configure flags below are a first cut at matching what the addon and
-  # the pipewire helper actually link against. Expect this list to be wrong.
+  # KNOWN GAP: 8.1.2 upstream is the BtbN pin minus 34 commits. It compiles; whether
+  # those commits matter to the renaming has not been exercised by running the app.
   - name: ffmpeg
     config-opts:
       - --disable-static
@@ -86,50 +69,95 @@ modules:
     sources:
       - type: archive
         url: https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
-        # Resolved by stage E of the first spike run (31537831529), not guessed.
-        #
-        # Upstream DOES publish 8.1.2, which the first run settled — the pin in
-        # fetch-ffmpeg.mjs is BtbN's n8.1.2-34-g9b6c8969e0, so this tarball is the
-        # same release 34 commits earlier. Whether those 34 commits matter to the
-        # symbol-renaming addon is now the open question, and it is a much smaller
-        # one than "does an upstream source tarball exist at all".
-        #
-        # QUOTED on purpose. Unquoted, the previous all-zeroes placeholder was
-        # parsed as a YAML integer, flatpak-builder failed to deserialize it as a
-        # string, and the build died with "No checksum specified" before it
-        # downloaded anything — so run 1 never actually attempted this module.
+        # Resolved by a spike run, not guessed. QUOTED: unquoted, a 64-digit value
+        # is a YAML integer, and flatpak-builder then reports "No checksum
+        # specified" and never downloads the tarball at all.
         sha256: "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
 
   # ---------------------------------------------------------------------------
   # 2. The application.
-  #
-  # generated-sources.json is NOT committed: flatpak-node-generator produces it from
-  # package-lock.json and it is large and entirely derived. The spike workflow writes
-  # it next to this file before building. If it is absent, that is the first thing to
-  # check — not a manifest bug.
   - name: openscreen
     buildsystem: simple
     build-options:
+      append-path: /usr/lib/sdk/node22/bin:/usr/lib/sdk/rust-stable/bin
       env:
-        # Point the native build at the ffmpeg this manifest just built rather than
-        # at crates/thirdparty/, which nothing provisions inside the sandbox.
+        # THE PATHS MATTER, and getting them wrong is why the first two spike runs
+        # died in `npm ci`. flatpak-node-generator lays its output out relative to
+        # the module build dir as `flatpak-node/`, so both of these are
+        # /run/build/<MODULE NAME>/flatpak-node/… — the module is named openscreen.
+        #
+        # XDG_CACHE_HOME is not optional despite looking like a nicety: it is where
+        # the Electron binary download is cached, so electron's postinstall goes to
+        # the network without it and the sandbox has none.
+        XDG_CACHE_HOME: /run/build/openscreen/flatpak-node/cache
+        npm_config_cache: /run/build/openscreen/flatpak-node/npm-cache
+        # Same shape for cargo: flatpak-cargo-generator hardcodes its vendor
+        # directory as $CARGO_HOME/vendor and writes the replace-with config into
+        # $CARGO_HOME, so CARGO_HOME has to be this exact path.
+        CARGO_HOME: /run/build/openscreen/cargo
+        CARGO_NET_OFFLINE: 'true'
+        # crates/thirdparty/ffmpeg-linux64-lgpl-shared is what the native build
+        # scripts look for and nothing provisions it here. Module 1 installed its
+        # headers and libraries into /app, which is the shape they expect.
         FFMPEG_DIR: /app
     build-commands:
-      # SPIKE: build:linux is `fetch:ffmpeg:sdk && build:native:linux &&
-      # build:native:compositor:linux && tsc && vite build && electron-builder …`.
-      # The fetch step is a network download and cannot run here, which is why the
-      # steps are spelled out instead of calling the npm script.
+      # `npm ci --offline`, not `npm run build:linux`: that script starts with
+      # `fetch:ffmpeg:sdk`, which is a network download, and module 1 already
+      # provides what it would have fetched. The remaining steps are spelled out.
       - npm ci --offline
       - npm run build:native:linux
       - npm run build:native:compositor:linux
       - npm run build-vite
-      # SPIKE: electron-builder's own linux targets are wrong here — Flathub packages
-      # the app tree directly. `--dir` is the closest thing; whether it cooperates
-      # with the BaseApp's electron is unknown and is a question for the run.
-      - npx electron-builder --linux dir --config.npmRebuild=false
+      # `dir`, because Flathub packages the app tree and has no use for a .deb or an
+      # AppImage. executableName is pinned so the wrapper below can name the binary
+      # instead of discovering it.
+      - npx electron-builder --linux dir --config.npmRebuild=false --config.executableName=openscreen
       - cp -r dist/linux-unpacked /app/openscreen
+      - install -Dm755 openscreen.sh /app/bin/openscreen
+      - install -Dm644 build/flatpak/com.getopenscreen.OpenScreen.desktop /app/share/applications/${FLATPAK_ID}.desktop
+      # The metainfo's launchable is `openscreen.desktop`, which is what the deb
+      # installs and what that file's own comment says a Flatpak build must rewrite.
+      # Rewriting it here rather than editing the source keeps the file honest for
+      # the deb, and Flatpak only exports desktop files named after the app id, so
+      # an unrewritten launchable makes the app unlaunchable from a software centre.
+      - |
+        sed "s|>openscreen\.desktop<|>${FLATPAK_ID}.desktop<|" \
+          build/com.getopenscreen.OpenScreen.metainfo.xml > metainfo.rewritten.xml
+        grep -q ">${FLATPAK_ID}.desktop<" metainfo.rewritten.xml \
+          || { echo "launchable rewrite matched nothing — did the metainfo change?" >&2; exit 1; }
+        install -Dm644 metainfo.rewritten.xml /app/share/metainfo/${FLATPAK_ID}.metainfo.xml
+      # Flatpak only exports icons named after the app ID, so the repo's bare
+      # `512x512.png` names have to be rewritten on the way in.
+      - |
+        for size in 16 24 32 48 64 128 256 512; do
+          install -Dm644 "icons/icons/png/${size}x${size}.png" \
+            "/app/share/icons/hicolor/${size}x${size}/apps/${FLATPAK_ID}.png"
+        done
     sources:
-      - type: git
-        url: https://github.com/getopenscreen/openscreen.git
-        tag: v1.9.2
+      # SPIKE ONLY, and it must change before any submission: Flathub wants a
+      # `type: git` pinned to a tag AND its commit sha. It cannot be that yet —
+      # v1.9.2 predates both build/com.getopenscreen.OpenScreen.metainfo.xml and the
+      # desktop file next to this manifest, so a tagged build would fail on files
+      # that do not exist in it. Building the working tree also means the spike tests
+      # the branch under review rather than a release from before the work started.
+      # Switch to tag + commit once a release ships containing both files.
+      - type: dir
+        path: ../..
+      # Generated by the spike workflow, not committed: both are derived from
+      # lockfiles and large. generated-sources.json alone is ~900 KB.
       - generated-sources.json
+      # TWO cargo lockfiles, and the generator has no option to separate their
+      # vendor directories — both land in $CARGO_HOME/vendor and both write the same
+      # replace-with config. Crates common to the two (anyhow, bindgen…) therefore
+      # appear twice at the same destination. If flatpak-builder refuses that, the
+      # fix is to build each crate tree under its own CARGO_HOME rather than to
+      # merge the lockfiles.
+      - cargo-sources-crates.json
+      - cargo-sources-pipewire.json
+      # Zypak is mandatory, not a nicety: without it Electron's sandbox fails with
+      # "SUID sandbox helper binary" and the app does not start.
+      - type: script
+        dest-filename: openscreen.sh
+        commands:
+          - export TMPDIR="$XDG_RUNTIME_DIR/app/$FLATPAK_ID"
+          - exec zypak-wrapper /app/openscreen/openscreen "$@"
