@@ -37,11 +37,13 @@ finish-args:
   - --socket=wayland
   - --socket=fallback-x11
   - --socket=pulseaudio
-  # Screen capture goes through the portal rather than a raw socket, which is the
-  # one part of this port that was already sandbox-shaped: the helper in
-  # electron/native/pipewire-capture speaks org.freedesktop.portal.ScreenCast.
-  - --talk-name=org.freedesktop.portal.ScreenCast
-  - --talk-name=org.freedesktop.portal.Desktop
+  # NO --talk-name for the portals, deliberately. Screen capture goes through
+  # org.freedesktop.portal.ScreenCast — the helper in
+  # electron/native/pipewire-capture speaks it, which is the one part of this port
+  # that was already sandbox-shaped — but portal bus names are reachable from every
+  # sandbox without being requested, so asking is both redundant and rejected:
+  # flatpak-builder-lint raises finish-args-portal-talk-name for anything starting
+  # with `org.freedesktop.portal.`, and it is an error, not a warning.
   # Webcam.
   - --device=all
   # The compositor addon is a Vulkan renderer.
