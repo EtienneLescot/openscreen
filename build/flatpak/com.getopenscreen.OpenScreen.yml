@@ -52,6 +52,23 @@ finish-args:
 
 modules:
   # ---------------------------------------------------------------------------
+  # 0. patchelf — a build tool, not a shipped dependency.
+  #
+  # build-linux-compositor-addon.mjs refuses to run without it, and for a reason
+  # central to this whole port: it is what rewrites the ffmpeg symbol names so the
+  # addon cannot bind to Chromium's bundled libffmpeg.so. The SDK does not carry it.
+  #
+  # `cleanup: ['*']` because later modules need it during the build and the finished
+  # app must not ship a copy of a build tool.
+  - name: patchelf
+    cleanup:
+      - '*'
+    sources:
+      - type: archive
+        url: https://github.com/NixOS/patchelf/releases/download/0.18.0/patchelf-0.18.0.tar.gz
+        sha256: "64de10e4c6b8b8379db7e87f58030f336ea747c0515f381132e810dbf84a86e7"
+
+  # ---------------------------------------------------------------------------
   # 1. ffmpeg, from source.
   #
   # Proven to build in run 31575509206 (~7 minutes). It cannot be the BtbN prebuilt
@@ -92,6 +109,9 @@ modules:
         # reads it too rather than searching. Pointing at the extension's lib dir is
         # what makes the ffmpeg headers parseable at all.
         LIBCLANG_PATH: /usr/lib/sdk/llvm18/lib
+        # Named rather than left to PATH: the script checks this variable first and
+        # module 0 installs to a known location, so there is nothing to discover.
+        PATCHELF: /app/bin/patchelf
         # THE PATHS MATTER, and getting them wrong is why the first two spike runs
         # died in `npm ci`. flatpak-node-generator lays its output out relative to
         # the module build dir as `flatpak-node/`, so both of these are
