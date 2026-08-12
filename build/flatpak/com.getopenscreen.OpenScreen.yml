@@ -86,9 +86,19 @@ modules:
     sources:
       - type: archive
         url: https://ffmpeg.org/releases/ffmpeg-8.1.2.tar.xz
-        # SPIKE: placeholder. The workflow resolves and prints the real digest; do
-        # not commit a guessed sha256, the build must fail loudly instead.
-        sha256: 0000000000000000000000000000000000000000000000000000000000000000
+        # Resolved by stage E of the first spike run (31537831529), not guessed.
+        #
+        # Upstream DOES publish 8.1.2, which the first run settled — the pin in
+        # fetch-ffmpeg.mjs is BtbN's n8.1.2-34-g9b6c8969e0, so this tarball is the
+        # same release 34 commits earlier. Whether those 34 commits matter to the
+        # symbol-renaming addon is now the open question, and it is a much smaller
+        # one than "does an upstream source tarball exist at all".
+        #
+        # QUOTED on purpose. Unquoted, the previous all-zeroes placeholder was
+        # parsed as a YAML integer, flatpak-builder failed to deserialize it as a
+        # string, and the build died with "No checksum specified" before it
+        # downloaded anything — so run 1 never actually attempted this module.
+        sha256: "464beb5e7bf0c311e68b45ae2f04e9cc2af88851abb4082231742a74d97b524c"
 
   # ---------------------------------------------------------------------------
   # 2. The application.
