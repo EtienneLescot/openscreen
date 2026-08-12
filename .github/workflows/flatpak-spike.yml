@@ -187,9 +187,14 @@ jobs:
           # --repo exports an OSTree repo alongside the build tree, which is what
           # stage G needs: the repo lint catches things the manifest lint cannot see,
           # like an icon or metainfo that did not actually get exported.
+          #
+          # In the workspace and NOT in /tmp. A flatpak always gets a private /tmp,
+          # whatever filesystem permissions it holds, so the sandboxed linter in stage G
+          # cannot see a host /tmp path — it read the manifest by a workspace-relative
+          # path perfectly well, which is what makes this the fix.
           flatpak-builder --user --install-deps-from=flathub --force-clean \
             --disable-rofiles-fuse \
-            --repo=/tmp/flatpak-repo \
+            --repo="$GITHUB_WORKSPACE/flatpak-repo" \
             /tmp/flatpak-build build/flatpak/com.getopenscreen.OpenScreen.yml \
             2>&1 | tee /tmp/flatpak-build.log
 
@@ -222,7 +227,7 @@ jobs:
           # classes of problem and a submission has to satisfy the two.
           rc=0
           lint manifest build/flatpak/com.getopenscreen.OpenScreen.yml || rc=1
-          lint repo /tmp/flatpak-repo || rc=1
+          lint repo "$GITHUB_WORKSPACE/flatpak-repo" || rc=1
           exit $rc
 
       - name: Collect artifacts
