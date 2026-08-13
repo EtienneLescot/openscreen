@@ -504,6 +504,23 @@ function checkLinuxNativePayload(context) {
  */
 const MAX_SYMBOL_VERSION = { GLIBC: "2.35", GLIBCXX: "3.4.30", CXXABI: "1.3.13" };
 
+/**
+ * The one build where the ceiling above is a category error rather than a floor.
+ *
+ * A Flatpak does not link against the host's glibc: it runs inside its runtime, so
+ * `org.freedesktop.Platform` decides what the binaries resolve against, and that is
+ * newer than every distro the ceiling protects. Checking a Flatpak payload against
+ * Ubuntu 22.04's glibc refuses a build that cannot have the problem — and the only
+ * other way past it, raising MAX_SYMBOL_VERSION, would silently drop a distro from
+ * the deb/rpm/pacman/AppImage packages that DO need the floor.
+ *
+ * Set by build/flatpak/com.getopenscreen.OpenScreen.yml and nothing else. It waives
+ * ONLY the ceiling comparison: the parser assertion still runs, because "does the
+ * floor apply here" and "did the scan work at all" are unrelated questions, and the
+ * second is how this guard stays honest.
+ */
+const SYMBOL_FLOOR_WAIVED = process.env.OPENSCREEN_SYMBOL_FLOOR === "runtime-provided";
+
 /** Dotted numeric compare, so 3.4.9 < 3.4.30 and 2.4 < 2.38 rather than by string. */
 function compareVersions(a, b) {
 	const left = a.split(".").map(Number);
@@ -616,6 +633,18 @@ function checkLinuxSymbolVersionFloor(dir) {
 				"(scripts/before-pack.cjs), not a self-contained payload. Fix the parser — leaving\n" +
 				"it is how packages that cannot start on the supported distros get shipped again.",
 		);
+	}
+
+	// After the parser assertion on purpose — see SYMBOL_FLOOR_WAIVED. Loud, because a
+	// waived guard that says nothing is indistinguishable from a guard that passed.
+	if (SYMBOL_FLOOR_WAIVED) {
+		console.log(
+			`[before-pack] symbol-version floor WAIVED for ${scanned.length} ELF files in ` +
+				`${path.relative(ROOT, dir)}: OPENSCREEN_SYMBOL_FLOOR=runtime-provided.\n` +
+				"  Valid only when the runtime ships its own glibc, which means the Flatpak build.\n" +
+				"  Distro packages (deb/rpm/pacman/AppImage) must never set it.",
+		);
+		return;
 	}
 
 	const offenders = scanned
