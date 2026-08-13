@@ -591,8 +591,10 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				// disagreeing about whether anything was recording: the HUD kept
 				// showing a stop button, and pressing it sent a second stop that
 				// came back "Native Windows capture is not running." (issue #252).
-				// The recording is already lost either way -- what the user needs
-				// is to be able to start a new one.
+				// Reaching here now means the take really is unreadable -- a failed
+				// stop that left a playable fragmented file comes back `success`
+				// with a session and takes the editor path below, so this branch no
+				// longer decides the fate of a recoverable recording.
 				clearNativeRecordingState();
 				return true;
 			}

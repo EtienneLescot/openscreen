@@ -3,6 +3,8 @@ import { EventEmitter } from "node:events";
 import { PassThrough, Writable } from "node:stream";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+	isSalvageableFragmentedCapture,
+	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
 	readStoppedPath,
 	terminateNativeWindowsCapture,
 	waitForNativeWindowsCaptureStop,
@@ -74,6 +76,45 @@ describe("readStoppedPath", () => {
 		expect(readStoppedPath("Recording started\n[stop-timing] step=microphone elapsed_ms=0\n")).toBe(
 			null,
 		);
+	});
+});
+
+describe("isSalvageableFragmentedCapture", () => {
+	const big = NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES * 8;
+
+	// The whole point of the fragmented container, and the case that used to be
+	// deleted-or-disowned while the file on disk played perfectly (#252).
+	it("keeps a fragmented capture whose stop never finalized", () => {
+		expect(isSalvageableFragmentedCapture("fragmented-mp4", big)).toBe(true);
+	});
+
+	// The ablation. Same size, same failed stop, no index anywhere in the file:
+	// this one really is lost, and saying otherwise would open an empty editor.
+	it("does not pretend a plain MP4 survived the same failure", () => {
+		expect(isSalvageableFragmentedCapture("mp4", big)).toBe(false);
+	});
+
+	it("rejects a fragmented file too small to hold a complete fragment", () => {
+		expect(
+			isSalvageableFragmentedCapture("fragmented-mp4", NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES - 1),
+		).toBe(false);
+	});
+
+	it("takes the floor itself as salvageable", () => {
+		expect(
+			isSalvageableFragmentedCapture("fragmented-mp4", NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES),
+		).toBe(true);
+	});
+
+	// A helper predating the fragmented sink reports no container at all. Absent
+	// is not fragmented -- guessing here would resurrect the total loss.
+	it("refuses to guess when the helper never reported a container", () => {
+		expect(isSalvageableFragmentedCapture(null, big)).toBe(false);
+		expect(isSalvageableFragmentedCapture(undefined, big)).toBe(false);
+	});
+
+	it("rejects a file that is not there at all", () => {
+		expect(isSalvageableFragmentedCapture("fragmented-mp4", null)).toBe(false);
 	});
 });
 
