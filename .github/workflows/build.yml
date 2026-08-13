@@ -56,9 +56,26 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: openscreen-windows
-          path: release/**/Openscreen.Setup.*.exe
+          # latest.yml is the update feed electron-updater reads; the .blockmap is what lets it
+          # download a delta instead of the full ~243 MB installer. Both were already produced
+          # by every build and thrown away here, because this glob only matched the .exe.
+          path: |
+            release/**/Openscreen.Setup.*.exe
+            release/**/Openscreen.Setup.*.exe.blockmap
+            release/**/latest.yml
           if-no-files-found: error
           retention-days: 30
+
+      # `if-no-files-found: error` evaluates the UNION of the globs above, so a dead pattern
+      # among live ones never fails — that is exactly how the *.zsync glob rotted unnoticed on
+      # the Linux job. Assert the update feed specifically.
+      - name: Verify the update feed was produced
+        shell: bash
+        run: |
+          test -f "$(find release -name latest.yml | head -1)" \
+            || { echo "::error::latest.yml missing — electron-updater has no feed to read"; exit 1; }
+          test -f "$(find release -name 'Openscreen.Setup.*.exe.blockmap' | head -1)" \
+            || { echo "::error::blockmap missing — differential updates would silently degrade"; exit 1; }
 
   build-windows-store:
     name: Windows Store package
@@ -431,6 +448,49 @@ jobs:
             exit 1
           fi
 
+      # Squirrel.Mac installs from a ZIP and nothing else — `MacUpdater` looks for one and
+      # throws ERR_UPDATER_ZIP_FILE_NOT_FOUND when the feed offers only a DMG. Built here, from
+      # the same signed bundle the DMG is about to be built from, so the two can never diverge.
+      #
+      # `ditto`, never `zip`: `zip` flattens the symlinks inside Contents/Frameworks and drops
+      # extended attributes, producing an archive whose .app fails signature validation on
+      # arrival — and Squirrel validates the downloaded bundle against the INSTALLED app's
+      # designated requirement before swapping it.
+      #
+      # ponytail: the .app inside this ZIP is signed but not stapled — only the DMG is notarized
+      # today. Squirrel does not check notarization, and a ZIP fetched by the app's own process
+      # carries no com.apple.quarantine, so Gatekeeper never re-scans the swapped bundle.
+      # Notarizing the .app as well would cost a second notarytool round trip per arch; revisit
+      # if Apple ever tightens this.
+      - name: Create update ZIP
+        id: update_zip
+        run: |
+          VERSION="${{ steps.version.outputs.version }}"
+          APP="${{ steps.find_app.outputs.app_bundle }}"
+          RELEASE_DIR="release/${VERSION}"
+          # The instruction set, NOT the marketing name used for the DMG: electron-updater picks
+          # the file for an Apple Silicon client by matching the literal substring "arm64".
+          ZIP="${RELEASE_DIR}/Openscreen-Mac-${{ matrix.arch }}-${VERSION}.zip"
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$ZIP"
+          node scripts/mac-update-feed.mjs describe "$ZIP" "$VERSION" \
+            "${RELEASE_DIR}/update-info-${{ matrix.arch }}.json"
+          echo "zip_path=${ZIP}" >> "$GITHUB_OUTPUT"
+          echo "info_path=${RELEASE_DIR}/update-info-${{ matrix.arch }}.json" >> "$GITHUB_OUTPUT"
+
+      # A ZIP whose .app is unreadable, or which lost the bundle root, downloads fine and then
+      # fails at install time on a user's machine. Nothing else in CI can catch that.
+      - name: Verify update ZIP
+        run: |
+          ZIP="${{ steps.update_zip.outputs.zip_path }}"
+          unzip -l "$ZIP" | grep -q "Openscreen.app/Contents/MacOS/" \
+            || { echo "::error::${ZIP} does not contain Openscreen.app/Contents/MacOS — ditto lost the bundle root"; exit 1; }
+          if [ "${{ matrix.arch }}" = "arm64" ]; then
+            case "$ZIP" in
+              *arm64*) ;;
+              *) echo "::error::the arm64 ZIP must carry 'arm64' in its name or Apple Silicon clients silently receive the Intel build"; exit 1 ;;
+            esac
+          fi
+
       - name: Create DMG
         id: dmg
         run: |
@@ -522,7 +582,13 @@ jobs:
         uses: actions/upload-artifact@v7
         with:
           name: openscreen-mac-${{ matrix.arch }}
-          path: ${{ steps.dmg.outputs.dmg_path }}
+          # The DMG is what a new user downloads; the ZIP is what an existing install updates
+          # from. The JSON sidecar is folded into a single latest-mac.yml in publish-release —
+          # each arch is built on a different runner, so neither job can write the feed alone.
+          path: |
+            ${{ steps.dmg.outputs.dmg_path }}
+            ${{ steps.update_zip.outputs.zip_path }}
+            ${{ steps.update_zip.outputs.info_path }}
           if-no-files-found: error
           retention-days: 30
 
@@ -659,14 +725,23 @@ jobs:
             release/**/*.deb
             release/**/*.pacman
             release/**/*.rpm
-          # No *.zsync: nothing produces one. zsync is electron-updater's delta format,
-          # this repo has no updater (no electron-updater, no autoUpdater, no
-          # latest-linux.yml), and app-builder-lib 26.x dropped zsync entirely in favour
-          # of the block map it embeds in the AppImage. The glob had matched nothing
-          # since the dependency bump, silently — `if-no-files-found: error` evaluates
-          # the union of these patterns, so one dead glob among live ones never fails.
+            release/**/latest-linux.yml
+          # Still no *.zsync, and there never will be: zsync was electron-updater's old delta
+          # format and app-builder-lib 26.x dropped it in favour of the block map it embeds
+          # directly in the AppImage. That glob had matched nothing since the dependency bump,
+          # silently — `if-no-files-found: error` evaluates the union of these patterns, so one
+          # dead glob among live ones never fails. Hence the explicit assertion below.
+          #
+          # latest-linux.yml serves all four formats from one file: each updater picks its own
+          # extension out of the `files:` list. app-update.yml and the `package-type` marker are
+          # already inside the deb/rpm/pacman payloads — only this feed was missing.
           if-no-files-found: error
           retention-days: 30
+
+      - name: Verify the update feed was produced
+        run: |
+          test -f "$(find release -name latest-linux.yml | head -1)" \
+            || { echo "::error::latest-linux.yml missing — electron-updater has no feed to read"; exit 1; }
 
   publish-release:
     name: Publish GitHub release
@@ -798,6 +873,26 @@ jobs:
         with:
           name: openscreen-linux
           path: artifacts/linux
+
+      # The two arches are built on different runners, so neither macOS job can write the feed:
+      # electron-builder would have each emit its own latest-mac.yml and the second upload would
+      # overwrite the first, serving one architecture the wrong build (electron-builder#5592).
+      # Fold the two JSON sidecars into ONE latest-mac.yml listing both, then drop the sidecars
+      # so they never reach the release.
+      - name: Build the macOS update feed
+        run: |
+          node scripts/mac-update-feed.mjs merge \
+            artifacts/mac-arm64/update-info-arm64.json \
+            artifacts/mac-x64/update-info-x64.json \
+            artifacts/latest-mac.yml
+          rm -f artifacts/mac-arm64/update-info-arm64.json artifacts/mac-x64/update-info-x64.json
+          test -f artifacts/latest-mac.yml
+          # Exactly two `- url:` entries. One means an arch is being served the other's build.
+          ENTRIES="$(grep -c '^  - url:' artifacts/latest-mac.yml)"
+          [ "$ENTRIES" -eq 2 ] \
+            || { echo "::error::latest-mac.yml lists ${ENTRIES} builds, expected 2 (one per arch)"; exit 1; }
+          grep -q 'arm64' artifacts/latest-mac.yml \
+            || { echo "::error::latest-mac.yml has no arm64 entry — Apple Silicon would update onto the Intel build"; exit 1; }
 
       - name: Publish release assets
         env:

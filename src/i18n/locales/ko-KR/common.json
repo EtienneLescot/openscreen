@@ -9,6 +9,8 @@
 		"open": "열기",
 		"checkForUpdates": "업데이트 확인",
 		"viewRelease": "릴리스 보기",
+		"downloadUpdate": "업데이트 다운로드",
+		"restartNow": "지금 다시 시작",
 		"upload": "업로드",
 		"export": "내보내기",
 		"showInFolder": "폴더에 표시",
@@ -42,6 +44,9 @@
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} 버전을 사용할 수 있습니다. 현재 버전은 {{currentVersion}}입니다.",
 		"current": "OpenScreen이 최신 버전입니다({{currentVersion}}).",
+		"readyToInstall": "OpenScreen {{latestVersion}}을(를) 다운로드했습니다. 다시 시작하여 설치를 완료하세요.",
+		"blockedRecording": "업데이트를 설치하기 전에 녹화를 마치세요.",
+		"blockedLocation": "업데이트하기 전에 OpenScreen을 응용 프로그램 폴더로 옮기세요.",
 		"failed": "업데이트를 확인할 수 없습니다."
 	},
 	"playback": {
