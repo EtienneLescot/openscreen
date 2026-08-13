@@ -311,7 +311,9 @@
 		"noMatches": "沒有符合 \"{{query}}\" 的專案。",
 		"navigateHint": "導覽 ·",
 		"openHint": "開啟",
-		"browseFiles": "瀏覽檔案…"
+		"browseFiles": "瀏覽檔案…",
+		"deleteProject": "刪除專案",
+		"confirmDelete": "刪除此專案？您的錄影檔案會保留。"
 	},
 	"editClipDialog": {
 		"title": "編輯片段",

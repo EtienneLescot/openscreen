@@ -311,7 +311,9 @@
 		"noMatches": "「{{query}}」に一致するプロジェクトがありません。",
 		"navigateHint": "で移動 ·",
 		"openHint": "で開く",
-		"browseFiles": "ファイルを参照…"
+		"browseFiles": "ファイルを参照…",
+		"deleteProject": "プロジェクトを削除",
+		"confirmDelete": "このプロジェクトを削除しますか？録画ファイルは保持されます。"
 	},
 	"editClipDialog": {
 		"title": "クリップを編集",

@@ -311,7 +311,9 @@
 		"noMatches": "\"{{query}}\" ile eşleşen proje yok.",
 		"navigateHint": "gezinmek için ·",
 		"openHint": "açmak için",
-		"browseFiles": "Dosyalara göz at…"
+		"browseFiles": "Dosyalara göz at…",
+		"deleteProject": "Projeyi sil",
+		"confirmDelete": "Bu proje silinsin mi? Kayıtlarınız korunur."
 	},
 	"editClipDialog": {
 		"title": "Klibi düzenle",

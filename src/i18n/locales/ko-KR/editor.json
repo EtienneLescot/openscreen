@@ -311,7 +311,9 @@
 		"noMatches": "\"{{query}}\"와(과) 일치하는 프로젝트가 없습니다.",
 		"navigateHint": "탐색 ·",
 		"openHint": "열기",
-		"browseFiles": "파일 찾아보기…"
+		"browseFiles": "파일 찾아보기…",
+		"deleteProject": "프로젝트 삭제",
+		"confirmDelete": "이 프로젝트를 삭제할까요? 녹화 파일은 유지됩니다."
 	},
 	"editClipDialog": {
 		"title": "클립 편집",

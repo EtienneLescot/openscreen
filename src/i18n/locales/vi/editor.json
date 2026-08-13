@@ -311,7 +311,9 @@
 		"noMatches": "Không có dự án nào khớp với \"{{query}}\".",
 		"navigateHint": "để điều hướng ·",
 		"openHint": "để mở",
-		"browseFiles": "Duyệt tệp…"
+		"browseFiles": "Duyệt tệp…",
+		"deleteProject": "Xoá dự án",
+		"confirmDelete": "Xoá dự án này? Các bản ghi của bạn vẫn được giữ lại."
 	},
 	"editClipDialog": {
 		"title": "Chỉnh sửa clip",

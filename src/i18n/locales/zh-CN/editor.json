@@ -311,7 +311,9 @@
 		"noMatches": "没有与 \"{{query}}\" 匹配的项目。",
 		"navigateHint": "导航 ·",
 		"openHint": "打开",
-		"browseFiles": "浏览文件…"
+		"browseFiles": "浏览文件…",
+		"deleteProject": "删除项目",
+		"confirmDelete": "删除此项目？您的录制文件会保留。"
 	},
 	"editClipDialog": {
 		"title": "编辑片段",
