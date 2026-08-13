@@ -41,6 +41,7 @@ import {
 } from "./Modals";
 import { Preview } from "./Preview";
 import type { TrimTarget } from "./RightPanes";
+import { importPendingRecording } from "./recordingImport";
 import v4 from "./v4/EditorShellV4.module.css";
 import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
 import { type Facet, FloatingInspector } from "./v4/FloatingInspector";
@@ -91,7 +92,6 @@ export function NewEditorShell() {
 	const projectId = useProjectStore((s) => s.projectId);
 	const dirty = useProjectStore((s) => s.dirty);
 	const createProject = useProjectStore((s) => s.createProject);
-	const addAsset = useProjectStore((s) => s.addAsset);
 	const setCurrentTime = useProjectStore((s) => s.setCurrentTime);
 	const setSourceDuration = useProjectStore((s) => s.setSourceDuration);
 	const loadProject = useProjectStore((s) => s.loadProject);
@@ -222,59 +222,45 @@ export function NewEditorShell() {
 		void (async () => {
 			if (!window.electronAPI) return;
 			try {
-				const result = await window.electronAPI.getCurrentRecordingSession();
-				if (!result.success || !result.session?.screenVideoPath) {
-					// ponytail: no active recording — try to restore the user's
-					// most recent project. The browser-shim's listProjects
-					// returns the seeded `browser-shim-projects` entries, so
-					// e2e tests can land directly in a populated editor; for
-					// real Electron users this is the expected "open last
-					// project on launch" UX.
-					try {
-						const projects = await nativeBridgeClient.aiEdition.listProjects();
-						console.info("[editor] listProjects returned", projects);
-						if (projects.length > 0) {
-							console.info("[editor] auto-loading project", projects[0].id);
-							await loadProject(projects[0].id);
-							const state = useProjectStore.getState();
-							console.info(
-								"[editor] post-loadProject status=",
-								state.status,
-								"error=",
-								JSON.stringify(state.error),
-								"doc=",
-								state.document ? "loaded" : "null",
-							);
-						}
-					} catch (e) {
-						console.warn("[editor] auto-load failed", e);
-					}
+				if (await importPendingRecording()) {
+					toast.success("Recording added to a new project");
 					return;
 				}
-				const screenPath = result.session.screenVideoPath;
-				const label = screenPath.split(/[\\/]/).pop() || "Recording";
-				await createProject(`Recording ${new Date().toLocaleString()}`);
-				await addAsset(screenPath, label);
-				// ponytail: MediaRecorder WebMs ship with duration = NaN until
-				// fix-webm-duration patches the EBML header; until that flows
-				// through the asset, drop a default 60s clip into the timeline
-				// so the editor isn't stuck on "No clips yet" the moment the
-				// user lands in the project. Real duration overwrites this
-				// when handleLoadedMetadata fires with a finite value.
-				const doc = useProjectStore.getState().document;
-				if (doc && doc.timeline.clips.length === 0 && doc.assets.length > 0) {
-					await useProjectStore
-						.getState()
-						.replaceTimeline([{ startSec: 0, endSec: 60 }], "Auto-imported recording");
-				}
-				toast.success("Recording added to a new project");
 			} catch (err) {
 				toast.error("Could not auto-create project from recording", {
 					description: err instanceof Error ? err.message : String(err),
 				});
+				return;
+			}
+			// ponytail: no recording waiting — restore the user's most recent
+			// project. The browser-shim's listProjects returns the seeded
+			// `browser-shim-projects` entries, so e2e tests can land directly in a
+			// populated editor; for real Electron users this is the expected "open
+			// last project on launch" UX — and, now that the recording hand-off is
+			// consumed on import, it is also what reopening the editor after a
+			// recording lands on: the project that recording went into, settings and
+			// all, instead of a second project on the same file.
+			try {
+				const projects = await nativeBridgeClient.aiEdition.listProjects();
+				console.info("[editor] listProjects returned", projects);
+				if (projects.length > 0) {
+					console.info("[editor] auto-loading project", projects[0].id);
+					await loadProject(projects[0].id);
+					const state = useProjectStore.getState();
+					console.info(
+						"[editor] post-loadProject status=",
+						state.status,
+						"error=",
+						JSON.stringify(state.error),
+						"doc=",
+						state.document ? "loaded" : "null",
+					);
+				}
+			} catch (e) {
+				console.warn("[editor] auto-load failed", e);
 			}
 		})();
-	}, [addAsset, createProject, loadProject]);
+	}, [loadProject]);
 
 	// Warn on close when dirty
 	useEffect(() => {
