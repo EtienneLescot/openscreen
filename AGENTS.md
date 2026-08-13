@@ -93,11 +93,14 @@ This section is the *mechanics*. **What to actually run is [`technical-documenta
 - **From a git worktree** (no `node_modules`/native binaries): junction/symlink `node_modules` from the main checkout (deps are usually identical — check `package-lock.json`), and copy the prebuilt native capture binaries from `electron/native/bin/<platform>/` (gitignored — rebuilding needs the full VS/Xcode toolchain). Then `npm run dev` works normally.
 - **Those binaries are frozen at whenever someone last built them, and nothing warns you.** They are not rebuilt by `npm run dev` or `npm run build`, so a helper older than the native change you came to test will run happily and silently exercise the old code path — the recording succeeds, and the thing you wanted to see is simply absent. Before trusting any native result, date the binary against the commit and search it for a string the change introduced — from the repo root:
 
-  ```
+  ```powershell
+  # the string the change introduced — absent from a stale helper
   findstr /M /C:"fragmented-mp4" electron\native\bin\win32-x64\wgc-capture.exe
+  # the control — present in every helper, stale or not
+  findstr /M /C:"encoder-selection" electron\native\bin\win32-x64\wgc-capture.exe
   ```
 
-  `findstr` handles binaries and ships with Windows, whereas Git Bash has **no `strings`**, so `strings … | grep` there returns nothing and reads as a confident *absent* for every binary you point it at. Always search a control string the old binary also has (`encoder-selection`) so a broken search cannot masquerade as a stale binary. If it is stale, rebuild it with `npm run build:native:win` (or `:mac` / `:linux`) — that is the only thing that compiles a helper. Without the toolchain, test the CI-built artifact instead; a dev build cannot answer the question.
+  Run **both**. Only the second tells "the binary is stale" apart from "my search is broken", and that distinction is not hypothetical: `findstr` handles binaries and ships with Windows, but Git Bash has **no `strings`**, so `strings … | grep` there returns nothing and reads as a confident *absent* for every binary you point it at. Measured against the two helpers this section is about — stale: no match, then HIT; current: HIT, HIT. A control that does not hit means you learned nothing about the binary. If it is stale, rebuild it with `npm run build:native:win` (or `:mac` / `:linux`) — that is the only thing that compiles a helper. Without the toolchain, test the CI-built artifact instead; a dev build cannot answer the question.
 
 **Granting access**
 
