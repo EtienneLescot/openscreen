@@ -47,7 +47,8 @@
 		"readyToInstall": "OpenScreen {{latestVersion}} をダウンロードしました。再起動してインストールを完了してください。",
 		"blockedRecording": "アップデートをインストールする前に録画を終了してください。",
 		"blockedLocation": "アップデートする前に OpenScreen をアプリケーションフォルダに移動してください。",
-		"failed": "アップデートを確認できませんでした。"
+		"failed": "アップデートを確認できませんでした。",
+		"downloadFailed": "アップデートをダウンロードできませんでした。"
 	},
 	"playback": {
 		"play": "再生",

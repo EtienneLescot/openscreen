@@ -47,7 +47,8 @@
 		"readyToInstall": "Se ha descargado OpenScreen {{latestVersion}}. Reinicia para completar la instalación.",
 		"blockedRecording": "Termina la grabación antes de instalar la actualización.",
 		"blockedLocation": "Mueve OpenScreen a la carpeta Aplicaciones antes de actualizar.",
-		"failed": "No se pudieron buscar actualizaciones."
+		"failed": "No se pudieron buscar actualizaciones.",
+		"downloadFailed": "No se pudo descargar la actualización."
 	},
 	"playback": {
 		"play": "Reproducir",

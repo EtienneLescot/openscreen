@@ -378,7 +378,9 @@ async function downloadAndInstall(latestVersion: string) {
 		await dialog.showMessageBox({
 			type: "error",
 			title: app.name,
-			message: mainT("common", "updates.failed"),
+			// Not `updates.failed`: the CHECK succeeded — that is how we got here — and telling
+			// the user we could not check for updates sends them looking in the wrong place.
+			message: mainT("common", "updates.downloadFailed"),
 			detail: downloaded.error.message,
 		});
 		return;

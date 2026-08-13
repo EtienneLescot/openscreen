@@ -47,7 +47,8 @@
 		"readyToInstall": "Đã tải xuống OpenScreen {{latestVersion}}. Khởi động lại để hoàn tất cài đặt.",
 		"blockedRecording": "Hãy kết thúc bản ghi trước khi cài đặt bản cập nhật.",
 		"blockedLocation": "Hãy chuyển OpenScreen vào thư mục Applications trước khi cập nhật.",
-		"failed": "Không thể kiểm tra bản cập nhật."
+		"failed": "Không thể kiểm tra bản cập nhật.",
+		"downloadFailed": "Không thể tải xuống bản cập nhật."
 	},
 	"playback": {
 		"play": "Phát",
