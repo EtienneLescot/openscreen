@@ -76,37 +76,40 @@ struct PrefetchedClip {
 /// Ouvre + positionne la paire de décodeurs d'un clip (même travail que
 /// `Player::set_active_clip`, mais autonome — sans instance `Player` existante, pour pouvoir
 /// tourner sur un thread dédié pendant que le `Player` réel joue encore le clip actif).
-/// Ouvre le décodeur webcam, ou un remplaçant si le clip n'en a pas.
+/// Ouvre le décodeur webcam, ou un remplaçant quand le clip n'a pas de caméra.
 ///
-/// Un clip sans caméra arrive ici avec un chemin VIDE (`assetCameraSource` côté TS renvoie
-/// `""`), et le reste du moteur veut une paire de décodeurs toujours valide plutôt qu'un
-/// `Option` à dérouler sur tout le chemin chaud. Le remplaçant est donc l'écran lui-même :
-/// il n'est jamais dessiné, puisque la composition ne pose une vignette que si le document
-/// déclare une caméra.
+/// La question « ce chemin désigne-t-il une vraie caméra ? » a déjà une réponse dans ce
+/// crate : `webcam_is_real`. Elle couvre le chemin vide, le chemin composé d'espaces, et le
+/// cas où l'appelant renvoie le chemin de l'écran lui-même — ce que fait `ExportDialog.tsx`
+/// et ce que contiennent les scènes plus anciennes. Un simple `is_empty()` en raterait deux
+/// sur trois, et le commentaire de `webcam_is_real` rappelle que c'est exactement cet oubli
+/// qui avait mis l'enregistrement d'écran dans la vignette caméra (#265).
 ///
-/// Le cas qui compte est l'autre : un chemin NON VIDE qui ne s'ouvre pas. Cela veut dire
-/// que le projet déclare une caméra dont le fichier a été déplacé ou supprimé — et là, la
-/// vignette EST dessinée, avec l'enregistrement d'écran dedans. C'est le symptôme de #265,
-/// et il était silencieux : aucune trace ne distinguait « pas de caméra » de « caméra
-/// introuvable ».
+/// Sans caméra, le remplaçant est l'écran : le moteur veut une paire de décodeurs toujours
+/// valide plutôt qu'un `Option` à dérouler sur tout le chemin chaud, et rien ne le dessine
+/// puisque la composition ne pose une vignette que si le document déclare une caméra.
+///
+/// Avec une caméra déclarée dont le fichier ne s'ouvre pas, c'est l'inverse : la vignette
+/// EST dessinée et affiche l'écran. Ce cas-là méritait une trace, et n'en avait aucune.
 ///
 /// ponytail: on garde le remplaçant plutôt que de passer `wdec` en `Option<Decoder>`, ce qui
-/// toucherait 22 sites dont le pool et la boucle de composition `unsafe`. À faire si quelqu'un
-/// mesure que le décodeur inutile coûte (VRAM des pools D3D11VA, ouverture par clip) — le
-/// journal ci-dessous dit enfin combien de fois le mauvais cas se produit.
+/// toucherait 22 sites dont le pool de décodeurs et la boucle de composition `unsafe`. À faire
+/// si quelqu'un mesure que le décodeur inutile coûte (VRAM des pools D3D11VA, une ouverture
+/// par clip) — l'avertissement ci-dessous dit enfin à quelle fréquence le cas visible arrive.
 unsafe fn open_webcam_or_stand_in(
     screen_path: &str,
     webcam_path: &str,
     gpu: &Gpu,
 ) -> Result<Decoder> {
+    if !webcam_is_real(webcam_path, screen_path) {
+        return Decoder::open(screen_path, gpu);
+    }
     match Decoder::open(webcam_path, gpu) {
         Ok(d) => Ok(d),
         Err(e) => {
-            if !webcam_path.is_empty() {
-                eprintln!(
-                    "WARNING: caméra déclarée mais illisible ({webcam_path}) : {e}.                      L'enregistrement d'écran sert de remplaçant, donc la vignette caméra                      affichera l'écran. Média à relier."
-                );
-            }
+            eprintln!(
+                "WARNING: caméra déclarée mais illisible ({webcam_path}) : {e}. La vignette caméra affichera l'enregistrement d'écran ; le média est à relier."
+            );
             Decoder::open(screen_path, gpu)
         }
     }
