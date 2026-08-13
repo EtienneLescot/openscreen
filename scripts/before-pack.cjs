@@ -504,6 +504,28 @@ function checkLinuxNativePayload(context) {
  */
 const MAX_SYMBOL_VERSION = { GLIBC: "2.35", GLIBCXX: "3.4.30", CXXABI: "1.3.13" };
 
+/**
+ * The one supported way past the ceiling, for the one case it does not fit: a developer
+ * on a distro newer than the floor, building a package for their own machine.
+ *
+ * Without it there is no way to get a .deb out of a working tree on, say, Ubuntu 24.04.
+ * `npm run build:whisper-binaries` links whisper/ggml against the host's glibc, so the
+ * guard refuses every local build and the only recourse is to push and wait for CI.
+ * That is a real cost — it means nobody can test a packaging change without a round
+ * trip — and it is what this exists to remove.
+ *
+ * `host` does NOT disable the check. It swaps the pinned ceiling for what this machine
+ * actually provides, so a payload needing something even the host lacks still fails.
+ * The guard keeps catching genuinely broken builds; it just stops pretending the
+ * developer is on Ubuntu 22.04. What it gives up is the distro-floor promise, which is
+ * exactly the promise a local build is not making.
+ *
+ * Refused outright under CI: an escape hatch that can reach a published artifact is not
+ * an escape hatch, it is a hole. The runners are pinned to the floor, so they never
+ * need it, and a release built with it set would be the bug this whole file prevents.
+ */
+const SYMBOL_FLOOR_MODE = process.env.OPENSCREEN_SYMBOL_FLOOR ?? "";
+
 /** Dotted numeric compare, so 3.4.9 < 3.4.30 and 2.4 < 2.38 rather than by string. */
 function compareVersions(a, b) {
 	const left = a.split(".").map(Number);
@@ -573,6 +595,131 @@ function neededSymbolVersions(file) {
 	return highest;
 }
 
+/**
+ * The mirror of neededSymbolVersions: what a library DEFINES (SHT_GNU_VERDEF) rather
+ * than what it asks for. Only used to read the host's own ceiling — a payload binary
+ * defines nothing interesting.
+ *
+ * Same hand-rolled parse as above, and for the same reason: this file already refuses
+ * to shell out to readelf, so that a missing binutils cannot turn the guard off.
+ */
+function definedSymbolVersions(file) {
+	const b = fs.readFileSync(file);
+	if (b.readUInt32BE(0) !== 0x7f454c46) throw new Error(`${file} is not an ELF binary`);
+	if (b[4] !== 2 || b[5] !== 1) throw new Error(`${file} is not 64-bit little-endian ELF`);
+
+	const shoff = Number(b.readBigUInt64LE(0x28));
+	const shentsize = b.readUInt16LE(0x3a);
+	const SHT_GNU_VERDEF = 0x6ffffffd;
+
+	let section;
+	for (let i = 0; i < b.readUInt16LE(0x3c); i++) {
+		const sh = shoff + i * shentsize;
+		if (b.readUInt32LE(sh + 4) !== SHT_GNU_VERDEF) continue;
+		// sh_info is the Verdef count; sh_link is the string table these names live in.
+		const strtabHeader = shoff + b.readUInt32LE(sh + 0x28) * shentsize;
+		section = {
+			offset: Number(b.readBigUInt64LE(sh + 0x18)),
+			count: b.readUInt32LE(sh + 0x2c),
+			strtab: Number(b.readBigUInt64LE(strtabHeader + 0x18)),
+		};
+		break;
+	}
+	if (!section) return {};
+
+	const nameAt = (at) =>
+		b.subarray(section.strtab + at, b.indexOf(0, section.strtab + at)).toString("latin1");
+
+	const highest = {};
+	let verdef = section.offset;
+	for (let i = 0; i < section.count; i++) {
+		// Verdef: vd_version(2) vd_flags(2) vd_ndx(2) vd_cnt(2) vd_hash(4) vd_aux(4) vd_next(4)
+		let verdaux = verdef + b.readUInt32LE(verdef + 12);
+		for (let j = 0; j < b.readUInt16LE(verdef + 6); j++) {
+			// Verdaux: vda_name(4) vda_next(4). The first entry of the first Verdef is the
+			// soname rather than a version, and it simply does not match the pattern.
+			const [, prefix, version] =
+				/^(.+)_(\d+(?:\.\d+)*)$/.exec(nameAt(b.readUInt32LE(verdaux))) ?? [];
+			if (prefix && (!highest[prefix] || compareVersions(version, highest[prefix]) > 0)) {
+				highest[prefix] = version;
+			}
+			verdaux += b.readUInt32LE(verdaux + 4);
+		}
+		verdef += b.readUInt32LE(verdef + 16);
+	}
+	return highest;
+}
+
+/**
+ * What THIS machine provides, read from the libraries node itself is running against —
+ * `process.report` gives their absolute paths, so there is nothing to guess at and no
+ * `ldconfig` to parse. node links both of the ones that matter.
+ */
+function hostSymbolCeiling() {
+	const providers = process.report
+		.getReport()
+		.sharedObjects.filter((so) => /\/lib(?:c|stdc\+\+)\.so\.6(?:\.\d+)*$/.test(so));
+
+	const ceiling = {};
+	for (const lib of providers) {
+		for (const [prefix, version] of Object.entries(definedSymbolVersions(lib))) {
+			if (!(prefix in MAX_SYMBOL_VERSION)) continue;
+			if (!ceiling[prefix] || compareVersions(version, ceiling[prefix]) > 0) {
+				ceiling[prefix] = version;
+			}
+		}
+	}
+
+	// Every prefix the pinned ceiling names has to come back, or the comparison below
+	// would quietly skip one and pass a payload nobody checked.
+	const missing = Object.keys(MAX_SYMBOL_VERSION).filter((prefix) => !ceiling[prefix]);
+	if (missing.length > 0) {
+		throw new Error(
+			`OPENSCREEN_SYMBOL_FLOOR=host could not read ${missing.join(", ")} from this machine.\n\n` +
+				`  looked in: ${providers.join(", ") || "(node reported no libc/libstdc++)"}\n\n` +
+				"Unset the variable to check against the pinned floor instead.",
+		);
+	}
+	return ceiling;
+}
+
+/**
+ * The ceiling this run compares against, plus whether it is the pinned one. Validates
+ * OPENSCREEN_SYMBOL_FLOOR here rather than at module load, so a stray value cannot
+ * break a Windows or macOS pack that never consults it.
+ */
+function resolveSymbolCeiling() {
+	if (SYMBOL_FLOOR_MODE === "") {
+		return { ceiling: MAX_SYMBOL_VERSION, pinned: true };
+	}
+	// An unrecognised value is an error, never a silent "enforce" or a silent "waive":
+	// a typo in the one variable that relaxes this guard must not decide either way.
+	if (SYMBOL_FLOOR_MODE !== "host") {
+		throw new Error(
+			`OPENSCREEN_SYMBOL_FLOOR=${SYMBOL_FLOOR_MODE} is not a value this guard knows.\n\n` +
+				'The only accepted value is "host": compare against this machine rather than the\n' +
+				"oldest supported distro, for a package you are building to run locally.\n" +
+				"Unset it to check against the pinned floor.",
+		);
+	}
+	if (process.env.CI) {
+		throw new Error(
+			"OPENSCREEN_SYMBOL_FLOOR=host is refused under CI.\n\n" +
+				"It exists so a developer on a newer distro can build a package for their own\n" +
+				"machine; a released artifact built with it would not start on the distros the\n" +
+				"README claims. The runners are pinned to the floor (build.yml build-linux,\n" +
+				"build-whisper-stt.yml), so nothing on CI needs it.",
+		);
+	}
+	return { ceiling: hostSymbolCeiling(), pinned: false };
+}
+
+// Exported for scripts/before-pack.test.mjs and nothing else. The two refusals above
+// are the only things standing between this escape hatch and a published package that
+// starts on nobody's machine but the builder's, and they are reachable from a test
+// without a payload to scan — so they are tested rather than trusted.
+exports.__testing = { resolveSymbolCeiling, MAX_SYMBOL_VERSION };
+
 /** Every ELF under `dir`, recursively — the helper's ffmpeg sits in a subdirectory. */
 function elfFilesUnder(dir) {
 	const found = [];
@@ -618,10 +765,29 @@ function checkLinuxSymbolVersionFloor(dir) {
 		);
 	}
 
+	// After the parser assertion on purpose: "does the pinned floor apply here" and "did
+	// the scan work at all" are unrelated questions, and the second is how this guard
+	// stays honest whichever ceiling it ends up using.
+	const { ceiling, pinned } = resolveSymbolCeiling();
+	if (!pinned) {
+		// Loud, because a relaxed guard that says nothing is indistinguishable from a
+		// guard that passed — and this one leaves a package that only runs here.
+		console.log(
+			`[before-pack] symbol-version ceiling taken from THIS MACHINE, not the pinned floor:\n` +
+				`  ${Object.entries(ceiling)
+					.map(([prefix, max]) => `${prefix}_${max}`)
+					.join(", ")}  (pinned floor: ${Object.entries(MAX_SYMBOL_VERSION)
+					.map(([prefix, max]) => `${prefix}_${max}`)
+					.join(", ")})\n` +
+				"  OPENSCREEN_SYMBOL_FLOOR=host is set. The package this produces may not start on\n" +
+				"  the distros the README claims — do not publish it.",
+		);
+	}
+
 	const offenders = scanned
 		.map((entry) => ({
 			name: entry.name,
-			bad: Object.entries(MAX_SYMBOL_VERSION)
+			bad: Object.entries(ceiling)
 				.filter(
 					([prefix, max]) => entry.needs[prefix] && compareVersions(entry.needs[prefix], max) > 0,
 				)
@@ -645,6 +811,11 @@ function checkLinuxSymbolVersionFloor(dir) {
 			"and build-whisper-stt.yml. To see which symbols pulled a version in:\n\n" +
 			"    readelf -V <file>\n" +
 			"    readelf -W --dyn-syms <file> | grep @GLIBC_2.38\n\n" +
+			(pinned
+				? "Building a package to run on THIS machine rather than to release? Set\n" +
+					"OPENSCREEN_SYMBOL_FLOOR=host, which compares against your own glibc instead of\n" +
+					"the floor. It is refused under CI, so it cannot reach a published artifact.\n\n"
+				: "") +
 			"Raising MAX_SYMBOL_VERSION drops a distro the README claims to support.",
 	);
 }
