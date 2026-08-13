@@ -76,10 +76,13 @@ every edit is the main way an agent turns a 5-minute task into a 30-minute one, 
 - E2E tests are in `tests/e2e/` (Playwright). Some specs are platform-specific (e.g. `windows-native-checklist.spec.ts`).
 - Add a test for every new behavior in the same package as the code under test.
 - All tests must pass before opening a PR. CI runs `npm run test` on every PR.
+- **Which kind of test to write, and where: [`technical-documentation/testing/writing-tests.md`](technical-documentation/testing/writing-tests.md).**
 
 ## Desktop E2E testing with computer-use
 
 Unit/browser tests can't exercise real capture (native screen recording, a physical webcam, the tray). To verify a recording/editor feature end to end, drive the actual Electron app with the **computer-use** MCP (screenshot + click/type on the desktop). This is the required "manual smoke test on real Windows/macOS" for native changes.
+
+This section is the *mechanics*. **What to actually run is [`technical-documentation/testing/manual-e2e-checklist.md`](technical-documentation/testing/manual-e2e-checklist.md)** — the capture-to-export pass, per-platform sections, and a results log to append to. Run it before promoting a release candidate and after any change to native capture, preview or export. For cursor work specifically, [`native-cursor-diagnostics.md`](technical-documentation/testing/native-cursor-diagnostics.md) gets you sidecars and reports without a full record-edit-export cycle. The checklist links back here for the mechanics below; the pairing only works if you know both halves exist.
 
 **Launch the app**
 
