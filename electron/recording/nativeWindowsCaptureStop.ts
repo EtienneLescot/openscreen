@@ -33,6 +33,43 @@ export const NATIVE_WINDOWS_CAPTURE_STOP_TIMEOUT_MS = 60_000;
 /** How long a killed helper gets to actually die before we escalate. */
 const NATIVE_WINDOWS_CAPTURE_KILL_GRACE_MS = 2_000;
 
+/** What `mf_encoder.h`'s `kContainerFormatFragmentedMp4` puts on the wire. */
+export const NATIVE_WINDOWS_FRAGMENTED_CONTAINER = "fragmented-mp4";
+
+/**
+ * An MP4 the helper never indexed is a few bytes of header at most. Anything
+ * larger might be a real recording, and deleting one of those to tidy up after
+ * a failed stop is a far worse outcome than leaving a stray file behind.
+ */
+export const NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES = 64 * 1024;
+
+/**
+ * Did a stop that failed its handshake still leave a recording worth opening?
+ *
+ * Only the fragmented container can. A plain MP4 writes its one index in
+ * `Finalize()`, so a helper that never reached it leaves bytes no demuxer can
+ * read — the total loss issues #252 / #292 / #327 reported. A fragmented one
+ * writes `moov` up front and a self-describing `moof`+`mdat` pair about every
+ * second, so the same file plays up to the last complete fragment with nothing
+ * else needed. Which one a run used is not a property of the version: the
+ * fragmented sink degrades to the plain one rather than failing a recording,
+ * which is exactly why the helper reports the flavour it settled on.
+ *
+ * The size floor is shared with the cleanup that deletes unusable leftovers, so
+ * the two agree by construction: nothing is recovered that the tidy-up would
+ * have judged a stub, and nothing is deleted that this would have called a
+ * recording.
+ */
+export function isSalvageableFragmentedCapture(
+	container: string | null | undefined,
+	sizeBytes: number | null,
+): boolean {
+	if (container !== NATIVE_WINDOWS_FRAGMENTED_CONTAINER) {
+		return false;
+	}
+	return sizeBytes !== null && sizeBytes >= NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES;
+}
+
 const RECORDING_STOPPED_PATTERN = /Recording stopped\. Output path: (.+)/;
 const STOP_TIMEOUT_EVENT_PATTERN = /"event":"stop-timeout"[^\n]*"step":"([^"]+)"/;
 
