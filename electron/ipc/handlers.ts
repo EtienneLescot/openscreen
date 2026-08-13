@@ -73,6 +73,8 @@ import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
 import { toHelperRect } from "../native-bridge/helperCoordinates";
 import {
+	isSalvageableFragmentedCapture,
+	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
 	terminateNativeWindowsCapture,
 	waitForNativeWindowsCaptureStop,
 } from "../recording/nativeWindowsCaptureStop";
@@ -538,6 +540,12 @@ let nativeWindowsCursorRecordingStartMs = 0;
 let nativeWindowsPauseStartedAtMs: number | null = null;
 let nativeWindowsPauseRanges: Array<{ startMs: number; endMs: number }> = [];
 let nativeWindowsIsPaused = false;
+/**
+ * The MP4 flavour the helper reported for THIS run, or null if it never said.
+ * Read at stop, not for reporting: it is what decides whether a capture that
+ * failed to finalize still left a playable file behind.
+ */
+let nativeWindowsCaptureContainer: string | null = null;
 /** Cuts a surviving helper's output loose so it cannot pollute the next recording. */
 let nativeWindowsCaptureDrainCleanup: (() => void) | null = null;
 
@@ -558,14 +566,17 @@ function resetNativeWindowsCaptureState() {
 	nativeWindowsPauseStartedAtMs = null;
 	nativeWindowsPauseRanges = [];
 	nativeWindowsIsPaused = false;
+	nativeWindowsCaptureContainer = null;
 }
 
-/**
- * An MP4 the helper never indexed is a few bytes of header at most. Anything
- * larger might be a real recording, and deleting one of those to tidy up after
- * a failed stop is a far worse outcome than leaving a stray file behind.
- */
-const NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES = 64 * 1024;
+/** Reads the file, then defers the judgement to the tested predicate. */
+async function salvageNativeWindowsFragmentedCapture(screenVideoPath: string | null) {
+	if (!screenVideoPath) {
+		return false;
+	}
+	const stats = await fs.stat(screenVideoPath).catch(() => null);
+	return isSalvageableFragmentedCapture(nativeWindowsCaptureContainer, stats?.size ?? null);
+}
 
 /**
  * Best-effort removal of the files a failed or discarded native Windows capture
@@ -1344,6 +1355,13 @@ function readNativeWindowsEncoderSelection(output: string) {
 	try {
 		return JSON.parse(lastLine) as {
 			video?: string;
+			// Which MP4 flavour the helper actually wrote, `fragmented-mp4` or
+			// `mp4`. It reports this because the fragmented sink degrades to the
+			// plain one rather than failing a recording, so the flavour is a
+			// per-run outcome and not a property of the version. This is the only
+			// thing that can answer "was this file supposed to survive a kill?",
+			// which is what `salvageNativeWindowsFragmentedCapture` asks.
+			container?: string;
 			preferSoftwareEncoder?: boolean;
 		};
 	} catch {
@@ -2433,6 +2451,9 @@ export function registerIpcHandlers(
 						: 0;
 				const webcamFormat = readNativeWindowsWebcamFormat(nativeWindowsCaptureOutput);
 				const encoderSelection = readNativeWindowsEncoderSelection(nativeWindowsCaptureOutput);
+				// Captured now because stop may have no helper left to ask. A helper
+				// killed mid-recording is exactly the case where this matters most.
+				nativeWindowsCaptureContainer = encoderSelection?.container ?? null;
 				console.info("[native-wgc] capture started", {
 					captureStartedAtMs,
 					cursorOffsetMs: nativeWindowsCursorOffsetMs,
@@ -2742,6 +2763,11 @@ export function registerIpcHandlers(
 			}
 		}
 
+		// Set when the helper failed its stop handshake but left a playable
+		// fragmented file. Reported so a bug report can tell a clean stop from a
+		// recovered one; the user-facing path is deliberately identical.
+		let recovered = false;
+
 		try {
 			completeNativeWindowsCursorPauseRange();
 			const stopPromise = waitForNativeWindowsCaptureStop({
@@ -2763,35 +2789,62 @@ export function registerIpcHandlers(
 				if (!stopResult.exited) {
 					detachNativeWindowsCaptureOutputDrain();
 				}
-				await stopCursorRecording();
-				// Same as the discard path. `startCursorRecording` clears this on
-				// the next recording anyway, so this is not what keeps the samples
-				// from being written next to someone else's video -- it just stops
-				// a lost take's telemetry from sitting in memory until then.
-				pendingCursorRecordingData = null;
-				// The helper never announced a finalized file, so what is on disk
-				// is almost certainly an unindexed stub, and leaving those behind
-				// just accumulates unplayable recordings the user cannot explain.
-				// Almost: size-gate it, because throwing away a recording to tidy
-				// up after a failed stop is the worse mistake of the two.
-				await removeNativeWindowsCaptureOutputs(preferredPath, preferredWebcamPath, {
-					onlyIfUnusable: true,
-				});
-				// The helper log goes to console/diagnostics above, not into this
-				// string: it ends up in a toast, and pasting an entire capture log
-				// into the HUD tells the user nothing they can act on.
-				return {
-					success: false,
-					reason: stopResult.reason,
-					error:
-						stopResult.reason === "stop-timeout"
-							? "Timed out waiting for native Windows capture to stop. The recording could not be saved."
-							: stopResult.message.split(/\r?\n/).filter(Boolean).at(-1) ||
-								"Native Windows capture failed.",
-				};
+
+				// A failed stop stopped meaning a lost take when the helper started
+				// writing fragmented MP4. The file on disk is already playable, so
+				// the only thing standing between the user and their recording is
+				// this function deciding to throw it away and say so. Fall through
+				// into the normal save path instead: same manifest, same media
+				// links, same editor. From the user's side it simply worked, minus
+				// at most the last incomplete fragment.
+				//
+				// Only once the helper is actually dead. `exited: false` means it
+				// survived even the forced kill -- stuck somewhere `TerminateProcess`
+				// could not reach -- and on Windows such a process still holds the
+				// MP4 open and may still be appending to it. Handing that file to
+				// the editor trades an honest failure for a sharing violation on a
+				// file that is still moving, so a wedged helper keeps the old answer.
+				if (stopResult.exited && (await salvageNativeWindowsFragmentedCapture(preferredPath))) {
+					console.warn("[native-wgc] stop failed but the fragmented output is playable", {
+						reason: stopResult.reason,
+						path: preferredPath,
+					});
+					recovered = true;
+				} else {
+					await stopCursorRecording();
+					// Same as the discard path. `startCursorRecording` clears this on
+					// the next recording anyway, so this is not what keeps the samples
+					// from being written next to someone else's video -- it just stops
+					// a lost take's telemetry from sitting in memory until then.
+					pendingCursorRecordingData = null;
+					// Reaching here means the container was the plain one, whose only
+					// index is written by the `Finalize()` this stop never reached, so
+					// what is on disk really is an unindexed stub and leaving those
+					// behind just accumulates unplayable recordings the user cannot
+					// explain. Size-gate it anyway: throwing away a recording to tidy
+					// up after a failed stop is the worse mistake of the two, and the
+					// gate is the same one the salvage check above uses.
+					await removeNativeWindowsCaptureOutputs(preferredPath, preferredWebcamPath, {
+						onlyIfUnusable: true,
+					});
+					// The helper log goes to console/diagnostics above, not into this
+					// string: it ends up in a toast, and pasting an entire capture log
+					// into the HUD tells the user nothing they can act on.
+					return {
+						success: false,
+						reason: stopResult.reason,
+						error:
+							stopResult.reason === "stop-timeout"
+								? "Timed out waiting for native Windows capture to stop. The recording could not be saved."
+								: stopResult.message.split(/\r?\n/).filter(Boolean).at(-1) ||
+									"Native Windows capture failed.",
+					};
+				}
 			}
 
-			const screenVideoPath = stopResult.screenVideoPath || preferredPath;
+			// Only a successful stop names the file; the salvage path above falls
+			// through with `ok: false` and nothing but the path we asked for.
+			const screenVideoPath = (stopResult.ok ? stopResult.screenVideoPath : null) || preferredPath;
 			if (!screenVideoPath) {
 				throw new Error("Native Windows capture did not return an output path.");
 			}
@@ -2833,7 +2886,10 @@ export function registerIpcHandlers(
 				success: true,
 				path: screenVideoPath,
 				session,
-				message: "Native Windows recording session stored successfully",
+				recovered,
+				message: recovered
+					? "Native Windows recording recovered from a failed stop"
+					: "Native Windows recording session stored successfully",
 			};
 		} catch (error) {
 			console.error("Failed to stop native Windows recording:", error);
