@@ -326,6 +326,16 @@ test.describe("Windows native checklist smoke tests", () => {
 	// input-transparent when the hook fails to install can never be clicked again,
 	// which is what bricked the app in issue #266. Both halves matter — that nothing
 	// asks during construction, and that the renderer still does after mount.
+	//
+	// Note what this test therefore cannot do, and what no test in this file can.
+	// Only a real OS cursor move drives a WH_MOUSE_LL hook; CDP-injected input
+	// arrives below the OS hit-test, so Playwright's own `.click()` on a HUD testid
+	// — above, and in the source-selector step of the checklist test — reaches the
+	// DOM handler whether or not click-through is installed, or even working. Those
+	// clicks assert renderer wiring and nothing else. The failure #266 actually shipped
+	// (a painted, permanently inert HUD) is invisible to injected input by construction,
+	// so it belongs on the manual computer-use checklist and cannot be regression-tested
+	// here. Do not read a green run as evidence that the HUD is clickable.
 	test("the HUD asks for click-through instead of being born with it", async () => {
 		const app = await launchApp();
 
