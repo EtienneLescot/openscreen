@@ -47,7 +47,8 @@
 		"readyToInstall": "OpenScreen {{latestVersion}} 已下載完成。請重新啟動以完成安裝。",
 		"blockedRecording": "請先結束錄影，再安裝更新。",
 		"blockedLocation": "更新前請將 OpenScreen 移至「應用程式」資料夾。",
-		"failed": "無法檢查更新。"
+		"failed": "無法檢查更新。",
+		"downloadFailed": "無法下載更新。"
 	},
 	"playback": {
 		"play": "播放",

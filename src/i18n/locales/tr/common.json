@@ -47,7 +47,8 @@
 		"readyToInstall": "OpenScreen {{latestVersion}} indirildi. Kurulumu tamamlamak için yeniden başlatın.",
 		"blockedRecording": "Güncellemeyi yüklemeden önce kaydınızı tamamlayın.",
 		"blockedLocation": "Güncellemeden önce OpenScreen'i Uygulamalar klasörüne taşıyın.",
-		"failed": "Güncellemeler denetlenemedi."
+		"failed": "Güncellemeler denetlenemedi.",
+		"downloadFailed": "Güncelleme indirilemedi."
 	},
 	"playback": {
 		"play": "Oynat",

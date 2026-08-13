@@ -47,7 +47,8 @@
 		"readyToInstall": "تم تنزيل OpenScreen {{latestVersion}}. أعد التشغيل لإكمال التثبيت.",
 		"blockedRecording": "أنهِ التسجيل قبل تثبيت التحديث.",
 		"blockedLocation": "انقل OpenScreen إلى مجلد التطبيقات قبل التحديث.",
-		"failed": "تعذّر التحقق من وجود تحديثات."
+		"failed": "تعذّر التحقق من وجود تحديثات.",
+		"downloadFailed": "تعذّر تنزيل التحديث."
 	},
 	"playback": {
 		"play": "تشغيل",

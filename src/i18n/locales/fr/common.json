@@ -47,7 +47,8 @@
 		"readyToInstall": "OpenScreen {{latestVersion}} a été téléchargé. Redémarrez pour terminer l'installation.",
 		"blockedRecording": "Terminez votre enregistrement avant d'installer la mise à jour.",
 		"blockedLocation": "Déplacez OpenScreen dans le dossier Applications avant de le mettre à jour.",
-		"failed": "Impossible de rechercher les mises à jour."
+		"failed": "Impossible de rechercher les mises à jour.",
+		"downloadFailed": "Impossible de télécharger la mise à jour."
 	},
 	"playback": {
 		"play": "Lecture",
