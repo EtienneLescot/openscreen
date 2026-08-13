@@ -76,6 +76,42 @@ struct PrefetchedClip {
 /// Ouvre + positionne la paire de décodeurs d'un clip (même travail que
 /// `Player::set_active_clip`, mais autonome — sans instance `Player` existante, pour pouvoir
 /// tourner sur un thread dédié pendant que le `Player` réel joue encore le clip actif).
+/// Ouvre le décodeur webcam, ou un remplaçant si le clip n'en a pas.
+///
+/// Un clip sans caméra arrive ici avec un chemin VIDE (`assetCameraSource` côté TS renvoie
+/// `""`), et le reste du moteur veut une paire de décodeurs toujours valide plutôt qu'un
+/// `Option` à dérouler sur tout le chemin chaud. Le remplaçant est donc l'écran lui-même :
+/// il n'est jamais dessiné, puisque la composition ne pose une vignette que si le document
+/// déclare une caméra.
+///
+/// Le cas qui compte est l'autre : un chemin NON VIDE qui ne s'ouvre pas. Cela veut dire
+/// que le projet déclare une caméra dont le fichier a été déplacé ou supprimé — et là, la
+/// vignette EST dessinée, avec l'enregistrement d'écran dedans. C'est le symptôme de #265,
+/// et il était silencieux : aucune trace ne distinguait « pas de caméra » de « caméra
+/// introuvable ».
+///
+/// ponytail: on garde le remplaçant plutôt que de passer `wdec` en `Option<Decoder>`, ce qui
+/// toucherait 22 sites dont le pool et la boucle de composition `unsafe`. À faire si quelqu'un
+/// mesure que le décodeur inutile coûte (VRAM des pools D3D11VA, ouverture par clip) — le
+/// journal ci-dessous dit enfin combien de fois le mauvais cas se produit.
+unsafe fn open_webcam_or_stand_in(
+    screen_path: &str,
+    webcam_path: &str,
+    gpu: &Gpu,
+) -> Result<Decoder> {
+    match Decoder::open(webcam_path, gpu) {
+        Ok(d) => Ok(d),
+        Err(e) => {
+            if !webcam_path.is_empty() {
+                eprintln!(
+                    "WARNING: caméra déclarée mais illisible ({webcam_path}) : {e}.                      L'enregistrement d'écran sert de remplaçant, donc la vignette caméra                      affichera l'écran. Média à relier."
+                );
+            }
+            Decoder::open(screen_path, gpu)
+        }
+    }
+}
+
 unsafe fn open_and_seek_clip(
     screen_path: &str,
     webcam_path: &str,
@@ -85,10 +121,7 @@ unsafe fn open_and_seek_clip(
 ) -> Result<PrefetchedClip> {
     let source_time_sec = source_time_sec.max(0.0);
     let mut sdec = Decoder::open(screen_path, gpu)?;
-    let mut wdec = match Decoder::open(webcam_path, gpu) {
-        Ok(d) => d,
-        Err(_) => Decoder::open(screen_path, gpu)?,
-    };
+    let mut wdec = open_webcam_or_stand_in(screen_path, webcam_path, gpu)?;
     let sf = sdec.seek_to(source_time_sec)?;
     let mut wf = wdec.seek_to(webcam_seek_time(source_time_sec, webcam_offset_sec))?;
     if wf.is_null() {
@@ -225,10 +258,7 @@ pub struct Player {
 
 impl Player {
     pub unsafe fn open(screen: &str, webcam: &str, gpu: &Gpu) -> Result<Player> {
-        let wdec = match Decoder::open(webcam, gpu) {
-            Ok(d) => d,
-            Err(_) => Decoder::open(screen, gpu)?,
-        };
+        let wdec = open_webcam_or_stand_in(screen, webcam, gpu)?;
         Ok(Player {
             sdec: Decoder::open(screen, gpu)?,
             wdec,
