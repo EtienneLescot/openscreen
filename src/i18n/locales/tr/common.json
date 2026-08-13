@@ -9,6 +9,8 @@
 		"open": "Aç",
 		"checkForUpdates": "Güncellemeleri denetle",
 		"viewRelease": "Sürümü görüntüle",
+		"downloadUpdate": "Güncellemeyi indir",
+		"restartNow": "Şimdi yeniden başlat",
 		"upload": "Yükle",
 		"export": "Dışa Aktar",
 		"showInFolder": "Klasörde Göster",
@@ -42,6 +44,9 @@
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} kullanılabilir. Mevcut sürümünüz {{currentVersion}}.",
 		"current": "OpenScreen güncel ({{currentVersion}}).",
+		"readyToInstall": "OpenScreen {{latestVersion}} indirildi. Kurulumu tamamlamak için yeniden başlatın.",
+		"blockedRecording": "Güncellemeyi yüklemeden önce kaydınızı tamamlayın.",
+		"blockedLocation": "Güncellemeden önce OpenScreen'i Uygulamalar klasörüne taşıyın.",
 		"failed": "Güncellemeler denetlenemedi."
 	},
 	"playback": {

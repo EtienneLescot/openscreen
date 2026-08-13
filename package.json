@@ -12,6 +12,10 @@
 		"name": "Etienne Lescot",
 		"url": "https://github.com/EtienneLescot"
 	},
+	"repository": {
+		"type": "git",
+		"url": "git+https://github.com/getopenscreen/openscreen.git"
+	},
 	"contributors": [
 		{
 			"name": "Siddharth Vaddem",
@@ -105,6 +109,7 @@
 		"@uiw/react-color-colorful": "^2.9.2",
 		"class-variance-authority": "^0.7.1",
 		"clsx": "^2.1.1",
+		"electron-updater": "^6.8.9",
 		"i18next": "^23.16.0",
 		"langchain": "^1.2.39",
 		"lucide-react": "^0.545.0",

@@ -9,6 +9,8 @@
 		"open": "開く",
 		"checkForUpdates": "アップデートを確認",
 		"viewRelease": "リリースを表示",
+		"downloadUpdate": "アップデートをダウンロード",
+		"restartNow": "今すぐ再起動",
 		"upload": "読み込む",
 		"export": "エクスポート",
 		"showInFolder": "フォルダに表示",
@@ -42,6 +44,9 @@
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} を利用できます。現在のバージョンは {{currentVersion}} です。",
 		"current": "OpenScreen は最新です（{{currentVersion}}）。",
+		"readyToInstall": "OpenScreen {{latestVersion}} をダウンロードしました。再起動してインストールを完了してください。",
+		"blockedRecording": "アップデートをインストールする前に録画を終了してください。",
+		"blockedLocation": "アップデートする前に OpenScreen をアプリケーションフォルダに移動してください。",
 		"failed": "アップデートを確認できませんでした。"
 	},
 	"playback": {

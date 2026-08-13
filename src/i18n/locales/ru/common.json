@@ -9,6 +9,8 @@
 		"open": "Открыть",
 		"checkForUpdates": "Проверить обновления",
 		"viewRelease": "Открыть выпуск",
+		"downloadUpdate": "Загрузить обновление",
+		"restartNow": "Перезапустить",
 		"upload": "Загрузить",
 		"export": "Экспорт",
 		"showInFolder": "Показать в папке",
@@ -42,6 +44,9 @@
 	"updates": {
 		"available": "Доступен OpenScreen {{latestVersion}}. Установлена версия {{currentVersion}}.",
 		"current": "Установлена последняя версия OpenScreen ({{currentVersion}}).",
+		"readyToInstall": "OpenScreen {{latestVersion}} загружен. Перезапустите, чтобы завершить установку.",
+		"blockedRecording": "Завершите запись перед установкой обновления.",
+		"blockedLocation": "Переместите OpenScreen в папку «Программы» перед обновлением.",
 		"failed": "Не удалось проверить наличие обновлений."
 	},
 	"playback": {

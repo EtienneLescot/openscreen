@@ -10,6 +10,27 @@
     "**/*.node"
   ],
   "productName": "Openscreen",
+  // Declared explicitly, NOT to start publishing from CI — every build still passes
+  // `--publish never`, which suppresses uploading only. What this turns on is the update
+  // METADATA: `latest.yml` / `latest-mac.yml` / `latest-linux.yml`, the `.blockmap` used for
+  // differential downloads, `app-update.yml` inside resources, and the `package-type` marker
+  // in deb/rpm/pacman that tells electron-updater which installer to run.
+  //
+  // Some of that was already being produced, because app-builder-lib falls back to inferring
+  // the provider from `.git/config`'s origin when no publish config is declared — which works
+  // in CI and silently stops working for anyone building from a source tarball. Declaring it
+  // (plus `repository` in package.json) makes it deterministic instead of incidental.
+  //
+  // The Store (appx) target deliberately gets NO publish config: `isSuitableWindowsTarget()`
+  // only writes `app-update.yml` for nsis, so the MSIX build cannot arm an updater that its
+  // read-only container could never run. Do not add `appx.electronUpdaterAware`.
+  "publish": [
+    {
+      "provider": "github",
+      "owner": "getopenscreen",
+      "repo": "openscreen"
+    }
+  ],
   // Fails the build when compositor_view.node is older than the crates/ Rust sources. Plain
   // `npm run build` does not rebuild the addon, and a stale one fails SILENTLY at runtime
   // (unknown scene fields are #[serde(default)]) rather than erroring. See the script header
@@ -78,6 +99,14 @@
     "hardenedRuntime": true,
     "entitlements": "macos.entitlements",
     "entitlementsInherit": "macos.entitlements",
+    // Squirrel.Mac can only install from a ZIP, so auto-update needs one beside each DMG.
+    // It is NOT listed here on purpose: the macOS job packs with `electron-builder --mac --dir`,
+    // and `--dir` skips every target — so adding "zip" (or anything else) to this list would be
+    // dead config that reads as if it worked. The DMG below is likewise hand-rolled with
+    // `hdiutil` in build.yml, which is why the release assets are named `-macOS-Apple-Silicon-`
+    // rather than following `artifactName`. The update ZIP is produced with `ditto` in the same
+    // job, from the signed and stapled .app. Same trap as `linux.target` below, where the CLI
+    // target list replaces this one.
     "target": [
       {
         "target": "dmg",

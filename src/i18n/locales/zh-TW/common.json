@@ -9,6 +9,8 @@
 		"open": "開啟",
 		"checkForUpdates": "檢查更新",
 		"viewRelease": "檢視版本",
+		"downloadUpdate": "下載更新",
+		"restartNow": "立即重新啟動",
 		"upload": "上傳",
 		"export": "匯出",
 		"showInFolder": "在資料夾中顯示",
@@ -42,6 +44,9 @@
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} 已推出。目前版本為 {{currentVersion}}。",
 		"current": "OpenScreen 已是最新版本（{{currentVersion}}）。",
+		"readyToInstall": "OpenScreen {{latestVersion}} 已下載完成。請重新啟動以完成安裝。",
+		"blockedRecording": "請先結束錄影，再安裝更新。",
+		"blockedLocation": "更新前請將 OpenScreen 移至「應用程式」資料夾。",
 		"failed": "無法檢查更新。"
 	},
 	"playback": {

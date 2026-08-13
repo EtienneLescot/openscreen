@@ -9,6 +9,8 @@
 		"open": "Apri",
 		"checkForUpdates": "Controlla aggiornamenti",
 		"viewRelease": "Visualizza versione",
+		"downloadUpdate": "Scarica aggiornamento",
+		"restartNow": "Riavvia ora",
 		"upload": "Carica",
 		"export": "Esporta",
 		"showInFolder": "Mostra nella cartella",
@@ -42,6 +44,9 @@
 	"updates": {
 		"available": "OpenScreen {{latestVersion}} è disponibile. Stai usando la versione {{currentVersion}}.",
 		"current": "OpenScreen è aggiornato ({{currentVersion}}).",
+		"readyToInstall": "OpenScreen {{latestVersion}} è stato scaricato. Riavvia per completare l'installazione.",
+		"blockedRecording": "Termina la registrazione prima di installare l'aggiornamento.",
+		"blockedLocation": "Sposta OpenScreen nella cartella Applicazioni prima di aggiornare.",
 		"failed": "Impossibile controllare gli aggiornamenti."
 	},
 	"playback": {

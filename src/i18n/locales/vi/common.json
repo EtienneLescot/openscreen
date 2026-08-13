@@ -9,6 +9,8 @@
 		"open": "Mở",
 		"checkForUpdates": "Kiểm tra bản cập nhật",
 		"viewRelease": "Xem bản phát hành",
+		"downloadUpdate": "Tải bản cập nhật",
+		"restartNow": "Khởi động lại ngay",
 		"upload": "Tải lên",
 		"export": "Xuất",
 		"showInFolder": "Hiển thị trong thư mục",
@@ -42,6 +44,9 @@
 	"updates": {
 		"available": "Đã có OpenScreen {{latestVersion}}. Bạn đang dùng phiên bản {{currentVersion}}.",
 		"current": "OpenScreen đang ở phiên bản mới nhất ({{currentVersion}}).",
+		"readyToInstall": "Đã tải xuống OpenScreen {{latestVersion}}. Khởi động lại để hoàn tất cài đặt.",
+		"blockedRecording": "Hãy kết thúc bản ghi trước khi cài đặt bản cập nhật.",
+		"blockedLocation": "Hãy chuyển OpenScreen vào thư mục Applications trước khi cập nhật.",
 		"failed": "Không thể kiểm tra bản cập nhật."
 	},
 	"playback": {
