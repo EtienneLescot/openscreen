@@ -19,16 +19,6 @@ import { describe, expect, it } from "vitest";
 const require = createRequire(import.meta.url);
 const BEFORE_PACK = path.join(path.dirname(fileURLToPath(import.meta.url)), "before-pack.cjs");
 
-/** Same dotted numeric compare before-pack.cjs uses, so 3.4.9 sorts below 3.4.30. */
-function compareVersions(a, b) {
-	const left = a.split(".").map(Number);
-	const right = b.split(".").map(Number);
-	for (let i = 0; i < Math.max(left.length, right.length); i++) {
-		if ((left[i] ?? 0) !== (right[i] ?? 0)) return (left[i] ?? 0) - (right[i] ?? 0);
-	}
-	return 0;
-}
-
 /**
  * Run `body` against a fresh copy of before-pack.cjs loaded under `env`.
  *
@@ -75,24 +65,26 @@ describe("symbol-version ceiling", () => {
 		});
 	});
 
-	// Reads this machine's own libc/libstdc++, so it asserts the shape and the direction
-	// of the swap rather than any particular version: the point is that every prefix the
-	// pinned floor names came back, and that a host ceiling is never the stricter one.
-	it.runIf(process.platform === "linux")(
-		"raises the ceiling to what this machine provides in host mode",
-		() => {
-			withEnv({ OPENSCREEN_SYMBOL_FLOOR: "host", CI: undefined }, (t) => {
-				const { ceiling, pinned } = t.resolveSymbolCeiling();
+	// Reads this machine's own libc/libstdc++, so it asserts shape rather than values:
+	// every prefix the pinned floor names came back, and each one is a version this run
+	// actually parsed out of an ELF.
+	//
+	// Deliberately NOT asserted: that the host ceiling is at least the pinned one. Host
+	// mode substitutes, it does not raise — on a distro OLDER than the floor the ceiling
+	// legitimately comes back lower, which makes the check stricter rather than weaker.
+	// Requiring otherwise would fail this test on a correct machine.
+	it.runIf(process.platform === "linux")("takes the ceiling from this machine in host mode", () => {
+		withEnv({ OPENSCREEN_SYMBOL_FLOOR: "host", CI: undefined }, (t) => {
+			const { ceiling, pinned } = t.resolveSymbolCeiling();
 
-				expect(pinned).toBe(false);
-				expect(Object.keys(ceiling).sort()).toEqual(Object.keys(t.MAX_SYMBOL_VERSION).sort());
-				for (const [prefix, pinnedMax] of Object.entries(t.MAX_SYMBOL_VERSION)) {
-					expect(
-						compareVersions(ceiling[prefix], pinnedMax),
-						`${prefix}: host ${ceiling[prefix]} vs floor ${pinnedMax}`,
-					).toBeGreaterThanOrEqual(0);
-				}
-			});
-		},
-	);
+			expect(pinned).toBe(false);
+			expect(ceiling).not.toBe(t.MAX_SYMBOL_VERSION);
+			expect(Object.keys(ceiling).sort()).toEqual(Object.keys(t.MAX_SYMBOL_VERSION).sort());
+			for (const [prefix, version] of Object.entries(ceiling)) {
+				expect(version, `${prefix} came back as ${JSON.stringify(version)}`).toMatch(
+					/^\d+(\.\d+)*$/,
+				);
+			}
+		});
+	});
 });
