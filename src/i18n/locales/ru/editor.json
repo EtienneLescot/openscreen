@@ -311,7 +311,9 @@
 		"noMatches": "Нет проектов, соответствующих «{{query}}».",
 		"navigateHint": "для навигации ·",
 		"openHint": "чтобы открыть",
-		"browseFiles": "Обзор файлов…"
+		"browseFiles": "Обзор файлов…",
+		"deleteProject": "Удалить проект",
+		"confirmDelete": "Удалить этот проект? Ваши записи сохранятся."
 	},
 	"editClipDialog": {
 		"title": "Изменить клип",

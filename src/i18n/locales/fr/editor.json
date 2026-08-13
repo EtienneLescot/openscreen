@@ -311,7 +311,9 @@
 		"noMatches": "Aucun projet ne correspond à « {{query}} ».",
 		"navigateHint": "pour naviguer ·",
 		"openHint": "pour ouvrir",
-		"browseFiles": "Parcourir les fichiers…"
+		"browseFiles": "Parcourir les fichiers…",
+		"deleteProject": "Supprimer le projet",
+		"confirmDelete": "Supprimer ce projet ? Vos enregistrements sont conservés."
 	},
 	"editClipDialog": {
 		"title": "Modifier le clip",

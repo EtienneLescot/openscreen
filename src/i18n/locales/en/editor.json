@@ -311,7 +311,9 @@
 		"noMatches": "No projects match \"{{query}}\".",
 		"navigateHint": "to navigate ·",
 		"openHint": "to open",
-		"browseFiles": "Browse files…"
+		"browseFiles": "Browse files…",
+		"deleteProject": "Delete project",
+		"confirmDelete": "Delete this project? Your recordings are kept."
 	},
 	"editClipDialog": {
 		"title": "Edit clip",

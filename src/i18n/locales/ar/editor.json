@@ -311,7 +311,9 @@
 		"noMatches": "لا توجد مشاريع تطابق \"{{query}}\".",
 		"navigateHint": "للتنقل ·",
 		"openHint": "للفتح",
-		"browseFiles": "تصفح الملفات…"
+		"browseFiles": "تصفح الملفات…",
+		"deleteProject": "حذف المشروع",
+		"confirmDelete": "هل تريد حذف هذا المشروع؟ سيتم الاحتفاظ بتسجيلاتك."
 	},
 	"editClipDialog": {
 		"title": "تعديل المقطع",

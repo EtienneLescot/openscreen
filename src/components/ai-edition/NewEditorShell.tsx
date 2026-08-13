@@ -594,6 +594,27 @@ export function NewEditorShell() {
 		[createProject],
 	);
 
+	// The only way to get rid of a project short of deleting its file by hand.
+	// Media is left alone on purpose: a recording can back several projects, and
+	// the dialog says so before it asks.
+	const handleDeleteProject = useCallback(async (id: string) => {
+		try {
+			const result = await nativeBridgeClient.aiEdition.delete(id);
+			if (!result.success) throw new Error(result.error ?? "Failed to delete project");
+			setProjectSummaries((prev) => prev.filter((p) => p.id !== id));
+			// Deleting the project that is open leaves the editor pointing at a file
+			// that no longer exists — any save from there would recreate it.
+			if (useProjectStore.getState().projectId === id) {
+				useProjectStore.getState().clear();
+			}
+			toast.success("Project deleted");
+		} catch (err) {
+			toast.error("Could not delete project", {
+				description: err instanceof Error ? err.message : String(err),
+			});
+		}
+	}, []);
+
 	const handleSave = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
@@ -1257,6 +1278,7 @@ export function NewEditorShell() {
 				projects={projectSummaries}
 				activeProjectId={projectId}
 				onSelect={handleSelectProject}
+				onDelete={handleDeleteProject}
 				onBrowse={handleBrowseProject}
 			/>
 			<NewProjectModal
