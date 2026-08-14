@@ -188,9 +188,12 @@ jobs:
 
           # The positional argument is the project root, NOT the package: passing
           # the package there is what failed v1.9.5 ("could not find a project
-          # publisher"). The package goes through --inputFile.
+          # publisher"). The package goes through the option below, which takes
+          # the DIRECTORY holding it: the CLI's own usage says
+          # `-i, --inputDirectory`, and rejects the `--inputFile` that Microsoft
+          # Learn documents. The v1.9.5 dry run is what caught that.
           # Not $args: that is a PowerShell automatic variable.
-          $cmdArgs = @('publish', '.', '--inputFile', $pkg.FullName, '--appId', $env:PRODUCT_ID)
+          $cmdArgs = @('publish', '.', '--inputDirectory', $pkg.Directory.FullName, '--appId', $env:PRODUCT_ID)
           if ($env:DRY_RUN -eq 'true') {
             # Leaves the submission in draft instead of sending it to
             # certification: the only way to test this path without shipping.
