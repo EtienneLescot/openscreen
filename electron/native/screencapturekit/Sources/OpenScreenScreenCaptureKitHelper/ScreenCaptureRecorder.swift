@@ -332,13 +332,22 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	/// said so at finishWriting(). The Windows helper checks every WriteSample
 	/// HRESULT and escalates; this is the macOS half of the same contract -- report
 	/// once, at the append that actually failed, carrying the live writer.error.
+	///
+	/// Deliberately not the code finishWriter() emits, and the difference is load
+	/// bearing. That one is the terminal result of stopping, and the Electron side
+	/// settles its stop on exactly one of `recording-stopped` or `writer-failed`.
+	/// Give both sites the same code behind this one-shot guard and a writer that
+	/// died mid-capture emits nothing at all at stop, so the stop promise never
+	/// settles and every failure becomes the "Saving..." hang instead of an error.
+	/// This event answers "when did the writer die"; that one answers "did stopping
+	/// work". Two questions, two codes.
 	private func reportWriterFailure(_ stage: String) {
 		guard !didReportWriterFailure, let writer else {
 			return
 		}
 		didReportWriterFailure = true
 		emitError(
-			code: "writer-failed",
+			code: "writer-failed-during-capture",
 			message: "\(stage): "
 				+ (writer.error.map { "\($0)" }
 					?? "AVAssetWriter status \(writer.status.rawValue)"),
@@ -493,10 +502,18 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 				// the fragment stays representable. A screen recorder gives up
 				// nothing for it: B-frames buy compression on lookahead-friendly
 				// content and cost encode latency, which is the wrong trade for
-				// real-time capture. Measured on macOS 26.5 / M1, 1080p30 with
-				// system audio: with reordering the writer dies after 1-2s, without
-				// it a 43.6s take stops clean and a SIGKILL at 25s still leaves 27
-				// readable `moof` fragments.
+				// real-time capture.
+				//
+				// Measured on macOS 26.5 / M1, 1080p with system audio. How reliably
+				// the bug bites scales with append rate, so quote the rate with the
+				// result: at ~57 fps, the rate the app actually drives, reordering
+				// on dies at 13.0s while reordering off stops clean at 31.6s; at
+				// 30 fps it is intermittent, dying at 1.0s and 2.0s but once
+				// surviving 22.2s. That intermittency is why the byte-level evidence
+				// leads here and the run counts only corroborate: the offsets are
+				// out of spec in every fragmented file whether or not that
+				// particular run happened to die. Reordering off is 3/3 clean across
+				// both rates, and a SIGKILL at 25s still leaves 27 readable `moof`.
 				AVVideoAllowFrameReorderingKey: false,
 			],
 		]
