@@ -320,10 +320,28 @@ unsafe fn decode_clip_audio_inner(
     let mut frame = av_frame_alloc();
     let mut input_eof = false;
 
+    // Garde anti-boucle : un conteneur dont la piste audio est tronquée ou corrompue en fin
+    // de flux peut faire que `av_read_frame` ne renvoie jamais AVERROR_EOF, empêchant
+    // `decoder_eof` de se propager — la boucle tourne alors à 100 % CPU pour toujours.
+    // Un budget TEMPS plutôt qu'un compteur d'itérations : `av_read_frame` peut être lent
+    // sur un flux corrompu, un compteur serait soit trop grand soit trop petit. 60 s
+    // couvre largement le décodage logiciel d'un clip de plus de 20 minutes.
+    let loop_start = std::time::Instant::now();
+    let loop_budget = std::time::Duration::from_secs(60);
+
     // Une seule passe de démux alimente tous les décodeurs : chaque paquet est routé vers la
     // piste dont il porte l'index. On continue tant qu'AU MOINS une piste a encore quelque
     // chose à produire.
     while tracks.iter().any(|t| !t.reached_end && !t.decoder_eof) {
+        if loop_start.elapsed() > loop_budget {
+            eprintln!(
+                "[openscreen-compositor] decode_clip_audio: boucle plafonnée à 60 s (source_end={source_end_sec} s), sortie forcée"
+            );
+            for track in tracks.iter_mut() {
+                track.decoder_eof = true;
+            }
+            break;
+        }
         if !input_eof {
             let read = av_read_frame(fmt, packet);
             if read == AVERROR_EOF {
@@ -612,6 +630,13 @@ impl WsolaTimeStretcher {
 
     fn process(&mut self, final_chunk: bool) -> PlanarPcm {
         let mut emitted = self.empty_chunk();
+        // Garde anti-boucle : si `find_best_delta` rend systématiquement un delta qui
+        // ramène grain_pos sur place, le break `buf_end` n'est jamais atteint et la boucle
+        // tourne à 100 % CPU pour toujours. On détecte la stagnation et on force la
+        // sortie — dans le cas normal le WSOLA a déjà couvert la cible, et un blocage ici
+        // ne fait que figer l'export entier.
+        let mut last_grain_pos: i64 = i64::MIN;
+        let mut stagnant: u32 = 0;
         loop {
             let search_target = (self.ideal_pos + self.ha).round() as i64;
             let required_end = (self.grain_pos + self.n as i64)
@@ -631,6 +656,21 @@ impl WsolaTimeStretcher {
             self.grain_pos = search_target + best_delta;
             self.ideal_pos += self.ha;
             self.frame += 1;
+
+            if self.grain_pos <= last_grain_pos {
+                stagnant += 1;
+                if stagnant >= 100 {
+                    let stuck_at = last_grain_pos;
+                    eprintln!(
+                        "[openscreen-compositor] WsolaTimeStretcher: grain_pos stagnant à {stuck_at} (frame {}), sortie forcée",
+                        self.frame
+                    );
+                    break;
+                }
+            } else {
+                stagnant = 0;
+                last_grain_pos = self.grain_pos;
+            }
 
             self.collect(placed_frame * self.hs, &mut emitted);
             self.discard_below(self.grain_pos);
