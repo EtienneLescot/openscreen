@@ -957,6 +957,12 @@ jobs:
   publish-msstore:
     name: Publish to Microsoft Store
     runs-on: windows-latest
+    # The workflow-wide token is `contents: write` because publish-release needs
+    # it. This job only reads: it checks the tree out so the CLI can identify the
+    # project, downloads a same-run artifact (which uses the runtime token, not
+    # this one), and talks to Partner Center with its own Entra credentials.
+    permissions:
+      contents: read
     needs:
       - build-windows-store
       - publish-release
@@ -1008,6 +1014,14 @@ jobs:
       - name: Check out the project
         if: steps.store.outputs.enabled == 'true'
         uses: actions/checkout@v7
+        with:
+          # Nothing here pushes; the tree is only read so the CLI can see it is
+          # an Electron project. Left at the default, checkout writes the
+          # workflow's `contents: write` token into .git/config, where every
+          # later step can read it — including a third-party CLI action and the
+          # Store submission. See the job-level `permissions` above: same reason,
+          # other half.
+          persist-credentials: false
 
       - name: Download Store package
         if: steps.store.outputs.enabled == 'true'
