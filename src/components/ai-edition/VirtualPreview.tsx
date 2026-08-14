@@ -162,7 +162,9 @@ export function VirtualPreview({
 }: VirtualPreviewProps) {
 	const { settings } = useEditorSettings();
 	const audioOffsetMsRef = useRef(settings.audioOffsetMs);
-	audioOffsetMsRef.current = settings.audioOffsetMs;
+	useEffect(() => {
+		audioOffsetMsRef.current = settings.audioOffsetMs;
+	}, [settings.audioOffsetMs]);
 	// ponytail: an oversized, offset video inside .videoFrame's overflow:hidden
 	// box — the same "scale + negative-position the full frame, let the
 	// container clip the rest" technique the export renderer uses via a Pixi
@@ -194,10 +196,12 @@ export function VirtualPreview({
 		autoMaster: settings.audioAutoMaster,
 		gainDb: settings.audioGainDb,
 	});
-	audioSettingsRef.current = {
-		autoMaster: settings.audioAutoMaster,
-		gainDb: settings.audioGainDb,
-	};
+	useEffect(() => {
+		audioSettingsRef.current = {
+			autoMaster: settings.audioAutoMaster,
+			gainDb: settings.audioGainDb,
+		};
+	}, [settings.audioAutoMaster, settings.audioGainDb]);
 	const audioContextRef = useRef<AudioContext | null>(null);
 	const audioContextCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const audioSourceNodesRef = useRef(new WeakMap<HTMLAudioElement, MediaElementAudioSourceNode>());

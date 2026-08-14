@@ -33,17 +33,21 @@ function basename(path: string): string {
 	return path.split(/[\\/]/).pop() ?? path;
 }
 
-export function addSelectedAssetToTimeline(
+export async function addSelectedAssetToTimeline(
 	selected: Pick<AxcutAsset, "id" | "label" | "originalPath"> | null,
-	onAddToTimeline: (assetId: string) => void,
+	onAddToTimeline: (assetId: string) => Promise<void>,
 	onSuccess: (label: string) => void,
-): void {
+): Promise<void> {
 	if (!selected) return;
-	onAddToTimeline(selected.id);
+	await onAddToTimeline(selected.id);
 	onSuccess(selected.label || basename(selected.originalPath));
 }
 
-export function MediaStage({ onAddToTimeline }: { onAddToTimeline: (assetId: string) => void }) {
+export function MediaStage({
+	onAddToTimeline,
+}: {
+	onAddToTimeline: (assetId: string) => Promise<void>;
+}) {
 	const t = useScopedT("editor");
 	const projectId = useProjectStore((s) => s.projectId);
 	const document = useProjectStore((s) => s.document);
@@ -106,9 +110,9 @@ export function MediaStage({ onAddToTimeline }: { onAddToTimeline: (assetId: str
 	};
 
 	const addSelectedToTimeline = () => {
-		addSelectedAssetToTimeline(selected, onAddToTimeline, (label) => {
+		void addSelectedAssetToTimeline(selected, onAddToTimeline, (label) => {
 			toast.success(t("mediaStage.addedToTimeline", { label }));
-		});
+		}).catch(() => undefined);
 	};
 
 	return (
