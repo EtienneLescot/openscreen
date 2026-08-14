@@ -7,7 +7,7 @@ const SOURCE_LOAD_TIMEOUT_MS = 60_000;
 const READ_END_PADDING_SEC = 0.5;
 
 function webDemuxerWasmUrl(): string {
-	return new URL("../exporter/wasm/web-demuxer.wasm", window.location.href).href;
+	return new URL("./wasm/web-demuxer.wasm", window.location.href).href;
 }
 
 /** Mixes one WebCodecs AudioData frame down to mono (averaged across channels). */
