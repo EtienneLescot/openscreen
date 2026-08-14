@@ -394,10 +394,14 @@ export function NewEditorShell() {
 	);
 
 	const handleDropAsset = useCallback(
-		(assetId: string) => {
-			void tl.insertClipAt(assetId, clips.length);
-		},
-		[tl, clips.length],
+		(assetId: string) =>
+			tl.insertClipAt(assetId, clips.length).catch((error) => {
+				toast.error(te("mediaStage.couldNotAddAsset"), {
+					description: error instanceof Error ? error.message : String(error),
+				});
+				throw error;
+			}),
+		[tl, clips.length, te],
 	);
 
 	// Ref so the 'ended' listener below always sees the latest clips without tearing

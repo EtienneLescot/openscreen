@@ -361,7 +361,7 @@ export function V4Timeline({
 	tl: TimelineApi;
 	setCurrentTime: (sec: number) => void;
 	variant?: "edit" | "media";
-	onDropAsset?: (assetId: string) => void;
+	onDropAsset?: (assetId: string) => Promise<void>;
 	videoSources?: VideoSource[];
 	playing: boolean;
 	onTogglePlay: () => void;
@@ -1549,7 +1549,7 @@ export function V4Timeline({
 								e.preventDefault();
 								setDragOver(false);
 								const id = e.dataTransfer.getData(ASSET_MIME);
-								if (id && onDropAsset) onDropAsset(id);
+								if (id && onDropAsset) void onDropAsset(id).catch(() => undefined);
 							}}
 						>
 							{clips.map((c, i) => {
