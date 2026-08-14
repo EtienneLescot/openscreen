@@ -12,3 +12,6 @@
    elle couvre les formats exotiques (10 bits, 4:2:2) qu'un interleave écrit à la
    main casserait silencieusement. */
 #include <libswscale/swscale.h>
+#include <libavfilter/avfilter.h>
+#include <libavfilter/buffersrc.h>
+#include <libavfilter/buffersink.h>

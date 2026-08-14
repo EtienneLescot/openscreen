@@ -36,6 +36,7 @@ const FFMPEG_SONAMES = [
 	"libavutil.so.60",
 	"libswscale.so.9",
 	"libswresample.so.6",
+	"libavfilter.so.11",
 ];
 
 const run = (command, args, options = {}) =>
