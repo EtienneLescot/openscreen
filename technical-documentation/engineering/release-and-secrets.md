@@ -173,7 +173,9 @@ Two constraints from Microsoft's documentation: automated updates through GitHub
 
 That failure was visible only because the same release carried the fix that reports the submission's real outcome instead of the configuration's. The prior version wrote "Submitted to the Store" whenever credentials resolved, under `always()` — so this exact failure would have shipped as a green success.
 
-**Still unverified, and the next thing likely to break:** `--inputFile` is documented for `.msix` and `.msixupload`, and `build:win:store` produces an `.appx` (`electron-builder --win appx`). Whether the CLI accepts that extension is untested — the only way to find out is a stable release or a `workflow_dispatch` of `build.yml` with a stable `release_tag`. Until one of those goes green, assume the Store still needs the manual upload below.
+**Still unverified, and the next thing likely to break:** `--inputFile` is documented for `.msix` and `.msixupload`, and `build:win:store` produces an `.appx` (`electron-builder --win appx`). Whether the CLI accepts that extension is untested.
+
+**There is no dry run, so do not reach for one.** The job is gated to stable tags, so the only ways to exercise it are a real release or a `workflow_dispatch` of `build.yml` with a stable `release_tag` — and neither is a rehearsal. `msstore publish` commits the submission unless it is given `-nc, --noCommit`, which this job does not pass, so a dispatch fired "just to see whether the `.appx` is accepted" creates a submission that enters certification and reaches users. Adding `--noCommit` behind a dispatch input is what a real validation path would need; until someone builds that, assume the Store needs the manual upload below, and treat the next stable release as the test.
 
 Rotate by issuing a new client secret on the Entra registration, updating `AZURE_AD_APPLICATION_SECRET`, publishing one release to confirm, then deleting the old secret. The tenant, client and seller IDs change only when the registration or account does.
 
