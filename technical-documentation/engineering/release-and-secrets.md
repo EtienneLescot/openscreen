@@ -169,6 +169,12 @@ Two constraints from Microsoft's documentation: automated updates through GitHub
 
 `msstore submission updateMetadata` can also drive the Store listing text from a versioned `metadata.json`, which would replace the CSV export/import round-trip. Not wired up here.
 
+**It has submitted nothing yet.** v1.9.5 was the job's first real run — it did not exist on the v1.9.1 or v1.9.2 builds — and it failed: `We could not find a project publisher for the project at …Openscreen.Setup.1.9.5.appx`. Credentials were fine; the CLI reported the configuration valid and resolved the product. The call was wrong. `msstore publish` takes a **project root** as its positional argument, detects the app type there, and only then accepts a built package through `--inputFile`; the job passed the `.appx` positionally and never checked the repo out, so there was no project to detect. Fixed by adding a checkout (before the artifact download — `actions/checkout` cleans the workspace) and calling `msstore publish . --inputFile <appx> --appId <id>`.
+
+That failure was visible only because the same release carried the fix that reports the submission's real outcome instead of the configuration's. The prior version wrote "Submitted to the Store" whenever credentials resolved, under `always()` — so this exact failure would have shipped as a green success.
+
+**Still unverified, and the next thing likely to break:** `--inputFile` is documented for `.msix` and `.msixupload`, and `build:win:store` produces an `.appx` (`electron-builder --win appx`). Whether the CLI accepts that extension is untested — the only way to find out is a stable release or a `workflow_dispatch` of `build.yml` with a stable `release_tag`. Until one of those goes green, assume the Store still needs the manual upload below.
+
 Rotate by issuing a new client secret on the Entra registration, updating `AZURE_AD_APPLICATION_SECRET`, publishing one release to confirm, then deleting the old secret. The tenant, client and seller IDs change only when the registration or account does.
 
 ## Discord secrets and variables
