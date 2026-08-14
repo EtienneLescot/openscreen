@@ -175,7 +175,13 @@ That failure was visible only because the same release carried the fix that repo
 
 **Still unverified, and the next thing likely to break:** `--inputFile` is documented for `.msix` and `.msixupload`, and `build:win:store` produces an `.appx` (`electron-builder --win appx`). Whether the CLI accepts that extension is untested.
 
-**There is no dry run, so do not reach for one.** The job is gated to stable tags, so the only ways to exercise it are a real release or a `workflow_dispatch` of `build.yml` with a stable `release_tag` — and neither is a rehearsal. `msstore publish` commits the submission unless it is given `-nc, --noCommit`, which this job does not pass, so a dispatch fired "just to see whether the `.appx` is accepted" creates a submission that enters certification and reaches users. Adding `--noCommit` behind a dispatch input is what a real validation path would need; until someone builds that, assume the Store needs the manual upload below, and treat the next stable release as the test.
+### Retrying a Store submission
+
+`publish-msstore.yml` submits an already-built appx on demand: `workflow_dispatch` with a stable `release_tag`, optionally a `run_id` (defaults to the most recent `build.yml` run for that tag), and a **`dry_run`** flag.
+
+It exists because `build.yml`'s own job has no usable retry. Re-running the failed job replays the workflow definition frozen into the original run, so a fix landed afterwards is never picked up; and re-dispatching `build.yml` rebuilds every platform and re-uploads the release assets with `--clobber`, rewriting a published release to correct a Store submission — and, if dispatched from `main` rather than the tag, rewriting it with binaries built from code that release never contained. v1.9.5 hit both walls.
+
+**`dry_run: true` is the only safe way to test this path.** It passes `-nc, --noCommit`, which creates the submission and leaves it in draft instead of sending it to certification. Without it — and this is what `build.yml` does — `msstore publish` commits, so a dispatch fired "just to see whether the `.appx` is accepted" puts a build in front of users. Validate with the dry run first; submit for real only once it comes back clean.
 
 Rotate by issuing a new client secret on the Entra registration, updating `AZURE_AD_APPLICATION_SECRET`, publishing one release to confirm, then deleting the old secret. The tenant, client and seller IDs change only when the registration or account does.
 
