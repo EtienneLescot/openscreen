@@ -376,12 +376,11 @@ describe("WhisperServerManager", () => {
 		const fs = await import("node:fs/promises");
 		const { spawn } = await import("node:child_process");
 		const dir = await mkdtemp(path.join(tmpdir(), "whisper-single-start-"));
+		const originalPlatform = Object.getOwnPropertyDescriptor(process, "platform");
 		try {
+			Object.defineProperty(process, "platform", { value: "linux", configurable: true });
 			const modelPath = path.join(dir, "ggml-large-v3-turbo-q5_0.bin");
-			const fakeBinaryPath = path.join(
-				dir,
-				process.platform === "win32" ? "whisper-stt-server.exe" : "whisper-stt-server",
-			);
+			const fakeBinaryPath = path.join(dir, "whisper-stt-server");
 			await fs.writeFile(modelPath, "dummy-ggml");
 			await fs.writeFile(fakeBinaryPath, "x", { mode: 0o755 });
 			const child = Object.assign(new EventEmitter(), {
@@ -407,6 +406,7 @@ describe("WhisperServerManager", () => {
 			expect(first).toEqual(second);
 			expect(spawn).toHaveBeenCalledOnce();
 		} finally {
+			if (originalPlatform) Object.defineProperty(process, "platform", originalPlatform);
 			vi.unstubAllGlobals();
 			await rm(dir, { recursive: true, force: true });
 		}
