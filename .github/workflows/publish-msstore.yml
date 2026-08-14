@@ -45,9 +45,12 @@ jobs:
   submit:
     name: Submit ${{ inputs.release_tag }} to the Store
     runs-on: windows-latest
-    # Same gate as build.yml: an RC reaching the Store would go through
-    # certification and land on every user's machine as an automatic update.
-    if: ${{ vars.MSSTORE_PRODUCT_ID != '' }}
+    # No job-level `if` on MSSTORE_PRODUCT_ID, deliberately. build.yml can afford
+    # to skip: it is one job among many in an automatic release. This one is
+    # something a person asked for by hand, and a skipped job is green and
+    # silent — the exact shape that let Homebrew and WinGet report success while
+    # publishing nothing for eight releases. Missing configuration is checked
+    # below and fails loudly instead.
     steps:
       - name: Validate the tag
         id: tag
@@ -63,23 +66,28 @@ jobs:
 
       # All-or-nothing, as in build.yml: a half-configured publisher is a
       # misnamed secret, and failing loudly beats submitting nothing quietly.
-      - name: Resolve Store credentials
+      - name: Resolve Store configuration
         id: store
         shell: bash
         env:
+          MSSTORE_PRODUCT_ID: ${{ vars.MSSTORE_PRODUCT_ID }}
           AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
           AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
           AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
           SELLER_ID: ${{ secrets.SELLER_ID }}
         run: |
-          required=(AZURE_AD_TENANT_ID AZURE_AD_APPLICATION_CLIENT_ID
-                    AZURE_AD_APPLICATION_SECRET SELLER_ID)
+          # MSSTORE_PRODUCT_ID is in here rather than in a job-level `if` so an
+          # unconfigured repository gets an error and a Summary line, not a
+          # silent skip on a run somebody triggered on purpose.
+          required=(MSSTORE_PRODUCT_ID AZURE_AD_TENANT_ID
+                    AZURE_AD_APPLICATION_CLIENT_ID AZURE_AD_APPLICATION_SECRET
+                    SELLER_ID)
           missing=()
           for name in "${required[@]}"; do
             [[ -n "${!name}" ]] || missing+=("$name")
           done
           if [[ ${#missing[@]} -ne 0 ]]; then
-            echo "::error::Store credentials incomplete; missing: ${missing[*]}"
+            echo "::error::Store configuration incomplete; missing: ${missing[*]}"
             exit 1
           fi
 
@@ -104,7 +112,28 @@ jobs:
           RUN_ID: ${{ inputs.run_id }}
         run: |
           if [[ -n "$RUN_ID" ]]; then
-            echo "Using the run id given: $RUN_ID"
+            # A hand-typed run id is the one input that can quietly ship the
+            # wrong bytes: nothing downstream re-checks what is inside the
+            # artifact, so a transposed digit could submit another commit's
+            # package to the Store under this tag. Confirm it is a build.yml run
+            # and that it was built from the tag being published.
+            INFO="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" \
+              --jq '{path: .path, sha: .head_sha}' 2>/dev/null)" || {
+              echo "::error::Run ${RUN_ID} not found in ${GITHUB_REPOSITORY}."
+              exit 1
+            }
+            RUN_PATH="$(jq -r .path <<<"$INFO")"
+            RUN_SHA="$(jq -r .sha <<<"$INFO")"
+            TAG_SHA="$(git rev-parse HEAD)"
+            if [[ "$RUN_PATH" != ".github/workflows/build.yml" ]]; then
+              echo "::error::Run ${RUN_ID} is ${RUN_PATH}, not build.yml."
+              exit 1
+            fi
+            if [[ "$RUN_SHA" != "$TAG_SHA" ]]; then
+              echo "::error::Run ${RUN_ID} built ${RUN_SHA}, but ${TAG} is ${TAG_SHA}."
+              exit 1
+            fi
+            echo "Using run ${RUN_ID}: build.yml at ${RUN_SHA}"
           else
             # Deliberately not filtered on conclusion: the run this is most
             # likely to be retrying is the one whose Store step failed, so
@@ -142,7 +171,8 @@ jobs:
           CLIENT_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
           DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          # Through env rather than `${{ }}` expanded straight into shell source.
+          # Secrets arrive through env, not through expression interpolation
+          # expanded straight into shell source.
           msstore reconfigure `
             --tenantId $env:TENANT_ID `
             --sellerId $env:SELLER_ID `
