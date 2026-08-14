@@ -141,6 +141,7 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 	private var audioMixer: AudioTrackMixer?
 	private var didStartWriting = false
 	private var didEmitRecordingStarted = false
+	private var didReportWriterFailure = false
 	private var isStopping = false
 	private var isPaused = false
 	private var pauseStartedAt: CMTime?
@@ -309,7 +310,8 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 		}
 
 		if videoInput.isReadyForMoreMediaData {
-			if videoInput.append(sampleBuffer), !didEmitRecordingStarted {
+			let appended = videoInput.append(sampleBuffer)
+			if appended, !didEmitRecordingStarted {
 				didEmitRecordingStarted = true
 				emit([
 					"event": "recording-started",
@@ -318,8 +320,29 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 					"height": outputHeight,
 					"captureBounds": captureBoundsPayload(),
 				])
+			} else if !appended {
+				reportWriterFailure("video append")
 			}
 		}
+	}
+
+	/// A failed AVAssetWriter keeps accepting appends and keeps answering false, so
+	/// a recorder that discards that Bool records nothing while the HUD counts on.
+	/// That is how a two-minute take was already lost by its fourth second and only
+	/// said so at finishWriting(). The Windows helper checks every WriteSample
+	/// HRESULT and escalates; this is the macOS half of the same contract -- report
+	/// once, at the append that actually failed, carrying the live writer.error.
+	private func reportWriterFailure(_ stage: String) {
+		guard !didReportWriterFailure, let writer else {
+			return
+		}
+		didReportWriterFailure = true
+		emitError(
+			code: "writer-failed",
+			message: "\(stage): "
+				+ (writer.error.map { "\($0)" }
+					?? "AVAssetWriter status \(writer.status.rawValue)"),
+		)
 	}
 
 	private func ensureRequestedPermissions() throws {
@@ -456,6 +479,25 @@ final class ScreenCaptureRecorder: NSObject, SCStreamOutput, SCStreamDelegate {
 			AVVideoCompressionPropertiesKey: [
 				AVVideoAverageBitRateKey: request.video.bitrate ?? 18_000_000,
 				AVVideoExpectedSourceFrameRateKey: request.video.fps,
+				// Without this the encoder defaults to B-frames, and a reordered
+				// stream needs a composition offset per sample. AVAssetWriter emits
+				// those in a version 0 `trun`, where ISO/IEC 14496-12 8.8.8.2 defines
+				// the field as UNSIGNED -- so a negative offset goes out as
+				// 0xFFFFFFF6 and the fragment writer refuses the fragment it is
+				// about to emit. That refusal is -11800 / -16341, raised from the
+				// single site in MediaToolbox that writes moof/traf/trun, which is
+				// why it appears if and only if movieFragmentInterval is set and
+				// lands exactly on a fragment boundary.
+				//
+				// Turning reordering off makes every offset zero and PTS == DTS, so
+				// the fragment stays representable. A screen recorder gives up
+				// nothing for it: B-frames buy compression on lookahead-friendly
+				// content and cost encode latency, which is the wrong trade for
+				// real-time capture. Measured on macOS 26.5 / M1, 1080p30 with
+				// system audio: with reordering the writer dies after 1-2s, without
+				// it a 43.6s take stops clean and a SIGKILL at 25s still leaves 27
+				// readable `moof` fragments.
+				AVVideoAllowFrameReorderingKey: false,
 			],
 		]
 		let input = AVAssetWriterInput(mediaType: .video, outputSettings: settings)
