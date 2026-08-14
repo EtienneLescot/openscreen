@@ -71,7 +71,7 @@ fn main() {
     if let Some(v) = ff.as_ref() {
         let lib_dir = Path::new(v).join("lib");
         println!("cargo:rustc-link-search=native={}", lib_dir.display());
-        for lib in ["avformat", "avcodec", "avutil", "swscale", "swresample"] {
+        for lib in ["avformat", "avcodec", "avutil", "swscale", "swresample", "avfilter"] {
             println!("cargo:rustc-link-lib=dylib={}", lib);
         }
     }

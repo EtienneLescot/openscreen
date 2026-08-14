@@ -3,6 +3,7 @@
 //! unique encodeur AAC alimente le même muxer que la vidéo.
 
 use crate::ffi::*;
+
 use crate::regions::SpeedSegment;
 use crate::scene::SceneAudio;
 use anyhow::{bail, Result};
@@ -767,6 +768,18 @@ fn stretch_pcm_to_length(pcm: &[Vec<f32>], target_samples: usize) -> PlanarPcm {
     }
 
     let speed = source_samples as f64 / target_samples as f64;
+
+    // atempo d'abord : le WSOLA ci-dessous est O(grain × rayon) par échantillon rendu, soit
+    // plusieurs minutes de CPU plein cœur sur un clip long (un export mesuré : 65,4 M
+    // échantillons, > 10 min sans finir) — l'export semble alors figé à ~80 %. Le filtre
+    // atempo fait le même time-stretch préservant la hauteur en O(n) avec les routines SIMD
+    // de ffmpeg : quelques secondes pour la même entrée. `avfilter_atempo_stretch` rend
+    // `None` si la chaîne ne monte pas (avfilter absent, vitesse hors bornes…) et le WSOLA
+    // reste le chemin de repli exact d'avant.
+    if let Some(stretched) = unsafe { avfilter_atempo_stretch(pcm, target_samples, speed) } {
+        return stretched;
+    }
+
     let mut stretcher = WsolaTimeStretcher::new(
         AUDIO_OUTPUT_SAMPLE_RATE,
         AUDIO_OUTPUT_CHANNELS,
@@ -790,6 +803,244 @@ fn stretch_pcm_to_length(pcm: &[Vec<f32>], target_samples: usize) -> PlanarPcm {
         }
     }
     exact
+}
+
+/// Découpe un facteur de vitesse en facteurs que `atempo` accepte individuellement : le
+/// filtre n'admet que [0.5, 100.0], on chaîne donc les dépassements (0.2 → [0.5, 0.5, 0.8],
+/// 250 → [100.0, 2.5]) — le produit des facteurs reconstitue la vitesse demandée.
+fn atempo_factors(speed: f64) -> Vec<f64> {
+    let mut factors = Vec::new();
+    let mut remaining = speed;
+    while remaining > 100.0 {
+        factors.push(100.0);
+        remaining /= 100.0;
+    }
+    while remaining < 0.5 {
+        factors.push(0.5);
+        remaining /= 0.5;
+    }
+    factors.push(remaining);
+    factors
+}
+
+/// RAII : libère le graphe même en sortie précoce sur erreur.
+struct FilterGraphGuard(*mut AVFilterGraph);
+
+impl Drop for FilterGraphGuard {
+    fn drop(&mut self) {
+        if !self.0.is_null() {
+            unsafe { avfilter_graph_free(&mut self.0) };
+        }
+    }
+}
+
+/// Étire le PCM d'un facteur `speed` via une chaîne `abuffer → atempo… → abuffersink`
+/// montée en processus, dans l'avfilter LGPL déjà vendored avec l'app (avfilter-11.dll /
+/// libavfilter.so.11 / libavfilter.11.dylib voyagent dans le même lot que avcodec —
+/// cf. scripts/fetch-ffmpeg.mjs qui copie TOUTES les av*.dll du build BtbN).
+///
+/// abuffer fixe le format de toute la chaîne à fltp 48 kHz stéréo — exactement ce que
+/// `decode_clip_audio` produit — et atempo préserve format/canaux/fréquence : aucune
+/// conversion, la sortie se recadre sur `target_samples` par troncature ou padding.
+///
+/// Retourne `None` sur toute défaillance (montage, négociation, exécution) : l'appelant
+/// retombe alors sur le WSOLA d'origine.
+unsafe fn avfilter_atempo_stretch(
+    pcm: &[Vec<f32>],
+    target_samples: usize,
+    speed: f64,
+) -> Option<PlanarPcm> {
+    if !speed.is_finite() || speed <= 0.0 {
+        return None;
+    }
+    let factors = atempo_factors(speed);
+
+    let graph_guard = FilterGraphGuard(avfilter_graph_alloc());
+    let graph = graph_guard.0;
+    if graph.is_null() {
+        return None;
+    }
+
+    let abuffer_name = CString::new("abuffer").ok()?;
+    let abuffersink_name = CString::new("abuffersink").ok()?;
+    let atempo_name = CString::new("atempo").ok()?;
+    let abuffer = avfilter_get_by_name(abuffer_name.as_ptr());
+    let abuffersink = avfilter_get_by_name(abuffersink_name.as_ptr());
+    let atempo = avfilter_get_by_name(atempo_name.as_ptr());
+    if abuffer.is_null() || abuffersink.is_null() || atempo.is_null() {
+        return None;
+    }
+
+    let create_filter = |graph: *mut AVFilterGraph,
+                         filter: *const AVFilter,
+                         name: &str,
+                         args: Option<&str>|
+     -> Option<*mut AVFilterContext> {
+        let cname = CString::new(name).ok()?;
+        let cargs = match args {
+            Some(args) => Some(CString::new(args).ok()?),
+            None => None,
+        };
+        let ctx = avfilter_graph_alloc_filter(graph, filter, cname.as_ptr());
+        if ctx.is_null() {
+            eprintln!("[openscreen-compositor] atempo: alloc_filter({name}) a rendu null");
+            return None;
+        }
+        // `map_or` consommerait `cargs` et le pointeur rendu par la closure serait
+        // dangling avant même l'appel — on emprunte donc pour la durée de l'appel.
+        let args_ptr = match &cargs {
+            Some(args) => args.as_ptr(),
+            None => ptr::null(),
+        };
+        let ret = avfilter_init_str(ctx, args_ptr);
+        if ret < 0 {
+            eprintln!(
+                "[openscreen-compositor] atempo: init_str({name}, {:?}) a échoué (ret={ret})",
+                args.unwrap_or("")
+            );
+            return None;
+        }
+        Some(ctx)
+    };
+
+    let rate = AUDIO_OUTPUT_SAMPLE_RATE;
+    let src_ctx = create_filter(
+        graph,
+        abuffer,
+        "in",
+        Some(&format!(
+            "time_base=1/{rate}:sample_rate={rate}:sample_fmt=fltp:channel_layout=stereo"
+        )),
+    )?;
+    let sink_ctx = create_filter(graph, abuffersink, "out", None)?;
+
+    let mut previous = src_ctx;
+    for (index, factor) in factors.iter().enumerate() {
+        let stage = create_filter(
+            graph,
+            atempo,
+            &format!("atempo{index}"),
+            Some(&format!("{factor}")),
+        )?;
+        if avfilter_link(previous, 0, stage, 0) < 0 {
+            eprintln!("[openscreen-compositor] atempo: avfilter_link a échoué au maillon {index}");
+            return None;
+        }
+        previous = stage;
+    }
+    if avfilter_link(previous, 0, sink_ctx, 0) < 0 {
+        eprintln!("[openscreen-compositor] atempo: avfilter_link vers le sink a échoué");
+        return None;
+    }
+    if avfilter_graph_config(graph, ptr::null_mut()) < 0 {
+        eprintln!("[openscreen-compositor] atempo: avfilter_graph_config a échoué");
+        return None;
+    }
+
+    // Alimentation : le PCM passe par trames fltp de 4096 échantillons. `av_buffersrc_add_frame`
+    // déplace les références du frame dans le graphe ; on alloue donc une trame neuve par
+    // tranche et on la libère après envoi (le shell est vide à ce point).
+    let source_samples = pcm.first().map(|plane| plane.len()).unwrap_or(0);
+    const CHUNK: usize = 4096;
+    let mut offset = 0usize;
+    while offset < source_samples {
+        let count = CHUNK.min(source_samples - offset);
+        let mut frame = av_frame_alloc();
+        if frame.is_null() {
+            eprintln!("[openscreen-compositor] atempo: av_frame_alloc (feed) a échoué");
+            return None;
+        }
+        (*frame).format = AVSampleFormat::AV_SAMPLE_FMT_FLTP as i32;
+        (*frame).sample_rate = rate;
+        (*frame).nb_samples = count as i32;
+        av_channel_layout_default(&mut (*frame).ch_layout, AUDIO_OUTPUT_CHANNELS as i32);
+        if av_frame_get_buffer(frame, 0) < 0 {
+            eprintln!("[openscreen-compositor] atempo: av_frame_get_buffer (feed) a échoué");
+            av_frame_free(&mut frame);
+            return None;
+        }
+        for channel in 0..AUDIO_OUTPUT_CHANNELS {
+            let destination = *(*frame).extended_data.add(channel) as *mut f32;
+            ptr::write_bytes(destination, 0, count);
+            if let Some(plane) = pcm.get(channel) {
+                let available = plane.len().saturating_sub(offset).min(count);
+                if available > 0 {
+                    ptr::copy_nonoverlapping(
+                        plane.as_ptr().add(offset),
+                        destination,
+                        available,
+                    );
+                }
+            }
+        }
+        (*frame).pts = offset as i64;
+        let ret = av_buffersrc_add_frame(src_ctx, frame);
+        av_frame_free(&mut frame);
+        if ret < 0 {
+            eprintln!("[openscreen-compositor] atempo: av_buffersrc_add_frame (offset={offset}) a échoué (ret={ret})");
+            return None;
+        }
+        offset += count;
+    }
+    // EOF : le graphe vide alors ses derniers grains.
+    av_buffersrc_add_frame(src_ctx, ptr::null_mut());
+
+    // Drain : après l'EOF de la source, chaque appel rend une trame jusqu'à AVERROR_EOF.
+    let mut frame = av_frame_alloc();
+    if frame.is_null() {
+        return None;
+    }
+    let mut stretched: PlanarPcm = vec![Vec::new(); AUDIO_OUTPUT_CHANNELS];
+    loop {
+        let ret = av_buffersink_get_frame(sink_ctx, frame);
+        if ret < 0 {
+            break;
+        }
+        let count = (*frame).nb_samples as usize;
+        let channels = (*frame).ch_layout.nb_channels.max(0) as usize;
+        // La négociation peut rendre fltp (plans) OU flt (entrelacé) — atempo offre les
+        // deux ; on désestrelingue au besoin plutôt que de contraindre le sink.
+        let frame_format = (*frame).format as AVSampleFormat::Type;
+        if frame_format == AVSampleFormat::AV_SAMPLE_FMT_FLTP
+            && channels == AUDIO_OUTPUT_CHANNELS
+        {
+            for channel in 0..AUDIO_OUTPUT_CHANNELS {
+                let plane = *(*frame).extended_data.add(channel) as *const f32;
+                stretched[channel]
+                    .extend_from_slice(std::slice::from_raw_parts(plane, count));
+            }
+        } else if frame_format == AVSampleFormat::AV_SAMPLE_FMT_FLT
+            && channels == AUDIO_OUTPUT_CHANNELS
+        {
+            let interleaved = *(*frame).extended_data.add(0) as *const f32;
+            let samples =
+                std::slice::from_raw_parts(interleaved, count * AUDIO_OUTPUT_CHANNELS);
+            for index in 0..count {
+                for channel in 0..AUDIO_OUTPUT_CHANNELS {
+                    stretched[channel].push(samples[index * AUDIO_OUTPUT_CHANNELS + channel]);
+                }
+            }
+        } else {
+            eprintln!(
+                "[openscreen-compositor] atempo: trame de sortie inattendue (format={frame_format:?} canaux={channels})"
+            );
+            av_frame_unref(frame);
+            av_frame_free(&mut frame);
+            return None;
+        }
+        av_frame_unref(frame);
+    }
+    av_frame_free(&mut frame);
+
+    // Recadrage exact : la longueur rendue par atempo diffère de `target_samples` de quelques
+    // échantillons de flush ; on tronque ou on padde, comme le faisait le chemin WSOLA.
+    let mut result: PlanarPcm = Vec::with_capacity(AUDIO_OUTPUT_CHANNELS);
+    for channel in 0..AUDIO_OUTPUT_CHANNELS {
+        let mut plane = std::mem::take(&mut stretched[channel]);
+        plane.resize(target_samples, 0.0);
+        result.push(plane);
+    }
+    Some(result)
 }
 
 /// Découpe le PCM gardé avec les mêmes spans et la même quantification frame que la vidéo.
@@ -1034,6 +1285,59 @@ mod tests {
     /// un seul suffit, mais les deux plans doivent exister (le format de sortie est stéréo).
     fn planar(samples: &[f32]) -> PlanarPcm {
         vec![samples.to_vec(), samples.to_vec()]
+    }
+
+    #[test]
+    fn atempo_factors_split_out_of_range_speeds() {
+        // Dans les bornes : un seul maillon.
+        assert_eq!(atempo_factors(1.25), vec![1.25]);
+        assert_eq!(atempo_factors(0.5), vec![0.5]);
+        // Hors bornes : chaîne dont le produit reconstitue la vitesse.
+        assert_eq!(atempo_factors(0.2), vec![0.5, 0.5, 0.8]);
+        assert_eq!(atempo_factors(250.0), vec![100.0, 2.5]);
+        for speed in [0.07f64, 0.3, 1.0, 3.7, 4_000.0] {
+            let product: f64 = atempo_factors(speed).iter().product();
+            assert!((product - speed).abs() < 1e-9, "produit={product} attendu={speed}");
+        }
+    }
+
+    #[test]
+    fn atempo_stretch_preserves_pitch_and_hits_the_target_length() {
+        // Sinus 440 Hz de 10 s : à speed 1.25 la sortie doit mesurer exactement 8 s
+        // (recadrage sur target_samples) et garder la hauteur — c'est la promesse du
+        // time-stretch, et la régression qu'on a vue quand on avait essayé un bête
+        // rééchantillonnage (voix qui monte d'un quart de ton).
+        let total = 10 * AUDIO_OUTPUT_SAMPLE_RATE as usize;
+        let mut pcm: PlanarPcm = vec![Vec::with_capacity(total); AUDIO_OUTPUT_CHANNELS];
+        for i in 0..total {
+            let t = i as f32 / AUDIO_OUTPUT_SAMPLE_RATE as f32;
+            let sample = (2.0 * PI * 440.0 * t).sin() * 0.5;
+            for channel in 0..AUDIO_OUTPUT_CHANNELS {
+                pcm[channel].push(sample);
+            }
+        }
+        let speed = 1.25;
+        let target = (total as f64 / speed).round() as usize;
+        let stretched =
+            unsafe { avfilter_atempo_stretch(&pcm, target, speed) }
+                .expect("la chaîne atempo doit monter quand avfilter est lié");
+        assert_eq!(stretched.len(), AUDIO_OUTPUT_CHANNELS);
+        for plane in &stretched {
+            assert_eq!(plane.len(), target);
+        }
+        // Hauteur mesurée par passages à zéro montants sur 1 s au milieu du signal.
+        let start = target / 2;
+        let window = AUDIO_OUTPUT_SAMPLE_RATE as usize;
+        let mut crossings = 0usize;
+        for i in start..start + window - 1 {
+            if stretched[0][i] <= 0.0 && stretched[0][i + 1] > 0.0 {
+                crossings += 1;
+            }
+        }
+        assert!(
+            (crossings as f64 - 440.0).abs() <= 2.0,
+            "hauteur dérivée : {crossings} Hz"
+        );
     }
 
     #[test]
