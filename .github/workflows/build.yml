@@ -1007,7 +1007,7 @@ jobs:
 
       # `msstore publish` takes a PROJECT root, not a package: it detects the app
       # type there (Electron, via package.json) and only then accepts the built
-      # package through `--inputFile`. This job used to check nothing out, so
+      # package through `--inputDirectory`. This job used to check nothing out, so
       # there was no project to point it at. Checkout runs before the artifact
       # download on purpose — actions/checkout cleans the workspace, and would
       # delete the package if it ran after.
@@ -1058,8 +1058,11 @@ jobs:
           # The positional argument is the project root, NOT the package — passing
           # the .appx there is what failed the first real run of this job on
           # v1.9.5: "We could not find a project publisher for the project at
-          # ...Openscreen.Setup.1.9.5.appx". The package goes through --inputFile.
-          msstore publish . --inputFile $appx.FullName --appId $env:PRODUCT_ID
+          # ...Openscreen.Setup.1.9.5.appx". The package goes through the option
+          # below, which takes the DIRECTORY holding it — the CLI's own usage
+          # says `-i, --inputDirectory`, and rejects the `--inputFile` that
+          # Microsoft Learn documents. The binary wins.
+          msstore publish . --inputDirectory $appx.Directory.FullName --appId $env:PRODUCT_ID
 
       # Report what happened, not what was configured. Keyed off `enabled` alone
       # under always(), this claimed "Submitted to the Store" when `msstore
