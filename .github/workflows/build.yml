@@ -999,6 +999,16 @@ jobs:
             exit 1
           fi
 
+      # `msstore publish` takes a PROJECT root, not a package: it detects the app
+      # type there (Electron, via package.json) and only then accepts the built
+      # package through `--inputFile`. This job used to check nothing out, so
+      # there was no project to point it at. Checkout runs before the artifact
+      # download on purpose — actions/checkout cleans the workspace, and would
+      # delete the package if it ran after.
+      - name: Check out the project
+        if: steps.store.outputs.enabled == 'true'
+        uses: actions/checkout@v7
+
       - name: Download Store package
         if: steps.store.outputs.enabled == 'true'
         uses: actions/download-artifact@v4
@@ -1031,7 +1041,11 @@ jobs:
             throw 'more than one .appx in the artifact — refusing to guess which one to submit'
           }
           Write-Output "Submitting $($appx.Name) to product $env:PRODUCT_ID"
-          msstore publish $appx.FullName -id $env:PRODUCT_ID
+          # The positional argument is the project root, NOT the package — passing
+          # the .appx there is what failed the first real run of this job on
+          # v1.9.5: "We could not find a project publisher for the project at
+          # ...Openscreen.Setup.1.9.5.appx". The package goes through --inputFile.
+          msstore publish . --inputFile $appx.FullName --appId $env:PRODUCT_ID
 
       # Report what happened, not what was configured. Keyed off `enabled` alone
       # under always(), this claimed "Submitted to the Store" when `msstore
