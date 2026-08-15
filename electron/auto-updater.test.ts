@@ -70,6 +70,10 @@ describe("blockedFromInstalling", () => {
 describe("self-update flow", () => {
 	beforeEach(() => {
 		mocks.app.isPackaged = true;
+		// Back to electron-updater's DEFAULTS before every test, so "these are false" can only
+		// pass because this test's call configured them — not because an earlier test did.
+		mocks.autoUpdater.autoDownload = true;
+		mocks.autoUpdater.autoInstallOnAppQuit = true;
 		mocks.autoUpdater.checkForUpdates.mockReset();
 		mocks.autoUpdater.downloadUpdate.mockReset();
 		mocks.autoUpdater.quitAndInstall.mockReset();
@@ -93,10 +97,21 @@ describe("self-update flow", () => {
 	// is a window, so the stock autoInstallOnAppQuit would fire a ~243 MB installer when the
 	// user merely closed the HUD.
 	it("disables auto-download and install-on-quit before doing anything", async () => {
-		mocks.autoUpdater.checkForUpdates.mockResolvedValue({ updateInfo: { version: "1.9.2" } });
+		// Asserted INSIDE the mock: checking after the call would still pass if the settings
+		// were applied late, and "late" is the whole failure — a check that starts downloading
+		// before autoDownload is turned off has already pulled ~243 MB the user never asked for.
+		const settingsWhenChecked: Array<boolean> = [];
+		mocks.autoUpdater.checkForUpdates.mockImplementation(() => {
+			settingsWhenChecked.push(
+				mocks.autoUpdater.autoDownload,
+				mocks.autoUpdater.autoInstallOnAppQuit,
+			);
+			return Promise.resolve({ updateInfo: { version: "1.9.2" } });
+		});
+
 		await checkForSelfUpdate("nsis");
-		expect(mocks.autoUpdater.autoDownload).toBe(false);
-		expect(mocks.autoUpdater.autoInstallOnAppQuit).toBe(false);
+
+		expect(settingsWhenChecked).toEqual([false, false]);
 	});
 
 	it("reports current when the feed offers the running version", async () => {

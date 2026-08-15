@@ -36,21 +36,21 @@ export function blockedFromInstalling(state: InstallReadiness): string | null {
 	return null;
 }
 
-let configured = false;
-
 /** Loaded lazily: importing electron-updater costs startup time on every launch, and the
  *  channels that cannot use it must not pay for it at all. */
 async function getUpdater() {
 	const { autoUpdater } = await import("electron-updater");
-	if (!configured) {
-		// Never surprise the user with a 240 MB download or an install they did not ask for.
-		// `window-all-closed` quits this app, and the HUD is a window — with the default
-		// `autoInstallOnAppQuit` simply closing the HUD would kick off an installer.
-		autoUpdater.autoDownload = false;
-		autoUpdater.autoInstallOnAppQuit = false;
-		autoUpdater.logger = null;
-		configured = true;
-	}
+	// Never surprise the user with a 240 MB download or an install they did not ask for.
+	// `window-all-closed` quits this app, and the HUD is a window — with the default
+	// `autoInstallOnAppQuit` simply closing the HUD would kick off an installer.
+	//
+	// Reapplied on every call rather than set once behind a flag: these are three property
+	// writes, so memoising them buys nothing measurable, and a "configured" flag would mean
+	// anything that later reset them is never corrected — while making the guarantee hold only
+	// for whichever caller happened to come first.
+	autoUpdater.autoDownload = false;
+	autoUpdater.autoInstallOnAppQuit = false;
+	autoUpdater.logger = null;
 	return autoUpdater;
 }
 
