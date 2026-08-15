@@ -8,7 +8,8 @@
 		"build": "docusaurus build",
 		"serve": "docusaurus serve",
 		"clear": "docusaurus clear",
-		"typecheck": "tsc --noEmit"
+		"typecheck": "tsc --noEmit",
+		"check:media": "node scripts/check-media-budget.mjs"
 	},
 	"dependencies": {
 		"@docusaurus/core": "^3.9.2",
