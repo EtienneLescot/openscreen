@@ -370,6 +370,28 @@ jobs:
             UserKnownHostsFile ~/.ssh/aur_known_hosts
           SSHCONF
 
+      # "Permission denied (publickey)" is the same message for three different
+      # problems: a secret that is not a readable key, a key nobody registered
+      # on AUR, and a key whose account is not a maintainer of this package.
+      # v1.9.1, v1.9.2 and v1.9.5 all died here and none of them said which.
+      # A public key is public, so printing it costs nothing and lets the value
+      # CI presents be compared against what is on the account; `ssh -T` is the
+      # decisive one, because AUR answers it by naming the user it authenticated.
+      - name: Identify the key AUR sees
+        if: steps.aur_secret.outputs.configured == 'true' && !inputs.dry_run
+        continue-on-error: true
+        run: |
+          if ! ssh-keygen -y -f ~/.ssh/aur_key > /tmp/aur_key.pub 2>/tmp/aur_key.err; then
+            echo "::error::AUR_SSH_PRIVATE_KEY is not a readable private key: $(cat /tmp/aur_key.err)"
+            exit 0
+          fi
+          echo "Public key this workflow presents:"
+          cat /tmp/aur_key.pub
+          ssh-keygen -lf /tmp/aur_key.pub || true
+          echo "--- what AUR says about it ---"
+          # Exits non-zero by design (interactive shell disabled); the message is the payload.
+          ssh -o BatchMode=yes -T aur@aur.archlinux.org 2>&1 || true
+
       - name: Commit and push
         if: steps.aur_secret.outputs.configured == 'true' && !inputs.dry_run
         working-directory: aur-repo
