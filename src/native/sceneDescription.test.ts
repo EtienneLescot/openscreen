@@ -760,6 +760,38 @@ describe("buildSceneDescription.cropByClip", () => {
 	});
 });
 
+// --- audio -----------------------------------------------------------------
+
+describe("buildSceneDescription.audio", () => {
+	// The editor claims "what you hear is what you export". That only holds while this
+	// payload carries nothing the preview cannot reproduce on the raw source file it
+	// plays: a linear gain and a whole-sample delay, and nothing else. These tests exist
+	// so a future stage with state (a filter, a compressor) or one measured over the
+	// assembled programme (a loudness normaliser) cannot be added here unnoticed.
+	it("carries the authored offset and gain through to the native payload", () => {
+		const doc = makeDoc({ legacyEditor: { audioOffsetMs: -120, audioGainDb: 4.5 } });
+		expect(buildSceneDescription(doc).audio).toEqual({ offsetMs: -120, gainDb: 4.5 });
+	});
+
+	it("defaults to a no-op for a project that predates the controls", () => {
+		expect(buildSceneDescription(makeDoc()).audio).toEqual({ offsetMs: 0, gainDb: 0 });
+	});
+
+	it("exposes only offset and gain", () => {
+		// Guards the parity contract itself, not a value: an extra key here means the
+		// export applies something the preview does not.
+		expect(Object.keys(buildSceneDescription(makeDoc()).audio).sort()).toEqual([
+			"gainDb",
+			"offsetMs",
+		]);
+	});
+
+	it("clamps to the range the sliders offer, so the UI can always display it", () => {
+		const doc = makeDoc({ legacyEditor: { audioOffsetMs: 9_999, audioGainDb: -99 } });
+		expect(buildSceneDescription(doc).audio).toEqual({ offsetMs: 500, gainDb: -12 });
+	});
+});
+
 // --- settings mapping ------------------------------------------------------
 
 describe("buildSceneDescription.settings mapping", () => {

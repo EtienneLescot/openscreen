@@ -67,8 +67,7 @@
 	},
 	"audio": {
 		"title": "Audio",
-		"help": "Nudge audio into sync, adjust output trim, and apply automatic speech-focused EQ, compression, and loudness finishing.",
-		"autoMaster": "Auto master voice",
+		"help": "Nudge audio timing and trim the output level. Both apply identically in the preview and the export.",
 		"syncOffset": "Sync offset",
 		"outputGain": "Output trim",
 		"reset": "Reset audio"

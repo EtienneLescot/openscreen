@@ -306,10 +306,9 @@
 	},
 	"audio": {
 		"title": "Audio",
-		"autoMaster": "Mastering vocal automatique",
 		"syncOffset": "Décalage de synchronisation",
 		"outputGain": "Niveau de sortie",
 		"reset": "Réinitialiser l’audio",
-		"help": "Nettoyez et équilibrez automatiquement la voix, puis ajustez précisément la synchronisation et le niveau."
+		"help": "Ajustez le calage de l’audio et le niveau de sortie. Les deux s’appliquent à l’identique dans l’aperçu et à l’export."
 	}
 }

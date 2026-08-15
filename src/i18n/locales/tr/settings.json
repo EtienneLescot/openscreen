@@ -306,10 +306,9 @@
 	},
 	"audio": {
 		"title": "Ses",
-		"autoMaster": "Otomatik ses mastering",
 		"syncOffset": "Senkronizasyon kaydırması",
 		"outputGain": "Çıkış seviyesi",
 		"reset": "Sesi sıfırla",
-		"help": "Konuşma sesini otomatik olarak temizleyip dengeleyin, ardından zamanlama ve seviyeyi hassas biçimde ayarlayın."
+		"help": "Ses zamanlamasını ve çıkış seviyesini ayarlayın. İkisi de önizlemede ve dışa aktarmada aynı şekilde uygulanır."
 	}
 }

@@ -55,15 +55,23 @@ export function resolveAudioPreviewTime(
 
 interface PreviewAudioGraph {
 	context: AudioContext;
-	highpasses: BiquadFilterNode[];
-	compressor: DynamicsCompressorNode;
 	gain: GainNode;
 }
 
+/**
+ * The preview's ONLY audio processing is the output trim, and that is deliberate: it is
+ * the same `10 ** (dB / 20)` scalar `finish_audio` applies natively, so what the editor
+ * plays is what the export writes.
+ *
+ * Nothing with state belongs here. The export runs on the assembled timeline (trimmed,
+ * speed-adjusted, concatenated); the preview runs on the untouched source file, seeked.
+ * A filter or a compressor would see a different signal on each side and drift — and an
+ * offline stage measured over the whole programme (a loudness normaliser) cannot exist
+ * here at all, because the preview never holds that programme.
+ */
 function applyPreviewAudioSettings(
 	graph: PreviewAudioGraph | null,
 	elements: Array<HTMLAudioElement | null>,
-	autoMaster: boolean,
 	gainDb: number,
 ): void {
 	const outputGain = 10 ** (gainDb / 20);
@@ -73,15 +81,6 @@ function applyPreviewAudioSettings(
 		}
 		return;
 	}
-	for (const filter of graph.highpasses) {
-		filter.frequency.value = autoMaster ? 80 : 20;
-		filter.Q.value = 0.707;
-	}
-	graph.compressor.threshold.value = autoMaster ? -18 : 0;
-	graph.compressor.knee.value = autoMaster ? 12 : 0;
-	graph.compressor.ratio.value = autoMaster ? 3 : 1;
-	graph.compressor.attack.value = 0.01;
-	graph.compressor.release.value = 0.12;
 	graph.gain.gain.value = outputGain;
 }
 
@@ -192,16 +191,10 @@ export function VirtualPreview({
 	const [supplementalAudioEl, setSupplementalAudioEl] = useState<HTMLAudioElement | null>(null);
 	const [supplementalAudioSrc, setSupplementalAudioSrc] = useState<string | null>(null);
 	const [audioProbeComplete, setAudioProbeComplete] = useState(false);
-	const audioSettingsRef = useRef({
-		autoMaster: settings.audioAutoMaster,
-		gainDb: settings.audioGainDb,
-	});
+	const audioGainDbRef = useRef(settings.audioGainDb);
 	useEffect(() => {
-		audioSettingsRef.current = {
-			autoMaster: settings.audioAutoMaster,
-			gainDb: settings.audioGainDb,
-		};
-	}, [settings.audioAutoMaster, settings.audioGainDb]);
+		audioGainDbRef.current = settings.audioGainDb;
+	}, [settings.audioGainDb]);
 	const audioContextRef = useRef<AudioContext | null>(null);
 	const audioContextCloseTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 	const audioSourceNodesRef = useRef(new WeakMap<HTMLAudioElement, MediaElementAudioSourceNode>());
@@ -271,69 +264,62 @@ export function VirtualPreview({
 		};
 	}, [activeSource?.filePath]);
 
-	// Route preview audio through the same fast voice-oriented controls the native export uses.
-	// The primary media element carries track 1; on macOS the existing IPC helper extracts track 2
-	// (normally the microphone) so both are audible instead of Chromium silently choosing one.
+	// Sum the audio elements into one gain node so the output trim can boost past 0 dB,
+	// which `element.volume` cannot do. The primary media element carries track 1; on macOS
+	// the existing IPC helper extracts track 2 (normally the microphone) so both are audible
+	// instead of Chromium silently choosing one.
 	useEffect(() => {
 		if (!primaryAudioEl || !audioProbeComplete) return;
 		if (supplementalAudioSrc && !supplementalAudioEl) return;
-		const connectedSources: MediaElementAudioSourceNode[] = [];
-		const highpasses: BiquadFilterNode[] = [];
-		let compressor: DynamicsCompressorNode | null = null;
-		let gain: GainNode | null = null;
-		try {
-			let context = audioContextRef.current;
-			if (!context || context.state === "closed") {
-				context = new AudioContext();
-				audioContextRef.current = context;
-				audioSourceNodesRef.current = new WeakMap();
+		const elements = [primaryAudioEl, supplementalAudioEl].filter(
+			(value): value is HTMLAudioElement => Boolean(value),
+		);
+		const graph = ((): PreviewAudioGraph | null => {
+			try {
+				let context = audioContextRef.current;
+				if (!context || context.state === "closed") {
+					context = new AudioContext();
+					audioContextRef.current = context;
+					audioSourceNodesRef.current = new WeakMap();
+				}
+				const gain = context.createGain();
+				gain.connect(context.destination);
+				return { context, gain };
+			} catch {
+				return null;
 			}
-			compressor = context.createDynamicsCompressor();
-			gain = context.createGain();
-			compressor.connect(gain).connect(context.destination);
-			for (const element of [primaryAudioEl, supplementalAudioEl].filter(
-				(value): value is HTMLAudioElement => Boolean(value),
-			)) {
+		})();
+		if (!graph) {
+			// WebAudio can be unavailable in unit tests or under a denied audio policy. No source
+			// node was created, so `volume` still reaches the output — capped at 0 dB.
+			applyPreviewAudioSettings(null, elements, audioGainDbRef.current);
+			return;
+		}
+
+		const connectedSources: MediaElementAudioSourceNode[] = [];
+		for (const element of elements) {
+			try {
 				let source = audioSourceNodesRef.current.get(element);
 				if (!source) {
-					source = context.createMediaElementSource(element);
+					source = graph.context.createMediaElementSource(element);
 					audioSourceNodesRef.current.set(element, source);
 				}
 				source.disconnect();
-				const highpass = context.createBiquadFilter();
-				highpass.type = "highpass";
-				source.connect(highpass).connect(compressor);
+				source.connect(graph.gain);
 				connectedSources.push(source);
-				highpasses.push(highpass);
+			} catch {
+				// Routing THIS element failed; leave the others alone. Once
+				// createMediaElementSource has run for an element its audio no longer reaches
+				// the default output, so tearing the whole graph down here would mute the
+				// preview outright rather than degrade it.
 			}
-			const graph = { context, highpasses, compressor, gain };
-			audioGraphRef.current = graph;
-			applyPreviewAudioSettings(
-				graph,
-				[primaryAudioEl, supplementalAudioEl],
-				audioSettingsRef.current.autoMaster,
-				audioSettingsRef.current.gainDb,
-			);
-		} catch {
-			// WebAudio can be unavailable in unit tests or under a denied audio policy. The media
-			// elements remain usable; the sync loop below still applies offset and playback state.
-			for (const source of connectedSources) source.disconnect();
-			for (const highpass of highpasses) highpass.disconnect();
-			compressor?.disconnect();
-			gain?.disconnect();
-			applyPreviewAudioSettings(
-				null,
-				[primaryAudioEl, supplementalAudioEl],
-				audioSettingsRef.current.autoMaster,
-				audioSettingsRef.current.gainDb,
-			);
 		}
+		audioGraphRef.current = graph;
+		applyPreviewAudioSettings(graph, elements, audioGainDbRef.current);
 		return () => {
 			audioGraphRef.current = null;
 			for (const source of connectedSources) source.disconnect();
-			for (const highpass of highpasses) highpass.disconnect();
-			compressor?.disconnect();
-			gain?.disconnect();
+			graph.gain.disconnect();
 		};
 	}, [primaryAudioEl, supplementalAudioEl, supplementalAudioSrc, audioProbeComplete]);
 
@@ -361,10 +347,9 @@ export function VirtualPreview({
 		applyPreviewAudioSettings(
 			audioGraphRef.current,
 			[primaryAudioRef.current, supplementalAudioRef.current],
-			settings.audioAutoMaster,
 			settings.audioGainDb,
 		);
-	}, [settings.audioAutoMaster, settings.audioGainDb]);
+	}, [settings.audioGainDb]);
 
 	const setPrimaryAudioElement = useCallback((element: HTMLAudioElement | null) => {
 		primaryAudioRef.current = element;

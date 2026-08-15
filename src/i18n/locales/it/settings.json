@@ -306,10 +306,9 @@
 	},
 	"audio": {
 		"title": "Audio",
-		"autoMaster": "Mastering vocale automatico",
 		"syncOffset": "Offset sincronizzazione",
 		"outputGain": "Livello di uscita",
 		"reset": "Reimposta audio",
-		"help": "Pulisci e bilancia automaticamente la voce, quindi regola con precisione sincronizzazione e livello."
+		"help": "Regola la sincronizzazione dell’audio e il livello di uscita. Entrambi si applicano allo stesso modo nell’anteprima e nell’esportazione."
 	}
 }
