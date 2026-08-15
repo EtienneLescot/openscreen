@@ -2,17 +2,32 @@ import { describe, expect, it, vi } from "vitest";
 import { addSelectedAssetToTimeline } from "./MediaStage";
 
 describe("addSelectedAssetToTimeline", () => {
-	it("reports success after the selected asset is added", async () => {
-		const onAdd = vi.fn(async () => undefined);
+	it("reports success only once the selected asset has been added", async () => {
+		// Deferred on purpose: with an immediately-resolved onAdd this test passes whether
+		// onSuccess fires before or after the insertion, which is the one thing it is here
+		// to pin — a success toast for a clip that is not on the timeline yet.
+		let resolveAdd!: () => void;
+		const onAdd = vi.fn(
+			() =>
+				new Promise<void>((resolve) => {
+					resolveAdd = resolve;
+				}),
+		);
 		const onSuccess = vi.fn();
 
-		await addSelectedAssetToTimeline(
+		const pending = addSelectedAssetToTimeline(
 			{ id: "asset-7", label: "", originalPath: "/recordings/demo.mp4" },
 			onAdd,
 			onSuccess,
 		);
 
 		expect(onAdd).toHaveBeenCalledWith("asset-7");
+		expect(onSuccess).not.toHaveBeenCalled();
+
+		resolveAdd();
+		await pending;
+
+		// Empty label falls back to the basename.
 		expect(onSuccess).toHaveBeenCalledWith("demo.mp4");
 	});
 
