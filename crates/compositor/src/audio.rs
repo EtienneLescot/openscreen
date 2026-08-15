@@ -1166,14 +1166,38 @@ mod tests {
     fn out_of_range_settings_are_clamped_to_the_editor_bounds() {
         // A hand-edited project (or a future UI change) must not be able to ask for an
         // offset or a gain the sliders cannot display.
-        let result = finish_audio(
-            planar(&[0.5, 0.5]),
+        //
+        // The buffer has to outlast the clamp for this to mean anything: on a short input
+        // every delay past its length produces silence, so the assertion would hold for a
+        // 500 ms clamp and for no clamp at all. Track a single impulse instead and check
+        // WHERE it lands.
+        let limit_samples = AUDIO_OUTPUT_SAMPLE_RATE as usize / 2; // 500 ms
+        let mut input = vec![0.0f32; limit_samples + 2];
+        input[0] = 0.5;
+        let delayed = finish_audio(
+            planar(&input),
             SceneAudio {
                 offset_ms: 9_999.0,
-                gain_db: 99.0,
+                gain_db: 0.0,
             },
         );
-        assert_eq!(result[0], vec![0.0, 0.0], "offset clamps to 500 ms, not 10 s");
+        assert_eq!(
+            delayed[0][limit_samples], 0.5,
+            "the impulse must land at 500 ms, not at the requested 9.999 s"
+        );
+        assert_eq!(delayed[0][limit_samples - 1], 0.0);
+        assert_eq!(delayed[0][0], 0.0);
+
+        let advanced = finish_audio(
+            planar(&input),
+            SceneAudio {
+                offset_ms: -9_999.0,
+                gain_db: 0.0,
+            },
+        );
+        // Advancing by the same clamp drops everything before it; the impulse at sample 0
+        // is gone and nothing is left behind it.
+        assert!(advanced[0].iter().all(|sample| *sample == 0.0));
 
         let quiet = finish_audio(
             planar(&[0.5]),
@@ -1184,5 +1208,15 @@ mod tests {
         );
         let floor = 0.5 * 10.0f32.powf(-12.0 / 20.0);
         assert!((quiet[0][0] - floor).abs() < 1e-6);
+
+        let loud = finish_audio(
+            planar(&[0.1]),
+            SceneAudio {
+                offset_ms: 0.0,
+                gain_db: 99.0,
+            },
+        );
+        let ceiling = 0.1 * 10.0f32.powf(12.0 / 20.0);
+        assert!((loud[0][0] - ceiling).abs() < 1e-6);
     }
 }
