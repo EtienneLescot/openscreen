@@ -414,7 +414,15 @@ span.replay {
 	transition: opacity 0.18s ease;
 }
 
-.clipReady {
+/* Compound, not `.clipReady` alone, and this is not tidiness.
+   `.clipReady { opacity: 1 }` and `.clip { opacity: 0 }` have equal specificity,
+   so which wins is decided by source order — and the production CSS optimiser
+   merges rules that share a declaration, so this one got folded in with
+   Infima's `.alert .close:hover` and hoisted ABOVE `.clip`. The result was a
+   clip that scrubbed perfectly at opacity 0 behind a poster that never moved:
+   correct in dev, invisible in the build, and no error anywhere. Raising the
+   specificity makes the outcome independent of what the optimiser does. */
+.clip.clipReady {
 	opacity: 1;
 }
 
@@ -479,7 +487,10 @@ span.replay {
 	animation-fill-mode: forwards;
 }
 
-.railDone {
+/* Compound for the same reason as `.clip.clipReady` above: `transform` is a
+   common declaration, and a same-specificity rule that the optimiser is free to
+   reorder is not a rule, it is a coin toss. */
+.railFill.railDone {
 	transform: scaleX(1);
 }
 
