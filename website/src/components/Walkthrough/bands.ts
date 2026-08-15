@@ -23,6 +23,24 @@ export type BandMedia = {
 	resultSm?: string;
 	clip?: string;
 	clipSm?: string;
+	/**
+	 * The scroll-driven rendition, where one exists.
+	 *
+	 * A different encode of the same footage, not the same file: scrubbing seeks
+	 * rather than plays, and a seek into a long GOP has to decode from the
+	 * preceding keyframe, so the shipped `clip` (`-g 60`) stutters under a
+	 * scrollwheel. These are all-intra — every frame its own keyframe — which
+	 * makes a seek exact and cheap and costs 8.4x the bytes at 30fps. Measured on
+	 * the export beat: 32 KB at -g 60, 402 KB all-intra. Dropping to 20fps takes
+	 * that to 268 KB, and 20fps is more than a scroll can resolve: a beat spans
+	 * roughly a viewport and a half of scrolling, so a frame lands every ~15px.
+	 */
+	scrub?: {
+		clip: string;
+		clipSm: string;
+		seconds: number;
+		frames: number;
+	};
 	/** Intrinsic size of the desktop asset. Both are needed on the <img> or the
 	 *  page reflows when it lands; `aspect-ratio` alone loses Safari 14. */
 	width: number;
@@ -60,8 +78,8 @@ export const BANDS: Band[] = [
 		index: "01",
 		kicker: "record",
 		claim: "It records with the operating system, not around it.",
-		body: "Pick a window, a display, or a region. macOS goes through ScreenCaptureKit and Windows through Windows Graphics Capture — the same capture path the system uses itself. The pointer is recorded as data rather than burned into the pixels, so you can restyle it after the fact.",
-		fact: "ScreenCaptureKit · Windows Graphics Capture · system audio on its own track",
+		body: "Pick a window or a display. macOS goes through ScreenCaptureKit and Windows through Windows Graphics Capture — the same capture path the system uses itself. The pointer is recorded as data rather than burned into the pixels, so you can restyle it after the fact.",
+		fact: "ScreenCaptureKit · Windows Graphics Capture · system audio without extra drivers",
 		shape: "statement",
 	},
 	{
@@ -79,7 +97,7 @@ export const BANDS: Band[] = [
 			height: 288,
 			widthSm: 640,
 			heightSm: 118,
-			alt: "The OpenScreen timeline: a ruler in minutes and seconds, two green zoom blocks labelled 1.80x and 2.20x sitting on their own lane, prompts reading “Press A to add annotation”, “Press S to add speed” and “Press T to add trim” on the empty lanes below, and one audio clip drawn as a waveform along the bottom.",
+			alt: "The OpenScreen timeline: a ruler in minutes and seconds, then prompts reading “Press A to add annotation”, “Press S to add speed” and “Press T to add trim” on empty lanes, then two green zoom blocks labelled 1.80x and 2.20x sharing one lane below them, then “Press C to add a Full Camera segment”, and one audio clip drawn as a waveform along the bottom.",
 		},
 	},
 	{
@@ -87,8 +105,8 @@ export const BANDS: Band[] = [
 		index: "03",
 		kicker: "captions",
 		claim: "Transcription runs on your machine.",
-		body: "Whisper is bundled. The audio never leaves the laptop, it works with the network off, and what comes back is editable text — set the typeface, the size, the colour, the position. Burn it into the render, or keep it as a track you can hand to someone else.",
-		fact: "whisper.cpp · offline · Metal, CUDA or CPU",
+		body: "whisper.cpp ships with the app, and the model downloads once on first use — after that it works with the network off. The audio never leaves the laptop, and what comes back is editable text — set the typeface, the size, the colour, the position, then burn it into the render. Delete a word from the transcript and that span is cut from the video too.",
+		fact: "whisper.cpp · offline after first run · Metal, Vulkan or CPU",
 		shape: "plate",
 		media: {
 			image: `${IMG}/03-captions-a.jpg`,
@@ -105,13 +123,19 @@ export const BANDS: Band[] = [
 		index: "04",
 		kicker: "agent",
 		claim: "Or describe the edit instead.",
-		body: "The agent reads the actual transcript and the actual timeline, so it answers with timecodes you can go and check — which spans it will cut, and how much that saves. It proposes; you accept. Every edit it makes is an ordinary undoable one, and it needs a provider key you supply. Nothing runs until you connect one.",
+		body: "The agent reads the actual transcript and the actual timeline, so it answers with timecodes you can go and check — which spans it will cut, and how much that saves. It makes the edit, then tells you exactly what it changed — or, with Project edits switched off in Settings → AI, it describes the cut and waits for your word. Every edit it makes is an ordinary undoable one, and it needs a provider key you supply. Nothing runs until you connect one.",
 		fact: "bring your own key · off by default · every edit is undoable",
 		shape: "plate",
 		flip: true,
 		media: {
 			image: `${IMG}/04-agent-a.jpg`,
 			imageSm: `${IMG}/04-agent-sm-a.jpg`,
+			scrub: {
+				clip: `${VID}/04-agent-scrub.mp4`,
+				clipSm: `${VID}/04-agent-sm-scrub.mp4`,
+				seconds: 2.75,
+				frames: 56,
+			},
 			width: 960,
 			height: 540,
 			widthSm: 640,
@@ -124,7 +148,7 @@ export const BANDS: Band[] = [
 		index: "05",
 		kicker: "export",
 		claim: "Then it writes the file.",
-		body: "MP4 or GIF, 720p to source, 24 or 30 or 60, H.264 or H.265. The encode runs on your machine and counts frames while it does. No queue, no account, no watermark. The file is on disk when the bar fills.",
+		body: "MP4 at 720p to source, 24 or 30 or 60, H.264 or H.265 — or a GIF. The encode runs on your machine and counts frames while it does. No queue, no account, no watermark. The file is on disk when the bar fills.",
 		fact: "H.264 / H.265 · 24, 30, 60 fps · no watermark",
 		// A plate, not a letterbox: the export dialog is already close to 16:9,
 		// and cropping it to a 3.5:1 strip cuts the format row off the top and the
@@ -137,6 +161,12 @@ export const BANDS: Band[] = [
 			resultSm: `${IMG}/05-export-sm-b.jpg`,
 			clip: `${VID}/05-export.mp4`,
 			clipSm: `${VID}/05-export-sm.mp4`,
+			scrub: {
+				clip: `${VID}/05-export-scrub.mp4`,
+				clipSm: `${VID}/05-export-sm-scrub.mp4`,
+				seconds: 3.2,
+				frames: 64,
+			},
 			width: 960,
 			height: 540,
 			widthSm: 640,

@@ -19,15 +19,30 @@
  * for a large share of visitors, and looks perfect on the machine that made it.
  */
 
-import { readdirSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readdirSync, readFileSync, statSync } from "node:fs";
 import { join, relative, resolve } from "node:path";
 
 const ROOT = resolve(import.meta.dirname, "..");
 
 const RULES = [
-	{ dir: "static/video", ext: ".mp4", max: 200_000 },
-	{ dir: "static/img/walkthrough", ext: ".jpg", max: 70_000 },
+	{ dir: "static/video", ext: [".mp4"], max: 200_000 },
+	{ dir: "static/img/walkthrough", ext: [".jpg", ".avif"], max: 70_000 },
 ];
+
+/**
+ * A `-scrub` clip is a different kind of file and gets a different ceiling.
+ *
+ * It is never played; scroll position seeks it. A seek into a long GOP has to
+ * decode from the preceding keyframe, so these are encoded all-intra — every
+ * frame its own keyframe — which is the entire reason they are large. Measured
+ * on the export beat at 960x540: 32 KB at `-g 60`, 402 KB all-intra at 30fps,
+ * 268 KB once dropped to 20fps. Twenty frames a second is finer than a scroll
+ * resolves, and it is where this ceiling was set.
+ *
+ * The generous per-file number is safe because TOTAL_MAX is the rule that
+ * actually protects the repository, and it did not move.
+ */
+const SCRUB_MAX = 300_000;
 const TOTAL_MAX = 1_600_000;
 
 const problems = [];
@@ -63,6 +78,29 @@ function hasAudioTrack(file) {
 	return false;
 }
 
+/**
+ * Why an AVIF might not belong. It is offered *ahead of* the JPEG and never
+ * instead of it — an engine that cannot decode AVIF falls through to the same
+ * <picture>'s JPEG, and the schema.org screenshot points at the JPEG as well —
+ * so the pair only pays for itself while the AVIF is the smaller of the two. An
+ * encoder run that came out heavier would hand every modern browser the worse
+ * file, and the JPEG would still be in git behind it: two costs for no win.
+ */
+function avifProblem(file, bytes) {
+	const fallback = file.replace(/\.avif$/, ".jpg");
+	if (!existsSync(fallback)) {
+		return "has no .jpg beside it — engines without AVIF would have nothing to fall back to";
+	}
+	const fallbackBytes = statSync(fallback).size;
+	if (bytes >= fallbackBytes) {
+		return (
+			`${bytes.toLocaleString()} B is no smaller than its ${fallbackBytes.toLocaleString()} B ` +
+			`JPEG. Re-encode it lower, or drop the AVIF and ship the JPEG alone.`
+		);
+	}
+	return null;
+}
+
 for (const rule of RULES) {
 	const abs = join(ROOT, rule.dir);
 	for (const file of walk(abs)) {
@@ -71,16 +109,21 @@ for (const rule of RULES) {
 		total += bytes;
 		counted += 1;
 
-		if (!file.endsWith(rule.ext)) {
-			problems.push(`${rel}: unexpected file type in ${rule.dir} (only ${rule.ext} belongs here)`);
+		if (!rule.ext.some((e) => file.endsWith(e))) {
+			problems.push(
+				`${rel}: unexpected file type in ${rule.dir} (only ${rule.ext.join(" or ")} belongs here)`,
+			);
 			continue;
 		}
-		if (bytes > rule.max) {
+		const ceiling = /-scrub(-sm)?\.mp4$/.test(file) ? SCRUB_MAX : rule.max;
+		if (bytes > ceiling) {
 			problems.push(
-				`${rel}: ${bytes.toLocaleString()} B exceeds the ${rule.max.toLocaleString()} B ceiling`,
+				`${rel}: ${bytes.toLocaleString()} B exceeds the ${ceiling.toLocaleString()} B ceiling`,
 			);
 		}
-		if (rule.ext === ".mp4" && hasAudioTrack(file)) {
+		const avifFault = file.endsWith(".avif") && avifProblem(file, bytes);
+		if (avifFault) problems.push(`${rel}: ${avifFault}`);
+		if (file.endsWith(".mp4") && hasAudioTrack(file)) {
 			problems.push(
 				`${rel}: carries an audio track. Re-encode with -an — iOS Safari refuses ` +
 					`gesture-free autoplay for media that has one, muted or not.`,

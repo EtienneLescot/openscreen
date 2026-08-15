@@ -26,11 +26,18 @@ const VISIBLE = 0.55;
 export type BandPlayback = {
 	/** The band that currently owns the single <video>, if any. */
 	activeId: string | null;
+	/** Bumped by every play() call. Ownership alone cannot express "start again",
+	 *  because the band asking is usually the band that already owns the element. */
+	playToken: number;
 	/** Bands that have played to the end, and now show their result frame. */
 	playedIds: ReadonlySet<string>;
 	/** Whether clips start on their own when scrolled to. */
 	autoplay: boolean;
 	setAutoplay: (on: boolean) => void;
+	/** Turns autoplay off, cancels the dwell timers already counting down, and
+	 *  gives up the element — so the control stops what is running, not only what
+	 *  would have run next. */
+	stopAutoplay: () => void;
 	/** True once the browser has taken over — controls stay inert before that. */
 	hydrated: boolean;
 	/** True where motion is unwelcome: reduced motion, or a metered connection. */
@@ -48,6 +55,7 @@ export type BandPlayback = {
 export function useBandPlayback(): BandPlayback {
 	const hydrated = useIsBrowser();
 	const [activeId, setActiveId] = useState<string | null>(null);
+	const [playToken, setPlayToken] = useState(0);
 	const [playedIds, setPlayedIds] = useState<ReadonlySet<string>>(new Set());
 	const [refusedIds, setRefusedIds] = useState<ReadonlySet<string>>(new Set());
 	const [autoplay, setAutoplay] = useState(true);
@@ -56,9 +64,13 @@ export function useBandPlayback(): BandPlayback {
 
 	const nodes = useRef(new Map<string, HTMLElement>());
 	const timers = useRef(new Map<string, ReturnType<typeof setTimeout>>());
-	// Read inside the observer callback, which is created once.
-	const state = useRef({ autoplay, quiet });
-	state.current = { autoplay, quiet };
+	// Set the moment the reader works the toggle. The environment supplies the
+	// default; after that the choice is theirs and nothing may recompute it.
+	const chosen = useRef(false);
+	// Read inside the observer callback, and inside stopAutoplay — both of which
+	// are created once and must not see a stale render's values.
+	const state = useRef({ autoplay, activeId, refusedIds });
+	state.current = { autoplay, activeId, refusedIds };
 
 	useEffect(() => {
 		if (!hydrated) return;
@@ -77,19 +89,28 @@ export function useBandPlayback(): BandPlayback {
 		).connection;
 		const thin = conn?.saveData === true || /^(slow-)?2g$/.test(conn?.effectiveType ?? "");
 
-		const sync = () => {
+		// Two queries, two callbacks. Width decides which rendition to load and
+		// nothing else; reading it in the same callback as the motion default is
+		// what let a phone rotation, or a zoom past 200%, put autoplay back on
+		// after the reader had turned it off.
+		const syncMotion = () => {
 			const q = motion.matches || thin;
 			setQuiet(q);
-			setAutoplay(!q);
-			setSmall(narrow.matches);
+			// An explicit choice outranks the default, but asking the OS for
+			// stillness outranks the choice: it withdraws consent rather than
+			// merely suggesting one. The toggle is still there to opt back in.
+			if (q) chosen.current = false;
+			if (!chosen.current) setAutoplay(!q);
 		};
-		sync();
+		const syncNarrow = () => setSmall(narrow.matches);
+		syncMotion();
+		syncNarrow();
 
-		motion.addEventListener("change", sync);
-		narrow.addEventListener("change", sync);
+		motion.addEventListener("change", syncMotion);
+		narrow.addEventListener("change", syncNarrow);
 		return () => {
-			motion.removeEventListener("change", sync);
-			narrow.removeEventListener("change", sync);
+			motion.removeEventListener("change", syncMotion);
+			narrow.removeEventListener("change", syncNarrow);
 		};
 	}, [hydrated]);
 
@@ -114,7 +135,14 @@ export function useBandPlayback(): BandPlayback {
 						clearTimer(id);
 						continue;
 					}
-					if (!state.current.autoplay || state.current.quiet) continue;
+					// `quiet` is not consulted here. It has already set the default
+					// this gate reads, and consulting it twice made the toggle
+					// unable to do anything at all for a reduced-motion reader.
+					if (!state.current.autoplay) continue;
+					// A band whose play() the browser actually refused has lost its
+					// control; handing it the element again would leave the page
+					// playing a clip with nothing beside it to stop.
+					if (state.current.refusedIds.has(id)) continue;
 					if (timers.current.has(id)) continue;
 					timers.current.set(
 						id,
@@ -153,7 +181,14 @@ export function useBandPlayback(): BandPlayback {
 		return cb;
 	}, []);
 
-	const play = useCallback((id: string) => setActiveId(id), []);
+	// Ownership is a claim on the element, not an instruction to start. Asking the
+	// band that already holds it to play writes its own id back over itself, React
+	// bails out of the render, and nothing downstream ever hears about it — which
+	// is why the token exists and why every caller must go through here.
+	const play = useCallback((id: string) => {
+		setActiveId(id);
+		setPlayToken((n) => n + 1);
+	}, []);
 
 	const markPlayed = useCallback((id: string) => {
 		setPlayedIds((prev) => {
@@ -174,11 +209,33 @@ export function useBandPlayback(): BandPlayback {
 		});
 	}, []);
 
+	const chooseAutoplay = useCallback((on: boolean) => {
+		chosen.current = true;
+		setAutoplay(on);
+	}, []);
+
+	const stopAutoplay = useCallback(() => {
+		chosen.current = true;
+		setAutoplay(false);
+		// Clearing the timers is the half that matters: a dwell scheduled a moment
+		// before the click would otherwise mount a clip after the control already
+		// reads off.
+		for (const t of timers.current.values()) clearTimeout(t);
+		timers.current.clear();
+		// Marking it played first — the band it stops is a band the reader has seen
+		// motion from, and releasing the element must not snap the picture back to
+		// the opening frame.
+		if (state.current.activeId) markPlayed(state.current.activeId);
+		setActiveId(null);
+	}, [markPlayed]);
+
 	return {
 		activeId,
+		playToken,
 		playedIds,
 		autoplay,
-		setAutoplay,
+		setAutoplay: chooseAutoplay,
+		stopAutoplay,
 		hydrated,
 		quiet,
 		small,

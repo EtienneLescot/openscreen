@@ -76,8 +76,10 @@ export default function Home() {
 							</span>
 							<h3>Nothing is uploaded</h3>
 							<p>
-								Recording, transcription and rendering all happen on your machine. The chat panel is
-								the only part that talks to a network, and only with a key you supply.
+								Recording, transcription and rendering all happen on your machine, and your video
+								never leaves it. Text leaves only when you ask: the chat panel and caption
+								translation, each with a key you supply. Transcription downloads its 264 MB Whisper
+								model once, on first run.
 							</p>
 						</article>
 

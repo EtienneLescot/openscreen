@@ -32,6 +32,15 @@
 	margin-bottom: 22px;
 }
 
+/* --os-accent clears 4.5:1 against --os-bg, but the pill is not --os-bg: its own
+   --os-accent-soft tint composites to rgb(224,237,234) and takes the label down
+   to 4.28:1 at 12.8px/600, the one place on the page where accent text sits on
+   an accent-tinted surface. Light only — --os-brand-lo measures 4.45:1 on the
+   dark pill, so unscoped this would trade the failure rather than fix it. */
+:global([data-theme="light"]) .badge {
+	color: var(--os-brand-lo);
+}
+
 .title {
 	margin: 20px 0 0;
 	font-size: clamp(42px, 6vw, 68px);

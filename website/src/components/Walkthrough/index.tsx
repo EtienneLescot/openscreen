@@ -6,12 +6,124 @@ import { BANDS, type Band } from "./bands";
 import { PLATE } from "./plate";
 import styles from "./styles.module.css";
 import { type BandPlayback, useBandPlayback } from "./useBandPlayback";
+import { useScrub, useScrubEnabled } from "./useScrub";
+
+/**
+ * Decides the layout before the first paint rather than after hydration.
+ *
+ * The pinned layout makes its band about two viewports tall. Switching to it
+ * once React has mounted would move every section below it, which is a layout
+ * shift with no user interaction to excuse it — exactly what CLS counts. An
+ * attribute set from the document head costs one synchronous statement and is
+ * in place before anything is painted.
+ *
+ * `position: sticky` is checked as well as the motion preference: it is the one
+ * capability the layout cannot do without, and an engine that lacks it would
+ * otherwise be handed a two-viewport-tall band with a picture stranded at the
+ * top of it.
+ */
+const SCRUB_GATE = `try{var m=matchMedia('(prefers-reduced-motion: reduce)').matches,
+w=matchMedia('(min-width: 901px)').matches,s=CSS.supports('position','sticky');
+document.documentElement.setAttribute('data-os-scrub',!m&&w&&s?'on':'off')}catch(e){}`;
 
 /** Both global controls are server-rendered as inert spans of identical box size
  *  and upgraded after hydration, so a reader without JavaScript never meets a
- *  control that looks operable and is not. */
-function useUpgradedTag(hydrated: boolean) {
+ *  control that looks operable and is not. Deliberately not named `use…`: it is a
+ *  ternary, it is called after an early return, and a hook-shaped name is how a
+ *  later refactor talks itself into putting state inside it. */
+function upgradedTag(hydrated: boolean) {
 	return hydrated ? "button" : "span";
+}
+
+/**
+ * A band the reader scrubs: the figure pins, the band is taller than the
+ * viewport, and scroll position walks the clip. There is no Play control and no
+ * dwell timer — the scroll *is* the transport, in both directions, and a reader
+ * who stops gets a still frame rather than something that carries on without
+ * them. The poster stays underneath and is what shows until the clip can seek.
+ */
+function ScrubBand({ band }: { band: Band }) {
+	const media = band.media!;
+	const scrub = media.scrub!;
+	const bandRef = useRef<HTMLElement | null>(null);
+	const videoRef = useRef<HTMLVideoElement | null>(null);
+	const enabled = useScrubEnabled();
+	const [small, setSmall] = useState(false);
+	useEffect(() => {
+		const mq = window.matchMedia("(max-width: 780px)");
+		const sync = () => setSmall(mq.matches);
+		sync();
+		mq.addEventListener("change", sync);
+		return () => mq.removeEventListener("change", sync);
+	}, []);
+	const { progress, ready, near } = useScrub({
+		band: bandRef,
+		video: videoRef,
+		seconds: scrub.seconds,
+		enabled,
+	});
+
+	return (
+		<article
+			id={band.id}
+			ref={bandRef}
+			className={`${styles.band} ${styles.split} ${band.flip ? styles.flip : ""} ${styles.scrubbable}`}
+		>
+			<Copy band={band} />
+			<figure className={styles.figure}>
+				<div
+					className={styles.frame}
+					style={{ aspectRatio: `${media.width} / ${media.height}` }}
+				>
+					<picture>
+						<source media="(max-width: 780px)" srcSet={media.imageSm} />
+						<img
+							className={styles.still}
+							src={media.image}
+							width={media.width}
+							height={media.height}
+							loading="lazy"
+							decoding="async"
+							alt={media.alt}
+						/>
+					</picture>
+					{enabled && near && (
+						<video
+							ref={videoRef}
+							className={`${styles.clip} ${ready ? styles.clipReady : ""}`}
+							src={small ? scrub.clipSm : scrub.clip}
+							width={media.width}
+							height={media.height}
+							muted
+							playsInline
+							preload="auto"
+							aria-hidden="true"
+							tabIndex={-1}
+							disableRemotePlayback
+						/>
+					)}
+				</div>
+				{/* Both captions are rendered and CSS shows one, because which is true
+				    depends on a capability the server cannot know. Swapping the text
+				    after hydration would say "Scroll to run it" to a reader for whom it
+				    is false, for as long as the bundle takes to arrive. */}
+				<figcaption className={styles.caption}>
+					<span className={`${styles.captionText} ${styles.captionScrub}`}>
+						Scroll to run it · {scrub.frames} frames
+					</span>
+					<span className={`${styles.captionText} ${styles.captionStill}`}>
+						A frame of the running application
+					</span>
+				</figcaption>
+				<span className={`${styles.rail} ${styles.railScrub}`} aria-hidden="true">
+					<span
+						className={styles.railFill}
+						style={{ transform: `scaleX(${progress.toFixed(4)})` }}
+					/>
+				</span>
+			</figure>
+		</article>
+	);
 }
 
 function BandView({ band, ctl }: { band: Band; ctl: BandPlayback }) {
@@ -25,7 +137,7 @@ function BandView({ band, ctl }: { band: Band; ctl: BandPlayback }) {
 	const refused = ctl.refusedIds.has(band.id);
 	// Depending on `ctl` itself would re-run this on every render — it is a fresh
 	// object each time — and call play() again on an element already playing.
-	const { markRefused } = ctl;
+	const { markRefused, playToken, small } = ctl;
 
 	useEffect(() => {
 		if (!owns) {
@@ -35,14 +147,29 @@ function BandView({ band, ctl }: { band: Band; ctl: BandPlayback }) {
 		}
 		const el = videoRef.current;
 		if (!el) return;
+		let live = true;
+		// `playToken` and `small` are dependencies for the same reason: neither one
+		// moves `owns`, and both mean the element has to start over. The second is
+		// the less obvious one — changing `src` runs the resource-selection
+		// algorithm, which rewinds to 0 and pauses without firing `pause`, so
+		// nothing else on the page would ever learn that playback had stopped.
+		el.currentTime = 0;
 		const attempt = el.play();
 		if (attempt) {
-			// iOS in Low Power Mode refuses muted inline autoplay outright, and the
-			// page cannot override it. The poster and the labelled button stay; only
-			// the element goes away.
-			attempt.catch(() => markRefused(band.id));
+			attempt.catch((err: DOMException) => {
+				// iOS in Low Power Mode refuses muted inline autoplay outright, and
+				// the page cannot override it. The poster and the labelled button
+				// stay; only the element goes away. An AbortError claims nothing of
+				// the sort — the band lost the element, or swapped rendition, while
+				// the clip was still loading — and filing it as a refusal deletes
+				// the only control the section has over its own motion.
+				if (live && err?.name === "NotAllowedError") markRefused(band.id);
+			});
 		}
-	}, [owns, band.id, markRefused]);
+		return () => {
+			live = false;
+		};
+	}, [owns, band.id, markRefused, playToken, small]);
 
 	if (!media) {
 		return (
@@ -66,7 +193,7 @@ function BandView({ band, ctl }: { band: Band; ctl: BandPlayback }) {
 	const alt = showResult && media.resultAlt ? media.resultAlt : media.alt;
 
 	const hasClip = !!media.clip;
-	const Tag = useUpgradedTag(ctl.hydrated);
+	const Tag = upgradedTag(ctl.hydrated);
 	const label = played ? `Replay the ${band.kicker} clip` : `Play the ${band.kicker} clip`;
 
 	return (
@@ -75,11 +202,17 @@ function BandView({ band, ctl }: { band: Band; ctl: BandPlayback }) {
 			className={`${styles.band} ${band.shape === "letterbox" ? styles.wide : styles.split} ${
 				band.flip ? styles.flip : ""
 			}`}
-			ref={ctl.registerBand(band.id)}
-			data-band-id={band.id}
 		>
 			<Copy band={band} />
-			<figure className={styles.figure}>
+			{/* The observer watches the picture, not the band. A stacked band on a
+			    landscape phone is taller than the viewport, so its intersection
+			    ratio cannot reach the threshold at all and the clip never starts
+			    however long the reader sits on it. The figure always fits. */}
+			<figure
+				className={styles.figure}
+				ref={ctl.registerBand(band.id)}
+				data-band-id={band.id}
+			>
 				<div
 					className={styles.frame}
 					style={{ aspectRatio: `${media.width} / ${media.height}` }}
@@ -100,7 +233,7 @@ function BandView({ band, ctl }: { band: Band; ctl: BandPlayback }) {
 						<video
 							ref={videoRef}
 							className={`${styles.clip} ${ready ? styles.clipReady : ""}`}
-							src={ctl.small ? media.clipSm : media.clip}
+							src={small ? media.clipSm : media.clip}
 							width={media.width}
 							height={media.height}
 							muted
@@ -111,6 +244,10 @@ function BandView({ band, ctl }: { band: Band; ctl: BandPlayback }) {
 							disableRemotePlayback
 							onLoadedData={() => setReady(true)}
 							onPlaying={() => setPlaying(true)}
+							onEmptied={() => {
+								setReady(false);
+								setPlaying(false);
+							}}
 							onEnded={() => {
 								setPlaying(false);
 								ctl.markPlayed(band.id);
@@ -166,11 +303,13 @@ function Copy({ band }: { band: Band }) {
 
 export default function Walkthrough() {
 	const ctl = useBandPlayback();
-	const Tag = useUpgradedTag(ctl.hydrated);
+	const scrubbing = useScrubEnabled();
+	const Tag = upgradedTag(ctl.hydrated);
 
 	return (
 		<>
 			<Head>
+				<script>{SCRUB_GATE}</script>
 				<link
 					rel="preload"
 					as="image"
@@ -190,7 +329,12 @@ export default function Walkthrough() {
 						sizes={PLATE.sizes}
 						width={PLATE.width}
 						height={PLATE.height}
-						fetchPriority="high"
+						// react-dom 18 does not recognise the camelCase prop it learns in 19,
+						// and logs an unknown-prop error for it on every dev load of the
+						// landing page. Both spellings serialise to fetchpriority="high";
+						// the spread is only what gets the lowercase one past @types/react,
+						// which is already on 19.
+						{...{ fetchpriority: "high" }}
 						decoding="async"
 						alt={PLATE.alt}
 					/>
@@ -229,7 +373,11 @@ export default function Walkthrough() {
 									? {
 											type: "button" as const,
 											"aria-pressed": ctl.autoplay,
-											onClick: () => ctl.setAutoplay(!ctl.autoplay),
+											// Turning it off has to stop the clip that is running and
+											// the one that is 400ms from starting, or the control
+											// reports a state the page has not entered.
+											onClick: () =>
+												ctl.autoplay ? ctl.stopAutoplay() : ctl.setAutoplay(true),
 										}
 									: { "aria-hidden": true })}
 							>
@@ -239,9 +387,16 @@ export default function Walkthrough() {
 						</div>
 					</div>
 
-					{BANDS.map((band) => (
-						<BandView key={band.id} band={band} ctl={ctl} />
-					))}
+					{/* Which component renders a band is decided by the data, not by a
+					    capability — the server and the client must agree, and the pinned
+					    layout is turned on and off in CSS alone. */}
+					{BANDS.map((band) =>
+						band.media?.scrub ? (
+							<ScrubBand key={band.id} band={band} />
+						) : (
+							<BandView key={band.id} band={band} ctl={ctl} />
+						),
+					)}
 				</div>
 			</section>
 		</>
