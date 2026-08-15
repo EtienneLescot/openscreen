@@ -305,10 +305,9 @@
 	},
 	"audio": {
 		"title": "Audio",
-		"autoMaster": "Mejora automática de voz",
 		"syncOffset": "Desfase de sincronización",
 		"outputGain": "Ajuste de salida",
 		"reset": "Restablecer audio",
-		"help": "Limpia y equilibra la voz automáticamente y luego ajusta con precisión el tiempo y el nivel."
+		"help": "Ajusta la sincronización del audio y el nivel de salida. Ambos se aplican igual en la vista previa y en la exportación."
 	}
 }

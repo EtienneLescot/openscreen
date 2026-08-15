@@ -38,6 +38,12 @@ import type { AxcutDocument } from "../schema";
 // for the same reason (their canonical types live in lib/wallpaper and
 // lib/cursor/cursorThemes as the source of truth).
 
+/** Audio finishing bounds, shared by the sliders, this store and `finish_audio` (Rust).
+ *  Both settings are deliberately parity-safe: a pure delay and a linear gain behave
+ *  identically on the preview's source file and on the export's assembled timeline. */
+export const AUDIO_OFFSET_MS_LIMIT = 500;
+export const AUDIO_GAIN_DB_LIMIT = 12;
+
 export interface EditorSettingsSnapshot {
 	wallpaper: string;
 	aspectRatio: AspectRatio;
@@ -57,7 +63,6 @@ export interface EditorSettingsSnapshot {
 	/** Positive values move audio later; negative values advance it. */
 	audioOffsetMs: number;
 	audioGainDb: number;
-	audioAutoMaster: boolean;
 	cursor: CursorVisualSettings;
 	cursorShow: boolean;
 	cursorTheme: string;
@@ -87,7 +92,6 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	webcamCropRegion: DEFAULT_CROP_REGION,
 	audioOffsetMs: 0,
 	audioGainDb: 0,
-	audioAutoMaster: true,
 	cursor: {
 		size: DEFAULT_CURSOR_SIZE,
 		smoothing: DEFAULT_CURSOR_SMOOTHING,
@@ -118,7 +122,6 @@ interface LegacyShape {
 	webcamCropRegion?: CropRegion;
 	audioOffsetMs?: number;
 	audioGainDb?: number;
-	audioAutoMaster?: boolean;
 	cursorSize?: number;
 	cursorSmoothing?: number;
 	cursorMotionBlur?: number;
@@ -174,9 +177,17 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 		webcamSizePreset: num(legacy?.webcamSizePreset, DEFAULT_EDITOR_SETTINGS.webcamSizePreset),
 		webcamPosition: normaliseWebcamPosition(legacy?.webcamPosition),
 		webcamCropRegion: normaliseCropRegion(legacy?.webcamCropRegion),
-		audioOffsetMs: Math.min(2_000, Math.max(-2_000, num(legacy?.audioOffsetMs, 0))),
-		audioGainDb: Math.min(18, Math.max(-24, num(legacy?.audioGainDb, 0))),
-		audioAutoMaster: bool(legacy?.audioAutoMaster, true),
+		// Same bounds the sliders offer and the native `finish_audio` clamps to. Three
+		// different ranges for one value is how a project ends up exporting an offset the
+		// UI cannot display.
+		audioOffsetMs: Math.min(
+			AUDIO_OFFSET_MS_LIMIT,
+			Math.max(-AUDIO_OFFSET_MS_LIMIT, num(legacy?.audioOffsetMs, 0)),
+		),
+		audioGainDb: Math.min(
+			AUDIO_GAIN_DB_LIMIT,
+			Math.max(-AUDIO_GAIN_DB_LIMIT, num(legacy?.audioGainDb, 0)),
+		),
 		cursor,
 		cursorShow: bool(legacy?.cursorShow, DEFAULT_EDITOR_SETTINGS.cursorShow),
 		cursorTheme: str(legacy?.cursorTheme, DEFAULT_EDITOR_SETTINGS.cursorTheme),
@@ -201,7 +212,6 @@ export interface EditorSettingsPatch {
 	webcamCropRegion?: CropRegion;
 	audioOffsetMs?: number;
 	audioGainDb?: number;
-	audioAutoMaster?: boolean;
 	cursor?: Partial<CursorVisualSettings> & { theme?: string; show?: boolean };
 	autoFocusAll?: boolean;
 }

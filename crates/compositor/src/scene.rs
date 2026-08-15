@@ -364,22 +364,19 @@ pub struct SceneCrop {
     pub height: f32,
 }
 
-#[derive(Debug, Clone, Copy, Deserialize)]
+/// Audio finishing. Deliberately limited to a linear gain and a signed delay — the two
+/// operations the editor preview can apply identically to the source file it plays. See
+/// `audio::finish_audio` before adding a field here.
+///
+/// Every field carries `#[serde(default)]`: a payload from a build that predates one of them
+/// must degrade to "that stage is neutral", not fail the whole scene.
+#[derive(Debug, Clone, Copy, Default, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct SceneAudio {
+    #[serde(default)]
     pub offset_ms: f64,
+    #[serde(default)]
     pub gain_db: f32,
-    pub auto_master: bool,
-}
-
-impl Default for SceneAudio {
-    fn default() -> Self {
-        Self {
-            offset_ms: 0.0,
-            gain_db: 0.0,
-            auto_master: false,
-        }
-    }
 }
 
 #[derive(Debug, Clone, Copy, Deserialize)]

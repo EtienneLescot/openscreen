@@ -27,12 +27,22 @@ const PASSTHROUGH_EPSILON: f64 = 1e-3;
 
 pub type PlanarPcm = Vec<Vec<f32>>;
 
-/// Apply the editor's signed sync offset and fast voice-oriented mastering.
+/// Apply the editor's output trim and signed sync offset to the assembled timeline.
 ///
-/// The automatic path is deliberately deterministic and dependency-free: an 80 Hz high-pass
-/// removes desk/room rumble, a linked-stereo 3:1 compressor controls speech peaks, and a final
-/// RMS/peak pass raises intelligibility without clipping. Linking the envelope preserves the
-/// stereo image. The result stays the same length so video and following clips cannot drift.
+/// Both stages are stateless on purpose. The editor preview plays the untouched source file
+/// (seeked), while this runs on the assembled timeline — trimmed, speed-adjusted, concatenated
+/// — so the two see different signals. A linear gain and a whole-sample delay are the only
+/// operations that land identically on both, which is what lets the editor claim that what you
+/// hear is what you export.
+///
+/// That rules out the obvious next feature. A filter or a compressor carries state across
+/// cuts here and not in the preview; a loudness normaliser is worse still, because its makeup
+/// is a single scalar measured over the whole assembled programme, which the preview never
+/// holds and which changes with every trim. Adding either back means either an offline preview
+/// render or an accepted, documented divergence — not a quiet extra stage in this function.
+///
+/// Bounds mirror `AUDIO_GAIN_DB_LIMIT` / `AUDIO_OFFSET_MS_LIMIT` in editorSettings.ts. The
+/// result stays the same length so video and following clips cannot drift.
 pub fn finish_audio(mut pcm: PlanarPcm, settings: SceneAudio) -> PlanarPcm {
     let samples = pcm.first().map(Vec::len).unwrap_or(0);
     if samples == 0 {
@@ -42,76 +52,12 @@ pub fn finish_audio(mut pcm: PlanarPcm, settings: SceneAudio) -> PlanarPcm {
         channel.resize(samples, 0.0);
     }
 
-    if settings.auto_master {
-        let cutoff_hz = 80.0f32;
-        let dt = 1.0 / AUDIO_OUTPUT_SAMPLE_RATE as f32;
-        let rc = 1.0 / (2.0 * PI * cutoff_hz);
-        let alpha = rc / (rc + dt);
-        for channel in pcm.iter_mut() {
-            let mut previous_input = 0.0f32;
-            let mut previous_output = 0.0f32;
-            for sample in channel.iter_mut() {
-                let input = *sample;
-                let output = alpha * (previous_output + input - previous_input);
-                *sample = output;
-                previous_input = input;
-                previous_output = output;
-            }
-        }
-
-        let threshold_db = -18.0f32;
-        let ratio = 3.0f32;
-        let attack = (-1.0 / (0.010 * AUDIO_OUTPUT_SAMPLE_RATE as f32)).exp();
-        let release = (-1.0 / (0.120 * AUDIO_OUTPUT_SAMPLE_RATE as f32)).exp();
-        let mut envelope = 0.0f32;
-        for index in 0..samples {
-            let peak = pcm
-                .iter()
-                .map(|channel| channel[index].abs())
-                .fold(0.0f32, f32::max);
-            let coefficient = if peak > envelope { attack } else { release };
-            envelope = coefficient * envelope + (1.0 - coefficient) * peak;
-            let level_db = 20.0 * envelope.max(1e-9).log10();
-            let reduction_db = if level_db > threshold_db {
-                (level_db - threshold_db) * (1.0 - 1.0 / ratio)
-            } else {
-                0.0
-            };
-            let reduction = 10.0f32.powf(-reduction_db / 20.0);
-            for channel in pcm.iter_mut() {
-                channel[index] *= reduction;
-            }
-        }
-
-        let mut sum_squares = 0.0f64;
-        let mut count = 0usize;
-        let mut peak = 0.0f32;
-        for &sample in pcm.iter().flatten() {
-            peak = peak.max(sample.abs());
-            if sample.abs() > 1e-5 {
-                sum_squares += (sample as f64) * (sample as f64);
-                count += 1;
-            }
-        }
-        if count > 0 && peak > 0.0 {
-            let rms = (sum_squares / count as f64).sqrt() as f32;
-            let target_rms = 10.0f32.powf(-16.0 / 20.0);
-            let peak_ceiling = 10.0f32.powf(-1.0 / 20.0);
-            let makeup = (target_rms / rms.max(1e-9))
-                .min(peak_ceiling / peak)
-                .clamp(0.1, 4.0);
-            for sample in pcm.iter_mut().flatten() {
-                *sample *= makeup;
-            }
-        }
-    }
-
-    let trim = 10.0f32.powf(settings.gain_db.clamp(-24.0, 18.0) / 20.0);
+    let trim = 10.0f32.powf(settings.gain_db.clamp(-12.0, 12.0) / 20.0);
     for sample in pcm.iter_mut().flatten() {
         *sample = (*sample * trim).clamp(-1.0, 1.0);
     }
 
-    let shift = ((settings.offset_ms.clamp(-2_000.0, 2_000.0) / 1_000.0)
+    let shift = ((settings.offset_ms.clamp(-500.0, 500.0) / 1_000.0)
         * AUDIO_OUTPUT_SAMPLE_RATE as f64)
         .round() as i64;
     if shift == 0 {
@@ -1178,59 +1124,65 @@ mod tests {
         let settings = SceneAudio {
             offset_ms: 1000.0 / AUDIO_OUTPUT_SAMPLE_RATE as f64,
             gain_db: 0.0,
-            auto_master: false,
         };
-        let delayed = finish_audio(planar(&[1.0, 2.0, 3.0]), settings);
-        assert_eq!(delayed[0], vec![0.0, 1.0, 1.0]);
+        // Values stay inside [-1, 1] so this asserts the shift, not the output clamp.
+        let delayed = finish_audio(planar(&[0.1, 0.2, 0.3]), settings);
+        assert_eq!(delayed[0], vec![0.0, 0.1, 0.2]);
 
         let advanced = finish_audio(
-            planar(&[1.0, 0.5, 0.25]),
+            planar(&[0.1, 0.2, 0.3]),
             SceneAudio {
                 offset_ms: -1000.0 / AUDIO_OUTPUT_SAMPLE_RATE as f64,
                 ..settings
             },
         );
-        assert_eq!(advanced[0], vec![0.5, 0.25, 0.0]);
+        assert_eq!(advanced[0], vec![0.2, 0.3, 0.0]);
     }
 
+    /// The gain must be the SAME scalar the editor preview feeds its GainNode
+    /// (`10 ** (dB / 20)`), because that identity is the whole parity guarantee: nothing
+    /// else stands between what the editor plays and what this writes.
     #[test]
-    fn manual_gain_is_applied_when_auto_master_is_off() {
-        let result = finish_audio(
-            planar(&[0.25, -0.25]),
-            SceneAudio {
-                offset_ms: 0.0,
-                gain_db: 6.0206,
-                auto_master: false,
-            },
-        );
-        assert!((result[0][0] - 0.5).abs() < 1e-4);
-        assert!((result[0][1] + 0.5).abs() < 1e-4);
-    }
-
-    #[test]
-    fn auto_master_removes_dc_and_respects_peak_ceiling() {
-        let mut input = vec![0.2f32; AUDIO_OUTPUT_SAMPLE_RATE as usize / 2];
-        for index in (0..input.len()).step_by(400) {
-            input[index] = 1.0;
+    fn output_trim_is_the_same_scalar_the_preview_applies() {
+        for gain_db in [-12.0f32, -6.0206, 0.0, 6.0206, 12.0] {
+            let result = finish_audio(
+                planar(&[0.25, -0.25]),
+                SceneAudio {
+                    offset_ms: 0.0,
+                    gain_db,
+                },
+            );
+            let expected = (0.25 * 10.0f32.powf(gain_db / 20.0)).clamp(-1.0, 1.0);
+            assert!(
+                (result[0][0] - expected).abs() < 1e-6,
+                "gain {gain_db} dB: got {}, want {expected}",
+                result[0][0]
+            );
+            assert!((result[0][1] + expected).abs() < 1e-6);
         }
+    }
+
+    #[test]
+    fn out_of_range_settings_are_clamped_to_the_editor_bounds() {
+        // A hand-edited project (or a future UI change) must not be able to ask for an
+        // offset or a gain the sliders cannot display.
         let result = finish_audio(
-            planar(&input),
+            planar(&[0.5, 0.5]),
             SceneAudio {
-                offset_ms: 0.0,
-                gain_db: 0.0,
-                auto_master: true,
+                offset_ms: 9_999.0,
+                gain_db: 99.0,
             },
         );
-        let peak = result
-            .iter()
-            .flatten()
-            .fold(0.0f32, |value, sample| value.max(sample.abs()));
-        let tail_mean = result[0][result[0].len() / 2..]
-            .iter()
-            .copied()
-            .sum::<f32>()
-            / (result[0].len() / 2) as f32;
-        assert!(peak <= 10.0f32.powf(-1.0 / 20.0) + 1e-5);
-        assert!(tail_mean.abs() < 0.01);
+        assert_eq!(result[0], vec![0.0, 0.0], "offset clamps to 500 ms, not 10 s");
+
+        let quiet = finish_audio(
+            planar(&[0.5]),
+            SceneAudio {
+                offset_ms: 0.0,
+                gain_db: -99.0,
+            },
+        );
+        let floor = 0.5 * 10.0f32.powf(-12.0 / 20.0);
+        assert!((quiet[0][0] - floor).abs() < 1e-6);
     }
 }

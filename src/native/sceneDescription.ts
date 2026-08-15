@@ -359,12 +359,19 @@ export interface SceneDescription {
 	 */
 	speedRegions: SceneSpeedRegion[];
 	cursor: SceneCursor;
-	/** Voice-oriented finishing applied to preview/export audio. Offset is signed:
-	 * positive delays audio, negative advances it. */
+	/**
+	 * Audio finishing, applied identically by the preview and by `finish_audio` (Rust).
+	 * Offset is signed: positive delays audio, negative advances it.
+	 *
+	 * Both fields are deliberately stateless — a pure delay and a linear gain. The preview
+	 * plays the untouched source file while the export runs on the assembled timeline, so
+	 * anything with memory (a filter, a compressor) or anything measured over the whole
+	 * programme (a loudness normaliser) would sound different on the two sides. Keep this
+	 * shape parity-safe; see the AudioPane comment before adding a field.
+	 */
 	audio: {
 		offsetMs: number;
 		gainDb: number;
-		autoMaster: boolean;
 	};
 	/**
 	 * Per-clip screen crop (fractions of the frame), or null for the identity
@@ -713,7 +720,6 @@ export function buildSceneDescription(
 		audio: {
 			offsetMs: settings.audioOffsetMs,
 			gainDb: settings.audioGainDb,
-			autoMaster: settings.audioAutoMaster,
 		},
 		background: parseWallpaper(settings.wallpaper),
 		zoomRegions: projectedZoomRegions.map((region) => ({

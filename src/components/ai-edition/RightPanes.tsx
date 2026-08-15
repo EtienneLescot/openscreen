@@ -42,6 +42,7 @@ import type {
 	AxcutTrimRange,
 	AxcutWord,
 } from "@/lib/ai-edition/schema";
+import { AUDIO_GAIN_DB_LIMIT, AUDIO_OFFSET_MS_LIMIT } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import {
@@ -1741,20 +1742,12 @@ export function AudioPane() {
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	return (
 		<Pane title={ts("audio.title")} icon={<AudioLines size={14} />} helpText={ts("audio.help")}>
-			<div className={styles.paneRow}>
-				<span className="label">{ts("audio.autoMaster")}</span>
-				<Toggle
-					checked={settings.audioAutoMaster}
-					disabled={!hasDocument}
-					onChange={(value) => void set({ audioAutoMaster: value })}
-				/>
-			</div>
 			<div className={styles.sliderGrid}>
 				<SliderCell
 					label={ts("audio.syncOffset")}
 					value={settings.audioOffsetMs}
-					min={-500}
-					max={500}
+					min={-AUDIO_OFFSET_MS_LIMIT}
+					max={AUDIO_OFFSET_MS_LIMIT}
 					step={1}
 					suffix=" ms"
 					disabled={!hasDocument}
@@ -1764,8 +1757,8 @@ export function AudioPane() {
 				<SliderCell
 					label={ts("audio.outputGain")}
 					value={settings.audioGainDb}
-					min={-12}
-					max={12}
+					min={-AUDIO_GAIN_DB_LIMIT}
+					max={AUDIO_GAIN_DB_LIMIT}
 					step={0.5}
 					decimals={1}
 					suffix=" dB"
@@ -1778,7 +1771,7 @@ export function AudioPane() {
 				type="button"
 				className={styles.secondaryBtn}
 				disabled={!hasDocument}
-				onClick={() => void set({ audioOffsetMs: 0, audioGainDb: 0, audioAutoMaster: true })}
+				onClick={() => void set({ audioOffsetMs: 0, audioGainDb: 0 })}
 			>
 				{ts("audio.reset")}
 			</button>
