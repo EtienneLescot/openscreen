@@ -129,6 +129,13 @@ export function useScrub({ band, video, seconds, enabled }: Options): {
 			seeking.current = false;
 		};
 		const loaded = () => setReady(true);
+		// The state is read as well as subscribed to. `loadeddata` fires once, and
+		// an element whose file is already in the HTTP cache reaches HAVE_CURRENT_DATA
+		// before an effect can attach anything — so on a warm load the event is
+		// simply gone, `ready` never turns true, and the clip scrubs correctly at
+		// opacity 0 behind a poster that never changes. It looks exactly like a
+		// feature that does not work, and only on the second visit.
+		if (v.readyState >= 2) setReady(true);
 		v.addEventListener("seeked", done);
 		v.addEventListener("error", done);
 		v.addEventListener("loadeddata", loaded);
