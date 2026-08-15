@@ -53,6 +53,14 @@ jobs:
       - name: Type-check
         working-directory: website
         run: npm run typecheck
+      # The walkthrough's clips and stills are committed to this repo, which has
+      # no LFS filter — their size is permanent, so a budget that lives only in a
+      # design note drifts on the first re-cut. This also fails any clip encoded
+      # with an audio track, which iOS Safari refuses to autoplay without a
+      # gesture even when the element is muted.
+      - name: Check media budget
+        working-directory: website
+        run: npm run check:media
       - name: Build
         working-directory: website
         run: npm run build

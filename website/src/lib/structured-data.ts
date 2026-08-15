@@ -34,6 +34,12 @@ const SOFTWARE_APPLICATION_LD = {
 	downloadUrl: `${SITE_URL}/download/`,
 	installUrl: "https://github.com/getopenscreen/openscreen/releases",
 	softwareHelp: `${SITE_URL}/docs/intro/`,
+	// The establishing plate on the landing page — one real frame of the running
+	// editor. Deliberately no VideoObject alongside it: the walkthrough's clips
+	// are silent five-second fragments with no standalone playback page, which is
+	// not what that rich result describes, and declaring a video the page never
+	// presents as one is a manual-action risk.
+	screenshot: `${SITE_URL}/img/walkthrough/editor-1560.jpg`,
 	license: "https://github.com/getopenscreen/openscreen/blob/main/LICENSE",
 	isAccessibleForFree: true,
 	// `offers` at price 0 is what lets a result carry a "Free" annotation;
