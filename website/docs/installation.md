@@ -20,20 +20,16 @@ Download the latest installer for your platform from the [download page](/downlo
 
 ## macOS
 
-Download the `.dmg` installer from [Releases](https://github.com/getopenscreen/openscreen/releases). If Gatekeeper blocks the app, remove the quarantine flag:
+Download the `.dmg` installer from [Releases](https://github.com/getopenscreen/openscreen/releases) and drag OpenScreen into your Applications folder. Builds from 1.9.0 onward are signed with a Developer ID certificate and notarized by Apple, so Gatekeeper does not block them and no terminal step is needed.
 
-```bash
-xattr -rd com.apple.quarantine /Applications/Openscreen.app
-```
+Then go to **System Settings → Privacy & Security** and grant **Screen Recording** and **Accessibility** to OpenScreen. Recording cannot start until both are granted.
 
-:::note
-Give your terminal **Full Disk Access** in System Settings → Privacy & Security first, then run the command above.
+:::note macOS 15 and later re-ask periodically
+macOS re-requests screen-recording permission from time to time for every third-party screen recorder. That prompt comes from the operating system — it does not mean your install is broken or that an update went wrong. Grant it again when asked.
 :::
 
-After that, go to **System Settings → Privacy & Security** and grant **Screen Recording** and **Accessibility** to OpenScreen. Launch the app once permissions are granted.
-
-:::tip Upgrading and recording won't start?
-If OpenScreen was already installed and a new version won't record (Screen Recording or Accessibility keep failing even after granting them), uninstall the old version, remove OpenScreen's entries under both permissions in System Settings, then reinstall and grant them fresh.
+:::tip Upgrading from a version older than 1.9.0?
+Those builds were not signed with a Developer ID certificate, and macOS ties Screen Recording and Accessibility grants to an app's signature — so it cannot tell the new build is the same app, and the permissions you granted the old one do not carry over. If a new version won't record even after granting them, remove OpenScreen's entries under both permissions in System Settings, then launch it again and grant them fresh.
 :::
 
 ## Windows
