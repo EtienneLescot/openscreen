@@ -190,8 +190,15 @@
 	cursor: pointer;
 }
 
-span.toggle {
+/* The pre-hydration form, to the pixel the same box so nothing shifts when the
+   real control replaces it — but visibly not a control. The border and the fill
+   carry that, never the text alpha: dimming the label takes it to 2.8:1 in the
+   dark theme and 2.3:1 in the light one, which trades a nit for a 1.4.3 failure. */
+span.toggle,
+span.replay {
 	cursor: default;
+	border-style: dashed;
+	background: none;
 }
 
 .toggle[aria-pressed="true"] {
@@ -210,6 +217,21 @@ span.toggle {
 .toggle[aria-pressed="true"] .toggleDot {
 	background: var(--os-accent);
 	box-shadow: 0 0 0 3px var(--os-accent-soft);
+}
+
+/* Forced colors paints both dots in Canvas and drops the box-shadow, so on and
+   off render identically — and with the dot gone the pill does not read as a
+   toggle at all. Border width is not a colour, so it survives: hollow ring off,
+   filled disc on, and 3px on a 7px border-box dot fills it without reflow. */
+@media (forced-colors: active) {
+	.toggleDot {
+		box-sizing: border-box;
+		border: 1px solid CanvasText;
+	}
+
+	.toggle[aria-pressed="true"] .toggleDot {
+		border-width: 3px;
+	}
 }
 
 /* ---- bands ---- */
@@ -313,6 +335,51 @@ span.toggle {
 }
 
 /* ---- the plate itself ---- */
+
+/* ---- the scrubbed bands ----
+   A band with a scroll rendition becomes its own theatre: it grows to a little
+   over two viewports, and both its halves pin, so scrolling through it walks the
+   clip a frame at a time in whichever direction the reader is going.
+
+   Every rule here hangs off one attribute set in the document head before the
+   first paint. Turn it off — reduced motion, a narrow screen, no `sticky`, no
+   JavaScript at all — and the band is an ordinary picture beside an ordinary
+   paragraph, which is the layout the rest of the section already uses. That is
+   the whole reason the pin is per band rather than one stage held across the
+   page: there is no second layout to maintain and nothing to swap at runtime. */
+
+:global([data-os-scrub="on"]) .scrubbable {
+	/* The clip's length in scroll. Roughly a viewport and a quarter of travel
+	   over a 64-frame clip puts a frame every ~15px, which is finer than a
+	   trackpad gesture resolves and about half what a wheel notch jumps. */
+	min-height: 225vh;
+	align-items: start;
+}
+
+:global([data-os-scrub="on"]) .scrubbable .copy,
+:global([data-os-scrub="on"]) .scrubbable .figure {
+	position: sticky;
+	/* Centred on the viewport where there is room, and never under the 60px
+	   navbar where there is not. */
+	top: max(88px, calc(50vh - 250px));
+}
+
+:global([data-os-scrub="on"]) .captionStill,
+:global([data-os-scrub="off"]) .captionScrub,
+:global([data-os-scrub="off"]) .railScrub {
+	display: none;
+}
+
+/* Before the gate script runs — and for a reader with JavaScript off, where it
+   never runs — neither caption has an answer yet. Show the one that is true of a
+   page nothing is driving. */
+.captionScrub {
+	display: none;
+}
+
+:global([data-os-scrub="on"]) .captionScrub {
+	display: inline;
+}
 
 .figure {
 	margin: 0;

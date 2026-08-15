@@ -57,11 +57,11 @@
 	--os-fg: #3a3f47;
 	--os-muted: #6b7280;
 	--os-meta: #98a0aa;
-	/* Darkened from #0d9668. The design system's light accent measures 3.63:1 on
-	   --os-bg, and it is used for inline 12.5px text (`xattr`, `sudo` in the
-	   install panes) and as the fill behind white on both Download buttons —
-	   both Level AA failures at that ratio. #0a7d57 measures 4.96:1 on the page
-	   and 5.14:1 under white, at the same hue. */
+	/* Darkened from #0d9668. The design system's light accent measures 3.63:1
+	   against --os-bg, which is a Level AA failure twice over: as inline 12.5px
+	   text (`xattr`, `sudo` in the install panes), and — it being the same pair
+	   of colours either way round — as the fill under the --os-bg label of both
+	   Download buttons. #0a7d57 measures 4.96:1, at the same hue. */
 	--os-accent: #0a7d57;
 	--os-brand-lo: #086b4a;
 	--os-accent-soft: rgba(10, 125, 87, 0.11);
@@ -313,7 +313,7 @@ body {
 	padding: 7px 14px !important;
 	border-radius: 9px;
 	background: var(--os-accent);
-	color: #fff !important;
+	color: var(--os-bg) !important;
 	font-size: 12.5px;
 	font-weight: 600;
 }

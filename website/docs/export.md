@@ -43,12 +43,12 @@ If something fails during render or write, the dialog shows the error so you can
 
 ## How MP4 is rendered
 
-MP4 export runs through the same native Rust + Direct3D 11 compositor that draws the live preview, one clip at a time, on a single GPU device: demux → decode → composite → hardware encode → mux, with no CPU readback in between. The preview pauses itself for the duration so the two aren't fighting over the GPU.
+MP4 export runs through the same native Rust compositor that draws the live preview — Direct3D 11 on Windows, Metal on macOS, wgpu/WGSL on Linux — one clip at a time, on a single GPU device: demux → decode → composite → encode → mux. On Windows and macOS the encoder takes the composed frame straight off the GPU, with no CPU readback in between; on Linux the frame is read back and encoded in software. The preview pauses itself for the duration so the two aren't fighting over the GPU.
 
 Because preview and export consume the same scene description, the frame you're looking at is the frame you get — there is no separate export renderer that could drift.
 
-:::warning Platform support
-The native compositor is **Windows-only today**, so MP4 export currently requires Windows. GIF export has its own renderer-side path and works on all three platforms. See the [roadmap](https://github.com/getopenscreen/openscreen/blob/main/ROADMAP.md) for status.
+:::note Platform support
+MP4 and GIF export both work on Windows, macOS, and Linux. The one difference left is speed: the Linux encode is software rather than hardware today, so the same export takes longer there. See the [roadmap](https://github.com/getopenscreen/openscreen/blob/main/ROADMAP.md) for status.
 :::
 
 ## Exported file vs. project file
