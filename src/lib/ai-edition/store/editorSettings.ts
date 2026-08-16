@@ -38,10 +38,13 @@ import type { AxcutDocument } from "../schema";
 // for the same reason (their canonical types live in lib/wallpaper and
 // lib/cursor/cursorThemes as the source of truth).
 
-/** Audio finishing bounds, shared by the sliders, this store and `finish_audio` (Rust).
- *  Both settings are deliberately parity-safe: a pure delay and a linear gain behave
- *  identically on the preview's source file and on the export's assembled timeline. */
-export const AUDIO_OFFSET_MS_LIMIT = 500;
+/** Output gain bound, shared by the slider, this store and `finish_audio` (Rust).
+ *
+ *  A linear gain is the one audio setting that behaves identically on the preview's source
+ *  file and on the export's assembled timeline, which is why it is the only one left. A sync
+ *  offset was tried and removed: the preview seeks in SOURCE time while the export shifts the
+ *  stretched, concatenated timeline, so the same value meant different delays under a speed
+ *  region, and near a cut the export pulls audio across the junction while the preview cannot. */
 export const AUDIO_GAIN_DB_LIMIT = 12;
 
 export interface EditorSettingsSnapshot {
@@ -60,8 +63,6 @@ export interface EditorSettingsSnapshot {
 	webcamSizePreset: WebcamSizePreset;
 	webcamPosition: WebcamPosition | null;
 	webcamCropRegion: CropRegion;
-	/** Positive values move audio later; negative values advance it. */
-	audioOffsetMs: number;
 	audioGainDb: number;
 	cursor: CursorVisualSettings;
 	cursorShow: boolean;
@@ -90,7 +91,6 @@ export const DEFAULT_EDITOR_SETTINGS: EditorSettingsSnapshot = {
 	webcamSizePreset: DEFAULT_WEBCAM_SIZE_PRESET,
 	webcamPosition: DEFAULT_WEBCAM_POSITION,
 	webcamCropRegion: DEFAULT_CROP_REGION,
-	audioOffsetMs: 0,
 	audioGainDb: 0,
 	cursor: {
 		size: DEFAULT_CURSOR_SIZE,
@@ -120,7 +120,6 @@ interface LegacyShape {
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: WebcamPosition | null;
 	webcamCropRegion?: CropRegion;
-	audioOffsetMs?: number;
 	audioGainDb?: number;
 	cursorSize?: number;
 	cursorSmoothing?: number;
@@ -177,13 +176,9 @@ export function getEditorSettings(doc: AxcutDocument | null | undefined): Editor
 		webcamSizePreset: num(legacy?.webcamSizePreset, DEFAULT_EDITOR_SETTINGS.webcamSizePreset),
 		webcamPosition: normaliseWebcamPosition(legacy?.webcamPosition),
 		webcamCropRegion: normaliseCropRegion(legacy?.webcamCropRegion),
-		// Same bounds the sliders offer and the native `finish_audio` clamps to. Three
-		// different ranges for one value is how a project ends up exporting an offset the
+		// Same bound the slider offers and the native `finish_audio` clamps to. Two
+		// different ranges for one value is how a project ends up exporting a gain the
 		// UI cannot display.
-		audioOffsetMs: Math.min(
-			AUDIO_OFFSET_MS_LIMIT,
-			Math.max(-AUDIO_OFFSET_MS_LIMIT, num(legacy?.audioOffsetMs, 0)),
-		),
 		audioGainDb: Math.min(
 			AUDIO_GAIN_DB_LIMIT,
 			Math.max(-AUDIO_GAIN_DB_LIMIT, num(legacy?.audioGainDb, 0)),
@@ -210,7 +205,6 @@ export interface EditorSettingsPatch {
 	webcamSizePreset?: WebcamSizePreset;
 	webcamPosition?: WebcamPosition | null;
 	webcamCropRegion?: CropRegion;
-	audioOffsetMs?: number;
 	audioGainDb?: number;
 	cursor?: Partial<CursorVisualSettings> & { theme?: string; show?: boolean };
 	autoFocusAll?: boolean;

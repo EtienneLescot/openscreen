@@ -305,9 +305,8 @@
 	},
 	"audio": {
 		"title": "Audio",
-		"syncOffset": "Décalage de synchronisation",
 		"outputGain": "Niveau de sortie",
 		"reset": "Réinitialiser l’audio",
-		"help": "Ajustez le calage de l’audio et le niveau de sortie. Les deux s’appliquent à l’identique dans l’aperçu et à l’export."
+		"help": "Ajustez le niveau de sortie audio. Il s’applique à l’identique dans l’aperçu et à l’export."
 	}
 }

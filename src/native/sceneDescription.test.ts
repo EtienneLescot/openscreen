@@ -765,30 +765,32 @@ describe("buildSceneDescription.cropByClip", () => {
 describe("buildSceneDescription.audio", () => {
 	// The editor claims "what you hear is what you export". That only holds while this
 	// payload carries nothing the preview cannot reproduce on the raw source file it
-	// plays: a linear gain and a whole-sample delay, and nothing else. These tests exist
-	// so a future stage with state (a filter, a compressor) or one measured over the
-	// assembled programme (a loudness normaliser) cannot be added here unnoticed.
-	it("carries the authored offset and gain through to the native payload", () => {
-		const doc = makeDoc({ legacyEditor: { audioOffsetMs: -120, audioGainDb: 4.5 } });
-		expect(buildSceneDescription(doc).audio).toEqual({ offsetMs: -120, gainDb: 4.5 });
+	// plays — which is a linear gain, and nothing else. These tests exist so a future
+	// stage with state (a filter, a compressor), one measured over the assembled
+	// programme (a loudness normaliser), or one expressed in timeline time (a sync
+	// offset — this shipped once and was removed) cannot be added here unnoticed.
+	it("carries the authored gain through to the native payload", () => {
+		const doc = makeDoc({ legacyEditor: { audioGainDb: 4.5 } });
+		expect(buildSceneDescription(doc).audio).toEqual({ gainDb: 4.5 });
 	});
 
-	it("defaults to a no-op for a project that predates the controls", () => {
-		expect(buildSceneDescription(makeDoc()).audio).toEqual({ offsetMs: 0, gainDb: 0 });
+	it("defaults to a no-op for a project that predates the control", () => {
+		expect(buildSceneDescription(makeDoc()).audio).toEqual({ gainDb: 0 });
 	});
 
-	it("exposes only offset and gain", () => {
+	it("exposes only the gain", () => {
 		// Guards the parity contract itself, not a value: an extra key here means the
 		// export applies something the preview does not.
-		expect(Object.keys(buildSceneDescription(makeDoc()).audio).sort()).toEqual([
-			"gainDb",
-			"offsetMs",
-		]);
+		expect(Object.keys(buildSceneDescription(makeDoc()).audio)).toEqual(["gainDb"]);
 	});
 
-	it("clamps to the range the sliders offer, so the UI can always display it", () => {
-		const doc = makeDoc({ legacyEditor: { audioOffsetMs: 9_999, audioGainDb: -99 } });
-		expect(buildSceneDescription(doc).audio).toEqual({ offsetMs: 500, gainDb: -12 });
+	it("clamps to the range the slider offers, so the UI can always display it", () => {
+		expect(buildSceneDescription(makeDoc({ legacyEditor: { audioGainDb: -99 } })).audio).toEqual({
+			gainDb: -12,
+		});
+		expect(buildSceneDescription(makeDoc({ legacyEditor: { audioGainDb: 99 } })).audio).toEqual({
+			gainDb: 12,
+		});
 	});
 });
 

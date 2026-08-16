@@ -361,16 +361,18 @@ export interface SceneDescription {
 	cursor: SceneCursor;
 	/**
 	 * Audio finishing, applied identically by the preview and by `finish_audio` (Rust).
-	 * Offset is signed: positive delays audio, negative advances it.
 	 *
-	 * Both fields are deliberately stateless — a pure delay and a linear gain. The preview
-	 * plays the untouched source file while the export runs on the assembled timeline, so
-	 * anything with memory (a filter, a compressor) or anything measured over the whole
-	 * programme (a loudness normaliser) would sound different on the two sides. Keep this
-	 * shape parity-safe; see the AudioPane comment before adding a field.
+	 * One field, and it takes some resisting to keep it that way. The preview plays the
+	 * untouched SOURCE file, seeked; the export runs on the assembled timeline — trimmed,
+	 * speed-adjusted, concatenated. A linear gain is the only operation that means the same
+	 * thing on both. Anything with memory (a filter, a compressor) diverges across cuts;
+	 * anything measured over the whole programme (a loudness normaliser) cannot be computed
+	 * preview-side at all; and even a plain delay diverges, because the preview would apply
+	 * it in source seconds while this applies it in timeline seconds — a 2x speed region
+	 * halves it, and near a cut the export pulls audio across the junction while the preview
+	 * only has the active asset. A sync offset shipped here and was removed for exactly that.
 	 */
 	audio: {
-		offsetMs: number;
 		gainDb: number;
 	};
 	/**
@@ -718,7 +720,6 @@ export function buildSceneDescription(
 			theme: settings.cursorTheme,
 		},
 		audio: {
-			offsetMs: settings.audioOffsetMs,
 			gainDb: settings.audioGainDb,
 		},
 		background: parseWallpaper(settings.wallpaper),

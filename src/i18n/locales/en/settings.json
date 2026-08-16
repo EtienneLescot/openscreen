@@ -67,8 +67,7 @@
 	},
 	"audio": {
 		"title": "Audio",
-		"help": "Nudge audio timing and trim the output level. Both apply identically in the preview and the export.",
-		"syncOffset": "Sync offset",
+		"help": "Trim the audio output level. It applies identically in the preview and the export.",
 		"outputGain": "Output trim",
 		"reset": "Reset audio"
 	},
