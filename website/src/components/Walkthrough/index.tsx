@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 
 import Head from "@docusaurus/Head";
 
+import Recreation from "../Recreation";
 import { BANDS, type Band } from "./bands";
 import { PLATE } from "./plate";
 import styles from "./styles.module.css";
@@ -353,10 +354,17 @@ export default function Walkthrough() {
 						<h2 id="walkthrough-title" className={styles.sectionTitle}>
 							Recorder first. Editor second. AI only if you ask.
 						</h2>
+						{/* The line this replaces read "Nothing here is a drawing of the
+						    interface", which the recreation makes false on a wide screen —
+						    and a claim that is true at 900px and false at 901px is worse
+						    than no claim. What survives is the part that is still checkable:
+						    the photographs are the application, and the drawn panels quote a
+						    file rather than an art director. */}
 						<p className={styles.deck}>
-							No sound, no narration. Every frame below is the running application — the same build
-							you can download — doing exactly what the line beside it says. Nothing here is a
-							drawing of the interface.
+							No sound, no narration. The photographs are the running application, unretouched. The
+							editor you scroll through is drawn live from the same design tokens the app ships,
+							around real footage of the recording it is editing — and every label in it is read out
+							of the project file rather than typed by hand.
 						</p>
 
 						<div className={styles.controls}>
@@ -389,8 +397,33 @@ export default function Walkthrough() {
 
 					{/* Which component renders a band is decided by the data, not by a
 					    capability — the server and the client must agree, and the pinned
-					    layout is turned on and off in CSS alone. */}
-					{BANDS.map((band) =>
+					    layout is turned on and off in CSS alone.
+
+					    The middle three bands and the recreation are the same three claims
+					    told twice, so exactly one of them is ever visible. Both gates are
+					    pure CSS and exact mirrors of each other — ≥901px and `position:
+					    sticky` supported and not forced-colors — so there is no width at
+					    which a reader gets both or neither, and nothing waits for
+					    hydration to decide. Record and export are not in the recreation
+					    (they are separate screens in the app, not part of the editor), so
+					    they render at every width. */}
+					{BANDS.filter((b) => b.index === "01").map((band) => (
+						<BandView key={band.id} band={band} ctl={ctl} />
+					))}
+
+					<Recreation />
+
+					<div className={styles.superseded}>
+						{BANDS.filter((b) => ["02", "03", "04"].includes(b.index)).map((band) =>
+							band.media?.scrub ? (
+								<ScrubBand key={band.id} band={band} />
+							) : (
+								<BandView key={band.id} band={band} ctl={ctl} />
+							),
+						)}
+					</div>
+
+					{BANDS.filter((b) => b.index === "05").map((band) =>
 						band.media?.scrub ? (
 							<ScrubBand key={band.id} band={band} />
 						) : (
