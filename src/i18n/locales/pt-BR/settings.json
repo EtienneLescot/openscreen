@@ -306,9 +306,8 @@
 	},
 	"audio": {
 		"title": "Áudio",
-		"syncOffset": "Deslocamento de sincronização",
 		"outputGain": "Nível de saída",
 		"reset": "Redefinir áudio",
-		"help": "Ajuste a sincronização do áudio e o nível de saída. Ambos se aplicam da mesma forma na prévia e na exportação."
+		"help": "Ajuste o nível de saída do áudio. Ele se aplica da mesma forma na prévia e na exportação."
 	}
 }

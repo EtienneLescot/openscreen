@@ -40,16 +40,22 @@ export interface VideoSource {
 	label: string;
 }
 
-export function resolveAudioPreviewTime(
+/**
+ * Where an audio element should sit to track the video, and whether it should be playing.
+ *
+ * The audio elements mirror the video's own time — there is no offset to apply, because the
+ * only per-track difference that survives is length: the supplemental track is extracted
+ * separately and can end before the video does. Past its end the element is parked at its
+ * duration and paused rather than left seeking into nothing.
+ */
+export function resolveAudioTrackPlayback(
 	videoTimeSec: number,
-	offsetMs: number,
 	durationSec = Number.POSITIVE_INFINITY,
 ) {
-	const raw = videoTimeSec - offsetMs / 1000;
 	const finiteDuration = Number.isFinite(durationSec) && durationSec > 0 ? durationSec : Infinity;
 	return {
-		targetTimeSec: Math.min(Math.max(0, raw), finiteDuration),
-		shouldPlay: raw >= 0 && raw < finiteDuration,
+		targetTimeSec: Math.min(Math.max(0, videoTimeSec), finiteDuration),
+		shouldPlay: videoTimeSec >= 0 && videoTimeSec < finiteDuration,
 	};
 }
 
@@ -160,10 +166,6 @@ export function VirtualPreview({
 	clockRef,
 }: VirtualPreviewProps) {
 	const { settings } = useEditorSettings();
-	const audioOffsetMsRef = useRef(settings.audioOffsetMs);
-	useEffect(() => {
-		audioOffsetMsRef.current = settings.audioOffsetMs;
-	}, [settings.audioOffsetMs]);
 	// ponytail: an oversized, offset video inside .videoFrame's overflow:hidden
 	// box — the same "scale + negative-position the full frame, let the
 	// container clip the rest" technique the export renderer uses via a Pixi
@@ -438,11 +440,7 @@ export function VirtualPreview({
 			}
 			for (const audio of [primaryAudioRef.current, supplementalAudioRef.current]) {
 				if (!audio) continue;
-				const target = resolveAudioPreviewTime(
-					v.currentTime,
-					audioOffsetMsRef.current,
-					audio.duration,
-				);
+				const target = resolveAudioTrackPlayback(v.currentTime, audio.duration);
 				if (audio.playbackRate !== v.playbackRate) audio.playbackRate = v.playbackRate;
 				if (Math.abs(audio.currentTime - target.targetTimeSec) > 0.025) {
 					try {

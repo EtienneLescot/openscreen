@@ -306,9 +306,8 @@
 	},
 	"audio": {
 		"title": "Âm thanh",
-		"syncOffset": "Độ lệch đồng bộ",
 		"outputGain": "Mức đầu ra",
 		"reset": "Đặt lại âm thanh",
-		"help": "Điều chỉnh thời điểm âm thanh và mức đầu ra. Cả hai được áp dụng giống hệt nhau trong bản xem trước và khi xuất."
+		"help": "Điều chỉnh mức đầu ra của âm thanh. Nó được áp dụng giống hệt nhau trong bản xem trước và khi xuất."
 	}
 }

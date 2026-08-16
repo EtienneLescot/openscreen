@@ -27,22 +27,28 @@ const PASSTHROUGH_EPSILON: f64 = 1e-3;
 
 pub type PlanarPcm = Vec<Vec<f32>>;
 
-/// Apply the editor's output trim and signed sync offset to the assembled timeline.
+/// Apply the editor's output trim to the assembled timeline.
 ///
-/// Both stages are stateless on purpose. The editor preview plays the untouched source file
-/// (seeked), while this runs on the assembled timeline — trimmed, speed-adjusted, concatenated
-/// — so the two see different signals. A linear gain and a whole-sample delay are the only
-/// operations that land identically on both, which is what lets the editor claim that what you
-/// hear is what you export.
+/// One stage, and keeping it that way takes some resisting. This runs on the assembled
+/// timeline — trimmed, speed-adjusted, concatenated — while the editor preview plays the
+/// untouched SOURCE file, seeked. A linear gain is the only operation that means the same
+/// thing on both, which is what lets the editor claim that what you hear is what you export.
 ///
-/// That rules out the obvious next feature. A filter or a compressor carries state across
-/// cuts here and not in the preview; a loudness normaliser is worse still, because its makeup
-/// is a single scalar measured over the whole assembled programme, which the preview never
-/// holds and which changes with every trim. Adding either back means either an offline preview
-/// render or an accepted, documented divergence — not a quiet extra stage in this function.
+/// Three things that look like they belong here and do not:
+/// - a filter or a compressor, which carries state across cuts here and not in the preview;
+/// - a loudness normaliser, whose makeup is a single scalar measured over the whole assembled
+///   programme — the preview never holds that programme, and the value moves with every trim;
+/// - a sync offset, which shipped here once. It is expressed in TIMELINE seconds at this
+///   point in the pipeline, but the preview would apply it in SOURCE seconds, so a 2x speed
+///   region halved it; and because the shift is uniform over the assembled programme, near a
+///   cut the export pulls audio across the junction while the preview only has the active
+///   asset loaded.
 ///
-/// Bounds mirror `AUDIO_GAIN_DB_LIMIT` / `AUDIO_OFFSET_MS_LIMIT` in editorSettings.ts. The
-/// result stays the same length so video and following clips cannot drift.
+/// Any of them means either rendering the export's audio assembly preview-side, or accepting
+/// and documenting a divergence — not a quiet extra stage in this function.
+///
+/// The bound mirrors `AUDIO_GAIN_DB_LIMIT` in editorSettings.ts. The result stays the same
+/// length so video and following clips cannot drift.
 pub fn finish_audio(mut pcm: PlanarPcm, settings: SceneAudio) -> PlanarPcm {
     let samples = pcm.first().map(Vec::len).unwrap_or(0);
     if samples == 0 {
@@ -55,28 +61,6 @@ pub fn finish_audio(mut pcm: PlanarPcm, settings: SceneAudio) -> PlanarPcm {
     let trim = 10.0f32.powf(settings.gain_db.clamp(-12.0, 12.0) / 20.0);
     for sample in pcm.iter_mut().flatten() {
         *sample = (*sample * trim).clamp(-1.0, 1.0);
-    }
-
-    let shift = ((settings.offset_ms.clamp(-500.0, 500.0) / 1_000.0)
-        * AUDIO_OUTPUT_SAMPLE_RATE as f64)
-        .round() as i64;
-    if shift == 0 {
-        return pcm;
-    }
-    if shift > 0 {
-        let destination = (shift as usize).min(samples);
-        let count = samples - destination;
-        for channel in pcm.iter_mut() {
-            channel.copy_within(..count, destination);
-            channel[..destination].fill(0.0);
-        }
-    } else {
-        let source = ((-shift) as usize).min(samples);
-        let count = samples - source;
-        for channel in pcm.iter_mut() {
-            channel.copy_within(source.., 0);
-            channel[count..].fill(0.0);
-        }
     }
     pcm
 }
@@ -1119,26 +1103,6 @@ mod tests {
         assert_eq!(mixed[0], vec![0.5; 8]);
     }
 
-    #[test]
-    fn signed_audio_offset_is_length_preserving() {
-        let settings = SceneAudio {
-            offset_ms: 1000.0 / AUDIO_OUTPUT_SAMPLE_RATE as f64,
-            gain_db: 0.0,
-        };
-        // Values stay inside [-1, 1] so this asserts the shift, not the output clamp.
-        let delayed = finish_audio(planar(&[0.1, 0.2, 0.3]), settings);
-        assert_eq!(delayed[0], vec![0.0, 0.1, 0.2]);
-
-        let advanced = finish_audio(
-            planar(&[0.1, 0.2, 0.3]),
-            SceneAudio {
-                offset_ms: -1000.0 / AUDIO_OUTPUT_SAMPLE_RATE as f64,
-                ..settings
-            },
-        );
-        assert_eq!(advanced[0], vec![0.2, 0.3, 0.0]);
-    }
-
     /// The gain must be the SAME scalar the editor preview feeds its GainNode
     /// (`10 ** (dB / 20)`), because that identity is the whole parity guarantee: nothing
     /// else stands between what the editor plays and what this writes.
@@ -1147,10 +1111,7 @@ mod tests {
         for gain_db in [-12.0f32, -6.0206, 0.0, 6.0206, 12.0] {
             let result = finish_audio(
                 planar(&[0.25, -0.25]),
-                SceneAudio {
-                    offset_ms: 0.0,
-                    gain_db,
-                },
+                SceneAudio { gain_db },
             );
             let expected = (0.25 * 10.0f32.powf(gain_db / 20.0)).clamp(-1.0, 1.0);
             assert!(
@@ -1163,60 +1124,26 @@ mod tests {
     }
 
     #[test]
-    fn out_of_range_settings_are_clamped_to_the_editor_bounds() {
-        // A hand-edited project (or a future UI change) must not be able to ask for an
-        // offset or a gain the sliders cannot display.
-        //
-        // The buffer has to outlast the clamp for this to mean anything: on a short input
-        // every delay past its length produces silence, so the assertion would hold for a
-        // 500 ms clamp and for no clamp at all. Track a single impulse instead and check
-        // WHERE it lands.
-        let limit_samples = AUDIO_OUTPUT_SAMPLE_RATE as usize / 2; // 500 ms
-        let mut input = vec![0.0f32; limit_samples + 2];
-        input[0] = 0.5;
-        let delayed = finish_audio(
-            planar(&input),
-            SceneAudio {
-                offset_ms: 9_999.0,
-                gain_db: 0.0,
-            },
-        );
-        assert_eq!(
-            delayed[0][limit_samples], 0.5,
-            "the impulse must land at 500 ms, not at the requested 9.999 s"
-        );
-        assert_eq!(delayed[0][limit_samples - 1], 0.0);
-        assert_eq!(delayed[0][0], 0.0);
-
-        let advanced = finish_audio(
-            planar(&input),
-            SceneAudio {
-                offset_ms: -9_999.0,
-                gain_db: 0.0,
-            },
-        );
-        // Advancing by the same clamp drops everything before it; the impulse at sample 0
-        // is gone and nothing is left behind it.
-        assert!(advanced[0].iter().all(|sample| *sample == 0.0));
-
-        let quiet = finish_audio(
-            planar(&[0.5]),
-            SceneAudio {
-                offset_ms: 0.0,
-                gain_db: -99.0,
-            },
-        );
+    fn out_of_range_gain_is_clamped_to_the_editor_bound() {
+        // A hand-edited project, the AI edition agent, or a future UI change must not be
+        // able to ask for a gain the slider cannot display.
+        let quiet = finish_audio(planar(&[0.5]), SceneAudio { gain_db: -99.0 });
         let floor = 0.5 * 10.0f32.powf(-12.0 / 20.0);
         assert!((quiet[0][0] - floor).abs() < 1e-6);
 
-        let loud = finish_audio(
-            planar(&[0.1]),
-            SceneAudio {
-                offset_ms: 0.0,
-                gain_db: 99.0,
-            },
-        );
+        let loud = finish_audio(planar(&[0.1]), SceneAudio { gain_db: 99.0 });
         let ceiling = 0.1 * 10.0f32.powf(12.0 / 20.0);
         assert!((loud[0][0] - ceiling).abs() < 1e-6);
+    }
+
+    #[test]
+    fn output_is_clipped_to_full_scale_and_keeps_its_length() {
+        // The trim can push a hot signal past full scale; the timeline must come back the
+        // same length either way, or video and the following clips drift against it.
+        let result = finish_audio(planar(&[0.9, -0.9, 0.1]), SceneAudio { gain_db: 12.0 });
+        assert_eq!(result[0].len(), 3);
+        assert_eq!(result[0][0], 1.0);
+        assert_eq!(result[0][1], -1.0);
+        assert!((result[0][2] - 0.1 * 10.0f32.powf(12.0 / 20.0)).abs() < 1e-6);
     }
 }

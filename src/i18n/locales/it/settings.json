@@ -306,9 +306,8 @@
 	},
 	"audio": {
 		"title": "Audio",
-		"syncOffset": "Offset sincronizzazione",
 		"outputGain": "Livello di uscita",
 		"reset": "Reimposta audio",
-		"help": "Regola la sincronizzazione dell’audio e il livello di uscita. Entrambi si applicano allo stesso modo nell’anteprima e nell’esportazione."
+		"help": "Regola il livello di uscita audio. Si applica allo stesso modo nell’anteprima e nell’esportazione."
 	}
 }
