@@ -80,7 +80,19 @@ export const BANDS: Band[] = [
 		claim: "It records with the operating system, not around it.",
 		body: "Pick a window or a display. macOS goes through ScreenCaptureKit and Windows through Windows Graphics Capture — the same capture path the system uses itself. The pointer is recorded as data rather than burned into the pixels, so you can restyle it after the fact.",
 		fact: "ScreenCaptureKit · Windows Graphics Capture · system audio without extra drivers",
-		shape: "statement",
+		shape: "plate",
+		media: {
+			image: `${IMG}/01-record-a.jpg`,
+			imageSm: `${IMG}/01-record-sm-a.jpg`,
+			// 820 wide rather than the section's usual 960: this band's evidence is
+			// a column of five small rows, and any crop tight enough to read them
+			// without upscaling comes out narrower. It renders into the same box.
+			width: 820,
+			height: 461,
+			widthSm: 640,
+			heightSm: 360,
+			alt: "The recorder's settings, with Rec selected in the mode switch above them. Five rows: the source, set to a named window; system audio, on; the microphone, off; the camera, off; and cursor highlighting, on.",
+		},
 	},
 	{
 		id: "band-timeline",
@@ -97,7 +109,7 @@ export const BANDS: Band[] = [
 			height: 288,
 			widthSm: 640,
 			heightSm: 118,
-			alt: "The OpenScreen timeline: a ruler in minutes and seconds, then prompts reading “Press A to add annotation”, “Press S to add speed” and “Press T to add trim” on empty lanes, then two green zoom blocks labelled 1.80x and 2.20x sharing one lane below them, then “Press C to add a Full Camera segment”, and one audio clip drawn as a waveform along the bottom.",
+			alt: "The OpenScreen timeline: a ruler in minutes and seconds, then prompts reading “Press A to add annotation” and “Press S to add speed” on empty lanes, then two red trim blocks at the far ends of their own lane labelled 0:02.2 and 0:04.9 — the silences the agent cut — then three green zoom blocks labelled 1.80x, 2.20x and 1.80x sharing the lane below, then “Press C to add a Full Camera segment”, and one audio clip drawn as a waveform along the bottom.",
 		},
 	},
 	{
@@ -115,7 +127,7 @@ export const BANDS: Band[] = [
 			height: 540,
 			widthSm: 640,
 			heightSm: 360,
-			alt: "The transcription panel, headed “Current transcription”, beside the video canvas. It names the recording and holds the spoken text of it, with the pauses marked inline as “[silence 2.2s]”, “[silence 0.3s]” and “[silence 6.2s]” — the gaps the editor can then cut.",
+			alt: "A caption line reading “amber day on the validator, and it” rendered large over the video, with the Captions panel open beside it: captions switched on, a note that fifteen caption lines were derived live from the transcript, a language row offering the original transcript or a translation, and the type controls — typeface, bold, size, colour — that are setting how the line above is drawn.",
 		},
 	},
 	{
@@ -140,7 +152,7 @@ export const BANDS: Band[] = [
 			height: 540,
 			widthSm: 640,
 			heightSm: 360,
-			alt: "The agent's reply in the chat panel, quoting the transcript back with timecodes: silences longer than one second at 0.0–2.24s before “Hi” and at 33.88–40.03s after “think.”, a total cut of about 8.4 seconds taking the video from 40s to roughly 31.6s, and a green line underneath reading “applied: added 2 trims”.",
+			alt: "The agent's reply in the chat panel, quoting the transcript back with timecodes: the only silences over a second were at the two ends, 0–2.19s of dead lead-in before “Hi” and 35.12–40.03s of dead tail after “think.”, both cut, taking the video about seven seconds shorter — from 40.0s to 33.0s of playable footage — with a note that the existing zooms stay anchored to the same moments, and a green line underneath reading “applied: added 2 trims”.",
 		},
 	},
 	{
@@ -172,8 +184,8 @@ export const BANDS: Band[] = [
 			widthSm: 640,
 			heightSm: 360,
 			seconds: 3.2,
-			alt: "The export dialog: MP4 or GIF, a resolution row offering 720p, 1080p and Source, a frame-rate row offering 24, 30 and 60, and a codec row offering H.264 and H.265.",
-			resultAlt: "The same dialog mid-render, with a progress bar part-filled and a counter reading the frame it has reached out of the total, with an estimate of the seconds left.",
+			alt: "The export dialog with MP4 chosen over GIF, 720p at 1280 by 720 chosen from a row offering 1080p and Source as well, 30 chosen from a row offering 24 and 60, and H.264 chosen over H.265.",
+			resultAlt: "The same dialog a moment into the render: a progress bar part-filled at fourteen per cent, and a line under it counting 134 of 988 frames with an estimate of eighteen seconds left.",
 		},
 	},
 ];

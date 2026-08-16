@@ -18,6 +18,6 @@ export const PLATE = {
 	// Not "unretouched": the window's rounded corners were squared against its own
 	// chrome colour so the wallpaper behind it does not bleed into the frame. That
 	// is matting, but the caption should not claim more than the picture is.
-	caption: "OpenScreen 1.8 · one frame of the running editor",
-	alt: "The OpenScreen editor: an AI chat panel down the left, the video canvas in the middle showing the page being demonstrated, a live transcript panel on the right with the silences marked in it, and a timeline below holding two zoom regions above one audio waveform.",
+	caption: "OpenScreen 1.9 · one frame of the running editor",
+	alt: "The OpenScreen editor at the end of a session: the chat panel down the left holding the agent's reply and a green line confirming two trims were applied, the video canvas in the middle showing the page being demonstrated, a transcript panel on the right where the two silences it cut are struck through in red, and a timeline below holding those two trims and three zoom regions above one audio waveform.",
 } as const;
