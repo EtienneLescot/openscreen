@@ -324,10 +324,12 @@ unsafe fn decode_clip_audio_inner(
     // de flux peut faire que `av_read_frame` ne renvoie jamais AVERROR_EOF, empêchant
     // `decoder_eof` de se propager — la boucle tourne alors à 100 % CPU pour toujours.
     // Un budget TEMPS plutôt qu'un compteur d'itérations : `av_read_frame` peut être lent
-    // sur un flux corrompu, un compteur serait soit trop grand soit trop petit. 60 s
-    // couvre largement le décodage logiciel d'un clip de plus de 20 minutes.
+    // sur un flux corrompu, un compteur serait soit trop grand soit trop petit. Le budget
+    // est dimensionné sur la durée demandée (facteur 8, plancher 60 s) : un long clip sur
+    // un stockage lent reste couvert, seule une vraie boucle infinie est coupée.
     let loop_start = std::time::Instant::now();
-    let loop_budget = std::time::Duration::from_secs(60);
+    let loop_budget_secs = (((source_end_sec - source_start_sec).max(0.0) * 8.0) as u64).max(60);
+    let loop_budget = std::time::Duration::from_secs(loop_budget_secs);
 
     // Une seule passe de démux alimente tous les décodeurs : chaque paquet est routé vers la
     // piste dont il porte l'index. On continue tant qu'AU MOINS une piste a encore quelque
@@ -335,7 +337,7 @@ unsafe fn decode_clip_audio_inner(
     while tracks.iter().any(|t| !t.reached_end && !t.decoder_eof) {
         if loop_start.elapsed() > loop_budget {
             eprintln!(
-                "[openscreen-compositor] decode_clip_audio: boucle plafonnée à 60 s (source_end={source_end_sec} s), sortie forcée"
+                "[openscreen-compositor] decode_clip_audio: boucle plafonnée à {loop_budget_secs} s (source_end={source_end_sec} s), sortie forcée"
             );
             for track in tracks.iter_mut() {
                 track.decoder_eof = true;
@@ -1022,8 +1024,12 @@ unsafe fn avfilter_atempo_stretch(
         }
         offset += count;
     }
-    // EOF : le graphe vide alors ses derniers grains.
-    av_buffersrc_add_frame(src_ctx, ptr::null_mut());
+    // EOF : le graphe vide alors ses derniers grains. Un échec ici signifie que
+    // le graphe n'a pas pu être vidé — on rend None pour retomber sur WSOLA.
+    if av_buffersrc_add_frame(src_ctx, ptr::null_mut()) < 0 {
+        eprintln!("[openscreen-compositor] atempo: flush du buffersrc a échoué, repli WSOLA");
+        return None;
+    }
 
     // Drain : après l'EOF de la source, chaque appel rend une trame jusqu'à AVERROR_EOF.
     let mut frame = av_frame_alloc();
@@ -1034,6 +1040,17 @@ unsafe fn avfilter_atempo_stretch(
     loop {
         let ret = av_buffersink_get_frame(sink_ctx, frame);
         if ret < 0 {
+            // Seuls EOF (drain terminé) et EAGAIN (rien de prêt) sont bénins ; tout
+            // autre code est une vraie panne du filtre — on rend None pour retomber
+            // sur le chemin WSOLA plutôt que d'exporter un audio partiel + silence.
+            if ret != AVERROR_EOF && ret != AVERROR_EAGAIN {
+                eprintln!(
+                    "[openscreen-compositor] atempo: av_buffersink_get_frame a échoué (ret={ret}), repli WSOLA"
+                );
+                av_frame_unref(frame);
+                av_frame_free(&mut frame);
+                return None;
+            }
             break;
         }
         let count = (*frame).nb_samples as usize;
