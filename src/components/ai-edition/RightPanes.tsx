@@ -1627,9 +1627,9 @@ export function LayoutPane() {
 			{isPip ? (
 				<div className={styles.sliderGrid}>
 					<div className={`${styles.sliderCell} ${styles.full}`}>
-						<div className="head">
-							<span className="label">{ts("layout.webcamSize")}</span>
-							<span className="val">{Math.round(settings.webcamSizePreset)}%</span>
+						<div className={styles.head}>
+							<span className={styles.label}>{ts("layout.webcamSize")}</span>
+							<span className={styles.val}>{Math.round(settings.webcamSizePreset)}%</span>
 						</div>
 						<input
 							type="range"
@@ -1883,10 +1883,10 @@ export function SliderCell({
 }) {
 	return (
 		<div className={styles.sliderCell}>
-			<div className="head">
-				<span className="label">{label}</span>
+			<div className={styles.head}>
+				<span className={styles.label}>{label}</span>
 				{showValue ? (
-					<span className="val">
+					<span className={styles.val}>
 						{value.toFixed(decimals)}
 						{suffix}
 					</span>
