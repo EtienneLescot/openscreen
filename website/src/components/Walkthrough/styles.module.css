@@ -336,6 +336,31 @@ span.replay {
 
 /* ---- the plate itself ---- */
 
+/* ---- the three bands the recreation replaces ----
+   An exact mirror of the gate in Recreation/styles.module.css, and it has to
+   stay one: if the two conditions ever drift apart there is a width at which a
+   reader sees the same three claims twice, or neither. Both are pure CSS for
+   that reason — a JavaScript gate on one side and a media query on the other
+   could not be kept in step, and one of them would decide after hydration. */
+
+.superseded {
+	display: contents;
+}
+
+@media (min-width: 901px) {
+	@supports (position: sticky) {
+		.superseded {
+			display: none;
+		}
+	}
+}
+
+@media (forced-colors: active) {
+	.superseded {
+		display: contents;
+	}
+}
+
 /* ---- the scrubbed bands ----
    A band with a scroll rendition becomes its own theatre: it grows to a little
    over two viewports, and both its halves pin, so scrolling through it walks the
