@@ -940,7 +940,7 @@ fn run<W: Write>(
                         ("metas", metas.clone().into()),
                     ]),
                 });
-                if !has_cursor_meta {
+                if !has_cursor_meta && config.cursor_mode.reports_cursor() {
                     let _ = emitter.emit(&Event::Warning {
                         code: "no-cursor-metadata".to_owned(),
                         message: format!(

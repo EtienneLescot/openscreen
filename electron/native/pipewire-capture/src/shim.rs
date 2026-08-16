@@ -102,6 +102,18 @@ extern "C" {
         with_modifier: i32,
         producer_modifier: i64,
     ) -> i32;
+    #[cfg(test)]
+    fn osc_pw_frame_bounds_valid(
+        data_type: u32,
+        maxsize: u32,
+        mapped_len: usize,
+        chunk_offset: u32,
+        chunk_size: u32,
+        chunk_flags: i32,
+        stride: i32,
+        width: i32,
+        height: i32,
+    ) -> i32;
     fn osc_pw_start(
         fd: i32,
         node_id: u32,
@@ -611,6 +623,34 @@ pub fn enum_format_accepts_dmabuf_producer(with_modifier: bool, producer_modifie
     unsafe { osc_pw_enum_format_accepts_dmabuf_producer(i32::from(with_modifier), producer_modifier) }
 }
 
+#[cfg(test)]
+fn frame_bounds_valid(
+    data_type: u32,
+    maxsize: u32,
+    mapped_len: usize,
+    chunk_offset: u32,
+    chunk_size: u32,
+    chunk_flags: i32,
+    stride: i32,
+    width: i32,
+    height: i32,
+) -> bool {
+    // SAFETY: the C helper performs arithmetic only and owns its output storage.
+    unsafe {
+        osc_pw_frame_bounds_valid(
+            data_type,
+            maxsize,
+            mapped_len,
+            chunk_offset,
+            chunk_size,
+            chunk_flags,
+            stride,
+            width,
+            height,
+        ) != 0
+    }
+}
+
 /// SPA enum values as compiled from the vendored headers.
 pub fn constants() -> Constants {
     let mut out = Constants::default();
@@ -747,9 +787,9 @@ extern "C" fn on_frame(user: *mut c_void, frame: *const RawFrame) {
         if rows > frame.size {
             return;
         }
-        // SAFETY: the shim clamped `size` against the mapping's `maxsize` before
-        // the callback, `rows <= size` was just checked, and the mapping stays
-        // live until this returns.
+        // SAFETY: the shim clamped `size` against the mapping length before the
+        // callback, `rows <= size` was just checked, and the mapping stays live
+        // until this returns.
         let pixels = unsafe { std::slice::from_raw_parts(frame.data, rows) };
         mailbox.put(pixels, frame);
         (state.sink)(StreamEvent::FrameReady);
@@ -927,6 +967,135 @@ mod tests {
             "a modifier we cannot mmap must not intersect — accepting it would ship \
              a scrambled recording instead of an error"
         );
+    }
+
+    #[test]
+    fn dmabuf_zero_maxsize_uses_recovered_mapping_length() {
+        let constants = constants();
+        let stride = 1920 * 4;
+
+        assert!(frame_bounds_valid(
+            constants.data_dma_buf,
+            0,
+            8 * 1024 * 1024,
+            0,
+            9,
+            0,
+            stride as i32,
+            1920,
+            1080,
+        ));
+    }
+
+    #[test]
+    fn frame_bounds_reject_invalid_offsets_and_geometry_without_affecting_memfd() {
+        let constants = constants();
+        let stride = 16;
+        let frame_len = stride * 4;
+
+        assert!(frame_bounds_valid(
+            constants.data_dma_buf,
+            frame_len,
+            frame_len as usize,
+            0,
+            frame_len,
+            0,
+            stride as i32,
+            4,
+            4,
+        ));
+        assert!(!frame_bounds_valid(
+            constants.data_dma_buf,
+            frame_len,
+            frame_len as usize,
+            frame_len + 1,
+            frame_len,
+            0,
+            stride as i32,
+            4,
+            4,
+        ));
+        // An oversized chunk is capped to the remaining allocation, as SPA
+        // requires, and remains valid only when a whole frame still fits.
+        assert!(frame_bounds_valid(
+            constants.data_dma_buf,
+            frame_len,
+            frame_len as usize,
+            0,
+            u32::MAX,
+            0,
+            stride as i32,
+            4,
+            4,
+        ));
+        // Shared-memory buffers continue to use PipeWire's maxsize; a separate
+        // mapped length is meaningful only for DMA-BUF.
+        assert!(frame_bounds_valid(
+            constants.data_mem_fd,
+            frame_len,
+            0,
+            0,
+            frame_len,
+            0,
+            stride as i32,
+            4,
+            4,
+        ));
+        assert!(!frame_bounds_valid(
+            constants.data_mem_fd,
+            frame_len,
+            0,
+            0,
+            frame_len,
+            1,
+            stride as i32,
+            4,
+            4,
+        ));
+        assert!(!frame_bounds_valid(
+            constants.data_mem_fd,
+            0,
+            frame_len as usize,
+            0,
+            frame_len,
+            0,
+            stride as i32,
+            4,
+            4,
+        ));
+        assert!(!frame_bounds_valid(
+            constants.data_dma_buf,
+            u32::MAX,
+            u32::MAX as usize,
+            0,
+            u32::MAX,
+            0,
+            i32::MAX,
+            4,
+            i32::MAX,
+        ));
+        assert!(!frame_bounds_valid(
+            constants.data_dma_buf,
+            frame_len,
+            frame_len as usize,
+            0,
+            frame_len,
+            0,
+            15,
+            4,
+            4,
+        ));
+        assert!(!frame_bounds_valid(
+            constants.data_dma_buf,
+            0,
+            frame_len as usize,
+            0,
+            9,
+            1,
+            stride as i32,
+            4,
+            4,
+        ));
     }
 
     /// End-to-end exercise of the PipeWire half with NO portal involved.

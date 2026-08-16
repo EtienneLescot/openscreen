@@ -171,6 +171,11 @@ int osc_pw_cursor_meta_accepts_producer_size(uint32_t width, uint32_t height);
  */
 int osc_pw_enum_format_accepts_dmabuf_producer(int with_modifier, int64_t producer_modifier);
 
+/* Test-only frame-bound validation without a live PipeWire buffer. */
+int osc_pw_frame_bounds_valid(uint32_t data_type, uint32_t maxsize, size_t mapped_len,
+                              uint32_t chunk_offset, uint32_t chunk_size, int32_t chunk_flags,
+                              int32_t stride, int32_t width, int32_t height);
+
 struct osc_pw_session;
 
 /*
