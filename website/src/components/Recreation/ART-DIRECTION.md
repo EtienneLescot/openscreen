@@ -1,223 +1,81 @@
-# Art direction brief — the recreated editor
+# The recreation — art direction
 
-The engineering of this section is finished and correct. Its composition is not.
-This brief exists because the specification it was built from was exact about
-geometry and silent about art direction, and it shows.
+Six settings in two acts, told by the scroll. This replaces an earlier build
+that drew the whole editor at 1:1 in a 1920px scene and flew a camera over it;
+this note records what was wrong with that and what the rules are now, so the
+next pass does not rediscover either.
 
-**The one job: make a scroll through this read as one continuous look at a piece
-of software, instead of a series of fragments.** Everything below is either the
-material you have to work with, a constraint you may not break, or a description
-of what is currently wrong.
+## What the previous cut got wrong
 
----
+1. **The scene was bigger than the screen.** Authored at 1920px and shown in a
+   1440px viewport, it could never be seen whole, so every camera hold framed a
+   fragment of an interface rather than an interface. Nothing else on the list
+   mattered as much as this one.
+2. **It was boxed into the 1040px measure.** Inside the page's content column,
+   a whole editor had to be drawn at a third of its natural size.
+3. **Three shadowed rectangles competed** — chat, canvas, floor — with no ground
+   under any of them and no clear subject in any frame.
+4. **It was generated from a spec and looked at once, at the end.**
 
-## 1. What this section is
+## The rules
 
-The OpenScreen landing page opens with a photograph of the real editor. Below it,
-the same editor is **redrawn in live DOM** — real elements, real text, the app's
-own design tokens — wrapped around **real video of the recording it is editing**.
-The reader scrolls; a camera moves through that scene in 3D perspective; the
-interface changes state as it goes.
+**Nothing is drawn that the current beat does not need.** Act one is a
+composite and one inspector panel; there is no timeline, because a background
+swap, a padding change and a cursor resize are all legible in a still frame and
+the picture would rather have the room. Act two adds the timeline, because
+zooms, a pinned note and cuts arriving from a transcript are only meaningful
+against one. The floor slides in once, between the acts.
 
-It is a composite, the same way the application is one: the app draws chrome in
-DOM and puts video in a canvas. That is the point. Chrome alone would be a
-*drawing* of an interface used to sell an interface — which is exactly what this
-page deleted, and the deletion is the section's whole premise.
+**Everything is sized to the viewport.** Percentages, `min()` against a measure,
+and container units inside the composite. There is no pixel scene and therefore
+no framing that can go wrong at a width nobody tested. The band is the one
+block on the page that escapes `.inner`.
 
-Live at `http://localhost:3223` (see §7). The code is five files, ~4,200 lines:
+**One subject per frame.** A caption and a panel on the left, the composite on
+the right, the floor at the bottom in act two. The composite gets a hairline and
+a seated shadow, not a glow — a halo reads as a selection state on something
+that is not selected.
 
-| file | lines | what it is |
-|---|---:|---|
-| `index.tsx` | 595 | the markup. Renders once, holds no state, hands refs to the driver |
-| `styles.module.css` | 1,613 | geometry, tokens, the 3D camera keyframes, the gates |
-| `driver.ts` | 366 | one rAF loop; the media clock |
-| `generated.ts` | 639 | **emitted, never hand-edited** — every string and number on screen |
-| `../../../scripts/gen-recreation.mjs` | 1,020 | the generator that emits it |
+**One clock.** Scroll position becomes scene seconds, scene seconds become
+document seconds in act two, and the playhead, the pill under it, the composite's
+magnification and the transcript's cue are four readings of that one number. No
+media element, no second timebase, nothing that can drift.
 
----
+**The beats touch.** A gap between beats is a stretch with no caption, no panel
+and no palette — which looks like breathing room on paper and like the left half
+of the screen going empty on screen. Two separate passes shipped that bug.
 
-## 2. The problem to solve
+**The hand is a child of the control it operates.** No pointer path in
+percentages of the stage, because such a path has to be re-tuned every time a
+panel moves and is otherwise silently almost-right.
 
-**Stated as a problem, because the current answer is wrong and a better one may
-not look like the current one at all.**
+## What is real
 
-The scene is authored at the app's literal size — 1920 CSS px — so that 11px pill
-labels and 13px transcript text render at 1:1 and stay legible. That was the
-right instinct: text drawn at native size is the difference between software at
-life size and a mockup.
+- **The panels** are the app's, by locale key: `PANELS` for the titles,
+  `CONTROLS` for every slider at this document's own setting, scaled and
+  suffixed the way `RightPanes.tsx` does it. Cursor size is `size * 10` over
+  5–100 with one decimal and no unit — a hand-written panel gets that wrong in a
+  way that looks entirely plausible.
+- **The padding slider** moves the composite through `PreviewCanvas.tsx`'s own
+  `clamp(1 - (padding/100) * 0.4, 0.4, 1)`, evaluated per frame.
+- **The wallpapers** are the 18 the app ships, and the one selected first is the
+  one `STAGE.wallpaper` names.
+- **The pills** are the document's five: three zoom regions with the scales
+  `effectiveZoomScale` gives them, two trims the agent made. The annotation is
+  the one drawn object — the document holds none, which is exactly why that lane
+  still shows its "Press A" hint.
+- **The transcript** is 103 words and 3 silences from the app's own
+  `buildClipSection`, and the two that strike are the two the document removes.
+- **The picture in the window** is a render of the page the recording was of.
+- **There is no webcam bubble** because `STAGE.webcam` is `null`: the camera
+  track is off in this project.
 
-But a 1920px-wide scene in a 1440px viewport **cannot be seen whole**. Every hold
-in the current camera therefore frames a fragment: half a transcript panel, a
-slice of canvas, a corner of the FAQ. There is no moment in the entire scroll
-where a reader sees *an editor*. Authoring at 1:1 and filling the viewport are
-in direct tension, and the current build resolves it by silently choosing 1:1 and
-letting the composition lose.
+`generated.ts` carries all of it and is emitted by `scripts/gen-recreation.mjs`.
+Never edit it by hand; `--check` fails the build when it drifts.
 
-Ways out exist and none is obviously right — that is the brief:
+## Verifying
 
-- Reframe so each act is a **deliberate detail shot** rather than an accidental
-  crop, and let the whole-editor view be carried by the photograph above.
-- Scale the scene down at the holds and accept softer text, buying a whole view.
-- Author a **narrower** scene — a composition of the app's parts rather than a
-  facsimile of its layout — which is not the app's geometry but may be the better
-  picture.
-- Something else. The constraint is legibility and honesty, not 1920.
-
----
-
-## 3. What is wrong now, specifically
-
-Regenerate the evidence with §7's command; these are the three that matter.
-
-**The camera is inside the scene rather than looking at it.** See above. This is
-the structural fault and everything else is downstream of it.
-
-**The copy panels are cards dropped on top.** Each act's headline and paragraph
-render as a rounded, shadowed rectangle floating over the scene, overlapping it
-at whatever position the transform happens to leave. They read as a separate UI
-layer, not as part of a composition. There is no relationship — no alignment, no
-consistent side, no negative space reserved for them.
-
-**A third rectangle competes.** The figure's caption (the mono paragraph
-explaining what is drawn and what is filmed) is a third floating card. Three
-shadowed rectangles fight for the frame at once.
-
-**There is no ground.** The scene bleeds into flat black with hard vertical seams
-where the world ends. Nothing situates it; nothing catches its edge.
-
----
-
-## 4. What you may not break
-
-These are not stylistic preferences. Each has a reason and most have a test.
-
-**Every string comes from somewhere.** `generated.ts` is emitted by a generator
-that reads the project document, the app's locale files, and the app's own
-`formatSec` / `effectiveZoomScale` / `buildClipSection` — imported and executed,
-not reimplemented. Each string carries a `PROVENANCE` entry naming its source.
-**Do not type a label, a timecode, a percentage or a duration into the markup.**
-If a value cannot be sourced, it does not appear: that is why there is no chat
-context pill (its value is computed and cannot honestly read 0% beside a rendered
-reply) and no webcam bubble (the camera track is off in this project).
-
-You may freely change **layout, size, position, colour, order, transform and
-motion**. You may not change **what is said**.
-
-**The two clocks stay separate.** `video.currentTime` owns the transport digits,
-the playhead, the cue-word underline and the canvas frame. Scroll owns the camera
-and the presence of the edit-history objects. No readout may have two sources,
-and no scroll-driven rule may touch a property the media clock owns. It is
-greppable on purpose.
-
-**Nothing is seeked.** The canvas video plays and loops. Scroll moves the camera,
-never the film. Seeking per animation frame is the most expensive thing this page
-could do.
-
-**The gates are mirrors and must stay mirrors.** The recreation shows only at
-≥901px with `position: sticky` supported and not in forced-colors. The three
-photographic bands it replaces (`.superseded` in `../Walkthrough/styles.module.css`)
-carry the exact inverse. Both are pure CSS. If they ever drift apart there is a
-width at which a reader sees the same three claims twice, or neither.
-
-**Reduced motion and no-JS fall back to the photographs**, with not one clip byte
-requested. Verified: the document is 9,161px with the recreation and 5,971px
-without.
-
-**The media budget has 12,744 bytes left**, of 1,600,000 — `npm run check:media`
-is the gate and it fails the build. If you need more, the four `-scrub` clips
-(865 KB) are now redundant with the DOM camera and can go; nothing else can.
-
-**Accessibility.** Nothing focusable anywhere — the app's silence marker is a real
-button, and recreating it as one would announce an action this page will never
-perform. No `role="img"` (it would flatten 433 nodes to `presentation`). The
-transcript and chat are exposed as real selectable text; the chrome is
-`aria-hidden`. The tree is fixed at the closing state so it never mutates under a
-linear reader. What moves is opacity, not the tree.
-
-**No `backdrop-filter` inside the transformed world** (measured: 2.2–3.0× the
-main-thread work of a whole sweep, a 166ms worst frame). **No `100vw`** — it ships
-a horizontal scrollbar on every classic-scrollbar platform. **No CSS custom
-property written from JavaScript** — an inherited property invalidates every
-descendant; measured at 211ms of style recalc against 8–9ms for direct
-`element.style` writes.
-
----
-
-## 5. The material
-
-All paths relative to `website/`. Everything here is already cut, verified and
-committed; none of it needs reshooting.
-
-### Photographs of the real application
-
-| file | size | bytes | what it shows |
-|---|---|---:|---|
-| `static/img/walkthrough/editor-1560.jpg` | 1560×876 | 68,521 | the whole editor at the end of a session — the agent's reply, two silences struck red in the transcript, two trims and three zooms on the timeline |
-| `static/img/walkthrough/editor-1040.jpg` | 1040×584 | 57,132 | same frame, smaller |
-| `…/editor-1560.avif`, `editor-1040.avif` | — | 53,739 / 30,807 | same, AVIF |
-| `…/01-record-a.jpg` | 820×461 | 13,051 | the recorder's five settings rows |
-| `…/02-timeline-a.jpg` | 1560×288 | 26,597 | the timeline strip: three zoom pills, two trim pills, lane hints, waveform |
-| `…/03-captions-a.jpg` | 960×540 | 36,099 | a caption rendered over the canvas, Captions panel beside it |
-| `…/04-agent-a.jpg` | 960×540 | 48,827 | the agent's reply quoting real timecodes, green applied line |
-| `…/05-export-a.jpg`, `-b.jpg` | 960×540 | 15,747 / 16,517 | the export dialog, before and mid-render |
-
-Each has a 640-wide `-sm-` companion.
-
-### Footage
-
-| file | size | bytes | what it is |
-|---|---|---:|---|
-| `static/video/canvas-loop.mp4` | 836×470 | 132,193 | **7.000s seamless loop**, the recording being edited, pre-cropped to zoom region 2's own 2.20× framing so the picture, the `2.20×` pill and the playhead are three renderings of one fact |
-| `static/video/canvas-loop-sm.mp4` | 640×360 | 62,819 | same |
-| `static/img/walkthrough/canvas-poster.jpg` | 872×490 | 35,889 | its first frame |
-| `static/video/05-export.mp4` (+`-sm`) | 960×540 | 22,259 | the export dialog rendering |
-| `static/video/*-scrub.mp4` ×4 | — | 865,212 | all-intra clips for the scroll-scrubbed bands — **redundant with this section; reclaimable** |
-
-### Data
-
-`generated.ts` exports, all derived: 106 transcript entries (103 words + 3 silence
-markers, each knowing whether a trim covers it), 5 timeline pills with their
-positions as percentages, 5 lanes with the app's real shortcut hints, both ruler
-variants (2s step ≤3042px, 1s step above), the waveform as 5 SVG paths bucketed by
-opacity, the chat's four blocks, the stage geometry, and the app's dark tokens.
-
----
-
-## 6. How this will be judged
-
-In this order:
-
-1. **Does a scroll read as one look at one piece of software?** Today it does not.
-2. **Is the text legible where the reader is asked to read it?** The transcript and
-   the agent's reply carry the section's two strongest claims; if they cannot be
-   read, the panels have no reason to be drawn rather than photographed.
-3. **Does the motion feel motivated?** The camera should move because there is
-   something to look at, not to demonstrate that it can.
-4. **Does it still feel like software rather than a mockup?** This is what native
-   text size was protecting. If you trade it away, trade it knowingly.
-5. **Do the fallbacks still hold, and does the budget still pass?** `npm run
-   typecheck && npm run check:media && npm run build` must be green.
-
----
-
-## 7. Running it and seeing it
-
-```bash
-cd website && npm ci && npm run build && npm run serve -- --port 3223
-```
-
-Then `http://localhost:3223`. Hard-reload — this page has bitten three people
-with a stale cache.
-
-The in-app browser panes do not deliver `IntersectionObserver` callbacks while
-hidden, so drive a real headless Chrome over CDP instead. Working drivers, which
-also produce the evidence in §3:
-
-```
-scratchpad/rec-shots.mjs     six screenshots across the scroll
-scratchpad/fallback.mjs      the gates at a given width, optionally with reduced motion
-scratchpad/overflow.mjs      every element crossing the viewport edge at a given width
-```
-
-To change what is *said* rather than how it looks, edit the sources the generator
-reads and re-run `node scripts/gen-recreation.mjs`. Never edit `generated.ts`.
+The in-app browser pane returns black frames for this page. Drive headless
+Chrome over CDP instead, scroll to a scene time, and look at the result — every
+defect in the list at the top of this file was visible in a screenshot and
+invisible in the source.

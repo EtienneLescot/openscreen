@@ -510,6 +510,135 @@ export const LOOP = {
 	"timeMapping": "startSec + min(currentTime, contentDurationSec)"
 } as const;
 
+/** The three facet panels the scroll opens before the transcript, with every
+ *  control's label as the app's locale files spell it. */
+export const PANELS = {
+	"background": {
+		"title": "Background",
+		"tabs": [
+			"Image",
+			"Color",
+			"Gradient"
+		],
+		"uploadCustom": "Upload Custom",
+		"wallpaperCount": 18,
+		"swatchLabels": [
+			"Background 1",
+			"Background 2",
+			"Background 3",
+			"Background 4",
+			"Background 5",
+			"Background 6",
+			"Background 7",
+			"Background 8",
+			"Background 9",
+			"Background 10",
+			"Background 11",
+			"Background 12",
+			"Background 13",
+			"Background 14",
+			"Background 15",
+			"Background 16",
+			"Background 17",
+			"Background 18"
+		]
+	},
+	"effects": {
+		"title": "Video Effects",
+		"padding": "Padding",
+		"blurBg": "Blur BG",
+		"motionBlur": "Motion Blur",
+		"shadow": "Shadow",
+		"roundness": "Roundness"
+	},
+	"cursor": {
+		"title": "Cursor",
+		"show": "Show Cursor",
+		"clipToBounds": "Clip to Canvas",
+		"theme": "Cursor Style",
+		"size": "Size",
+		"smoothing": "Smoothing"
+	}
+} as const;
+
+/** The padding formula's coefficients, so the slider moves the composite by the
+ *  app's own arithmetic rather than by a number that looks about right. */
+export const EFFECTS = {
+	"paddingDefault": 55,
+	"borderRadiusDefault": 40,
+	"paddingFitFactor": 0.4,
+	"paddingFitMin": 0.4
+} as const;
+
+/** Every slider and toggle on those panels, at this document's settings, scaled
+ *  and suffixed the way RightPanes.tsx scales and suffixes it. */
+export const CONTROLS = {
+	"padding": {
+		"label": "Padding",
+		"value": 55,
+		"min": 0,
+		"max": 100,
+		"suffix": "%",
+		"display": "55%"
+	},
+	"blurBg": {
+		"label": "Blur BG",
+		"on": true
+	},
+	"motionBlur": {
+		"label": "Motion Blur",
+		"value": 30,
+		"min": 0,
+		"max": 100,
+		"suffix": "%",
+		"display": "30%"
+	},
+	"shadow": {
+		"label": "Shadow",
+		"value": 35,
+		"min": 0,
+		"max": 100,
+		"suffix": "%",
+		"display": "35%"
+	},
+	"roundness": {
+		"label": "Roundness",
+		"value": 40,
+		"min": 0,
+		"max": 64,
+		"suffix": "px",
+		"display": "40px"
+	},
+	"cursorShow": {
+		"label": "Show Cursor",
+		"on": true
+	},
+	"clipToBounds": {
+		"label": "Clip to Canvas",
+		"on": false
+	},
+	"cursorTheme": {
+		"label": "Cursor Style",
+		"value": "default"
+	},
+	"cursorSize": {
+		"label": "Size",
+		"value": 45,
+		"min": 5,
+		"max": 100,
+		"suffix": "",
+		"display": "45.0"
+	},
+	"smoothing": {
+		"label": "Smoothing",
+		"value": 35,
+		"min": 0,
+		"max": 100,
+		"suffix": "%",
+		"display": "35%"
+	}
+} as const;
+
 export const TRANSPORT = {
 	"restCurrent": "0:17.5",
 	"endCurrent": "0:24.3",
@@ -577,6 +706,24 @@ export const PROVENANCE: ProvenanceEntry[] = [
 	{"shown":"Shift+Scroll Pan","source":"computed: timeline.json labels.pan, with the key hint V4Timeline.tsx:1474 writes beside it"},
 	{"shown":"Ctrl+Scroll Zoom","source":"computed: timeline.json labels.zoom, with the key hint V4Timeline.tsx:1477 writes beside it"},
 	{"shown":"Bellrock — docs walkthrough","source":"fixture assets[0].label, as the clip card's own label"},
+	{"shown":"Background","source":"src/i18n/locales/en/settings.json → background.title"},
+	{"shown":"Image","source":"src/i18n/locales/en/settings.json → background.image"},
+	{"shown":"Color","source":"src/i18n/locales/en/settings.json → background.color"},
+	{"shown":"Gradient","source":"src/i18n/locales/en/settings.json → background.gradient"},
+	{"shown":"Upload Custom","source":"src/i18n/locales/en/settings.json → background.uploadCustom"},
+	{"shown":"Background 1","source":"computed: settings.json background.imageLabel over the 18 wallpapers WALLPAPER_COUNT declares in src/lib/wallpaper.ts"},
+	{"shown":"Video Effects","source":"src/i18n/locales/en/settings.json → effects.title"},
+	{"shown":"Padding","source":"src/i18n/locales/en/settings.json → effects.padding"},
+	{"shown":"Blur BG","source":"src/i18n/locales/en/settings.json → effects.blurBg"},
+	{"shown":"Motion Blur","source":"src/i18n/locales/en/settings.json → effects.motionBlur"},
+	{"shown":"Shadow","source":"src/i18n/locales/en/settings.json → effects.shadow"},
+	{"shown":"Roundness","source":"src/i18n/locales/en/settings.json → effects.roundness"},
+	{"shown":"Cursor","source":"src/i18n/locales/en/settings.json → cursor.title"},
+	{"shown":"Show Cursor","source":"src/i18n/locales/en/settings.json → cursor.show"},
+	{"shown":"Clip to Canvas","source":"src/i18n/locales/en/settings.json → cursor.clipToBounds"},
+	{"shown":"Cursor Style","source":"src/i18n/locales/en/settings.json → cursor.theme"},
+	{"shown":"Size","source":"src/i18n/locales/en/settings.json → cursor.size"},
+	{"shown":"Smoothing","source":"src/i18n/locales/en/settings.json → cursor.smoothing"},
 ];
 
 /** What check-recreation.mjs asserts against. */

@@ -52,8 +52,8 @@
 
 import { execFileSync } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
-import { homedir } from "node:os";
 import { registerHooks } from "node:module";
+import { homedir } from "node:os";
 import { dirname, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 
@@ -113,7 +113,11 @@ const { buildClipSection, isSilenceWord, SILENCE_THRESHOLD_SEC } = await appModu
 // ── locale access that fails loudly ─────────────────────────────────────
 const locale = (ns) =>
 	JSON.parse(readFileSync(resolve(APP, `src/i18n/locales/en/${ns}.json`), "utf8"));
-const LOCALES = { editor: locale("editor"), settings: locale("settings"), timeline: locale("timeline") };
+const LOCALES = {
+	editor: locale("editor"),
+	settings: locale("settings"),
+	timeline: locale("timeline"),
+};
 
 /**
  * `t("settings:transcript.silence", { duration: "2.2" })`.
@@ -137,7 +141,8 @@ function t(path, vars = {}) {
 		if (!(name in vars)) throw new Error(`${path}: no value for {{${name}}}`);
 		return String(vars[name]);
 	});
-	if (/\{\{/.test(out)) throw new Error(`${path}: unresolved interpolation in ${JSON.stringify(out)}`);
+	if (/\{\{/.test(out))
+		throw new Error(`${path}: unresolved interpolation in ${JSON.stringify(out)}`);
 	return out;
 }
 
@@ -146,19 +151,19 @@ function t(path, vars = {}) {
 // imported. Its *arithmetic* can be, as text: pull the exact source of the
 // numbers this page reproduces and evaluate it. A change to any of them lands
 // here as a changed output, which `--check` turns into a failed build.
-const V4_SRC = readFileSync(
-	resolve(APP, "src/components/ai-edition/v4/V4Timeline.tsx"),
-	"utf8",
-);
+const V4_SRC = readFileSync(resolve(APP, "src/components/ai-edition/v4/V4Timeline.tsx"), "utf8");
 
 function lift(re, what) {
 	const m = V4_SRC.match(re);
-	if (!m) throw new Error(`could not lift ${what} out of V4Timeline.tsx — it moved or changed shape`);
+	if (!m)
+		throw new Error(`could not lift ${what} out of V4Timeline.tsx — it moved or changed shape`);
 	return m[1];
 }
 
 const TICK_STEPS_SEC = JSON.parse(
-	`[${lift(/const TICK_STEPS_SEC = \[([^\]]+)\]/, "TICK_STEPS_SEC").replace(/\s+/g, "").replace(/,$/, "")}]`,
+	`[${lift(/const TICK_STEPS_SEC = \[([^\]]+)\]/, "TICK_STEPS_SEC")
+		.replace(/\s+/g, "")
+		.replace(/,$/, "")}]`,
 );
 const MIN_LABEL_GAP_PX = Number(lift(/const MIN_LABEL_GAP_PX = (\d+)/, "MIN_LABEL_GAP_PX"));
 const MINOR_PER_MAJOR = Number(lift(/const MINOR_PER_MAJOR = (\d+)/, "MINOR_PER_MAJOR"));
@@ -323,7 +328,9 @@ const WORDS = section.words.map((cw, i) => {
 		i,
 		id: cw.id,
 		kind: silence ? "silence" : "word",
-		text: silence ? t("settings:transcript.silence", { duration: durationSec.toFixed(1) }) : cw.word.text,
+		text: silence
+			? t("settings:transcript.silence", { duration: durationSec.toFixed(1) })
+			: cw.word.text,
 		startSec: cw.word.startSec,
 		endSec: cw.word.endSec,
 		kept: cw.kept,
@@ -435,7 +442,10 @@ function rulerFor(worldPx) {
 
 /** Width at which the step drops to the next entry down. Below it the 1920 world
  *  applies; at or above it the world is the viewport and the rule re-steps. */
-const WIDE_BREAKPOINT_PX = Math.ceil((MIN_LABEL_GAP_PX * totalSec) / TICK_STEPS_SEC[TICK_STEPS_SEC.indexOf(rulerFor(1920).stepSec) - 1]);
+const WIDE_BREAKPOINT_PX = Math.ceil(
+	(MIN_LABEL_GAP_PX * totalSec) /
+		TICK_STEPS_SEC[TICK_STEPS_SEC.indexOf(rulerFor(1920).stepSec) - 1],
+);
 
 const RULER = {
 	minLabelGapPx: MIN_LABEL_GAP_PX,
@@ -623,7 +633,10 @@ const LOOP = {
 // PreviewCanvas.tsx:238 — padding shrinks the whole content block, not just the
 // screen: paddingFit = clamp(1 - (padding/100) * 0.4, 0.4, 1).
 const FRAME = { width: 1071, height: 603 };
-const paddingFit = Math.min(1, Math.max(0.4, 1 - (Math.min(100, Math.max(0, doc.legacyEditor.padding)) / 100) * 0.4));
+const paddingFit = Math.min(
+	1,
+	Math.max(0.4, 1 - (Math.min(100, Math.max(0, doc.legacyEditor.padding)) / 100) * 0.4),
+);
 const contentBox = {
 	width: Math.round(FRAME.width * paddingFit),
 	height: Math.round(FRAME.height * paddingFit),
@@ -646,7 +659,163 @@ const STAGE = {
 	},
 	webcam: null,
 	webcamReason:
-		"assets[0].cameraTrack.visible is false and legacyEditor.webcamLayoutPreset is \"no-webcam\" — there is no bubble to draw",
+		'assets[0].cameraTrack.visible is false and legacyEditor.webcamLayoutPreset is "no-webcam" — there is no bubble to draw',
+};
+
+// ── the inspector's facet panels ────────────────────────────────────────
+// FloatingInspector.tsx:59-65 is the rail in its own order; these are three of
+// its six facets — the ones the scroll opens before it reaches the transcript.
+// Every label is a locale key, so renaming a control in the app breaks this
+// build rather than shipping a word the app stopped using.
+//
+// `wallpaper.ts` is lifted by regex rather than imported: it opens with
+// `import { getAssetPath } from "@/lib/assetPath"`, and the resolver hook above
+// teaches Node relative extensionless specifiers, not the `@/` alias.
+const wallpaperSrc = readFileSync(resolve(APP, "src/lib/wallpaper.ts"), "utf8");
+const WALLPAPER_COUNT = Number(/WALLPAPER_COUNT\s*=\s*(\d+)/.exec(wallpaperSrc)?.[1]);
+if (!Number.isInteger(WALLPAPER_COUNT) || WALLPAPER_COUNT < 1) {
+	throw new Error("could not read WALLPAPER_COUNT out of src/lib/wallpaper.ts");
+}
+
+/**
+ * PreviewCanvas.tsx:238 as coefficients rather than as one baked number, so the
+ * page can evaluate the app's own formula on every frame while the reader drags
+ * the padding slider — `clamp(1 - (padding/100) * factor, min, 1)`. The single
+ * `STAGE.paddingFit` above is this same formula at the document's own setting.
+ */
+const EFFECTS = {
+	paddingDefault: doc.legacyEditor.padding,
+	borderRadiusDefault: doc.legacyEditor.borderRadius,
+	paddingFitFactor: 0.4,
+	paddingFitMin: 0.4,
+};
+
+/**
+ * Every slider and toggle on the two panels, at the document's own settings and
+ * with the range, suffix and precision RightPanes.tsx gives it.
+ *
+ * The app stores most of these as fractions and displays them scaled — cursor
+ * size is `size * 10` over 5–100 with one decimal and no suffix, smoothing is
+ * `smoothing * 100` with a per-cent sign — so a panel that showed the stored
+ * number would be wrong in a way that looks entirely plausible. The scaling
+ * lives here, next to the value it scales.
+ */
+const le = doc.legacyEditor;
+const defaultsSrc = [
+	[
+		"src/components/video-editor/types.ts",
+		readFileSync(resolve(APP, "src/components/video-editor/types.ts"), "utf8"),
+	],
+	[
+		"src/lib/ai-edition/store/editorSettings.ts",
+		readFileSync(resolve(APP, "src/lib/ai-edition/store/editorSettings.ts"), "utf8"),
+	],
+];
+/** `DEFAULT_EDITOR_SETTINGS` spells some of its defaults as named constants and
+ *  others inline, so look for both shapes and fail rather than assume. */
+const defaultBool = (name) => {
+	for (const [, src] of defaultsSrc) {
+		const m = new RegExp(`${name}\\s*[=:]\\s*(true|false)`).exec(src);
+		if (m) return m[1] === "true";
+	}
+	throw new Error(
+		`could not read a boolean default for ${name} out of ${defaultsSrc.map(([f]) => f).join(" or ")}`,
+	);
+};
+const asPercent = (v) => `${Math.round(v * 100)}%`;
+const slider = (label, value, min, max, suffix, display) => ({
+	label,
+	value,
+	min,
+	max,
+	suffix,
+	display,
+});
+
+const CONTROLS = {
+	// RightPanes.tsx:1443, :1397, :1412, :1427 — Video Effects, in its order.
+	padding: slider(t("settings:effects.padding"), le.padding, 0, 100, "%", `${le.padding}%`),
+	blurBg: { label: t("settings:effects.blurBg"), on: le.showBlur },
+	motionBlur: slider(
+		t("settings:effects.motionBlur"),
+		le.motionBlurAmount * 100,
+		0,
+		100,
+		"%",
+		asPercent(le.motionBlurAmount),
+	),
+	shadow: slider(
+		t("settings:effects.shadow"),
+		le.shadowIntensity * 100,
+		0,
+		100,
+		"%",
+		asPercent(le.shadowIntensity),
+	),
+	roundness: slider(
+		t("settings:effects.roundness"),
+		le.borderRadius,
+		0,
+		64,
+		"px",
+		`${le.borderRadius}px`,
+	),
+	// RightPanes.tsx:1755, :1771 — Cursor. `show` and `clipToBounds` are not in
+	// this document, so they are the app's own defaults rather than a guess.
+	cursorShow: { label: t("settings:cursor.show"), on: defaultBool("cursorShow") },
+	clipToBounds: {
+		label: t("settings:cursor.clipToBounds"),
+		on: defaultBool("DEFAULT_CURSOR_CLIP_TO_BOUNDS"),
+	},
+	cursorTheme: { label: t("settings:cursor.theme"), value: le.cursorTheme },
+	cursorSize: slider(
+		t("settings:cursor.size"),
+		le.cursorSize * 10,
+		5,
+		100,
+		"",
+		(le.cursorSize * 10).toFixed(1),
+	),
+	smoothing: slider(
+		t("settings:cursor.smoothing"),
+		le.cursorSmoothing * 100,
+		0,
+		100,
+		"%",
+		asPercent(le.cursorSmoothing),
+	),
+};
+
+const PANELS = {
+	background: {
+		title: t("settings:background.title"),
+		tabs: [
+			t("settings:background.image"),
+			t("settings:background.color"),
+			t("settings:background.gradient"),
+		],
+		uploadCustom: t("settings:background.uploadCustom"),
+		wallpaperCount: WALLPAPER_COUNT,
+		swatchLabels: Array.from({ length: WALLPAPER_COUNT }, (_, i) =>
+			t("settings:background.imageLabel", { index: i + 1 }),
+		),
+	},
+	effects: {
+		title: t("settings:effects.title"),
+		padding: t("settings:effects.padding"),
+		blurBg: t("settings:effects.blurBg"),
+		motionBlur: t("settings:effects.motionBlur"),
+		shadow: t("settings:effects.shadow"),
+		roundness: t("settings:effects.roundness"),
+	},
+	cursor: {
+		title: t("settings:cursor.title"),
+		show: t("settings:cursor.show"),
+		clipToBounds: t("settings:cursor.clipToBounds"),
+		theme: t("settings:cursor.theme"),
+		size: t("settings:cursor.size"),
+		smoothing: t("settings:cursor.smoothing"),
+	},
 };
 
 const TRANSPORT = {
@@ -730,23 +899,26 @@ const PROVENANCE = [
 		// if it rejoins them in start order — which is the point of quoting it
 		// whole rather than claiming "103 words" and asserting nothing.
 		shown: spokenWords.map((w) => w.text).join(" "),
-		source: "fixture transcript.words, rejoined in start order; every entry is rendered as its own span",
+		source:
+			"fixture transcript.words, rejoined in start order; every entry is rendered as its own span",
 	},
 	{
 		shown: CHAT.conversationTitle,
-		source: "computed: editor.json chat.untitledConversation + the session index, as LeftPanel.tsx:1433 renders it",
+		source:
+			"computed: editor.json chat.untitledConversation + the session index, as LeftPanel.tsx:1433 renders it",
 	},
 	{ shown: CHAT.emptyState, source: "editor.json chat.emptyState" },
 	{ shown: CHAT.authorUser, source: "editor.json chat.authorUser" },
 	{ shown: CHAT.authorAssistant, source: "editor.json chat.authorAssistant" },
 	{
 		shown: CHAT.userPrompt,
-		source: "src/components/ai-edition/v4/V4Timeline.tsx AI_ENHANCE_PROMPT, lifted verbatim as source text",
+		source:
+			"src/components/ai-edition/v4/V4Timeline.tsx AI_ENHANCE_PROMPT, lifted verbatim as source text",
 	},
 	{
 		shown: CHAT.agentReplyText,
 		source:
-			"photograph: static/img/walkthrough/04-agent-a.jpg — hand-transcribed; the conversation is in no store on disk and this photograph is its only existence. THE WEAKEST PROVENANCE ON THE PAGE. Every timecode, duration, quoted word and cut total in it is regenerated from timeline.trimRanges and transcript.words, not transcribed. Two figures are transcribed as the model wrote them and disagree with this file's arithmetic on purpose: \"33.0s\" (recomputed: 32.93s) and \"1.8×/2.2×\" (the pills read 1.80×/2.20×). The page is quoting a message, not drawing a readout.",
+			'photograph: static/img/walkthrough/04-agent-a.jpg — hand-transcribed; the conversation is in no store on disk and this photograph is its only existence. THE WEAKEST PROVENANCE ON THE PAGE. Every timecode, duration, quoted word and cut total in it is regenerated from timeline.trimRanges and transcript.words, not transcribed. Two figures are transcribed as the model wrote them and disagree with this file\'s arithmetic on purpose: "33.0s" (recomputed: 32.93s) and "1.8×/2.2×" (the pills read 1.80×/2.20×). The page is quoting a message, not drawing a readout.',
 	},
 	{
 		shown: CHAT.applied,
@@ -775,11 +947,70 @@ const PROVENANCE = [
 		source: `computed: fmtTick lifted from V4Timeline.tsx over a ${RULER.variants[0].stepSec}s step, itself derived as the first TICK_STEPS_SEC entry clearing MIN_LABEL_GAP_PX ${MIN_LABEL_GAP_PX} at ${RULER.variants[0].pxPerSec} px/s`,
 	},
 	{ shown: TRANSPORT.total, source: `computed: formatSec(assets[0].durationSec = ${totalSec})` },
-	{ shown: TRANSPORT.restCurrent, source: `computed: formatSec(zoomRanges[1].sourceStartSec = ${LOOP.startSec}) — where the loop starts` },
+	{
+		shown: TRANSPORT.restCurrent,
+		source: `computed: formatSec(zoomRanges[1].sourceStartSec = ${LOOP.startSec}) — where the loop starts`,
+	},
 	{ shown: TOOLBAR.aspectRatio, source: "fixture legacyEditor.aspectRatio" },
-	{ shown: `${TOOLBAR.panKbd} ${TOOLBAR.panLabel}`, source: "computed: timeline.json labels.pan, with the key hint V4Timeline.tsx:1474 writes beside it" },
-	{ shown: `${TOOLBAR.zoomKbd} ${TOOLBAR.zoomLabel}`, source: "computed: timeline.json labels.zoom, with the key hint V4Timeline.tsx:1477 writes beside it" },
+	{
+		shown: `${TOOLBAR.panKbd} ${TOOLBAR.panLabel}`,
+		source:
+			"computed: timeline.json labels.pan, with the key hint V4Timeline.tsx:1474 writes beside it",
+	},
+	{
+		shown: `${TOOLBAR.zoomKbd} ${TOOLBAR.zoomLabel}`,
+		source:
+			"computed: timeline.json labels.zoom, with the key hint V4Timeline.tsx:1477 writes beside it",
+	},
 	{ shown: TOOLBAR.clipLabel, source: "fixture assets[0].label, as the clip card's own label" },
+	{
+		shown: PANELS.background.title,
+		source: "src/i18n/locales/en/settings.json → background.title",
+	},
+	{
+		shown: PANELS.background.tabs[0],
+		source: "src/i18n/locales/en/settings.json → background.image",
+	},
+	{
+		shown: PANELS.background.tabs[1],
+		source: "src/i18n/locales/en/settings.json → background.color",
+	},
+	{
+		shown: PANELS.background.tabs[2],
+		source: "src/i18n/locales/en/settings.json → background.gradient",
+	},
+	{
+		shown: PANELS.background.uploadCustom,
+		source: "src/i18n/locales/en/settings.json → background.uploadCustom",
+	},
+	{
+		shown: PANELS.background.swatchLabels[0],
+		source: `computed: settings.json background.imageLabel over the ${WALLPAPER_COUNT} wallpapers WALLPAPER_COUNT declares in src/lib/wallpaper.ts`,
+	},
+	{ shown: PANELS.effects.title, source: "src/i18n/locales/en/settings.json → effects.title" },
+	{ shown: PANELS.effects.padding, source: "src/i18n/locales/en/settings.json → effects.padding" },
+	{ shown: PANELS.effects.blurBg, source: "src/i18n/locales/en/settings.json → effects.blurBg" },
+	{
+		shown: PANELS.effects.motionBlur,
+		source: "src/i18n/locales/en/settings.json → effects.motionBlur",
+	},
+	{ shown: PANELS.effects.shadow, source: "src/i18n/locales/en/settings.json → effects.shadow" },
+	{
+		shown: PANELS.effects.roundness,
+		source: "src/i18n/locales/en/settings.json → effects.roundness",
+	},
+	{ shown: PANELS.cursor.title, source: "src/i18n/locales/en/settings.json → cursor.title" },
+	{ shown: PANELS.cursor.show, source: "src/i18n/locales/en/settings.json → cursor.show" },
+	{
+		shown: PANELS.cursor.clipToBounds,
+		source: "src/i18n/locales/en/settings.json → cursor.clipToBounds",
+	},
+	{ shown: PANELS.cursor.theme, source: "src/i18n/locales/en/settings.json → cursor.theme" },
+	{ shown: PANELS.cursor.size, source: "src/i18n/locales/en/settings.json → cursor.size" },
+	{
+		shown: PANELS.cursor.smoothing,
+		source: "src/i18n/locales/en/settings.json → cursor.smoothing",
+	},
 ];
 
 // A string that claims a locale source but is not in the locale files is the
@@ -790,7 +1021,9 @@ for (const entry of PROVENANCE) {
 	if (!entry.source.includes(".json →") && !/\.json /.test(entry.source)) continue;
 	if (entry.source.startsWith("computed:")) continue;
 	if (!localeCorpus.includes(JSON.stringify(entry.shown).slice(1, -1))) {
-		throw new Error(`PROVENANCE claims a locale source for ${JSON.stringify(entry.shown)}, which is not in en/*.json`);
+		throw new Error(
+			`PROVENANCE claims a locale source for ${JSON.stringify(entry.shown)}, which is not in en/*.json`,
+		);
 	}
 }
 
@@ -820,8 +1053,10 @@ ${rows.map((r) => `	${JSON.stringify(r)},`).join("\n")}
 
 /** The ruler, pretty everywhere except its 21 + 41 label rows. */
 const litRuler = (ruler) =>
-	lit({ ...ruler, variants: ruler.variants.map((v, i) => ({ ...v, labels: `__LABELS_${i}__` })) })
-		.replace(/"__LABELS_(\d+)__"/g, (_m, i) => litRows(ruler.variants[Number(i)].labels));
+	lit({
+		...ruler,
+		variants: ruler.variants.map((v, i) => ({ ...v, labels: `__LABELS_${i}__` })),
+	}).replace(/"__LABELS_(\d+)__"/g, (_m, i) => litRows(ruler.variants[Number(i)].labels));
 
 const generated = `${banner}
 
@@ -905,6 +1140,18 @@ export const CHAT = ${lit(CHAT)} as const;
 export const STAGE = ${lit(STAGE)} as const;
 export const LOOP = ${lit(LOOP)} as const;
 
+/** The three facet panels the scroll opens before the transcript, with every
+ *  control's label as the app's locale files spell it. */
+export const PANELS = ${lit(PANELS)} as const;
+
+/** The padding formula's coefficients, so the slider moves the composite by the
+ *  app's own arithmetic rather than by a number that looks about right. */
+export const EFFECTS = ${lit(EFFECTS)} as const;
+
+/** Every slider and toggle on those panels, at this document's settings, scaled
+ *  and suffixed the way RightPanes.tsx scales and suffixes it. */
+export const CONTROLS = ${lit(CONTROLS)} as const;
+
 export const TRANSPORT = ${lit(TRANSPORT)} as const;
 export const TOOLBAR = ${lit(TOOLBAR)} as const;
 
@@ -932,7 +1179,9 @@ if (CHECK) {
 		);
 		process.exit(1);
 	}
-	console.log(`recreation data up to date — ${PROVENANCE.length} strings, ${WORDS.length} words, ${PILLS.length} pills`);
+	console.log(
+		`recreation data up to date — ${PROVENANCE.length} strings, ${WORDS.length} words, ${PILLS.length} pills`,
+	);
 } else {
 	mkdirSync(OUT_DIR, { recursive: true });
 	writeFileSync(GENERATED, generated);
@@ -978,17 +1227,36 @@ function cutMedia() {
 			FFMPEG,
 			[
 				// prettier-ignore
-				"-y", "-v", "error",
-				"-ss", String(LOOP.startSec), "-t", String(LOOP.contentDurationSec), "-i", RECORDING,
-				"-filter_complex", filter(w, h),
-				"-map", "[v]", "-an",
-				"-c:v", "h264_videotoolbox",
-				"-b:v", bitrate, "-maxrate", maxrate, "-bufsize", bufsize,
-				"-g", "60",
+				"-y",
+				"-v",
+				"error",
+				"-ss",
+				String(LOOP.startSec),
+				"-t",
+				String(LOOP.contentDurationSec),
+				"-i",
+				RECORDING,
+				"-filter_complex",
+				filter(w, h),
+				"-map",
+				"[v]",
+				"-an",
+				"-c:v",
+				"h264_videotoolbox",
+				"-b:v",
+				bitrate,
+				"-maxrate",
+				maxrate,
+				"-bufsize",
+				bufsize,
+				"-g",
+				"60",
 				// An IDR where the hold begins re-quantises the held frame against the
 				// same source as frame 0, which halves the visible step at the wrap.
-				"-force_key_frames", `0,${LOOP.contentDurationSec}`,
-				"-movflags", "+faststart",
+				"-force_key_frames",
+				`0,${LOOP.contentDurationSec}`,
+				"-movflags",
+				"+faststart",
 				resolve(videoDir, out),
 			],
 			{ stdio: "inherit" },
@@ -1008,13 +1276,28 @@ function cutMedia() {
 		FFMPEG,
 		[
 			// prettier-ignore
-			"-y", "-v", "error",
-			"-ss", String(LOOP.startSec), "-i", RECORDING, "-frames:v", "1",
-			"-vf", `crop=${LOOP.crop.w}:${LOOP.crop.h}:${LOOP.crop.x}:${LOOP.crop.y}`,
-			"-c:v", "mjpeg", "-q:v", "4", "-pix_fmt", "yuvj420p",
+			"-y",
+			"-v",
+			"error",
+			"-ss",
+			String(LOOP.startSec),
+			"-i",
+			RECORDING,
+			"-frames:v",
+			"1",
+			"-vf",
+			`crop=${LOOP.crop.w}:${LOOP.crop.h}:${LOOP.crop.x}:${LOOP.crop.y}`,
+			"-c:v",
+			"mjpeg",
+			"-q:v",
+			"4",
+			"-pix_fmt",
+			"yuvj420p",
 			resolve(imgDir, "canvas-poster.jpg"),
 		],
 		{ stdio: "inherit" },
 	);
-	console.log("cut static/video/canvas-loop{,-sm}.mp4 and static/img/walkthrough/canvas-poster.jpg");
+	console.log(
+		"cut static/video/canvas-loop{,-sm}.mp4 and static/img/walkthrough/canvas-poster.jpg",
+	);
 }
