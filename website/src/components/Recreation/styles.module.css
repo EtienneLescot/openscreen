@@ -188,6 +188,33 @@
 	.scene {
 		display: none;
 	}
+
+	/* "The editor above is redrawn in your browser…" — there is no editor above
+	   at this width. A caption for a picture that was not drawn is worse than no
+	   caption. */
+	.figcaption {
+		display: none;
+	}
+
+	/* Six claims in a column want to read as a list, not as six sections. The
+	   pinned layout gives each one a whole viewport and can afford a 34px claim;
+	   stacked, that size turns the fallback into a wall. */
+	.captions {
+		gap: 26px;
+	}
+
+	.capClaim {
+		font-size: 21px;
+		letter-spacing: -0.015em;
+	}
+
+	.capBody {
+		font-size: 13.5px;
+	}
+
+	.capFact {
+		font-size: 11px;
+	}
 }
 
 @supports not (position: sticky) {
@@ -219,6 +246,10 @@
 	.scene {
 		display: none;
 	}
+
+	.figcaption {
+		display: none;
+	}
 }
 
 /* Forced colors cannot carry any of the tokens above, and a recreation drawn in
@@ -226,6 +257,10 @@
    photographs are unfalsifiable; let them show instead. */
 @media (forced-colors: active) {
 	.scene {
+		display: none;
+	}
+
+	.figcaption {
 		display: none;
 	}
 }
