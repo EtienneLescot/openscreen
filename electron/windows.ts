@@ -294,7 +294,17 @@ export function createHudOverlayWindow(): BrowserWindow {
 	// window is shown before its first paint.
 	win.once("ready-to-show", () => {
 		applyContentProtection(win, "HUD");
-		if (!HEADLESS) win.show();
+		if (!HEADLESS) {
+			win.show();
+			// Re-arm click-through after the window is visible. On Windows, the
+			// forwarded-mouse hook can be installed too early when the renderer's
+			// initial IPC request arrives while Chromium is still starting up. If
+			// that request is the only call, the HUD is painted but every control
+			// remains unreachable because no forwarded pointermove can turn input
+			// back on. A post-ready call runs after the native window is live and
+			// gives Electron a reliable chance to install the hook.
+			win.setIgnoreMouseEvents(true, { forward: true });
+		}
 	});
 
 	win.webContents.on("did-finish-load", () => {
