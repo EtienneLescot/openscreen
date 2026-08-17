@@ -970,16 +970,51 @@ mod tests {
     }
 
     #[test]
-    fn dmabuf_zero_maxsize_uses_recovered_mapping_length() {
+    fn dmabuf_uses_the_mapped_allocation_not_advisory_sizes() {
         let constants = constants();
         let stride = 1920 * 4;
 
+        // Portal backends use different placeholders for DMA-BUF sizes. None
+        // are special: the fd allocation and frame geometry are authoritative.
         assert!(frame_bounds_valid(
             constants.data_dma_buf,
             0,
             8 * 1024 * 1024,
             0,
             9,
+            0,
+            stride as i32,
+            1920,
+            1080,
+        ));
+        assert!(frame_bounds_valid(
+            constants.data_dma_buf,
+            1,
+            8 * 1024 * 1024,
+            0,
+            1,
+            0,
+            stride as i32,
+            1920,
+            1080,
+        ));
+        assert!(frame_bounds_valid(
+            constants.data_dma_buf,
+            37,
+            8 * 1024 * 1024,
+            0,
+            23,
+            0,
+            stride as i32,
+            1920,
+            1080,
+        ));
+        assert!(!frame_bounds_valid(
+            constants.data_dma_buf,
+            u32::MAX,
+            4096,
+            0,
+            u32::MAX,
             0,
             stride as i32,
             1920,
@@ -1015,8 +1050,7 @@ mod tests {
             4,
             4,
         ));
-        // An oversized chunk is capped to the remaining allocation, as SPA
-        // requires, and remains valid only when a whole frame still fits.
+        // DMA-BUF advisory sizes cannot extend the actual fd allocation.
         assert!(frame_bounds_valid(
             constants.data_dma_buf,
             frame_len,

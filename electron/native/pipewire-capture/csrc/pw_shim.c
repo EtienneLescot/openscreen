@@ -31,6 +31,7 @@
 #include <errno.h>
 #include <linux/dma-buf.h>
 #include <stdarg.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -87,9 +88,6 @@ static int osc_debug_enabled(void);
 #define OSC_MAX_DMABUF_MAPS 32
 #define OSC_FRAME_DROP_REPORTS 5
 #define OSC_VIDEO_BYTES_PER_PIXEL 4
-/* xdg-desktop-portal-wlr uses 9 as a sentinel when a DMA-BUF
- * chunk size is unknown. */
-#define OSC_XDPW_DMABUF_SIZE_SENTINEL 9
 
 struct osc_dmabuf_map {
     int fd;
@@ -709,19 +707,21 @@ static void *osc_map_dmabuf(int fd, size_t *len, const char **why)
         return NULL;
     }
     /*
-     * A DmaBuf plane legitimately carries maxsize = 0: the size of a dmabuf is a
-     * property of the exporting buffer, not of the SPA descriptor, and wlroots
-     * leaves it unset. Every dmabuf fd is seekable to its own length, which is
-     * the documented way to recover it. Without this the mmap was never even
-     * attempted and the failure was reported as "this driver does not allow CPU
-     * mapping" — blaming the GPU for a size the producer simply had not filled in.
+     * A DmaBuf plane can carry an advisory maxsize rather than its allocation
+     * length. The allocation size is a property of the exporting fd, and every
+     * dmabuf fd is seekable to that length. Probe unconditionally and prefer a
+     * larger real allocation, while retaining a meaningful producer bound when
+     * the fd cannot report one.
      */
-    if (*len == 0) {
+    {
         off_t probed = lseek(fd, 0, SEEK_END);
-        if (probed > 0) {
+        if (probed > 0 && (uintmax_t)probed <= SIZE_MAX && (size_t)probed > *len) {
+            size_t advertised = *len;
             *len = (size_t)probed;
             if (osc_debug_enabled()) {
-                fprintf(stderr, "[osc-dmabuf] maxsize=0, recovered %zu bytes via lseek\n", *len);
+                fprintf(stderr,
+                        "[osc-dmabuf] maxsize=%zu, recovered %zu bytes via lseek\n",
+                        advertised, *len);
             }
         }
     }
@@ -781,8 +781,8 @@ static enum osc_frame_bounds_error osc_resolve_frame_bounds(
     uint64_t frame_bytes;
 
     /* PipeWire maps MemPtr/MemFd for us and maxsize is their allocation bound.
-     * DMA-BUF is mapped by osc_on_add_buffer, which may have recovered a real
-     * length from the fd when the producer legitimately left maxsize at zero. */
+     * DMA-BUF is mapped by osc_on_add_buffer, which recovers the real length
+     * from the fd when the producer leaves a placeholder in maxsize. */
     available = data_type == SPA_DATA_DmaBuf ? mapped_len : (size_t)maxsize;
     *available_out = available;
     if (available == 0) {
@@ -795,9 +795,12 @@ static enum osc_frame_bounds_error osc_resolve_frame_bounds(
     if ((chunk_flags & SPA_CHUNK_FLAG_CORRUPTED) != 0) {
         return OSC_FRAME_BOUNDS_CORRUPTED;
     }
-    if (data_type == SPA_DATA_DmaBuf && maxsize == 0 &&
-        chunk_size == OSC_XDPW_DMABUF_SIZE_SENTINEL) {
-        /* Use the mapped length for xdpw's unknown-size sentinel. */
+    if (data_type == SPA_DATA_DmaBuf) {
+        /* DMA-BUF capacity belongs to the fd, not to SPA's advisory maxsize or
+         * chunk size. Backends use different positive placeholders for those
+         * fields, so keying this path on magic values is both brittle and
+         * unnecessary. The frame is still accepted only when stride * height
+         * fits inside the actual mapped allocation below. */
         size = available - offset;
     } else {
         /* Validate offset first so this subtraction cannot underflow. */
