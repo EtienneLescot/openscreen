@@ -142,12 +142,9 @@ export const BANDS: Band[] = [
 		media: {
 			image: `${IMG}/04-agent-a.jpg`,
 			imageSm: `${IMG}/04-agent-sm-a.jpg`,
-			scrub: {
-				clip: `${VID}/04-agent-scrub.mp4`,
-				clipSm: `${VID}/04-agent-sm-scrub.mp4`,
-				seconds: 2.75,
-				frames: 56,
-			},
+			// No scrub clip: this band is `display: none` at >=901px, where the
+			// recreation tells the same claim, and scrubbing is off below it. The
+			// two files could never be fetched by anyone, so they are not shipped.
 			width: 960,
 			height: 540,
 			widthSm: 640,
@@ -185,7 +182,8 @@ export const BANDS: Band[] = [
 			heightSm: 360,
 			seconds: 3.2,
 			alt: "The export dialog with MP4 chosen over GIF, 720p at 1280 by 720 chosen from a row offering 1080p and Source as well, 30 chosen from a row offering 24 and 60, and H.264 chosen over H.265.",
-			resultAlt: "The same dialog a moment into the render: a progress bar part-filled at fourteen per cent, and a line under it counting 134 of 988 frames with an estimate of eighteen seconds left.",
+			resultAlt:
+				"The same dialog a moment into the render: a progress bar part-filled at fourteen per cent, and a line under it counting 134 of 988 frames with an estimate of eighteen seconds left.",
 		},
 	},
 ];

@@ -1,6 +1,5 @@
-import { useEffect, useRef, useState } from "react";
-
 import Head from "@docusaurus/Head";
+import { useEffect, useRef, useState } from "react";
 
 import Recreation from "../Recreation";
 import { BANDS, type Band } from "./bands";
@@ -72,10 +71,7 @@ function ScrubBand({ band }: { band: Band }) {
 		>
 			<Copy band={band} />
 			<figure className={styles.figure}>
-				<div
-					className={styles.frame}
-					style={{ aspectRatio: `${media.width} / ${media.height}` }}
-				>
+				<div className={styles.frame} style={{ aspectRatio: `${media.width} / ${media.height}` }}>
 					<picture>
 						<source media="(max-width: 780px)" srcSet={media.imageSm} />
 						<img
@@ -209,15 +205,8 @@ function BandView({ band, ctl }: { band: Band; ctl: BandPlayback }) {
 			    landscape phone is taller than the viewport, so its intersection
 			    ratio cannot reach the threshold at all and the clip never starts
 			    however long the reader sits on it. The figure always fits. */}
-			<figure
-				className={styles.figure}
-				ref={ctl.registerBand(band.id)}
-				data-band-id={band.id}
-			>
-				<div
-					className={styles.frame}
-					style={{ aspectRatio: `${media.width} / ${media.height}` }}
-				>
+			<figure className={styles.figure} ref={ctl.registerBand(band.id)} data-band-id={band.id}>
+				<div className={styles.frame} style={{ aspectRatio: `${media.width} / ${media.height}` }}>
 					<picture>
 						<source media="(max-width: 780px)" srcSet={stillSm} />
 						<img
@@ -304,7 +293,6 @@ function Copy({ band }: { band: Band }) {
 
 export default function Walkthrough() {
 	const ctl = useBandPlayback();
-	const scrubbing = useScrubEnabled();
 	const Tag = upgradedTag(ctl.hydrated);
 
 	return (
@@ -362,9 +350,9 @@ export default function Walkthrough() {
 						    file rather than an art director. */}
 						<p className={styles.deck}>
 							No sound, no narration. The photographs are the running application, unretouched. The
-							editor you scroll through is drawn live from the same design tokens the app ships,
-							around real footage of the recording it is editing — and every label in it is read out
-							of the project file rather than typed by hand.
+							editor you scroll through is drawn live from the design tokens the app ships, around a
+							real capture of the page it was recording — and every label, timecode, slider and pill
+							in it is read out of the project file rather than typed by hand.
 						</p>
 
 						<div className={styles.controls}>
@@ -384,8 +372,7 @@ export default function Walkthrough() {
 											// Turning it off has to stop the clip that is running and
 											// the one that is 400ms from starting, or the control
 											// reports a state the page has not entered.
-											onClick: () =>
-												ctl.autoplay ? ctl.stopAutoplay() : ctl.setAutoplay(true),
+											onClick: () => (ctl.autoplay ? ctl.stopAutoplay() : ctl.setAutoplay(true)),
 										}
 									: { "aria-hidden": true })}
 							>
@@ -410,9 +397,17 @@ export default function Walkthrough() {
 					{BANDS.filter((b) => b.index === "01").map((band) => (
 						<BandView key={band.id} band={band} ctl={ctl} />
 					))}
+				</div>
 
-					<Recreation />
+				{/* Outside `.inner` on purpose: the recreation is the one block on
+				    this page that wants the whole viewport. Boxed into the 1040px
+				    measure it has to draw a whole editor at a third of its natural
+				    size, which is what made the previous cut read as a diagram of an
+				    application rather than a picture of one. Everything else on the
+				    page keeps the measure. */}
+				<Recreation />
 
+				<div className={styles.inner}>
 					<div className={styles.superseded}>
 						{BANDS.filter((b) => ["02", "03", "04"].includes(b.index)).map((band) =>
 							band.media?.scrub ? (
