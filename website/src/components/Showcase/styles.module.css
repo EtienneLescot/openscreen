@@ -1,0 +1,207 @@
+/**
+ * Two treatments, one measure.
+ *
+ * Carried over from the section this replaces, minus everything that existed to
+ * run video: no rail, no replay control, no reduced-motion result swap, no
+ * `.clip` layer. There are no clips left on this page — the editor above is the
+ * only thing that moves — so the markup those rules styled is gone and the rules
+ * went with it.
+ */
+
+.section {
+	/* Explicit: the dark-theme document canvas resolves to Infima's own #1b1b1d,
+	   and `html, body { height: 100% }` means the body paints only the first
+	   viewport — so a section without a background sits on the wrong grey. */
+	background: var(--os-bg);
+	color: var(--os-fg);
+	padding: 96px 0 104px;
+}
+
+.inner {
+	max-width: 1096px;
+	margin: 0 auto;
+	padding: 0 28px;
+}
+
+/* The heading is centred like the page's other section headings; the items
+   under it are not, because each one is a claim beside a picture. */
+.kicker,
+.title {
+	text-align: center;
+}
+
+.kicker {
+	margin: 0;
+	font-family: var(--ifm-font-family-monospace);
+	font-size: 11px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--os-accent);
+}
+
+.title {
+	margin: 10px 0 0;
+	font-size: clamp(24px, 3vw, 32px);
+	font-weight: 700;
+	letter-spacing: -0.02em;
+	color: var(--os-fg-emphasis);
+}
+
+/* ---- told ----
+   Two cards, same chrome and radius as the install panes. A bordered card
+   rather than bare prose: without an image beside it, a claim needs an edge or
+   it reads as a caption that lost its picture. */
+
+.told {
+	display: grid;
+	grid-template-columns: repeat(2, 1fr);
+	gap: 16px;
+	margin-top: 36px;
+}
+
+.toldCard {
+	padding: 26px;
+	border-radius: 14px;
+	border: 1px solid var(--os-border);
+	background: var(--os-surface-1);
+	box-shadow: var(--os-elev-card);
+}
+
+/* ---- shown ---- */
+
+.band {
+	display: grid;
+	grid-template-columns: 360px 1fr;
+	gap: 40px;
+	align-items: center;
+	margin-top: 72px;
+	/* The navbar is 60px and sticky; without this an anchor jump parks the
+	   band's heading underneath it. */
+	scroll-margin-top: 76px;
+}
+
+/* Assigning columns and rows, not `order`: the tracks are asymmetric
+   (360px + 1fr), and reordering auto-placed items moves the plate into the
+   narrow track instead of swapping the two sides. Pinning only the column is
+   not enough either — auto-placement refuses to go backwards, so the figure
+   drops to a second row and the band silently becomes two stacked halves. The
+   DOM keeps the copy first either way, so reading order never depends on it. */
+.flip {
+	grid-template-columns: 1fr 360px;
+}
+
+.flip .copy {
+	grid-column: 2;
+	grid-row: 1;
+}
+
+.flip .figure {
+	grid-column: 1;
+	grid-row: 1;
+}
+
+/* ---- copy, shared by both treatments ---- */
+
+.itemKicker {
+	margin: 0;
+	font-family: var(--ifm-font-family-monospace);
+	font-size: 11px;
+	letter-spacing: 0.08em;
+	text-transform: uppercase;
+	color: var(--os-muted);
+}
+
+.claim {
+	margin: 14px 0 0;
+	font-size: 19px;
+	font-weight: 600;
+	line-height: 1.35;
+	letter-spacing: -0.01em;
+	color: var(--os-fg-emphasis);
+}
+
+.body {
+	margin: 12px 0 0;
+	font-size: 13.5px;
+	line-height: 1.65;
+	color: var(--os-fg-2);
+}
+
+.fact {
+	margin: 16px 0 0;
+	font-family: var(--ifm-font-family-monospace);
+	font-size: 11px;
+	line-height: 1.65;
+	color: var(--os-muted);
+}
+
+/* ---- the picture ---- */
+
+.figure {
+	margin: 0;
+}
+
+.frame {
+	position: relative;
+	overflow: hidden;
+	border-radius: 14px;
+	border: 1px solid var(--os-border);
+	background: var(--os-surface-1);
+	box-shadow: var(--os-elev-card);
+}
+
+.still {
+	display: block;
+	width: 100%;
+	height: auto;
+}
+
+.caption {
+	margin: 10px 2px 0;
+	font-family: var(--ifm-font-family-monospace);
+	font-size: 11px;
+	color: var(--os-muted);
+}
+
+/* ---- narrow ---- */
+
+@media (max-width: 900px) {
+	.section {
+		padding-top: 72px;
+	}
+
+	.told {
+		grid-template-columns: 1fr;
+	}
+
+	.band,
+	.flip {
+		grid-template-columns: 1fr;
+		gap: 22px;
+		margin-top: 56px;
+	}
+
+	/* The explicit placement above has to be undone with it, or the single
+	   column inherits `grid-column: 2` and collapses to nothing. */
+	.flip .copy,
+	.flip .figure {
+		grid-column: 1;
+		grid-row: auto;
+	}
+}
+
+@media (max-width: 600px) {
+	.inner {
+		padding: 0 18px;
+	}
+
+	.toldCard {
+		padding: 20px;
+	}
+}
+
+@media print {
+	.section {
+		padding: 24px 0;
+	}
+}

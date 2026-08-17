@@ -2,9 +2,18 @@ import Head from "@docusaurus/Head";
 import Link from "@docusaurus/Link";
 import Heading from "@theme/Heading";
 import Layout from "@theme/Layout";
-import { Apple, AppWindow, Cpu, Download, HeartHandshake, Monitor, TerminalSquare } from "lucide-react";
+import {
+	Apple,
+	AppWindow,
+	Cpu,
+	Download,
+	HeartHandshake,
+	Monitor,
+	TerminalSquare,
+} from "lucide-react";
 
-import Walkthrough from "../components/Walkthrough";
+import Editor from "../components/Editor";
+import Showcase from "../components/Showcase";
 import { jsonLd, softwareApplicationLd } from "../lib/structured-data";
 import styles from "./index.module.css";
 
@@ -49,13 +58,19 @@ export default function Home() {
 				</div>
 			</header>
 
-			<Walkthrough />
+			{/* The argument, immediately after the hero. */}
+			<Editor />
+
+			{/* The claims the editor cannot make on its own. */}
+			<Showcase />
 
 			<section className={styles.features}>
 				<div className={styles.featuresInner}>
 					<div className={styles.sectionKicker}>Also true</div>
+					{/* Capabilities are the section above; these three are properties,
+					    and no screenshot of the application can establish any of them. */}
 					<Heading as="h2" className={styles.sectionTitle}>
-						Three things a clip can&apos;t show.
+						Three things a screenshot can&apos;t show.
 					</Heading>
 
 					<div className={styles.bento}>

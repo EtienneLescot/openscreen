@@ -46,7 +46,11 @@ import { CONTROLS, EFFECTS, META, PILLS, STAGE, WORDS } from "./generated";
  * that happens under a caption that is still up.
  */
 export const BEATS = [
-	{ id: "background", from: 0.6, to: 4.15 },
+	// From zero, not from a settling beat. The band's first screen is visible
+	// under the heading before anyone has scrolled into it, and a beat table that
+	// starts late renders that screen as an empty stage — the one frame every
+	// reader is guaranteed to see.
+	{ id: "background", from: 0, to: 4.15 },
 	{ id: "padding", from: 4.15, to: 7.5 },
 	{ id: "cursor", from: 7.5, to: 11.0 },
 	{ id: "autozoom", from: 11.0, to: 15.3 },
