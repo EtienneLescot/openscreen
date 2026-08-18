@@ -32,10 +32,22 @@ export const T_TOTAL = 26.0;
 
 /* ── the five beats ───────────────────────────────────────────────────────── */
 
+/* The five beats tile [0, T_TOTAL] with no gaps, and that is a correctness
+ * property, not tidiness. A frame that falls in a gap has no beat, the driver
+ * has nothing to write to `data-beat`, and the stylesheet's `:not([data-beat])`
+ * rule takes over — which is the RESTING frame, built for readers who will
+ * never get the driver at all: the timeline in, the transcript panel open, the
+ * scene at its closing values.
+ *
+ * So a gap does not show "nothing". It shows the end of the story. This opened
+ * at [0, 0.6), which is the state of the stage on every approach to the band,
+ * and the reader met the transcript panel before the background panel. There
+ * were two more at [14.5, 15.0) and [19.5, 19.6), invisible only because the
+ * panel happens to be faded out across both. */
 export const BEATS = [
 	{
 		id: "style",
-		from: 0.6,
+		from: 0,
 		to: 7.2,
 		kicker: "Style",
 		title: "Swap the background",
@@ -52,7 +64,7 @@ export const BEATS = [
 	{
 		id: "cursor",
 		from: 10.4,
-		to: 14.5,
+		to: 15.0,
 		kicker: "Cursor",
 		title: "A cursor worth watching",
 		sub: "Size, smoothing, motion blur, click bounce — every move reads on screen.",
@@ -60,7 +72,7 @@ export const BEATS = [
 	{
 		id: "timeline",
 		from: 15.0,
-		to: 19.5,
+		to: 19.6,
 		kicker: "Timeline",
 		title: "One click, one pill",
 		sub: "Zooms, speed ramps, trims, comments — each edit lands as a pill on the timeline.",

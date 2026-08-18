@@ -415,8 +415,11 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 
 		if (f.beat !== lastBeat) {
 			lastBeat = f.beat;
+			// Set, never unset. The beats tile the scene so `f.beat` is always
+			// defined, and this keeps a future gap from falling through to the
+			// stylesheet's undriven fallback — which is the closing frame, not an
+			// empty one. Teardown still clears it.
 			if (f.beat) root.dataset.beat = f.beat;
-			else delete root.dataset.beat;
 		}
 
 		const pad = `${Math.round(f.padding)}%`;
