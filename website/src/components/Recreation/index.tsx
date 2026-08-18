@@ -178,21 +178,30 @@ export default function Recreation() {
 					} as React.CSSProperties
 				}
 			>
-				{/* ═══ THE CAPTIONS ═══ The section's real copy. Above the gate they
-				    share one box and take turns; below it they stack. */}
-				<div className={styles.captions}>
-					{BEATS.map((b) => (
-						<article key={b.id} className={styles.cap} data-cap={b.id}>
-							<p className={styles.capKicker}>{b.kicker}</p>
-							<h3 className={styles.capTitle}>{b.title}</h3>
-							<p className={styles.capSub}>{b.sub}</p>
-						</article>
-					))}
-				</div>
+				{/* ═══ THE LEFT COLUMN ═══ The caption and the inspector, in one flow
+				    so the pair can be balanced against the picture as a unit — nothing
+				    can align two boxes that are positioned absolutely and
+				    independently, which is what they were.
 
-				<div className={styles.scene} aria-hidden="true">
+				    The panel lives here rather than inside `.scene` for that reason
+				    alone, and carries its own aria-hidden: it is a drawing, while the
+				    caption above it is the section's real copy and has to stay in the
+				    accessibility tree. */}
+				<div className={styles.column}>
+					{/* ═══ THE CAPTIONS ═══ Above the gate they share one box and take
+					    turns; below it they stack. */}
+					<div className={styles.captions}>
+						{BEATS.map((b) => (
+							<article key={b.id} className={styles.cap} data-cap={b.id}>
+								<p className={styles.capKicker}>{b.kicker}</p>
+								<h3 className={styles.capTitle}>{b.title}</h3>
+								<p className={styles.capSub}>{b.sub}</p>
+							</article>
+						))}
+					</div>
+
 					{/* ═══ THE INSPECTOR ═══ */}
-					<div className={styles.panel}>
+					<div className={styles.panel} aria-hidden="true">
 						<header className={styles.panelHead}>
 							<h4 className={styles.panelTitle} data-pane="style">
 								{PANELS.background.title}
@@ -347,7 +356,9 @@ export default function Recreation() {
 							</div>
 						</div>
 					</div>
+				</div>
 
+				<div className={styles.scene} aria-hidden="true">
 					{/* ═══ THE TOOL PALETTE ═══ six tools, the app's own bar */}
 					<div className={styles.palette}>
 						<span

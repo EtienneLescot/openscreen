@@ -79,6 +79,16 @@
 	color: var(--ost-fg);
 }
 
+/* On a short window the gutter is the first thing to give: at 1280x720 the
+   tallest pane — ten cursor packs and two sliders — was losing 21px off its
+   bottom to it. Halving it buys 28 and clears that, and 14px still reads as a
+   margin rather than as an edge. */
+@media (max-height: 780px) {
+	.stage {
+		--gut-v: 14px;
+	}
+}
+
 /* ═══ THE BAND ═════════════════════════════════════════════════════════════
    Nine viewports. The ride is paced against whatever this turns out to be, plus
    one more viewport of overflow, so changing it re-paces the scene and breaks
@@ -194,13 +204,29 @@
 
 /* ═══ THE CAPTIONS ═════════════════════════════════════════════════════════ */
 
-.captions {
+/* The left column: the caption and the inspector, balanced against the picture
+   as one thing. They were two absolutely positioned boxes with no relationship,
+   so the pair could only ever be aligned by accident — the caption sat at the
+   picture's top and the panel hung below it, and on a laptop the pair finished
+   120px past the picture's bottom. In one flow the group has a height, and a
+   height is all it takes to centre it on the same line the picture is centred
+   on. */
+.column {
 	position: absolute;
 	left: 4.5vw;
-	top: var(--cap-top);
-	width: calc(var(--pnl-w) - 8px);
+	width: var(--pnl-w);
+	top: calc(var(--v-t) + var(--v-w) * 0.28125);
+	transform: translateY(-50%);
 	z-index: 11;
 	pointer-events: none;
+}
+
+.captions {
+	position: relative;
+	width: calc(var(--pnl-w) - 8px);
+	/* Its children are absolute and take turns, so the box has no height of its
+	   own — and the flow above needs one. */
+	height: var(--cap-h);
 	/* Gated with the inspector, on the inspector's own threshold and the
 	   inspector's own timing, so the title does not announce a panel that is not
 	   there yet. The per-beat cross-fade inside carries on independently. */
@@ -275,27 +301,20 @@
 /* ═══ THE INSPECTOR ════════════════════════════════════════════════════════ */
 
 .panel {
-	position: absolute;
-	left: 4.5vw;
-	/* Under the caption, capped by the footage, free to be shorter.
+	/* Under the caption, in the column's flow, free to be shorter than its slot.
 	   
-	   It hangs from the caption's bottom rather than centring on the picture.
-	   Centred, it rose above the caption whenever the picture was tall relative
-	   to the panel's content — at 1383x904 the panel's top landed 55px inside
-	   the caption's last line. The ask was only ever that it shrink to its
-	   content and keep its horizontal placement; the vertical centring was mine
-	   to invent and mine to take back.
-	   
-	   Two ceilings, whichever is lower: the footage's height, and the room left
-	   between here and the bottom gutter. min() over custom properties is the
-	   pattern postcss-calc drops, so the built sheet is checked for it. */
-	top: calc(var(--cap-top) + var(--cap-h));
-	width: var(--pnl-w);
+	   The ceiling is the room the column has between the gutters once the
+	   caption has taken its share — and NOT the footage's height, which is what
+	   was originally asked for and which turns out to clip. On a 1289x904 laptop
+	   the picture is 460px tall and the cursor pane needs 470, so that ceiling
+	   cut the Smoothing slider off the bottom of the demo. A panel ten pixels
+	   taller than the picture is a smaller price than a control missing from it,
+	   and now that the pair is centred on the picture rather than hanging past
+	   it, the difference reads as symmetry instead of overflow. */
+	position: relative;
+	width: 100%;
 	height: auto;
-	max-height: min(
-		calc(var(--v-w) * 0.5625),
-		calc(100vh - var(--gut-v) - var(--cap-top) - var(--cap-h))
-	);
+	max-height: calc(100vh - var(--nav) - var(--gut-v) * 2 - var(--cap-h));
 	overflow: hidden;
 	z-index: 12;
 	border: 1px solid var(--ost-border);
@@ -1647,9 +1666,19 @@
 		--pnl-w: calc(100vw - 2 * var(--gut));
 	}
 
+	/* The pair is not a pair here — the picture sits between them — so the
+	   column steps out of the way and its two children place themselves, which
+	   is what `display: contents` is for. */
+	.column {
+		display: contents;
+	}
+
 	.captions {
+		position: absolute;
 		left: var(--gut);
+		top: var(--cap-top);
 		width: calc(100vw - 2 * var(--gut));
+		z-index: 11;
 	}
 
 	.capTitle {
@@ -1660,6 +1689,8 @@
 	   is undone here, along with the -50% that went with it. The ceiling is what
 	   the floor has not taken: it closes as --tl opens. */
 	.panel {
+		position: absolute;
+		width: calc(100vw - 2 * var(--gut));
 		left: var(--gut);
 		top: calc(var(--cell-top1) + var(--vw1) * 0.5625 + 14px);
 		max-height: calc(
@@ -1710,6 +1741,10 @@
 		height: auto;
 	}
 
+	.column {
+		display: contents;
+	}
+
 	.stage {
 		position: static;
 		height: auto;
@@ -1739,12 +1774,17 @@
 		height: auto;
 	}
 
+	.column {
+		display: contents;
+	}
+
 	.stage {
 		position: static;
 		height: auto;
 	}
 
-	.scene {
+	.scene,
+	.panel {
 		display: none;
 	}
 
@@ -1765,7 +1805,8 @@
 }
 
 @media (forced-colors: active) {
-	.scene {
+	.scene,
+	.panel {
 		display: none;
 	}
 }
