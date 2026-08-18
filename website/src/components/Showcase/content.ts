@@ -59,7 +59,7 @@ export const FEATURES: Feature[] = [
 		kicker: "captions",
 		claim: "Transcription runs on your machine.",
 		body: "whisper.cpp ships with the app, and the model downloads once on first use — after that it works with the network off. The audio never leaves the laptop, and what comes back is editable text: set the typeface, the size, the colour and the position, then burn it into the render.",
-		fact: "whisper.cpp · 13 languages · offline after first run",
+		fact: "whisper.cpp · 99 languages · offline after first run",
 		label:
 			"A drawing of the captions panel: the line “amber day on the validator, and it” set large over the video, and beside it captions switched on, a note that seven caption lines are derived live from the transcript, and a language row offering English, Français, a Translate button and the option to delete a translation.",
 	},
