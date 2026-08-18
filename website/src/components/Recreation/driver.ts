@@ -25,6 +25,7 @@
 import { CURSORS } from "./generated";
 import {
 	BEATS,
+	CURSOR_CHOICE,
 	CUT_INDEX,
 	type Frame,
 	frameAt,
@@ -451,6 +452,10 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		   while the cut landed somewhere else. CUT_INDEX is derived from the
 		   tokens' own `cut` field, so this cannot drift again. */
 		const [c0, c1, c2, c3, c4] = CUT_INDEX;
+		/* Same trap, same fix: the swatch the pointer presses and the pack the
+		   frame selects were two literals that had to agree, and reordering the
+		   picks silently left the hand on the wrong one. */
+		const [, cur1, cur2] = CURSOR_CHOICE;
 		return [
 			[0.4, 58, 66],
 			[1.45, ...at("th-1")],
@@ -463,10 +468,10 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 			[7.95, ...pad()],
 			[9.0, ...pad()],
 			[10.3, ...pad()],
-			[11.0, ...at("cur-2")],
-			[11.9, ...at("cur-2")],
-			[12.15, ...at("cur-1")],
-			[12.63, ...at("cur-1")],
+			[11.0, ...at(`cur-${cur1}`)],
+			[11.9, ...at(`cur-${cur1}`)],
+			[12.15, ...at(`cur-${cur2}`)],
+			[12.63, ...at(`cur-${cur2}`)],
 			[12.7, ...sz()],
 			[13.2, ...sz()],
 			[14.3, ...sz()],
