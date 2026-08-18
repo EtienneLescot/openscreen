@@ -11,7 +11,12 @@
 /* A full screen, as the design has it: the recreation is meant to begin only
    once the hero has been scrolled past. */
 .hero {
-	min-height: 100vh;
+	position: relative;
+	/* One screen, navbar included. At a flat 100vh the hero is 60px taller than
+	   the viewport it is meant to fill, so its bottom edge — and the scroll hint
+	   pinned to it — sat below the fold, which is the one place an edge marker
+	   must not be. */
+	min-height: calc(100vh - var(--ifm-navbar-height, 60px));
 	display: flex;
 	align-items: center;
 	justify-content: center;
@@ -395,17 +400,43 @@
 	color: var(--os-fg-2);
 }
 
+/* Pinned to the bottom of the first screen, where an edge belongs, rather than
+   trailing the copy as one more paragraph. No media gate any more: it used to
+   carry a claim that was only true where the driver runs, and "there is more
+   below" is true everywhere. */
 .scrollHint {
-	margin: 28px 0 0;
-	font-size: 12.5px;
+	position: absolute;
+	left: 50%;
+	/* 81px, the design's own offset. At 34 it clung to the edge with a void
+	   above it; this reads as the bottom of a screen rather than as the bottom
+	   of the window. */
+	bottom: 81px;
+	transform: translateX(-50%);
+	margin: 0;
+	display: flex;
+	align-items: center;
+	gap: 9px;
+	font-size: 13px;
+	font-weight: 500;
 	color: var(--os-fg-2);
+	animation: os-scroll-nudge 2.4s var(--ifm-transition-timing-default, ease-in-out) infinite;
 }
 
-/* The claim is literal, so it is only made where it holds: the scene needs
-   901px and a reader who has not asked for less motion, and below either of
-   those the driver never attaches and nothing rides the scroll. */
-@media (max-width: 901px), (prefers-reduced-motion: reduce) {
+/* The design's nudge: four pixels, slowly, which is enough to read as "keep
+   going" and little enough not to nag. */
+@keyframes os-scroll-nudge {
+	0%,
+	100% {
+		transform: translateX(-50%) translateY(0);
+	}
+
+	50% {
+		transform: translateX(-50%) translateY(4px);
+	}
+}
+
+@media (prefers-reduced-motion: reduce) {
 	.scrollHint {
-		display: none;
+		animation: none;
 	}
 }
