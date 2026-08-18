@@ -27,6 +27,11 @@
  * closing frame — so a reader with no JavaScript, or a reduced-motion
  * preference, gets a still, complete editor rather than something stranded at
  * opacity 0.
+ *
+ * Two things in that frame are not custom properties and so cannot be declared
+ * here: the selected wallpaper, which is an attribute the markup renders and the
+ * driver overwrites, and the transcript's struck words, which are a class and
+ * are therefore the one part of the closing frame the still cannot show.
  */
 
 /* ═══ TOKENS ═══════════════════════════════════════════════════════════════
@@ -114,7 +119,6 @@
 	   driver — no JS, reduced motion — sees the captions rather than an
 	   invalid declaration falling back to whatever opacity happens to be. */
 	--intro: 1;
-	--bg: 3;
 	--fit: 0.88;
 	--pad-pct: 30;
 	--frame-scale: 1;
@@ -148,11 +152,13 @@
 	--palette: 0;
 	--wand: 0;
 	--comment: 0;
-	--trim-0: 1;
-	--trim-1: 1;
-	--trim-2: 1;
-	--trim-3: 1;
-	--trim-4: 1;
+	/* The trims, for a reader with no driver. Each pill's own opacity is written
+	   inline once there is one — the order they are placed in is not the order
+	   they sit in, so no count can express it, which is what --zooms-placed can
+	   do and this cannot. The one thing the still cannot show is the transcript's
+	   five struck words: striking is a class, and nothing applies it without the
+	   driver. */
+	--trims-shown: 1;
 
 	/* ── the grid, once ── */
 	--c2x: calc(4.5vw + var(--pnl-w) + 26px);
@@ -451,9 +457,10 @@
 }
 
 /* Selection is a `data-bg` on the stage matched against the swatch's own index.
-   An arithmetic version — opacity from `--i` against `--bg` — reads better and
-   is a trap: postcss-calc cannot fold min()/max() over custom properties and
-   drops the whole declaration, in the production build only. */
+   An arithmetic version — opacity from the swatch's `--i` against a `--bg` the
+   driver would write — reads better and is a trap: postcss-calc cannot fold
+   min()/max() over custom properties and drops the whole declaration, in the
+   production build only. */
 .swatch::after {
 	content: "";
 	position: absolute;
@@ -717,10 +724,6 @@
 	background: var(--ost-danger-soft);
 }
 
-.cue {
-	color: var(--os-fg-emphasis);
-}
-
 /* ═══ THE TOOL PALETTE ═════════════════════════════════════════════════════
    Centred in the left column, between the caption and the floor. */
 
@@ -823,8 +826,10 @@
 	transition: transform 0.7s var(--ease);
 }
 
-/* Four wallpapers, cross-fading on `--bg`. Only the one whose index matches is
-   opaque, so the picker's selection and the canvas cannot disagree. */
+/* Four wallpapers, cross-fading on `data-bg`. Only the one whose index matches
+   is opaque, so the picker's selection and the canvas cannot disagree. The
+   attribute is always present — the markup renders the closing frame's pick and
+   the driver overwrites it per frame — so this needs no undriven fallback. */
 .bg {
 	position: absolute;
 	inset: 0;
@@ -836,7 +841,8 @@
 }
 
 /* The first one is the floor of the stack, so something is always painted while
-   the others cross-fade over it. */
+   the others cross-fade over it. It is first in the markup as well as here: a
+   floor drawn later would paint over the picture it is meant to sit under. */
 .bg[data-i="0"] {
 	opacity: 1;
 }
@@ -1586,13 +1592,13 @@
 	color: var(--ost-danger);
 }
 
-/* Each trim's opacity is written straight onto the element by the driver.
-   `:nth-of-type` looked tidier and is wrong: it counts siblings of the same
+/* Each trim's opacity is written straight onto the element by the driver, over
+   this. `:nth-of-type` looked tidier and is wrong: it counts siblings of the same
    *element* — and the rail is full of spans for ticks and other pills — so the
    five rules matched five arbitrary nodes and every trim showed from the first
    frame. */
 .pillTrim {
-	opacity: 0;
+	opacity: var(--trims-shown);
 }
 
 .playhead {

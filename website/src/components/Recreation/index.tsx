@@ -55,9 +55,11 @@ import {
 	CLIPS,
 	CUT_INDEX,
 	FLOOR_H,
+	frameAt,
 	LANES,
 	PLAYHEAD,
 	SPEED,
+	shotCursorSrc,
 	TOKENS,
 	trims,
 	WALLPAPER_COUNT_SHOWN,
@@ -73,6 +75,10 @@ import styles from "./styles.module.css";
    reads it, so children placed this way stay nailed to the ruler at any width.
    Inline styles, so postcss never sees this calc. */
 const x = (sec: number) => `calc(${sec.toFixed(3)} * var(--k) * 1px)`;
+
+/** The frame the scene comes to rest on, and the one a reader with no driver is
+ *  handed. Everything below that needs a resting value reads it. */
+const REST = frameAt(1);
 
 /** The twelve wallpapers the picker shows, in the design's order. */
 const WALLPAPERS = [2, 5, 8, 11, 1, 4, 6, 7, 9, 10, 12, 13];
@@ -140,12 +146,12 @@ export default function Recreation() {
 			flow: flow.current,
 		};
 		if (Object.values(refs).some((el) => el === null)) return;
-		const classes = { struck: styles.struck, cue: styles.cue };
+		const classes = { struck: styles.struck };
 
 		// The gate is re-checked, not decided once: a reader who opens the page
-		// narrow and widens it past 901px gets the stage from CSS the instant the
-		// query flips, and a driver that had given up at mount would leave it
-		// frozen at its resting frame with the scroll doing nothing.
+		// narrower than 360px and widens it past that gets the stage from CSS the
+		// instant the query flips, and a driver that had given up at mount would
+		// leave it frozen at its resting frame with the scroll doing nothing.
 		let detach = attachDriver(refs as Parameters<typeof attachDriver>[0], classes);
 		const queries = SCENE_QUERIES.map((q) => window.matchMedia(q));
 		const recheck = () => {
@@ -163,18 +169,27 @@ export default function Recreation() {
 
 	return (
 		<section className={styles.band} ref={band} data-recreation="">
-			{/* The two cursor sprites are set here rather than in the stylesheet: a
-			    url() inside a CSS module is inlined by webpack as a data URI, and
-			    these two came to a quarter of the site's only render-blocking
-			    resource — paid for on every docs page, which have no stage on them.
-			    The driver writes both properties onto this same element. */}
+			{/* Three resting values that cannot live in the stylesheet, all read off
+			    the closing frame rather than typed:
+
+			    the two cursor sprites, because a url() inside a CSS module is
+			    inlined by webpack as a data URI and these two came to a quarter of
+			    the site's only render-blocking resource — paid for on every docs
+			    page, none of which has a stage on it;
+
+			    the wallpaper, because the selection is an attribute rather than a
+			    custom property, so there is nowhere in the sheet to declare it.
+			    `release()` restores it from the same expression.
+
+			    The driver overwrites all three per frame. */}
 			<div
 				className={styles.stage}
 				ref={root}
+				data-bg={String(REST.bg)}
 				style={
 					{
-						"--shot-cursor": 'url("/img/cursors/01-arrow.png")',
-						"--ui-cursor": 'url("/img/cursors/00-arrow.png")',
+						"--shot-cursor": `url("${shotCursorSrc(REST)}")`,
+						"--ui-cursor": `url("${CURSORS.themes[0].src}")`,
 					} as React.CSSProperties
 				}
 			>
@@ -233,8 +248,8 @@ export default function Recreation() {
 										<span
 											key={n}
 											className={styles.swatch}
+											data-i={i}
 											data-t={i < 4 ? `th-${i}` : undefined}
-											style={{ ["--i" as string]: i }}
 										>
 											{/* Lazy, and warmed by the driver — see primeStrip(). These
 											    twelve sit in a pane held at `display: none` until the
