@@ -128,21 +128,6 @@
 	color: var(--os-fg-2);
 }
 
-/* --os-meta is a 3.06:1 grey in dark and 2.55:1 in light; at 12.5px that is a
-   1.4.3 failure, and this paragraph is the one that says the app is not
-   production-grade — the last sentence on the page that should be hard to read. */
-.note {
-	margin: 22px auto 0;
-	max-width: 460px;
-	font-size: 12.5px;
-	color: var(--os-muted);
-	line-height: 1.5;
-}
-
-.note strong {
-	color: var(--os-fg-2);
-}
-
 /* ---- shared section chrome ---- */
 
 .sectionKicker {
@@ -419,4 +404,13 @@
 	margin: 28px 0 0;
 	font-size: 12.5px;
 	color: var(--os-fg-2);
+}
+
+/* The claim is literal, so it is only made where it holds: the scene needs
+   901px and a reader who has not asked for less motion, and below either of
+   those the driver never attaches and nothing rides the scroll. */
+@media (max-width: 901px), (prefers-reduced-motion: reduce) {
+	.scrollHint {
+		display: none;
+	}
 }

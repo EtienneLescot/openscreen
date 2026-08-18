@@ -46,14 +46,13 @@ export default function Home() {
 							Read the docs
 						</Link>
 					</div>
-					{/* Kept from the previous cut, which the design drops. It is the one
-					    line on the page that manages expectations, and a pre-release that
-					    does not say so is the kind of omission that costs trust once. */}
-					<p className={styles.note}>
-						OpenScreen is <strong>not production-grade</strong>. Expect rough edges while we build
-						in the open.
-					</p>
-					<p className={styles.scrollHint}>Scroll to ride the demo</p>
+					{/* The design's line here is "Scroll to ride the demo", which gives an
+					    instruction the reader did not need and a reason they did not get.
+					    This states the mechanism instead, and the mechanism is the reason:
+					    scroll position IS the clock the edit runs on. Hidden where that
+					    stops being true — below 901px, and under reduced motion, the driver
+					    never attaches and the scrollbar is just a scrollbar. */}
+					<p className={styles.scrollHint}>Scroll — the scrollbar is the timeline</p>
 				</div>
 			</header>
 

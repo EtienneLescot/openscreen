@@ -1,7 +1,8 @@
 /**
- * The heading keeps the page's 1096px measure. The recreation below it does not
- * — it is a direct child of the section rather than of `.head`, which is the
- * whole reason the section has no horizontal padding of its own.
+ * Nothing here is drawn any more except on focus. `.head` exists to give the
+ * skip link a positioning context and the hidden heading a home; the recreation
+ * is a sibling of it, not a child, which is why the section has no horizontal
+ * padding of its own.
  */
 
 .section {
@@ -10,50 +11,31 @@
 	   viewport — so a section without a background sits on the wrong grey. */
 	background: var(--os-bg);
 	color: var(--os-fg);
-	/* The hero has no bottom padding of its own — it used to hand straight over
-	   to a plate section that supplied its own. This is that air. */
-	padding: 104px 0 8px;
+	/* Down from 104px, which was the air a section heading needed. With the
+	   heading gone the hero should hand over to the editor the way the design
+	   has it: the demo begins as the hero leaves. */
+	padding: 24px 0 8px;
 }
 
-/* Centred, like every other section heading on the page.
- *
- * Left-aligned it introduced a third x-origin: the hero is centred, the
- * recreation's captions sit at 5% of the full-bleed stage, and a heading on the
- * 1096px measure landed between the two — near enough to the caption 200px
- * below it to read as a failed alignment rather than a different one. Aligning
- * the heading to the caption instead is not available: the caption has to stay
- * near the left edge, or at 1920px it runs into the composite. */
 .head {
 	position: relative;
 	max-width: 1096px;
 	margin: 0 auto;
-	padding: 0 28px 34px;
-	text-align: center;
+	padding: 0 28px;
 }
 
-.kicker {
-	margin: 0;
-	font-family: var(--ifm-font-family-monospace);
-	font-size: 11px;
-	letter-spacing: 0.08em;
-	text-transform: uppercase;
-	color: var(--os-accent);
-}
-
+/* Read, never seen. Not `display: none`, which would take it out of the
+   accessibility tree along with the outline it is there to keep. */
 .title {
-	margin: 10px 0 0;
-	font-size: clamp(26px, 3.2vw, 36px);
-	font-weight: 700;
-	letter-spacing: -0.025em;
-	color: var(--os-fg-emphasis);
-}
-
-.deck {
-	margin: 12px auto 0;
-	max-width: 62ch;
-	font-size: 14.5px;
-	line-height: 1.6;
-	color: var(--os-fg-2);
+	position: absolute;
+	width: 1px;
+	height: 1px;
+	margin: -1px;
+	padding: 0;
+	overflow: hidden;
+	clip-path: inset(50%);
+	white-space: nowrap;
+	border: 0;
 }
 
 /* Visible only on focus. */
@@ -82,7 +64,7 @@
 
 @media (max-width: 600px) {
 	.head {
-		padding: 0 18px 24px;
+		padding: 0 18px;
 	}
 
 	.skip {
