@@ -109,7 +109,8 @@
    rgba(16,185,129,.25) was the *dark* accent, and it shipped unchanged into the
    light theme. Foreground is --os-bg, not #fff — white on the light-theme accent
    measures 3.76:1, which is a Level AA failure on the page's main call to
-   action. Against --os-bg the same button is above 7:1 in both themes. */
+   action. Against --os-bg the same button measures 7.81:1 dark and 4.96:1 light:
+   AA in both, AAA in one. */
 .primaryCta {
 	background: var(--os-accent);
 	color: var(--os-bg);
@@ -388,7 +389,12 @@
 	padding: 3px 10px;
 	border-radius: 999px;
 	background: var(--os-accent);
-	color: #04110b;
+	/* --os-bg, not a literal near-black: the accent swaps under
+	   [data-theme="light"] and a fixed foreground therefore sits on two
+	   different greens. #04110b measured 7.59:1 on the dark accent and 3.75:1 on
+	   the light one — an AA failure at this size. Against --os-bg the same label
+	   is 7.81:1 and 4.96:1, which is the CTA's solution and the CTA's reason. */
+	color: var(--os-bg);
 	font-family: var(--ifm-font-family-monospace);
 	font-size: 10.5px;
 	font-weight: 700;
