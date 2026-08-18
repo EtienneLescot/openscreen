@@ -348,37 +348,50 @@ function bounce(t: number, win: number, clicks: number[]): number {
 		: 1 + Math.sin(((e - 0.38) / 0.62) * Math.PI) * 0.32;
 }
 
-/** The recorded pointer's path and the recorded page's scroll, both on the
- *  footage clock. Percentages of the frame, so neither has a pixel baked in. */
-const SHOT_PATH: number[][] = [
+/**
+ * The recorded pointer's path, on the footage clock.
+ *
+ * A keyframe is either a place in the frame — percentages, so no pixel is baked
+ * in — or the NAME of something in it, matched against `[data-shot]` and
+ * resolved by the driver against what that thing actually measures.
+ *
+ * The names are the point. Coordinates copied from the design describe the
+ * design's frame, not ours: our padding comes off the vendored document, so the
+ * recorded window sits somewhere else, and the pointer parked outside the very
+ * window it had just clicked. A name cannot drift, because whatever moves the
+ * window moves the answer with it.
+ *
+ * The wandering between clicks stays in coordinates. It is not aimed at
+ * anything, so there is nothing for it to name.
+ */
+export type ShotKey =
+	| readonly [at: number, x: number, y: number]
+	| readonly [at: number, on: string, fx: number, fy: number];
+
+export const SHOT_PATH: readonly ShotKey[] = [
 	[0.8, 38, 60],
 	[3.5, 52, 55],
 	[6.4, 46, 50],
-	[7.4, 34.5, 49],
-	[8.9, 34.5, 49],
+	/* The page's own call to action, which is what the take opens by pressing.
+	   Named through the scroll: the page is at -6% here and at -62% when the
+	   pointer comes back to this same spot at 21.9, so one coordinate cannot
+	   mean the same thing twice. */
+	[7.4, "cta", 0.5, 0.5],
+	[8.9, "cta", 0.5, 0.5],
 	[10.5, 52, 58],
 	[11.2, 46, 64],
 	[12.3, 46, 64],
 	[13.8, 50, 60],
 	[14.6, 44, 62],
 	[15.5, 44, 62],
-	[15.9, 50, 61.5],
-	[16.9, 50, 61.5],
-	/* (40, 36) and not the design's (34.8, 27.6): that point is on the window's
-	   title bar in the design's frame and misses ours by six per cent of the
-	   height, because the frame is inset by OUR padding — read off the vendored
-	   document — and not by the design's. Measured against the rendered window,
-	   which spans 36.0-64.0 across and 33.6-73.2 down, with the bar the 5.2%
-	   slice at its top.
-
-	   These are still coordinates, which is the same shape of fragility that put
-	   the reader's pointer 151px off its targets and swept the wrong word: the
-	   robust version aims at the window the way the pointer aims at `[data-t]`.
-	   That is a refactor rather than a patch — the shot path is evaluated in the
-	   pure score, which has no DOM to measure — and `data-shot="see"` in the
-	   markup is the unbuilt half of it. */
-	[17.4, 40, 36],
-	[18.3, 40, 36],
+	/* The button it is about to press. */
+	[15.9, "app-go", 0.5, 0.5],
+	[16.9, "app-go", 0.5, 0.5],
+	/* On the window's own title bar, a fifth of the way along it — where a hand
+	   goes to move a window. Named, so the padding can move the window without
+	   taking the pointer off it. */
+	[17.4, "app-bar", 0.2, 0.5],
+	[18.3, "app-bar", 0.2, 0.5],
 	[19.2, 35, 68],
 	[20.2, 58, 58],
 	[21.3, 34.5, 49],
@@ -458,6 +471,8 @@ export interface Frame {
 	/** Uniform scale on the recorded window — v4 scales the frame rather than
 	 *  insetting it, so the page's internal layout never reflows. */
 	frameScale: number;
+	/** The recorded app window's entrance, 0-1. */
+	winVis: number;
 	cursorSize: number;
 	cursorSizePct: number;
 	/** The size drag as 0-1, which is what the recorded cursor scales on. */
@@ -468,7 +483,6 @@ export interface Frame {
 	zoomOrigin: string;
 	zoomLabel: string;
 	zoomActive: number;
-	shot: [number, number];
 	shotBounce: number;
 	uiBounce: number;
 	pageY: number;
@@ -533,7 +547,6 @@ export function frameAt(p: number): Frame {
 	const live = ZOOMS.slice(1).find((z) => t >= z.from && t <= z.to);
 	const zoomsPlaced = ZOOMS.filter((z) => t >= z.placedAt).length;
 
-	const [shotX, shotY] = kf(tf, SHOT_PATH);
 	const [pageY] = kf(tf, PAGE_PATH);
 
 	const placedTrims = trims(t);
@@ -564,6 +577,13 @@ export function frameAt(p: number): Frame {
 		paddingPct:
 			((padding - CONTROLS.padding.min) / (CONTROLS.padding.max - CONTROLS.padding.min)) * 100,
 		frameScale: 1 - padU * 0.36,
+		/* The window opens and shuts on the footage clock, so it rides the speed
+		   ramp with everything else in the recording. Here and not in the
+		   stylesheet, because the pointer has to aim at a window this scales: it
+		   is the third transform between a named target and the frame, after the
+		   page's scroll and the padding. The `* 8` IS the ease — nothing may
+		   transition on top of it. */
+		winVis: Math.min(clamp01((tf - 15.25) * 8), clamp01((17.95 - tf) * 8)),
 		cursorSize,
 		cursorSizeU: sizeU,
 		cursorSizePct:
@@ -575,7 +595,6 @@ export function frameAt(p: number): Frame {
 		zoomOrigin: live ? live.origin : "52% 58%",
 		zoomLabel: live ? live.label : ZOOMS[1].label,
 		zoomActive: live ? 1 : 0,
-		shot: [shotX, shotY],
 		shotBounce: bounce(tf, 0.32, FOOTAGE_CLICKS),
 		uiBounce: bounce(t, 0.42, UI_CLICKS),
 		pageY,

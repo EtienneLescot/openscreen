@@ -392,7 +392,7 @@ export default function Recreation() {
 					{/* ═══ THE COMPOSITE ═══ */}
 					<div className={styles.card}>
 						<div className={styles.cardClip}>
-							<div className={styles.zoomer}>
+							<div className={styles.zoomer} data-shot-box>
 								{CANVAS_BG.map((n) => (
 									<img
 										key={n}
@@ -417,7 +417,7 @@ export default function Recreation() {
 										<span className={styles.omnibox}>fern.garden</span>
 									</div>
 									<div className={styles.viewport}>
-										<div className={styles.page}>
+										<div className={styles.page} data-shot-scroll>
 											<div className={styles.pageNav}>
 												<span className={styles.pageMark} />
 												<span className={styles.pageBrand}>Fern</span>
@@ -435,10 +435,10 @@ export default function Recreation() {
 													when they ask for it.
 												</p>
 												<div className={styles.pageBtns}>
-													<span className={styles.pageCta}>Download the app</span>
-													<span className={styles.pageGhost} data-shot="see">
-														See how it works
+													<span className={styles.pageCta} data-shot="cta">
+														Download the app
 													</span>
+													<span className={styles.pageGhost}>See how it works</span>
 												</div>
 											</div>
 											<div className={styles.pageShot}>
@@ -528,8 +528,8 @@ export default function Recreation() {
 
 										{/* The app the recording opens, half-way through the take. Two
 										    states crossfaded on the footage clock, under one title bar. */}
-										<div className={styles.appWin}>
-											<div className={styles.appBar}>
+										<div className={styles.appWin} data-shot-win>
+											<div className={styles.appBar} data-shot="app-bar">
 												<span className={styles.appLights}>
 													<span data-l="r" />
 													<span data-l="y" />
@@ -550,7 +550,9 @@ export default function Recreation() {
 													<span className={styles.appDot} />
 													Searching nearby…
 												</div>
-												<span className={styles.appBtn}>Pair sensor</span>
+												<span className={styles.appBtn} data-shot="app-go">
+													Pair sensor
+												</span>
 											</div>
 
 											<div className={styles.appDone}>

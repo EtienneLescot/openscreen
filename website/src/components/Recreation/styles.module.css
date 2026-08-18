@@ -1196,11 +1196,13 @@
 	background: #fbfcfd;
 	box-shadow: 0 4cqh 10cqh rgba(8, 12, 18, 0.45), 0 0 0 1px rgba(15, 23, 42, 0.08);
 	transform-origin: 26% 42%;
-	/* Open between footage 15.25 and 17.95 — expressed as a window on --tf so it
-	   rides the speed ramp with everything else in the recording. */
-	--open: clamp(0, (var(--tf) - 15.25) * 8, 1);
-	--shut: clamp(0, (17.95 - var(--tf)) * 8, 1);
-	--vis: min(var(--open), var(--shut));
+	/* Open between footage 15.25 and 17.95, on the footage clock so it rides the
+	   speed ramp with everything else in the recording. The ramp itself lives in
+	   the score (scene.ts, `winVis`), because the recorded pointer has to aim at
+	   a window this scales and cannot read a stylesheet. Zero without the driver
+	   — which is what a reader with no JS sees anyway, the scene frozen at its
+	   opening frame with the window not yet open. */
+	--vis: var(--win-vis, 0);
 	opacity: var(--vis);
 	transform: scale(calc(0.82 + var(--vis) * 0.18));
 	/* No transition. --vis is min() of two clamp() ramps off --tf, which the
