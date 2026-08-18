@@ -239,9 +239,17 @@
 .panel {
 	position: absolute;
 	left: 4.5vw;
-	top: var(--pnl-top);
+	/* Capped by the footage, centred on it, and free to be shorter. Anchoring
+	   `height` to the slot left every pane whose controls stop short sitting in
+	   a column of empty surface. Both numbers come off the video's own box and
+	   not off --pnl-top/--pnl-h: the slot is taller than the video once the
+	   timeline is in, and centring on the slot puts the panel 70px below the
+	   picture it belongs beside. The video is --v-w wide at 16/9, so its height
+	   is --v-w * 0.5625 and its centre line --v-t + half of that. */
+	top: calc(var(--v-t) + var(--v-w) * 0.28125);
 	width: var(--pnl-w);
-	height: var(--pnl-h);
+	height: auto;
+	max-height: calc(var(--v-w) * 0.5625);
 	overflow: hidden;
 	z-index: 12;
 	border: 1px solid var(--ost-border);
@@ -250,7 +258,10 @@
 	box-shadow: var(--ost-elev-pop), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 	pointer-events: none;
 	opacity: var(--panel);
-	transform: translateY(calc((1 - var(--panel)) * 12px));
+	/* Two functions rather than one calc: `calc(-50% + Npx)` mixes a percentage
+	   with a length, and postcss-calc drops declarations it cannot fold — which
+	   on this page is a production-only failure that has bitten twice. */
+	transform: translateY(-50%) translateY(calc((1 - var(--panel)) * 12px));
 	transition:
 		opacity 0.45s var(--ease),
 		transform 0.45s var(--ease);
@@ -660,7 +671,12 @@
 	top: var(--v-t);
 	width: var(--v-w);
 	aspect-ratio: 16 / 9;
-	border-radius: 16px;
+	/* 18px, matching .cardClip, which is inset:0 on this same box — so the
+	   1px ring below and the clipped content follow one arc. The design has
+	   16px here against an 18px clip, and the two arcs part company across the
+	   quadrant: a dark crescent opens between the ring and the picture, widest
+	   at 45 degrees. Reproduced at 6x before changing it. */
+	border-radius: 18px;
 	box-shadow:
 		0 0 0 1px rgba(16, 185, 129, 0.5),
 		0 0 44px -8px rgba(16, 185, 129, 0.3),

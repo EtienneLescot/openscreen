@@ -267,6 +267,12 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	let camReady = false;
 	let camPending: number | undefined;
 	const camSrc = "/video/webcam.mp4";
+
+	// Set at attach, not in the markup and not in primeCam: in the markup every
+	// phone fetches it for a bubble it never draws, and in primeCam it would
+	// race the clip it exists to stand in for. Here it has the whole approach to
+	// the band to arrive, and the driver only ever attaches above 901px.
+	cam.poster = "/img/walkthrough/webcam-poster.jpg";
 	const primeCam = () => {
 		if (cam.getAttribute("src")) return;
 		cam.setAttribute("src", camSrc);
@@ -289,6 +295,30 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	};
 	cam.addEventListener("loadeddata", onCamLoaded);
 	cam.addEventListener("seeked", onCamSeeked);
+	/* ── the swatch strip ─────────────────────────────────────────────────── */
+
+	/* The twelve wallpapers are `loading="lazy"` inside a pane that is
+	   `display: none` until the style beat opens — which means the browser never
+	   gets a chance to want them early, and all twelve are requested at the
+	   moment they are first needed. Measured on a 1.5 Mbps link: the strip was
+	   still blank half a second into the beat it belongs to.
+
+	   Warmed here rather than in the markup: this runs on the same in-band gate
+	   that primes the clip, so it costs nothing until the reader is actually
+	   arriving, and nothing at all below 901px, where the driver never attaches
+	   and the strip is never drawn. */
+	let stripPrimed = false;
+	const primeStrip = () => {
+		if (stripPrimed) return;
+		stripPrimed = true;
+		for (const img of Array.from(root.querySelectorAll<HTMLImageElement>("[data-strip] img"))) {
+			img.loading = "eager";
+			img.decode?.().catch(() => {
+				// A decode that loses a race with teardown is not worth reporting.
+			});
+		}
+	};
+
 	const seekCam = (tf: number) => {
 		if (!camReady || cam.readyState < 2) return;
 		const dur = Number.isFinite(cam.duration) && cam.duration > 0 ? cam.duration : 10;
@@ -320,7 +350,11 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	const apply = (f: Frame) => {
 		num("--t", f.t, 3);
 		num("--tf", f.tf, 3);
-		num("--tl", f.tl, 0);
+		// Three decimals, not zero. This was written at `toFixed(0)` from when --tl
+		// was a switch; the score has eased it into a ramp since, and rounding to
+		// the integer threw the ramp away and snapped the floor, the panel and the
+		// composite from one act to the other in a single frame.
+		num("--tl", f.tl, 3);
 		if (String(f.bg) !== root.dataset.bg) root.dataset.bg = String(f.bg);
 		num("--fit", f.fit);
 		num("--pad-pct", f.paddingPct, 2);
@@ -421,7 +455,10 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 			// sitting pinned and finished for a whole viewport.
 			const span = total + window.innerHeight * 1.04;
 			const off = Math.min(span, Math.max(0, -rect.top));
-			if (off > 0 && off < span) primeCam();
+			if (off > 0 && off < span) {
+				primeCam();
+				primeStrip();
+			}
 			apply(frameAt(span > 0 ? off / span : 0));
 		});
 	};

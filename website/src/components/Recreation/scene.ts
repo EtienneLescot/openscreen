@@ -381,7 +381,14 @@ export function frameAt(p: number): Frame {
 	// Easing the value here instead means every rule that reads `--tl` — the
 	// floor, the panel's top and height, the composite's box — moves together and
 	// lands exactly.
-	const tl = ease(clamp01((t - TL_IN) / 0.55));
+	//
+	// 1.5s, not 0.55s. The ramp is what the reader sees as the timeline sliding
+	// up from the bottom, and 0.55s of a 26s scene is 2% of the band — about a
+	// wheel notch, which arrives as a jump rather than as an entrance. At 1.5s
+	// it takes just under 6% of the band, and because every rule that reads
+	// --tl moves on it, the panel and the composite resize over the same
+	// stretch instead of snapping ahead of the floor.
+	const tl = ease(clamp01((t - TL_IN) / 1.5));
 
 	const bg = BG_PICKS.reduce((n, at) => (t >= at ? n + 1 : n), 0);
 
