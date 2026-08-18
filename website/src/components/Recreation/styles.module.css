@@ -690,10 +690,15 @@
    Centred in the left column, between the caption and the floor. */
 
 .palette {
+	/* Anchored where the inspector's top is, inside the same column, so the gap
+	   under the caption is the one gap every other beat has. It used to be
+	   centred in the box by a rule of its own — a second way of placing the same
+	   position, which is how it came to sit further from the caption than any
+	   panel does. Absolute, so it does not add to the column's flow: the group's
+	   height stays the caption plus the panel, and the two crossfade in place. */
 	position: absolute;
-	left: calc(4.5vw + var(--pnl-w) / 2);
-	/* Centred in the same box as everything else. */
-	top: calc(var(--box-top) + var(--box-h) / 2);
+	left: 50%;
+	top: var(--cap-h);
 	z-index: 12;
 	display: grid;
 	grid-template-columns: repeat(3, 66px);
@@ -703,7 +708,7 @@
 	border-radius: 22px;
 	background: color-mix(in srgb, var(--ost-surface) 90%, transparent);
 	box-shadow: var(--ost-elev-pop), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-	transform: translate(-50%, calc(-50% + (1 - var(--palette)) * -16px));
+	transform: translateX(-50%) translateY(calc((1 - var(--palette)) * -16px));
 	opacity: var(--palette);
 	pointer-events: none;
 	transition:
@@ -1674,9 +1679,14 @@
 		transform: translateY(calc((1 - var(--panel)) * 12px));
 	}
 
+	/* Centred between the picture and the floor, which is what the stack has
+	   instead of a column to hang from — so it takes back the vertical -50% the
+	   desktop rule drops in order to anchor under the caption. */
 	.palette {
 		left: 50%;
 		top: calc((var(--v-t) + var(--v-h) + var(--box-bot)) / 2);
+		transform: translateX(-50%) translateY(-50%)
+			translateY(calc((1 - var(--palette)) * -16px));
 	}
 
 	/* At this scale a 0.5s trim is twelve pixels wide, and a label clipped to

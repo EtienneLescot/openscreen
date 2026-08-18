@@ -356,9 +356,7 @@ export default function Recreation() {
 							</div>
 						</div>
 					</div>
-				</div>
 
-				<div className={styles.scene} aria-hidden="true">
 					{/* ═══ THE TOOL PALETTE ═══ six tools, the app's own bar */}
 					<div className={styles.palette}>
 						<span
@@ -388,7 +386,9 @@ export default function Recreation() {
 							<Crosshair size={30} />
 						</span>
 					</div>
+				</div>
 
+				<div className={styles.scene} aria-hidden="true">
 					{/* ═══ THE COMPOSITE ═══ */}
 					<div className={styles.card}>
 						<div className={styles.cardClip}>
