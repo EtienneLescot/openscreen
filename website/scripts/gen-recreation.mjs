@@ -109,7 +109,7 @@ const { buildClipSection, isSilenceWord, SILENCE_THRESHOLD_SEC } = await appModu
 );
 // Importable as-is: its only import is `import type { NativeCursorType }`, which
 // Node's type stripping removes, so the `@/` alias never has to resolve.
-const { CURSOR_THEMES, DEFAULT_CURSOR_SPRITES, DEFAULT_CURSOR_THEME_ID } = await appModule(
+const { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID, resolveCursorSprites } = await appModule(
 	"src/lib/cursor/cursorThemes.ts",
 );
 
@@ -801,8 +801,10 @@ const CONTROLS = {
  * this table rather than eyeball a `transform-origin`. The two sources spell
  * hotspots differently and that is the trap: `DEFAULT_CURSOR_SPRITES` stores
  * fractions of the image (0.119), while a theme stores the same quantity against
- * the ~32-logical reference the file header describes (1.5, i.e. 1.5/32). Both
- * are normalised to a fraction here, once.
+ * the 32-logical reference the file header describes (1.5, i.e. 1.5/32). The
+ * magnitude cannot tell them apart — a theme's `hotspotX: 1` is one unit in, an
+ * arrow tip, and reads as the sprite's right edge if taken for a fraction — so
+ * the application's own `resolveCursorSprites` does the conversion here too.
  */
 const CURSOR_PICKER = [
 	DEFAULT_CURSOR_THEME_ID,
@@ -817,20 +819,27 @@ const CURSOR_PICKER = [
 	"pokemon-neon-gengar",
 ];
 
-const REF = 32;
-const frac = (v) => Number((v > 1 ? v / REF : v).toFixed(4));
+const round4 = (v) => Number(v.toFixed(4));
 
 function cursorSprite(id, kind) {
-	if (id === DEFAULT_CURSOR_THEME_ID) {
-		const a = DEFAULT_CURSOR_SPRITES[kind];
-		if (!a) throw new Error(`default sprites have no ${kind}`);
-		return { name: "Default", hotspotX: frac(a.hotspotX), hotspotY: frac(a.hotspotY) };
+	const isDefault = id === DEFAULT_CURSOR_THEME_ID;
+	const theme = isDefault ? null : CURSOR_THEMES.find((t) => t.id === id);
+	if (!isDefault && !theme) {
+		throw new Error(`unknown cursor theme ${id} — it is not in CURSOR_THEMES`);
 	}
-	const theme = CURSOR_THEMES.find((t) => t.id === id);
-	if (!theme) throw new Error(`unknown cursor theme ${id} — it is not in CURSOR_THEMES`);
-	const a = theme.assets[kind];
-	if (!a) throw new Error(`cursor theme ${id} ships no ${kind} sprite`);
-	return { name: theme.name, hotspotX: frac(a.hotspotX), hotspotY: frac(a.hotspotY) };
+	// resolveCursorSprites falls back to the built-in art for a kind the pack
+	// does not ship, which is right in the application and wrong here: the
+	// picker would show the default arrow under a pack's name.
+	if (theme && !theme.assets[kind]) {
+		throw new Error(`cursor theme ${id} ships no ${kind} sprite`);
+	}
+	const sprite = resolveCursorSprites(theme?.id ?? null)[kind];
+	if (!sprite) throw new Error(`default sprites have no ${kind}`);
+	return {
+		name: theme?.name ?? "Default",
+		hotspotX: round4(sprite.hotspotX),
+		hotspotY: round4(sprite.hotspotY),
+	};
 }
 
 const CURSORS = {
