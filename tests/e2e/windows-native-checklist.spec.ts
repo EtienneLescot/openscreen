@@ -321,11 +321,17 @@ test.describe("Windows native checklist smoke tests", () => {
 	});
 
 	// The HUD must reach click-through by *asking* for it from the renderer, never
-	// by being born that way. On Windows the `forward` option is a global
-	// WH_MOUSE_LL hook, and it is the only route back out: a HUD that is already
-	// input-transparent when the hook fails to install can never be clicked again,
-	// which is what bricked the app in issue #266. Both halves matter — that nothing
-	// asks during construction, and that the renderer still does after mount.
+	// by being born that way: a window born input-transparent whose renderer never
+	// mounts can never be clicked again, which is what bricked the app in issue #266.
+	// Both halves matter — that nothing asks during construction, and that the
+	// renderer still does after mount.
+	//
+	// The second assertion also pins `forward` OFF. It used to be the only route back
+	// out of click-through, via a global WH_MOUSE_LL hook that Windows can refuse or
+	// silently revoke — which is how #385 reproduced a dead HUD on a build that already
+	// carried the #266 fix. The way out is now the "hud-overlay-cursor" poll in
+	// electron/windows.ts, and asking for `forward` again would restore the dependency
+	// without restoring the need.
 	//
 	// Note what this test therefore cannot do, and what no test in this file can.
 	// Only a real OS cursor move drives a WH_MOUSE_LL hook; CDP-injected input
@@ -383,7 +389,7 @@ test.describe("Windows native checklist smoke tests", () => {
 			// And the renderer does ask, once it has mounted.
 			await expect
 				.poll(() => app.evaluate(() => globalThis.__hudTape ?? []), { timeout: 20_000 })
-				.toContainEqual([true, { forward: true }]);
+				.toContainEqual([true]);
 		} finally {
 			await app.evaluate(({ BrowserWindow }) => {
 				const original = globalThis.__hudSetIgnoreMouseEvents;

@@ -80,6 +80,11 @@ contextBridge.exposeInMainWorld("electronAPI", {
 	setHudOverlayIgnoreMouseEvents: (ignore: boolean) => {
 		ipcRenderer.send("hud-overlay-ignore-mouse-events", ignore);
 	},
+	onHudOverlayCursor: (callback: (x: number, y: number) => void) => {
+		const listener = (_e: Electron.IpcRendererEvent, x: number, y: number) => callback(x, y);
+		ipcRenderer.on("hud-overlay-cursor", listener);
+		return () => ipcRenderer.removeListener("hud-overlay-cursor", listener);
+	},
 	beginHudOverlayDrag: () => {
 		ipcRenderer.send("hud-overlay-drag-start");
 	},

@@ -420,6 +420,25 @@ export function LaunchWindow() {
 		setHudMouseEventsEnabled(isPopoverOpen);
 	}, [isPopoverOpen, setHudMouseEventsEnabled]);
 
+	// The way back out of click-through. Every other route below — pointerenter and
+	// pointerdown on the bar, pointermove on the root — needs an event this document
+	// stops receiving the moment the window goes input-transparent, which is what left
+	// the HUD painted and permanently dead in #266 and again in #385. So the main
+	// process samples the OS cursor and pushes it here instead, and the hit test is the
+	// one `handleRootPointerMove` already runs, against the same layout: elementFromPoint
+	// honours pointer-events, so a point over the transparent reserve resolves to the
+	// root and correctly stays click-through.
+	//
+	// Only ever turns click-through OFF. Turning it back on is the DOM handlers' job,
+	// and they are reliable by then — the window is receiving real input again.
+	useEffect(() => {
+		return window.electronAPI?.onHudOverlayCursor?.((x, y) => {
+			if (document.elementFromPoint(x, y)?.closest("[data-hud-interactive='true']")) {
+				setHudMouseEventsEnabled(true);
+			}
+		});
+	}, [setHudMouseEventsEnabled]);
+
 	const defaultSourceName = t("sourceSelector.defaultSourceName");
 	const [selectedSource, setSelectedSource] = useState(defaultSourceName);
 	const [hasSelectedSource, setHasSelectedSource] = useState(false);
