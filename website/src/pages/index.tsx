@@ -2,7 +2,7 @@ import Head from "@docusaurus/Head";
 import Link from "@docusaurus/Link";
 import Heading from "@theme/Heading";
 import Layout from "@theme/Layout";
-import { Apple, AppWindow, CircleCheck, Download, TerminalSquare } from "lucide-react";
+import { Apple, AppWindow, ArrowDown, CircleCheck, Download, TerminalSquare } from "lucide-react";
 
 import Editor from "../components/Editor";
 import Showcase from "../components/Showcase";
@@ -48,14 +48,18 @@ export default function Home() {
 							Read the docs
 						</Link>
 					</div>
-					{/* The design's line here is "Scroll to ride the demo", which gives an
-					    instruction the reader did not need and a reason they did not get.
-					    This states the mechanism instead, and the mechanism is the reason:
-					    scroll position IS the clock the edit runs on. Hidden where that
-					    stops being true — below 901px, and under reduced motion, the driver
-					    never attaches and the scrollbar is just a scrollbar. */}
-					<p className={styles.scrollHint}>Scroll — the scrollbar is the timeline</p>
 				</div>
+
+				{/* An affordance, not a claim. It said "the scrollbar is the timeline",
+				    which is true and is still the wrong job for this line: what a
+				    reader needs at the fold is to know there is more below, and a
+				    sentence is a worse signal for that than an arrow. The design pins
+				    it to the bottom of the screen with a down arrow beside it, which
+				    is also what makes it read as an edge rather than as a caption. */}
+				<p className={styles.scrollHint}>
+					<ArrowDown size={15} strokeWidth={2} />
+					Scroll down
+				</p>
 			</header>
 
 			{/* The argument, immediately after the hero. */}
