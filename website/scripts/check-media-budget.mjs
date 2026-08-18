@@ -60,9 +60,7 @@ function walk(dir) {
 	} catch {
 		return []; // an absent directory is a section not yet shot, not a failure
 	}
-	return entries.flatMap((e) =>
-		e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)],
-	);
+	return entries.flatMap((e) => (e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]));
 }
 
 /**
