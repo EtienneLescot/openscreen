@@ -478,10 +478,8 @@ export default function Recreation() {
 															[1, 1, 0, 1, 0, 0, 1],
 															[0, 1, 0, 0, 1, 0, 0],
 														].map((row, r) => (
-															// biome-ignore lint/suspicious/noArrayIndexKey: a fixed drawing
 															<span key={r}>
 																{row.map((on, i) => (
-																	// biome-ignore lint/suspicious/noArrayIndexKey: a fixed drawing
 																	<span key={i} data-on={on ? "" : undefined} />
 																))}
 															</span>

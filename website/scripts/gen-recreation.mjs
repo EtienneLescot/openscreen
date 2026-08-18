@@ -103,9 +103,7 @@ registerHooks({
 const appModule = (rel) => import(pathToFileURL(resolve(APP, rel)).href);
 
 const { formatSec, formatMs } = await appModule("src/lib/ai-edition/timeline/format.ts");
-const { effectiveZoomScale, ZOOM_DEPTH_SCALES } = await appModule(
-	"src/lib/ai-edition/timeline/zoom-scale.ts",
-);
+const { effectiveZoomScale } = await appModule("src/lib/ai-edition/timeline/zoom-scale.ts");
 const { buildClipSection, isSilenceWord, SILENCE_THRESHOLD_SEC } = await appModule(
 	"src/lib/ai-edition/timeline/aggregated-transcript.ts",
 );
