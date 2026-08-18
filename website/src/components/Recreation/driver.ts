@@ -42,7 +42,7 @@ export interface DriverClasses {
 }
 
 export const SCENE_QUERIES = [
-	"(min-width: 901px)",
+	"(min-width: 360px)",
 	"(prefers-reduced-motion: reduce)",
 	"(forced-colors: active)",
 ] as const;
