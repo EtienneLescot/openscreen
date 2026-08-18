@@ -9,7 +9,8 @@
 		"serve": "docusaurus serve",
 		"clear": "docusaurus clear",
 		"typecheck": "tsc --noEmit",
-		"check:media": "node scripts/check-media-budget.mjs"
+		"check:media": "node scripts/check-media-budget.mjs",
+		"check:recreation": "node scripts/gen-recreation.mjs --check"
 	},
 	"dependencies": {
 		"@docusaurus/core": "^3.9.2",

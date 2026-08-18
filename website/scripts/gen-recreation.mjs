@@ -1140,11 +1140,54 @@ const banner = `/**
  * is absent for that reason, and so is the webcam bubble.
  */`;
 
-const lit = (value) => JSON.stringify(value, null, "\t");
-/** One row per entry. The word list is 106 objects; pretty-printing it costs ~11 KB
- *  of shipped bundle for indentation nobody reads. One line each stays diffable. */
+/**
+ * TypeScript object literals, not JSON: unquoted keys where the key is an
+ * identifier, trailing commas, tabs.
+ *
+ * The generator owns this file's formatting outright — biome.json tells the
+ * formatter to skip it — because `--check` compares bytes, and a formatter in
+ * between makes it report drift on a file nobody touched. That is what it did
+ * for as long as the file was committed: the check could not pass. So what
+ * comes out of here has to be what a reader will read, and it also has to be
+ * what biome would leave alone if it ever looked, or the exclusion becomes a
+ * silent licence to drift.
+ *
+ * Non-finite numbers throw rather than serialise. `JSON.stringify` writes NaN
+ * and Infinity as `null`, which is how a broken derivation ships as a plausible
+ * value instead of a build failure.
+ */
+const IDENT = /^[A-Za-z_$][A-Za-z0-9_$]*$/;
+const key = (k) => (IDENT.test(k) ? k : JSON.stringify(k));
+const scalar = (v) => {
+	if (typeof v === "number" && !Number.isFinite(v)) {
+		throw new Error(`refusing to emit ${v} — a derivation above this produced no number`);
+	}
+	return JSON.stringify(v);
+};
+const lit = (value, pad = "") => {
+	if (value === null || typeof value !== "object") return scalar(value);
+	const inner = `${pad}\t`;
+	if (Array.isArray(value)) {
+		if (!value.length) return "[]";
+		return `[\n${value.map((v) => `${inner}${lit(v, inner)},`).join("\n")}\n${pad}]`;
+	}
+	const entries = Object.entries(value).filter(([, v]) => v !== undefined);
+	if (!entries.length) return "{}";
+	return `{\n${entries.map(([k, v]) => `${inner}${key(k)}: ${lit(v, inner)},`).join("\n")}\n${pad}}`;
+};
+
+/** The same, on one line. The word list is 106 objects; pretty-printing it costs
+ *  ~11 KB of indentation nobody reads, and one line each stays diffable. */
+const litRow = (value) => {
+	if (value === null || typeof value !== "object") return scalar(value);
+	if (Array.isArray(value)) return `[${value.map(litRow).join(", ")}]`;
+	const entries = Object.entries(value).filter(([, v]) => v !== undefined);
+	return entries.length
+		? `{ ${entries.map(([k, v]) => `${key(k)}: ${litRow(v)}`).join(", ")} }`
+		: "{}";
+};
 const litRows = (rows) => `[
-${rows.map((r) => `	${JSON.stringify(r)},`).join("\n")}
+${rows.map((r) => `	${litRow(r)},`).join("\n")}
 ]`;
 
 /** The ruler, pretty everywhere except its 21 + 41 label rows. */

@@ -83,13 +83,14 @@ travel between two controls.
   so the bubble plays a clip of its own.
 
 `generated.ts` carries all of it and is emitted by `scripts/gen-recreation.mjs`.
-Never edit it by hand — run the generator and let the formatter have it.
+Never edit it by hand; `--check` fails the Docs workflow when it drifts.
 
-`--check` cannot be trusted as it stands: it byte-compares its own output with
-the committed file, and the committed file has been through biome (lint-staged
-formats it on the way in), so it reports drift on a file nobody touched. It is
-not wired into CI either. Either the generator should emit what biome would
-leave, or the formatter should be told to skip a generated file.
+That check compares its own output with the committed file byte for byte, so
+the generator has to own the file's formatting outright — `biome.json` tells the
+formatter to skip it, and the emitter writes TypeScript rather than JSON so that
+what it produces is also what a reader wants to read. Anything that reformats it
+afterwards makes the check report drift on a file nobody touched, which is
+exactly what it did for as long as lint-staged was formatting it.
 
 ## Verifying
 
