@@ -332,6 +332,7 @@ export default function Recreation() {
 													key={`${tok.text}-${i}`}
 													className={styles.word}
 													data-w={i}
+													data-tier={tok.tier}
 													data-t={CUT_INDEX.includes(i) ? `tok-${i}` : undefined}
 												>
 													{tok.text}{" "}

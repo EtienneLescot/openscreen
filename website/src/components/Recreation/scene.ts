@@ -97,26 +97,72 @@ const PANEL_OFF = [14.45, 19.6] as const;
 
 /* ── the transcript ───────────────────────────────────────────────────────── */
 
-export type Token = { text: string; silence?: boolean; cut?: number; label?: string };
+export type Token = {
+	text: string;
+	silence?: boolean;
+	cut?: number;
+	label?: string;
+	/** Tail words, revealed by viewport height. Only legal AFTER the last cut —
+	 *  see the assertion below — so hiding one can never move a struck word. */
+	tier?: 2 | 3;
+};
 
 /** The staged take. Five entries are removable — three silences and two filler
  *  words — and each has an explicit strike time in `STRIKE_T`. */
 export const TOKENS: Token[] = [
-	...["Hey,", "so", "today", "I", "want", "to", "show", "you", "the", "new", "export", "flow."].map(
+	...["Hey,", "so", "this", "is", "Fern", "—", "I", "want", "to", "walk", "you", "through"].map(
 		(text) => ({ text }),
 	),
-	{ text: "0.5s silence", silence: true, cut: 0.5, label: "0.5s" },
-	{ text: "Um,", cut: 0.4, label: "0.4s" },
-	...["let", "me", "pull", "up", "the", "dashboard", "first."].map((text) => ({ text })),
-	...["You", "just", "hit", "record", "—", "OpenScreen", "does", "the", "rest."].map((text) => ({
-		text,
-	})),
-	{ text: "[silence 0.6s]", silence: true, cut: 0.6, label: "0.6s" },
-	...["Trim", "the", "dead", "air,"].map((text) => ({ text })),
-	{ text: "um,", cut: 0.3, label: "0.3s" },
-	...["tighten", "the", "takes,"].map((text) => ({ text })),
 	{ text: "[silence 0.5s]", silence: true, cut: 0.5, label: "0.5s" },
-	...["and", "ship", "it", "before", "lunch."].map((text) => ({ text })),
+	{ text: "Um,", cut: 0.4, label: "0.4s" },
+	...["pairing", "a", "soil", "sensor."].map((text) => ({ text })),
+	...["This", "is", "the", "garden", "—", "every", "bed", "reports", "its", "own", "moisture."].map(
+		(text) => ({ text }),
+	),
+	{ text: "[silence 0.6s]", silence: true, cut: 0.6, label: "0.6s" },
+	...["Now", "the", "new", "probe,"].map((text) => ({ text })),
+	{ text: "um,", cut: 0.3, label: "0.3s" },
+	...["down", "in", "bed", "three."].map((text) => ({ text })),
+	{ text: "[silence 0.5s]", silence: true, cut: 0.5, label: "0.5s" },
+
+	/* Everything from here on is tail: it sits after the last cut, so hiding any
+	   of it cannot move a struck word or a pointer target. Tier 2 and 3 are
+	   revealed by viewport height, which is what the transcript window's own
+	   height is derived from. */
+	...["It", "shows", "up", "the", "second", "it", "handshakes."].map((text) => ({ text })),
+	...[
+		"No",
+		"app",
+		"store,",
+		"no",
+		"account",
+		"—",
+		"the",
+		"probe",
+		"talks",
+		"to",
+		"the",
+		"laptop.",
+	].map((text) => ({ text, tier: 2 as const })),
+	...[
+		"Whole",
+		"thing",
+		"took",
+		"forty",
+		"seconds,",
+		"and",
+		"I",
+		"still",
+		"have",
+		"to",
+		"cut",
+		"the",
+		"dead",
+		"air",
+		"out",
+		"of",
+		"it.",
+	].map((text) => ({ text, tier: 3 as const })),
 ];
 
 /** Indices into `TOKENS` of everything removable, in order. */
@@ -128,6 +174,34 @@ export const CUT_INDEX = TOKENS.reduce<number[]>((out, t, i) => {
 /** When each removable entry is struck. Explicit rather than swept: the pointer
  *  has to arrive at that word on that frame, and a sweep cannot be aimed. */
 const STRIKE_T = [20.05, 20.72, 21.25, 21.8, 22.3];
+
+/* The one coupling in here that cannot be derived: STRIKE_T is positional, so
+ * its k-th entry belongs to the k-th token carrying a `cut`. Everything else
+ * about the transcript is re-derived from TOKENS — the indices, the pointer's
+ * targets, the cut counter — so words can be added and removed freely. Change
+ * the NUMBER or ORDER of cut-bearing tokens, though, and every strike after the
+ * change lands on the wrong word at the wrong time, silently. Hence the check:
+ * it costs one comparison at module load and turns that into a build failure. */
+/* Tail words must never sit before a strike: text flows forward, so hiding a
+ * word after the last cut cannot move anything above it — and hiding one before
+ * a cut would move every struck word and every pointer target under it. */
+{
+	const lastCut = CUT_INDEX[CUT_INDEX.length - 1] ?? -1;
+	const stray = TOKENS.findIndex((t, i) => t.tier !== undefined && i < lastCut);
+	if (stray >= 0) {
+		throw new Error(
+			`recreation: tail token "${TOKENS[stray]?.text}" at ${stray} sits before the last cut at ` +
+				`${lastCut} — hiding it would move a struck word.`,
+		);
+	}
+}
+
+if (CUT_INDEX.length !== STRIKE_T.length) {
+	throw new Error(
+		`recreation: ${CUT_INDEX.length} removable tokens but ${STRIKE_T.length} strike times — ` +
+			"every strike after the mismatch would land on the wrong word.",
+	);
+}
 
 export const strikeOf = (i: number) => {
 	const k = CUT_INDEX.indexOf(i);
