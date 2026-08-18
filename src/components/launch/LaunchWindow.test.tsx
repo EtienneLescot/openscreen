@@ -63,6 +63,7 @@ const recorderState = vi.hoisted(() => ({
 	},
 }));
 
+let hudCursorListeners: Array<(x: number, y: number) => void> = [];
 let selectedSourceChangedListeners: SelectedSourceChangedListener[] = [];
 let sourceSelectorClosedListeners: Array<() => void> = [];
 
@@ -209,6 +210,12 @@ function stubElectronAPI(getSelectedSource: Window["electronAPI"]["getSelectedSo
 		})),
 		setHudOverlaySize: vi.fn(),
 		setHudOverlayIgnoreMouseEvents: vi.fn(),
+		onHudOverlayCursor: vi.fn((callback) => {
+			hudCursorListeners.push(callback);
+			return () => {
+				hudCursorListeners = hudCursorListeners.filter((listener) => listener !== callback);
+			};
+		}),
 		beginHudOverlayDrag: vi.fn(),
 		dragHudOverlayTo: vi.fn(),
 		endHudOverlayDrag: vi.fn(),
@@ -273,6 +280,7 @@ function resetLaunchMocks() {
 	recorderState.value.webcamEnabled = false;
 	recorderState.value.setWebcamEnabled.mockClear();
 	micDevicesState.value = [];
+	hudCursorListeners = [];
 	selectedSourceChangedListeners = [];
 	sourceSelectorClosedListeners = [];
 	i18nState.value.systemLocaleSuggestion = null;
@@ -407,6 +415,48 @@ describe("LaunchWindow record button", () => {
 
 		expect(recorderState.value.toggleRecording).toHaveBeenCalledTimes(1);
 		expect(window.electronAPI.openSourceSelector).not.toHaveBeenCalled();
+	});
+
+	// The #385 regression, and #266 before it. A HUD that has gone click-through
+	// receives no pointer event of any kind, so every DOM route back — pointerenter,
+	// pointerdown, pointermove — is unreachable by construction. This test therefore
+	// fires NO pointer events at all: it delivers only the cursor position the main
+	// process pushes, which is the one signal that survives input-transparency, and
+	// requires that to be enough to make the bar clickable again.
+	it("leaves click-through on a pushed cursor position alone, with no pointer event", async () => {
+		platformState.value = "win32";
+
+		renderLaunchWindow();
+
+		await waitFor(() => {
+			expect(window.electronAPI.setHudOverlayIgnoreMouseEvents).toHaveBeenLastCalledWith(true);
+		});
+		expect(hudCursorListeners).not.toHaveLength(0);
+
+		// jsdom has no layout and does not implement elementFromPoint at all, so it is
+		// defined here to return what a point over the bar resolves to in a browser. The
+		// assertion is that the pushed cursor drives the hit test, not that jsdom can hit-test.
+		const bar = document.querySelector("[data-hud-interactive='true']");
+		expect(bar).not.toBeNull();
+		const elementFromPoint = vi.fn(() => bar);
+		Object.defineProperty(document, "elementFromPoint", {
+			value: elementFromPoint,
+			configurable: true,
+		});
+
+		try {
+			for (const listener of hudCursorListeners) listener(410, 540);
+
+			expect(elementFromPoint).toHaveBeenCalledWith(410, 540);
+			expect(window.electronAPI.setHudOverlayIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
+
+			// And a point over the transparent reserve must NOT claim the window back.
+			elementFromPoint.mockReturnValue(document.body);
+			for (const listener of hudCursorListeners) listener(10, 10);
+			expect(window.electronAPI.setHudOverlayIgnoreMouseEvents).toHaveBeenLastCalledWith(false);
+		} finally {
+			Reflect.deleteProperty(document, "elementFromPoint");
+		}
 	});
 
 	it("keeps the HUD interactive on Linux so the drag handle can receive pointer events", async () => {
