@@ -1624,25 +1624,6 @@
 	clip-path: polygon(0 0, 100% 0, 100% 68%, 50% 100%, 0 68%);
 }
 
-.transport {
-	position: absolute;
-	left: 16px;
-	top: 12px;
-	z-index: 10;
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	font-family: var(--ost-font-mono);
-	font-size: 11px;
-	color: var(--ost-fg);
-	font-variant-numeric: tabular-nums;
-}
-
-.cuts {
-	color: var(--ost-danger);
-	font-weight: 600;
-}
-
 /* ═══ THE READER'S POINTER ═════════════════════════════════════════════════
    Positioned in vw/vh, which the driver's percentages of the stage match. */
 

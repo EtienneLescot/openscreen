@@ -326,7 +326,7 @@ export function trims(t: number): Placed[] {
  * It is not the scene clock. While the playhead crosses the speed region the
  * recording runs at 2.2x, and after it the footage is permanently 2.4s ahead —
  * which is exactly what a speed ramp does to everything downstream of it, and
- * the reason the transport's remaining time is not the scene time.
+ * the reason the picture and the rail cannot share one number.
  */
 export const footageTime = (t: number) =>
 	t < SPEED.from
@@ -521,9 +521,6 @@ export interface Frame {
 	palette: number;
 	wand: number;
 	comment: number;
-	/** Transport readouts. */
-	cutCount: number;
-	saved: number;
 }
 
 export function frameAt(p: number): Frame {
@@ -571,11 +568,6 @@ export function frameAt(p: number): Frame {
 	const [pageY] = kf(tf, PAGE_PATH);
 
 	const placedTrims = trims(t);
-	const cutCount = placedTrims.filter((c) => c.placed).length;
-	const saved = CUT_INDEX.reduce(
-		(sum, i) => sum + (t >= strikeOf(i) ? (TOKENS[i].cut ?? 0) : 0),
-		0,
-	);
 
 	const strikeIndex = CUT_INDEX.find((i) => t >= strikeOf(i) - 0.5 && t < strikeOf(i) + 0.35) ?? -1;
 
@@ -628,8 +620,6 @@ export function frameAt(p: number): Frame {
 		palette: paletteOn ? 1 : 0,
 		wand: t >= 15.0 && t < 17.0 && t >= 15.0 + (17.0 - 15.0) * 0.54 ? 1 : 0,
 		comment: t >= 17.3 && t < 19.2 && t >= 17.3 + (19.2 - 17.3) * 0.5 ? 1 : 0,
-		cutCount,
-		saved,
 	};
 }
 

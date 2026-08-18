@@ -42,8 +42,6 @@ export interface DriverRefs {
 	cam: HTMLVideoElement;
 	padValue: HTMLElement;
 	sizeValue: HTMLElement;
-	timeValue: HTMLElement;
-	cutsValue: HTMLElement;
 	flow: HTMLElement;
 }
 
@@ -107,13 +105,6 @@ const WRITTEN = [
 	"--comment",
 	"--k",
 ];
-
-const fmtSec = (sec: number) => {
-	const s = Math.max(0, sec);
-	const m = Math.floor(s / 60);
-	const r = s - m * 60;
-	return `${m}:${Math.floor(r).toString().padStart(2, "0")}.${Math.floor((r % 1) * 10)}`;
-};
 
 /** Piecewise-linear read of `[[t, ...values]]`, clamped at both ends. */
 function kf(t: number, pts: number[][]): number[] {
@@ -186,7 +177,7 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		};
 	}
 
-	const { band, root, cam, padValue, sizeValue, timeValue, cutsValue, flow } = refs;
+	const { band, root, cam, padValue, sizeValue, flow } = refs;
 	let raf = 0;
 
 	/* ── the target cache ─────────────────────────────────────────────────── */
@@ -573,8 +564,6 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	let lastBeat: string | null | undefined;
 	let lastPad = "";
 	let lastSize = "";
-	let lastTime = "";
-	let lastCuts = "";
 	let lastArt = "";
 	let lastTheme = -1;
 	const struck = new Set<number>();
@@ -667,11 +656,6 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		// and no unit, unlike every other slider on the panel.
 		const size = f.cursorSize.toFixed(1);
 		if (size !== lastSize) sizeValue.textContent = lastSize = size;
-		const time = fmtSec(f.tf);
-		if (time !== lastTime) timeValue.textContent = lastTime = time;
-		const cuts = f.cutCount ? `−${f.cutCount} · −${f.saved.toFixed(1)}s` : "";
-		if (cuts !== lastCuts) cutsValue.textContent = lastCuts = cuts;
-
 		// Only the five removable entries can ever change, so the other forty
 		// nodes in the transcript are never touched.
 		for (const i of CUT_INDEX) {

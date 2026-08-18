@@ -130,8 +130,6 @@ export default function Recreation() {
 	const cam = useRef<HTMLVideoElement | null>(null);
 	const padValue = useRef<HTMLSpanElement | null>(null);
 	const sizeValue = useRef<HTMLSpanElement | null>(null);
-	const timeValue = useRef<HTMLSpanElement | null>(null);
-	const cutsValue = useRef<HTMLSpanElement | null>(null);
 	const flow = useRef<HTMLParagraphElement | null>(null);
 
 	useEffect(() => {
@@ -141,8 +139,6 @@ export default function Recreation() {
 			cam: cam.current,
 			padValue: padValue.current,
 			sizeValue: sizeValue.current,
-			timeValue: timeValue.current,
-			cutsValue: cutsValue.current,
 			flow: flow.current,
 		};
 		if (Object.values(refs).some((el) => el === null)) return;
@@ -693,13 +689,6 @@ export default function Recreation() {
 						<span className={styles.playhead} style={{ left: `${PLAYHEAD * 100}%` }}>
 							<span className={styles.playheadHead} />
 						</span>
-
-						<div className={styles.transport}>
-							<span className={styles.time} ref={timeValue}>
-								0:00.0
-							</span>
-							<span className={styles.cuts} ref={cutsValue} />
-						</div>
 					</div>
 
 					{/* The reader's pointer, over the editor. */}
