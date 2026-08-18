@@ -395,6 +395,9 @@ interface Window {
 		hudOverlayHide: () => void;
 		hudOverlayClose: () => void;
 		setHudOverlayIgnoreMouseEvents: (ignore: boolean) => void;
+		/** Window-relative cursor position, pushed while the HUD is click-through and
+		 *  therefore receiving no pointer events of its own. Returns an unsubscribe. */
+		onHudOverlayCursor: (callback: (x: number, y: number) => void) => () => void;
 		/** Pins the overlay's current position as the origin for `dragHudOverlayTo`. */
 		beginHudOverlayDrag: () => void;
 		/** Total pointer travel since `beginHudOverlayDrag`, not a per-frame delta. */
