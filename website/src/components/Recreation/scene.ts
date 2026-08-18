@@ -213,6 +213,21 @@ export const strikeOf = (i: number) => {
 /** Pixels per second of footage. Every object on the rail is placed with it and
  *  the rail is translated by it, so the whole timeline is one transform. */
 export const K = 90;
+/**
+ * How much of the take the rail shows, and why it is not a constant.
+ *
+ * K is pixels per second of footage. Held fixed, the window it opens is the
+ * stage's width divided by it — sixteen seconds at 1440, and four at the width
+ * of a phone. Four seconds is not a timeline; it is one pill at a time drifting
+ * past, and it makes any portrait layout pointless before it is drawn.
+ *
+ * So the reference is the SPAN, not the scale: sixteen seconds, which is what
+ * 1440px at K already gives, and the scale follows from the width. Capped at K
+ * so nothing wider than the reference zooms in — a large display keeps showing
+ * more of the take rather than the same amount, larger.
+ */
+export const RAIL_SECONDS = 1440 / K;
+export const railScale = (stageWidth: number) => Math.min(K, stageWidth / RAIL_SECONDS);
 /** The playhead's x, as a fraction of the stage. */
 export const PLAYHEAD = 0.38;
 

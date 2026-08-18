@@ -55,7 +55,6 @@ import {
 	CLIPS,
 	CUT_INDEX,
 	FLOOR_H,
-	K,
 	LANES,
 	PLAYHEAD,
 	SPEED,
@@ -69,7 +68,11 @@ import styles from "./styles.module.css";
 /* ── geometry helpers ─────────────────────────────────────────────────────── */
 
 /** Rail positions are static; only the rail itself is translated. */
-const x = (sec: number) => `${(sec * K).toFixed(1)}px`;
+/* Seconds, resolved against the rail's scale at paint time rather than baked in
+   here. --k moves with the stage's width, and the rail's own transform already
+   reads it, so children placed this way stay nailed to the ruler at any width.
+   Inline styles, so postcss never sees this calc. */
+const x = (sec: number) => `calc(${sec.toFixed(3)} * var(--k) * 1px)`;
 
 /** The twelve wallpapers the picker shows, in the design's order. */
 const WALLPAPERS = [2, 5, 8, 11, 1, 4, 6, 7, 9, 10, 12, 13];
