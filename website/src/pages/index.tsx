@@ -2,15 +2,7 @@ import Head from "@docusaurus/Head";
 import Link from "@docusaurus/Link";
 import Heading from "@theme/Heading";
 import Layout from "@theme/Layout";
-import {
-	Apple,
-	AppWindow,
-	Cpu,
-	Download,
-	HeartHandshake,
-	Monitor,
-	TerminalSquare,
-} from "lucide-react";
+import { Apple, AppWindow, CircleCheck, Download, TerminalSquare } from "lucide-react";
 
 import Editor from "../components/Editor";
 import Showcase from "../components/Showcase";
@@ -75,16 +67,16 @@ export default function Home() {
 				<div className={styles.featuresInner}>
 					<div className={styles.sectionKicker}>Also true</div>
 					{/* Capabilities are the section above; these three are properties,
-					    and no screenshot of the application can establish any of them. */}
+					    and no screenshot of the application can establish any of them —
+					    which is why they get one repeated tick instead of three
+					    illustrations pretending to show something. */}
 					<Heading as="h2" className={styles.sectionTitle}>
 						Three things a screenshot can&apos;t show.
 					</Heading>
 
-					<div className={styles.bento}>
-						<article className={styles.card}>
-							<span className={styles.iconBadge}>
-								<HeartHandshake size={17} />
-							</span>
+					<div className={styles.trio}>
+						<article className={styles.trioItem}>
+							<CircleCheck className={styles.trioTick} size={21} />
 							<h3>MIT, free forever</h3>
 							<p>
 								No paywalls, no premium tier, no usage caps. Every feature ships free for personal
@@ -92,10 +84,8 @@ export default function Home() {
 							</p>
 						</article>
 
-						<article className={styles.card}>
-							<span className={styles.iconBadge}>
-								<Cpu size={17} />
-							</span>
+						<article className={styles.trioItem}>
+							<CircleCheck className={styles.trioTick} size={21} />
 							<h3>Nothing is uploaded</h3>
 							<p>
 								Recording, transcription and rendering all happen on your machine, and your video
@@ -105,10 +95,8 @@ export default function Home() {
 							</p>
 						</article>
 
-						<article className={styles.card}>
-							<span className={styles.iconBadge}>
-								<Monitor size={17} />
-							</span>
+						<article className={styles.trioItem}>
+							<CircleCheck className={styles.trioTick} size={21} />
 							<h3>Windows, macOS, Linux</h3>
 							<p>
 								One source tree, native capture on each. A .dmg, an .exe, a .deb, a .rpm, a .pacman,
@@ -122,7 +110,7 @@ export default function Home() {
 			<section className={styles.quickStart} id="download-install">
 				<div className={styles.quickStartInner}>
 					<div className={styles.sectionKicker}>Quick start</div>
-					<Heading as="h2" className={styles.sectionTitleSm}>
+					<Heading as="h2" className={styles.sectionTitle}>
 						Download and install
 					</Heading>
 

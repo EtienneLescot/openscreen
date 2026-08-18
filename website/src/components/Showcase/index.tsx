@@ -2,42 +2,34 @@
  * What the app is besides the editor: the recorder in front of it, the encoder
  * behind it, and the two features that are easier to show than to describe.
  *
- * Two treatments, and which one a claim gets is the editorial decision recorded
- * in `content.ts`. Nothing here plays: the page has one moving thing on it and
- * it is the editor above, which is the point of having built it.
+ * Four claims, four drawn panels, alternating sides. Nothing here plays: the
+ * page has one moving thing on it and it is the editor above, which is the
+ * point of having built it.
+ *
+ * The copy is first in the DOM in every band, including the two that draw the
+ * panel on the left — the sides are swapped by grid placement, so which way a
+ * band faces is a layout decision and never a reading-order one.
  */
 
 import Heading from "@theme/Heading";
 
-import { SHOWN, TOLD } from "./content";
+import { FEATURES } from "./content";
+import { PANELS } from "./panels";
 import styles from "./styles.module.css";
 
 export default function Showcase() {
 	return (
 		<section className={styles.section} aria-labelledby="showcase-title">
 			<div className={styles.inner}>
-				<p className={styles.kicker}>also in the box</p>
 				<Heading as="h2" id="showcase-title" className={styles.title}>
 					Recorder, captions, agent, encoder.
 				</Heading>
 
-				{/* The two sentences first: they are the pipeline the editor sits in
-				    the middle of, and they read in seconds. */}
-				<div className={styles.told}>
-					{TOLD.map((item) => (
-						<article key={item.id} id={item.id} className={styles.toldCard}>
-							<p className={styles.itemKicker}>{item.kicker}</p>
-							<h3 className={styles.claim}>{item.claim}</h3>
-							<p className={styles.body}>{item.body}</p>
-							<p className={styles.fact}>{item.fact}</p>
-						</article>
-					))}
-				</div>
-
-				{SHOWN.map((item) => (
+				{FEATURES.map((item) => (
 					<article
 						key={item.id}
 						id={item.id}
+						data-band={item.id}
 						className={`${styles.band} ${item.flip ? styles.flip : ""}`}
 					>
 						<div className={styles.copy}>
@@ -46,25 +38,13 @@ export default function Showcase() {
 							<p className={styles.body}>{item.body}</p>
 							<p className={styles.fact}>{item.fact}</p>
 						</div>
-						<figure className={styles.figure}>
-							<div
-								className={styles.frame}
-								style={{ aspectRatio: `${item.media.width} / ${item.media.height}` }}
-							>
-								<picture>
-									<source media="(max-width: 780px)" srcSet={item.media.imageSm} />
-									<img
-										className={styles.still}
-										src={item.media.image}
-										width={item.media.width}
-										height={item.media.height}
-										loading="lazy"
-										decoding="async"
-										alt={item.media.alt}
-									/>
-								</picture>
-							</div>
-							<figcaption className={styles.caption}>A frame of the running application</figcaption>
+
+						{/* One label for the whole drawing. Without it a screen reader walks
+						    two dozen interface fragments — "Display 1", "60 fps", "62%" —
+						    that mean nothing out of the picture they are drawn in. */}
+						<figure className={styles.figure} role="img" aria-label={item.label}>
+							<span className={styles.glow} />
+							{PANELS[item.id]}
 						</figure>
 					</article>
 				))}

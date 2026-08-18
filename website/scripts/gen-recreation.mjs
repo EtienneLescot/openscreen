@@ -505,8 +505,11 @@ const WAVEFORM = buildWaveform();
  * THE WEAKEST PROVENANCE ON THIS PAGE, and it is labelled as such in
  * PROVENANCE. The conversation is not in the project document and there is no
  * conversations store on disk: its only existence is
- * `static/img/walkthrough/04-agent-a.jpg`, which the page already ships. This
- * is a transcription of the message body visible in that photograph.
+ * `static/img/walkthrough/04-agent-a.jpg`, the plate this section was built
+ * from. That photograph is no longer shipped — the four feature panels are drawn
+ * in DOM now — so it survives only in this repository's history, which is the
+ * same footing `editor-1560.jpg` below has always been on. This is a
+ * transcription of the message body visible in it.
  *
  * What is NOT transcribed: every number and every quoted word. The two timecode
  * pairs, the two silence durations, the two quoted words and the cut total are
@@ -841,7 +844,10 @@ const CURSORS = {
 	})),
 	// The demonstration pointer over a control and over text. Default pack only:
 	// a theme may ship an arrow and a pointer, and none ships a text caret.
-	pointer: { ...cursorSprite(DEFAULT_CURSOR_THEME_ID, "pointer"), src: "/img/cursors/mac-pointer.png" },
+	pointer: {
+		...cursorSprite(DEFAULT_CURSOR_THEME_ID, "pointer"),
+		src: "/img/cursors/mac-pointer.png",
+	},
 	text: { ...cursorSprite(DEFAULT_CURSOR_THEME_ID, "text"), src: "/img/cursors/mac-text.png" },
 };
 
