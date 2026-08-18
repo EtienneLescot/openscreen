@@ -219,7 +219,18 @@ if (doc.schemaVersion !== SCHEMA_VERSION) {
  * recording's audio, the recording is 8 MB and lives outside the repo, and the
  * generator has to run in CI without it — so its 320 decoded amplitudes are
  * vendored beside the document for exactly the reason the document itself is.
+ *
+ * Scrubbed: the two stored paths. They are absolute paths in the store of
+ * whoever last ran `--vendor`, which is a local account name committed to a
+ * public repository. Nothing here reads more than the file name — `decodePeaks`
+ * names its source with it, and the recreation never opens either file — so the
+ * directory is replaced with a placeholder home rather than dropped, and the
+ * document keeps the shape schemaVersion 7 gives it.
  */
+const VENDOR_HOME = "/Users/example/Library/Application Support/openscreen/recordings";
+const scrubPath = (p) =>
+	typeof p === "string" ? `${VENDOR_HOME}/${p.replace(/^.*[/\\]/, "")}` : p;
+
 function vendorFixture() {
 	const full = JSON.parse(readFileSync(DOC_PATH, "utf8"));
 	if (full.schemaVersion !== SCHEMA_VERSION) {
@@ -228,7 +239,13 @@ function vendorFixture() {
 	const slim = {
 		schemaVersion: full.schemaVersion,
 		project: full.project,
-		assets: full.assets,
+		assets: full.assets.map((a) => ({
+			...a,
+			originalPath: scrubPath(a.originalPath),
+			...(a.cameraTrack
+				? { cameraTrack: { ...a.cameraTrack, sourcePath: scrubPath(a.cameraTrack.sourcePath) } }
+				: {}),
+		})),
 		transcript: {
 			assetId: full.transcript.assetId,
 			language: full.transcript.language,

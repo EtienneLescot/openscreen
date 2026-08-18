@@ -12,7 +12,7 @@
 			"id": "asset_98800b62-9429-4a8a-9c12-fef7af70b160",
 			"kind": "video",
 			"label": "Bellrock — docs walkthrough",
-			"originalPath": "/Users/m1/Library/Application Support/openscreen/recordings/recording-1786032000000.mp4",
+			"originalPath": "/Users/example/Library/Application Support/openscreen/recordings/recording-1786032000000.mp4",
 			"durationSec": 40.033,
 			"sizeBytes": 8194081,
 			"video": {
@@ -22,7 +22,7 @@
 				"fps": 0
 			},
 			"cameraTrack": {
-				"sourcePath": "/Users/m1/Library/Application Support/openscreen/recordings/recording-1786032000000-webcam.mp4",
+				"sourcePath": "/Users/example/Library/Application Support/openscreen/recordings/recording-1786032000000-webcam.mp4",
 				"startMs": 0,
 				"offsetMs": 0,
 				"visible": false
