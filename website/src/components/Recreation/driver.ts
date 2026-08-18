@@ -284,11 +284,24 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	/** v4's pointer score, rebuilt each frame from the cache — the cache is what
 	 *  makes that free, and rebuilding is what lets a target that was hidden at
 	 *  attach time be aimed at correctly once its pane opens. */
-	const path = (): number[][] => {
-		const pad = (pct: number) => along("padtrk", pct / 100);
-		const sz = (pct: number) => along("sztrk", pct / 100);
+	const path = (f: Frame): number[][] => {
+		/* The handle's own fraction, read off the frame that draws it, not a
+		   number copied out of the design. The pointer is dragging these two
+		   sliders; aiming it at a literal put it 10 to 14 per cent of the track
+		   to the right of the thing it is supposed to be holding, because the
+		   design's slider and ours do not carry the same value at the same
+		   second. Now there is one number and the hand is on it. */
+		const pad = () => along("padtrk", f.paddingPct / 100);
+		const sz = () => along("sztrk", f.cursorSizePct / 100);
 		const tok = (i: number) => at(`tok-${i}`);
 		const tokU = (i: number, ax: number) => along(`tok-${i}`, ax);
+		/* The five removable tokens, by the same list the strikes are keyed to.
+		   These were written as literal indices — 12, 13, 30, 35, 39 — and the
+		   moment the transcript was rewritten around them, two of them pointed
+		   at ordinary words: the pointer swept the wrong word and struck nothing
+		   while the cut landed somewhere else. CUT_INDEX is derived from the
+		   tokens' own `cut` field, so this cannot drift again. */
+		const [c0, c1, c2, c3, c4] = CUT_INDEX;
 		return [
 			[0.4, 58, 66],
 			[1.45, ...at("th-1")],
@@ -297,35 +310,35 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 			[4.9, ...at("th-2")],
 			[5.25, ...at("th-3")],
 			[6.6, ...at("th-3")],
-			[7.55, ...pad(97)],
-			[7.95, ...pad(97)],
-			[9.0, ...pad(48)],
-			[10.3, ...pad(48)],
+			[7.55, ...pad()],
+			[7.95, ...pad()],
+			[9.0, ...pad()],
+			[10.3, ...pad()],
 			[11.0, ...at("cur-2")],
 			[11.9, ...at("cur-2")],
 			[12.15, ...at("cur-1")],
 			[12.63, ...at("cur-1")],
-			[12.7, ...sz(50)],
-			[13.2, ...sz(79)],
-			[14.3, ...sz(79)],
+			[12.7, ...sz()],
+			[13.2, ...sz()],
+			[14.3, ...sz()],
 			[15.05, ...at("wand")],
 			[16.6, ...at("wand")],
 			[17.5, ...at("comment")],
 			[18.9, ...at("comment")],
-			[19.75, ...tok(12)],
-			[20.35, ...tok(12)],
-			[20.5, ...tokU(13, 1.02)],
-			[20.699, ...tokU(13, 1.02)],
-			[20.7, ...tokU(13, 0.02)],
-			[20.85, ...tokU(13, 0.02)],
-			[21.0, ...tok(30)],
-			[21.45, ...tok(30)],
-			[21.6, ...tokU(35, 1.02)],
-			[21.799, ...tokU(35, 1.02)],
-			[21.8, ...tokU(35, 0.02)],
-			[21.95, ...tokU(35, 0.02)],
-			[22.1, ...tok(39)],
-			[22.36, ...tok(39)],
+			[19.75, ...tok(c0)],
+			[20.35, ...tok(c0)],
+			[20.5, ...tokU(c1, 1.02)],
+			[20.699, ...tokU(c1, 1.02)],
+			[20.7, ...tokU(c1, 0.02)],
+			[20.85, ...tokU(c1, 0.02)],
+			[21.0, ...tok(c2)],
+			[21.45, ...tok(c2)],
+			[21.6, ...tokU(c3, 1.02)],
+			[21.799, ...tokU(c3, 1.02)],
+			[21.8, ...tokU(c3, 0.02)],
+			[21.95, ...tokU(c3, 0.02)],
+			[22.1, ...tok(c4)],
+			[22.36, ...tok(c4)],
 		];
 	};
 
@@ -475,7 +488,7 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 			root.dataset.cur = art;
 		}
 
-		const [ux, uy] = kf(Math.min(f.t, 22.36), path());
+		const [ux, uy] = kf(Math.min(f.t, 22.36), path(f));
 		num("--ui-x", ux, 2);
 		num("--ui-y", uy, 2);
 		num("--ui-on", f.t > 1.1 && f.t < 22.36 ? 1 : 0, 0);
