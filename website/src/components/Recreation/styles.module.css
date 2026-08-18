@@ -69,24 +69,24 @@
 
 	/* Pixels per second of footage — the rail's only scale. */
 	--k: 90;
-	/* v4's grid constants. */
-	--nav: 72px;
+	/* The grid's constants, and they answer to something.
+	   --nav reads Docusaurus's own navbar height instead of copying it: the copy
+	   said 72px where the bar measures 60, and that 12px was exactly the
+	   top-versus-bottom asymmetry in BOTH layouts. --cap-h is what the captions
+	   actually measure — 95px at every one of the five beats — plus air; it used
+	   to reserve 116 and waste 21. */
+	--nav: var(--ifm-navbar-height, 60px);
 	--pnl-w: 336px;
-	--cap-h: 116px;
+	--cap-h: 104px;
 	--tl-h: 210px;
+	/* One gutter for both layouts, and a formula rather than a breakpoint: it
+	   gives way on a short window, which is where the tallest pane runs out of
+	   room. The two layouts used to disagree — 28px in one, a hardcoded 12 in
+	   the other. */
+	--gut: clamp(14px, 3vh, 28px);
 
 	position: relative;
 	color: var(--ost-fg);
-}
-
-/* On a short window the gutter is the first thing to give: at 1280x720 the
-   tallest pane — ten cursor packs and two sliders — was losing 21px off its
-   bottom to it. Halving it buys 28 and clears that, and 14px still reads as a
-   margin rather than as an edge. */
-@media (max-height: 780px) {
-	.stage {
-		--gut-v: 14px;
-	}
 }
 
 /* ═══ THE BAND ═════════════════════════════════════════════════════════════
@@ -150,44 +150,25 @@
 	--c2x: calc(4.5vw + var(--pnl-w) + 26px);
 	--c2w: calc(96vw - var(--c2x));
 
-	/* The composite gets its own column's full height.
+	/* ── ONE BOX, BOTH LAYOUTS ──
+	   The floor is the only thing that separates the two-part layout from the
+	   three-part one, so it is the only thing --tl interpolates: the box's
+	   bottom bound. Everything else falls out of the box.
 	   
-	   It used to be sized against `100vh - nav - cap-h`, which reserves a band
-	   the width of the SCREEN for a caption that only ever occupies the left
-	   column — so the picture was starved of height it was not competing for,
-	   and being 16:9, of width with it. Measured at 1916x844: 1124x632 with
-	   210px stranded to its right and 188 above. The two columns are independent
-	   now, and the picture is centred in what its own column has.
-	   
-	   --gut-v is the breathing room top and bottom. It also un-sticks the
-	   caption, which at a wide, short viewport was landing 12px under the nav. */
-	--gut-v: 28px;
-	--vw1: min(var(--c2w), (100vh - var(--nav) - var(--gut-v) * 2) * 1.77778);
-	--vh1: calc(var(--vw1) * 0.5625);
-	--cell-top1: calc(
-		var(--nav) + var(--gut-v) + (100vh - var(--nav) - var(--gut-v) * 2 - var(--vh1)) / 2
-	);
-	/* The two columns start together: the caption's cap-height band sits level
-	   with the top of the picture rather than floating above it. */
-	--cap-top1: var(--cell-top1);
-	--vl1: calc(var(--c2x) + (var(--c2w) - var(--vw1)) / 2);
+	   This replaces twenty derived variables that described the two layouts
+	   separately and had to be kept in step by hand — which is how they came to
+	   use different gutters, and how the picture came to be sized against a
+	   caption band the width of the screen for a caption that only ever occupies
+	   the left column. */
+	--box-top: calc(var(--nav) + var(--gut));
+	--box-bot: calc(100vh - var(--gut) - var(--tl) * var(--tl-h));
+	--box-h: calc(var(--box-bot) - var(--box-top));
 
-	--cell-topv: calc(var(--nav) + 12px);
-	--avail2: calc(100vh - var(--tl-h) - 12px - var(--cell-topv));
-	--vw2: max(280px, min(var(--c2w), var(--avail2) * 1.77778));
-	--vh2: calc(var(--vw2) * 0.5625);
-	--cell-top2: calc(var(--cell-topv) + var(--cap-h));
-	--pnl-h2: calc(var(--avail2) - var(--cap-h));
-	--vl2: calc(var(--c2x) + (var(--c2w) - var(--vw2)) / 2);
-	--vt2: calc(var(--cell-topv) + (var(--avail2) - var(--vh2)) / 2);
-
-	/* ── the two phases, interpolated on --tl ── */
-	--cap-top: calc(var(--cap-top1) + (var(--cell-topv) - var(--cap-top1)) * var(--tl));
-	--pnl-top: calc(var(--cell-top1) + (var(--cell-top2) - var(--cell-top1)) * var(--tl));
-	--pnl-h: calc(var(--vh1) + (var(--pnl-h2) - var(--vh1)) * var(--tl));
-	--v-l: calc(var(--vl1) + (var(--vl2) - var(--vl1)) * var(--tl));
-	--v-t: calc(var(--cell-top1) + (var(--vt2) - var(--cell-top1)) * var(--tl));
-	--v-w: calc(var(--vw1) + (var(--vw2) - var(--vw1)) * var(--tl));
+	/* The picture is 16:9, as wide as the box allows, and centred in it. */
+	--v-w: min(var(--c2w), var(--box-h) * 1.77778);
+	--v-h: calc(var(--v-w) * 0.5625);
+	--v-l: calc(var(--c2x) + (var(--c2w) - var(--v-w)) / 2);
+	--v-t: calc(var(--box-top) + (var(--box-h) - var(--v-h)) / 2);
 
 	position: sticky;
 	top: 0;
@@ -215,7 +196,7 @@
 	position: absolute;
 	left: 4.5vw;
 	width: var(--pnl-w);
-	top: calc(var(--v-t) + var(--v-w) * 0.28125);
+	top: calc(var(--v-t) + var(--v-h) / 2);
 	transform: translateY(-50%);
 	z-index: 11;
 	pointer-events: none;
@@ -314,7 +295,7 @@
 	position: relative;
 	width: 100%;
 	height: auto;
-	max-height: calc(100vh - var(--nav) - var(--gut-v) * 2 - var(--cap-h));
+	max-height: calc(var(--box-h) - var(--cap-h));
 	overflow: hidden;
 	z-index: 12;
 	border: 1px solid var(--ost-border);
@@ -625,13 +606,11 @@
 .flowMask {
 	display: block;
 	position: relative;
-	/* Off the video's box, not off --pnl-h. --pnl-h is the panel's SLOT, which
-	   tracks 100vh with no floor: at 1280x640 it left this window 98px while the
-	   fifth strike lands at 117px, so on short screens the last cut of the demo
-	   played below the fade where nobody could see it. The video's height is the
-	   same number the panel is capped at, and it never collapses that far —
-	   measured 214px at 1280x640, 274px at 1440x700, 417px at 1440x900. */
-	max-height: calc(var(--v-w) * 0.5625 - 120px);
+	/* Off the box, like everything else. This was sized against the panel's old
+	   SLOT variable, which tracked 100vh with no floor: at 1280x640 it left the
+	   window 98px while the fifth strike lands at 117, so on a short screen the
+	   last cut of the demo played below the fade where nobody could see it. */
+	max-height: calc(var(--box-h) - var(--cap-h) - 120px);
 	overflow: hidden;
 	-webkit-mask-image: linear-gradient(180deg, #000 88%, transparent);
 	mask-image: linear-gradient(180deg, #000 88%, transparent);
@@ -708,7 +687,8 @@
 .palette {
 	position: absolute;
 	left: calc(4.5vw + var(--pnl-w) / 2);
-	top: calc(50vh + (var(--cell-top2) - var(--tl-h)) / 2 - 22px);
+	/* Centred in the same box as everything else. */
+	top: calc(var(--box-top) + var(--box-h) / 2);
 	z-index: 12;
 	display: grid;
 	grid-template-columns: repeat(3, 66px);
@@ -1644,26 +1624,18 @@
    it, which is the calmer reading of the same beat. */
 @media (max-width: 900px) {
 	.stage {
-		--nav: 56px;
-		--cap-h: 104px;
-		--gut: 18px;
+		/* The same box, answered for a stack rather than for two columns. The
+		   caption takes the top of it and the floor the bottom, so the picture's
+		   share is what is left between them — and --tl still moves nothing but
+		   the bottom bound. */
+		--gut-h: 18px;
+		--cap-h: 96px;
+		--pnl-w: calc(100vw - 2 * var(--gut-h));
 
-		/* The composite: full width less the gutters, 16:9, under the caption —
-		   and identical in both acts, so --v-* interpolate between equal ends. */
-		--vw1: calc(100vw - 2 * var(--gut));
-		--vw2: calc(100vw - 2 * var(--gut));
-		--vl1: var(--gut);
-		--vl2: var(--gut);
-		--cell-top1: calc(var(--nav) + var(--cap-h));
-		--cell-top2: calc(var(--nav) + var(--cap-h));
-		--vt2: calc(var(--nav) + var(--cap-h));
-		--cell-topv: var(--nav);
-		/* The caption sits above the picture rather than beside it, so it starts
-		   at the nav in both phases. Left at its desktop value it centres itself
-		   in the column and lands on top of the composite. */
-		--cap-top1: var(--nav);
-
-		--pnl-w: calc(100vw - 2 * var(--gut));
+		--v-w: calc(100vw - 2 * var(--gut-h));
+		--v-h: calc(var(--v-w) * 0.5625);
+		--v-l: var(--gut-h);
+		--v-t: calc(var(--box-top) + var(--cap-h));
 	}
 
 	/* The pair is not a pair here — the picture sits between them — so the
@@ -1675,9 +1647,10 @@
 
 	.captions {
 		position: absolute;
-		left: var(--gut);
-		top: var(--cap-top);
-		width: calc(100vw - 2 * var(--gut));
+		left: var(--gut-h);
+		top: var(--box-top);
+		width: calc(100vw - 2 * var(--gut-h));
+		height: var(--cap-h);
 		z-index: 11;
 	}
 
@@ -1685,29 +1658,20 @@
 		font-size: 21px;
 	}
 
-	/* Under the picture, not beside it — so the desktop's centre-line placement
-	   is undone here, along with the -50% that went with it. The ceiling is what
-	   the floor has not taken: it closes as --tl opens. */
+	/* Under the picture, filling what the box has left once the picture and the
+	   floor have taken their share. */
 	.panel {
 		position: absolute;
-		width: calc(100vw - 2 * var(--gut));
-		left: var(--gut);
-		top: calc(var(--cell-top1) + var(--vw1) * 0.5625 + 14px);
-		max-height: calc(
-			100vh - var(--cell-top1) - var(--vw1) * 0.5625 - 14px - var(--tl) * var(--tl-h) - 16px
-		);
+		left: var(--gut-h);
+		top: calc(var(--v-t) + var(--v-h) + 14px);
+		width: calc(100vw - 2 * var(--gut-h));
+		max-height: calc(var(--box-bot) - var(--v-t) - var(--v-h) - 14px);
 		transform: translateY(calc((1 - var(--panel)) * 12px));
 	}
 
-	/* The palette takes the inspector's slot rather than the left column, since
-	   in portrait there is no left column — centred in whatever the composite
-	   above and the floor below have left, so it does not strand a void under
-	   itself once the timeline is in. */
 	.palette {
 		left: 50%;
-		top: calc(
-			(var(--cell-top1) + var(--vw1) * 0.5625 + 100vh - var(--tl) * var(--tl-h)) / 2
-		);
+		top: calc((var(--v-t) + var(--v-h) + var(--box-bot)) / 2);
 	}
 
 	/* At this scale a 0.5s trim is twelve pixels wide, and a label clipped to
@@ -1728,9 +1692,7 @@
 	}
 
 	.flowMask {
-		max-height: calc(
-			100vh - var(--cell-top1) - var(--vw1) * 0.5625 - 14px - var(--tl) * var(--tl-h) - 120px
-		);
+		max-height: calc(var(--box-bot) - var(--v-t) - var(--v-h) - 134px);
 	}
 }
 
@@ -1741,8 +1703,16 @@
 		height: auto;
 	}
 
+	/* The column keeps its two children here rather than dissolving: dissolved,
+	   the panel joins the page's flow at full width and lands on top of the
+	   stacked captions. As a block it reads as what it is — the caption, then
+	   the inspector, then the still picture below them. */
 	.column {
-		display: contents;
+		position: static;
+		width: auto;
+		max-width: 60ch;
+		margin: 0 auto;
+		transform: none;
 	}
 
 	.stage {
@@ -1754,11 +1724,15 @@
 	.captions {
 		position: static;
 		width: auto;
-		max-width: 60ch;
-		margin: 0 auto;
+		height: auto;
 		padding: 0 24px;
 		display: grid;
 		gap: 26px;
+	}
+
+	.panel {
+		max-height: none;
+		margin: 26px 24px 0;
 	}
 
 	.cap {
