@@ -1,23 +1,23 @@
 /**
- * The page's centre of gravity: six viewports of editor, and nothing above it.
+ * The page's centre of gravity: nine viewports of editor, and nothing above it.
  *
  * It sits immediately under the hero because it is the argument. Everything
  * after it is either a claim the editor cannot make on its own (the recorder,
  * the encoder, captions, the agent) or a property rather than a capability
  * (the licence, the privacy, the platforms).
  *
- * No visible heading, as the design has it. The six beats caption themselves —
- * "STYLE / Swap the background", and five more — so a heading above them was a
+ * No visible heading, as the design has it. The five beats caption themselves —
+ * "STYLE / Swap the background", and four more — so a heading above them was a
  * lid on a box that labels itself, and the deck under it was the page
  * explaining itself to the reader instead of showing them.
  *
  * Two things survive that removal, both invisible:
  *
  *   The h2, now screen-reader-only. Without it the outline runs h1 straight to
- *   the six h3 captions, which is a skipped level, and the section's
+ *   the five h3 captions, which is a skipped level, and the section's
  *   aria-labelledby has nothing to point at.
  *
- *   The skip link, visible on focus. The band is six viewports tall; tabbing
+ *   The skip link, visible on focus. The band is nine viewports tall; tabbing
  *   through it to reach the download link is a long way for someone who has
  *   already decided.
  */
@@ -36,7 +36,7 @@ export default function Editor() {
 				</a>
 
 				<Heading as="h2" id="editor-title" className={styles.title}>
-					Six things you will actually do
+					Five things you will actually do
 				</Heading>
 			</div>
 

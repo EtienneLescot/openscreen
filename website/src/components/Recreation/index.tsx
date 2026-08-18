@@ -257,9 +257,10 @@ export default function Recreation() {
 											    box never intersects anything, so all twelve fired at
 											    once when the beat arrived and the strip painted blank
 											    for the first half second of it. Loading them eagerly
-											    fixes that and costs every phone 48 KB for a strip no
-											    phone ever sees, because the scene needs 901px. The
-											    driver only ever runs above that width. */}
+											    fixes that and bills 48 KB to everyone who opens the
+											    page, including the readers who never scroll this far.
+											    Phones are not an exception to pay it for: the scene
+											    runs from 360px up, and they reach this strip too. */}
 											<img
 												src={`/img/walkthrough/wp-${String(n).padStart(2, "0")}.jpg`}
 												alt=""
@@ -606,8 +607,9 @@ export default function Recreation() {
 							    src withheld until the reader is inside the band mean this
 							    bordered, shadowed box paints EMPTY until the clip's first frame
 							    decodes — just over a second on a 1.5 Mbps link. A poster in the
-							    markup fixes that and bills every phone 6.9 KB for a bubble no
-							    phone draws, because the scene needs 901px. */}
+							    markup fixes that and bills 6.9 KB to every reader on every load,
+							    phones included — the scene runs from 360px up — for a bubble
+							    nobody sees before the band. */}
 							<video
 								ref={cam}
 								className={styles.webcamVideo}
