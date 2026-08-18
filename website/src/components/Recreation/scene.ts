@@ -271,11 +271,15 @@ export const CLIPS = [
 	{ from: 13.23, to: 42, selected: false },
 ] as const;
 
-/** Three zooms, each with the scene time the wizard places it. */
+/** Three zooms, each with the scene time the wizard places it.
+ *
+ *  Two decimals, always: the app labels a zoom pill `scale.toFixed(2) + "×"`
+ *  (V4Timeline.tsx), so "1.5×" and "2×" are strings it never renders — the same
+ *  class of tell as a hand-typed cursor-size value. */
 export const ZOOMS = [
-	{ from: 12.6, to: 13.7, label: "1.5×", scale: 1.5, placedAt: 16.15, origin: "52% 58%" },
+	{ from: 12.6, to: 13.7, label: "1.50×", scale: 1.5, placedAt: 16.15, origin: "52% 58%" },
 	{ from: 16.25, to: 17.15, label: "1.80×", scale: 1.8, placedAt: 16.35, origin: "52% 58%" },
-	{ from: 17.6, to: 18.45, label: "2×", scale: 2, placedAt: 16.55, origin: "36% 30%" },
+	{ from: 17.6, to: 18.45, label: "2.00×", scale: 2, placedAt: 16.55, origin: "36% 30%" },
 ] as const;
 
 /** The speed ramp, and the window over which the footage clock runs 2.2x. */
