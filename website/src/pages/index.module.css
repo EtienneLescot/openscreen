@@ -395,11 +395,6 @@
 	color: var(--os-fg-2);
 }
 
-.titleAccent {
-	display: block;
-	color: var(--os-accent);
-}
-
 .scrollHint {
 	margin: 28px 0 0;
 	font-size: 12.5px;

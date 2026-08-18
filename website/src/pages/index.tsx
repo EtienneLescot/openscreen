@@ -26,12 +26,14 @@ export default function Home() {
 						<span className={styles.badgeNew}>NEW</span>
 						<span className={styles.badgeText}>Export faster</span>
 					</p>
-					{/* The descriptor sits inside the h1 rather than in the paragraph below
-					    it: "Screen Recording / Reimagined" alone gives the page's only h1 no
-					    subject, and a search result needs one. */}
+					{/* The product's name, not a claim about it. The design opens on
+					    "Screen Recording / Reimagined", which is the one line on a page
+					    that spends its whole length proving specific things — the editor
+					    runs live, the model is 264 MB, every edit is undoable — that
+					    proves nothing. It also left the strongest on-page signal there is
+					    without the word people search once they have heard of us. */}
 					<Heading as="h1" className={styles.title}>
-						Screen Recording
-						<span className={styles.titleAccent}>Reimagined</span>
+						OpenScreen
 						<span className={styles.titleTagline}>
 							A free, open-source screen recorder and video editor
 						</span>
