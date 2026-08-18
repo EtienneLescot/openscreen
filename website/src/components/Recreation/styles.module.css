@@ -1301,7 +1301,14 @@
 	width: calc(3.4% + var(--size-u) * 6%);
 	aspect-ratio: 58 / 73;
 	background: var(--shot-cursor) left top / contain no-repeat;
-	transform: translate(calc(var(--shot-x) * 1cqw), calc(var(--shot-y) * 1cqh))
+	/* The tip is what points, so the tip is what goes to the coordinate — the
+	   leftmost translate pulls the sprite back by its own hotspot, in percentages
+	   of its own box, which is the only way to say it here: this sprite's size
+	   follows the cursor-size slider, so the fixed pixel margin .uiCursor uses
+	   would only be right at one setting. Leftmost so it is applied outside the
+	   click bounce and does not wobble with it. */
+	transform: translate(calc(var(--shot-hx) * -1%), calc(var(--shot-hy) * -1%))
+		translate(calc(var(--shot-x) * 1cqw), calc(var(--shot-y) * 1cqh))
 		scale(var(--shot-bounce));
 	transform-origin: calc(var(--shot-hx) * 1%) calc(var(--shot-hy) * 1%);
 	filter: drop-shadow(0 0.3cqh 0.5cqh rgba(0, 0, 0, 0.4));

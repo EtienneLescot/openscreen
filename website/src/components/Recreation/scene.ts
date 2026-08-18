@@ -357,8 +357,21 @@ const SHOT_PATH: number[][] = [
 	[15.5, 44, 62],
 	[15.9, 50, 61.5],
 	[16.9, 50, 61.5],
-	[17.4, 34.8, 27.6],
-	[18.3, 34.8, 27.6],
+	/* (40, 36) and not the design's (34.8, 27.6): that point is on the window's
+	   title bar in the design's frame and misses ours by six per cent of the
+	   height, because the frame is inset by OUR padding — read off the vendored
+	   document — and not by the design's. Measured against the rendered window,
+	   which spans 36.0-64.0 across and 33.6-73.2 down, with the bar the 5.2%
+	   slice at its top.
+
+	   These are still coordinates, which is the same shape of fragility that put
+	   the reader's pointer 151px off its targets and swept the wrong word: the
+	   robust version aims at the window the way the pointer aims at `[data-t]`.
+	   That is a refactor rather than a patch — the shot path is evaluated in the
+	   pure score, which has no DOM to measure — and `data-shot="see"` in the
+	   markup is the unbuilt half of it. */
+	[17.4, 40, 36],
+	[18.3, 40, 36],
 	[19.2, 35, 68],
 	[20.2, 58, 58],
 	[21.3, 34.5, 49],
