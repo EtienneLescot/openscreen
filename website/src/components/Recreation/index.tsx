@@ -436,10 +436,81 @@ export default function Recreation() {
 												/>
 												<span className={styles.pageChip}>Live soil data</span>
 											</div>
+											{/* The social proof strip and the three feature cards, as the
+											    design draws them. They were three empty boxes until now; the
+											    take scrolls the page far enough to show them, so they were
+											    the one part of the recorded window that read as unfinished. */}
+											<div className={styles.pageProof}>
+												<span className={styles.pageFaces}>
+													<span data-face="a">LB</span>
+													<span data-face="b">AK</span>
+													<span data-face="c">JM</span>
+												</span>
+												<span>
+													Loved by <strong>12,400</strong> gardeners
+												</span>
+												<span>
+													<strong>38</strong> countries
+												</span>
+												<span>
+													<strong>4.9</strong> avg rating
+												</span>
+											</div>
+
 											<div className={styles.pageCards}>
-												<span />
-												<span />
-												<span />
+												<article className={styles.pageCard}>
+													<div className={`${styles.pageCardArt} ${styles.artDots}`}>
+														{[
+															[1, 1, 0, 1, 0, 0, 1],
+															[0, 1, 0, 0, 1, 0, 0],
+														].map((row, r) => (
+															// biome-ignore lint/suspicious/noArrayIndexKey: a fixed drawing
+															<span key={r}>
+																{row.map((on, i) => (
+																	// biome-ignore lint/suspicious/noArrayIndexKey: a fixed drawing
+																	<span key={i} data-on={on ? "" : undefined} />
+																))}
+															</span>
+														))}
+													</div>
+													<div className={styles.pageCardBody}>
+														<div>Auto schedules</div>
+														<div>Every pot on its own rhythm.</div>
+													</div>
+												</article>
+
+												<article className={styles.pageCard}>
+													<div className={`${styles.pageCardArt} ${styles.artBars}`}>
+														{[
+															[34, 0.55],
+															[58, 0.7],
+															[44, 0.6],
+															[62, 0.75],
+														].map(([h, o]) => (
+															<span key={h} style={{ height: `${h}%`, opacity: o }} />
+														))}
+													</div>
+													<div className={styles.pageCardBody}>
+														<div>Soil signals</div>
+														<div>Moisture, light and heat, live.</div>
+													</div>
+												</article>
+
+												<article className={styles.pageCard}>
+													<div className={`${styles.pageCardArt} ${styles.artLines}`}>
+														{[
+															[82, 0.5],
+															[64, 0.35],
+															[74, 0.45],
+														].map(([w, o]) => (
+															<span key={w} style={{ width: `${w}%`, opacity: o }} />
+														))}
+													</div>
+													<div className={styles.pageCardBody}>
+														<div>Harvest notes</div>
+														<div>A journal that writes itself.</div>
+													</div>
+												</article>
 											</div>
 										</div>
 

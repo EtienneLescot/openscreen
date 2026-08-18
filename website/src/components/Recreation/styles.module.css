@@ -968,18 +968,141 @@
 	font-weight: 600;
 }
 
+/* The recorded page is a light document whatever the site's theme is doing —
+   it is a picture of somebody else's website — so every colour below is a
+   literal, exactly as the design has it. */
+
+.pageProof {
+	display: flex;
+	align-items: center;
+	gap: 3.2cqw;
+	padding: 2.4cqw 3cqw 0.4cqw;
+	font-size: 1.15cqw;
+	color: #667085;
+}
+
+.pageProof strong {
+	color: #101828;
+}
+
+.pageFaces {
+	display: flex;
+	align-items: center;
+}
+
+.pageFaces span {
+	width: 2.7cqw;
+	height: 2.7cqw;
+	border-radius: 50%;
+	border: 0.22cqw solid #fff;
+	display: grid;
+	place-items: center;
+	font-size: 0.95cqw;
+	font-weight: 700;
+	color: #fff;
+}
+
+.pageFaces span + span {
+	margin-left: -0.9cqw;
+}
+
+.pageFaces span[data-face="a"] {
+	background: #0e7a5f;
+}
+
+.pageFaces span[data-face="b"] {
+	background: #065f46;
+}
+
+.pageFaces span[data-face="c"] {
+	background: #9a3412;
+}
+
 .pageCards {
 	display: flex;
 	gap: 2cqw;
-	padding: 2.4cqw 3cqw 3cqw;
+	padding: 2cqw 3cqw 3cqw;
 }
 
-.pageCards span {
+.pageCard {
 	flex: 1;
-	height: 14cqh;
-	border-radius: 1cqw;
 	border: 1px solid #eceff3;
-	background: linear-gradient(135deg, #f8fafc, #eef2f7);
+	border-radius: 1cqw;
+	overflow: hidden;
+}
+
+.pageCardArt {
+	height: 11cqh;
+	display: flex;
+}
+
+.pageCardBody {
+	padding: 1.3cqw;
+}
+
+.pageCardBody div:first-child {
+	font-size: 1.3cqw;
+	font-weight: 650;
+	color: #101828;
+}
+
+.pageCardBody div + div {
+	margin-top: 0.6cqw;
+	font-size: 1.1cqw;
+	color: #667085;
+}
+
+/* ── the three thumbnails ── */
+
+.artDots {
+	flex-direction: column;
+	justify-content: center;
+	gap: 0.8cqw;
+	padding: 0 1.6cqw;
+	background: linear-gradient(135deg, #ecfdf5, #d1fae5);
+}
+
+.artDots > span {
+	display: flex;
+	gap: 0.6cqw;
+}
+
+.artDots > span > span {
+	width: 1cqw;
+	height: 1cqw;
+	border-radius: 50%;
+	background: rgba(6, 95, 70, 0.25);
+}
+
+.artDots > span > span[data-on] {
+	background: #10b981;
+}
+
+.artBars {
+	align-items: flex-end;
+	gap: 0.7cqw;
+	padding: 1.2cqw 1.6cqw;
+	background: linear-gradient(135deg, #eff6ff, #dbeafe);
+}
+
+.artBars > span {
+	flex: 1;
+	border-radius: 0.3cqw 0.3cqw 0 0;
+	background: #3b82f6;
+}
+
+.artLines {
+	flex-direction: column;
+	justify-content: center;
+	gap: 0.9cqw;
+	padding: 0 1.6cqw;
+	background: linear-gradient(135deg, #fefce8, #fef9c3);
+}
+
+.artLines > span {
+	height: 0.8cqw;
+	border-radius: 0.4cqw;
+	background: #a16207;
 }
 
 /* The app the recording opens, half-way through the take. */
