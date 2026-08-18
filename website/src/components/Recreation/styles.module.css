@@ -277,17 +277,25 @@
 .panel {
 	position: absolute;
 	left: 4.5vw;
-	/* Capped by the footage, centred on it, and free to be shorter. Anchoring
-	   `height` to the slot left every pane whose controls stop short sitting in
-	   a column of empty surface. Both numbers come off the video's own box and
-	   not off --pnl-top/--pnl-h: the slot is taller than the video once the
-	   timeline is in, and centring on the slot puts the panel 70px below the
-	   picture it belongs beside. The video is --v-w wide at 16/9, so its height
-	   is --v-w * 0.5625 and its centre line --v-t + half of that. */
-	top: calc(var(--v-t) + var(--v-w) * 0.28125);
+	/* Under the caption, capped by the footage, free to be shorter.
+	   
+	   It hangs from the caption's bottom rather than centring on the picture.
+	   Centred, it rose above the caption whenever the picture was tall relative
+	   to the panel's content — at 1383x904 the panel's top landed 55px inside
+	   the caption's last line. The ask was only ever that it shrink to its
+	   content and keep its horizontal placement; the vertical centring was mine
+	   to invent and mine to take back.
+	   
+	   Two ceilings, whichever is lower: the footage's height, and the room left
+	   between here and the bottom gutter. min() over custom properties is the
+	   pattern postcss-calc drops, so the built sheet is checked for it. */
+	top: calc(var(--cap-top) + var(--cap-h));
 	width: var(--pnl-w);
 	height: auto;
-	max-height: calc(var(--v-w) * 0.5625);
+	max-height: min(
+		calc(var(--v-w) * 0.5625),
+		calc(100vh - var(--gut-v) - var(--cap-top) - var(--cap-h))
+	);
 	overflow: hidden;
 	z-index: 12;
 	border: 1px solid var(--ost-border);
@@ -296,10 +304,7 @@
 	box-shadow: var(--ost-elev-pop), inset 0 1px 0 rgba(255, 255, 255, 0.06);
 	pointer-events: none;
 	opacity: var(--panel);
-	/* Two functions rather than one calc: `calc(-50% + Npx)` mixes a percentage
-	   with a length, and postcss-calc drops declarations it cannot fold — which
-	   on this page is a production-only failure that has bitten twice. */
-	transform: translateY(-50%) translateY(calc((1 - var(--panel)) * 12px));
+	transform: translateY(calc((1 - var(--panel)) * 12px));
 	transition:
 		opacity 0.45s var(--ease),
 		transform 0.45s var(--ease);
