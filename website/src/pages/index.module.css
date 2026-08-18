@@ -148,109 +148,115 @@
 .sectionKicker {
 	font-family: var(--ifm-font-family-monospace);
 	font-size: 11px;
-	letter-spacing: 0.08em;
+	font-weight: 600;
+	letter-spacing: 0.16em;
 	color: var(--os-accent);
 	text-transform: uppercase;
 }
 
 .sectionTitle {
-	margin: 10px 0 0 !important;
-	font-size: clamp(26px, 3vw, 32px);
-	font-weight: 700 !important;
-	letter-spacing: -0.02em;
+	margin: 14px 0 0 !important;
+	font-size: clamp(24px, 2.8vw, 32px);
+	font-weight: 750 !important;
+	letter-spacing: -0.025em;
 	color: var(--os-fg-emphasis) !important;
-}
-
-.sectionTitleSm {
-	composes: sectionTitle;
-	font-size: clamp(24px, 2.6vw, 28px);
 }
 
 /* ---- coda ----
    Three claims that are not events: a licence, an absence of network traffic, a
-   list of platforms. Everything that *is* an event — the editor, the captions,
-   the agent — is demonstrated in the walkthrough above with real footage, so it
-   is not repeated here as an illustrated card. */
+   list of platforms. Everything that *is* an event — the editor, the recorder,
+   the captions, the agent — is demonstrated above, so these three are set as
+   columns of prose rather than as cards: a card is a container for a thing, and
+   there is no thing here, only a sentence. The rules between them are the only
+   chrome, and they are what makes three paragraphs read as one list. */
 
 .features {
-	padding: 0 28px 96px;
+	padding: 140px 28px 0;
 }
 
 .featuresInner {
-	max-width: 1040px;
+	max-width: 1080px;
 	margin: 0 auto;
 	text-align: center;
 }
 
-.bento {
-	margin-top: 2.5rem;
+.trio {
+	margin-top: 52px;
 	display: grid;
 	grid-template-columns: repeat(3, 1fr);
-	gap: 0.875rem;
 	text-align: left;
 }
 
-@media (max-width: 900px) {
-	.bento {
-		grid-template-columns: 1fr;
-	}
+.trioItem {
+	padding: 6px 38px;
+	border-left: 1px solid var(--os-border-soft);
 }
 
-.card {
-	display: flex;
-	flex-direction: column;
-	gap: 12px;
-	border-radius: 14px;
-	border: 1px solid var(--os-border);
-	background: var(--os-surface-1);
-	box-shadow: var(--os-elev-card);
-	padding: 22px;
+/* The first column's rule would be a rule against nothing, and its text has to
+   line up with the heading above it, so it keeps the gutter and loses the edge.
+   The last one only loses the gutter. */
+.trioItem:first-child {
+	padding-left: 0;
+	border-left: none;
 }
 
-.card h3 {
-	margin: 0;
-	font-size: 15px;
-	font-weight: 600;
-	color: var(--os-fg-emphasis);
-	letter-spacing: -0.01em;
+.trioItem:last-child {
+	padding-right: 0;
 }
 
-.card p {
-	margin: 0;
-	font-size: 12.5px;
-	line-height: 1.55;
-	color: var(--os-fg-2);
-}
-
-.iconBadge {
-	width: 34px;
-	height: 34px;
-	flex-shrink: 0;
-	border-radius: 9px;
-	background: var(--os-accent-soft);
-	display: grid;
-	place-items: center;
+.trioTick {
 	color: var(--os-accent);
+}
+
+.trioItem h3 {
+	margin: 16px 0 0;
+	font-size: 16.5px;
+	font-weight: 650;
+	letter-spacing: -0.015em;
+	color: var(--os-fg-emphasis);
+}
+
+.trioItem p {
+	margin: 10px 0 0;
+	font-size: 13.5px;
+	line-height: 1.75;
+	color: var(--os-fg);
+	text-wrap: pretty;
+}
+
+@media (max-width: 900px) {
+	.trio {
+		grid-template-columns: 1fr;
+		gap: 34px;
+	}
+
+	/* Stacked, a left rule points down the page instead of between the columns
+	   it was separating. */
+	.trioItem,
+	.trioItem:first-child {
+		padding: 0;
+		border-left: none;
+	}
 }
 
 /* ---- quick start ---- */
 
 .quickStart {
-	padding: 0 28px 100px;
+	padding: 140px 28px 100px;
 	display: flex;
 	justify-content: center;
 }
 
 .quickStartInner {
 	width: 100%;
-	max-width: 1040px;
+	max-width: 1080px;
 	text-align: center;
 }
 
 /* Grid items stretch, which is what keeps the three panes equal height even
    though only two of them carry a command. */
 .installGrid {
-	margin-top: 26px;
+	margin-top: 52px;
 	display: grid;
 	grid-template-columns: repeat(3, 1fr);
 	gap: 0.875rem;
@@ -337,8 +343,10 @@
 }
 
 .quickStartNote {
-	margin: 22px 0 0;
+	margin: 30px auto 0;
+	max-width: 700px;
 	font-size: 12.5px;
+	line-height: 1.7;
 	color: var(--os-muted);
 }
 
@@ -365,11 +373,11 @@
 	}
 
 	.features {
-		padding: 0 20px 72px;
+		padding: 96px 20px 0;
 	}
 
 	.quickStart {
-		padding: 0 20px 76px;
+		padding: 96px 20px 76px;
 	}
 }
 
