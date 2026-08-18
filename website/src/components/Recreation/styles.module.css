@@ -73,8 +73,11 @@
 	   --nav reads Docusaurus's own navbar height instead of copying it: the copy
 	   said 72px where the bar measures 60, and that 12px was exactly the
 	   top-versus-bottom asymmetry in BOTH layouts. --cap-h is what the captions
-	   actually measure — 95px at every one of the five beats — plus air; it used
-	   to reserve 116 and waste 21. */
+	   actually measure — 95px at every one of the five beats — plus the air that
+	   separates them from the pane below. One number, because everything that
+	   places the pair subtracts it: the pane's ceiling, and portrait's picture
+	   and its top. Widen the air here and the group keeps its height, so it
+	   stays centred on the picture. */
 	--nav: var(--ifm-navbar-height, 60px);
 	/* The inspector's width, and it gives before the picture does. Fixed at 336
 	   it took a third of a 1011px window, which starved the picture of width —
@@ -82,7 +85,7 @@
 	   void that opens under it on a narrow, tall screen. It stops at 280, which
 	   is what the sliders and the four-column swatch grid need. */
 	--pnl-w: clamp(280px, 30vw, 336px);
-	--cap-h: 104px;
+	--cap-h: 118px;
 	--tl-h: 210px;
 	/* One gutter for both layouts, and a formula rather than a breakpoint: it
 	   gives way on a short window, which is where the tallest pane runs out of
@@ -1681,11 +1684,21 @@
 		   share is what is left between them — and --tl still moves nothing but
 		   the bottom bound. */
 		--gut-h: 18px;
+		/* Back to the caption's own height: the air the landscape slot carries is
+		   there to hold the inspector off the title, and here the picture is what
+		   follows the title. Fourteen pixels of it come straight off the picture,
+		   which on a short screen is the thing with none to spare. */
 		--cap-h: 96px;
 		--pnl-w: calc(100vw - 2 * var(--gut-h));
 		/* What the pane below the picture needs at its smallest: the palette is
-		   160 tall and the transcript wants a few lines under its header. */
-		--pane-min: 190px;
+		   160 tall and the transcript wants a few lines under its header. A
+		   formula and not a constant, for the same reason as --gut: on a 667-tall
+		   phone the floor takes 210 of the box and 190 held here left the picture
+		   57px of height — a sliver — for the two beats the floor is up. It gives
+		   way before the picture does, and stops at the palette's own 160 plus a
+		   little air on each side — a toolbar touching the picture above it and
+		   the floor below it reads as a mistake. */
+		--pane-min: clamp(176px, 24vh, 190px);
 
 		/* Full width, but never more height than the box has left once the
 		   caption, the pane and the floor have taken theirs. Taking the width
