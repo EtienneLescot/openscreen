@@ -23,7 +23,7 @@
  */
 
 import { CURSORS } from "./generated";
-import { BEATS, CUT_INDEX, type Frame, frameAt, strikeOf, T_TOTAL } from "./scene";
+import { BEATS, CUT_INDEX, type Frame, frameAt, railScale, strikeOf, T_TOTAL } from "./scene";
 
 export interface DriverRefs {
 	band: HTMLElement;
@@ -93,7 +93,7 @@ const WRITTEN = [
 	"--palette",
 	"--wand",
 	"--comment",
-	"--flow-y",
+	"--k",
 	"--trim-0",
 	"--trim-1",
 	"--trim-2",
@@ -225,7 +225,17 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	 * share one flow container, so showing them together would measure each one
 	 * stacked below the others.
 	 */
+	/* The rail's scale, which is a function of the stage and not of the frame —
+	   so it is written here, where resizes land, rather than every rAF. The
+	   stylesheet's own `--k` is the resting value for a reader who never gets
+	   the driver; this overrides it as soon as there is a width to divide. */
+	const sizeRail = () => {
+		const w = root.getBoundingClientRect().width;
+		if (w > 0) root.style.setProperty("--k", railScale(w).toFixed(2));
+	};
+
 	const measure = () => {
+		sizeRail();
 		const had = root.dataset.beat;
 		const claimed = new Set<string>();
 		// Transitions off for the pass: see .stage[data-measuring].
