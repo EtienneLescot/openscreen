@@ -122,10 +122,6 @@
 	--palette: 0;
 	--wand: 0;
 	--comment: 0;
-	--cam-scale: 1.2;
-	--cam-tx: 0;
-	--cam-ty: 0;
-	--cam-rot: 0;
 	--trim-0: 1;
 	--trim-1: 1;
 	--trim-2: 1;
@@ -1074,14 +1070,23 @@
 	z-index: 6;
 }
 
+/* A fixed scale, and no transform animation at all.
+ *
+ * The motion in this bubble is the recording playing: the scroll is the
+ * transport, and `currentTime` is the footage clock. An earlier cut also panned
+ * and rotated the element on that same clock, which put two kinds of movement
+ * on screen at once and made the one that matters — that this is footage being
+ * scrubbed — read as a decorative Ken Burns on a still.
+ *
+ * 1.15 is not free: a 16/9 source in a 16/10.5 frame already loses ~7% off each
+ * side, and this takes it to ~13%, which is what keeps the generator's
+ * watermark at x≈95% out of the picture. */
 .webcamVideo {
 	width: 100%;
 	height: 100%;
 	object-fit: cover;
 	display: block;
-	transform: scale(var(--cam-scale)) translate(calc(var(--cam-tx) * 1%), calc(var(--cam-ty) * 1%))
-		rotate(calc(var(--cam-rot) * 1deg));
-	will-change: transform;
+	transform: scale(1.15);
 }
 
 /* ═══ THE FLOOR ════════════════════════════════════════════════════════════ */
