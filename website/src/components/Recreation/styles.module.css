@@ -35,16 +35,33 @@
  */
 
 /* ═══ TOKENS ═══════════════════════════════════════════════════════════════
-   The app's dark values, prefixed `--ost-`. They deliberately do NOT alias the
-   site's `--os-*` and do not follow its light/dark toggle: of 22 tokens
-   checked, all twelve neutrals differ and `--playhead` has no `--os-*`
-   counterpart at all, which is how an unaudited alias sheet ships the playhead
-   in mint.
+   The app's values, prefixed `--ost-`. They deliberately do NOT alias the site's
+   `--os-*`: of 22 tokens checked, all twelve neutrals differ and `--playhead`
+   has no `--os-*` counterpart at all, which is how an unaudited alias sheet
+   ships the playhead in mint.
 
-   ONE declared divergence: `--ost-meta` is #8b95a3 (the app's `--muted`), not
-   its `--meta` #5b6470. Against `--surface-1` those measure 5.87:1 and 2.97:1,
-   and the ruler's labels are real DOM, which SC 1.4.3's Incidental exemption
-   does not cover. */
+   They DO follow the site's toggle, because the application has a light theme
+   too — `design-tokens.css` is `:root` light with a `[data-theme="dark"]`
+   override — and a page that turns light around a dark editor is showing the
+   reader an application that does not exist. Both sets below are lifted from
+   that file: the dark block from its override, the light block from its root.
+
+   THE DIVERGENCES, and each is a contrast failure in the source rather than a
+   preference. Measured against the surface the scene actually paints that text
+   on, not against the app's own:
+
+     dark  `--ost-meta` is #8b95a3 (the app's `--muted`), not its `--meta`
+           #5b6470 — 5.87:1 against `--surface-1` rather than 2.97:1, and the
+           ruler's labels are real DOM, which SC 1.4.3's Incidental exemption
+           does not cover.
+
+     light the same label colour, and the three that carry meaning by hue: the
+           app's light `--accent` #10b981, `--danger` #ef4444 and `--speed`
+           #f97316 measure 2.54:1, 3.76:1 and 2.80:1 as text on white. Each is
+           replaced by the darkening the site's own light palette already made
+           for the same pair of colours (custom.css) — same hue, and 5.14:1,
+           4.83:1 and 5.18:1. Nothing here is a new colour; it is the light
+           theme the site already ships, applied to the editor's own tokens. */
 
 .band {
 	--ost-bg: #0a0d12;
@@ -57,7 +74,6 @@
 	--ost-fg-2: #f3f5f8;
 	--ost-muted: #8b95a3;
 	--ost-meta: #8b95a3;
-	--ost-faint: #6b7480;
 	--ost-accent: #10b981;
 	--ost-accent-soft: rgba(16, 185, 129, 0.14);
 	--ost-accent-ring: rgba(16, 185, 129, 0.32);
@@ -71,6 +87,19 @@
 	--ost-elev-pop: 0 24px 70px -28px rgba(0, 0, 0, 0.75);
 	--ost-font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
 	--ease: cubic-bezier(0.2, 0, 0, 1);
+
+	/* Two greys the dark theme could spell as white at low alpha — a slider's
+	   groove and a switch's track — which is invisible on a light panel. Tokens
+	   rather than literals for that reason alone. */
+	--ost-groove: rgba(255, 255, 255, 0.12);
+	--ost-thumb: #98a2b3;
+	--ost-thumb-on: #ffffff;
+	--ost-knob: #eafff6;
+	/* The seated highlight along the top edge of a raised panel. It is a lit
+	   edge in the dark theme and has to become a shadow-side edge in the light
+	   one, or the panel reads as glowing. */
+	--ost-lip: rgba(255, 255, 255, 0.06);
+	--ost-knob-shadow: rgba(0, 0, 0, 0.4);
 
 	/* Pixels per second of footage — the rail's only scale. */
 	--k: 90;
@@ -100,6 +129,45 @@
 
 	position: relative;
 	color: var(--ost-fg);
+}
+
+:global([data-theme="light"]) .band {
+	--ost-bg: #f8fafc;
+	--ost-surface: #ffffff;
+	--ost-surface-2: #e2e8f0;
+	--ost-border: #e2e8f0;
+	--ost-border-soft: #e6eaef;
+	--ost-border-hi: #cbd5e1;
+	--ost-fg: #0f172a;
+	--ost-fg-2: #334155;
+	/* One step below the app's `--muted` #64748b, which is 4.20:1 on the tab
+	   strip's own fill. 4.60:1 there, 5.14:1 on the panel. */
+	--ost-muted: #5c6b80;
+	/* The app's light `--meta` #7c8aa0 is 3.35:1 on the rail. `--muted` again,
+	   which is the same substitution the dark block makes. */
+	--ost-meta: #5c6b80;
+	/* One step below the site's own #0a7d57: that value clears the page's
+	   backgrounds, and a zoom pill's label sits on an 11% tint of itself, where
+	   it measures 4.42:1. */
+	--ost-accent: #097251;
+	--ost-accent-soft: rgba(9, 114, 81, 0.11);
+	--ost-accent-ring: rgba(9, 114, 81, 0.28);
+	--ost-danger: #c81f1f;
+	--ost-danger-soft: rgba(200, 31, 31, 0.1);
+	--ost-speed: #b73c0b;
+	--ost-speed-soft: rgba(183, 60, 11, 0.11);
+	--ost-speed-border: #b73c0b;
+	/* The playhead is the one colour the application does not re-theme: it is
+	   declared once, in the light root, and the dark theme keeps it. */
+	--ost-playhead: #6c55ff;
+	--ost-playhead-glow: rgba(108, 85, 255, 0.3);
+	--ost-elev-pop: 0 24px 70px -28px rgba(15, 23, 42, 0.28);
+	--ost-groove: #dfe4ea;
+	--ost-thumb: #ffffff;
+	--ost-thumb-on: #ffffff;
+	--ost-knob: #ffffff;
+	--ost-lip: rgba(15, 23, 42, 0.04);
+	--ost-knob-shadow: rgba(15, 23, 42, 0.18);
 }
 
 /* ═══ THE BAND ═════════════════════════════════════════════════════════════
@@ -331,7 +399,7 @@
 	border: 1px solid var(--ost-border);
 	border-radius: 16px;
 	background: color-mix(in srgb, var(--ost-surface) 92%, transparent);
-	box-shadow: var(--ost-elev-pop), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+	box-shadow: var(--ost-elev-pop), inset 0 1px 0 var(--ost-lip);
 	pointer-events: none;
 	opacity: var(--panel);
 	transform: translateY(calc((1 - var(--panel)) * 12px));
@@ -417,7 +485,10 @@
 
 .tabOn {
 	background: var(--ost-accent);
-	color: #04110b;
+	/* The page's ground, not a literal near-black: the accent under it changes
+	   with the theme, and a fixed foreground would sit on two different greens.
+	   Same fix as the site's own primary button. */
+	color: var(--ost-bg);
 	font-weight: 600;
 }
 
@@ -526,7 +597,7 @@
 	margin-top: 11px;
 	height: 5px;
 	border-radius: 999px;
-	background: rgba(255, 255, 255, 0.12);
+	background: var(--ost-groove);
 }
 
 .trackFill {
@@ -544,10 +615,10 @@
 	width: 15px;
 	height: 15px;
 	border-radius: 50%;
-	background: #eafff6;
+	background: var(--ost-knob);
 	border: 2.5px solid var(--ost-accent);
 	transform: translate(-50%, -50%);
-	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
+	box-shadow: 0 1px 4px var(--ost-knob-shadow);
 }
 
 .trackFillPad {
@@ -574,7 +645,7 @@
 	height: 20px;
 	flex-shrink: 0;
 	border-radius: 999px;
-	background: rgba(255, 255, 255, 0.14);
+	background: var(--ost-groove);
 }
 
 .switch::after {
@@ -585,7 +656,7 @@
 	width: 16px;
 	height: 16px;
 	border-radius: 50%;
-	background: #98a2b3;
+	background: var(--ost-thumb);
 }
 
 .switchOn {
@@ -595,7 +666,7 @@
 .switchOn::after {
 	left: auto;
 	right: 2px;
-	background: #fff;
+	background: var(--ost-thumb-on);
 }
 
 /* ── cursor pane ── */
@@ -743,7 +814,7 @@
 	gap: 8px;
 	border-radius: 22px;
 	background: color-mix(in srgb, var(--ost-surface) 90%, transparent);
-	box-shadow: var(--ost-elev-pop), inset 0 1px 0 rgba(255, 255, 255, 0.06);
+	box-shadow: var(--ost-elev-pop), inset 0 1px 0 var(--ost-lip);
 	/* The padding and the border collapse with the box, not just its content:
 	   max-height alone left 20px of column standing for a palette that is not
 	   there, and that is half a caption's worth of drift on the four beats where
@@ -1415,7 +1486,13 @@
 	gap: 5px;
 	padding: 4px 9px;
 	border-radius: 8px;
-	background: rgba(8, 10, 13, 0.55);
+	/* 0.78, not 0.55: this chip floats over the recording, so whatever is behind
+	   it decides its contrast — and what is behind it at the zoom beat is the
+	   recorded page, which is white in both themes. The mint label measured
+	   2.29:1 there. At 0.78 the chip is its own ground: 5.41:1 over white,
+	   8.27:1 over a mid-tone wallpaper. Literals, and deliberately not tokens —
+	   a HUD over footage does not follow the reader's theme. */
+	background: rgba(8, 10, 13, 0.78);
 	border: 1px solid rgba(16, 185, 129, 0.75);
 	color: #34d399;
 	font-family: var(--ost-font-mono);
