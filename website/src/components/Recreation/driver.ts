@@ -23,7 +23,7 @@
  */
 
 import { CURSORS } from "./generated";
-import { CUT_INDEX, type Frame, frameAt, strikeOf, T_TOTAL } from "./scene";
+import { BEATS, CUT_INDEX, type Frame, frameAt, strikeOf, T_TOTAL } from "./scene";
 
 export interface DriverRefs {
 	band: HTMLElement;
@@ -156,8 +156,33 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 
 	/* ── the target cache ─────────────────────────────────────────────────── */
 
+	/**
+	 * The frame's numbers that place a box rather than paint one.
+	 *
+	 * Anything listed here has to be written before a beat is measured, or the
+	 * pointer is aimed at where the target ISN'T. The test for membership is
+	 * mechanical: grep the stylesheet, and if the variable appears in a `top`,
+	 * a `transform`, a `height` or an `inset`, it belongs here.
+	 */
+	const GEOMETRY = [
+		{ css: "--tl", of: (f: Frame) => f.tl },
+		{ css: "--panel", of: (f: Frame) => f.panel },
+		{ css: "--palette", of: (f: Frame) => f.palette },
+	] as const;
+
 	let targets = new Map<string, [number, number]>();
-	const measureVisible = () => {
+	/**
+	 * `claimed` makes the first beat that can see a target the one that owns it.
+	 *
+	 * The timeline beat deliberately keeps the cursor pane on screen so the panel
+	 * does not empty while it fades (styles.module.css, ".floor's two beats hand
+	 * the column to the palette"). That pane is therefore measurable twice: once
+	 * in the cursor beat, where it plays, and again in the timeline beat, where
+	 * the act has moved the whole column 151px. Last-write-wins handed the
+	 * pointer the second one, and it spent the Size and Smoothing sliders that
+	 * far above them.
+	 */
+	const measureVisible = (claimed?: Set<string>) => {
 		const box = root.getBoundingClientRect();
 		if (box.width <= 0) return;
 		for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-t]"))) {
@@ -167,6 +192,16 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 			const r = el.getBoundingClientRect();
 			if (r.width <= 0) continue;
 			const name = el.dataset.t!;
+			if (claimed) {
+				// A target may declare the beat whose layout it should be measured
+				// in. The palette needs it: its buttons are visible in every beat,
+				// so "first beat that can see it" measures them in the opening act
+				// while the pointer only ever aims at them in the closing one.
+				const owner = el.dataset.tBeat;
+				if (owner && owner !== root.dataset.beat) continue;
+				if (claimed.has(name)) continue;
+				claimed.add(name);
+			}
 			// Anchors along a slider track are stored as the track's own geometry,
 			// so a percentage along it can be resolved without re-measuring.
 			targets.set(name, [
@@ -192,12 +227,34 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	 */
 	const measure = () => {
 		const had = root.dataset.beat;
-		for (const beat of ["style", "effects", "cursor", "timeline", "transcript"]) {
-			root.dataset.beat = beat;
-			measureVisible();
+		const claimed = new Set<string>();
+		// Transitions off for the pass: see .stage[data-measuring].
+		root.dataset.measuring = "";
+		const kept = GEOMETRY.map((g) => [g.css, root.style.getPropertyValue(g.css)] as const);
+		for (const b of BEATS) {
+			root.dataset.beat = b.id;
+			// Opening the pane is not enough. Three of the frame's numbers place
+			// boxes rather than paint them, and a beat measured with the wrong ones
+			// is measured in the wrong place: --tl moves the panel and the
+			// composite by the 151px between the two acts, and --panel and
+			// --palette each hold their box at its entrance offset until they
+			// finish arriving. The pointer wore all three.
+			//
+			// frameAt takes PROGRESS, not seconds: the rAF calls it as
+			// frameAt(off / span). Handing it a midpoint in seconds asks for a
+			// frame past the end of the scene, which answers with the closing act
+			// for every beat, including the three that play in the opening one.
+			const f = frameAt((b.from + b.to) / 2 / T_TOTAL);
+			for (const g of GEOMETRY) root.style.setProperty(g.css, g.of(f).toFixed(3));
+			measureVisible(claimed);
 		}
 		if (had === undefined) delete root.dataset.beat;
 		else root.dataset.beat = had;
+		for (const [css, was] of kept) {
+			if (was) root.style.setProperty(css, was);
+			else root.style.removeProperty(css);
+		}
+		delete root.dataset.measuring;
 	};
 
 	const at = (name: string, fx = 20, fy = 45): [number, number] => {

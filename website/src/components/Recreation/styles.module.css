@@ -234,6 +234,19 @@
 	color: var(--os-fg-2);
 }
 
+/* Measurement only, and never painted: the driver sets it, reads every target's
+   box, and clears it inside one task.
+
+   The panel and the palette both hold their box at an entrance offset through a
+   transitioned transform. A rect read in the same tick as the variable changes
+   comes back with the value the transition is LEAVING, not the one it is headed
+   for — so the palette measured 16px high for the whole timeline beat and the
+   panel 12px, and the pointer wore both. */
+.stage[data-measuring],
+.stage[data-measuring] * {
+	transition: none !important;
+}
+
 /* ═══ THE INSPECTOR ════════════════════════════════════════════════════════ */
 
 .panel {
