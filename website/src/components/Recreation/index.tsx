@@ -347,7 +347,11 @@ export default function Recreation() {
 
 					{/* ═══ THE TOOL PALETTE ═══ six tools, the app's own bar */}
 					<div className={styles.palette}>
-						<span className={`${styles.tool} ${styles.toolWand}`} data-t="wand">
+						<span
+							className={`${styles.tool} ${styles.toolWand}`}
+							data-t="wand"
+							data-t-beat="timeline"
+						>
 							<Wand2 size={30} />
 						</span>
 						<span className={styles.tool}>
@@ -356,7 +360,11 @@ export default function Recreation() {
 						<span className={styles.tool}>
 							<Clock size={30} />
 						</span>
-						<span className={`${styles.tool} ${styles.toolComment}`} data-t="comment">
+						<span
+							className={`${styles.tool} ${styles.toolComment}`}
+							data-t="comment"
+							data-t-beat="timeline"
+						>
 							<MessageSquare size={30} />
 						</span>
 						<span className={styles.tool}>
