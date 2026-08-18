@@ -177,7 +177,6 @@
 	width: calc(var(--pnl-w) - 8px);
 	z-index: 11;
 	pointer-events: none;
-	transition: top 0.75s var(--ease);
 }
 
 .cap {
@@ -250,9 +249,7 @@
 	transform: translateY(calc((1 - var(--panel)) * 12px));
 	transition:
 		opacity 0.45s var(--ease),
-		transform 0.45s var(--ease),
-		top 0.75s var(--ease),
-		height 0.75s var(--ease);
+		transform 0.45s var(--ease);
 }
 
 .panelHead {
@@ -665,10 +662,6 @@
 		0 0 44px -8px rgba(16, 185, 129, 0.3),
 		0 34px 70px -30px rgba(0, 0, 0, 0.65);
 	z-index: 5;
-	transition:
-		top 0.75s var(--ease),
-		left 0.75s var(--ease),
-		width 0.75s var(--ease);
 }
 
 .cardClip {
@@ -1101,8 +1094,10 @@
 	background: color-mix(in srgb, var(--ost-surface) 97%, transparent);
 	border-top: 1px solid var(--ost-border);
 	contain: layout paint;
+	/* No transition: `--tl` is eased in the score, and easing a scroll-driven
+	   value twice makes the floor chase a target it reaches late — which is how
+	   it came to sit 16px below its own `bottom: 0`. */
 	transform: translateY(calc((1 - var(--tl)) * (var(--tl-h) + 20px)));
-	transition: transform 0.75s var(--ease);
 }
 
 .floorClip {
@@ -1146,10 +1141,13 @@
 	white-space: nowrap;
 }
 
+/* 150 + 50 leaves 10px under the clips inside a 210px floor. At the design's
+   154 + 54 they finish 2px from the bottom edge, which does not read as a
+   track sitting on a floor — it reads as a track the floor has cut off. */
 .clip {
 	position: absolute;
-	top: 154px;
-	height: 54px;
+	top: 150px;
+	height: 50px;
 	border-radius: 10px;
 	background: color-mix(in srgb, var(--ost-surface-2) 72%, transparent);
 	border: 1px solid var(--ost-border-hi);
@@ -1161,7 +1159,7 @@
 	position: absolute;
 	left: 13px;
 	right: 13px;
-	top: 30px;
+	top: 28px;
 	height: 9px;
 	background: repeating-linear-gradient(90deg, var(--ost-accent) 0 2px, transparent 2px 7px);
 	opacity: 0.75;

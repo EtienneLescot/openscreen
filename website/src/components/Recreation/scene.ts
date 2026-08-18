@@ -140,16 +140,19 @@ export const LANES = {
 	zoom: 118,
 	laneH: 22,
 	hint: 142,
-	track: 154,
-	trackH: 54,
+	track: 150,
+	trackH: 50,
 } as const;
 
 export const FLOOR_H = 210;
 
 /** The two clips on the track. */
+/* The join is 0.13s — about twelve pixels at 90px/s. The design leaves 0.4s,
+   which is 36px of floor showing between two takes that are meant to read as
+   consecutive on one track. */
 export const CLIPS = [
 	{ from: -9, to: 13.1, selected: true },
-	{ from: 13.5, to: 42, selected: false },
+	{ from: 13.23, to: 42, selected: false },
 ] as const;
 
 /** Three zooms, each with the scene time the wizard places it. */
@@ -299,6 +302,13 @@ function kf(t: number, points: readonly number[][]): number[] {
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
+/** Smoothstep. Used only where a value is held at both ends — a ramp that
+ *  starts and stops is the one place linear reads as mechanical. */
+const ease = (v: number) => {
+	const k = clamp01(v);
+	return k * k * (3 - 2 * k);
+};
+
 /* ── sub-beat moments ─────────────────────────────────────────────────────── */
 
 /** The three background picks, and the two cursor picks. */
@@ -362,7 +372,16 @@ export function frameAt(p: number): Frame {
 	const tf = footageTime(t);
 
 	const beat = BEATS.find((b) => t >= b.from && t < b.to)?.id ?? null;
-	const tl = t >= TL_IN ? 1 : 0;
+	// A ramp, not a switch.
+	//
+	// This used to be 0/1 with a 0.75s CSS transition doing the easing, and that
+	// is a scroll-driven value being animated by a clock that is not the scroll:
+	// the floor chased a target it only reached long after `--tl` had settled, so
+	// it sat ~16px below its own `bottom: 0` and cut the bottom off the clips.
+	// Easing the value here instead means every rule that reads `--tl` — the
+	// floor, the panel's top and height, the composite's box — moves together and
+	// lands exactly.
+	const tl = ease(clamp01((t - TL_IN) / 0.55));
 
 	const bg = BG_PICKS.reduce((n, at) => (t >= at ? n + 1 : n), 0);
 
