@@ -90,6 +90,7 @@ const WRITTEN = [
 	"--zooms-placed",
 	"--speed-placed",
 	"--panel",
+	"--intro",
 	"--palette",
 	"--wand",
 	"--comment",
@@ -453,6 +454,8 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		num("--zooms-placed", f.zoomsPlaced, 0);
 		num("--speed-placed", f.speedPlaced, 0);
 		num("--panel", f.panel, 0);
+		// A switch, so no decimals to lose — unlike --tl, which is a ramp.
+		num("--intro", f.intro, 0);
 		num("--palette", f.palette, 0);
 		num("--wand", f.wand, 0);
 		num("--comment", f.comment, 0);

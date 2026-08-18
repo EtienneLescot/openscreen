@@ -92,6 +92,13 @@ export type BeatId = (typeof BEATS)[number]["id"];
 /** The floor arrives here — inside the cursor beat, so the acts change under a
  *  caption that is still up rather than across an empty stage. */
 const TL_IN = 14.65;
+/** When the interface arrives over the picture — the inspector and the captions
+ *  together. They used to disagree: the caption turned on with its beat, which
+ *  now opens the scene at 0, while the panel waited for this threshold, so the
+ *  title faded up a fifth of a second of scroll before the panel it belongs to.
+ *  One number, read by both. */
+const UI_IN = 0.35;
+
 /** The inspector is up for every beat except the two the palette owns. */
 const PANEL_OFF = [14.45, 19.6] as const;
 
@@ -473,6 +480,9 @@ export interface Frame {
 	/** Index of the entry the pointer is striking, or -1. */
 	strikeIndex: number;
 	panel: number;
+	/** The captions' gate, so they arrive with the inspector rather than before
+	 *  it. A switch, not a ramp — the fade is the CSS transition under it. */
+	intro: number;
 	palette: number;
 	wand: number;
 	comment: number;
@@ -535,7 +545,7 @@ export function frameAt(p: number): Frame {
 
 	const strikeIndex = CUT_INDEX.find((i) => t >= strikeOf(i) - 0.5 && t < strikeOf(i) + 0.35) ?? -1;
 
-	const panelOn = t >= 0.35 && !(t >= PANEL_OFF[0] && t < PANEL_OFF[1]);
+	const panelOn = t >= UI_IN && !(t >= PANEL_OFF[0] && t < PANEL_OFF[1]);
 	const paletteOn = t >= 14.75 && t < 19.45;
 
 	return {
@@ -569,6 +579,7 @@ export function frameAt(p: number): Frame {
 		trims: placedTrims,
 		strikeIndex,
 		panel: panelOn ? 1 : 0,
+		intro: t >= UI_IN ? 1 : 0,
 		palette: paletteOn ? 1 : 0,
 		wand: t >= 15.0 && t < 17.0 && t >= 15.0 + (17.0 - 15.0) * 0.54 ? 1 : 0,
 		comment: t >= 17.3 && t < 19.2 && t >= 17.3 + (19.2 - 17.3) * 0.5 ? 1 : 0,
