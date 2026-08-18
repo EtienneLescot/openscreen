@@ -193,7 +193,10 @@ jobs:
           # `-i, --inputDirectory`, and rejects the `--inputFile` that Microsoft
           # Learn documents. The v1.9.5 dry run is what caught that.
           # Not $args: that is a PowerShell automatic variable.
-          $cmdArgs = @('publish', '.', '--inputDirectory', $pkg.Directory.FullName, '--appId', $env:PRODUCT_ID)
+          # -v is not decoration: without it the CLI reports upload failures as the
+          # bare line 'Error while uploading the application package.' with no status
+          # code, no URL and no body, which is what made v1.9.6 undiagnosable.
+          $cmdArgs = @('publish', '.', '--inputDirectory', $pkg.Directory.FullName, '--appId', $env:PRODUCT_ID, '-v')
           if ($env:DRY_RUN -eq 'true') {
             # Leaves the submission in draft instead of sending it to
             # certification: the only way to test this path without shipping.
