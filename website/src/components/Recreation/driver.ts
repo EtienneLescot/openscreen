@@ -699,9 +699,19 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		});
 	};
 
+	// Coalesced into a frame, like the scroll. `measure()` opens all five beats,
+	// reads a rect for every `data-t` node and forces layout to do it; a window
+	// drag fires resize many times a second, and running that work per event was
+	// the one thing on this element's main thread that could take longer than
+	// the frame it was in.
+	let resizeRaf = 0;
 	const onResize = () => {
-		measure();
-		onScroll();
+		if (resizeRaf) return;
+		resizeRaf = requestAnimationFrame(() => {
+			resizeRaf = 0;
+			measure();
+			onScroll();
+		});
 	};
 
 	let detached = false;
@@ -736,6 +746,7 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		cam.removeEventListener("loadeddata", onCamLoaded);
 		cam.removeEventListener("seeked", onCamSeeked);
 		if (raf) cancelAnimationFrame(raf);
+		if (resizeRaf) cancelAnimationFrame(resizeRaf);
 	};
 }
 
