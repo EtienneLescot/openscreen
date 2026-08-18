@@ -23,7 +23,17 @@
  */
 
 import { CURSORS } from "./generated";
-import { BEATS, CUT_INDEX, type Frame, frameAt, railScale, strikeOf, T_TOTAL } from "./scene";
+import {
+	BEATS,
+	CUT_INDEX,
+	type Frame,
+	frameAt,
+	railScale,
+	SHOT_PATH,
+	type ShotKey,
+	strikeOf,
+	T_TOTAL,
+} from "./scene";
 
 export interface DriverRefs {
 	band: HTMLElement;
@@ -226,6 +236,107 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	 * share one flow container, so showing them together would measure each one
 	 * stacked below the others.
 	 */
+	/**
+	 * Where the things the recorded pointer aims at actually are, in the frame's
+	 * own per-cent — the space `--shot-x` is read in.
+	 *
+	 * Layout offsets and not rectangles: a rectangle comes back with every
+	 * transform already applied, and three of them sit over this one — the
+	 * zoomer's zoom, the frame's padding scale, the page's scroll. An offset
+	 * ignores all three, so the box is measured once here and put back through
+	 * them by `shotKey`, out of numbers the frame already carries. Nothing in
+	 * the loop reads layout.
+	 */
+	type ShotBox = {
+		x: number;
+		y: number;
+		w: number;
+		h: number;
+		scrolls: boolean;
+		/** The recorded window's own box, when the target is inside it. */
+		win: { x: number; y: number; w: number; h: number } | null;
+	};
+	const shots = new Map<string, ShotBox>();
+	let shotSpace: { w: number; h: number; page: number } | null = null;
+
+	const measureShots = () => {
+		const zoomer = root.querySelector<HTMLElement>("[data-shot-box]");
+		if (!zoomer || zoomer.offsetWidth <= 0) return;
+		const page = root.querySelector<HTMLElement>("[data-shot-scroll]");
+		shotSpace = { w: zoomer.offsetWidth, h: zoomer.offsetHeight, page: page?.offsetHeight ?? 0 };
+		const winEl = root.querySelector<HTMLElement>("[data-shot-win]");
+		let win: ShotBox["win"] = null;
+		for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-shot]"))) {
+			let x = 0;
+			let y = 0;
+			let n: HTMLElement | null = el;
+			while (n && n !== zoomer) {
+				if (n === winEl) win = { x, y, w: n.offsetWidth, h: n.offsetHeight };
+				x += n.offsetLeft;
+				y += n.offsetTop;
+				n = n.offsetParent as HTMLElement | null;
+			}
+			// Not under the zoomer, or in a pane with no box: keep the last answer,
+			// the way the pointer's own targets do.
+			if (n !== zoomer) continue;
+			shots.set(el.dataset.shot!, {
+				x,
+				y,
+				w: el.offsetWidth,
+				h: el.offsetHeight,
+				scrolls: page?.contains(el) ?? false,
+				// Offsets are measured from the target, so the window's own box comes
+				// back relative to it; put it in the zoomer's frame.
+				win: win && { ...win, x: x - win.x, y: y - win.y },
+			});
+			win = null;
+		}
+	};
+
+	/** One keyframe of the recorded pointer's path. A named one is put back
+	 *  through the transforms between the thing and the pointer, in the order
+	 *  the browser applies them: the page scrolls inside the frame, the frame
+	 *  scales about the middle of the zoomer — which is also the middle of the
+	 *  frame, since it is inset by the same per-cent on both sides. */
+	const shotKey = (k: ShotKey, f: Frame): [number, number] => {
+		if (typeof k[1] === "number") return [k[1], k[2]];
+		const b = shots.get(k[1]);
+		if (!b || !shotSpace) return [50, 50];
+		let x = b.x + k[2] * b.w;
+		let y = b.y + k[3] * b.h;
+		if (b.win) {
+			// The window scales as it opens, about a point of its own — so a target
+			// on it is somewhere else for as long as that lasts. Same shape as the
+			// stylesheet's `scale(0.82 + --win-vis * 0.18)`, and the same number
+			// only because both read `winVis` off the frame.
+			const s = 0.82 + f.winVis * 0.18;
+			x = b.win.x + 0.26 * b.win.w + (x - (b.win.x + 0.26 * b.win.w)) * s;
+			y = b.win.y + 0.42 * b.win.h + (y - (b.win.y + 0.42 * b.win.h)) * s;
+		}
+		x = (x / shotSpace.w) * 100;
+		y = (y / shotSpace.h) * 100;
+		if (b.scrolls) y += (f.pageY * shotSpace.page) / shotSpace.h;
+		return [50 + (x - 50) * f.frameScale, 50 + (y - 50) * f.frameScale];
+	};
+
+	/** The path, interpolated after its keyframes resolve and not before: a
+	 *  named keyframe answers differently every frame. */
+	const shotPoint = (f: Frame): [number, number] => {
+		const t = f.tf;
+		for (let i = 1; i < SHOT_PATH.length; i++) {
+			if (t <= SHOT_PATH[i][0]) {
+				const a = SHOT_PATH[i - 1];
+				const b = SHOT_PATH[i];
+				if (t <= a[0]) return shotKey(a, f);
+				const k = (t - a[0]) / (b[0] - a[0]);
+				const [ax, ay] = shotKey(a, f);
+				const [bx, by] = shotKey(b, f);
+				return [ax + (bx - ax) * k, ay + (by - ay) * k];
+			}
+		}
+		return shotKey(SHOT_PATH[SHOT_PATH.length - 1], f);
+	};
+
 	/* The rail's scale, which is a function of the stage and not of the frame —
 	   so it is written here, where resizes land, rather than every rAF. The
 	   stylesheet's own `--k` is the resting value for a reader who never gets
@@ -277,6 +388,8 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		   property here makes the restored state the one transitions start from,
 		   so there is nothing to animate. */
 		void root.offsetHeight;
+		// After the restore, so the boxes are the ones the reader is looking at.
+		measureShots();
 		delete root.dataset.measuring;
 	};
 
@@ -452,14 +565,16 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		num("--fit", f.fit);
 		num("--pad-pct", f.paddingPct, 2);
 		num("--frame-scale", f.frameScale, 4);
+		num("--win-vis", f.winVis, 4);
 		num("--size-pct", f.cursorSizePct, 2);
 		num("--cur-size", f.cursorSize, 2);
 		num("--size-u", f.cursorSizeU, 4);
 		num("--zoom", f.zoom, 4);
 		root.style.setProperty("--zoom-origin", f.zoomOrigin);
 		num("--zoom-active", f.zoomActive, 0);
-		num("--shot-x", f.shot[0], 2);
-		num("--shot-y", f.shot[1], 2);
+		const [shotX, shotY] = shotPoint(f);
+		num("--shot-x", shotX, 2);
+		num("--shot-y", shotY, 2);
 		num("--shot-bounce", f.shotBounce, 4);
 		num("--page-y", f.pageY, 2);
 		num("--ui-bounce", f.uiBounce, 4);
