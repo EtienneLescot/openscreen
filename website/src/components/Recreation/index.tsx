@@ -216,7 +216,7 @@ export default function Recreation() {
 									))}
 								</span>
 								<span className={styles.upload}>{PANELS.background.uploadCustom}</span>
-								<span className={styles.swatches}>
+								<span className={styles.swatches} data-strip="">
 									{WALLPAPERS.slice(0, WALLPAPER_COUNT_SHOWN).map((n, i) => (
 										<span
 											key={n}
@@ -224,6 +224,15 @@ export default function Recreation() {
 											data-t={i < 4 ? `th-${i}` : undefined}
 											style={{ ["--i" as string]: i }}
 										>
+											{/* Lazy, and warmed by the driver — see primeStrip(). These
+											    twelve sit in a pane held at `display: none` until the
+											    style beat opens, and a lazy image inside a display:none
+											    box never intersects anything, so all twelve fired at
+											    once when the beat arrived and the strip painted blank
+											    for the first half second of it. Loading them eagerly
+											    fixes that and costs every phone 48 KB for a strip no
+											    phone ever sees, because the scene needs 901px. The
+											    driver only ever runs above that width. */}
 											<img
 												src={`/img/walkthrough/wp-${String(n).padStart(2, "0")}.jpg`}
 												alt=""
@@ -452,6 +461,12 @@ export default function Recreation() {
 
 						{/* 16/10.5, not a circle. */}
 						<span className={styles.webcam}>
+							{/* No poster attribute: the driver sets one. `preload="none"` and a
+							    src withheld until the reader is inside the band mean this
+							    bordered, shadowed box paints EMPTY until the clip's first frame
+							    decodes — just over a second on a 1.5 Mbps link. A poster in the
+							    markup fixes that and bills every phone 6.9 KB for a bubble no
+							    phone draws, because the scene needs 901px. */}
 							<video
 								ref={cam}
 								className={styles.webcamVideo}
