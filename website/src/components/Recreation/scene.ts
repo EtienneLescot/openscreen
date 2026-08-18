@@ -460,8 +460,17 @@ const ease = (v: number) => {
 /** The three background picks, and the two cursor picks. */
 const BG_PICKS = [2.0, 3.95, 5.8];
 const CURSOR_PICKS = [11.45, 12.55];
-/** Which pack each pick selects, as an index into `CURSORS.themes`. */
-const CURSOR_CHOICE = [0, 2, 1];
+/** Which pack each pick selects, as an index into `CURSORS.themes`: the default
+ *  arrow, then the pink one, then the green.
+ *
+ *  The order is the page's, not the take's. Green is the site's accent, and the
+ *  pack chosen last is the one the recorded pointer wears for the eleven seconds
+ *  of timeline and transcript that follow — so the take ends on it and the pink
+ *  is spent early, while the panel it is being picked in is still the subject.
+ *
+ *  Exported because the pointer has to be on the swatch whose pack the frame
+ *  selects, and the path in `driver.ts` reads this rather than repeating it. */
+export const CURSOR_CHOICE = [0, 1, 2];
 
 export const WALLPAPER_COUNT_SHOWN = 12;
 
