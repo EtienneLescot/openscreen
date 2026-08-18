@@ -1660,10 +1660,22 @@
 		--gut-h: 18px;
 		--cap-h: 96px;
 		--pnl-w: calc(100vw - 2 * var(--gut-h));
+		/* What the pane below the picture needs at its smallest: the palette is
+		   160 tall and the transcript wants a few lines under its header. */
+		--pane-min: 190px;
 
-		--v-w: calc(100vw - 2 * var(--gut-h));
+		/* Full width, but never more height than the box has left once the
+		   caption, the pane and the floor have taken theirs. Taking the width
+		   unconditionally is what broke a 574px window: the picture grew to 302
+		   tall in a box with 512, the pane was left 114 for a palette of 160 —
+		   so it lay over the picture — and the transcript's mask came out at
+		   -20px, which is why that panel was empty. */
+		--v-w: min(
+			calc(100vw - 2 * var(--gut-h)),
+			calc((var(--box-h) - var(--cap-h) - var(--pane-min)) * 1.77778)
+		);
 		--v-h: calc(var(--v-w) * 0.5625);
-		--v-l: var(--gut-h);
+		--v-l: calc((100vw - var(--v-w)) / 2);
 		--v-t: calc(var(--box-top) + var(--cap-h));
 	}
 

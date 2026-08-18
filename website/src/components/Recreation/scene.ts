@@ -546,7 +546,12 @@ export function frameAt(p: number): Frame {
 	const strikeIndex = CUT_INDEX.find((i) => t >= strikeOf(i) - 0.5 && t < strikeOf(i) + 0.35) ?? -1;
 
 	const panelOn = t >= UI_IN && !(t >= PANEL_OFF[0] && t < PANEL_OFF[1]);
-	const paletteOn = t >= 14.75 && t < 19.45;
+	/* The complement of the panel's window, not a second pair of numbers.
+	   Written separately they were 14.75 to 19.45 against the panel's 14.45 to
+	   19.60, which leaves 0.30s at the start and 0.15s at the end where neither
+	   is up and the caption stands alone over an empty column. They are
+	   alternatives: one hands over to the other, and the 0.45s fades overlap. */
+	const paletteOn = t >= PANEL_OFF[0] && t < PANEL_OFF[1];
 
 	return {
 		t,
