@@ -94,10 +94,6 @@ const WRITTEN = [
 	"--wand",
 	"--comment",
 	"--flow-y",
-	"--cam-scale",
-	"--cam-tx",
-	"--cam-ty",
-	"--cam-rot",
 	"--trim-0",
 	"--trim-1",
 	"--trim-2",
@@ -351,14 +347,6 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 			const el = trimEls[i];
 			if (el) el.style.opacity = c.placed ? "1" : "0";
 		});
-
-		// Ken Burns on the webcam, on the footage clock. The minimum scale is a
-		// constraint, not a taste: below ~1.12 the generator's watermark enters
-		// the frame from the right.
-		num("--cam-scale", 1.18 + 0.07 * Math.sin(f.tf * 0.9), 3);
-		num("--cam-tx", 3.4 * Math.sin(f.tf * 0.55) + 1.2 * Math.sin(f.tf * 2.1), 2);
-		num("--cam-ty", 2.6 * Math.cos(f.tf * 0.7) + 0.9 * Math.sin(f.tf * 1.7), 2);
-		num("--cam-rot", 1.3 * Math.sin(f.tf * 0.42), 2);
 
 		// The pointer inside the recording wears the pack the picker selected.
 		if (f.cursorTheme !== lastTheme) {
