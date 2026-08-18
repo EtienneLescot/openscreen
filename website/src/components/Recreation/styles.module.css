@@ -1289,16 +1289,6 @@
 
 /* ═══ FALLBACKS ════════════════════════════════════════════════════════════ */
 
-.figcaption {
-	max-width: 78ch;
-	margin: 26px auto 0;
-	padding: 0 24px;
-	font-size: 12.5px;
-	line-height: 1.6;
-	color: var(--os-muted);
-	text-align: center;
-}
-
 @media (max-width: 900px) {
 	.band {
 		height: auto;
@@ -1310,8 +1300,7 @@
 		overflow: visible;
 	}
 
-	.scene,
-	.figcaption {
+	.scene {
 		display: none;
 	}
 
@@ -1347,8 +1336,7 @@
 		height: auto;
 	}
 
-	.scene,
-	.figcaption {
+	.scene {
 		display: none;
 	}
 
@@ -1369,8 +1357,7 @@
 }
 
 @media (forced-colors: active) {
-	.scene,
-	.figcaption {
+	.scene {
 		display: none;
 	}
 }
