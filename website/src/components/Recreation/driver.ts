@@ -273,10 +273,10 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		cam.preload = "auto";
 		cam.load();
 	};
-	cam.addEventListener("loadeddata", () => {
+	const onCamLoaded = () => {
 		camReady = true;
-	});
-	cam.addEventListener("seeked", () => {
+	};
+	const onCamSeeked = () => {
 		if (camPending !== undefined) {
 			const q = camPending;
 			camPending = undefined;
@@ -286,7 +286,9 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 				// A seek past a not-yet-buffered range throws; the next frame retries.
 			}
 		}
-	});
+	};
+	cam.addEventListener("loadeddata", onCamLoaded);
+	cam.addEventListener("seeked", onCamSeeked);
 	const seekCam = (tf: number) => {
 		if (!camReady || cam.readyState < 2) return;
 		const dur = Number.isFinite(cam.duration) && cam.duration > 0 ? cam.duration : 10;
@@ -429,20 +431,37 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		onScroll();
 	};
 
+	let detached = false;
+
 	measure();
 	// Targets inside a closed pane cannot be measured until it opens, and the
 	// panes open on scroll — so re-measure once the fonts have settled, which is
 	// also when the transcript's words stop moving.
-	document.fonts?.ready.then(measure).catch(() => {
-		// A font that never resolves leaves the first measurement standing.
-	});
+	//
+	// Guarded: the driver re-attaches whenever a SCENE_QUERIES breakpoint is
+	// crossed, and by then `fonts.ready` is already resolved, so an unguarded
+	// `.then` runs a second full measuring pass — five panes opened and closed —
+	// for a driver that has since been thrown away.
+	document.fonts?.ready
+		.then(() => {
+			if (!detached) measure();
+		})
+		.catch(() => {
+			// A font that never resolves leaves the first measurement standing.
+		});
 	window.addEventListener("scroll", onScroll, { passive: true });
 	window.addEventListener("resize", onResize);
 	onScroll();
 
 	return () => {
+		detached = true;
 		window.removeEventListener("scroll", onScroll);
 		window.removeEventListener("resize", onResize);
+		// The video outlives the driver — it is the same element on re-attach —
+		// so listeners left on it accumulate one pair per breakpoint crossing,
+		// each holding a dead driver's closure alive.
+		cam.removeEventListener("loadeddata", onCamLoaded);
+		cam.removeEventListener("seeked", onCamSeeked);
 		if (raf) cancelAnimationFrame(raf);
 	};
 }
