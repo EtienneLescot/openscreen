@@ -74,7 +74,11 @@ export const BEATS = [
 		from: 15.0,
 		to: 19.6,
 		kicker: "Timeline",
-		title: "One click, one pill",
+		/* Not "One click, one pill": the click this beat actually shows is the
+		   wand's, and it places three zooms at once. The claim is the same one —
+		   an edit is an object you can see — but counted the way the screen
+		   counts it. */
+		title: "One click, every zoom placed",
 		sub: "Zooms, speed ramps, trims, comments — each edit lands as a pill on the timeline.",
 	},
 	{
