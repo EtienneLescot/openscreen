@@ -445,10 +445,17 @@ function rulerFor(worldPx) {
 
 /** Width at which the step drops to the next entry down. Below it the 1920 world
  *  applies; at or above it the world is the viewport and the rule re-steps. */
-const WIDE_BREAKPOINT_PX = Math.ceil(
-	(MIN_LABEL_GAP_PX * totalSec) /
-		TICK_STEPS_SEC[TICK_STEPS_SEC.indexOf(rulerFor(1920).stepSec) - 1],
-);
+const wideStep = TICK_STEPS_SEC.indexOf(rulerFor(1920).stepSec);
+// Guarded, because the failure is silent otherwise: at index 0 the lookup below
+// is TICK_STEPS_SEC[-1], the division is NaN, and JSON.stringify writes NaN as
+// `null` — so the breakpoint would ship as null rather than fail the build.
+if (wideStep < 1) {
+	throw new Error(
+		`the 1920 ruler already uses the finest step (${rulerFor(1920).stepSec}s), so there is ` +
+			"no next entry down for the wide breakpoint to be the width of",
+	);
+}
+const WIDE_BREAKPOINT_PX = Math.ceil((MIN_LABEL_GAP_PX * totalSec) / TICK_STEPS_SEC[wideStep - 1]);
 
 const RULER = {
 	minLabelGapPx: MIN_LABEL_GAP_PX,
