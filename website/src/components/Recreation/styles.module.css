@@ -140,10 +140,26 @@
 	--c2x: calc(4.5vw + var(--pnl-w) + 26px);
 	--c2w: calc(96vw - var(--c2x));
 
-	--vw1: min(var(--c2w), (100vh - var(--nav) - 24px - var(--cap-h)) * 1.77778);
+	/* The composite gets its own column's full height.
+	   
+	   It used to be sized against `100vh - nav - cap-h`, which reserves a band
+	   the width of the SCREEN for a caption that only ever occupies the left
+	   column — so the picture was starved of height it was not competing for,
+	   and being 16:9, of width with it. Measured at 1916x844: 1124x632 with
+	   210px stranded to its right and 188 above. The two columns are independent
+	   now, and the picture is centred in what its own column has.
+	   
+	   --gut-v is the breathing room top and bottom. It also un-sticks the
+	   caption, which at a wide, short viewport was landing 12px under the nav. */
+	--gut-v: 28px;
+	--vw1: min(var(--c2w), (100vh - var(--nav) - var(--gut-v) * 2) * 1.77778);
 	--vh1: calc(var(--vw1) * 0.5625);
-	--cap-top1: calc(var(--nav) + (100vh - var(--nav) - 24px - var(--cap-h) - var(--vh1)) / 2);
-	--cell-top1: calc(var(--cap-top1) + var(--cap-h));
+	--cell-top1: calc(
+		var(--nav) + var(--gut-v) + (100vh - var(--nav) - var(--gut-v) * 2 - var(--vh1)) / 2
+	);
+	/* The two columns start together: the caption's cap-height band sits level
+	   with the top of the picture rather than floating above it. */
+	--cap-top1: var(--cell-top1);
 	--vl1: calc(var(--c2x) + (var(--c2w) - var(--vw1)) / 2);
 
 	--cell-topv: calc(var(--nav) + 12px);
