@@ -48,7 +48,6 @@ export interface DriverRefs {
 
 export interface DriverClasses {
 	struck: string;
-	cue: string;
 }
 
 export const SCENE_QUERIES = [
@@ -67,16 +66,17 @@ export function sceneEnabled(): boolean {
 	}
 }
 
-/** Everything `apply` writes, so a driver that shuts down hands the element back
- *  to the stylesheet's resting values rather than freezing mid-ride. */
+/** Every custom property `apply` writes, so a driver that shuts down hands the
+ *  element back to the stylesheet's resting values rather than freezing mid-ride.
+ *  Attributes and classes are handed back by `release` below. */
 const WRITTEN = [
 	"--t",
 	"--tf",
 	"--tl",
-	"--bg",
 	"--fit",
 	"--pad-pct",
 	"--frame-scale",
+	"--win-vis",
 	"--size-pct",
 	"--cur-size",
 	"--size-u",
@@ -105,11 +105,6 @@ const WRITTEN = [
 	"--wand",
 	"--comment",
 	"--k",
-	"--trim-0",
-	"--trim-1",
-	"--trim-2",
-	"--trim-3",
-	"--trim-4",
 ];
 
 const fmtSec = (sec: number) => {
@@ -153,10 +148,38 @@ const TEXTS = [
 ];
 const inAny = (t: number, w: number[][]) => w.some(([a, b]) => t >= a && t < b);
 
+/**
+ * Hands the scene back to the stylesheet.
+ *
+ * Not only the custom properties: `apply` also selects the wallpaper, the
+ * cursor pack and the pointer art with attributes, writes each trim's opacity
+ * inline, and strikes words with a class. A driver that stops — the reader
+ * crossed a breakpoint, or turned reduced motion on mid-ride — has to give all
+ * of it back, or the still it hands over is a frozen frame of the ride rather
+ * than the closing one the stylesheet is written for.
+ *
+ * `data-bg` is restored rather than removed, because there is no resting value
+ * for it in the stylesheet: the wallpaper is chosen by attribute, and the still
+ * shows the one the take ends on. The markup renders the same expression.
+ */
+function release(refs: DriverRefs, cls: DriverClasses): void {
+	const { root, flow } = refs;
+	for (const name of WRITTEN) root.style.removeProperty(name);
+	delete root.dataset.beat;
+	delete root.dataset.cur;
+	delete root.dataset.curSel;
+	root.dataset.bg = String(frameAt(1).bg);
+	for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-trim]"))) {
+		el.style.removeProperty("opacity");
+	}
+	for (const el of Array.from(flow.querySelectorAll<HTMLElement>(`.${cls.struck}`))) {
+		el.classList.remove(cls.struck);
+	}
+}
+
 export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	if (!sceneEnabled()) {
-		for (const name of WRITTEN) refs.root.style.removeProperty(name);
-		delete refs.root.dataset.beat;
+		release(refs, cls);
 		return () => {
 			// Nothing was attached, so there is nothing to detach.
 		};
