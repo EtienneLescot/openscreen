@@ -99,8 +99,16 @@ const TL_IN = 14.65;
  *  One number, read by both. */
 const UI_IN = 0.35;
 
-/** The inspector is up for every beat except the two the palette owns. */
-const PANEL_OFF = [14.45, 19.6] as const;
+/**
+ * The inspector is up for every beat except the one the palette owns — the
+ * timeline beat, read off the beat itself rather than copied.
+ *
+ * The copy said 14.45 where the beat starts at 15.0, and a caption belongs to
+ * the panel it describes: for those 0.55s "A cursor worth watching" stood over
+ * a toolbar with no cursor panel under it. One boundary, written once.
+ */
+const TL_BEAT = BEATS.find((b) => b.id === "timeline")!;
+const PANEL_OFF = [TL_BEAT.from, TL_BEAT.to] as const;
 
 /* ── the transcript ───────────────────────────────────────────────────────── */
 
