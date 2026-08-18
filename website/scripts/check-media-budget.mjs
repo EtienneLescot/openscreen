@@ -27,6 +27,10 @@ const ROOT = resolve(import.meta.dirname, "..");
 const RULES = [
 	{ dir: "static/video", ext: [".mp4"], max: 200_000 },
 	{ dir: "static/img/walkthrough", ext: [".jpg", ".avif"], max: 70_000 },
+	// The cursor packs, copied out of the application's own public/cursors. Each
+	// is a 32-logical sprite at 128px, so a five-figure file here means someone
+	// has shipped a full-resolution source by mistake.
+	{ dir: "static/img/cursors", ext: [".png"], max: 12_000 },
 ];
 
 /**

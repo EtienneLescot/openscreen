@@ -639,6 +639,96 @@ export const CONTROLS = {
 	}
 } as const;
 
+/** The cursor packs the picker shows, each with the application's own hotspot,
+ *  normalised to a fraction of the sprite. */
+export const CURSORS = {
+	"themeCount": 18,
+	"themes": [
+		{
+			"id": "default",
+			"name": "Default",
+			"hotspotX": 0.119,
+			"hotspotY": 0.0874,
+			"src": "/img/cursors/00-arrow.png"
+		},
+		{
+			"id": "pink-glossy-arrow-and-hand-3d",
+			"name": "Pink Glossy Arrow & Hand 3D",
+			"hotspotX": 0.0469,
+			"hotspotY": 0.0469,
+			"src": "/img/cursors/01-arrow.png"
+		},
+		{
+			"id": "spring-gradient",
+			"name": "Spring Gradient",
+			"hotspotX": 0.0469,
+			"hotspotY": 0.5,
+			"src": "/img/cursors/02-arrow.png"
+		},
+		{
+			"id": "black-and-rainbow-stroke-gradient-animated",
+			"name": "Black & Rainbow Stroke Gradient Animated",
+			"hotspotX": 0.05,
+			"hotspotY": 0.96,
+			"src": "/img/cursors/03-arrow.png"
+		},
+		{
+			"id": "among-us-sus-knife-and-red-animated",
+			"name": "Among Us Sus Knife & Red Animated",
+			"hotspotX": 0.1531,
+			"hotspotY": 0.1016,
+			"src": "/img/cursors/04-arrow.png"
+		},
+		{
+			"id": "hollow-knight-and-game-arrow",
+			"name": "Hollow Knight & Game Arrow",
+			"hotspotX": 0.5,
+			"hotspotY": 0.5,
+			"src": "/img/cursors/05-arrow.png"
+		},
+		{
+			"id": "mickey-mouse-black-hand-inflated-glove",
+			"name": "Mickey Mouse Black Hand Inflated Glove",
+			"hotspotX": 0.0781,
+			"hotspotY": 0.5,
+			"src": "/img/cursors/06-arrow.png"
+		},
+		{
+			"id": "sanrio-kuromi-skull-arrow",
+			"name": "Sanrio Kuromi Skull Arrow",
+			"hotspotX": 0.0469,
+			"hotspotY": 0.5,
+			"src": "/img/cursors/07-arrow.png"
+		},
+		{
+			"id": "old-roblox",
+			"name": "Old Roblox",
+			"hotspotX": 0.0781,
+			"hotspotY": 0.0469,
+			"src": "/img/cursors/08-arrow.png"
+		},
+		{
+			"id": "pokemon-neon-gengar",
+			"name": "Pokemon Neon Gengar",
+			"hotspotX": 1,
+			"hotspotY": 0.5,
+			"src": "/img/cursors/09-arrow.png"
+		}
+	],
+	"pointer": {
+		"name": "Default",
+		"hotspotX": 0.3893,
+		"hotspotY": 0.0032,
+		"src": "/img/cursors/mac-pointer.png"
+	},
+	"text": {
+		"name": "Default",
+		"hotspotX": 0.4375,
+		"hotspotY": 0.5333,
+		"src": "/img/cursors/mac-text.png"
+	}
+} as const;
+
 export const TRANSPORT = {
 	"restCurrent": "0:17.5",
 	"endCurrent": "0:24.3",
