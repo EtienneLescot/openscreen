@@ -160,7 +160,21 @@ export default function Recreation() {
 
 	return (
 		<section className={styles.band} ref={band} data-recreation="">
-			<div className={styles.stage} ref={root}>
+			{/* The two cursor sprites are set here rather than in the stylesheet: a
+			    url() inside a CSS module is inlined by webpack as a data URI, and
+			    these two came to a quarter of the site's only render-blocking
+			    resource — paid for on every docs page, which have no stage on them.
+			    The driver writes both properties onto this same element. */}
+			<div
+				className={styles.stage}
+				ref={root}
+				style={
+					{
+						"--shot-cursor": 'url("/img/cursors/01-arrow.png")',
+						"--ui-cursor": 'url("/img/cursors/00-arrow.png")',
+					} as React.CSSProperties
+				}
+			>
 				{/* ═══ THE CAPTIONS ═══ The section's real copy. Above the gate they
 				    share one box and take turns; below it they stack. */}
 				<div className={styles.captions}>

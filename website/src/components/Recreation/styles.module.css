@@ -102,10 +102,15 @@
 	--zoom: 1;
 	--zoom-origin: 52% 58%;
 	--zoom-active: 0;
+	/* --shot-cursor and --ui-cursor are set inline on this element in
+	   index.tsx, not here. Webpack inlines a small url() referenced from a
+	   stylesheet as a data URI, and these two sprites came to 9,139 gzipped
+	   bytes — a quarter of the site's only render-blocking resource, carried
+	   by every docs page, none of which has a .stage on it. The driver writes
+	   both properties to this same element's inline style anyway. */
 	--shot-x: 48;
 	--shot-y: 56;
 	--shot-bounce: 1;
-	--shot-cursor: url("/img/cursors/01-arrow.png");
 	--shot-hx: 4.69;
 	--shot-hy: 4.69;
 	--page-y: -8;
@@ -113,7 +118,6 @@
 	--ui-y: 45;
 	--ui-bounce: 1;
 	--ui-on: 0;
-	--ui-cursor: url("/img/cursors/00-arrow.png");
 	--ui-hx: 11.9;
 	--ui-hy: 8.74;
 	--zooms-placed: 3;
@@ -942,9 +946,10 @@
 	--vis: min(var(--open), var(--shut));
 	opacity: var(--vis);
 	transform: scale(calc(0.82 + var(--vis) * 0.18));
-	transition:
-		opacity 0.25s var(--ease),
-		transform 0.3s var(--ease);
+	/* No transition. --vis is min() of two clamp() ramps off --tf, which the
+	   driver rewrites every rAF, so the `* 8` in those clamps IS the ease;
+	   a transition on top of it eases an eased value and lands late. Same bug
+	   as --tl on .floor and the panel, twice post-mortemed. */
 }
 
 .appSetup,
