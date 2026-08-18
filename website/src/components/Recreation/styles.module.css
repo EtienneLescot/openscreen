@@ -168,6 +168,8 @@
 	--box-top: calc(var(--nav) + var(--gut));
 	--box-bot: calc(100vh - var(--gut) - var(--tl) * var(--tl-h));
 	--box-h: calc(var(--box-bot) - var(--box-top));
+	/* What the column has left for a pane once the caption has taken its share. */
+	--pane-h: calc(var(--box-h) - var(--cap-h));
 
 	/* The picture is 16:9, as wide as the box allows, and centred in it. */
 	--v-w: min(var(--c2w), var(--box-h) * 1.77778);
@@ -298,9 +300,21 @@
 	   and now that the pair is centred on the picture rather than hanging past
 	   it, the difference reads as symmetry instead of overflow. */
 	position: relative;
+	box-sizing: border-box;
 	width: 100%;
 	height: auto;
-	max-height: calc(var(--box-h) - var(--cap-h));
+	/* Multiplied by --panel, so the pane collapses out of the column's flow as
+	   it fades rather than holding its height while invisible. It used to keep
+	   it: during the timeline beat, where the palette owns the column and is
+	   absolute, the column was sized for a panel nobody could see and the
+	   visible group — caption plus palette — sat 124px above the picture it is
+	   supposed to be balanced against. The transition matches the opacity's, so
+	   the two swap in one movement. */
+	max-height: calc(var(--panel) * var(--pane-h));
+	transition:
+		opacity 0.45s var(--ease),
+		max-height 0.45s var(--ease),
+		transform 0.45s var(--ease);
 	overflow: hidden;
 	z-index: 12;
 	border: 1px solid var(--ost-border);
@@ -310,9 +324,6 @@
 	pointer-events: none;
 	opacity: var(--panel);
 	transform: translateY(calc((1 - var(--panel)) * 12px));
-	transition:
-		opacity 0.45s var(--ease),
-		transform 0.45s var(--ease);
 }
 
 .panelHead {
@@ -615,7 +626,7 @@
 	   SLOT variable, which tracked 100vh with no floor: at 1280x640 it left the
 	   window 98px while the fifth strike lands at 117, so on a short screen the
 	   last cut of the demo played below the fade where nobody could see it. */
-	max-height: calc(var(--box-h) - var(--cap-h) - 120px);
+	max-height: calc(var(--pane-h) - 120px);
 	overflow: hidden;
 	-webkit-mask-image: linear-gradient(180deg, #000 88%, transparent);
 	mask-image: linear-gradient(180deg, #000 88%, transparent);
@@ -690,29 +701,37 @@
    Centred in the left column, between the caption and the floor. */
 
 .palette {
-	/* Anchored where the inspector's top is, inside the same column, so the gap
-	   under the caption is the one gap every other beat has. It used to be
-	   centred in the box by a rule of its own — a second way of placing the same
-	   position, which is how it came to sit further from the caption than any
-	   panel does. Absolute, so it does not add to the column's flow: the group's
-	   height stays the caption plus the panel, and the two crossfade in place. */
-	position: absolute;
-	left: 50%;
-	top: var(--cap-h);
+	/* In the column's flow, like the inspector, and collapsing the same way: the
+	   two are alternatives, so whichever is hidden must give its height back or
+	   the column is sized for something nobody sees. Absolute, it never counted
+	   at all and the visible pair sat 79px below the picture; in flow with the
+	   panel holding its height, 124px above it. In flow with both collapsing,
+	   the column is exactly the caption plus whichever pane is up. */
+	position: relative;
+	margin: 0 auto;
+	width: max-content;
 	z-index: 12;
 	display: grid;
 	grid-template-columns: repeat(3, 66px);
 	gap: 8px;
-	padding: 9px;
-	border: 1px solid var(--ost-border);
 	border-radius: 22px;
 	background: color-mix(in srgb, var(--ost-surface) 90%, transparent);
 	box-shadow: var(--ost-elev-pop), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-	transform: translateX(-50%) translateY(calc((1 - var(--palette)) * -16px));
+	/* The padding and the border collapse with the box, not just its content:
+	   max-height alone left 20px of column standing for a palette that is not
+	   there, and that is half a caption's worth of drift on the four beats where
+	   the inspector is the one showing. 220px clears two rows of 66 plus gaps. */
+	box-sizing: border-box;
+	padding: calc(var(--palette) * 9px);
+	border: calc(var(--palette) * 1px) solid var(--ost-border);
+	max-height: calc(var(--palette) * 220px);
+	overflow: hidden;
+	transform: translateY(calc((1 - var(--palette)) * -16px));
 	opacity: var(--palette);
 	pointer-events: none;
 	transition:
 		opacity 0.45s var(--ease),
+		max-height 0.45s var(--ease),
 		transform 0.45s var(--ease);
 }
 
@@ -1683,8 +1702,11 @@
 	   instead of a column to hang from — so it takes back the vertical -50% the
 	   desktop rule drops in order to anchor under the caption. */
 	.palette {
+		position: absolute;
 		left: 50%;
 		top: calc((var(--v-t) + var(--v-h) + var(--box-bot)) / 2);
+		margin: 0;
+		max-height: none;
 		transform: translateX(-50%) translateY(-50%)
 			translateY(calc((1 - var(--palette)) * -16px));
 	}
