@@ -40,9 +40,14 @@ export default function Home() {
 					</Heading>
 					<p className={styles.tagline}>Native capture, local AI, no paywall.</p>
 					<div className={styles.actions}>
+						{/* Not "Download for macOS". This page's own trio says Windows, macOS
+						    and Linux, and /download offers a .dmg, an .exe, a .deb, an .rpm, a
+						    .pacman, an AppImage and a Nix flake. The label is static, so it was
+						    not adapting to the reader either: it simply told two of the three
+						    platforms that the page's main action was not for them. */}
 						<Link className={styles.primaryCta} to="/download">
 							<Download size={16} />
-							Download for macOS
+							Download
 						</Link>
 						<Link className={styles.secondaryCta} to="/docs/intro">
 							Read the docs
