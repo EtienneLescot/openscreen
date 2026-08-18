@@ -563,7 +563,13 @@
 .flowMask {
 	display: block;
 	position: relative;
-	max-height: calc(var(--pnl-h) - 120px);
+	/* Off the video's box, not off --pnl-h. --pnl-h is the panel's SLOT, which
+	   tracks 100vh with no floor: at 1280x640 it left this window 98px while the
+	   fifth strike lands at 117px, so on short screens the last cut of the demo
+	   played below the fade where nobody could see it. The video's height is the
+	   same number the panel is capped at, and it never collapses that far —
+	   measured 214px at 1280x640, 274px at 1440x700, 417px at 1440x900. */
+	max-height: calc(var(--v-w) * 0.5625 - 120px);
 	overflow: hidden;
 	-webkit-mask-image: linear-gradient(180deg, #000 88%, transparent);
 	mask-image: linear-gradient(180deg, #000 88%, transparent);
@@ -574,6 +580,26 @@
 	font-size: 12.5px;
 	line-height: 1.9;
 	color: var(--ost-fg);
+}
+
+/* The tail, bound to viewport height because that is what the window's own
+   max-height is derived from: 214px of transcript at 1280x640 against 417px at
+   1440x900. Hidden by default and revealed upward, so the short screen is the
+   one that is correct by construction rather than the one left to overflow. */
+.word[data-tier] {
+	display: none;
+}
+
+@media (min-height: 820px) {
+	.word[data-tier="2"] {
+		display: inline;
+	}
+}
+
+@media (min-height: 960px) {
+	.word[data-tier="3"] {
+		display: inline;
+	}
 }
 
 .word,
