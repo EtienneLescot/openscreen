@@ -301,6 +301,8 @@
 	   it, the difference reads as symmetry instead of overflow. */
 	position: relative;
 	box-sizing: border-box;
+	display: flex;
+	flex-direction: column;
 	width: 100%;
 	height: auto;
 	/* Multiplied by --panel, so the pane collapses out of the column's flow as
@@ -346,6 +348,12 @@
 
 .panelBody {
 	padding: 13px 15px 15px;
+	/* A column, so the pane that can fill takes what the head leaves instead of
+	   guessing at it. */
+	flex: 1;
+	min-height: 0;
+	display: flex;
+	flex-direction: column;
 }
 
 .pane {
@@ -619,14 +627,27 @@
 
 /* ── transcript pane ── */
 
+/* The transcript is the one pane that can fill its panel, so it is a column
+   too and its mask takes what is left. Both used to be a subtraction — the
+   panel's height less 120px on the desktop and less 134 in portrait — for a
+   head and paddings that measure about 73. The difference was dead space above
+   the floor, and the number had to be re-guessed every time the chrome moved. */
+.stage[data-beat="transcript"] .pane[data-pane="transcript"] {
+	display: flex;
+	flex-direction: column;
+	flex: 1;
+	min-height: 0;
+}
+
 .flowMask {
 	display: block;
 	position: relative;
+	flex: 1;
+	min-height: 0;
 	/* Off the box, like everything else. This was sized against the panel's old
 	   SLOT variable, which tracked 100vh with no floor: at 1280x640 it left the
 	   window 98px while the fifth strike lands at 117, so on a short screen the
 	   last cut of the demo played below the fade where nobody could see it. */
-	max-height: calc(var(--pane-h) - 120px);
 	overflow: hidden;
 	-webkit-mask-image: linear-gradient(180deg, #000 88%, transparent);
 	mask-image: linear-gradient(180deg, #000 88%, transparent);
@@ -1740,9 +1761,6 @@
 		gap: 3px;
 	}
 
-	.flowMask {
-		max-height: calc(var(--box-bot) - var(--v-t) - var(--v-h) - 134px);
-	}
 }
 
 /* Under 360px there is no honest layout left: the composite would be narrower
