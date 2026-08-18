@@ -92,6 +92,10 @@
 	--t: 26;
 	--tf: 28.4;
 	--tl: 1;
+	/* The resting frame has the interface up, so a reader who never gets a
+	   driver — no JS, reduced motion — sees the captions rather than an
+	   invalid declaration falling back to whatever opacity happens to be. */
+	--intro: 1;
 	--bg: 3;
 	--fit: 0.88;
 	--pad-pct: 30;
@@ -181,6 +185,11 @@
 	width: calc(var(--pnl-w) - 8px);
 	z-index: 11;
 	pointer-events: none;
+	/* Gated with the inspector, on the inspector's own threshold and the
+	   inspector's own timing, so the title does not announce a panel that is not
+	   there yet. The per-beat cross-fade inside carries on independently. */
+	opacity: var(--intro);
+	transition: opacity 0.45s var(--ease);
 }
 
 .cap {
