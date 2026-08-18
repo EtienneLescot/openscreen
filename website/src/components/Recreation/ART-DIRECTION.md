@@ -1,6 +1,6 @@
 # The recreation — art direction
 
-Six settings in two acts, told by the scroll. This replaces an earlier build
+Five settings in two acts, told by the scroll. This replaces an earlier build
 that drew the whole editor at 1:1 in a 1920px scene and flew a camera over it;
 this note records what was wrong with that and what the rules are now, so the
 next pass does not rediscover either.
@@ -45,9 +45,14 @@ media element, no second timebase, nothing that can drift.
 and no palette — which looks like breathing room on paper and like the left half
 of the screen going empty on screen. Two separate passes shipped that bug.
 
-**The hand is a child of the control it operates.** No pointer path in
-percentages of the stage, because such a path has to be re-tuned every time a
-panel moves and is otherwise silently almost-right.
+**The hand is aimed at the control it operates, never at a coordinate.** Both
+pointers name a target — `data-t` for the reader's, `data-shot` for the recorded
+one — and the driver measures it once per resize, then re-expresses it as a
+percentage of the stage each frame. The percentages are the output, not the
+score: a path authored in them has to be re-tuned every time a panel moves and
+is otherwise silently almost-right. The recorded pointer still carries authored
+coordinates for the moments its tip is over nothing nameable — open canvas, the
+travel between two controls.
 
 ## What is real
 
@@ -58,20 +63,33 @@ panel moves and is otherwise silently almost-right.
   way that looks entirely plausible.
 - **The padding slider** moves the composite through `PreviewCanvas.tsx`'s own
   `clamp(1 - (padding/100) * 0.4, 0.4, 1)`, evaluated per frame.
-- **The wallpapers** are the 18 the app ships, and the one selected first is the
-  one `STAGE.wallpaper` names.
-- **The pills** are the document's five: three zoom regions with the scales
-  `effectiveZoomScale` gives them, two trims the agent made. The annotation is
-  the one drawn object — the document holds none, which is exactly why that lane
-  still shows its "Press A" hint.
-- **The transcript** is 103 words and 3 silences from the app's own
-  `buildClipSection`, and the two that strike are the two the document removes.
+- **The wallpapers** are the app's own — twelve of the eighteen it ships, in the
+  design's order — and the first one the take picks is the one `STAGE.wallpaper`
+  names.
+- **The pills' scales and labels** are the document's: `effectiveZoomScale` for
+  the zooms, `toFixed(2)` and all, which is how a hand-typed "1.8×" gives itself
+  away. Their times are not. The document's own edit is two trims at the two ends
+  of a forty-second take — truthful, and almost nothing to look at — so the rail
+  stages nine objects over twenty-six seconds: three zooms, a speed ramp and five
+  trims. The annotation is the one drawn object; the document holds none, which
+  is exactly why that lane still shows its "Press A" hint.
+- **The transcript** is staged for the same reason: 76 tokens against the
+  document's 106, and five of them strike — the three silences and the two
+  filler words. The document's own transcript, as `buildClipSection` builds it,
+  is in `generated.ts`; the pane does not read it.
 - **The picture in the window** is a render of the page the recording was of.
-- **There is no webcam bubble** because `STAGE.webcam` is `null`: the camera
-  track is off in this project.
+- **The webcam bubble** is staged too, and is the one thing on screen the
+  document contradicts rather than merely omits: `cameraTrack.visible` is false,
+  so the bubble plays a clip of its own.
 
 `generated.ts` carries all of it and is emitted by `scripts/gen-recreation.mjs`.
-Never edit it by hand; `--check` fails the build when it drifts.
+Never edit it by hand — run the generator and let the formatter have it.
+
+`--check` cannot be trusted as it stands: it byte-compares its own output with
+the committed file, and the committed file has been through biome (lint-staged
+formats it on the way in), so it reports drift on a file nobody touched. It is
+not wired into CI either. Either the generator should emit what biome would
+leave, or the formatter should be told to skip a generated file.
 
 ## Verifying
 

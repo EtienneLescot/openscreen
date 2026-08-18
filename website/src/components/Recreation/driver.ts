@@ -503,9 +503,10 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	const camSrc = "/video/webcam.mp4";
 
 	// Set at attach, not in the markup and not in primeCam: in the markup every
-	// phone fetches it for a bubble it never draws, and in primeCam it would
+	// reader who never reaches the band pays for it, and in primeCam it would
 	// race the clip it exists to stand in for. Here it has the whole approach to
-	// the band to arrive, and the driver only ever attaches above 901px.
+	// the band to arrive — and on a phone, where the scene does run (the gate is
+	// 360px), it is still only fetched by a reader who scrolls into it.
 	cam.poster = "/img/walkthrough/webcam-poster.jpg";
 	const primeCam = () => {
 		if (cam.getAttribute("src")) return;
@@ -539,8 +540,8 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 
 	   Warmed here rather than in the markup: this runs on the same in-band gate
 	   that primes the clip, so it costs nothing until the reader is actually
-	   arriving, and nothing at all below 901px, where the driver never attaches
-	   and the strip is never drawn. */
+	   arriving, and nothing at all below 360px, where the driver never attaches
+	   and the still fallback stands in. */
 	let stripPrimed = false;
 	const primeStrip = () => {
 		if (stripPrimed) return;
