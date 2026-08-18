@@ -109,6 +109,11 @@ const { effectiveZoomScale, ZOOM_DEPTH_SCALES } = await appModule(
 const { buildClipSection, isSilenceWord, SILENCE_THRESHOLD_SEC } = await appModule(
 	"src/lib/ai-edition/timeline/aggregated-transcript.ts",
 );
+// Importable as-is: its only import is `import type { NativeCursorType }`, which
+// Node's type stripping removes, so the `@/` alias never has to resolve.
+const { CURSOR_THEMES, DEFAULT_CURSOR_SPRITES, DEFAULT_CURSOR_THEME_ID } = await appModule(
+	"src/lib/cursor/cursorThemes.ts",
+);
 
 // ── locale access that fails loudly ─────────────────────────────────────
 const locale = (ns) =>
@@ -786,6 +791,60 @@ const CONTROLS = {
 	),
 };
 
+/**
+ * The cursor packs the Cursor panel's picker shows, and the two macOS shapes the
+ * demonstration pointer swaps to.
+ *
+ * Every one is a pack the application actually ships in `public/cursors/`, with
+ * the hotspot the application actually uses — which is the whole reason to read
+ * this table rather than eyeball a `transform-origin`. The two sources spell
+ * hotspots differently and that is the trap: `DEFAULT_CURSOR_SPRITES` stores
+ * fractions of the image (0.119), while a theme stores the same quantity against
+ * the ~32-logical reference the file header describes (1.5, i.e. 1.5/32). Both
+ * are normalised to a fraction here, once.
+ */
+const CURSOR_PICKER = [
+	DEFAULT_CURSOR_THEME_ID,
+	"pink-glossy-arrow-and-hand-3d",
+	"spring-gradient",
+	"black-and-rainbow-stroke-gradient-animated",
+	"among-us-sus-knife-and-red-animated",
+	"hollow-knight-and-game-arrow",
+	"mickey-mouse-black-hand-inflated-glove",
+	"sanrio-kuromi-skull-arrow",
+	"old-roblox",
+	"pokemon-neon-gengar",
+];
+
+const REF = 32;
+const frac = (v) => Number((v > 1 ? v / REF : v).toFixed(4));
+
+function cursorSprite(id, kind) {
+	if (id === DEFAULT_CURSOR_THEME_ID) {
+		const a = DEFAULT_CURSOR_SPRITES[kind];
+		if (!a) throw new Error(`default sprites have no ${kind}`);
+		return { name: "Default", hotspotX: frac(a.hotspotX), hotspotY: frac(a.hotspotY) };
+	}
+	const theme = CURSOR_THEMES.find((t) => t.id === id);
+	if (!theme) throw new Error(`unknown cursor theme ${id} — it is not in CURSOR_THEMES`);
+	const a = theme.assets[kind];
+	if (!a) throw new Error(`cursor theme ${id} ships no ${kind} sprite`);
+	return { name: theme.name, hotspotX: frac(a.hotspotX), hotspotY: frac(a.hotspotY) };
+}
+
+const CURSORS = {
+	themeCount: CURSOR_THEMES.length + 1,
+	themes: CURSOR_PICKER.map((id, i) => ({
+		id,
+		...cursorSprite(id, "arrow"),
+		src: `/img/cursors/${String(i).padStart(2, "0")}-arrow.png`,
+	})),
+	// The demonstration pointer over a control and over text. Default pack only:
+	// a theme may ship an arrow and a pointer, and none ships a text caret.
+	pointer: { ...cursorSprite(DEFAULT_CURSOR_THEME_ID, "pointer"), src: "/img/cursors/mac-pointer.png" },
+	text: { ...cursorSprite(DEFAULT_CURSOR_THEME_ID, "text"), src: "/img/cursors/mac-text.png" },
+};
+
 const PANELS = {
 	background: {
 		title: t("settings:background.title"),
@@ -1151,6 +1210,10 @@ export const EFFECTS = ${lit(EFFECTS)} as const;
 /** Every slider and toggle on those panels, at this document's settings, scaled
  *  and suffixed the way RightPanes.tsx scales and suffixes it. */
 export const CONTROLS = ${lit(CONTROLS)} as const;
+
+/** The cursor packs the picker shows, each with the application's own hotspot,
+ *  normalised to a fraction of the sprite. */
+export const CURSORS = ${lit(CURSORS)} as const;
 
 export const TRANSPORT = ${lit(TRANSPORT)} as const;
 export const TOOLBAR = ${lit(TOOLBAR)} as const;
