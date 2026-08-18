@@ -63,7 +63,7 @@ function RecordPanel() {
 							src="/img/walkthrough/canvas-bg-1.jpg"
 							alt=""
 							width={1200}
-							height={1200}
+							height={675}
 							loading="lazy"
 							decoding="async"
 						/>
@@ -160,7 +160,7 @@ function CaptionsPanel() {
 					src="/img/walkthrough/canvas-bg-2.jpg"
 					alt=""
 					width={1200}
-					height={1200}
+					height={675}
 					loading="lazy"
 					decoding="async"
 				/>

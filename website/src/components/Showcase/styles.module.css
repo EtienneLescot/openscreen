@@ -568,7 +568,14 @@
 }
 
 /* The plate the app burns into the render: literal in both themes, because it
-   is drawn over video and not over the page. */
+   is drawn over video and not over the page.
+
+   No backdrop-filter, though the app's own plate has one. It always sits over
+   the bottom of the wallpaper — the drawn window stops at 70% and the plate
+   starts at 91% — so its backdrop is a smooth gradient, and blurring a smooth
+   gradient returns the same gradient. Measured: removing the blur moved 0.8%
+   of the panel's pixels by a mean of 0.13/255, all of them on the plate's own
+   edge. It bought a compositing layer and a backdrop read-back for that. */
 .capLine {
 	position: absolute;
 	left: 50%;
@@ -578,7 +585,6 @@
 	padding: 10px 18px;
 	border-radius: 10px;
 	background: rgba(8, 10, 13, 0.72);
-	backdrop-filter: blur(12px);
 	font-size: 18px;
 	font-weight: 700;
 	letter-spacing: -0.01em;
