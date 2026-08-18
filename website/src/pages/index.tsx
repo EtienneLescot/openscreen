@@ -30,13 +30,16 @@ export default function Home() {
 			</Head>
 			<header className={styles.hero}>
 				<div className={styles.heroInner}>
-					<span className={styles.badge}>Pre-release · work in progress</span>
-					{/* The descriptor sits inside the h1 rather than in the paragraph
-					    below it: the brand name alone gave the page's only h1 no
-					    subject. Rendered as a block at the old tagline's size, so the
-					    visual hierarchy is unchanged — big wordmark, descriptor under it. */}
+					<p className={styles.badgeRow}>
+						<span className={styles.badgeNew}>NEW</span>
+						<span className={styles.badgeText}>Export faster</span>
+					</p>
+					{/* The descriptor sits inside the h1 rather than in the paragraph below
+					    it: "Screen Recording / Reimagined" alone gives the page's only h1 no
+					    subject, and a search result needs one. */}
 					<Heading as="h1" className={styles.title}>
-						OpenScreen
+						Screen Recording
+						<span className={styles.titleAccent}>Reimagined</span>
 						<span className={styles.titleTagline}>
 							A free, open-source screen recorder and video editor
 						</span>
@@ -45,16 +48,20 @@ export default function Home() {
 					<div className={styles.actions}>
 						<Link className={styles.primaryCta} to="/download">
 							<Download size={16} />
-							Download
+							Download for macOS
 						</Link>
 						<Link className={styles.secondaryCta} to="/docs/intro">
 							Read the docs
 						</Link>
 					</div>
+					{/* Kept from the previous cut, which the design drops. It is the one
+					    line on the page that manages expectations, and a pre-release that
+					    does not say so is the kind of omission that costs trust once. */}
 					<p className={styles.note}>
 						OpenScreen is <strong>not production-grade</strong>. Expect rough edges while we build
 						in the open.
 					</p>
+					<p className={styles.scrollHint}>Scroll to ride the demo</p>
 				</div>
 			</header>
 

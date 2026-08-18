@@ -8,8 +8,14 @@
 	color: var(--os-fg);
 }
 
+/* A full screen, as the design has it: the recreation is meant to begin only
+   once the hero has been scrolled past. */
 .hero {
-	padding: 88px 28px 0;
+	min-height: 100vh;
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	padding: 88px 28px 56px;
 	text-align: center;
 	background: radial-gradient(ellipse 60% 40% at 50% 0%, var(--os-accent-wash), transparent 60%), var(--os-bg);
 }
@@ -365,4 +371,44 @@
 	.quickStart {
 		padding: 0 20px 76px;
 	}
+}
+
+
+/* ---- hero, v4 ---- */
+
+.badgeRow {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	gap: 10px;
+	margin: 0 0 16px;
+}
+
+.badgeNew {
+	display: inline-flex;
+	align-items: center;
+	padding: 3px 10px;
+	border-radius: 999px;
+	background: var(--os-accent);
+	color: #04110b;
+	font-family: var(--ifm-font-family-monospace);
+	font-size: 10.5px;
+	font-weight: 700;
+	letter-spacing: 0.06em;
+}
+
+.badgeText {
+	font-size: 13.5px;
+	color: var(--os-fg-2);
+}
+
+.titleAccent {
+	display: block;
+	color: var(--os-accent);
+}
+
+.scrollHint {
+	margin: 28px 0 0;
+	font-size: 12.5px;
+	color: var(--os-fg-2);
 }
