@@ -1,161 +1,90 @@
 /**
  * The OpenScreen editor, redrawn in live DOM and walked through by the scroll.
  *
- * Six settings in two acts. Act one — background, padding, cursor — needs no
- * timeline to make sense, so it does not draw one: the composite gets the whole
- * stage and the inspector answers beside it. Act two — auto zoom, annotation,
- * transcript — is only meaningful against a timeline, so the timeline slides in
- * once, between the acts, and the composite gives up the height it borrowed.
+ * Five beats in two acts. Act one — background, effects, cursor — is the
+ * composite and one inspector panel, and draws no timeline: those three
+ * settings are legible in a still frame and the picture would rather have the
+ * room. Act two brings the floor in once and keeps it, for the edits that only
+ * mean anything against a timeline.
  *
- * Every string, number and percentage comes from `generated.ts`, which
- * `scripts/gen-recreation.mjs` emits by reading the project document
- * (`fixture-slim.json`, schemaVersion 7), the app's locale files, and the app's
- * own `formatSec` / `effectiveZoomScale` / `buildClipSection`, imported and run.
- * The panels are the app's real panels: `PANELS` carries their titles and
- * `CONTROLS` carries every slider at this document's own setting, scaled and
- * suffixed the way `RightPanes.tsx` scales and suffixes it — cursor size is
- * `size * 10` with one decimal and no unit, which a hand-written panel gets
- * wrong in a way that looks completely plausible.
+ * ── DERIVED, AND STAGED ──────────────────────────────────────────────────────
  *
- * ── ONE CLOCK ────────────────────────────────────────────────────────────────
+ * The chrome is the application's. `PANELS` carries the panel titles by locale
+ * key, `CONTROLS` every slider at the vendored document's own setting — scaled
+ * and suffixed the way `RightPanes.tsx` does it, which is where a hand-written
+ * panel goes plausibly wrong — and `CURSORS` the ten packs the picker shows,
+ * each with the hotspot the renderer actually uses.
  *
- * The scroll is the only clock. `scene.ts` turns scroll position into a `Frame`;
- * `driver.ts` writes that frame to custom properties on one element. There is no
- * media element and no second timebase, so nothing can drift out of step with
- * anything else: the playhead, the pill under it, the composite's magnification
- * and the transcript's cue are four readings of a single number.
+ * The session is staged: the transcript, the trims, the zooms and the speed
+ * ramp are a composed demonstration, not a recording. The figcaption says so.
  *
- * This file renders once and never again. It holds no state and reads no clock.
+ * ── ONE CLOCK, TWO TIMEBASES ─────────────────────────────────────────────────
+ *
+ * The scroll is the only input. `scene.ts` turns scroll position into a `Frame`
+ * carrying both the scene clock and the footage clock — which differ, because a
+ * speed ramp is in the middle of the take. `driver.ts` writes that frame to
+ * custom properties on one element and seeks one video. React renders once.
  *
  * ── ACCESSIBILITY ────────────────────────────────────────────────────────────
  *
- * No focusable node anywhere. The app's controls are real buttons and sliders;
- * recreated as controls they become tab stops that announce actions this page
- * will never perform — a lie told exclusively to the readers least able to check
- * it. Every swatch, slider and pill here is a `<span>`.
+ * No focusable node. The app's controls are real buttons and sliders; recreated
+ * as controls they become tab stops announcing actions this page will never
+ * perform. Every swatch, slider and pill here is a span.
  *
- * One state, not a mutating one. What is exposed is the closing state and is
- * exposed from the first frame: the six claims, the panel titles and control
- * labels, the transcript's 103 words and 3 silence markers as real selectable
- * text, the five pill labels and the three lane hints. What moves is opacity and
- * transform, never the tree. Nothing is announced, nothing flips under a linear
- * reader, and there is no live region.
- *
- * Hidden from the accessibility tree: the wallpaper, the recorded page, both
- * pointers, the window chrome, the ruler, the waveform, the playhead and the
- * transport — pictures of an application, with nothing to read.
+ * What is exposed is the five claims and the transcript's words as real text.
+ * The drawn application — wallpaper, window, pointers, ruler, waveform,
+ * playhead, webcam — is `aria-hidden`: it is a picture of software, and a
+ * screen reader that walked it would recite a hundred nodes of chrome.
  */
 
 import {
-	ChevronRight,
-	CircleHelp,
+	Clock,
+	Crosshair,
 	MessageSquare,
-	MousePointer2,
-	Scissors,
+	SplitSquareHorizontal,
 	Wand2,
 	ZoomIn,
 } from "lucide-react";
 import { useEffect, useRef } from "react";
 
 import { attachDriver, SCENE_QUERIES } from "./driver";
+import { CONTROLS, CURSORS, PANELS } from "./generated";
 import {
-	CONTROLS,
-	INSPECTOR,
+	BEATS,
+	CLIPS,
+	CUT_INDEX,
+	FLOOR_H,
+	K,
 	LANES,
-	META,
-	PANELS,
-	type RecreationPill,
-	RULER,
-	TRANSPORT,
-	WAVEFORM,
-	WORDS,
-} from "./generated";
-import { BEATS, NOTE_AT, NOTE_LEN, WALLPAPER_FROM, WALLPAPER_TO } from "./scene";
+	PLAYHEAD,
+	SPEED,
+	TOKENS,
+	trims,
+	WALLPAPER_COUNT_SHOWN,
+	ZOOMS,
+} from "./scene";
 import styles from "./styles.module.css";
 
-/* ── the copy ─────────────────────────────────────────────────────────────
- * One caption per beat, in the beats' own order. The `id` is what the driver
- * writes to `data-beat`, so the score and the words cannot fall out of order
- * without TypeScript noticing.
- */
+/* ── geometry helpers ─────────────────────────────────────────────────────── */
 
-const CAPTIONS: Record<
-	(typeof BEATS)[number]["id"],
-	{ kicker: string; claim: string; body: string; fact: string }
-> = {
-	background: {
-		kicker: "Background",
-		claim: "Swap what sits behind it.",
-		body: "A recording is a rectangle on a desktop. Put a wallpaper, a colour or a gradient behind it and the composite re-renders as you pick — nothing is baked in until you export.",
-		fact: `${PANELS.background.wallpaperCount} bundled wallpapers · or any image on disk`,
-	},
-	padding: {
-		kicker: "Padding",
-		claim: "Give the window room.",
-		body: "One slider insets the whole composite, corners and shadow included. This document sits at 55%, and the frame you see is that number run through the app's own arithmetic rather than a number that looked about right.",
-		fact: "padding · roundness · shadow · motion blur",
-	},
-	cursor: {
-		kicker: "Cursor",
-		claim: "Your pointer, at your size.",
-		body: "The cursor is not burned into the recording — it is drawn from the captured telemetry, so its style, its size and how hard it smooths are all still yours after the take.",
-		fact: "recorded as telemetry · restyled after the fact",
-	},
-	autozoom: {
-		kicker: "Auto zoom",
-		claim: "Zooms, placed for you.",
-		body: "The wizard reads where the pointer actually went and lays zoom regions on the timeline. Each one carries its own scale, and the picture magnifies exactly while its region is under the playhead.",
-		fact: "three regions · 1.80× to 2.20× · every one editable",
-	},
-	annotation: {
-		kicker: "Annotation",
-		claim: "Pin a note to the second.",
-		body: "Press A and a note lands at the playhead, on its own lane. It travels with the clip: cut something ahead of it and the note moves with the frame it was about.",
-		fact: "own lane · moves with the cut",
-	},
-	transcript: {
-		kicker: "Transcript",
-		claim: "Edit the video like text.",
-		body: "The transcript is the timeline. Delete a word or a silence and the cut lands on the trim lane — this document's two cuts are both dead air the agent found at the ends, and neither one touched the file.",
-		fact: `${INSPECTOR.wordCount} words · ${INSPECTOR.silenceCount} silences · nothing destructive`,
-	},
-};
-
-/* ── the timeline's geometry ──────────────────────────────────────────────
- * One number: how many pixels a second of the document is worth. Every object
- * on the floor is placed with it, and the strip is translated by it, so the
- * whole timeline is one transform per frame rather than 400 repositioned nodes.
- */
-const K = 48;
-const DOC = META.assetDurationSec;
+/** Rail positions are static; only the rail itself is translated. */
 const x = (sec: number) => `${(sec * K).toFixed(1)}px`;
 
-const RULER_LABELS = RULER.variants[0].labels;
-/** The waveform's five opacity buckets; two of them are empty on this recording
- *  (it peaks at 0.4787, so the app's own `0.5 + amp*0.5` never reaches 0.8). */
-const WAVE_PATHS = WAVEFORM.paths.filter((p) => p.bars > 0);
+/** The twelve wallpapers the picker shows, in the design's order. */
+const WALLPAPERS = [2, 5, 8, 11, 1, 4, 6, 7, 9, 10, 12, 13];
+/** The four the background beat steps through, as full-size canvas layers. */
+const CANVAS_BG = [1, 2, 3, 4];
 
-const WALLPAPERS = Array.from({ length: PANELS.background.wallpaperCount }, (_, i) => i + 1);
-/** The ten cursor styles the app's picker offers. Colour is all the recreation
- *  needs: the glyph is the same arrow at every one of them. */
-const CURSOR_STYLES = [
-	"#ffffff",
-	"#f9a8d4",
-	"#475569",
-	"#a78bfa",
-	"#fbbf24",
-	"#f87171",
-	"#e2e8f0",
-	"#4ade80",
-	"#94a3b8",
-	"#38bdf8",
-];
+/** The ruler's half-second ticks and its labelled seconds. */
+const RULER = Array.from({ length: 103 }, (_, i) => (i - 18) / 2).filter((t) => t <= 42);
+
+const fmt = (sec: number) => {
+	const s = Math.max(0, sec);
+	return `${Math.floor(s / 60)}:${(Math.floor(s) % 60).toString().padStart(2, "0")}`;
+};
 
 /* ── small pieces ─────────────────────────────────────────────────────────── */
 
-/** A slider at a value that never moves. The two the reader does move —
- *  Padding and Size — are written out longhand below with a `--pct` the driver
- *  drives, because only those two need a variable at all. */
 function Slider({ label, display, pct }: { label: string; display: string; pct: number }) {
 	return (
 		<span className={styles.control}>
@@ -171,90 +100,48 @@ function Slider({ label, display, pct }: { label: string; display: string; pct: 
 	);
 }
 
-/**
- * The reader's hand, on the control it is operating.
- *
- * It is a child of that control, so it needs no coordinates: the CSS that puts
- * a knob at `left: var(--pad-pct)` puts the hand there too, at every width, and
- * a panel that moves takes its pointer with it. Which one is showing is decided
- * by `data-beat` on the stage; nothing here knows what beat it is in.
- */
-function Hand() {
-	return (
-		<span className={styles.hand} aria-hidden="true">
-			<MousePointer2 size={17} fill="#ffffff" strokeWidth={1.6} />
-		</span>
-	);
-}
-
 function Toggle({ label, on }: { label: string; on: boolean }) {
 	return (
 		<span className={`${styles.control} ${styles.controlRow}`}>
 			<span className={styles.controlLabel}>{label}</span>
-			<span className={`${styles.switch} ${on ? styles.switchOn : ""}`} aria-hidden="true">
-				<span className={styles.switchKnob} />
-			</span>
+			<span className={`${styles.switch} ${on ? styles.switchOn : ""}`} />
 		</span>
 	);
 }
 
-/** Where a slider's knob sits, as a percentage of its own track — the app's
- *  ranges are not all 0–100, and Size starts at 5. */
 const pctOf = (c: { value: number; min: number; max: number }) =>
 	((c.value - c.min) / (c.max - c.min)) * 100;
-
-function Pill({ pill, index }: { pill: RecreationPill; index: number }) {
-	const trim = pill.lane === "trim";
-	return (
-		<span
-			className={`${styles.pill} ${trim ? styles.pillTrim : styles.pillZoom}`}
-			style={{
-				left: x(pill.startSec),
-				width: x(pill.endSec - pill.startSec),
-				// Each pill compares one lane-wide count against its own index, so
-				// fourteen objects arrive over the ride without a single DOM write.
-				["--i" as string]: index,
-			}}
-		>
-			{trim ? (
-				<Scissors className={styles.pillGlyph} size={10} aria-hidden="true" />
-			) : (
-				<ZoomIn className={styles.pillGlyph} size={10} aria-hidden="true" />
-			)}
-			{pill.label}
-		</span>
-	);
-}
 
 /* ── the component ────────────────────────────────────────────────────────── */
 
 export default function Recreation() {
 	const band = useRef<HTMLElement | null>(null);
 	const root = useRef<HTMLDivElement | null>(null);
+	const cam = useRef<HTMLVideoElement | null>(null);
 	const padValue = useRef<HTMLSpanElement | null>(null);
 	const sizeValue = useRef<HTMLSpanElement | null>(null);
-	const zoomValue = useRef<HTMLSpanElement | null>(null);
 	const timeValue = useRef<HTMLSpanElement | null>(null);
+	const cutsValue = useRef<HTMLSpanElement | null>(null);
 	const flow = useRef<HTMLParagraphElement | null>(null);
 
 	useEffect(() => {
 		const refs = {
 			band: band.current,
 			root: root.current,
+			cam: cam.current,
 			padValue: padValue.current,
 			sizeValue: sizeValue.current,
-			zoomValue: zoomValue.current,
 			timeValue: timeValue.current,
+			cutsValue: cutsValue.current,
 			flow: flow.current,
 		};
 		if (Object.values(refs).some((el) => el === null)) return;
-		const classes = { cue: styles.cue, struck: styles.struck };
+		const classes = { struck: styles.struck, cue: styles.cue };
 
-		// The gate is not a one-time decision. A reader who opens the page in a
-		// narrow window and then widens it past 901px gets the stage from CSS the
-		// instant the media query flips; if the driver had checked once at mount
-		// and given up, they would get it frozen at its resting frame, with the
-		// scroll doing nothing, and no way back short of a reload.
+		// The gate is re-checked, not decided once: a reader who opens the page
+		// narrow and widens it past 901px gets the stage from CSS the instant the
+		// query flips, and a driver that had given up at mount would leave it
+		// frozen at its resting frame with the scroll doing nothing.
 		let detach = attachDriver(refs as Parameters<typeof attachDriver>[0], classes);
 		const queries = SCENE_QUERIES.map((q) => window.matchMedia(q));
 		const recheck = () => {
@@ -262,68 +149,52 @@ export default function Recreation() {
 			detach = attachDriver(refs as Parameters<typeof attachDriver>[0], classes);
 		};
 		for (const q of queries) q.addEventListener("change", recheck);
-
 		return () => {
 			for (const q of queries) q.removeEventListener("change", recheck);
 			detach();
 		};
 	}, []);
 
+	const placed = trims(0);
+
 	return (
-		// The figcaption is a sibling of the band, not a child of it. Inside, it
-		// would sit in flow directly after the sticky stage's own 100vh box — that
-		// is, one viewport into a six-viewport band — and show through the stage
-		// for the rest of the ride.
 		<>
 			<section className={styles.band} ref={band} data-recreation="">
 				<div className={styles.stage} ref={root}>
-					{/* ═══ THE CAPTION ═══ Real headings, in the beats' order. Where the
-				    scene is off, these are all this section is: a plain list of six
-				    claims in ordinary flow. */}
+					{/* ═══ THE CAPTIONS ═══ The section's real copy. Above the gate they
+					    share one box and take turns; below it they stack. */}
 					<div className={styles.captions}>
-						{BEATS.map(({ id }) => {
-							const c = CAPTIONS[id];
-							return (
-								<article key={id} className={styles.cap} data-cap={id}>
-									<p className={styles.capKicker}>{c.kicker}</p>
-									<h3 className={styles.capClaim}>{c.claim}</h3>
-									<p className={styles.capBody}>{c.body}</p>
-									<p className={styles.capFact}>{c.fact}</p>
-								</article>
-							);
-						})}
+						{BEATS.map((b) => (
+							<article key={b.id} className={styles.cap} data-cap={b.id}>
+								<p className={styles.capKicker}>{b.kicker}</p>
+								<h3 className={styles.capTitle}>{b.title}</h3>
+								<p className={styles.capSub}>{b.sub}</p>
+							</article>
+						))}
 					</div>
 
-					{/* ═══ THE SCENE ═══ Everything drawn, in one box, so the captions can
-				    be a sibling of it rather than a layer inside it. That is what lets
-				    a reduced-motion reader get both — the claims stacked in ordinary
-				    flow, and the still editor underneath them. */}
-					<div className={styles.scene}>
-						{/* ── the inspector ── */}
+					<div className={styles.scene} aria-hidden="true">
+						{/* ═══ THE INSPECTOR ═══ */}
 						<div className={styles.panel}>
 							<header className={styles.panelHead}>
-								<h4 className={styles.panelTitle} data-pane="background">
+								<h4 className={styles.panelTitle} data-pane="style">
 									{PANELS.background.title}
 								</h4>
-								<h4 className={styles.panelTitle} data-pane="padding">
+								<h4 className={styles.panelTitle} data-pane="effects">
 									{PANELS.effects.title}
 								</h4>
 								<h4 className={styles.panelTitle} data-pane="cursor">
 									{PANELS.cursor.title}
 								</h4>
 								<h4 className={styles.panelTitle} data-pane="transcript">
-									{INSPECTOR.title}
+									Current transcription
 								</h4>
-								<span className={styles.panelGlyphs} aria-hidden="true">
-									<CircleHelp size={14} />
-									<ChevronRight size={14} />
-								</span>
 							</header>
 
 							<div className={styles.panelBody}>
 								{/* ── Background ── */}
-								<div className={styles.pane} data-pane="background">
-									<span className={styles.tabs} aria-hidden="true">
+								<div className={styles.pane} data-pane="style">
+									<span className={styles.tabs}>
 										{PANELS.background.tabs.map((tab, i) => (
 											<span key={tab} className={i === 0 ? styles.tabOn : styles.tab}>
 												{tab}
@@ -332,32 +203,28 @@ export default function Recreation() {
 									</span>
 									<span className={styles.upload}>{PANELS.background.uploadCustom}</span>
 									<span className={styles.swatches}>
-										{WALLPAPERS.map((n) => (
+										{WALLPAPERS.slice(0, WALLPAPER_COUNT_SHOWN).map((n, i) => (
 											<span
 												key={n}
 												className={styles.swatch}
-												// The two the pointer moves between light their own ring
-												// off `--bg`; the other sixteen have no ring at all.
-												data-sel={
-													n === WALLPAPER_FROM ? "from" : n === WALLPAPER_TO ? "to" : undefined
-												}
+												data-t={i < 4 ? `th-${i}` : undefined}
+												style={{ ["--i" as string]: i }}
 											>
 												<img
 													src={`/img/walkthrough/wp-${String(n).padStart(2, "0")}.jpg`}
-													alt={PANELS.background.swatchLabels[n - 1]}
+													alt=""
 													width={240}
 													height={240}
 													loading="lazy"
 													decoding="async"
 												/>
-												{n === WALLPAPER_TO ? <Hand /> : null}
 											</span>
 										))}
 									</span>
 								</div>
 
 								{/* ── Video Effects ── */}
-								<div className={styles.pane} data-pane="padding">
+								<div className={styles.pane} data-pane="effects">
 									<span className={`${styles.control} ${styles.controlLive}`}>
 										<span className={styles.controlHead}>
 											<span className={styles.controlLabel}>{CONTROLS.padding.label}</span>
@@ -365,11 +232,9 @@ export default function Recreation() {
 												{CONTROLS.padding.display}
 											</span>
 										</span>
-										<span className={styles.track}>
+										<span className={styles.track} data-t="padtrk">
 											<span className={`${styles.trackFill} ${styles.trackFillPad}`} />
-											<span className={`${styles.knob} ${styles.knobPad}`}>
-												<Hand />
-											</span>
+											<span className={`${styles.knob} ${styles.knobPad}`} />
 										</span>
 									</span>
 									<Toggle label={CONTROLS.blurBg.label} on={CONTROLS.blurBg.on} />
@@ -395,17 +260,15 @@ export default function Recreation() {
 									<Toggle label={CONTROLS.cursorShow.label} on={CONTROLS.cursorShow.on} />
 									<Toggle label={CONTROLS.clipToBounds.label} on={CONTROLS.clipToBounds.on} />
 									<span className={styles.controlLabel}>{CONTROLS.cursorTheme.label}</span>
-									<span className={styles.cursorStyles} aria-hidden="true">
-										{CURSOR_STYLES.map((colour, i) => (
+									<span className={styles.cursorStyles}>
+										{CURSORS.themes.map((theme, i) => (
 											<span
-												key={colour}
+												key={theme.id}
 												className={styles.cursorStyle}
-												data-sel={i === 0 ? "from" : i === 1 ? "to" : undefined}
-												style={{ color: colour }}
-											>
-												<MousePointer2 size={14} fill="currentColor" />
-												{i === 1 ? <Hand /> : null}
-											</span>
+												data-t={`cur-${i}`}
+												data-i={i}
+												style={{ backgroundImage: `url(${theme.src})` }}
+											/>
 										))}
 									</span>
 									<span className={`${styles.control} ${styles.controlLive}`}>
@@ -415,11 +278,9 @@ export default function Recreation() {
 												{CONTROLS.cursorSize.display}
 											</span>
 										</span>
-										<span className={styles.track}>
+										<span className={styles.track} data-t="sztrk">
 											<span className={`${styles.trackFill} ${styles.trackFillSize}`} />
-											<span className={`${styles.knob} ${styles.knobSize}`}>
-												<Hand />
-											</span>
+											<span className={`${styles.knob} ${styles.knobSize}`} />
 										</span>
 									</span>
 									<Slider
@@ -431,33 +292,26 @@ export default function Recreation() {
 
 								{/* ── Current transcription ── */}
 								<div className={styles.pane} data-pane="transcript">
-									<span className={styles.clipHead}>
-										<span className={styles.clipBadge} aria-hidden="true">
-											{INSPECTOR.indexBadge}
-										</span>
-										<span>
-											<span className={styles.clipName}>{INSPECTOR.filename}</span>
-											<span className={styles.clipRange}>{INSPECTOR.clipRange}</span>
-										</span>
-									</span>
-									{/* The flow is translated under a fixed mask rather than
-							    scrolled, so keeping the cue in view cannot fight the page's
-							    own scrolling. `data-w` is the index into WORDS: the driver
-							    addresses the cue by integer and never matches it by text. */}
 									<span className={styles.flowMask}>
 										<p className={styles.flow} ref={flow}>
-											{WORDS.map((w) =>
-												w.kind === "silence" ? (
+											{TOKENS.map((tok, i) =>
+												tok.silence ? (
 													<span
-														key={w.id}
-														className={`${styles.sil} ${w.kept ? "" : styles.silCut}`}
-														data-w={w.i}
+														key={`${tok.text}-${i}`}
+														className={styles.sil}
+														data-w={i}
+														data-t={`tok-${i}`}
 													>
-														{w.text}
+														{tok.text}
 													</span>
 												) : (
-													<span key={w.id} className={styles.word} data-w={w.i}>
-														{w.text}{" "}
+													<span
+														key={`${tok.text}-${i}`}
+														className={styles.word}
+														data-w={i}
+														data-t={CUT_INDEX.includes(i) ? `tok-${i}` : undefined}
+													>
+														{tok.text}{" "}
 													</span>
 												),
 											)}
@@ -467,130 +321,226 @@ export default function Recreation() {
 							</div>
 						</div>
 
-						{/* ═══ THE TOOL PALETTE ═══ act two's two tools, in the app's own
-				    floating bar. */}
-						<div className={styles.palette} aria-hidden="true">
-							<span className={`${styles.tool} ${styles.toolWand}`}>
-								<Wand2 size={22} />
-								<Hand />
+						{/* ═══ THE TOOL PALETTE ═══ six tools, the app's own bar */}
+						<div className={styles.palette}>
+							<span className={`${styles.tool} ${styles.toolWand}`} data-t="wand">
+								<Wand2 size={30} />
 							</span>
-							<span className={`${styles.tool} ${styles.toolNote}`}>
-								<MessageSquare size={22} />
-								<Hand />
+							<span className={styles.tool}>
+								<SplitSquareHorizontal size={30} />
+							</span>
+							<span className={styles.tool}>
+								<Clock size={30} />
+							</span>
+							<span className={`${styles.tool} ${styles.toolComment}`} data-t="comment">
+								<MessageSquare size={30} />
+							</span>
+							<span className={styles.tool}>
+								<ZoomIn size={30} />
+							</span>
+							<span className={styles.tool}>
+								<Crosshair size={30} />
 							</span>
 						</div>
 
 						{/* ═══ THE COMPOSITE ═══ */}
-						<div className={styles.card} aria-hidden="true">
+						<div className={styles.card}>
 							<div className={styles.cardClip}>
 								<div className={styles.zoomer}>
-									<img className={styles.bg} src="/img/walkthrough/canvas-bg-a.jpg" alt="" />
-									<img className={styles.bgSwap} src="/img/walkthrough/canvas-bg-b.jpg" alt="" />
+									{CANVAS_BG.map((n) => (
+										<img
+											key={n}
+											className={styles.bg}
+											data-i={n - 1}
+											src={`/img/walkthrough/canvas-bg-${n}.jpg`}
+											alt=""
+											loading={n === 1 ? undefined : "lazy"}
+											decoding="async"
+										/>
+									))}
+
+									{/* The recorded window. `--frame-scale` is a uniform scale, not an
+									    inset: the page inside must not reflow while the padding moves. */}
 									<div className={styles.frame}>
 										<div className={styles.chrome}>
 											<span className={styles.lights}>
-												<span /> <span /> <span />
+												<span />
+												<span />
+												<span />
 											</span>
-											<span className={styles.omnibox}>bellrock.dev</span>
+											<span className={styles.omnibox}>fern.garden</span>
 										</div>
 										<div className={styles.viewport}>
-											<img
-												className={styles.page}
-												src="/img/walkthrough/fixture-page.jpg"
-												alt=""
-												width={1024}
-												height={1036}
-											/>
+											<div className={styles.page}>
+												<div className={styles.pageNav}>
+													<span className={styles.pageMark} />
+													<span className={styles.pageBrand}>Fern</span>
+													<span className={styles.pageLinks}>
+														<span>Product</span>
+														<span>Pricing</span>
+														<span>Journal</span>
+													</span>
+													<span className={styles.pageSignIn}>Sign in</span>
+												</div>
+												<div className={styles.pageHero}>
+													<h3>Grow smarter, water less.</h3>
+													<p>
+														Fern watches your plants&apos; soil, light and weather — and waters only
+														when they ask for it.
+													</p>
+													<div className={styles.pageBtns}>
+														<span className={styles.pageCta}>Download the app</span>
+														<span className={styles.pageGhost} data-shot="see">
+															See how it works
+														</span>
+													</div>
+												</div>
+												<div className={styles.pageShot}>
+													<img
+														src="/img/walkthrough/canvas-poster.jpg"
+														alt=""
+														loading="lazy"
+														decoding="async"
+													/>
+													<span className={styles.pageChip}>Live soil data</span>
+												</div>
+												<div className={styles.pageCards}>
+													<span />
+													<span />
+													<span />
+												</div>
+											</div>
+
+											{/* The app the recording opens, half-way through the take. */}
+											<div className={styles.appWin}>
+												<div className={styles.appSetup}>
+													<span className={styles.appLine} />
+													<span className={styles.appLine} />
+													<span className={styles.appBtn}>Pair sensor</span>
+												</div>
+												<div className={styles.appDone}>
+													<span className={styles.appTick} />
+													<span className={styles.appOk}>Sensor paired</span>
+												</div>
+											</div>
 										</div>
 									</div>
-									<MousePointer2 className={styles.shotCursor} size={22} fill="currentColor" />
+
+									{/* The pointer inside the recording, from the captured telemetry —
+									    which is what the Cursor panel restyles. */}
+									<span className={styles.shotCursor} />
 								</div>
 							</div>
+
 							<span className={styles.zoomBadge}>
-								<ZoomIn size={10} />
-								<span ref={zoomValue} />
+								<span className={styles.zoomBadgeText}>{ZOOMS[1].label}</span>
+							</span>
+
+							{/* 16/10.5, not a circle. */}
+							<span className={styles.webcam}>
+								<video
+									ref={cam}
+									className={styles.webcamVideo}
+									muted
+									playsInline
+									preload="none"
+									tabIndex={-1}
+									disableRemotePlayback
+								/>
 							</span>
 						</div>
 
 						{/* ═══ THE FLOOR ═══ */}
-						<div className={styles.timeline} aria-hidden="true">
-							<div className={styles.transport}>
-								<span className={styles.time}>
-									<span ref={timeValue}>0:00.0</span>
-									<span className={styles.timeTotal}> / {TRANSPORT.total}</span>
-								</span>
-							</div>
-
+						<div className={styles.floor}>
 							<div className={styles.floorClip}>
-								{/* The beds and their hints belong to the viewport, not to the
-						    document: an empty lane's shortcut hint stays where the eye
-						    left it while 40 seconds of timeline slide underneath. */}
-								<div className={styles.beds}>
-									{LANES.map((lane) => (
-										<div key={lane.id} className={styles.bed} data-lane={lane.id}>
-											{lane.hint ? <span className={styles.laneHint}>{lane.hint}</span> : null}
-										</div>
-									))}
-								</div>
-
-								<div className={styles.strip} style={{ width: x(DOC) }}>
+								{/* Static positions, one transform. */}
+								<div className={styles.rail}>
 									<div className={styles.ruler}>
-										{RULER_LABELS.map((label) => (
-											<span key={label.sec} className={styles.tick} style={{ left: x(label.sec) }}>
-												{label.text}
-											</span>
-										))}
+										{RULER.map((t) => {
+											const major = Math.round(t * 2) % 4 === 0;
+											return (
+												<span
+													key={t}
+													className={major ? styles.tickMajor : styles.tick}
+													style={{ left: x(t) }}
+												>
+													{major && t >= 0 ? fmt(t) : null}
+												</span>
+											);
+										})}
 									</div>
 
-									{LANES.map((lane) => (
-										<div key={lane.id} className={styles.lane} data-lane={lane.id}>
-											{lane.pills.map((pill, i) => (
-												<Pill key={pill.id} pill={pill} index={i} />
-											))}
-											{/* The note the reader places. The document holds no
-									    annotation regions — which is exactly why this lane
-									    still shows its "Press A" hint — so it is drawn here
-									    rather than read out of `PILLS`. */}
-											{lane.id === "annotation" ? (
-												<span
-													className={`${styles.pill} ${styles.pillNote}`}
-													style={{ left: x(NOTE_AT), width: x(NOTE_LEN) }}
-												>
-													<MessageSquare className={styles.pillGlyph} size={10} />
-													New annotation
-												</span>
-											) : null}
+									{CLIPS.map((c) => (
+										<div
+											key={c.from}
+											className={styles.clip}
+											style={{ left: x(c.from), width: x(c.to - c.from) }}
+										>
+											<span className={styles.clipWave} />
 										</div>
 									))}
 
-									<div className={styles.clipCard}>
-										<svg
-											className={styles.wave}
-											viewBox={WAVEFORM.viewBox}
-											preserveAspectRatio="none"
-											focusable="false"
+									{ZOOMS.map((z, i) => (
+										<span
+											key={z.label + z.from}
+											className={styles.pillZoom}
+											style={{
+												left: x(z.from),
+												width: x(z.to - z.from),
+												["--i" as string]: i,
+											}}
 										>
-											{WAVE_PATHS.map((p) => (
-												<path key={p.opacity} d={p.d} opacity={p.opacity} />
-											))}
-										</svg>
-									</div>
+											{z.label}
+										</span>
+									))}
+
+									<span
+										className={styles.pillSpeed}
+										style={{ left: x(SPEED.from), width: x(SPEED.to - SPEED.from) }}
+									>
+										{SPEED.label}
+									</span>
+
+									{placed.map((c, i) => (
+										<span
+											key={`${c.label}-${c.from}`}
+											className={styles.pillTrim}
+											data-trim=""
+											style={{
+												left: x(c.from),
+												width: x(c.to - c.from),
+												["--i" as string]: i,
+											}}
+										>
+											{c.label}
+										</span>
+									))}
 								</div>
 							</div>
 
-							<span className={styles.playhead}>
+							<span className={styles.playhead} style={{ left: `${PLAYHEAD * 100}%` }}>
 								<span className={styles.playheadHead} />
 							</span>
+
+							<div className={styles.transport}>
+								<span className={styles.time} ref={timeValue}>
+									0:00.0
+								</span>
+								<span className={styles.cuts} ref={cutsValue} />
+							</div>
 						</div>
+
+						{/* The reader's pointer, over the editor. */}
+						<span className={styles.uiCursor} />
 					</div>
 				</div>
 			</section>
 
 			<p className={styles.figcaption}>
-				The editor above is redrawn in your browser from the same project file the photographs on
-				this page were taken from, and from the design tokens the app ships. The picture inside the
-				window is the page that was recorded; the camera track is off in this project, so there is
-				no webcam bubble to draw.
+				The editor above is drawn live in your browser from the design tokens the application ships:
+				the panel titles, every slider&apos;s range and units, the wallpapers and the ten cursor
+				packs are read out of its source rather than typed here. The session it is editing is a
+				staged demonstration, not a recording of one.
 			</p>
 		</>
 	);

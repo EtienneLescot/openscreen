@@ -1,456 +1,273 @@
 /**
- * The editor, recreated — tokens, the two-act staging, and everything the
- * driver's variables land on.
+ * The editor, recreated — tokens, v4's grid, and everything the driver's
+ * variables land on.
+ *
+ * ── THE GRID ─────────────────────────────────────────────────────────────────
+ *
+ * v4 computes its layout in JavaScript from a measured stage. The same
+ * arithmetic is done here in `calc`, which removes the measurement, the resize
+ * handler and the re-render that came with it: a nav band, a 336px inspector, a
+ * 116px caption block, and the composite contained in what is left, centred in
+ * the space between the nav and the floor. The panel's height is locked to the
+ * composite's, which is the alignment the design is built on.
+ *
+ * Lengths here are `vw`/`vh`/px and never `%`. That is not style: a custom
+ * property is substituted as text, so a `%` inside `--video-w` would resolve
+ * against the *height* when that variable is used in a height context, and the
+ * composite would silently mis-size on one axis only. `vw` overstates the stage
+ * by the scrollbar on classic-scrollbar platforms, which is safe because the
+ * stage clips — it cannot produce a horizontal scrollbar the way a `100vw`
+ * child of the document would.
  *
  * ── ONE CLOCK ────────────────────────────────────────────────────────────────
  *
- * There is no scroll-timeline in this file and no `@keyframes` driving state.
- * `driver.ts` turns scroll position into about twenty custom properties on
- * `.stage`, and every rule below is a plain declaration reading one of them.
- * That is the whole animation system. It means a value can be checked by
- * reading one number off the element in devtools, and it means the resting
- * state — what a reader with no JavaScript gets — is just the fallback in each
- * `var()`, spelled out once in `.stage` below.
- *
- * ── HOW IT DEGRADES ──────────────────────────────────────────────────────────
- *
- * The variables' fallbacks ARE the closing state: timeline in, transcript open,
- * every pill placed, no magnification. So a reader with JavaScript off, or with
- * a reduced-motion preference (the driver declines to attach), gets a still,
- * complete, correct editor rather than something stranded at opacity 0. The
- * usual bug in this pattern cannot be written here, because there is no
- * keyframe whose `from` half could leak.
- *
- * Below 901px the editor is not drawn at all — a three-column editor cannot
- * reflow to 320 CSS px without two-dimensional scrolling (SC 1.4.10), and
- * scaled instead its 11px mono lands at ~2.9 effective px. The six claims stay:
- * they stop being a pinned overlay and become an ordinary stacked list, which
- * is why `.captions` is real flow content and not a decorative layer.
- *
- * ── TWO THINGS THAT ARE NOT HERE, ON PURPOSE ─────────────────────────────────
- *
- * No `100vw`, anywhere. html and body compute `overflow-x: visible` with
- * `scrollbar-gutter: auto`, so a `100vw` element tests clean on macOS overlay
- * scrollbars and ships a ~15px horizontal scrollbar to every classic-scrollbar
- * platform.
- *
- * No `backdrop-filter` on anything inside the stage. It is the one effect
- * measured to break the budget on the previous cut — 2.2–3.0x the main-thread
- * work of a whole sweep, a 166 ms worst frame. The panel's glass and the
- * badge's are flat fills at high alpha. `box-shadow` and blurred decorative
- * glows measured free and are kept.
+ * No scroll-timeline and no state-driving `@keyframes`. `driver.ts` turns
+ * scroll position into custom properties on `.stage` and every rule below reads
+ * one. The `var()` fallbacks spelled out on `.stage` ARE the resting state — the
+ * closing frame — so a reader with no JavaScript, or a reduced-motion
+ * preference, gets a still, complete editor rather than something stranded at
+ * opacity 0.
  */
 
 /* ═══ TOKENS ═══════════════════════════════════════════════════════════════
-   The app's dark values, scoped to the recreation and prefixed `--ost-`. They
-   deliberately do NOT alias the site's `--os-*` and do NOT follow the site's
-   light/dark toggle: of 22 tokens checked, all twelve neutrals differ, and
-   `--playhead` has no `--os-*` counterpart at all — which is how an unaudited
-   alias sheet ships the playhead in mint. The site's light `--os-accent` is
-   #0a7d57, darkened for AA; a light-following recreation would put a different
-   green in the pills from the photograph beside them.
+   The app's dark values, prefixed `--ost-`. They deliberately do NOT alias the
+   site's `--os-*` and do not follow its light/dark toggle: of 22 tokens
+   checked, all twelve neutrals differ and `--playhead` has no `--os-*`
+   counterpart at all, which is how an unaudited alias sheet ships the playhead
+   in mint.
 
-   ONE declared divergence from the app: `--ost-meta` is #8b95a3 (the app's
-   `--muted`), not the app's `--meta` #5b6470. Against `--surface-1` #14181f
-   those measure 2.97:1 and 5.87:1. It affects exactly two classes of text —
-   the three empty-lane hints and the ruler labels. SC 1.4.3's Incidental
-   exemption covers text inside a JPEG and does not cover real DOM. */
+   ONE declared divergence: `--ost-meta` is #8b95a3 (the app's `--muted`), not
+   its `--meta` #5b6470. Against `--surface-1` those measure 5.87:1 and 2.97:1,
+   and the ruler's labels are real DOM, which SC 1.4.3's Incidental exemption
+   does not cover. */
 
 .band {
 	--ost-bg: #0a0d12;
 	--ost-surface: #14181f;
-	--ost-surface-1: #14181f;
 	--ost-surface-2: #1c2029;
-	--ost-surface-3: #252a35;
-	--ost-surface-hi: #2b313b;
-
 	--ost-border: #252a35;
 	--ost-border-soft: #1c2029;
 	--ost-border-hi: #3a4150;
-
 	--ost-fg: #e6e9ef;
 	--ost-fg-2: #f3f5f8;
 	--ost-muted: #8b95a3;
-	/* The one divergence. See the block above. */
 	--ost-meta: #8b95a3;
-
+	--ost-faint: #6b7480;
 	--ost-accent: #10b981;
 	--ost-accent-soft: rgba(16, 185, 129, 0.14);
-	--ost-accent-border: rgba(16, 185, 129, 0.26);
 	--ost-accent-ring: rgba(16, 185, 129, 0.32);
-
 	--ost-danger: #f87171;
 	--ost-danger-soft: rgba(248, 113, 113, 0.14);
-
-	--ost-note: #fbbf24;
-	--ost-note-soft: rgba(217, 119, 6, 0.16);
-	--ost-note-border: #d97706;
-
+	--ost-speed: #fbbf24;
+	--ost-speed-soft: rgba(245, 158, 11, 0.13);
+	--ost-speed-border: #b45309;
 	--ost-playhead: #6c55ff;
 	--ost-playhead-glow: rgba(108, 85, 255, 0.68);
-
-	--ost-elev-pop: 0 8px 24px -8px rgba(0, 0, 0, 0.6);
-	--ost-elev-card: 0 1px 2px rgba(0, 0, 0, 0.4), 0 4px 12px -4px rgba(0, 0, 0, 0.5);
-
-	/* The app's own declaration. No `@font-face` ships with this component — the
-	   site has none — so on a machine without Geist Mono the fallback carries
-	   the digits. */
+	--ost-elev-pop: 0 24px 70px -28px rgba(0, 0, 0, 0.75);
 	--ost-font-mono: "Geist Mono", ui-monospace, "SF Mono", Menlo, Monaco, Consolas, monospace;
-
-	/* Pixels per document second. Every object on the floor is placed with it
-	   and the strip is translated by it, so the whole timeline is one transform
-	   per frame rather than four hundred repositioned nodes. */
-	--k: 48;
-
-	/* The floor's vertical plan, in one place — the beds overlay and the lanes
-	   inside the scrolling strip have to agree, and they are not siblings. */
-	--tl-h: 232px;
-	--lane-h: 18px;
 	--ease: cubic-bezier(0.2, 0, 0, 1);
+
+	/* Pixels per second of footage — the rail's only scale. */
+	--k: 90;
+	/* v4's grid constants. */
+	--nav: 72px;
+	--pnl-w: 336px;
+	--cap-h: 116px;
+	--tl-h: 210px;
 
 	position: relative;
 	color: var(--ost-fg);
 }
 
-/* ═══ THE BAND ═════════════════════════════════════════════════════════════ */
-
-/* One viewport per beat, near enough, plus the one the sticky stage occupies.
-   Nothing reads this number: the driver divides by whatever the band's measured
-   travel turns out to be, so changing it re-paces the whole scene and breaks
+/* ═══ THE BAND ═════════════════════════════════════════════════════════════
+   Nine viewports. The ride is paced against whatever this turns out to be, plus
+   one more viewport of overflow, so changing it re-paces the scene and breaks
    nothing. */
 .band {
-	height: 620vh;
+	height: 900vh;
 }
 
 .stage {
-	/* THE RESTING STATE. Every one of these is what the reader sees when no
-	   driver ever runs — reduced motion, no JavaScript, a failed bundle. It is
-	   the closing frame on purpose: the edit finished, not about to start. */
-	--t: 26.5;
+	/* THE RESTING STATE — the closing frame, not a half-built one. */
+	--t: 26;
+	--tf: 28.4;
 	--tl: 1;
-	--doc: 0;
-	--bg: 1;
-	--fit: 0.78;
+	--bg: 3;
+	--fit: 0.88;
+	--pad-pct: 30;
+	--frame-scale: 1;
+	--size-pct: 66;
+	--cur-size: 63.2;
+	--size-u: 1;
 	--zoom: 1;
-	--zoom-x: 60;
-	--zoom-y: 52;
-	--pad-pct: 55;
-	--size-pct: 42;
-	--cur-size: 45;
-	--cur-sel: 1;
-	--shot-x: 44;
-	--shot-y: 52;
-	--page-y: -34;
+	--zoom-origin: 52% 58%;
+	--zoom-active: 0;
+	--shot-x: 48;
+	--shot-y: 56;
+	--shot-bounce: 1;
+	--shot-cursor: url("/img/cursors/01-arrow.png");
+	--shot-hx: 4.69;
+	--shot-hy: 4.69;
+	--page-y: -8;
+	--ui-x: 20;
+	--ui-y: 45;
+	--ui-bounce: 1;
+	--ui-on: 0;
+	--ui-cursor: url("/img/cursors/00-arrow.png");
+	--ui-hx: 11.9;
+	--ui-hy: 8.74;
+	--zooms-placed: 3;
+	--speed-placed: 1;
+	--panel: 1;
 	--palette: 0;
 	--wand: 0;
-	--note-on: 0;
-	--panel: 1;
-	--zooms-placed: 3;
-	--trims-placed: 2;
-	--note-placed: 1;
-	--flow-y: 0;
+	--comment: 0;
+	--cam-scale: 1.2;
+	--cam-tx: 0;
+	--cam-ty: 0;
+	--cam-rot: 0;
+	--trim-0: 1;
+	--trim-1: 1;
+	--trim-2: 1;
+	--trim-3: 1;
+	--trim-4: 1;
+
+	/* ── the grid, once ── */
+	--c2x: calc(4.5vw + var(--pnl-w) + 26px);
+	--c2w: calc(96vw - var(--c2x));
+
+	--vw1: min(var(--c2w), (100vh - var(--nav) - 24px - var(--cap-h)) * 1.77778);
+	--vh1: calc(var(--vw1) * 0.5625);
+	--cap-top1: calc(var(--nav) + (100vh - var(--nav) - 24px - var(--cap-h) - var(--vh1)) / 2);
+	--cell-top1: calc(var(--cap-top1) + var(--cap-h));
+	--vl1: calc(var(--c2x) + (var(--c2w) - var(--vw1)) / 2);
+
+	--cell-topv: calc(var(--nav) + 12px);
+	--avail2: calc(100vh - var(--tl-h) - 12px - var(--cell-topv));
+	--vw2: max(280px, min(var(--c2w), var(--avail2) * 1.77778));
+	--vh2: calc(var(--vw2) * 0.5625);
+	--cell-top2: calc(var(--cell-topv) + var(--cap-h));
+	--pnl-h2: calc(var(--avail2) - var(--cap-h));
+	--vl2: calc(var(--c2x) + (var(--c2w) - var(--vw2)) / 2);
+	--vt2: calc(var(--cell-topv) + (var(--avail2) - var(--vh2)) / 2);
+
+	/* ── the two phases, interpolated on --tl ── */
+	--cap-top: calc(var(--cap-top1) + (var(--cell-topv) - var(--cap-top1)) * var(--tl));
+	--pnl-top: calc(var(--cell-top1) + (var(--cell-top2) - var(--cell-top1)) * var(--tl));
+	--pnl-h: calc(var(--vh1) + (var(--pnl-h2) - var(--vh1)) * var(--tl));
+	--v-l: calc(var(--vl1) + (var(--vl2) - var(--vl1)) * var(--tl));
+	--v-t: calc(var(--cell-top1) + (var(--vt2) - var(--cell-top1)) * var(--tl));
+	--v-w: calc(var(--vw1) + (var(--vw2) - var(--vw1)) * var(--tl));
 
 	position: sticky;
 	top: 0;
 	height: 100vh;
 	overflow: hidden;
 	font-family: var(--ifm-font-family-base);
-	/* Its own containing block for every absolutely-placed part below, and its
-	   own stacking context so the site's navbar keeps winning. */
 	isolation: isolate;
 }
 
-/* Everything drawn, in one box. The captions are its sibling, not a layer
-   inside it, which is what lets the two be separated in the fallbacks. */
 .scene {
 	position: absolute;
 	inset: 0;
 }
 
-/* Below the gate the stage stops being a stage: the captions become an ordinary
-   stacked list and nothing is drawn. A three-column editor cannot reflow to
-   320 CSS px without two-dimensional scrolling, and scaled instead its 11px
-   mono lands at ~2.9 effective px. */
-@media (max-width: 900px) {
-	/* The band's height exists only to give the sticky stage something to scroll
-	   through. With no stage there is nothing to pace, and 620vh of empty
-	   section is six blank screens. */
-	.band {
-		height: auto;
-	}
-
-	.stage {
-		position: static;
-		height: auto;
-		overflow: visible;
-	}
-
-	.scene {
-		display: none;
-	}
-
-	/* "The editor above is redrawn in your browser…" — there is no editor above
-	   at this width. A caption for a picture that was not drawn is worse than no
-	   caption. */
-	.figcaption {
-		display: none;
-	}
-
-	/* Six claims in a column want to read as a list, not as six sections. The
-	   pinned layout gives each one a whole viewport and can afford a 34px claim;
-	   stacked, that size turns the fallback into a wall. */
-	.captions {
-		gap: 26px;
-	}
-
-	.capClaim {
-		font-size: 21px;
-		letter-spacing: -0.015em;
-	}
-
-	.capBody {
-		font-size: 13.5px;
-	}
-
-	.capFact {
-		font-size: 11px;
-	}
-}
-
-@supports not (position: sticky) {
-	.band {
-		height: auto;
-	}
-
-	.stage {
-		position: static;
-		height: auto;
-		overflow: visible;
-	}
-
-	.captions {
-		position: static;
-		width: auto;
-		max-width: 60ch;
-		margin: 0 auto;
-		display: grid;
-		gap: 34px;
-	}
-
-	.cap {
-		position: static;
-		opacity: 1;
-		transform: none;
-	}
-
-	.scene {
-		display: none;
-	}
-
-	.figcaption {
-		display: none;
-	}
-}
-
-/* Forced colors cannot carry any of the tokens above, and a recreation drawn in
-   Canvas/CanvasText is a diagram of an editor rather than a picture of one. The
-   photographs are unfalsifiable; let them show instead. */
-@media (forced-colors: active) {
-	.scene {
-		display: none;
-	}
-
-	.figcaption {
-		display: none;
-	}
-}
-
-/* Reduced motion keeps the picture and gives up the ride.
- *
- * The driver declines to attach, so every variable stays at the resting values
- * declared on `.stage` — which are the closing frame, not a half-built one: the
- * timeline in, the transcript open, both cuts made, every pill placed. What
- * changes here is only where the words go. Pinned, the six captions share one
- * box and take turns; unpinned, nobody is turning them, so they stack above the
- * still editor and are all readable at once. Without this the reduced-motion
- * reader got a correct picture and not one of the six claims.
- */
-@media (prefers-reduced-motion: reduce) {
-	.band {
-		height: auto;
-	}
-
-	.stage {
-		position: static;
-		height: auto;
-		overflow: visible;
-	}
-
-	.captions {
-		position: static;
-		width: auto;
-		max-width: 60ch;
-		margin: 0 auto 44px;
-		padding: 0 28px;
-		display: grid;
-		gap: 34px;
-	}
-
-	.cap {
-		position: static;
-		opacity: 1;
-		transform: none;
-		transition: none;
-	}
-
-	.scene {
-		position: relative;
-		height: 100vh;
-	}
-}
-
-/* ═══ THE CAPTIONS ═════════════════════════════════════════════════════════
-   Above the gate: six articles stacked in one place, one visible at a time.
-   Below it: six articles in ordinary flow, all visible, which is the whole
-   reason they are real headings and paragraphs. */
+/* ═══ THE CAPTIONS ═════════════════════════════════════════════════════════ */
 
 .captions {
 	position: absolute;
-	left: 5%;
-	top: 7vh;
-	/* A measure, not a fraction: the stage is the whole viewport now, and 38% of
-	   a 2560px screen is a 970px line nobody can read. */
-	width: min(34%, 46ch);
+	left: 4.5vw;
+	top: var(--cap-top);
+	width: calc(var(--pnl-w) - 8px);
 	z-index: 11;
 	pointer-events: none;
+	transition: top 0.75s var(--ease);
 }
 
-/* The captions all occupy the same box, so the outgoing one has to be gone
-   before the incoming one arrives — cross-fading two paragraphs on top of each
-   other at 50% each is unreadable for the whole overlap. Out fast, in on a
-   delay that clears it. */
 .cap {
 	position: absolute;
 	left: 0;
 	top: 0;
 	width: 100%;
 	opacity: 0;
-	transform: translateY(10px);
+	transform: translateY(8px);
 	transition:
 		opacity 0.2s var(--ease),
 		transform 0.2s var(--ease);
 }
 
-/* The one the driver named. `data-beat` and `data-cap` carry the same six
-   strings, from the same union in `scene.ts`. */
-.stage[data-beat="background"] .cap[data-cap="background"],
-.stage[data-beat="padding"] .cap[data-cap="padding"],
+.stage[data-beat="style"] .cap[data-cap="style"],
+.stage[data-beat="effects"] .cap[data-cap="effects"],
 .stage[data-beat="cursor"] .cap[data-cap="cursor"],
-.stage[data-beat="autozoom"] .cap[data-cap="autozoom"],
-.stage[data-beat="annotation"] .cap[data-cap="annotation"],
+.stage[data-beat="timeline"] .cap[data-cap="timeline"],
 .stage[data-beat="transcript"] .cap[data-cap="transcript"] {
 	opacity: 1;
 	transform: none;
 	transition:
-		opacity 0.42s var(--ease) 0.18s,
-		transform 0.42s var(--ease) 0.18s;
+		opacity 0.4s var(--ease) 0.16s,
+		transform 0.4s var(--ease) 0.16s;
 }
 
 .capKicker {
 	margin: 0;
 	font-family: var(--ost-font-mono);
-	font-size: 10.5px;
+	font-size: 10px;
 	font-weight: 600;
 	letter-spacing: 0.14em;
 	text-transform: uppercase;
 	color: var(--ost-accent);
 }
 
-.capClaim {
-	margin: 8px 0 0;
-	font-size: clamp(24px, 2.4vw, 34px);
-	font-weight: 700;
-	letter-spacing: -0.028em;
-	line-height: 1.08;
+.capTitle {
+	margin: 6px 0 0;
+	font-size: clamp(19px, 1.6vw, 25px);
+	font-weight: 750;
+	letter-spacing: -0.025em;
+	line-height: 1.1;
 	color: var(--os-fg-emphasis);
 }
 
-.capBody {
-	margin: 10px 0 0;
-	font-size: 14px;
-	line-height: 1.55;
+.capSub {
+	margin: 7px 0 0;
+	max-width: 440px;
+	font-size: 13.5px;
+	line-height: 1.5;
 	color: var(--os-fg-2);
-}
-
-.capFact {
-	margin: 10px 0 0;
-	font-family: var(--ost-font-mono);
-	font-size: 11.5px;
-	color: var(--os-muted);
-}
-
-/* The stacked fallback. */
-@media (max-width: 900px) {
-	.captions {
-		position: static;
-		width: auto;
-		max-width: 60ch;
-		margin: 0 auto;
-		padding: 8px 0 0;
-		display: grid;
-		gap: 34px;
-	}
-
-	.cap {
-		position: static;
-		opacity: 1;
-		transform: none;
-		transition: none;
-	}
 }
 
 /* ═══ THE INSPECTOR ════════════════════════════════════════════════════════ */
 
 .panel {
 	position: absolute;
-	left: 5%;
-	top: calc(7vh + 218px);
-	width: 304px;
-	/* In act one there is no floor, so the panel takes the height the timeline
-	   would have had — which is the difference between showing four of the
-	   eighteen wallpapers and showing most of them. */
-	max-height: calc(93vh - 218px - var(--tl) * var(--tl-h) - 24px);
-	z-index: 12;
+	left: 4.5vw;
+	top: var(--pnl-top);
+	width: var(--pnl-w);
+	height: var(--pnl-h);
 	overflow: hidden;
+	z-index: 12;
 	border: 1px solid var(--ost-border);
 	border-radius: 16px;
-	background: color-mix(in srgb, var(--ost-surface) 94%, transparent);
+	background: color-mix(in srgb, var(--ost-surface) 92%, transparent);
 	box-shadow: var(--ost-elev-pop), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-	/* The Background pane holds all 18 swatches and is taller than the panel, as
-	   it is in the app, where the pane scrolls. Cut with a hard edge it reads as
-	   a rendering bug; faded, it reads as what it is — more below. */
-	-webkit-mask-image: linear-gradient(180deg, #000 calc(100% - 34px), transparent);
-	mask-image: linear-gradient(180deg, #000 calc(100% - 34px), transparent);
 	pointer-events: none;
 	opacity: var(--panel);
-	transform: translateY(calc((1 - var(--panel)) * 14px));
+	transform: translateY(calc((1 - var(--panel)) * 12px));
 	transition:
-		opacity 0.4s var(--ease),
-		transform 0.4s var(--ease);
+		opacity 0.45s var(--ease),
+		transform 0.45s var(--ease),
+		top 0.75s var(--ease),
+		height 0.75s var(--ease);
 }
 
 .panelHead {
-	display: flex;
+	display: grid;
 	align-items: center;
-	gap: 8px;
-	padding: 12px 14px 10px;
+	padding: 13px 15px 11px;
 	border-bottom: 1px solid var(--ost-border-soft);
 }
 
-/* Four titles in one slot: the header does not resize between panes, so the
-   swap is a cross-fade rather than a reflow. */
 .panelTitle {
-	grid-area: t;
+	grid-area: 1 / 1;
 	margin: 0;
 	font-size: 14px;
 	font-weight: 600;
@@ -460,54 +277,35 @@
 	transition: opacity 0.25s var(--ease);
 }
 
-.panelHead {
-	display: grid;
-	grid-template-areas: "t g";
-	grid-template-columns: 1fr auto;
-	align-items: center;
+.panelBody {
+	padding: 13px 15px 15px;
 }
-
-.panelGlyphs {
-	grid-area: g;
-	display: inline-flex;
-	gap: 4px;
-	color: var(--ost-muted);
-}
-
-.panelGlyphs svg {
-	display: block;
-}
-
-/* ═══ PANE SWITCHING ═══════════════════════════════════════════════════════
-   `data-pane` on the body and on the title carry the same beat names. One
-   selector list keeps the two in step; there is no third place to forget. */
 
 .pane {
 	display: none;
-	padding: 12px 14px 14px;
 }
 
-.stage[data-beat="background"] .pane[data-pane="background"],
-.stage[data-beat="padding"] .pane[data-pane="padding"],
+.stage[data-beat="style"] .pane[data-pane="style"],
+.stage[data-beat="effects"] .pane[data-pane="effects"],
 .stage[data-beat="cursor"] .pane[data-pane="cursor"],
-.stage[data-beat="transcript"] .pane[data-pane="transcript"] {
-	display: block;
-}
-
-.stage[data-beat="background"] .panelTitle[data-pane="background"],
-.stage[data-beat="padding"] .panelTitle[data-pane="padding"],
-.stage[data-beat="cursor"] .panelTitle[data-pane="cursor"],
-.stage[data-beat="transcript"] .panelTitle[data-pane="transcript"] {
-	opacity: 1;
-}
-
-/* Resting state: no `data-beat` at all means no driver ran, and the panel shows
-   the transcript — the closing pane. */
+.stage[data-beat="transcript"] .pane[data-pane="transcript"],
 .stage:not([data-beat]) .pane[data-pane="transcript"] {
 	display: block;
 }
 
+.stage[data-beat="style"] .panelTitle[data-pane="style"],
+.stage[data-beat="effects"] .panelTitle[data-pane="effects"],
+.stage[data-beat="cursor"] .panelTitle[data-pane="cursor"],
+.stage[data-beat="transcript"] .panelTitle[data-pane="transcript"],
 .stage:not([data-beat]) .panelTitle[data-pane="transcript"] {
+	opacity: 1;
+}
+
+/* The floor's two beats hand the column to the palette, so the panel keeps its
+   last pane rather than emptying. */
+.stage[data-beat="timeline"] .pane[data-pane="cursor"],
+.stage[data-beat="timeline"] .panelTitle[data-pane="cursor"] {
+	display: block;
 	opacity: 1;
 }
 
@@ -517,7 +315,7 @@
 	display: flex;
 	gap: 4px;
 	padding: 4px;
-	margin-bottom: 11px;
+	margin-bottom: 12px;
 	border-radius: 10px;
 	background: color-mix(in srgb, var(--ost-surface-2) 60%, transparent);
 }
@@ -560,8 +358,10 @@
 	position: relative;
 	aspect-ratio: 1;
 	border-radius: 10px;
-	overflow: visible;
 	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.08);
+	transition:
+		box-shadow 0.25s var(--ease),
+		transform 0.25s var(--ease);
 }
 
 .swatch img {
@@ -572,23 +372,25 @@
 	border-radius: 10px;
 }
 
-/* The two the pointer moves between light their own ring off `--bg`; the other
-   sixteen have no ring at all and no rule that could give them one. */
-.swatch[data-sel]::after {
+/* Selection is a `data-bg` on the stage matched against the swatch's own index.
+   An arithmetic version — opacity from `--i` against `--bg` — reads better and
+   is a trap: postcss-calc cannot fold min()/max() over custom properties and
+   drops the whole declaration, in the production build only. */
+.swatch::after {
 	content: "";
 	position: absolute;
 	inset: -3px;
 	border-radius: 13px;
 	border: 2px solid var(--ost-accent);
-	transition: opacity 0.3s var(--ease);
+	opacity: 0;
+	transition: opacity 0.25s var(--ease);
 }
 
-.swatch[data-sel="from"]::after {
-	opacity: calc(1 - var(--bg));
-}
-
-.swatch[data-sel="to"]::after {
-	opacity: var(--bg);
+.stage[data-bg="0"] .swatch[data-i="0"]::after,
+.stage[data-bg="1"] .swatch[data-i="1"]::after,
+.stage[data-bg="2"] .swatch[data-i="2"]::after,
+.stage[data-bg="3"] .swatch[data-i="3"]::after {
+	opacity: 1;
 }
 
 /* ── shared controls ── */
@@ -596,7 +398,7 @@
 .control {
 	display: block;
 	margin-bottom: 9px;
-	padding: 10px 12px 13px;
+	padding: 10px 13px 14px;
 	border: 1px solid var(--ost-border);
 	border-radius: 11px;
 	background: color-mix(in srgb, var(--ost-surface-2) 40%, transparent);
@@ -607,10 +409,9 @@
 	align-items: center;
 	justify-content: space-between;
 	gap: 12px;
-	padding: 10px 12px;
+	padding: 11px 13px;
 }
 
-/* The two the reader actually moves. */
 .controlLive {
 	border-color: var(--ost-accent);
 	border-width: 1.5px;
@@ -664,8 +465,6 @@
 	box-shadow: 0 1px 4px rgba(0, 0, 0, 0.4);
 }
 
-/* The live pair. Width and left read the same variable, so the fill can never
-   disagree with the knob. */
 .trackFillPad {
 	width: calc(var(--pad-pct) * 1%);
 }
@@ -693,11 +492,8 @@
 	background: rgba(255, 255, 255, 0.14);
 }
 
-.switchOn {
-	background: var(--ost-accent);
-}
-
-.switchKnob {
+.switch::after {
+	content: "";
 	position: absolute;
 	left: 2px;
 	top: 2px;
@@ -707,7 +503,11 @@
 	background: #98a2b3;
 }
 
-.switchOn .switchKnob {
+.switchOn {
+	background: var(--ost-accent);
+}
+
+.switchOn::after {
 	left: auto;
 	right: 2px;
 	background: #fff;
@@ -722,113 +522,58 @@
 	margin: 8px 0 11px;
 }
 
+/* The real packs, drawn from their own sprites. */
 .cursorStyle {
 	position: relative;
-	display: grid;
-	place-items: center;
 	aspect-ratio: 1;
 	border-radius: 9px;
-	background: color-mix(in srgb, var(--ost-surface-2) 55%, transparent);
+	background-color: color-mix(in srgb, var(--ost-surface-2) 55%, transparent);
+	background-repeat: no-repeat;
+	background-position: center;
+	background-size: auto 56%;
 	box-shadow: inset 0 0 0 1px var(--ost-border-soft);
 }
 
-.cursorStyle svg {
-	display: block;
-	stroke: #0b0e13;
-	stroke-width: 1.4;
-}
-
-.cursorStyle[data-sel]::after {
+.cursorStyle::after {
 	content: "";
 	position: absolute;
 	inset: -2.5px;
 	border-radius: 11px;
 	border: 2px solid var(--ost-accent);
-	transition: opacity 0.3s var(--ease);
+	opacity: 0;
+	transition: opacity 0.25s var(--ease);
 }
 
-.cursorStyle[data-sel="from"]::after {
-	opacity: calc(1 - var(--cur-sel));
-}
-
-.cursorStyle[data-sel="to"]::after {
-	opacity: var(--cur-sel);
+.stage[data-cur-sel="0"] .cursorStyle[data-i="0"]::after,
+.stage[data-cur-sel="1"] .cursorStyle[data-i="1"]::after,
+.stage[data-cur-sel="2"] .cursorStyle[data-i="2"]::after {
+	opacity: 1;
 }
 
 /* ── transcript pane ── */
 
-.clipHead {
-	display: flex;
-	align-items: center;
-	gap: 10px;
-	padding-bottom: 8px;
-	border-bottom: 1px solid var(--ost-border-soft);
-}
-
-.clipBadge {
-	width: 22px;
-	height: 22px;
-	flex-shrink: 0;
-	display: inline-flex;
-	align-items: center;
-	justify-content: center;
-	border-radius: 6px;
-	background: var(--ost-accent-soft);
-	color: var(--ost-accent);
-	font-family: var(--ost-font-mono);
-	font-size: 12px;
-	font-weight: 700;
-}
-
-.clipName {
-	display: block;
-	font-size: 12.5px;
-	font-weight: 600;
-	line-height: 1.2;
-	color: var(--ost-fg);
-	overflow: hidden;
-	text-overflow: ellipsis;
-	white-space: nowrap;
-}
-
-.clipRange {
-	display: block;
-	margin-top: 2px;
-	font-family: var(--ost-font-mono);
-	font-size: 10.5px;
-	line-height: 1.3;
-	color: var(--ost-muted);
-}
-
-/* A fixed window with the flow translated under it — a transform, which cannot
-   fight the page's own scrolling the way a scrollTop would. */
 .flowMask {
 	display: block;
 	position: relative;
-	height: 190px;
-	margin-top: 8px;
+	max-height: calc(var(--pnl-h) - 120px);
 	overflow: hidden;
-	-webkit-mask-image: linear-gradient(180deg, transparent, #000 12%, #000 84%, transparent);
-	mask-image: linear-gradient(180deg, transparent, #000 12%, #000 84%, transparent);
+	-webkit-mask-image: linear-gradient(180deg, #000 88%, transparent);
+	mask-image: linear-gradient(180deg, #000 88%, transparent);
 }
 
 .flow {
 	margin: 0;
 	font-size: 12.5px;
-	line-height: 1.95;
+	line-height: 1.9;
 	color: var(--ost-fg);
-	transform: translateY(calc(var(--flow-y) * 1px));
-	transition: transform 0.4s var(--ease);
 }
 
-.word {
-	border-bottom: 2px solid transparent;
-}
-
-/* The entry under the playhead — the app underlines it, and so does this. */
-.cue {
-	border-bottom-color: var(--ost-accent);
-	color: var(--os-fg-emphasis);
+.word,
+.sil {
+	transition:
+		color 0.2s var(--ease),
+		border-color 0.25s var(--ease),
+		background-color 0.25s var(--ease);
 }
 
 .sil {
@@ -842,171 +587,98 @@
 	font-size: 10.5px;
 	line-height: 1.6;
 	color: var(--ost-muted);
-	transition:
-		border-color 0.25s var(--ease),
-		background-color 0.25s var(--ease),
-		color 0.25s var(--ease);
 }
 
-/* Removed by one of the document's two trims — struck when the playhead has
-   passed it, which is the moment the pill lands on the floor below. */
 .struck {
-	border-style: solid;
-	border-color: var(--ost-danger);
-	background: var(--ost-danger-soft);
 	color: var(--ost-danger);
 	font-weight: 600;
 	text-decoration: line-through;
+	opacity: 0.9;
 }
 
-/* `silCut` marks the two the document removes — but only paints them struck
-   when no driver is running. With one, the whole point of the beat is that a
-   silence is intact until the playhead reaches it and the cut then lands on the
-   floor; painting both from the first frame gives that away and makes the
-   trim pills look like they arrive late. */
-.stage:not([data-beat]) .silCut {
+.sil.struck {
 	border-style: solid;
 	border-color: var(--ost-danger);
 	background: var(--ost-danger-soft);
-	color: var(--ost-danger);
-	text-decoration: line-through;
 }
 
-/* ═══ THE HAND ═════════════════════════════════════════════════════════════
-   A child of the control it operates, so it needs no coordinates: whatever CSS
-   places the knob places this. It shows only while its own beat is up, and only
-   once the pointer has "arrived". */
-
-.hand {
-	position: absolute;
-	left: 58%;
-	top: 62%;
-	z-index: 14;
-	display: block;
-	opacity: 0;
-	transform: translate(4px, 6px) scale(0.9);
-	filter: drop-shadow(0 2px 4px rgba(0, 0, 0, 0.55));
-	transition:
-		opacity 0.3s var(--ease),
-		transform 0.3s var(--ease);
-}
-
-.hand svg {
-	display: block;
-	stroke: #0b0e13;
-}
-
-.stage[data-beat="background"] .swatch[data-sel="to"] .hand,
-.stage[data-beat="padding"] .knobPad .hand,
-.stage[data-beat="cursor"] .cursorStyle[data-sel="to"] .hand,
-.stage[data-beat="autozoom"] .toolWand .hand,
-.stage[data-beat="annotation"] .toolNote .hand {
-	opacity: 1;
-	transform: none;
-}
-
-/* Once the size drag begins the hand moves from the style swatch to the knob.
-   Both live inside the Cursor pane, so this is one rule, not a handoff. */
-.stage[data-beat="cursor"] .cursorStyle[data-sel="to"] .hand {
-	opacity: calc(1 - var(--cur-sel));
-}
-
-.stage[data-beat="cursor"] .knobSize .hand {
-	opacity: var(--cur-sel);
-	transform: none;
+.cue {
+	color: var(--os-fg-emphasis);
 }
 
 /* ═══ THE TOOL PALETTE ═════════════════════════════════════════════════════
-   Act two's two tools, in the slot the inspector just left. */
+   Centred in the left column, between the caption and the floor. */
 
 .palette {
 	position: absolute;
-	left: 5%;
-	top: calc(7vh + 218px);
+	left: calc(4.5vw + var(--pnl-w) / 2);
+	top: calc(50vh + (var(--cell-top2) - var(--tl-h)) / 2 - 22px);
 	z-index: 12;
-	display: inline-flex;
-	align-items: center;
+	display: grid;
+	grid-template-columns: repeat(3, 66px);
 	gap: 8px;
 	padding: 9px;
 	border: 1px solid var(--ost-border);
 	border-radius: 22px;
-	background: color-mix(in srgb, var(--ost-surface) 94%, transparent);
+	background: color-mix(in srgb, var(--ost-surface) 90%, transparent);
 	box-shadow: var(--ost-elev-pop), inset 0 1px 0 rgba(255, 255, 255, 0.06);
-	pointer-events: none;
+	transform: translate(-50%, calc(-50% + (1 - var(--palette)) * -16px));
 	opacity: var(--palette);
-	transform: translateY(calc((1 - var(--palette)) * -14px));
+	pointer-events: none;
 	transition:
-		opacity 0.4s var(--ease),
-		transform 0.4s var(--ease);
+		opacity 0.45s var(--ease),
+		transform 0.45s var(--ease);
 }
 
 .tool {
-	position: relative;
-	width: 60px;
-	height: 60px;
+	width: 66px;
+	height: 66px;
 	display: grid;
 	place-items: center;
-	border-radius: 17px;
 	color: var(--ost-muted);
-	transition:
-		background-color 0.25s var(--ease),
-		color 0.25s var(--ease),
-		box-shadow 0.25s var(--ease);
+	border-radius: 17px;
+	background: color-mix(in srgb, var(--ost-surface-2) 70%, transparent);
+	transition: box-shadow 0.2s var(--ease);
 }
 
 .tool svg {
 	display: block;
 }
 
-/* Pressed is solid accent on both, resting is the same neutral on both. An
-   earlier cut gave the wand a soft-accent resting state and the note a
-   soft-accent pressed state, which made the two indistinguishable in the one
-   frame where it matters. */
 .toolWand {
-	background: color-mix(in srgb, var(--ost-accent) calc(var(--wand) * 100%), var(--ost-surface-2));
-	color: color-mix(in srgb, #04110b calc(var(--wand) * 100%), var(--ost-muted));
 	box-shadow: 0 0 0 calc(var(--wand) * 3px) var(--ost-accent-ring);
+	background: color-mix(in srgb, var(--ost-accent-soft) calc(var(--wand) * 100%), color-mix(in srgb, var(--ost-surface-2) 70%, transparent));
 }
 
-.toolNote {
-	background: color-mix(in srgb, var(--ost-accent) calc(var(--note-on) * 100%), var(--ost-surface-2));
-	color: color-mix(in srgb, #04110b calc(var(--note-on) * 100%), var(--ost-muted));
-	box-shadow: 0 0 0 calc(var(--note-on) * 3px) var(--ost-accent-ring);
+.toolComment {
+	box-shadow: 0 0 0 calc(var(--comment) * 3px) var(--ost-accent-ring);
+	background: color-mix(in srgb, var(--ost-accent-soft) calc(var(--comment) * 100%), color-mix(in srgb, var(--ost-surface-2) 70%, transparent));
 }
 
-/* ═══ THE COMPOSITE ════════════════════════════════════════════════════════
-   Act one gives it the whole stage height; act two takes the timeline's share
-   back. Both numbers interpolate on `--tl`, so the move between acts is one
-   continuous change rather than a swap. */
+/* ═══ THE COMPOSITE ════════════════════════════════════════════════════════ */
 
 .card {
 	position: absolute;
-	right: 4.5%;
-	top: calc(50% - var(--tl) * (var(--tl-h) / 2));
-	/* Whichever runs out first — the width left beside the copy, or the height
-	   left above the timeline. The second term is what keeps act two's composite
-	   from growing under the floor when the window is short. */
-	width: min(calc(52% - var(--tl) * 5%), calc((100vh - 130px - var(--tl) * 200px) * 1.62));
-	min-width: 300px;
+	left: var(--v-l);
+	top: var(--v-t);
+	width: var(--v-w);
 	aspect-ratio: 16 / 9;
-	transform: translateY(-50%);
 	border-radius: 16px;
-	/* A hairline and a seated shadow, not a halo. The green glow the first cut
-	   had read as a selection state on something that is not selected. */
 	box-shadow:
-		0 0 0 1px rgba(255, 255, 255, 0.07),
-		0 40px 80px -34px rgba(0, 0, 0, 0.85),
-		0 8px 24px -12px rgba(0, 0, 0, 0.6);
+		0 0 0 1px rgba(16, 185, 129, 0.5),
+		0 0 44px -8px rgba(16, 185, 129, 0.3),
+		0 34px 70px -30px rgba(0, 0, 0, 0.65);
 	z-index: 5;
 	transition:
-		top 0.7s var(--ease),
-		width 0.7s var(--ease);
+		top 0.75s var(--ease),
+		left 0.75s var(--ease),
+		width 0.75s var(--ease);
 }
 
 .cardClip {
 	position: absolute;
 	inset: 0;
-	border-radius: 16px;
+	border-radius: 18px;
 	overflow: hidden;
 	background: #0d1014;
 }
@@ -1014,56 +686,63 @@
 .zoomer {
 	position: absolute;
 	inset: 0;
+	container-type: size;
+	overflow: hidden;
 	transform: scale(var(--zoom));
-	transform-origin: calc(var(--zoom-x) * 1%) calc(var(--zoom-y) * 1%);
+	transform-origin: var(--zoom-origin);
+	transition: transform 0.7s var(--ease);
 }
 
-.bg,
-.bgSwap {
+/* Four wallpapers, cross-fading on `--bg`. Only the one whose index matches is
+   opaque, so the picker's selection and the canvas cannot disagree. */
+.bg {
 	position: absolute;
 	inset: 0;
 	width: 100%;
 	height: 100%;
 	object-fit: cover;
-}
-
-.bgSwap {
-	opacity: var(--bg);
+	opacity: 0;
 	transition: opacity 0.55s var(--ease);
 }
 
-/* The recorded window. `--fit` is `paddingFit` — the app's own
-   `clamp(1 - (padding/100) * 0.4, 0.4, 1)` — and it multiplies the whole block,
-   corners included, exactly as PreviewCanvas does. */
+/* The first one is the floor of the stack, so something is always painted while
+   the others cross-fade over it. */
+.bg[data-i="0"] {
+	opacity: 1;
+}
+
+.stage[data-bg="1"] .bg[data-i="1"],
+.stage[data-bg="2"] .bg[data-i="2"],
+.stage[data-bg="3"] .bg[data-i="3"] {
+	opacity: 1;
+}
+
+/* The recorded window. Scaled, not inset — the page inside must not reflow
+   while the padding slider moves. */
 .frame {
 	position: absolute;
-	left: 50%;
-	top: 50%;
-	width: calc(100% * var(--fit));
-	aspect-ratio: 16 / 9;
-	transform: translate(-50%, -50%);
+	left: 11%;
+	right: 11%;
+	top: 8.5%;
+	bottom: 8.5%;
 	display: flex;
 	flex-direction: column;
 	overflow: hidden;
+	border-radius: 1.1cqw;
 	background: #fbfcfd;
-	/* `cqw` in here would resolve against the nearest ancestor container, which
-	   is not this element — so the radius is plain px scaled by the same `--fit`
-	   that scales the window, and only the children below use container units. */
-	border-radius: calc(var(--fit) * 14px);
-	container-type: size;
-	box-shadow: 0 14px 34px rgba(0, 0, 0, 0.45);
-	transition:
-		width 0.35s var(--ease),
-		border-radius 0.35s var(--ease);
+	box-shadow: 0 4cqh 8cqh rgba(0, 0, 0, 0.5);
+	transform: scale(var(--frame-scale));
+	transform-origin: 50% 50%;
+	font-family: var(--ifm-font-family-base);
 }
 
 .chrome {
 	display: flex;
 	align-items: center;
-	gap: 1.6cqw;
+	gap: 1.2cqw;
 	flex-shrink: 0;
-	height: 7.4cqh;
-	padding: 0 1.6cqw;
+	height: 6.8cqh;
+	padding: 0 1.4cqw;
 	background: #f1f3f6;
 	border-bottom: 1px solid #e3e7ec;
 }
@@ -1077,10 +756,6 @@
 	width: 1.1cqw;
 	height: 1.1cqw;
 	border-radius: 50%;
-	background: #d5dae1;
-}
-
-.lights span:first-child {
 	background: #ff5f57;
 }
 
@@ -1088,7 +763,7 @@
 	background: #febc2e;
 }
 
-.lights span:last-child {
+.lights span:nth-child(3) {
 	background: #28c840;
 }
 
@@ -1096,9 +771,9 @@
 	margin: 0 auto;
 	display: inline-flex;
 	align-items: center;
-	height: 4.6cqh;
-	padding: 0 3cqw;
-	border-radius: 0.9cqw;
+	height: 4.4cqh;
+	padding: 0 1.8cqw;
+	border-radius: 0.8cqw;
 	background: #fff;
 	border: 1px solid #e3e7ec;
 	color: #5f6b7a;
@@ -1114,223 +789,393 @@
 .page {
 	position: absolute;
 	left: 0;
+	right: 0;
 	top: 0;
-	width: 100%;
-	height: auto;
 	transform: translateY(calc(var(--page-y) * 1%));
-	transition: transform 0.35s var(--ease);
+	will-change: transform;
 }
 
-/* The pointer inside the recording, drawn from the captured telemetry — the one
-   the Cursor panel restyles. Its colour and its size are the two controls the
-   reader just moved. */
+.pageNav {
+	display: flex;
+	align-items: center;
+	gap: 2cqw;
+	padding: 2.2cqw 3cqw 1cqw;
+}
+
+.pageMark {
+	width: 1.5cqw;
+	height: 1.5cqw;
+	border-radius: 0.45cqw;
+	background: #10b981;
+}
+
+.pageBrand {
+	font-size: 1.5cqw;
+	font-weight: 700;
+	color: #101828;
+}
+
+.pageLinks {
+	display: flex;
+	gap: 1.8cqw;
+	margin-left: 2cqw;
+	font-size: 1.2cqw;
+	color: #667085;
+}
+
+.pageSignIn {
+	margin-left: auto;
+	display: inline-flex;
+	align-items: center;
+	height: 4.6cqh;
+	padding: 0 1.6cqw;
+	border-radius: 0.7cqw;
+	background: #101828;
+	color: #fff;
+	font-size: 1.15cqw;
+	font-weight: 600;
+}
+
+.pageHero {
+	padding: 2.6cqw 3cqw 0;
+}
+
+.pageHero h3 {
+	margin: 0;
+	font-size: 3.8cqw;
+	font-weight: 750;
+	letter-spacing: -0.025em;
+	line-height: 1.08;
+	color: #101828;
+	max-width: 52cqw;
+}
+
+.pageHero p {
+	margin: 1.4cqw 0 0;
+	font-size: 1.5cqw;
+	line-height: 1.5;
+	color: #667085;
+	max-width: 44cqw;
+}
+
+.pageBtns {
+	display: flex;
+	gap: 1.4cqw;
+	margin-top: 2cqw;
+}
+
+.pageCta,
+.pageGhost {
+	display: inline-flex;
+	align-items: center;
+	height: 5.6cqh;
+	padding: 0 2.2cqw;
+	border-radius: 0.8cqw;
+	font-size: 1.35cqw;
+}
+
+.pageCta {
+	background: #10b981;
+	color: #fff;
+	font-weight: 650;
+}
+
+.pageGhost {
+	border: 1px solid #e3e7ec;
+	color: #344054;
+	font-weight: 550;
+	background: #fff;
+}
+
+.pageShot {
+	position: relative;
+	margin: 2.6cqw 3cqw 0;
+	height: 30cqh;
+	border-radius: 1cqw;
+	overflow: hidden;
+	background: linear-gradient(135deg, #d1fae5 0%, #a7f3d0 45%, #6ee7b7 100%);
+}
+
+.pageShot img {
+	position: absolute;
+	left: 10%;
+	top: 14%;
+	width: 80%;
+	border-radius: 0.9cqw 0.9cqw 0 0;
+	box-shadow: 0 2cqh 6cqh rgba(4, 60, 40, 0.28);
+	border: 1px solid rgba(255, 255, 255, 0.6);
+}
+
+.pageChip {
+	position: absolute;
+	left: 13%;
+	top: 20%;
+	display: inline-flex;
+	align-items: center;
+	padding: 0.5cqw 1.1cqw;
+	border-radius: 999px;
+	background: #065f46;
+	color: #fff;
+	font-size: 1.05cqw;
+	font-weight: 600;
+}
+
+.pageCards {
+	display: flex;
+	gap: 2cqw;
+	padding: 2.4cqw 3cqw 3cqw;
+}
+
+.pageCards span {
+	flex: 1;
+	height: 14cqh;
+	border-radius: 1cqw;
+	border: 1px solid #eceff3;
+	background: linear-gradient(135deg, #f8fafc, #eef2f7);
+}
+
+/* The app the recording opens, half-way through the take. */
+.appWin {
+	position: absolute;
+	left: 32%;
+	top: 24%;
+	width: 36%;
+	height: 52%;
+	z-index: 4;
+	border-radius: 1cqw;
+	background: #fbfcfd;
+	box-shadow: 0 4cqh 10cqh rgba(8, 12, 18, 0.45), 0 0 0 1px rgba(15, 23, 42, 0.08);
+	transform-origin: 26% 42%;
+	/* Open between footage 15.25 and 17.95 — expressed as a window on --tf so it
+	   rides the speed ramp with everything else in the recording. */
+	--open: clamp(0, (var(--tf) - 15.25) * 8, 1);
+	--shut: clamp(0, (17.95 - var(--tf)) * 8, 1);
+	--vis: min(var(--open), var(--shut));
+	opacity: var(--vis);
+	transform: scale(calc(0.82 + var(--vis) * 0.18));
+	transition:
+		opacity 0.25s var(--ease),
+		transform 0.3s var(--ease);
+}
+
+.appSetup,
+.appDone {
+	display: flex;
+	flex-direction: column;
+	gap: 1.6cqh;
+	padding: 2.4cqh 1.8cqw;
+}
+
+.appDone {
+	align-items: center;
+	justify-content: center;
+	opacity: clamp(0, (var(--tf) - 16.55) * 8, 1);
+}
+
+.appSetup {
+	opacity: clamp(0, (16.55 - var(--tf)) * 8, 1);
+}
+
+.appDone,
+.appSetup {
+	position: absolute;
+	inset: 0;
+}
+
+.appLine {
+	height: 1.6cqh;
+	border-radius: 0.4cqw;
+	background: #eef2f7;
+}
+
+.appLine:nth-child(2) {
+	width: 62%;
+}
+
+.appBtn {
+	display: inline-flex;
+	align-items: center;
+	justify-content: center;
+	height: 5.6cqh;
+	border-radius: 0.7cqw;
+	background: #10b981;
+	color: #fff;
+	font-size: 1.3cqw;
+	font-weight: 650;
+}
+
+.appTick {
+	width: 4cqh;
+	height: 4cqh;
+	border-radius: 50%;
+	background: #10b981;
+}
+
+.appOk {
+	font-size: 1.3cqw;
+	font-weight: 600;
+	color: #101828;
+}
+
+/* The pointer inside the recording, wearing the pack the picker selected, at
+   the size the slider set, bouncing on the recording's own clicks. */
 .shotCursor {
 	position: absolute;
-	left: calc(var(--shot-x) * 1%);
-	top: calc(var(--shot-y) * 1%);
-	z-index: 6;
-	/* A percentage of the frame, not `cqw`: postcss-calc cannot fold a container
-	   unit multiplied by a custom property and drops the whole declaration on the
-	   floor during minification — which is a bug that exists only in the
-	   production build. Percentages it understands. */
-	width: calc(var(--cur-size) * 0.055%);
-	height: auto;
-	color: color-mix(in srgb, #f9a8d4 calc(var(--cur-sel) * 100%), #ffffff);
-	stroke: rgba(10, 14, 19, 0.65);
-	stroke-width: 1.3;
-	filter: drop-shadow(0 0.4cqh 0.6cqh rgba(0, 0, 0, 0.4));
-	transition:
-		left 0.3s var(--ease),
-		top 0.3s var(--ease),
-		width 0.35s var(--ease),
-		color 0.3s var(--ease);
+	left: 0;
+	top: 0;
+	z-index: 5;
+	/* A percentage of the composite, not `cqw`: postcss-calc cannot fold a
+	   container unit multiplied by a custom property. */
+	width: calc(3.4% + var(--size-u) * 6%);
+	aspect-ratio: 58 / 73;
+	background: var(--shot-cursor) left top / contain no-repeat;
+	transform: translate(calc(var(--shot-x) * 1cqw), calc(var(--shot-y) * 1cqh))
+		scale(var(--shot-bounce));
+	transform-origin: calc(var(--shot-hx) * 1%) calc(var(--shot-hy) * 1%);
+	filter: drop-shadow(0 0.3cqh 0.5cqh rgba(0, 0, 0, 0.4));
+	will-change: transform;
 }
 
 .zoomBadge {
 	position: absolute;
-	top: 12px;
-	right: 14px;
-	z-index: 7;
+	top: 13px;
+	right: 30px;
+	z-index: 6;
 	display: inline-flex;
 	align-items: center;
 	gap: 5px;
 	padding: 4px 9px;
 	border-radius: 8px;
-	background: rgba(8, 10, 13, 0.72);
-	border: 1px solid rgba(16, 185, 129, 0.6);
+	background: rgba(8, 10, 13, 0.55);
+	border: 1px solid rgba(16, 185, 129, 0.75);
 	color: #34d399;
 	font-family: var(--ost-font-mono);
 	font-size: 10px;
 	font-weight: 600;
-	/* Present exactly while the picture is magnified, and by the same amount. */
-	opacity: clamp(0, calc((var(--zoom) - 1) * 6), 1);
-	transition: opacity 0.3s var(--ease);
+	opacity: var(--zoom-active);
+	transform: translateY(calc((1 - var(--zoom-active)) * -6px));
+	transition:
+		opacity 0.4s var(--ease),
+		transform 0.4s var(--ease);
 }
 
-.zoomBadge svg {
+/* 16/10.5 with a 13px radius — a rounded rectangle, not a bubble. */
+.webcam {
+	position: absolute;
+	right: 24px;
+	bottom: 64px;
+	width: 18%;
+	min-width: 96px;
+	aspect-ratio: 16 / 10.5;
+	border-radius: 13px;
+	overflow: hidden;
+	border: 3px solid rgba(255, 255, 255, 0.35);
+	box-shadow: 0 14px 34px rgba(0, 0, 0, 0.5);
+	z-index: 6;
+}
+
+.webcamVideo {
+	width: 100%;
+	height: 100%;
+	object-fit: cover;
 	display: block;
+	transform: scale(var(--cam-scale)) translate(calc(var(--cam-tx) * 1%), calc(var(--cam-ty) * 1%))
+		rotate(calc(var(--cam-rot) * 1deg));
+	will-change: transform;
 }
 
 /* ═══ THE FLOOR ════════════════════════════════════════════════════════════ */
 
-.timeline {
+.floor {
 	position: absolute;
 	left: 0;
 	right: 0;
 	bottom: 0;
 	height: var(--tl-h);
 	z-index: 8;
-	background: color-mix(in srgb, var(--ost-surface) 96%, transparent);
+	background: color-mix(in srgb, var(--ost-surface) 97%, transparent);
 	border-top: 1px solid var(--ost-border);
-	transform: translateY(calc((1 - var(--tl)) * (var(--tl-h) + 14px)));
-	transition: transform 0.7s var(--ease);
-}
-
-.transport {
-	display: flex;
-	align-items: center;
-	height: 36px;
-	padding: 0 16px;
-	border-bottom: 1px solid var(--ost-border-soft);
-}
-
-.time {
-	font-family: var(--ost-font-mono);
-	font-size: 11.5px;
-	font-weight: 600;
-	color: var(--ost-fg);
-	font-variant-numeric: tabular-nums;
-}
-
-.timeTotal {
-	color: var(--ost-muted);
-	font-weight: 500;
+	contain: layout paint;
+	transform: translateY(calc((1 - var(--tl)) * (var(--tl-h) + 20px)));
+	transition: transform 0.75s var(--ease);
 }
 
 .floorClip {
 	position: absolute;
-	left: 0;
-	right: 0;
-	top: 36px;
-	bottom: 0;
+	inset: 0;
 	overflow: hidden;
-	-webkit-mask-image: linear-gradient(90deg, transparent, #000 3%, #000 97%, transparent);
-	mask-image: linear-gradient(90deg, transparent, #000 3%, #000 97%, transparent);
 }
 
-/* The beds belong to the viewport. */
-.beds {
+/* Static children, one transform. */
+.rail {
 	position: absolute;
 	inset: 0;
-}
-
-.bed {
-	position: absolute;
-	left: 14px;
-	right: 14px;
-	height: var(--lane-h);
-	border-radius: 5px;
-	background: var(--ost-surface-2);
-	box-shadow: inset 0 0 0 1px var(--ost-border-soft);
-	display: flex;
-	align-items: center;
-	padding: 0 8px;
-}
-
-.bed[data-lane="annotation"] {
-	top: 26px;
-}
-.bed[data-lane="speed"] {
-	top: 46px;
-}
-.bed[data-lane="trim"] {
-	top: 66px;
-}
-.bed[data-lane="zoom"] {
-	top: 86px;
-}
-.bed[data-lane="cameraFullscreen"] {
-	top: 106px;
-}
-
-.laneHint {
-	font-size: 10px;
-	color: var(--ost-meta);
-	white-space: nowrap;
-}
-
-/* The annotation lane's hint is the app's way of saying the lane is empty. Once
-   the reader has put a note on it, it is not. */
-.bed[data-lane="annotation"] .laneHint {
-	opacity: calc(1 - var(--note-placed));
-	transition: opacity 0.3s var(--ease);
-}
-
-/* The document. One transform carries all of it. */
-.strip {
-	position: absolute;
 	left: 38%;
-	top: 0;
-	bottom: 0;
-	transform: translateX(calc(var(--doc) * var(--k) * -1px));
+	transform: translate3d(calc(var(--t) * var(--k) * -1px), 0, 0);
+	will-change: transform;
 }
 
 .ruler {
 	position: absolute;
-	left: 0;
-	right: 0;
-	top: 0;
-	height: 22px;
+	inset: 0;
 }
 
-.tick {
+.tick,
+.tickMajor {
 	position: absolute;
-	top: 4px;
-	padding-left: 5px;
-	border-left: 1px solid var(--ost-border-hi);
+	top: 22px;
+	width: 1.5px;
+	height: 9px;
+	background: var(--ost-border);
+}
+
+.tickMajor {
+	background: var(--ost-border-hi);
+	top: 20px;
+	height: 0;
+	width: auto;
+	transform: translateX(-50%);
 	font-family: var(--ost-font-mono);
-	font-size: 10px;
-	line-height: 14px;
-	color: var(--ost-meta);
+	font-size: 10.5px;
+	color: var(--ost-muted);
 	white-space: nowrap;
 }
 
-.lane {
+.clip {
 	position: absolute;
-	left: 0;
-	right: 0;
-	height: var(--lane-h);
+	top: 154px;
+	height: 54px;
+	border-radius: 10px;
+	background: color-mix(in srgb, var(--ost-surface-2) 72%, transparent);
+	border: 1px solid var(--ost-border-hi);
+	box-shadow: inset 0 1px 8px rgba(255, 255, 255, 0.07);
+	box-sizing: border-box;
 }
 
-.lane[data-lane="annotation"] {
-	top: 26px;
-}
-.lane[data-lane="speed"] {
-	top: 46px;
-}
-.lane[data-lane="trim"] {
-	top: 66px;
-}
-.lane[data-lane="zoom"] {
-	top: 86px;
-}
-.lane[data-lane="cameraFullscreen"] {
-	top: 106px;
+.clipWave {
+	position: absolute;
+	left: 13px;
+	right: 13px;
+	top: 30px;
+	height: 9px;
+	background: repeating-linear-gradient(90deg, var(--ost-accent) 0 2px, transparent 2px 7px);
+	opacity: 0.75;
 }
 
-.pill {
+.pillZoom,
+.pillSpeed,
+.pillTrim {
 	position: absolute;
-	top: 0;
-	height: var(--lane-h);
+	height: 22px;
 	box-sizing: border-box;
 	display: inline-flex;
 	align-items: center;
-	gap: 4px;
-	padding: 0 7px;
-	border-radius: 5px;
+	gap: 5px;
+	padding: 0 8px;
+	border-radius: 7px;
 	overflow: hidden;
 	font-family: var(--ost-font-mono);
-	font-size: 10px;
+	font-size: 10.5px;
 	font-weight: 600;
 	white-space: nowrap;
 	transition:
@@ -1338,79 +1183,48 @@
 		transform 0.35s var(--ease);
 }
 
-.pillGlyph {
-	flex-shrink: 0;
-}
-
-/* Each pill compares one lane-wide count against its own index. Fourteen
-   objects arrive over the ride and not one costs a DOM write. */
 .pillZoom {
-	--on: clamp(0, calc(var(--zooms-placed) - var(--i)), 1);
+	top: 118px;
 	background: var(--ost-accent-soft);
 	border: 1.5px solid var(--ost-accent);
 	color: var(--ost-accent);
+	--on: clamp(0, calc(var(--zooms-placed) - var(--i)), 1);
 	opacity: var(--on);
-	transform: translateY(calc((1 - var(--on)) * -6px));
+	transform: translateY(calc((1 - var(--on)) * -8px));
+}
+
+.pillSpeed {
+	top: 66px;
+	background: var(--ost-speed-soft);
+	border: 1.5px solid var(--ost-speed-border);
+	color: var(--ost-speed);
+	opacity: var(--speed-placed);
+	transform: translateY(calc((1 - var(--speed-placed)) * -8px));
 }
 
 .pillTrim {
-	--on: clamp(0, calc(var(--trims-placed) - var(--i)), 1);
+	top: 92px;
 	background: var(--ost-danger-soft);
 	border: 1px solid var(--ost-danger);
 	color: var(--ost-danger);
-	opacity: var(--on);
-	transform: translateY(calc((1 - var(--on)) * -6px));
 }
 
-.pillNote {
-	background: var(--ost-note-soft);
-	border: 1.5px solid var(--ost-note-border);
-	color: var(--ost-note);
-	font-family: var(--ifm-font-family-base);
-	font-size: 10px;
-	opacity: var(--note-placed);
-	transform: translateY(calc((1 - var(--note-placed)) * -6px));
-}
-
-.clipCard {
-	position: absolute;
-	left: 0;
-	top: 132px;
-	right: 0;
-	height: 52px;
-	border-radius: 9px;
-	border: 1.5px solid var(--ost-accent);
-	background: color-mix(in srgb, var(--ost-surface-2) 62%, transparent);
-	box-shadow: inset 0 1px 8px rgba(255, 255, 255, 0.06);
-	overflow: hidden;
-}
-
-/* The generator emits the bars as vertical strokes (`M0.5 46V54`), not as filled
-   shapes — `WAVEFORM.note` spells out why: stroke-width 2 with a non-scaling
-   stroke is what reproduces the app's own `max-width: 2px` bar under a
-   `preserveAspectRatio="none"` stretch. Filled, they render as nothing at all. */
-.wave {
-	position: absolute;
-	inset: 0;
-	width: 100%;
-	height: 100%;
-	fill: none;
-	stroke: var(--ost-accent);
-	stroke-width: var(--wave-stroke, 2);
-}
-
-.wave path {
-	vector-effect: non-scaling-stroke;
+/* Each trim's opacity is written straight onto the element by the driver.
+   `:nth-of-type` looked tidier and is wrong: it counts siblings of the same
+   *element* — and the rail is full of spans for ticks and other pills — so the
+   five rules matched five arbitrary nodes and every trim showed from the first
+   frame. */
+.pillTrim {
+	opacity: 0;
 }
 
 .playhead {
 	position: absolute;
-	left: 38%;
-	top: 26px;
+	top: 2px;
 	bottom: 0;
-	width: 2px;
+	width: 2.5px;
 	transform: translateX(-50%);
-	background: linear-gradient(180deg, var(--ost-playhead) 30%, rgba(108, 85, 255, 0.4));
+	background: linear-gradient(180deg, var(--ost-playhead) 30%, rgba(108, 85, 255, 0.35));
 	box-shadow: 0 0 12px var(--ost-playhead-glow);
 	z-index: 9;
 }
@@ -1418,25 +1232,179 @@
 .playheadHead {
 	position: absolute;
 	left: 50%;
-	top: -12px;
+	top: 0;
 	width: 15px;
 	height: 20px;
 	transform: translateX(-50%);
 	background: var(--ost-playhead);
 	border-radius: 4px;
 	clip-path: polygon(0 0, 100% 0, 100% 68%, 50% 100%, 0 68%);
-	filter: drop-shadow(0 0 10px var(--ost-playhead-glow));
 }
 
-/* ═══ THE FIGCAPTION ═══════════════════════════════════════════════════════
-   What the picture above actually is, in ordinary flow under the band. */
+.transport {
+	position: absolute;
+	left: 16px;
+	top: 12px;
+	z-index: 10;
+	display: flex;
+	align-items: center;
+	gap: 10px;
+	font-family: var(--ost-font-mono);
+	font-size: 11px;
+	color: var(--ost-fg);
+	font-variant-numeric: tabular-nums;
+}
+
+.cuts {
+	color: var(--ost-danger);
+	font-weight: 600;
+}
+
+/* ═══ THE READER'S POINTER ═════════════════════════════════════════════════
+   Positioned in vw/vh, which the driver's percentages of the stage match. */
+
+.uiCursor {
+	position: absolute;
+	left: 0;
+	top: 0;
+	width: 28px;
+	height: 36px;
+	z-index: 14;
+	background: var(--ui-cursor) left top / auto 30px no-repeat;
+	transform: translate(calc(var(--ui-x) * 1vw), calc(var(--ui-y) * 1vh)) scale(var(--ui-bounce));
+	transform-origin: calc(var(--ui-hx) * 1%) calc(var(--ui-hy) * 1%);
+	margin: calc(var(--ui-hy) * -0.3px) 0 0 calc(var(--ui-hx) * -0.28px);
+	filter: drop-shadow(0 2px 5px rgba(0, 0, 0, 0.5));
+	opacity: var(--ui-on);
+	will-change: transform;
+	transition: opacity 0.3s var(--ease);
+}
+
+.stage[data-cur="text"] .uiCursor {
+	background-position: center center;
+}
+
+/* ═══ FALLBACKS ════════════════════════════════════════════════════════════ */
 
 .figcaption {
 	max-width: 78ch;
 	margin: 26px auto 0;
-	padding: 0 4px;
+	padding: 0 24px;
 	font-size: 12.5px;
 	line-height: 1.6;
 	color: var(--os-muted);
 	text-align: center;
+}
+
+@media (max-width: 900px) {
+	.band {
+		height: auto;
+	}
+
+	.stage {
+		position: static;
+		height: auto;
+		overflow: visible;
+	}
+
+	.scene,
+	.figcaption {
+		display: none;
+	}
+
+	.captions {
+		position: static;
+		width: auto;
+		max-width: 60ch;
+		margin: 0 auto;
+		padding: 0 24px;
+		display: grid;
+		gap: 26px;
+	}
+
+	.cap {
+		position: static;
+		opacity: 1;
+		transform: none;
+		transition: none;
+	}
+
+	.capTitle {
+		font-size: 21px;
+	}
+}
+
+@supports not (position: sticky) {
+	.band {
+		height: auto;
+	}
+
+	.stage {
+		position: static;
+		height: auto;
+	}
+
+	.scene,
+	.figcaption {
+		display: none;
+	}
+
+	.captions {
+		position: static;
+		width: auto;
+		max-width: 60ch;
+		margin: 0 auto;
+		display: grid;
+		gap: 26px;
+	}
+
+	.cap {
+		position: static;
+		opacity: 1;
+		transform: none;
+	}
+}
+
+@media (forced-colors: active) {
+	.scene,
+	.figcaption {
+		display: none;
+	}
+}
+
+/* Reduced motion keeps the picture and gives up the ride: the driver declines
+   to attach, so every variable stays at the closing values above. The captions
+   stack over the still editor, because nobody is turning them. */
+@media (prefers-reduced-motion: reduce) {
+	.band {
+		height: auto;
+	}
+
+	.stage {
+		position: static;
+		height: auto;
+		overflow: visible;
+	}
+
+	.captions {
+		position: static;
+		width: auto;
+		max-width: 60ch;
+		margin: 0 auto 44px;
+		padding: 0 24px;
+		display: grid;
+		gap: 26px;
+	}
+
+	.cap {
+		position: static;
+		opacity: 1;
+		transform: none;
+		transition: none;
+	}
+
+	.scene {
+		position: relative;
+		height: 100vh;
+	}
 }
