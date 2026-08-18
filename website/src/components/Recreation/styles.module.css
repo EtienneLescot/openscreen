@@ -1472,7 +1472,103 @@
 
 /* ═══ FALLBACKS ════════════════════════════════════════════════════════════ */
 
+/* ═══ PORTRAIT ═════════════════════════════════════════════════════════════
+   The same scene, stacked instead of side by side.
+
+   Nothing below repositions an element. The desktop layout is already driven by
+   a handful of grid variables — --v-l/--v-t/--v-w place the composite, --pnl-*
+   the inspector, --cap-h the caption, --tl-h the floor — so portrait only has
+   to answer them differently and every rule downstream follows.
+
+   One real difference in the choreography: on desktop the act change shrinks
+   the video to make room for the floor, because they share the height. Here
+   they do not — the floor takes the bottom, the composite keeps its size, and
+   what gives way is the inspector's ceiling. So --v-* resolve to the same value
+   in both phases and the picture holds still while the timeline arrives under
+   it, which is the calmer reading of the same beat. */
 @media (max-width: 900px) {
+	.stage {
+		--nav: 56px;
+		--cap-h: 104px;
+		--gut: 18px;
+
+		/* The composite: full width less the gutters, 16:9, under the caption —
+		   and identical in both acts, so --v-* interpolate between equal ends. */
+		--vw1: calc(100vw - 2 * var(--gut));
+		--vw2: calc(100vw - 2 * var(--gut));
+		--vl1: var(--gut);
+		--vl2: var(--gut);
+		--cell-top1: calc(var(--nav) + var(--cap-h));
+		--cell-top2: calc(var(--nav) + var(--cap-h));
+		--vt2: calc(var(--nav) + var(--cap-h));
+		--cell-topv: var(--nav);
+		/* The caption sits above the picture rather than beside it, so it starts
+		   at the nav in both phases. Left at its desktop value it centres itself
+		   in the column and lands on top of the composite. */
+		--cap-top1: var(--nav);
+
+		--pnl-w: calc(100vw - 2 * var(--gut));
+	}
+
+	.captions {
+		left: var(--gut);
+		width: calc(100vw - 2 * var(--gut));
+	}
+
+	.capTitle {
+		font-size: 21px;
+	}
+
+	/* Under the picture, not beside it — so the desktop's centre-line placement
+	   is undone here, along with the -50% that went with it. The ceiling is what
+	   the floor has not taken: it closes as --tl opens. */
+	.panel {
+		left: var(--gut);
+		top: calc(var(--cell-top1) + var(--vw1) * 0.5625 + 14px);
+		max-height: calc(
+			100vh - var(--cell-top1) - var(--vw1) * 0.5625 - 14px - var(--tl) * var(--tl-h) - 16px
+		);
+		transform: translateY(calc((1 - var(--panel)) * 12px));
+	}
+
+	/* The palette takes the inspector's slot rather than the left column, since
+	   in portrait there is no left column — centred in whatever the composite
+	   above and the floor below have left, so it does not strand a void under
+	   itself once the timeline is in. */
+	.palette {
+		left: 50%;
+		top: calc(
+			(var(--cell-top1) + var(--vw1) * 0.5625 + 100vh - var(--tl) * var(--tl-h)) / 2
+		);
+	}
+
+	/* At this scale a 0.5s trim is twelve pixels wide, and a label clipped to
+	   "0" is noise pretending to be information. The trims keep their colour and
+	   their position and give up their text; the zooms and the speed ramp span
+	   seconds, so they keep theirs. */
+	.pillTrim {
+		font-size: 0;
+		padding: 0;
+		border-radius: 5px;
+	}
+
+	.pillZoom,
+	.pillSpeed {
+		font-size: 9.5px;
+		padding: 0 5px;
+		gap: 3px;
+	}
+
+	.flowMask {
+		max-height: calc(
+			100vh - var(--cell-top1) - var(--vw1) * 0.5625 - 14px - var(--tl) * var(--tl-h) - 120px
+		);
+	}
+}
+
+/* Under 360px there is no honest layout left: the composite would be narrower
+   than the inspector's own controls. The still fallback stands in. */
+@media (max-width: 359px), (prefers-reduced-motion: reduce), (forced-colors: active) {
 	.band {
 		height: auto;
 	}
@@ -1481,10 +1577,6 @@
 		position: static;
 		height: auto;
 		overflow: visible;
-	}
-
-	.scene {
-		display: none;
 	}
 
 	.captions {
@@ -1502,10 +1594,6 @@
 		opacity: 1;
 		transform: none;
 		transition: none;
-	}
-
-	.capTitle {
-		font-size: 21px;
 	}
 }
 
