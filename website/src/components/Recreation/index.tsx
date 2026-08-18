@@ -517,16 +517,48 @@ export default function Recreation() {
 											</div>
 										</div>
 
-										{/* The app the recording opens, half-way through the take. */}
+										{/* The app the recording opens, half-way through the take. Two
+										    states crossfaded on the footage clock, under one title bar. */}
 										<div className={styles.appWin}>
+											<div className={styles.appBar}>
+												<span className={styles.appLights}>
+													<span data-l="r" />
+													<span data-l="y" />
+													<span data-l="g" />
+												</span>
+												<span className={styles.appTitle}>Fern — Add a sensor</span>
+												<span className={styles.appPad} />
+											</div>
+
 											<div className={styles.appSetup}>
-												<span className={styles.appLine} />
-												<span className={styles.appLine} />
+												<div className={styles.appHead}>Pair a soil sensor</div>
+												<div className={styles.appRow}>
+													<span className={styles.appDot} />
+													Fern Probe · FP-204
+													<span className={styles.appMeta}>-42 dBm</span>
+												</div>
+												<div className={`${styles.appRow} ${styles.appRowIdle}`}>
+													<span className={styles.appDot} />
+													Searching nearby…
+												</div>
 												<span className={styles.appBtn}>Pair sensor</span>
 											</div>
+
 											<div className={styles.appDone}>
-												<span className={styles.appTick} />
-												<span className={styles.appOk}>Sensor paired</span>
+												<span className={styles.appTick}>
+													<svg viewBox="0 0 24 24" aria-hidden="true">
+														<path
+															d="M20 6 9 17l-5-5"
+															fill="none"
+															stroke="#059669"
+															strokeWidth="2.6"
+															strokeLinecap="round"
+															strokeLinejoin="round"
+														/>
+													</svg>
+												</span>
+												<div className={styles.appOk}>Sensor paired</div>
+												<div className={styles.appSub}>Bed 3 — South garden is now live.</div>
 											</div>
 										</div>
 									</div>

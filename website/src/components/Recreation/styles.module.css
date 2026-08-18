@@ -1151,17 +1151,105 @@
 .appDone,
 .appSetup {
 	position: absolute;
-	inset: 0;
+	/* Below the bar, which is a sibling and always up. */
+	inset: 5.2cqh 0 0;
 }
 
-.appLine {
-	height: 1.6cqh;
-	border-radius: 0.4cqw;
-	background: #eef2f7;
+/* ── the window's chrome, and its two states ── */
+
+.appBar {
+	position: absolute;
+	inset: 0 0 auto;
+	display: flex;
+	align-items: center;
+	gap: 0.8cqw;
+	padding: 0 1.3cqw;
+	height: 5.2cqh;
+	background: #f1f3f6;
+	border-bottom: 1px solid #e3e7ec;
+	border-radius: 1cqw 1cqw 0 0;
 }
 
-.appLine:nth-child(2) {
-	width: 62%;
+.appLights {
+	display: flex;
+	gap: 0.6cqw;
+}
+
+.appLights span {
+	width: 1cqw;
+	height: 1cqw;
+	border-radius: 50%;
+}
+
+.appLights span[data-l="r"] {
+	background: #ff5f57;
+}
+
+.appLights span[data-l="y"] {
+	background: #febc2e;
+}
+
+.appLights span[data-l="g"] {
+	background: #28c840;
+}
+
+.appTitle {
+	margin: 0 auto;
+	font-size: 1.15cqw;
+	font-weight: 600;
+	color: #344054;
+	letter-spacing: -0.01em;
+}
+
+/* Balances the lights so the title sits on the window's centre line. */
+.appPad {
+	width: 3cqw;
+}
+
+.appHead {
+	font-size: 1.7cqw;
+	font-weight: 700;
+	color: #101828;
+	letter-spacing: -0.02em;
+}
+
+.appRow {
+	height: 5.8cqh;
+	border-radius: 0.7cqw;
+	border: 1px solid #d0d5dd;
+	background: #fff;
+	display: flex;
+	align-items: center;
+	gap: 1cqw;
+	padding: 0 1.3cqw;
+	font-size: 1.25cqw;
+	color: #101828;
+}
+
+/* The one still looking: dashed, and greyed down to match. */
+.appRowIdle {
+	border-style: dashed;
+	background: none;
+	color: #98a2b3;
+}
+
+.appDot {
+	width: 1.1cqw;
+	height: 1.1cqw;
+	border-radius: 50%;
+	background: #10b981;
+	flex-shrink: 0;
+}
+
+.appRowIdle .appDot {
+	background: #d0d5dd;
+}
+
+.appMeta {
+	margin-left: auto;
+	font-family: var(--ost-font-mono);
+	font-size: 1cqw;
+	color: #667085;
 }
 
 .appBtn {
@@ -1177,16 +1265,28 @@
 }
 
 .appTick {
-	width: 4cqh;
-	height: 4cqh;
+	width: 6cqw;
+	height: 6cqw;
 	border-radius: 50%;
-	background: #10b981;
+	background: #d1fae5;
+	display: grid;
+	place-items: center;
+}
+
+.appTick svg {
+	width: 3cqw;
+	height: 3cqw;
 }
 
 .appOk {
-	font-size: 1.3cqw;
-	font-weight: 600;
+	font-size: 1.7cqw;
+	font-weight: 700;
 	color: #101828;
+}
+
+.appSub {
+	font-size: 1.2cqw;
+	color: #667085;
 }
 
 /* The pointer inside the recording, wearing the pack the picker selected, at
