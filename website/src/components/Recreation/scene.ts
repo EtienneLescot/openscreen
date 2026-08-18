@@ -1,150 +1,289 @@
 /**
- * The score. One pure function of scroll position, and the constants that say
- * when each thing happens.
+ * The score, ported from the design's v4 cut.
  *
  * Time here is *scene seconds* — a clock that exists only on this page and runs
- * from 0 to `T_TOTAL` as the reader scrolls the band. It is not the document's
- * clock. Where the two meet is `docTime()`, and they meet in exactly one place
- * on purpose: act one is a settings demonstration where the recording is not
- * playing at all, and act two is a ride down the real 40.033 s document.
+ * 0 → `T_TOTAL` as the reader scrolls the band. Every constant below is v4's,
+ * kept to the number: the beat boundaries, the instants each click lands, where
+ * each pill sits, and the two clocks' relationship.
  *
- * Nothing in this file touches the DOM, and nothing in it reads a clock. The
- * driver calls `frameAt(t)` and applies the result; that split is what lets the
- * whole score be checked by a test that never opens a browser.
+ * Nothing here touches the DOM and nothing reads a clock. The driver calls
+ * `frameAt(p)` and applies the result, which is what lets the whole score be
+ * checked by a test that never opens a browser.
+ *
+ * ── WHAT IS DERIVED AND WHAT IS STAGED ───────────────────────────────────────
+ *
+ * The editor's *chrome* is the application's: panel titles, every slider's
+ * range, scaling and suffix, the wallpapers, and the cursor packs with their
+ * real hotspots all come out of `generated.ts`, which the generator emits by
+ * reading the app's locale files and source.
+ *
+ * The *session* is staged. The transcript below, the five trims, the three
+ * zooms and the speed ramp are the design's scenario, not the vendored
+ * project file — they are a demonstration of what the editor does, composed to
+ * read in twenty-six seconds. An earlier cut drove this from the project
+ * document; the document's own edit is two trims at the two ends of a
+ * forty-second take, which is truthful and shows almost nothing. The page says
+ * which is which rather than implying the whole thing is a recording.
  */
 
-import { CONTROLS, EFFECTS, META, PILLS, STAGE, WORDS } from "./generated";
+import { CONTROLS, CURSORS, EFFECTS } from "./generated";
 
-/* ── the two acts ─────────────────────────────────────────────────────────
- *
- * Act one holds three settings that need no timeline to make sense — you can
- * see a background swap, a padding change and a cursor resize in a still frame.
- * They are the three the composite can answer on its own, so the timeline stays
- * off stage and the picture gets the room instead.
- *
- * Act two holds the three that are only meaningful against a timeline: zooms
- * placed on it, a note pinned to it, and cuts that arrive on it when words
- * leave the transcript. The timeline slides in once, between the acts, and the
- * composite gives up the height it was borrowing.
- */
+export const T_TOTAL = 26.0;
 
-/**
- * The beats touch. There is no gap anywhere, and the last one runs to the end.
- *
- * Two earlier cuts got this wrong in the same way. A gap between beats is a
- * stretch with no caption, no panel and no palette — so what looks on paper
- * like breathing room between two claims is, on screen, the left half of the
- * viewport going empty while the composite sits there alone. It is invisible
- * when you scroll past it at speed and glaring the moment anyone stops in it,
- * which is exactly the kind of defect that survives a demo and fails a reader.
- *
- * Touching beats mean the panel never has to fade out and back in between
- * background, padding and cursor: it stays, and its contents swap, which is
- * what the app does when you click a different facet. The one place anything
- * really leaves is the act change, where the panel gives way to the tool
- * palette — and the timeline starts arriving before then (`TL_IN`), so even
- * that happens under a caption that is still up.
- */
+/* ── the five beats ───────────────────────────────────────────────────────── */
+
 export const BEATS = [
-	// From zero, not from a settling beat. The band's first screen is visible
-	// under the heading before anyone has scrolled into it, and a beat table that
-	// starts late renders that screen as an empty stage — the one frame every
-	// reader is guaranteed to see.
-	{ id: "background", from: 0, to: 4.15 },
-	{ id: "padding", from: 4.15, to: 7.5 },
-	{ id: "cursor", from: 7.5, to: 11.0 },
-	{ id: "autozoom", from: 11.0, to: 15.3 },
-	{ id: "annotation", from: 15.3, to: 18.7 },
-	{ id: "transcript", from: 18.7, to: 26.5 },
+	{
+		id: "style",
+		from: 0.6,
+		to: 7.2,
+		kicker: "Style",
+		title: "Swap the background",
+		sub: "Image, color or gradient behind your recording — no re-shoot.",
+	},
+	{
+		id: "effects",
+		from: 7.2,
+		to: 10.4,
+		kicker: "Effects",
+		title: "Frame it your way",
+		sub: "Padding, motion blur, shadow, roundness — every effect composites live.",
+	},
+	{
+		id: "cursor",
+		from: 10.4,
+		to: 14.5,
+		kicker: "Cursor",
+		title: "A cursor worth watching",
+		sub: "Size, smoothing, motion blur, click bounce — every move reads on screen.",
+	},
+	{
+		id: "timeline",
+		from: 15.0,
+		to: 19.5,
+		kicker: "Timeline",
+		title: "One click, one pill",
+		sub: "Zooms, speed ramps, trims, comments — each edit lands as a pill on the timeline.",
+	},
+	{
+		id: "transcript",
+		from: 19.6,
+		to: 26.0,
+		kicker: "Transcript",
+		title: "Edit video like text",
+		sub: "Delete a word or a silence; the cut lands on the timeline. Nothing destructive.",
+	},
 ] as const;
 
 export type BeatId = (typeof BEATS)[number]["id"];
 
-export const T_TOTAL = 26.5;
+/** The floor arrives here — inside the cursor beat, so the acts change under a
+ *  caption that is still up rather than across an empty stage. */
+const TL_IN = 14.65;
+/** The inspector is up for every beat except the two the palette owns. */
+const PANEL_OFF = [14.45, 19.6] as const;
 
-/** Where the timeline arrives and the composite makes room. Deliberately inside
- *  the cursor beat rather than after it: the floor rising is the transition, and
- *  it should happen while there is still a caption on screen to watch it. */
-const TL_IN = 10.2;
+/* ── the transcript ───────────────────────────────────────────────────────── */
 
-/** Act two's ride: scene seconds mapped onto the document's own 40.033 s, so
- *  the playhead, the pills under it and the transcript cue are three renderings
- *  of one number rather than three animations that happen to agree. */
-const RIDE_FROM = 10.9;
-const RIDE_TO = T_TOTAL;
-const DOC_END = META.assetDurationSec;
+export type Token = { text: string; silence?: boolean; cut?: number; label?: string };
 
-/* ── sub-beat moments ─────────────────────────────────────────────────────
- * The instants inside a beat when a discrete thing happens — a click lands, a
- * selection moves. Each is the moment the pointer arrives, so the pointer path
- * below and these have to be read together.
- */
-const T_BG_CLICK = 2.5;
-const T_CUR_CLICK = 8.5;
-const T_WAND_CLICK = 12.6;
-const T_NOTE_CLICK = 16.4;
-
-/** The swatch the document itself is set to, and the one the pointer moves to.
- *  `STAGE.wallpaper` is the document's — everything else on this page agrees
- *  with the project file, and the picture the reader starts on has to as well. */
-export const WALLPAPER_FROM = wallpaperIndex(STAGE.wallpaper);
-export const WALLPAPER_TO = 9;
-
-function wallpaperIndex(path: string): number {
-	const n = Number(/wallpaper(\d+)\.jpg$/.exec(path)?.[1]);
-	// A document pointing at a colour or a gradient has no swatch to light up.
-	// Falling back to the first one keeps the panel honest about that rather
-	// than lighting up a swatch the document never chose.
-	return Number.isInteger(n) ? n : 1;
-}
-
-/* ── the pointers ─────────────────────────────────────────────────────────
- *
- * There are two, because the app has two, and only one of them is scored here.
- *
- * The reader's pointer — the one clicking swatches and dragging sliders — has
- * no coordinates at all. It is a child of the control it is operating, so the
- * same CSS that places a knob places the hand on it, at every viewport width,
- * with nothing to keep in sync. An earlier cut animated it along a path in
- * percentages of the stage and had to be re-tuned every time a panel moved,
- * which is a whole class of "nearly on the control" bug that simply cannot
- * happen now. All the score decides is *which* control has the hand, and that
- * is the beat.
- *
- * The recorded pointer — the one inside the recording, drawn from the captured
- * telemetry, which is what the Cursor panel is actually restyling — does have a
- * path, because there is nothing in the DOM for it to be attached to.
- */
-
-/** The recorded pointer, over the page being recorded. Percent of the screen
- *  inside the frame. */
-const SHOT_PATH: number[][] = [
-	[0, 34, 58],
-	[3, 46, 40],
-	[5.5, 45, 45],
-	[8, 58, 50],
-	[10.5, 60, 52],
-	[15.2, 60, 52],
-	[18, 52, 68],
-	[22, 44, 60],
-	[26.5, 40, 44],
+/** The staged take. Five entries are removable — three silences and two filler
+ *  words — and each has an explicit strike time in `STRIKE_T`. */
+export const TOKENS: Token[] = [
+	...["Hey,", "so", "today", "I", "want", "to", "show", "you", "the", "new", "export", "flow."].map(
+		(text) => ({ text }),
+	),
+	{ text: "0.5s silence", silence: true, cut: 0.5, label: "0.5s" },
+	{ text: "Um,", cut: 0.4, label: "0.4s" },
+	...["let", "me", "pull", "up", "the", "dashboard", "first."].map((text) => ({ text })),
+	...["You", "just", "hit", "record", "—", "OpenScreen", "does", "the", "rest."].map((text) => ({
+		text,
+	})),
+	{ text: "[silence 0.6s]", silence: true, cut: 0.6, label: "0.6s" },
+	...["Trim", "the", "dead", "air,"].map((text) => ({ text })),
+	{ text: "um,", cut: 0.3, label: "0.3s" },
+	...["tighten", "the", "takes,"].map((text) => ({ text })),
+	{ text: "[silence 0.5s]", silence: true, cut: 0.5, label: "0.5s" },
+	...["and", "ship", "it", "before", "lunch."].map((text) => ({ text })),
 ];
 
-/** How far the recorded page has been scrolled, as a percentage of its own
- *  height. The image is the whole page; this is the window onto it. */
+/** Indices into `TOKENS` of everything removable, in order. */
+export const CUT_INDEX = TOKENS.reduce<number[]>((out, t, i) => {
+	if (t.cut !== undefined) out.push(i);
+	return out;
+}, []);
+
+/** When each removable entry is struck. Explicit rather than swept: the pointer
+ *  has to arrive at that word on that frame, and a sweep cannot be aimed. */
+const STRIKE_T = [20.05, 20.72, 21.25, 21.8, 22.3];
+
+export const strikeOf = (i: number) => {
+	const k = CUT_INDEX.indexOf(i);
+	return k < 0 ? Number.POSITIVE_INFINITY : (STRIKE_T[k] ?? Number.POSITIVE_INFINITY);
+};
+
+/* ── the floor ────────────────────────────────────────────────────────────── */
+
+/** Pixels per second of footage. Every object on the rail is placed with it and
+ *  the rail is translated by it, so the whole timeline is one transform. */
+export const K = 90;
+/** The playhead's x, as a fraction of the stage. */
+export const PLAYHEAD = 0.38;
+
+/** The lane plan, in px from the top of the rail. */
+export const LANES = {
+	label: 20,
+	tick: 22,
+	annotation: 40,
+	speed: 66,
+	cut: 92,
+	zoom: 118,
+	laneH: 22,
+	hint: 142,
+	track: 154,
+	trackH: 54,
+} as const;
+
+export const FLOOR_H = 210;
+
+/** The two clips on the track. */
+export const CLIPS = [
+	{ from: -9, to: 13.1, selected: true },
+	{ from: 13.5, to: 42, selected: false },
+] as const;
+
+/** Three zooms, each with the scene time the wizard places it. */
+export const ZOOMS = [
+	{ from: 12.6, to: 13.7, label: "1.5×", scale: 1.5, placedAt: 16.15, origin: "52% 58%" },
+	{ from: 16.25, to: 17.15, label: "1.80×", scale: 1.8, placedAt: 16.35, origin: "52% 58%" },
+	{ from: 17.6, to: 18.45, label: "2×", scale: 2, placedAt: 16.55, origin: "36% 30%" },
+] as const;
+
+/** The speed ramp, and the window over which the footage clock runs 2.2x. */
+export const SPEED = { from: 18.6, to: 20.6, placedAt: 18.25, rate: 2.2, label: "2.2×" } as const;
+
+/** Where each trim lands. Close enough to the playhead to be on screen at the
+ *  moment its own word is struck — a cut that appears off screen is a cut the
+ *  reader has to take on trust. */
+const CUT_POS = [16.4, 17.3, 22.35, 23.15, 23.9];
+/** The zoom window trims are pushed clear of, so nothing overlaps. */
+const ZOOM_GUARD = { from: 20.9, to: 21.9 };
+
+export type Placed = { label: string; from: number; to: number; placed: boolean };
+
+/** The trim lane, resolved: sorted, spaced, and kept out from under the zoom. */
+export function trims(t: number): Placed[] {
+	const raw = CUT_INDEX.map((tokenIndex, k) => ({
+		label: TOKENS[tokenIndex].label ?? "",
+		at: CUT_POS[k] ?? 25.7,
+		dur: TOKENS[tokenIndex].cut ?? 0.5,
+		placed: t >= strikeOf(tokenIndex),
+	})).sort((a, b) => a.at - b.at);
+
+	const out: Placed[] = [];
+	let lastEnd = Number.NEGATIVE_INFINITY;
+	for (const c of raw) {
+		let from = Math.max(c.at, lastEnd + 0.25);
+		let to = from + c.dur;
+		if (to > ZOOM_GUARD.from - 0.35 && from < ZOOM_GUARD.to + 0.35) {
+			from = Math.max(ZOOM_GUARD.to + 0.4, lastEnd + 0.25);
+			to = from + c.dur;
+		}
+		lastEnd = to;
+		out.push({ label: c.label, from, to, placed: c.placed });
+	}
+	return out;
+}
+
+/* ── the footage ──────────────────────────────────────────────────────────── */
+
+/**
+ * The footage clock.
+ *
+ * It is not the scene clock. While the playhead crosses the speed region the
+ * recording runs at 2.2x, and after it the footage is permanently 2.4s ahead —
+ * which is exactly what a speed ramp does to everything downstream of it, and
+ * the reason the transport's remaining time is not the scene time.
+ */
+export const footageTime = (t: number) =>
+	t < SPEED.from
+		? t
+		: t < SPEED.to
+			? SPEED.from + (t - SPEED.from) * SPEED.rate
+			: t + (SPEED.to - SPEED.from) * (SPEED.rate - 1);
+
+/** Clicks in the recording, for the recorded pointer's bounce. */
+const FOOTAGE_CLICKS = [8.2, 11.6, 15.1, 16.5, 17.9, 21.9, 23.8];
+/** Clicks the reader makes on the editor, for the demonstration pointer's. */
+const UI_CLICKS = [2.0, 3.95, 5.8, 7.95, 11.45, 12.55, 12.7, 16.08, 18.25, 20.05, 21.25, 22.3];
+
+/**
+ * Click bounce, at parity with the renderer's own `cursor.rs`: the press is a
+ * half-sine down to 50% over the first 38% of the window, and the release a
+ * sine back up through 132%. Without it a pointer that never flinches reads as
+ * a sprite being dragged rather than something clicking.
+ */
+function bounce(t: number, win: number, clicks: number[]): number {
+	let last = -1;
+	for (const c of clicks) {
+		if (c <= t) last = c;
+		else break;
+	}
+	if (last < 0) return 1;
+	const e = (t - last) / win;
+	if (e >= 1) return 1;
+	return e < 0.38
+		? 1 - Math.sin((e / 0.38) * Math.PI) * 0.5
+		: 1 + Math.sin(((e - 0.38) / 0.62) * Math.PI) * 0.32;
+}
+
+/** The recorded pointer's path and the recorded page's scroll, both on the
+ *  footage clock. Percentages of the frame, so neither has a pixel baked in. */
+const SHOT_PATH: number[][] = [
+	[0.8, 38, 60],
+	[3.5, 52, 55],
+	[6.4, 46, 50],
+	[7.4, 34.5, 49],
+	[8.9, 34.5, 49],
+	[10.5, 52, 58],
+	[11.2, 46, 64],
+	[12.3, 46, 64],
+	[13.8, 50, 60],
+	[14.6, 44, 62],
+	[15.5, 44, 62],
+	[15.9, 50, 61.5],
+	[16.9, 50, 61.5],
+	[17.4, 34.8, 27.6],
+	[18.3, 34.8, 27.6],
+	[19.2, 35, 68],
+	[20.2, 58, 58],
+	[21.3, 34.5, 49],
+	[22.1, 34.5, 49],
+	[23.0, 52, 44],
+	[23.6, 20, 49],
+	[24.1, 20, 49],
+	[25.2, 46, 54],
+	[26.8, 56, 48],
+	[28.4, 48, 56],
+];
+
 const PAGE_PATH: number[][] = [
 	[0, 0],
 	[5.5, 0],
-	[9.5, -18],
-	[13.8, -18],
-	[17, -34],
-	[21, -34],
-	[26.5, -46],
+	[6.6, -6],
+	[8.4, -6],
+	[9.6, -26],
+	[12.8, -26],
+	[13.6, -40],
+	[18.8, -40],
+	[20.3, -62],
+	[21.3, -62],
+	[22.6, -30],
+	[24.6, -8],
 ];
 
 /* ── interpolation ────────────────────────────────────────────────────────── */
 
-/** Piecewise-linear read of `[[t, ...values]]` at `t`, clamped at both ends. */
 function kf(t: number, points: readonly number[][]): number[] {
 	if (t <= points[0][0]) return points[0].slice(1);
 	for (let i = 1; i < points.length; i++) {
@@ -160,175 +299,143 @@ function kf(t: number, points: readonly number[][]): number[] {
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
 
-/** Smoothstep. Used only where a value is *held* at both ends — a ramp that
- *  starts and stops is the one place linear reads as mechanical. */
-const ease = (v: number) => {
-	const k = clamp01(v);
-	return k * k * (3 - 2 * k);
-};
+/* ── sub-beat moments ─────────────────────────────────────────────────────── */
+
+/** The three background picks, and the two cursor picks. */
+const BG_PICKS = [2.0, 3.95, 5.8];
+const CURSOR_PICKS = [11.45, 12.55];
+/** Which pack each pick selects, as an index into `CURSORS.themes`. */
+const CURSOR_CHOICE = [0, 2, 1];
+
+export const WALLPAPER_COUNT_SHOWN = 12;
 
 /* ── the frame ────────────────────────────────────────────────────────────── */
 
 export interface Frame {
-	/** Scene seconds. */
 	t: number;
-	/** Which beat's caption and panel are up, or null between beats. */
 	beat: BeatId | null;
-	/** 0 in act one, 1 once the timeline has taken its place. */
+	/** 0 before the floor arrives, 1 after. */
 	tl: number;
-	/** Document seconds under the playhead. 0 for the whole of act one. */
-	doc: number;
-	/** Wallpaper cross-fade, 0 = the document's own, 1 = the one just picked. */
+	/** The footage clock, which the speed ramp pushes ahead of `t`. */
+	tf: number;
+	/** Which wallpaper is selected, 0-3. */
 	bg: number;
-	/** `paddingFit`, by the app's formula. Multiplies the whole content block. */
+	/** `paddingFit`, by the app's formula, and what the slider reads. */
 	fit: number;
-	/** What the Padding slider reads, and where its knob sits on its own track.
-	 *  The two differ for Size and not for Padding, which is exactly the trap:
-	 *  Size runs 5–100, so value and track percentage are never the same number. */
 	padding: number;
 	paddingPct: number;
-	/** Cursor size, as the Cursor panel's own number — `cursor.size * 10`. */
+	/** Uniform scale on the recorded window — v4 scales the frame rather than
+	 *  insetting it, so the page's internal layout never reflows. */
+	frameScale: number;
 	cursorSize: number;
 	cursorSizePct: number;
-	/** 1 once the pointer has picked the second cursor style. */
-	cursorSel: number;
-	/** Composite magnification, and where it magnifies from. */
+	/** The size drag as 0-1, which is what the recorded cursor scales on. */
+	cursorSizeU: number;
+	/** Index into `CURSORS.themes` of the selected pack. */
+	cursorTheme: number;
 	zoom: number;
-	zoomX: number;
-	zoomY: number;
-	/** The zoom pill currently under the playhead, if any — the badge quotes it. */
-	zoomLabel: string | null;
-	/** The recorded pointer, in percent of the screen inside the frame. */
+	zoomOrigin: string;
+	zoomLabel: string;
+	zoomActive: number;
 	shot: [number, number];
+	shotBounce: number;
+	uiBounce: number;
 	pageY: number;
-	/** Index into `WORDS` of the cue — the entry under the playhead. -1 before
-	 *  the transcript opens. */
-	cue: number;
-	/** How many of the document's pills have been placed, by lane. */
+	/** How many of the three zooms the wizard has placed, and whether the speed
+	 *  region is down. */
 	zoomsPlaced: number;
-	trimsPlaced: number;
-	notePlaced: number;
-	/** Tool-palette state. */
-	paletteIn: number;
-	wandOn: number;
-	noteOn: number;
-	/** Panel presence. */
-	panelIn: number;
+	speedPlaced: number;
+	trims: Placed[];
+	/** Index of the entry the pointer is striking, or -1. */
+	strikeIndex: number;
+	panel: number;
+	palette: number;
+	wand: number;
+	comment: number;
+	/** Transport readouts. */
+	cutCount: number;
+	saved: number;
 }
 
-/** Where act two's annotation lands. Not in the document — the project holds no
- *  annotation regions, which is why its lane still shows the "Press A" hint —
- *  so it is placed at the playhead, which is what pressing A does. */
-export const NOTE_AT = 19.6;
-export const NOTE_LEN = 2.4;
-
-const ZOOMS = PILLS.filter((p) => p.lane === "zoom");
-const TRIMS = PILLS.filter((p) => p.lane === "trim");
-
-/** The entries the document's own trims remove — two of its three silences.
- *  The driver resolves these to elements once, so striking them costs nothing
- *  per frame and the other 104 nodes are never touched. */
-export const WORDS_REMOVABLE = WORDS.filter((w) => !w.kept);
-
-/** The scene at scroll position `p` (0–1 through the band). */
 export function frameAt(p: number): Frame {
 	const t = clamp01(p) * T_TOTAL;
+	const tf = footageTime(t);
 
 	const beat = BEATS.find((b) => t >= b.from && t < b.to)?.id ?? null;
-	const q = (id: BeatId) => {
-		const b = BEATS.find((x) => x.id === id)!;
-		return clamp01((t - b.from) / (b.to - b.from));
-	};
+	const tl = t >= TL_IN ? 1 : 0;
 
-	const tl = ease((t - TL_IN) / 0.9);
-	const doc = clamp01((t - RIDE_FROM) / (RIDE_TO - RIDE_FROM)) * DOC_END;
+	const bg = BG_PICKS.reduce((n, at) => (t >= at ? n + 1 : n), 0);
 
-	/* Background — the swatch lights up and the picture behind the window
-	   changes on the same frame, because in the app they are one event. */
-	const bg = t >= T_BG_CLICK ? 1 : 0;
-
-	/* Padding — a drag, so it rises and comes back rather than landing on a
-	   number. The composite follows PreviewCanvas's own arithmetic. */
-	const dragged = clamp01((q("padding") - 0.32) / 0.48);
-	const triangle = beat === "padding" ? (dragged < 0.5 ? dragged * 2 : (1 - dragged) * 2) : 0;
-	const padding = STAGE.padding + triangle * 40;
+	// Padding starts wide — the backgrounds have to be visible for the beat that
+	// is about them — and comes down once, slowly, during the Effects beat.
+	const padU = 1 - clamp01((t - 7.95) / 1.05);
+	const padding = Math.round(30 + padU * 55);
 	const fit = Math.min(
 		1,
-		Math.max(
-			EFFECTS.paddingFitMin,
-			1 - (Math.min(100, Math.max(0, padding)) / 100) * EFFECTS.paddingFitFactor,
-		),
+		Math.max(EFFECTS.paddingFitMin, 1 - (padding / 100) * EFFECTS.paddingFitFactor),
 	);
 
-	/* Cursor — the style is picked, then the size is dragged up and left there,
-	   which is why this one does not come back down. */
-	const cursorSel = t >= T_CUR_CLICK ? 1 : 0;
-	const sizeU = t < BEATS[2].from ? 0 : t >= BEATS[2].to ? 1 : ease((q("cursor") - 0.55) / 0.3);
-	const cursorSize = CONTROLS.cursorSize.value + sizeU * 23;
+	const sizeU = clamp01((t - 12.7) / 0.5);
+	const cursorSize = 40 + sizeU * 23.2;
 
-	/* Zoom — driven by the document, not by the beat. The composite magnifies
-	   while a zoom region is under the playhead and at that region's own scale,
-	   so the picture cannot disagree with the pill that caused it. */
-	const active = tl > 0.5 ? ZOOMS.find((z) => doc >= z.startSec && doc <= z.endSec) : undefined;
-	const placedZooms = ZOOMS.filter((_, i) => t >= T_WAND_CLICK + 0.35 + i * 0.28).length;
-	const live = active && placedZooms > 0 ? active : undefined;
-	const zoomEdge = live
-		? Math.min(ease((doc - live.startSec) / 0.5), ease((live.endSec - doc) / 0.5))
-		: 0;
-	const scale = live ? Number(live.label.replace("×", "")) : 1;
-	const zoom = 1 + (scale - 1) * zoomEdge;
+	const cursorTheme = CURSOR_CHOICE[CURSOR_PICKS.reduce((n, at) => (t >= at ? n + 1 : n), 0)] ?? 0;
 
-	/* Transcript — the cue is the entry the playhead is inside, which is what
-	   the app highlights. Nothing sweeps on its own schedule. */
-	const transcriptOpen = t >= BEATS[5].from;
-	const cue = transcriptOpen ? WORDS.findIndex((w) => doc >= w.startSec && doc < w.endSec) : -1;
-	// A trim lands when the playhead *reaches* the span it removes, which is the
-	// same test the driver strikes the silence with — the pill and the
-	// strike-through are one event rather than two that nearly agree.
-	//
-	// Reaches, not clears. This document's second trim runs 35.12–40.033, and
-	// 40.033 is the end of the document: waiting for the playhead to clear it
-	// puts the whole payoff of the beat — a silence struck, a cut appearing under
-	// the playhead — on the last frame of the last scroll, where nobody sees it.
-	const trimsPlaced = transcriptOpen ? TRIMS.filter((x) => doc >= x.startSec).length : 0;
+	const live = ZOOMS.slice(1).find((z) => t >= z.from && t <= z.to);
+	const zoomsPlaced = ZOOMS.filter((z) => t >= z.placedAt).length;
 
-	const [shotX, shotY] = kf(t, SHOT_PATH);
-	const [pageY] = kf(t, PAGE_PATH);
+	const [shotX, shotY] = kf(tf, SHOT_PATH);
+	const [pageY] = kf(tf, PAGE_PATH);
 
-	const paletteIn = beat === "autozoom" || beat === "annotation" ? 1 : 0;
+	const placedTrims = trims(t);
+	const cutCount = placedTrims.filter((c) => c.placed).length;
+	const saved = CUT_INDEX.reduce(
+		(sum, i) => sum + (t >= strikeOf(i) ? (TOKENS[i].cut ?? 0) : 0),
+		0,
+	);
+
+	const strikeIndex = CUT_INDEX.find((i) => t >= strikeOf(i) - 0.5 && t < strikeOf(i) + 0.35) ?? -1;
+
+	const panelOn = t >= 0.35 && !(t >= PANEL_OFF[0] && t < PANEL_OFF[1]);
+	const paletteOn = t >= 14.75 && t < 19.45;
 
 	return {
 		t,
 		beat,
 		tl,
-		doc,
+		tf,
 		bg,
 		fit,
 		padding,
 		paddingPct:
 			((padding - CONTROLS.padding.min) / (CONTROLS.padding.max - CONTROLS.padding.min)) * 100,
+		frameScale: 1 - padU * 0.36,
 		cursorSize,
+		cursorSizeU: sizeU,
 		cursorSizePct:
 			((cursorSize - CONTROLS.cursorSize.min) /
 				(CONTROLS.cursorSize.max - CONTROLS.cursorSize.min)) *
 			100,
-		cursorSel,
-		zoom,
-		zoomX: 60,
-		zoomY: 52,
-		zoomLabel: live && zoomEdge > 0.02 ? live.label : null,
+		cursorTheme,
+		zoom: live ? live.scale : 1,
+		zoomOrigin: live ? live.origin : "52% 58%",
+		zoomLabel: live ? live.label : ZOOMS[1].label,
+		zoomActive: live ? 1 : 0,
 		shot: [shotX, shotY],
+		shotBounce: bounce(tf, 0.32, FOOTAGE_CLICKS),
+		uiBounce: bounce(t, 0.42, UI_CLICKS),
 		pageY,
-		cue,
-		zoomsPlaced: placedZooms,
-		trimsPlaced,
-		notePlaced: t >= T_NOTE_CLICK + 0.3 ? 1 : 0,
-		paletteIn,
-		wandOn: beat === "autozoom" && t >= T_WAND_CLICK ? 1 : 0,
-		noteOn: beat === "annotation" && t >= T_NOTE_CLICK ? 1 : 0,
-		panelIn:
-			beat === "background" || beat === "padding" || beat === "cursor" || beat === "transcript"
-				? 1
-				: 0,
+		zoomsPlaced,
+		speedPlaced: t >= SPEED.placedAt ? 1 : 0,
+		trims: placedTrims,
+		strikeIndex,
+		panel: panelOn ? 1 : 0,
+		palette: paletteOn ? 1 : 0,
+		wand: t >= 15.0 && t < 17.0 && t >= 15.0 + (17.0 - 15.0) * 0.54 ? 1 : 0,
+		comment: t >= 17.3 && t < 19.2 && t >= 17.3 + (19.2 - 17.3) * 0.5 ? 1 : 0,
+		cutCount,
+		saved,
 	};
 }
+
+/** The pack the recorded pointer is currently drawn with. */
+export const shotCursorSrc = (f: Frame) => CURSORS.themes[f.cursorTheme].src;

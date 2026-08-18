@@ -1,68 +1,52 @@
 /**
- * Scroll in, custom properties out.
+ * Scroll in, custom properties out — plus one video seek and a handful of class
+ * changes. This is the only thing that runs per frame.
  *
- * The component renders once. This is the only thing that runs per frame, and
- * it writes nothing but CSS variables, one `data-beat` attribute, three text
- * nodes and — when the cue actually moves — two class changes. React is not in
- * the frame loop, and neither is layout: every value below lands on a property
- * the compositor or the style system already knows how to interpolate.
+ * Three rules keep it cheap.
  *
- * Two rules keep it that way.
+ * **One write target.** Everything lands on custom properties on `.stage`, so a
+ * frame is a few dozen string assignments and no layout. The rail's contents,
+ * the pills and the ruler all have static positions; only the rail is
+ * translated.
  *
- * Nothing here reads geometry. The one measurement the scene needs — how far
- * the band has scrolled — comes from a single `getBoundingClientRect` on the
- * band itself, inside the rAF callback, which is the one place a read cannot
- * force a synchronous layout on a write that has not happened yet. Everything
- * else is a percentage of its own box, so a resize needs no recomputation at
- * all.
+ * **Geometry is read once per resize, never per frame.** The demonstration
+ * pointer aims at real controls — a swatch, a slider's 48% mark, a word in the
+ * transcript — so those have to be measured. They are measured on attach and on
+ * resize into a cache keyed by `data-t`, and the per-frame code only
+ * interpolates between cached numbers. A target that is display:none when the
+ * cache is built keeps its last known position, which is exactly right: the
+ * pointer is heading for a control the panel is about to show.
  *
- * Counts, not lists. Which pills have been placed is one number per lane; each
- * pill compares it against its own index in CSS. Fourteen objects appear over
- * the ride and not one of them costs a DOM write.
+ * **The video is seeked, never played.** `currentTime` is the footage clock.
+ * Seeks are issued latest-wins — one in flight, the newest pending value kept —
+ * which is the fastest cadence the decoder can hold without building a queue.
  */
 
-import { type Frame, frameAt, WORDS_REMOVABLE } from "./scene";
+import { CURSORS } from "./generated";
+import { CUT_INDEX, type Frame, frameAt, strikeOf, T_TOTAL } from "./scene";
 
 export interface DriverRefs {
 	band: HTMLElement;
 	root: HTMLElement;
+	cam: HTMLVideoElement;
 	padValue: HTMLElement;
 	sizeValue: HTMLElement;
-	zoomValue: HTMLElement;
 	timeValue: HTMLElement;
+	cutsValue: HTMLElement;
 	flow: HTMLElement;
 }
 
 export interface DriverClasses {
-	cue: string;
 	struck: string;
+	cue: string;
 }
 
-/** `formatSec`'s own shape — m:ss.d — for the transport readout. The generated
- *  strings prove the format; this is the same arithmetic for a moving number. */
-function fmtSec(sec: number): string {
-	const s = Math.max(0, sec);
-	const m = Math.floor(s / 60);
-	const rest = s - m * 60;
-	return `${m}:${Math.floor(rest).toString().padStart(2, "0")}.${Math.floor((rest % 1) * 10)}`;
-}
-
-/**
- * The three the component re-checks on change. `position: sticky` is not among
- * them because support for it does not change while the page is open.
- */
 export const SCENE_QUERIES = [
 	"(min-width: 901px)",
 	"(prefers-reduced-motion: reduce)",
 	"(forced-colors: active)",
 ] as const;
 
-/**
- * The scene is off below 901px, without `position: sticky`, under forced colours
- * and under a reduced-motion preference — the same four conditions the
- * stylesheet gates on, because a driver that runs while the stylesheet has
- * folded the band away would be animating variables nothing reads.
- */
 export function sceneEnabled(): boolean {
 	if (typeof window === "undefined") return false;
 	try {
@@ -73,34 +57,94 @@ export function sceneEnabled(): boolean {
 	}
 }
 
-/** Everything `apply` writes, so a driver that shuts down can hand the element
- *  back to the stylesheet's resting values rather than leaving it frozen at
- *  whatever frame it happened to stop on. */
+/** Everything `apply` writes, so a driver that shuts down hands the element back
+ *  to the stylesheet's resting values rather than freezing mid-ride. */
 const WRITTEN = [
 	"--t",
+	"--tf",
 	"--tl",
-	"--doc",
 	"--bg",
 	"--fit",
-	"--zoom",
-	"--zoom-x",
-	"--zoom-y",
 	"--pad-pct",
+	"--frame-scale",
 	"--size-pct",
 	"--cur-size",
-	"--cur-sel",
+	"--size-u",
+	"--zoom",
+	"--zoom-origin",
+	"--zoom-active",
 	"--shot-x",
 	"--shot-y",
+	"--shot-bounce",
+	"--shot-cursor",
+	"--shot-hx",
+	"--shot-hy",
 	"--page-y",
+	"--ui-x",
+	"--ui-y",
+	"--ui-bounce",
+	"--ui-on",
+	"--ui-cursor",
+	"--ui-hx",
+	"--ui-hy",
+	"--zooms-placed",
+	"--speed-placed",
+	"--panel",
 	"--palette",
 	"--wand",
-	"--note-on",
-	"--panel",
-	"--zooms-placed",
-	"--trims-placed",
-	"--note-placed",
+	"--comment",
 	"--flow-y",
+	"--cam-scale",
+	"--cam-tx",
+	"--cam-ty",
+	"--cam-rot",
+	"--trim-0",
+	"--trim-1",
+	"--trim-2",
+	"--trim-3",
+	"--trim-4",
 ];
+
+const fmtSec = (sec: number) => {
+	const s = Math.max(0, sec);
+	const m = Math.floor(s / 60);
+	const r = s - m * 60;
+	return `${m}:${Math.floor(r).toString().padStart(2, "0")}.${Math.floor((r % 1) * 10)}`;
+};
+
+/** Piecewise-linear read of `[[t, ...values]]`, clamped at both ends. */
+function kf(t: number, pts: number[][]): number[] {
+	if (t <= pts[0][0]) return pts[0].slice(1);
+	for (let i = 1; i < pts.length; i++) {
+		if (t <= pts[i][0]) {
+			const a = pts[i - 1];
+			const b = pts[i];
+			const k = (t - a[0]) / (b[0] - a[0]);
+			return a.slice(1).map((v, j) => v + (b[j + 1] - v) * k);
+		}
+	}
+	return pts[pts.length - 1].slice(1);
+}
+
+/** Windows where the pointer is over something clickable, or over text. */
+const HOVERS = [
+	[1.45, 3.05],
+	[3.4, 4.9],
+	[5.25, 6.6],
+	[7.55, 10.3],
+	[11.0, 12.63],
+	[12.7, 14.3],
+	[15.05, 16.6],
+	[17.5, 18.9],
+	[19.7, 20.4],
+	[20.95, 21.5],
+	[22.05, 22.36],
+];
+const TEXTS = [
+	[20.4, 20.95],
+	[21.5, 22.0],
+];
+const inAny = (t: number, w: number[][]) => w.some(([a, b]) => t >= a && t < b);
 
 export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 	if (!sceneEnabled()) {
@@ -111,72 +155,239 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		};
 	}
 
-	const { band, root, padValue, sizeValue, zoomValue, timeValue, flow } = refs;
-
+	const { band, root, cam, padValue, sizeValue, timeValue, cutsValue, flow } = refs;
 	let raf = 0;
-	let lastCue = -2;
+
+	/* ── the target cache ─────────────────────────────────────────────────── */
+
+	let targets = new Map<string, [number, number]>();
+	const measureVisible = () => {
+		const box = root.getBoundingClientRect();
+		if (box.width <= 0) return;
+		for (const el of Array.from(root.querySelectorAll<HTMLElement>("[data-t]"))) {
+			// An element inside a hidden pane has no box; keep whatever it last
+			// measured, because the pointer is on its way to it.
+			if (el.offsetParent === null) continue;
+			const r = el.getBoundingClientRect();
+			if (r.width <= 0) continue;
+			const name = el.dataset.t!;
+			// Anchors along a slider track are stored as the track's own geometry,
+			// so a percentage along it can be resolved without re-measuring.
+			targets.set(name, [
+				((r.left - box.left) / box.width) * 100,
+				((r.top + r.height / 2 - box.top) / box.height) * 100,
+			]);
+			targets.set(`${name}:w`, [(r.width / box.width) * 100, (r.height / box.height) * 100]);
+		}
+	};
+
+	/**
+	 * Measure every target, including those inside a pane that is closed.
+	 *
+	 * Three of the four panes are `display: none` at any moment, and a closed
+	 * pane's children have no box — so a single pass leaves the swatches, the
+	 * sliders and the transcript's words at their fallback coordinates, and the
+	 * pointer spends the whole ride a hundred pixels from everything it is
+	 * meant to be clicking. That was the first defect this build shipped.
+	 *
+	 * Opening each pane in turn is also the only correct way to do it: the panes
+	 * share one flow container, so showing them together would measure each one
+	 * stacked below the others.
+	 */
+	const measure = () => {
+		const had = root.dataset.beat;
+		for (const beat of ["style", "effects", "cursor", "timeline", "transcript"]) {
+			root.dataset.beat = beat;
+			measureVisible();
+		}
+		if (had === undefined) delete root.dataset.beat;
+		else root.dataset.beat = had;
+	};
+
+	const at = (name: string, fx = 20, fy = 45): [number, number] => {
+		const p = targets.get(name);
+		const w = targets.get(`${name}:w`);
+		if (!p) return [fx, fy];
+		// Centre by default; `along` handles the two sliders and the two words.
+		return [p[0] + (w ? w[0] / 2 : 0), p[1]];
+	};
+	const along = (name: string, frac: number, fx = 20, fy = 45): [number, number] => {
+		const p = targets.get(name);
+		const w = targets.get(`${name}:w`);
+		if (!p || !w) return [fx, fy];
+		return [p[0] + w[0] * frac, p[1]];
+	};
+
+	/** v4's pointer score, rebuilt each frame from the cache — the cache is what
+	 *  makes that free, and rebuilding is what lets a target that was hidden at
+	 *  attach time be aimed at correctly once its pane opens. */
+	const path = (): number[][] => {
+		const pad = (pct: number) => along("padtrk", pct / 100);
+		const sz = (pct: number) => along("sztrk", pct / 100);
+		const tok = (i: number) => at(`tok-${i}`);
+		const tokU = (i: number, ax: number) => along(`tok-${i}`, ax);
+		return [
+			[0.4, 58, 66],
+			[1.45, ...at("th-1")],
+			[3.05, ...at("th-1")],
+			[3.4, ...at("th-2")],
+			[4.9, ...at("th-2")],
+			[5.25, ...at("th-3")],
+			[6.6, ...at("th-3")],
+			[7.55, ...pad(97)],
+			[7.95, ...pad(97)],
+			[9.0, ...pad(48)],
+			[10.3, ...pad(48)],
+			[11.0, ...at("cur-2")],
+			[11.9, ...at("cur-2")],
+			[12.15, ...at("cur-1")],
+			[12.63, ...at("cur-1")],
+			[12.7, ...sz(50)],
+			[13.2, ...sz(79)],
+			[14.3, ...sz(79)],
+			[15.05, ...at("wand")],
+			[16.6, ...at("wand")],
+			[17.5, ...at("comment")],
+			[18.9, ...at("comment")],
+			[19.75, ...tok(12)],
+			[20.35, ...tok(12)],
+			[20.5, ...tokU(13, 1.02)],
+			[20.699, ...tokU(13, 1.02)],
+			[20.7, ...tokU(13, 0.02)],
+			[20.85, ...tokU(13, 0.02)],
+			[21.0, ...tok(30)],
+			[21.45, ...tok(30)],
+			[21.6, ...tokU(35, 1.02)],
+			[21.799, ...tokU(35, 1.02)],
+			[21.8, ...tokU(35, 0.02)],
+			[21.95, ...tokU(35, 0.02)],
+			[22.1, ...tok(39)],
+			[22.36, ...tok(39)],
+		];
+	};
+
+	/* ── the webcam ───────────────────────────────────────────────────────── */
+
+	let camReady = false;
+	let camPending: number | undefined;
+	const camSrc = "/video/webcam.mp4";
+	const primeCam = () => {
+		if (cam.getAttribute("src")) return;
+		cam.setAttribute("src", camSrc);
+		cam.preload = "auto";
+		cam.load();
+	};
+	cam.addEventListener("loadeddata", () => {
+		camReady = true;
+	});
+	cam.addEventListener("seeked", () => {
+		if (camPending !== undefined) {
+			const q = camPending;
+			camPending = undefined;
+			try {
+				cam.currentTime = q;
+			} catch {
+				// A seek past a not-yet-buffered range throws; the next frame retries.
+			}
+		}
+	});
+	const seekCam = (tf: number) => {
+		if (!camReady || cam.readyState < 2) return;
+		const dur = Number.isFinite(cam.duration) && cam.duration > 0 ? cam.duration : 10;
+		const t = ((tf % dur) + dur) % dur;
+		if (cam.seeking) camPending = t;
+		else if (Math.abs((cam.currentTime || 0) - t) > 0.033) {
+			try {
+				cam.currentTime = t;
+			} catch {
+				// ignored — see above
+			}
+		}
+	};
+
+	/* ── the frame ────────────────────────────────────────────────────────── */
+
 	let lastBeat: string | null | undefined;
 	let lastPad = "";
 	let lastSize = "";
-	let lastZoom = "";
 	let lastTime = "";
-	/** Every entry the document can remove, paired with its element. Two of the
-	 *  three silences are struck over the ride; resolving them once here is what
-	 *  keeps the per-frame work off the transcript's 106 nodes. */
-	const removable = WORDS_REMOVABLE.map((w) => ({
-		w,
-		el: flow.querySelector<HTMLElement>(`[data-w="${w.i}"]`),
-	})).filter((x) => x.el);
+	let lastCuts = "";
+	let lastArt = "";
+	let lastTheme = -1;
+	const struck = new Set<number>();
+	let trimEls: HTMLElement[] = [];
 
-	/**
-	 * Every entry's offset inside the flow, measured once.
-	 *
-	 * The cue moves about a hundred times over the ride, and reading `offsetTop`
-	 * each time is a layout read interleaved with the variable writes above —
-	 * the shape that turns a cheap frame into a forced synchronous reflow. The
-	 * flow's own layout never changes (the panel has a fixed width and the text
-	 * is static), so the only thing that can invalidate this is a late webfont,
-	 * which is what the resize listener and the fonts promise below are for.
-	 */
-	const entries = Array.from(flow.querySelectorAll<HTMLElement>("[data-w]"));
-	let offsets = new Map<string, number>();
-	let mask = 0;
-	const measure = () => {
-		offsets = new Map(entries.map((el) => [el.dataset.w!, el.offsetTop]));
-		mask = flow.parentElement?.clientHeight ?? 0;
-	};
-	measure();
-	document.fonts?.ready.then(measure).catch(() => {
-		// A font that never resolves leaves the first measurement standing, which
-		// is the right answer for every fallback stack anyway.
-	});
-
-	const num = (name: string, value: number, dp = 4) =>
-		root.style.setProperty(name, value.toFixed(dp));
+	const num = (n: string, v: number, dp = 4) => root.style.setProperty(n, v.toFixed(dp));
 
 	const apply = (f: Frame) => {
 		num("--t", f.t, 3);
-		num("--tl", f.tl);
-		num("--doc", f.doc, 3);
-		num("--bg", f.bg, 3);
+		num("--tf", f.tf, 3);
+		num("--tl", f.tl, 0);
+		if (String(f.bg) !== root.dataset.bg) root.dataset.bg = String(f.bg);
 		num("--fit", f.fit);
-		num("--zoom", f.zoom, 4);
-		num("--zoom-x", f.zoomX, 1);
-		num("--zoom-y", f.zoomY, 1);
 		num("--pad-pct", f.paddingPct, 2);
+		num("--frame-scale", f.frameScale, 4);
 		num("--size-pct", f.cursorSizePct, 2);
 		num("--cur-size", f.cursorSize, 2);
-		num("--cur-sel", f.cursorSel, 0);
+		num("--size-u", f.cursorSizeU, 4);
+		num("--zoom", f.zoom, 4);
+		root.style.setProperty("--zoom-origin", f.zoomOrigin);
+		num("--zoom-active", f.zoomActive, 0);
 		num("--shot-x", f.shot[0], 2);
 		num("--shot-y", f.shot[1], 2);
+		num("--shot-bounce", f.shotBounce, 4);
 		num("--page-y", f.pageY, 2);
-		num("--palette", f.paletteIn, 0);
-		num("--wand", f.wandOn, 0);
-		num("--note-on", f.noteOn, 0);
-		num("--panel", f.panelIn, 0);
+		num("--ui-bounce", f.uiBounce, 4);
 		num("--zooms-placed", f.zoomsPlaced, 0);
-		num("--trims-placed", f.trimsPlaced, 0);
-		num("--note-placed", f.notePlaced, 0);
+		num("--speed-placed", f.speedPlaced, 0);
+		num("--panel", f.panel, 0);
+		num("--palette", f.palette, 0);
+		num("--wand", f.wand, 0);
+		num("--comment", f.comment, 0);
+		// Written onto the elements, not through a variable and a positional
+		// selector — see the note in the stylesheet.
+		if (!trimEls.length) trimEls = Array.from(root.querySelectorAll<HTMLElement>("[data-trim]"));
+		f.trims.forEach((c, i) => {
+			const el = trimEls[i];
+			if (el) el.style.opacity = c.placed ? "1" : "0";
+		});
+
+		// Ken Burns on the webcam, on the footage clock. The minimum scale is a
+		// constraint, not a taste: below ~1.12 the generator's watermark enters
+		// the frame from the right.
+		num("--cam-scale", 1.18 + 0.07 * Math.sin(f.tf * 0.9), 3);
+		num("--cam-tx", 3.4 * Math.sin(f.tf * 0.55) + 1.2 * Math.sin(f.tf * 2.1), 2);
+		num("--cam-ty", 2.6 * Math.cos(f.tf * 0.7) + 0.9 * Math.sin(f.tf * 1.7), 2);
+		num("--cam-rot", 1.3 * Math.sin(f.tf * 0.42), 2);
+
+		// The pointer inside the recording wears the pack the picker selected.
+		if (f.cursorTheme !== lastTheme) {
+			lastTheme = f.cursorTheme;
+			root.dataset.curSel = String(f.cursorTheme);
+			const theme = CURSORS.themes[f.cursorTheme];
+			root.style.setProperty("--shot-cursor", `url(${theme.src})`);
+			num("--shot-hx", theme.hotspotX * 100, 2);
+			num("--shot-hy", theme.hotspotY * 100, 2);
+		}
+
+		// The reader's pointer: arrow, pointer over a control, caret over text.
+		// The hotspot is the app's own, which is why the tip lands on the target
+		// rather than near it.
+		const art = inAny(f.t, TEXTS) ? "text" : inAny(f.t, HOVERS) ? "pointer" : "arrow";
+		if (art !== lastArt) {
+			lastArt = art;
+			const sprite =
+				art === "text" ? CURSORS.text : art === "pointer" ? CURSORS.pointer : CURSORS.themes[0];
+			root.style.setProperty("--ui-cursor", `url(${sprite.src})`);
+			num("--ui-hx", sprite.hotspotX * 100, 2);
+			num("--ui-hy", sprite.hotspotY * 100, 2);
+			root.dataset.cur = art;
+		}
+
+		const [ux, uy] = kf(Math.min(f.t, 22.36), path());
+		num("--ui-x", ux, 2);
+		num("--ui-y", uy, 2);
+		num("--ui-on", f.t > 1.1 && f.t < 22.36 ? 1 : 0, 0);
 
 		if (f.beat !== lastBeat) {
 			lastBeat = f.beat;
@@ -185,62 +396,43 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		}
 
 		const pad = `${Math.round(f.padding)}%`;
-		if (pad !== lastPad) {
-			lastPad = pad;
-			padValue.textContent = pad;
-		}
-		// One decimal and no suffix — RightPanes.tsx:1755 gives this slider
-		// `decimals={1}` and no `suffix`, unlike every other slider on the panel.
+		if (pad !== lastPad) padValue.textContent = lastPad = pad;
+		// One decimal and no suffix: RightPanes gives this one slider `decimals={1}`
+		// and no unit, unlike every other slider on the panel.
 		const size = f.cursorSize.toFixed(1);
-		if (size !== lastSize) {
-			lastSize = size;
-			sizeValue.textContent = size;
-		}
-		const zoom = f.zoomLabel ?? "";
-		if (zoom !== lastZoom) {
-			lastZoom = zoom;
-			// Emptying it rather than hiding it: the badge's own opacity is
-			// already driven by --zoom, and a label left behind under a
-			// transparent badge is a string a screen reader can still reach.
-			zoomValue.textContent = zoom;
-		}
-		const time = fmtSec(f.doc);
-		if (time !== lastTime) {
-			lastTime = time;
-			timeValue.textContent = time;
+		if (size !== lastSize) sizeValue.textContent = lastSize = size;
+		const time = fmtSec(f.tf);
+		if (time !== lastTime) timeValue.textContent = lastTime = time;
+		const cuts = f.cutCount ? `−${f.cutCount} · −${f.saved.toFixed(1)}s` : "";
+		if (cuts !== lastCuts) cutsValue.textContent = lastCuts = cuts;
+
+		// Only the five removable entries can ever change, so the other forty
+		// nodes in the transcript are never touched.
+		for (const i of CUT_INDEX) {
+			const on = f.t >= strikeOf(i);
+			if (on === struck.has(i)) continue;
+			on ? struck.add(i) : struck.delete(i);
+			flow.querySelector(`[data-w="${i}"]`)?.classList.toggle(cls.struck, on);
 		}
 
-		if (f.cue !== lastCue) {
-			const prev = lastCue;
-			lastCue = f.cue;
-			if (prev >= 0) flow.querySelector(`[data-w="${prev}"]`)?.classList.remove(cls.cue);
-			if (f.cue >= 0) {
-				flow.querySelector(`[data-w="${f.cue}"]`)?.classList.add(cls.cue);
-				// Keep the cue in the panel without scrolling the panel: the flow
-				// is translated under a fixed mask, so this is a transform, not a
-				// scroll, and it cannot fight the page's own scrolling.
-				const top = offsets.get(String(f.cue));
-				if (top !== undefined) num("--flow-y", -Math.max(0, top - mask * 0.45), 1);
-			}
-			for (const { w, el } of removable) {
-				// `startSec`, matching `trimsPlaced` in the score: the silence is
-				// struck as the playhead arrives at the dead air, and its trim lands
-				// on the floor on the same frame.
-				el!.classList.toggle(cls.struck, f.cue >= 0 && f.doc >= w.startSec);
-			}
-		}
+		seekCam(f.tf);
 	};
+
+	/* ── the scroll ───────────────────────────────────────────────────────── */
 
 	const onScroll = () => {
 		if (raf) return;
 		raf = requestAnimationFrame(() => {
 			raf = 0;
 			const rect = band.getBoundingClientRect();
-			const travel = rect.height - window.innerHeight;
-			// Off screen in either direction: hold the nearest end rather than
-			// letting the scene run backwards past its own first frame.
-			const p = travel > 0 ? -rect.top / travel : 0;
-			apply(frameAt(p));
+			const total = rect.height - window.innerHeight;
+			// The ride overflows the sticky on purpose: the last stretch plays while
+			// the section is already scrolling away, so the editor is not still
+			// sitting pinned and finished for a whole viewport.
+			const span = total + window.innerHeight * 1.04;
+			const off = Math.min(span, Math.max(0, -rect.top));
+			if (off > 0 && off < span) primeCam();
+			apply(frameAt(span > 0 ? off / span : 0));
 		});
 	};
 
@@ -248,6 +440,14 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		measure();
 		onScroll();
 	};
+
+	measure();
+	// Targets inside a closed pane cannot be measured until it opens, and the
+	// panes open on scroll — so re-measure once the fonts have settled, which is
+	// also when the transcript's words stop moving.
+	document.fonts?.ready.then(measure).catch(() => {
+		// A font that never resolves leaves the first measurement standing.
+	});
 	window.addEventListener("scroll", onScroll, { passive: true });
 	window.addEventListener("resize", onResize);
 	onScroll();
@@ -258,3 +458,5 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 		if (raf) cancelAnimationFrame(raf);
 	};
 }
+
+export { T_TOTAL };
