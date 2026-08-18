@@ -265,6 +265,18 @@ export function attachDriver(refs: DriverRefs, cls: DriverClasses): () => void {
 			if (was) root.style.setProperty(css, was);
 			else root.style.removeProperty(css);
 		}
+		/* Flush the restored state while transitions are still suppressed.
+		   
+		   Without this the browser's last computed style is the one from the end
+		   of the loop — the transcript beat, because it is measured last — and
+		   re-enabling transitions animates FROM there back to the real beat. On a
+		   resize, which is when this runs, "Edit video like text" appeared at
+		   full opacity and faded out over 0.4s. Suppressing the transitions made
+		   that worse rather than better: it took the caption to 1 instantly
+		   instead of starting a fade that would be interrupted. Reading a layout
+		   property here makes the restored state the one transitions start from,
+		   so there is nothing to animate. */
+		void root.offsetHeight;
 		delete root.dataset.measuring;
 	};
 

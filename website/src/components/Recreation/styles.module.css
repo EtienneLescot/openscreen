@@ -76,7 +76,12 @@
 	   actually measure — 95px at every one of the five beats — plus air; it used
 	   to reserve 116 and waste 21. */
 	--nav: var(--ifm-navbar-height, 60px);
-	--pnl-w: 336px;
+	/* The inspector's width, and it gives before the picture does. Fixed at 336
+	   it took a third of a 1011px window, which starved the picture of width —
+	   and a 16:9 picture starved of width leaves height unused, which is the
+	   void that opens under it on a narrow, tall screen. It stops at 280, which
+	   is what the sliders and the four-column swatch grid need. */
+	--pnl-w: clamp(280px, 30vw, 336px);
 	--cap-h: 104px;
 	--tl-h: 210px;
 	/* One gutter for both layouts, and a formula rather than a breakpoint: it
