@@ -63,21 +63,51 @@ function walk(dir) {
 	return entries.flatMap((e) => (e.isDirectory() ? walk(join(dir, e.name)) : [join(dir, e.name)]));
 }
 
+/** The boxes a track's `hdlr` can be nested inside. Everything else is skipped
+ *  whole — including `mdat`, which is the point. */
+const MP4_CONTAINERS = new Set(["moov", "trak", "mdia"]);
+
 /**
  * True if the MP4 declares a sound track. Reads the `hdlr` boxes rather than
  * shelling out to ffprobe, which is not guaranteed on a CI runner and would make
  * this check quietly skippable — which is how the guarantee would be lost.
+ *
+ * Walked as a box tree, not searched for as a byte pattern. `mdat` is compressed
+ * picture: the twelve bytes that spell a sound handler can occur in it by
+ * chance, and the failure that would produce — a silent clip rejected for an
+ * audio track it does not have — is unreproducible and looks like a bug in this
+ * file rather than in the clip.
  */
 function hasAudioTrack(file) {
 	const buf = readFileSync(file);
-	for (let i = 0; i + 4 <= buf.length; i++) {
-		if (buf[i] === 0x68 && buf[i + 1] === 0x64 && buf[i + 2] === 0x6c && buf[i + 3] === 0x72) {
-			// hdlr: 4 size + 4 type + 4 version/flags + 4 predefined, then handler_type
-			const handler = buf.subarray(i + 12, i + 16).toString("latin1");
-			if (handler === "soun") return true;
+	const walk = (start, end) => {
+		let pos = start;
+		while (pos + 8 <= end) {
+			let size = buf.readUInt32BE(pos);
+			let head = 8;
+			if (size === 1) {
+				if (pos + 16 > end) return false;
+				size = Number(buf.readBigUInt64BE(pos + 8));
+				head = 16;
+			} else if (size === 0) {
+				size = end - pos; // the last box, extending to the end of the file
+			}
+			// A size that runs past its parent means the file is not what it says
+			// it is; stop rather than resync, which is how a scan gets back into
+			// payload bytes.
+			if (size < head || pos + size > end) return false;
+			const type = buf.toString("latin1", pos + 4, pos + 8);
+			if (type === "hdlr") {
+				// FullBox: 4 version/flags, 4 pre_defined, then handler_type.
+				if (buf.toString("latin1", pos + head + 8, pos + head + 12) === "soun") return true;
+			} else if (MP4_CONTAINERS.has(type) && walk(pos + head, pos + size)) {
+				return true;
+			}
+			pos += size;
 		}
-	}
-	return false;
+		return false;
+	};
+	return walk(0, buf.length);
 }
 
 /**
