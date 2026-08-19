@@ -1168,7 +1168,11 @@ jobs:
           # below, which takes the DIRECTORY holding it — the CLI's own usage
           # says `-i, --inputDirectory`, and rejects the `--inputFile` that
           # Microsoft Learn documents. The binary wins.
-          msstore publish . --inputDirectory $appx.Directory.FullName --appId $env:PRODUCT_ID
+          # -v for the same reason as the retry workflow: without it an upload
+          # failure is the bare line "Error while uploading the application package."
+          # with no status code, no URL and no body. This is the path a real release
+          # takes, so it is the path that most needs to be diagnosable.
+          msstore publish . --inputDirectory $appx.Directory.FullName --appId $env:PRODUCT_ID -v
 
       # Report what happened, not what was configured. Keyed off `enabled` alone
       # under always(), this claimed "Submitted to the Store" when `msstore
