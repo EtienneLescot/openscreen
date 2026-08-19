@@ -109,8 +109,20 @@ jobs:
           # `sources` enumerates displays, windows and microphones, so it
           # exercises the capture stack rather than proving that a usage string
           # can be printed. Its output is the assertion: well-formed, non-empty.
+          # Streams kept apart on purpose. A previous run piped both together and
+          # the parse died on "[10767:0819/...:ERROR:dbus/bus.cc:405]" -- Chromium
+          # diagnostics, which a headless host produces in quantity (no dbus, no
+          # GPU). Whether those land on stdout decides whether this is a flaw in
+          # the test or in the CLI: anything consuming `--json` breaks if they do,
+          # and headless is exactly where a --json flag earns its keep.
           echo "--- openscreen sources --json ---"
-          xvfb-run -a ./result/bin/openscreen $SANDBOX sources --json | tee /tmp/sources.json
+          xvfb-run -a ./result/bin/openscreen $SANDBOX sources --json \
+            >/tmp/sources.json 2>/tmp/sources.err || true
+
+          echo "--- stdout, first 400 bytes ---"
+          head -c 400 /tmp/sources.json; echo
+          echo "--- stderr, first 3 lines ---"
+          head -3 /tmp/sources.err || true
 
           python3 <<'PY'
           import json
