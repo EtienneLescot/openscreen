@@ -232,6 +232,18 @@ export function captionCueAt(cues: CaptionCue[], timeMs: number): CaptionCue | n
 }
 
 /**
+ * A caption's region, which is an `AnnotationRegion` measured against a different box.
+ *
+ * The `space` marker is why this type exists instead of a field on `AnnotationRegion`:
+ * an annotation is authored on top of the visible video and must keep tracking the
+ * screen rect, while a caption belongs to the output frame. Widening the shared type
+ * would also put a frame-space band — whose `y` legitimately goes negative when it
+ * overhangs the frame edge — through `annotationRegionSchema`, which bounds position
+ * to 0..100. Captions are never stored, so they never meet that schema.
+ */
+export type CaptionTextRegion = AnnotationRegion & { space: "frame" };
+
+/**
  * Cues as text annotation regions, so the export renderer draws captions through
  * the exact same text path as annotations (wrapping, background plate,
  * alignment) instead of a second, subtly-different implementation.
@@ -242,9 +254,10 @@ export function captionCueAt(cues: CaptionCue[], timeMs: number): CaptionCue | n
 export function captionCuesToTextRegions(
 	cues: CaptionCue[],
 	settings: CaptionSettings,
-): AnnotationRegion[] {
+): CaptionTextRegion[] {
 	const rect = captionBandRect(settings);
 	return cues.map((cue, index) => ({
+		space: "frame" as const,
 		id: cue.id,
 		startMs: cue.startMs,
 		endMs: cue.endMs,

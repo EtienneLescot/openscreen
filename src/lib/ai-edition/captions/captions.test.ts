@@ -2,8 +2,11 @@ import { describe, expect, it } from "vitest";
 import type { AxcutDocument, AxcutTranscript } from "../schema";
 import { captionCuesToTextRegions, deriveCaptionCues } from "./cues";
 import {
+	CAPTION_BAND_HEIGHT_PCT,
 	captionBackgroundCss,
 	captionBandRect,
+	captionInkHeightPct,
+	captionOffsetRange,
 	DEFAULT_CAPTION_SETTINGS,
 	getCaptionSettings,
 	patchCaptionSettings,
@@ -114,11 +117,72 @@ describe("caption settings", () => {
 		expect(getCaptionSettings(next)).toMatchObject({ minWordsPerLine: 3, maxWordsPerLine: 9 });
 	});
 
-	it("keeps the band inside the frame however far the offset is pushed", () => {
-		const rect = captionBandRect({ ...ON, verticalPosition: "bottom", offsetY: 45 });
-		expect(rect.y + rect.height).toBeLessThanOrEqual(100);
-		const top = captionBandRect({ ...ON, verticalPosition: "top", offsetY: -45 });
-		expect(top.y).toBeGreaterThanOrEqual(0);
+	it("leaves an untouched project exactly where it was", () => {
+		// The frame/screen-rect reinterpretation is the only intended visual change. The
+		// anchor arithmetic must not move on top of it, or every existing project shifts.
+		expect(captionBandRect({ ...ON, verticalPosition: "top" })).toMatchObject({ x: 10, y: 3 });
+		expect(captionBandRect({ ...ON, verticalPosition: "middle" })).toMatchObject({ x: 10, y: 39 });
+		expect(captionBandRect({ ...ON, verticalPosition: "bottom" })).toMatchObject({ x: 10, y: 75 });
+	});
+
+	it("pushes the ink onto the frame edge, and no further", () => {
+		// The band is a 22% box whose text the renderers centre, so the box has to hang off
+		// the frame for the glyphs to reach the edge — asserting the BOX stays inside is what
+		// used to stop the caption a half-band short (#396). What must stay inside is the ink.
+		for (const verticalPosition of ["top", "middle", "bottom"] as const) {
+			const settings = { ...ON, verticalPosition };
+			const range = captionOffsetRange(settings);
+			const half = captionInkHeightPct(settings) / 2;
+
+			const low = captionBandRect({ ...settings, offsetY: range.y.min });
+			expect(low.y + low.height / 2 - half).toBeCloseTo(0, 6);
+			expect(low.y).toBeLessThan(0);
+
+			const high = captionBandRect({ ...settings, offsetY: range.y.max });
+			expect(high.y + high.height / 2 + half).toBeCloseTo(100, 6);
+			expect(high.y + high.height).toBeGreaterThan(100);
+		}
+	});
+
+	it("clamps an offset the anchor cannot reach instead of drawing off-frame", () => {
+		const pushed = captionBandRect({ ...ON, verticalPosition: "bottom", offsetY: 100 });
+		const capped = captionBandRect({
+			...ON,
+			verticalPosition: "bottom",
+			offsetY: captionOffsetRange(ON).y.max,
+		});
+		expect(pushed).toEqual(capped);
+	});
+
+	it("lets the band reach the left and right frame edges, but never past them", () => {
+		const range = captionOffsetRange(ON);
+		expect(captionBandRect({ ...ON, offsetX: range.x.min }).x).toBeCloseTo(0, 6);
+		expect(captionBandRect({ ...ON, offsetX: range.x.max }).x).toBeCloseTo(100 - ON.width, 6);
+		expect(captionBandRect({ ...ON, offsetX: 100 }).x).toBeCloseTo(100 - ON.width, 6);
+	});
+
+	it("gives a full-width band no horizontal travel to offer", () => {
+		const full = { ...ON, width: 100 };
+		const range = captionOffsetRange(full);
+		expect(range.x.min).toBeCloseTo(0, 6);
+		expect(range.x.max).toBeCloseTo(0, 6);
+		expect(captionBandRect({ ...full, offsetX: 40 }).x).toBeCloseTo(0, 6);
+	});
+
+	it("shrinks the reach as the font grows, so big captions still fit", () => {
+		// The guaranteed-visible slice is font-derived: a 200px caption fills the whole band,
+		// leaving nothing to spill, while a small one can hang most of the band off-frame.
+		const small = captionOffsetRange({ ...ON, fontSize: 12 }).y.max;
+		const large = captionOffsetRange({ ...ON, fontSize: 200 }).y.max;
+		expect(small).toBeGreaterThan(large);
+		expect(large).toBeCloseTo(100 - CAPTION_BAND_HEIGHT_PCT - 75, 6);
+	});
+
+	it("normalises an offset left over from another anchor on read", () => {
+		// The stored value, the slider position and the drawn band stay the same number.
+		const parked = patchCaptionSettings(doc(), { enabled: true, offsetY: 45 });
+		const read = getCaptionSettings(parked);
+		expect(read.offsetY).toBeCloseTo(captionOffsetRange(read).y.max, 6);
 	});
 
 	it("folds the opacity into the background colour, and reports 'transparent' when off", () => {
