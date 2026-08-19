@@ -1617,6 +1617,73 @@ describe("buildSceneDescription.captions", () => {
 		expect(buildSceneDescription(docWithCaptions(false)).annotations).toHaveLength(0);
 	});
 
+	it("marks captions as frame-space so the compositor stops measuring the footage", () => {
+		const scene = buildSceneDescription(docWithCaptions(true));
+		expect(scene.annotations[0].space).toBe("frame");
+	});
+
+	it("holds the caption still while padding shrinks the screen rect", () => {
+		// Issue #396. Padding pulls `screenRect` in; a subtitle belongs to the frame the
+		// viewer sees, so its rect must not follow. Three points, because two could agree
+		// by coincidence — `paddingFit` is 1 - padding/100 * 0.4, so 1.0 / 0.8 / 0.6.
+		const rects = [0, 50, 100].map((padding) => {
+			const base = docWithCaptions(true);
+			const scene = buildSceneDescription({
+				...base,
+				legacyEditor: { ...(base.legacyEditor as Record<string, unknown>), padding },
+			} as AxcutDocument);
+			const caption = scene.annotations[0];
+			return {
+				screenWidth: scene.layout.screenRect?.width,
+				caption: { x: caption.x, y: caption.y, w: caption.w, h: caption.h },
+				fontSizeRel: caption.text?.fontSizeRel,
+			};
+		});
+
+		// The screen rect really does move — otherwise this test proves nothing.
+		expect(new Set(rects.map((r) => r.screenWidth)).size).toBe(3);
+		// ...and the caption does not, in position or in size.
+		expect(rects[1].caption).toEqual(rects[0].caption);
+		expect(rects[2].caption).toEqual(rects[0].caption);
+		// The font denominator has to follow the rect, or the caption holds still and
+		// still shrinks its text with the padding slider.
+		expect(rects[1].fontSizeRel).toBe(rects[0].fontSizeRel);
+		expect(rects[2].fontSizeRel).toBe(rects[0].fontSizeRel);
+	});
+
+	it("leaves the space key off a real annotation entirely", () => {
+		// Not `space: undefined` — an explicit key would change the annotation payload that
+		// shipped binaries already parse. `in` is the only check that tells them apart.
+		const doc = makeDoc({
+			annotations: [
+				{
+					id: "ann1",
+					startMs: 0,
+					endMs: 1000,
+					type: "text",
+					content: "hi",
+					position: { x: 10, y: 10 },
+					size: { width: 20, height: 10 },
+					style: {
+						color: "#fff",
+						backgroundColor: "transparent",
+						fontSize: 48,
+						fontFamily: "Inter",
+						fontWeight: "normal",
+						fontStyle: "normal",
+						textDecoration: "none",
+						textAlign: "center",
+						textAnimation: "none",
+					},
+					zIndex: 1,
+				},
+			],
+		});
+		const annotation = buildSceneDescription(doc).annotations[0];
+		expect(annotation).toBeDefined();
+		expect("space" in annotation).toBe(false);
+	});
+
 	it("carries the caption font size as a fraction, like every annotation", () => {
 		const scene = buildSceneDescription(docWithCaptions(true));
 		// 48px authored against a 1080-high frame.
