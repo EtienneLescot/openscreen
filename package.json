@@ -2,6 +2,9 @@
 	"name": "openscreen",
 	"private": true,
 	"version": "1.9.6",
+	"description": "Record your screen and polish the demo",
+	"homepage": "https://getopenscreen.com/",
+	"license": "MIT",
 	"type": "module",
 	"packageManager": "npm@10.9.4",
 	"engines": {
