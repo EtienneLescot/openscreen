@@ -3,6 +3,7 @@
   buildNpmPackage,
   nodejs_22,
   electron,
+  ffmpeg-headless,
   makeWrapper,
   makeDesktopItem,
   copyDesktopItems,
@@ -77,11 +78,25 @@ buildNpmPackage {
     mkdir -p "$out/lib/openscreen/public"
     cp -r public/wallpapers "$out/lib/openscreen/public/wallpapers"
 
-    # Wrap system electron with the app directory
+    # Wrap system electron with the app directory.
+    #
+    # OPENSCREEN_FFMPEG_PATH is checked before every other candidate in
+    # ffmpegCandidates (electron/media/audioPeaks.ts), which is what makes this
+    # a one-line answer to a problem that otherwise has none: the app normally
+    # gets ffmpeg from scripts/fetch-ffmpeg.mjs, and a build-time download
+    # cannot happen inside the sandbox. Without it resolveFfmpeg returns null,
+    # getAudioPeaks returns null in turn, and the renderer silently falls back
+    # to decoding waveforms in Chromium -- an order of magnitude slower, and
+    # invisible, which is the failure mode worth removing first.
+    #
+    # -headless rather than the full build: the only invocation is a decode to
+    # raw PCM (-i/-ac/-ar/-f), so X11 and SDL would be closure weight for
+    # nothing.
     mkdir -p "$out/bin"
     makeWrapper "${electron}/bin/electron" "$out/bin/openscreen" \
       --add-flags "$out/lib/openscreen" \
-      --set ELECTRON_IS_DEV 0
+      --set ELECTRON_IS_DEV 0 \
+      --set OPENSCREEN_FFMPEG_PATH "${ffmpeg-headless}/bin/ffmpeg"
 
     # Install icons to hicolor theme
     for size in 16 24 32 48 64 128 256 512 1024; do
