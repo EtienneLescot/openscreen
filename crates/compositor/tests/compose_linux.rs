@@ -171,8 +171,9 @@ fn compose_linux_ecran_tilte() {
     cfg.shadow = false;
     let (w, h, upright, tilted) = unsafe {
         let sf = dec.seek_to(1.0).expect("Decoder::seek_to");
-        // `frame` = 90 -> source_t = 3 s, au coeur de la region [0, 6] : la rampe
-        // d'entree est finie, la rotation est a pleine force.
+        // `frame` = 90 -> source_t = 90 / 60 = 1,5 s (`FPS` vaut 60 en dur dans
+        // `frame_geometry`, ce n'est pas le `fps` de la scene), dans la region [0, 6] et
+        // au-dela de la rampe d'entree : la rotation est a pleine force.
         let render = |json: String| {
             let scene = Scene::from_json(&json).expect("scene json");
             // Le padding transite par les live_params, pas la scene brute.
@@ -1482,13 +1483,17 @@ fn compose_linux_animation_texte() {
 /// l'element qui porte la transform, donc les sous-titres tiennent en place
 /// pendant que la video zoome dessous — et c'est celui que ce backend violait :
 /// il ancrait les annotations sur `s_dst`, la boite ecran, au lieu de `s_ann`.
-/// Windows et macOS avaient ete corriges a l'issue #179, Linux non, et personne
-/// ne l'a vu parce que la preview (web) reste juste sur les trois plateformes :
-/// seul l'export divergeait.
+/// Windows et macOS avaient ete corriges a l'issue #179, Linux non. Le natif
+/// etant la SEULE source de pixels de l'apercu (le DOM ne peint que la poignee
+/// de selection, cf. `AnnotationOverlay.tsx`), la derive se voyait des l'edition
+/// sur cette plateforme, pas seulement a l'export.
 ///
-/// La bande porte un fond OPAQUE : son empreinte est alors le rect entier, pas
-/// la silhouette des glyphes, donc la boite englobante mesure directement la
-/// geometrie de placement et ne depend pas de ce que la video montre dessous.
+/// La bande porte un fond OPAQUE : son empreinte est un RECT PLEIN et non la
+/// silhouette des glyphes, donc la boite englobante mesure une geometrie de
+/// placement et pas ce que la video montre dessous. Ce rect est la plaque du
+/// rasteriseur (`glyphs.plate`), serree sur les lignes posees — pas la boite
+/// 0.92x0.22 de l'annotation : peu importe ici, la plaque est une fonction
+/// deterministe de `dst` et de `font_size_px`, tous deux ancres sur `s_ann`.
 /// Chaque rendu est diffe contre son propre rendu sans annotation, sinon le
 /// changement du calque video sous le zoom dominerait la mesure.
 ///
@@ -1505,16 +1510,22 @@ fn compose_linux_annotation_ancree_hors_zoom() {
     let comp = Compositor::new_sized(&gpu, W, H).expect("Compositor::new_sized");
     let mut screen = Decoder::open(FIXTURE, &gpu).expect("Decoder::open");
 
-    let mut render = |zoom: &str, annotations: &str| -> Vec<u8> {
+    // UN SEUL `seek_to`, comme `compose_linux_ecran_tilte` : les six rendus partagent
+    // la meme AVFrame, donc le decodeur ne peut pas introduire une difference qu'on
+    // prendrait pour un deplacement de la bande.
+    let sf = unsafe { screen.seek_to(1.0).expect("seek") };
+
+    let render = |zoom: &str, annotations: &str| -> Vec<u8> {
         let parsed =
             Scene::from_json(&annotation_scene_with_zoom(zoom, annotations)).expect("scene json");
         comp.set_live_params(openscreen_compositor::compositor::live_params_from_scene(&parsed));
         comp.set_scene(Some(parsed));
+        // C'est CET override qui fixe le temps echantillonne, pas le 3e argument de
+        // `compose_frame` : `plan_frame` lit `timeline_t_override.unwrap_or(frame / FPS)`,
+        // et `FPS` y vaut 60 en dur (pas le `fps` de la scene). t = 3 s tombe au coeur
+        // de la region [0, 6], rampe d'entree finie, zoom et rotation a pleine force.
         comp.set_timeline_time(Some(3.0));
         unsafe {
-            let sf = screen.seek_to(1.0).expect("seek");
-            // Comme `compose_linux_ecran_tilte` : frame 90 tombe au coeur de la
-            // region [0, 6], rampe d'entree finie, zoom et rotation a pleine force.
             comp.compose_frame(sf, sf, 90.0, &Cfg::c8()).expect("compose_frame");
             comp.readback_direct().expect("readback").2
         }
@@ -1539,7 +1550,15 @@ fn compose_linux_annotation_ancree_hors_zoom() {
 
     let band_bbox = |bare: &[u8], with: &[u8], label: &str| {
         let px = changed_pixels(bare, with);
-        assert!(px.len() > 500, "bande absente ({} px changes) — {label}", px.len());
+        // C'est CE garde-fou qui saute en premier quand le bug est present : ancree sur
+        // `s_dst`, la bande part a y ~= 840 px dans un cadre de 540 et sort du champ, donc
+        // elle ne change plus aucun pixel au lieu de se decaler de quelques-uns.
+        assert!(
+            px.len() > 500,
+            "bande absente ({} px changes) — {label} : sortie du cadre, donc ancree sur \
+             `s_dst` au lieu de `s_ann`",
+            px.len()
+        );
         bbox(&px, W)
     };
     let plain = band_bbox(&bare_plain, &with_plain, "sans zoom");
@@ -1555,8 +1574,11 @@ fn compose_linux_annotation_ancree_hors_zoom() {
         moved.len()
     );
 
-    // 2 px de tolerance pour l'antialiasing du bord de la plaque ; l'erreur que ce
-    // test attrape se compte en dizaines de pixels (la bande deborde du cadre).
+    // 2 px de tolerance pour l'antialiasing du bord de la plaque. L'erreur visee est
+    // d'un tout autre ordre : sous zoom 2.5 la bande ancree sur `s_dst` descend de
+    // ~450 px et grossit d'autant, donc en pratique elle quitte le cadre et c'est le
+    // garde-fou « bande absente » ci-dessus qui tranche. Cette boucle attrape le reste :
+    // un ancrage qui deriverait sans sortir du champ.
     for (name, got) in [("zoom", zoomed), ("rotation 3D", tilted)] {
         let d = [
             got.0.abs_diff(plain.0),
