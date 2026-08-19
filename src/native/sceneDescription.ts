@@ -104,7 +104,13 @@ export interface SceneSpeedRegion {
  *  SCREEN layer's rect, not of the output frame — the web overlay is handed
  *  `layout.screenRect` as its container. And they are deliberately NOT affected by the zoom
  *  crop: the overlay is a sibling of the element carrying the zoom transform, so annotations
- *  hold still while the content zooms underneath them. */
+ *  hold still while the content zooms underneath them.
+ *
+ *  `space: "frame"` opts an entry out of that and measures it against the output frame instead.
+ *  Only captions set it: an annotation is authored on top of the visible video, so it must track
+ *  the screen rect, whereas a subtitle belongs to the frame the viewer sees and has to hold still
+ *  when padding resizes the footage under it (issue #396). The key is omitted entirely for
+ *  annotations, so their payload — and the older binaries that read it — are unchanged. */
 export interface SceneAnnotation {
 	id: string;
 	startSec: number;
@@ -112,7 +118,10 @@ export interface SceneAnnotation {
 	/** See `SceneZoomRegion.clipIndex`. */
 	clipIndex?: number;
 	kind: "text" | "image" | "figure" | "blur";
-	/** Rect as fractions of the screen layer (x, y top-left). */
+	/** Which box `x`/`y`/`w`/`h` — and `text.fontSizeRel` — are fractions of. Absent means
+	 *  `"screen"`, the historical behaviour and the only one annotations ever use. */
+	space?: "frame";
+	/** Rect as fractions of the box named by `space` (x, y top-left). */
 	x: number;
 	y: number;
 	w: number;
@@ -125,10 +134,12 @@ export interface SceneAnnotation {
 		content: string;
 		color: string;
 		backgroundColor: string;
-		/** Font size as a FRACTION of the screen rect's height, like everything else in this
-		 *  struct — multiply by the rect's height in output pixels. See `annotationScale.ts`:
-		 *  the preview applies the identical product against its own box, so preview and render
-		 *  agree at any resolution. */
+		/** Font size as a FRACTION of the height of the box named by `space`, like everything
+		 *  else in this struct — multiply by that box's height in output pixels. See
+		 *  `annotationScale.ts`: the preview applies the identical product against its own box,
+		 *  so preview and render agree at any resolution. The denominator MUST follow `space`:
+		 *  measuring the rect against the frame while sizing the text off the screen rect would
+		 *  hold a caption still and still shrink its text with the padding slider. */
 		fontSizeRel: number;
 		fontFamily: string;
 		fontWeight: "normal" | "bold";
@@ -485,10 +496,15 @@ export function buildSceneDescription(
 	// authored in RAW document time and the compositor matches each frame's SOURCE time.
 	//
 	// Captions join the annotations here rather than getting a bridge of their own: they are text
-	// over the screen layer with the same geometry and the same time base, so the compositor
-	// already knows how to draw them. Skipping this would have left them visible in the DOM
+	// with the same time base drawn through the same rasterizer, so the compositor already knows
+	// how to draw them. Skipping this would have left them visible in the DOM
 	// overlay and absent from the composited pixels — the exact preview/render gap the annotation
 	// work above closed. They are derived on the fly and never stored (see lib/ai-edition/captions).
+	//
+	// What they do NOT share is the reference box: each caption region carries `space: "frame"`,
+	// so the compositor measures it against the output frame while annotations stay on the screen
+	// rect. Subtitles have to sit where the viewer's frame ends, not where the footage does, or
+	// they slide inward the moment padding shrinks the screen rect (issue #396).
 	const captionSettings = getCaptionSettings(document);
 	const captionRegions = captionCuesToTextRegions(
 		deriveCaptionCues(document, captionSettings, getCaptionTranslations(document)),
@@ -726,13 +742,18 @@ export function buildSceneDescription(
 		annotations: projectedAnnotations
 			.map((region) => {
 				const style = region.style;
+				// Only captions carry a space; annotations must keep emitting the exact same keys
+				// they always have, so the field is omitted rather than sent as null/undefined.
+				const space = (region as { space?: "frame" }).space;
 				const base = {
 					id: region.id,
 					startSec: region.startMs / 1000,
 					endSec: region.endMs / 1000,
 					clipIndex: region.clipIndex,
 					kind: region.type,
-					// Authored as percentages of the screen rect; the native side wants fractions.
+					...(space ? { space } : {}),
+					// Authored as percentages of the box named by `space` — the screen rect unless
+					// this is a caption; the native side wants fractions either way.
 					x: region.position.x / 100,
 					y: region.position.y / 100,
 					w: region.size.width / 100,
