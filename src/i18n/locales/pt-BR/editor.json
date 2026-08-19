@@ -366,7 +366,7 @@
 		"webcamPreview": "Pré-visualização da webcam (arraste para reposicionar)",
 		"mediaError": {
 			"title": "Pré-visualização interrompida",
-			"description": "Não foi possível decodificar o vídeo. O arquivo pode ter sido movido ou ainda estar sendo gravado — seu projeto continua intacto.",
+			"description": "Não foi possível decodificar o vídeo. O arquivo pode estar danificado, ainda sendo gravado ou não estar mais onde o projeto espera — seu projeto continua intacto.",
 			"retry": "Tentar novamente",
 			"detail": "Detalhes: {{detail}}"
 		}

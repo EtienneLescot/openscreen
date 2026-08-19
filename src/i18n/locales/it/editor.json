@@ -366,7 +366,7 @@
 		"webcamPreview": "Anteprima webcam (trascina per riposizionare)",
 		"mediaError": {
 			"title": "Anteprima interrotta",
-			"description": "Non è stato possibile decodificare il video. Il file potrebbe essere stato spostato o essere ancora in fase di scrittura: il progetto è intatto.",
+			"description": "Non è stato possibile decodificare il video. Il file potrebbe essere danneggiato, ancora in scrittura o non più dove il progetto lo cerca: il progetto è intatto.",
 			"retry": "Riprova",
 			"detail": "Dettagli: {{detail}}"
 		}

@@ -366,7 +366,7 @@
 		"webcamPreview": "Web kamerası önizlemesi (taşımak için sürükleyin)",
 		"mediaError": {
 			"title": "Önizleme durdu",
-			"description": "Video çözümlenemedi. Dosya taşınmış ya da hâlâ yazılıyor olabilir — projeniz olduğu gibi duruyor.",
+			"description": "Video çözümlenemedi. Dosya bozulmuş, hâlâ yazılıyor ya da projenin beklediği yerde olmayabilir — projeniz olduğu gibi duruyor.",
 			"retry": "Yeniden dene",
 			"detail": "Ayrıntılar: {{detail}}"
 		}

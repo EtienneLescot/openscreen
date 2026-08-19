@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
 	describeMediaError,
 	formatMediaError,
+	MAX_RELOADS_PER_MEDIA,
 	mediaErrorDisposition,
 	RETRY_DELAYS_MS,
 	retryDelayMs,
@@ -66,6 +67,22 @@ describe("mediaErrorDisposition", () => {
 	it("treats an unknown failure as transient", () => {
 		expect(mediaErrorDisposition(null, 0)).toBe("retry");
 		expect(mediaErrorDisposition(null, RETRY_DELAYS_MS.length)).toBe("fatal");
+	});
+
+	// Measured in the field on a corrupted recording: two bad spots 0.47 s apart,
+	// each one looking like "progress" past the other, re-armed the budget on
+	// every cycle. The ceiling is what makes the reload count finite whatever the
+	// re-arming heuristic concludes.
+	it("is fatal once the reload ceiling is reached, whatever the budget says", () => {
+		expect(mediaErrorDisposition(3, 0, MAX_RELOADS_PER_MEDIA - 1)).toBe("retry");
+		expect(mediaErrorDisposition(3, 0, MAX_RELOADS_PER_MEDIA)).toBe("fatal");
+		expect(mediaErrorDisposition(2, 0, MAX_RELOADS_PER_MEDIA + 5)).toBe("fatal");
+	});
+
+	// …but never for a cancelled load. Making code 1 terminal at the ceiling is
+	// exactly how #395 would come back through the side door.
+	it("still ignores an aborted load at the ceiling", () => {
+		expect(mediaErrorDisposition(1, 0, MAX_RELOADS_PER_MEDIA * 10)).toBe("ignore");
 	});
 });
 

@@ -158,6 +158,10 @@ export function VirtualPreview({
 	// what re-arms the retry budget: see markSourceLoaded for why a reload
 	// completing is not evidence of anything.
 	const failedAtSourceTimeRef = useRef<number | null>(null);
+	// Reloads spent on the mounted media, ever — the ceiling the budget cannot
+	// talk its way past (see MAX_RELOADS_PER_MEDIA). Reset only when the media
+	// changes or the user retries, never by playback progress.
+	const reloadsRef = useRef(0);
 	// Which clip the rAF tick below believes is currently playing — set
 	// whenever a seek unambiguously resolves one (via locateVirtualPosition,
 	// timeline position → clip). Passed back into locateSourcePosition so
@@ -582,6 +586,7 @@ export function VirtualPreview({
 			retryRef.current.timer = null;
 		}
 		recoveringRef.current = true;
+		reloadsRef.current += 1;
 		setLoadState("loading");
 		retryRef.current.timer = window.setTimeout(() => {
 			retryRef.current.timer = null;
@@ -653,6 +658,7 @@ export function VirtualPreview({
 		retryRef.current = { attempts: 0, timer: null };
 		recoveringRef.current = false;
 		failedAtSourceTimeRef.current = null;
+		reloadsRef.current = 0;
 		return () => {
 			if (retryRef.current.timer !== null) {
 				window.clearTimeout(retryRef.current.timer);
@@ -669,6 +675,7 @@ export function VirtualPreview({
 		if (!retryToken) return;
 		retryRef.current.attempts = 0;
 		failedAtSourceTimeRef.current = null;
+		reloadsRef.current = 0;
 		reloadActiveSource(false, 0);
 	}, [retryToken]);
 
@@ -773,7 +780,7 @@ export function VirtualPreview({
 								const hasSource = Boolean(el.getAttribute("src")) || Boolean(el.currentSrc);
 								const attemptsSpent = retryRef.current.attempts;
 								const disposition = hasSource
-									? mediaErrorDisposition(description.code, attemptsSpent)
+									? mediaErrorDisposition(description.code, attemptsSpent, reloadsRef.current)
 									: "ignore";
 								const detail = formatMediaError(description);
 								// The code is the whole diagnosis, and it used to be thrown
@@ -787,6 +794,7 @@ export function VirtualPreview({
 									readyState: el.readyState,
 									currentTime: el.currentTime,
 									attemptsSpent,
+									reloadsSpent: reloadsRef.current,
 									disposition,
 								};
 								if (disposition === "ignore") {
@@ -822,6 +830,12 @@ export function VirtualPreview({
 								console.error("[preview] <video> failed for good", context);
 								pendingSeekRef.current = null;
 								recoveringRef.current = false;
+								// Once we have given up, nothing playback does may re-arm the
+								// budget: leaving this set let the rAF's progress check fire
+								// on the NEXT bad spot and start the whole cycle again, which
+								// is what "3 episodes for one broken file" looked like in the
+								// field. Only Retry or a media change re-arms from here.
+								failedAtSourceTimeRef.current = null;
 								setLoadState("error");
 								// An 'error' doesn't itself fire 'pause', so make sure the shell's
 								// transport state (single source of truth, see NewEditorShell's

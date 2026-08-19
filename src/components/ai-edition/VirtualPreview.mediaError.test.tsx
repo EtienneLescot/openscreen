@@ -3,7 +3,7 @@ import "@testing-library/jest-dom";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
-import { RETRY_DELAYS_MS } from "./mediaError";
+import { MAX_RELOADS_PER_MEDIA, RETRY_DELAYS_MS } from "./mediaError";
 import { type VideoSource, VirtualPreview } from "./VirtualPreview";
 
 // Same hand-driven rAF as VirtualPreview.playback.test.tsx: the tick is a
@@ -372,6 +372,56 @@ describe("VirtualPreview media-error recovery (issue #395)", () => {
 		advance(0);
 
 		expect(video.loadCalls).toBe(loadsBefore + 1);
+	});
+
+	// Field regression, caught by breaking a real recording: once the card is up,
+	// playback getting past the failure point must NOT hand the budget back. It
+	// used to, so the next bad spot started the whole retry cycle again — three
+	// full episodes for one broken file.
+	it("does not re-arm itself after it has given up", () => {
+		const { video, onVideoError } = mount();
+
+		video.play();
+		video.seekTo(4);
+		tick();
+		for (const delay of [...RETRY_DELAYS_MS, 0]) {
+			video.fail(3);
+			advance(delay);
+		}
+		expect(onVideoError).toHaveBeenCalledTimes(1);
+		const loadsAtGiveUp = video.loadCalls;
+
+		// Playback carries on past where it died — the shape that used to re-arm.
+		video.seekTo(6);
+		tick();
+		video.fail(3);
+		advance(5_000);
+
+		expect(video.loadCalls).toBe(loadsAtGiveUp);
+		expect(onVideoError).toHaveBeenCalledTimes(2); // still terminal, no new cycle
+	});
+
+	// The same file had two bad spots 0.47 s apart, each looking like progress
+	// past the other, so the budget re-armed on every cycle. The ceiling is the
+	// backstop that keeps the reload count finite regardless.
+	it("stops reloading at the ceiling when two bad spots keep re-arming the budget", () => {
+		const { video, onVideoError } = mount();
+
+		video.play();
+		// Alternate failure points further apart than the progress margin. Each
+		// reload completes (a corrupt file's header parses every time), and the
+		// tick then sees the playhead past the OTHER bad spot — which is what
+		// re-armed the budget forever in the field.
+		for (let i = 0; i < 12; i += 1) {
+			video.seekTo(i % 2 === 0 ? 4 : 6);
+			tick();
+			video.fail(3);
+			advance(5_000);
+			video.loadedMetadata();
+		}
+
+		expect(video.loadCalls).toBeLessThanOrEqual(MAX_RELOADS_PER_MEDIA);
+		expect(onVideoError).toHaveBeenCalled();
 	});
 
 	// The element is keyed on the asset id alone, so pointing an asset at a new

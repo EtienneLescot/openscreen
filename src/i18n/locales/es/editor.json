@@ -366,7 +366,7 @@
 		"webcamPreview": "Vista previa de la webcam (arrastra para reubicar)",
 		"mediaError": {
 			"title": "Vista previa detenida",
-			"description": "No se pudo decodificar el vídeo. Puede que el archivo se haya movido o que aún se esté terminando de escribir; tu proyecto está intacto.",
+			"description": "No se pudo decodificar el vídeo. El archivo puede estar dañado, aún escribiéndose, o ya no estar donde el proyecto lo espera; tu proyecto está intacto.",
 			"retry": "Reintentar",
 			"detail": "Detalles: {{detail}}"
 		}
