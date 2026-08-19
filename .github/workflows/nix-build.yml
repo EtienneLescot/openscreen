@@ -1,0 +1,77 @@
+name: Nix build
+
+# nix-check.yml verifies that npmDepsHash still matches the lockfile. That is a
+# necessary condition for `nix build` to succeed, not a sufficient one, and the
+# distinction has never been tested: nothing in CI has ever actually built
+# nix/package.nix. `grep -rn "nix build" .github/workflows` returns one hit, and
+# it is inside a comment.
+#
+# So the derivation is verified the way its npmDepsHash was before its sibling
+# existed — by a user, after it breaks. The failure mode is worse here, because
+# the build can succeed while producing a reduced application: buildPhase runs
+# `vite build` alone, while package.json's build:linux also chains the PipeWire
+# helper, the compositor addon and an ffmpeg download. The native components are
+# resolved at runtime behind existence checks, so their absence degrades the app
+# instead of failing it. A green `nix build` therefore proves the derivation
+# compiles, and nothing about whether the result can record or export.
+#
+# Hence two steps rather than one: build, then run the headless CLI against the
+# artefact. The build catches drift in what installPhase copies; the smoke test
+# catches the gap between "compiles" and "runs".
+#
+# Deliberately not on every pull request yet. Nobody has measured what this
+# costs on a runner, and a check whose duration is unknown is not one to put in
+# front of every merge. Promote it once the schedule has reported a few times.
+on:
+  workflow_dispatch:
+  push:
+    # TEMPORARY: claude/agitated-dijkstra-d63315 is here only so this workflow
+    # can report once before it reaches main. `workflow_dispatch` cannot fire
+    # for a workflow that the default branch has never seen, so a push trigger
+    # is the only way to learn whether `nix build` currently passes at all.
+    # Remove this branch from the list before merging.
+    branches: [main, claude/agitated-dijkstra-d63315]
+  schedule:
+    # Mondays, 06:00 UTC. Drift here comes from the lockfile and from the app's
+    # own build requirements, neither of which respects a release cadence.
+    - cron: "0 6 * * 1"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: nix-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: nix build .#openscreen
+    runs-on: ubuntu-latest
+    # A cold Electron + npm closure is the unknown this workflow exists to
+    # measure. Bounded well above any plausible honest build so that a genuine
+    # hang is still reported as one.
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: cachix/install-nix-action@v27
+        with:
+          nix_path: nixpkgs=channel:nixos-unstable
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Build
+        run: nix build .#openscreen --print-build-logs
+
+      - name: Report closure size
+        run: |
+          set -euo pipefail
+          echo "closure: $(nix path-info --closure-size --human-readable ./result | tail -1)"
+          ls -la result/bin/
+
+      # Electron initialises Chromium even for the headless CLI, so it needs a
+      # display server present. xvfb ships on ubuntu-latest.
+      - name: Smoke-test the built binary
+        run: |
+          set -euo pipefail
+          xvfb-run -a ./result/bin/openscreen --help
