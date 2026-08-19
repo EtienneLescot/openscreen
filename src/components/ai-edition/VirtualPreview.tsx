@@ -322,16 +322,19 @@ export function VirtualPreview({
 			// in a separate rAF effect). Cheap; <video>.readyState >= 2 guards
 			// against drawing a black frame into the cursor overlay.
 			if (v.readyState >= 2) {
-				setSourceTimeSec(v.currentTime);
+				// One read, three uses: `currentTime` is a live accessor into the
+				// media pipeline and this block runs 60×/s.
+				const sourceTime = v.currentTime;
+				setSourceTimeSec(sourceTime);
 				// Sampled here, where the decoder is known good, because this is
 				// where a reload has to put the playhead back if it cannot
 				// resolve one from the timeline.
-				lastGoodSourceTimeRef.current = v.currentTime;
+				lastGoodSourceTimeRef.current = sourceTime;
 				// …and here is the only place that can prove a reload WORKED:
 				// the decoder is past the bytes it died on. A quarter second of
 				// margin so re-decoding the same frame doesn't count as progress.
 				const failedAt = failedAtSourceTimeRef.current;
-				if (failedAt !== null && v.currentTime > failedAt + 0.25) {
+				if (failedAt !== null && sourceTime > failedAt + 0.25) {
 					failedAtSourceTimeRef.current = null;
 					retryRef.current.attempts = 0;
 				}
