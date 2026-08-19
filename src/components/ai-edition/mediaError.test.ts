@@ -2,8 +2,9 @@ import { describe, expect, it } from "vitest";
 import {
 	describeMediaError,
 	formatMediaError,
-	MAX_RELOADS_PER_MEDIA,
 	mediaErrorDisposition,
+	pruneReloads,
+	RELOAD_WINDOW_MS,
 	RETRY_DELAYS_MS,
 	retryDelayMs,
 } from "./mediaError";
@@ -69,20 +70,40 @@ describe("mediaErrorDisposition", () => {
 		expect(mediaErrorDisposition(null, RETRY_DELAYS_MS.length)).toBe("fatal");
 	});
 
-	// Measured in the field on a corrupted recording: two bad spots 0.47 s apart,
-	// each one looking like "progress" past the other, re-armed the budget on
-	// every cycle. The ceiling is what makes the reload count finite whatever the
-	// re-arming heuristic concludes.
-	it("is fatal once the reload ceiling is reached, whatever the budget says", () => {
-		expect(mediaErrorDisposition(3, 0, MAX_RELOADS_PER_MEDIA - 1)).toBe("retry");
-		expect(mediaErrorDisposition(3, 0, MAX_RELOADS_PER_MEDIA)).toBe("fatal");
-		expect(mediaErrorDisposition(2, 0, MAX_RELOADS_PER_MEDIA + 5)).toBe("fatal");
+	// The budget counts reloads inside a window, so a long session cannot
+	// exhaust it: the confirmed cause of #395 is our own seek storm, which
+	// recurs across an editing session and heals every time. A lifetime count
+	// would eventually show a card on media a 400 ms reload always repairs.
+	it("is fatal only once the window is full", () => {
+		expect(mediaErrorDisposition(3, RETRY_DELAYS_MS.length - 1)).toBe("retry");
+		expect(mediaErrorDisposition(3, RETRY_DELAYS_MS.length)).toBe("fatal");
 	});
 
-	// …but never for a cancelled load. Making code 1 terminal at the ceiling is
+	// Without this, a dead file reloads every time the window empties, flashes
+	// back on the metadata that always parses, and loses the card behind it.
+	it("stays fatal once it has given up, however empty the window", () => {
+		expect(mediaErrorDisposition(3, 0, true)).toBe("fatal");
+		expect(mediaErrorDisposition(2, 0, true)).toBe("fatal");
+	});
+
+	// …but never for a cancelled load, even then. Making code 1 terminal is
 	// exactly how #395 would come back through the side door.
-	it("still ignores an aborted load at the ceiling", () => {
-		expect(mediaErrorDisposition(1, 0, MAX_RELOADS_PER_MEDIA * 10)).toBe("ignore");
+	it("still ignores an aborted load after giving up", () => {
+		expect(mediaErrorDisposition(1, 99, true)).toBe("ignore");
+	});
+});
+
+describe("pruneReloads", () => {
+	it("keeps only what is still inside the window", () => {
+		const now = 1_000_000;
+		const timestamps = [
+			now - RELOAD_WINDOW_MS - 1, // expired
+			now - RELOAD_WINDOW_MS, // expired, boundary is exclusive
+			now - RELOAD_WINDOW_MS + 1,
+			now,
+		];
+		expect(pruneReloads(timestamps, now)).toEqual([now - RELOAD_WINDOW_MS + 1, now]);
+		expect(pruneReloads([], now)).toEqual([]);
 	});
 });
 
