@@ -85,9 +85,14 @@ interface PreviewCanvasProps {
 	onLoadedMetadata: (sec: number, assetId: string) => void;
 	onVideoElement: (el: HTMLVideoElement | null) => void;
 	currentTimeSec: number;
-	/** Receives the id of the asset whose <video> failed — the caller decides per
-	 *  source whether anything is left to render (see Preview.tsx). */
-	onVideoError?: (assetId: string) => void;
+	/** Receives the id of the asset whose <video> gave up, plus the MediaError
+	 *  detail for the card. Transient failures are reloaded inside VirtualPreview
+	 *  and never reach here (see Preview.tsx). */
+	onVideoError?: (assetId: string, detail: string) => void;
+	/** The mounted source decoded a frame again — see VirtualPreview. */
+	onVideoRecovered?: (assetId: string) => void;
+	/** Bumped to force a reload of the mounted source (the Retry button). */
+	retryToken?: number;
 }
 
 // ponytail: fallback only — used until the active source's <video> reports

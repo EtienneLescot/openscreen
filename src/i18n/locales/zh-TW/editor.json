@@ -363,7 +363,13 @@
 	},
 	"preview": {
 		"videoPreview": "影片預覽",
-		"webcamPreview": "攝影機預覽（拖曳可重新定位）"
+		"webcamPreview": "攝影機預覽（拖曳可重新定位）",
+		"mediaError": {
+			"title": "預覽已停止",
+			"description": "無法解碼此影片。檔案可能已被移動，或仍在寫入中——你的專案本身完好無缺。",
+			"retry": "重試",
+			"detail": "詳細資訊：{{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "註解",

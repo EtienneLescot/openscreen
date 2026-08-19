@@ -363,7 +363,13 @@
 	},
 	"preview": {
 		"videoPreview": "動画プレビュー",
-		"webcamPreview": "ウェブカメラのプレビュー（ドラッグで位置変更）"
+		"webcamPreview": "ウェブカメラのプレビュー（ドラッグで位置変更）",
+		"mediaError": {
+			"title": "プレビューを停止しました",
+			"description": "動画をデコードできませんでした。ファイルが移動されたか、まだ書き込み中の可能性があります。プロジェクト自体は損なわれていません。",
+			"retry": "再試行",
+			"detail": "詳細: {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "注釈",

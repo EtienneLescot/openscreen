@@ -363,7 +363,13 @@
 	},
 	"preview": {
 		"videoPreview": "Anteprima video",
-		"webcamPreview": "Anteprima webcam (trascina per riposizionare)"
+		"webcamPreview": "Anteprima webcam (trascina per riposizionare)",
+		"mediaError": {
+			"title": "Anteprima interrotta",
+			"description": "Non è stato possibile decodificare il video. Il file potrebbe essere stato spostato o essere ancora in fase di scrittura: il progetto è intatto.",
+			"retry": "Riprova",
+			"detail": "Dettagli: {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "Annotazione",
