@@ -743,6 +743,37 @@ pub struct FrameGeometry {
     pub shape_fade: f32,
 }
 
+impl FrameGeometry {
+    /// Rect de destination d'une annotation, en fractions de la sortie.
+    ///
+    /// `x`/`y`/`w`/`h` sont des fractions du rect ÉCRAN, et le rect en question est
+    /// `s_ann` — jamais `s_dst`. Les deux coïncident sans zoom, ce qui rend l'erreur
+    /// invisible sur la moitié des scènes ; sous zoom, `s_dst` grandit et emmène
+    /// annotations et sous-titres avec lui, alors que le contrat de `SceneAnnotation`
+    /// les veut « deliberately NOT affected by the zoom crop ».
+    ///
+    /// Cette méthode existe pour que le backend n'ait pas le choix : le bug est
+    /// reparu sur Linux après avoir été corrigé sur Windows et macOS (issue #179),
+    /// parce que chaque backend refaisait l'arithmétique dans son coin.
+    pub fn annotation_dst(&self, x: f32, y: f32, w: f32, h: f32) -> [f32; 4] {
+        [
+            self.s_ann[0] + x * self.s_ann[2],
+            self.s_ann[1] + y * self.s_ann[3],
+            w * self.s_ann[2],
+            h * self.s_ann[3],
+        ]
+    }
+
+    /// Hauteur en px du rect d'ancrage des annotations, pour `rh` px de sortie.
+    ///
+    /// `font_size_rel` est une fraction de cette hauteur (cf. `annotationScale.ts`) :
+    /// la prendre sur `s_dst` ferait grossir le texte avec le zoom, exactement comme
+    /// `annotation_dst` le déplacerait.
+    pub fn annotation_anchor_h_px(&self, rh: f32) -> f32 {
+        self.s_ann[3] * rh
+    }
+}
+
 /// Où va chaque calque, pour une frame — sans toucher au GPU.
 ///
 /// C'est la première moitié de `compose_frame`, mot pour mot : 353 lignes qui ne
@@ -1291,10 +1322,11 @@ mod tests {
         }
     }
 
-    /// La même scène, avec une région de zoom active à `t = 1.5 s`.
-    fn zoomed_golden_scene() -> Scene {
-        Scene::from_json(
-            r##"{
+    /// Le JSON de la scène zoomée, brut : `tilted_golden_scene` n'en change QUE la
+    /// rotation, et le faire par substitution garantit que les deux scènes ne diffèrent
+    /// pas ailleurs sans qu'on s'en aperçoive.
+    fn zoomed_golden_scene_json() -> &'static str {
+        r##"{
             "clips":[{"screenPath":"/s.mp4","webcamPath":"/w.mp4","sourceStartSec":0,"sourceEndSec":10,"webcamOffsetSec":0,"hasAudio":true}],
             "layout":{"preset":"picture-in-picture","webcamSize":0.44,"webcamShape":"circle","webcamMirror":false,
                       "webcamPosition":{"cx":0.8577,"cy":0.8159},"webcamReactiveZoom":false},
@@ -1304,9 +1336,12 @@ mod tests {
             "cursor":{"show":true,"size":7.76,"smoothing":0,"motionBlur":0.35,"clickBounce":1,"clipToBounds":false,"theme":"default"},
             "cropByClip":[{"x":0,"y":0,"width":0.61,"height":0.61}],
             "output":{"width":1170,"height":658,"fps":60}
-        }"##,
-        )
-        .expect("zoomed golden scene")
+        }"##
+    }
+
+    /// La même scène, avec une région de zoom active à `t = 1.5 s`.
+    fn zoomed_golden_scene() -> Scene {
+        Scene::from_json(zoomed_golden_scene_json()).expect("zoomed golden scene")
     }
 
     /// L'ancre des annotations ne bouge PAS avec le zoom, alors que la boîte écran, si.
@@ -1337,6 +1372,65 @@ mod tests {
         // Et sans zoom, l'ancre EST la boîte écran : `s_ann` ne doit pas devenir un rect
         // parallèle qui dériverait de `s_dst` pour d'autres raisons (padding, cover, crop).
         assert_eq!(a.s_ann, a.s_dst, "sans zoom, ancre et boîte écran coïncident");
+    }
+
+    /// La même scène, zoomée ET inclinée par un préset de rotation 3D.
+    fn tilted_golden_scene() -> Scene {
+        Scene::from_json(
+            &zoomed_golden_scene_json().replace(r#""rotation":"none""#, r#""rotation":"iso""#),
+        )
+        .expect("tilted golden scene")
+    }
+
+    /// Le rect et la taille de police d'une annotation ne bougent ni sous le zoom ni sous
+    /// une rotation 3D.
+    ///
+    /// `the_annotation_anchor_ignores_the_zoom` prouve que `plan_frame` **calcule** la
+    /// bonne ancre ; il ne dit rien de ce que le backend en fait. Linux, lui, refaisait
+    /// l'arithmétique contre `s_dst` — donc sous-titres qui grossissent et dérivent à
+    /// l'export, sur la seule plateforme où personne ne l'avait vu. Ce test porte sur les
+    /// accesseurs que les backends appellent maintenant, pas sur le champ brut.
+    ///
+    /// La rotation compte autant que le zoom : un préset iso/left/right est une propriété
+    /// de région de zoom, donc l'incliner amenait aussi la boîte — et les sous-titres
+    /// partaient avec elle, sans pour autant suivre le plan incliné. Les deux symptômes,
+    /// une seule cause.
+    #[test]
+    fn the_annotation_rect_and_font_ignore_zoom_and_rotation() {
+        let cfg = crate::config::all().pop().expect("au moins une config");
+        let rh = 658.0;
+        // Un rect d'annotation quelconque, décentré : au centre, un rect qui suivrait le
+        // zoom garderait le même centre et la moitié de l'erreur passerait inaperçue.
+        let (x, y, w, h) = (0.04, 0.78, 0.92, 0.22);
+
+        let plain = plan_frame(&golden_input(&golden_scene(), &cfg));
+        let zoomed = plan_frame(&golden_input(&zoomed_golden_scene(), &cfg));
+        let tilted = plan_frame(&golden_input(&tilted_golden_scene(), &cfg));
+
+        // Le garde-fou : sans lui, un `plan_frame` qui cesserait d'appliquer le zoom
+        // rendrait les assertions suivantes vraies pour la mauvaise raison.
+        assert_ne!(
+            plain.s_dst, zoomed.s_dst,
+            "le zoom doit agir sur la boîte écran — sinon ce test ne prouve rien"
+        );
+        assert!(
+            !crate::regions::is_identity_rotation(tilted.zoom_rotation),
+            "le préset iso doit produire une rotation — sinon ce test ne prouve rien"
+        );
+
+        let expected = plain.annotation_dst(x, y, w, h);
+        for (name, g) in [("zoom", &zoomed), ("rotation 3D", &tilted)] {
+            let got = g.annotation_dst(x, y, w, h);
+            assert_eq!(
+                got, expected,
+                "le rect de l'annotation a suivi le {name} : {got:?} au lieu de {expected:?}"
+            );
+            assert_eq!(
+                g.annotation_anchor_h_px(rh),
+                plain.annotation_anchor_h_px(rh),
+                "la taille de police a suivi le {name}"
+            );
+        }
     }
 
     /// **Le golden iso-render.**

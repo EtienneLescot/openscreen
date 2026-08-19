@@ -1285,10 +1285,20 @@ impl Compositor {
         });
 
         // ANNOTATIONS -- calque le plus haut, place relativement au rect ecran
-        // `g.s_dst` (les coords x/y/w/h de l'annotation sont des fractions de ce
-        // rect, cf. `scene.rs`). Port de `compositor_macos::draw_annotations` :
-        // memes modes, memes replis, meme ordre. Seul le texte diverge, tinte
-        // cote shader (atlas R8) au lieu d'une couleur bakee dans la texture.
+        // (les coords x/y/w/h de l'annotation sont des fractions de ce rect, cf.
+        // `scene.rs`). Le rect est `g.s_ann`, l'ecran SANS ZOOM, et surtout pas
+        // `g.s_dst` : le contrat de `SceneAnnotation` dit « deliberately NOT
+        // affected by the zoom crop », donc annotations et sous-titres tiennent
+        // en place pendant que le contenu grossit dessous. `s_dst` a tenu ce role
+        // gratuitement tant que le zoom vivait dans la coupe source ; depuis
+        // l'issue #179 il vit dans la BOITE, et l'ancrer dessus fait zoomer les
+        // sous-titres avec l'ecran. Windows et macOS ont ete corriges alors, ce
+        // backend non -- d'ou le passage par `FrameGeometry::annotation_dst`, qui
+        // ne laisse plus le choix. Le natif peignant AUSSI l'apercu, la derive se
+        // voyait des l'edition, pas seulement a l'export.
+        // Port de `compositor_macos::draw_annotations` : memes modes, memes
+        // replis, meme ordre. Seul le texte diverge, tinte cote shader (atlas R8)
+        // au lieu d'une couleur bakee dans la texture.
         struct AnnDraw {
             _buf: wgpu::Buffer,
             /// Gardent l'atlas / la texture image en vie jusqu'au submit. `None`
@@ -1324,12 +1334,7 @@ impl Compositor {
                 if !visible(a) {
                     continue;
                 }
-                let dst = [
-                    g.s_dst[0] + a.x * g.s_dst[2],
-                    g.s_dst[1] + a.y * g.s_dst[3],
-                    a.w * g.s_dst[2],
-                    a.h * g.s_dst[3],
-                ];
+                let dst = g.annotation_dst(a.x, a.y, a.w, a.h);
                 let quad_px = [dst[2] * rw, dst[3] * rh];
                 // Une boite degeneree ferait un atlas 0x0 et un draw invisible ;
                 // macOS l'ecarte de la meme facon.
@@ -1475,7 +1480,7 @@ impl Compositor {
                             content: text.content.clone(),
                             color,
                             background,
-                            font_size_px: text.font_size_rel * (g.s_dst[3] * rh),
+                            font_size_px: text.font_size_rel * g.annotation_anchor_h_px(rh),
                             font_family: text.font_family.clone(),
                             bold: text.font_weight == "bold",
                             italic: text.font_style == "italic",
