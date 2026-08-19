@@ -1616,8 +1616,11 @@ impl Compositor {
             if !visible(annotation) {
                 continue;
             }
+            // `anchor` et non `s_ann` : un sous-titre (`space: "frame"`) se mesure sur le
+            // cadre de sortie. Le dénominateur de la police plus bas lit le MÊME `anchor`.
+            let anchor = annotation.anchor_rect(s_ann);
             let dst = crate::frame_geometry::annotation_dst_in(
-                s_ann,
+                anchor,
                 annotation.x,
                 annotation.y,
                 annotation.w,
@@ -1754,17 +1757,18 @@ impl Compositor {
                     if text.content.trim().is_empty() {
                         continue;
                     }
-                    // `font_size_rel` est une fraction de la HAUTEUR DU RECT ÉCRAN (cf. le contrat
-                    // et `annotationScale.ts`) : on la ramène en pixels de sortie ici, avec le même
+                    // `font_size_rel` est une fraction de la HAUTEUR DE LA BOÎTE D'ANCRAGE — rect
+                    // écran, ou cadre de sortie pour un sous-titre (cf. le contrat et
+                    // `annotationScale.ts`) : on la ramène en pixels de sortie ici, avec le même
                     // produit que la preview applique contre sa propre boîte.
-                    let screen_h_px = s_ann[3] * self.rh();
+                    let anchor_h_px = anchor[3] * self.rh();
                     let spec = crate::text::TextSpec {
                         content: text.content.clone(),
                         color: parse_hex(&text.color).unwrap_or([1.0, 1.0, 1.0, 1.0]),
                         // "transparent" ne parse pas en hex : alpha 0 => pas de fond, ce qui est
                         // exactement la sémantique CSS.
                         background: parse_hex(&text.background_color).unwrap_or([0.0, 0.0, 0.0, 0.0]),
-                        font_size_px: text.font_size_rel * screen_h_px,
+                        font_size_px: text.font_size_rel * anchor_h_px,
                         font_family: text.font_family.clone(),
                         bold: text.font_weight == "bold",
                         italic: text.font_style == "italic",

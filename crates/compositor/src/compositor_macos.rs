@@ -1022,7 +1022,10 @@ impl Compositor {
             if !visible(a) {
                 continue;
             }
-            let dst = crate::frame_geometry::annotation_dst_in(s_ann, a.x, a.y, a.w, a.h);
+            // `anchor` et non `s_ann` : un sous-titre (`space: "frame"`) se mesure sur le
+            // cadre de sortie. Le dénominateur de la police plus bas lit le MÊME `anchor`.
+            let anchor = a.anchor_rect(s_ann);
+            let dst = crate::frame_geometry::annotation_dst_in(anchor, a.x, a.y, a.w, a.h);
             let quad_px = [dst[2] * rw, dst[3] * rh];
             if quad_px[0] <= 0.0 || quad_px[1] <= 0.0 {
                 continue;
@@ -1137,7 +1140,7 @@ impl Compositor {
                         color: parse_hex(&text.color).unwrap_or([1.0, 1.0, 1.0, 1.0]),
                         background: parse_hex(&text.background_color)
                             .unwrap_or([0.0, 0.0, 0.0, 0.0]),
-                        font_size_px: text.font_size_rel * (s_ann[3] * rh),
+                        font_size_px: text.font_size_rel * (anchor[3] * rh),
                         font_family: text.font_family.clone(),
                         bold: text.font_weight == "bold",
                         italic: text.font_style == "italic",
