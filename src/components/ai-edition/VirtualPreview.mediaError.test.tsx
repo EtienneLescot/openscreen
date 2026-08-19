@@ -3,7 +3,7 @@ import "@testing-library/jest-dom";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { AxcutClip } from "@/lib/ai-edition/schema";
-import { MAX_RELOADS_PER_MEDIA, RETRY_DELAYS_MS } from "./mediaError";
+import { RELOAD_WINDOW_MS, RETRY_DELAYS_MS } from "./mediaError";
 import { type VideoSource, VirtualPreview } from "./VirtualPreview";
 
 // Same hand-driven rAF as VirtualPreview.playback.test.tsx: the tick is a
@@ -297,24 +297,23 @@ describe("VirtualPreview media-error recovery (issue #395)", () => {
 		expect(onVideoError).toHaveBeenCalledWith("a1", "MEDIA_ERR_SRC_NOT_SUPPORTED (4) — code 4");
 	});
 
-	// Getting PAST the bad spot re-arms the budget. Without any re-arming a long
-	// session slowly walks into the same dead end — #395 with a longer fuse.
-	it("re-arms the budget once playback gets past the failure point", () => {
-		const { video, onVideoError, onVideoRecovered } = mount();
+	// THE long-session guarantee, and the answer to "can a user run out of
+	// recoveries?". The budget counts reloads inside a window, so it empties by
+	// itself: hiccups spaced minutes apart — which is what a seek storm across
+	// an editing session looks like — each get the full budget. A lifetime
+	// counter would have made this third failure terminal.
+	it("gives a later failure the full budget again once the window has emptied", () => {
+		const { video, onVideoError } = mount();
 
-		video.seekTo(4);
-		tick();
 		for (const delay of RETRY_DELAYS_MS) {
 			video.fail(3);
 			advance(delay);
 		}
-		video.loadedMetadata();
-		expect(onVideoRecovered).toHaveBeenCalledWith("a1");
+		expect(onVideoError).not.toHaveBeenCalled();
+		expect(video.loadCalls).toBe(RETRY_DELAYS_MS.length);
 
-		video.seekTo(5); // decoded past where it died
-		tick();
+		advance(RELOAD_WINDOW_MS + 1_000);
 
-		// A fresh failure now gets the full budget again rather than being fatal.
 		video.fail(3);
 		advance(RETRY_DELAYS_MS[0]);
 		expect(onVideoError).not.toHaveBeenCalled();
@@ -401,27 +400,27 @@ describe("VirtualPreview media-error recovery (issue #395)", () => {
 		expect(onVideoError).toHaveBeenCalledTimes(2); // still terminal, no new cycle
 	});
 
-	// The same file had two bad spots 0.47 s apart, each looking like progress
-	// past the other, so the budget re-armed on every cycle. The ceiling is the
-	// backstop that keeps the reload count finite regardless.
-	it("stops reloading at the ceiling when two bad spots keep re-arming the budget", () => {
+	// The other half: a file failing FAST does not get to loop quietly. Three
+	// failures inside one window is not "an occasional hiccup", and the user is
+	// told once — and stays told, because the window emptying afterwards must
+	// not restart the cycle behind the card.
+	it("reaches the card on a burst inside the window, and stays there", () => {
 		const { video, onVideoError } = mount();
 
-		video.play();
-		// Alternate failure points further apart than the progress margin. Each
-		// reload completes (a corrupt file's header parses every time), and the
-		// tick then sees the playhead past the OTHER bad spot — which is what
-		// re-armed the budget forever in the field.
-		for (let i = 0; i < 12; i += 1) {
-			video.seekTo(i % 2 === 0 ? 4 : 6);
-			tick();
+		for (const delay of [...RETRY_DELAYS_MS, 0]) {
 			video.fail(3);
-			advance(5_000);
-			video.loadedMetadata();
+			advance(delay);
 		}
+		expect(onVideoError).toHaveBeenCalledTimes(1);
+		const loadsAtGiveUp = video.loadCalls;
 
-		expect(video.loadCalls).toBeLessThanOrEqual(MAX_RELOADS_PER_MEDIA);
-		expect(onVideoError).toHaveBeenCalled();
+		// Long enough for every reload to age out of the window.
+		advance(RELOAD_WINDOW_MS * 3);
+		video.fail(3);
+		advance(5_000);
+
+		expect(video.loadCalls).toBe(loadsAtGiveUp);
+		expect(onVideoError).toHaveBeenCalledTimes(2);
 	});
 
 	// The element is keyed on the asset id alone, so pointing an asset at a new

@@ -27,6 +27,7 @@ import {
 	describeMediaError,
 	formatMediaError,
 	mediaErrorDisposition,
+	pruneReloads,
 	retryDelayMs,
 } from "./mediaError";
 import styles from "./VirtualPreview.module.css";
@@ -140,15 +141,16 @@ export function VirtualPreview({
 	// The seek that arrived while another was still running (see applySourceTime).
 	const pendingScrubTargetRef = useRef<number | null>(null);
 	const pendingSeekRef = useRef<{ sourceTimeSec: number; play: boolean } | null>(null);
-	// Reload bookkeeping for the mounted source (see `reloadActiveSource`).
-	// `attempts` is spent by failures and re-armed by playing past the point one
-	// died at — never by elapsed time, and never by a reload merely completing.
-	// A budget that only counts up is issue #395 with a longer fuse; one handed
-	// back too easily is a reload loop that never surfaces anything at all.
-	const retryRef = useRef<{ attempts: number; timer: number | null }>({
-		attempts: 0,
-		timer: null,
-	});
+	// When each AUTOMATIC reload happened. The budget is "reloads inside
+	// RELOAD_WINDOW_MS", so it expires by itself: a dead file burns it in
+	// seconds, while the occasional transient across a long editing session
+	// never accumulates. A lifetime count could not tell those apart and would
+	// eventually show a card on healthy media (see mediaError.ts).
+	const reloadsRef = useRef<number[]>([]);
+	// Set when we stop trying, so an expiring window cannot restart the cycle
+	// behind the card. Cleared only by Retry or a media change.
+	const gaveUpRef = useRef(false);
+	const retryTimerRef = useRef<number | null>(null);
 	// True from the moment a reload is scheduled until the element produces
 	// metadata again. Read by the rAF tick, which must not steer a dead decoder.
 	const recoveringRef = useRef(false);
@@ -156,14 +158,6 @@ export function VirtualPreview({
 	// after load(), and 0 after a load that failed before decoding a frame, so
 	// it cannot be the fallback resume point — that is a silent rewind.
 	const lastGoodSourceTimeRef = useRef(0);
-	// Where the decoder died, while a reload is outstanding. Playing PAST it is
-	// what re-arms the retry budget: see markSourceLoaded for why a reload
-	// completing is not evidence of anything.
-	const failedAtSourceTimeRef = useRef<number | null>(null);
-	// Reloads spent on the mounted media, ever — the ceiling the budget cannot
-	// talk its way past (see MAX_RELOADS_PER_MEDIA). Reset only when the media
-	// changes or the user retries, never by playback progress.
-	const reloadsRef = useRef(0);
 	// Which clip the rAF tick below believes is currently playing — set
 	// whenever a seek unambiguously resolves one (via locateVirtualPosition,
 	// timeline position → clip). Passed back into locateSourcePosition so
@@ -336,14 +330,6 @@ export function VirtualPreview({
 				// where a reload has to put the playhead back if it cannot
 				// resolve one from the timeline.
 				lastGoodSourceTimeRef.current = sourceTime;
-				// …and here is the only place that can prove a reload WORKED:
-				// the decoder is past the bytes it died on. A quarter second of
-				// margin so re-decoding the same frame doesn't count as progress.
-				const failedAt = failedAtSourceTimeRef.current;
-				if (failedAt !== null && sourceTime > failedAt + 0.25) {
-					failedAtSourceTimeRef.current = null;
-					retryRef.current.attempts = 0;
-				}
 			}
 			// À L'ARRÊT, le `<video>` ne pilote PLUS la position de la timeline.
 			//
@@ -619,15 +605,14 @@ export function VirtualPreview({
 	 * callback is stable and the scheduled work always sees current state.
 	 */
 	const reloadActiveSource = useCallback((play: boolean, delayMs: number) => {
-		if (retryRef.current.timer !== null) {
-			window.clearTimeout(retryRef.current.timer);
-			retryRef.current.timer = null;
+		if (retryTimerRef.current !== null) {
+			window.clearTimeout(retryTimerRef.current);
+			retryTimerRef.current = null;
 		}
 		recoveringRef.current = true;
-		reloadsRef.current += 1;
 		setLoadState("loading");
-		retryRef.current.timer = window.setTimeout(() => {
-			retryRef.current.timer = null;
+		retryTimerRef.current = window.setTimeout(() => {
+			retryTimerRef.current = null;
 			const video = videoRef.current;
 			if (!video) return;
 			// Resolved HERE rather than when the error fired: the user can scrub
@@ -693,14 +678,13 @@ export function VirtualPreview({
 	// before any queued macrotask can.
 	// biome-ignore lint/correctness/useExhaustiveDependencies: re-run when the mounted media changes
 	useEffect(() => {
-		retryRef.current = { attempts: 0, timer: null };
+		reloadsRef.current = [];
+		gaveUpRef.current = false;
 		recoveringRef.current = false;
-		failedAtSourceTimeRef.current = null;
-		reloadsRef.current = 0;
 		return () => {
-			if (retryRef.current.timer !== null) {
-				window.clearTimeout(retryRef.current.timer);
-				retryRef.current.timer = null;
+			if (retryTimerRef.current !== null) {
+				window.clearTimeout(retryTimerRef.current);
+				retryTimerRef.current = null;
 			}
 		};
 	}, [activeSourceKey, activeSource?.src]);
@@ -711,9 +695,10 @@ export function VirtualPreview({
 	// biome-ignore lint/correctness/useExhaustiveDependencies: the token bump IS the request
 	useEffect(() => {
 		if (!retryToken) return;
-		retryRef.current.attempts = 0;
-		failedAtSourceTimeRef.current = null;
-		reloadsRef.current = 0;
+		// Deliberately does NOT record a reload: the user's click must not spend
+		// one of the recoveries it is meant to restore.
+		reloadsRef.current = [];
+		gaveUpRef.current = false;
 		reloadActiveSource(false, 0);
 	}, [retryToken]);
 
@@ -825,9 +810,11 @@ export function VirtualPreview({
 								// "load failure" that says nothing about the media (Chromium
 								// calls it "Empty src attribute"). Never act on that.
 								const hasSource = Boolean(el.getAttribute("src")) || Boolean(el.currentSrc);
-								const attemptsSpent = retryRef.current.attempts;
+								const nowMs = Date.now();
+								reloadsRef.current = pruneReloads(reloadsRef.current, nowMs);
+								const reloadsInWindow = reloadsRef.current.length;
 								const disposition = hasSource
-									? mediaErrorDisposition(description.code, attemptsSpent, reloadsRef.current)
+									? mediaErrorDisposition(description.code, reloadsInWindow, gaveUpRef.current)
 									: "ignore";
 								const detail = formatMediaError(description);
 								// The code is the whole diagnosis, and it used to be thrown
@@ -840,8 +827,8 @@ export function VirtualPreview({
 									networkState: el.networkState,
 									readyState: el.readyState,
 									currentTime: el.currentTime,
-									attemptsSpent,
-									reloadsSpent: reloadsRef.current,
+									reloadsInWindow,
+									gaveUp: gaveUpRef.current,
 									disposition,
 								};
 								if (disposition === "ignore") {
@@ -856,18 +843,13 @@ export function VirtualPreview({
 								}
 								if (disposition === "retry") {
 									console.warn("[preview] <video> failed, reloading", context);
-									retryRef.current.attempts = attemptsSpent + 1;
-									// The bar the reload has to clear before the budget is
-									// handed back (see the rAF tick).
-									failedAtSourceTimeRef.current = Number.isFinite(el.currentTime)
-										? el.currentTime
-										: lastGoodSourceTimeRef.current;
+									reloadsRef.current.push(nowMs);
 									// Deliberately no pause(): a 400 ms reload should be a blip
 									// the user never sees, and pausing here would flip the
 									// shell's transport for it. What keeps the rAF from
 									// steering the dead decoder in the meantime is
 									// `recoveringRef`, set by reloadActiveSource.
-									reloadActiveSource(!el.paused, retryDelayMs(attemptsSpent));
+									reloadActiveSource(!el.paused, retryDelayMs(reloadsInWindow));
 									return;
 								}
 								// ponytail: don't blindly advance to the next source — if
@@ -877,12 +859,9 @@ export function VirtualPreview({
 								console.error("[preview] <video> failed for good", context);
 								pendingSeekRef.current = null;
 								recoveringRef.current = false;
-								// Once we have given up, nothing playback does may re-arm the
-								// budget: leaving this set let the rAF's progress check fire
-								// on the NEXT bad spot and start the whole cycle again, which
-								// is what "3 episodes for one broken file" looked like in the
-								// field. Only Retry or a media change re-arms from here.
-								failedAtSourceTimeRef.current = null;
+								// Latched so an expiring window cannot restart the cycle behind
+								// the card. Only Retry or a media change lifts it.
+								gaveUpRef.current = true;
 								setLoadState("error");
 								// An 'error' doesn't itself fire 'pause', so make sure the shell's
 								// transport state (single source of truth, see NewEditorShell's

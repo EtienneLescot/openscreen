@@ -20,16 +20,33 @@ export const MEDIA_ERROR_NAMES: Record<number, string> = {
 	4: "MEDIA_ERR_SRC_NOT_SUPPORTED",
 };
 
-/** Delayed rather than immediate: the likeliest transient causes are a file the
- *  capture process has not finished writing and a momentarily unreadable file
- *  (an antivirus pass, a Windows share lock). An instant re-read sees the same
- *  bytes and burns an attempt for nothing. */
+/** Delayed rather than immediate: the failure we actually measured is a demuxer
+ *  that could not keep up (see VirtualPreview's `applySourceTime`), and an
+ *  instant re-read arrives while it is still saturated. */
 export const RETRY_DELAYS_MS = [400, 1200] as const;
 
 /** A recording that is still being written reports as "unsupported" too, so
  *  code 4 gets one cheap look before we believe the browser that the file is
  *  unusable. */
 export const UNSUPPORTED_RETRY_BUDGET = 1;
+
+/**
+ * The budget is spent by reloads inside a SLIDING WINDOW, not over the lifetime
+ * of the mounted media. That distinction is the whole design:
+ *
+ * - a genuinely dead file burns the budget in seconds (400 ms + 1200 ms of
+ *   backoff and a moment of decode), so the user reaches the card almost at
+ *   once, which is what they need;
+ * - a healthy file hit by the occasional transient — the confirmed cause of
+ *   #395 was our own seek storm, which recurs across an editing session and
+ *   recovers every time — never accumulates, because the window empties between
+ *   hiccups. A lifetime count could not tell those apart: it would show a card
+ *   after enough ordinary editing, on media a 400 ms reload heals every time.
+ *
+ * A window also removes the need to "re-arm" anything on recovery, which is the
+ * mechanism that kept getting this wrong: it expires by itself.
+ */
+export const RELOAD_WINDOW_MS = 30_000;
 
 export interface MediaErrorDescription {
 	code: number | null;
@@ -58,43 +75,38 @@ export function formatMediaError(description: MediaErrorDescription): string {
 	return description.message ? `${label} — ${description.message}` : label;
 }
 
-/**
- * Hard ceiling on reloads for one mounted media, whatever the budget says.
- *
- * The budget is re-armed by playback getting past the point it died at, which
- * is a heuristic — and a file with two bad spots FURTHER APART than that margin
- * re-arms it on every cycle, because each failure looks like progress relative
- * to the other. Measured on a deliberately corrupted recording: failures at
- * 22.528 s and 22.997 s, 0.47 s apart, produced four reloads per episode
- * instead of two. This is the backstop that keeps the count finite whatever the
- * heuristic concludes. Reset only by a media change or the user's Retry.
- */
-export const MAX_RELOADS_PER_MEDIA = RETRY_DELAYS_MS.length * 2;
+/** The reload timestamps still inside the window. The single definition of what
+ *  "recent" means: the caller keeps the returned array and reads its length, so
+ *  there is no second copy of this predicate to drift from. The caller owns the
+ *  clock, which keeps this module pure and testable in the node environment. */
+export function pruneReloads(timestamps: readonly number[], nowMs: number): number[] {
+	return timestamps.filter((at) => nowMs - at < RELOAD_WINDOW_MS);
+}
 
 export type MediaErrorDisposition = "ignore" | "retry" | "fatal";
 
 /**
- * `attemptsSpent` is reset by a successful load, not by elapsed time: success is
- * the only honest evidence that the source recovered. A budget that only ever
- * counts up is issue #395 again with a longer fuse.
+ * `reloadsInWindow` counts only AUTOMATIC reloads: a user pressing Retry clears
+ * the history, because they clicked knowing something changed.
  *
  * A null code (an error event carrying no MediaError) rides the full budget —
  * we know nothing, so we try.
  */
 export function mediaErrorDisposition(
 	code: number | null,
-	attemptsSpent: number,
-	reloadsSpent = 0,
+	reloadsInWindow: number,
+	hasGivenUp = false,
 ): MediaErrorDisposition {
-	// Still ignored at the ceiling: a cancelled load says nothing about the
-	// media, and making it terminal once the counter is high is how #395 would
-	// come back through the side door.
 	if (code === 1) return "ignore";
-	if (reloadsSpent >= MAX_RELOADS_PER_MEDIA) return "fatal";
+	// Once the card is up, the window expiring must not quietly start the cycle
+	// again: a dead file would reload every 30 s, flash back to a picture on the
+	// metadata that always parses, and lose the card. Only Retry or a media
+	// change lifts this.
+	if (hasGivenUp) return "fatal";
 	const budget = code === 4 ? UNSUPPORTED_RETRY_BUDGET : RETRY_DELAYS_MS.length;
-	return attemptsSpent < budget ? "retry" : "fatal";
+	return reloadsInWindow < budget ? "retry" : "fatal";
 }
 
-export function retryDelayMs(attemptsSpent: number): number {
-	return RETRY_DELAYS_MS[Math.min(attemptsSpent, RETRY_DELAYS_MS.length - 1)];
+export function retryDelayMs(reloadsInWindow: number): number {
+	return RETRY_DELAYS_MS[Math.min(reloadsInWindow, RETRY_DELAYS_MS.length - 1)];
 }
