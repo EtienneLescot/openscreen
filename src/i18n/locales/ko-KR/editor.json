@@ -363,7 +363,13 @@
 	},
 	"preview": {
 		"videoPreview": "영상 미리보기",
-		"webcamPreview": "웹캠 미리보기 (끌어서 위치 변경)"
+		"webcamPreview": "웹캠 미리보기 (끌어서 위치 변경)",
+		"mediaError": {
+			"title": "미리보기가 중단되었습니다",
+			"description": "영상을 디코딩할 수 없습니다. 파일이 이동되었거나 아직 저장이 끝나지 않았을 수 있습니다. 프로젝트 자체는 그대로입니다.",
+			"retry": "다시 시도",
+			"detail": "세부 정보: {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "주석",

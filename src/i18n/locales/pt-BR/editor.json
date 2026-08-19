@@ -363,7 +363,13 @@
 	},
 	"preview": {
 		"videoPreview": "Pré-visualização do vídeo",
-		"webcamPreview": "Pré-visualização da webcam (arraste para reposicionar)"
+		"webcamPreview": "Pré-visualização da webcam (arraste para reposicionar)",
+		"mediaError": {
+			"title": "Pré-visualização interrompida",
+			"description": "Não foi possível decodificar o vídeo. O arquivo pode ter sido movido ou ainda estar sendo gravado — seu projeto continua intacto.",
+			"retry": "Tentar novamente",
+			"detail": "Detalhes: {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "Anotação",

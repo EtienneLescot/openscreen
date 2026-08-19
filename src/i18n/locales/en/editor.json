@@ -363,7 +363,13 @@
 	},
 	"preview": {
 		"videoPreview": "Video preview",
-		"webcamPreview": "Webcam preview (drag to reposition)"
+		"webcamPreview": "Webcam preview (drag to reposition)",
+		"mediaError": {
+			"title": "Preview stopped",
+			"description": "The video couldn't be decoded. The file may have been moved, or it may still be finishing writing — your project itself is intact.",
+			"retry": "Try again",
+			"detail": "Details: {{detail}}"
+		}
 	},
 	"annotationOverlay": {
 		"imageAlt": "Annotation",

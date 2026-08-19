@@ -643,6 +643,66 @@
 	width: 12px;
 	height: 12px;
 }
+
+/* ─── preview media failure (PreviewErrorCard) ──────────────────── */
+/* Overlays the stage instead of replacing it: the native compositor is still
+   painting the last composed frame underneath, and leaving that frame visible is
+   what tells the user their project is fine (issue #395). Translucent, not
+   opaque, for the same reason. */
+.previewFailure {
+	position: absolute;
+	inset: 0;
+	z-index: 3;
+	display: grid;
+	place-items: center;
+	padding: var(--sp-4);
+	background: rgba(9, 9, 11, 0.72);
+	backdrop-filter: blur(2px);
+}
+.previewFailureCard {
+	display: flex;
+	flex-direction: column;
+	align-items: center;
+	gap: var(--sp-3);
+	max-width: min(38ch, 100%);
+	text-align: center;
+}
+.previewFailureIconRing {
+	display: flex;
+	align-items: center;
+	justify-content: center;
+	width: 40px;
+	height: 40px;
+	border-radius: 999px;
+	background: rgba(255, 255, 255, 0.05);
+	box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.1);
+}
+.previewFailureIcon {
+	width: 20px;
+	height: 20px;
+	color: var(--muted-foreground, rgba(255, 255, 255, 0.6));
+}
+.previewFailureTitle {
+	margin: 0;
+	font-size: 1.05rem;
+	font-weight: 600;
+	color: var(--fg-2);
+}
+.previewFailureDescription {
+	margin: 0;
+	font-size: 0.875rem;
+	line-height: 1.5;
+	color: var(--muted-foreground, rgba(255, 255, 255, 0.55));
+}
+/* Selectable: it exists to be copied into a bug report. */
+.previewFailureDetail {
+	margin: 0;
+	font-size: 0.6875rem;
+	font-family: var(--font-mono, ui-monospace, monospace);
+	color: var(--muted-foreground, rgba(255, 255, 255, 0.35));
+	user-select: text;
+	word-break: break-word;
+}
 .previewEmptyDialog {
 	max-width: 24rem;
 	padding: var(--sp-5);

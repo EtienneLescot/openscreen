@@ -23,6 +23,12 @@ import {
 	computeZoomPreviewTransform,
 	IDENTITY_ZOOM_TRANSFORM,
 } from "@/lib/ai-edition/timeline/zoom-preview";
+import {
+	describeMediaError,
+	formatMediaError,
+	mediaErrorDisposition,
+	retryDelayMs,
+} from "./mediaError";
 import styles from "./VirtualPreview.module.css";
 
 export interface VideoSource {
@@ -63,8 +69,20 @@ interface VirtualPreviewProps {
 	videoStyle?: React.CSSProperties;
 	/** Called with the id of the asset that failed, not as a bare "the preview is
 	 *  broken" signal: only ONE source is mounted at a time (`activeSource`), so
-	 *  the caller has no other way to tell which of its sources is dead. */
-	onVideoError?: (assetId: string) => void;
+	 *  the caller has no other way to tell which of its sources is dead.
+	 *  Fires only once the retry budget below is spent — a transient decode or
+	 *  network blip is reloaded here and never reaches the caller. `detail`
+	 *  carries the MediaError code for the card and for bug reports. */
+	onVideoError?: (assetId: string, detail: string) => void;
+	/** The mounted source produced a frame again — after a reload, or simply
+	 *  because the playhead moved onto a healthy asset. The caller needs this to
+	 *  drop a failure it is showing; without it, a card outlives its failure and
+	 *  we are back to a latch, only quieter. */
+	onVideoRecovered?: (assetId: string) => void;
+	/** Bumped by the caller's Retry button. A user-initiated reload always runs:
+	 *  it cancels any pending backoff and starts the budget over, because the
+	 *  user clicked knowing something changed (they put the file back). */
+	retryToken?: number;
 	/** Crop of the active clip, as fractions (0-1) of the source frame. Absent/
 	 * identity ({x:0,y:0,width:1,height:1}) renders the full frame, unchanged
 	 * from before crop support existed. */
@@ -89,6 +107,8 @@ export function VirtualPreview({
 	onVideoElement,
 	videoStyle,
 	onVideoError,
+	onVideoRecovered,
+	retryToken,
 	cropRegion,
 	clockRef,
 }: VirtualPreviewProps) {
@@ -118,6 +138,20 @@ export function VirtualPreview({
 
 	const isProgrammaticSeekRef = useRef(false);
 	const pendingSeekRef = useRef<{ sourceTimeSec: number; play: boolean } | null>(null);
+	// Reload bookkeeping for the mounted source (see `reloadActiveSource`).
+	// `attempts` is spent by failures and reset by a SUCCESS, never by elapsed
+	// time — a budget that only counts up is issue #395 with a longer fuse.
+	const retryRef = useRef<{ attempts: number; timer: number | null }>({
+		attempts: 0,
+		timer: null,
+	});
+	// True from the moment a reload is scheduled until the element produces
+	// metadata again. Read by the rAF tick, which must not steer a dead decoder.
+	const recoveringRef = useRef(false);
+	// The last position read off a healthy element. `video.currentTime` is 0
+	// after load(), and 0 after a load that failed before decoding a frame, so
+	// it cannot be the fallback resume point — that is a silent rewind.
+	const lastGoodSourceTimeRef = useRef(0);
 	// Which clip the rAF tick below believes is currently playing — set
 	// whenever a seek unambiguously resolves one (via locateVirtualPosition,
 	// timeline position → clip). Passed back into locateSourcePosition so
@@ -177,6 +211,8 @@ export function VirtualPreview({
 	playbackClipsRef.current = playbackClips;
 	const videoSourcesRef = useRef(videoSources);
 	videoSourcesRef.current = videoSources;
+	const activeSourceRef = useRef(activeSource);
+	activeSourceRef.current = activeSource;
 	const sourceIndexRef = useRef(sourceIndex);
 	sourceIndexRef.current = sourceIndex;
 	const virtualTimeSecRef = useRef(virtualTimeSec);
@@ -217,6 +253,18 @@ export function VirtualPreview({
 				clockRef.current.isPlaying = !v.paused;
 				clockRef.current.playbackRate = v.playbackRate;
 				clockRef.current.virtualTimeSec = virtualTimeSecRef.current;
+			}
+			// A reload is in flight: the decoder is dead and `currentTime` is
+			// frozen (or already reset to 0), so every decision below — trim
+			// skipping, the clip-boundary advance, the unmapped-position
+			// fallback — would be taken on a lie, and the seeks two of them fire
+			// would clobber the resume queued for the reload. Deliberately BELOW
+			// the clock publish: the webcam overlay freezes on the last good
+			// position rather than jumping. Note this cannot ride on `v.paused`,
+			// the gate the rest of the tick uses — an `error` does not fire
+			// `pause`, so a failure mid-playback leaves `paused` false.
+			if (recoveringRef.current) {
+				return;
 			}
 			const activeSourceId = videoSourcesRef.current[sourceIndexRef.current]?.id;
 			// Trims only trim ahead during actual playback — scrubbing/paused seeks are
@@ -271,6 +319,10 @@ export function VirtualPreview({
 			// against drawing a black frame into the cursor overlay.
 			if (v.readyState >= 2) {
 				setSourceTimeSec(v.currentTime);
+				// Sampled here, where the decoder is known good, because this is
+				// where a reload has to put the playhead back if it cannot
+				// resolve one from the timeline.
+				lastGoodSourceTimeRef.current = v.currentTime;
 			}
 			// À L'ARRÊT, le `<video>` ne pilote PLUS la position de la timeline.
 			//
@@ -492,6 +544,92 @@ export function VirtualPreview({
 		}
 	}, []);
 
+	/**
+	 * Re-run the media load algorithm on the mounted element after a delay, and
+	 * queue the position to come back to. Everything is read through refs, so the
+	 * callback is stable and the scheduled work always sees current state.
+	 */
+	const reloadActiveSource = useCallback((play: boolean, delayMs: number) => {
+		if (retryRef.current.timer !== null) {
+			window.clearTimeout(retryRef.current.timer);
+			retryRef.current.timer = null;
+		}
+		recoveringRef.current = true;
+		setLoadState("loading");
+		retryRef.current.timer = window.setTimeout(() => {
+			retryRef.current.timer = null;
+			const video = videoRef.current;
+			if (!video) return;
+			// Resolved HERE rather than when the error fired: the user can scrub
+			// during the backoff, and the position they left the playhead on is
+			// the one that has to come back. An asset switch queued in the
+			// meantime is newer intent still, so it wins outright.
+			if (!pendingSeekRef.current) {
+				const position = locateVirtualPosition(clipsRef.current, virtualTimeSecRef.current);
+				// `locateVirtualPosition` answers for whatever clip the playhead
+				// is on, which after a boundary advance can belong to a DIFFERENT
+				// asset — its source time would be a meaningless offset into the
+				// file we are about to reload.
+				const clipIsOnThisSource = position?.clip.assetId === activeSourceRef.current?.id;
+				if (position && clipIsOnThisSource) {
+					// The rAF resumes against this; leaving it stale would resolve
+					// the next tick against the clip we were on before the failure.
+					activeClipIdRef.current = position.clip.id;
+				}
+				const resumeSec =
+					position && clipIsOnThisSource ? position.sourceTimeSec : lastGoodSourceTimeRef.current;
+				pendingSeekRef.current = {
+					sourceTimeSec: Number.isFinite(resumeSec) ? resumeSec : 0,
+					play,
+				};
+			}
+			// The restore itself rides the cross-asset path `onLoadedMetadata`
+			// already implements — one resume path in this component, not two.
+			//
+			// load() and nothing else: per spec it unconditionally re-runs the
+			// media load algorithm. Re-assigning `src` first (the obvious
+			// alternative) starts a SECOND load that aborts the first, which
+			// surfaces as a spurious MEDIA_ERR_ABORTED.
+			video.load();
+		}, delayMs);
+	}, []);
+
+	/** A frame decoded — whatever went wrong is over. Success, not elapsed time,
+	 *  is what re-arms the retry budget, and it is the only signal the caller has
+	 *  that a failure it is showing can be dropped. */
+	const markSourceHealthy = useCallback(() => {
+		recoveringRef.current = false;
+		retryRef.current.attempts = 0;
+		const id = activeSourceRef.current?.id;
+		if (id) onVideoRecovered?.(id);
+	}, [onVideoRecovered]);
+
+	// Reload bookkeeping belongs to the MOUNTED element: the <video> is keyed on
+	// the asset id, so a source swap replaces it, and a reload scheduled for the
+	// old one must never fire against its replacement. React runs this cleanup
+	// before any queued macrotask can.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: re-run on source swap
+	useEffect(() => {
+		retryRef.current = { attempts: 0, timer: null };
+		recoveringRef.current = false;
+		return () => {
+			if (retryRef.current.timer !== null) {
+				window.clearTimeout(retryRef.current.timer);
+				retryRef.current.timer = null;
+			}
+		};
+	}, [activeSourceKey]);
+
+	// The caller's Retry button. Same path as an automatic reload so the two
+	// cannot drift, but with a fresh budget and no delay: the user clicked
+	// because they know something changed.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: the token bump IS the request
+	useEffect(() => {
+		if (!retryToken) return;
+		retryRef.current.attempts = 0;
+		reloadActiveSource(false, 0);
+	}, [retryToken]);
+
 	// BUG corrigé : cet effet listait `seekToVirtualTime`/`seekToSourceTime` en dépendances
 	// — mais `seekToVirtualTime` change d'identité (nouveau `useCallback`) à chaque fois que
 	// `sourceIndex` change, y compris quand CE MÊME effet vient de le faire changer (switch
@@ -518,7 +656,10 @@ export function VirtualPreview({
 	}, [seekTarget]);
 
 	return (
-		<div className={styles.container}>
+		// The load state no longer paints anything here (Preview owns failure UI
+		// now), but it is still the honest read of what the decode clock is doing —
+		// worth one attribute for tests and for a screenshot in a bug report.
+		<div className={styles.container} data-load-state={loadState}>
 			{activeSource ? (
 				<>
 					<div ref={videoFrameRef} className={styles.videoFrame}>
@@ -542,6 +683,7 @@ export function VirtualPreview({
 							playsInline
 							onLoadedMetadata={(e) => {
 								setLoadState("ready");
+								markSourceHealthy();
 								// ponytail: forward the raw duration (possibly NaN for
 								// MediaRecorder WebMs) to the parent. handleLoadedMetadata
 								// falls back to a 60s seed when it isn't finite so the
@@ -576,19 +718,69 @@ export function VirtualPreview({
 								}
 							}}
 							onWaiting={() => setLoadState("loading")}
-							onCanPlay={() => setLoadState("ready")}
+							onCanPlay={() => {
+								setLoadState("ready");
+								markSourceHealthy();
+							}}
 							onError={(e) => {
+								const el = e.currentTarget;
+								const description = describeMediaError(el.error);
+								// An element whose source was torn out from under it reports a
+								// "load failure" that says nothing about the media (Chromium
+								// calls it "Empty src attribute"). Never act on that.
+								const hasSource = Boolean(el.getAttribute("src")) || Boolean(el.currentSrc);
+								const attemptsSpent = retryRef.current.attempts;
+								const disposition = hasSource
+									? mediaErrorDisposition(description.code, attemptsSpent)
+									: "ignore";
+								const detail = formatMediaError(description);
+								// The code is the whole diagnosis, and it used to be thrown
+								// away — which is why issue #395 could only ever be reported
+								// as "the preview disappeared". Keep it, whatever we decide.
+								const context = {
+									assetId: activeSource.id,
+									src: activeSource.src,
+									detail,
+									networkState: el.networkState,
+									readyState: el.readyState,
+									currentTime: el.currentTime,
+									attemptsSpent,
+									disposition,
+								};
+								if (disposition === "ignore") {
+									// Routine: every cross-asset clip boundary remounts this
+									// element mid-load. `debug`, not `warn` — this fires during
+									// ordinary playback and must not read as a problem.
+									console.debug(
+										"[preview] ignoring a <video> error from a cancelled load",
+										context,
+									);
+									return;
+								}
+								if (disposition === "retry") {
+									console.warn("[preview] <video> failed, reloading", context);
+									retryRef.current.attempts = attemptsSpent + 1;
+									// Deliberately no pause(): a 400 ms reload should be a blip
+									// the user never sees, and pausing here would flip the
+									// shell's transport for it. What keeps the rAF from
+									// steering the dead decoder in the meantime is
+									// `recoveringRef`, set by reloadActiveSource.
+									reloadActiveSource(!el.paused, retryDelayMs(attemptsSpent));
+									return;
+								}
 								// ponytail: don't blindly advance to the next source — if
 								// the failed source owns the current virtual clip, the
 								// next sourceIndex will seekToVirtualTime right back into
 								// the same failed asset, looping. Fail the preview.
+								console.error("[preview] <video> failed for good", context);
 								pendingSeekRef.current = null;
+								recoveringRef.current = false;
 								setLoadState("error");
 								// An 'error' doesn't itself fire 'pause', so make sure the shell's
 								// transport state (single source of truth, see NewEditorShell's
 								// own play/pause/ended listener) actually learns playback stopped.
-								e.currentTarget.pause();
-								onVideoError?.(activeSource.id);
+								el.pause();
+								onVideoError?.(activeSource.id, detail);
 							}}
 							onEnded={() => {
 								// BUG corrigé : ce handler stoppait TOUJOURS la lecture dès que le
@@ -626,14 +818,14 @@ export function VirtualPreview({
 							// handles clip-end advancement, so dropping the event
 							// handler here is safe.
 						/>
-						{/* Plus d'overlay « Loading preview… » : il reflétait l'état du <video>
-						    CACHÉ (source horloge/audio), pas la preview RÉELLE — le canvas natif,
-						    qui montre déjà une image valide pendant que le <video> re-seek. Il
-						    recouvrait donc une bonne image à chaque scrub, pour rien. On garde
-						    seulement l'erreur, qui, elle, signale un vrai échec de chargement. */}
-						{loadState === "error" && (
-							<div className={styles.overlay}>Video preview could not be loaded.</div>
-						)}
+						{/* Plus d'overlay ici du tout. « Loading preview… » reflétait l'état du
+						    <video> CACHÉ (source horloge/audio), pas la preview RÉELLE — le canvas
+						    natif, qui montre déjà une image valide pendant que le <video> re-seek.
+						    L'overlay d'erreur, lui, est parti chez Preview (#395) : il vivait dans
+						    .videoFrame, sur lequel l'effet de zoom écrit `style.transform`, donc à
+						    3× il partait hors cadre ; il n'était pas traduit ; et surtout il ne
+						    proposait rien — l'échec est désormais une carte avec un bouton
+						    Réessayer, rendue au-dessus de la dernière image composée. */}
 					</div>
 					{/* The native D3D canvas already draws the recorded-cursor sprite as part
 					    of the composited frame (same cursor sidecar file, single source of
