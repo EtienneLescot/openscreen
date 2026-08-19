@@ -58,6 +58,19 @@ export function formatMediaError(description: MediaErrorDescription): string {
 	return description.message ? `${label} — ${description.message}` : label;
 }
 
+/**
+ * Hard ceiling on reloads for one mounted media, whatever the budget says.
+ *
+ * The budget is re-armed by playback getting past the point it died at, which
+ * is a heuristic — and a file with two bad spots FURTHER APART than that margin
+ * re-arms it on every cycle, because each failure looks like progress relative
+ * to the other. Measured on a deliberately corrupted recording: failures at
+ * 22.528 s and 22.997 s, 0.47 s apart, produced four reloads per episode
+ * instead of two. This is the backstop that keeps the count finite whatever the
+ * heuristic concludes. Reset only by a media change or the user's Retry.
+ */
+export const MAX_RELOADS_PER_MEDIA = RETRY_DELAYS_MS.length * 2;
+
 export type MediaErrorDisposition = "ignore" | "retry" | "fatal";
 
 /**
@@ -71,8 +84,13 @@ export type MediaErrorDisposition = "ignore" | "retry" | "fatal";
 export function mediaErrorDisposition(
 	code: number | null,
 	attemptsSpent: number,
+	reloadsSpent = 0,
 ): MediaErrorDisposition {
+	// Still ignored at the ceiling: a cancelled load says nothing about the
+	// media, and making it terminal once the counter is high is how #395 would
+	// come back through the side door.
 	if (code === 1) return "ignore";
+	if (reloadsSpent >= MAX_RELOADS_PER_MEDIA) return "fatal";
 	const budget = code === 4 ? UNSUPPORTED_RETRY_BUDGET : RETRY_DELAYS_MS.length;
 	return attemptsSpent < budget ? "retry" : "fatal";
 }
