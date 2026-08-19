@@ -136,7 +136,11 @@ function mount(clips: AxcutClip[] = [clip("clip_1", "a1", 0)]) {
 	const onVideoError = vi.fn<(assetId: string, detail: string) => void>();
 	const onVideoRecovered = vi.fn<(assetId: string) => void>();
 	const onTimeChange = vi.fn<(timeSec: number) => void>();
-	const tree = (retryToken: number) => (
+	let seekRequestId = 0;
+	const tree = (
+		retryToken: number,
+		seekTarget: { timeSec: number; requestId: number } | null = null,
+	) => (
 		<VirtualPreview
 			videoSources={SOURCES}
 			clips={clips}
@@ -144,6 +148,7 @@ function mount(clips: AxcutClip[] = [clip("clip_1", "a1", 0)]) {
 			onVideoError={onVideoError}
 			onVideoRecovered={onVideoRecovered}
 			retryToken={retryToken}
+			seekTarget={seekTarget}
 		/>
 	);
 	const view = render(tree(0));
@@ -162,6 +167,12 @@ function mount(clips: AxcutClip[] = [clip("clip_1", "a1", 0)]) {
 		onVideoRecovered,
 		onTimeChange,
 		bumpRetryToken: (token: number) => view.rerender(tree(token)),
+		/** Move the playhead the way the shell does — a new seekTarget requestId. */
+		scrubTo: (timeSec: number) =>
+			act(() => {
+				seekRequestId += 1;
+				view.rerender(tree(0, { timeSec, requestId: seekRequestId }));
+			}),
 	};
 }
 
@@ -210,6 +221,24 @@ describe("VirtualPreview media-error recovery (issue #395)", () => {
 		expect(video.currentTime).toBeCloseTo(4, 5);
 		// …and playback resumes, because it was playing when the failure hit.
 		expect(video.playCalls).toBeGreaterThan(0);
+	});
+
+	// …and "at reload time" is the load-bearing half. Resolving it when the error
+	// fired, or from the last position sampled off the element, both give 4 here —
+	// only reading the live playhead when the timer runs gives 7.
+	it("honours a scrub made during the backoff", () => {
+		const { video, scrubTo } = mount();
+
+		video.play();
+		video.seekTo(4);
+		tick();
+
+		video.fail(3);
+		scrubTo(7);
+		advance(RETRY_DELAYS_MS[0]);
+
+		video.loadedMetadata();
+		expect(video.currentTime).toBeCloseTo(7, 5);
 	});
 
 	// An `error` does not fire `pause`, so `v.paused` — the gate the rest of the
@@ -261,11 +290,13 @@ describe("VirtualPreview media-error recovery (issue #395)", () => {
 		expect(onVideoError).toHaveBeenCalledWith("a1", "MEDIA_ERR_SRC_NOT_SUPPORTED (4) — code 4");
 	});
 
-	// Success re-arms the budget. Without this a long session slowly walks into
-	// the same dead end — #395 with a longer fuse.
-	it("re-arms the budget on a successful load", () => {
+	// Getting PAST the bad spot re-arms the budget. Without any re-arming a long
+	// session slowly walks into the same dead end — #395 with a longer fuse.
+	it("re-arms the budget once playback gets past the failure point", () => {
 		const { video, onVideoError, onVideoRecovered } = mount();
 
+		video.seekTo(4);
+		tick();
 		for (const delay of RETRY_DELAYS_MS) {
 			video.fail(3);
 			advance(delay);
@@ -273,11 +304,39 @@ describe("VirtualPreview media-error recovery (issue #395)", () => {
 		video.loadedMetadata();
 		expect(onVideoRecovered).toHaveBeenCalledWith("a1");
 
+		video.seekTo(5); // decoded past where it died
+		tick();
+
 		// A fresh failure now gets the full budget again rather than being fatal.
 		video.fail(3);
 		advance(RETRY_DELAYS_MS[0]);
 		expect(onVideoError).not.toHaveBeenCalled();
 		expect(video.loadCalls).toBe(RETRY_DELAYS_MS.length + 1);
+	});
+
+	// The livelock this fix originally shipped with. `loadedmetadata` only means
+	// the container header parsed — a truncated recording re-fires it on every
+	// reload — so re-arming the budget there handed it back faster than failures
+	// could spend it: a 400 ms reload loop, forever, and the user never saw the
+	// card. Progress past the failure point, not a completed load, is the signal.
+	it("still gives up on a file that reloads cleanly and fails at the same spot", () => {
+		const { video, onVideoError } = mount();
+
+		video.play();
+		video.seekTo(4);
+		tick();
+
+		// Three rounds of "the header parses, the data does not".
+		for (let round = 0; round < RETRY_DELAYS_MS.length + 1; round += 1) {
+			video.fail(3);
+			advance(5_000);
+			video.loadedMetadata(); // header fine, decoder willing
+			video.seekTo(4); // …and straight back to the byte that killed it
+			tick();
+		}
+
+		expect(onVideoError).toHaveBeenCalledWith("a1", "MEDIA_ERR_DECODE (3) — code 3");
+		expect(video.loadCalls).toBe(RETRY_DELAYS_MS.length);
 	});
 
 	it("treats an error with no MediaError as transient", () => {
@@ -314,7 +373,12 @@ describe("VirtualPreview media-error recovery (issue #395)", () => {
 		const { view, video } = mount();
 
 		video.fail(3);
+		// Assert the cancellation itself: `reloadActiveSource` bails on a null
+		// videoRef anyway, so a surviving timer would still leave loadCalls at 0
+		// and prove nothing about the cleanup this test exists for.
+		expect(vi.getTimerCount()).toBe(1);
 		view.unmount();
+		expect(vi.getTimerCount()).toBe(0);
 		advance(5_000);
 
 		expect(video.loadCalls).toBe(0);

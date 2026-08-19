@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import type { CameraFullscreenRegion, ZoomFocus } from "@/components/video-editor/types";
 import { useScopedT } from "@/contexts/I18nContext";
 import type {
@@ -87,8 +87,10 @@ export function Preview({
 	// later moved or deleted, or one left behind when its clip was removed — and
 	// handing the asset list straight to the canvas made `videoSources[0]` (the
 	// source VirtualPreview mounts first) that dead asset: its <video> errored,
-	// latched the failure flag below, and collapsed the WHOLE preview to the
-	// empty state while every clip on the timeline was perfectly playable.
+	// and the whole preview collapsed to the empty state while every clip on the
+	// timeline was perfectly playable. (A media error no longer collapses
+	// anything — see below — but mounting an asset nothing references is still
+	// the wrong source to put the decode clock on.)
 	// Ordered by timeline position, so the first source mounted is the one the
 	// playhead actually needs at 0:00.
 	// The fallback is load-bearing: the first clip of a fresh import is minted
@@ -128,13 +130,19 @@ export function Preview({
 	// the mounted one is.
 	const [failure, setFailure] = useState<{ assetId: string; detail: string } | null>(null);
 	const [retryToken, setRetryToken] = useState(0);
+	// Dropped only when the FAILED asset itself leaves the timeline — not
+	// whenever the source list changes shape. Appending a replacement recording
+	// (which is the advice the card gives) grows the list without touching the
+	// dead <video>: it is not remounted, nothing re-fires `error`, and clearing
+	// here would take the card and its Retry button away from a stage that is
+	// still frozen. A same-id source whose URL changed does re-run the load
+	// algorithm, and the resulting recovery clears the failure on its own.
 	const sourceKey = previewSources.map((source) => `${source.id}::${source.src}`).join("|");
-	const previousSourceKeyRef = useRef<string | null>(null);
+	// biome-ignore lint/correctness/useExhaustiveDependencies: keyed on the source list's identity, read through previewSources
 	useEffect(() => {
-		if (previousSourceKeyRef.current !== sourceKey) {
-			previousSourceKeyRef.current = sourceKey;
-			setFailure(null);
-		}
+		setFailure((prev) =>
+			prev && !previewSources.some((source) => source.id === prev.assetId) ? null : prev,
+		);
 	}, [sourceKey]);
 	const handleVideoError = useCallback((assetId: string, detail: string) => {
 		setFailure({ assetId, detail });

@@ -139,8 +139,10 @@ export function VirtualPreview({
 	const isProgrammaticSeekRef = useRef(false);
 	const pendingSeekRef = useRef<{ sourceTimeSec: number; play: boolean } | null>(null);
 	// Reload bookkeeping for the mounted source (see `reloadActiveSource`).
-	// `attempts` is spent by failures and reset by a SUCCESS, never by elapsed
-	// time — a budget that only counts up is issue #395 with a longer fuse.
+	// `attempts` is spent by failures and re-armed by playing past the point one
+	// died at — never by elapsed time, and never by a reload merely completing.
+	// A budget that only counts up is issue #395 with a longer fuse; one handed
+	// back too easily is a reload loop that never surfaces anything at all.
 	const retryRef = useRef<{ attempts: number; timer: number | null }>({
 		attempts: 0,
 		timer: null,
@@ -152,6 +154,10 @@ export function VirtualPreview({
 	// after load(), and 0 after a load that failed before decoding a frame, so
 	// it cannot be the fallback resume point — that is a silent rewind.
 	const lastGoodSourceTimeRef = useRef(0);
+	// Where the decoder died, while a reload is outstanding. Playing PAST it is
+	// what re-arms the retry budget: see markSourceLoaded for why a reload
+	// completing is not evidence of anything.
+	const failedAtSourceTimeRef = useRef<number | null>(null);
 	// Which clip the rAF tick below believes is currently playing — set
 	// whenever a seek unambiguously resolves one (via locateVirtualPosition,
 	// timeline position → clip). Passed back into locateSourcePosition so
@@ -323,6 +329,14 @@ export function VirtualPreview({
 				// where a reload has to put the playhead back if it cannot
 				// resolve one from the timeline.
 				lastGoodSourceTimeRef.current = v.currentTime;
+				// …and here is the only place that can prove a reload WORKED:
+				// the decoder is past the bytes it died on. A quarter second of
+				// margin so re-decoding the same frame doesn't count as progress.
+				const failedAt = failedAtSourceTimeRef.current;
+				if (failedAt !== null && v.currentTime > failedAt + 0.25) {
+					failedAtSourceTimeRef.current = null;
+					retryRef.current.attempts = 0;
+				}
 			}
 			// À L'ARRÊT, le `<video>` ne pilote PLUS la position de la timeline.
 			//
@@ -518,6 +532,18 @@ export function VirtualPreview({
 			const video = videoRef.current;
 			if (!video) return;
 
+			if (pendingSeekRef.current) {
+				// A load is in flight (a reload, or a source that has just been
+				// swapped in), so the seek below is a no-op — assigning
+				// `currentTime` before metadata only sets the default playback
+				// start position, and `onLoadedMetadata` is about to apply the
+				// queued resume over the top of it. Re-aim that resume instead:
+				// it is older intent than the gesture the user just made.
+				pendingSeekRef.current = {
+					sourceTimeSec: position.sourceTimeSec,
+					play: shouldContinuePlayback,
+				};
+			}
 			isProgrammaticSeekRef.current = true;
 			updateVirtualTime(position.virtualTimeSec);
 			if (Math.abs(video.currentTime - position.sourceTimeSec) > 0.01) {
@@ -594,12 +620,17 @@ export function VirtualPreview({
 		}, delayMs);
 	}, []);
 
-	/** A frame decoded — whatever went wrong is over. Success, not elapsed time,
-	 *  is what re-arms the retry budget, and it is the only signal the caller has
-	 *  that a failure it is showing can be dropped. */
-	const markSourceHealthy = useCallback(() => {
+	/** The element is loaded again, so the reload is over and any failure the
+	 *  caller is showing can go. Note what this does NOT do: re-arm the retry
+	 *  budget. `loadedmetadata`/`canplay` prove the container header parsed and
+	 *  the decoder is willing — not that the bytes that killed us are readable.
+	 *  A truncated recording (intact header, unreadable data — the case the error
+	 *  card exists for) re-fires both on every reload, so re-arming here would
+	 *  hand back the budget faster than failures could spend it: a 400 ms reload
+	 *  loop, forever, with nothing ever shown to the user. Getting PAST the
+	 *  failure point is the only honest evidence, and the rAF tick below owns it. */
+	const markSourceLoaded = useCallback(() => {
 		recoveringRef.current = false;
-		retryRef.current.attempts = 0;
 		const id = activeSourceRef.current?.id;
 		if (id) onVideoRecovered?.(id);
 	}, [onVideoRecovered]);
@@ -612,6 +643,7 @@ export function VirtualPreview({
 	useEffect(() => {
 		retryRef.current = { attempts: 0, timer: null };
 		recoveringRef.current = false;
+		failedAtSourceTimeRef.current = null;
 		return () => {
 			if (retryRef.current.timer !== null) {
 				window.clearTimeout(retryRef.current.timer);
@@ -627,6 +659,7 @@ export function VirtualPreview({
 	useEffect(() => {
 		if (!retryToken) return;
 		retryRef.current.attempts = 0;
+		failedAtSourceTimeRef.current = null;
 		reloadActiveSource(false, 0);
 	}, [retryToken]);
 
@@ -683,7 +716,7 @@ export function VirtualPreview({
 							playsInline
 							onLoadedMetadata={(e) => {
 								setLoadState("ready");
-								markSourceHealthy();
+								markSourceLoaded();
 								// ponytail: forward the raw duration (possibly NaN for
 								// MediaRecorder WebMs) to the parent. handleLoadedMetadata
 								// falls back to a 60s seed when it isn't finite so the
@@ -720,7 +753,7 @@ export function VirtualPreview({
 							onWaiting={() => setLoadState("loading")}
 							onCanPlay={() => {
 								setLoadState("ready");
-								markSourceHealthy();
+								markSourceLoaded();
 							}}
 							onError={(e) => {
 								const el = e.currentTarget;
@@ -760,6 +793,11 @@ export function VirtualPreview({
 								if (disposition === "retry") {
 									console.warn("[preview] <video> failed, reloading", context);
 									retryRef.current.attempts = attemptsSpent + 1;
+									// The bar the reload has to clear before the budget is
+									// handed back (see the rAF tick).
+									failedAtSourceTimeRef.current = Number.isFinite(el.currentTime)
+										? el.currentTime
+										: lastGoodSourceTimeRef.current;
 									// Deliberately no pause(): a 400 ms reload should be a blip
 									// the user never sees, and pausing here would flip the
 									// shell's transport for it. What keeps the rAF from

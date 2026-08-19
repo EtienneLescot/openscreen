@@ -253,9 +253,31 @@ describe("Preview keeps the stage when the media fails", () => {
 		expect(errorCard()).not.toBeInTheDocument();
 	});
 
+	// Taking the card's own advice — import a replacement — grows the source list
+	// without touching the dead <video>: it is not remounted, nothing re-fires
+	// `error`, and dropping the card here would leave a frozen stage with no
+	// explanation and no Retry button.
+	it("keeps the card when an unrelated source joins the timeline", () => {
+		const { rerender } = renderPreview({
+			videoSources: [source("moved")],
+			clips: [clip("clip_a", "moved", 0, 60)],
+		});
+		click("fail-moved");
+		expect(errorCard()).toBeInTheDocument();
+
+		rerender(
+			previewProps({
+				videoSources: [source("moved"), source("fresh")],
+				clips: [clip("clip_a", "moved", 0, 60), clip("clip_b", "fresh", 60, 90)],
+			}),
+		);
+
+		expect(errorCard()).toBeInTheDocument();
+	});
+
 	// Swapping the media out has to clear the failure, or the card would outlive
 	// the file that caused it.
-	it("clears the failure when the source set changes", () => {
+	it("clears the failure when the failed asset leaves the timeline", () => {
 		const { rerender } = renderPreview({
 			videoSources: [source("truncated")],
 			clips: [clip("clip_a", "truncated", 0, 60)],
