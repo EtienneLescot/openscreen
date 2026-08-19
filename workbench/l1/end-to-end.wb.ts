@@ -125,7 +125,7 @@ describe("no scoring without evidence", () => {
 });
 
 describe("a name the model was never given", () => {
-	it("comes back as a tool result naming the 19, and the turn survives", async () => {
+	it("comes back as a tool result naming the real ones, and the turn survives", async () => {
 		// The demoScripts of `cursor-question` and `wizard-enhance-bare` still
 		// replay the live turns of 2026-07-31, when the model had `ls`/`glob`/
 		// `grep` and used them. Now that the surface is gone those calls are

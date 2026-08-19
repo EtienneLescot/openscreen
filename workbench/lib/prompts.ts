@@ -1,14 +1,31 @@
 // ponytail: prompts and tool-surface constants, kept apart from the scenarios
-// so a wording change is one edit and so the wizard prompt stays byte-identical
-// to production.
+// so a wording change is one edit and so the wizard prompt is stated once, with
+// its provenance, rather than paraphrased per scenario.
 
 import { OPENSCREEN_TOOL_NAMES, PHANTOM_TOOL_NAMES } from "../../electron/ai-edition/agent-tools";
 
 /**
- * VERBATIM copy of `AI_ENHANCE_PROMPT` from
- * `src/components/ai-edition/v4/V4Timeline.tsx:57-58` — the string the
- * Auto-enhance button sends through the prompt bus into the same `runChat`.
- * A workbench that paraphrases it measures a prompt the product never sends.
+ * The Auto-enhance prompt the wizard scenarios send. It is NOT the string the
+ * button sends any more: `src/components/ai-edition/v4/V4Timeline.tsx:77`
+ * narrowed to cuts only in `7e6439ad`, because the model places zooms from what
+ * the transcript SAYS rather than from where the pointer WAS — on a real 66s
+ * screencast, 7 of its 9 focus points missed the cursor in their own window.
+ *
+ * This copy stays WIDE on purpose. That same commit names `real-wizard-enhance`
+ * as the scenario that would show the model can read the track and justify
+ * re-widening the product, and no scenario can measure zoom placement under a
+ * prompt that never asks for a zoom: `dsl.zoom.placement` (weight 3) opens with
+ * `fail("aucun zoom émis")`. The `wizard-enhance` pair scores the D1 fabricated
+ * focus and D2 multiplier tells the same way — under the narrow prompt those
+ * checks go green without anything having been fixed.
+ *
+ * So the divergence is deliberate, but it IS a divergence: re-narrowing this
+ * string means reworking the zoom checks in all three scenarios and re-recording
+ * their baselines, which is why it is not a one-line edit.
+ *
+ * ponytail: this said "VERBATIM copy … the string the Auto-enhance button sends"
+ * from `7e6439ad` until now, pointing at `V4Timeline.tsx:57-58` where the
+ * constant no longer lives. Nothing said so — `npm run wb` is not part of CI.
  */
 export const AI_ENHANCE_PROMPT =
 	"Automatically enhance this recording: (1) add smart zoom-ins on the moments where the cursor dwells or interacts with the UI, each focused on the cursor's location; and (2) cut the dead time — long pauses, silences, and idle stretches where nothing happens — to keep the pacing tight and natural. Apply the edits directly to the timeline.";
