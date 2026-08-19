@@ -71,7 +71,35 @@ jobs:
 
       # Electron initialises Chromium even for the headless CLI, so it needs a
       # display server present. xvfb ships on ubuntu-latest.
+      #
+      # Two attempts, because "does the artefact run" and "can Chromium sandbox
+      # here" are different questions and only the first is about the build.
+      # chrome-sandbox has to be setuid root; a nix store path cannot be. NixOS
+      # answers that with security.chromiumSuidSandbox.enable, which a non-NixOS
+      # host running nix does not have, and Chromium's fallback -- unprivileged
+      # user namespaces -- is what Ubuntu restricts by default since 23.10.
+      #
+      # So a failure of the first attempt alone says nothing about the
+      # derivation. A failure of both does.
       - name: Smoke-test the built binary
         run: |
           set -euo pipefail
-          xvfb-run -a ./result/bin/openscreen --help
+
+          echo "--- sandbox-relevant kernel settings ---"
+          echo "unprivileged_userns_clone: $(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || echo 'n/a')"
+          echo "apparmor_restrict_unprivileged_userns: $(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 'n/a')"
+
+          echo "--- attempt 1: as shipped ---"
+          if xvfb-run -a ./result/bin/openscreen --help; then
+            echo "Runs as shipped."
+            exit 0
+          fi
+
+          echo "--- attempt 2: --no-sandbox ---"
+          if xvfb-run -a ./result/bin/openscreen --no-sandbox --help; then
+            echo "::warning::The artefact runs only with --no-sandbox. chrome-sandbox cannot be setuid inside the nix store, so this package needs a sandbox story for non-NixOS hosts."
+            exit 0
+          fi
+
+          echo "::error::The artefact does not run, with or without the Chromium sandbox."
+          exit 1
