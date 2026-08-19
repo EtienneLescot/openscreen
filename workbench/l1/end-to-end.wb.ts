@@ -19,7 +19,10 @@ import { runRepetition, runScenarioReps } from "../lib/runner";
 import { allScenarios, getScenario } from "../scenarios/registry";
 
 describe("the context the model actually receives", () => {
-	it("is our 19 tools and nothing else", async () => {
+	// The title used to say "19" while the agent shipped 21, and a title cannot
+	// fail. The count lives in the roster now, and the roster is pinned in CI by
+	// `deep-agent/service.test.ts` against what `buildTools` actually builds.
+	it("is our tool surface and nothing else", async () => {
 		const run = await runScenario({
 			label: "l1-surface",
 			prompt: "hello",
