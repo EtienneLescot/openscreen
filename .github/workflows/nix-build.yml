@@ -89,17 +89,40 @@ jobs:
           echo "unprivileged_userns_clone: $(sysctl -n kernel.unprivileged_userns_clone 2>/dev/null || echo 'n/a')"
           echo "apparmor_restrict_unprivileged_userns: $(sysctl -n kernel.apparmor_restrict_unprivileged_userns 2>/dev/null || echo 'n/a')"
 
-          echo "--- attempt 1: as shipped ---"
-          if xvfb-run -a ./result/bin/openscreen --help; then
-            echo "Runs as shipped."
-            exit 0
+          # Probe for the sandbox mode this host can run, then assert against it.
+          # The probe decides how to invoke; it is not itself the test.
+          SANDBOX=""
+          echo "--- probe: as shipped ---"
+          if xvfb-run -a ./result/bin/openscreen --help >/dev/null 2>&1; then
+            echo "Chromium sandboxes normally here."
+          elif xvfb-run -a ./result/bin/openscreen --no-sandbox --help >/dev/null 2>&1; then
+            SANDBOX="--no-sandbox"
+            echo "::warning::The artefact runs only with --no-sandbox. chrome-sandbox cannot be setuid inside the nix store, so this package has no sandbox story on non-NixOS hosts."
+          else
+            echo "::error::The artefact does not run, with or without the Chromium sandbox."
+            exit 1
           fi
 
-          echo "--- attempt 2: --no-sandbox ---"
-          if xvfb-run -a ./result/bin/openscreen --no-sandbox --help; then
-            echo "::warning::The artefact runs only with --no-sandbox. chrome-sandbox cannot be setuid inside the nix store, so this package needs a sandbox story for non-NixOS hosts."
-            exit 0
-          fi
+          echo "--- openscreen --help ---"
+          xvfb-run -a ./result/bin/openscreen $SANDBOX --help
 
-          echo "::error::The artefact does not run, with or without the Chromium sandbox."
-          exit 1
+          # `sources` enumerates displays, windows and microphones, so it
+          # exercises the capture stack rather than proving that a usage string
+          # can be printed. Its output is the assertion: well-formed, non-empty.
+          echo "--- openscreen sources --json ---"
+          xvfb-run -a ./result/bin/openscreen $SANDBOX sources --json | tee /tmp/sources.json
+
+          python3 <<'PY'
+          import json
+          raw = open("/tmp/sources.json").read().strip()
+          if not raw:
+              raise SystemExit("sources --json produced no output")
+          try:
+              json.loads(raw)
+              print("parsed as a single JSON document")
+          except json.JSONDecodeError:
+              lines = [l for l in raw.splitlines() if l.strip()]
+              for l in lines:
+                  json.loads(l)
+              print(f"parsed as NDJSON, {len(lines)} record(s)")
+          PY
