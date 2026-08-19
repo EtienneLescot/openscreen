@@ -743,25 +743,32 @@ pub struct FrameGeometry {
     pub shape_fade: f32,
 }
 
+/// Rect de destination d'une annotation dans un rect d'ancrage, en fractions de la sortie.
+///
+/// `anchor` est TOUJOURS `s_ann`, le rect écran sans le zoom — jamais `s_dst`. Les deux
+/// coïncident sans zoom, ce qui rend l'erreur invisible sur la moitié des scènes ; sous
+/// zoom, `s_dst` grandit et emmène annotations et sous-titres avec lui, alors que le
+/// contrat de `SceneAnnotation` les veut « deliberately NOT affected by the zoom crop ».
+///
+/// Version libre plutôt que méthode : Windows déstructure `FrameGeometry` dès l'entrée de
+/// `compose_frame`, donc il n'a plus de `&self` à offrir quand il dessine les annotations.
+/// Les trois backends partagent malgré tout CETTE arithmétique-ci — le bug est reparu sur
+/// Linux après avoir été corrigé sur Windows et macOS (issue #179) parce que chacun en
+/// gardait sa copie.
+///
+/// Attention : le choix du rect passé en `anchor` reste, lui, au call site des backends
+/// Metal et D3D (leur `draw_annotations` prend le rect en paramètre). Seul Linux part
+/// directement de `FrameGeometry`. Passer `s_dst` ici reste donc possible sur deux
+/// backends sur trois — d'où le nom du paramètre côté appelants, et les tests.
+pub fn annotation_dst_in(anchor: [f32; 4], x: f32, y: f32, w: f32, h: f32) -> [f32; 4] {
+    [anchor[0] + x * anchor[2], anchor[1] + y * anchor[3], w * anchor[2], h * anchor[3]]
+}
+
 impl FrameGeometry {
-    /// Rect de destination d'une annotation, en fractions de la sortie.
-    ///
-    /// `x`/`y`/`w`/`h` sont des fractions du rect ÉCRAN, et le rect en question est
-    /// `s_ann` — jamais `s_dst`. Les deux coïncident sans zoom, ce qui rend l'erreur
-    /// invisible sur la moitié des scènes ; sous zoom, `s_dst` grandit et emmène
-    /// annotations et sous-titres avec lui, alors que le contrat de `SceneAnnotation`
-    /// les veut « deliberately NOT affected by the zoom crop ».
-    ///
-    /// Cette méthode existe pour que le backend n'ait pas le choix : le bug est
-    /// reparu sur Linux après avoir été corrigé sur Windows et macOS (issue #179),
-    /// parce que chaque backend refaisait l'arithmétique dans son coin.
+    /// `annotation_dst_in` appliqué à `s_ann`, pour les backends qui tiennent la géométrie
+    /// entière — c'est-à-dire ceux qui n'ont aucune raison de choisir un rect.
     pub fn annotation_dst(&self, x: f32, y: f32, w: f32, h: f32) -> [f32; 4] {
-        [
-            self.s_ann[0] + x * self.s_ann[2],
-            self.s_ann[1] + y * self.s_ann[3],
-            w * self.s_ann[2],
-            h * self.s_ann[3],
-        ]
+        annotation_dst_in(self.s_ann, x, y, w, h)
     }
 
     /// Hauteur en px du rect d'ancrage des annotations, pour `rh` px de sortie.
@@ -1387,9 +1394,14 @@ mod tests {
     ///
     /// `the_annotation_anchor_ignores_the_zoom` prouve que `plan_frame` **calcule** la
     /// bonne ancre ; il ne dit rien de ce que le backend en fait. Linux, lui, refaisait
-    /// l'arithmétique contre `s_dst` — donc sous-titres qui grossissent et dérivent à
-    /// l'export, sur la seule plateforme où personne ne l'avait vu. Ce test porte sur les
-    /// accesseurs que les backends appellent maintenant, pas sur le champ brut.
+    /// l'arithmétique contre `s_dst` — donc sous-titres qui grossissent et dérivent, sur
+    /// la seule plateforme qui n'avait pas été corrigée. Ce test porte sur les fonctions
+    /// que les backends appellent maintenant, pas sur le champ brut : la méthode côté
+    /// Linux ET `annotation_dst_in`, par où passent Metal et D3D.
+    ///
+    /// Ce qu'il ne couvre toujours PAS : le choix du rect au call site de Metal et D3D,
+    /// qui prennent leur ancre en paramètre. Ce niveau-là n'est vérifiable qu'en rendant
+    /// des pixels — c'est `compose_linux_annotation_ancree_hors_zoom`, opt-in.
     ///
     /// La rotation compte autant que le zoom : un préset iso/left/right est une propriété
     /// de région de zoom, donc l'incliner amenait aussi la boîte — et les sous-titres
@@ -1429,6 +1441,23 @@ mod tests {
                 g.annotation_anchor_h_px(rh),
                 plain.annotation_anchor_h_px(rh),
                 "la taille de police a suivi le {name}"
+            );
+            // Metal et D3D n'appellent pas la méthode : ils passent leur rect d'ancrage à
+            // `annotation_dst_in`. Les deux chemins doivent rendre le MÊME rect, sinon le
+            // « corrigé sur une plateforme seulement » recommence par le bas.
+            assert_eq!(
+                annotation_dst_in(g.s_ann, x, y, w, h),
+                got,
+                "le chemin des backends Metal/D3D diverge de la méthode sous le {name}"
+            );
+            // Et le garde-fou qui donne un sens aux deux précédents : nourrie avec `s_dst`,
+            // la même fonction rend un rect DIFFÉRENT. Sans ça, un `annotation_dst_in`
+            // devenu constant satisferait tout ce qui précède.
+            assert_ne!(
+                annotation_dst_in(g.s_dst, x, y, w, h),
+                expected,
+                "sous le {name}, ancrer sur `s_dst` devrait déplacer le rect — \
+                 si les deux coïncident, ce test ne prouve plus rien"
             );
         }
     }

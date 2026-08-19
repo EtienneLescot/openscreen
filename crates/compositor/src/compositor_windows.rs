@@ -1578,12 +1578,18 @@ impl Compositor {
         Ok(())
     }
 
-    /// Dessine les annotations visibles à `t`. `screen_dst` = rect écran en fractions de sortie.
+    /// Dessine les annotations visibles à `t`. `s_ann` = rect écran SANS ZOOM, en fractions de
+    /// sortie.
+    ///
+    /// Le paramètre s'appelle `s_ann` et pas `screen_dst` parce que c'est le seul rect correct :
+    /// lui passer `s_dst` fait dériver et grossir les sous-titres sous un zoom (issue #179, puis
+    /// #397 sur Linux). L'arithmétique elle-même vit dans `frame_geometry::annotation_dst_in`,
+    /// partagée par les trois backends.
     ///
     /// Seule la « figure » (flèche) est rendue à ce stade ; texte, image et flou suivront. Les
     /// types non gérés sont ignorés silencieusement plutôt que dessinés de travers : mieux vaut
     /// l'absence connue qu'un placeholder qui ferait croire à un bug de style.
-    unsafe fn draw_annotations(&self, scene: Option<&Scene>, t: f32, screen_dst: [f32; 4]) {
+    unsafe fn draw_annotations(&self, scene: Option<&Scene>, t: f32, s_ann: [f32; 4]) {
         let Some(scene) = scene else { return };
         if scene.annotations.is_empty() {
             return;
@@ -1610,12 +1616,13 @@ impl Compositor {
             if !visible(annotation) {
                 continue;
             }
-            let dst = [
-                screen_dst[0] + annotation.x * screen_dst[2],
-                screen_dst[1] + annotation.y * screen_dst[3],
-                annotation.w * screen_dst[2],
-                annotation.h * screen_dst[3],
-            ];
+            let dst = crate::frame_geometry::annotation_dst_in(
+                s_ann,
+                annotation.x,
+                annotation.y,
+                annotation.w,
+                annotation.h,
+            );
             let quad_px = [dst[2] * self.rw(), dst[3] * self.rh()];
             if quad_px[0] <= 0.0 || quad_px[1] <= 0.0 {
                 continue;
@@ -1750,7 +1757,7 @@ impl Compositor {
                     // `font_size_rel` est une fraction de la HAUTEUR DU RECT ÉCRAN (cf. le contrat
                     // et `annotationScale.ts`) : on la ramène en pixels de sortie ici, avec le même
                     // produit que la preview applique contre sa propre boîte.
-                    let screen_h_px = screen_dst[3] * self.rh();
+                    let screen_h_px = s_ann[3] * self.rh();
                     let spec = crate::text::TextSpec {
                         content: text.content.clone(),
                         color: parse_hex(&text.color).unwrap_or([1.0, 1.0, 1.0, 1.0]),
