@@ -217,8 +217,6 @@ export function VirtualPreview({
 	playbackClipsRef.current = playbackClips;
 	const videoSourcesRef = useRef(videoSources);
 	videoSourcesRef.current = videoSources;
-	const activeSourceRef = useRef(activeSource);
-	activeSourceRef.current = activeSource;
 	const sourceIndexRef = useRef(sourceIndex);
 	sourceIndexRef.current = sourceIndex;
 	const virtualTimeSecRef = useRef(virtualTimeSec);
@@ -595,8 +593,10 @@ export function VirtualPreview({
 				// `locateVirtualPosition` answers for whatever clip the playhead
 				// is on, which after a boundary advance can belong to a DIFFERENT
 				// asset — its source time would be a meaningless offset into the
-				// file we are about to reload.
-				const clipIsOnThisSource = position?.clip.assetId === activeSourceRef.current?.id;
+				// file we are about to reload. The mounted source is read from the
+				// same two mirrors the rAF tick uses, rather than kept in a third.
+				const clipIsOnThisSource =
+					position?.clip.assetId === videoSourcesRef.current[sourceIndexRef.current]?.id;
 				if (position && clipIsOnThisSource) {
 					// The rAF resumes against this; leaving it stale would resolve
 					// the next tick against the clip we were on before the failure.
@@ -631,7 +631,7 @@ export function VirtualPreview({
 	 *  failure point is the only honest evidence, and the rAF tick below owns it. */
 	const markSourceLoaded = useCallback(() => {
 		recoveringRef.current = false;
-		const id = activeSourceRef.current?.id;
+		const id = videoSourcesRef.current[sourceIndexRef.current]?.id;
 		if (id) onVideoRecovered?.(id);
 	}, [onVideoRecovered]);
 
