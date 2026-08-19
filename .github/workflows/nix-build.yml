@@ -47,10 +47,13 @@ jobs:
   build:
     name: nix build .#openscreen
     runs-on: ubuntu-latest
-    # A cold Electron + npm closure is the unknown this workflow exists to
-    # measure. Bounded well above any plausible honest build so that a genuine
-    # hang is still reported as one.
-    timeout-minutes: 90
+    # 90 was a placeholder for an unmeasured build. It has been measured since:
+    # two minutes, cold, 1.7G closure. The placeholder then did real damage --
+    # `sources --json` hung and the job sat on a runner for the full ninety
+    # before anyone learned anything, because the job was bounded and the
+    # commands inside it were not. Both are bounded now, and this one is set
+    # from the measurement rather than from ignorance.
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v7
 
@@ -91,11 +94,16 @@ jobs:
 
           # Probe for the sandbox mode this host can run, then assert against it.
           # The probe decides how to invoke; it is not itself the test.
+          # Every invocation is bounded. A CLI that never returns is a failure
+          # mode this workflow has already produced once, and an unbounded
+          # command turns it into a full runner slot spent learning nothing.
+          run_cli() { timeout --signal=TERM --kill-after=10s 120 xvfb-run -a ./result/bin/openscreen "$@"; }
+
           SANDBOX=""
           echo "--- probe: as shipped ---"
-          if xvfb-run -a ./result/bin/openscreen --help >/dev/null 2>&1; then
+          if run_cli --help >/dev/null 2>&1; then
             echo "Chromium sandboxes normally here."
-          elif xvfb-run -a ./result/bin/openscreen --no-sandbox --help >/dev/null 2>&1; then
+          elif run_cli --no-sandbox --help >/dev/null 2>&1; then
             SANDBOX="--no-sandbox"
             echo "::warning::The artefact runs only with --no-sandbox. chrome-sandbox cannot be setuid inside the nix store, so this package has no sandbox story on non-NixOS hosts."
           else
@@ -104,7 +112,7 @@ jobs:
           fi
 
           echo "--- openscreen --help ---"
-          xvfb-run -a ./result/bin/openscreen $SANDBOX --help
+          run_cli $SANDBOX --help
 
           # `sources` enumerates displays, windows and microphones, so it
           # exercises the capture stack rather than proving that a usage string
@@ -116,8 +124,14 @@ jobs:
           # the test or in the CLI: anything consuming `--json` breaks if they do,
           # and headless is exactly where a --json flag earns its keep.
           echo "--- openscreen sources --json ---"
-          xvfb-run -a ./result/bin/openscreen $SANDBOX sources --json \
-            >/tmp/sources.json 2>/tmp/sources.err || true
+          RC=0
+          run_cli $SANDBOX sources --json >/tmp/sources.json 2>/tmp/sources.err || RC=$?
+          if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
+            echo "::error::openscreen sources --json did not return within 120s. A CLI that hangs on a headless host cannot be scripted, and headless is what --json is for."
+            echo "--- stderr, last 20 lines before the timeout ---"
+            tail -20 /tmp/sources.err || true
+            exit 1
+          fi
 
           echo "--- stdout, first 400 bytes ---"
           head -c 400 /tmp/sources.json; echo
