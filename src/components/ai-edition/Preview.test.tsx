@@ -240,6 +240,25 @@ describe("Preview keeps the stage when the media fails", () => {
 		expect(errorCard()).not.toBeInTheDocument();
 	});
 
+	// …including when the healthy report comes from a DIFFERENT asset. Only one
+	// source is mounted at a time, so that report means the playhead has moved
+	// onto a clip that plays — and a "Preview stopped" card over a picture that
+	// is visibly fine is the #395 latch again, quieter. Scrubbing back onto the
+	// dead asset remounts it and brings the card back on its own.
+	it("drops the card when the playhead moves onto a healthy asset", () => {
+		renderPreview({
+			videoSources: [source("moved"), source("fresh")],
+			clips: [clip("clip_a", "moved", 0, 10), clip("clip_b", "fresh", 10, 20)],
+		});
+
+		click("fail-moved");
+		expect(errorCard()).toBeInTheDocument();
+
+		click("recover-fresh");
+		expect(errorCard()).not.toBeInTheDocument();
+		expect(canvas()).toBeInTheDocument();
+	});
+
 	it("bumps the retry token and clears the card when the user retries", () => {
 		renderPreview({ videoSources: [source("truncated")], clips: [] });
 		expect(canvas()).toHaveAttribute("data-retry-token", "0");

@@ -147,6 +147,15 @@ export function Preview({
 	const handleVideoError = useCallback((assetId: string, detail: string) => {
 		setFailure({ assetId, detail });
 	}, []);
+	// The reported asset id is deliberately ignored. Exactly one source is mounted
+	// at a time (`videoSources[sourceIndex]` in VirtualPreview), and it is always
+	// the one the playhead needs — so ANY source reporting healthy means the stage
+	// is showing a real picture, whichever asset it belongs to. Matching the id
+	// against the failed one instead would keep "Preview stopped" pinned over a
+	// clip that is playing perfectly, until the user happened to scrub back to the
+	// dead one: a card outliving its failure, which is the latch of #395 again in
+	// a quieter form. Moving back onto the dead asset remounts it and earns a
+	// fresh retry cycle, so the card returns on its own if it should.
 	// Fires on every canplay, so on every seek: `setFailure(null)` against an
 	// already-null state is a React bail-out, and the healthy path costs nothing.
 	const handleVideoRecovered = useCallback(() => {
