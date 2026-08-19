@@ -499,18 +499,59 @@ through `getCaptionSettings` / `patchCaptionSettings`
 |---|---|---|
 | `enabled` | `false` | Master show/hide for preview and export. |
 | `language` | `null` | `null` = the transcript's own language; any other value selects a translation layer. |
-| `fontSize` | `48` | Pixels at a 1080-high frame; `annotationFontSizePx` scales by the box actually being drawn into (`src/lib/ai-edition/annotationScale.ts`), resolution-free. |
+| `fontSize` | `48` | Pixels at a 1080-high frame; `annotationFontSizeFraction` turns that into a fraction of the box being drawn into (`src/lib/ai-edition/annotationScale.ts`), resolution-free. |
 | `fontFamily`, `fontWeight`, `color` | `Inter`, `bold`, `#ffffff` | Drawn from the same font families `src/index.css` already loads — anything else would render in the preview but fall back to a default in the export canvas. |
 | `backgroundEnabled`, `backgroundColor`, `backgroundOpacity` | `true`, `#000000`, `0.55` | When off, the text draws straight over the video with no plate. |
-| `verticalPosition` | `bottom` | `top` / `middle` / `bottom`. `captionBandRect` anchors the (always centred) band and clamps `offsetY` so it cannot leave the frame. |
-| `offsetY` | `0` | Fine nudge in % of frame height, on top of the anchor. |
+| `verticalPosition` | `bottom` | `top` / `middle` / `bottom`. `captionBandRect` anchors the band; `offsetY` nudges it from there. |
+| `offsetY` | `0` | Fine nudge in % of **frame** height, on top of the anchor. Positive moves down. |
+| `offsetX` | `0` | Fine nudge in % of **frame** width. Positive moves toward the right edge of the exported frame — frame geometry, so an RTL interface locale never mirrors it. |
 | `width` | `80` | Band width in % of frame width. |
 | `minWordsPerLine` / `maxWordsPerLine` | `2` / `7` | Line-group bounds; `groupTimedCaptionWordsIntoLines` packs inside the range, `[1, 12]` after clamp. |
 
+#### Coordinate space
+
+The percentages above are of the **output frame**, not of the screen rect the
+footage occupies. That distinction is the whole of
+[#396](https://github.com/getopenscreen/openscreen/issues/396): captions ride the
+annotation plumbing, and an annotation is measured against `layout.screenRect`
+because it is drawn on top of the video it points at. A subtitle is not — it
+belongs to the frame the viewer sees, and it has to hold still when padding
+shrinks the footage underneath it, and be free to sit in the padded area.
+
+`captionCuesToTextRegions` therefore stamps every region it builds with
+`space: "frame"`. `SceneAnnotation::anchor_rect`
+([`crates/compositor/src/scene.rs`](../../crates/compositor/src/scene.rs)) turns
+that into the reference box each backend multiplies by — `[0, 0, 1, 1]`, the
+render target itself, for frame space, and the screen rect for everything else.
+The field is absent on real annotations, so their payload and their behaviour are
+untouched. It is deliberately an `Option<String>` and not an enum: serde rejects
+an unknown unit variant, so a future value would cost an older binary the entire
+scene rather than one misplaced caption.
+
+The **font denominator follows the same box.** Flipping the rect without the
+denominator would hold a caption still while its glyphs kept shrinking with the
+padding slider, which is why both come off one `anchor` local in each backend.
+
+#### Reach
+
 `CAPTION_BAND_HEIGHT_PCT = 22`
-([`src/lib/ai-edition/captions/settings.ts:74`](../../src/lib/ai-edition/captions/settings.ts:74))
+([`src/lib/ai-edition/captions/settings.ts`](../../src/lib/ai-edition/captions/settings.ts))
 is generous enough for two wrapped lines at the default size — the
 renderers clip to it, so it is deliberately not tight.
+
+The band is a **box**; the visible caption is a strip centred inside it. All three
+rasterizers centre the text vertically, so a box stopped flush against the frame
+edge leaves its glyphs half a band short of it. `captionOffsetRange` therefore
+lets the box hang off the top or bottom by exactly its empty margin — the ink
+reaches the edge, and nothing drawn leaves the frame. The size of that margin is
+derived from `fontSize`, because the slice of the band that carries ink is: a
+200px caption fills the whole band, gets no overhang, and stays whole.
+
+`captionOffsetRange` is also what the inspector's sliders take their bounds from,
+so the reachable span and the slider span are the same span. Before #396 both
+ends were hardcoded to ±45 while the result was clamped separately, which left
+the bottom anchor honouring only −45…+3 — nearly half the slider moved the handle
+and nothing else.
 
 The Captions pane itself
 ([`src/components/ai-edition/CaptionsPane.tsx`](../../src/components/ai-edition/CaptionsPane.tsx))
@@ -536,10 +577,14 @@ sync.
 
 - **Preview and export** — `captionCuesToTextRegions`
   ([`src/lib/ai-edition/captions/cues.ts:242`](../../src/lib/ai-edition/captions/cues.ts:242))
-  converts the virtual-ms cue list into synthetic `AnnotationRegion`s via
+  converts the virtual-ms cue list into synthetic `CaptionTextRegion`s via
   the `captionBandRect` + `captionBackgroundCss` helpers. Those regions
   ride the existing annotation path through the scene description and onto
   the native compositor; neither surface has a caption path of its own.
+  `CaptionTextRegion` is an `AnnotationRegion` plus the `space` marker, kept
+  separate rather than widening the shared type: a frame-space band has a
+  negative `y` when it overhangs an edge, which `annotationRegionSchema`
+  bounds to 0..100. Captions are never stored, so they never meet it.
   Note that `captionBackgroundCss` emits `rgba(...)` (it recombines the
   inspector's separate colour and opacity fields), so the native colour
   parser has to accept CSS colours and not just hex — that contract is
