@@ -53,6 +53,23 @@ jobs:
       - name: Type-check
         working-directory: website
         run: npm run typecheck
+      # The walkthrough's clips and stills are committed to this repo, which has
+      # no LFS filter — their size is permanent, so a budget that lives only in a
+      # design note drifts on the first re-cut. This also fails any clip encoded
+      # with an audio track, which iOS Safari refuses to autoplay without a
+      # gesture even when the element is muted.
+      - name: Check media budget
+        working-directory: website
+        run: npm run check:media
+      # The recreation's data is generated from the app's own source and a
+      # vendored project document. It is committed, so it can go stale in either
+      # direction — a locale key moves, a timeline constant changes — and the
+      # page would then be showing numbers the application no longer produces.
+      # The generator compares its own output byte for byte, which is why the
+      # formatter is told to leave that one file alone (biome.json).
+      - name: Check recreation data
+        working-directory: website
+        run: npm run check:recreation
       - name: Build
         working-directory: website
         run: npm run build
