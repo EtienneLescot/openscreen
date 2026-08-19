@@ -1334,7 +1334,15 @@ impl Compositor {
                 if !visible(a) {
                     continue;
                 }
-                let dst = g.annotation_dst(a.x, a.y, a.w, a.h);
+                // Le rect d'ancrage se CHOISIT ici, mais le choix n'est pas
+                // revenu : `anchor_rect` ne rend que `s_ann` ou le cadre de
+                // sortie -- un sous-titre (`space: "frame"`) se mesure sur le
+                // cadre. `s_dst` reste inatteignable, ce que `annotation_dst`
+                // garantissait en ne prenant aucun parametre. L'arithmetique
+                // elle-meme reste partagee, et les trois backends font
+                // desormais exactement ces deux lignes.
+                let anchor = a.anchor_rect(g.s_ann);
+                let dst = crate::frame_geometry::annotation_dst_in(anchor, a.x, a.y, a.w, a.h);
                 let quad_px = [dst[2] * rw, dst[3] * rh];
                 // Une boite degeneree ferait un atlas 0x0 et un draw invisible ;
                 // macOS l'ecarte de la meme facon.
@@ -1480,7 +1488,7 @@ impl Compositor {
                             content: text.content.clone(),
                             color,
                             background,
-                            font_size_px: text.font_size_rel * g.annotation_anchor_h_px(rh),
+                            font_size_px: text.font_size_rel * (anchor[3] * rh),
                             font_family: text.font_family.clone(),
                             bold: text.font_weight == "bold",
                             italic: text.font_style == "italic",
