@@ -635,11 +635,17 @@ export function VirtualPreview({
 		if (id) onVideoRecovered?.(id);
 	}, [onVideoRecovered]);
 
-	// Reload bookkeeping belongs to the MOUNTED element: the <video> is keyed on
-	// the asset id, so a source swap replaces it, and a reload scheduled for the
-	// old one must never fire against its replacement. React runs this cleanup
+	// Reload bookkeeping belongs to the MOUNTED MEDIA, so it is keyed on the URL
+	// as well as the asset id — the element is keyed on the id alone (see the
+	// <video> below), so re-pointing an asset at a different file re-runs the
+	// load algorithm on the SAME element, and a budget spent on the old file
+	// must not be charged to the new one. Nothing re-points an asset today; the
+	// relink this card's copy invites would be the first, and it is the exact
+	// case where a fresh budget is the whole point.
+	// The cleanup matters for the swap that IS reachable: a reload scheduled for
+	// the old element must never fire against its replacement. React runs it
 	// before any queued macrotask can.
-	// biome-ignore lint/correctness/useExhaustiveDependencies: re-run on source swap
+	// biome-ignore lint/correctness/useExhaustiveDependencies: re-run when the mounted media changes
 	useEffect(() => {
 		retryRef.current = { attempts: 0, timer: null };
 		recoveringRef.current = false;
@@ -650,7 +656,7 @@ export function VirtualPreview({
 				retryRef.current.timer = null;
 			}
 		};
-	}, [activeSourceKey]);
+	}, [activeSourceKey, activeSource?.src]);
 
 	// The caller's Retry button. Same path as an automatic reload so the two
 	// cannot drift, but with a fresh budget and no delay: the user clicked

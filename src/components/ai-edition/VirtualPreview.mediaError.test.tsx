@@ -132,17 +132,18 @@ function driveVideo(element: HTMLVideoElement) {
 
 const SOURCES: VideoSource[] = [{ id: "a1", src: "file:///tmp/a1.mp4", label: "a1" }];
 
-function mount(clips: AxcutClip[] = [clip("clip_1", "a1", 0)]) {
+function mount(clips: AxcutClip[] = [clip("clip_1", "a1", 0)], sources: VideoSource[] = SOURCES) {
 	const onVideoError = vi.fn<(assetId: string, detail: string) => void>();
 	const onVideoRecovered = vi.fn<(assetId: string) => void>();
 	const onTimeChange = vi.fn<(timeSec: number) => void>();
 	let seekRequestId = 0;
+	let activeSources = sources;
 	const tree = (
 		retryToken: number,
 		seekTarget: { timeSec: number; requestId: number } | null = null,
 	) => (
 		<VirtualPreview
-			videoSources={SOURCES}
+			videoSources={activeSources}
 			clips={clips}
 			onTimeChange={onTimeChange}
 			onVideoError={onVideoError}
@@ -167,6 +168,12 @@ function mount(clips: AxcutClip[] = [clip("clip_1", "a1", 0)]) {
 		onVideoRecovered,
 		onTimeChange,
 		bumpRetryToken: (token: number) => view.rerender(tree(token)),
+		/** Re-point the mounted asset at a different file, keeping its id. */
+		repointSourceTo: (src: string) =>
+			act(() => {
+				activeSources = activeSources.map((source) => ({ ...source, src }));
+				view.rerender(tree(0));
+			}),
 		/** Move the playhead the way the shell does — a new seekTarget requestId. */
 		scrubTo: (timeSec: number) =>
 			act(() => {
@@ -364,6 +371,31 @@ describe("VirtualPreview media-error recovery (issue #395)", () => {
 		act(() => bumpRetryToken(1));
 		advance(0);
 
+		expect(video.loadCalls).toBe(loadsBefore + 1);
+	});
+
+	// The element is keyed on the asset id alone, so pointing an asset at a new
+	// file reloads the SAME element — and a budget spent on the old file must not
+	// be charged to the new one. Nothing in the app re-points an asset today, but
+	// it is the shape a "relink the moved file" flow would take, and this is the
+	// component's own contract rather than the app's current use of it.
+	it("gives a re-pointed source a fresh budget", () => {
+		const { video, onVideoError, repointSourceTo } = mount();
+
+		for (const delay of [...RETRY_DELAYS_MS, 0]) {
+			video.fail(3);
+			advance(delay);
+		}
+		expect(onVideoError).toHaveBeenCalledTimes(1);
+
+		repointSourceTo("file:///tmp/a1-restored.mp4");
+		onVideoError.mockClear();
+		const loadsBefore = video.loadCalls;
+
+		video.fail(3);
+		advance(RETRY_DELAYS_MS[0]);
+
+		expect(onVideoError).not.toHaveBeenCalled();
 		expect(video.loadCalls).toBe(loadsBefore + 1);
 	});
 
