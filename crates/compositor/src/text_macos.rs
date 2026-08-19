@@ -288,6 +288,11 @@ fn ct_alignment(align: &str) -> u8 {
 ///   (`CAPTION_BAND_HEIGHT_PCT`, volontairement généreuse pour absorber deux lignes), donc
 ///   « le reste » représentait ~180 px sur 238 en 1080p. C'est l'énorme marge basse.
 ///   Windows n'avait pas le problème : `DWRITE_PARAGRAPH_ALIGNMENT_CENTER`.
+///
+///   Ce centrage est aussi la raison pour laquelle une bande de sous-titres peut désormais
+///   déborder du cadre : côté app, `captionOffsetRange` la laisse sortir exactement de sa
+///   marge vide, sinon les lettres s'arrêteraient à une demi-bande du bord (issue #396).
+///   La boîte déborde, l'encre non — rien à changer ici.
 /// * **plaque ajustée au texte.** Le fond couvrait la boîte entière, là où le `<span>` du
 ///   DOM, le renderer canvas et Direct2D (qui remplit `DWRITE_TEXT_METRICS`) l'ajustent
 ///   tous au bloc mis en page.
