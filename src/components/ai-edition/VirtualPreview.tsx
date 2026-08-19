@@ -137,6 +137,8 @@ export function VirtualPreview({
 	const videoFrameRef = useRef<HTMLDivElement | null>(null);
 
 	const isProgrammaticSeekRef = useRef(false);
+	// The seek that arrived while another was still running (see applySourceTime).
+	const pendingScrubTargetRef = useRef<number | null>(null);
 	const pendingSeekRef = useRef<{ sourceTimeSec: number; play: boolean } | null>(null);
 	// Reload bookkeeping for the mounted source (see `reloadActiveSource`).
 	// `attempts` is spent by failures and re-armed by playing past the point one
@@ -490,6 +492,39 @@ export function VirtualPreview({
 		frame.style.transform = `translate(${transform.translateXPercent}%, ${transform.translateYPercent}%) scale(${transform.scale})`;
 	}, [zoomRegions, virtualTimeSec]);
 
+	/**
+	 * Write a source position onto the element with AT MOST ONE demuxer seek in
+	 * flight; a target that arrives while one is running replaces the queue and
+	 * is applied on `seeked`. Latest wins — an intermediate scrub position is
+	 * never a destination the user asked to see.
+	 *
+	 * This is the root cause of #395, not a mitigation of it. Dragging the
+	 * playhead makes V4Timeline publish a new time every rAF (it already
+	 * coalesces pointermove to that, "to avoid IPC flooding"), the shell mints a
+	 * seekTarget per publish, and this component turned each one into a
+	 * `currentTime` write: ~60 demuxer seeks a second on a 1080p H.264 file that
+	 * the native compositor is decoding at the same time. Chromium eventually
+	 * fails one — `PIPELINE_ERROR_READ: FFmpegDemuxer: demuxer seek failed`,
+	 * reproduced on a file ffmpeg decodes end to end without a single defect —
+	 * and before this branch, any media error emptied the editor.
+	 */
+	const applySourceTime = useCallback((video: HTMLVideoElement, sourceTimeSec: number) => {
+		if (!Number.isFinite(sourceTimeSec)) return;
+		if (Math.abs(video.currentTime - sourceTimeSec) <= 0.01) {
+			pendingScrubTargetRef.current = null;
+			return;
+		}
+		if (video.seeking) {
+			pendingScrubTargetRef.current = sourceTimeSec;
+			return;
+		}
+		pendingScrubTargetRef.current = null;
+		// Flagged at the moment of the ACTUAL write: a deferred target must not
+		// have its flag consumed by a frame on which no seek happened.
+		isProgrammaticSeekRef.current = true;
+		video.currentTime = sourceTimeSec;
+	}, []);
+
 	const seekToVirtualTime = useCallback(
 		(nextVirtualTimeSec: number, preservePlayback = false, forceResume = false) => {
 			const position = locateVirtualPosition(clips, nextVirtualTimeSec);
@@ -549,11 +584,8 @@ export function VirtualPreview({
 					play: shouldContinuePlayback,
 				};
 			}
-			isProgrammaticSeekRef.current = true;
 			updateVirtualTime(position.virtualTimeSec);
-			if (Math.abs(video.currentTime - position.sourceTimeSec) > 0.01) {
-				video.currentTime = position.sourceTimeSec;
-			}
+			applySourceTime(video, position.sourceTimeSec);
 			if (shouldContinuePlayback) {
 				// A rejection here means playback never actually started, so the browser
 				// never fired 'play' — nothing to reconcile, just avoid an unhandled
@@ -563,17 +595,23 @@ export function VirtualPreview({
 				});
 			}
 		},
-		[clips, videoSources, sourceIndex, updateVirtualTime],
+		[applySourceTime, clips, videoSources, sourceIndex, updateVirtualTime],
 	);
 
-	const seekToSourceTime = useCallback((sourceTimeSec: number) => {
-		const video = videoRef.current;
-		if (!video) return;
-		isProgrammaticSeekRef.current = true;
-		if (Math.abs(video.currentTime - sourceTimeSec) > 0.01) {
-			video.currentTime = sourceTimeSec;
-		}
-	}, []);
+	const seekToSourceTime = useCallback(
+		(sourceTimeSec: number) => {
+			const video = videoRef.current;
+			if (!video) return;
+			// A load is in flight, so this write would be a no-op that
+			// `onLoadedMetadata` then overwrites — re-aim the queued resume instead.
+			if (pendingSeekRef.current) {
+				pendingSeekRef.current = { sourceTimeSec, play: pendingSeekRef.current.play };
+				return;
+			}
+			applySourceTime(video, sourceTimeSec);
+		},
+		[applySourceTime],
+	);
 
 	/**
 	 * Re-run the media load algorithm on the mounted element after a delay, and
@@ -764,6 +802,15 @@ export function VirtualPreview({
 									}
 								} else if (clips.length > 0) {
 									seekToVirtualTime(virtualTimeSec);
+								}
+							}}
+							onSeeked={(e) => {
+								// The demuxer is free again: apply the newest target that
+								// arrived while it was busy, if the playhead has moved on.
+								const queued = pendingScrubTargetRef.current;
+								if (queued !== null) {
+									pendingScrubTargetRef.current = null;
+									applySourceTime(e.currentTarget, queued);
 								}
 							}}
 							onWaiting={() => setLoadState("loading")}
