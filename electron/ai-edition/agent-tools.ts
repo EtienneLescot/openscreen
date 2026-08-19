@@ -502,21 +502,6 @@ export const removeClipArgs = z.object({
 });
 
 /**
- * The tools that change the document. A LIST, not an inference: it gates the
- * checkpoint the chat-service takes before a write and the mutating/non-mutating
- * split the workbench scores its DSL axis on, and neither should quietly change
- * because someone edited a switch case.
- *
- * ponytail: this replaces `AGENT_TOOL_SPECS`, ~300 lines of JSON schema whose
- * own comment said "sent verbatim to the provider". It has not been sent
- * anywhere since the deep-agent landed: the model receives the zod schemas
- * built in `deep-agent/service.ts` and the prose in `TOOL_DESCRIPTIONS`. Two
- * descriptions of the same tools, only one of them reaching the model — and it
- * was the other one that humans read and kept up to date. The surviving
- * documentation duty is `TOOL_DESCRIPTIONS`; `service.test.ts` pins the three
- * remaining surfaces (descriptions, built tools, executor cases) to each other.
- */
-/**
  * Every tool the model is handed, in the order `buildTools` builds them.
  *
  * The roster lives here, beside `MUTATING_TOOL_NAMES`, rather than in
@@ -590,6 +575,21 @@ export const PHANTOM_TOOL_NAMES = [
 	"task",
 ] as const;
 
+/**
+ * The tools that change the document. A LIST, not an inference: it gates the
+ * checkpoint the chat-service takes before a write and the mutating/non-mutating
+ * split the workbench scores its DSL axis on, and neither should quietly change
+ * because someone edited a switch case.
+ *
+ * ponytail: this replaces `AGENT_TOOL_SPECS`, ~300 lines of JSON schema whose
+ * own comment said "sent verbatim to the provider". It has not been sent
+ * anywhere since the deep-agent landed: the model receives the zod schemas
+ * built in `deep-agent/service.ts` and the prose in `TOOL_DESCRIPTIONS`. Two
+ * descriptions of the same tools, only one of them reaching the model — and it
+ * was the other one that humans read and kept up to date. The surviving
+ * documentation duty is `TOOL_DESCRIPTIONS`; `service.test.ts` pins the three
+ * remaining surfaces (descriptions, built tools, executor cases) to each other.
+ */
 export const MUTATING_TOOL_NAMES: ReadonlySet<string> = new Set([
 	"addTrim",
 	"addTrims",
