@@ -658,6 +658,13 @@
 	padding: var(--sp-4);
 	background: rgba(9, 9, 11, 0.72);
 	backdrop-filter: blur(2px);
+	/* The scrim is a fixed dark surface in BOTH themes, so the text on it must
+	   not follow the document theme. Light is the default (useTheme.ts), and
+	   there --fg-2 is #334155 — near-black on near-black. Pinned here rather
+	   than as a var() fallback per rule: --muted-foreground is always defined
+	   (design-tokens.css), so a fallback would never have fired. */
+	--fg-2: #f3f5f8;
+	--muted-foreground: rgba(255, 255, 255, 0.78);
 }
 .previewFailureCard {
 	display: flex;
@@ -680,7 +687,7 @@
 .previewFailureIcon {
 	width: 20px;
 	height: 20px;
-	color: var(--muted-foreground, rgba(255, 255, 255, 0.6));
+	color: var(--muted-foreground);
 }
 .previewFailureTitle {
 	margin: 0;
@@ -692,14 +699,15 @@
 	margin: 0;
 	font-size: 0.875rem;
 	line-height: 1.5;
-	color: var(--muted-foreground, rgba(255, 255, 255, 0.55));
+	color: var(--muted-foreground);
 }
-/* Selectable: it exists to be copied into a bug report. */
+/* Selectable: it exists to be copied into a bug report, so it stays legible
+   rather than fading to decoration. */
 .previewFailureDetail {
 	margin: 0;
 	font-size: 0.6875rem;
 	font-family: var(--font-mono, ui-monospace, monospace);
-	color: var(--muted-foreground, rgba(255, 255, 255, 0.35));
+	color: rgba(255, 255, 255, 0.6);
 	user-select: text;
 	word-break: break-word;
 }

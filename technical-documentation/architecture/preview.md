@@ -258,9 +258,15 @@ What replaced it, in two layers:
   process is still writing reports as unsupported); everything else — including
   an `error` event carrying no `MediaError` — rides `RETRY_DELAYS_MS`. The
   reload is a plain `load()`: re-assigning `src` first would start a second load
-  that aborts the first and emit a spurious abort. The budget is reset by a
-  **successful** load, not by elapsed time — without that, the fourth transient
-  failure of a long session is terminal, which is #395 with a longer fuse.
+  that aborts the first and emit a spurious abort. The budget is re-armed by
+  **playing past the position the failure happened at** (tracked in the rAF
+  tick). Both obvious alternatives are wrong: never re-arming makes the third
+  transient failure of a long session terminal — #395 with a longer fuse — while
+  re-arming when the reload *completes* is worse still, because
+  `loadedmetadata`/`canplay` prove the header parsed and the decoder is willing,
+  not that the bytes that killed us are readable. A truncated recording re-fires
+  both on every reload, so that version loops at 400 ms forever and never
+  surfaces the card at all.
 - **Resume through the existing path.** The reload queues `pendingSeekRef` and
   lets `onLoadedMetadata` restore position and playback — the same path a
   cross-asset seek uses, so the component has one resume path rather than two.

@@ -366,7 +366,7 @@
 		"webcamPreview": "Xem trước webcam (kéo để đổi vị trí)",
 		"mediaError": {
 			"title": "Xem trước đã dừng",
-			"description": "Không thể giải mã video. Tệp có thể đã bị di chuyển hoặc vẫn đang được ghi xong — dự án của bạn vẫn nguyên vẹn.",
+			"description": "Không thể giải mã video. Tệp có thể đã bị di chuyển hoặc vẫn chưa được ghi xong — dự án của bạn vẫn nguyên vẹn.",
 			"retry": "Thử lại",
 			"detail": "Chi tiết: {{detail}}"
 		}
