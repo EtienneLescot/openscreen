@@ -12,6 +12,7 @@ import {
 	Loader2,
 	MousePointerClick,
 	Palette,
+	Pipette as PipetteIcon,
 	Sliders,
 	Trash2,
 } from "lucide-react";
@@ -41,6 +42,11 @@ import type {
 	AxcutTrimRange,
 	AxcutWord,
 } from "@/lib/ai-edition/schema";
+import {
+	startChromaPick,
+	stopChromaPick,
+	useChromaPicking,
+} from "@/lib/ai-edition/store/chromaPickStore";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import {
@@ -61,7 +67,9 @@ import { supportsCursorClickEffects } from "@/lib/cursor/cursorCapabilities";
 import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { buildGradientFromEditor } from "@/lib/gradientBuilder";
 import { resolveImageWallpaperUrl, WALLPAPER_PATHS, WALLPAPER_THUMB_PATHS } from "@/lib/wallpaper";
+import { CHROMA_KEY_PRESETS } from "@/lib/webcamChromaKey";
 import { isNativeCompositorActive, setNativeParam } from "@/native";
+import { ColorField } from "./ColorField";
 import styles from "./NewEditorShell.module.css";
 
 interface PaneProps {
@@ -1520,6 +1528,11 @@ export function LayoutPane() {
 		? hasAnyClipWithCamera(document.assets, document.timeline.clips)
 		: false;
 	const layoutControlsDisabled = !hasDocument || !hasAnyCamera;
+	// The chroma key acts on camera pixels, so it applies to every preset that
+	// actually draws a camera — not only PiP, unlike the shape/size controls above.
+	// Under "no-webcam" there is nothing to key, so the section is dropped rather
+	// than shown as a control with no effect.
+	const hasCameraOnScreen = hasAnyCamera && settings.webcamLayoutPreset !== "no-webcam";
 	return (
 		<Pane title={ts("layout.title")} icon={<LayoutIcon size={14} />} helpText={ts("layout.help")}>
 			<div className={styles.sectionLabel}>{ts("layout.preset")}</div>
@@ -1652,7 +1665,147 @@ export function LayoutPane() {
 					</div>
 				</div>
 			) : null}
+			{hasCameraOnScreen ? <ChromaKeySection disabled={layoutControlsDisabled} /> : null}
 		</Pane>
+	);
+}
+
+/**
+ * Chroma key (green screen) for the camera.
+ *
+ * NON-DESTRUCTIVE: nothing here touches the recorded camera file. The key is a
+ * per-frame effect the compositor applies while drawing the PiP, so switching it
+ * off returns the original footage, and the colour stays re-pickable forever.
+ *
+ * Every control pushes a live param as well as writing the setting, for the same
+ * reason `webcamMirror` does: the live preview builds its params from these
+ * pushes and never reads the scene's copy, while the export reads only the
+ * scene. Both roads or the feature is half-wired.
+ */
+function ChromaKeySection({ disabled }: { disabled: boolean }) {
+	const ts = useScopedT("settings");
+	const { settings, set, setLive, commit } = useEditorSettings();
+	const isPicking = useChromaPicking();
+	const key = settings.webcamChromaKey;
+
+	// Leaving the pane with the eyedropper armed would strand the preview showing
+	// the raw camera with no visible way back.
+	useEffect(() => stopChromaPick, []);
+
+	const sliders: ReadonlyArray<{
+		labelKey: string;
+		value: number;
+		param: string;
+		apply: (v: number) => void;
+	}> = [
+		{
+			labelKey: "layout.chromaSimilarity",
+			value: key.similarity,
+			param: "webcamChromaSimilarity",
+			apply: (v) => setLive({ webcamChromaKey: { similarity: v } }),
+		},
+		{
+			labelKey: "layout.chromaSmoothness",
+			value: key.smoothness,
+			param: "webcamChromaSmoothness",
+			apply: (v) => setLive({ webcamChromaKey: { smoothness: v } }),
+		},
+		{
+			labelKey: "layout.chromaSpill",
+			value: key.spill,
+			param: "webcamChromaSpill",
+			apply: (v) => setLive({ webcamChromaKey: { spill: v } }),
+		},
+	];
+
+	return (
+		<>
+			<div className={styles.sectionLabel}>{ts("layout.chromaKey")}</div>
+			<div className={styles.paneRow}>
+				<span className="label">{ts("layout.chromaKeyEnable")}</span>
+				<Toggle
+					checked={key.enabled}
+					disabled={disabled}
+					onChange={(v) => {
+						void set({ webcamChromaKey: { enabled: v } });
+						if (!v) stopChromaPick();
+						if (isNativeCompositorActive()) {
+							setNativeParam("webcamChromaEnabled", v);
+						}
+					}}
+				/>
+			</div>
+			{key.enabled ? (
+				<>
+					<div className={styles.paneRow}>
+						<span className="label">{ts("layout.chromaColor")}</span>
+						<div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+							<ColorField
+								label={ts("layout.chromaColor")}
+								value={key.color}
+								disabled={disabled}
+								presets={CHROMA_KEY_PRESETS}
+								onChange={(next) => {
+									setLive({ webcamChromaKey: { color: next } });
+									if (isNativeCompositorActive()) {
+										setNativeParam("webcamChromaColor", next);
+									}
+								}}
+								onCommit={() => void commit()}
+							/>
+							<button
+								type="button"
+								className={`${styles.cursorCell} ${isPicking ? styles.isActive : ""}`}
+								style={{ padding: "6px 10px", font: "500 11px/1 var(--font-body)" }}
+								disabled={disabled}
+								aria-pressed={isPicking}
+								title={ts("layout.chromaPickHint")}
+								onClick={() => (isPicking ? stopChromaPick() : startChromaPick())}
+							>
+								<PipetteIcon size={13} />
+								<span style={{ marginLeft: 5 }}>{ts("layout.chromaPick")}</span>
+							</button>
+						</div>
+					</div>
+					{isPicking ? (
+						<div className={styles.sectionLabel} style={{ opacity: 0.75, paddingTop: 0 }}>
+							{ts("layout.chromaPickHint")}
+						</div>
+					) : null}
+					<div className={styles.sliderGrid}>
+						{sliders.map((s) => (
+							<div key={s.param} className={`${styles.sliderCell} ${styles.full}`}>
+								<div className="head">
+									<span className="label">{ts(s.labelKey)}</span>
+									<span className="val">{Math.round(s.value * 100)}%</span>
+								</div>
+								<input
+									type="range"
+									min={0}
+									max={100}
+									step={1}
+									// `defaultValue`, matching the webcam-size slider above: the
+									// value is pushed on every drag tick, and a controlled input
+									// would fight the pointer through the React round trip.
+									defaultValue={Math.round(s.value * 100)}
+									disabled={disabled}
+									onChange={(e) => {
+										const next = Number(e.target.value) / 100;
+										s.apply(next);
+										if (isNativeCompositorActive()) {
+											setNativeParam(s.param, next);
+										}
+									}}
+									onMouseUp={() => void commit()}
+									onTouchEnd={() => void commit()}
+									onKeyUp={() => void commit()}
+								/>
+							</div>
+						))}
+					</div>
+				</>
+			) : null}
+		</>
 	);
 }
 

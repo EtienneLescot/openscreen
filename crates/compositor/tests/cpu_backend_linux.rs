@@ -16,6 +16,7 @@
 // resout vers un autre module.
 #![cfg(target_os = "linux")]
 
+use openscreen_compositor::compositor::Compositor;
 use openscreen_compositor::d3d::{create_backend, Backend, Gpu};
 
 /// Pose a 1 par la CI, ou `mesa-vulkan-drivers` est installe. Sur un poste de dev
@@ -89,4 +90,33 @@ fn create_est_materiel_strict() {
         ),
         Err(e) => eprintln!("cpu_backend_linux: pas de GPU ici, create() a bien echoue ({e:#})."),
     }
+}
+
+/// Le pendant Linux de `every_shader_entry_point_compiles` (Windows/HLSL et macOS/MSL),
+/// qui n'existait pas : `layer.wgsl` et `blur.wgsl` sont validés par naga au moment du
+/// `create_shader_module`, donc une erreur WGSL ne se voit ni au `cargo build` ni au
+/// `cargo test` — seulement au premier `Compositor::new` chez un utilisateur.
+///
+/// `Compositor::new_sized` couvre DEUX modes de panne d'un coup, et c'est pour ça qu'on
+/// construit un compositeur entier plutôt que de compiler les modules à la main :
+///   - la validation WGSL des deux modules ;
+///   - la création des bind group layouts, dont le `min_binding_size` est dérivé de
+///     `size_of::<LayerCB>()`. Un struct WGSL resté en arrière du struct Rust (ils sont
+///     déclarés trois fois : `LayerCB`, `layer.wgsl`, `blur.wgsl`) échoue précisément là.
+///
+/// Aucune fixture vidéo requise : le compositeur se construit avant tout décodage, ce qui
+/// rend ce test exécutable en CI, contrairement aux goldens de `compose_linux.rs` qui sont
+/// opt-in derrière `OPENSCREEN_LINUX_COMPOSE` et des .mp4 absents du dépôt.
+#[test]
+fn les_modules_wgsl_compilent_et_le_layout_accepte_le_constant_buffer() {
+    let Ok(gpu) = create_backend(Backend::Cpu).or_else(|_| create_backend(Backend::Hardware))
+    else {
+        assert!(
+            !required(),
+            "{REQUIRE} est pose mais aucun adaptateur Vulkan n'existe ici"
+        );
+        eprintln!("cpu_backend_linux: aucun adaptateur Vulkan ici. Skip.");
+        return;
+    };
+    Compositor::new_sized(&gpu, 320, 180).expect("layer.wgsl / blur.wgsl doivent compiler");
 }

@@ -28,6 +28,8 @@ struct Layer {
     src_prev: vec4<f32>,  // modes 8/12/13 : coins BR,BL du quad projeté ; mode 9 : barbe 1
     dst_prev: vec4<f32>,  // mode 8 : taille du plan en px AVANT projection (le rayon y vit) ; mode 13 : rect de clip ; mode 9 : barbe 2
     mb: vec4<f32>,        // mode 12 : mb.y = spread de la pénombre en px ; mode 9 : mb.y = demi-épaisseur du trait en px
+    chroma_key: vec4<f32>, // mode 0 : keyCb, keyCr, seuil, adoucissement (unités du plan UV)
+    chroma_fx: vec4<f32>,  // chroma_fx.x = incrustation active, .y = désaturation du débord
 }
 
 @group(0) @binding(0) var<uniform> layer: Layer;
@@ -201,6 +203,9 @@ fn quad_inverse_bilinear(P: vec2<f32>, c00: vec2<f32>, c10: vec2<f32>, c11: vec2
 fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
     var rgb: vec3<f32>;
     var alpha: f32;
+    // Couverture de l'incrustation couleur : 1 = pixel garde. Neutre par defaut, ecrite
+    // uniquement par le mode 0, appliquee a `alpha` dans la queue commune.
+    var chroma_keep: f32 = 1.0;
 
     if layer.mode < 0.5 {
         // Mode 0 — vidéo NV12 + flou de mouvement par vélocité (§8), port 1:1 du
@@ -233,6 +238,30 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
                 }
                 rgb = acc / f32(taps);
             }
+        }
+
+        // INCRUSTATION COULEUR (fond vert), CAMERA uniquement. L'ecran partage le mode 0
+        // mais laisse `chroma_fx` a zero, donc la branche est uniformement fausse pour lui.
+        //
+        // DEDANS le mode 0, et pas dans la queue commune que le mode 1 (couleur pleine)
+        // traverse aussi : le mode 0 est le seul a avoir une texture NV12 liee, donc le seul
+        // ou `texUV` veut dire quelque chose. `shaders.hlsl` et `shaders.metal` portent le
+        // meme bloc au meme endroit — ce sont des ports 1:1.
+        //
+        // Ce n'est PAS une contrainte d'uniformite : naga valide les deux placements (teste
+        // avec naga 24 sur ce fichier). Une version anterieure de ce commentaire l'affirmait
+        // — c'etait faux.
+        //
+        // Commentaire complet (cle dans le plan chroma, aucune conversion ici,
+        // demi-resolution du plan UV) : `shaders.hlsl`.
+        if layer.chroma_fx.x > 0.5 {
+            let cbcr = textureSample(texUV, samp, i.uv).rg;
+            let dist = length(cbcr - layer.chroma_key.xy);
+            let t0 = layer.chroma_key.z;
+            chroma_keep = smoothstep(t0, t0 + layer.chroma_key.w + 1e-4, dist);
+            let spill = layer.chroma_fx.y * clamp(1.0 - dist / max(t0 * 2.0, 1e-4), 0.0, 1.0);
+            let luma = dot(rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+            rgb = mix(rgb, vec3<f32>(luma), spill);
         }
     } else if layer.mode < 1.5 {
         // Mode 1 — couleur pleine.
@@ -427,7 +456,7 @@ fn fs_main(i: VsOut) -> @location(0) vec4<f32> {
         return vec4<f32>(layer.color.rgb * a, a);
     }
 
-    alpha = layer.color.a;
+    alpha = layer.color.a * chroma_keep;
 
     if layer.radius_px > 0.0 {
         // Feather ~1.5 px sur le bord du quad — parité exacte avec le HLSL

@@ -142,6 +142,18 @@ export function pushAllNativeParams(settings: EditorSettingsSnapshot): void {
 	setNativeParam("webcamMirror", settings.webcamMirrored);
 	setNativeParam("webcamShape", settings.webcamMaskShape);
 
+	// The chroma key travels BOTH roads, and it has to. Export builds its
+	// `LiveParams` from the scene (`live_params_from_scene`), the live preview
+	// builds them from these params and never looks at the scene's copy — so a
+	// key wired to only one of the two works in the preview and vanishes on
+	// export, or the reverse. Same reason `webcamMirror`/`webcamShape` are here
+	// as well as in the scene.
+	setNativeParam("webcamChromaEnabled", settings.webcamChromaKey.enabled);
+	setNativeParam("webcamChromaColor", settings.webcamChromaKey.color);
+	setNativeParam("webcamChromaSimilarity", settings.webcamChromaKey.similarity);
+	setNativeParam("webcamChromaSmoothness", settings.webcamChromaKey.smoothness);
+	setNativeParam("webcamChromaSpill", settings.webcamChromaKey.spill);
+
 	setNativeParam("cursorShow", settings.cursorShow);
 	setNativeParam("cursorSize", settings.cursor.size);
 	setNativeParam("cursorClickBounce", settings.cursor.clickBounce);

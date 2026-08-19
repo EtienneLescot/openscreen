@@ -42,7 +42,7 @@ using namespace metal;
 // =================================================================================
 //
 // Le moteur côté CPU upload ce buffer via `setVertexBytes` (vertex stage) et
-// `setFragmentBytes` (fragment stage) avant chaque draw — la copie est de 128 octets,
+// `setFragmentBytes` (fragment stage) avant chaque draw — la copie est de 160 octets,
 // ce qui est sous le seuil d'alignement 4K de Metal pour le mode « immediate ».
 
 struct Layer
@@ -57,6 +57,8 @@ struct Layer
     float4 src_prev;  // src à la frame précédente (flou de mouvement par vélocité)
     float4 dst_prev;  // dst à la frame précédente
     float4 mb;        // mb.x = nombre de taps de motion blur (1 = désactivé)
+    float4 chroma_key; // mode 0 : keyCb, keyCr, seuil, adoucissement (unités du plan UV)
+    float4 chroma_fx;  // chroma_fx.x = incrustation active, .y = désaturation du débord
 };
 
 // `layer` est passé en `constant Layer& [[buffer(0)]]` à chaque entry point qui le lit
@@ -467,6 +469,8 @@ fragment float4 ps_main(VSOut i [[stage_in]],
     }
 
     float3 rgb;
+    // Couverture de l'incrustation couleur : 1 = pixel gardé. Cf. `shaders.hlsl`.
+    float chroma_keep = 1.0;
     if (layer.mode < 0.5)
     {
         // flou de mouvement par vélocité (§8)
@@ -490,13 +494,32 @@ fragment float4 ps_main(VSOut i [[stage_in]],
             }
             rgb = acc / float(taps);
         }
+
+        // INCRUSTATION COULEUR (fond vert), CAMÉRA uniquement — parité EXACTE avec la
+        // branche correspondante de `shaders.hlsl`, qui porte le commentaire complet : clé
+        // dans le plan chroma, aucune conversion ici, demi-résolution du plan UV, et
+        // pourquoi le bloc vit DEDANS le mode 0 (seul mode à avoir une texture NV12 liée)
+        // plutôt que dans la queue commune que le mode 1 traverse aussi.
+        if (layer.chroma_fx.x > 0.5)
+        {
+            float2 cbcr = texUV.sample(samp, i.uv).rg;
+            float dist = length(cbcr - layer.chroma_key.xy);
+            float t0 = layer.chroma_key.z;
+            chroma_keep = smoothstep(t0, t0 + layer.chroma_key.w + 1e-4, dist);
+            // `clamp` et non `saturate` : convention du fichier (cf. l'en-tete — MSL 2.0,
+            // `saturate` n'arrive qu'en 2.4). Ce fichier n'en contenait aucun avant.
+            float spill =
+                layer.chroma_fx.y * clamp(1.0 - dist / max(t0 * 2.0, 1e-4), 0.0, 1.0);
+            float luma = dot(rgb, float3(0.2126, 0.7152, 0.0722));
+            rgb = mix(rgb, float3(luma), spill);
+        }
     }
     else
     {
         rgb = layer.color.rgb;
     }
 
-    float alpha = layer.color.a;
+    float alpha = layer.color.a * chroma_keep;
     if (layer.radius_px > 0.0)
     {
         float2 halfsz = layer.quad_px * 0.5;

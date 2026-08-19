@@ -49,6 +49,15 @@ interface WebcamOverlayProps {
 	// numeric sync target comes straight from the screen's own rAF, this
 	// frame, with no React round trip in between.
 	clockRef?: PlaybackClockRef;
+	// The chroma-key eyedropper samples this element: it is the only un-keyed
+	// copy of the camera in the app (the preview canvas holds the COMPOSED frame,
+	// key included). Handing the element out rather than the sampled colour keeps
+	// this component read-only, which is the rule stated at the top of the file.
+	onVideoElement?: (el: HTMLVideoElement | null) => void;
+	// While the eyedropper is armed the camera must be VISIBLE and un-keyed, so
+	// the user can aim at the real backdrop. `visibility` is the only thing the
+	// native path hides it with, so lifting it is enough.
+	revealVideo?: boolean;
 }
 
 export function WebcamOverlay(props: WebcamOverlayProps) {
@@ -170,6 +179,7 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 		transform: settings.webcamMirrored ? "scaleX(-1)" : undefined,
 		clipPath: getCssClipPath(props.webcamMaskShape) ?? undefined,
 		borderRadius: `${props.borderRadius}px`,
+		...(props.revealVideo ? { visibility: "visible" as const } : {}),
 	};
 
 	return (
@@ -177,6 +187,7 @@ export function WebcamOverlay(props: WebcamOverlayProps) {
 			key={cameraTrack.sourcePath}
 			ref={(el) => {
 				setVideoEl(el);
+				props.onVideoElement?.(el);
 				setHasError(false);
 			}}
 			src={toFileUrl(cameraTrack.sourcePath)}
