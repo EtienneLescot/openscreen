@@ -63,23 +63,36 @@ jobs:
             experimental-features = nix-command flakes
 
       # The compositor renders through wgpu, so exporting needs a Vulkan ICD.
-      # A GitHub runner has no GPU and ships no software rasteriser either, and
-      # the app says so itself when it gets there:
+      # A GitHub runner has no GPU and no software rasteriser, and the app says
+      # so itself when it gets there:
       #
       #   aucun pilote Vulkan sur cet hote ... le repli logiciel a echoue aussi
       #   (aucun rasteriseur logiciel Vulkan (lavapipe))
       #
-      # lavapipe is what makes the export assertion below mean anything here.
-      # This is the runner acquiring a capability a desktop already has, not the
-      # derivation gaining a dependency -- the same shape as the missing dbus.
-      - name: Install a software Vulkan rasteriser
+      # apt was the obvious source and was the wrong one: installing
+      # mesa-vulkan-drivers on this image left exactly one ICD behind,
+      # asahi_icd.json -- the Apple Silicon driver, on an x86 runner. Nix is
+      # already here and its mesa carries lavapipe, so take it from there and
+      # verify what landed rather than assuming a package's contents twice.
+      #
+      # Note what this is: the runner acquiring a capability an ordinary desktop
+      # already has, in the same category as its missing dbus. The derivation
+      # gains nothing -- a nix package that forced its own rasteriser would put
+      # every user with a real GPU into software rendering.
+      - name: Provide a software Vulkan rasteriser
         run: |
           set -euo pipefail
-          sudo apt-get update -qq
-          sudo apt-get install -y -qq mesa-vulkan-drivers vulkan-tools
-          echo "ICDs now present:"
-          ls -1 /usr/share/vulkan/icd.d/ || true
-          vulkaninfo --summary 2>/dev/null | head -20 || echo "(vulkaninfo reported nothing)"
+          MESA=$(nix build --no-link --print-out-paths nixpkgs#mesa)
+          echo "mesa: $MESA"
+          ICD=$(find "$MESA" -name 'lvp_icd*.json' | head -1)
+          if [ -z "$ICD" ]; then
+            echo "ICDs actually present:"
+            find "$MESA" -name '*_icd*.json' || true
+            echo "::error::nixpkgs#mesa carries no lavapipe ICD; the export test cannot run here"
+            exit 1
+          fi
+          echo "lavapipe ICD: $ICD"
+          echo "VK_ICD_FILENAMES=$ICD" >> "$GITHUB_ENV"
 
       - name: Build
         run: nix build .#openscreen --print-build-logs
