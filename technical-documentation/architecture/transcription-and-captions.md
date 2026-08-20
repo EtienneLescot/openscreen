@@ -649,7 +649,7 @@ it deletes data
   displayed it verbatim, and `transcribe.ts` wrote it onto
   `AxcutTranscript.language`. It now reports `whisper_full_lang_id()` — the
   detected language under `"auto"`, the forced one otherwise.
-- **No CUDA build.** Vulkan already accelerates NVIDIA on Windows and
+- **CUDA not built by default.** Vulkan already accelerates NVIDIA on Windows and
   Linux. CMake still accepts `OSC_ENABLE_CUDA=ON`, so a CUDA-enabled
   helper can be built by passing that through to `cmake` — it installs
   under the ordinary `whisper-stt-server` name and reports

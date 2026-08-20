@@ -254,6 +254,7 @@ export class SttManager {
 		let elapsedSec = 0;
 		let audioSec = 0;
 		let timedChunks = 0;
+		let untimedChunks = 0;
 		// The CPU verdict is worth saying once per run, not once per chunk.
 		let warnedCpu = false;
 		// Only the first chunk auto-detects; every later chunk is forced onto the
@@ -330,6 +331,8 @@ export class SttManager {
 				elapsedSec += result.timing.elapsedSec;
 				audioSec += result.timing.audioSec;
 				timedChunks++;
+			} else {
+				untimedChunks++;
 			}
 			const runRtf = audioSec > 0 ? elapsedSec / audioSec : undefined;
 			// Through `console.*` on purpose: that is what the main-process ring
@@ -364,13 +367,24 @@ export class SttManager {
 			});
 		}
 
+		// A total has to cover everything it claims to total. Let one chunk go
+		// unmeasured and these sums describe a SHORTER recording than the one that
+		// was actually transcribed — under a field documented as covering every
+		// chunk. So an incomplete run reports no timing rather than partial timing.
+		//
+		// The per-chunk `rtf` emitted above is deliberately not held to this: it is
+		// a RATIO, not a total, and stays honest over whatever subset reported.
 		const timing: SttTiming | undefined =
-			timedChunks > 0 && audioSec > 0
+			timedChunks > 0 && untimedChunks === 0 && audioSec > 0
 				? { elapsedSec, audioSec, rtf: elapsedSec / audioSec }
 				: undefined;
 		console.info(
 			`[stt] done on ${backend}: ${chunks.length} chunk(s), ` +
-				(timing ? formatTiming(timing) : "no timing reported"),
+				(timing
+					? formatTiming(timing)
+					: untimedChunks === chunks.length
+						? "no timing reported"
+						: `timing incomplete (${untimedChunks}/${chunks.length} chunks unmeasured)`),
 		);
 		return {
 			segments,

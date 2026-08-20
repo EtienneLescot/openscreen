@@ -141,15 +141,28 @@ describe("SttManager", () => {
 		}
 	});
 
+	// One per chunk of a 200s recording (90s + 90s + 20s), each with a DIFFERENT
+	// ratio on purpose. Identical chunks would let a wrong implementation pass:
+	// the arithmetic mean of these RTFs is 0.433, while the weighted figure the
+	// run should report is 75/200 = 0.375. Only unequal chunks tell them apart.
+	const CHUNK_TIMINGS = [
+		{ elapsedSec: 45, audioSec: 90, rtf: 0.5 },
+		{ elapsedSec: 18, audioSec: 90, rtf: 0.2 },
+		{ elapsedSec: 12, audioSec: 20, rtf: 0.6 },
+	];
+	const TOTAL_ELAPSED = 75;
+	const TOTAL_AUDIO = 200;
+
 	/** The default fake answers without timing; this one measures every chunk. */
 	function mockTimedChunks(): void {
-		fakeWhisperServer.transcribe.mockResolvedValue({
+		let call = 0;
+		fakeWhisperServer.transcribe.mockImplementation(async () => ({
 			segments: [],
 			wordSegments: [],
 			detectedLanguage: "en",
 			backend: "whispercpp-cpu",
-			timing: { elapsedSec: 45, audioSec: 90, rtf: 0.5 },
-		});
+			timing: CHUNK_TIMINGS[Math.min(call++, CHUNK_TIMINGS.length - 1)],
+		}));
 	}
 
 	it("sums per-chunk timing into one figure for the whole run", async () => {
@@ -161,13 +174,43 @@ describe("SttManager", () => {
 
 		// Summed, not averaged: chunks differ in length, so the mean of the
 		// per-chunk RTFs would not be the RTF of the run.
-		const chunkCount = planChunks(samples, 16000).length;
-		expect(chunkCount).toBeGreaterThan(1);
+		expect(planChunks(samples, 16000)).toHaveLength(CHUNK_TIMINGS.length);
 		expect(result.timing).toEqual({
-			elapsedSec: 45 * chunkCount,
-			audioSec: 90 * chunkCount,
-			rtf: 0.5,
+			elapsedSec: TOTAL_ELAPSED,
+			audioSec: TOTAL_AUDIO,
+			rtf: TOTAL_ELAPSED / TOTAL_AUDIO,
 		});
+		// Nail the distinction down rather than trusting the numbers to differ.
+		const mean = CHUNK_TIMINGS.reduce((sum, t) => sum + t.rtf, 0) / CHUNK_TIMINGS.length;
+		expect(result.timing?.rtf).not.toBeCloseTo(mean, 3);
+	});
+
+	it("reports no run timing at all when one chunk went unmeasured", async () => {
+		// A single chunk without a `timing` block is enough to spoil the totals:
+		// they would describe 110s of audio for a 200s recording, under a field
+		// that says it covers every chunk.
+		let call = 0;
+		fakeWhisperServer.transcribe.mockImplementation(async () => ({
+			segments: [],
+			wordSegments: [],
+			detectedLanguage: "en",
+			backend: "whispercpp-cpu",
+			timing: call++ === 1 ? undefined : { elapsedSec: 45, audioSec: 90, rtf: 0.5 },
+		}));
+		const mgr = new SttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		const result = await mgr.transcribe({
+			samples: new Float32Array(200 * 16000),
+			language: "en",
+		});
+
+		expect(result.timing).toBeUndefined();
+		// And it says which, rather than claiming nothing was measured at all.
+		expect(
+			infoSpy.mock.calls.some(([line]) =>
+				String(line).includes("timing incomplete (1/3 chunks unmeasured)"),
+			),
+		).toBe(true);
 	});
 
 	it("logs the backend and the timing of every chunk", async () => {
@@ -185,6 +228,8 @@ describe("SttManager", () => {
 		// without arithmetic.
 		expect(chunkLines[0]).toContain("whispercpp-cpu");
 		expect(chunkLines[0]).toContain("90.0s audio in 45.0s (0.50 rtf, 2.0x real-time)");
+		// Each line carries ITS OWN chunk's cost, not the running total.
+		expect(chunkLines[1]).toContain("90.0s audio in 18.0s (0.20 rtf, 5.0x real-time)");
 	});
 
 	it("says so when the helper reports no timing at all", async () => {
@@ -212,11 +257,11 @@ describe("SttManager", () => {
 		const reported = sink.mock.calls
 			.map(([event]) => event)
 			.filter((event) => event.backend !== undefined);
-		expect(reported).toHaveLength(planChunks(samples, 16000).length);
-		for (const event of reported) {
-			expect(event.backend).toBe("whispercpp-cpu");
-			expect(event.rtf).toBeCloseTo(0.5);
-		}
+		expect(reported).toHaveLength(CHUNK_TIMINGS.length);
+		for (const event of reported) expect(event.backend).toBe("whispercpp-cpu");
+		// Cumulative and weighted at every step — 45/90, then 63/180, then 75/200 —
+		// which is what makes the figure settle instead of bouncing per chunk.
+		expect(reported.map((e) => e.rtf)).toEqual([45 / 90, 63 / 180, 75 / 200]);
 	});
 
 	it("warns once per run — not once per chunk — that it landed on CPU", async () => {

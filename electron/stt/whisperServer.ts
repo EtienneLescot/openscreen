@@ -473,19 +473,22 @@ export class WhisperServerManager {
 	 * `rtf` is recomputed from the two durations whenever the helper didn't send
 	 * a usable one. It is derived data, and a NaN surviving this far would reach
 	 * the UI as "NaN x real-time".
+	 *
+	 * Durations no clock could have produced are treated as a junk block, not as
+	 * a slow one: `steady_clock` cannot run backwards, and a chunk holding no
+	 * audio has nothing to measure. Rejecting them here is what keeps a bad value
+	 * out of `SttManager`'s run totals, where it would quietly distort the figure
+	 * the whole recording is reported against.
 	 */
 	private toTiming(raw: WhisperJsonTiming | undefined): SttTiming | null {
 		if (!raw || typeof raw !== "object") return null;
 		const elapsedSec = this.toSec(raw.elapsed_s, Number.NaN);
 		const audioSec = this.toSec(raw.audio_s, Number.NaN);
-		if (!Number.isFinite(elapsedSec) || !Number.isFinite(audioSec)) return null;
+		if (!Number.isFinite(elapsedSec) || elapsedSec < 0) return null;
+		// Also the divisor below, so this doubles as the divide-by-zero guard.
+		if (!Number.isFinite(audioSec) || audioSec <= 0) return null;
 		const reported = this.toSec(raw.rtf, Number.NaN);
-		const rtf =
-			Number.isFinite(reported) && reported > 0
-				? reported
-				: audioSec > 0
-					? elapsedSec / audioSec
-					: 0;
+		const rtf = Number.isFinite(reported) && reported > 0 ? reported : elapsedSec / audioSec;
 		return { elapsedSec, audioSec, rtf };
 	}
 

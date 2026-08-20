@@ -96,6 +96,10 @@ export interface SttStatusEvent {
 	 * for the chunk that just landed. Per-chunk values swing with how much speech
 	 * a chunk happens to hold, and a figure that jumps every 90s reads as noise
 	 * rather than as progress.
+	 *
+	 * Computed over the chunks that reported timing. Unlike
+	 * `SttTranscribeResponse.timing` this is a ratio rather than a total, so it
+	 * stays meaningful even when a chunk reports nothing.
 	 */
 	rtf?: number;
 }
@@ -116,7 +120,11 @@ export interface SttTranscribeResponse {
 	wordSegments: SttWordSegment[];
 	detectedLanguage: string;
 	backend: SttBackend;
-	/** Summed over every chunk of this request; absent if no chunk reported timing. */
+	/**
+	 * Summed over every chunk of this request — and absent unless ALL of them
+	 * reported, because a total that quietly skips a chunk describes a shorter
+	 * recording than the one that was transcribed.
+	 */
 	timing?: SttTiming;
 }
 
