@@ -939,6 +939,56 @@ describe("buildSceneDescription.settings mapping", () => {
 		expect(pixelWidth / pixelHeight).toBeCloseTo(4 / 3, 1);
 	});
 
+	it("lays the camera box out from the camera's own dimensions, with no second argument", () => {
+		// The parity claim, and the reason `cameraTrack` carries dimensions at all.
+		//
+		// The case above passes a cameraTrack WITHOUT dimensions and gets 4:3 — the fallback,
+		// which is correct for a document written before the field existed. This one carries
+		// them, and must get 16:9 from the ARGUMENT-FREE call, because that is the call every
+		// export makes: `ExportDialog` and the CLI runner both invoke
+		// `buildSceneDescription(document)` with nothing else.
+		//
+		// Before the camera's size lived in the document, only the preview could supply it —
+		// through the optional second argument, filled from a mounted <video>'s reported size.
+		// So the same project framed a 16:9 camera 16:9 on screen and 4:3 in the file, and
+		// `cover_uv_rect` (Rust) trimmed the authored crop to that wrong box. This test fails
+		// on any version where the box depends on who is asking.
+		const asset = makeAsset({
+			id: "a",
+			originalPath: "/a.mp4",
+			video: { codec: "h264", width: 1920, height: 1080, fps: 30 },
+			cameraTrack: {
+				sourcePath: "/a-webcam.mp4",
+				startMs: 0,
+				offsetMs: 0,
+				visible: true,
+				width: 1280,
+				height: 720,
+			},
+		});
+		const doc = makeDoc({
+			assets: [asset],
+			clips: [
+				makeClip({
+					id: "c1",
+					assetId: "a",
+					sourceStartSec: 0,
+					sourceEndSec: 1,
+					timelineStartSec: 0,
+					timelineEndSec: 1,
+				}),
+			],
+			legacyEditor: { webcamSizePreset: 25 },
+		});
+		const scene = buildSceneDescription(doc);
+		const rect = scene.layout.webcamRect;
+		expect(rect).not.toBeNull();
+		// Pixel ratio, not fraction ratio — see the neighbouring case for why.
+		const pixelWidth = rect!.width * scene.output.width;
+		const pixelHeight = rect!.height * scene.output.height;
+		expect(pixelWidth / pixelHeight).toBeCloseTo(16 / 9, 1);
+	});
+
 	it("layout.webcamRect is null when no-webcam preset is selected", () => {
 		const doc = makeDoc({
 			legacyEditor: { webcamLayoutPreset: "no-webcam" },

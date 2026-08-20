@@ -120,6 +120,17 @@ export const cameraTrackSchema = z
 		startMs: z.number().nonnegative().default(0),
 		offsetMs: z.number().int().default(0),
 		visible: z.boolean().default(true),
+		// The camera file's real pixel dimensions, the camera's answer to
+		// `assetVideoSchema.width/height` for the screen. The layout box for the PiP is
+		// derived from them, and without them it falls back to a hardcoded 4:3 — which is
+		// how a 16:9 camera came out framed one way in the preview (where a mounted
+		// <video> had reported its size) and another way in an export (where none had).
+		//
+		// Optional and absent on every document written before this, exactly like
+		// `transcriptionFailure` below: additive, so no schema-version bump, and an older
+		// build simply drops the key on save. The fallback stays for that window.
+		width: z.number().int().positive().optional(),
+		height: z.number().int().positive().optional(),
 	})
 	.nullable()
 	.default(null);
