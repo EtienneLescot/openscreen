@@ -10,6 +10,16 @@
   copyDesktopItems,
 }:
 
+let
+  # nixpkgs' ffmpeg defaults to withGPL and withVersion3, so the stock
+  # ffmpeg-headless is gpl3Plus -- in the runtime closure of a derivation whose
+  # meta below says MIT, and on the one packaging path where scripts/
+  # fetch-ffmpeg.mjs's licence gate never runs. nix/compositor-view.nix builds an
+  # LGPL ffmpeg for exactly this reason and calls the alternative "a licensing
+  # fault, not a packaging shortcut"; the same standard applies here. The only
+  # invocation is a decode to raw PCM, so dropping GPL costs nothing.
+  ffmpegLgpl = ffmpeg-headless.override { withGPL = false; };
+in
 buildNpmPackage {
   nodejs = nodejs_22;
   pname = "openscreen";
@@ -97,7 +107,7 @@ buildNpmPackage {
     makeWrapper "${electron}/bin/electron" "$out/bin/openscreen" \
       --add-flags "$out/lib/openscreen" \
       --set ELECTRON_IS_DEV 0 \
-      --set OPENSCREEN_FFMPEG_PATH "${ffmpeg-headless}/bin/ffmpeg" \
+      --set OPENSCREEN_FFMPEG_PATH "${ffmpegLgpl}/bin/ffmpeg" \
       --set OPENSCREEN_COMPOSITOR_VIEW_NODE "${compositor-view}/lib/compositor_view.node"
 
     # Install icons to hicolor theme
