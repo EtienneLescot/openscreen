@@ -1542,20 +1542,30 @@ export function LayoutPane() {
 	const helpText = hasDocument && !hasAnyCamera ? ts("layout.helpNoWebcam") : ts("layout.help");
 	const webcamCrop = settings.webcamCropRegion;
 	const cropZoomPct = Math.round(100 / webcamCrop.width);
-	const cropPanX = webcamCrop.width >= 0.999 ? 50 : (webcamCrop.x / (1 - webcamCrop.width)) * 100;
-	const cropPanY = webcamCrop.height >= 0.999 ? 50 : (webcamCrop.y / (1 - webcamCrop.height)) * 100;
+	// Read straight off the pan, not back out of the rect. The rect cannot answer at 100%
+	// zoom — it is the whole frame, so its offset is 0 whatever the user chose — and it gave
+	// a drifting answer on the way there, because the offset gets squeezed toward the near
+	// edge as the window grows while the picture itself does not move.
+	const cropPan = settings.webcamCropPan;
+	const cropPanX = cropPan.x * 100;
+	const cropPanY = cropPan.y * 100;
+	/** Rect from zoom and pan. `pan * (1 - size)` cannot leave the frame, so nothing clamps. */
+	const cropRegionFor = (size: number, pan: { x: number; y: number }) => ({
+		x: pan.x * (1 - size),
+		y: pan.y * (1 - size),
+		width: size,
+		height: size,
+	});
 	const setCropZoom = (zoomPct: number) => {
 		const size = 100 / Math.max(100, zoomPct);
-		const centerX = webcamCrop.x + webcamCrop.width / 2;
-		const centerY = webcamCrop.y + webcamCrop.height / 2;
-		setLive({
-			webcamCropRegion: {
-				x: Math.min(1 - size, Math.max(0, centerX - size / 2)),
-				y: Math.min(1 - size, Math.max(0, centerY - size / 2)),
-				width: size,
-				height: size,
-			},
-		});
+		// A pure function of (pan, size): the pan is never re-derived from the rect this
+		// writes, so dragging the zoom back and forth returns the framing it started from.
+		setLive({ webcamCropRegion: cropRegionFor(size, cropPan) });
+	};
+	const setCropPan = (axis: "x" | "y", valuePct: number) => {
+		const pan = { ...cropPan, [axis]: valuePct / 100 };
+		// One patch for both, so a half-written pair can never reach disk.
+		setLive({ webcamCropPan: pan, webcamCropRegion: cropRegionFor(webcamCrop.width, pan) });
 	};
 	return (
 		<Pane title={ts("layout.title")} icon={<LayoutIcon size={14} />} helpText={helpText}>
@@ -1710,11 +1720,7 @@ export function LayoutPane() {
 					max={100}
 					suffix="%"
 					disabled={layoutControlsDisabled || webcamCrop.width >= 0.999}
-					onChange={(value) =>
-						setLive({
-							webcamCropRegion: { ...webcamCrop, x: (value / 100) * (1 - webcamCrop.width) },
-						})
-					}
+					onChange={(value) => setCropPan("x", value)}
 					onCommit={() => void commit()}
 				/>
 				<SliderCell
@@ -1724,11 +1730,7 @@ export function LayoutPane() {
 					max={100}
 					suffix="%"
 					disabled={layoutControlsDisabled || webcamCrop.height >= 0.999}
-					onChange={(value) =>
-						setLive({
-							webcamCropRegion: { ...webcamCrop, y: (value / 100) * (1 - webcamCrop.height) },
-						})
-					}
+					onChange={(value) => setCropPan("y", value)}
 					onCommit={() => void commit()}
 				/>
 			</div>

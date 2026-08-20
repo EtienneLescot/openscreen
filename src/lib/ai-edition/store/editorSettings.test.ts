@@ -156,4 +156,49 @@ describe("patchEditorSettings", () => {
 		expect(crop.width).toBeCloseTo(0.01);
 		expect(crop.height).toBeCloseTo(0.01);
 	});
+
+	// Every project on disk today carries a crop rect and no pan, because the pan did not
+	// exist when they were saved. Recovering it from the rect is what keeps opening one a
+	// no-op; defaulting to centred would quietly reframe all of them.
+	it("recovers the pan of a crop authored before the pan was stored", () => {
+		const doc: AxcutDocument = {
+			...baseDoc,
+			legacyEditor: { webcamCropRegion: { x: 0.375, y: 0, width: 0.5, height: 0.5 } },
+		};
+
+		const snap = getEditorSettings(doc);
+		// 0.375 of the 0.5 the crop leaves free is three quarters of the way across.
+		expect(snap.webcamCropPan.x).toBeCloseTo(0.75);
+		expect(snap.webcamCropPan.y).toBeCloseTo(0);
+		// And the rect comes back exactly as it went in — this is the identity that makes
+		// the change invisible to an existing document.
+		expect(snap.webcamCropRegion.x).toBeCloseTo(0.375);
+		expect(snap.webcamCropRegion.y).toBeCloseTo(0);
+	});
+
+	it("reads a full-frame crop as centred, since it has no room to sit in", () => {
+		const doc: AxcutDocument = {
+			...baseDoc,
+			legacyEditor: { webcamCropRegion: { x: 0, y: 0, width: 1, height: 1 } },
+		};
+
+		expect(getEditorSettings(doc).webcamCropPan).toEqual({ x: 0.5, y: 0.5 });
+	});
+
+	it("rebuilds the crop's offset from the pan when the two disagree on disk", () => {
+		// The pan is authoritative: a rect whose offset contradicts it is a half-written
+		// pair, and the pan is the half that carries intent.
+		const doc: AxcutDocument = {
+			...baseDoc,
+			legacyEditor: {
+				webcamCropRegion: { x: 0, y: 0, width: 0.5, height: 0.5 },
+				webcamCropPan: { x: 1, y: 0.5 },
+			},
+		};
+
+		const crop = getEditorSettings(doc).webcamCropRegion;
+		expect(crop.x).toBeCloseTo(0.5);
+		expect(crop.y).toBeCloseTo(0.25);
+		expect(crop.width).toBeCloseTo(0.5);
+	});
 });

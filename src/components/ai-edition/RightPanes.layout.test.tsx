@@ -5,7 +5,7 @@
 // the saved preference is left untouched on disk and the help popover says so.
 
 import "@testing-library/jest-dom";
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { I18nProvider } from "@/contexts/I18nContext";
@@ -125,5 +125,67 @@ describe("LayoutPane camera availability", () => {
 		// The camera-less hint must not leak into the normal case.
 		await user.click(screen.getByRole("button", { name: "Help" }));
 		expect(screen.getByRole("note")).not.toHaveTextContent(/saved layout is kept/i);
+	});
+});
+
+// #412. The pan used to be read back out of the crop rect, which cannot hold it: at 100%
+// zoom the crop IS the frame, so its offset is 0 for every pan the user could have chosen.
+// A trip down to 100% therefore erased the framing rather than suspending it.
+describe("LayoutPane webcam crop pan", () => {
+	const zoom = () => screen.getByRole("slider", { name: "Zoom" });
+	const panX = () => screen.getByRole("slider", { name: "Pan horizontally" });
+	const set = (slider: HTMLElement, value: number) =>
+		fireEvent.change(slider, { target: { value: String(value) } });
+
+	it("keeps the pan across a round trip through 100% zoom", () => {
+		renderLayout(seedProject(true));
+
+		set(zoom(), 200);
+		set(panX(), 75);
+		expect(panX()).toHaveValue("75");
+
+		set(zoom(), 100);
+		// Nowhere to pan at full frame, so the control is correctly out of reach...
+		expect(panX()).toBeDisabled();
+
+		set(zoom(), 200);
+		// ...but the intent survived the trip.
+		expect(panX()).toHaveValue("75");
+	});
+
+	it("does not move the pan while the zoom slider is dragged", () => {
+		// The old clamp squeezed the rect's offset toward the near edge as the window grew,
+		// so the pan slider crept upward on its own while the picture stayed put.
+		renderLayout(seedProject(true));
+
+		set(zoom(), 200);
+		set(panX(), 75);
+
+		for (const pct of [180, 150, 120, 110, 101]) {
+			set(zoom(), pct);
+			expect(panX()).toHaveValue("75");
+		}
+	});
+
+	it("puts the crop where the pan says, at any zoom", () => {
+		renderLayout(seedProject(true));
+
+		set(zoom(), 200);
+		set(panX(), 100);
+		// Hard against the right edge: a half-width window starts halfway across.
+		let crop = useProjectStore.getState().document?.legacyEditor?.webcamCropRegion as unknown as {
+			x: number;
+			width: number;
+		};
+		expect(crop.width).toBeCloseTo(0.5);
+		expect(crop.x).toBeCloseTo(0.5);
+
+		set(zoom(), 400);
+		// Clamped to the slider's 300% ceiling, so a third of the frame, still hard right.
+		crop = useProjectStore.getState().document?.legacyEditor?.webcamCropRegion as unknown as {
+			x: number;
+			width: number;
+		};
+		expect(crop.x).toBeCloseTo(1 - crop.width);
 	});
 });
