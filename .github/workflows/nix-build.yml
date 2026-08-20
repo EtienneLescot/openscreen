@@ -156,15 +156,15 @@ jobs:
             if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
               HUNG=$((HUNG + 1))
               echo "HUNG after 60s. Milestones reached:"
-              grep -a milestone "/tmp/sources.$i.err" || echo "  (none at all)"
-              echo "stdout head:"
-              head -c 200 "/tmp/sources.$i.out"
-              echo
+              # Read from stdout, not stderr. The probe above shows this host's
+              # xvfb-run folds the command's stderr into stdout, so the stderr
+              # capture is empty and every milestone lands in the other file.
+              grep -a milestone "/tmp/sources.$i.out" || echo "  (none at all)"
             else
               OK=$((OK + 1))
               LAST_OK="/tmp/sources.$i.json"
               echo "returned rc=$RC. Last milestone:"
-              grep -a milestone "/tmp/sources.$i.err" | tail -1 || echo "  (none)"
+              grep -a milestone "/tmp/sources.$i.out" | tail -1 || echo "  (none)"
             fi
           done
 
