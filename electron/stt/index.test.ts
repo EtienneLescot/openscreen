@@ -188,17 +188,25 @@ describe("SttManager", () => {
 	it("reports no run timing at all when one chunk went unmeasured", async () => {
 		// A single chunk without a `timing` block is enough to spoil the totals:
 		// they would describe 110s of audio for a 200s recording, under a field
-		// that says it covers every chunk.
+		// that says it covers every chunk. The two measured chunks carry DIFFERENT
+		// ratios so the running figure asserted below cannot be constant by luck.
+		const MEASURED = [
+			{ elapsedSec: 45, audioSec: 90, rtf: 0.5 },
+			undefined,
+			{ elapsedSec: 5, audioSec: 20, rtf: 0.25 },
+		];
 		let call = 0;
 		fakeWhisperServer.transcribe.mockImplementation(async () => ({
 			segments: [],
 			wordSegments: [],
 			detectedLanguage: "en",
 			backend: "whispercpp-cpu",
-			timing: call++ === 1 ? undefined : { elapsedSec: 45, audioSec: 90, rtf: 0.5 },
+			timing: MEASURED[call++],
 		}));
+		const sink = vi.fn<(e: SttStatusEvent) => void>();
 		const mgr = new SttManager();
-		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		await mgr.init({ statusSink: sink, modelsBaseDir: "/tmp/fake-stt-models" });
+		sink.mockClear();
 		const result = await mgr.transcribe({
 			samples: new Float32Array(200 * 16000),
 			language: "en",
@@ -211,6 +219,17 @@ describe("SttManager", () => {
 				String(line).includes("timing incomplete (1/3 chunks unmeasured)"),
 			),
 		).toBe(true);
+		// The status `rtf` is held to a different rule than the response total, and
+		// this is where that difference is visible: being a RATIO, it survives the
+		// gap instead of blanking — it holds at the last known value across the
+		// unmeasured chunk, then goes on aggregating. Killing the live speed
+		// readout for the rest of a run over one bad chunk would be the opposite of
+		// what the field exists for.
+		const running = sink.mock.calls
+			.map(([event]) => event)
+			.filter((event) => event.backend !== undefined)
+			.map((event) => event.rtf);
+		expect(running).toEqual([45 / 90, 45 / 90, 50 / 110]);
 	});
 
 	it("logs the backend and the timing of every chunk", async () => {
