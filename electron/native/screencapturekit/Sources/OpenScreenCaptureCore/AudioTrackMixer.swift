@@ -110,11 +110,17 @@ public final class AudioTrackMixer {
 	private var anchor: CMTime?
 	/// Absolute frame index of the next chunk to emit.
 	private var cursor: Int64 = 0
-	/// Frames emitted for which a given source contributed nothing. This is the measurement
-	/// that answers whether ScreenCaptureKit's system-audio output is silence-gapped the way the
-	/// WASAPI loopback tap is: on a take where nothing plays, a gapped tap leaves this equal to
-	/// the whole track and a continuously-streaming one leaves it near zero.
-	private var uncoveredFrames = [Int64](repeating: 0, count: Source.allCases.count)
+	/// Per source, the absolute frame its most recent delivery reached — nil until it delivers
+	/// anything — and the holes measured between deliveries.
+	///
+	/// Measured on what each source handed over, never on what came out of the mixer. Reading a
+	/// hole off the mixed output cannot answer the question the numbers exist for, because
+	/// `SourceTimeline.ingest` zero-fills holes up to `maxSilencePadFrames` into the source's own
+	/// buffer: a tap that stops for anything under two seconds would come back fully covered,
+	/// which is precisely the case that would tell us it is gapped.
+	private var deliveredThroughFrame = [Int64?](repeating: nil, count: Source.allCases.count)
+	private var undeliveredFrames = [Int64](repeating: 0, count: Source.allCases.count)
+	private var longestHoleFrames = [Int64](repeating: 0, count: Source.allCases.count)
 	private var pending: [CMSampleBuffer] = []
 	private var didWarnAboutBacklog = false
 	private var didWarnAboutDecode: Set<Int> = []
@@ -172,10 +178,9 @@ public final class AudioTrackMixer {
 		}
 
 		let now = clock()
-		sources[source.rawValue].ingest(
-			frames,
-			atFrame: frameIndex(of: presentationTime, from: anchor)
-		)
+		let startFrame = frameIndex(of: presentationTime, from: anchor)
+		noteDelivery(source, from: startFrame, frameCount: Int64(frames.count / MixFormat.channelCount))
+		sources[source.rawValue].ingest(frames, atFrame: startFrame)
 		// Where the clock stood when this source last said anything — not where its samples
 		// sit. See `emissionGraceFrames`.
 		sources[source.rawValue].lastDeliveryFrame = frameIndex(of: now, from: anchor)
@@ -201,6 +206,7 @@ public final class AudioTrackMixer {
 			// No grace: capture has stopped, so a source that has not covered a chunk by now
 			// never will, and waiting on it would only truncate the tail.
 			drain(upTo: end, grace: 0)
+			closeDeliveryHoles()
 			emitTimelineSummary()
 		}
 		flushPending(force: true)
@@ -228,27 +234,81 @@ public final class AudioTrackMixer {
 		])
 	}
 
-	/// Reports how much of the finished track each source actually covered.
+	/// Records the hole, if any, between this source's previous delivery and this one.
+	private func noteDelivery(_ source: Source, from startFrame: Int64, frameCount: Int64) {
+		let index = source.rawValue
+		// Audio captured before the session start is trimmed at frame zero, not missing.
+		let start = max(0, startFrame)
+		let previousEnd = deliveredThroughFrame[index] ?? 0
+		if start > previousEnd {
+			let hole = start - previousEnd
+			undeliveredFrames[index] += hole
+			longestHoleFrames[index] = max(longestHoleFrames[index], hole)
+		}
+		deliveredThroughFrame[index] = max(previousEnd, startFrame + frameCount)
+	}
+
+	/// Counts the stretch from each source's last delivery to the end of the take. A source that
+	/// never delivered at all lands here with the whole track, which is the answer that matters.
+	private func closeDeliveryHoles() {
+		for source in Source.allCases where includes(source) {
+			let index = source.rawValue
+			let tail = cursor - (deliveredThroughFrame[index] ?? 0)
+			if tail > 0 {
+				undeliveredFrames[index] += tail
+				longestHoleFrames[index] = max(longestHoleFrames[index], tail)
+			}
+		}
+	}
+
+	/// Reports what each source actually delivered against the finished track.
 	///
 	/// Not diagnostics for their own sake: nothing in the tree recorded whether
 	/// ScreenCaptureKit's system-audio output goes silent-but-delivering or stops delivering
 	/// altogether while nothing is playing, and the answer decides how much of the timeline the
 	/// clock is carrying on its own. One take with system audio enabled and nothing playing
-	/// settles it — `systemUncoveredSeconds` comes back as the whole track if the tap is gapped
-	/// the way WASAPI loopback is, and near zero if it streams silence.
+	/// settles it — `undeliveredSeconds` comes back as the whole track if the tap is gapped the
+	/// way WASAPI loopback is, and near zero if it streams silence. `longestHoleSeconds`
+	/// separates the two shapes a gapped tap can have: one long outage, or a steady stutter.
+	///
+	/// `droppedSeconds` is the cost side of the same ledger, and it should be zero. It counts
+	/// audio a source delivered describing a span the cursor had already emitted, which cannot
+	/// be placed any more. That happens only when a source went quiet for longer than
+	/// `emissionGraceFrames` and then handed over the period it was quiet for, so anything above
+	/// zero here says the grace is too short for that capture path.
 	private func emitTimelineSummary() {
 		var fields: [String: Any] = [
 			"event": "audio-timeline",
 			"code": "audio-timeline-summary",
 			"trackSeconds": seconds(cursor),
 		]
-		if includesSystemAudio {
-			fields["systemUncoveredSeconds"] = seconds(uncoveredFrames[Source.system.rawValue])
-		}
-		if includesMicrophone {
-			fields["microphoneUncoveredSeconds"] = seconds(uncoveredFrames[Source.microphone.rawValue])
+		for source in Source.allCases where includes(source) {
+			let report = deliveryReport(for: source)
+			fields[source == .system ? "system" : "microphone"] = [
+				"undeliveredSeconds": report.undeliveredSeconds,
+				"longestHoleSeconds": report.longestHoleSeconds,
+				"droppedSeconds": report.droppedSeconds,
+			]
 		}
 		emit(fields)
+	}
+
+	/// What one source handed over across the finished take. The same numbers
+	/// `emitTimelineSummary` reports, reachable without parsing a log line.
+	public struct DeliveryReport {
+		public let trackSeconds: Double
+		public let undeliveredSeconds: Double
+		public let longestHoleSeconds: Double
+		public let droppedSeconds: Double
+	}
+
+	public func deliveryReport(for source: Source) -> DeliveryReport {
+		DeliveryReport(
+			trackSeconds: seconds(cursor),
+			undeliveredSeconds: seconds(undeliveredFrames[source.rawValue]),
+			longestHoleSeconds: seconds(longestHoleFrames[source.rawValue]),
+			droppedSeconds: seconds(sources[source.rawValue].droppedFrames)
+		)
 	}
 
 	private func seconds(_ frames: Int64) -> Double {
@@ -325,14 +385,7 @@ public final class AudioTrackMixer {
 	private func emitChunk() {
 		var mix = [Float](repeating: 0, count: MixFormat.chunkFrames * MixFormat.channelCount)
 		for index in sources.indices {
-			let contributed = sources[index].drain(
-				into: &mix,
-				from: cursor,
-				frameCount: MixFormat.chunkFrames
-			)
-			if let source = Source(rawValue: index), includes(source) {
-				uncoveredFrames[index] += Int64(MixFormat.chunkFrames - contributed)
-			}
+			sources[index].drain(into: &mix, from: cursor, frameCount: MixFormat.chunkFrames)
 		}
 
 		let presentationTime = CMTimeAdd(
@@ -648,6 +701,8 @@ public final class AudioTrackMixer {
 		/// Where the clock stood at this source's most recent delivery, in absolute frames.
 		/// The mixer sets it, because only the mixer holds the clock.
 		var lastDeliveryFrame: Int64 = 0
+		/// Captured audio that arrived too late to be placed. See `discardFrames(before:)`.
+		private(set) var droppedFrames: Int64 = 0
 
 		var endFrame: Int64 { startFrame + Int64(samples.count / MixFormat.channelCount) }
 
@@ -687,23 +742,21 @@ public final class AudioTrackMixer {
 			samples.append(contentsOf: frames[overlap...])
 		}
 
-		/// Adds this source's contribution to one chunk and consumes it, returning how many of
-		/// the chunk's frames it actually covered. Frames it doesn't cover are simply left
-		/// alone — `mix` already holds silence there.
-		@discardableResult
-		mutating func drain(into mix: inout [Float], from cursor: Int64, frameCount: Int) -> Int {
-			dropFrames(before: cursor)
+		/// Adds this source's contribution to one chunk and consumes it. Frames it doesn't cover
+		/// are simply left alone — `mix` already holds silence there.
+		mutating func drain(into mix: inout [Float], from cursor: Int64, frameCount: Int) {
+			discardFrames(before: cursor)
 			guard !samples.isEmpty else {
-				return 0
+				return
 			}
 
 			let lead = Int(startFrame - cursor)
 			guard lead < frameCount else {
-				return 0
+				return
 			}
 			let usableFrames = min(frameCount - lead, samples.count / MixFormat.channelCount)
 			guard usableFrames > 0 else {
-				return 0
+				return
 			}
 
 			let base = lead * MixFormat.channelCount
@@ -712,21 +765,26 @@ public final class AudioTrackMixer {
 			}
 			samples.removeFirst(usableFrames * MixFormat.channelCount)
 			startFrame += Int64(usableFrames)
-			return usableFrames
 		}
 
 		/// Discards samples the mixer has already emitted past — a buffer that arrived after
 		/// its chunk went out cannot be placed any more.
-		private mutating func dropFrames(before cursor: Int64) {
+		///
+		/// This is the one path that loses captured audio, so it keeps a count. It costs
+		/// nothing while a source delivers steadily, however far behind the clock it runs; it
+		/// bites only when one went quiet for longer than `emissionGraceFrames`, had silence
+		/// emitted in its place, and then handed over the period it was quiet for.
+		private mutating func discardFrames(before cursor: Int64) {
 			guard startFrame < cursor else {
 				return
 			}
 
 			let available = Int64(samples.count / MixFormat.channelCount)
-			let dropFrames = Int(min(cursor - startFrame, available))
-			if dropFrames > 0 {
-				samples.removeFirst(dropFrames * MixFormat.channelCount)
-				startFrame += Int64(dropFrames)
+			let discarded = Int(min(cursor - startFrame, available))
+			if discarded > 0 {
+				samples.removeFirst(discarded * MixFormat.channelCount)
+				startFrame += Int64(discarded)
+				droppedFrames += Int64(discarded)
 			}
 			if samples.isEmpty {
 				startFrame = cursor
