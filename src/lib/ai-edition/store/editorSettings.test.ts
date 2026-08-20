@@ -201,4 +201,42 @@ describe("patchEditorSettings", () => {
 		expect(crop.y).toBeCloseTo(0.25);
 		expect(crop.width).toBeCloseTo(0.5);
 	});
+
+	it("clamps a stored pan that is out of range", () => {
+		const doc: AxcutDocument = {
+			...baseDoc,
+			legacyEditor: {
+				webcamCropRegion: { x: 0, y: 0, width: 0.5, height: 0.5 },
+				webcamCropPan: { x: 5, y: -2 },
+			},
+		};
+
+		const snap = getEditorSettings(doc);
+		expect(snap.webcamCropPan).toEqual({ x: 1, y: 0 });
+		// And the rect that follows from it still sits inside the frame.
+		expect(snap.webcamCropRegion.x).toBeCloseTo(0.5);
+		expect(snap.webcamCropRegion.y).toBeCloseTo(0);
+	});
+
+	it("falls back per axis when only one of the pan's coordinates is usable", () => {
+		// A half-written or hand-edited pan must not drag the good axis down with it: each
+		// coordinate recovers from the rect on its own.
+		const doc: AxcutDocument = {
+			...baseDoc,
+			legacyEditor: {
+				webcamCropRegion: { x: 0.375, y: 0.125, width: 0.5, height: 0.5 },
+				webcamCropPan: { x: "left", y: 0.9 } as unknown as { x: number; y: number },
+			},
+		};
+
+		const snap = getEditorSettings(doc);
+		// x is unusable, so it comes back from the rect: 0.375 of the 0.5 free is 0.75.
+		expect(snap.webcamCropPan.x).toBeCloseTo(0.75);
+		// y is a number, so it is kept — and 0.9 is deliberately NOT what the rect implies
+		// (0.125 of 0.5 free would be 0.25), so this fails if the axes are not independent.
+		expect(snap.webcamCropPan.y).toBeCloseTo(0.9);
+		// The rect then follows each axis from its own resolved pan.
+		expect(snap.webcamCropRegion.x).toBeCloseTo(0.375);
+		expect(snap.webcamCropRegion.y).toBeCloseTo(0.45);
+	});
 });
