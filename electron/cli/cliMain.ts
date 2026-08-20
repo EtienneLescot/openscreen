@@ -439,10 +439,15 @@ export function runCli(command: CliCommand): void {
 						command.jsonOutPath &&
 						result.sources
 					) {
+						// Same as writeProjectFile above: `record --project out/x` creates
+						// `out/`, so `sources -o out/x.json` has to as well. Without it a
+						// fully successful enumeration is lost on every channel at once --
+						// the ENOENT lands in the catch below, which clears result.success
+						// and so skips printSources and the `done` payload alike.
+						await fs.mkdir(path.dirname(command.jsonOutPath), { recursive: true });
 						await fs.writeFile(
 							command.jsonOutPath,
-							`${JSON.stringify(result.sources, null, 2)}
-`,
+							`${JSON.stringify(result.sources, null, 2)}\n`,
 							"utf8",
 						);
 					}
