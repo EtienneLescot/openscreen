@@ -650,9 +650,15 @@ it deletes data
   `AxcutTranscript.language`. It now reports `whisper_full_lang_id()` — the
   detected language under `"auto"`, the forced one otherwise.
 - **No CUDA build.** Vulkan already accelerates NVIDIA on Windows and
-  Linux, but a dedicated CUDA build can be added later via
-  `OSC_ENABLE_CUDA=ON`; the build script and CMake already accept the
-  flag, the default matrix doesn't build it yet.
+  Linux. CMake still accepts `OSC_ENABLE_CUDA=ON`, so a CUDA-enabled
+  helper can be built by passing that through to `cmake` — it installs
+  under the ordinary `whisper-stt-server` name and reports
+  `whispercpp-cuda` at runtime like any other backend. What was removed
+  is the build script's `--cuda` flag, which built a SIDE-BY-SIDE
+  `whisper-stt-server-cuda` binary: `candidateBinaryPaths()` only ever
+  looks for the plain name, so that build could not be selected at
+  runtime no matter what the host had. Nothing in the script or the CI
+  matrix turns CUDA on today.
 - **No CoreML/ANE encoder.** Metal already covers Apple GPU; CoreML is
   a future perf refinement.
 - **HTTP integration test not on CI.** `npm run test:whisper-stt` does the
