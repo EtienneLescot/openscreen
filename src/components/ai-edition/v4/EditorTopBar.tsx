@@ -11,6 +11,7 @@ import {
 	RefreshCw,
 	Save,
 	Settings,
+	Sparkles,
 	Sun,
 } from "lucide-react";
 import { type KeyboardEvent as ReactKeyboardEvent, useEffect, useRef, useState } from "react";
@@ -30,6 +31,7 @@ export interface TopBarActions {
 	openSettings: () => void;
 	renameProject: (title: string) => void;
 	toggleChat: () => void;
+	openProviderSettings: () => void;
 	showAbout: () => void;
 	checkForUpdates: () => void;
 }
@@ -293,6 +295,7 @@ async function readUpdateVeto(cancelled: () => boolean, apply: (allowed: boolean
 
 function AppMenu({ actions }: { actions: TopBarActions }) {
 	const tCommon = useScopedT("common");
+	const tEditor = useScopedT("editor");
 	const tShortcuts = useScopedT("shortcuts");
 	const [open, setOpen] = useState(false);
 	const [version, setVersion] = useState<string | null>(null);
@@ -406,6 +409,19 @@ function AppMenu({ actions }: { actions: TopBarActions }) {
 					>
 						<Keyboard size={15} />
 						{tShortcuts("title")}
+					</button>
+					{/* Settings surfaces together, above the separator. Both rows are labelled with the
+					    title of the dialog they open, so neither can drift from it — and unlike the AI
+					    panel's own entry points, this one is reachable in Media and Rec too, which is
+					    the whole reason the dialog's open state was lifted out of LeftPanel (#420). */}
+					<button
+						type="button"
+						role="menuitem"
+						className={styles.appMenuRow}
+						onClick={run(actions.openProviderSettings)}
+					>
+						<Sparkles size={15} />
+						{tEditor("providerSettings.title")}
 					</button>
 					<div className={styles.appMenuSep} aria-hidden />
 					{/* Only the PERMANENT half of the veto is applied here. A Store/Flathub/Snap/Nix

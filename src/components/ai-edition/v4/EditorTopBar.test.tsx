@@ -24,6 +24,7 @@ function renderTopBar(projectTitle: string | null) {
 	const onShowAbout = vi.fn();
 	const onCheckForUpdates = vi.fn();
 	const onOpenSettings = vi.fn();
+	const onOpenProviderSettings = vi.fn();
 	render(
 		<EditorTopBar
 			mode="edit"
@@ -40,12 +41,13 @@ function renderTopBar(projectTitle: string | null) {
 				openSettings: onOpenSettings,
 				renameProject: onRename,
 				toggleChat: noop,
+				openProviderSettings: onOpenProviderSettings,
 				showAbout: onShowAbout,
 				checkForUpdates: onCheckForUpdates,
 			}}
 		/>,
 	);
-	return { onRename, onShowAbout, onCheckForUpdates, onOpenSettings };
+	return { onRename, onShowAbout, onCheckForUpdates, onOpenSettings, onOpenProviderSettings };
 }
 
 /** The menu reads two separate channels, and they answer different questions: `getAppInfo` for
@@ -161,12 +163,28 @@ describe("AppMenu", () => {
 		expect(trigger.getAttribute("style") ?? "").not.toMatch(/all\s*:\s*unset/);
 	});
 
-	it("opens on click and offers shortcuts and about", () => {
+	it("opens on click and offers shortcuts, AI settings and about", () => {
 		renderTopBar("Demo Project");
 		fireEvent.click(screen.getByRole("button", { name: /OpenScreen/ }));
 		expect(screen.getByRole("menu")).toBeInTheDocument();
-		expect(screen.getByRole("menuitem", { name: /title/ })).toBeInTheDocument();
+		// Exact names: the translator echoes keys, and both settings rows are labelled with a
+		// `…title` key, so a /title/ match would hit two items and pin neither.
+		expect(screen.getByRole("menuitem", { name: "title" })).toBeInTheDocument();
+		expect(screen.getByRole("menuitem", { name: "providerSettings.title" })).toBeInTheDocument();
 		expect(screen.getByRole("menuitem", { name: /actions\.about/ })).toBeInTheDocument();
+	});
+
+	// Issue #420: the AI dialog used to be openable only from the chat panel, which mounts in
+	// Edit mode with the panel expanded. The row is unconditional here — its dialog is mounted
+	// in App.tsx, above every mode — so the menu does not lie in Media and Rec.
+	it("opens the AI settings dialog and closes behind itself", () => {
+		const { onOpenProviderSettings, onOpenSettings } = renderTopBar("Demo Project");
+		fireEvent.click(screen.getByRole("button", { name: /OpenScreen/ }));
+		fireEvent.click(screen.getByRole("menuitem", { name: "providerSettings.title" }));
+		expect(onOpenProviderSettings).toHaveBeenCalledTimes(1);
+		// Distinct from the shortcuts row above it, which is the dialog it would be confused with.
+		expect(onOpenSettings).not.toHaveBeenCalled();
+		expect(screen.queryByRole("menu")).not.toBeInTheDocument();
 	});
 
 	it("routes About to the main process and closes behind itself", () => {

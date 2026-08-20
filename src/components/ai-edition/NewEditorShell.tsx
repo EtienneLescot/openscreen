@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import type { EditorProjectData } from "@/components/video-editor/projectPersistence";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { useScopedT } from "@/contexts/I18nContext";
+import { useProviderSettings } from "@/contexts/ProviderSettingsContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
 import {
 	migrateProjectDataToAxcutDocument,
@@ -130,6 +131,7 @@ export function NewEditorShell() {
 		resolve: (choice: UnsavedChoice) => void;
 	} | null>(null);
 	const { shortcuts, isMac, openConfig: openShortcutsConfig } = useShortcuts();
+	const { openProviderSettings } = useProviderSettings();
 	// Transcription is local and every transcript-driven feature (Smart cuts,
 	// captions, the transcript pane) needs one, so the editor produces them by
 	// itself instead of waiting for the user to find the button. This hook is
@@ -1136,6 +1138,7 @@ export function NewEditorShell() {
 					openSettings: handleOpenSettings,
 					renameProject: handleRenameProject,
 					toggleChat: () => setChatOpen((v) => !v),
+					openProviderSettings,
 					showAbout: handleShowAbout,
 					checkForUpdates: handleCheckForUpdates,
 				}}

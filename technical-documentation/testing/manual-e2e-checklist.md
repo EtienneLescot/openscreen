@@ -328,12 +328,15 @@ The agent may only call the fixed tool set in [ai-agent.md](../architecture/ai-a
 - [ ] On macOS, open the application menu and confirm About OpenScreen is followed by Check for Updates.
 - [ ] On Windows and Linux, right-click the tray icon and confirm it lists Check for Updates and About OpenScreen. Outside the editor the tray is the only surface reachable by default there: the HUD is frameless and the editor and notes windows auto-hide their menu bar, so the Help menu appears only while Alt is held over one of those two windows.
 - [ ] On Windows and Linux, open the editor, hold Alt, and confirm the Help menu lists Check for Updates and About OpenScreen.
-- [ ] In the editor, click the OpenScreen wordmark in the top bar and confirm it opens a menu listing Keyboard Shortcuts, Check for Updates and About OpenScreen. This is the discoverable path on Windows and Linux, where the two above are not.
+- [ ] In the editor, click the OpenScreen wordmark in the top bar and confirm it opens a menu listing Keyboard Shortcuts, AI settings, Check for Updates and About OpenScreen. This is the discoverable path on Windows and Linux, where the two above are not.
 - [ ] Confirm the About row in that menu shows the running version, and that it matches what the About box then reports.
 - [ ] Open the wordmark menu and pick Keyboard Shortcuts; confirm it opens the same dialog the top bar's gear does, and that only one dialog appears.
+- [ ] Open the wordmark menu and pick AI settings; confirm it opens the same provider dialog the AI panel's gear does, and that only one dialog appears.
+- [ ] Repeat that in Media mode, in Rec mode, and in Edit mode with the chat panel collapsed — the three states in which the dialog had no owner before, and the reason the row must not be Edit-only.
+- [ ] Connect or disconnect a provider from the menu's dialog while the chat panel is open behind it, close the dialog, and confirm the composer and the model pill follow without reopening the panel.
 - [ ] Open the wordmark menu, then press Escape, click elsewhere in the top bar, and click the wordmark again — confirm each closes it and that the window does not start dragging instead of registering the click.
 - [ ] With the wordmark menu open, walk it with the Down and Up arrows and confirm focus wraps at both ends.
-- [ ] Switch the app language and confirm the wordmark menu's three labels follow, matching the wording the macOS app menu and the tray use.
+- [ ] Switch the app language and confirm the wordmark menu's four labels follow — the first two matching the dialogs they open, the last two the wording the macOS app menu and the tray use.
 - [ ] Open About and confirm it names the running version, the Electron/Chromium/Node versions, and the install channel.
 - [ ] Confirm the About box opens in front of the HUD rather than behind it.
 - [ ] On Windows and Linux, press Copy in the About box and confirm the clipboard holds that same block.
