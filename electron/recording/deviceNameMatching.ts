@@ -27,12 +27,48 @@
  * Windows-only scripts in `scripts/` that drive the real binary.
  */
 
-/** Lowercase, alphanumerics only, single-spaced — the shape both sides compare in. */
+/**
+ * Lowercase, letters and digits only, single-spaced — the shape both sides
+ * compare in.
+ *
+ * Unicode-aware, and not `[^a-z0-9]`: that stripped every non-Latin letter, so a
+ * Japanese "カメラ A" and "ウェブカメラ A" both collapsed to "a" and matched each
+ * other exactly, at the highest score there is. The C++ helpers use
+ * `std::iswalnum` on wide characters and never had that flaw; this is the copy
+ * that did.
+ */
 export function normalizeDeviceName(value: string) {
 	return value
 		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, " ")
+		.replace(/[^\p{L}\p{N}]+/gu, " ")
 		.trim();
+}
+
+/**
+ * Does `needle` appear in `haystack` as whole words?
+ *
+ * Plain containment answers for devices that merely share a spelling: a
+ * requested "Micro" is inside "Microphone (Logitech StreamCam)", and "Logi"
+ * inside "Logitech", neither of them as a word. Both resolved a device nobody
+ * asked for — and resolving one is precisely what stops the caller from falling
+ * through to the provider that had the right one.
+ *
+ * Both sides are normalized, so a boundary is the start of the string, its end,
+ * or a space.
+ */
+function containsAsWords(haystack: string, needle: string) {
+	if (!haystack || !needle) {
+		return false;
+	}
+	for (let at = haystack.indexOf(needle); at !== -1; at = haystack.indexOf(needle, at + 1)) {
+		const startsOnBoundary = at === 0 || haystack[at - 1] === " ";
+		const after = at + needle.length;
+		const endsOnBoundary = after === haystack.length || haystack[after] === " ";
+		if (startsOnBoundary && endsOnBoundary) {
+			return true;
+		}
+	}
+	return false;
 }
 
 /**
@@ -59,11 +95,11 @@ export function scoreDeviceNameMatch(
 		return 1000;
 	}
 	// One name being the other plus decoration is the ordinary case, and the only
-	// inexact match worth trusting.
-	if (candidate && (candidate.includes(requested) || requested.includes(candidate))) {
+	// inexact match worth trusting — provided the shared part is whole words.
+	if (containsAsWords(candidate, requested) || containsAsWords(requested, candidate)) {
 		return 900;
 	}
-	if (id && (id.includes(requested) || requested.includes(id))) {
+	if (containsAsWords(id, requested) || containsAsWords(requested, id)) {
 		return 800;
 	}
 	return 0;

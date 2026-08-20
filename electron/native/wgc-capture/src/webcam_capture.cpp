@@ -33,17 +33,37 @@ std::wstring readAllocatedString(IMFActivate* activate, REFGUID key) {
     return result;
 }
 
-bool containsInsensitive(const std::wstring& haystack, const std::wstring& needle) {
+/**
+ * Does one of these appear inside the other as WHOLE WORDS?
+ *
+ * Plain containment answered for devices that merely share a spelling: a
+ * requested "Logi" is inside "Logitech", and "Micro" inside "Microphone",
+ * neither of them as a word. Matching on that resolved a camera nobody asked
+ * for -- and resolving one is exactly what stops the request reaching the
+ * DirectShow fallback, where the cameras Media Foundation cannot enumerate live.
+ *
+ * Both sides arrive normalized, so a boundary is the start of the string, its
+ * end, or a space.
+ */
+bool containsAsWords(const std::wstring& haystack, const std::wstring& needle) {
     if (haystack.empty() || needle.empty()) {
         return false;
     }
+    size_t pos = haystack.find(needle);
+    while (pos != std::wstring::npos) {
+        const bool startsOnBoundary = pos == 0 || haystack[pos - 1] == L' ';
+        const size_t after = pos + needle.size();
+        const bool endsOnBoundary = after == haystack.size() || haystack[after] == L' ';
+        if (startsOnBoundary && endsOnBoundary) {
+            return true;
+        }
+        pos = haystack.find(needle, pos + 1);
+    }
+    return false;
+}
 
-    std::wstring lowerHaystack = haystack;
-    std::wstring lowerNeedle = needle;
-    std::transform(lowerHaystack.begin(), lowerHaystack.end(), lowerHaystack.begin(), ::towlower);
-    std::transform(lowerNeedle.begin(), lowerNeedle.end(), lowerNeedle.begin(), ::towlower);
-    return lowerHaystack.find(lowerNeedle) != std::wstring::npos ||
-        lowerNeedle.find(lowerHaystack) != std::wstring::npos;
+bool containsInsensitive(const std::wstring& haystack, const std::wstring& needle) {
+    return containsAsWords(haystack, needle) || containsAsWords(needle, haystack);
 }
 
 std::wstring normalizeDeviceName(const std::wstring& value) {
