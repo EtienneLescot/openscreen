@@ -117,25 +117,13 @@ jobs:
           # exercises the capture stack rather than proving that a usage string
           # can be printed.
           #
-          # Read through -o, not through stdout. This host has no dbus and no
-          # GPU, so Chromium and ANGLE write their own diagnostics to stdout
-          # ahead of anything the CLI emits, and no switch silences all of them:
-          # --disable-logging was tried and the wall survived it, because part of
-          # that output never passes through Chromium's logging. The file is the
-          # only channel the process fully owns. stdout is still captured, as the
-          # evidence for why the flag exists.
-          # Settles a question I answered from Debian's copy of xvfb-run instead
-          # of the one installed here. The startup milestones are written to
-          # process.stderr and arrive on stdout, with the stderr capture empty,
-          # so something merges the two below the redirection. Either xvfb-run
-          # does it, or the process does -- and the answer decides whether the
-          # noise on stdout is Chromium's doing or the harness's.
-          echo "--- does xvfb-run merge the command's streams here? ---"
-          xvfb-run -a bash -c 'echo TO_STDOUT; echo TO_STDERR >&2' >/tmp/x.out 2>/tmp/x.err || true
-          echo "stdout file holds:"; cat /tmp/x.out
-          echo "stderr file holds:"; cat /tmp/x.err
-          echo "xvfb-run comes from: $(dpkg -S "$(command -v xvfb-run)" 2>/dev/null || echo unknown)"
-
+          # Read through -o rather than stdout. Ubuntu's xvfb-run folds the
+          # command's stderr into its stdout -- established by probing it here,
+          # after an earlier reading of Debian's copy of the script said
+          # otherwise -- so Chromium's startup complaints about dbus and OpenGL
+          # arrive mixed into what a parser would read. The CLI is not at fault
+          # and stdout needs no fixing; the wrapper is simply not something a
+          # caller controls, which is the whole reason -o exists.
           # The hang reproduces about half the time, so a single invocation
           # proves nothing either way. Five per run, sharing one build: the
           # build is the expensive part and it is already done by here.
@@ -210,3 +198,59 @@ jobs:
             echo "::error::no attempt produced a usable result"
             exit 1
           fi
+
+          # The real acceptance test. Everything above proves the package starts
+          # and can list a screen; none of it touches the compositor addon, which
+          # is what actually renders output. Record a couple of seconds, export
+          # it, and look at what came out.
+          #
+          # Up to three goes, because screen capture on this host is unreliable
+          # in its own right -- `sources` fails a couple of times in five. One
+          # success is enough to answer the question being asked here; repeated
+          # capture failures are a separate problem, already reported above.
+          echo "--- record then export ---"
+          EXPORTED=""
+          for i in 1 2 3; do
+            echo "=== export attempt $i/3 ==="
+            rm -f /tmp/demo.openscreen /tmp/demo.mp4
+            RC=0
+            CLI_TIMEOUT=120 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX record --duration 2 --project /tmp/demo.openscreen >"/tmp/rec.$i.out" 2>&1 || RC=$?
+            if [ "$RC" -ne 0 ] || [ ! -f /tmp/demo.openscreen ]; then
+              echo "record failed (rc=$RC); last lines:"
+              tail -5 "/tmp/rec.$i.out" || true
+              continue
+            fi
+            echo "recorded. project:"
+            head -c 200 /tmp/demo.openscreen; echo
+
+            RC=0
+            CLI_TIMEOUT=180 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX export /tmp/demo.openscreen -o /tmp/demo.mp4 >"/tmp/exp.$i.out" 2>&1 || RC=$?
+            if [ "$RC" -ne 0 ] || [ ! -f /tmp/demo.mp4 ]; then
+              echo "export failed (rc=$RC); last lines:"
+              tail -15 "/tmp/exp.$i.out" || true
+              continue
+            fi
+            EXPORTED=/tmp/demo.mp4
+            break
+          done
+
+          if [ -z "$EXPORTED" ]; then
+            echo "::error::No attempt produced an MP4. The compositor addon is packaged but the export path does not work."
+            exit 1
+          fi
+
+          SIZE=$(wc -c < "$EXPORTED")
+          echo "exported $SIZE bytes"
+          # An MP4 opens with a 4-byte length then 'ftyp'. A zero-length or
+          # truncated file would otherwise pass a mere existence check.
+          MAGIC=$(dd if="$EXPORTED" bs=1 skip=4 count=4 2>/dev/null)
+          echo "magic at offset 4: $MAGIC"
+          if [ "$MAGIC" != "ftyp" ]; then
+            echo "::error::output is not an MP4 (no ftyp box)"
+            exit 1
+          fi
+          if [ "$SIZE" -lt 10000 ]; then
+            echo "::error::MP4 is only $SIZE bytes, which is too small to hold two seconds of video"
+            exit 1
+          fi
+          echo "Export works: $SIZE bytes of MP4."
