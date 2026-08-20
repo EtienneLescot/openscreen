@@ -97,7 +97,7 @@ jobs:
           # Every invocation is bounded. A CLI that never returns is a failure
           # mode this workflow has already produced once, and an unbounded
           # command turns it into a full runner slot spent learning nothing.
-          run_cli() { timeout --signal=TERM --kill-after=10s 120 xvfb-run -a ./result/bin/openscreen "$@"; }
+          run_cli() { timeout --signal=TERM --kill-after=10s "${CLI_TIMEOUT:-120}" xvfb-run -a ./result/bin/openscreen "$@"; }
 
           SANDBOX=""
           echo "--- probe: as shipped ---"
@@ -125,32 +125,70 @@ jobs:
           # that output never passes through Chromium's logging. The file is the
           # only channel the process fully owns. stdout is still captured, as the
           # evidence for why the flag exists.
-          # OPENSCREEN_DIAGNOSTIC turns on timestamped startup milestones, which
-          # is the only way to see where a hang happens: three of the last six
-          # runs stopped here without the renderer emitting anything at all, so
-          # the useful question is how far the main process got first.
-          echo "--- openscreen sources -o ---"
-          RC=0
-          OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX sources -o /tmp/sources.json             >/tmp/sources.out 2>/tmp/sources.err || RC=$?
+          # Settles a question I answered from Debian's copy of xvfb-run instead
+          # of the one installed here. The startup milestones are written to
+          # process.stderr and arrive on stdout, with the stderr capture empty,
+          # so something merges the two below the redirection. Either xvfb-run
+          # does it, or the process does -- and the answer decides whether the
+          # noise on stdout is Chromium's doing or the harness's.
+          echo "--- does xvfb-run merge the command's streams here? ---"
+          xvfb-run -a bash -c 'echo TO_STDOUT; echo TO_STDERR >&2' >/tmp/x.out 2>/tmp/x.err || true
+          echo "stdout file holds:"; cat /tmp/x.out
+          echo "stderr file holds:"; cat /tmp/x.err
+          echo "xvfb-run comes from: $(dpkg -S "$(command -v xvfb-run)" 2>/dev/null || echo unknown)"
 
-          echo "--- stdout, first 300 bytes (expected to be noisy) ---"
-          head -c 300 /tmp/sources.out; echo
-          echo "--- stderr in full: milestones live here ---"
-          cat /tmp/sources.err || true
+          # The hang reproduces about half the time, so a single invocation
+          # proves nothing either way. Five per run, sharing one build: the
+          # build is the expensive part and it is already done by here.
+          #
+          # OPENSCREEN_DIAGNOSTIC turns on the timestamped startup milestones.
+          # Three of six earlier runs stopped here with the renderer emitting
+          # nothing at all, so the question is how far the main process got, and
+          # the last milestone before the kill is the answer.
+          ATTEMPTS=5
+          HUNG=0
+          OK=0
+          LAST_OK=""
+          for i in $(seq 1 "$ATTEMPTS"); do
+            echo "=== attempt $i/$ATTEMPTS ==="
+            RC=0
+            CLI_TIMEOUT=60 OPENSCREEN_DIAGNOSTIC=1 run_cli $SANDBOX sources -o "/tmp/sources.$i.json" >"/tmp/sources.$i.out" 2>"/tmp/sources.$i.err" || RC=$?
+            if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
+              HUNG=$((HUNG + 1))
+              echo "HUNG after 60s. Milestones reached:"
+              grep -a milestone "/tmp/sources.$i.err" || echo "  (none at all)"
+              echo "stdout head:"
+              head -c 200 "/tmp/sources.$i.out"
+              echo
+            else
+              OK=$((OK + 1))
+              LAST_OK="/tmp/sources.$i.json"
+              echo "returned rc=$RC. Last milestone:"
+              grep -a milestone "/tmp/sources.$i.err" | tail -1 || echo "  (none)"
+            fi
+          done
 
-          if [ "$RC" -eq 124 ] || [ "$RC" -eq 137 ]; then
-            echo "::error::openscreen sources did not return within 120s. A CLI that hangs on a headless host cannot be scripted."
-            exit 1
-          fi
+          echo "=== $HUNG of $ATTEMPTS hung, $OK returned ==="
 
-          echo "--- the -o file ---"
-          cat /tmp/sources.json
-
-          python3 <<'PY'
-          import json
-          doc = json.load(open("/tmp/sources.json"))
+          # A run where nothing hung still has to prove the -o channel works.
+          if [ -n "$LAST_OK" ]; then
+            echo "--- the -o file from the last attempt that returned ---"
+            cat "$LAST_OK"
+            SOURCES_FILE="$LAST_OK" python3 <<'PY'
+          import json, os
+          doc = json.load(open(os.environ["SOURCES_FILE"]))
           missing = [k for k in ("displays", "windows", "microphones") if k not in doc]
           if missing:
               raise SystemExit(f"-o file is missing {missing}")
           print(f"displays={len(doc['displays'])} windows={len(doc['windows'])} microphones={len(doc['microphones'])}")
           PY
+          fi
+
+          if [ "$HUNG" -gt 0 ]; then
+            echo "::error::openscreen sources hung on $HUNG of $ATTEMPTS attempts. A CLI that sometimes never returns cannot be scripted."
+            exit 1
+          fi
+          if [ "$OK" -eq 0 ]; then
+            echo "::error::no attempt produced a usable result"
+            exit 1
+          fi
