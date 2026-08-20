@@ -314,43 +314,50 @@ pub struct AudioRing {
     inner: std::sync::Mutex<RingInner>,
     capacity: usize,
     dropped: std::sync::atomic::AtomicU64,
-    /// Whether the ring is taking samples at all. Cleared across a pause — see
-    /// [`Self::pause`].
-    accepting: std::sync::atomic::AtomicBool,
 }
 
-/// The queue and the silence owed in front of it, under one lock: a drain that
-/// took the samples without the silence would place them exactly as early as
-/// the silence exists to prevent.
-#[derive(Debug, Default)]
+/// Everything the ring's correctness rests on, under one lock: the queue, the
+/// silence owed in front of it, and whether samples are being taken at all.
+///
+/// `accepting` LIVES HERE rather than in an atomic beside the mutex, and that is
+/// not a matter of taste. Read before the lock, a producer could pass the check,
+/// wait for a whole `pause` to run, and only then append — putting audio from
+/// the far side of a pause into the take, where a pause-then-stop would flush it
+/// into the file. Under the lock, "pause has returned" and "no further sample
+/// can enter" are the same instant.
+#[derive(Debug)]
 struct RingInner {
     queue: std::collections::VecDeque<f32>,
     /// Samples dropped on overflow and not yet stood in for.
     silence_owed: usize,
+    accepting: bool,
 }
 
 impl AudioRing {
     pub fn new(seconds: usize, sample_rate: usize, channels: usize) -> Self {
         Self {
-            inner: std::sync::Mutex::new(RingInner::default()),
+            inner: std::sync::Mutex::new(RingInner {
+                queue: std::collections::VecDeque::new(),
+                silence_owed: 0,
+                accepting: true,
+            }),
             capacity: seconds * sample_rate * channels,
             dropped: std::sync::atomic::AtomicU64::new(0),
-            accepting: std::sync::atomic::AtomicBool::new(true),
         }
     }
 
     fn push(&self, samples: &[f32]) {
         use std::sync::atomic::Ordering;
 
-        // Paused. Refused at the door rather than queued and cleared later, so
-        // that the pause cannot spend the overflow tally — see `pause`.
-        if !self.accepting.load(Ordering::Relaxed) {
-            return;
-        }
         let Ok(mut inner) = self.inner.lock() else {
             self.dropped.fetch_add(samples.len() as u64, Ordering::Relaxed);
             return;
         };
+        // Paused: refused at the door rather than queued and discarded later.
+        // See `pause` for why the discard had to go.
+        if !inner.accepting {
+            return;
+        }
         inner.queue.extend(samples.iter().copied());
         if inner.queue.len() > self.capacity {
             let excess = inner.queue.len() - self.capacity;
@@ -382,45 +389,51 @@ impl AudioRing {
     /// opened before the portal picker is raised, so it records for however long
     /// the user takes to click — easily past the ring's two-second cap. Counting
     /// that overflow would report "the encoder could not keep up" on every
-    /// single recording, for audio that was always going to be thrown away.
+    /// single recording, for audio that was always going to be thrown away. The
+    /// reset happens under the lock with the rest: outside it, a producer could
+    /// slip an overflow between the queue being emptied and the tally being
+    /// forgiven, and have a real loss forgiven along with the pre-roll.
     pub fn clear(&self) {
         if let Ok(mut inner) = self.inner.lock() {
             inner.queue.clear();
             inner.silence_owed = 0;
+            self.dropped.store(0, std::sync::atomic::Ordering::Relaxed);
         }
-        self.dropped.store(0, std::sync::atomic::Ordering::Relaxed);
     }
 
-    /// Stops taking samples, and discards what is queued.
+    /// Stops taking samples. WHAT IS ALREADY QUEUED STAYS.
     ///
-    /// Called when the recording is paused. Audio that arrives while it is
-    /// paused belongs to no part of it — the video timeline does not advance
-    /// across a pause, so keeping the audio would push every later sample out of
-    /// sync by the pause's length.
+    /// Audio arriving while the recording is paused belongs to no part of it —
+    /// the video timeline does not advance across a pause, so keeping it would
+    /// push every later sample out of sync by the pause's length. Refusing it at
+    /// the door is what makes a discard at resume unnecessary, and the discard
+    /// is what did the damage. It threw away three things at once, all of them
+    /// from BEFORE the pause and all of them part of the take:
     ///
-    /// REFUSING IT IS WHAT KEEPS `dropped_samples` HONEST. Leaving the queue
-    /// open through the pause and clearing at resume did the same thing to the
-    /// track, but a queue nobody drains overflows a two-second ring within two
-    /// seconds — so the clear at resume had to reset the tally too, and it took
-    /// any real mid-take overflow from BEFORE the pause with it. That drop then
-    /// never reached the `audio-dropped` warning (main.rs), which is the only
-    /// place a user is told the recording lost audio.
+    ///   * the overflow tally, so a real mid-take drop never reached the
+    ///     `audio-dropped` warning (main.rs) — the only place a user is ever
+    ///     told a recording lost audio;
+    ///   * the silence owed for that drop, so the gap went unfilled and every
+    ///     later sample moved early anyway, which is the desync this ring
+    ///     exists to prevent;
+    ///   * and the queued samples themselves, up to a drain's worth of real
+    ///     recorded sound.
+    ///
+    /// With nothing able to enter while paused, what the ring holds at resume is
+    /// exactly what it held at pause, and the first drain after resume places it
+    /// where it belongs: the pause is spliced out of the video timeline too, so
+    /// the two sides join with no gap on either.
     pub fn pause(&self) {
-        self.accepting.store(false, std::sync::atomic::Ordering::Relaxed);
         if let Ok(mut inner) = self.inner.lock() {
-            inner.queue.clear();
-            inner.silence_owed = 0;
+            inner.accepting = false;
         }
     }
 
-    /// Takes samples again, from now. The discard covers a buffer a capture
-    /// thread was already inside [`Self::push`] with when [`Self::pause`] ran.
+    /// Takes samples again, from now.
     pub fn resume(&self) {
         if let Ok(mut inner) = self.inner.lock() {
-            inner.queue.clear();
-            inner.silence_owed = 0;
+            inner.accepting = true;
         }
-        self.accepting.store(true, std::sync::atomic::Ordering::Relaxed);
     }
 
     pub fn dropped_samples(&self) -> u64 {
@@ -1183,38 +1196,53 @@ mod audio_ring_tests {
     }
 
     #[test]
-    fn a_pause_neither_queues_nor_counts_what_arrives() {
-        // What made the `audio-dropped` warning unreachable: audio kept arriving
-        // through a pause, overflowed the ring within two seconds, and the
-        // discard at resume reset the tally — including anything dropped for
-        // real before the pause.
+    fn a_pause_refuses_what_arrives_and_keeps_what_was_already_there() {
+        // Both halves matter. What arrives during a pause must not enter — the
+        // video timeline does not advance across one, so encoding it would push
+        // every later sample out by the pause's length. What was already queued
+        // must not leave: it was captured BEFORE the pause and is take audio.
         let ring = ring();
-        ring.push_for_test(&vec![1.0; 40]);
-        let dropped_before_the_pause = ring.dropped_samples();
-        assert!(dropped_before_the_pause > 0, "the ring must have overflowed for this to mean anything");
+        ring.push_for_test(&[1.0; 10]);
 
         ring.pause();
-        ring.push_for_test(&vec![1.0; 400]);
-        assert_eq!(
-            ring.dropped_samples(),
-            dropped_before_the_pause,
-            "a pause discards, it does not drop: nothing it threw away is the encoder falling behind"
-        );
+        ring.push_for_test(&[0.75; 400]);
+        assert_eq!(ring.dropped_samples(), 0, "a pause discards, it does not drop");
 
         ring.resume();
-        assert_eq!(
-            ring.dropped_samples(),
-            dropped_before_the_pause,
-            "and the real drop from before the pause is still there to be reported"
-        );
+        let mut out = Vec::new();
+        ring.drain_into(&mut out);
+        assert_eq!(out, vec![1.0; 10], "the pre-pause audio is still there, and only it");
+
+        // `drain_into` appends, so this asks the question of a fresh buffer.
+        let mut after = Vec::new();
+        ring.push_for_test(&[0.25, 0.25]);
+        ring.drain_into(&mut after);
+        assert_eq!(after, vec![0.25, 0.25], "and the ring takes samples again after it");
+    }
+
+    #[test]
+    fn a_drop_before_a_pause_is_still_stood_in_for_after_it() {
+        // The pause used to clear the ring, which deleted the silence owed for
+        // an overflow that had happened before it while LEAVING the tally that
+        // reports it. Both halves were wrong at once: the recording lost the
+        // compensation, so everything after the pause moved early, and the
+        // `audio-dropped` warning claimed a silence that was never written.
+        let ring = ring();
+        ring.push_for_test(&vec![1.0; 40]);
+        assert_eq!(ring.dropped_samples(), 24);
+
+        ring.pause();
+        ring.resume();
 
         let mut out = Vec::new();
         ring.drain_into(&mut out);
-        assert!(out.is_empty(), "nothing captured during the pause reaches the track");
-
-        ring.push_for_test(&[0.25, 0.25]);
-        ring.drain_into(&mut out);
-        assert_eq!(out, vec![0.25, 0.25], "and the ring takes samples again after it");
+        assert_eq!(out.len(), 40, "the pause must not eat the time the drop stands for");
+        assert!(out[..24].iter().all(|sample| *sample == 0.0));
+        assert_eq!(
+            ring.dropped_samples(),
+            24,
+            "and what the warning reports still matches what the track got"
+        );
     }
 
     #[test]
