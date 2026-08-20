@@ -50,12 +50,22 @@ async function enumerateMicrophones(): Promise<{
 			(device) => device.kind === "audioinput",
 		);
 
-	let inputs = await withTimeout<MediaDeviceInfo[]>(
+	// null, not []: an empty list is an affirmative claim that this host has no
+	// microphones, and with it `microphoneLabelsUnavailable` computes to false
+	// below — the exact opposite of what giving up should report, and
+	// indistinguishable from a genuinely mic-less machine for anyone reading the
+	// -o file. The sentinel keeps "we stopped asking" separate from "there are
+	// none", and reports it the way a denied permission already reports it.
+	const initialInputs = await withTimeout<MediaDeviceInfo[] | null>(
 		listInputs(),
-		[],
+		null,
 		"device enumeration",
 		MICROPHONE_TIMEOUT_MS,
 	);
+	if (initialInputs === null) {
+		return { microphones: [], microphoneLabelsUnavailable: true };
+	}
+	let inputs = initialInputs;
 
 	// Labels are blank until a getUserMedia grant exists; a short-lived probe
 	// stream unlocks them without leaving anything recording.
@@ -71,8 +81,15 @@ async function enumerateMicrophones(): Promise<{
 			.catch(() => false); // Permission denied — report devices without labels.
 
 		if (await withTimeout(probe, false, "microphone permission probe", MICROPHONE_TIMEOUT_MS)) {
+			// The .catch restores what the try/catch around this call used to give:
+			// withTimeout is a Promise.race, so it adopts a rejection and its
+			// `fallback` never applies on that path. Without it a rejecting
+			// enumerateDevices() — a detached context, or the MediaDevices connection
+			// dropping after the grant — fails the whole command and discards the
+			// displays and windows already enumerated above, which are what `sources`
+			// is for. Labels are a nicety; keep the pre-probe list and carry on.
 			inputs = await withTimeout(
-				listInputs(),
+				listInputs().catch(() => inputs),
 				inputs,
 				"device re-enumeration",
 				MICROPHONE_TIMEOUT_MS,
