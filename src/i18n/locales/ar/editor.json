@@ -150,6 +150,7 @@
 		"transcribingEllipsis": "جارٍ النسخ…",
 		"pendingTranscription": "بانتظار النسخ",
 		"transcriptionFailed": "فشل النسخ",
+		"cpuBackendHint": "يعمل على المعالج — أبطأ بنحو 2× من معالج الرسوميات",
 		"noTranscript": "لا يوجد نص مكتوب",
 		"generating": "جارٍ الإنشاء",
 		"generationFailed": "فشل الإنشاء",

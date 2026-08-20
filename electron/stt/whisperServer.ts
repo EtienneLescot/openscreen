@@ -8,7 +8,12 @@ import type { Readable } from "node:stream";
 
 import { resolveBinaryPath } from "./gpuDetector";
 import { snapWordBoundariesToAudio } from "./snapWordBoundaries";
-import type { SttBackend, SttPhraseSegment, SttWordSegment } from "./transcriptionContract";
+import type {
+	SttBackend,
+	SttPhraseSegment,
+	SttTiming,
+	SttWordSegment,
+} from "./transcriptionContract";
 import { cleanupWav, writeSamplesAsWav } from "./wav";
 
 /** whisper.cpp helper is stdio-shaped: stdin ignored, stdout/stderr captured. */
@@ -88,11 +93,23 @@ interface WhisperJsonSegment {
 	words?: WhisperJsonWord[];
 }
 
+/**
+ * The helper's `timing` block, in its own snake_case wire spelling. Every field
+ * is optional and may arrive as a string for the same reason the segment bounds
+ * may (see `toSec`): nothing on the wire is guaranteed by a schema.
+ */
+interface WhisperJsonTiming {
+	elapsed_s?: number | string;
+	audio_s?: number | string;
+	rtf?: number | string;
+}
+
 interface WhisperJsonResponse {
 	segments?: WhisperJsonSegment[];
 	language?: string;
 	detected_language?: string;
 	backend?: string;
+	timing?: WhisperJsonTiming;
 }
 
 export class WhisperServerManager {
@@ -445,12 +462,41 @@ export class WhisperServerManager {
 		return Number.isFinite(n) ? n : fallback;
 	}
 
+	/**
+	 * Read the helper's `timing` block, or null when it is missing or unusable.
+	 *
+	 * Null rather than zeroes: a helper binary built before the field existed
+	 * simply omits it, and callers have to be able to tell that apart from a
+	 * transcription that genuinely took no time — one is "we don't know", the
+	 * other would be a bug worth showing.
+	 *
+	 * `rtf` is recomputed from the two durations whenever the helper didn't send
+	 * a usable one. It is derived data, and a NaN surviving this far would reach
+	 * the UI as "NaN x real-time".
+	 */
+	private toTiming(raw: WhisperJsonTiming | undefined): SttTiming | null {
+		if (!raw || typeof raw !== "object") return null;
+		const elapsedSec = this.toSec(raw.elapsed_s, Number.NaN);
+		const audioSec = this.toSec(raw.audio_s, Number.NaN);
+		if (!Number.isFinite(elapsedSec) || !Number.isFinite(audioSec)) return null;
+		const reported = this.toSec(raw.rtf, Number.NaN);
+		const rtf =
+			Number.isFinite(reported) && reported > 0
+				? reported
+				: audioSec > 0
+					? elapsedSec / audioSec
+					: 0;
+		return { elapsedSec, audioSec, rtf };
+	}
+
 	/** Run one transcription; serializes concurrent callers. */
 	async transcribe(opts: { samples: Float32Array; language?: string }): Promise<{
 		segments: SttPhraseSegment[];
 		wordSegments: SttWordSegment[];
 		detectedLanguage: string;
 		backend: SttBackend;
+		/** Null when the helper reported no usable `timing` block. */
+		timing: SttTiming | null;
 	}> {
 		const task = this.inFlight.then(() => this.transcribeImpl(opts));
 		this.inFlight = task.catch(() => undefined);
@@ -462,6 +508,7 @@ export class WhisperServerManager {
 		wordSegments: SttWordSegment[];
 		detectedLanguage: string;
 		backend: SttBackend;
+		timing: SttTiming | null;
 	}> {
 		const wavPath = await writeSamplesAsWav(opts.samples);
 		try {
@@ -494,7 +541,8 @@ export class WhisperServerManager {
 			);
 			const detectedLanguage = json.detected_language ?? json.language ?? "auto";
 			const backend = this.toBackend(json.backend);
-			return { segments, wordSegments, detectedLanguage, backend };
+			const timing = this.toTiming(json.timing);
+			return { segments, wordSegments, detectedLanguage, backend, timing };
 		} finally {
 			await cleanupWav(wavPath);
 		}

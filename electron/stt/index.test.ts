@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, type MockInstance, vi } from "vitest";
 
 import { planChunks } from "./chunking";
 import { _resetSttManagerForTests, getSttManager, SttManager, shutdownStt } from "./index";
@@ -50,6 +50,9 @@ vi.mock("./gpuDetector", () => ({
 }));
 
 describe("SttManager", () => {
+	let infoSpy: MockInstance<typeof console.info>;
+	let warnSpy: MockInstance<typeof console.warn>;
+
 	beforeEach(() => {
 		fakeWhisperServer.start.mockClear();
 		fakeWhisperServer.transcribe.mockClear();
@@ -63,10 +66,17 @@ describe("SttManager", () => {
 			backend: "whispercpp-cpu",
 		});
 		_resetSttManagerForTests();
+		// The manager narrates every chunk (backend + timing) through `console.*`,
+		// which is what puts those lines in the main-process ring buffer. Capture
+		// them instead of letting a dozen lines per test onto the suite's output.
+		infoSpy = vi.spyOn(console, "info").mockImplementation(() => undefined);
+		warnSpy = vi.spyOn(console, "warn").mockImplementation(() => undefined);
 	});
 
 	afterEach(() => {
 		_resetSttManagerForTests();
+		infoSpy.mockRestore();
+		warnSpy.mockRestore();
 	});
 
 	it("init() forwards model + transcribe phases to the sink", async () => {
@@ -129,6 +139,114 @@ describe("SttManager", () => {
 		for (let i = 1; i < progress.length; i++) {
 			expect(progress[i].completedSec).toBeGreaterThan(progress[i - 1].completedSec ?? -1);
 		}
+	});
+
+	/** The default fake answers without timing; this one measures every chunk. */
+	function mockTimedChunks(): void {
+		fakeWhisperServer.transcribe.mockResolvedValue({
+			segments: [],
+			wordSegments: [],
+			detectedLanguage: "en",
+			backend: "whispercpp-cpu",
+			timing: { elapsedSec: 45, audioSec: 90, rtf: 0.5 },
+		});
+	}
+
+	it("sums per-chunk timing into one figure for the whole run", async () => {
+		mockTimedChunks();
+		const samples = new Float32Array(200 * 16000);
+		const mgr = new SttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		const result = await mgr.transcribe({ samples, language: "en" });
+
+		// Summed, not averaged: chunks differ in length, so the mean of the
+		// per-chunk RTFs would not be the RTF of the run.
+		const chunkCount = planChunks(samples, 16000).length;
+		expect(chunkCount).toBeGreaterThan(1);
+		expect(result.timing).toEqual({
+			elapsedSec: 45 * chunkCount,
+			audioSec: 90 * chunkCount,
+			rtf: 0.5,
+		});
+	});
+
+	it("logs the backend and the timing of every chunk", async () => {
+		mockTimedChunks();
+		const samples = new Float32Array(200 * 16000);
+		const mgr = new SttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		await mgr.transcribe({ samples, language: "en" });
+
+		const chunkLines = infoSpy.mock.calls
+			.map(([line]) => String(line))
+			.filter((line) => line.startsWith("[stt] chunk "));
+		expect(chunkLines).toHaveLength(planChunks(samples, 16000).length);
+		// Both conventions on the line, so it can be read against the POC report
+		// without arithmetic.
+		expect(chunkLines[0]).toContain("whispercpp-cpu");
+		expect(chunkLines[0]).toContain("90.0s audio in 45.0s (0.50 rtf, 2.0x real-time)");
+	});
+
+	it("says so when the helper reports no timing at all", async () => {
+		// The default fake stands in for a staged binary older than the field.
+		const mgr = new SttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		const result = await mgr.transcribe({ samples: new Float32Array(16000) });
+		expect(result.timing).toBeUndefined();
+		expect(infoSpy.mock.calls.some(([line]) => String(line).includes("no timing reported"))).toBe(
+			true,
+		);
+	});
+
+	it("puts the backend and a running rtf on every chunk's status event", async () => {
+		mockTimedChunks();
+		const samples = new Float32Array(200 * 16000);
+		const sink = vi.fn<(e: SttStatusEvent) => void>();
+		const mgr = new SttManager();
+		await mgr.init({ statusSink: sink, modelsBaseDir: "/tmp/fake-stt-models" });
+		sink.mockClear();
+		await mgr.transcribe({ samples, language: "en" });
+
+		// The response alone is too late to be a signal: it arrives once the whole
+		// recording is done, and the point is to explain the wait while it happens.
+		const reported = sink.mock.calls
+			.map(([event]) => event)
+			.filter((event) => event.backend !== undefined);
+		expect(reported).toHaveLength(planChunks(samples, 16000).length);
+		for (const event of reported) {
+			expect(event.backend).toBe("whispercpp-cpu");
+			expect(event.rtf).toBeCloseTo(0.5);
+		}
+	});
+
+	it("warns once per run — not once per chunk — that it landed on CPU", async () => {
+		mockTimedChunks();
+		const mgr = new SttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		await mgr.transcribe({ samples: new Float32Array(200 * 16000), language: "en" });
+
+		const cpuWarnings = warnSpy.mock.calls
+			.map(([line]) => String(line))
+			.filter((line) => line.includes("running on CPU"));
+		expect(cpuWarnings).toHaveLength(1);
+	});
+
+	it("stays quiet about the backend when a GPU one is bound", async () => {
+		fakeWhisperServer.transcribe.mockResolvedValue({
+			segments: [],
+			wordSegments: [],
+			detectedLanguage: "en",
+			backend: "whispercpp-vulkan",
+			timing: { elapsedSec: 20, audioSec: 90, rtf: 20 / 90 },
+		});
+		const mgr = new SttManager();
+		await mgr.init({ modelsBaseDir: "/tmp/fake-stt-models" });
+		const result = await mgr.transcribe({ samples: new Float32Array(200 * 16000) });
+
+		expect(result.backend).toBe("whispercpp-vulkan");
+		expect(warnSpy.mock.calls.some(([line]) => String(line).includes("running on CPU"))).toBe(
+			false,
+		);
 	});
 
 	// Both spellings of "detect it for me". `"auto"` is the one the request

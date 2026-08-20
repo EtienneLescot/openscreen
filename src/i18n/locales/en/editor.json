@@ -144,6 +144,7 @@
 		"transcribingEllipsis": "Transcribing…",
 		"pendingTranscription": "Pending transcription",
 		"transcriptionFailed": "Transcription failed",
+		"cpuBackendHint": "Running on CPU — about 2× slower than on the GPU",
 		"noTranscript": "No transcript",
 		"notGeneratedYet": "Not generated yet",
 		"regenerateAs": "Regenerate as",

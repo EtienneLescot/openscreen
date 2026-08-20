@@ -150,6 +150,7 @@
 		"transcribingEllipsis": "Đang phiên âm…",
 		"pendingTranscription": "Đang chờ phiên âm",
 		"transcriptionFailed": "Phiên âm thất bại",
+		"cpuBackendHint": "Đang chạy trên CPU — chậm hơn khoảng 2× so với GPU",
 		"noTranscript": "Không có bản ghi lời thoại",
 		"generating": "Đang tạo",
 		"generationFailed": "Tạo thất bại",

@@ -52,6 +52,13 @@ export interface TranscriptionJob {
 	phase?: TranscriptionPhase;
 	/** Chunk progress while transcribing; absent until the first chunk lands. */
 	progress?: TranscriptionProgress;
+	/**
+	 * Which device the engine bound, and how fast it is going. Both arrive with
+	 * the first landed chunk and are refreshed by every chunk after it; both stay
+	 * absent against a helper binary too old to report timing at all.
+	 */
+	backend?: string;
+	rtf?: number;
 	/** `"auto"` unless the user forced a language from the media card. */
 	language: string;
 	failure?: TranscriptionFailure;
@@ -369,6 +376,12 @@ async function runJob(assetId: string, job: TranscriptionJob): Promise<void> {
 						status.completedSec !== undefined && status.totalSec !== undefined
 							? { completedSec: status.completedSec, totalSec: status.totalSec }
 							: undefined,
+					// Omitted rather than set to undefined when absent: `patchJob` spreads
+					// this object over the job, so a key that is present-but-undefined
+					// would blank out what the last chunk reported. The phases before the
+					// first chunk (audio extraction, the model download) carry neither.
+					...(status.backend !== undefined ? { backend: status.backend } : {}),
+					...(status.rtf !== undefined ? { rtf: status.rtf } : {}),
 				}),
 		});
 		if (controller.signal.aborted) {

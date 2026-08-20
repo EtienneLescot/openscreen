@@ -150,6 +150,7 @@
 		"transcribingEllipsis": "Metne dökülüyor…",
 		"pendingTranscription": "Metne dökme bekliyor",
 		"transcriptionFailed": "Metne dökme başarısız oldu",
+		"cpuBackendHint": "CPU üzerinde çalışıyor — GPU'ya göre yaklaşık 2× daha yavaş",
 		"noTranscript": "Transkript yok",
 		"generating": "Oluşturuluyor",
 		"generationFailed": "Oluşturma başarısız oldu",

@@ -150,6 +150,7 @@
 		"transcribingEllipsis": "Transcription en cours…",
 		"pendingTranscription": "Transcription en attente",
 		"transcriptionFailed": "Échec de la transcription",
+		"cpuBackendHint": "Exécution sur le processeur — environ 2× plus lent que sur le GPU",
 		"noTranscript": "Aucune transcription",
 		"generating": "Génération en cours",
 		"generationFailed": "Échec de la génération",
