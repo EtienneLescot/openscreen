@@ -1,5 +1,6 @@
 import { toast } from "sonner";
 import { create } from "zustand";
+import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { toastText } from "@/i18n/toastText";
 import { nativeBridgeClient } from "@/native/client";
 import {
@@ -8,6 +9,7 @@ import {
 	restoreFullTimeline as restoreFullTimelineOp,
 } from "../document/timeline";
 import { type AxcutAsset, type AxcutDocument, documentSchema } from "../schema";
+import { probeVideoDimensions } from "../timeline/duration";
 
 // ponytail: thin Zustand wrapper over the native-bridge client. Keeps the
 // current project + revision counter in renderer memory; mutations round-trip
@@ -157,6 +159,17 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 			try {
 				const camera = await window.electronAPI.findRecordingCamera(addedAsset.originalPath);
 				if (camera.success && camera.webcamVideoPath) {
+					// Stamp the camera's real dimensions at link time so a new recording never
+					// needs the backfill in `useTimeline`. They decide the PiP's layout box, and
+					// without them it falls back to a hardcoded 4:3 — which is how a 16:9 camera
+					// used to be framed one way in the preview and another in an export.
+					//
+					// Deliberately outside the shape below and deliberately non-fatal: a probe
+					// that fails must leave the link intact and let the backfill try again later,
+					// never take the `catch` that drops the camera from the recording entirely.
+					const camDims = await probeVideoDimensions(toFileUrl(camera.webcamVideoPath)).catch(
+						() => null,
+					);
 					const linked = {
 						sourcePath: camera.webcamVideoPath,
 						startMs: 0,
@@ -174,6 +187,7 @@ export const useProjectStore = create<ProjectState>((set, get) => ({
 						// the way IN rather than only at the recorder.
 						offsetMs: Math.round(camera.offsetMs ?? 0),
 						visible: true,
+						...(camDims ?? {}),
 					};
 					const next: AxcutDocument = {
 						...document,

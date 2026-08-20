@@ -144,21 +144,41 @@ export function useTimeline() {
 	useEffect(() => {
 		if (!document) return;
 		const usedAssetIds = new Set(document.timeline.clips.map((c) => c.assetId));
+		type Asset = (typeof document.assets)[number];
+		const needsScreen = (a: Asset) =>
+			Boolean(a.originalPath) && (!a.video || !a.video.width || !a.video.height);
+		// The camera is backfilled the same way and for the same reason. The PiP's layout
+		// box is derived from these dimensions, so an asset that never carried them was
+		// laid out from a hardcoded 4:3 — and differently depending on who was asking: the
+		// preview had a mounted <video> reporting the real size, an export had nothing, so
+		// a 16:9 camera came out framed one way on screen and another in the file.
+		const needsCamera = (a: Asset) =>
+			Boolean(a.cameraTrack?.sourcePath) && (!a.cameraTrack?.width || !a.cameraTrack?.height);
 		const missing = document.assets.filter(
 			(a) =>
 				usedAssetIds.has(a.id) &&
-				a.originalPath &&
-				(!a.video || !a.video.width || !a.video.height) &&
+				(needsScreen(a) || needsCamera(a)) &&
 				!probedAssetIdsRef.current.has(a.id),
 		);
 		if (missing.length === 0) return;
 		let cancelled = false;
 		void (async () => {
-			const probed: Record<string, { width: number; height: number }> = {};
+			type Dims = { width: number; height: number };
+			const probed: Record<string, { video?: Dims; camera?: Dims }> = {};
 			for (const a of missing) {
 				probedAssetIdsRef.current.add(a.id);
-				const dims = await probeVideoDimensions(toFileUrl(a.originalPath));
-				if (dims) probed[a.id] = dims;
+				const entry: { video?: Dims; camera?: Dims } = {};
+				if (needsScreen(a)) {
+					const dims = await probeVideoDimensions(toFileUrl(a.originalPath));
+					if (dims) entry.video = dims;
+				}
+				// Probed independently of the screen: one file being unreadable must not cost
+				// the other its dimensions, and a camera-less asset simply skips this.
+				if (a.cameraTrack && needsCamera(a)) {
+					const dims = await probeVideoDimensions(toFileUrl(a.cameraTrack.sourcePath));
+					if (dims) entry.camera = dims;
+				}
+				if (entry.video || entry.camera) probed[a.id] = entry;
 			}
 			if (cancelled || Object.keys(probed).length === 0) return;
 			// Re-read fresh state so a concurrent edit made while probing isn't stomped.
@@ -166,11 +186,19 @@ export function useTimeline() {
 			if (!current) return;
 			await useProjectStore.getState().saveDocument({
 				...current,
-				assets: current.assets.map((a) =>
-					probed[a.id]
-						? { ...a, video: { codec: "unknown", fps: 0, ...a.video, ...probed[a.id] } }
-						: a,
-				),
+				assets: current.assets.map((a) => {
+					const found = probed[a.id];
+					if (!found) return a;
+					return {
+						...a,
+						...(found.video
+							? { video: { codec: "unknown", fps: 0, ...a.video, ...found.video } }
+							: {}),
+						...(found.camera && a.cameraTrack
+							? { cameraTrack: { ...a.cameraTrack, ...found.camera } }
+							: {}),
+					};
+				}),
 			});
 		})();
 		return () => {

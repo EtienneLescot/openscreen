@@ -620,13 +620,39 @@ export function buildSceneDescription(
 	 * screen squeezed into its half with nothing beside it. `has_webcam` (native) only
 	 * gates the camera's own draw — it cannot give the screen its frame back.
 	 */
-	const croppedWebcamSize = webcamSourceSize
-		? {
-				width: Math.max(1, webcamSourceSize.width * settings.webcamCropRegion.width),
-				height: Math.max(1, webcamSourceSize.height * settings.webcamCropRegion.height),
-			}
-		: null;
-	const layoutForClip = (screenSize: { width: number; height: number }, hasCamera: boolean) => {
+	/**
+	 * The camera source SHAPE of a clip, resolved the same way and for the same reasons
+	 * as `screenSourceSizeOf` above: per clip, because two clips need not have been
+	 * recorded with the same camera.
+	 *
+	 * The order matters. `cameraTrack.width/height` comes FIRST because it is the only
+	 * source every caller has: it is in the document, so the export dialog and the CLI
+	 * runner read it exactly as the preview does. `webcamSourceSize` is second, as a
+	 * fresher-than-disk override for the window before the backfill has written the
+	 * dimensions — it is what a mounted <video> just reported, and only the preview can
+	 * ever supply it. The hardcoded 4:3 is last and is now only reached for a document
+	 * that predates the field, opened somewhere with no camera element mounted.
+	 *
+	 * That ordering is the fix: the box used to depend on WHO was asking rather than on
+	 * what was recorded, so a 16:9 camera was framed 16:9 in the preview and 4:3 in the
+	 * export. Everything below reads the same answer now.
+	 */
+	const webcamSourceSizeOf = (clip: AxcutClip) => {
+		const camera = assetById.get(clip.assetId)?.cameraTrack;
+		const source =
+			camera?.width && camera?.height
+				? { width: camera.width, height: camera.height }
+				: (webcamSourceSize ?? { width: 960, height: 720 });
+		return {
+			width: Math.max(1, Math.round(source.width * settings.webcamCropRegion.width)),
+			height: Math.max(1, Math.round(source.height * settings.webcamCropRegion.height)),
+		};
+	};
+	const layoutForClip = (
+		screenSize: { width: number; height: number },
+		hasCamera: boolean,
+		camSize: { width: number; height: number },
+	) => {
 		const preset = resolveWebcamLayoutPreset(settings.webcamLayoutPreset, hasCamera);
 		return computeCompositeLayout({
 			canvasSize: outputDims,
@@ -635,8 +661,7 @@ export function buildSceneDescription(
 				height: Math.round(outputDims.height * paddingFit),
 			},
 			screenSize,
-			webcamSize:
-				preset === "no-webcam" ? null : (croppedWebcamSize ?? { width: 960, height: 720 }),
+			webcamSize: preset === "no-webcam" ? null : camSize,
 			layoutPreset: preset,
 			webcamSizePreset: settings.webcamSizePreset,
 			webcamPosition: preset === "picture-in-picture" ? settings.webcamPosition : null,
@@ -672,12 +697,18 @@ export function buildSceneDescription(
 	// `for_clip_window` (Rust) selects the entry for the clip being composed, so the
 	// draw path keeps reading a single `layout` and needs no per-clip branch of its own.
 	const layoutByClip = visibleClips.map((clip, index) =>
-		resolvedLayoutOf(layoutForClip(screenSourceSizeOf(clip, index), clipHasCamera(clip))),
+		resolvedLayoutOf(
+			layoutForClip(screenSourceSizeOf(clip, index), clipHasCamera(clip), webcamSourceSizeOf(clip)),
+		),
 	);
 	// Scalar fields stay the FIRST clip's layout: they are the fallback for a payload
 	// without `layoutByClip`, and the value native starts from before any clip is active.
 	const computedLayout = visibleClips[0]
-		? layoutForClip(screenSourceSizeOf(visibleClips[0], 0), clipHasCamera(visibleClips[0]))
+		? layoutForClip(
+				screenSourceSizeOf(visibleClips[0], 0),
+				clipHasCamera(visibleClips[0]),
+				webcamSourceSizeOf(visibleClips[0]),
+			)
 		: null;
 	const webcamRect = computedLayout?.webcamRect
 		? toFrameFractions(computedLayout.webcamRect)
