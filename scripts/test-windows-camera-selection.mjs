@@ -75,6 +75,10 @@ function runHelper(label, webcamDeviceName) {
 
 		const proc = spawn(HELPER, [JSON.stringify(config)], { windowsHide: true });
 		let output = "";
+		let spawnError = null;
+		proc.on("error", (error) => {
+			spawnError = error.message;
+		});
 		proc.stdout.on("data", (chunk) => {
 			output += chunk.toString();
 		});
@@ -90,15 +94,23 @@ function runHelper(label, webcamDeviceName) {
 		}, RECORD_MS);
 		const killTimer = setTimeout(() => proc.kill(), RECORD_MS + 6000);
 
-		proc.on("close", () => {
+		proc.on("close", (code, signal) => {
 			clearTimeout(stopTimer);
 			clearTimeout(killTimer);
 			fs.rmSync(outputPath, { force: true });
 			fs.rmSync(webcamPath, { force: true });
 			resolve({
+				// A helper that dies can still have printed everything expected, so
+				// how it ended is part of the result rather than something to skip.
+				spawnError,
+				code,
+				signal,
 				opened: output.match(/"event":"webcam-format".*?"deviceName":"([^"]*)"/)?.[1] ?? null,
-				scores: [...output.matchAll(/candidate \[\d+\] name="([^"]*)" score=(\d+)/g)].map(
-					(m) => `${m[1]}=${m[2]}`,
+				// Which cameras Media Foundation actually offered. A negative case
+				// proves nothing if the camera it was meant to be tempted by was
+				// not among them.
+				candidates: [...output.matchAll(/candidate \[\d+\] name="([^"]*)" score=(\d+)/g)].map(
+					(match) => ({ name: match[1], score: Number(match[2]) }),
 				),
 			});
 		});
@@ -116,6 +128,12 @@ const cases = [
 		label: "shares-a-brand-only",
 		why: "another camera from the same maker is still another camera",
 		deviceName: "Logitech BRIO",
+		expectOpened: null,
+	},
+	{
+		label: "short-word-inside-a-brand",
+		why: '"Logi" is spelled inside "Logitech", but is not a word of it',
+		deviceName: "Logi",
 		expectOpened: null,
 	},
 	{
@@ -142,16 +160,40 @@ if (REAL_CAMERA) {
 let failures = 0;
 for (const testCase of cases) {
 	const result = await runHelper(testCase.label, testCase.deviceName);
-	const ok =
-		testCase.expectOpened === "any"
-			? Boolean(result.opened)
-			: result.opened === testCase.expectOpened;
-	if (!ok) failures += 1;
+
+	const problems = [];
+	if (result.spawnError) problems.push(`could not start the helper: ${result.spawnError}`);
+	if (result.signal) problems.push(`helper killed by ${result.signal}`);
+	if (result.code !== 0 && result.code !== null) problems.push(`helper exited ${result.code}`);
+
+	if (testCase.expectOpened === "any") {
+		if (!result.opened) problems.push("nothing was opened");
+	} else {
+		if (result.opened) problems.push(`opened "${result.opened}", and should have opened nothing`);
+		// A negative case only means something if the camera it was meant to be
+		// tempted by was on offer. With nothing enumerated it passes vacuously.
+		if (result.candidates.length === 0) {
+			problems.push("Media Foundation enumerated nothing, so this case proves nothing");
+		}
+		const scored = result.candidates.filter((candidate) => candidate.score > 0);
+		if (scored.length) {
+			problems.push(
+				`something scored above zero: ${scored.map((c) => `${c.name}=${c.score}`).join(", ")}`,
+			);
+		}
+	}
+
+	if (problems.length) failures += 1;
 	console.log(
-		`${ok ? "PASS" : "FAIL"}  ${testCase.label.padEnd(22)} requested="${testCase.deviceName}" opened=${result.opened === null ? "(none)" : `"${result.opened}"`}`,
+		`${problems.length ? "FAIL" : "PASS"}  ${testCase.label.padEnd(22)} requested="${testCase.deviceName}" opened=${result.opened === null ? "(none)" : `"${result.opened}"`}`,
 	);
 	console.log(`      ${testCase.why}`);
-	if (result.scores.length) console.log(`      scores: ${result.scores.join("  ")}`);
+	if (result.candidates.length) {
+		console.log(
+			`      enumerated: ${result.candidates.map((c) => `${c.name}=${c.score}`).join("  ")}`,
+		);
+	}
+	for (const problem of problems) console.log(`      -> ${problem}`);
 }
 
 console.log(

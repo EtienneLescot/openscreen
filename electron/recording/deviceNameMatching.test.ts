@@ -60,6 +60,30 @@ describe("scoreDeviceNameMatch", () => {
 		expect(scoreDeviceNameMatch("Logitech StreamCam", "{clsid}", "   ")).toBe(0);
 	});
 
+	/**
+	 * "Micro" is inside "Microphone", "Logi" inside "Logitech" — spelled there,
+	 * but not as a word. Containment used to take either for a match and resolve
+	 * a device nobody asked for.
+	 */
+	it("refuses a request merely spelled inside a longer word", () => {
+		expect(scoreDeviceNameMatch("Microphone (Logitech StreamCam)", "{id}", "Micro")).toBe(0);
+		expect(scoreDeviceNameMatch("Logitech StreamCam", "{clsid}", "Logi")).toBe(0);
+	});
+
+	/**
+	 * `[^a-z0-9]` stripped every non-Latin letter, so two different Japanese
+	 * cameras both normalized to "a" and matched each other at 1000.
+	 */
+	it("keeps non-Latin names apart", () => {
+		expect(scoreDeviceNameMatch("カメラ A", "{clsid}", "ウェブカメラ A")).toBe(0);
+		expect(scoreDeviceNameMatch("Веб-камера 1", "{clsid}", "Веб-камера 2")).toBe(0);
+	});
+
+	it("still matches identical non-Latin names", () => {
+		expect(scoreDeviceNameMatch("カメラ A", "{clsid}", "カメラ A")).toBe(1000);
+		expect(scoreDeviceNameMatch("摄像头（罗技）", "{clsid}", "摄像头（罗技）")).toBe(1000);
+	});
+
 	it("falls back to the identifier when the friendly name says nothing", () => {
 		expect(scoreDeviceNameMatch("", "usb elgato facecam 0fd9", "Elgato Facecam")).toBe(800);
 	});
