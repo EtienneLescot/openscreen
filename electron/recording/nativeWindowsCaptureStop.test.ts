@@ -6,6 +6,8 @@ import {
 	isSalvageableFragmentedCapture,
 	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
 	readStoppedPath,
+	readWebcamFormat,
+	readWebcamUnavailable,
 	terminateNativeWindowsCapture,
 	waitForNativeWindowsCaptureStop,
 } from "./nativeWindowsCaptureStop";
@@ -76,6 +78,54 @@ describe("readStoppedPath", () => {
 		expect(readStoppedPath("Recording started\n[stop-timing] step=microphone elapsed_ms=0\n")).toBe(
 			null,
 		);
+	});
+});
+
+describe("readWebcamUnavailable", () => {
+	it("sees the helper giving up on the camera", () => {
+		const output =
+			'{"event":"ready","schemaVersion":2}\n' +
+			"WARNING: Failed to initialize native webcam capture; continuing without webcam\n" +
+			'{"event":"warning","code":"webcam-unavailable","message":"Failed to initialize native webcam capture"}\n' +
+			"Recording started\n";
+		expect(readWebcamUnavailable(output)).toBe(true);
+	});
+
+	it("is false for a run whose camera worked", () => {
+		const output =
+			'{"event":"webcam-format","schemaVersion":2,"width":1920,"height":1080,"fps":30,"deviceName":"Camera (NVIDIA Broadcast)"}\n' +
+			"Recording started\n";
+		expect(readWebcamUnavailable(output)).toBe(false);
+	});
+});
+
+describe("readWebcamFormat", () => {
+	it("reads the negotiated camera format", () => {
+		const output =
+			'{"event":"webcam-format","schemaVersion":2,"width":1920,"height":1080,"fps":30,"deviceName":"Camera (NVIDIA Broadcast)"}\n';
+		expect(readWebcamFormat(output)).toMatchObject({
+			width: 1920,
+			height: 1080,
+			deviceName: "Camera (NVIDIA Broadcast)",
+		});
+	});
+
+	// Captured verbatim from a real run: the helper's stderr diagnostic and its
+	// stdout event land in the same drained chunk, with no newline between them.
+	// Parsing that line whole throws, which used to read as "no camera at all".
+	it("reads the event even when stderr is glued onto the front of it", () => {
+		const output =
+			"INFO: DirectShow webcam connected subtype NV12 720x1280 " +
+			'stride=2880{"event":"webcam-format","schemaVersion":2,"width":720,"height":1280,"fps":30,"deviceName":"OBS Virtual Camera"}\n';
+		expect(readWebcamFormat(output)).toMatchObject({
+			width: 720,
+			height: 1280,
+			deviceName: "OBS Virtual Camera",
+		});
+	});
+
+	it("is null when the helper never announced a camera", () => {
+		expect(readWebcamFormat("Recording started\n")).toBe(null);
 	});
 });
 

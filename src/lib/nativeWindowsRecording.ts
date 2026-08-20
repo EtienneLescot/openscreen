@@ -47,6 +47,12 @@ export type NativeWindowsRecordingStartResult = {
 	error?: string;
 	/** Helper-reported encoder selection: "default", "software-preferred", or "software-fallback". */
 	videoEncoderSelection?: string | null;
+	/**
+	 * A camera was asked for and the helper could not open it, so this take is
+	 * screen and audio only. Still a success — the recording is worth keeping —
+	 * but the user has to be told, or they discover it in the editor.
+	 */
+	webcamUnavailable?: boolean;
 };
 
 export function parseWindowHandleFromSourceId(sourceId?: string | null) {

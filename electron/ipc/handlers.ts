@@ -75,6 +75,8 @@ import { toHelperRect } from "../native-bridge/helperCoordinates";
 import {
 	isSalvageableFragmentedCapture,
 	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
+	readWebcamFormat,
+	readWebcamUnavailable,
 	terminateNativeWindowsCapture,
 	waitForNativeWindowsCaptureStop,
 } from "../recording/nativeWindowsCaptureStop";
@@ -1324,25 +1326,6 @@ function sendNativeWindowsStopCommand(proc: ChildProcessWithoutNullStreams) {
 	return true;
 }
 
-function readNativeWindowsWebcamFormat(output: string) {
-	const lines = output.split(/\r?\n/).filter((line) => line.includes('"event":"webcam-format"'));
-	const lastLine = lines.at(-1);
-	if (!lastLine) {
-		return null;
-	}
-
-	try {
-		return JSON.parse(lastLine) as {
-			width?: number;
-			height?: number;
-			fps?: number;
-			deviceName?: string;
-		};
-	} catch {
-		return null;
-	}
-}
-
 function readNativeWindowsEncoderSelection(output: string) {
 	const lines = output
 		.split(/\r?\n/)
@@ -2449,7 +2432,7 @@ export function registerIpcHandlers(
 					cursorCaptureMode === "editable-overlay"
 						? Math.max(0, captureStartedAtMs - cursorStartTimeMs)
 						: 0;
-				const webcamFormat = readNativeWindowsWebcamFormat(nativeWindowsCaptureOutput);
+				const webcamFormat = readWebcamFormat(nativeWindowsCaptureOutput);
 				const encoderSelection = readNativeWindowsEncoderSelection(nativeWindowsCaptureOutput);
 				// Captured now because stop may have no helper left to ask. A helper
 				// killed mid-recording is exactly the case where this matters most.
@@ -2466,12 +2449,30 @@ export function registerIpcHandlers(
 					onRecordingStateChange(true, source.name);
 				}
 
+				// Reported at start, not at stop: the helper decides the camera is a
+				// lost cause during its own init — before it announces "Recording
+				// started", so the warning is already in the buffer here — and telling
+				// the user now, while the take is still worth restarting, beats telling
+				// them at the end. Keyed on the helper's own event rather than on a
+				// missing `webcamFormat`: absence of the format line also means "the
+				// line could not be parsed", which would put a red toast on a recording
+				// whose camera is working perfectly.
+				const webcamUnavailable =
+					request.webcam.enabled && readWebcamUnavailable(nativeWindowsCaptureOutput);
+				if (webcamUnavailable) {
+					console.warn("[native-wgc] recording without a camera; the helper could not open it", {
+						deviceId: request.webcam.deviceId,
+						deviceName: request.webcam.deviceName,
+					});
+				}
+
 				return {
 					success: true,
 					recordingId,
 					path: outputPath,
 					helperPath,
 					videoEncoderSelection: encoderSelection?.video ?? null,
+					webcamUnavailable,
 				};
 			} catch (error) {
 				console.error("Failed to start native Windows recording:", error);
@@ -2863,8 +2864,21 @@ export function registerIpcHandlers(
 			let webcamVideoPath: string | undefined;
 			if (preferredWebcamPath) {
 				try {
-					await fs.access(preferredWebcamPath, fsConstants.R_OK);
-					webcamVideoPath = preferredWebcamPath;
+					// Size, not just existence. A camera that opened but delivered no
+					// frame still gets a file created for it, and its `Finalize()` then
+					// fails, leaving nought bytes on disk. Admitting that file put a
+					// camera track in the document pointing at something no demuxer can
+					// read, and the preview compositor answers an unreadable camera by
+					// drawing the SCREEN recording inside the little camera rectangle —
+					// which is how a webcam that never recorded showed up as the desktop
+					// duplicated into its own corner (getopenscreen/openscreen#387).
+					const webcamStat = await fs.stat(preferredWebcamPath);
+					webcamVideoPath = webcamStat.size > 0 ? preferredWebcamPath : undefined;
+					if (!webcamVideoPath) {
+						console.warn("[native-wgc] the webcam file is empty; saving without a camera", {
+							path: preferredWebcamPath,
+						});
+					}
 				} catch {
 					webcamVideoPath = undefined;
 				}
@@ -2887,6 +2901,14 @@ export function registerIpcHandlers(
 				path: screenVideoPath,
 				session,
 				recovered,
+				// `preferredWebcamPath` is non-null only for a take that asked for a
+				// camera, so the pair means "a camera was requested and none survived".
+				// This is the second, quieter way to lose one: the helper opened the
+				// device happily and then never got a frame out of it, so it reports no
+				// `webcam-unavailable` and the start-time notice stays silent. Left
+				// unreported, the user would find out in the editor — which is exactly
+				// the silence this change exists to end.
+				webcamDropped: Boolean(preferredWebcamPath) && !webcamVideoPath,
 				message: recovered
 					? "Native Windows recording recovered from a failed stop"
 					: "Native Windows recording session stored successfully",

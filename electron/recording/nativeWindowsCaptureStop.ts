@@ -95,6 +95,54 @@ export function readAbandonedStep(output: string) {
 }
 
 /**
+ * Did the helper give up on the camera and record the screen alone?
+ *
+ * It says so and then carries on, which is the right call — a screen-and-audio
+ * take the user can still edit beats losing the whole recording over one
+ * device. What was missing was anyone listening: nothing read this event, so a
+ * recording started WITH a camera came back without one, and without a word
+ * (getopenscreen/openscreen#387).
+ *
+ * A substring test and not a per-line parse, for the reason below.
+ */
+export function readWebcamUnavailable(output: string) {
+	return output.includes('"code":"webcam-unavailable"');
+}
+
+/**
+ * The format the helper negotiated with the camera, or null if it never said.
+ *
+ * Slices the object out of the buffer rather than parsing a line whole. Both
+ * helper streams are drained into this one string, diagnostics go to stderr and
+ * protocol to stdout, and a chunk boundary routinely glues them together — real
+ * output contains lines like
+ * `INFO: DirectShow webcam connected subtype NV12 {"event":"webcam-format",…}`.
+ * `JSON.parse` on that throws, and a working camera reads as one that said
+ * nothing at all.
+ */
+export function readWebcamFormat(output: string) {
+	const start = output.lastIndexOf('{"event":"webcam-format"');
+	if (start === -1) {
+		return null;
+	}
+	const end = output.indexOf("}", start);
+	if (end === -1) {
+		return null;
+	}
+
+	try {
+		return JSON.parse(output.slice(start, end + 1)) as {
+			width?: number;
+			height?: number;
+			fps?: number;
+			deviceName?: string;
+		};
+	} catch {
+		return null;
+	}
+}
+
+/**
  * The most useful line of a failed helper run, for a toast.
  *
  * The log ends with `[stop-timing]` and JSON protocol lines on every run, so

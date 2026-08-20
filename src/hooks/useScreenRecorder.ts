@@ -188,6 +188,18 @@ export async function finalizeWebcamAsset(
 
 export function useScreenRecorder(): UseScreenRecorderReturn {
 	const t = useScopedT("editor");
+	/**
+	 * `t` through a ref, for the callbacks that must not be rebuilt when it
+	 * changes identity.
+	 *
+	 * `finalizeNativeWindowsRecording` is one of them: it sits in the dependency
+	 * array of the unmount effect below, whose cleanup bumps `countdownRunId` and
+	 * discards any native recording in flight. Recreating that callback therefore
+	 * re-runs the effect, and its cleanup silently cancels the countdown a
+	 * recording is starting from — the take never begins, with nothing logged.
+	 */
+	const tRef = useRef(t);
+	tRef.current = t;
 	const [recording, setRecording] = useState(false);
 	const [paused, setPaused] = useState(false);
 	const [saving, setSaving] = useState(false);
@@ -613,6 +625,15 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			}
 
 			clearNativeRecordingState();
+			// The other way a camera goes missing, and the quieter one: the device
+			// opened, so nothing warned at start, but it never produced a frame and
+			// the file it left behind was empty. Say so before the editor opens
+			// without a camera and leaves the user to work out why. Through `tRef`
+			// because this callback has to stay referentially stable — see the ref's
+			// own comment.
+			if (result.webcamDropped) {
+				toast.error(tRef.current("recording.cameraCaptureUnavailable"));
+			}
 			if (result.session) {
 				await window.electronAPI.setCurrentRecordingSession(result.session);
 			} else if (result.path) {
@@ -1129,6 +1150,14 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const result = await window.electronAPI.startNativeWindowsRecording(request);
 			if (!result.success || !result.recordingId) {
 				throw new Error(result.error ?? "Native Windows capture failed.");
+			}
+
+			// The take goes on without the camera rather than failing, so this is the
+			// only moment the user can learn about it while it is still cheap to stop
+			// and retry. Left unsaid, the camera's absence was discovered in the
+			// editor, long after the moment was gone.
+			if (result.webcamUnavailable) {
+				toast.error(t("recording.cameraCaptureUnavailable"));
 			}
 
 			// Tell the user when the helper silently switched away from the default

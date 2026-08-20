@@ -43,6 +43,7 @@
 		"permissionDenied": "녹화 권한이 거부되었습니다. 화면 녹화를 허용해 주세요.",
 		"cameraDisconnected": "웹캠 연결이 끊어졌습니다.",
 		"cameraNotFound": "카메라를 찾을 수 없습니다.",
+		"cameraCaptureUnavailable": "카메라를 열 수 없습니다. 카메라 없이 녹화합니다.",
 		"accessibilityAllowAndRetry": "OpenScreen의 손쉬운 사용 접근을 허용한 다음, 카운트다운을 시작하려면 다시 녹화를 누르세요.",
 		"selectSource": "녹화할 소스를 선택해 주세요"
 	},

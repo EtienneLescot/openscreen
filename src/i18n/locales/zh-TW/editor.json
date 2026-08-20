@@ -43,6 +43,7 @@
 		"permissionDenied": "錄影權限被拒絕。請允許螢幕錄製。",
 		"cameraDisconnected": "網路攝影機已中斷連線。",
 		"cameraNotFound": "找不到攝影機。",
+		"cameraCaptureUnavailable": "無法開啟攝影機，將在沒有攝影機的情況下錄製。",
 		"accessibilityAllowAndRetry": "允許 OpenScreen 使用輔助使用權限，然後再次按下錄製以開始倒數。",
 		"selectSource": "請選擇要錄製的來源"
 	},
