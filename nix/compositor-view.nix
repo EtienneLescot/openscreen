@@ -11,6 +11,8 @@
   ffmpeg,
   symlinkJoin,
   pkg-config,
+  patchelf,
+  binutils,
 }:
 
 let
@@ -32,7 +34,9 @@ let
 
   # crates/compositor/build.rs wants a single tree holding both include/ and
   # lib/, the shape of the vendored ffmpeg the Windows and Linux scripts
-  # download. nixpkgs splits ffmpeg across outputs, so join them back.
+  # download. nixpkgs splits ffmpeg across outputs, so join them back. Only the
+  # headers are taken from here; lib/ is replaced at build time by renamed
+  # copies, for the reason spelled out on preBuild below.
   ffmpegTree = symlinkJoin {
     name = "ffmpeg-tree-for-build-rs";
     paths = [
@@ -58,13 +62,68 @@ rustPlatform.buildRustPackage {
     # is what applies here.
     rustPlatform.bindgenHook
     pkg-config
+    patchelf
+    binutils # nm, for reading the ffmpeg symbol table
   ];
 
   buildInputs = [ ffmpegLgpl ];
 
-  # Same reasoning: config.toml's [env] sets FFMPEG_DIR to the vendored win64
-  # tree, without force, so this overrides it rather than fighting it.
-  env.FFMPEG_DIR = "${ffmpegTree}";
+  # FFMPEG_DIR is set in preBuild, once the renamed libraries exist. Same
+  # reasoning as before for it winning over config.toml's [env]: that entry has
+  # no `force = true`, so the environment takes precedence.
+  #
+  # The prefix half of the scheme. build.rs rewrites the bindgen output so the
+  # Rust declarations import osff_-prefixed names, and it asserts that it renamed
+  # something, so a mismatch between these two halves fails the build rather than
+  # producing an addon that binds to the wrong ffmpeg.
+  env.OPENSCREEN_FFMPEG_SYMBOL_PREFIX = "osff_";
+
+  # WHY. Electron links Chromium's own stripped libffmpeg.so as a DT_NEEDED
+  # dependency, so it holds the global symbol scope before any addon is
+  # dlopen'd. ELF has one flat namespace, so the addon's avformat_open_input
+  # binds to Chromium's build regardless of RUNPATH -- the symbol is already
+  # satisfied. scripts/build-linux-compositor-addon.mjs documents this at length,
+  # including why RTLD_DEEPBIND and symbol versioning were both rejected.
+  #
+  # I left this out of the first version on the theory that an addon which loads
+  # and runs has no collision. That was wrong: loading proves nothing, because
+  # the Vulkan check happens before any ffmpeg call. What it actually produced is
+  # the quiet failure that comment warns about -- an addon running against an
+  # ffmpeg it was not built for, reporting `libopenh264: absent de ce build
+  # ffmpeg` while linked against a build that has it.
+  preBuild = ''
+    stage="$NIX_BUILD_TOP/ffmpeg-renamed"
+    mkdir -p "$stage/lib"
+    : > "$NIX_BUILD_TOP/symnames"
+
+    # Copy each library under its soname and read its symbol table. awk rather
+    # than sed with a backreference: the third field is the name, and anything
+    # after an @ is the version tag.
+    for lib in ${ffmpegLgpl.lib}/lib/lib{avformat,avcodec,avutil,swscale,swresample}.so.*; do
+      case "$lib" in *.so.*.*) continue ;; esac
+      test -f "$lib" || continue
+      cp "$(readlink -f "$lib")" "$stage/lib/$(basename "$lib")"
+      nm -D --defined-only "$lib" | awk '{ n = $3; sub(/@.*/, "", n); if (n ~ /^(av|sws_|swr_)/) print n }' >> "$NIX_BUILD_TOP/symnames"
+    done
+
+    map="$NIX_BUILD_TOP/symbols.map"
+    sort -u "$NIX_BUILD_TOP/symnames" | awk '{ print $1 " osff_" $1 }' > "$map"
+    count=$(wc -l < "$map")
+    if [ "$count" -eq 0 ]; then
+      echo "no ffmpeg symbols found; the addon would bind to Chromium's ffmpeg" >&2
+      exit 1
+    fi
+    echo "renaming $count ffmpeg symbols with the osff_ prefix"
+
+    for so in "$stage"/lib/*.so.*; do
+      chmod u+w "$so"
+      patchelf --rename-dynamic-symbols "$map" "$so"
+    done
+
+    # Headers from the real tree, libraries from the renamed one.
+    ln -s ${ffmpegTree}/include "$stage/include"
+    export FFMPEG_DIR="$stage"
+  '';
 
   # poc-d3d is in the workspace and is Direct3D, so it must not be built here.
   cargoBuildFlags = [
@@ -84,6 +143,13 @@ rustPlatform.buildRustPackage {
       echo "compositor_view.node was not produced" >&2
       exit 1
     }
+
+    # The renamed libraries travel with the addon: nothing else on this system
+    # defines osff_-prefixed symbols, so they have to sit beside it and be found
+    # from there rather than through any system path.
+    cp "$NIX_BUILD_TOP"/ffmpeg-renamed/lib/*.so.* "$out/lib/"
+    chmod u+w "$out/lib/compositor_view.node"
+    patchelf --set-rpath '$ORIGIN' "$out/lib/compositor_view.node"
     runHook postInstall
   '';
 
