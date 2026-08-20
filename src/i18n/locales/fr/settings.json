@@ -53,6 +53,7 @@
 		"reactiveWebcam": "Réduire au zoom",
 		"reactiveWebcamDescription": "La caméra rétrécit doucement pendant le zoom, pour ne pas gêner.",
 		"help": "Composition de la webcam avec l'écran : incrustation, empilement vertical, double cadre, forme du masque, taille et effet miroir.",
+		"helpNoWebcam": "Ce projet n’a pas de caméra : les réglages de disposition sont désactivés et le préréglage affiche « Sans webcam ». Votre disposition enregistrée est conservée pour le jour où une caméra sera ajoutée.",
 		"shapes": {
 			"rectangle": "Rect.",
 			"circle": "Cercle",

@@ -53,6 +53,7 @@
 		"reactiveWebcam": "Reducir al ampliar",
 		"reactiveWebcamDescription": "La cámara se reduce suavemente mientras el vídeo está ampliado, para no estorbar.",
 		"help": "Cómo se compone la webcam con la pantalla: imagen en imagen, pila vertical, marco doble, forma de máscara, tamaño y efecto espejo.",
+		"helpNoWebcam": "Este proyecto no tiene cámara, así que los controles de diseño están desactivados y el preajuste muestra «Sin cámara». Tu diseño guardado se conserva para cuando añadas una cámara.",
 		"shapes": {
 			"rectangle": "Rect.",
 			"circle": "Círculo",
