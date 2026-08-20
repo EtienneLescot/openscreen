@@ -98,12 +98,21 @@ export function ModalShell({
 	const tc = useScopedT("common");
 	const dialogRef = useRef<HTMLDivElement | null>(null);
 	useEscape(open && closeOnEscape, onClose);
-	// Move focus into the dialog as it opens. The app menu closes without restoring focus to
-	// its trigger — right for a pointer user — so otherwise the opener is left on
-	// document.body: Tab then walks the editor *behind* the backdrop, and a screen reader is
-	// never told a dialog appeared.
+	// Move focus into the dialog as it opens, and hand it back to whatever had it when the
+	// dialog goes. The app menu closes without restoring focus to its trigger — right for a
+	// pointer user — so otherwise the opener is left on document.body: Tab then walks the
+	// editor *behind* the backdrop, and a screen reader is never told a dialog appeared.
+	// Closing has the mirror problem: the focused node is the one being unmounted.
 	useEffect(() => {
-		if (open) dialogRef.current?.focus();
+		if (!open) return;
+		// Whatever opened this. Often document.body (the app menu unmounts its own row before
+		// the dialog mounts), in which case restoring is a no-op; the panel's gear is still
+		// there, and gets it back.
+		const opener = document.activeElement;
+		dialogRef.current?.focus();
+		return () => {
+			if (opener instanceof HTMLElement && opener.isConnected) opener.focus();
+		};
 	}, [open]);
 	if (!open) return null;
 	return (

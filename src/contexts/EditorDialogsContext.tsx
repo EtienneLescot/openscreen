@@ -50,15 +50,22 @@ export function useEditorDialogActions(): EditorDialogsActions {
 export function EditorDialogsProvider({ children }: { children: ReactNode }) {
 	const [section, setSection] = useState<EditorDialogSection | null>(null);
 	// Mirrored so `isDialogOpen` can read the current section without the actions value having
-	// to depend on it. Written during render rather than from an effect: a keystroke arriving
-	// between the state change and the effect would otherwise get the previous answer.
-	const sectionRef = useRef(section);
-	sectionRef.current = section;
+	// to depend on it. Written by the two openers, not during render and not from an effect:
+	// during render a discarded one would leave the ref claiming a dialog that never committed,
+	// and from an effect a keystroke landing between the click and the commit would still get
+	// the previous answer. `setSection` is called from nowhere else, so the two cannot drift.
+	const sectionRef = useRef<EditorDialogSection | null>(null);
 
 	const actions = useMemo<EditorDialogsActions>(
 		() => ({
-			openDialog: (next) => setSection(next),
-			closeDialog: () => setSection(null),
+			openDialog: (next) => {
+				sectionRef.current = next;
+				setSection(next);
+			},
+			closeDialog: () => {
+				sectionRef.current = null;
+				setSection(null);
+			},
 			isDialogOpen: () => sectionRef.current !== null,
 		}),
 		[],
