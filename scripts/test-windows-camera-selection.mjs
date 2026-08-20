@@ -117,29 +117,41 @@ function runHelper(label, webcamDeviceName) {
 	});
 }
 
+/**
+ * `tempts` names the camera each negative case exists to be tempted by. Without
+ * it a case passes on a machine where that camera is simply absent — nothing was
+ * opened, but nothing could have been, and the rule under test was never
+ * exercised. Cases naming one that is not enumerated here are skipped and say
+ * so, rather than reporting a pass they did not earn.
+ */
 const cases = [
 	{
 		label: "shares-a-prefix-only",
 		why: '"Logi Capture" is a real device, and shares no word with "Logitech StreamCam" — but "logi" is inside "logitech"',
 		deviceName: "Logi Capture",
+		tempts: "Logitech StreamCam",
 		expectOpened: null,
 	},
 	{
 		label: "shares-a-brand-only",
 		why: "another camera from the same maker is still another camera",
 		deviceName: "Logitech BRIO",
+		tempts: "Logitech StreamCam",
 		expectOpened: null,
 	},
 	{
 		label: "short-word-inside-a-brand",
 		why: '"Logi" is spelled inside "Logitech", but is not a word of it',
 		deviceName: "Logi",
+		tempts: "Logitech StreamCam",
 		expectOpened: null,
 	},
 	{
 		label: "nothing-like-it",
 		why: "a name with nothing in common must resolve to nothing, so the caller can fall through",
 		deviceName: "Elgato Facecam Pro",
+		// Nothing in particular tempts this one; any enumerated camera will do.
+		tempts: null,
 		expectOpened: null,
 	},
 ];
@@ -158,6 +170,7 @@ if (REAL_CAMERA) {
 }
 
 let failures = 0;
+let skipped = 0;
 for (const testCase of cases) {
 	const result = await runHelper(testCase.label, testCase.deviceName);
 
@@ -166,15 +179,25 @@ for (const testCase of cases) {
 	if (result.signal) problems.push(`helper killed by ${result.signal}`);
 	if (result.code !== 0 && result.code !== null) problems.push(`helper exited ${result.code}`);
 
+	// The camera this case exists to be tempted by has to be on offer, or the
+	// rule under test was never exercised and a pass would mean nothing.
+	const temptationPresent =
+		testCase.tempts === null
+			? result.candidates.length > 0
+			: result.candidates.some((candidate) => candidate.name === testCase.tempts);
+	if (testCase.expectOpened === null && !problems.length && !temptationPresent) {
+		skipped += 1;
+		console.log(
+			`SKIP  ${testCase.label.padEnd(22)} requested="${testCase.deviceName}" — ${testCase.tempts ?? "no camera"} was not enumerated here`,
+		);
+		console.log(`      ${testCase.why}`);
+		continue;
+	}
+
 	if (testCase.expectOpened === "any") {
 		if (!result.opened) problems.push("nothing was opened");
 	} else {
 		if (result.opened) problems.push(`opened "${result.opened}", and should have opened nothing`);
-		// A negative case only means something if the camera it was meant to be
-		// tempted by was on offer. With nothing enumerated it passes vacuously.
-		if (result.candidates.length === 0) {
-			problems.push("Media Foundation enumerated nothing, so this case proves nothing");
-		}
 		const scored = result.candidates.filter((candidate) => candidate.score > 0);
 		if (scored.length) {
 			problems.push(
@@ -198,7 +221,7 @@ for (const testCase of cases) {
 
 console.log(
 	failures === 0
-		? `\nAll ${cases.length} camera selection cases behaved.`
+		? `\nAll ${cases.length - skipped} camera selection cases behaved${skipped ? `, ${skipped} skipped for want of the camera they test against` : ""}.`
 		: `\n${failures} of ${cases.length} cases did not.`,
 );
 process.exit(failures === 0 ? 0 : 1);
