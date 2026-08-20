@@ -47,6 +47,7 @@ import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview
 import {
 	computeCameraFullscreenRect,
 	computeCompositeLayout,
+	resolveWebcamLayoutPreset,
 	type WebcamCompositeLayout,
 } from "@/lib/compositeLayout";
 import { classifyWallpaper, resolveImageWallpaperUrl } from "@/lib/wallpaper";
@@ -231,9 +232,10 @@ export function PreviewCanvas(props: PreviewCanvasProps) {
 		// A clip with no camera lays out as "no-webcam", whatever the panel says. Hiding
 		// only the webcam slot is not enough: the block presets size the SCREEN off the
 		// block, so the screen stayed squeezed into its half with nothing beside it.
-		const preset = (
-			activeClipHasCamera ? settings.webcamLayoutPreset : "no-webcam"
-		) as WebcamLayoutPreset;
+		const preset = resolveWebcamLayoutPreset(
+			settings.webcamLayoutPreset as WebcamLayoutPreset,
+			activeClipHasCamera,
+		);
 		const mask = settings.webcamMaskShape as WebcamMaskShape;
 		// ponytail: padding shrinks the available content area for ALL layouts
 		// (PiP/dual/stack) so the screen doesn't fill the canvas edge-to-edge.

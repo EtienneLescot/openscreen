@@ -35,6 +35,7 @@ import { projectRegionsToSource } from "@/lib/ai-edition/timeline/timelineMap";
 import {
 	computeCompositeLayout,
 	type RenderRect,
+	resolveWebcamLayoutPreset,
 	resolveWebcamReactiveZoom,
 	webcamSizeToFraction,
 } from "@/lib/compositeLayout";
@@ -586,7 +587,7 @@ export function buildSceneDescription(
 	 * gates the camera's own draw — it cannot give the screen its frame back.
 	 */
 	const layoutForClip = (screenSize: { width: number; height: number }, hasCamera: boolean) => {
-		const preset = hasCamera ? settings.webcamLayoutPreset : "no-webcam";
+		const preset = resolveWebcamLayoutPreset(settings.webcamLayoutPreset, hasCamera);
 		return computeCompositeLayout({
 			canvasSize: outputDims,
 			maxContentSize: {

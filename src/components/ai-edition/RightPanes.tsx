@@ -56,7 +56,7 @@ import { formatMs } from "@/lib/ai-edition/timeline/format";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import type { TranscriptGateReason } from "@/lib/ai-edition/transcription/status";
 import { getAssetPath } from "@/lib/assetPath";
-import { supportsWebcamReactiveZoom } from "@/lib/compositeLayout";
+import { resolveWebcamLayoutPreset, supportsWebcamReactiveZoom } from "@/lib/compositeLayout";
 import { supportsCursorClickEffects } from "@/lib/cursor/cursorCapabilities";
 import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { buildGradientFromEditor } from "@/lib/gradientBuilder";
@@ -1500,14 +1500,27 @@ export function LayoutPane() {
 	const ts = useScopedT("settings");
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	const document = useProjectStore((s) => s.document);
-	// A project can hold clips with no camera attached at all (plain imports or
-	// a recording made without a webcam). Keep the saved camera preference for
-	// later, but make the disabled control describe what the preview/export
-	// actually render right now.
-	const hasAnyCamera = document
-		? hasAnyClipWithCamera(document.assets, document.timeline.clips)
-		: false;
-	const effectiveLayoutPreset = hasAnyCamera ? settings.webcamLayoutPreset : "no-webcam";
+	// A project can hold clips with no camera attached at all (plain imports or a
+	// recording made without a webcam). Keep the saved camera preference for later, but
+	// make the disabled control describe whether this project has any camera at all.
+	//
+	// The preset is global while the camera is per clip, so a MIXED project shows the
+	// saved preset here while the playhead may sit over a camera-less clip — the
+	// preview and the scene answer `hasCamera` per clip, this panel answers it for the
+	// project. Deliberately `hasAnyClipWithCamera` (is a camera attached?) and not
+	// `assetCameraSource` (attached AND visible): a hidden camera keeps its saved preset
+	// on display, because this panel is the surface you would use to un-hide it.
+	//
+	// Memoised because the pane subscribes to the whole document, and `setLive` during a
+	// slider drag replaces it every frame — this scan is O(clips x assets).
+	const hasAnyCamera = useMemo(
+		() => (document ? hasAnyClipWithCamera(document.assets, document.timeline.clips) : false),
+		[document],
+	);
+	const effectiveLayoutPreset = resolveWebcamLayoutPreset(
+		settings.webcamLayoutPreset,
+		hasAnyCamera,
+	);
 
 	// Synchro initiale : cf. NativeCompositorOverlay (`pushAllNativeParams`).
 	// the mask shape picker only makes sense for Picture-in-Picture.
@@ -1521,12 +1534,17 @@ export function LayoutPane() {
 	// as a control that does nothing.
 	const supportsReactiveZoom = supportsWebcamReactiveZoom(effectiveLayoutPreset);
 	const layoutControlsDisabled = !hasDocument || !hasAnyCamera;
+	// The controls go dead and the preset reads "No Webcam", but the saved preference is
+	// still on disk. Say so, otherwise the only signal the user gets is their setting
+	// apparently having been thrown away.
+	const helpText = hasDocument && !hasAnyCamera ? ts("layout.helpNoWebcam") : ts("layout.help");
 	return (
-		<Pane title={ts("layout.title")} icon={<LayoutIcon size={14} />} helpText={ts("layout.help")}>
+		<Pane title={ts("layout.title")} icon={<LayoutIcon size={14} />} helpText={helpText}>
 			<div className={styles.sectionLabel}>{ts("layout.preset")}</div>
 			<div className={styles.field}>
-				<label>{ts("layout.title")}</label>
+				<label htmlFor="layout-preset">{ts("layout.title")}</label>
 				<select
+					id="layout-preset"
 					value={effectiveLayoutPreset}
 					disabled={layoutControlsDisabled}
 					onChange={(e) =>
