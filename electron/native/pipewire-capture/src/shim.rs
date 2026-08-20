@@ -65,6 +65,7 @@ struct RawCallbacks {
     on_cursor: extern "C" fn(*mut c_void, *const RawCursor),
     on_frame: extern "C" fn(*mut c_void, *const RawFrame),
     on_buffer_info: extern "C" fn(*mut c_void, u32, u32, i32, u32, *const c_char),
+    on_capture_issue: extern "C" fn(*mut c_void, *const c_char, *const c_char),
     on_state: extern "C" fn(*mut c_void, *const c_char, *const c_char),
 }
 
@@ -103,7 +104,7 @@ extern "C" {
         producer_modifier: i64,
     ) -> i32;
     #[cfg(test)]
-    fn osc_pw_frame_bounds_valid(
+    fn osc_pw_frame_bounds_reason(
         data_type: u32,
         maxsize: u32,
         mapped_len: usize,
@@ -113,7 +114,7 @@ extern "C" {
         stride: i32,
         width: i32,
         height: i32,
-    ) -> i32;
+    ) -> *const c_char;
     fn osc_pw_start(
         fd: i32,
         node_id: u32,
@@ -142,6 +143,15 @@ pub enum StreamEvent {
         /// "Header:12,Cursor:589872" — every metadata block that survived
         /// negotiation. Empty when the buffers carry none at all.
         metas: String,
+    },
+    /// Something cost the user frames and nothing downstream could work out
+    /// what. Raised by the shim for conditions that are terminal and otherwise
+    /// silent — a DMA-BUF import that failed, a buffer that fails validation —
+    /// where the recording comes out empty and every counter still reads zero.
+    CaptureIssue {
+        /// Stable kebab-case identifier, surfaced as the warning's `code`.
+        code: String,
+        detail: String,
     },
     Cursor(CursorEvent),
     /// A frame is waiting in the [`FrameMailbox`]. Carries no payload on
@@ -731,8 +741,15 @@ pub fn enum_format_accepts_dmabuf_producer(with_modifier: bool, producer_modifie
     unsafe { osc_pw_enum_format_accepts_dmabuf_producer(i32::from(with_modifier), producer_modifier) }
 }
 
+/// The inputs `osc_resolve_frame_bounds` weighs, as named fields.
+///
+/// The C entry point takes nine bare integers, four of which are plausible
+/// neighbours (`maxsize`/`mapped_len`, `chunk_offset`/`chunk_size`) that a
+/// transposition would not disturb. Building from a healthy baseline and
+/// changing one field means each test says which input it is about.
 #[cfg(test)]
-fn frame_bounds_valid(
+#[derive(Clone, Copy)]
+struct Bounds {
     data_type: u32,
     maxsize: u32,
     mapped_len: usize,
@@ -742,20 +759,63 @@ fn frame_bounds_valid(
     stride: i32,
     width: i32,
     height: i32,
-) -> bool {
-    // SAFETY: the C helper performs arithmetic only and owns its output storage.
-    unsafe {
-        osc_pw_frame_bounds_valid(
-            data_type,
-            maxsize,
-            mapped_len,
-            chunk_offset,
-            chunk_size,
-            chunk_flags,
-            stride,
-            width,
-            height,
-        ) != 0
+}
+
+#[cfg(test)]
+impl Bounds {
+    /// A healthy 1920x1080 BGRx frame in the 8 MiB allocation a GPU hands back
+    /// for it — the shape a working DMA-BUF session delivers, with an honest
+    /// `chunk_size`.
+    fn dmabuf_1080p() -> Self {
+        let stride = 1920 * 4;
+        Self {
+            data_type: constants().data_dma_buf,
+            maxsize: 0,
+            mapped_len: 8 * 1024 * 1024,
+            chunk_offset: 0,
+            chunk_size: stride * 1080,
+            chunk_flags: 0,
+            stride: stride as i32,
+            width: 1920,
+            height: 1080,
+        }
+    }
+
+    /// The same frame over shared memory, where `maxsize` really is the mapping
+    /// length because pw_stream mapped it.
+    fn memfd_1080p() -> Self {
+        let stride = 1920u32 * 4;
+        Self {
+            data_type: constants().data_mem_fd,
+            maxsize: stride * 1080,
+            mapped_len: (stride * 1080) as usize,
+            ..Self::dmabuf_1080p()
+        }
+    }
+
+    /// Which bound rejects this frame, or `"none"` when it is accepted.
+    fn reason(self) -> String {
+        // SAFETY: the C helper performs arithmetic only and returns a pointer to
+        // one of its own string literals, which outlives this call.
+        let raw = unsafe {
+            osc_pw_frame_bounds_reason(
+                self.data_type,
+                self.maxsize,
+                self.mapped_len,
+                self.chunk_offset,
+                self.chunk_size,
+                self.chunk_flags,
+                self.stride,
+                self.width,
+                self.height,
+            )
+        };
+        assert!(!raw.is_null(), "the shim always names a reason");
+        unsafe { CStr::from_ptr(raw) }.to_string_lossy().into_owned()
+    }
+
+    fn is_accepted(self) -> bool {
+        self.reason() == "none"
     }
 }
 
@@ -805,6 +865,7 @@ impl Session {
             on_cursor,
             on_frame,
             on_buffer_info,
+            on_capture_issue,
             on_state,
         };
 
@@ -969,6 +1030,24 @@ extern "C" fn on_cursor(user: *mut c_void, cursor: *const RawCursor) {
     });
 }
 
+extern "C" fn on_capture_issue(user: *mut c_void, code: *const c_char, detail: *const c_char) {
+    with_sink(user, |sink| {
+        let owned = |raw: *const c_char| {
+            if raw.is_null() {
+                String::new()
+            } else {
+                // SAFETY: the shim passes NUL-terminated buffers that outlive the
+                // callback.
+                unsafe { CStr::from_ptr(raw) }.to_string_lossy().into_owned()
+            }
+        };
+        sink(StreamEvent::CaptureIssue {
+            code: owned(code),
+            detail: owned(detail),
+        });
+    });
+}
+
 extern "C" fn on_state(user: *mut c_void, state: *const c_char, error: *const c_char) {
     with_sink(user, |sink| {
         let to_string = |raw: *const c_char| {
@@ -1078,166 +1157,165 @@ mod tests {
     }
 
     #[test]
-    fn dmabuf_uses_the_mapped_allocation_not_advisory_sizes() {
-        let constants = constants();
-        let stride = 1920 * 4;
-
-        // Portal backends use different placeholders for DMA-BUF sizes. None
-        // are special: the fd allocation and frame geometry are authoritative.
-        assert!(frame_bounds_valid(
-            constants.data_dma_buf,
-            0,
-            8 * 1024 * 1024,
-            0,
-            9,
-            0,
-            stride as i32,
-            1920,
-            1080,
-        ));
-        assert!(frame_bounds_valid(
-            constants.data_dma_buf,
-            1,
-            8 * 1024 * 1024,
-            0,
-            1,
-            0,
-            stride as i32,
-            1920,
-            1080,
-        ));
-        assert!(frame_bounds_valid(
-            constants.data_dma_buf,
-            37,
-            8 * 1024 * 1024,
-            0,
-            23,
-            0,
-            stride as i32,
-            1920,
-            1080,
-        ));
-        assert!(!frame_bounds_valid(
-            constants.data_dma_buf,
-            u32::MAX,
-            4096,
-            0,
-            u32::MAX,
-            0,
-            stride as i32,
-            1920,
-            1080,
-        ));
+    fn a_healthy_dmabuf_frame_is_accepted() {
+        assert_eq!(Bounds::dmabuf_1080p().reason(), "none");
     }
 
+    /// The fix for issue #287. Several portal backends put a token value in
+    /// `chunk->size` for a DMA-BUF plane instead of a byte count — xdg-desktop-
+    /// portal-wlr 0.8.2 writes 9, niri writes 1 — and clamping the frame to it
+    /// rejected every frame those compositors ever sent.
     #[test]
-    fn frame_bounds_reject_invalid_offsets_and_geometry_without_affecting_memfd() {
-        let constants = constants();
-        let stride = 16;
-        let frame_len = stride * 4;
+    fn dmabuf_placeholder_chunk_sizes_are_ignored_rather_than_obeyed() {
+        for placeholder in [1, 9, 23] {
+            let frame = Bounds {
+                chunk_size: placeholder,
+                ..Bounds::dmabuf_1080p()
+            };
+            assert_eq!(
+                frame.reason(),
+                "none",
+                "a chunk size of {placeholder} is a placeholder, not a byte count"
+            );
+        }
+    }
 
-        assert!(frame_bounds_valid(
-            constants.data_dma_buf,
-            frame_len,
-            frame_len as usize,
-            0,
-            frame_len,
-            0,
-            stride as i32,
-            4,
-            4,
-        ));
-        assert!(!frame_bounds_valid(
-            constants.data_dma_buf,
-            frame_len,
-            frame_len as usize,
-            frame_len + 1,
-            frame_len,
-            0,
-            stride as i32,
-            4,
-            4,
-        ));
-        // DMA-BUF advisory sizes cannot extend the actual fd allocation.
-        assert!(frame_bounds_valid(
-            constants.data_dma_buf,
-            frame_len,
-            frame_len as usize,
-            0,
-            u32::MAX,
-            0,
-            stride as i32,
-            4,
-            4,
-        ));
-        // Shared-memory buffers continue to use PipeWire's maxsize; a separate
-        // mapped length is meaningful only for DMA-BUF.
-        assert!(frame_bounds_valid(
-            constants.data_mem_fd,
-            frame_len,
-            0,
-            0,
-            frame_len,
-            0,
-            stride as i32,
-            4,
-            4,
-        ));
-        assert!(!frame_bounds_valid(
-            constants.data_mem_fd,
-            frame_len,
-            0,
-            0,
-            frame_len,
-            1,
-            stride as i32,
-            4,
-            4,
-        ));
-        assert!(!frame_bounds_valid(
-            constants.data_mem_fd,
-            0,
-            frame_len as usize,
-            0,
-            frame_len,
-            0,
-            stride as i32,
-            4,
-            4,
-        ));
-        assert!(!frame_bounds_valid(
-            constants.data_dma_buf,
-            u32::MAX,
-            u32::MAX as usize,
-            0,
-            u32::MAX,
-            0,
-            i32::MAX,
-            4,
-            i32::MAX,
-        ));
-        assert!(!frame_bounds_valid(
-            constants.data_dma_buf,
-            frame_len,
-            frame_len as usize,
-            0,
-            frame_len,
-            0,
-            15,
-            4,
-            4,
-        ));
-        assert!(!frame_bounds_valid(
-            constants.data_dma_buf,
-            0,
-            frame_len as usize,
-            0,
-            9,
-            1,
-            stride as i32,
-            4,
-            4,
-        ));
+    /// The other half of that rule: a chunk size large enough to be a real byte
+    /// count is still believed. A compositor whose copy did not finish reports a
+    /// short chunk, and reading it as a whole frame splices the previous frame's
+    /// pixels into the bottom of this one.
+    #[test]
+    fn a_torn_dmabuf_frame_is_still_refused() {
+        let healthy = Bounds::dmabuf_1080p();
+        let half_written = Bounds {
+            chunk_size: healthy.chunk_size / 2,
+            ..healthy
+        };
+        assert_eq!(
+            half_written.reason(),
+            "frame-bytes-exceed-available-chunk",
+            "half a frame is a plausible byte count and must still be clamped"
+        );
+    }
+
+    /// `maxsize` is advisory on the DMA-BUF path, so it can be arbitrarily
+    /// large — and being large must not let a frame reach past what was mapped.
+    #[test]
+    fn advisory_sizes_cannot_stretch_a_frame_past_its_mapping() {
+        let frame = Bounds {
+            maxsize: u32::MAX,
+            mapped_len: 4096,
+            ..Bounds::dmabuf_1080p()
+        };
+        assert_eq!(frame.reason(), "frame-bytes-exceed-available-chunk");
+    }
+
+    /// Every rejection, each reached by perturbing exactly one field of a frame
+    /// that is otherwise healthy, and each asserted by NAME. Asserting only
+    /// "rejected" would pass when the wrong bound fires — which is exactly what
+    /// a reordering of these checks would do.
+    #[test]
+    fn each_rejection_names_itself() {
+        let healthy = Bounds::dmabuf_1080p();
+        let cases = [
+            ("chunk-size-zero", Bounds { chunk_size: 0, ..healthy }),
+            ("buffer-length-zero", Bounds { mapped_len: 0, ..healthy }),
+            (
+                "chunk-offset-out-of-bounds",
+                Bounds {
+                    chunk_offset: healthy.mapped_len as u32 + 1,
+                    ..healthy
+                },
+            ),
+            (
+                "producer-marked-frame-corrupted",
+                Bounds {
+                    chunk_flags: 1, // SPA_CHUNK_FLAG_CORRUPTED
+                    ..healthy
+                },
+            ),
+            (
+                "stride-shorter-than-row",
+                Bounds {
+                    stride: healthy.width * 4 - 1,
+                    ..healthy
+                },
+            ),
+            (
+                "frame-bytes-exceed-available-chunk",
+                Bounds {
+                    mapped_len: 1024 * 1024,
+                    ..healthy
+                },
+            ),
+        ];
+        for (expected, frame) in cases {
+            assert_eq!(frame.reason(), expected);
+        }
+    }
+
+    /// The geometry gate moved during the bounds refactor and its `width` term
+    /// is new, so every axis is pinned here. Nothing else in the suite reaches
+    /// this branch: a healthy frame's stride, width and height are all positive.
+    #[test]
+    fn geometry_is_rejected_on_every_axis() {
+        let healthy = Bounds::dmabuf_1080p();
+        let broken = [
+            ("zero stride", Bounds { stride: 0, ..healthy }),
+            ("negative stride", Bounds { stride: -1, ..healthy }),
+            ("zero width", Bounds { width: 0, ..healthy }),
+            ("negative width", Bounds { width: -1, ..healthy }),
+            ("zero height", Bounds { height: 0, ..healthy }),
+            ("negative height", Bounds { height: -1, ..healthy }),
+        ];
+        for (axis, frame) in broken {
+            assert_eq!(frame.reason(), "invalid-frame-geometry", "{axis}");
+        }
+    }
+
+    /// A buffer carrying a cursor update and no pixels. The reader returns
+    /// without reporting a drop, but the bound still has to NAME it, or the
+    /// exported check and the production reader disagree about what it is.
+    #[test]
+    fn a_cursor_only_buffer_is_not_a_frame() {
+        for base in [Bounds::dmabuf_1080p(), Bounds::memfd_1080p()] {
+            let cursor_only = Bounds { chunk_size: 0, ..base };
+            assert_eq!(cursor_only.reason(), "chunk-size-zero");
+        }
+    }
+
+    /// The DMA-BUF leniency must not leak to shared memory, where `maxsize` is
+    /// the real mapping length and `chunk->size` is a real byte count. MemPtr
+    /// and MemFd are both advertised by the video path, so both are exercised.
+    #[test]
+    fn shared_memory_still_clamps_to_the_declared_chunk_size() {
+        let constants = constants();
+        for data_type in [constants.data_mem_fd, constants.data_mem_ptr] {
+            let healthy = Bounds {
+                data_type,
+                ..Bounds::memfd_1080p()
+            };
+            assert!(healthy.is_accepted(), "a healthy shared-memory frame");
+            let placeholder = Bounds { chunk_size: 9, ..healthy };
+            assert_eq!(
+                placeholder.reason(),
+                "frame-bytes-exceed-available-chunk",
+                "9 bytes is 9 bytes on shared memory, not a placeholder"
+            );
+        }
+    }
+
+    /// stride * height is computed on widened operands because both come from
+    /// another process; multiplied as int32 these wrap to a small positive
+    /// number and the frame would be accepted.
+    #[test]
+    fn an_overflowing_frame_size_cannot_wrap_past_the_bound() {
+        let frame = Bounds {
+            stride: i32::MAX,
+            height: i32::MAX,
+            ..Bounds::dmabuf_1080p()
+        };
+        assert_eq!(frame.reason(), "frame-bytes-exceed-available-chunk");
     }
 
     /// End-to-end exercise of the PipeWire half with NO portal involved.
@@ -1334,6 +1412,12 @@ mod tests {
                 }
                 Ok(StreamEvent::Cursor(cursor)) => {
                     println!("[{:>5}ms] cursor {cursor:?}", stamp(std::time::Instant::now()));
+                }
+                Ok(StreamEvent::CaptureIssue { code, detail }) => {
+                    println!(
+                        "[{:>5}ms] capture-issue {code}: {detail}",
+                        stamp(std::time::Instant::now())
+                    );
                 }
                 // Unreachable: this session was started with no mailbox, so the
                 // C side was never asked for frames. Matched rather than
