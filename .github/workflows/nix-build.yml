@@ -148,6 +148,7 @@ jobs:
           ATTEMPTS=5
           HUNG=0
           OK=0
+          FAILED=0
           LAST_OK=""
           for i in $(seq 1 "$ATTEMPTS"); do
             echo "=== attempt $i/$ATTEMPTS ==="
@@ -160,15 +161,25 @@ jobs:
               # xvfb-run folds the command's stderr into stdout, so the stderr
               # capture is empty and every milestone lands in the other file.
               grep -a milestone "/tmp/sources.$i.out" || echo "  (none at all)"
-            else
+            elif [ "$RC" -eq 0 ]; then
               OK=$((OK + 1))
               LAST_OK="/tmp/sources.$i.json"
-              echo "returned rc=$RC. Last milestone:"
+              echo "succeeded. Last milestone:"
               grep -a milestone "/tmp/sources.$i.out" | tail -1 || echo "  (none)"
+            else
+              # Bounded failure, not a hang: the CLI gave up and said why. Its -o
+              # file does not exist, so it must not become LAST_OK -- an earlier
+              # version assumed any non-timeout exit meant success and then tried
+              # to read a file that was never written.
+              FAILED=$((FAILED + 1))
+              echo "failed with rc=$RC. Last milestone:"
+              grep -a milestone "/tmp/sources.$i.out" | tail -1 || echo "  (none)"
+              echo "reported error:"
+              grep -a "Error:" "/tmp/sources.$i.out" | tail -2 || true
             fi
           done
 
-          echo "=== $HUNG of $ATTEMPTS hung, $OK returned ==="
+          echo "=== $ATTEMPTS attempts: $OK ok, $FAILED failed, $HUNG hung ==="
 
           # A run where nothing hung still has to prove the -o channel works.
           if [ -n "$LAST_OK" ]; then
@@ -185,7 +196,11 @@ jobs:
           fi
 
           if [ "$HUNG" -gt 0 ]; then
-            echo "::error::openscreen sources hung on $HUNG of $ATTEMPTS attempts. A CLI that sometimes never returns cannot be scripted."
+            echo "::error::openscreen sources hung on $HUNG of $ATTEMPTS attempts. A CLI that never returns cannot be scripted."
+            exit 1
+          fi
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::error::openscreen sources failed on $FAILED of $ATTEMPTS attempts. Bounded and reported, but the capture path is still not reliable on this host."
             exit 1
           fi
           if [ "$OK" -eq 0 ]; then
