@@ -33,6 +33,43 @@ export const NATIVE_WINDOWS_CAPTURE_STOP_TIMEOUT_MS = 60_000;
 /** How long a killed helper gets to actually die before we escalate. */
 const NATIVE_WINDOWS_CAPTURE_KILL_GRACE_MS = 2_000;
 
+/** What `mf_encoder.h`'s `kContainerFormatFragmentedMp4` puts on the wire. */
+export const NATIVE_WINDOWS_FRAGMENTED_CONTAINER = "fragmented-mp4";
+
+/**
+ * An MP4 the helper never indexed is a few bytes of header at most. Anything
+ * larger might be a real recording, and deleting one of those to tidy up after
+ * a failed stop is a far worse outcome than leaving a stray file behind.
+ */
+export const NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES = 64 * 1024;
+
+/**
+ * Did a stop that failed its handshake still leave a recording worth opening?
+ *
+ * Only the fragmented container can. A plain MP4 writes its one index in
+ * `Finalize()`, so a helper that never reached it leaves bytes no demuxer can
+ * read — the total loss issues #252 / #292 / #327 reported. A fragmented one
+ * writes `moov` up front and a self-describing `moof`+`mdat` pair about every
+ * second, so the same file plays up to the last complete fragment with nothing
+ * else needed. Which one a run used is not a property of the version: the
+ * fragmented sink degrades to the plain one rather than failing a recording,
+ * which is exactly why the helper reports the flavour it settled on.
+ *
+ * The size floor is shared with the cleanup that deletes unusable leftovers, so
+ * the two agree by construction: nothing is recovered that the tidy-up would
+ * have judged a stub, and nothing is deleted that this would have called a
+ * recording.
+ */
+export function isSalvageableFragmentedCapture(
+	container: string | null | undefined,
+	sizeBytes: number | null,
+): boolean {
+	if (container !== NATIVE_WINDOWS_FRAGMENTED_CONTAINER) {
+		return false;
+	}
+	return sizeBytes !== null && sizeBytes >= NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES;
+}
+
 const RECORDING_STOPPED_PATTERN = /Recording stopped\. Output path: (.+)/;
 const STOP_TIMEOUT_EVENT_PATTERN = /"event":"stop-timeout"[^\n]*"step":"([^"]+)"/;
 
@@ -55,6 +92,105 @@ export function readStoppedPath(output: string) {
 /** The step the helper's shutdown watchdog gave up on, if it fired. */
 export function readAbandonedStep(output: string) {
 	return output.match(STOP_TIMEOUT_EVENT_PATTERN)?.[1] ?? null;
+}
+
+/**
+ * Did the helper give up on the camera and record the screen alone?
+ *
+ * It says so and then carries on, which is the right call — a screen-and-audio
+ * take the user can still edit beats losing the whole recording over one
+ * device. What was missing was anyone listening: nothing read this event, so a
+ * recording started WITH a camera came back without one, and without a word
+ * (getopenscreen/openscreen#387).
+ *
+ * A substring test and not a per-line parse, for the reason below.
+ */
+export function readWebcamUnavailable(output: string) {
+	return output.includes('"code":"webcam-unavailable"');
+}
+
+/**
+ * Did the helper record the Windows default input instead of the microphone
+ * that was asked for?
+ *
+ * It falls back rather than failing, which is right — a take with the wrong
+ * microphone still holds the screen and the moment. But it used to fall back in
+ * silence, and the only symptom was a recording that sounded wrong
+ * (getopenscreen/openscreen#404).
+ */
+export function readMicrophoneDefaulted(output: string) {
+	return output.includes('"code":"microphone-defaulted"');
+}
+
+/**
+ * Index of the `}` that closes the object starting at `start`, or -1.
+ *
+ * Stopping at the first `}` is wrong for a value that contains one, and a
+ * camera's friendly name is free text straight from the driver — "Camera }
+ * Studio" is unusual but nothing forbids it, and cutting the object there turns
+ * a working camera into one that reported no format at all. So brace depth is
+ * counted, and braces inside a JSON string are skipped along with anything an
+ * escape protects.
+ */
+function findObjectEnd(output: string, start: number) {
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let index = start; index < output.length; index += 1) {
+		const ch = output[index];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (ch === "\\" && inString) {
+			escaped = true;
+			continue;
+		}
+		if (ch === '"') {
+			inString = !inString;
+			continue;
+		}
+		if (inString) continue;
+		if (ch === "{") depth += 1;
+		else if (ch === "}") {
+			depth -= 1;
+			if (depth === 0) return index;
+		}
+	}
+	return -1;
+}
+
+/**
+ * The format the helper negotiated with the camera, or null if it never said.
+ *
+ * Slices the object out of the buffer rather than parsing a line whole. Both
+ * helper streams are drained into this one string, diagnostics go to stderr and
+ * protocol to stdout, and a chunk boundary routinely glues them together — real
+ * output contains lines like
+ * `INFO: DirectShow webcam connected subtype NV12 {"event":"webcam-format",…}`.
+ * `JSON.parse` on that throws, and a working camera reads as one that said
+ * nothing at all.
+ */
+export function readWebcamFormat(output: string) {
+	const start = output.lastIndexOf('{"event":"webcam-format"');
+	if (start === -1) {
+		return null;
+	}
+	const end = findObjectEnd(output, start);
+	if (end === -1) {
+		return null;
+	}
+
+	try {
+		return JSON.parse(output.slice(start, end + 1)) as {
+			width?: number;
+			height?: number;
+			fps?: number;
+			deviceName?: string;
+		};
+	} catch {
+		return null;
+	}
 }
 
 /**

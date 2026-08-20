@@ -224,6 +224,7 @@ int main(int argc, char** argv) {
 	std::string model_path;
 	std::string host = "127.0.0.1";
 	bool host_from_flag = false;
+	bool force_cpu = false;
 	int port = 0;
 	int threads = std::max(1u, std::thread::hardware_concurrency());
 
@@ -233,6 +234,7 @@ int main(int argc, char** argv) {
 		else if (a == "--host" && i + 1 < argc) { host = argv[++i]; host_from_flag = true; }
 		else if (a == "--port" && i + 1 < argc) port = std::atoi(argv[++i]);
 		else if (a == "--threads" && i + 1 < argc) threads = std::atoi(argv[++i]);
+		else if (a == "--cpu") force_cpu = true;
 	}
 	// ponytail: prefer env var (matches the prior native STT model env var
 	// shape; the Node wrapper passes both ways).
@@ -268,7 +270,7 @@ int main(int argc, char** argv) {
 
 	// ---- Init whisper context with DTW alignment (POC §4.1) ----
 	whisper_context_params cparams = whisper_context_default_params();
-	cparams.use_gpu    = true;   // GPU offload via whatever backend was linked
+	cparams.use_gpu    = !force_cpu; // Parent retries with --cpu if a GPU backend aborts.
 	cparams.flash_attn = false;  // CRITICAL: DTW is silently disabled by v1.9.1
 	                             // if flash_attn is true; the guardrail in the
 	                             // /inference handler still runs, but skipping
@@ -276,12 +278,20 @@ int main(int argc, char** argv) {
 	cparams.dtw_token_timestamps = true;
 	cparams.dtw_aheads_preset    = WHISPER_AHEADS_SMALL;
 	whisper_context* ctx = whisper_init_from_file_with_params(model_path.c_str(), cparams);
+	if (!ctx && cparams.use_gpu) {
+		// Metal/Vulkan allocation can fail transiently when the editor or another
+		// creative app is already using most GPU memory. Captions should degrade to
+		// a slower CPU run instead of leaving the HTTP readiness probe to time out.
+		log("GPU model initialization failed; retrying with CPU inference");
+		cparams.use_gpu = false;
+		ctx = whisper_init_from_file_with_params(model_path.c_str(), cparams);
+	}
 	if (!ctx) {
 		log("whisper_init_from_file_with_params failed for " + model_path);
 		return 3;
 	}
-	const std::string active_backend = detect_active_backend();
-	log("model loaded: multilingual small; backend=" + active_backend);
+	const std::string active_backend = cparams.use_gpu ? detect_active_backend() : "whispercpp-cpu";
+	log("model loaded; backend=" + active_backend);
 
 	// ---- HTTP server ----
 	httplib::Server svr;

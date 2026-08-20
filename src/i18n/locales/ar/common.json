@@ -7,6 +7,10 @@
 		"share": "مشاركة",
 		"done": "تم",
 		"open": "فتح",
+		"checkForUpdates": "التحقق من وجود تحديثات",
+		"viewRelease": "عرض الإصدار",
+		"downloadUpdate": "تنزيل التحديث",
+		"restartNow": "إعادة التشغيل الآن",
 		"upload": "رفع",
 		"export": "تصدير",
 		"showInFolder": "عرض في المجلد",
@@ -36,6 +40,15 @@
 		"hide": "إخفاء OpenScreen",
 		"hideOthers": "إخفاء الآخرين",
 		"unhide": "إظهار الكل"
+	},
+	"updates": {
+		"available": "يتوفر OpenScreen {{latestVersion}}. الإصدار المثبت هو {{currentVersion}}.",
+		"current": "OpenScreen محدّث ({{currentVersion}}).",
+		"readyToInstall": "تم تنزيل OpenScreen {{latestVersion}}. أعد التشغيل لإكمال التثبيت.",
+		"blockedRecording": "أنهِ التسجيل قبل تثبيت التحديث.",
+		"blockedLocation": "انقل OpenScreen إلى مجلد التطبيقات قبل التحديث.",
+		"failed": "تعذّر التحقق من وجود تحديثات.",
+		"downloadFailed": "تعذّر تنزيل التحديث."
 	},
 	"playback": {
 		"play": "تشغيل",

@@ -6,6 +6,7 @@
 // self-sufficient).
 
 import {
+	AudioLines,
 	FileText,
 	HelpCircle,
 	Layout as LayoutIcon,
@@ -41,6 +42,7 @@ import type {
 	AxcutTrimRange,
 	AxcutWord,
 } from "@/lib/ai-edition/schema";
+import { AUDIO_GAIN_DB_LIMIT } from "@/lib/ai-edition/store/editorSettings";
 import { useProjectStore } from "@/lib/ai-edition/store/projectStore";
 import { useEditorSettings } from "@/lib/ai-edition/store/useEditorSettings";
 import {
@@ -56,7 +58,7 @@ import { formatMs } from "@/lib/ai-edition/timeline/format";
 import { locateVirtualPosition } from "@/lib/ai-edition/timeline/virtual-preview";
 import type { TranscriptGateReason } from "@/lib/ai-edition/transcription/status";
 import { getAssetPath } from "@/lib/assetPath";
-import { supportsWebcamReactiveZoom } from "@/lib/compositeLayout";
+import { resolveWebcamLayoutPreset, supportsWebcamReactiveZoom } from "@/lib/compositeLayout";
 import { supportsCursorClickEffects } from "@/lib/cursor/cursorCapabilities";
 import { CURSOR_THEMES, DEFAULT_CURSOR_THEME_ID } from "@/lib/cursor/cursorThemes";
 import { buildGradientFromEditor } from "@/lib/gradientBuilder";
@@ -1380,7 +1382,7 @@ export function VideoEffectsPane() {
 	return (
 		<Pane title={ts("effects.title")} icon={<Sliders size={14} />} helpText={ts("effects.help")}>
 			<div className={styles.paneRow}>
-				<span className="label">{ts("effects.blurBg")}</span>
+				<span className={styles.label}>{ts("effects.blurBg")}</span>
 				<Toggle
 					checked={settings.showBlur}
 					disabled={!hasDocument}
@@ -1500,33 +1502,79 @@ export function LayoutPane() {
 	const ts = useScopedT("settings");
 	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
 	const document = useProjectStore((s) => s.document);
+	// A project can hold clips with no camera attached at all (plain imports or a
+	// recording made without a webcam). Keep the saved camera preference for later, but
+	// make the disabled control describe whether this project has any camera at all.
+	//
+	// The preset is global while the camera is per clip, so a MIXED project shows the
+	// saved preset here while the playhead may sit over a camera-less clip — the
+	// preview and the scene answer `hasCamera` per clip, this panel answers it for the
+	// project. Deliberately `hasAnyClipWithCamera` (is a camera attached?) and not
+	// `assetCameraSource` (attached AND visible): a hidden camera keeps its saved preset
+	// on display, because this panel is the surface you would use to un-hide it.
+	//
+	// Memoised because the pane subscribes to the whole document, and `setLive` during a
+	// slider drag replaces it every frame — this scan is O(clips x assets).
+	const hasAnyCamera = useMemo(
+		() => (document ? hasAnyClipWithCamera(document.assets, document.timeline.clips) : false),
+		[document],
+	);
+	const effectiveLayoutPreset = resolveWebcamLayoutPreset(
+		settings.webcamLayoutPreset,
+		hasAnyCamera,
+	);
 
 	// Synchro initiale : cf. NativeCompositorOverlay (`pushAllNativeParams`).
 	// the mask shape picker only makes sense for Picture-in-Picture.
 	// Dual-frame (side-by-side) and vertical-stack (top/bottom) weld the camera
 	// to the screen as one block — the mask is rectangular and sized off the
 	// screen capture — so we hide those controls when the preset isn't PiP.
-	const isPip = settings.webcamLayoutPreset === "picture-in-picture";
+	const isPip = effectiveLayoutPreset === "picture-in-picture";
 	// Same reason for "Shrink on zoom": shrinking the camera mid-zoom would tear a
 	// hole in the block, so the block layouts force it off (see
 	// `supportsWebcamReactiveZoom`) and the toggle is dropped rather than shown
 	// as a control that does nothing.
-	const supportsReactiveZoom = supportsWebcamReactiveZoom(settings.webcamLayoutPreset);
-	// P4 — a project can hold clips with no camera attached at all (plain
-	// imported videos, or a recording made without a webcam). The layout
-	// controls have nothing to act on in that case, so they're disabled
-	// rather than left live for a preset that will never show anything.
-	const hasAnyCamera = document
-		? hasAnyClipWithCamera(document.assets, document.timeline.clips)
-		: false;
+	const supportsReactiveZoom = supportsWebcamReactiveZoom(effectiveLayoutPreset);
 	const layoutControlsDisabled = !hasDocument || !hasAnyCamera;
+	// The controls go dead and the preset reads "No Webcam", but the saved preference is
+	// still on disk. Say so, otherwise the only signal the user gets is their setting
+	// apparently having been thrown away.
+	const helpText = hasDocument && !hasAnyCamera ? ts("layout.helpNoWebcam") : ts("layout.help");
+	const webcamCrop = settings.webcamCropRegion;
+	const cropZoomPct = Math.round(100 / webcamCrop.width);
+	// Read straight off the pan, not back out of the rect. The rect cannot answer at 100%
+	// zoom — it is the whole frame, so its offset is 0 whatever the user chose — and it gave
+	// a drifting answer on the way there, because the offset gets squeezed toward the near
+	// edge as the window grows while the picture itself does not move.
+	const cropPan = settings.webcamCropPan;
+	const cropPanX = cropPan.x * 100;
+	const cropPanY = cropPan.y * 100;
+	/** Rect from zoom and pan. `pan * (1 - size)` cannot leave the frame, so nothing clamps. */
+	const cropRegionFor = (size: number, pan: { x: number; y: number }) => ({
+		x: pan.x * (1 - size),
+		y: pan.y * (1 - size),
+		width: size,
+		height: size,
+	});
+	const setCropZoom = (zoomPct: number) => {
+		const size = 100 / Math.max(100, zoomPct);
+		// A pure function of (pan, size): the pan is never re-derived from the rect this
+		// writes, so dragging the zoom back and forth returns the framing it started from.
+		setLive({ webcamCropRegion: cropRegionFor(size, cropPan) });
+	};
+	const setCropPan = (axis: "x" | "y", valuePct: number) => {
+		const pan = { ...cropPan, [axis]: valuePct / 100 };
+		// One patch for both, so a half-written pair can never reach disk.
+		setLive({ webcamCropPan: pan, webcamCropRegion: cropRegionFor(webcamCrop.width, pan) });
+	};
 	return (
-		<Pane title={ts("layout.title")} icon={<LayoutIcon size={14} />} helpText={ts("layout.help")}>
+		<Pane title={ts("layout.title")} icon={<LayoutIcon size={14} />} helpText={helpText}>
 			<div className={styles.sectionLabel}>{ts("layout.preset")}</div>
 			<div className={styles.field}>
-				<label>{ts("layout.title")}</label>
+				<label htmlFor="layout-preset">{ts("layout.title")}</label>
 				<select
-					value={settings.webcamLayoutPreset}
+					id="layout-preset"
+					value={effectiveLayoutPreset}
 					disabled={layoutControlsDisabled}
 					onChange={(e) =>
 						void set({ webcamLayoutPreset: e.target.value as typeof settings.webcamLayoutPreset })
@@ -1540,7 +1588,7 @@ export function LayoutPane() {
 				</select>
 			</div>
 			<div className={styles.paneRow}>
-				<span className="label">{ts("layout.mirrorWebcam")}</span>
+				<span className={styles.label}>{ts("layout.mirrorWebcam")}</span>
 				<Toggle
 					checked={settings.webcamMirrored}
 					disabled={layoutControlsDisabled}
@@ -1554,7 +1602,7 @@ export function LayoutPane() {
 			</div>
 			{supportsReactiveZoom ? (
 				<div className={styles.paneRow}>
-					<span className="label">{ts("layout.reactiveWebcam")}</span>
+					<span className={styles.label}>{ts("layout.reactiveWebcam")}</span>
 					<Toggle
 						checked={settings.webcamReactiveZoom}
 						disabled={layoutControlsDisabled}
@@ -1627,11 +1675,12 @@ export function LayoutPane() {
 			{isPip ? (
 				<div className={styles.sliderGrid}>
 					<div className={`${styles.sliderCell} ${styles.full}`}>
-						<div className="head">
-							<span className="label">{ts("layout.webcamSize")}</span>
-							<span className="val">{Math.round(settings.webcamSizePreset)}%</span>
+						<div className={styles.head}>
+							<span className={styles.label}>{ts("layout.webcamSize")}</span>
+							<span className={styles.val}>{Math.round(settings.webcamSizePreset)}%</span>
 						</div>
 						<input
+							aria-label={ts("layout.webcamSize")}
 							type="range"
 							min={10}
 							max={50}
@@ -1652,6 +1701,72 @@ export function LayoutPane() {
 					</div>
 				</div>
 			) : null}
+			<div className={styles.sectionLabel}>{ts("layout.webcamFraming")}</div>
+			<div className={styles.sliderGrid}>
+				<SliderCell
+					label={ts("layout.webcamCropZoom")}
+					value={cropZoomPct}
+					min={100}
+					max={300}
+					suffix="%"
+					disabled={layoutControlsDisabled}
+					onChange={setCropZoom}
+					onCommit={() => void commit()}
+				/>
+				<SliderCell
+					label={ts("layout.webcamCropX")}
+					value={cropPanX}
+					min={0}
+					max={100}
+					suffix="%"
+					disabled={layoutControlsDisabled || webcamCrop.width >= 0.999}
+					onChange={(value) => setCropPan("x", value)}
+					onCommit={() => void commit()}
+				/>
+				<SliderCell
+					label={ts("layout.webcamCropY")}
+					value={cropPanY}
+					min={0}
+					max={100}
+					suffix="%"
+					disabled={layoutControlsDisabled || webcamCrop.height >= 0.999}
+					onChange={(value) => setCropPan("y", value)}
+					onCommit={() => void commit()}
+				/>
+			</div>
+		</Pane>
+	);
+}
+
+// ─── Audio ────────────────────────────────────────────────────────
+
+export function AudioPane() {
+	const ts = useScopedT("settings");
+	const { settings, set, setLive, commit, hasDocument } = useEditorSettings();
+	return (
+		<Pane title={ts("audio.title")} icon={<AudioLines size={14} />} helpText={ts("audio.help")}>
+			<div className={styles.sliderGrid}>
+				<SliderCell
+					label={ts("audio.outputGain")}
+					value={settings.audioGainDb}
+					min={-AUDIO_GAIN_DB_LIMIT}
+					max={AUDIO_GAIN_DB_LIMIT}
+					step={0.5}
+					decimals={1}
+					suffix=" dB"
+					disabled={!hasDocument}
+					onChange={(value) => setLive({ audioGainDb: value })}
+					onCommit={() => void commit()}
+				/>
+			</div>
+			<button
+				type="button"
+				className={styles.secondaryBtn}
+				disabled={!hasDocument}
+				onClick={() => void set({ audioGainDb: 0 })}
+			>
+				{ts("audio.reset")}
+			</button>
 		</Pane>
 	);
 }
@@ -1703,7 +1818,7 @@ export function CursorPane() {
 			helpText={ts("cursor.help")}
 		>
 			<div className={styles.paneRow}>
-				<span className="label">{ts("cursor.show")}</span>
+				<span className={styles.label}>{ts("cursor.show")}</span>
 				<Toggle
 					checked={settings.cursorShow}
 					disabled={!hasDocument}
@@ -1716,7 +1831,7 @@ export function CursorPane() {
 				/>
 			</div>
 			<div className={styles.paneRow}>
-				<span className="label">{ts("cursor.clipToBounds")}</span>
+				<span className={styles.label}>{ts("cursor.clipToBounds")}</span>
 				<Toggle
 					checked={settings.cursor.clipToBounds}
 					disabled={!hasDocument}
@@ -1883,16 +1998,21 @@ export function SliderCell({
 }) {
 	return (
 		<div className={styles.sliderCell}>
-			<div className="head">
-				<span className="label">{label}</span>
+			<div className={styles.head}>
+				<span className={styles.label}>{label}</span>
 				{showValue ? (
-					<span className="val">
+					<span className={styles.val}>
 						{value.toFixed(decimals)}
 						{suffix}
 					</span>
 				) : null}
 			</div>
+			{/* The visible label is a <span>, not a <label htmlFor>, so without this the
+			    input has no accessible name at all — a screen reader announces "slider",
+			    and a test cannot tell two of them apart. That was survivable while a pane
+			    held one slider; the webcam framing row makes it four. */}
 			<input
+				aria-label={label}
 				type="range"
 				min={min}
 				max={max}

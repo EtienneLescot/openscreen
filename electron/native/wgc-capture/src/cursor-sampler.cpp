@@ -2,6 +2,8 @@
 #include <gdiplus.h>
 #include <objbase.h>
 
+#include "dpi_awareness.h"
+
 #include <atomic>
 #include <algorithm>
 #include <chrono>
@@ -416,7 +418,17 @@ int main(int argc, char* argv[]) {
     // capture and the consumer both work in physical pixels.  On any scaled
     // display the cursor then lands short of its real position, by more the
     // further it is from the origin (getopenscreen/openscreen#272).
-    SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
+    //
+    // Bail out rather than sample, and bail out before `ready`: for a display
+    // capture the caller normalizes these coordinates against a *physical* rect,
+    // so an unaware sampler puts every point at 1/scale of its real offset. The
+    // caller turns an exit-before-ready into "record without cursor data"
+    // (handlers.ts catches the failed start and drops the session), which is the
+    // outcome we want -- no overlay beats an overlay in the wrong place.
+    if (!enablePerMonitorV2DpiAwareness()) {
+        std::cerr << "ERROR: Could not enable per-monitor-v2 DPI awareness" << std::endl;
+        return 1;
+    }
 
     if (argc < 2) {
         std::cerr << "Usage: cursor-sampler <intervalMs> [windowHandle]" << std::endl;

@@ -23,6 +23,7 @@ import {
 import { applyProbedDuration } from "@/lib/ai-edition/document/timeline";
 import type { AxcutDocument } from "@/lib/ai-edition/schema";
 import { getEditorSettings } from "@/lib/ai-edition/store/editorSettings";
+import { assetCameraSource } from "@/lib/ai-edition/timeline/camera";
 import { resolveClipSourceEndSec } from "@/lib/ai-edition/timeline/clipDuration";
 import { DEFAULT_ZOOM_DEPTH, ZOOM_DEPTH_SCALES } from "@/lib/ai-edition/timeline/zoom-scale";
 import { buildAutoZoomSuggestions } from "@/lib/ai-edition/timeline/zoom-suggestions";
@@ -83,15 +84,15 @@ function buildNativeClipList(axcutDocument: AxcutDocument): CompositorClipInput[
 		if (!asset?.originalPath) {
 			return [];
 		}
-		const cam = asset.cameraTrack;
+		const camera = assetCameraSource(asset);
 		const sourceEndSec = resolveClipSourceEndSec(clip, asset);
 		return [
 			{
 				screenPath: asset.originalPath,
-				webcamPath: cam?.sourcePath ?? asset.originalPath,
+				webcamPath: camera.path,
 				sourceStartSec: clip.sourceStartSec,
 				sourceEndSec,
-				webcamOffsetSec: cam ? (cam.startMs + cam.offsetMs) / 1000 : 0,
+				webcamOffsetSec: camera.offsetSec,
 				hasAudio: true,
 			},
 		];
@@ -208,6 +209,34 @@ async function runExport(request: CliExportRequest): Promise<CliDoneResult> {
 	}
 	if (probed.durationMs > 0) {
 		axcutDocument = applyProbedDuration(axcutDocument, primaryAssetId, probed.durationMs / 1000);
+	}
+
+	// The camera's dimensions decide the PiP's layout box, and this is the one caller the
+	// document cannot answer for: there is no editor session here to have probed and saved
+	// them, so without this the CLI lays the box out from a hardcoded 4:3 and a 16:9 camera
+	// exports framed differently from the same project opened in the app.
+	//
+	// Failure-tolerant on purpose, unlike the screen probe above which is allowed to reject:
+	// a camera file that has gone missing should cost the export its camera, not the export.
+	if (media.webcamVideoPath) {
+		const camera = await probeVideoDimensions(toFileUrl(media.webcamVideoPath)).catch(() => null);
+		if (camera) {
+			axcutDocument = {
+				...axcutDocument,
+				assets: axcutDocument.assets.map((asset) =>
+					asset.cameraTrack
+						? {
+								...asset,
+								cameraTrack: {
+									...asset.cameraTrack,
+									width: camera.width,
+									height: camera.height,
+								},
+							}
+						: asset,
+				),
+			};
+		}
 	}
 
 	if (request.autoZoom) {

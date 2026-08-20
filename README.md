@@ -60,39 +60,58 @@ See [docs/cli.md](./docs/cli.md).
 
 ## Installation
 
-Download the latest installer for your platform from the [GitHub Releases](https://github.com/getopenscreen/openscreen/releases) page.
+Every platform has a recommended route below. On Windows that is the Microsoft Store; everywhere else it is the installer from the [GitHub Releases](https://github.com/getopenscreen/openscreen/releases) page.
 
 ### macOS
 
-Download the `.dmg` installer directly from the [Releases page](https://github.com/getopenscreen/openscreen/releases). If Gatekeeper blocks the app, you can bypass it by running the following command in your terminal after installation:
+Download the `.dmg` installer directly from the [Releases page](https://github.com/getopenscreen/openscreen/releases) and drag OpenScreen into your Applications folder. Builds from 1.9.0 onward are signed with a Developer ID certificate and notarized by Apple, so Gatekeeper does not block them and no terminal step is needed.
 
-```bash
-xattr -rd com.apple.quarantine /Applications/Openscreen.app
-```
-
-Note: Give your terminal Full Disk Access in **System Settings > Privacy & Security** to grant you access and then run the above command.
-
-After running this command, proceed to **System Settings > Privacy & Security** to grant the necessary permissions for "screen recording" and "accessibility". Once permissions are granted, you can launch the app.
+On first launch, open **System Settings > Privacy & Security** and grant the two permissions OpenScreen needs: **Screen Recording** and **Accessibility**. Recording cannot start until both are granted.
 
 > [!NOTE]
-> **Upgrading from an older version and hitting permission issues?** If you already had OpenScreen installed and the new version won't record (Screen Recording or Accessibility keep failing even after you grant them), uninstall the old version, remove OpenScreen's existing entries under **System Settings > Privacy & Security** (both Screen Recording and Accessibility), then do a fresh install and grant the permissions again when prompted.
+> **macOS 15 and later re-ask for screen-recording permission periodically.** That prompt comes from macOS itself and applies to every third-party screen recorder — it is not a sign that anything is wrong with your install or that an update broke something. Grant it again when asked.
+
+> [!NOTE]
+> **Upgrading from a version older than 1.9.0?** Those builds were not signed with a Developer ID certificate, and macOS ties Screen Recording and Accessibility grants to an app's signature — so it cannot tell the new build is the same app, and the permissions you granted the old one do not carry over. If the new version won't record even after you grant them, remove OpenScreen's existing entries under **System Settings > Privacy & Security** (both Screen Recording and Accessibility), then launch it again and grant them when prompted.
 
 ### Windows
 
-Download the `.exe` installer directly from the [Releases page](https://github.com/getopenscreen/openscreen/releases).
+**Recommended — Microsoft Store**
+
+[Get OpenScreen from the Microsoft Store](https://apps.microsoft.com/detail/9MXQ1HQJL5G5), or from a terminal:
+
+```powershell
+winget install --source msstore OpenScreen
+```
+
+Microsoft signs the Store package during certification, so it installs with no security warning and updates itself.
+
+**Alternative — standalone installer**
+
+Download the `.exe` from the [Releases page](https://github.com/getopenscreen/openscreen/releases). Use this if you can't reach the Store — Windows LTSC, a locked-down work machine, an offline install, or if you want a specific older version.
+
+> [!NOTE]
+> The `.exe` is not code-signed, so Windows SmartScreen shows **"Windows protected your PC"** and reports an unknown publisher. Choose **More info** → **Run anyway** to continue.
+>
+> This is not a sign that something is wrong with the download: an unsigned installer earns SmartScreen's trust per file, so a brand-new build always starts out untrusted no matter how many people installed the previous one. Verifying the signature isn't an option here — there is nothing to verify. If you want the checked path, use the Store build above. If you use the `.exe`, download it only from the Releases page linked here.
 
 ### Linux
 
-Three packages are published to the [Releases page](https://github.com/getopenscreen/openscreen/releases) for each version. Pick the one that matches your distro:
+Four packages are published to the [Releases page](https://github.com/getopenscreen/openscreen/releases) for each version. Pick the one that matches your distro:
 
 **Debian / Ubuntu / Pop!_OS (`.deb`)**
 ```bash
-sudo apt install ./Openscreen-Linux-latest.deb
+sudo apt install ./Openscreen-Linux-*.deb
+```
+
+**Fedora / RHEL / CentOS (`.rpm`)**
+```bash
+sudo dnf install ./Openscreen-Linux-*.rpm
 ```
 
 **Arch / Manjaro (`.pacman`)**
 ```bash
-sudo pacman -U Openscreen-Linux-latest.pacman
+sudo pacman -U Openscreen-Linux-*.pacman
 ```
 
 **Any distro (`.AppImage`)**

@@ -1,3 +1,4 @@
+import { setFailed } from "@actions/core";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const mockCreateForumThread = vi.fn();
@@ -8,6 +9,7 @@ const mockListForRepo = vi.fn();
 vi.mock("@actions/core", () => ({
 	info: vi.fn(),
 	warning: vi.fn(),
+	setFailed: vi.fn(),
 }));
 vi.mock("@actions/github", () => ({
 	context: {
@@ -52,6 +54,7 @@ const BASE_ENV = {
 
 beforeEach(() => {
 	vi.stubGlobal("fetch", vi.fn());
+	vi.mocked(setFailed).mockReset();
 	mockCreateForumThread.mockReset();
 	mockPostChannelMessage.mockReset();
 	mockListMilestones.mockReset();
@@ -65,7 +68,8 @@ beforeEach(() => {
 			k === "STABLE_TAG" ||
 			k === "RC_TAG" ||
 			k === "KIND" ||
-			k === "EXTRA"
+			k === "EXTRA" ||
+			k === "STRICT"
 		) {
 			delete process.env[k];
 		}
@@ -183,5 +187,69 @@ describe("discord-release-announce", () => {
 
 		await loadScript({ ...BASE_ENV, DISCORD_RELEASE_CHANNEL_ID: "123" });
 		expect(mockPostChannelMessage).toHaveBeenCalledTimes(1);
+	});
+});
+
+// Every path below exits 0 without STRICT, which is correct when prerelease.yml
+// and promote.yml call this: the release is already published and a failed
+// announcement must not report it as broken. announce-release.yml is dispatched
+// *because* an announcement was missed, so the same silence there recreates the
+// failure it was invoked to repair — v1.9.0 shipped unannounced exactly that way.
+describe("strict mode", () => {
+	const STRICT_ENV = { ...BASE_ENV, STRICT: "1", DISCORD_RELEASE_CHANNEL_ID: "123" };
+	const exits1 = /process\.exit unexpectedly called with "1"/;
+
+	it("fails when the release tag is missing", async () => {
+		await expect(
+			loadScript({ ...BASE_ENV, STABLE_TAG: "", STRICT: "1", DISCORD_RELEASE_CHANNEL_ID: "123" }),
+		).rejects.toThrow(exits1);
+		expect(vi.mocked(setFailed)).toHaveBeenCalledWith(
+			expect.stringContaining("STABLE_TAG missing"),
+		);
+	});
+
+	it("fails when the Discord configuration is missing", async () => {
+		await expect(loadScript({ STABLE_TAG: "v1.5.0", STRICT: "1" })).rejects.toThrow(exits1);
+		expect(vi.mocked(setFailed)).toHaveBeenCalledWith(expect.stringContaining("DISCORD_BOT_TOKEN"));
+	});
+
+	it("fails when the channel lookup fails", async () => {
+		vi.mocked(fetch).mockResolvedValue({
+			ok: false,
+			status: 403,
+			text: async () => "Missing Access",
+		});
+
+		await expect(loadScript(STRICT_ENV)).rejects.toThrow(exits1);
+		expect(vi.mocked(setFailed)).toHaveBeenCalledWith(expect.stringContaining("403"));
+	});
+
+	it("fails when the post itself fails", async () => {
+		vi.mocked(fetch).mockResolvedValue({ ok: true, status: 200, json: async () => ({ type: 0 }) });
+		mockPostChannelMessage.mockRejectedValue(new Error("failed 403: Missing Permissions"));
+
+		await expect(loadScript(STRICT_ENV)).rejects.toThrow(exits1);
+		expect(vi.mocked(setFailed)).toHaveBeenCalledWith(
+			expect.stringContaining("Missing Permissions"),
+		);
+	});
+
+	it("announces normally when everything works", async () => {
+		vi.mocked(fetch).mockResolvedValue({ ok: true, status: 200, json: async () => ({ type: 0 }) });
+		mockPostChannelMessage.mockResolvedValue({ id: "42" });
+
+		await loadScript(STRICT_ENV);
+
+		expect(mockPostChannelMessage).toHaveBeenCalledTimes(1);
+		expect(vi.mocked(setFailed)).not.toHaveBeenCalled();
+	});
+
+	it("leaves the release workflows non-fatal without STRICT", async () => {
+		vi.mocked(fetch).mockResolvedValue({ ok: true, status: 200, json: async () => ({ type: 0 }) });
+		mockPostChannelMessage.mockRejectedValue(new Error("failed 403: Missing Permissions"));
+
+		await loadScript({ ...BASE_ENV, DISCORD_RELEASE_CHANNEL_ID: "123" });
+
+		expect(vi.mocked(setFailed)).not.toHaveBeenCalled();
 	});
 });

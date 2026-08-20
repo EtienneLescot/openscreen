@@ -2,6 +2,26 @@ import AVFoundation
 import CoreMedia
 import Foundation
 
+/// Where the mixed track goes. `AVAssetWriterInput` satisfies this as it stands, with no
+/// adapter — the protocol exists so `swift test` can drive the mixer without a writer, a file,
+/// or an AAC encoder in the way, and read back the exact frames and presentation timestamps it
+/// produced. Measuring the timeline through an encoder would fold AAC's priming delay into
+/// every assertion; measuring it here is exact.
+public protocol MixedAudioSink: AnyObject {
+	var isReadyForMoreMediaData: Bool { get }
+	@discardableResult
+	func append(_ sampleBuffer: CMSampleBuffer) -> Bool
+}
+
+extension AVAssetWriterInput: MixedAudioSink {}
+
+/// The instant the writer's timeline has reached, in the writer's own time domain — the domain
+/// the session start and every sample's presentation timestamp already live in.
+///
+/// Frozen while the recording is paused, so that a pause stops the audio clock rather than
+/// resetting it: what follows keeps the position it would have had.
+public typealias TimelineClock = () -> CMTime
+
 /// Sums system audio and the microphone into the single AAC track the helper muxes.
 ///
 /// The helper used to give AVAssetWriter one input per source, so a recording with both
@@ -16,15 +36,25 @@ import Foundation
 /// The two sources run off independent clocks, so samples are placed on a shared timeline by
 /// presentation timestamp rather than by arrival order: a source that starts late, drifts, or
 /// drops buffers lands at the offset it belongs at instead of shoving everything after it out
-/// of sync. A chunk goes out as soon as every live source covers it — or, once some other
-/// source has run `stallToleranceFrames` past it, without it, so a microphone that goes quiet
-/// or disappears mid-recording can never stall the track.
+/// of sync.
+///
+/// **The cursor advances on the clock, not on the data.** Chunks go out for as long as the take
+/// runs, filled from whichever source covers them and with silence where none does. Inferring
+/// the position from arrivals instead is the bug this mirrors from Windows (`7e6cde3f`,
+/// getopenscreen/openscreen#406): there the emit counter only moved while a queue held samples,
+/// so a take beginning in silence emitted nothing and the first sound landed at timestamp zero.
+/// Here the same inference lived in the anchor — it was set lazily on the first decoded buffer
+/// to `max(firstPresentationTime, sessionStart)`, so audio that first arrived four seconds in
+/// made frame zero of the mixed track *be* four seconds in, and the leading silence was simply
+/// absent from the file. Anchoring to the session start and letting the clock carry the cursor
+/// covers the leading silence, the trailing silence and mid-take gaps with one mechanism, and
+/// shifts no source relative to any other.
 ///
 /// Not thread-safe by design: every entry point runs on the recorder's serial sample queue,
-/// which is also the queue ScreenCaptureKit delivers both audio outputs on.
-@available(macOS 13.0, *)
-final class AudioTrackMixer {
-	enum Source: Int, CaseIterable {
+/// which is also the queue ScreenCaptureKit delivers both audio outputs on and the queue the
+/// recorder's tick timer fires on.
+public final class AudioTrackMixer {
+	public enum Source: Int, CaseIterable {
 		case system = 0
 		case microphone = 1
 	}
@@ -37,13 +67,28 @@ final class AudioTrackMixer {
 		static let bytesPerFrame = channelCount * MemoryLayout<Int16>.size
 		/// 10 ms — the chunk size the Windows mixer emits too.
 		static let chunkFrames = sampleRate / 100
-		/// How far ahead one source may run before the ones lagging behind it are written off
-		/// as stalled and the chunk goes out without them. Two orders of magnitude above the
-		/// delivery skew between two outputs of the same SCStream, so ordinary jitter never
-		/// trips it; the file is written offline, so the latency it buys back costs nothing.
-		static let stallToleranceFrames = sampleRate / 4
-		/// Longest hole a source may silence-pad across. Past this the source has been dead
-		/// long enough that padding would materialize however long the outage lasted.
+		/// How long a source may deliver nothing at all before it is written off and chunks go
+		/// out without it.
+		///
+		/// Measured from that source's own last delivery, and deliberately not from how far
+		/// behind the clock its coverage is. Those differ for a source that is alive but
+		/// arriving late, and the difference is the whole take: a capture path whose buffers
+		/// reach us a fixed delay after the audio they describe would be permanently "behind",
+		/// so writing it off for that would emit silence, drop the real samples as
+		/// already-passed, and do it again for every chunk. Asking "has it stopped delivering"
+		/// instead is immune to any constant latency, and it is the actual question — a dead
+		/// microphone stops, a slow one does not.
+		///
+		/// Nothing is shifted by this number and no sample moves because of it; it only decides
+		/// when to stop waiting. That is what separates it from the bounded start-up rebase in
+		/// PR #343, where the same 250 ms moved real audio. The value is two orders of magnitude
+		/// above the ~2.5 ms delivery skew between two outputs of the same SCStream, so ordinary
+		/// jitter never trips it, and the file is written offline, so the latency it costs at a
+		/// transition into silence costs the recording nothing.
+		static let emissionGraceFrames = sampleRate / 4
+		/// Longest hole a source may silence-pad across. Past this the source has been dead long
+		/// enough that padding would materialize however long the outage lasted — the cursor
+		/// carries the track across the gap instead.
 		static let maxSilencePadFrames = sampleRate * 2
 		/// Writer backpressure allowance, in chunks (5 s). `expectsMediaDataInRealTime` keeps
 		/// this at zero or one in practice; the cap only bounds a pathological writer stall.
@@ -52,29 +97,43 @@ final class AudioTrackMixer {
 		static let finalFlushTimeout = 5.0
 	}
 
-	private let input: AVAssetWriterInput
+	private let input: MixedAudioSink
+	private let clock: TimelineClock
 	private let includesSystemAudio: Bool
 	private let includesMicrophone: Bool
 	private let microphoneGain: Float
 	private let outputFormatDescription: CMAudioFormatDescription?
 
 	private var sources = [SourceTimeline](repeating: SourceTimeline(), count: Source.allCases.count)
-	private var sessionStart: CMTime?
-	/// Timeline origin: frame 0 of the mixed track, in the writer's time domain.
+	/// Timeline origin: frame 0 of the mixed track, in the writer's time domain. Set once,
+	/// eagerly, to the writer's session start — never inferred from a buffer.
 	private var anchor: CMTime?
 	/// Absolute frame index of the next chunk to emit.
 	private var cursor: Int64 = 0
+	/// Per source, the absolute frame its most recent delivery reached — nil until it delivers
+	/// anything — and the holes measured between deliveries.
+	///
+	/// Measured on what each source handed over, never on what came out of the mixer. Reading a
+	/// hole off the mixed output cannot answer the question the numbers exist for, because
+	/// `SourceTimeline.ingest` zero-fills holes up to `maxSilencePadFrames` into the source's own
+	/// buffer: a tap that stops for anything under two seconds would come back fully covered,
+	/// which is precisely the case that would tell us it is gapped.
+	private var deliveredThroughFrame = [Int64?](repeating: nil, count: Source.allCases.count)
+	private var undeliveredFrames = [Int64](repeating: 0, count: Source.allCases.count)
+	private var longestHoleFrames = [Int64](repeating: 0, count: Source.allCases.count)
 	private var pending: [CMSampleBuffer] = []
 	private var didWarnAboutBacklog = false
 	private var didWarnAboutDecode: Set<Int> = []
 
-	init(
-		input: AVAssetWriterInput,
+	public init(
+		input: MixedAudioSink,
 		includesSystemAudio: Bool,
 		includesMicrophone: Bool,
-		microphoneGain: Double
+		microphoneGain: Double,
+		clock: @escaping TimelineClock
 	) {
 		self.input = input
+		self.clock = clock
 		self.includesSystemAudio = includesSystemAudio
 		self.includesMicrophone = includesMicrophone
 		// The request carries MIC_GAIN_BOOST (1.4); Windows applies it unconditionally and so
@@ -84,22 +143,29 @@ final class AudioTrackMixer {
 		self.outputFormatDescription = Self.makeOutputFormatDescription()
 	}
 
-	/// Anchors the mixer to the writer session. Audio delivered before this is dropped — the
-	/// writer would reject anything ahead of its session start anyway.
-	func beginTimeline(at sessionStart: CMTime) {
-		guard self.sessionStart == nil, sessionStart.isValid else {
+	/// Anchors frame 0 of the mixed track to the writer session start.
+	///
+	/// Eagerly, and to the session start itself: audio that arrives before it is trimmed at
+	/// frame zero rather than moving the origin, and audio that arrives long after it lands at
+	/// the offset it belongs at with real silence in front of it.
+	public func beginTimeline(at sessionStart: CMTime) {
+		guard anchor == nil, sessionStart.isValid, sessionStart.isNumeric else {
 			return
 		}
 
-		self.sessionStart = sessionStart
+		anchor = CMTimeConvertScale(
+			sessionStart,
+			timescale: CMTimeScale(MixFormat.sampleRate),
+			method: .roundHalfAwayFromZero
+		)
 	}
 
-	func ingest(_ sampleBuffer: CMSampleBuffer, from source: Source) {
-		guard includes(source), let sessionStart else {
+	public func ingest(_ sampleBuffer: CMSampleBuffer, from source: Source) {
+		guard includes(source), let anchor else {
 			return
 		}
 		let presentationTime = CMSampleBufferGetPresentationTimeStamp(sampleBuffer)
-		guard presentationTime.isValid else {
+		guard presentationTime.isValid, presentationTime.isNumeric else {
 			return
 		}
 		guard let frames = decodeInterleavedStereo(sampleBuffer, gain: gain(for: source)),
@@ -111,30 +177,38 @@ final class AudioTrackMixer {
 			return
 		}
 
-		if anchor == nil {
-			anchor = CMTimeConvertScale(
-				CMTimeMaximum(presentationTime, sessionStart),
-				timescale: CMTimeScale(MixFormat.sampleRate),
-				method: .roundHalfAwayFromZero
-			)
-		}
-		guard let anchor else {
-			return
-		}
-
-		let offset = CMTimeConvertScale(
-			CMTimeSubtract(presentationTime, anchor),
-			timescale: CMTimeScale(MixFormat.sampleRate),
-			method: .roundHalfAwayFromZero
-		)
-		sources[source.rawValue].ingest(frames, atFrame: offset.value)
-		drain(flushing: false)
+		let now = clock()
+		let startFrame = frameIndex(of: presentationTime, from: anchor)
+		noteDelivery(source, from: startFrame, frameCount: Int64(frames.count / MixFormat.channelCount))
+		sources[source.rawValue].ingest(frames, atFrame: startFrame)
+		// Where the clock stood when this source last said anything — not where its samples
+		// sit. See `emissionGraceFrames`.
+		sources[source.rawValue].lastDeliveryFrame = frameIndex(of: now, from: anchor)
+		drain(upTo: now, grace: Int64(MixFormat.emissionGraceFrames))
 	}
 
-	/// Writes out everything still buffered. Call once, on the sample queue, before the
-	/// writer input is marked as finished.
-	func finish() {
-		drain(flushing: true)
+	/// Advances the cursor to wherever the clock now stands, emitting silence for anything no
+	/// source covered. Called on a timer, because a take that nothing is delivering audio for is
+	/// exactly the take whose timeline has to keep moving.
+	public func tick() {
+		guard anchor != nil else {
+			return
+		}
+		drain(upTo: clock(), grace: Int64(MixFormat.emissionGraceFrames))
+	}
+
+	/// Carries the track out to the end of the take and writes out everything still buffered.
+	/// Call once, on the sample queue, before the writer input is marked as finished — and pass
+	/// the same source time the writer's `endSession` is given, so the audio track and the
+	/// container agree on where the recording ended.
+	public func finish(atSourceTime end: CMTime) {
+		if anchor != nil {
+			// No grace: capture has stopped, so a source that has not covered a chunk by now
+			// never will, and waiting on it would only truncate the tail.
+			drain(upTo: end, grace: 0)
+			closeDeliveryHoles()
+			emitTimelineSummary()
+		}
 		flushPending(force: true)
 	}
 
@@ -160,6 +234,95 @@ final class AudioTrackMixer {
 		])
 	}
 
+	/// Records the hole, if any, between this source's previous delivery and this one.
+	private func noteDelivery(_ source: Source, from startFrame: Int64, frameCount: Int64) {
+		let index = source.rawValue
+		// Audio captured before the session start is trimmed at frame zero, not missing.
+		let start = max(0, startFrame)
+		let previousEnd = deliveredThroughFrame[index] ?? 0
+		if start > previousEnd {
+			let hole = start - previousEnd
+			undeliveredFrames[index] += hole
+			longestHoleFrames[index] = max(longestHoleFrames[index], hole)
+		}
+		deliveredThroughFrame[index] = max(previousEnd, startFrame + frameCount)
+	}
+
+	/// Counts the stretch from each source's last delivery to the end of the take. A source that
+	/// never delivered at all lands here with the whole track, which is the answer that matters.
+	private func closeDeliveryHoles() {
+		for source in Source.allCases where includes(source) {
+			let index = source.rawValue
+			let tail = cursor - (deliveredThroughFrame[index] ?? 0)
+			if tail > 0 {
+				undeliveredFrames[index] += tail
+				longestHoleFrames[index] = max(longestHoleFrames[index], tail)
+			}
+		}
+	}
+
+	/// Reports what each source actually delivered against the finished track.
+	///
+	/// Not diagnostics for their own sake: nothing in the tree recorded whether
+	/// ScreenCaptureKit's system-audio output goes silent-but-delivering or stops delivering
+	/// altogether while nothing is playing, and the answer decides how much of the timeline the
+	/// clock is carrying on its own. One take with system audio enabled and nothing playing
+	/// settles it — `undeliveredSeconds` comes back as the whole track if the tap is gapped the
+	/// way WASAPI loopback is, and near zero if it streams silence. `longestHoleSeconds`
+	/// separates the two shapes a gapped tap can have: one long outage, or a steady stutter.
+	///
+	/// `droppedSeconds` is the cost side of the same ledger, and it should be zero. It counts
+	/// audio a source delivered describing a span the cursor had already emitted, which cannot
+	/// be placed any more. That happens only when a source went quiet for longer than
+	/// `emissionGraceFrames` and then handed over the period it was quiet for, so anything above
+	/// zero here says the grace is too short for that capture path.
+	private func emitTimelineSummary() {
+		var fields: [String: Any] = [
+			"event": "audio-timeline",
+			"code": "audio-timeline-summary",
+			"trackSeconds": seconds(cursor),
+		]
+		for source in Source.allCases where includes(source) {
+			let report = deliveryReport(for: source)
+			fields[source == .system ? "system" : "microphone"] = [
+				"undeliveredSeconds": report.undeliveredSeconds,
+				"longestHoleSeconds": report.longestHoleSeconds,
+				"droppedSeconds": report.droppedSeconds,
+			]
+		}
+		emit(fields)
+	}
+
+	/// What one source handed over across the finished take. The same numbers
+	/// `emitTimelineSummary` reports, reachable without parsing a log line.
+	public struct DeliveryReport {
+		public let trackSeconds: Double
+		public let undeliveredSeconds: Double
+		public let longestHoleSeconds: Double
+		public let droppedSeconds: Double
+	}
+
+	public func deliveryReport(for source: Source) -> DeliveryReport {
+		DeliveryReport(
+			trackSeconds: seconds(cursor),
+			undeliveredSeconds: seconds(undeliveredFrames[source.rawValue]),
+			longestHoleSeconds: seconds(longestHoleFrames[source.rawValue]),
+			droppedSeconds: seconds(sources[source.rawValue].droppedFrames)
+		)
+	}
+
+	private func seconds(_ frames: Int64) -> Double {
+		Double(frames) / Double(MixFormat.sampleRate)
+	}
+
+	private func frameIndex(of time: CMTime, from anchor: CMTime) -> Int64 {
+		CMTimeConvertScale(
+			CMTimeSubtract(time, anchor),
+			timescale: CMTimeScale(MixFormat.sampleRate),
+			method: .roundHalfAwayFromZero
+		).value
+	}
+
 	private func includes(_ source: Source) -> Bool {
 		switch source {
 		case .system:
@@ -178,60 +341,64 @@ final class AudioTrackMixer {
 		}
 	}
 
-	/// Emits every chunk that is ready. A chunk is ready once all live sources cover it; when
-	/// one source has run far enough ahead of another, the laggard is marked stalled and the
-	/// chunk goes out with silence in its place. That is what keeps a dead microphone — or a
-	/// system-audio device that stops delivering — from blocking the whole track.
-	private func drain(flushing: Bool) {
+	/// Emits every chunk the clock has passed.
+	///
+	/// Two ways a chunk goes out. Normally it goes out as soon as every live source covers it,
+	/// which costs no latency at all. Otherwise it goes out once every source still missing
+	/// from it has gone `grace` without delivering anything — the case a purely data-driven
+	/// mixer has no answer for, because when no source is delivering there is nothing to
+	/// measure against. The clock supplies that reference whether one source has gone quiet,
+	/// both have, or neither has ever delivered a single buffer.
+	///
+	/// `chunkEnd <= limitFrame` bounds the loop: a chunk covering time that has not happened yet
+	/// is never emitted, so the cursor can never outrun the take.
+	private func drain(upTo limit: CMTime, grace: Int64) {
+		guard let anchor, limit.isValid, limit.isNumeric else {
+			return
+		}
+		let limitFrame = frameIndex(of: limit, from: anchor)
+
 		while true {
-			let delivered = sources.indices.filter { sources[$0].hasDelivered }
-			guard let furthest = delivered.map({ sources[$0].endFrame }).max(), furthest > cursor else {
+			let chunkEnd = cursor + Int64(MixFormat.chunkFrames)
+			guard chunkEnd <= limitFrame else {
 				break
 			}
 
-			let chunkEnd = cursor + Int64(MixFormat.chunkFrames)
-			let live = delivered.filter { !sources[$0].isStalled }
-			let complete = live.allSatisfy { sources[$0].endFrame >= chunkEnd }
-			if !complete && !flushing {
-				if furthest < chunkEnd + Int64(MixFormat.stallToleranceFrames) {
+			let live = sources.indices.filter { sources[$0].hasDelivered && !sources[$0].isStalled }
+			let laggards = live.filter { sources[$0].endFrame < chunkEnd }
+			if !laggards.isEmpty {
+				guard laggards.allSatisfy({ limitFrame >= sources[$0].lastDeliveryFrame + grace })
+				else {
 					break
 				}
-				for index in live where sources[index].endFrame < chunkEnd {
+				// …and each stays stalled until its next buffer arrives, so one source going
+				// quiet can never hold the track back chunk after chunk.
+				for index in laggards {
 					sources[index].isStalled = true
 				}
 			}
 
-			// emitChunk always advances the cursor when it can; bailing out on the one case
-			// where it cannot is what stops this loop from spinning forever.
-			guard emitChunk() else {
-				break
-			}
+			emitChunk()
 		}
 	}
 
-	@discardableResult
-	private func emitChunk() -> Bool {
-		guard let anchor else {
-			return false
-		}
-
+	private func emitChunk() {
 		var mix = [Float](repeating: 0, count: MixFormat.chunkFrames * MixFormat.channelCount)
 		for index in sources.indices {
 			sources[index].drain(into: &mix, from: cursor, frameCount: MixFormat.chunkFrames)
 		}
 
 		let presentationTime = CMTimeAdd(
-			anchor,
+			anchor ?? .zero,
 			CMTime(value: cursor, timescale: CMTimeScale(MixFormat.sampleRate))
 		)
 		cursor += Int64(MixFormat.chunkFrames)
 
 		guard let sampleBuffer = makeSampleBuffer(from: mix, at: presentationTime) else {
-			return true
+			return
 		}
 		pending.append(sampleBuffer)
 		flushPending(force: false)
-		return true
 	}
 
 	/// `append` is not advisory backpressure — it raises an NSException when the input is not
@@ -521,14 +688,21 @@ final class AudioTrackMixer {
 	}
 
 	/// One source's pending samples, positioned on the shared timeline: `startFrame` is the
-	/// absolute frame index of the first frame in `samples`.
+	/// absolute frame index of the first frame in `samples`. A negative index is ordinary — that
+	/// is audio captured before the writer session started, and `dropFrames` trims it at frame
+	/// zero rather than letting it move the origin.
 	private struct SourceTimeline {
 		private(set) var samples: [Float] = []
 		private(set) var startFrame: Int64 = 0
 		/// A source only counts towards "is this chunk complete" once it has produced audio…
 		private(set) var hasDelivered = false
-		/// …and stops counting the moment it misses a chunk the others already covered.
+		/// …and stops counting once it has gone `emissionGraceFrames` without producing any.
 		var isStalled = false
+		/// Where the clock stood at this source's most recent delivery, in absolute frames.
+		/// The mixer sets it, because only the mixer holds the clock.
+		var lastDeliveryFrame: Int64 = 0
+		/// Captured audio that arrived too late to be placed. See `discardFrames(before:)`.
+		private(set) var droppedFrames: Int64 = 0
 
 		var endFrame: Int64 { startFrame + Int64(samples.count / MixFormat.channelCount) }
 
@@ -547,7 +721,7 @@ final class AudioTrackMixer {
 				if gapFrames > MixFormat.maxSilencePadFrames {
 					// Nothing arrived for seconds. Zero-filling the hole would allocate however
 					// long the outage lasted, so restart here instead and let the mixer's own
-					// catch-up carry the track across; the stale pending samples go with it.
+					// clock carry the track across; the stale pending samples go with it.
 					startFrame = frameIndex
 					samples = frames
 					return
@@ -568,10 +742,10 @@ final class AudioTrackMixer {
 			samples.append(contentsOf: frames[overlap...])
 		}
 
-		/// Adds this source's contribution to one chunk and consumes it. Frames the source
-		/// doesn't cover are simply left alone — `mix` already holds silence there.
+		/// Adds this source's contribution to one chunk and consumes it. Frames it doesn't cover
+		/// are simply left alone — `mix` already holds silence there.
 		mutating func drain(into mix: inout [Float], from cursor: Int64, frameCount: Int) {
-			dropFrames(before: cursor)
+			discardFrames(before: cursor)
 			guard !samples.isEmpty else {
 				return
 			}
@@ -595,16 +769,22 @@ final class AudioTrackMixer {
 
 		/// Discards samples the mixer has already emitted past — a buffer that arrived after
 		/// its chunk went out cannot be placed any more.
-		private mutating func dropFrames(before cursor: Int64) {
+		///
+		/// This is the one path that loses captured audio, so it keeps a count. It costs
+		/// nothing while a source delivers steadily, however far behind the clock it runs; it
+		/// bites only when one went quiet for longer than `emissionGraceFrames`, had silence
+		/// emitted in its place, and then handed over the period it was quiet for.
+		private mutating func discardFrames(before cursor: Int64) {
 			guard startFrame < cursor else {
 				return
 			}
 
 			let available = Int64(samples.count / MixFormat.channelCount)
-			let dropFrames = Int(min(cursor - startFrame, available))
-			if dropFrames > 0 {
-				samples.removeFirst(dropFrames * MixFormat.channelCount)
-				startFrame += Int64(dropFrames)
+			let discarded = Int(min(cursor - startFrame, available))
+			if discarded > 0 {
+				samples.removeFirst(discarded * MixFormat.channelCount)
+				startFrame += Int64(discarded)
+				droppedFrames += Int64(discarded)
 			}
 			if samples.isEmpty {
 				startFrame = cursor

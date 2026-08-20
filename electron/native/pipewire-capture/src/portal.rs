@@ -138,14 +138,39 @@ fn failed(context: &str, error: impl std::fmt::Display) -> PortalError {
     PortalError::Failed(format!("{context}: {error}"))
 }
 
+/// `Screencast::new()` fails when nothing answers on the ScreenCast D-Bus
+/// interface. That is almost never a fault in the session: it is a machine with
+/// no portal BACKEND installed — invisible on any desktop that ships one, which
+/// every distro's desktop metapackage does, and the norm on a minimal install or
+/// a hand-assembled compositor.
+///
+/// This message is not a log line. `message()` is what the helper emits on
+/// `portal-failed`, what `handlers.ts` turns into the IPC error, and what the
+/// recorder finally shows in a toast — so the raw zbus text ("A portal frontend
+/// implementing org.freedesktop.portal.ScreenCast was not found") reached the
+/// user verbatim and read as an internal fault to the one person able to fix it.
+/// Name the package instead, the way `d3d_linux::diagnose` names Mesa.
+///
+/// The list has to be a list. `xdg-desktop-portal` on its own only dispatches;
+/// which backend implements ScreenCast depends on the desktop, so naming the
+/// frontend alone would send someone to install the package they already have.
+fn portal_unavailable(error: impl std::fmt::Display) -> PortalError {
+    PortalError::Failed(format!(
+        "no ScreenCast portal is available on this session ({error}). Screen capture on Linux \
+         goes through xdg-desktop-portal, which needs the backend matching your desktop: \
+         xdg-desktop-portal-gnome (GNOME), xdg-desktop-portal-kde (KDE Plasma), \
+         xdg-desktop-portal-hyprland (Hyprland), xdg-desktop-portal-wlr (Sway and other wlroots \
+         compositors), or xdg-desktop-portal-gtk (anything else). Install one, then log out and \
+         back in."
+    ))
+}
+
 /// Cheap, non-interactive probe: does this portal offer METADATA cursor mode?
 ///
 /// Split out from [`negotiate`] so the helper can answer that question — and
 /// emit `ready` — before anything raises a dialog.
 pub async fn cursor_metadata_supported() -> Result<bool, PortalError> {
-    let proxy = Screencast::new()
-        .await
-        .map_err(|error| failed("cannot reach org.freedesktop.portal.ScreenCast", error))?;
+    let proxy = Screencast::new().await.map_err(portal_unavailable)?;
     let cursor_modes = proxy
         .available_cursor_modes()
         .await
@@ -161,9 +186,7 @@ pub async fn cursor_metadata_supported() -> Result<bool, PortalError> {
 /// process-global `OnceLock`, so the portal session stays open until this
 /// process exits — which is exactly the lifetime we want.
 pub async fn negotiate(cursor_mode: CursorMode) -> Result<PortalStream, PortalError> {
-    let proxy = Screencast::new()
-        .await
-        .map_err(|error| failed("cannot reach org.freedesktop.portal.ScreenCast", error))?;
+    let proxy = Screencast::new().await.map_err(portal_unavailable)?;
 
     let cursor_modes = proxy
         .available_cursor_modes()

@@ -1,0 +1,242 @@
+name: Publish to Microsoft Store (retry)
+
+# Submits an already-built appx to the Store, without rebuilding anything.
+#
+# build.yml's own publish-msstore job is the normal path. This exists because
+# that job has no usable retry: re-running it replays the workflow definition
+# frozen into the original run, so a fix landed afterwards is not picked up, and
+# re-dispatching build.yml rebuilds every platform and re-uploads the release
+# assets with `--clobber` — rewriting a published release to correct a Store
+# submission. v1.9.5 hit exactly that dead end.
+#
+# So this takes the appx that build already produced and submits it. Nothing is
+# rebuilt, no release asset is touched, and the flaky macOS legs are not in the
+# way.
+
+on:
+  workflow_dispatch:
+    inputs:
+      release_tag:
+        description: "Stable tag whose appx should be submitted (e.g. v1.9.5)"
+        required: true
+        type: string
+      run_id:
+        description: "Build run to take the appx from. Leave empty to use the most recent build for the tag."
+        required: false
+        type: string
+      dry_run:
+        description: "Create the submission but leave it in draft (--noCommit). Use this to test without shipping."
+        required: false
+        type: boolean
+        default: false
+
+# Read-only: this checks the tree out so the CLI can identify the project, and
+# reads a build artifact. Partner Center is reached with its own Entra
+# credentials, not with this token.
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: publish-msstore-${{ inputs.release_tag }}
+  cancel-in-progress: false
+
+jobs:
+  submit:
+    name: Submit ${{ inputs.release_tag }} to the Store
+    runs-on: windows-latest
+    # No job-level `if` on MSSTORE_PRODUCT_ID, deliberately. build.yml can afford
+    # to skip: it is one job among many in an automatic release. This one is
+    # something a person asked for by hand, and a skipped job is green and
+    # silent — the exact shape that let Homebrew and WinGet report success while
+    # publishing nothing for eight releases. Missing configuration is checked
+    # below and fails loudly instead.
+    steps:
+      - name: Validate the tag
+        id: tag
+        shell: bash
+        env:
+          TAG: ${{ inputs.release_tag }}
+        run: |
+          if [[ ! "$TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "::error::Expected a stable tag like v1.9.5; got '${TAG}'. RCs must never reach the Store."
+            exit 1
+          fi
+          echo "tag=$TAG" >> "$GITHUB_OUTPUT"
+
+      # All-or-nothing, as in build.yml: a half-configured publisher is a
+      # misnamed secret, and failing loudly beats submitting nothing quietly.
+      - name: Resolve Store configuration
+        id: store
+        shell: bash
+        env:
+          MSSTORE_PRODUCT_ID: ${{ vars.MSSTORE_PRODUCT_ID }}
+          AZURE_AD_TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          AZURE_AD_APPLICATION_CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          AZURE_AD_APPLICATION_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+        run: |
+          # MSSTORE_PRODUCT_ID is in here rather than in a job-level `if` so an
+          # unconfigured repository gets an error and a Summary line, not a
+          # silent skip on a run somebody triggered on purpose.
+          required=(MSSTORE_PRODUCT_ID AZURE_AD_TENANT_ID
+                    AZURE_AD_APPLICATION_CLIENT_ID AZURE_AD_APPLICATION_SECRET
+                    SELLER_ID)
+          missing=()
+          for name in "${required[@]}"; do
+            [[ -n "${!name}" ]] || missing+=("$name")
+          done
+          if [[ ${#missing[@]} -ne 0 ]]; then
+            echo "::error::Store configuration incomplete; missing: ${missing[*]}"
+            exit 1
+          fi
+
+      - name: Check out the tag
+        uses: actions/checkout@v7
+        with:
+          # `msstore publish` takes a project root and detects the app type
+          # there; it is not given a package to introspect. Checking out the tag
+          # rather than the default branch keeps that project state matching the
+          # appx being submitted.
+          ref: ${{ steps.tag.outputs.tag }}
+          # Nothing here pushes, and the token would otherwise sit in .git/config
+          # for the third-party CLI action below to read.
+          persist-credentials: false
+
+      - name: Resolve the build run
+        id: run
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+          RUN_ID: ${{ inputs.run_id }}
+        run: |
+          if [[ -n "$RUN_ID" ]]; then
+            # A hand-typed run id is the one input that can quietly ship the
+            # wrong bytes: nothing downstream re-checks what is inside the
+            # artifact, so a transposed digit could submit another commit's
+            # package to the Store under this tag. Confirm it is a build.yml run
+            # and that it was built from the tag being published.
+            INFO="$(gh api "repos/${GITHUB_REPOSITORY}/actions/runs/${RUN_ID}" \
+              --jq '{path: .path, sha: .head_sha}' 2>/dev/null)" || {
+              echo "::error::Run ${RUN_ID} not found in ${GITHUB_REPOSITORY}."
+              exit 1
+            }
+            RUN_PATH="$(jq -r .path <<<"$INFO")"
+            RUN_SHA="$(jq -r .sha <<<"$INFO")"
+            TAG_SHA="$(git rev-parse HEAD)"
+            if [[ "$RUN_PATH" != ".github/workflows/build.yml" ]]; then
+              echo "::error::Run ${RUN_ID} is ${RUN_PATH}, not build.yml."
+              exit 1
+            fi
+            if [[ "$RUN_SHA" != "$TAG_SHA" ]]; then
+              echo "::error::Run ${RUN_ID} built ${RUN_SHA}, but ${TAG} is ${TAG_SHA}."
+              exit 1
+            fi
+            echo "Using run ${RUN_ID}: build.yml at ${RUN_SHA}"
+          else
+            # Deliberately not filtered on conclusion: the run this is most
+            # likely to be retrying is the one whose Store step failed, so
+            # requiring success would skip exactly the build we want.
+            RUN_ID="$(gh run list --workflow build.yml --branch "$TAG" \
+              --limit 1 --json databaseId --jq '.[0].databaseId')"
+            if [[ -z "$RUN_ID" || "$RUN_ID" == "null" ]]; then
+              echo "::error::No build.yml run found for ${TAG}. Pass run_id explicitly."
+              exit 1
+            fi
+            echo "Resolved the most recent build for ${TAG}: $RUN_ID"
+          fi
+          echo "id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download the Store package
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_ID: ${{ steps.run.outputs.id }}
+        run: |
+          mkdir -p artifacts/store
+          gh run download "$RUN_ID" --name openscreen-windows-store --dir artifacts/store
+
+      - name: Configure Microsoft Store CLI
+        uses: microsoft/microsoft-store-apppublisher@v1.1
+        # PINNED, and it has to stay pinned. The action defaults to `latest`, and
+        # msstore-cli v0.4.0 (published 2026-08-18, the first release since v0.3.9
+        # in January) ships an Azure SDK client whose `ClientOptions.Retry.NetworkTimeout`
+        # is 0:00:00 — every blob upload is cancelled the instant it starts. The CLI
+        # reports that as "Error while uploading the application package.", so the
+        # submission is created and configured and then dies at "Uploading Bundle to
+        # Azure blob: 0%", six instant retries later. v1.9.6 hit it three times in a
+        # row; the same package and account had submitted fine on v0.3.9 three days
+        # earlier. Unpin only against a CLI release that fixes the timeout.
+        with:
+          version: v0.3.9
+
+      - name: Submit the package to the Store
+        id: submit
+        shell: pwsh
+        env:
+          PRODUCT_ID: ${{ vars.MSSTORE_PRODUCT_ID }}
+          TENANT_ID: ${{ secrets.AZURE_AD_TENANT_ID }}
+          SELLER_ID: ${{ secrets.SELLER_ID }}
+          CLIENT_ID: ${{ secrets.AZURE_AD_APPLICATION_CLIENT_ID }}
+          CLIENT_SECRET: ${{ secrets.AZURE_AD_APPLICATION_SECRET }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          # Secrets arrive through env, not through expression interpolation
+          # expanded straight into shell source.
+          msstore reconfigure `
+            --tenantId $env:TENANT_ID `
+            --sellerId $env:SELLER_ID `
+            --clientId $env:CLIENT_ID `
+            --clientSecret $env:CLIENT_SECRET
+
+          $packages = @(Get-ChildItem artifacts/store -Recurse -Include '*.appx','*.msix','*.msixupload')
+          if ($packages.Count -eq 0) { throw 'no package in the downloaded artifact' }
+          if ($packages.Count -ne 1) {
+            throw "expected one package, found $($packages.Count): refusing to guess which to submit"
+          }
+          $pkg = $packages[0]
+
+          # The positional argument is the project root, NOT the package: passing
+          # the package there is what failed v1.9.5 ("could not find a project
+          # publisher"). The package goes through the option below, which takes
+          # the DIRECTORY holding it: the CLI's own usage says
+          # `-i, --inputDirectory`, and rejects the `--inputFile` that Microsoft
+          # Learn documents. The v1.9.5 dry run is what caught that.
+          # Not $args: that is a PowerShell automatic variable.
+          # -v is not decoration: without it the CLI reports upload failures as the
+          # bare line 'Error while uploading the application package.' with no status
+          # code, no URL and no body, which is what made v1.9.6 undiagnosable.
+          $cmdArgs = @('publish', '.', '--inputDirectory', $pkg.Directory.FullName, '--appId', $env:PRODUCT_ID, '-v')
+          if ($env:DRY_RUN -eq 'true') {
+            # Leaves the submission in draft instead of sending it to
+            # certification: the only way to test this path without shipping.
+            $cmdArgs += '--noCommit'
+            Write-Output "DRY RUN: submitting $($pkg.Name) as a draft only"
+          } else {
+            Write-Output "Submitting $($pkg.Name) to product $env:PRODUCT_ID"
+          }
+          msstore @cmdArgs
+
+      # Report what happened, not what was configured — the mistake that let
+      # v1.9.5's failed submission read as a success (see 1617c930).
+      - name: Summary
+        if: always()
+        shell: bash
+        env:
+          SUBMIT: ${{ steps.submit.outcome }}
+          TAG: ${{ inputs.release_tag }}
+          DRY_RUN: ${{ inputs.dry_run }}
+        run: |
+          case "$SUBMIT" in
+            success)
+              if [[ "$DRY_RUN" == "true" ]]; then
+                echo "Draft submission created for ${TAG}; nothing was sent to certification." >> "$GITHUB_STEP_SUMMARY"
+              else
+                echo "Submitted ${TAG} to the Store. Certification still has to pass before it goes live." >> "$GITHUB_STEP_SUMMARY"
+              fi
+              ;;
+            *)
+              echo "Store submission for ${TAG} did NOT happen (submit step: ${SUBMIT:-did not run}). The appx is unchanged; upload it by hand if this keeps failing." >> "$GITHUB_STEP_SUMMARY"
+              ;;
+          esac

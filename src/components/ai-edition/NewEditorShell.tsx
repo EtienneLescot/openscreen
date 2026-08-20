@@ -41,6 +41,7 @@ import {
 } from "./Modals";
 import { Preview } from "./Preview";
 import type { TrimTarget } from "./RightPanes";
+import { importPendingRecording } from "./recordingImport";
 import v4 from "./v4/EditorShellV4.module.css";
 import { type EditorMode, EditorTopBar } from "./v4/EditorTopBar";
 import { type Facet, FloatingInspector } from "./v4/FloatingInspector";
@@ -91,7 +92,6 @@ export function NewEditorShell() {
 	const projectId = useProjectStore((s) => s.projectId);
 	const dirty = useProjectStore((s) => s.dirty);
 	const createProject = useProjectStore((s) => s.createProject);
-	const addAsset = useProjectStore((s) => s.addAsset);
 	const setCurrentTime = useProjectStore((s) => s.setCurrentTime);
 	const setSourceDuration = useProjectStore((s) => s.setSourceDuration);
 	const loadProject = useProjectStore((s) => s.loadProject);
@@ -172,7 +172,7 @@ export function NewEditorShell() {
 	// don't race each other's save and overwrite one another in the
 	// store. The hook reads the doc inside the chain (after awaiting the
 	// previous save) — see its source for the race this fixes.
-	const { apply: applyTimelineOp } = useSequentialTimelineOps({
+	const { apply: applyTimelineOp, enqueue: enqueueTimelineWrite } = useSequentialTimelineOps({
 		fallbackDocument: document,
 		saveDocument,
 	});
@@ -222,59 +222,45 @@ export function NewEditorShell() {
 		void (async () => {
 			if (!window.electronAPI) return;
 			try {
-				const result = await window.electronAPI.getCurrentRecordingSession();
-				if (!result.success || !result.session?.screenVideoPath) {
-					// ponytail: no active recording — try to restore the user's
-					// most recent project. The browser-shim's listProjects
-					// returns the seeded `browser-shim-projects` entries, so
-					// e2e tests can land directly in a populated editor; for
-					// real Electron users this is the expected "open last
-					// project on launch" UX.
-					try {
-						const projects = await nativeBridgeClient.aiEdition.listProjects();
-						console.info("[editor] listProjects returned", projects);
-						if (projects.length > 0) {
-							console.info("[editor] auto-loading project", projects[0].id);
-							await loadProject(projects[0].id);
-							const state = useProjectStore.getState();
-							console.info(
-								"[editor] post-loadProject status=",
-								state.status,
-								"error=",
-								JSON.stringify(state.error),
-								"doc=",
-								state.document ? "loaded" : "null",
-							);
-						}
-					} catch (e) {
-						console.warn("[editor] auto-load failed", e);
-					}
+				if (await importPendingRecording()) {
+					toast.success("Recording added to a new project");
 					return;
 				}
-				const screenPath = result.session.screenVideoPath;
-				const label = screenPath.split(/[\\/]/).pop() || "Recording";
-				await createProject(`Recording ${new Date().toLocaleString()}`);
-				await addAsset(screenPath, label);
-				// ponytail: MediaRecorder WebMs ship with duration = NaN until
-				// fix-webm-duration patches the EBML header; until that flows
-				// through the asset, drop a default 60s clip into the timeline
-				// so the editor isn't stuck on "No clips yet" the moment the
-				// user lands in the project. Real duration overwrites this
-				// when handleLoadedMetadata fires with a finite value.
-				const doc = useProjectStore.getState().document;
-				if (doc && doc.timeline.clips.length === 0 && doc.assets.length > 0) {
-					await useProjectStore
-						.getState()
-						.replaceTimeline([{ startSec: 0, endSec: 60 }], "Auto-imported recording");
-				}
-				toast.success("Recording added to a new project");
 			} catch (err) {
 				toast.error("Could not auto-create project from recording", {
 					description: err instanceof Error ? err.message : String(err),
 				});
+				return;
+			}
+			// ponytail: no recording waiting — restore the user's most recent
+			// project. The browser-shim's listProjects returns the seeded
+			// `browser-shim-projects` entries, so e2e tests can land directly in a
+			// populated editor; for real Electron users this is the expected "open
+			// last project on launch" UX — and, now that the recording hand-off is
+			// consumed on import, it is also what reopening the editor after a
+			// recording lands on: the project that recording went into, settings and
+			// all, instead of a second project on the same file.
+			try {
+				const projects = await nativeBridgeClient.aiEdition.listProjects();
+				console.info("[editor] listProjects returned", projects);
+				if (projects.length > 0) {
+					console.info("[editor] auto-loading project", projects[0].id);
+					await loadProject(projects[0].id);
+					const state = useProjectStore.getState();
+					console.info(
+						"[editor] post-loadProject status=",
+						state.status,
+						"error=",
+						JSON.stringify(state.error),
+						"doc=",
+						state.document ? "loaded" : "null",
+					);
+				}
+			} catch (e) {
+				console.warn("[editor] auto-load failed", e);
 			}
 		})();
-	}, [addAsset, createProject, loadProject]);
+	}, [loadProject]);
 
 	// Warn on close when dirty
 	useEffect(() => {
@@ -316,15 +302,9 @@ export function NewEditorShell() {
 		// 3. Handle request-save-before-close from Electron
 		const unsubSaveBeforeClose = window.electronAPI.onRequestSaveBeforeClose(async () => {
 			const doc = useProjectStore.getState().document;
-			if (doc) {
-				try {
-					await saveDocument(doc);
-					return true;
-				} catch {
-					toast.error("Failed to save before closing");
-					return false;
-				}
-			}
+			// The store already toasted the reason; answering false is what keeps the
+			// window open on top of it.
+			if (doc) return await saveDocument(doc);
 			return true;
 		});
 
@@ -338,6 +318,7 @@ export function NewEditorShell() {
 		if (!document) return [];
 		return document.assets.map((asset) => ({
 			id: asset.id,
+			filePath: /^(https?|blob|data):/.test(asset.originalPath) ? undefined : asset.originalPath,
 			// Real Electron assets are filesystem paths and go through toFileUrl.
 			// In the browser preview an asset can already point at an http(s)/
 			// blob/data URL served by Vite; toFileUrl would mangle those into a
@@ -412,11 +393,33 @@ export function NewEditorShell() {
 		[setCurrentTime],
 	);
 
+	// Same race as `useSequentialTimelineOps` — see that file's header. `insertClipAt` is a
+	// read-modify-write of the whole document, so two adds in flight at once both read the
+	// pre-insert doc and the second `saveDocument` clobbers the first, silently dropping a
+	// clip. Two adds is one double-click on **Add to timeline** (the button has no pending
+	// state) or two quick drags.
+	//
+	// It goes on that hook's queue rather than one of its own: a second queue serialises
+	// adds against adds and nothing else, so an add still clobbers a trim landing at the
+	// same moment. It can't route through `apply()` — inserting a clip is not an
+	// AxcutTimelineOperation, it carries its own background duration probe — hence
+	// `enqueue`, which is the same chain without that constraint.
+	//
+	// The append index is read INSIDE the chain for the same reason the doc is: off the
+	// closure, `clips.length` stays frozen at the last render, so the second add lands
+	// before the first instead of after it.
 	const handleDropAsset = useCallback(
-		(assetId: string) => {
-			void tl.insertClipAt(assetId, clips.length);
-		},
-		[tl, clips.length],
+		(assetId: string) =>
+			enqueueTimelineWrite(() => {
+				const at = useProjectStore.getState().document?.timeline.clips.length ?? 0;
+				return tl.insertClipAt(assetId, at);
+			}).catch((error) => {
+				toast.error(te("mediaStage.couldNotAddAsset"), {
+					description: error instanceof Error ? error.message : String(error),
+				});
+				throw error;
+			}),
+		[tl, te, enqueueTimelineWrite],
 	);
 
 	// Ref so the 'ended' listener below always sees the latest clips without tearing
@@ -608,17 +611,31 @@ export function NewEditorShell() {
 		[createProject],
 	);
 
-	const handleSave = useCallback(async () => {
-		const doc = useProjectStore.getState().document;
-		if (!doc) return;
+	// The only way to get rid of a project short of deleting its file by hand.
+	// Media is left alone on purpose: a recording can back several projects, and
+	// the dialog says so before it asks.
+	const handleDeleteProject = useCallback(async (id: string) => {
 		try {
-			await saveDocument(doc);
-			toast.success("Project saved");
+			const result = await nativeBridgeClient.aiEdition.delete(id);
+			if (!result.success) throw new Error(result.error ?? "Failed to delete project");
+			setProjectSummaries((prev) => prev.filter((p) => p.id !== id));
+			// Deleting the project that is open leaves the editor pointing at a file
+			// that no longer exists — any save from there would recreate it.
+			if (useProjectStore.getState().projectId === id) {
+				useProjectStore.getState().clear();
+			}
+			toast.success("Project deleted");
 		} catch (err) {
-			toast.error("Save failed", {
+			toast.error("Could not delete project", {
 				description: err instanceof Error ? err.message : String(err),
 			});
 		}
+	}, []);
+
+	const handleSave = useCallback(async () => {
+		const doc = useProjectStore.getState().document;
+		if (!doc) return;
+		if (await saveDocument(doc)) toast.success("Project saved");
 	}, [saveDocument]);
 
 	// Native File menu (electron/main.ts) → v4 actions. The menu is shown via
@@ -646,13 +663,7 @@ export function NewEditorShell() {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
 			if (title === doc.project.title) return;
-			try {
-				await saveDocument({ ...doc, project: { ...doc.project, title } });
-			} catch (err) {
-				toast.error("Rename failed", {
-					description: err instanceof Error ? err.message : String(err),
-				});
-			}
+			await saveDocument({ ...doc, project: { ...doc.project, title } });
 		},
 		[saveDocument],
 	);
@@ -673,13 +684,12 @@ export function NewEditorShell() {
 				}
 				if (choice === "save") {
 					const doc = useProjectStore.getState().document;
-					if (doc) {
-						try {
-							await saveDocument(doc);
-						} catch {
-							resolve("cancel");
-							return;
-						}
+					// A failed save cancels the action that prompted this dialog. The store has
+					// already said why -- which is what the bare `catch {}` here used to swallow,
+					// leaving the window refusing to close with nothing on screen explaining it.
+					if (doc && !(await saveDocument(doc))) {
+						resolve("cancel");
+						return;
 					}
 				}
 				if (action === "record") {
@@ -838,13 +848,8 @@ export function NewEditorShell() {
 					if (choice === "cancel") return;
 					if (choice === "save") {
 						const doc = useProjectStore.getState().document;
-						if (doc) {
-							try {
-								await saveDocument(doc);
-							} catch {
-								return;
-							}
-						}
+						// Stay put if the save did not land -- the store has already said why.
+						if (doc && !(await saveDocument(doc))) return;
 					}
 					setNewProjectOpen(true);
 				})();
@@ -857,13 +862,8 @@ export function NewEditorShell() {
 					if (choice === "cancel") return;
 					if (choice === "save") {
 						const doc = useProjectStore.getState().document;
-						if (doc) {
-							try {
-								await saveDocument(doc);
-							} catch {
-								return;
-							}
-						}
+						// Stay put if the save did not land -- the store has already said why.
+						if (doc && !(await saveDocument(doc))) return;
 					}
 					setOpenProjectOpen(true);
 				})();
@@ -1219,7 +1219,7 @@ export function NewEditorShell() {
 							/>
 						</>
 					) : mode === "media" ? (
-						<MediaStage />
+						<MediaStage onAddToTimeline={handleDropAsset} />
 					) : (
 						<RecStage
 							onStartRecording={() => void handleNewRecording()}
@@ -1271,6 +1271,7 @@ export function NewEditorShell() {
 				projects={projectSummaries}
 				activeProjectId={projectId}
 				onSelect={handleSelectProject}
+				onDelete={handleDeleteProject}
 				onBrowse={handleBrowseProject}
 			/>
 			<NewProjectModal

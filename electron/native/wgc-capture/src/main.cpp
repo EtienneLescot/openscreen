@@ -1,4 +1,5 @@
 #include "audio_sample_utils.h"
+#include "dpi_awareness.h"
 #include "mf_encoder.h"
 #include "monitor_utils.h"
 #include "wasapi_loopback_capture.h"
@@ -193,6 +194,190 @@ std::string jsonEscape(const std::string& value) {
         }
     }
     return result;
+}
+
+// HighPart:LowPart, matching how Windows tooling and QueryDisplayConfig traces
+// spell a LUID, so a value from a bug report can be grepped against them.
+std::string formatLuid(const LUID& luid) {
+    return std::to_string(luid.HighPart) + ":" + std::to_string(luid.LowPart);
+}
+
+// Reports which GPU the capture device landed on, and which one actually drives
+// the monitor being captured.
+//
+// WgcSession creates its device with D3D11CreateDevice(nullptr, ...) -- the
+// default adapter -- and nothing anywhere asks whether that is the adapter that
+// owns the target display. On a single-GPU machine the question does not arise.
+// On a hybrid laptop, a machine with a discrete card, or one with virtual
+// display adapters, the two can differ, and then every frame WGC delivers has
+// crossed an adapter boundary before the caller ever touches it. That crossing
+// is driver work on both GPUs, and it is the most plausible remaining candidate
+// for the stop hangs in #252 / #327, which nobody has reproduced on hardware we
+// control.
+//
+// This does not change behaviour, and deliberately so: it turns the next bug
+// report into evidence instead of another round of guessing. Failures here are
+// silent -- a diagnostic that can abort a recording is worse than no diagnostic.
+void reportCaptureAdapters(ID3D11Device* device, HMONITOR targetMonitor) {
+    if (!device) {
+        return;
+    }
+
+    Microsoft::WRL::ComPtr<IDXGIDevice> dxgiDevice;
+    if (FAILED(device->QueryInterface(IID_PPV_ARGS(&dxgiDevice)))) {
+        return;
+    }
+    Microsoft::WRL::ComPtr<IDXGIAdapter> deviceAdapter;
+    if (FAILED(dxgiDevice->GetAdapter(&deviceAdapter))) {
+        return;
+    }
+    DXGI_ADAPTER_DESC deviceDesc{};
+    if (FAILED(deviceAdapter->GetDesc(&deviceDesc))) {
+        return;
+    }
+
+    // The device's own adapter knows its factory, so there is no need to create
+    // one (and no second code path to keep alive if that ever needs a flag).
+    Microsoft::WRL::ComPtr<IDXGIFactory1> factory;
+    if (FAILED(deviceAdapter->GetParent(IID_PPV_ARGS(&factory)))) {
+        return;
+    }
+
+    std::wstring monitorAdapterName;
+    std::string monitorAdapterLuid;
+    bool monitorAdapterFound = false;
+    bool sameAdapter = false;
+    // Set when EnumOutputs says the outputs could not be looked at, rather than
+    // that there are none. The two are different answers and the event reports
+    // them differently -- see the comment on the inner loop.
+    bool enumerationUnavailable = false;
+    // The loops end on FAILED(), not on DXGI_ERROR_NOT_FOUND specifically.
+    // NOT_FOUND is itself a failure code, so one test covers the normal end of
+    // the enumeration and every other way it can stop -- and the other ways are
+    // what matter here: neither call fills its out-pointer when it fails, so
+    // testing only for NOT_FOUND left a null ComPtr to be dereferenced on the
+    // next line, taking down a recording from inside the one function in this
+    // file that promises never to.
+    for (UINT adapterIndex = 0;; ++adapterIndex) {
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+        if (FAILED(factory->EnumAdapters1(adapterIndex, &adapter)) || !adapter) {
+            break;
+        }
+        for (UINT outputIndex = 0;; ++outputIndex) {
+            Microsoft::WRL::ComPtr<IDXGIOutput> output;
+            // NOT_CURRENTLY_AVAILABLE is the exception to the rule above, and it
+            // has to be told apart: it is what EnumOutputs answers a process in
+            // session 0, and it means the outputs could not be inspected rather
+            // than that the adapter has none. Collapsing the two would report
+            // "no adapter claims this monitor" for a machine we never got to
+            // look at -- and that is a value this diagnostic tells its readers
+            // to interpret as an active virtual display. Same class of lie as
+            // the identical descriptions this event was just fixed for.
+            const HRESULT outputHr = adapter->EnumOutputs(outputIndex, &output);
+            if (outputHr == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE) {
+                enumerationUnavailable = true;
+                break;
+            }
+            if (FAILED(outputHr) || !output) {
+                break;
+            }
+            DXGI_OUTPUT_DESC outputDesc{};
+            if (FAILED(output->GetDesc(&outputDesc)) || outputDesc.Monitor != targetMonitor) {
+                continue;
+            }
+            DXGI_ADAPTER_DESC1 adapterDesc{};
+            if (FAILED(adapter->GetDesc1(&adapterDesc))) {
+                continue;
+            }
+            monitorAdapterName = adapterDesc.Description;
+            monitorAdapterLuid = formatLuid(adapterDesc.AdapterLuid);
+            monitorAdapterFound = true;
+            // Compared by LUID rather than by description, because two adapters
+            // of the same model report the same string.
+            sameAdapter = adapterDesc.AdapterLuid.LowPart == deviceDesc.AdapterLuid.LowPart &&
+                adapterDesc.AdapterLuid.HighPart == deviceDesc.AdapterLuid.HighPart;
+        }
+        if (monitorAdapterFound) {
+            break;
+        }
+    }
+
+    // The LUIDs are reported, not just the descriptions, because on the exact
+    // configuration this diagnostic exists to catch the two descriptions are
+    // IDENTICAL. An IddCx virtual display driver renders through the physical
+    // GPU and inherits its description string while being a separate DXGI
+    // adapter with its own LUID -- measured on a rented multi-adapter box:
+    //
+    //   adapter[0]  NVIDIA Quadro RTX 4000   LUID 0:24084       -> \\.\DISPLAY1
+    //   adapter[1]  NVIDIA Quadro RTX 4000   LUID 0:12889146    -> the IDD
+    //
+    // So a machine with the divergence would have printed two identical names
+    // next to sameAdapter:false, which reads as a bug in this reporting rather
+    // than as the finding it is. The comparison was always by LUID; only the
+    // output was ambiguous.
+    std::cout << "{\"event\":\"capture-adapter\",\"schemaVersion\":2,\"deviceAdapter\":\""
+              << jsonEscape(wideToUtf8(deviceDesc.Description)) << "\",\"deviceLuid\":\""
+              << formatLuid(deviceDesc.AdapterLuid) << "\",\"monitorAdapter\":";
+    if (monitorAdapterFound) {
+        std::cout << "\"" << jsonEscape(wideToUtf8(monitorAdapterName)) << "\",\"monitorLuid\":\""
+                  << monitorAdapterLuid << "\",\"monitorLookup\":\"ok\",\"sameAdapter\":"
+                  << (sameAdapter ? "true" : "false");
+    } else if (enumerationUnavailable) {
+        // Session 0: the outputs were never inspected. Reported as its own
+        // state so nobody reads it as a finding about the hardware.
+        std::cout << "null,\"monitorLuid\":null,\"monitorLookup\":\"unavailable\",\"sameAdapter\":null";
+    } else {
+        // The enumeration completed and no output claims this monitor: it is
+        // driven by something DXGI does not enumerate, which on the machines in
+        // #252 would mean a virtual display adapter. Worth seeing in its own
+        // right -- but only distinguishable from the case above because that
+        // one is now labelled.
+        std::cout << "null,\"monitorLuid\":null,\"monitorLookup\":\"no-output-claims-it\",\"sameAdapter\":null";
+    }
+    std::cout << "}" << std::endl;
+
+    // The full enumeration, to stderr, once at startup. Two adapters sharing a
+    // description is the thing a reader needs to see with their own eyes before
+    // they will believe sameAdapter over the names, and an adapter with no
+    // output at all is how an inactive virtual display presents.
+    for (UINT adapterIndex = 0;; ++adapterIndex) {
+        Microsoft::WRL::ComPtr<IDXGIAdapter1> adapter;
+        if (FAILED(factory->EnumAdapters1(adapterIndex, &adapter)) || !adapter) {
+            break;
+        }
+        DXGI_ADAPTER_DESC1 desc{};
+        if (FAILED(adapter->GetDesc1(&desc))) {
+            continue;
+        }
+        std::cerr << "[adapters] " << adapterIndex << " luid=" << formatLuid(desc.AdapterLuid)
+                  << " \"" << wideToUtf8(desc.Description) << "\"";
+        UINT outputCount = 0;
+        bool outputsUnavailable = false;
+        for (UINT outputIndex = 0;; ++outputIndex) {
+            Microsoft::WRL::ComPtr<IDXGIOutput> output;
+            const HRESULT outputHr = adapter->EnumOutputs(outputIndex, &output);
+            if (outputHr == DXGI_ERROR_NOT_CURRENTLY_AVAILABLE) {
+                outputsUnavailable = true;
+                break;
+            }
+            if (FAILED(outputHr) || !output) {
+                break;
+            }
+            DXGI_OUTPUT_DESC outputDesc{};
+            if (SUCCEEDED(output->GetDesc(&outputDesc))) {
+                std::cerr << (outputCount == 0 ? " outputs=" : ",") << wideToUtf8(outputDesc.DeviceName)
+                          << (outputDesc.Monitor == targetMonitor ? "(captured)" : "");
+            }
+            ++outputCount;
+        }
+        if (outputsUnavailable) {
+            // Not the same as none: session 0 refuses the question entirely.
+            std::cerr << " outputs=unavailable";
+        } else if (outputCount == 0) {
+            std::cerr << " outputs=none";
+        }
+        std::cerr << std::endl;
+    }
 }
 
 bool hasVisibleBgraContent(const std::vector<BYTE>& frame) {
@@ -457,6 +642,18 @@ void readCaptureCommands(CaptureControl& control, const std::function<void(bool)
 } // namespace
 
 int main(int argc, char* argv[]) {
+    // Before anything reads a coordinate. `findMonitorForCapture` matches the
+    // config's display bounds against the rects `EnumDisplayMonitors` reports,
+    // and the caller sends those bounds in physical pixels; a DPI-unaware
+    // process would compare them against virtualized ones and silently record
+    // the wrong screen (getopenscreen/openscreen#346). Refusing to start is the
+    // honest outcome -- a recording of the wrong monitor is discovered far too
+    // late to be worth salvaging.
+    if (!enablePerMonitorV2DpiAwareness()) {
+        std::cerr << "ERROR: Could not enable per-monitor-v2 DPI awareness" << std::endl;
+        return 1;
+    }
+
     if (argc < 2) {
         std::cerr << "ERROR: Missing JSON config argument" << std::endl;
         return 1;
@@ -489,6 +686,7 @@ int main(int argc, char* argv[]) {
     std::cout << "{\"event\":\"ready\",\"schemaVersion\":2}" << std::endl;
 
     WgcSession session;
+    HMONITOR capturedMonitor = nullptr;
     if (config.sourceType == "display") {
         HMONITOR monitor = findMonitorForCapture(
             config.displayId,
@@ -497,6 +695,7 @@ int main(int argc, char* argv[]) {
             std::cerr << "ERROR: Could not resolve monitor" << std::endl;
             return 1;
         }
+        capturedMonitor = monitor;
         if (!session.initialize(monitor, config.fps, config.captureCursor)) {
             std::cerr << "ERROR: Failed to initialize WGC display session" << std::endl;
             return 1;
@@ -507,6 +706,9 @@ int main(int argc, char* argv[]) {
             std::cerr << "ERROR: Native window capture requires a valid HWND" << std::endl;
             return 1;
         }
+        // A window is captured by whichever display it currently sits on, which
+        // is the adapter that matters for the same reason a monitor's does.
+        capturedMonitor = MonitorFromWindow(window, MONITOR_DEFAULTTONEAREST);
         if (!session.initialize(window, config.fps, config.captureCursor)) {
             std::cerr << "ERROR: Failed to initialize WGC window session" << std::endl;
             return 1;
@@ -515,6 +717,8 @@ int main(int argc, char* argv[]) {
         std::cerr << "ERROR: Unsupported native capture source type: " << config.sourceType << std::endl;
         return 1;
     }
+
+    reportCaptureAdapters(session.device(), capturedMonitor);
 
     // WGC owns the captured texture size. Encoding must use that exact size
     // until a dedicated GPU scaling pass is introduced; CopyResource requires
@@ -607,6 +811,30 @@ int main(int argc, char* argv[]) {
     MFEncoderOptions encoderOptions{};
     encoderOptions.preferSoftwareEncoder = config.preferSoftwareEncoder;
     encoderOptions.injectDefaultSinkWriterFailureOnce = injectDefaultSinkWriterFailureOnce;
+    // OFF by default. The GPU path exists to dodge a Map() that wedges inside
+    // the display driver on the machine in #252, and it demonstrably fixed
+    // display and window capture there. It also broke recording outright for
+    // the reporter in #336, who had working video before it. Its fallbacks
+    // cover every check made during initialize(); nothing covers a failure that
+    // only appears once frames are flowing, which is what #336 is.
+    //
+    // So it is opt-in until a failure mid-encode degrades to the CPU path
+    // instead of ending the recording, or until someone confirms it closes
+    // #252. Neither has happened, and defaulting it on means every user carries
+    // the risk so that the few who reproduce #252 might not have to.
+    //
+    // Set OPENSCREEN_WGC_ENABLE_DXGI_INPUT=1 to turn it on -- that is what the
+    // people in #252 and #327 should be given to test with.
+    //
+    // The other two conditions are unchanged and still required: software
+    // encoding and inline webcam PiP both need the frame in system memory,
+    // which the DXGI path does not produce. config.webcamEnabled, not
+    // webcamActive -- the latter is only set once webcam capture has started,
+    // well after this.
+    encoderOptions.useDxgiInput =
+        readEnvInt("OPENSCREEN_WGC_ENABLE_DXGI_INPUT", 0) == 1 &&
+        !config.preferSoftwareEncoder &&
+        (!config.webcamEnabled || writeSeparateWebcam);
 
     MFEncoder encoder;
     if (!encoder.initialize(
@@ -622,8 +850,19 @@ int main(int argc, char* argv[]) {
         std::cerr << "ERROR: Failed to initialize Media Foundation encoder" << std::endl;
         return 1;
     }
+    // `videoInput` reports what the encoder settled on, not what was asked for:
+    // it silently degrades to the CPU readback on any machine the GPU path does
+    // not fit, and a bug report that cannot tell the two apart is a bug report
+    // about the wrong path.
+    const bool usesDxgiInput = encoder.usesDxgiInput();
     std::cout << "{\"event\":\"encoder-selection\",\"schemaVersion\":2,\"video\":\""
               << encoder.videoEncoderSelection()
+              << "\",\"videoInput\":\"" << (usesDxgiInput ? "dxgi-nv12" : "cpu-rgb32")
+              // Reported for the same reason `videoInput` is: the encoder falls
+              // back to the plain container rather than failing a recording, and
+              // "was this file supposed to survive a kill?" is unanswerable from
+              // a bug report that cannot tell the two apart.
+              << "\",\"container\":\"" << encoder.containerFormat()
               << "\",\"preferSoftwareEncoder\":"
               << (config.preferSoftwareEncoder ? "true" : "false")
               << "}" << std::endl;
@@ -631,6 +870,7 @@ int main(int argc, char* argv[]) {
     if (writeSeparateWebcam) {
         MFEncoderOptions webcamEncoderOptions = encoderOptions;
         webcamEncoderOptions.injectDefaultSinkWriterFailureOnce = false;
+        webcamEncoderOptions.useDxgiInput = false;
         const int webcamPixels = std::max(1, webcamCapture.width()) * std::max(1, webcamCapture.height());
         const int webcamBitrate = webcamPixels >= 1280 * 720 ? 8'000'000 : 4'000'000;
         if (!webcamEncoder.initialize(
@@ -652,6 +892,10 @@ int main(int argc, char* argv[]) {
     CaptureControl control;
     std::atomic<bool> firstFrameWritten = false;
     std::atomic<bool> encodeFailed = false;
+    // Frames the GPU bridge was too busy to take. Reported at stop rather than
+    // per frame: a handful over a recording is normal contention, a stream of
+    // them is the next bug report, and neither is worth a log line each.
+    std::atomic<uint64_t> contendedFrames = 0;
     Microsoft::WRL::ComPtr<ID3D11Texture2D> latestFrameTexture;
     int64_t latestFrameTimestampHns = 0;
     int64_t firstFrameTimestampHns = -1;
@@ -706,6 +950,7 @@ int main(int argc, char* argv[]) {
         int64_t nextWebcamWriteDueHns = 0;
         const int64_t nominalWebcamIntervalHns =
             static_cast<int64_t>(10'000'000ULL / std::max(1, webcamCapture.fps()));
+        auto nextFrameDue = std::chrono::steady_clock::now();
 
         while (!control.stopRequested && !encodeFailed) {
             Microsoft::WRL::ComPtr<IMFSample> videoSample;
@@ -802,22 +1047,40 @@ int main(int argc, char* argv[]) {
                     std::this_thread::sleep_for(std::chrono::milliseconds(testStallReadbackMs));
                 }
                 if (latestFrameTexture) {
-                    // captureVideoSample performs the GPU readback
-                    // (CopyResource/Map) from latestFrameTexture, which must
-                    // stay serialized (via `mutex`) against the WGC
-                    // frame-arrival callback above, which writes new data
-                    // into the same texture on another thread.
-                    hasVideoSample = encoder.captureVideoSample(
-                        latestFrameTexture.Get(),
-                        frameTimestampHns,
-                        !writeSeparateWebcam && webcamFrame.data ? &webcamFrame : nullptr,
-                        videoSample);
-                    if (!hasVideoSample) {
+                    // Both entry points do their GPU work on latestFrameTexture,
+                    // which must stay serialized (via `mutex`) against the WGC
+                    // frame-arrival callback above, which writes new data into
+                    // the same texture on another thread. Which one is live is
+                    // the encoder's answer, not this struct's request: it falls
+                    // back to the CPU path on its own when the GPU path does
+                    // not fit the machine.
+                    bool captured = false;
+                    if (usesDxgiInput) {
+                        captured = encoder.captureDxgiSample(
+                            latestFrameTexture.Get(),
+                            frameTimestampHns,
+                            videoSample);
+                    } else {
+                        captured = encoder.captureVideoSample(
+                            latestFrameTexture.Get(),
+                            frameTimestampHns,
+                            !writeSeparateWebcam && webcamFrame.data ? &webcamFrame : nullptr,
+                            videoSample);
+                    }
+                    if (!captured) {
                         encodeFailed = true;
                         control.requestStop();
                         break;
                     }
-                    lastEncodedVideoTimestampHns = frameTimestampHns;
+                    // The DXGI path returns success with no sample when the
+                    // GPU bridge was momentarily busy. That costs one frame,
+                    // which beats ending a recording that is otherwise fine.
+                    hasVideoSample = videoSample != nullptr;
+                    if (hasVideoSample) {
+                        lastEncodedVideoTimestampHns = frameTimestampHns;
+                    } else {
+                        contendedFrames += 1;
+                    }
                 }
             }
 
@@ -844,8 +1107,25 @@ int main(int argc, char* argv[]) {
             }
 
             frameIndex += 1;
-            std::this_thread::sleep_for(frameDuration);
+            // Pace to a deadline, not `sleep_for(frameDuration)` after the work:
+            // capturing, converting and encoding a 1080p frame costs ~11 ms, so
+            // sleeping a whole period on top of it made the real period
+            // `work + 1/fps` -- 30 fps requested delivered 22.5 measured.
+            nextFrameDue += frameDuration;
+            const auto now = std::chrono::steady_clock::now();
+            if (nextFrameDue < now) {
+                // Fell behind (slow frame, or waiting on the first one). Resync
+                // to now rather than firing a burst of catch-up frames, same as
+                // the webcam cadence above.
+                nextFrameDue = now;
+            }
+            std::this_thread::sleep_until(nextFrameDue);
         }
+        std::cerr << "[pacing] frames=" << frameIndex << " elapsed_ms="
+                  << std::chrono::duration_cast<std::chrono::milliseconds>(
+                         std::chrono::steady_clock::now() - control.recordingStartedAt)
+                         .count()
+                  << std::endl;
     };
 
     std::thread videoWriterThread;
@@ -1080,8 +1360,19 @@ int main(int argc, char* argv[]) {
             // sleep still be killed.
             if (stopElapsedMs() >= currentStepDeadlineMs.load() && !shutdownComplete.load()) {
                 const char* step = currentStopStep.load();
+                // The encoder stage is what turns "video-writer-join was
+                // abandoned" into something actionable: it names the call the
+                // writer thread is sitting in, instead of leaving the next
+                // report to guess the way issue #252 had to.
+                // Both threads are named, because either can be the one that is
+                // stuck and each has its own slot: encode_stage is the video
+                // writer, audio_stage the mixer. A report showing audio_stage
+                // parked on write-audio while encode_stage sits at a bridge
+                // call says the two are fighting over writerMutex_, which no
+                // single-slot breadcrumb could ever have shown.
                 std::cerr << "[stop-timing] step=" << step << " elapsed_ms=" << stopElapsedMs()
-                          << " phase=abandoned" << std::endl;
+                          << " phase=abandoned encode_stage=" << encoder.encodeStage()
+                          << " audio_stage=" << encoder.audioStage() << std::endl;
                 std::cout << "{\"event\":\"stop-timeout\",\"schemaVersion\":2,\"step\":\"" << step
                           << "\"}" << std::endl;
                 std::cout.flush();
@@ -1124,6 +1415,9 @@ int main(int argc, char* argv[]) {
     beginStopStep("video-writer-join", stepBudgetMs);
     stopVideoWriter();
     logStopStep("video-writer-join");
+    if (usesDxgiInput) {
+        std::cerr << "[frame-drops] gpu_bridge_contended=" << contendedFrames.load() << std::endl;
+    }
     // No frame lock here, and the ordering above is what makes that safe rather
     // than incidental: stopVideoWriter() joined the only thread that calls into
     // the encoder's GPU readback, and audioMixer->stop() joined the only other

@@ -1,4 +1,4 @@
-import { info, warning } from "@actions/core";
+import { info, setFailed, warning } from "@actions/core";
 import { context, getOctokit } from "@actions/github";
 import { createForumThread, postChannelMessage } from "./discord-bot-api.mjs";
 
@@ -14,13 +14,29 @@ const stableTag = (process.env.STABLE_TAG || "").trim();
 const rcTag = (process.env.RC_TAG || "").trim();
 const extra = (process.env.EXTRA || "").trim();
 
-if (!stableTag) {
-	warning("STABLE_TAG missing; skipping.");
+// Set only by announce-release.yml. Every path below that ends without posting
+// used to exit 0, which is right when prerelease.yml and promote.yml call this:
+// the release is already out, the announcement is bookkeeping, and failing the
+// job would misreport a successful release. A manual dispatch has the opposite
+// contract — it exists *because* an announcement was missed, so a green run
+// that posted nothing recreates the exact failure it was invoked to repair.
+const strict = (process.env.STRICT || "").trim() !== "";
+
+/** Ends the run without announcing: fatal under STRICT, a skip otherwise. */
+function bail(message, note = warning) {
+	if (strict) {
+		setFailed(message);
+		process.exit(1);
+	}
+	note(message);
 	process.exit(0);
 }
+
+if (!stableTag) {
+	bail("STABLE_TAG missing; skipping.");
+}
 if (!botToken || !channelId) {
-	info("Discord announce skipped: set DISCORD_BOT_TOKEN and a channel id variable.");
-	process.exit(0);
+	bail("Discord announce skipped: set DISCORD_BOT_TOKEN and a channel id variable.", info);
 }
 
 const owner = context.repo.owner;
@@ -91,10 +107,11 @@ async function fetchChannelType() {
 	});
 	if (!res.ok) {
 		const txt = await res.text();
-		warning(`Discord channel fetch failed ${res.status}: ${txt}`);
-		return null;
+		// Returned rather than reported here, so the single exit policy in bail()
+		// decides whether a failed lookup is fatal.
+		return { error: `Discord channel fetch failed ${res.status}: ${txt}` };
 	}
-	return res.json();
+	return { channel: await res.json() };
 }
 
 async function announceToForum() {
@@ -125,9 +142,9 @@ async function announceToText() {
 	info(`📣 ${kind} announcement posted to text channel (id=${result.id}).`);
 }
 
-const channel = await fetchChannelType();
-if (!channel) {
-	process.exit(0);
+const { channel, error } = await fetchChannelType();
+if (error) {
+	bail(error);
 }
 
 try {
@@ -137,5 +154,13 @@ try {
 		await announceToText();
 	}
 } catch (err) {
-	warning(`Discord announce failed: ${err?.message ?? err}`);
+	// Not bail(): this is the last statement, so there is nothing left to skip
+	// and the non-strict path must fall through rather than exit — "handles 4xx
+	// gracefully without throwing" pins that the module finishes on its own.
+	const message = `Discord announce failed: ${err?.message ?? err}`;
+	if (strict) {
+		setFailed(message);
+		process.exit(1);
+	}
+	warning(message);
 }

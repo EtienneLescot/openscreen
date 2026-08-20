@@ -12,6 +12,23 @@
 FFMPEG_DIR = { value = "thirdparty/ffmpeg-n8.1.2-win64-lgpl-shared", relative = true }
 LIBCLANG_PATH = "C:\\Program Files\\LLVM\\bin"
 
+# CRT statique. Par défaut, un cdylib MSVC importe VCRUNTIME140.dll, qui ne fait PAS
+# partie de Windows : elle vient du Redistribuable Visual C++. Toute machine ayant
+# déjà compilé ce dépôt — ou installé à peu près n'importe quelle autre application
+# de bureau — l'a dans System32, donc la dépendance est invisible en local comme en
+# CI. Sur une image Windows propre, `require()` de compositor_view.node échoue et
+# l'éditeur s'ouvre sans aperçu pendant que le son continue : le symptôme EXACT que
+# la colocation avec les DLL ffmpeg (build-windows-compositor-addon.mjs) était
+# censée corriger. Elle a bien corrigé sa cause à elle — MSIX qui ignore PATH — mais
+# celle-ci restait, et aucune machine de dev ne peut la faire apparaître.
+#
+# Rien de partagé avec l'hôte ne traverse la frontière du CRT : napi-rs ne fait
+# passer que des napi_value opaques, et les Buffer rendus à Node portent un
+# finalizer qui libère côté addon ce que l'addon a alloué. Le CRT statique est donc
+# sans effet de bord ici. scripts/before-pack.cjs échoue si l'import revient.
+[target.x86_64-pc-windows-msvc]
+rustflags = ["-C", "target-feature=+crt-static"]
+
 # macOS : BtbN ne publie pas de build macOS (cf. scripts/fetch-ffmpeg.mjs), donc on
 # laisse `crates/compositor/build.rs` chercher MAC_FFMPEG_DIR (env var explicite posée
 # par la CI macOS ou par le dev local) ou un répertoire attendu sous `thirdparty/`.

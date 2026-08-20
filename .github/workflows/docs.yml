@@ -39,10 +39,10 @@ jobs:
     name: Build site
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@b4ffde65f46336ab88eb53be808477a3936bae11 # v4.1.1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - uses: actions/setup-node@1e60f620b9541d16bece96c5465dc8ee9832be0b # v4.0.3
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 22
           cache: npm
@@ -53,13 +53,40 @@ jobs:
       - name: Type-check
         working-directory: website
         run: npm run typecheck
+      # The walkthrough's clips and stills are committed to this repo, which has
+      # no LFS filter — their size is permanent, so a budget that lives only in a
+      # design note drifts on the first re-cut. This also fails any clip encoded
+      # with an audio track, which iOS Safari refuses to autoplay without a
+      # gesture even when the element is muted.
+      - name: Check media budget
+        working-directory: website
+        run: npm run check:media
+      # The recreation's data is generated from the app's own source and a
+      # vendored project document. It is committed, so it can go stale in either
+      # direction — a locale key moves, a timeline constant changes — and the
+      # page would then be showing numbers the application no longer produces.
+      # The generator compares its own output byte for byte, which is why the
+      # formatter is told to leave that one file alone (biome.json).
+      - name: Check recreation data
+        working-directory: website
+        run: npm run check:recreation
       - name: Build
         working-directory: website
         run: npm run build
       - name: Upload artifact
-        uses: actions/upload-pages-artifact@56afc609e74202658d3ffba0e8f6dda462b719fa # v3.0.1
+        uses: actions/upload-pages-artifact@fc324d3547104276b827a68afc52ff2a11cc49c9 # v5.0.0
         with:
           path: website/build
+          # v4 stopped bundling dotfiles by default. Nothing in website/build
+          # is hidden today — the deployed artifact from 7c4827b9 was checked
+          # and contains no dot-entries at all, so this changes nothing now
+          # (Docusaurus only writes a `.nojekyll` on its own `deploy` command,
+          # not in a plain `build`). It is set so that stays true by accident
+          # rather than by omission: a `.well-known/` for domain verification
+          # or security.txt is the realistic case, and under the v4+ default it
+          # would vanish from the deploy silently. `.git` and `.github` are
+          # excluded regardless of this flag.
+          include-hidden-files: true
 
   deploy:
     name: Deploy to GitHub Pages
@@ -76,4 +103,4 @@ jobs:
       id-token: write
     steps:
       - id: deployment
-        uses: actions/deploy-pages@d6db90164ac5ed86f2b6aed7e0febac5b3c0c03e # v4.0.5
+        uses: actions/deploy-pages@cd2ce8fcbc39b97be8ca5fce6e763baed58fa128 # v5.0.0

@@ -13,13 +13,41 @@ on:
 jobs:
   publish:
     runs-on: windows-latest
-    if: (github.event_name == 'workflow_dispatch' || !github.event.release.prerelease) && vars.WINGET_IDENTIFIER != ''
+    # La condition de configuration a QUITTÉ ce `if`, et c'est tout l'objet du
+    # changement. `vars.WINGET_IDENTIFIER != ''` ici rendait le job `skipped`, et un
+    # job sauté est vert : les huit dernières releases, v1.8.0 comprise, ont toutes
+    # « réussi » sans rien publier, et #148 est resté ouvert deux semaines parce que
+    # rien, nulle part, ne le disait. Même famille que le glob zsync mort de
+    # build.yml — un garde qui ne fait rien en silence ne garde rien.
+    #
+    # Le job démarre donc toujours, et c'est une étape qui annonce l'absence de
+    # configuration. Le coût est une minute de runner par release ; le gain est que
+    # « pas publié » devienne visible dans le résumé du run.
+    if: github.event_name == 'workflow_dispatch' || !github.event.release.prerelease
+    env:
+      IDENTIFIER: ${{ vars.WINGET_IDENTIFIER }}
+      # `secrets` n'est PAS un contexte lisible depuis un `if`, ni au niveau du job ni
+      # au niveau de l'étape — seul `env` l'est. D'où ce booléen-en-chaîne, qui expose
+      # la présence du token sans jamais exposer sa valeur.
+      HAS_TOKEN: ${{ secrets.WINGET_ACC_TOKEN != '' }}
     steps:
+      # Les deux pièges nommés ici sont documentés chez l'action et coûteraient chacun
+      # une release pour être découverts : un PAT fine-grained N'EST PAS supporté
+      # (vedantmgoyal9/winget-releaser#172), et l'action refuse de tourner tant qu'aucune
+      # version du paquet n'existe déjà dans winget-pkgs — elle part d'un manifeste
+      # existant pour écrire le suivant. La première soumission est donc manuelle,
+      # `wingetcreate new`, et l'automatisation ne prend le relais qu'ensuite.
+      - name: Report that winget publishing is not configured
+        if: env.IDENTIFIER == '' || env.HAS_TOKEN != 'true'
+        run: |
+          echo "::warning title=winget publishing skipped::Nothing was published to winget. Needs (1) the repository variable WINGET_IDENTIFIER, currently ${{ env.IDENTIFIER == '' && 'UNSET' || 'set' }}; (2) the secret WINGET_ACC_TOKEN, currently ${{ env.HAS_TOKEN == 'true' && 'set' || 'UNSET' }} — a CLASSIC PAT with public_repo scope, fine-grained tokens are not supported; (3) a fork of microsoft/winget-pkgs under getopenscreen; and (4) at least one version of the package already merged into winget-pkgs, since this action updates an existing manifest and refuses to create the first one. See https://github.com/getopenscreen/openscreen/issues/148"
+
       # Épinglé sur le SHA de v2 : un tag git est mutable, et cette action tierce
       # reçoit WINGET_ACC_TOKEN. Un tag repointé suffirait à exfiltrer le token
       # sans qu'aucun changement n'apparaisse ici. Pour bouger de version,
       # re-résoudre le tag et remplacer le SHA explicitement.
       - uses: vedantmgoyal9/winget-releaser@4ffc7888bffd451b357355dc214d43bb9f23917e # v2
+        if: env.IDENTIFIER != '' && env.HAS_TOKEN == 'true'
         with:
           identifier: ${{ vars.WINGET_IDENTIFIER }}
           # Matches the Windows installer asset attached to each release,

@@ -71,7 +71,14 @@ import { createCursorRecordingSession } from "../native-bridge/cursor/recording/
 import { requestMacCursorAccessibilityAccess } from "../native-bridge/cursor/recording/macNativeCursorRecordingSession";
 import { findPipeWireCursorHelperPath } from "../native-bridge/cursor/recording/pipeWireCursorRecordingSession";
 import type { CursorRecordingSession } from "../native-bridge/cursor/recording/session";
+import { toHelperRect } from "../native-bridge/helperCoordinates";
+import { scoreDeviceNameMatch } from "../recording/deviceNameMatching";
 import {
+	isSalvageableFragmentedCapture,
+	NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES,
+	readMicrophoneDefaulted,
+	readWebcamFormat,
+	readWebcamUnavailable,
 	terminateNativeWindowsCapture,
 	waitForNativeWindowsCaptureStop,
 } from "../recording/nativeWindowsCaptureStop";
@@ -472,6 +479,18 @@ let currentRecordingSession: RecordingSession | null = null;
 export interface RecordingPrefs {
 	micEnabled: boolean;
 	micDeviceId: string | null;
+	/**
+	 * The microphone's LABEL, carried beside its id because the native Windows
+	 * helper selects by name and Chromium selects by id.
+	 *
+	 * Without it, a HUD rebuilt for a new recording restored the id and had to
+	 * re-derive the name from its own `enumerateDevices()` — which needs a full
+	 * getUserMedia permission round-trip first, and an auto-started recording
+	 * beat it. The request then went out with no name at all, and the helper
+	 * answers that by recording the Windows default endpoint instead of the
+	 * microphone the user picked (getopenscreen/openscreen#404).
+	 */
+	micDeviceName: string | null;
 	camEnabled: boolean;
 	camDeviceId: string | null;
 	systemAudioEnabled: boolean;
@@ -480,6 +499,7 @@ export interface RecordingPrefs {
 let recordingPrefs: RecordingPrefs = {
 	micEnabled: false,
 	micDeviceId: null,
+	micDeviceName: null,
 	camEnabled: false,
 	camDeviceId: null,
 	systemAudioEnabled: false,
@@ -540,6 +560,12 @@ let nativeWindowsCursorRecordingStartMs = 0;
 let nativeWindowsPauseStartedAtMs: number | null = null;
 let nativeWindowsPauseRanges: Array<{ startMs: number; endMs: number }> = [];
 let nativeWindowsIsPaused = false;
+/**
+ * The MP4 flavour the helper reported for THIS run, or null if it never said.
+ * Read at stop, not for reporting: it is what decides whether a capture that
+ * failed to finalize still left a playable file behind.
+ */
+let nativeWindowsCaptureContainer: string | null = null;
 /** Cuts a surviving helper's output loose so it cannot pollute the next recording. */
 let nativeWindowsCaptureDrainCleanup: (() => void) | null = null;
 
@@ -560,14 +586,17 @@ function resetNativeWindowsCaptureState() {
 	nativeWindowsPauseStartedAtMs = null;
 	nativeWindowsPauseRanges = [];
 	nativeWindowsIsPaused = false;
+	nativeWindowsCaptureContainer = null;
 }
 
-/**
- * An MP4 the helper never indexed is a few bytes of header at most. Anything
- * larger might be a real recording, and deleting one of those to tidy up after
- * a failed stop is a far worse outcome than leaving a stray file behind.
- */
-const NATIVE_WINDOWS_SALVAGEABLE_OUTPUT_BYTES = 64 * 1024;
+/** Reads the file, then defers the judgement to the tested predicate. */
+async function salvageNativeWindowsFragmentedCapture(screenVideoPath: string | null) {
+	if (!screenVideoPath) {
+		return false;
+	}
+	const stats = await fs.stat(screenVideoPath).catch(() => null);
+	return isSalvageableFragmentedCapture(nativeWindowsCaptureContainer, stats?.size ?? null);
+}
 
 /**
  * Best-effort removal of the files a failed or discarded native Windows capture
@@ -935,40 +964,6 @@ function isWindowsGraphicsCaptureOsSupported() {
 	return Number.isFinite(build) && build >= 19041;
 }
 
-function normalizeNativeDeviceName(value: string) {
-	return value
-		.toLowerCase()
-		.replace(/[^a-z0-9]+/g, " ")
-		.trim();
-}
-
-function scoreNativeDeviceName(candidateName: string, candidateId: string, requestedName?: string) {
-	const candidate = normalizeNativeDeviceName(candidateName);
-	const id = normalizeNativeDeviceName(candidateId);
-	const requested = normalizeNativeDeviceName(requestedName ?? "");
-	if (!requested) {
-		return 0;
-	}
-	if (candidate === requested) {
-		return 1000;
-	}
-	if (candidate.includes(requested) || requested.includes(candidate)) {
-		return 900;
-	}
-	if (id.includes(requested) || requested.includes(id)) {
-		return 800;
-	}
-
-	return requested
-		.split(/\s+/)
-		.filter((word) => word.length > 1 && !["camera", "webcam", "video", "input"].includes(word))
-		.reduce((score, word) => {
-			if (candidate.includes(word)) return score + 100;
-			if (id.includes(word)) return score + 50;
-			return score;
-		}, 0);
-}
-
 function queryDirectShowVideoInputRegistry() {
 	return new Promise<string>((resolve) => {
 		const proc = spawn(
@@ -1013,7 +1008,7 @@ async function resolveDirectShowWebcamClsid(deviceName?: string) {
 	let best: { clsid: string; friendlyName?: string; score: number } | null = null;
 	for (const entry of entries) {
 		if (!entry.clsid) continue;
-		const score = scoreNativeDeviceName(entry.friendlyName ?? "", entry.clsid, deviceName);
+		const score = scoreDeviceNameMatch(entry.friendlyName ?? "", entry.clsid, deviceName);
 		if (!best || score > best.score) {
 			best = { clsid: entry.clsid, friendlyName: entry.friendlyName, score };
 		}
@@ -1315,25 +1310,6 @@ function sendNativeWindowsStopCommand(proc: ChildProcessWithoutNullStreams) {
 	return true;
 }
 
-function readNativeWindowsWebcamFormat(output: string) {
-	const lines = output.split(/\r?\n/).filter((line) => line.includes('"event":"webcam-format"'));
-	const lastLine = lines.at(-1);
-	if (!lastLine) {
-		return null;
-	}
-
-	try {
-		return JSON.parse(lastLine) as {
-			width?: number;
-			height?: number;
-			fps?: number;
-			deviceName?: string;
-		};
-	} catch {
-		return null;
-	}
-}
-
 function readNativeWindowsEncoderSelection(output: string) {
 	const lines = output
 		.split(/\r?\n/)
@@ -1346,6 +1322,13 @@ function readNativeWindowsEncoderSelection(output: string) {
 	try {
 		return JSON.parse(lastLine) as {
 			video?: string;
+			// Which MP4 flavour the helper actually wrote, `fragmented-mp4` or
+			// `mp4`. It reports this because the fragmented sink degrades to the
+			// plain one rather than failing a recording, so the flavour is a
+			// per-run outcome and not a property of the version. This is the only
+			// thing that can answer "was this file supposed to survive a kill?",
+			// which is what `salvageNativeWindowsFragmentedCapture` asks.
+			container?: string;
 			preferSoftwareEncoder?: boolean;
 		};
 	} catch {
@@ -2322,6 +2305,11 @@ export function registerIpcHandlers(
 							null)
 						: getSelectedDisplay();
 				const bounds = sourceDisplay?.bounds ?? getSelectedSourceBounds();
+				// `bounds` is DIPs; the helper matches it against physical monitor rects
+				// (getopenscreen/openscreen#346). Converted here, at the wire, and not in
+				// `getSelectedSourceBounds` — the cursor session shares that getter and
+				// converts on its own side.
+				const helperBounds = toHelperRect(bounds);
 				const displayId =
 					typeof request.source.displayId === "number" && Number.isFinite(request.source.displayId)
 						? request.source.displayId
@@ -2350,10 +2338,10 @@ export function registerIpcHandlers(
 					fps: request.video.fps,
 					videoWidth: request.video.width,
 					videoHeight: request.video.height,
-					displayX: bounds.x,
-					displayY: bounds.y,
-					displayW: bounds.width,
-					displayH: bounds.height,
+					displayX: helperBounds.x,
+					displayY: helperBounds.y,
+					displayW: helperBounds.width,
+					displayH: helperBounds.height,
 					hasDisplayBounds: true,
 					captureSystemAudio: request.audio.system.enabled,
 					captureMic: request.audio.microphone.enabled,
@@ -2378,7 +2366,7 @@ export function registerIpcHandlers(
 						sourceId: request.source.sourceId,
 						displayId: Number.isFinite(displayId) ? displayId : null,
 						windowHandle: request.source.windowHandle ?? null,
-						bounds,
+						bounds: helperBounds,
 					},
 					video: request.video,
 					audio: request.audio,
@@ -2395,7 +2383,10 @@ export function registerIpcHandlers(
 					webcam: request.webcam,
 					encoder: { preferSoftwareEncoder },
 					cursor: { mode: cursorCaptureMode },
-					bounds,
+					// Both spaces, deliberately: the helper's own errors quote the physical
+					// rect, and a report that only carried the DIP one would be read against
+					// numbers it never saw (getopenscreen/openscreen#346).
+					bounds: { dip: bounds, helper: helperBounds },
 					sourceId: selectedSource?.id ?? null,
 					usedDisplayMatch: Boolean(sourceDisplay),
 					outputPath,
@@ -2440,8 +2431,11 @@ export function registerIpcHandlers(
 					cursorCaptureMode === "editable-overlay"
 						? Math.max(0, captureStartedAtMs - cursorStartTimeMs)
 						: 0;
-				const webcamFormat = readNativeWindowsWebcamFormat(nativeWindowsCaptureOutput);
+				const webcamFormat = readWebcamFormat(nativeWindowsCaptureOutput);
 				const encoderSelection = readNativeWindowsEncoderSelection(nativeWindowsCaptureOutput);
+				// Captured now because stop may have no helper left to ask. A helper
+				// killed mid-recording is exactly the case where this matters most.
+				nativeWindowsCaptureContainer = encoderSelection?.container ?? null;
 				console.info("[native-wgc] capture started", {
 					captureStartedAtMs,
 					cursorOffsetMs: nativeWindowsCursorOffsetMs,
@@ -2454,12 +2448,42 @@ export function registerIpcHandlers(
 					onRecordingStateChange(true, source.name);
 				}
 
+				// Reported at start, not at stop: the helper decides the camera is a
+				// lost cause during its own init — before it announces "Recording
+				// started", so the warning is already in the buffer here — and telling
+				// the user now, while the take is still worth restarting, beats telling
+				// them at the end. Keyed on the helper's own event rather than on a
+				// missing `webcamFormat`: absence of the format line also means "the
+				// line could not be parsed", which would put a red toast on a recording
+				// whose camera is working perfectly.
+				const webcamUnavailable =
+					request.webcam.enabled && readWebcamUnavailable(nativeWindowsCaptureOutput);
+				// Same shape as the camera notice: the helper records the Windows
+				// default input rather than failing, so this take is usable but is
+				// almost certainly the wrong microphone.
+				const microphoneDefaulted =
+					request.audio.microphone.enabled && readMicrophoneDefaulted(nativeWindowsCaptureOutput);
+				if (microphoneDefaulted) {
+					console.warn("[native-wgc] recording the default input; the microphone was not named", {
+						deviceId: request.audio.microphone.deviceId,
+						deviceName: request.audio.microphone.deviceName,
+					});
+				}
+				if (webcamUnavailable) {
+					console.warn("[native-wgc] recording without a camera; the helper could not open it", {
+						deviceId: request.webcam.deviceId,
+						deviceName: request.webcam.deviceName,
+					});
+				}
+
 				return {
 					success: true,
 					recordingId,
 					path: outputPath,
 					helperPath,
 					videoEncoderSelection: encoderSelection?.video ?? null,
+					webcamUnavailable,
+					microphoneDefaulted,
 				};
 			} catch (error) {
 				console.error("Failed to start native Windows recording:", error);
@@ -2751,6 +2775,11 @@ export function registerIpcHandlers(
 			}
 		}
 
+		// Set when the helper failed its stop handshake but left a playable
+		// fragmented file. Reported so a bug report can tell a clean stop from a
+		// recovered one; the user-facing path is deliberately identical.
+		let recovered = false;
+
 		try {
 			completeNativeWindowsCursorPauseRange();
 			const stopPromise = waitForNativeWindowsCaptureStop({
@@ -2772,35 +2801,62 @@ export function registerIpcHandlers(
 				if (!stopResult.exited) {
 					detachNativeWindowsCaptureOutputDrain();
 				}
-				await stopCursorRecording();
-				// Same as the discard path. `startCursorRecording` clears this on
-				// the next recording anyway, so this is not what keeps the samples
-				// from being written next to someone else's video -- it just stops
-				// a lost take's telemetry from sitting in memory until then.
-				pendingCursorRecordingData = null;
-				// The helper never announced a finalized file, so what is on disk
-				// is almost certainly an unindexed stub, and leaving those behind
-				// just accumulates unplayable recordings the user cannot explain.
-				// Almost: size-gate it, because throwing away a recording to tidy
-				// up after a failed stop is the worse mistake of the two.
-				await removeNativeWindowsCaptureOutputs(preferredPath, preferredWebcamPath, {
-					onlyIfUnusable: true,
-				});
-				// The helper log goes to console/diagnostics above, not into this
-				// string: it ends up in a toast, and pasting an entire capture log
-				// into the HUD tells the user nothing they can act on.
-				return {
-					success: false,
-					reason: stopResult.reason,
-					error:
-						stopResult.reason === "stop-timeout"
-							? "Timed out waiting for native Windows capture to stop. The recording could not be saved."
-							: stopResult.message.split(/\r?\n/).filter(Boolean).at(-1) ||
-								"Native Windows capture failed.",
-				};
+
+				// A failed stop stopped meaning a lost take when the helper started
+				// writing fragmented MP4. The file on disk is already playable, so
+				// the only thing standing between the user and their recording is
+				// this function deciding to throw it away and say so. Fall through
+				// into the normal save path instead: same manifest, same media
+				// links, same editor. From the user's side it simply worked, minus
+				// at most the last incomplete fragment.
+				//
+				// Only once the helper is actually dead. `exited: false` means it
+				// survived even the forced kill -- stuck somewhere `TerminateProcess`
+				// could not reach -- and on Windows such a process still holds the
+				// MP4 open and may still be appending to it. Handing that file to
+				// the editor trades an honest failure for a sharing violation on a
+				// file that is still moving, so a wedged helper keeps the old answer.
+				if (stopResult.exited && (await salvageNativeWindowsFragmentedCapture(preferredPath))) {
+					console.warn("[native-wgc] stop failed but the fragmented output is playable", {
+						reason: stopResult.reason,
+						path: preferredPath,
+					});
+					recovered = true;
+				} else {
+					await stopCursorRecording();
+					// Same as the discard path. `startCursorRecording` clears this on
+					// the next recording anyway, so this is not what keeps the samples
+					// from being written next to someone else's video -- it just stops
+					// a lost take's telemetry from sitting in memory until then.
+					pendingCursorRecordingData = null;
+					// Reaching here means the container was the plain one, whose only
+					// index is written by the `Finalize()` this stop never reached, so
+					// what is on disk really is an unindexed stub and leaving those
+					// behind just accumulates unplayable recordings the user cannot
+					// explain. Size-gate it anyway: throwing away a recording to tidy
+					// up after a failed stop is the worse mistake of the two, and the
+					// gate is the same one the salvage check above uses.
+					await removeNativeWindowsCaptureOutputs(preferredPath, preferredWebcamPath, {
+						onlyIfUnusable: true,
+					});
+					// The helper log goes to console/diagnostics above, not into this
+					// string: it ends up in a toast, and pasting an entire capture log
+					// into the HUD tells the user nothing they can act on.
+					return {
+						success: false,
+						reason: stopResult.reason,
+						error:
+							stopResult.reason === "stop-timeout"
+								? "Timed out waiting for native Windows capture to stop. The recording could not be saved."
+								: stopResult.message.split(/\r?\n/).filter(Boolean).at(-1) ||
+									"Native Windows capture failed.",
+					};
+				}
 			}
 
-			const screenVideoPath = stopResult.screenVideoPath || preferredPath;
+			// Only a successful stop names the file; the salvage path above falls
+			// through with `ok: false` and nothing but the path we asked for.
+			const screenVideoPath = (stopResult.ok ? stopResult.screenVideoPath : null) || preferredPath;
 			if (!screenVideoPath) {
 				throw new Error("Native Windows capture did not return an output path.");
 			}
@@ -2819,8 +2875,21 @@ export function registerIpcHandlers(
 			let webcamVideoPath: string | undefined;
 			if (preferredWebcamPath) {
 				try {
-					await fs.access(preferredWebcamPath, fsConstants.R_OK);
-					webcamVideoPath = preferredWebcamPath;
+					// Size, not just existence. A camera that opened but delivered no
+					// frame still gets a file created for it, and its `Finalize()` then
+					// fails, leaving nought bytes on disk. Admitting that file put a
+					// camera track in the document pointing at something no demuxer can
+					// read, and the preview compositor answers an unreadable camera by
+					// drawing the SCREEN recording inside the little camera rectangle —
+					// which is how a webcam that never recorded showed up as the desktop
+					// duplicated into its own corner (getopenscreen/openscreen#387).
+					const webcamStat = await fs.stat(preferredWebcamPath);
+					webcamVideoPath = webcamStat.size > 0 ? preferredWebcamPath : undefined;
+					if (!webcamVideoPath) {
+						console.warn("[native-wgc] the webcam file is empty; saving without a camera", {
+							path: preferredWebcamPath,
+						});
+					}
 				} catch {
 					webcamVideoPath = undefined;
 				}
@@ -2842,7 +2911,18 @@ export function registerIpcHandlers(
 				success: true,
 				path: screenVideoPath,
 				session,
-				message: "Native Windows recording session stored successfully",
+				recovered,
+				// `preferredWebcamPath` is non-null only for a take that asked for a
+				// camera, so the pair means "a camera was requested and none survived".
+				// This is the second, quieter way to lose one: the helper opened the
+				// device happily and then never got a frame out of it, so it reports no
+				// `webcam-unavailable` and the start-time notice stays silent. Left
+				// unreported, the user would find out in the editor — which is exactly
+				// the silence this change exists to end.
+				webcamDropped: Boolean(preferredWebcamPath) && !webcamVideoPath,
+				message: recovered
+					? "Native Windows recording recovered from a failed stop"
+					: "Native Windows recording session stored successfully",
 			};
 		} catch (error) {
 			console.error("Failed to stop native Windows recording:", error);

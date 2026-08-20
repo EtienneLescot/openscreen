@@ -17,6 +17,7 @@ import {
 	readCursorSidecar,
 	readCursorTelemetryFile,
 } from "./cursorSidecar";
+import { whenRegistryIdle } from "./mediaLinksRegistry";
 
 let dir: string;
 
@@ -25,6 +26,12 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+	// The registry fallback below starts a path-refresh write that the lookup
+	// deliberately does not await, so it can still be queued when the test ends.
+	// Removing the tree underneath it made `fs.rm` fail with ENOTEMPTY — the write
+	// recreating an entry between rm's recursive walk and its final rmdir — which
+	// failed this hook, intermittently, only in the full parallel suite.
+	await whenRegistryIdle();
 	await fs.rm(dir, { recursive: true, force: true });
 	vi.restoreAllMocks();
 });

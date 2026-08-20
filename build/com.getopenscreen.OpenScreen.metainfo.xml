@@ -1,0 +1,136 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  Upstream AppStream metadata. This is what a software centre reads to show the
+  app as something other than a bare icon and a filename: name, summary,
+  description, licence, screenshots, release history.
+
+  It lives here rather than in a packaging repository on purpose. Flathub
+  requires the MetaInfo file to come from upstream — a reviewer will not accept
+  one written by the packager — and the same file serves the deb and rpm, whose
+  /usr/share/metainfo/ is empty today (checked against the shipped 1.9.2 deb:
+  it installs a .desktop file, nine icon sizes, and nothing else). So it is
+  authored once here and consumed by whatever packaging exists later.
+
+  The component ID is com.getopenscreen.OpenScreen, NOT the Electron appId
+  com.etiennelescot.openscreen. Two different namespaces, and only one of them
+  has to satisfy Flathub's rule that the ID map to a domain the project
+  controls: getopenscreen.com is the project's site, etiennelescot.com is not a
+  domain anyone here owns (the maintainer's is .fr). Changing the Electron
+  appId is not on the table — it decides the userData directory of every
+  existing install.
+
+  Editing this file: `appstreamcli validate` is what CI runs, and it is worth
+  running before pushing. Note that an XML comment may not contain a double
+  hyphen, so the flags CI passes are spelled out in ci.yml and not here — this
+  very paragraph failed validation once for naming them. Nothing consumes the
+  file yet — the Flatpak manifest that will is not written — so CI validating it
+  is the only thing standing between an edit here and a submission rejected for
+  it months later.
+-->
+<component type="desktop-application">
+  <id>com.getopenscreen.OpenScreen</id>
+
+  <name>OpenScreen</name>
+  <summary>Record your screen and polish the demo</summary>
+
+  <metadata_license>CC0-1.0</metadata_license>
+  <project_license>MIT</project_license>
+
+  <developer id="com.getopenscreen">
+    <name>Etienne Lescot</name>
+  </developer>
+
+  <description>
+    <p>
+      OpenScreen records your screen, webcam and audio, then hands you an editor
+      built for the thing you actually wanted: a demo worth watching. No
+      watermark, no subscription, no upload step.
+    </p>
+    <p>
+      Recordings open straight into a timeline where the polish is the point:
+    </p>
+    <ul>
+      <li>Automatic zoom that follows the cursor, adjustable per region</li>
+      <li>Backgrounds, padding, rounded corners and shadows on the frame</li>
+      <li>Trim, cut and per-region playback speed</li>
+      <li>Webcam picture-in-picture, cursor smoothing and custom cursor themes</li>
+      <li>Local speech-to-text for captions — the model runs on your machine</li>
+      <li>Export to MP4 or GIF, rendered on the GPU</li>
+    </ul>
+    <p>
+      Screen capture goes through the desktop portal, so it works on Wayland and
+      X11 alike and asks for permission the way the rest of your desktop does.
+    </p>
+  </description>
+
+  <!--
+    The desktop file electron-builder generates and installs is openscreen.desktop
+    (verified in the shipped deb, /usr/share/applications/openscreen.desktop).
+    A Flatpak build renames both that file and this one to the component ID, as
+    Flathub requires, and has to rewrite this launchable to match — the rename is
+    not optional there and a stale launchable makes the app unlaunchable from the
+    software centre.
+  -->
+  <launchable type="desktop-id">openscreen.desktop</launchable>
+
+  <url type="homepage">https://getopenscreen.com/</url>
+  <url type="bugtracker">https://github.com/getopenscreen/openscreen/issues</url>
+  <url type="vcs-browser">https://github.com/getopenscreen/openscreen</url>
+  <url type="contribute">https://github.com/getopenscreen/openscreen/blob/main/CONTRIBUTING.md</url>
+
+  <!--
+    Pinned to `main` rather than to a tag: a tagged URL is stable but goes stale
+    the moment the UI changes, and a screenshot of a two-year-old build is worse
+    than a moving one. Both files are tracked in this repository, so the URLs
+    stay ours. Flathub fetches these at build time and fails the submission if
+    either 404s.
+  -->
+  <screenshots>
+    <screenshot type="default">
+      <image type="source">https://raw.githubusercontent.com/getopenscreen/openscreen/main/public/preview4.png</image>
+      <caption>Editing a recording: zoom regions, video effects and export settings</caption>
+    </screenshot>
+    <screenshot>
+      <image type="source">https://raw.githubusercontent.com/getopenscreen/openscreen/main/public/preview3.png</image>
+      <caption>The timeline, with trim, speed and zoom regions on separate tracks</caption>
+    </screenshot>
+  </screenshots>
+
+  <categories>
+    <category>AudioVideo</category>
+    <category>Video</category>
+    <category>Recorder</category>
+  </categories>
+
+  <keywords>
+    <keyword>screen recorder</keyword>
+    <keyword>screencast</keyword>
+    <keyword>screen capture</keyword>
+    <keyword>video editor</keyword>
+    <keyword>demo</keyword>
+    <keyword>webcam</keyword>
+  </keywords>
+
+  <supports>
+    <control>pointing</control>
+    <control>keyboard</control>
+  </supports>
+
+  <!-- Empty element means every OARS category is "none", which is the honest
+       answer for a screen recorder: it renders what the user recorded. -->
+  <content_rating type="oars-1.1" />
+
+  <!--
+    ponytail: one hand-written entry, the release published when this file was
+    written. It exists because validators warn on a component with no release
+    history at all, not because anyone will remember to append to it — and a
+    version restated by hand is exactly what nix/package.nix refuses to do,
+    having watched one drift two minors behind. Upgrade path: whatever packaging
+    ends up consuming this file injects the entry from package.json at build
+    time, and this block goes away. Until something consumes it, a stale date
+    here is visible to nobody.
+  -->
+  <releases>
+    <release version="1.9.2" date="2026-08-10" />
+  </releases>
+</component>

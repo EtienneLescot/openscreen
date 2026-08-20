@@ -104,6 +104,27 @@ export function useTimeline() {
 	// the Delete key operates on.
 	const [multiSelection, setMultiSelection] = useState<RegionHandle[]>([]);
 	const [clipSelection, setClipSelection] = useState<string | null>(null);
+	// Pre-drag snapshots for the two optimistic paths (zoom focus, annotations), so a
+	// failed commit can put the document back instead of leaving an edit on screen that
+	// was never written.
+	const zoomFocusRollbackRef = useRef<AxcutDocument | null>(null);
+	const zoomFocusLiveRef = useRef<AxcutDocument | null>(null);
+	const annotationRollbackRef = useRef<AxcutDocument | null>(null);
+	const annotationLiveRef = useRef<AxcutDocument | null>(null);
+
+	// A drag does not always end in a commit: `ZoomFocusOverlay` unmounts the moment
+	// `focusMode` flips to "auto", so `endDrag` never runs and the snapshot outlives the
+	// project. Left alone, resetting focus in project B and failing that save restored
+	// project A's document into B -- the next successful save then wrote A over B. It
+	// also pinned two whole documents per hook instance, and annotations can carry
+	// base64 image data URLs.
+	// biome-ignore lint/correctness/useExhaustiveDependencies: projectId is the trigger, not a read — the body only clears refs.
+	useEffect(() => {
+		zoomFocusRollbackRef.current = null;
+		zoomFocusLiveRef.current = null;
+		annotationRollbackRef.current = null;
+		annotationLiveRef.current = null;
+	}, [projectId]);
 
 	const hasDoc = document !== null && projectId !== null;
 
@@ -123,21 +144,41 @@ export function useTimeline() {
 	useEffect(() => {
 		if (!document) return;
 		const usedAssetIds = new Set(document.timeline.clips.map((c) => c.assetId));
+		type Asset = (typeof document.assets)[number];
+		const needsScreen = (a: Asset) =>
+			Boolean(a.originalPath) && (!a.video || !a.video.width || !a.video.height);
+		// The camera is backfilled the same way and for the same reason. The PiP's layout
+		// box is derived from these dimensions, so an asset that never carried them was
+		// laid out from a hardcoded 4:3 — and differently depending on who was asking: the
+		// preview had a mounted <video> reporting the real size, an export had nothing, so
+		// a 16:9 camera came out framed one way on screen and another in the file.
+		const needsCamera = (a: Asset) =>
+			Boolean(a.cameraTrack?.sourcePath) && (!a.cameraTrack?.width || !a.cameraTrack?.height);
 		const missing = document.assets.filter(
 			(a) =>
 				usedAssetIds.has(a.id) &&
-				a.originalPath &&
-				(!a.video || !a.video.width || !a.video.height) &&
+				(needsScreen(a) || needsCamera(a)) &&
 				!probedAssetIdsRef.current.has(a.id),
 		);
 		if (missing.length === 0) return;
 		let cancelled = false;
 		void (async () => {
-			const probed: Record<string, { width: number; height: number }> = {};
+			type Dims = { width: number; height: number };
+			const probed: Record<string, { video?: Dims; camera?: Dims }> = {};
 			for (const a of missing) {
 				probedAssetIdsRef.current.add(a.id);
-				const dims = await probeVideoDimensions(toFileUrl(a.originalPath));
-				if (dims) probed[a.id] = dims;
+				const entry: { video?: Dims; camera?: Dims } = {};
+				if (needsScreen(a)) {
+					const dims = await probeVideoDimensions(toFileUrl(a.originalPath));
+					if (dims) entry.video = dims;
+				}
+				// Probed independently of the screen: one file being unreadable must not cost
+				// the other its dimensions, and a camera-less asset simply skips this.
+				if (a.cameraTrack && needsCamera(a)) {
+					const dims = await probeVideoDimensions(toFileUrl(a.cameraTrack.sourcePath));
+					if (dims) entry.camera = dims;
+				}
+				if (entry.video || entry.camera) probed[a.id] = entry;
 			}
 			if (cancelled || Object.keys(probed).length === 0) return;
 			// Re-read fresh state so a concurrent edit made while probing isn't stomped.
@@ -145,11 +186,19 @@ export function useTimeline() {
 			if (!current) return;
 			await useProjectStore.getState().saveDocument({
 				...current,
-				assets: current.assets.map((a) =>
-					probed[a.id]
-						? { ...a, video: { codec: "unknown", fps: 0, ...a.video, ...probed[a.id] } }
-						: a,
-				),
+				assets: current.assets.map((a) => {
+					const found = probed[a.id];
+					if (!found) return a;
+					return {
+						...a,
+						...(found.video
+							? { video: { codec: "unknown", fps: 0, ...a.video, ...found.video } }
+							: {}),
+						...(found.camera && a.cameraTrack
+							? { cameraTrack: { ...a.cameraTrack, ...found.camera } }
+							: {}),
+					};
+				}),
 			});
 		})();
 		return () => {
@@ -217,7 +266,7 @@ export function useTimeline() {
 				...document,
 				zoomRanges: [...document.zoomRanges, ...anchored] as AxcutDocument["zoomRanges"],
 			};
-			await saveDocument(next);
+			if (!(await saveDocument(next))) return 0;
 			return suggestions.length;
 		},
 		[document, saveDocument],
@@ -305,7 +354,7 @@ export function useTimeline() {
 					...created,
 				] as unknown as AxcutDocument["annotations"],
 			};
-			await saveDocument(next);
+			if (!(await saveDocument(next))) return;
 			// Select the freshly added annotation so its inspector opens and it shows a
 			// selection box on the canvas, ready to be retyped over.
 			const newId = created[0]?.id ?? ann.id;
@@ -487,6 +536,7 @@ export function useTimeline() {
 		(id: string, focus: { cx: number; cy: number }) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
+			if (zoomFocusLiveRef.current !== doc) zoomFocusRollbackRef.current = doc;
 			const next: AxcutDocument = {
 				...doc,
 				zoomRanges: patchPillById(doc.zoomRanges, id, {
@@ -494,6 +544,7 @@ export function useTimeline() {
 				}) as AxcutDocument["zoomRanges"],
 			};
 			setDocument(next);
+			zoomFocusLiveRef.current = next;
 		},
 		[setDocument],
 	);
@@ -501,7 +552,19 @@ export function useTimeline() {
 	const commitZoomFocus = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		await saveDocument(doc);
+		const rollback = zoomFocusRollbackRef.current;
+		zoomFocusRollbackRef.current = null;
+		zoomFocusLiveRef.current = null;
+		if (!(await saveDocument(doc)) && rollback) {
+			useProjectStore.setState((state) =>
+				// `dirty` is deliberately NOT cleared. The rollback target is the last document
+				// this drag started from, which is not the same as the last SAVED one: with two
+				// commits in flight the first one's unsaved document is what we restore. Saying
+				// "clean" there tells `beforeunload` and `setHasUnsavedChanges` there is nothing
+				// to save, and the window closes on real work without prompting.
+				state.document === doc ? { document: rollback, revision: state.revision + 1 } : {},
+			);
+		}
 	}, [saveDocument]);
 
 	// Zoom-level control for the region-settings panel (1-6, matches
@@ -590,11 +653,13 @@ export function useTimeline() {
 		(id: string, patch: Partial<AxcutDocument["annotations"][number]>) => {
 			const doc = useProjectStore.getState().document;
 			if (!doc) return;
+			if (annotationLiveRef.current !== doc) annotationRollbackRef.current = doc;
 			const next: AxcutDocument = {
 				...doc,
 				annotations: patchPillById(doc.annotations, id, patch),
 			};
 			setDocument(next);
+			annotationLiveRef.current = next;
 		},
 		[setDocument],
 	);
@@ -602,7 +667,19 @@ export function useTimeline() {
 	const commitAnnotationChange = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
-		await saveDocument(doc);
+		const rollback = annotationRollbackRef.current;
+		annotationRollbackRef.current = null;
+		annotationLiveRef.current = null;
+		if (!(await saveDocument(doc)) && rollback) {
+			useProjectStore.setState((state) =>
+				// `dirty` is deliberately NOT cleared. The rollback target is the last document
+				// this drag started from, which is not the same as the last SAVED one: with two
+				// commits in flight the first one's unsaved document is what we restore. Saying
+				// "clean" there tells `beforeunload` and `setHasUnsavedChanges` there is nothing
+				// to save, and the window closes on real work without prompting.
+				state.document === doc ? { document: rollback, revision: state.revision + 1 } : {},
+			);
+		}
 	}, [saveDocument]);
 
 	const updateSpeedSpan = useCallback(
@@ -692,7 +769,7 @@ export function useTimeline() {
 		async (kind: RegionKind, id: string) => {
 			if (!document) return;
 			// One shared mutator with the agent's removeTrim / removeModifier tools.
-			await saveDocument(removeRegionInDocument(document, kind, id));
+			if (!(await saveDocument(removeRegionInDocument(document, kind, id)))) return;
 			if (selection?.id === id) setSelection(null);
 			setMultiSelection((prev) => prev.filter((h) => h.id !== id));
 		},
@@ -743,7 +820,7 @@ export function useTimeline() {
 						? { ...legacy, speedRegions: prevSpeed, cameraFullscreenRegions: prevCameraFullscreen }
 						: document.legacyEditor,
 			};
-			await saveDocument(next);
+			if (!(await saveDocument(next))) return;
 			setSelection(null);
 			setMultiSelection([]);
 		},
@@ -926,7 +1003,7 @@ export function useTimeline() {
 				timeline: { ...currentDoc.timeline, clips: newClips },
 			};
 			const finalDoc = rederiveRegionMs(next, newClips);
-			await saveDocument(finalDoc);
+			if (!(await saveDocument(finalDoc))) return;
 			setClipSelection(newClip.id);
 
 			// If we used the placeholder, kick off the probe in the background.
@@ -971,7 +1048,7 @@ export function useTimeline() {
 			// original, so its index in the result is the original's index + 1.
 			const insertedIndex = document.timeline.clips.findIndex((c) => c.id === clipId) + 1;
 			const next = duplicateClipInDocument(document, clipId, "user", "Duplicated clip");
-			await saveDocument(next);
+			if (!(await saveDocument(next))) return;
 			setClipSelection(next.timeline.clips[insertedIndex]?.id ?? null);
 		},
 		[document, saveDocument],
@@ -981,7 +1058,7 @@ export function useTimeline() {
 		async (clipId: string) => {
 			if (!document) return;
 			// One shared mutator with the agent's removeClip tool: reflow survivors + rederive pills.
-			await saveDocument(removeClipInDocument(document, clipId));
+			if (!(await saveDocument(removeClipInDocument(document, clipId)))) return;
 			if (clipSelection === clipId) setClipSelection(null);
 		},
 		[document, clipSelection, saveDocument],
