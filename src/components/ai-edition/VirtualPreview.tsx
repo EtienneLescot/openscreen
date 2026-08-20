@@ -64,7 +64,7 @@ export function resolveAudioTrackPlayback(
 	};
 }
 
-interface PreviewAudioGraph {
+export interface PreviewAudioGraph {
 	context: AudioContext;
 	gain: GainNode;
 }
@@ -80,7 +80,7 @@ interface PreviewAudioGraph {
  * offline stage measured over the whole programme (a loudness normaliser) cannot exist
  * here at all, because the preview never holds that programme.
  */
-function applyPreviewAudioSettings(
+export function applyPreviewAudioSettings(
 	graph: PreviewAudioGraph | null,
 	elements: Array<HTMLAudioElement | null>,
 	gainDb: number,
