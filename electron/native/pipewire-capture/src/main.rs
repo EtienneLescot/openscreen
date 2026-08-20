@@ -953,6 +953,19 @@ fn run<W: Write>(
                 }
             }
 
+            // Surfaced as a warning rather than logged, because these are the
+            // conditions that leave a recording empty while every counter still
+            // reads zero: a frame refused by the shim never reaches the mailbox,
+            // so `frames-dropped` stays at 0 and the session stops "cleanly".
+            // Without this the only honest symptom is a file with no frames in
+            // it and nothing anywhere saying why.
+            Ok(Message::Stream(StreamEvent::CaptureIssue { code, detail })) => {
+                let _ = emitter.emit(&Event::Warning {
+                    code,
+                    message: detail,
+                });
+            }
+
             Ok(Message::Stream(StreamEvent::State { state, error })) => {
                 // Every transition, not just the failures. Without this a run
                 // that ends in "target not found" is ambiguous: there is no way

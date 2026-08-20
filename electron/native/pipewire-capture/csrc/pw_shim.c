@@ -121,7 +121,8 @@ struct osc_dmabuf_map {
  * unit test can assert instead of something a maintainer rediscovers.
  */
 #define OSC_CURSOR_META_SIZE(w, h) \
-    (sizeof(struct spa_meta_cursor) + sizeof(struct spa_meta_bitmap) + (size_t)(w) * (h) * 4)
+    (sizeof(struct spa_meta_cursor) + sizeof(struct spa_meta_bitmap) + \
+     (size_t)(w) * (h) * OSC_VIDEO_BYTES_PER_PIXEL)
 
 /*
  * How many buffers to describe before going quiet.
@@ -187,6 +188,7 @@ struct osc_pw_session {
     int uses_dmabuf;
     struct osc_dmabuf_map dmabuf_maps[OSC_MAX_DMABUF_MAPS];
     int frame_drop_reports;
+    int capture_issue_reports;
     /* fd whose DMA_BUF_SYNC_START has not been closed by its END yet, or -1.
      * The bracket has to span the on_frame callback, not just osc_read_frame,
      * because the callback is where the pixels are actually read. */
@@ -656,6 +658,7 @@ static void osc_on_param_changed(void *userdata, uint32_t id, const struct spa_p
      * set actually in use rather than a set that no longer exists. */
     session->buffer_info_reports = 0;
     session->frame_drop_reports = 0;
+    session->capture_issue_reports = 0;
 
     api.stream_update_params(session->stream, params, SPA_N_ELEMENTS(params));
 }
@@ -698,9 +701,10 @@ static int osc_debug_enabled(void)
  * fail are not interchangeable, and conflating them sent the one real
  * investigation of this path looking at the GPU driver for an hour.
  */
-static void *osc_map_dmabuf(int fd, size_t *len, const char **why)
+static void *osc_map_dmabuf(int fd, uint32_t data_flags, size_t *len, const char **why)
 {
     void *ptr;
+    off_t probed;
 
     if (fd < 0) {
         *why = "the compositor handed us a DMA-BUF plane with no file descriptor";
@@ -708,21 +712,24 @@ static void *osc_map_dmabuf(int fd, size_t *len, const char **why)
     }
     /*
      * A DmaBuf plane can carry an advisory maxsize rather than its allocation
-     * length. The allocation size is a property of the exporting fd, and every
-     * dmabuf fd is seekable to that length. Probe unconditionally and prefer a
-     * larger real allocation, while retaining a meaningful producer bound when
-     * the fd cannot report one.
+     * length. The allocation size is a property of the exporting fd — dma_buf's
+     * llseek returns exactly dmabuf->size — so when the fd answers, it is the
+     * authority and maxsize is not.
+     *
+     * It has to win in BOTH directions. Preferring it only when it is LARGER
+     * leaves an over-declared maxsize as the mmap length, and the kernel refuses
+     * a dmabuf mapping longer than the object (-EINVAL), so the import dies
+     * reporting a driver that will not map — which is precisely the misdiagnosis
+     * this code exists to stop, with the right answer already in hand.
      */
-    {
-        off_t probed = lseek(fd, 0, SEEK_END);
-        if (probed > 0 && (uintmax_t)probed <= SIZE_MAX && (size_t)probed > *len) {
-            size_t advertised = *len;
-            *len = (size_t)probed;
-            if (osc_debug_enabled()) {
-                fprintf(stderr,
-                        "[osc-dmabuf] maxsize=%zu, recovered %zu bytes via lseek\n",
-                        advertised, *len);
-            }
+    probed = lseek(fd, 0, SEEK_END);
+    if (probed > 0 && (uintmax_t)probed <= SIZE_MAX) {
+        size_t advertised = *len;
+
+        *len = (size_t)probed;
+        if (advertised != *len && osc_debug_enabled()) {
+            fprintf(stderr, "[osc-dmabuf] maxsize=%zu, fd reports %zu bytes via lseek\n",
+                    advertised, *len);
         }
     }
     if (*len == 0) {
@@ -742,7 +749,14 @@ static void *osc_map_dmabuf(int fd, size_t *len, const char **why)
         }
     }
     if (ptr == MAP_FAILED) {
-        *why = "this driver does not allow CPU mapping of the capture buffer";
+        /* The producer already answered this question. SPA_DATA_FLAG_MAPPABLE
+         * exists because "some memory types are not simply mappable (DmaBuf)
+         * unless explicitly specified with this flag" — so when it is unset,
+         * blaming the GPU driver sends the reader somewhere else entirely. */
+        *why = SPA_FLAG_IS_SET(data_flags, SPA_DATA_FLAG_MAPPABLE)
+                   ? "this driver does not allow CPU mapping of the capture buffer"
+                   : "the compositor did not mark this DMA-BUF plane mappable "
+                     "(SPA_DATA_FLAG_MAPPABLE unset)";
     }
     return ptr == MAP_FAILED ? NULL : ptr;
 }
@@ -761,6 +775,8 @@ static struct osc_dmabuf_map *osc_find_dmabuf_map(struct osc_pw_session *session
 
 enum osc_frame_bounds_error {
     OSC_FRAME_BOUNDS_OK,
+    /* Not a failure: a buffer carrying a cursor update and no pixels. */
+    OSC_FRAME_BOUNDS_EMPTY_CHUNK,
     OSC_FRAME_BOUNDS_NO_CAPACITY,
     OSC_FRAME_BOUNDS_OFFSET,
     OSC_FRAME_BOUNDS_CORRUPTED,
@@ -785,6 +801,20 @@ static enum osc_frame_bounds_error osc_resolve_frame_bounds(
      * from the fd when the producer leaves a placeholder in maxsize. */
     available = data_type == SPA_DATA_DmaBuf ? mapped_len : (size_t)maxsize;
     *available_out = available;
+    /*
+     * A zero-sized chunk is how a compositor ships a cursor update with no new
+     * frame attached; KWin is documented as doing exactly that. Not an error,
+     * just not a frame, and the caller returns without reporting a drop.
+     *
+     * It is asked HERE, ahead of everything else, so that this function and the
+     * production reader answer the same question. The check used to sit in
+     * osc_read_frame alone, which left the exported bound check accepting a
+     * buffer the reader silently refused — a contract the tests certified and
+     * the code did not implement.
+     */
+    if (chunk_size == 0) {
+        return OSC_FRAME_BOUNDS_EMPTY_CHUNK;
+    }
     if (available == 0) {
         return OSC_FRAME_BOUNDS_NO_CAPACITY;
     }
@@ -792,19 +822,8 @@ static enum osc_frame_bounds_error osc_resolve_frame_bounds(
     if (offset > available) {
         return OSC_FRAME_BOUNDS_OFFSET;
     }
-    if ((chunk_flags & SPA_CHUNK_FLAG_CORRUPTED) != 0) {
+    if (SPA_FLAG_IS_SET(chunk_flags, SPA_CHUNK_FLAG_CORRUPTED)) {
         return OSC_FRAME_BOUNDS_CORRUPTED;
-    }
-    if (data_type == SPA_DATA_DmaBuf) {
-        /* DMA-BUF capacity belongs to the fd, not to SPA's advisory maxsize or
-         * chunk size. Backends use different positive placeholders for those
-         * fields, so keying this path on magic values is both brittle and
-         * unnecessary. The frame is still accepted only when stride * height
-         * fits inside the actual mapped allocation below. */
-        size = available - offset;
-    } else {
-        /* Validate offset first so this subtraction cannot underflow. */
-        size = SPA_MIN((size_t)chunk_size, available - offset);
     }
     if (stride <= 0 || width <= 0 || height <= 0) {
         return OSC_FRAME_BOUNDS_GEOMETRY;
@@ -815,6 +834,28 @@ static enum osc_frame_bounds_error osc_resolve_frame_bounds(
     }
     /* Widen before multiplying: both operands originate outside this process. */
     frame_bytes = (uint64_t)stride * (uint64_t)height;
+    /*
+     * `chunk->size` is the producer's statement of how many bytes it actually
+     * wrote, and clamping to it is what stops a short or torn frame from being
+     * read as a whole one. Some DMA-BUF backends leave a placeholder there
+     * instead — xdg-desktop-portal-wlr 0.8.2 writes 9, niri writes 1 — and
+     * clamping to those rejected every frame on those compositors, which is the
+     * bug this path exists to fix.
+     *
+     * So weigh the VALUE rather than the memory type: a chunk size too small to
+     * hold even one row of pixels is not a byte count, and the mapped allocation
+     * is then the only bound left. Anything at or above a row is taken at its
+     * word. One row is the threshold on purpose — the placeholders seen in the
+     * wild are a couple of bytes, three orders of magnitude below it, while a
+     * half-written frame is far above and stays clamped, so a torn frame is
+     * still refused instead of being read as a whole one.
+     */
+    if (data_type == SPA_DATA_DmaBuf && (uint64_t)chunk_size < row_bytes) {
+        size = available - offset;
+    } else {
+        /* Offset was validated above, so this subtraction cannot underflow. */
+        size = SPA_MIN((size_t)chunk_size, available - offset);
+    }
     if (frame_bytes > (uint64_t)size) {
         return OSC_FRAME_BOUNDS_FRAME_TOO_LARGE;
     }
@@ -823,22 +864,12 @@ static enum osc_frame_bounds_error osc_resolve_frame_bounds(
     return OSC_FRAME_BOUNDS_OK;
 }
 
-int osc_pw_frame_bounds_valid(uint32_t data_type, uint32_t maxsize, size_t mapped_len,
-                              uint32_t chunk_offset, uint32_t chunk_size, int32_t chunk_flags,
-                              int32_t stride, int32_t width, int32_t height)
-{
-    size_t available;
-    size_t offset;
-    size_t size;
-
-    return osc_resolve_frame_bounds(data_type, maxsize, mapped_len, chunk_offset, chunk_size,
-                                    chunk_flags, stride, width, height, &available, &offset, &size) ==
-           OSC_FRAME_BOUNDS_OK;
-}
 
 static const char *osc_frame_bounds_error_name(enum osc_frame_bounds_error error)
 {
     switch (error) {
+    case OSC_FRAME_BOUNDS_EMPTY_CHUNK:
+        return "chunk-size-zero";
     case OSC_FRAME_BOUNDS_NO_CAPACITY:
         return "buffer-length-zero";
     case OSC_FRAME_BOUNDS_OFFSET:
@@ -857,6 +888,20 @@ static const char *osc_frame_bounds_error_name(enum osc_frame_bounds_error error
     return "unknown";
 }
 
+const char *osc_pw_frame_bounds_reason(uint32_t data_type, uint32_t maxsize, size_t mapped_len,
+                                       uint32_t chunk_offset, uint32_t chunk_size,
+                                       int32_t chunk_flags, int32_t stride, int32_t width,
+                                       int32_t height)
+{
+    size_t available = 0;
+    size_t offset = 0;
+    size_t size = 0;
+
+    return osc_frame_bounds_error_name(osc_resolve_frame_bounds(
+        data_type, maxsize, mapped_len, chunk_offset, chunk_size, chunk_flags, stride, width,
+        height, &available, &offset, &size));
+}
+
 static const char *osc_data_type_name(uint32_t data_type)
 {
     switch (data_type) {
@@ -871,22 +916,54 @@ static const char *osc_data_type_name(uint32_t data_type)
     }
 }
 
+/*
+ * The chunk fields arrive as values, not as a `chunk` pointer to re-read. This
+ * only ever runs when the producer has already misbehaved, which is exactly the
+ * moment it may be rewriting that struct; reading it a second time here would
+ * let the line describe a frame other than the one that was refused.
+ */
 static void osc_report_frame_drop(struct osc_pw_session *session, const struct spa_data *data,
-                                  size_t mapped_len, size_t available,
+                                  size_t mapped_len, size_t available, uint32_t chunk_offset,
+                                  uint32_t chunk_size, int32_t chunk_flags, int32_t stride,
                                   enum osc_frame_bounds_error error)
 {
-    if (!osc_debug_enabled() || session->frame_drop_reports >= OSC_FRAME_DROP_REPORTS) {
+    const char *reason = osc_frame_bounds_error_name(error);
+
+    if (session->frame_drop_reports >= OSC_FRAME_DROP_REPORTS) {
         return;
     }
     session->frame_drop_reports++;
-    fprintf(stderr,
-            "[osc-frame-drop] reason=%s data_type=%s data_type_id=%u fd=%lld maxsize=%u "
-            "mapped_len=%zu available_len=%zu chunk_offset=%u chunk_size=%u "
-            "chunk_flags=%d stride=%d width=%u height=%u format=%u\n",
-            osc_frame_bounds_error_name(error), osc_data_type_name(data->type), data->type,
-            (long long)data->fd, data->maxsize, mapped_len, available, data->chunk->offset,
-            data->chunk->size, data->chunk->flags, data->chunk->stride, session->format.size.width,
-            session->format.size.height, session->format.format);
+
+    /*
+     * On the event stream, not only in a debug log. Every reason this reports is
+     * decided by stride, geometry and the mapped length, all of which are fixed
+     * for a whole negotiation — so a buffer that fails once fails every time and
+     * the user gets a recording with no frames in it. Nothing downstream can
+     * name the cause: a refused frame never reaches the mailbox, so the
+     * frames-dropped counter stays at zero and the session still stops
+     * "successfully". Requiring OPENSCREEN_PIPEWIRE_DEBUG and a reproduction to
+     * learn why is the diagnosis gap this whole change set exists to close.
+     */
+    if (session->callbacks.on_capture_issue != NULL) {
+        char detail[320];
+
+        snprintf(detail, sizeof(detail),
+                 "the compositor's buffer failed validation (%s), so this frame was dropped: "
+                 "dataType=%s stride=%d width=%u height=%u chunkOffset=%u chunkSize=%u "
+                 "available=%zu",
+                 reason, osc_data_type_name(data->type), stride, session->format.size.width,
+                 session->format.size.height, chunk_offset, chunk_size, available);
+        session->callbacks.on_capture_issue(session->callbacks.user, "frame-dropped", detail);
+    }
+    if (osc_debug_enabled()) {
+        fprintf(stderr,
+                "[osc-frame-drop] reason=%s data_type=%s data_type_id=%u fd=%lld maxsize=%u "
+                "mapped_len=%zu available_len=%zu chunk_offset=%u chunk_size=%u "
+                "chunk_flags=%d stride=%d width=%u height=%u format=%u\n",
+                reason, osc_data_type_name(data->type), data->type, (long long)data->fd,
+                data->maxsize, mapped_len, available, chunk_offset, chunk_size, chunk_flags, stride,
+                session->format.size.width, session->format.size.height, session->format.format);
+    }
 }
 
 /*
@@ -912,6 +989,17 @@ static void osc_dmabuf_sync(int fd, int start)
     }
 }
 
+static void osc_report_capture_issue(struct osc_pw_session *session, const char *code,
+                                     const char *detail)
+{
+    if (session->callbacks.on_capture_issue == NULL ||
+        session->capture_issue_reports >= OSC_BUFFER_INFO_REPORTS) {
+        return;
+    }
+    session->capture_issue_reports++;
+    session->callbacks.on_capture_issue(session->callbacks.user, code, detail);
+}
+
 static void osc_on_add_buffer(void *userdata, struct pw_buffer *pw_buf)
 {
     struct osc_pw_session *session = userdata;
@@ -927,45 +1015,56 @@ static void osc_on_add_buffer(void *userdata, struct pw_buffer *pw_buf)
     if (data->type != SPA_DATA_DmaBuf) {
         return;
     }
+    /*
+     * Several pw_buffers can be slices of ONE exported allocation and therefore
+     * arrive carrying the same fd. The table is keyed on that fd and the lookup
+     * returns the first match, so mapping it again buys a second mapping of the
+     * whole allocation that nothing will ever read, plus an unmap that only ever
+     * reaches one of the two.
+     */
+    if (osc_find_dmabuf_map(session, (int)data->fd) != NULL) {
+        return;
+    }
 
     for (i = 0; i < OSC_MAX_DMABUF_MAPS; i++) {
         if (session->dmabuf_maps[i].ptr != NULL) {
             continue;
         }
-        /* `maxsize` is the producer's statement of how much of the fd belongs to
-         * this buffer, and mapping exactly that keeps the bounds checks in
-         * osc_read_frame meaningful. It is legitimately 0 for a DMA-BUF plane —
-         * wlroots leaves it unset — in which case osc_map_dmabuf recovers the
-         * real length from the fd and reports it back here. Storing the
-         * producer's 0 instead would leave every later bounds check comparing
-         * against an empty mapping. */
+        /* `maxsize` is a starting point, not the answer: osc_map_dmabuf prefers
+         * the length the fd itself reports, because a DmaBuf plane can carry an
+         * advisory maxsize — wlroots leaves it at 0 — rather than its allocation
+         * length. It reports back the length actually mapped, and THAT is what
+         * every later bounds check measures against. */
         maplen = data->maxsize;
-        session->dmabuf_maps[i].ptr = osc_map_dmabuf((int)data->fd, &maplen, &why);
+        session->dmabuf_maps[i].ptr = osc_map_dmabuf((int)data->fd, data->flags, &maplen, &why);
         if (session->dmabuf_maps[i].ptr == NULL) {
-            /* Reported once, through the buffer-info channel that already exists
-             * for describing what the compositor handed us — a mapping failure
-             * here means no frames at all, and silence would read as a hang.
+            /* Reported once, on the event stream: a mapping failure here means
+             * no frames at all, and silence would read as a hang.
              *
-             * The reason is carried up rather than assumed: this used to say the
+             * The reason is carried up rather than assumed. This used to say the
              * driver refused CPU mapping no matter what actually went wrong, and
              * that message sent the one real investigation of this path looking
              * at the GPU for a size the compositor had simply left at 0. */
-            if (session->callbacks.on_buffer_info != NULL &&
-                session->buffer_info_reports < OSC_BUFFER_INFO_REPORTS) {
-                char detail[256];
+            char detail[256];
 
-                snprintf(detail, sizeof(detail), "dmabuf import failed: %s; capture cannot proceed",
-                         why);
-                session->buffer_info_reports++;
-                session->callbacks.on_buffer_info(session->callbacks.user, data->type,
-                                                  pw_buf->buffer->n_datas, 0, 0, detail);
-            }
+            snprintf(detail, sizeof(detail), "dmabuf import failed: %s; capture cannot proceed",
+                     why);
+            osc_report_capture_issue(session, "dmabuf-import-failed", detail);
             return;
         }
         session->dmabuf_maps[i].fd = (int)data->fd;
         session->dmabuf_maps[i].len = maplen;
         return;
     }
+    /*
+     * Out of slots. Falling out of this loop used to be the one failure here
+     * that said nothing on any channel: osc_read_frame's lookup then misses for
+     * every frame of the session and returns before it can report anything, so
+     * the recording freezes with no explanation anywhere.
+     */
+    osc_report_capture_issue(session, "dmabuf-map-table-full",
+                             "the compositor allocated more DMA-BUF buffers than this helper can "
+                             "map; capture cannot proceed");
 }
 
 static void osc_on_remove_buffer(void *userdata, struct pw_buffer *pw_buf)
@@ -1106,12 +1205,16 @@ static int osc_read_cursor(const struct spa_buffer *buffer, struct osc_pw_cursor
  * Extracts the pixels of one buffer. Returns 1 when `out` describes a frame, 0
  * when this buffer carries none.
  *
- * The offset/size clamping against the mapped length is the standard PipeWire
- * consumer idiom and is not paranoia: `chunk` lives in memory the PRODUCER
- * writes, so its fields are untrusted input from another process. A compositor
- * bug — or a malicious one — that reports a size past the end of the mapping
- * would otherwise be a read straight off the end of the shared memory. For
- * DMA-BUF, that length comes from dmabuf_maps[] because maxsize may be zero.
+ * Every bound comes out of osc_resolve_frame_bounds, and none of it is
+ * paranoia: `chunk` lives in memory the PRODUCER writes, so its fields are
+ * untrusted input from another process. A compositor bug — or a malicious one —
+ * that reports a size past the end of the mapping would otherwise be a read
+ * straight off the end of the shared memory.
+ *
+ * The readable length is the MAPPING's length. For MemPtr/MemFd pw_stream maps
+ * the region and `maxsize` is that length; for DMA-BUF we map it ourselves and
+ * dmabuf_maps[] records what was actually mapped, because SPA's maxsize is
+ * advisory there and some producers leave a placeholder in it.
  */
 static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffer *buffer,
                           struct osc_pw_frame *out)
@@ -1121,11 +1224,18 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
     struct spa_meta_header *header;
     struct spa_meta_region *region;
     enum osc_frame_bounds_error bounds_error;
-    size_t available;
+    size_t available = 0;
     size_t mapped_len;
-    size_t offset;
-    size_t size;
+    /* Written by osc_resolve_frame_bounds only when it returns OK. Initialised
+     * so that reading them on any other path is a zero, never stack junk that
+     * would reach SPA_PTROFF as a pointer offset. */
+    size_t offset = 0;
+    size_t size = 0;
+    uint32_t chunk_offset;
+    uint32_t chunk_size;
+    int32_t chunk_flags;
     int32_t stride;
+    int32_t width;
     int32_t height;
 
     const uint8_t *base;
@@ -1164,20 +1274,27 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
         base = data->data;
         mapped_len = data->maxsize;
     }
-    /* A zero-sized chunk is how a compositor ships a cursor update with no new
-     * frame attached. Not an error, just not a frame. */
-    if (data->chunk->size == 0) {
+    width = (int32_t)session->format.size.width;
+    height = (int32_t)session->format.size.height;
+    /* Read each producer-written field ONCE, and decide and report from that
+     * same snapshot. Re-reading them for the diagnostic would let a misbehaving
+     * producer rewrite the numbers in between, so the report would describe a
+     * frame other than the one that was refused. */
+    chunk_offset = data->chunk->offset;
+    chunk_size = data->chunk->size;
+    chunk_flags = data->chunk->flags;
+    stride = data->chunk->stride;
+    bounds_error =
+        osc_resolve_frame_bounds(data->type, data->maxsize, mapped_len, chunk_offset, chunk_size,
+                                 chunk_flags, stride, width, height, &available, &offset, &size);
+    /* A cursor update with no pixels attached. Expected traffic, not a drop, so
+     * it is deliberately not reported. */
+    if (bounds_error == OSC_FRAME_BOUNDS_EMPTY_CHUNK) {
         return 0;
     }
-
-    height = (int32_t)session->format.size.height;
-    stride = data->chunk->stride;
-    bounds_error = osc_resolve_frame_bounds(
-        data->type, data->maxsize, mapped_len, data->chunk->offset, data->chunk->size,
-        data->chunk->flags, stride, (int32_t)session->format.size.width, height, &available, &offset,
-        &size);
     if (bounds_error != OSC_FRAME_BOUNDS_OK) {
-        osc_report_frame_drop(session, data, mapped_len, available, bounds_error);
+        osc_report_frame_drop(session, data, mapped_len, available, chunk_offset, chunk_size,
+                              chunk_flags, stride, bounds_error);
         return 0;
     }
 
@@ -1194,7 +1311,7 @@ static int osc_read_frame(struct osc_pw_session *session, const struct spa_buffe
     out->data = SPA_PTROFF(base, offset, const uint8_t);
     out->size = size;
     out->stride = stride;
-    out->width = (int32_t)session->format.size.width;
+    out->width = width;
     out->height = height;
     out->video_format = session->format.format;
 
