@@ -51,18 +51,34 @@ describe("applyAgentDocumentIfCurrent", () => {
 		expect(useProjectStore.getState().document?.project.title).toBe("Manual edit");
 	});
 
-	it("puts the document back when the save fails", async () => {
+	it("puts the document back when the save fails, and does not call it applied", async () => {
 		// Without this the user is told the edits were rejected while looking at them, and
 		// `dirty` is left set -- so the next unrelated save writes the rejected document.
+		//
+		// `saveDocument` reports its own failures and resolves false rather than
+		// throwing. This was written against a `saveDocument` that threw, and the two
+		// changes landed minutes apart: a dead `catch` type-checks, so the rollback
+		// stopped firing and "applied" came back for a write that never happened.
 		const before = createEmptyDocument({ projectId: "project_1", title: "Before" });
 		const agentResult = { ...before, project: { ...before.project, title: "Agent edit" } };
 		useProjectStore.setState({ projectId: "project_1", document: before, revision: 4 });
 		saveMock.mockResolvedValue({ success: false, error: "EACCES" });
 
-		await expect(applyAgentDocumentIfCurrent(agentResult, 4)).rejects.toThrow("EACCES");
+		await expect(applyAgentDocumentIfCurrent(agentResult, 4)).resolves.toBe("save-failed");
 
 		expect(useProjectStore.getState().document?.project.title).toBe("Before");
 		expect(useProjectStore.getState().dirty).toBe(false);
+	});
+
+	it("still rejects when the agent hands back something that is not a document", async () => {
+		// The one throw left on this path, and the reason the caller keeps a try/catch.
+		const before = createEmptyDocument({ projectId: "project_1", title: "Before" });
+		useProjectStore.setState({ projectId: "project_1", document: before, revision: 4 });
+
+		await expect(applyAgentDocumentIfCurrent({ not: "a document" }, 4)).rejects.toThrow();
+
+		expect(useProjectStore.getState().document?.project.title).toBe("Before");
+		expect(saveMock).not.toHaveBeenCalled();
 	});
 
 	it("allows an explicit rewind to replace the current revision", async () => {
