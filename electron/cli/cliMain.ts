@@ -292,21 +292,6 @@ export function runCli(command: CliCommand): void {
 	// so the WebGL-based export renderer still works.
 	app.commandLine.appendSwitch("enable-unsafe-swiftshader");
 
-	// Chromium's own C++ logging writes to stdout, and for this process stdout is
-	// the CLI's data channel. On a host with no dbus and no GPU -- CI, a server,
-	// a container -- `openscreen sources --json` emits a wall of
-	// [pid:...:ERROR:dbus/bus.cc:405] ahead of the JSON, and every consumer
-	// downstream chokes on it. Headless is precisely where --json earns its keep,
-	// so stdout has to carry the CLI's output and nothing else.
-	//
-	// console.* is already rerouted to stderr above, but that only covers the JS
-	// side; native logging never passes through Node's streams and needs the
-	// switch. Diagnostic runs keep it: seeing more is the point of that flag, and
-	// such a run is not being piped into jq.
-	if (!isDiagnosticModeEnabled()) {
-		app.commandLine.appendSwitch("disable-logging");
-	}
-
 	// Never show the dock icon for CLI runs.
 	if (process.platform === "darwin") {
 		app.dock?.hide();
