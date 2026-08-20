@@ -342,7 +342,11 @@ export function runCli(command: CliCommand): void {
 				return;
 			}
 
-			await fs.mkdir(path.join(app.getPath("userData"), "recordings"), { recursive: true });
+			milestone("resolving userData path");
+			const userDataDir = app.getPath("userData");
+			milestone(`userData = ${userDataDir}`);
+			await fs.mkdir(path.join(userDataDir, "recordings"), { recursive: true });
+			milestone("recordings directory ready");
 
 			// Media/screen permissions for the renderer (mic metering, future browser
 			// capture paths). Mirrors the GUI allowlist.
@@ -380,6 +384,7 @@ export function runCli(command: CliCommand): void {
 				},
 				{ useSystemPicker: false },
 			);
+			milestone("session permission handlers registered");
 
 			if (command.kind === "record" && command.mic && process.platform === "darwin") {
 				const micStatus = systemPreferences.getMediaAccessStatus("microphone");
@@ -388,12 +393,16 @@ export function runCli(command: CliCommand): void {
 				}
 			}
 
+			milestone("media access checked");
+
 			let cliWindow: BrowserWindow | null = null;
 			registerAppHandlersForCli(() => cliWindow);
+			milestone("app handlers registered");
 
 			// Speech-to-text backs the captions command; registered by the GUI boot
 			// path (main.ts) rather than registerIpcHandlers.
 			registerSttIpc(ipcMain);
+			milestone("stt ipc registered");
 
 			// Registered by the GUI boot path (main.ts) rather than registerIpcHandlers;
 			// the renderer's i18n init invokes it unconditionally.
@@ -494,6 +503,7 @@ export function runCli(command: CliCommand): void {
 				setupRecordStopSignals(stop);
 			}
 
+			milestone("cli ipc registered; resolving window type");
 			const windowType = {
 				export: "cli-export",
 				record: "cli-record",
