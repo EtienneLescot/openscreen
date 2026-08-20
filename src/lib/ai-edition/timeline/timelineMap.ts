@@ -416,8 +416,19 @@ interface RegionClipAnchor {
 }
 
 /** True when the anchor is usable on its own (all three parts present), i.e. the
- *  region can be placed without consulting raw-virtual time at all. */
-function hasCompleteClipAnchor<T extends RegionClipAnchor>(
+ *  region can be placed without consulting raw-virtual time at all. Anything missing
+ *  a part of `{clipId, sourceStartSec, sourceEndSec}` still relies on its RAW ms.
+ *
+ *  THE definition, so "is this anchored?" can never be asked two different ways. It
+ *  used to be asked twice: the document layer had its own copy testing
+ *  `sourceStartSec !== undefined`, which called a region carrying `null` anchored
+ *  while this one called it unanchored. `null` survives any in-memory mutation that
+ *  does not round-trip through zod, and the two answers sent the same region down
+ *  two different paths -- `rederiveAnchoredRegion` rewrote it to `Math.max(null, ...)`
+ *  i.e. the clip start, while the exporter went on using its raw ms. Preview and
+ *  export disagreed. The `typeof` tests below are what make that unreachable, so
+ *  keep them: `!== undefined` is not the same question. */
+export function hasCompleteClipAnchor<T extends RegionClipAnchor>(
 	region: T,
 ): region is T & Required<RegionClipAnchor> {
 	return (
