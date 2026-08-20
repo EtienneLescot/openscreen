@@ -158,7 +158,7 @@ test.describe("Windows native checklist smoke tests", () => {
 	// Both halves matter — that nothing asks during construction, and that the
 	// renderer still does after mount.
 	//
-	// The second assertion also pins `forward` OFF. It used to be the only route back
+	// The tape assertions also pin `forward` OFF. It used to be the only route back
 	// out of click-through, via a global WH_MOUSE_LL hook that Windows can refuse or
 	// silently revoke — which is how #385 reproduced a dead HUD on a build that already
 	// carried the #266 fix. The way out is now the "hud-overlay-cursor" poll in
@@ -222,6 +222,15 @@ test.describe("Windows native checklist smoke tests", () => {
 			await expect
 				.poll(() => app.evaluate(() => globalThis.__hudTape ?? []), { timeout: 20_000 })
 				.toContainEqual([true]);
+
+			// Containment is not enough by itself: a second caller asking with
+			// `forward` would sit in the tape beside the renderer's own bare [true]
+			// and still satisfy it, which is exactly the shape a re-arm of the hook
+			// takes. So pin the whole tape — the first ask is the renderer's, and no
+			// ask anywhere carries an options object, the only way `forward` returns.
+			const tape = await app.evaluate(() => globalThis.__hudTape ?? []);
+			expect(tape[0]).toEqual([true]);
+			expect(tape.filter((call) => call.length > 1)).toEqual([]);
 		} finally {
 			await app.evaluate(({ BrowserWindow }) => {
 				const original = globalThis.__hudSetIgnoreMouseEvents;
