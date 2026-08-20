@@ -12,11 +12,20 @@ describe("resolveAudioTrackPlayback", () => {
 		expect(resolveAudioTrackPlayback(12, 10)).toEqual({ targetTimeSec: 10, shouldPlay: false });
 	});
 
+	it("treats a zero-length track as already ended", () => {
+		// An empty extraction is a KNOWN length, not an unknown one. Reading it as
+		// unknown parks the element at the video's time with shouldPlay true, and the
+		// rAF loop then seeks and calls play() on it for the whole timeline.
+		expect(resolveAudioTrackPlayback(1, 0)).toEqual({ targetTimeSec: 0, shouldPlay: false });
+	});
+
 	it("plays while the duration is still unknown", () => {
 		expect(resolveAudioTrackPlayback(1, Number.NaN)).toEqual({
 			targetTimeSec: 1,
 			shouldPlay: true,
 		});
+		// A negative duration is not a length either — same fallback as NaN.
+		expect(resolveAudioTrackPlayback(1, -1)).toEqual({ targetTimeSec: 1, shouldPlay: true });
 	});
 
 	it("never seeks to a negative time", () => {
