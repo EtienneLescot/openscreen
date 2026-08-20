@@ -386,6 +386,8 @@ interface Window {
 		quitApp: () => void;
 		setTitleBarOverlay: (color: string, symbolColor: string) => void;
 		getPlatform: () => string;
+		getAppInfo: () => Promise<{ version: string; canCheckForUpdates: boolean }>;
+		checkForUpdates: () => Promise<void>;
 		revealInFolder: (
 			filePath: string,
 		) => Promise<{ success: boolean; error?: string; message?: string }>;

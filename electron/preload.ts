@@ -361,6 +361,17 @@ contextBridge.exposeInMainWorld("electronAPI", {
 		ipcRenderer.send("set-titlebar-overlay", color, symbolColor);
 	},
 	getPlatform: () => PLATFORM,
+	/** App identity for the HUD's settings panel: the running version, and whether this copy
+	 *  may offer an update check at all — a Store/Flathub/Snap/Nix install may not, see
+	 *  electron/install-channel.ts. */
+	getAppInfo: () =>
+		ipcRenderer.invoke("get-app-info") as Promise<{
+			version: string;
+			canCheckForUpdates: boolean;
+		}>,
+	/** Resolves once the check has a verdict. The dialogs that verdict leads to — download,
+	 *  restart — are the main process's conversation, not the caller's. */
+	checkForUpdates: () => ipcRenderer.invoke("check-for-updates") as Promise<void>,
 	revealInFolder: (filePath: string) => {
 		return ipcRenderer.invoke("reveal-in-folder", filePath);
 	},

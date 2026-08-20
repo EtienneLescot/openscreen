@@ -211,6 +211,45 @@
 	color: rgba(255, 255, 255, 0.35);
 }
 
+/* About block at the foot of the settings panel: version on the left, the update check on
+   the right. Same 10px gutter as the meter rows above it so the panel keeps one left edge. */
+.hudModalAboutRow {
+	display: flex;
+	align-items: center;
+	justify-content: space-between;
+	gap: 8px;
+	padding: 4px 10px 6px;
+}
+
+.hudModalVersion {
+	font-family: var(--font-mono, ui-monospace, monospace);
+	font-size: 10px;
+	color: rgba(255, 255, 255, 0.45);
+}
+
+.hudModalAboutAction {
+	border: 0;
+	border-radius: 0.45rem;
+	padding: 0.3rem 0.5rem;
+	background: transparent;
+	font-size: 11px;
+	color: rgba(255, 255, 255, 0.72);
+	cursor: pointer;
+	transition: background-color 120ms ease, color 120ms ease;
+}
+
+.hudModalAboutAction:hover:not(:disabled),
+.hudModalAboutAction:focus-visible:not(:disabled) {
+	background: rgba(255, 255, 255, 0.075);
+	color: #ffffff;
+	outline: none;
+}
+
+.hudModalAboutAction:disabled {
+	color: rgba(255, 255, 255, 0.35);
+	cursor: default;
+}
+
 .levelMeter {
 	display: flex;
 	flex: 1;

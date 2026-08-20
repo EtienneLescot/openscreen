@@ -93,6 +93,10 @@
 		"micHint": "تحدّث لاختبار الميكروفون",
 		"noMicrophones": "لم يتم العثور على ميكروفون",
 		"preview": "معاينة",
-		"previewUnavailable": "المعاينة غير متاحة"
+		"previewUnavailable": "المعاينة غير متاحة",
+		"about": "حول",
+		"version": "الإصدار {{version}}",
+		"checkForUpdates": "التحقق من التحديثات",
+		"checkingForUpdates": "جارٍ التحقق…"
 	}
 }
