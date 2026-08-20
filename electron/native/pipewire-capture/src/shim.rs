@@ -308,11 +308,36 @@ impl FrameMailbox {
 /// belongs to, permanently and by an amount nothing records. Standing in
 /// silence of exactly the dropped length keeps that count right, so an overflow
 /// costs a gap where it happened and nothing after it. The debt is a counter
-/// until someone drains, which is also the only thing that can stop it growing.
+/// until someone drains, which is also the only thing that can stop it growing —
+/// and it stops being exact at [`MAX_SILENCE_SECONDS`], which is where a bounded
+/// allocation starts to matter more than sync nobody can still use.
+/// How much silence the ring will stand in for before it stops trying.
+///
+/// The debt costs a counter while it is owed and only becomes memory when
+/// someone drains — 384 KB per second of it, at 48 kHz stereo f32. A drain runs
+/// on every tick of the main loop, heartbeat included (`Capture::advance` from
+/// the `RecvTimeoutError::Timeout` arm in main.rs), so a debt worth seconds
+/// means the loop itself has stopped. There is no bound on how long a stopped
+/// loop stays stopped, and one that comes back materialises the whole stall in a
+/// single allocation — which is also the one place the ring's own two-second cap
+/// does not reach. There is a second, quieter way to get there: nothing drains
+/// before the first video frame either, so the debt grows for as long as the
+/// portal picker is up. That normally ends in `clear` rather than a drain, but
+/// not if staging that first frame fails, and the stop path flushes the ring.
+///
+/// Thirty seconds is far past any stall a recording survives, and past it the
+/// take has a hole half a minute wide — the cap trades sync that is already lost
+/// for an allocation that stays bounded. `dropped_samples` keeps counting the
+/// whole loss regardless, so the `audio-dropped` warning still reports what
+/// really happened rather than what could be paid back.
+const MAX_SILENCE_SECONDS: usize = 30;
+
 #[derive(Debug)]
 pub struct AudioRing {
     inner: std::sync::Mutex<RingInner>,
     capacity: usize,
+    /// Ceiling on `RingInner::silence_owed`. See [`MAX_SILENCE_SECONDS`].
+    max_silence_owed: usize,
     dropped: std::sync::atomic::AtomicU64,
 }
 
@@ -342,6 +367,7 @@ impl AudioRing {
                 accepting: true,
             }),
             capacity: seconds * sample_rate * channels,
+            max_silence_owed: MAX_SILENCE_SECONDS * sample_rate * channels,
             dropped: std::sync::atomic::AtomicU64::new(0),
         }
     }
@@ -362,7 +388,10 @@ impl AudioRing {
         if inner.queue.len() > self.capacity {
             let excess = inner.queue.len() - self.capacity;
             inner.queue.drain(..excess);
-            inner.silence_owed += excess;
+            // Capped, so one drain can never be asked for more than the ring's
+            // own capacity plus this. The tally below is NOT capped: what the
+            // warning reports is the loss, not the part of it that was paid for.
+            inner.silence_owed = (inner.silence_owed + excess).min(self.max_silence_owed);
             self.dropped.fetch_add(excess as u64, Ordering::Relaxed);
         }
     }
@@ -1180,6 +1209,28 @@ mod audio_ring_tests {
         assert_eq!(out.len(), 40, "the drain must cover as much time as was pushed");
         assert!(out[..24].iter().all(|sample| *sample == 0.0), "the drop reads as silence");
         assert!(out[24..].iter().all(|sample| *sample == 1.0), "the survivors are the newest");
+    }
+
+    #[test]
+    fn the_silence_owed_stops_growing_before_the_allocation_does() {
+        // A drain turns the debt into real samples, and nothing else bounds how
+        // large it can get: the loop can stop for an unbounded stretch and then
+        // come back. `ring()` is 8 Hz stereo, so the cap is 30 s = 480 samples.
+        let ring = ring();
+        ring.push_for_test(&vec![1.0; 5_000]);
+
+        let mut out = Vec::new();
+        ring.drain_into(&mut out);
+        assert_eq!(
+            out.len(),
+            480 + 16,
+            "a drain may never be asked for more than the cap plus the ring's own capacity"
+        );
+        assert_eq!(
+            ring.dropped_samples(),
+            4_984,
+            "and the tally still reports the whole loss, not the part paid back"
+        );
     }
 
     #[test]
