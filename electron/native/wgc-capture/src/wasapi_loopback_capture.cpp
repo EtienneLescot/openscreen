@@ -168,19 +168,24 @@ bool WasapiLoopbackCapture::initialize(WasapiCaptureEndpoint endpoint, const std
         }
     }
 
-    // A microphone was asked for and neither its id nor its name could name a
-    // device, so the recording is about to capture whatever Windows calls the
-    // default input. That is worth saying out loud: the caller sends an empty
-    // name whenever it could not resolve one in time, and the take then sounds
-    // like the wrong microphone with nothing anywhere explaining why
-    // (getopenscreen/openscreen#404).
-    if (endpoint == WasapiCaptureEndpoint::Microphone && !device_ && deviceName.empty()) {
-        std::cerr << "{\"event\":\"warning\",\"code\":\"microphone-defaulted\","
-                     "\"message\":\"No microphone name was supplied; capturing the default input\"}"
-                  << std::endl;
-    }
-
     if (!device_) {
+        // A particular microphone was asked for and nothing here could find it,
+        // so the recording is about to capture whatever Windows calls the default
+        // input. Worth saying out loud, and keyed on the OUTCOME rather than on
+        // which lookup failed: the caller sends an empty name when it could not
+        // resolve one in time, but a name that simply matches no endpoint lands
+        // in exactly the same place. Either way the take sounds like the wrong
+        // microphone with nothing explaining why (getopenscreen/openscreen#404).
+        const bool wantedAParticularMicrophone =
+            endpoint == WasapiCaptureEndpoint::Microphone &&
+            ((!deviceId.empty() && deviceId != L"default") || !deviceName.empty());
+        if (wantedAParticularMicrophone) {
+            std::cerr << "{\"event\":\"warning\",\"code\":\"microphone-defaulted\","
+                         "\"message\":\"The requested microphone could not be resolved; "
+                         "capturing the default input\"}"
+                      << std::endl;
+        }
+
         const EDataFlow flow =
             endpoint == WasapiCaptureEndpoint::SystemLoopback ? eRender : eCapture;
         hr = deviceEnumerator_->GetDefaultAudioEndpoint(flow, eConsole, &device_);

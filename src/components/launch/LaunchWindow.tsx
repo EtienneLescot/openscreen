@@ -91,6 +91,7 @@ export function LaunchWindow() {
 		setMicrophoneEnabled,
 		microphoneDeviceId,
 		setMicrophoneDeviceId,
+		microphoneDeviceName,
 		setMicrophoneDeviceName,
 		systemAudioEnabled,
 		setSystemAudioEnabled,
@@ -160,7 +161,11 @@ export function LaunchWindow() {
 		devices: micDevices,
 		selectedDeviceId: selectedMicId,
 		setSelectedDeviceId: setSelectedMicId,
-	} = useMicrophoneDevices(microphoneEnabled || isDeviceSettingsOpen, microphoneDeviceId);
+	} = useMicrophoneDevices(
+		microphoneEnabled || isDeviceSettingsOpen,
+		microphoneDeviceId,
+		microphoneDeviceName,
+	);
 
 	useEffect(() => {
 		if (selectedMicId && selectedMicId !== "default") {
