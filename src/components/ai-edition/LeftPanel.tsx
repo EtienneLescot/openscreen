@@ -935,13 +935,23 @@ function ChatStripPanel() {
 						try {
 							return await applyDocument(options);
 						} catch (err) {
+							// Only `ensureDocument` still throws here -- the agent handed back
+							// something that is not a document. A failed WRITE does not reach this:
+							// the store reports it itself and `applyDocument` answers "save-failed".
 							toast.error(t("chat.applyEditsFailed"), {
 								description: err instanceof Error ? err.message : String(err),
 							});
-							return "conflict" as const;
+							return "malformed" as const;
 						}
 					};
-					if ((await applyEdits()) === "conflict") {
+					const applyResult = await applyEdits();
+					if (applyResult === "save-failed") {
+						// The store has already said WHY the write failed, with the native error.
+						// This says what it COST, without a description so the two do not repeat
+						// each other: the assistant's "done, I removed 14 silences" renders either
+						// way, so a bare save error next to it leaves the two unconnected.
+						toast.error(t("chat.applyEditsFailed"));
+					} else if (applyResult === "conflict") {
 						// The turn is not lost, it is just not automatically applied: the document
 						// is still in hand and the assistant's reply is about to be rendered as if
 						// the edits had landed. The thing that usually moves `revision` here is a

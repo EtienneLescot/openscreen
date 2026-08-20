@@ -2,7 +2,7 @@ import type { AxcutDocument } from "../schema";
 import { ensureDocument } from "../schema";
 import { useProjectStore } from "./projectStore";
 
-export type AgentDocumentApplyResult = "applied" | "conflict" | "no-live-document";
+export type AgentDocumentApplyResult = "applied" | "conflict" | "save-failed" | "no-live-document";
 
 /**
  * Apply a full document returned by the agent only if the live editor is still
@@ -29,22 +29,25 @@ export async function applyAgentDocumentIfCurrent(
 	// saveDocument, which sets `document` too" silently breaks Ctrl+Z after an agent edit.
 	// `saveDocument` is what reaches the disk.
 	store.setDocument(parsed);
-	try {
-		await store.saveDocument(parsed);
-	} catch (err) {
-		// The edits are on screen by now. Leaving them there while the caller toasts
-		// "could not apply the agent's edits" tells the user two opposite things at once,
-		// and worse: `dirty` is set, so the next unrelated save would quietly persist the
-		// document we just said was rejected.
-		//
-		// Restored through `setState` rather than `setDocument`, so the rejected document
-		// does not land on the undo stack. `revision` keeps the bump: it did move, and
-		// leaving it forward makes any in-flight guard read "conflict", which is the safe
-		// direction to be wrong in.
-		if (previous) useProjectStore.setState({ document: previous, dirty: previousDirty });
-		throw err;
-	}
-	return "applied";
+	if (await store.saveDocument(parsed)) return "applied";
+
+	// The edits are on screen by now. Leaving them there while the caller says they
+	// were not applied tells the user two opposite things at once, and worse: `dirty`
+	// is set, so the next unrelated save would quietly persist the document we just
+	// said was rejected.
+	//
+	// Restored through `setState` rather than `setDocument`, so the rejected document
+	// does not land on the undo stack. `revision` keeps the bump: it did move, and
+	// leaving it forward makes any in-flight guard read "conflict", which is the safe
+	// direction to be wrong in.
+	//
+	// A returned `false` and not a `catch`: `saveDocument` reports its own failures and
+	// never rejects. This was a `try`/`catch` when it was written, against a
+	// `saveDocument` that threw -- the two landed within minutes of each other, and a
+	// dead `catch` type-checks, so the rollback stopped firing and this returned
+	// "applied" for a write that never happened.
+	if (previous) useProjectStore.setState({ document: previous, dirty: previousDirty });
+	return "save-failed";
 }
 
 export interface AgentTurn<T> {
