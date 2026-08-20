@@ -20,6 +20,7 @@ import type { CursorCaptureMode, RecordedVideoAssetInput } from "@/lib/recording
 import { requestCameraAccess } from "@/lib/requestCameraAccess";
 import { loadUserPreferences, saveUserPreferences } from "@/lib/userPreferences";
 import { createRecorderHandle, type RecorderHandle } from "./recorderHandle";
+import { webcamDeviceIdentityFrom } from "./webcamDeviceIdentity";
 
 const TARGET_FRAME_RATE = 60;
 const MIN_FRAME_RATE = 30;
@@ -317,6 +318,18 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			mixingContext.current = null;
 		}
 	}, []);
+
+	/**
+	 * The camera to name in a native capture request. See
+	 * `webcamDeviceIdentityFrom` for why it is read off the live track rather than
+	 * off this hook's two separate pieces of state. Must be called before
+	 * `stopWebcamPreviewStream()`, which is why the Windows path captures it up
+	 * front instead of at the point of use.
+	 */
+	const readWebcamDeviceIdentity = useCallback(
+		() => webcamDeviceIdentityFrom(webcamStream.current, webcamDeviceId, webcamDeviceName),
+		[webcamDeviceId, webcamDeviceName],
+	);
 
 	const stopWebcamPreviewStream = useCallback(() => {
 		if (!webcamStream.current) {
@@ -1058,11 +1071,16 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 			const displayId = Number(selectedSource.display_id);
 			const sourceType = selectedSource.id.startsWith("window:") ? "window" : "display";
 			const windowHandle = parseWindowHandleFromSourceId(selectedSource.id);
+			let webcamIdentity = { deviceId: webcamDeviceId, deviceName: webcamDeviceName };
 			if (webcamEnabled) {
 				await waitForWebcamReady();
 				if (!isCountdownRunActive(countdownRunToken)) {
 					return true;
 				}
+				// Read the device off the live track before letting go of it: this is
+				// the only moment where the id and the name are known to describe the
+				// same camera (see readWebcamDeviceIdentity).
+				webcamIdentity = readWebcamDeviceIdentity();
 				// Release the renderer-side validation stream before asking the native
 				// helper to open the same device: most webcams only allow one exclusive
 				// capture session, and native (Media Foundation/DirectShow) now owns
@@ -1098,8 +1116,8 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				},
 				webcam: {
 					enabled: webcamEnabled,
-					deviceId: webcamDeviceId,
-					deviceName: webcamDeviceName,
+					deviceId: webcamIdentity.deviceId,
+					deviceName: webcamIdentity.deviceName,
 					width: 0,
 					height: 0,
 					fps: WEBCAM_TARGET_FRAME_RATE,
@@ -1248,8 +1266,9 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 				},
 				webcam: {
 					enabled: webcamEnabled,
-					deviceId: webcamDeviceId,
-					deviceName: webcamDeviceName,
+					// Same pairing rule as the Windows path; here the stream is still
+					// open, so the identity can be read at the point of use.
+					...readWebcamDeviceIdentity(),
 					width: 0,
 					height: 0,
 					fps: WEBCAM_TARGET_FRAME_RATE,

@@ -85,6 +85,84 @@ describe("useCameraDevices", () => {
 		expect(result.current.isLoading).toBe(false);
 	});
 
+	it("should prefer the restored device over the first enumerated one", async () => {
+		const { result } = renderHook(() => useCameraDevices(true, "cam2"));
+
+		await waitFor(() => {
+			expect(result.current.selectedDeviceId).toBe("cam2");
+		});
+	});
+
+	// The prefs arrive over IPC and routinely land after enumeration has already
+	// settled on the first device. Losing the user's camera at that point is what
+	// made a HUD rebuilt for a new recording revert to a virtual camera that emits
+	// nothing, while the native helper was told to capture it by name.
+	it("should adopt the restored device when it arrives after enumeration", async () => {
+		const { result, rerender } = renderHook(
+			({ preferred }: { preferred?: string }) => useCameraDevices(true, preferred),
+			{ initialProps: { preferred: undefined as string | undefined } },
+		);
+
+		await waitFor(() => {
+			expect(result.current.selectedDeviceId).toBe("cam1");
+		});
+
+		rerender({ preferred: "cam2" });
+
+		await waitFor(() => {
+			expect(result.current.selectedDeviceId).toBe("cam2");
+		});
+	});
+
+	it("should ignore a restored device that is no longer plugged in", async () => {
+		const { result } = renderHook(() => useCameraDevices(true, "cam-that-left"));
+
+		await waitFor(() => {
+			expect(result.current.selectedDeviceId).toBe("cam1");
+		});
+	});
+
+	/**
+	 * The HUD feeds this hook's own output back in: `LaunchWindow` writes
+	 * `selectedDeviceId` into the recorder's `webcamDeviceId`, and hands that same
+	 * value back as `preferredDeviceId`. A rule that re-asserts the preference on
+	 * every render would ping-pong with that write-back forever, so the loop this
+	 * closes has to settle. Counts renders rather than asserting a value: a
+	 * converging hook renders a handful of times, one that oscillates renders
+	 * without end.
+	 */
+	it("settles instead of oscillating when its own selection is fed back as the preference", async () => {
+		let renders = 0;
+		const { result, rerender } = renderHook(
+			({ preferred }: { preferred?: string }) => {
+				renders += 1;
+				return useCameraDevices(true, preferred);
+			},
+			{ initialProps: { preferred: undefined as string | undefined } },
+		);
+
+		await waitFor(() => {
+			expect(result.current.selectedDeviceId).toBe("cam1");
+		});
+
+		// The HUD hands back whatever this hook just selected, then the late prefs
+		// name a different camera, which the hook adopts and hands back in turn.
+		rerender({ preferred: result.current.selectedDeviceId });
+		rerender({ preferred: "cam2" });
+
+		await waitFor(() => {
+			expect(result.current.selectedDeviceId).toBe("cam2");
+		});
+
+		const settled = renders;
+		rerender({ preferred: result.current.selectedDeviceId });
+		await new Promise((resolve) => setTimeout(resolve, 50));
+
+		// Only the render this test asked for; the effect no longer has anything to say.
+		expect(renders - settled).toBeLessThanOrEqual(2);
+		expect(result.current.selectedDeviceId).toBe("cam2");
+	});
+
 	it("should fall back to first available device when selected device is unplugged", async () => {
 		const { result } = renderHook(() => useCameraDevices(true));
 
