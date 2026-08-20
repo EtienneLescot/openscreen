@@ -925,13 +925,19 @@ struct MuxTrack {
     stream_time_base: ff::AVRational,
 }
 
-/// A multi-track MP4 writer: one video stream plus however many audio tracks.
+/// An MP4 writer, taking however many streams [`Self::add_stream`] is called for.
 ///
-/// Audio is written as separate tracks rather than pre-mixed, matching the macOS
-/// helper — see the note in crates/compositor/src/audio.rs, which decodes and
-/// mixes every audio track it finds on export. Keeping them apart means the two
-/// captures never have to be resampled onto a common clock here: each carries
-/// its own timestamps and the container reconciles them.
+/// WHAT A RECORDING ACTUALLY USES IS TWO: one H.264 video stream and one AAC
+/// track carrying system audio and the microphone already mixed together
+/// (`AudioMix` in crate::capture). This wrote them as two separate audio tracks
+/// once, matching what the macOS helper did, on the grounds that the export path
+/// mixes every track it finds (crates/compositor/src/audio.rs). The preview does
+/// not: it is an HTML5 `<video>`, which plays the default audio track and cannot
+/// be told to switch, because Chromium implements no `audioTracks` API — so a
+/// take with silent system audio played silence while the microphone sat in a
+/// track nothing would ever select. Mixing before the muxer is what fixed it,
+/// and it also removes the question of reconciling two capture clocks in the
+/// container: there is only one audio timeline now, built in `AudioMix::pump`.
 ///
 /// `+faststart` is not used: it rewrites the whole file on close, which on a
 /// long recording means copying gigabytes. The moov atom is written at the end

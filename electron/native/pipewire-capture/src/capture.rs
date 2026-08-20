@@ -62,8 +62,9 @@ struct AudioInput {
 /// was silent while the microphone sat in a track nothing would ever select.
 ///
 /// The Windows helper has always written one mixed track
-/// (`mf_encoder.cpp` has a single `audioStreamIndex_`, fed by `AudioMixer`).
-/// This now matches it. macOS still has the two-track bug.
+/// (`mf_encoder.cpp` has a single `audioStreamIndex_`, fed by `AudioMixer`), and
+/// macOS has since done the same (`AudioTrackMixer` feeding the helper's single
+/// `AVAssetWriterInput(mediaType: .audio)`). All three now agree.
 struct AudioMix {
     inputs: Vec<AudioInput>,
     encoder: AudioEncoder,
@@ -396,6 +397,17 @@ impl Capture {
     pub fn pause(&mut self) {
         if self.paused_at.is_none() {
             self.paused_at = Some(Instant::now());
+            // The rings stop taking samples here rather than queueing them for
+            // the discard at resume. A queue nobody drains overflows the
+            // two-second cap within two seconds of a pause, and the discard that
+            // used to clear that overflow cleared the tally with it — taking any
+            // real drop from before the pause, which is the one worth reporting.
+            // See AudioRing::pause.
+            if let Some(mix) = &mut self.audio {
+                for input in &mut mix.inputs {
+                    input.ring.pause();
+                }
+            }
         }
     }
 
@@ -408,7 +420,7 @@ impl Capture {
             // of the pause.
             if let Some(mix) = &mut self.audio {
                 for input in &mut mix.inputs {
-                    input.ring.clear();
+                    input.ring.resume();
                     input.pending.clear();
                 }
             }
@@ -778,6 +790,51 @@ mod tests {
             "pre-roll overflow must not be reported as the encoder falling behind"
         );
         assert!(capture.dropped_audio().is_empty());
+        let _ = std::fs::remove_file(&output);
+    }
+
+    #[test]
+    fn a_real_drop_before_a_pause_still_reaches_the_warning_after_it() {
+        // Regression: resume() threw away what arrived during the pause by
+        // clearing the ring, and the clear reset `dropped` — so an overflow that
+        // happened for real earlier in the take was forgotten, and the
+        // `audio-dropped` warning (main.rs) never fired for it. Pausing is the
+        // only thing between the user and the only report that a recording lost
+        // audio.
+        let ring = Arc::new(AudioRing::new(1, 8, AUDIO_CHANNELS));
+        let capacity = 1 * 8 * AUDIO_CHANNELS;
+
+        let output = std::env::temp_dir().join("openscreen-capture-audio-pause-drop.mp4");
+        let (mut capture, _) = Capture::start(
+            &output,
+            320,
+            240,
+            30,
+            Some(1_000_000),
+            Some(Backend::Software),
+            vec![AudioSource { label: "system", ring: ring.clone(), gain: 1.0, bitrate: 128_000 }],
+        )
+        .expect("start");
+        capture
+            .stage(&frame(320, 240, shim::constants().video_format_bgrx))
+            .expect("stage");
+
+        // Mid-take: the encoder falls far enough behind that the ring overflows.
+        ring.push_for_test(&vec![0.5; capacity * 3]);
+        let dropped = ring.dropped_samples();
+        assert!(dropped > 0, "the ring must have overflowed for this test to mean anything");
+
+        capture.pause();
+        // A long pause. Nothing that arrives during it belongs to the recording,
+        // and none of it is the encoder falling behind either.
+        ring.push_for_test(&vec![0.5; capacity * 10]);
+        capture.resume();
+
+        assert_eq!(
+            capture.dropped_audio(),
+            vec![("system", dropped)],
+            "the pause must not spend the tally of a drop that happened before it"
+        );
         let _ = std::fs::remove_file(&output);
     }
 
