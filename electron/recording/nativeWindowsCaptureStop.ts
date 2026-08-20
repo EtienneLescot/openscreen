@@ -110,6 +110,44 @@ export function readWebcamUnavailable(output: string) {
 }
 
 /**
+ * Index of the `}` that closes the object starting at `start`, or -1.
+ *
+ * Stopping at the first `}` is wrong for a value that contains one, and a
+ * camera's friendly name is free text straight from the driver — "Camera }
+ * Studio" is unusual but nothing forbids it, and cutting the object there turns
+ * a working camera into one that reported no format at all. So brace depth is
+ * counted, and braces inside a JSON string are skipped along with anything an
+ * escape protects.
+ */
+function findObjectEnd(output: string, start: number) {
+	let depth = 0;
+	let inString = false;
+	let escaped = false;
+	for (let index = start; index < output.length; index += 1) {
+		const ch = output[index];
+		if (escaped) {
+			escaped = false;
+			continue;
+		}
+		if (ch === "\\" && inString) {
+			escaped = true;
+			continue;
+		}
+		if (ch === '"') {
+			inString = !inString;
+			continue;
+		}
+		if (inString) continue;
+		if (ch === "{") depth += 1;
+		else if (ch === "}") {
+			depth -= 1;
+			if (depth === 0) return index;
+		}
+	}
+	return -1;
+}
+
+/**
  * The format the helper negotiated with the camera, or null if it never said.
  *
  * Slices the object out of the buffer rather than parsing a line whole. Both
@@ -125,7 +163,7 @@ export function readWebcamFormat(output: string) {
 	if (start === -1) {
 		return null;
 	}
-	const end = output.indexOf("}", start);
+	const end = findObjectEnd(output, start);
 	if (end === -1) {
 		return null;
 	}

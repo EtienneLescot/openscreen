@@ -199,7 +199,12 @@ export function useScreenRecorder(): UseScreenRecorderReturn {
 	 * recording is starting from — the take never begins, with nothing logged.
 	 */
 	const tRef = useRef(t);
-	tRef.current = t;
+	// In an effect, not during render: a render React discards still leaves a ref
+	// written there, and a later recording error would then be worded by a UI that
+	// never reached the screen.
+	useEffect(() => {
+		tRef.current = t;
+	}, [t]);
 	const [recording, setRecording] = useState(false);
 	const [paused, setPaused] = useState(false);
 	const [saving, setSaving] = useState(false);

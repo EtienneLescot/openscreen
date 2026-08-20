@@ -20,10 +20,21 @@ export function useCameraDevices(enabled: boolean = false, preferredDeviceId?: s
 	const [selectedDeviceId, setSelectedDeviceId] = useState<string>("");
 	const [isLoading, setIsLoading] = useState(false);
 	const [error, setError] = useState<string | null>(null);
+	// `loadDevices` runs long after the render that scheduled it — on a
+	// `devicechange` that may arrive at any moment — so it reads these two
+	// through refs rather than closing over them.
+	//
+	// Synchronised in an effect and not during render: React may discard a render
+	// without committing it, and a ref written there keeps the value anyway. The
+	// selection would then be resolved against a device the committed tree never
+	// agreed on. Declared above the loading effect so the refs are current before
+	// the first enumeration reads them.
 	const selectedDeviceIdRef = useRef(selectedDeviceId);
-	selectedDeviceIdRef.current = selectedDeviceId;
 	const preferredDeviceIdRef = useRef(preferredDeviceId);
-	preferredDeviceIdRef.current = preferredDeviceId;
+	useEffect(() => {
+		selectedDeviceIdRef.current = selectedDeviceId;
+		preferredDeviceIdRef.current = preferredDeviceId;
+	}, [selectedDeviceId, preferredDeviceId]);
 
 	useEffect(() => {
 		if (!enabled) return;
