@@ -172,6 +172,17 @@ describe("parseCliArgs", () => {
 		expect(parse(["sources", "--out"])).toMatchObject({ kind: "error" });
 	});
 
+	it("rejects an empty flag value rather than resolving it to cwd", () => {
+		// `openscreen sources -o "$OUT"` with OUT unset arrives as an empty
+		// argument. resolvePath would turn it into cwd, which only fails later as
+		// EISDIR from the write; the omitted-value spelling is the same mistake and
+		// must get the same answer.
+		expect(parse(["sources", "-o", ""])).toMatchObject({ kind: "error" });
+		// takeValue is shared, so every flag that takes a value gets this.
+		expect(parse(["pack", "demo.openscreen", "--out", ""])).toMatchObject({ kind: "error" });
+		expect(parse(["export", "demo.openscreen", "-o", ""])).toMatchObject({ kind: "error" });
+	});
+
 	it("parses pack", () => {
 		expect(parse(["pack", "demo.openscreen", "--out", "bundle"])).toMatchObject({
 			kind: "pack",
