@@ -1380,7 +1380,7 @@ export function VideoEffectsPane() {
 	return (
 		<Pane title={ts("effects.title")} icon={<Sliders size={14} />} helpText={ts("effects.help")}>
 			<div className={styles.paneRow}>
-				<span className="label">{ts("effects.blurBg")}</span>
+				<span className={styles.label}>{ts("effects.blurBg")}</span>
 				<Toggle
 					checked={settings.showBlur}
 					disabled={!hasDocument}
@@ -1540,7 +1540,7 @@ export function LayoutPane() {
 				</select>
 			</div>
 			<div className={styles.paneRow}>
-				<span className="label">{ts("layout.mirrorWebcam")}</span>
+				<span className={styles.label}>{ts("layout.mirrorWebcam")}</span>
 				<Toggle
 					checked={settings.webcamMirrored}
 					disabled={layoutControlsDisabled}
@@ -1554,7 +1554,7 @@ export function LayoutPane() {
 			</div>
 			{supportsReactiveZoom ? (
 				<div className={styles.paneRow}>
-					<span className="label">{ts("layout.reactiveWebcam")}</span>
+					<span className={styles.label}>{ts("layout.reactiveWebcam")}</span>
 					<Toggle
 						checked={settings.webcamReactiveZoom}
 						disabled={layoutControlsDisabled}
@@ -1703,7 +1703,7 @@ export function CursorPane() {
 			helpText={ts("cursor.help")}
 		>
 			<div className={styles.paneRow}>
-				<span className="label">{ts("cursor.show")}</span>
+				<span className={styles.label}>{ts("cursor.show")}</span>
 				<Toggle
 					checked={settings.cursorShow}
 					disabled={!hasDocument}
@@ -1716,7 +1716,7 @@ export function CursorPane() {
 				/>
 			</div>
 			<div className={styles.paneRow}>
-				<span className="label">{ts("cursor.clipToBounds")}</span>
+				<span className={styles.label}>{ts("cursor.clipToBounds")}</span>
 				<Toggle
 					checked={settings.cursor.clipToBounds}
 					disabled={!hasDocument}
