@@ -428,11 +428,11 @@ export function runCli(command: CliCommand): void {
 					if (result.success && command.kind === "captions" && result.projectData !== undefined) {
 						await writeProjectFile(command.projectPath, result.projectData);
 					}
-					// A file is the only output channel this process fully owns. Chromium
-					// and ANGLE write diagnostics straight to stdout on a host with no
-					// dbus and no GPU, ahead of anything emitted here, and no switch
-					// silences all of them -- part of that output never passes through
-					// Chromium's logging. So -o exists for the case stdout cannot serve.
+					// -o writes where no wrapper can redirect. stdout itself is fine --
+					// Chromium logs to stderr -- but a caller does not control what wraps
+					// this process, and xvfb-run on Ubuntu merges the two, which is enough
+					// to make `sources --json | jq` fail under the very tool used to run a
+					// GUI binary headlessly.
 					if (
 						result.success &&
 						command.kind === "sources" &&
