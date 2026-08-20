@@ -67,8 +67,8 @@
 	},
 	"audio": {
 		"title": "Audio",
-		"help": "Trim the audio output level. It applies identically in the preview and the export.",
-		"outputGain": "Output trim",
+		"help": "Adjust the audio output level. It applies identically in the preview and the export.",
+		"outputGain": "Output level",
 		"reset": "Reset audio"
 	},
 	"effects": {
