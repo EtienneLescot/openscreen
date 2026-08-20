@@ -106,33 +106,69 @@ console.log(`Recording in silence, playing a ${TONE_MS / 1000}s tone at ${PLAY_A
 const proc = spawn(HELPER, [JSON.stringify(config)], { windowsHide: true });
 let helperOutput = "";
 let spawnError = null;
+let playbackArmed = false;
 proc.on("error", (error) => {
 	spawnError = error.message;
 });
+
+/**
+ * Arms the tone once the helper says it is recording, never from spawn.
+ *
+ * Everything measured here is relative to the audio timeline, which starts when
+ * the helper does — after it has opened WGC, the encoder and WASAPI. Counting
+ * from spawn would fold that setup time into the offset and fail the test on a
+ * slow machine, with nothing wrong with the timestamps.
+ */
+function armPlaybackOnce() {
+	if (playbackArmed || !helperOutput.includes("Recording started")) {
+		return;
+	}
+	playbackArmed = true;
+	setTimeout(() => {
+		// Blocking on purpose: it guarantees the tone really played before the
+		// stop below is sent, which is the premise of the measurement. The path
+		// goes into a PowerShell single-quoted string, where an apostrophe — legal
+		// in a Windows user name, and so in %TEMP% — ends the string early and
+		// silently plays nothing; doubling it is how that quoting escapes.
+		const quotedTonePath = tonePath.replaceAll("'", "''");
+		spawnSync(
+			"powershell.exe",
+			[
+				"-NoProfile",
+				"-Command",
+				`(New-Object System.Media.SoundPlayer '${quotedTonePath}').PlaySync()`,
+			],
+			{ windowsHide: true },
+		);
+		try {
+			proc.stdin.write("stop\n");
+		} catch {
+			// Already gone; the close handler reports how it ended.
+		}
+	}, PLAY_AT_MS);
+}
+
 proc.stdout.on("data", (chunk) => {
 	helperOutput += chunk.toString();
+	armPlaybackOnce();
 });
 proc.stderr.on("data", (chunk) => {
 	helperOutput += chunk.toString();
+	armPlaybackOnce();
 });
 
-setTimeout(() => {
-	// Blocking on purpose: it guarantees the tone really played before the stop
-	// below is sent, which is the whole premise of the measurement.
-	spawnSync(
-		"powershell.exe",
-		["-NoProfile", "-Command", `(New-Object System.Media.SoundPlayer '${tonePath}').PlaySync()`],
-		{ windowsHide: true },
-	);
-	try {
-		proc.stdin.write("stop\n");
-	} catch {
-		// Already gone; the close handler reports how it ended.
+// If the helper never announces itself, nothing would ever stop it.
+const startTimeout = setTimeout(() => {
+	if (!playbackArmed) {
+		console.error("The helper never reported that recording had started.");
+		proc.kill();
 	}
-}, PLAY_AT_MS);
+}, 30_000);
 
 proc.on("close", (code, signal) => {
+	clearTimeout(startTimeout);
 	const problems = [];
+	if (!playbackArmed) problems.push("recording never started, so no tone was played");
 	if (spawnError) problems.push(`could not start the helper: ${spawnError}`);
 	if (signal) problems.push(`helper killed by ${signal}`);
 	if (code !== 0 && code !== null) problems.push(`helper exited ${code}`);
@@ -196,5 +232,12 @@ proc.on("close", (code, signal) => {
 		`\n${problems.length ? "FAIL" : "PASS"}  track=${trackSeconds.toFixed(2)}s  tone at ${startedAt === null ? "(none)" : `${startedAt.toFixed(1)}s`}, played at ${(PLAY_AT_MS / 1000).toFixed(1)}s`,
 	);
 	for (const problem of problems) console.log(`      -> ${problem}`);
+	if (problems.length) {
+		const complaints = helperOutput
+			.split("\n")
+			.map((line) => line.trim())
+			.filter((line) => line.startsWith("ERROR:") || line.startsWith("WARNING:"));
+		for (const complaint of complaints.slice(-5)) console.log(`      helper: ${complaint}`);
+	}
 	process.exit(problems.length ? 1 : 0);
 });
