@@ -22,6 +22,9 @@ export interface HudDeviceSettingsLabels {
 	cameraUnavailable: string;
 	preview: string;
 	previewUnavailable: string;
+	about: string;
+	checkForUpdates: string;
+	checkingForUpdates: string;
 }
 
 /** Segmented input-level bar, driven by the live analyser. */
@@ -89,8 +92,12 @@ export const HudDeviceSettings = memo(function HudDeviceSettings({
 	cameraLoading,
 	cameraError,
 	labels,
+	versionLabel,
+	canCheckForUpdates,
+	checkingForUpdates,
 	onSelectMic,
 	onSelectCamera,
+	onCheckForUpdates,
 	onClose,
 	panelRef,
 }: {
@@ -101,8 +108,14 @@ export const HudDeviceSettings = memo(function HudDeviceSettings({
 	cameraLoading: boolean;
 	cameraError: string | null;
 	labels: HudDeviceSettingsLabels;
+	/** Already interpolated ("Version 1.9.6"), or null while the main process has not
+	 *  answered — the About block stays out rather than reading "Version undefined". */
+	versionLabel: string | null;
+	canCheckForUpdates: boolean;
+	checkingForUpdates: boolean;
 	onSelectMic: (device: MicrophoneDevice) => void;
 	onSelectCamera: (device: CameraDevice) => void;
+	onCheckForUpdates: () => void;
 	onClose: () => void;
 	panelRef: (el: HTMLDivElement | null) => void;
 }) {
@@ -202,6 +215,30 @@ export const HudDeviceSettings = memo(function HudDeviceSettings({
 						error={previewError}
 						unavailableLabel={labels.previewUnavailable}
 					/>
+				</>
+			) : null}
+
+			{/* The HUD has no other settings surface, and an app the user cannot ask "which
+			    version am I running?" is an app whose bug reports arrive without one. The
+			    update button is absent — not disabled — where a package manager owns the
+			    update; see electron/install-channel.ts. */}
+			{versionLabel ? (
+				<>
+					<div className={styles.hudMenuSectionLabel}>{labels.about}</div>
+					<div className={styles.hudModalAboutRow}>
+						<span className={styles.hudModalVersion}>{versionLabel}</span>
+						{canCheckForUpdates ? (
+							<button
+								type="button"
+								data-testid="hud-check-for-updates"
+								onClick={onCheckForUpdates}
+								disabled={checkingForUpdates}
+								className={styles.hudModalAboutAction}
+							>
+								{checkingForUpdates ? labels.checkingForUpdates : labels.checkForUpdates}
+							</button>
+						) : null}
+					</div>
 				</>
 			) : null}
 		</div>

@@ -3,6 +3,7 @@ import { toast } from "sonner";
 import type { EditorProjectData } from "@/components/video-editor/projectPersistence";
 import { toFileUrl } from "@/components/video-editor/projectPersistence";
 import { useScopedT } from "@/contexts/I18nContext";
+import { useProviderSettings } from "@/contexts/ProviderSettingsContext";
 import { useShortcuts } from "@/contexts/ShortcutsContext";
 import {
 	migrateProjectDataToAxcutDocument,
@@ -130,6 +131,7 @@ export function NewEditorShell() {
 		resolve: (choice: UnsavedChoice) => void;
 	} | null>(null);
 	const { shortcuts, isMac, openConfig: openShortcutsConfig } = useShortcuts();
+	const { openProviderSettings } = useProviderSettings();
 	// Transcription is local and every transcript-driven feature (Smart cuts,
 	// captions, the transcript pane) needs one, so the editor produces them by
 	// itself instead of waiting for the user to find the button. This hook is
@@ -724,6 +726,23 @@ export function NewEditorShell() {
 		openShortcutsConfig();
 	}, [openShortcutsConfig]);
 
+	// Both hand off to the main process rather than rendering anything here: the About box and
+	// the update dialogs are native message boxes owned by a window (see showMessageBox in
+	// electron/main.ts), which is what keeps them from opening behind the always-on-top HUD.
+	// Errors are swallowed on purpose — the main process is the one that reports them, and a
+	// rejection here would only surface as an unhandled promise in the renderer.
+	const handleShowAbout = useCallback(() => {
+		void window.electronAPI?.showAbout?.().catch(() => {
+			// Swallowed: see above.
+		});
+	}, []);
+
+	const handleCheckForUpdates = useCallback(() => {
+		void window.electronAPI?.checkForUpdates?.().catch(() => {
+			// Swallowed: see above.
+		});
+	}, []);
+
 	const pasteRegion = useCallback(async () => {
 		const doc = useProjectStore.getState().document;
 		if (!doc) return;
@@ -1119,6 +1138,9 @@ export function NewEditorShell() {
 					openSettings: handleOpenSettings,
 					renameProject: handleRenameProject,
 					toggleChat: () => setChatOpen((v) => !v),
+					openProviderSettings,
+					showAbout: handleShowAbout,
+					checkForUpdates: handleCheckForUpdates,
 				}}
 			/>
 

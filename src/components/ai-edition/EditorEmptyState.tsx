@@ -1,17 +1,14 @@
-// Empty state for the new editor's preview.
+// Empty state for the editor's preview.
 //
-// Mirrors the legacy `EditorEmptyState` (import video + load project + drag
-// drop) but on top of the project store: a "no project" branch offers
-// `createProject` + `loadProject`, and a "has project, no asset" branch offers
-// the file picker + load (for the rare user who already has a .openscreen
-// project without media attached).
+// Import video + load project + drag/drop on top of the project store: a
+// "no project" branch offers `createProject` + `loadProject`, and a
+// "has project, no asset" branch offers the file picker + load (for the rare
+// user who already has a .openscreen project without media attached).
 //
-// ponytail: keeps the existing copy from the legacy component and the same
-// drag/drop affordance, but the actions map to project-store operations
-// rather than the legacy `nativeBridgeClient.project.*` ones. The two editor
-// shells will collapse once we have a single render path; until then the
-// "open screen" feature lives here in the new UX and in the legacy
-// `EditorEmptyState.tsx` for the deprecated editor.
+// ponytail: the actions map to project-store operations rather than the
+// `nativeBridgeClient.project.*` ones, which this shell no longer uses. The
+// deprecated editor and its own `EditorEmptyState` were deleted in 1320121d,
+// so this is the single render path for the feature.
 
 import { AlertCircle, Film, FolderOpen, Upload, X } from "lucide-react";
 import { useCallback, useRef, useState } from "react";

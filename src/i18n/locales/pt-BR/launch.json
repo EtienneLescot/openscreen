@@ -6,8 +6,6 @@
 		"cancelRecording": "Cancelar gravação",
 		"pauseRecording": "Pausar gravação",
 		"resumeRecording": "Retomar gravação",
-		"openVideoFile": "Abrir arquivo de vídeo",
-		"openProject": "Abrir projeto",
 		"useVerticalTray": "Usar bandeja vertical",
 		"useHorizontalTray": "Usar bandeja horizontal",
 		"openStudio": "Abrir Studio",
@@ -93,6 +91,9 @@
 		"micHint": "Fale para testar seu microfone",
 		"noMicrophones": "Nenhum microfone encontrado",
 		"preview": "Pré-visualização",
-		"previewUnavailable": "Pré-visualização indisponível"
+		"previewUnavailable": "Pré-visualização indisponível",
+		"about": "Sobre",
+		"version": "Versão {{version}}",
+		"checkingForUpdates": "Verificando…"
 	}
 }
